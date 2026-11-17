@@ -1326,10 +1326,6 @@ async function startAnthropicCompatProxy(generation: number): Promise<void> {
         // 严格 Anthropic 入站 schema 不接受该扩展字段。
         stripToolUseProviderSpecificFields,
 
-        // image block、不碰 tool_use 结构，位于 repair/dedupe 之后安全；未命中时返回 null，
-        // 旧 #794 strip 继续兜底。
-        // 供应商分享受邀者的请求不走视觉桥：视觉后端是本机用户自己配的其它供应商，
-        // 受邀者只能用分享给它的那一个(图片照原样交给分享的模型)。
         createXdToolResultImageNoticeTransform(claudeUpstreamEndpoint),
         // PI / Claude 走本 proxy 的 /responses 时（Gateway grok、自定义 LiteLLM）
         // 不会经过 Codex 的 xAI 订阅 transform，必须在这里洗 ModelInput。

@@ -459,7 +459,6 @@ export class Session {
 
   private readonly handle: AgentSessionHandle;
   private readonly logger: Logger;
-  /** 视觉桥钩子（层 B）。缺省 = 未启用，send 完全跳过。 */
   private readonly toolLoopReviewer: ToolLoopReviewer | undefined;
   private toolLoopUserIntent: AutoReviewUserIntent | undefined;
   private permissionModeStateValue: PermissionModeState;
@@ -963,9 +962,8 @@ export class Session {
     if (this.isTurnRunning()) {
       throw this.createSessionRunningError();
     }
-    // 并发 send 守卫：已有一个 pre-dispatch reservation 在飞（视觉桥 await 阶段，
-    // handle 尚未 send → isTurnRunning 仍 false）时，拒绝新 send。否则并发 send 会覆盖
-    // this.sendReservation，让先进入视觉桥的 turn 白调外部视觉后端后才发现被取消。
+    // 并发 send 守卫：前置授权／准备期间 handle 尚未 send，isTurnRunning 仍可能为 false。
+    // 拒绝新 send，防止覆盖已有 reservation，让先进入准备的 turn 失去自己的取消边界。
     if (this.sendReservation !== null) {
       throw this.createSessionRunningError();
     }

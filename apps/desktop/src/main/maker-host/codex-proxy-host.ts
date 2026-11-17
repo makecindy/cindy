@@ -3351,7 +3351,7 @@ function createTransformRequestChain(
   frozenAuthInjection?: CodexProxyAuthInjection,
   execAdapter = createCodexResponsesCompatibilityAdapter(),
   pricing: XaiRequestPricing = new Map(),
-  /** 供应商分享受邀者的 proxy：不走视觉桥(视觉后端是本机用户自己的其它供应商)。 */
+  /** 是否是供应商分享受邀者的 proxy，沿用分享来源隔离与请求转换规则。 */
   guest = false,
 ): RequestTransform[] {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {

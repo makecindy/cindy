@@ -333,7 +333,6 @@ describe('Pi device-hosted guest sessions', () => {
           CINDY_PI_UNREFERENCED: 'stray',
         },
       }),
-      // 本机用户开了视觉桥：视觉后端(本机用户自己的其它供应商)的地址与密钥。
       registerPiProxySession: (_sessionId, _token, resolveProviderId) => {
         registered.push(resolveProviderId());
         return () => {};
@@ -362,7 +361,6 @@ describe('Pi device-hosted guest sessions', () => {
       expect(env.CINDY_PI_KEY_BYOM_B).toBeUndefined();
       expect(env.CINDY_PI_BYOM_B_HEADER_authorization).toBeUndefined();
       expect(env.CINDY_PI_UNREFERENCED).toBeUndefined();
-      // 视觉桥不进受邀者会话(视觉后端是本机用户的其它供应商，vision 工具还会直接读本机文件)。
       const routes = readSubagentRoutes(env);
       expect(Object.keys(routes)).toEqual(['model-a']);
       expect(routes['model-a']!.map((route) => route.provider)).toEqual(['byom-a']);

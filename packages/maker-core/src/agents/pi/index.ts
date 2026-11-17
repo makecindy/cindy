@@ -5763,7 +5763,6 @@ export class PiAgent extends BaseAgent {
         // 外部 MCP header 真值只经 env 交给 bridge extension；host 生成独立名字，
         // 且这些键已进入 piSecretEnvNames，LLM 可调用的 bash 子进程拿不到。
         ...mcpEnv,
-        // 视觉桥后端 env（层 C）：键含 API key 已纳入 piSecretEnvNames 剥离面。
         // Input handoff askpass, owner's own local tasks only (deterministic per session).
         ...(!remote && !hosted && !reviewMode && opts.sessionId
           ? this.deps.runtimeConfig.taskShellEnv?.({ sessionId: opts.sessionId })

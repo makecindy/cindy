@@ -2799,7 +2799,6 @@ function getCindyGhostsMcpDeps(
       const base = producedMedia.length > 0
         ? { ...finalized, ...advisory, producedMedia, ...modelImages }
         : { ...finalized, ...advisory, ...modelImages };
-      // 视觉桥工具结果图片描述(最佳努力,不阻塞):把工具返回的 cindy-media://
       return base;
     },
     async forgeGuide(): Promise<string> {

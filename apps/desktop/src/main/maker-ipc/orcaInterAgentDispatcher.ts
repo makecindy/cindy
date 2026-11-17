@@ -406,8 +406,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         category: 'image',
         mimeType: image.mimeType,
         // 图片只可能来自本机(SSH 远端在入口已拒):标记 desktop-host,
-        // 视觉桥才会桥接无视觉模型的 worker,否则原始 block 进 Pi 会抛
-        // PiImageInputUnsupportedError 整条任务失败。
+        // 原始图片按宿主附件交给 worker 的原生输入路径，由所选模型判定图片能力。
         pathOrigin: 'desktop-host',
       }));
     }

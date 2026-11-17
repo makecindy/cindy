@@ -179,3 +179,10 @@ appendManagedImageReferences / pickVisionAgent / dismissVisionBridgeToast
 
 
 隔离 Desktop 启动：`--mock --isolated=@worktree --passive` 返回 `DESKTOP_DEV_VERDICT=ready`，窗口与本地数据库就绪。启动时 Codex 后台用量读取出现原生 SQLite 初始化失败，未发送真实聊天／图片请求，不能据启动成功宣称该隔离环境的 Codex 实际模型调用通过。设置校验图片已按固定 SHA 发布到作者 fork，PR 引用生成的图片证据。
+
+
+### 首轮 CI 跟进（2026-11-18）
+
+Windows 单测第 5 分片发现群聊失败提示测试仍要求旧视觉桥设置建议；已改为验证仍有效的“切换到支持图片的模型”恢复路径，并明确不再出现视觉桥建议。全语言反查另发现 Mobile 日文、韩文 details 漏清，已改为同一错误现有的 advice；无新增入口、文案方案或运行逻辑。补清已删除字段遗留的注释，保留共享能力与测试。相关 Renderer 两文件 19 项通过，i18n 与术语检查通过。
+
+Windows 数据库 job 的失败为既有迁移回放用例 `normalizes duplicate worker labels deterministically before enforcing uniqueness` 超过 60 秒，伴随 Vitest worker 的 `onTaskUpdate` 通信超时。本 PR 未改 schema、migration、数据库 runner 或该测试。本机从真实迁移生产入口定向复跑该用例，1 项通过（0.328 秒），25 项因名称过滤未执行；这不是完整迁移验收或 Windows 通过的证据。不改迁移、不抬高超时、不弱化断言，随修复推送触发新一轮 Windows CI，继续观察。
