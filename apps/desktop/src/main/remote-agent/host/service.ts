@@ -26,7 +26,7 @@ import {
 } from '../../device-link/broadcast-tap.js';
 import { setRemoteAgentHandler } from '../../device-link/dispatch.desktop.js';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../../device-link/index.js';
-import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
+import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, providerShareGuestDenial, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
 import { applyProviderShareDelegation, clearProviderShareDelegations, delegatedProviderShareGuestAccess, delegatedProviderShareLeases, delegatedProviderShareModelAllowed, delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed, delegatedProviderShareTaskAccess, invalidateProviderShareDelegation, revokeDelegatedProviderShareGuest } from '../../device-link/providerShareDelegatedAccess.js';
 import { checkProviderShareDelegation, clearProviderShareDelegationChecks, grantProviderShareDelegation as requestDelegationGrant, providerShareOwnerKey, providerShareDelegationRetryAt, revokeProviderShareDelegation as requestDelegationRevoke } from '../../device-link/providerShareApi.js';
 import { startProviderShareDelegationRechecks } from '../../device-link/providerShareDelegationChecks.js';
@@ -363,7 +363,17 @@ export function installRemoteAgentHost(options: {
     const ownerDeviceId = getSelfDeviceId();
     const snapshot = getProviderShareHostLoadedSnapshot();
     if (!ownerDeviceId || !snapshot) throw sharedTaskRecoveryError('owner', 'authorization');
-    if (peer?.role !== 'guest' || !access
+    if (!access) {
+      // Null also covers an unready snapshot or cleanup fence. Keep the local
+      // verdict private and publish only an existing, bounded recovery reason.
+      const denial = providerShareGuestDenial(controller);
+      const refused = denial !== null && [
+        'not-guest-peer', 'self-device', 'share-unknown', 'share-on-other-device',
+        'member-not-active', 'remote-control-off', 'provider-not-remote',
+      ].includes(denial);
+      throw sharedTaskRecoveryError('owner', refused ? 'denied' : 'authorization');
+    }
+    if (peer?.role !== 'guest'
       || access.shareId !== peer.shareId || access.memberId !== peer.memberId
       || !settings.remoteControlEnabled || settings.revokedControllers.includes(peer.deviceId)
       || !isRemoteProviderInvocationAllowed(access.providerId)) {

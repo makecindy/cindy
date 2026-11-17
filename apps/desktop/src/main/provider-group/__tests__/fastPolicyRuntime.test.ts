@@ -30,6 +30,7 @@ const state = vi.hoisted(() => ({
   planDevice: 'one',
   plan: vi.fn(),
   approved: true,
+  accessDenial: undefined as 'member-cleanup-pending' | 'snapshot-not-loaded' | undefined,
   delegatedAllowed: true,
   modelChanged: undefined as (() => void) | undefined,
   shareOwner: 'test',
@@ -56,6 +57,7 @@ function ownedShareSnapshot(): readonly ProviderShareOwned[] | null {
   return state.shares.map((share) => ({ ...share, members: state.approved ? share.members : [] }));
 }
 function ownedGuestAccess(peer: string) {
+  if (state.accessDenial) return null;
   if (peer !== providerShareGuestPeer('share', 'member', 'laptop')) return null;
   const share = ownedShareSnapshot()?.find((entry) => entry.shareId === 'share' && entry.hostDeviceId === 'self');
   const member = share?.members.find((entry) => entry.memberId === 'member' && entry.status === 'active');
@@ -90,6 +92,7 @@ vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
 vi.mock('../../device-link/providerShareHost.js', () => ({
   getProviderShareHostLoadedSnapshot: ownedShareSnapshot,
   ownedProviderShareGuestAccess: ownedGuestAccess,
+  providerShareGuestDenial: () => state.accessDenial ?? (!ownedShareSnapshot() ? 'host-scope-stale' : !state.approved ? 'member-not-active' : null),
   providerShareGuestAccess: ownedGuestAccess,
   verifyProviderShareMemberGeneration: async (member: { shareId: string; memberId: string; joinedAt: string }) => {
     const saved = ownedShareSnapshot()?.find((share) => share.shareId === member.shareId && share.hostDeviceId === 'self')
@@ -229,6 +232,7 @@ beforeEach(() => {
   state.plan.mockReset().mockImplementation(async () => ({ kind: 'member', agentDeviceId: state.planDevice,
     providerId: 'openai', memberKey: `device:${state.planDevice}:openai`, sameAccount: true }));
   state.approved = true;
+  state.accessDenial = undefined;
   state.delegatedAllowed = true;
   state.modelChanged = undefined;
   state.revoked = [];
@@ -301,7 +305,7 @@ const allocate = (sessionId: string) => state.hostDeps!.directGuestExecution!.al
 // asserted rejection, so business refusals could lose their public diagnosis.
 // A normally located task followed by revoked access/cleanup/provider change is
 // the minimal failure; the unchanged original location is the passing control.
-it.each([['revoked', 'denied'], ['cleanup', 'authorization'], ['unloaded', 'authorization'], ['provider', 'history']] as const)(
+it.each([['revoked', 'denied'], ['cleanup', 'authorization'], ['unloaded', 'authorization'], ['early-cleanup', 'authorization'], ['early-snapshot', 'authorization'], ['provider', 'history']] as const)(
   'classifies direct history refusal %s as %s without exposing private details', async (condition, reason) => {
   await installDirectHost();
   await allocate('diagnostic10848');
@@ -311,6 +315,8 @@ it.each([['revoked', 'denied'], ['cleanup', 'authorization'], ['unloaded', 'auth
   if (condition === 'revoked') state.approved = false;
   if (condition === 'cleanup') vi.spyOn(state.usage!, 'memberGenerationReady').mockReturnValue(false);
   if (condition === 'unloaded') state.owner = 'another-account';
+  if (condition === 'early-cleanup') state.accessDenial = 'member-cleanup-pending';
+  if (condition === 'early-snapshot') state.accessDenial = 'snapshot-not-loaded';
   if (condition === 'provider') state.shares[0].providerId = 'private-provider';
   const error = await locate().catch((error: unknown) => error);
   expect(error).toBeInstanceOf(Error);
