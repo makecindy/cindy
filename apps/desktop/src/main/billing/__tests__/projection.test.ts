@@ -136,7 +136,7 @@ describe('billing response projection', () => {
           {
             grantId: 'welcome',
             displayName: 'Welcome',
-            source: 'subscription_rollover',
+            source: { type: 'subscription_rollover' },
             originalAmount: '2',
             usedAmount: '1',
             remainingAmount: '1',
@@ -180,7 +180,7 @@ describe('billing response projection', () => {
         {
           grantId: 'welcome',
           displayName: 'Welcome',
-          source: 'subscription_rollover',
+          source: { type: 'subscription_rollover' },
           originalAmount: '2',
           usedAmount: '1',
           remainingAmount: '1',
@@ -215,9 +215,9 @@ describe('billing response projection', () => {
     });
   });
 
-  // 契约：稳定标签/string|null 与礼品卡对象共存；对象仍只保留类型和合法赠送方。
-  // 字符串/null 属于滚存的既有来源格式，不能套用礼品卡对象校验而丢弃。
-  it('keeps string and gift card sources while dropping malformed structured metadata', () => {
+  // 人工审查后的来源契约（unit）：同一真实投影接受滚存/礼品卡对象和 null，
+  // 旧覆盖只验证字符串滚存；最小失败输入是滚存对象，以及必须忽略的旧字符串。
+  it('keeps rollover and gift card objects while dropping string and malformed sources', () => {
     const grant = (grantId: string, source: unknown) => ({
       grantId,
       displayName: null,
@@ -238,6 +238,8 @@ describe('billing response projection', () => {
       { type: 'gift_card' },
       'gift_card',
       'subscription_rollover',
+      { type: 'subscription_rollover', cardId: 'internal' },
+      'x'.repeat(4096),
     ];
     const usage = projectModelAccessCreditUsage({
       available: String(sources.length),
@@ -254,9 +256,12 @@ describe('billing response projection', () => {
 
     expect(usage.promotionalGrants[0].source).toEqual({ type: 'gift_card', senderName: 'Cindy Team' });
     expect(usage.promotionalGrants[2].source).toBeNull();
-    expect(usage.promotionalGrants[7].source).toBe('gift_card');
-    expect(usage.promotionalGrants[8].source).toBe('subscription_rollover');
-    for (const projected of [usage.promotionalGrants[1], ...usage.promotionalGrants.slice(3, 7)]) {
+    expect(usage.promotionalGrants[9].source).toEqual({ type: 'subscription_rollover' });
+    for (const projected of [
+      usage.promotionalGrants[1],
+      ...usage.promotionalGrants.slice(3, 9),
+      usage.promotionalGrants[10],
+    ]) {
       expect(projected).not.toHaveProperty('source');
     }
   });

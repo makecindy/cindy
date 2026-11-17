@@ -667,16 +667,18 @@ describe('BillingPage remote catalog rendering', () => {
   });
 
   // D20 replaces D19 (unit): exercise the real BillingPage header controls and
-  // visible rows. Previous coverage only grouped/collapsed history. Mixed expiry
+  // visible rows. Previous coverage only grouped/collapsed history. Mixed states and expiry
   // dates, 21/30 records and 0/9/10 records expose sorting, page boundaries,
   // partial last pages and empty/single-page behavior without changing the API.
-  it('sorts unexpired grants by expiry before expired grants and preserves usage details', async () => {
+  // 人工审查后的排序契约：active 优先，各组按到期时间排序；旧测试把未到期的
+  // depleted/voided 排在 active 前。五条乱序状态通过真实页面验证顺序和金额（unit）。
+  it('sorts active grants first and each group by expiry while preserving usage details', async () => {
     const now = Date.now();
     window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
-      available: '66',
+      available: '68',
       plan: { remaining: '40', used: '60', total: '100' },
       purchased: { remaining: '20', used: '30', total: '50' },
-      promotional: { remaining: '6', used: '6', total: '12' },
+      promotional: { remaining: '8', used: '6', total: '14' },
       promotionalGrants: [
         {
           grantId: 'welcome',
@@ -714,6 +716,15 @@ describe('BillingPage remote catalog rendering', () => {
           expiresAt: new Date(now + 2 * 86_400_000).toISOString(),
           state: 'voided' as const,
         },
+        {
+          grantId: 'active-sooner',
+          displayName: 'Active sooner',
+          originalAmount: '2',
+          usedAmount: '0',
+          remainingAmount: '2',
+          expiresAt: new Date(now + 2 * 86_400_000).toISOString(),
+          state: 'active' as const,
+        },
       ],
       promotionalGrantsComplete: true,
       promotionalGrantConsistency: 'OBSERVED' as const,
@@ -727,25 +738,27 @@ describe('BillingPage remote catalog rendering', () => {
     expect(await screen.findByText('Welcome grant')).toBeTruthy();
     expect(screen.getByText('Depleted grant')).toBeTruthy();
     expect(screen.getByText('Voided grant')).toBeTruthy();
-    expect(screen.getAllByRole('listitem')).toHaveLength(4);
+    expect(screen.getAllByRole('listitem')).toHaveLength(5);
     expect(screen.getByText('billing.usage.promotionalDetails.unnamed')).toBeTruthy();
-    expect(screen.getByText('billing.usage.promotionalDetails.states.active')).toBeTruthy();
+    expect(screen.getAllByText('billing.usage.promotionalDetails.states.active')).toHaveLength(2);
     expect(screen.getByText('billing.usage.promotionalDetails.states.depleted')).toBeTruthy();
     expect(screen.getByText('billing.usage.promotionalDetails.states.expired')).toBeTruthy();
     expect(screen.getByText('billing.usage.promotionalDetails.states.voided')).toBeTruthy();
 
     const grantRows = screen.getAllByRole('listitem');
     for (const [index, name] of [
-      'Depleted grant', 'Voided grant', 'Welcome grant', 'billing.usage.promotionalDetails.unnamed',
+      'Active sooner', 'Welcome grant', 'billing.usage.promotionalDetails.unnamed',
+      'Depleted grant', 'Voided grant',
     ].entries()) {
       expect(within(grantRows[index]).getByText(name)).toBeTruthy();
     }
     const formatter = new Intl.NumberFormat('en', { style: 'currency', currency: 'CNY' });
     for (const [row, usedAmount] of [
-      [grantRows[0], 2],
-      [grantRows[1], 0.5],
-      [grantRows[2], 4],
-      [grantRows[3], 1.25],
+      [grantRows[0], 0],
+      [grantRows[1], 4],
+      [grantRows[2], 1.25],
+      [grantRows[3], 2],
+      [grantRows[4], 0.5],
     ] as const) {
       const usedLabel = within(row).getByText('billing.usage.promotionalDetails.used');
       expect(usedLabel.nextElementSibling?.textContent).toBe(formatter.format(usedAmount));
@@ -849,8 +862,9 @@ describe('BillingPage remote catalog rendering', () => {
       purchased: { remaining: '0', used: '0', total: '0' },
       promotional: { remaining: '30', used: '0', total: '30' },
       promotionalGrants: [
-        { ...grant, grantId: 'rollover', displayName: 'Server fallback', source: 'subscription_rollover' },
-        { ...grant, grantId: 'other', displayName: '滚存额度', source: 'operator_bonus' },
+        { ...grant, grantId: 'rollover', displayName: 'Server fallback',
+          source: { type: 'subscription_rollover' as const } },
+        { ...grant, grantId: 'other', displayName: '滚存额度' },
         { ...grant, grantId: 'null-source', displayName: 'Other gift', source: null },
       ],
       promotionalGrantsComplete: true, promotionalGrantConsistency: 'OBSERVED' as const,
@@ -864,7 +878,7 @@ describe('BillingPage remote catalog rendering', () => {
     expect(within(rows[2]).getByText('Other gift')).toBeTruthy();
   });
 
-  // Server contract (unit): gift_card objects, rollover strings and null can share
+  // Server contract (unit): gift_card/rollover objects and null can share
   // one usage response. Earlier cases rendered these origins separately; this
   // checks the real BillingPage keeps both localized names and the null fallback.
   it('shows gift card and localized rollover names from the same usage response', async () => {
@@ -881,7 +895,7 @@ describe('BillingPage remote catalog rendering', () => {
         { ...grant, grantId: 'gift', displayName: 'Server gift fallback',
           source: { type: 'gift_card' as const, senderName: 'Sample sender' } },
         { ...grant, grantId: 'rollover', displayName: 'Server rollover fallback',
-          source: 'subscription_rollover' },
+          source: { type: 'subscription_rollover' as const } },
         { ...grant, grantId: 'other', displayName: 'Other grant', source: null },
       ],
       promotionalGrantsComplete: true, promotionalGrantConsistency: 'OBSERVED' as const,

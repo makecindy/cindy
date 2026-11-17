@@ -1799,11 +1799,10 @@ function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
     Math.ceil(usage.promotionalGrants.length / PROMOTIONAL_GRANTS_PAGE_SIZE),
   );
   const page = Math.min(requestedPage, pageCount);
-  const now = Date.now();
   const grants = [...usage.promotionalGrants].sort((left, right) => {
     const leftExpiry = Date.parse(left.expiresAt);
     const rightExpiry = Date.parse(right.expiresAt);
-    return Number(leftExpiry <= now) - Number(rightExpiry <= now) || leftExpiry - rightExpiry;
+    return Number(right.state === 'active') - Number(left.state === 'active') || leftExpiry - rightExpiry;
   });
   const pageGrants = grants.slice(
     (page - 1) * PROMOTIONAL_GRANTS_PAGE_SIZE,
@@ -1890,9 +1889,9 @@ function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
                 <div className="col-span-3 min-w-0 lg:col-span-1">
                   <div className="flex min-w-0 items-center gap-2">
                     <p className="truncate text-12 font-medium text-[var(--text-primary)]">
-                      {grant.source === 'subscription_rollover'
+                      {grant.source?.type === 'subscription_rollover'
                         ? t('billing.usage.promotionalDetails.rolloverName')
-                        : typeof grant.source === 'object' && grant.source?.type === 'gift_card'
+                        : grant.source?.type === 'gift_card'
                           ? t('billing.usage.promotionalDetails.giftCard', {
                               sender: grant.source.senderName,
                             })
