@@ -404,12 +404,103 @@ describe('RoutedDeviceLinkClient', () => {
     emitPathChange(legacy, 'old-device', 'direct');
     expect(changes).toEqual([{ deviceId: 'old-device', path: 'direct' }]);
 
+    // 只有**承载连接**的事件算数:主连接自己为这个 legacy 对端发的换路不是事实,
+    // 传出去会让 main 的 directDataPeers 停在不承载流量的那条连接上(Codex review P1)。
+    emitPathChange(client, 'old-device', 'relay');
+    expect(changes).toHaveLength(1);
+
     // 退订之后不再收到(事件订阅要能释放)。
     off();
     emitPathChange(legacy, 'old-device', 'relay');
     expect(changes).toHaveLength(1);
     client.stop();
   });
+
+  // 桌面端 #9537 的 Codex review P1(第二轮):探测把归属从 legacy 交给主连接时,两条子连接的
+  // path 表都没动,onPeerPathChanged 不会响 —— 而「这个对端现在走哪条 socket」已经换了。
+  // 诊断钉在旧连接的判定上不失效(main 的 directDataPeers 同理),路由层必须单独通知一次。
+  it('notifies route-owner changes when the legacy probe hands a peer to the primary', async () => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({
+      getWsUrl: () => url, getToken: async () => 'unit-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
+    });
+    const client = new RoutedDeviceLinkClient(options('ws://v2-node'), undefined, {
+      active: () => true, useForPeer: () => false, probeForPeer: () => true,
+      primaryCapability: 'agent-net-node-v2', options: options('ws://v1-relay'),
+    });
+    const owners: string[] = [];
+    const changes: Array<{ deviceId: string; path: string }> = [];
+    const offOwner = client.onPeerRouteOwnerChanged(deviceId => owners.push(deviceId));
+    client.onPeerPathChanged(change => changes.push({ deviceId: change.deviceId, path: change.path }));
+    client.start();
+    await vi.advanceTimersByTimeAsync(1);
+    const primarySocket = sockets.find((s) => s.url === 'ws://v2-node')!, legacySocket = sockets.find((s) => s.url === 'ws://v1-relay')!;
+    primarySocket.ack(); legacySocket.ack(); await vi.advanceTimersByTimeAsync(1);
+    const opened = client.openLink('known-peer', {}); await vi.advanceTimersByTimeAsync(1);
+    const probe = legacySocket.sent.find((f) => f.kind === 'link-open')!;
+    expect(owners).toEqual([]); // 探测进行中:归属还没变。
+
+    // 探测结果说这个对端能走主连接 → 归属换人,而两条连接的 path 表都没动。
+    legacySocket.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: probe.id, src: 'known-peer', payload: {
+      appVersion: '1', allowlistHash: 'unit', capabilities: ['agent-net-node-v2'],
+    } }); await vi.advanceTimersByTimeAsync(1);
+    expect(owners).toEqual(['known-peer']);
+    expect(changes).toEqual([]); // 归属切换不是路径变化:不发 onPeerPathChanged。
+
+    // 归属已经归主连接:legacy 之后为自己那条 socket 发的换路,不再是这个对端的事实。
+    emitPathChange(client.legacyConnection()!, 'known-peer', 'direct');
+    expect(changes).toEqual([]);
+    emitPathChange(client, 'known-peer', 'direct');
+    expect(changes).toEqual([{ deviceId: 'known-peer', path: 'direct' }]);
+
+    offOwner();
+    const accepted = primarySocket.sent.find((f) => f.kind === 'link-open')!;
+    primarySocket.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: accepted.id, src: 'known-peer', payload: { appVersion: '1', allowlistHash: 'unit' } });
+    await opened; client.stop();
+  });
+
+  // 同一个不变量的另一扇门:legacy 兜底整体关掉时,记在它上面的归属一起回到主连接。
+  it('notifies route-owner changes when the legacy fallback retires every routed peer', async () => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({
+      getWsUrl: () => url, getToken: async () => 'unit-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
+    });
+    let legacyActive = true;
+    const client = new RoutedDeviceLinkClient(options('ws://v2-node'), undefined, {
+      active: () => legacyActive, useForPeer: () => false, probeForPeer: () => true, options: options('ws://v1-relay'),
+    });
+    const owners: string[] = [];
+    const changes: Array<{ deviceId: string; path: string }> = [];
+    client.onPeerRouteOwnerChanged(deviceId => owners.push(deviceId));
+    client.onPeerPathChanged(change => changes.push({ deviceId: change.deviceId, path: change.path }));
+    client.start();
+    await vi.advanceTimersByTimeAsync(1);
+    const primarySocket = sockets.find((s) => s.url === 'ws://v2-node')!, legacySocket = sockets.find((s) => s.url === 'ws://v1-relay')!;
+    primarySocket.ack(); legacySocket.ack(); await vi.advanceTimersByTimeAsync(1);
+    const opened = client.openLink('known-peer', {}); await vi.advanceTimersByTimeAsync(1);
+    const probe = legacySocket.sent.find((f) => f.kind === 'link-open')!;
+    // 探测结果说不具备主连接能力 → 归属记在 legacy 上。
+    legacySocket.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: probe.id, src: 'known-peer', payload: {
+      appVersion: '1', allowlistHash: 'unit',
+    } }); await vi.advanceTimersByTimeAsync(1);
+    expect(owners).toEqual(['known-peer']);
+    expect(client.connectionFor('known-peer')).toBe(client.legacyConnection());
+    expect(changes).toEqual([]);
+
+    legacyActive = false;
+    client.connectNow('unit-legacy-off'); await vi.advanceTimersByTimeAsync(1);
+    expect(owners).toEqual(['known-peer', 'known-peer']);
+    expect(client.connectionFor('known-peer')).toBe(client);
+    // 归属已经归主连接、legacy 也停了:主连接自己的换路照常上报。
+    emitPathChange(client, 'known-peer', 'direct');
+    expect(changes).toEqual([{ deviceId: 'known-peer', path: 'direct' }]);
+    await opened; client.stop();
+  });
+
 });
 
 /** 路径变化在 client 内部是私有发射器:单测直接触发它,验证路由层有没有汇总上来。 */

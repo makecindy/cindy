@@ -74,6 +74,8 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
   private legacyRunning = false;
   private readonly legacyRoutes = new Set<string>();
   private readonly legacyPrefersPrimary = new Set<string>();
+  /** `onPeerRouteOwnerChanged` 的订阅者；归属切换时逐个通知。 */
+  private readonly routeOwnerObservers = new Set<(deviceId: string) => void>();
   private readonly legacyReplies = new Set<string>();
   private readonly observedLegacyFrames = new WeakSet<Envelope>();
   private readonly blockedLegacyFrames = new WeakSet<Envelope>();
@@ -151,7 +153,12 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     if (legacyActive !== this.legacyRunning) {
       this.legacyRunning = legacyActive;
       if (legacyActive) this.legacy?.start();
-      else { this.legacy?.stop(); this.legacyRoutes.clear(); this.legacyPrefersPrimary.clear(); this.legacyReplies.clear(); }
+      else {
+        // legacy 兜底关掉:这些对端的归属整体回到主连接。与单点切换一样,没有任何子连接
+        // 会为此发路径变化,按新归属补发一次(桌面端 #9537 的 Codex review P1)。
+        for (const peer of [...this.legacyPrefersPrimary, ...this.legacyRoutes]) this.noteRouteOwnerChanged(peer);
+        this.legacy?.stop(); this.legacyRoutes.clear(); this.legacyPrefersPrimary.clear(); this.legacyReplies.clear();
+      }
     }
     const connection = this.crossAccount;
     if (!connection) return;
@@ -300,8 +307,8 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
         if (frame.kind === 'link-open') {
           const caps = (frame.payload as { capabilities?: string[] } | undefined)?.capabilities;
           if (this.legacyOptions?.prefersPrimary?.(frame.payload) ?? (this.legacyOptions?.primaryCapability && caps?.includes(this.legacyOptions.primaryCapability))) {
-            this.legacyPrefersPrimary.add(frame.src); this.legacyRoutes.delete(frame.src);
-          } else { this.legacyPrefersPrimary.delete(frame.src); this.legacyRoutes.add(frame.src); }
+            this.setLegacyRoute(frame.src, true);
+          } else { this.setLegacyRoute(frame.src, false); }
         }
         if (frame.kind === 'invoke' && this.legacyPrefersPrimary.has(frame.src)) {
           this.blockedLegacyFrames.add(frame);
@@ -340,15 +347,55 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
   }
 
   /**
-   * 数据面路径(直连 ↔ relay)的变化同样要从**承载该 peer 的那条连接**汇总上来。
+   * 数据面路径(直连 ↔ relay)的变化要从**当前承载该 peer 的那条连接**汇总上来。
    *
    * 基类只发自己那条连接上的路径变化;被路由到 legacy / 跨账号 / scoped 连接的 peer
    * 换路时,事件留在那条连接上,host(桌面端的连接诊断)收不到 —— 熔断未解除时,诊断会
    * 一直按旧路径的判定提示用户(桌面端 #9537 的 Codex review P1)。
+   *
+   * 只认承载连接的事件:`acceptsScopedEvent` 只回答「这条连接能不能为这个 peer 发言」,
+   * 不回答「现在是谁在承载它」。归属切换后旧连接仍满足前者,会把旧连接的路径当成事实传
+   * 出去 —— main 的 directDataPeers 与 degraded banner 会停在旧连接上。快照入口
+   * `getPeerLinkSnapshots` 早就按 `routed(...) === connection` 过滤,路径事件与它同一把尺子。
+   *
+   * 归属切换本身不发这里的事件(它不改变任何一条连接的 path 表),走
+   * `onPeerRouteOwnerChanged`。
    */
   override onPeerPathChanged(cb: (change: DeviceLinkPeerPathChanged) => void): () => void {
-    return this.both(super.onPeerPathChanged(change => { if (this.acceptsScopedEvent(this, change.deviceId)) cb(change); }),
-      connection => connection.onPeerPathChanged(change => { if (this.acceptsScopedEvent(connection, change.deviceId)) cb(change); }));
+    return this.both(super.onPeerPathChanged(change => { if (this.connectionFor(change.deviceId) === this) cb(change); }),
+      connection => connection.onPeerPathChanged(change => { if (this.connectionFor(change.deviceId) === connection) cb(change); }));
+  }
+
+  /**
+   * 某个 peer 的**承载连接换了人**时逐个通知(legacy ↔ 主连接)。
+   *
+   * 归属切换不改任何一条子连接的 path 表,`onPeerPathChanged` 因此不会响;而「这个对端
+   * 现在走哪条 socket」已经换了 —— 桌面端出站诊断(#9537)按 socket 钉住的代理判定、main
+   * 的 directDataPeers、远程拓扑快照都会停在旧连接上(Codex review P1)。
+   *
+   * 刻意**不**复用 `onPeerPathChanged` 发这个信号:那个事件的订阅方把 `path === 'relay'`
+   * 当作「直连刚断、relay 的离线裁决生效」(mobile 的 DeviceLinkContext 据此判离线、取消
+   * 目录刷新),而归属切换常常是往更好的连接搬,发过去会让它们按相反的语义行动。
+   *
+   * 覆盖边界:只在路由层**记下**归属决定的地方发 —— legacy 探测结果、inbound link-open
+   * 的判定、legacy 兜底整体退役。靠静态谓词(`useForPeer`)路由的对端没有 per-peer 记录
+   * 可枚举,scoped pin 的注册/退役影响的是一整个资源作用域,这两类不在此列。
+   */
+  onPeerRouteOwnerChanged(cb: (deviceId: string) => void): () => void {
+    this.routeOwnerObservers.add(cb);
+    return () => { this.routeOwnerObservers.delete(cb); };
+  }
+
+  private noteRouteOwnerChanged(peer: string): void {
+    if (!this.routeOwnerObservers.size) return;
+    for (const observer of [...this.routeOwnerObservers]) observer(peer);
+  }
+
+  /** 切换某个 peer 在 legacy 与主连接之间的归属,并让订阅方重新读它的事实。 */
+  private setLegacyRoute(peer: string, prefersPrimary: boolean): void {
+    if (prefersPrimary) { this.legacyRoutes.delete(peer); this.legacyPrefersPrimary.add(peer); }
+    else { this.legacyPrefersPrimary.delete(peer); this.legacyRoutes.add(peer); }
+    this.noteRouteOwnerChanged(peer);
   }
 
   override onInboundPeerReleased(cb: (peer: string) => void): () => void {
@@ -414,10 +461,12 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
       && (route === this.legacy || this.legacyOptions?.probeForPeer?.(dst))) {
       return this.legacy.openLink(dst, payload, timeoutMs).then((accepted) => {
         if (this.legacyOptions?.prefersPrimary?.(accepted) ?? (this.legacyOptions?.primaryCapability && accepted.capabilities?.includes(this.legacyOptions.primaryCapability))) {
-          this.legacyRoutes.delete(dst); this.legacyPrefersPrimary.add(dst);
+          // 探测结果把归属从 legacy 交给主连接:补发一次路径变化,否则「这条对端现在走
+          // 哪条 socket」换了却没有任何事件(桌面端 #9537 的 Codex review P1)。
+          this.setLegacyRoute(dst, true);
           return super.openLink(dst, payload, timeoutMs);
         }
-        this.legacyPrefersPrimary.delete(dst); this.legacyRoutes.add(dst); return accepted;
+        this.setLegacyRoute(dst, false); return accepted;
       });
     }
     return route?.openLink(dst, payload, timeoutMs) ?? super.openLink(dst, payload, timeoutMs);

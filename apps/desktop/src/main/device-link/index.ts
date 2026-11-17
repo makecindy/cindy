@@ -1284,6 +1284,17 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (path === 'direct') directDataPeers.add(deviceId); else directDataPeers.delete(deviceId);
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status: getDeviceLinkStatus(), directDataDeviceIds: getDirectDataDeviceIds(), dataPathChangedDeviceId: deviceId });
   });
+  // 承载连接换人(legacy ↔ 主连接)时,「这个对端走哪条 socket」变了,而两条连接的 path 表
+  // 可能都没动、onPeerPathChanged 不会响:directDataPeers 会停在旧连接那份路径上,渲染层钉在
+  // 旧 socket 上的出站代理判定也不会失效(熔断未解除时那条提示一直在)。按新承载连接重算并广播
+  // 一次,让订阅方重新读事实(#9537 的 Codex review P1)。拓扑页自己 2s 轮询,不需要这个信号。
+  const routeOwnerClient = routedClient;
+  routeOwnerClient.onPeerRouteOwnerChanged((deviceId) => {
+    if (client !== routeOwnerClient) return;
+    const path = deviceLinkPeerDataPath(deviceId);
+    if (path === 'direct') directDataPeers.add(deviceId); else directDataPeers.delete(deviceId);
+    broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status: getDeviceLinkStatus(), directDataDeviceIds: getDirectDataDeviceIds(), dataPathChangedDeviceId: deviceId });
+  });
   client.onPeerTransportReset(({ deviceId }) => {
     invalidatePluginOauth(deviceId);
     if (hasOutboundControlIntent(deviceId)) {
