@@ -88,13 +88,18 @@ export function buildHomeSections(
 
   const partitioned = options.groupAutomation ? partitionAutomationItems(home) : null;
   const listHome = partitioned?.home ?? home;
-  const rows = groupByProject ? buildGroupedHomeRows(listHome, options) : buildMixedHomeRows(listHome, options);
-  if (partitioned && partitioned.automations.length > 0) {
-    rows.push(buildAutomationGroupRow(partitioned.automations, options));
+  const automations = partitioned ? mergeAutomationItems(partitioned.automations) : [];
+  // 跨项目合并会换代表运行;排序档位要按合并后的全部成员重新聚合。
+  const rowOptions = automations.length && options.priorityContext
+    ? { ...options, priorityContext: withMergedAutomationPriority(options.priorityContext, automations) }
+    : options;
+  const rows = groupByProject ? buildGroupedHomeRows(listHome, rowOptions) : buildMixedHomeRows(listHome, rowOptions);
+  if (automations.length > 0) {
+    rows.push(buildAutomationGroupRow(automations, rowOptions));
   }
   if (rows.length > 0) {
     sections.push({
-      data: partitioned ? sortHomeRows(rows, options) : rows,
+      data: partitioned ? sortHomeRows(rows, rowOptions) : rows,
       key: HOME_MAIN_SECTION_KEY,
       title: null,
     });
@@ -210,12 +215,42 @@ export function mergeAutomationItems(
   return merged;
 }
 
+/**
+ * 优先级上下文按合并前各组的代表运行收集。合并后的组若有任一成员在等待 / 未读 / 运行,
+ * 新代表继承该档位,不会因代表换成另一次运行而掉到普通档。
+ */
+export function withMergedAutomationPriority(
+  ctx: HomeListPriorityContext,
+  items: readonly RemoteSessionListItem[],
+): HomeListPriorityContext {
+  let waiting: Set<string> | null = null;
+  let unread: Set<string> | null = null;
+  let running: Set<string> | null = null;
+  for (const item of items) {
+    const members = item.automationGroup?.items;
+    if (!members) continue;
+    const id = item.session.id;
+    const any = (set: ReadonlySet<string>) => members.some((member) => set.has(member.session.id));
+    if (!ctx.waitingSessionIds.has(id) && any(ctx.waitingSessionIds)) (waiting ??= new Set(ctx.waitingSessionIds)).add(id);
+    if (!ctx.unreadSessionIds.has(id) && any(ctx.unreadSessionIds)) (unread ??= new Set(ctx.unreadSessionIds)).add(id);
+    if (!ctx.runningSessionIds.has(id) && any(ctx.runningSessionIds)) (running ??= new Set(ctx.runningSessionIds)).add(id);
+  }
+  if (!waiting && !unread && !running) return ctx;
+  return {
+    ...ctx,
+    runningSessionIds: running ?? ctx.runningSessionIds,
+    unreadSessionIds: unread ?? ctx.unreadSessionIds,
+    waitingSessionIds: waiting ?? ctx.waitingSessionIds,
+  };
+}
+
+/** 「自动化」目录行;items 已经过 mergeAutomationItems。 */
 export function buildAutomationGroupRow(
   items: readonly RemoteSessionListItem[],
   options: HomeSectionOptions = {},
 ): HomeRow {
   const title = options.automationTitle ?? i18n.t('devices.list.menu.automationFolder');
-  const sessions = sortSessionItems(mergeAutomationItems(items), options);
+  const sessions = sortSessionItems(items, options);
   return {
     key: 'automation',
     kind: 'automation',

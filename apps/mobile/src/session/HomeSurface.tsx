@@ -2989,7 +2989,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
 
   // 自动化组「查看全部 N 次运行」:与项目组「查看全部」一致,进入该任务的专属列表页
   // (设备详情页的自动化任务作用域模式),不在列表里原地铺开。
-  const openAutomationGroup = useCallback((group: RemoteAutomationSessionGroup) => {
+  const openAutomationGroup = useCallback((group: RemoteAutomationSessionGroup, options?: { allProjects?: boolean }) => {
     const session = group.items[0]?.session as RemoteSession | undefined;
     if (!session) return;
     // 设备解析与 openSession 同口径:可达优先(canonicalDeviceId),回退物理 id / store 索引。
@@ -2999,8 +2999,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       return;
     }
     // 项目组内的组行(有 workingDir)带上项目维度:baseKey 不含项目 scope,同一任务跨
-    // 项目时目标页只该显示本项目的 run(与组行标称的 N 一致)。dialogue 组无目录,不带。
-    const workingDir = session.workingDir?.trim();
+    // 项目时目标页只该显示本项目的 run(与组行标称的 N 一致)。dialogue 组无目录,不带;
+    // 总「自动化」目录已跨项目合并,也不带,否则看不到其它目录的运行。
+    const workingDir = options?.allProjects ? undefined : session.workingDir?.trim();
     guardedPush({
       pathname: '/devices/[deviceId]',
       params: {
@@ -4140,7 +4141,7 @@ function ProjectRow({
   onDragEnd?: () => void;
   onDragMove?: (absoluteY: number) => void;
   onDragStart?: (input: { absoluteY: number; count: number; key: string; title: string }) => void;
-  onOpenAutomationGroup(group: RemoteAutomationSessionGroup): void;
+  onOpenAutomationGroup(group: RemoteAutomationSessionGroup, options?: { allProjects?: boolean }): void;
   onOpenProject(): void;
   onNewTask(): void;
   onSearchProject(): void;
@@ -4168,6 +4169,10 @@ function ProjectRow({
   // PureComponent bail)——以低频首页状态版本兜底感知运行态变化,与 AutomationGroup-
   // Children 同款(否则折叠线以下转入 running 的会话不会被豁免展开,review P1)。
   const homeStatusVersion = useRemoteHomeStatusVersion();
+  const openRowAutomationGroup = useCallback(
+    (group: RemoteAutomationSessionGroup) => onOpenAutomationGroup(group, kind === 'automation' ? { allProjects: true } : undefined),
+    [kind, onOpenAutomationGroup],
+  );
   // 与桌面侧栏项目组同一套折叠策略:前 N 条之外豁免最近 24h 活动 / 需关注 / 运行中的条目
   // (豁免语义见共享层 getRemoteSessionPreviewCollapse 注释)。
   // 自动化折叠后 sessions 是"行"(组行代表多条会话):按钮显隐看隐藏行数(hiddenCount),
@@ -4426,7 +4431,7 @@ function ProjectRow({
                 hideDivider={hiddenRowCount === 0 && index === visibleSessions.length - 1}
                 indented
                 item={item}
-                onOpenAutomationGroup={onOpenAutomationGroup}
+                onOpenAutomationGroup={openRowAutomationGroup}
                 onOpenSession={onOpenSession}
                 onToggleAutomationGroup={onToggleAutomationGroup}
                 swipe={swipe}
@@ -4546,7 +4551,7 @@ function HomeListRowInner({
   machineIdentity?: HomeProjectMachineIdentity;
   nextIsBlock: boolean;
   onArchive(session: RemoteSession): void;
-  onOpenAutomationGroup(group: RemoteAutomationSessionGroup): void;
+  onOpenAutomationGroup(group: RemoteAutomationSessionGroup, options?: { allProjects?: boolean }): void;
   onOpenProjectSessions(project: MobileHomeProjectGroup, search?: boolean): void;
   onNewProjectTask(project: MobileHomeProjectGroup): void;
   onOpenSession(item: RemoteSessionListItem): void;

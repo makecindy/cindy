@@ -8,6 +8,8 @@ import {
   homeFolderRowsShareRenderData,
   homeRowsShareRenderData,
   homeRowBefore,
+  mergeAutomationItems,
+  withMergedAutomationPriority,
 } from '@/session/homeSections';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
 import type { RemoteSessionListItem } from '@/session/sessionList';
@@ -185,6 +187,35 @@ describe('自动化归组', () => {
     expect(folder.project.sessions).toHaveLength(1);
     expect([...(folder.project.sessions[0].automationGroup?.sessionIds ?? [])].sort()).toEqual(['r1', 'r2', 'r3', 'r4']);
     expect(folder.project.sessionCount).toBe(4);
+  });
+
+  it('跨项目合并后换了代表运行,旧目录里等待确认的档位仍归到合并后的组', () => {
+    const nightly = (id: string, workingDir: string, at: string, pending = 0) => ({
+      session: { id, title: 'Nightly', source: 'scheduler', workingDir, updatedAt: at, status: 'idle', agentKind: 'codex', deviceLinkDeviceId: 'mac' },
+      scheduleInfo: { scheduleId: 'nightly', scheduleName: 'Nightly', running: false, unreadCount: 0 },
+      title: 'Nightly',
+      lastActivityAt: at,
+      pendingInteractionCount: pending,
+    }) as unknown as RemoteSessionListItem;
+    const now = Date.parse('2026-11-17T00:00:00Z');
+    const oldGroup = groupAutomationListItems([
+      nightly('r1', '/old', '2026-11-09T00:00:00Z', 1),
+      nightly('r2', '/old', '2026-11-10T00:00:00Z'),
+    ], now, true, () => 'old');
+    const newGroup = groupAutomationListItems([
+      nightly('r3', '/new', '2026-11-15T00:00:00Z'),
+      nightly('r4', '/new', '2026-11-16T00:00:00Z'),
+    ], now, true, () => 'new');
+    const before = [...oldGroup, ...newGroup];
+    // 合并前的上下文:只有旧目录组的代表在等待档。
+    const ctx = {
+      runningSessionIds: new Set<string>(),
+      unreadSessionIds: new Set<string>(),
+      waitingSessionIds: new Set(before.filter((item) => item.pendingInteractionCount > 0).map((item) => item.session.id)),
+    };
+    const [merged] = mergeAutomationItems(before, now);
+    expect(ctx.waitingSessionIds.has(merged.session.id)).toBe(false);
+    expect(withMergedAutomationPriority(ctx, [merged]).waitingSessionIds.has(merged.session.id)).toBe(true);
   });
 });
 
