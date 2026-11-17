@@ -119,11 +119,16 @@ function observe(): void {
     if (event.status === 'online' && previous !== 'online') recover();
   });
   const offReopened = link.onPeerLinkReopened?.(event => recover(event.deviceId));
+  const offResponsiveness = link.onResponsivenessChanged?.(event => {
+    // A successful probe can clear the circuit without changing presence or
+    // reopening the link. A cleanup (recovered=false) is not a recovery.
+    if (!event.unresponsive && event.recovered !== false) recover(event.deviceId);
+  });
   const offHidden = window.electronAPI.onWindowHiddenChange?.(hidden => { if (!hidden) recover(); });
   window.addEventListener('focus', focus);
   document.addEventListener('visibilitychange', focus);
   stopObserving = () => {
-    offPresence?.(); offStatus?.(); offReopened?.(); offHidden?.();
+    offPresence?.(); offStatus?.(); offReopened?.(); offResponsiveness?.(); offHidden?.();
     window.removeEventListener('focus', focus);
     document.removeEventListener('visibilitychange', focus);
   };

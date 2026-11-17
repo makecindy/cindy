@@ -32,7 +32,7 @@ const invoke = vi.fn();
 const chatStat = vi.fn();
 const localResolve = vi.fn();
 const events = new Map<string, Set<(value: any) => void>>();
-const eventNames = ['onPresenceChanged', 'onStatusChanged', 'onPeerLinkReopened'];
+const eventNames = ['onPresenceChanged', 'onStatusChanged', 'onPeerLinkReopened', 'onResponsivenessChanged'];
 const emit = (name: string, value: unknown) => events.get(name)?.forEach(listener => listener(value));
 
 function reply(content = '`' + href + '`', deviceId = 'remote-a', workingDir = '/remote/project', origin?: SessionFileOrigin) {
@@ -143,6 +143,45 @@ describe('remote home references', () => {
     expect(invoke.mock.calls.filter(([device]) => device === 'remote-a')).toHaveLength(2);
     expect(invoke.mock.calls.filter(([device]) => device === 'remote-b')).toHaveLength(1);
     expect(chatStat.mock.calls.some(([args]) => args.absPath === '/old-owner/report.html')).toBe(false);
+  });
+
+  it('recovers only the responsive device without a presence, link or focus change', async () => {
+    // PR #11154: a circuit-open lookup fails while presence and relay stay online.
+    // This production-renderer regression supplies only the recovery event;
+    // existing reconnect cases cannot detect this missing event subscription.
+    invoke.mockRejectedValue(new Error('DEVICE_UNRESPONSIVE'));
+    const a = render(reply('`' + href + '` and `' + href + '`'));
+    const b = render(reply(undefined, 'remote-b'));
+    await act(async () => {});
+    expect(a.container.querySelector('code[role="button"]')).toBeNull();
+    expect(b.container.querySelector('code[role="button"]')).toBeNull();
+    await act(async () => {
+      emit('onResponsivenessChanged', { deviceId: 'remote-a', unresponsive: true, recovered: false });
+      emit('onResponsivenessChanged', { deviceId: 'remote-a', unresponsive: false, recovered: false });
+      emit('onResponsivenessChanged', { deviceId: 'unrelated', unresponsive: false, recovered: true });
+    });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    document.documentElement.setAttribute('data-app-hidden', '');
+    await act(async () => {
+      emit('onResponsivenessChanged', { deviceId: 'remote-a', unresponsive: false, recovered: true });
+    });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    document.documentElement.removeAttribute('data-app-hidden');
+    invoke.mockResolvedValue({ status: 'unique', candidates: [resolved], kind: 'file' });
+    await act(async () => {
+      emit('onResponsivenessChanged', { deviceId: 'remote-a', unresponsive: false, recovered: true });
+    });
+    expect(a.container.querySelectorAll('code[role="button"]')).toHaveLength(2);
+    expect(b.container.querySelector('code[role="button"]')).toBeNull();
+    expect(invoke.mock.calls.filter(([device]) => device === 'remote-a')).toHaveLength(2);
+    expect(invoke.mock.calls.filter(([device]) => device === 'remote-b')).toHaveLength(1);
+    a.unmount();
+    await act(async () => {
+      emit('onResponsivenessChanged', { deviceId: 'remote-a', unresponsive: false, recovered: true });
+    });
+    expect(invoke).toHaveBeenCalledTimes(3);
+    b.unmount();
+    expect(events.get('onResponsivenessChanged')?.size).toBe(0);
   });
 
   it('does not carry a resolved href across device, workdir or owner changes', async () => {
