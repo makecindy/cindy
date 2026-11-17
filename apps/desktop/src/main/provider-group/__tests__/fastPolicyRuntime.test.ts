@@ -1,3 +1,4 @@
+import { sharedTaskFailureReason, canRetrySharedTaskRecovery } from '../../../shared/sharedTaskRecovery.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -295,6 +296,30 @@ async function installDirectHost() {
 }
 const allocate = (sessionId: string) => state.hostDeps!.directGuestExecution!.allocate(guestPeer,
   { op: 'allocate', sessionId, agentKind: 'codex', model: 'gpt-5' });
+
+// #10848, unit: production Host + real ledger. Existing location tests only
+// asserted rejection, so business refusals could lose their public diagnosis.
+// A normally located task followed by revoked access/cleanup/provider change is
+// the minimal failure; the unchanged original location is the passing control.
+it.each([['revoked', 'denied'], ['cleanup', 'authorization'], ['unloaded', 'authorization'], ['provider', 'history']] as const)(
+  'classifies direct history refusal %s as %s without exposing private details', async (condition, reason) => {
+  await installDirectHost();
+  await allocate('diagnostic10848');
+  const locate = () => state.hostDeps!.directGuestExecution!.locate!(guestPeer,
+    { op: 'direct-locate', sessionId: 'diagnostic10848' });
+  expect(await locate()).toEqual({ deviceId: 'one' });
+  if (condition === 'revoked') state.approved = false;
+  if (condition === 'cleanup') vi.spyOn(state.usage!, 'memberGenerationReady').mockReturnValue(false);
+  if (condition === 'unloaded') state.owner = 'another-account';
+  if (condition === 'provider') state.shares[0].providerId = 'private-provider';
+  const error = await locate().catch((error: unknown) => error);
+  expect(error).toBeInstanceOf(Error);
+  if (!(error instanceof Error)) throw new Error('Expected a history refusal');
+  expect(sharedTaskFailureReason(error)).toBe(reason);
+  expect(error.message).toContain('[SHARED_TASK_STAGE_owner]');
+  expect(error.message).not.toMatch(/private-provider|laptop|cleanup|Provider share/);
+  expect(canRetrySharedTaskRecovery(error)).toBe(false);
+});
 
 // Unit: real O allocation/ledger must distinguish denial and policy from
 // transport failure without forwarding the upstream secret-bearing message.

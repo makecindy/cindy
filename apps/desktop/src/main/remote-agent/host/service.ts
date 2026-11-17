@@ -361,23 +361,25 @@ export function installRemoteAgentHost(options: {
     const access = ownedProviderShareGuestAccess(controller);
     const settings = readDeviceLinkSettings();
     const ownerDeviceId = getSelfDeviceId();
-    if (peer?.role !== 'guest' || !access || !ownerDeviceId || !getProviderShareHostLoadedSnapshot()
+    const snapshot = getProviderShareHostLoadedSnapshot();
+    if (!ownerDeviceId || !snapshot) throw sharedTaskRecoveryError('owner', 'authorization');
+    if (peer?.role !== 'guest' || !access
       || access.shareId !== peer.shareId || access.memberId !== peer.memberId
       || !settings.remoteControlEnabled || settings.revokedControllers.includes(peer.deviceId)
       || !isRemoteProviderInvocationAllowed(access.providerId)) {
-      throw new Error('[REMOTE_AGENT_UNAVAILABLE] Provider share access is unavailable');
+      throw sharedTaskRecoveryError('owner', 'denied');
     }
     const identity = { ownerScope: providerShareOwnerKey(), ownerDeviceId,
       shareId: peer.shareId, memberId: peer.memberId, guestDeviceId: peer.deviceId, sessionId };
-    const joinedAt = getProviderShareHostLoadedSnapshot()?.find((share) => share.shareId === peer.shareId)
+    const joinedAt = snapshot.find((share) => share.shareId === peer.shareId)
       ?.members.find((member) => member.memberId === peer.memberId)?.joinedAt;
     if (!joinedAt || !usage.memberGenerationReady(identity, joinedAt)) {
-      throw new Error('[REMOTE_AGENT_UNAVAILABLE] Provider share membership cleanup is pending');
+      throw sharedTaskRecoveryError('owner', 'authorization');
     }
     const location = usage.findDirectTaskLocation(identity);
     if (location && (location.providerId !== access.providerId
       || usage.pendingDirectCleanupFor(identity.ownerScope, location))) {
-      throw new Error('[REMOTE_AGENT_UNAVAILABLE] Provider share task is unavailable');
+      throw sharedTaskRecoveryError('owner', 'history');
     }
     return { identity, location, access, joinedAt };
   };
