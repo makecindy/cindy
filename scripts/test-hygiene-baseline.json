@@ -34,9 +34,6 @@
     "apps/desktop/src/main/__tests__/chatAttachmentIpcOwnerBoundary.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/main/__tests__/claudeAccountUsageSource.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/main/__tests__/claudeOrphanReaper.test.ts": {
       "resetModules": 1
     },
@@ -44,7 +41,7 @@
       "resetModules": 1
     },
     "apps/desktop/src/main/__tests__/computerUsePluginIpc.test.ts": {
-      "sourceReads": 10
+      "sourceReads": 9
     },
     "apps/desktop/src/main/__tests__/deviceLinkSettingsStore.test.ts": {
       "resetModules": 1
@@ -110,9 +107,6 @@
     "apps/desktop/src/main/__tests__/sessionDragReleaseNativeHost.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/main/__tests__/sessionRuntimeFallbackIntent.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/main/__tests__/sessionTaskSummary.test.ts": {
       "sourceReads": 2
     },
@@ -130,12 +124,6 @@
     },
     "apps/desktop/src/main/__tests__/updateService.test.ts": {
       "resetModules": 1
-    },
-    "apps/desktop/src/main/__tests__/usageBroadcasterClaudeSubscription.test.ts": {
-      "resetModules": 2
-    },
-    "apps/desktop/src/main/__tests__/usageBroadcasterCodexAccount.test.ts": {
-      "resetModules": 9
     },
     "apps/desktop/src/main/__tests__/usageBroadcasterXaiSubscription.test.ts": {
       "resetModules": 1
@@ -317,9 +305,6 @@
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/orcaLifecycleService.test.ts": {
-      "sourceReads": 1
-    },
-    "apps/desktop/src/main/maker-ipc/__tests__/orcaModelSelectionIntent.test.ts": {
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/orcaProviderRoutingSnapshotWiring.test.ts": {

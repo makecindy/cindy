@@ -8,7 +8,11 @@ Desktop 在工作过程分组后追加待发项（`pendingQueueItems.ts`），�
 
 定向界面验证：`pnpm ui:check --page pending-queue --theme all`。真实派发仍由现有输入协调器负责。
 
-> **读取时机**：安装、启动、重启、调试或验证 `apps/desktop` 及其共享 packages 时
+> **读取时机**：安装、启动、重启、调试或验证 `apps/desktop` 及其共享 packages 时，
+> 或修改 Desktop 开发启动脚本与单页 UI 验证工具（`ui:check`）之前
+> **适用路径**：`scripts/restart-desktop-remote.mjs`、`scripts/desktop-dev-runner.mjs`、
+> `scripts/desktop-dev-verdict.mjs`、`scripts/shared/desktop-dev-*.mjs`、
+> `apps/desktop/scripts/ui-page/**`
 
 本文是 Desktop 开发命令及其使用条件的权威说明；可执行脚本以当前 checkout 的根
 `package.json` 与 `apps/desktop/package.json` 为代码事实源。
@@ -626,3 +630,23 @@ Windows 的贴边／贴满判断仍读真实窗口（程序自己的展开不算
 若打开期间显示器被拔掉或分辨率变小，收起时旧矩形改放回当前工作区内。
 实现见 `main/sidebarWindowExpansion.ts`、`renderer/layout/sidebarPresentation.ts`；
 回归见 `sidebarWindowExpansion.test.ts` 和 `sidebarPresentation.test.tsx`。
+
+## Codex Micro Guard 遗留全局环境恢复
+
+旧版保护通过当前用户的 `launchctl NODE_OPTIONS` 预加载钩子，可能影响企业微信等
+沙盒 Node 应用（#5985）。功能已暂停；恢复仅剥离 Cindy 已知目录格式的预加载参数，
+保留其他 Node 参数，不重新启用保护。
+
+正常恢复沿用跨实例文件锁并清理旧标记。若创建锁之前遇到 `ENOSPC`、`EDQUOT` 或
+`EROFS`，仍通过 launchctl 尝试清理并回读验证全局变量，不依赖分配磁盘空间。
+此应急分支不读取旧快照、不处理文件，仍报告 `recovery-required`；磁盘恢复后使用
+设置中的「恢复环境」完成普通清理。只有旧钩子的值会被 unset；没有磁盘快照时无法恢复
+原先显式设置的空字符串。权限错误、不安全路径和锁竞争不走应急分支。
+
+清理全局环境不能改变已运行应用的环境：须完全退出旧版 Cindy，并重新打开受影响应用。
+不会强制终止应用、删除诊断报告或更改沙盒权限。不要在故障机器上先删除 hook 文件，
+已继承预加载的进程仍可能引用它。现场应记录客户端版本与清理是否成功；本地故障注入
+测试不能替代企业微信现场验证，也不能据此断言每次报告风暴都是磁盘满导致的清理失败。
+
+回归入口：`codexMicroGuardCore.test.ts`、`CodexMicroGuardService.test.ts`；测试通过替身
+模拟 launchctl 和存储故障，不修改测试机的真实全局环境。

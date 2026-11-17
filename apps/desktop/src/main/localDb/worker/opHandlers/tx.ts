@@ -174,6 +174,15 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return botsResumeLifecycle(db, txArgs);
     case 'bots.archiveLifecycle':
       return botsArchiveLifecycle(db, txArgs);
+    case 'bots.retireCloudCopy': {
+      const p = asRecord(txArgs, 'bots.retireCloudCopy args');
+      // Keep every version, session link and message. Only a confirmed cloud retirement
+      // releases this hidden copy's name; moving to another computer never calls this.
+      const result = db.prepare(`UPDATE bot_profiles SET status = 'archived', updated_at = ?
+        WHERE id = ? AND status NOT IN ('archived', 'deleting')`)
+        .run(expectNumber(p.at, 'at'), expectString(p.botId, 'botId'));
+      return { changed: result.changes > 0 };
+    }
     case 'bots.deleteProfile':
       return botsDeleteProfile(db, txArgs);
     case 'bots.prepareProfileDeletion':
@@ -897,8 +906,8 @@ function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArg
     if (existing) {
       // The group's project folder changed on this computer: the lane moves with it.
       db.prepare('UPDATE bot_session_links SET archived_at = ? WHERE session_id = ?').run(createdAt, existing.sessionId);
-      db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'`)
-        .run(createdAt, existing.sessionId);
+      db.prepare(`UPDATE sessions SET status = 'archived' WHERE id = ? AND status = 'active'`)
+        .run(existing.sessionId);
     }
     insertBotSession(db, s);
     db.prepare(`INSERT INTO bot_session_links
@@ -2248,8 +2257,8 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
     }
     if (status === 'archived' || status === 'deleted') db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
     const updated = db.prepare(
-      'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
-    ).get(status, now, sessionId) as {
+      'UPDATE sessions SET status = ?, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    ).get(status, payload.idleArchiveCutoff ?? null, now, sessionId) as {
       id: string; title: string | null; workingDir: string | null; workspaceKind: string | null; remoteHostId: string | null; source: string | null;
     } | undefined;
     if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });

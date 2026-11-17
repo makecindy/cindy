@@ -1,4 +1,5 @@
 import { INVOKE_TIMEOUT_OVERRIDES_MS } from './allowlist.js';
+import { REMOTE_DESKTOP_HEARTBEAT_TIMEOUT_MS } from './remoteDesktop.js';
 import {
   TASK_MIGRATION_CHANNEL,
   TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
@@ -199,7 +200,7 @@ export function resolveRemoteInvokeTimeoutMs(
   // Renewals must settle before the 12s lease, independently of slow media offers.
   const request = args?.[0];
   if (channel === 'device-link:remote-desktop:v1' && request &&
-      typeof request === 'object' && 'op' in request && request.op === 'heartbeat') return 5_000;
+      typeof request === 'object' && 'op' in request && request.op === 'heartbeat') return REMOTE_DESKTOP_HEARTBEAT_TIMEOUT_MS;
   const exact = MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS[channel];
   if (exact !== undefined) return exact;
   if (channel.startsWith('maker:schedule:')) return MOBILE_SCHEDULE_CHANNEL_TIMEOUT_MS;

@@ -35,6 +35,7 @@ import {
   startActivityPushSync,
   unregisterActivityPush,
 } from "@/widgets/agentActivityPush";
+import { setMobileDebugSink } from "@/debug/mobileDebugLog";
 import { setMobileAuthOwner } from "@/auth/authOwnerGeneration";
 
 const registration = () => ({
@@ -60,7 +61,7 @@ const options = () => ({
   },
 });
 const fetchMock = vi.fn<typeof fetch>();
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); setMobileDebugSink(undefined); });
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal("__DEV__", true);
@@ -295,4 +296,52 @@ it("keeps a confirmed server takeover when a rebuilt syncer fails to register", 
     expect(fetchMock).toHaveBeenCalled();
     expect(opts.onRegistered).not.toHaveBeenCalledWith(false);
   } finally { sync.dispose(); }
+});
+
+// Unit: reconnects used to reset both freshness observation and the 30s budget.
+// Existing tests only kept one syncer. Recreate it against the same activity and
+// observe actual HTTP payloads, including recovery on old/new native modules.
+it('preserves the recovery budget across syncers and sends an explicit bounded recovery hint', async () => {
+  vi.useFakeTimers();
+  const diagnostic = vi.fn();
+  setMobileDebugSink(diagnostic);
+  const recovery = {};
+  const opts = { ...options(), recovery };
+  fixture.native.getPushRegistration.mockResolvedValue({
+    ...registration(), activityId: 'live', updateToken: 'update', isStale: true,
+    confirmedAt: 100, staleAt: 200,
+  });
+  let sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    const body = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
+    expect(body.refreshStale).toBe(true);
+    expect(body).not.toHaveProperty('confirmedAt');
+    expect(body).not.toHaveProperty('staleAt');
+    sync.dispose();
+    sync = startActivityPushSync(opts);
+    await sync.sync(true);
+    expect(fetchMock.mock.calls.filter(call => JSON.parse(call[1]!.body as string).refreshStale)).toHaveLength(1);
+    vi.advanceTimersByTime(30_000);
+    await sync.sync(true);
+    expect(JSON.parse(fetchMock.mock.calls.at(-1)![1]!.body as string).refreshStale).toBe(true);
+    // Native timestamps are diagnostic only: new content must not register again.
+    const count = fetchMock.mock.calls.length;
+    fixture.native.getPushRegistration.mockResolvedValue({
+      ...registration(), activityId: 'live', updateToken: 'update', isStale: false,
+      confirmedAt: 300, staleAt: 1200,
+    });
+    await sync.sync();
+    expect(fetchMock).toHaveBeenCalledTimes(count);
+    expect(diagnostic).toHaveBeenCalledWith("info", "lifecycle", ["activity-recovered"]);
+    expect(diagnostic).toHaveBeenCalledWith("debug", "lifecycle", ["activity-content", {
+      confirmedAt: 300, staleAt: 1200, stale: false,
+    }]);
+    // A different activity has an independent recovery budget.
+    fixture.native.getPushRegistration.mockResolvedValue({
+      ...registration(), activityId: 'next', updateToken: 'next', isStale: true,
+    });
+    await sync.sync();
+    expect(JSON.parse(fetchMock.mock.calls.at(-1)![1]!.body as string).refreshStale).toBe(true);
+  } finally { sync.dispose(); vi.useRealTimers(); }
 });

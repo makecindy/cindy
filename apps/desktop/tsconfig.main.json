@@ -1,0 +1,17 @@
+// desktop typecheck 分片之一：主进程 / preload / 共享层。
+// 单个 tsconfig.json 全量检查的实测峰值：2026-11-13 堆 11.6 GiB（12288 上限的
+// 96.4%）、RSS 12.4 GB，已贴近 `Ineffective mark-compacts near heap limit`。
+// 按进程边界拆成两片后，本片实测堆 8.5 GiB / RSS 8.7 GB / 2m31s，与 renderer 片
+// 互相看不到对方的实现文件（共享层与 src/renderer/vite-env.d.ts 两边都要）。
+// 新增 src 顶层目录时必须同步这两片，否则 scripts/check-typecheck-shards.mjs 会失败。
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/main/**/*",
+    "src/shared/**/*",
+    "src/preload/**/*",
+    "src/test/**/*",
+    "src/renderer/vite-env.d.ts",
+    "*.d.ts"
+  ]
+}

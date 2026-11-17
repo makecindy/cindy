@@ -6,6 +6,17 @@
 > [`DESIGN.md`](./DESIGN.md) 为准；两者冲突时，视觉判断以 `DESIGN.md` 为准，流程判断以本文为准。
 > 方法论先例：同套治理已在 `xindong/mivo-canvas-plugin` 仓完整试点并被 review 流程接受
 > （治理合同 #191、单一台账 #233/#237、Token 单一权威 #332/#341、最小试点 #343）。
+>
+> **读取时机**：新增或修改设计 Token、主题系统、标准 UI 组件（primitive / pattern）、视觉类门禁
+> 脚本，或参与设计系统迁移 PR 之前；做 UI 圆角分类或点击目标尺寸审查时，同时读
+> `DESIGN.md` §5 与本文 §13（普通 UI 改动同样适用，不限于设计系统迁移 PR）。
+> **适用路径**：`packages/design-tokens/**`、`apps/desktop/src/renderer/themes/**`、
+> `apps/desktop/src/renderer/components/ui/**`、`apps/mobile/src/theme/**`、
+> `scripts/design-inventory.mjs`、`scripts/hardcoded-color-audit.mjs`、
+> `scripts/hardcoded-color-exemptions.json`、`scripts/shared/design-*.mjs`、
+> `scripts/shared/hardcoded-color-match.mjs`、`scripts/check-pr-design-basis.mjs`、
+> `docs/design-rules/design-inventory.md`、
+> `apps/desktop/src/renderer/__tests__/{designEffectsDiscipline,motionDiscipline}.test.ts`
 
 ## 1. 目的与范围
 

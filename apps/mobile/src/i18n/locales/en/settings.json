@@ -85,6 +85,16 @@
       "reset": "Reset to default",
       "apply": "Apply",
       "hex": "Color value"
+    },
+    "appIcon": {
+      "label": "App icon",
+      "saveFailed": "Couldn’t change the app icon. Try again.",
+      "options": {
+        "default": "Default",
+        "cat": "Black cat",
+        "wordmark": "Cindy wordmark",
+        "mark": "Cindy symbol"
+      }
     }
   },
   "language": {
@@ -514,5 +524,8 @@
     "sourceHint_local": "Enter a name to create a folder, or choose an existing one.",
     "chooseExistingFolder": "Choose existing folder",
     "changeMainDirectory": "Change"
+  },
+  "navigation": {
+    "unavailable": "Could not open settings on the target computer. Check that it is online and allows remote control; update Cindy if it is an older version."
   }
 }

@@ -28,8 +28,10 @@ open 结果沿用现有 invokeTransfer gzip 协商，自建中转继续透明转
 尚未发布的本机插件界面增量在 v3 `mcpApps.host` 声明视图、位置、命令和能力，仍引用
 `mcpApps.ui.resources` 并复用标准 AppBridge。`open-resource` 仅本机支持真正的无任务来源；
 原远程操作继续要求真实任务，不扩大 device-link allowlist、relay 或 Mobile 原生能力。
-receipt v2 新增可选 `approvedHostUi`，只承认当前 Host 理解且确认界面实际展示过的主体；
-旧 receipt、旧页面批准及旧提示界面不自动授予新宿主操作，原工具和页面批准继续可用。
+Host UI 以整版安装/更新批准有效、已启用及当前 manifest 声明为准，不另存分项批准。
+本机位置增量 `composer.header` 复用原生控件与弹层入口；旧端保留该声明但不挂载，既有位置与批准记录不变，无跨端协议变化。
+旧 receipt 的 `approvedHostUi` 字段读到即忽略，不迁移、不删数据；旧页面批准与原工具审批保持不变。
+原生入口、具名页面工具及无任务全局工具不套用 Agent MCP 策略或调用时确认，仍校验归属、版本、声明与来源 ticket。
 原生控件订阅/状态沿现有管子与本机用途受限 IPC，消息正文不新增落库前查询。
 `message.menu` 复用贡献项的显式批准和原动作执行；只接菜单动作，关闭的菜单不成为状态消费者。
 作者契约与兼容范围见[插件界面扩展](../../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-ui.md)。
@@ -135,8 +137,9 @@ open 增加独立可选字段 `sdkCacheHashes: string[]`（最多 8 个小写 SH
 不放进 context，不交给页面的 hostContext。哈希是 UTF-8 编码的固定 JSON 元组
 `[sdk.source, sdk.addons?.['cindy/view-state']?.source ?? null, sdk.addons?.['cindy/view-state']?.reactSource ?? null]`
 的 SHA-256，覆盖官方模块与两个辅助模块的实际字节，不只比较应用版本号。
-执行端在原有授权/open 流程完成后，只有当前 SDK 哈希被查看端明确声明时，才省略 sdk、
-返回可选的 `sdkRef: string`。未声明、未命中或原预算已省略 SDK 时，沿用原有结果。
+执行端沿用原有授权/open 流程，在文档预算检查之前，只有当前 SDK 哈希被查看端明确声明时，
+才省略 sdk、返回可选的 `sdkRef: string`。未声明或未命中时，沿用原来超预算先删 addons、
+再删 SDK 的顺序；引用本身仍超预算时也省略，不减少原有 SDK-less 页面上限。
 这不改变原有 `sdk.source` 类型，不增加 channel、allowlist、relay 帧或新操作。
 
 查看端只声明本地确实持有的模块，缓存按账号代次和执行设备隔离，进程内最多 8 项、
@@ -168,3 +171,39 @@ Desktop Main 和 Mobile JS 复用同一个引用缓存实现；Mobile 用已有�
 否则已能打开的页面会退化；缓存/压缩后的大小不能代表解码后内存。验收用约 3.9 MiB 难压缩
 页面同时打开 4 张，记录两端内存、传输量、排队和失败半径。冷缓存并发请求可能各传一份 SDK，
 不能把“后续串行命中省字节”写成“并发首次只传一份”；长轮询合并仍留待独立方案。
+
+独立验收实测（Electron 42.11.12、iOS 26.5 测试环境，非手机真机）：约 3.9 MiB 大页面
+每次 open 都传未压缩的 4,090,021 B；同时打开 4 张时，同期读历史约 3.6 秒，手机发消息
+从点击到成功约 3.0 秒，未出现 BACKPRESSURE。这是本次验收环境的数据，不是吞吐保证。
+是否应在代码里限制同时传输的大结果数量，仍待评估；本次不改并发调度或单份上限。
+
+该次大页面验收发生在“先引用、后预算”修复之前：冷开没有哈希声明，SDK 仍可能因预算被省略，
+依赖宿主 SDK import 的页面会 404 并最终 MCP_APP_INITIALIZATION_TIMEOUT。这是原有冷开限制；
+本次只修复已有匹配字节的暖开，尚未对该补丁重做远程实机验收。是否声明查看端内置 SDK 的
+哈希属于后续设计事项，本次不实现。
+
+## 卡片来源、宿主按钮与固定尺寸（2026-11-16）
+
+公开 `mcpAppHistory` version 1 增加可选 `plugin: {name,source?}` 与 `customMcp: {name}`。
+source 是宿主记录的生成时快照，只包含 `{kind: "official"|"organization"|"market"|"third-party"|"local"|"unknown"}`；
+同账号与共享访客历史均不发送 namespace，公开 organization 无 namespace 仍按市场来源显示。
+Host 侧 installationSource 的 namespace 校验、插件详情与安装确认保持不变。
+自定义 MCP 的 name 由执行 Host 从用户配置的 CustomMcpConfig.name 写入私有工具 `_meta["cindy/custom-mcp"]`，
+覆盖服务自报的同名字段；公开投影只保留 name，不含服务 ID、slug、地址、端口、请求头或凭证。
+旧端 title 同时得到「服务名 · 自定义 MCP」；名称为生成时快照，改名不改旧卡片，不在渲染时回查配置。
+兼容早期 `customMcp: true` 和缺失/非法 name：回退原工具标题/工具名，不能因此丢掉整张卡。
+新查看端遇到未知 source kind 按 unknown 提示，旧卡片缺 source 不加来源标签。
+旧端继续读 title/text，title 保留插件名与例外来源文字；没有向公开历史加入私有参数、服务器身份或凭据。
+已安装插件投影和安装确认增加可选 `installationSource`，旧 `trust.level` 与 `consent.trust` 值域、权限和批准语义均不变。
+旧手机允许未知可选字段，仍按原 trust 四值校验。新手机连接旧 Host 时缺来源的确认显示来源未知，不猜市场身份。
+
+资源可选 `hostFullscreenButton` 映射为 `_meta["cindy/host-fullscreen-button"]`；默认 true，false 只控制宿主按钮。
+旧 manifest 解析器保留未知资源字段，因此不会拒装；若作者必须隐藏旧宿主按钮，需按实际发布版本设置 minCindyVersion。
+新 Host 在既有 `ui/notifications/host-context-changed` 中发布可选 `cindy/host-controls: {fullscreenButton:boolean}`，
+取当前资源设置、Host 与 App 显示模式能力交集。新查看端仅在明确 true 时显示按钮；旧 Host 缺字段时隐藏，旧查看端忽略。
+本机和远控 Desktop 沿原沙箱消息观察通道接收，不新增 channel、操作或 relay 字段，按钮走原 displayMode 校验。
+手机始终只提供 inline，忽略按钮字段。
+
+页签及全屏使用标准 containerDimensions 的 `{width,height}` 分支；对话保持 `{width,maxHeight}`，
+尺寸变化沿原 context 操作发送，隐藏/零尺寸不发送。无存储迁移，不重新批准插件。
+Mobile 仅 JS/TS 展示与文案修改，无原生依赖、配置或接口变化，可随热更新交付；最终指纹仍以 CI 同环境比较为准。

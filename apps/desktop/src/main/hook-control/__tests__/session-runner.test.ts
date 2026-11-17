@@ -148,6 +148,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     Session: actual.Session,
     hasSessionPermissionUpdates: actual.hasSessionPermissionUpdates,
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
+    isAutoReviewNoAvailableModelNotice: actual.isAutoReviewNoAvailableModelNotice,
     isAutoReviewUnavailableMetadata: actual.isAutoReviewUnavailableMetadata,
     autoReviewReasonFromMetadata: actual.autoReviewReasonFromMetadata,
     AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT: actual.AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
@@ -441,12 +442,10 @@ vi.mock('../../im/shared/sessionProviderLabel.js', () => ({
   resolveSessionErrorContext: vi.fn(async () => ({ providerLabel: 'OpenAI', modelLabel: 'GPT-6 Astra', taskLabel: '测试任务（sess-new）' })),
 }));
 
-import { createMakerHookSessionRunner, extractToolResultMediaUrls } from '../session-runner.js';
+import { createMakerHookSessionRunner, extractToolResultMediaUrls, resolveSharedImProjectConfig } from '../session-runner.js';
 import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
-import { getResolvedMainLocale } from '../../i18n.desktop.js';
-import { buildUiLanguageErrorNote } from '../../maker-ipc/uiLanguageErrorNote.js';
 import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.desktop.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 import { createModelRoutingTransform, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host.js';
@@ -455,7 +454,7 @@ import { clearAllSessionRuntimeAxes, setSessionEffort, setSessionFastMode } from
 const log = { info: vi.fn(), warn: vi.fn() };
 
 /** 喂给 agent 的文本 = 用户原话 + 渠道说明(教模型用 xdt-file 回传文件)。 */
-const HELLO_WITH_NOTE = `hello\n\n${SLACK_HOOK_PROMPT_NOTE}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`;
+const HELLO_WITH_NOTE = `hello\n\n${SLACK_HOOK_PROMPT_NOTE}`;
 
 function catalogModel(id: string, name = id): CatalogModel {
   return {
@@ -551,6 +550,22 @@ beforeEach(() => {
 afterEach(() => setMainLocale('en'));
 
 describe('hook task model selection on next send', () => {
+  // Plugin IM must use the canonical row even before an official channel connects.
+  // Existing runner tests only selected adopted channels. Actual shared resolver; unit.
+  it('resolves plugin IM from the shared project row before any official channel adopts it', async () => {
+    h.useActualDefaults = true;
+    h.isSharedPrefsAdopted.mockReturnValue(false);
+    h.getWorkspacePref.mockImplementation((...args: unknown[]) => args[0] === 'shared'
+      ? { workspace: 'chat', agentKind: 'codex', model: 'remote-model', effort: 'high', permissionMode: 'ask' }
+      : { workspace: 'chat', agentKind: 'codex', model: 'wrong-model', effort: 'low', permissionMode: 'bypassPermissions' });
+    h.getWorkspaceProviderSource.mockImplementation((...args: unknown[]) => args[0] === 'shared' ? 'remote-provider' : 'wrong-provider');
+    h.agentDeviceId = 'share:owner';
+    h.readRemoteRoute.mockResolvedValue({ model: catalogModel('remote-model') });
+    const result = await resolveSharedImProjectConfig('chat', log);
+    expect(result).toMatchObject({ agentKind: 'codex', model: 'remote-model', effort: 'high', permissionMode: 'ask',
+      providerId: 'remote-provider', agentDeviceId: 'share:owner' });
+    expect(h.readRemoteRoute).toHaveBeenCalledWith({ agentDeviceId: 'share:owner', agentKind: 'codex', providerId: 'remote-provider', model: 'remote-model' });
+  });
   // PR #7291 unit: automatic selection must use the execution location and still
   // reach the existing stale-source rule; previous coverage used pinned defaults.
   it('creates an automatic remote workspace task and follows its resolved route', async () => {
@@ -1483,7 +1498,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     );
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `hello\n\n${buildHookPromptNote(im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
+      content: `hello\n\n${buildHookPromptNote(im)}`,
     });
     expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
       origin: { kind: 'hook', source: im },
@@ -1520,7 +1535,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       rawChannelText: rawCommand,
     });
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `${decoratedPrompt}\n\n${buildHookPromptNote(im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
+      content: `${decoratedPrompt}\n\n${buildHookPromptNote(im)}`,
     });
   });
 
@@ -1657,7 +1672,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(outcome.status).toBe('ok');
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `再试试\n\n${SLACK_HOOK_PROMPT_NOTE}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
+      content: `再试试\n\n${SLACK_HOOK_PROMPT_NOTE}`,
     });
   });
 

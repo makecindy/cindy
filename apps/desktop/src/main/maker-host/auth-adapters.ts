@@ -1135,6 +1135,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       return;
     }
     this.ensureInvalidationMarkerLoaded();
+    const reconcileOwner = getActiveAppSession();
     const systemAuth = getSystemCodexAuthPath();
     const myAuth = path.join(this.codexHome, 'auth.json');
 
@@ -1265,14 +1266,34 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 会让 relink 走 link-unsupported 回退, splash 后首次 auth 查询短暂误报未登录。
     await fsp.mkdir(this.codexHome, { recursive: true }).catch(() => undefined);
     if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
-      const snapshot = await copyCodexAuthSnapshotWithRetry(systemAuth, myAuth);
-      if (hasLocalEntry && !topology.healthy) {
+      const authorization = captureNativeProviderAuthorizationGeneration('openai');
+      const revoked = isNativeProviderAuthRevoked('openai');
+      const assertCurrent = () => {
+        const owner = getActiveAppSession();
+        if (isAppSessionBoundaryPending() || owner.dataOwnerId !== reconcileOwner.dataOwnerId
+          || owner.generation !== reconcileOwner.generation
+          || this.pendingLogin || this.loginCancellationOpen
+          || authorization !== captureNativeProviderAuthorizationGeneration('openai')
+          || revoked !== isNativeProviderAuthRevoked('openai')
+          || getSystemCodexAuthPath() !== systemAuth
+          || !this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)
+          || getActiveInvalidatedSystemCodexAuthMarker(this.codexHome, systemAuth, myAuth)) {
+          throw new Error('Release auth snapshot authorization changed');
+        }
+      };
+      const snapshot = await copyCodexAuthSnapshotWithRetry(
+        systemAuth, myAuth, process.platform, undefined, assertCurrent,
+      );
+      // The primitive's resolved Promise yields before this continuation.
+      // Never grant scope to an owner/login that changed in that gap.
+      if (snapshot.kind === 'copied') assertCurrent();
+      if (hasLocalEntry && !topology.healthy && !snapshot.unchanged) {
         this.lastOrphanRepair = snapshot.kind === 'copied' ? 'relinked' : 'failed';
       }
       if (snapshot.kind === 'copied') {
         markNativeProviderAuthSharedSystemCredential('openai');
         this.lastKnownCodexCredentialScope = 'system-shared';
-        log.info('codex auth.json copied from Release login for read-only Dev use');
+        if (!snapshot.unchanged) log.info('codex auth.json copied from Release login for read-only Dev use');
       } else {
         credPathLog.warn('Release auth snapshot failed, auth.json left intact', {
           error: snapshot.error?.message,

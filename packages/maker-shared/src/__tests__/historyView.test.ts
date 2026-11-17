@@ -469,13 +469,19 @@ describe('shared history view lifecycle', () => {
     expect(view.getSnapshot().details.size).toBe(0);
   });
 
-  it('releases a large partial detail body when collapsed during pagination', async () => {
+  // #11009: cancellation must stop the indicator and discard late completion,
+  // while retaining warm bodies and still evicting large ordinary partial reads.
+  it.each([
+    { cached: false, preview: true }, { cached: true, preview: true }, { cached: false, preview: false },
+  ])('stops a cancelled paginated read (cached=$cached, preview=$preview)', async ({ cached, preview }) => {
     const body = row(1, 'thinking', 'x'.repeat(1024 * 1024));
+    const items = projectHistoryView([body], preview);
+    const warm = cached ? [row(1, 'thinking', 'previous complete body')] : [];
     let finish!: (page: { version: 1; messages: HistoryMessageSource[]; hasMore: false; nextCursor: null }) => void;
     let started!: () => void;
     const secondPage = new Promise<void>(resolve => { started = resolve; });
     const view = new HistoryViewController<HistoryMessageSource>({
-      page: async () => ({ version: 1, items: projectHistoryView([body], false), hasMore: false, nextCursor: null }),
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
       details: async (_ref, after) => {
         if (!after) return { version: 1, messages: [body], hasMore: true, nextCursor: 'next' };
         started();
@@ -483,19 +489,67 @@ describe('shared history view lifecycle', () => {
       },
       expanded: async () => undefined,
     });
+    if (cached) await view.restoreCachedView(async () => ({
+      ...view.getSnapshot(), items, ready: true,
+      details: new Map([[items[0].key, { messages: warm, revision: 'previous', lastMessageId: body.id,
+        loading: false, complete: true, error: null }]]),
+    }));
     await view.refresh();
     const group = view.getSnapshot().items[0];
     if (group.type !== 'work') throw new Error('Expected a work group');
     view.setExpanded(group.key, true);
     const pending = view.loadDetails(group.summary);
     await secondPage;
-    expect(view.getSnapshot().details.get(group.key)?.messages).toHaveLength(1);
+    expect(view.getSnapshot().details.get(group.key)).toMatchObject({
+      messages: cached ? warm : preview ? [] : [body], loading: true,
+    });
     view.setExpanded(group.key, false);
-    expect(view.getSnapshot().details.size).toBe(0);
+    const cancelled = view.getSnapshot().details.get(group.key);
+    if (cached || preview) expect(cancelled).toMatchObject({ messages: warm, loading: false, complete: false });
+    else expect(cancelled).toBeUndefined();
     finish({ version: 1, messages: [], hasMore: false, nextCursor: null });
     await pending;
-    expect(view.getSnapshot().details.size).toBe(0);
+    expect(view.getSnapshot().details.get(group.key)).toBe(cancelled);
   });
+
+  // #11009 scope regression (unit): only the full range that can switch back
+  // to a detail preview needs atomic publication. Other first reads must keep
+  // their first page readable during a slow/failing second page.
+  it.each(['completed', 'lines', 'preview', 'preview-full'] as const)(
+    'preserves partial-read availability outside the preview-switch path (%s)', async (mode) => {
+      const rows = Array.from({ length: 8 }, (_, i) => row(i + 1, 'thinking', `step ${i}`));
+      const items = projectHistoryView(rows, mode !== 'completed');
+      const group = items[0];
+      if (group.type !== 'work') throw new Error('Expected a work group');
+      if (mode === 'lines') group.summary.lines = [];
+      const summary = mode === 'preview' ? group.summary.preview! : group.summary;
+      const first = rows.findIndex(message => message.id === summary.firstMessageId);
+      const firstPage = rows.slice(first, first + 2);
+      let fail!: (error: Error) => void;
+      let started!: () => void;
+      const secondPage = new Promise<void>(resolve => { started = resolve; });
+      const view = new HistoryViewController<HistoryMessageSource>({
+        page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+        details: async (_ref, after) => {
+          if (!after) return { version: 1, messages: firstPage, hasMore: true, nextCursor: 'next' };
+          started();
+          return new Promise((_resolve, reject) => { fail = reject; });
+        },
+        expanded: async () => undefined,
+      });
+      await view.refresh();
+      view.setExpanded(summary.key, true);
+      const pending = view.loadDetails(summary);
+      await secondPage;
+      const visible = mode === 'preview-full' ? [] : firstPage;
+      expect(view.getSnapshot().details.get(summary.key)).toMatchObject({ messages: visible, loading: true });
+      const error = new Error('Second page failed');
+      fail(error);
+      await pending;
+      expect(view.getSnapshot().details.get(summary.key)).toMatchObject({ messages: visible, loading: false, error });
+      view.setActive(false);
+    },
+  );
 
   it.each([false, true])('joins an expanded detail read through its latest revision (changed=%s)', async (changed) => {
     let rows = [row(1, 'thinking', 'old')];

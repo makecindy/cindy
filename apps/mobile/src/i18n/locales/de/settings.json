@@ -85,6 +85,16 @@
       "reset": "Auf Standard zurücksetzen",
       "apply": "Anwenden",
       "hex": "Farbwert"
+    },
+    "appIcon": {
+      "label": "App-Symbol",
+      "saveFailed": "Das App-Symbol konnte nicht geändert werden. Bitte versuche es erneut.",
+      "options": {
+        "default": "Standard",
+        "cat": "Schwarze Katze",
+        "wordmark": "Cindy-Wortmarke",
+        "mark": "Cindy-Symbol"
+      }
     }
   },
   "language": {
@@ -514,5 +524,8 @@
     "sourceHint_local": "Einen Namen zum Erstellen eingeben oder einen vorhandenen Ordner wählen.",
     "chooseExistingFolder": "Vorhandenen Ordner wählen",
     "changeMainDirectory": "Ändern"
+  },
+  "navigation": {
+    "unavailable": "Die Einstellungen des Zielcomputers konnten nicht geöffnet werden. Prüfe, ob er online ist und Fernsteuerung erlaubt. Aktualisiere Cindy bei einer älteren Version."
   }
 }

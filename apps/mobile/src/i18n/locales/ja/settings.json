@@ -85,6 +85,16 @@
       "reset": "デフォルトに戻す",
       "apply": "適用",
       "hex": "カラーコード"
+    },
+    "appIcon": {
+      "label": "アプリアイコン",
+      "saveFailed": "アプリアイコンを変更できませんでした。もう一度お試しください",
+      "options": {
+        "default": "デフォルト",
+        "cat": "黒猫",
+        "wordmark": "Cindy ロゴタイプ",
+        "mark": "Cindy シンボル"
+      }
     }
   },
   "language": {
@@ -514,5 +524,8 @@
     "sourceHint_local": "名前を入力して作成するか、既存のフォルダを選択します。",
     "chooseExistingFolder": "既存フォルダを選択",
     "changeMainDirectory": "変更"
+  },
+  "navigation": {
+    "unavailable": "対象のパソコンの設定を開けませんでした。オンラインでリモート操作が許可されているか確認し、古いバージョンの場合は Cindy を更新してください。"
   }
 }

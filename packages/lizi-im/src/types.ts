@@ -374,6 +374,12 @@ export interface InteractiveCardSpec {
   /** Markdown body. */
   body: string;
   buttons: InteractiveCardButton[];
+  /**
+   * 按钮排布。`row`(默认): 少量短按钮横排, 如允许 / 拒绝。
+   * `list`: 选项列表(模型、项目、会话等), 每个选项独占一行、按卡片宽度展开,
+   * 避免多按钮挤在一行时文字被压缩截断。不支持排布的渠道忽略此字段。
+   */
+  buttonLayout?: 'row' | 'list';
 }
 
 /**

@@ -4,6 +4,7 @@
 > **读取时机**：修改个人 IM 渠道（`apps/desktop/src/main/im/**`）或官方 hook
 > （`apps/desktop/src/main/hook-control/**`）的找/建任务、命令、排队与插话、输入拼装、
 > 事件观察、表情、交互、收尾或停止逻辑之前
+> **适用路径**：`apps/desktop/src/main/im/**`、`apps/desktop/src/main/hook-control/**`
 
 个人 IM 渠道（Telegram / 飞书 / 微信 / 钉钉 / Discord / 企业微信）与官方 hook（官方
 Telegram / Slack / X / 飞书 / Lark）是同一件事的两套实现：把渠道里的一条消息变成 Cindy 任务里的一轮，
@@ -11,6 +12,13 @@ Telegram / Slack / X / 飞书 / Lark）是同一件事的两套实现：把渠�
 **合并后归谁**，以及迁移中必须守住的不变量。用户可见的两侧差异另见
 [`../product-rules/telegram-bot-parity.md`](../product-rules/telegram-bot-parity.md)；
 台账里标「有意不同」的项以策略参数表达，合并时不抹平。
+
+模型输入的语言／文风规则（2026-11-15）：IM 不附加界面语言、文学形式或暂停／恢复文风说明；
+官方 hook 的 `promptWithNote` 仅保留渠道与实际业务上下文说明。模型正文和错误说明随来信、
+用户要求及模型决定，宿主固定控制文案仍按各渠道本地化规则生成。实现与发送回归见
+[session-runner.ts](../../apps/desktop/src/main/hook-control/session-runner.ts) 和
+[session-runner.test.ts](../../apps/desktop/src/main/hook-control/__tests__/session-runner.test.ts)；
+产品台账见 [Telegram bot 对齐](../product-rules/telegram-bot-parity.md)。
 
 连接恢复由渠道 transport 持有，不重放任务或发送内容。Telegram、Discord 的启动网络失败与
 钉钉的连接失败使用可取消的指数退避（约 1 秒起、30 秒封顶，带抖动）；Telegram 429 尊重
@@ -38,6 +46,10 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 覆盖用户刚固定的模型或切换后的渠道。
 
 ## 0. 项目清单（2026-11-13）
+
+插件 IM 入口可经批准的 `tasks.imProjects/create/followImProject` 使用同一份项目与配置，
+不读私有文件、不另存模型默认值；微信包装插件按群/私聊保存项目选择。具体合同见
+[插件 IM 共用项目与模型](protocol-compatibility/plugin-im-projects.md)。官方渠道原有命令和镜像协议不变。
 
 **侧栏的本机项目就是 IM 机器人用的项目**，不另设「工作目录映射」这一层概念；界面与机器人文案一律叫
 「项目」，「工作目录」只指 Agent 实际干活的那个目录（术语表）。
@@ -450,3 +462,16 @@ async 卡跨轮存活、最长 24 小时。重启后旧卡安全失效。
 `interaction.decision` 的 `question:reply`＋`answerText` 回传文字。未协商时沿用旧入口。
 Telegram 继续使用已协商的 `telegram-question-ops-v1`，展示模型与其余 IM 同源。
 本实现不新增 X 的公开帖问答入口，不改变各渠道原有消息触发／成员准入规则。
+
+### Telegram 后台回报的媒体发送
+
+渠道自有任务收到其它任务回报、或沿渠道来源被后台唤醒时，共享 runner 在已核实的
+输出路由上建立本轮媒体发送租约。`send_media` 与正常入站共用发送流程，支持图片、
+任意类型文件、视频、音频等全部既有类型，以及本地绝对路径、公网 URL 和 Telegram
+file_id；后台回报不另设文件目录或图片专属限制。文件存在性、上传大小和平台格式限制
+沿用 Telegram transport。工具只在发送成功后返回成功回执。
+
+目标固定为原 bot 的原聊天／话题。该租约独立于 `ChannelToolScope`，不提供用户身份、
+群历史读取、群管理或跨群 API 权限，也不把普通工具过程图片自动发到群里。
+桌面输入、普通接管任务、远程 SSH 任务不建立它。终态、未派发、解绑、销毁及下一轮
+来源切换时回收；正常 Telegram 入站的权限规则不变，包括非绑定用户的文件范围限制。

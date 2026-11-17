@@ -85,6 +85,16 @@
       "reset": "Réinitialiser",
       "apply": "Appliquer",
       "hex": "Valeur de couleur"
+    },
+    "appIcon": {
+      "label": "Icône de l’app",
+      "saveFailed": "Impossible de modifier l’icône de l’app. Veuillez réessayer.",
+      "options": {
+        "default": "Par défaut",
+        "cat": "Chat noir",
+        "wordmark": "Logotype Cindy",
+        "mark": "Symbole Cindy"
+      }
     }
   },
   "language": {
@@ -514,5 +524,8 @@
     "sourceHint_local": "Saisissez un nom pour créer un dossier ou choisissez un dossier existant.",
     "chooseExistingFolder": "Choisir un dossier existant",
     "changeMainDirectory": "Modifier"
+  },
+  "navigation": {
+    "unavailable": "Impossible d’ouvrir les paramètres de l’ordinateur cible. Vérifiez qu’il est en ligne et autorise le contrôle à distance ; mettez Cindy à jour si nécessaire."
   }
 }

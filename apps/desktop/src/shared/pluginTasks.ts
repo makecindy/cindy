@@ -1,4 +1,10 @@
+import type { MessageSourcePluginRelay } from '@cindy/maker-shared/message-source';
 import type { PluginMessageAttachment } from './pluginAttachments.js';
+/**
+ * Optional `tasks.send` relay: where the plugin says this IM message came from. Display and
+ * `[消息来源]` context only; the Host still stamps the plugin as the sender, never a grant.
+ */
+export type PluginTaskMessageRelay = MessageSourcePluginRelay;
 /** Ordinary Session API. Task data stays on the plugin host; execution may be remote. */
 export interface PluginTaskRoute {
   /** Omitted = plugin host; a paired computer or share:<id> selects remote Agent execution. */
@@ -8,6 +14,10 @@ export interface PluginTaskRoute {
   model: string;
   effort: string;
   fastMode: boolean | 'ultrafast';
+}
+/** Same location vocabulary as an explicit route: a paired computer id or share:<id>; never 'local'. */
+export function isPluginTaskAgentDeviceId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value) && value !== 'local';
 }
 export const PLUGIN_TASK_PERMISSION_MODES = ['ask', 'auto', 'bypassPermissions'] as const;
 export type PluginTaskPermissionMode = (typeof PLUGIN_TASK_PERMISSION_MODES)[number];
@@ -30,6 +40,7 @@ export interface PluginTaskView {
   revision: number;
   resolvedConfig: PluginTaskRoute;
   workingDir?: string;
+  workspaceKind?: 'project' | 'dialogue';
   permissionMode?: string;
   /** Independent Plan Mode; the stored permission remains available after it ends. */
   planModeEnabled?: boolean;
@@ -67,7 +78,14 @@ export interface PluginTaskRun {
   completedAt?: number;
   error?: string;
   usage: { status: 'unavailable'; reason: string };
+  /**
+   * getRun only (capabilities().runPreview): the assistant text block currently streaming in this
+   * run's live execution. Partial, may reset after a tool call, never the final output; never stored.
+   */
+  preview?: { text: string };
 }
+/** UTF-16 chars kept from the start of a streaming preview. */
+export const PLUGIN_TASK_RUN_PREVIEW_MAX_CHARS = 32_768;
 export interface PluginTeamPlan {
   concurrency: number | null;
   /** Plugin-authored scope, authenticated by Host registration; never user-authored intent. */
@@ -84,7 +102,8 @@ export function isPluginTeamPlanWithinBudget(plan: unknown): boolean {
   } catch { return false; }
 }
 export type PluginTaskRequest = (
-  | { type: 'tasks-request'; kind: 'capabilities' | 'models' }
+  | { type: 'tasks-request'; kind: 'capabilities' | 'models' | 'imProjects' }
+  | { type: 'tasks-request'; kind: 'followImProject'; taskId: string; expectedRevision: number; imProject: string }
   | { type: 'tasks-request'; kind: 'setModel'; taskId: string; expectedRevision: number; route: PluginTaskRoute | 'plugin-default' }
   | {
       type: 'tasks-request';
@@ -95,6 +114,8 @@ export type PluginTaskRequest = (
       title?: string;
       /** Opt in to Host naming after the first accepted message; omit title. */
       autoTitle?: boolean;
+      /** Shared IM project: chat or a directory returned by imProjects. Requires agent.targets. */
+      imProject?: string;
       route?: PluginTaskRoute;
       /** New task only; the plugin's Host card ceiling applies only when enabled. */
       permissionMode?: PluginTaskPermissionMode;
@@ -121,9 +142,14 @@ export type PluginTaskRequest = (
       text: string;
       /** Supplementary material, collapsed in the conversation but sent to the Agent. */
       context?: string;
+      /** The message's own images, audio/video or files; shown with it. `text` may be '' when present. */
       attachments?: PluginMessageAttachment[];
+      /** Model-only references (for example group history); never shown or saved with the message. */
+      contextAttachments?: PluginMessageAttachment[];
       /** Optional Host-issued parent invocation; correlation only, not execution authority. */
       invocationId?: string;
+      /** Optional IM relay context (capabilities().messageRelay); rendered as an IM card. */
+      relay?: PluginTaskMessageRelay;
     }
   | { type: 'tasks-request'; kind: 'getRun'; runId: string }
   | { type: 'tasks-request'; kind: 'listRuns'; taskId: string; after?: string; limit?: number }

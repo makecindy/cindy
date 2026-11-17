@@ -3,7 +3,9 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RemoteSerializedAttachment } from '@/session/types';
+import { contextSheetMediaUploadCandidates } from '@/session/contextSheetMediaUpload';
 import type { MobileLocalAttachmentUploadCandidate } from '@/session/mobileLocalAttachmentUpload';
+import { useBotGroupComposerAttachments } from '@/session/useBotGroupComposerAttachments';
 import { useComposerImageExpansion } from '@/session/useComposerImageExpansion';
 import {
   useMobileLocalAttachments,
@@ -37,6 +39,13 @@ vi.mock('expo-image-picker', () => ({
   UIImagePickerPreferredAssetRepresentationMode: { Current: 'current' },
 }));
 vi.mock('@/session/deferredPhotoLibrary', () => ({ pickDeferredLibraryPhotos: runtime.pickPhotos }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ getAccessToken: async () => 'token' }) }));
+vi.mock('@/session/useContextSheetMediaAssets', () => ({
+  // The photo library hands back a local file that is already optimized.
+  resolveContextSheetMediaAssetForUpload: async (asset: { filename: string }) => ({
+    uri: `file:///photos/${asset.filename}`, filename: asset.filename, width: 10, height: 10, optimized: true,
+  }),
+}));
 vi.mock('expo-file-system/legacy', () => ({
   documentDirectory: 'file:///docs/',
   deleteAsync: async () => undefined,
@@ -404,6 +413,52 @@ it('restores share source order when concurrent uploads complete in reverse orde
   expect(attachments.map(item => item.name)).toEqual(['second.pdf']);
   await act(async () => { runtime.uploads[0].resolve(); await harness.latest().waitForPendingUploads(); });
   expect(attachments.map(item => item.name)).toEqual(['first.pdf', 'second.pdf']);
+});
+
+// PR #10729 review (P1): recent photos picked together and added with the sheet's bottom button
+// upload two at a time, so the tray followed upload completion instead of the picked order.
+// The share case above covers the pipeline with hand-written order; these run what the three
+// composers really enqueue. Minimal failing input: two photos, the second upload finishes first.
+// Unit tier, real upload pipeline with the transport faked.
+describe('recent photos added together', () => {
+  const photo = (name: string) => ({ id: name, uri: `ph://${name}`, filename: `${name}.jpg` }) as never;
+  const finish = (name: string) => runtime.uploads.find((upload) => upload.name === `${name}.jpg`)!.resolve();
+
+  it('return to the picked order in the task and new-task composers', async () => {
+    const harness = mount('session-a');
+    let attachments: RemoteSerializedAttachment[] = [];
+    // Both pages keep their list with insertUploadedAttachment.
+    vi.mocked(harness.options.onUploaded).mockImplementation((attachment) => {
+      attachments = harness.latest().insertUploadedAttachment(attachments, attachment);
+    });
+    act(() => harness.first.enqueueUploads(
+      contextSheetMediaUploadCandidates([photo('first'), photo('second')]), { token: 'token' }));
+    await act(async () => { await flush(); });
+    expect(runtime.uploads).toHaveLength(2);
+    await act(async () => { finish('second'); await flush(); });
+    expect(attachments.map((item) => item.name)).toEqual(['second.jpg']);
+    await act(async () => { finish('first'); await harness.latest().waitForPendingUploads(); });
+    expect(attachments.map((item) => item.name)).toEqual(['first.jpg', 'second.jpg']);
+  });
+
+  it('return to the picked order in the group composer, after what was already attached', async () => {
+    let tray!: ReturnType<typeof useBotGroupComposerAttachments>;
+    function Harness() {
+      tray = useBotGroupComposerAttachments({ deviceId: 'device-1', onPicked: () => undefined });
+      return null;
+    }
+    act(() => root.render(<Harness />));
+    // A single tap first: a later batch must not be sorted in front of it.
+    act(() => tray.toggleMediaAsset(photo('earlier')));
+    await act(async () => { await flush(); });
+    await act(async () => { finish('earlier'); await tray.waitForPendingUploads(); });
+    act(() => { tray.armMediaTap(); tray.addMediaAssets([photo('first'), photo('second')]); });
+    await act(async () => { await flush(); });
+    await act(async () => { finish('second'); await flush(); });
+    expect(tray.attachments.map((item) => item.name)).toEqual(['earlier.jpg', 'second.jpg']);
+    await act(async () => { finish('first'); await tray.waitForPendingUploads(); });
+    expect(tray.attachments.map((item) => item.name)).toEqual(['earlier.jpg', 'first.jpg', 'second.jpg']);
+  });
 });
 
 it('cleans a shared file only after staging takes ownership, retaining failed originals for retry', async () => {

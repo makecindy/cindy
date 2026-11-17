@@ -169,6 +169,7 @@ function parseMember(value: unknown): BotGroupMemberView | null {
     ...(id(record.actorId) ? { actorId: id(record.actorId)! } : {}),
     ...(record.actorKind === 'human' || record.actorKind === 'bot' || record.actorKind === 'integration' ? { actorKind: record.actorKind } : {}),
     ...(typeof record.isOwned === 'boolean' ? { isOwned: record.isOwned } : {}),
+    ...(record.assistant === true ? { assistant: true } : {}),
     // The computer running my companion: its group tasks are read there, not on the route's computer.
     ...(id(record.homeDeviceId) ? { homeDeviceId: id(record.homeDeviceId)! } : {}),
     ...(typeof record.isSelf === 'boolean' ? { isSelf: record.isSelf } : {}),
@@ -282,7 +283,7 @@ function parseStep(value: unknown): BotGroupPlanStepView | null {
   const status = enumOf(record?.status, STEP_STATUSES);
   const task = text(record?.task, 4_096);
   if (!record || position === null || !botId || !status || task === null) return null;
-  return { position, botId, botName: text(record.botName, MAX_NAME) ?? '', task, status,
+  return { position, botId, canStop: record.canStop === true, botName: text(record.botName, MAX_NAME) ?? '', task, status,
     // An explicit null means the turn published nothing (NO_REPLY); a missing field is an older
     // projection that never reported it. Keeping them apart is what lets the queue show a skipped
     // turn instead of claiming it spoke (#9909).
@@ -306,6 +307,7 @@ function parsePlan(value: unknown): BotGroupPlanView | null {
     status,
     kind: record.kind === 'talk' || record.kind === 'work' ? record.kind : undefined,
     supportsPendingSkip: record.supportsPendingSkip === true,
+    canStop: typeof record.canStop === 'boolean' ? record.canStop : record.kind ? false : undefined,
     canManage: typeof record.canManage === 'boolean' ? record.canManage : undefined,
     canAdd: typeof record.canAdd === 'boolean' ? record.canAdd : undefined,
     // The setting belongs to this computer; only a new host explicitly offers remote control.
@@ -351,6 +353,9 @@ function parseRound(value: unknown): BotGroupRoundView {
         ...(speaker.threadRootId === null ? { threadRootId: null } : id(speaker.threadRootId) ? { threadRootId: id(speaker.threadRootId)! } : {}),
         sessionId: optionalId(speaker.sessionId),
         activity: enumOf(speaker.activity, SPEAKER_ACTIVITIES) ?? 'reply',
+        ...(id(speaker.sourceMessageId) ? { sourceMessageId: id(speaker.sourceMessageId)! } : {}),
+        ...(typeof speaker.isSelfRequested === 'boolean' ? { isSelfRequested: speaker.isSelfRequested } : {}),
+        ...(typeof speaker.requesterName === 'string' && speaker.requesterName.trim() ? { requesterName: speaker.requesterName.trim() } : {}),
         ...(id(speaker.executionId) ? { executionId: id(speaker.executionId)! } : {}),
         ...(typeof speaker.timelineAt === 'number' && Number.isFinite(speaker.timelineAt) ? { timelineAt: speaker.timelineAt } : {}),
         ...(typeof speaker.startedAt === 'number' && Number.isFinite(speaker.startedAt) ? { startedAt: speaker.startedAt } : {}),
@@ -405,6 +410,9 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
   const plans = Array.isArray(record.plans)
     ? record.plans.slice(0, 200).flatMap((raw) => {
       const plan = parsePlan(raw);
+      if (plan && record.serverBacked === true && record.supportsOwnedStop !== true) {
+        return [{ ...plan, canStop: false, steps: plan.steps.map(step => ({ ...step, canStop: false })) }];
+      }
       return plan ? [plan] : [];
     })
     : [];
@@ -413,10 +421,12 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     name,
     serverBacked: record.serverBacked === true,
     singleSpeaker: record.singleSpeaker === true,
-    canStopAll: record.canStopAll === true,
+    canStopAll: false, supportsOwnedStop: record.supportsOwnedStop === true,
     supportsScopedStop: record.supportsScopedStop === true,
     supportsMentionAudiences: record.supportsMentionAudiences === true,
     allowMentionAllBots: record.allowMentionAllBots === true,
+    supportsMemberInvites: record.supportsMemberInvites === true,
+    allowMemberInvites: record.allowMemberInvites === true,
     supportsDivision: record.supportsDivision === true,
     archived: record.archived === true,
     dissolvedAt: text(record.dissolvedAt, 64),
@@ -432,6 +442,7 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     ...(text(record.description, 2_000) ? { description: text(record.description, 2_000)! } : {}),
     supportsMemberRemoval: record.supportsMemberRemoval === true,
     supportsSettingsManagement: record.supportsSettingsManagement === true,
+    supportsOwnBotRemoval: record.supportsOwnBotRemoval === true,
     supportsReadReceipts: record.supportsReadReceipts === true,
     ...(record.supportsLocalReadSync === true ? { supportsLocalReadSync: true } : {}),
     supportsPersonalMask: record.supportsPersonalMask === true,

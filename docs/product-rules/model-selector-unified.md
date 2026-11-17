@@ -2,6 +2,13 @@
 
 > **状态**:实施设计文档(本次交付的权威规格;合并后其中「交互契约」章节升为产品规则)
 > **读取时机**:实现、review 或修改新版模型选择器(新会话/会话内)前
+> **适用路径**：`apps/desktop/src/renderer/components/new-chat/{ModelSelector,ModelPickerAccount,UnifiedModel,unifiedModelSelection,modelPickerPreferences}*`、
+> `apps/desktop/src/renderer/__tests__/{modelSelector,modelPicker,unifiedModel}*`、
+> `apps/mobile/src/session/{UnifiedModelPicker,MobileModelPickerList,ModelPicker,modelPicker}*`、
+> `apps/mobile/src/__tests__/{modelPicker,unifiedMobilePicker,androidModelPickerParity}*`、
+> `packages/model-providers/src/**/unifiedSelection*`、`packages/device-link/src/**/modelFavorites*`、
+> `apps/desktop/src/renderer/state/modelFavorites.ts`、
+> `apps/desktop/scripts/fixtures/{model-selector-performance,model-selector-remote-repro}/**`
 > **来源**:2026-08-12 交互设计稿(Chris 逐轮裁决)+ 三路代码侦察(选择器结构/目录平面/偏好持久化)
 
 ## 0. 一句话
@@ -39,7 +46,7 @@
 
 平均值是已知周剩余百分比按账号等权计算，不是精确总可用量；不同套餐的绝对额度上限未知，
 不得把平均值标成总额度。任一成员的周余量未知或已过重置点，汇总显示「余量待更新」，
-已知成员的明细仍可见。没有可展示账号或查询失败时保留「账号待分配」。
+已知成员的明细仍可见。选择器只展示、不分配账号，账号在发出消息时才分配（2026-11-16 用户反馈）：读取中、查询失败或没有可展示账号时只显示供应商名，不写账号，也不借用默认账号；还没运行过的任务与新任务一样显示账号池预览（「N 个账号」与额度总览，只有一个账号时显示它的名字），不再显示「账号待分配」。
 
 **快重置且余量较多的轻提醒**：共用 `willLeaveQuotaUnused` / `resetTimeLevel`：按周窗口已消耗比例和已过去时间推算重置时仍有余量，且有效重置时刻在未来 24 小时内，
 供应商页签只显示小圆点提醒，不显示时钟图标；百分比后用中点分隔最早临期账号的当前余量与紧凑倒计时，整体为「57% · 80% 6h 后重置」（不足一小时显示分钟）；主列表不显示时钟，只有时间数字着色：24 小时内黄色，6 小时内红色，百分比、中点和文字保持中性，窄屏可换行，完整本地化说明保留在明细与无障碍标签。多个账号临期时按重置时间选最早的一项，其余账号在明细查看；该百分比属于该账号，不是池平均值或预计浪费量。主列表使用「后重置」句式，不增加额外箭头；不标「总余量」，因为等权百分比不代表各套餐绝对可用额度之和。悬浮／展开明细与无障碍标签保留「即将重置」，明细指出该账号余量与倒计时，并说明提醒条件。即使平均值未知，
@@ -79,13 +86,32 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
 - **A 版是新旧用户唯一的模型选择面板**（2026-09-05）。删除 B 版与样式切换入口，不再读取历史 `xdt:modelPickerLayout:v1` 偏好，升级无需手动切换。仅在老被控端 capabilities-only 时保留兼容列表。固定引擎表单同样使用 A，候选锁定在该表单实际能保存的引擎。
 - 全局入口：聊天、新任务、定时任务、IM 默认、Hook 工作目录、Worker、Subagent、视觉桥、辅助模型与插件快问快答复用同一面板。只存模型的入口不开放深度 / Fast 配置；仅存单引擎配置的入口不能选择其他引擎。专用模型白名单不得因界面统一而扩大，远程模型与来源来自被控端目录，不能写入本机记忆。
 - **所有模型选择器必须包含远程模型**（2026-11-03 用户裁决）：同账号其他电脑与分享来的供应商默认都要列出，选中后连运行位置一起保存和执行，不能只列不存，也不能退回本机同名供应商。Desktop 的 `ModelSelector` 和 Mobile 的 `ModelPickerSheet` 都要求入口声明模型来源，漏传编译不过，例外由 `modelPickerSourceGuard.test.ts` 锁定。此刻不可用只限这些情况：SSH 任务、共享任务访客、不支持远程的旧版被控电脑。
-- **同一个供应商在几台自己的电脑上只列一项**（2026-11-10 用户要求）：本机任务的面板里，同账号电脑上与本机同 ID、
-  已开放且不在供应商组里的供应商，按供应商的「运行于」只保留一处——本机能用且没改选时只列本机那一项，否则只列
-  运行所在那台的一项（行上带电脑名）。当前任务此刻正在用的那一项始终保留。本机新任务草稿选着的供应商「运行于」
-  另一台时，草稿直接落到那台（与在面板里点那台的同一行相同，`NewMakerDraftRoute.tsx`），输入框下方写明 Agent 在哪台运行。分享来的供应商与供应商组按各自规则，
-  不参与收起。实现见 `ModelSelector.tsx` 的 `runLocationFold` 与 `lib/providerRunLocation.ts`，回归见
-  `modelSelectorProviderGroupUsage.test.tsx`。Mobile 暂未收起，仍逐台列出。
-  只限本机的例外是封闭清单，因为这些入口目前不能保存或消费其他电脑的模型：子代理（随父任务运行，设置不存运行位置）、视觉桥（本机代理调用）、辅助模型与只有快问快答的插件（本机直接发一次性请求）、插件“模型与任务”设置（该设置尚不保存运行位置，权限上限仍在插件宿主执行；`tasks.capabilities().remoteRoutes:true` 的显式 route 已支持远程创建与改模）。第三方插件的 `cindy.pickModel` 保留 `allowRemote` 显式开启，旧插件不认运行位置。新增例外必须同时改这里和守卫测试。
+- **同一个来源只列一项，选择器与设置页一致**（2026-11-10 用户要求；2026-11-17 用户裁决：选择器必须严格按设置页的
+  供应商列表显示，开了远程连接也不能重复出现）。设置页、Desktop 选择器的所有入口（本机任务、远程查看、被控电脑上的
+  任务、只传 deviceId 的输入框）与 Mobile 选择器只用一条规则：`@cindy/model-providers` 的 `listedSourceFolds`，
+  不各自另写。以任务所在电脑为基准（设置页是本机）：同一台电脑上同一账号的几条连接只列一项；其他电脑上的同一来源
+  （核实为同一登录，或同一内置供应商且没有相互冲突的身份）收进基准电脑那一项；两台其他电脑提供同一来源、基准电脑
+  没有时也只列一项。模型或控件比代表项多的来源、不同账号、供应商组保留各自一项；模型显示偏好不参与判定。
+  本人分享出去的供应商在设置页另列于「我分享的供应商」，那是管理分享的入口、不计入普通列表；选择器里它仍按同一
+  来源只列一项，不因分享而多出一个入口。选择器按「运行于」决定代表项（用户明确改选的优先，其次是当前任务正在用的那一项），设置页始终
+  显示本机那一行；当前任务正在用的那一项始终保留——只有任务正停在非「运行于」那台时会暂时与代表项同时出现。
+  本机新任务草稿选着的供应商「运行于」另一台时，草稿直接落到那台（与在面板里点那台的同一行相同，
+  `NewMakerDraftRoute.tsx`），输入框下方写明 Agent 在哪台运行。分享来的供应商按各自规则，不参与收起。
+  设置页已连接但暂无可选模型的来源，选择器本来就列不出，这一差异保留。实现见 `subscriptionIdentity.ts` 的
+  `listedSourceFolds`、`ModelSelector.tsx` 的 `runLocationFold`、`ProvidersSection.tsx` 与
+  `UnifiedModelPickerSheet.tsx`；同一份数据下设置页与选择器列出相同来源由 ui:check 页面
+  `provider-listing-consistency` 守住，各路径回归见 `model-selector-remote-repro`。
+  只限本机的例外是封闭清单，因为这些入口目前不能保存或消费其他电脑的模型：子代理（随父任务运行，设置不存运行位置）、视觉桥（本机代理调用）、辅助模型与只有快问快答的插件（本机直接发一次性请求）。第三方插件的 `cindy.pickModel` 保留 `allowRemote` 显式开启，旧插件不认运行位置。新增例外必须同时改这里和守卫测试。
+- **插件“模型与任务”设置与普通任务列表一致**（2026-11-16 用户要求）：能建任务的插件，其设置卡（Desktop、
+  Desktop 远程控制与 Mobile）列出与普通任务相同的同账号其他电脑与分享来的供应商；选中哪一行，运行位置
+  （`agentDeviceId`）就随模型一起存进插件设置。插件新建任务（`tasks.create`、`setModel('plugin-default')`、
+  旧 errand 与 `workspace.ensureSession`）按保存的位置在那台电脑运行 Agent，任务、文件、权限上限与回执仍在插件电脑；
+  每次按那台电脑的目录重新核对，不可用时明确报错，不借本机同名供应商。明确选择本机保存 `agentDeviceId:null`；
+  历史缺字段的 errand 设置保留既有任务复用语义，不重建用户已修好的任务。快问快答是本机直发的一次性请求，
+  选了远程模型时改用身份卡声明 / 系统辅助模型链，设置卡下方写明这一点。被控电脑未声明
+  `PluginTaskPreferences.remoteRoutes` 的旧版本时，控制端只列那台电脑自己的模型（`remote` 为 undefined）。
+  实现见 `PluginTaskPrefs.tsx`、`PluginTaskSettings.tsx`、`pluginTaskPrefsStore.ts`、`mobileTaskSettings.ts` 与
+  `register.ts` 的插件路由解析。
 - 协同 Worker 的面板与新任务一样列出远程供应商（2026-10-10）：任务所在电脑的供应商之后接其他电脑与分享来的供应商，选中哪一行，Worker 的 Agent 就在哪台运行，默认选中 Lead 的位置。Desktop、Desktop 远程控制与 Mobile 同口径；远程那几行的档位记在本机为那台单独记的一份，不进本机 Worker 偏好。
 - 模型选择、配置编辑与“跟随默认”均等待保存结果；失败保留面板与原配置。选模型或跟随默认成功才收起，配置编辑保持浮层打开。无模型记忆表的设置入口编辑非当前模型时，直接应用其完整配置。已有待生效配置时再次远程选模，先展示最新用户选择；运行时当前配置的来源、模型、引擎、深度与 Fast 始终来自同一快照。
 - 结构:搜索框贴顶 → 左侧 rail(最近 / ★收藏 / 全部 / 各供应商图标) → 右侧列表 → 底部「＋配置模型」。
@@ -121,6 +147,7 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
 ### 1.4 自定义与恢复(遵循 configuration-and-overrides.md)
 
 - 浮层内改引擎/深度/Fast = 写该模型的用户 override;行内三元组提亮 + 底栏「已自定义 · 恢复推荐」。
+- Pi 模型提供思考开关时，关闭思考同样属于自定义配置；恢复推荐会重新开启思考。当前模型先通过原运行时写入入口恢复，成功后才删除思考偏好；失败保留原配置。未选中模型只清对应记忆，收藏与最近使用副本仍不保存思考字段。旧远端镜像没有删除入口时沿用写回默认值的兼容方式，不新增跨端协议。
 - 当前选中模型只切 Harness 时保留正在使用的思考档，不重置成目标 Harness 的推荐或旧记忆；
   目标不支持时按实际能力适配，无可调档时不传强度。来源 Harness 的旧偏好不因此删除或改写。
 - 恢复推荐 = **删 override**,随版本跟随新推荐;未自定义用户自动获得新默认。

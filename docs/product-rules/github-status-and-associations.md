@@ -4,7 +4,7 @@
 
 桌面标题旁的 PR 标识悬停显示信息浮窗，点击立即打开并保持浮窗；浮窗保持打开时再次点击标识会打开 PR 网页并收起浮窗，按 Escape 或点击外部可关闭。也可以点浮窗内的链接打开 PR 网页，键盘可从标识按 Tab 进入链接。缺少 gh／登录态时，安装和登录入口也放在浮窗内。
 
-用户或助手消息中提到完整 GitHub PR 链接时自动关联，不要求 Agent 另调 attach，也不按任务分支猜测归属。工具结果不参与提取，单纯调用 GitHub 查询工具不建立关联；助手把链接写入可见消息则按提及关联。关联只用于显示状态，不登记自动化，也不推断唯一 owner。手动添加、固定和排序仍可用。
+用户或助手消息中提到完整 GitHub PR 链接时自动关联，不要求 Agent 另调 attach，也不按任务分支猜测归属。工具结果不参与提取，单纯调用 GitHub 查询工具不建立关联；助手把链接写入可见消息则按提及关联。关联只用于显示状态，不登记自动化，也不推断唯一 owner。手动添加、固定和排序仍可用；右键消息中的 GitHub PR / GitLab MR 链接，在「打开方式」菜单选择「添加到顶栏」。
 
 桌面、手机、伙伴卡和任务摘要沿现有 `association_source=explicit` 且 `removed_at IS NULL` 的投影展示；该存储值表示当前有效关联，并不代表用户曾手动确认。消息提取记录 `association_origin=message`，保持 `manually_added=false`；手动管理或 Agent attach 记录真实入口并保护关联不被消息重算删除。
 
@@ -105,7 +105,7 @@ PR 状态变化只触发引用该 PR 的定时任务、首见不触发、失败�
 电脑端藏起、手机端不投影（`ghostCardPrStatus.test.ts`、`cardRemoteResource.test.ts`）；gh-cli 插件的连接请求打开
 GitHub 登录框或回报 ready（`ghostWorkdirGate.test.ts`、`githubSetupIpc.test.ts`）。
 
-真实工具发现和调用、读无关联副作用；明确管理及移除优先；非空旧库升级并再次启动；消息写入、导入和故障期间的历史补扫能关联，清空、rewind 与助手校正重算且保留手动关系；head 不匹配和分页失败显式未知；多读取者、重启、游标过期；账号切换与在途失效；固定批次重试、消息持久化后回执；同账号远程与共享任务权限；iOS/Android 历史引用恢复。
+真实工具发现和调用、读无关联副作用；明确管理及移除优先；非空旧库升级并再次启动；可见消息写入、导入与历史补扫自动关联，清空、rewind 与正文编辑按可见历史重算并保护手动关联；隐藏续跑指令和私有卡片数据不关联；显式关联可添加，已移除关系只允许显式 restore；head 不匹配和分页失败显式未知；多读取者、重启、游标过期；账号切换与在途失效；固定批次重试、消息持久化后回执；同账号远程与共享任务权限；iOS/Android 历史引用恢复。
 
 ## GitLab MR 的界面状态与关联
 
@@ -210,3 +210,5 @@ GitHub 批次与重连补查使用独立执行队列，普通 Webhook 入队与�
 客户端利用已有 WebSocket 心跳每分钟复查一次服务状态，不重复登记订阅、不调用 GitHub；
 状态超过 90 秒未更新也恢复原频率，避免界面未打开时长期沿用过期的健康结论。
 这个健康状态只覆盖服务内部积压与已检测故障，不能证明 GitHub 发出的每个请求都已到达入口。
+
+消息链接右键入口仅对完整 HTTPS PR/MR 页面提供「添加到顶栏」；子页面链接先规范化为基础 URL，顶栏只展示排序后的前 3 条；已关联且在前 3 条时显示「已在顶栏」，否则显示「已关联，未在顶栏」，两者均禁用。关联保存但未进入前 3 条时，提示到任务顶栏的 PR 管理中固定。已移除项仍需管理入口恢复。关联写到任务所属电脑，设备不明时不猜测为本机。实现见 [useOpenWithMenu.tsx](../../apps/desktop/src/renderer/components/chat/useOpenWithMenu.tsx)，回归见 [UserMessageUrlLink.test.tsx](../../apps/desktop/src/renderer/components/chat/__tests__/UserMessageUrlLink.test.tsx)。

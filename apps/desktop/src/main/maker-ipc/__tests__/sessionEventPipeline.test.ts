@@ -1,3 +1,5 @@
+import { botLearningTracker } from '../botLearningTracker.js';
+import { learningTurnIdentity } from '../botLearningFeedback.js';
 import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js';
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
@@ -1350,6 +1352,36 @@ describe('production Session event pipeline', () => {
     );
     expect(h.deps.overflowSuppressedBroadcasts.size).toBe(0);
     await h.dispose();
+  });
+
+  // The Node Host holds the same terminal errors for context recovery (apps/host context-recovery.ts
+  // holdsOverflowBroadcast); a class added here must be added there.
+  it('holds the same terminal errors as the Host context recovery', async () => {
+    // A non-literal specifier: the Host's source is loaded at run time, outside the desktop's type program.
+    const hostModule = 'context-recovery.ts';
+    const { holdsOverflowBroadcast } = await import(`../../../../../host/src/agent/${hostModule}`) as {
+      holdsOverflowBroadcast(session: { remoteHostId?: string | null }, event: AgentEvent): boolean;
+    };
+    const { CODEX_HISTORY_OVERSIZED_REASON, CONTEXT_OVERFLOW_REASON, UNSUPPORTED_REQUEST_OPTION_REASON } = await import('@cindy/maker-core');
+    const cases: Array<[string, unknown]> = [
+      ['context overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' }],
+      ['context overflow by message', { message: 'prompt is too long: 210000 tokens > 200000 maximum' }],
+      ['oversized history', { reason: CODEX_HISTORY_OVERSIZED_REASON, message: 'history too large' }],
+      ['unsupported request option', { reason: UNSUPPORTED_REQUEST_OPTION_REASON, message: 'rejected option' }],
+      ['retryable overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long', isTerminal: false }],
+      ['ordinary failure', { message: 'boom', reason: 'sdk_crash' }],
+    ];
+    for (const [name, data] of cases) {
+      const h = harness();
+      h.activity.setSessionInTurn('task', true);
+      // Keeps a held broadcast in the map instead of the no-owner path re-sending it at once.
+      (h.deps.agentInputCoordinatorHolder as { isAutoResumeDeferred: ReturnType<typeof vi.fn> })
+        .isAutoResumeDeferred.mockReturnValue(true);
+      const terminal = event('error', data);
+      h.emit(terminal);
+      expect(holdsOverflowBroadcast(h.session, terminal), name).toBe(h.deps.overflowSuppressedBroadcasts.size === 1);
+      await h.dispose();
+    }
   });
 
   it('does not flush a stale suppressed error onto a later unrelated error', async () => {
@@ -3246,5 +3278,40 @@ describe('Codex generated images through the production event pipeline', () => {
       expect(seen).toEqual(['image', 'done']);
       expect(h.deps.deliverCodexGeneratedImage).not.toHaveBeenCalled();
     } finally { close(); offSeen(); offWire(); await session.close(); await h.dispose(); }
+  });
+});
+
+// #10318: exercise the real pipeline and feedback adapter, not just tracker helpers.
+// One paired Codex write must retain its path across preparation/persistence; stale,
+// child and background traffic must never feed a foreground memory receipt (unit).
+describe('native memory receipt event wiring', () => {
+  it.each(['foreground', 'failed', 'background', 'child', 'old-instance', 'old-generation'])
+  ('keeps memory feedback scoped for %s events', async mode => {
+    const h = harness();
+    const publish = vi.fn();
+    const receipt = { kind: 'memory' as const, key: 'user_tea.md', title: 'Tea', action: 'created' as const };
+    const read = vi.fn(async (paths: readonly string[]) => paths.length ? [receipt] : []);
+    const identity = learningTurnIdentity(h.session);
+    botLearningTracker.markProjectTeammate(h.session.id, read);
+    botLearningTracker.observe(h.session.id, identity, publish);
+    const extra = mode === 'background' ? { turnScope: 'background' as const }
+      : mode === 'child' ? { agentMeta: { parentUuid: 'child' } }
+        : mode === 'old-instance' ? { sessionInstanceId: 'replaced' }
+          : mode === 'old-generation' ? { sessionTurnGeneration: h.session.getTurnGeneration() - 1 } : {};
+    try {
+      h.emit({ type: 'tool_use', source: 'codex', ...extra,
+        data: { toolUseId: 'write-memory', toolName: 'file_change',
+          input: { changes: [{ path: '.cindy/memory/user_tea.md', kind: { type: 'add' } }] } } });
+      h.emit({ type: 'tool_result_full', source: 'codex', ...extra,
+        data: { toolUseId: 'write-memory', fullText: 'add memory', isError: mode === 'failed' } });
+      botLearningTracker.seal(h.session.id, identity, 'reply');
+      await read.mock.results[0].value;
+      expect(read).toHaveBeenCalledWith(mode === 'foreground' ? ['.cindy/memory/user_tea.md'] : []);
+      if (mode === 'foreground') expect(publish).toHaveBeenCalledWith('reply', [receipt]);
+      else expect(publish).not.toHaveBeenCalled();
+    } finally {
+      botLearningTracker.markProjectTeammate(h.session.id);
+      await h.session.close();
+    }
   });
 });

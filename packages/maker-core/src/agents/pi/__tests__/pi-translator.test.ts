@@ -44,7 +44,7 @@ const ev = (e: Record<string, unknown>): PiRpcEvent => e as unknown as PiRpcEven
 describe('pi translator', () => {
   // #8887: prior retry tests omitted the second native agent_start. Each
   // completed request must be observable before settlement (unit, no I/O).
-  it.each(['success', 'exhausted'] as const)('accounts before settlement and preserves retry usage (%s)', outcome => {
+  it.each(['success', 'exhausted', 'stop'] as const)('accounts before settlement and preserves retry usage (%s)', outcome => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
     const request = (input: number) => ev({ type: 'message_end', message: {
@@ -58,9 +58,18 @@ describe('pi translator', () => {
     translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 2 }), queue, ctx);
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     translatePiEvent(request(20), queue, ctx);
-    if (outcome === 'exhausted') translatePiEvent(ev({ type: 'auto_retry_end', success: false, finalError: 'quota exceeded' }), queue, ctx);
+    if (outcome === 'stop') markPiHostAbortRequested(ctx);
+    translatePiEvent(ev({ type: 'auto_retry_end', success: outcome === 'success', finalError: 'quota exceeded' }), queue, ctx);
+    // #10277: exhausted retry must release admission without a native settled
+    // frame; successful retry still waits for the remaining automatic work.
+    expect(ctx.isStreaming).toBe(outcome === 'success');
+    expect(ctx.turnSettled).toBe(outcome !== 'success');
+    expect(events.filter(e => e.type === 'done')).toHaveLength(outcome === 'success' ? 0 : 1);
     translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    expect(events.filter(e => e.type === 'done')).toHaveLength(1);
+    expect(events.filter(e => e.type === 'error')).toHaveLength(outcome === 'exhausted' ? 1 : 0);
     const done = events.find(e => e.type === 'done')!;
+    expect(done.data).toMatchObject({ status: outcome === 'success' ? 'completed' : outcome === 'stop' ? 'cancelled' : 'failed' });
     expect(done.data).toMatchObject({ usage: { inputTokens: 120, outputTokens: 4, cacheReadTokens: 6, cacheCreationTokens: 2 } });
     const receipts = events.filter(e => e.type === 'account_usage').map(e => (e.data as any).usage);
     expect(receipts).toHaveLength(2);
@@ -3090,4 +3099,90 @@ it('projects native cache recovery ownership onto the terminal error', () => {
   expect(events.filter(event => event.type === 'error')).toHaveLength(1);
   expect(events.find(event => event.type === 'error')?.data).toMatchObject({ piCacheRecoveryHandled: true, isTerminal: true });
   disposePiTranslateContext(ctx);
+});
+
+// #10651 unit: production RPC translation previously leaked complete DSML and
+// reported completed with no tool/error. Existing tests only cover native calls.
+describe('#10651 DSML output', () => {
+  const command = `echo '===中文开始==='; printf '%s\\n' "nested 'quotes'" | cat; echo '===中文结束==='`;
+  const markup = (bar: string) => `<${bar}DSML${bar} calls><${bar}DSML${bar} invoke name="ssh"><${bar}DSML${bar} parameter name="args" string="true">${command}</${bar}DSML${bar} parameter></${bar}DSML${bar} invoke></${bar}DSML${bar} calls>`;
+  function emitMessage(ctx: ReturnType<typeof createPiTranslateContext>, queue: AsyncQueue<AgentEvent>, text: string, calls: unknown[] = [], reason = 'stop') {
+    translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: text } }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: reason,
+      content: [{ type: 'text', text }, ...calls], usage: { input: 10, output: 5, cacheRead: 8 } } }), queue, ctx);
+  }
+  it.each(['structured', 'code', 'quote', 'incomplete', 'stop', 'length', 'error', 'retry', 'previous-call', 'other-session', 'thinking', 'thinking-final', 'thinking-and-text', 'list-code', 'batch-shortfall'])(
+    'preserves the output/terminal boundary for %s', mode => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      const raw = markup('|');
+      const call = { type: 'toolCall', id: 'ssh-1', name: 'ssh', arguments: { args: command } };
+      try {
+        translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+        if (mode === 'other-session') {
+          const other = createPiTranslateContext(noopLogger);
+          try { emitMessage(other, makeQueue().queue, raw, [call]); } finally { disposePiTranslateContext(other); }
+        }
+        if (mode === 'previous-call') {
+          emitMessage(ctx, queue, raw, [call]);
+          translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'ssh-1', toolName: 'ssh', args: { args: command } }), queue, ctx);
+          translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'ssh-1', toolName: 'ssh', result: { content: [{ type: 'text', text: 'ok' }] } }), queue, ctx);
+        }
+        if (mode === 'retry') {
+          translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+          translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: raw } }), queue, ctx);
+          translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 3, errorMessage: 'HTTP status 529: overloaded' }), queue, ctx);
+          expect(events.filter(e => e.type === 'text').map(e => (e.data as { text: string }).text).join('')).toBe(raw);
+        }
+        if (mode === 'stop') markPiHostAbortRequested(ctx);
+        const literal = mode === 'list-code' ? '- ~~~xml\n  ' + raw + '\n  ~~~' : mode === 'code' ? '```xml\n' + raw + '\n```' : mode === 'quote' ? '> ' + raw : mode === 'incomplete' ? raw.slice(0, -10) : raw;
+        if (mode.startsWith('thinking')) {
+          translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+          if (mode !== 'thinking-final') translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: raw } }), queue, ctx);
+          translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'thinking_end', contentIndex: 0, content: raw } }), queue, ctx);
+          translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'thinking', thinking: raw }, { type: 'text', text: mode === 'thinking-and-text' ? raw : 'answer' }] } }), queue, ctx);
+        } else {
+          const duplicate = raw.replace('</|DSML| calls>', raw.slice('<|DSML| calls>'.length, -'</|DSML| calls>'.length) + '</|DSML| calls>');
+          emitMessage(ctx, queue, mode === 'batch-shortfall' ? duplicate : literal, mode === 'structured' || mode === 'batch-shortfall' ? [call] : [],
+            mode === 'length' || mode === 'error' ? mode : 'stop');
+        }
+        if (mode === 'structured') translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'ssh-1', toolName: 'ssh', args: { args: command } }), queue, ctx);
+        translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+        const done = events.find(e => e.type === 'done')!.data as Record<string, unknown>;
+        const invalid = ['retry', 'previous-call', 'other-session', 'thinking-and-text', 'batch-shortfall'].includes(mode);
+        expect(done.status).toBe(mode === 'stop' ? 'cancelled' : invalid || mode === 'length' || mode === 'error' ? 'failed' : 'completed');
+        expect(events.filter(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'unexecuted-tool-markup')).toHaveLength(invalid ? 1 : 0);
+        // #10651 review: speculative thinking is not an attempted action. Unit tier,
+        // production translator; previous coverage incorrectly required failed.
+        if (mode.startsWith('thinking')) {
+          expect(events.find(e => e.type === 'thinking' && (e.data as { stage?: string }).stage === 'final')?.data).toMatchObject({ text: raw });
+          expect(events.filter(e => e.type === 'tool_use')).toHaveLength(0);
+          if (mode !== 'thinking-and-text') expect(done.result).toBe('answer');
+        }
+        if (mode === 'structured') {
+          expect(events.filter(e => e.type === 'tool_use')).toHaveLength(1);
+          expect(events.find(e => e.type === 'tool_use')?.data).toMatchObject({ toolUseId: 'ssh-1', toolName: 'ssh', input: { args: command } });
+          expect(done.usage).toMatchObject({ inputTokens: 10, outputTokens: 5, cacheReadTokens: 8 });
+        }
+        if (['code', 'list-code', 'quote', 'incomplete', 'stop', 'length'].includes(mode)) expect(events.filter(e => e.type === 'text').some(e => (e.data as { text: string }).text === literal)).toBe(true);
+      } finally { disposePiTranslateContext(ctx); }
+    },
+  );
+  it.each(['|', '｜', '｜｜'])('rejects text-only long commands (%s)', bar => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const text = 'before.' + markup(bar) + 'after.';
+    try {
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      for (const delta of text) translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta } }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text }] } }), queue, ctx);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      expect(events.find(e => e.type === 'done')?.data).toMatchObject({ status: 'failed', reason: 'unexecuted-tool-markup', silentStop: false });
+      expect(events.filter(e => e.type === 'error')).toHaveLength(1);
+      expect(events.filter(e => e.type === 'tool_use')).toHaveLength(0);
+      expect(events.filter(e => e.type === 'text').map(e => (e.data as { text: string }).text).join('')).not.toContain('DSML');
+    } finally { disposePiTranslateContext(ctx); }
+  });
 });

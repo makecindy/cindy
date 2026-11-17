@@ -202,19 +202,24 @@ describe('provider-group quota routing', () => {
     expect(h.router.coolingUntil('anthropic', 'local', SONNET)).toBe(NOW + 200_000);
   });
 
-  it('bounds a pool read and ignores a late positive result after the pick has returned', async () => {
+  // Unit regression: repeated 1.5s waits discarded healthy late evidence. The returned
+  // pick stays unchanged, but the next one must use it without a new probe.
+  it('bounds a pool read and applies a late healthy result to subsequent picks', async () => {
     vi.useFakeTimers();
     try {
       let finish!: (available: boolean) => void;
-      const h = harness(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+      const read = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+      const h = harness(read);
       h.config.members[1].paused = true;
       h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
       const pick = h.pick(OPUS);
       await vi.advanceTimersByTimeAsync(1500);
       expect((await pick).kind).toBe('unavailable');
       finish(true);
-      await Promise.resolve();
-      expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBe(NOW + 100_000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBeNull();
+      expect(await h.pick(OPUS)).toMatchObject({ member: { key: 'local' } });
+      expect(read).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

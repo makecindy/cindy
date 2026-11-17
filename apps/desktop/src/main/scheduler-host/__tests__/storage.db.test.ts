@@ -2151,6 +2151,46 @@ it('deduplicates only identical unrecovered failures across persistent history',
   } finally { h.close(); }
 });
 
+it('deduplicates continuation cancellation by reason without losing per-run IDs (#10547)', async () => {
+  const h = createStorageHarness();
+  try {
+    await h.storage.insert(baseSchedule());
+    const error = (reason: string, id: string) =>
+      `Scheduled turn continuation was cancelled (reason: ${reason}, continuationId: ${id})`;
+    const first: ScheduleRun = { id: 'cancel-1', scheduleId: 'sch-1', firedAt: 1,
+      status: 'failed', errorMsg: error('wake_contract_unfulfilled', '1') };
+    await h.storage.insertRun(first);
+    const next = { ...first, id: 'cancel-2', firedAt: 2,
+      errorMsg: error('wake_contract_unfulfilled', '2') };
+    expect(await h.storage.hasUnrecoveredMatchingFailure(next)).toBe(true);
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: error('user_stop', '2') })).toBe(false);
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: error('wake_contract_unfulfilled', 'unknown') })).toBe(true);
+    for (const id of ['0', '-1', '1.5', '9007199254740992', '1) private']) {
+      expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+        errorMsg: error('wake_contract_unfulfilled', id) })).toBe(false);
+    }
+    // Historical malformed IDs must not match a valid cancellation either.
+    for (const [index, id] of ['0', '-1', '1.5', '9007199254740992', '1) private', '01', ''].entries()) {
+      await h.storage.insertRun({ ...first, id: `malformed-${index}`, errorMsg: error('user_stop', id) });
+    }
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: error('user_stop', '2') })).toBe(false);
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: error('wake_contract_unfulfilled', '9007199254740991') })).toBe(true);
+    // An ordinary error containing an ID remains an exact match only.
+    await h.storage.insertRun({ ...first, id: 'ordinary', errorMsg: 'other continuationId: 1' });
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: 'other continuationId: 2' })).toBe(false);
+    await h.storage.insertRun(next);
+    expect((await h.storage.listRuns('sch-1')).find(run => run.id === next.id)?.errorMsg)
+      .toBe(error('wake_contract_unfulfilled', '2'));
+    await h.storage.insertRun({ id: 'recovered-cancel', scheduleId: 'sch-1', firedAt: 3, status: 'success' });
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next, id: 'cancel-3', firedAt: 4 })).toBe(false);
+  } finally { h.close(); }
+});
+
 // 心跳持续权限失配：引擎把失败与放行的 gate 结果写进同一条 run，runner 的失败通知
 // 也必须带同一份 gate 结果，否则 stderr 不同会让每一轮都重新通知。
 it('deduplicates a persistent permission mismatch until the heartbeat succeeds', async () => {

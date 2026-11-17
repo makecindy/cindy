@@ -857,7 +857,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       return target ? { memberKey: target.key, label: target.label, quota: target.quota } : null;
     },
     invalidate(member) {
-      deps.directory.invalidate(member.agentDeviceId ?? undefined);
+      deps.directory.invalidate(member.agentDeviceId ?? '', { providerIds: [member.providerId] });
     },
     async memberKeyOf(groupProviderId, row) {
       if (row.agentDeviceId) {
@@ -1053,22 +1053,16 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
   }
 
   /**
-   * 交接换电脑时不考虑的组内电脑：这一轮试过的，以及与当前所在同一台电脑上的其他组员(旧版各自独立的供应商
-   * 连接)——交接只能换电脑，换到同一台的另一项不会生效(新任务分配不受此限)。`keepCurrent`：当前这项的账号池里
-   * 另一个账号能接，它仍是候选，选中即原地换账号。
+   * 只排除这一轮试过的成员与当前连接。同机的其他独立供应商仍可接替，交接入口会按目标连接重建原生会话。
+   * `keepCurrent`：当前这项的账号池里另一个账号能接，它仍是候选，选中即原地换账号。
    */
   function switchExclusion(
-    config: ProviderGroupConfig,
     current: ProviderGroupMember,
     tried: ReadonlySet<string>,
     keepCurrent = false,
   ): Set<string> {
     const exclude = new Set(tried);
-    for (const member of config.members) {
-      if (member.agentDeviceId === current.agentDeviceId && !(keepCurrent && member.key === current.key)) {
-        exclude.add(member.key);
-      }
-    }
+    if (!keepCurrent) exclude.add(current.key);
     return exclude;
   }
 
@@ -1076,9 +1070,9 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     return `${source.ownerDeviceId ?? ''}\u0000${groupProviderId}\u0000${memberKey}`;
   }
 
-  /** 换号时不考虑的：同一台电脑上的账号(交接只能换电脑)，以及刚换失败、还在退避中的。 */
+  /** 换号时排除当前连接，以及刚换失败、还在退避中的成员。 */
   function rebalanceExclusion(source: GroupSource, groupProviderId: string, config: ProviderGroupConfig, current: ProviderGroupMember): Set<string> {
-    const exclude = switchExclusion(config, current, new Set());
+    const exclude = switchExclusion(current, new Set());
     const now = deps.now();
     for (const member of config.members) {
       const key = backoffKey(source, groupProviderId, member.key);
@@ -1676,7 +1670,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         config,
         agentKind: row.agentKind,
         model: row.model,
-        exclude: skipped.exclusion(switchExclusion(config, current, tried(), accountSwitch !== null)),
+        exclude: skipped.exclusion(switchExclusion(current, tried(), accountSwitch !== null)),
         allowOffline: false,
       });
       // 选电脑期间用户已接手：绑定与任务记录都还没动，直接停下。
@@ -2079,7 +2073,6 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         throw providerGroupUnavailableError(pick);
       }
       const route = source.routeOf(pick.member, source.ownerDeviceId ? null : providerId);
-      if (route.agentDeviceId === target.current.agentDeviceId && route.providerId !== target.current.providerId) return null;
       deps.log.info('provider group: chose a computer for a task moved into the group', {
         sessionId,
         groupProviderId: providerId,
@@ -2104,9 +2097,9 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       if (binding.groupDeviceId) return deps.remote !== undefined;
       const config = deps.readGroup(binding.providerId);
       const current = config?.members.find((m) => m.key === binding.memberKey);
-      // 交接只在不同电脑之间进行(switchExclusion)：组里没有别的电脑时换不了。
+      // 同机其他连接也能接替；只有当前成员时仍交回原有错误处理。
       return Boolean(
-        config?.autoSwitch && current && config.members.some((m) => m.agentDeviceId !== current.agentDeviceId),
+        config?.autoSwitch && current && config.members.some((m) => m.key !== current.key),
       );
     },
 
@@ -2161,7 +2154,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       if (cached === false && accepted && await deps.isFailoverEligible(sessionId, { kind: 'rebalance' })
         && !deps.readRebalanceDisabled?.(sessionId)
         && config.members.some((m) => m.key === accepted.memberKey)
-        && !switchExclusion(config, current, new Set()).has(accepted.memberKey)) {
+        && !switchExclusion(current, new Set()).has(accepted.memberKey)) {
         const moved = await rebalanceBeforeSend(
           sessionId, source, binding.providerId, config, current, { ...row, model: row.model }, accepted.memberKey, options,
         );
@@ -2211,7 +2204,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
             config,
             agentKind: row.agentKind,
             model: row.model,
-            exclude: skipped.exclusion(switchExclusion(config, current, tried)),
+            exclude: skipped.exclusion(switchExclusion(current, tried)),
             allowOffline: false,
           });
           if (!isCurrent()) return;

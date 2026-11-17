@@ -1,13 +1,12 @@
 /**
- * 额度查询遇到 Cindy 网关 401 时上报 Cindy AI Key 失效(其余状态不上报)。
- * 只断言上报行为;配额解析契约见 claudeAccountUsageSource.test.ts。
+ * Unit: production refresh and IPC regressions for disabled idle polling and
+ * concurrent windows. A quota read used to rotate inference Keys on 401; quota
+ * now uses Model Access. Keep the polling/clear-loop coverage after retiring it.
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   providerDisabled: false,
-  outboundFetch: vi.fn(),
-  report: vi.fn(),
   readOrganization: vi.fn(),
   windows: [] as Array<{ isDestroyed: () => boolean; webContents: { send: (...args: unknown[]) => void } }>,
 }));
@@ -27,45 +26,21 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({ tapWindowBroadcast: vi.fn
 vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../../maker-host/auth-adapters', () => ({
-  readClaudeApiKey: () => 'usage-key-sent',
-}));
-vi.mock('../../maker-host/outbound-fetch.desktop', () => ({ outboundFetch: mocks.outboundFetch }));
-vi.mock('../../maker-host/runtime-configs', () => ({
-  claudeUpstreamEndpoint: () => 'https://gateway.test.invalid',
-}));
-vi.mock('../modelPricing', () => ({ getGatewayAccountCurrency: async () => 'USD' }));
-vi.mock('../ledgerCurrency', () => ({ currentLedgerCurrency: () => 'USD' }));
-vi.mock('../../model-access/gatewayKeyRejection', () => ({
-  reportCindyGatewayKeyRejected: mocks.report,
-}));
 vi.mock('../../maker-host/model-disable-store.js', () => ({
   readModelDisableOverrides: () => ({ disabledProviders: { xd: mocks.providerDisabled } }),
 }));
 
-// This suite exercises the explicit old-server / Nova compatibility path.
 vi.mock('../organizationAccountUsage.js', () => ({ readOrganizationAccountUsage: mocks.readOrganization }));
-let usage: typeof import('../claudeAccountUsage');
-let credentials: typeof import('../../model-access/quotaCredentialState');
+import * as usage from '../claudeAccountUsage';
+import * as credentials from '../../model-access/quotaCredentialState';
+const quota = { spend: 1, maxBudget: 10, currency: 'USD', todaySpend: null, dailyLimitEnabled: false, fetchedAt: 1 };
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status });
-}
-
-describe('claudeAccountUsage Cindy AI key rejection', () => {
-  beforeAll(async () => {
-    // reset-modules: load the mocked usage module once before this suite; per-test resets use its production test reset API.
-    vi.resetModules();
-    usage = await import('../claudeAccountUsage');
-    credentials = await import('../../model-access/quotaCredentialState');
-  });
+describe('claudeAccountUsage polling and concurrent IPC', () => {
   beforeEach(() => {
     mocks.providerDisabled = false;
     usage.__resetClaudeAccountUsageForTesting();
     vi.useFakeTimers();
-    mocks.outboundFetch.mockReset();
-    mocks.report.mockReset();
-    mocks.readOrganization.mockReset().mockResolvedValue(undefined);
+    mocks.readOrganization.mockReset().mockResolvedValue(quota);
     mocks.windows = [];
     credentials.__resetQuotaCredentialStateForTesting('cloud:user-1:1', {
       state: 'ok', source: 'server', endpoint: 'https://gateway.test.invalid', accountTier: null,
@@ -76,40 +51,31 @@ describe('claudeAccountUsage Cindy AI key rejection', () => {
   // Unit regression: the existing idle poll kept querying and reporting 401
   // after xd was suspended, which indirectly rotated keys in another instance.
   it('stops quota requests while disabled even when idle polling was already started', async () => {
-    mocks.outboundFetch.mockImplementation(async (url: string) =>
-      url.includes('/user/daily/activity')
-        ? jsonResponse({ results: [] })
-        : jsonResponse({ spend: 1, max_budget: 10, budget_reset_at: null }),
-    );
     await usage.triggerClaudeAccountUsageRefresh(true);
-    expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
-    mocks.outboundFetch.mockClear();
+    expect(mocks.readOrganization).toHaveBeenCalledTimes(1);
     mocks.readOrganization.mockClear();
 
     mocks.providerDisabled = true;
     await usage.triggerClaudeAccountUsageRefresh(true);
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(mocks.readOrganization).not.toHaveBeenCalled();
-    expect(mocks.outboundFetch).not.toHaveBeenCalled();
-    expect(mocks.report).not.toHaveBeenCalled();
     expect(usage.readClaudeAccountUsageSnapshot()).toBeNull();
 
     mocks.providerDisabled = false;
     await usage.triggerClaudeAccountUsageRefresh(true);
-    expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
+    expect(mocks.readOrganization).toHaveBeenCalledTimes(1);
     expect(usage.readClaudeAccountUsageSnapshot()?.spend).toBe(1);
   });
 
-  it('does not start legacy gateway requests after disabling during the managed quota read', async () => {
+  it('discards a quota result when disabled during its read', async () => {
     mocks.readOrganization.mockImplementation(async () => {
       mocks.providerDisabled = true;
-      return undefined;
+      return quota;
     });
 
     await usage.triggerClaudeAccountUsageRefresh(true);
 
-    expect(mocks.outboundFetch).not.toHaveBeenCalled();
-    expect(mocks.report).not.toHaveBeenCalled();
+    expect(usage.readClaudeAccountUsageSnapshot()).toBeNull();
   });
 
   it('shares the main-process quota read across primary and secondary window IPC senders', async () => {
@@ -145,60 +111,5 @@ describe('claudeAccountUsage Cindy AI key rejection', () => {
     await read(2);
     expect(mocks.readOrganization).toHaveBeenCalledTimes(2);
     for (const send of sends) expect(send).toHaveBeenCalledTimes(1);
-  });
-
-  it('reports the sent key when user/info and daily/activity are rejected with 401', async () => {
-    mocks.outboundFetch.mockImplementation(async () => jsonResponse({ error: 'invalid key' }, 401));
-
-    await usage.triggerClaudeAccountUsageRefresh(true);
-
-    expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
-    for (const call of mocks.outboundFetch.mock.calls) {
-      expect(call[1]).toMatchObject({ headers: { Authorization: 'Bearer usage-key-sent' } });
-    }
-    expect(mocks.report).toHaveBeenCalledTimes(2);
-    expect(mocks.report).toHaveBeenNthCalledWith(1, 'usage-key-sent');
-    expect(mocks.report).toHaveBeenNthCalledWith(2, 'usage-key-sent');
-  });
-
-  it('reports only the endpoint that was rejected with 401', async () => {
-    mocks.outboundFetch.mockImplementation(async (url: string) =>
-      url.includes('/user/daily/activity')
-        ? jsonResponse({ error: 'invalid key' }, 401)
-        : jsonResponse({ spend: 1, max_budget: 10, budget_reset_at: null }),
-    );
-
-    await usage.triggerClaudeAccountUsageRefresh(true);
-
-    expect(mocks.report).toHaveBeenCalledTimes(1);
-    expect(mocks.report).toHaveBeenCalledWith('usage-key-sent');
-  });
-
-  it.each([403, 500])('does not report HTTP %s', async (status) => {
-    mocks.outboundFetch.mockImplementation(async () => jsonResponse({ error: 'nope' }, status));
-
-    await usage.triggerClaudeAccountUsageRefresh(true);
-
-    expect(mocks.outboundFetch).toHaveBeenCalled();
-    expect(mocks.report).not.toHaveBeenCalled();
-  });
-
-  it('does not report successful quota responses', async () => {
-    mocks.outboundFetch.mockImplementation(async (url: string) =>
-      url.includes('/user/daily/activity')
-        ? jsonResponse({ results: [] })
-        : jsonResponse({ spend: 1, max_budget: 10, budget_reset_at: null }),
-    );
-
-    await usage.triggerClaudeAccountUsageRefresh(true);
-
-    expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
-    expect(mocks.report).not.toHaveBeenCalled();
-    // Unit compatibility: the legacy reader keeps daily data without opting in
-    // to the enterprise switch (missing switch must not disable this path).
-    expect(usage.readClaudeAccountUsageSnapshot()).toEqual({
-      spend: 1, maxBudget: 10, currency: 'USD', budgetResetAt: null,
-      todaySpend: 0, fetchedAt: expect.any(Number),
-    });
   });
 });

@@ -3,6 +3,14 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改凭证或授权信息处理、文件落盘位置、用户持久数据、临时文件、
 > 测试目录或运行时生成物之前
+> **适用路径**：`apps/desktop/src/main/secrets/**`、
+> `apps/desktop/src/main/**/*{C,c}redential*.ts`、
+> `apps/desktop/src/main/{devKeychain,safeStorage}*.ts`、
+> `apps/desktop/src/main/{userDataPath,regionUserData,legacyUserDataMigration}.ts`、
+> `apps/desktop/src/test/vitest/{user-data-dir-setup,testDirectoryTemplate}.ts`、
+> `apps/mobile/src/auth/secureStorage.ts`、`apps/mobile/src/**/*{C,c}redential*.ts`、
+> `packages/**/*{C,c}redential*.ts`、
+> `apps/desktop/src/main/authManager.ts`、`apps/desktop/src/main/localProfile*Migration*.ts`、`apps/desktop/src/main/maker-host/codex-auth-*.ts`
 
 本文约束 Desktop、Mobile、共享 package、脚本和测试中的本地文件写入。数据库 migration
 另见 [`database-and-migrations.md`](database-and-migrations.md)，Renderer 与 IPC 边界另见
@@ -12,6 +20,21 @@
 > 存量数据。存量凭证或用户数据迁移必须单独设计兼容、回滚和验证方案。
 
 ## 凭证不入仓
+
+### 本地模式首次云登录：资产交接暂时回退
+
+2026-11-17 回退 #10357 新增的资产交接：它将密钥与插件复制放入登录提交路径，
+复制或 Windows 实例检查失败会阻断已提交登录的后续完成及原生供应商绑定。
+登录继续沿用原数据库与原生供应商绑定流程；本地模式的自定义供应商密钥、请求头、
+插件及偏好暂不自动接续到首个云账号，这是回退恢复的已知限制。
+
+回退只撤销代码，不清理源资料、已复制的目标资料、`.local-profile-assets-v1.json`
+或 `.local-profile-assets-*` 暂存目录，也不撤销原账号认领或修改历史数据库 migration。
+尚未完成的资产计划不再自动续跑；未来恢复交接时必须兼容这些记录，并保留用户后续修改。
+再次接入前须覆盖迁移失败后登录仍可完成、插件初始化不抢占待交接目标，以及重启后的恢复。
+登录回归入口为 `authPostCommitStartup.test.ts`。
+
+### 通用存储要求
 
 - 用户凭证、OAuth 授权、API key、访问令牌、刷新令牌、私钥和 Agent 授权文件不得以
   复制、链接、fixture、日志或生成物等形式进入仓库工作区或任何可能被 Git 跟踪的路径。
@@ -93,13 +116,24 @@ Windows 的共享链接替换需要先删除本实例的目标。对同一目标
 实现与回归见 `maker-host/codex-auth-link.ts`、`auth-adapters.ts`、
 `codexAuthLink.test.ts` 和 `codexAuthInvalidation.test.ts`。
 
+Windows 的无覆盖发布子进程保留每次 15 秒的超时。子进程结束后若源目录项已消失、
+目标仍是开始时记录的目录项，则接受已提交结果；否则仅在确认超时、源目录项的
+身份／大小／修改时间未变且目标确实不存在时重试一次。读取状态失败不等于不存在，
+目标存在或来源变化时不重试；第二次超时返回脱敏的 `ETIMEDOUT`，不泄漏子进程命令、
+路径或环境。重试仍用原子无覆盖的 `File.Move`，不使用硬链接或覆盖重命名。
+实现与回归见 `maker-host/codex-auth-file-move.ts`、`codexAuthFileMove.test.ts` 和
+`scripts/check-windows-codex-auth-move.mjs`。
+
 ## Claude 订阅只经 Claude Code 自己的登录
 
 Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；第三方应用不得提供
 Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此只做内置 CLI 的外壳：
 
 - 登录只拉起内置 CLI 的 `claude auth login --claudeai`，登录态只读
-  `claude auth status --json`。凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
+  `claude auth status --json`。JSON 缺少套餐显示名时，可在同一 binary、env、账号目录和剩余超时
+  预算内读取一次 `auth status --text`，仅在邮箱与组织匹配时补充 `planDisplayName`；文本不作为
+  登录或权限依据，失败仍保留 JSON 登录态，不读取原始 profile／凭证文件。
+  凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
   Cindy 不读取、不复制、不刷新它。默认账号的会话与登录检查不设 `CLAUDE_CONFIG_DIR`
   （dev 多实例的默认账号也一样），确保仍能看到终端已有登录。
   2026-11-07 起，用户显式添加的[供应商内订阅账号](../product-rules/subscription-account-pools.md)
@@ -354,7 +388,7 @@ relay 原有 60 秒主动续期节流保持不变。
 | 语音输入声纹识别模型 | `userData/voice-models/<哈希前缀>-<文件名>.onnx`，按内容哈希从区域 CDN 下载并在可见前校验 SHA-256；不含个人数据，本机所有账号共用。新版本模型下载完成后删除旧版本文件 |
 | Mobile 语音输入声纹（生物特征） | SecureStore（iOS 钥匙串 / Android Keystore）键 `xdt.voiceSpeakerProfile.v1.<账号 key 的 SHA-256 前 32 位>`，内容同 Desktop：声纹向量、录入时间与模型哈希；开关与灵敏度 override 在 AsyncStorage `cindy.mobile.voice-speaker-filter.v1.<账号 key>`。只在本机，不同步、不上传、不进日志；退出登录时随该账号的其他本机数据一起删除（模型文件保留）。删除前写 AsyncStorage `cindy.mobile.voice-speaker-filter.cleanup.v1.<账号 key>` 重试标记，不含声纹；失败时保留标记，启动、回到前台及该账号下次读写前重试，全部删除成功后才移除。标记落盘也失败时保留进程内重试，无法保证进程终止后的恢复；不因声纹删除失败阻止退出凭证清除。朗读音频只在内存中处理 |
 | Mobile 语音输入声纹识别模型 | `cacheDirectory/voice-models/`，与 Desktop 同一组按内容哈希下载、校验 SHA-256 后才可见的文件；放缓存目录以免进入 iCloud / Android 备份。系统清理缓存后，下次语音输入发现缺失会在后台重新下载，本次不过滤 |
-| Mobile iOS 键盘停靠高度 | AsyncStorage `cindy.mobile.keyboard-docked-height.v2`（设备级，不分账号）：`{ 窗口宽度: 键盘高度 }` 两个整数，只在 iOS 正常停靠键盘、且不在转屏后 1 秒内时更新（取最高），供系统发来异常键盘坐标时沿用（见 `docs/dev-rules/mobile-development.md`「iOS 键盘坐标异常」）。不含用户内容，退出登录不清除。见 `apps/mobile/src/session/keyboardOverlap.ts` |
+| Mobile iOS 键盘停靠高度 | AsyncStorage `cindy.mobile.keyboard-docked-height.v2`（设备级，不分账号）：`{ 窗口宽度: [键盘高度, …] }`，每个宽度保留最近 6 次停稳的高度（整数，由旧到新；旧版本存的是单个历史最高值，读入时当作最旧的一条），只在 iOS 正常停靠键盘、且不在转屏后 1 秒内时更新，供系统发来异常键盘坐标时沿用其中最高值（见 `docs/dev-rules/mobile-development.md`「iOS 键盘坐标异常」）。不含用户内容，退出登录不清除。见 `apps/mobile/src/session/keyboardOverlap.ts` |
 | 新电脑设置：上次迁移记录 | `userData/owners/<账号>/setup-migration-state.json`，只记上次迁移来源电脑的名称、完成时间、一次性清单（类别、显示名称、插件实例键或供应商 / MCP id、完成标记）与是否已关闭首次建议；不含密钥、令牌、凭证或设置值。复用设置文件跨进程锁与原子替换，账号切换按目录隔离，用户「关闭清单」后清空。快照只带「是否已配置」的布尔提示。用户勾选「密钥」且原电脑的人允许后，API Key / PAT 以一次性加密传来，在 Main 内存中解开后写入各自原有的 safeStorage 存储，不落其他文件（`docs/product-rules/new-device-setup-migration.md`） |
 | iOS 桌面小组件数据 | App Group `group.<bundle id>`（与 expo-sharing 共用）里的 `usage-widget-snapshot.json`：每台电脑最近一次的余量与用量快照（已按电脑上「隐藏个人信息」打码，含账号名或邮箱前缀、余量、近 30 天用量与模型名）、「自动」所选电脑 id 与电脑名列表；不含凭证。同一 App Group 的 UserDefaults 键 `usageWidgetPins` 只记组件选中的电脑 id 与时间，超过 2 天的丢弃。App 在前台时整份原子替换写入；切换或退出账号时删除快照文件。见 `apps/mobile/modules/cindy-usage-widgets` 与 `plugins/usage-widgets` |
 | Android 桌面小组件数据 | 应用私有 `noBackupFilesDir/usage-widget-snapshot.json`（不进 Android 自动备份），内容与 iOS 的 App Group 文件相同（已打码的余量与用量快照、「自动」所选电脑 id 与电脑名列表，不含凭证）；SharedPreferences `cindy-usage-widgets` 里 `computer.<组件 id>` 记组件选中的电脑，`usageWidgetPins` 记固定电脑 id 与时间（超过 2 天丢弃），删除组件时清理。切换或退出账号时删除快照文件，并清掉所有 `computer.` / `pinned.` / `hidden.` 与 `usageWidgetPins`（它们含上一个账号的电脑 id 与账号名），再重绘组件。见 `apps/mobile/modules/cindy-usage-widgets/android` |

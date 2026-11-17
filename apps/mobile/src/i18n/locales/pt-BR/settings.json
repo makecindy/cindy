@@ -85,6 +85,16 @@
       "reset": "Restaurar padrão",
       "apply": "Aplicar",
       "hex": "Valor da cor"
+    },
+    "appIcon": {
+      "label": "Ícone do app",
+      "saveFailed": "Não foi possível alterar o ícone do app. Tente novamente.",
+      "options": {
+        "default": "Padrão",
+        "cat": "Gato preto",
+        "wordmark": "Logotipo do Cindy",
+        "mark": "Símbolo do Cindy"
+      }
     }
   },
   "language": {
@@ -514,5 +524,8 @@
     "sourceHint_local": "Digite um nome para criar uma pasta ou escolha uma existente.",
     "chooseExistingFolder": "Escolher pasta existente",
     "changeMainDirectory": "Alterar"
+  },
+  "navigation": {
+    "unavailable": "Não foi possível abrir as configurações do computador de destino. Verifique se está online e permite controle remoto; atualize o Cindy se estiver em uma versão antiga."
   }
 }

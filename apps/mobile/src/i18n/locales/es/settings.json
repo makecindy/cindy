@@ -85,6 +85,16 @@
       "reset": "Restablecer los valores predeterminados",
       "apply": "Aplicar",
       "hex": "Valor de color"
+    },
+    "appIcon": {
+      "label": "Icono de la app",
+      "saveFailed": "No se pudo cambiar el icono de la app. Inténtalo de nuevo.",
+      "options": {
+        "default": "Predeterminado",
+        "cat": "Gato negro",
+        "wordmark": "Logotipo de Cindy",
+        "mark": "Símbolo de Cindy"
+      }
     }
   },
   "language": {
@@ -514,5 +524,8 @@
     "sourceHint_local": "Escribe un nombre para crear una carpeta o elige una existente.",
     "chooseExistingFolder": "Elegir carpeta existente",
     "changeMainDirectory": "Cambiar"
+  },
+  "navigation": {
+    "unavailable": "No se pudo abrir la configuración del equipo de destino. Comprueba que esté conectado y permita el control remoto; actualiza Cindy si usa una versión antigua."
   }
 }

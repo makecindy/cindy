@@ -12,7 +12,7 @@
 import { act, cleanup, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../shared/ghost';
+import { type InstalledGhost } from '../../../shared/ghost';
 import { usePluginUiWindowCandidates } from '../PluginUiContributions';
 import { useGhostPanelsSync } from '../ghostPanels';
 import { useWorkdirDisabledGhostIds } from '../ghostWorkdirFilter';
@@ -90,7 +90,7 @@ it('updates window contributions on installation, revocation and disable without
         { id: 'action', title: 'Action', position: 'window.titlebar', view: 'page' },
       ] },
   };
-  plugin.approvedHostUi = ghostHostUiApprovalTokens(plugin.manifest);
+
   act(() => changedCbs.forEach(callback => callback({ ghosts: [plugin] })));
   expect(renders).toBe(1);
   // A relevant change before LayoutRoot mounts must be caught from the cache
@@ -104,7 +104,7 @@ it('updates window contributions on installation, revocation and disable without
   // IPC creates fresh objects for the whole roster, including unchanged plugins.
   act(() => changedCbs.forEach(callback => callback({ ghosts: [structuredClone(plugin), ghost('ordinary')] })));
   expect(renders).toBe(2);
-  for (const next of [{ ...plugin, approvedHostUi: [] }, { ...plugin, enabled: false }, ghost('ordinary')]) {
+  for (const next of [{ ...plugin, approval: { state: 'invalid' as const } }, { ...plugin, enabled: false }, ghost('ordinary')]) {
     act(() => changedCbs.forEach(callback => callback({ ghosts: [next] })));
     expect(result.current.settings).toBe(empty.settings);
     expect(result.current.sidebarSections).toBe(empty.sidebarSections);

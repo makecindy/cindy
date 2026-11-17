@@ -37,7 +37,7 @@ export function SessionProjectSettingsButton({
           disabled={disabled}
           onClick={() => setOpen(true)}
           style={WINDOW_NO_DRAG_STYLE}
-          className="mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-md hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
+          className="mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
         >
           <ResolvedProjectIcon
             directory={project.workingDir}

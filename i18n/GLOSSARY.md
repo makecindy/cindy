@@ -196,6 +196,8 @@
 | Quota | pt-PT | quota | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Quota** | pt-BR | Cota | 默认 |
 | Quota | pt-BR | cota | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Running** | fr | en cours d'exécution | 默认 |
+| Running | fr | En cours d'exécution | 标题或状态标签使用大写首字母；句中仍使用小写首字母。 |
 | **Running** | zh-CN | 运行中 | 默认 |
 | Running | zh-CN | 正在运行 | 完整句子里作谓语时（"Agent 正在运行"），不是状态标签 |
 | **Running** | zh-TW | 執行中 | 默认 |
@@ -495,6 +497,10 @@ Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一
 
 应用异常终止。此前只出现在内部日志里, 随日志上报进入用户可见文案, 因此登记。ko 取音译「크래시」而非「충돌」——后者在韩语里更常指冲突/碰撞(如合并冲突), 会与 merge conflict 语境混读。proposed。
 
+### Custom MCP
+
+插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
+
 ### Database cleanup
 
 设置 → 存储空间内主动备份、清理任务消息并压缩本地数据库的功能名称。默认只清理非活跃任务；用户确认开启可选项后，也会清理活跃任务的历史。先登记为 proposed，待实际使用后再固化。
@@ -707,6 +713,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应网关的文
 
 issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。
 
+### Rerank
+
+模型分类 rerank，对查询的候选文档重新排序，不进入对话模型清单。
+
 ### Speech to Text
 
 issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_transcription 的语音转写/ASR 模型（如 gpt-4o-transcribe）。
@@ -811,6 +821,18 @@ Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 
 
 插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于插件随包的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。
 
+### Locally installed
+
+插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
+
+### Third-party source
+
+插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
+
+### Unknown source
+
+插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
+
 ### Audio
 
 模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
@@ -830,6 +852,10 @@ Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 
 ### Duration
 
 模型价目表的时长收费项：Duration Input / Duration Output；不是请求耗时。
+
+### Privacy screen
+
+Cindy 用来代替锁屏的遮罩：盖住本机屏幕，有人碰电脑就转系统锁屏，AI 在后面继续工作。用于离开时、远程控制中和远程结束后三种场景（docs/product-rules/privacy-screen.md）。取代旧称「电脑防窥」「防窥遮罩」「黑色遮罩」；不是系统自带的锁屏，也不是显示器防窥膜。
 
 ### Process
 
@@ -996,6 +1022,10 @@ Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 
 ### Speech speed
 
 伙伴语音设置的合成语速；按伙伴保存，通话朗读、消息朗读和试听共用。区别于播放器倍速和语音输入停顿时间。
+
+### Header
+
+任务 PR/MR 关联展示的顶栏。沿用 ccAgent.gitContext.pr.manage.pin/hint 的既有译法；区别于系统窗口标题栏。
 
 ### Tag
 

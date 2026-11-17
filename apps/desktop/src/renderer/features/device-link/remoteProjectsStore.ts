@@ -746,12 +746,21 @@ const actions = {
     status: RemoteSessionStatus = 'active',
   ): void {
     const connectionStatus: DeviceLinkConnectionStatus = 'connected';
+    const existing = shards.get(deviceId);
+    // userSendAt 在被控端只会从空变成时间、不会清回空。一次早于首条受理就发出的列表读取
+    // 可能晚于 sessions:patched 才落地，整行替换会把已知的发送时间退回空；而首条标记
+    // (pendingFirstSendAt)此时已经让位回收，新任务就会按「未发送 + 0 条消息」掉出项目、
+    // 等下一次回流才回来。所以列表里为空时沿用已知值。
+    const knownUserSendAt = new Map<string, string>();
+    for (const session of existing?.sessions ?? []) {
+      if (session.userSendAt != null) knownUserSendAt.set(session.id, session.userSendAt);
+    }
     // 状态桶本身是权威筛选条件：跨版本兼容行 / 测试夹具可能缺 status，统一按本次
     // 请求桶补齐；refresh 层已在到达这里之前拒绝混入其它状态的协议损坏响应。
-    const stamped = rawSessions.map((session) =>
-      stamp({ ...session, status }, deviceId, deviceName, connectionStatus),
-    );
-    const existing = shards.get(deviceId);
+    const stamped = rawSessions.map((session) => {
+      const userSendAt = session.userSendAt ?? knownUserSendAt.get(session.id) ?? session.userSendAt;
+      return stamp({ ...session, status, userSendAt }, deviceId, deviceName, connectionStatus);
+    });
     const loadingStateCleared =
       status === 'active'
         ? setBootstrapState(deviceId, 'idle')

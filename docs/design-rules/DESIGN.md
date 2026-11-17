@@ -1,5 +1,10 @@
 # Cindy Design System
 
+> **读取时机**：新增或修改任何界面、组件、布局、样式、动效或 UI 文案之前。先读下面的「阅读路由」，
+> 再按路由读相关章节与专题，不需要通读全文；设计文档索引见 `cindy-design-system.md`。
+> **适用路径**：`apps/desktop/src/renderer/**`、`apps/mobile/app/**`、`apps/mobile/src/**/*.tsx`、
+> `apps/mobile/src/theme/**`、`packages/design-tokens/**`
+
 ## 阅读路由
 
 本文件是 Cindy 视觉规则的入口，不需要通读。本节只指路，不写参数；每个参数只在对应章节保留一份。
@@ -22,6 +27,7 @@
 | 开关、滑杆 | `Switch`、`Slider`、`EffortSlider` | §15.17、§15.18 |
 | 复选框 | `components/ui/checkbox.tsx` 的 `Checkbox` | §4 Desktop settings controls |
 | 加载中 | `components/ui/spinner.tsx` 的 `Spinner` | §14.4 |
+| 下载、安装进度 | `components/ui/download-meter.tsx` 的 `DownloadMeter` | §4 Download progress |
 | 错误与通知 | `ErrorNotice`；短通知用 `lib/toast.ts` | §4 Error notices、§4 Toast |
 | 展开收起 | `components/ui/collapse.tsx` 的 `Collapse` | §14.4 |
 | 聊天内容 | `chatChrome.ts`、`activityRowChrome.ts` | §4 Desktop chat and operation authorization |
@@ -31,7 +37,8 @@
 | 圆角与点击区域 | 上述组件的默认值 | §5 Border Radius Scale、[治理合同](./design-governance.md) §13 |
 | 字号、字重、行高 | Tailwind 字号档位 | §3 |
 | 动效 | Motion Token | §14.4 |
-| 界面文案 | i18n 键 | §11、[术语表](../../i18n/GLOSSARY.md) |
+| 界面文案 | i18n 键 | §11、[术语表](../../i18n/GLOSSARY.md)（规则见[工程约定](../dev-rules/engineering-conventions.md) §5.1） |
+| 文案里出现「任务／对话／消息」 | 已裁决的叫法 | [任务与对话命名](../product-rules/task-and-conversation-naming.md) |
 | 修改 Token、主题或标准组件 | 现有生成链路 | [治理合同](./design-governance.md)、[Token README](../../packages/design-tokens/README.md) |
 
 只在改动对应功能时才读下面的专题：
@@ -82,6 +89,8 @@ The decision and review correction are recorded in
 [`design-decision-log.md`](./design-decision-log.md) (2026-09-06).
 
 ## 2. Color Palette & Roles
+
+MCP App 卡片来源例外（2026-11-16）：第三方来源、本地安装、来源未知使用 warning 语义前景色（Desktop `--warning-fg`，Mobile `warningFg`）；市场来源不标色，自定义 MCP 使用普通文字色。只表达安装来源，不替代权限或签名判断。
 
 > **Multi-theme note**: the values in this section are the concrete **Default Light / Default Dark** (base theme) palette, given as the visual-spec reference sample. At runtime **every color is consumed through a token** (see §10 Theme System & Token Reference), so the same component automatically renders each theme's own colors under other themes (Eclipse / One Dark Pro / Monokai Pro, …). **When implementing components, always write tokens, never hex** — rules in §10.
 
@@ -150,6 +159,7 @@ and `task-tag-white-check` / `taskTagWhiteCheck` glyph to remain visible on ligh
 Images and emoji retain their intrinsic colors. Palette swatches are two rows of six; default is the first explicit choice above the palette, with an adaptive neutral swatch, a selected check and a localized “follow theme” label. It is not presented as a reset action. Color choices have localized names and a neutral selection ring. Mobile targets are 44pt;
 Desktop uses standard pill Buttons. Controls, project names and task status remain on their existing tokens.
 Project letter icons are identity artwork: square tiles with 25% corner radius, Cindy typography and weight 600. Automatic initials use a stable name-derived choice from the existing non-white identity colors, with theme-adjusted foreground and a 14% same-color background. Explicit default remains the theme foreground. Manual letter colors remain selectable; the tile shape also applies to them.
+Project image thumbnails use the same 25% corner crop on Desktop and Mobile, including automatic images, uploaded images and previews. This clips opaque asset corners without changing the image's intrinsic colors or persisted bytes; emoji and symbol geometry stay unchanged.
 
 ### Semantic & Accent
 
@@ -619,10 +629,13 @@ input/text
 
 Every confirmation built on the shared `ConfirmDialog` / provider uses its standard buttons; there is no per-caller presentation switch (maintainer ruling 2026-11-11, C-02 — supersedes the DS-6 two-caller pilot). Confirmation actions keep a 36px minimum height; long labels wrap within the panel and may grow vertically instead of overflowing or truncating. Keep `confirm-btn-*` local styling, default/destructive choice, focus branches and no scrim dismissal. Full Access and plugin-authorization confirmations follow the same buttons; the in-chat Permission card is not a `ConfirmDialog` and keeps its own `palette="permission"` presentation.
 
-**Interaction answer composers (user decision, 2026-11-10):** Free-text answers, custom-choice answers,
-withdrawn-question supplements and plan feedback use a full-width input frame. Text occupies its own
-full-width area; existing microphone and submit controls sit inside the frame in a trailing toolbar
-below the text, never squeeze the textarea into a narrow side column. Submission uses the main
+**Interaction answer composers (user decisions, 2026-11-10 and 2026-11-16):** Free-text answers, custom-choice answers,
+withdrawn-question supplements and plan feedback use one input frame that starts as a single line: while
+the answer is empty or fits one line, the text sits beside the existing microphone and submit controls,
+centred on them (about 48px tall). Once the answer wraps or contains a line break, the frame expands: the
+text takes its own full-width area and the controls move to a trailing toolbar below it, so a multi-line
+answer is never squeezed into a narrow column. The expansion holds until the answer is cleared, so the
+layout does not flip back and forth while typing (`useAnswerComposerExpanded`). Submission uses the main
 composer's paper-plane glyph, with the actual action retained in localized accessible names and
 Desktop tooltips. Multi-select custom input has one submit control, not a second footer submit.
 Question navigation, close/skip, validation, voice finalization and approval semantics stay unchanged.
@@ -670,6 +683,26 @@ Button (user decision, 2026-11-09), and dismissal uses its quiet tone. Eligibili
 独立的加载、保存、执行失败，以及需要用户处理的错误横幅使用卡片；字段校验、列表项状态、消息发送状态、已经有完整容器的内嵌工具结果、短暂 Toast（含 §4 Inputs & Forms 的表单提交服务失败）与系统原生警告保留原有形态，避免卡片套卡片。手机采用紧凑布局：标题下集中放说明，右上角关闭代替重复的「忽略」按钮；重试、Fork 与详情入口共用可换行的操作区。按钮面板操作文字为 15/20、500、`textPrimary`，视觉底板最小 36pt，但点击热区保持至少 44pt。卡片内边距与说明到操作区的间距为 16pt，标题与说明间距为 8pt；按钮内水平留白 12pt、图标到文字 8pt，操作间距 12pt。空间不足时自然换行，不压缩留白来强塞一行。说明与详情入口为 13/18 常规字重、`textSecondary`，红色只用于 `statusError` 图标。iOS 原生表单使用 `NativeErrorNotice`，由现有 Section 提供卡片底色与圆角，不再嵌套第二层边框，保留 SwiftUI 文字换行。错误卡片不自行增加重试、自动恢复或 Fork 的适用范围。
 
 历史恢复操作命名为「在新任务中继续」，说明会保留对话记录与原任务，以及需要重新发送刚才的消息。图标必须与消息 Fork「开启一个新任务」入口一致，使用 `Split`；不使用侧栏新建任务的 `SquarePen`。
+
+### Download progress
+
+Desktop 上用户能看到的下载与安装进度（工具、运行时、模型、更新包、插件、Skill、壁纸等）统一使用
+`components/ui/download-meter.tsx` 的 `DownloadMeter`，数据为 Main 端统一生成的 `DownloadProgress`
+（工程约定见 [校验下载](../dev-rules/verified-downloads.md)「下载进度与界面」）。不在业务界面里另画进度条或
+自行格式化字节、速度与剩余时间。起因：2026-11-17 GitHub CLI 安装在重试与龟速时进度停住且无任何说明，
+用户以为卡死。
+
+- 三行结构：第一行名称（`text-12`、`--text-secondary`，过长截断）与整数百分比（`--text-tertiary`、
+  等宽数字，只有真正完成才显示 100%）；第二行 4px 胶囊进度条，轨道 `--surface-chip`、填充
+  `--text-primary`，宽度变化 150ms；第三行 `text-11` `--text-tertiary`，左侧状态、右侧速度与剩余时间。
+- 进度条不动时必须有文字说明：传输中左侧显示「已下载 / 总大小」，重试显示原因（网络较慢在换连接、
+  连接中断、超时、服务器繁忙）且右侧显示第几次尝试，校验、安装、排队、准备、暂停各有状态文字。
+  速度与剩余时间只在传输中显示，避免停住时残留旧速度。
+- 失败时状态行换成失败说明（`--error-flat`），填充改为 `--remote-status-failed`，并隐藏百分比。
+- 不使用循环动画或不确定进度的动效；大小未知时只显示已下载量。暂停、继续、取消等操作由所在界面
+  提供，组件只负责显示。`role="progressbar"` 的 `aria-valuetext` 汇总状态与速度，供读屏读取。
+- 启动页、壁纸缩略图等已登记的品牌或特定界面若不能放入三行结构，保留原外形，但状态文字与数值
+  仍取自同一份 `DownloadProgress` 和本组件导出的格式化函数。
 
 ### Dialog & Modal
 
@@ -828,7 +861,9 @@ Implementation: `AutomationSessionGroupItem.tsx` and `automationSidebarGrouping.
 
 ### Desktop teammate sidebar
 
-The expanded teammate section previews five chats (local teammates, remote teammates, groups and the merged Cindy device row share this limit). Keep the current chat visible within those five rows. Use the task list’s “Show all N” footer style, with “Show less” after expansion. The teammate section has its own icon/list preference, independent of the pinned section and of collapse state. The icon strip’s +N button switches to the full list. Collapsing resets the preview and hides ordinary entries entirely; unread chats and pending interaction/error rows remain visible in the chosen mode, without a preview cap. The currently open teammate chat also stays visible after it becomes read, until navigation leaves that chat; pending attention still keeps it visible after leaving. Explicitly collapsing the teammate section hides a read selection immediately; new unread or pending attention restores its visibility and read-until-leaving protection. This applies to both icon and list modes. The pinned section follows the same attention exception, including tasks inside pinned projects. This limit applies to the Desktop sidebar; the Mobile task home section below previews three.
+The teammate display-style menu adds a separated “Show avatars when collapsed” checkbox. It defaults off on Desktop, preserving the existing attention-only collapse behavior, and stores explicit choices per account on this computer. Enabling it shows all visible chats as a single avatar strip while collapsed, regardless of the expanded icon/list preference; overflow uses the existing +N entry, which expands the section into the full list. Disabling it restores the existing attention exception without changing the fold or expanded display style. Mobile keeps its own existing default-on choice. Implementation and regressions: `TeammatesSection.tsx`, `teammatesSectionPrefs.ts`, their existing unit tests and the `collapse-attention` UI fixture.
+
+The expanded teammate section previews five chats (local teammates, remote teammates, groups and the merged Cindy device row share this limit). Keep the current chat visible within those five rows. Use the task list’s “Show all N” footer style, with “Show less” after expansion. The teammate section has its own icon/list preference, independent of the pinned section and of collapse state. The icon strip’s +N button switches to the full list. With collapsed avatars disabled, collapsing resets the preview and hides ordinary entries entirely; unread chats and pending interaction/error rows remain visible in the chosen mode, without a preview cap. The currently open teammate chat also stays visible after it becomes read, until navigation leaves that chat; pending attention still keeps it visible after leaving. Explicitly collapsing the teammate section hides a read selection immediately; new unread or pending attention restores its visibility and read-until-leaving protection. This applies to both icon and list modes. The pinned section follows the same attention exception, including tasks inside pinned projects. This limit applies to the Desktop sidebar; the Mobile task home section below previews three.
 
 ### Desktop and Mobile task creator filters (2026-10-27)
 
@@ -1486,8 +1521,11 @@ Only the two registered chart members inside Usage History may enlarge their non
   - **Small preset**: 18 particles, angle 90, spread 80, startVelocity 5.5, decay 0.92, gravity 0.35, ticks 105 (about 1.75s), scalar 0.45. Resolve the original four status tokens (done, awaiting, warning-accent, error) from the active theme to hex for the canvas library. The quota preset supersedes the earlier DOM-only, constant-horizontal-speed and end-only-fade implementation constraints; it keeps the modest scale and original palette. Skip reduced motion, lazy-load, clean up after completion or unmount, and retain the quota layer at 9999.
   - **Scope boundary**: quota reset and the explicitly approved GitHub Star confirmation below only. Task completion and send success stay on the §14.4 baseline. Both use `components/ui/ConfettiBurst.tsx`; `QuotaResetConfetti.tsx` remains the anchor adapter. Existing full-quota detection and provider deduplication remain unchanged.
 - **GitHub Star confirmation (user-approved 2026-11-09)** — after the GitHub API confirms the user's Star, use `canvas-confetti` 1.9.4 through the shared celebration component with the Star preset: 160 particles, spread 360, startVelocity 30, gravity 1.6, ticks 140. Capture the Star activation point in viewport CSS pixels and use it as the burst origin after success; keyboard activation uses the button center. Normalize against the actual canvas when firing, clamping if the window has resized; cursor movement or the success layout change must not move the origin. Keep the library's default colors, size, wobble, tilt, velocity decay and continuous fade; this explicit celebration is exempt from the quota-specific particle/color/DOM-animation limits. Render once on a full-window, pointer-transparent canvas above the Toast; load lazily, skip under reduced motion, remove on completion or dismissal. Use a dedicated main-thread instance without adding a blob-worker CSP exception. Quota reset shares the engine with its separate small preset above. Ordinary success notifications, failed writes and opening GitHub in the browser do not celebrate.
-- **Plugin selection annotation (2026-11-07)** — `GhostSummonCard` records only the user's explicit plugin choice, with a static identity ring and “selected” label. Historical mention directives remain quiet pills. Autonomous plugin calls never add or upgrade a label on the user's message, on either Desktop or Mobile. Mobile keeps its existing companion work-log header; its activity is gated by actual pending calls. Execution progress belongs to the existing work-log tool row and settles when its result arrives, independently of the assistant's remaining turn. The former whole-turn seal spin/closing/success choreography is retired; no context rules or new settings are introduced.
-
+- **Summon-seal terminal choreography(召唤法阵终态编舞)** — the fourth sanctioned motion class (approved 2026-07-29), **only** for the plugin summon seal in `GhostSummonCard`/`SummonSeal` (the dual counter-arc "summoning circle" around the plugin avatar in user messages):
+  - **Definition**: the seal's signature running animation (two gapped arcs, outer 83/17 + inner 39/61, spinning as a whole at 2.4s linear on an HTML wrapper) is a beloved product signature and is preserved verbatim. What was missing was an ending: when the plugin calls settle, the gaps used to freeze in place and read as "stuck mid-load". The choreography gives the animation a curtain call instead of replacing it: **while still spinning, both arcs close their gaps into full circles** (600ms one-shot `stroke-dasharray` transition — permitted as a one-shot transient per the red lines above); when all represented `ghost_call` results have arrived (fulfilled), a success-colored halo ring then dilates outward once (`summon-seal-halo`, 0.9s scale 1→1.65 + fade) while a ✓ badge pops at the avatar's corner (reusing the Done semantic's sanctioned overshoot curve, same as `status-done-pop`); the spin is removed only after the circles are closed — a spinning full circle is visually static, so the removal is seamless. Semantics stay self-consistent: gap = in progress, full circle = stopped; ✓/halo appear **only after all represented calls have returned** — an interrupted/never-issued call closes neutrally with no completion badge (the ring must not fake success).
+  - **Parameter red lines**: close 600ms (`--motion-ease-out`; outside the duration tiers — sanctioned here, do not reuse elsewhere), halo 0.9s one-shot, tick pop 0.3s. Historic messages mount directly on the closed static frame with zero animation; the choreography plays only for a mount that actually witnessed `running` flip false. Halo/badge fill comes from the status-dot done-green exemption (`--card-status-done`); the ✓ glyph uses `--completion-badge-fg` (dark ink both modes, 5.29:1 on the done green — white would be 2.88:1, below the WCAG 1.4.11 non-text 3:1 floor). All keyframes are in the `prefers-reduced-motion` whitelist — reduced motion lands straight on the terminal frame.
+  - **Call ownership (2026-11-16)**: keep the single annotation inside the owning user bubble, combining names and retaining the first avatar. Derive it solely from actual visible `ghost_call` messages and matched tool results. Results end activity immediately even while the assistant keeps answering. A later ordinary message never inherits it; autonomous triggers and sealed turns cannot add calls to an old human bubble. Unexecuted explicit selections stay static and say “selected”. Existing work-log progress and plugin-supplied result cards remain unchanged.
+  - **Scope boundary**: this seal only. The closing-ring language must not leak into other spinners or progress indicators. Implementation: `apps/desktop/src/renderer/components/chat/GhostSummonCard.tsx` + `.summon-seal-*` in `globals.css`.
 - **Stream-word fade(流式正文分段淡入)** — the fifth sanctioned motion class (approved 2026-08-07, ordinary-chat timing aligned 2026-08-25), **only** for streaming assistant prose in the chat message flow:
   - **Definition**: during streaming, each newly-arrived text **word** and each inline-code atom fades in over `--motion-fast` (150ms, opacity only) instead of popping in — content appears to *surface*, not *type*. This is explicitly **not** the forbidden per-character typewriter: each segment is fully rendered and positioned from its first frame; only opacity ramps. CJK is segmented per word via `Intl.Segmenter`; an inline-code chip keeps its internal structure and fades as one indivisible segment.
   - **Architecture red lines**: CSS owns the form, JS owns only the timing — `rehypeStreamWordFade` wraps words and inline-code atoms in `span.stream-word` and writes `--wf-delay`. Ordinary chat uses one **message-level continuous timeline** across render batches and Markdown chunks: new segments normally start `16ms` apart; once queued transparent wait reaches `96ms`, the step compresses to `4ms`; no segment may remain transparent for more than `160ms`. This keeps a burst from flashing in all at once without allowing a long batch to leave a visible transparent hole. Inline-code atoms and list markers borrow the corresponding prose segment's key and delay, so semantic atoms cannot overtake their text. Segments are keyed by type + stable content matching (same-position matches, text-prefix continuation, and bounded backward matching), not by document index. Render computes a candidate state; only a committed DOM render may publish it from a layout effect. Each segment keeps an absolute start time / remaining delay across re-parse and remount, so already-seen content never replays. The animation itself is a pure-opacity one-shot keyframe in `globals.css` (compositor-only). The final (non-streaming) render carries **zero** wrapper spans — the plugin only mounts while `isStreaming`.
@@ -1652,6 +1690,14 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 - **Constraints**: the color comes only from the official asset — no component-authored gradient or brand hex. The QR card itself carries **no brand edge, no border, no shadow and no pointer 3D tilt**: a 2px edge made of the scaled app icon was tried on 2026-07-25 and removed the same day (it read as a strange ring rotating behind the code — see §14.4). Do not re-add it in any form, static or animated.
 - **Scope boundary**: this dialog only. Other working-UI surfaces keep the neutral treatment; a new brand surface needs a new entry here. Contract test: `mobileDownloadDialog.test.tsx` → `keeps the QR card flat with no brand edge`.
 - **Reference renders** (light theme, zh-CN, @2x — `assets/mobile-download-dialog/`): [local mode](assets/mobile-download-dialog/guest-local.webp) (QR only — no account, so no permission card) · [signed in, no linked mobile](assets/mobile-download-dialog/onboarding.webp) (228px QR + permission card) · [signed in, mobile linked](assets/mobile-download-dialog/linked.webp) (132px QR + device list). Re-shoot these when the dialog's layout changes. **Stale as of 2026-07-25**: all three still show the retired brand edge around the QR — read them for layout only, not for the card's treatment.
+
+**Sanctioned brand surface — gift card face (owner-requested 2026-11-16).**
+
+- **Where**: Desktop `features/billing/GiftCardFace.tsx`, mounted only by `GiftCardRedeemDialog` — the confirm and result steps of redeeming a gift card from Billing settings. Mobile `src/gift-card/GiftCardFace.tsx`, mounted only by `GiftCardSheet` — the same two steps of the redeem sheet (see `apps/mobile/docs/mobile-design-guide.md` §9). A gift card has to read as a gift, so the card itself is the one place in this flow that carries brand artwork, and it is the same card on both clients.
+- **Asset / theme boundary**: four finished faces, `{cindy,cat,bell,leap}.webp` (1200×757, no amount), in Desktop `renderer/assets/gift-cards/` and Mobile `assets/gift-cards/`, composed from existing official artwork and the wordmark without redraw. Brand red and the characters are intrinsic to these files; the components author no colour. The two red faces use the wordmark in a single ivory colour because its red arrow and cursor are not visible on the artwork's red ground. The same four files ship with Share Server and Platform Console so a card looks identical everywhere; `faceCode` comes from the server, and a code this build does not know falls back to the default face — never a broken image. Light and Dark use the same files.
+- **Amount on the face (owner-requested 2026-11-16)**: the amount is printed on the card, as on a physical gift card — currency symbol plus the number with trailing zeros dropped (`$20`, `¥100`, `$19.99`). It is part of the artwork, not interface text: `packages/maker-shared/src/giftCardAmount.ts` (shared by Desktop and Mobile) holds the outlines of the 14 characters an amount can contain (Anton, SIL OFL 1.1, drawn as vector paths so neither client loads an extra typeface), the per-face position and size in card coordinates, and the two artwork colours (ivory on the red and night faces, ink on the ivory face). These are the same numbers Share Server and Platform Console use; change them together. Amounts longer than the face allows scale down as a whole. This is the only text on the face and the only use of this lettering in the clients — the interface typeface is unchanged.
+- **Treatment**: static image with the container radius (12) and a 1px default-border hairline, which keeps the ivory and night faces separated from the panel in either mode. No tilt, shadow, sheen or motion. Sender and message are ordinary token-coloured text below the card; the amount is not repeated there. The card is exposed to assistive technology as one image named with the amount. If an amount cannot be drawn (a character with no outline), the face is shown without it and the amount falls back to token-coloured text below.
+- **Scope boundary**: the Desktop redeem dialog and the Mobile redeem sheet only. The Billing page, balance cards, order history, Mobile settings and every other dialog or sheet stay neutral; this is not precedent for artwork on other cards or confirmations.
 
 **Sanctioned brand surface — Alipay payment QR (approved 2026-07-29).**
 
@@ -1860,7 +1906,7 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 头像在本轮开头显示，右侧依次呈现处理记录与回复正文；执行中转为完成态时保持同组，不再给回复重复头像。
 复用回复头像的尺寸、间距和正文列；展开的中间文字与工具明细不重复头像，成果卡仍与正文对齐。没有过程的回复照常显示头像，新一轮重新显示头像。
 
-常用操作固定在消息下方，复用现有群聊图标、引用预览与输入组件。桌面32px按钮、4px间隔、14px图标；手机44pt热区、不额外插空，左右消息的操作图形对齐对应正文边缘。复制/回复/更多常显，现有朗读与编辑能力保留；创建话题与分享图片放更多。已有话题沿用头像、回复数及最后回复时间/未读提示入口，不另造数字徽章。群聊操作及主对话914px宽度规则不变，手机正文直接选字不受操作栏影响。沿用语义色与原菜单开合、焦点和按压状态；各语言及明暗模式均不得溢出。
+常用操作固定在消息下方，复用现有群聊图标、引用预览与输入组件。桌面32px按钮、4px间隔、14px图标；手机44pt热区、不额外插空，左右消息的操作图形对齐对应正文边缘。复制/回复/更多常显，现有朗读与编辑能力保留；创建话题与分享图片放更多。已有话题沿用头像、回复数及最后回复时间/未读提示入口，不另造数字徽章。普通任务、伙伴私聊与群聊共用914px内容列及响应式留白规则，群聊不得单独放宽；气泡及输入区规则见 [群聊规则](../product-rules/bot-group-chat.md)。手机正文直接选字不受操作栏影响。沿用语义色与原菜单开合、焦点和按压状态；各语言及明暗模式均不得溢出。
 
 ### 伙伴内部通讯入口（2026-11-01）
 

@@ -24,6 +24,7 @@ import { isRelayJoinPath, RELAY_JOIN_ROUTE, receiveRelayJoinIntent } from '@/dev
 import { WECHAT_APP_ID, WECHAT_UNIVERSAL_LINK } from '@/config/env';
 import { isWechatSdkCallback } from '@/auth/wechatCallback';
 import { isChatInviteLinkPath, receiveChatInviteLink } from '@/chat/chatInviteIntent';
+import { isGiftCardLinkPath, receiveGiftCardLink } from '@/gift-card/giftCardIntent';
 
 export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string | null {
   try {
@@ -37,6 +38,9 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     // Group invitations stay in memory across login. A warm link preserves the
     // current page; the single root Host presents the invitation after auth.
     if (receiveChatInviteLink(path)) return initial ? '/' : null;
+    // 礼品卡兑换码等同于余额：只留在内存，不进路由状态。冷启动回首页，热唤起保留当前页面，
+    // 登录后由根级 GiftCardHost 呈现兑换面板；残缺的链接同样在面板里提示无效。
+    if (receiveGiftCardLink(path)) return initial ? '/' : null;
     // 供应商分享链接只能在电脑上申请:手机只显示「请在电脑上打开」的提示页。口令不进路由
     // 状态与诊断(提示页从内存取走可复制的链接),不合法的链接同样落到提示页、什么都不留。
     if (receiveProviderShareLinkIntent(path)) return PROVIDER_SHARE_LINK_ROUTE;
@@ -63,6 +67,7 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     return path;
   } catch {
     if (isChatInviteLinkPath(path)) return initial ? '/' : null;
+    if (isGiftCardLinkPath(path)) return initial ? '/' : null;
     // 分享口令与中转加入码绝不随原始链接进路由状态。
     if (isProviderShareLinkPath(path)) return PROVIDER_SHARE_LINK_ROUTE;
     return isRelayJoinPath(path) ? RELAY_JOIN_ROUTE : path;

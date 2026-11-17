@@ -85,6 +85,16 @@
       "reset": "恢復預設",
       "apply": "套用",
       "hex": "色碼"
+    },
+    "appIcon": {
+      "label": "應用程式圖示",
+      "saveFailed": "無法更換應用程式圖示，請稍後再試",
+      "options": {
+        "default": "預設",
+        "cat": "黑貓",
+        "wordmark": "Cindy 字標",
+        "mark": "Cindy 符號"
+      }
     }
   },
   "language": {
@@ -514,5 +524,8 @@
     "sourceHint_local": "填寫名稱自動建立，也可以選擇現有資料夾。",
     "chooseExistingFolder": "選擇現有資料夾",
     "changeMainDirectory": "更改"
+  },
+  "navigation": {
+    "unavailable": "無法開啟目標電腦的設定。請確認電腦在線上且已允許遠端控制；舊版本請先更新 Cindy。"
   }
 }

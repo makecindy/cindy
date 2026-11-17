@@ -1,4 +1,4 @@
-/** Registration is a hint, not proof of delivery. Mainland networks retain a direct connection. */
+/** Explicit server configuration is a hint, not proof of delivery. Mainland networks retain a direct connection. */
 export type AndroidPushAvailability = 'unknown' | 'available' | 'unavailable';
 let availability: AndroidPushAvailability = 'unknown';
 const listeners = new Set<() => void>();

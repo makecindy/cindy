@@ -1,3 +1,4 @@
+import { parseSettingsNavigationTarget, type SettingsNavigationTarget } from '@cindy/maker-shared/settings-navigation';
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { APP_PREFERENCE_REQUEST, APP_PREFERENCE_REPLY, APP_SETTINGS_CHANGED, type AppPreferenceControlBridge } from '../shared/appPreferenceControl.js';
 import type { VoiceConversationApi } from '../shared/voiceConversation';
@@ -1602,7 +1603,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     uiPrompts: (): Promise<Array<{id: string; name: string; version: string}>> => ipcRenderer.invoke('ghosts:ui-prompts'),
     deferUiPrompt: (id: string, version: string): Promise<void> => ipcRenderer.invoke('ghosts:defer-ui-prompt', id, version),
     requestUiApproval: (id: string): Promise<{ granted: boolean }> => ipcRenderer.invoke('ghosts:request-ui-approval', id),
-    requestTaskApproval: (id: string, capability?: 'observe' | 'companions' | `host-tools:${import('@cindy/plugin-protocol').GhostHostToolGroup}` | `event:${import('../shared/ghost').GhostTaskEventTopic}`): Promise<{ granted: boolean }> =>
+    requestTaskApproval: (id: string, capability?: 'observe' | 'companions'): Promise<{ granted: boolean }> =>
       ipcRenderer.invoke('ghosts:request-task-approval', id, capability),
     /** 本插件声明的控制节点(运行前检查)与生效状态。 */
     getControlPoints: (id: string): Promise<GhostControlPointInfo[]> =>
@@ -1716,6 +1717,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{
       cards: Array<{ callId: string; ghostId: string; html: string; height: number; v: number }>;
     }> => ipcRenderer.invoke('ghosts:card:list-by-session', sessionId),
+    getRemoteCard: (
+      deviceId: string,
+      sessionId: string,
+      callId: string,
+    ): Promise<{
+      card: { ghostId: string; html: string; height: number; revision: string; externalLinks: boolean } | null;
+      unsupported?: true;
+      failed?: true;
+    }> => ipcRenderer.invoke('ghosts:card:get-remote', deviceId, sessionId, callId),
     // 会话切换上报(订阅槽① did-session-switched 的数据源):路由 effect 每次
     // 路由变化调,单向 send 零等待;去重/资格门全在 main。
     noteSessionFocused: (sessionId: string | null): void =>
@@ -1768,6 +1778,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('ghosts:readme', id, locale),
     libraryOverview: (id: string): Promise<import('../shared/ghost').GhostLibraryOverview> =>
       ipcRenderer.invoke('ghosts:library-overview', id),
+    reusableAccounts: (id: string): Promise<import('../shared/pluginAccountReuse').GhostAccountReuseGroup[]> =>
+      ipcRenderer.invoke('ghosts:reusable-accounts', id),
+    reuseAccount: (id: string, request: import('../shared/pluginAccountReuse').GhostAccountReuseAction): Promise<import('../shared/pluginAccountReuse').GhostAccountReuseResult> =>
+      ipcRenderer.invoke('ghosts:reuse-account', id, request),
     handoffList: (id: string): Promise<import('../shared/ghost').GhostHandoffFile[]> =>
       ipcRenderer.invoke('ghosts:handoff-list', id),
     handoffFolder: (id: string): Promise<string | null> => ipcRenderer.invoke('ghosts:handoff-folder', id),
@@ -3225,6 +3239,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openSubscriptionPortal: () => ipcRenderer.invoke(BILLING_INVOKE.OPEN_SUBSCRIPTION_PORTAL),
     openPaymentRedirect: (payload) =>
       ipcRenderer.invoke(BILLING_INVOKE.OPEN_PAYMENT_REDIRECT, payload),
+    previewGiftCard: (payload) => ipcRenderer.invoke(BILLING_INVOKE.PREVIEW_GIFT_CARD, payload),
+    redeemGiftCard: (payload) => ipcRenderer.invoke(BILLING_INVOKE.REDEEM_GIFT_CARD, payload),
   } satisfies BillingRendererApi,
 
   // ── Workdir File Browser (vscode-style file tree + content viewer) ──
@@ -4107,6 +4123,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
           | 'done'
           | 'failed';
         name: string;
+        /** Standard progress while downloading (shared/downloadProgress.ts). */
+        download?: import('../shared/downloadProgress').DownloadProgress;
         version?: string;
         absolutePath?: string;
         errorCode?: string;
@@ -4332,10 +4350,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'gift-card'; code: string }
         | { type: 'shared-task-join'; invitation: string; server: string }
         | { type: 'provider-share-join'; link: string }
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
+        | { type: 'settings-navigation'; target: SettingsNavigationTarget }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; imGroup?: 'cindy' | 'personal' },
     ) => void,
   ): (() => void) =>
@@ -4343,6 +4363,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       if (!payload || typeof payload !== 'object') return;
       const p = payload as {
         type?: unknown;
+        target?: unknown;
         id?: unknown;
         workingDir?: unknown;
         filePath?: unknown;
@@ -4350,6 +4371,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         pluginId?: unknown;
         snapshotId?: unknown;
         ghostId?: unknown;
+        code?: unknown;
         invitation?: unknown;
         token?: unknown;
         server?: unknown;
@@ -4383,6 +4405,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         callback({ type: 'plugin', pluginId: p.pluginId });
       } else if (p.type === 'local-plugin-share' && isLocalPluginSnapshotId(p.snapshotId)) {
         callback({ type: 'local-plugin-share', snapshotId: p.snapshotId });
+      } else if (p.type === 'gift-card' && typeof p.code === 'string' && /^[0-9A-HJKMNP-TV-Z]{16}$/.test(p.code)) {
+        // Main already normalized the redeem code; anything else is dropped here.
+        callback({ type: 'gift-card', code: p.code });
       } else if (p.type === 'installed-plugin' && (p.ghostId === undefined || (typeof p.ghostId === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(p.ghostId)))) {
         // A plugin's own id (same rule as isValidGhostId in shared/ghost), not a market resource id.
         // The bare list link carries none. Main validated it already; a malformed id drops the payload.
@@ -4391,6 +4416,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         && [p.groupId, p.messageId, ...(p.threadRootId === undefined ? [] : [p.threadRootId])].every(value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value))) {
         callback({ type: 'chat-message', groupId: p.groupId, messageId: p.messageId,
           ...(typeof p.threadRootId === 'string' ? { threadRootId: p.threadRootId } : {}) });
+      } else if (p.type === 'settings-navigation') {
+        const target = parseSettingsNavigationTarget(p.target);
+        if (target) callback({ type: 'settings-navigation', target });
       } else if (p.type === 'settings' && (p.tab === 'voice-input' || p.tab === 'providers' || p.tab === 'remote-control' || p.tab === 'builtin-tools' || p.tab === 'im-bot')) {
         // connect 只对 providers 页有意义;主进程已做 id 白名单,这里按纵深防御
         // 原样复用同一规则。字段存在但不合法时丢弃整个 payload,不降级成半执行。
@@ -4460,10 +4488,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     | { type: 'plugin'; pluginId: string }
     | { type: 'local-plugin-share'; snapshotId: string }
     | { type: 'installed-plugin'; ghostId?: string }
+    | { type: 'gift-card'; code: string }
     | { type: 'shared-task-join'; invitation: string; server: string }
     | { type: 'provider-share-join'; link: string }
     | { type: 'chat-invite'; token: string }
     | { type: 'chat-invite-malformed' }
+    | { type: 'settings-navigation'; target: SettingsNavigationTarget }
     | { type: 'settings'; tab: 'voice-input' | 'providers' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; imGroup?: 'cindy' | 'personal' }
     | null
   > => ipcRenderer.invoke('deep-link:take-pending'),
@@ -5255,7 +5285,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       }>;
       /** Bounded last-known directory; absence is not an authoritative removal. */
       stale?: boolean;
+      /**
+       * Only one hybrid discovery leg answered; its rows are fresh but its
+       * absence proves nothing, so nothing may be pruned on it.
+       */
+      partial?: boolean;
       displayBudget?: { remainingMs: number };
+      /** Server rate-limit deadline (wall-clock ms) for the next directory read. */
+      retryAtMs?: number;
     }> => ipcRenderer.invoke('device-link:list-devices'),
     renameDevice: (
       deviceId: string,
@@ -5681,6 +5718,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('worktree:reveal', req),
   worktreeSuggestName: (req: { baseRepo: string }): Promise<unknown> =>
     ipcRenderer.invoke('worktree:suggest-name', req),
+  worktreeGenerateName: (req: { taskText: string }): Promise<unknown> =>
+    ipcRenderer.invoke('worktree:generate-name', req),
+  worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest): Promise<import('../shared/worktreeCheckout').CheckoutReply> => ipcRenderer.invoke('worktree:checkout', req),
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncStatus> => ipcRenderer.invoke('worktree:branch-sync-status', req),
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncReply> => ipcRenderer.invoke('worktree:sync-branch', req),
   worktreeListBranches: (req: { baseRepo: string }): Promise<unknown> =>
@@ -6891,6 +6931,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ownerGeneration: number;
       providers: import('@cindy/model-providers').ProviderView[];
       providerOrder: string[];
+      disabledProviders?: Record<string, boolean>;
     }> => ipcRenderer.invoke('maker:provider:list'),
     setProviderRemoteAccess: (input: { providerId: string; enabled: boolean }): Promise<{ ok: true; enabled: boolean }> =>
       ipcRenderer.invoke('maker:provider:remote-access:set', input),
@@ -7221,7 +7262,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setModelDisable: (
       input:
         | { kind: 'model'; providerId: string; modelIds: string[]; disabled: boolean }
-        | { kind: 'provider'; providerId: string; disabled: boolean }
+        | { kind: 'provider'; providerId: string; disabled: boolean; remoteDeviceId?: string }
         // reset = 恢复默认:删除该供应商整组停用 override(含陈旧条目),遵循
         // configuration-and-overrides.md §4 的「删 override 跟随默认」语义。
         | { kind: 'reset'; providerId: string },
@@ -8130,7 +8171,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       effective: 'immediate';
     }> => ipcRenderer.invoke('maker:session-runtime-fallback:reset'),
 
-    // Claude Code 自动上下文压缩阈值。仅对新建会话生效。
+    // Codex 原生服务器/本地压缩选择。下次启动或恢复任务时生效。
+    codexCompactionGet: (): Promise<{ enabled: boolean; isCustomized: boolean }> =>
+      ipcRenderer.invoke('maker:codex-compaction:get'),
+    codexCompactionSet: (
+      enabled: boolean | null,
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
+    ): Promise<{ enabled: boolean; isCustomized: boolean }> =>
+      ipcRenderer.invoke('maker:codex-compaction:set', enabled, owner),
+    // Claude Code 自动上下文压缩阈值。
     compactionGetPct: (): Promise<number> => ipcRenderer.invoke('maker:compaction:get-pct'),
     compactionGetState: (): Promise<{ pct: number; isCustomized: boolean; defaultPct: number }> =>
       ipcRenderer.invoke('maker:compaction:get-state'),

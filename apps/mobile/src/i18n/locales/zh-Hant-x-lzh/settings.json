@@ -85,6 +85,16 @@
       "reset": "復預設",
       "apply": "用之",
       "hex": "色碼"
+    },
+    "appIcon": {
+      "label": "應用之標",
+      "saveFailed": "應用之標未能易，請稍後再試",
+      "options": {
+        "default": "常例",
+        "cat": "玄貓",
+        "wordmark": "Cindy 字標",
+        "mark": "Cindy 符記"
+      }
     }
   },
   "language": {
@@ -514,5 +524,8 @@
     "sourceHint_local": "填寫名稱自動建立，也可以選擇現有資料夾。",
     "chooseExistingFolder": "選擇現有資料夾",
     "changeMainDirectory": "更改"
+  },
+  "navigation": {
+    "unavailable": "未能開啟彼機設定。請驗其在線且已允遠控；版本舊則先更新 Cindy。"
   }
 }

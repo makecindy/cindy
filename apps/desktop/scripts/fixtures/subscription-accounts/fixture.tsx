@@ -44,7 +44,7 @@ const claude = (
           },
         ],
 });
-// The default account's card comes from the provider (ProvidersSection); added accounts carry their own.
+// Every account carries its own quota, including the login in the official CLI directory.
 const defaultSnapshot = claude(2, 92, 16, [3.6, 76]);
 const usage = (snapshot: ClaudeSubscriptionUsageSnapshot): SubscriptionAccountUsage => ({
   claude: snapshot,
@@ -64,7 +64,7 @@ const codex = (primary: number, secondary: number): SubscriptionAccountUsage => 
   },
 });
 
-/** Mirrors ProvidersSection: the provider card sits in the default row, the usage page in the header. */
+/** Mirrors ProvidersSection: the old provider card is only an unavailable-endpoint fallback. */
 function Section({ codexPool, signedOut }: { codexPool: boolean; signedOut: boolean }) {
   const { t } = useTranslation();
   if (codexPool) return <SubscriptionAccountsSection providerId="openai" />;
@@ -98,18 +98,21 @@ void mountPage({
           id: 'default',
           identity: 'alex@example.com',
           plan: isCodex ? 'pro' : 'max',
+          ...(isCodex ? { planType: 'pro' } : { planTier: 'max_20x' }),
           directory: isCodex ? '/Users/alex/.codex' : '/Users/alex/.claude',
           status: 'ready',
           running: 2,
           limit: 10,
           weight: 1,
           paused: false,
-          ...(isCodex ? { usage: codex(18, 41) } : { loginExpiresAt: new Date(now + 18 * 86_400_000).toISOString() }),
+          usage: isCodex ? codex(18, 41) : usage({ ...defaultSnapshot, planTier: 'max_20x' }),
+          ...(!isCodex ? { loginExpiresAt: new Date(now + 18 * 86_400_000).toISOString() } : {}),
         },
         {
           id: 'second',
           identity: 'long.work.account@research.example.com',
           plan: isCodex ? 'plus' : 'max',
+          ...(isCodex ? { planType: 'plus' } : { planTier: 'max_5x' }),
           directory: '/Users/alex/.claude-cindy-opaque-id',
           status: 'ready',
           running: 0,
@@ -133,6 +136,12 @@ void mountPage({
         },
       ],
     };
+    if (ctx.case.startsWith('official-plan-name')) {
+      view.accounts[0] = {
+        ...view.accounts[0], plan: 'pro', planTier: 'pro', planDisplayName: 'Ultra',
+        usage: usage({ ...defaultSnapshot, subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra' }),
+      };
+    }
     if (ctx.case.startsWith('codex-no-usage')) view.accounts[1].usage = undefined;
     if (ctx.case === 'expiry-past')
       view.accounts[1].loginExpiresAt = new Date(now - 86_400_000).toISOString();

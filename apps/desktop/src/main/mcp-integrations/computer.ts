@@ -21,6 +21,9 @@ import type {
   ComputerMcpToolName,
 } from '@cindy/mcps';
 import { createLogger } from '../logger.js';
+// progressReporter only (not the downloader facade): this module must not pull in Electron's net transport.
+import { createDownloadProgressReporter } from '../downloader/progressReporter.js';
+import type { DownloadProgress } from '../../shared/downloadProgress.js';
 import {
   adaptComputerDriverArgs,
   selectAdvertisedComputerDriverArgs,
@@ -206,6 +209,41 @@ export interface ComputerDriverUpdateProgress {
   phase: 'downloading' | 'installing' | 'done';
   downloadedBytes: number | null;
   totalBytes: number | null;
+  /** Standard progress (speed, time left) for the shared DownloadMeter. */
+  download?: DownloadProgress;
+}
+
+const DRIVER_SPEED_WINDOW_MS = 5_000;
+
+/** Adds the shared DownloadProgress to sampled installer progress; speed comes from file-size samples. */
+function withStandardDriverProgress(
+  onProgress: (progress: ComputerDriverUpdateProgress) => void,
+): (progress: ComputerDriverUpdateProgress) => void {
+  const reporter = createDownloadProgressReporter({
+    initialPhase: 'downloading',
+    throttleMs: 0,
+    emit: () => {},
+  });
+  const samples: Array<{ at: number; bytes: number }> = [];
+  return (progress) => {
+    if (progress.phase === 'downloading' && progress.downloadedBytes !== null) {
+      const now = Date.now();
+      samples.push({ at: now, bytes: progress.downloadedBytes });
+      while (samples.length > 2 && now - samples[0].at > DRIVER_SPEED_WINDOW_MS) samples.shift();
+      const first = samples[0];
+      const elapsedMs = now - first.at;
+      const speedBps =
+        elapsedMs > 0
+          ? Math.max(0, Math.round(((progress.downloadedBytes - first.bytes) * 1000) / elapsedMs))
+          : 0;
+      reporter.setBytes(progress.downloadedBytes, progress.totalBytes, speedBps);
+    } else if (progress.phase === 'installing') {
+      reporter.setPhase('installing');
+    } else if (progress.phase === 'done') {
+      reporter.setPhase('completed');
+    }
+    onProgress({ ...progress, download: reporter.snapshot() });
+  };
 }
 export interface ComputerRuntimePorts {
   /** Host monitor liveness check; never treat unavailable OS facts as idle. */
@@ -3512,6 +3550,7 @@ async function updateComputerDriver(
   }
   if (!driverUpdateInstallInFlight) {
     let stopSampler: () => void = () => {};
+    const report = onProgress ? withStandardDriverProgress(onProgress) : undefined;
     // preflight + install 立即收进同一个 Promise,避免并发点击各起一轮安装。
     driverUpdateInstallInFlight = (async () => {
       const targetVersion = await revalidateComputerDriverUpdateTarget(opts?.fetchImpl ?? outboundFetch);
@@ -3520,7 +3559,7 @@ async function updateComputerDriver(
       }
       try {
         const result = await installComputerDriver((pid) => {
-          if (onProgress) stopSampler = startInstallProgressSampler(pid, onProgress);
+          if (report) stopSampler = startInstallProgressSampler(pid, report);
         }, targetVersion);
         const installedVersion = extractDriverSemver(result.status.version);
         if (!installedVersion || compareSemver(installedVersion, targetVersion) < 0) {
@@ -3539,7 +3578,7 @@ async function updateComputerDriver(
     })().finally(() => {
       driverUpdateInstallInFlight = null;
       stopSampler();
-      onProgress?.({ phase: 'done', downloadedBytes: null, totalBytes: null });
+      report?.({ phase: 'done', downloadedBytes: null, totalBytes: null });
     });
   }
   return driverUpdateInstallInFlight;
@@ -4176,7 +4215,7 @@ function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): ComputerMcpDe
       }
       if (options.isComputerUseEnabled && !options.isComputerUseEnabled(context)) {
         throw new ComputerDriverError(
-          'Computer Use is disabled in Settings. Tell the person this step needs it: Settings → Built-in tools → Computer Use (link: cindy://settings/builtin-tools; macOS also asks for Accessibility and Screen Recording there). Only they can enable it; do not simulate input from the shell.',
+          'Computer Use is disabled in Settings. Tell the person this step needs it: Use cindy_helper get_settings_link with page=builtin-tools and show its returned device-bound Markdown link (macOS also asks for Accessibility and Screen Recording there). Only they can enable it; do not simulate input from the shell.',
           'COMPUTER_USE_DISABLED',
         );
       }

@@ -270,12 +270,15 @@ function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }
     ? t('providerGroup.member.accountCount', { count: pool.members.length })
     : pool && pickerAccount ? pool.members[0].identity
     : pickerAccount
-      ? (pickerAccount.identity ?? t('subscriptionAccounts.unassigned'))
+      ? pickerAccount.identity
       : props.accountIdentity;
   const displayedQuota = pool
     ? pool.average === null
       ? null
-      : { usedPercent: 100 - pool.average, resetsAt: null }
+      : {
+          usedPercent: 100 - pool.average,
+          resetsAt: pool.isPool ? null : pool.members[0]?.resetsAt ?? null,
+        }
     : quota;
   return (
     <RailButtonView {...props} accountIdentity={identity} quota={displayedQuota} pool={pool} />
@@ -326,7 +329,8 @@ function RailButtonView({
   const tooltip = pool && (pool.hasAccountDetails || pool.warning) ? (
     <>
       <div>{displayLabel}</div>
-      <ModelPoolQuotaDetails pool={pool} />
+      {/* 标题已含完整账号时明细不再重复；供应商组标题不带账号、生成名截断到 50 字时只有半个账号，照常列出。 */}
+      <ModelPoolQuotaDetails pool={pool} accountInTitle={!groupNote && !!accountIdentity && displayLabel.includes(accountIdentity)} />
     </>
   ) : quotaLabel || note ? (
     <>
