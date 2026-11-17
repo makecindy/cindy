@@ -40,7 +40,9 @@ test('the Host loader chain imports HTML with ?raw and plain Markdown as text', 
     await writeFile(html, '<p>example</p>\n');
     await writeFile(markdown, '# Example\n');
     const loader = new URL('./register-raw.mjs', import.meta.url).href;
-    const script = `import html from ${JSON.stringify(pathToFileURL(html).href + '?raw')};
+    const htmlUrl = pathToFileURL(html);
+    htmlUrl.search = 'raw';
+    const script = `import html from ${JSON.stringify(htmlUrl.href)};
       import md from ${JSON.stringify(pathToFileURL(markdown).href)};
       process.stdout.write(JSON.stringify([html, md]));`;
     const { stdout } = await exec(process.execPath, ['--import', 'tsx', '--import', loader, '--input-type=module', '-e', script]);
