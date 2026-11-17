@@ -31,6 +31,7 @@ import { createHostCodexThreadStorage } from './codex-thread-storage.js';
 import { invalidateHostCodexLogin } from './codex-invalidation.js';
 import { createHostCodexSystemLogin, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
 import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
+import { heldCredentialError } from './held-credentials.js';
 import { createCodexAuthBoundary } from './codex-auth-boundary.js';
 import { createCodexProxyInbound } from './codex-proxy-inbound.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
@@ -94,8 +95,7 @@ function expiresWithinBridgeMargin(token: string): boolean {
     return typeof exp === 'number' && Date.now() / 1000 >= exp - BRIDGE_REFRESH_MARGIN_SEC;
   } catch { return false; }
 }
-const heldLoginExpired = () => new Error(`${HOST_PROFILE_IN_USE_BY_DESKTOP}: the ChatGPT sign-in has expired, and it is not renewed `
-  + 'while a Cindy desktop app running on its own uses this data (both would renew the same sign-in). Quit that app, then try again.');
+const heldLoginExpired = () => heldCredentialError('the ChatGPT sign-in has expired, and it is not renewed');
 
 /**
  * Coexistence plan A (reviewer, 2026-11-17): a ChatGPT login the upstream rejected while a desktop

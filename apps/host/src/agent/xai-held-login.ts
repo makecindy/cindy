@@ -16,7 +16,7 @@
  *   this process and requests with the same token fail with a reason, not reaching the upstream again;
  * - once released forgets everything and behaves as the service does.
  */
-import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
+import { heldCredentialError } from './held-credentials.js';
 import type { createGrokOAuthService } from '../../../desktop/src/main/maker-host/grok-oauth-login.js';
 
 type GrokService = ReturnType<typeof createGrokOAuthService>;
@@ -37,8 +37,7 @@ export function holdGrokLoginWrites(service: GrokService, ports: {
       return typeof value === 'number' ? value : null;
     } catch { return null; }
   };
-  const refusal = (what: string) => new Error(`${HOST_PROFILE_IN_USE_BY_DESKTOP}: ${what} while a Cindy desktop app running on its own `
-    + 'uses this data (both would renew the same sign-in). Quit that app, then try again.');
+  const refusal = heldCredentialError;
   return {
     ...service,
     async getGrokAccessToken(providerId = 'xai') {

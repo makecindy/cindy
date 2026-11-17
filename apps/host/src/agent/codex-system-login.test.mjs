@@ -559,3 +559,38 @@ test('while a desktop uses the profile, the xAI login is neither renewed nor sig
   await xai.invalidateXaiBridgeAuth({ status: 403, body: 'unauthenticated: bad-credentials', failedAccessToken: 'xai-token-rejected' });
   assert.equal(f.outbound.length, 1);
 });
+
+/*
+ * 测试价值
+ * - 生产入口：生产的 createHostProviderConfig 里的自定义供应商 OAuth（config.oauth.readGenericOAuthAccessToken：
+ *   setOAuthTokenReader 注册给各代理的路由读取与自动审查都经它），续期请求经 provider-config 传给它的 fetch。
+ * - 规则：并存方案 A（审核方 2026-11-17 定）。登录存在共用 profile 的 safe-storage 里；闸门关着时不续期（续期请求不发出，
+ *   不消耗 refresh token、不写回），还没过期的令牌照用，已过期的按现有路径报 provider_oauth_refresh_failed；放开后照常续期。
+ * - 现有覆盖缺口：之前闸门不管自定义供应商 OAuth 的续期。
+ * - 最小失败输入：闸门关着时读一次快过期的令牌、一次已过期的令牌。
+ * - tier：unit（真实的临时库与 profile；对外请求是记录调用的桩）。
+ */
+test('while a desktop uses the profile, a custom provider OAuth sign-in is not renewed', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const f = await productionRuntime(t, 'held-oauth-owner');
+  const descriptor = { tokenUrl: 'https://oauth.example.test/token', clientId: 'fixture-client' };
+  const writeLogin = (id, expiresAt) => assert.equal(f.config.recipeSecretIo.write(id,
+    JSON.stringify({ access_token: `${id}-access`, refresh_token: `${id}-refresh`, expires_at: expiresAt })), true);
+  // Held, about to expire (within the 120 seconds it renews ahead): the current token is used, nothing renewed.
+  writeLogin('cprov-expiring', Date.now() + 60_000);
+  let before = f.snapshot();
+  assert.equal(await f.config.oauth.readGenericOAuthAccessToken('cprov-expiring', descriptor), 'cprov-expiring-access');
+  assert.deepEqual(f.outbound, []);
+  assert.deepEqual(f.snapshot(), before);
+  // Held, expired: the existing refusal, still nothing sent or written.
+  writeLogin('cprov-expired', Date.now() - 1_000);
+  before = f.snapshot();
+  await assert.rejects(f.config.oauth.readGenericOAuthAccessToken('cprov-expired', descriptor), /provider_oauth_refresh_failed/);
+  assert.deepEqual(f.outbound, []);
+  assert.deepEqual(f.snapshot(), before);
+  // Released: the renewal goes out (answered with a failure here, so nothing is written).
+  f.setHeld(false);
+  writeLogin('cprov-released', Date.now() + 60_000);
+  await f.config.oauth.readGenericOAuthAccessToken('cprov-released', descriptor);
+  assert.deepEqual(f.outbound, ['https://oauth.example.test/token']);
+});

@@ -18,6 +18,7 @@ import { loadCatalogWithSource, storedCustomProviderId, type CatalogSourceConfig
 import { createGenericOAuthService, type GenericOAuthStorage } from '../../../desktop/src/main/maker-host/generic-oauth.js';
 import { createGrokOAuthService } from '../../../desktop/src/main/maker-host/grok-oauth-login.js';
 import { holdGrokLoginWrites } from './xai-held-login.js';
+import { holdCredentialFetch } from './held-credentials.js';
 import { hostOutbound, resolveHostOutboundProxy } from '../outbound.mjs';
 import { createClaudeNativeCli } from '../../../desktop/src/main/maker-host/claude-native-cli.js';
 import { readClaudeCliLoginStatusBySpawn } from '@cindy/maker-core/claude-cli-login-status';
@@ -93,7 +94,10 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
     set: (id, value) => { options.credentials.write(key(providerSecretStorageKey(id)), value); return true; },
     remove: id => { options.credentials.remove(key(providerSecretStorageKey(id))); return { success: true }; },
   };
-  const oauth = createGenericOAuthService({ fetchImpl: hostOutbound.outboundFetch });
+  // Custom provider OAuth renews through this fetch; while a desktop uses the profile it sends
+  // nothing, so no refresh token is spent and nothing is written back (held-credentials.ts).
+  const oauth = createGenericOAuthService({ fetchImpl: holdCredentialFetch(hostOutbound.outboundFetch,
+    () => options.isProfileHeld?.() === true, 'this provider sign-in is not renewed') });
   oauth.configureGenericOAuth({ storage: oauthStorage, openExternal: options.openExternal });
   // Every Host consumer of the xAI login reads it through this one service; while a desktop uses
   // the profile it neither renews nor signs out (xai-held-login.ts).

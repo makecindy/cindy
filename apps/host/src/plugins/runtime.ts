@@ -65,6 +65,8 @@ import { prepareHostPluginAssets } from './assets.mjs';
 import type { GhostNodeRuntimeBrokerDeps } from '../../../desktop/src/main/cindy-brain/nodeRuntimeBroker.js';
 
 interface PluginRuntimeOptions {
+  /** Coexistence plan A: whether a Cindy desktop app running on its own uses this profile (plugin OAuth). */
+  isProfileHeld?(): boolean;
   profileDir: string;
   ownerId: string;
   manager: GhostManager;
@@ -157,7 +159,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   });
   const unavailable = () => { throw new Error('PLUGIN_ACCOUNT_SERVICE_UNAVAILABLE'); };
   const authorization = createHostPluginAuthorization({ owner, root, current, assertCurrent,
-    getGhost, list: () => options.manager.list(), secret, kv, identity,
+    getGhost, list: () => options.manager.list(), secret, kv, identity, isProfileHeld: options.isProfileHeld,
     account: options.account ?? { hasLogin: () => false, post: unavailable, endpoint: unavailable,
       openExternal: unavailable, modelAccessReady: () => false },
     publish: options.publish, signal: stopSignal.signal });
