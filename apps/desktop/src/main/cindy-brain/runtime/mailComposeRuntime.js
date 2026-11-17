@@ -707,11 +707,13 @@ var cindyMail = (function () {
               }
             }
             edit.error = result;
-            if (!sending && result.execution === "executed") edit.completedSaveFields = fields;
+            const completedSave = !sending && !additions.length && result.execution === "executed";
+            if (completedSave) edit.completedSaveFields = fields;
             // A failed completed save has never attempted delivery. Keep its
-            // error and edits, but do not persist an unknown-send lock. Legacy
+            // error and edits, but do not persist an unknown-send lock. Uploads
+            // still require verified bytes before consuming their descriptors. Legacy
             // pending records have no operation provenance and stay untouched.
-            if (result.execution === "not_executed" || (!sending && result.execution === "executed")) {
+            if (result.execution === "not_executed" || completedSave) {
               if (result.execution === "not_executed" && additions.length && !result.stale) {
                 edit.additions = (edit.additions || []).filter(a => !additions.includes(a));
                 for (const file of additions) if (file.contentId) {

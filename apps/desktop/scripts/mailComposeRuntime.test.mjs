@@ -758,6 +758,54 @@ for (const failure of ['unavailable', 'wrong-draft', 'conflict']) test(`complete
   }
 });
 
+for (const inline of [false, true]) test(`verified uploads still save and send once: ${inline}`, async () => {
+  let f;
+  f = fixture({ richText: true, write: async request => {
+    if (request.send) return;
+    const attachment = request.attachments[0];
+    assert.equal(request.attachments.length, 1);
+    f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml,
+      attachments: [{ key: 'provider-part', filename: attachment.filename, bytes: attachment.bytes,
+        mimeType: 'image/png', contentId: attachment.contentId || '' }] });
+    return { ok: true, data: { readBack: f.current() } };
+  } });
+  await f.present();
+  await f.card(inline ? 'image' : 'attach', f.values(), { mailAttachment: {
+    path: 'synthetic-upload', filename: 'example.png', bytes: 12, sha256: 'a'.repeat(64),
+    ...(inline ? { contentId: 'new-image@cindy.local' } : {}) } });
+  assert.equal(await f.tool('update'), null);
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.filter(r => !r.send).length, 1);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+  assert.equal(f.writes.at(-1).attachments.length, 0);
+  assert.equal(JSON.parse(f.writes.at(-1).fields.attachmentItems).length, 1);
+});
+
+// An executed failure does not verify newly uploaded bytes. Preserve the old
+// upload lock rather than replay transient descriptors from mailbox metadata.
+for (const inline of [false, true]) test(`failed upload is not replayed during save recovery: ${inline}`, async () => {
+  let f;
+  const upload = { path: 'synthetic-upload', filename: 'example.png', bytes: 12,
+    sha256: 'a'.repeat(64), ...(inline ? { contentId: 'new-image@cindy.local' } : {}) };
+  f = fixture({ richText: true, write: async request => {
+    assert.equal(request.send, false);
+    assert.equal(request.attachments.length, 1);
+    f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml,
+      attachments: [{ key: 'provider-part', filename: upload.filename, bytes: upload.bytes,
+        mimeType: 'image/png', contentId: upload.contentId || '' }] });
+    return { ok: false, execution: 'executed', message: 'Saved but upload verification failed' };
+  } });
+  await f.present();
+  await f.card(inline ? 'image' : 'attach', f.values(), { mailAttachment: upload });
+  assert.equal((await f.tool('update')).execution, 'executed');
+  assert.equal((await f.resolve()).state, 'pending');
+  assert.equal((await f.tool('get')).ok, true);
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal(f.writes.length, 1);
+});
+
 for (const operation of ['save-unknown', 'send-executed', 'send-unknown']) test(`reads and restart retain the uncertain lock: ${operation}`, async () => {
   const f = fixture({ write: async () => ({ ok: false,
     execution: operation === 'send-executed' ? 'executed' : 'unknown', message: 'Uncertain result' }) });
