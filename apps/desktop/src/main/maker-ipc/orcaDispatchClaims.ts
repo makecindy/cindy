@@ -90,8 +90,8 @@ const LABELED_MESSAGE_ID_PATTERN =
 
 const FENCED_CODE_PATTERN = /```[\s\S]*?```/g;
 const BLOCKQUOTE_LINE_PATTERN = /^\s*>.*$/gm;
-/** 标题行没有句末标点，会和下一句粘成一条主张，回显时要去掉。 */
-const HEADING_LINE_PATTERN = /^\s*#{1,6}\s.*$/gm;
+/** 标题只剥井号标记：文字保留参与核对，否则只写在标题里的派单主张会逃过对账。 */
+const HEADING_LINE_PATTERN = /^\s*#{1,6}\s+/gm;
 
 function emptyLedger(): LeadLedger {
   return { epoch: 0, lastGeneration: null, facts: [], woke: false, escalated: false };
@@ -145,10 +145,10 @@ export function dispatchFactsForTurn(
   return ledger.facts.filter((fact) => fact.turnGeneration >= turnGeneration);
 }
 
-/** 句级切分：中文句号与英文句点都算边界，保留标点后的语气不影响判定。 */
+/** 句级切分：中文句号与英文句点都算边界，换行也算边界——标题行不得与后续主张句粘连。 */
 function splitSentences(body: string): string[] {
   return body
-    .split(/(?<=[。！？.!?])\s*/)
+    .split(/(?<=[。！？.!?])\s*|\n+/)
     .map((part) => part.trim())
     .filter(Boolean);
 }
