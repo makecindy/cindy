@@ -189,6 +189,45 @@ describe('自动化归组', () => {
     expect(folder.project.sessionCount).toBe(4);
   });
 
+  it('跨项目合并按全局最近活动排列成员,较新的运行不会被折到后面', () => {
+    const nightly = (id: string, workingDir: string, at: string) => ({
+      session: { id, title: 'Nightly', source: 'scheduler', workingDir, updatedAt: at, status: 'active', agentKind: 'codex', deviceLinkDeviceId: 'mac' },
+      scheduleInfo: { scheduleId: 'nightly', scheduleName: 'Nightly', running: false, unreadCount: 0 },
+      title: 'Nightly',
+      lastActivityAt: at,
+      pendingInteractionCount: 0,
+    }) as unknown as RemoteSessionListItem;
+    const now = Date.parse('2026-11-20T00:00:00Z');
+    const a = groupAutomationListItems([
+      nightly('a17', '/a', '2026-11-17T00:00:00Z'),
+      nightly('a06', '/a', '2026-11-06T00:00:00Z'),
+    ], now, true, () => 'a');
+    const b = groupAutomationListItems([
+      nightly('b16', '/b', '2026-11-16T00:00:00Z'),
+      nightly('b15', '/b', '2026-11-15T00:00:00Z'),
+    ], now, true, () => 'b');
+    const [merged] = mergeAutomationItems([...a, ...b], now);
+    expect(merged.automationGroup?.items.map((item) => item.session.id)).toEqual(['a17', 'b16', 'b15', 'a06']);
+  });
+
+  it('旧伙伴例行任务专线随「自动化」收进目录;没有 routineId 的旧主机任务留在原位', () => {
+    const routine = (id: string, routineId?: string) => ({
+      session: { id, title: id, source: 'bot', companion: { id: 'cindy', role: 'routine', ...(routineId ? { routineId } : {}) } },
+      title: id,
+      lastActivityAt: '2026-11-16T00:00:00Z',
+      pendingInteractionCount: 0,
+    }) as unknown as RemoteSessionListItem;
+    const home = presentation({
+      projects: [projectGroup('buddy', '2026-11-16T00:00:00Z', [routine('review', 'memory'), routine('legacy')])],
+    });
+    const rows = buildHomeSections(home, true, false, { groupAutomation: true, automationTitle: '自动化' })
+      .find((section) => section.key === HOME_MAIN_SECTION_KEY)?.data ?? [];
+    const folder = rows.find((row) => row.kind === 'automation');
+    expect(folder?.kind === 'automation' && folder.project.sessions.map((item) => item.session.id)).toEqual(['review']);
+    const project = rows.find((row) => row.kind === 'project');
+    expect(project?.kind === 'project' && project.project.sessions.map((item) => item.session.id)).toEqual(['legacy']);
+  });
+
   it('跨项目合并后换了代表运行,旧目录里等待确认的档位仍归到合并后的组', () => {
     const nightly = (id: string, workingDir: string, at: string, pending = 0) => ({
       session: { id, title: 'Nightly', source: 'scheduler', workingDir, updatedAt: at, status: 'idle', agentKind: 'codex', deviceLinkDeviceId: 'mac' },

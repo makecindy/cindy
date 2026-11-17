@@ -5,7 +5,12 @@ import {
   groupAutomationListItems,
 } from '@cindy/maker-shared/session-list';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
-import type { MobileHomePresentation, MobileHomeProjectGroup } from './mobileHome';
+import {
+  compareSessionsByStatusThenActivityDesc,
+  type MobileHomePresentation,
+  type MobileHomeProjectGroup,
+  type MobileHomeSessionLike,
+} from './mobileHome';
 import { LIVE_TASK_PRIORITY } from '@cindy/maker-shared/live-task-priority';
 import {
   activityMsFromIso,
@@ -137,8 +142,24 @@ export function isFolderHomeRow(
     || row.kind === 'automation');
 }
 
+/**
+ * 旧伙伴例行任务专线(`source='bot'`、`companion.role='routine'`)的规则身份,与桌面
+ * getAutomationSidebarGroupInfo 同口径;旧主机不带 routineId 时为 null,维持原位。
+ */
+function teammateRoutineKey(item: RemoteSessionListItem): string | null {
+  const session = item.session as {
+    source?: unknown;
+    orcaRole?: unknown;
+    companion?: { id?: string | null; role?: unknown; routineId?: string | null } | null;
+  };
+  if (session.source !== 'bot' || session.orcaRole === 'worker') return null;
+  const companion = session.companion;
+  if (companion?.role !== 'routine' || !companion.id || !companion.routineId) return null;
+  return `routine:${companion.id}:${companion.routineId}`;
+}
+
 function isAutomationItem(item: RemoteSessionListItem): boolean {
-  return automationGroupKey(item) !== null;
+  return automationGroupKey(item) !== null || teammateRoutineKey(item) !== null;
 }
 
 /**
@@ -191,7 +212,8 @@ export function mergeAutomationItems(
 ): RemoteSessionListItem[] {
   const buckets = new Map<string, RemoteSessionListItem[]>();
   for (const item of items) {
-    const baseKey = item.automationGroup?.baseKey ?? automationGroupKey(item) ?? `session:${item.session.id}`;
+    const baseKey = item.automationGroup?.baseKey ?? automationGroupKey(item) ?? teammateRoutineKey(item)
+      ?? `session:${item.session.id}`;
     const key = `${automationDeviceKey(item)}|${baseKey}`;
     const bucket = buckets.get(key);
     if (bucket) bucket.push(item);
@@ -204,7 +226,10 @@ export function mergeAutomationItems(
       merged.push(bucket[0]);
       continue;
     }
-    const runs = bucket.flatMap((item) => item.automationGroup?.items ?? [item]);
+    // 各项目的成员拼在一起会打乱顺序;恢复上游的「状态 → 最近活动」顺序,组内前几条仍是最新的。
+    const runs = bucket
+      .flatMap((item) => item.automationGroup?.items ?? [item])
+      .sort((a, b) => compareSessionsByStatusThenActivityDesc(a.session as MobileHomeSessionLike, b.session as MobileHomeSessionLike));
     // 与 buildMobileHomePresentation 同一流水线:先折叠再本地化(组内成员已本地化)。
     const rows = groupAutomationListItems(runs, nowMs, true, automationDeviceKey, mobilePresentationLocalizer);
     if (rows.length !== 1 || !rows[0].automationGroup) {
