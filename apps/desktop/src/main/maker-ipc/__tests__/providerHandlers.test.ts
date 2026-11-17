@@ -45,7 +45,7 @@ import {
 } from '../../provider-import/providerImport.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE, MAKER_PUSH } from '../channels.js';
-import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
+import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.desktop.js';
 import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot, setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
 import { runDeviceLinkInvokeContext, readDeviceLinkModelSelectionOrigin } from '../../device-link/invoke-context.js';
 import { extractIpcError } from '../../../renderer/utils/ipcError';

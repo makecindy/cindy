@@ -1364,7 +1364,7 @@ import {
 } from './reviewStartHandler.js';
 import { registerStopAgentTaskHandler } from './stopAgentTaskHandler.js';
 import { registerStopSessionBackgroundTasksHandler } from './stopSessionBackgroundTasksHandler.js';
-import { registerProviderHandlers } from './providerHandlers.js';
+import { registerProviderHandlers } from './providerHandlers.desktop.js';
 import { readModelImageInputOverride, writeModelImageInputOverride } from '../maker-host/model-catalog-override-store.js';
 import { createLocalCliScanDeps, scanLocalCliAuth } from './localCliDetect.js';
 import { registerMcpHandlers } from './mcpHandlers.js';
@@ -1420,7 +1420,7 @@ import {
   setAccountUsageOwnerStampReader,
   setAccountUsageProviderReader,
 } from '../maker-host/provider-account-usage.js';
-import { fetchProviderModels, fetchSavedOAuthProviderModels } from '../maker-host/provider-model-fetch.js';
+import { fetchProviderModels, fetchSavedOAuthProviderModels } from '../maker-host/provider-model-fetch.desktop.js';
 import { detectProviderDeployment } from '../maker-host/provider-detection.js';
 import {
   beginProviderRouteMutation,
