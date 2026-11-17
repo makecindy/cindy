@@ -303,6 +303,7 @@ import { createInterruptedTurnAutoResumeHooks } from './interruptedTurnAutoResum
 import { createAutoResumeRuntime } from './autoResumeRuntime.js';
 import { createSessionRuntimeFallback } from './sessionRuntimeFallback.js';
 import { handleSilentStopTurnEndWithPorts } from './silentStopTurnEnd.js';
+import { settleSilentStopDoneWithPorts, type SilentStopSettleReason } from './silentStopSettle.js';
 import { surfaceSilentStopFailureWithPorts, type SilentStopFailureCause } from './silentStopFailure.js';
 import { createAgentSwitchBoundaryInsert, createAgentSwitchDbApply, createRememberThinkingIntent, createSwitchedSessionBootstrap, readAgentSwitchSessionRow } from './agentSwitchDepsCore.js';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
@@ -5799,50 +5800,23 @@ export function installDesktopInteractionListener(session: {
  * 终结记账/收口。失败只 warn + 清 pending,绝不重试(额度不退,安全方向)。
  */
 /**
- * silent-stop done 时 idle 转换被延迟(避免假完成通知);当守卫决定不续跑时
- * (skip / exhausted / send 失败)补发被推迟的 idle + coordinator done 信号,
- * 让 renderer 正确显示 stopped、scheduler/hook runner 收到 done 并 finish。
+ * silent-stop done 时 idle 转换被延迟；守卫决定不续跑时补发 idle 与 coordinator done
+ * (silentStopSettle.ts，与 Node Host 共用)。
  */
 async function settleSilentStopDone(
   sessionId: string,
-  reason: 'exhausted' | 'skip' | 'send-failed',
+  reason: SilentStopSettleReason,
   turnLeaseId: string,
   runtime: NonNullable<ReturnType<Maker['getSession']>>,
   generation: number,
 ): Promise<void> {
-  silentStopTurnLeaseGate.settle(sessionId, turnLeaseId);
-  try {
-    if (!(await sessionTurnLeaseTracker.markTurnEndedAndCheckIdle(
-      sessionId, turnLeaseId, () => runtime.settleHostTurnContinuation(generation),
-    ))) {
-      log.debug('ignored stale silent-stop settle after a newer turn started', {
-        sessionId,
-        turnLeaseId,
-      });
-      return;
-    }
-  } catch (error) {
-    log.warn('silent-stop turn lease settle failed closed', {
-      sessionId,
-      turnLeaseId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return;
-  }
-  void finalizeTurnChangeSet(sessionId, null, 'complete');
-  sessionListActivityTracker.commit(sessionId);
-  productTurnWallClockTracker.clear(sessionId);
-  productTurnUsageTargetTracker.clear(sessionId);
-  sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(sessionId);
-  noteClaudeSessionTurnState(sessionId, false);
-  agentInputCoordinatorHolder?.onTurnEvent(sessionId, 'done');
-  settlePendingCredentialSwitch(sessionId, `silent-stop:${reason}`);
-  settlePendingSessionRuntimeControlHolder?.(sessionId, `silent-stop:${reason}`);
-  deferredCodexRestartHolder?.onSessionSettled();
-  gatewayCodexRestartHolder?.onSessionSettled();
-  agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
-  refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
-  fireSilentStopSettled(sessionId, reason);
+  await settleSilentStopDoneWithPorts(sessionId, reason, turnLeaseId, runtime, generation, {
+    silentStopTurnLeaseGate, sessionTurnLeaseTracker, finalizeTurnChangeSet, sessionListActivityTracker,
+    productTurnWallClockTracker, productTurnUsageTargetTracker, sessionTurnActivityTracker, noteClaudeSessionTurnState,
+    agentInputCoordinatorHolder, settlePendingCredentialSwitch, settlePendingSessionRuntimeControlHolder,
+    deferredCodexRestartHolder, gatewayCodexRestartHolder, refreshRemoteCodexMcpOnTurnSettledHolder,
+    fireSilentStopSettled, log,
+  });
 }
 
 async function surfaceSilentStopExhaustedBanner(sessionId: string, cause: SilentStopFailureCause): Promise<void> {
