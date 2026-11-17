@@ -82,6 +82,8 @@
 | Active | pt-PT | ativo | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Active** | pt-BR | Ativo | 默认 |
 | Active | pt-BR | ativo | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Active** | id | Aktif | 默认 |
+| Active | id | aktif | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Agent session** | es | Sesión de Agent | 默认 |
 | Agent session | es | sesión de Agent | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | Agent session | es | sesiones de Agent | Agent 运行时会话的复数。 |
@@ -97,12 +99,17 @@
 | Agent session | pt-BR | sessões do Agent | Agent 运行时会话的复数。 |
 | Agent session | pt-BR | sessões de Agent | 不带定冠词的 Agent 运行时会话复数。 |
 | Agent session | pt-BR | sessão Pi Agent | 指定 Pi Agent 引擎的运行时会话。 |
+| **Agent session** | id | Sesi Agent | 默认 |
+| Agent session | id | sesi agent | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
+| Agent session | id | sesi Agent | 句中位置：sentence case 只大写首词，Agent 作为专名保持大写。 |
 | **Author** | es | Autor | 默认 |
 | Author | es | autor | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Author** | pt-PT | Autor | 默认 |
 | Author | pt-PT | autor | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Author** | pt-BR | Autor | 默认 |
 | Author | pt-BR | autor | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Author** | id | Penulis | 默认 |
+| Author | id | penulis | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Automation** | zh-CN | 自动化 | 默认 |
 | Automation | zh-CN | 自动操作 | Computer Use 语境——「自动操作电脑 / 浏览器」，指代操控设备而非定时任务 |
 | **Automation** | zh-TW | 自動化 | 默认 |
@@ -122,12 +129,16 @@
 | Chat | pt-PT | conversa | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Chat** | pt-BR | Conversa | 默认 |
 | Chat | pt-BR | conversa | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Chat** | id | Obrolan | 默认 |
+| Chat | id | obrolan | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Collaboration** | es | Colaboración | 默认 |
 | Collaboration | es | colaboración | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Collaboration** | pt-PT | Colaboração | 默认 |
 | Collaboration | pt-PT | colaboração | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Collaboration** | pt-BR | Colaboração | 默认 |
 | Collaboration | pt-BR | colaboração | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Collaboration** | id | Kolaborasi | 默认 |
+| Collaboration | id | kolaborasi | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Collapse** | de | Einklappen | 默认 |
 | Collapse | de | einklappen | 动词位于句中或按钮的补语中。 |
 | **Credits** | zh-CN | 点数 | 默认 |
@@ -146,18 +157,24 @@
 | Credits | pt-PT | créditos | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Credits** | pt-BR | Créditos | 默认 |
 | Credits | pt-BR | créditos | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Credits** | id | Kredit | 默认 |
+| Credits | id | kredit | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Directory** | es | Directorio | 默认 |
 | Directory | es | directorio | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Directory** | pt-PT | Diretório | 默认 |
 | Directory | pt-PT | diretório | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Directory** | pt-BR | Diretório | 默认 |
 | Directory | pt-BR | diretório | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Directory** | id | Direktori | 默认 |
+| Directory | id | direktori | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Effort** | es | Intensidad de razonamiento | 默认 |
 | Effort | es | intensidad de razonamiento | 句中模型推理投入档位的名称。 |
 | **Effort** | pt-PT | Esforço de raciocínio | 默认 |
 | Effort | pt-PT | esforço de raciocínio | 句中模型推理投入档位的名称。 |
 | **Effort** | pt-BR | Esforço de raciocínio | 默认 |
 | Effort | pt-BR | esforço de raciocínio | 句中模型推理投入档位的名称。 |
+| **Effort** | id | Tingkat penalaran | 默认 |
+| Effort | id | tingkat penalaran | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Issue** | es | Incidencia | 默认 |
 | Issue | es | incidencia | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Issue** | pt-PT | Issue | 默认 |
@@ -172,6 +189,8 @@
 | Message | pt-PT | mensagem | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Message** | pt-BR | Mensagem | 默认 |
 | Message | pt-BR | mensagem | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Message** | id | Pesan | 默认 |
+| Message | id | pesan | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Plugin** | es | Complemento | 默认 |
 | Plugin | es | complemento | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Project** | es | Proyecto | 默认 |
@@ -180,6 +199,8 @@
 | Project | pt-PT | projeto | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Project** | pt-BR | Projeto | 默认 |
 | Project | pt-BR | projeto | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Project** | id | Proyek | 默认 |
+| Project | id | proyek | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Provider** | zh-CN | 供应商 | 默认 |
 | Provider | zh-CN | 模型供应商 | 首次出现或需要消歧时用全称，如设置页标题 |
 | **Provider** | zh-TW | 供應商 | 默认 |
@@ -190,12 +211,16 @@
 | Provider | pt-PT | fornecedor | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Provider** | pt-BR | Provedor | 默认 |
 | Provider | pt-BR | provedor | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Provider** | id | Penyedia | 默认 |
+| Provider | id | penyedia | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Quota** | es | Cuota | 默认 |
 | Quota | es | cuota | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Quota** | pt-PT | Quota | 默认 |
 | Quota | pt-PT | quota | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Quota** | pt-BR | Cota | 默认 |
 | Quota | pt-BR | cota | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Quota** | id | Kuota | 默认 |
+| Quota | id | kuota | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Running** | fr | en cours d'exécution | 默认 |
 | Running | fr | En cours d'exécution | 标题或状态标签使用大写首字母；句中仍使用小写首字母。 |
 | **Running** | zh-CN | 运行中 | 默认 |
@@ -214,6 +239,8 @@
 | Running | de | laufend | 句中形容正在运行的任务或会话，允许相应屈折变化。 |
 | Running | de | Laufend | 句首形容正在运行的任务或会话。 |
 | Running | de | laufen | 复数主语的运行状态谓语。 |
+| **Running** | id | Berjalan | 默认 |
+| Running | id | berjalan | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Session** | zh-CN | 任务 | 默认 |
 | Session | zh-CN | 对话 | 指任务内人与 AI 交流的过程或其内容（对话区、对话正文、对话记录、继续对话） |
 | **Session** | zh-TW | 任務 | 默认 |
@@ -224,6 +251,8 @@
 | Session | pt-PT | sessão | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Session** | pt-BR | Sessão | 默认 |
 | Session | pt-BR | sessão | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Session** | id | Sesi | 默认 |
+| Session | id | sesi | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Skill** | zh-CN | 技能 | 默认 |
 | Skill | zh-CN | Skill | 技术语境下指代具体的 skill 文件 / 目录结构时，可保留英文 |
 | **Skill** | zh-TW | 技能 | 默认 |
@@ -236,6 +265,8 @@
 | Task | pt-PT | tarefa | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Task** | pt-BR | Tarefa | 默认 |
 | Task | pt-BR | tarefa | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Task** | id | Tugas | 默认 |
+| Task | id | tugas | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Buddy** | fr | Ami | 默认 |
 | Buddy | fr | ami | 句中使用小写首字母。 |
 | Buddy | fr | amis | 按语法使用复数形式。 |
@@ -260,6 +291,8 @@
 | Thread | pt-PT | tópico | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Thread** | pt-BR | Tópico | 默认 |
 | Thread | pt-BR | tópico | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Thread** | id | Thread | 默认 |
+| Thread | id | thread | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Turn** | es | Turno | 默认 |
 | Turn | es | turno | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Turn** | pt-PT | Turno | 默认 |
@@ -268,18 +301,24 @@
 | Turn | pt-BR | turno | 确需描述一次完整往返时使用；葡语复数 turnos、德语复数 Runden 仍属本词。 |
 | **Turn** | de | Runde | 默认 |
 | Turn | de | Runde | 确需描述一次完整往返时使用；葡语复数 turnos、德语复数 Runden 仍属本词。 |
+| **Turn** | id | Giliran | 默认 |
+| Turn | id | giliran | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Usage** | es | Uso | 默认 |
 | Usage | es | uso | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Usage** | pt-PT | Utilização | 默认 |
 | Usage | pt-PT | utilização | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Usage** | pt-BR | Uso | 默认 |
 | Usage | pt-BR | uso | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Usage** | id | Penggunaan | 默认 |
+| Usage | id | penggunaan | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Working directory** | es | Directorio de trabajo | 默认 |
 | Working directory | es | directorio de trabajo | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Working directory** | pt-PT | Diretório de trabalho | 默认 |
 | Working directory | pt-PT | diretório de trabalho | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Working directory** | pt-BR | Diretório de trabalho | 默认 |
 | Working directory | pt-BR | diretório de trabalho | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Working directory** | id | Direktori kerja | 默认 |
+| Working directory | id | direktori kerja | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Worktree** | pt-PT | Worktree | 默认 |
 | Worktree | pt-PT | worktree | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Worktree** | pt-BR | Worktree | 默认 |

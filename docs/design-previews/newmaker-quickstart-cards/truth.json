@@ -487,6 +487,13 @@
             "locator": "newChat.createAgent.quickStarts.explore",
             "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
           }
+        },
+        "id": {
+          "value": "Telusuri dan pahami kode",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/id/common.json",
+            "locator": "newChat.createAgent.quickStarts.explore"
+          }
         }
       }
     },
@@ -602,6 +609,13 @@
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json",
             "locator": "newChat.createAgent.quickStarts.build",
             "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
+          }
+        },
+        "id": {
+          "value": "Bangun fitur, aplikasi, atau alat baru",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/id/common.json",
+            "locator": "newChat.createAgent.quickStarts.build"
           }
         }
       }
@@ -719,6 +733,13 @@
             "locator": "newChat.createAgent.quickStarts.review",
             "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
           }
+        },
+        "id": {
+          "value": "Tinjau kode dan sarankan perubahan",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/id/common.json",
+            "locator": "newChat.createAgent.quickStarts.review"
+          }
         }
       }
     },
@@ -834,6 +855,13 @@
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-Hans-x-lzh/common.json",
             "locator": "newChat.createAgent.quickStarts.fix",
             "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
+          }
+        },
+        "id": {
+          "value": "Perbaiki masalah dan kegagalan",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/id/common.json",
+            "locator": "newChat.createAgent.quickStarts.fix"
           }
         }
       }
@@ -1152,6 +1180,13 @@
           "locator": "newChat.createAgent.quickStart",
           "hash": "80ac523f1f14b66091ef266c9082f9c5fcfa46c19a83d4395dcf50019dd2637f"
         }
+      },
+      "id": {
+        "value": "Mulai cepat",
+        "provenance": {
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/id/common.json",
+          "locator": "newChat.createAgent.quickStart"
+        }
       }
     }
   },
@@ -1233,6 +1268,14 @@
       "provenance": {
         "hash": "4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b",
         "locator": "SUPPORTED_LOCALES[9]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      }
+    },
+    {
+      "value": "id",
+      "provenance": {
+        "hash": "4fdab9d79466d01f3876806e1f0fed4e36670d0c5ced911d72cbba5917c3854b",
+        "locator": "SUPPORTED_LOCALES[10]",
         "source": "../../../apps/desktop/src/shared/locale.ts"
       }
     },

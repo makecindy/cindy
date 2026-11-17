@@ -116,6 +116,12 @@
             "text": "ativo",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
+        ],
+        "id": [
+          {
+            "text": "aktif",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
+          }
         ]
       },
       "forbidden": {
@@ -351,6 +357,16 @@
             "text": "sessão Pi Agent",
             "when": "指定 Pi Agent 引擎的运行时会话。"
           }
+        ],
+        "id": [
+          {
+            "text": "sesi agent",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
+          },
+          {
+            "text": "sesi Agent",
+            "when": "句中位置：sentence case 只大写首词，Agent 作为专名保持大写。"
+          }
         ]
       }
     },
@@ -475,6 +491,12 @@
           {
             "text": "autor",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "id": [
+          {
+            "text": "penulis",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
           }
         ]
       }
@@ -728,6 +750,12 @@
           {
             "text": "conversa",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "id": [
+          {
+            "text": "obrolan",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
           }
         ]
       }
@@ -1002,6 +1030,12 @@
             "text": "colaboração",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
+        ],
+        "id": [
+          {
+            "text": "kolaborasi",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
+          }
         ]
       }
     },
@@ -1224,6 +1258,12 @@
             "text": "créditos",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
+        ],
+        "id": [
+          {
+            "text": "kredit",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
+          }
         ]
       },
       "forbidden": {
@@ -1414,6 +1454,12 @@
             "text": "diretório",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
+        ],
+        "id": [
+          {
+            "text": "direktori",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
+          }
         ]
       }
     },
@@ -1543,6 +1589,12 @@
           {
             "text": "esforço de raciocínio",
             "when": "句中模型推理投入档位的名称。"
+          }
+        ],
+        "id": [
+          {
+            "text": "tingkat penalaran",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
           }
         ]
       }
@@ -2218,6 +2270,12 @@
           {
             "text": "mensagem",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "id": [
+          {
+            "text": "pesan",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
           }
         ]
       }
@@ -2895,6 +2953,12 @@
             "text": "projeto",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
+        ],
+        "id": [
+          {
+            "text": "proyek",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
+          }
         ]
       }
     },
@@ -2945,6 +3009,12 @@
           {
             "text": "provedor",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "id": [
+          {
+            "text": "penyedia",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
           }
         ]
       },
@@ -3130,6 +3200,12 @@
           {
             "text": "cota",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "id": [
+          {
+            "text": "kuota",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
           }
         ]
       }
@@ -3591,6 +3667,12 @@
             "text": "laufen",
             "when": "复数主语的运行状态谓语。"
           }
+        ],
+        "id": [
+          {
+            "text": "berjalan",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
+          }
         ]
       },
       "minorityByDesign": {
@@ -3755,6 +3837,12 @@
           {
             "text": "sessão",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "id": [
+          {
+            "text": "sesi",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
           }
         ]
       }
@@ -4065,6 +4153,12 @@
             "text": "tarefa",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
+        ],
+        "id": [
+          {
+            "text": "tugas",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
+          }
         ]
       }
     },
@@ -4282,6 +4376,12 @@
             "text": "tópico",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
           }
+        ],
+        "id": [
+          {
+            "text": "thread",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
+          }
         ]
       },
       "forbidden": {
@@ -4353,6 +4453,12 @@
           {
             "text": "Runde",
             "when": "确需描述一次完整往返时使用；葡语复数 turnos、德语复数 Runden 仍属本词。"
+          }
+        ],
+        "id": [
+          {
+            "text": "giliran",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
           }
         ]
       },
@@ -4459,6 +4565,12 @@
           {
             "text": "uso",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "id": [
+          {
+            "text": "penggunaan",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
           }
         ]
       }
@@ -4723,6 +4835,12 @@
           {
             "text": "diretório de trabalho",
             "when": "句中使用小写首字母；标题仍可使用大写首字母。"
+          }
+        ],
+        "id": [
+          {
+            "text": "direktori kerja",
+            "when": "印尼语 sentence case：该词在句中（非句首）出现时为小写。"
           }
         ]
       }

@@ -34,6 +34,7 @@
       "de",
       "pt-PT",
       "pt-BR",
+      "id",
       "zh-Hant-x-lzh",
       "zh-Hans-x-lzh"
     ]
@@ -411,6 +412,16 @@
           "os": "mac",
           "mode": "light",
           "lang": "zh-Hans-x-lzh"
+        }
+      },
+      {
+        "id": "global-light-en-id",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "light",
+          "lang": "id"
         }
       }
     ],
