@@ -1361,11 +1361,8 @@ function useResolvedMarkdownTarget(
       // ForRender 版会把 TTL 未过期的负缓存回成 'unknown',于是「断链期间的乐观点亮」
       // 也是缓存的派生,不需要组件自己记住(见 remoteFileOpen 里两个 peek 的分工)。
       const verdict = peekRemotePathVerdictForRender(remoteOrigin, workingDir, remoteAbsPath);
-      // chatStat can be unknown outside the workdir. Keep the owner's known
-      // kind there, but a newer definitive stat (including nonfile) still wins.
       const decision = decideRemoteLit(
-        verdict === 'unknown' ? remoteHomePath?.kind ?? verdict : verdict,
-        candidate.href, candidate.originalHref,
+        verdict, candidate.href, candidate.originalHref, remoteHomePath?.kind,
       );
       if (!decision.lit) return null;
       return resolvedLocalFromResult(candidate, {

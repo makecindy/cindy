@@ -6,6 +6,7 @@ import type { SmartResolveResult } from '@/lib/localPathResolver';
 
 const CACHE_CAP = 500;
 const RETRY_AFTER_MS = 30_000;
+const MAX_ACTIVE_PER_DEVICE = 2;
 type ResolvedHomePath = Extract<SmartResolveResult, { status: 'unique' }>;
 type Entry = {
   owner: ReturnType<typeof getDataOwnerGeneration>;
@@ -16,11 +17,47 @@ type Entry = {
   checkedAt: number;
   pending?: Promise<ResolvedHomePath | null>;
   refreshQueued: boolean;
+  explicit: boolean;
   listeners: Set<() => void>;
 };
 const entries = new Map<string, Entry>();
 let owner = getDataOwnerGeneration();
 let stopObserving: (() => void) | undefined;
+type DeviceQueue = { active: number; scheduled: boolean; jobs: Array<{ entry: Entry; start: () => void }> };
+const deviceQueues = new Map<string, DeviceQueue>();
+
+function drain(deviceId: string, queue: DeviceQueue): void {
+  while (queue.active < MAX_ACTIVE_PER_DEVICE && queue.jobs.length) {
+    // A click may promote a lookup already queued by rendering. Leave the
+    // shared device-link queue available for other task reads and actions.
+    const explicit = queue.jobs.findIndex(job => job.entry.explicit);
+    const [job] = queue.jobs.splice(explicit < 0 ? 0 : explicit, 1);
+    queue.active++;
+    job.start();
+  }
+  if (!queue.active && !queue.jobs.length && deviceQueues.get(deviceId) === queue) deviceQueues.delete(deviceId);
+}
+
+function enqueue(entry: Entry, run: () => Promise<ResolvedHomePath | null>): Promise<ResolvedHomePath | null> {
+  let queue = deviceQueues.get(entry.deviceId);
+  if (!queue) {
+    queue = { active: 0, scheduled: false, jobs: [] };
+    deviceQueues.set(entry.deviceId, queue);
+  }
+  const target = queue;
+  return new Promise((resolve, reject) => {
+    target.jobs.push({ entry, start: () => {
+      void run().then(resolve, reject).then(() => {
+        target.active--;
+        drain(entry.deviceId, target);
+      });
+    } });
+    if (!target.scheduled) {
+      target.scheduled = true;
+      queueMicrotask(() => { target.scheduled = false; drain(entry.deviceId, target); });
+    }
+  });
+}
 
 export function isHomePath(href: string): boolean {
   return /^~(?:[\\/]|$)/.test(href);
@@ -43,7 +80,7 @@ function entryFor(deviceId: string, workingDir: string, href: string): Entry {
   const key = JSON.stringify([deviceId, workingDir, href]);
   let entry = entries.get(key);
   if (!entry) {
-    entry = { owner, deviceId, workingDir, href, result: null, checkedAt: 0, refreshQueued: false, listeners: new Set() };
+    entry = { owner, deviceId, workingDir, href, result: null, checkedAt: 0, refreshQueued: false, explicit: false, listeners: new Set() };
     entries.set(key, entry);
     // Render creates entries before React subscribes. Trim only after requests
     // settle or subscriptions leave, so new mounted entries cannot be evicted
@@ -57,8 +94,9 @@ function visible(): boolean {
 }
 
 /** Only the owning device can expand ~. No viewer-home or cwd/~ fallback. */
-function request(entry: Entry, refresh = false): Promise<ResolvedHomePath | null> {
+function request(entry: Entry, refresh = false, explicit = false): Promise<ResolvedHomePath | null> {
   if (!isDataOwnerGenerationCurrent(entry.owner)) return Promise.resolve(null);
+  if (explicit) entry.explicit = true;
   if (entry.pending) {
     // A recovery while an old call is pending must not be lost. Keep one
     // follow-up, never parallel calls or a connection-level restart.
@@ -68,8 +106,13 @@ function request(entry: Entry, refresh = false): Promise<ResolvedHomePath | null
   if (!refresh && (entry.result || Date.now() - entry.checkedAt < RETRY_AFTER_MS)) {
     return Promise.resolve(entry.result);
   }
-  entry.pending = (async () => {
-    let force = refresh;
+  entry.pending = enqueue(entry, async () => {
+    // Queued work must not outlive the view/account that requested it. A click
+    // is an explicit waiter even when no inline reference is mounted.
+    if (!isDataOwnerGenerationCurrent(entry.owner) || !visible()
+      || (!entry.listeners.size && !entry.explicit)) return null;
+    // A recovery before dispatch is covered by this first call, not a second.
+    let force = refresh || entry.refreshQueued;
     do {
       entry.refreshQueued = false;
       let resolved: ResolvedHomePath | null = null;
@@ -78,7 +121,7 @@ function request(entry: Entry, refresh = false): Promise<ResolvedHomePath | null
           href: entry.href,
           workingDir: entry.workingDir,
           ...(force ? { refresh: true } : {}),
-        }]) as Awaited<ReturnType<typeof window.electronAPI.resolvePath>>;
+        }], { background: !entry.explicit }) as Awaited<ReturnType<typeof window.electronAPI.resolvePath>>;
         const candidate = result?.status === 'unique' ? result.candidates?.[0] : undefined;
         if (typeof candidate === 'string' && /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(candidate)) {
           resolved = { status: 'unique', absPath: candidate, kind: result.kind };
@@ -93,7 +136,7 @@ function request(entry: Entry, refresh = false): Promise<ResolvedHomePath | null
       force = true;
     } while (entry.refreshQueued && entry.listeners.size > 0 && visible());
     return entry.result;
-  })().finally(() => { entry.pending = undefined; trimCache(); });
+  }).finally(() => { entry.pending = undefined; entry.explicit = false; trimCache(); });
   return entry.pending;
 }
 
@@ -140,7 +183,7 @@ function observe(): void {
 
 /** Explicit authored-link retry uses the very same owner-scoped lookup. */
 export function resolveRemoteHomePath(deviceId: string, workingDir: string, href: string): Promise<ResolvedHomePath | null> {
-  return isHomePath(href) ? request(entryFor(deviceId, workingDir, href), true) : Promise.resolve(null);
+  return isHomePath(href) ? request(entryFor(deviceId, workingDir, href), true, true) : Promise.resolve(null);
 }
 
 export function useRemoteHomePath(origin: SessionFileOrigin, workingDir: string, href: string | null): ResolvedHomePath | null {

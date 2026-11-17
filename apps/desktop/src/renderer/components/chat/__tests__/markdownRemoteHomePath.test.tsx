@@ -13,6 +13,7 @@ import { resolveRemoteHomePath } from '@/hooks/useRemoteHomePath';
 import { openDirInSidebarFileBrowser } from '@/features/right-sidebar/lib/openInSidebarFileBrowser';
 import { toast } from '@/lib/toast';
 import { i18n } from '@/i18n';
+import { InvokeScheduler } from '../../../../../../../packages/device-link/src/invokeScheduler';
 
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'home-path-test' } }) }));
 vi.mock('react-i18next', async (original) => ({
@@ -75,15 +76,73 @@ afterEach(() => {
 });
 
 describe('remote home references', () => {
+  it.each(['mount', 'recovery'])('drains many distinct references without starving the device on %s', async boundary => {
+    // PR #11154 P2: 141 distinct paths exceed the real shared scheduler's
+    // 12 active + 128 queued budget. DOM/unit: use that production scheduler,
+    // hold the service reply, then verify every chip and an unrelated action.
+    const scheduler = new InvokeScheduler();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const service = (device: string, _channel: string, [args]: [{ href: string }], scheduling?: { background?: boolean }) =>
+      scheduler.run(device, scheduling?.background ?? false, 30_000, async () => {
+        if (device === 'remote-a') await gate;
+        return { status: 'unique', candidates: ['/Users/remote/' + args.href.slice(2)], kind: 'file' };
+      });
+    invoke.mockImplementation(boundary === 'recovery' ? () => Promise.reject(new Error('offline')) : service);
+    chatStat.mockResolvedValue({ verdict: 'file' });
+    const content = Array.from({ length: 141 }, (_, i) => '`~/report-' + i + '.html`').join(' ');
+    const view = render(reply(content));
+    await act(async () => {});
+    if (boundary === 'recovery') {
+      expect(view.container.querySelector('code[role="button"]')).toBeNull();
+      invoke.mockClear().mockImplementation(service);
+      await act(async () => emit('onResponsivenessChanged', { deviceId: 'remote-a', unresponsive: false, recovered: true }));
+    }
+    const dispatchedBeforeReply = invoke.mock.calls.length;
+    const pressure = scheduler.snapshot('remote-a');
+    let actionRan = false;
+    const action = scheduler.run('remote-a', 'foreground', 30_000, async () => { actionRan = true; }).catch(() => {});
+    const other = render(reply(undefined, 'remote-b'));
+    await act(async () => {});
+    const otherReady = !!other.container.querySelector('code[role="button"]');
+    const actionRanBeforeReply = actionRan;
+    await act(async () => { release(); await action; });
+    expect(dispatchedBeforeReply).toBeLessThanOrEqual(2);
+    expect(pressure.queued).toBe(0);
+    expect(actionRanBeforeReply).toBe(true);
+    expect(otherReady).toBe(true);
+    expect(view.container.querySelectorAll('code[role="button"]')).toHaveLength(141);
+    expect(invoke.mock.calls.filter(([device]) => device === 'remote-a')).toHaveLength(141);
+    expect(localResolve).not.toHaveBeenCalled();
+  });
+
+  it.each(['hidden', 'unmounted', 'owner-changed'])('drops unsent lookups when %s', async boundary => {
+    // Queuing must not move work past its view/account lifetime. Five mounted
+    // references leave unsent work behind two held requests; no wall-clock wait.
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    invoke.mockImplementation(async () => { await gate; return { status: 'none', candidates: [] }; });
+    const view = render(reply(Array.from({ length: 5 }, (_, i) => '`~/pending-' + i + '.html`').join(' ')));
+    await act(async () => {});
+    if (boundary === 'hidden') document.documentElement.setAttribute('data-app-hidden', '');
+    else if (boundary === 'unmounted') view.unmount();
+    else setDataOwnerGeneration('new-owner');
+    await act(async () => release());
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(chatStat).not.toHaveBeenCalled();
+  });
+
   it('keeps newly mounted duplicates recoverable when older lookups fill the cache', async () => {
     // Smallest pressure case: the 500-entry cap is occupied by pending lookups,
     // then a new mounted reference must remain registered for recovery.
+    // Another device fills this owner-wide cache without occupying the new
+    // reference's own bounded dispatch slots.
     let finishOlder!: (value: unknown) => void;
     const older = new Promise(resolve => { finishOlder = resolve; });
     invoke.mockImplementation((_device, _channel, [args]) => args.href === href
       ? Promise.reject(new Error('offline')) : older);
     const pending = Array.from({ length: 500 }, (_, index) =>
-      resolveRemoteHomePath('remote-a', '/remote/project', `~/pending-${index}.html`));
+      resolveRemoteHomePath('remote-b', '/remote/project', `~/pending-${index}.html`));
     const view = render(reply('`' + href + '` and `' + href + '`'));
     await act(async () => {});
     const initialCalls = invoke.mock.calls.filter(([, , [args]]) => args.href === href).length;
@@ -103,7 +162,7 @@ describe('remote home references', () => {
     await act(async () => {});
     expect(view.container.querySelectorAll('code[role="button"]')).toHaveLength(2);
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith('remote-a', 'fs:resolve-path', [{ href, workingDir: '/remote/project' }]);
+    expect(invoke).toHaveBeenCalledWith('remote-a', 'fs:resolve-path', [{ href, workingDir: '/remote/project' }], { background: true });
     expect(chatStat).toHaveBeenCalledTimes(1);
     expect(chatStat).toHaveBeenCalledWith({ origin: { kind: 'device', deviceId: 'remote-a' }, workdir: '/remote/project', absPath: resolved });
     await act(async () => fireEvent.click(view.container.querySelector('code[role="button"]')!));
