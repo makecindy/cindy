@@ -104,12 +104,37 @@ export function relayStatusHint(status: DeviceLinkStatus, lastSyncedAt: number |
   return i18n.t(`deviceLink.relay.hint.${status}`);
 }
 
-export function describeAgentAuthError(error: string | null | undefined): string | null {
+/**
+ * 「共享凭证连不上」的 reason 字面量。
+ *
+ * 与 apps/desktop/src/shared/codexAuthReason.ts 是同一份约定:desktop 那份在 desktop
+ * app 里,手机端引不到,只能各写一份并互相标注。改动时两边一起改。
+ */
+const CODEX_SHARED_AUTH_LINK_UNAVAILABLE = 'codex_shared_auth_link_unavailable';
+
+/** 解析 `<agent> not authenticated: <reason>`;识别不出来返回 null。 */
+export function parseAgentAuthError(error: string | null | undefined): { agent: string; reason: string } | null {
   if (!error) return null;
   const matched = AGENT_NOT_AUTHENTICATED_RE.exec(error.trim());
   if (!matched) return null;
   const agent = matched[1] === 'claude-code' ? 'Claude' : matched[1] === 'pi' ? 'Pi' : 'Codex';
-  const reason = matched[2] || 'unknown';
+  return { agent, reason: (matched[2] || 'unknown').trim() };
+}
+
+/**
+ * 这条错误是不是「共享凭证连不上」。
+ *
+ * 与桌面端 `isCodexSharedAuthLinkUnavailableError` 同一个判定口径:reason 产生后要穿过
+ * `AgentNotAuthenticatedError` 与宿主 send failure 两层包装才到手机端,只能按模板识别。
+ */
+export function isCodexSharedAuthLinkUnavailableError(error: string | null | undefined): boolean {
+  return parseAgentAuthError(error)?.reason === CODEX_SHARED_AUTH_LINK_UNAVAILABLE;
+}
+
+export function describeAgentAuthError(error: string | null | undefined): string | null {
+  const parsed = parseAgentAuthError(error);
+  if (!parsed) return null;
+  const { agent, reason } = parsed;
   const reasonKey: Record<string, string> = {
     no_key: 'noKey',
     no_oauth: 'noOauth',
@@ -117,8 +142,8 @@ export function describeAgentAuthError(error: string | null | undefined): string
     no_encryption: 'noEncryption',
     proxy_not_ready: 'proxyNotReady',
     // 与 apps/desktop/src/shared/codexAuthReason.ts 同一个字面量:电脑端 Codex 已登录,
-    // 但 Windows 普通权限下建不出指向那份凭证的链接,于是内部 codex-home 连不上它。
-    codex_shared_auth_link_unavailable: 'sharedLinkUnavailable',
+    // 但这台电脑上建不出指向那份凭证的链接,于是内部 codex-home 连不上它。
+    [CODEX_SHARED_AUTH_LINK_UNAVAILABLE]: 'sharedLinkUnavailable',
   };
   return i18n.t(`deviceLink.agentAuth.${reasonKey[reason] ?? 'default'}`, {
     agent,
