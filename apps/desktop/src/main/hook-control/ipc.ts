@@ -131,6 +131,7 @@ import {
   resetGroupContextCursorsSafely,
 } from './groupWindow.js';
 import { createHookDispatcher } from './dispatcher.js';
+import { hookModelProviderName } from './modelProviderName.js';
 import { createMakerHookSessionRunner } from './session-runner.js';
 import { resolveHookInteraction } from './interactions.js';
 import { listRecentHookSessions } from './recentSessions.js';
@@ -573,6 +574,10 @@ function throwHookPrefsError(err: unknown): never {
   throw err;
 }
 
+function providerNameField(name: string | undefined): { provider?: string } {
+  return name === undefined ? {} : { provider: name };
+}
+
 function ensureInstances(): { store: SlackHookStore; manager: HookControlManager } {
   if (!store) {
     store = createSlackHookStore({
@@ -809,6 +814,8 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
               // 分组随行: 折扣版(gpt-budget)与官方版 displayName 故意同名,
               // Slack 卡与 Tina 下拉都靠 group 加区分后缀
               ...(m.group !== undefined ? { group: m.group } : {}),
+              // 供应商名随行: 不同供应商会提供同名模型, 飞书选择卡把它写在模型名前面
+              ...providerNameField(hookModelProviderName(providers, agentKind, m.id)),
             })),
             permissionModes: getMaker()
               .getCapabilities(agentKind)
