@@ -121,7 +121,8 @@ export function noteLeadDispatchFact(leadSessionId: string, fact: LeadDispatchFa
   if (ledger.facts.length > MAX_FACTS_PER_LEAD) {
     ledger.facts.splice(0, ledger.facts.length - MAX_FACTS_PER_LEAD);
   }
-  // 真派发出现即视为恢复，重置升级抑制。
+  // 真派发出现即视为恢复：撤回补派额度与升级抑制，新的无据主张重新获得一次补派机会。
+  ledger.woke = false;
   ledger.escalated = false;
 }
 

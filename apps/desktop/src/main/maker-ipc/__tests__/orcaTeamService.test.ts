@@ -395,6 +395,37 @@ describe('lead dispatch claim verification', () => {
     expect(deps.escalateDispatchClaim).toHaveBeenCalledTimes(1);
   });
 
+  it('restores the wake allowance once a real dispatch lands', async () => {
+    resetDispatchClaimState();
+    const generation = 7;
+    const { deps, service } = createDeps({
+      getLiveSession: () => ({ isTurnRunning: () => true, getTurnGeneration: () => generation }),
+    });
+
+    const claim = { leadSessionId: 'lead-1', finalText: '已派给 backend-2，等它回报。' };
+    // 1) 无据主张：唤醒补派一次。
+    await service.handleLeadTurnSettled({ ...claim, turnGeneration: generation });
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
+
+    // 2) 被唤醒后真的补派成功，并按提示词要求零输出收口（这一轮不动账本）。
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'Take the export bug.',
+    });
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: generation,
+      finalText: '',
+    });
+    expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
+
+    // 3) 补派已兑现：新的无据主张重新拿到一次唤醒，而不是直接升级。
+    await service.handleLeadTurnSettled({ ...claim, turnGeneration: generation + 1 });
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(2);
+    expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
+  });
+
   it('does nothing for planned work or when the capability is off', async () => {
     resetDispatchClaimState();
     const { deps, service } = createDeps({ readDispatchClaimVerificationEnabled: () => false });
