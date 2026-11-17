@@ -14100,6 +14100,12 @@
       "elapsed": "Waiting for {{duration}}"
     },
     "worktree": {
+      "choose": "Choose worktree",
+      "createNew": "New worktree",
+      "existing": "Existing worktrees",
+      "noExisting": "No existing worktrees",
+      "loadExistingFailed": "Could not load worktrees. Retry",
+      "sharedHint": "New context; files and branch are shared with other tasks in this worktree",
       "detecting": "Detecting environment…",
       "detectFailed": "Environment detection failed; worktree unavailable for now",
       "gitMissing": "Git not detected. Install it first.",

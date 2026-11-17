@@ -158,6 +158,7 @@ async function submit(options: {
   collab?: CollabDraft;
   slashCommandRanges?: Array<{ start: number; end: number }>;
   worktree?: {
+    existingWorktree?: { sessionId: string; path: string };
     enabled: boolean;
     sourceBranch: string;
     confirmedIneligible?: boolean | null;
@@ -218,7 +219,7 @@ async function submit(options: {
   // Synthetic IPC paths; no filesystem is touched by these renderer fixtures.
   const baseRepo = '/fixture/repo';
   const worktreePath = '/fixture/repo/.cindy-worktrees/creator';
-  const hasWorktree = options.worktree?.enabled ?? options.worktreeSkills !== undefined;
+  const hasWorktree = !options.worktree?.existingWorktree && (options.worktree?.enabled ?? options.worktreeSkills !== undefined);
   const detectCwd = vi.fn(async () => {
     if (options.detectFailure) throw new Error('fixture probe failed');
     return { gitInstalled: true, isGitRepo: true, isInsideWorktree: false,
@@ -381,7 +382,7 @@ async function submit(options: {
   };
   if (options.defaultSourceBranch) {
     environment.wtRef.current = runInNewContext(worktreeSnapshotCode, {
-      wtRef: {}, wtEnabled: true, wtName: 'creator', wtBaseRepo: baseRepo,
+      wtRef: {}, wtEnabled: true, wtName: 'creator', wtBaseRepo: baseRepo, wtExistingWorktree: null,
       wtSourceBranch: options.sourceBranch ?? '', wtBranchPreferenceReady: true,
       wtBranchPreferenceSaving: false, wtPreferenceSaving: false,
       wtSupportsRecoveryKeyDiscard: true, wtConfirmedIneligible: false,
@@ -539,6 +540,17 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.clearDraft).not.toHaveBeenCalled();
     if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.deviceStillLoading');
     else expect(String(result.errors[0])).toContain('ccAgent.draft.deviceStillLoading');
+  });
+  // Unit: Send and Goal must open an empty borrower rather than enter the new-
+  // tree pipeline. Existing tests only exercised the new-tree/unchecked modes.
+  it.each(['send', 'goal'] as const)('reuses the selected worktree for %s without creating another tree', async entry => {
+    const result = await submit({ entry, worktree: { enabled: true, sourceBranch: 'main',
+      existingWorktree: { sessionId: 'owner', path: '/fixture/repo/.cindy-worktrees/login' } } });
+    expect(result.errors).toEqual([]);
+    expect(result.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: '/fixture/repo', reuseWorktreePath: '/fixture/repo/.cindy-worktrees/login', reuseWorktreeSessionId: 'owner',
+    }));
+    expect(result.environment.window.electronAPI.worktreeCreate).not.toHaveBeenCalled();
   });
   it.each([
     ['send', undefined], ['goal', undefined], ['send', 'task-computer'], ['goal', 'task-computer'],

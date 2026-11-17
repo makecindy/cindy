@@ -16,6 +16,8 @@ import {
 } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BranchWorktreeChip, WorktreeChipsRow, type CheckoutBranchView } from '../WorktreeChipsRow';
+import { ExistingWorktreePicker } from '../ExistingWorktreePicker';
+import type { WorktreeMeta } from '@/lib/worktree.types';
 import {
   applyRemoteSessionActivity,
   clearRemoteSessionActivity,
@@ -122,6 +124,34 @@ afterEach(() => {
 });
 const branchButton = () => screen.getByRole('button', { name: 'newChat.branchChip.label' });
 const refreshButton = () => screen.getByRole('button', { name: /newChat.branchSync.action/ });
+// User's compact reuse selector: the real menu owns selection, while the closed
+// capsule retains its fixed label. Previously only branch selection was covered.
+// Unit, minimum input: one matching tree and an unrelated/ephemeral tree.
+it('selects an existing worktree inside the menu and can return to New worktree', async () => {
+  const tree: WorktreeMeta = { sessionId: 'owner', name: 'merry-edison', path: '/repo/.cindy-worktrees/merry-edison',
+    baseRepo: '/repo', branch: 'cindy/merry-edison', sourceBranch: 'main', createdAt: '2026-11-17' };
+  window.electronAPI.worktreeListAll = vi.fn(async () => [tree, { ...tree, sessionId: 'foreign', baseRepo: '/other' },
+    { ...tree, sessionId: 'pool', name: 'pool', ephemeral: true }]);
+  function Fixture() {
+    const [selected, setSelected] = React.useState<WorktreeMeta | null>(null);
+    return <BranchWorktreeChip {...props} worktreePicker={
+      <ExistingWorktreePicker baseRepo="/repo" selected={selected} onSelect={setSelected} />
+    } />;
+  }
+  render(<Fixture />);
+  const chooser = screen.getByRole('button', { name: 'newChat.worktree.choose' });
+  fireEvent.keyDown(chooser, { key: 'Enter' });
+  expect(await screen.findByRole('menuitemradio', { name: 'newChat.worktree.createNew', checked: true })).toBeTruthy();
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: /merry-edison/ }));
+  expect(chooser.textContent).toBe('');
+  expect(screen.queryByText('merry-edison')).toBeNull();
+  fireEvent.keyDown(chooser, { key: 'Enter' });
+  expect(await screen.findByRole('menuitemradio', { name: /merry-edison/, checked: true })).toBeTruthy();
+  expect(screen.getAllByRole('menuitemradio')).toHaveLength(2);
+  fireEvent.click(screen.getByRole('menuitemradio', { name: 'newChat.worktree.createNew' }));
+  fireEvent.keyDown(chooser, { key: 'Enter' });
+  expect(await screen.findByRole('menuitemradio', { name: 'newChat.worktree.createNew', checked: true })).toBeTruthy();
+});
 // Regression: remote Git continues after the old 90s request budget; follow the
 // operation handle rather than repeating the mutation. Unit tier, real hook/UI.
 it('continues waiting for the same remote fetch and shows its final result', async () => {

@@ -27,6 +27,7 @@ import {
 } from 'react';
 
 import type { WorktreeMeta } from '@/lib/worktree.types';
+import { workingDirEquals } from '../../shared/workingDir';
 import { createLogger } from '@/lib/logger';
 import {
   getDataOwnerGeneration,
@@ -344,11 +345,14 @@ export function useWorktrees(): Record<string, WorktreeMeta> {
 /** 单条快捷查询；徽标 (M4) / 各 session 视图都用它。 */
 export function useWorktreeForSession(
   sessionId: string | null | undefined,
-  opts?: { includeInvalid?: boolean },
+  opts?: { includeInvalid?: boolean; resourcePath?: string | null },
 ): WorktreeMeta | null {
   const { metas, rawMetas } = useCtx();
   if (!sessionId) return null;
-  return (opts?.includeInvalid ? rawMetas : metas)[sessionId] ?? null;
+  const entries = opts?.includeInvalid ? rawMetas : metas;
+  return entries[sessionId] ?? (opts?.resourcePath
+    ? Object.values(entries).find(meta => workingDirEquals(meta.path, opts.resourcePath)) ?? null
+    : null);
 }
 
 /** 仅同步当前任务已有探测的结果，不额外启动 Git，也不修改 main store。 */

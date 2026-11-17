@@ -14046,6 +14046,12 @@
       "elapsed": "待機時間 {{duration}}"
     },
     "worktree": {
+      "choose": "worktree を選択",
+      "createNew": "新しい worktree",
+      "existing": "既存の worktree",
+      "noExisting": "既存の worktree はありません",
+      "loadExistingFailed": "worktree を読み込めませんでした。再試行",
+      "sharedHint": "独立したコンテキスト。この worktree 内の他のタスクとファイルとブランチを共有します",
       "detecting": "環境を検出中…",
       "detectFailed": "環境の検出に失敗しました。worktree は現在使用できません",
       "gitMissing": "git が検出されません。先にインストールしてください",

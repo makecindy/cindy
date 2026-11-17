@@ -70,21 +70,37 @@ function ActiveProbe() {
   return <span data-testid="active">{info?.path ?? ''}</span>;
 }
 
+// Unit: a borrower resolves a durable reference only against the live owner
+// registry. This closes the display gap left by owner-only context tests.
+it('shows a borrower badge through its live owner and removes it after owner recycling', async () => {
+  const owner = { sessionId: 'owner', name: 'login', baseRepo: '/repo', path: '/repo/.cindy-worktrees/login',
+    branch: 'cindy/login', sourceBranch: 'main', createdAt: '2026-11-17' };
+  mocks.worktreeListAll.mockResolvedValue([owner]);
+  const view = render(<WorktreeProvider><SidebarProbe id="borrower" worktreePath={owner.path} /></WorktreeProvider>);
+  await waitFor(() => expect(view.getByTestId('sidebar-borrower').getAttribute('data-path')).toBe(owner.path));
+  expect(view.getByTestId('sidebar-borrower').querySelector('button')).not.toBeNull();
+  mocks.worktreeGetForSession.mockResolvedValue(null);
+  await act(async () => emitWorktreeChanged('owner'));
+  await waitFor(() => expect(view.getByTestId('sidebar-borrower').getAttribute('data-path')).toBe(''));
+});
+
 function SidebarProbe({
   id = 'open',
   remoteHostId,
   deviceLinkDeviceId,
+  worktreePath,
   enabled = true,
   onRender,
 }: {
   id?: string;
   remoteHostId?: string;
   deviceLinkDeviceId?: string;
+  worktreePath?: string;
   enabled?: boolean;
   onRender?: () => void;
 }) {
   const info = useTaskInfoWorktree(
-    { id, workingDir: '/repo', remoteHostId, deviceLinkDeviceId },
+    { id, workingDir: '/repo', remoteHostId, deviceLinkDeviceId, worktreePath },
     enabled,
   );
   onRender?.();

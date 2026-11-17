@@ -66,6 +66,7 @@ import {
   type CheckoutBranchView,
 } from '@/components/new-chat/WorktreeChipsRow';
 import { checkDraftBranchBeforeStart } from './newMakerDraftBranchCheck';
+import type { WorktreeMeta } from '@/lib/worktree.types';
 import {
   FolderPickerPopover,
   type FolderPickerDeviceScope,
@@ -945,6 +946,8 @@ export function NewMakerDraftRoute() {
   // 「开启协同」富弹窗(CreateWorkerPopover):与会话内同一控件,收集 role/agent/model/初始任务。
   const [createWorkerOpen, setCreateWorkerOpen] = useState(false);
   const [wtEnabled, setWtEnabled] = useState(false);
+  const [wtExistingWorktree, setWtExistingWorktree] = useState<WorktreeMeta | null>(null);
+  useLayoutEffect(() => { setWtExistingWorktree(null); }, [dataOwnerId]);
   const [wtName, setWtName] = useState('');
   const [wtSourceBranch, setWtSourceBranch] = useState('');
   const [wtDefaultSource, setWtDefaultSource] = useState<WorktreeDefaultSource | null>(null);
@@ -4301,6 +4304,7 @@ export function NewMakerDraftRoute() {
       : '');
   const wtSourceReady = wtBranchPreferenceReady && !!wtEffectiveSourceBranch;
   const wtRef = useRef({
+    existingWorktree: wtExistingWorktree,
     enabled: wtEnabled,
     name: wtName,
     sourceBranch: wtEffectiveSourceBranch,
@@ -4312,6 +4316,8 @@ export function NewMakerDraftRoute() {
     preferenceSaving: wtPreferenceSaving,
   });
   wtRef.current = {
+    existingWorktree: wtEnabled && !effectiveDeviceLinkDeviceId && wtConfirmedIneligible === false
+      ? wtExistingWorktree : null,
     enabled: wtEnabled,
     name: wtName,
     sourceBranch: wtEffectiveSourceBranch,
@@ -4628,7 +4634,7 @@ export function NewMakerDraftRoute() {
                 commandName: leadingSlashInvocation(message)?.name ?? builtInSkillIntent.commandName,
               }
             : undefined;
-          if (!(await resolveBuiltInSkillForDirectory(selectedWorkingDir))) return;
+          if (!(await resolveBuiltInSkillForDirectory(selectedWorktree.existingWorktree?.path ?? selectedWorkingDir))) return;
 
           // device-link 远程项目:在被控端走校验过的 maker:create-session 建会话(写被控 DB,
           // allowlist 内、非裸写),首条消息经 setPending 交给 SessionView 发送(与本地
@@ -5128,11 +5134,11 @@ export function NewMakerDraftRoute() {
             emitAutoTitlePreview(sessionId, optimisticTitle);
             optimisticTitleSessionId = sessionId;
           }
-          const workingDir = selectedWorkingDir;
+          const workingDir = selectedWorktree.existingWorktree?.path ?? selectedWorkingDir;
           const wt = selectedWorktree;
           // 生效条件 = 勾选 && baseRepo 已就绪。上面的发送门已阻止不完整状态；
           // 这里保留完整条件作创建副作用前的防御，且始终不改写勾选记忆。
-          if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo) {
+          if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo && !wt.existingWorktree) {
             const baseRepo = wt.baseRepo;
 
             let name = wt.name.trim();
@@ -5440,7 +5446,9 @@ export function NewMakerDraftRoute() {
             permissionMode,
             fastMode: effectiveFastMode,
             planModeEnabled: effectivePlanMode,
-            workingDir: workingDir ?? undefined,
+            workingDir: selectedWorktree.existingWorktree ? selectedWorktree.baseRepo ?? selectedWorkingDir : workingDir,
+            reuseWorktreePath: selectedWorktree.existingWorktree?.path,
+            reuseWorktreeSessionId: selectedWorktree.existingWorktree?.sessionId,
             // 没选项目目录 = 创建 standalone dialogue;main 端会按 workspaceKind='dialogue'
             // 自动分配 <userData>/dialogues/<date>/<sid>/ 作为运行目录,不进入项目段。
             workspaceKind: workingDir ? 'project' : 'dialogue',
@@ -6255,12 +6263,13 @@ export function NewMakerDraftRoute() {
           selectedWorkingDir
           && !isRemoteProjectDraft
           && selectedWorktree.enabled
+          && !selectedWorktree.existingWorktree
           && selectedWorktree.confirmedIneligible !== true,
         );
         goalSessionId = localDraftSessionIdRef.current;
         optimisticGoalTitle = normalizeAutoTitle(objective);
         if (optimisticGoalTitle) emitAutoTitlePreview(goalSessionId, optimisticGoalTitle);
-        let goalWorkingDir = selectedWorkingDir;
+        let goalWorkingDir = selectedWorktree.existingWorktree?.path ?? selectedWorkingDir;
         let goalWorktreeName = '';
         let goalWorktreeBranchName = '';
         if (useLocalGoalWorktree) {
@@ -6293,7 +6302,9 @@ export function NewMakerDraftRoute() {
           effort: draftInitialEffort ?? '',
           permissionMode: chatInitialPermissionMode,
           fastMode: effectiveFastMode,
-          workingDir: goalWorkingDir,
+          workingDir: selectedWorktree.existingWorktree ? selectedWorktree.baseRepo ?? selectedWorkingDir : goalWorkingDir,
+          reuseWorktreePath: selectedWorktree.existingWorktree?.path,
+          reuseWorktreeSessionId: selectedWorktree.existingWorktree?.sessionId,
           workspaceKind: goalWorkingDir ? 'project' : 'dialogue',
           remoteHostId: goalWorkingDir ? (effectiveRemoteHostId ?? undefined) : undefined,
           ...(routeAgentDeviceId ? { agentDeviceId: routeAgentDeviceId } : {}),
@@ -6910,12 +6921,15 @@ export function NewMakerDraftRoute() {
                   </button>
                 </FolderPickerPopover>
                 <WorktreeChipsRow
+                  key={dataOwnerId}
                   variant="advancedOnly"
                   compact
                   cwd={effectiveWorkingDir ?? null}
                   folderPickerMode="project"
                   projectOptions={projectPickerOptions}
                   enabled={wtEnabled}
+                  existingWorktree={wtExistingWorktree}
+                  onExistingWorktreeChange={setWtExistingWorktree}
                   onEnabledChange={handleWtEnabledChange}
                   sourceBranch={wtSourceBranch}
                   onSourceBranchChange={handleWtSourceBranchChange}

@@ -48,3 +48,25 @@ A session can run inside its own **git worktree** — a separate working copy of
 - The agent works inside the worktree folder automatically; you don't need to switch directories.
 - Because the branch outlives the worktree, you can always find the agent's work with `git branch --list 'cindy/*' 'xdt/*'`.
 - Worktrees don't affect sessions that don't use them.
+
+## Start a new task in an existing worktree
+
+On the local Desktop new-task page, enable worktree and open the arrow on its right.
+The menu defaults to **New worktree**, followed by the project's registered ordinary
+worktrees. The check mark identifies the selection inside the menu; the closed
+control keeps its fixed worktree label. Choosing an existing directory starts a
+new context while sharing files, the current branch and uncommitted changes.
+The branch control shows that directory's actual branch and becomes read-only.
+Switching back to New worktree restores the source-branch selection.
+
+The new task retains project membership and a durable worktree reference without
+becoming a second owner. Archiving or deleting the original task keeps the directory
+while another task uses it. The final reference uses the existing runtime-close,
+snapshot and recycling safety checks. If the directory or registration is gone,
+creation fails and retains the draft; it never creates a replacement or falls back
+to the main project. This first version provides the picker on local Desktop only;
+SSH, device-link controllers and Mobile retain their existing creation behavior.
+
+Implementation: `ExistingWorktreePicker.tsx`, `NewMakerDraftRoute.tsx`, and
+`main/localDb/ipc/createUserSession.ts`; creation and lifecycle regressions are
+covered by `createUserSession.test.ts` and `worktreeSessionRemovalRecycle.test.ts`.
