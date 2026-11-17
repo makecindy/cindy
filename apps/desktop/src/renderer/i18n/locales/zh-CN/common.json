@@ -5475,6 +5475,13 @@
       },
       "toggleAria": "切换提问导航条"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "用模型给 worktree 取名",
+        "description": "新建任务的 worktree 会按第一条消息起一个英文短名（如 fix-login-timeout），文件夹和分支一眼就能看出用途。由辅助模型生成，取名失败时仍用随机名；只影响之后新建的 worktree。"
+      },
+      "toggleAria": "切换用模型给 worktree 取名"
+    },
     "promptRecommendation": {
       "label": "输入建议",
       "description": "回复后建议下一句，按 Tab 填入",

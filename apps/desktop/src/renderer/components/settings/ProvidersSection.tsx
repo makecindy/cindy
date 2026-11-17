@@ -962,12 +962,13 @@ function DetailHeader({
         {detail && <div className="px-5 pb-4">{detail}</div>}
         {provider?.subscriptionFastPolicy && <div className="px-5 pb-4"><SubscriptionFastSetting key={provider.id} provider={provider} /></div>}
         {/* Pooled subscription accounts show the provider card in the default account's row. */}
-        {subscriptionPool && subscriptionKind && !borrowing && (
+        {subscriptionPool && subscriptionKind && (
           <SubscriptionAccountsSection
             key={subscriptionPool}
             providerId={subscriptionPool}
             kind={subscriptionKind}
             providerName={provider?.name}
+            locationLabel={borrowing ? t('settings.providers.detail.runLocation.optionLocal') : undefined}
             defaultUsage={usageCard}
             dashboard={dashboard ?? undefined}
             expectAccounts={provider?.connected === true}
