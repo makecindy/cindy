@@ -1101,6 +1101,8 @@ describe('AgentIslandService native publishing', () => {
     mocks.isSessionNotificationsMutedSync.mockImplementation((id: string) => id === 'muted-task');
     service.handleUserPrompt({ sessionId: 'muted-task', agentKind: 'codex' }, 'run tests');
 
+    // Privacy-screen demand must include muted execution (PR #10639).
+    expect(service.getLocalRunningTaskCount()).toBe(1);
     // 岛面（含菜单栏与提示音）里没有它。
     expect(published.at(-1)?.sessions).toEqual([]);
     // 但侧栏卡片与远端活动镜像仍有实时活动：静音不是把任务藏起来。

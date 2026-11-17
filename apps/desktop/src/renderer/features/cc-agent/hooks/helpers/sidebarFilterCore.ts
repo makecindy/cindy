@@ -39,6 +39,8 @@ export const GROUP_DEVICE_KEY = 'cc-agent.sidebar.filter.groupDevice';
 export const DEVICE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.deviceGroupCollapsed';
 export const DIALOGUE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.dialogueGroupCollapsed';
 export const PINNED_SECTION_COLLAPSED_KEY = 'cc-agent.sidebar.pinnedSectionCollapsed';
+export const PINNED_SORT_BY_KEY = 'cc-agent.sidebar.pinnedSortBy';
+export type PinnedSortBy = 'manual' | 'recency';
 /** 单一混排列表(未按设备切段)里唯一对话组的折叠状态 key。 */
 export const DIALOGUE_GROUP_ALL_KEY = 'all';
 export const LAST_ACTIVITY_KEY = 'cc-agent.sidebar.filter.lastActivity';
@@ -558,6 +560,26 @@ const PROJECT_ORDER_VALUES: ReadonlySet<string> = new Set<FilterProjectOrder>([
   'activity',
   'custom',
 ]);
+
+/** Display preference only: never rewrites the durable mixed pinned order. */
+export function loadPinnedSortBy(): PinnedSortBy {
+  try {
+    return safeStorage()?.getItem(PINNED_SORT_BY_KEY) === 'recency' ? 'recency' : 'manual';
+  } catch (err) {
+    log.warn('failed to read pinned sort preference', err);
+    return 'manual';
+  }
+}
+
+export function persistPinnedSortBy(sortBy: PinnedSortBy): void {
+  try {
+    const storage = safeStorage();
+    if (sortBy === 'manual') storage?.removeItem(PINNED_SORT_BY_KEY);
+    else storage?.setItem(PINNED_SORT_BY_KEY, sortBy);
+  } catch (err) {
+    log.warn('failed to persist pinned sort preference', err);
+  }
+}
 
 /**
  * 读 sortBy。已删除的 'alphabetic' / 'time' / 'manual' 存量值不在合法集合内，

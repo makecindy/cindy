@@ -208,8 +208,10 @@ function entryContents(definition) {
   };
 }
 
-// Match the eager, default-export Vite glob used by the settings catalog. Keep
-// real modules as imports, so coverage, fingerprints and --compare see them.
+// Match the eager, default-export Vite globs used by the settings catalog and
+// asset folders. Keep real modules/assets as imports, so coverage, fingerprints
+// and --compare see them; `?url` assets rely on esbuild's file loader returning
+// the public URL, the same value Vite's default export would provide.
 function eagerGlobModules(overlay) {
   return {
     name: 'ui-page-eager-glob',
@@ -222,15 +224,16 @@ function eagerGlobModules(overlay) {
         const imports = [];
         const watchDirs = [];
         contents = contents.replace(
-          /import\.meta\.glob(?:<\w+>)?\(\s*(['"])(\.\/[^'"]+)\1\s*,\s*\{\s*eager:\s*true,\s*import:\s*(['"])default\3\s*,?\s*\}\s*\)/g,
-          (_, _quote, pattern) => {
-            const matches = picomatch(pattern.slice(2));
+          /import\.meta\.glob(?:<\w+>)?\(\s*(['"])(\.{1,2}\/[^'"]+)\1\s*,\s*\{\s*eager:\s*true\s*,\s*(?:query:\s*(['"])\?url\3\s*,\s*)?import:\s*(['"])default\4\s*,?\s*\}\s*\)/g,
+          (_, _quote, pattern, _queryQuote, _importQuote) => {
+            const matches = picomatch(pattern.startsWith('./') ? pattern.slice(2) : pattern);
             const files = overlay?.atRef
               ? [...overlay.atRef].filter(candidate => matches(path.relative(dir, candidate).split(path.sep).join('/')))
               : globSync(pattern, { cwd: dir }).map(candidate => path.resolve(dir, candidate));
             watchDirs.push(dir);
             return `{${files.sort().map(candidate => {
-              const key = './' + path.relative(dir, candidate).split(path.sep).join('/');
+              const relative = path.relative(dir, candidate).split(path.sep).join('/');
+              const key = pattern.startsWith('./') ? './' + relative : relative;
               const binding = `__ui_eager_glob_${imports.length}`;
               // Relative imports pass through the revision overlay's resolver,
               // including modules that no longer exist in the current worktree.

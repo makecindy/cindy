@@ -82,6 +82,10 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 新增或修改代输入（`request_input_handoff`、宿主步骤读取与执行、代输入卡、截图扫码、终端 askpass、
   单窗口实时画面、设备码识别，或任何经手主人填写值的路径）前，必须先读
   `docs/product-rules/input-handoff.md`：主人填写的值只交给宿主执行，不进模型、记录、日志、IM 与推送。
+- 新增或修改隐私屏（离开时遮住屏幕、远程控制时的遮罩、远程结束后的保护）、物理输入转锁屏、锁屏失败处理、
+  屏幕常亮策略，或「离开电脑时」设置与遥控端「安全」面板里的相关开关前，必须先读
+  `docs/product-rules/privacy-screen.md`：隐私屏不是认证边界，任何情况下不露出一个没锁的桌面；
+  怎么保护只由被控电脑本机决定，遥控端只决定这一次连接什么时候保护。
 - 新增或修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前，必须先读
   `docs/product-rules/schedule-webhook-trigger.md`：事件只是门铃，正文不进任务，密钥不进任务记录。
 - 新增或修改模型组（把模型供应商里已有的来源合成路线与模式）的配置、选路、选择器入口、任务里的说明，
@@ -176,6 +180,9 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 新增或修改插件持久 Library（library 槽、binding / 目录选择、随时迁移、
   回收站删除、SQLite 语句门或 `/library/` 面板投影）前，必须先读
   `docs/dev-rules/plugin-library-storage.md`。
+- 新增或修改文件下载、安装进度或它们的界面前，必须先读 `docs/dev-rules/verified-downloads.md`：
+  传输走统一下载器（必须带 SHA-256，自带重试、续传和龟速换连接），给用户看的进度统一为
+  `DownloadProgress` 并用标准 `DownloadMeter` 显示，不各自画进度条、格式化速度或处理重试提示。
 - 修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）前，必须先读
   `docs/dev-rules/cindy-updater.md`。
 - 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、客户端本地或远程数据读取／

@@ -84,6 +84,7 @@
   "taskPermission": "Aufgabenberechtigungen",
   "followDefault": "Standardeinstellungen verwenden",
   "taskSettingsHint": "Gilt für Aufgaben, die dieses Plugin ab jetzt erstellt. Bestehende Aufgaben behalten ihr Modell und ihre Berechtigungen.",
+  "remoteQuickAnswerHint": "Dieses Modell läuft auf einem anderen Computer. Schnellantworten werden vom Computer des Plugins gesendet und verwenden daher das systemweite Hilfsmodell.",
   "permissionHint": "Wähle Berechtigungen für neue Plugin-Aufgaben. Die Berechtigungen der aktuellen Aufgabe werden nicht übernommen.",
   "autoPermissionHint": "Mit automatischer Genehmigung kann Cindy Berechtigungsanfragen automatisch bewerten. Für künftige Plugin-Aufgaben verwenden?",
   "settingsReload": "Lade die Einstellungen neu, um zu prüfen, ob die Aktion gespeichert wurde",

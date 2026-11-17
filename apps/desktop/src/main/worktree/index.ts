@@ -7,10 +7,13 @@
  */
 
 import path from 'node:path';
+import { createCheckoutHandler } from './checkoutHandler';
+import type { CheckoutActivity } from './checkout';
 import { readOriginDefaultBranch } from './branchSync';
 import { createBranchSyncHandlers } from './branchSyncHandlers';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../device-link/invoke-context';
+import { isDesktopPlatform } from '../device-link/controllerPlatform';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current';
 
 import { ipcMain as ipcMainType, type IpcMain, shell } from 'electron';
@@ -54,7 +57,28 @@ export * from './types';
  * 注册所有 worktree 相关 IPC handler。重复调用会抛(ipcMain 不允许重复 handle)——
  * 调用方保证只调一次。
  */
-export function registerWorktreeIpc(ipcMain: IpcMain = ipcMainType): void {
+export function registerWorktreeIpc(
+  ipcMain: IpcMain = ipcMainType,
+  listActivity: () => Promise<CheckoutActivity[]> = async () => [],
+): void {
+  ipcMain.handle(
+    'worktree:checkout',
+    createCheckoutHandler({
+      assertTrustedAppRendererEvent,
+      isDeviceLinkInvoke,
+      listActivity,
+      getCallerScope: () => {
+        const owner = getCurrentDbClientSnapshot();
+        return owner
+          ? JSON.stringify([
+              owner.userId,
+              owner.clientEpoch,
+              getDeviceLinkInvokeContext()?.controllerDeviceId ?? 'local',
+            ])
+          : null;
+      },
+    }),
+  );
   const branchSync = createBranchSyncHandlers({
     assertTrustedAppRendererEvent,
     isDeviceLinkInvoke,
@@ -72,9 +96,13 @@ export function registerWorktreeIpc(ipcMain: IpcMain = ipcMainType): void {
   ipcMain.handle('worktree:branch-sync-status', branchSync.status);
   ipcMain.handle('worktree:sync-branch', branchSync.sync);
 
-  ipcMain.handle('worktree:create', (_e, req: CreateWorktreeReq) =>
-    WorktreeManager.createWorktree(req),
-  );
+  ipcMain.handle('worktree:create', (_e, req: CreateWorktreeReq) => {
+    const context = getDeviceLinkInvokeContext();
+    // Experience routing only: mobile/unknown controllers keep using their local ref.
+    return WorktreeManager.createWorktree(req, {
+      refreshDefaultSource: !context || isDesktopPlatform(context.controllerPlatform),
+    });
+  });
 
   ipcMain.handle('worktree:detect-cwd', async (_e, req: DetectCwdReq) => {
     try {

@@ -16,7 +16,8 @@ import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './plug
 export type { PluginSetupCommandError } from './pluginSetupCommandError';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
 import { normalizeTaskTags } from '@cindy/maker-shared';
-import type { ImMessageSource } from '../../shared/imMessageSource';
+import { createPluginRelayImSource, type ImMessageSource } from '../../shared/imMessageSource';
+import { splitPluginMessage } from '../../shared/pluginMessage';
 import { sharedTaskAuthorMemberId, sharedTaskAuthorName } from '@cindy/maker-shared';
 import { readBotAuthorizationCard } from '../../shared/botAuthorization';
 import { readBotStarterOptions } from '../../shared/botStarterOptions';
@@ -1034,7 +1035,7 @@ export interface PendingGhostGrantConfirm {
    * outside_workdir = 文档/电脑等内置工具读写工作目录外的路径。
    */
   lane:
-    | 'attachments' | 'handoff' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'fs_delete' | 'workspace' | 'forge_source' | 'outside_workdir';
+    | 'attachments' | 'handoff' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
   sourceTool?: string;
   operation?: 'read' | 'write';
   items: Array<{
@@ -18253,7 +18254,6 @@ function parseGhostGrantConfirmRequest(request: {
     lane !== 'save_dir' &&
     lane !== 'reveal_path' &&
     lane !== 'fs_write' &&
-    lane !== 'fs_delete' &&
     lane !== 'workspace' &&
     lane !== 'forge_source' &&
     lane !== 'outside_workdir'
@@ -20404,12 +20404,17 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       const automationOrigin = toMessageAutomationOrigin(m.agentMeta?.origin);
       const delivery = m.agentMeta?.delivery;
       const goalObjective = m.agentMeta?.goalObjective;
-      // Both ingress paths share the Desktop card, but local IM must not opt
-      // older Mobile clients into legacy Hook/system-card semantics.
-      const hookSource = m.agentMeta?.imSource ?? m.agentMeta?.hookSource;
       // 发送设备 / 插件来源:宽容读取(平台未知等不完整数据不出标签)。
       const sourceDevice = readMessageSourceDevice(m.agentMeta);
       const sourcePlugin = readMessageSourcePlugin(m.agentMeta);
+      // Both ingress paths share the Desktop card, but local IM must not opt
+      // older Mobile clients into legacy Hook/system-card semantics.
+      // 插件转发的 IM 消息(sourcePlugin.relay)只在这里派生同一张卡片,不落库成 imSource;
+      // 插件来源标签照常显示在卡片上方。
+      const hookSource = m.agentMeta?.imSource ?? m.agentMeta?.hookSource
+        ?? (sourcePlugin?.relay
+          ? createPluginRelayImSource(sourcePlugin.relay, splitPluginMessage(parsed.text, parsed.pastedTextRanges))
+          : undefined);
       return {
         sharedAuthorName: sharedTaskAuthorName(m.agentMeta),
         sharedAuthorMemberId: sharedTaskAuthorMemberId(m.agentMeta),

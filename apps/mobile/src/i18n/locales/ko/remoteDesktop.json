@@ -15,9 +15,9 @@
   "switchRetro": "레트로로 전환",
   "skinSwipeHint": "여기를 좌우로 밀어 모양을 바꿔 보세요.",
   "hostDisconnected": "컴퓨터에서 원격 데스크톱 연결을 종료했습니다.",
-  "privacyScreen": "컴퓨터 프라이버시 화면",
-  "privacyScreenHint": "컴퓨터 화면을 가립니다. 컴퓨터에서 클릭하거나 키를 누른 뒤 확인하면 연결이 끊어집니다. 종료 시 잠금 설정도 적용됩니다.",
-  "privacyActive": "프라이버시 화면이 켜져 있습니다. 컴퓨터에서 클릭하거나 키를 누른 뒤 확인하면 연결이 끊어집니다. 종료 시 잠금 설정도 적용됩니다.",
+  "privacyScreen": "연결 중 프라이버시 화면 사용",
+  "privacyScreenHint": "원격 제어 중 이 컴퓨터의 화면을 가립니다. 컴퓨터 앞에서 누군가 클릭하거나 키를 누르면 연결을 끊을지 먼저 묻습니다.",
+  "privacyActive": "프라이버시 화면이 켜져 있습니다. 컴퓨터 앞에서 누군가 클릭하거나 키를 누르면 연결을 끊을지 먼저 묻습니다.",
   "privacyFailed": "프라이버시 화면을 켜지 못했습니다. 컴퓨터 화면이 여전히 보일 수 있습니다.",
   "clipboardSync": "클립보드 동기화",
   "clipboardSyncHint": "앱이 전면에 있을 때 텍스트, 이미지, 서식 있는 텍스트를 양방향으로 동기화합니다. iPhone에서 붙여넣기 권한을 요청하면 허용해 주세요.",
@@ -194,8 +194,8 @@
   "idleMinutes_other": "{{count}}분",
   "idleDisconnected": "장시간 조작이 없어 연결이 해제되었습니다. 다시 연결해 주세요.",
   "backgroundDisconnected": "Cindy가 백그라운드로 전환되어 원격 데스크톱 연결이 해제되었습니다. 다시 연결해 주세요.",
-  "lockOnExit": "종료 시 컴퓨터 잠금",
-  "lockOnExitHint": "원격 데스크톱을 종료하면 이 컴퓨터를 잠급니다.",
+  "lockOnExit": "종료 시 컴퓨터 보호",
+  "lockOnExitHint": "원격 데스크톱을 종료하면 컴퓨터를 잠급니다.",
   "lockOnExitFailed": "컴퓨터가 잠겼는지 확인하지 못했습니다. 자리를 비우기 전에 컴퓨터 상태를 확인하세요.",
   "hostMute": "원격 컴퓨터 음소거",
   "hostMuteHint": "연결 중 원격 컴퓨터의 소리를 음소거합니다",
@@ -208,5 +208,8 @@
   "keyAppWindows": "앱 윈도우",
   "keySearch": "검색",
   "keyTaskView": "작업 보기",
-  "keySpace": "스페이스"
+  "keySpace": "스페이스",
+  "lockOnExitHintPrivacy": "종료하면 프라이버시 화면을 표시하여 AI가 계속 작업할 수 있습니다. 컴퓨터를 건드리면 잠깁니다.",
+  "lockedEnablePrivacyHint": "자리를 비운 동안에도 AI가 이 컴퓨터를 계속 사용하게 하려면, 이 컴퓨터의 “설정 → 일반 → 자리를 비울 때”에서 프라이버시 화면을 켜세요.",
+  "protectingOnExit": "프라이버시 화면을 표시하는 중…"
 }

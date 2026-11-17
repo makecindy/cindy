@@ -431,6 +431,8 @@ interface ComputerDriverUpdateProgress {
   phase: 'downloading' | 'installing' | 'done';
   downloadedBytes: number | null;
   totalBytes: number | null;
+  /** Standard progress (speed, time left) for the shared DownloadMeter. */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── CCD Progress ── */
@@ -452,6 +454,8 @@ interface BinaryDownloadProgressPayload {
   reset?: boolean;
   /** 失败/调试文案使用，标识当前推进度的 vendor。 */
   vendor?: 'claude' | 'codex' | 'pi';
+  /** Standard display progress (phase, retry reason, speed, time left); `progress` stays the bar. */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── App Update Progress ── */
@@ -465,6 +469,8 @@ interface AppUpdateProgressPayload {
   failed?: boolean;
   /** DownloadError code (e.g. 'NETWORK', 'CHECKSUM', 'HTTP_4XX'). */
   error?: string;
+  /** Standard display progress (phase, retry reason, speed, time left). */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── Auth types ── */
@@ -1475,7 +1481,7 @@ interface ElectronAPI {
     uiPrompts: () => Promise<Array<{id: string; name: string; version: string}>>;
     deferUiPrompt: (id: string, version: string) => Promise<void>;
     requestUiApproval: (id: string) => Promise<{ granted: boolean }>;
-    requestTaskApproval: (id: string, capability?: 'observe' | 'companions' | `host-tools:${import('@cindy/plugin-protocol').GhostHostToolGroup}` | `event:${import('../shared/ghost').GhostTaskEventTopic}`) => Promise<{ granted: boolean }>;
+    requestTaskApproval: (id: string, capability?: 'observe' | 'companions') => Promise<{ granted: boolean }>;
     getControlPoints: (id: string) => Promise<import('../shared/ghost').GhostControlPointInfo[]>;
     listControlPointCandidates: (point: import('../shared/ghost').GhostControlPointId) => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
     runtimePlugins: (sessionId: string, settings?: import('../shared/pluginRuntime').RuntimePluginSettings) => Promise<import('../shared/pluginRuntime').RuntimePluginSettings>;
@@ -1576,6 +1582,13 @@ interface ElectronAPI {
      *  为通用媒体渲染(远程会话 / 被 GC 的历史卡都走这条)。 */
     getCard: (callId: string) => Promise<{
       card: { callId: string; ghostId: string; html: string; height: number; v: number } | null;
+    }>;
+    /** A card of a task on another computer, sanitized again on this one. Null: no card, an
+     *  older host or a card kind shown only on its own computer; failed: the read itself failed. */
+    getRemoteCard: (deviceId: string, sessionId: string, callId: string) => Promise<{
+      card: { ghostId: string; html: string; height: number; revision: string; externalLinks: boolean } | null;
+      unsupported?: true;
+      failed?: true;
     }>;
     /** 权威实测高回填:GhostToolCard 量出内容真实高度后写回卡片库,历史
      *  回放据此零动画首帧贴合(行不存在主机静默跳过)。 */
@@ -1739,6 +1752,8 @@ interface ElectronAPI {
     clearUsage: (subjectId: string | null) => Promise<void>;
     readme: (id: string, locale?: string) => Promise<import('@cindy/plugin-protocol').GhostReadmeContent | null>;
     libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
+    reusableAccounts: (id: string) => Promise<import('../shared/pluginAccountReuse').GhostAccountReuseGroup[]>;
+    reuseAccount: (id: string, request: import('../shared/pluginAccountReuse').GhostAccountReuseAction) => Promise<import('../shared/pluginAccountReuse').GhostAccountReuseResult>;
     handoffList: (id: string) => Promise<import('../shared/ghost').GhostHandoffFile[]>;
     handoffFolder: (id: string) => Promise<string | null>;
     handoffDelete: (id: string, ref: string) => Promise<{ existed: boolean }>;
@@ -4035,6 +4050,8 @@ interface ElectronAPI {
           | 'done'
           | 'failed';
         name: string;
+        /** Standard progress while downloading (shared/downloadProgress.ts). */
+        download?: import('../shared/downloadProgress').DownloadProgress;
         version?: string;
         absolutePath?: string;
         errorCode?: string;
@@ -4648,6 +4665,7 @@ interface ElectronAPI {
   }) => Promise<import('@/lib/worktree.types').SuggestNameResp>;
   /** Opt-in model-written name for a new task's worktree; `name: null` keeps the generated one. */
   worktreeGenerateName: (req: { taskText: string }) => Promise<{ name: string | null }>;
+  worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;
   worktreeListBranches: (req: {

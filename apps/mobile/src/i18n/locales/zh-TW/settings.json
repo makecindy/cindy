@@ -85,6 +85,16 @@
       "reset": "恢復預設",
       "apply": "套用",
       "hex": "色碼"
+    },
+    "appIcon": {
+      "label": "應用程式圖示",
+      "saveFailed": "無法更換應用程式圖示，請稍後再試",
+      "options": {
+        "default": "預設",
+        "cat": "黑貓",
+        "wordmark": "Cindy 字標",
+        "mark": "Cindy 符號"
+      }
     }
   },
   "language": {

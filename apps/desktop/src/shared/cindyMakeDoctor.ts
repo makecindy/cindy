@@ -1,3 +1,5 @@
+import type { DownloadProgress } from './downloadProgress';
+
 /** Desktop-local environment checks and tool preparation. No source checkout or account required. */
 export type MakeDoctorCheckId =
   'platform' | 'git' | 'gitLfs' | 'node' | 'pnpm' | 'python' | 'native' | 'storage';
@@ -42,6 +44,8 @@ export interface MakeDoctorCheck {
   freeGiB?: number;
   source?: 'system' | 'managed';
   progress?: { loaded: number; total: number | null; percent: number | null };
+  /** Standard download progress; reports stored before 2026-11 only carry `progress`. */
+  download?: DownloadProgress;
 }
 
 export interface MakeDoctorReport {

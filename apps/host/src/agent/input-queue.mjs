@@ -215,6 +215,7 @@ export function createInputQueue(deps) {
       touchUserSend: deps.touchUserSend ?? (async () => {}),
       emitProjection: publish,
       persistQueueSnapshot: persist,
+      awaitQueuePersistence: flushed,
       loadQueueSnapshot: deps.loadQueueSnapshot,
       loadClearBoundary: deps.loadClearBoundary,
       getPersistedClientIds: deps.getPersistedClientIds,
@@ -228,10 +229,12 @@ export function createInputQueue(deps) {
       beforeDispatchUserTurn: executor.beforeDispatchUserTurn,
       // A durable turn that never reached the vendor: drop the record, then the baseline.
       onUndispatchedUserTurn: executor.onUndispatchedUserTurn,
+      onPersistedSendRejected: (id, message, item, recovering) =>
+        scheduleBridge.onPersistedSendRejected(id, message, item, recovering),
       onAcceptedQueuedMessage: async (id, item) => {
         schedulePreparations.delete(item.clientId);
         scheduleDiscardWatchers.delete(item.clientId);
-        await acceptedCallbacks.run(id, item);
+        await acceptedCallbacks.run(id, item, scheduleBridge.recoverySourceClientId(id, item));
       },
       onDiscardedQueuedMessage: (id, item) => {
         afterSnapshot(id, () => attachmentOwnership.discardClient(id, item.clientId));
@@ -251,6 +254,7 @@ export function createInputQueue(deps) {
       createId: randomUUID,
       preparations: schedulePreparations,
       discardWatchers: scheduleDiscardWatchers,
+      discardAcceptedCallback: acceptedCallbacks.discard,
       enqueue: async req => {
         const id = req.targetSessionId;
         const state = stateFor(id);
@@ -346,6 +350,10 @@ export function createInputQueue(deps) {
       schedulerQueue: () => ({ ...scheduleBridge,
         ensureQueueRestored: id => command(id, () => coordinator.isQueueRestored(id)),
         isSessionBusy: id => { assertCurrent(); return scheduleBridge.isSessionBusy(id); },
+        hasPendingInput: id => {
+          if (closing) throw new Error('session is closed');
+          assertCurrent(); return scheduleBridge.hasPendingInput(id);
+        },
         enqueuePrompt: req => command(req.sessionId, async (_state, admission) => {
           // The bridge reads metadata and the stored row before enqueue. Keep
           // the original command generation across every one of those reads.

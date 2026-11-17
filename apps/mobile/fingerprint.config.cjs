@@ -1,3 +1,6 @@
+const path = require("node:path");
+const { readAlternateIcons } = require("./plugins/with-app-icons");
+
 // Keep beta-only EAS profiles out of the native runtime fingerprint.
 // Production profiles remain transparent: any production EAS/app config change
 // still changes the fingerprint and must be handled intentionally.
@@ -14,6 +17,13 @@ const sourceSkips = [
     ? ["ExpoConfigVersions"]
     : []),
 ];
+
+const appIconSources = [
+  "manifest.json",
+  ...readAlternateIcons().flatMap((icon) =>
+    [icon.light, icon.dark].filter(Boolean).map((file) => path.basename(file)),
+  ),
+].map((file) => `../../packages/maker-shared/app-icons/${file}`);
 
 module.exports = {
   // Hash patched native sources, not just dependency versions.
@@ -55,6 +65,14 @@ module.exports = {
       reasons: ["native message menu assets"],
     }))
     .concat([
+      // Compiled into the iOS asset catalog by plugins/with-app-icons.js. Only
+      // the manifest and the artwork it names: the notes and the generation
+      // record beside them never reach the binary.
+      ...appIconSources.map((filePath) => ({
+        type: "file",
+        filePath,
+        reasons: ["alternate app icon artwork"],
+      })),
       ...["Cargo.toml", "Cargo.lock", "src", "include", "CindyAgentNetNative.podspec", "build-ios.mjs", "build-android.mjs"].map((entry) => ({
         type: entry === "src" || entry === "include" ? "dir" : "file",
         filePath: `../../packages/agent-net-native/${entry}`,

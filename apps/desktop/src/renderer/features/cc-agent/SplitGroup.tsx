@@ -565,27 +565,28 @@ function resolveSplitLayout(
   const maximumFirstSize = Math.max(firstMinimum, axisSize - secondMinimum);
   const firstAxisSize = Math.min(maximumFirstSize, Math.max(firstMinimum, requestedFirstSize));
   const normalizedFirstAxisSize = Math.max(0, Math.min(axisSize, firstAxisSize));
+  const pixelFirstAxisSize = Math.min(axisSize, Math.max(0, Math.round(normalizedFirstAxisSize)));
   const displayedFraction = axisSize > 0 ? normalizedFirstAxisSize / axisSize : requestedFraction;
   branchLayouts.push({
     branch: node,
     rect,
-    firstAxisSize: normalizedFirstAxisSize,
+    firstAxisSize: pixelFirstAxisSize,
     displayedFraction,
   });
 
   const firstRect: SplitLayoutRect = isRow
-    ? { ...rect, width: normalizedFirstAxisSize }
-    : { ...rect, height: normalizedFirstAxisSize };
+    ? { ...rect, width: pixelFirstAxisSize }
+    : { ...rect, height: pixelFirstAxisSize };
   const secondRect: SplitLayoutRect = isRow
     ? {
         ...rect,
-        left: rect.left + normalizedFirstAxisSize + GUTTER_PX,
-        width: Math.max(0, axisSize - normalizedFirstAxisSize),
+        left: rect.left + pixelFirstAxisSize + GUTTER_PX,
+        width: Math.max(0, axisSize - pixelFirstAxisSize),
       }
     : {
         ...rect,
-        top: rect.top + normalizedFirstAxisSize + GUTTER_PX,
-        height: Math.max(0, axisSize - normalizedFirstAxisSize),
+        top: rect.top + pixelFirstAxisSize + GUTTER_PX,
+        height: Math.max(0, axisSize - pixelFirstAxisSize),
       };
   resolveSplitLayout(node.first, firstRect, liveResize, paneLayouts, branchLayouts);
   resolveSplitLayout(node.second, secondRect, liveResize, paneLayouts, branchLayouts);
@@ -593,9 +594,11 @@ function resolveSplitLayout(
 
 function SplitGroupCanvas({ root, ...paneProps }: SplitPaneSharedProps & { root: SplitNode }) {
   const viewportRef = useRef<HTMLDivElement>(null);
-  const [viewportSize, setViewportSize] = useState({
-    width: DEFAULT_SPLIT_VIEWPORT_WIDTH_PX,
-    height: DEFAULT_SPLIT_VIEWPORT_HEIGHT_PX,
+  const [viewportMetrics, setViewportMetrics] = useState({
+    outerWidth: DEFAULT_SPLIT_VIEWPORT_WIDTH_PX,
+    outerHeight: DEFAULT_SPLIT_VIEWPORT_HEIGHT_PX,
+    contentWidth: DEFAULT_SPLIT_VIEWPORT_WIDTH_PX,
+    contentHeight: DEFAULT_SPLIT_VIEWPORT_HEIGHT_PX,
   });
   const [liveResize, setLiveResize] = useState<{
     splitKey: string;
@@ -607,11 +610,31 @@ function SplitGroupCanvas({ root, ...paneProps }: SplitPaneSharedProps & { root:
     if (!viewport) return;
     const updateSize = () => {
       const rect = viewport.getBoundingClientRect();
-      const width = Math.max(0, viewport.clientWidth || rect.width);
-      const height = Math.max(0, viewport.clientHeight || rect.height);
-      if (width === 0 || height === 0) return;
-      setViewportSize((current) =>
-        current.width === width && current.height === height ? current : { width, height },
+      // Floor outer CSS box dimensions so subpixel rounding never produces a canvas
+      // larger than the viewport, while tracking outer vs scrollbar-reduced content
+      // sizes separately so classic scrollbars neither oscillate nor mutually latch.
+      const rectWidth = rect.width > 0 ? Math.floor(rect.width) : 0;
+      const rectHeight = rect.height > 0 ? Math.floor(rect.height) : 0;
+      const outerWidth = Math.max(0, rectWidth || viewport.clientWidth);
+      const outerHeight = Math.max(0, rectHeight || viewport.clientHeight);
+      const contentWidth =
+        viewport.clientWidth > 0 && rectWidth > 0
+          ? Math.min(viewport.clientWidth, rectWidth)
+          : outerWidth;
+      const contentHeight =
+        viewport.clientHeight > 0 && rectHeight > 0
+          ? Math.min(viewport.clientHeight, rectHeight)
+          : outerHeight;
+      if (outerWidth === 0 || outerHeight === 0 || contentWidth === 0 || contentHeight === 0) {
+        return;
+      }
+      setViewportMetrics((current) =>
+        current.outerWidth === outerWidth &&
+        current.outerHeight === outerHeight &&
+        current.contentWidth === contentWidth &&
+        current.contentHeight === contentHeight
+          ? current
+          : { outerWidth, outerHeight, contentWidth, contentHeight },
       );
     };
     updateSize();
@@ -622,9 +645,26 @@ function SplitGroupCanvas({ root, ...paneProps }: SplitPaneSharedProps & { root:
   }, []);
 
   const requiredSize = useMemo(() => getSplitRequiredSize(root), [root]);
+  const fitsWithoutScrollbars =
+    viewportMetrics.outerWidth >= requiredSize.width &&
+    viewportMetrics.outerHeight >= requiredSize.height;
+  const needsHorizontalScroll =
+    !fitsWithoutScrollbars &&
+    (viewportMetrics.outerWidth < requiredSize.width ||
+      viewportMetrics.contentWidth < requiredSize.width);
+  const needsVerticalScroll =
+    !fitsWithoutScrollbars &&
+    (viewportMetrics.outerHeight < requiredSize.height ||
+      viewportMetrics.contentHeight < requiredSize.height);
+  const effectiveContentWidth = fitsWithoutScrollbars
+    ? viewportMetrics.outerWidth
+    : viewportMetrics.contentWidth;
+  const effectiveContentHeight = fitsWithoutScrollbars
+    ? viewportMetrics.outerHeight
+    : viewportMetrics.contentHeight;
   const canvasSize = {
-    width: Math.max(viewportSize.width, requiredSize.width),
-    height: Math.max(viewportSize.height, requiredSize.height),
+    width: needsHorizontalScroll ? requiredSize.width : effectiveContentWidth,
+    height: needsVerticalScroll ? requiredSize.height : effectiveContentHeight,
   };
   const { paneLayouts, branchLayouts } = useMemo(() => {
     const nextPaneLayouts: SplitPaneLayout[] = [];
@@ -646,11 +686,21 @@ function SplitGroupCanvas({ root, ...paneProps }: SplitPaneSharedProps & { root:
   }, [branchLayouts, liveResize]);
 
   return (
-    <div ref={viewportRef} className="h-full min-h-0 w-full min-w-0 overflow-auto">
+    <div
+      ref={viewportRef}
+      className={cn(
+        'h-full min-h-0 w-full min-w-0',
+        needsHorizontalScroll ? 'overflow-x-auto' : 'overflow-x-hidden',
+        needsVerticalScroll ? 'overflow-y-auto' : 'overflow-y-hidden',
+      )}
+    >
       <div
         data-split-canvas
         className="relative bg-content-area"
-        style={{ width: canvasSize.width, height: canvasSize.height }}
+        style={{
+          width: needsHorizontalScroll ? canvasSize.width : '100%',
+          height: needsVerticalScroll ? canvasSize.height : '100%',
+        }}
       >
         {paneLayouts.map(({ pane, rect }) => (
           <div key={pane.key} className="absolute overflow-hidden bg-content-area" style={rect}>

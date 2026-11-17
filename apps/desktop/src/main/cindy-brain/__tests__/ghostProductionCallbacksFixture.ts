@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import ts from 'typescript';
-import { confirmedAutoTools, confirmedHostToolGroups, confirmedEventTopics, confirmedCindyModelActions } from '../ghostInstallConsent.js';
+import { confirmedAutoTools, confirmedCindyModelActions } from '../ghostInstallConsent.js';
 import { setPluginEnabled } from '../pluginEnableService.js';
 import { createGhostExecutionPipe } from '../executionPipe.js';
 import { setTaskChangeListener } from '../../localDb/taskEvents.js';
 import { ghostInstallTargetContext, resolveForgeInstallTarget } from '../ghostInstallTarget.js';
 import { ghostInstallApprovalToken } from '../../../shared/ghost.js';
+import { isReusableSavedSecret } from '../../../shared/pluginAccountReuse.js';
 import { withPluginSchedulerApproval } from '../pluginSchedulerApproval.js';
 import {
   parsePluginStoragePart,
@@ -28,6 +29,7 @@ import {
 
 const productionIdentityDeps = {
   ghostInstallApprovalToken,
+  isReusableSavedSecret,
   withPluginSchedulerApproval,
   requestPluginHostToolCall: async () => ({ isError: true, content: [{ type: 'text', text: '{"ok":false,"errorCode":"HOST_NOT_READY"}' }] }),
   createGhostExecutionPipe,
@@ -39,8 +41,6 @@ const productionIdentityDeps = {
   LOCAL_PLUGIN_NAMESPACE,
   isOrganizationPluginNamespace,
   confirmedAutoTools,
-  confirmedHostToolGroups,
-  confirmedEventTopics,
   confirmedCindyModelActions,
   ghostInstallTargetContext,
   resolveForgeInstallTarget,

@@ -1001,9 +1001,30 @@ function renameOldPathsToRemove(files: readonly SnapshotCommitFile[]): string[] 
 }
 
 async function detectBlockedGitState(repoPath: string, deadlineAtMs?: number): Promise<SnapshotBlockedGitState | null> {
-  for (const { reason, marker } of BLOCKED_GIT_STATE_MARKERS) {
-    const markerPath = await resolveGitInternalPath(repoPath, marker, deadlineAtMs);
-    if (markerPath && (await pathExists(markerPath))) {
+  // Git resolves linked-worktree paths; one invocation avoids five serial
+  // process starts on the normal, unblocked path. Never cache across captures.
+  const { stdout } = await gitExec([
+    'rev-parse', ...BLOCKED_GIT_STATE_MARKERS.flatMap(({ marker }) => ['--git-path', marker]),
+  ], repoPath, { deadlineAtMs });
+  operationCheckpoint();
+  checkSnapshotCaptureDeadline(deadlineAtMs);
+  const paths = gitPathOutput(stdout).split(process.platform === 'win32' ? /\r?\n/ : /\n/);
+  // rev-parse has no NUL framing: a POSIX path may itself contain a newline.
+  // Ambiguous output uses the original single-path reader with the same budget.
+  // Command errors are deliberately not caught or retried here.
+  const usable = stdout.endsWith('\n') && paths.length === BLOCKED_GIT_STATE_MARKERS.length
+    && paths.every((value, index) => !value.includes('\0')
+      && path.basename(value) === BLOCKED_GIT_STATE_MARKERS[index].marker);
+  for (const [index, { reason, marker }] of BLOCKED_GIT_STATE_MARKERS.entries()) {
+    operationCheckpoint();
+    checkSnapshotCaptureDeadline(deadlineAtMs);
+    const markerPath = usable
+      ? path.resolve(repoPath, paths[index])
+      : await resolveGitInternalPath(repoPath, marker, deadlineAtMs);
+    const exists = markerPath && await pathExists(markerPath);
+    operationCheckpoint();
+    checkSnapshotCaptureDeadline(deadlineAtMs);
+    if (markerPath && exists) {
       return { reason, marker, markerPath };
     }
   }

@@ -1116,19 +1116,23 @@
   },
   "privacyExit": {
     "status": "This computer is being remotely controlled through Cindy",
-    "hint": "To show this screen, turn off Computer privacy screen under Security on the device controlling it. Or click or press any key on this computer, then choose Disconnect.",
+    "hint": "To show this screen, turn off Privacy screen while connected under Security on the controlling device. Or click or press any key on this computer, then choose Disconnect.",
     "title": "Disconnect remote desktop?",
-    "detail": "This will end remote control and restore this computer’s screen. The computer will lock if lock on exit is enabled.",
+    "detail": "This ends remote control and removes the privacy screen. If Protect Computer on Exit is on, the computer also locks.",
     "cancel": "Keep connected",
     "disconnect": "Disconnect"
   },
   "awayGuard": {
     "status": "Cindy is working",
-    "hint": "Press any key to lock, then unlock with Touch ID or your password.",
+    "hint": "Press any key or the Touch ID key to lock, then unlock with your fingerprint or password",
     "lockFailed": {
       "status": "Cindy couldn't lock this Mac",
-      "hint": "Press Control-Command-Q to lock it. The screen will also lock on its own after a while."
-    }
+      "hint": "Touch the computer to try locking again. If it still can’t lock, verify with Touch ID or your password to remove the cover. You can also close the lid or press the power button to lock.",
+      "hintWindows": "Touch the computer to try locking again. If it still can’t lock, verify with Windows Hello or your PIN to remove the cover. You can also press the Windows logo key + L to lock."
+    },
+    "hintWindows": "Press any key to lock; unlock with Windows Hello or your password",
+    "hintLinux": "Press any key to lock; unlock with your password",
+    "verifyReason": "remove the privacy screen"
   },
   "appBadge": {
     "attentionCount": "Tasks needing attention: {{count}}"
@@ -1279,10 +1283,10 @@
       "resolutionHint": "Resolution changes affect the actual remote monitor."
     },
     "settingUnsupported": "This computer does not support this setting yet",
-    "privacyScreen": "Computer privacy screen",
-    "privacyScreenHint": "Cover the computer’s screens. Click or press a key on the computer, then confirm to disconnect. Lock on exit applies if enabled.",
-    "privacyActive": "Privacy screen is on. Click or press a key on the computer, then confirm to disconnect. Lock on exit applies if enabled.",
-    "privacyFailed": "Privacy screen could not be enabled. The computer’s screens may still be visible.",
+    "privacyScreen": "Privacy screen while connected",
+    "privacyScreenHint": "Covers this computer’s screen during remote control. If someone clicks or presses a key at the computer, it asks before disconnecting.",
+    "privacyActive": "Privacy screen is on. If someone clicks or presses a key at the computer, it asks before disconnecting.",
+    "privacyFailed": "Couldn't turn on the privacy screen. The computer's screen may still be visible.",
     "hostMute": "Mute controlled computer",
     "hostMuteHint": "Mute the controlled computer while connected",
     "hostMuteFailed": "Couldn’t change the controlled computer’s mute state",
@@ -1298,7 +1302,7 @@
     "idleMinutes_one": "{{count}} minute",
     "idleMinutes_other": "{{count}} minutes",
     "idleDisconnected": "Disconnected due to inactivity. Reconnect when you are ready.",
-    "lockOnExit": "Lock Computer on Exit",
+    "lockOnExit": "Protect Computer on Exit",
     "lockOnExitHint": "Locks the computer when you exit remote desktop.",
     "lockOnExitFailed": "Could not confirm that the computer locked. Check the computer before leaving it unattended.",
     "nativeResolution": "Native",
@@ -1341,7 +1345,9 @@
         "body": "This task has {{device}} open on another computer. Update the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
         "action": "Update"
       }
-    }
+    },
+    "lockOnExitHintPrivacy": "Shows the privacy screen when you exit, so AI can keep working; touching the computer locks it.",
+    "lockedEnablePrivacyHint": "To let AI keep using this computer while you're away, turn on the privacy screen in its Settings → General → When You're Away."
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1910,7 +1916,8 @@
       "windowBehavior": "App Behavior",
       "shortcuts": "Keyboard Shortcuts",
       "mcpServers": "Custom MCP",
-      "bots": "Buddies"
+      "bots": "Buddies",
+      "awayFromComputer": "When You're Away"
     },
     "remote": {
       "title": "Remote machines",
@@ -2476,21 +2483,23 @@
       "swallowActivationClickAria": "Toggle protection from accidental clicks when returning to the window",
       "macRestartNote": "On macOS, restart the app for changes to take effect.",
       "awayGuard": {
-        "label": "Keep working while you're away",
-        "hint": "When on, this Mac won't sleep its display or lock on its own, so AI can use it at any time. After you've been away for a while, a black cover hides the screen and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Touch ID or your password.",
+        "label": "Use privacy screen instead of locking",
+        "hint": "When AI needs the screen, this computer won't turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Touch ID or your password. With no tasks running, the display sleeps and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
         "permission": "Allow Cindy in System Settings > Privacy & Security > Accessibility so it can lock the screen as soon as someone touches this Mac. Until then, the screen sleeps and locks as usual.",
         "preview": "Try it now",
-        "previewStarting": "Take your hands off the mouse and keyboard. The screen is covered in 3 seconds; press any key to lock it, then unlock.",
-        "previewUnavailable": "Couldn't cover the screen. Restart Cindy and try again.",
+        "previewStarting": "Let go of the mouse and keyboard. In 3 seconds the privacy screen appears; press any key to lock, then unlock to try it.",
+        "previewUnavailable": "Couldn't show the privacy screen. Restart Cindy and try again.",
         "delay": {
           "30": "30 sec",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
-          "label": "Cover the screen after",
-          "hint": "How long the keyboard and mouse stay untouched before the cover goes up. By default, the same as your display sleep time.",
+          "label": "Show privacy screen after",
+          "hint": "How long nobody touches the keyboard or mouse while AI is working. Defaults to the system's display-off time.",
           "system": "System"
-        }
+        },
+        "hintWindows": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Windows Hello or your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
+        "hintLinux": "When AI needs the screen, this computer won’t turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with your password. With no tasks running, the display turns off and locks as usual. After a remote session ends, the privacy screen protects this computer too."
       }
     },
     "agentIsland": {
@@ -4468,14 +4477,7 @@
         "installCancel": "Cancel install",
         "installFailed": "Couldn’t install Ollama",
         "installPhase": {
-          "resolving": "Looking up the official release…",
-          "downloading": "Downloading…",
-          "verifying": "Verifying…",
-          "extracting": "Installing…",
-          "starting": "Starting…",
-          "success": "Installed",
-          "error": "Install failed",
-          "cancelled": "Cancelled"
+          "error": "Install failed"
         },
         "openWebsite": "Open Ollama website",
         "recheck": "I installed it, check again",
@@ -4510,20 +4512,6 @@
         "retryDownload": "Retry",
         "libraryName": "Exact Ollama library name",
         "pullingTitle": "Downloading {{name}}",
-        "pullIndeterminate": "Preparing",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Preparing download…",
-          "manifest": "Fetching manifest…",
-          "downloading": "Downloading model files",
-          "verifying": "Verifying…",
-          "writing": "Writing…",
-          "success": "Download complete",
-          "error": "Download failed",
-          "paused": "Paused",
-          "cancelled": "Cancelled"
-        },
         "pauseDownload": "Pause",
         "resumeDownload": "Resume Download",
         "cancelDownload": "Delete Incomplete Download",
@@ -5771,7 +5759,8 @@
             "statusFailed": "the controller status check failed",
             "recoveryFailed": "the control connection could not be rebuilt",
             "extensionDisconnected": "no browser extension is connected (install and enable the Cindy Chrome plugin and its extension)",
-            "pluginMissing": "the Cindy Chrome plugin is not installed or enabled"
+            "pluginMissing": "the Cindy Chrome plugin is not installed or enabled",
+            "browserMissing": "Chrome is not installed on this computer"
           },
           "reconnect": "Reconnect Browser",
           "recover": "Recover Browser",
@@ -5791,7 +5780,7 @@
         },
         "userBrowser": {
           "title": "My browser",
-          "description": "Works in the Chrome or Edge you are using, with your existing sign-ins. New pages open in a background window and stay out of your way."
+          "description": "Your own Chrome on this computer (Edge also works). The Agent works in it directly, with your existing sign-ins. New pages open in a background window and stay out of your way."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Install the Cindy Chrome plugin",
@@ -5810,7 +5799,9 @@
           "updatePluginTitle": "Update the Cindy Chrome plugin",
           "updatePluginBody": "The installed Cindy Chrome plugin is too old for “My browser”. Update it to the latest version, then follow its prompt to add the extension.",
           "updatePlugin": "Update",
-          "storeOpened": "Opened the Cindy extension page in your browser. Choose Add to Chrome and it connects on its own."
+          "storeOpened": "Opened the Cindy extension page in your browser. Choose Add to Chrome and it connects on its own.",
+          "installBrowserTitle": "Install Chrome first",
+          "installBrowserBody": "Chrome is not installed on this computer. My browser needs Chrome (or Edge) for the Cindy extension. Once it is installed, this moves on to the next step automatically."
         }
       },
       "android": {
@@ -5972,8 +5963,6 @@
           "notChecked": "Not checked yet",
           "action": "Update",
           "updating": "Updating…",
-          "downloadingPercent": "Downloading {{percent}}% ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "Downloading, {{downloaded}} MB so far…",
           "installing": "Download complete, installing…",
           "toast": {
             "success": "cua-driver updated to the latest version",
@@ -7026,7 +7015,8 @@
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
-      }
+      },
+      "keepAwakeIncluded": "Included in the privacy screen: this computer won't sleep."
     },
     "imBot": {
       "beta": "Beta",
@@ -7929,7 +7919,6 @@
         "install": "Install",
         "details": "Details",
         "detailsAria": "View details for {{name}}",
-        "loadingDetails": "Loading details…",
         "update": "Update from market",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",
@@ -8235,39 +8224,36 @@
         "hostTools_history": "Task History",
         "hostTools_historyDetail": "Use Cindy’s task tools to list existing tasks, read complete messages and search history, including your other computers when explicitly selected and accessible. Export local tasks as native files. Plugin calls use installation authorization; Agent calls follow their own runtime permissions.",
         "hostTools_control": "Task Management",
-        "hostTools_controlDetail": "Use Cindy’s task tools to edit, archive, restore and control existing tasks and projects, and import native task files on this computer. High-risk operations require confirmation in Cindy each time.",
+        "hostTools_controlDetail": "Use Cindy’s task tools to edit, archive, restore and control existing tasks and projects, and import native task files on this computer.",
         "hostTools_handoff": "Task Messaging",
         "hostTools_handoffDetail": "Use Cindy’s task tools to send messages to existing tasks. Operations needing a current task require an explicit task target.",
+        "hostTools_usage": "Read subscription usage",
+        "hostTools_usageDetail": "Read account identifiers, plans, quota windows and update times for Claude and Codex subscriptions connected to your current Cindy account on this computer. Cannot read emails, credentials, files or other computers, or change accounts.",
         "hostTools_settings": "App Settings",
         "hostTools_settingsDetail": "Use Cindy’s settings tools to read and change app configuration. Secrets are not returned, and private input remains yours to provide.",
         "hostTools_scheduler": "Automation Management",
-        "hostTools_schedulerDetail": "After approval, the plugin can create, list, edit, pause, resume, delete and run automated tasks, and read run history. Agent-run scheduled tasks use the task’s default permissions, including Full Access. High-risk host operations require confirmation each time.",
+        "hostTools_schedulerDetail": "After approval, the plugin can create, list, edit, pause, resume, delete and run automated tasks, and read run history. Agent-run scheduled tasks use the task’s default permissions, including Full Access.",
         "hostTools_terminal": "Terminal and Commands",
         "codeDetailFiles": "The plugin page stays isolated. Cindy performs approved file operations within the directories you select.",
         "hostTools_discovery": "View Host Capabilities",
         "hostTools_discoveryDetail": "Read the services provided by the execution computer and this plugin’s declared and approved tool groups. Cannot install, disable or revoke other plugins.",
         "hostTools_browser": "Browser Control",
-        "hostTools_browserDetail": "Read and operate pages in Cindy’s selected browser. Switching to My Browser, uploading files and other sensitive actions keep Cindy’s confirmations.",
+        "hostTools_browserDetail": "Read and operate pages in Cindy’s selected browser. Can switch to My Browser, access signed-in pages and upload files.",
         "hostTools_computer": "Computer Control",
         "hostTools_computerDetail": "View windows and use keyboard and mouse actions through Cindy’s computer tools. System permissions, sensitive input protection and Host risk rules still apply.",
         "hostTools_ssh": "SSH Connections",
-        "hostTools_sshDetail": "Run commands and manage your configured SSH connections. Credentials stay with Cindy. Actions requiring confirmation are confirmed each time.",
+        "hostTools_sshDetail": "Run commands and manage your configured SSH connections. Credentials stay with Cindy.",
         "hostTools_docs": "Read and Create Documents",
-        "hostTools_docsDetail": "Use Cindy’s document tools within this plugin’s private directory. Creating and converting documents requires Cindy’s confirmation.",
+        "hostTools_docsDetail": "Use Cindy’s document tools within this plugin’s private directory.",
         "codeDetailHostServices": "Plugin pages stay isolated. Approved Host tools can operate browsers, computers, connections or documents as described in each permission.",
         "hostTools_storage": "Storage and Sharing Between Plugins",
-        "hostTools_storageDetail": "Use this plugin’s storage, Library and authorized media. Cindy confirms the source, recipient plugin and exact copy for every share. Other plugins’ storage cannot be read.",
-        "codeDetailStorage": "Storage operations stay within this plugin’s data. You confirm every share with another plugin.",
-        "storageShareTitle": "Give a Copy to Another Plugin",
-        "storageShareMessage": "Copy “{{file}}” ({{size}}) from plugin “{{name}}” to plugin “{{target}}”. The recipient gets an independent copy; source updates are not synchronized. Content already read or saved by the recipient cannot be recalled.",
+        "hostTools_storageDetail": "Use this plugin’s storage, Library and authorized media. Sharing delivers a copy only between enabled plugins that declare storage under the same account and organization. Other plugins’ storage cannot be read.",
+        "codeDetailStorage": "Storage operations stay within this plugin’s data. Sharing delivers copies between enabled plugins that declare storage under the same account and organization.",
         "hostTools_files": "Files in Selected Directories",
         "hostTools_filesDetail": "Read, write, list, delete files and watch changes in directories you explicitly select. Previous selections do not grant access. Disabling the plugin stops access.",
         "filesPickMessage": "Plugin “{{name}}” will be able to read, write, list and delete files in the selected directory and watch changes. Select a directory you allow it to access.",
         "codeDetailTerminal": "Plugin pages run in an isolated sandbox. Approved commands run as your user and can access local files, apps and networks.",
-        "hostTools_terminalDetail": "Start commands and interactive terminals as your user on this computer, read output, send input and stop this plugin’s processes. Commands can access your files and apps. Starting, entering input and other changes require confirmation in Cindy each time.",
-        "hostToolsRequest": "Review {{group}} Permission",
-        "hostToolCallTitle": "Allow Plugin Operation",
-        "hostToolCallMessage": "The plugin “{{name}}” wants to call {{server}} / {{tool}}. This approval applies only to the parameters below.",
+        "hostTools_terminalDetail": "Start commands and interactive terminals as your user on this computer, read output, send input and stop this plugin’s processes. Commands can access your files and apps.",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentErrand": "Create tasks, perform work, and read results",
@@ -8337,7 +8323,7 @@
         "deviceSyncDetail": "Exchanges this plugin’s data with the same plugin on your other online computers signed in to the same Cindy account. Transfers are encrypted. The plugin controls merging and deletions; no credentials or other plugins’ data are shared.",
         "libraryPersist": "Can use a durable library (large files and databases)",
         "libraryPersistDetail": "It gets a Cindy-managed storage area for your work (canvases, images, databases) with no normal plugin data quota. All file and database operations are executed by the host; the plugin only uses relative paths inside its own library and cannot touch your other files. It can also ask Cindy to show a library file in Finder or Explorer, or open the system Save As dialog so you choose where a copy goes; cancelling Save As copies nothing. It can also write a PNG bitmap to the system clipboard with no confirmation dialog; this overwrites the current clipboard. Uninstalling the plugin does not delete this data; deletion requires separate confirmation in Cindy settings.",
-        "networkHost": "Accesses the network domain {{host}}",
+        "networkHost": "Accesses the network target {{host}}",
         "networkSecret": "Needs a credential from you: “{{name}}”",
         "networkSecretGhostInputDetail": "Collected by this plugin's own settings UI — the plugin page sees the value at entry time. It is then handed to the host in one step for encrypted storage; once stored, the plugin can never read it back, and the host injects it only for the domains it declares.",
         "networkSecretIdentity": "Will use your login email as the credential “{{name}}”",
@@ -8346,8 +8332,8 @@
         "networkSecretGhCliDetail": "The host reads the local gh login token only when needed and injects it only into GitHub API requests; plugin code cannot read or store the token. If gh is unavailable, you can configure a fallback Personal Access Token in the plugin settings.",
         "networkSecretOrganizationIdentity": "Will use your Cindy organization identity as the credential “{{name}}”",
         "networkSecretOrganizationIdentityDetail": "Cindy issues a short-lived identity assertion when needed, and the host sends it only to the explicitly listed service hosts. The plugin code cannot read or store the token.",
-        "networkSecretOauth": "Will guide you through OAuth authorization at {{host}} ({{name}})",
-        "networkSecretOauthDetail": "The authorization flow and all tokens are managed by the host and can never be read by the plugin code; you provide the client credentials on the plugin detail page. The requested permission scopes are listed verbatim below — review them before approving.",
+        "networkSecretOauth": "Authorize {{name}} or use a connected account at {{host}}",
+        "networkSecretOauthDetail": "Cindy manages sign-in and tokens. You can authorize a new account or choose a compatible connected account. Review the scopes below; reused accounts retain their existing permissions.",
         "networkConnections": "Can connect to {{label}} addresses you add",
         "networkConnectionsDetail": "Addresses are added in this plugin's settings UI; every new address requires your confirmation, and the credential you provide is injected only for its own address.",
         "codeDetailNetwork": "Runs in an isolated sandbox with no access to your files; network access is limited to the domains listed above, relayed by the host.",
@@ -8530,6 +8516,7 @@
           "workdirClear": "Reset to default folder",
           "followAuxiliary": "Follow system auxiliary model · {{model}}",
           "followAuxiliaryUnset": "Follow system auxiliary model",
+          "remoteQuickAnswerHint": "This model doesn’t run on this computer. Quick answers are sent from this computer, so they use the system auxiliary model.",
           "restoreModel": "Reset model"
         },
         "toolsTitle": "Tools",
@@ -8560,6 +8547,16 @@
         "browserSwitchTitle": "Switch browser extension connection?",
         "browserSwitchMessage": "Use “{{name}}” for this browser connection?",
         "browserSwitchDetail": "Instance: {{instance}}\nRegistration: {{host}}\nThis replaces the current registration. The extension will connect to this plugin.",
+        "reuseAccountTitle": "Use an Account or Credential",
+        "reuseAccountDescription": "Use an account or credential already saved in Cindy. Cindy injects it without exposing the original value.",
+        "reuseAccountChoose": "Choose an Account or Credential",
+        "reuseAccountUse": "Use This Selection",
+        "reuseAccountStop": "Stop Using",
+        "reuseAccountEmpty": "No compatible account or credential is saved. Connect an account or save a key in the source plugin settings.",
+        "reuseAccountUnavailable": "The original account or credential is unavailable. Choose another source.",
+        "reuseAccountLoadFailed": "Could not load accounts and credentials",
+        "reuseAccountChangeFailed": "Could not change this selection",
+        "reuseAccountRefresh": "Refresh",
         "portReclaimTitle": "End the program using the callback port?",
         "portReclaimMessage": "“{{name}}” needs port {{port}}. End the following program?",
         "portReclaimDetail": "Ending it may interrupt its work or lose unsaved data. You can cancel and close the program yourself.",
@@ -8855,23 +8852,10 @@
         "projectReadFailed": "Could not read project settings. Try again."
       },
       "usage": {
-        "title": "Your calls",
-        "explanationLabel": "How usage is counted",
-        "explanation": "Tool calls dispatched on this computer by the current account, including failures, timeouts and cancellations. The last 7 days is a rolling 168 hours. Panels, Skills and debugging are excluded. Records remain until cleared.",
-        "clear": "Clear records",
-        "loading": "Loading records…",
-        "unavailable": "Personal records unavailable",
-        "retry": "Retry",
-        "lastUsed": "Last call",
-        "last7Days": "Calls in last 7 days",
-        "never": "No calls yet",
-        "clearTitle": "Clear this Plugin’s usage records?",
-        "clearDescription": "Remove call records and Session links for this account on this computer. New calls start a fresh history. Shared totals already received by the server are not withdrawn.",
         "downloadExplanation": "Cumulative download URL requests. Each successfully issued package URL counts once, including updates, reinstalls and retries that request a new URL. This is not a count of completed installations.",
-        "clearAction": "Clear",
         "downloadsValue": "{{value}} downloads",
         "usesValue": "{{value}} uses",
-        "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience. Your calls below count only this account on this computer."
+        "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience."
       },
       "contribution": {
         "unreadReview": "New plugin result",
@@ -9280,6 +9264,9 @@
         "failed": "Cleanup could not finish",
         "pending": "Queued"
       }
+    },
+    "awayFromComputer": {
+      "title": "When You're Away"
     },
     "navigation": {
       "unavailable": "Could not open settings on the target computer. Check that it is online and allows remote control; update Cindy if it is an older version."
@@ -10918,6 +10905,7 @@
       "duplicate": "Duplicate buddy",
       "moreActions": "More actions for {{name}}",
       "viewIcons": "Icons",
+      "showCollapsedTeammateAvatars": "Show avatars when collapsed",
       "sectionExpand": "Expand buddies",
       "showLess": "Show less",
       "sectionCollapse": "Collapse buddies",
@@ -11415,6 +11403,8 @@
         "projectDirNote": "Buddies work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
         "autoContinueSaveFailed": "Couldn’t save step handoffs. Try again.",
         "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again.",
+        "allowMemberInvites": "Let all members invite friends",
+        "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
         "allowMentionAllBots": "Allow @all buddies",
         "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
       },
@@ -11520,6 +11510,7 @@
         "threadRecent": "Recent messages in the thread",
         "threadNew": "New messages in the thread",
         "replyingTo": "Replying to “{{name}}”: {{text}}",
+        "filesOutsideWorkingDir": "Files outside the working directory were not attached.",
         "earlierOmitted": "(Earlier messages omitted)",
         "actingFor": "{{name}} · for {{person}}",
         "checkout": {
@@ -11692,6 +11683,11 @@
           "transferHint": "They will become the owner and you will become an admin.",
           "removeTitle": "Remove {{name}} from this group?",
           "removeHint": "They will lose access to messages. Their companions will also leave.",
+          "removeOwn": "Remove from group",
+          "removeOwnScope": "This only affects this group. Your companion stays in your account.",
+          "removeOwnHint": "{{name}} will no longer receive messages from “{{group}}”. Message history stays; other groups and private chats are unaffected.",
+          "removeOwnActiveHint": "Removing this companion stops its active requests in this group. Tasks opened independently keep running.",
+          "stopAndRemove": "Stop and remove",
           "leave": "Leave group",
           "leaveHint": "You and your companions will leave this group. You will no longer receive new messages or have access to its history.",
           "soleOwnerHint": "You’re the only member left. Archive this group to keep its history and restore it later.",
@@ -12932,6 +12928,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "No automatic review model is available. On the computer running the Agent, enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. Actions that need review still require your confirmation.",
           "autoReviewUnavailable": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
           "autoReviewUnavailableWechat": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
           "autoReviewConfirmUndelivered": "Auto-review didn't finish, and the confirmation either wasn't delivered or wasn't answered. This denial didn't come from you.",
@@ -14097,7 +14094,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Creating worktree · input disabled",
-      "subtitle": "Target branch {{branch}} · will unlock automatically"
+      "subtitle": "Target branch {{branch}} · will unlock automatically",
+      "elapsed": "Waiting for {{duration}}"
     },
     "worktree": {
       "detecting": "Detecting environment…",
@@ -14106,7 +14104,7 @@
       "notGitRepo": "Current directory is not a git repository",
       "alreadyInWorktree": "Already inside a worktree; nesting isn't allowed",
       "toggleAria": "Use worktree isolation",
-      "chipTooltip": "Start this session in an isolated worktree without touching the current branch"
+      "chipTooltip": "Start in a separate project copy without affecting your current files, changes or other sessions"
     },
     "branchChip": {
       "label": "Branch",
@@ -14481,6 +14479,81 @@
       "later": "Later",
       "ready": "Interactive pages are enabled for the next plugin tool call.",
       "updateHost": "Update Cindy on the execution computer to approve interactive pages here."
+    },
+    "checkout": {
+      "useWorktree": "Use worktree",
+      "switched": "Switched to {{branch}}",
+      "stashed": " · Changes saved for later",
+      "carried": " · Changes brought along",
+      "fetched": "Fetched {{count}} new commits from {{branch}}",
+      "sessionsContinue": "{{names}} will also continue on {{branch}} next time.",
+      "undo": "Undo",
+      "savedChanges": "Saved changes are available for {{branch}}.",
+      "restore": "Restore changes",
+      "undone": "Branch switch undone",
+      "restored": "Saved changes restored",
+      "title": "Switch to {{branch}}",
+      "dirtyDescription": "{{branch}} has uncommitted changes in {{count}} files",
+      "dirtyDescription_one": "{{branch}} has uncommitted changes in {{count}} file",
+      "dirtyDescription_other": "{{branch}} has uncommitted changes in {{count}} files",
+      "dirtyDescription_many": "{{branch}} has uncommitted changes in {{count}} files",
+      "carry": "Bring changes to {{branch}}",
+      "stash": "Save for later",
+      "idleSessions": "{{count}} sessions switch too",
+      "errors": {
+        "busy": "A session is running here. Branch switching is temporarily unavailable",
+        "operation": "Branch changes are being combined. Finish that operation before switching",
+        "occupied": "{{branch}} is already open in another worktree and cannot be switched to here",
+        "changed": "The branch or changes have changed. Check the directory before trying again",
+        "undoChanged": "The branch or changes have changed. Check the directory before trying again. Undo is only available while still on the branch you switched to.",
+        "restoreChanged": "The current branch has changed. Return to the branch where you saved these changes before restoring",
+        "conflict": "These changes overlap with the target branch and cannot be brought along. Save them first or use worktree.",
+        "ignored": "Switching to {{branch}} would overwrite local files or folders, including {{file}} ({{count}} in total). The switch was stopped.",
+        "dirty": "There are new uncommitted changes. Handle them before restoring.",
+        "diverged": "The local and remote branches have different updates. Resolve the differences before switching.",
+        "missing": "The selected branch no longer exists. Refresh the list.",
+        "git": "Could not finish the operation. Check the current branch and saved changes before trying again",
+        "savedMissing": "These saved changes are no longer available",
+        "undoUnavailable": "This branch switch can no longer be undone"
+      },
+      "carryDescription": "Keep editing these changes on {{branch}}",
+      "stashDescription": "{{branch}} stays clean. Restore when you return to {{current}}",
+      "carryConflict": "These changes conflict with {{branch}} and cannot be brought along",
+      "newFile": "New file",
+      "deletedFile": "Deleted",
+      "dialogSessions": "“{{name}}” and {{count}} sessions in total use this directory and will continue on {{branch}}",
+      "dialogSessions_one": "“{{name}}” also uses this directory and will continue on {{branch}}",
+      "dialogSessions_other": "“{{name}}” and {{count}} sessions in total use this directory and will continue on {{branch}}",
+      "dialogSessions_many": "“{{name}}” and {{count}} sessions in total use this directory and will continue on {{branch}}",
+      "moreFiles": "{{count}} more files",
+      "moreFiles_one": "{{count}} more file",
+      "moreFiles_other": "{{count}} more files",
+      "moreFiles_many": "{{count}} more files",
+      "question": "How should we handle them?",
+      "noLoss": "Nothing is lost",
+      "worktree": "Keep this copy, use worktree",
+      "worktreeDescription": "Start a copy from {{branch}}; keep this one unchanged",
+      "carryConfirm": "Switch with changes",
+      "stashConfirm": "Save and switch",
+      "startWorktree": "Start with worktree",
+      "showFiles": "View",
+      "hideFiles": "Hide",
+      "running": "Running",
+      "runningTitle": "{{count}} sessions are running here",
+      "runningTitle_one": "“{{name}}” is running here",
+      "runningTitle_other": "{{count}} sessions are running here",
+      "runningTitle_many": "{{count}} sessions are running here",
+      "runningWait": "Wait for them to finish before switching branches.",
+      "runningWait_one": "Wait for it to finish before switching branches.",
+      "runningWait_other": "Wait for them to finish before switching branches.",
+      "runningWait_many": "Wait for them to finish before switching branches.",
+      "idleSessions_one": "“{{name}}” switches too",
+      "idleSessions_other": "{{count}} sessions switch too",
+      "idleSessions_many": "{{count}} sessions switch too",
+      "runningWithWorktree": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
+      "runningWithWorktree_one": "Wait for it to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
+      "runningWithWorktree_other": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
+      "runningWithWorktree_many": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other."
     }
   },
   "onboarding": {
@@ -15448,6 +15521,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "This file is outside the current session working directory and cannot be located in the sidebar file browser",
       "openInDefaultBrowser": "Open in browser",
       "copyLink": "Copy link",
+      "addPrToHeader": "Add to Header",
+      "prAlreadyInHeader": "Already in Header",
+      "prAddedToHeader": "Added to the header — status follows this task.",
+      "prAssociatedNotInHeader": "Linked, not in Header",
+      "prSavedNotInHeader": "Link saved. The header is full; pin this PR in the task header’s PR manager.",
       "linkCopied": "Link copied",
       "viewSourceFile": "View source",
       "openInSidebarFailed": "Failed to open in sidebar browser",
@@ -15609,6 +15687,7 @@
       "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
       "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "No automatic review model is available. On the computer running the Agent, enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. Actions that need review still require your confirmation.",
       "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "Automatic review was unavailable, and the confirmation request was not completed. This is not a user rejection.",
@@ -15629,7 +15708,12 @@
       "REMOTE_PROVIDER_UPDATING": "This model provider’s credentials are updating. Try again in a moment.",
       "REMOTE_WORKDIR_UNAVAILABLE": "The remote working directory is unavailable. Check that the folder still exists on that computer, then try again.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice.",
-      "REMOTE_AGENT_UNAVAILABLE": "The connection to the computer running the Agent dropped. Try again. If it keeps happening, make sure that computer is online and allows remote control.",
+      "REMOTE_AGENT_UNAVAILABLE": "Could not communicate with the computer running the Agent. Check the error details.",
+      "REMOTE_AGENT_TIMEOUT": "Timed out waiting for the computer running the Agent. The result is unknown. Check the task before retrying.",
+      "REMOTE_AGENT_LINK_BUSY": "Communication with the computer running the Agent is busy. Wait a moment before retrying.",
+      "REMOTE_AGENT_UNRESPONSIVE": "The computer running the Agent repeatedly failed to respond, so calls were temporarily paused. Wait a moment before retrying.",
+      "REMOTE_AGENT_OFFLINE": "The computer running the Agent is offline. Retry after it reconnects.",
+      "REMOTE_AGENT_ACCESS_DENIED": "Remote access to the computer running the Agent was denied. Check its access settings before retrying.",
       "REMOTE_AGENT_PEER_TOO_OLD": "Cindy on the other computer is too old for this action. Update Cindy there first.",
       "REMOTE_AGENT_EXPIRED": "This session already ended on the computer running the Agent. Send your message again.",
       "REMOTE_AGENT_NOT_FOUND": "This session already ended on the computer running the Agent. Send your message again.",
@@ -16084,7 +16168,7 @@
       "claudeSubscriptionWorkspaceOverride": "This folder's .claude settings change where Claude sends requests or how it signs in, so the Claude subscription can't be used here. Remove those settings, or pick a gateway or API key model",
       "deviceStillLoading": "The remote device is still loading. Wait a moment.",
       "remoteDefaultsLoadFailed": "Could not load the remote device settings. Check the connection; Cindy is retrying.",
-      "branchRequiresWorktree": "The selected branch is not the current branch. Enable worktree or select the current branch.",
+      "branchChanged": "The project is now on {{branch}}. Check it, then send again.",
       "branchCheckFailed": "Could not verify the current branch. Enable worktree to use the selected branch, or check the project and try again.",
       "worktreeMissingRepo": "Can't create a worktree: the current directory's repo root is missing",
       "worktreeRepoHint": "Try picking the working directory again, and retry once the folder badge at the bottom right refreshes",
@@ -17193,7 +17277,9 @@
         "saveAria": "Save automation",
         "createAria": "Create automation",
         "namePlaceholder": "Name this Automation",
-        "promptPlaceholder": "Example: Find new crashes in Sentry and summarize the top regressions."
+        "promptPlaceholder": "Example: Find new crashes in Sentry and summarize the top regressions.",
+        "expandPrompt": "Expand editor",
+        "collapsePrompt": "Collapse"
       },
       "executionMode": {
         "label": "Execution",
@@ -18031,7 +18117,6 @@
       "descriptionSaveDir": "The directory below is outside this session's working directory. If you allow, this plugin can save downloaded files into it (existing files are never overwritten).",
       "descriptionRevealPath": "The path is returned to the current Agent only after you allow it and will enter the conversation record; paired devices may sync that record. This does not grant any plugin access to the file.",
       "descriptionFsWrite": "This plugin requests to write the files below into the current session's working directory. If you allow, further writes to the same directory in this session won't ask again.",
-      "descriptionFsDelete": "This plugin requests to delete the files or folders below from the current task's working directory. Deleting a folder also deletes its contents. This approval applies to this deletion only.",
       "descriptionWorkspace": "This folder is outside this session's working directory. If you allow, Cindy creates an empty session for it in the sidebar (an existing session is reused) without reading any files inside.",
       "descriptionForgeSource": "The directory below is outside this session's working directory. If you allow, Forge will pack or scaffold the plugin there (it writes a .cindy artifact or skeleton files).",
       "descriptionForgeScaffold": "The directory below is outside this session's working directory. If you allow, Forge will create plugin source files there.",
@@ -21742,5 +21827,28 @@
     "archivedNotice": "Automatically archived idle tasks: {{count}}",
     "undo": "Undo",
     "undoFailed": "Could not undo. Restore the tasks from Archived."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "{{time}} left",
+    "attempt": "Attempt {{attempt}}",
+    "phase": {
+      "preparing": "Preparing…",
+      "queued": "Queued…",
+      "downloading": "Downloading…",
+      "retrying": "Retrying…",
+      "verifying": "Verifying…",
+      "installing": "Installing…",
+      "paused": "Paused",
+      "completed": "Done",
+      "failed": "Download failed",
+      "cancelled": "Cancelled"
+    },
+    "retry": {
+      "slow": "Slow connection, reconnecting…",
+      "network": "Connection lost, retrying…",
+      "timeout": "Connection timed out, retrying…",
+      "server": "Server busy, retrying…"
+    }
   }
 }

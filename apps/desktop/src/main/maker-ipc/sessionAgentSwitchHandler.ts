@@ -47,7 +47,7 @@ import {
   type HandoffSourceMessage,
 } from './agentHandoff.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-live.js';
+import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-catalog.js';
 import { dbToMakerAgentKind, makerToDbAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 
@@ -870,17 +870,23 @@ export async function performSessionAgentSwitch(
     }
   }
   const agentDeviceChanges = targetAgentDeviceId !== currentAgentDeviceId;
+  // 组内同一台电脑可有多个独立连接。换连接必须关闭旧原生会话并全量交接，不能落入同引擎 no-op，
+  // 也不能把旧账号的停泊会话或原生历史交给新账号。只认组内立即执行／组选结果，不改变普通换模型语义。
+  const providerConnectionChanges =
+    (params.providerGroupRelocation === true || groupResolvedToCurrentPosition) && params.applyNow === true
+    && !agentDeviceChanges && normalizedProviderId !== undefined && normalizedProviderId !== row.providerId;
   // 位置不变的强制换电脑(只认内部 applyNow 调用，且 Agent 在另一台电脑上)：交接、提交、分隔条都按换电脑处理。
   const forcedRelocation =
     !agentDeviceChanges && params.forceRelocation === true && params.applyNow === true && targetAgentDeviceId !== null;
   const relocating = agentDeviceChanges || forcedRelocation;
+  const rebuildingRoute = relocating || providerConnectionChanges;
   // 协同任务点了别处的供应商组、组又选回当前位置：同引擎原地换模型在发送时要用点选时核对过的窗口，
   // 而这次点选按换电脑登记、没有窗口确认，换到更小窗口的模型时会一直卡在发送前。用户已确认过按交接
   // 重新开始，这里照此全量交接重建，不走原地换模型。
   const orcaGroupReturnRebuild = groupResolvedToCurrentPosition && (!!row.orcaRole || !!parseOrcaRemoteLead(row.orcaRemoteLead)) && fromDbKind === toDbKind;
   // 落到另一台电脑的完整切换(换引擎或换电脑)：登记与落地前都按那台的目录裁决。同引擎同位置
   // 的模型选择走 selectSameAgentModel，在 SET_MODEL 链路里裁决。
-  if (targetAgentDeviceId && (relocating || orcaGroupReturnRebuild || fromDbKind !== toDbKind)) {
+  if (targetAgentDeviceId && (rebuildingRoute || orcaGroupReturnRebuild || fromDbKind !== toDbKind)) {
     await deps.assertAgentDeviceRouteUsable?.(
       targetAgentDeviceId,
       targetAgentKind,
@@ -891,7 +897,7 @@ export async function performSessionAgentSwitch(
     throwIfAgentSwitchAborted(signal);
     params.assertSelectionCurrent?.();
   }
-  if (fromDbKind === toDbKind && !relocating && !orcaGroupReturnRebuild) {
+  if (fromDbKind === toDbKind && !rebuildingRoute && !orcaGroupReturnRebuild) {
     // Only picker calls stage a model choice here. Internal cross-engine apply/recovery
     // callers retain the existing same-engine no-op; send consumes staged choices below.
     if (deps.selectSameAgentModel && (!params.applyNow || groupResolvedToCurrentPosition)) {
@@ -1027,7 +1033,7 @@ export async function performSessionAgentSwitch(
   // 工作状态区仍按全量历史提取);无绑定 → v1 全量交接 + 全新原生会话。
   // 换电脑不复用目标电脑旧的停泊记录；同机回切也只认在本机离场的线程，
   // 避免把另一台电脑上的原生会话误当成本机可续接的历史。
-  const parked = deps.findParkedEngineSession && !relocating && !orcaGroupReturnRebuild
+  const parked = deps.findParkedEngineSession && !rebuildingRoute && !orcaGroupReturnRebuild
     ? await deps.findParkedEngineSession(sessionId, toDbKind, currentAgentDeviceId)
     : null;
   const fullSourceMessages = await deps.listMessagesForHandoff(sessionId);
@@ -1096,7 +1102,7 @@ export async function performSessionAgentSwitch(
     let sourceNativeId = row.sdkSessionId;
     let nativeBootstrapReady = false;
     const confirmSummary = params.providerGroupSwitchReason === 'quota-rebalance'
-      && relocating && fromDbKind === toDbKind && !forcedRelocation
+      && rebuildingRoute && fromDbKind === toDbKind && !forcedRelocation
       && !isProviderShareAgentDeviceId(currentAgentDeviceId)
       && !isProviderShareAgentDeviceId(targetAgentDeviceId);
     const assertTransferCurrent = () => {
@@ -1163,7 +1169,7 @@ export async function performSessionAgentSwitch(
         handoff = nativeRelocationHandoff(await deps.peekPendingHandoff?.(sessionId));
       }
     }
-    if (relocating) assertTransferCurrent();
+    if (rebuildingRoute) assertTransferCurrent();
 
     // Revalidate before probing and after any user confirmation, which may take time.
     const revalidateRoute = async () => {
@@ -1175,7 +1181,7 @@ export async function performSessionAgentSwitch(
       if (rerouteAtCommit && typeof normalizedProviderId !== 'string') normalizedProviderId = rerouteAtCommit;
     };
     await revalidateRoute();
-    if (relocating) assertTransferCurrent();
+    if (rebuildingRoute) assertTransferCurrent();
 
     if (confirmSummary) {
       // Probe native resume before publishing a switch boundary or replacing pending
@@ -1221,7 +1227,7 @@ export async function performSessionAgentSwitch(
     }
 
     if (params.providerGroupRelocation && row.source === 'bot') await params.beforeMutation?.();
-    if (relocating) assertTransferCurrent();
+    if (rebuildingRoute) assertTransferCurrent();
     params.onRelocationMutationStart?.();
     // ---- commit point:此后切换生效 ----
     try {
@@ -1232,8 +1238,8 @@ export async function performSessionAgentSwitch(
         sdkSessionId: relocatedNativeId ?? parked?.sdkSessionId ?? null,
         ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
         ...((typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
-        // 组选回的当前位置在另一台电脑时也带上位置：提交按它判断窗口该查哪台的目录，不能拿本机目录。
-        ...(agentDeviceChanges || (orcaGroupReturnRebuild && targetAgentDeviceId)
+        // 同机换连接／组选回的当前位置在另一台电脑时也带上位置：提交按它判断窗口该查哪台的目录，不能拿本机目录。
+        ...(agentDeviceChanges || ((orcaGroupReturnRebuild || providerConnectionChanges) && targetAgentDeviceId)
           ? { agentDeviceId: targetAgentDeviceId }
           : {}),
       });
@@ -1313,12 +1319,12 @@ export async function performSessionAgentSwitch(
     if (!nativeBootstrapReady && (relocatedNativeId || parked || !params.skipBootstrap)) {
       try {
         await bootstrapSwitchedSessionWithThinking(deps, sessionId, thinkingEnabled, !!relocatedNativeId);
-        if (relocating) assertTransferCurrent();
+        if (rebuildingRoute) assertTransferCurrent();
         if (relocatedNativeId && deps.getLiveSession(sessionId)?.sdkSessionId !== relocatedNativeId) {
           throw new Error('Native history resume did not restore the transferred session');
         }
       } catch (err) {
-        if (relocating) assertTransferCurrent();
+        if (rebuildingRoute) assertTransferCurrent();
         if (relocatedNativeId || parked) {
           if (relocatedNativeId) {
             await closeFailedNativeSession();

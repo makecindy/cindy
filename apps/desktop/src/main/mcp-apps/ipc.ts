@@ -11,15 +11,12 @@ import { nativePluginUi, parsePluginUiInterests } from './nativeRuntime.js';
 import { manageAppSettings } from '../app-settings/sections.js';
 import { matchesGhostHostUiAttachment, type GhostHostUiContribution } from '@cindy/plugin-protocol';
 import { preparePluginAttachmentResult } from './pluginAttachment.js';
-import { resolveGhostAttachmentUrl } from '../mcp-integrations/ghostAttachmentResolve.js';
 import { getActiveAppSession } from '../appSessionState.js';
 import { stageLocalFileToCache, cleanupOwnedUnpersistedStagedChatAttachments } from '../file-browser/remote-file-cache.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
 import { resolveSafe } from '../cindy-media/blobStore.desktop.js';
-import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { GHOST_HANDOFF_MAX_BYTES_PER_FILE } from '../../shared/ghost.js';
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import { saveAppDownload } from './downloadFile.js';
 import { randomUUID } from 'node:crypto';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
@@ -33,7 +30,6 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { messages, sessions } from '../localDb/schema.js';
 import { createMessage, broadcastMessageRow } from '../localDb/ipc/messages.js';
 import { messageToCamel } from '../localDb/mapper.js';
-import { recomputePrRefsForSession } from '../git-context/prRefsStore.js';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { createLogger } from '../logger.js';
@@ -172,7 +168,6 @@ export function registerMcpAppsIpc(
           : entry?.host.contributions?.find(contribution => contribution.id === action.id);
         if (!entry || !declaration?.tool) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
         const position = 'position' in declaration ? declaration.position : undefined;
-        const temporaryInputs: string[] = [];
         const ownerId = position === 'composer.attachment' ? getActiveAppSession().dataOwnerId : null;
         const cleanup = (paths: string[]) => ownerId
           ? cleanupOwnedUnpersistedStagedChatAttachments({ ownerId, filePaths: paths }) : Promise.resolve();
@@ -209,7 +204,7 @@ export function registerMcpAppsIpc(
             value = action.value;
           }
           const args: Record<string, unknown> = { ...declaration.arguments, ...(value === undefined ? {} : { value }) };
-          let attachments: string[] | undefined;
+          let attachmentBytes: Uint8Array | undefined;
           const stage = async (name: string, buffer: Buffer, mimeType: string) => {
             await assertCurrent();
             if (!ownerId || !owner) throw new Error('MCP_APP_OWNER_UNAVAILABLE');
@@ -227,34 +222,24 @@ export function registerMcpAppsIpc(
                 action.requestId === undefined) throw new Error('MCP_APP_INVALID_REQUEST');
             args.trigger = input.trigger; args.query = input.query;
           } else if (position === 'composer.attachment') {
-            const input = action.input as { attachment?: { name?: unknown; uri?: unknown; size?: unknown; mimeType?: unknown } } | undefined;
+            const input = action.input as { attachment?: { name?: unknown; uri?: unknown; bytes?: unknown; size?: unknown; mimeType?: unknown } } | undefined;
             const file = input?.attachment;
-            if (!file || typeof file.name !== 'string' || !file.name || file.name.length > 200 || typeof file.uri !== 'string' ||
+            if (!file || typeof file.name !== 'string' || !file.name || file.name.length > 200 || file.uri !== undefined ||
+                !(file.bytes instanceof Uint8Array) ||
                 typeof file.mimeType !== 'string' || file.mimeType.length > 256 || !Number.isSafeInteger(file.size) ||
-                (file.size as number) < 1 || !matchesGhostHostUiAttachment((declaration as GhostHostUiContribution).accept,
+                (file.size as number) < 1 || (file.size as number) > GHOST_HANDOFF_MAX_BYTES_PER_FILE ||
+                file.bytes.byteLength !== file.size || !matchesGhostHostUiAttachment((declaration as GhostHostUiContribution).accept,
                   file as { name: string; mimeType: string })) throw new Error('MCP_APP_INVALID_REQUEST');
             args.attachment = { name: file.name, size: file.size, mimeType: file.mimeType };
-            if (path.isAbsolute(file.uri)) attachments = [file.uri];
-            else if (/^(?:cindy-media:|xdt-image:)/.test(file.uri)) attachments = [resolveGhostAttachmentUrl(file.uri).absPath];
-            else if (/^data:image\/(png|jpeg|gif|webp);base64,/.test(file.uri)) {
-              const encoded = file.uri.slice(file.uri.indexOf(',') + 1);
-              if (encoded.length > Math.ceil(GHOST_HANDOFF_MAX_BYTES_PER_FILE / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw new Error('MCP_APP_INVALID_REQUEST');
-              const buffer = Buffer.from(encoded, 'base64');
-              if (buffer.length !== file.size || !sniffMediaMime(buffer)) throw new Error('MCP_APP_INVALID_REQUEST');
-              await assertCurrent();
-              if (!ownerId) throw new Error('MCP_APP_OWNER_UNAVAILABLE');
-              const source = await stageLocalFileToCache({ ownerId, suggestedName: file.name, expectedSize: BigInt(buffer.length),
-                copyTo: target => fs.writeFile(target, buffer, { flag: 'wx' }) });
-              temporaryInputs.push(source); attachments = [source];
-            } else throw new Error('MCP_APP_INVALID_REQUEST');
+            // Copy only supplied bytes; a renderer path/URL never authorizes a Main read.
+            attachmentBytes = Uint8Array.from(file.bytes);
           } else if (action.input !== undefined || action.requestId !== undefined) throw new Error('MCP_APP_INVALID_REQUEST');
           signal.throwIfAborted();
           const result = await host.callPluginAction(caller, sessionId, { id: action.id, config: entry.config,
-            title: declaration.title, assertCurrent, ...(attachments ? { attachments } : {}) }, declaration.tool, args, signal);
+            title: declaration.title, assertCurrent, ...(attachmentBytes ? { attachmentBytes } : {}) }, declaration.tool, args, signal);
           return position === 'composer.attachment'
             ? await preparePluginAttachmentResult(action.instanceId, result, { access: pluginFiles, stage, cleanup, assertCurrent, signal }) : result;
         } finally {
-          if (temporaryInputs.length) await cleanup(temporaryInputs);
           if (controller) {
             const calls = providerCalls.get(caller); calls?.delete(action.requestId as string);
             if (!calls?.size) providerCalls.delete(caller);

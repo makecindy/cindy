@@ -241,6 +241,7 @@ function Foo() {
 ### iOS 外壳 vs Cindy 内容
 
 - **任务行滑动（2026-10-24 用户裁决，iOS / Android）**：右滑提供已读与置顶，全滑默认标记已读；左滑提供选项与归档，全滑归档。跨端组合沿用已有方案：已读沿用灵动岛的青绿色单勾（Lucide `Check` / SF Symbols `checkmark`），归档沿用手机版的蓝色归档盒（`Archive` / `archivebox`），置顶为橙色图钉，选项为中性灰省略号。Mobile 的已读底色独立加深以保证白色图标对比度，数值由 `swipeActionRead` 管理；不把灵动岛深色背景上的高亮色直接复制到手机浅色背景。
+  Android 任务行、项目标题与设备管理行共用 `ClassicSwipeable` 的 16pt 横向激活／纵向失效边界：纵向先越界时交回列表，横向先激活后继续正常跟手；iOS 原有识别实现不变。
 
 - **项目标题滑动（iOS / Android）**：仅标题整行横移，展开的子任务不随之移动。左滑露出「新建任务」，超过屏宽 55% 松手打开预填项目电脑与目录的新建页；发送后才创建任务。右滑露出「全部任务」「搜索」，必须点按，搜索限定当前项目并聚焦输入框。点标题继续展开／收起，已有滑开行时先收起操作；自定义排序仍为长按后纵向拖动。项目与任务共用滑动互斥注册表，滚动收行，左屏缘保留返回手势。动作沿用普通任务的圆形到胶囊形态，按钮直径为 56pt，间距使用 spacing.md、图标使用 iconSize.swipeAction；使用双模式 token，并通过标题的无障碍动作提供等价入口。只对有明确电脑和目录的项目启用，不把对话或 Cindy Make 聚合组视为单一目录。实现见 `src/session/SwipeableProjectHeader.tsx`、`HomeSurface.tsx`。
 - **首页导航共用组件（2026-10-13，2026-10-24 收为单一首页）**：iOS 首页调用 platform/chrome/HomeStackHeader，统一系统导航栏、菜单按钮与居中标题宽度；顶部模糊背景由首页路由绘制一层。页面只提供标题内容、菜单动作和右侧工具；任务标题保留长名称避让。列表、安全区、滚动指示器和下拉刷新只计算一次顶部占位。手机不再有任务／伙伴两种首页与切换转场，伙伴以任务首页的伙伴段呈现。普通页面、聊天身份栏、面板及 Android 导航暂未纳入这一批，不视为全端迁移完成。
@@ -328,6 +329,7 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 - **间距 `spacing`**:`xs 4 · sm 8 · md 12 · lg 16 · xl 24 · xxl 32`(基数 4)。避免 `2 / 6 / 13 / 17` 这类裸数字;1-2pt 的微调若实在需要,集中、少量、写注释。
 - **圆角 `radius`**:四档阶梯——`micro 4` / `control 8` / `container 12` / `pill 9999`(定义与各档用途见 `src/theme/tokens.ts`,守护测试 `designTokenDiscipline.test.ts` 拦截字面量与 token 算术)。**禁止**阶梯外值。
 - **触控目标**:主操作命中区 ≥ 44×44(iOS HIG)。可见图标可小(14–18),用 `hitSlop` 或不可见外层把热区补到 44。
+- **任务页侧边系统栏**：系统导航移到左／右侧时，紧凑任务页标题行在顶部安全区之外至少保留 `spacing.md`（12pt）留白；常驻任务列表布局保留已有 `spacing.lg`（16pt）。输入框下沿继续使用系统底部安全区 + `composerGeometry.restingGap`（8pt），不因系统手势条隐藏而扣除安全区。
 - **安全区**:屏幕根用 `SafeAreaView`(react-native-safe-area-context);需要精确 inset 用 `useSafeAreaInsets()`。键盘遮挡用 `KeyboardAvoidingView` + inset,务必开软键盘实测。
 
 ---

@@ -2296,11 +2296,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   );
   const projectMachineIdentities = useMemo(
     () => buildHomeProjectMachineIdentities(home, {
-      status, getPresenceAvailability, unresponsiveDevices, revokedDevices,
+      getPresenceAvailability, unresponsiveDevices, revokedDevices,
     }),
     // Presence is read through a stable getter; its version/connection epoch must
     // refresh icons even when the page-local device list has not changed.
-    [home, status, getPresenceAvailability, presenceVersion, connectionEpoch, unresponsiveDevices, revokedDevices],
+    [home, getPresenceAvailability, presenceVersion, connectionEpoch, unresponsiveDevices, revokedDevices],
   );
   const runningSessionIds = useMemo(() => {
     const ids = new Set<string>();
@@ -2418,6 +2418,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   });
   const sections = useMemo(() => {
     if (!shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) return homeSections;
+    // SectionList counts section headers/footers even with no rows, suppressing
+    // ListEmptyComponent. Leave the list truly empty while searching or on no hits.
+    if (indexedSearch.results.length === 0) return [];
     return [{
       data: indexedSearch.results.map((item) => ({
         item,
@@ -3392,8 +3395,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
                 padding: windowLayout.emptyPadding,
               }}
             />
-          ) : filteredHome.pinned.length > 0 ? (
+          ) : !shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) && filteredHome.pinned.length > 0 ? (
             // 仅剩置顶且被收起时 item 数为 0,但用户并非"无对话",不显示空状态插画。
+            // 搜索列表的空态只认搜索结果,不能被普通列表里的置顶任务遮掉。
             null
           ) : showRemoteGuide && home.emptyNoDevice ? (
             // 无可控制电脑是「首次使用 / 产品模式说明」级空态:按 reason 渲染远程访问引导
@@ -3507,7 +3511,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       ) : null}
       <View
         onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
-        style={[styles.homeChrome, nativeHomeHeader && { top: nativeHeaderHeight }, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
+        style={[styles.homeChrome, {
+          // Absolute positioning ignores the root's padding. Keep the search and
+          // connection controls inside the same safe edges as the task list.
+          left: embedded ? 0 : edgePadding.paddingLeft,
+          right: embedded ? 0 : edgePadding.paddingRight,
+        }, nativeHomeHeader && { top: nativeHeaderHeight }, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
       >
         <HomeChromeFrost disabled={nativeHomeHeader} visible={headerFrosted}>
         <View style={{ paddingTop: nativeHomeHeader ? 0 : embedded ? spacing.lg : edgePadding.paddingTop }}>

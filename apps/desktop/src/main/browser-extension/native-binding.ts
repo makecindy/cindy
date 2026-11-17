@@ -290,14 +290,23 @@ $values = @(foreach ($key in $keys) {
           return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'NATIVE_HOST_IN_USE' };
         options.assertCurrent?.();
       }
+      const source = path.join(options.binaryDir, platform + '-' + arch, binaryName);
+      let content: Buffer;
+      try {
+        content = await fs.readFile(source);
+      } catch (error) {
+        // Only the packaged executable being absent is terminal. ENOENT elsewhere may
+        // be a registration race and must retain its transient recovery behavior.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+          return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'NATIVE_BINARY_MISSING' };
+        throw error;
+      }
       await privateDirectory(path.join(root, 'connections'));
       // Claim the connection before touching the shared registration, so a binding closing at the
       // same time (plugin update, re-approval, account switch) still sees this one in use.
       config = path.join(root, 'connections', port + '.json');
       await atomic(config, JSON.stringify({ token, extensionIds: [...extensionIds] }));
-      const source = path.join(options.binaryDir, platform + '-' + arch, binaryName);
       // 内容相同时不替换正在运行的 Windows 映像。
-      const content = await fs.readFile(source);
       const old = await fs.readFile(binary).catch(() => null);
       if (!old?.equals(content)) await atomic(binary, content, 0o700);
       const manifest = {
@@ -356,13 +365,13 @@ $values = @(foreach ($key in $keys) {
   async function install(port: number, extensionIds: readonly string[], request?: { takeover?: boolean }) {
     try {
       await privateDirectory(registrationRoot);
-      return await withSecurityBoundaryLock(path.join(registrationRoot, options.hostName + '.lock'),
+      const result = await withSecurityBoundaryLock(path.join(registrationRoot, options.hostName + '.lock'),
       { label: 'browser-native-registration' }, async lock => {
         if (!lock.held) return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'REGISTRATION_BUSY' };
-        const result = await installLocked(port, extensionIds, request?.takeover === true);
-        if (!result.ok) state = 'unavailable';
-        return result;
+        return installLocked(port, extensionIds, request?.takeover === true);
       });
+      if (!result.ok) state = 'unavailable';
+      return result;
     } catch (error) {
       state = 'unavailable';
       return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const,

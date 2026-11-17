@@ -30,6 +30,8 @@ export type AutoReviewDecision = {
    * 是这次请求没法审，属于正常判定。
    */
   unavailable?: boolean;
+  /** Safe Host diagnostic; model decision parsers never accept this field. */
+  unavailableReason?: 'no_available_model';
 };
 
 /**
@@ -38,6 +40,11 @@ export type AutoReviewDecision = {
  * （见 apps/desktop 的 chat.remoteError.*），不新增协议、不新增事件类型。
  */
 export const AUTO_REVIEW_UNAVAILABLE_CODE = 'AUTO_REVIEW_UNAVAILABLE';
+export const AUTO_REVIEW_NO_AVAILABLE_MODEL_CODE = 'AUTO_REVIEW_NO_AVAILABLE_MODEL';
+const AUTO_REVIEW_NO_AVAILABLE_MODEL_TEXT =
+  'No automatic review model is available. On the computer running the Agent, '
+  + 'enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. '
+  + 'Actions that need review still require your confirmation.';
 
 /**
  * 未落地 i18n 的宿主看到的兜底英文。三条 Harness 共用这一句。少打断只能指向
@@ -62,7 +69,12 @@ const AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT =
  */
 export function isAutoReviewUnavailableNotice(message: unknown): boolean {
   return typeof message === 'string'
-    && message.startsWith(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`);
+    && (message.startsWith(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`)
+      || isAutoReviewNoAvailableModelNotice(message));
+}
+
+export function isAutoReviewNoAvailableModelNotice(message: unknown): boolean {
+  return typeof message === 'string' && message.startsWith(`[${AUTO_REVIEW_NO_AVAILABLE_MODEL_CODE}]`);
 }
 
 /**
@@ -74,13 +86,15 @@ export function isAutoReviewUnavailableNotice(message: unknown): boolean {
  */
 export function createAutoReviewUnavailableNotice(
   emit: (message: string) => void,
-): { notify(): void; reset(): void } {
+): { notify(decision?: AutoReviewDecision): void; reset(): void } {
   let sent = false;
   return {
-    notify(): void {
+    notify(decision): void {
       if (sent) return;
       sent = true;
-      emit(`[${AUTO_REVIEW_UNAVAILABLE_CODE}] ${AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT}`);
+      emit(decision?.unavailable === true && decision.unavailableReason === 'no_available_model'
+        ? `[${AUTO_REVIEW_NO_AVAILABLE_MODEL_CODE}] ${AUTO_REVIEW_NO_AVAILABLE_MODEL_TEXT}`
+        : `[${AUTO_REVIEW_UNAVAILABLE_CODE}] ${AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT}`);
     },
     reset(): void {
       sent = false;
@@ -581,6 +595,13 @@ export async function resolveAutoReviewDecision(
         || decision?.verdict === 'ask'
       )
     ) {
+      if (decision.verdict === 'ask' && decision.unavailable === true
+        && decision.unavailableReason === 'no_available_model') {
+        return {
+          verdict: 'ask', unavailable: true, unavailableReason: 'no_available_model',
+          reason: AUTO_REVIEW_NO_AVAILABLE_MODEL_TEXT,
+        };
+      }
       // Delegate 是运行期边界：即便当前 host 实现已做解析，未来实现也不能把
       // 非字符串或无上限 reason 原样塞进日志、UI 或下一轮模型上下文。
       const reason = typeof decision.reason === 'string'
