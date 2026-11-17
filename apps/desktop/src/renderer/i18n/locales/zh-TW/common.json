@@ -14868,7 +14868,7 @@
       "credentialSwitchBusy": "Codex 正在其他任務中執行，暫時無法按本任務選擇的模型來源切換（需要重啟共享的 Codex 背景處理程序）。等它結束後點「重試」即可。",
       "accountBoundaryPending": "Cindy 正在切換帳號狀態，暫時無法開始這個任務。稍等片刻後點「重試」；如果一直出現，請重新啟動 Cindy。",
       "codexThreadStale": "Codex 驗證模式已切換，目前任務無法繼續 —— 請新建任務以套用。",
-      "codexSharedAuthLinkUnavailable": "本機的 Codex 已經登入，但這個任務讀不到那份登入：Windows 一般權限下無法建立指向它的連結。請以系統管理員身分執行一次 {{appName}}，或開啟 Windows 開發人員模式，然後點「重試」。",
+      "codexSharedAuthLinkUnavailable": "本機的 Codex 已經登入，但這個任務讀不到那份登入：Windows 一般權限下無法建立指向它的連結。請以系統管理員身分執行一次 {{appName}}，或開啟 Windows 開發人員模式，然後點「重試」。也可以到「模型供應商」重新連接 ChatGPT 帳號，連接後這個任務就能讀到那份登入。",
       "codexResumeNotReady": "Codex 暫時無法恢復這個任務，請稍後重試",
       "claudeGatewayOpusPlanMismatch": "這次 Opus 請求實際走的是 XD Gateway，不是你的 Claude.ai 訂閱；該閘道器路由拒絕了此模型。可切換到 Claude.ai 訂閱後重試，或換一個模型。",
       "claudeSubscriptionOpusPlanMismatch": "目前連線的 Claude Pro 方案不支援 Opus。請切換到方案支援的模型；如果剛升級方案，請在設定中重新連線 Anthropic 後重試。",

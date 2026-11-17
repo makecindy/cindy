@@ -428,7 +428,9 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     const error =
       'LAZY_CREATE_FAILED: codex not authenticated: codex_shared_auth_link_unavailable';
     render(
-      <ErrorBanner error={error} retryText="retry this turn" onRetry={vi.fn()} agentKind="codex" />,
+      <MemoryRouter>
+        <ErrorBanner error={error} retryText="retry this turn" onRetry={vi.fn()} agentKind="codex" />
+      </MemoryRouter>,
     );
 
     expect(screen.getByText('chat.errorBanner.codexSharedAuthLinkUnavailable')).toBeTruthy();
@@ -436,6 +438,9 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText(error)).toBeNull();
     // 权限补齐后下一次 reconcile 就能建出链接,所以 Retry 必须留着。
     expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+    // #10301 行动项 2:独立登录这条既有流程早就走得通,断的只是入口 —— 失败表面上必须
+    // 有一条路把用户带到设置里的「连接」,否则用户只能自己在设置里翻。
+    expect(screen.getByRole('button', { name: 'logic.confirm.goToSettings' })).toBeTruthy();
   });
 
   // 同一条链路上的其它鉴权原因不归这里管:误报会让「真的没登录」的用户去改 Windows 权限。
@@ -451,6 +456,8 @@ describe('ErrorBanner OpenAI connection recovery', () => {
 
     expect(screen.queryByText('chat.errorBanner.codexSharedAuthLinkUnavailable')).toBeNull();
     expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    // 普通未登录不该被指去改 Windows 权限,也不该被指去重新连接(那是另一条流程的入口)。
+    expect(screen.queryByRole('button', { name: 'logic.confirm.goToSettings' })).toBeNull();
   });
 
   it('replaces an unsettled account boundary error with retry guidance', () => {

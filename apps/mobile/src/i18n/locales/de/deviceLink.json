@@ -65,7 +65,7 @@
     "noCredentials": "{{agent}} kann nicht verwendet werden, da auf dem Computer keine Anmeldung vorliegt. Melde dich in {{appName}} auf dem Computer unter Einstellungen → Modellanbieter an und versuch es erneut.",
     "noEncryption": "{{agent}} kann nicht verwendet werden, da der sichere Systemspeicher auf dem Computer nicht verfügbar ist. Prüfe die Schlüsselbundverwaltung unter macOS oder die Kontoverschlüsselung unter Windows und starte {{appName}} auf dem Computer neu.",
     "proxyNotReady": "{{agent}} ist auf dem Computer noch nicht bereit. Versuch es gleich erneut. Falls das Problem weiterhin besteht, starte {{appName}} auf dem Computer neu.",
-    "sharedLinkUnavailable": "{{agent}} kann momentan nicht verwendet werden: Codex ist auf dem Computer angemeldet, aber {{appName}} kann diese Anmeldung nicht erreichen (Windows erstellt die Verknüpfung unter einem Standardkonto nicht). Führe {{appName}} auf dem Computer einmal als Administrator aus oder aktiviere den Windows-Entwicklermodus und versuch es erneut.",
+    "sharedLinkUnavailable": "{{agent}} kann momentan nicht verwendet werden: Codex ist auf dem Computer angemeldet, aber {{appName}} kann diese Anmeldung nicht erreichen (Windows erstellt die Verknüpfung unter einem Standardkonto nicht). Führe {{appName}} auf dem Computer einmal als Administrator aus oder aktiviere den Windows-Entwicklermodus und versuch es erneut. Du kannst dein ChatGPT-Konto auch unter Einstellungen → Modellanbieter auf dem Computer neu verbinden.",
     "default": "{{agent}} kann nicht verwendet werden, da die Anmeldung auf dem Computer nicht verfügbar ist. Melde dich auf dem Computer in {{appName}} unter Einstellungen → Modellanbieter erneut an. ({{reason}})"
   },
   "remoteError": {

@@ -561,6 +561,8 @@ export function ErrorBanner({
   } else if (isCodexSharedAuthLinkUnavailable) {
     // 保留 Retry:权限补齐(管理员一次 / 开发者模式)后,下一次 reconcile 就能建出链接,
     // 重试是这条文案承诺的动作里唯一能立刻生效的那个。
+    // 同时给「去设置里重新连接」这个入口(#10301 行动项 2):主侧的独立登录流程早就走得通
+    // —— 断的只是入口,失败表面上没有任何东西把用户带到那里,用户只能自己在设置里翻。
     displayError = t('chat.errorBanner.codexSharedAuthLinkUnavailable');
   } else if (showInvalidEncryptedContentRecovery) {
     displayError = t('chat.errorBanner.invalidEncryptedContent');
@@ -877,6 +879,13 @@ export function ErrorBanner({
             </Button>
           )}
           {isCodexLocalOAuthAuthMissing && !isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError && (
+            <OpenAiConnectionSettingsAction providerId={authProviderId ?? 'openai'} />
+          )}
+          {/* #10301 行动项 2:共享凭证连不上时,第二条恢复路线是「到模型供应商里重新连接」。
+              落在那张卡上时 useCodexAuth 判定为未连接,「连接」走的是 mode:'local' 的独立登录
+              (auth-adapters 的 localLogin 块),凭证写进 Cindy 自己的 codex-home —— 正是这个
+              任务读的那个目录。不给这个入口,用户从失败横幅到设置里的连接按钮之间没有任何指引。 */}
+          {isCodexSharedAuthLinkUnavailable && (
             <OpenAiConnectionSettingsAction providerId={authProviderId ?? 'openai'} />
           )}
           {isClaudeGatewayOpusPlanMismatch && onSwitchToClaudeSubscription && (
