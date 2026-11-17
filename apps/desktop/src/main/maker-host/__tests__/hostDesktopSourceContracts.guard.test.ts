@@ -919,10 +919,13 @@ describe('Host macOS system proxy rules', () => {
  * exported empty containers that another file in the graph mutates.
  * Failure: a new setter (or a newly loaded module with one) that the table does not classify, or a table
  * entry whose setter is gone, turns this red until the table is updated. A `bound` entry must bind it in
- * the Host file it names (bindsIn: a call, a container mutation, or the setter handed over as a value).
+ * the Host file it names (bindsIn: a call, a container mutation, or the setter handed over as a value);
+ * `where: '<file>#<function>'` narrows that to one function of the file, for a file that binds the same
+ * setter more than once (skill-projection-owner.ts: serve refuses, `cindy-host login` allows).
  * Not seen: slots that start as some other value (an object, a number); setters not named this way;
- * closure state of factories; modules loaded at run time through createRequire; and, for a setter handed
- * over as a port value, whether the receiving code really calls it.
+ * closure state of factories; modules loaded at run time through createRequire; for a setter handed
+ * over as a port value, whether the receiving code really calls it; and, for `<file>#<function>`,
+ * whether the Host calls that function.
  */
 describe('module-level port setters the Host loads, classified for the Host', () => {
   const tableFile = path.join(hostSrc, 'desktop-module-setters.ts');
@@ -1008,9 +1011,16 @@ describe('module-level port setters the Host loads, classified for the Host', ()
 
   /** Whether a Host file binds `name`: calls it (`name(…)`, `x.name(…)`), mutates the container
    * (`name.set(…)`, …), or hands it over as a port value (a call argument or an object property).
-   * A call that only passes null or undefined (the teardown `setX(null)`) does not bind. */
-  function bindsIn(file: string, name: string): boolean {
-    const sf = ts.createSourceFile(file, read(path.join(repo, file)), ts.ScriptTarget.Latest, true);
+   * A call that only passes null or undefined (the teardown `setX(null)`) does not bind. With `inFunction`,
+   * only that function of the file (a declaration or a const initialised to a function) counts. */
+  function bindsIn(file: string, name: string, inFunction?: string): boolean {
+    const source = ts.createSourceFile(file, read(path.join(repo, file)), ts.ScriptTarget.Latest, true);
+    const named = (n: ts.Node): ts.Node | undefined =>
+      (ts.isFunctionDeclaration(n) && n.name?.text === inFunction)
+      || (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === inFunction && n.initializer)
+        ? n : ts.forEachChild(n, named);
+    const sf = inFunction ? named(source) : source;
+    if (!sf) return false;
     const isName = (n: ts.Node) => (ts.isIdentifier(n) && n.text === name) || (ts.isPropertyAccessExpression(n) && n.name.text === name);
     const isNullish = (n: ts.Node) => n.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(n) && n.text === 'undefined');
     let binds = false;
@@ -1077,11 +1087,14 @@ describe('module-level port setters the Host loads, classified for the Host', ()
       if (entry.status === 'bound') {
         // The Host file named must really bind it: a mention in a comment, string, type or import does not count.
         expect(entry.where, key).toMatch(/^apps\/host\//);
-        expect(bindsIn(entry.where!, key.split('#')[1]), `${key} not bound in ${entry.where}`).toBe(true);
+        const [whereFile, whereFunction] = entry.where!.split('#');
+        expect(bindsIn(whereFile, key.split('#')[1], whereFunction), `${key} not bound in ${entry.where}`).toBe(true);
       } else {
         expect(entry.reason?.trim(), key).toBeTruthy();
         // Release table file lines drift with every edit; point at row ids, 甲/乙 gaps or section names.
         expect(entry.reason, key).not.toMatch(/release table[^)]*\bline\s*\d/);
+        // Source line numbers drift too: name the file (and function), not `file.ts:12`.
+        expect(entry.reason, key).not.toMatch(/\.(ts|tsx|mts|cts|js|mjs|cjs):\d/);
         if (entry.status === 'pending') expect(entry.reason, key).toMatch(/\brow \w+|[甲乙]/);
       }
     }
