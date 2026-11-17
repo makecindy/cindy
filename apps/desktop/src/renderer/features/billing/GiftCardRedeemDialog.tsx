@@ -63,6 +63,9 @@ export function GiftCardRedeemDialog({
   const holdOpenRef = useRef(false);
   // 关闭或重开后，先前请求的结果不再写回。
   const requestRef = useRef(0);
+  // 领取请求在途时不换卡：此时又点开另一张礼品卡链接，若照常重置，这次领取的结果会被
+  // 丢掉，到账提示和余额刷新都不会发生。与手机端一致，新链接在这期间不接手弹窗。
+  const redeemingRef = useRef<number | null>(null);
 
   const preview = useCallback(async (input: string) => {
     const code = giftCardCodeFromInput(input);
@@ -95,6 +98,8 @@ export function GiftCardRedeemDialog({
   }, []);
 
   useEffect(() => {
+    if (open && redeemingRef.current !== null) return;
+    redeemingRef.current = null;
     requestRef.current += 1;
     holdOpenRef.current = false;
     setBusy(false);
@@ -111,6 +116,7 @@ export function GiftCardRedeemDialog({
 
   const redeem = async (code: string, card: BillingGiftCard) => {
     const request = ++requestRef.current;
+    redeemingRef.current = request;
     setBusy(true);
     setFailure(null);
     try {
@@ -131,6 +137,7 @@ export function GiftCardRedeemDialog({
         setFailure({ reason: 'FAILED', code });
       }
     } finally {
+      if (redeemingRef.current === request) redeemingRef.current = null;
       if (request === requestRef.current) setBusy(false);
     }
   };

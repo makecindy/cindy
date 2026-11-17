@@ -153,4 +153,32 @@ describe('GiftCardRedeemDialog', () => {
     await screen.findByText('billing.giftCard.pendingTitle');
     await waitFor(() => expect(onRedeemed).toHaveBeenCalledOnce());
   });
+
+  // 评审发现（PR #10964）：领取请求在途时打开另一张礼品卡链接会重置弹窗，第一张卡的成功
+  // 回包被忽略，到账提示和余额刷新都不出现。
+  it('keeps the card being redeemed when another gift link arrives mid-request', async () => {
+    api.previewGiftCard.mockResolvedValue({ ok: true, card });
+    let finish!: (value: unknown) => void;
+    api.redeemGiftCard.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const onRedeemed = vi.fn();
+    const dialog = (code: string) => (
+      <GiftCardRedeemDialog open initialCode={code} onClose={vi.fn()} onRedeemed={onRedeemed} />
+    );
+    const view = render(dialog(CODE));
+
+    await screen.findByText('billing.giftCard.confirmTitle');
+    click('billing.giftCard.confirmAction');
+    await waitFor(() => expect(api.redeemGiftCard).toHaveBeenCalledWith(CODE));
+    view.rerender(dialog('G0123456789ABCDF'));
+    finish({
+      ok: true,
+      card: { ...card, status: 'CLAIMED_BY_YOU' },
+      credit: { state: 'APPLIED', amount: '20', expiresAt: '2027-02-14T16:00:00.000Z' },
+    });
+
+    await waitFor(() => expect(onRedeemed).toHaveBeenCalledOnce());
+    // 新链接没有接手弹窗：只查询过正在领取的那张卡。
+    expect(api.previewGiftCard).toHaveBeenCalledTimes(1);
+    expect(api.previewGiftCard).toHaveBeenCalledWith(CODE);
+  });
 });
