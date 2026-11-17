@@ -9,6 +9,7 @@ import { _clearRemotePathVerdictCache } from '@/lib/remoteFileOpen';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { openHtmlFileByPreference } from '../messageLinkActions';
 import type { SessionFileOrigin } from '@/lib/sessionFileOrigin';
+import { resolveRemoteHomePath } from '@/hooks/useRemoteHomePath';
 
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'home-path-test' } }) }));
 vi.mock('react-i18next', async (original) => ({
@@ -67,6 +68,29 @@ afterEach(() => {
 });
 
 describe('remote home references', () => {
+  it('keeps newly mounted duplicates recoverable when older lookups fill the cache', async () => {
+    // Smallest pressure case: the 500-entry cap is occupied by pending lookups,
+    // then a new mounted reference must remain registered for recovery.
+    let finishOlder!: (value: unknown) => void;
+    const older = new Promise(resolve => { finishOlder = resolve; });
+    invoke.mockImplementation((_device, _channel, [args]) => args.href === href
+      ? Promise.reject(new Error('offline')) : older);
+    const pending = Array.from({ length: 500 }, (_, index) =>
+      resolveRemoteHomePath('remote-a', '/remote/project', `~/pending-${index}.html`));
+    const view = render(reply('`' + href + '` and `' + href + '`'));
+    await act(async () => {});
+    const initialCalls = invoke.mock.calls.filter(([, , [args]]) => args.href === href).length;
+    await act(async () => {
+      finishOlder({ status: 'none', candidates: [] });
+      await Promise.all(pending);
+      invoke.mockResolvedValue({ status: 'unique', candidates: [resolved], kind: 'file' });
+      fireEvent.focus(window);
+    });
+    expect(initialCalls).toBe(1);
+    expect(view.container.querySelectorAll('code[role="button"]')).toHaveLength(2);
+    expect(invoke.mock.calls.filter(([, , [args]]) => args.href === href)).toHaveLength(2);
+  });
+
   it('resolves on the file owner before verifying and lighting duplicate references', async () => {
     const view = render(reply('`' + href + '` and `' + href + '`'));
     await act(async () => {});

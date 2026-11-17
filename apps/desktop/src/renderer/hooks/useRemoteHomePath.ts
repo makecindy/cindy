@@ -43,7 +43,9 @@ function entryFor(deviceId: string, workingDir: string, href: string): Entry {
   if (!entry) {
     entry = { owner, deviceId, workingDir, href, path: null, checkedAt: 0, refreshQueued: false, listeners: new Set() };
     entries.set(key, entry);
-    trimCache();
+    // Render creates entries before React subscribes. Trim only after requests
+    // settle or subscriptions leave, so new mounted entries cannot be evicted
+    // before they acquire their listeners (including duplicates in this render).
   }
   return entry;
 }
