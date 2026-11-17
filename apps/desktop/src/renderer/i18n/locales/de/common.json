@@ -17310,7 +17310,8 @@
           "jira_comment": "In Jira kommentieren",
           "sessions_dispatch": "Sitzungen zuweisen",
           "feishu_read": "Feishu-Nachrichten lesen",
-          "settings_read": "Anbieterstatus lesen"
+          "settings_read": "Freigabemitglieder lesen",
+          "usage_read": "Nutzung und Anbietergruppenstatus lesen"
         },
         "project": "Projektverzeichnis",
         "capabilitiesLabel": "Erlaubte Funktionen",
@@ -17323,7 +17324,8 @@
           "jira_comment": "Kommentare zu Jira-Vorgängen hinzufügen",
           "sessions_dispatch": "{{appName}}-Sitzungen erstellen oder aktivieren und Nachrichten zustellen",
           "feishu_read": "Zuletzt aktive Chats auflisten; aktuelle Nachrichten aus einem Chat abrufen (Gruppe oder Direktnachricht)",
-          "settings_read": "Freigabemitglieder, Nutzung, Anbietergruppen und Abonnementkonten lesen; Einstellungen werden nicht geändert"
+          "settings_read": "Liest Mitglieder deiner Freigaben und deren erlaubte Modelle auf diesem Computer oder anderen autorisierten Computern desselben Kontos; keine Änderungen",
+          "usage_read": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Anbietergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen."
         },
         "capabilityWarn": {
           "ghostMissing": "Erfordert das Plugin „{{name}}“, das nicht installiert ist — diese Funktion wird zur Laufzeit fehlschlagen",

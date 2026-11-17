@@ -17475,7 +17475,8 @@
           "jira_comment": "Commenter dans Jira",
           "sessions_dispatch": "Répartir des sessions",
           "feishu_read": "Lire les messages Feishu",
-          "settings_read": "Lire l’état des fournisseurs"
+          "settings_read": "Lire les membres des partages",
+          "usage_read": "Lire l’utilisation et l’état des groupes de fournisseurs"
         },
         "project": "Répertoire du projet",
         "capabilitiesLabel": "Capacités autorisées",
@@ -17488,7 +17489,8 @@
           "jira_comment": "Ajouter des commentaires aux issues Jira",
           "sessions_dispatch": "Créer ou réveiller des sessions {{appName}} et leur transmettre des messages",
           "feishu_read": "Lister les conversations récemment actives ; récupérer les messages récents d'une conversation (groupe ou message privé)",
-          "settings_read": "Lire les membres des partages, l’utilisation, les groupes de fournisseurs et les comptes d’abonnement ; ne modifie pas les réglages"
+          "settings_read": "Lire les membres de vos partages et leurs modèles autorisés sur cet ordinateur ou d’autres ordinateurs autorisés du même compte ; aucune modification",
+          "usage_read": "Lire les identifiants, offres, périodes de quota et dates de mise à jour des comptes Claude/Codex locaux connectés à votre compte Cindy. Lire l’utilisation enregistrée par jour et par modèle, les coûts estimés, la configuration et l’état des groupes de fournisseurs, ainsi que les identifiants, noms et avatars visibles des membres et appareils sur cet ordinateur ou d’autres ordinateurs autorisés du même compte. Ne permet pas de lire les adresses e-mail de connexion aux abonnements, les dossiers de comptes, les empreintes d’identité internes, les identifiants de connexion ou les fichiers, ni de modifier les comptes ou réglages."
         },
         "capabilityWarn": {
           "ghostMissing": "Nécessite le plugin « {{name}} », qui n'est pas installé : cette capacité échouera à l'exécution",

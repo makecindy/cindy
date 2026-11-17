@@ -4,27 +4,29 @@
 
 ## 只跑脚本读取宿主状态
 
-定时任务选择只跑脚本时，沿原 `scriptConfig.capabilities` 声明 `settings.read`。
+定时任务选择只跑脚本时，沿原 `scriptConfig.capabilities` 分别声明 `settings.read` 或 `usage.read`。
 这是定时脚本已有的能力白名单，不替代插件的 `agent.hostTools` 声明。
 脚本通过原 `cindy-script/1` JSONL 的 `call` 帧调用以下方法，参数与同名宿主工具一致：
 
-| 方法 | 允许的参数 |
-| --- | --- |
-| `settings.list_provider_share_members` | `providerId?`、`device?` |
-| `settings.get_provider_share_model_access` | `providerId`、`memberId`、`device?` |
-| `settings.get_provider_usage_history` | `providerId`、`device?` |
-| `settings.get_provider_group` | `providerId`、`device?` |
-| `settings.list_model_providers` | `providerId?`，只读执行电脑 |
-| `settings.configure_model_provider` | 仅 `change:{action:'subscriptionAccounts',providerId,command:{action:'read'}}` |
+| 能力声明 | 方法 | 允许的参数 |
+| --- | --- | --- |
+| `settings.read` | `settings.list_provider_share_members` | `providerId?`、`device?` |
+| `settings.read` | `settings.get_provider_share_model_access` | `providerId`、`memberId`、`device?` |
+| `usage.read` | `usage.get_subscription_usage` | `providerId?`，只读执行电脑 |
+| `usage.read` | `usage.get_provider_usage_history` | `providerId`、`device?` |
+| `usage.read` | `usage.get_provider_group` | `providerId`、`device?` |
 
 先调用免授权的 `host.capabilities` 查询方法及 `available`，再处理原 `call_result` 帧。
 成功帧的 `result` 是同一宿主处理器的业务结果，不额外套 MCP `content`，不重新聚合或估算。
-`settings.read` 不允许成员暂停／恢复、模型修改、账号登录、配置或其它相邻写操作；
+两种读取声明均不允许成员暂停／恢复、模型修改、账号登录、配置或其它相邻写操作；
+原始供应商目录与 `subscriptionAccounts/read` 不在脚本白名单内。
 伪造调用方身份参数被拒绝。没有服务装配时返回 `UNSUPPORTED_CAPABILITY`；旧 Host 没有方法时
 返回 `METHOD_NOT_FOUND`。异机失败不退回本机，也不自动改用模型执行。
 
 读取不启动 Agent，不消耗模型 token；原读取自身的本地、CLI 或网络成本仍存在。
-数据范围、账号切换守卫、完整性标记及下文列出的身份／目录字段沿原能力保留；不含密钥。
+额度沿用下文 `get_subscription_usage` 的本机白名单投影，保留已知 `plan.type` / `plan.tier` 套餐字段；
+用量和组状态保留原完整性标记与可见的成员／设备信息，组自动名称沿原投影去订阅身份。
+不返回订阅登录邮箱、账号目录、内部身份指纹或凭证；账号切换和异机旧端行为沿同一宿主处理器。
 额度分配、费用、停止线、到线暂停、定时恢复、看板和提醒由插件决定，宿主不增加这些策略。
 
 ## 声明与批准

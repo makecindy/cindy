@@ -18,7 +18,7 @@ export default {
     'src/renderer/features/scheduler/components/TemplateGallery': 'export const TemplateGallery = () => null;',
     'src/renderer/features/scheduler/components/ScheduleChips': `import React from 'react'; const chip = label => React.createElement('button', {type: 'button', style: {height: 34}}, label); export const ProjectChip = () => chip('对话'); export const ModelEffortChip = () => chip('Codex'); export const ScheduleChip = () => chip('09:00'); export const ScheduleSettingsButton = () => null; export const ThreadPickerInline = () => null;`,
   },
-  cases: { 'script-settings': { about: '现有脚本能力选择器显示只读供应商状态及完整说明' },
+  cases: { 'script-settings': { about: '现有脚本能力选择器分别显示成员与用量读取及完整范围说明' },
     default: { about: 'Webhook → 手动 → 定时 → Webhook，弹窗及触发选择器不跳动' },
     create: { about: '新建表单使用相同的稳定切换布局' },
     scrolled: { about: '小窗口滚动后切换触发方式，配置区收起不拉回滚动位置', viewport: { width: 780, height: 620 } },
@@ -43,6 +43,8 @@ export default {
       await trigger.click();
       await page.getByText(await ui.t('scheduler.editor.script.capabilityDescs.settings_read'), { exact: true }).scrollIntoViewIfNeeded();
       await ui.capture('settings-read');
+      await page.getByText(await ui.t('scheduler.editor.script.capabilityDescs.usage_read'), { exact: true }).scrollIntoViewIfNeeded();
+      await ui.capture('usage-read');
       return;
     }
     // Issue #10224: the compact field still shows the original three lines; a long

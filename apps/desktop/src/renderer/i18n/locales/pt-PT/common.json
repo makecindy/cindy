@@ -17475,7 +17475,8 @@
           "jira_comment": "Comentar no Jira",
           "sessions_dispatch": "Encaminhar sessões",
           "feishu_read": "Ler mensagens do Feishu",
-          "settings_read": "Ler o estado dos fornecedores"
+          "settings_read": "Ler membros das partilhas",
+          "usage_read": "Ler a utilização e o estado dos grupos de fornecedores"
         },
         "project": "Diretório do projeto",
         "capabilitiesLabel": "Capacidades permitidas",
@@ -17488,7 +17489,8 @@
           "jira_comment": "Adicionar comentários a issues do Jira",
           "sessions_dispatch": "Criar ou reativar sessões de {{appName}} e entregar mensagens",
           "feishu_read": "Listar conversas com atividade recente; obter mensagens recentes de uma conversa (grupo ou mensagem direta)",
-          "settings_read": "Ler membros das partilhas, utilização, grupos de fornecedores e contas de subscrição; não altera as definições"
+          "settings_read": "Lê os membros das tuas partilhas e os modelos permitidos neste computador ou noutros computadores autorizados da mesma conta; não faz alterações",
+          "usage_read": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições."
         },
         "capabilityWarn": {
           "ghostMissing": "Requer o plugin \"{{name}}\", que não está instalado — esta capacidade irá falhar durante a execução",

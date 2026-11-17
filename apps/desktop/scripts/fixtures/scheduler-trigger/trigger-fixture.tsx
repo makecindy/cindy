@@ -27,7 +27,7 @@ void mountPage({
   } } },
   render: () => <ScheduleFormDialog open
     initial={ctx.case === 'script-settings' ? { ...schedule, webhookTrigger: undefined, executionMode: 'script',
-      scriptConfig: { command: 'node read-status.mjs', capabilities: ['settings.read'] } }
+      scriptConfig: { command: 'node read-status.mjs', capabilities: ['settings.read', 'usage.read'] } }
       : ctx.case === 'create' ? null
       : ctx.case === 'long-prompt' || ctx.case === 'expanded' ? { ...schedule, prompt: longPrompt } : schedule}
     initialValues={ctx.case === 'create' ? { webhookEnabled: true } : undefined}

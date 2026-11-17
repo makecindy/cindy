@@ -17236,7 +17236,8 @@
           "jira_comment": "評 Jira",
           "sessions_dispatch": "派差事",
           "feishu_read": "讀飛書之訊",
-          "settings_read": "讀供方之況"
+          "settings_read": "讀分享成員",
+          "usage_read": "查用量及供應商組狀態"
         },
         "project": "案之目錄",
         "capabilitiesLabel": "許呼之能",
@@ -17249,7 +17250,8 @@
           "jira_comment": "於 Jira 單增評",
           "sessions_dispatch": "立或喚 {{appName}} 差事，並遞訊",
           "feishu_read": "列近日活躍之言談；取指定言談（群/單聊）之近訊",
-          "settings_read": "讀分享成員、用量、供方組與訂閱帳號；不改規制"
+          "settings_read": "讀己所分享成員及其可用模型，含同帳號已授權他機；不改設定",
+          "usage_read": "可查現用 Cindy 帳號於此機所接 Claude/Codex 之帳號標識、方案、配額時段及更新時間，亦可查此機及同帳號已授權他機所記每日、型號用量、估算費用、供應商組配置與狀態，及可見成員、設備之標識、名稱與頭像。不得取訂閱登入郵址、帳號目錄、內部指紋、憑證或檔案，亦不得改帳號或設定"
         },
         "capabilityWarn": {
           "ghostMissing": "依「{{name}}」法器，今未納——差事行時此能必敗",

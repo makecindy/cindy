@@ -17236,7 +17236,8 @@
           "jira_comment": "Jira 댓글 작성",
           "sessions_dispatch": "세션 디스패치",
           "feishu_read": "Feishu 메시지 읽기",
-          "settings_read": "제공자 상태 읽기"
+          "settings_read": "공유 멤버 읽기",
+          "usage_read": "사용량 및 제공자 그룹 상태 읽기"
         },
         "project": "프로젝트 디렉터리",
         "capabilitiesLabel": "허용할 기능",
@@ -17249,7 +17250,8 @@
           "jira_comment": "Jira 이슈에 댓글 추가",
           "sessions_dispatch": "{{appName}} 세션 생성·재개 및 메시지 전달",
           "feishu_read": "최근 활성 채팅 목록 조회; 지정한 채팅(그룹/DM)의 최근 메시지 가져오기",
-          "settings_read": "공유 멤버, 사용량, 제공자 그룹 및 구독 계정 조회; 설정은 변경하지 않음"
+          "settings_read": "이 컴퓨터 또는 같은 계정에서 허용된 다른 컴퓨터에서 내가 공유한 멤버와 사용 가능한 모델을 읽습니다. 변경하지 않습니다.",
+          "usage_read": "현재 Cindy 계정에 연결된 이 컴퓨터의 Claude/Codex 계정 ID, 요금제, 할당량 기간과 업데이트 시간을 읽습니다. 이 컴퓨터와 같은 계정에서 허용된 다른 컴퓨터에 기록된 일별·모델별 사용량, 예상 비용, 제공자 그룹 설정과 상태, 볼 수 있는 구성원·기기의 ID, 이름과 아바타도 읽습니다. 구독 로그인 이메일, 계정 디렉터리, 내부 지문, 인증 정보나 파일은 읽을 수 없으며 계정이나 설정도 변경할 수 없습니다."
         },
         "capabilityWarn": {
           "ghostMissing": "\"{{name}}\" 플러그인이 필요하지만 설치되어 있지 않습니다 — 실행 시 이 기능은 실패합니다",
