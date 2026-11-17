@@ -153,6 +153,9 @@ export const sessions = sqliteTable(
     status: text('status', { enum: ['active', 'archived', 'deleted'] })
       .notNull()
       .default('active'),
+    archiveRevision: integer('archive_revision').notNull().default(0),
+    archiveInstance: text('archive_instance').notNull().default(''),
+    remoteRestoredAt: integer('remote_restored_at'),
     sdkSessionId: text('sdk_session_id'),
     totalTokenUsage: integer('total_token_usage').notNull().default(0),
     totalCostUsd: real('total_cost_usd').notNull().default(0),
@@ -1925,6 +1928,20 @@ export const dailySpend = sqliteTable(
     pk: primaryKey({ columns: [t.day, t.costCurrency] }),
   }),
 );
+
+/** Durable same-account Device Link results for ordinary session archive commands. */
+export const sessionArchiveReceipts = sqliteTable('session_archive_receipts', {
+  controllerId: text('controller_id').notNull(),
+  operationId: text('operation_id').notNull(),
+  sessionId: text('session_id').notNull(),
+  instance: text('session_instance').notNull(),
+  expectedRevision: integer('expected_revision').notNull(),
+  revision: integer('revision').notNull(),
+  archived: integer('archived', { mode: 'boolean' }).notNull(),
+}, t => ({
+  pk: primaryKey({ columns: [t.controllerId, t.operationId] }),
+  session: index('session_archive_receipts_session_idx').on(t.sessionId, t.instance),
+}));
 
 /** Immutable request receipts; insertion and aggregate increments share one transaction. */
 export const piUsageReceipts = sqliteTable('pi_usage_receipts', {

@@ -16873,6 +16873,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   claudeIdleReleaseWatcher.start();
   configureTaskArchiveRuntime({
     pending: hasPendingIdleReleaseInput,
+    hasArchiveBlockingWork: async id => {
+      const session = maker.getSession(id);
+      if (!session) return false;
+      if (await session.hasLiveBackgroundWork() || maker.getSession(id) !== session) return true;
+      if (session.getStatus() === 'closed') return false;
+      return session.getStatus() !== 'active' || session.hasPendingHostOperation()
+        || session.countPendingWakeContinuations() > 0
+        || (session.manageAsyncUserQuestions({ action: 'list' }).questions?.length ?? 0) > 0;
+    },
     waiting: id => hasPendingAgentInteractionForSession(id)
       || inputCoordinator.hasPendingQueuedWork(id)
       || inputCoordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true })

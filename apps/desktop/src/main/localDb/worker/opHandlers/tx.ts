@@ -1,6 +1,7 @@
 import { deleteDeletedSessionViewStates, saveMcpAppViewState } from './mcpAppViewState.js';
 import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
+import { setRemoteSessionArchive } from './sessionArchiveTx.js';
 import { runPluginUsageTransaction } from './pluginUsageTx.js';
 import { runSessionImportTransaction } from './sessionImportTx.js';
 import { runTaskTagsTransaction } from './taskTagsTx.js';
@@ -8,7 +9,7 @@ import { recordMediaSpend } from './mediaSpendTx.js';
 import { recordPiUsage } from './piUsageTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
-import { IDLE_ARCHIVE_GUARD_SQL } from '../../../task-management/eligibility.js';
+import { IDLE_ARCHIVE_GUARD_SQL, REMOTE_ARCHIVE_GUARD_SQL } from '../../../task-management/eligibility.js';
 import { botProfileModelSelectionChanged } from '../../../../shared/botModelChain.js';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion.js';
 import { parseScheduledModelBaseline } from '../../../../shared/scheduledModelBaseline.js';
@@ -118,6 +119,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return sessionsRenameTitles(db, txArgs);
     case 'sessions.setStatus':
       return sessionsSetStatus(db, txArgs);
+    case 'sessions.setRemoteArchive':
+      return setRemoteSessionArchive(db, txArgs as import('../../client/tx/types.js').SessionsSetRemoteArchiveArgs, REMOTE_ARCHIVE_GUARD_SQL);
     case 'sessions.setTerminalStatus':
       return sessionsSetTerminalStatus(db, txArgs);
     case 'recentWorkdirs.mergeWindowsIdentity':

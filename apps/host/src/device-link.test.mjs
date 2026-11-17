@@ -174,6 +174,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(neighbor.result.id, 'task');
   const forbidden = await clients[2].invoke('host', { channel: 'host:execute-arbitrary', args: [] }).catch(error => ({ denied: error }));
   assert.ok(forbidden.denied || forbidden.ok === false);
+  for (const channel of ['local-db:sessions:archive:get', 'local-db:sessions:archive:apply']) {
+    const reply = await clients[2].invoke('host', { channel, args: ['task'] })
+      .catch(error => ({ error }));
+    assert.equal(reply.error?.code, 'CHANNEL_NOT_ALLOWED');
+  }
   await host.setEnabled(false);
   assert.equal(host.state().status, 'stopped');
   assert.equal(host.state().controllers.length, 0);

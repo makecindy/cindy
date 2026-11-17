@@ -2152,6 +2152,23 @@ export async function restoreArchivedSessionForSend(
   await restoreArchivedTaskForSend(sessionId, options, { patchSessionMetaInDb, captureOwnerScope, isOwnerScopeCurrent });
 }
 
+/** The worker has already committed an ordinary session status and its receipt. */
+export function publishRemoteArchiveStatus(
+  dbClient: DbClient,
+  sessionId: string,
+  status: 'archived' | 'active',
+  workingDir: string | null,
+  ownerScope: OwnerScope,
+): void {
+  if (!isOwnerScopeCurrent(ownerScope)) return;
+  cleanupSessionRuntimeForTerminalStatus(sessionId, status);
+  cleanupSessionTerminalArtifacts(sessionId, status);
+  notifyAgentIslandSessionPatch(sessionId, { status, workingDir });
+  broadcastSessionPatched(sessionId, { status }, ownerScope);
+  notifyGhostSessionStatusChange(sessionId, status, workingDir);
+  compactTerminalSessionToolResults(dbClient, sessionId, status);
+}
+
 export async function patchSessionMetaInDb(
   sessionId: string,
   patch: {

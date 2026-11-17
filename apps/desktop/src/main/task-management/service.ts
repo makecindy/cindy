@@ -6,11 +6,12 @@ import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
 import { setSessionRestoreObserver } from '../localDb/sessionRestoreRetention.js';
 import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import { isProvisionalSession } from '../localDb/provisionalSessions.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import { createLogger } from '../logger.js';
 import { createTaskArchiveEngine } from './engine.js';
 import { createTaskArchiveScheduler } from './scheduler.js';
 import {
-  ARCHIVE_CANDIDATE_SELECT,
+  ARCHIVE_CANDIDATE_WITH_RESTORE_SELECT,
   type ArchiveCandidateRow,
   type ArchiveProtection,
 } from './eligibility.js';
@@ -22,6 +23,7 @@ let runtime: {
   busy(id: string): boolean;
   waiting(id: string): boolean;
   pending(id: string): Promise<boolean>;
+  hasArchiveBlockingWork(id: string): Promise<boolean>;
 } | null = null;
 let platform: {
   canRun(): boolean;
@@ -55,12 +57,12 @@ export const taskArchiveEngine = createTaskArchiveEngine({
   },
   list: (afterId) =>
     getDbClient().query<ArchiveCandidateRow>(
-      `${ARCHIVE_CANDIDATE_SELECT}
+      `${ARCHIVE_CANDIDATE_WITH_RESTORE_SELECT}
     WHERE s.status = 'active' AND s.id > ? ORDER BY s.id LIMIT 128`,
       [afterId],
     ),
   read: (id) =>
-    getDbClient().queryOne<ArchiveCandidateRow>(`${ARCHIVE_CANDIDATE_SELECT} WHERE s.id = ?`, [id]),
+    getDbClient().queryOne<ArchiveCandidateRow>(`${ARCHIVE_CANDIDATE_WITH_RESTORE_SELECT} WHERE s.id = ?`, [id]),
   protection: () => (runtime && platform ? platform.protection() : unavailable),
   busy: (id) => isProvisionalSession(id) || !runtime || runtime.busy(id),
   waiting: (id) => runtime?.waiting(id) ?? false,
@@ -150,4 +152,14 @@ export function configureTaskArchiveRuntime(next: typeof runtime): void {
   runtime = next;
   taskArchiveEngine.invalidate();
   refreshTaskArchiveReadiness();
+}
+
+/** Run inside the maker-owned route lock, immediately before a remote archive write. */
+export async function assertRemoteArchiveRuntimeIdle(id: string): Promise<void> {
+  const current = runtime;
+  if (!current || isProvisionalSession(id) || current.busy(id) || current.waiting(id) ||
+      await current.pending(id) || await current.hasArchiveBlockingWork(id) ||
+      current !== runtime || current.busy(id) || current.waiting(id)) {
+    throwIpcError('PRECONDITION_FAILED', 'Task runtime is busy or unavailable');
+  }
 }

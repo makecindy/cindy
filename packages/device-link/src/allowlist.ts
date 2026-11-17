@@ -78,6 +78,10 @@ export const DL_UNSUBSCRIBE_CHANNEL = 'device-link:unsubscribe';
 export const DL_HISTORY_MESSAGES_CHANNEL = 'local-db:history:messages';
 /** Same-account, linked, read-only history discovery/search. No shared-task or unlinked access. */
 export const DL_HISTORY_QUERY_CHANNEL = 'local-db:history:query';
+/** Same-account task status and durable archive operation receipts. */
+export const DL_SESSION_ARCHIVE_GET_CHANNEL = 'local-db:sessions:archive:get';
+export const DL_SESSION_ARCHIVE_SET_CHANNEL = 'local-db:sessions:archive:apply';
+
 /**
  * 同账号另一台电脑上的任务，把一条消息发给本机的既有任务（Agent 的 send_to_session
  * 传 `deviceId::sessionId`）。只投递到既有任务，不新建；来源由被控端按服务端认证的
@@ -358,6 +362,8 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
   DL_HISTORY_QUERY_CHANNEL,
+  DL_SESSION_ARCHIVE_GET_CHANNEL,
+  DL_SESSION_ARCHIVE_SET_CHANNEL,
   'local-db:messages:list',
   // Read-only visible history and recoverable work ranges; same session authorization as list.
   'local-db:messages:view',

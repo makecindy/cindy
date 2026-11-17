@@ -20,6 +20,14 @@ export function withSessionRouteLock<T>(sessionId: string, task: () => Promise<T
   return routeLock(sessionId, task);
 }
 
+/** Remote mutations must never fall back to an unlocked database write. */
+export function withRequiredSessionRouteLock<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+  if (routeLock === passthroughLock) {
+    return Promise.reject(new Error('[PRECONDITION_FAILED] Task routing is not ready'));
+  }
+  return routeLock(sessionId, task);
+}
+
 /** Acquire a batch in stable order so reversed overlapping batches cannot deadlock. */
 export function withSessionRouteLocks<T>(
   sessionIds: readonly string[],
