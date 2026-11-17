@@ -14,7 +14,7 @@ import { createScheduledModelScope, type ScheduledModelSelection } from '../sche
 
 // Execute the actual picker admission branches (local and agent-device), with
 // everything after admission represented by applyLive. No Electron bootstrap.
-const source = ts.createSourceFile('register.ts', readFileSync(new URL('../register.ts', import.meta.url), 'utf8'),
+let source = ts.createSourceFile('register.ts', readFileSync(new URL('../register.ts', import.meta.url), 'utf8'),
   ts.ScriptTarget.Latest, true);
 const branches: string[] = [];
 const confirmationChecks: string[] = [];
@@ -85,6 +85,11 @@ function visit(node: ts.Node) {
   }
   ts.forEachChild(node, visit);
 }
+visit(source);
+// handleSetModel moved verbatim into sessionRuntimeSelectionApply.ts. Walking it after register.ts
+// collects its branches in the order they had there (everything else stays before its old place).
+source = ts.createSourceFile('sessionRuntimeSelectionApply.ts',
+  readFileSync(new URL('../sessionRuntimeSelectionApply.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
 visit(source);
 const remoteLead = { leadDeviceId: 'lead-device', leadSessionId: 'lead-session', workerLabel: 'worker' };
 const orcaIdentities = [

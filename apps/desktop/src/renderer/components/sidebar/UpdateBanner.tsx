@@ -29,8 +29,8 @@ import { Button } from '@/components/ui/button';
  *   - 只在 ready 态出现。superseding 态顶部刻意不显示版本号(新版还在下),没有可信的
  *     版本可查,confirming 态则要保持中断警告的干净,两者都不给入口。
  *   - CDN 上没有该版本公告(或内容不可渲染)时不显示入口 —— 用挂载时的 fetch 探测,
- *     宁可没有入口,也不给一个点了报错的链接。探测结果被 release-notes 双层缓存复用,
- *     真正点开时不会再打一次网。
+ *     宁可没有入口,也不给一个点了报错的链接。重新展开提示时重试失败的探测；成功结果
+ *     和在途请求由 release-notes 复用，真正点开时不会再打一次网。
  *   - 收起 / rail 态放不下文字链,因此**没有入口**;那两态里 UserInfoSection 的火焰按钮
  *     也只能看 <= 当前已装版本的历史,看不到待装版本。这是本方案已知的取舍。
  *
@@ -206,12 +206,15 @@ export function UpdateBanner({
       setHasNotes(false);
       return;
     }
+    // 关闭提示不发请求；火焰唤回时重新探测，以恢复此前 404 / 网络失败的公告入口。
+    // 成功结果与在途请求由 fetchReleaseNotes 复用，反复开关不重复联网。
+    if (dismissed) return;
     let cancelled = false;
     fetchReleaseNotes(version, effectiveLocale)
       .then((notes) => { if (!cancelled) setHasNotes(notes !== null); })
       .catch(() => { if (!cancelled) setHasNotes(false); });
     return () => { cancelled = true; };
-  }, [status, version, canOpenNotice, isCollapsed, effectiveLocale]);
+  }, [status, version, canOpenNotice, isCollapsed, effectiveLocale, dismissed]);
 
   // 取消:先打标记再复位,让上面的 effect 在入口按钮重新挂载后把焦点还回去。
   const handleCancelConfirm = () => {

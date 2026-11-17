@@ -29,6 +29,26 @@ getRun/listRuns/readMessages 复用本机回执和历史、按原插件/账号�
 回归：`taskSlot.test.ts`、`pluginTaskSnapshot.test.ts`、`pluginTaskService.test.ts`、
 `sessionRuntimeHarnessSelection.test.ts`；同时运行原远程往返和 Session 控制回归。
 
+### 插件设置保存运行位置（2026-11-16，未发布）
+
+宿主「模型与任务」卡与普通任务列出相同来源；`ghost-errand-prefs.json` 的插件配置可选保存
+`agentDeviceId`（字符串指定远程来源，`null` 明确选本机；只随完整模型组合保存，
+单独出现按脏数据丢弃，历史缺字段的配置不迁移）。
+保存时 `setPluginTaskConfigValidator` 用 `savedPluginTaskRemoteRoute` 组成完整 route，经
+`resolveRemotePluginTaskRoute` 按那台电脑的目录核对；不读本机目录和本机已装 Harness。
+没有显式 route 的 `tasks.create` 与 `setModel('plugin-default')` 采用保存的位置；显式 route
+（本机或远程）整组替换保存的选择，不把保存的位置拼进显式本机 route。旧 errand 与
+`workspace.ensureSession` 经 `resolvePluginSavedExecution` 同样带位置建任务，errand 复用判定与
+设置变更检查都比较位置；errand 只有设置明确选过位置时才比较任务位置，历史缺字段时
+保留原来复用用户修好任务的语义，其它字段不匹配仍按原方式重建本机任务。
+快问快答（`getPluginOneshotModelSelection`）在有远程位置时返回 null，
+走身份卡声明 / 系统辅助模型链。手机与远程 Desktop 经 `task-settings:set` / `kind:'tasks'` 的
+`model.agentDeviceId` 写入，宿主读取结果带 `remoteRoutes:true`；协议见
+[插件任务设置的运行位置](protocol-compatibility/plugin-task-preferences-remote-route.md)。
+新控制端用 `model.agentDeviceId:null` 明确切回宿主；旧控制端修改权限时回传同一模型组合，
+宿主保留已存运行位置，避免把整卡回传误当作选择本机同名来源。
+旧版客户端读取同一文件会丢掉该字段，降级后按本机同名供应商解析，这是不支持降级的已知边界。
+
 ## 新建任务、继续任务与读取结果
 
 插件调用的是 Cindy 普通任务（Session）能力。界面、工具说明和文档统一使用「新建任务」「打开任务」「继续任务」，不另设 AI 代办或插件专属任务概念。
@@ -44,7 +64,7 @@ getRun/listRuns/readMessages 复用本机回执和历史、按原插件/账号�
 
 伙伴任务完成后向伙伴自己的时间线回报，是伙伴的业务流程。插件新建任务不默认附带该流程；
 普通任务创建入口不发送完成回叫。插件根据需要读取回执和结果，无需模拟一个伙伴。
-任务事件通过独立声明并批准的 `subscribe.topics: ['message','task-state']` 投递；持久执行事实仍查询回执。
+任务事件在整体安装批准有效且已启用时，按 manifest 的 `subscribe.topics: ['message','task-state']` 声明投递；持久执行事实仍查询回执。
 不要把「已创建」或「已接受输入」显示成「执行完成」。
 
 ### 作者使用示例
@@ -430,7 +450,7 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
 历史 JSON 的 `files.path`、绝对路径、旧文件直读 URL 及跨电脑附件返回 `UNSUPPORTED_CAPABILITY`；不从历史路径创建新授权或交接副本，返回分块字节与摘要，不暴露宿主路径。
 媒体后续请求带回 `mediaHash`，复核当前插件的既有 grant 后，从总仓安全文件句柄只读取指定范围，不重复读取来源、计算整图摘要或入仓；未获 grant 的指纹不提供字节。
 完整历史导出由插件基于 `get_chat_history` 游标页组装。作者说明见[宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
-消息与任务状态订阅使用 `subscribe.topics` 中的 `message` / `task-state`，receipt 可选 `approvedEventTopics` 只记录明确批准。
+消息与任务状态订阅使用 manifest 的 `subscribe.topics` 中的 `message` / `task-state`，由整体安装批准授予，不另存主题批准。
 宿主消息保存和生命周期状态变化走同一事件源；`task-state` 不发高频进度、活动或仅隐藏状态的变化。
 花名册变化时重建 `GhostTaskEventIndex`；热路径只访问该 topic 的订阅者，零订阅不读目录、投影正文或唤醒进程。
 沿用逐事件投递、100 条熄灯队列和 `dropped`，不新增 timer 或进度折叠。
@@ -447,3 +467,13 @@ Host 校验规范 base64，嗅探 PNG/JPEG/WebP，最多 4 张、合计 20 MiB�
 
 queue 与 steer 都把托管 URL 写入 files、chatMessage.images 和持久消息信封；模型输入由既有附件装配器生成。
 正文/附件来源仍是插件续行，不把截图变为新用户授权；目标、批准、owner 和取消闸保持不变。
+
+### 转发 IM 消息的出处（2026-11-16）
+
+`tasks.capabilities().messageRelay` 表示 `tasks.send` 接受可选 `relay:{platform,chatType,chatName?,sender:{id,name,isOwner}}`；
+`taskSlot.ts` 逐层只认这些键并按 `MESSAGE_SOURCE_RELAY_LIMITS` 限长，`targets.send` 不接受。`PluginTaskService.send`
+只在请求带 relay 时把它加进回执摘要（不带时摘要逐字节不变，旧 requestKey 照常重放），并且只在有 relay 时把它作为
+`dispatch` 的第七个参数传下去。`register.ts` 的派发适配器用 `readMessageSourcePluginRelay` 清洗后盖章到
+`sourcePlugin.relay`，插件名与插件 id 仍由宿主决定。展示、`[消息来源]` 与访客脱敏见
+[消息来源](../product-rules/message-source.md)「插件转发的 IM 消息」；只是本机插件管子的增量字段，无 device-link、
+官方或自建 relay 改动，无数据库迁移。

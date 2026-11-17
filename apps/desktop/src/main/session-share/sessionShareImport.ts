@@ -67,7 +67,6 @@ import {
   type LedgerDb,
 } from '../cindy-media/ledger.js';
 import { withSessionRouteLocks } from '../localDb/sessionRouteLock.js';
-import { recordPrRefsForImportedMessages } from '../git-context/prRefsStore.js';
 
 import { openPayload } from './xdtshareCrypto.js';
 import {
@@ -1115,12 +1114,7 @@ export async function commitShareImport(
       },
     );
 
-    // Publish only after the entire graph is durable, using persisted public
-    // messages rather than bundle candidates. Revalidate before each task so an
-    // account switch cannot redirect the remaining workers into another DB.
-    for (const sessionId of [newId, ...workerPlans.map((plan) => plan.newId)]) {
-      await guarded(() => recordPrRefsForImportedMessages(sessionId));
-    }
+    assertStillValid();
 
     // ── 最终保真度(lead + 全部 Worker 聚合) ──
     const bundledKeys = new Set(

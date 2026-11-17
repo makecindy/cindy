@@ -24,6 +24,7 @@ import {
   translateAgentMessageDelta,
   translateAccountRateLimitsUpdated,
   translateItemNotification,
+  translateOmittedItem,
   translatePlanUpdatedNotification,
   beginCodexGenerationTurn,
   codexGenerationDurationMs,
@@ -152,6 +153,54 @@ describe('Codex assistant text streaming contract', () => {
       } },
     });
     expect(events.some(event => event.type === 'done')).toBe(false);
+    resetCodexGenerationTiming(rt);
+  });
+
+  // #8412, unit: a late background completion cannot replace the foreground
+  // generation clock. Earlier late-event tests checked only emitted events.
+  it.each(['normal', 'omitted'])('keeps foreground timing across a %s background completion', (kind) => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const item = { type: 'commandExecution', id: 'old-tool', command: 'pwd', cwd: '/repo',
+      status: 'inProgress', aggregatedOutput: '', exitCode: null };
+    translateItemNotification('started', { threadId: 't1', turnId: 'old', item }, q, makeCtx(rt));
+    beginCodexGenerationTurn(rt, 'foreground', 200);
+    const ctx = { ...makeCtx(rt), background: true };
+    if (kind === 'normal') translateItemNotification('completed', {
+      threadId: 't1', turnId: 'old', item: { ...item, status: 'completed' },
+    }, q, ctx);
+    else translateOmittedItem('completed', { threadId: 't1', turnId: 'old',
+      item: { id: item.id, type: item.type } }, q, ctx);
+    finalizeCodexGenerationTurn(rt, 'foreground', 400);
+    expect(codexGenerationDurationMs(rt)).toBe(200);
+    resetCodexGenerationTiming(rt);
+  });
+
+  // #8412 review, unit: an oversized tool result arrives through itemOmitted,
+  // not item/completed. It still proves the earlier commentary was accepted, so
+  // a later stream retry must not mark that commentary failed.
+  it.each(['commandExecution', 'fileChange'])('accepts earlier commentary when a completed %s body was omitted', async (itemType) => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+    translateItemNotification('completed', { threadId: 't1', turnId: 'turn-a',
+      item: { type: 'agentMessage', id: 'progress', text: 'Writing the file', phase: 'commentary' } }, q, ctx);
+    if (itemType === 'commandExecution') translateItemNotification('started', { threadId: 't1', turnId: 'turn-a',
+      item: { type: 'commandExecution', id: 'tool', command: 'cat big', cwd: '/repo',
+        status: 'inProgress', aggregatedOutput: '', exitCode: null } } as never, q, ctx);
+    translateOmittedItem('completed', { threadId: 't1', turnId: 'turn-a',
+      item: { id: 'tool', type: itemType } }, q, ctx);
+    translateErrorNotification(makeParams({ willRetry: true, message: 'stream disconnected',
+      codexErrorInfo: { responseStreamDisconnected: {} } }), q, ctx);
+    const events = await collect(q);
+    if (itemType === 'commandExecution') {
+      expect(events.find(event => event.type === 'tool_result_full')?.data)
+        .toMatchObject({ toolUseId: 'tool', assistantSamplingAccepted: { agentMessageIds: ['progress'] } });
+    } else {
+      expect(events.some(event => event.type === 'tool_use' || event.type === 'tool_result')).toBe(false);
+    }
+    expect(events.filter(event => event.type === 'error' &&
+      (event.data as { assistantAttemptFailure?: unknown }).assistantAttemptFailure)).toEqual([]);
     resetCodexGenerationTiming(rt);
   });
 

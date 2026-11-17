@@ -17,6 +17,39 @@ Cindy 创建或重建托管 worktree 时，会尽力向 Git 本地 `info/exclude
 `.gitignore`，不影响已跟踪文件；写入失败不阻止创建或恢复。不扫描、排除任意第三方目录。
 实现见 `apps/desktop/src/main/worktree/managedWorktreeExclude.ts`。
 
+仓库根有 `.multibox.toml`、且本机能运行 `git multibox --version` 时，托管 worktree 的
+创建、目录丢失后的重建和删除改用 Multibox（`git multibox`，`git worktree` 的替代品）：
+一次给出带引擎缓存（Unity `Library/`、Rust `target/` 等）的完整目录，不带 `--no-checkout`
+（带上会退回普通 worktree、不复制缓存），也不做分段检出和后台 checkout；`.worktreeinclude`
+匹配的文件只补缺、不覆盖 Multibox 已克隆的副本；删除带 `--wait`，不带 `-f` 时同样拒绝删除
+有改动的工作区。两个条件缺一就走原生 `git worktree`，普通仓库不额外启动探测进程。按是否
+启用选择，不按失败回退：Multibox 报错原样显示给用户，不改用 `git worktree add` 重试。
+同一次创建中途失败的回滚不再逐字节比较 ignored 文件：此时它们全是本次刚从 base 克隆的
+引擎缓存（常见十万级文件、数十 GB），比较只会长时间占住该仓库的创建队列。
+Multibox 建完才返回（2026-11-16 实测 Unity 项目 67–88 秒），所以远程创建（另一台电脑或
+手机发起）的等待上限是 5 分钟（`packages/device-link/src/allowlist.ts` 的 `worktree:create`），
+期间控制端一直显示创建中，建好后才建任务，Agent 不会进入半成品目录；未更新的控制端仍按
+60 秒超时。Desktop 的创建中卡片（`WorktreeCreatingOverlay`）超过 3 秒后显示已等待时长：本机
+新建在任务页替代输入框；远程创建时显示在新建页输入框下方，Goal 创建时显示在目标弹窗内。
+手机新建页暂无同款卡片与计时。
+
+正常回收后的完整 Git 快照恢复也使用 Multibox：直接在最终目录检出快照 commit 并携带缓存，
+再只还原原 HEAD、index 和分支连接，保留 staged、unstaged 与未跟踪文件；不经临时路径搬移，
+避免缓存内的绝对路径失效。回收记录的可选 `multiboxRestore` 标记和预留目录身份覆盖中断重试；
+恢复期间出现新的文件、暂存或 HEAD 变化时保留现场与快照，不覆盖用户改动。部分删除目录及
+历史加密归档仍使用原有保护式修复。旧 stash 恢复先让出 Multibox 刚复制且仍与 base 相同的
+本地配置，再还原快照里的用户版本；配置已被修改则保留并停止恢复。
+现状缺口：
+- `git multibox add` 报告的环境变量（如 `UNITY_PROJECT_PATH`）不会注入任务的 Agent 进程
+  （Codex 多个任务共用一个后台进程），需要的工具在工作区内运行 `eval "$(git multibox env)"`。
+- 预创建放弃与创建失败补偿（`preserveDirty` 路径）仍逐字节比较 ignored 文件；在 Multibox
+  的 Unity 仓库上会很慢，且主仓库编辑器改动缓存后通常判为保留，未回收的远程预创建账本会
+  阻止该设备再次远程创建 worktree。
+
+实现见 `apps/desktop/src/main/worktree/multibox.ts`、`restoreRecovery.ts`，回归见
+`apps/desktop/src/main/__tests__/worktreeManagerCreate.test.ts`、`worktreeRestore.test.ts` 与
+`worktreeRecovery.git-integration.test.ts` 的 Multibox 用例。
+
 如果你是 Cindy 内嵌的 agent，且 cwd 位于 `<baseRepo>/.cindy-worktrees/<name>`（或迁移前的
 `.xdt-worktrees/<name>`）下（会话级 git worktree），遵守以下契约：
 
@@ -54,7 +87,11 @@ Git 引用后确认原分支不存在时，使用当前 owner 的
 与原工作目录的哈希定位。重启后重新优先恢复原 worktree；仍失败则复用同一备用目录，
 不搬运或删除其中的文件。DB / Git 临时错误、绑定不匹配与快照冲突保留原目录重试，
 不登记备用目录。同一运行期不自动切回。明确换到另一工作目录时不复用旧绑定
-的备用目录。原地重建普通目录的现有行为保持不变，不把失败的 Git
+的备用目录。普通目录仍可原地重建，但当前 userData 的 `owners/` 下只允许重建当前
+owner 的目录；旧 owner 的缺失路径沿用目录不可用结果，不自动映射、搬运或清理账号数据。
+已有旧路径（含用户自行建立的 junction）不因该检查而改向。创建前复核账号边界和恢复记录，
+探测或排队期间切账号或清除恢复记录后不再发起创建；共享 I/O 队列在实际写入前复核，
+不同恢复尝试的创建请求不共用旧记录的检查。已经交给文件系统的操作无法撤销。不把失败的 Git
 worktree 建成空目录或自动切到项目根继续修改代码。
 
 恢复说明随本轮消息传给 Agent，明确原路径、文件未恢复和当前运行位置；消息被接受

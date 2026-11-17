@@ -556,6 +556,8 @@ export interface ProviderMediaModel extends Pick<
   discoveredMetadata?: ModelMetadata;
   /** Local projection provenance; not part of the public Registry metadata. */
   sourceAgent?: AgentKind;
+  /** All actual runtime connections; sourceAgent is set only for a unique preferred route. */
+  sourceAgents?: AgentKind[];
   /** Same-provider display-only pricing; never inherited through public model metadata. */
   displayPricing?: ModelDisplayPricing;
   currency?: 'USD' | 'CNY';

@@ -6,13 +6,14 @@ import { beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   owner: 'owner-a',
   run: vi.fn(),
+  readPool: vi.fn(),
   meta: vi.fn(),
   provider: vi.fn(),
   binding: vi.fn(),
   migrate: vi.fn(),
   place: vi.fn(),
 }));
-vi.mock('../runtime.js', () => ({ runSubscriptionAccountCommand: h.run }));
+vi.mock('../runtime.js', () => ({ runSubscriptionAccountCommand: h.run, readSubscriptionPool: h.readPool }));
 vi.mock('../store.js', () => ({ readAccountBinding: h.binding, migrateLegacyCodexAccounts: h.migrate,
   readLegacyCodexAccountId: () => 'imported' }));
 vi.mock('../placement.js', () => ({ placeSubscriptionAccount: h.place,
@@ -48,6 +49,7 @@ beforeEach(() => {
   h.meta.mockReset().mockResolvedValue({ agentKind: 'claude-code', sdkSessionId: 'native-a' });
   h.provider.mockReset().mockReturnValue('anthropic');
   h.binding.mockReset().mockReturnValue(null);
+  h.readPool.mockReset().mockResolvedValue({ configured: true, boundAccountId: 'original', accounts: [{ id: 'original' }] });
   h.migrate.mockReset().mockResolvedValue(undefined);
   h.place.mockReset().mockResolvedValue(undefined);
 });
@@ -59,6 +61,10 @@ it('keeps an old resumable task unknown until its original account is known', as
   h.binding.mockReturnValue({ accountId: 'original' });
   expect((await read()).boundAccountId).toBe('original');
   expect(h.binding).toHaveBeenLastCalledWith('native:native-a', 'anthropic');
+  // Unit regression: after duplicate homes are folded, the native-only fallback must return
+  // the original row as well as its ID; existing tests only asserted boundAccountId.
+  expect((await read()).accounts).toEqual([{ id: 'original' }]);
+  expect(h.readPool).toHaveBeenLastCalledWith('anthropic', false, 'task-a', 'native-a');
 });
 
 it('previews a new provider without borrowing another provider native session', async () => {

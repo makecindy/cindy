@@ -5,7 +5,7 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 import { GHOST_ERRAND_PERMISSION_MODES } from '../../shared/ghost.js';
-import { PLUGIN_TASK_PERMISSION_MODES } from '../../shared/pluginTasks.js';
+import { isPluginTaskAgentDeviceId, PLUGIN_TASK_PERMISSION_MODES } from '../../shared/pluginTasks.js';
 import { PLUGIN_TASK_EFFORTS, type PluginTaskConfig } from './pluginTaskPrefsStore.js';
 import type { PluginTaskPreferences } from '@cindy/device-link';
 
@@ -27,6 +27,8 @@ export class MobileTaskSettings {
       config,
       permissionModes: [...PLUGIN_TASK_PERMISSION_MODES],
       defaultPermissionMode: 'ask',
+      // Controllers list other computers and shares only when this Host saves the location.
+      remoteRoutes: true,
     };
   }
   private revision(id: string, installation: string) {
@@ -51,7 +53,7 @@ export class MobileTaskSettings {
     const current = this.deps.read(id),
       next = { ...current };
     if (input.model === null) {
-      for (const key of ['agentKind', 'providerId', 'model', 'effort', 'fastMode'] as const)
+      for (const key of ['agentKind', 'providerId', 'model', 'agentDeviceId', 'effort', 'fastMode'] as const)
         delete next[key];
     } else if (input.model !== undefined) {
       if (!input.model || typeof input.model !== 'object' || Array.isArray(input.model))
@@ -59,8 +61,9 @@ export class MobileTaskSettings {
       const v = input.model as Record<string, unknown>;
       if (
         Object.keys(v).some(
-          (k) => !['agentKind', 'providerId', 'model', 'effort', 'fastMode'].includes(k),
+          (k) => !['agentKind', 'providerId', 'model', 'agentDeviceId', 'effort', 'fastMode'].includes(k),
         ) ||
+        (v.agentDeviceId !== undefined && v.agentDeviceId !== null && !isPluginTaskAgentDeviceId(v.agentDeviceId)) ||
         !['cc', 'codex', 'pi'].includes(v.agentKind as string) ||
         typeof v.providerId !== 'string' ||
         typeof v.model !== 'string' ||
@@ -73,23 +76,39 @@ export class MobileTaskSettings {
         (typeof v.fastMode !== 'boolean' && v.fastMode !== 'ultrafast')
       )
         throw new Error('PLUGIN_SETTINGS_INVALID');
-      const agent = v.agentKind === 'cc' ? 'claude-code' : (v.agentKind as 'codex' | 'pi');
-      if (!(await this.deps.agents()).includes(agent)) throw new Error('PLUGIN_MODEL_UNAVAILABLE');
-      const views = await this.deps.providers();
-      checkRevision();
-      const provider = connectedProvidersForAgent(views, agent).find((p) => p.id === v.providerId);
-      const model = provider?.models[agent]?.find((m) => m.id === v.model);
-      if (
-        !provider ||
-        !model ||
-        !isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }) ||
-        (v.effort !== undefined && !model.efforts.includes(v.effort as never)) ||
-        (v.fastMode && (model.supportsFastMode !== true || (v.fastMode === 'ultrafast' && (agent !== 'codex' || model.supportsUltrafastMode !== true))))
-      )
-        throw new Error('PLUGIN_MODEL_UNAVAILABLE');
+      // Older Desktop controllers echo the model even when only permissions or tuning
+      // changed. Preserve its source when the model identity is unchanged; newer
+      // controllers send null to explicitly choose the Host's same-named model.
+      const sameModel = v.agentKind === current.agentKind && v.providerId === current.providerId && v.model === current.model;
+      const agentDeviceId = v.agentDeviceId === undefined && sameModel ? current.agentDeviceId : v.agentDeviceId;
+      if (agentDeviceId) {
+        // Another computer or a share: its own catalog is checked by deps.validate below,
+        // never this Host's catalog or installed engines.
+        next.agentDeviceId = agentDeviceId;
+        next.providerId = v.providerId;
+        next.model = v.model;
+      } else {
+        const agent = v.agentKind === 'cc' ? 'claude-code' : (v.agentKind as 'codex' | 'pi');
+        if (!(await this.deps.agents()).includes(agent)) throw new Error('PLUGIN_MODEL_UNAVAILABLE');
+        const views = await this.deps.providers();
+        checkRevision();
+        const provider = connectedProvidersForAgent(views, agent).find((p) => p.id === v.providerId);
+        const model = provider?.models[agent]?.find((m) => m.id === v.model);
+        if (
+          !provider ||
+          !model ||
+          !isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }) ||
+          (v.effort !== undefined && !model.efforts.includes(v.effort as never)) ||
+          (v.fastMode && (model.supportsFastMode !== true || (v.fastMode === 'ultrafast' && (agent !== 'codex' || model.supportsUltrafastMode !== true))))
+        )
+          throw new Error('PLUGIN_MODEL_UNAVAILABLE');
+        // Null explicitly selects this Host; a different legacy model also selects it.
+        if (agentDeviceId === null) next.agentDeviceId = null;
+        else delete next.agentDeviceId;
+        next.providerId = provider.id;
+        next.model = model.id;
+      }
       next.agentKind = v.agentKind as PluginTaskConfig['agentKind'];
-      next.providerId = provider.id;
-      next.model = model.id;
       // The store owns its supported effort vocabulary. Empty effort means no explicit override.
       if (v.effort === undefined) delete next.effort;
       else next.effort = v.effort as PluginTaskConfig['effort'];

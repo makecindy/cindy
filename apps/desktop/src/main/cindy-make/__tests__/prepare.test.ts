@@ -3,6 +3,7 @@ import { prepareCindyMakeEnvironment } from '../prepare.js';
 import type { MakeToolchainEnvironment } from '../toolchainEnvironment.js';
 import type { MakeDoctorReport, MakeToolId } from '../../../shared/cindyMakeDoctor.js';
 import { DownloadError } from '../../downloader/index.js';
+import { initialDownloadProgress } from '../../../shared/downloadProgress.js';
 
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn() }),
@@ -42,8 +43,9 @@ function harness(present: MakeToolId[] = []) {
       input.onProgress({
         status: 'downloading',
         progress: { loaded: 50, total: 100, percent: 50 },
+        download: { ...initialDownloadProgress('downloading', 100), loaded: 50, percent: 50 },
       });
-      input.onProgress({ status: 'installing' });
+      input.onProgress({ status: 'installing', download: initialDownloadProgress('installing') });
       return '/injected-tools/' + input.artifact.id;
     },
   );
@@ -168,7 +170,10 @@ describe('native Make environment preparation', () => {
     async (reason) => {
       const h = harness();
       h.install.mockImplementation(async (input) => {
-        input.onProgress({ status: 'downloading' });
+        input.onProgress({
+          status: 'downloading',
+          download: initialDownloadProgress('downloading'),
+        });
         h.controller.abort(reason);
         throw new Error('stopped');
       });

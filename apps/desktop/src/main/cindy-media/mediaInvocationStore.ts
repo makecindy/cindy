@@ -23,6 +23,31 @@ export interface StoredMediaInvocation {
   updatedAt: number;
 }
 
+export interface MediaInvocationReceipt {
+  submission?: unknown;
+  poll?: unknown;
+  result?: unknown;
+}
+
+const SUBMISSION_RECEIPT_PREFIX = '{"__cindyMediaReceipt":"submission"';
+
+/** Keep paid submission and poll facts in the existing response column. Old
+ * snapshots contain a plain result; completed managed results stay unchanged. */
+export function readMediaInvocationReceipt(json?: string): MediaInvocationReceipt {
+  if (!json) return {};
+  const value: unknown = JSON.parse(json);
+  if (value && typeof value === 'object' && !Array.isArray(value) && '__cindyMediaReceipt' in value &&
+      (value.__cindyMediaReceipt === 'submission' || value.__cindyMediaReceipt === 'result')) {
+    const receipt = value as MediaInvocationReceipt;
+    return { submission: receipt.submission, poll: receipt.poll, result: receipt.result };
+  }
+  return { result: value };
+}
+
+export function serializeMediaInvocationReceipt(receipt: MediaInvocationReceipt): string {
+  return JSON.stringify({ __cindyMediaReceipt: receipt.result === undefined ? 'submission' : 'result', ...receipt });
+}
+
 interface MediaInvocationRow {
   id: string;
   owner: string;
@@ -94,22 +119,25 @@ export async function pruneMediaInvocations(
      WHERE owner = ? AND (
        (state = 'prepared' AND created_at < ?)
        OR (state IN ('pending', 'complete', 'failed', 'unknown') AND updated_at < ?
-           AND NOT (state = 'pending' AND response_json IS NOT NULL))
+           AND NOT (state = 'pending' AND response_json IS NOT NULL
+             AND substr(response_json, 1, ?) <> ?))
      )`,
-    [input.owner, input.preparedBefore, input.terminalBefore],
+    [input.owner, input.preparedBefore, input.terminalBefore, SUBMISSION_RECEIPT_PREFIX.length, SUBMISSION_RECEIPT_PREFIX],
   );
 }
 
 export async function countMediaInvocations(
   owner: string,
   db: DbClient = getDbClient(),
+  includeSavedResults = false,
 ): Promise<number> {
   const row = await db.queryOne<{ count: number }>(
     `SELECT COUNT(*) AS count
      FROM media_invocations
      WHERE owner = ? AND (state IN ('prepared', 'submitting')
-       OR (state = 'pending' AND response_json IS NULL))`,
-    [owner],
+       OR (state = 'pending' AND (? = 1 OR response_json IS NULL
+         OR substr(response_json, 1, ?) = ?)))`,
+    [owner, includeSavedResults ? 1 : 0, SUBMISSION_RECEIPT_PREFIX.length, SUBMISSION_RECEIPT_PREFIX],
   );
   return Number(row?.count ?? 0);
 }
@@ -120,14 +148,15 @@ export async function createMediaInvocation(
     owner: string;
     guide: PreparedMediaInvocationGuide;
     createdAt: number;
+    receipt?: { taskId?: string; responseJson: string };
   },
   db: DbClient = getDbClient(),
 ): Promise<void> {
   await db.exec(
     `INSERT INTO media_invocations (
        id, owner, model_id, capability, guide_revision, guide_json,
-       state, task_id, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, 'prepared', NULL, ?, ?)`,
+       state, task_id, response_json, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.id,
       input.owner,
@@ -135,6 +164,9 @@ export async function createMediaInvocation(
       input.guide.capability,
       input.guide.revision,
       JSON.stringify(input.guide),
+      input.receipt ? 'pending' : 'prepared',
+      input.receipt?.taskId ?? null,
+      input.receipt?.responseJson ?? null,
       input.createdAt,
       input.createdAt,
     ],
@@ -181,9 +213,9 @@ export async function transitionMediaInvocation(
     input.taskId !== undefined
       ? await db.exec(
           `UPDATE media_invocations
-           SET state = ?, task_id = ?, updated_at = ?
+           SET state = ?, task_id = ?, response_json = COALESCE(?, response_json), updated_at = ?
          WHERE id = ? AND owner = ? AND state = ?`,
-          [input.to, input.taskId, Date.now(), input.id, input.owner, input.from],
+          [input.to, input.taskId, input.responseJson ?? null, Date.now(), input.id, input.owner, input.from],
         )
       : input.responseJson !== undefined
         ? await db.exec(

@@ -30,7 +30,6 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { messages, sessions } from '../localDb/schema.js';
 import { createMessage, broadcastMessageRow } from '../localDb/ipc/messages.js';
 import { messageToCamel } from '../localDb/mapper.js';
-import { recomputePrRefsForSession } from '../git-context/prRefsStore.js';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { createLogger } from '../logger.js';

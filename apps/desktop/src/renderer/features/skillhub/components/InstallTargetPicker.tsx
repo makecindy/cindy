@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button } from '@/components/ui/button';
+import { DownloadMeter } from '@/components/ui/download-meter';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronRight, FolderOpen, Globe } from 'lucide-react';
 
@@ -29,6 +30,7 @@ import {
   normalizeInstallPathKey,
 } from '../lib/installTargetPaths';
 import type { SkillhubCatalogScope } from '../../../../shared/skillhubCatalog';
+import type { DownloadProgress } from '../../../../shared/downloadProgress';
 import { useSkillhubTarget } from '../SkillhubTargetContext';
 
 /** Minimal skill identity for the picker (market Clone or local import). */
@@ -101,6 +103,7 @@ export function InstallTargetPicker({
 }: InstallTargetPickerProps) {
   const { t } = useTranslation();
   const target = useSkillhubTarget();
+  const windowsPaths = !!target || window.electronAPI?.platform === 'win32';
   const { projects, loading: projectsLoading } = useProjectsForPicker();
   const { confirm } = useConfirmDialog();
   const [installing, setInstalling] = useState(false);
@@ -109,6 +112,31 @@ export function InstallTargetPicker({
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [installedPaths, setInstalledPaths] = useState<Map<string, string>>(new Map());
+  const [installProgress, setInstallProgress] = useState<DownloadProgress | null>(null);
+
+  // Local installs report download progress; remote targets send none and show no meter.
+  useEffect(() => {
+    setInstallProgress(null);
+    if (!installing || !skill) return;
+    return window.electronAPI.skillhub?.onInstallProgress?.((event) => {
+      if (event.name !== skill.name) return;
+      if (event.download) setInstallProgress(event.download);
+      else if (
+        event.phase === 'verifying' ||
+        event.phase === 'extracting' ||
+        event.phase === 'registering'
+      )
+        setInstallProgress(
+          (prev) =>
+            prev && {
+              ...prev,
+              phase: event.phase === 'verifying' ? 'verifying' : 'installing',
+              speedBps: 0,
+              etaSeconds: null,
+            },
+        );
+    });
+  }, [installing, skill?.name]);
 
   useEffect(() => {
     if (open && target) void target.refresh();
@@ -122,7 +150,7 @@ export function InstallTargetPicker({
       for (const local of target.state.skills) {
         if (local.registrySkillName !== skill.name || !local.registryEntry
           || (local.registryEntry.catalogScope ?? 'market') !== (skill.catalogScope ?? 'market')) continue;
-        paths.set(normalizeInstallPathKey(joinSkillInstallPath(local.projectRoot ?? 'remote-global', skill.name)), local.registryEntry.version);
+        paths.set(normalizeInstallPathKey(joinSkillInstallPath(local.projectRoot ?? 'remote-global', skill.name), { windows: windowsPaths }), local.registryEntry.version);
       }
       setInstalledPaths(paths);
       return;
@@ -134,7 +162,7 @@ export function InstallTargetPicker({
         if (cancelled || !res.success || !res.manifest) return;
         const paths = new Map<string, string>();
         for (const [p, entry] of Object.entries(res.manifest.installs)) {
-          paths.set(normalizeInstallPathKey(p), entry.version);
+          paths.set(normalizeInstallPathKey(p, { windows: windowsPaths }), entry.version);
         }
         setInstalledPaths(paths);
       })
@@ -142,7 +170,7 @@ export function InstallTargetPicker({
     return () => {
       cancelled = true;
     };
-  }, [open, skill?.name, skill?.catalogScope, target?.state.skills]);
+  }, [open, skill?.name, skill?.catalogScope, target?.state.skills, windowsPaths]);
 
   useEffect(() => {
     if (!open) {
@@ -154,14 +182,14 @@ export function InstallTargetPicker({
   if (!open || !skill) return null;
 
   const getInstalledVersion = (targetPath: string): string | null => {
-    return installedPaths.get(normalizeInstallPathKey(targetPath)) ?? null;
+    return installedPaths.get(normalizeInstallPathKey(targetPath, { windows: windowsPaths })) ?? null;
   };
 
   // Global 行：找 registry 中不属于任何 projectRoot 的条目
   const globalInstalledVersion = (() => {
     for (const [p, v] of installedPaths) {
-      if (!isInstallPathForSkill(p, skill.name)) continue;
-      const isProjectPath = projects.some((proj) => isInstallPathUnderProject(p, proj.projectRoot));
+      if (!isInstallPathForSkill(p, skill.name, { windows: windowsPaths })) continue;
+      const isProjectPath = projects.some((proj) => isInstallPathUnderProject(p, proj.projectRoot, { windows: windowsPaths }));
       if (!isProjectPath) return v;
     }
     return null;
@@ -459,6 +487,11 @@ export function InstallTargetPicker({
             </div>
           )}
         </div>
+          {installing && installProgress && (
+            <div className="px-4 pb-3">
+              <DownloadMeter label={skill.name} progress={installProgress} />
+            </div>
+          )}
           <div className="flex justify-end px-4 pb-4">
             <Button ref={cancelRef} variant="secondary" disabled={installing} onClick={onClose}>
               {t('skillhub.detail.cancel')}

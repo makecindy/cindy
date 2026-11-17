@@ -84,6 +84,7 @@
   "taskPermission": "Task permissions",
   "followDefault": "Follow defaults",
   "taskSettingsHint": "Applies to tasks created by this plugin from now on. Existing tasks keep their model and permissions.",
+  "remoteQuickAnswerHint": "This model runs on another computer. Quick answers are sent from the plugin’s computer, so they use the system auxiliary model.",
   "permissionHint": "Choose permissions for new plugin tasks. The current task’s permissions are not inherited.",
   "autoPermissionHint": "Automatic approval lets Cindy assess permission requests automatically. Use it for future plugin tasks?",
   "settingsReload": "Reload settings to check whether the action was saved",

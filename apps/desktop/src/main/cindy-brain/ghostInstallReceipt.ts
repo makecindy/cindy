@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readBoundedFileNoFollow, readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
-import { declaredGhostHostToolGroups, type GhostHostToolGroup, isValidPluginNamespace, isValidPluginResourceId } from '@cindy/plugin-protocol';
+import { isValidPluginNamespace, isValidPluginResourceId } from '@cindy/plugin-protocol';
 import { validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
 
 import {
@@ -20,11 +20,9 @@ import {
   GHOST_LOCALE_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
   declaredAutoApproveTools,
-  declaredGhostTaskEventTopics,
   declaredGhostCindyModelActions,
   type GhostCindyModelsAction,
-  type GhostTaskEventTopic,
-  declaredGhostControlPoints,
+  isGhostRuntimeControlPoint,
   ghostManifestToAuthorFormat,
   isValidGhostId,
   validateGhostManifestLocaleResource,
@@ -150,8 +148,6 @@ export interface GhostInstallReceipt {
   approvedAutoTools?: string[];
   observeCapabilityApproved?: true;
   companionsCapabilityApproved?: true;
-  approvedHostToolGroups?: GhostHostToolGroup[];
-  approvedEventTopics?: GhostTaskEventTopic[];
   approvedCindyModelActions?: GhostCindyModelsAction[];
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
@@ -1298,22 +1294,15 @@ function approvedAutoToolsField(raw: unknown, manifest: GhostManifest): { approv
 
 /**
  * 只保留仍在本次批准 manifest 里声明的节点名(格式合法即可，不按当前 Host 目录过滤：
- * 回退到旧版再升级时，旧版不认识的已批准节点不应丢)。空列表省略字段。
+ * 回退到旧版再升级时，旧版不认识的已批准节点不应丢)。任务运行时五点的旧记录忽略，
+ * 不迁移或改写原文件。空列表省略字段。
  */
 function approvedControlPointsField(raw: unknown, manifest: GhostManifest): { approvedControlPoints?: string[] } {
   if (!Array.isArray(raw)) return {};
-  const declared = new Set([...(manifest.subscribe?.hooks ?? []), ...declaredGhostControlPoints(manifest)]);
-  const points = [...new Set(raw.filter((item): item is string => typeof item === 'string' && declared.has(item as never)))];
+  const declared = new Set(manifest.subscribe?.hooks ?? []);
+  const points = [...new Set(raw.filter((item): item is string => typeof item === 'string'
+    && !isGhostRuntimeControlPoint(item) && declared.has(item as never)))];
   return points.length > 0 ? { approvedControlPoints: points.sort() } : {};
-}
-
-export function approvedHostToolGroupsField(raw: unknown, manifest: GhostManifest): { approvedHostToolGroups?: GhostHostToolGroup[] } {
-  const approved = Array.isArray(raw) ? declaredGhostHostToolGroups(manifest).filter(group => raw.includes(group)) : [];
-  return approved.length > 0 ? { approvedHostToolGroups: approved } : {};
-}
-export function approvedEventTopicsField(raw: unknown, manifest: GhostManifest): { approvedEventTopics?: GhostTaskEventTopic[] } {
-  const approved = Array.isArray(raw) ? declaredGhostTaskEventTopics(manifest).filter(topic => raw.includes(topic)) : [];
-  return approved.length ? { approvedEventTopics: approved } : {};
 }
 
 /** Match explicit confirmation to the APIs still declared; never infer grants from old manifests. */
@@ -1323,9 +1312,7 @@ export function approvedCindyModelActionsField(raw: unknown, manifest: GhostMani
 }
 
 export function createGhostInstallReceipt(input: {
-  approvedEventTopics?: readonly string[];
   approvedCindyModelActions?: readonly string[];
-  approvedHostToolGroups?: readonly string[];
   simulatorPreviousRelId?: string;
   simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
   taskCapabilityApproved?: true;
@@ -1377,8 +1364,6 @@ export function createGhostInstallReceipt(input: {
     ...approvedAutoToolsField(input.approvedAutoTools, input.manifest),
     ...(input.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
     ...(input.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
-    ...approvedHostToolGroupsField(input.approvedHostToolGroups, input.manifest),
-    ...approvedEventTopicsField(input.approvedEventTopics, input.manifest),
     ...approvedCindyModelActionsField(input.approvedCindyModelActions, input.manifest),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
@@ -1600,8 +1585,6 @@ function validateReceipt(
       ...approvedAutoToolsField(value.approvedAutoTools, manifestResult.manifest),
       ...(value.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
       ...(value.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
-      ...approvedHostToolGroupsField(value.approvedHostToolGroups, manifestResult.manifest),
-      ...approvedEventTopicsField(value.approvedEventTopics, manifestResult.manifest),
       ...approvedCindyModelActionsField(value.approvedCindyModelActions, manifestResult.manifest),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),

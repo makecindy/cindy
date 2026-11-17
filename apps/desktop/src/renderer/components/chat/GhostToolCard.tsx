@@ -58,11 +58,21 @@ import {
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { findInstalledGhostByInstanceId } from '../../../shared/pluginIdentity';
 import {
+  getGhostCardEntry,
   getGhostCardSnapshot,
   listSpawnCards,
   noteCardMeasuredHeight,
+  retainRemoteCardSession,
   subscribeGhostCards,
+  type GhostRemoteCardSource,
 } from '@/cindy-brain/ghostCardStore';
+import {
+  dispatchGhostCardAction,
+  prepareRemoteModelRoutes,
+  routeForPicker,
+} from '@/cindy-brain/ghostCardActions';
+import { useRemoteCardIdentity } from '@/cindy-brain/useRemoteCardIdentity';
+import { RemoteCardModelRequest, useRemoteCardPromptFor } from './RemoteCardPrompt';
 import { useGhostCardThemeVars } from '@/cindy-brain/useGhostCardThemeVars';
 import { alignFrameWithGate } from '@/lib/hiddenAnimationGate';
 import { startGhostCardLiveIndicators } from '@/cindy-brain/ghostCardLive';
@@ -194,18 +204,36 @@ export function MailCardEditor({ callId, html, height, sessionId }: { callId: st
     themeVars={themeVars} ariaTitle={t('mailReader.title')} running={false} mailPanel />;
 }
 
+/**
+ * Who drew a card. A local card names the plugin installed here; a remote card names the plugin
+ * installed on the task's computer, whose permission to open links also applies.
+ */
+function useGhostCardOwner(callId: string, ghostId: string, locale: string) {
+  const ghost = findInstalledGhostByInstanceId(useInstalledGhosts(), ghostId);
+  const remote = useRemoteCardSource(callId);
+  const identity = useRemoteCardIdentity(remote, ghostId, locale);
+  if (remote) return { name: identity?.name ?? ghost?.manifest.name ?? ghostId, icon: identity?.icon ?? null, externalLinks: remote.externalLinks };
+  return { name: ghost?.manifest.name ?? ghostId, icon: ghost?.iconDataUrl ?? null, externalLinks: ghost?.manifest.card?.externalLinks };
+}
+
+function useRemoteCardSource(callId: string): GhostRemoteCardSource | undefined {
+  return useSyncExternalStore(subscribeGhostCards, () => {
+    const entry = getGhostCardEntry(callId);
+    return entry?.status === 'ready' ? entry.remote : undefined;
+  });
+}
+
 /** A second view of the same card; actions keep the original call identity. */
 export function GhostCardPreview({ callId, ghostId, html, sessionId, onEscape, settingsButtonRef, inDialog }: {
   callId: string; ghostId: string; html: string; sessionId: string; inDialog?: boolean; onEscape?: () => void; settingsButtonRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const themeVars = useGhostCardThemeVars();
-  const ghosts = useInstalledGhosts();
-  const ghost = findInstalledGhostByInstanceId(ghosts, ghostId);
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const { name, externalLinks } = useGhostCardOwner(callId, ghostId, i18n.language);
   return <GhostCardCanvas callId={callId} html={html} height={GHOST_CARD_HEIGHT_MIN}
     sessionId={sessionId} themeVars={themeVars} running={false} persistHeight={false} inDialog={inDialog} onEscape={onEscape} settingsButtonRef={settingsButtonRef}
-    ariaTitle={t('chat.ghostCall.cardAria', { name: ghost?.manifest.name ?? ghostId, tool: '' })}
-    allowExternalLinks={ghost?.manifest.card?.externalLinks} />;
+    ariaTitle={t('chat.ghostCall.cardAria', { name, tool: '' })}
+    allowExternalLinks={externalLinks} />;
 }
 
 /**
@@ -249,6 +277,16 @@ function GhostCardCanvas({
   const { t } = useTranslation();
   const editorId = useId();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // A card of a task on another computer: its clicks and stored height belong to that computer.
+  const remote = useRemoteCardSource(callId);
+  const remoteRef = useRef(remote);
+  remoteRef.current = remote;
+  useEffect(() => {
+    if (!remote) return;
+    prepareRemoteModelRoutes();
+    return retainRemoteCardSession(remote.deviceId, remote.sessionId);
+  }, [remote?.deviceId, remote?.sessionId]);
+  const remotePrompt = useRemoteCardPromptFor(callId);
   // The iframe is not rebuilt when a plugin update adds card.externalLinks, so already-bound action handlers read this live.
   const allowExternalLinksRef = useRef(allowExternalLinks);
   allowExternalLinksRef.current = allowExternalLinks;
@@ -467,7 +505,8 @@ function GhostCardCanvas({
     // "声明值 → 实测值"的可见收敛。
     if (persistHeight && !formFields && Math.abs(clamped - height) > 2) {
       noteCardMeasuredHeight(callId, clamped);
-      window.electronAPI?.ghosts?.reportCardHeight?.(callId, clamped)?.catch(() => {});
+      // A remote card is stored on its own computer; this one only keeps it in memory.
+      if (!remoteRef.current) window.electronAPI?.ghosts?.reportCardHeight?.(callId, clamped)?.catch(() => {});
     }
   }, [callId, height, formFields, persistHeight]);
 
@@ -711,7 +750,7 @@ function GhostCardCanvas({
             const values = latest && entry?.status === 'ready' && readGhostCardFormChange(entry.html) === formState.current.key
               ? mergeGhostCardFormValues(formState.current.values, formState.current.base, Object.fromEntries(latest.map(f => [f.name, f.value])))
               : formState.current.values;
-            return window.electronAPI?.ghosts?.dispatchCardAction?.(callId, actionId, undefined, values) ?? { ok: false };
+            return dispatchGhostCardAction(callId, actionId, { formValues: values });
           }).then(result => { if (mailSubmit || !result.ok) unlock(); }).catch(unlock);
           return;
         }
@@ -731,7 +770,8 @@ function GhostCardCanvas({
           } catch { /* 没有当前值:从空白选择开始 */ }
           setModelAsk({
             actionId,
-            initial,
+            // The card states its model relative to the computer it runs on.
+            initial: routeForPicker(initial, remoteRef.current),
             rect: { top: f.top - o.top + r.top, left: f.left - o.left + r.left, width: r.width, height: r.height },
           });
           return;
@@ -759,7 +799,7 @@ function GhostCardCanvas({
           return;
         }
         lockActionEl(el);
-        void window.electronAPI?.ghosts?.dispatchCardAction?.(callId, actionId)?.catch(() => {});
+        void dispatchGhostCardAction(callId, actionId);
       });
     });
     // 归档任务按钮:点击不回传插件,交给打开这个任务的任务页走标准归档流程。
@@ -923,7 +963,7 @@ function GhostCardCanvas({
     if (!text || !promptAsk) return;
     const el = promptSourceElRef.current;
     if (el) lockActionEl(el);
-    void window.electronAPI?.ghosts?.dispatchCardAction?.(callId, promptAsk.actionId, text)?.catch(() => {});
+    void dispatchGhostCardAction(callId, promptAsk.actionId, { prompt: text });
     setPromptAsk(null);
     setPromptText('');
   };
@@ -940,8 +980,8 @@ function GhostCardCanvas({
         onAttach={readMailCard(html) ? inline => {
           const mail = readMailCard(html)!;
           setFormBusy(true);
-          const delivery = formDelivery.current.then(() => window.electronAPI.ghosts.dispatchCardAction(callId,
-            `mail:${inline ? 'image' : 'attach'}:${mail.key}`, undefined, formState.current.values).then(r => r.ok).catch(() => false));
+          const delivery = formDelivery.current.then(() => dispatchGhostCardAction(callId,
+            `mail:${inline ? 'image' : 'attach'}:${mail.key}`, { formValues: formState.current.values }).then(r => r.ok));
           formDelivery.current = delivery;
           if (sessionId) trackGhostCardFormDelivery(sessionId, `${callId}:${editorId}`, delivery);
           void delivery.then(ok => { if (!ok) toast.error(t('chat.ghostCall.attachmentNotAdded')); }).finally(() => setFormBusy(false));
@@ -949,8 +989,8 @@ function GhostCardCanvas({
         onChange={values => {
           formState.current.values = values;
           if (changeAction) {
-            const delivery = formDelivery.current.then(() => window.electronAPI?.ghosts?.dispatchCardAction?.(callId, changeAction, undefined, values, true)
-              .then(result => result.ok).catch(() => false) ?? false);
+            const delivery = formDelivery.current.then(() => dispatchGhostCardAction(callId, changeAction, { formValues: values, formChange: true })
+              .then(result => result.ok));
             formDelivery.current = delivery;
             if (sessionId) trackGhostCardFormDelivery(sessionId, `${callId}:${editorId}`, delivery);
             void delivery.then(ok => { if (!ok) toast.error(t('chat.ghostCall.formSyncFailed')); });
@@ -1036,14 +1076,16 @@ function GhostCardCanvas({
           onCancel={() => setPromptAsk(null)}
         />
       ) : null}
+      {remotePrompt?.kind === 'model' ? (
+        <RemoteCardModelRequest key={remotePrompt.request.requestId} prompt={remotePrompt} inDialog={inDialog} />
+      ) : null}
       {modelAsk ? (
         <GhostCardModelSelect inDialog={inDialog}
           rect={modelAsk.rect}
           initial={modelAsk.initial}
           onSelect={(route) => {
-            void window.electronAPI?.ghosts?.dispatchCardAction?.(callId, modelAsk.actionId, undefined, undefined, undefined, route)
-              ?.then((r) => { if (!r.ok) toast.error(t('chat.ghostCall.modelSelectFailed')); })
-              .catch(() => toast.error(t('chat.ghostCall.modelSelectFailed')));
+            void dispatchGhostCardAction(callId, modelAsk.actionId, { modelSelection: route })
+              .then((r) => { if (!r.ok) toast.error(t('chat.ghostCall.modelSelectFailed')); });
           }}
           onClose={() => setModelAsk(null)}
         />
@@ -1167,11 +1209,8 @@ export function GhostToolCard({
   running: boolean;
   sessionId?: string;
 }): ReactNode {
-  const { t } = useTranslation();
-  const installedGhosts = useInstalledGhosts();
-  const ghost = findInstalledGhostByInstanceId(installedGhosts, ghostId);
-  const name = ghost?.manifest.name ?? ghostId;
-  const icon = ghost?.iconDataUrl ?? null;
+  const { t, i18n } = useTranslation();
+  const { name, icon, externalLinks } = useGhostCardOwner(callId, ghostId, i18n.language);
   // 主机主题变量块(白名单 token → :root):注进 srcDoc 头部,意识可选用
   // var(--xxx) 跟主题。主题切换时该串变化 → srcDoc 变化 → iframe 重载。
   const themeVars = useGhostCardThemeVars();
@@ -1317,7 +1356,7 @@ export function GhostToolCard({
         themeVars={themeVars}
         ariaTitle={ariaTitle}
         sessionId={sessionId}
-        allowExternalLinks={ghost?.manifest.card?.externalLinks}
+        allowExternalLinks={externalLinks}
       />}
 
       {/* ── 衍生卡(card-action 触发的新结果;母卡保留,可反复抽卡)────────
@@ -1364,7 +1403,7 @@ export function GhostToolCard({
               themeVars={themeVars}
               ariaTitle={ariaTitle}
               sessionId={sessionId}
-              allowExternalLinks={ghost?.manifest.card?.externalLinks}
+              allowExternalLinks={externalLinks}
             />
           </div>
         );

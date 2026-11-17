@@ -1,3 +1,5 @@
+import type { DownloadProgress } from './downloadProgress';
+
 /** Device-local Pi runtime management. No paths or download URLs cross IPC. */
 export type PiKernelSource = 'official' | 'upstream';
 export type PiKernelPhase = 'lookup' | 'download' | 'verify' | 'activate';
@@ -17,7 +19,12 @@ export interface PiKernelState {
   restartRequired: boolean;
   official: PiKernelCheck;
   upstream: PiKernelCheck;
-  operation: { source: PiKernelSource; phase: PiKernelPhase } | null;
+  operation: {
+    source: PiKernelSource;
+    phase: PiKernelPhase;
+    /** Standard progress while `phase` is 'download'; numbers only, no paths or URLs. */
+    download?: DownloadProgress;
+  } | null;
 }
 export interface PiKernelInstallRequest {
   source: PiKernelSource;

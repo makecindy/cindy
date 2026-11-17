@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · 替 {{person}}"
+  },
   "progress": {
     "stop": "停止",
     "stopMine": "停止我發起的",
@@ -306,6 +309,8 @@
       "loading": "正在讀取群組設定…",
       "unavailable": "群組設定讀取失敗，請重試"
     },
+    "allowMemberInvites": "允許所有成員邀請朋友",
+    "allowMemberInvitesHint": "開啟後，已加入的所有成員都可邀請朋友。僅群主和管理員可變更。",
     "allowMentionAllBots": "允許 @所有夥伴",
     "allowMentionAllBotsHint": "僅群主可更改。夥伴可能都會回覆，大群請謹慎開啟。此開關不影響 AI 代答。"
   },
@@ -578,6 +583,11 @@
     "transferHint": "對方成為群主，你將成為管理員。",
     "removeTitle": "將 {{name}} 移出群組？",
     "removeHint": "該成員將無法繼續查看或傳送訊息；其夥伴也會退出。",
+    "removeOwn": "移出群聊",
+    "removeOwnScope": "移出僅影響這個群，夥伴仍保留在你的帳號中。",
+    "removeOwnHint": "{{name}} 將不再接收「{{group}}」的訊息。歷史訊息會保留，其他群和私聊不受影響。",
+    "removeOwnActiveHint": "移出會停止它在本群的執行中請求。已獨立開啟的任務繼續執行。",
+    "stopAndRemove": "停止並移出",
     "confirm": "確認",
     "inviteTitle": "邀請加入群聊",
     "reusableLink": "長期有效 · 可供多人重複使用",
