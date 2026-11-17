@@ -474,6 +474,7 @@ interface MessageStreamProps {
   ownerDeviceId?: string | null;
   /** Task origin. Personal WeChat must not be told to switch to Full access. */
   sessionSource?: string | null;
+  canConfigureAutoReview?: boolean;
   onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
   /** Session working directory; passed down so MarkdownRenderer / UserMessage
    *  can resolve relative paths in markdown links and inline @-chips
@@ -2823,6 +2824,7 @@ function renderWorkGroupChild(
     agentKind?: 'cc' | 'codex' | 'pi';
     remoteHostId?: string | null;
     sessionSource?: string | null;
+    canConfigureAutoReview?: boolean;
     onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
     isSessionStreaming: boolean;
     firstUserMessageClientId: string | null;
@@ -2874,6 +2876,7 @@ function renderWorkGroupChild(
         agentKind={props.agentKind}
         remoteHostId={props.remoteHostId}
         sessionSource={props.sessionSource}
+        canConfigureAutoReview={props.canConfigureAutoReview}
         onDiagnoseError={props.onDiagnoseError}
         sessionRunning={props.isSessionStreaming}
         assistantForkBlocked={shouldBlockAssistantFork(
@@ -3002,6 +3005,7 @@ export function MessageStream({
   remoteHostId,
   ownerDeviceId,
   sessionSource,
+  canConfigureAutoReview,
   onDiagnoseError,
   workingDir,
   assistantAvatar,
@@ -6423,6 +6427,7 @@ export function MessageStream({
       agentKind,
       remoteHostId,
       sessionSource,
+      canConfigureAutoReview,
       onDiagnoseError,
       isSessionStreaming,
       firstUserMessageClientId,
@@ -6445,6 +6450,7 @@ export function MessageStream({
       agentKind,
       remoteHostId,
       sessionSource,
+      canConfigureAutoReview,
       onDiagnoseError,
       isSessionStreaming,
       firstUserMessageClientId,
@@ -6878,6 +6884,7 @@ export function MessageStream({
                         simplifiedBotConversation={simplifiedBotConversation}
                         starterOptionsLocked={Boolean(lastUserMessageClientId)}
                         sessionSource={sessionSource}
+                        canConfigureAutoReview={canConfigureAutoReview}
                         onDiagnoseError={onDiagnoseError}
                       />
                     );
@@ -7067,6 +7074,7 @@ const MessageItem = memo(function MessageItem({
   simplifiedBotConversation,
   starterOptionsLocked,
   sessionSource,
+  canConfigureAutoReview,
   onDiagnoseError,
 }: {
   pluginUi: PluginUiMessageCandidates;
@@ -7124,6 +7132,7 @@ const MessageItem = memo(function MessageItem({
   /** True once the user has written anything in this task, which retires the opening's starter buttons. */
   starterOptionsLocked?: boolean;
   sessionSource?: string | null;
+  canConfigureAutoReview?: boolean;
   onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
@@ -7320,6 +7329,7 @@ const MessageItem = memo(function MessageItem({
           toolLoop={message.toolLoop}
           outputLimit={message.outputLimit}
           sessionSource={sessionSource}
+          canConfigureAutoReview={canConfigureAutoReview}
           onDiagnose={onDiagnoseError}
         />
       );

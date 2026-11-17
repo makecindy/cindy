@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { download, type DownloadOptions } from '../downloader/index.js';
+import {
+  createDownloadProgressReporter,
+  download,
+  type DownloadOptions,
+} from '../downloader/index.js';
 import { createLogger } from '../logger.js';
 import { replaceFile } from '../utils/replaceFile.js';
 import type { ToolArtifact, ToolInstallProgress } from './types.js';
@@ -72,9 +76,29 @@ export async function installTool(
   const target = path.join(parent, generation);
   const recordTemp = path.join(parent, `${generation}.json.tmp`);
   let promoted = false;
-  let lastProgressAt = 0;
+  // Throttled: a fast connection must not produce thousands of chat-store updates per second.
+  const reporter = createDownloadProgressReporter({
+    initialPhase: 'downloading',
+    throttleMs: 150,
+    emit: (progress) => {
+      if (signal.aborted) return;
+      onProgress({
+        status: progress.phase === 'installing' ? 'installing' : 'downloading',
+        ...(progress.loaded > 0
+          ? {
+              progress: {
+                loaded: progress.loaded,
+                total: progress.total,
+                percent: progress.percent,
+              },
+            }
+          : {}),
+        download: progress,
+      });
+    },
+  });
   try {
-    onProgress({ status: 'downloading' });
+    onProgress({ status: 'downloading', download: reporter.snapshot() });
     // Each attempt has its own writable archive. The downloader retries/resumes in this
     // attempt without sharing mutable .part files with another Cindy process.
     await (deps.download ?? download)({
@@ -84,24 +108,11 @@ export async function installTool(
       targetPath: path.join(staging, 'archive'),
       signal,
       logger: log,
-      onProgress: ({ loaded, total, percent }) => {
-        const now = Date.now();
-        // A fast connection must not produce thousands of chat-store updates per second.
-        if (signal.aborted || (now - lastProgressAt < 150 && loaded !== total)) return;
-        lastProgressAt = now;
-        onProgress({
-          status: 'downloading',
-          progress: {
-            loaded,
-            total,
-            percent: percent === null ? null : Math.max(0, Math.min(100, percent)),
-          },
-        });
-      },
+      ...reporter.callbacks,
       retry: { maxAttempts: 4 },
     });
     signal.throwIfAborted();
-    onProgress({ status: 'installing' });
+    reporter.setPhase('installing');
     await mkdir(payload);
     await (deps.extract ?? extractToolArchive)(
       path.join(staging, 'archive'),

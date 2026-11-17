@@ -1,6 +1,6 @@
 import type { Catalog } from '@cindy/model-providers';
 
-import { getActiveCatalog, getActiveCatalogWithCodexModels } from '../../../desktop/src/main/maker-host/active-catalog.js';
+import { getActiveCatalog, getActiveCatalogWithCodexModels, getActiveCatalogWithClaudeModels } from '../../../desktop/src/main/maker-host/active-catalog.js';
 import { filterLegacyGptContextProfiles } from '../../../desktop/src/main/maker-host/legacy-context-profiles.js';
 import { createModelContextProviderResolver } from '../../../desktop/src/main/maker-host/modelContextProvider.js';
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.js';
@@ -44,9 +44,9 @@ export function createHostModelContext(ports: {
       });
       return filterLegacyGptContextProfiles(
         projectSubscriptionPoolCatalog(base, { readPool, codexAccountState: ports.codexAccountState,
-          getActiveCatalogWithCodexModels, readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds,
-          // M2: subscription-pool Codex discovery is still a desktop runtime; see the release table.
-          readSubscriptionPoolCodexModels: () => null }, false),
+          getActiveCatalogWithCodexModels, getActiveCatalogWithClaudeModels, readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds,
+          // M2: subscription-pool discovery is still a desktop runtime; see the release table.
+          readSubscriptionPoolCodexModels: () => null, readSubscriptionPoolClaudeModels: () => null }, false),
       );
     },
     resolveContextProviderId: createModelContextProviderResolver({

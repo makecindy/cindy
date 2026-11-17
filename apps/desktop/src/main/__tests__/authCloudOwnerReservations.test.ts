@@ -19,6 +19,8 @@ vi.mock('../device-link/crossProcessLock.js', () => ({
 import * as profile from '../localProfileDataMigration.js';
 import * as native from '../maker-host/nativeProviderAuthBinding.js';
 import { __testing, withGhostSkillProjectionOwnerCommit } from '../authBoundaryQuarantine.js';
+import { adoptLocalProfileAssets } from '../localProfileAssetsMigration.js';
+import { ownerScopedPath } from '../dataOwnerPath.js';
 
 // Unit: run the production cloud-commit transaction with real temporary ownership
 // records and credential/adoption guards. Prior tests tested each namespace alone;
@@ -43,10 +45,16 @@ function setup(overrides: Record<string, unknown> = {}) {
   const deps = {
     ...profile, ...native,
     app: { getPath: () => context.root },
-    BRAND_IDENTITY: { dbFilePrefix: 'cindy' },
+    BRAND_IDENTITY: { dbFilePrefix: 'cindy', executableName: 'Cindy' },
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     isPassiveSharedUserDataInstance: () => false,
     withGhostSkillProjectionOwnerCommit,
+    adoptLocalProfileAssets,
+    hasExclusiveSharedLegacyUserDataAccess: () => true,
+    acquireWindowsPackagedInstanceBarrier: async () => ({
+      isHeld: () => true,
+      release: async () => {},
+    }),
     notifyRendererAuthBoundaryPending() {}, enterOwnerChangeShellPending() {},
     leaveOwnerChangeShellPending() {}, notifyRenderer() {}, requestStableOwnerPostCommit() {},
     beginAppSessionBoundary: () => () => {},
@@ -74,6 +82,10 @@ afterEach(() => fs.rmSync(context.root, { recursive: true, force: true }));
 describe('cloud login with independent legacy asset owners', () => {
   it.each(['owner-a', 'owner-b', 'owner-c'])('commits %s without moving either legacy namespace', async (owner) => {
     seed('owner-a', 'owner-b');
+    const localRoot = ownerScopedPath(context.root, 'local-v1');
+    const localPreferences = '{"testOnly":true}';
+    fs.mkdirSync(localRoot, { recursive: true });
+    fs.writeFileSync(path.join(localRoot, 'ghost-cindy-prefs.json'), localPreferences);
     const before = [fs.readFileSync(profileFile(), 'utf8'), fs.readFileSync(nativeFile(), 'utf8')];
     const auth = setup();
     await auth.withCloudOwnerCommit({
@@ -82,6 +94,10 @@ describe('cloud login with independent legacy asset owners', () => {
     });
     expect(context.owner).toBe(owner);
     expect([fs.readFileSync(profileFile(), 'utf8'), fs.readFileSync(nativeFile(), 'utf8')]).toEqual(before);
+    const adoptedPreferences = path.join(ownerScopedPath(context.root, owner), 'ghost-cindy-prefs.json');
+    expect(fs.existsSync(adoptedPreferences)).toBe(owner === 'owner-a');
+    if (owner === 'owner-a') expect(fs.readFileSync(adoptedPreferences, 'utf8')).toBe(localPreferences);
+    expect(fs.readFileSync(path.join(localRoot, 'ghost-cindy-prefs.json'), 'utf8')).toBe(localPreferences);
     expect(native.isNativeProviderAuthBound('openai')).toBe(owner === 'owner-b');
     // A repair must not make another namespace available to the current owner.
     expect(auth.repairStableCloudOwnerDataReservationsWhileLocked(owner)).toBe(owner === 'owner-b');

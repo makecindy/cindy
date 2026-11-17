@@ -7,6 +7,7 @@ import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { AutoReviewRecoveryActions } from './AutoReviewRecoveryActions';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { isCodexGatewayWireModel, isOpenAiSubscriptionProvider } from '@cindy/model-providers';
 import { useProviders } from '@/hooks/useProviders';
@@ -666,7 +667,13 @@ export function ErrorBanner({
     hasSpecialGuidance = false;
   }
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
-  if (sharedRecoveryReason && remoteErrorCode !== 'REMOTE_AGENT_RESUME_UNAVAILABLE') {
+  // Keep the share's route-choice action without replacing the more specific
+  // communication guidance (especially the timeout's unknown-result warning).
+  const keepRemoteGuidance = !!remoteGuidance && [
+    'REMOTE_AGENT_RESUME_UNAVAILABLE', 'REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY',
+    'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED',
+  ].includes(remoteErrorCode ?? '');
+  if (sharedRecoveryReason && !keepRemoteGuidance) {
     displayError = t(`sharedTaskRecovery.reason.${sharedRecoveryReason}`);
   }
   const canShowErrorDetails =
@@ -827,6 +834,7 @@ export function ErrorBanner({
       }
       actions={
         <>
+          {isLocalAuthSession && remoteErrorCode === 'AUTO_REVIEW_NO_AVAILABLE_MODEL' && <AutoReviewRecoveryActions />}
           {sharedRecoveryReason && onChooseComputer && !isRecoverable && (
             <Button size="sm" compact type="button" onClick={onChooseComputer}>
               {t('sharedTaskRecovery.choose')}

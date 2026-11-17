@@ -4533,14 +4533,7 @@
         "installCancel": "Cancelar instalação",
         "installFailed": "Não foi possível instalar o Ollama",
         "installPhase": {
-          "resolving": "A procurar a versão oficial…",
-          "downloading": "A descarregar…",
-          "verifying": "A verificar…",
-          "extracting": "A instalar…",
-          "starting": "A iniciar…",
-          "success": "Instalado",
-          "error": "Falha na instalação",
-          "cancelled": "Cancelado"
+          "error": "Falha na instalação"
         },
         "openWebsite": "Abrir site do Ollama",
         "recheck": "Já instalei, verificar novamente",
@@ -4575,20 +4568,6 @@
         "retryDownload": "Tentar novamente",
         "libraryName": "Nome exato da biblioteca Ollama",
         "pullingTitle": "A descarregar {{name}}",
-        "pullIndeterminate": "A preparar",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "A preparar transferência…",
-          "manifest": "A obter manifesto…",
-          "downloading": "A descarregar ficheiros do modelo",
-          "verifying": "A verificar…",
-          "writing": "A escrever…",
-          "success": "Transferência concluída",
-          "error": "Não foi possível descarregar",
-          "paused": "Em pausa",
-          "cancelled": "Cancelado"
-        },
         "pauseDownload": "Pausar",
         "resumeDownload": "Retomar transferência",
         "cancelDownload": "Eliminar transferência incompleta",
@@ -5831,7 +5810,8 @@
             "statusFailed": "a verificação do estado do controlador falhou",
             "recoveryFailed": "não foi possível restabelecer a ligação de controlo",
             "extensionDisconnected": "não está ligada nenhuma extensão do navegador (instale e ative o plugin Cindy Chrome e a respetiva extensão)",
-            "pluginMissing": "o plugin Cindy Chrome não está instalado ou ativado"
+            "pluginMissing": "o plugin Cindy Chrome não está instalado ou ativado",
+            "browserMissing": "o Chrome não está instalado neste computador"
           },
           "reconnect": "Voltar a ligar navegador",
           "recover": "Recuperar navegador",
@@ -5851,7 +5831,7 @@
         },
         "userBrowser": {
           "title": "O meu navegador",
-          "description": "Funciona no Chrome ou Edge que está a usar, com os seus inícios de sessão existentes. As novas páginas abrem numa janela em segundo plano, sem atrapalhar."
+          "description": "O seu próprio Chrome neste computador (o Edge também funciona). O Agent trabalha diretamente nele, com os seus inícios de sessão existentes. As novas páginas abrem numa janela em segundo plano, sem atrapalhar."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Instalar o plugin Cindy Chrome",
@@ -5870,7 +5850,9 @@
           "updatePluginTitle": "Atualizar o plugin Cindy Chrome",
           "updatePluginBody": "O plugin Cindy Chrome instalado é demasiado antigo para O meu navegador. Atualize-o para a versão mais recente e siga as instruções para adicionar a extensão.",
           "updatePlugin": "Atualizar",
-          "storeOpened": "A página da extensão Cindy foi aberta no seu navegador. Escolha Adicionar ao Chrome e a ligação será estabelecida automaticamente."
+          "storeOpened": "A página da extensão Cindy foi aberta no seu navegador. Escolha Adicionar ao Chrome e a ligação será estabelecida automaticamente.",
+          "installBrowserTitle": "Instale primeiro o Chrome",
+          "installBrowserBody": "O Chrome não está instalado neste computador. «O meu navegador» precisa do Chrome (ou Edge) para a extensão Cindy. Depois de o instalar, aqui avança automaticamente para o passo seguinte."
         }
       },
       "android": {
@@ -6032,8 +6014,6 @@
           "notChecked": "Ainda não verificado",
           "action": "Atualizar",
           "updating": "A atualizar…",
-          "downloadingPercent": "A transferir {{percent}}% ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "A transferir, {{downloaded}} MB até agora…",
           "installing": "Transferência concluída, a instalar…",
           "toast": {
             "success": "cua-driver atualizado para a versão mais recente",
@@ -8601,6 +8581,7 @@
           "workdirClear": "Repor pasta predefinida",
           "followAuxiliary": "Usar modelo auxiliar do sistema · {{model}}",
           "followAuxiliaryUnset": "Usar modelo auxiliar do sistema",
+          "remoteQuickAnswerHint": "Este modelo não é executado neste computador. As respostas rápidas são enviadas a partir deste computador, por isso usam o modelo auxiliar do sistema.",
           "restoreModel": "Repor modelo"
         },
         "toolsTitle": "Ferramentas",
@@ -11001,6 +10982,7 @@
       "duplicate": "Duplicar amigo",
       "moreActions": "Mais ações para {{name}}",
       "viewIcons": "Ícones",
+      "showCollapsedTeammateAvatars": "Mostrar avatares quando recolhido",
       "sectionExpand": "Expandir amigos",
       "showLess": "Mostrar menos",
       "sectionCollapse": "Recolher amigos",
@@ -11778,6 +11760,11 @@
           "transferHint": "A outra pessoa passará a proprietária; o utilizador passará a administrador.",
           "removeTitle": "Remover {{name}} deste grupo?",
           "removeHint": "Perderá o acesso às mensagens. Os seus amigos também sairão.",
+          "removeOwn": "Remover do grupo",
+          "removeOwnScope": "Isto afeta apenas este grupo. O seu parceiro permanece na sua conta.",
+          "removeOwnHint": "{{name}} deixará de receber mensagens de «{{group}}». O histórico é mantido; os outros grupos e conversas privadas não são afetados.",
+          "removeOwnActiveHint": "Os pedidos ativos neste grupo serão interrompidos. As tarefas iniciadas de forma independente continuarão em execução.",
+          "stopAndRemove": "Parar e remover",
           "leave": "Sair do grupo",
           "leaveHint": "O utilizador e os seus amigos irão sair deste grupo. Deixará de receber novas mensagens e de ter acesso ao respetivo histórico.",
           "soleOwnerHint": "É o único membro restante. Arquive este grupo para manter o histórico e o restaurar mais tarde.",
@@ -13041,6 +13028,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "Não há modelos disponíveis para revisão automática. No computador que executa o Agente, ative e ligue um fornecedor de revisão em Fornecedores de modelos ou personalize os modelos auxiliares nas definições. As ações que precisam de revisão continuam a exigir a sua confirmação.",
           "autoReviewUnavailable": "A revisão automática não conseguiu chegar a uma decisão, pelo que as ações que exigem revisão precisam agora da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta um risco mais elevado.",
           "autoReviewUnavailableWechat": "A revisão automática não conseguiu chegar a uma decisão, pelo que as ações que exigem revisão precisam agora da sua confirmação. O WeChat pessoal não pode utilizar Acesso total. Confirme esta ação diretamente.",
           "autoReviewConfirmUndelivered": "A revisão automática não terminou e a confirmação não foi entregue ou não obteve resposta. Esta recusa não foi feita por si.",
@@ -15630,6 +15618,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Este ficheiro está fora do diretório de trabalho da sessão atual e não pode ser localizado no explorador de ficheiros da barra lateral",
       "openInDefaultBrowser": "Abrir no navegador",
       "copyLink": "Copiar ligação",
+      "addPrToHeader": "Adicionar ao cabeçalho",
+      "prAlreadyInHeader": "Já está no cabeçalho",
+      "prAddedToHeader": "Adicionado ao cabeçalho — o estado acompanha esta tarefa.",
+      "prAssociatedNotInHeader": "Associado, fora do cabeçalho",
+      "prSavedNotInHeader": "Associação guardada. Os três lugares do cabeçalho estão ocupados; fixe este PR na gestão de PRs no cabeçalho da tarefa.",
       "linkCopied": "Ligação copiada",
       "viewSourceFile": "Ver código-fonte",
       "openInSidebarFailed": "Não foi possível abrir no navegador da barra lateral",
@@ -15791,6 +15784,7 @@
       "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente dentro de instantes.",
       "REMOTE_DAEMON_CLOSED": "A ligação remota caiu, possivelmente durante uma atualização. Este turno terminou. Envie a mensagem novamente.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Os anexos de ficheiros/imagens locais não estão acessíveis em sessões remotas. Cole o conteúdo diretamente.",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "Não há modelos disponíveis para revisão automática. No computador que executa o Agente, ative e ligue um fornecedor de revisão em Fornecedores de modelos ou personalize os modelos auxiliares nas definições. As ações que precisam de revisão continuam a exigir a sua confirmação.",
       "AUTO_REVIEW_UNAVAILABLE": "A revisão automática não conseguiu chegar a uma decisão, pelo que as ações que exigem revisão precisam agora da sua confirmação. Mude esta tarefa para Acesso total se preferir não ser interrompido. Esse modo apresenta um risco mais elevado.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "A revisão automática não conseguiu chegar a uma decisão, pelo que as ações que exigem revisão precisam agora da sua confirmação. O WeChat pessoal não pode utilizar Acesso total. Confirme esta ação diretamente.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "A revisão automática não estava disponível e o pedido de confirmação não foi concluído. Isto não constitui uma rejeição do utilizador.",
@@ -15811,7 +15805,12 @@
       "REMOTE_PROVIDER_UPDATING": "As credenciais deste fornecedor de modelos estão a ser atualizadas. Tente novamente dentro de instantes.",
       "REMOTE_WORKDIR_UNAVAILABLE": "O diretório de trabalho remoto está indisponível. Verifique se a pasta ainda existe nesse computador e tente novamente.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "O computador ainda não consegue confirmar se esta mensagem foi enviada. Aguarde um momento e tente novamente. Não envie a mesma mensagem duas vezes.",
-      "REMOTE_AGENT_UNAVAILABLE": "A ligação ao computador que executa o Agent foi interrompida. Tente novamente. Se continuar a acontecer, certifique-se de que esse computador está online e permite o controlo remoto.",
+      "REMOTE_AGENT_UNAVAILABLE": "Não foi possível comunicar com o computador que executa o Agent. Consulte os detalhes do erro.",
+      "REMOTE_AGENT_TIMEOUT": "O tempo de espera pelo computador que executa o Agent expirou. O resultado é desconhecido. Verifique a tarefa antes de tentar novamente.",
+      "REMOTE_AGENT_LINK_BUSY": "A comunicação com o computador que executa o Agent está congestionada. Aguarde um momento antes de tentar novamente.",
+      "REMOTE_AGENT_UNRESPONSIVE": "O computador que executa o Agent não respondeu repetidamente, pelo que as chamadas foram suspensas temporariamente. Aguarde um momento antes de tentar novamente.",
+      "REMOTE_AGENT_OFFLINE": "O computador que executa o Agent está offline. Tente novamente quando voltar a ligar-se.",
+      "REMOTE_AGENT_ACCESS_DENIED": "O acesso remoto ao computador que executa o Agent foi negado. Verifique as definições de acesso antes de tentar novamente.",
       "REMOTE_AGENT_PEER_TOO_OLD": "A versão do Cindy no outro computador é demasiado antiga para esta ação. Atualize primeiro o Cindy nesse computador.",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "Este computador não consegue restaurar o estado anterior da sessão. Escolhe um modelo de outro computador ou fornecedor para continuar com uma passagem de contexto. As mensagens existentes são mantidas.",
       "REMOTE_AGENT_EXPIRED": "Esta sessão já terminou no computador que executa o Agent. Envie a sua mensagem novamente.",
@@ -22026,5 +22025,28 @@
     "archivedNotice": "Tarefas inativas arquivadas automaticamente: {{count}}",
     "undo": "Anular",
     "undoFailed": "Não foi possível anular. Restaure as tarefas a partir do arquivo."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "Faltam {{time}}",
+    "attempt": "Tentativa {{attempt}}",
+    "phase": {
+      "preparing": "A preparar…",
+      "queued": "Em fila…",
+      "downloading": "A transferir…",
+      "retrying": "A tentar novamente…",
+      "verifying": "A verificar…",
+      "installing": "A instalar…",
+      "paused": "Em pausa",
+      "completed": "Concluído",
+      "failed": "Falha na transferência",
+      "cancelled": "Cancelado"
+    },
+    "retry": {
+      "slow": "Ligação lenta, a restabelecer…",
+      "network": "Ligação perdida, a tentar novamente…",
+      "timeout": "Tempo de ligação esgotado, a tentar novamente…",
+      "server": "Servidor ocupado, a tentar novamente…"
+    }
   }
 }
