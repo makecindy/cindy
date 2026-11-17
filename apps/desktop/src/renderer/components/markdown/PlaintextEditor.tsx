@@ -1010,6 +1010,8 @@ type PlaintextEditorInitialConfig = {
   useCodeChrome: boolean;
   skipHighlight: boolean;
   skipWrap: boolean;
+  /** 代码模式默认不折行（与强制 skipWrap 区分：调用方显式 wordWrap 仍可覆盖）。 */
+  defaultNoWrap: boolean;
 };
 
 interface ViewportTopAnchor {
@@ -1074,37 +1076,44 @@ function getSelectionText(view: EditorView): string | null {
   return view.state.doc.sliceString(from, to);
 }
 
+function applyEditorFontSizeVar(value: string | null): void {
+  for (const target of [document.documentElement, document.body]) {
+    if (value === null) target.style.removeProperty('--app-editor-font-size');
+    else target.style.setProperty('--app-editor-font-size', value);
+  }
+}
+
 function adjustEditorFontSize(view: EditorView, delta: -1 | 1): boolean {
-  const root = document.documentElement;
+  // 待落盘的调整优先：连按时不能从磁盘上的旧值重新起算，否则会漏掉上一次按键。
   const rootOverride = Number.parseFloat(
-    root.style.getPropertyValue('--app-editor-font-size'),
+    document.documentElement.style.getPropertyValue('--app-editor-font-size'),
   );
   const savedOverride = Number.parseFloat(
     String(window.electronAPI?.appearanceSettings?.getSync?.()?.editorFontSize ?? ''),
   );
   const computed = Number.parseFloat(getComputedStyle(view.contentDOM).fontSize);
-  const current = [rootOverride, savedOverride, computed].find(Number.isFinite);
+  // 待落盘的调整和页面上的变量都比磁盘值新，按这个顺序取第一个有效值。
+  const current = [pendingEditorFontSizeWrite, rootOverride, savedOverride, computed].find(
+    (value) => typeof value === 'number' && Number.isFinite(value),
+  );
   const next = clampAppearanceCodeSize(
     (current ?? DEFAULT_APPEARANCE_SETTINGS.codeSize) + delta,
   );
-  const previous = root.style.getPropertyValue('--app-editor-font-size');
-  const apply = (value: string | null) => {
-    for (const target of [root, document.body]) {
-      if (value === null) target.style.removeProperty('--app-editor-font-size');
-      else target.style.setProperty('--app-editor-font-size', value);
-    }
-  };
-  apply(`${next}px`);
-  persistEditorFontSize(next, () => apply(previous || null));
+  applyEditorFontSizeVar(`${next}px`);
+  persistEditorFontSize(next);
   return true;
 }
 
-function persistEditorFontSize(next: number, rollback: () => void): void {
+function persistEditorFontSize(next: number): void {
   pendingEditorFontSizeWrite = next;
   if (editorFontSizeWriteRunning) return;
   editorFontSizeWriteRunning = true;
   queueMicrotask(() => {
     void (async () => {
+      // 这一轮里最近一次成功落盘的值：失败时回退到它，而不是这轮开始前的旧值。
+      let lastSaved = Number.parseFloat(
+        String(window.electronAPI?.appearanceSettings?.getSync?.()?.editorFontSize ?? ''),
+      );
       while (pendingEditorFontSizeWrite !== null) {
         const value = pendingEditorFontSizeWrite;
         pendingEditorFontSizeWrite = null;
@@ -1112,8 +1121,14 @@ function persistEditorFontSize(next: number, rollback: () => void): void {
         if (!persist) continue;
         try {
           await persist({ editorFontSize: value });
+          lastSaved = value;
         } catch (error: unknown) {
-          if (pendingEditorFontSizeWrite === null) rollback();
+          // 只在这轮没有更新的待写入值时回退，并退到「最近一次成功落盘」的值。
+          if (pendingEditorFontSizeWrite === null) {
+            applyEditorFontSizeVar(
+              Number.isFinite(lastSaved) ? `${lastSaved}px` : null,
+            );
+          }
           window.electronAPI?.logToMain?.(
             'error',
             'renderer/plaintext-editor',
@@ -1125,6 +1140,7 @@ function persistEditorFontSize(next: number, rollback: () => void): void {
     })();
   });
 }
+
 
 export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditorProps>(
   function PlaintextEditor(
@@ -1175,7 +1191,9 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
         // largeDoc 命中时强制关 highlighting (避免 Lezer 全文 lex);
         // longLine 命中时同时关 wrap (避免 wrap measure 卡死)。
         skipHighlight: docFlags.largeDoc,
-        skipWrap: initialEditorChrome === 'code' || docFlags.longLine,
+        skipWrap: docFlags.longLine,
+        // 代码模式默认不折叠（横向滚动），但调用方显式传 wordWrap 时以调用方为准。
+        defaultNoWrap: initialEditorChrome === 'code',
       };
     }
 
@@ -1380,10 +1398,15 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
           { key: 'Mod-Subtract', run: (view) => adjustEditorFontSize(view, -1) },
         ])),
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
-        wrapCompartment.of(initialConfig.skipWrap || wordWrap === false ? [] : EditorView.lineWrapping,
+        wrapCompartment.of(
+          initialConfig.skipWrap || !(wordWrap ?? !initialConfig.defaultNoWrap)
+            ? []
+            : EditorView.lineWrapping,
         ),
         lineNumbersCompartment.of(
           (showLineNumbers ?? initialConfig.useCodeChrome) ? lineNumbers() : []),
+        // 不折行时代码会超出编辑器宽度，需要能横向滚；主题默认 hidden 是为隐藏滚动条。
+        EditorView.theme({ '.cm-scroller': { overflowX: 'auto' } }),
         ...highlightExtensions,
         // .diff/.patch rows keep their red/green fill even when highlighting is skipped.
         ...(isDiffLanguage(initialConfig.language) ? [diffLineHighlight] : []),
@@ -1599,7 +1622,10 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
       cmViewRef.current?.dispatch({
         effects: [
           wrapCompartment.reconfigure(
-            wordWrap === false || initialConfigRef.current?.skipWrap ? [] : EditorView.lineWrapping,
+            initialConfigRef.current?.skipWrap ||
+              !(wordWrap ?? !initialConfigRef.current?.defaultNoWrap)
+              ? []
+              : EditorView.lineWrapping,
           ),
           lineNumbersCompartment.reconfigure(
             (showLineNumbers ?? initialConfigRef.current?.useCodeChrome) ? lineNumbers() : [],

@@ -256,7 +256,7 @@ function makePlainEditorTheme(isDark: boolean) {
   return EditorView.theme(
     {
       '&': {
-        fontSize: '15px',
+        fontSize: 'var(--app-editor-font-size, 15px)',
         backgroundColor: 'transparent',
         height: '100%',
         color: text,
@@ -304,7 +304,7 @@ function makeMarkdownEditorTheme(isDark: boolean) {
   return EditorView.theme(
     {
       '&': {
-        fontSize: '16px',
+        fontSize: 'var(--app-editor-font-size, 16px)',
         backgroundColor: 'transparent',
         height: '100%',
         color: text,
@@ -662,7 +662,7 @@ function makeMarkdownEditorTheme(isDark: boolean) {
         background: 'transparent',
         color: text,
         fontFamily: CODE_FONT_STACK,
-        fontSize: CODE_FONT_SIZE,
+        fontSize: 'var(--app-editor-font-size, ' + CODE_FONT_SIZE + ')',
         lineHeight: '1.5',
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',
