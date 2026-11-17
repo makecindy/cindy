@@ -6866,6 +6866,7 @@
           "guide": {
             "usageLabel": "So funktioniert’s",
             "usageBody": "Erwähne @askmycindy in einem Beitrag auf X – die Aufgabe wird dann an dieses Gerät gesendet und hier ausgeführt; das Ergebnis kommt als Antwort zurück.",
+            "usageBodyOnDevice": "Erwähne @askmycindy in einem Beitrag auf X – die Aufgabe wird dann an {{device}} gesendet und dort ausgeführt; das Ergebnis kommt als Antwort zurück.",
             "riskLabel": "Antworten sind öffentlich",
             "riskPublicBody": "Antworten sind öffentlich und für alle sichtbar. Nutze diese Funktion für öffentliche Fragen und Probleme, nicht für private Angelegenheiten, die deine Privatsphäre gefährden könnten.",
             "riskWorkdirBody": "Jede X-Aufgabe wird im Standardprojekt ausgeführt, das in den X-Verbindungseinstellungen festgelegt ist. Der Agent kann dort Dateien lesen und schreiben. Sein Ergebnis wird öffentlich gepostet – wenn dieses Projekt auf ein privates Repository verweist, können dabei auch Dateiinhalte öffentlich werden.",
