@@ -5,12 +5,12 @@ import path from 'node:path';
 import {
   findConcurrentLiveInstancePids,
   type ConcurrentInstanceScanDeps,
-} from '../../../desktop/src/main/concurrentInstanceScan.ts';
+} from '../../../desktop/src/main/concurrentInstanceScan.js';
 import {
   readProcessIdentities,
   type ProcessIdentitySnapshot,
-} from '../../../desktop/src/main/processIdentity.ts';
-import { explicitPorts } from './explicit-ports.ts';
+} from '../../../desktop/src/main/processIdentity.js';
+import { explicitPorts } from './explicit-ports.js';
 
 /**
  * The Host and a desktop that opens the same profile's database (coexistence plan A, release table).
