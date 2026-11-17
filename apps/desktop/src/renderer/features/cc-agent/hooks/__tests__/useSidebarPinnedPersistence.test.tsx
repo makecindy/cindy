@@ -9,6 +9,7 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { __testing as sidebarOwnerTesting } from '@/lib/sidebarOwnerStorage';
 import { MANUAL_PINNED_ORDER_KEY, useSidebarFilter } from '../useSidebarFilter';
+import { PINNED_SORT_BY_KEY } from '../helpers/sidebarFilterCore';
 import type { DataOwnerPushStamp } from '../../../../../shared/dataOwnerPush';
 import {
   SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH,
@@ -121,6 +122,32 @@ function renderFilter() {
 }
 
 describe('pinned sidebar persistence', () => {
+  // 测试价值：置顶排序偏好可保存但不能改掉用户的拖拽顺序。现有用例只覆盖顺序写入。
+  // 最小输入：已有两条手动置顶，切到最近活动后重新挂载；并验证另一窗口切回。unit。
+  it('remembers display sorting independently of the durable manual pins', () => {
+    durablePinnedOrder = ['older', 'newer'];
+    pinnedOrderIsAuthoritative = true;
+    const view = renderFilter();
+    expect(view.result.current.pinnedSortBy).toBe('manual');
+    act(() => view.result.current.setPinnedSortBy('recency'));
+    expect(view.result.current.pinnedSortBy).toBe('recency');
+    expect(view.result.current.manualPinnedOrder).toEqual(['older', 'newer']);
+    expect(mutatePinnedOrder).not.toHaveBeenCalled();
+    view.unmount();
+
+    const reopened = renderFilter();
+    expect(reopened.result.current.pinnedSortBy).toBe('recency');
+    act(() => {
+      localStorage.removeItem(PINNED_SORT_BY_KEY);
+      window.dispatchEvent(new StorageEvent('storage', { key: PINNED_SORT_BY_KEY }));
+    });
+    expect(reopened.result.current.pinnedSortBy).toBe('manual');
+    expect(reopened.result.current.manualPinnedOrder).toEqual(['older', 'newer']);
+    act(() => reopened.result.current.setPinnedSortBy('recency'));
+    act(() => reopened.result.current.setPinnedSortBy('manual'));
+    expect(localStorage.getItem(PINNED_SORT_BY_KEY)).toBeNull();
+  });
+
   it('optimistically removes every legacy Windows project-pin casing variant', () => {
     (window.electronAPI as { platform: string }).platform = 'win32';
     durablePinnedOrder = [

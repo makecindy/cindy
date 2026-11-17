@@ -22,6 +22,7 @@
 | 开关、滑杆 | `Switch`、`Slider`、`EffortSlider` | §15.17、§15.18 |
 | 复选框 | `components/ui/checkbox.tsx` 的 `Checkbox` | §4 Desktop settings controls |
 | 加载中 | `components/ui/spinner.tsx` 的 `Spinner` | §14.4 |
+| 下载、安装进度 | `components/ui/download-meter.tsx` 的 `DownloadMeter` | §4 Download progress |
 | 错误与通知 | `ErrorNotice`；短通知用 `lib/toast.ts` | §4 Error notices、§4 Toast |
 | 展开收起 | `components/ui/collapse.tsx` 的 `Collapse` | §14.4 |
 | 聊天内容 | `chatChrome.ts`、`activityRowChrome.ts` | §4 Desktop chat and operation authorization |
@@ -675,6 +676,26 @@ Button (user decision, 2026-11-09), and dismissal uses its quiet tone. Eligibili
 
 历史恢复操作命名为「在新任务中继续」，说明会保留对话记录与原任务，以及需要重新发送刚才的消息。图标必须与消息 Fork「开启一个新任务」入口一致，使用 `Split`；不使用侧栏新建任务的 `SquarePen`。
 
+### Download progress
+
+Desktop 上用户能看到的下载与安装进度（工具、运行时、模型、更新包、插件、Skill、壁纸等）统一使用
+`components/ui/download-meter.tsx` 的 `DownloadMeter`，数据为 Main 端统一生成的 `DownloadProgress`
+（工程约定见 [校验下载](../dev-rules/verified-downloads.md)「下载进度与界面」）。不在业务界面里另画进度条或
+自行格式化字节、速度与剩余时间。起因：2026-11-17 GitHub CLI 安装在重试与龟速时进度停住且无任何说明，
+用户以为卡死。
+
+- 三行结构：第一行名称（`text-12`、`--text-secondary`，过长截断）与整数百分比（`--text-tertiary`、
+  等宽数字，只有真正完成才显示 100%）；第二行 4px 胶囊进度条，轨道 `--surface-chip`、填充
+  `--text-primary`，宽度变化 150ms；第三行 `text-11` `--text-tertiary`，左侧状态、右侧速度与剩余时间。
+- 进度条不动时必须有文字说明：传输中左侧显示「已下载 / 总大小」，重试显示原因（网络较慢在换连接、
+  连接中断、超时、服务器繁忙）且右侧显示第几次尝试，校验、安装、排队、准备、暂停各有状态文字。
+  速度与剩余时间只在传输中显示，避免停住时残留旧速度。
+- 失败时状态行换成失败说明（`--error-flat`），填充改为 `--remote-status-failed`，并隐藏百分比。
+- 不使用循环动画或不确定进度的动效；大小未知时只显示已下载量。暂停、继续、取消等操作由所在界面
+  提供，组件只负责显示。`role="progressbar"` 的 `aria-valuetext` 汇总状态与速度，供读屏读取。
+- 启动页、壁纸缩略图等已登记的品牌或特定界面若不能放入三行结构，保留原外形，但状态文字与数值
+  仍取自同一份 `DownloadProgress` 和本组件导出的格式化函数。
+
 ### Dialog & Modal
 
 Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialog.tsx` (the shared confirm dialog); new dialogs reuse its structure — do not invent a parallel one.
@@ -832,7 +853,9 @@ Implementation: `AutomationSessionGroupItem.tsx` and `automationSidebarGrouping.
 
 ### Desktop teammate sidebar
 
-The expanded teammate section previews five chats (local teammates, remote teammates, groups and the merged Cindy device row share this limit). Keep the current chat visible within those five rows. Use the task list’s “Show all N” footer style, with “Show less” after expansion. The teammate section has its own icon/list preference, independent of the pinned section and of collapse state. The icon strip’s +N button switches to the full list. Collapsing resets the preview and hides ordinary entries entirely; unread chats and pending interaction/error rows remain visible in the chosen mode, without a preview cap. The currently open teammate chat also stays visible after it becomes read, until navigation leaves that chat; pending attention still keeps it visible after leaving. Explicitly collapsing the teammate section hides a read selection immediately; new unread or pending attention restores its visibility and read-until-leaving protection. This applies to both icon and list modes. The pinned section follows the same attention exception, including tasks inside pinned projects. This limit applies to the Desktop sidebar; the Mobile task home section below previews three.
+The teammate display-style menu adds a separated “Show avatars when collapsed” checkbox. It defaults off on Desktop, preserving the existing attention-only collapse behavior, and stores explicit choices per account on this computer. Enabling it shows all visible chats as a single avatar strip while collapsed, regardless of the expanded icon/list preference; overflow uses the existing +N entry, which expands the section into the full list. Disabling it restores the existing attention exception without changing the fold or expanded display style. Mobile keeps its own existing default-on choice. Implementation and regressions: `TeammatesSection.tsx`, `teammatesSectionPrefs.ts`, their existing unit tests and the `collapse-attention` UI fixture.
+
+The expanded teammate section previews five chats (local teammates, remote teammates, groups and the merged Cindy device row share this limit). Keep the current chat visible within those five rows. Use the task list’s “Show all N” footer style, with “Show less” after expansion. The teammate section has its own icon/list preference, independent of the pinned section and of collapse state. The icon strip’s +N button switches to the full list. With collapsed avatars disabled, collapsing resets the preview and hides ordinary entries entirely; unread chats and pending interaction/error rows remain visible in the chosen mode, without a preview cap. The currently open teammate chat also stays visible after it becomes read, until navigation leaves that chat; pending attention still keeps it visible after leaving. Explicitly collapsing the teammate section hides a read selection immediately; new unread or pending attention restores its visibility and read-until-leaving protection. This applies to both icon and list modes. The pinned section follows the same attention exception, including tasks inside pinned projects. This limit applies to the Desktop sidebar; the Mobile task home section below previews three.
 
 ### Desktop and Mobile task creator filters (2026-10-27)
 

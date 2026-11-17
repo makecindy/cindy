@@ -4,7 +4,7 @@
  *
  * Electron does not expose Chromium's full native menu as a safe reusable
  * default, so we intentionally build the small platform set Cindy needs:
- * read-only selections get macOS Copy / Look Up or Windows Copy / web search,
+ * read-only selections get macOS Copy / Look Up or Windows/Linux Copy / web search,
  * and editable controls get the standard edit commands (undo … select all).
  * Browser-only actions such as reload, view source, and inspect are never
  * included.
@@ -34,7 +34,7 @@ const SEARCH_URL = 'https://www.bing.com/search?q=';
 const LABEL_PREVIEW_CHARS = 48;
 const SEARCH_QUERY_MAX_CHARS = 2000;
 
-type SupportedPlatform = 'darwin' | 'win32';
+type SupportedPlatform = 'darwin' | 'win32' | 'linux';
 let currentLocale: SupportedLocale | null = null;
 
 interface SelectionMenuActions {
@@ -253,7 +253,11 @@ async function showSelectionContextMenu(
   win: BrowserWindow,
   params: ContextMenuParams,
 ): Promise<void> {
-  if (process.platform !== 'darwin' && process.platform !== 'win32') return;
+  if (
+    process.platform !== 'darwin'
+    && process.platform !== 'win32'
+    && process.platform !== 'linux'
+  ) return;
   if (params.isEditable) {
     // 可编辑目标不问 renderer:「添加到对话」只对只读引用区有意义,少一次
     // executeJavaScript 也让输入框右键即时弹出。

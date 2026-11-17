@@ -499,6 +499,25 @@ describe('createAutoReviewConfirmUndeliveredNotice', () => {
 });
 
 describe('createAutoReviewUnavailableNotice', () => {
+  // #10385, unit: a host-owned cause survives the decision boundary without forwarding arbitrary details.
+  it('uses a safe recovery notice and keeps session deduplication', async () => {
+    const decision = await resolveAutoReviewDecision(request({ kind: 'exec', command: 'npm run build' }), async () => ({
+      verdict: 'ask', unavailable: true, unavailableReason: 'no_available_model', reason: 'PRIVATE_PROVIDER_EXCEPTION',
+    }));
+    expect(decision).toMatchObject({ verdict: 'ask', unavailable: true, unavailableReason: 'no_available_model' });
+    expect(decision.reason).not.toContain('PRIVATE_PROVIDER_EXCEPTION');
+    const emit = vi.fn();
+    const notice = createAutoReviewUnavailableNotice(emit);
+    notice.notify(decision);
+    notice.notify(decision);
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(isAutoReviewUnavailableNotice(emit.mock.calls[0][0])).toBe(true);
+    expect(emit.mock.calls[0][0]).toContain('[AUTO_REVIEW_NO_AVAILABLE_MODEL]');
+    expect(emit.mock.calls[0][0]).not.toContain('PRIVATE_PROVIDER_EXCEPTION');
+    notice.reset();
+    notice.notify();
+    expect(emit.mock.calls[1][0]).toContain('[AUTO_REVIEW_UNAVAILABLE]');
+  });
   it('emits once per session and re-arms only after reset', () => {
     const emitted: string[] = [];
     const notice = createAutoReviewUnavailableNotice((message) => emitted.push(message));

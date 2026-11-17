@@ -1181,6 +1181,49 @@ describe('MakerScheduleRunner model selection', () => {
       expect(h.setModel).not.toHaveBeenCalled();
     });
 
+    // 2026-11-16 regression, unit: a bound drift check saved as Claude Code + a Claude
+    // subscription model without modelAgentKind fired after its task had moved to Codex.
+    // The model-only override kept Codex and was refused with 403. Minimal input: legacy
+    // schedule (agentKind=claude-code, model set) and a task whose current Harness is
+    // Codex. Same-Harness tasks keep the follow-task override path.
+    it.each([
+      { current: 'codex' as const, switches: true },
+      { current: 'claude-code' as const, switches: false },
+    ])('legacy model-only override on a $current task (switches=$switches)', async ({ current, switches }) => {
+      const h = createSessionHarness();
+      Object.assign(h.session, { agentKind: current, model: current === 'codex' ? 'gpt-6.1-sol' : 'claude-opus-5-5' });
+      const switchHarness = vi.fn(async () => ({ engineReady: true }));
+      const acquirePendingAgentSwitch = vi.fn(async (
+        _id: string, _signal?: AbortSignal, selection?: Parameters<typeof applyScheduledModelSelection>[0],
+      ) => selection ? {
+        release: vi.fn(),
+        selection: await applyScheduledModelSelection(selection, {
+          getTarget: async () => ({ agentKind: current, status: 'active' }),
+          isBusy: () => false,
+          resolveSelection: async (choice) => choice,
+          switchHarness,
+          applyModel: async () => {},
+        }),
+      } : vi.fn());
+      const harness = createRunnerHarness(h, {
+        agentKind: current, model: h.session.model, workDir: '/work', sdkSessionId: 'sdk-1',
+      }, { acquirePendingAgentSwitch });
+      const opts = await fireToCompletion(harness, h, baseSchedule({
+        targetSessionId: h.session.id, agentKind: 'claude-code',
+        model: 'claude-sonnet-5-5', providerId: 'anthropic',
+      })) as { agentKind?: string; model: string };
+      expect(opts).toMatchObject({ agentKind: 'claude-code', model: 'claude-sonnet-5-5' });
+      if (switches) {
+        expect(acquirePendingAgentSwitch.mock.calls[0][2]).toMatchObject({
+          agentKind: 'claude-code', model: 'claude-sonnet-5-5', providerId: 'anthropic',
+        });
+        expect(switchHarness).toHaveBeenCalledOnce();
+      } else {
+        expect(acquirePendingAgentSwitch.mock.calls[0][2]).toBeUndefined();
+        expect(switchHarness).not.toHaveBeenCalled();
+      }
+    });
+
     it('复用 Codex 的 context Host 身份变化时先关闭旧 handle，再 cold resume', async () => {
       mocks.getSessionProvider.mockReturnValue('mygpt');
       const h = createSessionHarness();

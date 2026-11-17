@@ -32,6 +32,18 @@ import {
 
 export type MobileSessionEventKind = 'done' | 'error' | 'needs-reply';
 
+/** Activity suppresses ordinary duplicate alerts; explicitly requested alerts bypass that projection. */
+export function shouldSuppressForActivity(
+  kind: MobileSessionEventKind,
+  activity: { phase?: string; attention?: boolean } | undefined,
+  attentionExempt = false,
+): boolean {
+  if (!activity || attentionExempt) return false;
+  return kind === 'needs-reply'
+    ? activity.phase !== 'needs-interaction'
+    : !activity.attention;
+}
+
 const CATEGORY_BY_KIND: Record<MobileSessionEventKind, NotifyCategory> = {
   done: 'session-done',
   error: 'session-error',

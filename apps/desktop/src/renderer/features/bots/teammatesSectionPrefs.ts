@@ -24,3 +24,13 @@ export function readTeammatesViewMode(ownerId: string | null): TeammatesViewMode
 export function writeTeammatesViewMode(ownerId: string | null, mode: TeammatesViewMode): void {
   writeSidebarOwnerStorage(VIEW_KEY, ownerId, mode);
 }
+
+const COLLAPSED_AVATARS_KEY = 'sidebar.teammatesCollapsedAvatars.v1';
+
+export function readCollapsedTeammateAvatars(ownerId: string | null): boolean {
+  return readSidebarOwnerStorage(COLLAPSED_AVATARS_KEY, ownerId) === 'true';
+}
+
+export function writeCollapsedTeammateAvatars(ownerId: string | null, enabled: boolean): void {
+  writeSidebarOwnerStorage(COLLAPSED_AVATARS_KEY, ownerId, String(enabled));
+}

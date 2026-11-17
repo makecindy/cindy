@@ -189,8 +189,8 @@ export function createGithubSetup(root: string, connected: () => void): GithubSe
         root,
         artifact,
         signal,
-        onProgress: ({ status, progress }) =>
-          update({ phase: status, percent: progress?.percent ?? undefined }),
+        onProgress: ({ status, download }) =>
+          update({ phase: status, percent: download.percent ?? undefined, download }),
         validate: (binary) => check(binary, ['--version'], GH_VERSION),
       });
     },

@@ -4477,14 +4477,7 @@
         "installCancel": "Installation abbrechen",
         "installFailed": "Ollama konnte nicht installiert werden",
         "installPhase": {
-          "resolving": "Offizielle Version wird gesucht…",
-          "downloading": "Wird heruntergeladen…",
-          "verifying": "Wird überprüft…",
-          "extracting": "Wird installiert…",
-          "starting": "Wird gestartet…",
-          "success": "Installiert",
-          "error": "Installation fehlgeschlagen",
-          "cancelled": "Abgebrochen"
+          "error": "Installation fehlgeschlagen"
         },
         "openWebsite": "Ollama-Website öffnen",
         "recheck": "Bereits installiert, erneut prüfen",
@@ -4519,20 +4512,6 @@
         "retryDownload": "Erneut versuchen",
         "libraryName": "Exakter Name in der Ollama-Bibliothek",
         "pullingTitle": "{{name}} wird heruntergeladen",
-        "pullIndeterminate": "Vorbereitung",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Download wird vorbereitet…",
-          "manifest": "Manifest wird abgerufen…",
-          "downloading": "Modelldateien werden heruntergeladen",
-          "verifying": "Wird überprüft…",
-          "writing": "Wird geschrieben…",
-          "success": "Download abgeschlossen",
-          "error": "Download fehlgeschlagen",
-          "paused": "Pausiert",
-          "cancelled": "Abgebrochen"
-        },
         "pauseDownload": "Pausieren",
         "resumeDownload": "Download fortsetzen",
         "cancelDownload": "Unvollständigen Download löschen",
@@ -5773,7 +5752,8 @@
             "statusFailed": "die Statusprüfung des Controllers ist fehlgeschlagen",
             "recoveryFailed": "die Steuerungsverbindung konnte nicht neu aufgebaut werden",
             "extensionDisconnected": "keine Browsererweiterung ist verbunden (installiere und aktiviere das Cindy Chrome-Plugin und die zugehörige Erweiterung)",
-            "pluginMissing": "das Cindy Chrome-Plugin ist nicht installiert oder aktiviert"
+            "pluginMissing": "das Cindy Chrome-Plugin ist nicht installiert oder aktiviert",
+            "browserMissing": "Chrome ist auf diesem Computer nicht installiert"
           },
           "reconnect": "Browser erneut verbinden",
           "recover": "Browser wiederherstellen",
@@ -5793,7 +5773,7 @@
         },
         "userBrowser": {
           "title": "Mein Browser",
-          "description": "Funktioniert in deinem aktuell verwendeten Chrome oder Edge mit deinen bestehenden Anmeldungen. Neue Seiten öffnen sich in einem Hintergrundfenster und stören dich nicht."
+          "description": "Dein eigenes Chrome auf diesem Computer (Edge funktioniert auch). Der Agent arbeitet direkt darin, mit deinen bestehenden Anmeldungen. Neue Seiten öffnen sich in einem Hintergrundfenster und stören dich nicht."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome-Plugin installieren",
@@ -5812,7 +5792,9 @@
           "updatePluginTitle": "Cindy Chrome-Plugin aktualisieren",
           "updatePluginBody": "Das installierte Cindy Chrome-Plugin ist für „Mein Browser“ zu alt. Aktualisiere es auf die neueste Version und folge dann der Aufforderung, die Erweiterung hinzuzufügen.",
           "updatePlugin": "Aktualisieren",
-          "storeOpened": "Die Seite der Cindy-Erweiterung wurde in deinem Browser geöffnet. Wähle „Zu Chrome hinzufügen“, dann wird die Verbindung automatisch hergestellt."
+          "storeOpened": "Die Seite der Cindy-Erweiterung wurde in deinem Browser geöffnet. Wähle „Zu Chrome hinzufügen“, dann wird die Verbindung automatisch hergestellt.",
+          "installBrowserTitle": "Zuerst Chrome installieren",
+          "installBrowserBody": "Chrome ist auf diesem Computer nicht installiert. „Mein Browser“ braucht Chrome (oder Edge) für die Cindy-Erweiterung. Sobald es installiert ist, geht es hier automatisch mit dem nächsten Schritt weiter."
         }
       },
       "android": {
@@ -5974,8 +5956,6 @@
           "notChecked": "Noch nicht geprüft",
           "action": "Aktualisieren",
           "updating": "Wird aktualisiert…",
-          "downloadingPercent": "Wird heruntergeladen: {{percent}} % ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "Wird heruntergeladen, bisher {{downloaded}} MB…",
           "installing": "Download abgeschlossen, Installation läuft…",
           "toast": {
             "success": "cua-driver auf die neueste Version aktualisiert",
@@ -8529,6 +8509,7 @@
           "workdirClear": "Auf Standardordner zurücksetzen",
           "followAuxiliary": "Systemweites Hilfsmodell verwenden · {{model}}",
           "followAuxiliaryUnset": "Systemweites Hilfsmodell verwenden",
+          "remoteQuickAnswerHint": "Dieses Modell läuft nicht auf diesem Computer. Schnellantworten werden von diesem Computer gesendet und verwenden daher das systemweite Hilfsmodell.",
           "restoreModel": "Modell zurücksetzen"
         },
         "toolsTitle": "Tools",
@@ -10917,6 +10898,7 @@
       "duplicate": "Freund duplizieren",
       "moreActions": "Weitere Aktionen für {{name}}",
       "viewIcons": "Symbole",
+      "showCollapsedTeammateAvatars": "Avatare im eingeklappten Zustand anzeigen",
       "sectionExpand": "Freunde ausklappen",
       "showLess": "Weniger anzeigen",
       "sectionCollapse": "Freunde einklappen",
@@ -11683,6 +11665,11 @@
           "transferHint": "Diese Person wird Inhaber und du wirst Admin.",
           "removeTitle": "{{name}} aus dieser Gruppe entfernen?",
           "removeHint": "Diese Person verliert den Zugriff auf Nachrichten. Ihre Freunde verlassen die Gruppe ebenfalls.",
+          "removeOwn": "Aus Gruppe entfernen",
+          "removeOwnScope": "Dies betrifft nur diese Gruppe. Dein Partner bleibt in deinem Konto.",
+          "removeOwnHint": "{{name}} erhält keine Nachrichten mehr aus „{{group}}“. Der Verlauf bleibt erhalten; andere Gruppen und private Chats sind nicht betroffen.",
+          "removeOwnActiveHint": "Aktive Anfragen dieses Partners in dieser Gruppe werden gestoppt. Unabhängig gestartete Aufgaben laufen weiter.",
+          "stopAndRemove": "Stoppen und entfernen",
           "leave": "Gruppe verlassen",
           "leaveHint": "Du und deine Freunde verlassen diese Gruppe. Du erhältst keine neuen Nachrichten mehr und verlierst den Zugriff auf den Verlauf.",
           "soleOwnerHint": "Du bist das einzige verbliebene Mitglied. Archiviere diese Gruppe, um ihren Verlauf zu behalten und sie später wiederherzustellen.",
@@ -12934,6 +12921,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "Kein Modell für die automatische Prüfung verfügbar. Aktiviere und verbinde auf dem Computer, auf dem der Agent läuft, einen Prüfanbieter unter Modellanbieter oder konfiguriere Hilfsmodelle in den Einstellungen. Prüfpflichtige Aktionen benötigen weiterhin deine Bestätigung.",
           "autoReviewUnavailable": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Stelle diese Aufgabe auf Vollzugriff um, wenn du nicht unterbrochen werden möchtest. Dieser Modus birgt höhere Risiken.",
           "autoReviewUnavailableWechat": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Persönliches WeChat kann keinen Vollzugriff nutzen. Bestätige diese Aktion direkt.",
           "autoReviewConfirmUndelivered": "Die automatische Prüfung wurde nicht abgeschlossen, und die Bestätigung wurde nicht zugestellt oder nicht beantwortet. Diese Ablehnung kam nicht von dir.",
@@ -15489,6 +15477,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Diese Datei liegt außerhalb des Arbeitsverzeichnisses der aktuellen Sitzung und kann im Dateibrowser der Seitenleiste nicht gefunden werden",
       "openInDefaultBrowser": "Im Browser öffnen",
       "copyLink": "Link kopieren",
+      "addPrToHeader": "Zur Kopfzeile hinzufügen",
+      "prAlreadyInHeader": "Bereits in der Kopfzeile",
+      "prAddedToHeader": "Zur Kopfzeile hinzugefügt – der Status begleitet diese Aufgabe.",
+      "prAssociatedNotInHeader": "Verknüpft, nicht in der Kopfzeile",
+      "prSavedNotInHeader": "Verknüpfung gespeichert. Die drei Plätze in der Kopfzeile sind belegt. Du kannst diesen PR in der PR-Verwaltung der Aufgabe anheften.",
       "linkCopied": "Link kopiert",
       "viewSourceFile": "Quelltext anzeigen",
       "openInSidebarFailed": "Öffnen im Browser der Seitenleiste fehlgeschlagen",
@@ -15650,6 +15643,7 @@
       "DEVICE_LINK_BUSY": "Der Remotecomputer ist ausgelastet. Versuche es in Kürze erneut.",
       "REMOTE_DAEMON_CLOSED": "Die Remote-Verbindung wurde unterbrochen, möglicherweise während eines Updates. Diese Runde wurde beendet. Sende die Nachricht erneut.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Lokale Datei-/Bildanhänge sind in Remote-Sitzungen nicht zugänglich. Füge stattdessen den Inhalt direkt ein.",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "Kein Modell für die automatische Prüfung verfügbar. Aktiviere und verbinde auf dem Computer, auf dem der Agent läuft, einen Prüfanbieter unter Modellanbieter oder konfiguriere Hilfsmodelle in den Einstellungen. Prüfpflichtige Aktionen benötigen weiterhin deine Bestätigung.",
       "AUTO_REVIEW_UNAVAILABLE": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Stelle diese Aufgabe auf Vollzugriff um, wenn du nicht unterbrochen werden möchtest. Dieser Modus birgt höhere Risiken.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Die automatische Prüfung konnte keine Entscheidung treffen. Aktionen, die eine Prüfung erfordern, brauchen jetzt deine Bestätigung. Persönliches WeChat kann keinen Vollzugriff nutzen. Bestätige diese Aktion direkt.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "Die automatische Prüfung war nicht verfügbar und die Bestätigungsanfrage wurde nicht abgeschlossen. Dies ist keine Ablehnung durch den Nutzer.",
@@ -21826,5 +21820,28 @@
     "archivedNotice": "Automatisch archivierte inaktive Aufgaben: {{count}}",
     "undo": "Rückgängig",
     "undoFailed": "Rücknahme fehlgeschlagen. Stelle die Aufgaben im Archiv wieder her."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "Noch {{time}}",
+    "attempt": "Versuch {{attempt}}",
+    "phase": {
+      "preparing": "Wird vorbereitet…",
+      "queued": "In der Warteschlange…",
+      "downloading": "Wird heruntergeladen…",
+      "retrying": "Neuer Versuch…",
+      "verifying": "Wird geprüft…",
+      "installing": "Wird installiert…",
+      "paused": "Pausiert",
+      "completed": "Fertig",
+      "failed": "Download fehlgeschlagen",
+      "cancelled": "Abgebrochen"
+    },
+    "retry": {
+      "slow": "Langsame Verbindung, neu verbinden…",
+      "network": "Verbindung unterbrochen, neuer Versuch…",
+      "timeout": "Zeitüberschreitung, neuer Versuch…",
+      "server": "Server ausgelastet, neuer Versuch…"
+    }
   }
 }

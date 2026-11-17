@@ -4533,14 +4533,7 @@
         "installCancel": "Annuler l'installation",
         "installFailed": "Impossible d'installer Ollama",
         "installPhase": {
-          "resolving": "Recherche de la version officielle…",
-          "downloading": "Téléchargement…",
-          "verifying": "Vérification…",
-          "extracting": "Installation…",
-          "starting": "Démarrage…",
-          "success": "Installé",
-          "error": "Échec de l'installation",
-          "cancelled": "Annulé"
+          "error": "Échec de l'installation"
         },
         "openWebsite": "Ouvrir le site d'Ollama",
         "recheck": "Je l'ai installé, vérifier à nouveau",
@@ -4575,20 +4568,6 @@
         "retryDownload": "Réessayer",
         "libraryName": "Nom exact dans la bibliothèque Ollama",
         "pullingTitle": "Téléchargement de {{name}}",
-        "pullIndeterminate": "Préparation",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Préparation du téléchargement…",
-          "manifest": "Récupération du manifeste…",
-          "downloading": "Téléchargement des fichiers du modèle",
-          "verifying": "Vérification…",
-          "writing": "Écriture…",
-          "success": "Téléchargement terminé",
-          "error": "Échec du téléchargement",
-          "paused": "En pause",
-          "cancelled": "Annulé"
-        },
         "pauseDownload": "Mettre en pause",
         "resumeDownload": "Reprendre le téléchargement",
         "cancelDownload": "Supprimer le téléchargement incomplet",
@@ -5831,7 +5810,8 @@
             "statusFailed": "la vérification du statut du contrôleur a échoué",
             "recoveryFailed": "la connexion de contrôle n'a pas pu être reconstruite",
             "extensionDisconnected": "aucune extension de navigateur n'est connectée (installez et activez le plugin Cindy Chrome et son extension)",
-            "pluginMissing": "le plugin Cindy Chrome n'est pas installé ou pas activé"
+            "pluginMissing": "le plugin Cindy Chrome n'est pas installé ou pas activé",
+            "browserMissing": "Chrome n'est pas installé sur cet ordinateur"
           },
           "reconnect": "Reconnecter le navigateur",
           "recover": "Restaurer le navigateur",
@@ -5851,7 +5831,7 @@
         },
         "userBrowser": {
           "title": "Mon navigateur",
-          "description": "Fonctionne dans le Chrome ou l'Edge que vous utilisez, avec vos connexions existantes. Les nouvelles pages s'ouvrent dans une fenêtre en arrière-plan, sans vous gêner."
+          "description": "Votre propre Chrome sur cet ordinateur (Edge fonctionne aussi). L'Agent y travaille directement, avec vos connexions existantes. Les nouvelles pages s'ouvrent dans une fenêtre en arrière-plan, sans vous gêner."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Installer le plugin Cindy Chrome",
@@ -5870,7 +5850,9 @@
           "updatePluginTitle": "Mettre à jour le plugin Cindy Chrome",
           "updatePluginBody": "Le plugin Cindy Chrome installé est trop ancien pour « Mon navigateur ». Mettez-le à jour vers la dernière version, puis suivez ses indications pour ajouter l'extension.",
           "updatePlugin": "Mettre à jour",
-          "storeOpened": "La page de l'extension Cindy s'est ouverte dans votre navigateur. Choisissez « Ajouter à Chrome » et la connexion se fera d'elle-même."
+          "storeOpened": "La page de l'extension Cindy s'est ouverte dans votre navigateur. Choisissez « Ajouter à Chrome » et la connexion se fera d'elle-même.",
+          "installBrowserTitle": "Installez d'abord Chrome",
+          "installBrowserBody": "Chrome n'est pas installé sur cet ordinateur. « Mon navigateur » a besoin de Chrome (ou d'Edge) pour l'extension Cindy. Une fois installé, l'étape suivante s'affichera ici automatiquement."
         }
       },
       "android": {
@@ -6032,8 +6014,6 @@
           "notChecked": "Pas encore vérifié",
           "action": "Mettre à jour",
           "updating": "Mise à jour…",
-          "downloadingPercent": "Téléchargement {{percent}} % ({{downloaded}}/{{total}} Mo)…",
-          "downloadingBytes": "Téléchargement, {{downloaded}} Mo pour l'instant…",
           "installing": "Téléchargement terminé, installation…",
           "toast": {
             "success": "cua-driver mis à jour vers la dernière version",
@@ -8601,6 +8581,7 @@
           "workdirClear": "Revenir au dossier par défaut",
           "followAuxiliary": "Suivre le modèle auxiliaire du système · {{model}}",
           "followAuxiliaryUnset": "Suivre le modèle auxiliaire du système",
+          "remoteQuickAnswerHint": "Ce modèle ne s’exécute pas sur cet ordinateur. Les réponses rapides sont envoyées depuis cet ordinateur et utilisent donc le modèle auxiliaire du système.",
           "restoreModel": "Réinitialiser le modèle"
         },
         "toolsTitle": "Outils",
@@ -11001,6 +10982,7 @@
       "duplicate": "Dupliquer l’ami",
       "moreActions": "Plus d'actions pour {{name}}",
       "viewIcons": "Icônes",
+      "showCollapsedTeammateAvatars": "Afficher les avatars en mode réduit",
       "sectionExpand": "Développer les amis",
       "showLess": "Afficher moins",
       "sectionCollapse": "Réduire les amis",
@@ -11778,6 +11760,11 @@
           "transferHint": "Cette personne deviendra propriétaire et vous deviendrez administrateur.",
           "removeTitle": "Retirer {{name}} de ce groupe ?",
           "removeHint": "Cette personne perdra l'accès aux messages. Ses amis quitteront également le groupe.",
+          "removeOwn": "Retirer du groupe",
+          "removeOwnScope": "Cela ne concerne que ce groupe. Votre partenaire reste dans votre compte.",
+          "removeOwnHint": "{{name}} ne recevra plus les messages de « {{group}} ». L’historique est conservé ; les autres groupes et discussions privées ne sont pas affectés.",
+          "removeOwnActiveHint": "Ses demandes en cours dans ce groupe seront arrêtées. Les tâches lancées indépendamment continueront.",
+          "stopAndRemove": "Arrêter et retirer",
           "leave": "Quitter le groupe",
           "leaveHint": "Vos amis et vous quitterez ce groupe. Vous ne recevrez plus de nouveaux messages et n'aurez plus accès à son historique.",
           "soleOwnerHint": "Vous êtes le dernier membre. Archivez ce groupe pour conserver son historique et le restaurer plus tard.",
@@ -13041,6 +13028,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "Aucun modèle de révision automatique n’est disponible. Sur l’ordinateur qui exécute l’Agent, activez et connectez un fournisseur de révision dans Fournisseurs de modèles, ou personnalisez les modèles auxiliaires dans les réglages. Les actions à vérifier nécessitent toujours votre confirmation.",
           "autoReviewUnavailable": "La revue automatique n'a pas pu prendre de décision : les actions qui nécessitent une revue requièrent désormais votre confirmation. Passez cette tâche en accès complet si vous préférez ne pas être interrompu. Ce mode présente un risque plus élevé.",
           "autoReviewUnavailableWechat": "La revue automatique n'a pas pu prendre de décision : les actions qui nécessitent une revue requièrent désormais votre confirmation. WeChat personnel ne peut pas utiliser l'accès complet. Confirmez directement cette action.",
           "autoReviewConfirmUndelivered": "La revue automatique n'a pas abouti, et la confirmation n'a pas été transmise ou est restée sans réponse. Ce refus ne vient pas de vous.",
@@ -15630,6 +15618,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Ce fichier se trouve en dehors du répertoire de travail de la session actuelle et ne peut pas être localisé dans le navigateur de fichiers de la barre latérale",
       "openInDefaultBrowser": "Ouvrir dans le navigateur",
       "copyLink": "Copier le lien",
+      "addPrToHeader": "Ajouter à l’en-tête",
+      "prAlreadyInHeader": "Déjà dans l’en-tête",
+      "prAddedToHeader": "Ajouté à l’en-tête — le statut accompagne cette tâche.",
+      "prAssociatedNotInHeader": "Liée, absente de l’en-tête",
+      "prSavedNotInHeader": "Lien enregistré. Les trois places de l’en-tête sont prises ; épinglez cette PR dans la gestion des PR de l’en-tête de la tâche.",
       "linkCopied": "Lien copié",
       "viewSourceFile": "Voir la source",
       "openInSidebarFailed": "Impossible d'ouvrir dans le navigateur de la barre latérale",
@@ -15791,6 +15784,7 @@
       "DEVICE_LINK_BUSY": "L'ordinateur distant est occupé. Veuillez réessayer dans un instant.",
       "REMOTE_DAEMON_CLOSED": "La connexion distante a été coupée, peut-être pendant une mise à jour. Ce tour est terminé. Renvoyez le message.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Les pièces jointes locales (fichiers/images) ne sont pas accessibles dans les sessions distantes. Collez plutôt directement le contenu.",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "Aucun modèle de révision automatique n’est disponible. Sur l’ordinateur qui exécute l’Agent, activez et connectez un fournisseur de révision dans Fournisseurs de modèles, ou personnalisez les modèles auxiliaires dans les réglages. Les actions à vérifier nécessitent toujours votre confirmation.",
       "AUTO_REVIEW_UNAVAILABLE": "La revue automatique n'a pas pu prendre de décision : les actions qui nécessitent une revue requièrent désormais votre confirmation. Passez cette tâche en accès complet si vous préférez ne pas être interrompu. Ce mode présente un risque plus élevé.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "La revue automatique n'a pas pu prendre de décision : les actions qui nécessitent une revue requièrent désormais votre confirmation. WeChat personnel ne peut pas utiliser l'accès complet. Confirmez directement cette action.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "La revue automatique était indisponible et la demande de confirmation n'a pas abouti. Il ne s'agit pas d'un refus de l'utilisateur.",
@@ -22031,5 +22025,28 @@
     "archivedNotice": "Tâches inactives archivées automatiquement : {{count}}",
     "undo": "Annuler",
     "undoFailed": "Annulation impossible. Restaurez les tâches depuis les archives."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "Encore {{time}}",
+    "attempt": "Tentative {{attempt}}",
+    "phase": {
+      "preparing": "Préparation…",
+      "queued": "En file d’attente…",
+      "downloading": "Téléchargement…",
+      "retrying": "Nouvelle tentative…",
+      "verifying": "Vérification…",
+      "installing": "Installation…",
+      "paused": "En pause",
+      "completed": "Terminé",
+      "failed": "Échec du téléchargement",
+      "cancelled": "Annulé"
+    },
+    "retry": {
+      "slow": "Connexion lente, reconnexion…",
+      "network": "Connexion perdue, nouvelle tentative…",
+      "timeout": "Délai de connexion dépassé, nouvelle tentative…",
+      "server": "Serveur occupé, nouvelle tentative…"
+    }
   }
 }
