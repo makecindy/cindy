@@ -95,12 +95,14 @@ describe('authentication does not wait for optional plugin provisioning', () => 
   it.each([false, true])('keeps first-owner assets behind the login fence (copy fails: %s)', async (fails) => {
     // #10334: the SQLite/native-auth handoff alone let the cloud runtime start
     // without local provider keys or installed plugins. Exercise the real auth
-    // commit; a failed asset copy must retain ownership without publishing ready.
+    // commit; a failed asset copy keeps the durable plan for the next commit
+    // and never revokes the login that already committed.
     let committed = false;
     let claimed = false;
     let assets = false;
     let visible: boolean | undefined;
     const rollback = vi.fn();
+    const warn = vi.fn();
     const deps = {
       isPassiveSharedUserDataInstance: () => false,
       withGhostSkillProjectionOwnerCommit: async (hooks: {
@@ -119,6 +121,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
         if (fails) throw new Error('asset copy unavailable');
         assets = true;
       },
+      log: { warn },
       app: { getPath: () => 'test-only-user-data' },
       BRAND_IDENTITY: { dbFilePrefix: 'cindy', executableName: 'cindy' },
       hasExclusiveSharedLegacyUserDataAccess: () => true,
@@ -132,13 +135,14 @@ describe('authentication does not wait for optional plugin provisioning', () => 
     const commit = new Function(...Object.keys(deps), compiled)(...Object.values(deps));
     const result = commit({ previousOwnerId: 'local-v1', nextOwnerId: 'first-cloud',
       prepareTransition: async () => {}, commit: () => { committed = true; } });
+    await result;
+    expect(visible).toBe(!fails);
     if (fails) {
-      await expect(result).rejects.toThrow('asset copy unavailable');
-      expect(visible).toBeUndefined();
-      expect(deps.requestStableOwnerPostCommit).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith('local profile asset adoption deferred', {
+        ownerId: 'first-cloud', error: 'asset copy unavailable',
+      });
     } else {
-      await result;
-      expect(visible).toBe(true);
+      expect(warn).not.toHaveBeenCalled();
     }
     expect(rollback).not.toHaveBeenCalled();
   });

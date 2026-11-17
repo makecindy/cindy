@@ -2488,18 +2488,27 @@ async function withCloudOwnerCommit<T>(opts: {
         rollbackReservation = null;
         // The verified first cloud owner adopts local credentials and plugin
         // installation facts while the old runtime is drained and the new
-        // owner is still quarantined. Optional provisioning must not race this.
-        await adoptLocalProfileAssets(opts.nextOwnerId, {
-          userDataDir: app.getPath('userData'),
-          dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
-          hasExclusiveSourceAccess: hasExclusiveSharedLegacyUserDataAccess,
-          acquireSourcePublicationBarrier: process.platform === 'win32'
-            ? () => acquireWindowsPackagedInstanceBarrier({
-                userDataDir: app.getPath('userData'),
-                programName: BRAND_IDENTITY.executableName,
-              })
-            : undefined,
-        });
+        // owner is still quarantined. Optional provisioning must not race this,
+        // and a failed handoff keeps its durable plan for the next commit; it
+        // must never revoke a login or refresh that already committed.
+        try {
+          await adoptLocalProfileAssets(opts.nextOwnerId, {
+            userDataDir: app.getPath('userData'),
+            dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
+            hasExclusiveSourceAccess: hasExclusiveSharedLegacyUserDataAccess,
+            acquireSourcePublicationBarrier: process.platform === 'win32'
+              ? () => acquireWindowsPackagedInstanceBarrier({
+                  userDataDir: app.getPath('userData'),
+                  programName: BRAND_IDENTITY.executableName,
+                })
+              : undefined,
+          });
+        } catch (error) {
+          log.warn('local profile asset adoption deferred', {
+            ownerId: opts.nextOwnerId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         // Same-owner repair: advance the owner generation after the real commit
         // so activeOwnerScopeKey() changes and stale captured scopes are rejected.
         if (forceBumpGeneration) {
