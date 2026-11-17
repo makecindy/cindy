@@ -5,6 +5,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
+import { buildRemoteMediaUrl } from '../../shared/remoteMediaUrl';
 
 import {
   classifyLightboxMediaUrl,
@@ -163,6 +164,7 @@ function makeDeps(overrides: Partial<LightboxMediaDeps> = {}): LightboxMediaDeps
       buffer: Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('remote-media')]),
       mimeType: 'image/jpeg',
     })),
+    saveRemoteMedia: vi.fn(async () => undefined),
     getTempDir: () => '/tmp-dir',
     fileExists: () => true,
     statSize: async () => 1234,
@@ -276,12 +278,41 @@ describe('saveAs', () => {
       url: 'https://x.com/photo.png',
     });
     expect(result.canceled).toBe(false);
-    expect(deps.fetchRemoteImage).toHaveBeenCalledWith('https://x.com/photo.png');
-    expect(deps.writeFile).toHaveBeenCalledWith(
-      '/downloads/out.png',
-      Buffer.from('remote-bytes'),
+    expect(deps.saveRemoteMedia).toHaveBeenCalledWith(
+      { kind: 'http', url: 'https://x.com/photo.png' }, '/downloads/out.png',
     );
+    expect(deps.fetchRemoteImage).not.toHaveBeenCalled();
+    expect(deps.writeFile).not.toHaveBeenCalled();
   });
+
+  // #10128: real save handler, minimum canceled/confirmed remote source. The old
+  // handler fetched before offering the dialog; image-only actions must still use their cap.
+  it.each([false, true])('offers remote filename before any fetch (canceled=%s)', async (canceled) => {
+    const url = buildRemoteMediaUrl({ kind: 'device', deviceId: 'device' },
+      'xdt-file://local/?path=' + encodeURIComponent('C:\\clips\\movie.mp4'));
+    const deps = makeDeps();
+    deps.showSaveDialog = vi.fn(async ({ defaultPath }) => {
+      expect(defaultPath).toBe(path.join('/downloads', 'movie.mp4'));
+      expect(deps.fetchRemoteMediaImage).not.toHaveBeenCalled();
+      expect(deps.saveRemoteMedia).not.toHaveBeenCalled();
+      return { canceled, filePath: '/downloads/movie.mp4' };
+    });
+    const result = await createLightboxMediaHandlers(deps).saveAs({ url });
+    expect(result.canceled).toBe(canceled);
+    expect(deps.fetchRemoteMediaImage).not.toHaveBeenCalled();
+    expect(deps.saveRemoteMedia).toHaveBeenCalledTimes(canceled ? 0 : 1);
+  });
+
+  it.each(['evil.exe', '%2Ftmp%2Fclip.mp4', 'NUL.mp4', 'clip.mp4%20', '..']) (
+    'uses an inert suggestion for unsafe URL name %s', async (name) => {
+      const deps = makeDeps({ showSaveDialog: vi.fn(async () => ({ canceled: true })) });
+      await createLightboxMediaHandlers(deps).saveAs({ url: `https://example.test/${name}` });
+      expect(deps.showSaveDialog).toHaveBeenCalledWith({
+        defaultPath: path.join('/downloads', 'media-1720000000000.bin'),
+      });
+      expect(deps.saveRemoteMedia).not.toHaveBeenCalled();
+    },
+  );
 
   it('decodes data URLs to bytes', async () => {
     const deps = makeDeps();
@@ -367,13 +398,17 @@ describe('remote-media source', () => {
     expect(result.mimeType).toBe('image/jpeg');
   });
 
-  it('save-as fetches remote bytes and writes them to the chosen path', async () => {
+  it('save-as streams remote media to the chosen path without image collection', async () => {
     const deps = makeDeps();
     const result = await createLightboxMediaHandlers(deps).saveAs({
       url: 'cindy-remote-media://m/abc/def',
     });
     expect(result.canceled).toBe(false);
-    expect(deps.writeFile).toHaveBeenCalled();
+    expect(deps.saveRemoteMedia).toHaveBeenCalledWith(
+      { kind: 'remote-media', url: 'cindy-remote-media://m/abc/def' }, '/downloads/out.png',
+    );
+    expect(deps.fetchRemoteMediaImage).not.toHaveBeenCalled();
+    expect(deps.writeFile).not.toHaveBeenCalled();
   });
 
   it('open-with-default-app drops remote bytes into a temp file and opens it', async () => {
