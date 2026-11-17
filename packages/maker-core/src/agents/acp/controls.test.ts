@@ -23,6 +23,7 @@ function peer(withPartnerModels = false) {
   let failThought = false;
   const calls: AcpRecord[] = [];
   const receivers = new Set<(line: string) => void>();
+  const closeListeners = new Set<() => void>();
   const notify = (update: AcpRecord, sessionId = 'controls-native') => {
     for (const receive of receivers) receive(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update } }));
   };
@@ -32,7 +33,7 @@ function peer(withPartnerModels = false) {
     { id: 'mode', category: 'mode', type: 'select', currentValue: mode, options: ['default', 'auto', 'accept-edits', 'plan'].map(value => ({ value, name: value })) },
   ];
   const transport: AcpTransport = {
-    onLine: receive => { receivers.add(receive); return () => { receivers.delete(receive); }; }, onClose: () => () => {}, close: async () => {},
+    onLine: receive => { receivers.add(receive); return () => { receivers.delete(receive); }; }, onClose: listener => { closeListeners.add(listener); return () => { closeListeners.delete(listener); }; }, close: async () => {},
     write(line) {
       const req = JSON.parse(line); calls.push(req);
       if (req.id === undefined) return;
@@ -65,10 +66,25 @@ function peer(withPartnerModels = false) {
   const agent = new AntigravityAgent({ binaryPath: '/official/agy', runtimeConfig: {}, logger: createConsoleLogger('test'), auth: {
     getState: async () => ({ authenticated: false }), triggerLogin: async () => ({ authenticated: false }), logout: async () => {}, getAuthEnv: async () => ({}),
   } }, { connect: async () => connection, modelsChanged() {}, assertGenerationAllowed: async () => {} });
-  return { session, agent, calls, updates, notify, native: () => ({ model, thought, mode }), failNextThought: () => { failThought = true; } };
+  return { session, agent, calls, updates, notify, crash: () => { for (const listener of closeListeners) listener(); }, native: () => ({ model, thought, mode }), failNextThought: () => { failThought = true; } };
 }
 
 describe('Antigravity native controls', () => {
+  // PR #11135: idle transport death must end the production handle's stream,
+  // allowing Session's existing stream-end recovery; explicit control reconnects must not.
+  it('ends the dead handle stream after an idle ACP exit and permits a fresh handle', async () => {
+    const h = peer(); await h.session.close();
+    const opts = { providerId: 'google-antigravity-subscription', workingDir: '/workspace', model: 'gemini-4-hydrogen' };
+    const handle = await h.agent.startSession(opts);
+    const ended = (async () => { for await (const event of handle.events()) { expect(event.type).not.toBe('done'); } })();
+    h.crash(); await ended;
+    await expect(handle.send({ type: 'user', content: 'must not send on dead handle' })).rejects.toThrow();
+    const replacement = await h.agent.startSession(opts);
+    await replacement.send({ type: 'user', content: 'fresh handle works' });
+    await replacement.close();
+    expect(h.calls.filter(call => call.method === 'session/prompt')).toHaveLength(1);
+  });
+
   it('discovers partner defaults from native controls without prompting or changing the original selection', async () => {
     const h = peer(true); await h.session.initialize(); await h.session.open({ cachedAuthentication: true });
     await h.session.discoverModelOptions();

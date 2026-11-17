@@ -24,7 +24,7 @@ export class AcpClient {
   onNotification: (method: string, params: AcpRecord) => void = () => {};
   onRequest: (method: string, params: AcpRecord, signal: AbortSignal) => Promise<unknown> = async () => { throw new AcpError(-32601); };
   private requests = new Set<AbortController>();
-  constructor(private transport: AcpTransport) {
+  constructor(private transport: AcpTransport, private onClose?: () => void) {
     this.unsub = [transport.onLine(line => { void this.receive(line).catch(() => this.ended()); }), transport.onClose(() => this.ended())];
   }
   request(method: string, params: AcpRecord, timeoutMs = 30_000, onSent?: () => void): Promise<AcpRecord> {
@@ -71,11 +71,12 @@ export class AcpClient {
     }
     else pending.resolve(record(msg.result));
   }
-  private ended(): void {
+  private ended(notify = true): void {
     if (this.closed) return;
     this.closed = true; this.cancelPermissions();
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new AcpError(-32001)); }
     this.pending.clear();
+    if (notify) this.onClose?.();
   }
-  async close(): Promise<void> { this.ended(); for (const unsub of this.unsub) unsub(); await this.transport.close(); }
+  async close(): Promise<void> { this.ended(false); for (const unsub of this.unsub) unsub(); await this.transport.close(); }
 }

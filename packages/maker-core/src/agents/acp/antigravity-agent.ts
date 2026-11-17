@@ -134,6 +134,17 @@ export class AntigravityAgent extends BaseAgent {
     const emit = (type: AgentEvent['type'], data: unknown) => { queue.push({ type, data, source: 'antigravity' }); };
     const createSession = (current: typeof connection) => new AcpSubscriptionSession({
       ...current, cwd: opts.workingDir, systemPrompt: [opts[TASK_SYSTEM_PROMPT], opts.botProfilePrompt, opts.userPrompt, opts.botProfileContextPrompt].filter(Boolean).join("\n\n"),
+      onClose() {
+        if (current !== connection || closed) return;
+        closed = true; usable = false; turnController?.abort();
+        // Only release the event stream after this process has stopped. Session's
+        // normal stream-end lifecycle then rebuilds on the next user send; no replay.
+        void session.close().then(() => {
+          try { current.dispose?.(); } finally { queue.end(); }
+        }).catch(() => {
+          thisAgent.deps.logger.warn('ACP cleanup pending after connection closed', { code: 'ACP_PROCESS_EXIT_UNCONFIRMED' });
+        });
+      },
       onUpdate(update) {
         const type = update.sessionUpdate;
         if (type === 'config_option_update') {

@@ -7,6 +7,7 @@ export interface AcpSubscriptionOptions {
   assertSubscriptionOnly(): Promise<void>;
   systemPrompt?: string;
   onUpdate(update: AcpRecord): void;
+  onClose?(): void;
   requestPermission(input: AcpRecord, signal: AbortSignal): Promise<boolean>;
 }
 export interface AcpDiscoveredModel {
@@ -45,7 +46,11 @@ export class AcpSubscriptionSession {
   currentModel: string | undefined;
   currentMode: string | undefined;
   constructor(private options: AcpSubscriptionOptions) {
-    this.client = new AcpClient(options.transport);
+    this.client = new AcpClient(options.transport, () => queueMicrotask(() => {
+      this.ready = false; this.authenticated = false;
+      for (const permission of this.permissions) permission.abort();
+      options.onClose?.();
+    }));
     this.client.onNotification = (method, params) => {
       if (method !== 'session/update') return;
       const update = record(params.update);

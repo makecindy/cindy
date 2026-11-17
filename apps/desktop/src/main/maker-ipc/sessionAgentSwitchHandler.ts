@@ -746,6 +746,8 @@ export async function performSessionAgentSwitch(
 ): Promise<SessionAgentSwitchResult> {
   const ownerGeneration = deps.readOwnerGeneration?.();
   const { sessionId, targetAgentKind, model, providerId, signal } = params;
+  // ACP has no Fast mode. Persist false across every staged and immediate path.
+  const fastMode = targetAgentKind === 'antigravity' ? false : params.fastMode;
   // Pi 跨引擎重建时同样要带上思考开关意图：不传就容易落到被控端镜像/默认值，
   // 与用户在意图期内刚改的开关不一致（device-link 远程场景最明显）。
   const thinkingEnabled = typeof params.thinking === 'boolean' ? params.thinking : undefined;
@@ -925,7 +927,7 @@ export async function performSessionAgentSwitch(
         model,
         providerId: normalizedProviderId,
         ...(typeof params.effort === 'string' ? { effort: params.effort } : {}),
-        ...(targetAgentKind !== 'antigravity' && (typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
+        ...((typeof fastMode === 'boolean' || fastMode === 'ultrafast') ? { fastMode: fastMode } : {}),
         ...(targetAgentKind !== 'antigravity' && typeof thinking === 'boolean' ? { thinking } : {}),
         sameAgentSelection: true,
         ...(confirmedContextWindow !== undefined ? { confirmedContextWindow } : {}),
@@ -1008,7 +1010,7 @@ export async function performSessionAgentSwitch(
       model,
       providerId: normalizedProviderId,
       ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
-      ...(targetAgentKind !== 'antigravity' && (typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
+      ...((typeof fastMode === 'boolean' || fastMode === 'ultrafast') ? { fastMode: fastMode } : {}),
       ...(targetAgentKind !== 'antigravity' && typeof thinking === 'boolean' ? { thinking } : {}),
       ...(agentDeviceChanges ? { targetAgentDeviceId } : {}),
     };
@@ -1241,7 +1243,7 @@ export async function performSessionAgentSwitch(
         providerId: normalizedProviderId,
         sdkSessionId: relocatedNativeId ?? parked?.sdkSessionId ?? null,
         ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
-        ...((typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
+        ...((typeof fastMode === 'boolean' || fastMode === 'ultrafast') ? { fastMode: fastMode } : {}),
         // 同机换连接／组选回的当前位置在另一台电脑时也带上位置：提交按它判断窗口该查哪台的目录，不能拿本机目录。
         ...(agentDeviceChanges || ((orcaGroupReturnRebuild || providerConnectionChanges) && targetAgentDeviceId)
           ? { agentDeviceId: targetAgentDeviceId }
@@ -1370,7 +1372,7 @@ export async function performSessionAgentSwitch(
                 model,
                 providerId: normalizedProviderId,
                 ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
-                ...((typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
+                ...((typeof fastMode === 'boolean' || fastMode === 'ultrafast') ? { fastMode: fastMode } : {}),
                 resumeFallbackRecovery: {
                   boundaryClientId,
                   boundaryContent: fallbackBoundaryContent,
@@ -1395,7 +1397,7 @@ export async function performSessionAgentSwitch(
               model,
               providerId: normalizedProviderId,
               ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
-              ...((typeof params.fastMode === 'boolean' || params.fastMode === 'ultrafast') ? { fastMode: params.fastMode } : {}),
+              ...((typeof fastMode === 'boolean' || fastMode === 'ultrafast') ? { fastMode: fastMode } : {}),
               resumeFallbackRecovery: {
                 boundaryClientId: null,
                 boundaryContent: fallbackBoundaryContent,

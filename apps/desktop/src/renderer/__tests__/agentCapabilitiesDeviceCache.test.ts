@@ -122,10 +122,12 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
   it('registered optional engines participate in the same local capability snapshot', async () => {
     const { getCapabilities } = stubElectron();
     Object.assign(window.electronAPI.maker, { listAvailableAgents: async () => ['claude-code', 'codex', 'pi', 'antigravity'] });
+    getCapabilities.mockImplementation(async agent => caps(`local:${agent}`, agent === 'antigravity' ? 0 : 1));
     const capabilities = await import('@/hooks/useAgentCapabilities');
     await capabilities.preloadAllCapabilities();
     expect(getCapabilities).toHaveBeenCalledWith('antigravity');
     expect(capabilities.getCachedCapabilities('antigravity')?.availableModels[0].displayName).toBe('local:antigravity');
+    expect((await capabilities.loadLocalCapabilitiesSnapshot()).find(([agent]) => agent === 'antigravity')?.[1].availableModels[0].contextWindow).toBe(0);
   });
 
   it('an optional registered engine IPC failure cannot masquerade as an unconfigured engine', async () => {

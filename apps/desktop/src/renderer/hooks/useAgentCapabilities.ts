@@ -249,7 +249,7 @@ function isOptionalNewSessionDefault(value: unknown): boolean {
   if (!Array.isArray(value) || value.length === 0) return false;
   if (
     value.some(
-      (agent) => agent !== 'claude-code' && agent !== 'codex' && agent !== 'pi',
+      (agent) => agent !== 'claude-code' && agent !== 'codex' && agent !== 'pi' && agent !== 'antigravity',
     )
   ) {
     return false;
@@ -268,7 +268,7 @@ function isModelDescriptor(value: unknown): value is ModelDescriptor {
     value.displayName.length > 0 &&
     typeof value.contextWindow === 'number' &&
     Number.isFinite(value.contextWindow) &&
-    value.contextWindow > 0 &&
+    value.contextWindow >= 0 &&
     isStringArray(efforts) &&
     (defaultEffort === null ||
       (typeof defaultEffort === 'string' && efforts.includes(defaultEffort))) &&
