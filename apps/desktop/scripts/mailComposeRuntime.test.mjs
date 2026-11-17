@@ -27,6 +27,8 @@ function fixture({
   richText = false,
   allowCardRead = true,
   publish,
+  hostRead,
+  kvWrite,
 } = {}) {
   let kv = {},
     revision = 1,
@@ -96,7 +98,11 @@ function fixture({
           json: async () => ({ context: { locale: "zh-CN" } }),
         };
       assert.equal(url, "/kv");
-      if (options.method === "PUT") kv = JSON.parse(options.body);
+      if (options.method === "PUT") {
+        const next = JSON.parse(options.body);
+        if (kvWrite) await kvWrite(next);
+        kv = next;
+      }
       return { ok: true, json: async () => copy(kv) };
     },
     cindy: {
@@ -107,6 +113,7 @@ function fixture({
         if (card.type === 'mail-draft-update' && card.sourceCallId && card.callId !== card.sourceCallId && !allowCardRead)
           return { ok: false };
         if (card.type === 'mail-draft-read') {
+          if (hostRead) await hostRead(card);
           const stored = cards.findLast(c => c.draft && c.callId === card.callId);
           if (!stored || (!allowCardRead && card.callId !== card.sourceCallId)) return { ok: false };
           const draft = copy(stored.draft);
@@ -989,6 +996,50 @@ for (const rejectGet of [false, true]) for (const rejectPreview of [false, true]
   assert.deepEqual(copy(read.data.conflicts || []), []);
   assert.equal((await f.tool('send')).ok, true);
   assert.equal(f.writes.at(-1).fields.body, 'Replacement D');
+});
+
+// Fault the real SDK boundary after provider confirmation; Host metadata is
+// best effort and cannot reclassify a confirmed save as an unknown operation.
+test('confirmed recovery save survives a rejecting Host baseline lookup', async () => {
+  let f, rejecting = false;
+  f = fixture({ hostRead: () => { if (rejecting) throw new Error('Synthetic IPC rejection'); }, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update'); await f.tool('get');
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  rejecting = true;
+  const saved = await f.tool('update').catch(() => ({ ok: false }));
+  assert.equal(saved, null);
+  assert.equal(Object.values(f.kv().mailDraftCards)[0].state, 'draft');
+  rejecting = false; f.restart();
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.at(-1).fields.body, 'Replacement C');
+});
+
+// Rejecting durable acceptance must not leave an upload accepted only in RAM.
+// This checks the same crash boundary without writing files or sending mail.
+for (const inline of [false, true]) test(`failed upload-lock persistence accepts no volatile attachment: inline=${inline}`, async () => {
+  let f, rejectLock = false;
+  f = fixture({ richText: true, kvWrite: next => {
+    if (rejectLock && Object.values(next.mailDraftCards || {}).some(r => r.unverifiedAdditions))
+      throw new Error('Synthetic KV write rejection');
+  } });
+  await f.present();
+  rejectLock = true;
+  await f.card(inline ? 'image' : 'attach', f.values(), { mailAttachment: {
+    path: 'synthetic-upload', filename: 'selected.pdf', bytes: 12, sha256: 'a'.repeat(64),
+    ...(inline ? { contentId: 'synthetic-image' } : {}),
+  } });
+  rejectLock = false;
+  await f.card('change', { ...f.values(), subject: 'After failed attachment' });
+  assert.equal(await f.tool('update'), null);
+  assert.deepEqual(f.writes.at(-1).attachments, []);
+  assert.equal(f.writes.at(-1).fields.bodyHtml.includes('cid:synthetic-image'), false);
 });
 
 // Plugin KV has a whole-document budget. Terminal receipts must release merge

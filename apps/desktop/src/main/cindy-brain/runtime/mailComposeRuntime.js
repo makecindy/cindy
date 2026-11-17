@@ -249,7 +249,7 @@ var cindyMail = (function () {
             formatNotRetained: "The mail plugin did not retain the formatted content. The draft is saved; ask the assistant to check the plugin before sending.",
           };
     }
-    async function mailRecords(change) {
+    async function mailRecords(change, committed) {
       return navigator.locks.request(
         adapter.storageLock || "mail-compose-records",
         async function () {
@@ -270,6 +270,8 @@ var cindyMail = (function () {
             throw new Error(
               "草稿卡片状态无法保存，邮件未再次发送，请先检查邮箱。",
             );
+          // Accept volatile uploads only after durable KV, before releasing its lock.
+          if (committed) committed(result);
           return result;
         },
       );
@@ -636,6 +638,7 @@ var cindyMail = (function () {
           if (sending) edit.sending = true;
           record.state = "pending";
           await mailRecords(function (records) {
+            if (!sending && edit.additions?.length) record.unverifiedAdditions = true;
             records[key] = record;
           });
           if (sending) {
@@ -708,7 +711,10 @@ var cindyMail = (function () {
                 record.fingerprint = latest.fingerprint;
                 record.locator = latest.locator;
                 record.state = 'draft';
-                await mailRecords(records => { records[key] = record; });
+                await mailRecords(records => {
+                  if (edit.additions?.length) record.unverifiedAdditions = true;
+                  records[key] = record;
+                });
                 edit.error = await conflictError(merged.conflicts);
                 if (!edit.error) {
                   rebased = true;
@@ -747,6 +753,7 @@ var cindyMail = (function () {
               else delete record.unverifiedAdditions;
               record.state = "draft";
               await mailRecords(function (records) {
+                if (edit.additions?.length) record.unverifiedAdditions = true;
                 records[key] = record;
               });
             }
@@ -789,8 +796,11 @@ var cindyMail = (function () {
             // stored card base and concurrent previews of the preceding mailbox
             // version to this verified save; never copy private fields to KV.
             const preceding = draftValues(edit.readBack);
-            const saved = await cindy.send({ type: 'mail-draft-read', callId: record.callId,
-              ...(sourceCallId ? { sourceCallId } : {}) });
+            let saved;
+            try {
+              saved = await cindy.send({ type: 'mail-draft-read', callId: record.callId,
+                ...(sourceCallId ? { sourceCallId } : {}) });
+            } catch (_) { /* Best-effort provenance; the provider save is confirmed. */ }
             const hostBase = saved?.ok && saved.draft?.key === key &&
               saved.draft.accountId === record.account && saved.draft.draftId === record.draftId
               ? saved.draft.baseValues : undefined;
@@ -817,6 +827,7 @@ var cindyMail = (function () {
           record.locator = edit.readBack.locator;
           record.state = "draft";
           await mailRecords(function (records) {
+            if (!sending && edit.additions?.length) record.unverifiedAdditions = true;
             records[key] = record;
           });
           if (adapter.richText) {
@@ -1038,24 +1049,28 @@ var cindyMail = (function () {
       }
       if (['attach', 'image'].includes(match[1]) && adapter.richText && edit && !edit.sent && !edit.sending && message.mailAttachment) {
         cancelMailSend(key);
-        if (edit.error?.execution === 'not_executed' && !edit.error.stale) edit.error = undefined;
-        edit.additions = [...(edit.additions || []), message.mailAttachment];
-        if (message.mailAttachment.contentId) {
-          const alt = message.mailAttachment.filename.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-          edit.fields.bodyHtml += '<p><img src="cid:' + message.mailAttachment.contentId + '" alt="' + alt + '" style="max-width:100%"></p>';
-        }
-        edit.revision++;
+        const accepted = await mailRecords(records => {
+          const record = records[key];
+          if (!record || record.callId !== message.callId || !['draft', 'pending'].includes(record.state) ||
+              edit.callId !== message.callId || edit.sent || edit.sending || edit.deleting) return false;
+          // A crash before PUT has accepted no descriptor. A crash after PUT
+          // keeps the lock even if the descriptor itself never reaches memory.
+          record.unverifiedAdditions = true;
+          return true;
+        }, accepted => {
+          if (!accepted || edit.sent || edit.sending || edit.deleting) return;
+          if (edit.error?.execution === 'not_executed' && !edit.error.stale) edit.error = undefined;
+          edit.additions = [...(edit.additions || []), message.mailAttachment];
+          if (message.mailAttachment.contentId) {
+            const alt = message.mailAttachment.filename.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+            edit.fields.bodyHtml += '<p><img src="cid:' + message.mailAttachment.contentId + '" alt="' + alt + '" style="max-width:100%"></p>';
+          }
+          edit.revision++;
+        });
+        if (!accepted || edit.sent || edit.sending || edit.deleting) return;
       }
       var record = (await mailRecords())[key];
       if (!record || record.callId !== message.callId) return;
-      if (['attach', 'image'].includes(match[1]) && edit?.additions?.length) {
-        // Upload descriptors are volatile. Losing this sandbox must not turn a
-        // selected but unverified file into a clean, sendable provider draft.
-        await mailRecords(records => {
-          if (records[key]?.callId === message.callId && ['draft', 'pending'].includes(records[key].state))
-            records[key].unverifiedAdditions = true;
-        });
-      }
       if (match[1] === "delete") { await deleteMailDraft(key); return; }
       if (record.state === "deleted") return;
       var copy = await mailCopy();
