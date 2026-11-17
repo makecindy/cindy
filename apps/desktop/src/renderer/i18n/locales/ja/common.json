@@ -2,7 +2,7 @@
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "この Pi の実行場所ではシステム指示の追加に対応していません。",
-    "nativeHooksUnsupported": "ツールフックはこのコンピューターで動作するエンジンでのみ対応しています。",
+    "nativeHooksUnsupported": "ツールフックはローカルの Claude Code と Pi のみ対応しています。",
     "title": "タスクのプラグイン",
     "description": "このタスクで使うプラグインを選択します。変更は次のメッセージから反映されます。",
     "unsupported": "リクエストごとの処理はローカルの Pi のみ対応しています。このタスクのエンジンでは利用できません。",

@@ -2,7 +2,7 @@
   "runtimePlugins": {
     "save": "Enregistrer",
     "promptUnsupported": "Cet emplacement d’exécution de Pi ne prend pas en charge les fragments d’instructions système.",
-    "nativeHooksUnsupported": "Les hooks d’outils sont pris en charge uniquement pour les moteurs exécutés sur cet ordinateur.",
+    "nativeHooksUnsupported": "Les hooks d’outils prennent uniquement en charge Claude Code et Pi en local.",
     "title": "Plugins de la tâche",
     "description": "Choisissez les plugins de cette tâche. Les changements prennent effet au prochain message.",
     "unsupported": "Le traitement de chaque requête est disponible uniquement avec Pi en local. Le moteur de cette tâche ne le prend pas en charge.",

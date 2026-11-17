@@ -2,7 +2,7 @@
   "runtimePlugins": {
     "save": "저장",
     "promptUnsupported": "이 Pi 실행 위치는 시스템 지시 추가를 지원하지 않습니다.",
-    "nativeHooksUnsupported": "도구 훅은 이 컴퓨터에서 실행하는 엔진만 지원합니다.",
+    "nativeHooksUnsupported": "도구 훅은 로컬 Claude Code와 Pi만 지원합니다.",
     "title": "작업 플러그인",
     "description": "이 작업에 사용할 플러그인을 선택하세요. 변경 사항은 다음 메시지부터 적용됩니다.",
     "unsupported": "요청별 처리는 로컬 Pi에서만 지원됩니다. 이 작업의 엔진은 지원하지 않습니다.",

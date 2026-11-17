@@ -2010,6 +2010,21 @@ describe('control points', () => {
       expect(settled).toBe(true);
     });
 
+  // Tool hook silence keeps the native default even when malformed answers
+  // would use the task's block-on-failure policy. Fake timers, no real waits.
+  it.each(['will-tool-call', 'did-tool-result'] as const)('keeps the native default after %s deadlines and the existing fuse', async runtimePoint => {
+    const provider = ghost('runtime', { hooks: [runtimePoint] });
+    const { gw, running, sent } = makeGateway({ listGhosts: () => [provider] });
+    running.add('runtime');
+    for (let i = 0; i < 4; i++) {
+      const pending = gw.screenControlPoint(runtimePoint, { engine: 'pi', phase: 'call', sessionId: 'task', toolName: 'read', toolCallId: 'call', input: {} },
+        { pluginId: 'runtime', onFailure: 'block' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await pending).toEqual({ action: 'allow' });
+    }
+    expect(sent).toHaveLength(3);
+  });
+
   it('asks only the chosen plugin and returns its skip', async () => {
     const { gw, sent, running } = makeGateway({ listGhosts: () => [approved('p1'), approved('p2')] });
     running.add('p1').add('p2');

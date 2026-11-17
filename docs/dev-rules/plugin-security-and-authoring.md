@@ -410,13 +410,13 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   `/kv` 之外，读时重新校验。`route` 模型必须声明 `will-start-task`，节点批准后才显示；选择器只读落盘列表，
   不调用插件，文案全部来自插件。`route` 模型不进执行目录。
 - **原生工具控制节点**：`will-tool-call` / `did-tool-result` 经现有任务插件选择、整体安装批准与
-  `subscribe.hooks` 声明接 Claude SDK hooks、Codex 原生 MCP hooks 和 Pi cindy-bridge。
+  `subscribe.hooks` 声明接 Claude SDK hooks 和 Pi cindy-bridge。
   每个调用／结果有独立 1 秒等待预算，不消费轮前 5 秒；不选时不装钩子或序列化内容。
   只允许收紧权限，改参后仍走原权限链；原生支持、错误／取消和结果变换差异见随包
-  `plugin-control-points.md`「原生工具生命周期」。Codex 只为注入的 session-flags handler
-  写精确 hash 到 thread config，不改用户信任、不 bypass，Review／访客隔离不变。
-  选择变更复用 deferred runtime-refresh；无新批准表或存量迁移。
-  接线与行为回归见 `toolLifecycleControl.ts`、`native-tool-hooks.integration.test.ts` 与 Pi 原生集成用例。
+  `plugin-control-points.md`「原生工具生命周期」。Codex 不自动接入：不复制原生内部信任指纹或路径，
+  不改用户信任、不 bypass；Review／访客隔离不变。静默超时沿用引擎默认行为。
+  实例选择快照配合 deferred runtime-refresh；交付前重查所有贡献者，无新批准表或存量迁移。
+  接线与行为回归见 `toolLifecycleControl.ts`、Claude 钩子测试与 Pi 原生集成用例。
 - **任务运行时控制点**：`will-start-turn` 在 App 正常发送入口为 Claude Code／Codex／Pi 新轮开始前选模，
   复用任务原有模型控制服务；`will-model-request` 仅本机 Pi 支持，使用原生虚拟模型与
   `before_provider_request`，分 `select` 和 `payload` 两阶段。后者可变更参数和请求正文，

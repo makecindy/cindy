@@ -42,7 +42,6 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { structuredPatch } from 'diff';
 import { syncCodexArchiveState } from './archive-state.js';
-import { codexToolHookConfig } from './native-tool-hooks.js';
 import { readCodexThreadMcpServerTools } from './mcp-server-tools.js';
 import { CODEX_ACCOUNT_RATE_LIMITS_TIMEOUT_MS, readAccountRateLimitsWithRefresh } from './app-server/account-rate-limits.js';
 
@@ -6733,7 +6732,6 @@ assertRouteCurrent();
       return criticalThreadRpcOptions();
     }
 
-    const toolLifecycleControl = this.deps.toolLifecycleControl;
     function currentThreadWorkspaceConfig(contextLimit = currentContextLimit()): Pick<
       ThreadStartParams,
       | 'approvalPolicy'
@@ -6754,8 +6752,6 @@ assertRouteCurrent();
         // Install while the thread is created/resumed: a later switch to Auto
         // changes the turn reviewer without rebuilding this thread config.
         ...nativeContinuationConfig,
-        ...(!reviewMode && !hosted && !opts.remoteHostId && opts.sessionId && toolLifecycleControl?.enabled(opts.sessionId)
-          ? codexToolHookConfig('cindy_helper', 'call_tool', 600) : {}),
         // Cindy owns goal dispatch, budgets and pause/resume. A native goal
         // starts a second continuation loop whose turns bypass Session.send
         // and lose the Host origin after the first terminal event.

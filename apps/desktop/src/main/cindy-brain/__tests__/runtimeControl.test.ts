@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createRuntimePluginControl, RuntimePluginControlError } from '../runtimeControl.js';
+import { createRuntimePluginControl, RUNTIME_PLUGIN_RESULT_CURRENT, RuntimePluginControlError } from '../runtimeControl.js';
 import type { GhostControlPointData, GhostRuntimeControlPointResult, GhostRuntimePointData } from '../../../shared/ghost.js';
 import type { RuntimePluginPoint, RuntimePluginSettings, RuntimePluginTarget } from '../../../shared/pluginRuntime.js';
 import { MODEL_REQUEST_CONTROL } from '@cindy/maker-core';
@@ -22,6 +22,47 @@ import * as runtimePreferences from '../../maker-host/runtime-plugin-settings.js
 // host effects. Minimum failure: an empty selection or revocation during an ask.
 // Tier: unit, injected transport, no processes/network/waits.
 describe('task runtime plugin control', () => {
+  // Native hook tables belong to the engine instance; preference writes affect
+  // its replacement. Revocation still invalidates every contributing answer.
+  it('keeps an engine selection until replacement while owner revocation still wins', async () => {
+    let settings: RuntimePluginSettings = { 'will-tool-call': [{ pluginId: 'original', onFailure: 'block' }] };
+    let ownerGeneration = 1;
+    const screen = vi.fn(async (_point, _data, target) => ({ action: 'tool', ghostId: target.pluginId, ghostName: target.pluginId, tool: { input: { command: target.pluginId } } } as const));
+    const control = createRuntimePluginControl({ readSettings: () => settings,
+      captureOwner: () => { const generation = ownerGeneration; return () => generation === ownerGeneration; }, screen });
+    const lifecycle = createPluginToolLifecycle({ readSettings: () => settings, control: () => control });
+    const bound = lifecycle.bind!('task')!;
+    settings = {};
+    const event = { engine: 'pi' as const, phase: 'call' as const, toolName: 'bash', toolCallId: 'call', input: {} };
+    expect(await bound.run('task', event)).toEqual({ input: { command: 'original' } });
+    expect(lifecycle.bind!('task')).toBeUndefined();
+    ownerGeneration++;
+    expect(await bound.run('task', event)).toMatchObject({ decision: 'deny' });
+    expect(screen).toHaveBeenCalledOnce();
+  });
+  it('discards an earlier rewrite revoked while the next plugin was answering', async () => {
+    const settings: RuntimePluginSettings = { 'will-tool-call': [{ pluginId: 'first', onFailure: 'allow' }, { pluginId: 'second', onFailure: 'allow' }] };
+    let firstCurrent = true;
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: async (_point, _data, target) => {
+        if (target.pluginId === 'second') { firstCurrent = false; return { action: 'allow' }; }
+        return Object.assign({ action: 'tool' as const, ghostId: 'first', ghostName: 'first', tool: { input: { command: 'stale' } } },
+          { [RUNTIME_PLUGIN_RESULT_CURRENT]: () => firstCurrent });
+      } });
+    const lifecycle = createPluginToolLifecycle({ readSettings: () => settings, control: () => control });
+    expect(await lifecycle.run('task', { engine: 'pi', phase: 'call', toolName: 'bash', toolCallId: 'call', input: {} })).toEqual({});
+  });
+  it('rejects oversized native results before serializing or delivering their contents', async () => {
+    const settings: RuntimePluginSettings = { 'did-tool-result': [{ pluginId: 'plugin', onFailure: 'allow' }] };
+    const screen = vi.fn();
+    const later = vi.fn();
+    const result = { huge: 'x'.repeat(1_048_577), get later() { later(); return 'unreachable'; } };
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true, screen });
+    const lifecycle = createPluginToolLifecycle({ readSettings: () => settings, control: () => control });
+    expect(await lifecycle.run('task', { engine: 'pi', phase: 'result', toolName: 'read', toolCallId: 'call', input: {}, result })).toEqual({});
+    expect(screen).not.toHaveBeenCalled();
+    expect(later).not.toHaveBeenCalled();
+  });
   // Native control, unit: the existing controller previously shared a per-turn
   // budget. Tool calls require independent deadlines and supported native effects.
   // Minimal regression: two >500ms tool hooks in one turn, or a Codex ask/result

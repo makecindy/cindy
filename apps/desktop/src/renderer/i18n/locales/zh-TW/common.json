@@ -2,7 +2,7 @@
   "runtimePlugins": {
     "save": "儲存",
     "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",
-    "nativeHooksUnsupported": "工具掛鉤僅支援在本機執行的引擎。",
+    "nativeHooksUnsupported": "工具掛鉤僅支援本機 Claude Code 與 Pi。",
     "title": "任務插件",
     "description": "為這個任務選擇插件。修改從下一則訊息起生效。",
     "unsupported": "每次請求前處理僅支援本機 Pi，目前任務的引擎不支援。",

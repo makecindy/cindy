@@ -2,7 +2,7 @@
   "runtimePlugins": {
     "save": "存之",
     "promptUnsupported": "此 Pi 所在之处不支持系统提示词片段。",
-    "nativeHooksUnsupported": "工具钩子仅支持在本机运行的引擎。",
+    "nativeHooksUnsupported": "工具钩子惟本机 Claude Code、Pi 可用。",
     "title": "差事法器",
     "description": "为此差事择法器，改动自下一讯起生效。",
     "unsupported": "逐次请求前处置仅本机 Pi 可用，此差事引擎不支持。",

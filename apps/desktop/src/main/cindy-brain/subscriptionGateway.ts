@@ -623,6 +623,7 @@ export class GhostSubscriptionGateway {
     }
     const ghostId = installedGhostStoragePart(ghost);
     const e = this.entry(ghostId);
+    if (e.pointFused && (point === 'will-tool-call' || point === 'did-tool-result')) return { action: 'allow' };
     const controlApproval = ghostInstallApprovalToken(ghost.approval);
     const currentTarget = () => {
       const current = findTarget();
@@ -737,6 +738,8 @@ export class GhostSubscriptionGateway {
         // 不复用消息钩子的"已降级为只旁听"通知：节点熔断后仍按用户的出错处理执行。
         this.deps.log?.warn('ghost control points fused; failures follow user policy', { ghostId });
       }
+      // Native tool hooks fall back to the engine on deadline; no synthetic denial.
+      if (!deliverFailure && (point === 'will-tool-call' || point === 'did-tool-result')) return { action: 'allow' };
       return null;
     }
     e.pointFails = 0;

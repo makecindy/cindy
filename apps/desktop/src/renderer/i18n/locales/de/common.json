@@ -2,7 +2,7 @@
   "runtimePlugins": {
     "save": "Speichern",
     "promptUnsupported": "Dieser Pi-Ausführungsort unterstützt keine Systemanweisungsfragmente.",
-    "nativeHooksUnsupported": "Werkzeug-Hooks werden nur für Engines auf diesem Computer unterstützt.",
+    "nativeHooksUnsupported": "Werkzeug-Hooks unterstützen nur lokales Claude Code und Pi.",
     "title": "Aufgaben-Plugins",
     "description": "Plugins für diese Aufgabe auswählen. Änderungen gelten ab der nächsten Nachricht.",
     "unsupported": "Die Verarbeitung jeder Anfrage wird nur mit lokalem Pi unterstützt. Die Engine dieser Aufgabe unterstützt sie nicht.",

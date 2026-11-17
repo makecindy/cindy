@@ -1,6 +1,7 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
 import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
+import { assertToolLifecycleBudget } from '../shared/tool-lifecycle.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *
@@ -5144,24 +5145,27 @@ export default async function cindyBridge(piApi: any) {
   // Native plugin hooks run before Cindy permissions, so transformed parameters
   // enter the same permission/capture path. With no selected plugin no RPC runs.
   const toolLifecycleEnabled = process.env.CINDY_PI_TOOL_LIFECYCLE === '1';
+  const assertToolHookBudget = ${assertToolLifecycleBudget.toString()};
   const pluginToolLifecycle = async (event: any, ctx: any, phase: 'call' | 'result') => {
-    const serialized = JSON.stringify({ phase, toolName: event.toolName, toolCallId: event.toolCallId,
-      input: event.input ?? {}, ...(phase === 'result' ? { result: { content: event.content, details: event.details, isError: event.isError }, isError: event.isError } : {}) });
-    if (JSON.stringify(serialized).length > ${MAX_JSONL_BUFFER_CHARS - 4096}) throw new Error('Tool hook exceeds the transport frame budget');
+    const data = { phase, toolName: event.toolName, toolCallId: event.toolCallId,
+      input: event.input ?? {}, ...(phase === 'result' ? { result: { content: event.content, details: event.details, isError: event.isError }, isError: event.isError } : {}) };
+    assertToolHookBudget(data, Math.min(1_048_576, ${MAX_JSONL_BUFFER_CHARS - 4096} / 6));
+    const serialized = JSON.stringify(data);
     const raw = await ctx.ui.input('cindy:tool-lifecycle', serialized, { timeout: 2_000 });
     const result = typeof raw === 'string' ? JSON.parse(raw) : null;
     if (!result || result.error) throw new Error('Tool hook failed');
     return result;
   };
   if (toolLifecycleEnabled && !guestToolGate && !currentPermissionState().reviewOnly) {
-    pi.on('tool_call', async (event: any, ctx: any) => {
+    const pluginToolCall = async (event: any, ctx: any) => {
       const result = await pluginToolLifecycle(event, ctx, 'call');
       if (result.decision === 'deny') return { block: true, reason: result.reason ?? 'Plugin denied tool call' };
       if (result.input) {
         for (const key of Object.keys(event.input)) delete event.input[key];
         Object.assign(event.input, result.input);
       }
-    });
+    };
+    pi.on('tool_call', pluginToolCall);
     pi.on('tool_result', async (event: any, ctx: any) => {
       const result = await pluginToolLifecycle(event, ctx, 'result');
       if (result.decision === 'deny') {

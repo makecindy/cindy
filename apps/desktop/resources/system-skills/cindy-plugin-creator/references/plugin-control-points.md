@@ -240,9 +240,9 @@ Claude Code、Codex、Pi 都复用同一个检索入口；多插件仅调用任�
 没有选择时不装插件工具钩子、不复制工具参数或结果、不启动 RPC 或每工具计时器。
 
 数据为 `{sessionId,engine,phase,toolName,toolCallId,input,result?,isError?}`，`engine` 是
-`claude-code / codex / pi`，`phase` 是 `call / result`。名称与数据按引擎原生语义保留：例如
-Codex 的 shell 钩子名为 `Bash`、参数为 `{command}`，不一定等于模型工具表里的 `exec_command`。
-Pi MCP 仍使用原生网关工具名和输入。失败且未执行的工具不保证有结果节点。
+`claude-code / pi`，`phase` 是 `call / result`；协议保留 `codex` 枚举，但此通道不为 Codex 装配钩子。
+名称与数据按引擎原生语义保留，Pi MCP 使用原生网关工具名和输入。
+失败且未执行的工具不保证有结果节点。
 
 ```js
 if (msg.type === 'event' && msg.name === 'will-tool-call') {
@@ -258,21 +258,21 @@ if (msg.type === 'event' && msg.name === 'will-tool-call') {
 
 | 能力 | Claude Code / SDK | Codex 0.167.2 | Pi 1.5.2 |
 | --- | --- | --- | --- |
-| 调用前 | 原生 PreToolUse：改参、deny、ask、additionalContext | 原生 PreToolUse：改参、deny、additionalContext；不支持 ask | cindy-bridge 的 tool_call：改参、block；仍走原有权限门 |
-| 结果后 | PostToolUse 可替换结果、补上下文；PostToolUseFailure 只补上下文／停止，不能替换结果 | PostToolUse 可补上下文、反馈／停止；不能替换结果 | tool_result 可返回 `{content?,details?,isError?}`；停止使用原生 `ctx.abort()`，不会撤销工具 |
-| 结果格式 | `tool.result` 为原生 updatedToolOutput | 无结果替换 | `tool.result` 为原生 tool_result 返回对象 |
+| 调用前 | 原生 PreToolUse：改参、deny、ask、additionalContext | 不接入：见下方原生信任边界 | cindy-bridge 的 tool_call：改参、block；仍走原有权限门 |
+| 结果后 | PostToolUse 可替换结果、补上下文；PostToolUseFailure 只补上下文／停止，不能替换结果 | 不接入 | tool_result 可返回 `{content?,details?,isError?}`；停止使用原生 `ctx.abort()`，不会撤销工具 |
+| 结果格式 | `tool.result` 为原生 updatedToolOutput | 不接入 | `tool.result` 为原生 tool_result 返回对象 |
 
 不支持的动作按任务所选 `onFailure: allow / block` 处理。单次事件／裁决 JSON 最多 1 MiB，
 原生传输帧上限仍适用，不发送截断后冒充完整的数据。每工具等待独立，不消费轮前 5 秒预算。
-原生错误、超时与取消保留各引擎自己的语义；例如 Codex 原生 MCP hook 通道失败会报告 hook failed，
-不等于插件给出了 deny，不能把它宣传成所有故障下都能阻断工具。正常送达的插件失败／不支持动作才由宿主映射任务策略。
+静默超时或既有熔断后沿用引擎默认行为，不制造拒绝；正常送达的插件失败／不支持动作按任务策略处理。
+超时不会取消已经执行的工具。大结果在序列化前检查预算；不发送截断后冒充完整的数据。
 
-Codex 复用同一 Agent 的 `cindy_helper.call_tool` 通道与原生参数模板。只信任宿主注入的 session-flags
-handler 的精确原生内容 hash；不写用户 config、不启用全局 trust bypass，不改变用户／项目 hooks 的信任。
-Codex 原生协议要求改参时同时带 `permissionDecision:'allow'`，宿主只为传递 `updatedInput` 补这个字段；
-它不会批准工具，原生权限检查仍在改参之后执行。插件裁决本身不接受 `decision:'allow'`。
+Codex 原生具备 PreToolUse／PostToolUse，且 `hooks/list` 可读取原生信任信息；但本通道不复制其内部
+指纹算法、合成配置路径，也不建立额外线程来生成信任。因此不自动装配 Codex 插件工具钩子；
+不会改用户 config、信任记录或启用全局 trust bypass，不能把原生能力表等同于本通道已支持。
 Review 的 hooks 禁用与共享访客隔离保留。Pi 仅在既有 cindy-bridge 上接线，不装配插件包内的 Pi 原生扩展，
 用户自行安装的原生扩展保持原顺序与能力。
+引擎实例保留启动时的节点选择，保存新选择在下次消息生效；账号、插件启停与安装代次仍在交付效果前复核。
 
 这些节点不是全局 `aroundExecute`。插件自己提供的工具可在自己的 Node / JS handler 中包装执行、
 计时和可安全重试的业务调用；通用取消沿用 `ghost_call` / Node 通道。不要重放任意 Bash、Edit 或网络写入，

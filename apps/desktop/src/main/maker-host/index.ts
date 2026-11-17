@@ -1476,8 +1476,8 @@ export function getMaker(): Maker {
       log: desktopMakerLogger.child('command-gate'),
     });
     const claudeAgent = new ClaudeCodeAgent({
-      toolLifecycleControl: ghostToolLifecycleControl,
       resolveLocalMcpDuplicateChoices,
+      toolLifecycleControl: ghostToolLifecycleControl,
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       getManagedSkills: listCindyManagedSkills,
@@ -1789,7 +1789,6 @@ export function getMaker(): Maker {
       getDisabledRuntimePluginIds: (workingDir) => getPluginRegistry().getDisabledRuntimePluginIds(workingDir),
     });
     const codexAgent = new CodexAgent({
-      toolLifecycleControl: ghostToolLifecycleControl,
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       getManagedSkills: listCindyManagedSkills,

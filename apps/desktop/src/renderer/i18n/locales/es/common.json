@@ -2,7 +2,7 @@
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Esta ubicación de ejecución de Pi no admite fragmentos de instrucciones del sistema.",
-    "nativeHooksUnsupported": "Los hooks de herramientas solo se admiten en motores que se ejecutan en este equipo.",
+    "nativeHooksUnsupported": "Los hooks de herramientas solo admiten Claude Code y Pi locales.",
     "title": "Complementos de la tarea",
     "description": "Selecciona los complementos de esta tarea. Los cambios se aplican desde el siguiente mensaje.",
     "unsupported": "El procesamiento de cada solicitud solo está disponible con Pi local. El motor de esta tarea no lo admite.",

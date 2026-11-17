@@ -71,6 +71,36 @@ function gatewayWithFetch(fetchImpl: typeof fetch, permissionMode = 'ask') {
 
 afterEach(() => vi.useRealTimers());
 
+// Native registration boundary: an unselected/isolated task installs no plugin
+// listeners and cannot serialize tool data or send an extension UI request.
+describe('Pi native plugin hook opt-in', () => {
+  it.each([
+    { selected: false, guest: false, review: false, count: 0 },
+    { selected: true, guest: true, review: false, count: 0 },
+    { selected: true, guest: false, review: true, count: 0 },
+    { selected: true, guest: false, review: false, count: 2 },
+  ])('registers exactly $count native listeners: $selected/$guest/$review', async ({ selected, guest, review, count }) => {
+    const start = source.indexOf('  // Native plugin hooks run before');
+    const end = source.indexOf('  // ── 权限门', start);
+    const on = vi.fn();
+    const stringify = vi.fn(JSON.stringify);
+    const input = vi.fn(async () => '{}');
+    runInNewContext(ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
+      process: { env: { CINDY_PI_TOOL_LIFECYCLE: selected ? '1' : '' } },
+      pi: { on }, guestToolGate: guest, currentPermissionState: () => ({ reviewOnly: review }),
+      JSON: { stringify, parse: JSON.parse },
+    });
+    expect(on).toHaveBeenCalledTimes(count);
+    expect(stringify).not.toHaveBeenCalled();
+    expect(input).not.toHaveBeenCalled();
+    if (count) {
+      const callback = on.mock.calls.find(([event]) => event === 'tool_call')![1];
+      await callback({ toolName: 'read', toolCallId: 'call', input: { path: 'fixture.txt' } }, { ui: { input } });
+      expect(input).toHaveBeenCalledOnce();
+    }
+  });
+});
+
 describe('Pi MCP request lifecycle', () => {
   // #10691: the registered gateway and real approval hook must reject missing
   // ghost_id, including an extra args wrapper, before approval/HTTP. Previously

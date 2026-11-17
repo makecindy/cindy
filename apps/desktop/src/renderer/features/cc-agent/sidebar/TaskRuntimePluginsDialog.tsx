@@ -58,7 +58,7 @@ export function TaskRuntimePluginsDialog({ session, onDismiss }: { session: Sess
             }
             if (!list.length) return null;
             const nativeToolHook = point === 'will-tool-call' || point === 'did-tool-result';
-            const unsupported = nativeToolHook && (!!session.remoteHostId || !!session.agentDeviceId)
+            const unsupported = nativeToolHook && (session.agentKind === 'codex' || !!session.remoteHostId || !!session.agentDeviceId)
               || point === 'will-model-request' && (session.agentKind !== 'pi' || !!session.remoteHostId || !!session.agentDeviceId)
               || point === 'system-prompt' && session.agentKind === 'pi' && !!session.agentDeviceId;
             const spec = GHOST_CONTROL_POINTS[point];

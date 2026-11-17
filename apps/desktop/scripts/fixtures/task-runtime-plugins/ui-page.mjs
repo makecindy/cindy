@@ -16,6 +16,7 @@ export default {
     'one-control': { about: 'A context provider: only its nonempty group is shown' },
     'removed-selection': { about: 'An uninstalled selected provider remains visible and clearable' },
     'native-tools': { about: 'Native tool call and result controls in the existing task-plugins dialog; scene data only' },
+    'native-tools-codex': { about: 'Codex is explicitly unsupported and tool controls cannot be enabled; scene data only' },
   },
   async check(page, ui) {
     const entry = page.getByRole('menuitem', { name: await ui.t('runtimePlugins.title'), exact: true });
@@ -25,9 +26,13 @@ export default {
     }
     await entry.click();
     await page.getByRole('dialog').waitFor();
-    if (ui.case === 'native-tools') {
+    if (ui.case.startsWith('native-tools')) {
       assert.equal(await page.getByRole('group').count(), 2);
       assert.equal(await page.getByRole('checkbox', { name: 'Tool fixture plugin', exact: true }).count(), 2);
+      if (ui.case === 'native-tools-codex') {
+        for (const checkbox of await page.getByRole('checkbox', { name: 'Tool fixture plugin', exact: true }).all()) assert.equal(await checkbox.isDisabled(), true);
+        assert.equal(await page.getByText(await ui.t('runtimePlugins.nativeHooksUnsupported'), { exact: true }).count(), 2);
+      }
       return;
     }
     const label = ui.case === 'removed-selection'
