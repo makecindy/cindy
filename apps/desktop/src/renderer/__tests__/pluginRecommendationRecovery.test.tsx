@@ -58,8 +58,6 @@ describe('plugin recommendation recovery', () => {
         installedGhostStoragePart,
         installedGhostLogicalIdentity,
         runPluginInPlace: vi.fn(),
-      installedGhostLogicalIdentity,
-      runPluginInPlace: vi.fn(),
         i18n: { language: 'en' },
         t: () => 'Use plugin mail via ghost_info and ghost_call',
         isRemoteProjectDraft: false,
