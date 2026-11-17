@@ -4138,11 +4138,22 @@ function _trimSessionMessages(sessionId: string): void {
   // 不可见，同样不裁。
   if (_activeViewSessions.has(sessionId)) {
     const scroll = readSessionScroll(sessionId);
-    if (scroll?.isNearBottom === false) return;
     const floorIdx = scroll?.windowFloorClientId
       ? messageIndexByClientId(state.messages, scroll.windowFloorClientId)
       : -1;
+    // 快照缺 windowFloorClientId（旧快照/窗口未建立）时无法证明前缀不可见，不裁。
     if (floorIdx < 0) return;
+    // isNearBottom 只在手动滚动时刷新：程序化钉底与窗口推进地板同步都不改它。
+    // 读过历史的挂载面板会留下残留 false，再叠加窗口推进同步进来的尾部地板，
+    // 豁免就变成永久 —— live push 无界堆积成刻度墙。豁免只保护「真的在看历史」：
+    // 渲染窗口地板距尾超过暖读上限才算深读；地板仍在尾部附近时读者窗口就是
+    // 地板到结尾，裁掉地板之前的行不动它。
+    if (
+      scroll?.isNearBottom === false &&
+      state.messages.length - floorIdx > WARM_READING_MAX_MESSAGES
+    ) {
+      return;
+    }
     floors.push(floorIdx);
   }
   // 正在忙：不再整窗豁免，改为以「在途轮起始行」为地板 —— 完成轮照裁，运行轮整体

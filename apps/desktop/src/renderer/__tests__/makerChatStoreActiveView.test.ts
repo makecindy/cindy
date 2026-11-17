@@ -310,6 +310,29 @@ describe('makerChatStore active view tracking', () => {
     view.leave();
   });
 
+  // 残留 false + 尾部地板：读者读完后面板回到自动跟随，窗口推进地板同步会把尾部
+  // 地板合并进快照，但 isNearBottom 不会被它刷新（见 floor-merge 用例）。残留的
+  // false 曾把豁免变成永久，挂载面板随 live push 无界堆积成刻度墙。地板距尾
+  // 不超过暖读上限时，读者窗口就是地板到结尾，裁掉地板之前的行不动它。
+  it('trims a stale scrolled-up mounted view whose render-window floor is back at the tail', async () => {
+    const view = await readingWindow('stale-false-tail');
+    updateRenderWindowFloor(view.id, 'client-149');
+    vi.advanceTimersByTime(31_000);
+    const messages = makerChatStore.getSnapshot(view.id).messages;
+    expect(messages).toHaveLength(201);
+    expect(messages[0]?.clientId).toBe('client-149');
+    view.leave();
+  });
+
+  it('keeps a deep reading view with its floor beyond the warm-reading bound exempt', async () => {
+    const view = await readingWindow('deep-reading', 1500);
+    saveSessionScroll(view.id, { windowAnchorKey: null, viewportTopKey: 'msg-client-10',
+      messageClientId: 'client-10', offset: 0, isNearBottom: false, windowFloorClientId: 'client-10' });
+    vi.advanceTimersByTime(31_000);
+    expect(makerChatStore.getSnapshot(view.id).messages).toHaveLength(1500);
+    view.leave();
+  });
+
   it('bounds a busy session above its in-flight turn floor on the maintenance tick', async () => {
     // 300 行完成轮 + user 触发行 + 100 行运行轮 + 一条插话行（steer，不打断轮）+
     // 100 行运行轮：502 行窗口在 leaveView / 维护拍上都必须收敛到整段在途轮
