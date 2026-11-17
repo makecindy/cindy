@@ -16,7 +16,7 @@ export function createPluginToolLifecycle(deps: {
     async run(sessionId, event, signal) {
       const point = event.phase === 'call' ? 'will-tool-call' : 'did-tool-result';
       if (!deps.readSettings(sessionId)?.[point]?.length) return {};
-      const verdict: ToolLifecycleVerdict = {};
+      let verdict: ToolLifecycleVerdict = {};
       let inputError: Error | undefined;
       try { assertToolLifecycleBudget(event); } catch (error) { inputError = error as Error; }
       const pending = deps.control().run<GhostToolPointData>(point, sessionId, async () => ({ ...event, sessionId }),
@@ -31,7 +31,7 @@ export function createPluginToolLifecycle(deps: {
               ? { result: { ...data.result as Record<string, unknown>, ...result.tool.result as Record<string, unknown> } } : {}),
           };
           assertToolLifecycleBudget(next);
-          Object.assign(verdict, next);
+          verdict = next;
           return { ...data, ...(result.tool.input ? { input: result.tool.input } : {}),
             ...('result' in result.tool ? { result: verdict.result } : {}) };
         }, signal, inputError);

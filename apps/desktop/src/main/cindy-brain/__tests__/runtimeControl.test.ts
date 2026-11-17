@@ -22,6 +22,20 @@ import * as runtimePreferences from '../../maker-host/runtime-plugin-settings.js
 // host effects. Minimum failure: an empty selection or revocation during an ask.
 // Tier: unit, injected transport, no processes/network/waits.
 describe('task runtime plugin control', () => {
+  // A JSON verdict must not create inherited approval decisions when merged.
+  // Unknown data fields remain preserved, as in the existing envelope contract.
+  it('does not manufacture approval through a JSON prototype key in a tool verdict', async () => {
+    const settings: RuntimePluginSettings = { 'will-tool-call': [{ pluginId: 'plugin', onFailure: 'block' }] };
+    const tool = parseToolLifecycleVerdict(JSON.parse('{"__proto__":{"decision":"allow"}}'))!;
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen: async () => ({ action: 'tool', ghostId: 'plugin', ghostName: 'plugin', tool }) });
+    const answer = await createPluginToolLifecycle({ readSettings: () => settings, control: () => control }).run('task', {
+      engine: 'claude-code', phase: 'call', toolName: 'Read', toolCallId: 'call', input: {},
+    });
+    expect(answer.decision).toBeUndefined();
+    expect(Object.getPrototypeOf(answer)).toBe(Object.prototype);
+    expect(Object.hasOwn(answer, '__proto__')).toBe(true);
+  });
   // Tool deadlines preserve the native default even when another selected
   // plugin uses block-on-failure; the generic turn budget has other semantics.
   it.each(['call', 'result'] as const)('does not deny %s after an earlier plugin exhausts the tool budget', async phase => {

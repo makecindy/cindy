@@ -5164,7 +5164,7 @@ export default async function cindyBridge(piApi: any) {
       if (result.decision === 'deny') return { block: true, reason: result.reason ?? 'Plugin denied tool call' };
       if (result.input) {
         for (const key of Object.keys(event.input)) delete event.input[key];
-        Object.assign(event.input, result.input);
+        Object.defineProperties(event.input, Object.getOwnPropertyDescriptors(result.input));
       }
     };
     if (toolLifecyclePoints.includes('call')) pi.on('tool_call', pluginToolCall);
