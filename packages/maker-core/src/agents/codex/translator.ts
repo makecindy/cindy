@@ -686,7 +686,7 @@ export function translateOmittedItem(
     data: { summary: OMITTED_ITEM_RESULT, toolUseIds: [id] },
     source: 'codex',
   });
-  if (terminalCollab) {
+  if (terminalCollab && isSpawnCollabTool(terminalCollab.tool)) {
     queue.push({ type: 'agent_task_update', source: 'codex',
       data: toCodexTaskUpdate(terminalCollab, terminalCollab.status === 'failed' ? 'failed' : 'completed', OMITTED_ITEM_RESULT) });
   }
@@ -2213,6 +2213,13 @@ function handleDynamicToolCall(
 // codex 多 agent 协作 (spawn/sendInput/resume/wait/closeAgent)。
 // toolName=collab:${tool}; input 透传 prompt / receivers / model / effort 让 UI 详情面板看到调度参数;
 // completed 时把 agentsStates 压成线程状态摘要,避免子任务卡片展开后直接展示原始 JSON。
+// 只有 spawn 类调用发 agent_task_update(子代理卡 + 持久 Subagent run 的来源);
+// sendInput/resume/wait/close 是对别人子线程的控制,只留普通工具步骤。
+
+/** spawn 类 collab 工具(`spawnAgent` / `spawn` 等)：真正诞生子线程的调用。 */
+function isSpawnCollabTool(tool: string): boolean {
+  return tool.toLowerCase().startsWith('spawn');
+}
 
 function formatCodexAgentStateLabel(state: unknown): string | undefined {
   if (typeof state === 'string') {
@@ -2253,7 +2260,7 @@ function handleCollabAgentToolCall(
   ctx: CodexTranslateContext,
 ): void {
   const toolName = `collab:${item.tool}`;
-  const isSpawn = item.tool.toLowerCase().startsWith('spawn');
+  const isSpawn = isSpawnCollabTool(item.tool);
   const hasSpawnReceiver = !isSpawn || item.receiverThreadIds.length > 0;
   if (phase !== 'completed' && hasSpawnReceiver) {
     ctx.rt.collabToolItems.set(item.id, {
@@ -2286,6 +2293,7 @@ function handleCollabAgentToolCall(
       data: { toolUseId: item.id, toolName, input },
       source: 'codex',
     });
+    if (!isSpawn) return;
     queue.push({
       type: 'agent_task_update',
       data: toCodexTaskUpdate(item, 'running'),
@@ -2304,6 +2312,7 @@ function handleCollabAgentToolCall(
         source: 'codex',
       });
     }
+    if (!isSpawn) return;
     queue.push({
       type: 'agent_task_update',
       data: toCodexTaskUpdate(item, 'running'),
@@ -2338,6 +2347,11 @@ function handleCollabAgentToolCall(
     data: { summary: isError ? 'failed' : item.status, toolUseIds: [item.id] },
     source: 'codex',
   });
+  // 控制调用(wait / sendInput / resumeAgent / closeAgent)不是子代理的诞生:
+  // 它们只调度别人已有的子线程,没有自己的卡片与持久 Subagent run。发成
+  // agent_task_update 会让每轮等待都长出一张 "Subagent wait" 卡和一条后台任务
+  // 行。控制调用只保留上面的 tool_use / tool_result 边界,按普通工具步骤展示。
+  if (!isSpawn) return;
   queue.push({
     type: 'agent_task_update',
     data: toCodexTaskUpdate(
@@ -2504,7 +2518,7 @@ function toCodexTaskUpdate(
   summary?: string,
   completedOnly = false,
 ): AgentTaskUpdateEventData {
-  const isSpawn = item.tool.toLowerCase().startsWith('spawn');
+  const isSpawn = isSpawnCollabTool(item.tool);
   const subagentObservation = isSpawn
     && item.receiverThreadIds.length > 0
     && (status !== 'completed' || completedOnly)
