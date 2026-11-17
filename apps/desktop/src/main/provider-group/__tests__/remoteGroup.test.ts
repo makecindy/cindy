@@ -241,6 +241,24 @@ describe('assigning through a group on another computer', () => {
     expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
   });
 
+  // §9.4: confirmed deletion wins over an unknown implicit route. Previously
+  // deletion tests only covered explicit providers; rebuilding must not re-adopt.
+  it('releases a deleted group even when its implicit provider cannot be resolved', async () => {
+    const h = harness({ row: { providerId: null, sdkSessionId: 'native-1' } });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: OWNER_LOCAL.key, groupDeviceId: OWNER, at: 1 });
+    h.remote.readGroup.mockResolvedValue(null);
+    h.deps.resolveImplicitProvider.mockResolvedValue(null);
+    expect(await h.service.assignBeforeStart(START)).toBeNull();
+    expect(h.bindings.size).toBe(0);
+    expect(h.released.get('s1')).toEqual({ providerId: 'anthropic', groupDeviceId: OWNER });
+
+    h.remote.readGroup.mockResolvedValue(h.config!);
+    h.deps.resolveImplicitProvider.mockResolvedValue('anthropic');
+    expect(await h.service.assignBeforeStart(START)).toBeNull();
+    expect(h.bindings.size).toBe(0);
+    expect(h.remote.pick).not.toHaveBeenCalled();
+  });
+
   it('asks the group computer and connects straight to the chosen computer', async () => {
     const h = harness();
     const context = await h.service.assignBeforeStart(START);

@@ -1047,6 +1047,10 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     config: ProviderGroupConfig | null,
     row: ProviderGroupSessionRow,
   ): Promise<ProviderGroupMember | null> {
+    if (!config) {
+      await releaseDeletedGroup(sessionId, groupOf(source, binding.providerId));
+      return null;
+    }
     if (row.agentDeviceId && row.agentDeviceId === source.ownerDeviceId && !row.providerId) {
       const providerId = await remoteProviderId(row);
       // An unavailable default route is not proof that the user left the group.
@@ -1054,16 +1058,16 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       row = { ...row, providerId };
     }
     const located = await locatedMemberKey(source, binding.providerId, row);
-    const key = located !== null && config?.members.some((m) => m.key === located) ? located : null;
+    const key = located !== null && config.members.some((m) => m.key === located) ? located : null;
     if (key === null) {
       await deps.writeBinding(sessionId, null);
       // 任务还在原来那台、那台却已被移出组(或组已删除)：之后同一台重新加入、重建同一个组都不再纳入(§9.4)。
       // 用户把任务挪到组外不记：挪回组那一项时照常纳入。
-      if (!config || located === binding.memberKey) await deps.markReleased(sessionId, groupOf(source, binding.providerId));
+      if (located === binding.memberKey) await deps.markReleased(sessionId, groupOf(source, binding.providerId));
       return null;
     }
     if (key !== binding.memberKey) await deps.writeBinding(sessionId, bindingFor(source, binding.providerId, key));
-    return config!.members.find((m) => m.key === key) ?? null;
+    return config.members.find((m) => m.key === key) ?? null;
   }
 
   /**
