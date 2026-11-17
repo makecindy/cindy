@@ -151,6 +151,24 @@ export function createTurnExecutor(deps) {
     const history = historyFor(sessionId);
     history.flushAssistantBlock(sessionId);
     history.flushOrphanToolResults(sessionId, event?.agentMeta ?? null);
+    // As the desktop's terminal stage (sessionEventTerminal.ts), in the same write queue and before the
+    // error row: the turn's last top-level reply gets its seal. A successful done (for Codex, raw status
+    // completed) seals it completed, with the native fork anchor; a terminal error, or a Codex done that
+    // was interrupted or failed, seals it failed, so later history reads neither take a progress note for
+    // the final answer nor a stopped plan for a finished one. Teammate result ids are not passed: the
+    // Host refuses teammate tasks. A stop without a terminal event seals nothing; the id is consumed
+    // either way so it cannot seal a later turn.
+    // A paused write queue keeps the seal for its retry and reports the failure itself
+    // (onPersistenceError); the rejected promise only says so.
+    const sealId = history.consumeLastTopLevelAssistantPersistId(sessionId);
+    if (sealId && (error || event)) {
+      const succeeded = !error && event?.type === 'done'
+        && (event.source !== 'codex' || history.isSuccessfulCodexDoneEventData(event.data));
+      const nativeForkAnchor = succeeded ? event.agentMeta?.nativeForkAnchor : undefined;
+      void (succeeded
+        ? history.markAssistantTurnCompleted(sessionId, sealId, nativeForkAnchor ? { nativeForkAnchor } : undefined)
+        : history.markAssistantTurnFailed(sessionId, sealId)).catch(() => {});
+    }
     if (error && !recoveryOwnsError) {
       // As the desktop's terminal stage (sessionEventTerminal.ts): while an automatic resume holds this
       // error (pending or deferred, sessionErrorSuppression.ts), its row is not written; the bookkeeping

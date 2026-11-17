@@ -4226,6 +4226,9 @@ test('context recovery through /api/chat: the stream carries the replay\'s answe
   assert.match(c.writes.at(-1), /event: end/);
   assert.equal(c.rows('chat-recovered', 'user').length, 1, 'the replay writes no second user row');
   assert.deepEqual(c.rows('chat-recovered', 'user').map(row => row.client_id), ['chat-input']);
+  // The stream ends on the done; the turn's last writes (the reply's turn seal) settle after it,
+  // and the fixture closes the database before the queue: let them land first.
+  await waitFor(() => !c.h.queue.projection('chat-recovered').turnInProgress);
 });
 
 test('context recovery through /api/chat: a stop during the replay ends the stream with the message\'s interrupted receipt', { timeout: 30_000 }, async t => {
@@ -4839,6 +4842,8 @@ test('/api/chat: a reconnect while context recovery rebuilds stays open and ends
   const streamed = writes.join('').split('\n\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
   assert.ok(streamed.some(event => event.type === 'text' && event.inputClientId === 'reconnect-recovery-input'), 'the replay\'s answer reaches the reconnect');
   assert.equal(streamed.filter(event => event.type === 'input_receipt' && event.status === 'interrupted').length, 0);
+  // As above: the turn's last writes settle after the stream ends; the fixture closes the database first.
+  await waitFor(() => !r.h.queue.projection('reconnect-recovery').turnInProgress);
 });
 
 
@@ -5703,4 +5708,52 @@ test('owner boundary, /chat: the stream ends with the interrupted receipt when t
   // The same receipt, written by the stream itself (as its queue-head and reconnect receipts): no hub sequence.
   assert.deepEqual(boundaryReceipt, { type: 'input_receipt', sessionId: 'boundary-chat-2', inputClientId: 'chat-boundary',
     clientId: 'chat-boundary', status: 'interrupted' });
+});
+
+/*
+ * Turn seal on the last reply (release table 甲 9).
+ * - Production entry and observable result: the Host executor's turn end (turn-executor.mjs finish) over a
+ *   real profile database; the last top-level assistant row's agent_meta.turnCompleted (and the native fork
+ *   anchor of a successful done).
+ * - Rule: the desktop's terminal stage (sessionEventTerminal.ts) seals that row through the shared
+ *   persistence core (markAssistantTurnCompleted / markAssistantTurnFailed): completed for a successful
+ *   done (for Codex, raw status completed), failed for a terminal error or an interrupted Codex done.
+ *   History reads use the seal to pick the final answer and the title material, the fork anchor to fork
+ *   natively, and a failed seal so a stopped Codex plan is not shown as finished.
+ * - Coverage gap: the Host never sealed, every row stayed without turnCompleted.
+ * - Minimal failing input: one reply then a done leaves no turnCompleted on the row.
+ * - Tier: unit (node:test, real profile database, the Host event path; no account, network or engine).
+ * The desktop's terminal stage imports Electron and does not load under Node, so the decisions are
+ * pinned against its rules rather than run side by side.
+ */
+test('turn seal: the Host seals the last reply of a turn as the desktop does', { timeout: 30_000 }, async t => {
+  const db = await recoveryDatabase(t);
+  const { h } = assembledRuntime(t, db);
+  const anchor = { agentKind: 'codex', sdkSessionId: 'thread-1', kind: 'turn', id: 'turn-1' };
+  const cases = [
+    { id: 'seal-done', terminal: { type: 'done', data: {}, agentMeta: { nativeForkAnchor: anchor } },
+      meta: { turnCompleted: true, nativeForkAnchor: anchor } },
+    { id: 'seal-codex-done', terminal: { type: 'done', source: 'codex', data: { raw: { id: 'turn-2', status: 'completed' } },
+      agentMeta: { nativeForkAnchor: anchor } }, meta: { turnCompleted: true, nativeForkAnchor: anchor } },
+    { id: 'seal-codex-stopped', terminal: { type: 'done', source: 'codex', data: { raw: { id: 'turn-3', status: 'interrupted' } },
+      agentMeta: { nativeForkAnchor: anchor } }, meta: { turnCompleted: false, nativeForkAnchor: anchor } },
+    { id: 'seal-error', terminal: { type: 'error', data: { message: 'provider failed', isTerminal: true } },
+      meta: { turnCompleted: false } },
+  ];
+  for (const { id, terminal, meta } of cases) {
+    await db.createTask(id);
+    await h.queue.enqueue(id, { clientId: `${id}-input`, text: 'work' });
+    await waitFor(() => h.maker.sessions.get(id)?.sent.length === 1);
+    const session = h.maker.sessions.get(id);
+    const stamp = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId };
+    session.emit({ type: 'text', data: { text: `reply of ${id}` }, ...stamp });
+    session.emit({ ...terminal, ...stamp });
+    await waitFor(() => !h.queue.projection(id).turnInProgress);
+    const [row] = db.db.prepare("SELECT agent_meta FROM messages WHERE session_id = ? AND role = 'assistant'").all(id);
+    const agentMeta = JSON.parse(row.agent_meta ?? '{}');
+    // The anchor also comes with the done's agent meta when the reply block is written (as on the desktop,
+    // flushAssistantBlock with the event's meta); the seal adds it for a successful done.
+    assert.deepEqual({ turnCompleted: agentMeta.turnCompleted, ...(agentMeta.nativeForkAnchor ? { nativeForkAnchor: agentMeta.nativeForkAnchor } : {}) },
+      meta, id);
+  }
 });
