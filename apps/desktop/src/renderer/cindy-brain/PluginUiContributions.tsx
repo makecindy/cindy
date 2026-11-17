@@ -16,6 +16,7 @@ import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { MAIN_VIEW_ICONS } from './mainViewIcons';
+import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from './pluginUiVisibility';
 const PluginUiView = lazy(() => import('./PluginUiView').then(module => ({ default: module.PluginUiView })));
 const openPluginUiView = async (instanceId: string, viewId: string, sessionId: string | null, input?: Record<string, unknown>) =>
@@ -272,7 +273,10 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
   const title = state?.title ?? action.title;
   const header = appearance === 'composer-header';
   const controlTitle = header ? `${title} · ${entry.ghost.manifest.name}` : entry.ghost.manifest.name;
-  const label = header ? <span className="min-w-0 truncate">{title}</span> : title;
+  const label = <>{action.position === 'composer.toolbar' && entry.ghost.iconDataUrl &&
+    <span aria-hidden="true" className="size-5 shrink-0"><GhostPluginIcon iconId={entry.ghost.manifest.id}
+      iconName={entry.ghost.manifest.name} iconDataUrl={entry.ghost.iconDataUrl} size="mini" /></span>}
+    {header ? <span className="min-w-0 truncate">{title}</span> : title}</>;
   const Icon = MAIN_VIEW_ICONS[action.icon as keyof typeof MAIN_VIEW_ICONS] ?? Puzzle;
   if (appearance === 'titlebar') {
     const view = action.view && getApprovedGhostHostUi(entry.ghost)?.views?.find(view => view.id === action.view);

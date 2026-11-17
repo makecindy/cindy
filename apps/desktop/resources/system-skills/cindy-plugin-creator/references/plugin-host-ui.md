@@ -31,6 +31,8 @@
 `task` 页面只能从真实本机任务打开。已安装并启用插件声明的页面和命令可从插件详情、任务标题栏菜单进入。
 同实例、视图和任务再次打开会聚焦已有页签；更新输入不重建页面。
 
+`composer.toolbar` 的按钮会在标题前展示已安装插件的专属图标（如提供）；沿用包内 `icon` 声明，不需要额外权限。
+
 原生按钮可额外声明 `presentation:"popover"`，在入口旁打开同一 MCP App 资源；缺省仍打开侧栏页签。
 仅适用于 `composer.header/composer.toolbar/session.header/statusbar/message.actions/turn.footer` 的页面按钮；
 正文位置与更多菜单保持各自承载方式。页面在弹层打开后才加载，关闭、入口离开视口或区域隐藏即释放。

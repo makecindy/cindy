@@ -1,3 +1,4 @@
+import { paletteIconDataUrl } from './palette-icon';
 import manifest from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/ghost.json';
 import type { InstalledGhost } from '../../../src/shared/ghost';
 import { pluginUiInterestKey, type PluginUiInterest, type PluginUiStateChange } from '../../../src/shared/pluginUi';
@@ -7,7 +8,7 @@ import { MessageActionBar } from '../../../src/renderer/components/chat/MessageA
 import { AppFrame, mountPage } from '../../ui-page/harness';
 
 const ghost: InstalledGhost = { manifest: manifest as unknown as InstalledGhost['manifest'], enabled: true,
-  dir: '/fixture', approval: { state: 'approved', revision: 'fixture' } };
+  dir: '/fixture', iconDataUrl: paletteIconDataUrl, approval: { state: 'approved', revision: 'fixture' } };
 let receive: ((update: { epoch: string; updates: PluginUiStateChange[] }) => void) | undefined;
 let epoch = '', interests: PluginUiInterest[] = [];
 const task = 'fixture-task';
@@ -42,7 +43,7 @@ void mountPage({
       <div className="rounded-xl border border-[var(--border)] p-4">
         <PluginUiBody position="tool.body" sessionId={task} tool="refresh"><p className="text-14">原始工具结果</p></PluginUiBody>
       </div>
-      <div className="flex flex-wrap items-center gap-2"><PluginUiSlot position="composer.toolbar" sessionId={task} /></div>
+      <div data-plugin-composer className="flex flex-wrap items-center gap-2"><PluginUiSlot position="composer.toolbar" sessionId={task} /></div>
       <div className="flex flex-wrap items-center justify-between gap-2"><PluginUiSlot position="statusbar" sessionId={task} />
         <Button variant="secondary" size="sm" onClick={() => receive?.({ epoch,
           updates: interests.filter(interest => interest.id === 'progress').map(interest => ({ key: pluginUiInterestKey(interest), revision: 1, state: { title: '最近同步已完成' } })) })}>
