@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -16,6 +16,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { SessionEntryRows, type SessionEntryRowsProps } from './SessionEntryList';
 import { SectionCollapse } from './SectionCollapse';
 import { sessionRowKey } from './sessionRowKey';
+import { holdViewedInboxPlacement, type ViewedInboxPlacement } from './taskInboxPlacement';
 import {
   sessionNaturalPriorityRank,
   sessionPriorityRank,
@@ -41,6 +42,8 @@ export function TaskInbox({ sessions, priorityContext, ...rows }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表整表远程活动
     [priorityContext, sessions, remoteActivityRevision],
   );
+  const { activeSessionId } = rows;
+  const viewedPlacement = useRef<ViewedInboxPlacement | null>(null);
   const [now, setNow] = useState(Date.now);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
     () => new Set(['working', 'snoozed', 'archived']),
@@ -80,8 +83,12 @@ export function TaskInbox({ sessions, priorityContext, ...rows }: Props) {
         .push(session);
     }
     result.get('snoozed')!.sort((a, b) => taskSnoozeUntil(a) - taskSnoozeUntil(b));
+    const viewed = sessions.find((session) => session.id === activeSessionId);
+    viewedPlacement.current = holdViewedInboxPlacement(
+      result, sessionRowKey, viewed ? sessionRowKey(viewed) : undefined, viewedPlacement.current,
+    );
     return result;
-  }, [sessions, inboxContext, now, followingSessions]);
+  }, [sessions, inboxContext, now, followingSessions, activeSessionId]);
   return (
     <div className="flex flex-col gap-2 pt-1 pl-3">
       {SECTIONS.map((section) => {
