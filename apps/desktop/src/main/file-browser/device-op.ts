@@ -59,7 +59,7 @@ import {
   type PushOwnerStamp,
 } from '@cindy/device-link';
 import { REVEALABLE_IGNORE_DIR_NAMES } from '../../shared/ignoreNames';
-import { WorkdirWatchManager } from '@cindy/remote-file-service';
+import { FileServiceRpcError, WorkdirWatchManager } from '@cindy/remote-file-service';
 import type { FsRpcMethods } from '@cindy/remote-file-service/protocol';
 
 import { createLogger } from '../logger.js';
@@ -563,13 +563,26 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       case 'stat':
         return request('stat', { workdir, relPath: args.relPath ?? '' });
       case 'writeFile': {
-        const r = await request('writeFile', {
-          workdir,
-          relPath: args.relPath ?? '',
-          content: writeContent ?? '',
-          expectedResolvedPath: args.expectedResolvedPath,
-        });
-        return { ok: true as const, ...r };
+        try {
+          const r = await request('writeFile', {
+            workdir,
+            relPath: args.relPath ?? '',
+            content: writeContent ?? '',
+            expectedResolvedPath: args.expectedResolvedPath,
+          });
+          return { ok: true as const, ...r };
+        } catch (err) {
+          // Preserve the existing save-result contract so the editor can explain
+          // how to keep the draft. Authorization and transport errors still reject.
+          if (
+            err instanceof FileServiceRpcError &&
+            err.code === 'OPERATION_FAILED' &&
+            err.message.startsWith('FILE_TARGET_CHANGED:')
+          ) {
+            return bad('FILE_TARGET_CHANGED');
+          }
+          throw err;
+        }
       }
       case 'createFile':
         return {

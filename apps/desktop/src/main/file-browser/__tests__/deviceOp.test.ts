@@ -15,7 +15,11 @@ import path from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { WorkdirWatchManager, type RemoteFileTreeEvent } from '@cindy/remote-file-service';
+import {
+  FileServiceRpcError,
+  WorkdirWatchManager,
+  type RemoteFileTreeEvent,
+} from '@cindy/remote-file-service';
 import { FILE_BROWSER_EVENT_CHANNEL } from '@cindy/device-link';
 import type { RemoteWorkingDirCheckResult } from '../../device-link/remote-workdir-guard.js';
 
@@ -1377,6 +1381,38 @@ describe('file-browser device-op', () => {
       relPath: 'a.md',
       content: original,
       expectedResolvedPath: 'actual/a.md',
+    });
+  });
+
+  // #10882, unit: the real device-op must return a
+  // save failure that FileBodyView can localize. Existing coverage only checks
+  // successful SSH forwarding and local rejection; the minimal missing input
+  // is the daemon's OPERATION_FAILED / FILE_TARGET_CHANGED response.
+  it('nested SSH: returns target-change failures without rejecting the device invocation', async () => {
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    sshRequestMock.mockRejectedValueOnce(
+      new FileServiceRpcError(
+        'OPERATION_FAILED',
+        'FILE_TARGET_CHANGED: file target changed; reopen the file before saving',
+      ),
+    );
+
+    await expect(
+      handleRemoteOp({
+        op: 'writeFile',
+        workdir: '/remote/proj',
+        relPath: 'alias/a.md',
+        contentGz: gzipSync(Buffer.from('retained draft')).toString('base64'),
+        expectedResolvedPath: 'original/a.md',
+      }),
+    ).resolves.toEqual({ ok: false, message: 'FILE_TARGET_CHANGED' });
+    expect(sshRequestMock).toHaveBeenCalledTimes(1);
+    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'writeFile', {
+      workdir: '/remote/proj',
+      relPath: 'alias/a.md',
+      content: 'retained draft',
+      expectedResolvedPath: 'original/a.md',
     });
   });
 
