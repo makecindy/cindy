@@ -94,7 +94,7 @@ export async function startScheduleWebhooks(scheduler: Scheduler, logger: Logger
     },
   });
   host = next;
-  configureGithubAppRefresh(token => next.refreshGithubAuthorization(token));
+  configureGithubAppRefresh(credential => next.refreshGithubAuthorization(credential));
   let ownerGeneration = authManager.getAuthState().ownerGeneration;
   stopWatchingAuth = authManager.onAuthStateChange((state) => {
     const changed = ownerGeneration !== state.ownerGeneration || !state.isAuthenticated;

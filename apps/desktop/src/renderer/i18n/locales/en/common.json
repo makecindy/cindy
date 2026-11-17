@@ -16771,6 +16771,7 @@
             "checking": "Checking GitHub connection…",
             "mismatch": "Operations and notifications use different accounts. Check the accounts and reconnect.",
             "ready": "GitHub account connected.",
+            "close": "Close",
             "incomplete": "Account linked. Authorize repository operations on this computer to finish.",
             "eventsOnly": "This account receives repository events. Its name alone does not confirm authorization on this computer.",
             "connect": "Connect GitHub",

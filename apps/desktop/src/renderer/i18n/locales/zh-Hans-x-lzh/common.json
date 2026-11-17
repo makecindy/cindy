@@ -16697,6 +16697,7 @@
             "checking": "正在检查 GitHub 连接…",
             "mismatch": "操作账号与通知账号不同，请核对后重新连接。",
             "ready": "GitHub 账号已连接。",
+            "close": "闭之",
             "incomplete": "账号已绑定，请补充此电脑的操作授权。",
             "eventsOnly": "此账号用于仓库通知；显示账号名字不代表此电脑已获得操作授权。",
             "connect": "连接 GitHub",

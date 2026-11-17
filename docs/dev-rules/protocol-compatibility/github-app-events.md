@@ -44,7 +44,7 @@ Webhook 服务的 `GET /api/v1/github` 可选返回 `prSubscriptions: true`、`d
 
 `POST /api/v1/github/user-token/refresh` 接收 `{refreshToken}`，要求原 Cindy 账号仍绑定同一
 GitHub numeric ID，并在 GitHub 回复后复核账号状态与绑定代次。返回新 grant；授权失效返回
-400 / `GITHUB_AUTHORIZATION_EXPIRED`，临时故障不清凭证。此通道不记录请求／响应正文。
+400 / `GITHUB_AUTHORIZATION_EXPIRED`，临时故障不清凭证。GitHub 已轮换令牌但身份核对暂时失败时返回 `200 {recovery}`：服务端密封、绑定 Cindy 账号的新令牌对，Desktop 必须先落盘再按临时失败处理，下次改用 `{recovery}` 续期（旧 refresh token 已被 GitHub 作废）；核对身份后才放出令牌。此通道不记录请求／响应正文。
 服务端不持久化用户令牌，App 私钥与 Client Secret 始终留在服务端。本机按数据所有者和服务
 端点隔离加密凭证；跨进程锁串行化保存、续期与删除，轮换结果落盘后才使用，账号／端点切换
 丢弃在途结果。断开清除此电脑的 App 授权和服务端事件绑定，不卸载 App，不清理 gh/PAT；

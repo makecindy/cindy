@@ -1,6 +1,6 @@
 // tier: unit. OAuth rotation/account boundaries; production store entry with encrypted IO ports.
 import { describe, expect, it, vi } from 'vitest';
-import { createGithubAppAuthorization, type GithubUserGrant } from '../git-context/githubAppAuthorization';
+import { createGithubAppAuthorization, type GithubRefreshCredential, type GithubUserGrant } from '../git-context/githubAppAuthorization';
 
 const grant: GithubUserGrant = { userId: '12', login: 'example', accessToken: 'synthetic-access',
   refreshToken: 'synthetic-refresh', expiresAt: 500_000, refreshExpiresAt: 10_000_000 };
@@ -9,7 +9,7 @@ function fixture() {
   let scope = 'owner-a';
   let now = 0;
   let queue = Promise.resolve();
-  const refresh = vi.fn<() => Promise<GithubUserGrant | null>>(async () => ({ ...grant, accessToken: 'synthetic-renewed', refreshToken: 'synthetic-rotated', expiresAt: 900_000 }));
+  const refresh = vi.fn<(credential: GithubRefreshCredential) => Promise<GithubUserGrant | { recovery: string } | null>>(async () => ({ ...grant, accessToken: 'synthetic-renewed', refreshToken: 'synthetic-rotated', expiresAt: 900_000 }));
   const write = vi.fn((value: string) => { raw = value; return true; });
   const changed = vi.fn();
   const store = createGithubAppAuthorization({ scope: () => scope, read: () => raw, write,
@@ -67,5 +67,14 @@ describe('GitHub App user authorization', () => {
     expect(attempts).toEqual([1, 2].map(() => ({ status: 'rejected', reason: new Error('GITHUB_AUTHORIZATION_REFRESH_FAILED') })));
     expect(f.refresh).toHaveBeenCalledOnce();
     expect(JSON.parse(f.raw()!).refreshToken).toBe(grant.refreshToken);
+  });
+  it('keeps a sealed rotated pair after an unverified refresh and resumes with it instead of the spent token', async () => {
+    const f = fixture(); await f.store.save(grant); f.expire();
+    f.refresh.mockResolvedValueOnce({ recovery: 'sealed-recovery' });
+    await expect(f.store.readToken()).rejects.toThrow('GITHUB_AUTHORIZATION_REFRESH_FAILED');
+    expect(JSON.parse(f.raw()!).recovery).toBe('sealed-recovery');
+    expect(await f.store.readToken()).toBe('synthetic-renewed');
+    expect(f.refresh).toHaveBeenLastCalledWith({ recovery: 'sealed-recovery' });
+    expect(JSON.parse(f.raw()!)).not.toHaveProperty('recovery');
   });
 });

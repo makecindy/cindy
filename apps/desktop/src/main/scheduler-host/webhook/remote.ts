@@ -373,8 +373,9 @@ export class ScheduleWebhookRemote {
     this.updateConnection();
   }
 
-  async refreshGithubAuthorization(refreshToken: string): Promise<GithubUserGrant | null> {
-    try { return await this.request('POST', '/github/user-token/refresh', { refreshToken }); }
+  /** Returns a grant, `{recovery}` (rotated but unverified; caller must keep it), or null when expired. */
+  async refreshGithubAuthorization(credential: { refreshToken: string } | { recovery: string }): Promise<GithubUserGrant | { recovery: string } | null> {
+    try { return await this.request('POST', '/github/user-token/refresh', credential); }
     catch (error) {
       if (error instanceof RemoteRequestError && error.status === 400 && error.code === 'GITHUB_AUTHORIZATION_EXPIRED') return null;
       throw new Error('GITHUB_AUTHORIZATION_REFRESH_FAILED');

@@ -261,9 +261,9 @@ export class ScheduleWebhookHost {
     return this.remote.connectGithub();
   }
 
-  async refreshGithubAuthorization(refreshToken: string) {
+  async refreshGithubAuthorization(credential: { refreshToken: string } | { recovery: string }) {
     if (this.receiver() !== 'cloud' || !this.remote) throw new Error('WEBHOOK_ACCOUNT_REQUIRED');
-    return this.remote.refreshGithubAuthorization(refreshToken);
+    return this.remote.refreshGithubAuthorization(credential);
   }
 
   async installGithub(): Promise<string | undefined> {

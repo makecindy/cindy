@@ -8,6 +8,12 @@ export interface GithubUserGrant {
   refreshExpiresAt: number;
 }
 
+/** Opaque server-sealed rotated pair; GitHub already spent the previous refresh token. */
+export type GithubRefreshCredential = { refreshToken: string } | { recovery: string };
+const isRecovery = (value: unknown): value is { recovery: string } => !!value && typeof value === 'object'
+  && typeof (value as { recovery?: unknown }).recovery === 'string' && (value as { recovery: string }).recovery.length > 0
+  && (value as { recovery: string }).recovery.length <= 24576;
+
 export function isGithubUserGrant(value: unknown): value is GithubUserGrant {
   if (!value || typeof value !== 'object') return false;
   const grant = value as GithubUserGrant;
@@ -25,7 +31,7 @@ export function createGithubAppAuthorization(deps: {
   write(value: string): boolean;
   remove(): boolean;
   lock<T>(work: () => Promise<T>): Promise<T>;
-  refresh(refreshToken: string): Promise<unknown>;
+  refresh(credential: GithubRefreshCredential): Promise<unknown>;
   changed(): void;
   now(): number;
 }) {
@@ -65,10 +71,16 @@ export function createGithubAppAuthorization(deps: {
         if (!isGithubUserGrant(stored)) throw new Error('GITHUB_INVALID_USER_GRANT');
         if (stored.expiresAt > deps.now() + 120_000) return stored.accessToken;
         if (stored.refreshExpiresAt <= deps.now()) return null;
+        const recovery = (stored as { recovery?: unknown }).recovery;
         let renewed: unknown;
-        try { renewed = await deps.refresh(stored.refreshToken); }
+        try { renewed = await deps.refresh(isRecovery({ recovery }) ? { recovery: recovery as string } : { refreshToken: stored.refreshToken }); }
         catch { throw new Error('GITHUB_AUTHORIZATION_REFRESH_FAILED'); }
         current(scope);
+        if (isRecovery(renewed)) {
+          // Keep the sealed pair before reporting a temporary failure; the old refresh token is no longer valid.
+          if (!deps.write(JSON.stringify({ ...stored, recovery: renewed.recovery }))) throw new Error('GITHUB_CREDENTIAL_STORAGE_UNAVAILABLE');
+          throw new Error('GITHUB_AUTHORIZATION_REFRESH_FAILED');
+        }
         if (renewed === null) {
           if (!deps.remove()) throw new Error('GITHUB_CREDENTIAL_STORAGE_UNAVAILABLE');
           deps.changed();

@@ -6,15 +6,15 @@ import { activeOwnerScopeKey, getActiveAppSession } from '../appSessionState.js'
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { genericOAuthSecretIo } from '../secrets/providerSecretStore.js';
 import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
-import { createGithubAppAuthorization } from './githubAppAuthorization.js';
+import { createGithubAppAuthorization, type GithubRefreshCredential } from './githubAppAuthorization.js';
 
-let refresh: ((token: string) => Promise<unknown>) | undefined;
+let refresh: ((credential: GithubRefreshCredential) => Promise<unknown>) | undefined;
 const listeners = new Set<() => void>();
 const endpoint = () => getClientEndpoint('webhookApiBaseUrl');
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const storageKey = () => `cindy-github-app-${digest(endpoint())}`;
 
-export function configureGithubAppRefresh(callback: (token: string) => Promise<unknown>): void { refresh = callback; }
+export function configureGithubAppRefresh(callback: (credential: GithubRefreshCredential) => Promise<unknown>): void { refresh = callback; }
 export function onGithubAppAuthorizationChanged(listener: () => void): () => void {
   listeners.add(listener);
   return () => { listeners.delete(listener); };
@@ -36,9 +36,9 @@ export const githubAppAuthorization = createGithubAppAuthorization({
       return work();
     });
   },
-  refresh: token => {
+  refresh: credential => {
     if (!refresh) throw new Error('GITHUB_AUTHORIZATION_UNAVAILABLE');
-    return refresh(token);
+    return refresh(credential);
   },
   changed: () => { for (const listener of listeners) listener(); },
   now: Date.now,

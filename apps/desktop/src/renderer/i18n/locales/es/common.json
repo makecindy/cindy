@@ -16933,6 +16933,7 @@
             "checking": "Comprobando conexión con GitHub…",
             "mismatch": "Las operaciones y las notificaciones usan cuentas diferentes. Revísalas y vuelve a conectar.",
             "ready": "Cuenta de GitHub conectada.",
+            "close": "Cerrar",
             "incomplete": "Cuenta vinculada. Autoriza las operaciones en este equipo para terminar.",
             "eventsOnly": "Esta cuenta recibe eventos del repositorio. Su nombre no confirma la autorización en este equipo.",
             "connect": "Conectar GitHub",

@@ -16771,6 +16771,7 @@
             "checking": "GitHub-Verbindung wird geprüft…",
             "mismatch": "Aktionen und Benachrichtigungen verwenden verschiedene Konten. Bitte prüfen und erneut verbinden.",
             "ready": "GitHub-Konto verbunden.",
+            "close": "Schließen",
             "incomplete": "Konto verknüpft. Autorisiere jetzt Aktionen auf diesem Computer.",
             "eventsOnly": "Dieses Konto empfängt Repository-Ereignisse. Der Name bestätigt keine Autorisierung auf diesem Computer.",
             "connect": "GitHub verbinden",
