@@ -94,9 +94,11 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner } from '../runner.desktop';
+import { __testing as projectAutomation } from '../project-automation-loader';
+import { scheduleCreateToRow, schedulePatchToRow, scheduleToCamel } from '../../localDb/mapper';
 import { applyScheduledModelSelection, createScheduledModelScope, resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
 import type { ProviderView } from '@cindy/model-providers';
-import type { Scheduler } from '@cindy/maker-scheduler';
+import { Scheduler, type ScheduleStorage } from '@cindy/maker-scheduler';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -344,6 +346,35 @@ describe('MakerScheduleRunner model selection', () => {
     mocks.isSessionInTurn.mockReturnValue(false);
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
     mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: false });
+  });
+
+  // #11134 / unit: project update + persisted row -> actual runner.fire. Existing
+  // fresh/heartbeat tests start with correct bindings and miss a retained Codex
+  // target after switching a persistent project automation to fresh Claude runs.
+  it('starts a fresh Claude task after a persisted project binding is cleared', async () => {
+    const h = createSessionHarness();
+    const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-5.5', workDir: '/work' });
+    const previous = baseSchedule({ source: 'project', projectConfigId: 'daily',
+      agentKind: 'codex', model: 'gpt-5.5', persistentSession: true, targetSessionId: 'old-codex-task' });
+    const patch = projectAutomation.scheduleConfigToUpdateInput({ id: 'daily', name: 'Daily',
+      prompt: 'Check', cronExpr: '0 9 * * *', agentKind: 'claude-code',
+      model: 'claude-opus-5-5', providerId: 'anthropic', persistentSession: false }, '/work');
+    let row = scheduleCreateToRow(previous) as Parameters<typeof scheduleToCamel>[0];
+    const scheduler = new Scheduler({ runner: harness.runner, storage: {
+      get: async () => scheduleToCamel(row),
+      update: async (_id: string, update: Partial<Schedule>) => {
+        row = { ...row, ...schedulePatchToRow(update) };
+        return scheduleToCamel(row);
+      },
+    } as unknown as ScheduleStorage });
+    const saved = await scheduler.update(previous.id, patch);
+    await fireToCompletion(harness, h, saved);
+    expect(harness.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'claude-code', model: 'claude-opus-5-5', providerId: 'anthropic',
+      title: '[Schedule] Daily',
+    }));
+    expect(harness.createSession.mock.calls[0][0].id).not.toBe('old-codex-task');
+    expect(harness.closeSession).toHaveBeenCalled();
   });
 
   // Unit regression: a bound task runs on another computer, but an explicit
