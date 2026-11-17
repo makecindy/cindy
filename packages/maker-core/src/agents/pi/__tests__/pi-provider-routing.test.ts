@@ -6471,7 +6471,7 @@ describe("Pi provider-aware model routing", () => {
     ) as {
       providers: Record<
         string,
-        { models: Array<{ id: string; input: string[] }> }
+        { models: Array<{ id: string; input: string[]; inputLimits?: unknown }> }
       >;
     };
     expect(modelsJson.providers.cindy?.models).toEqual(
@@ -6480,6 +6480,16 @@ describe("Pi provider-aware model routing", () => {
         expect.objectContaining({
           id: "gateway-vision",
           input: ["text", "image"],
+          inputLimits: {
+            images: {
+              resize: {
+                maxWidth: 1568,
+                maxHeight: 1568,
+                maxBytes: 524_288,
+                jpegQuality: 75,
+              },
+            },
+          },
         }),
         expect.objectContaining({ id: "gateway-unknown", input: ["text", "image"] }),
       ]),
