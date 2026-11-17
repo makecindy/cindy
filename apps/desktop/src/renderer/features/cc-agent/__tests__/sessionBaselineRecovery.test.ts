@@ -88,7 +88,8 @@ it('authenticates the recovered Harness on subsequent sends after a legacy proje
 // check waits on main. The check runs as the store's beforeEnqueue, and its
 // rejection rolls the bubble back so the composer restores the draft.
 function setup(options: { proceed: boolean; remoteDeviceId?: string | null; rebalance?: boolean; status?: string; catalogDeviceId?: string; remoteHostId?: string;
-  gate?: ReturnType<typeof useVendorAuthGate>; vendor?: 'codex' | 'claude-code' }) {
+  gate?: ReturnType<typeof useVendorAuthGate>; vendor?: 'codex' | 'claude-code';
+  switchAgentDeviceId?: string | null; catalogHostDeviceId?: string }) {
   const order: string[] = [];
   const auth = vi.fn(async () => {
     order.push('auth');
@@ -106,7 +107,10 @@ function setup(options: { proceed: boolean; remoteDeviceId?: string | null; reba
     readOnly: false, cindyMakeInputLocked: false, invalidateHistoryRecoveryNavigation: vi.fn(),
     remoteDeviceId: options.remoteDeviceId ?? null, catalogDeviceId: options.catalogDeviceId,
     displayAgentKind: options.vendor ?? 'claude-code', isCodex: options.vendor === 'codex',
-    agentSwitchIntent: null, vendorAuthGate: options.gate ?? { checkAndConfirm: auth },
+    agentSwitchIntent: options.switchAgentDeviceId !== undefined
+      ? { target: options.vendor ?? 'claude-code', agentDeviceId: options.switchAgentDeviceId } : null,
+    modelCatalogKey, controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
+    vendorAuthGate: options.gate ?? { checkAndConfirm: auth },
     session: { remoteHostId: options.remoteHostId, source: 'user', status: options.status ?? 'active', workingDir: '/repo' }, sessionId: 'session-1',
     folderPickerOpen: false, sessionHandoffPreparing: false, isOrcaLeadSession: () => false,
     isRunningRef: { current: false }, confirmRebalance: vi.fn(), t: (key: string) => key,
@@ -225,4 +229,40 @@ it.each([undefined, 'ssh-host'])('keeps local/SSH sends on the existing local re
     .resolves.toBe(true);
   expect(revalidate).toHaveBeenCalledExactlyOnceWith({ includeSuspended: true, skipBinary: Boolean(remoteHostId) });
   expect(invoke).not.toHaveBeenCalled();
+});
+
+// A location switch remains an intent until enqueue. Gate the selected next location,
+// even if the previous location is offline; null explicitly selects local execution.
+it.each([
+  ['old-remote', null, undefined],
+  ['old-remote', 'next-remote', undefined],
+  [undefined, 'next-remote', undefined],
+  ['old-remote', 'share:next', 'task-host'],
+] as const)('uses pending send location (%s -> %s)', async (current, next, taskHost) => {
+  revalidate.mockResolvedValue(next === null ? 'ready' : 'unauthenticated');
+  const invoke = vi.fn(async (device: string, channel: string, args: unknown[]) => {
+    expect(device).toBe(taskHost ?? next);
+    const operation = taskHost ? (args[0] as { channel: string }).channel : channel;
+    return operation === 'maker:agent:status'
+      ? { binaryReady: true, authReady: true }
+      : { providers: [{ id: 'remote', name: 'Remote', connected: true, agents: ['codex'], routing: { codex: {} }, models: { codex: [] } }] };
+  });
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  const { result } = renderHook(() => useVendorAuthGate());
+  const { send } = setup({ proceed: false, vendor: 'codex', gate: result.current,
+    catalogDeviceId: modelCatalogKey(current, taskHost), switchAgentDeviceId: next,
+    catalogHostDeviceId: taskHost });
+  await expect(send('after location switch', 'model', '', 'ask', undefined, undefined, { literalText: true }))
+    .resolves.toBe(true);
+  expect(confirm).not.toHaveBeenCalled();
+  if (next === null) {
+    expect(invoke).not.toHaveBeenCalled();
+    expect(revalidate).toHaveBeenCalledExactlyOnceWith({ includeSuspended: true, skipBinary: false });
+  } else {
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(revalidate).not.toHaveBeenCalled();
+    if (taskHost) expect(invoke).toHaveBeenCalledWith(taskHost, 'maker:model-catalog:read', [{
+      op: 'read', agentDeviceId: next, channel: 'maker:agent:status', args: ['codex'],
+    }]);
+  }
 });

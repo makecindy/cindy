@@ -4322,8 +4322,12 @@ function CCAgentSessionContent({
         model === session.runtimeEffective?.model && displayAgentKind === session.runtimeEffective.agentKind &&
         (opts.providerId ?? null) === (session.runtimeEffective.providerId ?? null);
       const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
+      // A location switch is applied by main on the next send; null explicitly selects local.
+      const authCatalogDeviceId = agentSwitchIntent?.agentDeviceId !== undefined
+        ? modelCatalogKey(agentSwitchIntent.agentDeviceId ?? undefined, controlledModelRoute.catalogHostDeviceId)
+        : catalogDeviceId;
       const passesVendorAuthGate = async () => (await vendorAuthGate.checkAndConfirm(authVendor, {
-        ...(catalogDeviceId ? { deviceId: catalogDeviceId } : {}),
+        ...(authCatalogDeviceId ? { deviceId: authCatalogDeviceId } : {}),
         // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
         // PR #744 review 第十七轮)。
         existingSessionRoute: true,
@@ -4544,6 +4548,7 @@ function CCAgentSessionContent({
       confirmRebalance,
       remoteDeviceId,
       catalogDeviceId,
+      controlledModelRoute.catalogHostDeviceId,
       sessionHandoffPreparing,
       cindyMakeInputLocked,
       botChatIdentity,
