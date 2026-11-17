@@ -316,16 +316,16 @@ export function createTurnExecutor(deps) {
   }
 
   // A silent-stop done closes its segment's rows as the desktop's terminal stage does for it (the reply
-  // block, its seal and the list preview: settleTurnBoundary) and marks the turn's end at the done (the
-  // desktop's markTurnEndedAfterPersistDrain). The Host's turn stays open for the decision (silent-stop.ts):
-  // the coordinator does not get this done (handTerminalToCoordinator), and the next input waits.
+  // block, its seal and the list preview: settleTurnBoundary). The Host's turn stays open for the decision
+  // (silent-stop.ts): the coordinator does not get this done (handTerminalToCoordinator), and the next input
+  // waits. The turn's end is not marked here: the desktop marks it at this done (markTurnEndedAfterPersistDrain),
+  // so a crash or an account boundary during the decision or the continuation leaves it looking finished.
+  // On the Host it stays a running turn until it really ends (review item 2): a settle without a continuation
+  // marks the end at the done's time (finish), a continuation at its own end, and an interruption marks none.
   function settleSilentStopSegment(sessionId, turn, session, history, event) {
     turn.silentStopPending = true;
-    const doneAt = turn.silentStopDoneAt = Date.now();
+    turn.silentStopDoneAt = Date.now();
     settleTurnBoundary(sessionId, history, event);
-    void history.drain().then(() => {
-      if (!history.hasFailedWrites() && deps.isCurrent() && turns.get(sessionId) === turn) return deps.markEnded?.(sessionId, doneAt);
-    }).catch(() => {});
     silentStop.decideLater(session, turn, event);
   }
 

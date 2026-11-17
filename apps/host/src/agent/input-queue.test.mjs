@@ -5755,6 +5755,39 @@ test('owner boundary: a silent stop decided after the boundary began sends no co
   t.mock.timers.tick(SILENT_STOP_DECISION_DELAY_MS);
   await settleUntil(() => !b.h.queue.projection(id).turnInProgress, 'the turn ends');
   assert.equal(session.sent.length, 1, 'no continuation once the boundary began');
+  await drainSessionActiveTurnWrites(id);
+  assert.equal((await b.markers()).endedAt, null, 'no turn end is written');
+  assert.equal(await b.interruptedAtNextStart(), true, 'it is an interrupted task at the next start');
+});
+
+// Review item 2 (8g B, 2026-11-18): while a silent-stop continuation runs, the task's turn is still running in
+// its markers, so a crash or a boundary then leaves it interrupted ("continue the interrupted task" at the
+// next start); its end is written when the continuation ends.
+test('owner boundary: a silent-stop continuation that is running counts as a running turn until it ends', async t => {
+  const id = 'boundary-silent-continuation';
+  const b = await boundaryTask(t, id);
+  const session = await b.startTurn();
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  t.after(() => t.mock.timers.reset());
+  const emitTurn = done => {
+    const stamp = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId };
+    session.emit({ type: 'status', data: { isRunning: true }, ...stamp });
+    session.emit({ type: 'text', data: { text: 'some work', isFinal: true }, ...stamp });
+    session.emit({ type: 'status', data: { isRunning: false }, ...stamp });
+    session.emit({ ...done, ...stamp });
+  };
+  emitTurn({ type: 'done', data: { silentStop: true } });
+  await settle();
+  t.mock.timers.tick(SILENT_STOP_DECISION_DELAY_MS);
+  await settleUntil(() => session.sent.length === 2, 'the continuation is sent');
+  await drainSessionActiveTurnWrites(id);
+  assert.equal((await b.markers()).endedAt, null, 'no end while the continuation runs');
+  assert.equal(await b.interruptedAtNextStart(), true, 'a crash now leaves an interrupted task');
+  emitTurn({ type: 'done', data: {} });
+  await settleUntil(() => !b.h.queue.projection(id).turnInProgress, 'the turn ends');
+  await drainSessionActiveTurnWrites(id);
+  assert.equal(typeof (await b.markers()).endedAt, 'number', 'the end is written once the continuation ends');
+  assert.equal(await b.interruptedAtNextStart(), false);
 });
 
 for (const [path, steps] of [
