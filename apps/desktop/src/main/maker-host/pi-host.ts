@@ -202,7 +202,6 @@ export interface BuildPiAgentOpts {
   /** Trusted project-approval authority; omitted until the host has one, which fails closed. */
   resolvePiProjectTrustInput?: AgentDeps['resolvePiProjectTrustInput'];
   /** 层 C：视觉桥后端 env（cindy-bridge 的 vision 工具读取）。 */
-  resolvePiVisionBridgeEnv?: AgentDeps['resolvePiVisionBridgeEnv'];
   /** SSH remote pi 会话的 transport 工厂(host 装配;缺省 = 远端 pi 会话被拒)。 */
   getRemotePiTransport?: AgentDeps['getRemotePiTransport'];
   /** SSH remote pi 会话的 agentHome 文件操作原语(host 装配;缺省 = 远端 fs 走本地,错误语义)。 */
@@ -389,7 +388,6 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolvePiGatewayModelSpec: resolvePiCindyGatewayModelSpec,
     getGhostRosterPrompt: opts.getGhostRosterPrompt,
     resolvePiProjectTrustInput: opts.resolvePiProjectTrustInput,
-    resolvePiVisionBridgeEnv: opts.resolvePiVisionBridgeEnv,
     getRemotePiTransport: opts.getRemotePiTransport,
     getRemotePiFileOps: opts.getRemotePiFileOps,
     getRemoteAgentFileOps: opts.getRemoteAgentFileOps,

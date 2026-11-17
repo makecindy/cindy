@@ -1071,10 +1071,6 @@ Codex 模型的第三档速度；与推理深度 Ultra 独立。标准、快速�
 
 设置 → 自动操作里，把系统 Chrome / Edge / Brave 当前 profile 的 cookie 与保存的密码快照到 Agent 专用浏览器。不是接管日常窗口。不要译成 real profile / 真实配置文件。
 
-### Vision Bridge
-
-让纯文本模型获得看图能力的能力名:把图片交给外部多模态后端转成文字描述,再喂给文本模型。zh-CN 取「视觉桥」而非「视觉桥梁/图像转文字」——「桥」强调其桥接定位,且与英文 Vision Bridge 一一对应。设置页 visionBridge 分节、docs/vision-bridge-design.md、日志 note 使用。先登记为 proposed,待产品术语评审后固化。
-
 ### Voice dictionary
 
 语音输入的用户自定义术语表(人名、产品名、代号与其常见误识别写法),在同账号的电脑之间自动同步、手机只读查看。当前先采用四语直译并登记为待讨论术语,避免与「自定义词典」「术语表」「用户词库」等说法混用。

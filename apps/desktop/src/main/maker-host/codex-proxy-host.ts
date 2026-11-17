@@ -78,7 +78,6 @@ import {
   type RoutingTransform,
   type RecoveryRule,
 } from '@cindy/anthropic-compat-proxy';
-import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
   chainResponseTransforms,
   createResponsesNullArrayRepairTransform,
@@ -3455,11 +3454,7 @@ function createTransformRequestChain(
       enabled: () => true,
       strip: stripResponsesReasoningContentFromBody,
     }),
-    // 视觉桥透明替换（层 A，Responses 格式）：controller 未注入时短路透传，零干扰；
-    // 注入后把纯文本模型请求 input[] 里的 input_image 转成文字描述。放在 strip 之前与
-    // Anthropic 链一致，避免未来 strip 扩展覆盖 Responses input_image 时吃掉图。
-    ...(guest ? [] : [buildVisionBridgeProxyTransform(log)]),
-    // Run after every provider dialect rewrite: xAI can also turn custom calls into functions.
+
     // This covers native-custom routes and tool-less /responses/compact without changing call_id.
     normalizeResponsesToolItemIds,
     createActiveStripTransform({

@@ -954,17 +954,6 @@ export interface AgentDeps {
    */
   capabilityAdditions?: AgentCapabilityAdditions;
 
-  /**
-   * Pi-only:视觉桥后端 env（层 C）。host 解析视觉桥配置（主/fallback 视觉后端 →
-   * OpenAI 兼容端点 + model + key）后返回键值对，PiAgent 注入 pi 子进程 spawnEnv，
-   * cindy-bridge 的 vision 工具读取。缺省 = 不注入（视觉桥工具不可用，零干扰）。
-   * model 参数供 host 按 session 模型判定是否命中视觉桥目标模型——未命中返回 null，
-   * 保证非目标/已有视觉能力的 Pi 模型不注册 vision 工具、不改变工具面（零干扰）。
-   * sessionId 供需要上游会话头的后端（OpenCode Go）确定性派生头值：spawn env 必须
-   * 同 session 重建逐字节稳定（pi-harness §4.10），不得用随机值。
-   * 返回的键应纳入 piSecretEnvNames 剥离面（host 实现应把含 key 的键名一并声明）。
-   */
-  resolvePiVisionBridgeEnv?: (model: string, sessionId?: string) => Record<string, string> | null;
 
   /**
    * Host-owned arbitration for capabilities that overlap with harness-native

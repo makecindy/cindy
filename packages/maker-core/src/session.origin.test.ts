@@ -2162,3 +2162,82 @@ describe('Session host event-stream hold', () => {
     await session.close();
   });
 });
+
+// Removal regression (unit): exercise Session's real send/steer boundary.
+// The deleted bridge suite also contained Host grant and turn-race coverage;
+// those contracts still apply without image conversion and must survive here.
+describe('Session native attachments and Host dispatch grants', () => {
+  function harness() {
+    const h = createControllableHandle({ agentKind: 'claude-code' });
+    const session = new Session({
+      id: 'native-image', agentKind: 'claude-code', workDir: path.join('workspace', 'repo'),
+      handle: h.handle, capabilities: { sameTurnSteer: { supported: true } } as never,
+      logger: createLogger() as never,
+    });
+    return { ...h, session };
+  }
+
+  it.each(['send', 'steer'] as const)('passes original image blocks and Host approval evidence through %s', async (method) => {
+    const h = harness();
+    h.setTurnRunning(method === 'steer');
+    const dispatch = vi.spyOn(h.handle, method);
+    const message: UserMessage = { type: 'user', content: [
+      { type: 'text', text: 'What is in this image?' },
+      { type: 'image', path: path.join('fixture', 'image.png'), managedUrl: `cindy-media://blobs/${'a'.repeat(64)}.png` },
+    ] };
+    try {
+      await h.session[method](message, {
+        [AUTO_REVIEW_SOURCE_CONTENT]: 'original request',
+        [AUTO_REVIEW_USER_INTENT]: 'read only',
+      });
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch.mock.calls[0][0]).toEqual(message);
+      expect(dispatch.mock.calls[0][1]).toMatchObject({
+        [AUTO_REVIEW_SOURCE_CONTENT]: 'original request',
+        [AUTO_REVIEW_USER_INTENT]: 'read only',
+      });
+      expect(dispatch.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toBeUndefined();
+    } finally {
+      await h.session.close();
+    }
+  });
+
+  it('runs the Host steer grant without exposing it to the provider', async () => {
+    const h = harness();
+    h.setTurnRunning(true);
+    const steer = vi.spyOn(h.handle, 'steer');
+    const grant = vi.fn(async () => {});
+    try {
+      await h.session.steer('App-authored text', { beforeProviderStart: grant, messageUuid: 'app-input' });
+      expect(grant).toHaveBeenCalledOnce();
+      expect(steer).toHaveBeenCalledWith(
+        { type: 'user', content: 'App-authored text' }, expect.objectContaining({ messageUuid: 'app-input' }),
+      );
+      expect(steer.mock.calls[0][1]).not.toHaveProperty('beforeProviderStart');
+    } finally {
+      await h.session.close();
+    }
+  });
+
+  it.each(['ended', 'replaced', 'closed', 'revoked'] as const)('rejects a steer whose grant becomes %s', async (change) => {
+    const h = harness();
+    h.setTurnRunning(true);
+    const steer = vi.spyOn(h.handle, 'steer');
+    const generation = vi.spyOn(h.session, 'getTurnGeneration').mockReturnValue(1);
+    try {
+      await expect(h.session.steer('App-authored text', {
+        beforeProviderStart: async () => {
+          await Promise.resolve();
+          if (change === 'ended') h.setTurnRunning(false);
+          else if (change === 'replaced') generation.mockReturnValue(2);
+          else if (change === 'revoked') throw new Error('MCP_APP_CARD_UNAVAILABLE');
+          else await h.session.close();
+        },
+      })).rejects.toThrow(change === 'closed' ? 'closed' : change === 'revoked' ? 'MCP_APP_CARD_UNAVAILABLE' : 'has no active turn to steer');
+      expect(steer).not.toHaveBeenCalled();
+    } finally {
+      generation.mockRestore();
+      await h.session.close();
+    }
+  });
+});

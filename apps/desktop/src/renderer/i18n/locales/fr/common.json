@@ -1933,7 +1933,6 @@
       "memory": "Mémoire",
       "subagentModels": "Sous-Agents",
       "auxiliaryModels": "Modèles auxiliaires",
-      "visionBridge": "Vision Bridge",
       "compaction": "Compaction du contexte",
       "terminalShell": "Shell du terminal par défaut",
       "composer": "Saisie des messages",
@@ -5471,37 +5470,6 @@
     "compatMode": {
       "title": "Astuces",
       "description": "Options fonctionnelles. Certaines nécessitent une nouvelle session pour prendre effet (voir la description de chaque option)."
-    },
-    "visionBridge": {
-      "title": "Vision Bridge",
-      "description": "Permettez aux modèles texte uniquement de lire des images en les faisant passer par un modèle multimodal distinct qui convertit les images en descriptions textuelles.",
-      "enableLabel": "Activer Vision Bridge",
-      "enableHint": "Désactivé, tous les modèles se comportent exactement comme avant. Activé, les modèles sélectionnés ci-dessous font passer leurs images par le backend de vision. Une fois activé, les images envoyées à ces modèles et le texte proche utilisé comme indication de focus sont envoyés au backend de vision choisi.",
-      "enableAria": "Activer ou désactiver Vision Bridge",
-      "toast": {
-        "saved": "Paramètres de Vision Bridge enregistrés",
-        "saveFailed": "Échec de l'enregistrement des paramètres de Vision Bridge"
-      },
-      "capability": {
-        "vision": "Compatible vision (connu)",
-        "noVision": "Texte uniquement (connu)",
-        "unknown": "Capacité de vision inconnue"
-      },
-      "targetModels": {
-        "label": "Modèles routés via Vision Bridge",
-        "hint": "Les modèles texte uniquement (par ex. DeepSeek) sont cochés par défaut. Vous pouvez aussi cocher des modèles compatibles vision, par exemple pour utiliser un modèle de description moins cher afin d'économiser des jetons.",
-        "empty": "Aucun modèle disponible.",
-        "toggleAria": "Activer ou désactiver Vision Bridge pour {{model}}"
-      },
-      "backends": {
-        "label": "Modèles du backend de vision",
-        "hint": "Choisissez jusqu'à deux modèles multimodaux qui convertissent les images en texte. Le second (secours) est facultatif.",
-        "primary": "Principal",
-        "fallback": "Secours",
-        "unset": "Aucune sélection",
-        "noBackup": "Aucun secours",
-        "hintSecondary": "Le backend principal est utilisé en premier. S'il échoue et qu'un secours est défini, le secours est utilisé. Si les deux échouent, l'image ne peut pas être décrite et est remplacée par un avis textuel."
-      }
     },
     "terminalShell": {
       "title": "Shell du terminal par défaut",
@@ -11445,7 +11413,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} ne peut pas répondre : l'appareil de l’ami a atteint sa limite de sessions distantes.\nDemandez au propriétaire de l’ami d'archiver les sessions inutilisées, ou au propriétaire de l'ordinateur distant d'augmenter la limite dans Accès distant et partage.",
           "REMOTE_TOTAL_LIMIT": "{{name}} ne peut pas répondre : l'ordinateur distant a atteint sa limite totale de sessions distantes.\nDemandez au propriétaire de cet ordinateur de libérer les sessions inutilisées ou d'augmenter la limite dans Accès distant et partage.",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}} n'a pas pu répondre : le modèle actuel ne prend pas en charge les images.\nChoisissez un modèle compatible avec les images, ou activez et configurez Vision Bridge dans Paramètres → Personnalisation, puis renvoyez votre message.",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}} n'a pas pu répondre : le modèle actuel ne prend pas en charge les images.\nChoisissez un modèle compatible avec les images.",
           "MODEL_UNAVAILABLE": "{{name}} n'a pas pu répondre : aucun modèle n'est disponible.\nChoisissez un modèle connecté et disponible dans les paramètres de l’ami, puis renvoyez votre message.",
           "AUTH_REQUIRED": "{{name}} n'a pas pu répondre : la connexion au modèle nécessite une authentification.\nReconnectez le fournisseur de modèles dans les Paramètres, puis renvoyez votre message.",
           "RATE_LIMITED": "{{name}} n'a pas pu répondre : trop de requêtes au modèle.\nRenvoyez votre message plus tard, ou choisissez un autre modèle disponible.",
@@ -14917,11 +14885,6 @@
       "title": "Image manquante",
       "unavailable": "Image indisponible",
       "loading": "Chargement de l'image…"
-    },
-    "visionBridge": {
-      "analyzing": "Analyse de {{count}} image(s)…",
-      "fallback": "Le pont de vision est passé à un backend de vision de secours (principal indisponible) ; la reconnaissance d'images peut être affectée",
-      "unavailable": "Le pont de vision est indisponible ; l'image n'a pas pu être décrite et a été remplacée par un avis textuel"
     },
     "newMessageIndicator": {
       "aria": "Revenir en bas, voir {{count}} nouveaux messages",
@@ -21512,7 +21475,6 @@
       "sessionRuntimeFallback": "Repli automatique du modèle des tâches",
       "subagentModels": "Sous-Agents",
       "auxiliaryModels": "Modèles auxiliaires",
-      "visionBridge": "Vision Bridge",
       "modelVisibility": "Modèles affichés et masqués",
       "providerOrder": "Ordre des fournisseurs",
       "modelCatalogOverrides": "Paramètres de modèle modifiés",

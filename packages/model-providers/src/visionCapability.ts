@@ -5,7 +5,7 @@
  * （modalities 只在 Pi 自定义 provider 手动标记，内置目录为空）。视觉桥配置需要区分
  * 「已知有视觉 / 已知无视觉 / 未知」三类模型，本模块维护一份保守名单 + 归一化判定。
  *
- * 分类语义（对齐 docs/vision-bridge-design.md 配置设计）：
+ * 分类语义（供模型图片输入配置使用）：
  *  - vision：已知支持图片输入的多模态模型（claude / gpt / gemini / grok 等）；
  *  - no-vision：已知纯文本模型（deepseek 系列、glm-5.2 等，实测/厂商声明无视觉）；
  *  - unknown：名单外 —— 不确定，按保守处理（视觉桥配置 UI 默认不勾选，允许用户手动勾）。

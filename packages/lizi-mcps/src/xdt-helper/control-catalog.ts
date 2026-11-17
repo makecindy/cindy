@@ -43,7 +43,6 @@ export const CONTROL_CATALOG: readonly Control[] = [
   setting('application.memory', 'application', '全局记忆开关', 'Cindy 与各 Harness 的记忆开关，不是单个伙伴的记忆。', 'memory', ['memory', '全局记忆']),
   setting('models.subagents', 'models', '子代理模型', '子代理模型与 Codex 智能调配。', 'subagent-models', ['subagent', '子代理', '智能调配']),
   setting('models.auxiliary', 'models', '辅助模型', '辅助模型优先与备用。', 'auxiliary-models', ['auxiliary', '辅助模型']),
-  setting('models.vision', 'models', '视觉桥', '视觉桥开关、目标模型与主备用视觉模型。', 'vision-bridge', ['vision', '视觉桥']),
   helper('models.configuration', 'models', '模型与供应商配置', '本机 API 连接、媒体能力声明与调用 Guide、安全密钥输入、型号发现；型号参数、供应商启停及 Claude/Codex 多订阅账号。', ['list_model_providers', 'get_model_configuration', 'set_model_configuration', 'configure_model_provider', 'configure_model_connection', 'manage_media_guide'], ['model', 'provider', '模型', '供应商', '媒体', '图片', '视频', 'guide', '上下文', '压缩', '价格', '订阅', '账号', 'Claude', 'Codex', '负载均衡']),
   helper('models.provider-state', 'models', '供应商用量与供应组状态', '原样读取已记录用量、截断范围、组成员状态与已知额度；筛选和汇总由调用方处理。device 可指定同账号已授权电脑，缺省为本机；插件需声明 usage 组。', ['get_provider_usage_history', 'get_provider_group'], ['供应组', '用量', '额度', '成员用量', 'usage', 'quota', 'provider group']),
   helper('models.default', 'models', '默认模型', '普通任务的新任务默认选择；伙伴调用时依其原默认模型语义。', ['get_app_default_model', 'set_app_default_model'], ['default model', '默认模型'], '单个伙伴覆盖请查 teammates.profile；不要把新任务默认和伙伴默认混为同一设置。'),

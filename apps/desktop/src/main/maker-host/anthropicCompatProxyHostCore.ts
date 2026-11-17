@@ -36,7 +36,6 @@ import {
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
-import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
@@ -1326,15 +1325,11 @@ async function startAnthropicCompatProxy(generation: number): Promise<void> {
         // LiteLLM/provider adapter 可能把 provider_specific_fields(null) 挂到 tool_use 上，
         // 严格 Anthropic 入站 schema 不接受该扩展字段。
         stripToolUseProviderSpecificFields,
-        // 视觉桥透明替换（层 A）：controller 未注入时短路透传，零干扰；注入后把纯文本
-        // 模型请求里的图转成文字描述。放在 stripNonAnthropicFields 之前——否则旧 #794 的
-        // tool_result 图片省略逻辑（如 glm-5.2 的 stripGlm52）会先吃掉 tool_result 内嵌图，
-        // A 层无图可转描述，文档承诺的「A 层覆盖 tool_result 内嵌」落空。视觉桥只替换
+
         // image block、不碰 tool_use 结构，位于 repair/dedupe 之后安全；未命中时返回 null，
         // 旧 #794 strip 继续兜底。
         // 供应商分享受邀者的请求不走视觉桥：视觉后端是本机用户自己配的其它供应商，
         // 受邀者只能用分享给它的那一个(图片照原样交给分享的模型)。
-        buildVisionBridgeProxyTransform(log, isGuestProviderShareRequest),
         createXdToolResultImageNoticeTransform(claudeUpstreamEndpoint),
         // PI / Claude 走本 proxy 的 /responses 时（Gateway grok、自定义 LiteLLM）
         // 不会经过 Codex 的 xAI 订阅 transform，必须在这里洗 ModelInput。

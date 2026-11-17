@@ -1895,7 +1895,6 @@
       "memory": "Gedächtnis",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Hilfsmodelle",
-      "visionBridge": "Vision Bridge",
       "compaction": "Kontextkomprimierung",
       "terminalShell": "Standard-Terminal-Shell",
       "composer": "Nachrichteneingabe",
@@ -5413,37 +5412,6 @@
     "compatMode": {
       "title": "Tipps",
       "description": "Funktionelle Umschalter. Einige erfordern eine neue Sitzung, um wirksam zu werden (siehe Beschreibungen der einzelnen Zellen)."
-    },
-    "visionBridge": {
-      "title": "Vision Bridge",
-      "description": "Ermögliche reinen Textmodellen, Bilder zu lesen, indem du sie über ein separates multimodales Modell leitest, das Bilder in Textbeschreibungen umwandelt.",
-      "enableLabel": "Vision Bridge aktivieren",
-      "enableHint": "Wenn deaktiviert, verhalten sich alle Modelle genau wie bisher. Wenn aktiviert, leiten die unten ausgewählten Modelle ihre Bilder über das Vision-Backend. Dabei werden Bilder, die du an diese Modelle sendest, sowie benachbarter Text als Fokushinweis an das von dir gewählte Vision-Backend gesendet.",
-      "enableAria": "Vision Bridge ein-/ausschalten",
-      "toast": {
-        "saved": "Vision Bridge-Einstellungen gespeichert",
-        "saveFailed": "Vision Bridge-Einstellungen konnten nicht gespeichert werden"
-      },
-      "capability": {
-        "vision": "Als bildfähig bekannt",
-        "noVision": "Als reines Textmodell bekannt",
-        "unknown": "Bildverarbeitungsfähigkeit unbekannt"
-      },
-      "targetModels": {
-        "label": "Über Vision Bridge geleitete Modelle",
-        "hint": "Reine Textmodelle (z. B. DeepSeek) sind standardmäßig ausgewählt. Du kannst auch Modelle mit Bildverarbeitung auswählen — etwa um mit einem günstigeren Beschreibungsmodell Token zu sparen.",
-        "empty": "Keine Modelle verfügbar.",
-        "toggleAria": "Vision Bridge für {{model}} ein-/ausschalten"
-      },
-      "backends": {
-        "label": "Vision-Backend-Modelle",
-        "hint": "Wähle bis zu zwei multimodale Modelle, die Bilder in Text umwandeln. Das zweite (Ersatzmodell) ist optional.",
-        "primary": "Primär",
-        "fallback": "Ersatzmodell",
-        "unset": "Keine Auswahl",
-        "noBackup": "Kein Ersatzmodell",
-        "hintSecondary": "Das primäre Backend wird zuerst verwendet. Schlägt es fehl und ist ein Ersatzmodell festgelegt, wird dieses verwendet. Schlagen beide fehl, kann das Bild nicht beschrieben werden und wird durch einen Texthinweis ersetzt."
-      }
     },
     "terminalShell": {
       "title": "Standard-Terminal-Shell",
@@ -11356,7 +11324,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} kann nicht antworten: Das Gerät des Freundes hat sein Limit für Remote-Sitzungen erreicht.\nBitte den Besitzer des Freundes, ungenutzte Sitzungen zu archivieren, oder den Besitzer des Remote-Computers, das Limit unter „Remote & Freigabe“ zu erhöhen.",
           "REMOTE_TOTAL_LIMIT": "{{name}} kann nicht antworten: Der Remote-Computer hat sein Gesamtlimit für Remote-Sitzungen erreicht.\nBitte den Besitzer dieses Computers, ungenutzte Sitzungen freizugeben oder das Limit unter „Remote & Freigabe“ zu erhöhen.",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}} konnte nicht antworten: Das aktuelle Modell unterstützt keine Bilder.\nWähle ein bildfähiges Modell oder aktiviere und konfiguriere Vision Bridge unter Einstellungen → Personalisierung. Sende deine Nachricht dann erneut.",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}} konnte nicht antworten: Das aktuelle Modell unterstützt keine Bilder.\nWähle ein Modell mit Bildunterstützung.",
           "MODEL_UNAVAILABLE": "{{name}} konnte nicht antworten: Kein Modell verfügbar.\nWähle in den Einstellungen des Freundes ein verbundenes, verfügbares Modell und sende deine Nachricht erneut.",
           "AUTH_REQUIRED": "{{name}} konnte nicht antworten: Die Modellverbindung erfordert eine Authentifizierung.\nVerbinde den Modellanbieter in den Einstellungen erneut und sende deine Nachricht noch einmal.",
           "RATE_LIMITED": "{{name}} konnte nicht antworten: Zu viele Modellanfragen.\nSende deine Nachricht später erneut oder wähle ein anderes verfügbares Modell.",
@@ -14791,11 +14759,6 @@
       "title": "Bild fehlt",
       "unavailable": "Bild nicht verfügbar",
       "loading": "Bild wird geladen…"
-    },
-    "visionBridge": {
-      "analyzing": "{{count}} Bild(er) werden analysiert…",
-      "fallback": "Vision Bridge ist auf ein Ersatz-Vision-Backend ausgewichen (primäres Backend nicht verfügbar); die Bilderkennung kann beeinträchtigt sein",
-      "unavailable": "Vision Bridge ist nicht verfügbar; das Bild konnte nicht beschrieben werden und wurde durch einen Texthinweis ersetzt"
     },
     "newMessageIndicator": {
       "aria": "Nach unten, {{count}} neue Nachrichten ansehen",
@@ -21308,7 +21271,6 @@
       "sessionRuntimeFallback": "Automatischer Modellwechsel für Aufgaben",
       "subagentModels": "Subagenten",
       "auxiliaryModels": "Hilfsmodelle",
-      "visionBridge": "Vision Bridge",
       "modelVisibility": "Angezeigte und ausgeblendete Modelle",
       "providerOrder": "Reihenfolge der Anbieter",
       "modelCatalogOverrides": "Geänderte Modellparameter",

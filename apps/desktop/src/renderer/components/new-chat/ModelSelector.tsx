@@ -735,7 +735,6 @@ export interface RemoteAgentSelectorOptions {
  */
 export type ModelSelectorLocalOnlyReason =
   | 'subagent-in-parent-task'
-  | 'vision-bridge-local-proxy'
   | 'one-shot-local-request';
 
 /**

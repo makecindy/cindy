@@ -1933,7 +1933,6 @@
       "memory": "Memória",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Modelos auxiliares",
-      "visionBridge": "Vision Bridge",
       "compaction": "Compactação de contexto",
       "terminalShell": "Shell padrão do terminal",
       "composer": "Entrada de mensagens",
@@ -5471,37 +5470,6 @@
     "compatMode": {
       "title": "Dicas",
       "description": "Opções funcionais. Algumas exigem uma nova sessão para entrar em vigor (veja as descrições de cada célula)."
-    },
-    "visionBridge": {
-      "title": "Vision Bridge",
-      "description": "Permita que modelos somente de texto leiam imagens, encaminhando-as a um modelo multimodal separado que converte imagens em descrições de texto.",
-      "enableLabel": "Ativar Vision Bridge",
-      "enableHint": "Quando desativado, todos os modelos funcionam exatamente como antes. Quando ativado, os modelos selecionados abaixo encaminham suas imagens pelo backend de visão. As imagens enviadas a esses modelos e o texto próximo usado como dica de foco são enviados ao backend de visão escolhido.",
-      "enableAria": "Alternar Vision Bridge",
-      "toast": {
-        "saved": "Configurações do Vision Bridge salvas",
-        "saveFailed": "Falha ao salvar as configurações do Vision Bridge"
-      },
-      "capability": {
-        "vision": "Com capacidade de visão conhecida",
-        "noVision": "Confirmado como somente texto",
-        "unknown": "Capacidade de visão desconhecida"
-      },
-      "targetModels": {
-        "label": "Modelos encaminhados pelo Vision Bridge",
-        "hint": "Modelos somente de texto (por exemplo, DeepSeek) são selecionados por padrão. Você também pode selecionar modelos com visão — por exemplo, para usar um modelo de descrição mais barato e economizar tokens.",
-        "empty": "Nenhum modelo disponível.",
-        "toggleAria": "Alternar Vision Bridge para {{model}}"
-      },
-      "backends": {
-        "label": "Modelos de backend de visão",
-        "hint": "Escolha até dois modelos multimodais que convertem imagens em texto. O segundo (reserva) é opcional.",
-        "primary": "Principal",
-        "fallback": "Reserva",
-        "unset": "Nenhum selecionado",
-        "noBackup": "Sem reserva",
-        "hintSecondary": "O backend principal é usado primeiro. Se ele falhar e houver um backend de reserva, o de reserva será usado. Se ambos falharem, a imagem não poderá ser descrita e será substituída por um aviso de texto."
-      }
     },
     "terminalShell": {
       "title": "Shell padrão do terminal",
@@ -11445,7 +11413,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} não pode responder: o dispositivo do amigo atingiu o limite de sessões remotas.\nPeça ao proprietário do amigo para arquivar as sessões não utilizadas ou ao proprietário do computador remoto para aumentar o limite em Acesso remoto e compartilhamento.",
           "REMOTE_TOTAL_LIMIT": "{{name}} não pode responder: o computador remoto atingiu o limite total de sessões remotas.\nPeça ao proprietário desse computador para liberar as sessões não utilizadas ou aumentar o limite em Acesso remoto e compartilhamento.",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}} não conseguiu responder: o modelo atual não oferece suporte a imagens.\nEscolha um modelo compatível com imagens ou ative e configure o Vision Bridge em Configurações → Personalização e envie sua mensagem novamente.",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}} não conseguiu responder: o modelo atual não aceita imagens.\nEscolha um modelo compatível com imagens.",
           "MODEL_UNAVAILABLE": "{{name}} não conseguiu responder: nenhum modelo está disponível.\nEscolha um modelo conectado e disponível nas configurações do amigo e envie sua mensagem novamente.",
           "AUTH_REQUIRED": "{{name}} não conseguiu responder: a conexão do modelo precisa de autenticação.\nReconecte o provedor do modelo em Configurações e envie sua mensagem novamente.",
           "RATE_LIMITED": "{{name}} não conseguiu responder: há solicitações demais ao modelo.\nEnvie sua mensagem novamente mais tarde ou escolha outro modelo disponível.",
@@ -14917,11 +14885,6 @@
       "title": "Imagem ausente",
       "unavailable": "Imagem indisponível",
       "loading": "Carregando imagem…"
-    },
-    "visionBridge": {
-      "analyzing": "Analisando {{count}} imagem(ns)…",
-      "fallback": "A ponte de visão recorreu a um backend de visão reserva (o principal está indisponível); o reconhecimento de imagens pode ser afetado",
-      "unavailable": "A ponte de visão está indisponível; não foi possível descrever a imagem, que foi substituída por um aviso de texto"
     },
     "newMessageIndicator": {
       "aria": "Voltar ao fim e ver {{count}} novas mensagens",
@@ -21513,7 +21476,6 @@
       "sessionRuntimeFallback": "Troca automática do modelo das tarefas",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Modelos auxiliares",
-      "visionBridge": "Vision Bridge",
       "modelVisibility": "Modelos exibidos e ocultos",
       "providerOrder": "Ordem dos provedores",
       "modelCatalogOverrides": "Parâmetros de modelo alterados",
