@@ -300,6 +300,24 @@ var cindyMail = (function () {
     function sameFields(a, b) {
       return Object.keys(b).every(name => comparable(name, a[name]) === comparable(name, b[name]));
     }
+    // Persist only field digests as executed-save provenance, never a second
+    // body snapshot. A mailbox-confirmed field becomes its own merge baseline.
+    async function fieldDigests(fields) {
+      return Object.fromEntries(await Promise.all(Object.keys(fields).map(async name => {
+        const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(comparable(name, fields[name])));
+        return [name, Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('')];
+      })));
+    }
+    async function completedSaveBase(record, original, remote) {
+      if (!record.completedSaveHashes) return original;
+      const [hashes, originals] = await Promise.all([fieldDigests(remote), fieldDigests(original || {})]);
+      const base = { ...original };
+      for (const name of Object.keys(remote))
+        if (originals[name] && hashes[name] === record.completedSaveHashes[name]?.attempt &&
+            (originals[name] === record.completedSaveHashes[name]?.base ||
+             originals[name] === record.completedSaveHashes[name]?.previous)) base[name] = remote[name];
+      return base;
+    }
     // A conservative three-way text merge: identical edits converge; independent
     // replacement ranges combine. Overlapping replacements remain for review.
     function mergeText(base, local, remote) {
@@ -354,7 +372,7 @@ var cindyMail = (function () {
       return navigator.locks.request('mail-restore:' + key, async function () {
         if (mailEdits.has(key)) return true;
         const record = (await mailRecords())[key];
-        if (!record || record.callId !== callId || record.state !== 'draft') return false;
+        if (!record || record.callId !== callId || record.state !== 'draft' || record.unverifiedAdditions) return false;
         const saved = await cindy.send({ type: 'mail-draft-read', callId, ...(sourceCallId ? { sourceCallId } : {}) });
         const card = saved?.ok && saved.draft;
         if (!card || card.key !== key || card.accountId !== record.account || card.draftId !== record.draftId) return false;
@@ -367,8 +385,8 @@ var cindyMail = (function () {
         const local = { ...remote, ...Object.fromEntries(card.fields.map(f => [f.name, f.value])) };
         // Legacy clean cards are their own last synchronized snapshot. A legacy
         // error without a base can still converge when both contents are equal.
-        const base = card.baseValues || (card.state === 'draft' ? local :
-          ['syncing', 'sending'].includes(card.state) && readBack.fingerprint === record.fingerprint ? remote : undefined);
+        const base = await completedSaveBase(record, card.baseValues || (card.state === 'draft' ? local :
+          ['syncing', 'sending'].includes(card.state) && readBack.fingerprint === record.fingerprint ? remote : undefined), remote);
         const merged = mergeFields(base, local, remote);
         const active = await mailRecords(records => {
           const current = records[key];
@@ -456,7 +474,7 @@ var cindyMail = (function () {
                 id !== settledKey &&
                 records[id].account === account.accountId &&
                 records[id].draftId === readBack.draftId &&
-                records[id].state !== "draft"
+                (records[id].state !== "draft" || records[id].unverifiedAdditions)
               );
             })
           ) {
@@ -708,7 +726,12 @@ var cindyMail = (function () {
             }
             edit.error = result;
             const completedSave = !sending && !additions.length && result.execution === "executed";
-            if (completedSave) edit.completedSaveFields = fields;
+            if (completedSave) {
+              const [attempt, base] = await Promise.all([fieldDigests(fields), fieldDigests(draftValues(edit.readBack))]);
+              record.completedSaveHashes = Object.fromEntries(Object.keys(attempt).map(name =>
+                [name, { base: base[name], attempt: attempt[name] }]));
+              if (edit.additions?.length) record.unverifiedAdditions = true;
+            }
             // A failed completed save has never attempted delivery. Keep its
             // error and edits, but do not persist an unknown-send lock. Uploads
             // still require verified bytes before consuming their descriptors. Legacy
@@ -720,6 +743,8 @@ var cindyMail = (function () {
                   edit.fields.bodyHtml = edit.fields.bodyHtml.replace(new RegExp('<p><img src="cid:' + file.contentId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"[^>]*></p>', 'g'), '');
                 }
               }
+              if (edit.additions?.length) record.unverifiedAdditions = true;
+              else delete record.unverifiedAdditions;
               record.state = "draft";
               await mailRecords(function (records) {
                 records[key] = record;
@@ -739,6 +764,8 @@ var cindyMail = (function () {
           if (result.data.sent) {
             record.state = "sent";
             record.receipt = result.data.receipt;
+            delete record.completedSaveHashes;
+            delete record.unverifiedAdditions;
             try {
               await mailRecords(function (records) {
                 records[key] = record;
@@ -757,6 +784,24 @@ var cindyMail = (function () {
               );
             return result;
           }
+          if (record.completedSaveHashes) {
+            // Host publication is not atomic with routing KV. Bridge the actual
+            // stored card base and concurrent previews of the preceding mailbox
+            // version to this verified save; never copy private fields to KV.
+            const preceding = draftValues(edit.readBack);
+            const saved = await cindy.send({ type: 'mail-draft-read', callId: record.callId,
+              ...(sourceCallId ? { sourceCallId } : {}) });
+            const hostBase = saved?.ok && saved.draft?.key === key &&
+              saved.draft.accountId === record.account && saved.draft.draftId === record.draftId
+              ? saved.draft.baseValues : undefined;
+            const [attempt, previous, base] = await Promise.all([
+              fieldDigests(draftValues(result.data.readBack)), fieldDigests(preceding), fieldDigests(hostBase || {}),
+            ]);
+            record.completedSaveHashes = Object.fromEntries(Object.keys(attempt).map(name => [name, {
+              base: base[name] || record.completedSaveHashes[name]?.base,
+              previous: previous[name], attempt: attempt[name],
+            }]));
+          }
           edit.readBack = result.data.readBack;
           edit.conflictBase = undefined;
           if (adapter.richText) {
@@ -765,6 +810,8 @@ var cindyMail = (function () {
             if (edit.fields.bodyHtml === fields.bodyHtml) edit.fields.bodyHtml = edit.readBack.editor.bodyHtml || '';
             if (edit.fields.quote === fields.quote) edit.fields.quoteHtml = edit.readBack.editor.quoteHtml || '';
           }
+          if (edit.additions?.length) record.unverifiedAdditions = true;
+          else delete record.unverifiedAdditions;
           edit.savedRevision = revision;
           record.fingerprint = edit.readBack.fingerprint;
           record.locator = edit.readBack.locator;
@@ -846,6 +893,10 @@ var cindyMail = (function () {
         }
         result ||= { ok: false, execution: "unknown", message: "无法确认草稿是否已删除，请先检查邮箱，不要重复操作。" };
         record.state = result.ok ? "deleted" : result.execution === "not_executed" ? "draft" : "pending";
+        if (result.ok) {
+          delete record.completedSaveHashes;
+          delete record.unverifiedAdditions;
+        }
         if (edit) {
           edit.deleting = record.state !== "draft";
           if (!result.ok) edit.error = result;
@@ -997,6 +1048,14 @@ var cindyMail = (function () {
       }
       var record = (await mailRecords())[key];
       if (!record || record.callId !== message.callId) return;
+      if (['attach', 'image'].includes(match[1]) && edit?.additions?.length) {
+        // Upload descriptors are volatile. Losing this sandbox must not turn a
+        // selected but unverified file into a clean, sendable provider draft.
+        await mailRecords(records => {
+          if (records[key]?.callId === message.callId && ['draft', 'pending'].includes(records[key].state))
+            records[key].unverifiedAdditions = true;
+        });
+      }
       if (match[1] === "delete") { await deleteMailDraft(key); return; }
       if (record.state === "deleted") return;
       var copy = await mailCopy();
@@ -1068,7 +1127,10 @@ var cindyMail = (function () {
         message: "请先读取草稿并展示卡片，再通过公共邮件流程发送。" } : null;
       // Uncertain writes must block repeat writes, not the read needed to inspect
       // the mailbox. Keep the receipt record intact and expose a read-only view.
-      if (operation === "get" && records[key].state === "pending") {
+      const lostAdditions = records[key].unverifiedAdditions && !mailEdits.get(key)?.additions?.length;
+      if (lostAdditions && operation !== "get")
+        return { ok: false, execution: "unknown", message: "之前操作的结果尚未确认，请先检查邮箱，未再次发送。" };
+      if (operation === "get" && (records[key].state === "pending" || lostAdditions)) {
         const latest = await adapter.readDraft({ record: { ...records[key] }, sourceCallId });
         if (latest?.ok && latest.data?.readBack?.status === "read_back" && sourceCallId && readOnly === false) {
           const selected = await adapter.selectAccount(account);
@@ -1137,14 +1199,13 @@ var cindyMail = (function () {
             return { ok: false, execution: 'not_executed', message: (await mailCopy()).missing };
           if (!saved?.ok || saved.draft?.key !== key) {
             const selected = await adapter.selectAccount(account);
-            if (selected.ok && sourceCallId) await showMailDraft({ callId: sourceCallId }, selected, readBack);
+            if (selected.ok && sourceCallId && !record.unverifiedAdditions) await showMailDraft({ callId: sourceCallId }, selected, readBack);
             return latest;
           }
           const remote = draftValues(readBack);
           // If the mailbox confirms the exact attempted save, later typing is
           // relative to that save rather than an overlapping remote edit.
-          const base = edit.completedSaveFields && sameFields(edit.completedSaveFields, remote)
-            ? edit.completedSaveFields : draftValues(edit.readBack);
+          const base = await completedSaveBase(record, draftValues(edit.readBack), remote);
           const merged = mergeFields(base, edit.fields, remote);
           edit.fields = merged.fields;
           edit.readBack = readBack;
@@ -1153,12 +1214,14 @@ var cindyMail = (function () {
           edit.conflictBase = merged.conflicts.length ? base : undefined;
           edit.inputFields = { ...edit.fields };
           edit.error = await conflictError(merged.conflicts);
-          edit.completedSaveFields = undefined;
+          // Keep provenance until a verified save. Its paired original digest
+          // prevents a stale attempt from overriding a newer Host card base.
           record.fingerprint = readBack.fingerprint;
           record.locator = readBack.locator;
           const active = await mailRecords(records => {
             if (mailEdits.get(key) !== edit || records[key]?.state !== 'draft' ||
                 records[key].callId !== record.callId) return false;
+            if (edit.additions?.length || records[key].unverifiedAdditions) record.unverifiedAdditions = true;
             records[key] = record;
             return true;
           });
@@ -1166,6 +1229,8 @@ var cindyMail = (function () {
           const selected = await adapter.selectAccount(account);
           if (selected.ok) await showMailDraft({ callId: record.callId, sourceCallId }, selected,
             readBack, edit.error?.message || (edit.savedRevision !== edit.revision ? (await mailCopy()).waiting : undefined), key, edit.fields, true);
+          if (!edit.error && edit.savedRevision !== edit.revision)
+            scheduleMailSave(key, record.callId, (await mailCopy()).failed);
           return { ...latest, data: { ...latest.data, cardEdits: { ...edit.fields }, conflicts: merged.conflicts } };
         });
       }

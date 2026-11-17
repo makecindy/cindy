@@ -5,6 +5,7 @@ import { webcrypto } from "node:crypto";
 import { createContext, runInContext } from "node:vm";
 import { test } from "vitest";
 import { JSDOM } from 'jsdom';
+import { isValidGhostKvValue } from '../src/main/cindy-brain/ghostKvStore';
 import { isSyntheticTriggerText, syntheticTriggerKind } from "@cindy/maker-shared/synthetic-trigger";
 
 const source = fs.readFileSync(new URL("../src/main/cindy-brain/runtime/mailComposeRuntime.js", import.meta.url), "utf8");
@@ -25,6 +26,7 @@ function fixture({
   acceptCard = true,
   richText = false,
   allowCardRead = true,
+  publish,
 } = {}) {
   let kv = {},
     revision = 1,
@@ -114,6 +116,7 @@ function fixture({
           }
           return { ok: true, draft };
         }
+        if (publish && !publish(card)) return { ok: false };
         cards.push(copy(card));
         return { ok: acceptCard || !card.statusOnly?.pendingSend };
       },
@@ -782,6 +785,244 @@ for (const stale of [false, true]) for (const duringRead of [false, true]) test(
   const countdown = f.cards.findIndex(c => c.statusOnly?.pendingSend);
   assert.ok(countdown > 0);
   assert.equal(f.cards.slice(0, countdown).findLast(c => c.draft).draft.attachments[0], upload.filename);
+});
+
+// Restart must not silently lose a selected upload or the provenance of typing
+// that follows an executed save; ordinary same-process recovery cannot cover it.
+for (const recoverBeforeRestart of [false, true]) test(`post-failure uploads remain locked after restart: ${recoverBeforeRestart}`, async () => {
+  let f;
+  f = fixture({ richText: true, write: async request => {
+    if (f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved', bodyHtml: '<p>Saved</p>' });
+  await f.tool('update');
+  await f.card('attach', f.values(), { mailAttachment: {
+    path: 'synthetic-upload', filename: 'selected.pdf', bytes: 12, sha256: 'a'.repeat(64) } });
+  if (recoverBeforeRestart) await f.tool('get');
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal((await f.tool('update')).execution, 'unknown');
+  await assert.rejects(() => f.present());
+  assert.equal(f.writes.length, 1);
+});
+
+test('an upload added during recovery retains its restart lock', async () => {
+  let f, recovering = false, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  f = fixture({ richText: true, write: async request => {
+    f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  }, read: async () => {
+    if (recovering) { entered(); await new Promise(resolve => { release = resolve; }); }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved', bodyHtml: '<p>Saved</p>' });
+  await f.tool('update');
+  recovering = true;
+  const reading = f.tool('get'); await started;
+  await f.card('attach', f.values(), { mailAttachment: {
+    path: 'synthetic-upload', filename: 'selected.pdf', bytes: 12, sha256: 'a'.repeat(64) } });
+  release(); await reading;
+  recovering = false;
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal(f.writes.length, 1);
+});
+
+for (const restart of [false, true]) for (const remoteSubject of [false, true]) test(`completed save baseline merges each field across restart=${restart}, remoteSubject=${remoteSubject}`, async () => {
+  let f;
+  f = fixture({ write: async request => {
+    if (f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  assert.equal(JSON.stringify(f.kv()).includes('Replacement B'), false);
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  if (remoteSubject) f.externalEdit({ subject: 'Remote subject' });
+  if (restart) f.restart();
+  const read = await f.tool('get');
+  assert.equal(read.ok, true);
+  assert.deepEqual(copy(read.data.conflicts || []), []);
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.at(-1).fields.body, 'Replacement C');
+  assert.equal(f.writes.at(-1).fields.subject, remoteSubject ? 'Remote subject' : 'Meeting');
+});
+
+test('successful recovery re-arms autosave after the failed timer has expired', async () => {
+  let f;
+  f = fixture({ write: async request => {
+    if (f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Follow-up C' });
+  await f.flush(); // Existing timer is consumed while the save error blocks it.
+  assert.equal(f.writes.length, 1);
+  await f.tool('get');
+  await f.advance(2000);
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.writes.at(-1).send, false);
+  assert.equal(f.current().editor.body, 'Follow-up C');
+});
+
+// Exercise the Host/KV boundary too: adapter read completion alone does not
+// prove a recovered base or later upload has reached durable card state.
+test('a rejected recovery card keeps the completed-save baseline through restart', async () => {
+  let f, rejecting = false;
+  f = fixture({ publish: card => !rejecting || card.type !== 'mail-draft-update', write: async request => {
+    if (f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  rejecting = true;
+  await f.tool('get');
+  f.restart(); rejecting = false;
+  const read = await f.tool('get');
+  assert.deepEqual(copy(read.data.conflicts || []), []);
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.at(-1).fields.body, 'Replacement C');
+});
+
+test('a recovered Host baseline permits a later remote field rollback', async () => {
+  let f;
+  f = fixture({ write: async request => {
+    if (f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  f.externalEdit({ subject: 'Remote C' });
+  await f.tool('get');
+  f.externalEdit({ subject: 'Meeting' });
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.at(-1).fields.subject, 'Meeting');
+  assert.equal(f.writes.filter(w => !w.send).length, 1);
+});
+
+test('an upload selected after recovery remains locked through restart', async () => {
+  let f;
+  f = fixture({ richText: true, write: async request => {
+    if (f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved', bodyHtml: '<p>Saved</p>' });
+  await f.tool('update');
+  await f.tool('get');
+  await f.card('attach', f.values(), { mailAttachment: {
+    path: 'synthetic-upload', filename: 'selected.pdf', bytes: 12, sha256: 'a'.repeat(64) } });
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal(f.writes.length, 1);
+});
+
+test('an upload arriving during autosave retains its restart lock', async () => {
+  let f, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  f = fixture({ richText: true, write: async request => {
+    if (f.writes.length > 1) return;
+    entered(); await new Promise(resolve => { release = resolve; });
+    f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+    return { ok: true, data: { readBack: f.current() } };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved', bodyHtml: '<p>Saved</p>' });
+  const saving = f.advance(2000); await started;
+  await f.card('attach', f.values(), { mailAttachment: {
+    path: 'synthetic-upload', filename: 'selected.pdf', bytes: 12, sha256: 'a'.repeat(64) } });
+  release(); await saving;
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal(f.writes.length, 1);
+});
+
+for (const rejectGet of [false, true]) for (const rejectPreview of [false, true]) test(`verified save retains recovery provenance when Host publication fails: get=${rejectGet}, preview=${rejectPreview}`, async () => {
+  let f, rejecting = false, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  f = fixture({ publish: card => !rejecting || card.type !== 'mail-draft-update', write: async request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    if (f.writes.length === 2) {
+      entered(); await new Promise(resolve => { release = resolve; });
+      f.externalEdit({ body: request.fields.body });
+      rejecting = true; // The final saved-card publication is rejected.
+      return { ok: true, data: { readBack: f.current() } };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  rejecting = rejectGet;
+  await f.tool('get');
+  rejecting = rejectPreview;
+  const saving = f.advance(2000); await started;
+  rejecting = false;
+  await f.card('change', { ...f.values(), body: 'Replacement D' });
+  release(); await saving;
+  f.restart(); rejecting = false;
+  const read = await f.tool('get');
+  assert.deepEqual(copy(read.data.conflicts || []), []);
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.at(-1).fields.body, 'Replacement D');
+});
+
+// Plugin KV has a whole-document budget. Terminal receipts must release merge
+// metadata; uncertain delivery still needs the original protection/provenance.
+for (const operation of ['send', 'delete', 'send-unknown']) test(`recovery metadata follows the receipt lifecycle: ${operation}`, async () => {
+  let f;
+  f = fixture({ write: async request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    if (operation === 'send-unknown' && request.send)
+      return { ok: false, execution: 'unknown', message: 'No delivery receipt' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved replacement' });
+  await f.tool('update');
+  await f.tool('get');
+  const before = JSON.stringify(f.kv());
+  const metadata = Object.values(f.kv().mailDraftCards)[0].completedSaveHashes;
+  assert.ok(metadata);
+  await f.tool(operation === 'delete' ? 'delete' : 'send');
+  const record = Object.values(f.kv().mailDraftCards)[0];
+  assert.equal(record.state, operation === 'send-unknown' ? 'pending' : operation === 'delete' ? 'deleted' : 'sent');
+  if (operation === 'send-unknown') assert.ok(record.completedSaveHashes);
+  else {
+    assert.equal(record.completedSaveHashes, undefined);
+    assert.equal(record.unverifiedAdditions, undefined);
+    assert.ok(JSON.stringify(f.kv()).length < before.length);
+    const history = saved => ({ mailDraftCards: Object.fromEntries(Array.from({ length: 64 }, (_, i) =>
+      ['history-' + i, { ...saved, draftId: 'synthetic-draft-' + i, callId: 'synthetic-call-' + i }])) });
+    assert.equal(isValidGhostKvValue(history(record)), true);
+    assert.equal(isValidGhostKvValue(history({ ...record, completedSaveHashes: metadata })), false);
+  }
 });
 
 test('failed completed autosave preserves typing during recovery and uses the new locator', async () => {
