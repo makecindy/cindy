@@ -673,7 +673,9 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
   // unit: terminal errors used to bypass the optional durable sink, losing both offline
   // delivery and completed-input dedup. Cover progress present/absent and storage failure.
+  // #10002 /4594780098: real error dispatch must localize the durable final, not only streaming.
   it.each(['stream', 'start-failed', 'storage-failed'] as const)('commits terminal errors once and releases the next turn: %s', async mode => {
+    setMainLocale('en');
     const previous = fakeAdapter.output;
     const handle = { messageId: 'progress', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
     const commitFinal = vi.fn(async () => { if (mode === 'storage-failed') throw new Error('DISCORD_OUTBOX_STORAGE_UNAVAILABLE'); });
@@ -691,7 +693,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       h.emit({ type: 'error', data: { message: 'terminal failure', isTerminal: true } });
       if (first.kind === 'accepted') await expect(first.terminal).resolves.toMatchObject({ kind: 'error', errorCode: 'agent_turn_error' });
       expect(commitFinal).toHaveBeenCalledTimes(1);
-      expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({ inputMessageId: '30|8', terminal: 'error', errorCode: 'agent_turn_error', text: expect.stringContaining('terminal failure') }));
+      expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({ inputMessageId: '30|8', terminal: 'error', errorCode: 'agent_turn_error', text: expect.stringContaining('❌ Error: terminal failure') }));
       expect(complete).toHaveBeenCalledTimes(1);
       expect(handle.finalize).not.toHaveBeenCalled();
       expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();

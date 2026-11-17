@@ -57,7 +57,8 @@ describe('discord terminal media lease', () => {
     const send = vi.fn(async () => ({ id: '91' }));
     const channel = { id: '30', guildId: '10', parentId: '20', parent: { id: '20', guildId: '10', type: 0 }, type: 11,
       isTextBased: () => true, isSendable: () => true, messages: {}, permissionsFor: () => ({ has: () => true }), send };
-    const sdk = { user: { id: '2' }, rest: { post }, channels: { fetch: async () => channel } };
+    const removeProgress = vi.fn(async () => {});
+    const sdk = { user: { id: '2' }, rest: { post, delete: removeProgress, get: async () => ({ id: '7', channel_id: '30', author: { id: '2' } }) }, channels: { fetch: async () => channel } };
     const host: IMHost = {
       secrets: { read: key => secrets.get(key) ?? null, write: () => true, remove() {}, isAvailable: () => true },
       ipc: { handle() {}, broadcast() {}, throwIpcError() { throw new Error('invalid'); } },
@@ -79,8 +80,9 @@ describe('discord terminal media lease', () => {
       await received;
       const output = buildDiscordAdapter(im, CONFIG).output;
       if (output.kind !== 'rich-card' || !output.commitFinal) throw new Error('missing terminal sink');
-      await output.commitFinal({ inputMessageId: '30|8', userId: 'g/10/20/30', text: `${kind === 'text-and-image' ? 'answer\n' : ''}![image](cindy-media://blobs/image.png)`, terminal: 'done', mediaAbsPaths: kind === 'image-only' ? [file, file] : [] });
+      await output.commitFinal({ inputMessageId: '30|8', userId: 'g/10/20/30', text: `${kind === 'text-and-image' ? 'answer\n' : ''}![image](cindy-media://blobs/image.png)`, terminal: 'done', progressMessageId: '30|7', mediaAbsPaths: kind === 'image-only' ? [file, file] : [] });
       expect(post).toHaveBeenCalledTimes(kind === 'text-and-image' ? 1 : 0);
+      expect(removeProgress).toHaveBeenCalledExactlyOnceWith('/channels/30/messages/7');
       expect(send).toHaveBeenCalledOnce();
       expect(send).toHaveBeenCalledWith({ files: [{ attachment: file, name: undefined }], allowedMentions: { parse: [] } });
       expect(JSON.parse(contents!).entries[0]).toMatchObject({ state: 'delivered', segments: [] });

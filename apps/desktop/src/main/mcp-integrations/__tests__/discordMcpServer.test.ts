@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -19,7 +20,7 @@ async function setup(scope: 'owner' | 'group' | 'companion' | 'missing' = 'owner
   let afterFetch = () => {};
   const secrets = new Map([['discord-bot-token', 'fake-not-a-token'], ['discord-owner-user-id', '1'], ['discord-bot-lifecycle-announcement', 'false']]);
   const rest = { get: vi.fn(async () => []), post: vi.fn(async () => ({ id: '90' })), put: vi.fn(), delete: vi.fn(), patch: vi.fn() };
-  const channel = { id: '30', guildId: '10', parentId: '20', parent: { id: '20', guildId: '10', type: 0 }, type: 11, name: 'thread', isTextBased: () => true, isSendable: () => true, messages: {}, permissionsFor: () => ({ has: () => true }), send: vi.fn(async () => ({ id: '91' })) };
+  const channel = { id: '30', guildId: '10', parentId: '20', parent: { id: '20', guildId: '10', type: 0 }, type: 11, name: 'thread', isTextBased: () => true, isSendable: () => true, messages: {}, permissionsFor: () => ({ has: () => true }), send: vi.fn<(payload: unknown) => Promise<{ id: string }>>(async () => ({ id: '91' })) };
   const sdk = { user: { id: '2' }, rest, channels: { fetch: vi.fn(async () => { afterFetch(); return channel; }), cache: new Map([['30', channel]]) } };
   const host: IMHost = {
     secrets: { read: key => secrets.get(key) ?? null, write: (key, value) => { secrets.set(key, value); return true; }, remove: key => { secrets.delete(key); }, isAvailable: () => true },
@@ -98,6 +99,25 @@ describe('Discord MCP host bridge', () => {
     } finally { await h.close(); await fs.rm(root, { recursive: true, force: true }); }
   });
 
+  // #10002 /4594780071, unit: real MCP -> SDK payload. Existing file tests
+  // did not replace the checked path while the channel fetch was pending.
+  it('uploads checked bytes when the path becomes an outside symlink during channel fetch', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-discord-swap-'));
+    const work = path.join(root, 'work'); await fs.mkdir(work);
+    const file = path.join(work, 'answer.txt'); const outside = path.join(root, 'private.txt');
+    await fs.writeFile(file, 'answer'); await fs.writeFile(outside, 'private');
+    const h = await setup('group', work);
+    h.afterFetch(() => {
+      // Synchronous swap at the exact SDK await boundary; no socket or real upload.
+      fsSync.unlinkSync(file); fsSync.symlinkSync(outside, file);
+    });
+    try {
+      expect((await h.call('call_tool', { name: 'send_file', args: { path: file } })).error).not.toBe(true);
+      const payload = h.channel.send.mock.calls[0]?.[0] as unknown as { files: Array<{ attachment: unknown; name: string }> };
+      expect(payload.files[0]).toEqual({ attachment: Buffer.from('answer'), name: 'answer.txt' });
+    } finally { await h.close(); await fs.rm(root, { recursive: true, force: true }); }
+  });
+
   // unit: real MCP -> DiscordIM file handoff. Missing local paths previously looked like an
   // uncertain Discord write; existing coverage only checked valid files/outside-workdir denial.
   // The smallest failure is realpath ENOENT. Mock only FS metadata; no new disk/network resources.
@@ -105,6 +125,11 @@ describe('Discord MCP host bridge', () => {
     const workingDir = path.join(os.tmpdir(), 'cindy-discord-preflight');
     const file = path.join(workingDir, 'answer.txt');
     const mockMetadata = () => ({
+      open: vi.spyOn(fs, 'open').mockImplementation(async () => ({
+        stat: () => fs.stat(file),
+        read: async (buffer: Buffer) => { buffer.write('answer'); return { bytesRead: 6, buffer }; },
+        close: vi.fn(async () => {}),
+      }) as unknown as Awaited<ReturnType<typeof fs.open>>),
       realpath: vi.spyOn(fs, 'realpath').mockImplementation(async candidate => String(candidate)),
       stat: vi.spyOn(fs, 'stat').mockResolvedValue({ isFile: () => true, size: 6 } as Awaited<ReturnType<typeof fs.stat>>),
     });

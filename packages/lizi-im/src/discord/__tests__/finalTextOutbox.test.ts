@@ -14,13 +14,30 @@ function harness() {
   const startedAt = Date.now();
   const send = vi.fn<(text: string, nonce: string) => Promise<string>>(async () => 'sent-1');
   const store: DiscordFinalTextStorage = { key: 'test', read: () => contents, write: value => { contents = value; }, assertCurrent: () => {}, authorizationStamp: () => authorization };
-  const prepare = vi.fn(async () => ({ assertCurrent: () => {}, send }));
+  const removeProgress = vi.fn<(messageId: string) => Promise<void>>(async () => {});
+  const prepare = vi.fn<ConstructorParameters<typeof DiscordFinalTextOutbox>[0]['prepare']>(async () => ({ assertCurrent: () => {}, send, removeProgress }));
   const warn = vi.fn();
   const create = () => new DiscordFinalTextOutbox({ storage: () => store, identity: () => identity, ready: () => ready, prepare, warn, now: () => now + Date.now() - startedAt });
-  return { create, send, prepare, store, warn, get json() { return JSON.parse(contents!); }, set contents(v: string | null) { contents = v; }, get contents() { return contents; }, offline: () => { ready = false; }, online: () => { ready = true; }, revoke: () => { authorization = 'grant-2'; }, changeIdentity: () => { identity = 'other:owner'; }, advance: (ms: number) => { now += ms; } };
+  return { create, send, prepare, removeProgress, store, warn, get json() { return JSON.parse(contents!); }, set contents(v: string | null) { contents = v; }, get contents() { return contents; }, offline: () => { ready = false; }, online: () => { ready = true; }, revoke: () => { authorization = 'grant-2'; }, changeIdentity: () => { identity = 'other:owner'; }, advance: (ms: number) => { now += ms; } };
 }
 describe('Discord text-only outbox', () => {
   // #10002 review: empty terminal text must permit immediate media delivery without a rejected empty POST.
+  // #10002 /4594780091, unit: complete -> persisted ledger -> fresh drain.
+  // A pending final previously lost its progress id, so recovery could never remove it.
+  it('removes progress after offline recovery, without coupling cleanup to media', async () => {
+    const h = harness(); h.offline(); const first = h.create();
+    await first.complete('trigger', 'g/10/20', 'finished', '20|7'); first.stop();
+    expect(h.json.entries[0].progressMessageId).toBe('20|7');
+    const { removeProgress } = h;
+    h.online(); const restarted = h.create();
+    try {
+      await restarted.drain();
+      expect(h.send).toHaveBeenCalledOnce();
+      expect(removeProgress).toHaveBeenCalledExactlyOnceWith('20|7');
+      expect(h.json.entries[0].progressMessageId).toBeUndefined();
+      await restarted.drain(); expect(removeProgress).toHaveBeenCalledOnce();
+    } finally { restarted.stop(); }
+  });
   it('delivers an empty terminal as zero segments without sending text', async () => {
     const h = harness(); const outbox = h.create();
     try {

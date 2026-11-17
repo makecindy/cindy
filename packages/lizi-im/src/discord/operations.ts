@@ -1,4 +1,5 @@
 /** Lane-scoped operations over the connected bot. */
+import { decodeMessageId } from './codec.js';
 import { ChannelType, type Channel, type Client } from 'discord.js';
 import { decodeDiscordLaneUserId, discordLaneOfChannel, discordLaneTargetChannelId, encodeDiscordLaneUserId, type DiscordLane } from './lane.js';
 
@@ -147,6 +148,14 @@ export function createDiscordOperations(deps: {
       assertLane(laneId);
       return {
         assertCurrent: () => { assertLane(laneId); },
+        removeProgress: async (encodedId: string) => {
+          const progress = decodeMessageId(encodedId);
+          if (progress.channelId !== channel.id) throw new DiscordOperationError('DISCORD_LANE_DENIED');
+          // This ID comes only from our streaming handle, not an agent tool argument.
+          assertLane(laneId);
+          await client.rest.delete(`/channels/${channel.id}/messages/${progress.messageId}`);
+          assertLane(laneId);
+        },
         send: async (text: string, nonce: string) => {
           assertLane(laneId);
           const sent = await client.rest.post(`/channels/${channel.id}/messages`, { body: { content: text, nonce, enforce_nonce: true, allowed_mentions: { parse: [] } } }) as { id: string };
@@ -177,7 +186,7 @@ export function createDiscordOperations(deps: {
       assertLane(laneId);
       return { messageId: sent.id, channelId: channel.id };
     },
-    async sendFile(laneId: string, file: string, name?: string) {
+    async sendFile(laneId: string, file: string | Buffer, name?: string) {
       const { channel } = await target(laneId, 'send');
       if (!channel.isSendable()) throw new DiscordOperationError('DISCORD_CHANNEL_UNAVAILABLE');
       assertLane(laneId);

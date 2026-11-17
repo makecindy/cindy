@@ -64,7 +64,7 @@ export function buildDiscordAdapter(
     im: discordIm,
     getBotContextId: () => discordIm.botContextId,
     output: { kind: 'rich-card', im: discordIm, commitFinal: async result => {
-      const receipt = await discordIm.commitFinalText(result.inputMessageId, result.userId, result.text);
+      const receipt = await discordIm.commitFinalText(result.inputMessageId, result.userId, result.text, result.progressMessageId);
       if (receipt.state !== 'delivered') return;
       // Text is durable; media keeps the existing best-effort lifecycle (no persistent pin).
       const media = discordIm.captureTools(result.userId, receipt.assertCurrent);
@@ -77,7 +77,6 @@ export function buildDiscordAdapter(
         }
       }
       receipt.assertCurrent();
-      if (result.progressMessageId) await discordIm.patchMarkdownCard(result.progressMessageId, '').catch(() => undefined);
     } },
     config,
     ui,

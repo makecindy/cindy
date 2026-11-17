@@ -4168,7 +4168,8 @@ export function createTurnRunner(
       // Error finals have the same identity boundary as successful finals.
     } else if (output.kind === 'rich-card' && output.commitFinal && turn.userMessageId) {
       const view = composeStreamingView(turn, true);
-      const text = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
+      const errorLine = imText('imBot.text.shared.turn.error', { message: msg });
+      const text = view ? `${view}\n\n${errorLine}` : errorLine;
       turn.streamingHandle?.close();
       try {
         await output.commitFinal({ userId, text, terminal: 'error', errorCode: turn.terminalErrorCode ?? 'agent_turn_error',

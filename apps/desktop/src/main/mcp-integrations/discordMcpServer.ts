@@ -1,6 +1,7 @@
 /** Discord tools over the active bot connection and task scope. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { constants } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { LiziMcpSessionContext } from '@cindy/mcps';
@@ -173,9 +174,32 @@ export function createDiscordMcpServer(deps: DiscordMcpDeps): McpServer {
           setFileStage('file_stat');
           const stat = await fs.stat(file).catch(rejectFilePreflight); tools.assertCurrent();
           if (!stat.isFile() || !stat.size || stat.size > 8 * 1024 * 1024) throw new DiscordOperationError('FILE_EMPTY_OR_TOO_LARGE');
-          // This boundary still includes channel fetch and SDK file resolution, not proof of a POST.
+          const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)).catch(rejectFilePreflight);
+          let bytes: Buffer;
+          try {
+            const opened = await handle.stat();
+            tools.assertCurrent();
+            if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino ||
+                await fs.realpath(file) !== file) throw new DiscordOperationError('FILE_ACCESS_DENIED');
+            if (!opened.size || opened.size > 8 * 1024 * 1024) throw new DiscordOperationError('FILE_EMPTY_OR_TOO_LARGE');
+            // Read only this checked descriptor and size; the SDK must never reopen the path.
+            bytes = Buffer.alloc(opened.size);
+            let offset = 0;
+            while (offset < bytes.length) {
+              const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset);
+              tools.assertCurrent();
+              if (!bytesRead) throw new DiscordOperationError('FILE_READ_FAILED');
+              offset += bytesRead;
+            }
+          } catch (error) {
+            tools.assertCurrent();
+            if (error instanceof DiscordOperationError) throw error;
+            rejectFilePreflight(error);
+          } finally { await handle.close().catch(rejectFilePreflight); }
+          tools.assertCurrent();
+          // Includes channel fetch, not proof of a POST.
           setFileStage('send_file_call');
-          return tools.sendFile(target, file, p.name);
+          return tools.sendFile(target, bytes!, p.name ?? path.basename(file));
         }
       }
     }));

@@ -256,13 +256,13 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   getFinalTextDeliveryStatus(laneId?: string) { return this.finalTextOutbox.summary(laneId); }
 
   /** Final text is durable before any terminal send; media is not pinned by this ledger. */
-  async commitFinalText(requestId: string, laneId: string, markdown: string) {
+  async commitFinalText(requestId: string, laneId: string, markdown: string, progressMessageId?: string) {
     while (this.configUpdate) await this.configUpdate;
     const anchor = this.finalTextAnchors.get(`${laneId}:${requestId}`);
     if (!anchor) throw new DiscordOperationError('DISCORD_REPLY_ANCHOR_UNAVAILABLE');
     anchor.assertCurrent();
     const { text, imageUrls } = markdownToDiscord(markdown);
-    const state = await this.finalTextOutbox.complete(requestId, laneId, text);
+    const state = await this.finalTextOutbox.complete(requestId, laneId, text, progressMessageId);
     while (this.configUpdate) await this.configUpdate;
     anchor.assertCurrent();
     this.finalTextAnchors.delete(`${laneId}:${requestId}`);

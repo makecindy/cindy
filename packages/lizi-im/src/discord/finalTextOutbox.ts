@@ -21,6 +21,7 @@ interface Entry {
   /** Shorter-lived delivery receipts; capacity-bounded completed-input tombstones do not expire with delivery. */
   receipts?: string[];
   deliveredAt?: number;
+  progressMessageId?: string;
 }
 interface Ledger { version: 1; entries: Entry[] }
 const TTL = 24 * 60 * 60 * 1000;
@@ -38,7 +39,7 @@ export class DiscordFinalTextOutbox {
     storage(): DiscordFinalTextStorage | null;
     identity(): string;
     ready(): boolean;
-    prepare(lane: string): Promise<{ assertCurrent(): void; send(text: string, nonce: string): Promise<string> }>;
+    prepare(lane: string): Promise<{ assertCurrent(): void; send(text: string, nonce: string): Promise<string>; removeProgress?(messageId: string): Promise<void> }>;
     warn(code: string): void;
     now?: () => number;
   }) {}
@@ -55,6 +56,7 @@ export class DiscordFinalTextOutbox {
         if (e.state === 'pending' || e.state === 'uncertain') e.state = 'expired';
         e.segments = [];
         delete e.receipts;
+        delete e.progressMessageId;
       }
       if (e.deliveredAt && this.now() - e.deliveredAt > 60 * 60 * 1000) delete e.receipts;
       // Crash between POST and receipt persistence: delivery cannot be inferred from a short-lived nonce.
@@ -78,7 +80,7 @@ export class DiscordFinalTextOutbox {
   invalidate(): void {
     const store = this.deps.storage();
     if (!store) return;
-    this.mutate(store, ledger => { for (const e of ledger.entries) { e.state = 'cancelled'; e.segments = []; } });
+    this.mutate(store, ledger => { for (const e of ledger.entries) { e.state = 'cancelled'; e.segments = []; delete e.progressMessageId; } });
     this.retry.reset();
     this.retryNotBefore = 0;
   }
@@ -102,7 +104,7 @@ export class DiscordFinalTextOutbox {
       deliveries: entries.filter(e => e.state === 'pending' || e.state === 'uncertain').map(e => ({ key: e.key, lane: e.lane, createdAt: e.createdAt, state: e.state, confirmedSegments: e.segments.filter(s => s.state === 'sent').length })),
       note: 'Text delivery expires after 24 hours; completed-input tombstones remain within the 4096-entry capacity. Uncertain POST receipts require manual history verification. Nonces only deduplicate for a few minutes.' };
   }
-  async complete(requestId: string, lane: string, text: string): Promise<Entry['state']> {
+  async complete(requestId: string, lane: string, text: string, progressMessageId?: string): Promise<Entry['state']> {
     if (this.stopped) throw new Error('DISCORD_OUTBOX_STOPPED');
     const store = this.deps.storage();
     if (!store) throw new Error('DISCORD_OUTBOX_STORAGE_UNAVAILABLE');
@@ -117,7 +119,7 @@ export class DiscordFinalTextOutbox {
       }
       if (ledger.entries.length >= MAX_ENTRIES || ledger.entries.filter(e => e.segments.length).length >= 256 ||
           Buffer.byteLength(JSON.stringify(ledger)) + Buffer.byteLength(text) > 4 * 1024 * 1024) throw new Error('DISCORD_OUTBOX_CAPACITY');
-      ledger.entries.push({ key, identity: this.deps.identity(), lane, createdAt: this.now(), authorization: store.authorizationStamp(lane), state: segments.length ? 'pending' : 'delivered', segments });
+      ledger.entries.push({ key, identity: this.deps.identity(), lane, createdAt: this.now(), authorization: store.authorizationStamp(lane), state: segments.length ? 'pending' : 'delivered', segments, ...(progressMessageId ? { progressMessageId } : {}) });
     });
     await this.drain();
     const state = this.read(store).entries.find(e => e.key === key)?.state ?? 'cancelled';
@@ -147,7 +149,8 @@ export class DiscordFinalTextOutbox {
         return;
       }
       store.assertCurrent();
-      const entry = this.read(store).entries.find(e => e.state === 'pending');
+      const entries = this.read(store).entries;
+      const entry = entries.find(e => e.state === 'pending') ?? entries.find(e => e.state === 'delivered' && e.progressMessageId);
       if (!entry) { this.retry.reset(); return; }
       const valid = () => {
         if (this.stopped) throw new Error('DISCORD_OUTBOX_STOPPED');
@@ -173,6 +176,23 @@ export class DiscordFinalTextOutbox {
         }
         this.retry.schedule(() => { void this.drain(); }, { minimumDelayMs: (failure.retryAfter ?? 0) * 1000 });
         return;
+      }
+      if (entry.state === 'delivered' && entry.progressMessageId) {
+        try {
+          valid(); target.assertCurrent();
+          await target.removeProgress?.(entry.progressMessageId);
+          valid(); target.assertCurrent();
+        } catch (error) {
+          const failure = discordOperationFailure(error);
+          if (failure.errorCode !== 'DISCORD_NOT_FOUND') {
+            this.deps.warn('DISCORD_PROGRESS_CLEANUP_FAILED');
+            if (failure.errorCode === 'DISCORD_RATE_LIMITED') this.retryNotBefore = this.now() + Math.max(1, failure.retryAfter ?? 1) * 1000;
+            this.retry.schedule(() => { void this.drain(); }, { minimumDelayMs: (failure.retryAfter ?? 0) * 1000 });
+            return;
+          }
+        }
+        this.mutate(store, ledger => { delete ledger.entries.find(e => e.key === entry.key)!.progressMessageId; });
+        continue;
       }
       const index = entry.segments.findIndex(s => s.state === 'pending');
       if (index < 0) {
