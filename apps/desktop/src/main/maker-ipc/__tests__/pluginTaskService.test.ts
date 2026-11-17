@@ -1042,6 +1042,31 @@ describe('plugin ordinary task receipts', () => {
       outputMessageId: 'output',
     });
   });
+  // Side panel streaming (2026-11-17, capabilities().runPreview): getRun shows the run's own live
+  // streaming block. Entry: service.getRun; nothing covered preview before. Minimum inputs: the
+  // task now executing a different generation, an empty snapshot, an oversized block, and a run
+  // that already settled while a stale block lingers. Tier: unit (in-memory deps).
+  it('previews only the streaming text of the run\'s own live execution', async () => {
+    const f = fixture();
+    const run = await f.send();
+    await f.service.accept(run.taskId, { clientId: run.inputMessageId }, f.execution);
+    f.deps.inspect = async () => ({ execution: f.execution, pending: [] });
+    let live: { execution: typeof f.execution | null; text: string | null } = { execution: f.execution,
+      text: 'Answer citeturn1search1so far' };
+    f.deps.readLivePreview = () => live;
+    expect(await f.service.getRun('p', run.runId)).toMatchObject({ status: 'running', preview: { text: 'Answer so far' } });
+    live = { execution: f.execution, text: 'x'.repeat(40_000) };
+    expect((await f.service.getRun('p', run.runId)).preview?.text).toHaveLength(32_768);
+    for (const other of [{ execution: { ...f.execution, generation: 2 }, text: 'next input' }, { execution: f.execution, text: null }]) {
+      live = other;
+      expect((await f.service.getRun('p', run.runId)).preview).toBeUndefined();
+    }
+    live = { execution: f.execution, text: 'stale' };
+    await f.service.settle(run.taskId, f.execution, 'completed', 'output');
+    const settled = await f.service.getRun('p', run.runId);
+    expect([settled.status, settled.preview]).toEqual(['completed', undefined]);
+    expect(JSON.parse(f.rows.get(run.runId)!.payload).preview).toBeUndefined();
+  });
   it('transfers only native recovery aliases to the new execution', async () => {
     const f = fixture();
     const run = await f.send();

@@ -1,5 +1,10 @@
 # Cindy Design System
 
+> **读取时机**：新增或修改任何界面、组件、布局、样式、动效或 UI 文案之前。先读下面的「阅读路由」，
+> 再按路由读相关章节与专题，不需要通读全文；设计文档索引见 `cindy-design-system.md`。
+> **适用路径**：`apps/desktop/src/renderer/**`、`apps/mobile/app/**`、`apps/mobile/src/**/*.tsx`、
+> `apps/mobile/src/theme/**`、`packages/design-tokens/**`
+
 ## 阅读路由
 
 本文件是 Cindy 视觉规则的入口，不需要通读。本节只指路，不写参数；每个参数只在对应章节保留一份。
@@ -32,7 +37,8 @@
 | 圆角与点击区域 | 上述组件的默认值 | §5 Border Radius Scale、[治理合同](./design-governance.md) §13 |
 | 字号、字重、行高 | Tailwind 字号档位 | §3 |
 | 动效 | Motion Token | §14.4 |
-| 界面文案 | i18n 键 | §11、[术语表](../../i18n/GLOSSARY.md) |
+| 界面文案 | i18n 键 | §11、[术语表](../../i18n/GLOSSARY.md)（规则见[工程约定](../dev-rules/engineering-conventions.md) §5.1） |
+| 文案里出现「任务／对话／消息」 | 已裁决的叫法 | [任务与对话命名](../product-rules/task-and-conversation-naming.md) |
 | 修改 Token、主题或标准组件 | 现有生成链路 | [治理合同](./design-governance.md)、[Token README](../../packages/design-tokens/README.md) |
 
 只在改动对应功能时才读下面的专题：
@@ -83,6 +89,8 @@ The decision and review correction are recorded in
 [`design-decision-log.md`](./design-decision-log.md) (2026-09-06).
 
 ## 2. Color Palette & Roles
+
+MCP App 卡片来源例外（2026-11-16）：第三方来源、本地安装、来源未知使用 warning 语义前景色（Desktop `--warning-fg`，Mobile `warningFg`）；市场来源不标色，自定义 MCP 使用普通文字色。只表达安装来源，不替代权限或签名判断。
 
 > **Multi-theme note**: the values in this section are the concrete **Default Light / Default Dark** (base theme) palette, given as the visual-spec reference sample. At runtime **every color is consumed through a token** (see §10 Theme System & Token Reference), so the same component automatically renders each theme's own colors under other themes (Eclipse / One Dark Pro / Monokai Pro, …). **When implementing components, always write tokens, never hex** — rules in §10.
 

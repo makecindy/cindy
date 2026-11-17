@@ -4,10 +4,22 @@
   "loadFailed": "應用程式載入失敗。請檢查連線後重新載入。",
   "updateRequired": "這台電腦尚不支援 MCP Apps，請更新電腦上的 Cindy 後再試。",
   "appName": "MCP App",
-  "cardTitle": "{{title}} · $t(mcpApps.appName)",
+  "cardTitle": "{{title}}",
   "messageSource": "由 $t(mcpApps.appName)「{{name}}」傳送",
   "serverId": "MCP 伺服器 ID：{{id}}",
   "exitFullscreen": "離開全螢幕",
   "mobileUpdateRequired": "請更新手機上的 Cindy 後再開啟此卡片。",
-  "filesOnExecutionComputer": "檔案內容請在執行電腦查看"
+  "filesOnExecutionComputer": "檔案內容請在執行電腦查看",
+  "source": {
+    "official": "Cindy 官方",
+    "organization": "組織 · {{namespace}}",
+    "market": "插件市場",
+    "third-party": "第三方來源",
+    "local": "本機安裝",
+    "unknown": "來源未知"
+  },
+  "customMcp": "自訂 MCP",
+  "sourceLabel": "來源",
+  "signatureLabel": "簽章",
+  "fullscreen": "全螢幕"
 }

@@ -41,6 +41,7 @@ import { groupFastPolicyStore } from '../../provider-group/fastPolicyStore.js';
 import { captureProviderManagementScope } from '../../provider-group/managementScope.js';
 import { createSubscriptionFastPolicy } from '../../maker-host/subscription-fast-policy.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL, parseSubscriptionSessionAccountView } from '../../../shared/subscriptionAccounts.js';
+import { canSwitchHostedSubscriptionAccount } from '../../subscription-accounts/runtime.js';
 import { hostSessionIdFor } from './sessionIdentity.js';
 import { getSessionProvider } from '../../maker-host/session-provider-store.js';
 import { remoteAgentPollerFor } from '../controller/service';
@@ -1095,6 +1096,11 @@ export function installRemoteAgentHost(options: {
     recordOwnerUsage: (controller, sample) => recordDeviceUsage(controller, sample, 'device'),
     // 供应商组(本机是组所在电脑)：受邀者的任务按组分给组内电脑，本机中转(provider-groups.md §4)。
     groupRelay,
+    canSwitchLocalAccount: async ({ providerId, hostSessionId, model }) => {
+      if (readProviderGroup(providerId)?.autoSwitch === false) return false;
+      return await canSwitchHostedSubscriptionAccount(providerId, hostSessionId, model)
+        && readProviderGroup(providerId)?.autoSwitch !== false;
+    },
     groupContinuity: hasProviderGroupContinuityHandler,
     directGuestExecution: {
       acceptDelegated: acceptShareAvailability,

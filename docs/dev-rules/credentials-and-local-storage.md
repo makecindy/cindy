@@ -3,6 +3,14 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改凭证或授权信息处理、文件落盘位置、用户持久数据、临时文件、
 > 测试目录或运行时生成物之前
+> **适用路径**：`apps/desktop/src/main/secrets/**`、
+> `apps/desktop/src/main/**/*{C,c}redential*.ts`、
+> `apps/desktop/src/main/{devKeychain,safeStorage}*.ts`、
+> `apps/desktop/src/main/{userDataPath,regionUserData,legacyUserDataMigration}.ts`、
+> `apps/desktop/src/test/vitest/{user-data-dir-setup,testDirectoryTemplate}.ts`、
+> `apps/mobile/src/auth/secureStorage.ts`、`apps/mobile/src/**/*{C,c}redential*.ts`、
+> `packages/**/*{C,c}redential*.ts`、
+> `apps/desktop/src/main/authManager.ts`、`apps/desktop/src/main/localProfile*Migration*.ts`、`apps/desktop/src/main/maker-host/codex-auth-*.ts`
 
 本文约束 Desktop、Mobile、共享 package、脚本和测试中的本地文件写入。数据库 migration
 另见 [`database-and-migrations.md`](database-and-migrations.md)，Renderer 与 IPC 边界另见
@@ -122,7 +130,10 @@ Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；
 Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此只做内置 CLI 的外壳：
 
 - 登录只拉起内置 CLI 的 `claude auth login --claudeai`，登录态只读
-  `claude auth status --json`。凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
+  `claude auth status --json`。JSON 缺少套餐显示名时，可在同一 binary、env、账号目录和剩余超时
+  预算内读取一次 `auth status --text`，仅在邮箱与组织匹配时补充 `planDisplayName`；文本不作为
+  登录或权限依据，失败仍保留 JSON 登录态，不读取原始 profile／凭证文件。
+  凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
   Cindy 不读取、不复制、不刷新它。默认账号的会话与登录检查不设 `CLAUDE_CONFIG_DIR`
   （dev 多实例的默认账号也一样），确保仍能看到终端已有登录。
   2026-11-07 起，用户显式添加的[供应商内订阅账号](../product-rules/subscription-account-pools.md)
