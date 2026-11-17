@@ -16,6 +16,7 @@ import type { AgentDeps, AgentSessionHandle } from '../../../../../../packages/m
 import type { AgentEvent } from '../../../../../../packages/maker-core/src/types/events.js';
 import type { Logger } from '../../../../../../packages/maker-core/src/interfaces/logger.js';
 import { buildPiNativeProvidersFromConfigs } from '../pi-native-catalog.js';
+import { applyExistingModelLocalPatch, sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 
 const binary = process.env.CINDY_TEST_PI_BINARY ?? path.resolve('../../apps/pi-bin',
   `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'pi.exe' : 'pi');
@@ -101,7 +102,10 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
     { status: 200, staleRoute: true },
     { status: 400, staleRoute: false },
     { status: 401, staleRoute: false },
-  ])('settles HTTP $status (stale route: $staleRoute)', async ({ status, staleRoute }) => {
+    // #11023: the private gateway URL is intentionally unavailable. The strict
+    // loopback reproduces its reported store rejection without a paid endpoint.
+    { status: 200, staleRoute: false, customGateway: true },
+  ])('settles HTTP $status (stale route: $staleRoute, custom: $customGateway)', async ({ status, staleRoute, customGateway }) => {
     const root = mkdtempSync(path.join(tmpdir(), 'cindy-google-chat-'));
     const agentHome = path.join(root, 'agent');
     const workingDir = path.join(root, 'work');
@@ -134,19 +138,35 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
       await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
       const endpoint = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
       const official = 'https://generativelanguage.googleapis.com/v1beta/openai';
+      const upstream = customGateway ? 'https://truefoundry.example.invalid/v1' : official;
+      const modelId = customGateway ? 'gemini-4-hydrogen' : 'gemini-3.8-flash';
       const config = { id: 'google-fixture', name: 'Google', runtimes: { pi: {
-        catalogPresetId: 'google-gemini-api', baseUrl: official, wireProtocol: 'openai-chat' as const,
-        models: [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', ...(staleRoute ? {
+        ...(!customGateway ? { catalogPresetId: 'google-gemini-api' } : {}),
+        baseUrl: upstream, wireProtocol: 'openai-chat' as const,
+        models: [{ id: modelId, name: modelId,
+          ...(customGateway ? { reasoning: true, reasoningEfforts: ['xhigh' as const], reasoningDefaultEffort: 'xhigh' as const } : {}),
+          ...(staleRoute ? {
           api: 'openai-completions' as const,
           route: { baseUrl: 'https://stale.example/v1', wireProtocol: 'anthropic-messages' as const,
             requestPath: '/custom/messages' },
         } : {}) }],
       } } };
       const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, buildUserProvider(config)] };
+      if (customGateway) {
+        const custom = catalog.providers.at(-1)!;
+        // The persisted local override is sanitized and projected through the
+        // production catalog path, not injected into Pi's generated models.json.
+        const parsed = sanitizeModelCatalogOverrides({ patches: {
+          [`${encodeURIComponent(custom.id)}:${modelId}`]: { perAgent: { pi: { supportsStore: false } } },
+        } });
+        expect(parsed.invalid).toEqual([]);
+        custom.models.pi = custom.models.pi!.map(model =>
+          applyExistingModelLocalPatch(custom.id, 'pi', model, parsed.overrides));
+      }
       const native = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined, catalog);
       const provider = native.providers[0];
       expect(provider.models[0].api ?? provider.api).toBe('openai-completions');
-      expect(provider.models[0].baseUrl ?? provider.baseUrl).toBe(official);
+      expect(provider.models[0].baseUrl ?? provider.baseUrl).toBe(upstream);
       // Keep the selected API, model and compat intact; route the HTTP test only to loopback.
       provider.baseUrl = `${endpoint}/v1beta/openai`;
       const deps: AgentDeps = {
@@ -159,7 +179,7 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
         resolvePiNativeProviders: async () => native,
       };
       handle = await new PiAgent(deps).startSession({ sessionId: `google-chat-${status}`, workingDir,
-        providerId: provider.id, model: 'gemini-3.8-flash' });
+        providerId: provider.id, model: modelId });
       const runtimeDir = path.join(agentHome, 'run-tmp');
       const configHome = readdirSync(runtimeDir).map(name => path.join(runtimeDir, name))
         .find(dir => existsSync(path.join(dir, 'models.json')))!;
@@ -179,6 +199,12 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
         status: request.status })), JSON.stringify(events.filter(event => event.type === 'error' || event.type === 'done')))
         .toEqual([{ url: '/v1beta/openai/chat/completions', hasStore: false, status }]);
       expect(serialized.providers[provider.id].models[0].compat.supportsStore).toBe(false);
+      if (customGateway) {
+        expect(requests[0].body).toMatchObject({ model: modelId, reasoning_effort: 'xhigh' });
+        expect(requests[0].body.tools).toEqual(expect.arrayContaining([
+          expect.objectContaining({ type: 'function' }),
+        ]));
+      }
       if (status === 200) {
         expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'completed' });
         expect(events.some(event => event.type === 'text' && JSON.stringify(event.data).includes('fixture-ok'))).toBe(true);
