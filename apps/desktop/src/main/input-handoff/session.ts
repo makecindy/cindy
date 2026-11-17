@@ -1053,7 +1053,7 @@ export class InputHandoffSession {
       const secure = picture.field === 'password';
       result = await driver.pointer({ kind: 'type', ...base, value, submit: action.kind === 'submit', secure });
       if ('ok' in result && result.ok && secure && value && this.agentControlled) {
-        const url = this.unreadablePage?.url ?? this.step?.url;
+        const url = (this.unreadablePage ?? this.step)?.url;
         this.options.onSecretEntered?.({ pid: target.pid, ...(url ? { url } : {}) });
       }
     }
