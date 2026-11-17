@@ -19,6 +19,7 @@ export default {
     await dialog.getByText(await ui.t('settings.ghosts.perm.hostUi.capabilities.draft'), { exact: true }).waitFor();
     await dialog.getByText(await ui.t('settings.ghosts.perm.hostTools_usage'), { exact: true }).waitFor();
     await dialog.getByText(await ui.t('settings.ghosts.perm.hostTools_usageDetail'), { exact: true }).waitFor();
+    await dialog.getByText(await ui.t('settings.ghosts.perm.hostTools_usageDetail'), { exact: true }).scrollIntoViewIfNeeded();
     assert.doesNotMatch(await dialog.innerText(), /capability:|contribution:|"position"|\{"/);
     await ui.capture('permissions');
   },

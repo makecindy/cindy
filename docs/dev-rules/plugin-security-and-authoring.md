@@ -32,12 +32,16 @@ Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 
 
 ## 事实来源
 
-订阅用量读取（2026-11-16）：独立 `agent.hostTools:['usage']` 工具组仅开放
-`get_subscription_usage`。与 `settings` 分开授权，沿用 Host 工具网关的安装批准、启用状态、
-版本和 owner 代次检查。只读执行电脑当前 Cindy 账号已连接的 Claude/Codex 账号，通过
+用量与供应商组读取（2026-11-16）：独立 `agent.hostTools:['usage']` 工具组提供
+`get_subscription_usage`、`get_provider_usage_history` 和 `get_provider_group`。与 `settings` 分开授权，沿用 Host 工具网关的安装批准、启用状态、
+版本和 owner 代次检查。当前安装说明覆盖本机订阅配额、已记录用量与估算、供应商组配置/状态，以及可见成员和设备信息；
+后两类可指定同账号已授权其它电脑，不新增权限组或版本化重批。订阅配额只读执行电脑当前 Cindy 账号已连接的 Claude/Codex 账号，通过
 `subscription-accounts/usageView.ts` 白名单返回账号标识、套餐、额度窗口及观测时间；
 不展开原生账号对象、凭证、目录、邮箱、内部指纹或远程分享。参数不接受调用方身份、owner、路径
-或强制刷新；跨账号切换和插件撤权后的迟到回包不交付。原有插件未声明该组时行为与批准不变。
+或强制刷新；用量与组状态复用原管理通道和数据可见性，组内自动供应商名称中的订阅身份只在插件返回投影清除，Agent/UI 不变。
+跨账号切换和插件撤权后的迟到回包不交付。原有插件未声明该组时行为与批准不变。
+manifest 新增 `usage` 声明走原整体安装确认；已有该组批准调用新增组内读取不补批。
+beta 存量同意范围扩展及维护者确认要求见[平台契约的授权记录](protocol-compatibility/plugin-host-tools-platform.md#usage-组范围扩展的维护确认)。
 实现与回归见 `subscription-accounts/runtime.ts` 及其测试、`hostToolSlot.test.ts`、
 `ghostInstallConsent.test.ts`；作者用法见随包 `plugin-host-tools.md`「读取订阅用量」。
 
@@ -222,7 +226,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   批准后，插件创建的任务及 Worker 中的 Agent 按普通任务的权限使用已连接工具；
   创建回执仅约束插件直接管理该任务，不参与任务内 Agent 的工具权限判定。
   插件直接调用 `cindy.tasks` 仍只管理本插件的任务。
-- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` / `browser` / `computer` / `ssh` / `docs` / `discovery` 工具组，安装/更新确认中展示各项声明。
+- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` / `browser` / `computer` / `ssh` / `docs` / `discovery` / `usage` 工具组，安装/更新确认中展示各项声明。
   安装/更新确认是整体决定：接受即授予该版本 manifest 的全部已知声明能力，拒绝则不安装或不更新。整体安装批准有效、已启用且 manifest 声明对应组即放行，不另存分项批准，也不提供补批入口。
   旧 receipt 的 `approvedHostToolGroups` / `approvedEventTopics` 字段读取时忽略，不迁移或清理数据，不建立替代许可。新增声明随整体更新确认，移除声明、停用、卸载或撤销整体安装批准立即失效。
   `cindy.host.call(server, tool, args)` 的 UI 与 Node 请求共用 `hostToolSlot`，通过同一 provider / registry 调用 Agent 工具处理器，禁止另写插件业务实现。
@@ -1152,6 +1156,8 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
   绑定；启动窗口创建前的固定配置读取和一次性 CLI 不受请求预算约束。
 
 ## 6. 作者契约与编写手册同步
+
+随包作者手册只描述随包版本的当前能力，不写发布状态或首个可用版本；用到新能力时，`minCindyVersion` 填开发测试所用的 Cindy 版本。
 
 插件界面扩展的作者入口为随包 `references/plugin-host-ui.md`，具名视图和原生入口仍共用
 MCP Apps，不能另建页面 SDK 或逐历史消息 render/query。`mcpApps.host` 能力以整版安装/更新

@@ -37,14 +37,20 @@ export async function createProjectMemoryReceipts(workspace: string) {
     }
     return result;
   }
+  const resolvedPath = (file: string) => {
+    const resolved = path.resolve(workspace, file);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
   let previous = await snapshot().catch(() => null);
   let pending = Promise.resolve<BotLearningReceipt[]>([]);
-  return () => {
+  return (writtenPaths: readonly string[]) => {
+    const confirmed = new Set(writtenPaths.map(resolvedPath));
     pending = pending.then(async () => {
       const next = await snapshot().catch(() => null);
       const receipts: BotLearningReceipt[] = [];
       if (previous && next) for (const [filename, record] of next) {
-        if (previous.get(filename)?.hash === record.hash) continue;
+        if (!confirmed.has(resolvedPath(path.join(teammateProjectMemoryDir(workspace), filename)))
+          || previous.get(filename)?.hash === record.hash) continue;
         receipts.push({ kind: 'memory', key: filename, title: record.title,
           action: previous.has(filename) ? 'updated' : 'created' });
       }

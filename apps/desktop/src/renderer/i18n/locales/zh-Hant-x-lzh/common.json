@@ -8170,8 +8170,8 @@
         "hostTools_controlDetail": "得循 Cindy 之器改、藏、復及治既有任務與專案，並在本機匯入原生任務檔案。",
         "hostTools_handoff": "任務傳言",
         "hostTools_handoffDetail": "得循 Cindy 之器傳訊息於既有任務。需當前任務之境者，須明指任務。",
-        "hostTools_usage": "查訂閱用量",
-        "hostTools_usageDetail": "可查此機現用 Cindy 帳號所接 Claude、Codex 之帳號標識、方案、限額時段及更新時刻。不得取郵址、憑證、檔案或他機資料，亦不得改帳號",
+        "hostTools_usage": "查用量及供應商組狀態",
+        "hostTools_usageDetail": "可查現用 Cindy 帳號於此機所接 Claude/Codex 之帳號標識、方案、配額時段及更新時間，亦可查此機及同帳號已授權他機所記每日、型號用量、估算費用、供應商組配置與狀態，及可見成員、設備之標識、名稱與頭像。不得取訂閱登入郵址、帳號目錄、內部指紋、憑證或檔案，亦不得改帳號或設定",
         "hostTools_settings": "應用設定",
         "hostTools_settingsDetail": "得循 Cindy 之器閱改應用設定；不返金鑰，祕文仍由主人親填。",
         "hostTools_scheduler": "自動化治辦",
@@ -10835,7 +10835,12 @@
       "summary": "自述",
       "summaryPlaceholder": "如：一嗜作小說之文士，略帶詼諧，好揣摩人物之微心。",
       "avatarSelectionFailed": "不能讀頭像，請擇 5 MB 以內之 PNG、JPEG 或 WebP 圖",
-      "personality": "性情與言談之習"
+      "personality": "性情與言談之習",
+      "sourceLength": "{{length}} / {{limit}} 個 UTF-16 單元（首尾空白不計）。",
+      "sourceExcess": "逾限 {{excess}} 個單元，刪簡後方可存。",
+      "sourceTooLong": "此文過長，修之方可存。",
+      "sourceRecovery": "已存原文不變，完整草稿仍留此頁。複製後，請先貼至安全處，核對全文無缺，再刪減或放棄本次修改。",
+      "sourceCopy": "錄全文"
     },
     "nameLabel": "何以稱之",
     "close": "闔",
@@ -12916,7 +12921,7 @@
           "reasoningDominated": "思已耗此番所出之大半，覆或不全。宜減思之深淺，或先壓縮言談錄，再續。",
           "generic": "模型所出已達長度上限，此輪之覆或不全。可遣新訊以續；若屢見之，請減思之深淺，或先壓縮言談錄。",
           "join": "{{usage}}{{guidance}}",
-          "silentStopExhausted": "模型屢返空應，自動續行已暫止。"
+          "silentStopExhausted": "察得空答，自動續行已暫止。"
         },
         "permission": {
           "autoReviewUnavailable": "自動審批未竟，請確認是否許此操作。",
@@ -18967,7 +18972,7 @@
       "steerFailed": "插話未成：{{message}}",
       "qrExpired": "二維碼已逾時，請重新起始",
       "registrationFailed": "立之未成，請稍後再試",
-      "silentStopExhausted": "模型屢返空答，自動續行已暫止。點「續」以復差事。",
+      "silentStopExhausted": "察得空答，自動續行已暫止。",
       "executionResultUnavailable": "未得行之結果，自動接續已止。可請助手察既有之結果。",
       "outputLimit": "模型已達輸出之限，此答或有不全。可遣新訊以續；若屢至此限，宜減思之深淺，或先壓縮言談錄。",
       "outputLimitReasoning": "思考已耗本次輸出預算之大半，此答或有不全。宜減思之深淺，或先壓縮言談錄，而後續之。",
@@ -19559,7 +19564,8 @@
         "expired": "這張禮品卡已過領取期限。",
         "voided": "這張禮品卡已作廢。",
         "rateLimited": "嘗試次數過多，請稍後再試。",
-        "failed": "暫時無法兌換，請稍後重試。"
+        "failed": "暫時無法兌換，請稍後重試。",
+        "personalRequired": "禮品卡僅限個人使用者領取。"
       }
     },
     "usage": {

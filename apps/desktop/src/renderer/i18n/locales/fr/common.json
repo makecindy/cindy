@@ -8299,8 +8299,8 @@
         "hostTools_controlDetail": "Utiliser les outils de Cindy pour modifier, archiver, restaurer et contrôler les tâches et projets existants, et importer des fichiers de tâches au format natif sur cet ordinateur.",
         "hostTools_handoff": "Messages aux tâches",
         "hostTools_handoffDetail": "Utiliser les outils de Cindy pour envoyer des messages aux tâches existantes. Une opération nécessitant le contexte de la tâche actuelle exige une cible explicite.",
-        "hostTools_usage": "Lire l’utilisation des abonnements",
-        "hostTools_usageDetail": "Lire les identifiants de compte, les offres, les périodes de quota et les dates de mise à jour des abonnements Claude et Codex connectés à votre compte Cindy actuel sur cet ordinateur. Ne permet pas de lire les adresses e-mail, les identifiants de connexion, les fichiers ou les données d’autres ordinateurs, ni de modifier les comptes.",
+        "hostTools_usage": "Lire l’utilisation et l’état des groupes de fournisseurs",
+        "hostTools_usageDetail": "Lire les identifiants, offres, périodes de quota et dates de mise à jour des comptes Claude/Codex locaux connectés à votre compte Cindy. Lire l’utilisation enregistrée par jour et par modèle, les coûts estimés, la configuration et l’état des groupes de fournisseurs, ainsi que les identifiants, noms et avatars visibles des membres et appareils sur cet ordinateur ou d’autres ordinateurs autorisés du même compte. Ne permet pas de lire les adresses e-mail de connexion aux abonnements, les dossiers de comptes, les empreintes d’identité internes, les identifiants de connexion ou les fichiers, ni de modifier les comptes ou réglages.",
         "hostTools_settings": "Paramètres de l’application",
         "hostTools_settingsDetail": "Utiliser les outils de Cindy pour lire et modifier la configuration. Aucun secret n’est renvoyé et les saisies confidentielles restent à votre charge.",
         "hostTools_scheduler": "Gestion des automatisations",
@@ -10964,7 +10964,12 @@
       "summary": "Présentation",
       "summaryPlaceholder": "Par exemple : un romancier passionné de feuilletons, doté d'un humour pince-sans-rire et fasciné par ce qui anime les personnages.",
       "avatarSelectionFailed": "Impossible de lire l'image. Choisissez une image PNG, JPEG ou WebP de 5 Mo maximum.",
-      "personality": "Personnalité et conversation"
+      "personality": "Personnalité et conversation",
+      "sourceLength": "{{length}} / {{limit}} unités UTF-16 (hors espaces de début et de fin).",
+      "sourceExcess": "Limite dépassée de {{excess}} unités. Raccourcissez le texte pour l’enregistrer.",
+      "sourceTooLong": "Ce texte est trop long pour être enregistré. Modifiez-le pour continuer.",
+      "sourceRecovery": "L’original enregistré reste inchangé et le brouillon complet reste sur cette page. Après la copie, collez-le dans un endroit sûr et vérifiez qu’il est complet avant de le raccourcir ou d’abandonner les modifications.",
+      "sourceCopy": "Copier tout le texte"
     },
     "nameLabel": "Comment l'appeler ?",
     "close": "Fermer",
@@ -13076,7 +13081,7 @@
           "reasoningDominated": "La réflexion a consommé l'essentiel du budget de sortie : la réponse peut être incomplète. Réduisez l'effort de raisonnement ou compactez d'abord la conversation, puis continuez.",
           "generic": "Le modèle a atteint la limite de longueur de sortie : cette réponse peut être incomplète. Envoyez un nouveau message pour continuer. Si cela se reproduit, réduisez l'effort de raisonnement ou compactez d'abord la conversation.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "Le modèle a renvoyé plusieurs réponses vides d'affilée : la poursuite automatique est en pause."
+          "silentStopExhausted": "Une réponse vide a été détectée. La poursuite automatique est en pause."
         },
         "permission": {
           "autoReviewUnavailable": "La revue automatique n'a pas abouti. Confirmez si vous autorisez cette action.",
@@ -19224,7 +19229,7 @@
       "steerFailed": "Échec de la réorientation : {{message}}",
       "qrExpired": "QR code expiré, veuillez recommencer",
       "registrationFailed": "Échec de la création, veuillez réessayer plus tard",
-      "silentStopExhausted": "Le modèle a renvoyé des réponses vides à plusieurs reprises ; la reprise automatique est en pause. Cliquez sur « Continuer » pour reprendre la tâche.",
+      "silentStopExhausted": "Une réponse vide a été détectée. La poursuite automatique est en pause.",
       "executionResultUnavailable": "Impossible de récupérer le résultat de l'exécution. La poursuite automatique s'est arrêtée. Demandez à l'assistant de vérifier le résultat d'exécution existant.",
       "outputLimit": "Le modèle a atteint sa limite de sortie ; cette réponse peut être incomplète. Envoyez un nouveau message pour continuer. Si cela se répète, réduisez l’effort de raisonnement ou compactez d’abord l’historique de la conversation.",
       "outputLimitReasoning": "Le raisonnement a consommé la majeure partie du budget de sortie de cette requête ; la réponse peut être incomplète. Réduisez l’effort de raisonnement ou compactez l’historique de la conversation avant de continuer.",
@@ -19820,7 +19825,8 @@
         "expired": "Cette carte cadeau ne peut plus être utilisée : sa date limite est dépassée.",
         "voided": "Cette carte cadeau a été annulée.",
         "rateLimited": "Trop de tentatives. Réessayez plus tard.",
-        "failed": "Impossible d’utiliser la carte cadeau. Réessayez plus tard."
+        "failed": "Impossible d’utiliser la carte cadeau. Réessayez plus tard.",
+        "personalRequired": "Les cartes cadeaux ne peuvent être utilisées qu’avec un compte personnel."
       }
     },
     "usage": {

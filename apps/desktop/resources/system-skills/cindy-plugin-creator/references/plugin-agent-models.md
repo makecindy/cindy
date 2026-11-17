@@ -10,9 +10,9 @@
 不代表远程 SSH 目录。读取不调用模型、不触发凭证认领或上游发现，不返回凭证、账号 identity 或 endpoint；不需要新增 manifest 权限。
 格式非法、重复参数、空或超过 128 字符的设备 ID，或其他查询参数返回 400。格式合法但那台离线、未知或没开远程控制时返回 503 且 `errorCode` 为 `NOT_AVAILABLE`，响应里没有本机条目。旧 Host 带任何参数都返回 400；旧 Host 可能返回 404，插件应明确提示升级；503 时提供重试。运行前再次核验选定来源。
 
-## 4.0.3b 宿主统一模型选择器（新增接口，尚未发布）
+## 4.0.3b 宿主统一模型选择器
 
-### 桌面插件页面：在按钮旁展开（开发中，尚未发布）
+### 桌面插件页面：在按钮旁展开
 
 桌面 settings、panel、mainView 与 taskView 页面可使用 Host 注入的最小页面桥：
 
@@ -42,7 +42,7 @@ button.addEventListener('click', async () => {
 所有坐标相对当前顶层插件页面，使用 CSS 像素；不要传屏幕坐标或主窗口坐标。
 此桥仅在本机桌面 WebView 可用，手机／远程控制页面和旧版 Host 继续走原生选模通道，
 必须检查函数是否存在。返回值和错误码与下面 `cindy.pickModel` 相同。
-示例源码见 `scripts/examples/plugin-model-picker/`；新接口发布前不要凭本地开发构建推测版本下限。
+示例源码见 `scripts/examples/plugin-model-picker/`。
 
 不想自行绘制选模界面时，电子脑调用 `cindy.pickModel(options?)`。
 Host 打开与 Cindy 共用的模型选择器，用户确认后返回完整配置；取消、关闭页面或超时不返回配置。
@@ -103,4 +103,4 @@ const selected = await response.json();
 关闭或完成后可以立即再次打开，无时间冷却；旧版 Host 仍可能返回 `RATE_LIMITED`，插件应兼容。
 窗口、页面、连接、账号或安装版本变化后，旧回执不能交给替代实例。
 此接口可选择 Agent 运行来源，任务文件仍在任务电脑上；不选择 SSH 工作区，也不提供凭证、endpoint 或完整 ProviderView。
-依赖此接口的插件应在接口正式发布后填入实际的首个 `minCindyVersion`，并保留运行时能力检查。
+依赖此接口的插件仍须保留运行时能力检查。
