@@ -20,8 +20,12 @@
  * - decoration 只是渲染层,doc JSON / 草稿存储 / 发送内容里没有任何痕迹;
  * - doc 没变直接复用 DecorationSet,变了全量重扫(chat input 文本量小,
  *   全量成本可忽略,不值得做增量映射);
- * - IME composition 开始前临时移除 decoration,结束后的下一轮 task 再按
- *   当前 doc 补算,避免微软拼音输入时改写 composition DOM;
+ * - IME composition 开始前只移除会包住组字文本的 decoration(见
+ *   resolveCompositionScope),其余行原样保留、只随 transaction 映射位置;
+ *   结束后的下一轮 task 再按当前 doc 补算。这样既不在微软拼音组字期间改写
+ *   composition DOM,也不会让其他行(例如上方的引用)在每次组字时左右跳;
+ * - 引用行(`> `)不加列表的 1em 基础缩进:`>` 与普通正文左对齐,并使用
+ *   次级文字色,把引用原文与自己的评论区分开;
  * - 这是兼容文本行的视觉缩进,不改变 doc JSON / 发送文本。
  */
 import { Extension } from '@tiptap/core';
@@ -44,9 +48,16 @@ import { hasCjkContextPunctuation } from './CjkPunctuationUtils';
 
 const TAB_SIZE = 8;
 
+/** IME 组字期间暂停的列表 decoration 所在范围(doc position)。 */
+export interface ListCompositionScope {
+  from: number;
+  to: number;
+}
+
 type ListDecorationPluginState = {
   decorations: DecorationSet;
   suspendedForComposition: boolean;
+  compositionScope: ListCompositionScope | null;
 };
 
 type CompositionMeta = 'suspend' | 'resume';
@@ -54,6 +65,151 @@ type CompositionMeta = 'suspend' | 'resume';
 const PLUGIN_STATE_KEY = new PluginKey<ListDecorationPluginState>(
   'composerListIndentDecorationState',
 );
+
+/**
+ * decoration spec 上记录布局方式,供组字暂停时判断能否保留:
+ * - `node`:只给段落加 class / CSS 变量的单行悬挂缩进,不包裹任何文字;
+ * - `paragraph`:段落级 fallback 容器及其换行标记,各行互相依赖;
+ * - 未标记:逐行或逐前缀包裹文字的 inline decoration。
+ */
+type ListDecorationLayout = 'node' | 'paragraph';
+const NODE_LAYOUT_SPEC = { composerListLayout: 'node' satisfies ListDecorationLayout };
+const PARAGRAPH_LAYOUT_SPEC = {
+  composerListLayout: 'paragraph' satisfies ListDecorationLayout,
+};
+
+function decorationLayout(decoration: Decoration): ListDecorationLayout | null {
+  const layout = (decoration.spec as { composerListLayout?: unknown }).composerListLayout;
+  return layout === 'node' || layout === 'paragraph' ? layout : null;
+}
+
+function overlapsScope(range: { from: number; to: number }, scope: ListCompositionScope): boolean {
+  return range.from < scope.to && range.to > scope.from;
+}
+
+/**
+ * 组字开始时需要暂停的范围。微软拼音在组字 DOM 被改写时可能卡死整窗
+ * (#626),所以凡是可能包住组字文本的 decoration 都要在组字开始前移除;
+ * 但与组字无关的行继续保留,避免整段列表 / 引用在每次组字时跳动:
+ * - 光标所在段落只有 `node` 布局(单行悬挂缩进)时什么都不暂停——它只改
+ *   段落元素的属性,组字文本不在任何 decoration 包裹内;
+ * - 段落使用 `paragraph` fallback 布局时整段暂停(容器内边距与每行抵消
+ *   互相依赖,只拆一行会让该行错位);
+ * - 其余逐行包裹的段落只暂停选区覆盖的行,同段其他行保持原位。
+ */
+function resolveCompositionScope(
+  decorations: DecorationSet,
+  state: EditorState,
+): ListCompositionScope | null {
+  const { $from, $to } = state.selection;
+  if (!$from.parent.isTextblock || !$to.parent.isTextblock) return null;
+  if ($from.depth === 0 || $to.depth === 0) return null;
+  const blockFrom = $from.before();
+  const blockTo = $to.after();
+  const owned = decorations
+    .find(blockFrom, blockTo)
+    .filter((decoration) => overlapsScope(decoration, { from: blockFrom, to: blockTo }));
+  if (owned.length === 0) return null;
+  if (owned.every((decoration) => decorationLayout(decoration) === 'node')) return null;
+  if (!$from.sameParent($to) || owned.some((d) => decorationLayout(d) === 'paragraph')) {
+    return { from: blockFrom, to: blockTo };
+  }
+
+  const contentStart = $from.start();
+  let lineFrom = contentStart;
+  let lineTo = $from.end();
+  let foundLineEnd = false;
+  $from.parent.forEach((child, offset) => {
+    if (child.type.name !== 'hardBreak') return;
+    const breakPos = contentStart + offset;
+    if (breakPos < $from.pos) {
+      lineFrom = breakPos + child.nodeSize;
+    } else if (breakPos >= $to.pos && !foundLineEnd) {
+      lineTo = breakPos;
+      foundLineEnd = true;
+    }
+  });
+  return { from: lineFrom, to: lineTo };
+}
+
+/**
+ * 当前(或即将开始的)组字会暂停哪些列表 decoration。CjkPunctDecoration
+ * 用它只在同一范围内接管列表前缀的标点字体,范围外仍尊重列表的包裹盒子。
+ */
+export function listDecorationCompositionScope(state: EditorState): ListCompositionScope | null {
+  const pluginState = PLUGIN_STATE_KEY.getState(state);
+  if (!pluginState) return null;
+  if (pluginState.suspendedForComposition) return pluginState.compositionScope;
+  return resolveCompositionScope(pluginState.decorations, state);
+}
+
+/**
+ * 引用行(`> `)在每一种布局分支里都带 `composer-list-quote`:CSS 据此去掉
+ * 列表的 1em 基础缩进并使用次级文字色。任一分支漏掉,引用在输入途中切换
+ * 布局(正文变成长字母串、插入 mention)时就会横跳 1em。
+ */
+function isQuotePrefix(prefix: string): boolean {
+  return prefix.trimStart().startsWith('>');
+}
+
+function classNames(...names: string[]): string {
+  return names.filter(Boolean).join(' ');
+}
+
+/**
+ * 段落级 fallback 布局里的一行带前缀行:前缀占固定槽位;长字母串正文另有
+ * 断字盒子。引用行的正文只给文字片段加改颜色的 inline decoration——fallback
+ * 正文不包 inline-block,与 CjkPunctDecoration 的逐字 span 叠加只会合并属性;
+ * mention 等原子节点不加,避免往 React node view 的外层元素写属性。
+ */
+function addFallbackPrefixedLine(
+  decorations: Decoration[],
+  block: PMNode,
+  contentBase: number,
+  line: { start: number; end: number },
+  prefixLength: number,
+  prefix: string,
+  options: { prefixHasCjkPunctuation: boolean; longRunBody: boolean },
+): void {
+  const from = contentBase + line.start;
+  const to = contentBase + line.end;
+  const prefixTo = from + prefixLength;
+  const quote = isQuotePrefix(prefix);
+  decorations.push(
+    Decoration.inline(from, prefixTo, {
+      class: classNames(
+        'composer-list-fallback-prefix',
+        prefix.includes('\t') ? 'composer-list-tab-indent' : '',
+        options.prefixHasCjkPunctuation ? 'composer-list-cjk-font' : '',
+        quote ? 'composer-list-quote' : '',
+      ),
+      'data-composer-list-prefix-length': String(prefixLength),
+      style: listPrefixIndentStyle(prefix),
+    }),
+  );
+  if (prefixTo >= to) return;
+  if (options.longRunBody) {
+    // LONG_ALPHANUMERIC_BODY_RE excludes atoms, so the body is one text run.
+    decorations.push(
+      Decoration.inline(prefixTo, to, {
+        class: classNames('composer-list-fallback-long-run-body', quote ? 'composer-list-quote' : ''),
+      }),
+    );
+    return;
+  }
+  if (!quote) return;
+  block.nodesBetween(prefixTo - contentBase, to - contentBase, (node, pos) => {
+    if (!node.isText) return false;
+    const segmentFrom = Math.max(contentBase + pos, prefixTo);
+    const segmentTo = Math.min(contentBase + pos + node.nodeSize, to);
+    if (segmentFrom < segmentTo) {
+      decorations.push(
+        Decoration.inline(segmentFrom, segmentTo, { class: 'composer-list-quote' }),
+      );
+    }
+    return false;
+  });
+}
 
 /** 行内一个非文本 inline 节点(mention chip 等)的占位符,与 applyListContinuation 一致。 */
 const ATOM_PLACEHOLDER = '\uFFFC';
@@ -80,6 +236,9 @@ function listPrefixIndentValues(prefix: string): ListIndentValues {
       ch += TAB_SIZE;
     } else if (char === '、' || char === '\u3000') {
       em += 1;
+    } else if (char === '>') {
+      // 引用标记接近数字宽度;按窄字符估算会让长字母串的正文盖住 `> ` 的空格。
+      ch += 1;
     } else {
       ch += 0.4;
     }
@@ -110,14 +269,14 @@ function addLongRunDecoration(
   markerClass = '',
 ): void {
   const prefixTo = from + prefixLength;
-  const markerClassSuffix = markerClass ? ` ${markerClass}` : '';
+  const quoteClass = isQuotePrefix(prefix) ? 'composer-list-quote' : '';
   decorations.push(
     Decoration.inline(from, prefixTo, {
-      class: `composer-list-long-run-marker${markerClassSuffix}`,
+      class: classNames('composer-list-long-run-marker', markerClass, quoteClass),
       style: listPrefixIndentStyle(prefix),
     }),
     Decoration.inline(prefixTo, to, {
-      class: 'composer-list-long-run-body',
+      class: classNames('composer-list-long-run-body', quoteClass),
       style: listPrefixIndentStyle(prefix),
     }),
   );
@@ -126,8 +285,8 @@ function addLongRunDecoration(
 /**
  * 将列表前缀换算成当前字体下的近似宽度。
  *
- * ChatInput 已启用 tabular-nums,所以数字直接用 1ch;句点、空格、方括号等
- * 窄字符按 0.4ch 估算;中文顿号按全角 1em。这里只生成数字和 CSS 单位,
+ * ChatInput 已启用 tabular-nums,所以数字直接用 1ch;引用标记 `>` 也按 1ch;
+ * 句点、空格、方括号等窄字符按 0.4ch 估算;中文顿号按全角 1em。这里只生成数字和 CSS 单位,
  * 不会透传用户文本。Tab 使用固定 tab stop 估算，不再用 Range 实测后
  * 直接改 decoration DOM：ProseMirror 的 DOMObserver 会尝试恢复这类外部
  * style 变更，在 Chromium 中可能与 plugin view 形成更新循环并卡死 renderer。
@@ -224,23 +383,37 @@ export function buildListIndentDecorations(
         (lines.length > 1 && (overlapsVoiceReplacement || hasCjkPunctuation))
       );
     });
-    const fallbackPrefixes = lineMatches
+    const matchedPrefixes = lineMatches
       .filter(({ match }) => Boolean(match))
-      .map(({ line, match }) => listPrefixIndentValues(line.text.slice(0, match!.prefixLength)));
-    const fallbackStyle = widestListIndentValue(fallbackPrefixes);
+      .map(({ line, match }) => line.text.slice(0, match!.prefixLength));
+    const fallbackStyle = widestListIndentValue(matchedPrefixes.map(listPrefixIndentValues));
 
     if (hasFallbackLine) {
+      // 只有引用行时容器同样不吃 1em 基础缩进,`>` 与非 fallback 布局下位置一致;
+      // 与列表行混排时仍按列表缩进。
+      const quoteOnly = matchedPrefixes.every(isQuotePrefix);
       decorations.push(
-        Decoration.node(blockPos, blockPos + block.nodeSize, {
-          class: 'composer-list-fallback-container',
-          style: `--composer-list-fallback-indent:${fallbackStyle};`,
-        }),
+        Decoration.node(
+          blockPos,
+          blockPos + block.nodeSize,
+          {
+            class: classNames(
+              'composer-list-fallback-container',
+              quoteOnly ? 'composer-list-quote-container' : '',
+            ),
+            style: `--composer-list-fallback-indent:${fallbackStyle};`,
+          },
+          PARAGRAPH_LAYOUT_SPEC,
+        ),
       );
       hardBreaks.forEach((breakPos) => {
         decorations.push(
-          Decoration.node(contentBase + breakPos, contentBase + breakPos + 1, {
-            class: 'composer-list-fallback-break',
-          }),
+          Decoration.node(
+            contentBase + breakPos,
+            contentBase + breakPos + 1,
+            { class: 'composer-list-fallback-break' },
+            PARAGRAPH_LAYOUT_SPEC,
+          ),
         );
       });
     }
@@ -276,26 +449,10 @@ export function buildListIndentDecorations(
         // prefix gets a fixed slot (the widest marker in the paragraph), while
         // atoms and slash pills remain ordinary inline content inside the same
         // line flow. This avoids a width:100% wrapper being split at atom edges.
-        decorations.push(
-          Decoration.inline(from, from + match.prefixLength, {
-            class: [
-              'composer-list-fallback-prefix',
-              hasTabPrefix ? 'composer-list-tab-indent' : '',
-              prefixHasCjkPunctuation ? 'composer-list-cjk-font' : '',
-            ]
-              .filter(Boolean)
-              .join(' '),
-            'data-composer-list-prefix-length': String(match.prefixLength),
-            style: listPrefixIndentStyle(prefix),
-          }),
-        );
-        if (LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix) {
-          decorations.push(
-            Decoration.inline(from + match.prefixLength, to, {
-              class: 'composer-list-fallback-long-run-body',
-            }),
-          );
-        }
+        addFallbackPrefixedLine(decorations, block, contentBase, line, match.prefixLength, prefix, {
+          prefixHasCjkPunctuation,
+          longRunBody: LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix,
+        });
         return;
       }
       if (LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix) {
@@ -311,7 +468,13 @@ export function buildListIndentDecorations(
       }
       decorations.push(
         Decoration.inline(from, to, {
-          class: `composer-list-line-indent ${lineClass}`.trim(),
+          class: [
+            'composer-list-line-indent',
+            lineClass,
+            isQuotePrefix(prefix) ? 'composer-list-quote' : '',
+          ]
+            .filter(Boolean)
+            .join(' '),
           'data-composer-list-prefix-length': String(match.prefixLength),
           style: listPrefixIndentStyle(prefix),
         }),
@@ -331,18 +494,16 @@ export function buildListIndentDecorations(
       // A node decoration stays on the paragraph even when CjkPunctDecoration
       // adds nested inline spans, so punctuation cannot split the list wrapper.
       if (line && match && hasFallbackLine) {
-        decorations.push(
-          Decoration.inline(from, from + match.prefixLength, {
-            class: [
-              'composer-list-fallback-prefix',
-              hasTabPrefix ? 'composer-list-tab-indent' : '',
-              prefixHasCjkPunctuation ? 'composer-list-cjk-font' : '',
-            ]
-              .filter(Boolean)
-              .join(' '),
-            'data-composer-list-prefix-length': String(match.prefixLength),
-            style: listPrefixIndentStyle(prefix),
-          }),
+        // Single-line fallback keeps its existing prefix-only slot for lists;
+        // quote rows additionally get the colour-only body decoration.
+        addFallbackPrefixedLine(
+          decorations,
+          block,
+          contentBase,
+          line,
+          match.prefixLength,
+          prefix,
+          { prefixHasCjkPunctuation, longRunBody: false },
         );
       } else if (
         line &&
@@ -351,13 +512,22 @@ export function buildListIndentDecorations(
         (!hasLongAlphanumericBody || prefix.includes('\t'))
       ) {
         decorations.push(
-          Decoration.node(blockPos, blockPos + block.nodeSize, {
-            class: ['composer-list-block-indent', hasTabPrefix ? 'composer-list-tab-indent' : '']
-              .filter(Boolean)
-              .join(' '),
-            'data-composer-list-prefix-length': String(match.prefixLength),
-            style: listPrefixIndentStyle(prefix),
-          }),
+          Decoration.node(
+            blockPos,
+            blockPos + block.nodeSize,
+            {
+              class: [
+                'composer-list-block-indent',
+                hasTabPrefix ? 'composer-list-tab-indent' : '',
+                isQuotePrefix(prefix) ? 'composer-list-quote' : '',
+              ]
+                .filter(Boolean)
+                .join(' '),
+              'data-composer-list-prefix-length': String(match.prefixLength),
+              style: listPrefixIndentStyle(prefix),
+            },
+            NODE_LAYOUT_SPEC,
+          ),
         );
       } else if (
         line &&
@@ -422,21 +592,40 @@ export const ComposerListIndentDecoration = Extension.create({
                 null,
               ),
               suspendedForComposition: false,
+              compositionScope: null,
             };
           },
           apply(tr: Transaction, old: ListDecorationPluginState, oldState: EditorState) {
             const compositionMeta = tr.getMeta(PLUGIN_STATE_KEY) as CompositionMeta | undefined;
             if (compositionMeta === 'suspend') {
+              const scope = resolveCompositionScope(old.decorations, oldState);
+              const suspended = scope
+                ? old.decorations
+                    .find(scope.from, scope.to)
+                    .filter((decoration) => overlapsScope(decoration, scope))
+                : [];
               return {
-                decorations: DecorationSet.empty,
+                decorations:
+                  suspended.length > 0 ? old.decorations.remove(suspended) : old.decorations,
                 suspendedForComposition: true,
+                compositionScope: scope,
               };
             }
 
             const rosterUpdate = getSlashCommandRosterUpdate(tr);
             const voiceReplacement = resolveVoiceInputReplacementRange(tr, oldState);
             if (old.suspendedForComposition && compositionMeta !== 'resume') {
-              return old;
+              // 组字期间不重建:保留的 decoration 只随 transaction 映射位置,
+              // 结构不变,ProseMirror 不会改写它们或组字文本的 DOM。
+              if (!tr.docChanged) return old;
+              const scope = old.compositionScope;
+              return {
+                decorations: old.decorations.map(tr.mapping, tr.doc),
+                suspendedForComposition: true,
+                compositionScope: scope
+                  ? { from: tr.mapping.map(scope.from, -1), to: tr.mapping.map(scope.to, 1) }
+                  : null,
+              };
             }
             if (
               compositionMeta !== 'resume' &&
@@ -454,6 +643,7 @@ export const ComposerListIndentDecoration = Extension.create({
                 voiceReplacement.range,
               ),
               suspendedForComposition: false,
+              compositionScope: null,
             };
           },
         },
