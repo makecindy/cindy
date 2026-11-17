@@ -269,6 +269,26 @@ it('asks above the composer and sets the plugin up right here when this computer
   });
 });
 
+// Review #11030: the title-bar entries stay mounted when the user moves to another task.
+// Unit: an install that finishes after the switch is reported, but must not open the
+// first task's device page over the task now on screen.
+it('does not open the earlier task’s device when an install finishes after switching tasks', async () => {
+  installed.ghosts = [];
+  let finish!: (value: { ghost: unknown }) => void;
+  install.mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+  const entries = taskLiveScreenEntries([listed('sim-a', 'iPhone Air', ['task-1'])] as never, []);
+  const view = render(<TaskLiveScreenButtons sessionId="task-1" entries={entries} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Install the “Device Simulator” plugin' }));
+  for (let i = 0; i < 4; i++) await settle();
+  expect(install).toHaveBeenCalledOnce();
+  view.rerender(<TaskLiveScreenButtons sessionId="task-2" entries={entries} />);
+  await act(async () => finish({ ghost: plugin() }));
+  await settle();
+  expect(toasts.success).toHaveBeenCalledOnce();
+  expect(openTab).not.toHaveBeenCalled();
+  expect(navigate).not.toHaveBeenCalled();
+});
+
 // Multiple providers are independent: one working plugin must not hide another
 // plugin's setup entry. Only same-source logical identity duplicates collapse.
 it('keeps every plugin entry and setup need while merging duplicate install keys', () => {

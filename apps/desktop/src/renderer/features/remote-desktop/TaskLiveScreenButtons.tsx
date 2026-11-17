@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties } from 'react';
 import { Smartphone, Tablet, Tv } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -111,6 +111,9 @@ function useEntrySetup(sessionId: string) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { run, isBusy } = usePluginInPlace();
+  // The title-bar entries stay mounted across tasks: a late result belongs to the task it was asked from.
+  const shownSession = useRef(sessionId);
+  shownSession.current = sessionId;
   const copy = useCallback(
     (entry: TaskLiveScreenEntry, part: 'title' | 'body' | 'action') =>
       t(`remoteDesktop.liveScreenPlugin.${entry.need ?? 'install'}.${part}`, {
@@ -130,6 +133,7 @@ function useEntrySetup(sessionId: string) {
       void run(
         { ghostId: identity.ghostId, namespace: identity.namespace, update: entry.need === 'update' },
         {
+          isCurrent: () => shownSession.current === sessionId,
           onReady: (ghost) => {
             if (canShowRemote(ghost)) void openPluginTaskTab(sessionId, installedGhostStoragePart(ghost)).catch(() => {});
           },

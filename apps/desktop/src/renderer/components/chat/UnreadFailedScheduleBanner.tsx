@@ -125,9 +125,10 @@ function MissingPluginAction({ plugin, onReady }: { plugin: ScheduleMissingPlugi
   const { run, isBusy } = usePluginInPlace();
   const resolved = resolvePluginInstanceQuery(readInstalledGhostsSnapshot(), plugin.ghostId, plugin.namespace ?? null);
   const installed = resolved.status === 'unique' ? resolved.ghost : null;
+  // A record without a namespace names the root source, never "any source".
   const target = {
     ghostId: plugin.ghostId,
-    namespace: plugin.namespace,
+    namespace: plugin.namespace ?? null,
     ...(plugin.pluginId ? { marketPluginId: plugin.pluginId } : {}),
   };
   if (installed?.enabled) {

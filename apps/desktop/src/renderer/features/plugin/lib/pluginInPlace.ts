@@ -170,7 +170,10 @@ export function usePluginInPlace() {
         onReady?: (ghost: InstalledGhost) => void | Promise<void>;
         /** Replaces opening the plugin page, e.g. to keep a "come back here" request. */
         onPage?: (route: string) => void;
-        /** Whether the result still belongs to what is on screen. */
+        /**
+         * Whether what the user asked from is still on screen. When not, the result is
+         * still reported, but nothing continues or navigates for it.
+         */
         isCurrent?: () => boolean;
       } = {},
     ): Promise<PluginInPlaceResult | null> => {
@@ -180,7 +183,8 @@ export function usePluginInPlace() {
       setBusy(key);
       try {
         const result = await makePluginUsableInPlace(target);
-        if (!mounted.current || options.isCurrent?.() === false) return result;
+        if (!mounted.current) return result;
+        const current = options.isCurrent?.() !== false;
         switch (result.status) {
           case 'ready':
             if (result.changed === 'installed')
@@ -190,9 +194,10 @@ export function usePluginInPlace() {
                 name: result.ghost.manifest.name,
                 version: result.ghost.manifest.version,
               }));
-            await options.onReady?.(result.ghost);
+            if (current) await options.onReady?.(result.ghost);
             break;
           case 'page':
+            if (!current) break;
             if (options.onPage) options.onPage(result.route);
             else navigate(result.route);
             break;

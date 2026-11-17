@@ -97,7 +97,7 @@ describe('historical failed schedule notice', () => {
   // let the user install it (previously only "checks blocked" plus an exit code). Since
   // 2026-11-17 that happens right here, without opening the plugin page.
   it('names a missing plugin, installs that market listing here and closes once it is usable', async () => {
-    const item = { pluginId: 'p1', ghostId: 'cindy-github', installState: 'not-installed' };
+    const item = { pluginId: 'p1', ghostId: 'cindy-github', namespace: null, installState: 'not-installed' };
     const install = vi.fn(async () => ({ ghost: { manifest: { id: 'cindy-github', name: 'GitHub' } } }));
     Object.assign(window.electronAPI, {
       ghosts: { listSync: () => ({ ghosts: installedGhosts }) },
@@ -128,6 +128,38 @@ describe('historical failed schedule notice', () => {
       allowSourceReplacement: false,
     });
     expect(screen.queryByTestId('location')).toBeNull();
+  });
+  // Review #11030: a record without a namespace names the root plugin. A same-id copy from
+  // an organization must not be turned on in its place (the check would stay blocked).
+  it('installs the root plugin a record names even when another source of it is installed', async () => {
+    const org = { manifest: { id: 'cindy-github', name: 'GitHub' }, dir: '/plugins/_ns/acme/cindy-github', namespace: 'acme', enabled: false, approval: { state: 'approved', revision: 'r' } };
+    installedGhosts.push(org);
+    try {
+      const root = { pluginId: 'p1', ghostId: 'cindy-github', namespace: null, installState: 'not-installed' };
+      const install = vi.fn(async () => ({ ghost: { manifest: { id: 'cindy-github', name: 'GitHub' } } }));
+      const setEnabled = vi.fn();
+      Object.assign(window.electronAPI, {
+        ghosts: { listSync: () => ({ ghosts: installedGhosts }), setEnabled },
+        pluginMarket: {
+          lookup: async () => ({ items: [root, { ...root, pluginId: 'p2', namespace: 'acme', installState: 'installed' }] }),
+          detail: async () => ({ ...root, releaseId: 'r1', manifest: { id: 'cindy-github' } }),
+          install,
+        },
+      });
+      render(
+        <MemoryRouter>
+          <UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
+            latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'precheck',
+              missingPlugin: { ghostId: 'cindy-github', pluginId: 'p1', name: 'GitHub' } }} />
+        </MemoryRouter>,
+      );
+      fireEvent.click(screen.getByText('chat.unreadFailedScheduleBanner.installPlugin'));
+      await waitFor(() => expect(install).toHaveBeenCalledOnce());
+      expect(install).toHaveBeenCalledWith('p1', expect.objectContaining({ allowSourceReplacement: false }));
+      expect(setEnabled).not.toHaveBeenCalled();
+    } finally {
+      installedGhosts.length = 0;
+    }
   });
   // Review (#8957): a remote task's check runs on another computer; this computer's plugin
   // pages would fix the wrong machine, so the message stays but the action is not offered.
