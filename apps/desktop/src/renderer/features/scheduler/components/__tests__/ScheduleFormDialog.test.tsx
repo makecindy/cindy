@@ -142,7 +142,7 @@ beforeEach(() => {
   state.vendors = new Set(['cc', 'codex', 'pi']);
   localStorage.clear();
   vi.stubGlobal('electronAPI', { localDb: { bots: {
-    // Opening the editor must work without loading profiles or resuming invitations (#10847).
+    // Opening the editor must work without loading profiles or resuming invitations (PR 10847).
     list: vi.fn(async () => { throw new Error('full roster unavailable'); }),
     ownsProject: async () => true,
   } }, gitContext: { githubAppStatus: async () => ({ available: true, login: null }) }, maker: { schedule: {
