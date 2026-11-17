@@ -8349,7 +8349,9 @@ describe('CodexAgent send', () => {
     },
   );
 
-  it('rejects turn/start failures when the caller needs accepted-or-rejected semantics', async () => {
+  // Positive acceptance is needed by restored-account scheduling: legacy event-only
+  // failures must not consume recovery or change the caller's Goal lifecycle.
+  it.each([false, true])('does not notify acceptance after turn/start failure (strict=%s)', async strict => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) throw new Error('turn start rejected');
@@ -8363,11 +8365,23 @@ describe('CodexAgent send', () => {
       userPrompt: 'USER PROMPT',
     });
 
-    await expect(
-      handle.send({ type: 'user', content: 'hello' }, { throwOnStartFailure: true }),
-    ).rejects.toThrow(/turn start rejected/);
+    const accepted = vi.fn();
+    const sending = handle.send({ type: 'user', content: 'hello' }, { throwOnStartFailure: strict, onTurnStartAccepted: accepted });
+    if (strict) await expect(sending).rejects.toThrow(/turn start rejected/);
+    else await expect(sending).resolves.toBeUndefined();
+    expect(accepted).not.toHaveBeenCalled();
     expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
 
+    await handle.close();
+  });
+  it.each([false, true])('notifies positive turn/start acceptance without changing dispatch (observerThrows=%s)', async observerThrows => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'accepted-turn' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'accepted-observer', model: 'gpt-5.4', workingDir: '/repo' });
+    const accepted = vi.fn(() => { if (observerThrows) throw new Error('observer failed'); });
+    await expect(handle.send({ type: 'user', content: 'hello' }, { onTurnStartAccepted: accepted })).resolves.toBeUndefined();
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
     await handle.close();
   });
 
@@ -8386,9 +8400,10 @@ describe('CodexAgent send', () => {
       userPrompt: 'USER PROMPT',
     });
 
+    const accepted = vi.fn();
     const sendPromise = handle.send(
       { type: 'user', content: 'hello' },
-      { throwOnStartFailure: true },
+      { throwOnStartFailure: true, onTurnStartAccepted: accepted },
     );
     for (let i = 0; i < 5; i += 1) {
       if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
@@ -8400,6 +8415,7 @@ describe('CodexAgent send', () => {
     turnStart.resolve({ turn: { id: 'late-turn' } });
 
     await expect(sendPromise).rejects.toThrow(/session is closed after turn\/start/i);
+    expect(accepted).not.toHaveBeenCalled();
   });
 });
 

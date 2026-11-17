@@ -26,6 +26,19 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe('Session close lifecycle', () => {
+  // Unit: reclamation must treat unknown native activity as busy. Adapter tests
+  // cover RPC failure, but not Session's conservative boundary or closed-runtime bypass.
+  it('reports a failed native activity probe as busy until the runtime closes', async () => {
+    const { session, handle } = liveTurn();
+    const probe = vi.fn(async () => { throw new Error('probe unavailable'); });
+    handle.hasLiveBackgroundWork = probe;
+    expect(await session.hasLiveBackgroundWork()).toBe(true);
+    expect(handle.close).not.toHaveBeenCalled();
+    await session.close();
+    expect(await session.hasLiveBackgroundWork()).toBe(false);
+    expect(probe).toHaveBeenCalledOnce();
+  });
+
   function liveTurn(hostContinuation = true, terminalGate?: Promise<void>) {
     const queue = createAsyncQueue<AgentEvent>();
     let running = false;

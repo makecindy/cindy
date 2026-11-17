@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   remoteModels: null as string[] | null,
   placement: {} as Record<string, string>,
   created: {} as Record<string, import('../placement.js').CreatedSubscriptionProvider>,
+  recovery: {} as Record<string, boolean>,
   placementUnreadable: false,
   poolUnreadable: false,
   placementWriteFails: false,
@@ -57,13 +58,14 @@ vi.mock('../../maker-host/override-settings-file.js', () => ({
     ? {
         invalidateIfChanged: () => {},
         isUnreadable: () => h.placementUnreadable,
-        read: () => ({ accounts: h.placement, providers: h.created, strategies: {} }),
-        updateAtomic: async (edit: (input: { value: { accounts: typeof h.placement; providers: typeof h.created; strategies: Record<string, never> } }) => { accounts?: typeof h.placement; providers?: typeof h.created }) => {
+        read: () => ({ accounts: h.placement, providers: h.created, strategies: {}, autoRejoinRecovered: h.recovery }),
+        updateAtomic: async (edit: (input: { value: { accounts: typeof h.placement; providers: typeof h.created; strategies: Record<string, never>; autoRejoinRecovered: typeof h.recovery } }) => { accounts?: typeof h.placement; providers?: typeof h.created; autoRejoinRecovered?: typeof h.recovery }) => {
           h.beforeWrite?.();
-          const next = edit({ value: { accounts: h.placement, providers: h.created, strategies: {} } });
+          const next = edit({ value: { accounts: h.placement, providers: h.created, strategies: {}, autoRejoinRecovered: h.recovery } });
           if (h.placementWriteFails) throw new Error('placement write unavailable');
           if (next.accounts) h.placement = next.accounts;
           if (next.providers) h.created = next.providers;
+          if (next.autoRejoinRecovered) h.recovery = next.autoRejoinRecovered;
         },
       }
     : {
@@ -115,6 +117,9 @@ import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
 import { legacyCodexAccountCanRun, openAiRouteAllowsModel, setLegacyCodexAccountPaused } from '../legacyAccountAccess.js';
 import {
   normalizePlacementFile,
+  readProviderAutoRejoinRecovered,
+  writeProviderAutoRejoinRecovered,
+  deleteCreatedSubscriptionProvider,
   accountProviderId,
   createSubscriptionProvider,
   placeSubscriptionAccount,
@@ -167,6 +172,7 @@ beforeEach(() => {
   h.remoteModels = null;
   h.placement = {};
   h.created = {};
+  h.recovery = {};
   h.placementUnreadable = false;
   h.poolUnreadable = false;
   h.placementWriteFails = false;
@@ -376,7 +382,7 @@ describe('legacy Codex account upgrade', () => {
     expect(normalizePlacementFile({ accounts: {
       'openai:default': 'openai-a', 'openai:../escape': 'openai-a', [`openai:${ids.a}`]: 'Not An Id',
       [`anthropic:${ids.a}`]: 'claude-work',
-    } })).toEqual({ accounts: { 'openai:default': 'openai-a', [`anthropic:${ids.a}`]: 'claude-work' }, providers: {}, strategies: {} });
+    } })).toEqual({ accounts: { 'openai:default': 'openai-a', [`anthropic:${ids.a}`]: 'claude-work' }, providers: {}, strategies: {}, autoRejoinRecovered: {} });
   });
 });
 describe('old automatically pooled account restoration', () => {
@@ -479,6 +485,66 @@ describe('old automatically pooled account restoration', () => {
     else await expect(pending).rejects.toThrow();
     expect(h.created).toEqual({});
     expect(h.placement).toEqual(change === 'move' ? { [`openai:${id}`]: 'openai' } : {});
+  });
+});
+
+// Unit: recovery configuration is per provider, not the shared account-kind pool.
+// Existing strategy tests did not cover boolean overrides, old-host support or opt-in isolation.
+// Minimal failure: configure false is dropped, or enabling one OpenAI provider enables another.
+describe('subscription recovery configuration', () => {
+  it('round-trips explicit false and true overrides without crossing provider boundaries', async () => {
+    const builtin = { kind: 'openai', providerId: 'openai' } as const;
+    const separate = { kind: 'openai', providerId: 'openai-sub-12345678' } as const;
+    expect(readProviderAutoRejoinRecovered(builtin)).toBe(false);
+    await writeProviderAutoRejoinRecovered(separate, true);
+    await writeProviderAutoRejoinRecovered(builtin, false);
+    h.recovery = normalizePlacementFile(JSON.parse(JSON.stringify({ autoRejoinRecovered: h.recovery }))).autoRejoinRecovered;
+    expect(h.recovery).toEqual({ openai: false, 'openai-sub-12345678': true });
+    expect(readProviderAutoRejoinRecovered(builtin)).toBe(false);
+    expect(readProviderAutoRejoinRecovered(separate)).toBe(true);
+    expect(normalizePlacementFile({ autoRejoinRecovered: { openai: 'true', anthropic: null, '../bad': true } }).autoRejoinRecovered).toEqual({});
+    h.placementUnreadable = true;
+    expect(readProviderAutoRejoinRecovered(separate)).toBe(false);
+    h.placementUnreadable = false;
+    h.placementWriteFails = true;
+    await expect(writeProviderAutoRejoinRecovered(separate, false)).rejects.toThrow();
+    expect(readProviderAutoRejoinRecovered(separate)).toBe(true);
+    h.placementWriteFails = false;
+    h.beforeWrite = () => { h.generation++; };
+    await expect(writeProviderAutoRejoinRecovered(separate, false)).rejects.toThrow('owner changed');
+    expect(h.recovery[separate.providerId]).toBe(true);
+    h.beforeWrite = undefined;
+    h.created[separate.providerId] = { kind: 'openai', name: 'Separate', account: 'test' };
+    await deleteCreatedSubscriptionProvider(separate.providerId);
+    expect(h.recovery).toEqual({ openai: false });
+  });
+
+  // Review: Claude must not accept an override it cannot project or apply (unit).
+  it('rejects non-OpenAI writes without storing an ineffective override', async () => {
+    for (const providerId of ['anthropic', 'anthropic-sub-12345678']) {
+      const ref = { kind: 'anthropic', providerId } as const;
+      for (const enabled of [true, false])
+        await expect(writeProviderAutoRejoinRecovered(ref, enabled)).rejects.toThrow('Invalid subscription recovery setting');
+      expect(h.recovery).toEqual({});
+      h.recovery[providerId] = true;
+      expect(readProviderAutoRejoinRecovered(ref)).toBe(false);
+      delete h.recovery[providerId];
+    }
+  });
+
+  it('validates the boolean opt-in through owner IPC and retains configure authorization', async () => {
+    for (const autoRejoinRecovered of [false, true]) {
+      const command = { action: 'configure', providerId: 'openai-sub-12345678', autoRejoinRecovered };
+      await invoke(command);
+      expect(h.execute).toHaveBeenLastCalledWith(expect.objectContaining(command));
+    }
+    for (const autoRejoinRecovered of [null, 1, 'true', {}])
+      await expect(invoke({ action: 'configure', providerId: 'openai', autoRejoinRecovered })).rejects.toThrow('INVALID_PARAMS');
+    h.trusted = false;
+    await expect(invoke({ action: 'configure', providerId: 'openai', autoRejoinRecovered: true })).rejects.toThrow('untrusted');
+    h.context = { sharedTask: {} };
+    await expect(invoke({ action: 'configure', providerId: 'openai', autoRejoinRecovered: true })).rejects.toThrow('PERMISSION_DENIED');
+    expect(h.execute).toHaveBeenCalledTimes(2);
   });
 });
 

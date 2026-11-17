@@ -78,6 +78,107 @@ describe('SubscriptionAccountsSection usage', () => {
       action: 'remove', providerId: 'anthropic', accountId: 'default',
     }));
   });
+  /* Recovery setting contract (unit): real account-pool controls, no Agent/network.
+   * Existing reset-credit tests cover a different setting, not recovery participation.
+   * Minimal inputs: two OpenAI accounts with false/true/missing capability; protect
+   * default-off, persisted toggles, old-host no-write and click-only risk disclosure. */
+  it.each([false, true])('saves recovery participation from %s without optimistic enablement', async initial => {
+    let current: SubscriptionPoolView = { ...view, providerId: 'openai', autoRejoinRecovered: initial };
+    let finishSave!: () => void;
+    const save = new Promise<void>(resolve => { finishSave = resolve; });
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async request => {
+      if (request.action === 'configure') {
+        await save;
+        current = { ...current, autoRejoinRecovered: request.autoRejoinRecovered };
+      }
+      return current;
+    });
+    const mounted = render(<SubscriptionAccountsSection providerId="openai" />);
+    const toggle = await screen.findByRole('switch', { name: 'subscriptionAccounts.autoRejoin.label' });
+    expect(toggle.getAttribute('aria-checked')).toBe(String(initial));
+    expect(command.mock.calls.filter(([request]) => request.action === 'configure')).toHaveLength(0);
+    fireEvent.click(toggle);
+    expect(toggle.hasAttribute('disabled')).toBe(true);
+    expect(toggle.getAttribute('aria-checked')).toBe(String(initial));
+    expect(screen.queryByRole('status')).toBeNull();
+    await act(async () => { finishSave(); });
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe(String(!initial)));
+    expect(command).toHaveBeenCalledWith({ action: 'configure', providerId: 'openai', autoRejoinRecovered: !initial });
+    expect(screen.getByRole('status').textContent).toContain('subscriptionAccounts.strategyHelp.saved');
+    expect(screen.getByRole('status').textContent).toContain(initial
+      ? 'subscriptionAccounts.strategyHelp.recoveryOff' : 'subscriptionAccounts.autoRejoin.scope');
+    mounted.unmount();
+    render(<SubscriptionAccountsSection providerId="openai" />);
+    expect((await screen.findByRole('switch', { name: 'subscriptionAccounts.autoRejoin.label' })).getAttribute('aria-checked')).toBe(String(!initial));
+  });
+  it('keeps recovery off and reports a rejected save', async () => {
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async request => {
+      if (request.action === 'configure') throw new Error('[UNAVAILABLE] Could not save');
+      return { ...view, providerId: 'openai', autoRejoinRecovered: false };
+    });
+    render(<SubscriptionAccountsSection providerId="openai" />);
+    const toggle = await screen.findByRole('switch', { name: 'subscriptionAccounts.autoRejoin.label' });
+    fireEvent.click(toggle);
+    await waitFor(() => expect(error).toHaveBeenCalledWith('subscriptionAccounts.failed'));
+    await waitFor(() => expect(toggle.hasAttribute('disabled')).toBe(false));
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+  // #10608 / unit: strategy controls lacked clickable explanations and real save receipts.
+  // Minimum gap: a delayed/rejected configure must never announce saved or migration.
+  it('discloses all four account strategies and announces scope only after a confirmed save', async () => {
+    let finish!: (receipt: SubscriptionPoolView) => void;
+    const pending = new Promise<SubscriptionPoolView>(resolve => { finish = resolve; });
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(request =>
+      request.action === 'configure' ? pending : Promise.resolve(view));
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const disclosure = await screen.findByRole('button', { name: 'subscriptionAccounts.strategyHelp.details' });
+    expect(screen.queryByText('subscriptionAccounts.strategyHelp.weight')).toBeNull();
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+    for (const strategy of ['least', 'round', 'order', 'weight']) {
+      expect(await screen.findByText(`subscriptionAccounts.strategyHelp.${strategy}`)).toBeTruthy();
+    }
+    fireEvent.click(screen.getByRole('radio', { name: 'providerGroup.strategy.round' }));
+    expect(screen.queryByRole('status')).toBeNull();
+    await act(async () => { finish({ ...view, strategy: 'round' }); });
+    expect(screen.getByRole('status').textContent).toContain('subscriptionAccounts.strategyHelp.saved');
+    expect(screen.getByRole('status').textContent).toContain('subscriptionAccounts.strategyHelp.scope');
+  });
+  it('does not announce saved when a host returns an unchanged strategy', async () => {
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    fireEvent.click(await screen.findByRole('radio', { name: 'providerGroup.strategy.round' }));
+    await waitFor(() => expect(error).toHaveBeenCalledWith('subscriptionAccounts.failed'));
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+  it('does not let an old host save an unknown setting, but explains risks by click without hover', async () => {
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, providerId: 'openai' });
+    render(<SubscriptionAccountsSection providerId="openai" />);
+    const toggle = await screen.findByRole('switch', { name: 'subscriptionAccounts.autoRejoin.label' });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(toggle.hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText('subscriptionAccounts.autoRejoin.unsupported')).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(command.mock.calls.filter(([request]) => request.action === 'configure')).toHaveLength(0);
+    expect(screen.queryByText('subscriptionAccounts.autoRejoin.context')).toBeNull();
+    const disclosure = screen.getByRole('button', { name: 'subscriptionAccounts.autoRejoin.details' });
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+    expect(await screen.findByText('subscriptionAccounts.autoRejoin.context')).toBeTruthy();
+    expect(screen.getByText('subscriptionAccounts.autoRejoin.scope')).toBeTruthy();
+    expect(screen.getByText('subscriptionAccounts.autoRejoin.failover')).toBeTruthy();
+  });
+  it.each(['anthropic', 'single-openai'])('hides recovery participation for %s', async provider => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view,
+      providerId: provider === 'anthropic' ? 'anthropic' : 'openai', autoRejoinRecovered: false,
+      accounts: provider === 'anthropic' ? view.accounts : [view.accounts[0]],
+    });
+    render(<SubscriptionAccountsSection providerId={provider === 'anthropic' ? 'anthropic' : 'openai'} />);
+    await screen.findAllByTestId('subscription-account');
+    expect(screen.queryByRole('switch', { name: 'subscriptionAccounts.autoRejoin.label' })).toBeNull();
+  });
   // Unit regression: the real second-account row must expose the shared reset UI
   // and send its own scope/key. Previously only the supplied default card had it.
   it.each([true, false])('shows and saves second-account reset preferences with quota present=%s', async hasQuota => {

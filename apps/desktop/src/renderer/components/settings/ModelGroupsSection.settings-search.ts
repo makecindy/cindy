@@ -20,6 +20,13 @@ export const modelGroupsSettings = defineSettings({
     descriptionKey: 'modelGroups.routesDescription',
     sectionKey: 'settings.tabs.modelGroups',
     keywordKeys: [
+      'subscriptionAccounts.strategyHelp.details',
+      'modelGroups.settings.strategyScope',
+      'modelGroups.settings.strategyLimits',
+      'modelGroups.strategy.expiring.hint',
+      'modelGroups.strategy.order.hint',
+      'modelGroups.strategy.rotate.hint',
+      'modelGroups.strategy.cheapest.hint',
       'modelGroups.strategy.expiring.title',
       'modelGroups.strategy.order.title',
       'modelGroups.strategy.rotate.title',

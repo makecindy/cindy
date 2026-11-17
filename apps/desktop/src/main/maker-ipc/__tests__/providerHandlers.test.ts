@@ -1,4 +1,5 @@
 import { remoteProviderDisableKey } from '@cindy/model-providers';
+import { executeSubscriptionAccountCommand } from '../../subscription-accounts/service.js';
 import * as customProviderStore from '../../maker-host/custom-provider-store.js';
 import { configureModelSettingsActions, manageAppModels } from '../../app-settings/models';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -48,6 +49,8 @@ import { extractIpcError } from '../../../renderer/utils/ipcError';
 import * as providerPresentation from '../../maker-host/provider-presentation-store.js';
 import * as llamaCppService from '../../local-model-runtime/llamaCppService.js';
 import { IpcHarness } from './helpers/ipcHarness.js';
+
+vi.mock('../../subscription-accounts/service.js', () => ({ executeSubscriptionAccountCommand: vi.fn() }));
 
 /** 最小 ProviderView 桩（只放断言要用的字段；handler 不解读结构，原样透传）。 */
 function fakeView(id: string, connected: boolean): ProviderView {
@@ -5944,6 +5947,33 @@ it('shares model actions with AI without making untrusted renderer writes valid'
   expect(contextLimit).toBe(16000);
   await actions.resetContext(target, owner);
   expect(contextLimit).toBe(null);
+});
+
+// Unit: real Helper execution must reject old hosts before configure, preserve explicit false,
+// and not claim a successful opt-in without a matching receipt. Existing connection tests never
+// exercised subscription settings; minimum failure is an old read reply with no capability field.
+it('checks recovery support and committed receipts through the Helper model settings entry', async () => {
+  configureModelSettingsActions(registerProviderHandlers(new IpcHarness(), makeDeps()));
+  const execute = vi.mocked(executeSubscriptionAccountCommand);
+  const request = { operation: 'provider', change: { action: 'subscriptionAccounts', providerId: 'openai-sub-12345678',
+    command: { action: 'configure', autoRejoinRecovered: true } } } as const;
+  execute.mockReset().mockResolvedValue({ providerId: request.change.providerId, configured: true, strategy: 'least', accounts: [] });
+  expect(await manageAppModels(request, async () => {})).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+  expect(execute).toHaveBeenCalledTimes(1);
+  expect(execute).toHaveBeenLastCalledWith({ action: 'read', providerId: request.change.providerId });
+  for (const enabled of [true, false]) {
+    execute.mockReset()
+      .mockResolvedValueOnce({ providerId: request.change.providerId, configured: true, strategy: 'least', accounts: [], autoRejoinRecovered: !enabled })
+      .mockResolvedValueOnce({ providerId: request.change.providerId, configured: true, strategy: 'least', accounts: [], autoRejoinRecovered: enabled });
+    const result = await manageAppModels({ ...request, change: { ...request.change, command: { action: 'configure', autoRejoinRecovered: enabled } } }, async () => {});
+    expect(result).toMatchObject({ accounts: { autoRejoinRecovered: enabled } });
+    expect(execute).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'configure', autoRejoinRecovered: enabled }));
+  }
+  execute.mockReset().mockResolvedValue({ providerId: request.change.providerId, configured: true, strategy: 'least', accounts: [], autoRejoinRecovered: false });
+  expect(await manageAppModels(request, async () => {})).toMatchObject({ ok: false, errorCode: 'SUBSCRIPTION_RECOVERY_NOT_CONFIRMED' });
+  execute.mockReset();
+  await expect(manageAppModels(request, async () => { throw new Error('revoked'); })).rejects.toThrow('revoked');
+  expect(execute).not.toHaveBeenCalled();
 });
 
 // Unit, production manageAppModels -> Settings mutation -> isolated SQLite.

@@ -122,8 +122,19 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
         const { parseSubscriptionAccountCommand } = await import('../subscription-accounts/commands.js');
         const { executeSubscriptionAccountCommand } = await import('../subscription-accounts/service.js');
         await guard();
-        const accounts = await executeSubscriptionAccountCommand(parseSubscriptionAccountCommand({ ...change.command, providerId: change.providerId }));
+        const command = parseSubscriptionAccountCommand({ ...change.command, providerId: change.providerId });
+        const recovery = command.action === 'configure' ? command.autoRejoinRecovered : undefined;
+        if (recovery !== undefined) {
+          const current = await executeSubscriptionAccountCommand({ action: 'read', providerId: change.providerId });
+          await guard();
+          if (typeof current.autoRejoinRecovered !== 'boolean')
+            return { scope: 'local', ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' };
+        }
         await guard();
+        const accounts = await executeSubscriptionAccountCommand(command);
+        await guard();
+        if (recovery !== undefined && accounts.autoRejoinRecovered !== recovery)
+          return { scope: 'local', ok: false, errorCode: 'SUBSCRIPTION_RECOVERY_NOT_CONFIRMED', accounts };
         return { scope: 'local', providerId: change.providerId, accounts };
       }
       case 'rename': case 'remove': case 'restore': await api.presentation({ ...owner, ...change }); break;

@@ -24,6 +24,7 @@ import {
   withReplaySourceNotes,
 } from '../contextOverflowRollover';
 import { buildHandoffText } from '../agentHandoff';
+import { commitContextRecoveryWithPorts, type CommitContextRecoveryPorts } from '../contextRecoveryAssembly';
 
 function msg(
   role: string,
@@ -334,6 +335,7 @@ describe('shouldRebuildForModelWindowSwitch', () => {
 
 describe('createContextOverflowRollover', () => {
   function makeDeps(source: OverflowSourceMessage[]) {
+    const live = { isTurnRunning: () => false };
     return {
       getSessionRow: vi.fn(
         async (): Promise<{
@@ -371,12 +373,13 @@ describe('createContextOverflowRollover', () => {
           getTurnGeneration?(): number;
           isTurnRunning(): boolean;
           listBackgroundTasks?(): ReadonlyArray<unknown>;
+          hasLiveBackgroundWork?(): Promise<boolean>;
           getUsageSnapshot?: () => {
             contextTokens: number;
             contextWindow: number;
             needsRollover?: boolean;
           };
-        } | undefined => ({ isTurnRunning: () => false }),
+        } | undefined => live,
       ),
       rehydrateColdPiRuntimeForWindowVerification: vi.fn(async () => undefined),
       closeSession: vi.fn(async () => undefined),
@@ -652,40 +655,158 @@ describe('createContextOverflowRollover', () => {
     }));
     expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('already finished'), 3);
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
-    expect(assertCurrent).toHaveBeenCalledTimes(2);
+    expect(assertCurrent).toHaveBeenCalledTimes(3);
   });
 
-  // Unit: disabling an account carries ordinary task context, including completed
-  // tools, without replay; earlier recovery coverage only allowed Bot restart or a route change.
+  // Unit; context recovery rules require bounded tool evidence, no thinking and no replay.
+  // buildHandoffText tests cover formatting in isolation; this retain-route fixture verifies
+  // the real account-handoff entry passes those options and publishes the durable handoff.
+  // Minimal pressure input: one >1000-character result with a distinct middle and tail.
   it.each(['native-a', null])('retains ordinary task history for an account switch with native id %s', async sdkSessionId => {
     const deps = makeDeps([
       msg('user', 'continue building the game', 'u1'),
-      { ...msg('tool_result', { fullText: 'Saved zombie model successfully' }, 'r1'), toolUseId: 'save-1' },
+      { ...msg('tool_result', { fullText: `Saved zombie model successfully\n${'log '.repeat(250)}OMITTED_MIDDLE${'log '.repeat(250)}\nReceipt: save-42` }, 'r1'), toolUseId: 'save-1' },
+      msg('thinking', { text: 'PRIVATE_THINKING_NOT_HANDOFF' }, 'thinking-1'),
       msg('assistant', 'Next: verify the scene', 'a1'),
     ]);
     deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'desktop', sdkSessionId });
     await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn());
     const handoff = deps.setPendingHandoff.mock.calls[0]![1];
     expect(handoff).toContain('continue building the game');
+    expect(handoff).toContain('[Tool result id=save-1;');
     expect(handoff).toContain('Saved zombie model successfully');
+    expect(handoff).toContain('Receipt: save-42');
+    expect(handoff).not.toContain('OMITTED_MIDDLE');
+    expect(handoff).not.toContain('PRIVATE_THINKING_NOT_HANDOFF');
     expect(handoff).toContain('Next: verify the scene');
-    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.any(String),
-      expect.not.objectContaining({ replacementRoute: expect.anything() }), expect.any(AbortSignal));
+    expect(handoff).toContain('started a fresh native session in the same task');
+    expect(handoff).toContain('The original conversation remains available through the history retrieval tools');
+    expect(handoff).toContain('do not repeat completed actions');
+    expect(handoff).toContain('search_chat_history');
+    expect(handoff).toContain('get_chat_history');
+    expect(handoff).toContain('"session_ids":["s1"]');
+    expect(handoff.length).toBeLessThanOrEqual(16_000);
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', handoff,
+      expect.objectContaining({ reason: 'native-session-recovery', sourceUserClientId: 'u1' }), expect.any(AbortSignal), expect.any(Function));
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', handoff,
+      expect.not.objectContaining({ replacementRoute: expect.anything() }), expect.any(AbortSignal), expect.any(Function));
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
   // Regression #9964: an idle root turn can still own background builds/tests.
   // Earlier recovery tests only covered foreground work; closing here kills that work.
-  it.each(['retain-route', { model: 'new-model', providerId: 'openai', effort: null, fastMode: false }] as const)(
-    'does not close background work during native recovery (%j)', async target => {
+  it.each([
+    ['retain-route', false],
+    ['retain-route', true],
+    [{ model: 'new-model', providerId: 'openai', effort: null, fastMode: false }, false],
+  ] as const)(
+    'does not close active work during native recovery (%j, foreground=%s)', async (target, foreground) => {
       const deps = makeDeps([msg('user', 'keep the build running', 'u1')]);
-      deps.getLiveSession.mockReturnValue({ isTurnRunning: () => false, listBackgroundTasks: () => [{}] });
+      deps.getLiveSession.mockReturnValue({ isTurnRunning: () => foreground, listBackgroundTasks: () => foreground ? [] : [{}] });
       await expect(createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', target, vi.fn()))
         .rejects.toThrow('running');
       expect(deps.closeSession).not.toHaveBeenCalled();
       expect(deps.commitRebuild).not.toHaveBeenCalled();
       expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+      // commitRebuild owns SDK-id reset; rejecting before it preserves the binding.
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
     });
+  // Unit: native work has no task card; a failed probe must also preserve the
+  // account binding. Earlier recovery coverage only modeled task snapshots.
+  it.each(['running', 'unknown'] as const)('does not retire a Codex account with native work (%s)', async state => {
+    const deps = makeDeps([msg('user', 'finish the child build', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), agentKind: 'codex' });
+    deps.getLiveSession.mockReturnValue({ isTurnRunning: () => false, listBackgroundTasks: () => [], hasLiveBackgroundWork: async () => {
+      if (state === 'unknown') throw new Error('probe failed');
+      return true;
+    } });
+    await expect(createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn())).rejects.toThrow('running');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  // Unit: a native probe can complete after Stop or a new turn; neither idle
+  // answer authorizes closing/resetting the binding. Earlier mocks never yielded here.
+  it.each(['stop', 'new-turn'] as const)('preserves the runtime when %s wins the native probe', async change => {
+    const deps = makeDeps([msg('user', 'keep working', 'u1')]);
+    const controller = new AbortController();
+    let generation = 1;
+    let release!: (busy: boolean) => void;
+    let started!: () => void;
+    const probing = new Promise<void>(resolve => { started = resolve; });
+    const probe = new Promise<boolean>(resolve => { release = resolve; });
+    deps.getLiveSession.mockReturnValue({ instanceId: 'native-runtime', isTurnRunning: () => false,
+      getTurnGeneration: () => generation, hasLiveBackgroundWork: () => { started(); return probe; } });
+    const pending = createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn(), controller.signal);
+    const rejected = expect(pending).rejects.toThrow();
+    await probing;
+    if (change === 'stop') controller.abort();
+    else generation++;
+    release(false);
+    await rejected;
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+  });
+
+  // P1 / unit: authorization may be withdrawn while assembly reads projection metadata.
+  // Earlier mocks resolved commitRebuild immediately, missing the last pre-transaction await.
+  it('rejects withdrawn retain-route authorization after assembly metadata resolves without resetting the binding or handoff epoch', async () => {
+    const deps = makeDeps([msg('user', 'keep this context', 'u1')]);
+    const row = await deps.getSessionRow();
+    let resolveMetadata!: (rows: Array<{ agentKind: string; contextWindow: number }>) => void;
+    const metadata = new Promise<Array<{ agentKind: string; contextWindow: number }>>(resolve => { resolveMetadata = resolve; });
+    let noteQueryStarted!: () => void;
+    const queryStarted = new Promise<void>(resolve => { noteQueryStarted = resolve; });
+    const snapshot = {
+      clientEpoch: 7,
+      client: { drizzle: { select: () => ({ from: () => ({ where: () => ({ limit: () => {
+        noteQueryStarted();
+        return metadata;
+      } }) }) }) } },
+    } as unknown as NonNullable<ReturnType<CommitContextRecoveryPorts['getCurrentDbClientSnapshot']>>;
+    const commitContextRebuild = vi.fn<CommitContextRecoveryPorts['commitContextRebuild']>(async () => {
+      row.sdkSessionId = null;
+      return { updatedAt: Date.now() };
+    });
+    const ports = {
+      captureDataOwnerBroadcastScope: () => null,
+      getCurrentDbClientSnapshot: () => snapshot,
+      sessions: { id: 'id', agentKind: 'agentKind', contextWindow: 'contextWindow' },
+      eq: vi.fn(),
+      isDataOwnerBroadcastScopeCurrent: () => true,
+      commitContextRebuild,
+      broadcastSessionPatched: vi.fn(),
+      createDbMessage: vi.fn(),
+      createId: () => 'card-id',
+      log: deps.log,
+    } as unknown as CommitContextRecoveryPorts;
+    const generation = deps.readPendingHandoffGeneration();
+    let enabled = true;
+    const recovery = createContextOverflowRollover({
+      ...deps,
+      commitRebuild: (...args) => commitContextRecoveryWithPorts(ports, ...args),
+    });
+    const pending = recovery.prepareNativeSessionRecovery('s1', 'retain-route', () => {
+      if (!enabled) throw new Error('account rejoin disabled');
+    });
+    const rejected = expect(pending).rejects.toThrow('account rejoin disabled');
+    await queryStarted;
+    enabled = false;
+    resolveMetadata([{ agentKind: row.agentKind, contextWindow: row.contextWindow }]);
+    await rejected;
+    expect(commitContextRebuild).not.toHaveBeenCalled();
+    expect(row.sdkSessionId).toBe('/tmp/dead.jsonl');
+    expect(snapshot.clientEpoch).toBe(7);
+    expect(deps.readPendingHandoffGeneration()).toBe(generation);
+    expect(ports.broadcastSessionPatched).not.toHaveBeenCalled();
+    expect(ports.createDbMessage).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    expect(deps.onRebuilt).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
 
   it('does not commit an account handoff after the user stops recovery', async () => {
     const deps = makeDeps([msg('user', 'keep this context', 'u1')]);

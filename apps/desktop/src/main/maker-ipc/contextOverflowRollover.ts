@@ -472,6 +472,7 @@ export interface ContextOverflowRolloverDeps {
     getTurnGeneration?(): number;
     isTurnRunning(): boolean;
     listBackgroundTasks?(): ReadonlyArray<unknown>;
+    hasLiveBackgroundWork?(): Promise<boolean>;
     getUsageSnapshot?(): { contextTokens: number; contextWindow: number; needsRollover?: boolean };
   } | null | undefined;
   rehydrateColdPiRuntimeForWindowVerification?(sessionId: string): Promise<void>;
@@ -490,6 +491,7 @@ export interface ContextOverflowRolloverDeps {
       replacementRoute?: NativeSessionRecoveryTarget & { expectedSdkSessionId: string };
     },
     signal?: AbortSignal,
+    assertCanCommit?: () => void,
   ): Promise<void>;
   setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
   readPendingHandoffGeneration?(sessionId: string): number;
@@ -637,6 +639,24 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 } {
   const inFlight = new Map<string, AbortController | undefined>();
   const claimTurns = new WeakMap<AbortController, RecoveryTurnIdentity>();
+  // Probe provider-owned work, not UI cards alone. Unknown is busy, and a late
+  // answer must never authorize retirement of a replacement runtime or turn.
+  const liveIsBusy = async (sessionId: string, live: ReturnType<ContextOverflowRolloverDeps['getLiveSession']>): Promise<boolean> => {
+    const generation = live?.getTurnGeneration?.();
+    const busy = () => {
+      const current = deps.getLiveSession(sessionId);
+      return (live?.instanceId ? current?.instanceId !== live.instanceId : current !== live)
+        || current?.getTurnGeneration?.() !== generation
+        || !!current?.isTurnRunning() || (current?.listBackgroundTasks?.().length ?? 0) > 0;
+    };
+    if (busy()) return true;
+    try {
+      if (await live?.hasLiveBackgroundWork?.()) return true;
+    } catch {
+      return true;
+    }
+    return busy();
+  };
   // One automatic continuation per source input, not one per replacement thread.
   const continuedInputs = new Map<string, string>();
   // 自愈成功时那一轮的 turn 身份：同身份再次到达 = 同一轮的重复终态投递（丢弃）；
@@ -686,7 +706,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 
     return deps.withCloseSuppressed(sessionId, async () => {
       const live = deps.getLiveSession(sessionId);
-      if (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0) {
+      if (await liveIsBusy(sessionId, live)) {
         deps.log.warn('context overflow rollover skipped: turn still running', { sessionId });
         return false;
       }
@@ -774,6 +794,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         const latestUser = [...currentMessages].reverse().find((message) => message.role === 'user' && !isSyntheticUser(message));
         if (!sourceUnchanged() || latestUser?.clientId !== sourceUser?.clientId) return false;
         // Retire the idle stale runtime so the next owner-managed send loads the fix.
+        if (await liveIsBusy(sessionId, live)) return false;
+        signal?.throwIfAborted();
         if (live) await deps.closeSession(sessionId);
         signal?.throwIfAborted();
         // The Pi receipt also covers output not yet flushed to the desktop database.
@@ -858,6 +880,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         return false;
       }
 
+      if (await liveIsBusy(sessionId, live)) return false;
+      signal?.throwIfAborted();
       if (oversized) {
         if (plan.skipGenericReplay || deps.hasExternalRecoveryOwner?.(sessionId)) return false;
         if (continuedInputs.get(sessionId) === plan.sourceUserClientId) return false;
@@ -1060,6 +1084,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       (await deps.findLatestUser?.(sessionId)) ??
       null;
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
+    if (await liveIsBusy(sessionId, live)) return 'busy';
     target.assertCanCommit?.();
     target.beforeClose?.();
     if (live) await deps.closeSession(sessionId);
@@ -1100,7 +1125,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // SSH only; device-link 会话在被控桌面是本地 session,继续换窗。
     if (sessionRow.remoteHostId) return false;
     const live = deps.getLiveSession(sessionId);
-    if (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0) return false;
+    if (await liveIsBusy(sessionId, live)) return false;
     const accountHandoff = await deps.needsNativeSessionHandoff?.(sessionId, sessionRow) ?? false;
     if (!sessionRow.sdkSessionId && !accountHandoff) return false;
     // All companion lanes use the ordinary Session recovery boundary. Healthy
@@ -1182,6 +1207,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
     // 关掉当前 live handle。调用方必须在解析发送目标之前调用 prepare,
     // 再 getSession / createSession;peek 之后对旧对象 send 会打到已关闭实例。
+    if (await liveIsBusy(sessionId, live)) return false;
     signal.throwIfAborted();
     if (live) await deps.closeSession(sessionId);
     signal.throwIfAborted();
@@ -1237,9 +1263,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           }
           assertReady();
           const live = deps.getLiveSession(sessionId);
-          if (target && (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0)) {
+          if (target && await liveIsBusy(sessionId, live)) {
             throw new Error('Native session recovery cannot interrupt a running turn or background task');
           }
+          assertReady();
           // Manual restart closes the broken runtime without asking it to compact.
           if (live) await deps.closeSession(sessionId);
           assertReady();
@@ -1273,7 +1300,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             expectedClearedAt: row.clearedAt,
             ...(target && target !== 'retain-route' ? { replacementRoute: { ...target, expectedSdkSessionId: row.sdkSessionId! } } : {}),
           }];
-          if (target === 'retain-route') assertReady();
+          if (target === 'retain-route') {
+            assertReady();
+            commitArgs[4] = assertReady;
+          }
           if (signal) commitArgs[3] = signal;
           await deps.commitRebuild(...commitArgs);
           deps.setPendingHandoff(sessionId, handoff, generation);

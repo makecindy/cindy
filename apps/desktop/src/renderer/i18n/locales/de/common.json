@@ -21512,6 +21512,25 @@
     "lineNumbers": "Zeilennummern"
   },
   "subscriptionAccounts": {
+    "strategyHelp": {
+      "details": "Zweck und Grenzen der Strategien",
+      "saved": "Einstellungen gespeichert.",
+      "scope": "Gilt ab sofort für folgende neue Zuteilungen. Intakte bestehende Sitzungen behalten ihr Konto; eine Strategieänderung verschiebt sie nicht.",
+      "recoveryOff": "Bei künftigen sicheren Sendevorgängen nehmen erholte Konten nicht aktiv wieder teil. Intakte Sitzungen behalten ihr Konto; der Wechsel nach echten Fehlern bleibt unverändert. Bereits festgeschriebene Übergaben werden nicht rückgängig gemacht.",
+      "basis": "Alle vier Strategien prüfen zuerst Verfügbarkeit, Pause, Modellrechte, Abkühlzeit und Parallelitätsgrenzen, dann die Dringlichkeit des Kontingents. Die Strategie wählt nur unter verbleibenden ähnlichen Kandidaten, nicht unter allen Konten.",
+      "least": "Parallele Arbeit verteilen: Konto mit den wenigsten laufenden Sitzungen wählen, bei Gleichstand nach Listenreihenfolge. Sitzungsanzahl ist kein Token-Verbrauch.",
+      "round": "Zuteilungen verteilen: nächstes geeignetes Konto nach dem zuletzt gewählten verwenden. Übersprungene Konten und unterschiedliche Arbeitsmengen verhindern eine Garantie gleicher Token- oder Kontingentanteile.",
+      "order": "Ein Konto bevorzugen: erstes verbleibendes Konto der Liste wählen. Kontingent- und Verfügbarkeitsfilter haben Vorrang.",
+      "weight": "Neue Zuteilungen gewichten: verbleibende Konten zufällig proportional zu ihren Gewichten wählen. Das ist eine Wahrscheinlichkeit je Zuteilung, keine Garantie für Token- oder Kontingentverhältnisse."
+    },
+     "autoRejoin": {
+       "label": "Nach Kontingenterholung wieder an bestehenden Sitzungen teilnehmen",
+       "scope": "Für zuvor ausgefallene Konten, deren Erholung bestätigt wurde, nicht zum allgemeinen Ausgleich intakter Konten. Gilt nur für bestehende Codex-Sitzungen auf diesem Desktop beim nächsten sinnvollen, sicheren Senden, einschließlich der Zielfortsetzung. Tools und Hintergrundarbeit werden nicht unterbrochen.",
+       "details": "Wiederherstellung und Grenzen ansehen",
+       "context": "Beim Kontowechsel kann die Kontextübergabe verlustbehaftet sein. Der interne Tool- und Denkverlauf lässt sich nicht vollständig bewahren.",
+       "failover": "Das Ausschalten beeinflusst den Kontowechsel bei erschöpftem Kontingent oder Fehlern nicht. Eine Änderung der Zuteilungsstrategie allein verschiebt keine intakten Sitzungen. Diese Einstellung gibt einem nachweislich erholten Konto einmal Gelegenheit zur Teilnahme.",
+       "unsupported": "Dieser Host unterstützt die Einstellung nicht. Ihr Zustand ist unbekannt und kann nicht gespeichert werden. Aktualisiere Cindy auf dem Host."
+     },
     "placement": {
       "needsUpdate": "Auf dem ausführenden Computer muss Cindy aktualisiert werden, bevor Konten so verschoben werden können.",
       "moveTo": "Verschieben nach…",
@@ -21641,19 +21660,19 @@
     "strategy": {
       "expiring": {
         "title": "Bald Verfallendes zuerst",
-        "hint": "Nutzt zuerst das Abo-Kontingent, von dem viel übrig ist und das bald zurückgesetzt wird, damit nichts verfällt. Quellen ohne lesbares Kontingent kommen danach."
+        "hint": "Kontingentverschwendung vermeiden: Restkontingent durch Zeit bis zum Reset vergleichen, knappe 5-Stunden-Fenster zuerst meiden. Unbekanntes Kontingent kommt nach bekanntem; ähnliche Dringlichkeit folgt der Liste."
       },
       "order": {
         "title": "Der Reihe nach",
-        "hint": "Wechselt erst zur nächsten Quelle, wenn die vorherige nicht nutzbar ist."
+        "hint": "Eine Quelle bevorzugen: erste verfügbare Quelle nach der Filterung wählen, nicht unbedingt die erste konfigurierte."
       },
       "rotate": {
         "title": "Abwechselnd",
-        "hint": "Jede neue Aufgabe geht an die nächste Quelle und verteilt die Last gleichmäßig."
+        "hint": "Auswahlen verteilen: nächste geeignete Quelle nach der letzten bestätigten Wahl verwenden. Die Position bleibt nur im Speicher und wird beim Neustart zurückgesetzt; Vorschauen ändern sie nicht. Gleicher Token- oder Kontingentverbrauch ist nicht garantiert."
       },
       "cheapest": {
         "title": "Am günstigsten",
-        "hint": "Nutzt zuerst Abos mit verbleibendem Kontingent, ohne Zusatzkosten; der Rest folgt vom niedrigsten zum höchsten Listenpreis, Quellen ohne Preis kommen zuletzt."
+        "hint": "Niedrige Listenpreise bevorzugen: Abos mit Restkontingent zuerst, dann USD-Listenpreis je Million Ausgabe-Token. Unbekannte Preise zuletzt; gleiche oder durchweg unbekannte Preise folgen der Liste. Gesamtkosten werden nicht vorhergesagt."
       }
     },
     "picker": {
@@ -21686,6 +21705,8 @@
       "separator": "; "
     },
     "settings": {
+      "strategyScope": "Gespeicherte Änderungen gelten bei der nächsten Auswahl: neue Sitzungen wählen vor dem ersten Senden. Bestehende Sitzungen wechseln nie automatisch; manuelle Moduswahl wählt einmal am Ausführungsort der Sitzung, mit der üblichen Bestätigung und dem üblichen Zeitpunkt des Modellwechsels. Sie kann die Sitzung nicht auf einen anderen Computer verschieben.",
+      "strategyLimits": "Nur diese vier Strategien, keine Gewichte oder geringste Auslastung. Ausnahmen gelten zuerst; deaktivierte, getrennte oder nicht verfügbare Quellen werden übersprungen. Erschöpfte Abos kommen nach hinten; sind alle erschöpft, zählt der früheste Reset. Ist keine Quelle nutzbar, bleibt das ursprüngliche Modell. Wechselvorschläge nach Kontingentgrenzen erfordern einen Klick, keine automatische Migration.",
       "newRoute": "Neuer Modus",
       "newRouteName": "Neuer Modus",
       "routesEmpty": "Noch keine Modi. Erstelle einen und füge mehrere Quellen hinzu.",

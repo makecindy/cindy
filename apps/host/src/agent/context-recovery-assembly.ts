@@ -119,7 +119,7 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
     getLiveSession: sessionId => host.getMaker().getSession(sessionId),
     closeSession: sessionId => host.getMaker().closeSession(sessionId, 'runtime-refresh'),
     drainPersistQueue: () => runtime.drainHistories(),
-    commitRebuild: (sessionId, handoff, meta, signal) => commitContextRecoveryWithPorts({
+    commitRebuild: (sessionId, handoff, meta, signal, assertCanCommit) => commitContextRecoveryWithPorts({
       captureDataOwnerBroadcastScope, getCurrentDbClientSnapshot, isDataOwnerBroadcastScopeCurrent,
       sessions, eq: (left, right) => eq(left, right),
       commitContextRebuild: (id, text, rebuildMeta) => commitContextRebuildWithPorts({
@@ -129,7 +129,7 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
       createDbMessage: host.persistMessage,
       createId: () => createId(),
       log: host.log,
-    }, sessionId, handoff, meta, signal),
+    }, sessionId, handoff, meta, signal, assertCanCommit),
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       host.pendingHandoff.set(sessionId, handoff, expectedGeneration),
     readPendingHandoffGeneration: sessionId => host.pendingHandoff.readGeneration(sessionId),

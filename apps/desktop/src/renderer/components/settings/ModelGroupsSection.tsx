@@ -3,7 +3,7 @@
  * 来源本身仍在「模型供应商」里连接和管理；这里只引用已连接的模型。每次改动立即保存。
  * 产品规则见 docs/product-rules/model-groups.md。
  */
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Check, CornerDownRight, Minus, Play, Plus, Waypoints, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -48,6 +48,7 @@ import { ModelGroupRouteExceptions } from './ModelGroupRouteExceptions';
 import { modelGroupsSettings } from './ModelGroupsSection.settings-search';
 import { ModelGroupsOverview } from './ModelGroupsOverview';
 import { SettingsTextInput } from './SettingsTextInput';
+import { StrategyDetails } from './StrategyDetails';
 
 const log = createLogger('ModelGroupsSection');
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -114,10 +115,15 @@ export function ModelGroupsSection() {
   const [view, setView] = useState<View>({ kind: 'list' });
   const [preview, setPreview] = useState<{ routeId: string; result: ModelGroupResolveResult } | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const saveRequest = useRef(0);
 
   const save = useCallback(async (change: (latest: ModelGroupsConfig) => ModelGroupsConfig) => {
+    const request = ++saveRequest.current;
+    setSaved(false);
     try {
       await saveModelGroups(change);
+      if (request === saveRequest.current) setSaved(true);
       setPreview(null);
       return true;
     } catch (error) {
@@ -150,7 +156,7 @@ export function ModelGroupsSection() {
     const route: ModelGroupRoute = { id: crypto.randomUUID(), name: t('modelGroups.settings.newRouteName'), strategy: 'expiring', candidates: [] };
     if (await save((latest) => ({ ...latest, routes: [...latest.routes, route] }))) setView({ kind: 'route', id: route.id });
   };
-  const back = () => setView({ kind: 'list' });
+  const back = () => { setSaved(false); setView({ kind: 'list' }); };
 
   // ── 路线详情 ───────────────────────────────────────────────────────────────
   const route = view.kind === 'route' ? config.routes.find((item) => item.id === view.id) : undefined;
@@ -195,6 +201,18 @@ export function ModelGroupsSection() {
           />
           <div className="mt-6 flex min-w-0 flex-col gap-9">
             <SettingsSection>
+              <StrategyDetails label={t('subscriptionAccounts.strategyHelp.details')} scope={t('modelGroups.settings.strategyScope')}>
+                <p>{t('modelGroups.settings.strategyLimits')}</p>
+                {MODEL_GROUP_STRATEGIES.map(value => (
+                  <div key={value}>
+                    <h4 className="font-medium text-[var(--text-primary)]">{t(`modelGroups.strategy.${value}.title`)}</h4>
+                    <p>{t(`modelGroups.strategy.${value}.hint`)}</p>
+                  </div>
+                ))}
+              </StrategyDetails>
+              {saved && <p role="status" className="text-12 text-[var(--text-secondary)]">
+                {t('subscriptionAccounts.strategyHelp.saved')} {t('modelGroups.settings.strategyScope')}
+              </p>}
               <SettingsCard>
                 <NameRow key={route.id} value={route.name} label={t('modelGroups.settings.name')} hint={t('modelGroups.settings.nameHint')}
                   onCommit={(name) => void updateRoute(route.id, (current) => ({ ...current, name }))} />
@@ -389,7 +407,7 @@ export function ModelGroupsSection() {
   // ── 列表 ───────────────────────────────────────────────────────────────────
   return (
     <SettingsSection variant="page" title={t('modelGroups.title')} description={t('modelGroups.description')} testId="model-groups-settings">
-      <ModelGroupsOverview config={config} onOpenRoute={(id) => setView({ kind: 'route', id })} />
+      <ModelGroupsOverview config={config} onOpenRoute={(id) => { setSaved(false); setView({ kind: 'route', id }); }} />
       <SettingsSection
         title={t('modelGroups.routes')}
         titleId={modelGroupsSettings.routes.targetId}
@@ -414,7 +432,7 @@ export function ModelGroupsSection() {
               title={item.name}
               hint={routeSummary(item)}
               chevron
-              onClick={() => setView({ kind: 'route', id: item.id })}
+              onClick={() => { setSaved(false); setView({ kind: 'route', id: item.id }); }}
             />
           ))}
           {config.routes.length === 0 && (

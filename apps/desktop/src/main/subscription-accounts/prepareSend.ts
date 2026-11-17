@@ -7,6 +7,7 @@ import { taskPoolRouteAllowsModel, readTaskPoolAccount } from './taskAccount.js'
 interface PrepareAccountSendDeps {
   readSession(id: string): Promise<SessionRowSnapshot | null>;
   isRunning(id: string): boolean;
+  hasLiveBackgroundWork?(id: string): Promise<boolean>;
   /** Retires only this runtime and durably retains its context before clearing the native id. */
   rebuild(id: string, assertCurrent: () => void): Promise<void>;
   /**
@@ -42,7 +43,9 @@ export async function prepareSubscriptionAccountForSend(
   if (!pool || (pool.disconnected && task.providerId === provider)) return false;
   const original = pool.accounts.find(account => account.id === task.accountId);
   if (original && !original.paused) return false;
-  if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
+  const nativeBusy = await deps.hasLiveBackgroundWork?.(sessionId);
+  assertOwner();
+  if (nativeBusy || deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
   // The merged route's own model switches still apply; never widen access by moving.
   if (!(await taskPoolRouteAllowsModel(task, row!.model ?? undefined)))
     throw new Error('No subscription account is available');

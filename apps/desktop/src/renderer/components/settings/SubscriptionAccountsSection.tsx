@@ -12,12 +12,14 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useRef,
   useState,
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+import { Collapse } from '@/components/ui/collapse';
 import { Select } from '@/components/ui/select';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Switch } from '@/components/ui/switch';
@@ -61,6 +63,7 @@ import {
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { isClassicalLocale, modernLocaleOf } from '../../../shared/locale';
 import { providersSettings } from './ProvidersSection.settings-search';
+import { StrategyDetails } from './StrategyDetails';
 import { useSettingDefinition } from './useSettingDefinition';
 import { codexResetScope } from '../../../shared/subscriptionAccounts';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
@@ -184,6 +187,9 @@ export function SubscriptionAccountsSection({
   const { confirm } = useConfirmDialog();
   const cache = useContext(SubscriptionPoolViewCache);
   const [view, setView] = useState<SubscriptionPoolView | null>(() => cache?.get(providerId) ?? null);
+  const [savedScope, setSavedScope] = useState<string | null>(null);
+  const [rejoinDetailsOpen, setRejoinDetailsOpen] = useState(false);
+  const rejoinDetailsId = useId();
   const [failed, setFailed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -238,9 +244,18 @@ export function SubscriptionAccountsSection({
     if (inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
+    setSavedScope(null);
     if (command.action === 'add' || command.action === 'login') login.current = command.loginKey;
     try {
-      await window.electronAPI.subscriptionAccounts.command(command);
+      const receipt = await window.electronAPI.subscriptionAccounts.command(command);
+      if (command.action === 'configure' && (command.strategy !== undefined || command.autoRejoinRecovered !== undefined)) {
+        if ((command.strategy !== undefined && receipt.strategy !== command.strategy)
+          || (command.autoRejoinRecovered !== undefined && receipt.autoRejoinRecovered !== command.autoRejoinRecovered)) {
+          throw new Error('Subscription setting was not confirmed');
+        }
+        setSavedScope(command.autoRejoinRecovered === undefined ? 'subscriptionAccounts.strategyHelp.scope'
+          : command.autoRejoinRecovered ? 'subscriptionAccounts.autoRejoin.scope' : 'subscriptionAccounts.strategyHelp.recoveryOff');
+      }
       await refresh();
     } catch (error) {
       const code = extractIpcError(error)?.code;
@@ -371,6 +386,67 @@ export function SubscriptionAccountsSection({
                   });
                 }}
               />
+            </div>
+          )}
+          {balancing && (
+            <div className="mt-3">
+              <StrategyDetails label={t('subscriptionAccounts.strategyHelp.details')} scope={t('subscriptionAccounts.strategyHelp.scope')}>
+                <p>{t('subscriptionAccounts.strategyHelp.basis')}</p>
+                {strategies.map(value => (
+                  <div key={value}>
+                    <h4 className="font-medium text-[var(--text-primary)]">{t(`providerGroup.strategy.${value}`)}</h4>
+                    <p>{t(`subscriptionAccounts.strategyHelp.${value}`)}</p>
+                  </div>
+                ))}
+              </StrategyDetails>
+            </div>
+          )}
+          {savedScope && <p role="status" className="mt-3 text-12 text-[var(--text-secondary)]">
+            {t('subscriptionAccounts.strategyHelp.saved')} {t(savedScope)}
+          </p>}
+          {kind === 'openai' && balancing && (
+            <div className="mt-4 space-y-2">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-13 font-medium text-[var(--text-primary)]">
+                    {t('subscriptionAccounts.autoRejoin.label')}
+                  </div>
+                  <p className="mt-1 text-12 text-[var(--text-secondary)]">
+                    {t(view.autoRejoinRecovered === undefined
+                      ? 'subscriptionAccounts.autoRejoin.unsupported'
+                      : 'subscriptionAccounts.autoRejoin.scope')}
+                  </p>
+                </div>
+                <Switch
+                  {...accountSetting.controlProps}
+                  aria-label={t('subscriptionAccounts.autoRejoin.label')}
+                  checked={view.autoRejoinRecovered === true}
+                  disabled={busy || failed || view.autoRejoinRecovered === undefined}
+                  onCheckedChange={(autoRejoinRecovered) => {
+                    // Missing capability is not a default value: never send it to an old host.
+                    if (view.autoRejoinRecovered === undefined || failed) return;
+                    void run({ action: 'configure', providerId, autoRejoinRecovered });
+                  }}
+                />
+              </div>
+              <Button
+                data-settings-search-action="Expand account recovery scope and context limitations"
+                variant="secondary"
+                tone="quiet"
+                size="sm"
+                aria-expanded={rejoinDetailsOpen}
+                aria-controls={rejoinDetailsId}
+                onClick={() => setRejoinDetailsOpen((open) => !open)}
+              >
+                {t('subscriptionAccounts.autoRejoin.details')}
+              </Button>
+              <Collapse open={rejoinDetailsOpen} id={rejoinDetailsId}>
+                <div className="space-y-2 text-12 text-[var(--text-secondary)]">
+                  <p>{t('subscriptionAccounts.autoRejoin.scope')}</p>
+                  <p>{t('subscriptionAccounts.autoRejoin.context')}</p>
+                  <p>{t('subscriptionAccounts.autoRejoin.failover')}</p>
+                </div>
+              </Collapse>
             </div>
           )}
           {/* One grid for every account: each usage card joins it as a subgrid, so the bars of all

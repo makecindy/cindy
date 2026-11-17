@@ -18,13 +18,16 @@
  * continues on the merged `openai` route, whose own model switches must allow its model.
  */
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { readPool } from './store.js';
-import { accountProviderId, providerAccounts } from './placement.js';
+import { readPool, readLegacyCodexProviderId } from './store.js';
+import { legacyCodexAccountCanRun, subscriptionRouteAllowsModel } from './legacyAccountAccess.js';
+import { accountProviderId, providerAccounts, readProviderAutoRejoinRecovered, resolveSubscriptionPoolProvider } from './placement.js';
 import {
   acquireSubscriptionAccount,
+  acquireSubscriptionRebalance,
   readRemoteSubscriptionAccountSwitch,
   readRemoteSubscriptionAccountHandoff,
   readSubscriptionAccountBlocked,
+  observeSubscriptionAccountFailure,
   type RemoteSubscriptionInvoke,
 } from './runtime.js';
 import { taskPoolRouteAllowsModel, readTaskPoolAccount, type TaskPoolAccount } from './taskAccount.js';
@@ -37,12 +40,16 @@ export interface AccountFailoverSession {
   sdkSessionId?: string | null;
   remoteHostId?: string | null;
   agentDeviceId?: string | null;
+  source?: string | null;
+  orcaRole?: string | null;
 }
 
 export interface AccountFailoverDeps {
   readSession(id: string): Promise<AccountFailoverSession | null>;
   /** A running turn, including background work after the main turn, is never moved. */
   isRunning(id: string): boolean;
+  /** Official provider probe for native work not represented by a background card. */
+  hasLiveBackgroundWork?(id: string): Promise<boolean>;
   /**
    * Retires this task's idle runtime and durably saves a context handoff for a fresh native
    * session on the same route. Must call `assertCurrent` before committing.
@@ -103,11 +110,14 @@ export async function readSubscriptionAccountSwitch(
   sessionId: string,
   readSession: AccountFailoverDeps['readSession'],
   invokeRemote?: RemoteSubscriptionInvoke,
+  turnError?: unknown,
 ): Promise<string | null> {
+  const owner = activeOwnerScopeKey();
   const local = hasMultiAccountPool();
   // Most tasks have no multi-account pool anywhere: skip the session read entirely.
   if (!local && !invokeRemote) return null;
   const row = await readSession(sessionId);
+  if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return null;
   if (!row || row.status === 'deleted' || row.remoteHostId) return null;
   if (row.agentDeviceId) {
     return invokeRemote
@@ -115,7 +125,9 @@ export async function readSubscriptionAccountSwitch(
       : null;
   }
   const bound = local ? boundAccount(sessionId, row) : null;
-  if (!bound || !readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model)) return null;
+  if (!bound) return null;
+  if (turnError !== undefined) observeSubscriptionAccountFailure(bound.provider, bound.accountId, turnError, bound.model);
+  if (!readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model)) return null;
   if (!(await routeAdmits(bound))) return null;
   try {
     await acquireSubscriptionAccount(bound.providerId, bound.model, [], false, {
@@ -140,6 +152,7 @@ export async function canSwitchSubscriptionAccount(
 export async function prepareSubscriptionAccountFailover(
   sessionId: string,
   deps: AccountFailoverDeps,
+  options: { balance?: boolean } = {},
 ): Promise<boolean> {
   const owner = activeOwnerScopeKey();
   const assertOwner = () => {
@@ -189,33 +202,64 @@ export async function prepareSubscriptionAccountFailover(
   if (!local) return false;
   const bound = row && boundAccount(sessionId, row);
   if (!bound || deps.isRunning(sessionId)) return false;
-  if (!readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model)) return false;
+  const blocked = readSubscriptionAccountBlocked(bound.provider, bound.accountId, bound.model);
+  const recoveryRef = resolveSubscriptionPoolProvider(bound.providerId);
+  const recoveryEnabled = () => recoveryRef?.kind === 'openai' && readProviderAutoRejoinRecovered(recoveryRef);
+  if (!blocked && (!recoveryEnabled() || !options.balance || row!.agentKind !== 'codex' || !row!.sdkSessionId
+    || row!.source !== 'desktop' || row!.orcaRole)) return false;
   if (bound.previousProviderId && !deps.moveRoute) return false;
+  if (await deps.hasLiveBackgroundWork?.(sessionId)) return false;
+  assertOwner();
+  if (deps.isRunning(sessionId)) return false;
   if (!(await routeAdmits(bound))) return false;
   assertOwner();
   // Reserve the replacement with the same pool policy, limits and quota order as a new task.
   // None left (all blocked or full): keep the original account and let the send report it.
   let lease: Awaited<ReturnType<typeof acquireSubscriptionAccount>>;
   try {
-    lease = await acquireSubscriptionAccount(bound.providerId, bound.model, [], false, {
-      exclude: new Set([bound.accountId]),
-    });
+    lease = blocked
+      ? await acquireSubscriptionAccount(bound.providerId, bound.model, [], false, { exclude: new Set([bound.accountId]) })
+      : await acquireSubscriptionRebalance(bound.providerId, bound.model, bound.accountId);
   } catch {
     return false;
   }
   if (!lease) return false;
+  // Disabling cancels a not-yet-committed optional handoff. Once the existing
+  // durable rebuild commits, finish its binding transaction rather than strand it.
+  let rebuilt = false;
   try {
     const assertCurrent = () => {
       assertOwner();
+      if (!blocked && !rebuilt && !recoveryEnabled()) throw new Error('Recovered account participation was disabled');
+      if (!rebuilt) {
+        if (accountProviderId(bound.provider, lease!.accountId) !== bound.providerId)
+          throw new Error('The target subscription account provider changed');
+        const imported = bound.provider === 'openai' ? readLegacyCodexProviderId(lease!.accountId) : undefined;
+        if (!subscriptionRouteAllowsModel(bound.providerId, bound.model)
+          || (imported && !legacyCodexAccountCanRun(imported, bound.model, { remote: false, newRoute: true })))
+          throw new Error('The target subscription route permission changed');
+      }
       lease!.assertDispatchable();
       if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
       const current = readTaskPoolAccount(sessionId, row!);
       if (current?.accountId !== bound.accountId || current.providerId !== bound.providerId)
         throw new Error('The task subscription account changed');
     };
+    const assertRoute = async (afterRebuild = false) => {
+      const latest = await deps.readSession(sessionId);
+      assertCurrent();
+      if (!latest || latest.status === 'deleted' || latest.providerId !== row!.providerId
+        || latest.model !== row!.model || latest.agentKind !== row!.agentKind
+        || latest.remoteHostId !== row!.remoteHostId || latest.agentDeviceId !== row!.agentDeviceId
+        || (latest.sdkSessionId !== row!.sdkSessionId && (!afterRebuild || !!latest.sdkSessionId)))
+        throw new Error('The task route changed');
+    };
+    await assertRoute();
     assertCurrent();
     // Keep the old native id bound to the account that owns its history; only the task moves.
     if (row!.sdkSessionId) await deps.rebuild(sessionId, assertCurrent);
+    rebuilt = true;
+    await assertRoute(true);
     assertCurrent();
     if (bound.previousProviderId) {
       // The old id would pin the old account again; continue on the merged route instead.
