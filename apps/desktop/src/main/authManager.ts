@@ -116,6 +116,7 @@ import { resolveLoginScenarioFetch } from '@cindy/auth-client/fixtures';
 
 import { createLogger } from './logger';
 import { requestErrorMessage } from './requestErrorMessage';
+import { withProviderResponseDiagnostics } from './authProviderResponse';
 import { AuthOwnerChangeShellGate } from './authOwnerChangeShellGate';
 import {
   isGhostSkillProjectionBoundaryStableForOwner,
@@ -159,8 +160,11 @@ import {
 } from './appSessionState.js';
 import {
   claimLegacyOwnerNamespace,
+  hasExclusiveSharedLegacyUserDataAccess,
   recordLegacyGhostMigrationResult,
 } from './ownerNamespaceMigration.js';
+import { adoptLocalProfileAssets } from './localProfileAssetsMigration.js';
+import { acquireWindowsPackagedInstanceBarrier } from './windowsPackagedInstanceBarrier.js';
 import {
   migrateLocalNativeProviderAuthBindings,
   readLegacyNativeProviderAuthOwner,
@@ -449,7 +453,10 @@ function createAuthClient(
     deviceId,
     clientType: 'desktop',
     locale: getResolvedMainLocale(),
-    fetch: scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
+    fetch: withProviderResponseDiagnostics(
+      scenarioFetch ?? (async (input, init) => net.fetch(input, init as RequestInit)),
+      (diagnostic) => log.warn('login providers non-JSON response', diagnostic),
+    ),
     onRequestError: (apiPath, status, error) => {
       log.warn('auth request failed', apiPath, { realm, status }, requestErrorMessage(error));
     },
@@ -2479,6 +2486,20 @@ async function withCloudOwnerCommit<T>(opts: {
           throw new Error('cloud owner data reservation finalization remains pending');
         }
         rollbackReservation = null;
+        // The verified first cloud owner adopts local credentials and plugin
+        // installation facts while the old runtime is drained and the new
+        // owner is still quarantined. Optional provisioning must not race this.
+        await adoptLocalProfileAssets(opts.nextOwnerId, {
+          userDataDir: app.getPath('userData'),
+          dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
+          hasExclusiveSourceAccess: hasExclusiveSharedLegacyUserDataAccess,
+          acquireSourcePublicationBarrier: process.platform === 'win32'
+            ? () => acquireWindowsPackagedInstanceBarrier({
+                userDataDir: app.getPath('userData'),
+                programName: BRAND_IDENTITY.executableName,
+              })
+            : undefined,
+        });
         // Same-owner repair: advance the owner generation after the real commit
         // so activeOwnerScopeKey() changes and stale captured scopes are rejected.
         if (forceBumpGeneration) {
@@ -5991,6 +6012,7 @@ async function runLoginAction(
     const errorState = loginPreparingErrorState(
       code,
       error instanceof AuthApiError ? error.retryAt : undefined,
+      code === 'INVALID_RESPONSE' && status >= 400 && status <= 599 ? status : undefined,
     );
     loginFlowState =
       flowCannotRetry || code === 'CREDENTIAL_STORE_UNAVAILABLE'

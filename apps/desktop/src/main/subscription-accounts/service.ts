@@ -1,6 +1,6 @@
 import { isProviderDisabled } from '@cindy/model-providers';
 import type { SubscriptionAccountCommand } from '../../shared/subscriptionAccounts.js';
-import { runSubscriptionAccountCommand } from './runtime.js';
+import { readSubscriptionPool, runSubscriptionAccountCommand } from './runtime.js';
 import {
   getMaker,
   getMakerIfReady,
@@ -56,7 +56,7 @@ export async function executeSubscriptionAccountCommand(command: SubscriptionAcc
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
       throw new Error('Subscription accounts changed');
   }
-  const result = await runSubscriptionAccountCommand(command);
+  let result = await runSubscriptionAccountCommand(command);
   const kind = result.kind ?? resolveSubscriptionPoolProvider(command.providerId)?.kind;
   if (
     command.action === 'read' &&
@@ -84,6 +84,12 @@ export async function executeSubscriptionAccountCommand(command: SubscriptionAcc
       result.boundAccountId = meta?.sdkSessionId
         ? readAccountBinding(`native:${meta.sdkSessionId}`, kind)?.accountId
         : undefined;
+      // A duplicate home can be folded out of the ordinary list. Keep the old task's exact
+      // native row, not just an ID that its account picker can no longer find.
+      if (result.boundAccountId && !result.accounts.some(account => account.id === result.boundAccountId)) {
+        result = await readSubscriptionPool(command.providerId, false, command.taskId, meta?.sdkSessionId);
+        assertCurrent();
+      }
     }
   }
   if (command.action === 'add' || command.action === 'connect' || command.action === 'login' || command.action === 'create') {

@@ -41,6 +41,8 @@ import { buildClientEnvironmentNote } from './mobileClientPromptNote.js';
 import { buildWireMessageSourceNote } from './messageSourceNote.js';
 import { isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
 import { isEmptyModelChangeMarker } from './recoveryCoordinator.js';
+import { isTerminalTurnErrorEvent } from './sessionTurnActivityTracker.js';
+import type { AgentEvent, Session } from '@cindy/maker-core';
 export { isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
 
 const SYNTHETIC_TRIGGER_PREFIX = '[UI_ACTION_TRIGGER]';
@@ -111,6 +113,27 @@ export function isUnsupportedRequestOptionErrorData(data: unknown): boolean {
   if (rec.reason === UNSUPPORTED_REQUEST_OPTION_REASON) return true;
   return [rec.message, rec.sdkError].some(
     (value) => typeof value === 'string' && isUnsupportedRequestOptionErrorMessage(value),
+  );
+}
+
+/**
+ * Whether the broadcast of a terminal error is held for context recovery: an overflow-class
+ * terminal error of a local task (sessionEventDelivery.ts holds it and reserves its persist id).
+ */
+export function holdsContextRecoveryBroadcast(
+  session: Pick<Session, 'remoteHostId'>,
+  event: AgentEvent,
+): boolean {
+  return (
+    !session.remoteHostId &&
+    event.type === 'error' &&
+    isTerminalTurnErrorEvent(event) &&
+    (isContextOverflowErrorData(event.data) ||
+      isOversizedHistoryErrorData(event.data) ||
+      // 与 sessionEventTerminal 的 overflowClaim 判据保持一致：PI compat 自愈的终态错误
+      // 也要先压住广播并预留 persistId，否则自愈失败时 surfaceOverflowFailure 拿不到
+      // 预留 id（dedup 已被吃掉），错误行不落库、后台任务历史里看不到失败。
+      isUnsupportedRequestOptionErrorData(event.data))
   );
 }
 

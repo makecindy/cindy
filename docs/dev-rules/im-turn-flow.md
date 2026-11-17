@@ -12,6 +12,13 @@ Telegram / Slack / X / 飞书 / Lark）是同一件事的两套实现：把渠�
 [`../product-rules/telegram-bot-parity.md`](../product-rules/telegram-bot-parity.md)；
 台账里标「有意不同」的项以策略参数表达，合并时不抹平。
 
+模型输入的语言／文风规则（2026-11-15）：IM 不附加界面语言、文学形式或暂停／恢复文风说明；
+官方 hook 的 `promptWithNote` 仅保留渠道与实际业务上下文说明。模型正文和错误说明随来信、
+用户要求及模型决定，宿主固定控制文案仍按各渠道本地化规则生成。实现与发送回归见
+[session-runner.ts](../../apps/desktop/src/main/hook-control/session-runner.ts) 和
+[session-runner.test.ts](../../apps/desktop/src/main/hook-control/__tests__/session-runner.test.ts)；
+产品台账见 [Telegram bot 对齐](../product-rules/telegram-bot-parity.md)。
+
 连接恢复由渠道 transport 持有，不重放任务或发送内容。Telegram、Discord 的启动网络失败与
 钉钉的连接失败使用可取消的指数退避（约 1 秒起、30 秒封顶，带抖动）；Telegram 429 尊重
 服务端完整等待时间。飞书保留 SDK 重连，仅在 SDK 耗尽重试或启动抛错后补重试；就绪日志须
@@ -450,3 +457,16 @@ async 卡跨轮存活、最长 24 小时。重启后旧卡安全失效。
 `interaction.decision` 的 `question:reply`＋`answerText` 回传文字。未协商时沿用旧入口。
 Telegram 继续使用已协商的 `telegram-question-ops-v1`，展示模型与其余 IM 同源。
 本实现不新增 X 的公开帖问答入口，不改变各渠道原有消息触发／成员准入规则。
+
+### Telegram 后台回报的媒体发送
+
+渠道自有任务收到其它任务回报、或沿渠道来源被后台唤醒时，共享 runner 在已核实的
+输出路由上建立本轮媒体发送租约。`send_media` 与正常入站共用发送流程，支持图片、
+任意类型文件、视频、音频等全部既有类型，以及本地绝对路径、公网 URL 和 Telegram
+file_id；后台回报不另设文件目录或图片专属限制。文件存在性、上传大小和平台格式限制
+沿用 Telegram transport。工具只在发送成功后返回成功回执。
+
+目标固定为原 bot 的原聊天／话题。该租约独立于 `ChannelToolScope`，不提供用户身份、
+群历史读取、群管理或跨群 API 权限，也不把普通工具过程图片自动发到群里。
+桌面输入、普通接管任务、远程 SSH 任务不建立它。终态、未派发、解绑、销毁及下一轮
+来源切换时回收；正常 Telegram 入站的权限规则不变，包括非绑定用户的文件范围限制。

@@ -46,10 +46,15 @@ export interface GhostErrandSessionRow {
   providerId?: string | null;
   effort?: string | null;
   fastMode?: boolean | 'ultrafast';
+  /** Agent 运行位置(另一台电脑或 share:<id>);null / 缺省 = 本机。 */
+  agentDeviceId?: string | null;
   permissionMode: string;
   workingDir: string | null;
   workspaceKind: string;
 }
+
+/** 共用解析结果;带运行位置时 Agent 在那台电脑运行,任务仍在本机。 */
+export type GhostErrandExecution = SessionExecutionSelection & { agentDeviceId?: string };
 
 export interface GhostErrandRunnerDeps {
   readConfig(ghostId: string): PluginTaskConfig;
@@ -67,13 +72,14 @@ export interface GhostErrandRunnerDeps {
     effort?: string;
     fastMode?: boolean | 'ultrafast';
     providerId?: string | null;
+    agentDeviceId?: string;
     permissionMode: GhostErrandPermissionMode;
     workingDir?: string;
   }): Promise<string>;
   /** 该插件的展示名(errand 会话默认标题用)。 */
   getGhostName(ghostId: string): string | null;
   /** Shared ordinary-task model policy; errand only adapts its own lifecycle. */
-  resolveExecution(config: PluginTaskConfig, sourceSessionId?: string, existing?: GhostErrandSessionRow): Promise<SessionExecutionSelection>;
+  resolveExecution(config: PluginTaskConfig, sourceSessionId?: string, existing?: GhostErrandSessionRow): Promise<GhostErrandExecution>;
   captureOwner(): () => void;
   /**
    * 目录规范化(与 sessions 落库同一实现):配置目录必须先规范化再与 DB 行
@@ -121,13 +127,16 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
   /** 既有会话还能不能当这单的干活间:完整模型组合/权限档/目录变了就换新间。 */
   const sessionMatchesConfig = (
     row: GhostErrandSessionRow,
-    execution: SessionExecutionSelection,
+    execution: GhostErrandExecution,
     permissionMode: GhostErrandPermissionMode,
     effectiveDir: string | undefined,
+    explicitLocation: boolean,
   ): boolean => {
     if (row.status !== 'active') return false;
     if (row.agentKind !== (execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind)) return false;
     if (row.model !== execution.model || (row.providerId ?? null) !== (execution.providerId ?? null)) return false;
+    // 新版明确选过位置时比较来源；历史设置未选位置，保留用户修好任务后的复用语义。
+    if (explicitLocation && (row.agentDeviceId ?? null) !== (execution.agentDeviceId ?? null)) return false;
     if (row.effort && row.effort !== execution.effort) return false;
     if ((row.fastMode ?? false) !== execution.fastMode) return false;
     if (row.permissionMode !== permissionMode) return false;
@@ -149,7 +158,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
     const assertConfig = () => {
       assertOwner();
       const current = deps.readConfig(request.ghostId);
-      if ((['agentKind', 'model', 'providerId', 'effort', 'fastMode', 'permissionMode', 'workingDir'] as const)
+      if ((['agentKind', 'model', 'providerId', 'agentDeviceId', 'effort', 'fastMode', 'permissionMode', 'workingDir'] as const)
         .some(key => current[key] !== cfg[key])) throw new Error('插件任务设置已变化，请重新发起任务');
     };
     // Compatibility only: existing errand callers keep their original authority.
@@ -180,7 +189,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
     let sessionId = deps.readSessionId(request.ghostId, sessionKey);
     const originalSessionId = sessionId;
     let row: GhostErrandSessionRow | null;
-    let execution: SessionExecutionSelection;
+    let execution: GhostErrandExecution;
     try {
       row = sessionId ? await deps.getSessionRow(sessionId) : null;
       assertOwner();
@@ -194,7 +203,8 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
     } catch (error) {
       return failure('SESSION_UNAVAILABLE', error instanceof Error ? error.message : String(error));
     }
-    if (sessionId && (!row || !sessionMatchesConfig(row, execution, permissionMode, effectiveDir))) sessionId = null;
+    const explicitLocation = cfg.agentDeviceId !== undefined;
+    if (sessionId && (!row || !sessionMatchesConfig(row, execution, permissionMode, effectiveDir, explicitLocation))) sessionId = null;
     if (!sessionId) {
       const ghostName = deps.getGhostName(request.ghostId);
       try {
@@ -219,7 +229,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
     if (row && sessionId === originalSessionId) {
       const current = await deps.getSessionRow(sessionId);
       assertOwner();
-      if (!current || !sessionMatchesConfig(current, execution, permissionMode, effectiveDir)) {
+      if (!current || !sessionMatchesConfig(current, execution, permissionMode, effectiveDir, explicitLocation)) {
         return failure('SESSION_UNAVAILABLE', '任务配置已变化，请重新发起；不会使用旧模型继续执行');
       }
     }

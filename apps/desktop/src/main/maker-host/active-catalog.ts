@@ -1190,8 +1190,16 @@ function projectXdGatewayMediaModels(
       ...(model.modalities ? { modalities: model.modalities } : {}),
       discoveredMetadata: pickModelMetadata(model),
     }));
+  const evaluationModels = gatewayModels
+    .filter(model => model.mode === 'evaluation' || model.mode === 'rerank')
+    .map(model => ({
+      ...pickModelMetadata(model), ...gatewayDisplayPricing(model),
+      id: model.id, name: model.name ?? model.id, mode: model.mode,
+      ...(model.availability ? { availability: model.availability } : {}),
+    }));
   const hasEmbeddingEntries = gatewayModels.some((model) => model.mode === 'embedding');
   const identity = { ...provider };
+  delete identity.evaluationModels;
   delete identity.imageModels;
   delete identity.imageDefaults;
   delete identity.videoModels;
@@ -1205,6 +1213,7 @@ function projectXdGatewayMediaModels(
     imageModels,
     videoModels,
     audioModels,
+    ...(evaluationModels.length ? { evaluationModels } : {}),
     ...(embeddingModels.length > 0 ? { embeddingModels } : {}),
     ...(imageModels[0] ? { imageDefaults: { standard: imageModels[0].id } } : {}),
     ...(videoModels[0] ? { videoDefaults: { standard: videoModels[0].id } } : {}),
@@ -1212,7 +1221,7 @@ function projectXdGatewayMediaModels(
   };
 }
 
-function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex): Catalog {
+function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, claudeModels?: readonly CatalogModel[]): Catalog {
   const source = base ?? BUNDLED_CATALOG;
   const b =
     baseCapabilityEvidence === 'current'
@@ -1423,8 +1432,9 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex): 
     }
     if (providerCatalogId(p) === 'anthropic') {
       // Claude 订阅只供 Claude Code(内置 CLI 用它自己的登录),不向 Codex / Pi 投影。
-      const accountModels = p.id === 'anthropic' ? anthropicModels : [];
-      const seed = accountModels.length > 0 ? accountModels : (p.models['claude-code'] ?? []);
+      const accountModels = p.id === 'anthropic' ? claudeModels ?? anthropicModels : [];
+      const seed = (p.id === 'anthropic' && claudeModels !== undefined) || accountModels.length > 0
+        ? accountModels : (p.models['claude-code'] ?? []);
       // 成员只来自 Claude Code SDK 返回的清单;registry 不补 SDK 没返回的型号。
       const root = assembleRoot(
         'anthropic', 'claude-code', seed, plan, false, false, p.id, accountModels,
@@ -2055,6 +2065,19 @@ export function getActiveCatalogWithCodexModels(models: readonly CatalogModel[])
   const catalog = computeMerged(models);
   const projected = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
   pooledCodexProjection.catalogs.set(models, projected);
+  return projected;
+}
+
+let pooledClaudeProjection: { revision: number; catalogs: WeakMap<readonly CatalogModel[], Catalog> } | undefined;
+/** Apply the same Registry and user overrides to only this Claude account's membership. */
+export function getActiveCatalogWithClaudeModels(models: readonly CatalogModel[]): Catalog {
+  if (pooledClaudeProjection?.revision !== revision)
+    pooledClaudeProjection = { revision, catalogs: new WeakMap() };
+  const cached = pooledClaudeProjection.catalogs.get(models);
+  if (cached) return cached;
+  const catalog = computeMerged(undefined, models);
+  const projected = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
+  pooledClaudeProjection.catalogs.set(models, projected);
   return projected;
 }
 

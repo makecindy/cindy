@@ -116,6 +116,11 @@ beforeEach(() => {
 });
 
 describe('parseClaudeCliLoginStatus', () => {
+  // Unit: official auth status already exposes the tier, but our parser discarded it.
+  it.each(['max_5x', 'max_20x', 'future_tier'])('preserves the upstream tier %s without guessing a product name', planTier => {
+    expect(parseClaudeCliLoginStatus(JSON.stringify({ ...JSON.parse(SUBSCRIPTION), planTier })))
+      .toMatchObject({ subscriptionType: 'max', planTier });
+  });
   // Login expiry is advisory metadata from the official CLI, never an auth verdict.
   it.each(['2026-12-01T12:00:00.000Z', '2020-01-01T00:00:00.000Z'])('preserves a valid login deadline without signing the account out (%s)', (loginExpiresAt) => {
     expect(parseClaudeCliLoginStatus(JSON.stringify({ ...JSON.parse(SUBSCRIPTION), loginExpiresAt })))

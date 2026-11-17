@@ -21,6 +21,7 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { Maker, Session } from '@cindy/maker-core';
 import { sessions } from '../localDb/schema.js';
+import type { DbClient } from '../localDb/client/DbClient.js';
 
 /** Shared by the initial scan and the lock-protected recheck. */
 export const piIdleReleaseIdleSince = () =>
@@ -73,6 +74,33 @@ export function createPiIdleReleaseClose(
   return (session) => withCloseSuppressed(session.id, async () =>
     await maker.closeSessionIfCurrent(session as Session, 'runtime-refresh', { onlyIfIdle: true }) === 'closed',
   );
+}
+
+/** The candidate scan and the lock-protected recheck, against the database the caller reads now. */
+export function createPiIdleReleaseCandidateQueries(getDbClient: () => Pick<DbClient, 'drizzle'>): Pick<
+  PiIdleReleaseWatcherDeps,
+  'listCandidates' | 'readIdleSinceMs'
+> {
+  return {
+    listCandidates: async (idleBeforeMs) => {
+      const idleSince = piIdleReleaseIdleSince();
+      const rows = await getDbClient()
+        .drizzle
+        .select({ id: sessions.id, idleSinceMs: idleSince })
+        .from(sessions)
+        .where(and(piIdleReleaseCandidateWhere(), sql`${idleSince} < ${idleBeforeMs}`));
+      return rows.map((row) => ({ id: row.id, idleSinceMs: Number(row.idleSinceMs) }));
+    },
+    readIdleSinceMs: async (sessionId) => {
+      const [row] = await getDbClient()
+        .drizzle
+        .select({ idleSinceMs: piIdleReleaseIdleSince() })
+        .from(sessions)
+        .where(and(eq(sessions.id, sessionId), piIdleReleaseCandidateWhere()))
+        .limit(1);
+      return row ? Number(row.idleSinceMs) : null;
+    },
+  };
 }
 
 /** Timer handle abstraction keeps the watcher deterministic under fake timers. */

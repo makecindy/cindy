@@ -195,6 +195,38 @@ describe('turn change-set sidecar store', () => {
     });
   });
 
+  it('treats a Codex diff dropped at the app-server line limit as too large, not as the previous snapshot', async () => {
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'codex',
+      cwd: workdir,
+    });
+    noteTurnDiffEvent('session-1', {
+      type: 'turn_diff',
+      source: 'codex',
+      data: {
+        turnId: 'turn-oversized',
+        cwd: workdir,
+        diff: ['diff --git a/early.ts b/early.ts', '--- a/early.ts', '+++ b/early.ts', '@@ -1 +1 @@', '-old', '+new', ''].join('\n'),
+      },
+    });
+    noteTurnDiffEvent('session-1', {
+      type: 'turn_diff',
+      source: 'codex',
+      data: { turnId: 'turn-oversized', cwd: workdir, diff: '', omitted: 'oversized' },
+    });
+    finalizeTurnChangeSet('session-1', 'turn-oversized', 'complete');
+
+    await vi.waitFor(async () => expect(await listTurnChangeSets('session-1')).toHaveLength(1));
+    const [summary] = await listTurnChangeSets('session-1');
+    expect(summary).toMatchObject({
+      state: 'partial',
+      incompleteReasons: ['diff-too-large'],
+      fileCount: 0,
+    });
+  });
+
   it('keeps overlapping same-workspace captures parallel and degrades both to review-only', async () => {
     const target = path.join(workdir, 'shared.txt');
     const workspaceAlias = path.join(root, 'workspace-alias');

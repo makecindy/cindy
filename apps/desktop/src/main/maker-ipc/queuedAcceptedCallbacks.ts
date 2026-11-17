@@ -14,19 +14,26 @@ interface QueuedAcceptedCallback {
 export function createQueuedAcceptedCallbacks(log?: AcceptedCallbackLogger) {
   const callbacks = new Map<string, QueuedAcceptedCallback>();
 
-  const register = (
+  const registerOwned = (
     clientId: string,
     accepted: () => void | Promise<void>,
     rollback?: (reason?: 'cancelled-before-dispatch') => void | Promise<void>,
     commit?: () => void | Promise<void>,
-  ): void => {
-    callbacks.set(clientId, {
-      accepted,
-      rollback,
-      commit,
-      didRun: false,
-    });
+  ): (() => void) => {
+    const callback: QueuedAcceptedCallback = { accepted, rollback, commit, didRun: false };
+    callbacks.set(clientId, callback);
+    // Admission owns only this registration; a later replacement has its own lifecycle.
+    return () => {
+      if (callbacks.get(clientId) === callback) callbacks.delete(clientId);
+    };
   };
+
+  /** Preserve the existing void registration API for other queue callers. */
+  const register = (
+    clientId: string, accepted: () => void | Promise<void>,
+    rollback?: (reason?: 'cancelled-before-dispatch') => void | Promise<void>,
+    commit?: () => void | Promise<void>,
+  ): void => { registerOwned(clientId, accepted, rollback, commit); };
 
   const rollback = async (
     sessionId: string,
@@ -73,7 +80,17 @@ export function createQueuedAcceptedCallbacks(log?: AcceptedCallbackLogger) {
   const run = (
     sessionId: string,
     item: AgentInputQueuedMessage,
+    recoverySourceClientId?: string,
   ): Promise<void> | undefined => {
+    // The scheduler bridge verifies the session/run owner before transferring
+    // an unaccepted callback to its coordinator-owned automatic replacement.
+    if (!callbacks.has(item.clientId) && recoverySourceClientId) {
+      const original = callbacks.get(recoverySourceClientId);
+      if (original && !original.didRun) {
+        callbacks.delete(recoverySourceClientId);
+        callbacks.set(item.clientId, original);
+      }
+    }
     const callback = callbacks.get(item.clientId);
     if (!callback) return undefined;
     callback.didRun = true;
@@ -84,5 +101,5 @@ export function createQueuedAcceptedCallbacks(log?: AcceptedCallbackLogger) {
     callbacks.delete(clientId);
   };
 
-  return { register, rollback, settle, run, discard, has: (id: string) => callbacks.has(id) };
+  return { register, registerOwned, rollback, settle, run, discard, has: (id: string) => callbacks.has(id) };
 }

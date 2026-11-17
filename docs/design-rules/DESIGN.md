@@ -113,7 +113,7 @@ The interface is built from a three-tier layer system that applies symmetrically
 
 ### Task tag identity colors
 
-用户确认的任务标签色板为红、橙、黄、绿、蓝、紫、灰、粉、珊瑚、青、靛蓝、白共十二色。只用于标签色球与编辑色板，表示用户分类，不表示任务运行状态。色球为圆形、细描边，选中时勾位于球内；白色在 Light/Dark 中均保持白色，用独立深色勾保证对比度。Desktop 使用 `task-tag-*` 语义 token；Mobile 使用对应 `taskTag*` 色板字段。默认面板只显示选择列表，添加或编辑后才显示名称和两行六列色板，不显示双击编辑提示。
+用户确认的任务标签色板为红、橙、黄、绿、蓝、紫、灰、粉、珊瑚、青、靛蓝、白共十二色。用于标签色球与编辑色板，以及用户选择的项目图标和图标色板（见本节项目图标规则），表示用户分类或身份，不表示任务运行状态。色球为圆形、细描边，选中时勾位于球内；白色在 Light/Dark 中均保持白色，用独立深色勾保证对比度。Desktop 使用 `task-tag-*` 语义 token；Mobile 使用对应 `taskTag*` 色板字段。默认面板只显示选择列表，添加或编辑后才显示名称和两行六列色板，不显示双击编辑提示。
 
 ### Personal message bubble colors (Mobile, 2026-10-12)
 
@@ -138,6 +138,19 @@ Small interactive chips (button backgrounds, tag pills, avatar fills, selected-n
 - **Silver** (`#a3a3a3`): Tertiary text and deeply de-emphasized metadata. **Never use it as a placeholder** — too prominent, reads as filled-in (see §4 Inputs; the G3 erratum is archived in [`design-decision-log.md`](./design-decision-log.md); placeholders use `--text-placeholder` `#c4c4c4`).
 
 > ~~**Button Text Dark** (`#404040`)~~ — deprecated (2026-06, G1). Once labeled the "white-surface button text color", but no real button ever used it (only bare hardcodes in the experimental view). White Pill secondary text uniformly uses **Near Black** (`--text-primary` `#262626`).
+
+### Project icon identity colors (user request, 2026-11-13)
+
+Project symbols and letter icons reuse the existing task-tag palette, order and localized color names (`TASK_TAG_COLORS`):
+red, orange, yellow, green, blue, purple, gray, pink, coral, teal, indigo and white.
+Desktop reads `--task-tag-*`; Mobile reads `taskTag*` directly. No separate project palette or new color
+values. This extends the tag identity-color role to user-selected project symbols, letter icons and their picker.
+Default explicitly uses `text-primary` / `textPrimary`: dark ink in Light, light ink in Dark. White uses the tag's white fill, neutral border
+and `task-tag-white-check` / `taskTagWhiteCheck` glyph to remain visible on light surfaces.
+Images and emoji retain their intrinsic colors. Palette swatches are two rows of six; default is the first explicit choice above the palette, with an adaptive neutral swatch, a selected check and a localized “follow theme” label. It is not presented as a reset action. Color choices have localized names and a neutral selection ring. Mobile targets are 44pt;
+Desktop uses standard pill Buttons. Controls, project names and task status remain on their existing tokens.
+Project letter icons are identity artwork: square tiles with 25% corner radius, Cindy typography and weight 600. Automatic initials use a stable name-derived choice from the existing non-white identity colors, with theme-adjusted foreground and a 14% same-color background. Explicit default remains the theme foreground. Manual letter colors remain selectable; the tile shape also applies to them.
+Project image thumbnails use the same 25% corner crop on Desktop and Mobile, including automatic images, uploaded images and previews. This clips opaque asset corners without changing the image's intrinsic colors or persisted bytes; emoji and symbol geometry stay unchanged.
 
 ### Semantic & Accent
 
@@ -607,10 +620,13 @@ input/text
 
 Every confirmation built on the shared `ConfirmDialog` / provider uses its standard buttons; there is no per-caller presentation switch (maintainer ruling 2026-11-11, C-02 — supersedes the DS-6 two-caller pilot). Confirmation actions keep a 36px minimum height; long labels wrap within the panel and may grow vertically instead of overflowing or truncating. Keep `confirm-btn-*` local styling, default/destructive choice, focus branches and no scrim dismissal. Full Access and plugin-authorization confirmations follow the same buttons; the in-chat Permission card is not a `ConfirmDialog` and keeps its own `palette="permission"` presentation.
 
-**Interaction answer composers (user decision, 2026-11-10):** Free-text answers, custom-choice answers,
-withdrawn-question supplements and plan feedback use a full-width input frame. Text occupies its own
-full-width area; existing microphone and submit controls sit inside the frame in a trailing toolbar
-below the text, never squeeze the textarea into a narrow side column. Submission uses the main
+**Interaction answer composers (user decisions, 2026-11-10 and 2026-11-16):** Free-text answers, custom-choice answers,
+withdrawn-question supplements and plan feedback use one input frame that starts as a single line: while
+the answer is empty or fits one line, the text sits beside the existing microphone and submit controls,
+centred on them (about 48px tall). Once the answer wraps or contains a line break, the frame expands: the
+text takes its own full-width area and the controls move to a trailing toolbar below it, so a multi-line
+answer is never squeezed into a narrow column. The expansion holds until the answer is cleared, so the
+layout does not flip back and forth while typing (`useAnswerComposerExpanded`). Submission uses the main
 composer's paper-plane glyph, with the actual action retained in localized accessible names and
 Desktop tooltips. Multi-select custom input has one submit control, not a second footer submit.
 Question navigation, close/skip, validation, voice finalization and approval semantics stay unchanged.
@@ -816,7 +832,9 @@ Implementation: `AutomationSessionGroupItem.tsx` and `automationSidebarGrouping.
 
 ### Desktop teammate sidebar
 
-The expanded teammate section previews five chats (local teammates, remote teammates, groups and the merged Cindy device row share this limit). Keep the current chat visible within those five rows. Use the task list’s “Show all N” footer style, with “Show less” after expansion. The teammate section has its own icon/list preference, independent of the pinned section and of collapse state. The icon strip’s +N button switches to the full list. Collapsing resets the preview and hides ordinary entries entirely; unread chats and pending interaction/error rows remain visible in the chosen mode, without a preview cap. The currently open teammate chat also stays visible after it becomes read, until navigation leaves that chat; pending attention still keeps it visible after leaving. Explicitly collapsing the teammate section hides a read selection immediately; new unread or pending attention restores its visibility and read-until-leaving protection. This applies to both icon and list modes. The pinned section follows the same attention exception, including tasks inside pinned projects. This limit applies to the Desktop sidebar; the Mobile task home section below previews three.
+The teammate display-style menu adds a separated “Show avatars when collapsed” checkbox. It defaults off on Desktop, preserving the existing attention-only collapse behavior, and stores explicit choices per account on this computer. Enabling it shows all visible chats as a single avatar strip while collapsed, regardless of the expanded icon/list preference; overflow uses the existing +N entry, which expands the section into the full list. Disabling it restores the existing attention exception without changing the fold or expanded display style. Mobile keeps its own existing default-on choice. Implementation and regressions: `TeammatesSection.tsx`, `teammatesSectionPrefs.ts`, their existing unit tests and the `collapse-attention` UI fixture.
+
+The expanded teammate section previews five chats (local teammates, remote teammates, groups and the merged Cindy device row share this limit). Keep the current chat visible within those five rows. Use the task list’s “Show all N” footer style, with “Show less” after expansion. The teammate section has its own icon/list preference, independent of the pinned section and of collapse state. The icon strip’s +N button switches to the full list. With collapsed avatars disabled, collapsing resets the preview and hides ordinary entries entirely; unread chats and pending interaction/error rows remain visible in the chosen mode, without a preview cap. The currently open teammate chat also stays visible after it becomes read, until navigation leaves that chat; pending attention still keeps it visible after leaving. Explicitly collapsing the teammate section hides a read selection immediately; new unread or pending attention restores its visibility and read-until-leaving protection. This applies to both icon and list modes. The pinned section follows the same attention exception, including tasks inside pinned projects. This limit applies to the Desktop sidebar; the Mobile task home section below previews three.
 
 ### Desktop and Mobile task creator filters (2026-10-27)
 
@@ -1848,7 +1866,7 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 头像在本轮开头显示，右侧依次呈现处理记录与回复正文；执行中转为完成态时保持同组，不再给回复重复头像。
 复用回复头像的尺寸、间距和正文列；展开的中间文字与工具明细不重复头像，成果卡仍与正文对齐。没有过程的回复照常显示头像，新一轮重新显示头像。
 
-常用操作固定在消息下方，复用现有群聊图标、引用预览与输入组件。桌面32px按钮、4px间隔、14px图标；手机44pt热区、不额外插空，左右消息的操作图形对齐对应正文边缘。复制/回复/更多常显，现有朗读与编辑能力保留；创建话题与分享图片放更多。已有话题沿用头像、回复数及最后回复时间/未读提示入口，不另造数字徽章。群聊操作及主对话914px宽度规则不变，手机正文直接选字不受操作栏影响。沿用语义色与原菜单开合、焦点和按压状态；各语言及明暗模式均不得溢出。
+常用操作固定在消息下方，复用现有群聊图标、引用预览与输入组件。桌面32px按钮、4px间隔、14px图标；手机44pt热区、不额外插空，左右消息的操作图形对齐对应正文边缘。复制/回复/更多常显，现有朗读与编辑能力保留；创建话题与分享图片放更多。已有话题沿用头像、回复数及最后回复时间/未读提示入口，不另造数字徽章。普通任务与私聊的914px内容列规则不变；群聊自适应宽度及操作栏位置见 [群聊规则](../product-rules/bot-group-chat.md)。手机正文直接选字不受操作栏影响。沿用语义色与原菜单开合、焦点和按压状态；各语言及明暗模式均不得溢出。
 
 ### 伙伴内部通讯入口（2026-11-01）
 

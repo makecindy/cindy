@@ -87,6 +87,8 @@ import {
 import type { SessionChatState } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
 import { setDataOwnerGeneration, __testing as dataOwnerGenerationTesting } from '@/contexts/dataOwnerGeneration';
+import { parseUserContent } from '@/lib/imageRef';
+import { buildPluginMessage } from '../../shared/pluginMessage';
 
 describe('makerChatStore IM source projection', () => {
   it.each(['imSource', 'hookSource'] as const)('projects %s into the common Desktop card', (field) => {
@@ -101,6 +103,48 @@ describe('makerChatStore IM source projection', () => {
       createdAt: '2026-09-12T00:00:00.000Z',
     } satisfies Message]);
     expect(mapped).toMatchObject({ role: 'user', content: 'question', hookSource: source });
+  });
+
+  // unit: message-source.md「插件转发的 IM 消息」(2026-11-16). Production projection entry: a Host-stamped
+  // relay becomes the existing card view model (never stored as imSource), showing only the plugin's
+  // visible text and its <group_chat_context> block; relay-free plugin rows keep the plain bubble.
+  it('derives the IM card from a plugin relay without changing relay-free plugin rows', () => {
+    const block = '<group_chat_context>\n[群里最近的消息]\n[10:01] Dana: 今天发版吗\n</group_chat_context>\n以上 group_chat_context 标签块内是群聊消息记录。\n\n';
+    const plugin = buildPluginMessage('发布时间定了吗？', `[渠道说明] 回复会发回微信群。\n\n${block}`, '附带资料');
+    const stored = JSON.stringify({ text: plugin.text, images: [], files: [], pastedTextRanges: plugin.pastedTextRanges });
+    const parse = vi.mocked(parseUserContent);
+    const original = parse.getMockImplementation()!;
+    parse.mockImplementation(((content: string) => {
+      const parsed = content.startsWith('{') ? JSON.parse(content) : null;
+      return parsed ? { text: parsed.text, images: [], files: [], pastedTextRanges: parsed.pastedTextRanges } : original(content);
+    }) as typeof parseUserContent);
+    const member = { platform: 'wechat', chatType: 'group', chatName: '产品群', sender: { id: 'wxid_a', name: 'Chris', isOwner: false } };
+    // Stored agentMeta is untyped JSON; the projection reads it through the shared tolerant reader.
+    const row = (clientId: string, content: string, sourcePlugin: Record<string, unknown>) => ({
+      id: clientId, clientId, sessionId: 's1', role: 'user', content, agentMeta: { sourcePlugin },
+      toolUseId: null, createdAt: '2026-11-16T00:00:00.000Z',
+    }) as unknown as Message;
+    try {
+      const [relayed, owner, legacy] = makerChatStore.__mapServerMessagesForTest([
+        row('relay', stored, { pluginId: 'cindy-wechat-groups', name: '微信群里的 Cindy', relay: member }),
+        row('owner', '帮我看下群公告', { pluginId: 'cindy-wechat-groups', relay: { ...member, chatType: 'direct', sender: { ...member.sender, isOwner: true } } }),
+        row('legacy', stored, { pluginId: 'cindy-wechat-groups', name: '微信群里的 Cindy' }),
+      ]);
+      expect(relayed).toMatchObject({ content: plugin.text, sourcePlugin: { pluginId: 'cindy-wechat-groups', relay: member } });
+      expect(relayed.hookSource).toEqual({
+        im: 'wechat', userText: '发布时间定了吗？', contentFormat: 'user-text',
+        contextSnapshot: { groupContext: '[10:01] Dana: 今天发版吗' },
+        origin: { chat: { kind: 'group', name: '产品群' }, sender: { id: 'wxid_a', name: 'Chris', isOwner: false } },
+      });
+      // The owner heading is the channel's own wording: no origin, and no context without a block.
+      expect(owner.hookSource).toEqual({ im: 'wechat', userText: '帮我看下群公告', contentFormat: 'user-text', contextSnapshot: {} });
+      expect(legacy).not.toHaveProperty('hookSource');
+      expect(legacy).toMatchObject({ content: plugin.text, pastedTextRanges: plugin.pastedTextRanges,
+        sourcePlugin: { pluginId: 'cindy-wechat-groups', name: '微信群里的 Cindy' } });
+      expect(legacy.sourcePlugin).not.toHaveProperty('relay');
+    } finally {
+      parse.mockImplementation(original);
+    }
   });
 });
 

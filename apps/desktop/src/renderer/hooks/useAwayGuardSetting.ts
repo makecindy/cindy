@@ -8,7 +8,9 @@ export function useAwayGuardSetting() {
   const [busy, setBusy] = useState(false);
   const mounted = useRef(false);
   const generation = useRef(0);
-  const supported = window.electronAPI?.platform === 'darwin';
+  // Main confirms the OS version (macOS 14+, supported Hyprland). Windows is implemented
+  // but off until verified on Windows hardware (WINDOWS_PRIVACY_SCREEN_ENABLED).
+  const supported = ['darwin', 'linux'].includes(window.electronAPI?.platform ?? '');
 
   const refresh = useCallback(async () => {
     const current = ++generation.current;

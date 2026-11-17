@@ -14,20 +14,32 @@
  *   - 文字副: 12 / 400 / workingdir-text "目标分支 {branch} · 完成后自动解锁"
  *   - 右侧无 action 按钮; 仍保留 justify-between 占位, 内部用 invisible spacer 撑开
  *     视觉对称 (与 TakeoverMask 的左中右分布同款)。
+ *   - 右侧计时: 创建超过 3s 后在占位处显示「已等待 {duration}」(12 / 400 /
+ *     workingdir-text / tabular-nums), 让分钟级创建(如 Multibox 克隆)有进度感;
+ *     常见的秒级创建不闪出计时。计时不进 aria-live, 避免读屏每秒播报。
  */
 
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
+import { formatTaskElapsed, useNowTicker } from '@/components/chat/AgentTaskLiveDetails';
+
+/** 创建持续超过这个时长才显示「已等待」计时。 */
+const ELAPSED_VISIBLE_AFTER_MS = 3_000;
 
 interface WorktreeCreatingOverlayProps {
   /** 当前正在创建的目标托管分支名。 */
   branchName: string;
+  /** 开始创建的时刻(ms);缺省时不显示计时。 */
+  startedAt?: number;
 }
 
-export function WorktreeCreatingOverlay({ branchName }: WorktreeCreatingOverlayProps) {
+export function WorktreeCreatingOverlay({ branchName, startedAt }: WorktreeCreatingOverlayProps) {
   const { t } = useTranslation();
+  const now = useNowTicker(startedAt !== undefined);
+  const elapsedMs = startedAt === undefined ? 0 : Math.max(0, now - startedAt);
+  const showElapsed = startedAt !== undefined && elapsedMs >= ELAPSED_VISIBLE_AFTER_MS;
 
   return (
     <div
@@ -40,7 +52,7 @@ export function WorktreeCreatingOverlay({ branchName }: WorktreeCreatingOverlayP
         'border border-[hsl(var(--sidebar-border))]',
       )}
     >
-      <div className="flex items-center gap-[10px]">
+      <div className="flex min-w-0 flex-1 items-center gap-[10px]">
         <div
           className={cn(
             'flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
@@ -49,19 +61,34 @@ export function WorktreeCreatingOverlay({ branchName }: WorktreeCreatingOverlayP
         >
           <Spinner size={16} className="text-[var(--workingdir-icon)]" />
         </div>
-        <div className="flex flex-col gap-[2px]">
-          <div className="text-14 font-medium leading-tight text-[var(--msg-assistant-text)]">
+        <div className="flex min-w-0 flex-col gap-[2px]">
+          <div
+            className="truncate text-14 font-medium leading-tight text-[var(--msg-assistant-text)]"
+            title={t('newChat.worktreeCreatingOverlay.heading')}
+          >
             {t('newChat.worktreeCreatingOverlay.heading')}
           </div>
-          <div className="text-12 font-normal leading-tight text-[var(--workingdir-text)]">
+          <div
+            className="truncate text-12 font-normal leading-tight text-[var(--workingdir-text)]"
+            title={t('newChat.worktreeCreatingOverlay.subtitle', { branch: branchName })}
+          >
             {t('newChat.worktreeCreatingOverlay.subtitle', { branch: branchName })}
           </div>
         </div>
       </div>
-      {/* 占位 spacer:保持与 TakeoverMask "左 icon+文 / 右 action button" 同款
-          justify-between 视觉重心,避免左侧内容因为没有右侧元素就漂到正中,
-          造成与 takeover mask 并排时的不一致感。 */}
-      <div aria-hidden className="h-8 w-8 shrink-0" />
+      {showElapsed ? (
+        <div
+          aria-hidden
+          className="shrink-0 text-12 font-normal leading-tight tabular-nums text-[var(--workingdir-text)]"
+        >
+          {t('newChat.worktreeCreatingOverlay.elapsed', { duration: formatTaskElapsed(elapsedMs, t) })}
+        </div>
+      ) : (
+        /* 占位 spacer:保持与 TakeoverMask "左 icon+文 / 右 action button" 同款
+           justify-between 视觉重心,避免左侧内容因为没有右侧元素就漂到正中,
+           造成与 takeover mask 并排时的不一致感。 */
+        <div aria-hidden className="h-8 w-8 shrink-0" />
+      )}
     </div>
   );
 }

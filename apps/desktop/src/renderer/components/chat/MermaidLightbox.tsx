@@ -1,3 +1,4 @@
+import { isLightboxCovered } from '@/lib/lightboxLayer';
 import { usePreviewFocusReturn } from './PreviewChrome';
 import { PlaintextEditor } from '@/components/markdown/PlaintextEditor';
 /**
@@ -132,7 +133,12 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
   // Esc closes
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) handleClose();
+      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
+      const overlay = overlayRef.current;
+      if (!overlay || isLightboxCovered(overlay)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      handleClose();
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);

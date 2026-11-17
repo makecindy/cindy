@@ -6,7 +6,9 @@ import { Spinner } from '@/components/ui/spinner';
 import type { GithubAppConnectionState, GithubConnectionState } from '../../../shared/githubSetup';
 
 /** Trusted account controls alongside the plugin's existing GitHub login card. */
-export function GithubAppCard({ account, accountBusy = false, children, alternative }: {
+export function GithubAppCard({ account, accountBusy = false, children, alternative, automation = false, repositories }: {
+  automation?: boolean;
+  repositories?: string[];
   account?: GithubConnectionState;
   accountBusy?: boolean;
   children?: ReactNode;
@@ -72,7 +74,10 @@ export function GithubAppCard({ account, accountBusy = false, children, alternat
     : actor ? 'ready'
     : state?.login && (account?.status === 'missing' || account?.status === 'auth') ? 'incomplete'
     : undefined;
+  if (!children && !failed && state?.available === false) return automation
+    ? <p className="text-12 text-[var(--text-secondary)]">{t('scheduler.editor.webhook.appUnavailable')}</p> : null;
   const disabled = busy || checking;
+  const unavailable = state?.unavailable?.filter(repo => !repositories || repositories.some(selected => selected.toLowerCase() === repo.toLowerCase()));
   return (
     <>
       {children && summary && <p className="mb-3 text-13 text-[var(--text-primary)]" role="status">
@@ -91,23 +96,23 @@ export function GithubAppCard({ account, accountBusy = false, children, alternat
       </details>}
       {(failed || state?.available !== false) &&
     <div className="mt-3 flex flex-col gap-2 border-t border-[var(--border-default)] pt-3" aria-live="polite" aria-busy={disabled}>
-      <p className="text-13 text-[var(--text-primary)]">{t(key + 'title')}</p>
+      <p className="text-13 text-[var(--text-primary)]">{t(automation ? 'scheduler.editor.webhook.accountLabel' : key + 'title')}</p>
       <p className="text-12 text-[var(--text-secondary)]">
         {awaitingBrowser ? t(key + 'finishInBrowser') : state?.login
-          ? t(checking ? 'ccAgent.gitContext.pr.setup.account.connected' : actor && !mismatch ? 'ccAgent.gitContext.pr.setup.connection.repositories' : key + 'connected', { login: state.login, count: state.repositories?.length ?? 0 })
-          : t(key + 'description')}
+          ? t(checking || automation ? 'ccAgent.gitContext.pr.setup.account.connected' : actor && !mismatch ? 'ccAgent.gitContext.pr.setup.connection.repositories' : key + 'connected', { login: state.login, count: state.repositories?.length ?? 0 })
+          : t(automation ? 'scheduler.editor.webhook.accountDisconnected' : key + 'description')}
       </p>
       {children && !checking && !failed && state?.login && (account?.status === 'missing' || account?.status === 'auth') && <p className="text-12 text-[var(--text-secondary)]">{t('ccAgent.gitContext.pr.setup.connection.eventsOnly')}</p>}
-      {!checking && !awaitingBrowser && Boolean(state?.unavailable?.length) && <p className="break-words text-12 text-[var(--text-secondary)]">{t(key + 'missing', { repositories: state?.unavailable?.join(', ') })}</p>}
+      {!checking && !awaitingBrowser && Boolean(unavailable?.length) && <p className="break-words text-12 text-[var(--text-secondary)]">{t(key + 'missing', { repositories: unavailable?.join(', ') })}</p>}
       {checking && <p role="status" className="flex items-center gap-2 text-12 text-[var(--text-secondary)]">
         <Spinner size={14} />{t(state?.login ? key + 'syncing' : 'ccAgent.gitContext.pr.setup.account.checking')}
       </p>}
       {failed && !checking && <ErrorNotice role="alert" message={t(key + 'error')} />}
       <div className="flex flex-wrap gap-2">
         {state?.available && (state.login ? <>
-          <Button variant="secondary" disabled={disabled || failed} onClick={() => void act(() => window.electronAPI.gitContext.installGithubApp(), true)}>{t(key + 'repositories')}</Button>
-          <Button variant="secondary" disabled={disabled || failed} onClick={() => void act(() => window.electronAPI.gitContext.disconnectGithubApp())}>{t(children && state.userAuthorization ? 'ccAgent.gitContext.pr.setup.connection.disconnect' : key + 'disconnect')}</Button>
-        </> : !failed && !(children && state.userAuthorization) && <Button variant="secondary" disabled={disabled} onClick={() => void act(() => window.electronAPI.gitContext.connectGithubApp(), true)}>{t(key + 'connect')}</Button>)}
+          <Button variant="secondary" disabled={disabled || failed} onClick={() => void act(() => window.electronAPI.gitContext.installGithubApp(), true)}>{t(automation ? 'scheduler.editor.webhook.authorizeRepositories' : key + 'repositories')}</Button>
+          {!automation && <Button variant="secondary" disabled={disabled || failed} onClick={() => void act(() => window.electronAPI.gitContext.disconnectGithubApp())}>{t(children && state.userAuthorization ? 'ccAgent.gitContext.pr.setup.connection.disconnect' : key + 'disconnect')}</Button>}
+        </> : !failed && !(children && state.userAuthorization) && <Button variant="secondary" disabled={disabled} onClick={() => void act(() => window.electronAPI.gitContext.connectGithubApp(), true)}>{t(automation ? 'scheduler.editor.webhook.connectAccount' : key + 'connect')}</Button>)}
         {failed && <Button variant="secondary" disabled={disabled} onClick={() => void refresh()}>{t('ccAgent.gitContext.pr.setup.account.recheck')}</Button>}
       </div>
     </div>

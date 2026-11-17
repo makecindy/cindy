@@ -38,36 +38,61 @@ function installed(
 }
 
 describe('plugin install consent', () => {
-  it.each(['browser', 'computer', 'ssh', 'docs', 'discovery'] as const)('requires explicit approval for a newly recognized %s group', group => {
+  it.each(['browser', 'computer', 'ssh', 'docs', 'discovery', 'usage'] as const)('retains an installed %s declaration and confirms newly added declarations', group => {
     const next = manifest({ agent: { hostTools: [group] } });
     const old = installed(next);
-    expect(evaluateGhostInstallConsent(old, next)).toMatchObject({ kind: 'update',
+    expect(evaluateGhostInstallConsent(old, next)).toBeNull();
+    expect(evaluateGhostInstallConsent(installed(manifest()), next)).toMatchObject({ kind: 'update',
       added: expect.arrayContaining([expect.objectContaining({ key: `agent:host-tools:${group}` })]) });
-    expect(evaluateGhostInstallConsent({ ...old, approvedHostToolGroups: [group] }, next)).toBeNull();
   });
 
-  // §21 unit: a group retained as unknown by an older Host is not an explicit
-  // filesystem approval. Existing cases did not cover a newly recognized group.
-  it('将亲选目录 files 组单列为扩权，旧声明不补批准', () => {
+  // Unit: installation grants existing declarations, while a package adding
+  // files still presents both the new group and the changed code explanation.
+  it('保留已安装的 files 声明，新增声明仍随整体更新确认展示', () => {
     const next = manifest({ pick: true, agent: { hostTools: ['files'] } });
     const old = installed(next);
-    expect(evaluateGhostInstallConsent(old, next)).toMatchObject({ kind: 'update',
+    expect(evaluateGhostInstallConsent(old, next)).toBeNull();
+    expect(evaluateGhostInstallConsent(installed(manifest({ pick: true })), next)).toMatchObject({ kind: 'update',
       // The code row also changes from the isolated-page explanation to the
       // approved Host-file explanation; it must remain visible in the consent.
-      added: [expect.objectContaining({ key: 'agent:host-tools:files' }), expect.objectContaining({ key: 'code', detailKey: 'codeDetailFiles' })] });
-    expect(evaluateGhostInstallConsent({ ...old, approvedHostToolGroups: ['files'] }, next)).toBeNull();
+      added: [expect.objectContaining({ key: 'agent:user-action' }), expect.objectContaining({ key: 'agent:host-tools:files' }),
+        expect.objectContaining({ key: 'code', detailKey: 'codeDetailFiles' })] });
     expect(evaluateGhostInstallConsent(null, next)).toMatchObject({ kind: 'install',
       permissions: expect.arrayContaining([expect.objectContaining({ key: 'agent:host-tools:files' })]) });
   });
+  // #9803 regression, unit: the production active/consent projections used by
+  // candidates, task settings, details and execution must accept a whole approved
+  // install without a per-point list. Earlier coverage required that extra list.
+  it.each(['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory', 'system-prompt'] as const)
+    ('uses whole-install approval for %s without a separate point grant', point => {
+      const base = point === 'system-prompt'
+        ? manifest({ systemPrompt: [{ id: 'style', text: 'Task instructions', order: 0, scope: 'selected-task' }] })
+        : manifest({ subscribe: { hooks: [point] } });
+      const provider = installed(base);
+      expect(ghostControlPointActive(provider, point)).toBe(true);
+      expect(ghostControlPointActive({ ...provider, approvedControlPoints: [] }, point)).toBe(true);
+      expect(evaluateGhostInstallConsent(provider, base)).toBeNull();
+      expect(ghostControlPointActive({ ...provider, enabled: false }, point)).toBe(false);
+      expect(ghostControlPointActive(installed(manifest()), point)).toBe(false);
+      for (const approval of [{ state: 'invalid' }, { state: 'legacy-unapproved' }] as const) {
+        expect(ghostControlPointActive({ ...provider, approval, approvedControlPoints: [point] }, point)).toBe(false);
+      }
+    });
+
+  it.each(['will-schedule-run', 'will-routine-run', 'will-start-task'] as const)
+    ('retains the existing per-point approval behavior for %s', point => {
+      const provider = installed(manifest({ subscribe: { hooks: [point] } }));
+      expect(ghostControlPointActive(provider, point)).toBe(false);
+      expect(ghostControlPointActive({ ...provider, approvedControlPoints: [point] }, point)).toBe(true);
+    });
 
   // Static system text is itself reviewed capability content: changing it must
   // trigger update consent, even when the capability name stays the same.
   it('shows static system fragments and asks again when their content changes', () => {
     const fragments = [{ id: 'style', text: 'Original static instructions', order: 10, scope: 'selected-task' }];
     const base = manifest({ systemPrompt: fragments });
-    const old = { ...installed(base), approvedControlPoints: ['system-prompt' as const] };
+    const old = installed(base);
     expect(ghostControlPointActive(old, 'system-prompt')).toBe(true);
-    expect(ghostControlPointActive(installed(base), 'system-prompt')).toBe(false);
     const next = manifest({ systemPrompt: [{ ...fragments[0], text: 'Changed static instructions' }] });
     expect(evaluateGhostInstallConsent(old, next)).toMatchObject({ kind: 'update',
       added: [expect.objectContaining({ key: 'system-prompt', detail: expect.stringContaining('Changed static instructions') })],

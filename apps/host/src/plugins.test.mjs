@@ -8,7 +8,15 @@ import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { PassThrough } from 'node:stream';
 import { serialize } from 'node:v8';
+import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
 import { createPluginControlPipe } from '../../desktop/src/main/cindy-brain/nodeRuntimePipe.ts';
+import { GhostNetworkSlot } from '../../desktop/src/main/cindy-brain/networkSlot.ts';
+import { GhostOauthAccountManager } from '../../desktop/src/main/cindy-brain/ghostOauthAccounts.ts';
+import { GhostSavedCredentialManager } from '../../desktop/src/main/cindy-brain/ghostSavedCredentials.ts';
+import { GhostConnectionManager } from '../../desktop/src/main/cindy-brain/ghostConnections.ts';
+import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../desktop/src/shared/pluginAccountReuse.ts';
+import { installedGhostMutationTargetToken, installedGhostStoragePart } from '../../desktop/src/shared/pluginIdentity.ts';
 import { createHostNodeRuntimeBroker } from './plugins/node-process.ts';
 import { HostTerminalService } from '../../desktop/src/main/terminal/hostTerminalService.ts';
 import { GhostFsSlot } from '../../desktop/src/main/cindy-brain/fsSlot.ts';
@@ -60,6 +68,79 @@ test('closing the actual task Session ends its managed child process', async t =
     assert.equal(terminal.manager.has(job.id), false, 'Session.close must remove and terminate its exact managed PTY');
     await exited;
   } finally { terminal.disposeScoped(); await exited; }
+});
+
+// Load each production assembly once. Unrelated UI/database/process services
+// are boundaries; credential selection, its source guard and network are real.
+const credentialAssembly = await Promise.all(['authorization', 'runtime'].map(async name => {
+  const output = await build({ entryPoints: [fileURLToPath(new URL(`./plugins/${name}.ts`, import.meta.url))],
+    bundle: false, write: false, platform: 'node', format: 'cjs', target: 'node22', logLevel: 'silent' });
+  return new Function('require', 'module', 'exports', output.outputFiles[0].text);
+}));
+
+// Unit, #9825 / 4546519908: manager-only tests missed the standalone Host's
+// absent resolver wiring. Start the real Host factory on existing reference
+// records; assert the outgoing header, then revoke the source through its vault.
+test('Host assembly injects an existing saved credential and rejects its revoked source', async () => {
+  const records = new Map([
+    ['source:token', 'synthetic-source-only-pat'], ['target:token', GHOST_SAVED_CREDENTIAL_MARKER],
+    ['target:token-reused-credential', JSON.stringify({ kind: 'secret', instanceKey: 'source', secretKey: 'token', accountId: 'saved' })],
+  ]);
+  const secret = {
+    readGhostSecret: (id, key) => records.get(id + ':' + key) ?? null,
+    readGhostSecretStrict: (id, key) => records.get(id + ':' + key) ?? null,
+    storeGhostSecret: (id, key, value) => { records.set(id + ':' + key, value); return true; },
+    removeGhostSecret: (id, key) => records.delete(id + ':' + key), readGhostSecretTail: () => null,
+    listGhostAccountReferenceKeys: ids => ids.map(instanceKey => ({ instanceKey,
+      keys: [...records.keys()].filter(key => key.startsWith(instanceKey + ':')).map(key => key.slice(instanceKey.length + 1)) })),
+  };
+  const ghosts = ['source', 'target'].map(id => ({ enabled: true, dir: `/fixture/${id}`,
+    approval: { state: 'approved', revision: 'saved-reference-fixture' },
+    manifest: { id, name: id, version: '1.0.0', network: { hosts: ['api.example.test'],
+      secrets: [{ key: 'token', label: 'PAT', inject: { header: 'Authorization', format: 'Bearer {value}' } }] } } }));
+  const requests = [];
+  const noop = () => {};
+  const imports = new Proxy({
+    GhostSavedCredentialManager, GhostConnectionManager, GhostNetworkSlot, GhostOauthAccountManager,
+    withGhostOauthMutationLock: async (_owner, _id, _path, run) => run(),
+    installedGhostMutationTargetToken, installedGhostStoragePart,
+    activeOwnerScopeKey: () => 'owner:1', isAppSessionBoundaryPending: () => false,
+    createLogger: () => ({ warn: noop, info: noop }), hostRuntimeLayout: () => ({ packaged: false }),
+    createHostPluginSecrets: () => secret, createHostPluginIdentity: () => ({}),
+    createHeadlessPluginSandbox: () => ({ adapter: {}, deliver: noop }),
+    hostBlobStore: {}, hostOutbound: { outboundFetch: async (_url, init) => {
+      requests.push(init); return Response.json({ accepted: true });
+    } },
+  }, { get: (target, name) => name in target ? target[name] : /^[A-Z]/.test(String(name)) ? class {} : () => ({}) });
+  const load = compiled => {
+    const module = { exports: {} };
+    compiled(name => name === 'node:module' ? { createRequire: () => ({ resolve: () => '/fixture/sqlite' }) }
+      : name.startsWith('node:') ? createRequire(import.meta.url)(name) : imports, module, module.exports);
+    return module.exports;
+  };
+  imports.createHostPluginAuthorization = load(credentialAssembly[0]).createHostPluginAuthorization;
+  const api = await load(credentialAssembly[1]).createHostPluginRuntime({
+    profileDir: '/fixture/host', ownerId: 'owner', credentials: {}, getLoginEmail: () => null,
+    manager: { list: () => ghosts, findInstalledInstance: id => ghosts.find(ghost => ghost.manifest.id === id) },
+    publish: noop, assets: { nodeWorker: '/fixture/worker', close: noop },
+  });
+  try {
+    const result = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(requests[0].headers.Authorization, 'Bearer synthetic-source-only-pat');
+    assert.equal(JSON.stringify(result).includes('synthetic-source-only-pat'), false);
+    api.secret.removeGhostSecret('source', 'token');
+    const revoked = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
+    assert.equal(revoked.ok, false);
+    assert.equal(requests.length, 1);
+    api.secret.storeGhostSecret('source', 'token', 'synthetic-replacement-pat');
+    await api.authorization.cleanupSourceReferences('source');
+    assert.equal(api.secret.readGhostSecret('target', 'token-reused-credential'), null);
+    assert.equal(api.secret.readGhostSecret('source', 'token'), 'synthetic-replacement-pat');
+    const replacement = await api.network.handleFetchRequest('target', { url: 'https://api.example.test/account' });
+    assert.equal(replacement.ok, false);
+    assert.equal(requests.length, 1);
+  } finally { await api.network.disposeAll(); }
 });
 
 // Rebase #9496 onto #9621: execute the real gateway's registered page-tool
@@ -160,6 +241,21 @@ test('a missing profile yields an empty list rather than an error', (t) => {
 // broker tests use fake OS processes and cannot cover this platform adapter.
 test('runs and reaps real plugin workers through the common broker', async t => {
   const dir = tempProfile(t);
+  const http = createServer((request, response) => {
+    if (request.url === '/account') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ authorized: request.headers.authorization === 'Bearer synthetic-host-only-access' }));
+    } else { response.writeHead(200, { 'content-type': 'text/event-stream' }); response.write('data: ready\n\n'); }
+  });
+  const websocket = new WebSocketServer({ server: http });
+  websocket.on('connection', socket => socket.on('message', (bytes, binary) => socket.send(bytes, { binary })));
+  await new Promise(resolve => http.listen(0, '127.0.0.1', resolve));
+  const port = http.address().port;
+  t.after(async () => {
+    for (const client of websocket.clients) client.terminate();
+    http.closeAllConnections();
+    await new Promise(resolve => http.close(resolve));
+  });
   const workerEntry = process.env.CINDY_TEST_PLUGIN_WORKER || path.join(dir, 'bootstrap.cjs');
   if (!process.env.CINDY_TEST_PLUGIN_WORKER) await build({
     entryPoints: [fileURLToPath(new URL('./plugins/node-worker.ts', import.meta.url))],
@@ -179,6 +275,20 @@ test('runs and reaps real plugin workers through the common broker', async t => 
         child.stdout.on('data', data => { output += data; });
         await new Promise(resolve => child.once('close', resolve));
         result = JSON.parse(output);
+      } else if (request.method === 'network') {
+        const stream = await cindy.fetch({ url: request.params.http + '/events', as: 'stream' });
+        if (!stream.ok) throw new Error(JSON.stringify(stream));
+        const first = await cindy.network.read({ connectionId: stream.connectionId, waitMs: 1000 });
+        await cindy.network.close({ connectionId: stream.connectionId });
+        const socket = await cindy.network.open({ url: request.params.ws + '/echo' });
+        if (!socket.ok) throw new Error(JSON.stringify(socket));
+        await cindy.network.send({ connectionId: socket.connectionId, data: 'plugin-frame' });
+        const echoed = await cindy.network.read({ connectionId: socket.connectionId, waitMs: 1000 });
+        await cindy.network.close({ connectionId: socket.connectionId });
+        result = { status: stream.status, first, echoed };
+      } else if (request.method === 'account') {
+        const response = await cindy.fetch({ url: 'https://api.example.test/account' });
+        result = { response, receivedSecrets: !!request.cindy?.secrets };
       } else if (request.method === 'terminal') {
         const response = await cindy.host.call(request.params.server || 'cindy_helper', request.params.tool, request.params.args);
         result = JSON.parse(response.content.find(item => item.type === 'text').text);
@@ -202,18 +312,45 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     else process.env.CINDY_TEST_PRIVATE_HOST_VALUE = previous; });
   const ghost = { manifest: { id: 'test-node', name: 'Node fixture', version: '1.0.0', node: {
     entry: 'worker.cjs', protocol: 'json-rpc-stdio', entries: ['child.cjs'], childSpawn: true,
-  }, agent: { hostTools: ['terminal', 'files', 'storage', 'browser', 'discovery'] } }, dir, enabled: true,
+    secretBindings: [{ key: 'raw_account', label: 'Account', oauthSecret: 'account', methods: ['raw-account'] }],
+  }, agent: { hostTools: ['terminal', 'files', 'storage', 'browser', 'discovery'] }, network: { hosts: ['api.example.test', 'http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port],
+    secrets: [{ key: 'account', label: 'Account', source: 'oauth', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.example.test'] },
+      oauth: { authorizeUrl: 'https://accounts.example.test/authorize', tokenUrl: 'https://accounts.example.test/token', scopes: ['read'], clientId: 'fixture-client' } }] } }, dir, enabled: true,
     namespace: null, namespaceState: 'confirmed',
-    approval: { state: 'approved', revision: 'real-worker-fixture' }, approvedHostToolGroups: ['terminal', 'files', 'storage', 'browser', 'discovery'] };
+    approval: { state: 'approved', revision: 'real-worker-fixture' } };
   const receiverDir = path.join(dir, 'receiver'); fs.mkdirSync(receiverDir);
   fs.copyFileSync(path.join(dir, 'worker.cjs'), path.join(receiverDir, 'worker.cjs'));
   const receiver = { manifest: { id: 'test-receiver', name: 'Receiver fixture', version: '1.0.0',
     agent: { hostTools: ['storage'] }, node: { entry: 'worker.cjs', protocol: 'json-rpc-stdio' } },
     dir: receiverDir, enabled: true, namespace: null, namespaceState: 'confirmed',
-    approval: { state: 'approved', revision: 'receiver-fixture' }, approvedHostToolGroups: ['storage'] };
+    approval: { state: 'approved', revision: 'receiver-fixture' } };
   const getGhost = id => id === 'test-node' ? ghost : id === 'test-receiver' ? receiver : null;
-  // Real PTY through the same Host service, gateway and registry. Only native
-  // owner confirmation is acknowledged by the fixture; no App install is fabricated here.
+  const original = { ...ghost, manifest: { ...ghost.manifest, id: 'source-account' } };
+  const values = new Map([
+    ['source-account:account-client-id', 'fixture-client'],
+    ['source-account:account-accounts', JSON.stringify({ defaultAccountId: 'original', accounts: [{ id: 'original', label: 'demo@example.test', status: 'connected', createdAt: 1 }] })],
+    ['source-account:account-rt-original', 'synthetic-source-refresh'],
+  ]);
+  const oauth = new GhostOauthAccountManager({
+    vault: { read: (id, key) => values.get(id + ':' + key) ?? null, store: (id, key, value) => { values.set(id + ':' + key, value); return true; }, remove: (id, key) => values.delete(id + ':' + key) },
+    connectionSources: () => [ghost, original].map(item => ({ instanceKey: item.manifest.id, name: item.manifest.id, manifest: item.manifest })),
+    connectionSource: id => [ghost, original].map(item => ({ instanceKey: item.manifest.id, name: item.manifest.id, manifest: item.manifest }))
+      .find(item => item.instanceKey === id) ?? null,
+    openExternal: () => { throw new Error('reuse must not log in again'); },
+    fetchImpl: async () => Response.json({ access_token: 'synthetic-host-only-access', token_type: 'Bearer', expires_in: 3600 }),
+  });
+  assert.equal((await oauth.reuseAccount('test-node', 'account', ghost.manifest.network.secrets[0].oauth,
+    { instanceKey: 'source-account', secretKey: 'account', accountId: 'original' })).ok, true);
+  const network = new GhostNetworkSlot({ getGhost: () => ghost, readSecret: () => null, getLoginEmail: () => null,
+    // Deterministic transport double: synthetic HTTPS origin reaches this real
+    // loopback server. This verifies Host injection, not TLS/DNS behavior.
+    fetchImpl: (url, init) => fetch(url === 'https://api.example.test/account' ? 'http://127.0.0.1:' + port + '/account' : url, init),
+    fetchPublicImpl: async () => { throw new Error('undeclared request'); },
+    oauthTokens: { getFreshAccessToken: (...args) => oauth.getFreshAccessToken(...args), invalidateAccessToken: (...args) => oauth.invalidateAccessToken(...args) },
+    readGhostMedia: async () => null, takeDirDeposit: () => null, writeSaveDeposit: async () => null,
+    saveGhostMedia: async () => { throw new Error('media not used'); }, isSupportedMediaMime: () => false });
+  // Real PTY through the same Host service, gateway and registry. Overall install
+  // authority covers the declarations; no supplementary prompt may be requested.
   let readyResolve, echoResolve;
   const ready = new Promise(resolve => { readyResolve = resolve; });
   const echo = new Promise(resolve => { echoResolve = resolve; });
@@ -242,27 +379,15 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   kv.write('test-node', { record: sharedValue });
   const database = { drizzle: {} }; setCurrentDbClient(database, 'fixture-owner');
   const confirmations = createHostConfirmations({ current: () => true });
-  const disconnect = confirmations.connect('web:fixture', event => {
-    if (event.channel === 'ghosts:confirm-request') queueMicrotask(() =>
-      confirmations.resolve('web:fixture', 'confirm', event.payload.requestId, true));
-    if (event.channel === 'ghosts:install-consent:request') queueMicrotask(() =>
-      confirmations.resolve('web:fixture', 'install', event.payload.requestId, false));
-    return true;
-  });
+  let prompts = 0;
+  const disconnect = confirmations.connect('web:fixture', () => { prompts++; return false; });
   const storage = new HostStorageService({ ownerKey: () => 'fixture-owner:1', getGhost, handoff, listGhosts: () => [ghost, receiver],
     providers: createHostStorageProviders({ kv, files: fileService, library: null, handoff,
       media: { describe: async () => null, read: async () => new Response(null, { status: 404 }) } }),
-    confirmShare: async (facts, current) => {
-      assert.equal(facts.sourceId, 'test-node'); assert.equal(facts.targetId, 'test-receiver');
-      assert.equal(facts.fileName, 'record.json');
-      const answer = await confirmations.confirm({ ghostId: facts.sourceId, ghostName: facts.sourceName,
-        body: `${facts.fileName} → ${facts.targetName}`, confirmText: null, cancelText: null, danger: false });
-      return current() && answer;
-    } });
+  });
   const hostTools = createHostToolService({ terminal: terminals, files: () => fileService, storage: () => storage,
     profileDir: dir, ownerId: 'fixture-owner', owner,
     getGhost, getSession: () => undefined, current: () => true, confirmations, t: key => key,
-    manager: { approveTaskCapability: async () => { throw new Error('fixture group was already approved'); } },
   });
   // This fixture supplies a browser driver, as Desktop does. Node Host's default
   // assembly remains unsupported; Worker/FD/gateway/registry are the real path.
@@ -271,7 +396,9 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   hostTools.providers.push(...browserProviders);
   hostTools.services.replace(hostTools.providers);
   const broker = createHostNodeRuntimeBroker(workerEntry, { getGhost,
-    hostToolRequest: hostTools.request, onStopped: hostTools.stopPlugin });
+    hostToolRequest: hostTools.request, onStopped: hostTools.stopPlugin,
+    resolveOauthSecret: (id, key, accountId) => oauth.getNodeAccessToken(id, key, ghost.manifest.network.secrets[0].oauth, accountId),
+    networkRequest: (id, request) => request.op === 'fetch' ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request) });
   try {
     const first = await broker.handleRequest('test-node', { type: 'node-request', method: 'echo', params: { value: '你好' } });
     assert.equal(first.ok, true, JSON.stringify(first));
@@ -281,15 +408,33 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     const child = await broker.handleRequest('test-node', { type: 'node-request', method: 'child' });
     assert.equal(child.ok, true, JSON.stringify(child));
     assert.deepEqual(child.result, { arg: 'input', nestedSpawn: false });
+    const connected = await broker.handleRequest('test-node', { type: 'node-request', method: 'network', params: { http: 'http://127.0.0.1:' + port, ws: 'ws://127.0.0.1:' + port } });
+    assert.equal(connected.ok, true, JSON.stringify(connected));
+    assert.equal(connected.result.status, 200);
+    assert.equal(connected.result.first.events[0].data, 'data: ready\n\n');
+    assert.equal(connected.result.echoed.events[0].data, 'plugin-frame');
+    const account = await broker.handleRequest('test-node', { type: 'node-request', method: 'account' });
+    assert.equal(account.ok, true, JSON.stringify(account));
+    assert.equal(account.result.response.ok, true);
+    assert.equal(JSON.parse(account.result.response.body).authorized, true);
+    assert.equal(account.result.receivedSecrets, false);
+    assert.equal(JSON.stringify(account).includes('synthetic-host-only-access'), false);
+    const raw = await broker.handleRequest('test-node', { type: 'node-request', method: 'raw-account' });
+    assert.equal(raw.ok, false);
+    assert.equal(raw.errorCode, 'HOST_INJECTION_REQUIRED');
     const browser = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
       server: 'cindy_browser', tool: 'browser', args: { action: 'status' } } });
     assert.equal(browser.ok, true, JSON.stringify(browser));
     assert.equal(browser.result.ok, true, JSON.stringify(browser));
     assert.equal(browser.result.data.source, 'shared-browser-handler');
-    ghost.approvedHostToolGroups = ghost.approvedHostToolGroups.filter(group => group !== 'browser');
-    const unapprovedBrowser = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
+    ghost.approvedHostToolGroups = [];
+    const legacyBrowser = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
       server: 'cindy_browser', tool: 'browser', args: { action: 'status' } } });
-    assert.equal(unapprovedBrowser.result.errorCode, 'PERMISSION_DENIED');
+    assert.equal(legacyBrowser.result.ok, true, JSON.stringify(legacyBrowser));
+    ghost.manifest.agent.hostTools = ghost.manifest.agent.hostTools.filter(group => group !== 'browser');
+    const undeclaredBrowser = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
+      server: 'cindy_browser', tool: 'browser', args: { action: 'status' } } });
+    assert.equal(undeclaredBrowser.result.errorCode, 'PERMISSION_DENIED');
     const terminalCall = async (tool, args = {}) => {
       const result = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: { tool, args } });
       assert.equal(result.ok, true, JSON.stringify(result));
@@ -299,7 +444,8 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     const capabilities = await terminalCall('host_services');
     assert.equal(capabilities.scope, 'local');
     assert.equal(capabilities.services.find(service => service.group === 'terminal').available, true);
-    assert.equal(capabilities.services.find(service => service.group === 'discovery').approved, true);
+    assert.equal(capabilities.services.find(service => service.group === 'discovery').declared, true);
+    assert.equal(Object.hasOwn(capabilities.services.find(service => service.group === 'discovery'), 'approved'), false);
     assert.equal(capabilities.services.find(service => service.group === 'scheduler').available, false);
     assert.equal(capabilities.services.find(service => service.group === 'computer').available, false);
     // §21 integration: execute a real plugin's host.call across the private FD,
@@ -314,7 +460,7 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     await fileCall('delete', { path: 'exports/worker.txt' });
     assert.equal(fs.existsSync(path.join(dir, 'exports/worker.txt')), false);
     // §27 integration: two actual workers use the same provider interface and
-    // real KV/handoff persistence. Native confirmation is acknowledged above.
+    // real KV/handoff persistence without supplementary confirmation.
     assert.deepEqual((await terminalCall('storage_request', { op: 'targets' })).targets,
       [{ id: 'test-receiver', name: 'Receiver fixture' }]);
     const share = await terminalCall('storage_request', { op: 'share', targetPluginId: 'test-receiver', source: { provider: 'kv', key: 'record' } });
@@ -351,10 +497,11 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     assert.throws(() => process.kill(first.result.pid, 0), { code: 'ESRCH' });
     ghost.enabled = false;
     assert.equal((await broker.handleRequest('test-node', { type: 'node-request', method: 'echo' })).ok, false);
+    assert.equal(prompts, 0);
   } finally {
     fileService.disposeAll();
     disconnect(); confirmations.close(); hostTools.close(); clearCurrentDbClient(database);
-    await broker.stopAndWait('test-node');
+    await network.disposeAll(); await broker.stopAndWait('test-node');
     await broker.stopAndWait('test-receiver');
     broker.destroyAll();
   }

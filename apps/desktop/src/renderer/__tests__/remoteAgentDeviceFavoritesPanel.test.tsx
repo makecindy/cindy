@@ -21,7 +21,7 @@ import {
 } from '@cindy/device-link';
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => null, useOptionalDataOwnerGeneration: () => 0 }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -748,8 +748,8 @@ describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显�
     renderPanel({ devices: xdDevices });
     await clickRail('remote:share:magi:xd');
     for (const row of rowsOf(list(), SHARED)) expectSupplier(row);
-    // 另一台电脑上的同名 Cindy AI 在本机能用时不占左栏(「运行于」那台时见下一条)。
-    expect(document.querySelector('[data-rail-item="remote:device-c:xd"]')).toBeNull();
+    // 同名来源提供本机没有的 GLM 5.2，保留入口，避免去重吞掉模型。
+    expect(document.querySelector('[data-rail-item="remote:device-c:xd"]')).not.toBeNull();
     await clickRail('provider:xd');
     for (const row of rowsOf(list(), LOCAL)) expectSupplier(row);
   });

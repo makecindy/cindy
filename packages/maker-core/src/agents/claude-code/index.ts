@@ -1005,11 +1005,18 @@ export class ClaudeCodeAgent extends BaseAgent {
   ): ClaudeSdkEffort | undefined {
     const descriptor = this.capabilities.availableModels.find((m) => m.id === model);
     // 来源不明(null)时不收窄,只保留原有的「无档位模型不下发」判断。
+    const hasRouteResolver = Boolean(this.deps.resolveModelEfforts);
     const routeEfforts = this.routeEffortsForModel(model, providerId);
-    if ((routeEfforts ?? descriptor?.efforts)?.length === 0) return undefined;
+    const efforts = hasRouteResolver ? routeEfforts : descriptor?.efforts;
+    const routeEffortsUnknown = hasRouteResolver && routeEfforts === null;
+    // 自定义来源未声明能力时, efforts=[] 只是占位值; 保留用户显式选择,交由
+    // Claude Code SDK/CLI 裁决。只有明确声明为空的模型才省略 effort。
+    if (!routeEffortsUnknown && (hasRouteResolver || descriptor?.effortsUnknown !== true) && efforts?.length === 0) {
+      return undefined;
+    }
     // 会话档位可能来自上一个模型(如 Claude 的 xhigh),原样下发会被只认目录档位的
     // 上游拒绝(GLM-5.3 收到 xhigh 回 400/1210,#5402)。按目标来源声明的档位收窄。
-    return clampEffortForClaude((clampEffortToSupported(effort, routeEfforts ?? undefined) as Effort | undefined) ?? effort);
+    return clampEffortForClaude((clampEffortToSupported(effort, routeEffortsUnknown ? undefined : efforts ?? undefined) as Effort | undefined) ?? effort);
   }
 
   private sdkMaxEffortFallbackForModel(
@@ -1474,6 +1481,11 @@ export class ClaudeCodeAgent extends BaseAgent {
       : { model: opts.model };
     const nativeSubscriptionAccount = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
     nativeSubscriptionAccount?.assertCurrent();
+    // Provider auth itself checks proxy readiness. Let a local launch join or
+    // retry warmup before that check; read-only auth status stays side-effect free.
+    if (!opts.remoteHostId && credentialMode === 'provider-oauth') {
+      await this.deps.runtimeConfig.resolveLocalEndpoint?.();
+    }
     const authState = await this.deps.auth.getState({ ...authOptions, nativeSubscriptionAccount });
     if (!authState.authenticated) {
       throw new AgentNotAuthenticatedError(
@@ -1565,6 +1577,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       nativeSubscriptionAccount,
       credentialMode,
       nativeCliAuth,
+      // Remote startup also builds this preliminary env, but must never wait
+      // for or materialize the controller's local model proxy.
+      mode: opts.remoteHostId ? 'remote' : 'local',
       authModel: opts.model,
       sessionProviderId: opts.providerId ?? null,
       activeModel: sdkModel,
@@ -2728,7 +2743,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 审阅器故障降级来的 ask 额外发一条会话级提示:用户需要知道自己为什么
           // 突然开始被问,否则 Auto 档看起来像坏了。
           if (autoDecision.unavailable) {
-            autoReviewUnavailableNotice.notify();
+            autoReviewUnavailableNotice.notify(autoDecision);
             unavailableHandoff = true;
           } else {
             autoReviewAskReason = autoDecision.reason;
@@ -4225,7 +4240,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               }
               // 与本地分支同口径:故障降级来的 ask 提示一次,让用户知道为何开始被问。
               if (autoDecision.unavailable) {
-                autoReviewUnavailableNotice.notify();
+                autoReviewUnavailableNotice.notify(autoDecision);
                 remoteUnavailableHandoff = true;
               } else {
                 remoteAutoReviewAskReason = autoDecision.reason;
@@ -6712,7 +6727,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           [opts.workingDir, ...mutableWritableDirs],
           opts.remoteHostId ? 'linux' : process.platform,
         );
-        if (decision.unavailable) autoReviewUnavailableNotice.notify();
+        if (decision.unavailable) autoReviewUnavailableNotice.notify(decision);
         return decision;
       },
       get id() { return durableSdkSessionId ?? '<pending>'; },

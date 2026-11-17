@@ -259,7 +259,10 @@ test('local plugins preserve source versions and compatibility instead of relabe
   assert.equal(packageHash(src), packageHash(dest));
   assert.equal(JSON.parse(fs.readFileSync(path.join(src, 'ghost.json'))).version, '1.2.0');
   put(path.join(dest, 'main.js'), 'changed'); assert.notEqual(packageHash(dest), copied.sha256);
-  fs.symlinkSync(path.join(root, 'dest', 'main.js'), path.join(src, 'link.js'));
+  // Windows file symlinks require an elevated token or Developer Mode. A
+  // junction exercises the same non-regular-entry rejection without either.
+  if (process.platform === 'win32') fs.symlinkSync(dest, path.join(src, 'link'), 'junction');
+  else fs.symlinkSync(path.join(dest, 'main.js'), path.join(src, 'link.js'));
   assert.throws(() => copyPlugin('sample', src, path.join(root, 'rejected'), {}), /non-regular/);
   assert.equal(fs.existsSync(path.join(root, 'rejected')), false);
 });

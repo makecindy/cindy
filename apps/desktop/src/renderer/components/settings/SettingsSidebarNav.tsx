@@ -89,6 +89,7 @@ const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
 };
 
 interface SettingsSidebarNavProps {
+  requestedQuery?: string;
   tabIds: readonly VisibleSettingsTab[];
   searchContext?: SettingsSearchContext;
   activeTab: SettingsTab;
@@ -102,6 +103,7 @@ interface SettingsSidebarNavProps {
 
 /** Settings left nav. Every item is an in-panel tab with a matching lucide mark. */
 export function SettingsSidebarNav({
+  requestedQuery,
   tabIds,
   searchContext,
   activeTab,
@@ -116,7 +118,7 @@ export function SettingsSidebarNav({
 
   return (
     <>
-      <SettingsSearchBox visibleTabIds={tabIds} searchContext={searchContext} additionalDocuments={pluginSearchDocuments} onSelect={onSelectSearchResult} />
+      <SettingsSearchBox requestedQuery={requestedQuery} visibleTabIds={tabIds} searchContext={searchContext} additionalDocuments={pluginSearchDocuments} onSelect={onSelectSearchResult} />
       <nav role="tablist" aria-label={t('settings.title')} className="flex flex-col gap-0.5">
         {tabIds.map((tabId) => {
           const selected = activeTab === tabId && !selectedPluginPage;

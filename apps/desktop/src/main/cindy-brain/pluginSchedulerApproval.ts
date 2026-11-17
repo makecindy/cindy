@@ -1,7 +1,6 @@
 import type { HostToolCaller } from '@cindy/mcps';
 import type { ScheduleMutationGuard } from '@cindy/maker-scheduler';
 import type { PluginHostToolPorts } from './hostToolSlot.js';
-import { hasPluginHostToolGroupApproval } from './taskCapability.js';
 import { getPluginHostToolCaller, runPluginHostToolCall } from '../mcp-integrations/hostToolCaller.js';
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
@@ -14,18 +13,14 @@ const hasShell = (args: Record<string, unknown>) =>
   args.executionMode === 'script' || !!(command(args.scriptConfig) || command(args.preRunHook));
 
 /** Adds a plugin caller condition around the frozen gateway. All schedule reads
- * and writes still use the Agent's registered handlers and original policy. */
+ * and writes still use the shared registered handlers and command constraints. */
 export function withPluginSchedulerApproval(id: string, ports: PluginHostToolPorts): PluginHostToolPorts {
   let caller: Extract<HostToolCaller, { kind: 'plugin' }>;
-  let active = () => false;
   const noNode = () => {
     const ghost = ports.getGhost(id);
     return ghost?.approval.state !== 'approved' || !ghost.manifest.node;
   };
-  const assertCurrent = () => {
-    if (!active() || !hasPluginHostToolGroupApproval(ports.getGhost(id), 'scheduler')) throw new Error('PERMISSION_DENIED');
-  };
-  const readSchedule = async (args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+  const readSchedule = async (args: Record<string, unknown>, assertCurrent: () => void): Promise<Record<string, unknown>> => {
     assertCurrent();
     const runtime = ports.createRuntime('cindy_scheduler', caller);
     if (!runtime) throw new Error('HOST_NOT_READY');
@@ -54,7 +49,7 @@ export function withPluginSchedulerApproval(id: string, ports: PluginHostToolPor
       return schedule;
     } finally { await runtime.close(); }
   };
-  const check = async (server: string, tool: string, args: Record<string, unknown>): Promise<ScheduleMutationGuard | undefined> => {
+  const check = async (server: string, tool: string, args: Record<string, unknown>, assertCurrent: () => void): Promise<ScheduleMutationGuard | undefined> => {
     if (server !== 'cindy_scheduler' || !noNode()) return;
     assertCurrent();
     if (tool === 'schedule_set_pre_run_hook'
@@ -63,7 +58,7 @@ export function withPluginSchedulerApproval(id: string, ports: PluginHostToolPor
     // Any update can reactivate an expired schedule (e.g. recurring: true).
     // Inspect the stored definition through the existing shared read handler.
     if (tool === 'schedule_update' || tool === 'schedule_run_now' || tool === 'schedule_resume') {
-      const schedule = await readSchedule(args);
+      const schedule = await readSchedule(args, assertCurrent);
       assertCurrent();
       if (hasShell(schedule)) throw new Error('UNSUPPORTED_CAPABILITY');
       return schedule as unknown as ScheduleMutationGuard;
@@ -71,26 +66,17 @@ export function withPluginSchedulerApproval(id: string, ports: PluginHostToolPor
   };
   return {
     ...ports,
-    approveGroup: async (pluginId, group, current) => {
-      const approved = await ports.approveGroup(pluginId, group, current);
-      active = current;
-      return approved;
-    },
     createRuntime: (server, identity) => {
       caller = identity;
       const runtime = ports.createRuntime(server, identity);
       if (!runtime) return null;
       return { ...runtime, call: async (tool, args, signal) => {
-        const scheduleGuard = await check(server, tool, args ?? {});
-        if (!scheduleGuard) return runtime.call(tool, args, signal);
         const current = getPluginHostToolCaller();
         if (!current) throw new Error('PERMISSION_DENIED');
+        const scheduleGuard = await check(server, tool, args ?? {}, current.assertCurrent);
+        if (!scheduleGuard) return runtime.call(tool, args, signal);
         return runPluginHostToolCall({ ...current, scheduleGuard }, () => runtime.call(tool, args, signal));
       } };
-    },
-    confirm: async input => {
-      await check(input.server, input.tool, input.args);
-      return ports.confirm(input);
     },
   };
 }

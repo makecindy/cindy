@@ -85,7 +85,17 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
   另一台时，草稿直接落到那台（与在面板里点那台的同一行相同，`NewMakerDraftRoute.tsx`），输入框下方写明 Agent 在哪台运行。分享来的供应商与供应商组按各自规则，
   不参与收起。实现见 `ModelSelector.tsx` 的 `runLocationFold` 与 `lib/providerRunLocation.ts`，回归见
   `modelSelectorProviderGroupUsage.test.tsx`。Mobile 暂未收起，仍逐台列出。
-  只限本机的例外是封闭清单，因为这些入口目前不能保存或消费其他电脑的模型：子代理（随父任务运行，设置不存运行位置）、视觉桥（本机代理调用）、辅助模型与只有快问快答的插件（本机直接发一次性请求）、插件“模型与任务”设置（该设置尚不保存运行位置，权限上限仍在插件宿主执行；`tasks.capabilities().remoteRoutes:true` 的显式 route 已支持远程创建与改模）。第三方插件的 `cindy.pickModel` 保留 `allowRemote` 显式开启，旧插件不认运行位置。新增例外必须同时改这里和守卫测试。
+  只限本机的例外是封闭清单，因为这些入口目前不能保存或消费其他电脑的模型：子代理（随父任务运行，设置不存运行位置）、视觉桥（本机代理调用）、辅助模型与只有快问快答的插件（本机直接发一次性请求）。第三方插件的 `cindy.pickModel` 保留 `allowRemote` 显式开启，旧插件不认运行位置。新增例外必须同时改这里和守卫测试。
+- **插件“模型与任务”设置与普通任务列表一致**（2026-11-16 用户要求）：能建任务的插件，其设置卡（Desktop、
+  Desktop 远程控制与 Mobile）列出与普通任务相同的同账号其他电脑与分享来的供应商；选中哪一行，运行位置
+  （`agentDeviceId`）就随模型一起存进插件设置。插件新建任务（`tasks.create`、`setModel('plugin-default')`、
+  旧 errand 与 `workspace.ensureSession`）按保存的位置在那台电脑运行 Agent，任务、文件、权限上限与回执仍在插件电脑；
+  每次按那台电脑的目录重新核对，不可用时明确报错，不借本机同名供应商。明确选择本机保存 `agentDeviceId:null`；
+  历史缺字段的 errand 设置保留既有任务复用语义，不重建用户已修好的任务。快问快答是本机直发的一次性请求，
+  选了远程模型时改用身份卡声明 / 系统辅助模型链，设置卡下方写明这一点。被控电脑未声明
+  `PluginTaskPreferences.remoteRoutes` 的旧版本时，控制端只列那台电脑自己的模型（`remote` 为 undefined）。
+  实现见 `PluginTaskPrefs.tsx`、`PluginTaskSettings.tsx`、`pluginTaskPrefsStore.ts`、`mobileTaskSettings.ts` 与
+  `register.ts` 的插件路由解析。
 - 协同 Worker 的面板与新任务一样列出远程供应商（2026-10-10）：任务所在电脑的供应商之后接其他电脑与分享来的供应商，选中哪一行，Worker 的 Agent 就在哪台运行，默认选中 Lead 的位置。Desktop、Desktop 远程控制与 Mobile 同口径；远程那几行的档位记在本机为那台单独记的一份，不进本机 Worker 偏好。
 - 模型选择、配置编辑与“跟随默认”均等待保存结果；失败保留面板与原配置。选模型或跟随默认成功才收起，配置编辑保持浮层打开。无模型记忆表的设置入口编辑非当前模型时，直接应用其完整配置。已有待生效配置时再次远程选模，先展示最新用户选择；运行时当前配置的来源、模型、引擎、深度与 Fast 始终来自同一快照。
 - 结构:搜索框贴顶 → 左侧 rail(最近 / ★收藏 / 全部 / 各供应商图标) → 右侧列表 → 底部「＋配置模型」。
@@ -121,6 +131,7 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
 ### 1.4 自定义与恢复(遵循 configuration-and-overrides.md)
 
 - 浮层内改引擎/深度/Fast = 写该模型的用户 override;行内三元组提亮 + 底栏「已自定义 · 恢复推荐」。
+- Pi 模型提供思考开关时，关闭思考同样属于自定义配置；恢复推荐会重新开启思考。当前模型先通过原运行时写入入口恢复，成功后才删除思考偏好；失败保留原配置。未选中模型只清对应记忆，收藏与最近使用副本仍不保存思考字段。旧远端镜像没有删除入口时沿用写回默认值的兼容方式，不新增跨端协议。
 - 当前选中模型只切 Harness 时保留正在使用的思考档，不重置成目标 Harness 的推荐或旧记忆；
   目标不支持时按实际能力适配，无可调档时不传强度。来源 Harness 的旧偏好不因此删除或改写。
 - 恢复推荐 = **删 override**,随版本跟随新推荐;未自定义用户自动获得新默认。
