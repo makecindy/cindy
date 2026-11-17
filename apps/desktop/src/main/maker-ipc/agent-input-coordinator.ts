@@ -717,6 +717,8 @@ export interface AgentInputCoordinatorDeps {
     sessionId: string,
     items: AgentInputQueuedMessage[],
     orcaReportsStopped?: boolean,
+    /** 写快照时队列处于暂停态:恢复后不得当成崩溃恢复暂停(#7534)。 */
+    pauseHeld?: boolean,
   ) => void | Promise<void>;
   loadClearBoundary?: (sessionId: string) => Promise<unknown>;
   loadQueueSnapshot?: (sessionId: string) => Promise<AgentInputQueuedMessage[] | AgentInputQueueSnapshotState>;
@@ -1774,9 +1776,11 @@ export class AgentInputCoordinator {
     }
     let items: AgentInputQueuedMessage[];
     let savedOrcaReportsStopped = false;
+    let savedPauseHeld = false;
     try {
       const snapshot = await this.deps.loadQueueSnapshot!(sessionId);
       savedOrcaReportsStopped = !Array.isArray(snapshot) && snapshot.orcaReportsStopped;
+      savedPauseHeld = !Array.isArray(snapshot) && snapshot.pauseHeld === true;
       items = (Array.isArray(snapshot) ? snapshot : snapshot.items)
         .map(sanitizeQueuedMessageForPersistence)
         .map(normalizeRestoredSyntheticTrigger)
@@ -1879,7 +1883,7 @@ export class AgentInputCoordinator {
     // 收口点直接跳过,避免每次打开会话都发一次冗余覆盖写/删除。只要有丢弃项就
     // 留空，让 maybePersistQueueSnapshot 把清理后的快照写回盘面。
     if (staleClearItems.length === 0) {
-      this.lastQueueSnapshotJson.set(sessionId, JSON.stringify([items, savedOrcaReportsStopped]));
+      this.lastQueueSnapshotJson.set(sessionId, JSON.stringify([items, savedOrcaReportsStopped, savedPauseHeld]));
     } else {
       this.lastQueueSnapshotJson.delete(sessionId);
     }
@@ -1977,7 +1981,10 @@ export class AgentInputCoordinator {
     if (!state.queuePaused && (wasQuiet || state.orcaReportsStopped === true)) {
       state.queuePaused = true;
       state.queuePausedByRestore = true;
-      state.queuePausedByCrashRestore = true;
+      // 快照里带「暂停来源」标记 → 这条队列在写快照时就是暂停态(等主人输入 /
+      // 用户显式 Stop),不是崩溃恢复出来的:外部投递不得放行它,只有主人的下一条
+      // 显式输入可以(#7534)。没有标记的旧快照按崩溃恢复处理,行为不变。
+      state.queuePausedByCrashRestore = !savedPauseHeld;
     }
     log.info('restored queued input from crash snapshot', {
       sessionId,
@@ -5137,12 +5144,18 @@ export class AgentInputCoordinator {
     if (!state) return;
     const items = this.computeQueueSnapshotItems(state);
     const orcaReportsStopped = state.orcaReportsStopped === true;
-    const json = JSON.stringify([items, orcaReportsStopped]);
+    // 暂停来源随快照落盘(#7534):写快照时队列处于暂停态且不是崩溃恢复暂停
+    // (「重启伙伴」等主人输入 / 用户显式 Stop),恢复后外部投递不得放行它。
+    const pauseHeld = state.queuePaused && !state.queuePausedByCrashRestore;
+    const json = JSON.stringify([items, orcaReportsStopped, pauseHeld]);
     if (this.lastQueueSnapshotJson.get(sessionId) === json) return;
     this.lastQueueSnapshotJson.set(sessionId, json);
-    const result = orcaReportsStopped
-      ? this.deps.persistQueueSnapshot(sessionId, items, true)
-      : this.deps.persistQueueSnapshot(sessionId, items);
+    // 只有真的带暂停来源时才多传这个参数:既有调用形状不变(报告停止标记单独传)。
+    const result = pauseHeld
+      ? this.deps.persistQueueSnapshot(sessionId, items, orcaReportsStopped, true)
+      : orcaReportsStopped
+        ? this.deps.persistQueueSnapshot(sessionId, items, true)
+        : this.deps.persistQueueSnapshot(sessionId, items);
     if (result && typeof (result as Promise<void>).catch === 'function') {
       (result as Promise<void>).catch(() => {
         if (this.lastQueueSnapshotJson.get(sessionId) === json) {

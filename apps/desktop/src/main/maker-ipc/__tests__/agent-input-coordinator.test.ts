@@ -82,6 +82,7 @@ import type {
 } from '../../../shared/agentInputQueue.js';
 import { HOST_ONLY_AGENT_PREFIX, USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue.js';
 import { buildRemoteWorkerQueuedMessage, createOrcaRemoteWorkerRuntime, type RemoteWorkerTurnEnd } from '../orcaRemoteWorkerRuntime.js';
+import { isAuthorizedExternalDelivery } from '../crashRestoreQueueRelease.js';
 import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
@@ -843,12 +844,12 @@ describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
   });
 });
 
-// #7209:Bot 私聊投递走 send_to_session 的入队通路,不经 INPUT_ENQUEUE,因此拿不到
+// #7209:外部投递走 send_to_session 的入队通路,不经 INPUT_ENQUEUE,因此拿不到
 // 解挂崩溃恢复暂停的 flag。恢复暂停的队列永不出队 → shouldQueueNewTurn 恒为真 →
 // 该会话跨重启永久假忙,日志持续打「send_to_session queued while target busy」。
-// 这里执行生产入队函数本身(与上面 INPUT_ENQUEUE 用例同一手法),断言 Bot 私聊车道
-// 能解挂并推进队列,其它来源仍保持暂停。
-describe('Bot 私聊投递解挂崩溃恢复暂停队列', () => {
+// 这里执行生产入队函数本身(与上面 INPUT_ENQUEUE 用例同一手法),断言「外部已授权
+// 投递」能解挂并推进队列,其它来源仍保持暂停。
+describe('外部已授权投递解挂崩溃恢复暂停队列', () => {
   const source = registerSourceText;
   const start = source.indexOf('  async function enqueueSendToSessionMessage(params: {');
   const end = source.indexOf('  async function buildSessionControlInputItem(params: {', start);
@@ -857,7 +858,16 @@ describe('Bot 私聊投递解挂崩溃恢复暂停队列', () => {
     { compilerOptions: { target: ScriptTarget.ES2022 } },
   ).outputText;
 
-  function botDmEnqueue(h: ReturnType<typeof createHarness>) {
+  /** 伙伴发来的消息:发送方身份由宿主按发送方 session 的伙伴绑定盖章。 */
+  const companionOrigin = {
+    kind: 'session' as const,
+    senderSessionId: 'buddy-session',
+    displayText: 'ping',
+    senderBotId: 'buddy-1',
+    senderBotName: 'Buddy',
+  };
+
+  function externalEnqueue(h: ReturnType<typeof createHarness>) {
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     const noop = () => undefined;
@@ -868,6 +878,7 @@ describe('Bot 私聊投递解挂崩溃恢复暂停队列', () => {
       orcaInterAgentDispatcher: { registerQueuedOrcaInterAgentAcceptedCallback: noop },
       assertTaskActionCurrent: async () => undefined,
       commitBotAuthorizationInput: async (_guard: unknown, run: () => void) => run(),
+      isAuthorizedExternalDelivery,
       log: { info: noop, warn: noop, debug: noop, error: noop },
     };
     return new Function(...Object.keys(bindings), compiled)(...Object.values(bindings)) as
@@ -876,36 +887,57 @@ describe('Bot 私聊投递解挂崩溃恢复暂停队列', () => {
         clientId: string;
         message: string;
         persistedContent: string;
+        origin?: AgentInputQueuedMessage['origin'];
+        externalAuthorizedDelivery?: boolean;
       }) => Promise<void>;
   }
 
-  it('releases the restored pause and dispatches the queue when a Bot DM arrives', async () => {
+  it('releases the restored pause and dispatches the queue when a companion delivers a message', async () => {
     const h = createHarness();
-    const sid = 'bot-dm-session';
+    const sid = 'companion-session';
     h.setLoadQueueSnapshot(async () => [makeItem('restored', 'restored draft')]);
 
-    await botDmEnqueue(h)({
+    await externalEnqueue(h)({
       targetSessionId: sid,
-      clientId: 'bot-dm:thread-1:delivery-1',
+      clientId: 'delivery-1',
       message: 'ping',
       persistedContent: 'ping',
+      origin: companionOrigin,
     });
     await flush();
 
     expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
-    // 恢复出来的队首先派发,Bot 私聊这条接在后面(队列仍是 FIFO)。
+    // 恢复出来的队首先派发,这条投递接在后面(队列仍是 FIFO)。
     expect(h.sendToAgent).toHaveBeenCalledOnce();
     expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'restored draft' });
     expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
-      .toEqual(['bot-dm:thread-1:delivery-1']);
+      .toEqual(['delivery-1']);
   });
 
-  it('keeps the restored pause for deliveries outside the Bot DM lane', async () => {
+  it('releases the restored pause when the owner speaks in the companion room', async () => {
+    const h = createHarness();
+    const sid = 'companion-room-session';
+    h.setLoadQueueSnapshot(async () => [makeItem('restored', 'restored draft')]);
+
+    await externalEnqueue(h)({
+      targetSessionId: sid,
+      clientId: 'chat-direct:execution-1:message-1',
+      message: 'ping',
+      persistedContent: 'ping',
+      externalAuthorizedDelivery: true,
+    });
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the restored pause for deliveries outside the authorized lanes', async () => {
     const h = createHarness();
     const sid = 'plugin-task-session';
     h.setLoadQueueSnapshot(async () => [makeItem('restored', 'restored draft')]);
 
-    await botDmEnqueue(h)({
+    await externalEnqueue(h)({
       targetSessionId: sid,
       clientId: 'plugin-task:run-1',
       message: 'ping',
@@ -919,7 +951,7 @@ describe('Bot 私聊投递解挂崩溃恢复暂停队列', () => {
       .toEqual(['restored', 'plugin-task:run-1']);
   });
 
-  it('does not let a Bot DM release the pause left by restarting a companion', async () => {
+  it('does not let an external delivery release the pause left by restarting a companion', async () => {
     // 「重启伙伴」的排队请求保留但不自动重放,只有主人的下一条消息启动新运行
     // (docs/product-rules/cindy-bots-runtime.md)。它与崩溃恢复共用
     // queuePausedByRestore,但外部投递不得放行它。
@@ -934,18 +966,59 @@ describe('Bot 私聊投递解挂崩溃恢复暂停队列', () => {
     await flush();
     expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
 
-    await botDmEnqueue(h)({
+    await externalEnqueue(h)({
       targetSessionId: sid,
-      clientId: 'bot-dm:thread-2:delivery-2',
+      clientId: 'delivery-2',
       message: 'ping',
       persistedContent: 'ping',
+      origin: companionOrigin,
     });
     await flush();
 
     expect(h.coordinator.getProjection(sid).queuePaused).toBe(true);
     expect(h.sendToAgent).not.toHaveBeenCalled();
     expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
-      .toEqual(['kept', 'bot-dm:thread-2:delivery-2']);
+      .toEqual(['kept', 'delivery-2']);
+  });
+
+  it('does not let an external delivery release a pause restored from a snapshot that records the pause cause', async () => {
+    // #7534:暂停来源必须随快照落盘。「重启伙伴」按住的队列在崩溃后恢复时,若被
+    // 一律当成崩溃恢复暂停,下一条外部投递就会把它放行,绕过「只有主人的下一条
+    // 消息才能放行」这条约定。
+    const h = createHarness();
+    const sid = 'restarted-then-crashed';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('kept', 'kept request'));
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true, resumeOnUserInput: true });
+    h.setRunning(false);
+    await flush();
+    const snapshot = h.persistQueueSnapshot.mock.calls.at(-1);
+    expect(snapshot?.[3]).toBe(true);
+
+    const restarted = createHarness();
+    restarted.setLoadQueueSnapshot(async () => ({
+      items: JSON.parse(JSON.stringify(snapshot?.[1] ?? [])),
+      orcaReportsStopped: false,
+      pauseHeld: true,
+    }));
+    await restarted.coordinator.ensureQueueRestored(sid);
+    expect(restarted.coordinator.getProjection(sid).queuePaused).toBe(true);
+
+    await externalEnqueue(restarted)({
+      targetSessionId: sid,
+      clientId: 'delivery-3',
+      message: 'ping',
+      persistedContent: 'ping',
+      origin: companionOrigin,
+    });
+    await flush();
+
+    expect(restarted.coordinator.getProjection(sid).queuePaused).toBe(true);
+    expect(restarted.sendToAgent).not.toHaveBeenCalled();
+    expect(restarted.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId))
+      .toEqual(['kept', 'delivery-3']);
   });
 });
 

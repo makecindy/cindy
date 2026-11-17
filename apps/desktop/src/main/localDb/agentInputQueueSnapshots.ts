@@ -33,6 +33,15 @@ const SNAPSHOT_COUNT_QUERY_BATCH_SIZE = 200;
 export interface AgentInputQueueSnapshotState {
   items: AgentInputQueuedMessage[];
   orcaReportsStopped: boolean;
+  /**
+   * 写这份快照时队列处于暂停态(等主人输入 / 用户显式 Stop)。
+   *
+   * 暂停本身此前不落盘:恢复逻辑只能把读回来的队列一律当成「崩溃恢复暂停」,
+   * 于是「重启伙伴」按住的排队请求在崩溃后会被外部投递放行,绕过「只有主人的
+   * 下一条消息才能放行」这条约定(#7534)。这个标记把暂停来源带过重启:
+   * 带标记的快照恢复成「等主人输入」的暂停,外部投递不得放行。
+   */
+  pauseHeld?: boolean;
 }
 // Keep the existing array format: older readers ignore this non-message record
 // while retaining every real queued item. No schema or wire migration is needed.
@@ -42,6 +51,19 @@ export function isOrcaReportStopSnapshotMarker(value: unknown): boolean {
     && Object.keys(value).length === 2
     && (value as typeof ORCA_REPORT_STOP).type === ORCA_REPORT_STOP.type
     && (value as typeof ORCA_REPORT_STOP).version === 1;
+}
+
+/**
+ * 暂停来源标记:与 ORCA_REPORT_STOP 同款的非消息记录,只说明「写快照时这条队列
+ * 正处于暂停态」。旧客户端读到它会当坏条目丢弃(不影响任何真实排队项),
+ * 新客户端读到它就知道恢复后不能把这条队列当成崩溃恢复暂停。
+ */
+const QUEUE_PAUSE_HELD = { type: 'queue-pause-held', version: 1 } as const;
+export function isQueuePauseHeldSnapshotMarker(value: unknown): boolean {
+  return !!value && typeof value === 'object'
+    && Object.keys(value).length === 2
+    && (value as typeof QUEUE_PAUSE_HELD).type === QUEUE_PAUSE_HELD.type
+    && (value as typeof QUEUE_PAUSE_HELD).version === 1;
 }
 
 /** per-session 写链:只做覆盖写/删除排队保序,无读改写。 */
@@ -243,20 +265,26 @@ export function saveAgentInputQueueSnapshot(
   sessionId: string,
   items: AgentInputQueuedMessage[],
   orcaReportsStopped = false,
+  pauseHeld = false,
 ): Promise<void> {
   return chainWrite(sessionId, 'snapshot', async (owner) => {
     try {
       const db = owner.client.drizzle;
-      if (items.length === 0 && !orcaReportsStopped) {
+      if (items.length === 0 && !orcaReportsStopped && !pauseHeld) {
         await db
           .delete(agentInputQueueSnapshots)
           .where(eq(agentInputQueueSnapshots.sessionId, sessionId));
         return;
       }
       const persistableItems = items.map(sanitizeQueuedMessageForPersistence);
-      const encode = (rows: AgentInputQueuedMessage[]) => JSON.stringify(
-        orcaReportsStopped ? [...rows, ORCA_REPORT_STOP] : rows,
-      );
+      // 暂停来源标记只跟着「有排队项的暂停」走:空队列没有可暂停的东西,恢复时
+      // 本来就会释放这条暂停,不必落盘(也不必让只读队列的迁移检查多认一种记录)。
+      const heldPausedQueue = pauseHeld && persistableItems.length > 0;
+      const encode = (rows: AgentInputQueuedMessage[]) => JSON.stringify([
+        ...rows,
+        ...(orcaReportsStopped ? [ORCA_REPORT_STOP] : []),
+        ...(heldPausedQueue ? [QUEUE_PAUSE_HELD] : []),
+      ]);
       let payload = encode(persistableItems);
       if (payload.length > MAX_PAYLOAD_BYTES) {
         payload = encode(stripInlineBase64(persistableItems));
@@ -472,9 +500,12 @@ export async function loadAgentInputQueueSnapshotState(
     return { items: [], orcaReportsStopped: false };
   }
   const orcaReportsStopped = parsed.some(isOrcaReportStopSnapshotMarker);
+  const pauseHeld = parsed.some(isQueuePauseHeldSnapshotMarker);
   const validItems = parsed.filter(isRestorableQueuedMessage);
   const items = validItems.map(sanitizeQueuedMessageForPersistence);
-  const malformedCount = parsed.filter(item => !isRestorableQueuedMessage(item) && !isOrcaReportStopSnapshotMarker(item)).length;
+  const malformedCount = parsed.filter(item => !isRestorableQueuedMessage(item)
+    && !isOrcaReportStopSnapshotMarker(item)
+    && !isQueuePauseHeldSnapshotMarker(item)).length;
   if (malformedCount > 0) {
     log.warn('dropped malformed rows from queue snapshot', {
       sessionId,
@@ -487,9 +518,9 @@ export async function loadAgentInputQueueSnapshotState(
       sessionId,
       items: items.length,
     });
-    void saveAgentInputQueueSnapshot(sessionId, items, orcaReportsStopped).catch(() => undefined);
+    void saveAgentInputQueueSnapshot(sessionId, items, orcaReportsStopped, pauseHeld).catch(() => undefined);
   }
-  return { items, orcaReportsStopped };
+  return { items, orcaReportsStopped, ...(pauseHeld ? { pauseHeld: true } : {}) };
 }
 
 export async function getPersistedInputClientIds(

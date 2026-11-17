@@ -154,6 +154,34 @@ describe('agent input queue snapshot durability boundary', () => {
     } finally { sqlite.close(); }
   });
 
+  // 暂停来源随快照落盘(#7534):写快照时队列处于暂停态 → 恢复时不能把这条队列
+  // 当成崩溃恢复暂停。标记是非消息记录,既有读取方(条数统计、媒体回收)照旧忽略它。
+  it('keeps the paused-queue cause in the snapshot without turning it into a message', async () => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec(`
+      CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER DEFAULT 1);
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);
+      INSERT INTO sessions VALUES ('held-queue', NULL);
+    `);
+    mocks.getDbClient.mockReturnValue({ drizzle: drizzle(sqlite),
+      query: async (text: string, args: unknown[]) => sqlite.prepare(text).all(...args) });
+    const sid = 'held-queue';
+    const item = queued('kept', 'kept-request');
+    try {
+      await saveAgentInputQueueSnapshot(sid, [item], false, true);
+      expect(await loadAgentInputQueueSnapshotState(sid)).toEqual({ items: [item], orcaReportsStopped: false, pauseHeld: true });
+      // 标记不是消息:条数统计与读取仍只认真实排队项。
+      expect(await loadAgentInputQueueSnapshotCounts([sid])).toEqual({ [sid]: 1 });
+      expect(await loadAgentInputQueueSnapshot(sid)).toEqual([item]);
+      const payload = JSON.parse(String(sqlite.prepare('SELECT payload FROM agent_input_queue_snapshots WHERE session_id = ?').get(sid)?.payload));
+      expect(payload).toHaveLength(2);
+      expect(payload[1]).toEqual({ type: 'queue-pause-held', version: 1 });
+      await saveAgentInputQueueSnapshot(sid, [item]);
+      expect(await loadAgentInputQueueSnapshotState(sid)).toEqual({ items: [item], orcaReportsStopped: false });
+    } finally { sqlite.close(); }
+  });
+
   // DB-tier: startup discovery must find retained Worker reports without loading
   // ordinary message bodies or waking stopped reports; malformed legacy rows stay harmless.
   it('discovers only eligible report snapshots for startup restoration', async () => {
