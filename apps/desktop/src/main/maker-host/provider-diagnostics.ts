@@ -343,23 +343,33 @@ async function runProviderProbeUnlogged(
     'bedrock-converse-stream', 'mistral-conversations'].includes(api) || requiresNativeProviderAuth(row))) {
     const model = row ?? invocationModelRecord({ id: spec.modelId, name: spec.modelId,
       group: 'custom', contextWindow: 4096, maxOutput: 16, efforts: [], defaultEffort: null, api: api as PiModelApi }, spec.baseUrl)!;
+    // Native SDKs may resolve a transport error as an assistant message and
+    // discard its cause. Preserve only the safe code before that conversion.
+    let networkCode: string | undefined;
+    const diagnosticFetch: typeof fetch = async (input, init) => {
+      try { return await fetchImpl(input, init); }
+      catch (error) {
+        networkCode = providerNetworkErrorCode(error);
+        throw error;
+      }
+    };
     try {
       const result = await probePiProvider({ row: model, providerId: spec.catalogPresetId ?? 'custom-probe',
         upstream: spec.baseUrl, apiKey: spec.authMethod === 'none' ? '' : spec.apiKey
           ?? new Headers(spec.headers).get('authorization')?.replace(/^Bearer /i, '')
           ?? new Headers(spec.headers).get('x-goog-api-key')
           ?? new Headers(spec.headers).get('x-api-key') ?? '',
-        headers: spec.apiKey || spec.authMethod === 'none' ? withoutCredentialHeaders(spec.headers) : spec.headers, fetchImpl,
+        headers: spec.apiKey || spec.authMethod === 'none' ? withoutCredentialHeaders(spec.headers) : spec.headers, fetchImpl: diagnosticFetch,
       }, AbortSignal.timeout(PROBE_TIMEOUT_MS));
       if (result.stopReason !== 'error' && result.stopReason !== 'aborted') return { ok: true, latencyMs: Date.now() - start };
       const detail = result.errorMessage ?? 'Native provider probe failed';
       const statusMatch = detail.match(/(?:status|code)["\s:]+(4\d\d|5\d\d)\b|^(4\d\d|5\d\d)(?:\s|:)/);
       const status = statusMatch ? Number(statusMatch[1] ?? statusMatch[2]) : undefined;
       const cls = classifyProviderError({ status, bodyText: detail,
-        ...(result.stopReason === 'aborted' ? { networkErrorCode: 'AbortError' } : {}) });
+        networkErrorCode: result.stopReason === 'aborted' ? 'AbortError' : networkCode });
       return { ok: false, code: cls.code, status, latencyMs: Date.now() - start, detail: cls.detail };
     } catch (err) {
-      const cls = classifyProviderError({ networkErrorCode: providerNetworkErrorCode(err) });
+      const cls = classifyProviderError({ networkErrorCode: networkCode ?? providerNetworkErrorCode(err) });
       return { ok: false, code: cls.code, latencyMs: Date.now() - start, detail: cls.detail };
     }
   }

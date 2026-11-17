@@ -1124,6 +1124,41 @@ it('probes Google using generateContent instead of falling through to Responses'
 
 
 describe('native SDK connection probes', () => {
+  // #11007 review regression: unlike the direct-fetch matrix, this unit test
+  // enters the real native SDK, which resolves transport failures as messages.
+  // Minimal failure is a fetch rejection with a certificate code in its cause.
+  it.each(['saved', 'adhoc'] as const)('preserves certificate diagnostics when the native SDK consumes a %s rejection', async kind => {
+    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'openai-responses')!;
+    setCustomProviders([buildUserProvider({ id: 'native-certificate', name: 'Native certificate',
+      auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
+      runtimes: { pi: { baseUrl: row.upstream, catalogPresetId: 'github-copilot', wireProtocol: 'openai-responses',
+        models: [{ id: row.id, name: row.name, piApi: 'openai-responses' }] } },
+    })]);
+    setDiagnosticsOAuthTokenReader(() => 'fixture-token');
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      throw new TypeError('fetch failed', { cause: Object.assign(new Error('private endpoint'), { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' }) });
+    });
+    const result = await testProviderConnection(kind === 'saved'
+      ? { kind, providerId: 'native-certificate', agent: 'pi' }
+      : { kind, spec: { agent: 'pi', baseUrl: row.upstream, modelId: row.id, api: 'openai-responses',
+        catalogPresetId: 'github-copilot', apiKey: 'fixture-token' } }, fetcher);
+    expect(result).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).not.toContain('private endpoint');
+  });
+
+  it.each([
+    ['ECONNREFUSED', 'UPSTREAM_UNREACHABLE'],
+    ['ERR_SSL_WRONG_VERSION_NUMBER', 'UNKNOWN'],
+    ['ABORT_ERR', 'TIMEOUT'],
+  ])('keeps native transport failure %s distinct from certificate errors', async (networkCode, code) => {
+    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'openai-responses')!;
+    const fetcher = vi.fn<typeof fetch>(async () => { throw Object.assign(new Error('transport failed'), { code: networkCode }); });
+    expect(await runProviderProbe({ agent: 'pi', baseUrl: row.upstream, modelId: row.id,
+      api: 'openai-responses', nativeModel: row, apiKey: 'fixture-token' }, fetcher)).toMatchObject({ ok: false, code });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it.each(['saved', 'adhoc', 'header-only'] as const)('uses the Vertex SDK for a %s connection, not the public Gemini path', async kind => {
     const row = PROVIDER_MODEL_CATALOG.providers['google-vertex'][0];
     const baseUrl = 'https://us-central1-aiplatform.googleapis.com';

@@ -1404,7 +1404,7 @@
     "UPSTREAM_ERROR": "上游服务谬误（5xx），请稍后再试",
     "UPSTREAM_UNREACHABLE": "不能连端点，请察网络与基础 URL",
     "TIMEOUT": "连接逾时，请察网络与基础 URL",
-    "CERT_ERROR": "凭证验证失败，请检查凭证链及企业 CA 信任设置",
+    "CERT_ERROR": "凭证验证失败，请核基础 URL 主机名与凭证是否相符，并查凭证链及企业 CA 信任设置",
     "UNKNOWN": "未详之谬，请察日志以知其详",
     "upstreamToast": "供方「{{provider}}」请求未成：{{message}}"
   },
