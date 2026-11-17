@@ -3210,10 +3210,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // A quote resolves against every message this run read; otherwise its card snapshot stands.
       const readMessages = [...history, ...focusMessages];
       // Execution outcomes change without changing message revisions. Read the current
-      // authorized source window on every ordinary turn, independently of text progress.
+      // authorized source window on every ordinary/talk turn, independently of text progress.
       // Never reuse a UI snapshot or carry an old failure into a new grant/Thread.
       let peerExecutionFailures: { coverage: 'sources' | 'recent-executions' | 'unavailable'; sourceMessageIds: string[]; failures: BotGroupExecutionFailureView[] } | undefined;
-      if (!digest && !execution.mask_owner_id && !run.plan) {
+      if (!digest && !execution.mask_owner_id && (!run.plan || run.plan.kind === 'talk')) {
         const sourceMessageIds = [...new Set([...textHistory, ...focusMessages].filter(m => !m.deleted
           && BigInt(m.seq) <= BigInt(execution.context_seq)
           && (threadRootId ? m.id === threadRootId || m.threadRootId === threadRootId : !m.threadRootId)).map(m => m.id))];

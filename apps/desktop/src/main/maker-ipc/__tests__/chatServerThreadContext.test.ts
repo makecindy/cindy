@@ -292,6 +292,28 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     expect(input.message).not.toContain('private diagnostic');
   });
 
+  // #11097 review / unit: a failed queue speaker has no result message, but the
+  // next speaker must still receive the real failure through its dispatch input.
+  it.each([false, true])('passes a failed talk speaker to the next speaker (Thread=%s)', async inThread => {
+    const root = post('discussion');
+    const request = post('everyone answer', inThread ? { threadRootId: root.id } : {});
+    const planId = uuid(++ids);
+    const plan = { id: planId, kind: 'talk', source_message_id: request.id, request_text: 'everyone answer',
+      steps: bots.map((bot, position) => ({ position, botId: bot.id, botName: bot.name, task: 'answer', status: 'running' })) };
+    fixture.handle.mockImplementation((route, method, body, actor) => route.includes('/plans?ids=') ? { body: [plan] } : handle(route, method, body, actor));
+    const [failed] = trigger({ ...request, mentions: [bots[0].id] }, { plan_id: planId, plan_step: 0 });
+    await vi.advanceTimersByTimeAsync(2000);
+    await service.settleLaneTurn({ sessionId: 'lane-nova', activeInputClientId: null, outcome: 'error', resultText: '', failureCode: 'MODEL_UNAVAILABLE' });
+    expect(failed.status).toBe('failed');
+    plan.steps[0].status = 'failed';
+    trigger({ ...request, mentions: [bots[1].id] }, { plan_id: planId, plan_step: 1 });
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(inputs('pico')).toHaveLength(1);
+    expect(payload(inputs('pico')[0].message).peerExecutionFailures.failures).toEqual([
+      expect.objectContaining({ botName: 'Nova', sourceMessageId: request.id, planId, code: 'MODEL_UNAVAILABLE' }),
+    ]);
+  });
+
   // Regression: automatic talk queues dropped the candidate list before a follow-up.
   // Unlike existing quote/file tests, inspect each speaker's actual dispatch (unit).
   it.each([false, true])('keeps the original discussion background for every speaker (thread=%s)', async inThread => {
