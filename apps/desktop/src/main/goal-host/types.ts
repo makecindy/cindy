@@ -138,6 +138,8 @@ export interface GoalCompletionSummary {
 
 /** Session 的结构子集 —— 真 Session 满足之,fake 实现供单测。 */
 export interface SessionLike {
+  readonly instanceId?: string;
+  readonly requestSessionId?: string;
   readonly id: string;
   readonly agentKind: AgentKind;
   send(
@@ -255,6 +257,10 @@ export interface GoalControllerDeps {
     sessionId: string,
     turnError?: unknown,
   ) => Promise<AccountLimitInfo | null>;
+  /** Confirm a different same-pool account can serve this failed turn. Never infer reset from billing. */
+  readAccountSwitch?: (sessionId: string, turnError: unknown, boundary?: {
+    instanceId?: string; nativeId?: string; generation?: number; isCurrent?: () => boolean;
+  }) => Promise<string | null>;
   /**
    * 持久化一条 goal 提示记录(注入 createMessage,role:'assistant' + agentMeta.goalNotice)。
    * 目前用于 usageLimited 到点自动续跑时落一条"用量已恢复,继续目标"。

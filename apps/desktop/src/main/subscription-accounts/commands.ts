@@ -100,6 +100,8 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
       !PROVIDER_GROUP_STRATEGIES.includes(value.strategy as never)
     )
       throwIpcError('INVALID_PARAMS', 'Invalid strategy');
+    if (value.autoRejoinRecovered !== undefined && typeof value.autoRejoinRecovered !== 'boolean')
+      throwIpcError('INVALID_PARAMS', 'Invalid recovery setting');
     if (accountId !== undefined && !accountIdValid(accountId))
       throwIpcError('INVALID_PARAMS', 'Invalid account');
     if (value.paused !== undefined && typeof value.paused !== 'boolean')
@@ -128,6 +130,7 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
       providerId,
       accountId,
       strategy: value.strategy,
+      ...(value.autoRejoinRecovered !== undefined ? { autoRejoinRecovered: value.autoRejoinRecovered } : {}),
       paused: value.paused,
       limit: value.limit,
       weight: value.weight,

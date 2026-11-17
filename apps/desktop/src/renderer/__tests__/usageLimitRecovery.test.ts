@@ -197,6 +197,9 @@ describe('usage limit recovery detection', () => {
         NOW,
       ),
     ).toBeNull();
+    expect(extractUsageLimitRecoveryHint(
+      { message: 'Your workspace is out of credits. Ask your workspace owner to refill in order to continue.' }, NOW,
+    )).toBeNull();
     expect(
       extractUsageLimitRecoveryHint(
         {

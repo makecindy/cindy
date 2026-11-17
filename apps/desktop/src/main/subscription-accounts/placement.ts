@@ -45,6 +45,8 @@ interface PlacementFile {
   providers: Record<string, CreatedSubscriptionProvider>;
   /** Assignment policy of providers other than the built-ins (those keep the pool's own policy). */
   strategies: Record<string, ProviderGroupStrategy>;
+  /** Explicit recovery overrides by actual provider id, including built-ins. */
+  autoRejoinRecovered: Record<string, boolean>;
 }
 
 const keyOf = (kind: SubscriptionProvider, accountId: string) => `${kind}:${accountId}`;
@@ -83,13 +85,21 @@ export function normalizePlacementFile(raw: unknown): PlacementFile {
         strategies[providerId] = strategy as ProviderGroupStrategy;
     }
   }
-  return { accounts, providers, strategies };
+  const autoRejoinRecovered: Record<string, boolean> = {};
+  const recovery = value?.autoRejoinRecovered;
+  if (recovery && typeof recovery === 'object' && !Array.isArray(recovery)) {
+    for (const [providerId, enabled] of Object.entries(recovery).slice(0, MAX_PLACEMENTS)) {
+      if (PROVIDER_ID.test(providerId) && typeof enabled === 'boolean')
+        autoRejoinRecovered[providerId] = enabled;
+    }
+  }
+  return { accounts, providers, strategies, autoRejoinRecovered };
 }
 
 const file = createOverrideSettingsFile<PlacementFile>({
   filePath: () => ownerScopedUserDataPath('subscription-account-placement.json'),
   scopeKey: activeOwnerScopeKey,
-  defaults: { accounts: {}, providers: {}, strategies: {} },
+  defaults: { accounts: {}, providers: {}, strategies: {}, autoRejoinRecovered: {} },
   normalize: normalizePlacementFile,
   log: desktopMakerLogger,
   label: 'subscription-account-placement',
@@ -281,6 +291,24 @@ export async function writeProviderStrategy(providerId: string, strategy: Provid
   });
 }
 
+/** Missing/unreadable preferences never opt a provider into recovery. No read-path writes. */
+export function readProviderAutoRejoinRecovered(ref: SubscriptionPoolProviderRef): boolean {
+  if (ref.kind !== 'openai') return false;
+  file.invalidateIfChanged();
+  return !file.isUnreadable() && file.read().autoRejoinRecovered?.[ref.providerId] === true;
+}
+
+/** Persist explicit true AND false overrides, isolated from old clients' pool normalization. */
+export async function writeProviderAutoRejoinRecovered(ref: SubscriptionPoolProviderRef, value: boolean): Promise<void> {
+  if (ref.kind !== 'openai' || !PROVIDER_ID.test(ref.providerId) || typeof value !== 'boolean')
+    throw new Error('Invalid subscription recovery setting');
+  const owner = activeOwnerScopeKey();
+  await file.updateAtomic(({ value: current }) => {
+    assertOwner(owner);
+    return { autoRejoinRecovered: { ...(current.autoRejoinRecovered ?? {}), [ref.providerId]: value } };
+  });
+}
+
 /**
  * Forget a created provider (deleted, or its first sign-in did not finish): its record, strategy and
  * every placement pointing at it, so no empty or hidden provider is left behind.
@@ -294,8 +322,10 @@ export async function deleteCreatedSubscriptionProvider(providerId: string): Pro
     delete providers[providerId];
     const strategies = { ...(value.strategies ?? {}) };
     delete strategies[providerId];
+    const autoRejoinRecovered = { ...(value.autoRejoinRecovered ?? {}) };
+    delete autoRejoinRecovered[providerId];
     const accounts = Object.fromEntries(Object.entries(value.accounts).filter(([, id]) => id !== providerId));
-    return { providers, strategies, accounts };
+    return { providers, strategies, accounts, autoRejoinRecovered };
   });
 }
 

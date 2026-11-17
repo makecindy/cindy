@@ -313,7 +313,7 @@ function parseTextResetAt(
  * depletion and temporary upstream overload are intentionally excluded.
  */
 const BILLING_DEPLETION_PATTERN =
-  /\b(?:insufficient_quota|billing_error|credit(?:s| balance)?\s+(?:depleted|exhausted|too low))\b/i;
+  /\b(?:insufficient_quota|billing_error|out of credits|credit(?:s| balance)?\s+(?:depleted|exhausted|too low))\b/i;
 
 /**
  * 余额 / 计费耗尽（要充值，不会到点恢复）。即使文案里也出现 quota / limit，也不是周期额度上限，
