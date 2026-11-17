@@ -1,5 +1,6 @@
 import { installDesktopInteractionHandler, requestHostInteraction, allowHostPagePermission } from '../../../desktop/src/main/maker-ipc/interactionRouter.ts';
 import { redactToolInputForUntrustedBoundary } from '../../../desktop/src/main/toolInputRedaction.ts';
+import { defaultDecisionForPending } from '../../../desktop/src/main/maker-ipc/sessionEventPreparationSteps.ts';
 
 /** Client presentation for the shared Session interaction router. Routing,
  * aborts and unattended-turn policy remain the same as Desktop and IM. */
@@ -7,10 +8,8 @@ export function createInteractionBroker(deps) {
   const pending = new Map();
   const bindings = new Map();
 
-  /** @returns {import('@cindy/maker-core').InteractionDecision} */
-  const fallback = (request, reason) => request.kind === 'ask_user_question'
-    ? { kind: request.kind, answers: {}, dismissed: true }
-    : { kind: request.kind, behavior: 'deny', reason, dismissed: true };
+  // A card closed without an answer (abort, replaced runtime, owner change, duplicate request id) gets
+  // the desktop's default decision (register.ts uses the same defaultDecisionForPending).
 
   function settle(entry, decision, reason) {
     if (pending.get(entry.request.requestId) !== entry) return false;
@@ -32,7 +31,7 @@ export function createInteractionBroker(deps) {
     if (!binding) return;
     bindings.delete(sessionId);
     for (const entry of pending.values()) {
-      if (entry.binding === binding) settle(entry, fallback(entry.request, reason), reason);
+      if (entry.binding === binding) settle(entry, defaultDecisionForPending(entry.request.kind, reason), reason);
     }
   }
 
@@ -46,10 +45,10 @@ export function createInteractionBroker(deps) {
       bindings.set(sessionId, binding);
       installDesktopInteractionHandler(session, request => {
         if (!binding.isCurrent() || bindings.get(sessionId) !== binding) {
-          return Promise.resolve(fallback(request, 'owner_changed'));
+          return Promise.resolve(defaultDecisionForPending(request.kind, 'owner_changed'));
         }
         if (!request.requestId || pending.has(request.requestId)) {
-          return Promise.resolve(fallback(request, 'duplicate_request_id'));
+          return Promise.resolve(defaultDecisionForPending(request.kind, 'duplicate_request_id'));
         }
         return new Promise(resolve => {
           binding.history?.flushAssistantBlock(sessionId);
@@ -82,7 +81,7 @@ export function createInteractionBroker(deps) {
 
     requestHost(sessionId, request, signal, options) {
       signal.throwIfAborted();
-      if (!options.isCurrent()) return Promise.resolve(fallback(request, 'owner_changed'));
+      if (!options.isCurrent()) return Promise.resolve(defaultDecisionForPending(request.kind, 'owner_changed'));
       // Historical cards have no running Agent. The interaction-only object is
       // the same surface used by Desktop; it cannot execute a task or grant FS.
       const session = options.session ?? bindings.get(sessionId)?.session
@@ -106,7 +105,7 @@ export function createInteractionBroker(deps) {
       const entry = pending.get(String(requestId ?? ''));
       if (!entry || (sessionId && entry.binding.sessionId !== sessionId)) return false;
       if (!entry.binding.isCurrent() || bindings.get(entry.binding.sessionId) !== entry.binding) {
-        settle(entry, fallback(entry.request, 'owner_changed'), 'owner_changed');
+        settle(entry, defaultDecisionForPending(entry.request.kind, 'owner_changed'), 'owner_changed');
         return false;
       }
       if (entry.binding.isPaused()) return false;
