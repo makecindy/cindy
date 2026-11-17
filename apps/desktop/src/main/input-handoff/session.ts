@@ -16,7 +16,7 @@ import { HumanDesktopInput } from '../remote-desktop/inputOwnership.js';
 import type { HandoffDriver } from './macDriver.js';
 import { qrContent } from './qrCode.js';
 import { isBrowserBundle } from './originPolicy.js';
-import { applyFieldPlan, extractStep, type ExtractedStep } from './stepExtractor.js';
+import { applyFieldPlan, extractStep, IncompleteFormError, type ExtractedStep } from './stepExtractor.js';
 import type {
   ControlBinding,
   FoundQr,
@@ -279,6 +279,7 @@ export class InputHandoffSession {
   private target: HandoffTarget | null = null;
   private initial: HandoffTarget | null = null;
   private step: ExtractedStep | null = null;
+  private unreadablePage: IncompleteFormError['page'] | null = null;
   private stepNumber = 0;
   private submissions = 0;
   private finishingUntil: number | undefined;
@@ -700,7 +701,7 @@ export class InputHandoffSession {
   }
 
   /** The owner types a password straight into this page: the agent's page reads pause there, as after a form. */
-  private guardSignInPage(step: ExtractedStep): void {
+  private guardSignInPage(step: Pick<ExtractedStep, 'signIn' | 'url'>): void {
     // Every direct sign-in field counts, not only a password: a one-time code or an account typed in the window is as readable.
     if (step.signIn && this.target) {
       this.guardedPage = { pid: this.target.pid, ...(step.url ? { url: step.url } : {}) };
@@ -756,6 +757,7 @@ export class InputHandoffSession {
 
   /** What the card says it shows: the page when it can be read, otherwise the window. */
   private source(): InputHandoffSource {
+    if (this.unreadablePage) return this.unreadablePage.source;
     if (this.step) return this.step.source;
     const app = this.target?.app ?? this.options.target.app ?? '';
     return this.target?.window.title ? { app, window: this.target.window.title } : { app };
@@ -1051,7 +1053,8 @@ export class InputHandoffSession {
       const secure = picture.field === 'password';
       result = await driver.pointer({ kind: 'type', ...base, value, submit: action.kind === 'submit', secure });
       if ('ok' in result && result.ok && secure && value && this.agentControlled) {
-        this.options.onSecretEntered?.({ pid: target.pid, ...(this.step?.url ? { url: this.step.url } : {}) });
+        const url = this.unreadablePage?.url ?? this.step?.url;
+        this.options.onSecretEntered?.({ pid: target.pid, ...(url ? { url } : {}) });
       }
     }
     if ('error' in result && result.error === 'moved') return 'origin_changed';
@@ -1212,6 +1215,7 @@ export class InputHandoffSession {
   }
 
   private async useTarget(target: HandoffTarget): Promise<void> {
+    this.unreadablePage = null;
     if (this.target?.pid !== target.pid) {
       this.agentControlled = AUTOMATION_FLAGS.test(await this.options.driver.commandLine(target.pid));
     }
@@ -1273,7 +1277,17 @@ export class InputHandoffSession {
     const raw = await this.options.driver.snapshot(this.target.pid, this.target.window);
     if ('error' in raw) return null;
     this.target = { ...this.target, window: { index: raw.window.index, title: raw.window.title } };
-    const step = extractStep(raw as NativeAxSnapshot);
+    this.unreadablePage = null;
+    let step: ExtractedStep;
+    try {
+      step = extractStep(raw as NativeAxSnapshot);
+    } catch (error) {
+      if (error instanceof IncompleteFormError) {
+        this.unreadablePage = error.page;
+        this.guardSignInPage(error.page);
+      }
+      throw error;
+    }
     if (this.options.fields && !this.fieldPlanRetired && step.shown.length) {
       const surface = JSON.stringify([raw.pid, raw.window.title, step.url]);
       this.fieldPlanSurface ??= surface;

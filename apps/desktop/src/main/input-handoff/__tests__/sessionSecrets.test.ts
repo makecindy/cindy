@@ -4,6 +4,7 @@ import { isHumanDesktopInputActive } from '../../remote-desktop/inputOwnership.j
 import type { HandoffDriver } from '../macDriver.js';
 import { InputHandoffSession, type HandoffResult, type HandoffSessionOptions } from '../session.js';
 import type { NativeActRequest, NativeAxNode } from '../types.js';
+import { clearSecretPages, isSecretPage, markSecretEntered } from '../secretTaint.js';
 
 const node = (ref: string, role: string, extra: Partial<NativeAxNode> = {}): NativeAxNode => ({
   ref,
@@ -116,6 +117,53 @@ function answer(step: InputHandoffSnapshot) {
 }
 
 describe('代输入 secrets', () => {
+  // Unit/security: rejecting an incomplete form must not discard its known URL.
+  // Exercise the actual page-read taint before capture and after picture typing.
+  it.each(['capacity', 'truncated'])('protects the page when %s forces picture input', async (reason) => {
+    clearSecretPages();
+    const page = loginPage('--remote-debugging-port=9222');
+    const url = 'https://login.example.com/signin';
+    const read = page.driver.snapshot;
+    page.driver.snapshot = async (...args) => {
+      const raw = await read(...args);
+      if ('error' in raw) return raw;
+      raw.nodes = [raw.nodes[0], ...Array.from({ length: reason === 'capacity' ? 40 : 1 }, (_, i) =>
+        node(`0.${i}`, 'AXTextField', { title: `Field ${i}` })),
+        ...(reason === 'capacity' ? [node('0.40', 'AXTextField', { title: 'Password', secure: true })] : [])];
+      // A truncated tree may end before the focused password appears.
+      raw.truncated = reason === 'truncated';
+      return raw;
+    };
+    const protectedAtCapture: boolean[] = [];
+    page.driver.capture = async () => {
+      protectedAtCapture.push(isSecretPage(url));
+      return { jpeg: Buffer.from('synthetic'), width: 800, height: 600, area: [0, 0, 800, 600], windowFrame: [0, 0, 800, 600] };
+    };
+    page.driver.focusedField = async () => ({ editable: true, secure: true });
+    const typed: unknown[] = [];
+    page.driver.pointer = async request => { typed.push(request); return { ok: true }; };
+    const entered: Array<string | undefined> = [];
+    const { session, latest } = start(page.driver, target => {
+      entered.push(target.url);
+      markSecretEntered(target.url);
+    });
+    try {
+      await session.start();
+      expect(latest()).toMatchObject({ phase: 'ready', picture: true, source: { origin: 'https://login.example.com' } });
+      expect(protectedAtCapture).toEqual([true]);
+      expect(latest().controls).toEqual([{ id: 'typed', kind: 'text', label: '', contentType: 'password' }]);
+      await session.submit({ expectedRevision: latest().revision, values: { typed: 'synthetic-secret' }, action: { kind: 'submit' } });
+      expect(typed).toEqual([expect.objectContaining({ kind: 'type', secure: true, value: 'synthetic-secret' })]);
+      expect(entered.length).toBeGreaterThan(1);
+      expect(entered.every(value => value === url)).toBe(true);
+      expect(isSecretPage(url)).toBe(true);
+      expect(latest()).toMatchObject({ picture: true, source: { origin: 'https://login.example.com' } });
+    } finally {
+      session.cancel();
+      clearSecretPages();
+    }
+  });
+
   // Unit: static validation text can shift AX refs after the first fill. Keep
   // stable targets usable, but do not confuse a removed/replaced field with a shift.
   it.each(['dom', 'stale-dom', 'fingerprint', 'replaced', 'removed'])('handles a static-node insertion using %s identity', async (mode) => {

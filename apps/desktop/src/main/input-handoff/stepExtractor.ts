@@ -48,6 +48,13 @@ export interface ExtractedStep {
   signIn?: boolean;
 }
 
+/** Keep verified page metadata even when its controls cannot form a complete step. */
+export class IncompleteFormError extends Error {
+  constructor(readonly page: Pick<ExtractedStep, 'source' | 'url' | 'signIn'>) {
+    super('Incomplete form');
+  }
+}
+
 const SKIPPED_SUBROLES = new Set([
   'AXCloseButton',
   'AXMinimizeButton',
@@ -175,8 +182,6 @@ function signatureOf(source: InputHandoffSource, controls: ScreenControl[]): str
 }
 
 export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
-  // Never ask the owner to submit a subset just because the AX walk hit its budget.
-  if (snapshot.truncated) throw new Error('Incomplete form');
   const windowFrame = snapshot.window.frame ?? [];
   const browser = isBrowserBundle(snapshot.bundleId);
   const nodes = snapshot.nodes.filter((node) => visible(node, windowFrame));
@@ -378,10 +383,6 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
   );
   if (primary >= 0) (controls[primary] as Extract<ScreenControl, { kind: 'button' }>).primary = true;
 
-  if (controls.filter((control) => control.kind === 'text').length > INPUT_HANDOFF_MAX_CONTROLS) {
-    throw new Error('Incomplete form');
-  }
-  const capped = capControls(controls, bindings);
   const source: InputHandoffSource = {
     app: clip(snapshot.app) || snapshot.bundleId || 'App',
     ...(snapshot.window.title ? { window: clip(snapshot.window.title) } : {}),
@@ -404,8 +405,7 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     if (crossOriginPassword) source.warning = 'embedded-frame';
   }
   const texts = inScope.map((node) => textOf(node)).filter((text): text is string => !!text);
-  const deviceCode = findDeviceCode(inScope, capped.some((control) => control.kind === 'text'));
-  const fieldTypes = capped.flatMap((control) => (control.kind === 'text' ? [control.contentType] : []));
+  const fieldTypes = controls.flatMap((control) => (control.kind === 'text' ? [control.contentType] : []));
   const labels = inScope.filter((node) => !TEXT_ROLES.has(node.role)).map((node) => textOf(node)).filter((text): text is string => !!text);
   let addressSaysLogin = false;
   try {
@@ -417,6 +417,17 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     (!browser || /^https?:/i.test(topWeb?.url ?? '')) &&
     (fieldTypes.some((type) => SIGN_IN_SECRETS.has(type)) ||
       (looksLikeLogin && fieldTypes.some((type) => SIGN_IN_ACCOUNTS.has(type))));
+  // Never expose a partial form, but retain its verified source for picture
+  // input and page-read protection. A truncated tree may hide the password.
+  if (snapshot.truncated || fieldTypes.length > INPUT_HANDOFF_MAX_CONTROLS) {
+    throw new IncompleteFormError({
+      source,
+      ...(topWeb?.url ? { url: topWeb.url } : {}),
+      signIn: signIn || (!!snapshot.truncated && /^https?:/i.test(topWeb?.url ?? '')),
+    });
+  }
+  const capped = capControls(controls, bindings);
+  const deviceCode = findDeviceCode(inScope, capped.some((control) => control.kind === 'text'));
   return {
     controls: capped,
     shown: deviceCode ? [] : ownerControls(capped),
