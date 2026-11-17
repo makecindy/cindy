@@ -10880,7 +10880,12 @@
       "summary": "Selbstvorstellung",
       "summaryPlaceholder": "Zum Beispiel: ein Romanautor, der Fortsetzungsgeschichten liebt, trockenen Humor hat und davon fasziniert ist, was Figuren antreibt.",
       "avatarSelectionFailed": "Das Bild konnte nicht gelesen werden. Wähle ein PNG-, JPEG- oder WebP-Bild bis 5 MB.",
-      "personality": "Persönlichkeit & Gesprächsstil"
+      "personality": "Persönlichkeit & Gesprächsstil",
+      "sourceLength": "{{length}} / {{limit}} UTF-16-Einheiten (ohne umgebende Leerzeichen).",
+      "sourceExcess": "Das Limit ist um {{excess}} Einheiten überschritten. Kürze den Text vor dem Speichern.",
+      "sourceTooLong": "Dieser Text ist zu lang zum Speichern. Bearbeite ihn, um fortzufahren.",
+      "sourceRecovery": "Das gespeicherte Original bleibt unverändert, der vollständige Entwurf auf dieser Seite. Füge den kopierten Text an einem sicheren Ort ein und prüfe seine Vollständigkeit, bevor du ihn kürzt oder Änderungen verwirfst.",
+      "sourceCopy": "Vollständigen Text kopieren"
     },
     "nameLabel": "Wie sollen wir den Freund nennen?",
     "close": "Schließen",
