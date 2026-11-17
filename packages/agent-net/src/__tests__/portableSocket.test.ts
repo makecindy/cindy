@@ -12,7 +12,80 @@ import type { DeviceView } from '@cindy/agent-net-protocol';
 import { PROTOCOL_VERSION } from '@cindy/device-link-protocol';
 import { DeviceLinkClient, SERVER_CAPABILITY_NOTIFY } from '@cindy/device-link';
 import { AgentNetSocket } from '../portableSocket.js';
-import type { PeerChannel, RosterEntry } from '../types.js';
+import type { PeerChannel, RosterEntry, TransportOptions } from '../types.js';
+
+// A simultaneous dial can replace an admitted channel while its first link-open
+// is still in flight. Exercise real frame admission, routing and reply handling;
+// an already-established-channel test cannot expose this controlled ordering.
+it.each(['before', 'in-flight', 'revoked', 'rotated', 'stale-presence', 'replacement-closed'] as const)(
+  'handles %s frames during simultaneous-dial channel replacement', async mode => {
+    const local = generateIdentity('a-host'), remote = generateIdentity('b-controller');
+    const { root, bootstrap } = createPrivateNetwork('Channel handover', local);
+    const member = (identity: typeof remote): DeviceView => ({
+      certificate: issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity, role: 'member' }),
+      name: 'Remote', online: false, remoteControlEnabled: true, capabilities: [],
+    });
+    const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [member(remote)], delegations: [],
+      send() {}, presence() {}, onDatagram() {}, close() {} });
+    const makeChannel = () => {
+      let receive!: (bytes: Uint8Array) => void;
+      let finish: () => void = () => undefined;
+      const sent: Array<{ kind: string; id?: string }> = [];
+      const channel: PeerChannel = {
+        remoteId: Buffer.from(remote.transportKey, 'base64url').toString('hex'),
+        send(bytes) { sent.push(JSON.parse(Buffer.from(bytes).subarray(4).toString())); },
+        onData(handler) { receive = handler; }, onClose(handler) { finish = handler; },
+        // A graceful core close drains already-written bytes; they may arrive
+        // after the replacement is admitted. No artificial delay or retry.
+        close() {}, path: () => 'relay',
+      };
+      return { channel, sent, finish() { finish(); }, deliver(frame: object) {
+        const body = Buffer.from(JSON.stringify(frame)), header = Buffer.alloc(4); header.writeUInt32BE(body.length);
+        receive(Buffer.concat([header, body]));
+      } };
+    };
+    const old = makeChannel(), preferred = makeChannel();
+    let transport!: TransportOptions;
+    const socket = await AgentNetSocket.openWithBindings({
+      client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey,
+        certificate: bootstrap.ownerCertificate, identity: local, connect: async () => uplink },
+      userId: bootstrap.ownerCertificate.subject,
+      bindings: { verifyCertificate, createTransport: async options => {
+        transport = options;
+        return { id: 'local', dial: {}, connect: async () => preferred.channel, close: async () => undefined };
+      } },
+    });
+    const received: string[] = [];
+    socket.on('message', raw => {
+      const frame = JSON.parse(raw.toString()); received.push(frame.kind);
+      if (frame.kind === 'link-open') socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'link-accept',
+        id: frame.id, dst: frame.src, payload: { appVersion: 'test', allowlistHash: 'test' } }));
+    });
+    const request = { v: PROTOCOL_VERSION, kind: 'link-open', id: 'in-flight-open', dst: local.deviceId, payload: {} };
+    try {
+      socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: {
+        deviceName: 'Host', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false,
+      } }));
+      // The preferred outgoing handshake is already in progress when the
+      // incoming nonpreferred connection is admitted first.
+      const preferredDial = socket.dial(remote.deviceId);
+      transport.onIncoming(old.channel);
+      if (mode === 'before') old.deliver(request);
+      await preferredDial;
+      received.length = 0;
+      if (mode === 'revoked') { uplink.devices = []; uplink.emit('directory'); }
+      if (mode === 'rotated') { uplink.devices = [member(generateIdentity(remote.deviceId))]; uplink.emit('directory'); }
+      if (mode === 'replacement-closed') preferred.finish();
+      if (mode === 'stale-presence') old.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { online: true } });
+      else if (mode !== 'before') old.deliver(request);
+      if (mode === 'before') expect(old.sent).toContainEqual(expect.objectContaining({ kind: 'link-accept', id: request.id }));
+      else if (mode === 'in-flight') expect(preferred.sent).toContainEqual(expect.objectContaining({ kind: 'link-accept', id: request.id }));
+      else {
+        expect(received).not.toContain(mode === 'stale-presence' ? 'presence-changed' : 'link-open');
+        expect(preferred.sent.some(frame => frame.kind === 'link-accept')).toBe(false);
+      }
+    } finally { socket.close(); }
+  });
 
 // Mixed-version protocol, unit: real signed roster and length-prefixed peer
 // frames through openWithBindings/dial. Existing recovery tests sent no peer
