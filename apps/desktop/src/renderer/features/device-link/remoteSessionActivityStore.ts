@@ -11,6 +11,7 @@
  *   - completed / error 且 attention=true → 写入(未读终态;被控端真实展示后 relay
  *     会重发 attention=false 的收尾包)
  *   - 其余(已读收尾包)→ 删除条目,行回落时间显示
+ *   - 共享访客本地已读完成 → 保留 attention=false 快照，防止房主重复推送恢复绿点
  *
  * 不喂 dock 角标——未读归被控端。灵动岛与桌面通知由 agentIslandRemoteSessions 按侧栏
  * 「任务范围」裁剪后另行同步给 main。
@@ -20,6 +21,7 @@
  */
 
 import { useMemo, useSyncExternalStore } from 'react';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 export type RemoteSessionActivityPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
@@ -90,6 +92,17 @@ export function getRemoteSessionActivity(
   deviceId: string | null | undefined,
 ): RemoteSessionActivity | undefined {
   return deviceId ? activityByDevice.get(deviceId)?.get(sessionId) : undefined;
+}
+
+/** Guests consume their own completion, never the host's notification. Keep the
+ * read snapshot so replaying the same host activity cannot resurrect its dot.
+ * Running, interaction and error states still come from the host unchanged. */
+export function acknowledgeSharedTaskCompletion(sessionId: string, deviceId: string): void {
+  if (!isSharedTaskPeer(deviceId)) return;
+  const current = getRemoteSessionActivity(sessionId, deviceId);
+  if (current?.phase !== 'completed' || !current.attention) return;
+  activityByDevice.get(deviceId)!.set(sessionId, { ...current, attention: false });
+  emit(deviceId, sessionId);
 }
 
 /** Hook —— 按 sessionId 精准订阅(本地会话恒为 undefined,零开销)。 */
@@ -174,6 +187,14 @@ export function applyRemoteSessionActivity(deviceId: string, payload: unknown): 
     activityByDevice.set(deviceId, activityMap);
   }
   const current = activityMap.get(sessionId);
+  // Prefer turn identity: delayed notification-policy updates are still the
+  // same completion. Older hosts fall back to the activity snapshot.
+  if (isSharedTaskPeer(deviceId) && current?.phase === 'completed' && !current.attention &&
+      next.phase === 'completed' && (current.completionToken
+        ? current.completionToken === next.completionToken
+        : sameActivity(current, { ...next, attention: false, completionNotification: current.completionNotification }))) {
+    next.attention = false;
+  }
   if (current && sameActivity(current, next)) return;
   activityMap.set(sessionId, next);
   emit(deviceId, sessionId);
