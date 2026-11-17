@@ -107,6 +107,7 @@
     "test:e2e": "pnpm test:runner && node scripts/test-workspaces.mjs --tier e2e",
     "test:all": "pnpm test:runner && node scripts/test-workspaces.mjs --all",
     "test:git-integration": "pnpm test:runner && node scripts/test-workspaces.mjs --tier git-integration",
+    "test:personal-database": "node --test scripts/__tests__/personal-build-database.test.mjs",
     "test:db": "pnpm test:runner && node scripts/test-workspaces.mjs --tier db",
     "test:guard": "node scripts/test-workspaces.mjs --tier guard",
     "test:device-link": "node apps/mobile/scripts/device-link-reconnect-smoke.mjs",
