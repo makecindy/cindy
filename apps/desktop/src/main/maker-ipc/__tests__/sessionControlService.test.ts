@@ -95,6 +95,7 @@ function setup(opts?: {
       displayText: 'before',
     });
   const deps = {
+    getPluginCaller: vi.fn<() => { source: { pluginId: string }; assertCurrent(): void } | undefined>(() => undefined),
     sessionExists: vi.fn(async () => opts?.exists ?? true),
     getLiveSession,
     getSessionActivitySnapshot: vi.fn(async () => activity),
@@ -151,8 +152,8 @@ function setup(opts?: {
     steerQueuedMessage: vi.fn(async (
       _sessionId: string, _item: AgentInputQueuedMessage, _turn: SessionSteerTurnIdentity,
     ) => opts?.steerAccepted ?? true),
-    getQueueSnapshot: vi.fn(async () => ({ pendingQueue: [queueItem], consumingClientIds: [] })),
-    replaceQueuedMessage: vi.fn(() => true),
+    getQueueSnapshot: vi.fn(async (): Promise<{ pendingQueue: AgentInputQueuedMessage[]; consumingClientIds: string[] }> => ({ pendingQueue: [queueItem], consumingClientIds: [] })),
+    replaceQueuedMessage: vi.fn((_sessionId: string, _clientId: string, _next: AgentInputQueuedMessage, _expected?: AgentInputQueuedMessage) => true),
     removeQueuedMessage: vi.fn(() => true),
     steerStoredQueuedMessage: vi.fn(async () => ({ kind: 'steered' as const })),
     moveQueuedMessage: vi.fn(() => 0),
@@ -162,6 +163,45 @@ function setup(opts?: {
 }
 
 describe('session control domain service', () => {
+  // Unit / all-message queue contract: drive the real queue owner through its public service.
+  // Existing cases only granted a task its own handoffs, never a plugin editing a user row.
+  it.each([
+    undefined,
+    { kind: 'session' as const, senderSessionId: 'other', displayText: 'before' },
+    { kind: 'scheduler' as const, scheduleId: 'schedule', runId: 'run' },
+  ])('allows a plugin edit without borrowing the original sender authority (%j)', async origin => {
+    const original = item(origin);
+    original.autoReviewUserText = 'original owner request';
+    const { deps, service } = setup({ queueItem: original });
+    deps.getPluginCaller.mockReturnValue({ source: { pluginId: 'editor' }, assertCurrent: () => {} });
+    expect(await service.updateQueuedMessage({ targetSessionId: 'target', queuedMessageId: 'queued-1', message: 'edited' }))
+      .toMatchObject({ ok: true });
+    const edited = deps.replaceQueuedMessage.mock.calls[0]?.[2];
+    expect(edited).toMatchObject({ clientId: 'queued-1', text: 'edited', sourcePlugin: { pluginId: 'editor' },
+      autoReviewUserText: { kind: 'agent-request' } });
+    expect(edited?.origin).toEqual(origin);
+  });
+
+  it.each(['cancelQueuedMessage', 'steerQueuedMessage', 'moveQueuedMessage'] as const)(
+    'allows plugin %s on a user row and still rejects a consuming row', async operation => {
+      const { deps, service } = setup({ queueItem: item() });
+      deps.getPluginCaller.mockReturnValue({ source: { pluginId: 'editor' }, assertCurrent: () => {} });
+      const params = { targetSessionId: 'target', queuedMessageId: 'queued-1', position: 0 };
+      expect(await service[operation](params)).toMatchObject({ ok: true });
+      deps.getQueueSnapshot.mockResolvedValue({ pendingQueue: [item()], consumingClientIds: ['queued-1'] });
+      expect(await service[operation](params)).toMatchObject({ ok: false, errorCode: 'MESSAGE_CONSUMING' });
+    },
+  );
+
+  it('rechecks plugin installation after the queue read and before mutation', async () => {
+    const { deps, service } = setup({ queueItem: item() });
+    const assertCurrent = vi.fn(() => { throw new Error('plugin revoked'); });
+    deps.getPluginCaller.mockReturnValue({ source: { pluginId: 'editor' }, assertCurrent });
+    await expect(service.cancelQueuedMessage({ targetSessionId: 'target', queuedMessageId: 'queued-1' }))
+      .rejects.toThrow('plugin revoked');
+    expect(deps.removeQueuedMessage).not.toHaveBeenCalled();
+  });
+
   it('marks ordinary send_to_session queue rows with the dispatcher identity', () => {
     expect(
       sessionQueueOriginForDispatcher({

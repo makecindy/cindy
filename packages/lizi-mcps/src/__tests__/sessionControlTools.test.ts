@@ -94,6 +94,26 @@ function setup(opts?: { sessionId?: string | undefined }) {
 }
 
 describe('cindy_helper session control tools', () => {
+  // Unit / queue capability contract: an attested plugin has no task identity.
+  // The old entry rejected every mutation with NO_SESSION_CONTEXT before reaching the queue owner.
+  it.each(['update', 'cancel', 'steer', 'move'] as const)('allows plugin %s through the existing queue tool', async action => {
+    const { deps, registry } = setup({ sessionId: undefined });
+    deps.getSessionContext = () => ({ agentKind: 'codex', workingDir: '', hostCaller: {
+      kind: 'plugin', pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1,
+    } });
+    const result = await registry.call(`${action}_session_queued_message`, {
+      session_id: 'target', queued_message_id: 'queued-1',
+      ...(action === 'update' ? { message: 'edited' } : {}),
+      ...(action === 'move' ? { position: 0 } : {}),
+    });
+    expect(parse(result)).toMatchObject({ ok: true, queued_message_id: 'queued-1' });
+    const mutation = { update: deps.updateQueuedMessage, cancel: deps.cancelQueuedMessage,
+      steer: deps.steerQueuedMessage, move: deps.moveQueuedMessage }[action]!;
+    expect(mutation).toHaveBeenCalledWith(expect.objectContaining({
+      callerSessionId: undefined, targetSessionId: 'target', queuedMessageId: 'queued-1',
+    }));
+  });
+
   // Unit #9801/uKm_: the production tool must retain partial-application facts
   // in its existing error payload; prior tests only covered successful runtime results.
   it('returns an error with the applied runtime and original permission failure', async () => {

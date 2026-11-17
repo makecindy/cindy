@@ -8,6 +8,7 @@ import type {
   SessionTurnControlSnapshot,
 } from '@cindy/maker-core';
 import { assertTaskActionCurrent, bindTaskActionInput, combineInputGuards, hasTaskActionAuthorization } from './taskActionAuthorization.js';
+import { revokeTrustedDesktopQueuedOrigin } from './queuedInputOrigin.js';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type {
@@ -95,6 +96,8 @@ export interface SessionSteerTurnIdentity {
 }
 
 export interface SessionControlServiceDeps {
+  /** The gateway supplies the real plugin identity; tool arguments cannot grant this access. */
+  getPluginCaller?(): { source: NonNullable<AgentInputQueuedMessage['sourcePlugin']>; assertCurrent(): void } | undefined;
   sessionExists(sessionId: string): Promise<boolean>;
   getLiveSession(sessionId: string): SessionControlLiveSession | null;
   getSessionActivitySnapshot(sessionId: string): Promise<SessionActivitySnapshot>;
@@ -162,7 +165,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
 
   return {
     async updateQueuedMessage(params: {
-      callerSessionId: string;
+      callerSessionId?: string;
       targetSessionId: string;
       queuedMessageId: string;
       /** Host-only authorization check after async reads, immediately before mutation. */
@@ -171,16 +174,23 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     }): Promise<SessionQueuedMessageControlResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
-      const captured = await deps.captureRequest?.(params.callerSessionId, params.message,
-        { sessionId: params.targetSessionId });
+      const plugin = params.callerSessionId ? undefined : deps.getPluginCaller?.();
+      const captured = params.callerSessionId ? await deps.captureRequest?.(params.callerSessionId, params.message,
+        { sessionId: params.targetSessionId }) : undefined;
       return queueControl.update({
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
         message: params.message,
-        authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
-        beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent),
+        authorize: (item) => plugin ? { ok: true } : authorizeSessionQueueItem(item, params.callerSessionId),
+        beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent, plugin ? async () => plugin.assertCurrent() : undefined),
         rebuild: (item, message) => {
-          const next = rebuildSessionQueueItem(item, message, captured?.autoReviewUserText);
+          const next = plugin ? updateQueuedMessageText(item, message)
+            : rebuildSessionQueueItem(item, message, captured?.autoReviewUserText);
+          if (plugin) {
+            revokeTrustedDesktopQueuedOrigin(next);
+            next.sourcePlugin = plugin.source;
+            next.autoReviewUserText = { kind: 'agent-request' };
+          }
           bindTaskActionInput(params.targetSessionId, next);
           return next;
         },
@@ -188,7 +198,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     },
 
     async cancelQueuedMessage(params: {
-      callerSessionId: string;
+      callerSessionId?: string;
       targetSessionId: string;
       queuedMessageId: string;
       /** Host-only authorization check after async reads, immediately before mutation. */
@@ -196,45 +206,48 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     }): Promise<SessionQueuedMessageControlResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
+      const plugin = params.callerSessionId ? undefined : deps.getPluginCaller?.();
       return queueControl.cancel({
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
-        authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
-        beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent),
+        authorize: (item) => plugin ? { ok: true } : authorizeSessionQueueItem(item, params.callerSessionId),
+        beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent, plugin ? async () => plugin.assertCurrent() : undefined),
       });
     },
 
     async steerQueuedMessage(params: {
-      callerSessionId: string;
+      callerSessionId?: string;
       targetSessionId: string;
       queuedMessageId: string;
     }): Promise<SessionQueueSteerResult | Failure<'NOT_FOUND'>> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
+      const plugin = params.callerSessionId ? undefined : deps.getPluginCaller?.();
       return queueControl.steer({
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
-        beforeMutation: assertTaskActionCurrent,
+        beforeMutation: combineInputGuards(assertTaskActionCurrent, plugin ? async () => plugin.assertCurrent() : undefined),
         authorize: (item) =>
-          authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
+          plugin ? { ok: true } : authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
       });
     },
 
     async moveQueuedMessage(params: {
-      callerSessionId: string;
+      callerSessionId?: string;
       targetSessionId: string;
       queuedMessageId: string;
       position: number;
     }): Promise<SessionQueueMoveResult | Failure<'NOT_FOUND'>> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
+      const plugin = params.callerSessionId ? undefined : deps.getPluginCaller?.();
       return queueControl.move({
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
         position: params.position,
-        beforeMutation: assertTaskActionCurrent,
+        beforeMutation: combineInputGuards(assertTaskActionCurrent, plugin ? async () => plugin.assertCurrent() : undefined),
         authorize: (item) =>
-          authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
+          plugin ? { ok: true } : authorizeSessionQueueReorder(item, params.callerSessionId, params.targetSessionId),
       });
     },
 
@@ -430,9 +443,9 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
 
 export function authorizeSessionQueueItem(
   item: AgentInputQueuedMessage,
-  callerSessionId: string,
+  callerSessionId: string | undefined,
 ): { ok: true } | { ok: false; message: string } {
-  return item.origin?.kind === 'session' && item.origin.senderSessionId === callerSessionId
+  return !!callerSessionId && item.origin?.kind === 'session' && item.origin.senderSessionId === callerSessionId
     ? { ok: true }
     : { ok: false, message: 'queued message was not sent by the current session' };
 }
@@ -443,7 +456,7 @@ export function authorizeSessionQueueItem(
  */
 export function authorizeSessionQueueReorder(
   item: AgentInputQueuedMessage,
-  callerSessionId: string,
+  callerSessionId: string | undefined,
   targetSessionId: string,
 ): { ok: true } | { ok: false; message: string } {
   const plainMachineMessage =

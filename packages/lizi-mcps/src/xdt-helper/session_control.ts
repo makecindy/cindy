@@ -54,19 +54,19 @@ export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
 export interface SessionControlDeps {
   getSessionContext: () => LiziMcpSessionContext;
   updateQueuedMessage(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
     message: string;
   }): Promise<ControlResult<{ queuedMessageId: string }, SessionQueueControlErrorCode>>;
   cancelQueuedMessage(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
   }): Promise<ControlResult<{ queuedMessageId: string }, SessionQueueControlErrorCode>>;
   /** 把一条排队消息转为插话;没插成时消息留在队列,返回 delivery=queued + reason。 */
   steerQueuedMessage(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
   }): Promise<
@@ -81,7 +81,7 @@ export interface SessionControlDeps {
   >;
   /** 调整一条排队消息的位置(position 越界放队尾),返回实际最终位置。 */
   moveQueuedMessage(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
     position: number;
@@ -154,7 +154,7 @@ export function registerUpdateSessionQueuedMessageTool(
     category: 'control',
     description:
       '修改你通过 send_to_session 投递、且目标 session 尚未消费的一条排队消息。' +
-      '只能修改当前调用 session 自己投递的消息；正在投递或其它来源的消息会被拒绝。',
+      '任务只能修改自己投递的消息；声明 control 的插件可修改所有来源的待发消息。正在投递的消息不可修改。',
     inputShape: {
       session_id: z.string().min(1).describe('目标 session id。'),
       queued_message_id: z.string().min(1).describe('来自 send_to_session 或 list_session_queue 的消息 id。'),
@@ -162,11 +162,11 @@ export function registerUpdateSessionQueuedMessageTool(
     },
     handler: async ({ session_id, queued_message_id, message }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
       }
       const result = await deps.updateQueuedMessage({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         queuedMessageId: queued_message_id,
         message,
@@ -190,18 +190,18 @@ export function registerCancelSessionQueuedMessageTool(
     category: 'control',
     description:
       '撤回你通过 send_to_session 投递、且目标 session 尚未消费的一条排队消息。' +
-      '只能撤回当前调用 session 自己投递的消息；正在投递或其它来源的消息会被拒绝。',
+      '任务只能撤回自己投递的消息；声明 control 的插件可撤回所有来源的待发消息。正在投递或已消费的消息不可撤回。',
     inputShape: {
       session_id: z.string().min(1).describe('目标 session id。'),
       queued_message_id: z.string().min(1).describe('来自 send_to_session 或 list_session_queue 的消息 id。'),
     },
     handler: async ({ session_id, queued_message_id }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
       }
       const result = await deps.cancelQueuedMessage({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         queuedMessageId: queued_message_id,
       });
@@ -220,7 +220,7 @@ export function registerCancelSessionQueuedMessageTool(
 // 机器消息;用户手打、伙伴委派、插件、定时任务消息不可操作。
 const SESSION_QUEUE_MANAGEABLE_SCOPE =
   '可操作的是你通过 send_to_session 投递的消息,或你自己任务队列里由其它任务 / 协同成员发来的机器消息;' +
-  '用户手打、伙伴委派、插件、定时任务消息不可操作。';
+  '任务不能操作用户手打、伙伴委派、插件、定时任务消息；声明 control 的插件可管理所有来源的待发消息。';
 
 export function registerSteerSessionQueuedMessageTool(
   registry: XdtHelperToolRegistry,
@@ -241,11 +241,11 @@ export function registerSteerSessionQueuedMessageTool(
     },
     handler: async ({ session_id, queued_message_id }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
       }
       const result = await deps.steerQueuedMessage({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         queuedMessageId: queued_message_id,
       });
@@ -277,11 +277,11 @@ export function registerMoveSessionQueuedMessageTool(
     },
     handler: async ({ session_id, queued_message_id, position }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
       }
       const result = await deps.moveQueuedMessage({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         queuedMessageId: queued_message_id,
         position,
