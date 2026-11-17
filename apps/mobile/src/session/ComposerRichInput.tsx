@@ -198,12 +198,19 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     const { generation, current: currentGeneration } = recovery;
     const focusEditor = useCallback(() => {
       if (!readyRef.current) {
+        recovery.onInteraction();
         pendingFocusRef.current = true;
         return;
       }
       inject('window.cindyComposer.focus();');
       if (Platform.OS === 'android') webViewRef.current?.requestFocus();
-    }, [inject]);
+    }, [inject, recovery.onInteraction]);
+    const handleTouchStart = useCallback(() => {
+      if (hidden || !editable) return;
+      // Healthy touches keep WebKit's native caret/selection behavior. A dead
+      // page cannot consume the touch, so focus its replacement once ready.
+      if (recovery.onInteraction()) pendingFocusRef.current = true;
+    }, [editable, hidden, recovery.onInteraction]);
     const applyDocument = useCallback((value: ComposerDocument, focusAfter = false, caret?: { nodeIndex: number; offset: number }) => {
       rejectSnapshot();
       if (value !== webDocumentRef.current.document && selectionRef.current?.atomRange) selectionRef.current = null;
@@ -539,7 +546,8 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       // WebView's imperative ref is a command handle, not a Fabric host ref.
       // Animate its native View container and let the WebView fill that frame.
       <GestureDetector gesture={touchGesture}>
-      <Animated.View style={[styles.frame, heightStyle, { opacity: hidden ? 0 : 1 }]}>
+      <Animated.View style={[styles.frame, heightStyle, { opacity: hidden ? 0 : 1 }]}
+        onTouchStart={handleTouchStart}>
       <WebView
         key={generation}
         ref={webViewRef}

@@ -4,10 +4,22 @@
   "loadFailed": "Não foi possível carregar o aplicativo. Verifique a conexão e recarregue.",
   "updateRequired": "Este computador ainda não oferece suporte a MCP Apps. Atualize Cindy nesse computador e tente novamente.",
   "appName": "Aplicativo MCP",
-  "cardTitle": "{{title}} · $t(mcpApps.appName)",
+  "cardTitle": "{{title}}",
   "messageSource": "Enviado por $t(mcpApps.appName) “{{name}}”",
   "serverId": "ID do servidor MCP: {{id}}",
   "exitFullscreen": "Sair da tela cheia",
   "mobileUpdateRequired": "Atualize Cindy neste celular para abrir este cartão.",
-  "filesOnExecutionComputer": "Ver o conteúdo do arquivo no computador de execução"
+  "filesOnExecutionComputer": "Ver o conteúdo do arquivo no computador de execução",
+  "source": {
+    "official": "Cindy oficial",
+    "organization": "Organização · {{namespace}}",
+    "market": "Mercado de plugins",
+    "third-party": "Origem de terceiros",
+    "local": "Instalação local",
+    "unknown": "Origem desconhecida"
+  },
+  "customMcp": "MCP personalizado",
+  "sourceLabel": "Origem",
+  "signatureLabel": "Assinatura",
+  "fullscreen": "Tela cheia"
 }

@@ -72,6 +72,8 @@ void mountPage({
       auxiliaryModelSettingsGet: read(state({ models: ctx.data.customAuxiliary ? ['cat:openrouter:codex:openai/gpt-5-mini'] : [] })),
       visionBridgeSettingsGet: read(state(VISION_BRIDGE_SETTINGS_DEFAULTS)),
       silentEncryptedRetryGet: read(state({ enabled: true })),
+      codexCompactionGet: read({ enabled: true, isCustomized: false }),
+      codexCompactionSet: forbid('codexCompactionSet'),
       listCustomMcpServers: read({ servers: [] }), onMcpChanged: subscription('mcp'),
       plugins: { list: read([]), getState: read({ effectiveEnabled: true }) },
     },

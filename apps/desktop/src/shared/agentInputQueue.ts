@@ -155,7 +155,8 @@ export interface AgentInputChatMessage {
   isPendingPersist?: boolean;
   createdAt?: string;
   images?: Array<AgentInputImageRef | AgentInputFallbackImage>;
-  files?: Array<{ name: string; path: string }>;
+  /** `url` is the cindy-media address of Host-stored audio/video, kept so the message pins it. */
+  files?: Array<{ name: string; path: string; url?: string }>;
   quotesEncoded?: boolean;
   agentReferences?: AgentInputReference[];
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
@@ -344,6 +345,12 @@ export interface AgentInputQueuedMessage {
   workingDir: string;
   vendorOptions?: Record<string, unknown>;
   files?: AgentInputSerializedFile[];
+  /**
+   * Main-only reference attachments for the model (a plugin's relayed group history or quoted
+   * messages), sent after `files`. Never shown or persisted with the message, and stripped
+   * from Renderer and device-link input.
+   */
+  contextFiles?: AgentInputSerializedFile[];
   mentions?: AgentInputMention[];
   sessionRefs?: AgentInputSessionRef[];
   trustedSessionReferenceContexts?: AgentInputSessionReferenceContext[];
@@ -1213,7 +1220,7 @@ export function buildMakerUserMessage(
   // 本条消息内 image block 的序号(从 1 起),与模型看到的图片顺序一致。
   let imageBlockCount = 0;
   const regionDescriptions: string[] = [];
-  for (const f of queued.files ?? []) {
+  for (const f of [...(queued.files ?? []), ...(queued.contextFiles ?? [])]) {
     const type = getAgentInputAttachmentBlockType(f.category, f.ext);
     const pathOrigin = type === 'image' && f.pathOrigin === 'desktop-host'
       ? { pathOrigin: f.pathOrigin }

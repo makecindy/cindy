@@ -219,8 +219,11 @@ const r = await cindy.agent.requestSchedule({
 - `send({target:{kind,id},requestKey,text,context?,title?,autoTitle?,route?,permissionMode?,delivery?,attachments?})`：直接指定目标，Host 当次复核。project 在目录中新建普通任务，可传统一模型目录的 route 和已授权范围内的 permissionMode；task/bot 沿用接收方模型、权限、目录，不接受 route 或 permissionMode。`delivery` 为 `queue | steer`，缺省 queue；project 不接受 steer。steer 尝试同轮注入，不停止当前轮，空闲或插话暂不可用时入队。返回 `{taskId,accepted:true,delivery:"queue"|"steer"}` 表示实际接受路径，不表示执行完成。筛查拒绝返回 DELIVERY_REJECTED，不入队重试；ACK 未知返回 DELIVERY_UNCERTAIN，不得换键重发。不开放读取任意任务历史或改模。
 - 同一次 send 重试沿用相同 requestKey、target、内容和 delivery（缺省与 queue 等价）；同键参数变化返回 REQUEST_KEY_CONFLICT。Host 在执行前持久保留投递回执，重启后已接受的请求返回原结果，未确定结果的请求返回 DELIVERY_UNCERTAIN，不再次创建或投递。普通投递回执不保存正文或附件字节；显式委派另保存下述有界执行范围。不要通过更换 requestKey 绕过未知结果，应先让用户在 Cindy 检查。
 - `cancel({requestKey})`：使本次请求及迟到的发送失效，仅撤回本插件该请求尚未执行的输入；不会停止接收方其他输入，也不保证撤销已经开始的工作。新操作使用新的 requestKey。
-- `tasks.send` 和 `targets.send` 均支持可选 `attachments:[{base64,name?}]`：只接收插件提供的图片字节，不接受本机路径、URL、媒体 URI 或自报 MIME。Host 检测 PNG/JPEG/WebP，最多 4 张、合计 20 MiB。先检查 `tasks.capabilities().messageAttachments.kinds` 包含 image；旧客户端不支持时停止，不静默丢图或改投临时路径。截图进既有 cindy-media，作为消息附件展示并进入模型输入；不需要额外声明 media.deposit。附件内容及名称参与幂等签名，更换附件不能复用同键。
-- 所有插件的两种发送入口共用 40 MiB 在途附件额度；超额在解码和写回执前返回可重试的 `TASK_BUSY`。等待已有请求结束后沿用原 requestKey 重试，不自动改投或丢图。
+- `tasks.send` 和 `targets.send` 均支持可选 `attachments:[{base64,name?}]`：只接收插件提供的字节，不接受本机路径、URL、媒体 URI 或自报 MIME。去处由 Host 按真实字节判定，与 Cindy 自己的 IM 渠道一致：图片（PNG/JPEG/GIF/WebP）和音视频（MP4/MOV/WebM、MP3/WAV/M4A/OGG）进既有 cindy-media；其余字节（PDF、文档、压缩包、Host 不认识的音视频格式等）按普通文件放进该任务自己的附件目录，`name` 决定显示名和扩展名，请务必传。都作为消息附件展示并交给 Agent；不需要额外声明 media.deposit。附件内容及名称参与幂等签名，更换附件不能复用同键。
+- 能力与上限看 `tasks.capabilities().messageAttachments`：`kinds` 列出可收的种类（旧客户端只有 `['image']`，只收 PNG/JPEG/WebP、最多 4 张、合计 20 MiB；此时只发图片，其余如实告诉用户未转交，不静默丢弃或改投临时路径），`maxCount` 条、单个不超过 `maxItemBytes`、一次发送合计不超过 `maxBytes`（当前 10 个、单个 30 MiB、合计 50 MiB）。
+- `attachmentOnly === true` 时，`tasks.send` 的 `text` 可传空字符串 `''`，前提是带了 `attachments`（例如转发一张没有配文的照片）；不带附件时仍需非空 text。
+- `contextMaxCount` 存在时，`tasks.send` 另可传 `contextAttachments:[{base64,name?}]`（最多 `contextMaxCount` 个，与 attachments 共用 `maxBytes`）：只给 Agent 参考、不显示也不随消息保存的附件，用于转发群聊记录或被引用消息里的图片和文件，相当于 Cindy 频道机器人的「群历史附件」。媒体以可回收缓存保存、文件留在会按时清理的暂存区，任务长时间排队后可能已被回收。它参与幂等签名；不传时签名与旧版相同。`targets.send` 不接受该字段。
+- 所有插件的两种发送入口共用 100 MiB 在途附件额度；超额在解码和写回执前返回可重试的 `TASK_BUSY`。等待已有请求结束后沿用原 requestKey 重试，不自动改投或丢图。
 - 目标只包含本机可见、可用的项目、普通任务或有唯一 canonical 对话的活跃伙伴；不提供 Mobile/device-link 透传。投递仍受当前插件启用、批准、账号和目标权限约束；插件内容不构成新真人授权。
 
 调用统计由 Host 统一确认，不提供插件自报次数或定义计次规则的接口。独立的 `tasks.send` / `targets.send`
@@ -258,6 +261,34 @@ autoTitle 与 title 互斥，task/bot
 项目名称。新模式参与幂等摘要；旧字段组合的摘要及重放行为保持，不需要重新批准或配置。
 旧 Host 未宣告支持时，应明确提示所需客户端能力，不能静默丢弃资料或假称已经自动命名。
 
+### 转发 IM 消息的出处（可选）
+
+插件把它代管的 IM 消息（如微信群里的提问）转进任务时，先检查 `tasks.capabilities().messageRelay === true`，
+再给 `tasks.send` 另传 `relay`，Cindy 会把这条消息显示成与自带 IM 渠道相同的卡片：
+
+```js
+await cindy.tasks.send({ taskId, requestKey, expectedRevision, text, context, relay: {
+  platform: 'wechat',            // 1–32 字符（去首尾空白后），不含换行等控制字符
+  chatType: 'group',             // 'group' | 'direct'
+  chatName: '产品群',            // 可选，≤100 字符
+  sender: { id: 'wxid_xxx', name: 'Chris', isOwner: false }, // id ≤128，name ≤64，isOwner 必须是布尔值
+} });
+```
+
+- 各层只接受上面这些键，多一个、类型或长度不对都返回 `INVALID_REQUEST`。`targets.send` 不接受 `relay`。
+- `text` 只放发言人的原话，卡片正文只显示它。群聊背景放进 `context`：Cindy 只把其中第一个
+  `<group_chat_context>\n[群里最近的消息]（或 [自你上次请求后群里新增的消息]）\n…\n</group_chat_context>` 块显示为
+  「群聊背景」，块外的说明（例如给 Agent 的回复方式说明）照常交给 Agent，但不显示。
+- 平台 id 用 Cindy 已知的写法（`wechat`、`wecom`、`dingtalk`、`feishu`、`lark`、`slack`、`telegram`、`discord`、
+  `imessage`、`x`）才显示平台名和手机端卡片；其它值在电脑端原样显示、手机端保持普通插件消息。
+- `isOwner: true` 时卡头为「Cindy · 来自 微信」，否则写出发言人与群名。手机端对所有 IM 都只显示「Cindy · 来自 X」。
+- **来源标签不变**：卡片上方仍显示「由插件「你的插件名」发送」，Agent 收到的 `[消息来源]` 写明是本插件转发、
+  发言人是谁、是否由插件标明为主人本人。`relay` 只是展示上下文：不改变权限、Auto 审阅或任务归属，也不让消息变成
+  用户本人在 Cindy 里的输入。共享任务的访客看不到 `relay`。
+- 宿主会清洗这些字符串（去换行、限长、替换书名号）后保存；`relay` 参与幂等摘要，同键重试必须带相同的 `relay`。
+  不带 `relay` 的请求与旧版完全一样，已有 requestKey 照常重放。
+- 旧 Host 没有 `messageRelay` 时不要传 `relay`（会被当作未知字段拒绝）；照旧只发 `text` 和 `context`，消息显示为普通插件消息。
+
 ### 新建任务的权限选择（可选）
 
 先检查 `tasks.capabilities().createPermissionMode === true`。`tasks.create` 和 project 的
@@ -283,7 +314,21 @@ autoTitle 与 title 互斥，task/bot
 
 `models()` 返回统一目录可选项的完整 route、efforts 和 supportsFastMode。用户明确选择后将 route 原样传给 create，或用 `setModel({taskId, expectedRevision, route})` 修改已有自有任务。运行中按普通任务的安全边界切换，不修改应用默认。两方法使用前检查 capabilities.operations。
 
-**远程模型执行（新增，尚未发布）**：`capabilities().remoteRoutes === true` 时，
+**IM 共用项目与模型**：检查 `capabilities().imProjects === true`，并声明、获批
+`agent.tasks` 与 `agent.targets`。`imProjects()` 返回 `{projects:[{id,label,directory?}]}`，包含
+内置 `chat` 与宿主电脑侧栏项目；id 原样使用，不构造路径。项目选择与聊天绑定由插件保存。
+`create({requestKey,title,imProject:id})` 同时读取该项目的模型、来源、推理档与权限；不能再带
+route、permissionMode、callId、isolatedWorkspace。共用配置的插件可声明 `showTaskPreferences:false`
+隐藏重复的任务设置卡，历史偏好保留。
+
+接续前用 `followImProject({taskId,expectedRevision,imProject:id})`，返回 `{status,task}`，然后以
+返回的 revision 发送新输入。只适用于插件自己空闲的任务，TASK_BUSY 时等待，STALE_REVISION 时重新读取；
+PROJECT_MISMATCH 表示换了项目或任务被移动，应新建任务并保留旧任务。归档后同样新建。
+发送已受理或结果不确定时，先按原请求键查回执，不重新选项目或改写原输入。旧 Host 缺能力时提示升级，
+不能改投插件默认模型。权限收紧与项目移除会在派发时再检查，插件不能绕过。项目属于插件宿主电脑，
+远程模型来源不把项目搬到另一台电脑。
+
+**远程模型执行**：`capabilities().remoteRoutes === true` 时，
 `create` 和 `setModel` 的完整 route 可带 `agentDeviceId`（同账号其他电脑或 `share:<shareId>`）。
 省略表示插件运行电脑；它选择 Agent 执行来源，任务记录、文件、权限和结果仍归插件运行电脑。
 先读取该能力再给统一选择器传 `allowRemote:true`，将返回的整份 route 原样保存与回传。
@@ -348,6 +393,21 @@ const page = await cindy.tasks.readMessages({ taskId: task.taskId, limit: 50 });
 // 保存 nextCursor；下一页传 after，不以最后一条 assistant 推断 run 已完成。
 ```
 
+**边生成边显示（新增接口，尚未发布）**：`capabilities().runPreview === true` 时，`getRun` 在
+`status === 'running'` 且任务当前执行的正是这次输入时，可额外返回 `preview: { text }`：
+Agent 正在输出的那一段回答（最多 32768 个 UTF-16 字符，超出只保留开头），已去掉内部引用标记。
+它只是过程中的草稿：一次工具调用后会从新的一段重新开始，不是完整回答，也不是最终结果；
+没有正在输出的文字、run 已结束或任务正在执行别的输入时不带此字段。最终回答仍在 run 结束后
+按 `outputMessageId` 用 `readMessages` 读取，不要把最后一次 preview 当结果保存。
+无需新声明，归属检查与 `getRun` 相同，只能看到本插件这次 run 的内容。旧 Host 没有该标记，
+插件照常只显示阶段，不要为了取草稿而缩短轮询间隔（约 700 ms 足够）。
+
+```js
+const caps = await cindy.tasks.capabilities();
+const state = await cindy.tasks.getRun({ runId: run.runId });
+if (caps.runPreview === true && state.preview) showDraft(state.preview.text); // 可能变短或重置
+```
+
 SDK 成功返回 data，失败抛出带 code 的错误。原始管子响应为 `{ok:true,data}` 或
 `{ok:false,error:{code,message,retryable}}`。不要将请求键换掉来绕过不确定的派发结果。
 create/send 的 requestKey 持久去重；同键不同内容拒绝。删除后的记录不自动重建。
@@ -376,7 +436,7 @@ run 的 acceptedConfig 是接收配置，execution 是观测到的原生 instanc
 实验性接口尚未提供全部恢复路径的最终对账和事件补拉，因此暂不用于无人值守正式评测。
 
 
-## 4.11.7 伙伴委派协议与回执（未发布）
+## 4.11.7 伙伴委派协议与回执
 
 此增量在插件系统实现，不创建普通任务代替伙伴，不更改伙伴身份、模型、目录或权限档。
 插件声明 `agent: { tasks: true, targets: true, delegation: true }`；`agent:delegation`
@@ -401,7 +461,7 @@ Auto 使用回执的任务范围并保留主人的限制；Ask、Full Access 沿
 `{settled:true,requestKey,clientId}`。缺少 settled 或请求不匹配时不得解除未确认的执行占位；旧 Host 的回执行为不变。
 执行能力声明及单元测试通过不代表某个业务插件已通过真实端到端验收。
 
-### 委派收据查询（未发布）
+### 委派收据查询
 
 先检查 targets.capabilities().delegation 的 execution、receiptQuery 和 settled 均为 true。
 显式 delegation 的 send 成功响应新增 executionId、requestKey、target；同键同内容仍返回原收据。
@@ -413,7 +473,7 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
 恢复尚未结束时保持 settled=false；恢复最终失败后记录原输入的 failed 终态，即使运行时已重建也保留原 instanceId/generation，不结算后来排队的请求。
 取消只撤回该插件输入，只有原队列和执行确已结束时 settled=true。不读取伙伴历史。
 
-## 4.11.8 只读查看项目任务（未发布）
+## 4.11.8 只读查看项目任务
 
 插件需要按项目展示任务列表和状态（例如看板）时，声明 `"agent": { "observe": true }`，在本机 Desktop 逻辑页使用 `cindy.observe`。
 它不依赖、也不授予 `agent.tasks` / `agent.targets`；`agent:observe` 单列为独立权限，安装/更新时已确认的不重复询问，否则首次调用复用既有宿主确认。
@@ -428,7 +488,7 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
 - `openTask({taskId})`：在主窗口打开该任务；Cindy 未在前台时不抢焦点。只接受 `projectTasks` 能列出的任务，否则返回 `TARGET_UNAVAILABLE`。返回 `{opened:true}`。
 - 只读，不能发送消息、修改、归档或停止任务；需要这些操作请改用 `cindy.tasks` / `cindy.targets` 并声明对应权限。状态变化不推送，插件自行按需刷新。
 
-## 4.11.9 查看伙伴和状态（未发布）
+## 4.11.9 查看伙伴和状态
 
 插件要把伙伴画成角色、头像墙或状态面板时，声明 `"agent": { "companions": true }`，在本机 Desktop 逻辑页使用 `cindy.companions`。
 它是一项独立权限（`agent:companions`），覆盖伙伴名单、实时状态、待处理请求（内容与对话卡片上看到的一致）、最新一条回复与最近对话；安装/更新时已确认的不重复询问，否则首次调用复用既有宿主确认。

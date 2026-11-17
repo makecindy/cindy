@@ -39,6 +39,7 @@ import screenRecordingPermissionIcon from '@/assets/system-settings/screen-recor
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
+import { DownloadMeter } from '@/components/ui/download-meter';
 import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
@@ -1944,20 +1945,10 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                   </button>
                 </div>
                 {driverUpdatePending &&
-                driverUpdateProgress?.phase === 'downloading' &&
-                driverUpdateProgress.downloadedBytes !== null &&
-                driverUpdateProgress.totalBytes ? (
-                  <div className="absolute inset-x-0 bottom-0 h-[2px] bg-[var(--settings-input-bg)]">
-                    <div
-                      className="h-full bg-[var(--settings-section-title)] transition-[width] duration-500"
-                      style={{
-                        width: `${Math.min(
-                          100,
-                          (driverUpdateProgress.downloadedBytes / driverUpdateProgress.totalBytes) *
-                            100,
-                        )}%`,
-                      }}
-                    />
+                driverUpdateProgress?.phase !== 'done' &&
+                driverUpdateProgress?.download ? (
+                  <div className="mt-3">
+                    <DownloadMeter label="cua-driver" progress={driverUpdateProgress.download} />
                   </div>
                 ) : null}
               </SettingsBlock>

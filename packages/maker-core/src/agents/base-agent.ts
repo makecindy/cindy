@@ -1472,6 +1472,9 @@ export interface AgentDeps {
    */
   claudeHooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
 
+  /** Optional native tool hooks; the host owns live task selection and plugin lifecycle. */
+  toolLifecycleControl?: import('./shared/tool-lifecycle.js').ToolLifecycleControl;
+
   /** Host bridge for repairing Claude Code subagent usage when provider usage is zero. */
   registerClaudeSubagentTask?: (task: ClaudeSubagentTaskRegistration) => void;
   getClaudeSubagentTaskUsage?: (taskId: string) => ClaudeSubagentTaskUsage | undefined;
@@ -2418,6 +2421,30 @@ export interface BackgroundTaskSnapshot {
  */
 export type TurnContinuationState = 'awaiting' | 'active' | 'cancelled';
 
+/** Fixed diagnostic codes only; never carry SDK errors, prompts or task output. */
+export type TurnContinuationCancellationReason =
+  | 'all_wake_tasks_stopped'
+  | 'bridge_aborted'
+  | 'graceful_stop'
+  | 'user_stop'
+  | 'wake_contract_unfulfilled';
+
+/** Runtime projection for adapters/consumers whose TypeScript contract may be older. */
+export function safeTurnContinuationCancellationReason(
+  reason: unknown,
+): TurnContinuationCancellationReason | undefined {
+  switch (reason) {
+    case 'all_wake_tasks_stopped':
+    case 'bridge_aborted':
+    case 'graceful_stop':
+    case 'user_stop':
+    case 'wake_contract_unfulfilled':
+      return reason;
+    default:
+      return undefined;
+  }
+}
+
 /**
  * Why a session handle is being torn down.
  *
@@ -2631,8 +2658,11 @@ export interface AgentSessionHandle {
    * wake task does not necessarily produce another provider `done`.
    */
   onTurnContinuationChange?(
-    listener: (continuationId: number, state: TurnContinuationState) => void,
+    listener: (continuationId: number, state: TurnContinuationState, reason?: TurnContinuationCancellationReason) => void,
   ): () => void;
+
+  /** Cause of a retained cancelled claim, including one whose done is still queued. */
+  getTurnContinuationCancellationReason?(continuationId: number): TurnContinuationCancellationReason | undefined;
 
   /** 关闭会话，清理子进程 */
   close(opts?: AgentSessionTeardownOptions): Promise<void>;

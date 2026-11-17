@@ -1,6 +1,7 @@
 import { createMessageClearRecovery } from '../../desktop/src/main/localDb/messageClearRecovery.js';
 import { readVisiblePiUserEntry, patchMessageAgentMetaWithResultRow } from '../../desktop/src/main/localDb/messageMutations.js';
 import { removeRefs as removeMediaRefs, removeSessionAttachmentRefIfUnreferencedByLiveMessage } from '../../desktop/src/main/cindy-media/ledger.js';
+import { recomputePrRefsForSession } from '../../desktop/src/main/git-context/prRefsStore.js';
 import { createLogger } from '../../desktop/src/main/logger.js';
 import { messageToCamel } from "../../desktop/src/main/localDb/mapper.js";
 import {
@@ -120,6 +121,9 @@ export function createHostMessageRecovery(deps: {
     broadcastMessageDeleted: (payload, owner) => {
       if (isCurrent(owner)) deps.publish({ type: 'message_deleted', ...payload });
     },
+    recomputePrRefsForSession: (id, owner) => recomputePrRefsForSession(id, {
+      dbClient: owner.client, isCurrent: () => isCurrent(owner),
+    }),
     log: createLogger('localDb/messages'),
   });
   return {

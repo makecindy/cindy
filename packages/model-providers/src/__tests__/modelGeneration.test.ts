@@ -36,6 +36,19 @@ describe('new model generation defaults', () => {
     }
   });
 
+  // Unit: the official-endpoint GPT-6.2 Sol record keeps the 272K working default that future
+  // IDs inherit. Without its own capacity, a verified 272K window becomes a hard ceiling and an
+  // explicit 500K task budget is clamped (review on #11172). buildUserProvider is the entry.
+  it('keeps the public capacity beside the 272K working default for GPT-6.2 Sol on the official API', () => {
+    const runtime = { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses' as const, models: discovered('gpt-6.2-sol') };
+    const provider = buildUserProvider({ id: 'openai-api', name: 'OpenAI API', runtimes: { codex: runtime, pi: runtime } },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    for (const agent of ['codex', 'pi'] as const) {
+      expect(provider.models[agent]![0]).toMatchObject({ id: 'gpt-6.2-sol', contextWindow: 272000,
+        contextWindowMax: 1050000, contextWindowVerified: true });
+    }
+  });
+
   it('uses a target maximum-only report before inherited working windows without verifying it', () => {
     const provider = build([
       { id: 'private-6-sol', name: 'Old', discoveredMetadata: { contextWindow: 272000 } },
@@ -272,9 +285,9 @@ describe('new model generation defaults', () => {
   });
 
   it('reuses serializer mappings without copying the predecessor identity, prices, endpoint or headers', () => {
-    const source = providerModelRecord('gpt-6.1-sol', 'https://api.openai.com/v1', 'openai-responses')!;
+    const source = providerModelRecord('gpt-6.2-sol', 'https://api.openai.com/v1', 'openai-responses')!;
     const inherited = providerModelGenerationRecord('gpt-9-sol', 'https://relay.example/v1', 'openai-responses')!;
-    expect(inherited).toMatchObject({ id: 'gpt-9-sol', name: 'gpt-9-sol', upstream: 'https://relay.example/v1', inheritedFrom: 'gpt-6.1-sol' });
+    expect(inherited).toMatchObject({ id: 'gpt-9-sol', name: 'gpt-9-sol', upstream: 'https://relay.example/v1', inheritedFrom: 'gpt-6.2-sol' });
     expect(inherited.execution.pi.thinkingLevelMap).toEqual(source.execution.pi.thinkingLevelMap);
     expect(inherited.execution.pi.compat).toEqual(source.execution.pi.compat);
     expect(inherited.cost).toBeUndefined();

@@ -23,12 +23,14 @@ import type {
   ModelAccessCreditPoolUsage,
   ModelAccessCreditUsage,
   ModelAccessPromotionalGrantState,
+  ModelAccessPromotionalGrantSource,
   ModelAccessPromotionalGrantUsage,
 } from '../../shared/modelAccess.js';
 import { isAllowedBillingRedirectUrl, isAllowedStripeBillingPortalUrl } from './paymentRedirect.js';
 
 const MAX_ID_LENGTH = 128;
 const MAX_NAME_LENGTH = 128;
+const MAX_GIFT_SENDER_LENGTH = 80;
 const MAX_CURSOR_LENGTH = 512;
 const MAX_QR_VALUE_LENGTH = 4_096;
 const MAX_PROMOTIONAL_GRANTS = 1_000;
@@ -234,6 +236,16 @@ function projectCreditPool(
   };
 }
 
+/**
+ * 赠送的来源只是展示信息：认不出的类型或不合规的内容按「没有来源」处理，
+ * 不因此丢掉整份余额。
+ */
+function projectPromotionalGrantSource(value: unknown): ModelAccessPromotionalGrantSource | null {
+  if (!isRecord(value) || value.type !== 'gift_card') return null;
+  const senderName = boundedString(value.senderName, MAX_GIFT_SENDER_LENGTH);
+  return senderName ? { type: 'gift_card', senderName } : null;
+}
+
 function projectPromotionalGrant(value: unknown): ModelAccessPromotionalGrantUsage {
   if (!isRecord(value)) invalidResponse();
   const grantId = boundedString(value.grantId);
@@ -271,9 +283,11 @@ function projectPromotionalGrant(value: unknown): ModelAccessPromotionalGrantUsa
   ) {
     invalidResponse();
   }
+  const source = projectPromotionalGrantSource(value.source);
   return {
     grantId,
     displayName,
+    ...(source ? { source } : {}),
     originalAmount: originalAmount.source,
     usedAmount: usedAmount.source,
     remainingAmount: remainingAmount.source,

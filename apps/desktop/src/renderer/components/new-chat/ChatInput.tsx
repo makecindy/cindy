@@ -45,12 +45,14 @@ import {
   ComposerOrderedList,
   handleStructuredListBackspace,
   handleComposerListEnter,
+  handleComposerListTab,
   hasTrailingPlainListParagraph,
   isTopLevelBlockSelection,
   isTrailingEmptyTopLevelParagraph,
   promoteTrailingPlainListParagraph,
 } from './ComposerListNodes';
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
+import { ComposerLineEdgeKeymap } from './ComposerLineEdgeKeymap';
 import { useVoiceProcessingIndicator } from '../../voice-input/useVoiceProcessingIndicator';
 import { EmptyDocSelectionGuard } from './EmptyDocSelectionGuard';
 import { restoreComposerDocument } from './restoreComposerDocument';
@@ -164,6 +166,7 @@ import { captureComposerSendSnapshot, isComposerSendSnapshotCurrent } from './co
 import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
 
 import {
+  discoveredCopyReason,
   confirmAgentSwitchRisk,
   isAgentSwitchEchoConfigConsistent,
   isAgentSwitchResponseFresh,
@@ -386,7 +389,7 @@ import {
 } from '@/lib/providerModels';
 import {
   clearProviderModelEffort,
-  clearProviderModelFast, editProviderModelMemoryBatch,
+  clearProviderModelFast, clearProviderModelThinking, editProviderModelMemoryBatch,
   getProviderModelEffort,
   setProviderModelChoice,
   setProviderModelEffort,
@@ -988,6 +991,7 @@ const LOCAL_MODEL_MEMORY: ModelMemoryAccessors = {
   setFast: setProviderModelFast,
   getThinking: getProviderModelThinking,
   setThinking: setProviderModelThinking,
+  clearThinking: clearProviderModelThinking,
   // 「恢复推荐」= 删记忆键(跟随目录新默认),不是把这一版的默认快照写回去。
   // device-link 镜像没有这两个入口(隧道协议没有删除那一笔),按各自能力退化。
   clearEffort: clearProviderModelEffort,
@@ -1019,6 +1023,9 @@ const SSH_PROJECT_MODEL_MEMORY: ModelMemoryAccessors = (() => {
       local(agent) ? getProviderModelThinking(agent, providerId, modelId) : undefined,
     setThinking: (agent, providerId, modelId, enabled) => {
       if (local(agent)) setProviderModelThinking(agent, providerId, modelId, enabled);
+    },
+    clearThinking: (agent, providerId, modelId) => {
+      if (local(agent)) clearProviderModelThinking(agent, providerId, modelId);
     },
     clearEffort: (agent, providerId, modelId) => {
       if (local(agent)) clearProviderModelEffort(agent, providerId, modelId);
@@ -2505,6 +2512,11 @@ export function ChatInput({
       WindowsSelectionReplacement.configure({
         enabled: window.electronAPI.platform === 'win32',
       }),
+      // macOS Ctrl+A / Ctrl+E 按"当前行"(hardBreak 分行)移到行首 / 行尾,
+      // 而不是 Tiptap 默认的整段开头 / 结尾。
+      ComposerLineEdgeKeymap.configure({
+        enabled: window.electronAPI.platform === 'darwin',
+      }),
       // 空输入框全选 / 全选后删空都会在行首留一块幽灵高亮(空 paragraph 被整体框进
       // AllSelection,删空后 Chromium 的 DOM selection 也不跟着折叠)。见模块头注释。
       EmptyDocSelectionGuard,
@@ -2834,6 +2846,14 @@ export function ChatInput({
         // but we expose a ref-based escape hatch via `panelBridgeRef`.
         const bridge = panelBridgeRef.current;
         if (bridge?.captureKey(event)) {
+          event.preventDefault();
+          return true;
+        }
+
+        // Tab / Shift+Tab — 光标在结构化列表里时调整列表层级(大纲式编辑)。
+        // 放在 captureKey 之后(palette 打开时 Tab 归 palette),推荐提示词与
+        // cycle-permission-mode 之前:在列表里 Shift+Tab 不会误切权限模式。
+        if (handleComposerListTab(view, event)) {
           event.preventDefault();
           return true;
         }
@@ -7951,11 +7971,22 @@ export function ChatInput({
   // 标题写那台电脑的名字(「这台电脑」在控制端看来是本机,会读错)。
   const relocationSourceAgent = sessionEngineFilter?.currentAgent;
   const confirmAgentRelocation = useCallback(
-    (target: UnifiedSelectionAgentDevice, targetAgent: string) =>
-      confirmAgentSwitchRisk({
+    (target: UnifiedSelectionAgentDevice, targetAgent: string) => {
+      const description = t(relocationDescriptionKey({
+        fromAgent: relocationSourceAgent,
+        toAgent: targetAgent,
+        fromAgentDeviceId: agentDeviceId,
+        toAgentDeviceId: target?.deviceId,
+      }));
+      // 另一台电脑上那份只是因为任务所在电脑的这一份用不了才列出来：每次都问(不受「不再提示」影响)，
+      // 同一个框里说明原因。不答或取消 = 不换；正在进行的回复和这一份的恢复都不受影响(2026-11-18)。
+      const ask = target?.askBeforeUse;
+      const reason = ask ? discoveredCopyReason(t, ask) : null;
+      return confirmAgentSwitchRisk({
         hasSwitchIntent:
           (target?.deviceId ?? null) === agentDeviceId ||
           (intentAgentDeviceId !== undefined && intentAgentDeviceId === (target?.deviceId ?? null)),
+        alwaysAsk: !!ask,
         confirm: confirmDialog,
         copy: {
           title: target
@@ -7965,17 +7996,15 @@ export function ChatInput({
                   device: deviceDisplayName(deviceLinkDeviceId, deviceLinkDeviceName),
                 })
               : t('newChat.chatInput.agentRelocation.titleLocal'),
-          description: t(relocationDescriptionKey({
-            fromAgent: relocationSourceAgent,
-            toAgent: targetAgent,
-            fromAgentDeviceId: agentDeviceId,
-            toAgentDeviceId: target?.deviceId,
-          })),
+          description: reason
+            ? t('newChat.chatInput.agentRelocation.discoveredDescription', { reason, description })
+            : description,
           confirmText: t('newChat.chatInput.agentRelocation.confirm'),
           cancelText: t('newChat.chatInput.agentRelocation.cancel'),
           dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
         },
-      }),
+      });
+    },
     [agentDeviceId, intentAgentDeviceId, deviceLinkDeviceId, deviceLinkDeviceName, relocationSourceAgent, confirmDialog, t],
   );
   const sessionRemoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(() => {
@@ -9579,6 +9608,9 @@ export function ChatInput({
           )}
         </div>
       )}
+      {pluginUiCandidates.header && !remoteHostId && !deviceLinkDeviceId && (
+        <PluginUiSlot position="composer.header" sessionId={sessionId} />
+      )}
       {/* When the pending-queue panel is visible, the wrapper div owns the
           border + corner radius + focus-within highlight. Both inner halves
           (panel + input card) become borderless sections, so a focus on the
@@ -10198,7 +10230,28 @@ export function ChatInput({
                         : true
                     }
                     onThinkingChange={async (enabled) => {
-                      if (settingsLocked) return;
+                      if (settingsLocked) return false;
+                      // Apply to the runtime (or the next-message intent) before
+                      // confirming the preference. A rejected write must leave
+                      // the visible switch and its remembered value unchanged.
+                      if (sessionId) {
+                        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
+                        if (intent) {
+                          const applied = await performAgentSwitch(intent.target, intent.model, intent.providerId, {
+                            ...(intent.effort ? { effort: intent.effort as Effort } : {}),
+                            fastMode: intent.fastMode,
+                            thinking: enabled,
+                            axesOnly: true,
+                          });
+                          if (!applied) return false;
+                        } else {
+                          const api = deviceLinkDeviceId
+                            ? makerApiForDevice(deviceLinkDeviceId)
+                            : window.electronAPI.maker;
+                          await api.setThinkingEnabled(sessionId, enabled);
+                        }
+                        if (!isSessionScopeCurrent(sessionId, currentSessionIdRef.current)) return false;
+                      }
                       if (currentModelAgentKind && effectiveSourceId) {
                         if (modelMemory?.setThinking) {
                           modelMemory.setThinking(
@@ -10215,24 +10268,6 @@ export function ChatInput({
                             enabled,
                           );
                         }
-                      }
-                      // 意图期内(点选尚未发送)必须把开关写回 staged 意图：否则结算回放
-                      // 会按登记时的旧快照下发档位，把用户刚关掉的思考又打开(或反之)。
-                      if (sessionId && currentModelAgentKind) {
-                        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
-                        if (intent) {
-                          await performAgentSwitch(intent.target, intent.model, intent.providerId, {
-                            ...(intent.effort ? { effort: intent.effort as Effort } : {}),
-                            fastMode: intent.fastMode,
-                            thinking: enabled,
-                          });
-                        }
-                      }
-                      if (sessionId) {
-                        const api = deviceLinkDeviceId
-                          ? makerApiForDevice(deviceLinkDeviceId)
-                          : window.electronAPI.maker;
-                        await api.setThinkingEnabled(sessionId, enabled);
                       }
                     }}
                     modelMemory={modelMemory}

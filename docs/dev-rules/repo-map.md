@@ -2,6 +2,7 @@
 
 > **读取时机**：首次接触本仓、需要定位某个功能的代码位置、或新增代码／依赖前判断
 > 应该放进哪个模块时
+> **适用路径**：按主题
 
 本文只做**定位导航**：先按用户行为找生产入口、共享判据和测试，再按目录判断代码归属。
 事实源是各目录的源码、`package.json` 与 README；发现本文与代码不一致时，以代码为准并顺手修正本文。
@@ -15,6 +16,7 @@
 
 | 用户行为 | 生产入口与共享判据 | 从哪些测试开始 |
 | --- | --- | --- |
+| 兑换礼品卡（输入兑换码、粘贴礼品卡链接或点开 `cindy://gift/<code>`） | 两端共用 [giftCard](../../packages/maker-shared/src/giftCard.ts)（兑换码归一、响应投影、失败原因）与 [giftCardAmount](../../packages/maker-shared/src/giftCardAmount.ts)（印在卡面上的金额）。Desktop：[GiftCardRedeemDialog](../../apps/desktop/src/renderer/features/billing/GiftCardRedeemDialog.tsx) 经 [billing/index.ts](../../apps/desktop/src/main/billing/index.ts) 的 `PREVIEW_GIFT_CARD` / `REDEEM_GIFT_CARD` 请求，链接由 [deepLink.ts](../../apps/desktop/src/main/deepLink.ts) 收下。Mobile：[GiftCardSheet](../../apps/mobile/src/gift-card/GiftCardSheet.tsx) 与 [useGiftCardRedeem](../../apps/mobile/src/gift-card/useGiftCardRedeem.ts)，链接由 [+native-intent.ts](../../apps/mobile/app/+native-intent.ts) 交给 [giftCardIntent](../../apps/mobile/src/gift-card/giftCardIntent.ts)，根级 [GiftCardHost](../../apps/mobile/src/gift-card/GiftCardHost.tsx) 呈现。兑换码只在内存与请求体里，不进路由、日志或存储；是否可领取以 model-access-server 为准。 | [共享判据](../../packages/maker-shared/src/__tests__/giftCard.test.ts)、[卡面金额](../../packages/maker-shared/src/__tests__/giftCardAmount.test.ts)、[Desktop 弹窗](../../apps/desktop/src/renderer/features/billing/__tests__/GiftCardRedeemDialog.test.tsx)、[Mobile 面板](../../apps/mobile/src/__tests__/GiftCardSheet.test.tsx)、[Mobile 链接](../../apps/mobile/src/__tests__/giftCardIntent.test.ts) |
 | 发送、排队、插话、停止后继续 | [AgentInputCoordinator](../../apps/desktop/src/main/maker-ipc/agent-input-coordinator.ts) 持有输入事务；[register.ts](../../apps/desktop/src/main/maker-ipc/register.ts) 的 `sendToSessionInternal` 接宿主发送；[agentInputQueue](../../apps/desktop/src/shared/agentInputQueue.ts) 定义队列契约。个人 IM / 官方 hook 的调用方账本见 [IM 轮次流程](im-turn-flow.md)。 | [coordinator](../../apps/desktop/src/main/maker-ipc/__tests__/agent-input-coordinator.test.ts)、[队列契约](../../apps/desktop/src/main/__tests__/agentInputQueue.test.ts) |
 | 普通任务、伙伴与群任务切换权限 | [register.ts](../../apps/desktop/src/main/maker-ipc/register.ts) 的 `SET_PERMISSION_MODE` 与 [sessionPermissionChange](../../apps/desktop/src/main/maker-ipc/sessionPermissionChange.ts) 处理运行期变更；未加载运行时的持久化走 [sessionPermissionPersistence](../../apps/desktop/src/main/maker-ipc/sessionPermissionPersistence.ts)，伙伴专线同步走 [botPermissionSync](../../apps/desktop/src/main/maker-ipc/botPermissionSync.ts)。[permissionMode](../../packages/maker-shared/src/permissionMode.ts) 统一客户端的未知档位与 Full access 确认判据；实际执行权限仍由宿主／引擎决定。 | [权限持久化与专线同步](../../apps/desktop/src/main/maker-ipc/__tests__/sessionPermissionPersistence.test.ts)、[引擎控制](../../packages/maker-core/src/session-control.test.ts)、[跨端权限判据](../../packages/maker-shared/src/__tests__/permissionMode.test.ts) |
 | 重启后发现中断任务、运行中断后续跑 | 启动候选由 [sessionActiveTurn](../../apps/desktop/src/main/localDb/sessionActiveTurn.ts) 判定，[interruptedResumeCandidates](../../apps/desktop/src/main/localDb/interruptedResumeCandidates.ts) 补展示信息；运行期自动续跑由 [interruptedTurnAutoResume](../../apps/desktop/src/main/maker-ipc/interruptedTurnAutoResume.ts) 分类，再回输入协调器。两者不是同一触发条件。 | [启动中断判据](../../apps/desktop/src/main/localDb/__tests__/sessionActiveTurn.test.ts)、[启动恢复对话框](../../apps/desktop/src/renderer/features/cc-agent/__tests__/InterruptedTasksResumeDialog.test.tsx)、[自动续跑判据](../../apps/desktop/src/main/maker-ipc/__tests__/interruptedTurnAutoResume.test.ts) |
@@ -96,5 +98,6 @@ Desktop 的 `main/local-agent/` 提供经 Cindy 主题确认授权的通用本�
 ## 校验下载与工具安装
 
 Desktop 发行资产统一走 `main/downloader/index.ts`；通用工具安装位于
-`main/managed-tools/`。接入方法和各业务保留的边界见
+`main/managed-tools/`；下载／安装进度统一为 `shared/downloadProgress.ts`，界面用
+`components/ui/download-meter.tsx`。接入方法和各业务保留的边界见
 [校验下载与受管工具安装](verified-downloads.md)。
