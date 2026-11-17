@@ -1,7 +1,8 @@
+import type { AgentEvent } from '@cindy/maker-core';
 import { describe, it, expect, vi } from 'vitest';
 import { createBotLearningTracker } from '../botLearningTracker.js';
 import { botLearningRows } from '@cindy/maker-shared/bot-learning';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rename, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createProjectMemoryReceipts } from '../botProjectLearning.js';
@@ -17,6 +18,11 @@ const skill = {
   title: '工作周报',
   action: 'updated' as const,
 };
+function successfulWrite(tracker: ReturnType<typeof createBotLearningTracker>, session: string, identity: string,
+  source: AgentEvent['source'], toolName: string, input: Record<string, unknown>, id = 'write') {
+  tracker.noteToolEvent(session, identity, { type: 'tool_use', source, data: { toolUseId: id, toolName, input } });
+  tracker.noteToolEvent(session, identity, { type: 'tool_result_full', source, data: { toolUseId: id, isError: false } });
+}
 describe('teammate learning receipt ownership', () => {
   // PR #10294: native file tools bypassed memory.beginWrite. Real files + production tracker
   // protect persisted created/updated feedback on the original bubble; read-only/invalid files
@@ -34,6 +40,8 @@ describe('teammate learning receipt ownership', () => {
       tracker.observe('s', 'i:1', publish);
       await writeFile(path.join(dir, 'user_tea.md'), shard('sencha'));
       await writeFile(path.join(dir, 'user_new.md'), shard('jasmine'));
+      successfulWrite(tracker, 's', 'i:1', 'pi', 'edit', { path: path.join(dir, 'user_tea.md') });
+      successfulWrite(tracker, 's', 'i:1', 'claude-code', 'Write', { file_path: path.join('.cindy', 'memory', 'user_new.md') }, 'new');
       // Another queued input rehydrates unchanged resources while this turn is still busy.
       // It must neither scan nor replace the pre-write reader used for this reply.
       const queuedReader = vi.fn(() => createProjectMemoryReceipts(root));
@@ -60,6 +68,116 @@ describe('teammate learning receipt ownership', () => {
         '---\ntitle: Compaction\ndescription: Internal summary\ntype: digest\n---\nInternal only');
       tracker.seal('s', 'i:2', 'next');
       await read.mock.results[1].value;
+      expect(publish).not.toHaveBeenCalled();
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  // #10318: independent readers share the project's directory. A read-only turn
+  // must not publish B's write. Real fs + production tracker, unit tier.
+  it('does not attribute a shared-directory write to a read-only session', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'native-owners-'));
+    try {
+      const dir = path.join(root, '.cindy', 'memory');
+      await mkdir(dir, { recursive: true });
+      const tracker = createBotLearningTracker();
+      const readA = vi.fn(await createProjectMemoryReceipts(root));
+      const readB = vi.fn(await createProjectMemoryReceipts(root));
+      const publishA = vi.fn(), publishB = vi.fn();
+      tracker.markProjectTeammate('A', readA);
+      tracker.markProjectTeammate('B', readB);
+      tracker.observe('A', 'A:1', publishA);
+      tracker.observe('B', 'B:1', publishB);
+      await writeFile(path.join(dir, 'user_tea.md'),
+        '---\ntitle: Tea\ndescription: Preferred drink\ntype: user\n---\noolong');
+      successfulWrite(tracker, 'B', 'B:1', 'codex', 'file_change', { changes: [{ path: path.join(dir, 'user_tea.md'), kind: { type: 'add' } }] });
+      tracker.seal('A', 'A:1', 'reply-A');
+      tracker.seal('B', 'B:1', 'reply-B');
+      await Promise.all([readA.mock.results[0].value, readB.mock.results[0].value]);
+      expect(publishA).not.toHaveBeenCalled();
+      expect(publishB).toHaveBeenCalledWith('reply-B', [{ kind: 'memory', key: 'user_tea.md', title: 'Tea', action: 'created' }]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ['claude-code', 'Write', 'file_path'], ['claude-code', 'Edit', 'file_path'],
+    ['pi', 'write', 'path'], ['pi', 'edit', 'path'], ['codex', 'file_change', 'changes'],
+  ] as const)('attributes only the confirmed %s %s file, excluding a concurrent sibling', async (source, name, field) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'native-tool-'));
+    try {
+      const dir = path.join(root, '.cindy', 'memory');
+      await mkdir(dir, { recursive: true });
+      const tracker = createBotLearningTracker(), publish = vi.fn();
+      const read = vi.fn(await createProjectMemoryReceipts(root));
+      tracker.markProjectTeammate('s', read);
+      tracker.observe('s', 'i:1', publish);
+      const file = path.join('.cindy', 'memory', 'user_tea.md');
+      const body = '---\ntitle: Tea\ndescription: Preferred drink\ntype: user\n---\noolong';
+      await writeFile(path.join(root, file), body);
+      await writeFile(path.join(dir, 'user_other.md'), body);
+      const input = field === 'changes' ? { changes: [{ path: file, kind: { type: 'add' } }] } : { [field]: file };
+      successfulWrite(tracker, 's', 'i:1', source, name, input);
+      tracker.seal('s', 'i:1', 'reply');
+      await read.mock.results[0].value;
+      expect(publish).toHaveBeenCalledExactlyOnceWith('reply', [
+        { kind: 'memory', key: 'user_tea.md', title: 'Tea', action: 'created' },
+      ]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each(['into', 'out of'])('attributes a successful Codex move %s memory only to its destination', async direction => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'native-move-'));
+    try {
+      const dir = path.join(root, '.cindy', 'memory');
+      await mkdir(dir, { recursive: true });
+      const memoryFile = path.join(dir, 'user_tea.md'), stagingFile = path.join(root, 'staged.md');
+      const from = direction === 'into' ? stagingFile : memoryFile;
+      const to = direction === 'into' ? memoryFile : stagingFile;
+      const body = '---\ntitle: Tea\ndescription: Drink\ntype: user\n---\noolong';
+      await writeFile(from, body);
+      const tracker = createBotLearningTracker(), publish = vi.fn();
+      const read = vi.fn(await createProjectMemoryReceipts(root));
+      tracker.markProjectTeammate('s', read);
+      tracker.observe('s', 'i:1', publish);
+      await rename(from, to);
+      // Another task can recreate the old name after a move out; it is not our save.
+      if (direction === 'out of') await writeFile(from, body + '\nAnother writer');
+      successfulWrite(tracker, 's', 'i:1', 'codex', 'file_change', {
+        changes: [{ path: from, kind: { type: 'update', move_path: to } }],
+      });
+      tracker.seal('s', 'i:1', 'reply');
+      await read.mock.results[0].value;
+      if (direction === 'into') expect(publish).toHaveBeenCalledWith('reply', [
+        { kind: 'memory', key: 'user_tea.md', title: 'Tea', action: 'created' },
+      ]);
+      else expect(publish).not.toHaveBeenCalled();
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  // Same tool ID can exist across sessions/turns. A failed, child or unknown
+  // result cannot authorize a directory change produced by a different writer.
+  it.each(['failed', 'unknown', 'omitted', 'unpaired', 'wrong-session', 'wrong-turn', 'background', 'child', 'read', 'shell', 'outside'])
+  ('does not claim a real file change from %s tool evidence', async mode => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'native-unconfirmed-'));
+    try {
+      const dir = path.join(root, '.cindy', 'memory');
+      await mkdir(dir, { recursive: true });
+      const tracker = createBotLearningTracker(), publish = vi.fn();
+      const read = vi.fn(await createProjectMemoryReceipts(root));
+      tracker.markProjectTeammate('s', read);
+      tracker.observe('s', 'i:1', publish);
+      const file = mode === 'outside' ? path.join(root, 'user_tea.md') : path.join(dir, 'user_tea.md');
+      const scope = mode === 'background' ? { turnScope: 'background' as const }
+        : mode === 'child' ? { agentMeta: { parentUuid: 'child' } } : {};
+      if (mode !== 'unpaired') tracker.noteToolEvent('s', 'i:1', { type: 'tool_use', source: 'claude-code', ...scope,
+        data: { toolUseId: 'write', toolName: mode === 'read' ? 'Read' : mode === 'shell' ? 'Bash' : 'Write', input: { file_path: file } } });
+      await writeFile(path.join(dir, 'user_tea.md'), '---\ntitle: Tea\ndescription: Drink\ntype: user\n---\noolong');
+      tracker.noteToolEvent(mode === 'wrong-session' ? 'other' : 's', mode === 'wrong-turn' ? 'i:0' : 'i:1', {
+        type: 'tool_result_full', source: 'claude-code', ...scope,
+        data: { toolUseId: 'write', ...(mode === 'unknown' ? {} : { isError: mode === 'failed' }),
+          ...(mode === 'omitted' ? { outputOmitted: 'oversized' } : {}) },
+      });
+      tracker.seal('s', 'i:1', 'reply');
+      await read.mock.results[0].value;
       expect(publish).not.toHaveBeenCalled();
     } finally { await rm(root, { recursive: true, force: true }); }
   });

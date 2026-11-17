@@ -190,7 +190,7 @@ describe('sendToSession ordering', () => {
     const pluginStateBlock = extractBetween(
       source,
       'ipcMain.handle(\n    MAKER_INVOKE.PLUGINS_GET_STATE',
-      'ipcMain.handle(MAKER_INVOKE.PLUGINS_SET_ENABLED',
+      'registerPluginEnableHandlers(',
     );
 
     expect(pluginStateBlock).toContain('resolveLocalCollabPolicyWorkingDir(');

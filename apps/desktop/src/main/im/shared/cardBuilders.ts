@@ -329,9 +329,18 @@ export function createCardBuilders(
       const { sessionId, agentKind, sections, currentModelId, currentProviderId, currentEffort, defaultEffortByModel } =
         args;
       // 当前选中模型展示名:跨所有分段按 id 找;IM 卡片当前仍保持描述留空。
-      const currentLabel =
-        sections.flatMap((s) => s.models).find((m) => m.id === currentModelId)?.displayName ??
-        currentModelId;
+      // 会话锁定了来源、且该来源就在清单里时,「当前」一行与按钮同一写法带上供应商名 ——
+      // 多家都有同名模型时,只写模型名看不出现在用的是哪一家。来源未锁定(跟随默认)时
+      // 不替用户猜是哪一家,只写模型名。
+      const currentSection = sections.find(
+        (s) => s.provider.id === currentProviderId && s.models.some((m) => m.id === currentModelId),
+      );
+      const currentName =
+        (currentSection?.models ?? sections.flatMap((s) => s.models)).find((m) => m.id === currentModelId)
+          ?.displayName ?? currentModelId;
+      const currentLabel = currentSection
+        ? ui.cards.model.optionLabel(currentSection.provider.name, currentName, null)
+        : currentName;
 
       return {
         title: ui.cards.model.title,
@@ -356,7 +365,8 @@ export function createCardBuilders(
                 requestId: `model-pick:${sessionId}`,
                 sessionId,
                 modelId: m.id,
-                modelLabel: m.displayName,
+                // 选中后的回执文案(model.resolved)原样用它:带上供应商名,回执才说得清切到了哪一家。
+                modelLabel: ui.cards.model.optionLabel(sec.provider.name, m.displayName, null),
                 providerId: sec.provider.id,
                 effort,
               },

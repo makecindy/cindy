@@ -1,6 +1,8 @@
 import type {
   BillingCatalog,
   BillingCurrentSubscription,
+  BillingGiftCardPreviewResult,
+  BillingGiftCardRedeemResult,
   BillingOrderList,
   BillingPaymentHistory,
   BillingPaymentOrder,
@@ -81,5 +83,11 @@ export const billingApi = {
   },
   openPaymentRedirect(url: string): Promise<{ success: boolean }> {
     return window.electronAPI.billing.openPaymentRedirect({ url });
+  },
+  previewGiftCard(code: string): Promise<BillingGiftCardPreviewResult> {
+    return window.electronAPI.billing.previewGiftCard({ code });
+  },
+  redeemGiftCard(code: string): Promise<BillingGiftCardRedeemResult> {
+    return window.electronAPI.billing.redeemGiftCard({ code });
   },
 };

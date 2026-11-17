@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import { DownloadError, type DownloadOptions, type DownloadResult, type Logger } from './types';
 import { computeHash } from './integrity';
 import { assertDownloadUrl, executeOnce, type TransportContext } from './transport';
-import { withRetry } from './retry';
+import { DEFAULT_RETRY, withRetry } from './retry';
 import { deletePart, deleteMeta } from './resume';
 
 import { createLogger } from '../logger';
@@ -219,6 +219,10 @@ export class Scheduler {
         logger,
         signal: controller.signal,
         resumedFromBytes: 0,
+        // Callers that opted out of retries or resume keep their exact previous behaviour.
+        reconnectKeepsBytes:
+          task.opts.resume !== false &&
+          (task.opts.retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts) > 1,
       };
 
       const result = await withRetry(() => executeOnce(ctx), {
@@ -226,6 +230,7 @@ export class Scheduler {
         signal: controller.signal,
         logger,
         onRetry: task.opts.onRetry,
+        keptProgress: ctx.reconnectKeepsBytes ? () => ctx.keptBytes ?? 0 : undefined,
       });
       task.resolve({
         path: task.opts.targetPath,
@@ -238,7 +243,13 @@ export class Scheduler {
     } catch (err) {
       task.reject(
         timedOut
-          ? new DownloadError('TIMEOUT', 'Download total time limit exceeded')
+          ? new DownloadError(
+              'TIMEOUT',
+              'Download total time limit exceeded',
+              undefined,
+              undefined,
+              'total',
+            )
           : (err as Error),
       );
     } finally {
