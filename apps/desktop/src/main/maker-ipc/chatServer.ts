@@ -2998,9 +2998,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // answered as a group and never subscribed: nothing may run without a visible group entry to watch or stop it.
       if (!ownDirectRoom && !isGroupRoom(s.room)) throw new Error('INVALID_EXECUTION_TRIGGER');
       subscribe(execution.conversation_id, s.cursor);
-      // Regular group requests from other members only chat. AI reply mode
-      // retains its separate explicit per-member grant and authority checks.
-      if (!ownDirectRoom && !execution.mask_owner_id && execution.access_mode !== 'owner') toolsOff = true;
+      // In a group with a repository, other members' requests only chat even with a `tools` grant:
+      // project work runs with the owner's logins (bot-group-chat.md §7.5). Without a repository a
+      // `tools` grant keeps the teammate's existing capabilities (#10951). AI reply mode retains its
+      // separate explicit per-member grant and authority checks.
+      if (!ownDirectRoom && readGroupRepository(s.room.project) && !execution.mask_owner_id && execution.access_mode !== 'owner') toolsOff = true;
       if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
       if (ownDirectRoom) { await runDirectExecution(run, bot.id, s.room.id); return; }
       if (await runInCardTask(run, s, sourceRead)) return;
