@@ -9,6 +9,7 @@ import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/
 import os from 'node:os';
 import path from 'node:path';
 import { mkdir, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { ClaudeCodeAgent } from '@cindy/maker-core/agents/claude-code';
 import { CodexAgent } from '@cindy/maker-core/agents/codex';
@@ -18,6 +19,7 @@ import type { AgentDeps, AgentKind, AuthAdapter, AuthAdapterOptions, AuthLoginOp
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
 import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-adapter.js';
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
+import { codexSharedAuthLinkUnavailableReason } from '../../../desktop/src/shared/codexAuthReason.js';
 import { commitHostCodexDisconnectBoundary, readHostCodexInvalidation, readHostCodexRecoveryRequirement } from './codex-invalidation.js';
 import { createHostCodexSystemLogin, detectHostCodexCredentialScope, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from '../../../desktop/src/main/maker-host/claude-gateway-config.js';
@@ -406,6 +408,12 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       if (invalidated) return { authenticated: false, errorReason: invalidated.reason, credentialScope: invalidated.credentialScope };
       // Then the reconciliation with the system login, as readState does before reading auth.json.
       await systemLogin.reconcile();
+      // The desktop's codexSharedAuthLinkUnavailableReason: the system login is signed in but
+      // this runtime could not link to it, so the credential is unreachable, not absent.
+      const sharedLinkReason = codexSharedAuthLinkUnavailableReason({
+        linkUnavailable: systemLogin.sharedAuthLinkUnavailable(),
+        systemAuthPresent: !!systemAuthPath && existsSync(systemAuthPath),
+      });
       const recovery = readHostCodexRecoveryRequirement(codexHome, systemAuthPath);
       const local = await readCodexLocalAuthState(codexHome);
       // The desktop reads the token through getAccessToken, which reconciles again before its
@@ -421,9 +429,10 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
         // The desktop's codexRecoveryRequiredErrorState.
         if (recovery) return { authenticated: false, errorReason: recovery.reason, credentialScope: recovery.credentialScope };
         if (opts?.credentialMode === 'oauth-bearer') {
-          // As the desktop's oauth-bearer readState: the local file's own reason, else no_oauth.
+          // As the desktop's oauth-bearer readState: the local file's own reason, else the
+          // shared-link reason when the system login is signed in but unreachable, else no_oauth.
           const local = native ?? await readCodexLocalAuthState(codexHome);
-          return { authenticated: false, errorReason: (local.authenticated ? undefined : local.errorReason) ?? 'no_oauth' };
+          return { authenticated: false, errorReason: (local.authenticated ? undefined : local.errorReason) ?? sharedLinkReason ?? 'no_oauth' };
         }
         return { authenticated: false, errorReason: native?.errorReason ?? 'oauth_not_bound' };
       }
