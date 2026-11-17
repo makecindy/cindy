@@ -7,6 +7,12 @@
  *
  * Retryable codes: NETWORK, HTTP_5XX, per-attempt TIMEOUT. Other failures are permanent.
  *
+ * An attempt that left at least PROGRESS_RETRY_MIN_BYTES of new resumable data (as
+ * reported by `keptProgress`) resets the failure count and the backoff: a long transfer
+ * over a flaky or slow link keeps moving instead of failing after six brief drops spread
+ * over its lifetime. Such resets are capped at PROGRESS_RETRY_LIMIT per download.
+ * Low-speed cuts (`timeoutReason: 'slow'`) never count as failures; the transport limits them.
+ *
  * The sleep between attempts is interruptible — if the AbortSignal fires while
  * we're backing off, we throw `ABORTED` immediately without waiting out the
  * full delay.
@@ -26,14 +32,21 @@ export interface RetryOptions {
   signal?: AbortSignal;
   logger: Logger;
   onRetry?: (e: { attempt: number; delayMs: number; cause: Error }) => void;
+  /** Bytes the failed attempt kept for the next one to resume. Omit when retries restart. */
+  keptProgress?: () => number;
 }
+
+export const PROGRESS_RETRY_MIN_BYTES = 64 * 1024;
+export const PROGRESS_RETRY_LIMIT = 20;
 
 export async function withRetry<T>(task: () => Promise<T>, opts: RetryOptions): Promise<T> {
   const cfg: RetryConfig = { ...DEFAULT_RETRY, ...(opts.config ?? {}) };
   let attempt = 0;
+  let failures = 0;
+  let progressRetries = 0;
   let lastError: Error | null = null;
 
-  while (attempt < cfg.maxAttempts) {
+  while (failures < cfg.maxAttempts) {
     if (opts.signal?.aborted) throw new DownloadError('ABORTED', 'Download aborted');
     attempt++;
     try {
@@ -42,12 +55,25 @@ export async function withRetry<T>(task: () => Promise<T>, opts: RetryOptions): 
       lastError = err as Error;
 
       if (!isRetryable(err)) throw err;
-      if (attempt >= cfg.maxAttempts) throw err;
+      // A low-speed cut is the downloader's own probe for a better route, not a failure;
+      // the transport caps it at MAX_SLOW_RECONNECTS per download.
+      const slowProbe = err instanceof DownloadError && err.timeoutReason === 'slow';
+      const progressed =
+        !slowProbe &&
+        progressRetries < PROGRESS_RETRY_LIMIT &&
+        (opts.keptProgress?.() ?? 0) >= PROGRESS_RETRY_MIN_BYTES;
+      if (progressed) {
+        progressRetries++;
+        failures = 0;
+      } else if (!slowProbe) {
+        failures++;
+      }
+      if (failures >= cfg.maxAttempts) throw err;
       if (opts.signal?.aborted === true) {
         throw new DownloadError('ABORTED', 'aborted during retry');
       }
 
-      const delayMs = computeBackoff(attempt, cfg);
+      const delayMs = computeBackoff(Math.max(1, failures), cfg);
       const code = err instanceof DownloadError ? err.code : 'UNKNOWN';
       opts.logger.warn?.(
         `[downloader] attempt ${attempt} failed (${code}); retry in ${delayMs}ms`,

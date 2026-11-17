@@ -264,8 +264,7 @@ App 内正常发起的新轮次生效。片段先按 `order` 升序，再按 `�
 | 本机／SSH Pi | 支持，原生 `before_agent_start` |
 | 设备托管 Pi | 不支持，设备传输尚无宿主静态片段入口 |
 
-这是未发布能力。旧宿主会忽略未知 `systemPrompt`；仅使用这些新增节点的开发示例不得宣称
-旧正式版已支持。发布时把 `minCindyVersion` 写成实际首个支持版本；运行期用 `control-points`
+旧宿主会忽略未知 `systemPrompt`；运行期用 `control-points`
 探测新能力，静态片段是否获准由返回的 `declared / active` 判断。
 
 最小开发示例：[Runtime Context Example](examples/runtime-context/README.md)，含完整清单与可直接打包的 `main.js`。

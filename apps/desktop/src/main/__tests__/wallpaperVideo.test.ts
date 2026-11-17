@@ -154,38 +154,48 @@ describe('official wallpaper downloads', () => {
     const first = vi.fn();
     const firstResult = ensureWallpaperVideo('cindy-window', first);
     await vi.waitFor(() =>
-      expect(first).toHaveBeenLastCalledWith({
+      expect(first).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          wallpaperId: 'cindy-window',
+          kind: 'video',
+          loaded: 1,
+          total: 3,
+        }),
+      ),
+    );
+    const second = vi.fn();
+    const secondResult = ensureWallpaperVideo('cindy-window', second);
+    expect(second).toHaveBeenLastCalledWith(
+      expect.objectContaining({
         wallpaperId: 'cindy-window',
         kind: 'video',
         loaded: 1,
         total: 3,
       }),
     );
-    const second = vi.fn();
-    const secondResult = ensureWallpaperVideo('cindy-window', second);
-    expect(second).toHaveBeenLastCalledWith({
-      wallpaperId: 'cindy-window',
-      kind: 'video',
-      loaded: 1,
-      total: 3,
-    });
     const closingResult = ensureWallpaperVideo('cindy-window', () => {
       throw new Error('closed frame');
     });
     options.onRetry?.({ attempt: 2, delayMs: 1, cause: new Error('connection reset') });
-    expect(second).toHaveBeenLastCalledWith({
-      wallpaperId: 'cindy-window',
-      kind: 'video',
-      loaded: 0,
-      total: 3,
-    });
+    expect(second).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        wallpaperId: 'cindy-window',
+        kind: 'video',
+        loaded: 0,
+        total: 3,
+        // A restart is explained, not just shown as an empty bar.
+        download: expect.objectContaining({ phase: 'retrying', retryReason: 'network' }),
+      }),
+    );
     options.onProgress?.({ loaded: 5, total: 99, percent: 5, speedBps: 1 });
-    expect(second).toHaveBeenLastCalledWith({
-      wallpaperId: 'cindy-window',
-      kind: 'video',
-      loaded: 3,
-      total: 3,
-    });
+    expect(second).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        wallpaperId: 'cindy-window',
+        kind: 'video',
+        loaded: 3,
+        total: 3,
+      }),
+    );
     finish();
     expect(await Promise.all([firstResult, secondResult, closingResult])).toEqual([
       url('.mp4'),

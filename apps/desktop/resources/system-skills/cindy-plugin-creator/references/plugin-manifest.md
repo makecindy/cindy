@@ -20,7 +20,7 @@
   },
   "version": "1.0.0",
   "releaseNotes": "新增图片编辑工具。", // 可选；更新说明要求见 §7.3
-  "minCindyVersion": "1.2.3", // 示例；v3 必填:本插件实际依赖的首个 Cindy 正式版本(SemVer)
+  "minCindyVersion": "1.2.3", // 示例；v3 必填，填写规则见下文(SemVer)
   "entry": "main.js",          // 电子脑入口(kind 字段已无需填写:插件只有芯片一种形态,缺省即 chip;写了也只认 "chip")
   "launch": "on-demand",       // 可选:电子脑启动模式。on-demand(缺省)=被需要才拉起;resident=唤醒即常驻(详情页会如实标注"常驻运行",绝大多数插件不需要,仅订阅型/需秒响应的场景用)
   "command": "画图",            // 推荐:用户 $画图 显式点名(与已装插件查重,冲突拒装)。
@@ -64,12 +64,12 @@
 }
 ```
 
-`schemaVersion: 3` 必须填写 `minCindyVersion`。它写本插件实际依赖的首个 Cindy
-正式版本；Manifest schema 本身没有统一的 Cindy 版本下限。不要为了使用某项既有能力随意抬高版本。
+`schemaVersion: 3` 必须填写 `minCindyVersion`。用到新能力时，填开发测试所用的 Cindy 版本；
+Manifest schema 本身没有统一的 Cindy 版本下限。不要为了使用某项既有能力随意抬高版本。
 官方市场会优先向旧客户端投影最近的兼容历史版本，没有兼容版本时不展示该插件。
 Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` 追加筛选或确认弹窗；
 用户主动导入的本地包、以及用户添加的自定义市场也遵循同一安装策略。这个字段仍必须
-准确填写：它供发布服务选择兼容 release，也记录插件真实依赖的首个 Host 版本。
+准确填写：它供发布服务选择兼容 release，也记录插件已验证的 Host 版本下限。
 
 `mcpApps.ui` 声明页面资源与工具可见性，完整写法见[§4.23](plugin-interactive-pages.md)。
 
@@ -82,7 +82,6 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 `[{ "id": "style", "text": "Use the documented terminology.", "order": 100, "scope": "selected-task", "agentKinds": ["cc", "codex", "pi"] }]`。
 安装确认展示完整原文，用户在任务设置中选择后才生效；不进入其它任务或全局提示词。
 顺序、作用范围、引擎支持与大小限制见[静态系统提示词片段](plugin-control-points.md#静态系统提示词片段)。
-该能力尚未发布，开发示例不能作为正式版版本下限的依据。
 
 ### whenToUse:只写发现线索,不写使用规则
 
@@ -235,7 +234,7 @@ UI 和 Agent 发送都先进入 10 秒倒计时，卡片可撤销或立即发送
 
 v3 未识别的顶层字段会原样保留，但旧版 Cindy 不展示、不给这个未知 Host 能力、也不因此阻止安装。
 当未来 Cindy 识别该字段后，它才会进入正常的能力展示与运行时守门。插件若依赖新能力，
-应同时把 `minCindyVersion` 提高到首个支持版本；仅由插件包自己完成的逻辑不要发明
+应同时按本章规则更新 `minCindyVersion`；仅由插件包自己完成的逻辑不要发明
 Host 能力字段。v2 的 `slots` 只用于存量包兼容，新插件不得再写。
 当前 Agent tool-call 内，插件工具是否执行由外层 `ghost_call` 的 Agent 授权决定；
 普通网络和 workdir 文件操作按上文的 `callId` 绑定复用 Agent 授权。CLI 继续由

@@ -16,7 +16,7 @@ const { useCodexRuntimeRouteMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key, i18n: { exists: () => false, language: 'en' } }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { exists: (key: string) => key.startsWith('chat.remoteError.MCP_APPROVAL_AUTO_BLOCKED'), language: 'en' } }),
   initReactI18next: { type: '3rdParty', init: () => undefined },
 }));
 
@@ -47,6 +47,34 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+// #7356 follow-up, component: live and persisted errors show the same cause,
+// while arbitrary diagnostics remain collapsed. No approval/retry is performed.
+describe('MCP fixed cause guidance', () => {
+  it.each([
+    ['User instructions changed; retry against the current request.', 'INSTRUCTIONS_CHANGED'],
+    ['Plugin or task Auto authorization is no longer active.', 'AUTHORIZATION_INACTIVE'],
+    ['Command review needs concrete command text.', 'MISSING_EVIDENCE'],
+    ['Unrecognized reviewer text api_key=private-test-value', null],
+  ])('shows %s in live and history', (cause, suffix) => {
+    const error = `[MCP_APPROVAL_AUTO_BLOCKED] Automatic approval review blocked this tool call. No user rejection was received. ${cause}`;
+    const key = `chat.remoteError.MCP_APPROVAL_AUTO_BLOCKED${suffix ? `_${suffix}` : ''}`;
+    const onRetry = vi.fn();
+    for (const surface of ['live', 'history']) {
+      const view = render(surface === 'live'
+        ? <ErrorBanner error={error} onRetry={onRetry} agentKind="codex" />
+        : <ErrorMessageCard message={error} />);
+      expect(screen.getByText(key)).toBeTruthy();
+      expect(screen.queryByText(/private-test-value/)).toBeNull();
+      expect(screen.queryByText(error)).toBeNull();
+      fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+      expect(screen.queryByText(/private-test-value/)).toBeNull();
+      if (suffix) expect(screen.getByText(error)).toBeTruthy();
+      expect(onRetry).not.toHaveBeenCalled();
+      view.unmount();
+    }
+  });
 });
 
 describe('ErrorBanner — LiteLLM 流中断', () => {

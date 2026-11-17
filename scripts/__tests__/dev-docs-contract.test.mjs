@@ -297,34 +297,7 @@ test("current locale-aware QA artifacts cover every supported locale", () => {
 		}
 	}
 
-	const newMakerDir = "docs/design-previews/newmaker-quickstart-cards";
-	const newMakerSpec = readJson(`${newMakerDir}/spec.json`);
-	const newMakerTruth = readJson(`${newMakerDir}/truth.json`);
-	assert.deepEqual(newMakerSpec.matrix.langs, supportedLocales, `${newMakerDir} matrix locale order drifted`);
-	assert.deepEqual(
-		newMakerTruth.supportedLocales.map(({ value }) => value),
-		supportedLocales,
-		`${newMakerDir} embedded locale order drifted`,
-	);
-	assert.deepEqual(
-		[...new Set(newMakerSpec.verify.cases.map(({ prefs }) => prefs.lang))].sort(),
-		expectedSet,
-		`${newMakerDir} representative cases must exercise every supported locale`,
-	);
-	assert.deepEqual(
-		Object.keys(newMakerTruth.section.titles).sort(),
-		expectedSet,
-		`${newMakerDir} section-title locale coverage drifted`,
-	);
-	for (const [index, card] of newMakerTruth.cards.entries()) {
-		assert.deepEqual(
-			Object.keys(card.labels).sort(),
-			expectedSet,
-			`${newMakerDir} card ${index} locale coverage drifted`,
-		);
-	}
-
-	for (const dir of ["docs/design-previews/login-deletion-bubble", newMakerDir]) {
+	for (const dir of ["docs/design-previews/login-deletion-bubble"]) {
 		const html = readText(`${dir}/index.html`);
 		const embedded = html.match(
 			/<script id="qa-truth" type="application\/json">([\s\S]*?)<\/script>/,

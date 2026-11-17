@@ -8,6 +8,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 import { LlamaCppCandidates } from '../LlamaCppCandidates';
+import { initialDownloadProgress } from '../../../../shared/downloadProgress';
 afterEach(cleanup);
 const catalog = [
   {
@@ -104,7 +105,7 @@ it('keeps an active candidate in only one section and restores pause controls', 
       {...props}
       download={{
         input: catalog[0]!.variants[0]!,
-        progress: { label: 'downloading', completed: 50, total: 100 },
+        progress: { ...initialDownloadProgress('downloading', 100), loaded: 50, percent: 50 },
       }}
     />,
   );
@@ -117,7 +118,7 @@ it('keeps an active candidate in only one section and restores pause controls', 
       {...props}
       download={{
         input: catalog[0]!.variants[0]!,
-        progress: { label: 'paused', paused: true, completed: 50, total: 100 },
+        progress: { ...initialDownloadProgress('paused', 100), loaded: 50, percent: 50 },
       }}
     />,
   );

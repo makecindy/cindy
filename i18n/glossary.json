@@ -3866,6 +3866,25 @@
       }
     },
     {
+      "id": "task-header",
+      "status": "proposed",
+      "en": "Header",
+      "translations": {
+        "zh-CN": "顶栏",
+        "zh-TW": "頂列",
+        "zh-Hans-x-lzh": "顶列",
+        "zh-Hant-x-lzh": "頂列",
+        "ja": "上部",
+        "ko": "상단",
+        "de": "Kopfzeile",
+        "es": "encabezado",
+        "fr": "en-tête",
+        "pt-BR": "cabeçalho",
+        "pt-PT": "cabeçalho"
+      },
+      "note": "任务 PR/MR 关联展示的顶栏。沿用 ccAgent.gitContext.pr.manage.pin/hint 的既有译法；区别于系统窗口标题栏。"
+    },
+    {
       "id": "task-tag",
       "status": "proposed",
       "en": "Tag",
