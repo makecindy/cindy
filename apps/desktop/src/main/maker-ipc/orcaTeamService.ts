@@ -180,9 +180,34 @@ export function buildWorkerFailureRecoveryNote(workerSessionId: string): string 
   return (
     '(Host note: this Worker is kept as it is: its conversation, working directory and uncommitted changes ' +
     `are intact, and its status is now error. To retry or continue, send_to_worker to the same worker (session_id: ${workerSessionId}). ` +
-    'If the cause is a usage limit or an unavailable model, first move it to another model with the cindy_helper tools ' +
-    'get_session_runtime and set_session_runtime on that session_id (not available for a Worker running on another computer), ' +
-    'then send_to_worker. Archiving it and creating a replacement starts over without this context.)'
+    'If the cause is a usage limit or an unavailable model, first choose another route for it with set_worker_runtime ' +
+    '(models and sources from list_available_models; not available for a Worker running on another computer), ' +
+    'then send_to_worker: the new route starts with this conversation. ' +
+    'Archiving it and creating a replacement starts over without this context.)'
+  );
+}
+
+const SUBSCRIPTION_ROUTE_FAILURE = /\[(SUBSCRIPTION_ACCOUNT_(?:LIMITED|UNAVAILABLE|LOGIN_REQUIRED|SIGNING_IN))\]/;
+
+/**
+ * send_to_worker could not start the Worker on its current subscription route. The Lead
+ * cannot see account quotas the way the picker shows them, so say what failed and what
+ * continues the same Worker. Everything else keeps the host message as it was.
+ */
+export function workerRouteFailureHint(message: string): string | null {
+  const code = SUBSCRIPTION_ROUTE_FAILURE.exec(message)?.[1];
+  if (!code) return null;
+  const resetAtMs = Number(/resetAtMs=(\d+)/.exec(message)?.[1]);
+  const reason = code === 'SUBSCRIPTION_ACCOUNT_LIMITED'
+    ? `its subscription account is at its usage limit${Number.isFinite(resetAtMs) && resetAtMs > 0 ? ` until ${new Date(resetAtMs).toISOString()}` : ''}`
+    : code === 'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED' || code === 'SUBSCRIPTION_ACCOUNT_SIGNING_IN'
+      ? 'its subscription account needs the user to sign in again'
+      : 'its subscription account is unavailable';
+  return (
+    `The message was not delivered: the Worker's current route cannot start because ${reason}. ` +
+    'Its conversation, working directory and changes are kept. To continue now, choose another route with ' +
+    'set_worker_runtime (list_available_models lists models and sources; the same subscription source can move ' +
+    'it to another of its accounts that has quota), then send_to_worker again; or wait and send then.'
   );
 }
 
@@ -409,6 +434,11 @@ export interface OrcaTeamServiceDeps {
     worker: OrcaWorkerRecordSnapshot,
     link: OrcaWorkerLinkSnapshot,
   ): Promise<void>;
+  /**
+   * 任务登记了尚未落地的 Agent／模型／来源选择(下一次发送时生效)。此时不按数据库里的旧路线
+   * 唤醒休眠的 Worker：派发会先应用这次选择，再在新路线上启动。
+   */
+  hasPendingAgentSwitch?(sessionId: string): boolean;
   /** 修订 worker 的 role/label；label 唯一性由 store 的唯一索引把关。 */
   updateWorkerIdentity: (input: {
     workerId: string;
@@ -546,6 +576,11 @@ export interface OrcaTeamService {
     role?: string;
     label?: string;
   }): Promise<UpdateWorkerResult>;
+  /** 外部调用边界：只在 Lead 自己的 Worker 里按 worker_id / session_id 找到目标(换模型等任务级操作用)。 */
+  resolveWorkerSession(params: { callerLeadSessionId: string; workerId: string }): Promise<
+    | { ok: true; workerId: string; sessionId: string }
+    | { ok: false; errorCode: 'WORKER_NOT_FOUND' | 'INTERNAL'; message: string }
+  >;
   /** 外部调用边界：列出目标 worker 输入队列中的排队消息(lead 自己的条目含正文)。 */
   /** workerRef 省略时读取 Lead 自己的输入队列(Worker 回报在 Lead 忙时排在这里)。 */
   listWorkerQueuedMessages(params: {
@@ -1117,10 +1152,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             return 'AGENT_NOT_READY';
         }
       })();
+      const hint = errorCode === 'AGENT_NOT_READY' ? workerRouteFailureHint(outcome.message) : null;
       return {
         ok: false,
         errorCode,
-        message: outcome.message,
+        message: hint ? `${hint}\n${outcome.message}` : outcome.message,
       };
     }
     return {
@@ -1367,7 +1403,12 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           // Runtime liveness is independent from the persisted worker status. After a restart a
           // running/error worker can be dormant too, and must rehydrate through the Worker-specific
           // path so its stored permission mode and Orca vendor options are preserved.
-          if (!wasLiveBeforeDispatch) await deps.resumeWorkerSession(target, link);
+          // A staged route choice is the exception: waking the old route first can fail on it
+          // (e.g. its subscription is at its usage limit) before the choice lands. Delivery
+          // applies the choice, then starts the Worker on the new route with the same identity.
+          if (!wasLiveBeforeDispatch && !deps.hasPendingAgentSwitch?.(target.sessionId)) {
+            await deps.resumeWorkerSession(target, link);
+          }
           await params.assertCurrent?.();
           result = await deps.dispatchWorkerMessage({
             targetSessionId: target.sessionId,
@@ -1754,6 +1795,14 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     return params.onlyIfIdle ? deps.withSessionSendLock(worker.sessionId, archive) : archive();
     };
     return params.onlyIfIdle ? withWorkerTransition(params.workerId,perform) : perform();
+  }
+
+  async function resolveWorkerSession(params: { callerLeadSessionId: string; workerId: string }) {
+    const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
+    if (found.ok) return { ok: true as const, workerId: found.worker.id, sessionId: found.worker.sessionId };
+    return found.errorCode === 'NOT_FOUND'
+      ? { ok: false as const, errorCode: 'WORKER_NOT_FOUND' as const, message: `worker ${params.workerId} not found` }
+      : { ok: false as const, errorCode: 'INTERNAL' as const, message: found.message };
   }
 
   async function updateWorker(params: {
@@ -2240,6 +2289,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     idleWorker,
     archiveWorker,
     updateWorker,
+    resolveWorkerSession,
     listWorkerQueuedMessages,
     updateWorkerQueuedMessage,
     cancelWorkerQueuedMessage,
