@@ -23,7 +23,10 @@ export async function reconcileRunning(options) {
     const store=new RecoveryJournal(path.join(root,'journal.json')), original=store.read();
     const release=releaseDescriptor(directory);
     check(original.phase==='blocked'&&original.failed?.directory===directory,'Not the failed checkout');
-    for(const key of ['migrations','runtime','plugins','localPlugins','dataCode'])
+    // dataCode includes scripts, including the two permitted repairs below. The ancestor +
+    // exact changed-file allowlist checks every tracked path more strictly here; keep the
+    // ordinary release/automatic-upgrade fingerprint unchanged.
+    for(const key of ['migrations','runtime','plugins','localPlugins'])
       check(original.failed[key]===release[key],`Recovery changed ${key}; needs separate validation`);
     run('git',['merge-base','--is-ancestor',original.failed.head,release.head],directory);
     const changes=run('git',['diff','--name-only',original.failed.head,release.head],directory).split('\n').filter(Boolean);

@@ -9,7 +9,8 @@ import {once} from 'node:events';
 import {createRequire} from 'node:module';
 import {pathToFileURL,fileURLToPath} from 'node:url';
 import {preflightSharedStartup,startupApproval} from '../personal-build/startup-preflight.mjs';
-import {restartWithSupervisorLock,launchSelected} from '../personal-build/automatic.mjs';
+import {restartWithSupervisorLock,launchSelected,releaseDescriptor} from '../personal-build/automatic.mjs';
+import {reconcileRunning} from '../personal-build/reconcile-running.mjs';
 import {activatePreparedCandidate} from '../personal-build/activation-stages.mjs';
 import {RecoveryJournal} from '../personal-build/recovery.mjs';
 
@@ -22,6 +23,39 @@ const Database=require('better-sqlite3');
 const git=(cwd,...args)=>execFileSync('git',args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 const temporary=()=>fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'personal-handoff-test-')));
 const mkdir=p=>fs.mkdirSync(p,{recursive:true});
+
+// PR #11122: journal-only tests missed the command rejecting its own two allowed repairs.
+// Minimum input: blocked checkout + one committed policy repair changes dataCode.
+// Script integration tier (real Git); stop at an intentional policy rejection, before any DB/live
+// process access. Also prove an unrelated script is rejected before that policy runs.
+// Full file measured at 4.1s locally, including the SQLite/process drill.
+test('reconcile-running permits only the reviewed policy repairs to reach shared preflight',async()=>{
+  const dir=temporary();
+  try{
+    const app=path.join(dir,'app');mkdir(path.join(app,'scripts'));
+    git(app,'init');git(app,'config','user.name','Test');git(app,'config','user.email','test@example.invalid');git(app,'config','commit.gpgsign','false');
+    fs.writeFileSync(path.join(app,'scripts/dev-migration-policy.mjs'),'export function assertSharedDevMigrationPolicy(){throw Error("policy reached");}\n');
+    fs.writeFileSync(path.join(app,'scripts/personal-migration-allowlist.json'),'{}\n');
+    git(app,'add','.');git(app,'commit','-m','failed candidate');
+    const failed=releaseDescriptor(app),state=path.join(dir,'state'),root=path.join(state,'automatic');
+    const store=new RecoveryJournal(path.join(root,'journal.json'));
+    store.init({id:'old',directory:path.join(dir,'old'),verified:true});
+    store.beginManual(failed,{prepared:true,stopped:true,manualRequested:true,smokeVerified:true,profileVerified:true});
+    store.recoverInterrupted();
+    const original=store.read(),config=path.join(dir,'config.json');
+    fs.writeFileSync(config,JSON.stringify({version:1,name:'test',region:'global',app:{checkout:dir,repository:'test/app'},
+      runtime:{mode:'shared',clientDir:app,stagingDir:path.join(dir,'stage'),stateDir:state,dataDir:path.join(dir,'profile')}}));
+    for(const file of ['scripts/dev-migration-policy.mjs','scripts/personal-migration-allowlist.json','scripts/unrelated.mjs']){
+      fs.appendFileSync(path.join(app,file),'\n');git(app,'add','.');git(app,'commit','-m',file);
+      assert.notEqual(releaseDescriptor(app).dataCode,failed.dataCode);
+      await assert.rejects(reconcileRunning({config,app,out:path.join(dir,'receipt.json'),'expected-pid':42}),
+        file.endsWith('unrelated.mjs')?/beyond the reviewed startup-policy repair/:/Shared startup preflight rejected.*policy reached/s);
+      assert.deepEqual(store.read(),original);
+      assert.equal(fs.existsSync(path.join(root,'supervisor.lock')),false);
+      assert.equal(fs.existsSync(path.join(dir,'receipt.json')),false);
+    }
+  }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
 async function processFixture(fail=false){
   const child=spawn(process.execPath,['-e',fail?'process.exit(7)':'process.send("ready");setInterval(()=>{},1000);'],{stdio:['ignore','ignore','ignore','ipc']});
   if(fail){const [code]=await once(child,'exit');assert.equal(code,7);throw Error('fixture startup exit 7');}
@@ -95,7 +129,9 @@ test('real SQLite migration and process failure preserve backup; repaired proces
     const oldRelease={id:'old',directory:baseline,verified:true},release={id:'new',directory:next};
     const plan={authorized:true,dataDir:profile,candidate:release,baseline:oldRelease,pending:m.createMigrationRuntimeManifest(newDir).migrations.slice(1),rehearsalDir:path.join(profile,'personal-upgrade-backups/rehearse'),backupDir:path.join(profile,'personal-upgrade-backups/before')};
     const planFile=path.join(dir,'plan.json');
-    const action=a=>{fs.writeFileSync(planFile,JSON.stringify(plan));return JSON.parse(execFileSync(process.execPath,[worker,planFile,a],{encoding:'utf8',env:{...process.env,NODE_PATH:path.join(candidate,'node_modules')},stdio:['ignore','pipe','pipe']}));};
+    // Resolve the installed dependency rather than assuming this checkout owns node_modules.
+    const dependencyRoot=path.dirname(path.dirname(require.resolve('better-sqlite3/package.json')));
+    const action=a=>{fs.writeFileSync(planFile,JSON.stringify(plan));return JSON.parse(execFileSync(process.execPath,[worker,planFile,a],{encoding:'utf8',env:{...process.env,NODE_PATH:dependencyRoot},stdio:['ignore','pipe','pipe']}));};
     plan.rehearsal=action('rehearse');plan.databases=plan.rehearsal.databases;
     let now=1;const store=new RecoveryJournal(path.join(dir,'journal.json'),{now:()=>now});store.init(oldRelease);
     old=await processFixture();let stopped=false;const phases=[];
