@@ -1,3 +1,4 @@
+import { useRemoteProjectAliases as useProjectInfoSnapshots } from '@/session/remoteProjectAliases';
 import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
 import { ProjectPickerIcon } from '@/session/ProjectPickerIcon';
 import { playHaptic } from '@/platform/haptics';
@@ -599,6 +600,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const maker = useMobileMakerTransport(selectedDeviceId);
   const sessions = useRemoteSessions();
   const projectAliases = useRemoteProjectAliases([selectedDeviceId]);
+  const projectInfo = useProjectInfoSnapshots().get(selectedDeviceId);
   const recentWorkspaces = useMemo(
     () => buildRecentWorkspaceOptions(
       sessions.filter((session) => session.deviceLinkDeviceId === selectedDeviceId),
@@ -5730,7 +5732,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                 accessibilityLabel={t('settings.projectInfo.createTitle')}
                 accessibilityRole="button"
                 disabled={creating}
-                onPress={() => { setWorkspacePickerOpen(false); setCreateProjectOpen(true); }}
+                onPress={() => { setWorkspacePickerOpen(false); if ((projectInfo?.settingsVersion ?? 0) >= 6) setCreateProjectOpen(true); else setBrowseOpen(true); }}
                 style={({ pressed }) => [styles.workspaceOptionRow, pressed && styles.pressed]}
                 testID="newSession.workspaceBrowseOption"
               >
@@ -5955,7 +5957,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         onDialogue={selectDialogueWorkspace}
         onProject={selectRecentProject}
         browseLabel={t('settings.projectInfo.createTitle')}
-        onBrowse={() => { createProjectPending.current = true; setWorkspacePickerOpen(false); }}
+        onBrowse={() => { if ((projectInfo?.settingsVersion ?? 0) >= 6) { createProjectPending.current = true; setWorkspacePickerOpen(false); } else setBrowseOpen(true); }}
         onClosed={() => {
           if (createProjectPending.current) {
             createProjectPending.current = false;

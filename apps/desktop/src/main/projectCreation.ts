@@ -6,7 +6,7 @@ import {
   projectCreationFolderName,
 } from '@cindy/maker-shared/project-alias-sync';
 import { readProjectsRootDirectory } from './projects-root-settings.js';
-import { listRecentWorkdirs } from './localDb/ipc/recentWorkdirsCore.js';
+import { listRegisteredProjectPaths } from './localDb/ipc/recentWorkdirsCore.js';
 import { getDbClient } from './localDb/client/current.js';
 import { loadSidebarSettingsSnapshot } from './sidebarSettingsStore.js';
 import { projectKeyComparisonKey } from '../shared/projectKeys.js';
@@ -45,16 +45,12 @@ export async function projectCreationRoot(): Promise<string> {
       projectKeyComparisonKey(key, process.platform),
     ),
   );
-  const catalog = await listRecentWorkdirs(getDbClient());
+  const catalog = await listRegisteredProjectPaths(getDbClient());
   return (
     inferProjectsRoot(
-      catalog
-        .filter(
-          (row) =>
-            row.exists &&
-            !hidden.has(projectKeyComparisonKey(`local:${row.path}`, process.platform)),
-        )
-        .map((row) => row.path),
+      catalog.filter(
+        (row) => !hidden.has(projectKeyComparisonKey(`local:${row}`, process.platform)),
+      ),
     ) ?? path.join(homedir(), 'Projects')
   );
 }

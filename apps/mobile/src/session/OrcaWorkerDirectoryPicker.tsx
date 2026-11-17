@@ -1,3 +1,6 @@
+import { Platform, View, ScrollView, ActivityIndicator } from "react-native";
+import { SheetModal } from "./SheetModal";
+import { NewTaskSelectionRow } from "./NewTaskSelectionRow";
 import { useEffect, useState } from "react";
 import { TextInput } from "@/components/AppText";
 import { useTheme, typeScale, lineHeight, spacing, radius } from "@/theme";
@@ -32,6 +35,89 @@ export function OrcaWorkerDirectoryPicker({
     sessions.filter((session) => session.deviceLinkDeviceId === deviceId),
     deviceId ?? "",
   );
+  if (Platform.OS === "web") {
+    return (
+      <SheetModal
+        visible={picker.page !== null}
+        onBackdropPress={picker.close}
+        onRequestClose={picker.close}
+        onClosed={picker.closed}
+      >
+        <View
+          style={{
+            backgroundColor: colors.surface,
+            padding: spacing.md,
+            gap: spacing.sm,
+          }}
+        >
+          <NewTaskSelectionRow
+            title={t("settings.projectInfo.cancel")}
+            onPress={picker.close}
+          />
+          <TextInput
+            value={path}
+            onChangeText={setPath}
+            accessibilityLabel={t("settings.projectInfo.directoryPath")}
+            placeholder={t("settings.projectInfo.directoryPath")}
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={{
+              minHeight: 48,
+              color: colors.textPrimary,
+              fontSize: typeScale.body,
+              lineHeight: lineHeight.body,
+            }}
+            onSubmitEditing={() => {
+              if (path.trim()) void picker.load(path.trim());
+            }}
+          />
+          <NewTaskSelectionRow
+            title={t("settings.projectInfo.browseDirectory")}
+            disabled={picker.loading || !path.trim()}
+            onPress={() => void picker.load(path.trim())}
+          />
+          <ScrollView style={{ maxHeight: 320 }}>
+            {picker.loading && <ActivityIndicator />}
+            {picker.error && (
+              <NewTaskSelectionRow
+                title={picker.error}
+                onPress={() => void picker.load(picker.path)}
+              />
+            )}
+            {picker.parent && (
+              <NewTaskSelectionRow
+                title=".."
+                onPress={() => void picker.load(picker.parent!)}
+              />
+            )}
+            {picker.drives.map((entry) => (
+              <NewTaskSelectionRow
+                key={entry.path}
+                title={entry.name}
+                onPress={() => void picker.load(entry.path)}
+              />
+            ))}
+            {picker.entries.map((entry) => (
+              <NewTaskSelectionRow
+                key={entry.path}
+                title={entry.name}
+                onPress={() => void picker.load(entry.path)}
+              />
+            ))}
+          </ScrollView>
+          <NewTaskSelectionRow
+            title={t("session.new.useCurrent")}
+            disabled={picker.loading || !!picker.error || !picker.path}
+            onPress={() => {
+              if (path.trim() !== picker.path) {
+                if (path.trim()) void picker.load(path.trim());
+              } else picker.choose(picker.path);
+            }}
+          />
+        </View>
+      </SheetModal>
+    );
+  }
   return (
     <NewTaskSelectionSheet
       directoryInput={

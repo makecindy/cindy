@@ -1,3 +1,4 @@
+import { updateProjectInfo } from '../localDb/ipc/projectAliases.js';
 import {
   validateLocalProjectDirectory,
   validateExistingLocalProjectDirectory,
@@ -106,7 +107,6 @@ export async function createProject({
 }) {
   if (!workingDir || repositoryUrl || name !== undefined) {
     return withLocalProjectContext(callerSessionId, async ({ owner, assertCurrent }) => {
-      const { updateProjectInfo } = await import('../localDb/ipc/projectAliases.js');
       assertCurrent();
       const result = await updateProjectInfo({
         ...owner,

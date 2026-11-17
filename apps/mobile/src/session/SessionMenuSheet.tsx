@@ -1,3 +1,4 @@
+import { useRemoteProjectAliases } from './remoteProjectAliases';
 import { ProjectSettingsSheet } from "./ProjectSettingsSheet";
 import { sessionProjectDirectory } from "@cindy/maker-shared/worktree-paths";
 import {
@@ -623,7 +624,9 @@ export function SessionMenuSheet({
     session.workspaceKind === "project"
       ? sessionProjectDirectory(session)
       : null;
+  const projectInfo = useRemoteProjectAliases().get(tagDeviceId ?? "");
   const projectSettingsAvailable =
+    (projectInfo?.settingsVersion ?? 0) >= 6 &&
     !!projectDirectory &&
     !!tagDeviceId &&
     !sharedGuest &&

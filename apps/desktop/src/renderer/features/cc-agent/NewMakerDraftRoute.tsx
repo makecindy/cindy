@@ -1,3 +1,4 @@
+import { useProjectInfo } from './hooks/useProjectInfo';
 import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
 import { ResolvedProjectIcon } from './sidebar/ResolvedProjectIcon';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
@@ -3820,6 +3821,7 @@ export function NewMakerDraftRoute() {
   // 这里只在「当前设备」的语境内换工作区。所以选「对话」= 在当前设备上开不绑项目的对话,
   // 而不是退回本机 —— 后者由设备 pill 选「本机」来表达。picker 现在只列当前设备的项目,
   // 传进来的 path 必然属于当前设备,语义自洽。
+  const projectInfo = useProjectInfo(effectiveDeviceLinkDeviceId ?? null);
   const [projectSettingsMode, setProjectSettingsMode] = useState<'create' | 'edit' | null>(null);
   const handleWorkingDirChange = useCallback(
     (dir: string | null) => {
@@ -6893,7 +6895,7 @@ export function NewMakerDraftRoute() {
                   />
                 )}
                 <FolderPickerPopover
-                  onCreateProject={() => setProjectSettingsMode('create')}
+                  onCreateProject={(projectInfo?.settingsVersion ?? 0) >= 6 ? () => setProjectSettingsMode('create') : undefined}
                   open={folderPickerOpen}
                   onOpenChange={handleFolderPickerOpenChange}
                   onSelect={handleModePickerSelect}
@@ -6981,7 +6983,7 @@ export function NewMakerDraftRoute() {
                   )}
                   <ChatInput
                     onOpenProjectSettings={
-                      effectiveWorkingDir ? () => setProjectSettingsMode('edit') : undefined
+                      effectiveWorkingDir && (projectInfo?.settingsVersion ?? 0) >= 6 ? () => setProjectSettingsMode('edit') : undefined
                     }
                     onSend={handleSend}
                     onComposerTyping={openProvisionalDraftTask}

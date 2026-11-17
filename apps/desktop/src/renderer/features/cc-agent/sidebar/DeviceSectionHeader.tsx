@@ -50,7 +50,7 @@ function RemoteDesktopShortcut({
   return (
     <div
       className={cn(
-        'shrink-0 pointer-events-none opacity-0 transition-opacity duration-150 motion-reduce:transition-none',
+        'shrink-0 pointer-events-none opacity-0 transition-opacity duration-[var(--motion-fast)] motion-reduce:transition-none',
         'group-hover/device-header:pointer-events-auto group-hover/device-header:opacity-100',
         'has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100',
       )}
@@ -127,7 +127,7 @@ export function DeviceSectionHeader({
     >
       {children}
       {onCreateProject && (
-        <div className="shrink-0 pointer-events-none opacity-0 transition-opacity duration-150 motion-reduce:transition-none group-hover/device-header:pointer-events-auto group-hover/device-header:opacity-100 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
+        <div className="shrink-0 pointer-events-none opacity-0 transition-opacity duration-[var(--motion-fast)] motion-reduce:transition-none group-hover/device-header:pointer-events-auto group-hover/device-header:opacity-100 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
           <Tip
             text={t(
               createProjectDisabled

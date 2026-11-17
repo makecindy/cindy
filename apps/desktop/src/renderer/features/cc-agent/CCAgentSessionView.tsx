@@ -1,3 +1,4 @@
+import { useProjectInfo } from './hooks/useProjectInfo';
 import { SessionProjectSettingsDialog } from './sidebar/SessionProjectSettingsButton';
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
 import { getLiveErrorMessageClientId, type ChatMessage } from '@/lib/makerChatStore';
@@ -1606,6 +1607,7 @@ function CCAgentSessionContent({
 
   // F2: controlled folder picker open state
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
+  const projectInfo = useProjectInfo(session?.deviceLinkDeviceId ?? null);
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
 
   // ── Full-area drag-and-drop (F-FI-1 enhancement) ──
@@ -6297,7 +6299,7 @@ function CCAgentSessionContent({
                     onClose={() => setProjectSettingsOpen(false)} />
                 )}
                 <ChatInput
-                  onOpenProjectSettings={session?.workspaceKind === 'project' &&
+                  onOpenProjectSettings={(projectInfo?.settingsVersion ?? 0) >= 6 && session?.workspaceKind === 'project' &&
                     !isSharedTaskPeer(session.deviceLinkDeviceId ?? '')
                     ? () => setProjectSettingsOpen(true) : undefined}
                   sessionModelPickRef={sessionModelPickRef}
