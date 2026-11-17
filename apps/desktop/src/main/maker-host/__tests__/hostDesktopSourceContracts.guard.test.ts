@@ -1007,13 +1007,15 @@ describe('module-level port setters the Host loads, classified for the Host', ()
   }
 
   /** Whether a Host file binds `name`: calls it (`name(…)`, `x.name(…)`), mutates the container
-   * (`name.set(…)`, …), or hands it over as a port value (a call argument or an object property). */
+   * (`name.set(…)`, …), or hands it over as a port value (a call argument or an object property).
+   * A call that only passes null or undefined (the teardown `setX(null)`) does not bind. */
   function bindsIn(file: string, name: string): boolean {
     const sf = ts.createSourceFile(file, read(path.join(repo, file)), ts.ScriptTarget.Latest, true);
     const isName = (n: ts.Node) => (ts.isIdentifier(n) && n.text === name) || (ts.isPropertyAccessExpression(n) && n.name.text === name);
+    const isNullish = (n: ts.Node) => n.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(n) && n.text === 'undefined');
     let binds = false;
     const visit = (n: ts.Node): void => {
-      if (ts.isCallExpression(n) && (isName(n.expression) || n.arguments.some(isName)
+      if (ts.isCallExpression(n) && ((isName(n.expression) && !(n.arguments.length > 0 && n.arguments.every(isNullish))) || n.arguments.some(isName)
         || (ts.isPropertyAccessExpression(n.expression) && MUTATORS.has(n.expression.name.text) && isName(n.expression.expression)))) binds = true;
       if ((ts.isShorthandPropertyAssignment(n) && n.name.text === name) || (ts.isPropertyAssignment(n) && isName(n.initializer))) binds = true;
       ts.forEachChild(n, visit);
