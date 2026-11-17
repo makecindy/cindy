@@ -113,6 +113,16 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 
 > Cindy 自有子代理的委派、控制、结果收口与测试边界见 [Pi 子代理设计](../research/pi-subagent-delegation.md)。与 Orca 协作模式分别维护。
 
+### Chat 网关工具 ID 与子代理兼容配置
+
+Chat Completions 网关在 Gemini 工具 ID 中携带签名时，切到非 Gemini 模型可能超过
+下游的 64 字符限制。bridge 只在非 Gemini 的 `openai-completions` 请求投影中缩短
+超长 ID，调用与结果使用同一映射，并避开已有短 ID；不写回会话历史。Gemini（含带
+命名空间的模型名）保留原 ID，Responses 沿用 Pi 原生归一化。子代理自带 bridge，
+并在启动与恢复时继承父模型配置中的 `compat`（含 `supportsStore: false`），无需
+为此转发用户扩展或放开 `--no-extensions`。真实 Pi 回归见
+`pi-agent.integration.test.ts` 的 Gemini 切模与 Chat 子代理恢复用例。
+
 ### 原生请求 Fast 偏好
 
 支持 Fast 的原生模型在 `before_provider_request` 中经现有 RPC 通道发出
