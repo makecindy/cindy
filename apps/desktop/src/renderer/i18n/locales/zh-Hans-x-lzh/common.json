@@ -8345,6 +8345,7 @@
             "contentStyle": "修改消息间距和气泡样式"
           },
           "positions": {
+            "composer_header": "输入框上方",
             "composer_toolbar": "输入框工具栏",
             "session_header": "任务标题栏",
             "statusbar": "状态栏",

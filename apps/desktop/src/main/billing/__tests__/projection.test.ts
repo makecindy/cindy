@@ -237,6 +237,7 @@ describe('billing response projection', () => {
       { type: 'gift_card', senderName: 'x'.repeat(81) },
       { type: 'gift_card' },
       'gift_card',
+      'subscription_rollover',
     ];
     const usage = projectModelAccessCreditUsage({
       available: String(sources.length),
@@ -254,6 +255,7 @@ describe('billing response projection', () => {
     expect(usage.promotionalGrants[0].source).toEqual({ type: 'gift_card', senderName: 'Cindy Team' });
     expect(usage.promotionalGrants[2].source).toBeNull();
     expect(usage.promotionalGrants[7].source).toBe('gift_card');
+    expect(usage.promotionalGrants[8].source).toBe('subscription_rollover');
     for (const projected of [usage.promotionalGrants[1], ...usage.promotionalGrants.slice(3, 7)]) {
       expect(projected).not.toHaveProperty('source');
     }

@@ -864,6 +864,38 @@ describe('BillingPage remote catalog rendering', () => {
     expect(within(rows[2]).getByText('Other gift')).toBeTruthy();
   });
 
+  // Server contract (unit): gift_card objects, rollover strings and null can share
+  // one usage response. Earlier cases rendered these origins separately; this
+  // checks the real BillingPage keeps both localized names and the null fallback.
+  it('shows gift card and localized rollover names from the same usage response', async () => {
+    const grant = {
+      originalAmount: '10', usedAmount: '0', remainingAmount: '10',
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(), state: 'active' as const,
+    };
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '30',
+      plan: { remaining: '0', used: '0', total: '0' },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '30', used: '0', total: '30' },
+      promotionalGrants: [
+        { ...grant, grantId: 'gift', displayName: 'Server gift fallback',
+          source: { type: 'gift_card' as const, senderName: 'Sample sender' } },
+        { ...grant, grantId: 'rollover', displayName: 'Server rollover fallback',
+          source: 'subscription_rollover' },
+        { ...grant, grantId: 'other', displayName: 'Other grant', source: null },
+      ],
+      promotionalGrantsComplete: true, promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: null, scale: 9 as const, observedAt: '2026-11-17T00:00:00Z',
+    }));
+    render(<BillingPage />);
+    const rows = within(await screen.findByRole('list')).getAllByRole('listitem');
+    expect(within(rows[0]).getByText('billing.usage.promotionalDetails.giftCard:{"sender":"Sample sender"}')).toBeTruthy();
+    expect(within(rows[1]).getByText('Rollover grant')).toBeTruthy();
+    expect(within(rows[2]).getByText('Other grant')).toBeTruthy();
+    expect(screen.queryByText('Server gift fallback')).toBeNull();
+    expect(screen.queryByText('Server rollover fallback')).toBeNull();
+  });
+
   // 契约：礼品卡到账的赠送在明细里要认得出来。此前这一行只显示通用名称，和其它赠送无法区分。
   // 组件层：真实 BillingPage + 假的宿主数据，验证名称的选择规则，不涉及服务端如何标注来源。
   it('names a redeemed gift card with its sender, and keeps other grants as they were', async () => {

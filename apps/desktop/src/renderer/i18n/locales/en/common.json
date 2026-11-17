@@ -8418,6 +8418,7 @@
             "contentStyle": "Change message spacing and bubble styling"
           },
           "positions": {
+            "composer_header": "area above the input box",
             "composer_toolbar": "input toolbar",
             "session_header": "task header",
             "statusbar": "status bar",

@@ -8490,6 +8490,7 @@
             "contentStyle": "Modifier l’espacement des messages et les bulles"
           },
           "positions": {
+            "composer_header": "au-dessus de la zone de saisie",
             "composer_toolbar": "barre d’outils de saisie",
             "session_header": "en-tête de la tâche",
             "statusbar": "barre d’état",

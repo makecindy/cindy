@@ -8375,6 +8375,7 @@
             "contentStyle": "메시지 간격 및 말풍선 모양 변경"
           },
           "positions": {
+            "composer_header": "입력창 위",
             "composer_toolbar": "입력창 도구 모음",
             "session_header": "작업 머리글",
             "statusbar": "상태 표시줄",
