@@ -16,7 +16,13 @@ import type { Session } from '@/lib/ccAgent.types';
 import { SessionEntryRows, type SessionEntryRowsProps } from './SessionEntryList';
 import { SectionCollapse } from './SectionCollapse';
 import { sessionRowKey } from './sessionRowKey';
-import { holdViewedInboxPlacement, type ViewedInboxPlacement } from './taskInboxPlacement';
+import {
+  freezeInboxLayout,
+  holdViewedInboxPlacement,
+  snapshotInboxLayout,
+  type FrozenInboxLayout,
+  type ViewedInboxPlacement,
+} from './taskInboxPlacement';
 import {
   sessionNaturalPriorityRank,
   sessionPriorityRank,
@@ -89,10 +95,44 @@ export function TaskInbox({ sessions, priorityContext, ...rows }: Props) {
     );
     return result;
   }, [sessions, inboxContext, now, followingSessions, activeSessionId]);
+  // While the pointer is over the list (or a row menu / snooze popover it opened is still open),
+  // rows keep their arrangement so a one-click Done never lands on a row that just moved.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const pointerInside = useRef(false);
+  const [frozen, setFrozen] = useState<FrozenInboxLayout | null>(null);
+  const shown = useMemo(
+    () => (frozen ? freezeInboxLayout(groups, sessionRowKey, frozen) : groups),
+    [groups, frozen],
+  );
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!frozen || !root) return;
+    const release = () => {
+      if (!pointerInside.current && !root.querySelector('[data-state="open"]')) setFrozen(null);
+    };
+    const observer = new MutationObserver(release);
+    observer.observe(root, { subtree: true, attributes: true, attributeFilter: ['data-state'] });
+    return () => observer.disconnect();
+  }, [frozen]);
   return (
-    <div className="flex flex-col gap-2 pt-1 pl-3">
+    <div
+      ref={rootRef}
+      className="flex flex-col gap-2 pt-1 pl-3"
+      onPointerEnter={() => {
+        pointerInside.current = true;
+        setFrozen((current) => current ?? snapshotInboxLayout(shownRef.current, sessionRowKey));
+      }}
+      onPointerLeave={() => {
+        pointerInside.current = false;
+        if (!rootRef.current?.querySelector('[data-state="open"]')) setFrozen(null);
+      }}
+    >
       {SECTIONS.map((section) => {
-        const items = groups.get(section)!;
+        // Counts stay live; only the rows hold still while the pointer is over the list.
+        const count = groups.get(section)!.length;
+        const items = shown.get(section)!;
         const closed = collapsed.has(section);
         const visible = expanded.has(section) ? items : items.slice(0, 20);
         return (
@@ -112,7 +152,7 @@ export function TaskInbox({ sessions, priorityContext, ...rows }: Props) {
             >
               {closed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
               <span>{t(`ccAgent.sidebar.inbox.${section}`)}</span>
-              <span className="ml-auto tabular-nums">{items.length}</span>
+              <span className="ml-auto tabular-nums">{count}</span>
             </button>
             <SectionCollapse collapsed={closed}>
               {section === 'inbox' && items.length === 0 && (

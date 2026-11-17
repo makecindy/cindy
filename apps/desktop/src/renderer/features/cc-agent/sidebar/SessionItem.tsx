@@ -911,13 +911,13 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           <Undo size={14} strokeWidth={2} />
         </SessionAction>
       ) : canQuickArchive && inboxMode ? (
-        // 收件箱：「完成」同样两步确认，避免列表重排时点错；确认后不再提醒自动化
-        // （未提交改动的确认仍保留，见 handleActionClick）。
+        // 收件箱：「完成」单击生效；鼠标在列表上时排列冻结（TaskInbox），不会点到跳动的行。
+        // 未提交改动的确认仍保留，见 handleActionClick。
         <SessionAction
           label={t('ccAgent.sidebar.inbox.complete')}
           onClick={() => {
             prefetchRemovalPreflight();
-            setArchivePending(true);
+            onAction(session.id, 'complete');
           }}
           isActive={isActive}
         >
@@ -1231,14 +1231,14 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                 onClick={(e) => {
                   e.stopPropagation();
                   setArchivePending(false);
-                  onAction(session.id, inboxMode ? 'complete' : 'archive-now');
+                  onAction(session.id, 'archive-now');
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
                 onDoubleClick={(e) => e.stopPropagation()}
                 className="absolute right-0 top-0 w-14"
-                aria-label={t(inboxMode ? 'ccAgent.sidebar.inbox.complete' : 'ccAgent.sidebar.sessionMenu.archived')}
+                aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
               >
-                {t(inboxMode ? 'ccAgent.sidebar.inbox.complete' : 'ccAgent.sidebar.sessionMenu.archived')}
+                {t('ccAgent.sidebar.sessionMenu.archived')}
               </Button>
             )}
             {/* Action 按钮组（hover/menu open 时浮现，archivePending 期间整组让位给红色 pill）。

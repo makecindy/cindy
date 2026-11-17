@@ -1316,15 +1316,14 @@ function TimeActionsSlot({
             onClick={(e) => {
               e.stopPropagation();
               setArchivePending(false);
-              if (inboxMode) onComplete();
-              else onArchiveNow();
+              onArchiveNow();
             }}
             onPointerDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => e.stopPropagation()}
             className="absolute right-0 top-1/2 z-20 w-max min-w-14 -translate-y-1/2 whitespace-nowrap"
-            aria-label={t(inboxMode ? 'ccAgent.sidebar.inbox.complete' : 'ccAgent.sidebar.sessionMenu.archived')}
+            aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
           >
-            {t(inboxMode ? 'ccAgent.sidebar.inbox.complete' : 'ccAgent.sidebar.sessionMenu.archived')}
+            {t('ccAgent.sidebar.sessionMenu.archived')}
           </Button>
         )}
 
@@ -1382,7 +1381,7 @@ function TimeActionsSlot({
                   variant="list"
                   isActive={isActive}
                   label={t('ccAgent.sidebar.inbox.complete')}
-                  onClick={() => setArchivePending(true)}
+                  onClick={() => onComplete()}
                 >
                   <Check size={14} strokeWidth={2} />
                 </CardAction>

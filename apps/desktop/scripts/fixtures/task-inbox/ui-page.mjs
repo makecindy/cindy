@@ -86,13 +86,9 @@ export default {
     await page.getByRole('menu').waitFor();
     await ui.capture('context-menu');
     await page.keyboard.press('Escape');
-    // Done keeps the two-step confirmation (the list may reorder under the pointer):
-    // the first click only reveals the pill; the second archives, even for the open task.
+    // One click on Done archives at once (even for the open task). The list holds still while
+    // hovered, but an explicit Done leaves its slot immediately; restore brings it back.
     await ready.hover();
-    await ready.getByRole('button', { name: archiveLabel, exact: true }).click();
-    assert.equal(await page.locator('section').filter({ hasText: await ui.t('ccAgent.sidebar.inbox.archived') })
-      .locator('[data-session-id="ready"]').count(), 0);
-    await ui.capture('complete-confirm');
     await ready.getByRole('button', { name: archiveLabel, exact: true }).click();
     const archivedSection = page.locator('section > button')
       .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.archived') }).locator('..');

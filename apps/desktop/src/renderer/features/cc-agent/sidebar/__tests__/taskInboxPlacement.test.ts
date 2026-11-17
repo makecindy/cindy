@@ -11,7 +11,7 @@
 import { expect, it } from 'vitest';
 import type { TaskInboxSection } from '@cindy/maker-shared/live-task-priority';
 
-import { holdViewedInboxPlacement } from '../taskInboxPlacement';
+import { freezeInboxLayout, holdViewedInboxPlacement, snapshotInboxLayout } from '../taskInboxPlacement';
 
 const groups = (inbox: string[], working: string[], snoozed: string[] = []) =>
   new Map<TaskInboxSection, string[]>([['inbox', inbox], ['working', working], ['snoozed', snoozed], ['archived', []]]);
@@ -39,4 +39,24 @@ it('applies explicit snooze or archive at once', () => {
   expect(holdViewedInboxPlacement(snoozed, id, 'open', placement)).toEqual({ key: 'open', section: 'snoozed', index: 0 });
   expect(snoozed.get('snoozed')).toEqual(['open']);
   expect(holdViewedInboxPlacement(groups([], []), id, undefined, placement)).toBeNull();
+});
+
+// 2026-11-18 用户要求：「完成」单击生效，但鼠标在任务栏里时任务不能跳动。
+it('keeps rows in place while hovered, closes the gap for settled rows and holds new arrivals', () => {
+  const frozen = snapshotInboxLayout(groups(['a', 'b', 'c'], ['w']), id);
+  // Meanwhile: b was completed (archived), a started running, c stays, n newly arrived.
+  const fresh = new Map<TaskInboxSection, string[]>([
+    ['inbox', ['n', 'c']], ['working', ['a', 'w']], ['snoozed', []], ['archived', ['b']],
+  ]);
+  const shown = freezeInboxLayout(fresh, id, frozen);
+  expect(shown.get('inbox')).toEqual(['a', 'c']);
+  expect(shown.get('working')).toEqual(['w']);
+  expect(shown.get('archived')).toEqual(['b']);
+  expect([...shown.values()].flat()).not.toContain('n');
+  // Restoring a processed task is explicit too: it leaves its slot and joins the end of its section.
+  const restored = freezeInboxLayout(new Map<TaskInboxSection, string[]>([
+    ['inbox', ['b', 'a', 'c']], ['working', ['w']], ['snoozed', []], ['archived', []],
+  ]), id, snapshotInboxLayout(shown, id));
+  expect(restored.get('inbox')).toEqual(['a', 'c', 'b']);
+  expect(restored.get('archived')).toEqual([]);
 });
