@@ -17313,7 +17313,9 @@
           "jira_read": "Read Jira",
           "jira_comment": "Comment on Jira",
           "sessions_dispatch": "Dispatch sessions",
-          "feishu_read": "Read Feishu messages"
+          "feishu_read": "Read Feishu messages",
+          "settings_read": "Read share members",
+          "usage_read": "Read usage and provider group status"
         },
         "project": "Project directory",
         "capabilitiesLabel": "Allowed capabilities",
@@ -17325,7 +17327,9 @@
           "jira_read": "Read Jira issues (get by key / JQL search)",
           "jira_comment": "Add comments to Jira issues",
           "sessions_dispatch": "Create or wake {{appName}} sessions and deliver messages",
-          "feishu_read": "List recently-active chats; fetch recent messages from a chat (group or DM)"
+          "feishu_read": "List recently-active chats; fetch recent messages from a chat (group or DM)",
+          "settings_read": "Read your share members and allowed models on this computer or other authorized computers on the same account; no changes",
+          "usage_read": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, provider group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings."
         },
         "capabilityWarn": {
           "ghostMissing": "Requires the “{{name}}” plugin, which is not installed — this capability will fail at run time",

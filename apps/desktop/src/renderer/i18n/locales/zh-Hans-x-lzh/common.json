@@ -17239,7 +17239,9 @@
           "jira_read": "读 Jira",
           "jira_comment": "评 Jira",
           "sessions_dispatch": "派差事",
-          "feishu_read": "读飞书之讯"
+          "feishu_read": "读飞书之讯",
+          "settings_read": "读分享成员",
+          "usage_read": "查用量及供应商组状态"
         },
         "project": "案之目录",
         "capabilitiesLabel": "许呼之能",
@@ -17251,7 +17253,9 @@
           "jira_read": "查读 Jira 单（依 key 读 / JQL 寻）",
           "jira_comment": "于 Jira 单增评",
           "sessions_dispatch": "立或唤 {{appName}} 差事，并递讯",
-          "feishu_read": "列近日活跃之言谈；取指定言谈（群/单聊）之近讯"
+          "feishu_read": "列近日活跃之言谈；取指定言谈（群/单聊）之近讯",
+          "settings_read": "读己所分享成员及其可用模型，含同账号已授权他机；不改设置",
+          "usage_read": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、供应商组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置"
         },
         "capabilityWarn": {
           "ghostMissing": "依「{{name}}」法器，今未纳——差事行时此能必败",
