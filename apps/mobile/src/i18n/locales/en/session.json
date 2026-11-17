@@ -635,6 +635,7 @@
     "dismissNotice": "Dismiss notice",
     "ignore": "Ignore",
     "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
+    "unexecutedToolMarkup": "The model wrote a tool call as text. Execution could not be confirmed, so this turn did not complete.",
     "silentStopExhausted": "An empty response was detected. Automatic continuation is paused.",
     "outputLimit": "The model reached its output limit, so this response may be incomplete. Send a new message to continue; if this repeats, lower the reasoning effort or compact the conversation history first.",
     "outputLimitReasoning": "Reasoning consumed most of this request’s output budget, so the response may be incomplete. Lower the reasoning effort or compact the conversation history before continuing.",

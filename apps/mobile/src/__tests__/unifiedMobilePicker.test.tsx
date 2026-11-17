@@ -689,7 +689,8 @@ it('explains a closed current model without changing it and still allows choosin
 // 远程 Agent:其他电脑上开放了远程调用的供应商接在被控电脑自己的之后,每个供应商一段、标题带电脑名。
 const studioCatalog = {
   deviceId:'device-studio-mac', name:'Studio Mac', status:'ready',
-  providers:[{id:'account',name:'Studio Provider',models:{},connected:true,logoKind:'anthropic'}],
+  // A different verified login from the host's: listed on its own (the shared rule folds equal sources).
+  providers:[{id:'account',name:'Studio Provider',models:{},connected:true,logoKind:'anthropic',subscriptionAccountKeys:['studio-login']}],
 };
 const remoteId = 'remote:["device-studio-mac","account"]';
 async function mountRemote(selectedDeviceId:string|null,onSelect=vi.fn(async()=>true),catalog:any=studioCatalog,visible=true) {

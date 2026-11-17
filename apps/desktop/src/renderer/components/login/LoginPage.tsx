@@ -372,7 +372,7 @@ export function LoginPage({
   // 「跳过登录」常驻入口在面板内(identifier 视图 SKIP_ENTRY 文字链);footer 仅保留
   // 准备态、离线入口和 error 步的逃生入口，不依赖登录服务恢复。
   const showLocalModeFooter =
-    !isAddAccount && canLeaveProviderLoad && !credentialStoreFailed;
+    !isAddAccount && enterLocalMode !== null && canLeaveProviderLoad && !credentialStoreFailed;
   // 面板底部预留恒取全流程最大值(footer 124;协议行 48 被其覆盖):step 切换时
   // 面板/品牌层零跳位(规则 7,codex 审查 P1)。browser-redirect/completed 维持 0,
   // 与迁移前 main 口径一致(该两步由品牌 overlay/跳转态接管)。
@@ -794,7 +794,7 @@ export function LoginPage({
               圆钮;LoginSkipEntry ≠ LoginTextLink,见该组件注释):接既有 local mode
               链路,过协议门(2026-07-29 拍板)。槽位在 error_text(380..430)之下、
               与其首尾相接,两者同时可见互不重叠;error 出现不推移本入口(均 absolute)。 */}
-          {!isAddAccount ? (
+          {!isAddAccount && enterLocalMode !== null ? (
             <LoginSkipEntry
               testId="login-skip-entry"
               disabled={isLoading || localModePending}

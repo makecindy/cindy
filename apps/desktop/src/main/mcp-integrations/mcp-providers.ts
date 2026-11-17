@@ -336,6 +336,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         closed,
         terminalError: terminal?.kind === 'error'
           ? {
+            ...(terminal.message ? { message: terminal.message } : {}),
             ...(terminal.sdkError ? { sdkError: terminal.sdkError } : {}),
             ...(terminal.codexErrorInfo ? { codexErrorInfo: terminal.codexErrorInfo } : {}),
             ...(typeof terminal.errorStatus === 'number' ? { errorStatus: terminal.errorStatus } : {}),
