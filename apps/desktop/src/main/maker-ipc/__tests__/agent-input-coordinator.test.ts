@@ -13554,6 +13554,9 @@ describe('Bot subscription startup admission', () => {
       rollbackGuardPendingResume: (id, token) => { if (token !== undefined) guard.noteResumeSendFailed(id, token); },
       abandonTakeover: (id, message, token) => h.coordinator.abandonAutoResume(id, message, token),
     });
+    // Match the host's intervention callbacks, including cancellation of its timer.
+    h.onAutomaticEnqueue.mockImplementation(id => book.supersedeUnclaimedErrorForUserIntervention(id));
+    h.onUserEnqueue.mockImplementation(id => book.supersedeUnclaimedErrorForUserIntervention(id));
     const hooks = createInterruptedTurnAutoResumeHooks<Session>({
       // Match the late-bound Desktop facade; its ports are required so the
       // production assembly cannot silently omit the startup authority check.
@@ -13602,6 +13605,104 @@ describe('Bot subscription startup admission', () => {
       expect(h.sendToAgent.mock.calls[1][2]).toMatchObject({ planMode: true });
       expect(h.sendToAgent.mock.calls[1][1]).toMatchObject({ content: 'original task' });
       expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: null, pendingQueue: [] });
+    } finally { vi.useRealTimers(); }
+  });
+
+  // #10559 review regression, unit: an accepted automatic FIFO tail is not a
+  // user intervention. Existing startup tests had no input during host backoff.
+  it.each(['orca', 'report', 'scheduler'] as const)('keeps startup recovery and delivery receipts for an automatic %s tail', async origin => {
+    vi.useFakeTimers();
+    try {
+      const h = startupHarness();
+      h.coordinator.enqueue(h.sid, h.item);
+      await flush();
+      await h.sendToAgent.mock.results[0].value;
+      await flush();
+      h.onAutomaticEnqueue.mockClear();
+      h.onUserEnqueue.mockClear();
+      const tail = makeItem('tail', 'subsequent task', {
+        origin: origin === 'scheduler' ? { kind: 'scheduler', scheduleId: 'tail-schedule', scheduleName: 'Tail task' }
+          : { kind: 'orca', senderLabel: 'worker', senderSessionId: 'worker-session' },
+        ...(origin === 'report' ? { orcaReportDelivery: { workerId: 'worker-1' } } : {}),
+      });
+      h.coordinator.enqueue(h.sid, tail);
+      await flush();
+      expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: null,
+        autoResumePending: { attempt: 1 }, pendingQueue: [
+          expect.objectContaining({ clientId: 'original' }), expect.objectContaining({ clientId: 'tail' }),
+        ] });
+      expect(h.onAutomaticEnqueue).not.toHaveBeenCalled();
+      expect(h.onUserEnqueue).not.toHaveBeenCalled();
+      expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flush();
+      expect(h.fallback).toHaveBeenCalledOnce();
+      expect(h.onUserMessagePersisted.mock.calls.map(call => call[1].clientId)).toEqual(['original']);
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(h.sid, 'done');
+      await flush();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.onUserMessagePersisted.mock.calls.map(call => call[1].clientId)).toEqual(['original', 'tail']);
+      expect(h.sendToAgent.mock.calls.map(call => call[3].persistUserMessage?.clientId)).toEqual(['original', 'original', 'tail']);
+      expect(h.session.send).toHaveBeenCalledTimes(2);
+      expect(h.onRejectedUserTurn).not.toHaveBeenCalledWith(h.sid, expect.objectContaining({ clientId: 'original' }));
+    } finally { vi.useRealTimers(); }
+  });
+
+  // The same original-input takeover must settle when a manual action cancels
+  // its prepared recovery; it is not a hidden autoResume queue item to discard.
+  it.each(['compact', 'steer', 'steer-rejected', 'clear'] as const)('ends startup ownership and the original receipt on %s', async action => {
+    vi.useFakeTimers();
+    try {
+      const h = startupHarness();
+      h.coordinator.enqueue(h.sid, h.item);
+      await flush();
+      await h.sendToAgent.mock.results[0].value;
+      await flush();
+      if (action === 'compact') await h.coordinator.compact(h.sid, h.item.createOpts);
+      else if (action === 'clear') h.coordinator.clearError(h.sid);
+      else await h.coordinator.steer(h.sid, makeItem('manual', 'new request'), {
+        removeFromQueue: true, fallbackToTurn: action !== 'steer-rejected',
+      });
+      await flush();
+      expect(h.coordinator.getProjection(h.sid).autoResumePending).toBeUndefined();
+      expect(latestProjection(h.projections).autoResumePending).toBeUndefined();
+      expect(h.onRejectedUserTurn).toHaveBeenCalledExactlyOnceWith(h.sid, expect.objectContaining({ clientId: 'original' }));
+      if (action !== 'clear') expect(h.coordinator.getProjection(h.sid).error).toEqual(expect.any(String));
+      await vi.advanceTimersByTimeAsync(120_000);
+      await flush();
+      expect(h.fallback).not.toHaveBeenCalled();
+      expect(h.session.send).not.toHaveBeenCalled();
+      expect(h.book.hasSchedule(h.sid)).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Queue ordering is editable while backoff owns A. Settlement must locate A
+  // by its recovery identity, while retry eligibility must still require head A.
+  it.each(['abandon', 'stop', 'automatic-tail'] as const)('settles the displaced startup input on %s without sending another head', async action => {
+    vi.useFakeTimers();
+    try {
+      const h = startupHarness();
+      h.coordinator.enqueue(h.sid, h.item);
+      await flush();
+      await h.sendToAgent.mock.results[0].value;
+      await flush();
+      const tail = makeItem('tail', 'later task', {
+        origin: { kind: 'orca', senderLabel: 'worker', senderSessionId: 'worker-session' },
+      });
+      h.coordinator.enqueue(h.sid, tail);
+      h.coordinator.move(h.sid, 'tail', 0);
+      expect(h.coordinator.getProjection(h.sid).pendingQueue.map(item => item.clientId)).toEqual(['tail', 'original']);
+      if (action === 'stop') h.coordinator.stop(h.sid, { keepQueue: true, pauseQueue: true });
+      if (action === 'automatic-tail') h.coordinator.enqueue(h.sid, { ...tail, clientId: 'another-tail' });
+      if (action !== 'abandon') expect(h.coordinator.getProjection(h.sid).autoResumePending).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(120_000);
+      await flush();
+      expect(h.coordinator.getProjection(h.sid).autoResumePending).toBeUndefined();
+      expect(h.onRejectedUserTurn).toHaveBeenCalledExactlyOnceWith(h.sid, expect.objectContaining({ clientId: 'original' }));
+      expect(h.session.send).not.toHaveBeenCalled();
+      expect(h.onUserMessagePersisted).not.toHaveBeenCalled();
+      expect(h.fallback).toHaveBeenCalledTimes(action === 'abandon' ? 1 : 0);
     } finally { vi.useRealTimers(); }
   });
 

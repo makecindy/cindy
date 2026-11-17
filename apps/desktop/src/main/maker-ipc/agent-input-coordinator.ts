@@ -2166,9 +2166,13 @@ export class AgentInputCoordinator {
       && state.recovery?.kind === 'queue-head' && state.recovery.clientId === recoveringReport?.clientId
       && recoveringReport?.origin?.kind === 'orca' && Boolean(recoveringReport.orcaReportDelivery)
       && !recoveringReport.orcaReportDelivery?.recoveryBlocked;
-    // Another accepted report is only a FIFO tail, not an intervention in the
-    // failed head. Keep both the coordinator lease and the host's retry timer.
-    const preservesAutoResume = schedulerOrigin || preservesReportRecovery;
+    const preservesStartupAdmissionRecovery = automaticOrigin
+      && state.recovery?.kind === 'queue-head'
+      && state.pendingQueue[0]?.clientId === state.recovery.clientId
+      && Boolean(this.pendingStartupAdmissionInput(state));
+    // Accepted automatic tails do not intervene in the recovering head. Keep
+    // both the coordinator lease and the host timer that owns its delivery receipt.
+    const preservesAutoResume = schedulerOrigin || preservesReportRecovery || preservesStartupAdmissionRecovery;
     if (!preservesAutoResume) {
       // 自动续跑可能已经从 pendingQueue 进入 activeTurn、但仍卡在持久化或其它
       // pre-vendor await。用户此时接管不能只作废 host waiter：那会让隐藏 Continue
@@ -3834,7 +3838,6 @@ export class AgentInputCoordinator {
 
   clearError(sessionId: string): AgentInputProjection {
     const state = this.getState(sessionId);
-    const startupAdmissionInput = this.pendingStartupAdmissionInput(state);
     if (state.autoResumePending) this.deps.onUserEnqueue?.(sessionId);
     this.cancelPreparedAutoResume(sessionId, state);
     const shouldDrainTail = state.recovery?.kind === 'active-turn';
@@ -3848,7 +3851,6 @@ export class AgentInputCoordinator {
     if (state.recovery?.kind !== 'queue-head') {
       state.recovery = null;
     }
-    if (startupAdmissionInput) this.notifyRejectedUserTurn(sessionId, startupAdmissionInput);
     this.emit(sessionId);
     if (shouldDrainTail) this.scheduleDrain(sessionId, 'clear-active-turn-error');
     return this.getProjection(sessionId);
@@ -6845,6 +6847,15 @@ export class AgentInputCoordinator {
    * suppressed error 与 guard pending 状态。
    */
   private cancelPreparedAutoResume(sessionId: string, state: SessionInputState): boolean {
+    const startupAdmissionInput = this.pendingStartupAdmissionInput(state);
+    if (startupAdmissionInput) {
+      // Startup recovery owns the original non-autoResume queue item. Cancelling
+      // its token must also end the activity and deferred delivery receipt.
+      state.autoResumePending = null;
+      state.autoResumeAttemptToken = null;
+      this.notifyRejectedUserTurn(sessionId, startupAdmissionInput);
+      this.emit(sessionId);
+    }
     const queuedClientIds = state.pendingQueue
       .filter((item) => item.autoResume)
       .map((item) => item.clientId);
@@ -6854,7 +6865,7 @@ export class AgentInputCoordinator {
     const active = state.activeTurn;
     const item = active?.item;
     if (!active || !item?.autoResume || !isActiveTurnBeforeVendorDispatch(active)) {
-      return queuedClientIds.length > 0;
+      return queuedClientIds.length > 0 || startupAdmissionInput !== undefined;
     }
     const persisted = active.persisted;
     this.cancelPreSendActiveTurn(sessionId, state, false);
@@ -7876,8 +7887,9 @@ export class AgentInputCoordinator {
     const recovery = state.recovery;
     if (state.autoResumePending?.reason !== BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON
       || recovery?.kind !== 'queue-head') return undefined;
-    const head = state.pendingQueue[0];
-    return head?.clientId === recovery.clientId ? head : undefined;
+    // Ending ownership must still find the original input after an allowed
+    // queue reorder. Retry eligibility separately requires it to be the head.
+    return state.pendingQueue.find(item => item.clientId === recovery.clientId);
   }
 
   abandonAutoResume(sessionId: string, message?: string, attemptToken?: number): void {
