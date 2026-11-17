@@ -487,7 +487,7 @@ import * as imageCacheStore from '../imageCacheStore.desktop.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
 import { materializeSshRemoteMedia } from '../file-browser/ssh-media.js';
 import { readGeneratedImageFile, MAX_GENERATED_IMAGE_BYTES } from '../cindy-media/generatedMedia.js';
-import { createGeneratedImageDelivery } from '../cindy-media/generatedImageDelivery.js';
+import { createDesktopGeneratedImageDelivery } from '../cindy-media/generatedImageDelivery.desktop.js';
 import { authorizeSharedTaskHistory, liveSharedTaskTarget } from '../remote-agent/controller/providerShareTaskLocation.js';
 import { resolveRemoteAgentTarget } from '../device-link/providerShareGuest.js';
 import { setGeneratedImageRecovery } from '../cindy-media/generatedImageRecovery.js';
@@ -1653,6 +1653,7 @@ import {
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { getDeepLinkMainWindow, openMainWindowSession } from '../deepLink.js';
 import { handleSessionEvent, type SessionEventDependencies } from './sessionEventPipeline.js';
+import { defaultDecisionForPending } from './sessionEventPreparationSteps.js';
 import {
   createDeferredProductTurnFailureGate,
   createProductTurnFailureFinalizer,
@@ -4018,21 +4019,6 @@ function isPermissionInteractionDecision(
   return Boolean(
     value && typeof value === 'object' && (value as { kind?: unknown }).kind === 'permission',
   );
-}
-
-function defaultDecisionForPending(
-  kind: InteractionRequest['kind'],
-  reason: string,
-): InteractionDecision {
-  if (kind === 'ask_user_question') {
-    return { kind: 'ask_user_question', answers: {}, dismissed: true };
-  }
-  if (kind === 'plan_review') {
-    // dismissed: 系统性 deny(session_closed / session_aborted / 超时清理等),
-    // reason 是系统代码 —— Codex plan 修订循环据此不把它当用户反馈发修订 turn。
-    return { kind: 'plan_review', behavior: 'deny', reason, dismissed: true };
-  }
-  return { kind, behavior: 'deny', reason } as InteractionDecision;
 }
 
 function cleanupPendingAgentInteractionsForSession(sessionId: string, reason: string): void {
@@ -22798,7 +22784,7 @@ export function registerComputerUseIpc(): void {
   );
 }
 
-const generatedImageDelivery = createGeneratedImageDelivery({
+const generatedImageDelivery = createDesktopGeneratedImageDelivery({
   invoke: remoteBackgroundInvoke,
   liveSharedTaskTarget,
   resolveSharedOwnerTarget: async (ownerRoute) => resolveRemoteAgentTarget(ownerRoute),

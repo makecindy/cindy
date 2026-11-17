@@ -5,13 +5,7 @@ import { isQuietScheduledOutput, revealScheduledOutput } from '../scheduler-host
 import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
 import { contextSnapshotForStatus, isContextCompactionSnapshot } from './sessionContextSnapshot.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
-import type {
-  AgentEvent,
-  InteractionDecision,
-  InteractionRequest,
-  SendOrigin,
-  Session,
-} from '@cindy/maker-core';
+import type { AgentEvent, SendOrigin, Session } from '@cindy/maker-core';
 
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 
@@ -32,11 +26,9 @@ import {
 import { isCcMgrUpgradeInFlight } from '../remote-ssh/index.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import { clearPromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
-import { MAKER_PUSH } from './channels.js';
 import { finalizeTurnChangeSet } from '../turn-change-set/store.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
 import { noteClaudeSessionTurnState } from '../maker-host/claude-session-background-activity.js';
-import { consumeClaudeOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
 import {
   isTerminalTurnErrorEvent,
   SessionTurnActivityTracker,
@@ -60,15 +52,14 @@ import {
 } from './interruptedTurnAutoResume.js';
 import type { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
+import {
+  claudeOpusPlanTerminalErrorData,
+  handleInteractionDismissedEvent,
+  routeStandaloneTextEvent,
+  type InteractionDismissedDeps,
+} from './sessionEventPreparationSteps.js';
 
-interface DismissedInteraction {
-  kind: InteractionRequest['kind'];
-  resolve: (decision: InteractionDecision) => void;
-  request: InteractionRequest;
-  persistId?: string;
-}
-
-export interface PrepareSessionEventDeps {
+export interface PrepareSessionEventDeps extends InteractionDismissedDeps {
   readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly botCompactRuntimeRefreshCoordinator: Pick<BotCompactRuntimeRefreshCoordinator, 'noteBoundary'>;
   readonly isFencedStaleSessionTerminal: (sessionId: string, event: AgentEvent) => boolean;
@@ -80,20 +71,6 @@ export interface PrepareSessionEventDeps {
   /** 限额自动继续：有实质产出时重算连续自动继续次数。 */
   readonly usageLimitAutoResume?: Pick<UsageLimitAutoResume, 'noteProgress'>;
   readonly redactEventForRenderer: (event: AgentEvent) => AgentEvent;
-  readonly handleAgentIslandInteractionDismissed: (sessionId: string, requestId: string) => void;
-  readonly clearPendingInteraction: (requestId: string) => DismissedInteraction | null;
-  readonly defaultDecisionForPending: (
-    kind: InteractionRequest['kind'],
-    reason: string,
-  ) => InteractionDecision;
-  readonly persistInteractionDecision: (
-    sessionId: string,
-    persistId: string | undefined,
-    kind: InteractionRequest['kind'],
-    request: InteractionRequest,
-    decision: InteractionDecision | Record<string, unknown>,
-  ) => void;
-  readonly broadcastToAllWindows: (channel: string, payload: unknown) => void;
   /** Starts live delivery; resolves with the tool events it published (never rejects). */
   readonly deliverCodexGeneratedImage: (sessionId: string, event: AgentEvent) => Promise<readonly AgentEvent[]>;
   readonly autoResumeBookkeeping: Pick<
@@ -190,28 +167,7 @@ export function prepareSessionEvent(
   }
   const taskCoordination = event.turnScope !== 'background'
     && (deps.agentInputCoordinatorHolder?.isActiveTaskCoordination?.(session.id, event.sessionTurnGeneration) ?? false);
-  if (event.type === 'text' && event.standaloneText === true) {
-    if (isQuietScheduledOutput(event) && !event.runtimeRecovery) return;
-    // Deliver through the existing persisted-row channel only. Sending a text
-    // event as well would let older renderers adopt the notice as their active
-    // assistant stream and overwrite/misdate the next model reply.
-    const redacted = deps.redactEventForRenderer(event);
-    const text = (redacted.data as { text?: unknown } | null)?.text;
-    const inputId = deps.agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
-    // Private-message visibility is still owned by the accepted input, even
-    // though the notice is independent of the model's reply/usage state.
-    const inputProvenance = deps.agentInputCoordinatorHolder?.getAcceptedInputProvenance(session.id);
-    const replyInputId = inputId && inputProvenance?.clientId === inputId && inputProvenance.autoResume
-      ? inputProvenance.retrySourceClientId ?? inputId : inputId;
-    const privateReply = inputId
-      ? isBotGroupClientId(inputId) || (!!replyInputId?.startsWith('bot-dm:') && !event.runtimeRecovery)
-      : event.agentMeta?.botPrivateReply;
-    if (typeof text === 'string') {
-      onStandaloneTextEvent(session.id, text,
-        typeof privateReply === 'boolean' ? { botPrivateReply: privateReply } : null);
-    }
-    return;
-  }
+  if (routeStandaloneTextEvent(deps, session, event, onStandaloneTextEvent)) return;
   // 自动续跑的 pending 不能只靠 status(isRunning=true) 清理：Pi/Claude 的
   // terminal-only 路径可能首个事件就是 error。Session 已把 host-owned token
   // 盖到事件上，首个匹配 token 的事件即视为 provider accepted。
@@ -263,54 +219,10 @@ export function prepareSessionEvent(
       ...attributedEvent, agentMeta: { ...attributedEvent.agentMeta, replyToClientId: inputClientId },
     };
   }
-  if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
-    const reason =
-      !session.remoteHostId && session.agentKind === 'claude-code'
-        ? consumeClaudeOpusPlanMismatch(session.id)
-        : null;
-    if (reason) {
-      const eventData =
-        event.data && typeof event.data === 'object' && !Array.isArray(event.data)
-          ? (event.data as Record<string, unknown>)
-          : {};
-      attributedEvent = { ...attributedEvent, data: { ...eventData, reason } };
-      deps.log.warn('Claude Opus plan error normalized for renderer', {
-        sessionId: session.id,
-        model: session.model,
-        reason,
-      });
-    }
-  }
+  const opusPlanErrorData = claudeOpusPlanTerminalErrorData(deps, session, event);
+  if (opusPlanErrorData) attributedEvent = { ...attributedEvent, data: opusPlanErrorData };
   const broadcastEvent = deps.redactEventForRenderer(attributedEvent);
-  if (event.type === 'interaction_dismissed') {
-    const data = event.data as { requestId?: unknown; reason?: unknown; withdrawalReason?: unknown };
-    if (typeof data.requestId === 'string') {
-      deps.handleAgentIslandInteractionDismissed(session.id, data.requestId);
-      const entry = deps.clearPendingInteraction(data.requestId);
-      if (entry) {
-        const decision = deps.defaultDecisionForPending(
-          entry.kind,
-          typeof data.reason === 'string' ? data.reason : 'dismissed',
-        );
-        const persistedDecision = data.reason === 'question_withdrawn' && entry.kind === 'ask_user_question'
-          && typeof data.withdrawalReason === 'string'
-          ? { ...decision, withdrawalReason: data.withdrawalReason } : decision;
-        entry.resolve(decision);
-        deps.persistInteractionDecision(
-          session.id,
-          entry.persistId,
-          entry.kind,
-          entry.request,
-          persistedDecision,
-        );
-      }
-    }
-    deps.broadcastToAllWindows(MAKER_PUSH.INTERACTION_DISMISSED, {
-      sessionId: session.id,
-      ...(event.data as object),
-    });
-    return;
-  }
+  if (handleInteractionDismissedEvent(deps, session, event)) return;
   if (event.type === 'image' && event.source === 'codex') {
     if (!isQuietScheduledOutput(event)) {
       // Hold the stream until the stored result is published so IM / hook
