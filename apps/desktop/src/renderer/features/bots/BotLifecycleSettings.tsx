@@ -8,7 +8,7 @@ import type { BotProfile } from './botStore';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { BotDeleteDialog } from './BotDeleteDialog';
 import { withoutBotHiddenLanes } from './botGroupLane';
 import appI18n from 'i18next';
@@ -47,6 +47,11 @@ export function BotLifecycleSettings({
   const archivedSessions = withoutBotHiddenLanes(bot.sessions)
     .filter((item) => item.kind === 'history')
     .sort((a, b) => b.updatedAt - a.updatedAt);
+  // The durable association is enough to reopen a topic's own task. Do not require
+  // its root to be loaded, to belong to today's canonical chat, or to have a summary.
+  const threadSessions = target.kind === 'local' ? bot.sessions
+    .filter((item) => item.role === 'thread' && item.status !== 'deleted')
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)) : [];
   const isPaused = bot.status === 'paused';
   const isArchived = bot.status === 'archived';
 
@@ -235,6 +240,23 @@ export function BotLifecycleSettings({
               )
             ) : null}
           </div>
+
+          {threadSessions.length > 0 ? (
+            <SettingsSection className="mt-4 px-3" title={t('bots.groupChat.server.topic')} count={threadSessions.length}>
+              <SettingsCard>
+                {threadSessions.map((item) => (
+                  <SettingsRow
+                    key={item.id}
+                    title={item.title}
+                    hint={new Date(item.updatedAt).toLocaleString(appI18n.language)}
+                    value={t('bots.open')}
+                    chevron
+                    onClick={() => onOpenSession(item.id)}
+                  />
+                ))}
+              </SettingsCard>
+            </SettingsSection>
+          ) : null}
 
           <div className="mt-4 px-3">
             <div className="flex items-center justify-between gap-3">
