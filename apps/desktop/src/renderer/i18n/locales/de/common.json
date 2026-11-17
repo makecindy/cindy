@@ -4477,14 +4477,7 @@
         "installCancel": "Installation abbrechen",
         "installFailed": "Ollama konnte nicht installiert werden",
         "installPhase": {
-          "resolving": "Offizielle Version wird gesucht…",
-          "downloading": "Wird heruntergeladen…",
-          "verifying": "Wird überprüft…",
-          "extracting": "Wird installiert…",
-          "starting": "Wird gestartet…",
-          "success": "Installiert",
-          "error": "Installation fehlgeschlagen",
-          "cancelled": "Abgebrochen"
+          "error": "Installation fehlgeschlagen"
         },
         "openWebsite": "Ollama-Website öffnen",
         "recheck": "Bereits installiert, erneut prüfen",
@@ -4519,20 +4512,6 @@
         "retryDownload": "Erneut versuchen",
         "libraryName": "Exakter Name in der Ollama-Bibliothek",
         "pullingTitle": "{{name}} wird heruntergeladen",
-        "pullIndeterminate": "Vorbereitung",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Download wird vorbereitet…",
-          "manifest": "Manifest wird abgerufen…",
-          "downloading": "Modelldateien werden heruntergeladen",
-          "verifying": "Wird überprüft…",
-          "writing": "Wird geschrieben…",
-          "success": "Download abgeschlossen",
-          "error": "Download fehlgeschlagen",
-          "paused": "Pausiert",
-          "cancelled": "Abgebrochen"
-        },
         "pauseDownload": "Pausieren",
         "resumeDownload": "Download fortsetzen",
         "cancelDownload": "Unvollständigen Download löschen",
@@ -5977,8 +5956,6 @@
           "notChecked": "Noch nicht geprüft",
           "action": "Aktualisieren",
           "updating": "Wird aktualisiert…",
-          "downloadingPercent": "Wird heruntergeladen: {{percent}} % ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "Wird heruntergeladen, bisher {{downloaded}} MB…",
           "installing": "Download abgeschlossen, Installation läuft…",
           "toast": {
             "success": "cua-driver auf die neueste Version aktualisiert",
@@ -10921,6 +10898,7 @@
       "duplicate": "Freund duplizieren",
       "moreActions": "Weitere Aktionen für {{name}}",
       "viewIcons": "Symbole",
+      "showCollapsedTeammateAvatars": "Avatare im eingeklappten Zustand anzeigen",
       "sectionExpand": "Freunde ausklappen",
       "showLess": "Weniger anzeigen",
       "sectionCollapse": "Freunde einklappen",
@@ -21837,5 +21815,28 @@
     "archivedNotice": "Automatisch archivierte inaktive Aufgaben: {{count}}",
     "undo": "Rückgängig",
     "undoFailed": "Rücknahme fehlgeschlagen. Stelle die Aufgaben im Archiv wieder her."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "Noch {{time}}",
+    "attempt": "Versuch {{attempt}}",
+    "phase": {
+      "preparing": "Wird vorbereitet…",
+      "queued": "In der Warteschlange…",
+      "downloading": "Wird heruntergeladen…",
+      "retrying": "Neuer Versuch…",
+      "verifying": "Wird geprüft…",
+      "installing": "Wird installiert…",
+      "paused": "Pausiert",
+      "completed": "Fertig",
+      "failed": "Download fehlgeschlagen",
+      "cancelled": "Abgebrochen"
+    },
+    "retry": {
+      "slow": "Langsame Verbindung, neu verbinden…",
+      "network": "Verbindung unterbrochen, neuer Versuch…",
+      "timeout": "Zeitüberschreitung, neuer Versuch…",
+      "server": "Server ausgelastet, neuer Versuch…"
+    }
   }
 }

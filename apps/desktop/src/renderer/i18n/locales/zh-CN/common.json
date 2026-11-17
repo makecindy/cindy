@@ -4434,14 +4434,7 @@
         "installCancel": "取消安装",
         "installFailed": "Ollama 安装失败",
         "installPhase": {
-          "resolving": "正在查找官方版本…",
-          "downloading": "正在下载…",
-          "verifying": "正在校验…",
-          "extracting": "正在安装…",
-          "starting": "正在启动…",
-          "success": "已安装",
-          "error": "安装失败",
-          "cancelled": "已取消"
+          "error": "安装失败"
         },
         "openWebsite": "前往 Ollama 官网",
         "recheck": "已安装，重新检测",
@@ -4476,20 +4469,6 @@
         "retryDownload": "重试",
         "libraryName": "精确的 Ollama 库名",
         "pullingTitle": "正在下载 {{name}}",
-        "pullIndeterminate": "准备中",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "正在准备下载…",
-          "manifest": "正在获取清单…",
-          "downloading": "正在下载模型文件",
-          "verifying": "正在校验…",
-          "writing": "正在写入…",
-          "success": "下载完成",
-          "error": "下载失败",
-          "paused": "已暂停",
-          "cancelled": "已取消"
-        },
         "pauseDownload": "暂停",
         "resumeDownload": "继续下载",
         "cancelDownload": "删除未完成下载",
@@ -5934,8 +5913,6 @@
           "notChecked": "尚未检查更新",
           "action": "更新",
           "updating": "更新中…",
-          "downloadingPercent": "正在下载 {{percent}}%（{{downloaded}}/{{total}} MB）…",
-          "downloadingBytes": "正在下载，已下载 {{downloaded}} MB…",
           "installing": "下载完成，正在安装…",
           "toast": {
             "success": "cua-driver 已更新到最新版本",
@@ -10876,6 +10853,7 @@
       "duplicate": "复制伙伴",
       "moreActions": "{{name}} 的更多操作",
       "viewIcons": "图标",
+      "showCollapsedTeammateAvatars": "收起时显示头像",
       "sectionExpand": "展开伙伴",
       "showLess": "收起",
       "sectionCollapse": "收起伙伴",
@@ -21755,5 +21733,28 @@
     "archivedNotice": "已自动归档 {{count}} 个闲置任务",
     "undo": "撤销",
     "undoFailed": "未能撤销，请在已归档任务中恢复。"
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "剩余 {{time}}",
+    "attempt": "第 {{attempt}} 次尝试",
+    "phase": {
+      "preparing": "正在准备…",
+      "queued": "正在排队…",
+      "downloading": "正在下载…",
+      "retrying": "正在重试…",
+      "verifying": "正在校验…",
+      "installing": "正在安装…",
+      "paused": "已暂停",
+      "completed": "已完成",
+      "failed": "下载失败",
+      "cancelled": "已取消"
+    },
+    "retry": {
+      "slow": "网络较慢，正在重新连接…",
+      "network": "连接中断，正在重试…",
+      "timeout": "连接超时，正在重试…",
+      "server": "服务器繁忙，正在重试…"
+    }
   }
 }

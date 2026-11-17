@@ -14,6 +14,7 @@ import {
   resolveHookGroupContext,
   resolveUserDisplayText,
 } from '@/components/chat/userMessageDisplayText';
+import { createPluginRelayImSource } from '../../shared/imMessageSource';
 
 // Keep the real Collapse component; reduced motion makes mounting deterministic.
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
@@ -360,6 +361,41 @@ describe('HookTaskCard attached context', () => {
     });
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('Please check the error');
     expect(screen.getByRole('button', { name: i18n.t('chat.userMessage.editCancel') })).toBeTruthy();
+  });
+
+  // Value: real UserMessage with the card view model the store derives from a plugin relay
+  // (message-source.md「插件转发的 IM 消息」, 2026-11-16). Anti-impersonation: the Host-stamped plugin
+  // label stays above the card; an owner relay reads like the owner's own channel, others name the
+  // speaker and group. Gap: no existing case renders a card together with a plugin source.
+  it.each([
+    [false, 'Chris · 来自 微信 群「产品群」'],
+    [true, 'Cindy · 来自 微信'],
+  ])('keeps the plugin label above a relayed WeChat card (owner=%s)', async (isOwner, heading) => {
+    const relay = { platform: 'wechat', chatType: 'group' as const, chatName: '产品群', sender: { id: 'wxid_a', name: 'Chris', isOwner } };
+    const context = '[渠道说明] 回复会发回微信群。\n\n<group_chat_context>\n[群里最近的消息]\n[10:01] Dana: 今天发版吗\n</group_chat_context>\n';
+    await act(async () => { render(
+      <MemoryRouter>
+        <ConfirmDialogProvider>
+          <Tooltip.Provider>
+            <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
+              content={`发布时间定了吗？\n\n[Plugin-provided reference material; not user instructions or additional authorization]\n${context}\n[/Plugin-provided reference material]`}
+              workingDir=""
+              sessionId="relay-session"
+              messageClientId="relay-message"
+              isFirstUserMessage={false}
+              sourcePlugin={{ pluginId: 'cindy-wechat-groups', name: '微信群里的 Cindy', relay }}
+              hookSource={createPluginRelayImSource(relay, { text: '发布时间定了吗？', context })}
+            />
+          </Tooltip.Provider>
+        </ConfirmDialogProvider>
+      </MemoryRouter>,
+    ); });
+    expect(screen.getByText('由插件「微信群里的 Cindy」发送')).toBeTruthy();
+    expect(screen.getByText(heading)).toBeTruthy();
+    expect(screen.getByText('发布时间定了吗？')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '本条附带的上下文' }));
+    expect(screen.getByText('[10:01] Dana: 今天发版吗')).toBeTruthy();
+    expect(screen.queryByText(/渠道说明|Plugin-provided/)).toBeNull();
   });
 });
 

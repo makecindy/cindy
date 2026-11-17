@@ -6,6 +6,7 @@ import { GithubSetupDialog } from '../features/cc-agent/GithubSetupDialog';
 import { GitContextBadge } from '../features/cc-agent/GitContextBadge';
 import { Tooltip } from '../components/ui/tooltip';
 import { PrRefsProvider, usePrActions, usePrStatus } from '../contexts/PrRefsContext';
+import { initialDownloadProgress } from '../../shared/downloadProgress';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'local-v1' }) }));
@@ -101,7 +102,11 @@ describe('GitHub setup UI', () => {
     const cancel = vi.fn(async () => ({ phase: 'cancelled' }));
     window.electronAPI = {
       gitContext: {
-        githubSetupStatus: async () => ({ phase: 'downloading', percent: 42 }),
+        githubSetupStatus: async () => ({
+          phase: 'downloading',
+          percent: 42,
+          download: { ...initialDownloadProgress('downloading', 100), loaded: 42, percent: 42 },
+        }),
         cancelGithubSetup: cancel,
       },
     } as any;

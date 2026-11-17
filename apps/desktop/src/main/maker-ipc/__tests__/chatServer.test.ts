@@ -196,7 +196,11 @@ describe('Chat Server result delivery and refresh', () => {
       const next = claimed ? null : execution; claimed = true;
       return { body: { execution: next } };
     }
-    if (route.endsWith('/snapshot')) return { body: { room: room(route.split('/')[2]), members: [], messages: [], cursor: '1' } };
+    // The default actor is this owner's companion. Stop-plan regressions need its
+    // membership as well; permission-denial cases provide their own snapshots.
+    if (route.endsWith('/snapshot')) return { body: { room: room(route.split('/')[2]), members: [
+      { id: botId, kind: 'bot', name: 'Bot', state: 'joined', role: 'member', ownerActorId: selfId },
+    ], messages: [], cursor: '1' } };
     if (route.includes('/messages?') || route.endsWith('/executions') || route.includes('/execution-failures?') || route.includes('/plans')) return { body: [] };
     return { body: {} };
   }
