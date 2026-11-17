@@ -4,6 +4,7 @@
 > **读取时机**：修改个人 IM 渠道（`apps/desktop/src/main/im/**`）或官方 hook
 > （`apps/desktop/src/main/hook-control/**`）的找/建任务、命令、排队与插话、输入拼装、
 > 事件观察、表情、交互、收尾或停止逻辑之前
+> **适用路径**：`apps/desktop/src/main/im/**`、`apps/desktop/src/main/hook-control/**`
 
 个人 IM 渠道（Telegram / 飞书 / 微信 / 钉钉 / Discord / 企业微信）与官方 hook（官方
 Telegram / Slack / X / 飞书 / Lark）是同一件事的两套实现：把渠道里的一条消息变成 Cindy 任务里的一轮，

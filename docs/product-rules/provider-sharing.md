@@ -6,13 +6,26 @@
 > 客户端与服务端的工作拆分见 [`docs/provider-sharing-implementation-plan.md`](../provider-sharing-implementation-plan.md)。
 > 2026-10-27 新目标：跨账号分享经供应商组分配后，受邀者优先连接实际执行电脑，并以 30 分钟为
 > 离线授权上限；详见[受邀者与执行电脑直连](provider-sharing-direct-execution.md)。该目标未上线时仍按本文现行授权和中转规则运行。
-> 读取时机：新增或修改供应商分享、分享链接、分享申请与审批、分享管理页，或受邀者使用
-> 分享供应商的任何路径之前。
 > 分享出去的供应商建了[供应商组](provider-groups.md)时，§1 的运行位置、§7.2 管理页、§7.4 用量
 > 与 §9 安全不变量按该文调整：受邀者的任务按组分配与中转、运行中自动换电脑已实现（2026-10-10，P2b / P2c），
 > 按组的用量（§7.4）在 P3。§4.1 第 3 步的告知不论有没有组都已改用该文 §8 的说法（2026-10-10）。
 > 2026-10-15 用户要求：受邀者把分享来的供应商放进自己的供应商组再分享给第三人时，必须由原分享者逐人同意；原分享者
 > 删除对他的分享后，他与他分享的人都不再能用到它，见 §4.3、§9 第 8 条。
+> **读取时机**：新增或修改供应商分享、分享链接、分享申请与审批、分享管理页，或受邀者使用
+> 分享供应商的任何路径之前。
+> **适用路径**：`apps/desktop/src/renderer/features/provider-share/**`、
+> `apps/desktop/src/main/device-link/**/providerShare*`、`apps/desktop/src/shared/providerShare*`、
+> `apps/desktop/src/main/mcp-integrations/**/providerSharingTools*`、
+> `apps/desktop/src/main/remote-agent/controller/providerShareTaskLocation.ts`、
+> `apps/desktop/src/renderer/{state/providerShareFavorites.ts,__tests__/providerShareFavorites*}`、
+> `packages/device-link/src/**/providerShare*`、`packages/device-link-protocol/src/providerShare.ts`、
+> `packages/device-link-sharing/src/{providerShares,publicProviderPage}.ts`、
+> `apps/mobile/app/provider-share.tsx`、
+> `apps/mobile/src/**/{providerShare,remoteAgentCatalogsProviderShare}*`、
+> `apps/desktop/scripts/fixtures/{provider-share-insights,provider-share-sources}/**`、
+> `scripts/provider-share-direct-smoke.mjs`、
+> `apps/desktop/src/renderer/hooks/useProviderBorrow*`、`apps/desktop/src/renderer/components/settings/ProviderRunLocationRow*`、
+> `apps/desktop/src/main/device-link/**/remoteModelAccess*`
 
 ## 1. 定位
 

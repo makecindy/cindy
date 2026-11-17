@@ -8213,6 +8213,8 @@
         "hostTools_terminalDetail": "在这台电脑上以你的用户身份启动命令和交互终端，读取输出、输入和停止本插件的进程。命令可访问你的文件和应用。",
         "agentHiddenTasks": "可创建不显示在任务列表里的后台任务",
         "agentHiddenTasksDetail": "本插件创建的任务可以不出现在任务列表、搜索和通知里。你可以随时在插件详情的「后台任务」中查看、打开，或显示到任务列表；卸载插件时这些任务会恢复显示。",
+        "agentModelPreferences": "读取并修改你的模型收藏，读取你最近使用的模型",
+        "agentModelPreferencesDetail": "可读取这台电脑上的模型收藏和最近使用的模型（含推理强度与 Fast 设置），并添加、修改或移除收藏，改动会同步显示在 Cindy 的模型选择器里。在插件里选择的模型不会记入最近使用。不包含你其他电脑上或别人分享给你的模型，也不提供任何凭证。",
         "agentErrand": "可以新建任务、执行工作并读取结果",
         "agentErrandDetail": "创建的任务会出现在 Cindy 的任务列表中，可以查看过程并继续交流。",
         "agentSchedule": "可以请你新建自动化",
@@ -16763,6 +16765,7 @@
         "openInFileBrowser": "在文件浏览器查看",
         "showInFolder": "在文件夹中显示",
         "copyFilePath": "复制文件路径",
+        "copyFolderPath": "复制文件夹路径",
         "deleteFile": "删除文件"
       },
       "searchPanel": {
@@ -18975,6 +18978,7 @@
       "registrationFailed": "创建失败，请稍后重试",
       "silentStopExhausted": "检测到空响应，自动续跑已暂停。",
       "executionResultUnavailable": "未能取回执行结果，已停止自动续接。可以让助手检查已有的执行结果。",
+      "unexecutedToolMarkup": "模型把工具调用写成了文本，无法确认执行结果，本轮未完成。",
       "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。",
       "outputLimitReasoning": "思考已消耗本次输出的大部分预算，回复可能不完整。建议降低推理强度，或先压缩对话记录，再继续。",
       "outputLimitUsage": "本次模型请求已输出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用于思考。",

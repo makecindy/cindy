@@ -118,10 +118,15 @@ function PlayingWallpaper({
     video.src = src;
     let generation = 0;
     let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+    let waitingTimer: ReturnType<typeof setTimeout> | undefined;
     let recoveryAttempts = 0;
     let interrupted = false;
     const hidden = () =>
       document.hidden || document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR);
+    const cancelWaiting = () => {
+      clearTimeout(waitingTimer);
+      waitingTimer = undefined;
+    };
     const cancelRecovery = () => {
       clearTimeout(recoveryTimer);
       recoveryTimer = undefined;
@@ -153,11 +158,25 @@ function PlayingWallpaper({
       if (event.type === 'stalled' && video.readyState >= 2) return;
       if (!playingRef.current && video.readyState >= 2) return;
       interrupted = true;
-      setReady(false);
+      // Native loop seeks can wait for just one frame. Keep the last canvas and
+      // its composer CSS marker until waiting persists; repeated events must not
+      // extend the grace period. Discarded data still falls back immediately.
+      if (event.type === 'waiting' && playingRef.current && !hidden()) {
+        if (waitingTimer === undefined) {
+          waitingTimer = setTimeout(() => {
+            waitingTimer = undefined;
+            setReady(false);
+          }, 500);
+        }
+      } else {
+        cancelWaiting();
+        setReady(false);
+      }
       recover();
     };
     const onPlaying = () => {
       interrupted = false;
+      cancelWaiting();
       cancelRecovery();
     };
     const sync = () => {
@@ -168,7 +187,12 @@ function PlayingWallpaper({
         document.hidden ||
         document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR)
       ) {
+        cancelWaiting();
         cancelRecovery();
+        // Static/reduced-motion custom video keeps its decoded frame. A prior
+        // playback wait no longer applies, including on later hide/show syncs.
+        if (!playingRef.current && video.readyState >= 2) interrupted = false;
+        if (interrupted) setReady(false);
         video.pause();
       } else {
         if (interrupted) recover();
@@ -194,6 +218,7 @@ function PlayingWallpaper({
     sync();
     return () => {
       generation++;
+      cancelWaiting();
       cancelRecovery();
       for (const event of ['waiting', 'emptied', 'stalled'])
         video.removeEventListener(event, onInterrupted);

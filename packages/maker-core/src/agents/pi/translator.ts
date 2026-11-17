@@ -1,3 +1,4 @@
+import { piToolMarkupProjection } from './tool-markup-projection.js';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
 /**
@@ -851,6 +852,24 @@ export function isFailedOrAbortedPiCompaction(event: Pick<PiRpcEvent, 'type'> & 
 }
 
 export function translatePiEvent(
+  event: PiRpcEvent,
+  queue: AsyncQueue<AgentEvent>,
+  ctx: PiTranslateContext,
+): void {
+  const projection = piToolMarkupProjection(ctx);
+  const message = event.message as PiAssistantMessage | undefined;
+  if (event.type === 'auto_retry_start') projection.beginSample(queue);
+  if (event.type === 'message_start' && (!message || message.role === 'assistant')) projection.beginSample(queue);
+  const preserve = message?.stopReason === 'error' || message?.stopReason === 'aborted'
+    || message?.stopReason === 'length' || isCurrentTurnHostAbortRequested(ctx);
+  if (event.type === 'message_end' && message?.role === 'assistant') projection.setMessage(message.content, preserve);
+  const generation = ctx.turnGeneration;
+  translatePiEventInternal(event, projection.queue(queue) as AsyncQueue<AgentEvent>, ctx);
+  if (ctx.turnGeneration !== generation) projection.resetTurn(queue);
+  if (event.type === 'message_end' && message?.role === 'assistant') projection.finish(queue, preserve);
+}
+
+function translatePiEventInternal(
   event: PiRpcEvent,
   queue: AsyncQueue<AgentEvent>,
   ctx: PiTranslateContext,

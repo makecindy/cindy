@@ -21,6 +21,7 @@ vi.mock('@cindy/device-link', async () => {
     MetadataContinuityReader: metadata.MetadataContinuityReader,
     readProviderMetadataContinuity: metadata.readProviderMetadataContinuity,
     isProviderAccessDeniedError: metadata.isProviderAccessDeniedError,
+    PROVIDER_METADATA_TRUST_MS: metadata.PROVIDER_METADATA_TRUST_MS,
     PROVIDER_GROUP_REMOTE_CHANNEL: group.PROVIDER_GROUP_REMOTE_CHANNEL,
     REMOTE_AGENT_CHANNEL: remoteAgent.REMOTE_AGENT_CHANNEL,
   };

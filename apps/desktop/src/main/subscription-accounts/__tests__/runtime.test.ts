@@ -5,6 +5,7 @@ import type {
   SubscriptionPoolConfig,
   SubscriptionProvider,
 } from '../../../shared/subscriptionAccounts.js';
+import { parseSubscriptionSessionAccountView } from '../../../shared/subscriptionAccounts.js';
 import {
   NATIVE_SUBSCRIPTION_ACCOUNT,
   AgentStartupStoppedError,
@@ -452,7 +453,7 @@ it.each(['anthropic', 'openai'] as const)('persists and restores every %s accoun
   h.pools[provider] = { strategy: 'round', accounts: [account('default'), account('second')] };
   h.read.mockImplementation(async (_provider: string, directory: string) => ({
     authenticated: true, identity: directory, plan: provider === 'anthropic' ? 'max' : 'plus',
-    ...(provider === 'anthropic' ? { planTier: 'max_20x' } : { planType: 'plus' }),
+    ...(provider === 'anthropic' ? { planTier: 'max_20x', planDisplayName: 'Ultra' } : { planType: 'plus' }),
   }));
   h.usage.mockImplementation(async (_provider: string, directory: string) => {
     const used = directory.endsWith('second') ? 42 : 12;
@@ -465,6 +466,9 @@ it.each(['anthropic', 'openai'] as const)('persists and restores every %s accoun
   const initial = await readSubscriptionPool(provider);
   expect(h.storedUsage.has(`${provider}:default`)).toBe(true);
   expect(h.storedUsage.has(`${provider}:second`)).toBe(true);
+  if (provider === 'anthropic') expect(h.storedUsage.get('anthropic:second')).toMatchObject({
+    subscriptionType: 'max', planTier: 'max_20x', planDisplayName: 'Ultra',
+  });
   h.owner += ':restart'; // discard runtime state, retain the simulated owner's database
   const authorized = h.read.getMockImplementation()!;
   h.read.mockRejectedValue(new Error('temporary authentication read failure'));
@@ -473,10 +477,34 @@ it.each(['anthropic', 'openai'] as const)('persists and restores every %s accoun
   h.usage.mockRejectedValue(new Error('temporarily offline'));
   const restored = await refreshSubscriptionPool(provider, true);
   expect(restored.accounts.map(a => a.usage)).toEqual(initial.accounts.map(a => a.usage));
-  expect(restored.accounts[1]).toMatchObject(provider === 'anthropic' ? { planTier: 'max_20x' } : { planType: 'plus' });
+  expect(restored.accounts[1]).toMatchObject(provider === 'anthropic'
+    ? { planTier: 'max_20x', planDisplayName: 'Ultra' } : { planType: 'plus' });
   h.owner += ':replacement';
   h.read.mockResolvedValue({ authenticated: true, identity: 'different-account' });
   expect((await readSubscriptionPool(provider)).accounts.every(a => a.usage === undefined)).toBe(true);
+});
+
+// Unit: a marketing-name change is independent of quota and machine tier. The
+// next status read must update stored/displayed metadata even while quota is reused.
+it.each(['Pro', undefined])('updates or clears the Claude display name without refreshing quota (%s)', async nextName => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  const now = Date.now();
+  try {
+    h.pools.anthropic = { strategy: 'order', accounts: [account('second')] };
+    let planDisplayName: string | undefined = 'Ultra';
+    h.read.mockImplementation(async () => ({ authenticated: true, identity: 'same@example.test',
+      plan: 'pro', planTier: 'pro', planDisplayName }));
+    h.usage.mockResolvedValue({ claudeUsage: { source: 'oauth-endpoint', updatedAt: now,
+      fiveHour: { utilization: 10 }, scoped: [] } });
+    expect((await readSubscriptionPool('anthropic')).accounts[0]).toMatchObject({ planDisplayName: 'Ultra' });
+    planDisplayName = nextName;
+    vi.setSystemTime(now + 31_000);
+    const view = (await readSubscriptionPool('anthropic')).accounts[0];
+    expect(view.planDisplayName).toBe(nextName);
+    expect(view.usage?.claude?.planDisplayName).toBe(nextName);
+    expect(h.storedUsage.get('anthropic:second')).toMatchObject({ subscriptionType: 'pro', planTier: 'pro', planDisplayName: nextName });
+    expect(h.usage).toHaveBeenCalledTimes(1);
+  } finally { vi.useRealTimers(); }
 });
 
 // Test value / unit: use real admission, account events and commands. A healthy
@@ -520,7 +548,8 @@ describe('read-only subscription usage', () => {
     h.pools[provider] = { strategy: 'round', accounts: [account('default'), account('second')] };
     h.read.mockImplementation(async (_kind: string, directory: string) => ({ authenticated: true,
       identity: `${directory}@private.test`, plan: provider === 'anthropic' ? 'max' : 'plus',
-      planTier: provider === 'anthropic' ? 'max_20x' : undefined, accessToken: 'must-not-leak' }));
+      planTier: provider === 'anthropic' ? 'max_20x' : undefined,
+      planDisplayName: provider === 'anthropic' ? 'Ultra' : undefined, accessToken: 'must-not-leak' }));
     const observedAt = Date.now() - 10_000;
     h.usage.mockImplementation(async (_kind: string, directory: string) => {
       const used = directory.endsWith('second') ? 74 : 12;
@@ -535,6 +564,8 @@ describe('read-only subscription usage', () => {
     expect(result.accounts.map(a => [a.accountId, a.windows[0].usedPercent])).toEqual([['default', 12], ['second', 74]]);
     expect(result.accounts[0]).toMatchObject({ providerId: provider, provider, status: 'connected',
       plan: { type: provider === 'anthropic' ? 'max' : 'plus', tier: provider === 'anthropic' ? 'max_20x' : null }, usageStatus: 'available' });
+    if (provider === 'anthropic') expect(result.accounts[0].plan).toHaveProperty('displayName', 'Ultra');
+    else expect(result.accounts[0].plan).not.toHaveProperty('displayName');
     expect(result.accounts[0].windows[0]).toMatchObject({ windowMinutes: 300, resetsAt: 9_999_999_999 });
     expect(JSON.stringify(result)).not.toMatch(/must-not-leak|private\.test|directory|accountKey|accountFingerprint|accessToken/);
     const reads = h.usage.mock.calls.length;
@@ -2886,6 +2917,8 @@ describe('native account assignment on the executing computer', () => {
     h.pools[provider] = { strategy: 'order', accounts: [account('default'), account('second')] };
     h.read.mockImplementation(async (_p: string, directory: string) => ({
       authenticated: true, identity: directory.endsWith('second') ? 'second@example.test' : 'first@example.test',
+      ...(provider === 'anthropic' ? { plan: 'pro', planTier: 'pro',
+        planDisplayName: directory.endsWith('second') ? 'Ultra' : 'Pro' } : {}),
     }));
     const now = Date.now();
     h.usage.mockImplementation(async (_p: string, directory: string) => {
@@ -2903,6 +2936,8 @@ describe('native account assignment on the executing computer', () => {
     expect(bound).toMatchObject({ state: 'bound', account: {
       isDefault: false, number: 2, identity: 'second@example.test', status: 'ready',
     } });
+    if (provider === 'anthropic') expect(parseSubscriptionSessionAccountView(bound, provider))
+      .toMatchObject({ account: { plan: 'pro', planTier: 'pro', planDisplayName: 'Ultra' } });
     expect(bound.state === 'bound' && (provider === 'anthropic'
       ? bound.account.usage?.claude?.fiveHour?.utilization
       : bound.account.usage?.codex?.buckets.codex.primary?.usedPercent)).toBe(30);
@@ -2957,6 +2992,10 @@ describe('native account assignment on the executing computer', () => {
   // is exhausted. Existing tests only exercise the new pool query, not old calls.
   it.each(['anthropic', 'openai'] as const)('keeps old %s quota readers usable without changing the default account card', async (provider) => {
     h.pools[provider] = { strategy: 'order', accounts: [account('default'), account('second')] };
+    if (provider === 'anthropic') h.read.mockImplementation(async (_kind: string, directory: string) => ({
+      authenticated: true, identity: directory, plan: 'pro', planTier: 'pro',
+      planDisplayName: directory.endsWith('second') ? 'Ultra' : 'Pro',
+    }));
     const now = Date.now();
     h.usage.mockImplementation(async (_provider: string, directory: string) => {
       const used = directory.endsWith('default') ? 100 : 12;
@@ -2969,7 +3008,8 @@ describe('native account assignment on the executing computer', () => {
     const read = (channel: string, args: unknown[]) => readLegacySubscriptionQuota(readLegacySubscriptionPoolUsage, channel, args);
     if (provider === 'anthropic') {
       const usage = await read('maker:usage:claude-subscription', []);
-      expect(usage).toMatchObject({ fiveHour: { utilization: 12 }, providerId: 'anthropic' });
+      expect(usage).toMatchObject({ fiveHour: { utilization: 12 }, providerId: 'anthropic',
+        subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra' });
       expect(providerGroupMemberUsageState({ claudeUsage: providerGroupUsageSnapshot(usage, now) }, undefined, now, 'claude-code').limited).toBe(false);
       expect(JSON.stringify(usage)).not.toContain('private-identity');
     } else {
