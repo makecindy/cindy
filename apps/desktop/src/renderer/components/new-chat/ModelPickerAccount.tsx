@@ -26,6 +26,7 @@ export interface ModelPickerAccountInfo {
   identity?: string;
   plan?: string | null;
   planTier?: string;
+  planDisplayName?: string;
   planType?: string;
   usage: SubscriptionAccountUsage | null;
 }
@@ -157,6 +158,7 @@ function ScopedModelPickerAccount({
                           identity: account.identity?.trim() || undefined,
                           plan: account.plan,
                           planTier: account.planTier,
+                          planDisplayName: account.planDisplayName,
                           planType: account.planType,
                           usage: account.usage ?? null,
                         }
@@ -167,6 +169,7 @@ function ScopedModelPickerAccount({
                             identity: member.identity?.trim() || undefined,
                             plan: member.plan,
                             planTier: member.planTier,
+                            planDisplayName: member.planDisplayName,
                             planType: member.planType,
                             usage: member.usage ?? null,
                           })),
@@ -252,6 +255,7 @@ export function useModelPickerAccount(providerId: string, deviceId?: string | nu
       ...(display.identity ? { identity: display.identity } : {}),
       plan: display.plan,
       planTier: display.planTier,
+      planDisplayName: display.planDisplayName,
       planType: display.planType,
       usage: session?.state === 'bound' ? session.account.usage ?? null : display.usage,
     };

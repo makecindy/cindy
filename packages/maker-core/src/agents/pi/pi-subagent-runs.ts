@@ -872,14 +872,14 @@ export const PI_SUBAGENT_IDLE_POLL_MS = 2_000;
 /** Background polling consumes one bounded status at a time, not Promise.all(history). */
 export async function* scanPiSubagentRuns(
   root: string,
-  options: { latestPerTask?: boolean } = {},
+  options: { latestPerTask?: boolean; onRead?: (status: PiSubagentRunStatus) => void } = {},
 ): AsyncGenerator<PiSubagentRunStatus> {
   if (options.latestPerTask) {
     // Directory order is not generation order. Select using small identities
     // first so an old run cannot publish a result/approval before its successor.
     // Re-read only the selected payloads instead of retaining every output.
     const newest = new Map<string, { runId: string; startedAt: number }>();
-    for await (const status of scanPiSubagentRuns(root)) {
+    for await (const status of scanPiSubagentRuns(root, { onRead: options.onRead })) {
       const previous = newest.get(status.taskId);
       if (!previous || status.startedAt > previous.startedAt
         || (status.startedAt === previous.startedAt && status.runId.localeCompare(previous.runId) > 0)) {
@@ -907,7 +907,11 @@ export async function* scanPiSubagentRuns(
     try {
       status = parseStatus(await readSmallJson(path.join(root, entry.name, 'status.json')), entry.name);
     } catch { continue; }
-    if (status && !await isPiSubagentRunStaleAsync(status, Date.now())) yield status;
+    if (status && !await isPiSubagentRunStaleAsync(status, Date.now())) {
+      // Accounting can observe all generations without exposing old results or approvals.
+      options.onRead?.(status);
+      yield status;
+    }
   }
 }
 

@@ -5576,6 +5576,13 @@
       },
       "toggleAria": "Afficher ou masquer le rail de navigation des questions"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Nommer les worktrees avec un modèle",
+        "description": "Donne au worktree d’une nouvelle tâche un nom court en anglais tiré de son premier message (par ex. fix-login-timeout), pour que le dossier et la branche indiquent leur rôle. Généré par les modèles auxiliaires ; en cas d’échec, un nom aléatoire est utilisé. Ne concerne que les worktrees créés à partir de maintenant."
+      },
+      "toggleAria": "Activer ou désactiver le nommage des worktrees par un modèle"
+    },
     "promptRecommendation": {
       "label": "Suggestions de saisie",
       "description": "Après une réponse, la zone de saisie propose une suggestion pour votre prochain message. Appuyez sur Tab pour l'insérer.",
@@ -8292,8 +8299,8 @@
         "hostTools_controlDetail": "Utiliser les outils de Cindy pour modifier, archiver, restaurer et contrôler les tâches et projets existants, et importer des fichiers de tâches au format natif sur cet ordinateur.",
         "hostTools_handoff": "Messages aux tâches",
         "hostTools_handoffDetail": "Utiliser les outils de Cindy pour envoyer des messages aux tâches existantes. Une opération nécessitant le contexte de la tâche actuelle exige une cible explicite.",
-        "hostTools_usage": "Lire l’utilisation des abonnements",
-        "hostTools_usageDetail": "Lire les identifiants de compte, les offres, les périodes de quota et les dates de mise à jour des abonnements Claude et Codex connectés à votre compte Cindy actuel sur cet ordinateur. Ne permet pas de lire les adresses e-mail, les identifiants de connexion, les fichiers ou les données d’autres ordinateurs, ni de modifier les comptes.",
+        "hostTools_usage": "Lire l’utilisation et l’état des groupes de fournisseurs",
+        "hostTools_usageDetail": "Lire les identifiants, offres, périodes de quota et dates de mise à jour des comptes Claude/Codex locaux connectés à votre compte Cindy. Lire l’utilisation enregistrée par jour et par modèle, les coûts estimés, la configuration et l’état des groupes de fournisseurs, ainsi que les identifiants, noms et avatars visibles des membres et appareils sur cet ordinateur ou d’autres ordinateurs autorisés du même compte. Ne permet pas de lire les adresses e-mail de connexion aux abonnements, les dossiers de comptes, les empreintes d’identité internes, les identifiants de connexion ou les fichiers, ni de modifier les comptes ou réglages.",
         "hostTools_settings": "Paramètres de l’application",
         "hostTools_settingsDetail": "Utiliser les outils de Cindy pour lire et modifier la configuration. Aucun secret n’est renvoyé et les saisies confidentielles restent à votre charge.",
         "hostTools_scheduler": "Gestion des automatisations",
@@ -8483,6 +8490,7 @@
             "contentStyle": "Modifier l’espacement des messages et les bulles"
           },
           "positions": {
+            "composer_header": "au-dessus de la zone de saisie",
             "composer_toolbar": "barre d’outils de saisie",
             "session_header": "en-tête de la tâche",
             "statusbar": "barre d’état",
@@ -10991,7 +10999,12 @@
       "summary": "Présentation",
       "summaryPlaceholder": "Par exemple : un romancier passionné de feuilletons, doté d'un humour pince-sans-rire et fasciné par ce qui anime les personnages.",
       "avatarSelectionFailed": "Impossible de lire l'image. Choisissez une image PNG, JPEG ou WebP de 5 Mo maximum.",
-      "personality": "Personnalité et conversation"
+      "personality": "Personnalité et conversation",
+      "sourceLength": "{{length}} / {{limit}} unités UTF-16 (hors espaces de début et de fin).",
+      "sourceExcess": "Limite dépassée de {{excess}} unités. Raccourcissez le texte pour l’enregistrer.",
+      "sourceTooLong": "Ce texte est trop long pour être enregistré. Modifiez-le pour continuer.",
+      "sourceRecovery": "L’original enregistré reste inchangé et le brouillon complet reste sur cette page. Après la copie, collez-le dans un endroit sûr et vérifiez qu’il est complet avant de le raccourcir ou d’abandonner les modifications.",
+      "sourceCopy": "Copier tout le texte"
     },
     "nameLabel": "Comment l'appeler ?",
     "close": "Fermer",
@@ -13103,7 +13116,7 @@
           "reasoningDominated": "La réflexion a consommé l'essentiel du budget de sortie : la réponse peut être incomplète. Réduisez l'effort de raisonnement ou compactez d'abord la conversation, puis continuez.",
           "generic": "Le modèle a atteint la limite de longueur de sortie : cette réponse peut être incomplète. Envoyez un nouveau message pour continuer. Si cela se reproduit, réduisez l'effort de raisonnement ou compactez d'abord la conversation.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "Le modèle a renvoyé plusieurs réponses vides d'affilée : la poursuite automatique est en pause."
+          "silentStopExhausted": "Une réponse vide a été détectée. La poursuite automatique est en pause."
         },
         "permission": {
           "autoReviewUnavailable": "La revue automatique n'a pas abouti. Confirmez si vous autorisez cette action.",
@@ -13863,12 +13876,6 @@
         "TARGET_UNAVAILABLE": "Ce plugin est désactivé, désinstallé ou indisponible. Vérifiez le plugin et réessayez.",
         "ASSESSMENT_FAILED": "Impossible d'actualiser l'état de la configuration. Réessayez.",
         "TIMEOUT": "Délai de configuration dépassé. Réessayez."
-      },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "Service de modèles d'IA",
-          "description": "Connectez un service de modèles disponible avant d'utiliser les fonctionnalités d'image ou de vidéo déclarées par ce plugin."
-        }
       },
       "form": {
         "placeholder": "Saisissez {{label}}",
@@ -15164,6 +15171,7 @@
       "pluginDisabledUnnamed": "Les vérifications automatiques sont bloquées : un plugin requis est désactivé. Elles reprendront une fois le plugin activé.",
       "installPlugin": "Installer le plugin",
       "openPlugin": "Ouvrir le plugin",
+      "enablePlugin": "Activer le plugin",
       "dismissTitle": "Fermer l'avis d'échec passé"
     },
     "worktreeRestoreBanner": {
@@ -15830,6 +15838,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "Le contrôle de cet appareil est désactivé ; le message n'a pas été envoyé.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Échec du transfert de la pièce jointe ; le message n'a pas été envoyé. Veuillez réessayer.",
       "MCP_APPROVAL_AUTO_BLOCKED": "La revue d'approbation automatique a bloqué cet appel d'outil. Aucun refus manuel n'a été reçu.",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "L’approbation automatique a bloqué cet appel d’outil, car les détails de l’action sont incomplets.",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "L’approbation automatique a bloqué cet appel d’outil, car vos instructions ont changé ou ne sont pas encore synchronisées.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "L’approbation automatique a bloqué cet appel d’outil, car les permissions du répertoire ont changé.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "L’approbation automatique a bloqué cet appel d’outil, car l’autorisation déléguée a changé.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "L’approbation automatique a bloqué cet appel d’outil, car l’autorisation du plugin ou de la tâche n’est plus active.",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "L’approbation automatique a bloqué cet appel d’outil, car aucune instruction de l’utilisateur n’autorise l’action.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "L’approbation automatique a bloqué cet appel d’outil, car le plan de travail dépasse la taille prise en charge.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "L’approbation automatique a bloqué cet appel d’outil, car l’Agent exécutant ne correspond pas au plan de travail enregistré.",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "L’approbation automatique a bloqué cet appel d’outil, car le répertoire de travail de la tâche a changé.",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "L’approbation automatique a bloqué cet appel d’outil, car le périmètre de la tâche déléguée est absent ou invalide.",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "La demande d'autorisation a expiré sans décision confirmée. Un délai dépassé n'indique pas si vous avez cliqué sur un bouton.",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "La confirmation de l'autorisation n'a pas pu aboutir. Aucun refus manuel n'a été reçu.",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "Ce modèle a besoin que cet ordinateur transfère les requêtes, ce que la connexion distante ne permet pas encore. Passez à Cindy AI ou utilisez ce modèle dans une tâche locale.",
@@ -17016,6 +17034,7 @@
         "openInFileBrowser": "Ouvrir dans le navigateur de fichiers",
         "showInFolder": "Afficher dans le dossier",
         "copyFilePath": "Copier le chemin du fichier",
+        "copyFolderPath": "Copier le chemin du dossier",
         "deleteFile": "Supprimer le fichier"
       },
       "searchPanel": {
@@ -19247,8 +19266,9 @@
       "steerFailed": "Échec de la réorientation : {{message}}",
       "qrExpired": "QR code expiré, veuillez recommencer",
       "registrationFailed": "Échec de la création, veuillez réessayer plus tard",
-      "silentStopExhausted": "Le modèle a renvoyé des réponses vides à plusieurs reprises ; la reprise automatique est en pause. Cliquez sur « Continuer » pour reprendre la tâche.",
+      "silentStopExhausted": "Une réponse vide a été détectée. La poursuite automatique est en pause.",
       "executionResultUnavailable": "Impossible de récupérer le résultat de l'exécution. La poursuite automatique s'est arrêtée. Demandez à l'assistant de vérifier le résultat d'exécution existant.",
+      "unexecutedToolMarkup": "Le modèle a écrit un appel d’outil sous forme de texte. L’exécution n’a pas pu être confirmée ; ce tour n’est donc pas terminé.",
       "outputLimit": "Le modèle a atteint sa limite de sortie ; cette réponse peut être incomplète. Envoyez un nouveau message pour continuer. Si cela se répète, réduisez l’effort de raisonnement ou compactez d’abord l’historique de la conversation.",
       "outputLimitReasoning": "Le raisonnement a consommé la majeure partie du budget de sortie de cette requête ; la réponse peut être incomplète. Réduisez l’effort de raisonnement ou compactez l’historique de la conversation avant de continuer.",
       "outputLimitUsage": "Cette requête au modèle a utilisé {{outputTokens}} jetons de sortie, dont {{reasoningTokens}} jetons de raisonnement.",
@@ -19810,6 +19830,43 @@
       "notSupported": "La consultation du solde n'est pas prise en charge pour ce compte.",
       "unavailable": "Le solde est temporairement indisponible. Actualisez pour réessayer."
     },
+    "giftCard": {
+      "action": "Utiliser une carte cadeau",
+      "title": "Utiliser une carte cadeau",
+      "inputLabel": "Code de la carte",
+      "inputHint": "Saisissez le code à 16 caractères ou collez le lien d’une carte cadeau.",
+      "continue": "Continuer",
+      "confirmTitle": "Utiliser cette carte cadeau ?",
+      "confirmAction": "Utiliser",
+      "from": "De la part de {{sender}}",
+      "cardLabel": "Carte cadeau Cindy, {{amount}}",
+      "fields": {
+        "validity": "Validité",
+        "validityValue_one": "{{count}} jour après utilisation",
+        "validityValue_many": "{{count}} de jours après utilisation",
+        "validityValue_other": "{{count}} jours après utilisation",
+        "claimBy": "À utiliser avant le",
+        "destination": "Ajouté à"
+      },
+      "doneTitle": "{{amount}} ajoutés",
+      "doneDescription": "Ajouté à votre Solde promotionnel. Valable jusqu’au {{date}}.",
+      "doneDescriptionNoDate": "Ajouté à votre Solde promotionnel.",
+      "pendingTitle": "Carte cadeau utilisée",
+      "pendingDescription": "{{amount}} sont en cours d’ajout et apparaîtront bientôt dans votre Solde promotionnel. Inutile de l’utiliser à nouveau.",
+      "alreadyYours": "Vous avez déjà utilisé cette carte cadeau.",
+      "done": "Terminé",
+      "errors": {
+        "notFound": "Ce code n’est pas valide. Vérifiez-le et réessayez.",
+        "wrongRegionCn": "Cette carte cadeau est destinée à l’édition Chine continentale de Cindy et ne peut pas être utilisée avec ce compte.",
+        "wrongRegionGlobal": "Cette carte cadeau est destinée à l’édition internationale de Cindy et ne peut pas être utilisée avec ce compte.",
+        "alreadyClaimed": "Cette carte cadeau a déjà été utilisée.",
+        "expired": "Cette carte cadeau ne peut plus être utilisée : sa date limite est dépassée.",
+        "voided": "Cette carte cadeau a été annulée.",
+        "rateLimited": "Trop de tentatives. Réessayez plus tard.",
+        "failed": "Impossible d’utiliser la carte cadeau. Réessayez plus tard.",
+        "personalRequired": "Les cartes cadeaux ne peuvent être utilisées qu’avec un compte personnel."
+      }
+    },
     "usage": {
       "title": "Consommation du solde",
       "observedAt": "Solde mis à jour le {{date}}",
@@ -19825,6 +19882,7 @@
         "empty": "Aucune attribution promotionnelle disponible.",
         "incomplete": "Il existe de nombreuses attributions. Seules les {{count}} plus récentes sont affichées.",
         "unnamed": "Attribution promotionnelle",
+        "giftCard": "Carte cadeau · de la part de {{sender}}",
         "original": "Initial",
         "used": "Utilisé",
         "remaining": "Restant",
@@ -21187,7 +21245,7 @@
     "loadFailed": "Impossible de charger l'application. Vérifiez la connexion et rechargez.",
     "updateRequired": "Cet ordinateur ne prend pas encore en charge les MCP Apps. Mettez à jour Cindy sur cet ordinateur et réessayez.",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "Envoyé par $t(mcpApps.appName) « {{name}} »",
     "serverId": "ID du serveur MCP : {{id}}",
     "exitFullscreen": "Quitter le plein écran",
@@ -21201,7 +21259,19 @@
     "pluginCspRejected": "La page a demandé un domaine non déclaré et a été bloquée.",
     "filesOnExecutionComputer": "Afficher le contenu du fichier sur l'ordinateur d'exécution",
     "awaitingApproval": "En attente de votre approbation",
-    "pendingApprovals": "{{count}} demandes en attente d’approbation"
+    "pendingApprovals": "{{count}} demandes en attente d’approbation",
+    "source": {
+      "official": "Cindy officiel",
+      "organization": "Organisation · {{namespace}}",
+      "market": "Marché des plugins",
+      "third-party": "Source tierce",
+      "local": "Installation locale",
+      "unknown": "Source inconnue"
+    },
+    "customMcp": "MCP personnalisé",
+    "sourceLabel": "Source",
+    "signatureLabel": "Signature",
+    "fullscreen": "Plein écran"
   },
   "richAnswer": {
     "invalidImageReference": "La référence de cette image est invalide.",

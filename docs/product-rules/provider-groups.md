@@ -1,5 +1,17 @@
 # 供应商组：一台电脑把多台电脑上的同一个供应商合成一组
 
+> **读取时机**：新增或修改供应商组、组策略、组内电脑的添加与状态、经供应商组的任务分配或转发、
+> 供应商组用量与「远程与分享」页之前。
+> **适用路径**：`apps/desktop/src/main/provider-group/**`、
+> `apps/desktop/src/renderer/features/provider-group/**`、
+> `apps/desktop/src/shared/**/{providerGroup,remoteProviderGroups}*`、
+> `packages/device-link/src/providerGroup.ts`、`apps/desktop/src/renderer/lib/**/remoteProviderGroups*`、
+> `apps/desktop/src/renderer/features/provider-share/**/SharedProviderGroupStatus*`、
+> `apps/desktop/src/renderer/__tests__/modelSelectorProviderGroup*`、
+> `apps/mobile/src/**/{remoteProviderGroups,useSessionProviderGroup}*`、
+> `apps/desktop/scripts/fixtures/{provider-group-accounts,provider-group-rebalance,provider-group-status}/**`、
+> `apps/desktop/src/main/maker-ipc/sessionAgentSwitchHandler.ts`
+
 同一执行电脑的 Anthropic / OpenAI 供应商（2026-11-13 起也包括用户合并出的同类供应商）可包含[多个订阅账号](subscription-account-pools.md)。
 外层组仍选择供应商与电脑，执行入口在该电脑内部按账号池策略分配；组配额读取反映池内可用账号，
 不能只因默认账号耗尽而把整个供应商排除。旧电脑没有账号池查询能力时继续走原单账号配额读取。
@@ -95,8 +107,6 @@
 > 实现进度见 §12：P1 已实现；P2 全部已实现：同账号直连与模型列表只显示组(P2a)、分享的人经组中转与启动阶段换电脑(P2b)、
 > 分享的人运行中换电脑与申请弹窗新说法(P2c)；P3 已做按人与按组内电脑两个维度的用量(§7)。
 > 交互设计稿见 [`docs/design-previews/provider-groups/index.html`](../design-previews/provider-groups/index.html)。
-> 读取时机：新增或修改供应商组、组策略、组内电脑的添加与状态、经供应商组的任务分配或转发、
-> 供应商组用量与「远程与分享」页之前。
 > 相关规则：[供应商分享](provider-sharing.md)、远程 Agent 协议（`docs/dev-rules/protocol-compatibility/remote-agent.md`
 > 「远程 Agent」）、[用量上限自动继续](usage-limit-auto-continue.md)、[跨电脑复制任务](task-device-migration.md)。
 

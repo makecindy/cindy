@@ -77,7 +77,7 @@ describe('source mapping', () => {
     const source = claudeSource(
       provider({ id: 'anthropic' }),
       {
-        subscriptionType: 'max',
+        subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra',
         fiveHour: { utilization: 10, resetsAt: nowSec + 3600 },
         sevenDay: { utilization: 30, resetsAt: nowSec + 86_400 },
         scoped: [{ modelDisplayName: 'Fable', utilization: 50, resetsAt: nowSec + 86_400 }],
@@ -85,6 +85,7 @@ describe('source mapping', () => {
       NOW,
     );
     expect(source.account).toBeNull();
+    expect(source.plan).toBe('Ultra');
     expect(source.windows.map((w) => [w.kind, w.label ?? null, w.usedPercent])).toEqual([
       ['session', null, 10],
       ['week', null, 30],
@@ -289,7 +290,8 @@ describe('collectMenubarInputs', () => {
   it.each(['local', 'remote'])('keeps Claude pool plans and per-model windows attached to their account on %s', async location => {
     const claudePool: SubscriptionPoolView = {
       ...pool, providerId: 'anthropic', accounts: pool.accounts.map((account, index) => ({
-        ...account, plan: index ? 'max' : undefined, planTier: index ? 'max_20x' : undefined, usage: { claude: {
+        ...account, plan: index ? 'pro' : undefined, planTier: index ? 'pro' : undefined,
+        planDisplayName: index ? 'Ultra' : undefined, usage: { claude: {
           updatedAt: NOW, subscriptionType: 'pro',
           fiveHour: { utilization: index ? 25 : 80, resetsAt: nowSec + 3600 },
           sevenDay: { utilization: index ? 35 : 90, resetsAt: nowSec + 86_400 },
@@ -308,7 +310,7 @@ describe('collectMenubarInputs', () => {
     expect(collected.sources).toMatchObject([
       { id: `${prefix}anthropic`, account: 'default@example.com', plan: 'Pro',
         windows: [{ usedPercent: 80 }, { usedPercent: 90 }, { label: 'Sonnet', usedPercent: 95 }] },
-      { id: `${prefix}anthropic:account:extra`, account: 'extra@example.com', plan: 'Max 20×',
+      { id: `${prefix}anthropic:account:extra`, account: 'extra@example.com', plan: 'Ultra',
         windows: [{ usedPercent: 25 }, { usedPercent: 35 }, { label: 'Sonnet', usedPercent: 40 }] },
     ]);
   });

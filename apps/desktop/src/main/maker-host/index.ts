@@ -1,5 +1,6 @@
 import { createPiVisionUsageRecorder } from '../vision-bridge/piVisionUsage.js';
 import { createOneShotUsageRecorder } from '../usage/auxiliaryUsage.js';
+import { attachmentPreservation, attachmentStorageRoots } from './oversized-attachment-recovery.js';
 import { createCodexLocalModelSink } from './codexLocalModelSink.js';
 import { createCodexSpawnConfig, createCodexRoutingSignature } from './codexSpawnConfigCore.js';
 import { refreshCodexGatewayRuntime } from './codexGatewayRefresh.js';
@@ -2619,6 +2620,8 @@ export function getMaker(): Maker {
       // Agent 在同账号另一台电脑上运行、任务与文件留在本机(见 remote-agent/)。
       startDeviceAgentSession: createDeviceAgentStarter({
         readImageDeliveryEpoch: readGeneratedImageEpoch,
+        attachmentPreservation: sessionId => attachmentPreservation(sessionId),
+        attachmentStorageRoots: sessionId => attachmentStorageRoots(sessionId),
         remoteInvoke: remoteBackgroundInvoke,
         renewSharedProviderLink: (peer) => isCrossRegionProviderShareTarget(peer)
           ? renewCrossRegionProviderShareLink(peer) : openRemoteLink(peer),

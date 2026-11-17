@@ -484,6 +484,13 @@ describe('inputProjection', () => {
     );
   });
 
+  it('keeps text-only tool calls as a localized failure in the remote projection', () => {
+    const projection = normalizeInputProjection({
+      sessionId: 'markup', error: 'fallback', errorReason: 'unexecuted-tool-markup',
+    });
+    expect(localizeAgentError(projection.errorReason, null)).toBe(i18n.t('session.tail.unexecutedToolMarkup'));
+  });
+
   it('localizes compact ciphertext rejection even when only its reason survives projection', () => {
     const projection = normalizeInputProjection({
       sessionId: 'compact', error: 'Error running remote compact task',

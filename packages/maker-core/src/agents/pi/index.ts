@@ -1,3 +1,4 @@
+import { piToolMarkupProjection } from './tool-markup-projection.js';
 import { estimatePiContext, type PiPromptSource } from './context-estimate.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
@@ -4262,6 +4263,7 @@ export class PiAgent extends BaseAgent {
       };
     }
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger, { model: initialWireModel });
+    piToolMarkupProjection(ctx).attachTerminalQueue(queue);
     ctx.getPriceVariant = opts.getPriceVariant;
     ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
     ctx.workingContextWindow = startupWorkingContextWindow;
@@ -5230,7 +5232,10 @@ export class PiAgent extends BaseAgent {
       let succeeded = false;
       try {
         const seenRunIds = new Set<string>();
-        for await (const status of scanPiSubagentRuns(subagentRunRoot, { latestPerTask: !visionUsage })) {
+        for await (const status of scanPiSubagentRuns(subagentRunRoot, {
+          latestPerTask: true,
+          onRead: visionUsage ? observePiSubagentVision : undefined,
+        })) {
           if (closed) break;
           observePiSubagentVision(status);
           seenRunIds.add(status.runId);

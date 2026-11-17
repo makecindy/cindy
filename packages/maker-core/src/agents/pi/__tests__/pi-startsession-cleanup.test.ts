@@ -1232,14 +1232,30 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     useFakePollClock();
     const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
     const receipt = (requestId: string) => ({ requestId, backendRole: 'primary', usage: { prompt_tokens: 10 } });
-    const first = { ...run, state: 'completed' as const, endedAt: Date.now(), tasks: run.tasks.map(task => ({ ...task, status: 'completed' as const, pendingApproval: undefined, visionUsage: [receipt('first')] })) };
-    const latest = { ...first, runId: '22222222-2222-4222-8222-222222222222', startedAt: first.startedAt + 1, tasks: first.tasks.map(task => ({ ...task, visionUsage: [receipt('latest')] })) };
+    const first = { ...run, title: 'obsolete-vision-run', state: 'completed' as const, endedAt: Date.now(), tasks: run.tasks.map(task => ({ ...task, status: 'completed' as const, pendingApproval: undefined, visionUsage: [receipt('first')] })) };
+    const latest = { ...first, title: 'current-vision-run', runId: '22222222-2222-4222-8222-222222222222', startedAt: first.startedAt + 1, tasks: first.tasks.map(task => ({ ...task, visionUsage: [receipt('latest')] })) };
+    let visible = false;
     vi.spyOn(piSubagentRuns, 'scanPiSubagentRuns').mockImplementation(async function* (_root, options) {
-      yield latest; if (!options?.latestPerTask) yield first;
+      if (!visible) return;
+      options?.onRead?.(first);
+      options?.onRead?.(latest);
+      if (!options?.latestPerTask) yield first;
+      yield latest;
     });
     const observe = vi.fn(async () => {});
     const handle = await new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: () => ({ observe, close() {} }) })).startSession(opts());
-    try { await pollUntil(() => expect(observe).toHaveBeenCalledTimes(2)); }
+    const updates: unknown[] = [];
+    void (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'agent_task_update') updates.push(event.data);
+      }
+    })();
+    visible = true;
+    try {
+      await pollUntil(() => expect(observe).toHaveBeenCalledTimes(2));
+      expect(JSON.stringify(updates)).not.toContain(first.title);
+      expect(JSON.stringify(updates)).toContain(latest.title);
+    }
     finally { await closeWithoutPolls(handle.close()); }
     expect(observe.mock.calls.map(([value]) => (value as { requestId: string }).requestId).sort()).toEqual(['first', 'latest']);
   });

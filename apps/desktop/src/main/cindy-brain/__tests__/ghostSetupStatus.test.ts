@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { validateGhostManifest, type GhostManifest } from '../../../shared/ghost';
+import { assessPluginSetup } from '../pluginSetupService';
 import {
   evaluateGhostSetup,
   evaluateGhostSetupAssessment,
@@ -41,6 +42,37 @@ function manifest(raw: Record<string, unknown>): GhostManifest {
 }
 
 const INJECT = { header: 'Authorization', format: 'Bearer {value}' };
+
+// #7730：原有测试只覆盖纯 manifest 判定，漏掉运行期叠加的网关前置条件。
+// unit：通过真实 assessPluginSetup 验证仅声明快问快答、无官方网关时可用，
+// 插件自己的 Secret 缺失时仍应阻塞；不需要真实模型请求或持久化配置。
+describe('插件模型服务解耦', () => {
+  it.each([false, true])('无官方网关，插件自己的 Secret 缺失=%s', (needsSecret) => {
+    const input = {
+      manifest: manifest({
+        slots: needsSecret ? ['cindy', 'network'] : ['cindy'],
+        cindy: { text: ['oneshot'] },
+        ...(needsSecret ? {
+          settingsHtml: 'settings.html',
+          network: {
+            hosts: ['api.example.com'],
+            secrets: [{ key: 'api_key', label: 'API Key', inject: INJECT }],
+          },
+        } : {}),
+      }),
+      probes: probes(),
+      revision: 1,
+      reauthSuggestion: () => undefined,
+      // 旧服务以此把缺官方网关当成所有 cindy 能力的前置条件；修复后不再消费它。
+      translate: (key: string) => key,
+      clientConfigReady: () => false,
+    };
+    const assessment = assessPluginSetup(input);
+    expect(assessment.state).toBe(needsSecret ? 'required' : 'ready');
+    expect(assessment.groups.flatMap(group => group.items.map(item => item.ref)))
+      .toEqual(needsSecret ? ['secret:api_key'] : []);
+  });
+});
 
 describe('evaluateGhostSetup · 启发式回落(无 setup 声明)', () => {
   it('零凭证零连接的意识恒就绪', () => {

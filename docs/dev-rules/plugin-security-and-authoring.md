@@ -4,6 +4,13 @@
 > **读取时机**：新增或修改插件（`.cindy`）的运行时、沙箱、权限、能力声明、面板供片、
 > 网络／凭证／文件交接、插件市场分页读取、安装扫描、实例核对、使用统计与远程插件状态读取，插件作者可见的
 > 身份卡、管子协议、打包与编写手册，或批准状态、安装布局、指纹格式等**存量安装读得到的任何东西**之前
+> **适用路径**：`apps/desktop/src/main/cindy-brain/**`、`apps/desktop/src/main/plugin-*/**`、
+> `apps/desktop/src/main/mcp-integrations/**/ghost*`、
+> `apps/desktop/src/main/maker-ipc/**/{ghost,plugin,runtimePlugins}*`、
+> `apps/desktop/src/shared/**/{ghost,plugin}*`、`apps/desktop/src/preload/**/ghost*`、
+> `apps/desktop/src/renderer/cindy-brain/**`、`apps/desktop/src/renderer/features/plugin/**`、
+> `apps/host/src/plugins/**`、`apps/mobile/src/plugins/**`、`packages/plugin-protocol/**`、
+> `packages/cindy-tools/src/ghost/**`、`apps/desktop/resources/system-skills/cindy-plugin-creator/**`
 
 本文治理 Cindy 中运行的插件——以 `ghost.json` 为身份卡的 `.cindy` 包。它约束三件
 互为支撑的事：**运行时权限安全**（宿主如何隔离并授权插件）、**存量插件兼容**（升级
@@ -32,12 +39,16 @@ Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 
 
 ## 事实来源
 
-订阅用量读取（2026-11-16）：独立 `agent.hostTools:['usage']` 工具组仅开放
-`get_subscription_usage`。与 `settings` 分开授权，沿用 Host 工具网关的安装批准、启用状态、
-版本和 owner 代次检查。只读执行电脑当前 Cindy 账号已连接的 Claude/Codex 账号，通过
+用量与供应商组读取（2026-11-16）：独立 `agent.hostTools:['usage']` 工具组提供
+`get_subscription_usage`、`get_provider_usage_history` 和 `get_provider_group`。与 `settings` 分开授权，沿用 Host 工具网关的安装批准、启用状态、
+版本和 owner 代次检查。当前安装说明覆盖本机订阅配额、已记录用量与估算、供应商组配置/状态，以及可见成员和设备信息；
+后两类可指定同账号已授权其它电脑，不新增权限组或版本化重批。订阅配额只读执行电脑当前 Cindy 账号已连接的 Claude/Codex 账号，通过
 `subscription-accounts/usageView.ts` 白名单返回账号标识、套餐、额度窗口及观测时间；
 不展开原生账号对象、凭证、目录、邮箱、内部指纹或远程分享。参数不接受调用方身份、owner、路径
-或强制刷新；跨账号切换和插件撤权后的迟到回包不交付。原有插件未声明该组时行为与批准不变。
+或强制刷新；用量与组状态复用原管理通道和数据可见性，组内自动供应商名称中的订阅身份只在插件返回投影清除，Agent/UI 不变。
+跨账号切换和插件撤权后的迟到回包不交付。原有插件未声明该组时行为与批准不变。
+manifest 新增 `usage` 声明走原整体安装确认；已有该组批准调用新增组内读取不补批。
+beta 存量同意范围扩展及维护者确认要求见[平台契约的授权记录](protocol-compatibility/plugin-host-tools-platform.md#usage-组范围扩展的维护确认)。
 实现与回归见 `subscription-accounts/runtime.ts` 及其测试、`hostToolSlot.test.ts`、
 `ghostInstallConsent.test.ts`；作者用法见随包 `plugin-host-tools.md`「读取订阅用量」。
 
@@ -222,7 +233,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   批准后，插件创建的任务及 Worker 中的 Agent 按普通任务的权限使用已连接工具；
   创建回执仅约束插件直接管理该任务，不参与任务内 Agent 的工具权限判定。
   插件直接调用 `cindy.tasks` 仍只管理本插件的任务。
-- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` / `browser` / `computer` / `ssh` / `docs` / `discovery` 工具组，安装/更新确认中展示各项声明。
+- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` / `browser` / `computer` / `ssh` / `docs` / `discovery` / `usage` 工具组，安装/更新确认中展示各项声明。
   安装/更新确认是整体决定：接受即授予该版本 manifest 的全部已知声明能力，拒绝则不安装或不更新。整体安装批准有效、已启用且 manifest 声明对应组即放行，不另存分项批准，也不提供补批入口。
   旧 receipt 的 `approvedHostToolGroups` / `approvedEventTopics` 字段读取时忽略，不迁移或清理数据，不建立替代许可。新增声明随整体更新确认，移除声明、停用、卸载或撤销整体安装批准立即失效。
   `cindy.host.call(server, tool, args)` 的 UI 与 Node 请求共用 `hostToolSlot`，通过同一 provider / registry 调用 Agent 工具处理器，禁止另写插件业务实现。
@@ -298,6 +309,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   可查询本机项目、任务和伙伴的目标元数据，并投递文字/图片；该接口本身不授予其他任务的历史读取、设置修改或停止权限。
   安装/更新复用既有权限确认；历史 tasks 批准和未知 targets 字段不能自动扩权，缺新批准时只阻止新目标接口，首次调用复用既有宿主确认。
   实现与作者契约见 [通用投递目标](plugin-task-api-implementation.md#通用投递目标增量接口尚未发布)。
+  同一批准也允许 IM 插件通过 `tasks.imProjects/create/followImProject` 复用侧栏项目与官方机器人
+  的模型、来源和权限设置；仅接续插件自己的任务，不能搬动其他项目的任务。
+  增量字段、旧任务回执兼容与发送时复核见[插件 IM 共用项目与模型](protocol-compatibility/plugin-im-projects.md)。
 - `agent.observe` 是独立能力，不依赖 `agent.tasks`，单列 `agent:observe` 权限并要求 Host receipt 的 `observeCapabilityApproved` 显式批准。
   只读返回已登记本机项目中任务的标题、Agent 类型、归档与状态元数据，并可在主窗口打开其中的任务；不返回消息、计划或文件，也不能发送、修改或停止任务。
   旧 tasks/targets 批准与历史未知字段不授予查看；首次调用复用既有宿主确认。实现见 [只读查看项目任务](plugin-task-api-implementation.md#只读查看项目任务增量接口尚未发布)。
@@ -964,13 +978,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 ## 5. 存量插件兼容：升级必须无感（红线）
 
-本地模式首次云登录采用插件时，内容目录必须连同原 receipt、技能快照、实例记录和市场
-来源账本一起交接，保留 revision、启停态与原批准能力，不重新铸造批准。仅最终持久认领
-`local-v1` 的首个云账号可采用；已有目标插件状态不自动混合，源资料保留。交接在账号
-隔离区内完成，复制中断由冻结计划恢复；未完成安装事务须先恢复，不能把 pending journal
-当成有效安装。OAuth 锁与账号授权不复制。凭证范围及回滚见
-[本地模式首次云登录的凭证交接](credentials-and-local-storage.md#本地模式首次云登录的凭证交接)。
-回归入口为 `localProfileAssetsMigration.test.ts` 的实际 GhostManager/receipt 重载。
+本地模式首次云登录的插件交接随 #10357 暂时回退；已交接资料保持原样，未完成的交接
+暂不继续。已知限制与恢复要求见[资产交接回退说明](credentials-and-local-storage.md#本地模式首次云登录资产交接暂时回退)。
 
 `tools[].parameters` 的 16KB 约束：新包入口 `validateGhostManifest` 按 JSON 序列化后的
 UTF-8 字节计量；历史市场 release 入口 `validateStoredGhostManifest` 和已装快照入口
@@ -1154,6 +1163,8 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
   绑定；启动窗口创建前的固定配置读取和一次性 CLI 不受请求预算约束。
 
 ## 6. 作者契约与编写手册同步
+
+随包作者手册只描述随包版本的当前能力，不写发布状态或首个可用版本；用到新能力时，`minCindyVersion` 填开发测试所用的 Cindy 版本。
 
 插件界面扩展的作者入口为随包 `references/plugin-host-ui.md`，具名视图和原生入口仍共用
 MCP Apps，不能另建页面 SDK 或逐历史消息 render/query。`mcpApps.host` 能力以整版安装/更新
