@@ -30,7 +30,13 @@
  * CINDY_PI_TOOL_FOLD_PIN_BUDGET（钉住预算字符数，默认 64000）、
  * CINDY_PI_TOOL_FOLD_INGEST_LIMIT / _INGEST_KEEP（入库截断阈值/保留，默认 20000/2000）、
  * CINDY_PI_TOOL_FOLD_GIANTS（保留的巨型结果条数，默认 64）、
- * CINDY_PI_TOOL_FOLD_GIANT_BUDGET（巨型结果总字符预算，默认 2000000）。
+ * CINDY_PI_TOOL_FOLD_GIANT_BUDGET（巨型结果总字符预算，默认 2000000）、
+ * CINDY_PI_TOOL_FOLD_ARG_CHARS（参数超过多少字符才折，默认 200；0 = 只折结果不折参数）。
+ *
+ * 回放（两条重会话，keep=4/pairs=32/chars=36000，价格为实测 cacheRead 折扣）：
+ * 参数≥200 才折 → 上下文 −25.5% / −22.6%，净 +$2.70 / +$0.49；只折结果 → −17.4% / −14.1%，
+ * 净 +$1.32 / −$0.12；照折全部参数 → −25.2% / −22.4%，净 +$2.64 / +$0.47。
+ * 小参数不折不是省钱，是省一次重建、并且不让历史里出现能被执行形状的参数对象。
  */
 
 export const CINDY_TOOL_FOLD_EXTENSION_FILENAME = 'cindy-tool-fold.ts';
@@ -47,6 +53,7 @@ export const CINDY_TOOL_FOLD_ENV_NAMES = [
   'CINDY_PI_TOOL_FOLD_GIANTS',
   'CINDY_PI_TOOL_FOLD_GIANT_BUDGET',
   'CINDY_PI_TOOL_FOLD_MAX_FOLDED',
+  'CINDY_PI_TOOL_FOLD_ARG_CHARS',
 ] as const;
 
 export const CINDY_TOOL_FOLD_EXTENSION_SOURCE = String.raw`/**
@@ -68,6 +75,15 @@ export const CINDY_TOOL_FOLD_EXTENSION_SOURCE = String.raw`/**
  *     giants are kept separately in memory (bounded).
  *  4. Recovered round-trips are pinned as originals until the next user message or the
  *     pin budget (LRU by last recovery timestamp), preventing fold/recover thrashing.
+ *  5. Arguments are folded only past ARG_FOLD_CHARS: the pointer plus the record that
+ *     repeats its subject costs ~115 chars, so folding a 100-char read call is a net
+ *     loss, and a call block whose arguments read like a command is the one shape models
+ *     replay as if it were runnable (measured: 202 such replays in local sessions). What
+ *     a folded argument said moves into the result record instead. Replaying two heavy
+ *     sessions: folding only arguments >= 200 chars keeps the full context saving
+ *     (-25.5% / -22.6%) with the lowest rebuild; folding every argument gives
+ *     -25.2% / -22.4%; folding none drops to -17.4% / -14.1% and turns the net negative
+ *     on one session.
  *
  * Batch size is expressed in characters (call arguments + result text) because a
  * round-trip ranges from ~20 chars (git status) to ~8k (a file read). Measured on two
@@ -100,6 +116,7 @@ export default function (pi) {
   var GIANT_BUDGET_CHARS = intEnv('CINDY_PI_TOOL_FOLD_GIANT_BUDGET', 2000000, 100000, 1000000000);
   var LINE = 160;
   var MAX_FOLDED = intEnv('CINDY_PI_TOOL_FOLD_MAX_FOLDED', 4000, 100, 1000000);
+  var ARG_FOLD_CHARS = intEnv('CINDY_PI_TOOL_FOLD_ARG_CHARS', 200, 0, 1000000);
 
   // Sticky fold marks: toolCallId -> payload chars. Survives requests in this process;
   // a restart simply re-folds on the next batch.
@@ -162,7 +179,7 @@ export default function (pi) {
     return '';
   }
 
-  function callSummary(block) {
+  function callSubject(block) {
     var args = block.arguments && typeof block.arguments === 'object' ? block.arguments : {};
     var key = '';
     if (typeof args.command === 'string') key = oneLine(args.command);
@@ -174,7 +191,15 @@ export default function (pi) {
     else {
       try { key = oneLine(JSON.stringify(args)); } catch (error) { key = ''; }
     }
-    return (block.name ? String(block.name) + ' \u00b7 ' : '') + key;
+    return key;
+  }
+
+  function callSummary(block) {
+    return (block.name ? String(block.name) + ' \u00b7 ' : '') + callSubject(block);
+  }
+
+  function argChars(block) {
+    try { return JSON.stringify(block.arguments || {}).length; } catch (error) { return 0; }
   }
 
   function isFoldedCall(block) {
@@ -232,20 +257,26 @@ export default function (pi) {
     return trips;
   }
 
+  // The pointer must not look runnable: it carries the id and nothing that reads like
+  // an argument, because the model replays the nearest call-shaped example it sees.
   function foldedCall(block) {
     return {
       type: 'toolCall',
       id: block.id,
       name: block.name,
-      arguments: { __folded: true, summary: callSummary(block) },
+      arguments: { __folded: true, call: String(block.id) },
     };
   }
 
-  function foldedResult(result, call) {
+  function foldedResult(result, call, argsFolded) {
     var text = textOf(result.content);
     var lines = text ? text.split('\n').length : 0;
     var summary = '[folded] ' + (result.isError === true ? 'error' : 'ok');
     if (call && call.name) summary += ' \u00b7 ' + String(call.name);
+    if (argsFolded && call) {
+      var subject = callSubject(call);
+      if (subject) summary += ' \u00b7 ' + subject;
+    }
     summary += ' \u00b7 ' + lines + ' lines/' + text.length + ' chars';
     var head = firstLine(text);
     if (head) summary += ' \u00b7 ' + head;
@@ -538,27 +569,36 @@ export default function (pi) {
       var blocks = assistant.content;
       var nextContent = [];
       var callsById = Object.create(null);
-      var foldedAny = false;
+      var argsReplaced = false;
       for (var k = 0; k < blocks.length; k++) {
         var block = blocks[k];
         if (block && block.type === 'toolCall' && foldable(String(block.id))) {
-          var replaced = foldedCall(block);
-          callsById[String(block.id)] = replaced;
-          nextContent.push(replaced);
-          foldedAny = true;
+          // Fold arguments only past the budget; below it the pointer is larger than the
+          // payload and the call block is the shape the model re-sends by accident.
+          var foldArgs = ARG_FOLD_CHARS > 0 && argChars(block) > ARG_FOLD_CHARS;
+          callsById[String(block.id)] = { call: block, argsFolded: foldArgs };
+          if (foldArgs) {
+            nextContent.push(foldedCall(block));
+            argsReplaced = true;
+          } else {
+            nextContent.push(block);
+          }
         } else {
           nextContent.push(block);
         }
       }
       // Fold per call, not per trip: a pinned call keeps its own payload verbatim while
       // its parallel siblings stay folded.
-      if (!foldedAny) continue;
-      if (out === null) out = messages.slice();
-      out[unit.start] = Object.assign({}, assistant, { content: nextContent });
+      if (argsReplaced) {
+        if (out === null) out = messages.slice();
+        out[unit.start] = Object.assign({}, assistant, { content: nextContent });
+      }
       for (var r = 0; r < unit.results.length; r++) {
         var result = unit.results[r];
-        var foldedCallNow = callsById[String(result.toolCallId)];
-        if (foldedCallNow) out[unit.indexes[r]] = foldedResult(result, foldedCallNow);
+        var entry = callsById[String(result.toolCallId)];
+        if (!entry) continue;
+        if (out === null) out = messages.slice();
+        out[unit.indexes[r]] = foldedResult(result, entry.call, entry.argsFolded);
       }
     }
 

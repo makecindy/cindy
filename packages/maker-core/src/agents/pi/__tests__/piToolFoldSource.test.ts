@@ -12,6 +12,8 @@ type Tool = { execute: (id: string, params: unknown) => Promise<{ content?: Bloc
 /** Run the shipped extension source the way pi loads it, capturing handlers and tools. */
 function loadExtension(env: Record<string, string> = {}) {
   for (const [key, value] of Object.entries(env)) process.env[key] = value;
+  // Budget tests must not leak into the rest of the suite: reset what they switch off.
+  process.env.CINDY_PI_TOOL_FOLD_ARG_CHARS = env.CINDY_PI_TOOL_FOLD_ARG_CHARS ?? '200';
   const body = CINDY_TOOL_FOLD_EXTENSION_SOURCE.replace(/^export default /m, '');
   const handlers: Record<string, Handler> = {};
   const tools: Record<string, Tool> = {};
@@ -36,7 +38,7 @@ function pairs(count: number, textLength = 2000): Message[] {
   const messages: Message[] = [];
   for (let index = 0; index < count; index += 1) {
     const id = `call-${index}`;
-    messages.push(call(id, 'bash', { command: `run step ${index} with a reasonably long command line` }));
+    messages.push(call(id, 'bash', { command: `run step ${index} ${'c'.repeat(420)}` }));
     messages.push(result(id, 'bash', `step ${index} ok ${'x'.repeat(textLength)}`));
   }
   return messages;
@@ -84,19 +86,57 @@ describe('cindy-tool-fold extension source', () => {
     expect(foldedText).toContain('[folded] ok');
     expect(foldedText).toContain('toolfold_read("call-0")');
     expect(foldedText).toContain('step 0 ok');
-    expect(String((out[0].content![0].arguments as Record<string, unknown>).summary)).toContain('run step 0');
+    // Large arguments are replaced by an id-only pointer; what they said moves to the record.
+    expect(out[0].content![0].arguments).toEqual({ __folded: true, call: 'call-0' });
+    expect(foldedText).toContain('run step 0');
+  });
+
+  it('keeps a small-argument call verbatim and does not repeat it in the record', () => {
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
+    const messages = pairs(40);
+    // A `read`-sized argument object: smaller than the pointer that would replace it.
+    const args = { path: 'packages/maker-core/src/agents/pi/pi-tool-fold-source.ts', offset: 1, limit: 40 };
+    messages[0] = call('call-0', 'read', args);
+    const out = projection(context, messages);
+    expect(out[0]).toBe(messages[0]);
+    const record = String(out[1].content![0].text);
+    expect(record).toContain('[folded] ok \u00b7 read');
+    // The call block already shows the path; the record stays on the result side.
+    expect(record).not.toContain(args.path);
+    expect(record).toContain('toolfold_read("call-0")');
+  });
+
+  it('never rewrites arguments when the argument budget is switched off', () => {
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8', CINDY_PI_TOOL_FOLD_ARG_CHARS: '0' });
+    const messages = pairs(40);
+    const out = projection(context, messages);
+    expect(out[0]).toBe(messages[0]);
+    expect(out[1]).not.toBe(messages[1]);
+    const record = String(out[1].content![0].text);
+    expect(record).toContain('[folded] ok \u00b7 bash');
+    // No duplication: the call block still shows the command.
+    expect(record).not.toContain('run step 0');
+  });
+
+  it('leaves no command text in the pointer of a folded large-argument call', () => {
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
+    const messages = pairs(40);
+    const out = projection(context, messages);
+    const pointer = out[0].content![0].arguments as Record<string, unknown>;
+    expect(pointer).toEqual({ __folded: true, call: 'call-0' });
+    expect(JSON.stringify(pointer)).not.toContain('run step 0');
   });
 
   it('keeps folds sticky and does not rewrite them again until the next batch', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const first = projection(context, pairs(40));
-    const firstFolded = String((first[0].content![0].arguments as Record<string, unknown>).summary);
+    const firstPointer = JSON.stringify(first[0].content![0].arguments);
     const firstSavings = JSON.stringify(first).length;
     const again = projection(context, pairs(40));
-    expect(String((again[0].content![0].arguments as Record<string, unknown>).summary)).toBe(firstFolded);
+    expect(JSON.stringify(again[0].content![0].arguments)).toBe(firstPointer);
     expect(JSON.stringify(again).length).toBe(firstSavings);
     const grown = projection(context, pairs(41));
-    expect(String((grown[0].content![0].arguments as Record<string, unknown>).summary)).toBe(firstFolded);
+    expect(JSON.stringify(grown[0].content![0].arguments)).toBe(firstPointer);
     expect(isFolded(grown[grown.length - 4])).toBe(false);
   });
 
@@ -191,8 +231,8 @@ describe('cindy-tool-fold extension source', () => {
     const trip: Message = {
       role: 'assistant',
       content: [
-        { type: 'toolCall', id: 'par-a', name: 'bash', arguments: { command: 'run a' } },
-        { type: 'toolCall', id: 'par-b', name: 'bash', arguments: { command: 'run b' } },
+        { type: 'toolCall', id: 'par-a', name: 'bash', arguments: { command: `run a ${'a'.repeat(420)}` } },
+        { type: 'toolCall', id: 'par-b', name: 'bash', arguments: { command: `run b ${'b'.repeat(420)}` } },
       ],
     };
     const messages: Message[] = [
@@ -220,15 +260,15 @@ describe('cindy-tool-fold extension source', () => {
     const parallel: Message = {
       role: 'assistant',
       content: [
-        { type: 'toolCall', id: 'big', name: 'bash', arguments: { command: 'big' } },
-        { type: 'toolCall', id: 'small', name: 'bash', arguments: { command: 'small' } },
+        { type: 'toolCall', id: 'big', name: 'bash', arguments: { command: `big ${'b'.repeat(420)}` } },
+        { type: 'toolCall', id: 'small', name: 'bash', arguments: { command: `small ${'s'.repeat(420)}` } },
       ],
     };
     const messages: Message[] = [
       parallel,
       result('big', 'bash', 'b'.repeat(2600)),
       result('small', 'bash', 's'.repeat(100)),
-      call('other', 'bash', { command: 'other' }),
+      call('other', 'bash', { command: `other ${'o'.repeat(420)}` }),
       result('other', 'bash', 'o'.repeat(500)),
       ...pairs(40),
     ];
@@ -383,7 +423,7 @@ describe('cindy-tool-fold extension source', () => {
   it('counts parallel calls, not messages, toward the pairs gate', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '32', CINDY_PI_TOOL_FOLD_MIN_CHARS: '1000000000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
     // One assistant message with 32 parallel calls: 32 complete pairs in one trip.
-    const blocks = Array.from({ length: 32 }, (_, i) => ({ type: 'toolCall', id: `par-${i}`, name: 'bash', arguments: { command: `parallel step ${i}` } }));
+    const blocks = Array.from({ length: 32 }, (_, i) => ({ type: 'toolCall', id: `par-${i}`, name: 'bash', arguments: { command: `parallel step ${i} ${'p'.repeat(420)}` } }));
     const results = blocks.map((b, i) => result(String(b.id), 'bash', `parallel ${i} ok ${'z'.repeat(120)}`));
     // A newer trailing pair keeps the 32-call trip outside the KEEP=1 resident window.
     const messages: Message[] = [
