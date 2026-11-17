@@ -12,6 +12,7 @@ import { PLUGIN_ATTACHMENT_MAX_BYTES } from '../../../shared/pluginAttachments.j
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import {
   createPluginTaskService,
+  pluginTaskMatchesImProject,
   isPluginTaskPermissionAllowed,
   PluginTaskError,
   assertPluginTaskResult,
@@ -25,6 +26,75 @@ import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSess
 import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
 import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from '../pluginTaskModelRoute.js';
 import type { ProviderView } from '@cindy/model-providers';
+
+// User contract: plugin IM entrances share project settings. Existing route tests
+// lack project defaults, directory boundaries and permission changes on continuation.
+// Minimal cases: one create retry after a setting change; one existing task; one moved task.
+// Tier: unit, production task service with in-memory persistence.
+it('creates from shared IM settings and replays creation after those settings change', async () => {
+  const f = fixture();
+  const shared = { ...f.route, agentDeviceId: 'share:owner', effort: 'medium' };
+  f.deps.readPermissionMode = () => undefined;
+  f.deps.resolveImProject = vi.fn(async () => ({ route: shared, workingDir: '/project', permissionMode: 'bypassPermissions' as const,
+    assertCurrent: () => {}, matches: () => true }));
+  const request = { requestKey: 'im-create', title: 'Group', imProject: '/project' };
+  const task = await f.service.create('p', request);
+  expect(task.resolvedConfig).toEqual(shared);
+  expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Group', shared, undefined,
+    shared, expect.any(Function), undefined, undefined, expect.objectContaining({ workingDir: '/project' }), 'bypassPermissions');
+  f.deps.resolveImProject = vi.fn(async () => { throw new Error('source offline'); });
+  expect(await f.service.create('p', request)).toEqual(task);
+  expect(f.deps.resolveImProject).not.toHaveBeenCalled();
+  await expect(f.service.create('p', { ...request, imProject: 'chat' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+});
+
+it('keeps chat, nested projects and Windows project directories separate', async () => {
+  const task = await fixture().create();
+  const projects = ['C:/work', 'C:/work/nested'];
+  expect(pluginTaskMatchesImProject({ ...task, workspaceKind: 'dialogue' }, undefined, projects)).toBe(true);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work' }, undefined, projects)).toBe(false);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'c:\\WORK\\src' }, 'C:/work', projects)).toBe(true);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work/nested/src' }, 'C:/work', projects)).toBe(false);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work-other' }, 'C:/work', projects)).toBe(false);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work/../other' }, 'C:/work', projects)).toBe(false);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work' }, 'C:/work', [])).toBe(false);
+});
+
+it('follows project model and permission in the same task through both runtime write boundaries', async () => {
+  const f = fixture();
+  f.deps.readPermissionMode = () => undefined;
+  const task = await f.create();
+  const route = { ...f.route, effort: 'medium', agentDeviceId: 'share:owner' };
+  f.deps.resolveImProject = async () => ({ route, permissionMode: 'ask', assertCurrent: () => {}, matches: () => true });
+  f.deps.setModel = async (id, selected, assertCurrent, permissionMode) => {
+    await assertCurrent();
+    Object.assign(f.tasks.get(id)!, { resolvedConfig: selected, revision: 2 });
+    await assertCurrent(); // actual SessionControlService checks again before permission
+    Object.assign(f.tasks.get(id)!, { permissionMode, revision: 3 });
+    return { status: 'applied' };
+  };
+  const result = await f.service.followImProject('p', { taskId: task.taskId, expectedRevision: task.revision, imProject: 'chat' });
+  expect(result.task).toMatchObject({ taskId: task.taskId, resolvedConfig: route, permissionMode: 'ask' });
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload).imProject).toBe('chat');
+  f.deps.assertImProjectDispatch = () => { throw new PluginTaskError('PERMISSION_DENIED', 'project tightened'); };
+  await expect(f.service.send('p', { taskId: task.taskId, expectedRevision: 3, requestKey: 'new', text: 'hello' }))
+    .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  expect(f.deps.dispatch).not.toHaveBeenCalled();
+});
+
+it('does not move an existing task or override a project configuration changed during resolution', async () => {
+  const f = fixture();
+  const task = await f.create();
+  f.deps.setModel = vi.fn();
+  f.deps.resolveImProject = async () => ({ route: f.route, permissionMode: 'auto', assertCurrent: () => {}, matches: () => false });
+  const request = { taskId: task.taskId, expectedRevision: task.revision, imProject: '/other' };
+  await expect(f.service.followImProject('p', request)).rejects.toMatchObject({ code: 'PROJECT_MISMATCH' });
+  f.deps.resolveImProject = async () => ({ route: f.route, permissionMode: 'auto', matches: () => true,
+    assertCurrent: () => { throw new PluginTaskError('STALE_REVISION', 'settings changed'); } });
+  await expect(f.service.followImProject('p', request)).rejects.toMatchObject({ code: 'STALE_REVISION' });
+  expect(f.deps.setModel).not.toHaveBeenCalled();
+  expect(await f.service.get('p', task.taskId)).toEqual(task);
+});
 
 // PR #9155 P1: a cold/offline remote read held the shared receipt queue, so
 // even another plugin's already running task could not stop. Existing lifecycle

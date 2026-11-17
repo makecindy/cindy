@@ -126,6 +126,36 @@ describe('useDeviceLinkSettings deletion', () => {
     unmount();
   });
 
+  // #10671: the encrypted write may commit before the legacy write fails.
+  // Unit tier through the real hook; success-only tests miss reconciliation.
+  it.each(['rename', 'delete'] as const)('refreshes actual state after a partial %s failure without claiming success', async op => {
+    const subscribe = vi.fn(() => vi.fn());
+    const listed = (name: string) => ({ devices: [{ deviceId: 'target', name, platform: 'darwin',
+      appVersion: null, lastSeenAt: null, online: true, busy: false, remoteControlEnabled: true,
+      controlEnabled: true, isSelf: false }] });
+    const api = {
+      getState: vi.fn(() => new Promise<never>(() => {})),
+      listDevices: vi.fn().mockResolvedValueOnce(listed('before')).mockResolvedValue(listed(op === 'rename' ? 'after' : 'before')),
+      renameDevice: vi.fn().mockRejectedValue(new Error('[INTERNAL] legacy write failed')),
+      deleteDevice: vi.fn().mockRejectedValue(new Error('[INTERNAL] legacy write failed')),
+      onOwnershipChanged: subscribe, onPresenceChanged: subscribe, onStatusChanged: subscribe,
+      onConnectionIssue: subscribe, onControlledState: subscribe, onControlTargetChanged: subscribe,
+    };
+    (window as unknown as { electronAPI: { deviceLink: typeof api } }).electronAPI = { deviceLink: api };
+    const { result, unmount } = renderHook(() => useDeviceLinkSettings());
+    await waitFor(() => expect(result.current.devices?.[0]?.name).toBe('before'));
+    await act(async () => {
+      if (op === 'rename') await result.current.rename('target', 'after');
+      else expect(await result.current.remove('target')).toBe(false);
+    });
+    expect(api.listDevices).toHaveBeenCalledTimes(2);
+    expect(result.current.devices?.[0]?.name).toBe(op === 'rename' ? 'after' : 'before');
+    expect(effects.error).toHaveBeenCalledWith(`settings.devices.toast.${op === 'rename' ? 'renameFailed' : 'deleteFailed'}`);
+    expect(effects.success).not.toHaveBeenCalled();
+    expect(effects.removeDevice).not.toHaveBeenCalled();
+    unmount();
+  });
+
   // 服务端以「在线」拒绝删除(409 → ALREADY_EXISTS)：列出 target 后点删除，返回 remove() 的结果。
   async function removeAfterOnlineRejection(
     onlineBefore: boolean,
