@@ -361,6 +361,22 @@ describe('makerChatStore active view tracking', () => {
     view.leave();
   });
 
+  // 滚动保存(整体替换快照)曾把 renderFloorsByView 一并抹掉:跟随面随后的字段级
+  // 更新只会重建自己那份,深读者的地板丢失,下一拍按尾部地板裁掉它仍在渲染的行
+  // (Codex P2: Preserve per-view floors across scroll snapshot saves)。
+  it('preserves per-view floors when a mounted view saves a plain scroll snapshot', async () => {
+    const view = await readingWindow('dual-save', 1500);
+    updateRenderWindowFloor(view.id, 'client-10', 'view-reader');
+    // 读者面板一次普通滚动保存(不带地板字段的快照)整体替换 scroll 对象。
+    saveSessionScroll(view.id, { windowAnchorKey: null, viewportTopKey: 'msg-client-10',
+      messageClientId: 'client-10', offset: 0, isNearBottom: false });
+    // 跟随面推进自己的地板 —— 若上面的保存把地板映射抹了,这里只会剩 follower 一份。
+    updateRenderWindowFloor(view.id, 'client-1400', 'view-follower');
+    vi.advanceTimersByTime(31_000);
+    expect(makerChatStore.getSnapshot(view.id).messages).toHaveLength(1500);
+    view.leave();
+  });
+
   it('bounds a busy session above its in-flight turn floor on the maintenance tick', async () => {
     // 300 行完成轮 + user 触发行 + 100 行运行轮 + 一条插话行（steer，不打断轮）+
     // 100 行运行轮：502 行窗口在 leaveView / 维护拍上都必须收敛到整段在途轮

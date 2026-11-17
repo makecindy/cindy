@@ -65,7 +65,12 @@ const store = new Map<string, SessionViewMemory>();
 
 export function saveSessionScroll(sessionId: string, snapshot: SessionScrollSnapshot): void {
   const previous = store.get(sessionId);
-  store.set(sessionId, { ...previous, scroll: snapshot });
+  // 滚动保存不知道渲染地板:整体替换会抹掉所有挂载视图的地板,之后跟随面的
+  // 字段级更新只会重建自己那份 —— 双面板下深读者的地板丢失,下一拍会裁掉它
+  // 仍在渲染的行。地板由 updateRenderWindowFloor 单独维护,这里保留旧值。
+  const retainedFloors = snapshot.renderFloorsByView ?? previous?.scroll?.renderFloorsByView;
+  const scroll = retainedFloors ? { ...snapshot, renderFloorsByView: retainedFloors } : snapshot;
+  store.set(sessionId, { ...previous, scroll });
 }
 
 /** 字段级更新裁剪地板 —— 渲染窗口推进时由 MessageStream 调用。
