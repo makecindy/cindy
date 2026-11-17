@@ -131,7 +131,7 @@ export interface LogStreamHealth {
   initialized: boolean;
   /** 当天文件当前是否有活跃写流。 */
   active: boolean;
-  /** 最近一次失败;恢复后仍保留,便于事后回看。 */
+  /** 最近一次失败;写入恢复成功后清空,未恢复期间一直留着,便于事后回看。 */
   lastFailure: LogStreamFailure | null;
 }
 
@@ -659,7 +659,10 @@ function writeRecordFormatSentinel(slot: DailySlot): void {
     `[${RECORD_FORMAT_SENTINEL_SCOPE}] ${RECORD_FORMAT_SENTINEL_MSG}\n`;
   try {
     slot.stream.write(line, (err?: Error | null) => {
-      if (!err) slot.sentinelWritten = true;
+      if (!err) {
+        slot.sentinelWritten = true;
+        markSlotHealthy(slot);
+      }
     });
   } catch (err) {
     reportSlotFailure(slot, 'write', err);
@@ -698,13 +701,30 @@ function scheduleSlotRetry(slot: DailySlot): void {
   slot.retryDelayMs = Math.min(slot.retryDelayMs * 2, STREAM_RETRY_MAX_MS);
 }
 
+/**
+ * 一次写入真的落盘了:退避复位,失败原因与去重状态一起清空。
+ *
+ * 判据只能是「写成功」,不能是「文件打开成功」——ENOSPC 时 open 照样成功、写才失败。
+ * 在 open 上复位会同时坏掉两件事:退避永远停在 1 秒(每条日志都重开一次流),以及
+ * 去重状态被清空(同一个错误每一轮重刷一遍 stderr);`lastFailure` 也会在写仍失败的
+ * 时候被清掉,健康自检误报成健康。
+ */
+function markSlotHealthy(slot: DailySlot): void {
+  slot.retryDelayMs = STREAM_RETRY_MIN_MS;
+  slot.lastFailure = null;
+  slot.reportedFailure = '';
+}
+
 // 按天切换: dateKey 变了就关旧 stream、开当天文件, 并触发保留清理。main / agent 共用。
 function ensureDailySlot(slot: DailySlot, now: Date): void {
   if (!slot.dir) return; // 未 init
   const key = dateKeyLocal(now);
   if (key === slot.dateKey) {
     if (slot.stream) return;                     // 同一天,流还活着
-    if (now.getTime() < slot.nextRetryAt) return; // 刚失败过:等退避窗口,别每条日志都重开
+    // 刚失败过:等退避窗口,别每条日志都重开。
+    // 注意按墙上时钟判,不按 `now` —— `now` 可能是记录自带的时间戳(cc-debug 重试旧行时
+    // 它一直停在原地),而 nextRetryAt 是墙上时钟设的,拿旧时间戳比会把窗口判成永远没过。
+    if (Date.now() < slot.nextRetryAt) return;
   } else {
     if (slot.stream) {
       try { slot.stream.end(); } catch { /* ignore */ }
@@ -720,11 +740,6 @@ function ensureDailySlot(slot: DailySlot, now: Date): void {
     let opened = false;
     stream.on('open', () => {
       opened = true;
-      if (slot.stream !== stream) return;
-      // 开成功了:退避复位,失败原因清空(此刻是健康的)。
-      slot.retryDelayMs = STREAM_RETRY_MIN_MS;
-      slot.lastFailure = null;
-      slot.reportedFailure = '';
     });
     stream.on('error', (err) => {
       if (slot.stream === stream) {
@@ -794,12 +809,17 @@ async function cleanupOldSessions(rootDir: string): Promise<void> {
   }
 }
 
+/** main 行写成功:此刻才是真的健康了,退避与失败原因复位(#10790)。 */
+function mainLineFlushed(err?: Error | null): void {
+  if (!err) markSlotHealthy(mainSlot);
+}
+
 // main 纯文本行写入: 按天切 + append。
 function writeMainLine(line: string): void {
   ensureDailySlot(mainSlot, new Date());
   if (!mainSlot.stream) return;
   try {
-    mainSlot.stream.write(line);
+    mainSlot.stream.write(line, mainLineFlushed);
   } catch (err) {
     // 写不进去时不再静默:留下原因,并让下一次写入重新开流。
     reportSlotFailure(mainSlot, 'write', err);
@@ -830,7 +850,11 @@ function writeAgentRecord(rec: Omit<AgentLogRecord, 'seq'>, retryable = false): 
   const slot = rec.sessionId ? sessionAgentSlot(rec.sessionId) : agentSlot;
   if (!slot) return rejected();
   ensureDailySlot(slot, new Date(rec.ts));
-  if (!slot.stream || !agentLogWriter.write(slot.stream, line)) return rejected();
+  // 落盘成功才算健康:open 成功但写失败(ENOSPC)时不能复位退避,见 markSlotHealthy。
+  const settled = (err?: Error | null): void => {
+    if (!err) markSlotHealthy(slot);
+  };
+  if (!slot.stream || !agentLogWriter.write(slot.stream, line, settled)) return rejected();
   agentSeq++;
   droppedAgentRecords = 0;
   return true;
