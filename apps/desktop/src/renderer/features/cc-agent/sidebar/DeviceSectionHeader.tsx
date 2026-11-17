@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
-import { LoaderCircle, Monitor, MonitorOff, Plus } from 'lucide-react';
+import { LoaderCircle, Monitor, MonitorOff, FolderPlus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { SIDEBAR_RAIL_ICON_BUTTON_CLASS } from '@/components/sidebar/SidebarIconButton';
 import { Tip } from '@/components/ui/tooltip';
@@ -149,7 +149,7 @@ export function DeviceSectionHeader({
                 if (!createProjectDisabled) onCreateProject();
               }}
             >
-              <Plus size={14} aria-hidden />
+              <FolderPlus size={14} aria-hidden />
             </button>
           </Tip>
         </div>
