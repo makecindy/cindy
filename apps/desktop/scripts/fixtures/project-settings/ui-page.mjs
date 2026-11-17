@@ -8,9 +8,10 @@ export default {
   name: 'project-settings',
   entry: './fixture.tsx',
   viewport: { width: 720, height: 800 },
-  real: 'ProjectSettingsDialog and ProjectIcon',
-  notCovered: 'Real persistence, device-link transport and phone native presentation.',
+  real: 'ProjectSettingsDialog, ProjectIcon and DeviceSectionHeader',
+  notCovered: 'Real persistence, device-link transport, full sidebar navigation and phone native presentation.',
   cases: {
+    'create-device': { about: 'Device-row add action appears on hover/focus and opens the creation form', data: { create: true } },
     'create-legacy': { about: 'Version 6 still requires an existing directory and hides clone fields', data: { create: true, version: 6 } },
     'create-blank': { about: 'Repository creation is opt-in and returning to blank cannot send a hidden clone URL', data: { create: true } },
     'create-auto': { about: 'Create by name without choosing a directory', data: { create: true } },
@@ -80,11 +81,29 @@ export default {
   },
   async ready(page) {
     await page
-      .getByRole('button', { name: /^(更换图标|Change icon|项目设置|Project settings)$/ })
+      .getByRole('button', { name: /^(更换图标|Change icon|项目设置|Project settings|新建项目|New project)$/ })
       .first()
       .waitFor();
   },
   async check(page, ui) {
+    // Real header and dialog, with a local specimen row. Existing dialog cases
+    // cannot verify hover/focus visibility. ProjectsSection unit tests cover
+    // local/remote target routing separately from this browser layout check.
+    if (ui.case === 'create-device') {
+      const add = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.newProject'), exact: true });
+      const wrapper = add.locator('..');
+      if (await wrapper.evaluate(el => getComputedStyle(el).opacity) !== '0') throw new Error('Add action should be hidden at rest');
+      await page.getByRole('button', { expanded: true }).hover();
+      if (await wrapper.evaluate(el => getComputedStyle(el).opacity) !== '1') throw new Error('Hover did not reveal add action');
+      await ui.capture('device-hover');
+      await page.mouse.move(350, 300);
+      await add.focus();
+      if (await wrapper.evaluate(el => getComputedStyle(el).opacity) !== '1') throw new Error('Keyboard focus did not reveal add action');
+      await add.click();
+      await page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true }).waitFor();
+      await ui.capture('device-create');
+      return;
+    }
     if (['create-auto', 'create-repository', 'create-blank'].includes(ui.case)) {
       const repositoryInput = page.getByRole('textbox', { name: await ui.t('projectSettings.repository'), exact: true });
       if (await repositoryInput.count()) throw new Error('Repository field appeared before opting in');

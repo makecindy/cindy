@@ -157,6 +157,7 @@ import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
 import { useSidebarFilter, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
 import { useHiddenProjects, type UseHiddenProjectsReturn } from './hooks/useHiddenProjects';
 import {
+  deviceLinkProjectKey,
   buildPersistentLocalProjects,
   filterPersistentLocalProjectsByLastActivity,
   normalizeProjectKey,
@@ -2810,8 +2811,13 @@ function ExpandedView({
     [handleClearSelection, navigate, t],
   );
 
-  const [creatingProject, setCreatingProject] = useState(false);
-  const handleCreateProject = useCallback(() => setCreatingProject(true), []);
+  const [creatingProject, setCreatingProject] = useState<{
+    target: DialogueDeviceTarget | null;
+  } | null>(null);
+  const handleCreateProject = useCallback(
+    (target: DialogueDeviceTarget | null) => setCreatingProject({ target }),
+    [],
+  );
 
   /**
    * 新建对话。目标设备两种来源:
@@ -3647,23 +3653,27 @@ function ExpandedView({
             scope: 'local',
             workingDir: '',
             remoteHostId: null,
-            deviceLinkDeviceId: null,
-            deviceLinkDeviceName: null,
+            deviceLinkDeviceId: creatingProject.target?.deviceId ?? null,
+            deviceLinkDeviceName: creatingProject.target?.deviceName ?? null,
             deviceLinkConnectionStatus: null,
             displayName: '',
             segments: 1,
             sessions: [],
             latestActivityAt: '',
           }}
-          onClose={() => setCreatingProject(false)}
+          onClose={() => setCreatingProject(null)}
           onCreated={(directory) => {
-            filter.ensureProjectIncluded(directory);
+            filter.ensureProjectIncluded(
+              creatingProject.target
+                ? deviceLinkProjectKey(creatingProject.target.deviceId, directory)
+                : `local:${directory}`,
+            );
             handleClearSelection();
             patchNewMakerDraft({
               workingDir: directory,
               remoteHostId: null,
-              deviceLinkDeviceId: null,
-              deviceLinkDeviceName: null,
+              deviceLinkDeviceId: creatingProject.target?.deviceId ?? null,
+              deviceLinkDeviceName: creatingProject.target?.deviceName ?? null,
             });
             navigate('/cc-agent/new', { state: makeNewMakerRouteState('dialogue') });
           }}

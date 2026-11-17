@@ -1,3 +1,7 @@
+import { useState, type ReactNode } from 'react';
+import { MonitorSmartphone, ChevronDown } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { DeviceSectionHeader } from '../../../src/renderer/features/cc-agent/sidebar/DeviceSectionHeader';
 import { SessionProjectSettingsButton } from '../../../src/renderer/features/cc-agent/sidebar/SessionProjectSettingsButton';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 import { mountPage, subscription } from '../../ui-page/harness';
@@ -6,6 +10,20 @@ import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwner
 setDataOwnerGeneration('fixture', 1);
 const writes: unknown[] = [];
 Object.assign(window, { projectSettingsWrites: writes });
+function DeviceEntry({ enabled, children }: { enabled: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const { t } = useTranslation();
+  if (!enabled) return children;
+  return <div className="max-w-80 p-4">
+    <DeviceSectionHeader deviceId={null} name={t('ccAgent.sidebar.deviceGroup.local')} onCreateProject={() => setOpen(true)}>
+      <button type="button" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)} className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-full px-2 text-xs text-[var(--sidebar-list-muted)]">
+        <MonitorSmartphone size={13} /><span>{t('ccAgent.sidebar.deviceGroup.local')}</span><ChevronDown size={12} />
+      </button>
+    </DeviceSectionHeader>
+    {open && children}
+  </div>;
+}
 mountPage({
   host: (ctx) => ({
     showOpenDirectoryDialog: async () => ({
@@ -61,6 +79,7 @@ mountPage({
         <span>Task in a worktree</span>
       </div>
     ) : (
+      <DeviceEntry enabled={ctx.case === 'create-device'}>
       <ProjectSettingsDialog
         create={!!ctx.data.create}
         onClose={() => {}}
@@ -79,5 +98,6 @@ mountPage({
           latestActivityAt: '',
         }}
       />
+      </DeviceEntry>
     ),
 });
