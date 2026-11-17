@@ -372,6 +372,29 @@ describe('lead dispatch claim verification', () => {
     );
   });
 
+  it('keeps the escalation quiet when a later reply claims nothing', async () => {
+    resetDispatchClaimState();
+    const { deps, service } = createDeps();
+
+    const claim = { leadSessionId: 'lead-1', finalText: '已派给 backend-2，等它回报。' };
+    await service.handleLeadTurnSettled({ ...claim, turnGeneration: 3 });
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
+
+    await service.handleLeadTurnSettled({ ...claim, turnGeneration: 5 });
+    expect(deps.escalateDispatchClaim).toHaveBeenCalledTimes(1);
+
+    // 普通回复不带派发主张，不解除升级后的静默。
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 6,
+      finalText: '好的，我继续等它的回报。',
+    });
+    await service.handleLeadTurnSettled({ ...claim, turnGeneration: 7 });
+
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
+    expect(deps.escalateDispatchClaim).toHaveBeenCalledTimes(1);
+  });
+
   it('does nothing for planned work or when the capability is off', async () => {
     resetDispatchClaimState();
     const { deps, service } = createDeps({ readDispatchClaimVerificationEnabled: () => false });

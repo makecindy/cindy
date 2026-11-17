@@ -2372,10 +2372,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
     const roster = workers.map((worker) => ({ id: worker.id, label: worker.label ?? worker.role ?? worker.id }));
     const reading = readDispatchClaim(params.finalText, roster);
-    if (!reading.claimed) {
-      settleDispatchClaimIncident(params.leadSessionId, true);
-      return;
-    }
+    // 不带派发主张的普通回复不清账：账本只由「有据的派发主张」结束。
+    // 否则升级后的静默被一句普通回复解除，下一轮不实主张又从头唤醒一遍。
+    if (!reading.claimed) return;
 
     const facts = dispatchFactsForTurn(params.leadSessionId, params.turnGeneration);
     const verdict = verifyDispatchClaim(reading, facts);
