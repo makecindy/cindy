@@ -105,12 +105,15 @@ try {
   });
 
   await check('the Host side answers through Chromium and the PAC script, per host', async () => {
-    const helper = createChromiumProxyHelper({ profileDir: path.join(root, 'host-side'), spawnImpl: testSpawn });
-    let answer;
-    for (const until = Date.now() + 15_000; Date.now() < until && !answer; await delay(100)) {
-      answer = await helper.resolveProxy('https://api.example.test/v1').catch(() => undefined);
-    }
-    assert.equal(answer, 'PROXY 127.0.0.1:9');
+    const home = path.join(root, 'host-side');
+    fs.mkdirSync(home);
+    const helper = createChromiumProxyHelper({ profileDir: home,
+      spawnImpl: (binary, args, options) => testSpawn(binary, args, { ...options, env: {
+        ...options.env, HOME: home, USERPROFILE: home, APPDATA: home, LOCALAPPDATA: home,
+      } }),
+    });
+    await helper.warmUp();
+    assert.equal(await helper.resolveProxy('https://api.example.test/v1'), 'PROXY 127.0.0.1:9');
     assert.equal(await helper.resolveProxy('https://wiki.intranet.test/'), 'DIRECT');
     assert.equal(helper.state(), 'ready');
     // In memory: no cookie store or partition on disk under the helper's own directory.
@@ -118,6 +121,7 @@ try {
     assert.ok(!files.some(file => /(^|[\\/])Cookies$/.test(file) || file.includes('cindy-proxy-helper')), files.join(', '));
     await helper.close();
     assert.equal(helper.state(), 'stopped');
+    assert.deepEqual(fs.readdirSync(home), ['proxy-helper'], 'no caches, logs or saved state elsewhere in HOME');
   });
 
   await check('a crashed helper: no answer meanwhile, started again after the backoff', async () => {

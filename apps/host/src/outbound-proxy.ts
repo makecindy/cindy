@@ -4,7 +4,7 @@
  * the system proxy session set here (release table row 28):
  * - macOS: the static system proxy settings (28b, macos-system-proxy.ts); when they use PAC or auto-discovery,
  *   the Chromium proxy helper (28c, chromium-proxy.ts) answers, falling back to the static reading;
- * - Windows: the Chromium proxy helper from the first resolution on (28c); without an answer in time the request
+ * - Windows: the Chromium proxy helper, prewarmed before the first request (28c); without an answer in time the request
  *   goes direct and its path is recorded as `unknown` (resolve_failed);
  * - other platforms (Linux): none; only the proxy environment variables are read, and a request without them goes
  *   direct with its path recorded as `unknown` (session_unavailable), not as a confirmed direct route.
@@ -57,16 +57,27 @@ export function useHostChromiumProxySession(chromium: SystemProxySession | null)
   systemProxySession = chromium;
 }
 
-/**
- * At Host startup (main.ts): macOS reads the static system proxy settings and keeps the Chromium proxy helper for
- * PAC and auto-discovery; Windows asks the helper; other platforms read no system settings. The helper starts on
- * the first resolution that needs it, not here.
- */
-export function startHostSystemProxySettings(): void {
-  if (process.platform !== 'darwin' && process.platform !== 'win32') return;
-  chromiumHelper = createChromiumProxyHelper({ profileDir: resolveHostDataDir() });
-  if (process.platform === 'darwin') useHostSystemProxySettings(readScutilProxyOutput, chromiumHelper);
-  else useHostChromiumProxySession(chromiumHelper);
+/** Prepare the system session before login or startup can send its first request. */
+export async function startHostSystemProxySettings({
+  platform = process.platform,
+  readSettings = readScutilProxyOutput,
+  makeHelper = () => createChromiumProxyHelper({ profileDir: resolveHostDataDir() }),
+}: {
+  platform?: NodeJS.Platform;
+  readSettings?: ReadSystemProxySettings;
+  makeHelper?: () => ChromiumProxyHelper;
+} = {}): Promise<void> {
+  if (platform !== 'darwin' && platform !== 'win32') return;
+  const helper = chromiumHelper = makeHelper();
+  if (platform === 'darwin') {
+    const session = createMacSystemProxySession(readSettings, helper);
+    systemProxySession = session;
+    if (hasProxyEnvConfig() || !await session.needsChromium().catch(() => false)) return;
+  } else {
+    systemProxySession = helper;
+    if (hasProxyEnvConfig()) return;
+  }
+  await helper.warmUp();
 }
 
 /** At Host shutdown: stops the Chromium proxy helper, if it runs, by its handle. */

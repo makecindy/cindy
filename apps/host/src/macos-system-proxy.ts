@@ -530,7 +530,7 @@ export interface SystemProxySession {
  * SYSTEM_PROXY_SETTINGS_TTL_MS, and concurrent requests share one reading. A failed reading is not kept:
  * the resolver core already holds its unresolved verdict for 5 s per upstream.
  */
-export function createMacSystemProxySession(readSettings: ReadSystemProxySettings, chromium?: SystemProxySession | null): SystemProxySession {
+export function createMacSystemProxySession(readSettings: ReadSystemProxySettings, chromium?: SystemProxySession | null): SystemProxySession & { needsChromium(): Promise<boolean> } {
   let current: { settings: MacSystemProxySettings; expiresAt: number } | null = null;
   let reading: Promise<MacSystemProxySettings> | null = null;
   let reportedAutoDiscovery = false;
@@ -558,6 +558,10 @@ export function createMacSystemProxySession(readSettings: ReadSystemProxySetting
   }
 
   return {
+    async needsChromium() {
+      const settings = await settingsNow();
+      return settings.pacUrl || settings.autoDiscovery;
+    },
     async resolveProxy(url) {
       const settings = await settingsNow();
       // On demand (28c): Chromium only for PAC and auto-discovery; static settings never start the helper.

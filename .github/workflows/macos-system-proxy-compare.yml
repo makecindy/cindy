@@ -5,7 +5,7 @@
 # auto-discovery, the Host's Chromium proxy helper (apps/host/src/chromium-proxy.ts); on Windows the helper for
 # everything. Both jobs first run the helper's acceptance (apps/host/scripts/chromium-proxy-worker.e2e.mjs), which
 # needs the Electron binary these jobs install; the macOS job then asserts that the helper, started the production
-# way, created no "Cindy Proxy Safe Storage" keychain item.
+# way, added no keychain item ending in "Safe Storage".
 #
 # The jobs CHANGE THE RUNNER'S SYSTEM PROXY SETTINGS (networksetup with sudo; the current user's Internet
 # Settings on Windows). They therefore run only on GitHub-hosted runners, which are discarded afterwards, and
@@ -22,6 +22,7 @@ on:
   pull_request:
     paths:
       - 'apps/host/src/macos-system-proxy.ts'
+      - 'apps/host/src/outbound-proxy.ts'
       - 'apps/host/src/chromium-proxy.ts'
       - 'apps/host/src/chromium-proxy-worker.cjs'
       - 'apps/host/scripts/macos-system-proxy-*'

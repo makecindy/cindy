@@ -5,7 +5,7 @@
  * does. This module starts it on demand, waits for it with limits, restarts it with backoff and stops it by its
  * handle. outbound-proxy.ts decides when it is asked: never while proxy environment variables are set (the
  * resolver core answers from them first); on macOS only when the system settings use PAC or auto-discovery;
- * on Windows from the first resolution on.
+ * on Windows at startup, before the first upstream request.
  *
  * Every wait has a limit: a resolution that the helper cannot answer within ANSWER_WAIT_MS (starting,
  * restarting, slow or gone) rejects, and the caller falls back (macOS: the static settings, 28b; Windows:
@@ -35,6 +35,8 @@ const log = createMakerLogger('outbound-proxy');
 export const ANSWER_WAIT_MS = 1800;
 /** A helper not ready by then is stopped and started again after the backoff. */
 export const START_TIMEOUT_MS = 15_000;
+/** Startup alone allows a cold PAC longer than the individual request deadline. */
+export const WARMUP_WAIT_MS = 8_000;
 /** A helper that does not answer a ping within this, after a resolution timed out, is stopped. */
 export const PING_TIMEOUT_MS = 3000;
 export const FIRST_BACKOFF_MS = 1000;
@@ -51,6 +53,7 @@ export class ChromiumProxyUnavailableError extends Error {
 }
 
 export interface ChromiumProxyHelper {
+  warmUp(): Promise<void>;
   /** Chromium's PAC result string for the URL; rejects with ChromiumProxyUnavailableError when it has none in time. */
   resolveProxy(url: string): Promise<string>;
   state(): ChromiumProxyHelperState;
@@ -250,6 +253,24 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
   }
 
   return {
+    async warmUp() {
+      if (closed || state !== 'not-started') return;
+      const target = worker = start();
+      if (!target) return;
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([target.ready, new Promise<void>(resolve => {
+          timer = setTimeout(() => {
+            warnOnce('not ready during startup');
+            resolve();
+          }, WARMUP_WAIT_MS);
+        })]);
+      } catch {
+        // The exit handler already entered backoff. Startup uses the existing fallback.
+      } finally {
+        clearTimeout(timer);
+      }
+    },
     async resolveProxy(url) {
       const deadline = now() + ANSWER_WAIT_MS;
       if (closed) throw new ChromiumProxyUnavailableError('stopped');

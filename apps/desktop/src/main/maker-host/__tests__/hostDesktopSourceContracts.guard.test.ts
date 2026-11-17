@@ -123,10 +123,8 @@ describe('Host main.ts wiring', () => {
     const main = read(path.join(hostSrc, 'main.ts'));
     assert.ok(main.includes("import { describeHostOutboundProxy, describeOutboundProxyLine, startHostSystemProxySettings, stopHostSystemProxySettings } from './outbound-proxy.ts';\n"));
     assert.equal(main.split('startHostSystemProxySettings();').length - 1, 1);
-    const call = main.indexOf('\nstartHostSystemProxySettings();\n');
-    assert.ok(call > 0 && call < main.indexOf('\nconst command = process.argv[2];\n'), 'a top-level call before the command dispatch');
-    const outbound = read(path.join(hostSrc, 'outbound-proxy.ts'));
-    assert.ok(outbound.includes("  if (process.platform === 'darwin') useHostSystemProxySettings(readScutilProxyOutput, chromiumHelper);\n"));
+    const gate = "if (command === undefined || command === 'serve' || command === 'login') {\n  await startHostSystemProxySettings();\n}";
+    assert.ok(main.includes(gate) && main.indexOf(gate) < main.indexOf("if (command === '--help'"), 'before command dispatch and the first auth request');
     const rules = read(path.join(hostSrc, 'macos-system-proxy.ts'));
     assert.ok(rules.includes("const SCUTIL_PATH = '/usr/sbin/scutil';\n"));
     assert.equal(rules.split('execFile(').length - 1, 1);

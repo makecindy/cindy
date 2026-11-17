@@ -82,25 +82,25 @@ try {
     for (const [name, value] of Object.entries(group.values)) writeValue(name, value);
     const electron = await electronProxyResults(electronBinary, URLS);
     const helper = createChromiumProxyHelper({ profileDir: fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-proxy-compare-helper-')) });
-    for (const url of URLS) {
-      let host;
-      for (let attempt = 0; ; attempt++) {
-        try { host = await helper.resolveProxy(url); break; } catch (error) {
-          host = `ERROR: ${error.message}`;
-          if (helper.state() !== 'starting' || attempt >= 20) break;
+    try {
+      await helper.warmUp();
+      for (const url of URLS) {
+        let host;
+        try { host = await helper.resolveProxy(url); }
+        catch (error) { host = `ERROR: ${error.message}`; }
+        const chromium = electron[url];
+        // Check the PAC's verdict independently: two DIRECT answers could both have missed the PAC.
+        if (group.name.startsWith('pac') && url === 'https://api.example.test/' && chromium !== 'PROXY 10.9.9.9:8080') {
+          throw new Error(`PAC did not take effect for ${url}: Electron returned ${chromium}`);
         }
+        const applied = !(group.mustProxy === url && !/PROXY/.test(String(chromium)));
+        const ok = host === chromium && applied;
+        if (!ok) mismatches += 1;
+        report.push({ group: group.name, url, chromium: applied ? chromium : `${chromium} (settings not applied)`, host, ok });
       }
-      const chromium = electron[url];
-      // Check the PAC's verdict independently: two DIRECT answers could both have missed the PAC.
-      if (group.name.startsWith('pac') && url === 'https://api.example.test/' && chromium !== 'PROXY 10.9.9.9:8080') {
-        throw new Error(`PAC did not take effect for ${url}: Electron returned ${chromium}`);
-      }
-      const applied = !(group.mustProxy === url && !/PROXY/.test(String(chromium)));
-      const ok = host === chromium && applied;
-      if (!ok) mismatches += 1;
-      report.push({ group: group.name, url, chromium: applied ? chromium : `${chromium} (settings not applied)`, host, ok });
+    } finally {
+      await helper.close();
     }
-    await helper.close();
   }
 } finally {
   restore();

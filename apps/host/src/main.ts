@@ -181,9 +181,6 @@ import { isDefaultDraftSessionTitle, normalizeAutoTitle } from '@cindy/maker-sha
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
 configureGhostSnapshotProcess(createSnapshotProcess);
-// Outbound requests (sign-in included) follow the system proxy as on the desktop: on macOS the
-// static system proxy settings (release table row 28, 28b); proxy environment variables still win.
-startHostSystemProxySettings();
 const VALID_EFFORTS: Record<string, true> = {
   minimal: true, low: true, medium: true, high: true, xhigh: true, max: true, ultra: true,
 };
@@ -217,6 +214,10 @@ try {
 } catch (error) {
   console.error(`cindy-host: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
+}
+// Only commands that can contact an upstream need the system proxy.
+if (command === undefined || command === 'serve' || command === 'login') {
+  await startHostSystemProxySettings();
 }
 if (command === '--help' || command === '-h') {
   console.log('Usage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|remote [status|enable|disable|revoke <device-id>]|stop]');

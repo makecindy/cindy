@@ -14,12 +14,11 @@
 // With PAC or auto-discovery the Host asks its Chromium proxy helper (28c, src/chromium-proxy.ts), started here
 // exactly as in production (no test switch), so those groups must agree too. Expected difference: with an
 // authenticated proxy the Host reports unresolved every URL Electron sends through that proxy.
-// Afterwards (28c, reviewer 2026-11-18): the keychain must hold no "Cindy Proxy Safe Storage" item, i.e. the helper,
-// started the production way and asked under a PAC URL, did not set up Chromium's Safe Storage.
+// Under PAC and auto-discovery, compare all Safe Storage item identities before and after the production helper.
 //
 // usage (on the runner, from apps/host):
 //   node --import tsx --import ./src/loaders/register-raw.mjs scripts/macos-system-proxy-compare.mjs <out-dir>
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
@@ -84,6 +83,7 @@ const HTTP = ['-setwebproxy', '10.0.0.1', '3128'];
 const HTTPS = ['-setsecurewebproxy', '10.0.0.2', '3129'];
 const SOCKS = ['-setsocksfirewallproxy', '10.0.0.3', '1081'];
 const GROUPS = [
+  { name: 'pac', settings: [HTTPS, ['-setautoproxyurl', pacUrl]] },
   { name: 'none', settings: [] },
   { name: 'http', settings: [HTTP] },
   { name: 'https', settings: [HTTPS] },
@@ -95,11 +95,15 @@ const GROUPS = [
     '10.0.0.0/8', 'ex?mple.com', 'https://www.example.com', 'a.example.com, b.example.com', 'fd00::/8']] },
   { name: 'subtract-implicit', settings: [HTTP, HTTPS, ['-setproxybypassdomains', '<-loopback>']] },
   { name: 'auto-discovery', settings: [HTTPS, ['-setproxyautodiscovery', 'on']] },
-  { name: 'pac', settings: [HTTPS, ['-setautoproxyurl', pacUrl]] },
   // Only the HTTPS proxy names a user: what Electron sends through it the Host leaves unresolved, the rest agrees.
   { name: 'authenticated', expect: 'auth', authenticatedProxy: 'PROXY 10.0.0.2:3129',
     settings: [['-setsecurewebproxy', '10.0.0.2', '3129', 'on', 'ci-proxy-user', 'ci-proxy-pass'], HTTP] },
 ];
+
+function safeStorageItems() {
+  const script = path.join(scriptsDir, 'macos-system-proxy-keychain.swift');
+  return new Set(JSON.parse(execFileSync('/usr/bin/swift', [script], { encoding: 'utf8', timeout: 60_000 })));
+}
 
 const report = [];
 let mismatches = 0;
@@ -114,19 +118,27 @@ try {
     // A new helper per group, started the production way (default launcher and assets, no test switch).
     const helper = createChromiumProxyHelper({ profileDir: fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-proxy-compare-helper-')) });
     const session = createMacSystemProxySession(async () => sample, helper);
+    const needsHelper = await session.needsChromium();
+    if (group.name === 'pac' && !needsHelper) throw new Error('no PAC in the runner system settings');
+    const before = needsHelper ? safeStorageItems() : null;
+    const hostAnswers = new Map();
+    try {
+      if (needsHelper) await helper.warmUp();
+      for (const url of URLS) {
+        try { hostAnswers.set(url, await session.resolveProxy(url)); }
+        catch (error) { hostAnswers.set(url, `ERROR: ${error.message}`); }
+      }
+    } finally {
+      await helper.close();
+    }
+    if (before) {
+      const additions = [...safeStorageItems()].filter(item => !before.has(item)).length;
+      report.push({ group: group.name, url: 'new Safe Storage items', chromium: '-', host: additions, ok: additions === 0 });
+      if (additions) mismatches += 1;
+    }
     const electron = await electronProxyResults(electronBinary, URLS);
     for (const url of URLS) {
-      let host;
-      for (let attempt = 0; ; attempt++) {
-        try {
-          host = await session.resolveProxy(url);
-          break;
-        } catch (error) {
-          host = `ERROR: ${error.message}`;
-          // The helper may still be starting (each answer waits at most 1.8 s): ask again for up to 20 s.
-          if (helper.state() !== 'starting' || attempt >= 20) break;
-        }
-      }
+      const host = hostAnswers.get(url);
       const chromium = electron[url];
       // Check the PAC's verdict independently: two DIRECT answers could both have missed the PAC.
       if (group.name.startsWith('pac') && url === 'https://api.example.test/' && chromium !== 'PROXY 10.9.9.9:8080') {
@@ -138,22 +150,11 @@ try {
       if (!ok) mismatches += 1;
       report.push({ group: group.name, url, chromium, host, ok });
     }
-    await helper.close();
   }
 } finally {
   resetSettings();
   pacServer.close();
 }
-
-// The helper ran the production way under a PAC URL above: Chromium must not have created its Safe Storage item.
-const keychain = spawnSync('/usr/bin/security', ['find-generic-password', '-s', 'Cindy Proxy Safe Storage'], { encoding: 'utf8' });
-// security returns 44 for errSecItemNotFound (-25300). An inaccessible keychain cannot prove absence.
-if (keychain.status !== 0 && keychain.status !== 44) {
-  throw new Error(`Safe Storage query failed (exit ${keychain.status}): ${keychain.error?.message ?? keychain.stderr}`);
-}
-const safeStorageCreated = keychain.status === 0;
-report.push({ group: 'keychain', url: 'Cindy Proxy Safe Storage', chromium: '-', host: safeStorageCreated ? 'present' : 'absent', ok: !safeStorageCreated });
-if (safeStorageCreated) mismatches += 1;
 
 fs.writeFileSync(path.join(outDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
 const table = ['| group | url | Chromium | Host | |', '|---|---|---|---|---|',

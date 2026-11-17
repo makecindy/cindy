@@ -13,22 +13,25 @@
  * - Gap: nothing ran PAC or auto-discovery on the Host before 28c.
  * - Minimal failing input: a helper that answers DIRECT before it is ready; HTTPS_PROXY set; a helper that never
  *   becomes ready.
- * - Tier: unit (no process, no network; setTimeout and Date are mocked).
+ * - Tier: unit with a process stand-in and mocked timers. The startup login case also uses a loopback HTTP proxy.
  */
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
+import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import test, { mock } from 'node:test';
 
 import {
-  ANSWER_WAIT_MS, FIRST_BACKOFF_MS, START_TIMEOUT_MS, createChromiumProxyHelper, helperEnv, helperUrl,
+  ANSWER_WAIT_MS, FIRST_BACKOFF_MS, START_TIMEOUT_MS, WARMUP_WAIT_MS, createChromiumProxyHelper, helperEnv, helperUrl,
 } from './chromium-proxy.ts';
 import {
-  getHostOutboundPathSnapshotFor, resolveHostOutboundProxy, useHostChromiumProxySession, useHostSystemProxySettings,
+  getHostOutboundPathSnapshotFor, resolveHostOutboundProxy, startHostSystemProxySettings, useHostChromiumProxySession, useHostSystemProxySettings,
 } from './outbound-proxy.ts';
+
+import { hostAuthFetch } from './auth-fetch.mjs';
 
 const PROXY_ENV_KEYS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy'];
 const savedEnv = Object.fromEntries(PROXY_ENV_KEYS.map(key => [key, process.env[key]]));
@@ -146,6 +149,83 @@ test('started on demand: not with proxy environment variables, not for static ma
   assert.equal(await resolveHostOutboundProxy('https://windows.example.test/'), 'http://10.9.9.9:8080');
   assert.equal(spawned.length, 1, 'the helper stays running');
   await helper.close();
+});
+
+// Startup regression (row 28c): exercise the startup gate followed by the actual auth transport.
+// The PAC answer is delayed past the normal 1.8 s deadline. Only the loopback proxy receives the POST.
+test('the first login reaches the PAC proxy after a three-second cold start', async t => {
+  const seen = [];
+  const proxy = createServer((req, res) => {
+    seen.push([req.method, req.url]);
+    res.end('via PAC');
+  });
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { proxy.closeAllConnections(); proxy.close(resolve); }));
+  const { spawnImpl, spawned } = standIn({
+    onRequest: answer(`PROXY 127.0.0.1:${proxy.address().port}`),
+  });
+  const helper = helperFor(spawnImpl);
+  t.after(() => helper.close());
+  const url = 'http://cold-auth.example.test/v1/session/refresh';
+  const startup = track(startHostSystemProxySettings({ platform: 'darwin', makeHelper: () => helper,
+    readSettings: async () => '<dictionary> {\n  ProxyAutoConfigEnable : 1\n  ProxyAutoConfigURLString : http://pac.example.test/proxy.pac\n}\n',
+  }));
+  await settle();
+  assert.equal(spawned.length, 1, 'start before any network request');
+  mock.timers.tick(2999);
+  await settle();
+  assert.equal(startup.settled, false, 'startup must wait for the cold PAC');
+  assert.deepEqual(spawned[0].written, []);
+  mock.timers.tick(1);
+  ready(spawned[0]);
+  await settle();
+  assert.equal(startup.settled, true);
+  assert.ifError(startup.error);
+  const response = await hostAuthFetch(url, { method: 'POST' });
+  assert.equal(await response.text(), 'via PAC');
+  assert.deepEqual(seen, [['POST', url]]);
+});
+
+// Removing the 8 s bound leaves startup blocked until the independent 15 s watchdog.
+test('startup continues at the warmup deadline with the first route unknown', async t => {
+  const { spawnImpl, spawned } = standIn();
+  const helper = helperFor(spawnImpl);
+  t.after(() => helper.close());
+  const startup = track(startHostSystemProxySettings({ platform: 'win32', makeHelper: () => helper }));
+  await settle();
+  assert.equal(spawned.length, 1);
+  mock.timers.tick(WARMUP_WAIT_MS - 1);
+  await settle();
+  assert.equal(startup.settled, false);
+  mock.timers.tick(1);
+  await settle();
+  assert.equal(startup.settled, true, 'startup continued at its own deadline');
+  assert.ifError(startup.error);
+  const upstream = 'https://auth-timeout.example.test';
+  const first = track(resolveHostOutboundProxy(upstream));
+  await settle();
+  mock.timers.tick(ANSWER_WAIT_MS);
+  await settle();
+  assert.equal(first.settled, true);
+  assert.equal(first.value, null);
+  assert.equal(getHostOutboundPathSnapshotFor([upstream]).kind, 'unknown');
+  assert.equal(helper.state(), 'starting', 'a slow PAC can still finish within the independent start watchdog');
+});
+
+test('startup skips the helper for proxy variables or static macOS settings', async t => {
+  const { spawnImpl, spawned } = standIn();
+  const helper = helperFor(spawnImpl);
+  t.after(() => helper.close());
+  let reads = 0;
+  const ports = { makeHelper: () => helper, readSettings: async () => { reads++; return '<dictionary> {\n}\n'; } };
+  process.env.HTTPS_PROXY = 'http://127.0.0.1:9';
+  try {
+    for (const platform of ['win32', 'darwin']) await startHostSystemProxySettings({ ...ports, platform });
+  } finally { delete process.env.HTTPS_PROXY; }
+  assert.equal(reads, 0);
+  await startHostSystemProxySettings({ ...ports, platform: 'darwin' });
+  assert.equal(reads, 1);
+  assert.equal(spawned.length, 0);
 });
 
 test('every wait is bounded: a helper that never gets ready is stopped and started again after a growing backoff', async () => {
