@@ -1583,13 +1583,16 @@ interface ElectronAPI {
     getCard: (callId: string) => Promise<{
       card: { callId: string; ghostId: string; html: string; height: number; v: number } | null;
     }>;
-    /** A card of a task on another computer, sanitized again on this one. Null: no card, an
-     *  older host or a card kind shown only on its own computer; failed: the read itself failed. */
+    /** A card of a task on another computer, sanitized again on this one (mail cards are rebuilt
+     *  here from their data). Null: no card, an older host or a legacy mail card; failed: the read
+     *  itself failed. */
     getRemoteCard: (deviceId: string, sessionId: string, callId: string) => Promise<{
-      card: { ghostId: string; html: string; height: number; revision: string; externalLinks: boolean } | null;
+      card: { ghostId: string; html: string; height: number; revision: string; externalLinks: boolean; mailUpload?: boolean } | null;
       unsupported?: true;
       failed?: true;
     }>;
+    /** Pick a file here and upload it for a remote task's mail card. attachment null: cancelled. */
+    uploadRemoteMailAttachment: (deviceId: string) => Promise<{ ok: boolean; attachment: { url: string; name: string } | null }>;
     /** 权威实测高回填:GhostToolCard 量出内容真实高度后写回卡片库,历史
      *  回放据此零动画首帧贴合(行不存在主机静默跳过)。 */
     reportCardHeight: (callId: string, height: number) => Promise<{ ok: true }>;
@@ -4375,7 +4378,9 @@ interface ElectronAPI {
       enabled: boolean,
     ) => Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }>;
     listDevices: () => Promise<{ devices: DeviceLinkDeviceView[]; stale?: boolean;
-      displayBudget?: { remainingMs: number } }>;
+      /** Only one hybrid discovery leg answered: absence is not an authoritative removal. */
+      partial?: boolean;
+      displayBudget?: { remainingMs: number }; retryAtMs?: number }>;
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照 */
     getPeerLinks: () => Promise<DeviceLinkPeerLinksSnapshot>;
     /** 对端链路拓扑变化,payload 为全量快照 */

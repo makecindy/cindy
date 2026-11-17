@@ -6,6 +6,8 @@
  * 不因 PR、队列、候选链任一项失败而让整份摘要失败。输出合同(≤300 字 / ≤2KB)由工具层的
  * boundTaskDigest 保证;这里只负责事实。
  */
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { redactLocalPathText } from '../maker-ipc/coldPiRehydrationFailure.js';
 import type { TaskDigestPhase, TaskDigestRoute, TaskDigestWire } from '@cindy/mcps';
 import type { WatchedSession } from '../../shared/botAutonomy.js';
 
@@ -17,6 +19,8 @@ export interface TaskDigestSessionFacts {
   route: TaskDigestRoute | null;
   /** 共享给访客的任务(来源 shared):摘要不带对话原文。 */
   shared?: boolean;
+  clearedAt?: number | null;
+  startedAtMs?: number | null;
 }
 
 export interface TaskDigestActivity {
@@ -48,6 +52,7 @@ export interface TaskDigestDeps {
     readSession(sessionId: string): Promise<TaskDigestSessionFacts | null>;
     readActivity(sessionId: string): Promise<TaskDigestActivity | null>;
     readLastExchange(sessionId: string): Promise<TaskDigestExchange>;
+    readError?(sessionId: string, activity: TaskDigestActivity | null, facts: TaskDigestSessionFacts): Promise<string | null>;
     queuedCount(sessionId: string): Promise<number | null>;
     prStatus(sessionId: string): Promise<string | null>;
     /**
@@ -68,6 +73,7 @@ export interface TaskDigestDeps {
     readSession(deviceId: string, sessionId: string): Promise<TaskDigestSessionFacts | null>;
     readActivity(deviceId: string, sessionId: string): Promise<TaskDigestActivity | null>;
     readLastExchange(deviceId: string, sessionId: string): Promise<TaskDigestExchange>;
+    readError?(deviceId: string, sessionId: string, activity: TaskDigestActivity | null, facts: TaskDigestSessionFacts): Promise<string | null>;
     prStatus(deviceId: string, sessionId: string): Promise<string | null>;
   };
 }
@@ -201,10 +207,16 @@ export function createTaskDigestReader(deps: TaskDigestDeps) {
         settle(() => remote.prStatus(deviceId, sessionId), null),
         settle(() => remote.deviceName(deviceId), null),
       ]);
+      const phase = watched?.phase ?? fallbackDigestPhase(activity);
+      const error = !facts.shared && (phase === 'errored' || (activity?.phase === 'idle' && !watched))
+        ? await settle(() => remote.readError?.(deviceId, sessionId, activity, facts) ?? Promise.resolve(null), null)
+        : null;
       return {
         ok: true,
         digest: assemble({
-          key, now, watched, facts, activity, exchange, prStatus,
+          key, now, watched, facts,
+          activity: error && activity?.phase === 'idle' ? { ...activity, phase: 'error' } : activity,
+          exchange, prStatus, error,
           local: false,
           device: watched?.deviceName ?? deviceName ?? deviceId,
           queuedCount: null,
@@ -225,6 +237,9 @@ export function createTaskDigestReader(deps: TaskDigestDeps) {
     ]);
     const current = activity?.route ?? facts.route;
     const phase = watched?.phase ?? fallbackDigestPhase(activity);
+    const error = !facts.shared && phase === 'errored'
+      ? await settle(() => deps.local.readError?.(key, activity, facts) ?? Promise.resolve(null), null)
+      : null;
     // 换模型只用来救出错和用量上限(跟进规则也只在这两种相位用它);其余相位不给建议。
     const suggestedRoute = current && (phase === 'errored' || phase === 'usage-limit')
       ? await settle(() => deps.local.suggestRoute({
@@ -237,7 +252,7 @@ export function createTaskDigestReader(deps: TaskDigestDeps) {
     return {
       ok: true,
       digest: assemble({
-        key, now, watched, facts, activity, exchange, prStatus, queuedCount, suggestedRoute,
+        key, now, watched, facts, activity, exchange, prStatus, queuedCount, suggestedRoute, error,
         local: true,
         device: null,
         runtimeGeneration: activity?.runtimeGeneration ?? null,
@@ -248,6 +263,7 @@ export function createTaskDigestReader(deps: TaskDigestDeps) {
 
 function assemble(input: {
   key: string;
+  error: string | null;
   now: number;
   watched: WatchedSession | null;
   facts: TaskDigestSessionFacts;
@@ -280,7 +296,7 @@ function assemble(input: {
     last_user_ask: input.facts.shared ? null : input.exchange.lastUserAsk,
     last_assistant_line: input.facts.shared ? null : input.exchange.lastAssistantLine,
     pending_question: watched?.pendingQuestion ?? null,
-    error: watched?.error ?? null,
+    error: input.facts.shared ? null : taskDigestErrorSummary(watched?.error ?? input.error),
     current_route: activity?.route ?? input.facts.route,
     runtime_generation: input.runtimeGeneration,
     suggested_route: input.suggestedRoute,
@@ -319,9 +335,14 @@ export function sessionFactsFromRow(row: unknown): TaskDigestSessionFacts | null
   const agentKind = text(record.agentKind);
   const harness = agentKind === 'codex' || agentKind === 'pi' ? agentKind : agentKind ? 'claude-code' : null;
   const model = text(record.model);
+  // local DB rows use unix ms; the existing remote session mapper returns ISO.
+  const clearedAt = typeof record.clearedAt === 'number' ? record.clearedAt
+    : typeof record.clearedAt === 'string' ? Date.parse(record.clearedAt) : NaN;
   return {
     title: text(record.title) ?? '',
     status: text(record.status) ?? 'active',
+    ...(Number.isFinite(clearedAt) ? { clearedAt } : {}),
+    ...(typeof record.activeTurnStartedAt === 'number' && Number.isFinite(record.activeTurnStartedAt) ? { startedAtMs: record.activeTurnStartedAt } : {}),
     ...(text(record.source) === 'shared' ? { shared: true } : {}),
     route: harness && model
       ? {
@@ -333,4 +354,11 @@ export function sessionFactsFromRow(row: unknown): TaskDigestSessionFacts | null
         }
       : null,
   };
+}
+
+/** Redact before bounding: a truncated credential must never become unrecognizable. */
+export function taskDigestErrorSummary(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const text = redactLocalPathText(redactSensitiveText(value));
+  return text ? Array.from(text).slice(0, 300).join('') : null;
 }

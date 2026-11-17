@@ -1,5 +1,18 @@
 # Cindy 伙伴运行时
 
+> **读取时机**：修改伙伴（Bot）的身份、伙伴项目、Session 生命周期、模型 fallback、工作目录、Skill / MCP 装配、
+> 伙伴间协作、伙伴设置、伙伴消息、后台任务或伙伴提示词之前
+> **适用路径**：`apps/desktop/src/main/maker-ipc/**/{bot,teammate,sessionTeammate,remoteBot}*`、
+> `apps/desktop/src/main/localDb/**/{bot,teammate,legacyTeammate}*`、`apps/desktop/src/shared/**/bot*`、
+> `packages/maker-shared/src/**/{bot,teammate}*`、`apps/desktop/src/renderer/features/bots/**`、
+> `apps/mobile/src/session/**/{Companion,companion,useCompanion,Teammate,teammate,useTeammate,HomeTeammates,useHostTeammates}*`、
+> `packages/maker-core/src/agents/**/{bot-,teammate-}*`、
+> `packages/lizi-mcps/src/xdt-helper/{bot_,teammate_,create_teammate,list_teammates}*`、
+> `apps/desktop/src/main/maker-host/**/{bot-model-chain,botMcpCatalog,botToolsetAvailability}*`、
+> `apps/desktop/src/main/im/shared/**/{botIm,imBotBinding}*`、
+> `apps/desktop/src/main/scheduler-host/**/{ownTeammateProject,teammateHomeGuard}*`、
+> `apps/desktop/src/main/bot-import/**`
+
 > 本文是伙伴（Bot）身份、任务、模型路由、工作目录、Skill / MCP、伙伴消息与后台任务的产品契约。
 > 修改伙伴运行时、伙伴设置、伙伴消息、后台任务或伙伴提示词前必须先读本文。
 > 2026-11-05 方向：伙伴的工作方式属于伙伴自己的规则，宿主只保证来源、权限、上限、状态与运行位置。
@@ -358,6 +371,8 @@ provider 的 `final_answer` 从首段正文起可见，历史视图接管、后�
 归档和故障信息可以在需要时呈现，但维护动作默认由系统完成。用户只管理伙伴，不管理容器。
 
 伙伴设置采用紧凑的分组列表，右侧抽屉最大宽度 448px，窄于该宽度的可视区域内占满可用宽度；此尺寸只用于伙伴设置，不改变全局设置。头像居中且可更换。伙伴聊天头部保留姓名／头像、近况（6.3）与设置入口；伙伴在哪台电脑上运行与切换电脑都收进近况，头部不再单列电脑名或切换器。资料、性格、记忆、模型、能力、历史检索和高级配置在同一抽屉内打开完整内页；返回与关闭前先保存资料，保存失败留在原页。模型复用统一选择器，保留来源、Harness、思考深度、Fast 与备用链，不另造默认模型规则。
+性格与「关于我的记忆」沿用写入端的 12000 个 UTF-16 单元上限（去除首尾空白后计数）。桌面本机与共用编辑器的远程入口显示实际长度、上限与超出量，保留完整原文和当前草稿，提供完整复制；未修改的超长原文不妨碍其他字段保存。超限编辑不发送写请求、不提供无效的重复保存；返回或关闭时可继续编辑，或明确确认放弃未保存设置后离开。改回已保存内容时清除过期错误。此为前述「保存失败留在原页」的显式放弃例外，不自动截断，也不允许超限写入。手机和旧主机通用表单对已有超长资料仍沿用只读展示；本项不改变其协议。
+
 （2026-11-08 起 V2 不再适用：伙伴设置的「例行任务」页、桌面与手机的跟进页、近况里的待办与手机顶栏待办入口均已移除；伙伴的定时工作是它项目里的普通自动化。）实现见 Mobile `CompanionHeader.tsx`、`CompanionProfileSheet.tsx` 与 `remoteResources.ts`。
 
 伙伴项目的 Git 初始化以存在有效的 HEAD 提交为准；仅有 `.git` 不代表首次版本已保存。缺少提交身份时保留文件与仓库配置，不阻断伙伴基本使用，后续准备或启动会重试未完成的首次提交。桌面「高级配置」提供只读状态、身份配置指引与显式重试；远程桌面只在伙伴所在电脑支持该操作时显示，沿用同账号授权。重试使用已有 Git 身份，不代填作者或改全局配置；损坏、不可读的仓库不能按空仓库重建。

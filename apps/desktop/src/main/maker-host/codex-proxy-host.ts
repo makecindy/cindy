@@ -139,6 +139,7 @@ import {
   xaiModelInputStripController,
 } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
+import { createCodexBedrockSearchCompatibilityRule } from './codex-bedrock-search-compat.js';
 import { desktopAnthropicImageCodec } from './anthropic-image-codec.js';
 import { getLogDir } from '../logger.js';
 import { createCodexImageModelRewrite } from './codex-image-model-rewrite.js';
@@ -357,6 +358,7 @@ const CODEX_BODY_RECOVERY_RULES = [
   duplicateResponsesToolCallRecoveryRule,
   xaiModelInputRecoveryRule,
   vllmResponsesCompatibilityRule,
+  createCodexBedrockSearchCompatibilityRule(),
 ] as const;
 
 /** Only fall back for the exact dialect mismatches the outgoing normalizer can repair. */

@@ -1,6 +1,6 @@
 {
   "sectionTitle": "禮品卡",
-  "settingsFooter": "輸入兌換碼或貼上禮品卡連結，把禮品卡存入贈送餘額。",
+  "settingsFooter": "輸入兌換碼或貼上禮品卡連結，把禮品卡存入贈送餘額。禮品卡僅限個人使用者領取。",
   "action": "兌換禮品卡",
   "title": "兌換禮品卡",
   "inputLabel": "兌換碼",
@@ -33,6 +33,7 @@
     "expired": "這張禮品卡已過領取期限。",
     "voided": "這張禮品卡已作廢。",
     "rateLimited": "嘗試次數過多，請稍後再試。",
-    "failed": "暫時無法兌換，請稍後重試。"
+    "failed": "暫時無法兌換，請稍後重試。",
+    "personalRequired": "禮品卡僅限個人使用者領取。"
   }
 }

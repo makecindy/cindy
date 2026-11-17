@@ -11888,6 +11888,44 @@ class MemoryDirectRuntime {
 }
 
 describe('automatic LAN connection through platform bridges', () => {
+  // PR #11084 / MagicLizi: urgent Mobile network changes were mistaken for
+  // peer timeout probes. Existing tests exercised relay probing and negotiator
+  // reset separately. Unit: reach 40s direct backoff through the real client,
+  // then observe runtime attempts 5s after each public recovery entry.
+  it.each(['network', 'urgent-network', 'peer-timeout'] as const)(
+    'keeps direct recovery scoped for %s', async hint => {
+      vi.useFakeTimers();
+      vi.spyOn(Math, 'random').mockReturnValue(0.999999);
+      const relay = new MemoryRelay();
+      const create = vi.fn(() => { throw new Error('unavailable RTC'); });
+      const timing = { pingIntervalMs: 1000, pongMissLimit: 1000 };
+      const controller = makeRelayClient(relay, 'a-controller', timing,
+        { directRuntime: { create }, isPeerBusy: () => true });
+      const host = makeRelayClient(relay, 'z-host', timing, { directRuntime: { create } });
+      const sockets = vi.spyOn(relay, 'makeWebSocket');
+      const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+      host.onFrame(env => {
+        if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      });
+      try {
+        controller.start(); host.start(); await pump();
+        const opening = controller.openLink('z-host', { controllerName: 'Controller', protocolVersion: 1, appVersion: '1' });
+        await pump(); await opening;
+        await vi.advanceTimersByTimeAsync(35_000);
+        expect(create).toHaveBeenCalledTimes(4);
+        const socketCount = sockets.mock.calls.length;
+        if (hint === 'peer-timeout') expect(controller.confirmRelayForPeerTimeout()).toBe(false);
+        else controller.notifyNetworkChanged({ urgent: hint === 'urgent-network' });
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(create).toHaveBeenCalledTimes(hint === 'peer-timeout' ? 4 : 5);
+        expect(sockets).toHaveBeenCalledTimes(socketCount);
+        expect(controller.isLinkReady('z-host')).toBe(true);
+      } finally {
+        controller.stop(); host.stop(); vi.restoreAllMocks(); vi.useRealTimers();
+      }
+    },
+  );
+
   // Unit, capacity recovery contract: a new peer keeps executing on relay while
   // full, then upgrades without reopening its control link or the relay socket.
   // The old tests cover failed RTC sessions, not a rejected capacity admission.

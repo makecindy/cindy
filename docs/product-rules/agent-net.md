@@ -3,7 +3,12 @@
 > 产品裁决：2026-10-30（用户确认）。本文是产品规则，功能分阶段实施；当前接入范围与验证结果见
 > [`../agent-net-plan.md`](../agent-net-plan.md)，交互稿见
 > [`../design-previews/agent-net/index.html`](../design-previews/agent-net/index.html)。
-> 读取时机：新增或修改 agent-net 的节点模型、能力清单、加密、中继选择、网络分享或拓扑界面之前。
+> **读取时机**：新增或修改 agent-net 的传输核心、节点模型、能力清单、加密、中继选择、网络分享或拓扑界面之前。
+> **适用路径**：`packages/agent-net*/**`、`packages/device-link-relay/src/agentNet.ts`、
+> `packages/device-link/src/agentNetSwitch.ts`、`apps/desktop/src/main/device-link/**/agentNet*`、
+> `apps/desktop/src/renderer/features/remote-connection-v2/**`、`apps/mobile/modules/cindy-agent-net/**`、
+> `apps/mobile/src/**/{agentNet,AgentNet}*`、`prototypes/agent-net-spike/**`、
+> `scripts/check-agent-net-native.mjs`、`.github/workflows/agent-net-native.yml`
 
 ## 定位
 

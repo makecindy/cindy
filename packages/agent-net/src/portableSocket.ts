@@ -417,8 +417,17 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     this.peers.set(deviceId, peer); previous?.channel.close();
     const frames = new Frames();
     channel.onData((bytes) => {
-      if (this.peers.get(deviceId) !== peer || !this.authorized(deviceId)) { channel.close(); return; }
-      try { frames.push(bytes, (frame) => this.fromPeer(peer, frame)); } catch { channel.close(); }
+      // The replaced, authenticated channel still drains already-written RPCs.
+      // Dropping its first link-open strands the caller without a link-accept.
+      // Recheck the current key/authorization; retired channels cannot refresh
+      // presence or revive a revoked/rotated identity.
+      const current = this.peers.get(deviceId);
+      if (!current || !this.authorized(deviceId)
+        || current !== peer && this.deviceForKey(peer.key) !== deviceId) { channel.close(); return; }
+      try { frames.push(bytes, (frame) => {
+        if (this.peers.get(deviceId) !== peer && frame.kind === 'presence-changed') return;
+        this.fromPeer(peer, frame);
+      }); } catch { channel.close(); }
     });
     channel.onClose(() => {
       if (this.peers.get(deviceId) !== peer) return;

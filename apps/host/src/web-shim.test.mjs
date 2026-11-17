@@ -94,13 +94,22 @@ test('installation and business confirmations use the authenticated Host routes'
   ]);
 });
 
-test('entering the app preserves the actual Host auth verdict', async () => {
+// #10601: a state query silently accepted local entry. Unit: public shim API;
+// no Host identity exists, so entry must reject without querying signed-out auth.
+test('browser local entry is unavailable without querying Host auth', async () => {
+  const b = browser();
+  assert.equal(b.api.hostConnection.client, 'browser');
+  await assert.rejects(b.api.authEnterLocal(), /HOST_CHANNEL_UNSUPPORTED/);
+  assert.equal(b.calls.length, 0);
+});
+
+test('initializing auth preserves the actual Host auth verdict', async () => {
   for (const state of [
     { user: { id: 'test-user' }, mode: 'cloud', canEnterApp: true },
     { user: null, mode: 'signed-out', canEnterApp: false },
   ]) {
     const b = browser(() => state);
-    assert.deepEqual(JSON.parse(JSON.stringify(await b.api.authEnterLocal())), state);
+    assert.deepEqual(JSON.parse(JSON.stringify(await b.api.authInitialize())), state);
   }
 });
 

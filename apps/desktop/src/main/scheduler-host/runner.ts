@@ -2037,7 +2037,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 失败仅 warn,不影响本次 fire；下次 fire 会再尝试绑定。
     if (!isHeartbeat && schedule.persistentSession && this.scheduler) {
       try {
-        await this.scheduler.update(schedule.id, { targetSessionId: session.id });
+        await this.scheduler.updateFromCurrent(schedule.id, async (current) => {
+          // Session creation may yield to an edit. Check under the mutation lock
+          // so a late first run cannot restore a cleared/replaced binding.
+          return current.persistentSession && !current.targetSessionId
+            ? { targetSessionId: session.id }
+            : {};
+        });
       } catch (err) {
         this.deps.logger.warn?.('[runner] persistentSession bind failed (non-fatal)', err);
       }

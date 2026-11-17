@@ -219,6 +219,11 @@ Pi 已识别的 OpenAI 订阅连接之间可复用同一运行时：每个账号
 `localModels` 支持 `patches`、完整 `additions`、`removedIds`、`featuredIds`；空推荐数组明确不推荐任何模型。名称和包装仍需通过本地域校验，不能下发命令、路径或下载 URL。删除补丁或对应字段就是恢复继承，远端刷新不会写回或删除这些用户字段。
 
 自定义供应商的接口结果单独保存在 `discoveredMetadata`；表单只持久化用户显式设置。旧数据缺少来源标记时保守保留旧名称和窗口，不猜测用户意图。刷新供应商信息会更新发现快照，不把发现值转成用户 override。
+`supported_parameters` 未包含推理参数不代表明确不支持；只有明确否定或显式空档位才生成
+`efforts: []`。旧发现快照的空档位无法区分真实否定与旧解析器的错误推断，因此重新发现该模型时，
+若本次没有明确档位声明，就移除发现层的旧空档位，让公共资料继续继承；本次明确否定仍保留。
+其它稀疏资料和用户显式覆盖不变，未返回的模型、发现失败或尚未刷新时不改缓存。
+实现与回归见 `modelDiscovery.ts`、`modelMetadataLayers.ts`、`modelDiscoveryChannels.test.ts`。
 从预设新建时只保存 `catalogPresetId` 引用；模型默认资料读取当前目录，接口结果仍单独记录。
 预设地址与协议仍按创建时配置保存。继续继承需要 catalogPresetId 命中，runtime 地址（忽略尾斜杠）、
 补默认后的协议、requestPath 及型号 ID 匹配，型号自己的 route 地址/协议/path 也一致。

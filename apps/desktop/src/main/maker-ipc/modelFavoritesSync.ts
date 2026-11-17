@@ -6,6 +6,8 @@ import {
   MODEL_FAVORITES_CHANGED,
   parseModelFavoriteMutation,
   parseModelFavorites,
+  parseRemoteModelFavorite,
+  type ModelFavoriteMutation,
   type RemoteModelFavorite,
 } from '@cindy/device-link';
 import {
@@ -14,6 +16,7 @@ import {
   FAVORITE_HOST_REPLY,
   FAVORITE_HOST_CHANGED,
   type FavoriteHostReply,
+  type RecentModelHostItem,
 } from '../../shared/modelFavoritesSync.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import {
@@ -23,6 +26,39 @@ import {
 } from '../appSessionState.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+
+/** Favorites plus the renderer-owned recently used list, both newest/display order. */
+export interface HostModelPreferences {
+  favorites: RemoteModelFavorite[];
+  recents: RecentModelHostItem[];
+}
+type FavoritesHostRequest = (mutation?: unknown, options?: { recents?: true }) =>
+  Promise<{ items: RemoteModelFavorite[]; recents?: RecentModelHostItem[] }>;
+let hostRequest: FavoritesHostRequest | null = null;
+
+/** Recents are a short renderer list (20 kept); anything larger is a malformed reply. */
+function parseRecentModels(value: unknown): RecentModelHostItem[] {
+  if (!Array.isArray(value) || value.length > 64) throw new Error('Invalid recents snapshot');
+  return value.map((item) => {
+    const { uid: _uid, ...rest } = parseRemoteModelFavorite(item, false);
+    return rest;
+  });
+}
+
+/**
+ * Main-side callers (plugin `/model-preferences`) reuse the same owner-fenced bridge as
+ * device-link; errors carry the same IPC codes. Throws DEVICE_LINK_UNAVAILABLE before
+ * registration.
+ */
+export async function readHostModelPreferences(): Promise<HostModelPreferences> {
+  if (!hostRequest) throwIpcError('DEVICE_LINK_UNAVAILABLE', 'Favorites host not ready');
+  const reply = await hostRequest(undefined, { recents: true });
+  return { favorites: reply.items, recents: reply.recents ?? [] };
+}
+export async function applyHostModelFavorite(mutation: ModelFavoriteMutation): Promise<RemoteModelFavorite[]> {
+  if (!hostRequest) throwIpcError('DEVICE_LINK_UNAVAILABLE', 'Favorites host not ready');
+  return (await hostRequest(mutation)).items;
+}
 
 /** The existing renderer store is authoritative. Dispatch once to ONE owner-fenced
  * app window and acknowledge persisted results, never maintain a second database. */
@@ -59,7 +95,7 @@ export function registerModelFavoritesSync(
     )
       broadcast(MODEL_FAVORITES_CHANGED, {});
   });
-  const request = async (mutation?: unknown): Promise<RemoteModelFavorite[]> => {
+  const request: FavoritesHostRequest = async (mutation, options) => {
     if (isAppSessionBoundaryPending())
       throwIpcError('PRECONDITION_FAILED', 'Favorites owner is changing');
     if (pending.size >= 64)
@@ -86,9 +122,12 @@ export function registerModelFavoritesSync(
           if (reply.failed)
             throwIpcError('PRECONDITION_FAILED', 'Favorites were not confirmed; refresh before retrying');
           let items;
-          try { items = parseModelFavorites(reply.items); }
-          catch { throwIpcError('INTERNAL', 'Invalid favorites host response'); }
-          resolve(items);
+          let recents: RecentModelHostItem[] | undefined;
+          try {
+            items = parseModelFavorites(reply.items);
+            if (options?.recents) recents = parseRecentModels(reply.recents);
+          } catch { throwIpcError('INTERNAL', 'Invalid favorites host response'); }
+          resolve({ items, ...(recents ? { recents } : {}) });
         } catch (error) {
           reject(error);
         }
@@ -101,19 +140,21 @@ export function registerModelFavoritesSync(
           mutation: operation,
           ownerStamp: getActiveDataOwnerPushStamp(),
           expiresAt: Date.now() + 7500,
+          ...(options?.recents ? { recents: true as const } : {}),
         });
       } catch {
         settle();
       }
     });
   };
+  hostRequest = request;
   ipcMain.handle(MODEL_FAVORITES_GET, (event) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
-    return request();
+    return request().then((reply) => reply.items);
   });
   ipcMain.handle(MODEL_FAVORITES_APPLY, (event, mutation: unknown) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
     if (mutation === undefined) throwIpcError('INVALID_PARAMS', 'Favorite operation required');
-    return request(mutation);
+    return request(mutation).then((reply) => reply.items);
   });
 }

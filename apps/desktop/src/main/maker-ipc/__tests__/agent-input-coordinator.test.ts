@@ -12,7 +12,7 @@ import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolA
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ScriptTarget, transpileModule } from 'typescript';
-import { ASYNC_QUESTION_ANSWER, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
+import { AgentStartupStoppedError, ASYNC_QUESTION_ANSWER, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
 import { REPLY_QUOTE_SOURCE_CONTENT } from '../chatReplyQuoteNote';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13499,6 +13499,249 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
 // Unit regressions for lost Worker reports: production enqueue/restore/retry
 // entries, with an in-memory persistence boundary. Existing auto-bridge tests
 // manually replayed terminal events and never exercised a cold Lead's queue.
+// #10559, unit: real transaction + coordinator + recovery hooks/guard/bookkeeping.
+// Only bootstrap/native execution and route application are injected. Existing
+// turn-error tests never enter the cold, unpersisted queue-head failure boundary.
+describe('Bot subscription startup admission', () => {
+  function startupHarness(bot = true, opaque = false, rehydrate = false) {
+    const h = createHarness();
+    const attemptCurrent = vi.spyOn(h.coordinator, 'isAutoResumeAttemptCurrent');
+    const sid = 'startup-admission';
+    let backup = false;
+    const session: MakerSendTransactionSession = {
+      id: sid, instanceId: 'backup-runtime', agentKind: 'codex', workDir: '/repo', remoteHostId: null,
+      isTurnRunning: () => false,
+      send: vi.fn(async (_message, opts) => {
+        await opts?.beforeProviderStart?.();
+        await opts?.onAccepted?.();
+        opts?.onDispatching?.();
+        h.setRunning(true);
+        return { accepted: true as const };
+      }),
+    };
+    const failure = new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset\nresetAtMs=9000000');
+    const bootstrap = vi.fn(async () => {
+      if (!backup) throw opaque ? failure : new AgentStartupStoppedError(failure);
+      return { session, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+    });
+    const transaction = createMakerSendTransaction({
+      getMainClassicalStyle, getResolvedMainLocale, readMcpAppModelContext: id => mcpAppModelContext(id),
+      getSession: () => rehydrate && !backup ? session : undefined,
+      closeSession: async () => {}, closeSessionIfCurrent: async () => {}, preflightBotRuntimeResources: async () => {},
+      getSessionMeta: async () => ({}), ensureRemoteReadyForSessionStart: async () => {},
+      checkWorkDirExists: async () => true, isOrcaMcpHydrated: () => !rehydrate,
+      buildCreateOptsWithStderr: x => x, synthesizeOrcaVendorOptionsFromDb: async () => rehydrate,
+      statDirectory: async () => ({ isDirectory: () => true }),
+      readSessionExtraDirsFromDb: async () => [], readSessionWorkingDirFromDb: async () => '/repo',
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'claude-code', workingDir: '/repo', model: 'claude-opus-5-5' }),
+      withRehydrateCloseSuppressed: async (_id, fn) => fn(), bootstrapSession: bootstrap,
+      markOrcaRoleIfNeeded: async () => {}, broadcastSessionCreated: () => {},
+      prepareSendUserMessage: async (_id, message) => message as string,
+      createDbMessage: async (id, row) => { await mocks.createMessage(id, row); },
+      isSessionRunningError: () => false, log: mocks.logger,
+    });
+    h.sendToAgent.mockImplementation(async (...args) => (await transaction.sendToAgentAccepted(...args)).outcome);
+    const botFallbackInputs = new WeakSet<object>();
+    const fallback = vi.fn(async (_sid: string, _episode: number, _token: number, _required: boolean, current: () => boolean) => {
+      if (!current()) return { session: null, outcome: 'superseded' as const };
+      backup = true;
+      h.setAgentKind('codex');
+      return { session: null, outcome: 'switched' as const };
+    });
+    const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log: mocks.logger, random: () => 0.5 });
+    const book = new AutoResumeBookkeeping({
+      persistSuppressedError: vi.fn(), markOutcome: vi.fn(),
+      rollbackGuardPendingResume: (id, token) => { if (token !== undefined) guard.noteResumeSendFailed(id, token); },
+      abandonTakeover: (id, message, token) => h.coordinator.abandonAutoResume(id, message, token),
+    });
+    // Match the host's intervention callbacks, including cancellation of its timer.
+    h.onAutomaticEnqueue.mockImplementation(id => book.supersedeUnclaimedErrorForUserIntervention(id));
+    h.onUserEnqueue.mockImplementation(id => book.supersedeUnclaimedErrorForUserIntervention(id));
+    const hooks = createInterruptedTurnAutoResumeHooks<Session>({
+      // Match the late-bound Desktop facade; its ports are required so the
+      // production assembly cannot silently omit the startup authority check.
+      inputCoordinator: {
+        isExecutionPaused: id => h.coordinator.isExecutionPaused(id),
+        isAutoResumeAttemptCurrent: (id, token) => h.coordinator.isAutoResumeAttemptCurrent(id, token),
+        autoRetryLastError: (id, token) => h.coordinator.autoRetryLastError(id, token),
+      }, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
+      botFallbackInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
+      getStableSessionForTurnBoundary: () => null,
+      pendingContinuationOnlyAutoResumeRebuilds: new Map<Session, number>(),
+      maybeApplySessionRuntimeFallback: fallback, pendingSessionRuntimeFallbackRebuilds: new Set<Session>(),
+      providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
+      pendingSchedulerAutoResumeRunBySession: new Map(), notifySchedulerAutoResumeFailed: vi.fn(),
+      autoResumeAttemptToken: () => null, log: mocks.logger,
+    });
+    h.isResumableTurnErrorCandidate.mockImplementation(hooks.canRecoverTurn);
+    h.onResumableTurnError.mockImplementation(hooks.onResumableTurnError);
+    const item = makeItem('original', 'original task', { createOpts: {
+      agentKind: 'claude-code', model: 'claude-opus-5-5', workingDir: '/repo', planMode: true,
+    } });
+    if (bot) botFallbackInputs.add(item.createOpts);
+    return { ...h, sid, item, bootstrap, session, fallback, book, failure, attemptCurrent };
+  }
+
+  it.each([false, true])('switches before sending the same original input (rehydrate=%s)', async rehydrate => {
+    vi.useFakeTimers();
+    try {
+      const h = startupHarness(true, false, rehydrate);
+      h.coordinator.enqueue(h.sid, h.item);
+      await flush();
+      await h.sendToAgent.mock.results[0].value;
+      await flush();
+      expect(h.session.send).not.toHaveBeenCalled();
+      expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
+      expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: null, autoResumePending: { attempt: 1 } });
+      expect(h.attemptCurrent).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flush();
+      expect(h.fallback).toHaveBeenCalledWith(h.sid, 1, expect.any(Number), true, expect.any(Function));
+      expect(h.attemptCurrent).toHaveBeenCalledWith(h.sid, 1);
+      expect(h.session.send).toHaveBeenCalledOnce();
+      expect(h.onUserMessagePersisted).toHaveBeenCalledOnce();
+      expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
+      expect(h.sendToAgent.mock.calls[1][3].persistUserMessage).toMatchObject({ clientId: 'original' });
+      expect(h.sendToAgent.mock.calls[1][2]).toMatchObject({ planMode: true });
+      expect(h.sendToAgent.mock.calls[1][1]).toMatchObject({ content: 'original task' });
+      expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: null, pendingQueue: [] });
+    } finally { vi.useRealTimers(); }
+  });
+
+  // #10559 review regression, unit: an accepted automatic FIFO tail is not a
+  // user intervention. Existing startup tests had no input during host backoff.
+  it.each(['orca', 'report', 'scheduler'] as const)('keeps startup recovery and delivery receipts for an automatic %s tail', async origin => {
+    vi.useFakeTimers();
+    try {
+      const h = startupHarness();
+      h.coordinator.enqueue(h.sid, h.item);
+      await flush();
+      await h.sendToAgent.mock.results[0].value;
+      await flush();
+      h.onAutomaticEnqueue.mockClear();
+      h.onUserEnqueue.mockClear();
+      const tail = makeItem('tail', 'subsequent task', {
+        origin: origin === 'scheduler' ? { kind: 'scheduler', scheduleId: 'tail-schedule', scheduleName: 'Tail task' }
+          : { kind: 'orca', senderLabel: 'worker', senderSessionId: 'worker-session' },
+        ...(origin === 'report' ? { orcaReportDelivery: { workerId: 'worker-1' } } : {}),
+      });
+      h.coordinator.enqueue(h.sid, tail);
+      await flush();
+      expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: null,
+        autoResumePending: { attempt: 1 }, pendingQueue: [
+          expect.objectContaining({ clientId: 'original' }), expect.objectContaining({ clientId: 'tail' }),
+        ] });
+      expect(h.onAutomaticEnqueue).not.toHaveBeenCalled();
+      expect(h.onUserEnqueue).not.toHaveBeenCalled();
+      expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flush();
+      expect(h.fallback).toHaveBeenCalledOnce();
+      expect(h.onUserMessagePersisted.mock.calls.map(call => call[1].clientId)).toEqual(['original']);
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(h.sid, 'done');
+      await flush();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.onUserMessagePersisted.mock.calls.map(call => call[1].clientId)).toEqual(['original', 'tail']);
+      expect(h.sendToAgent.mock.calls.map(call => call[3].persistUserMessage?.clientId)).toEqual(['original', 'original', 'tail']);
+      expect(h.session.send).toHaveBeenCalledTimes(2);
+      expect(h.onRejectedUserTurn).not.toHaveBeenCalledWith(h.sid, expect.objectContaining({ clientId: 'original' }));
+    } finally { vi.useRealTimers(); }
+  });
+
+  // The same original-input takeover must settle when a manual action cancels
+  // its prepared recovery; it is not a hidden autoResume queue item to discard.
+  it.each(['compact', 'steer', 'steer-rejected', 'clear'] as const)('ends startup ownership and the original receipt on %s', async action => {
+    vi.useFakeTimers();
+    try {
+      const h = startupHarness();
+      h.coordinator.enqueue(h.sid, h.item);
+      await flush();
+      await h.sendToAgent.mock.results[0].value;
+      await flush();
+      if (action === 'compact') await h.coordinator.compact(h.sid, h.item.createOpts);
+      else if (action === 'clear') h.coordinator.clearError(h.sid);
+      else await h.coordinator.steer(h.sid, makeItem('manual', 'new request'), {
+        removeFromQueue: true, fallbackToTurn: action !== 'steer-rejected',
+      });
+      await flush();
+      expect(h.coordinator.getProjection(h.sid).autoResumePending).toBeUndefined();
+      expect(latestProjection(h.projections).autoResumePending).toBeUndefined();
+      expect(h.onRejectedUserTurn).toHaveBeenCalledExactlyOnceWith(h.sid, expect.objectContaining({ clientId: 'original' }));
+      if (action !== 'clear') expect(h.coordinator.getProjection(h.sid).error).toEqual(expect.any(String));
+      await vi.advanceTimersByTimeAsync(120_000);
+      await flush();
+      expect(h.fallback).not.toHaveBeenCalled();
+      expect(h.session.send).not.toHaveBeenCalled();
+      expect(h.book.hasSchedule(h.sid)).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Queue ordering is editable while backoff owns A. Settlement must locate A
+  // by its recovery identity, while retry eligibility must still require head A.
+  it.each(['abandon', 'stop', 'automatic-tail'] as const)('settles the displaced startup input on %s without sending another head', async action => {
+    vi.useFakeTimers();
+    try {
+      const h = startupHarness();
+      h.coordinator.enqueue(h.sid, h.item);
+      await flush();
+      await h.sendToAgent.mock.results[0].value;
+      await flush();
+      const tail = makeItem('tail', 'later task', {
+        origin: { kind: 'orca', senderLabel: 'worker', senderSessionId: 'worker-session' },
+      });
+      h.coordinator.enqueue(h.sid, tail);
+      h.coordinator.move(h.sid, 'tail', 0);
+      expect(h.coordinator.getProjection(h.sid).pendingQueue.map(item => item.clientId)).toEqual(['tail', 'original']);
+      if (action === 'stop') h.coordinator.stop(h.sid, { keepQueue: true, pauseQueue: true });
+      if (action === 'automatic-tail') h.coordinator.enqueue(h.sid, { ...tail, clientId: 'another-tail' });
+      if (action !== 'abandon') expect(h.coordinator.getProjection(h.sid).autoResumePending).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(120_000);
+      await flush();
+      expect(h.coordinator.getProjection(h.sid).autoResumePending).toBeUndefined();
+      expect(h.onRejectedUserTurn).toHaveBeenCalledExactlyOnceWith(h.sid, expect.objectContaining({ clientId: 'original' }));
+      expect(h.session.send).not.toHaveBeenCalled();
+      expect(h.onUserMessagePersisted).not.toHaveBeenCalled();
+      expect(h.fallback).toHaveBeenCalledTimes(action === 'abandon' ? 1 : 0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['ordinary', 'opaque', 'stop', 'closed', 'remove', 'clear', 'exhausted', 'superseded', 'failed'] as const)(
+    'retains the safe boundary when %s', async mode => {
+      vi.useFakeTimers();
+      try {
+        const h = startupHarness(mode !== 'ordinary', mode === 'opaque');
+        if (['exhausted', 'superseded', 'failed'].includes(mode)) {
+          h.fallback.mockResolvedValue({ session: null, outcome: mode } as never);
+        }
+        h.coordinator.enqueue(h.sid, h.item);
+        await flush();
+        await h.sendToAgent.mock.results[0].value;
+        await flush();
+        expect(h.onRejectedUserTurn).toHaveBeenCalledTimes(mode === 'ordinary' || mode === 'opaque' ? 1 : 0);
+        if (mode === 'stop') h.coordinator.stop(h.sid);
+        if (mode === 'closed') h.coordinator.onSessionClosed(h.sid);
+        if (mode === 'remove') h.coordinator.remove(h.sid, 'original');
+        if (mode === 'clear') h.coordinator.clearError(h.sid);
+        await vi.advanceTimersByTimeAsync(120_000);
+        await flush();
+        expect(h.session.send).not.toHaveBeenCalled();
+        expect(h.onUserMessagePersisted).not.toHaveBeenCalled();
+        expect(h.bootstrap).toHaveBeenCalledOnce();
+        if (['ordinary', 'opaque', 'stop', 'closed', 'remove', 'clear'].includes(mode)) expect(h.fallback).not.toHaveBeenCalled();
+        if (['stop', 'closed', 'remove', 'clear'].includes(mode)) {
+          expect(h.coordinator.getProjection(h.sid).autoResumePending).toBeUndefined();
+        }
+        if (['exhausted', 'superseded', 'failed'].includes(mode)) expect(h.onRejectedUserTurn).toHaveBeenCalledOnce();
+        if (mode === 'exhausted' || mode === 'failed' || mode === 'ordinary' || mode === 'opaque') {
+          expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: expect.stringContaining('SUBSCRIPTION_ACCOUNT_LIMITED'),
+            recovery: { kind: 'queue-head', clientId: 'original' } });
+        }
+      } finally { vi.useRealTimers(); }
+    },
+  );
+});
+
 describe('Orca report durable recovery', () => {
   const report = (clientId = 'report-1') => makeItem(clientId, 'Review complete', {
     origin: { kind: 'orca', senderLabel: 'reviewer', senderSessionId: 'worker-session' },
@@ -17097,12 +17340,14 @@ describe('usage-limit wait (ordinary tasks)', () => {
     h.setRunning(false);
     h.coordinator.onTurnEvent(sid, 'error', "You've hit your session limit", LIMIT_SIGNALS);
     await flush();
-    // 授权可能在等待期间被撤销:不自动续,错误与房主手动处理保留。
-    expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+    // 授权可能在等待期间被撤销:可交给即时组恢复，但不能挂额度重置等待。
+    expect(h.onUsageLimitedTurnError).toHaveBeenCalledOnce();
+    const token = h.onUsageLimitedTurnError.mock.calls[0][3];
+    expect(h.coordinator.armUsageLimitWait(sid, token, 9_000_000)).toBe(false);
     expect(latestProjection(h.projections).error).toBe("You've hit your session limit");
   });
 
-  // 访客 steer 的两种时序都不得挂等待:ACK 先到时本轮归属换成访客 steer 项(被访客判据挡住);
+  // 访客 steer 的两种时序都不得挂等待:ACK 先到时本轮归属换成访客 steer 项(仅可即时组恢复);
   // 终态先到时 steer 仍在途、不形成可续的 recovery,也就不会报告候选。
   it('does not offer a wait once a guest steer joined the turn, even before its ack', async () => {
     const guest = (sid: string, clientId: string) => ({
@@ -17140,7 +17385,11 @@ describe('usage-limit wait (ordinary tasks)', () => {
         await steering;
         await flush();
       }
-      expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+      expect(h.onUsageLimitedTurnError).toHaveBeenCalledTimes(ackBeforeError ? 1 : 0);
+      if (ackBeforeError) {
+        const token = h.onUsageLimitedTurnError.mock.calls[0][3];
+        expect(h.coordinator.armUsageLimitWait(sid, token, 9_000_000)).toBe(false);
+      }
     }
 
     // 房主自己的 steer 不影响。
@@ -17185,6 +17434,42 @@ describe('usage-limit wait (ordinary tasks)', () => {
 });
 
 describe('provider group computer switch hold', () => {
+  // Unit regression: accepted guest turns must reach group recovery and retain
+  // their attribution, but must never become a persisted, delayed quota wait.
+  // A single-member reconnect has no synchronous switch hint (#11111); this
+  // minimum input previously never reached the recovery callback.
+  it.each([
+    { hasOutput: false, candidate: 'usage-limit' as const },
+    { hasOutput: true, candidate: 'usage-limit' as const },
+    { hasOutput: false, candidate: null },
+  ])('recovers a shared guest turn through the group (%j)', async ({ hasOutput, candidate }) => {
+    const sid = 'shared-group-recovery';
+    const h = createHarness({ providerGroupSwitchCandidate: () => candidate });
+    const author = { sharedTaskId: 'st', sessionId: sid, memberId: 'm', accountId: 'guest', displayName: 'Guest' };
+    h.coordinator.enqueue(sid, { ...makeItem('guest-original', 'guest request'), sharedTaskAuthor: author });
+    await flush();
+    h.setHasAssistantProgressAfter(async () => hasOutput);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', candidate ? "You've hit your session limit" : 'remote agent disconnected',
+      candidate ? { sdkError: 'rate_limit' } : { reason: 'remote_agent_lost' });
+    await flush();
+    expect(h.onUsageLimitedTurnError).toHaveBeenCalledOnce();
+    const token = h.onUsageLimitedTurnError.mock.calls[0][3];
+    expect(h.coordinator.getProviderGroupSwitchHoldId(sid) !== null).toBe(candidate !== null);
+    expect(h.coordinator.armUsageLimitWait(sid, token, 9_000_000)).toBe(false);
+    expect(h.coordinator.snapshotUsageLimitRecovery(sid, token)).toBeNull();
+    const lease = h.coordinator.leaseUsageLimitRecovery(sid, token)!;
+    const continueToken = h.coordinator.rearmUsageLimitWait(sid, lease, Date.now())!;
+    await h.coordinator.continueAfterProviderGroupRecovery(sid, continueToken, {
+      reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON, attempt: 1, maxAttempts: 1, sessionTotal: 0,
+      ...(candidate ? { agentSwitch: { from: 'A', to: 'B', cause: 'usage-limit' as const } }
+        : { agentReconnect: { computer: 'A' } }),
+    });
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(false);
+  });
+
   // Unit integration: real coordinator + eligibility + guest-switch service.
   // Existing tests replaced eligibility with true; they could not catch bot's
   // exclusion or a second replay after a handoff closed the native session.

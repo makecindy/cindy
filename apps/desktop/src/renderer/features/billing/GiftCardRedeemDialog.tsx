@@ -158,6 +158,7 @@ export function GiftCardRedeemDialog({
       EXPIRED: 'billing.giftCard.errors.expired',
       VOIDED: 'billing.giftCard.errors.voided',
       RATE_LIMITED: 'billing.giftCard.errors.rateLimited',
+      PERSONAL_REQUIRED: 'billing.giftCard.errors.personalRequired',
       FAILED: 'billing.giftCard.errors.failed',
     };
     return t(keys[failure.reason]);

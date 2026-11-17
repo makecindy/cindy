@@ -8,7 +8,7 @@ import {
   type InterruptedTurnAutoResumeGuard,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
-import { isBotCandidateUnavailable, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
+import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotCandidateUnavailable, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
 
@@ -19,6 +19,7 @@ type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoo
 export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends object> {
   inputCoordinator: {
     isExecutionPaused(sessionId: string): boolean;
+    isAutoResumeAttemptCurrent(sessionId: string, attemptToken: number): boolean;
     autoRetryLastError(sessionId: string, attemptToken: number): Promise<'resumed' | 'superseded' | 'no-progress'>;
   };
   interruptedTurnAutoResumeGuard: Pick<InterruptedTurnAutoResumeGuard, 'onInterruptedTurn' | 'noteResumeSendFailed'>;
@@ -108,6 +109,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       const requireRouteChange = botInput && isBotCandidateUnavailable(signals);
       const reportPreparation = signals.reason === 'orca-report-preparation';
       const localPreparation = signals.reason === 'scheduler-snapshot-preparation';
+      const startupAdmission = signals.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON;
       const sameRouteRetryable = reportPreparation || localPreparation || isInterruptedTurnError(signals);
       const erroredAt = Date.now();
       const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);
@@ -164,9 +166,12 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
         (attempt) => {
           return (async () => {
             let fallbackRebuildSession: RuntimeSession | null = null;
+            const isCurrent = () => attempt.isCurrent() && !inputCoordinator.isExecutionPaused(sessionId)
+              && (!startupAdmission || inputCoordinator.isAutoResumeAttemptCurrent(sessionId, decision.attemptToken) === true);
             try {
               // Report retries must enter the original queue checkpoint before any
               // allocation. Runtime fallback can eagerly bootstrap a different route.
+              if (!isCurrent()) return;
               const fallback: RuntimeFallbackResult<RuntimeSession> = reportPreparation || localPreparation
                 ? { session: null, outcome: 'unchanged' }
                 : await maybeApplySessionRuntimeFallback(
@@ -174,10 +179,10 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   decision.episodeAttempt,
                   decision.attemptToken,
                   requireRouteChange,
-                  () => attempt.isCurrent() && !inputCoordinator.isExecutionPaused(sessionId),
+                  isCurrent,
                 );
               fallbackRebuildSession = fallback.session;
-              if (!attempt.isCurrent()) return;
+              if (!isCurrent()) return;
               if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback, sameRouteRetryable)) {
                 interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
                 autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
@@ -191,7 +196,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
               // pendingResume。
               // A queue-head retry keeps its original input ID and has no
               // replacement turn to release the guard. Retain the attempt budget.
-              if (reportPreparation) interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
+              if (reportPreparation || startupAdmission) interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
               const outcome = await inputCoordinator.autoRetryLastError(
                 sessionId,
                 decision.attemptToken,

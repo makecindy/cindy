@@ -112,6 +112,7 @@ export function useLogin({ autoLoad = true }: { autoLoad?: boolean } = {}): UseL
   );
 
   const enterLocalMode = useCallback(async () => {
+    if (!enterLocalModeFromAuth) return;
     const operation = ++operationRef.current;
     loadingRef.current = true;
     setIsLoading(true);
@@ -145,6 +146,6 @@ export function useLogin({ autoLoad = true }: { autoLoad?: boolean } = {}): UseL
     clearError: () => {
       setErrorCode(null);
     },
-    enterLocalMode,
+    enterLocalMode: enterLocalModeFromAuth === null ? null : enterLocalMode,
   };
 }
