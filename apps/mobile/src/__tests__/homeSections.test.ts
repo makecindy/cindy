@@ -11,6 +11,7 @@ import {
 } from '@/session/homeSections';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
 import type { RemoteSessionListItem } from '@/session/sessionList';
+import { groupAutomationListItems } from '@cindy/maker-shared/session-list';
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
@@ -125,7 +126,7 @@ describe('buildHomeSections', () => {
 
 describe('自动化归组', () => {
   function run(id: string, lastActivityAt: string, source?: string): RemoteSessionListItem {
-    return { session: { id, title: '', source }, lastActivityAt, pendingInteractionCount: 0 } as unknown as RemoteSessionListItem;
+    return { session: { id, title: id, source }, title: id, lastActivityAt, pendingInteractionCount: 0 } as unknown as RemoteSessionListItem;
   }
 
   it('把项目和对话里的自动化运行收进一个目录,只剩自动化的项目随之消失', () => {
@@ -150,6 +151,40 @@ describe('自动化归组', () => {
     expect(folder.kind === 'automation' && folder.project.sessions.map((item) => item.session.id))
       .toEqual(['review', 'report', 'digest']);
     expect(rows[1].kind === 'project' && rows[1].project.sessionCount).toBe(1);
+  });
+
+  it('改过项目目录的同一自动化:各项目里已折叠的运行收进目录后合成一个文件夹', () => {
+    const nightly = (id: string, workingDir: string, at: string) => ({
+      session: { id, title: 'Nightly', source: 'scheduler', workingDir, status: 'idle', agentKind: 'codex', deviceLinkDeviceId: 'mac' },
+      scheduleInfo: { scheduleId: 'nightly', scheduleName: 'Nightly', running: false, unreadCount: 0 },
+      title: 'Nightly',
+      lastActivityAt: at,
+      pendingInteractionCount: 0,
+    }) as unknown as RemoteSessionListItem;
+    // 上游(buildMobileHomePresentation)按项目分别折叠。
+    const perProject = (dir: string, runs: RemoteSessionListItem[]) =>
+      groupAutomationListItems(runs, Date.parse('2026-11-17T00:00:00Z'), true, () => dir);
+    const home = presentation({
+      projects: [
+        projectGroup('old', '2026-11-10T00:00:00Z', perProject('old', [
+          nightly('r1', '/old', '2026-11-09T00:00:00Z'),
+          nightly('r2', '/old', '2026-11-10T00:00:00Z'),
+        ])),
+        projectGroup('new', '2026-11-16T00:00:00Z', perProject('new', [
+          nightly('r3', '/new', '2026-11-15T00:00:00Z'),
+          nightly('r4', '/new', '2026-11-16T00:00:00Z'),
+        ])),
+      ],
+    });
+    const rows = buildHomeSections(home, true, false, { groupAutomation: true, automationTitle: '自动化' })
+      .find((section) => section.key === HOME_MAIN_SECTION_KEY)?.data ?? [];
+    expect(rows).toHaveLength(1);
+    const folder = rows[0];
+    expect(folder.kind).toBe('automation');
+    if (folder.kind !== 'automation') return;
+    expect(folder.project.sessions).toHaveLength(1);
+    expect([...(folder.project.sessions[0].automationGroup?.sessionIds ?? [])].sort()).toEqual(['r1', 'r2', 'r3', 'r4']);
+    expect(folder.project.sessionCount).toBe(4);
   });
 });
 

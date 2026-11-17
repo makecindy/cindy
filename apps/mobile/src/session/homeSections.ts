@@ -1,5 +1,10 @@
 import { i18n } from '@/i18n';
-import { automationGroupKey, compareSessionListStrings } from '@cindy/maker-shared/session-list';
+import {
+  automationGroupKey,
+  compareSessionListStrings,
+  groupAutomationListItems,
+} from '@cindy/maker-shared/session-list';
+import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from './mobileHome';
 import {
   activityMsFromIso,
@@ -13,7 +18,11 @@ import {
   normalizeManualProjectOrder,
   type HomeProjectOrder,
 } from './homeProjectOrder';
-import type { RemoteSessionListItem } from './sessionList';
+import {
+  createSessionListTranslator,
+  localizeRemoteSessionListItem,
+  type RemoteSessionListItem,
+} from './sessionList';
 
 /** 首页列表的一行:目录分组头,或一条任务(置顶 / 普通 / 项目内)。 */
 export type HomeRow =
@@ -159,12 +168,54 @@ export function partitionAutomationItems(home: MobileHomePresentation): {
   return { home: { ...home, chats, projects }, automations };
 }
 
+function automationDeviceKey(item: RemoteSessionListItem): string {
+  const session = item.session as { canonicalDeviceId?: string | null; deviceLinkDeviceId?: string | null };
+  return session.canonicalDeviceId ?? session.deviceLinkDeviceId ?? '';
+}
+
+/**
+ * 上游按项目各自折叠自动化运行。收进「自动化」目录后按设备 + 自动化重新合并,改过项目目录
+ * (或同时有项目内与对话里运行)的同一条自动化只显示一个文件夹。只重建确实被拆开的那些,
+ * 其余保留原对象,行比较仍走引用快路径。
+ */
+export function mergeAutomationItems(
+  items: readonly RemoteSessionListItem[],
+  nowMs = Date.now(),
+): RemoteSessionListItem[] {
+  const buckets = new Map<string, RemoteSessionListItem[]>();
+  for (const item of items) {
+    const baseKey = item.automationGroup?.baseKey ?? automationGroupKey(item) ?? `session:${item.session.id}`;
+    const key = `${automationDeviceKey(item)}|${baseKey}`;
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(item);
+    else buckets.set(key, [item]);
+  }
+  let translate: ReturnType<typeof createSessionListTranslator> | null = null;
+  const merged: RemoteSessionListItem[] = [];
+  for (const bucket of buckets.values()) {
+    if (bucket.length === 1) {
+      merged.push(bucket[0]);
+      continue;
+    }
+    const runs = bucket.flatMap((item) => item.automationGroup?.items ?? [item]);
+    // 与 buildMobileHomePresentation 同一流水线:先折叠再本地化(组内成员已本地化)。
+    const rows = groupAutomationListItems(runs, nowMs, true, automationDeviceKey, mobilePresentationLocalizer);
+    if (rows.length !== 1 || !rows[0].automationGroup) {
+      merged.push(...bucket);
+      continue;
+    }
+    translate ??= createSessionListTranslator();
+    merged.push(localizeRemoteSessionListItem(rows[0], nowMs, translate));
+  }
+  return merged;
+}
+
 export function buildAutomationGroupRow(
   items: readonly RemoteSessionListItem[],
   options: HomeSectionOptions = {},
 ): HomeRow {
   const title = options.automationTitle ?? i18n.t('devices.list.menu.automationFolder');
-  const sessions = sortSessionItems(items, options);
+  const sessions = sortSessionItems(mergeAutomationItems(items), options);
   return {
     key: 'automation',
     kind: 'automation',
