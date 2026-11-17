@@ -45,18 +45,20 @@ export class PiToolMarkupProjection {
     }).slice(0, 128) : [];
     this.callsComplete = true;
   }
-  private clean(text: string): string {
+  private clean(text: string, isOutput = true): string {
     if (this.preserve) return text;
-    const result = reconcileToolCallMarkup(text, this.calls, true);
-    this.unexecuted ||= result.unexecuted;
+    const result = reconcileToolCallMarkup(text, this.calls, isOutput);
+    this.unexecuted ||= isOutput && result.unexecuted;
     return result.text;
   }
   finish(sink: Sink, preserve = false): void {
     this.preserve ||= preserve;
     for (const stream of this.streams.values()) {
+      // Reasoning may consider then abandon a call; only output can fail the turn.
+      const isOutput = stream.template.type === 'text';
       const result = this.preserve ? { text: stream.buffer.drain(), unexecuted: false }
-        : stream.buffer.resolveReport(this.calls, true);
-      this.unexecuted ||= result.unexecuted;
+        : stream.buffer.resolveReport(this.calls, isOutput);
+      this.unexecuted ||= isOutput && result.unexecuted;
       const finalData = record(stream.final?.data);
       // Pi full snapshots replace the streamed bubble; thinking finals also
       // replace their block, but ordinary delta-only consumers still need tails.
@@ -64,7 +66,7 @@ export class PiToolMarkupProjection {
         && typeof finalData.text === 'string' && finalData.text.endsWith(result.text))) {
         sink.push({ ...stream.template, data: { ...record(stream.template.data), text: result.text } });
       }
-      if (stream.final) sink.push({ ...stream.final, data: { ...finalData, text: this.clean(String(finalData.text ?? '')) } });
+      if (stream.final) sink.push({ ...stream.final, data: { ...finalData, text: this.clean(String(finalData.text ?? ''), isOutput) } });
     }
     this.streams.clear();
   }

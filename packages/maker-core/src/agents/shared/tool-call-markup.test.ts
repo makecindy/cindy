@@ -23,6 +23,24 @@ describe('reconcileSerializedToolCalls', () => {
     expect(reconcileToolCallMarkup(raw, [], true)).toEqual({ text: raw, unexecuted: false });
   });
 
+  // #10651 review: list-container fences are examples, not attempted tools.
+  // Unit tier through production reconciliation/buffer; bare-fence coverage missed lists.
+  it.each(['- ', '1. ', '12. ', '  - '])('preserves list fences (%s) and still rejects following raw calls', marker => {
+    const indent = ' '.repeat(marker.length);
+    const literal = marker + '~~~xml\n' + indent + echo() + '\n' + indent + '~~~';
+    expect(reconcileToolCallMarkup(literal, [], true)).toEqual({ text: literal, unexecuted: false });
+    // Both a close fence and leaving an unfinished list fence restore root parsing.
+    for (const example of [literal, marker + '~~~xml\n' + indent + echo()]) {
+      const input = example + '\n\n' + echo();
+      const guard = new SerializedToolCallEcho();
+      let visible = '';
+      for (const char of input) visible += guard.push(char);
+      const result = guard.resolveReport([], true);
+      expect(visible + result.text).toBe(example + '\n\n');
+      expect(result.unexecuted).toBe(true);
+    }
+  });
+
   it('requires distinct actual calls within one batch but can reconcile independent echoes', () => {
     const invoke = '<invoke name="read"><parameter name="path" string="true">a</parameter></invoke>';
     const batch = '<tool_calls>' + invoke + invoke + '</tool_calls>';

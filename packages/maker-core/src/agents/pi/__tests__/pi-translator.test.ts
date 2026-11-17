@@ -3112,7 +3112,7 @@ describe('#10651 DSML output', () => {
     translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: reason,
       content: [{ type: 'text', text }, ...calls], usage: { input: 10, output: 5, cacheRead: 8 } } }), queue, ctx);
   }
-  it.each(['structured', 'code', 'quote', 'incomplete', 'stop', 'length', 'error', 'retry', 'previous-call', 'other-session', 'thinking', 'batch-shortfall'])(
+  it.each(['structured', 'code', 'quote', 'incomplete', 'stop', 'length', 'error', 'retry', 'previous-call', 'other-session', 'thinking', 'thinking-final', 'thinking-and-text', 'list-code', 'batch-shortfall'])(
     'preserves the output/terminal boundary for %s', mode => {
       const ctx = createPiTranslateContext(noopLogger);
       const { queue, events } = makeQueue();
@@ -3136,12 +3136,12 @@ describe('#10651 DSML output', () => {
           expect(events.filter(e => e.type === 'text').map(e => (e.data as { text: string }).text).join('')).toBe(raw);
         }
         if (mode === 'stop') markPiHostAbortRequested(ctx);
-        const literal = mode === 'code' ? '```xml\n' + raw + '\n```' : mode === 'quote' ? '> ' + raw : mode === 'incomplete' ? raw.slice(0, -10) : raw;
-        if (mode === 'thinking') {
+        const literal = mode === 'list-code' ? '- ~~~xml\n  ' + raw + '\n  ~~~' : mode === 'code' ? '```xml\n' + raw + '\n```' : mode === 'quote' ? '> ' + raw : mode === 'incomplete' ? raw.slice(0, -10) : raw;
+        if (mode.startsWith('thinking')) {
           translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
-          translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: raw } }), queue, ctx);
+          if (mode !== 'thinking-final') translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: raw } }), queue, ctx);
           translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'thinking_end', contentIndex: 0, content: raw } }), queue, ctx);
-          translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'thinking', thinking: raw }, { type: 'text', text: 'answer' }] } }), queue, ctx);
+          translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'thinking', thinking: raw }, { type: 'text', text: mode === 'thinking-and-text' ? raw : 'answer' }] } }), queue, ctx);
         } else {
           const duplicate = raw.replace('</|DSML| calls>', raw.slice('<|DSML| calls>'.length, -'</|DSML| calls>'.length) + '</|DSML| calls>');
           emitMessage(ctx, queue, mode === 'batch-shortfall' ? duplicate : literal, mode === 'structured' || mode === 'batch-shortfall' ? [call] : [],
@@ -3150,15 +3150,22 @@ describe('#10651 DSML output', () => {
         if (mode === 'structured') translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'ssh-1', toolName: 'ssh', args: { args: command } }), queue, ctx);
         translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
         const done = events.find(e => e.type === 'done')!.data as Record<string, unknown>;
-        const invalid = ['retry', 'previous-call', 'other-session', 'thinking', 'batch-shortfall'].includes(mode);
+        const invalid = ['retry', 'previous-call', 'other-session', 'thinking-and-text', 'batch-shortfall'].includes(mode);
         expect(done.status).toBe(mode === 'stop' ? 'cancelled' : invalid || mode === 'length' || mode === 'error' ? 'failed' : 'completed');
         expect(events.filter(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'unexecuted-tool-markup')).toHaveLength(invalid ? 1 : 0);
+        // #10651 review: speculative thinking is not an attempted action. Unit tier,
+        // production translator; previous coverage incorrectly required failed.
+        if (mode.startsWith('thinking')) {
+          expect(events.find(e => e.type === 'thinking' && (e.data as { stage?: string }).stage === 'final')?.data).toMatchObject({ text: raw });
+          expect(events.filter(e => e.type === 'tool_use')).toHaveLength(0);
+          if (mode !== 'thinking-and-text') expect(done.result).toBe('answer');
+        }
         if (mode === 'structured') {
           expect(events.filter(e => e.type === 'tool_use')).toHaveLength(1);
           expect(events.find(e => e.type === 'tool_use')?.data).toMatchObject({ toolUseId: 'ssh-1', toolName: 'ssh', input: { args: command } });
           expect(done.usage).toMatchObject({ inputTokens: 10, outputTokens: 5, cacheReadTokens: 8 });
         }
-        if (['code', 'quote', 'incomplete', 'stop', 'length'].includes(mode)) expect(events.filter(e => e.type === 'text').some(e => (e.data as { text: string }).text === literal)).toBe(true);
+        if (['code', 'list-code', 'quote', 'incomplete', 'stop', 'length'].includes(mode)) expect(events.filter(e => e.type === 'text').some(e => (e.data as { text: string }).text === literal)).toBe(true);
       } finally { disposePiTranslateContext(ctx); }
     },
   );

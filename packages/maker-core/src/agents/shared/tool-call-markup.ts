@@ -9,15 +9,17 @@ function isEscaped(text: string, at: number): boolean {
 /** Conservative Markdown protection; an unfinished code span is kept verbatim too. */
 function literalMask(text: string): Uint8Array {
   const mask = new Uint8Array(text.length);
-  let fence: { char: string; length: number } | undefined;
+  let fence: { char: string; length: number; indent: number } | undefined;
   let quote = false;
   for (const match of text.matchAll(/[^\n]+(?:\n|$)|\n/g)) {
     const line = match[0];
     const at = match.index;
+    // Leaving a list container ends its fence; do not mask following root output.
+    if (fence?.indent && line.trim() && !line.startsWith(' '.repeat(fence.indent))) fence = undefined;
     if (fence) {
       const fenceChar = fence.char;
       mask.fill(1, at, at + line.length);
-      const closing = /^ {0,3}([`~]+)[ \t]*\r?\n?$/.exec(line)?.[1];
+      const closing = /^ {0,3}([`~]+)[ \t]*\r?\n?$/.exec(line.slice(fence.indent))?.[1];
       if (closing && closing.length >= fence.length
         && [...closing].every((char) => char === fenceChar)) fence = undefined;
       continue;
@@ -29,9 +31,11 @@ function literalMask(text: string): Uint8Array {
       mask.fill(1, at, at + line.length);
       continue;
     }
-    const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    const opening = /^( {0,3}(?:(?:[-+*]|\d{1,9}[.)])[ \t]{1,4})?)(`{3,}|~{3,})/.exec(line);
     if (opening) {
-      fence = { char: opening[0]!, length: opening.length };
+      const marker = opening[2]!;
+      const indent = /[-+*.)]/.test(opening[1]!) ? opening[1]!.length : 0;
+      fence = { char: marker[0]!, length: marker.length, indent };
       mask.fill(1, at, at + line.length);
     } else if (/^(?: {0,3}>| {4}| *\t)/.test(line)) {
       mask.fill(1, at, at + line.length);
