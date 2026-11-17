@@ -120,6 +120,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务     | 给既有任务发消息（隐藏群专线不是群聊收件地址，返回不支持且说明未送达） | 有 | 有（2026-10-14；接收电脑执行同一判定，隐藏目标仍优先遵守可见性检查） |
 | 任务     | 新建任务（继承项目、选择已有项目或不绑项目；来源不绑项目时按执行目录所在的已登记可见项目归属，2026-11-10） | 有 | 有（2026-11-11，`device` 指定任务电脑；项目与默认模型在目标解析，不继承本机路径）               |
 | 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `provider_device_id`（兼容 `agent_device_id`），取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在 `device` 指定的电脑） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |
+| 任务     | 新建任务时指定模型组的模式（`send_to_session` create 的 `model_group_id`，先用 `list_model_groups` 查模式 id），由宿主按模式选一次来源，回执带模式与实际路线（[model-groups.md §6.3](model-groups.md#63-send_to_session-按模式新建任务)） | 有（当前账号本机配置；共享任务不能用；任务建好后不再换来源） | 无（`device` 指向另一台电脑与 SSH 来源返回 `INVALID_ARGS`，不改用本机的模式） |
 | 任务     | 归档 / 取消归档                                             | 有   | 有（2026-10-16） |
 | 任务     | `delete_session` 删除明确任务（不能删除当前调用任务），复用宿主生命周期清理 | 有（整体安装授予的 control 声明） | 有（既有 patch-meta，结果不明不重发） |
 | 自动归档 | 设置 → 存储空间中的闲置自动归档开关、保留天数、预览与恢复默认；`tasks.auto-archive` 仍通过 `task-management` 配置分类复用 `get_app_settings` / `update_app_settings` / `reset_app_settings` | 有（当前账号本机） | 无（设置本身为本机范围，远程仍使用现有归档与恢复） |
@@ -204,6 +205,8 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
 - 新建任务的 Agent 所在电脑：`packages/lizi-mcps/src/xdt-helper/send_to_session.ts` 的 `provider_device_id`（兼容 `agent_device_id`），
   host 侧解析见 `apps/desktop/src/main/maker-ipc/sendToSessionExecutionConfig.ts`
   （`resolveSendToSessionCreateRoute`）。
+- 新建任务按模型组的模式选来源：`send_to_session` 的 `model_group_id`，host 侧见
+  `apps/desktop/src/main/maker-ipc/sendToSessionModelGroup.ts` 与 `resolveSendToSessionCreateRoute` 的 `pinnedProviderId`。
 - 任务摘要（`get_task_digest`）：`packages/lizi-mcps/src/xdt-helper/get_task_digest.ts`（输出合同 ≤2KB）、
   `apps/desktop/src/main/mcp-integrations/taskDigest.ts` 与 `taskDigestHost.ts`（跨电脑只读，复用
   `local-db:sessions:get`、`maker:list-active`、历史消息与 PR 状态通道）。

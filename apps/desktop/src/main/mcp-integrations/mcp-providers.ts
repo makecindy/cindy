@@ -1175,8 +1175,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         effort,
         fast,
         agentDeviceId,
+        modelGroupId,
       }) => {
         if (!targetSessionId && device && device !== 'local' && device !== getDeviceId()) {
+          // 模式里的「这台电脑」属于记录它的电脑；在这里替另一台电脑选会选错来源，也不悄悄丢掉这个参数
+          // (model-groups.md §6.3)。用那台电脑的模式开新任务尚未接入。
+          if (modelGroupId !== undefined)
+            return { ok: false, errorCode: 'INVALID_ARGS', message: 'model_group_id is only supported for tasks created on this computer; omit device or model_group_id.' };
           if (!remoteSessionHandoff || !dispatcherSessionId)
             return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'Remote task creation is unavailable in this host.' };
           const id = randomUUID();
@@ -1237,6 +1242,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
                 }
               : {}),
             ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
+            ...(modelGroupId !== undefined ? { modelGroupId } : {}),
           });
           if (result.ok && result.wakeKind === 'created' && dispatcherSessionId)
             reportGroupTaskCreated(dispatcherSessionId, { taskId: result.targetSessionId, deviceId: null,

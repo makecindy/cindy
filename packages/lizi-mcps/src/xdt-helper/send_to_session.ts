@@ -2,7 +2,7 @@ import { BRAND_NAME } from "@cindy/maker-shared/branding";
 import { z } from "zod";
 
 import type { XdtHelperToolRegistry } from "../lizi_xdtHelperToolRegistry.js";
-import { toHostAgentDeviceId } from "./create_worker.js";
+import { LOCAL_AGENT_DEVICE, toHostAgentDeviceId, type WorkerCreationModelGroup } from "./create_worker.js";
 import type {
   ControlResult,
   ControlWorkerAgent,
@@ -42,6 +42,8 @@ export type SendToSessionCallback = (params: {
   fast?: boolean | 'ultrafast';
   /** create 模式可选:新任务的 Agent 所在电脑；null = 本机，缺省继承 dispatcher。jump 不传。 */
   agentDeviceId?: string | null;
+  /** create 模式可选:模型组里模式的 id(list_model_groups 的 routes[].id)；宿主按模式选来源。jump 不传。 */
+  modelGroupId?: string;
 }) => Promise<
   ControlResult<
     {
@@ -65,6 +67,8 @@ export type SendToSessionCallback = (params: {
       effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | null;
       fastMode?: boolean | 'ultrafast';
       providerId?: string | null;
+      /** create + modelGroupId：宿主选中的模式、模型、来源与原因；agentDeviceId null = 本机。 */
+      modelGroup?: WorkerCreationModelGroup & { agentDeviceId: string | null };
     },
     | "REMOTE_UNSUPPORTED"
     | "REMOTE_DEVICE_OFFLINE"
@@ -84,6 +88,8 @@ export type SendToSessionCallback = (params: {
     | "LEAD_NOT_SUPPORTED"
     | "WORKTREE_UNAVAILABLE"
     | "HOST_NOT_READY"
+    | "MODEL_GROUP_NOT_FOUND"
+    | "MODEL_GROUP_UNAVAILABLE"
   > & { recoverySessionId?: string }
 >;
 
@@ -144,6 +150,8 @@ const DESCRIPTION = [
   "",
   "【provider_device_id(旧名 agent_device_id，仅 create 模式)】新任务的 Agent 使用哪台电脑的远程供应商：取 list_available_models 的 locations[].provider_device_id；\"local\" 或本机设备 id 表示本机。本机缺省继承当前任务的位置；远程创建缺省使用目标电脑本机供应商，local 也相对目标电脑。本机创建时位置与当前任务不同且没传 model 时沿用当前任务的模型 id，按那台电脑的供应商重新解析来源；那台没有这个模型、离线、未开启远程控制或分享不可用 → PROVIDER_ROUTE_UNAVAILABLE；格式不对，或当前任务是 SSH 任务 → INVALID_ARGS。失败时不创建任务、不自动换电脑，由调用方决定换哪一台重试。jump 模式忽略。",
   "",
+  "【model_group_id(仅本机 create)】用户在设置「模型组」里建的模式 id，先用 cindy_helper 的 list_model_groups 查 routes[].id 与名称。用户要求「用某个模式 / 模型组开任务」时传它，不要自己从来源里挑一个模型代替。宿主在创建时按模式规则选一次来源(引擎、模型、供应商连接、Agent 位置与推理强度；时段例外照常，本工具不带图片，图片例外不生效)；模式不指定推理强度或选中的模型不支持这一档时用模型默认档。与 agent_kind / model / effort / provider_device_id(agent_device_id) 同传、传了 target_session_id、device 指向另一台电脑、或来源任务是 SSH 任务 → INVALID_ARGS，什么都不建；fast 可传。模式不存在 → MODEL_GROUP_NOT_FOUND；此刻没有能用的来源或当前是共享中的任务 → MODEL_GROUP_UNAVAILABLE，不回退到当前任务的模型。成功时返回 model_group(模式、选中的模型与来源、provider_device_id、原因)和实际 agent_kind / model / provider_id / effort。任务建好后不会因模式再换来源。",
+  "",
   "【远程新建】device 选择任务与文件所在电脑；先 list_machines、list_projects(device)、list_available_models(device)。旧版本不支持时不发出；DELIVERY_UNKNOWN / CREATED_NOT_DELIVERED 返回恢复用 target_session_id，先读该任务记录和队列，不能重复 create。不会建立 Worker、父子编排或自动回传；需要回信时用普通 send_to_session。",
   "【working_dir(仅 create 模式)】可选执行目录，缺省为选中或继承的项目目录；不绑项目时分配独立的托管目录。可以指定已有仓库、子目录或临时 worktree；必须为存在的绝对目录。它不改变已指定或继承的项目归属，也不登记项目。不绑项目且 use_worktree=true 时必须显式指定 working_dir 作为 Git 仓库。jump 模式忽略。",
   "",
@@ -164,7 +172,8 @@ const DESCRIPTION = [
   "- UNSUPPORTED_CAPABILITY: 目标 session 不接受跨任务投递（例如 host 管理的隔离 Review）。skill 不应重试或改走其它输入入口。",
   "- HOST_NOT_READY: 主进程服务尚未就绪。skill 应告知用户稍等几秒后重试。",
   "- PROVIDER_ROUTE_UNAVAILABLE: 仅 create:目标位置(agent_device_id 或继承的位置)没有提供所需模型的已连接供应商，或指定的电脑读不到供应商(离线 / 未开启远程控制 / 分享不可用)。没有创建任务；可换一台电脑或换模型重试。",
-  "- INVALID_ARGS: 参数不合法(含 agent_device_id 格式不对、SSH 任务指定 agent_device_id)。没有创建任务。",
+  "- INVALID_ARGS: 参数不合法(含 agent_device_id 格式不对、SSH 任务指定 agent_device_id、model_group_id 与模式决定的参数同传或用于已有任务 / 另一台电脑 / SSH 任务)。没有创建任务。",
+  "- MODEL_GROUP_NOT_FOUND / MODEL_GROUP_UNAVAILABLE: 仅 create + model_group_id:模式不存在(重新 list_model_groups)，或此刻没有能用的来源(message 附各原因的个数)/共享中的任务不能用模式。没有创建任务；如实告诉用户，由用户换模式或指定模型。",
   "- REMOTE_DEVICE_OFFLINE / REMOTE_DISABLED / REMOTE_UNAVAILABLE: 目标电脑离线、未开启远程控制或暂时连不上,消息没有发出。",
   "- REMOTE_UNSUPPORTED: 目标电脑的版本不支持接收其它电脑的任务消息,消息没有发出;需要对方升级。",
   "- DELIVERY_UNKNOWN: 请求已发往目标电脑但没有收到可信回执(含对方 Agent 没能启动),可能已送达。重发前先用 get_chat_history(deviceId::sessionId) 确认,避免重复。",
@@ -285,6 +294,9 @@ export function registerSendToSessionTool(
         .describe(
           "仅 create 模式可选:Fast 模式开关。目标 Agent/provider/model 不支持时创建前失败；jump 模式忽略。",
         ),
+      model_group_id: z.string().trim().min(1).max(64).optional().describe(
+        '仅本机 create 可选:用户在设置「模型组」里建的模式 id，取 cindy_helper list_model_groups 返回的 routes[].id。由宿主按该模式当场选一个来源；不能与 agent_kind / model / effort / provider_device_id / agent_device_id / target_session_id 同传，device 不能指向另一台电脑；fast 可传。没有能用的来源时返回 MODEL_GROUP_UNAVAILABLE，不回退到别的模型。',
+      ),
       agent_device_id: z
         .string()
         .trim()
@@ -309,9 +321,13 @@ export function registerSendToSessionTool(
       effort,
       fast,
       agent_device_id,
+      model_group_id,
     }) => {
       if (target_session_id && device !== undefined)
         return errorPayload("INVALID_ARGS", "已有目标请只传 target_session_id；device 仅用于新建任务。");
+      // 已有任务的模型不因模式改变；忽略会让调用方以为用上了模式，所以明确拒绝。
+      if (target_session_id && model_group_id !== undefined)
+        return errorPayload("INVALID_ARGS", "model_group_id 只用于新建任务；发给已有任务时不能换模型，请去掉 model_group_id 或 target_session_id。");
       if (!target_session_id && provider_device_id !== undefined && agent_device_id !== undefined
         && provider_device_id !== agent_device_id)
         return errorPayload("INVALID_ARGS", "provider_device_id 与旧名 agent_device_id 指向不同位置，请只选一个供应商位置。");
@@ -357,6 +373,7 @@ export function registerSendToSessionTool(
         ...(fast !== undefined ? { fast } : {}),
         // jump 不改既有任务的位置：只在 create 时传。
         ...(localTargetId === undefined ? toHostAgentDeviceId(provider_device_id ?? agent_device_id) : {}),
+        ...(model_group_id !== undefined ? { modelGroupId: model_group_id } : {}),
       });
 
       if (!result.ok) {
@@ -396,6 +413,13 @@ export function registerSendToSessionTool(
         ...(result.effort !== undefined ? { effort: result.effort } : {}),
         ...(result.fastMode !== undefined ? { fast_mode: result.fastMode } : {}),
         ...(result.providerId !== undefined ? { provider_id: result.providerId } : {}),
+        ...(result.modelGroup ? { model_group: {
+          id: result.modelGroup.routeId, name: result.modelGroup.groupName, why: result.modelGroup.why,
+          model_name: result.modelGroup.modelName, source_name: result.modelGroup.sourceName,
+          provider_device_id: result.modelGroup.agentDeviceId ?? LOCAL_AGENT_DEVICE,
+          ...(result.modelGroup.exceptions ? { exceptions: result.modelGroup.exceptions.map((item) => ({
+            type: item.type, ...(item.viaRouteName ? { via_route_name: item.viaRouteName } : {}) })) } : {}),
+        } } : {}),
       });
     },
   });

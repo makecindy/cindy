@@ -83,6 +83,8 @@ export async function routeWorkerByModelGroup(
   routeId: string,
   context: { hasImages: boolean },
   resolve: ((request: ModelGroupResolveRequest) => Promise<ModelGroupResolveResult>) | undefined,
+  /** 失败说明里「什么没建」：Worker 或 send_to_session 新建的任务。 */
+  subject: 'Worker' | 'task' = 'Worker',
 ): Promise<WorkerModelGroupRouting> {
   if (!resolve) {
     return { ok: false, errorCode: 'MODEL_GROUP_UNAVAILABLE', message: 'Model groups are not available on this computer.' };
@@ -102,7 +104,7 @@ export async function routeWorkerByModelGroup(
     return {
       ok: false,
       errorCode: 'MODEL_GROUP_UNAVAILABLE',
-      message: `No source in model group mode "${result.groupName}" can be used now${unavailableSummary(result)}. No Worker was created.`,
+      message: `No source in model group mode "${result.groupName}" can be used now${unavailableSummary(result)}. No ${subject} was created.`,
     };
   }
   const effort = WORKER_EFFORTS.find((item) => item === result.route.effort);

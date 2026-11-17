@@ -132,7 +132,8 @@
   （模式本身也只在这台电脑），不进模型收藏的同步协议；模式删除后收藏自动不再显示。
 - 任务开始后模型组不会自己换来源；撞上配额时只**提议**换到同一个模式里的下一个来源，用户点了才换（见 §6.1）。
 - 协同模式的 Worker：Lead 创建时可以指定一个模式（见 §6.2）；Lead 自己与选择器里的协同草稿仍不提供模式。
-- 伙伴、定时与自动化、子代理、辅助模型暂不经过模型组；要接入时先在这里补规则。
+- 伙伴或任务用 `send_to_session` 在本机新建任务：可以指定一个模式（见 §6.3）；发给已有任务、在另一台电脑新建时不提供。
+- 伙伴自己的对话、定时与自动化、子代理、辅助模型暂不经过模型组；要接入时先在这里补规则。
 - 配置按账号保存在本机（`model-groups.json`），只存用户建的内容；不随新电脑迁移（供应商连接 ID 各台不同）。
 
 ### 6.1 撞配额时提议换来源继续
@@ -189,6 +190,40 @@
 - **读取边界**：`list_model_groups` 只读这台电脑上当前账号的配置，不读别的电脑；共享中的任务与 SSH 任务不能读取，
   共享中的 Lead 传 `model_group_id` 也返回 `MODEL_GROUP_UNAVAILABLE`、不选路；
   不修改模式、不切换任何任务的模型。用户在界面里手动创建 Worker 的面板不提供模式（界面传来的参数不含它）。
+
+### 6.3 send_to_session 按模式新建任务
+
+用户让伙伴（或普通任务里的 Agent）「用某个模式开个新任务」时，与 §6.2 一样先用 `list_model_groups` 查模式 id，再把它作为
+`send_to_session`（create，不传 `target_session_id`）的 `model_group_id` 传给宿主，由宿主在新建时按这个模式选一次来源。
+除下面写明的不同，规则与 §6.2 相同：同一个选路与 resolver 实例（轮流位置共用）、推理强度同 §4 口径（模式指定且模型支持就用，
+否则用模型默认档，不继承来源任务的档位）、选不到不回退、建成才提交、选路凭据不进回执。
+
+- **模式决定的参数不能同时传**：`agent_kind`、`model`、`effort`、`provider_device_id`（旧名 `agent_device_id`）与
+  `model_group_id` 同传即 `INVALID_ARGS`，什么都不建、不选路；`fast`、标题、项目、执行目录、worktree 照常。
+  `fast` 不传时按原有规则继承来源任务（选中的模型不支持就关掉）。错误码沿用本工具一贯的 `INVALID_ARGS`，与 Worker 工具的
+  `INVALID_PARAMS` 是同一种失败。
+- **只用于新建**：传了 `target_session_id`（含 `deviceId::sessionId`）即 `INVALID_ARGS`，不静默忽略——已有任务的模型不因模式改变，
+  忽略会让调用方以为用上了模式。
+- **只在这台电脑新建**：`device` 指向另一台电脑时返回 `INVALID_ARGS`，不改用本机的模式替那台选路（模式里的「这台电脑」属于
+  记录它的电脑）。来源任务是 SSH 任务时同样 `INVALID_ARGS`。用另一台电脑的模式在那台开新任务，等远程新任务读取那台模型组的
+  能力接入后再在这里补规则。没有来源任务（宿主自己发起的新建，如定时脚本任务）不提供模式。
+- **任务在哪**：任务、项目与文件仍按原有规则在这台电脑；只有 Agent 在选中来源的位置运行（另一台电脑或分享来的来源与
+  `provider_device_id` 同一条路径，照常经过目录、模型与预算校验）。选中的来源过不了这些校验时按原有错误返回
+  （如 `PROVIDER_ROUTE_UNAVAILABLE`），不换模式里的下一个来源。
+- **图片**：本工具不带图片，图片例外不生效；时段例外照常。
+- **选不到就不建**：模式已删除 → `MODEL_GROUP_NOT_FOUND`；此刻没有能用的来源（附各原因的个数），或调用方是共享中的任务 →
+  `MODEL_GROUP_UNAVAILABLE`。与界面新任务「沿用原来的模型」不同：调用方没有选过别的模型，不回退到来源任务的模型。
+- **只有建成才算这次选择**：任务建好且首条消息被接受（直接发出或进入它的输入队列）后才推进「轮流」、记进「最近的选择」；
+  冲突、选不到、后续校验失败、worktree 失败、创建或首条消息失败都不提交。
+- **之后不换**：任务建好后不会因模式再换来源，也不挂撞配额时的提议（§6.1 已把伙伴等非本机直接开的任务排除在外），不登记
+  `model-group-session-bindings.json`。
+- **让调用方看得见**：成功回执带 `model_group`（模式 id 与名称、选中的模型名、来源名、`provider_device_id`、原因、起作用的例外）
+  和实际的 `agent_kind` / `model` / `provider_id` / `effort`；不传 `model_group_id` 时一切照旧。第一条消息下方的说明卡（§5）
+  目前只在界面新任务显示，本入口不写。
+
+实现：`main/maker-ipc/sendToSessionModelGroup.ts`（冲突与选路）、`sendToSessionExecutionConfig.ts` 的 `pinnedProviderId`
+（固定来源与推理强度口径）、`register.ts` 的 `sendToSessionInternal` create 分支（选路与落定后提交）、
+`main/mcp-integrations/mcp-providers.ts`（另一台电脑新建时拒绝）；工具 `packages/lizi-mcps/src/xdt-helper/send_to_session.ts`。
 
 实现：`main/maker-ipc/orcaWorkerModelGroup.ts`（冲突与选路）、`orcaWorkerCreationService.ts` 的
 `createModelGroupWorkerInTeam`、`orcaLifecycleService.ts`（落定后提交）、`main/model-groups/runtime.ts`（与界面共用的

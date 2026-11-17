@@ -99,6 +99,7 @@ function routeProviderFor(params: {
   sourceProviderId?: string | null;
   routeChanged: boolean;
   providerRouting: OrcaWorkerProviderRoutingContext;
+  pinnedProviderId?: string;
 }):
   | {
       ok: true;
@@ -117,6 +118,20 @@ function routeProviderFor(params: {
   const offering = providers.filter((provider) => provider.models.includes(model));
   if (offering.length === 0) {
     return { ok: false, message: providerRouteUnavailableMessage(agentKind, model) };
+  }
+
+  // 模型组选中的来源：只认这个供应商连接，不换成同模型的默认来源(两个账号都有这个模型时正是要分开用)。
+  if (params.pinnedProviderId !== undefined) {
+    const pinned = offering.find((provider) => provider.id === params.pinnedProviderId);
+    if (!pinned) {
+      return {
+        ok: false,
+        message:
+          `供应商 "${params.pinnedProviderId}" 当前未连接，或不再为 ${agentKind} 提供模型 "${model}"。`
+          + '模型组选中的来源此刻用不了，没有换成别的来源。',
+      };
+    }
+    return { ok: true, provider: pinned, providerId: pinned.id };
   }
 
   if (!routeChanged && sourceProviderId) {
@@ -162,8 +177,14 @@ export function resolveSendToSessionExecutionConfig(params: {
   hasCindyAiApiKey: boolean;
   /** 新任务的 Agent 换了电脑：来源的 provider 不在那台，按目标电脑重新解析；缺模型算没有路由。 */
   locationChanged?: boolean;
+  /**
+   * 模型组选中的供应商连接(model-groups.md §6.3)：来源固定为它；推理强度按模式——overrides.effort 只是偏好，
+   * 模型不支持时退到默认档，没带就用模型默认档，不继承来源任务的档位。
+   */
+  pinnedProviderId?: string;
 }): SendToSessionExecutionConfigResult {
   const { source, overrides } = params;
+  const pinned = params.pinnedProviderId !== undefined;
   const agentKind = overrides.agentKind ?? source.agentKind;
   const model = overrides.model ?? source.model;
   const modelCapabilities = params.availableModels.find((candidate) => candidate.id === model);
@@ -178,10 +199,13 @@ export function resolveSendToSessionExecutionConfig(params: {
     };
   }
 
-  const routeChanged = params.locationChanged === true
+  const routeChanged = pinned
+    || params.locationChanged === true
     || agentKind !== source.agentKind
     || model !== source.model;
-  const budgetRouteProviderId = !routeChanged && source.providerId
+  const budgetRouteProviderId = pinned
+    ? params.pinnedProviderId
+    : !routeChanged && source.providerId
     ? source.providerId
     : params.providerRouting.resolveDefaultProviderIdForModel(agentKind, model);
   if (
@@ -201,6 +225,7 @@ export function resolveSendToSessionExecutionConfig(params: {
     sourceProviderId: source.providerId,
     routeChanged,
     providerRouting: params.providerRouting,
+    ...(pinned ? { pinnedProviderId: params.pinnedProviderId } : {}),
   });
   if (!route.ok) {
     return {
@@ -221,8 +246,8 @@ export function resolveSendToSessionExecutionConfig(params: {
     : modelCapabilities;
   const normalizedEffort = normalizeEffort({
     model: effortCapabilities,
-    effort: overrides.effort ?? source.effort,
-    explicit: overrides.effort !== undefined,
+    effort: pinned ? overrides.effort : overrides.effort ?? source.effort,
+    explicit: overrides.effort !== undefined && !pinned,
   });
   if (!normalizedEffort.ok) {
     return {
@@ -288,6 +313,8 @@ export async function resolveSendToSessionCreateRoute(
     /** undefined = 继承来源；null = 本机；字符串 = 那台电脑或分享。SSH 来源不接受显式位置。 */
     requestedAgentDeviceId?: string | null;
     overrides?: SendToSessionExecutionOverrides;
+    /** 模型组选中的供应商连接；语义见 resolveSendToSessionExecutionConfig。 */
+    pinnedProviderId?: string;
   },
   deps: {
     isSelfDeviceId: (deviceId: string) => boolean;
@@ -327,7 +354,9 @@ export async function resolveSendToSessionCreateRoute(
     || overrides.model !== undefined
     || overrides.effort !== undefined
     || overrides.fastMode !== undefined;
-  if (!locationChanged && !hasOverrides) return { ok: true, agentDeviceId, config: params.source };
+  if (!locationChanged && !hasOverrides && params.pinnedProviderId === undefined) {
+    return { ok: true, agentDeviceId, config: params.source };
+  }
 
   const agentKind = overrides.agentKind ?? params.source.agentKind;
   let routing: SendToSessionRoutingSnapshot;
@@ -353,6 +382,7 @@ export async function resolveSendToSessionCreateRoute(
     overrides,
     ...routing,
     locationChanged,
+    ...(params.pinnedProviderId !== undefined ? { pinnedProviderId: params.pinnedProviderId } : {}),
   });
   return resolved.ok ? { ok: true, agentDeviceId, config: resolved.config } : resolved;
 }
