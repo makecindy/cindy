@@ -1,6 +1,7 @@
 # 开发环境与依赖准备
 
-> **读取时机**：首次克隆、创建新 worktree、缺少依赖或安装命令失败时
+> **读取时机**：首次克隆、创建新 worktree、缺少依赖或安装命令失败时，或修改依赖安装配置之前
+> **适用路径**：`pnpm-workspace.yaml`、`.npmrc`、`.nvmrc`、`scripts/ensure-deps.mjs`
 
 ## 环境要求
 

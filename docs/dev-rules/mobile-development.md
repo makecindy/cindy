@@ -1,6 +1,9 @@
 # Mobile 开发、模拟器与验证
 
-> **读取时机**：开发、启动、调试或验证 `apps/mobile` 及其共享能力时
+> **读取时机**：开发、启动、调试或验证 `apps/mobile` 及其共享能力时；修改原生配置、原生依赖、
+> config plugin 或原生模块（`app.json`、`app.config.js`、`eas.json`、`package.json`、
+> `plugins/`、`modules/` 等会进入 runtime fingerprint 的输入）之前，先读「冷更边界」
+> **适用路径**：`apps/mobile/**`
 
 本文是 Mobile 日常开发命令及其使用条件的权威说明；可执行脚本以当前 checkout 的根
 `package.json` 与 `apps/mobile/package.json` 为代码事实源。
