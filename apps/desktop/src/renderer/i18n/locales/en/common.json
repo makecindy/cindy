@@ -6638,6 +6638,7 @@
           "guide": {
             "usageLabel": "How to Use It",
             "usageBody": "Post on X mentioning @askmycindy and the task is dispatched to this device to run here; the result comes back as a reply.",
+            "usageBodyOnDevice": "Post on X mentioning @askmycindy and the task is dispatched to {{device}} to run there; the result comes back as a reply.",
             "riskLabel": "Replies Are Public",
             "riskPublicBody": "Replies are public and visible to anyone. Use this for public questions and problems, not for private matters that could expose personal information.",
             "riskWorkdirBody": "Every X task runs in the default project set in X connection settings. The Agent can read and write files there, and its conclusion is posted publicly — if that project points at a private repository, file contents may become public with it.",

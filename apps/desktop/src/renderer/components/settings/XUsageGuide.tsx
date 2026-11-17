@@ -76,7 +76,11 @@ function GuideBody({ children }: { children: React.ReactNode }) {
   return <span className="text-12 leading-[1.45] text-[var(--text-tertiary)]">{children}</span>;
 }
 
-export function XUsageGuide({ companion = false }: { companion?: boolean } = {}) {
+/**
+ * `deviceName` is set when the X account runs on another computer (a teammate's channel page for a
+ * teammate there): the questions are dispatched to that computer, not to "this device".
+ */
+export function XUsageGuide({ companion = false, deviceName }: { companion?: boolean; deviceName?: string } = {}) {
   const { t } = useTranslation();
   const k = (name: string) => `settings.remoteControl.hook.x.guide.${name}`;
 
@@ -87,7 +91,7 @@ export function XUsageGuide({ companion = false }: { companion?: boolean } = {})
     // DESIGN.md §14.1 的判据就是「用户会不会想复制它」: 会 → 可选。
     <div className="flex select-text flex-col gap-3">
       <GuideGroup label={t(k('usageLabel'))}>
-        <GuideBody>{t(k('usageBody'))}</GuideBody>
+        <GuideBody>{deviceName ? t(k('usageBodyOnDevice'), { device: deviceName }) : t(k('usageBody'))}</GuideBody>
       </GuideGroup>
 
       {/* 风险组:沿用仓内既有的 warning callout 形态(见 ModelPriceOverrideDialog 的

@@ -6595,6 +6595,7 @@
           "guide": {
             "usageLabel": "用法",
             "usageBody": "于 X 上发一则推文 @askmycindy，差事即派至此台设备运行，结论以回帖覆君。",
+            "usageBodyOnDevice": "于 X 上发一则推文 @askmycindy，差事即派至「{{device}}」运行，结论以回帖覆君。",
             "riskLabel": "回帖乃公开",
             "riskPublicBody": "回复乃公开推文，人人可见。宜于公开提问、解决难题；不宜处理私事，免泄隐私。",
             "riskWorkdirBody": "X 差事皆落于 X 连接设置中之常例案，Agent 能读写其中之卷，而结论将公开回帖 —— 若常例案指向私密仓库，卷中内容或随之公开，慎之。",

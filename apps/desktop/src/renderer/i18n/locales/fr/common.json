@@ -6705,6 +6705,7 @@
           "guide": {
             "usageLabel": "Comment l'utiliser",
             "usageBody": "Publiez sur X en mentionnant @askmycindy : la tâche est transmise à cet appareil pour y être exécutée, et le résultat revient sous forme de réponse.",
+            "usageBodyOnDevice": "Publiez sur X en mentionnant @askmycindy : la tâche est transmise à {{device}} pour y être exécutée, et le résultat revient sous forme de réponse.",
             "riskLabel": "Les réponses sont publiques",
             "riskPublicBody": "Les réponses sont publiques et visibles par tous. Utilisez cette fonction pour des questions et problèmes publics, pas pour des sujets privés qui pourraient exposer votre vie privée.",
             "riskWorkdirBody": "Chaque tâche X s'exécute dans le projet par défaut défini dans les paramètres de connexion X. L'Agent peut y lire et écrire des fichiers, et sa conclusion est rendue publique : si ce projet pointe vers un dépôt privé, le contenu des fichiers peut le devenir aussi.",
