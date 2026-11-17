@@ -7,6 +7,30 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Unit: native catalog discovery/mutation through the real host-tool registry.
+// Existing runtime controls lack native method argument and stdio boundaries.
+it('exposes native catalogs on demand and rejects process MCP configuration', async () => {
+  const call = vi.fn(async () => ({ ok: true as const, engine: 'pi', result: ['read'] }));
+  const server = createXdtHelperMcpServer({ sessionToolCatalog: { call } }, {
+    agentKind: 'pi', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'catalog', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  try {
+    expect(call).not.toHaveBeenCalled();
+    expect(server.hostTools.describe('get_session_tool_catalog')).toMatchObject({ category: 'control' });
+    expect(parsePayload(await server.hostTools.call('get_session_tool_catalog', { method: 'getActiveTools' })))
+      .toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+    expect(parsePayload(await server.hostTools.call('set_session_tool_catalog', {
+      session_id: 'target', method: 'registerMcpServer', args: ['external', { url: 'http://localhost/mcp', command: 'node' }],
+    }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).not.toHaveBeenCalled();
+    expect(parsePayload(await server.hostTools.call('set_session_tool_catalog', {
+      session_id: 'target', method: 'setActiveTools', args: [['read']],
+    }))).toMatchObject({ ok: true, engine: 'pi', result: ['read'] });
+    expect(call).toHaveBeenCalledWith(expect.objectContaining({ hostCaller: expect.objectContaining({ pluginId: 'catalog' }) }),
+      { sessionId: 'target', method: 'setActiveTools', args: [['read']] });
+  } finally { await server.close(); }
+});
+
 // Unit / #10794 permission boundary: the real registry must not expose the raw
 // account view or provider directory to a plugin without a task. The original
 // plugin read case allowed both. Minimal input is subscriptionAccounts/read.
