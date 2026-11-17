@@ -2,16 +2,19 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件记录对应能力的增量协议与旧端降级。
 
-settings 增量注册 `get_provider_usage_history` / `get_provider_group`，Agent/插件共用原 usage-history 与组 get 处理器，
+现有 `usage` 组增量注册 `get_provider_usage_history` / `get_provider_group`，Agent/插件共用原 usage-history 与组 get 处理器，
 异机复用现有同账号 manage-share / manage-group；无新 action、channel、额度 DTO、缓存或服务端请求种类。
-原 list_model_providers 与 configure_model_provider 的 subscriptionAccounts/read 允许经核验的插件无 Session 读取，
-保留原账号视图中的邮箱/账号名、账号目录与摘要等非凭证信息，具体字段见作者手册；不返回密钥，不放宽相邻写动作。
+不声明 `usage` 的旧插件权限不变，扩权更新走既有安装确认；仅有 `settings` 不授予这些读取。
+`list_model_providers` 与 `configure_model_provider` 的 `subscriptionAccounts/read` 仍要求原本机任务上下文，
+插件订阅额度只经 `get_subscription_usage` 的既有字段白名单投影，不返回登录邮箱、CLI 目录、内部账号指纹或凭证。
+历史视图包含成员/分享标识、日期、模型、token、估算费用及中转设备名；组视图包含设备/供应商显示名、可见 ownerName、
+运行与组配置，原本可见的 reshare 还含受邀者显示名/头像/批准状态，保留分享来源的匿名边界；具体字段见作者手册。
 原截断标记 coverageStart、当天累积、缺失/未知和错误语义保持，旧端不认识工具/命令时明确不支持，不退回本机/零数据。
 插件 Host 调用签名、manifest、receipt、自建中转透传及原 UI/Agent 命令保持，不涉及迁移。
 
 `usage`（2026-11-16）为独立只读组，经原 `cindy.host.call` / `host-tool-request` 调用
 `cindy_helper.get_subscription_usage({providerId?})`。不改已有消息签名、receipt 或数据存储布局；
-不声明该组的旧插件权限不变，扩权更新走既有安装确认。只读执行电脑当前 owner 的本机订阅账号，
+不声明该组的旧插件权限不变，扩权更新走既有安装确认。该额度工具只读执行电脑当前 owner 的本机订阅账号，
 账号、套餐、窗口和时间通过字段白名单投影，不返回原生目录、邮箱、身份摘要或凭证。
 旧宿主将新组保留为未知声明且不提供工具，调用者须按不支持处理；未接入额度服务的 Node Host
 同样不宣称可用。未新增 Device Link channel / payload；官方和自建中转仍透传既有插件消息，

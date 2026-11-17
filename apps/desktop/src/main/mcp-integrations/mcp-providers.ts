@@ -22,10 +22,10 @@ import { manageAppSettings } from '../app-settings/sections.js';
 import { importThemePackageFromTask } from '../local-themes/agent.js';
 import { manageAppModels } from '../app-settings/models.js';
 import { runProviderReadRequest } from './providerReadTools.js';
+import { runProviderSharingRequest } from './providerSharingTools.js';
 import { executeProviderShareManagementCommand } from '../device-link/providerShareRuntime.js';
 import { createProviderGroupCommandDeps, executeProviderGroupCommand } from '../provider-group/ipc.js';
 import { invokeProviderManagement } from '../provider-group/managementClient.js';
-import { runProviderSharingRequest } from './providerSharingTools.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { classifyOrigin } from '../input-handoff/originPolicy.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
@@ -59,7 +59,6 @@ import { and, eq, isNull } from 'drizzle-orm';
 
 import {
   createLiziMcpProviders,
-  isReadOnlyAppModelsRequest,
   resolveLiziMcpSessionContext,
   setSessionPathAuthorizer,
   type LiziMcpProvider,
@@ -1351,15 +1350,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
       modelSettings: {
         call: ({ callerSessionId, ...input }, signal) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
-          const readOnly = isReadOnlyAppModelsRequest(input);
-          if (!callerSessionId && !readOnly) throw new Error('NO_SESSION_CONTEXT');
           const guard = async () => {
             await assertCurrent();
-            if (!readOnly && (input.operation === 'set' || input.operation === 'provider' || input.operation === 'connection' ||
-                (input.operation === 'mediaGuide' && input.change.action === 'save'))) await assertTaskActionCurrent();
+            if (input.operation === 'set' || input.operation === 'provider' || input.operation === 'connection' ||
+                (input.operation === 'mediaGuide' && input.change.action === 'save')) await assertTaskActionCurrent();
           };
           return manageAppModels(input, guard, async (name, endpoints, lifetime) => {
-            if (!callerSessionId) throw new Error('NO_SESSION_CONTEXT');
             await guard();
             if (await isInputHandoffDisabledForSession(callerSessionId)) throw new Error('DISABLED_BY_OWNER');
             await guard();
