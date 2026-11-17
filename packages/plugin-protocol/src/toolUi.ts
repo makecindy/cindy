@@ -9,6 +9,8 @@ export interface GhostUiResource {
   file: string;
   csp?: { connectDomains?: string[]; resourceDomains?: string[]; frameDomains?: string[]; baseUriDomains?: string[] };
   prefersBorder?: boolean;
+  /** Only the Host button; does not limit App requestDisplayMode. */
+  hostFullscreenButton?: boolean;
   domain?: string;
   permissions?: { camera?: Record<string, never>; microphone?: Record<string, never>; geolocation?: Record<string, never>; clipboardWrite?: Record<string, never> };
 }
@@ -37,6 +39,7 @@ export function parseGhostUi(raw: unknown, tools: readonly { name: string }[], h
         resource.uri.length <= 5 || /[\s\x00-\x1f\x7f]/.test(resource.uri) || uris.has(resource.uri) ||
         !safePath(resource.file) || typeof resource.file !== 'string' || !/\.html?$/i.test(resource.file) ||
         (resource.prefersBorder !== undefined && typeof resource.prefersBorder !== 'boolean') ||
+        (resource.hostFullscreenButton !== undefined && typeof resource.hostFullscreenButton !== 'boolean') ||
         (resource.domain !== undefined && typeof resource.domain !== 'string')) return null;
     uris.add(resource.uri);
     if (resource.permissions !== undefined && (!object(resource.permissions) ||

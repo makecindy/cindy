@@ -188,23 +188,8 @@ const RECONCILE_BACKOFF_MAX_MS = 120_000;
 /** 主窗口无人输入超过此时长则停周期对账；连接与 push 进度仍在。 */
 export const REMOTE_RECONCILE_USER_IDLE_MS = 5 * 60_000;
 
-/**
- * 设备目录读取失败或只拿到过期快照后的补读阶梯（±15% 抖动，封顶后保持该间隔）。
- * 只在链路在线、上一次目录不是新鲜结果时运行；拿到新鲜目录或链路离线即停，
- * 不会因为账号里存在长期离线的设备而变成常驻轮询。
- */
-const DIRECTORY_RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000, 60_000] as const;
 /** 同一台设备因「链路建立」等可达证据触发目录重读的最小间隔。 */
 const DIRECTORY_RECOVER_MIN_INTERVAL_MS = 30_000;
-
-export function nextDirectoryRetryDelay(
-  attempt: number,
-  jitter: (delayMs: number) => number = (delay) => Math.round(delay * (0.85 + Math.random() * 0.3)),
-): number {
-  const index = Math.min(Math.max(0, attempt), DIRECTORY_RETRY_DELAYS_MS.length - 1);
-  const base = DIRECTORY_RETRY_DELAYS_MS[index];
-  return Math.max(0, jitter(base));
-}
 
 /**
  * 主窗口周期对账闸：页面不可见或用户离开电脑后停拉全量列表。
@@ -490,6 +475,48 @@ export function useDeviceLinkRemoteProjects(
      */
     const cacheHydrationBlocked = new Set<string>();
     let directoryGeneration = 0;
+    /**
+     * 设备目录重读退避:relay 在线但目录仍读不到(有界旧快照 / REST 失败)时,按 5 秒起步、
+     * 翻倍、最长 60 秒重读一次,直到拿到新目录。relay 离线 / 卸载即取消。
+     * 旧快照里的 offline 行不是 presence 证据(见 reseed),少了这条退避,一次断网重连
+     * 就可能把在线设备永久移出同步名单,只能重启 Cindy(#9342)。
+     */
+    const DIRECTORY_RETRY_BASE_MS = 5_000;
+    const DIRECTORY_RETRY_MAX_MS = 60_000;
+    /**
+     * setTimeout 的延时上限:32 位有符号毫秒。超过它的延时会被截断成「立刻触发」——
+     * 服务端给一个超大的 Retry-After 时,渲染进程会变成紧密的 listDevices 循环。
+     */
+    const MAX_TIMER_DELAY_MS = 2_147_483_647;
+    let directoryRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    let directoryRetryDelayMs = DIRECTORY_RETRY_BASE_MS;
+    /**
+     * 服务端限流给出的重试期限(墙钟 ms):目录读被 429 拒过时,下一次重读要等到那之后。
+     * 没有它,每个挂载窗口都会在限流窗口里继续追问,延长限流并放大共享目录压力。
+     */
+    let directoryRetryDeadlineMs = 0;
+    /**
+     * 目录被**权威作废**(main 侧确认 401/403 后广播):此时不再按 5–60 秒的节奏一直追问。
+     * 每问一次都被服务端再拒一次、再广播一次作废,读永远拿不到结果,只是把请求放大 ——
+     * 而 relay 明明在线,看起来像「一直在转」。等真正的状态变化(relay 重连 / 重新登录)
+     * 再读一轮。
+     */
+    let directoryInvalidated = false;
+    /**
+     * main 侧 `rethrowServerError`(device-link/ipc.ts)把设备目录的**终态** 4xx 映射成这几个码:
+     * 404→NOT_FOUND、409→ALREADY_EXISTS、400→INVALID_PARAMS。终态失败重问不会变好 —— 与
+     * main 广播的 401/403 作废(`onDeviceDirectoryInvalidated`)同一档:停掉目录重读,等真正的
+     * 状态变化(relay 重连 / 重新登录)再读一轮,不再自己按 5–60 秒的节奏一直追问
+     * (Codex review #9360「Stop retrying terminal directory responses」)。
+     *
+     * 暂时性失败一律照旧退避:503/0→DEVICE_LINK_UNAVAILABLE,429、超时、断网与 401/403 的
+     * 迟到错误落 INTERNAL —— 429 还要让过 retryAtMs,401/403 由作废推送收口。
+     */
+    const TERMINAL_DIRECTORY_IPC_CODES: ReadonlySet<string> = new Set([
+      'NOT_FOUND', 'ALREADY_EXISTS', 'INVALID_PARAMS',
+    ]);
+    const isTerminalDirectoryFailure = (err: unknown): boolean =>
+      TERMINAL_DIRECTORY_IPC_CODES.has(extractIpcError(err)?.code ?? '');
     /** relay 在线时才跑 anti-entropy；初始状态未知时保守暂停，避免离线失败重试。 */
     let linkOnline: boolean | null = null;
     let directDataDevices = new Set<string>();
@@ -550,18 +577,8 @@ export function useDeviceLinkRemoteProjects(
      * 不补订就会一直「列表可见、运行状态全无」,直到下一次重连 / 熔断恢复重跑 bootstrap。
      */
     const sessionsSubscribeRetry = new Set<string>();
-    /**
-     * 上一次设备目录读取是否拿到了新鲜结果。失败或过期快照都不能证明「设备离线」;
-     * 链路在线时按 DIRECTORY_RETRY_DELAYS_MS 补读,拿到新鲜结果即停。
-     */
-    let directoryFresh = false;
-    let directoryRetryTimer: ReturnType<typeof setTimeout> | null = null;
-    let directoryRetryAttempt = 0;
-    const clearDirectoryRetry = (resetAttempts: boolean): void => {
-      if (directoryRetryTimer) clearTimeout(directoryRetryTimer);
-      directoryRetryTimer = null;
-      if (resetAttempts) directoryRetryAttempt = 0;
-    };
+    /** 有待恢复设备时启动恢复巡检(实现见下方「恢复巡检」;在那里赋值)。 */
+    let ensureRecoveryTimer: () => void = () => undefined;
     /** 按设备记录最近一次因可达证据触发的目录重读时刻(节流用)。 */
     const directoryRecoverAt = new Map<string, number>();
     /** 该设备的分片是否已由一次成功快照确认在线(与横幅 / 历史视图的 host-online 判据同源)。 */
@@ -768,6 +785,8 @@ export function useDeviceLinkRemoteProjects(
           } while (canBootstrap(deviceId, task.lifecycleEpoch) && task.rerun);
         } finally {
           if (bootstrapTasks.get(deviceId) === task) bootstrapTasks.delete(deviceId);
+          // 首拉结束仍未确认在线(被作废 / 失败 / 中途取消):交给恢复巡检补齐。
+          if (!disposed && eligible.has(deviceId) && !isDeviceConnected(deviceId)) ensureRecoveryTimer();
         }
       })();
       bootstrapTasks.set(deviceId, task);
@@ -848,34 +867,62 @@ export function useDeviceLinkRemoteProjects(
       }
     };
 
-    /** 有设备分片还没被快照确认在线时,新鲜目录才可能改变结论;否则不必补读。 */
-    const directoryRecoveryNeeded = (): boolean =>
-      remoteProjectsStore.getAllDeviceIds().some((id) => !isSharedTaskPeer(id) && !isDeviceConnected(id))
-      || [...eligible.keys()].some((id) => !isDeviceConnected(id));
     /**
-     * 目录读取失败或只拿到过期快照:链路在线时有界补读,直到拿到新鲜结果。
-     * 链路不在线时不排(上线边沿本来就会 reseed);同一时刻只排一个。
-     */
-    const scheduleDirectoryRetry = (): void => {
-      if (disposed || linkOnline !== true || directoryRetryTimer || !directoryRecoveryNeeded()) return;
-      const delay = nextDirectoryRetryDelay(directoryRetryAttempt);
-      directoryRetryAttempt += 1;
-      log.debug(`device directory retry scheduled attempt=${directoryRetryAttempt} delayMs=${delay}`);
-      directoryRetryTimer = setTimeout(() => {
-        directoryRetryTimer = null;
-        if (disposed || linkOnline !== true || directoryFresh || !directoryRecoveryNeeded()) return;
-        // 已有读取在途:它失败或过期时会自己重新排补读,这里不叠加第二个请求。
-        if (directoryReadInFlight) return;
-        void reseed();
-      }, delay);
-    };
-
-    /**
-     * 当前在途的目录读取。恢复入口(补读计时器、可达证据)只复用它,不另发请求:
+     * 当前在途的目录读取。恢复入口(重读计时器、可达证据)只复用它,不另发请求:
      * main 只合并 300ms 内的调用,唤醒后多台设备先后恢复时否则会各读一遍整份目录。
      * 上线边沿、控制目标变化等明确的刷新仍直接 reseed。
      */
     let directoryReadInFlight: Promise<void> | null = null;
+
+    const cancelDirectoryRetry = (): void => {
+      if (directoryRetryTimer) clearTimeout(directoryRetryTimer);
+      directoryRetryTimer = null;
+    };
+    /** 取消重读并把退避复位:下一轮从头 5 秒起。 */
+    const stopDirectoryRetry = (): void => {
+      cancelDirectoryRetry();
+      directoryRetryDelayMs = DIRECTORY_RETRY_BASE_MS;
+    };
+    /**
+     * 目录读不到时的有界重读。一次只挂一个计时器(不叠加),relay 不在线不重读。
+     * 旧快照最多 30 分钟有界,过期后连旧快照都没有 —— 没有这条退避,重连后的视图永远
+     * 停在「目录不可用」上,直到重启(#9342)。
+     *
+     * 只在**已知在线**时起循环:状态还未知(`getState` 拒绝 / 仍挂起、也没有状态 push)
+     * 就起的话,每个挂载窗口都会对着一个可能已经停掉的 relay 每 5–60 秒发一次物理读,
+     * 而且没有任何事件保证把它停掉。恢复挂在状态转换上 —— push 到 `online` 时
+     * `onStatusChanged` 本来就会再 reseed 一轮(Codex review #9360「Pause directory
+     * retries until relay status is known」)。
+     */
+    const scheduleDirectoryRetry = (): void => {
+      if (disposed || directoryRetryTimer) return;
+      if (linkOnline !== true) return;
+      const delay = directoryRetryDelayMs;
+      directoryRetryDelayMs = Math.min(DIRECTORY_RETRY_MAX_MS, directoryRetryDelayMs * 2);
+      // 服务端明确说了多久之后再问(429 的 Retry-After):退避要让过那个期限。
+      const deadline = Math.max(0, directoryRetryDeadlineMs - Date.now());
+      const wait = Math.max(delay, deadline);
+      // setTimeout 的延时是 32 位有符号毫秒:超过 2^31-1 会被截断成「立刻触发」——
+      // 渲染进程里就是一个紧密的 listDevices 循环(main 还会同步返回旧快照)。
+      // 拆成最大块,每块结束后按**墙上时钟**重新算还差多久。
+      const armDirectoryRetry = (remainingMs: number): void => {
+        const chunk = Math.min(Math.max(0, remainingMs), MAX_TIMER_DELAY_MS);
+        directoryRetryTimer = setTimeout(() => {
+          directoryRetryTimer = null;
+          if (disposed || linkOnline !== true) return;
+          const left = Math.max(0, directoryRetryDeadlineMs - Date.now());
+          // 还有整块没走完(只有超大的服务端期限才会走到这里):接着等剩下的。
+          if (left > 0 && chunk >= MAX_TIMER_DELAY_MS) {
+            armDirectoryRetry(left);
+            return;
+          }
+          // 已有读取在途:它失败或过期时会自己重新排重读,这里不叠加第二个请求。
+          if (directoryReadInFlight) return;
+          void reseed();
+        }, chunk);
+      };
+      armDirectoryRetry(wait);
+    };
 
     /** 全量重播(初始 + WS 重连):listDevices 带 isSelf,权威。 */
     const reseed = (): Promise<void> => {
@@ -890,19 +937,31 @@ export function useDeviceLinkRemoteProjects(
       const generation = directoryGeneration;
       return window.electronAPI.deviceLink
         .listDevices()
-        .then(({ devices, stale }) => {
+        .then(({ devices, stale, partial, retryAtMs }) => {
           if (disposed || generation !== directoryGeneration) return;
-          directoryFresh = !stale;
-          if (stale) scheduleDirectoryRetry();
-          else clearDirectoryRetry(true);
+          // 服务端限流给了重试期限:记住它,退避要让过那个期限。
+          if (typeof retryAtMs === 'number' && Number.isFinite(retryAtMs)) {
+            directoryRetryDeadlineMs = Math.max(directoryRetryDeadlineMs, retryAtMs);
+          }
           let staleDemotionsIgnored = 0;
           for (const d of devices) {
-            // 过期快照(目录请求失败后的有界回退)不是新的在线证据:当前判定为可控的设备
-            // 不因它被降级 —— 未知不等于离线(与手机端 mergeDeviceViewsForStaleDirectory 同口径)。
-            // 真实的离线 / 关被控由实时 presence、链路事件或下一次新鲜目录给出。
-            // 只读冷缓存种入、从未确认在线的分片仍按原语义收为离线,不会一直停在「检测中」。
-            if (stale && !d.isSelf && eligible.has(d.deviceId) && !(d.online && d.remoteControlEnabled)) {
-              staleDemotionsIgnored += 1;
+            // 有界旧快照里的 offline 行不是 presence 证据:主进程在 relay 掉线时清掉了
+            // presence 视图,而重连后的目录补齐可能还没成功,旧快照于是把每台设备都投影成
+            // offline。拿它当离线判据会把在线设备踢出同步名单,而 presence 是增量流,
+            // 一直在线的设备不会再发 presence —— 没有任何事件会把它加回来,只能重启
+            // Cindy(#9342)。旧快照里 online 的行是经数据通道验证的,照常使用。
+            if (stale && !d.online) {
+              // 已合格的设备保持同步资格:旧快照证明不了缺席,更证明不了此刻不在线。
+              if (eligible.has(d.deviceId)) {
+                staleDemotionsIgnored += 1;
+                continue;
+              }
+              // 但**尚未合格**的冷缓存设备不能永远停在「检测中」:缓存种入时标 connecting,
+              // 而宽限计时器只在 relay 不在线时才降级,relay 在线时就没人收口了。旧快照的
+              // offline 至少能证明此刻连不上 —— 收成离线(与这次修复前的呈现一致),
+              // 但不动它的同步资格(它本来就没有)。
+              remoteProjectsStore.markDeviceDisconnected(d.deviceId);
+              remoteProjectAliases.suspend(d.deviceId);
               continue;
             }
             applyDevice({
@@ -928,7 +987,11 @@ export function useDeviceLinkRemoteProjects(
           // 要收的那些分片(review: codex 指出上一轮的修复因此无效)。
           // A bounded last-known directory cannot prove absence. Keep cached
           // shards until a fresh REST answer or an explicit permission event.
-          if (!stale) {
+          // A **partial** directory (only one hybrid leg answered) cannot prove
+          // absence either: a device that lives only on the other leg would look
+          // gone (Codex review #9360「Keep one-leg hybrid results
+          // non-authoritative」).
+          if (!stale && !partial) {
             const authoritative = new Set(devices.map((d) => d.deviceId));
             for (const deviceId of remoteProjectsStore.getAllDeviceIds()) {
               // SharedTask shards are reconciled against membership, not the own-device directory.
@@ -946,12 +1009,31 @@ export function useDeviceLinkRemoteProjects(
               cacheHydrationBlocked.add(deviceId);
               clearCachedDevice(deviceId);
             }
+            // 拿到新目录:目录重读退避到此为止,下一次目录不可用时再从头开始。
+            stopDirectoryRetry();
+            // 新目录到手 = 服务端没有在限流,期限作废。
+            directoryRetryDeadlineMs = 0;
+          }
+          // 目录又拿到了(哪怕只有一条腿):上一轮的权威作废不再成立,退避可以重新开始。
+          if (!stale) directoryInvalidated = false;
+          if (stale || partial) {
+            // 只有旧快照或只有一条腿:按退避重读,直到目录恢复。
+            scheduleDirectoryRetry();
           }
         })
         .catch((err) => {
-          if (disposed || generation !== directoryGeneration) return;
-          directoryFresh = false;
           log.debug(`listDevices reseed failed code=${extractIpcError(err)?.code ?? 'unknown'}`);
+          // 目录被权威作废后不再追问(main 侧会广播 onDeviceDirectoryInvalidated):
+          // 每次追问都会被再拒一次、再广播一次,读永远拿不到结果。
+          if (directoryInvalidated) return;
+          // 终态失败(400/404/409 → INVALID_PARAMS / NOT_FOUND / ALREADY_EXISTS)与作废同一档:
+          // 重问不会变好,按 5–60 秒追问只是把请求放大,relay 却一直「在线」。等状态变化再读。
+          if (isTerminalDirectoryFailure(err)) {
+            directoryInvalidated = true;
+            stopDirectoryRetry();
+            directoryRetryDeadlineMs = 0;
+            return;
+          }
           scheduleDirectoryRetry();
         });
     };
@@ -1108,11 +1190,22 @@ export function useDeviceLinkRemoteProjects(
      * 与周期 anti-entropy 不同,它不看「5 分钟内有键鼠操作」:用户回到电脑前看到的
      * 应当已经是恢复好的状态,而不是一个要等他动一下才会去修的离线横幅。只对出问题的
      * 设备生效,健康设备不产生任何额外请求;独立侧栏仍随窗口可见性暂停。
+     *
+     * 计时器只在确有待恢复设备时运行,全部确认在线(或只剩链路离线 / 熔断中的设备,它们由
+     * 上线边沿 / 熔断恢复事件接手)即停;首拉未能确认在线、设备被标断开、窗口重新可见时再起。
      */
     const recoveryBackoff = createReconcileBackoff({ baseMs: RECONCILE_TICK_MS });
     const recoveryInFlight = new Set<string>();
-    const recoveryTimer = setInterval(() => {
-      if (disposed || !periodicReconcileActiveRef.current) return;
+    let recoveryTimer: ReturnType<typeof setInterval> | null = null;
+    const stopRecoveryTimer = (): void => {
+      if (recoveryTimer) clearInterval(recoveryTimer);
+      recoveryTimer = null;
+    };
+    const runRecoveryPass = (): void => {
+      if (disposed || !periodicReconcileActiveRef.current) {
+        stopRecoveryTimer();
+        return;
+      }
       const pending = new Set<string>();
       for (const [deviceId, name] of eligible) {
         if (isSharedTaskPeer(deviceId) || !peerReadable(deviceId) || unresponsiveDevicesStore.has(deviceId)) continue;
@@ -1129,7 +1222,17 @@ export function useDeviceLinkRemoteProjects(
         });
       }
       recoveryBackoff.retainOnly(pending);
-    }, RECONCILE_TICK_MS);
+      if (pending.size === 0) stopRecoveryTimer();
+    };
+    ensureRecoveryTimer = (): void => {
+      if (disposed || recoveryTimer || !periodicReconcileActiveRef.current) return;
+      recoveryTimer = setInterval(runRecoveryPass, RECONCILE_TICK_MS);
+    };
+    const wakePeriodicReconcile = periodicReconcile.wake;
+    wakeRemoteReconcileRef.current = () => {
+      wakePeriodicReconcile();
+      ensureRecoveryTimer();
+    };
 
     // 目标设备「无响应」熔断翻转(main 权威):镜像给 UI;恢复时重跑 subscribe+bootstrap
     // ——熔断 open 期间的订阅 / 首拉都被快速失败挡掉了,恢复必须主动补,不能等用户手点。
@@ -1286,8 +1389,10 @@ export function useDeviceLinkRemoteProjects(
         if (!(linkOnline && !wasOnline)) return;
       }
       if (p.status !== 'online') {
-        clearDirectoryRetry(true);
         clearAllArchivedSessionRetries();
+        // relay 不在线时目录重读没有意义(读到的必然是旧快照或失败),停掉退避。
+        // relay 回到 online 时那次 reseed 会按需重新起一条。
+        stopDirectoryRetry();
         for (const deviceId of eligible.keys()) if (!directDataDevices.has(deviceId)) remoteProjectAliases.suspend(deviceId);
         // relay 瞬时重连(connecting):保留远程会话镜像,只标记 disconnected,让 All Sessions
         // 不因网络抖动反复增删/重排。eligible 保留不动 → 重连 online 时下面的分支自动
@@ -1314,6 +1419,11 @@ export function useDeviceLinkRemoteProjects(
         // 重连,被拒状态应跨重连保留(正常在线期一直可见),故不清。登出 unmount 时的 clearAll 仍是兜底。
         if (p.status === 'stopped') {
           linkExpectedToConnect = false;
+          // 账号边界:上一个账号的限流期限不该被下一个账号继承(main 侧按 owner 记期限,
+          // 渲染侧同理)。否则新账号的第一次目录读失败时,退避会一直等到旧期限。
+          directoryRetryDeadlineMs = 0;
+          // 作废标记同样归账号边界:换账号后目录要重新读,不能带着上一轮的「已作废」。
+          directoryInvalidated = false;
           for (const deviceId of revokedDevicesStore.getSnapshot()) {
             if (!isSharedTaskPeer(deviceId)) revokedDevicesStore.clearRevoked(deviceId);
           }
@@ -1321,14 +1431,34 @@ export function useDeviceLinkRemoteProjects(
         return;
       }
       if (wasOnline) {
+        // 目录曾被权威作废:状态事件说明 relay 侧动过了(重连 / 重新登录),再读一轮 ——
+        // 还是被拒就再等下一次事件,不再自己按 5–60 秒的节奏追问。
+        if (directoryInvalidated) {
+          directoryInvalidated = false;
+          reseed();
+        }
         // 重复的 online(数据通道 / 兼容连接各自恢复)不重订健康设备,但仍未被快照确认
         // 在线的设备需要补齐 —— 否则一次被作废的首拉会让它一直停在离线。
         for (const deviceId of eligible.keys()) recoverDevice(deviceId, 'online');
         return;
       }
       clearConnectingGrace();
+      // 权威作废标记只对**当前这次连接**有效:重连说明 relay 侧动过了,再读一轮 ——
+      // 还是被拒就再等下一次作废事件(它会把标记重新立起来),不再自己按 5–60 秒追问。
+      // 不清的话:作废 → 重连(connecting → online)→ 首次目录读撞上瞬时失败 →
+      // catch 里看到旧标记就 return,恢复节奏被永久压住(always-online 的对端不会再有
+      // 状态事件,目录就一直停在「不可用」上)(Codex review #9360)。
+      directoryInvalidated = false;
       for (const [deviceId, name] of eligible) void subscribeAndBootstrap(deviceId, name);
       reseed();
+    });
+
+    // 目录被权威作废(main 侧确认 401/403):停掉目录重读,别再对着被拒的目录追问。
+    const offDirectoryInvalidated = window.electronAPI.deviceLink.onDeviceDirectoryInvalidated?.(() => {
+      directoryInvalidated = true;
+      stopDirectoryRetry();
+      // 上一轮的限流期限一并作废:下一次读按新的节奏来。
+      directoryRetryDeadlineMs = 0;
     });
 
     // 控制端:被某被控端撤销访问权限(收到其 link-close('revoked'))→ 立即移除 + 标记已撤销。
@@ -1419,11 +1549,11 @@ export function useDeviceLinkRemoteProjects(
     return () => {
       disposed = true;
       clearTimeout(initialDiscoveryTimer);
+      stopDirectoryRetry();
       for (const { timer } of scheduleEventRefreshes.values()) clearTimeout(timer);
       scheduleEventRefreshes.clear();
       clearConnectingGrace();
-      clearDirectoryRetry(true);
-      clearInterval(recoveryTimer);
+      stopRecoveryTimer();
       recoveryInFlight.clear();
       setRemoteReseedImpl(null);
       setRemoteSessionBootstrapRetryImpl(null);
@@ -1436,6 +1566,7 @@ export function useDeviceLinkRemoteProjects(
       offPresence();
       offRemotePush();
       offStatus();
+      offDirectoryInvalidated?.();
       offAccessRevoked();
       offPeerReset?.();
       offPeerReopened?.();

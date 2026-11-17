@@ -14998,6 +14998,7 @@
       "pluginDisabledUnnamed": "Automatische Prüfungen sind blockiert: Ein benötigtes Plugin ist deaktiviert. Nach dem Aktivieren laufen sie automatisch weiter.",
       "installPlugin": "Plugin installieren",
       "openPlugin": "Plugin öffnen",
+      "enablePlugin": "Plugin aktivieren",
       "dismissTitle": "Hinweis auf früheren Fehler schließen"
     },
     "worktreeRestoreBanner": {
@@ -21015,7 +21016,7 @@
     "loadFailed": "Die App konnte nicht geladen werden. Prüfe die Verbindung und lade sie neu.",
     "updateRequired": "Dieser Computer unterstützt MCP Apps noch nicht. Aktualisiere Cindy auf diesem Computer und versuch es erneut.",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "Gesendet von $t(mcpApps.appName) „{{name}}“",
     "serverId": "MCP-Server-ID: {{id}}",
     "exitFullscreen": "Vollbild beenden",
@@ -21029,7 +21030,19 @@
     "pluginCspRejected": "Die Seite hat eine nicht deklarierte Domain angefordert und wurde blockiert.",
     "filesOnExecutionComputer": "Dateiinhalt auf dem ausführenden Computer anzeigen",
     "awaitingApproval": "Wartet auf deine Genehmigung",
-    "pendingApprovals": "{{count}} ausstehende Genehmigungen"
+    "pendingApprovals": "{{count}} ausstehende Genehmigungen",
+    "source": {
+      "official": "Offiziell von Cindy",
+      "organization": "Organisation · {{namespace}}",
+      "market": "Plugin-Markt",
+      "third-party": "Drittanbieterquelle",
+      "local": "Lokal installiert",
+      "unknown": "Unbekannte Quelle"
+    },
+    "customMcp": "Benutzerdefiniertes MCP",
+    "sourceLabel": "Quelle",
+    "signatureLabel": "Signatur",
+    "fullscreen": "Vollbild"
   },
   "richAnswer": {
     "invalidImageReference": "Dieser Bildverweis ist ungültig.",

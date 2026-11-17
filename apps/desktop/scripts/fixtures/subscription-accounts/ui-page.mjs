@@ -7,6 +7,8 @@ export default {
   notCovered:
     'Real browser sign-in, credentials, native CLI processes or transport; fixture supplies account metadata only',
   cases: {
+    'official-plan-name': { about: 'The account row displays official Ultra while its machine plan remains pro' },
+    'official-plan-name-narrow': { about: 'The official Ultra account label at 320-pixel content width', viewport: { width: 320, height: 850 } },
     expiry: { about: 'Login expiry and the selected-account renewal action, before interaction' },
     'expiry-narrow': { about: 'Login expiry and renewal at 320-pixel content width, before interaction' },
     'identity-unknown': { about: 'A stale account row explains how to reconnect when the executor cannot confirm the original identity' },
@@ -74,8 +76,14 @@ export default {
     const codex = ui.case.startsWith('codex') || ui.case === 'narrow-weight';
     assert.equal(await page.getByTestId('subscription-account').first().getByRole('progressbar').count() > 0, true);
     if (!codex) {
-      await page.getByText('Max 20×', { exact: true }).waitFor();
+      await page.getByText(ui.case.startsWith('official-plan-name') ? 'Ultra' : 'Max 20×', { exact: true }).waitFor();
       await page.getByText('Max 5×', { exact: true }).waitFor();
+    }
+    if (ui.case.startsWith('official-plan-name')) {
+      const account = page.getByTestId('subscription-account').first();
+      assert.equal(await account.getByText('Pro', { exact: true }).count(), 0);
+      await ui.capture('official-plan-name');
+      return;
     }
     if (codex) {
       const rows = page.getByTestId('subscription-account');
