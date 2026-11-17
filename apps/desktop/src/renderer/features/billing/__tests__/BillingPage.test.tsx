@@ -449,6 +449,13 @@ describe('BillingPage remote catalog rendering', () => {
     });
   });
 
+  it('opens Usage history from the balance usage section', async () => {
+    routerState.search = 'tab=billing';
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.usage.viewUsage' }));
+    expect(routerState.search).toBe('tab=usage');
+  });
+
   it('shows the server ledger total and all three balance pools', async () => {
     render(<BillingPage />);
 

@@ -19575,7 +19575,8 @@
           "expired": "已过期",
           "voided": "已作废"
         }
-      }
+      },
+      "viewUsage": "查看用量"
     },
     "orders": {
       "title": "订单记录",

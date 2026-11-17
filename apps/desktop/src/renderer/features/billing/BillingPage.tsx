@@ -5,6 +5,7 @@ import {
   CircleDollarSign,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Copy,
   CreditCard,
   ExternalLink,
@@ -1152,6 +1153,18 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
           {(creditUsage || balance) && (
             <BillingGroup
               title={t('billing.usage.title')}
+              action={
+                <Button
+                  variant="secondary"
+                  tone="quiet"
+                  size="xs"
+                  compact
+                  onClick={() => setSearchParams(new URLSearchParams({ tab: 'usage' }))}
+                >
+                  {t('billing.usage.viewUsage')}
+                  <ChevronRight size={12} aria-hidden="true" />
+                </Button>
+              }
               description={
                 usageDetailsUnavailable ? t('billing.usage.detailsUnavailable') : undefined
               }
@@ -1580,12 +1593,14 @@ function BillingGroup({
   titleId,
   description,
   badge,
+  action,
   children,
 }: {
   title: string;
   titleId?: string;
   description?: string;
   badge?: React.ReactNode;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -1594,7 +1609,7 @@ function BillingGroup({
         <h3 id={titleId} className={SETTINGS_SECTION_TITLE_CLASS}>
           {title}
         </h3>
-        {badge}
+        {action ?? badge}
       </div>
       {description && (
         <p className="mt-1 max-w-[620px] text-12 leading-5 text-[var(--text-secondary)]">

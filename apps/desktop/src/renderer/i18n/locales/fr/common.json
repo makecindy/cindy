@@ -19834,7 +19834,8 @@
           "expired": "Expiré",
           "voided": "Annulé"
         }
-      }
+      },
+      "viewUsage": "Voir la consommation"
     },
     "orders": {
       "title": "Historique des commandes",

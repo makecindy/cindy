@@ -19651,7 +19651,8 @@
           "expired": "Abgelaufen",
           "voided": "Annulliert"
         }
-      }
+      },
+      "viewUsage": "Nutzung anzeigen"
     },
     "orders": {
       "title": "Bestellverlauf",

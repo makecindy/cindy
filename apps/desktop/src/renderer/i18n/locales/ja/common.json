@@ -19575,7 +19575,8 @@
           "expired": "期限切れ",
           "voided": "無効"
         }
-      }
+      },
+      "viewUsage": "使用量を見る"
     },
     "orders": {
       "title": "注文履歴",

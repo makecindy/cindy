@@ -19575,7 +19575,8 @@
           "expired": "已逾期",
           "voided": "已廢"
         }
-      }
+      },
+      "viewUsage": "覽耗用"
     },
     "orders": {
       "title": "訂單錄",

@@ -19575,7 +19575,8 @@
           "expired": "만료됨",
           "voided": "무효화됨"
         }
-      }
+      },
+      "viewUsage": "사용량 보기"
     },
     "orders": {
       "title": "주문 내역",

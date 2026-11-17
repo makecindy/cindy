@@ -19834,7 +19834,8 @@
           "expired": "Caducado",
           "voided": "Anulado"
         }
-      }
+      },
+      "viewUsage": "Ver uso"
     },
     "orders": {
       "title": "Historial de pedidos",

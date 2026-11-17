@@ -19651,7 +19651,8 @@
           "expired": "Expired",
           "voided": "Voided"
         }
-      }
+      },
+      "viewUsage": "View usage"
     },
     "orders": {
       "title": "Order history",
