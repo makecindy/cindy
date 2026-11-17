@@ -596,11 +596,12 @@ describe('bridge · 作业生命周期', () => {
     const c = await ready();
     const route = { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5', effort: 'high', fastMode: true };
     const chat = { op: 'conversation', scenario: 'webpage-chat', instruction: 'q', text: 'page', source: { url: 'https://example.test/' }, route };
-    const favorite = { op: 'model-favorite', mutation: { kind: 'add', item: { providerId: 'openai', modelId: 'gpt-5.5', agent: 'codex', effort: 'high', extra: 1 } } };
+    const favorite = { op: 'model-favorite', mutation: { kind: 'add', item: { providerId: 'openai', modelId: 'gpt-5.5', agent: 'codex', effort: 'none', extra: 1 } } };
     for (const request of [{ op: 'models' }, favorite, chat])
       expect((await c.signed('/learning/start', { id: crypto.randomUUID(), request })).ok).toBe(true);
     expect(relays.map((r) => r.request.op)).toEqual(['models', 'model-favorite', 'conversation']);
-    expect(relays[1].request.mutation).toEqual({ kind: 'add', item: { providerId: 'openai', modelId: 'gpt-5.5', agent: 'codex', effort: 'high' } });
+    // Review 2026-11-17 (Codex P2): "Off" (`none`) is a picker effort and must pass validation.
+    expect(relays[1].request.mutation).toEqual({ kind: 'add', item: { providerId: 'openai', modelId: 'gpt-5.5', agent: 'codex', effort: 'none' } });
     expect(relays[2].request.route).toEqual(route);
     // Another computer's route, or a route outside webpage chat, never reaches the plugin.
     for (const request of [{ ...chat, route: { ...route, agentDeviceId: 'other' } }, { op: 'translate', text: 'x', route }])

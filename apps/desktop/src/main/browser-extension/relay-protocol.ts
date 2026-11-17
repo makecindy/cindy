@@ -115,7 +115,8 @@ function source(value: unknown): RelaySource {
   };
 }
 
-const EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+// Same effort keys as Cindy's picker, including `none` (shown as "Off" where a model offers it).
+const EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 const AGENTS = new Set(['cc', 'codex', 'pi']);
 
 /** A favorite in Cindy's own favorites shape; mirrors the plugin's learning-core rule. */
