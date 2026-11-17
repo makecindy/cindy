@@ -41,7 +41,13 @@ describe('download progress reporter', () => {
     const h = harness(0);
     h.progress(600);
     h.progress(50); // the server ignored Range on the next attempt
-    expect(h.last()).toMatchObject({ phase: 'downloading', loaded: 600, percent: 60 });
+    // The bar holds, but time left (PR #10938 review) follows the 950 bytes still to fetch.
+    expect(h.last()).toMatchObject({
+      phase: 'downloading',
+      loaded: 600,
+      percent: 60,
+      etaSeconds: 10,
+    });
     h.progress(900);
     expect(h.last()).toMatchObject({ loaded: 900, percent: 90, etaSeconds: 1 });
   });

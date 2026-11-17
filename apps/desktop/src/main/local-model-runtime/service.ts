@@ -361,6 +361,18 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       status: 'paused',
       done: true,
       bytesPerSecond: undefined,
+      // The inner meter state must agree with the paused checkpoint, not the last live frame.
+      ...(progress.download
+        ? {
+            download: {
+              ...progress.download,
+              phase: 'paused' as const,
+              speedBps: 0,
+              etaSeconds: null,
+              retryReason: undefined,
+            },
+          }
+        : {}),
     };
     pausedByName.set(next.name, next);
     await pausedPullStore.write(next, digests);

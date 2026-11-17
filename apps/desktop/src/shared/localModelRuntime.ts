@@ -18,6 +18,7 @@ import {
 import { MANAGED_LLAMACPP_PROVIDER_ID } from './llamaCpp.js';
 import {
   initialDownloadProgress,
+  isDownloadProgressActive,
   type DownloadProgress,
   type DownloadProgressPhase,
 } from './downloadProgress.js';
@@ -245,8 +246,20 @@ export function downloadPhaseOfPull(phase: LocalModelPullPhase): DownloadProgres
 
 /** What the pull meter shows, including snapshots stored before `download` existed. */
 export function pullDownloadProgress(progress: LocalModelPullProgress): DownloadProgress {
-  if (progress.download) return progress.download;
   const phase = downloadPhaseOfPull(progress.phase);
+  if (progress.download) {
+    // A settled pull (paused, failed, cancelled, done) outranks the last live meter frame.
+    return isDownloadProgressActive(phase)
+      ? progress.download
+      : {
+          ...progress.download,
+          phase,
+          speedBps: 0,
+          etaSeconds: null,
+          retryReason: undefined,
+          ...(phase === 'completed' ? { percent: 100 } : {}),
+        };
+  }
   const total = progress.total && progress.total > 0 ? progress.total : null;
   return {
     ...initialDownloadProgress(phase, total),

@@ -158,7 +158,13 @@ export function createThrottledEmitter(
  * never go backwards while layers are discovered, time left comes from the measured speed.
  */
 export function createPullDownloadTracker(now: () => number = Date.now) {
-  const reporter = createDownloadProgressReporter({ emit: () => undefined, throttleMs: 0, now });
+  // Ollama reveals each layer's size only when that layer starts: never claim 100% early.
+  const reporter = createDownloadProgressReporter({
+    emit: () => undefined,
+    throttleMs: 0,
+    now,
+    holdCompleteUntilDone: true,
+  });
   return (progress: LocalModelPullProgress): LocalModelPullProgress => {
     const phase = downloadPhaseOfPull(progress.phase);
     if (progress.completed !== undefined) {

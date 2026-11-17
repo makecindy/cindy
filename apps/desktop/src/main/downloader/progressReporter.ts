@@ -19,6 +19,8 @@ import {
 import { DownloadError, type DownloadOptions } from './types';
 
 const DEFAULT_THROTTLE_MS = 200;
+/** Below the 100 that `downloadPercentLabel` reserves for finished work. */
+const HELD_COMPLETE_PERCENT = 99.9;
 
 export interface DownloadProgressReporterOptions {
   /** Receives every visible change. Exceptions are swallowed so UI bugs never stop a download. */
@@ -28,6 +30,11 @@ export interface DownloadProgressReporterOptions {
   total?: number | null;
   throttleMs?: number;
   now?: () => number;
+  /**
+   * The total may still grow (more parts discovered later), so stop short of 100% until
+   * `setPhase('completed')`. Ollama pulls only learn each layer's size when it starts.
+   */
+  holdCompleteUntilDone?: boolean;
 }
 
 export interface DownloadProgressReporter {
@@ -77,12 +84,19 @@ export function createDownloadProgressReporter(
 
   const applyBytes = (rawLoaded: number, rawTotal: number | null, speedBps: number) => {
     const total = rawTotal ?? state.total;
-    // A restarted attempt reports fewer bytes; keep the bar where the user last saw it.
-    const loaded = Math.max(state.loaded, rawLoaded);
+    // A restarted attempt reports fewer bytes; keep the bar where the user last saw it. A larger
+    // total means more work was discovered (e.g. another model layer): the old floor no longer
+    // describes the same job, so the percent may honestly drop.
+    const sameWork = total === state.total;
+    const loaded = sameWork ? Math.max(state.loaded, rawLoaded) : rawLoaded;
     const rawPercent = total && total > 0 ? (loaded / total) * 100 : null;
+    const ceiling = options.holdCompleteUntilDone ? HELD_COMPLETE_PERCENT : 100;
     const percent =
-      rawPercent === null ? null : Math.max(state.percent ?? 0, Math.min(100, rawPercent));
-    const remaining = total === null ? null : Math.max(0, total - loaded);
+      rawPercent === null
+        ? null
+        : Math.max(sameWork ? (state.percent ?? 0) : 0, Math.min(ceiling, rawPercent));
+    // Time left follows what this request still has to fetch, not the floor kept for display.
+    const remaining = total === null ? null : Math.max(0, total - rawLoaded);
     const etaSeconds = remaining !== null && speedBps > 0 ? Math.ceil(remaining / speedBps) : null;
     const phaseChanged = state.phase !== 'downloading';
     update(

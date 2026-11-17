@@ -143,14 +143,20 @@ describe('createPullDownloadTracker', () => {
     ...patch,
   });
 
-  it('keeps the bar from moving back when Ollama discovers another layer', () => {
+  // PR #10938 review: once the first layer finished the meter read 100% and, because it never
+  // moved back, stayed there while the next layers downloaded.
+  it('never claims 100% before the pull succeeds, even when a later layer appears', () => {
     const track = createPullDownloadTracker(() => 0);
     expect(track(snap({ phase: 'manifest' })).download).toMatchObject({ phase: 'preparing' });
     const first = track(snap({ completed: 80, total: 100, percent: 80, bytesPerSecond: 10 }));
     expect(first.download).toMatchObject({ phase: 'downloading', percent: 80, etaSeconds: 2 });
-    const grown = track(snap({ completed: 90, total: 200, percent: 45, bytesPerSecond: 10 }));
-    expect(grown.download).toMatchObject({ loaded: 90, total: 200, percent: 80 });
-    expect(grown.percent).toBe(45); // the raw snapshot is unchanged for existing consumers
+    const layerDone = track(snap({ completed: 100, total: 100, percent: 100, bytesPerSecond: 10 }));
+    expect(layerDone.download?.percent).toBeLessThan(100);
+    // More work discovered: the bar follows the real share instead of sticking near 100%.
+    const grown = track(snap({ completed: 120, total: 400, percent: 30, bytesPerSecond: 10 }));
+    expect(grown.download).toMatchObject({ loaded: 120, total: 400, percent: 30, etaSeconds: 28 });
+    expect(grown.percent).toBe(30); // the raw snapshot is unchanged for existing consumers
+    expect(track(snap({ phase: 'success', done: true })).download?.percent).toBe(100);
   });
 
   it.each([

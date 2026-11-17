@@ -24,6 +24,7 @@ import {
   installDownloadProgress,
   pullDownloadProgress,
 } from '../localModelRuntime.js';
+import { initialDownloadProgress } from '../downloadProgress.js';
 
 describe('localModelRuntime', () => {
   it('maps known Ollama library tags to catalog display names', () => {
@@ -485,5 +486,28 @@ describe('standard download progress for Ollama surfaces', () => {
         done: true,
       }),
     ).toMatchObject({ phase: 'paused', loaded: 40, total: 100, percent: 40, speedBps: 0 });
+  });
+
+  // PR #10938 review: a paused checkpoint copied the last live frame, so the meter kept showing
+  // speed and time left (or "verifying") while the button already offered to resume.
+  it('lets a settled pull outrank the last live meter frame it still carries', () => {
+    const live = {
+      ...initialDownloadProgress('verifying', 100),
+      loaded: 60,
+      percent: 60,
+      speedBps: 900,
+      etaSeconds: 3,
+    };
+    expect(
+      pullDownloadProgress({
+        name: 'qwen3.8:27b',
+        status: 'paused',
+        phase: 'paused',
+        completed: 60,
+        total: 100,
+        done: true,
+        download: live,
+      }),
+    ).toMatchObject({ phase: 'paused', loaded: 60, percent: 60, speedBps: 0, etaSeconds: null });
   });
 });
