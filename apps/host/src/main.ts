@@ -174,7 +174,7 @@ import { createHostAttachments } from './attachments.js';
 import { createSubagentReadService } from '../../desktop/src/main/localDb/ipc/subagentReadService.js';
 import { configureUserDataDir, configureAppDataDir, getUserDataDir } from '../../desktop/src/main/userDataPath.js';
 import { botSessionLinks, messages as messageTable, projectAliases as projectAliasTable, sessions as sessionTable } from '../../desktop/src/main/localDb/schema.js';
-import { startHostSystemProxySettings } from './outbound-proxy.ts';
+import { describeHostOutboundProxy, describeOutboundProxyLine, startHostSystemProxySettings, stopHostSystemProxySettings } from './outbound-proxy.ts';
 import { and, eq, isNull } from 'drizzle-orm';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { isDefaultDraftSessionTitle, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
@@ -247,6 +247,7 @@ if (command === '--help' || command === '-h') {
       console.log(`running: ${state.running === null ? 'unreachable' : state.running}`);
       if ('region' in state && state.region) console.log(`region: ${state.region}`);
       if (state.baseUrl) console.log(`address: ${state.baseUrl}`);
+      if ('outboundProxy' in state && state.outboundProxy) console.log(`outbound proxy: ${describeOutboundProxyLine(state.outboundProxy)}`);
       if (state.error) console.error(state.error);
       // Row 25 (25b): an install signed in before the login published the projection owner.
       if (state.authenticated && (state.skillProjectionBoundary === 'missing-or-invalid' || state.skillProjectionBoundary === 'other-owner')) {
@@ -1465,6 +1466,8 @@ const serverDeps = {
     pid: process.pid,
     region: resolveHostRegion(),
     dataDir: resolveHostDataDir(),
+    // How this Host finds its outbound proxy (row 28): never an address or a setting.
+    outboundProxy: describeHostOutboundProxy(),
     runtime: activeOwner === null
       ? runtime
       : { ...runtime, skillProjectionBoundary: observeSkillProjectionBoundary(activeOwner) },
@@ -2179,6 +2182,8 @@ const stop = () => {
   void (async () => {
     try {
       errors.push(...(await boundary).errors);
+      // The Chromium proxy helper (row 28c), by its handle; it also quits on its own once this process is gone.
+      try { await stopHostSystemProxySettings(); } catch (error) { errors.push(error); }
       if (errors.length) throw new AggregateError(errors, 'Host shutdown did not complete cleanly');
     } finally {
       server.closeAllConnections();

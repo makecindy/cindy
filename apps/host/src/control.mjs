@@ -59,6 +59,8 @@ export async function readHostProcessStatus(profile) {
     return { running: true, pid: endpoint.pid, baseUrl: endpoint.baseUrl, runtime: health.runtime, instanceId: health.instanceId,
       // The running Host's edition (a release's build region), so a client can refuse the other edition.
       ...(typeof health.region === 'string' ? { region: health.region } : {}),
+      // How the running Host finds its outbound proxy (row 28; never an address or a setting).
+      ...(health.outboundProxy && typeof health.outboundProxy === 'object' ? { outboundProxy: health.outboundProxy } : {}),
       ...(health.clientProtocol === undefined ? {} : { clientProtocol: health.clientProtocol }) };
   } catch (error) {
     // An unresponsive service is not proof that its process has exited.

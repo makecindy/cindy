@@ -228,6 +228,8 @@ try {
     await fs.cp(electronRoot, path.join(resources, 'credential-runtime'), { recursive: true, dereference: true });
     metadata.electronBinary = path.join('resources', 'credential-runtime', path.relative(electronRoot, executable));
     await fs.copyFile(path.join(host, 'src/credentials/electron-codec.cjs'), path.join(bin, 'electron-codec.cjs'));
+    // Row 28c: the Chromium proxy helper, run by the same Electron (system proxy, PAC and auto-discovery).
+    await fs.copyFile(path.join(host, 'src/chromium-proxy-worker.cjs'), path.join(bin, 'chromium-proxy-worker.cjs'));
     await build({ absWorkingDir: repo, entryPoints: ['apps/desktop/src/main/host-platform/power-worker.desktop.ts'],
       outfile: path.join(bin, 'power-worker.cjs'), bundle: true, platform: 'node', format: 'cjs', target: 'node22', external: ['electron'] });
   }

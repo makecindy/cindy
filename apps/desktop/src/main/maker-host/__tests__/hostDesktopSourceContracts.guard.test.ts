@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import { isBuiltin } from 'node:module';
+import { createRequire, isBuiltin } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { build } from 'esbuild';
@@ -120,12 +120,12 @@ describe('Host main.ts wiring', () => {
   // 用户全部直连；或 scutil 经 PATH 查找、被同名程序顶替。
   it('reads the macOS system proxy settings at startup, with the system scutil', () => {
     const main = read(path.join(hostSrc, 'main.ts'));
-    assert.ok(main.includes("import { startHostSystemProxySettings } from './outbound-proxy.ts';\n"));
+    assert.ok(main.includes("import { describeHostOutboundProxy, describeOutboundProxyLine, startHostSystemProxySettings, stopHostSystemProxySettings } from './outbound-proxy.ts';\n"));
     assert.equal(main.split('startHostSystemProxySettings();').length - 1, 1);
     const call = main.indexOf('\nstartHostSystemProxySettings();\n');
     assert.ok(call > 0 && call < main.indexOf('\nconst command = process.argv[2];\n'), 'a top-level call before the command dispatch');
     const outbound = read(path.join(hostSrc, 'outbound-proxy.ts'));
-    assert.ok(outbound.includes("  if (process.platform === 'darwin') useHostSystemProxySettings(readScutilProxyOutput);\n"));
+    assert.ok(outbound.includes("  if (process.platform === 'darwin') useHostSystemProxySettings(readScutilProxyOutput, chromiumHelper);\n"));
     const rules = read(path.join(hostSrc, 'macos-system-proxy.ts'));
     assert.ok(rules.includes("const SCUTIL_PATH = '/usr/sbin/scutil';\n"));
     assert.equal(rules.split('execFile(').length - 1, 1);
@@ -1047,6 +1047,72 @@ function hostImportGraph(): Promise<string[]> {
  * and, for a setter handed over as a port value, whether the receiving code really calls it; for
  * `<file>#<function>`, whether the caller found is itself reached at run time (one call level is checked).
  */
+describe('Host Chromium proxy helper (row 28, 28c)', () => {
+  const worker = () => read(path.join(hostSrc, 'chromium-proxy-worker.cjs'));
+  const launcher = () => read(path.join(hostSrc, 'chromium-proxy.ts'));
+  const TEST_SWITCHES = ['use-mock-keychain', 'proxy-pac-url', 'no-proxy-server', 'proxy-server', 'CINDY_PROXY_WORKER_TEST_CONFIG'];
+
+  // 规则：生产启动不带任何测试开关（审核方 2026-11-18）：Host 只以 `[脚本]` 起辅助进程，环境经 helperEnv 去掉全部
+  // XDT_/CINDY_ 变量后只加 profile 目录；测试配置与 Chromium 开关只出现在辅助进程脚本（读测试配置）和验收脚本里。
+  // 失效后果：生产里的辅助进程用了 mock 钥匙串或固定代理配置，与系统设置不一致，或测试配置经环境漏进生产。
+  it('starts the helper the production way: no switch, no test configuration', () => {
+    const source = launcher();
+    assert.equal(source.split('spawnImpl(').length - 1, 1);
+    assert.ok(source.includes('child = spawnImpl(found.binary, [found.script], {\n        env: helperEnv(profile), stdio:'));
+    assert.ok(source.includes("    if (/^(XDT_|CINDY_)/i.test(key) || /^(NODE_OPTIONS|NODE_PATH|ELECTRON_RUN_AS_NODE)$/i.test(key)) continue;"));
+    const production = fs.readdirSync(hostSrc, { recursive: true }).map(String)
+      .filter(file => /\.(ts|mts|cts|mjs|cjs|js)$/.test(file) && !/\.test\.|[\\/]loaders[\\/]/.test(file) && file !== 'chromium-proxy-worker.cjs')
+      .map(file => path.join(hostSrc, file));
+    for (const file of [...production, path.join(repo, 'apps/host/scripts/build.mjs')]) {
+      const text = read(file);
+      for (const name of TEST_SWITCHES) assert.equal(text.includes(name), false, `${path.relative(repo, file)} mentions ${name}`);
+    }
+    assert.equal(worker().split('process.env.CINDY_PROXY_WORKER_TEST_CONFIG').length - 1, 1);
+  });
+
+  // 规则：辅助进程只用不落盘的内存分区，不碰 defaultSession、safeStorage、单实例锁、窗口或端口；先应用配置、强制重载、
+  // 解析一次再报 ready，ready 之前一律回 not_ready（审核方 2026-11-18）。失效后果：写 cookie 或触发 Safe Storage
+  // 钥匙串条目；开了端口或窗口；PAC 未就绪时回 DIRECT。
+  it('the helper asks an in-memory session and keeps off the keychain, windows and ports', () => {
+    const source = worker();
+    assert.ok(source.includes("  const candidate = session.fromPartition('cindy-proxy-helper', { cache: false });\n"));
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    for (const banned of ['persist:', 'defaultSession', 'safeStorage', 'requestSingleInstanceLock', 'BrowserWindow', 'loadURL',
+      'createServer', "require('node:http')", "require('node:net')", 'appendSwitch']) {
+      assert.equal(code.includes(banned), false, banned);
+    }
+    assert.ok(source.includes('app.disableHardwareAcceleration();\n'));
+    assert.ok(source.includes("app.setPath('userData', profile);\n"));
+    assert.ok(source.includes("lines.on('close', () => app.quit());\n"));
+    assert.ok(source.includes("  if (!ses) return send({ id: request.id, error: 'not_ready' });\n"));
+    const ready = between(source, '  await candidate.setProxy(', "  send({ ready: true, pid: process.pid });");
+    assert.deepEqual(ready.split('\n').filter(line => !line.startsWith('//')), [
+      "await candidate.setProxy(testConfig ? JSON.parse(testConfig) : { mode: 'system' });",
+      'await candidate.forceReloadProxyConfig();',
+      'await candidate.resolveProxy(READINESS_PROBE);',
+      'ses = candidate;',
+    ]);
+  });
+
+  // 规则：Host 包里的 Electron 是 npm 原版（build.mjs 从 desktopRequire('electron') 拷贝），不翻 fuse，cookie 加密
+  // 默认关闭；装了二进制时直接读它的 fuse（CI 的桌面任务不下载二进制，那里只核对源码；macOS/Windows 的比对
+  // workflow 在验收脚本里读同一个 fuse）。失效后果：换成翻过 fuse 的 Electron 后，辅助进程启动即触发钥匙串。
+  it('ships the npm Electron, with cookie encryption off', async () => {
+    const build = read(path.join(repo, 'apps/host/scripts/build.mjs'));
+    assert.ok(build.includes("    const executable = desktopRequire('electron');\n"));
+    assert.ok(build.includes("    await fs.copyFile(path.join(host, 'src/chromium-proxy-worker.cjs'), path.join(bin, 'chromium-proxy-worker.cjs'));\n"));
+    const hostFiles = fs.readdirSync(path.join(repo, 'apps/host'), { recursive: true }).map(String)
+      .filter(file => !file.includes('node_modules') && /\.(ts|mts|cts|mjs|cjs|js|json)$/.test(file));
+    for (const file of hostFiles) assert.equal(read(path.join(repo, 'apps/host', file)).includes('@electron/fuses'), false, file);
+    let executable: string | null = null;
+    try { executable = createRequire(path.join(repo, 'apps/desktop/package.json'))('electron') as string; } catch { executable = null; }
+    if (!executable || !fs.existsSync(executable)) return;
+    const fuses = await import('@electron/fuses');
+    const wire = await fuses.getCurrentFuseWire(process.platform === 'darwin' ? path.resolve(executable, '../../..') : executable);
+    expect(String.fromCharCode(wire[fuses.FuseV1Options.EnableCookieEncryption] as number), 'EnableCookieEncryption').toBe('0');
+  });
+});
+
 describe('module-level port setters the Host loads, classified for the Host', () => {
   const tableFile = path.join(hostSrc, 'desktop-module-setters.ts');
   const SETTER = /^(set|register|bind|configure|install|init)[A-Z]/;

@@ -42,6 +42,8 @@ export function hostRuntimeLayout() {
     pluginBridge: release ? resource('plugin-bridge.js') : null,
     powerWorker: release ? path.join(root, 'bin', 'power-worker.cjs') : null,
     credentialScript: release ? path.join(root, 'bin', 'electron-codec.cjs') : path.join(root, 'apps', 'host', 'src', 'credentials', 'electron-codec.cjs'),
+    // The Chromium proxy helper (chromium-proxy-worker.cjs, row 28c), run by electronBinary; macOS and Windows releases only.
+    proxyWorker: release?.electronBinary ? path.join(root, 'bin', 'chromium-proxy-worker.cjs') : null,
     electronBinary: release?.electronBinary ? path.join(root, release.electronBinary) : null,
     chromiumExecutable: release?.chromiumExecutable ? path.join(root, release.chromiumExecutable) : null,
     harnessRoot: release ? resource('harnesses') : path.join(root, 'apps'),

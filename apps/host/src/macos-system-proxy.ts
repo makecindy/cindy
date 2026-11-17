@@ -10,9 +10,14 @@
  * Chromium file each rule comes from, are cited where the rule is implemented; the macOS CI
  * comparison (`.github/workflows/macos-system-proxy-compare.yml`) checks them against Electron.
  *
+ * PAC and auto-discovery (28c): when the settings use either and the Chromium proxy helper is given
+ * (chromium-proxy.ts, macOS releases carry its Electron), Chromium answers, exactly as for the desktop. Only
+ * when the helper has no answer in time (starting, restarting, missing) does the Host fall back to what
+ * follows, the static reading (28b).
+ *
  * What the Host does not do, and reports as an unresolved path (the resolver core's `resolve_failed`:
  * direct, a warn, `unknown` in the path snapshot) instead of guessing:
- * - a PAC URL: Chromium runs the script; the Host cannot yet (28c);
+ * - a PAC URL without an answer from the Chromium proxy helper;
  * - a proxy whose settings name a user (`HTTPUser`, `HTTPSUser`, `SOCKSUser`, macOS 15 and later): its
  *   password is in the keychain, which the Host never reads; a user name without its password is not
  *   used;
@@ -525,7 +530,7 @@ export interface SystemProxySession {
  * SYSTEM_PROXY_SETTINGS_TTL_MS, and concurrent requests share one reading. A failed reading is not kept:
  * the resolver core already holds its unresolved verdict for 5 s per upstream.
  */
-export function createMacSystemProxySession(readSettings: ReadSystemProxySettings): SystemProxySession {
+export function createMacSystemProxySession(readSettings: ReadSystemProxySettings, chromium?: SystemProxySession | null): SystemProxySession {
   let current: { settings: MacSystemProxySettings; expiresAt: number } | null = null;
   let reading: Promise<MacSystemProxySettings> | null = null;
   let reportedAutoDiscovery = false;
@@ -544,7 +549,6 @@ export function createMacSystemProxySession(readSettings: ReadSystemProxySetting
       try {
         const settings = parseScutilProxyOutput(await readSettings());
         current = { settings, expiresAt: Date.now() + SYSTEM_PROXY_SETTINGS_TTL_MS };
-        noteAutoDiscovery(settings);
         return settings;
       } finally {
         reading = null;
@@ -555,7 +559,17 @@ export function createMacSystemProxySession(readSettings: ReadSystemProxySetting
 
   return {
     async resolveProxy(url) {
-      return systemProxyResultFor(await settingsNow(), url);
+      const settings = await settingsNow();
+      // On demand (28c): Chromium only for PAC and auto-discovery; static settings never start the helper.
+      if (chromium && (settings.pacUrl || settings.autoDiscovery)) {
+        try {
+          return await chromium.resolveProxy(url);
+        } catch {
+          // No answer in time: the static reading below (28b), as before the helper.
+        }
+      }
+      noteAutoDiscovery(settings);
+      return systemProxyResultFor(settings, url);
     },
   };
 }
