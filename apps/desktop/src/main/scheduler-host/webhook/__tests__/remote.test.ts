@@ -66,9 +66,11 @@ interface FakeEndpoint {
 /** 与 webhook-server 合同相同的最小实现。 */
 class FakeServer {
   github: { available: boolean; login: string; endpointId: string; repositories: string[]; unavailable?: string[];
-    installUrl?: string; prSubscriptions?: boolean; dailyQuotaExempt?: boolean; automationSubscriptions?: boolean; deliveryHealthy?: boolean } | null = null;
+    installUrl?: string; userAuthorization?: boolean; prSubscriptions?: boolean; dailyQuotaExempt?: boolean; automationSubscriptions?: boolean; deliveryHealthy?: boolean } | null = null;
   githubAllowedRepositories: string[] | undefined;
   githubConnect: { state: string; redirectUri: string } | undefined;
+  githubGrant: unknown;
+  githubCompleteBody: Record<string, unknown> | undefined;
   githubUnavailable = false;
   githubSubscriptionBodies: Record<string, unknown>[] = [];
   readonly releases = new Map<string, string>();
@@ -165,7 +167,10 @@ class FakeServer {
         this.githubConnect = body() as { state: string; redirectUri: string };
         return reply(200, { url: `https://github.com/login/oauth/authorize?state=${this.githubConnect.state}&code_challenge_method=S256` });
       }
-      if (this.github && route === 'POST /api/v1/github/connect/complete') return reply(200, { url: this.github.installUrl });
+      if (this.github && route === 'POST /api/v1/github/connect/complete') {
+        this.githubCompleteBody = body();
+        return reply(200, { url: this.github.installUrl, ...(this.githubCompleteBody.includeUserToken ? { grant: this.githubGrant } : {}) });
+      }
       if (this.github && route === 'PUT /api/v1/github/repositories') {
         this.githubSubscriptionBodies.push(body());
         const requested = body().repositories as string[];
@@ -1115,4 +1120,51 @@ it('keeps ordinary Webhooks and connection status usable while a GitHub batch is
     release();
     await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'slow-github' }));
   } finally { release(); remote.stop(); await server.close(); }
+});
+
+// New credentials are delivered only to main and must be persisted before reporting success.
+it.each([false, true])('persists an App user grant before redirecting the browser (storage failure: %s)', async fails => {
+  let input!: { state: string; codeChallenge: string; redirectUri: string };
+  const grant = { userId: '12', login: 'example', accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh',
+    expiresAt: 999_999_999_999_999, refreshExpiresAt: 999_999_999_999_999 };
+  let saved = false;
+  const attempt = await beginGithubConnect({ start: async value => {
+    input = value; return { url: `https://github.com/login/oauth/authorize?state=${value.state}&code_challenge_method=S256` };
+  }, complete: async () => ({ url: 'https://github.com/apps/example-app/installations/new', grant }),
+    isCurrent: () => true, onConnected: async value => {
+      expect(value).toEqual(grant);
+      if (fails) throw new Error('storage unavailable');
+      saved = true;
+    } });
+  try {
+    const response = await fetch(`${input.redirectUri}?state=${input.state}&code=synthetic`, { redirect: 'manual' });
+    expect(response.status).toBe(fails ? 400 : 303);
+    expect(saved).toBe(!fails);
+    const visible = JSON.stringify([...response.headers]) + await response.text();
+    expect(visible).not.toContain(grant.accessToken);
+    expect(visible).not.toContain(grant.refreshToken);
+  } finally { attempt.close(); }
+});
+
+it.each([false, true])('negotiates App user authorization without changing the old server contract (%s)', async userAuthorization => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example', endpointId: 'whk-github', repositories: [],
+    userAuthorization, installUrl: 'https://github.com/apps/example-app/installations/new' };
+  server.githubGrant = { userId: '12', login: 'example', accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh',
+    expiresAt: 999_999_999_999_999, refreshExpiresAt: 999_999_999_999_999 };
+  const baseUrl = await server.listen();
+  const authorized = vi.fn(async () => {});
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch: async () => {},
+    onGithubAuthorized: authorized });
+  try {
+    await remote.sync([]);
+    await remote.connectGithub();
+    const { redirectUri, state } = server.githubConnect!;
+    const callback = await fetch(`${redirectUri}?state=${state}&code=synthetic`, { redirect: 'manual' });
+    expect(callback.status).toBe(303);
+    expect(server.githubCompleteBody?.includeUserToken).toBe(userAuthorization ? true : undefined);
+    expect(authorized).toHaveBeenCalledTimes(userAuthorization ? 1 : 0);
+    if (userAuthorization) expect(authorized).toHaveBeenCalledWith(server.githubGrant);
+  } finally { remote.stop(); await server.close(); }
 });

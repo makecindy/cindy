@@ -16631,7 +16631,8 @@
             "token": "Fallback-Token wird verwendet",
             "recheck": "Verbindung prüfen",
             "summary": "Verwalte GitHub-Repositories, Issues, Pull Requests und Actions.",
-            "otherMethods": "Andere Verbindungsmethoden"
+            "otherMethods": "Andere Verbindungsmethoden",
+            "github-app": "GitHub App"
           },
           "app": {
             "title": "Repository-Ereignisse",
@@ -16644,6 +16645,20 @@
             "repositories": "Repositorys auswählen",
             "disconnect": "Ereignisse trennen",
             "connect": "GitHub App verbinden"
+          },
+          "connection": {
+            "operations": "Repository-Aktionen",
+            "operationsMissing": "Repository-Zugriff noch nicht autorisiert",
+            "checking": "GitHub-Verbindung wird geprüft…",
+            "mismatch": "Aktionen und Benachrichtigungen verwenden verschiedene Konten. Bitte prüfen und erneut verbinden.",
+            "ready": "GitHub-Konto verbunden.",
+            "incomplete": "Konto verknüpft. Autorisiere jetzt Aktionen auf diesem Computer.",
+            "eventsOnly": "Dieses Konto empfängt Repository-Ereignisse. Der Name bestätigt keine Autorisierung auf diesem Computer.",
+            "connect": "GitHub verbinden",
+            "alternative": "Lokale GitHub-Anmeldung verwenden",
+            "cliDescription": "Die lokale Anmeldung bleibt nutzbar. Persönliche Benachrichtigungen und andere von GitHub Apps nicht unterstützte Funktionen benötigen sie weiterhin.",
+            "disconnect": "GitHub App trennen",
+            "repositories": "Beobachtete Repositorys: {{count}}"
           }
         },
         "unresolved": "Ungelöste Review-Threads: {{count}}",

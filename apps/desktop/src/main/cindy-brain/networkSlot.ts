@@ -114,6 +114,8 @@ export interface NetworkSlotDeps {
   readSecret(instanceKey: string, secretKey: string): string | null;
   /** source:'gh-cli' 的宿主 GitHub CLI 登录 token；不可用返回 null。 */
   readGhCliToken?: () => Promise<string | null>;
+  /** Same approved gh-cli declaration; injected only into GitHub API requests. */
+  readGithubAppToken?: () => Promise<string | null>;
   /**
    * 当前登录账号的邮箱(source:'login-email' 凭证的值来源;现读登录态,
    * 登出/切号下一单即生效)。未登录 / 登录态缺 email 返回 null。
@@ -1816,8 +1818,14 @@ export class GhostNetworkSlot {
       if (ghToken && ghToken.trim().length > 0) return { value: ghToken.trim() };
       const fallback = this.deps.readSecret(instanceKey, secret.key);
       if (fallback && fallback.length > 0) return { value: fallback };
+      if (hostname === 'api.github.com') {
+        try {
+          const appToken = await this.deps.readGithubAppToken?.();
+          if (appToken) return { value: appToken };
+        } catch { return { error: 'GitHub 授权暂时不可用，请在 GitHub 插件详情页检查连接状态' }; }
+      }
       return {
-        error: `凭证「${secret.label}」不可用——未检测到本机 gh 登录，且尚未配置备用 Personal Access Token；请先运行 gh auth login，或到主界面侧边栏「插件」的本插件详情页填写 PAT`,
+        error: `凭证「${secret.label}」不可用；请在 GitHub 插件详情页连接账号，也可运行 gh auth login 或配置备用 Personal Access Token`,
       };
     }
     if (secret.source === 'oidc-token') {

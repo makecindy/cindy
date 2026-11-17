@@ -1,7 +1,7 @@
 /** No credentials, process output or local paths cross this boundary. */
 export type GithubConnectionState =
-  | { status: 'connected'; login: string; source: 'gh-cli' | 'token' }
-  | { status: 'missing' | 'auth' | 'network' | 'forbidden'; source?: 'gh-cli' | 'token' };
+  | { status: 'connected'; login: string; source: 'gh-cli' | 'token' | 'github-app' }
+  | { status: 'missing' | 'auth' | 'network' | 'forbidden'; source?: 'gh-cli' | 'token' | 'github-app' };
 
 export interface GithubSetupState {
   phase:
@@ -19,9 +19,10 @@ export interface GithubSetupState {
   error?: 'unsupported' | 'install' | 'login' | 'timeout';
 }
 
-/** Public connection state only; App credentials remain on the server. */
+/** Public connection state only; OAuth credentials remain in main, never renderer. */
 export interface GithubAppConnectionState {
   available: boolean;
+  userAuthorization?: boolean;
   login?: string | null;
   repositories?: string[];
   unavailable?: string[];

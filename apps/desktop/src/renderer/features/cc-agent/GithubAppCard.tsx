@@ -1,12 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
-import type { GithubAppConnectionState } from '../../../shared/githubSetup';
+import type { GithubAppConnectionState, GithubConnectionState } from '../../../shared/githubSetup';
 
 /** Trusted account controls alongside the plugin's existing GitHub login card. */
-export function GithubAppCard() {
+export function GithubAppCard({ account, accountBusy = false, children, alternative }: {
+  account?: GithubConnectionState;
+  accountBusy?: boolean;
+  children?: ReactNode;
+  alternative?: ReactNode;
+}) {
   const { t } = useTranslation();
   const [state, setState] = useState<GithubAppConnectionState>();
   const [busy, setBusy] = useState(false);
@@ -39,7 +44,10 @@ export function GithubAppCard() {
     void refresh();
     const onFocus = () => { if (!acting.current) void refresh(); };
     window.addEventListener('focus', onFocus);
-    return () => { generation.current++; pending.current = null; window.removeEventListener('focus', onFocus); };
+    const unsubscribe = window.electronAPI.gitContext.onGithubConnected?.(() => {
+      generation.current++; pending.current = null; void refresh();
+    });
+    return () => { unsubscribe?.(); generation.current++; pending.current = null; window.removeEventListener('focus', onFocus); };
   }, [refresh]);
   const act = async (action: () => Promise<void>, opensBrowser = false) => {
     if (acting.current || pending.current) return;
@@ -56,16 +64,40 @@ export function GithubAppCard() {
     } catch { if (current === generation.current) setFailed(true); }
     finally { acting.current = false; setBusy(false); }
   };
-  if (!failed && state?.available === false) return null;
+  const actor = account?.status === 'connected' ? account.login : undefined;
+  const mismatch = actor && state?.login && actor.toLowerCase() !== state.login.toLowerCase();
+  const summary = accountBusy || checking ? 'checking'
+    : failed ? undefined
+    : mismatch ? 'mismatch'
+    : actor ? 'ready'
+    : state?.login && (account?.status === 'missing' || account?.status === 'auth') ? 'incomplete'
+    : undefined;
   const disabled = busy || checking;
   return (
+    <>
+      {children && summary && <p className="mb-3 text-13 text-[var(--text-primary)]" role="status">
+        {t('ccAgent.gitContext.pr.setup.connection.' + summary)}
+      </p>}
+      {children}
+      {children && state?.userAuthorization && !failed && (account?.status === 'missing' || account?.status === 'auth' || (actor && !state.login) || mismatch) &&
+        <Button className="mt-3" variant="secondary" disabled={disabled || accountBusy || awaitingBrowser}
+          onClick={() => void act(() => window.electronAPI.gitContext.connectGithubApp(), true)}>
+          {t('ccAgent.gitContext.pr.setup.connection.connect')}
+        </Button>}
+      {alternative && <details className="mt-3 text-12 text-[var(--text-secondary)]" open={state?.available === false || (state && !state.userAuthorization && !actor)}>
+        <summary className="cursor-pointer">{t('ccAgent.gitContext.pr.setup.connection.alternative')}</summary>
+        <p className="my-2">{t('ccAgent.gitContext.pr.setup.connection.cliDescription')}</p>
+        {alternative}
+      </details>}
+      {(failed || state?.available !== false) &&
     <div className="mt-3 flex flex-col gap-2 border-t border-[var(--border-default)] pt-3" aria-live="polite" aria-busy={disabled}>
       <p className="text-13 text-[var(--text-primary)]">{t(key + 'title')}</p>
       <p className="text-12 text-[var(--text-secondary)]">
         {awaitingBrowser ? t(key + 'finishInBrowser') : state?.login
-          ? t(checking ? 'ccAgent.gitContext.pr.setup.account.connected' : key + 'connected', { login: state.login, count: state.repositories?.length ?? 0 })
+          ? t(checking ? 'ccAgent.gitContext.pr.setup.account.connected' : actor && !mismatch ? 'ccAgent.gitContext.pr.setup.connection.repositories' : key + 'connected', { login: state.login, count: state.repositories?.length ?? 0 })
           : t(key + 'description')}
       </p>
+      {children && !checking && !failed && state?.login && (account?.status === 'missing' || account?.status === 'auth') && <p className="text-12 text-[var(--text-secondary)]">{t('ccAgent.gitContext.pr.setup.connection.eventsOnly')}</p>}
       {!checking && !awaitingBrowser && Boolean(state?.unavailable?.length) && <p className="break-words text-12 text-[var(--text-secondary)]">{t(key + 'missing', { repositories: state?.unavailable?.join(', ') })}</p>}
       {checking && <p role="status" className="flex items-center gap-2 text-12 text-[var(--text-secondary)]">
         <Spinner size={14} />{t(state?.login ? key + 'syncing' : 'ccAgent.gitContext.pr.setup.account.checking')}
@@ -74,10 +106,12 @@ export function GithubAppCard() {
       <div className="flex flex-wrap gap-2">
         {state?.available && (state.login ? <>
           <Button variant="secondary" disabled={disabled || failed} onClick={() => void act(() => window.electronAPI.gitContext.installGithubApp(), true)}>{t(key + 'repositories')}</Button>
-          <Button variant="secondary" disabled={disabled || failed} onClick={() => void act(() => window.electronAPI.gitContext.disconnectGithubApp())}>{t(key + 'disconnect')}</Button>
-        </> : !failed && <Button variant="secondary" disabled={disabled} onClick={() => void act(() => window.electronAPI.gitContext.connectGithubApp(), true)}>{t(key + 'connect')}</Button>)}
+          <Button variant="secondary" disabled={disabled || failed} onClick={() => void act(() => window.electronAPI.gitContext.disconnectGithubApp())}>{t(children && state.userAuthorization ? 'ccAgent.gitContext.pr.setup.connection.disconnect' : key + 'disconnect')}</Button>
+        </> : !failed && !(children && state.userAuthorization) && <Button variant="secondary" disabled={disabled} onClick={() => void act(() => window.electronAPI.gitContext.connectGithubApp(), true)}>{t(key + 'connect')}</Button>)}
         {failed && <Button variant="secondary" disabled={disabled} onClick={() => void refresh()}>{t('ccAgent.gitContext.pr.setup.account.recheck')}</Button>}
       </div>
     </div>
+      }
+    </>
   );
 }

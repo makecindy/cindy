@@ -1,3 +1,4 @@
+import { readGithubAppToken, onGithubAppAuthorizationChanged } from './githubAppAuthorization.desktop.js';
 import path from 'node:path';
 import { createGithubStar } from './githubStar.js';
 import { app, BrowserWindow, ipcMain } from 'electron';
@@ -46,6 +47,7 @@ export async function readGithubConnection(
         : fallback
           ? readGhostSecret(fallback.instanceId, fallback.key)
           : readGhostSecret(rootInstance, 'github_pat') ?? readGhostSecret('cindy-github', 'github_pat'),
+    readApp: readGithubAppToken,
     fetch: outboundFetch,
   });
   return owner === activeOwnerScopeKey() ? result : { status: 'missing' };
@@ -92,6 +94,7 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
       if (!win.isDestroyed()) win.webContents.send('git-context:github-connected');
     }
   };
+  const stopAppChanges = onGithubAppAuthorizationChanged(changed);
   const setup = createGithubSetup(root, changed);
   const star = createGithubStar({
     owner: () => getActiveAppSession().dataOwnerId ? activeOwnerScopeKey() : null,
@@ -103,7 +106,7 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
       const token = await source.readToken();
       if (owner !== activeOwnerScopeKey()) return null;
       return token ?? readGhostSecret(cindyGithubRootInstance(), 'github_pat')
-        ?? readGhostSecret('cindy-github', 'github_pat');
+        ?? readGhostSecret('cindy-github', 'github_pat') ?? await readGithubAppToken();
     },
     fetch: outboundFetch,
   });
@@ -151,6 +154,7 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
     });
   }
   app.once('before-quit', () => {
+    stopAppChanges();
     unsubscribes.forEach(unsubscribe => unsubscribe());
     setup.cancel();
   });

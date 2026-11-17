@@ -1,3 +1,4 @@
+import { readGithubAppToken } from '../git-context/githubAppAuthorization.desktop.js';
 import { setPluginEnabled } from './pluginEnableService.js';
 import { createRuntimePluginControl } from './runtimeControl.js';
 import { createRuntimeContextProviders } from './runtimeContext.js';
@@ -6837,6 +6838,7 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       mcpAppsManual: bundledMcpAppsManual,
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
       readGhCliToken: () => getSharedGhCliTokenSource().readToken(),
+      readGithubAppToken,
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
       getLoginEmail: () => getAuthState().user?.email ?? null,
       // 用 Node 侧 undici fetch 而非 Electron net.fetch:redirect:'manual' 在 undici
@@ -9546,7 +9548,9 @@ export function registerGhostIpc(): void {
       ? networkSecretDecls.filter((s) => s.source === 'gh-cli')
       : [];
     const ghCliAvailable =
-      ghCliSecretDecls.length > 0 ? await getSharedGhCliTokenSource().probeAvailability() : false;
+      ghCliSecretDecls.length > 0
+        ? await getSharedGhCliTokenSource().probeAvailability() || Boolean(await readGithubAppToken().catch(() => null))
+        : false;
     return handleGhostSecretsRequest({
       method,
       pathname,

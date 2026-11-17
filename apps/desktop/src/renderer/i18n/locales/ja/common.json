@@ -16557,7 +16557,8 @@
             "token": "予備トークンを使用中",
             "recheck": "接続を確認",
             "summary": "GitHub のリポジトリ、Issue、PR、Actions を管理。",
-            "otherMethods": "その他の接続方法"
+            "otherMethods": "その他の接続方法",
+            "github-app": "GitHub App"
           },
           "app": {
             "title": "リポジトリのイベント",
@@ -16570,6 +16571,20 @@
             "repositories": "リポジトリを選択",
             "disconnect": "イベント接続を解除",
             "connect": "GitHub App を接続"
+          },
+          "connection": {
+            "operations": "リポジトリの操作",
+            "operationsMissing": "リポジトリの操作は未承認です",
+            "checking": "GitHub 接続を確認中…",
+            "mismatch": "操作と通知でアカウントが異なります。確認して再接続してください。",
+            "ready": "GitHub アカウントに接続済みです。",
+            "incomplete": "アカウントは連携済みです。このコンピューターでの操作を承認してください。",
+            "eventsOnly": "このアカウントはリポジトリ通知用です。名前の表示だけでは、このコンピューターでの操作権限を確認できません。",
+            "connect": "GitHub に接続",
+            "alternative": "このコンピューターの GitHub ログインを使用",
+            "cliDescription": "既存のログインを引き続き使えます。個人通知など GitHub App 非対応の機能には、この方法が必要です。",
+            "disconnect": "GitHub App の接続を解除",
+            "repositories": "通知を受け取るリポジトリ：{{count}}"
           }
         },
         "unresolved": "未解決のレビューコメント: {{count}} 件",

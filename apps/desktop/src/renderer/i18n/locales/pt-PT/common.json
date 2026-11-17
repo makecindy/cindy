@@ -16793,7 +16793,8 @@
             "token": "A utilizar o token alternativo",
             "recheck": "Verificar ligação",
             "summary": "Gerir repositórios, issues, pull requests e Actions do GitHub.",
-            "otherMethods": "Outros métodos de ligação"
+            "otherMethods": "Outros métodos de ligação",
+            "github-app": "GitHub App"
           },
           "app": {
             "title": "Eventos dos repositórios",
@@ -16806,6 +16807,20 @@
             "repositories": "Escolher repositórios",
             "disconnect": "Desligar eventos",
             "connect": "Ligar GitHub App"
+          },
+          "connection": {
+            "operations": "Operações de repositório",
+            "operationsMissing": "Acesso ao repositório ainda não autorizado",
+            "checking": "A verificar a ligação ao GitHub…",
+            "mismatch": "As operações e notificações usam contas diferentes. Verifique as contas e volte a ligar.",
+            "ready": "Conta GitHub ligada.",
+            "incomplete": "Conta associada. Autorize as operações neste computador para concluir.",
+            "eventsOnly": "Esta conta recebe eventos de repositório. O nome não confirma a autorização neste computador.",
+            "connect": "Ligar GitHub",
+            "alternative": "Usar o início de sessão local do GitHub",
+            "cliDescription": "Pode continuar a usar a sessão local. As notificações pessoais e funções não suportadas por GitHub Apps continuam a precisar dela.",
+            "disconnect": "Desligar GitHub App",
+            "repositories": "Repositórios seguidos: {{count}}"
           }
         },
         "unresolved": "Discussões de revisão por resolver: {{count}}",

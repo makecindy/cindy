@@ -680,10 +680,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   逐跳只发往 `network.hosts` / 连接地址中已声明的主机，插件自带的同名头（不区分大小写）一律剥除；版本无关
   （0.0.0）或找不到内置手册时不带。Node 工作进程的请求不带，只剥除同名头。
 - `source: "gh-cli"` 是按声明开放的宿主凭证来源；已批准且身份已确认的实例可使用。Host 优先读取
-  本机 `gh auth token`，不可用时才回落到同 key 经 `/secrets` 保存的 PAT。两种 token
+  本机 `gh auth token`，不可用时才回落到同 key 经 `/secrets` 保存的 PAT，再回落到当前 Cindy 数据所有者的 GitHub App 用户令牌。三种 token
   均只在 Main 的 networkSlot 或受信本机账号检查中注入 `api.github.com` 的
   `Authorization: Bearer` 请求头，不得进入插件、Renderer、Agent、KV、日志或 Node
-  Worker。本机账号检查仅允许固定 GET `/user`，拒绝重定向，限时 15 秒；只返回
+  Worker。App 用户令牌按本机所有者与服务端点加密隔离，续期与旧版本兼容见
+  [GitHub App 用户授权](protocol-compatibility/github-app-events.md#github-app-用户授权与统一连接2026-11-17待部署)。
+  本机账号检查仅允许固定 GET `/user`，拒绝重定向，限时 15 秒；只返回
   连接分类、用户名和来源，不返回响应原文。插件设置页只能读取 `hostAvailable`、
   `hostManagedSetup` 布尔与备用 PAT 的 `saved/tail` 状态。该来源
   不允许 `exchange` 或 `setup.requires` 引用。安装确认须说明它能使用本机 GitHub 账号的实际权限。

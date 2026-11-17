@@ -5,7 +5,6 @@ import { PluginShareButton } from './PluginShareButton';
 import { PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
 import { permissionItemDetail } from '../../../shared/ghostPermissionDetail';
 import { Button } from '@/components/ui/button';
-import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
@@ -497,10 +496,10 @@ export function GhostPluginDetailView({
                       reloadKey={githubConnectionVersion}
                       account={
                         hasGithubConnection ? (
-                          <div>
-                            <GithubAccountCard onConnected={() => setGithubConnectionVersion((version) => version + 1)} />
-                            {ghost.manifest.id === 'cindy-github' && ghost.namespace === null && <GithubAppCard />}
-                          </div>
+                          <GithubAccountCard
+                            includeEvents={ghost.manifest.id === 'cindy-github' && ghost.namespace === null}
+                            onConnected={() => setGithubConnectionVersion((version) => version + 1)}
+                          />
                         ) : undefined
                       }
                       ghost={ghost}

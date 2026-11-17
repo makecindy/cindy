@@ -4,14 +4,19 @@ import type { GithubConnectionState } from '../../shared/githubSetup.js';
 export async function githubConnection(deps: {
   readGh(): Promise<string | null>;
   readFallback(): string | null;
+  readApp?(): Promise<string | null>;
   fetch: typeof fetch;
 }): Promise<GithubConnectionState> {
-  let source: 'gh-cli' | 'token' = 'gh-cli';
+  let source: 'gh-cli' | 'token' | 'github-app' = 'gh-cli';
   try {
     let token = await deps.readGh();
     if (!token) {
       source = 'token';
       token = deps.readFallback();
+    }
+    if (!token && deps.readApp) {
+      source = 'github-app';
+      token = await deps.readApp();
     }
     if (!token) return { status: 'missing' };
     const response = await deps.fetch('https://api.github.com/user', {

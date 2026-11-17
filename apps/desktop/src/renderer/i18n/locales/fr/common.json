@@ -16793,7 +16793,8 @@
             "token": "Utilisation du jeton de secours",
             "recheck": "Vérifier la connexion",
             "summary": "Gérez les dépôts, issues, pull requests et Actions GitHub.",
-            "otherMethods": "Autres méthodes de connexion"
+            "otherMethods": "Autres méthodes de connexion",
+            "github-app": "GitHub App"
           },
           "app": {
             "title": "Événements des dépôts",
@@ -16806,6 +16807,20 @@
             "repositories": "Choisir les dépôts",
             "disconnect": "Déconnecter les événements",
             "connect": "Connecter GitHub App"
+          },
+          "connection": {
+            "operations": "Opérations sur les dépôts",
+            "operationsMissing": "Accès aux dépôts pas encore autorisé",
+            "checking": "Vérification de la connexion GitHub…",
+            "mismatch": "Les opérations et les notifications utilisent des comptes différents. Vérifiez-les et reconnectez-vous.",
+            "ready": "Compte GitHub connecté.",
+            "incomplete": "Compte lié. Autorisez les opérations sur cet ordinateur pour terminer.",
+            "eventsOnly": "Ce compte reçoit les événements des dépôts. Son nom ne confirme pas l’autorisation sur cet ordinateur.",
+            "connect": "Connecter GitHub",
+            "alternative": "Utiliser la connexion GitHub locale",
+            "cliDescription": "Vous pouvez conserver votre connexion locale. Les notifications personnelles et les fonctions non prises en charge par GitHub Apps en ont toujours besoin.",
+            "disconnect": "Déconnecter GitHub App",
+            "repositories": "Dépôts suivis : {{count}}"
           }
         },
         "unresolved": "Fils de revue non résolus : {{count}}",

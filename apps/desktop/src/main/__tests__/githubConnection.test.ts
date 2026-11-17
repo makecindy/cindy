@@ -2,6 +2,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { githubConnection } from '../git-context/githubConnection';
 
 describe('GitHub account verification', () => {
+  it('uses App user authorization only after existing gh and PAT credentials', async () => {
+    const readApp = vi.fn(async () => 'synthetic-app');
+    const deps = { readGh: async () => null, readFallback: () => null, readApp,
+      fetch: vi.fn(async () => Response.json({ login: 'app-user' })) };
+    expect(await githubConnection(deps)).toEqual({ status: 'connected', source: 'github-app', login: 'app-user' });
+    expect(JSON.stringify(await githubConnection(deps))).not.toContain('synthetic-app');
+    readApp.mockClear();
+    await githubConnection({ ...deps, readFallback: () => 'synthetic-pat' });
+    expect(readApp).not.toHaveBeenCalled();
+  });
   it('verifies the selected credential without returning secrets or unrelated user data', async () => {
     const fallback = vi.fn(() => 'fake-fallback');
     const fetcher = vi.fn(

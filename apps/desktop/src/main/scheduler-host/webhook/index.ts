@@ -261,6 +261,11 @@ export class ScheduleWebhookHost {
     return this.remote.connectGithub();
   }
 
+  async refreshGithubAuthorization(refreshToken: string) {
+    if (this.receiver() !== 'cloud' || !this.remote) throw new Error('WEBHOOK_ACCOUNT_REQUIRED');
+    return this.remote.refreshGithubAuthorization(refreshToken);
+  }
+
   async installGithub(): Promise<string | undefined> {
     if (this.receiver() !== 'cloud' || !this.remote) throw new Error('WEBHOOK_ACCOUNT_REQUIRED');
     return this.remote.installGithub();
