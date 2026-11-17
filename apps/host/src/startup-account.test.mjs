@@ -463,6 +463,10 @@ for (const [name, start] of [
  * - Gap: the cases above build the state from a classified error; none runs a refresh after a failed start.
  * - Not covered: a rejected saved session end to end. A saved session needs the system credential store
  *   (keychain or keyring) and the auth endpoint must be https; neither belongs in a unit run.
+ * - Credentials: no saved session, so no record is ever decrypted. On macOS and Windows the store only checks
+ *   that a record file exists (credentials/store.mjs read; the native codec runs only to decrypt). On Linux
+ *   building the store looks up the keyring at once (store.mjs createCredentialStore, secret-tool); a stand-in
+ *   `secret-tool` first on PATH answers instead, so no real keyring is read and the session ends as elsewhere.
  * - Tier: unit (loopback HTTP and one child process; no network, nothing outside the temporary directory).
  */
 test('a refresh after a failed start keeps the start-failure reason (no saved session)', async t => {
@@ -472,12 +476,19 @@ test('a refresh after a failed start keeps the start-failure reason (no saved se
   const home = path.join(root, 'home');
   mkdirSync(profile, { recursive: true, mode: 0o700 });
   mkdirSync(home, { recursive: true });
+  const bin = path.join(root, 'bin');
+  mkdirSync(bin);
+  writeFileSync(path.join(bin, 'secret-tool'), `#!${['', 'bin', 'sh'].join('/')}\necho cindy-host-start-reason-test-secret\n`, { mode: 0o755 });
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith('CINDY_HOST_') || key === 'XDT_USER_DATA_DIR') delete env[key];
+  delete env.NODE_OPTIONS;
+  delete env.NODE_PATH;
   const lease = acquireHostRuntimeLease(profile, 'owner-locked');
   assert.equal(lease.held, true);
   const hostDir = path.resolve(new URL('..', import.meta.url).pathname);
   const child = spawn(process.execPath, ['--import', 'tsx', '--import', './src/loaders/register-raw.mjs', 'src/main.ts', 'serve'], {
     cwd: hostDir, stdio: ['ignore', 'ignore', 'pipe'],
-    env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, TMPDIR: root, CINDY_HOST_DATA_DIR: profile,
+    env: { ...env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, HOME: home, USERPROFILE: home, TMPDIR: root, CINDY_HOST_DATA_DIR: profile,
       CINDY_HOST_OWNER: 'owner-locked', CINDY_HOST_PORT: '0', CINDY_HOST_KEYRING_APPLICATION: 'cindy-host-start-reason-test',
       // Anything that leaves the machine fails at once.
       HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', NODE_USE_ENV_PROXY: '1' },
