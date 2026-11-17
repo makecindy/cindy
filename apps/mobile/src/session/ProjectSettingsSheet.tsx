@@ -117,6 +117,7 @@ export function ProjectSettingsSheet({
   );
   const defaultName = projectDirectoryName(directory);
   const [name, setName] = useState(title);
+  const nameEdited = useRef(!!title.trim());
   const [repositoryUrl, setRepositoryUrl] = useState("");
   const [source, setSource] = useState<"local" | "repository">("local");
   const repositoryExpanded = source === "repository";
@@ -142,6 +143,7 @@ export function ProjectSettingsSheet({
       setName(next.name.slice(0, 80));
   };
   const changeName = (value: string) => {
+    nameEdited.current = !!value.trim();
     // Names such as Design/2027 must not silently become GitHub repositories.
     const address =
       /^(?:https?:\/\/|ssh:\/\/|[\w.-]+@[\w.-]+:|[\w.-]+\.[\w.-]+\/)/i.test(
@@ -209,7 +211,13 @@ export function ProjectSettingsSheet({
     const savedIcon = resolveProjectIcon(snapshot, projectKey);
     const savedDirectories =
       resolveProjectDirectories(snapshot, projectKey) ?? [];
-    setName((current) => (current === initial.name ? savedName : current));
+    if (directory) {
+      setName((current) =>
+        !current.trim() || !nameEdited.current
+          ? savedName || projectDirectoryName(directory).slice(0, 80)
+          : current,
+      );
+    }
     setIcon((current) => (current === initial.icon ? savedIcon : current));
     setDirectories((current) =>
       JSON.stringify(current) === JSON.stringify(initialDirectories)
@@ -218,7 +226,7 @@ export function ProjectSettingsSheet({
     );
     setInitial({ name: savedName, icon: savedIcon });
     setInitialDirectories(savedDirectories);
-  }, [create, projectKey, snapshot, initial, initialDirectories]);
+  }, [create, projectKey, directory, snapshot, initial, initialDirectories]);
   const [stage, setStage] = useState<"profile" | "icon">("profile");
   const [mode, setMode] = useState<"symbols" | "emoji" | "letters" | "image">(
     "symbols",
@@ -626,7 +634,10 @@ export function ProjectSettingsSheet({
                   {(!create || !!directory) && name !== defaultName && (
                     <Pressable
                       disabled={disabled}
-                      onPress={() => setName(defaultName)}
+                      onPress={() => {
+                        nameEdited.current = false;
+                        setName(defaultName);
+                      }}
                       accessibilityRole="button"
                       style={[styles.reset, { alignSelf: "flex-start" }]}
                     >

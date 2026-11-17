@@ -135,6 +135,9 @@ export default {
       return;
     }
     if (ui.case === 'create-primary') {
+      // UI regression: choosing a folder with an empty name must visibly fill it;
+      // the existing creation scenario previously checked only the submitted path.
+      const nameInput = page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true });
       for (const path of ['/Projects/First', '/Projects/Second']) {
         await page.evaluate((path) => {
           window.projectPickerPath = path;
@@ -142,13 +145,18 @@ export default {
         await page
           .getByRole('button', { name: await ui.t(path === '/Projects/First' ? 'projectSettings.changeMainDirectory' : 'projectSettings.addDirectory'), exact: true })
           .click();
+        if ((await nameInput.inputValue()) !== 'First') throw new Error('Selecting the main folder did not fill its name, or adding another folder changed it');
       }
+      await ui.capture('folder-name');
+      // Clearing a name returns to automatic naming on the next folder choice.
+      await nameInput.fill(' ');
       await page.getByText(await ui.t('projectSettings.mainDirectory'), { exact: true }).waitFor();
       await page
         .getByRole('button', { name: await ui.t('projectSettings.removeDirectory'), exact: true })
         .first()
         .click();
       await page.getByText('/Projects/Second', { exact: true }).waitFor();
+      if ((await nameInput.inputValue()) !== 'Second') throw new Error('Automatically filled name did not follow the promoted main folder');
       await ui.capture('promoted-primary');
       await page
         .getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true })
@@ -220,13 +228,14 @@ export default {
         }
         await page
           .getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true })
-          .fill('Example');
+          .fill('My project');
         await page.evaluate((path) => {
           window.projectPickerPath = path;
         }, '/Projects/Example');
         await page
           .getByRole('button', { name: await ui.t(ui.case === 'create-legacy' ? 'projectSettings.addDirectory' : 'projectSettings.changeMainDirectory'), exact: true })
           .click();
+        if ((await page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true }).inputValue()) !== 'My project') throw new Error('Choosing a folder replaced the manually entered name');
         await page.evaluate(() => {
           window.projectPickerPath = '/Projects/Reference';
         });
@@ -261,7 +270,7 @@ export default {
         throw new Error('Changed a pre-existing directory permission');
       if (
         ['create', 'create-legacy'].includes(ui.case) &&
-        (!writes[0].create || writes[0].projectKey !== 'local:/Projects/Example')
+        (!writes[0].create || writes[0].projectKey !== 'local:/Projects/Example' || writes[0].value.name !== 'My project')
       )
         throw new Error('Wrong creation identity');
       return;

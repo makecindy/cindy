@@ -98,6 +98,7 @@ export function ProjectSettingsDialog({
   );
   const defaultName = projectDirectoryName(directory);
   const [name, setName] = useState(project.displayName);
+  const nameEdited = useRef(!!project.displayName.trim());
   const [repositoryUrl, setRepositoryUrl] = useState('');
   const [source, setSource] = useState<'local' | 'repository'>('local');
   const repositoryExpanded = source === 'repository';
@@ -122,6 +123,7 @@ export function ProjectSettingsDialog({
     if (next && (!name.trim() || name === previous?.name)) setName(next.name.slice(0, 80));
   };
   const changeName = (value: string) => {
+    nameEdited.current = !!value.trim();
     // Names such as Design/2027 must not silently become GitHub repositories.
     const address = /^(?:https?:\/\/|ssh:\/\/|[\w.-]+@[\w.-]+:|[\w.-]+\.[\w.-]+\/)/i.test(
       value.trim(),
@@ -160,14 +162,20 @@ export function ProjectSettingsDialog({
       )?.alias ?? '';
     const savedIcon = resolveProjectIcon(snapshot, key);
     const savedDirectories = resolveProjectDirectories(snapshot, key) ?? [];
-    setName((current) => (current === initial.name ? savedName : current));
+    if (directory) {
+      setName((current) =>
+        !current.trim() || !nameEdited.current
+          ? savedName || projectDirectoryName(directory).slice(0, 80)
+          : current,
+      );
+    }
     setIcon((current) => (current === initial.icon ? savedIcon : current));
     setDirectories((current) =>
       JSON.stringify(current) === JSON.stringify(initialDirectories) ? savedDirectories : current,
     );
     setInitial({ name: savedName, icon: savedIcon });
     setInitialDirectories(savedDirectories);
-  }, [create, key, snapshot, initial, initialDirectories]);
+  }, [create, key, directory, snapshot, initial, initialDirectories]);
   const [stage, setStage] = useState<'profile' | 'icon'>('profile');
   const [mode, setMode] = useState<'symbols' | 'emoji' | 'letters' | 'image'>('symbols');
   const [pickerIcon, setPickerIcon] = useState<string | null>(null);
@@ -483,7 +491,10 @@ export function ProjectSettingsDialog({
                           size="sm"
                           className="-ml-3 mt-1"
                           disabled={busy || !available}
-                          onClick={() => setName(defaultName)}
+                          onClick={() => {
+                            nameEdited.current = false;
+                            setName(defaultName);
+                          }}
                         >
                           <RotateCcw size={13} />
                           {label('reset')}
