@@ -17564,12 +17564,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             if (!axes.ok) throwIpcError('INVALID_PARAMS', `target model runtime axes unavailable: ${axes.reason}`);
             return { ...profile, providerId: providerId ?? null, effort: axes.effort, fastMode: axes.fastMode };
           },
-          stage: async (id, profile, assertSelectionCurrent, beforeMutation) => {
+          stage: async (id, profile, assertSelectionCurrent, beforeMutation, source) => {
             return performSessionAgentSwitch(agentSwitchDeps, {
               sessionId: id, targetAgentKind: profile.agentKind, model: profile.model,
               providerId: profile.providerId, effort: profile.effort, fastMode: profile.fastMode,
               ...(profile.agentDeviceId !== undefined ? { agentDeviceId: profile.agentDeviceId } : {}),
-              runtimeSource: 'agent', assertSelectionCurrent, beforeMutation,
+              runtimeSource: source === 'user' ? undefined : 'agent', assertSelectionCurrent, beforeMutation,
             });
           },
         }, { targetSessionId, expectedGeneration, beforeMutation,

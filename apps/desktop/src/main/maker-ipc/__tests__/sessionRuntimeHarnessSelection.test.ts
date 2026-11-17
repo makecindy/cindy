@@ -54,7 +54,7 @@ function setup(running = false) {
     pendingRevision: (id) => pending.revision!(id),
     read: vi.fn(async () => effective),
     resolve: vi.fn(async (profile) => ({ ...profile, providerId: profile.providerId ?? 'openai' })),
-    stage: (id, profile, assertCurrent, beforeMutation) =>
+    stage: (id, profile, assertCurrent, beforeMutation, source = 'agent') =>
       performSessionAgentSwitch(switchDeps, {
         sessionId: id,
         targetAgentKind: profile.agentKind,
@@ -63,7 +63,7 @@ function setup(running = false) {
         effort: profile.effort,
         fastMode: profile.fastMode,
         ...(profile.agentDeviceId !== undefined ? { agentDeviceId: profile.agentDeviceId } : {}),
-        runtimeSource: 'agent',
+        runtimeSource: source === 'agent' ? 'agent' : undefined,
         assertSelectionCurrent: assertCurrent,
         beforeMutation,
       }),
@@ -221,6 +221,32 @@ describe('runtime harness selection', () => {
     });
     expect(h.close).not.toHaveBeenCalled();
     expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  // PR #11071: axes-only Agent revisions lost picker provenance. Existing tests only
+  // revised Agent choices. Minimal input: reselect the current model, then enable Fast.
+  // Unit tier: real staging + send application must retain the IM manual-route marker.
+  it('keeps a user-staged choice manual after an Agent revises its axes and sends', async () => {
+    const h = setup();
+    h.pending.set('s1', {
+      targetAgentKind: 'claude-code', model: h.effective.model,
+      providerId: 'old-provider', sameAgentSelection: true,
+    });
+    h.switchDeps.selectSameAgentModel = vi.fn(async (id, intent, applyNow) => {
+      if (!applyNow) h.pending.set(id, { ...intent, sameAgentSelection: true });
+      return { deferred: !applyNow };
+    });
+    h.switchDeps.onUserRouteSelectionLanded = vi.fn(async () => {});
+
+    expect(await setSessionRuntimeHarness(h.deps, {
+      targetSessionId: 's1', expectedGeneration: 4, patch: { fastMode: true },
+    })).toMatchObject({
+      ok: true,
+      pendingMutation: { source: 'user', profile: { fastMode: true } },
+    });
+    await applyPendingAgentSwitchIfIdle(h.switchDeps, 's1');
+    expect(h.switchDeps.onUserRouteSelectionLanded).toHaveBeenCalledWith('s1');
+    expect(h.pending.get('s1')).toBeUndefined();
   });
 
   // Agent runtime reads showed pending=null for a picker choice, so a Lead could overwrite a

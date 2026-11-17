@@ -78,6 +78,7 @@ export interface HarnessRuntimeSelectionDeps {
     profile: SessionRuntimeProfile,
     assertCurrent: () => void,
     beforeMutation?: () => Promise<void>,
+    source?: 'user' | 'agent',
   ): Promise<{ deferred?: boolean; sameEngineSuperseded?: boolean }>;
   pending(sessionId: string): PendingAgentSwitchIntent | undefined;
 }
@@ -141,7 +142,11 @@ export async function setSessionRuntimeHarness(
       if (params.beforeMutation) await params.beforeMutation();
       if (!effective)
         return { ok: false, errorCode: 'NOT_FOUND', message: `session ${id} not found` };
-      const staged = revisingStaged ? stagedSelectionProfile(deps.pending(id), effective.agentDeviceId) : null;
+      const previous = deps.pending(id);
+      const staged = revisingStaged ? stagedSelectionProfile(previous, effective.agentDeviceId) : null;
+      // Revising a picker choice must retain its provenance until send records the
+      // manual-route override, even when the Agent changes only effort or Fast.
+      const source = revisingStaged && isUserPendingAgentSwitchIntent(previous) ? 'user' : 'agent';
       if (revisingStaged && !staged) {
         return {
           ok: false,
@@ -168,7 +173,7 @@ export async function setSessionRuntimeHarness(
         { effort: patch.effort !== undefined, fast: patch.fastMode !== undefined },
       );
       assertCurrent();
-      const result = await deps.stage(id, profile, assertCurrent, params.beforeMutation);
+      const result = await deps.stage(id, profile, assertCurrent, params.beforeMutation, source);
       if (result.sameEngineSuperseded) {
         return {
           ok: false,
@@ -190,7 +195,8 @@ export async function setSessionRuntimeHarness(
         effectiveBoundary: 'next_send',
         generation,
         effectiveProfile: effective,
-        pendingMutation: pendingHarnessRuntimeMutation(deps.pending(id), generation, effective.agentDeviceId),
+        pendingMutation: pendingHarnessRuntimeMutation(deps.pending(id), generation, effective.agentDeviceId)
+          ?? userStagedSelectionProjection(deps.pending(id), generation, effective.agentDeviceId),
       };
     });
   } catch (error) {
