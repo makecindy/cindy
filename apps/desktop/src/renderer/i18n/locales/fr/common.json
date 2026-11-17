@@ -9541,23 +9541,23 @@
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
           "body": "Ces données appartiennent à un autre compte que la connexion enregistrée par le service d’arrière-plan Cindy.",
-          "action": "Exécutez cindy-host login avec le compte d’origine, puis redémarrez le service d’arrière-plan Cindy."
+          "action": "Exécutez cindy-host login avec le compte d’origine, redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy."
         },
         "HOST_DATABASE_LOCKED": {
           "body": "Une autre application Cindy utilise ces données.",
-          "action": "Fermez-la, puis redémarrez le service d’arrière-plan Cindy."
+          "action": "Fermez-la, redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy."
         },
         "HOST_DATABASE_UNAVAILABLE": {
           "body": "Les données de ce compte ne peuvent pas être ouvertes.",
-          "action": "Si vous avez récemment utilisé une version plus récente de Cindy, mettez Cindy à jour sur cet ordinateur, puis redémarrez le service d’arrière-plan Cindy. Sinon, exécutez cindy-host status pour voir pourquoi."
+          "action": "Si vous avez récemment utilisé une version plus récente de Cindy, mettez Cindy à jour sur cet ordinateur, redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy. Sinon, exécutez cindy-host status pour voir pourquoi."
         },
         "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
           "body": "Au démarrage, le service d’arrière-plan Cindy n’a pas pu joindre le service de connexion.",
-          "action": "Vérifiez votre réseau, puis redémarrez le service d’arrière-plan Cindy."
+          "action": "Vérifiez votre réseau, redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy."
         },
         "HOST_START_FAILED": {
           "body": "Le service d’arrière-plan Cindy a rencontré une erreur au démarrage.",
-          "action": "Redémarrez le service d’arrière-plan Cindy. Si cela se reproduit, exécutez cindy-host status pour en voir la raison."
+          "action": "Redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy. Si cela se reproduit, exécutez cindy-host status pour en voir la raison."
         }
       }
     },
@@ -19237,7 +19237,7 @@
     "errors": {
       "piStartupCloudFile": "Un fichier d’instructions uniquement dans le cloud peut retarder le démarrage de Pi : {{path}}. Téléchargez ce fichier dans le Finder, attendez qu’il soit disponible en local, puis réessayez. Le délai dépassé peut avoir une autre cause.",
       "hostProfileInUseByDesktop": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule. Quittez-la, puis renvoyez le message.",
-      "hostProfileInUseByDesktopAtStart": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule ; le service d’arrière-plan Cindy n’a donc pas démarré. Quittez-la, puis redémarrez le service d’arrière-plan Cindy.",
+      "hostProfileInUseByDesktopAtStart": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule ; le service d’arrière-plan Cindy n’a donc pas démarré. Quittez-la, redémarrez le service d’arrière-plan Cindy, puis rouvrez cette fenêtre Cindy.",
       "hostProfileInUseByDesktopRetry": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule ; cette modification n’est donc pas possible pour le moment. Quittez-la, puis réessayez.",
       "openFileFailed": "Impossible d'ouvrir le fichier dans le système",
       "emptyResponse": "Le modèle n'a renvoyé aucun contenu. Réessayez. Si le contexte est très long, changez de modèle.",

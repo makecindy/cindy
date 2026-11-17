@@ -9469,23 +9469,23 @@
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
           "body": "Diese Daten gehören zu einem anderen Konto als die Anmeldung, die der Cindy-Hintergrunddienst gespeichert hat.",
-          "action": "Führe cindy-host login mit dem ursprünglichen Konto aus und starte den Cindy-Hintergrunddienst dann neu."
+          "action": "Führe cindy-host login mit dem ursprünglichen Konto aus, starte dann den Cindy-Hintergrunddienst neu und öffne Cindy erneut."
         },
         "HOST_DATABASE_LOCKED": {
           "body": "Ein anderes Cindy-Programm verwendet diese Daten.",
-          "action": "Beende es und starte den Cindy-Hintergrunddienst dann neu."
+          "action": "Beende es, starte dann den Cindy-Hintergrunddienst neu und öffne Cindy erneut."
         },
         "HOST_DATABASE_UNAVAILABLE": {
           "body": "Die Daten dieses Kontos lassen sich nicht öffnen.",
-          "action": "Wenn du kürzlich eine neuere Version von Cindy verwendet hast, aktualisiere Cindy auf diesem Computer zuerst auf die neueste Version und starte den Cindy-Hintergrunddienst dann neu. Andernfalls führe cindy-host status aus, um den Grund zu sehen."
+          "action": "Wenn du kürzlich eine neuere Version von Cindy verwendet hast, aktualisiere Cindy auf diesem Computer zuerst auf die neueste Version, starte dann den Cindy-Hintergrunddienst neu und öffne Cindy erneut. Andernfalls führe cindy-host status aus, um den Grund zu sehen."
         },
         "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
           "body": "Der Cindy-Hintergrunddienst konnte beim Start den Anmeldedienst nicht erreichen.",
-          "action": "Prüfe deine Netzwerkverbindung und starte den Cindy-Hintergrunddienst dann neu."
+          "action": "Prüfe deine Netzwerkverbindung, starte dann den Cindy-Hintergrunddienst neu und öffne Cindy erneut."
         },
         "HOST_START_FAILED": {
           "body": "Beim Start des Cindy-Hintergrunddienstes ist ein Fehler aufgetreten.",
-          "action": "Starte den Cindy-Hintergrunddienst neu. Wenn es wieder passiert, führe cindy-host status aus, um den Grund zu sehen."
+          "action": "Starte den Cindy-Hintergrunddienst neu und öffne Cindy erneut. Wenn es wieder passiert, führe cindy-host status aus, um den Grund zu sehen."
         }
       }
     },
@@ -19055,7 +19055,7 @@
     "errors": {
       "piStartupCloudFile": "Eine nur in der Cloud verfügbare Anweisungsdatei verzögert möglicherweise den Start von Pi: {{path}}. Lade diese Datei im Finder herunter, warte, bis sie lokal verfügbar ist, und versuche es erneut. Die Zeitüberschreitung kann eine andere Ursache haben.",
       "hostProfileInUseByDesktop": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet. Beende sie und sende dann erneut.",
-      "hostProfileInUseByDesktopAtStart": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet, daher wurde der Cindy-Hintergrunddienst nicht gestartet. Beende sie und starte den Cindy-Hintergrunddienst dann neu.",
+      "hostProfileInUseByDesktopAtStart": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet, daher wurde der Cindy-Hintergrunddienst nicht gestartet. Beende sie, starte den Cindy-Hintergrunddienst neu und öffne dann dieses Cindy-Fenster erneut.",
       "hostProfileInUseByDesktopRetry": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet, daher ist das gerade nicht möglich. Beende sie und versuche es dann erneut.",
       "openFileFailed": "Datei kann nicht mit dem System geöffnet werden",
       "emptyResponse": "Das Modell hat keinen Inhalt zurückgegeben. Versuche es erneut. Wechsle bei sehr langem Kontext das Modell.",

@@ -9426,23 +9426,23 @@
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
           "body": "这份数据属于另一个账号，和 Cindy 后台服务保存的登录不一致。",
-          "action": "请用原来的账号运行 cindy-host login，再重新启动 Cindy 后台服务。"
+          "action": "请用原来的账号运行 cindy-host login，再重新启动 Cindy 后台服务，然后重新打开 Cindy。"
         },
         "HOST_DATABASE_LOCKED": {
           "body": "另一个 Cindy 程序正在使用这份数据。",
-          "action": "请先关掉它，再重新启动 Cindy 后台服务。"
+          "action": "请先关掉它，再重新启动 Cindy 后台服务，然后重新打开 Cindy。"
         },
         "HOST_DATABASE_UNAVAILABLE": {
           "body": "这个账号的数据打不开。",
-          "action": "如果最近用过更新版本的 Cindy，请先把这台电脑上的 Cindy 更新到最新版本，再重新启动 Cindy 后台服务；否则运行 cindy-host status 查看原因。"
+          "action": "如果最近用过更新版本的 Cindy，请先把这台电脑上的 Cindy 更新到最新版本，再重新启动 Cindy 后台服务，然后重新打开 Cindy；否则运行 cindy-host status 查看原因。"
         },
         "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
           "body": "Cindy 后台服务启动时连不上登录服务。",
-          "action": "请检查网络，再重新启动 Cindy 后台服务。"
+          "action": "请检查网络，再重新启动 Cindy 后台服务，然后重新打开 Cindy。"
         },
         "HOST_START_FAILED": {
           "body": "Cindy 后台服务启动时出错。",
-          "action": "请重新启动 Cindy 后台服务。如果还是出错，运行 cindy-host status 查看原因。"
+          "action": "请重新启动 Cindy 后台服务，然后重新打开 Cindy。如果还是出错，运行 cindy-host status 查看原因。"
         }
       }
     },
@@ -18980,7 +18980,7 @@
     "errors": {
       "piStartupCloudFile": "发现仅在云端的指令文件：{{path}}。它可能使 Pi 启动等待。请在访达中下载该文件，确认已保存在本机后重试；超时也可能另有原因。",
       "hostProfileInUseByDesktop": "这份数据正被单独运行的 Cindy 电脑端使用。请先退出它，再发送。",
-      "hostProfileInUseByDesktopAtStart": "这份数据正被单独运行的 Cindy 电脑端使用，Cindy 后台服务没有启动。请先退出它，再重新启动 Cindy 后台服务。",
+      "hostProfileInUseByDesktopAtStart": "这份数据正被单独运行的 Cindy 电脑端使用，Cindy 后台服务没有启动。请先退出它，重新启动 Cindy 后台服务，然后重新打开当前这个 Cindy 窗口。",
       "hostProfileInUseByDesktopRetry": "这份数据正被单独运行的 Cindy 电脑端使用，暂时不能修改。请先退出它，再试一次。",
       "openFileFailed": "无法在系统中打开文件",
       "emptyResponse": "模型没有返回内容。请重试。上下文很长时，也可以换一个模型。",
