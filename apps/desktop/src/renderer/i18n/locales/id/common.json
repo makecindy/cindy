@@ -9228,6 +9228,13 @@
     },
     "navigation": {
       "unavailable": "Tidak dapat membuka pengaturan komputer tujuan. Pastikan komputer online dan mengizinkan kontrol jarak jauh; jika versinya lama, perbarui Cindy dulu."
+    },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Beri nama worktree dengan model",
+        "description": "Worktree tugas baru diberi nama Inggris pendek berdasarkan pesan pertamanya (misalnya fix-login-timeout), jadi folder dan branch langsung terlihat fungsinya. Dibuat oleh model bantu; jika penamaan gagal, nama acak tetap dipakai. Hanya memengaruhi worktree yang dibuat setelah ini."
+      },
+      "toggleAria": "Alihkan penamaan worktree dengan model"
     }
   },
   "remoteDevice": {
