@@ -40,6 +40,11 @@ Renderer 可以负责组件渲染、交互状态、表单状态、展示数据�
 - 不把前端隐藏、按钮禁用或 prompt 当成权限边界。
 - 不为了绕过 IPC 在 Renderer 中新增带凭证的网络请求。无凭证的公开资源请求必须受 CSP
   约束，并确认不会泄露本地数据。
+- Markdown 的 `skipHtml` 保持开启。`remarkHtmlText.ts` 只用无 DOM 的 parse5 提取
+  HTML 容器正文，输出普通文本、段落和换行；不重新解释文本为 HTML，不传递原标签的属性、
+  CSS 或链接，不保留 script / style / iframe / object 等子树。HTML 表格只保全文本行，
+  details 的标题与正文直接可读；单独的安全 `<img>` 仍由既有 `remarkHtmlImages` 处理，
+  不因容器文本恢复而新增嵌套图片或其他资源加载。
 
 ### Main、Packages 与 Shared
 

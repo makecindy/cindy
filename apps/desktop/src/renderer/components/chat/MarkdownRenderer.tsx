@@ -15,8 +15,8 @@ import { WorkspaceMediaSrc } from './useWorkspaceMediaPath';
  * - Code blocks: JetBrains Mono, Card bg + Board border + 12px radius
  * - Inline code: Stone bg + 4px padding + 6px radius
  * - GFM tables, lists, bold, italic, links
- * - HTML tags filtered (no <script>); safe single <img> tags are normalized
- *   into Markdown image nodes before HTML filtering.
+ * - Raw HTML stays disabled; container text is preserved as Markdown text nodes,
+ *   and safe single <img> tags use the existing Markdown image renderer.
  */
 
 import { Tip } from '@/components/ui/tooltip';
@@ -39,6 +39,7 @@ import { normalizeDisplayMathFences } from './normalizeDisplayMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
 import remarkHtmlImages from './remarkHtmlImages';
+import remarkHtmlText from './remarkHtmlText';
 import remarkBareSpaceLocalImages from './remarkBareSpaceLocalImages';
 import remarkPreserveRawLocalDestinations, {
   RAW_LOCAL_IMAGE_SRC_PROP,
@@ -236,6 +237,7 @@ export const REMARK_PLUGINS: PluggableList = [
   remarkStrictInlineMath,
   remarkTruncateCjkUrls,
   remarkHtmlImages,
+  remarkHtmlText,
   remarkBareSpaceLocalImages,
   remarkLocalPathLinks,
   remarkPreserveRawLocalDestinations,
@@ -247,6 +249,7 @@ export const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   remarkStrictInlineMath,
   remarkTruncateCjkUrls,
   remarkHtmlImages,
+  remarkHtmlText,
   remarkBareSpaceLocalImages,
   remarkSessionLinks,
   remarkLocalPathLinks,

@@ -18,6 +18,7 @@ export default {
   cases: {
     default: { about: 'A zip that cannot be previewed opens in a compact centered panel over the dimmed conversation' },
     markdown: { about: 'A Markdown document in the same floating panel' },
+    'html-content': { about: '#10888: HTML-block text remains readable without executing HTML or loading its resources' },
     image: { about: 'An image in the same floating panel' },
   },
   async ready(page) {
@@ -26,6 +27,7 @@ export default {
         document.querySelector('[data-preview-scrim]') &&
         ([...document.querySelectorAll('img')].some((i) => i.complete && i.naturalWidth === 1600) ||
           document.body.innerText.includes('核对步骤') ||
+          document.body.innerText.includes('HTML 正文核对') ||
           document.body.innerText.includes('269.4 KB ·')),
     );
     // 入场淡入结束后再截图。
@@ -55,6 +57,26 @@ export default {
       assert.equal(panel.left, MARGIN);
       assert.equal(viewport.width - panel.right, MARGIN);
       assert.equal(viewport.height - panel.bottom, MARGIN);
+    }
+    if (ui.case === 'html-content') {
+      const body = page.locator('[data-text-lightbox-search-root]');
+      const text = await body.innerText();
+      for (const expected of ['容器正文与嵌套文字', '展开标题', '第一段正文', '第二段正文', '换行内容', '名称 | 数量', '苹果 | 2', '安全正文链接标签正文']) {
+        assert(text.includes(expected), `Missing HTML text: ${expected}`);
+      }
+      assert.equal(await body.locator('details, summary, iframe, object, embed, script, style, img, #html-injection, [onclick], [onerror], a[href^="javascript:"]').count(), 0);
+      assert.equal(await page.evaluate(() => window.__htmlExecuted), undefined);
+      assert.equal(await body.locator('strong').innerText(), '普通 Markdown');
+      assert.equal(await body.locator('pre code').innerText(), '<div><script>literal_code()</script></div>\n');
+      await ui.capture('html-text-preserved');
+      await page.getByRole('button', { name: await ui.t('attachmentPreview.more'), exact: true }).click();
+      await page.getByRole('menuitem', { name: await ui.t('attachmentPreview.source'), exact: true }).click();
+      await page.waitForSelector('.cm-content');
+      assert((await page.locator('.cm-content').innerText()).includes('<details><summary>展开标题</summary>'));
+      await page.getByRole('button', { name: await ui.t('attachmentPreview.more'), exact: true }).click();
+      await page.getByRole('menuitem', { name: await ui.t('attachmentPreview.rendered'), exact: true }).click();
+      await page.waitForSelector('[data-text-lightbox-search-root]');
+      return;
     }
     if (ui.case !== 'default') return;
     await page.getByRole('button', { name: await ui.t('ccAgent.workdirBrowse.unrenderable.revealFolder') }).click();
