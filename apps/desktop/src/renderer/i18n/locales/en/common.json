@@ -21716,7 +21716,8 @@
     "source_local": "Local folder",
     "sourceShort_local": "Local folder",
     "sourceHint_local": "Enter a name to create a folder, or choose an existing one.",
-    "chooseExistingFolder": "Choose existing folder"
+    "chooseExistingFolder": "Choose existing folder",
+    "changeMainDirectory": "Change"
   },
   "taskManagement": {
     "scope": "Applies to this account on this computer only.",

@@ -11,6 +11,7 @@ export function ProjectDirectoriesEditor({
   mainDirectory,
   automatic = false,
   onMainDirectoryChange,
+  onChooseMainDirectory,
   copied,
   onCopy,
   allowAdd = true,
@@ -24,6 +25,7 @@ export function ProjectDirectoriesEditor({
   mainDirectory: string;
   automatic?: boolean;
   onMainDirectoryChange?: (path: string) => void;
+  onChooseMainDirectory?: () => void;
   copied: boolean;
   onCopy: () => void;
   allowAdd?: boolean;
@@ -53,12 +55,25 @@ export function ProjectDirectoriesEditor({
         <div className="flex flex-col gap-3">
           {mainDirectory && (
             <div className="flex items-center gap-2 rounded-lg border border-[var(--border-default)] p-3">
-              <span className="min-w-0 flex-1 select-text break-all text-13 text-[var(--text-primary)]">
-                {mainDirectory}
-              </span>
-              <span className="shrink-0 rounded bg-[var(--surface-hover-soft)] px-2 py-1 text-12 text-[var(--text-secondary)]">
-                {label(automatic ? 'automaticMain' : 'mainDirectory')}
-              </span>
+              <div className="min-w-0 flex-1 space-y-1">
+                <p className="select-text break-all text-13 text-[var(--text-primary)]">
+                  {mainDirectory}
+                </p>
+                <p className="text-12 text-[var(--text-secondary)]">
+                  {label(automatic ? 'automaticMain' : 'mainDirectory')}
+                </p>
+              </div>
+              {onChooseMainDirectory && (
+                <Button
+                  variant="secondary"
+                  tone="quiet"
+                  className="shrink-0"
+                  disabled={disabled}
+                  onClick={onChooseMainDirectory}
+                >
+                  {label('changeMainDirectory')}
+                </Button>
+              )}
               {!automatic && (
                 <Button
                   variant="secondary"

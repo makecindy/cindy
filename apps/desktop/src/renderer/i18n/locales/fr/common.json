@@ -21921,7 +21921,8 @@
     "source_local": "Dossier local",
     "sourceShort_local": "Dossier local",
     "sourceHint_local": "Saisissez un nom pour créer un dossier ou choisissez un dossier existant.",
-    "chooseExistingFolder": "Choisir un dossier existant"
+    "chooseExistingFolder": "Choisir un dossier existant",
+    "changeMainDirectory": "Modifier"
   },
   "taskManagement": {
     "scope": "Uniquement pour ce compte sur cet ordinateur.",

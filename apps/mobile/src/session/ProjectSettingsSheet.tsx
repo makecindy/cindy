@@ -702,21 +702,14 @@ export function ProjectSettingsSheet({
                     {deviceName || label("thisComputer")}
                   </Text>
                 </View>
-                {repositoryCreation && source === "local" && (
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={disabled}
-                    onPress={() => browse("main")}
-                    style={[styles.reset, { alignSelf: "flex-start" }]}
-                  >
-                    <Text style={[styles.path, textColor]}>
-                      {label("chooseExistingFolder")}
-                    </Text>
-                  </Pressable>
-                )}
                 <ProjectDirectoriesEditor
                   mainDirectory={directoryPreview}
                   automatic={automaticDirectory}
+                  onChooseMainDirectory={
+                    repositoryCreation && source === "local"
+                      ? () => browse("main")
+                      : undefined
+                  }
                   showHint={!create}
                   copied={copied}
                   onMainDirectoryChange={

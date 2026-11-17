@@ -21634,7 +21634,8 @@
     "source_local": "本機資料夾",
     "sourceShort_local": "本機資料夾",
     "sourceHint_local": "填寫名稱自動建立，也可以選擇現有資料夾。",
-    "chooseExistingFolder": "選擇現有資料夾"
+    "chooseExistingFolder": "選擇現有資料夾",
+    "changeMainDirectory": "更改"
   },
   "taskManagement": {
     "scope": "僅套用於目前帳號在這台電腦上的任務。",

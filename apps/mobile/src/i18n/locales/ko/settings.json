@@ -512,6 +512,7 @@
     "source_local": "로컬 폴더",
     "sourceShort_local": "로컬 폴더",
     "sourceHint_local": "이름을 입력해 새로 만들거나 기존 폴더를 선택하세요.",
-    "chooseExistingFolder": "기존 폴더 선택"
+    "chooseExistingFolder": "기존 폴더 선택",
+    "changeMainDirectory": "변경"
   }
 }

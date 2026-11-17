@@ -113,7 +113,7 @@ export default {
       }
       if (ui.case === 'create-auto') {
         await page.evaluate(() => window.projectPickerCancelled = true);
-        await page.getByRole('button', { name: await ui.t('projectSettings.chooseExistingFolder'), exact: true }).click();
+        await page.getByRole('button', { name: await ui.t('projectSettings.changeMainDirectory'), exact: true }).click();
         await page.getByText(await ui.t('projectSettings.automaticMain'), { exact: true }).waitFor();
         await page.evaluate(() => window.projectPickerCancelled = false);
       }
@@ -140,7 +140,7 @@ export default {
           window.projectPickerPath = path;
         }, path);
         await page
-          .getByRole('button', { name: await ui.t(path === '/Projects/First' ? 'projectSettings.chooseExistingFolder' : 'projectSettings.addDirectory'), exact: true })
+          .getByRole('button', { name: await ui.t(path === '/Projects/First' ? 'projectSettings.changeMainDirectory' : 'projectSettings.addDirectory'), exact: true })
           .click();
       }
       await page.getByText(await ui.t('projectSettings.mainDirectory'), { exact: true }).waitFor();
@@ -167,7 +167,7 @@ export default {
         window.projectPickerPath = path;
       }, '/Projects/Cindy');
       await page
-        .getByRole('button', { name: await ui.t('projectSettings.chooseExistingFolder'), exact: true })
+        .getByRole('button', { name: await ui.t('projectSettings.changeMainDirectory'), exact: true })
         .click();
       await page.getByText('/Projects/Reference', { exact: true }).waitFor();
       if (
@@ -225,7 +225,7 @@ export default {
           window.projectPickerPath = path;
         }, '/Projects/Example');
         await page
-          .getByRole('button', { name: await ui.t(ui.case === 'create-legacy' ? 'projectSettings.addDirectory' : 'projectSettings.chooseExistingFolder'), exact: true })
+          .getByRole('button', { name: await ui.t(ui.case === 'create-legacy' ? 'projectSettings.addDirectory' : 'projectSettings.changeMainDirectory'), exact: true })
           .click();
         await page.evaluate(() => {
           window.projectPickerPath = '/Projects/Reference';

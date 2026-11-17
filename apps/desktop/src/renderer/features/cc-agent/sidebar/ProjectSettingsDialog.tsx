@@ -547,36 +547,30 @@ export function ProjectSettingsDialog({
                       <Monitor size={15} />
                       <span>{project.deviceLinkDeviceName || label('thisComputer')}</span>
                     </div>
-                    {repositoryCreation && source === 'local' && (
-                      <Button
-                        variant="secondary"
-                        tone="quiet"
-                        className="self-start"
-                        disabled={busy || !available}
-                        onClick={async () => {
-                          if (project.deviceLinkDeviceId) {
-                            setRemoteBrowse('main');
-                            return;
-                          }
-                          try {
-                            const result = await window.electronAPI.showOpenDirectoryDialog();
-                            if (
-                              !result.canceled &&
-                              result.path &&
-                              isDataOwnerGenerationCurrent(owner)
-                            )
-                              setDirectory(result.path);
-                          } catch {
-                            setError(label('failed'));
-                          }
-                        }}
-                      >
-                        {label('chooseExistingFolder')}
-                      </Button>
-                    )}
                     <ProjectDirectoriesEditor
                       mainDirectory={directoryPreview}
                       automatic={automaticDirectory}
+                      onChooseMainDirectory={
+                        repositoryCreation && source === 'local'
+                          ? async () => {
+                              if (project.deviceLinkDeviceId) {
+                                setRemoteBrowse('main');
+                                return;
+                              }
+                              try {
+                                const result = await window.electronAPI.showOpenDirectoryDialog();
+                                if (
+                                  !result.canceled &&
+                                  result.path &&
+                                  isDataOwnerGenerationCurrent(owner)
+                                )
+                                  setDirectory(result.path);
+                              } catch {
+                                setError(label('failed'));
+                              }
+                            }
+                          : undefined
+                      }
                       showHint={!create}
                       copied={copied}
                       onMainDirectoryChange={

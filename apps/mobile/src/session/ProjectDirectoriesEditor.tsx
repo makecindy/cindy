@@ -18,6 +18,7 @@ export function ProjectDirectoriesEditor({
   mainDirectory,
   automatic = false,
   onMainDirectoryChange,
+  onChooseMainDirectory,
   copied,
   onCopy,
   allowAdd = true,
@@ -30,6 +31,7 @@ export function ProjectDirectoriesEditor({
   mainDirectory: string;
   automatic?: boolean;
   onMainDirectoryChange?: (path: string) => void;
+  onChooseMainDirectory?: () => void;
   copied: boolean;
   onCopy: () => void;
   allowAdd?: boolean;
@@ -63,6 +65,18 @@ export function ProjectDirectoriesEditor({
                 {label(automatic ? "automaticMain" : "mainDirectory")}
               </Text>
             </View>
+            {onChooseMainDirectory && (
+              <Pressable
+                accessibilityRole="button"
+                disabled={disabled}
+                onPress={onChooseMainDirectory}
+                style={[styles.change, { opacity: disabled ? 0.5 : 1 }]}
+              >
+                <Text style={[styles.body, { color: colors.textPrimary }]}>
+                  {label("changeMainDirectory")}
+                </Text>
+              </Pressable>
+            )}
             {!automatic && (
               <Pressable
                 accessibilityRole="button"
@@ -204,6 +218,13 @@ const styles = StyleSheet.create({
   remove: {
     width: 44,
     height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  change: {
+    minHeight: 44,
+    minWidth: 44,
+    paddingHorizontal: spacing.sm,
     alignItems: "center",
     justifyContent: "center",
   },

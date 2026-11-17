@@ -512,6 +512,7 @@
     "source_local": "ローカルフォルダ",
     "sourceShort_local": "ローカルフォルダ",
     "sourceHint_local": "名前を入力して作成するか、既存のフォルダを選択します。",
-    "chooseExistingFolder": "既存フォルダを選択"
+    "chooseExistingFolder": "既存フォルダを選択",
+    "changeMainDirectory": "変更"
   }
 }

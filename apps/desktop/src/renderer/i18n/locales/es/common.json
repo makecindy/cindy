@@ -21921,7 +21921,8 @@
     "source_local": "Carpeta local",
     "sourceShort_local": "Carpeta local",
     "sourceHint_local": "Escribe un nombre para crear una carpeta o elige una existente.",
-    "chooseExistingFolder": "Elegir carpeta existente"
+    "chooseExistingFolder": "Elegir carpeta existente",
+    "changeMainDirectory": "Cambiar"
   },
   "taskManagement": {
     "scope": "Solo se aplica a esta cuenta en este ordenador.",

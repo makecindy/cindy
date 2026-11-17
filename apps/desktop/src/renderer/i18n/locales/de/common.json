@@ -21716,7 +21716,8 @@
     "source_local": "Lokaler Ordner",
     "sourceShort_local": "Lokaler Ordner",
     "sourceHint_local": "Einen Namen zum Erstellen eingeben oder einen vorhandenen Ordner wählen.",
-    "chooseExistingFolder": "Vorhandenen Ordner wählen"
+    "chooseExistingFolder": "Vorhandenen Ordner wählen",
+    "changeMainDirectory": "Ändern"
   },
   "taskManagement": {
     "scope": "Nur für dieses Konto auf diesem Computer.",

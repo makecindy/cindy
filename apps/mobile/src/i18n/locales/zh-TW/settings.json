@@ -512,6 +512,7 @@
     "source_local": "本機資料夾",
     "sourceShort_local": "本機資料夾",
     "sourceHint_local": "填寫名稱自動建立，也可以選擇現有資料夾。",
-    "chooseExistingFolder": "選擇現有資料夾"
+    "chooseExistingFolder": "選擇現有資料夾",
+    "changeMainDirectory": "更改"
   }
 }

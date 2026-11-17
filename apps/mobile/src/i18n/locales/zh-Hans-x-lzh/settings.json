@@ -512,6 +512,7 @@
     "source_local": "本地文件夹",
     "sourceShort_local": "本地文件夹",
     "sourceHint_local": "填写名称自动创建，也可以选择已有文件夹。",
-    "chooseExistingFolder": "选择已有文件夹"
+    "chooseExistingFolder": "选择已有文件夹",
+    "changeMainDirectory": "更改"
   }
 }

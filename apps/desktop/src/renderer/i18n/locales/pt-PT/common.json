@@ -21921,7 +21921,8 @@
     "source_local": "Pasta local",
     "sourceShort_local": "Pasta local",
     "sourceHint_local": "Introduza um nome para criar uma pasta ou escolha uma existente.",
-    "chooseExistingFolder": "Escolher pasta existente"
+    "chooseExistingFolder": "Escolher pasta existente",
+    "changeMainDirectory": "Alterar"
   },
   "taskManagement": {
     "scope": "Apenas para esta conta neste computador.",
