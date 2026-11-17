@@ -10459,6 +10459,39 @@ export function registerGhostIpc(): void {
     }
   });
 
+  // Attachment for a mail card of a task on another computer: chosen and uploaded here; only the
+  // transfer reference and file name go to that computer, as with a phone upload.
+  ipcMain.handle('ghosts:card:remote-mail-attachment', async (event, deviceId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      const [{ uploadRemoteMailAttachment }, { uploadLocalFile, mimeOf }, { withAgentNetMediaTarget }, { readDeviceLinkSettings }] = await Promise.all([
+        import('./remoteMailAttachment.js'), import('../device-link/mediaTransfer.desktop.js'),
+        import('../device-link/agentNetMediaRouting.js'),
+        import('../device-link/settings-store.desktop.js'),
+      ]);
+      if (typeof deviceId !== 'string' || !/^[a-f0-9]{64}$/.test(deviceId)) throw new Error('INVALID_DEVICE_ID');
+      const target = deviceId;
+      const assertTarget = () => {
+        if (readDeviceLinkSettings().disabledControlDeviceIds.includes(target)) throw new Error('DEVICE_LINK_CONTROL_DISABLED');
+      };
+      assertTarget();
+      const { attachment } = await withAgentNetMediaTarget(target, () => uploadRemoteMailAttachment({
+        pick: async () => {
+          const result = await dialog.showOpenDialog({ properties: ['openFile'] });
+          return result.canceled ? null : result.filePaths[0] ?? null;
+        },
+        upload: (file, options) => { assertTarget(); return uploadLocalFile(file, { ...options, assertCurrent: assertTarget }); },
+        mimeOf,
+      }));
+      return { ok: true, attachment };
+    } catch (err) {
+      // Transfer errors can quote the chosen file's path; keep only known codes in the log.
+      const code = err instanceof Error && /^[A-Z][A-Z0-9_]{2,63}$/.test(err.message) ? err.message : 'UPLOAD_FAILED';
+      log.warn('ghosts:card:remote-mail-attachment failed', { error: code });
+      return { ok: false, attachment: null };
+    }
+  });
+
   // 会话切换上报(订阅槽①;renderer MainLayout 路由 effect 单向 send,无返回):
   // 非法载荷按 null(切去非会话页)处理,去重与资格门都在 noteGhostSessionFocused 之后。
   ipcMain.on('ghosts:session-focused', (event, sessionId: unknown) => {
