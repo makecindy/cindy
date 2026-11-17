@@ -10,6 +10,7 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { sessions, mediaRefs } from '../localDb/schema.js';
 import { addRef, removeRefById } from '../cindy-media/ledger.js';
 import { createLogger } from '../logger.js';
+import { hostedAttachmentPreservation, type PreserveAttachment, type PreserveAttachmentBatch } from './attachmentPreservation.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 
 
@@ -243,6 +244,11 @@ function createRequestSizeController(
       try {
         // Session resolution is performed by the existing recovery callback. The size controller
         // keeps persistence scoped to the current DB owner and never exposes a path to the model.
+        const hostedId = resolveSession(policy.context?.headers ?? {});
+        const hosted = hostedId ? hostedAttachmentPreservation(hostedId) : undefined;
+        if (hosted) return await hosted(policy.signal, preserve => controlRequestSize(
+          body, format, { ...policy, modelFamily: requestSizeModelFamily(policy.route.modelId), preprocessor: countingPreprocessor }, preserve,
+        ));
         const snapshot = getCurrentDbClientSnapshot();
         if (!snapshot) return await compressOnly('no-db');
         const db = snapshot.client.drizzle;
@@ -260,64 +266,9 @@ function createRequestSizeController(
             throw new Error('Attachment recovery owner changed');
           }
         };
-        // Keep preparation, commit and rollback under the same lock as legacy
-        // recovery: another request must not reuse an uncommitted attachment.
-        return await serializeRecovery(`${scope.ownerStorageKey}/${sessionId}`, async () => {
-          let directory: string | undefined;
-          const staged = new Map<string, { source: string; hash: string; mimeType: string | null; refId?: string }>();
-          const createdFiles: string[] = [];
-          try {
-            assertCurrent();
-            const route = policy.route as ImageRouteInfo;
-            const modelFamily = requestSizeModelFamily(route.modelId);
-            const result = await controlRequestSize(
-              body, format, { route, modelFamily, signal: policy.signal, preprocessor: countingPreprocessor, singleImageMaxBytes: policy.singleImageMaxBytes, triggerBytes: policy.triggerBytes, targetBytes: policy.targetBytes, triggerImages: policy.triggerImages, targetImages: policy.targetImages, reason: policy.reason, allowRemoval: policy.allowRemoval },
-              async (bytes, declaredMime, index) => {
-                assertCurrent();
-                const hash = createHash('sha256').update(bytes).digest('hex');
-                const mimeType = sniffMediaMime(bytes.subarray(0, 64 * 1024), declaredMime);
-                const ext = mimeType ? extForMime(mimeType)! : bytes.subarray(0, 5).toString() === '%PDF-' ? '.pdf' : '.bin';
-                const destination = mimeType
-                  ? resolveSafe(blobUrl(hash, ext)).absPath
-                  : path.join(getUserDataDir(), 'hook-attachments', sessionId, `${hash}-recovered${ext}`);
-                directory ??= await mkdtemp(path.join(tmpdir(), 'cindy-request-size-'));
-                const source = path.join(directory, `${index}-${hash}${ext}`);
-                await writeFile(source, bytes, { flag: 'wx', mode: 0o600 });
-                if (!staged.has(destination)) {
-                  const existing = mimeType ? await db.select({ id: mediaRefs.id }).from(mediaRefs)
-                    .where(and(eq(mediaRefs.hash, hash), eq(mediaRefs.refKind, 'session-attachment'), eq(mediaRefs.refId, sessionId))).get() : null;
-                  staged.set(destination, { source, hash, mimeType, refId: mimeType && !existing ? randomUUID() : undefined });
-                }
-                assertCurrent();
-                return destination;
-              },
-            );
-            if (!result) return null;
-            const persist = async () => {
-              for (const [destination, item] of staged) {
-                assertCurrent();
-                if (item.mimeType) {
-                  const media = await ingestMedia({ filePath: item.source, mimeType: item.mimeType, isCache: false,
-                    refs: [], assertStillValid: assertCurrent, refCompensationScope: scope }, db);
-                  assertCurrent();
-                  if (resolveSafe(media.url).absPath !== destination) throw new Error('Recovered attachment path changed');
-                  if (item.refId) await addRef({ id: item.refId, hash: item.hash, refKind: 'session-attachment', refId: sessionId,
-                    originSessionId: sessionId, originKind: 'user' }, db);
-                } else await persistNonMediaAttachment({ ...item, file: destination }, createdFiles, assertCurrent);
-                assertCurrent();
-              }
-            };
-            const refIds = [...staged.values()].flatMap(item => item.refId ? [item.refId] : []);
-            if (refIds.length) {
-              await withMediaRefCompensation({ scope: { ...scope, assertStillValid: assertCurrent }, refIds,
-                perform: persist, compensate: id => removeRefById(id, db) });
-            } else await persist();
-            return result;
-          } catch (error) {
-            await Promise.all(createdFiles.map(file => rm(file, { force: true })));
-            throw error;
-          } finally { if (directory) await rm(directory, { recursive: true, force: true }); }
-        });
+        return await attachmentPreservation(sessionId, assertCurrent)(policy.signal, preserve => controlRequestSize(
+          body, format, { ...policy, modelFamily: requestSizeModelFamily(policy.route.modelId), preprocessor: countingPreprocessor }, preserve,
+        ));
       } catch (error) {
         if (error instanceof Error && error.message === 'REQUEST_TEXT_TOO_LARGE') throw error;
         skipped('error', error);
@@ -328,5 +279,107 @@ function createRequestSizeController(
   return controller;
 }
 
-return { createAttachmentRecovery, createRequestSizeController };
+function attachmentPreservation(sessionId: string, bindingCurrent: () => void = () => {}): PreserveAttachmentBatch {
+  // Capture the owner before any transport wait; a later account must never adopt this batch.
+  const snapshot = getCurrentDbClientSnapshot();
+  const scope = snapshot ? captureMediaRefCompensationScope() : undefined;
+  return async (signal, operation) => {
+    if (!snapshot || !scope || !/^[\w-]+$/.test(sessionId)) throw new Error('Attachment preservation unavailable');
+    const db = snapshot.client.drizzle;
+    const assertCurrent = () => {
+      signal.throwIfAborted();
+      scope.assertStillValid();
+      bindingCurrent();
+      if (getCurrentDbClientSnapshot() !== snapshot) throw new Error('Attachment recovery owner changed');
+    };
+    assertCurrent();
+    return serializeRecovery(`${scope.ownerStorageKey}/${sessionId}`, async () => {
+      assertCurrent();
+      const session = await db.select({ status: sessions.status, remoteHostId: sessions.remoteHostId })
+        .from(sessions).where(eq(sessions.id, sessionId)).get();
+      assertCurrent();
+      if (!session || session.status === 'deleted' || session.remoteHostId) throw new Error('Attachment preservation unavailable');
+      let directory: string | undefined;
+      const staged = new Map<string, { source: string; hash: string; mimeType: string | null; refId?: string }>();
+      const createdFiles: string[] = [];
+      try {
+        const preserve: PreserveAttachment = async (bytes, declaredMime, index) => {
+          assertCurrent();
+          const hash = createHash('sha256').update(bytes).digest('hex');
+          const mimeType = sniffMediaMime(bytes.subarray(0, 64 * 1024), declaredMime);
+          const ext = mimeType ? extForMime(mimeType)! : bytes.subarray(0, 5).toString() === '%PDF-' ? '.pdf' : '.bin';
+          const destination = mimeType
+            ? resolveSafe(blobUrl(hash, ext)).absPath
+            : path.join(getUserDataDir(), 'hook-attachments', sessionId, `${hash}-recovered${ext}`);
+          directory ??= await mkdtemp(path.join(tmpdir(), 'cindy-request-size-'));
+          const source = path.join(directory, `${index}-${hash}${ext}`);
+          await writeFile(source, bytes, { flag: 'wx', mode: 0o600 });
+          if (!staged.has(destination)) {
+            const existing = mimeType ? await db.select({ id: mediaRefs.id }).from(mediaRefs)
+              .where(and(eq(mediaRefs.hash, hash), eq(mediaRefs.refKind, 'session-attachment'), eq(mediaRefs.refId, sessionId))).get() : null;
+            staged.set(destination, { source, hash, mimeType, refId: mimeType && !existing ? randomUUID() : undefined });
+          }
+          assertCurrent();
+          return destination;
+        };
+        preserve.find = async (hash, declaredMime) => {
+          assertCurrent();
+          if (!/^[a-f0-9]{64}$/.test(hash)) return null;
+          const ext = extForMime(declaredMime);
+          const destination = ext ? resolveSafe(blobUrl(hash, ext)).absPath
+            : path.join(getUserDataDir(), 'hook-attachments', sessionId, `${hash}-recovered${declaredMime === 'application/pdf' ? '.pdf' : '.bin'}`);
+          if (staged.has(destination)) return destination;
+          if (ext) {
+            const ref = await db.select({ id: mediaRefs.id }).from(mediaRefs)
+              .where(and(eq(mediaRefs.hash, hash), eq(mediaRefs.refKind, 'session-attachment'), eq(mediaRefs.refId, sessionId))).get();
+            assertCurrent();
+            if (!ref) return null;
+          }
+          try {
+            const stat = await lstat(destination);
+            if (!stat.isFile() || stat.isSymbolicLink() || await hashFile(destination) !== hash) return null;
+          } catch { assertCurrent(); return null; }
+          assertCurrent();
+          return destination;
+        };
+        const result = await operation(preserve);
+        if (result === null) return null;
+        assertCurrent();
+        const current = await db.select({ status: sessions.status }).from(sessions).where(eq(sessions.id, sessionId)).get();
+        assertCurrent();
+        if (!current || current.status === 'deleted') throw new Error('Attachment preservation unavailable');
+        const persist = async () => {
+          for (const [destination, item] of staged) {
+            assertCurrent();
+            if (item.mimeType) {
+              const media = await ingestMedia({ filePath: item.source, mimeType: item.mimeType, isCache: false,
+                refs: [], assertStillValid: assertCurrent, refCompensationScope: scope }, db);
+              assertCurrent();
+              if (resolveSafe(media.url).absPath !== destination) throw new Error('Recovered attachment path changed');
+              if (item.refId) await addRef({ id: item.refId, hash: item.hash, refKind: 'session-attachment', refId: sessionId,
+                originSessionId: sessionId, originKind: 'user' }, db);
+            } else await persistNonMediaAttachment({ ...item, file: destination }, createdFiles, assertCurrent);
+            assertCurrent();
+          }
+        };
+        const refIds = [...staged.values()].flatMap(item => item.refId ? [item.refId] : []);
+        if (refIds.length) {
+          await withMediaRefCompensation({ scope: { ...scope, assertStillValid: assertCurrent }, refIds,
+            perform: persist, compensate: id => removeRefById(id, db) });
+        } else await persist();
+        return result;
+      } catch (error) {
+        await Promise.all(createdFiles.map(file => rm(file, { force: true })));
+        throw error;
+      } finally { if (directory) await rm(directory, { recursive: true, force: true }); }
+    });
+  };
+}
+
+function attachmentStorageRoots(sessionId: string) {
+  if (!/^[\w-]+$/.test(sessionId)) throw new Error('Invalid attachment owner');
+  return { media: path.dirname(path.dirname(resolveSafe(blobUrl('0'.repeat(64), '.png')).absPath)),
+    files: path.join(getUserDataDir(), 'hook-attachments', sessionId) };
+}
+return { createAttachmentRecovery, createRequestSizeController, attachmentPreservation, attachmentStorageRoots };
 }
