@@ -2663,6 +2663,9 @@ it('lets cindy_mcp_call_tool omit args and forwards an empty object for no-param
   expect(argsSchema.properties).toHaveProperty('args');
   expect(argsSchema.properties.name.type).toBeUndefined();
   expect(argsSchema.properties.args.type).toBeUndefined();
+  // #10818 评审 P1: args 必须也收字符串形态 —— schema 只认 object 时, pi 的 schema 校验
+  // 会先把「args 是一段 JSON 字符串」的调用判成非法并丢掉, 网关的解析分支永远走不到。
+  expect(argsSchema.type).toEqual(['object', 'string']);
   // 顶层必须留开(#10818): 一旦 additionalProperties: false, pi-schema 会先把模型平铺出来
   // 的参数判成 unknown field 拒掉, 归位逻辑根本看不到它们, 用户要的操作被静默丢掉。
   expect(callTool.parameters.additionalProperties).toBe(true);
@@ -2792,6 +2795,103 @@ it('fails loudly when the arguments cannot be read at all instead of forwarding 
   await expect(gateway.executeCall({ server: 'cindy_sheets', tool: 'set_cell', args: 'row=10' }))
     .rejects.toThrow(/args must be a JSON object/);
   expect(requests).toHaveLength(0);
+});
+
+// 测试价值(#10818 评审 P1/P2 两条新用例)
+// - 生产入口与可观察结果: CindyMcpGateway.executeCall → 出站 tools/call 的 arguments,
+//   以及工具结果里回显的 Forwarded arguments(用户与模型据此分清链路丢参与服务端行为)。
+// - Bug／规则依据: #10818 评审 P1「显式 arguments: null 绕过校验」、P2「字符串解析不可见」。
+// - 现有覆盖缺口: 相邻用例只覆盖「解析不了的字符串」与「平铺折回」, 「显式 null」与
+//   「字符串解析成功」这两支没有用例(后者此前连正向断言都没有)。
+// - 最小失败输入: {server, tool, arguments: null} / {args: null};
+//   {server, tool, args: '{"file_id":"doc-1","row":10,"col":1}'}。
+// - tier: unit — 进程内假 MCP client, 复用本文件既有 runInNewContext 夹具。
+// - 实测耗时: 本文件单独运行 4.4s(含既有 64 条; 两条新用例合计约 0.1s)。
+//
+// #10818 评审 P1: 显式传 null 与「没传这个键」不是一回事。null 是模型给了一个用不了的
+// 形态 —— 原样转发 {} 只会让服务端按缺省值兜底并返回成功(表格类服务写回 A1),
+// 用户与模型都以为操作生效了。args 与 arguments 两个别名都要判为 malformed。
+it('rejects an explicitly null argument instead of forwarding empty arguments', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'WROTE[A1]' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_sheets', client, [{
+    name: 'set_cell',
+    inputSchema: {
+      type: 'object',
+      properties: { file_id: { type: 'string' }, row: { type: 'integer' }, col: { type: 'integer' } },
+      required: ['file_id', 'row', 'col'],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_sheets', tool: 'set_cell' });
+  for (const key of ['args', 'arguments']) {
+    await expect(gateway.executeCall({ server: 'cindy_sheets', tool: 'set_cell', [key]: null }))
+      .rejects.toThrow(/args must be a JSON object/);
+  }
+  // 一次都不许发出去: 发出去就是服务端按缺省值执行并返回成功。
+  expect(requests).toHaveLength(0);
+  // 「没传这个键」仍然合法: 无参工具照常转发空对象。
+  await gateway.executeCall({ server: 'cindy_sheets', tool: 'set_cell', args: { file_id: 'doc-1', row: 10, col: 1 } });
+  expect(requests).toHaveLength(1);
+});
+
+// #10818 评审 P2: 「args 是一段 JSON 字符串」也是一种归一化动作 —— 参数确实被改写成了
+// 对象转发出去, 用户与模型必须看得见真正发出去的那一份, 否则「参数没生效」时无从对照。
+it('parses a JSON string argument and echoes the forwarded arguments', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'WROTE[A1]' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_sheets', client, [{
+    name: 'set_cell',
+    inputSchema: {
+      type: 'object',
+      properties: { file_id: { type: 'string' }, row: { type: 'integer' }, col: { type: 'integer' } },
+      required: ['file_id', 'row', 'col'],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_sheets', tool: 'set_cell' });
+  const result = await gateway.executeCall({
+    server: 'cindy_sheets', tool: 'set_cell', args: '{"file_id":"doc-1","row":10,"col":1}',
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'set_cell', arguments: { file_id: 'doc-1', row: 10, col: 1 },
+  });
+  const note = (result.content as Array<{ text?: string }>).map(block => block.text ?? '').join('\n');
+  expect(note).toContain('parsed the JSON string in args');
+  expect(note).toContain('"row":10');
 });
 
 it('repairs a flattened plugin parameter instead of rejecting the call', async () => {

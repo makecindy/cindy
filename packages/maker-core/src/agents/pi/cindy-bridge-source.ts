@@ -2722,6 +2722,8 @@ interface ResolvedMcpGatewayCall {
   folded?: string[];
   /** 顶层有、但工具 schema 不认、因而没有转发的键。 */
   unmapped?: string[];
+  /** args 以 JSON 字符串形态给出, 已被解析成对象。 */
+  parsedFromString?: boolean;
 }
 
 class McpBridgeError extends Error {
@@ -3282,6 +3284,8 @@ interface GatewayArgsResolution {
   folded: string[];
   /** 顶层有、但这个工具的 schema 不认、因而没有转发的键。 */
   unmapped: string[];
+  /** args 以 JSON 字符串形态给出, 已被解析成对象。 */
+  parsedFromString: boolean;
 }
 
 function parseJsonObject(value: string): Record<string, unknown> | null {
@@ -3316,20 +3320,31 @@ function schemaParameterNames(schema: Record<string, unknown> | undefined): Set<
  *
  * 这里按工具自己的 schema 把参数归位: schema 声明过的顶层键折进 args(同名以 args 为准),
  * 声明之外的顶层键不转发(那是模型的私货, 转过去只会让服务端多一条校验错误), 但记下来。
+ *
+ * args/arguments 只有两种形态可用: 对象, 或能解析成对象的 JSON 字符串。
+ * 「没传这个键」与「显式传 null」必须分开: 后者是模型给了一个用不了的形态,
+ * 静默发 arguments: {} 只会让服务端按缺省值兜底并返回成功。
  */
 function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMcpTool): GatewayArgsResolution {
   const provided = record.args !== undefined || record.arguments !== undefined;
   const raw = record.args !== undefined ? record.args : record.arguments;
   let args: Record<string, unknown> = {};
   let malformed = false;
-  if (raw !== undefined && raw !== null) {
+  let parsedFromString = false;
+  if (raw === null) {
+    malformed = true;
+  } else if (raw !== undefined) {
     if (typeof raw === 'object' && !Array.isArray(raw)) {
       // 复制一份: 归一化不能改写模型给的那个对象(它同时是审批提示与回执的凭据)。
       args = { ...raw as Record<string, unknown> };
     } else if (typeof raw === 'string') {
       const parsed = parseJsonObject(raw);
-      if (parsed) args = parsed;
-      else malformed = true;
+      if (parsed) {
+        args = parsed;
+        parsedFromString = true;
+      } else {
+        malformed = true;
+      }
     } else {
       malformed = true;
     }
@@ -3350,7 +3365,7 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
     args[key] = value;
     folded.push(key);
   }
-  return { args, provided, malformed, folded, unmapped };
+  return { args, provided, malformed, folded, unmapped, parsedFromString };
 }
 
 /**
@@ -3561,8 +3576,12 @@ class CindyMcpGateway {
     const resolution = normalizeGatewayArgs(record, tool);
     if (resolution.malformed) {
       // 参数放在一个用不了的地方: 原样转发只会让服务端按缺省值静默兜底。
+      // 显式传 null 与「没传这个键」不是一回事, 所以单独点名, 让模型知道要省略这个键。
+      const sent = record.args === null || record.arguments === null
+        ? 'null (omit the key entirely — null is not an empty argument object)'
+        : 'something else';
       return 'Invalid ' + tool.serverName + '/' + tool.name + ' parameters: args must be a JSON object'
-        + ' (the model sent something else). Put the selected tool parameters directly in gateway args.'
+        + ' (the model sent ' + sent + '). Put the selected tool parameters directly in gateway args.'
         + ' Expected args schema: ' + schemaHint(tool.inputSchema);
     }
     // Only the host plugin gateway is in scope. Other MCP tools retain their
@@ -3610,6 +3629,7 @@ class CindyMcpGateway {
       tool,
       ...(resolution.folded.length > 0 ? { folded: resolution.folded } : {}),
       ...(resolution.unmapped.length > 0 ? { unmapped: resolution.unmapped } : {}),
+      ...(resolution.parsedFromString ? { parsedFromString: true } : {}),
     };
   }
 
@@ -4047,8 +4067,14 @@ class CindyMcpGateway {
   private normalizationNote(call: ResolvedMcpGatewayCall): string | null {
     const folded = call.folded ?? [];
     const unmapped = call.unmapped ?? [];
-    if (folded.length === 0 && unmapped.length === 0) return null;
+    const parsedFromString = call.parsedFromString === true;
+    if (folded.length === 0 && unmapped.length === 0 && !parsedFromString) return null;
     const parts: string[] = [];
+    if (parsedFromString) {
+      // 字符串形态也是一种归一化动作: 参数被解析成了对象, 用户与模型看到的必须
+      // 是真正发出去的那一份, 否则「参数没生效」时就没有可对照的依据。
+      parts.push('Cindy parsed the JSON string in args before forwarding.');
+    }
     if (folded.length > 0) {
       parts.push('Cindy moved these top-level parameters into args before forwarding: '
         + folded.join(', ') + '.');
@@ -4476,9 +4502,15 @@ class CindyMcpGateway {
           // MiniMax-M3.1 / deepseek-v4.1-flash / step-5 三会话均复现), 服务端只报 expected
           // string/name。故把信封形状作为**无类型约束**的提示属性挂出来: 声明结构给模型看,
           // 不约束任何值, 避免误伤参数名恰好叫 args 或 name 的直调工具。
+          //
+          // 类型放开成 object|string: 弱模型有时把 args 写成一段 JSON 字符串
+          // (实测 MiniMax-M3.1 / deepseek-v4.1-flash / step-5)。schema 只认 object 时,
+          // pi 的 schema 校验会先把这个调用判成非法并丢掉, 网关的「字符串→对象」解析分支
+          // 永远走不到 —— 字符串形态必须真的能到达网关, 才谈得上「解析后原样转发」。
           args: {
-            type: 'object',
-            description: 'Arguments for the selected tool as a JSON object; omit when the selected tool takes none.',
+            type: ['object', 'string'],
+            description: 'Arguments for the selected tool as a JSON object, or the same object encoded as a JSON '
+              + 'string; omit when the selected tool takes none.',
             properties: {
               name: { description: 'Generic call_tool envelope only: the target tool name.' },
               args: { description: 'Generic call_tool envelope only: the target tool parameters.' },
