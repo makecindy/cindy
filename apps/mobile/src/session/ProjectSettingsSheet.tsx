@@ -1,4 +1,5 @@
 import {
+  isExplicitProjectRepositoryAddress,
   parseProjectRepository,
   projectCreationFolderName,
 } from "@cindy/maker-shared/project-alias-sync";
@@ -145,10 +146,7 @@ export function ProjectSettingsSheet({
   const changeName = (value: string) => {
     nameEdited.current = !!value.trim();
     // Names such as Design/2027 must not silently become GitHub repositories.
-    const address =
-      /^(?:https?:\/\/|ssh:\/\/|[\w.-]+@[\w.-]+:|[\w.-]+\.[\w.-]+\/)/i.test(
-        value.trim(),
-      );
+    const address = isExplicitProjectRepositoryAddress(value);
     const repository =
       repositoryCreation && address ? parseProjectRepository(value) : null;
     if (repository) {

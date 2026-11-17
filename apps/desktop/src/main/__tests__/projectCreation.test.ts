@@ -8,6 +8,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { prepareNewProject } from '../projectCreation';
 import {
+  isExplicitProjectRepositoryAddress,
   parseProjectRepository,
   projectCreationFolderName,
 } from '@cindy/maker-shared/project-alias-sync';
@@ -30,6 +31,7 @@ const deps = () => ({
 });
 it.each([
   ['https://git.example.com/repo.git', 'https://git.example.com/repo.git', 'repo'],
+  ['git.example.com/group/repo', 'https://git.example.com/group/repo.git', 'repo'],
   ['https://github.com/org/repo', 'https://github.com/org/repo.git', 'repo'],
   [
     'https://gitlab.example.com/group/sub/repo/-/tree/main',
@@ -55,6 +57,10 @@ it.each([
   'bad address',
   'https://github.com/a/%2e%2e/b',
   'ssh://-oProxyCommand=x@gitlab.com/a/b',
+  // CodeQL #518: the old implicit-host regex backtracked on repeated "-.".
+  // Keep malformed input at the parser's public 4096-character boundary.
+  '-.'.repeat(2048),
+  '-.'.repeat(2000) + '/',
 ])('rejects non-repository or credential-bearing input %s', (input) => {
   expect(parseProjectRepository(input)).toBeNull();
 });
@@ -126,4 +132,19 @@ it('makes safe folder names across platforms', () => {
   expect(projectCreationFolderName('../CON')).toBe('..-CON');
   expect(projectCreationFolderName('CON')).toBe('Project');
   expect(projectCreationFolderName('示例 / demo')).toBe('示例 - demo');
+});
+
+// CodeQL #518: explicit-paste recognition shares the hostname scan with parsing.
+// Unit regression: plain slash names must remain names; malformed dot runs and
+// actual HTTPS/SSH/hostname addresses must not require the old ambiguous regex.
+it.each([
+  ['Design/2027', false],
+  ['org/repo', false],
+  ['https://github.com/org/repo', true],
+  ['SSH://git@git.example.com/group/repo', true],
+  ['git@git.example.com:group/repo', true],
+  ['git.example.com/group/repo', true],
+  ['-.'.repeat(2048), false],
+] as const)('recognizes an explicit pasted address: %s', (input, expected) => {
+  expect(isExplicitProjectRepositoryAddress(input)).toBe(expected);
 });

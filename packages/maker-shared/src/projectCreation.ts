@@ -1,3 +1,19 @@
+function hasRepositoryHostnamePrefix(text: string): boolean {
+  const slash = text.indexOf("/");
+  const host = slash >= 0 ? text.slice(0, slash) : "";
+  return host.slice(1, -1).includes(".") && /^[\w.-]+$/.test(host);
+}
+
+/** Identify pasted addresses without treating an ordinary name as owner/repo shorthand. */
+export function isExplicitProjectRepositoryAddress(input: string): boolean {
+  const text = input.trim();
+  if (text.length > 4096) return false;
+  return (
+    /^(?:https?:\/\/|ssh:\/\/|[\w.-]+@[\w.-]+:)/i.test(text) ||
+    hasRepositoryHostnamePrefix(text)
+  );
+}
+
 /** A repository address, never a local path or a Git remote-helper command. */
 export function parseProjectRepository(
   input: string,
@@ -6,7 +22,9 @@ export function parseProjectRepository(
   if (!text || text.length > 4096 || /[\s\u0000-\u001f]/.test(text))
     return null;
   if (/^[\w.-]+\/[\w.-]+$/.test(text)) text = `https://github.com/${text}`;
-  if (/^[\w.-]+\.[\w.-]+\//.test(text)) text = `https://${text}`;
+  // Split once: adjacent wildcard-like hostname groups around a dot otherwise
+  // backtrack quadratically on malformed addresses such as repeated "-.".
+  if (hasRepositoryHostnamePrefix(text)) text = `https://${text}`;
   const scp = /^([\w.-]+)@([\w.-]+):([^/].*)$/.exec(text);
   if (scp) text = `ssh://${scp[1]}@${scp[2]}/${scp[3]}`;
   try {
