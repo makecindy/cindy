@@ -400,7 +400,11 @@ export interface OrcaTeamServiceDeps {
   getWorkerLinkBySessionId(workerSessionId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   getWorkerLinkByWorkerId(workerId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerRecordSnapshot[]>;
-  getLiveSession(sessionId: string): { isTurnRunning(): boolean; getTurnGeneration?(): number } | null;
+  getLiveSession(sessionId: string): {
+    isTurnRunning(): boolean;
+    getTurnGeneration?(): number;
+    hasLiveBackgroundWork?(): Promise<boolean>;
+  } | null;
   resumeWorkerSession(
     worker: OrcaWorkerRecordSnapshot,
     link: OrcaWorkerLinkSnapshot,
@@ -1660,9 +1664,12 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       }
       if (params.expectedStatus) {
         await assertAfterIdle();
-        const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker');
+        const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker', false, opts?.assertCurrent);
         if (!didClose) {
           await rollbackDoneAcknowledgement();
+          if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
+            deferDoneAcknowledgement(worker.id, await captureDeferredAuthority(params.callerLeadSessionId, opts));
+          }
           return {
             ok: false,
             errorCode: 'WORKER_STATE_CHANGED',
@@ -1712,7 +1719,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     const archive = async (): Promise<OrcaOkResult> => {
     await params.beforeArchive?.();
     if (params.onlyIfIdle) {
-      if ((activeWorkerDispatches.get(worker.id) ?? 0)>0 || await deps.hasPendingWorkerInput(worker.sessionId) || !await closeWorkerSessionIfIdleBestEffort(worker.sessionId,'releaseWorker',true)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has active or queued input'};
+      if ((activeWorkerDispatches.get(worker.id) ?? 0)>0 || await deps.hasPendingWorkerInput(worker.sessionId) || !await closeWorkerSessionIfIdleBestEffort(worker.sessionId,'releaseWorker',true,params.beforeArchive)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has active or queued input'};
       if (await deps.hasPendingWorkerInput(worker.sessionId)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has queued input'};
     }
     await params.beforeArchive?.();
@@ -2179,8 +2186,20 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     sessionId: string,
     owner: string,
     sendLockHeld = false,
+    beforeClose?: () => Promise<void>,
   ): Promise<boolean> {
     try {
+      const runtime = deps.getLiveSession(sessionId);
+      const generation = runtime?.getTurnGeneration?.();
+      // Native work may outlive the foreground turn without appearing in the
+      // task snapshot. A failed probe is caught below and leaves the runtime alive.
+      if (runtime?.hasLiveBackgroundWork) {
+        if (await runtime.hasLiveBackgroundWork()) return false;
+        if (await deps.hasPendingWorkerInput(sessionId)) return false;
+        await beforeClose?.();
+        if (deps.getLiveSession(sessionId) !== runtime
+          || runtime.getTurnGeneration?.() !== generation) return false;
+      }
       return await (sendLockHeld ? deps.closeWorkerSessionIfIdle(sessionId, true) : deps.closeWorkerSessionIfIdle(sessionId));
     } catch (err) {
       deps.log.warn(`${owner}: close idle worker session failed`, {

@@ -1,3 +1,5 @@
+import type { Maker, Session } from '@cindy/maker-core';
+
 /** Worker statuses that may release their runtime after the configured idle threshold. */
 export const ORCA_IDLE_RELEASE_STATUSES = ['idle', 'running', 'done', 'error'] as const;
 
@@ -16,6 +18,8 @@ export interface OrcaIdleReleaseCandidate {
 /** Runtime session surface used to protect a live turn from background release. */
 export interface OrcaIdleReleaseSession {
   isTurnRunning(): boolean;
+  getTurnGeneration(): number;
+  hasLiveBackgroundWork(): Promise<boolean>;
 }
 
 /** Timer handle abstraction keeps the watcher deterministic under fake timers. */
@@ -33,7 +37,8 @@ export interface OrcaIdleReleaseWatcherDeps {
   hasPendingInput(sessionId: string): Promise<boolean>;
   markReleased(candidate: OrcaIdleReleaseCandidate, releasedAt: number): Promise<boolean>;
   touchWorker(workerId: string, updatedAt: number): Promise<void>;
-  closeSession(sessionId: string): Promise<void>;
+  /** Must use Session.closeIfIdle, preserving its synchronous send/background guard. */
+  closeSession(sessionId: string): Promise<boolean>;
   broadcastWorkerChanged(leadSessionId: string): void;
   now(): number;
   timer: OrcaIdleReleaseTimer;
@@ -50,6 +55,26 @@ export interface OrcaIdleReleaseWatcher {
 }
 
 const DEFAULT_SCAN_INTERVAL_MS = 60_000;
+
+/** Keep failed teardown retryable without force-closing a replacement runtime. */
+export function createOrcaIdleRuntimeClose(
+  maker: Pick<Maker, 'getSession' | 'closeSessionIfCurrent'>,
+): OrcaIdleReleaseWatcherDeps['closeSession'] {
+  const failed = new WeakSet<Session>();
+  return async (sessionId) => {
+    const session = maker.getSession(sessionId);
+    if (!session) return false;
+    try {
+      const closed = await maker.closeSessionIfCurrent(session, 'requested',
+        failed.has(session) && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed';
+      if (closed) failed.delete(session);
+      return closed;
+    } catch (error) {
+      failed.add(session);
+      throw error;
+    }
+  };
+}
 
 function isReleaseStatus(status: string): status is OrcaIdleReleaseStatus {
   return ORCA_IDLE_RELEASE_STATUSES.some((candidate) => candidate === status);
@@ -85,10 +110,11 @@ export function createOrcaIdleReleaseWatcher(
             // shared-userData instance owns the runtime, so only the local owner may release it.
             const session = deps.getSession(candidate.sessionId);
             if (!session) return;
+            const generation = session.getTurnGeneration();
 
             // Sends and releases share this lock. Re-read the live session only after
             // acquiring it so a newly accepted turn cannot be closed by this scan.
-            if (session.isTurnRunning()) {
+            if (session.isTurnRunning() || await session.hasLiveBackgroundWork()) {
               await deps.touchWorker(candidate.id, deps.now());
               return;
             }
@@ -100,7 +126,12 @@ export function createOrcaIdleReleaseWatcher(
               return;
             }
 
-            await deps.closeSession(candidate.sessionId);
+            if (deps.getSession(candidate.sessionId) !== session
+              || session.getTurnGeneration() !== generation) return;
+            if (!await deps.closeSession(candidate.sessionId)) {
+              await deps.touchWorker(candidate.id, deps.now());
+              return;
+            }
 
             const releasedAt = deps.now();
             const marked = await deps.markReleased(candidate, releasedAt);

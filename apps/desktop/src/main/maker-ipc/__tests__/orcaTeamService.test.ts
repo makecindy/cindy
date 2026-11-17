@@ -2782,6 +2782,56 @@ describe('OrcaTeamService', () => {
     ]);
   });
 
+  // #11042 (unit): done acknowledgement previously ignored native background
+  // work and lost the retry after closeIfIdle refused tracked work/continuations.
+  it.each(['native-work', 'probe-failed', 'close-refused'] as const)(
+    'defers done acknowledgement for %s until a later terminal', async (kind) => {
+      const runtime = {
+        isTurnRunning: () => false,
+        getTurnGeneration: () => 1,
+        hasLiveBackgroundWork: vi.fn(async () => false),
+      };
+      const { deps, service, setWorker, getWorker } = createDeps({ getLiveSession: () => runtime });
+      setWorker(createWorker({ status: 'done' }));
+      if (kind === 'native-work') runtime.hasLiveBackgroundWork.mockResolvedValueOnce(true);
+      if (kind === 'probe-failed') runtime.hasLiveBackgroundWork.mockRejectedValueOnce(new Error('unknown'));
+      if (kind === 'close-refused') vi.mocked(deps.closeWorkerSessionIfIdle).mockResolvedValueOnce(false);
+      await expect(service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', expectedStatus: 'done' }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+      expect(getWorker()?.status).toBe('done');
+      expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+      await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'complete' });
+      expect(getWorker()?.status).toBe('idle');
+    },
+  );
+
+  it.each(['generation', 'runtime', 'queue'] as const)(
+    'does not close a worker changed during the native probe: %s', async (change) => {
+      let generation = 1;
+      let queued = false;
+      const runtime = {
+        isTurnRunning: () => false,
+        getTurnGeneration: () => generation,
+        hasLiveBackgroundWork: async () => {
+          if (change === 'generation') generation++;
+          if (change === 'runtime') current = { ...runtime };
+          if (change === 'queue') queued = true;
+          return false;
+        },
+      };
+      let current = runtime;
+      const { deps, service, setWorker, getWorker } = createDeps({
+        getLiveSession: () => current,
+        hasPendingWorkerInput: async () => queued,
+      });
+      setWorker(createWorker({ status: 'done' }));
+      await expect(service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', expectedStatus: 'done' }))
+        .resolves.toMatchObject({ ok: false });
+      expect(getWorker().status).toBe('done');
+      expect(deps.closeWorkerSessionIfIdle).not.toHaveBeenCalled();
+    },
+  );
+
   it('does not clear runtime or close a done worker when the conditional idle update loses a race', async () => {
     const { calls, deps, service, setWorker } = createDeps({
       markWorkerIdleIfStatus: vi.fn(async () => false),
@@ -3136,7 +3186,7 @@ describe('OrcaTeamService', () => {
       message: 'worker worker-1 has an active turn',
     });
 
-    expect(deps.getLiveSession).toHaveBeenCalledTimes(1);
+    expect(deps.getLiveSession).toHaveBeenCalledWith('worker-session-1');
     expect(deps.closeWorkerSessionIfIdle).toHaveBeenCalledWith('worker-session-1');
     expect(deps.closeWorkerSession).not.toHaveBeenCalled();
     expect(deps.restoreWorkerDoneIfIdle).toHaveBeenCalledWith('worker-1');

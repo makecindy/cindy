@@ -1765,7 +1765,9 @@ export class Session {
 
   /**
    * Close only when no send reservation, agent turn, or host-initiated exclusive
-   * RPC operation (manual compact / rewind / model switch) is active. The check
+   * RPC operation (manual compact / rewind / model switch), tracked background
+   * task or wake continuation is active. Provider-only asynchronous probes must
+   * run in the caller before this final synchronous check. The check
    * and close reservation are synchronous, so a concurrent send either wins
    * first and keeps the session open, or observes closePromise and is rejected.
    */
@@ -1773,6 +1775,14 @@ export class Session {
     if (this.status !== 'active' || this.closePromise || this.isTurnRunning() || this.hasUnsettledTurn()
       || this.retirementContinuationGeneration === this.turnGeneration
       || this.hasPendingHostOperation()) {
+      return Promise.resolve(false);
+    }
+    try {
+      if (this.listBackgroundTasks().length > 0 || this.countPendingWakeContinuations() > 0) {
+        return Promise.resolve(false);
+      }
+    } catch {
+      // A missing snapshot cannot establish that destructive teardown is safe.
       return Promise.resolve(false);
     }
     return this.close().then(() => true);

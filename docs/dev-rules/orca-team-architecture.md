@@ -741,6 +741,15 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 2. **done 确认与派活必须互斥（状态：不变量）**<br>
    `done` worker 的隐式 `idle_worker(expectedStatus='done')` 确认不得与同一 worker 的派活交错：派活从 pre-resume reservation 起至 host dispatch settle 期间持有 active dispatch 计数，done 确认必须在每 worker transition 队列中串行执行，并在计数非零时拒绝。确认还必须在 DB CAS 前后检查 live turn、`send_to_session` 锁与 pending 输入；close 必须使用 `Session.closeIfIdle` 原子地与 send reservation 互斥。任一检查失败或 close 失败时，若已 CAS 为 `idle`，必须只恢复仍为 `idle` 的记录到 `done`，不得覆盖新终态。实现指针：`orcaTeamService.ts` 的 `withWorkerTransition`、`activeWorkerDispatches`、`dispatchWorkerTask`、`idleWorker`。
 
+   自动完成确认和空闲回收不能把前台结束当作后台工作结束（#11042）。`Session.closeIfIdle`
+   同步保护已跟踪的后台任务和待完成的 wake continuation；Orca 在调用前还查询
+   `hasLiveBackgroundWork`，保护不在任务快照中的原生工作，读取失败则保留运行时。
+   异步查询之后复核运行时身份、轮次和排队输入，最终关闭仍与发送预留同步互斥。
+   完成确认被拒后沿既有终态边界重试；watcher 只有关闭成功才写释放标记。
+   显式 idle、归档与结束团队继续沿原来的关闭路径，不把任意脱管 shell 进程当成已跟踪任务。
+   回归见 `session.close.test.ts`、Claude `abort-stops-background-tasks.test.ts`、
+   `orcaTeamService.test.ts` 与 `orcaIdleReleaseWatcher.test.ts`。
+
 3. **idle worker 恢复必须保留 extraDirs（状态：不变量）**<br>
    idle worker 被 `switch_focus` 或 `send_to_worker` 唤醒时，要从 DB 读取 `extra_dirs` 并带回 `bootstrapSession`，否则恢复后的 worker 会丢附加目录上下文。实现指针：`register.ts` 的 idle worker resume helper。
 
@@ -973,7 +982,7 @@ defaults 则按当前 snapshot 解析并保存实际来源。这样 Claude Code 
 
 #### 10. Worker 回收要克制（状态：无损 idle release 已落地）
 
-Worker 的价值在于上下文可延续、可观察、可介入。PR #340 已落地无损的 idle release：idle watcher 在 Worker 超过设置的空闲阈值、没有运行中的 turn 或排队输入时，关闭本进程持有的 Maker runtime，并以 CAS 原子写入 `status = idle` 和 `idle_since`。`idle_since != null` 是 runtime 已释放的持久化标记，不是 `idle/running/done/error` 之外的第五种 Worker 状态；Worker 记录、session、历史和上下文都继续保留。
+Worker 的价值在于上下文可延续、可观察、可介入。PR #340 已落地无损的 idle release：idle watcher 在 Worker 超过设置的空闲阈值、没有运行中的 turn、已跟踪的后台工作、待完成的 wake continuation 或排队输入时，关闭本进程持有的 Maker runtime，并以 CAS 原子写入 `status = idle` 和 `idle_since`。`idle_since != null` 是 runtime 已释放的持久化标记，不是 `idle/running/done/error` 之外的第五种 Worker 状态；Worker 记录、session、历史和上下文都继续保留。
 
 再次向该 Worker 派发任务时，既有 resume 链路会复用或重建 runtime，并在任务被接受时恢复运行态。共享 userData 多实例下，watcher 只释放本进程实际持有 runtime 的 Worker；没有本地 runtime 的记录保持不变，由其 runtime owner 负责处理。
 
