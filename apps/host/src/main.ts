@@ -700,6 +700,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   // The engine binaries this owner runtime uses, read once (the model settings use the same ones).
   const harnessBinaryPaths = await harnessBinaries.resolve();
   providerConfig = createHostProviderConfig({ profileDir: dataDir, ownerId, credentials,
+    // Coexistence plan A: the xAI login is neither renewed nor signed out while held (agent/xai-held-login.ts).
+    isProfileHeld: () => inputQueue.isHeldForDesktop(),
     gatewayConnected: () => Boolean(currentGateway()),
     getCodexBinary: () => harnessBinaryPaths.codex,
     getClaudeBinary: () => harnessBinaryPaths['claude-code'],

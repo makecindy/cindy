@@ -395,3 +395,167 @@ test('while a desktop uses the profile, a bridge-reported rejection also stops a
   assert.deepEqual(await f.codexAuth.getAuthEnv({ credentialMode: 'oauth-bearer' }), { CODEX_HOME: f.codexHome });
   assert.ok(f.counts.reconcile > 0);
 });
+
+// ---- With a production Codex runtime (createHostCodexRuntime) and its provider configuration ----
+import fsp from 'node:fs/promises';
+import { createHostProviderConfig } from './provider-config.ts';
+import { createHostModelAccess } from './model-access.ts';
+import { createHostCodexRuntime } from './codex-runtime.ts';
+import { createHostMcpRuntime } from './mcp-runtime.ts';
+import { createCredentialStore } from '../credentials/store.mjs';
+import { hostOutbound } from '../outbound.mjs';
+import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
+import { createAvailabilityPolicy } from '../../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.ts';
+import { createXaiAuthInvalidationHost } from '../../../desktop/src/main/maker-host/xaiAuthInvalidationCore.ts';
+import { hostRuntimeLayout } from '../runtime-layout.mjs';
+import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore.ts';
+import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
+
+/** A production Codex runtime on a temporary profile and database, as codex-thread-routes.test.mjs builds it. */
+async function productionRuntime(t, ownerId) {
+  const root = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-host-held-runtime-')));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  const savedEnv = { ...process.env };
+  t.after(() => { for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key]; Object.assign(process.env, savedEnv); });
+  process.env.HOME = process.env.USERPROFILE = path.join(root, 'home');
+  const fixtureHome = process.env.HOME;
+  t.mock.method(os, 'homedir', () => fixtureHome);
+  await fsp.mkdir(fixtureHome);
+  for (const key of ['XDT_OFFICIAL_SHARED_PROFILE', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_HOME', 'XDT_CODEX_API_KEY', 'ANTHROPIC_API_KEY', HOST_TEST_SYSTEM_CODEX_AUTH_ENV]) delete process.env[key];
+  // Every outbound request (token renewals included) is recorded and answered with a failure.
+  const outbound = [];
+  t.mock.method(hostOutbound, 'outboundFetch', async url => { outbound.push(String(url)); return new Response('{}', { status: 500 }); });
+  const profile = path.join(root, 'profile');
+  await fsp.mkdir(path.join(profile, 'codex-home'), { recursive: true });
+  configureHostOwner({ userDataDir: profile, ownerId });
+  t.after(() => configureHostOwner({ userDataDir: profile, ownerId: null }));
+  configureAppDataDir(path.join(root, 'app-data'));
+  const layout = hostRuntimeLayout();
+  const opened = await openOwnerDatabase({ userDataDir: profile, ownerId, isPackaged: false,
+    drizzleDir: layout.drizzleDir, sqliteVecExtPath: layout.sqliteVecPath });
+  const database = createDbClientForHandle({ db: opened.db, drizzle: opened.drizzle, dispose: async () => opened.db.close() });
+  setCurrentDbClient(database, ownerId);
+  t.after(async () => { clearCurrentDbClient(database); await database.dispose(); });
+  const credentials = await createCredentialStore({ userDataDir: profile, platform: 'linux', keyPromise: Promise.resolve(Buffer.alloc(16, 5)) });
+  let held = true;
+  let modelAccess;
+  const config = createHostProviderConfig({ profileDir: profile, ownerId, credentials, getCodexBinary: () => null, isProfileHeld: () => held,
+    gatewayConnected: () => Boolean(modelAccess?.gateway.credential), openExternal: async () => { throw new Error('Unexpected browser request'); } });
+  t.after(() => config.close());
+  modelAccess = createHostModelAccess({ ownerId, region: 'global', readKey: () => config.builtinStore.get('xd'),
+    writeKey: value => config.builtinStore.set('xd', value), request: async () => ({ endpoint: 'http://127.0.0.1:9', apiKey: 'synthetic-gateway-key' }),
+    onKeyChanged: () => {}, publish: () => {} });
+  await modelAccess.start();
+  t.after(() => modelAccess.close());
+  const mcp = createHostMcpRuntime({ appServerIds: () => [], getRemoteMcpBridgeToken: config.remoteBridgeToken });
+  t.after(() => mcp.close());
+  const runtime = createHostCodexRuntime({ profileDir: profile, binaryPath: path.join(root, 'no-codex-binary'), config, modelAccess, mcp,
+    availabilityPolicy: createAvailabilityPolicy(async () => { throw new Error('Unexpected share mutation'); }), publish: () => {},
+    isProfileHeld: () => held });
+  t.after(() => runtime.close());
+  const snapshot = () => {
+    const out = {};
+    const walk = dir => { for (const name of fs.readdirSync(dir).sort()) {
+      const file = path.join(dir, name); const stat = fs.lstatSync(file); const key = path.relative(profile, file);
+      if (stat.isSymbolicLink()) out[key] = `link:${fs.readlinkSync(file)}`;
+      else if (stat.isDirectory()) { out[key] = 'dir'; walk(file); }
+      // The database and its journal change on their own; the logins do not live there.
+      else if (!/\.(db|sqlite)(-wal|-shm|-journal)?$/.test(name)) out[key] = fs.readFileSync(file).toString('base64');
+    } };
+    walk(profile);
+    return out;
+  };
+  const jwt = expSec => `h.${Buffer.from(JSON.stringify({ exp: expSec })).toString('base64url')}.s`;
+  return { profile, config, runtime, snapshot, jwt, outbound, setHeld: value => { held = value; } };
+}
+
+/*
+ * 测试价值
+ * - 生产入口：生产的 createHostCodexRuntime 实例：引擎的作废端口（它返回的 invalidateNative，createHostAgentGraph 交给
+ *   Codex 引擎）、起本机 Codex 前的检查（assertNativeLoginUsable）、订阅桥（runtime.subscriptions.bridge）。
+ * - 规则：并存方案 A（审核方 2026-11-17 定）。桥和引擎共用同一实例里的同一份“闸门关着时被拒过”的记忆：引擎报过，
+ *   桥的请求带同一原因失败；桥报过，起本机 Codex 带同一原因失败。这一条由生产的装配保证，fixture 里的手工装配钉不住。
+ * - 现有覆盖缺口：上面几条用的是手工装配的端口。
+ * - 最小失败输入：闸门关着时，引擎报一次拒绝再经桥取令牌；桥报一次再起本机 Codex。
+ * - tier：unit（真实的临时库与 profile；所有对外请求是记录调用的桩）。
+ */
+test('one production Codex runtime: the engine and the bridge see each other\'s rejection while held', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const f = await productionRuntime(t, 'held-runtime-owner');
+  const token = f.jwt(Math.floor(Date.now() / 1000) + 3600);
+  const writeLogin = value => fs.writeFileSync(path.join(f.profile, 'codex-home', 'auth.json'),
+    JSON.stringify({ tokens: { access_token: value, refresh_token: 'refresh-fixture', account_id: 'workspace-a' } }), { mode: 0o600 });
+  writeLogin(token);
+  bindNativeProviderAuth('openai', { instanceIsolated: true });
+  const bridge = f.runtime.subscriptions.bridge;
+  const refusal = /^Error: HOST_PROFILE_IN_USE_BY_DESKTOP: OpenAI rejected this ChatGPT sign-in \(token_revoked\)/;
+  assert.equal((await bridge.getChatgptBridgeAuth('openai')).accessToken, token);
+  const before = f.snapshot();
+  // The engine reports; the same runtime's bridge refuses the token.
+  await f.runtime.invalidateNative('token_revoked', { credentialAttribution: 'unproven' });
+  bridge.clearChatgptBridgeCredentialCache();
+  await assert.rejects(bridge.getChatgptBridgeAuth('openai'), refusal);
+  assert.throws(() => f.runtime.assertNativeLoginUsable(), refusal);
+  assert.deepEqual(f.snapshot(), before);
+  assert.equal(isNativeProviderAuthBound('openai'), true);
+  // Released, the memory is gone; held again with a new login, the bridge reports and the engine refuses.
+  f.setHeld(false);
+  f.runtime.assertNativeLoginUsable();
+  f.setHeld(true);
+  const next = f.jwt(Math.floor(Date.now() / 1000) + 3600) + 'b';
+  writeLogin(next);
+  bridge.clearChatgptBridgeCredentialCache();
+  assert.equal((await bridge.getChatgptBridgeAuth('openai')).accessToken, next);
+  await bridge.invalidateChatgptBridgeAuth({ status: 401,
+    body: '{"error":{"code":"token_revoked","message":"Your authentication token has been revoked."}}', failedAccessToken: next }, 'openai');
+  assert.throws(() => f.runtime.assertNativeLoginUsable(), refusal);
+  assert.equal(isNativeProviderAuthBound('openai'), true);
+  assert.deepEqual(f.outbound, [], 'nothing left this test');
+});
+
+/*
+ * 测试价值
+ * - 生产入口：生产的 createHostProviderConfig 里的 xAI 服务（config.grok，订阅桥、Codex 代理的 xAI 观察者、
+ *   供应商 OAuth 令牌读取与自动审查都经它），上游拒绝经 createXaiAuthInvalidationHost(config.grok)，与 codex-runtime.ts 同一装配。
+ * - 规则：并存方案 A（审核方 2026-11-17 定）。xAI 登录在共用 profile 的 safe-storage 里，桌面也读写；闸门关着时：
+ *   快过期的令牌不续期、带原因失败；上游拒绝时不续期、不登出、不解绑，只记进程内，之后同一令牌带原因失败；放开后照常。
+ * - 现有覆盖缺口：之前闸门不管 xAI 的续期与登出。
+ * - 最小失败输入：闸门关着时取一次快过期的令牌；上游拒绝一次再取一次。
+ * - tier：unit（真实的临时库与 profile；续期请求是记录调用的桩，不联网）。
+ */
+test('while a desktop uses the profile, the xAI login is neither renewed nor signed out', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const f = await productionRuntime(t, 'held-xai-owner');
+  const grok = f.config.grok;
+  const writeLogin = (access, expiresAt) => {
+    assert.equal(f.config.builtinStore.set('xai', JSON.stringify({ access_token: access, refresh_token: 'xai-refresh-fixture', expires_at: expiresAt })), true);
+    grok.resetGrokOAuthMemoryCache();
+  };
+  bindNativeProviderAuth('xai', { instanceIsolated: true });
+  // Held, a valid token: used as it is.
+  writeLogin('xai-token-valid', Date.now() + 3_600_000);
+  let before = f.snapshot();
+  assert.equal(await grok.getGrokAccessToken(), 'xai-token-valid');
+  // Held, a token about to expire (within the 120 seconds the service renews ahead): refused, not renewed.
+  writeLogin('xai-token-expiring', Date.now() + 60_000);
+  before = f.snapshot();
+  await assert.rejects(grok.getGrokAccessToken(),
+    /^Error: HOST_PROFILE_IN_USE_BY_DESKTOP: the SuperGrok sign-in has expired, and it is not renewed while a Cindy desktop app/);
+  assert.deepEqual(f.outbound, []);
+  assert.deepEqual(f.snapshot(), before);
+  // Held, the upstream rejects a valid token: nothing renewed, signed out or unbound; the token is refused afterwards.
+  writeLogin('xai-token-rejected', Date.now() + 3_600_000);
+  before = f.snapshot();
+  const xai = createXaiAuthInvalidationHost(grok);
+  await xai.invalidateXaiBridgeAuth({ status: 403, body: 'unauthenticated: bad-credentials', failedAccessToken: 'xai-token-rejected' });
+  assert.deepEqual(f.outbound, []);
+  assert.deepEqual(f.snapshot(), before);
+  assert.equal(isNativeProviderAuthBound('xai'), true);
+  await assert.rejects(grok.getGrokAccessToken(), /^Error: HOST_PROFILE_IN_USE_BY_DESKTOP: xAI rejected this SuperGrok sign-in/);
+  // Released: the token is used again, and a rejection takes the service's forced renewal (one request).
+  f.setHeld(false);
+  assert.equal(await grok.getGrokAccessToken(), 'xai-token-rejected');
+  await xai.invalidateXaiBridgeAuth({ status: 403, body: 'unauthenticated: bad-credentials', failedAccessToken: 'xai-token-rejected' });
+  assert.equal(f.outbound.length, 1);
+});

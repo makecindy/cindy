@@ -17,6 +17,7 @@ import { withoutProviderHeaderCredentials } from '../../../desktop/src/main/make
 import { loadCatalogWithSource, storedCustomProviderId, type CatalogSourceConfig } from '@cindy/model-providers';
 import { createGenericOAuthService, type GenericOAuthStorage } from '../../../desktop/src/main/maker-host/generic-oauth.js';
 import { createGrokOAuthService } from '../../../desktop/src/main/maker-host/grok-oauth-login.js';
+import { holdGrokLoginWrites } from './xai-held-login.js';
 import { hostOutbound, resolveHostOutboundProxy } from '../outbound.mjs';
 import { createClaudeNativeCli } from '../../../desktop/src/main/maker-host/claude-native-cli.js';
 import { readClaudeCliLoginStatusBySpawn } from '@cindy/maker-core/claude-cli-login-status';
@@ -59,7 +60,9 @@ export function createHostCodexAccounts(
 
 /** Owner-bound configuration and the existing encrypted header migration. */
 export function createHostProviderConfig(options: { profileDir: string; ownerId: string; openExternal(url: string): Promise<void>;
-  gatewayConnected?(): boolean; getCodexBinary?(): string | null; getClaudeBinary?(): string | null; publish?(channel: string, payload: unknown): void; credentials: {
+  gatewayConnected?(): boolean; getCodexBinary?(): string | null; getClaudeBinary?(): string | null; publish?(channel: string, payload: unknown): void;
+  /** Coexistence plan A: whether a Cindy desktop app running on its own uses this profile (xai-held-login.ts). */
+  isProfileHeld?(): boolean; credentials: {
   decrypt(value: string): string; read(key: string): string | null;
   write(key: string, value: string): void; remove(key: string): void;
 } }) {
@@ -92,8 +95,13 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
   };
   const oauth = createGenericOAuthService({ fetchImpl: hostOutbound.outboundFetch });
   oauth.configureGenericOAuth({ storage: oauthStorage, openExternal: options.openExternal });
-  const grok = createGrokOAuthService({ outboundFetch: hostOutbound.outboundFetch, openExternal: options.openExternal,
-    genericOAuthSecretIo: oauthStorage, getProviderSecretStore: () => builtinStore });
+  // Every Host consumer of the xAI login reads it through this one service; while a desktop uses
+  // the profile it neither renews nor signs out (xai-held-login.ts).
+  const grok = holdGrokLoginWrites(createGrokOAuthService({ outboundFetch: hostOutbound.outboundFetch, openExternal: options.openExternal,
+    genericOAuthSecretIo: oauthStorage, getProviderSecretStore: () => builtinStore }), {
+    isProfileHeld: () => options.isProfileHeld?.() === true,
+    readStoredLogin: id => (id === 'xai' ? builtinStore.get('xai') : oauthStorage.read(id)),
+  });
   const claudeNative = createClaudeNativeCli({
     binaryPath: () => { check(); return options.getClaudeBinary?.() ?? null; },
     resolveOutboundProxy: resolveHostOutboundProxy,
