@@ -17,6 +17,7 @@ import hostContext from '../../../resources/system-skills/cindy-plugin-creator/r
 import agentCallContext from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-agent-call-context.md?raw';
 import chatCards from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-chat-cards.md?raw';
 import eventSubscriptions from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-event-subscriptions.md?raw';
+import toolObservation from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-tool-observation.md?raw';
 import messageHooks from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-message-hooks.md?raw';
 import controlPoints from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-control-points.md?raw';
 import pluginModels from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-models.md?raw';
@@ -65,6 +66,7 @@ export const FORGE_GUIDE = [
   agentCallContext,
   chatCards,
   eventSubscriptions,
+  toolObservation,
   messageHooks,
   controlPoints,
   pluginModels,

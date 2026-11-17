@@ -35,7 +35,7 @@ const component = ast.statements.find(
   (node) => ts.isFunctionDeclaration(node) && node.name?.text === 'RunningStatusBar',
 );
 if (!component) throw new Error('RunningStatusBar not found');
-const compiled = ts.transpileModule(component.getText(ast), {
+const compiled = ts.transpileModule(component.getText(ast).replace(/^export\s+/, ''), {
   compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const Icon = () => null;
@@ -71,6 +71,9 @@ const RunningStatusBar = new Function(
 )(deps) as React.ComponentType<{
   visible: boolean;
   suppressContent?: boolean;
+  preparing?: boolean;
+  backgroundTasksRunning?: boolean;
+  onStopBackgroundTasks?: () => void;
   rightLeadingSlot?: React.ReactNode;
   status: string;
   reconnectStatus?: string | null;
@@ -90,6 +93,19 @@ const RunningStatusBar = new Function(
 }>;
 
 afterEach(cleanup);
+
+it('keeps background stop available during remote preparation without displaying old metrics', () => {
+  const stop = vi.fn();
+  const props = { visible: true, preparing: true, status: 'Waiting for remote response',
+    startedAt: 1, tokenUsage: 1234, outputTokens: 1234, generationDurationMs: 1000 };
+  const { container, rerender } = render(<RunningStatusBar {...props} />);
+  expect(container.querySelector('[data-running-status-meta]')).toBeNull();
+  rerender(<RunningStatusBar {...props} backgroundTasksRunning onStopBackgroundTasks={stop} />);
+  fireEvent.click(screen.getByRole('button', { name: 'chat.backgroundActivity.stopAll' }));
+  expect(stop).toHaveBeenCalledOnce();
+  expect(container.querySelector('[data-running-status-meta]')?.textContent).not.toContain('1234');
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
 
 it.each([false, true])('reconnect hides stale speed and pinned history, then waits for fresh samples (pinned=%s)', (pinned) => {
   const props = {

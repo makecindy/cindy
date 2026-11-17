@@ -740,9 +740,9 @@ export interface GhostCindyNeeds {
  * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
  * 两项在安装或更新确认中展示；整体批准后按当前声明订阅，旧元数据主题语义保持。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state', 'tool-execution'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
-export const GHOST_TASK_EVENT_TOPICS = ['message', 'task-state'] as const;
+export const GHOST_TASK_EVENT_TOPICS = ['message', 'task-state', 'tool-execution'] as const;
 export type GhostTaskEventTopic = (typeof GHOST_TASK_EVENT_TOPICS)[number];
 export function declaredGhostTaskEventTopics(manifest: Pick<GhostManifest, 'subscribe'>): GhostTaskEventTopic[] {
   return GHOST_TASK_EVENT_TOPICS.filter(topic => manifest.subscribe?.topics?.includes(topic));
@@ -773,14 +773,14 @@ export type GhostMessageHook = (typeof GHOST_MESSAGE_HOOKS)[number];
  * - 插件只能收紧：`allow` 只表示"不反对"，不能替用户批准本来需要确认的事；
  * - 只问用户在该任务里选定的插件(任务的 preRunPlugin)，不是装了就管所有任务；
  * - 出错(没装/停用/超时/崩溃/熔断)怎么办由用户在任务里设置(onFailure)，插件不能自报；
- * - 旧控制节点沿用 receipt approvedControlPoints；任务运行时五点只依赖整包安装批准，
+ * - 旧控制节点沿用 receipt approvedControlPoints；任务运行时节点只依赖整包安装批准，
  *   并在任务里选择提供者，不额外批准节点。
  * 新增节点 = 在本目录加一项 + 在 Host 对应流程按任务配置调用 screenControlPoint。
  */
 export const GHOST_CONTROL_POINT_FAILURE_ACTIONS = ['allow', 'skip', 'block'] as const;
 export type GhostControlPointFailureAction = (typeof GHOST_CONTROL_POINT_FAILURE_ACTIONS)[number];
 
-export type GhostControlPointAction = 'allow' | 'skip' | 'block' | 'route' | 'transform' | 'context' | 'memories';
+export type GhostControlPointAction = 'allow' | 'skip' | 'block' | 'route' | 'transform' | 'context' | 'memories' | 'tool';
 
 export interface GhostControlPointSpec {
   /** 插件可返回的裁决(allow 恒可用)。route 只用于开新任务时选模型。 */
@@ -863,6 +863,16 @@ export const GHOST_CONTROL_POINTS = {
     actions: ['allow'], failureActions: ['allow', 'skip', 'block'], defaultOnFailure: 'block', timeoutMs: 8_000,
     permissionKey: 'system-prompt', labelKey: 'systemPrompt', detailKey: 'systemPromptDetail',
   },
+  'will-tool-call': {
+    actions: ['allow', 'block', 'tool'], failureActions: ['allow', 'block'],
+    defaultOnFailure: 'block', timeoutMs: 1_000, permissionKey: 'subscribe:hooks:tool-call',
+    labelKey: 'subscribeToolCall', detailKey: 'subscribeToolCallDetail',
+  },
+  'did-tool-result': {
+    actions: ['allow', 'block', 'tool'], failureActions: ['allow', 'block'],
+    defaultOnFailure: 'block', timeoutMs: 1_000, permissionKey: 'subscribe:hooks:tool-result',
+    labelKey: 'subscribeToolResult', detailKey: 'subscribeToolResultDetail',
+  },
 } as const satisfies Record<string, GhostControlPointSpec>;
 export type GhostControlPointId = keyof typeof GHOST_CONTROL_POINTS;
 export const GHOST_CONTROL_POINT_IDS = Object.keys(GHOST_CONTROL_POINTS) as GhostControlPointId[];
@@ -882,13 +892,14 @@ export function declaredGhostControlPoints(manifest: Pick<GhostManifest, 'subscr
   return manifest.systemPrompt?.length ? [...points, 'system-prompt'] : points;
 }
 
-/** 任务运行时五点随整包安装批准，不维护节点级批准记录。 */
+/** 任务运行时节点随整包安装批准，不维护节点级批准记录。 */
 export function isGhostRuntimeControlPoint(point: string): boolean {
   return point === 'will-start-turn' || point === 'will-model-request' || point === 'will-compose-context'
-    || point === 'will-search-memory' || point === 'system-prompt';
+    || point === 'will-search-memory' || point === 'system-prompt'
+    || point === 'will-tool-call' || point === 'did-tool-result';
 }
 
-/** 任务运行时五点只检查整包安装；旧控制节点保留原有名单语义。 */
+/** 任务运行时节点只检查整包安装；旧控制节点保留原有名单语义。 */
 export function ghostControlPointActive(
   ghost: Pick<InstalledGhost, 'enabled' | 'manifest' | 'approval' | 'approvedControlPoints'>,
   point: GhostControlPointId,
@@ -2756,8 +2767,8 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       if (topics?.length) {
         for (const topic of declaredGhostTaskEventTopics(manifest)) items.push({
           key: `subscribe:topics:${topic}`, kind: 'subscribe',
-          labelKey: topic === 'message' ? 'subscribeMessage' : 'subscribeTaskState',
-          detailKey: topic === 'message' ? 'subscribeMessageDetail' : 'subscribeTaskStateDetail',
+          labelKey: topic === 'message' ? 'subscribeMessage' : topic === 'tool-execution' ? 'subscribeToolExecution' : 'subscribeTaskState',
+          detailKey: topic === 'message' ? 'subscribeMessageDetail' : topic === 'tool-execution' ? 'subscribeToolExecutionDetail' : 'subscribeTaskStateDetail',
         });
         // 旧 key 只在真订了 turn / session 时产出:纯 activity 插件不该在确认框里
         // 多出一行"旁听轮次与会话事件"——网关根本不给它投 turn / session,那行是凭空
@@ -3087,7 +3098,7 @@ export function diffInstalledGhostPermissionItems(
       cindy: installed.manifest.cindy ? { ...installed.manifest.cindy,
         models: declaredGhostCindyModelActions(installed.manifest).filter(action => installed.approvedCindyModelActions?.includes(action)),
       } : undefined,
-      // 仅旧控制节点沿用分项批准；任务运行时五点以已安装 manifest 为比较基线。
+      // 仅旧控制节点沿用分项批准；任务运行时节点以已安装 manifest 为比较基线。
       subscribe: withoutUnapprovedControlPoints(installed),
       tools: withoutUnapprovedAutoTools(installed),
     };
@@ -9104,6 +9115,7 @@ export type GhostActivityEventName =
 
 /** did- 旁听事件名，按声明并批准的 topic 分发。 */
 export type GhostDidEventName =
+  | 'did-tool-execution'
   | 'did-message-created'
   | 'did-task-state-changed'
   | 'did-turn-start'
@@ -9168,7 +9180,14 @@ export type GhostEventActivityData = GhostEventThinkingData | GhostEventInteract
 
 /** did- 旁听载荷；消息内容与任务状态使用各自的批准主题。 */
 export type GhostDidEventData =
-  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData | GhostTaskEventData;
+  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData | GhostTaskEventData | GhostToolExecutionData;
+export interface GhostToolExecutionData {
+  sessionId: string;
+  eventType: string;
+  source?: string;
+  payload: unknown;
+  truncated?: true;
+}
 export interface GhostTaskEventData {
   sessionId: string;
   messageId?: string;
@@ -9240,7 +9259,8 @@ export interface GhostMemorySearchPointData {
 }
 export interface GhostComposeContextPointData { sessionId: string; text: string }
 
-export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData | GhostStartTaskPointData | GhostRuntimePointData | GhostMemorySearchPointData | GhostComposeContextPointData;
+export type GhostToolPointData = import('@cindy/maker-core/tool-lifecycle').ToolLifecycleEvent & { sessionId: string };
+export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData | GhostStartTaskPointData | GhostRuntimePointData | GhostMemorySearchPointData | GhostComposeContextPointData | GhostToolPointData;
 
 /** 选择器里的一个插件模型(已按当前语言解析文案)。 */
 export interface GhostPickerModel {
@@ -9269,6 +9289,7 @@ export type GhostControlPointResult =
   | { action: 'route'; ghostId: string; ghostName: string; route: GhostModelRoute; reason: string };
 
 export type GhostRuntimeControlPointResult = GhostControlPointResult
+  | { action: 'tool'; ghostId: string; ghostName: string; tool: import('@cindy/maker-core/tool-lifecycle').ToolLifecycleVerdict }
   | { action: 'context'; ghostId: string; ghostName: string; blocks: GhostContextBlock[] }
   | { action: 'memories'; ghostId: string; ghostName: string; entries: GhostMemoryEntry[] }
   | { action: 'transform'; ghostId: string; ghostName: string; request: Record<string, unknown> };
@@ -9409,7 +9430,8 @@ export type GhostPipeEventPush =
 export interface GhostPipeEventVerdict {
   type: 'event-verdict';
   hookId: string;
-  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories';
+  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories' | 'tool';
+  tool?: import('@cindy/maker-core/tool-lifecycle').ToolLifecycleVerdict;
   blocks?: GhostContextBlock[];
   entries?: GhostMemoryEntry[];
   /** Provider request JSON body, only for will-model-request phase=payload. */

@@ -309,6 +309,11 @@ export function BotGroupComposer({
       attemptRef.current = null;
       setAlsoSendToMain(false);
       tray.clearSent(attachmentIds);
+      // 发出后收起输入框与软键盘(与下拉收起同口径),把屏幕让给群聊;等待期间又打了字就不打断。
+      if (!textRef.current) {
+        inputRef.current?.blur();
+        setFocused(false);
+      }
     } catch {
       restoreDraft();
     } finally {

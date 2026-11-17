@@ -16,7 +16,7 @@
  * 走到运行中这一步的已是终态错误：偶发的网络 / 过载抖动先由中断自愈在同一台重试，重试用尽才会到这里，
  * 对应「同一台连续失败才算」。
  */
-import { SESSION_CLOSED_MID_TURN_MESSAGE } from '@cindy/maker-core';
+import { AgentNotAuthenticatedError, SESSION_CLOSED_MID_TURN_MESSAGE } from '@cindy/maker-core';
 
 import type { AutoResumeAgentSwitchCause } from '../../shared/agentInputQueue.js';
 import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
@@ -223,7 +223,7 @@ export function providerGroupFailureSignals(error: unknown): InterruptedTurnErro
   if (error instanceof Error) {
     const code = (error as { code?: unknown }).code;
     const message = error.message || (typeof code === 'string' ? `[${code}]` : '');
-    return { message };
+    return { message, ...(error instanceof AgentNotAuthenticatedError ? { sdkError: 'authentication_failed' } : {}) };
   }
   if (typeof error === 'string') return { message: error };
   if (error && typeof error === 'object') return error as InterruptedTurnErrorSignals;

@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   hold: false,
   accountResult: undefined as unknown,
   oldAuthenticated: false,
+  oldReason: 'oauth_expired',
   oldLogin: vi.fn<(...args: unknown[]) => Promise<{ ok: boolean; reason?: string }>>(async () => ({ ok: true })),
   oldCancel: vi.fn(),
 }));
@@ -27,7 +28,7 @@ vi.mock('@cindy/maker-core', () => ({
 }));
 vi.mock('../../agent-binaries/index.js', () => ({ getReadyBinaryPath: () => h.binary }));
 vi.mock('../../maker-host/codex-account-auth.desktop.js', () => ({
-  codexAccountState: () => ({ authenticated: h.oldAuthenticated, errorReason: h.oldAuthenticated ? undefined : 'oauth_expired' }),
+  codexAccountState: () => ({ authenticated: h.oldAuthenticated, errorReason: h.oldAuthenticated ? undefined : h.oldReason }),
   loginCodexAccount: h.oldLogin,
   cancelCodexAccountLogin: h.oldCancel,
 }));
@@ -127,6 +128,7 @@ beforeEach(() => {
   h.hold = false;
   h.accountResult = undefined;
   h.oldAuthenticated = false;
+  h.oldReason = 'oauth_expired';
   h.oldLogin.mockReset().mockResolvedValue({ ok: true });
   h.oldCancel.mockReset();
   children.length = 0;
@@ -213,6 +215,17 @@ describe('official Codex profiles', () => {
     h.oldAuthenticated = true;
     expect(await readLegacyCodexProviderAccount('openai-old', '/fixture/imported')).toMatchObject({ authenticated: true, plan: 'plus' });
     expect(h.spawn.mock.calls[0][2].env.CODEX_HOME).toBe('/fixture/imported');
+  });
+
+  // 2026-11-18 personal restart, unit: an interrupted task's automatic resume failed with
+  // "requires login" because the account was read before custom providers reached the catalog.
+  // Entry: readLegacyCodexProviderAccount, whose rejection the pool caches for seconds as
+  // unavailable (runtime.test "re-reads a failed account snapshot"); a returned signed-out state
+  // is cached for 30 s as LOGIN_REQUIRED. Minimal input: catalog lookup reports provider_unavailable.
+  it('reports a connection missing from the catalog as a failed read, not a signed-out account', async () => {
+    h.oldReason = 'provider_unavailable';
+    await expect(readLegacyCodexProviderAccount('openai-old', '/fixture/imported')).rejects.toThrow('not loaded');
+    expect(h.spawn).not.toHaveBeenCalled();
   });
 
   it('uses the original login cancellation path for an imported connection', async () => {

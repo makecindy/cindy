@@ -725,7 +725,7 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain(
       'const composerDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);',
     );
-    expect(newMakerDraftRouteSource).toContain('text: stripLocalMentionChips(composerDraft.text),');
+    expect(newMakerDraftRouteSource).toContain('text: stripLocalMentionChips(composerDraft.text, deviceChanged),');
   });
 
   // #807 review 第三轮:点已选中的那一行只是确认当前选择,不能有副作用 —— 否则用户点一下
@@ -892,7 +892,7 @@ describe('Shared create project picker', () => {
       newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback('),
     );
     expect(action).toContain(
-      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions();',
+      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions(deviceChanged);',
     );
     // 附件由出站上传层搬运，无需随引用一起删除。
     expect(action).not.toContain('dropPathBackedAttachments');
@@ -1071,7 +1071,7 @@ describe('Shared create project picker', () => {
       newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback('),
     );
     expect(action).toContain(
-      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions();',
+      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions(deviceChanged);',
     );
   });
 
@@ -1247,7 +1247,7 @@ describe('Shared create project picker', () => {
     );
     expect(action).not.toContain('attachmentState.removeFile');
     expect(newMakerDraftRouteSource).not.toContain('dropPathBackedAttachments');
-    expect(action).toContain('stripProjectRelativeMentions();');
+    expect(action).toContain('stripProjectRelativeMentions(deviceChanged);');
   });
 
   /**
@@ -1298,7 +1298,7 @@ describe('Shared create project picker', () => {
     expect(body).toContain('const workingDirChanged = req.workingDir !== draft.workingDir;');
     // mention chip 存**项目相对**路径 → 设备或项目任一变化都要剥(第 29 轮 P1)。
     expect(body).toContain(
-      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions();',
+      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions(deviceChanged);',
     );
     // 附件始终属于控制端，换目标设备不丢弃；发送时由上传层转成远端引用。
     expect(body).not.toContain('dropPathBackedAttachments');
