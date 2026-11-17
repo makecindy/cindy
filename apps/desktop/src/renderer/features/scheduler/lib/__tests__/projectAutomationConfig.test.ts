@@ -94,6 +94,38 @@ describe('project automation providerId serialization', () => {
   });
 });
 
+describe('project automation program change gate serialization', () => {
+  // PR #8285 review: promoting a gated check rebuilt it from the project file, which
+  // had no gate field, so the check started the model again on every run.
+  it('keeps the gate through promotion and form edits, and omits it when off', () => {
+    const gated = { id: 's1', name: 'n', prompt: 'p', cronExpr: '0 9 * * *', silentWhenIdle: true,
+      programChangeGate: true } as Schedule;
+    expect(JSON.parse(JSON.stringify(scheduleToProjectConfig(gated, 'daily')))).toMatchObject({
+      silentWhenIdle: true, programChangeGate: true });
+    expect(JSON.parse(JSON.stringify(formToProjectConfig(makeForm({ silentWhenIdle: true }), 'daily', true))))
+      .toMatchObject({ programChangeGate: true });
+    expect(JSON.parse(JSON.stringify(scheduleToProjectConfig({ ...gated, programChangeGate: false }, 'daily'))))
+      .not.toHaveProperty('programChangeGate');
+    expect(JSON.parse(JSON.stringify(formToProjectConfig(makeForm(), 'daily'))))
+      .not.toHaveProperty('programChangeGate');
+  });
+
+  // PR #8285 review (P1): the project file keeps scripts but not plugins. A check whose
+  // only signal was a plugin would keep the gate and skip every run after promotion.
+  it.each([
+    ['plugin only: the signal is dropped, so the gate is dropped', { preRunPlugin: { pluginId: 'p' } }, false],
+    ['plugin and script: the script travels, so the gate stays',
+      { preRunPlugin: { pluginId: 'p' }, preRunHook: { command: 'node check.mjs' } }, true],
+    ['script only: the gate stays', { preRunHook: { command: 'node check.mjs' } }, true],
+  ])('%s', (_label, signal, kept) => {
+    const schedule = { id: 's1', name: 'n', prompt: 'p', cronExpr: '0 9 * * *', silentWhenIdle: true,
+      programChangeGate: true, ...signal } as unknown as Schedule;
+    const config = JSON.parse(JSON.stringify(scheduleToProjectConfig(schedule, 'daily')));
+    if (kept) expect(config).toMatchObject({ programChangeGate: true });
+    else expect(config).not.toHaveProperty('programChangeGate');
+  });
+});
+
 describe('project automation explicit Harness serialization', () => {
   it('preserves the selection through JSON and omits its marker when following', () => {
     const form = makeForm({ agentKind: 'pi', modelAgentKind: 'pi', model: 'test-model',

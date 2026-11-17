@@ -92,6 +92,10 @@ export function registerScheduleUpdateTool(
         .boolean()
         .optional()
         .describe('静默运行开关,语义见 schedule_create 同名字段'),
+      programChangeGate: z
+        .boolean()
+        .optional()
+        .describe('程序变化门,语义见 schedule_create 同名字段;与 silentWhenIdle 无关。true 打开:没有前置脚本或插件放行时不启动模型;false 关闭:每轮照常启动模型。省略 = 不修改。只能改本机任务。'),
       executionMode: z
         .enum(EXECUTION_MODE)
         .optional()
@@ -176,6 +180,8 @@ export function registerScheduleUpdateTool(
         }
         const unsupported = bindToCurrentSession
           ? 'bindToCurrentSession 只能绑定本机的当前任务'
+          : patch.programChangeGate !== undefined
+            ? 'programChangeGate 只能在本机修改'
           : targetInvalid
             ? 'targetSessionId 必须是目标定时任务所在电脑上的任务（deviceId::sessionId 或该电脑的任务 id）'
           : patch.preRunHook

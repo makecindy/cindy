@@ -31,6 +31,8 @@ export interface ProjectScheduleConfig {
   useWorktree?: boolean;
   persistentSession?: boolean;
   silentWhenIdle?: boolean;
+  /** 程序变化门。只在打开时写入;省略 = false(旧配置不变)。详见 Schedule.programChangeGate。 */
+  programChangeGate?: boolean;
   /**
    * 前置检查脚本(Pre-run Hook)。省略 = 未启用;reconcile 时恒带 key,
    * 配置文件里删掉即清空 DB 里的 hook(与表单「恒带 key」语义一致)。
@@ -76,6 +78,12 @@ export function scheduleToProjectConfig(
     useWorktree: schedule.useWorktree,
     persistentSession: schedule.persistentSession,
     silentWhenIdle: schedule.silentWhenIdle,
+    // 项目配置文件保存前置脚本、不保存插件。只靠插件给信号的检查提升后没有信号来源，
+    // 门照搬会让项目里的副本每轮空跳，所以这种情况不保留门（与复制为个人自动化一致）。
+    programChangeGate:
+      (schedule.programChangeGate === true &&
+        !(schedule.preRunPlugin && !schedule.preRunHook?.command?.trim())) ||
+      undefined,
     preRunHook: schedule.preRunHook?.command
       ? { command: schedule.preRunHook.command, timeoutMs: schedule.preRunHook.timeoutMs }
       : undefined,
@@ -86,6 +94,8 @@ export function scheduleToProjectConfig(
 export function formToProjectConfig(
   form: ScheduleFormState,
   id: string,
+  /** 表单不编辑程序变化门;编辑已有任务时传入原值,否则保存会把它关掉。 */
+  programChangeGate?: boolean,
 ): ProjectScheduleConfig {
   const cronExpr = form.cronExpr.trim();
   return {
@@ -110,6 +120,7 @@ export function formToProjectConfig(
     useWorktree: form.useWorktree,
     persistentSession: form.persistentSession,
     silentWhenIdle: form.silentWhenIdle,
+    programChangeGate: programChangeGate || undefined,
     // 与 buildScheduleInput 同源:未启用为 undefined(JSON 序列化时省略该字段;
     // 类型上抹掉 null——那是 update patch 的清空语义,config 文件里用"字段缺席"表达)
     preRunHook: buildPreRunHook(form) ?? undefined,
