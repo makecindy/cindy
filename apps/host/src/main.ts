@@ -33,7 +33,10 @@ import {
 } from './agent/profile-coexistence.js';
 import { createHostProviderExecutionCheck } from './agent/send-preflight.js';
 import { explicitPorts } from './agent/explicit-ports.js';
-import { createSkillProjectionBoundaryObserver } from './agent/skill-projection-boundary.js';
+import { createSkillProjectionBoundaryObserver, readSkillProjectionBoundaryStatus } from './agent/skill-projection-boundary.js';
+import { refuseSkillProjectionOwnerCommit, sweepOwnerSkillProjectionsAtLogout } from './agent/skill-projection-owner.js';
+import { createHostSharedGlobalSkills } from './agent/shared-global-skills.js';
+import { createHostAgentSkillList } from './agent/agent-skills.js';
 import { resolveRuntimeDeviceId } from '../../desktop/src/main/deviceId.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -187,6 +190,16 @@ function parsePermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 const command = process.argv[2];
+
+/** The status command's boundary category: the running Host's, else a lock-free read of the profile. */
+function readStatusSkillProjectionBoundary(processStatus: { running: boolean | null; runtime?: { skillProjectionBoundary?: string } }) {
+  if (processStatus.running) return processStatus.runtime?.skillProjectionBoundary ?? null;
+  const owner = discoverHostOwner(resolveHostDataDir()).ownerId;
+  if (!owner) return null;
+  configureUserDataDir(resolveHostDataDir());
+  return readSkillProjectionBoundaryStatus(owner);
+}
+
 // Every command, before it reads a profile: a release refuses a CINDY_HOST_REGION that names the other
 // edition (profile-path.mjs resolveHostRegion) instead of running as the wrong one.
 try {
@@ -212,7 +225,9 @@ if (command === '--help' || command === '-h') {
       userDataDir: resolveHostDataDir(),
       keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
     }).catch(() => ({ authenticated: null, realm: null, credentialStoreUnavailable: true }));
-    const state = { ...login, ...await readHostProcessStatus(resolveHostDataDir()) };
+    const processStatus = await readHostProcessStatus(resolveHostDataDir());
+    const state = { ...login, ...processStatus,
+      skillProjectionBoundary: readStatusSkillProjectionBoundary(processStatus) };
     const json = process.argv.includes('--json');
     if (json) {
       console.log(JSON.stringify(state));
@@ -223,6 +238,10 @@ if (command === '--help' || command === '-h') {
       if ('region' in state && state.region) console.log(`region: ${state.region}`);
       if (state.baseUrl) console.log(`address: ${state.baseUrl}`);
       if (state.error) console.error(state.error);
+      // Row 25 (25b): an install signed in before the login published the projection owner.
+      if (state.authenticated && (state.skillProjectionBoundary === 'missing-or-invalid' || state.skillProjectionBoundary === 'other-owner')) {
+        console.log('Run cindy-host login again to finish setting up this account\'s Skills.');
+      }
       if ('credentialStoreUnavailable' in login) console.error('Credential store is unavailable; unlock it to inspect sign-in status.');
     }
   } catch (error) {
@@ -264,6 +283,9 @@ if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) throw new Error('CINDY_
 const profileDir = resolveHostDataDir();
 configureUserDataDir(profileDir);
 configureAppDataDir(resolveHostAppDataDir());
+// Release table row 25 (25b, decision (a)): serve never publishes the Skill projection owner; the
+// window, or `cindy-host login` on a Host's own profile, does. Before anything can commit.
+refuseSkillProjectionOwnerCommit();
 configureWindowsAtomicRename({
   packagedBinary: hostRuntimeLayout().atomicRenameBinary ?? undefined,
   sourceFile: hostRuntimeLayout().atomicRenameSource ?? undefined,
@@ -303,6 +325,11 @@ interface RuntimeState {
 const runtime: RuntimeState = { state: 'uninitialized', owner: null, storage: 'unopened' };
 // Row 25 (25a): read-only diagnostic of the Skill projection owner boundary, read per call.
 const observeSkillProjectionBoundary = createSkillProjectionBoundaryObserver(createLogger('host-skill-projection'));
+// Row 25 (25b): the desktop's shared global Skill preparation, skipped while a desktop holds the profile.
+const sharedGlobalSkills = createHostSharedGlobalSkills({
+  isProfileHeld: () => inputQueue.isHeldForDesktop(),
+  bundledSystemSkillsRoot: () => hostRuntimeLayout().systemSkillsDir,
+});
 
 /**
  * The engine binary of each harness, chosen once when an owner runtime starts with the desktop's rules
@@ -647,6 +674,9 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   closeStorage = async () => { clearCurrentDbClient(client); await client.dispose(); };
   configureProvisionalSessions(dataDir, { onSwept: sessionId => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }) });
   await sweepLeftoverProvisionalSessions();
+  // As the desktop at startup (bootstrap-electron.ts): Cindy-owned Skill activation and the home-level
+  // projections, through the stable-owner boundary. Failures are logged and never block startup.
+  await sharedGlobalSkills.ensureSharedGlobalSkills();
   // Desktop runs this repair once the account DB is ready (bootstrap-electron.ts):
   // savepoint refs of tasks this DB marks deleted are removed from their repos.
   void reconcileSavepointRefsForDeletedSessions().catch(error =>
@@ -884,6 +914,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       makerMemory,
       reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
       readAuthRealm: () => account.realm,
+      sharedGlobalSkills,
       // Vision-bridge notices, which the desktop sends its windows; the client maps them to
       // MAKER_PUSH.EVENT (device-link.ts) and they are not persisted.
       publishVisionBridgeNotice: notice => eventHub.publish(notice),
@@ -1362,6 +1393,10 @@ const serverDeps = {
   logout: async () => {
     await startup;
     authClosed = true;
+    const outgoingOwner = activeOwner;
+    // Read before the runtime is disposed (disposal releases the hold with the input queue).
+    const heldAtLogout = inputQueue.isHeldForDesktop();
+    let loggedOut = false;
     const releaseBoundary = beginAppSessionBoundary();
     try {
     await authRefreshFlight;
@@ -1391,9 +1426,18 @@ const serverDeps = {
         });
       },
     );
+    loggedOut = true;
     return result;
     } finally {
-      try { await disposeOwnerRuntime(); }
+      try {
+        await disposeOwnerRuntime();
+        // Row 25 (25b, decision (ii)): clear the outgoing owner's Skill projections as the desktop does at
+        // sign-out, without a commit; skipped while a desktop holds the profile. Never fails the logout.
+        if (loggedOut && outgoingOwner) {
+          await sweepOwnerSkillProjectionsAtLogout({ userDataDir: resolveHostDataDir(), ownerId: outgoingOwner,
+            isProfileHeld: () => heldAtLogout, warn: (message, fields) => hostLog.warn(message, fields) });
+        }
+      }
       finally {
         commitVolatileAppSession('signed-out', null, true);
         releaseBoundary();
@@ -1668,18 +1712,16 @@ const serverDeps = {
     if (!agent) return { success: false, error: `Agent '${kind}' is not registered` };
     return { success: true, commands: agent.listAgentCommands() };
   },
-  agentSkills: async (input: { agentKind?: string; workingDir?: string; sessionId?: string }) => {
-    const rawKind = String(input.agentKind ?? '');
-    const kind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
-    const agent = agentGraph?.instances?.[kind];
-    if (!agent) return { success: false, error: `Agent '${kind}' is not registered` };
-    const stored = input.sessionId ? await sessionStorage?.get(input.sessionId) : null;
-    if (input.sessionId && !stored) throw new Error('session not found');
-    const workingDir = stored?.workDir || input.workingDir || undefined;
-    if (workingDir && !path.isAbsolute(workingDir)) throw new Error('workingDir must be absolute');
-    const result = await agent.listAgentSkills({ workingDir });
-    return { success: true, skills: result.skills ?? [] };
-  },
+  agentSkills: createHostAgentSkillList({
+    maker: () => agentGraph?.maker ?? null,
+    hasAgent: kind => Boolean(agentGraph?.instances?.[kind as 'claude-code' | 'codex' | 'pi']),
+    readStoredWorkDir: async (sessionId) => {
+      const stored = await sessionStorage?.get(sessionId);
+      return { found: Boolean(stored), workDir: stored?.workDir };
+    },
+    isProfileHeld: () => inputQueue.isHeldForDesktop(),
+    ensureSharedGlobalSkills: () => sharedGlobalSkills.ensureSharedGlobalSkills(),
+  }),
   capabilities: async (agentKind: string) => {
     const kind = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'claude-code';
     const baseCaps = agentGraph?.capabilitiesByAgent?.[kind];

@@ -183,6 +183,8 @@ try {
   await fs.cp(path.join(desktop, 'drizzle'), path.join(resources, 'drizzle'), {
     recursive: true, filter: file => !/[/\\]meta[/\\]\d+_snapshot\.json$/.test(file),
   });
+  // The built-in Skill bundle, as the desktop packages it (forge extraResource system-skills).
+  await fs.cp(path.join(desktop, 'resources', 'system-skills'), path.join(resources, 'system-skills'), { recursive: true, dereference: true });
   // Migration companion scripts remain byte-for-byte identical CommonJS, even
   // with .ts extensions. This must not change their frozen runtime hashes.
   await fs.mkdir(path.join(resources, 'config'));

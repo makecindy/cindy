@@ -31,6 +31,7 @@ import { CLAUDE_ACCOUNT_RETIRED_REASON, subscriptionAccountKind } from '../../..
 import { getActiveCatalog, getLocalCatalogOverridesSnapshot } from '../../../desktop/src/main/maker-host/active-catalog.js';
 import { resolvePiCindyGatewayModelApi, resolvePiCindyGatewayModelSpec } from '../../../desktop/src/main/maker-host/piNativeProvidersCore.js';
 import { createHostPiNativeProviders } from './pi-native-providers.js';
+import type { HostSharedGlobalSkills } from './shared-global-skills.js';
 import { spawnHostPiSubagentRunner } from './pi-subagent-runner.js';
 import { createHostPiPackages } from './pi-packages.js';
 import { deriveAvailableModels, refreshCatalogDerivedModels, resolveModelContextProviderId, resolvePiGatewayDescriptorProviderId, resolvePiRuntimeModelDescriptor } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
@@ -122,6 +123,22 @@ export interface HostAgentGraphOptions {
    * writes nothing the desktop shares and starts no CLI: Codex skips its reconciliation with the
    * system login, Claude answers from the CLI status already read. */
   isProfileHeld?: () => boolean;
+  /** Shared global Skill preparation (agent/shared-global-skills.ts, release table row 25): before
+   * each Claude CLI start (the desktop's Claude getAuthEnv) and before local Pi (piNativeProviders). */
+  sharedGlobalSkills?: Pick<HostSharedGlobalSkills, 'ensureSharedGlobalSkills' | 'beforeClaudeLaunch'> | null;
+}
+
+/** The desktop's Claude getAuthEnv opens with the shared Skill preparation; the Host adapter keeps its own body. */
+function withClaudeSkillPreparation<T extends AuthAdapter>(adapter: T, skills: HostAgentGraphOptions['sharedGlobalSkills']): T {
+  if (!skills) return adapter;
+  return {
+    ...adapter,
+    async getAuthEnv(options?: AuthAdapterOptions) {
+      options?.nativeSubscriptionAccount?.assertCurrent();
+      await skills.beforeClaudeLaunch();
+      return adapter.getAuthEnv(options);
+    },
+  };
 }
 
 export const LOGGER = createMakerLogger('maker');
@@ -640,8 +657,10 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     ...PORTS_ONLY_PI_READS,
     resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices,
     claudeHooks,
-    auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy, config.grok,
-      options.isProfileHeld),
+    auth: withClaudeSkillPreparation(
+      createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy, config.grok,
+        options.isProfileHeld),
+      options.sharedGlobalSkills),
     runtimeConfig: runtimeConfigs.buildClaudeRuntimeConfig(engineEndpoint, claudeProxy ? () => claudeProxy.resolveAgentEndpoint() : undefined),
     binaryPath: options.binaryPath,
     logger: LOGGER,
@@ -775,6 +794,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   const piNativeProviders = createHostPiNativeProviders({
     userDataDir: options.userDataDir, piBinaryPath: options.piBinaryPath ?? null, endpoint: engineEndpoint,
     claudeProxy, providerConfig: config,
+    ensureSharedGlobalSkills: () => options.sharedGlobalSkills?.ensureSharedGlobalSkills() ?? Promise.resolve(),
   });
   // The desktop's main-process strings (i18n.desktop.ts) in the system language, as
   // plugins/authorization.ts does; the window's language choice does not reach the Host.

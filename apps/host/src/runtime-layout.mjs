@@ -27,6 +27,9 @@ export function hostRuntimeLayout() {
     version: release?.version ?? JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8')).version,
     configDir: release ? resource('config') : path.join(root, 'config'),
     drizzleDir: release ? resource('drizzle') : path.join(desktop, 'drizzle'),
+    // The built-in Skill bundle the Host publishes (user decision: the personal Host ships its own
+    // copy; release table row 25). From source: the desktop's own development bundle.
+    systemSkillsDir: release ? resource('system-skills') : path.join(desktop, 'resources', 'system-skills'),
     sqliteVecPath: release ? resource('native', vec) : path.join(desktop, 'native', 'sqlite-vec', `${process.platform}-${process.arch}`, vec),
     webDir: release ? resource('web') : path.join(desktop, '.vite', 'renderer', 'main_window'),
     shimPath: release ? resource('web', 'shim.js') : path.join(root, 'apps', 'web', 'shim.js'),

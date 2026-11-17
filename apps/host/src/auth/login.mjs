@@ -88,6 +88,8 @@ function listenOnLoopback(server) {
  *   region: 'cn' | 'global',
  *   packageRegion?: 'cn' | 'global',
  *   warn?: (line: string) => void,
+ *   admitAccount?: (membership: { id: string }) => void,
+ *   persistSession?: (record: string, membership: { id: string }) => Promise<void>,
  *   refusedSessionLogoutTimeoutMs?: number,
  *   hostedCallbackUrl?: string,
  *   openBrowser: (url: string) => Promise<void>,
@@ -114,11 +116,16 @@ export async function runHostLogin(deps) {
   try {
     assertHostSessionRegion({ packageRegion: deps.packageRegion ?? hostPackageRegion(), sessionRealm: deps.region,
       membershipKind: pair.membership?.kind });
+    // A running serve with another account's runtime: that account must stop first (login-cli.mjs).
+    deps.admitAccount?.(pair.membership);
   } catch (error) {
     await endRefusedSession(deps, pair.accessToken);
     throw error;
   }
-  deps.store.write(AUTH_SESSION_KEY, deps.deviceId ? serializeHostSession(deps.region, pair.refreshToken, deps.deviceId) : serializeAuthSessionRecord(deps.region, pair.refreshToken));
+  const record = deps.deviceId ? serializeHostSession(deps.region, pair.refreshToken, deps.deviceId) : serializeAuthSessionRecord(deps.region, pair.refreshToken);
+  // The Skill projection owner commit (login-cli.mjs) saves the session inside its own transaction.
+  if (deps.persistSession) await deps.persistSession(record, pair.membership);
+  else deps.store.write(AUTH_SESSION_KEY, record);
   return { authenticated: true, realm: deps.region, method: method.providerOrConnectionId ?? method.type };
 }
 

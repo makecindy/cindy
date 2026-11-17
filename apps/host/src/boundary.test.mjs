@@ -139,15 +139,21 @@ async function skillBoundaryProfile(t) {
   fs.mkdirSync(profile);
   process.env.HOME = home;
   process.env.USERPROFILE = home;
-  const { configureUserDataDir, getUserDataDir } = await import('../../desktop/src/main/userDataPath.ts');
+  const appData = path.join(root, 'app-data');
+  fs.mkdirSync(appData);
+  const { configureUserDataDir, getUserDataDir, configureAppDataDir, getAppDataDir } = await import('../../desktop/src/main/userDataPath.ts');
   let previousProfile = null;
+  let previousAppData = null;
   try { previousProfile = getUserDataDir(); } catch { /* not configured yet */ }
+  try { previousAppData = getAppDataDir(); } catch { /* not configured yet */ }
   configureUserDataDir(profile);
+  configureAppDataDir(appData);
   const boundary = await import('../../desktop/src/main/authBoundaryQuarantine.ts');
   const observer = await import('./agent/skill-projection-boundary.ts');
   t.after(() => {
     boundary.__testing.setStrictLockWaitMs(null);
     if (previousProfile) configureUserDataDir(previousProfile);
+    if (previousAppData) configureAppDataDir(previousAppData);
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -161,7 +167,7 @@ async function skillBoundaryProfile(t) {
   const commitOwner = (nextOwnerId, previousOwnerId = null) => boundary.withGhostSkillProjectionOwnerCommit({
     previousOwnerId, nextOwnerId, prepareTransition: async () => {}, commit: () => undefined,
   });
-  return { profile, boundary, observer, commitOwner };
+  return { root, home, profile, appData, boundary, observer, commitOwner };
 }
 
 test('skill projection boundary loads in the Host, uses its profile and joins the stable owner', async (t) => {
@@ -237,4 +243,254 @@ test('skill projection boundary fails closed while another process holds the own
   holder.stdin.end();
   assert.equal(await exited, 0);
   assert.equal(await boundary.withSharedGlobalSkillProjectionMutation('owner-a', async () => 'after release'), 'after release');
+});
+
+/*
+ * Release table row 25, step 25b (reviewer decision (a) and its conditions). Production entries:
+ * the serve refusal (agent/skill-projection-owner.ts, injected by main.ts; the guard
+ * scripts/__tests__/host-skill-projection-owner.test.mjs pins that call), `cindy-host login`
+ * (login-cli.mjs runLoginCommand, with fake auth servers on loopback and an in-memory credential
+ * store), serve's logout sweep, the shared global Skill preparation and `/api/agent-skills`.
+ * Gap: 25a covered only joining; nothing published the owner of a Host's own profile, swept an
+ * outgoing owner's Skills, or honoured the desktop's hold. Every case runs under the temporary HOME,
+ * profile and app-data of skillBoundaryProfile, which asserts the lock paths are inside them first.
+ * Tier: unit (loopback HTTP and the file system only).
+ */
+function snapshotTree(dir) {
+  const out = [];
+  const walk = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = path.join(current, entry.name);
+      const stat = fs.lstatSync(full);
+      // Directory mtimes move when a lock record is published and removed; a file keeps its mtime.
+      out.push(`${path.relative(dir, full)}:${entry.isSymbolicLink() ? 'l' : entry.isDirectory() ? 'd' : 'f'}:${stat.isFile() ? `${stat.size}:${stat.mtimeMs}` : ''}`);
+      if (entry.isDirectory()) walk(full);
+    }
+  };
+  walk(dir);
+  return out;
+}
+
+/** An owner projection with one Ghost Skill linked from the shared ~/.claude/skills and privately. */
+async function plantOwnerSkillLinks(profile, home, ownerId) {
+  const { ownerScopedPath } = await import('../../desktop/src/main/dataOwnerPath.ts');
+  const { ghostSkillPluginRoot } = await import('../../desktop/src/main/cindy-brain/skillSlot.ts');
+  const root = ownerScopedPath(profile, ownerId, 'cindy-brain');
+  const source = path.join(root, 'fixture-ghost', 'skills', 'fixture-skill');
+  fs.mkdirSync(source, { recursive: true });
+  fs.writeFileSync(path.join(source, 'SKILL.md'), '---\nname: fixture-skill\ndescription: fixture\n---\n');
+  const shared = path.join(home, '.claude', 'skills', 'fixture-ghost--fixture-skill');
+  const privateDir = path.join(ghostSkillPluginRoot(root), 'skills');
+  fs.mkdirSync(path.dirname(shared), { recursive: true });
+  fs.mkdirSync(privateDir, { recursive: true });
+  fs.symlinkSync(source, shared, 'dir');
+  fs.symlinkSync(source, path.join(privateDir, 'fixture-ghost--fixture-skill'), 'dir');
+  return { shared, privateLink: path.join(privateDir, 'fixture-ghost--fixture-skill') };
+}
+
+const linkExists = (file) => { try { fs.lstatSync(file); return true; } catch { return false; } };
+
+test('25b: serve refuses to publish the projection owner and writes no state', async (t) => {
+  const { boundary } = await skillBoundaryProfile(t);
+  const owner = await import('./agent/skill-projection-owner.ts');
+  owner.refuseSkillProjectionOwnerCommit();
+  t.after(() => owner.allowSkillProjectionOwnerCommit());
+  const prepareTransition = async () => { throw new Error('the teardown must not run'); };
+  await assert.rejects(boundary.withGhostSkillProjectionOwnerCommit({ previousOwnerId: null, nextOwnerId: 'owner-a', prepareTransition, commit: () => undefined }),
+    /This process cannot publish the Ghost projection owner/);
+  assert.equal(fs.existsSync(boundary.__testing.filePath()), false);
+  assert.equal(fs.existsSync(boundary.__testing.quarantinePath()), false);
+});
+
+async function fakeLoginAuth(t) {
+  const { createServer } = await import('node:http');
+  const hits = [];
+  let member = 'member-a';
+  let kind = 'personal';
+  const server = createServer((request, response) => {
+    hits.push(request.url);
+    const json = (value) => response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value));
+    const membership = { id: member, kind, role: 'owner', displayName: 'Fixture', email: null, orgId: null, orgName: null };
+    if (request.url === '/api/auth/providers') return json({ region: 'global', attribution: 'email', email: true, phone: false, social: ['google'] });
+    if (request.url === '/api/auth/desktop/callback/poll') return json({ status: 'ok', code: 'fixture-code' });
+    if (request.url === '/api/auth/token') return json({ status: 'ok', accessToken: 'fixture-access', refreshToken: `fixture-refresh-${member}`, membership });
+    if (request.url === '/api/auth/logout') return json({ status: 'ok' });
+    return response.writeHead(404).end('{}');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => { server.closeAllConnections?.(); server.close(resolve); }));
+  const port = server.address().port;
+  return { hits, port, setMember: (id) => { member = id; }, setKind: (value) => { kind = value; } };
+}
+
+async function loginEnvironment(t, root, profile, port) {
+  const endpointDir = path.join(root, 'endpoints');
+  fs.mkdirSync(endpointDir, { recursive: true });
+  const manifest = JSON.stringify({ authApiBaseUrl: `https://127.0.0.1:${port}`, authDesktopCallbackUrl: `https://127.0.0.1:${port}/desktop/callback` });
+  for (const file of ['endpoint.json', 'endpoint.global.json']) fs.writeFileSync(path.join(endpointDir, file), manifest);
+  const saved = { CINDY_HOST_DATA_DIR: process.env.CINDY_HOST_DATA_DIR, CINDY_HOST_ENDPOINT_DIR: process.env.CINDY_HOST_ENDPOINT_DIR,
+    CINDY_HOST_APP_DATA_DIR: process.env.CINDY_HOST_APP_DATA_DIR };
+  process.env.CINDY_HOST_DATA_DIR = profile;
+  process.env.CINDY_HOST_ENDPOINT_DIR = endpointDir;
+  process.env.CINDY_HOST_APP_DATA_DIR = path.join(root, 'app-data');
+  t.after(() => { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  const records = new Map();
+  const store = { read: (key) => records.get(key) ?? null, write: (key, value) => records.set(key, value), remove: (key) => records.delete(key) };
+  const { runLoginCommand } = await import('./login-cli.mjs');
+  const login = (deps = {}) => runLoginCommand(['--no-open'], { stdout: () => {}, stderr: () => {}, deps: {
+    store, readStatus: async () => ({ running: false }), scanDesktops: async () => [],
+    // The manifest must be https (endpoints.mjs); the fake server listens on plain loopback HTTP.
+    fetch: (input, init) => fetch(String(input).replace(/^https:/, 'http:'), init), ...deps } });
+  return { login, records };
+}
+
+test('25b: cindy-host login publishes the owner that serve then reads as stable, and sweeps the previous account', async (t) => {
+  const { root, home, profile, observer, boundary } = await skillBoundaryProfile(t);
+  const auth = await fakeLoginAuth(t);
+  const { login, records } = await loginEnvironment(t, root, profile, auth.port);
+  const { AUTH_SESSION_KEY } = await import('../../desktop/src/main/authCredentialKeys.ts');
+  const { parseAuthSessionRecord } = await import('@cindy/auth-client');
+
+  await login();
+  assert.equal(observer.readSkillProjectionBoundaryStatus('member-a'), 'stable');
+  assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY))?.refreshToken, 'fixture-refresh-member-a');
+
+  // Switching to B revokes A's shared and private Ghost Skill links before B becomes visible.
+  const links = await plantOwnerSkillLinks(profile, home, 'member-a');
+  auth.setMember('member-b');
+  await login();
+  assert.equal(observer.readSkillProjectionBoundaryStatus('member-b'), 'stable');
+  assert.equal(linkExists(links.shared), false);
+  assert.equal(linkExists(links.privateLink), false);
+
+  // A sweep blocker aborts the switch: B is not published, the boundary stays pending, and B's
+  // session is rolled back to the previous record. Fixing it and running login again recovers.
+  const again = await plantOwnerSkillLinks(profile, home, 'member-b');
+  const sharedDir = path.dirname(again.shared);
+  fs.chmodSync(sharedDir, 0o000);
+  t.after(() => { try { fs.chmodSync(sharedDir, 0o755); } catch { /* removed */ } });
+  auth.setMember('member-c');
+  await assert.rejects(login(), /cleanup incomplete/);
+  assert.equal(boundary.readGhostSkillProjectionBoundaryState()?.phase, 'pending');
+  assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY))?.refreshToken, 'fixture-refresh-member-b');
+  fs.chmodSync(sharedDir, 0o755);
+  await login();
+  assert.equal(observer.readSkillProjectionBoundaryStatus('member-c'), 'stable');
+  assert.equal(linkExists(again.shared), false);
+});
+
+test('25b: login refuses while a desktop uses the profile, or the scan cannot tell, and commits nothing', async (t) => {
+  const { root, profile, boundary } = await skillBoundaryProfile(t);
+  const auth = await fakeLoginAuth(t);
+  const { login, records } = await loginEnvironment(t, root, profile, auth.port);
+  await assert.rejects(login({ scanDesktops: async () => [4242] }), /Quit the Cindy desktop app that is using this profile/);
+  await assert.rejects(login({ scanDesktops: async () => { throw Object.assign(new Error('EACCES: registry'), { code: 'EACCES' }); } }),
+    /Cannot tell whether the Cindy desktop app is using this profile \(EACCES: registry\)/);
+  assert.equal(records.size, 0);
+  assert.deepEqual(auth.hits, []);
+  assert.equal(fs.existsSync(boundary.__testing.filePath()), false);
+});
+
+test('25b: a running serve admits a first login and the same account, and refuses replacing its account', async (t) => {
+  const { root, profile, observer } = await skillBoundaryProfile(t);
+  const auth = await fakeLoginAuth(t);
+  const { login, records } = await loginEnvironment(t, root, profile, auth.port);
+  // Serve running without an account runtime: the first login goes through.
+  await login({ readStatus: async () => ({ running: true, runtime: { state: 'uninitialized', owner: null } }) });
+  assert.equal(observer.readSkillProjectionBoundaryStatus('member-a'), 'stable');
+  // Serve running A: A signs in again.
+  await login({ readStatus: async () => ({ running: true, runtime: { state: 'ready', owner: 'member-a' } }) });
+  // Serve running A: B is refused after the exchange, its session ended and not saved.
+  auth.setMember('member-b');
+  const before = records.get([...records.keys()][0]);
+  await assert.rejects(login({ readStatus: async () => ({ running: true, runtime: { state: 'ready', owner: 'member-a' } }) }),
+    /Cindy Host is running another account/);
+  assert.equal(records.get([...records.keys()][0]), before);
+  assert.equal(auth.hits.filter((hit) => hit === '/api/auth/logout').length, 1);
+  assert.equal(observer.readSkillProjectionBoundaryStatus('member-a'), 'stable');
+  // An unresponsive serve is refused before anything else.
+  await assert.rejects(login({ readStatus: async () => ({ running: null }) }), /Cindy Host is not responding/);
+});
+
+test('25b: serve logout sweeps the outgoing owner once, skips while a desktop holds the profile, and never refuses', async (t) => {
+  const { root, home, profile, commitOwner, boundary } = await skillBoundaryProfile(t);
+  const { sweepOwnerSkillProjectionsAtLogout } = await import('./agent/skill-projection-owner.ts');
+  await commitOwner('owner-a');
+  const links = await plantOwnerSkillLinks(profile, home, 'owner-a');
+  const warnings = [];
+  const sweep = (held) => sweepOwnerSkillProjectionsAtLogout({ userDataDir: profile, ownerId: 'owner-a',
+    isProfileHeld: () => held, warn: (_message, fields) => warnings.push(fields.outcome) });
+  // Held: the shared projections are the running desktop's; not a byte changes.
+  await boundary.withSharedSkillRootsLock(async () => {}); // materialize the shared-roots lock directory first
+  const before = snapshotTree(root);
+  assert.equal(await sweep(true), 'skipped-profile-held');
+  assert.deepEqual(snapshotTree(root), before);
+  assert.equal(linkExists(links.shared), true);
+  // Not held: revoked, and a second sweep (both sides in client mode) finds nothing and does not fail.
+  assert.equal(await sweep(false), 'revoked');
+  assert.equal(linkExists(links.shared), false);
+  assert.equal(linkExists(links.privateLink), false);
+  assert.equal(await sweep(false), 'revoked');
+  // The window signed out first (stable(null)): serve leaves its transition alone.
+  await commitOwner(null, 'owner-a');
+  assert.equal(await sweep(false), 'skipped-not-stable');
+  assert.deepEqual(warnings, ['skipped-profile-held', 'skipped-not-stable']);
+});
+
+test('25b: shared Skill preparation publishes the bundle under the stable owner, and writes nothing when held or without locks', async (t) => {
+  const { root, appData, commitOwner } = await skillBoundaryProfile(t);
+  const { createHostSharedGlobalSkills } = await import('./agent/shared-global-skills.ts');
+  const { configureHostOwner } = await import('./agent/claude-auth.mjs');
+  const bundle = path.join(srcDir, '../../desktop/resources/system-skills');
+  const lockDir = path.join(appData, 'Cindy', 'shared-skill-mutation-locks');
+  configureHostOwner({ userDataDir: path.join(root, 'profile'), ownerId: 'owner-a' });
+  await commitOwner('owner-a');
+  let held = true;
+  const skills = () => createHostSharedGlobalSkills({ isProfileHeld: () => held, bundledSystemSkillsRoot: () => bundle });
+  const before = snapshotTree(root);
+  await skills().ensureSharedGlobalSkills();
+  assert.deepEqual(snapshotTree(root), before, 'held: nothing written');
+  // The Skill mutation lock directory cannot be created (a file occupies it): this round is skipped.
+  held = false;
+  fs.mkdirSync(path.dirname(lockDir), { recursive: true });
+  fs.writeFileSync(lockDir, 'occupied');
+  const { withSharedSkillRootsLock } = await import('../../desktop/src/main/authBoundaryQuarantine.ts');
+  await withSharedSkillRootsLock(async () => {}); // the boundary's own lock directory, made once
+  const blocked = snapshotTree(root);
+  await skills().ensureSharedGlobalSkills();
+  // No bundle, no manifest, no link is written. The one addition is the empty ~/.agents/skills root:
+  // the desktop's prepareSharedGlobalSkillLinks creates it before it asks for the Skill mutation
+  // lease (shared-global-skills.ts), so the Host, running that code, does too (reported, not changed).
+  assert.deepEqual(snapshotTree(root).sort(), [...blocked, 'home/.agents:d:', 'home/.agents/skills:d:'].sort(), 'no lock directory: nothing else written');
+  assert.deepEqual(fs.readdirSync(path.join(root, 'home', '.agents', 'skills')), []);
+  // With the locks available the bundle this Host carries is published in the shared app-data root.
+  fs.rmSync(lockDir);
+  await skills().ensureSharedGlobalSkills();
+  assert.ok(fs.existsSync(path.join(appData, 'Cindy', 'shared-system-skills', '.cindy-system-skills.json')));
+});
+
+test('25b L1: /api/agent-skills drops a Skill the user switched off, and only lists while a desktop holds the profile', async (t) => {
+  const { root, appData } = await skillBoundaryProfile(t);
+  const { Maker } = await import('@cindy/maker-core');
+  const { BaseAgent } = await import('../../../packages/maker-core/src/agents/base-agent.ts');
+  const { setCindySkillEnabled } = await import('../../desktop/src/main/skillhub/activationPreferences.ts');
+  const { createHostAgentSkillList } = await import('./agent/agent-skills.ts');
+  void appData;
+  const kept = path.join(root, 'skills', 'kept', 'SKILL.md');
+  const off = path.join(root, 'skills', 'off', 'SKILL.md');
+  for (const file of [kept, off]) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '---\nname: x\n---\n'); }
+  await setCindySkillEnabled(off, false);
+  const agent = Object.create(BaseAgent.prototype);
+  agent.deps = {};
+  agent.listAgentSkills = async () => ({ skills: [{ name: 'kept', path: kept }, { name: 'off', path: off }] });
+  const maker = { storage: { get: async () => null }, requireAgent: () => agent, getSession: () => undefined, listAgentSkills: Maker.prototype.listAgentSkills };
+  let held = false;
+  let refreshes = 0;
+  const list = createHostAgentSkillList({ maker: () => maker, hasAgent: () => true, readStoredWorkDir: async () => ({ found: false }),
+    isProfileHeld: () => held, ensureSharedGlobalSkills: async () => { refreshes += 1; } });
+  assert.deepEqual((await list({ agentKind: 'claude-code' })).skills.map((skill) => skill.name), ['kept']);
+  assert.equal(refreshes, 1);
+  held = true;
+  assert.deepEqual((await list({ agentKind: 'pi' })).skills.map((skill) => skill.name), ['kept']);
+  assert.equal(refreshes, 1, 'held: listed without refreshing');
 });
