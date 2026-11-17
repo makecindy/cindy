@@ -21517,7 +21517,7 @@
     "close": "Fermer",
     "taskInbox": {
       "title": "Découvrir la boîte de réception",
-      "lead": "Les tâches se rangent d’elles-mêmes dans À traiter, En cours, Reportées et Traitées. Surveillez simplement À traiter et cliquez sur Terminé quand c’est fait.",
+      "lead": "Les tâches se rangent d’elles-mêmes dans À traiter, En cours, Reportées et Traitées. La meilleure habitude : vider la boîte de réception au fil de l’eau. Cliquez sur Terminé quand une tâche est réglée, reportez ce qui peut attendre.",
       "pending": {
         "title": "À traiter",
         "body": "Les tâches avec de nouveaux résultats ou qui attendent votre réponse arrivent ici automatiquement."

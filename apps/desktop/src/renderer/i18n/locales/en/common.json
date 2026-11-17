@@ -21312,7 +21312,7 @@
     "close": "Close",
     "taskInbox": {
       "title": "Meet the Inbox",
-      "lead": "Tasks sort themselves into Pending, Working, Snoozed and Processed. Just keep an eye on Pending and click Done when you finish.",
+      "lead": "Tasks sort themselves into Pending, Working, Snoozed and Processed. The best habit is to keep your inbox clear: click Done when a task is handled, and snooze what can wait.",
       "pending": {
         "title": "Pending",
         "body": "Tasks with new results or waiting for your answer show up here on their own."
