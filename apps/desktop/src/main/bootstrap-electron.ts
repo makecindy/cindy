@@ -3498,6 +3498,17 @@ function installApplicationMenu(
   // Toggle Sidebar: 用 registerAccelerator: false —— 菜单显示 ⌘B 标签且可点击,
   // 但不向 OS 注册热键。真正按键由 MainLayout 里的 renderer keydown 处理 (那段
   // 会跳过非 Tiptap 的 contenteditable, 保留富文本编辑器自己的 Bold 能力)。
+  // 右栏「默认展开」偏好只有长按开关一个入口，鼠标手势键盘给不出来；这里补一个
+  // 同语义的菜单项（仅 macOS，该偏好本身只在 mac 生效）。
+  const toggleRightSidebarPersistentItem: Electron.MenuItemConstructorOptions[] =
+    process.platform === 'darwin'
+      ? [
+          {
+            label: labels.toggleRightSidebarPersistent,
+            click: () => dispatchApplicationMenuCommand(mainWindow, 'toggle-right-sidebar-persistent'),
+          },
+        ]
+      : [];
   const toggleSidebarItem: Electron.MenuItemConstructorOptions = {
     label: labels.toggleSidebar,
     accelerator: menuAcceleratorFor('toggle-sidebar'),
@@ -3517,6 +3528,7 @@ function installApplicationMenu(
         label: labels.viewMenu,
         submenu: [
           toggleSidebarItem,
+          ...toggleRightSidebarPersistentItem,
           { type: 'separator' },
           ...persistedZoomMenuItems('resetZoom', null, registerMenuAccelerators),
           ...persistedZoomMenuItems('zoomIn', PAGE_ZOOM_FACTOR_STEP, registerMenuAccelerators),
@@ -3529,6 +3541,7 @@ function installApplicationMenu(
         label: labels.viewMenu,
         submenu: [
           toggleSidebarItem,
+          ...toggleRightSidebarPersistentItem,
           { type: 'separator' },
           { role: 'reload', registerAccelerator: registerMenuAccelerators },
           { role: 'forceReload', registerAccelerator: registerMenuAccelerators },

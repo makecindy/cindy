@@ -24,6 +24,7 @@ export const APPLICATION_MENU_COMMANDS = [
   'new-maker',
   'new-maker-shortcut',
   'toggle-sidebar',
+  'toggle-right-sidebar-persistent',
 ] as const;
 
 export type ApplicationMenuCommand = (typeof APPLICATION_MENU_COMMANDS)[number];

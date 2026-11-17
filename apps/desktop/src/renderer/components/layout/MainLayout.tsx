@@ -1531,9 +1531,21 @@ export function MainLayout() {
           // 不依赖菜单 accelerator。
           handleToggleSidebar();
           break;
+        case 'toggle-right-sidebar-persistent':
+          // 键盘可用的入口：与右栏开关的长按等价（该手势只有鼠标能给）。
+          if (isMac) toggleDefaultRightSidebarOpen();
+          break;
       }
     });
-  }, [isMac, navigate, openNotice, t, handleNewMakerShortcut, handleToggleSidebar]);
+  }, [
+    isMac,
+    navigate,
+    openNotice,
+    t,
+    handleNewMakerShortcut,
+    handleToggleSidebar,
+    toggleDefaultRightSidebarOpen,
+  ]);
 
   // ⌘B / Ctrl+B 切换侧边栏折叠 (组合键定义在 shared/appShortcuts registry,
   // 用户可改绑)。capture 阶段处理, 但需要为真正用到 Bold 的 contenteditable
