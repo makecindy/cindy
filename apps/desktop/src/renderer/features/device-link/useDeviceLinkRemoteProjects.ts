@@ -864,12 +864,29 @@ export function useDeviceLinkRemoteProjects(
       directoryRetryTimer = setTimeout(() => {
         directoryRetryTimer = null;
         if (disposed || linkOnline !== true || directoryFresh || !directoryRecoveryNeeded()) return;
+        // 已有读取在途:它失败或过期时会自己重新排补读,这里不叠加第二个请求。
+        if (directoryReadInFlight) return;
         void reseed();
       }, delay);
     };
 
+    /**
+     * 当前在途的目录读取。恢复入口(补读计时器、可达证据)只复用它,不另发请求:
+     * main 只合并 300ms 内的调用,唤醒后多台设备先后恢复时否则会各读一遍整份目录。
+     * 上线边沿、控制目标变化等明确的刷新仍直接 reseed。
+     */
+    let directoryReadInFlight: Promise<void> | null = null;
+
     /** 全量重播(初始 + WS 重连):listDevices 带 isSelf,权威。 */
     const reseed = (): Promise<void> => {
+      const request = readDirectory();
+      directoryReadInFlight = request;
+      void request.finally(() => {
+        if (directoryReadInFlight === request) directoryReadInFlight = null;
+      });
+      return request;
+    };
+    const readDirectory = (): Promise<void> => {
       const generation = directoryGeneration;
       return window.electronAPI.deviceLink
         .listDevices()
@@ -954,7 +971,8 @@ export function useDeviceLinkRemoteProjects(
         void subscribeAndBootstrap(deviceId, name);
         return;
       }
-      if (!remoteProjectsStore.hasDevice(deviceId) || directoryRetryTimer) return;
+      // 已排补读或已有读取在途时,由那一次读取给出结论(它失败 / 过期会继续补读)。
+      if (!remoteProjectsStore.hasDevice(deviceId) || directoryRetryTimer || directoryReadInFlight) return;
       // 链路建立事件可能频繁出现;同一台设备的目录重读至少间隔 DIRECTORY_RECOVER_MIN_INTERVAL_MS。
       const now = Date.now();
       const last = directoryRecoverAt.get(deviceId);
