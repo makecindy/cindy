@@ -40,7 +40,8 @@ describe('degraded 横幅的出站路径提示', () => {
   // - Bug/规则依据:维护者确认 issue #9982 的行动项 —— 「通过组件 fixture 补齐
   //   RemoteSessionBanner 在 degraded 态下的深浅双色核对，确认脱敏代理地址在小尺寸或长地址
   //   场景下的折行与视觉层级符合规范」。这里把可自动化的部分落成断言：两模式都渲染、
-  //   颜色走 token、长地址走截断而不是撑破布局。
+  //   颜色走 token、长地址时完整地址仍可读到；「视觉上被截断、不把状态文案挤出可视区」是
+  //   排版事实，jsdom 不做布局、测不到，归 UI 目检那一层，不在单测里假装修验过。
   // - 现有覆盖缺口:本 PR 的测试只覆盖主进程探针（outboundProxyResolver）、IPC 与连接状态
   //   判定（remoteConnectionStatus），没有任何组件级用例 —— 提示文案与脱敏地址的展示链路
   //   只在真实客户端里才看得见。
@@ -61,15 +62,17 @@ describe('degraded 横幅的出站路径提示', () => {
     expect(darkHint.getAttribute('class')).toContain('var(--text-tertiary)');
   });
 
-  // 长地址 / 小尺寸场景:提示是 strip 上的次要信息,必须截断而不是把状态文案挤出可视区。
-  it('truncates a long proxy address instead of pushing the status label out of view', () => {
+  // 长地址场景：提示是 strip 上的次要信息，完整地址必须仍能被读到（悬停 / 读屏）。
+  // 注意这里断言的是**可观察结果**（渲染出的文本与 title 里的完整地址），不是 class 里的
+  // Tailwind 字面量 —— jsdom 不做布局，"文字被截断、没有把状态文案挤出可视区"是排版事实，
+  // 归 UI 目检（pnpm ui:check）那一层，不在单测里假装修验过。
+  it('keeps the full proxy address readable when the hint is long', () => {
     const long = 'http://proxy.internal.example.com:3128/some/long/path/segment?token=abcdefghijklmnop';
     renderBanner({ proxyVerdict: { kind: 'proxy', proxy: long } });
     const hint = screen.getByText(/proxy\.internal\.example\.com:3128/);
-    expect(hint.getAttribute('class')).toContain('truncate');
-    expect(hint.getAttribute('class')).toContain('shrink-0');
-    // 完整地址保留在 title 上，小尺寸下悬停仍可读到。
-    expect(hint.getAttribute('title')).toContain('proxy.internal.example.com:3128');
+    // 完整地址保留在 title 上，小尺寸下悬停仍可读到；可见文本也不是被代码截短的残缺串。
+    expect(hint.getAttribute('title')).toContain(long);
+    expect(hint.textContent).toContain(long);
   });
 
   // 诊断只陈述已核实的事实：未确证（unknown / direct / 探测失败）不展示任何代理提示。
