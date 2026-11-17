@@ -381,13 +381,19 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     ...(origin?.warning ? { warning: origin.warning } : {}),
   };
   if (!source.warning && topWeb && hasSecure) {
-    // A password field inside a nested page from another origin.
-    const secureNode = inScope.find((node) => node.secure);
-    const frameArea = secureNode && webAreas
-      .filter((area) => area !== topWeb && isWithin(secureNode.ref, area.ref))
-      .sort((a, b) => b.ref.length - a.ref.length)[0];
-    const nested = frameArea?.url ? classifyOrigin(frameArea.url, browser) : undefined;
-    if (nested?.origin && origin?.origin && nested.origin !== origin.origin) source.warning = 'embedded-frame';
+    // Included fields may be below the viewport. Their ancestor origins must
+    // come from the complete tree too, including clipped or zero-size web areas.
+    const nestedAreas = snapshot.nodes.filter((node) =>
+      node.role === 'AXWebArea' && node !== topWeb && isWithin(node.ref, topWeb.ref));
+    const crossOriginPassword = inScope.some((node) => {
+      if (!node.secure) return false;
+      const frameArea = nestedAreas
+        .filter((area) => isWithin(node.ref, area.ref))
+        .sort((a, b) => b.ref.length - a.ref.length)[0];
+      const nested = frameArea?.url ? classifyOrigin(frameArea.url, browser) : undefined;
+      return !!nested?.origin && !!origin?.origin && nested.origin !== origin.origin;
+    });
+    if (crossOriginPassword) source.warning = 'embedded-frame';
   }
   const texts = inScope.map((node) => textOf(node)).filter((text): text is string => !!text);
   const deviceCode = findDeviceCode(inScope, capped.some((control) => control.kind === 'text'));

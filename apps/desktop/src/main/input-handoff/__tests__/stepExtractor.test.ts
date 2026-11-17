@@ -38,6 +38,24 @@ describe('extractStep', () => {
     expect(step.controls.find(c => c.kind === 'button')).toMatchObject({ primary: true });
   });
 
+  // Unit/security regression: offscreen fields are included, so their ancestor
+  // origins must be too. A preceding top-level password must not mask the iframe.
+  it.each([
+    { url: 'https://other.example/login', frame: [100, 1000, 400, 100], warning: 'embedded-frame' },
+    { url: 'https://other.example/login', frame: [100, 900, 400, 0], warning: 'embedded-frame' },
+    { url: 'https://example.test/nested', frame: [100, 900, 400, 0], warning: undefined },
+  ])('retains the origin warning for an offscreen frame: %j', ({ url, frame, warning }) => {
+    const step = extractStep(snapshot([
+      node('0', 'AXWebArea', { url: 'https://example.test/login', frame: [0, 60, 1200, 840] }),
+      node('0.1', 'AXTextField', { title: 'Main password', secure: true }),
+      node('0.2', 'AXWebArea', { url, frame }),
+      node('0.2.0', 'AXTextField', { title: 'Embedded password', secure: true, frame }),
+    ]));
+    expect(step.shown.map(c => c.kind === 'text' && c.label)).toEqual(['Main password', 'Embedded password']);
+    expect(step.source.origin).toBe('https://example.test');
+    expect(step.source.warning).toBe(warning);
+  });
+
   it('never exposes a silently truncated form as a complete step', () => {
     const nodes = Array.from({ length: 41 }, (_, i) => node(String(i), 'AXTextField', { title: `Key ${i}` }));
     for (const input of [snapshot(nodes, { bundleId: 'x' }), snapshot(nodes.slice(0, 2), { bundleId: 'x', truncated: true })]) {
