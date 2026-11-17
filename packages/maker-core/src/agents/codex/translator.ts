@@ -745,14 +745,21 @@ export const CODEX_MODEL_UNAVAILABLE_REASON = 'model_unavailable';
 export const CODEX_MODEL_UNAVAILABLE_MESSAGE =
   '[MODEL_SELECTION_UNAVAILABLE] The selected model is unavailable for this connection. Choose another available model and retry.';
 
-function hasModelRejection(text: string): boolean {
-  if (/\bThe '[^'\r\n]{1,128}' model is not supported when using Codex with a ChatGPT account\b/i.test(text)) return true;
+function hasModelRejection(text: string, status: number | undefined): boolean {
+  // Native reconnect notifications flatten gateway JSON into this exact phrase.
+  // It is a model denial only with 403, never evidence for a generic auth failure.
+  if (status === 403 && /\buser not allowed to access model\b/i.test(text)) return true;
+  if (status !== 403 && /\bThe '[^'\r\n]{1,128}' model is not supported when using Codex with a ChatGPT account\b/i.test(text)) return true;
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start < 0 || end < start) return false;
   try {
-    const body = JSON.parse(text.slice(start, end + 1)) as { code?: unknown; error?: { code?: unknown } } | null;
-    return body?.error?.code === 'model_not_found' || body?.code === 'model_not_found';
+    const body = JSON.parse(text.slice(start, end + 1)) as {
+      code?: unknown; type?: unknown; error?: { code?: unknown; type?: unknown };
+    } | null;
+    const error = body?.error ?? body;
+    if (error?.code === 'user_model_access_denied' || error?.type === 'user_model_access_denied') return true;
+    return status !== 403 && (body?.error?.code === 'model_not_found' || body?.code === 'model_not_found');
   } catch {
     return false;
   }
@@ -762,7 +769,6 @@ function hasModelRejection(text: string): boolean {
 export function isCodexModelUnavailableError(error: CodexErrorInput | null | undefined): boolean {
   const message = typeof error?.message === 'string' ? error.message.slice(0, 8192) : '';
   const details = typeof error?.additionalDetails === 'string' ? error.additionalDetails.slice(0, 8192) : '';
-  if (!hasModelRejection(message) && !hasModelRejection(details)) return false;
 
   const info = error?.codexErrorInfo;
   const tag = codexErrorInfoTag(info);
@@ -776,7 +782,9 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
   const textStatus = /\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/i;
   const match = textStatus.exec(message) ?? textStatus.exec(details);
   const status = httpInfo?.httpStatusCode ?? (match ? Number(match[1]) : undefined);
-  return status === undefined || status === 400 || status === 404;
+  if (status !== undefined && status !== 400 && status !== 403 && status !== 404) return false;
+  if (isAuthRelatedErrorMessage(message) || isAuthRelatedErrorMessage(details)) return false;
+  return hasModelRejection(message, status) || hasModelRejection(details, status);
 }
 
 /**
