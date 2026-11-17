@@ -992,7 +992,9 @@ function hostImportGraph(): Promise<string[]> {
  * much a port the Host can leave at its default as a `let reader = null` (active-catalog.ts
  * openAiImagesApiKeyConfigured). Destructured declarations (`let [a, b] = …`) count by each name. Wrapped
  * forms (`as`, `satisfies`, `!`, `<T>`, parentheses) are unwrapped.
- * A write is `=`, `??=`, `||=` or `&&=` to a let/var, the same to a property of any binding (logger.ts
+ * Imported values (default, named, namespace; not types) are const bindings of the importing module.
+ * A write is any assignment operator (`=`, `+=`, `|=`, `<<=`, `??=`, …) or `++` / `--` on a let/var, the same on a
+ * property of any binding (logger.ts
  * `mainSlot.dir = …`), a container mutation (`.set`, `.push`, …) or `Object.assign(binding, …)` (projectAutomaticIcon.ts),
  * anywhere in the setter including its callbacks, or in a module function it calls, followed transitively
  * (active-catalog.ts setters through markChanged, codex-process-registry.ts registerCodexProcessRole through
@@ -1003,7 +1005,9 @@ function hostImportGraph(): Promise<string[]> {
  * entry whose setter is gone, turns this red until the table is updated. A `bound` entry must bind it in
  * the Host file it names (bindsIn: a call, a container mutation, or the setter handed over as a value);
  * `where: '<file>#<function>'` narrows that to one function of the file, for a file that binds the same
- * setter more than once (skill-projection-owner.ts: serve refuses, `cindy-host login` allows).
+ * setter more than once (skill-projection-owner.ts: serve refuses, `cindy-host login` allows) or binds it from a
+ * startup function (project-icon.ts bindHostProjectIconRuntime); such a function must be called by another Host
+ * file the Host loads (main.ts), so dropping that call fails too.
  * Not seen, by form:
  * - slots declared other than at module level (inside a block, an IIFE, a namespace or a class body,
  *   static fields included);
@@ -1014,7 +1018,7 @@ function hostImportGraph(): Promise<string[]> {
  *   a setter not named this way;
  * - closure state of factories;
  * and, for a setter handed over as a port value, whether the receiving code really calls it; for
- * `<file>#<function>`, whether the Host calls that function.
+ * `<file>#<function>`, whether the caller found is itself reached at run time (one call level is checked).
  */
 describe('module-level port setters the Host loads, classified for the Host', () => {
   const tableFile = path.join(hostSrc, 'desktop-module-setters.ts');
@@ -1040,6 +1044,15 @@ describe('module-level port setters the Host loads, classified for the Host', ()
         || ts.isNonNullExpression(n) || ts.isTypeAssertionExpression(n))) n = n.expression;
       return n;
     };
+    // Imported values are const bindings of this module too: `import { state } from './x'` then `state.y = v`.
+    for (const statement of sf.statements) {
+      const clause = ts.isImportDeclaration(statement) ? statement.importClause : undefined;
+      if (!clause || clause.isTypeOnly) continue;
+      if (clause.name) slots.set(clause.name.text, false);
+      const named = clause.namedBindings;
+      if (named && ts.isNamespaceImport(named)) slots.set(named.name.text, false);
+      if (named && ts.isNamedImports(named)) for (const element of named.elements) if (!element.isTypeOnly) slots.set(element.name.text, false);
+    }
     const bindingNames = (name: ts.BindingName): string[] => (ts.isIdentifier(name) ? [name.text]
       : name.elements.flatMap(element => (ts.isOmittedExpression(element) ? [] : bindingNames(element.name))));
     for (const statement of sf.statements) {
@@ -1065,8 +1078,8 @@ describe('module-level port setters the Host loads, classified for the Host', ()
         functions.push({ name: statement.name.text, node: statement });
       }
     }
-    const ASSIGN = new Set([ts.SyntaxKind.EqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken, ts.SyntaxKind.BarBarEqualsToken,
-      ts.SyntaxKind.AmpersandAmpersandEqualsToken]);
+    // Every assignment operator TypeScript has (`=` through `??=`: `+=`, `|=`, `<<=`, …), as numbers and bit flags are slots too.
+    const isAssignment = (kind: ts.SyntaxKind) => kind >= ts.SyntaxKind.FirstAssignment && kind <= ts.SyntaxKind.LastAssignment;
     /** `slot = …` for a let/var; `slot.x = …` or `slot[k] = …` for any binding. */
     const isSlotTarget = (raw: ts.Expression | undefined): boolean => {
       const n = unwrap(raw);
@@ -1098,7 +1111,9 @@ describe('module-level port setters the Host loads, classified for the Host', ()
       let partial = false;
       const visit = (n: ts.Node): void => {
         if (writes) return;
-        if (ts.isBinaryExpression(n) && ASSIGN.has(n.operatorToken.kind) && isSlotTarget(n.left)) writes = true;
+        if (ts.isBinaryExpression(n) && isAssignment(n.operatorToken.kind) && isSlotTarget(n.left)) writes = true;
+        if ((ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n))
+          && (n.operator === ts.SyntaxKind.PlusPlusToken || n.operator === ts.SyntaxKind.MinusMinusToken) && isSlotTarget(n.operand)) writes = true;
         if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression)) {
           const callee = n.expression;
           if (ts.isIdentifier(callee.expression) && MUTATORS.has(callee.name.text) && slots.has(callee.expression.text)) writes = true;
@@ -1197,7 +1212,27 @@ describe('module-level port setters the Host loads, classified for the Host', ()
     expect(keys.filter(key => !collected.has(key)), 'entries whose setter is gone').toEqual([]);
   }, 60_000);
 
-  it('keeps the table sorted, one entry per line, each status with its evidence', () => {
+  /** Host files the Host loads, other than `file`, that call `fn` (`fn(…)` or `x.fn(…)`). */
+  async function hostCallersOf(file: string, fn: string): Promise<string[]> {
+    const callers: string[] = [];
+    for (const other of await hostImportGraph()) {
+      if (other === file || !/^apps\/host\/src\//.test(other)) continue;
+      const text = read(path.join(repo, other));
+      if (!text.includes(fn)) continue;
+      const sf = ts.createSourceFile(other, text, ts.ScriptTarget.Latest, true);
+      let calls = false;
+      const visit = (n: ts.Node): void => {
+        if (ts.isCallExpression(n) && ((ts.isIdentifier(n.expression) && n.expression.text === fn)
+          || (ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === fn))) calls = true;
+        if (!calls) ts.forEachChild(n, visit);
+      };
+      visit(sf);
+      if (calls) callers.push(other);
+    }
+    return callers;
+  }
+
+  it('keeps the table sorted, one entry per line, each status with its evidence', async () => {
     const rows = table();
     const keys = rows.map(row => row.key);
     expect(keys).toEqual([...keys].sort());
@@ -1211,6 +1246,8 @@ describe('module-level port setters the Host loads, classified for the Host', ()
         expect(entry.where, key).toMatch(/^apps\/host\//);
         const [whereFile, whereFunction] = entry.where!.split('#');
         expect(bindsIn(whereFile, key.split('#')[1], whereFunction), `${key} not bound in ${entry.where}`).toBe(true);
+        // A binding inside a function binds only if the Host calls it (main.ts bindHostProjectIconRuntime()).
+        if (whereFunction) expect((await hostCallersOf(whereFile, whereFunction)).length, `${entry.where} is never called`).toBeGreaterThan(0);
       } else {
         expect(entry.reason?.trim(), key).toBeTruthy();
         // Release table file lines drift with every edit; point at row ids, 甲/乙 gaps or section names.
@@ -1220,7 +1257,7 @@ describe('module-level port setters the Host loads, classified for the Host', ()
         if (entry.status === 'pending') expect(entry.reason, key).toMatch(/\brow \w+|[甲乙]/);
       }
     }
-  });
+  }, 60_000);
 });
 
 /**
