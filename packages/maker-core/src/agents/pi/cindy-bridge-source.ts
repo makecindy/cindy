@@ -60,6 +60,7 @@ export const CINDY_PI_MODEL_REQUEST_INPUT_PREFIX = '[CINDY_MODEL_REQUEST]:';
 export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
 export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
 export const CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX = 'cindy:provider-request:';
+export const CINDY_PI_VISION_USAGE_PREFIX = 'cindy:pi-vision-usage:';
 
 /** Shared with the generated bridge: only bounded counts and known effort names may enter logs. */
 export function projectPiRequestDiagnostics(value: unknown): Record<string, number | string | null> {
@@ -5419,6 +5420,7 @@ export default async function cindyBridge(piApi: any) {
     wireProtocol: 'anthropic-messages' | 'openai-responses' | 'openai-chat';
   }
   interface PiVisionBridgeEnvPayload {
+    usageToken?: string;
     enabled: boolean;
     primary: PiVisionBackendSpec | null;
     fallback: PiVisionBackendSpec | null;
@@ -5474,10 +5476,36 @@ export default async function cindyBridge(piApi: any) {
       .join('');
   }
 
+  function emitPiVisionUsage(body: unknown, backendRole: 'primary' | 'fallback', notify?: (message: string) => void): void {
+    const token = readPiVisionBridge()?.usageToken ?? process.env.CINDY_PI_TURN_TOOL_POLICY;
+    if (!token || !notify || !body || typeof body !== 'object') return;
+    const response = body as Record<string, unknown>;
+    if (!response.usage || typeof response.usage !== 'object') return;
+    const raw = response.usage as Record<string, unknown>;
+    const usage: Record<string, unknown> = {};
+    const count = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+    for (const key of ['input_tokens', 'prompt_tokens', 'output_tokens', 'completion_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']) {
+      if (count(raw[key])) usage[key] = raw[key];
+    }
+    for (const key of ['input_tokens_details', 'prompt_tokens_details']) {
+      const cached = (raw[key] as { cached_tokens?: unknown } | undefined)?.cached_tokens;
+      if (count(cached)) usage[key] = { cached_tokens: cached };
+    }
+    if (!Object.keys(usage).length) return;
+    try {
+      notify(${JSON.stringify(CINDY_PI_VISION_USAGE_PREFIX)} + token + ':' + JSON.stringify({
+        requestId: randomUUID(), backendRole, usage,
+        ...(typeof response.model === 'string' && response.model.length <= 1024 ? { model: response.model } : {}),
+      }));
+    } catch { /* Accounting must not turn an accepted vision request into another attempt. */ }
+  }
+
   async function callPiVision(
     spec: PiVisionBackendSpec,
     imagePath: string,
     prompt: string,
+    backendRole: 'primary' | 'fallback',
+    notify?: (message: string) => void,
   ): Promise<string> {
     // 读文件失败 / 超大 / 非图片：包成泛化错误，不把路径/URL 泄漏给模型侧。
     // 先 stat 前置拒超大文件，避免 readFileSync 整文件进内存（阻塞 Pi bridge 事件循环）。
@@ -5578,13 +5606,15 @@ export default async function cindyBridge(piApi: any) {
       // 网络失败包成泛化错误，不带 URL/网络细节。
       throw new Error('vision: vision backend request failed');
     }
-    if (!res.ok) throw new Error('vision HTTP ' + res.status);
     let json: unknown;
     try {
       json = await res.json();
     } catch {
+      if (!res.ok) throw new Error('vision HTTP ' + res.status);
       throw new Error('vision: vision backend returned an invalid response');
     }
+    emitPiVisionUsage(json, backendRole, notify);
+    if (!res.ok) throw new Error('vision HTTP ' + res.status);
     const MAX_DESC = 32 * 1024;
     const trimDesc = (s: string): string =>
       s.length > MAX_DESC ? s.slice(0, MAX_DESC) + '…[truncated]' : s;
@@ -5631,14 +5661,14 @@ export default async function cindyBridge(piApi: any) {
     throw new Error('vision empty description');
   }
 
-  async function describePiVisionWithFallback(imagePath: string, prompt: string): Promise<string> {
+  async function describePiVisionWithFallback(imagePath: string, prompt: string, notify?: (message: string) => void): Promise<string> {
     const cfg = readPiVisionBridge();
     if (!cfg || !cfg.enabled || !cfg.primary) throw new Error('vision bridge not configured');
     // host 可关联日志：仅含 backendRole/model/errorClass（脱敏），不含 image path、base64、
     // Authorization 或请求体。走 stderr，host 侧 Pi 子进程日志收集可消费。
     const errClass = (e: unknown): string => (e instanceof Error ? e.name : typeof e);
     try {
-      return await callPiVision(cfg.primary, imagePath, prompt);
+      return await callPiVision(cfg.primary, imagePath, prompt, 'primary', notify);
     } catch (primaryErr) {
       console.error('[cindy-bridge] vision bridge pi primary backend failed', {
         backendRole: 'primary',
@@ -5659,7 +5689,7 @@ export default async function cindyBridge(piApi: any) {
         JSON.stringify(cfg.fallback.headers ?? {}) === JSON.stringify(cfg.primary.headers ?? {});
       if (cfg.fallback && !sameBackend) {
         try {
-          const text = await callPiVision(cfg.fallback, imagePath, prompt);
+          const text = await callPiVision(cfg.fallback, imagePath, prompt, 'fallback', notify);
           console.error('[cindy-bridge] vision bridge pi used fallback backend', {
             backendRole: 'fallback',
             model: cfg.fallback.model,
@@ -5697,7 +5727,7 @@ export default async function cindyBridge(piApi: any) {
       },
       required: ['path'],
     },
-    async execute(_toolCallId: string, params: unknown) {
+    async execute(_toolCallId: string, params: unknown, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: { ui: { notify(message: string, level: string): void } }) {
       const input = params as { path?: string; query?: string };
       if (typeof input.path !== 'string' || input.path.length === 0) {
         throw new Error('vision: path is required');
@@ -5705,7 +5735,7 @@ export default async function cindyBridge(piApi: any) {
       const prompt = typeof input.query === 'string' && input.query.trim().length > 0
         ? input.query.trim()
         : VISION_DEFAULT_PROMPT;
-      const text = await describePiVisionWithFallback(input.path, prompt);
+      const text = await describePiVisionWithFallback(input.path, prompt, message => ctx.ui.notify(message, 'info'));
       return { content: [{ type: 'text', text }] };
     },
   });
@@ -5724,7 +5754,7 @@ export default async function cindyBridge(piApi: any) {
       },
       required: ['path', 'target'],
     },
-    async execute(_toolCallId: string, params: unknown) {
+    async execute(_toolCallId: string, params: unknown, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: { ui: { notify(message: string, level: string): void } }) {
       const input = params as { path?: string; target?: string };
       if (typeof input.path !== 'string' || input.path.length === 0) {
         throw new Error('vision-locate: path is required');
@@ -5733,7 +5763,7 @@ export default async function cindyBridge(piApi: any) {
         throw new Error('vision-locate: target is required');
       }
       const prompt = VISION_LOCATE_PROMPT_PREFIX + input.target.trim();
-      const text = await describePiVisionWithFallback(input.path, prompt);
+      const text = await describePiVisionWithFallback(input.path, prompt, message => ctx.ui.notify(message, 'info'));
       return { content: [{ type: 'text', text }] };
     },
   });

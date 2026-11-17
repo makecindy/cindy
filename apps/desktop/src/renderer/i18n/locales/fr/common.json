@@ -9942,6 +9942,7 @@
         "embedding-index": "Indexation vectorielle",
         "web-search": "Recherche web",
         "provider-probe": "Tests de connexion",
+        "vision-bridge": "Vision Bridge",
         "auxiliary": "Autres requêtes auxiliaires"
       }
     }

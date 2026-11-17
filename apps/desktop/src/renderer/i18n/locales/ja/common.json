@@ -9826,6 +9826,7 @@
         "embedding-index": "ベクトル索引",
         "web-search": "ウェブ検索",
         "provider-probe": "接続テスト",
+        "vision-bridge": "ビジョンブリッジ",
         "auxiliary": "その他の補助リクエスト"
       }
     }

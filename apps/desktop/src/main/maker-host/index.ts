@@ -1,3 +1,4 @@
+import { createPiVisionUsageRecorder } from '../vision-bridge/piVisionUsage.js';
 import { createOneShotUsageRecorder } from '../usage/auxiliaryUsage.js';
 import { createCodexLocalModelSink } from './codexLocalModelSink.js';
 import { createCodexSpawnConfig, createCodexRoutingSignature } from './codexSpawnConfigCore.js';
@@ -2301,6 +2302,7 @@ export function getMaker(): Maker {
       },
       getGhostRosterPrompt,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
+      createPiVisionUsageRecorder,
       resolvePiVisionBridgeEnv: (model, sessionId) =>
         buildPiVisionBridgeEnv(
           {

@@ -9826,6 +9826,7 @@
         "embedding-index": "벡터 색인",
         "web-search": "웹 검색",
         "provider-probe": "연결 테스트",
+        "vision-bridge": "비전 브리지",
         "auxiliary": "기타 보조 요청"
       }
     }

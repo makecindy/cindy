@@ -295,6 +295,48 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     };
   }
 
+  it('consumes only this runtime private vision receipts and releases the recorder on close', async () => {
+    const observe = vi.fn(async () => {}); const close = vi.fn();
+    const factory = vi.fn(() => ({ observe, close }));
+    const handle = await new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: factory })).startSession({ sessionId: 'vision-task', workingDir: cwd, model: 'm' });
+    const events: unknown[] = [];
+    void (async () => { for await (const event of handle.events()) events.push(event); })();
+    try {
+      const env = knobs.spawnedEnvs.at(-1)!; const token = env.CINDY_PI_TURN_TOOL_POLICY;
+      expect(JSON.parse(env.CINDY_PI_VISION_BRIDGE!).usageToken).toBe(token);
+      expect(factory).toHaveBeenCalledWith(expect.objectContaining({ CINDY_PI_VISION_BRIDGE: env.CINDY_PI_VISION_BRIDGE }), 'vision-task');
+      const notify = (value: string) => knobs.onEvent?.({ type: 'extension_ui_request', method: 'notify', message: 'cindy:pi-vision-usage:' + value });
+      notify('wrong-token:{}'); notify(token + ':invalid'); notify(token + ':' + 'x'.repeat(4097));
+      expect(observe).not.toHaveBeenCalled();
+      notify(token + ':{"requestId":"receipt"}');
+      expect(observe).toHaveBeenCalledWith({ requestId: 'receipt' });
+    } finally { await handle.close(); }
+    expect(close).toHaveBeenCalledOnce();
+    expect(JSON.stringify(events)).not.toContain('cindy:pi-vision-usage:');
+  });
+
+  it('accepts a late vision receipt while process close is still unconfirmed', async () => {
+    let stopped!: () => void;
+    knobs.closeGate = new Promise<void>(resolve => { stopped = resolve; });
+    const observe = vi.fn(async () => {}); const close = vi.fn();
+    const handle = await new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: () => ({ observe, close }) })).startSession({ sessionId: 'vision-late', workingDir: cwd, model: 'm' });
+    const closing = handle.close();
+    try {
+      await vi.waitFor(() => expect(knobs.closeCount).toBe(1));
+      expect(close).not.toHaveBeenCalled();
+      const token = knobs.spawnedEnvs.at(-1)!.CINDY_PI_TURN_TOOL_POLICY;
+      knobs.onEvent?.({ type: 'extension_ui_request', method: 'notify', message: 'cindy:pi-vision-usage:' + token + ':{"requestId":"late"}' });
+      expect(observe).toHaveBeenCalledWith({ requestId: 'late' });
+    } finally { stopped(); await closing; }
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('releases the vision usage owner when Pi construction fails before returning a handle', async () => {
+    const close = vi.fn(); knobs.rpcCtorThrows = true;
+    await expect(new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: () => ({ observe: async () => {}, close }) })).startSession({ sessionId: 'vision-fail', workingDir: cwd, model: 'm' })).rejects.toThrow();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it('writes model-scoped compaction without replacing the inherited policy of other models or providers', async () => {
     const agent = new PiAgent(buildDeps({
       runtimeConfig: { endpoint: 'http://127.0.0.1:9', piAutoCompactThresholdPct: 85 },
@@ -1186,6 +1228,37 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await pollUntil(() => expect(proxyDisposed).toBe(2));
   });
 
+  it('records vision receipts from superseded child runs while showing only the latest task state', async () => {
+    useFakePollClock();
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    const receipt = (requestId: string) => ({ requestId, backendRole: 'primary', usage: { prompt_tokens: 10 } });
+    const first = { ...run, state: 'completed' as const, endedAt: Date.now(), tasks: run.tasks.map(task => ({ ...task, status: 'completed' as const, pendingApproval: undefined, visionUsage: [receipt('first')] })) };
+    const latest = { ...first, runId: '22222222-2222-4222-8222-222222222222', startedAt: first.startedAt + 1, tasks: first.tasks.map(task => ({ ...task, visionUsage: [receipt('latest')] })) };
+    vi.spyOn(piSubagentRuns, 'scanPiSubagentRuns').mockImplementation(async function* (_root, options) {
+      yield latest; if (!options?.latestPerTask) yield first;
+    });
+    const observe = vi.fn(async () => {});
+    const handle = await new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: () => ({ observe, close() {} }) })).startSession(opts());
+    try { await pollUntil(() => expect(observe).toHaveBeenCalledTimes(2)); }
+    finally { await closeWithoutPolls(handle.close()); }
+    expect(observe.mock.calls.map(([value]) => (value as { requestId: string }).requestId).sort()).toEqual(['first', 'latest']);
+  });
+
+  it('settles a terminal child vision receipt after navigation closes the parent and deduplicates later scans', async () => {
+    useFakePollClock();
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    const list = mockRunDiscovery().mockResolvedValue([run]);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    const observe = vi.fn(async () => {}); const close = vi.fn();
+    const handle = await new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: () => ({ observe, close }) })).startSession(opts());
+    await closeWithoutPolls(handle.close({ reason: 'navigation' }));
+    expect(close).not.toHaveBeenCalled();
+    const receipt = { requestId: '11111111-1111-4111-8111-111111111111', backendRole: 'primary', usage: { prompt_tokens: 100, completion_tokens: 2 } };
+    list.mockResolvedValue([{ ...run, state: 'completed', endedAt: Date.now(), tasks: run.tasks.map(task => ({ ...task, status: 'completed', pendingApproval: undefined, visionUsage: [receipt] })) }]);
+    await pollUntil(() => expect(close).toHaveBeenCalledOnce());
+    expect(observe).toHaveBeenCalledExactlyOnceWith(receipt);
+  });
+
   it('keeps answering detached Subagent approvals after the parent handle closes', async () => {
     // Regression: close() used to clear the only timer that refreshed
     // pendingApproval *and* short-circuit the approval handler on `closed`,
@@ -1360,6 +1433,26 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     // The run stays live for several supervisor periods: nothing re-leases the token.
     await vi.advanceTimersByTimeAsync(1_000);
     expect(proxyDisposed).toBe(2);
+  });
+
+  it('drains child vision facts before an already-exited parent releases its owner at an account boundary', async () => {
+    useFakePollClock();
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    const list = mockRunDiscovery().mockResolvedValue([run]);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const receipt = { requestId: '11111111-1111-4111-8111-111111111111', backendRole: 'primary', usage: { prompt_tokens: 10 } };
+    vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockImplementation(async () => {
+      list.mockResolvedValue([{ ...run, state: 'completed', endedAt: Date.now(), tasks: run.tasks.map(task => ({ ...task, status: 'completed', pendingApproval: undefined, visionUsage: [receipt] })) }]);
+      return true;
+    });
+    const observe = vi.fn(async () => {}); const close = vi.fn();
+    const handle = await new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: () => ({ observe, close }) })).startSession(opts());
+    knobs.onExit?.({ code: 1, signal: null });
+    await settle(handle.close({ reason: 'account-boundary' }));
+    expect(observe).toHaveBeenCalledExactlyOnceWith(receipt);
+    expect(close).toHaveBeenCalledOnce();
+    expect(observe.mock.invocationCallOrder[0]).toBeLessThan(close.mock.invocationCallOrder[0]!);
   });
 
   it('does not resurrect a detached supervisor when the process exits after an account boundary', async () => {

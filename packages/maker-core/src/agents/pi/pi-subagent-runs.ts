@@ -144,6 +144,8 @@ async function copyStagedRipgrep(
 export type PiSubagentRunState = 'queued' | 'running' | 'completed' | 'failed' | 'stopped';
 
 export interface PiSubagentTaskStatus {
+  /** Private, provider-reported vision facts; never folded into assistant usage. */
+  visionUsage?: unknown[];
   childId: string;
   sessionId: string;
   agent: string;

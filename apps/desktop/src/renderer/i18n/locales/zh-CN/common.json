@@ -9826,6 +9826,7 @@
         "embedding-index": "向量索引",
         "web-search": "网页搜索",
         "provider-probe": "连接测试",
+        "vision-bridge": "视觉桥",
         "auxiliary": "其他辅助请求"
       }
     }

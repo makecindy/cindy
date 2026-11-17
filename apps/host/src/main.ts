@@ -717,7 +717,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     const gateway = modelAccess!.gateway;
     // Memory uses the same owner-scoped store Desktop reads, so a task started
     // here sees the same memories as a task started there.
-    makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId });
+    makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId, getMaker: () => agentGraph?.maker ?? null });
     // Flip the flag before the agents are built: their runtimeConfig snapshots it
     // at construction, and native-agent syncoff needs the agents that do not exist yet.
     if (makerMemory.isEnabled()) await makerMemory.enable({ skipAgentSync: true });

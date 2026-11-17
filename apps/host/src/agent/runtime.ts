@@ -1,3 +1,4 @@
+import { createPiVisionUsageRecorder } from '../../../desktop/src/main/vision-bridge/piVisionUsage.js';
 import { createOneShotUsageRecorder } from '../../../desktop/src/main/usage/auxiliaryUsage.js';
 import { getDesktopClaudeReadOnlyAllowedTools, getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.js';
@@ -789,6 +790,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
           },
         }),
         // Only for Pi models the vision bridge targets (layer C), as on the desktop.
+        createPiVisionUsageRecorder,
         resolvePiVisionBridgeEnv: visionBridge.resolvePiVisionBridgeEnv,
       })
     : null;

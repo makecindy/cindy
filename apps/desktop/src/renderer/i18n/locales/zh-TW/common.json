@@ -9826,6 +9826,7 @@
         "embedding-index": "向量索引",
         "web-search": "網頁搜尋",
         "provider-probe": "連線測試",
+        "vision-bridge": "視覺橋",
         "auxiliary": "其他輔助請求"
       }
     }

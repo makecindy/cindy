@@ -965,6 +965,11 @@ export interface AgentDeps {
    * 返回的键应纳入 piSecretEnvNames 剥离面（host 实现应把含 key 的键名一并声明）。
    */
   resolvePiVisionBridgeEnv?: (model: string, sessionId?: string) => Record<string, string> | null;
+  /** Capture the usage owner before Pi dispatches independent vision requests. */
+  createPiVisionUsageRecorder?: (env: Record<string, string>, sessionId?: string) => {
+    observe(payload: unknown): Promise<void>;
+    close(): void;
+  };
 
   /**
    * Host-owned arbitration for capabilities that overlap with harness-native

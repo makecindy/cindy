@@ -9869,6 +9869,7 @@
         "embedding-index": "Vector indexing",
         "web-search": "Web search",
         "provider-probe": "Connection tests",
+        "vision-bridge": "Vision Bridge",
         "auxiliary": "Other auxiliary requests"
       }
     }

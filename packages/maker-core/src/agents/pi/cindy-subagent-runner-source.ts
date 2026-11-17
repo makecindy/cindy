@@ -294,6 +294,7 @@ function main() {
       // request must never displace an earlier unanswered one. That overwrite
       // is exactly how a child used to wait forever on its first parallel tool
       // call while the Host only ever saw the second.
+      visionUsage: [],
       pendingApprovals: [],
       pendingControls: [],
       stopRequested: false,
@@ -378,6 +379,7 @@ function main() {
           toolUses: task.toolUses,
           usage: task.usage,
           usageSegments: task.usageSegments,
+          visionUsage: task.visionUsage.length ? task.visionUsage : undefined,
           // Intermediate commentary is useful progress, not a final result.
           // Publish its readiness separately so controls never infer it from text.
           output: task.output || (
@@ -925,6 +927,18 @@ function main() {
           send(task, { type: 'extension_ui_response', id: event.id, value: JSON.stringify(receipt || {}) });
           return;
         }
+        if (event.type === 'extension_ui_request' && event.method === 'notify'
+            && typeof event.message === 'string' && event.message.startsWith('cindy:pi-vision-usage:')) {
+          try {
+            const vision = JSON.parse(childEnv.CINDY_PI_VISION_BRIDGE || '{}');
+            const prefix = 'cindy:pi-vision-usage:' + vision.usageToken + ':';
+            if (vision.usageToken && event.message.startsWith(prefix) && event.message.length <= prefix.length + 4096) {
+              task.visionUsage.push(JSON.parse(event.message.slice(prefix.length)));
+              scheduleStatus();
+            }
+          } catch (_) { /* Private usage never becomes tool output or an approval. */ }
+          return;
+        }
         safeAppendTranscript(state, { type: 'cindy.subagent.child_event', at: Date.now(), childId: task.childId, event: event });
         if (event.type === 'extension_ui_request') {
           const pending = {
@@ -1236,6 +1250,7 @@ function main() {
           error: task.error,
           usage: task.usage,
           usageSegments: task.usageSegments,
+          visionUsage: task.visionUsage.length ? task.visionUsage : undefined,
           toolUses: task.toolUses,
         };
       }),
