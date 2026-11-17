@@ -400,7 +400,11 @@ export interface OrcaTeamServiceDeps {
   getWorkerLinkBySessionId(workerSessionId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   getWorkerLinkByWorkerId(workerId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerRecordSnapshot[]>;
-  getLiveSession(sessionId: string): { isTurnRunning(): boolean; getTurnGeneration?(): number } | null;
+  getLiveSession(sessionId: string): {
+    isTurnRunning(): boolean;
+    getTurnGeneration?(): number;
+    hasLiveBackgroundWork?(): Promise<boolean>;
+  } | null;
   resumeWorkerSession(
     worker: OrcaWorkerRecordSnapshot,
     link: OrcaWorkerLinkSnapshot,
@@ -421,7 +425,7 @@ export interface OrcaTeamServiceDeps {
   restoreWorkerDoneIfIdle(workerId: string): Promise<boolean>;
   closeWorkerSession(sessionId: string, beforeClose?: () => Promise<void>): Promise<void>;
   /** 与 Session.send reservation 原子互斥；false 表示 direct send/turn 已先取得会话。 */
-  closeWorkerSessionIfIdle(sessionId: string, sendLockHeld?: boolean): Promise<boolean>;
+  closeWorkerSessionIfIdle(sessionId: string, sendLockHeld?: boolean, options?: { intent: 'explicit-release' }): Promise<boolean>;
   /** pending / dispatch-boundary / recovery 输入任一存在时返回 true。 */
   hasPendingWorkerInput(sessionId: string): Promise<boolean>;
   /** send_to_session 的恢复/直发锁覆盖 bootstrap 到 Session.send reservation 的窗口。 */
@@ -1660,9 +1664,18 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       }
       if (params.expectedStatus) {
         await assertAfterIdle();
-        const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker');
+        const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker', false, assertAfterIdle);
         if (!didClose) {
+          // A normal refusal also crosses an asynchronous boundary (including
+          // remote lookup). Do not renew an expired request into a deferred retry.
+          await assertAfterIdle();
           await rollbackDoneAcknowledgement();
+          if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
+            await opts?.assertCurrent?.();
+            const authority = await captureDeferredAuthority(params.callerLeadSessionId, opts);
+            await opts?.assertCurrent?.();
+            deferDoneAcknowledgement(worker.id, authority);
+          }
           return {
             ok: false,
             errorCode: 'WORKER_STATE_CHANGED',
@@ -1712,7 +1725,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     const archive = async (): Promise<OrcaOkResult> => {
     await params.beforeArchive?.();
     if (params.onlyIfIdle) {
-      if ((activeWorkerDispatches.get(worker.id) ?? 0)>0 || await deps.hasPendingWorkerInput(worker.sessionId) || !await closeWorkerSessionIfIdleBestEffort(worker.sessionId,'releaseWorker',true)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has active or queued input'};
+      if ((activeWorkerDispatches.get(worker.id) ?? 0)>0 || await deps.hasPendingWorkerInput(worker.sessionId) || !await closeWorkerSessionIfIdleBestEffort(worker.sessionId,'releaseWorker',true,params.beforeArchive,{ intent: 'explicit-release' })) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has active or queued input'};
       if (await deps.hasPendingWorkerInput(worker.sessionId)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has queued input'};
     }
     await params.beforeArchive?.();
@@ -2179,10 +2192,39 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     sessionId: string,
     owner: string,
     sendLockHeld = false,
+    beforeClose?: () => Promise<void>,
+    options?: { intent: 'explicit-release' },
   ): Promise<boolean> {
+    let authorityRejected = false;
+    const assertCloseAuthority = async () => {
+      try { await beforeClose?.(); }
+      catch (err) { authorityRejected = true; throw err; }
+    };
     try {
-      return await (sendLockHeld ? deps.closeWorkerSessionIfIdle(sessionId, true) : deps.closeWorkerSessionIfIdle(sessionId));
+      const runtime = deps.getLiveSession(sessionId);
+      const generation = runtime?.getTurnGeneration?.();
+      // Native work may outlive the foreground turn without appearing in the
+      // task snapshot. A failed probe is caught below and leaves the runtime alive.
+      if (runtime?.hasLiveBackgroundWork) {
+        const busy = await runtime.hasLiveBackgroundWork();
+        const queued = !busy && await deps.hasPendingWorkerInput(sessionId);
+        await assertCloseAuthority();
+        if (busy || queued) return false;
+        if (deps.getLiveSession(sessionId) !== runtime
+          || runtime.getTurnGeneration?.() !== generation) return false;
+      }
+      const didClose = await (options
+        ? deps.closeWorkerSessionIfIdle(sessionId, sendLockHeld, options)
+        : sendLockHeld ? deps.closeWorkerSessionIfIdle(sessionId, true) : deps.closeWorkerSessionIfIdle(sessionId));
+      // A normal refusal can also outlive the caller's authority, even when
+      // the runtime has no native background probe (remote worker shims).
+      await assertCloseAuthority();
+      return didClose;
     } catch (err) {
+      if (authorityRejected) throw err;
+      // A failed provider probe/close is retryable only while the caller's
+      // authority still holds; otherwise it must not acquire a new retry guard.
+      await assertCloseAuthority();
       deps.log.warn(`${owner}: close idle worker session failed`, {
         sessionId,
         err: err instanceof Error ? err.message : String(err),

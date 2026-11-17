@@ -833,6 +833,7 @@ import {
 import { handleCloseSessionRequest } from './closeSessionRequest.js';
 import {
   createOrcaIdleReleaseWatcher,
+  createOrcaIdleRuntimeClose,
   ORCA_IDLE_RELEASE_STATUSES,
   type OrcaIdleReleaseWatcher,
 } from './orcaIdleReleaseWatcher.js';
@@ -16793,7 +16794,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .set({ updatedAt })
         .where(eq(orcaWorkers.id, workerId));
     },
-    closeSession: (sessionId) => maker.closeSession(sessionId),
+    closeSession: createOrcaIdleRuntimeClose(maker),
     broadcastWorkerChanged: (leadSessionId) => {
       broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
     },
