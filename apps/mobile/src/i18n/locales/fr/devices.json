@@ -433,6 +433,7 @@
         "snoozed": "Reportées",
         "archived": "Traitées",
         "snooze": "Reporter la tâche",
+        "complete": "Terminé",
         "wake": "Réafficher maintenant",
         "restore": "Restaurer la tâche",
         "process": "Marquer comme traitée (archiver)",

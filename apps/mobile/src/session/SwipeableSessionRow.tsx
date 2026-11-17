@@ -65,6 +65,8 @@ export interface SessionSwipeControls {
   onArchive(session: RemoteSession): void;
   onShowOptions(session: RemoteSession): void;
   onSnooze?(session: RemoteSession): void;
+  /** Inbox: one-tap Done (archives without the automation reminder). */
+  onComplete?(session: RemoteSession): void;
 }
 
 export interface SwipeableSessionRowProps {
@@ -84,6 +86,8 @@ export interface SwipeableSessionRowProps {
   /** 左滑「选项」按钮:先关行,再由页面层弹出操作菜单。 */
   onShowOptions(session: RemoteSession): void;
   onSnooze?(session: RemoteSession): void;
+  /** Inbox: one-tap Done (archives without the automation reminder). */
+  onComplete?(session: RemoteSession): void;
   testID?: string;
   children: ReactNode;
 }
@@ -93,14 +97,18 @@ function SwipeableSessionRowInner({
   registry,
   onTogglePin,
   onMarkRead,
-  onArchive,
+  onArchive: onArchiveProp,
   onShowOptions,
   onSnooze,
+  onComplete,
   inboxMode = false,
   testID,
   children,
 }: SwipeableSessionRowProps) {
   const { t } = useTranslation();
+  // Inbox: archive becomes a one-tap Done (button and full swipe alike).
+  const completeAction = inboxMode && session.status !== 'archived' && onComplete !== undefined;
+  const onArchive = completeAction && onComplete !== undefined ? onComplete : onArchiveProp;
   // The same task may appear in its project and in the fixed inbox at once.
   const instanceId = useId();
   const rowKey = `${instanceId}:${session.id}`;
@@ -287,7 +295,8 @@ function SwipeableSessionRowInner({
           {actionsMounted ? (
             <RightActionsContent
               armedProgress={armedProgress}
-              archiveLabel={statusToggle.label}
+              archiveLabel={completeAction ? t('devices.list.menu.inbox.complete') : statusToggle.label}
+              complete={completeAction}
               archived={statusToggle.action === 'restore'}
               onArchive={handleArchivePress}
               onOptions={handleOptionsPress}
@@ -308,7 +317,7 @@ function SwipeableSessionRowInner({
       armedProgress,
       handleArchivePress,
       handleOptionsPress,
-      secondaryLabel, snoozeAction, inboxMode, session.status,
+      secondaryLabel, snoozeAction, inboxMode, session.status, completeAction, t,
       handleTranslationValue,
       actionsMounted,
       statusToggle,
@@ -462,6 +471,7 @@ function RightActionsContent({
   armedProgress,
   archiveLabel,
   archived,
+  complete = false,
   onArchive,
   onOptions,
   secondaryLabel, snoozeAction, showSecondary,
@@ -474,6 +484,7 @@ function RightActionsContent({
   armedProgress: Animated.Value;
   archiveLabel: string;
   archived: boolean;
+  complete?: boolean;
   onArchive(): void;
   onOptions(): void;
   secondaryLabel: string;
@@ -490,7 +501,7 @@ function RightActionsContent({
   // 置顶 / 归档会让行移位:按下即提前挂上列表过渡,松手时直接执行。
   const prepareDisclosure = useDisclosurePrepare();
   const { t } = useTranslation();
-  const StatusIcon = archived ? ArchiveRestore : Archive;
+  const StatusIcon = complete ? Check : archived ? ArchiveRestore : Archive;
   const revealed = Animated.multiply(translation, -1);
   const optionsOpacity = Animated.multiply(
     revealed.interpolate({

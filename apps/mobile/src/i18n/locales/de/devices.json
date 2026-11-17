@@ -430,6 +430,7 @@
         "snoozed": "Zurückgestellt",
         "archived": "Erledigt",
         "snooze": "Aufgabe zurückstellen",
+        "complete": "Erledigt",
         "wake": "Jetzt zurückholen",
         "restore": "Aufgabe wiederherstellen",
         "process": "Als erledigt markieren (archivieren)",

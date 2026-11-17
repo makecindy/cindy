@@ -191,8 +191,13 @@ export function useSessionListActions(options?: {
   }, [animateListChange, invoke, preferredRpcDeviceId, t]);
 
   // 归档预检提示 active 自动化后续会恢复原任务；沿用乐观归档事务，取消时恢复行。
-  const runSwipeAction = useCallback((session: RemoteSession, action: Exclude<SessionSwipeAction, 'rename' | 'snooze' | 'wake'>) => {
-    void patchSession(session, swipeActionPatch(action), action === 'archive' ? async (isLatest) => {
+  const runSwipeAction = useCallback((
+    session: RemoteSession,
+    action: Exclude<SessionSwipeAction, 'rename' | 'snooze' | 'wake'>,
+    options: { skipScheduleConfirm?: boolean } = {},
+  ) => {
+    // Inbox Done is one tap: it archives without the automation reminder (quiet runs re-archive).
+    void patchSession(session, swipeActionPatch(action), action === 'archive' && !options.skipScheduleConfirm ? async (isLatest) => {
       const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
       const names = devices ? await loadActiveBoundScheduleNames({
         deviceId: devices.rpcDeviceId, invoke, sessionId: session.id, source: session.source,
@@ -274,6 +279,10 @@ export function useSessionListActions(options?: {
     runSwipeAction(session, action);
   }, [runSwipeAction]);
 
+  const completeSession = useCallback((session: RemoteSession) => {
+    runSwipeAction(session, 'archive', { skipScheduleConfirm: true });
+  }, [runSwipeAction]);
+
   const showSessionOptions = useCallback((session: RemoteSession) => {
     setActionSheetSession(session);
   }, []);
@@ -345,10 +354,11 @@ export function useSessionListActions(options?: {
     onSnooze: snoozeSession,
     onMarkRead: markSessionRead,
     onArchive: archiveSession,
+    onComplete: completeSession,
     onShowOptions: showSessionOptions,
     onTogglePin: toggleSessionPinned,
     registry: swipeRegistry,
-  }), [archiveSession, markSessionRead, showSessionOptions, snoozeSession, swipeRegistry, toggleSessionPinned]);
+  }), [archiveSession, completeSession, markSessionRead, showSessionOptions, snoozeSession, swipeRegistry, toggleSessionPinned]);
 
   return {
     snoozeSessionTarget, confirmSnooze, closeSnooze, handleSnoozeClosed,

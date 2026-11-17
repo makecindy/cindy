@@ -3257,7 +3257,7 @@ function ExpandedView({
   const handleActionClick = useCallback(
     async (
       sessionId: string,
-      action: 'delete' | 'archive' | 'archive-now' | 'unarchive',
+      action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive',
       sharedTaskId?: string,
     ) => {
       const session = sessionsByIdRef.current.get(sessionId);
@@ -3265,7 +3265,7 @@ function ExpandedView({
         toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
         return;
       }
-      const isArchiveLike = action === 'archive' || action === 'archive-now';
+      const isArchiveLike = action === 'archive' || action === 'archive-now' || action === 'complete';
       // 执行中的 session 不允许归档 —— 让用户先停下当前任务
       if (isArchiveLike && archiveBlockedByRunning(sessionId, session?.deviceLinkDeviceId)) return;
       // 被 IM 接管中的 session 不允许归档 —— 接管方还在操控，先收回再归档。
@@ -3303,10 +3303,13 @@ function ExpandedView({
             // 接管拦截先结算:被接管时不该弹任何归档确认。
             if (await blockedByAttachment()) return false;
             // 自动化绑定读本地缓存,放在 worktree 预检之前,不占用预检之后的窗口。
-            const scheduleNames =
-              (await loadActiveBoundScheduleNames([
-                { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId },
-              ])).get(sessionId) ?? [];
+            // 收件箱「完成」单击生效:不再提醒自动化会恢复任务(安静的一轮会放回已处理,
+            // archive-pauses-automations.md);未提交改动的确认照常保留。
+            const scheduleNames = action === 'complete'
+              ? []
+              : (await loadActiveBoundScheduleNames([
+                  { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId },
+                ])).get(sessionId) ?? [];
             // **worktree 预检必须是最后一个前置条件**(codex review):它之后再 await
             // 任何东西(比如原来排在后面的接管查询),都会给「clean 结论」留一段失效
             // 窗口 —— 编辑器或收尾中的 agent 在那段时间写脏工作区,归档就不带警告地

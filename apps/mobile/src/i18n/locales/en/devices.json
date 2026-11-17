@@ -430,6 +430,7 @@
         "snoozed": "Snoozed",
         "archived": "Processed",
         "snooze": "Snooze task",
+        "complete": "Done",
         "wake": "Bring back now",
         "restore": "Restore task",
         "process": "Mark processed (archive)",

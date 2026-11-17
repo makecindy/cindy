@@ -430,6 +430,7 @@
         "snoozed": "稍后处理",
         "archived": "已处理",
         "snooze": "稍后处理",
+        "complete": "完成",
         "wake": "立即取回",
         "restore": "恢复任务",
         "process": "标记已处理（归档）",

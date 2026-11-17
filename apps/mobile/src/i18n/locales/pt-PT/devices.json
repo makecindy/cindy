@@ -433,6 +433,7 @@
         "snoozed": "Adiadas",
         "archived": "Tratadas",
         "snooze": "Adiar tarefa",
+        "complete": "Concluído",
         "wake": "Mostrar agora",
         "restore": "Restaurar tarefa",
         "process": "Marcar como tratada (arquivar)",

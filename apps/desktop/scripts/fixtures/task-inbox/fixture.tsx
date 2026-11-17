@@ -132,7 +132,12 @@ void mountPage({
   host: {
     maker: {
       schedule: {
-        list: async () => [{ id: 'follow-pr', name: 'PR 跟进', status: 'active', targetSessionId: 'following', cronExpr: '*/5 * * * *', manual: false }],
+        list: async () => [
+          { id: 'follow-pr', name: 'PR 跟进', status: 'active', targetSessionId: 'following', cronExpr: '*/5 * * * *', manual: false,
+            preRunHook: { command: 'node pr-heartbeat-gate.mjs https://github.com/example/app/pull/42' } },
+          // A routine automation bound to a task does not make it working.
+          { id: 'routine', name: '例行巡检', status: 'active', targetSessionId: 'ready', cronExpr: '0 * * * *', manual: false },
+        ],
         onEvent: subscription('schedules'),
       },
     },

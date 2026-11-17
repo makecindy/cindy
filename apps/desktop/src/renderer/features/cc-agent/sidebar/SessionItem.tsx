@@ -37,7 +37,7 @@ import { Button } from '@/components/ui/button';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
-import { Archive, ChevronRight, Crown, EllipsisVertical, Play, Undo } from 'lucide-react';
+import { Archive, Check, ChevronRight, Crown, EllipsisVertical, Play, Undo } from 'lucide-react';
 import { withSidebarNavigation, type SidebarNavigationProps } from './sidebarNavigation';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 
@@ -275,7 +275,7 @@ export interface SessionItemProps {
   onClick: SessionClickHandler;
   onAction: (
     sessionId: string,
-    action: 'delete' | 'archive' | 'archive-now' | 'unarchive',
+    action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive',
     sharedTaskId?: string,
   ) => void;
   onRename: (sessionId: string, newTitle: string) => void;
@@ -909,6 +909,18 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           isActive={isActive}
         >
           <Undo size={14} strokeWidth={2} />
+        </SessionAction>
+      ) : canQuickArchive && inboxMode ? (
+        // 收件箱：「完成」单击即归档（未提交改动的确认仍保留，见 handleActionClick）。
+        <SessionAction
+          label={t('ccAgent.sidebar.inbox.complete')}
+          onClick={() => {
+            prefetchRemovalPreflight();
+            onAction(session.id, 'complete');
+          }}
+          isActive={isActive}
+        >
+          <Check size={14} strokeWidth={2} />
         </SessionAction>
       ) : canQuickArchive ? (
         <SessionAction

@@ -4677,6 +4677,7 @@ function HomeListRowInner({
     <SwipeableSessionRow
       inboxMode={inboxMode}
       onSnooze={swipe.onSnooze}
+      onComplete={swipe.onComplete}
       onArchive={onArchive}
       onShowOptions={onShowOptions}
       onTogglePin={onTogglePin}

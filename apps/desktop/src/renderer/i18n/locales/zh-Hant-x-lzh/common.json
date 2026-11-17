@@ -16549,6 +16549,7 @@
         "snoozed": "待後處理",
         "archived": "已處理",
         "snooze": "留待後辦",
+        "complete": "畢",
         "wake": "即刻取回",
         "restore": "恢復任務",
         "process": "標記已處理（封存）",

@@ -241,3 +241,32 @@ it('opens snooze without writing, cancels cleanly, and saves the selected instan
   await act(async () => actions.sessionSwipeControls.onSnooze?.({ ...original, snoozedUntil: until }));
   expect(mocks.invoke).toHaveBeenCalledWith('host', 'local-db:sessions:patch-meta', ['task', { snoozedUntil: null }], expect.any(Object));
 });
+
+// Inbox Done (2026-11-18): one tap archives even when an automation is bound; the ordinary
+// archive keeps its reminder. Minimal input: a task targeted by an active schedule.
+it('archives with one tap from inbox Done, while ordinary archive still reminds about automations', async () => {
+  const original = { ...task, status: 'active' } as RemoteSession;
+  remoteSessionStore.upsertDeviceSession('old-shard', 'Host', original);
+  vi.mocked(withNewSessionCreationRemoval).mockImplementation(async (_id, _host, _status, run) => run());
+  mocks.invoke.mockImplementation(async (_device: string, channel: string) => {
+    if (channel === 'maker:schedule:list') {
+      return [{ id: 'routine', name: 'Routine', status: 'active', targetSessionId: 'task', cronExpr: '0 * * * *', manual: false }];
+    }
+    if (channel === 'maker:schedule:list-sidebar-index-runs') return { runs: [] };
+    if (channel === 'local-db:sessions:patch-meta') return { ...original, status: 'archived' };
+    return undefined;
+  });
+  mount();
+  await act(async () => actions.sessionSwipeControls.onArchive(original));
+  expect(Alert.alert).toHaveBeenCalledTimes(1);
+  expect(mocks.invoke).not.toHaveBeenCalledWith('host', 'local-db:sessions:patch-meta', expect.anything(), expect.anything());
+
+  vi.mocked(Alert.alert).mockClear();
+  remoteSessionStore.upsertDeviceSession('old-shard', 'Host', original);
+  await act(async () => actions.sessionSwipeControls.onComplete?.(original));
+  expect(Alert.alert).not.toHaveBeenCalled();
+  expect(mocks.invoke).toHaveBeenCalledWith('host', 'local-db:sessions:patch-meta',
+    ['task', expect.objectContaining({ status: 'archived' })], expect.any(Object));
+  // Done never looks up automations: the only schedule read is the ordinary archive's.
+  expect(mocks.invoke.mock.calls.filter(([, channel]) => channel === 'maker:schedule:list')).toHaveLength(1);
+});

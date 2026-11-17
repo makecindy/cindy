@@ -74,7 +74,8 @@ export default {
     assert.equal(await workingSection.locator('[data-session-id="waiting"]').count(), 0);
     await ui.capture('all-sections');
     await ready.hover();
-    const archiveLabel = await ui.t('ccAgent.sidebar.sessionMenu.archived');
+    // Inbox shows a one-click Done instead of the two-step archive.
+    const archiveLabel = await ui.t('ccAgent.sidebar.inbox.complete');
     const moreLabel = await ui.t('ccAgent.sidebar.sessionMenu.moreActions');
     assert.equal(await ready.getByRole('button', { name: archiveLabel, exact: true }).count(), 1);
     assert.equal(await page.getByRole('button', { name: moreLabel, exact: true }).count(), 0);
@@ -85,10 +86,15 @@ export default {
     await page.getByRole('menu').waitFor();
     await ui.capture('context-menu');
     await page.keyboard.press('Escape');
-    // Preserve the original two-step archive flow and its restore action.
+    // One click on Done archives at once (even for the open task); restore brings it back.
     await ready.hover();
     await ready.getByRole('button', { name: archiveLabel, exact: true }).click();
-    await ready.getByRole('button', { name: archiveLabel, exact: true }).click();
+    const archivedSection = page.locator('section > button')
+      .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.archived') }).locator('..');
+    await archivedSection.locator('[data-session-id="ready"]').waitFor();
+    assert.equal(await ready.getByRole('button', {
+      name: await ui.t('ccAgent.sidebar.sessionMenu.archived'), exact: true,
+    }).count(), 0);
     await ready.hover();
     await ready
       .getByRole('button', {

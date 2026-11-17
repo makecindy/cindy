@@ -16785,6 +16785,7 @@
         "snoozed": "Pospuestas",
         "archived": "Procesadas",
         "snooze": "Posponer tarea",
+        "complete": "Hecho",
         "wake": "Mostrar ahora",
         "restore": "Restaurar tarea",
         "process": "Marcar como procesada (archivar)",

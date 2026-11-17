@@ -37,7 +37,7 @@ import type {
   ReactNode,
   RefObject,
 } from 'react';
-import { Archive, ChevronRight, Crown, EllipsisVertical, Undo } from 'lucide-react';
+import { Archive, Check, ChevronRight, Crown, EllipsisVertical, Undo } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { withSidebarNavigation, type SidebarNavigationProps } from './sidebarNavigation';
 
@@ -881,6 +881,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   setMenuPos({ x: rect.left, y: rect.bottom + 2 });
                 }}
                 onArchiveNow={() => onAction(session.id, 'archive-now')}
+                onComplete={() => {
+                  prefetchRemovalPreflight();
+                  onAction(session.id, 'complete');
+                }}
                 canUnarchive={!remoteWritesBlocked}
                 onUnarchive={handleUnarchiveSelect}
                 yieldToOrdinalBadge={ordinalBadgeLabel != null}
@@ -1226,6 +1230,7 @@ function TimeActionsSlot({
   menuOpen,
   onOpenMenu,
   onArchiveNow,
+  onComplete,
   onUnarchive,
   yieldToOrdinalBadge = false,
   ordinalBadgeLabel,
@@ -1246,6 +1251,8 @@ function TimeActionsSlot({
   menuOpen: boolean;
   onOpenMenu: (e: ReactMouseEvent<HTMLButtonElement>) => void;
   onArchiveNow: () => void;
+  /** Inbox: one-click Done (archives; the dirty-worktree confirmation still applies). */
+  onComplete: () => void;
   onUnarchive: () => void;
   /** mod+1..9 序号徽标出现时让位:徽标独占右缘,不与时间/badge 并排。 */
   yieldToOrdinalBadge?: boolean;
@@ -1368,6 +1375,15 @@ function TimeActionsSlot({
                   onClick={() => onUnarchive()}
                 >
                   <Undo size={14} strokeWidth={2} />
+                </CardAction>
+              ) : canQuickArchive && inboxMode ? (
+                <CardAction
+                  variant="list"
+                  isActive={isActive}
+                  label={t('ccAgent.sidebar.inbox.complete')}
+                  onClick={() => onComplete()}
+                >
+                  <Check size={14} strokeWidth={2} />
                 </CardAction>
               ) : canQuickArchive ? (
                 <CardAction

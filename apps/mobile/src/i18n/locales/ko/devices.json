@@ -430,6 +430,7 @@
         "snoozed": "나중에 처리",
         "archived": "처리됨",
         "snooze": "나중에 처리",
+        "complete": "완료",
         "wake": "지금 다시 표시",
         "restore": "작업 복원",
         "process": "처리됨으로 표시(보관)",
