@@ -48,6 +48,8 @@ export interface GhostRemoteCardSource {
   /** The host's version of this card; an action made on an older one is refused there. */
   revision: string;
   externalLinks: boolean;
+  /** A mail card whose computer accepts attachments uploaded from this one. */
+  mailUpload?: boolean;
 }
 
 export interface GhostLiveCard {
@@ -363,7 +365,7 @@ function readRemoteCard(deviceId: string, sessionId: string, callId: string): Pr
         sessionId,
         html: card.html,
         height: current?.status === 'ready' && current.html === card.html ? current.height : card.height,
-        remote: { deviceId, sessionId, revision: card.revision, externalLinks: card.externalLinks },
+        remote: { deviceId, sessionId, revision: card.revision, externalLinks: card.externalLinks, ...(card.mailUpload ? { mailUpload: true } : {}) },
       });
       bump();
       return;
