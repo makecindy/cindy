@@ -6,9 +6,11 @@ import {
 } from '@cindy/maker-shared/session-list';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from './mobileHome';
+import { LIVE_TASK_PRIORITY } from '@cindy/maker-shared/live-task-priority';
 import {
   activityMsFromIso,
   EMPTY_HOME_PRIORITY_CONTEXT,
+  naturalPriorityRankForId,
   sessionPriorityRank,
   sessionPriorityRecencyMs,
   type HomeListPriorityContext,
@@ -216,8 +218,9 @@ export function mergeAutomationItems(
 }
 
 /**
- * 优先级上下文按合并前各组的代表运行收集。合并后的组若有任一成员在等待 / 未读 / 运行,
- * 新代表继承该档位,不会因代表换成另一次运行而掉到普通档。
+ * 优先级上下文按合并前各组的代表运行收集。合并后的组按每个成员各自的档位取最优,新代表
+ * 只继承这一档:不把不同成员的原始信号并在一起(否则旧目录的完成未读 + 新目录的运行中
+ * 会被当成同一任务的新一轮运行,整组降到 running 档)。
  */
 export function withMergedAutomationPriority(
   ctx: HomeListPriorityContext,
@@ -230,10 +233,20 @@ export function withMergedAutomationPriority(
     const members = item.automationGroup?.items;
     if (!members) continue;
     const id = item.session.id;
-    const any = (set: ReadonlySet<string>) => members.some((member) => set.has(member.session.id));
-    if (!ctx.waitingSessionIds.has(id) && any(ctx.waitingSessionIds)) (waiting ??= new Set(ctx.waitingSessionIds)).add(id);
-    if (!ctx.unreadSessionIds.has(id) && any(ctx.unreadSessionIds)) (unread ??= new Set(ctx.unreadSessionIds)).add(id);
-    if (!ctx.runningSessionIds.has(id) && any(ctx.runningSessionIds)) (running ??= new Set(ctx.runningSessionIds)).add(id);
+    const current = naturalPriorityRankForId(id, ctx);
+    const best = members.reduce(
+      (rank, member) => Math.min(rank, naturalPriorityRankForId(member.session.id, ctx)),
+      current,
+    );
+    if (best >= current) continue;
+    if (best === LIVE_TASK_PRIORITY.waiting) {
+      (waiting ??= new Set(ctx.waitingSessionIds)).add(id);
+    } else if (best === LIVE_TASK_PRIORITY.unread) {
+      (unread ??= new Set(ctx.unreadSessionIds)).add(id);
+      if (ctx.runningSessionIds.has(id)) (running ??= new Set(ctx.runningSessionIds)).delete(id);
+    } else if (best === LIVE_TASK_PRIORITY.running) {
+      (running ??= new Set(ctx.runningSessionIds)).add(id);
+    }
   }
   if (!waiting && !unread && !running) return ctx;
   return {

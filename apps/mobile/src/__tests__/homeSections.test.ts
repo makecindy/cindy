@@ -217,6 +217,28 @@ describe('自动化归组', () => {
     expect(ctx.waitingSessionIds.has(merged.session.id)).toBe(false);
     expect(withMergedAutomationPriority(ctx, [merged]).waitingSessionIds.has(merged.session.id)).toBe(true);
   });
+
+  it('跨项目合并按成员各自档位取最优:旧目录完成未读 + 新目录运行中,整组仍在未读档', () => {
+    const nightly = (id: string, workingDir: string, at: string) => ({
+      session: { id, title: 'Nightly', source: 'scheduler', workingDir, updatedAt: at, status: 'idle', agentKind: 'codex', deviceLinkDeviceId: 'mac' },
+      scheduleInfo: { scheduleId: 'nightly', scheduleName: 'Nightly', running: false, unreadCount: 0 },
+      title: 'Nightly',
+      lastActivityAt: at,
+      pendingInteractionCount: 0,
+    }) as unknown as RemoteSessionListItem;
+    const now = Date.parse('2026-11-17T00:00:00Z');
+    const runs = [nightly('r1', '/old', '2026-11-09T00:00:00Z'), nightly('r4', '/new', '2026-11-16T00:00:00Z')];
+    const ctx = {
+      runningSessionIds: new Set(['r4']),
+      unreadSessionIds: new Set(['r1']),
+      waitingSessionIds: new Set<string>(),
+    };
+    const [merged] = mergeAutomationItems(runs, now);
+    expect(merged.session.id).toBe('r4');
+    const next = withMergedAutomationPriority(ctx, [merged]);
+    expect(next.unreadSessionIds.has('r4')).toBe(true);
+    expect(next.runningSessionIds.has('r4')).toBe(false);
+  });
 });
 
 describe('homeRowBefore(跨 section 邻接:分割线唯一化的 prevIsBlock 依据)', () => {
