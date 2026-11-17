@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -32,6 +32,10 @@ describe('passive shared-userData instance auth isolation', () => {
   ).replace(/\r\n/g, '\n');
   const authAdapterSource = readFileSync(
     resolve(process.cwd(), 'src/main/maker-host/auth-adapters.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+  const sharedSkillsCoreSource = readFileSync(
+    resolve(process.cwd(), 'src/main/maker-host/sharedGlobalSkillsPreparationCore.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
 
@@ -242,9 +246,12 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(bootstrapSource).not.toContain('await prepareSharedGlobalSkillLinks();');
     expect(bootstrapSource).not.toContain('refreshBuiltInSharedSkillLinks');
 
-    const start = authAdapterSource.indexOf('private async runEnsureSharedGlobalSkills(ownerId:');
-    const end = authAdapterSource.indexOf('\n  async getState(', start);
-    const body = authAdapterSource.slice(start, end);
+    // The body moved unchanged into the shared core (release table row 25, 25b); the adapter delegates.
+    expect(authAdapterSource).toContain('await this.sharedGlobalSkills.ensureSharedGlobalSkills();');
+    const start = sharedSkillsCoreSource.indexOf('async function runEnsureSharedGlobalSkills(ownerId:');
+    const end = sharedSkillsCoreSource.indexOf('\n  return { ensureSharedGlobalSkills };', start);
+    expect(start).toBeGreaterThan(-1);
+    const body = sharedSkillsCoreSource.slice(start, end);
     const ownerBoundary = body.indexOf('withSharedGlobalSkillProjectionMutation(ownerId');
     expect(ownerBoundary).toBeGreaterThan(-1);
     expect(body.indexOf('prepareBuiltInSkills({')).toBeGreaterThan(ownerBoundary);
@@ -437,6 +444,29 @@ describe('passive shared-userData instance auth isolation', () => {
    * Minimal failure: delete the configureProjectionBoundaryPassive line from index.ts, or move it
    * below dispatch().
    */
+  /**
+   * Release table row 25 (25b): the owner-commit gate defaults to allowed, and only the Node Host's
+   * resident process injects a refusal. If any desktop main-process file injected it, the desktop's
+   * sign-in, logout and projection repair would stop publishing the owner and every Skill projection
+   * would stay refused. Minimal failure: a configureProjectionBoundaryOwnerCommit( call in src/main.
+   */
+  it('Skill projection boundary: the desktop never injects the owner-commit gate', () => {
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) { if (entry.name !== '__tests__') walk(full); continue; }
+        if (!/\.(ts|tsx|mts|cts)$/.test(entry.name) || /\.test\.|\.d\.ts$/.test(entry.name)) continue;
+        const text = readFileSync(full, 'utf8');
+        const calls = text.match(/configureProjectionBoundaryOwnerCommit\(/g)?.length ?? 0;
+        const definitions = text.match(/export function configureProjectionBoundaryOwnerCommit\(/g)?.length ?? 0;
+        if (calls > definitions) offenders.push(full);
+      }
+    };
+    walk(resolve(process.cwd(), 'src/main'));
+    expect(offenders).toEqual([]);
+  });
+
   it('Skill projection boundary: the passive check is injected before bootstrap-electron loads', () => {
     const indexSource = readFileSync(resolve(process.cwd(), 'src/main/index.ts'), 'utf8').replace(
       /\r\n/g,

@@ -40,6 +40,7 @@ vi.mock('../device-link/crossProcessLock.js', () => ({
 
 import {
   __testing,
+  configureProjectionBoundaryOwnerCommit,
   configureProjectionBoundaryPassive,
   isGhostSkillProjectionBoundaryStableForOwner,
   readGhostSkillProjectionBoundaryState,
@@ -100,6 +101,29 @@ afterEach(() => {
 });
 
 describe('Ghost skill projection boundary state', () => {
+  // Release table row 25 (25b): the Node Host's resident process injects a refusal so that only the
+  // window or `cindy-host login` publishes the owner; the desktop injects nothing and keeps
+  // committing (every other case in this file commits under the default). Minimal failure: the gate
+  // checked after the quarantine/pending writes, or a refusal that still runs the teardown.
+  it('an injected refusal blocks sign-in and logout commits before anything is written', async () => {
+    configureProjectionBoundaryOwnerCommit(() => false);
+    try {
+      const prepareTransition = vi.fn(async () => {});
+      for (const nextOwnerId of ['owner-a', null]) {
+        await expect(withGhostSkillProjectionOwnerCommit({
+          previousOwnerId: null, nextOwnerId, prepareTransition, commit: () => undefined,
+        })).rejects.toThrow('This process cannot publish the Ghost projection owner');
+      }
+      expect(prepareTransition).not.toHaveBeenCalled();
+      expect(fs.existsSync(__testing.filePath())).toBe(false);
+      expect(fs.existsSync(__testing.quarantinePath())).toBe(false);
+    } finally {
+      configureProjectionBoundaryOwnerCommit(() => true);
+    }
+    await commitOwner('owner-a');
+    expect(isGhostSkillProjectionBoundaryStableForOwner('owner-a')).toBe(true);
+  });
+
   it('stores owner state per instance and keeps only the shared-roots lock machine-wide', () => {
     expect(__testing.filePath()).toBe(
       path.join(pathMock.userDataDir, 'ghost-skill-projection-boundary.json'),

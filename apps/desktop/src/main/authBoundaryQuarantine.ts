@@ -46,6 +46,20 @@ export function configureProjectionBoundaryPassive(predicate: () => boolean): vo
   passivePredicate = predicate;
 }
 
+// Allowed until a launcher says otherwise: the desktop never injects this, so its sign-in, logout and
+// projection repair commit exactly as before.
+let ownerCommitAllowed: () => boolean = () => true;
+
+/**
+ * Install the launcher's "may this process publish the projection owner" gate. The Node Host's
+ * resident process (serve) injects a refusal: under option A the window, or `cindy-host login`
+ * for a Host on its own profile, commits the owner and serve only joins it (release table row 25).
+ * Evaluated on every commit, before anything is written.
+ */
+export function configureProjectionBoundaryOwnerCommit(allowed: () => boolean): void {
+  ownerCommitAllowed = allowed;
+}
+
 export type GhostSkillProjectionBoundaryState =
   | {
       version: 1;
@@ -369,6 +383,9 @@ export async function withGhostSkillProjectionOwnerCommit<T>(
 ): Promise<T> {
   if (isPassiveSharedUserDataInstance()) {
     throw new Error('Passive shared-userData instances cannot publish the Ghost projection owner');
+  }
+  if (!ownerCommitAllowed()) {
+    throw new Error('This process cannot publish the Ghost projection owner');
   }
   const previousOwnerId = normalizeOwnerArgument(options.previousOwnerId);
   const nextOwnerId = normalizeOwnerArgument(options.nextOwnerId);
