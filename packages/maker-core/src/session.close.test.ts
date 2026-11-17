@@ -250,6 +250,26 @@ describe('Session close lifecycle', () => {
     expect(handle.send).toHaveBeenCalledTimes(2);
   });
 
+  it('forwards continuation diagnostics and preserves handles without a reason API (#10547)', async () => {
+    const { session, handle } = liveTurn(false);
+    expect(session.getTurnContinuationCancellationReason(7)).toBeUndefined();
+    expect(session.onTurnContinuationChange(() => undefined)).toBeTypeOf('function');
+    let notify!: Parameters<NonNullable<AgentSessionHandle['onTurnContinuationChange']>>[0];
+    const unsubscribe = vi.fn();
+    handle.onTurnContinuationChange = listener => { notify = listener; return unsubscribe; };
+    handle.getTurnContinuationCancellationReason = id => id === 7 ? 'user_stop' : undefined;
+    const seen = vi.fn();
+    const off = session.onTurnContinuationChange(seen);
+    notify(7, 'cancelled', 'user_stop');
+    expect(seen).toHaveBeenCalledExactlyOnceWith(7, 'cancelled', 'user_stop');
+    expect(session.getTurnContinuationCancellationReason(7)).toBe('user_stop');
+    expect(session.getTurnContinuationCancellationReason(8)).toBeUndefined();
+    off();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    await session.close();
+    expect(session.getTurnContinuationCancellationReason(7)).toBeUndefined();
+  });
+
   it('does not retire at a provider boundary with an outstanding continuation claim', async () => {
     const { session, handle, queue, seen, idle } = liveTurn();
     handle.beginTurnContinuationWait = (id) => id === 4 ? 'awaiting' : null;

@@ -4533,14 +4533,7 @@
         "installCancel": "Cancelar instalação",
         "installFailed": "Não foi possível instalar o Ollama",
         "installPhase": {
-          "resolving": "A procurar a versão oficial…",
-          "downloading": "A descarregar…",
-          "verifying": "A verificar…",
-          "extracting": "A instalar…",
-          "starting": "A iniciar…",
-          "success": "Instalado",
-          "error": "Falha na instalação",
-          "cancelled": "Cancelado"
+          "error": "Falha na instalação"
         },
         "openWebsite": "Abrir site do Ollama",
         "recheck": "Já instalei, verificar novamente",
@@ -4575,20 +4568,6 @@
         "retryDownload": "Tentar novamente",
         "libraryName": "Nome exato da biblioteca Ollama",
         "pullingTitle": "A descarregar {{name}}",
-        "pullIndeterminate": "A preparar",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "A preparar transferência…",
-          "manifest": "A obter manifesto…",
-          "downloading": "A descarregar ficheiros do modelo",
-          "verifying": "A verificar…",
-          "writing": "A escrever…",
-          "success": "Transferência concluída",
-          "error": "Não foi possível descarregar",
-          "paused": "Em pausa",
-          "cancelled": "Cancelado"
-        },
         "pauseDownload": "Pausar",
         "resumeDownload": "Retomar transferência",
         "cancelDownload": "Eliminar transferência incompleta",
@@ -5597,6 +5576,13 @@
       },
       "toggleAria": "Ativar/desativar barra de navegação de perguntas"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Nomear worktrees com um modelo",
+        "description": "Dá ao worktree de uma nova tarefa um nome curto em inglês com base na primeira mensagem (p. ex., fix-login-timeout), para que a pasta e a branch mostrem para que servem. Gerado pelos modelos auxiliares; se falhar, é usado um nome aleatório. Afeta apenas os worktrees criados a partir de agora."
+      },
+      "toggleAria": "Ativar ou desativar a nomeação de worktrees com um modelo"
+    },
     "promptRecommendation": {
       "label": "Sugestões de escrita",
       "description": "Após uma resposta, o campo de escrita mostra uma sugestão para a próxima mensagem. Prima Tab para a inserir.",
@@ -6035,8 +6021,6 @@
           "notChecked": "Ainda não verificado",
           "action": "Atualizar",
           "updating": "A atualizar…",
-          "downloadingPercent": "A transferir {{percent}}% ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "A transferir, {{downloaded}} MB até agora…",
           "installing": "Transferência concluída, a instalar…",
           "toast": {
             "success": "cua-driver atualizado para a versão mais recente",
@@ -8506,6 +8490,7 @@
             "contentStyle": "Alterar o espaçamento das mensagens e os balões"
           },
           "positions": {
+            "composer_header": "uma área acima da caixa de entrada",
             "composer_toolbar": "barra de ferramentas de entrada",
             "session_header": "cabeçalho da tarefa",
             "statusbar": "barra de estado",
@@ -13852,12 +13837,6 @@
         "ASSESSMENT_FAILED": "Não foi possível atualizar o estado da configuração. Tente novamente.",
         "TIMEOUT": "O tempo limite da configuração foi excedido. Tente novamente."
       },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "Serviço de modelos de IA",
-          "description": "Ligue um serviço de modelos disponível antes de usar as capacidades de imagem ou vídeo declaradas por este plugin."
-        }
-      },
       "form": {
         "placeholder": "Introduza {{label}}",
         "required": "Introduza {{label}}",
@@ -15641,6 +15620,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Este ficheiro está fora do diretório de trabalho da sessão atual e não pode ser localizado no explorador de ficheiros da barra lateral",
       "openInDefaultBrowser": "Abrir no navegador",
       "copyLink": "Copiar ligação",
+      "addPrToHeader": "Adicionar ao cabeçalho",
+      "prAlreadyInHeader": "Já está no cabeçalho",
+      "prAddedToHeader": "Adicionado ao cabeçalho — o estado acompanha esta tarefa.",
+      "prAssociatedNotInHeader": "Associado, fora do cabeçalho",
+      "prSavedNotInHeader": "Associação guardada. Os três lugares do cabeçalho estão ocupados; fixe este PR na gestão de PRs no cabeçalho da tarefa.",
       "linkCopied": "Ligação copiada",
       "viewSourceFile": "Ver código-fonte",
       "openInSidebarFailed": "Não foi possível abrir no navegador da barra lateral",
@@ -15813,6 +15797,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "O controlo deste dispositivo está desativado; a mensagem não foi enviada.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "A transferência do anexo falhou; a mensagem não foi enviada. Tente novamente.",
       "MCP_APPROVAL_AUTO_BLOCKED": "A revisão de aprovação automática bloqueou esta chamada de ferramenta. Não foi recebida nenhuma rejeição manual.",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "A aprovação automática bloqueou esta chamada de ferramenta porque faltam detalhes da ação.",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "A aprovação automática bloqueou esta chamada de ferramenta porque as tuas instruções mudaram ou ainda não estão sincronizadas.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "A aprovação automática bloqueou esta chamada de ferramenta porque as permissões do diretório mudaram.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "A aprovação automática bloqueou esta chamada de ferramenta porque a autorização delegada mudou.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "A aprovação automática bloqueou esta chamada de ferramenta porque a autorização do plugin ou da tarefa já não está ativa.",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "A aprovação automática bloqueou esta chamada de ferramenta porque nenhuma instrução do utilizador autoriza a ação.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "A aprovação automática bloqueou esta chamada de ferramenta porque o plano de trabalho excede o tamanho suportado.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "A aprovação automática bloqueou esta chamada de ferramenta porque o Agent executor não corresponde ao plano de trabalho registado.",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "A aprovação automática bloqueou esta chamada de ferramenta porque o diretório de trabalho da tarefa mudou.",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "A aprovação automática bloqueou esta chamada de ferramenta porque o âmbito da tarefa delegada está em falta ou é inválido.",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "O pedido de permissão expirou sem uma decisão confirmada. A expiração não indica se clicou num botão.",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "Não foi possível concluir a confirmação de permissão. Não foi recebida nenhuma rejeição manual.",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "Este modelo precisa que este computador reencaminhe os pedidos, e a ligação remota ainda não o permite. Mude para Cindy AI ou use este modelo numa tarefa local.",
@@ -19793,6 +19787,42 @@
       "notSupported": "A consulta de saldo não é suportada para esta conta.",
       "unavailable": "O saldo está temporariamente indisponível. Atualize para tentar novamente."
     },
+    "giftCard": {
+      "action": "Utilizar cartão de oferta",
+      "title": "Utilizar cartão de oferta",
+      "inputLabel": "Código do cartão",
+      "inputHint": "Introduza o código de 16 caracteres ou cole a ligação de um cartão de oferta.",
+      "continue": "Continuar",
+      "confirmTitle": "Utilizar este cartão de oferta?",
+      "confirmAction": "Utilizar",
+      "from": "De {{sender}}",
+      "cardLabel": "Cartão de oferta Cindy, {{amount}}",
+      "fields": {
+        "validity": "Validade",
+        "validityValue_one": "{{count}} dia após a utilização",
+        "validityValue_many": "{{count}} de dias após a utilização",
+        "validityValue_other": "{{count}} dias após a utilização",
+        "claimBy": "Utilizar até",
+        "destination": "Adicionado a"
+      },
+      "doneTitle": "{{amount}} adicionados",
+      "doneDescription": "Adicionado ao seu Saldo promocional. Válido até {{date}}.",
+      "doneDescriptionNoDate": "Adicionado ao seu Saldo promocional.",
+      "pendingTitle": "Cartão de oferta utilizado",
+      "pendingDescription": "{{amount}} estão a ser adicionados e vão aparecer em breve no seu Saldo promocional. Não precisa de o utilizar novamente.",
+      "alreadyYours": "Já utilizou este cartão de oferta.",
+      "done": "Concluído",
+      "errors": {
+        "notFound": "Este código não é válido. Verifique-o e tente novamente.",
+        "wrongRegionCn": "Este cartão de oferta destina-se à edição da China continental do Cindy e não pode ser utilizado com esta conta.",
+        "wrongRegionGlobal": "Este cartão de oferta destina-se à edição internacional do Cindy e não pode ser utilizado com esta conta.",
+        "alreadyClaimed": "Este cartão de oferta já foi utilizado.",
+        "expired": "Este cartão de oferta já não pode ser utilizado porque o prazo terminou.",
+        "voided": "Este cartão de oferta foi anulado.",
+        "rateLimited": "Demasiadas tentativas. Tente novamente mais tarde.",
+        "failed": "Não foi possível utilizar o cartão de oferta. Tente novamente mais tarde."
+      }
+    },
     "usage": {
       "title": "Utilização do saldo",
       "observedAt": "Saldo atualizado em {{date}}",
@@ -19808,6 +19838,7 @@
         "empty": "Não existem atribuições promocionais disponíveis.",
         "incomplete": "Existem muitos registos de atribuições. Apenas são apresentados os {{count}} mais recentes.",
         "unnamed": "Atribuição promocional",
+        "giftCard": "Cartão de oferta · de {{sender}}",
         "original": "Original",
         "used": "Utilizado",
         "remaining": "Restante",
@@ -22043,5 +22074,28 @@
     "archivedNotice": "Tarefas inativas arquivadas automaticamente: {{count}}",
     "undo": "Anular",
     "undoFailed": "Não foi possível anular. Restaure as tarefas a partir do arquivo."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "Faltam {{time}}",
+    "attempt": "Tentativa {{attempt}}",
+    "phase": {
+      "preparing": "A preparar…",
+      "queued": "Em fila…",
+      "downloading": "A transferir…",
+      "retrying": "A tentar novamente…",
+      "verifying": "A verificar…",
+      "installing": "A instalar…",
+      "paused": "Em pausa",
+      "completed": "Concluído",
+      "failed": "Falha na transferência",
+      "cancelled": "Cancelado"
+    },
+    "retry": {
+      "slow": "Ligação lenta, a restabelecer…",
+      "network": "Ligação perdida, a tentar novamente…",
+      "timeout": "Tempo de ligação esgotado, a tentar novamente…",
+      "server": "Servidor ocupado, a tentar novamente…"
+    }
   }
 }

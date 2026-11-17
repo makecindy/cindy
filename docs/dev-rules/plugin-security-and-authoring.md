@@ -298,6 +298,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   可查询本机项目、任务和伙伴的目标元数据，并投递文字/图片；该接口本身不授予其他任务的历史读取、设置修改或停止权限。
   安装/更新复用既有权限确认；历史 tasks 批准和未知 targets 字段不能自动扩权，缺新批准时只阻止新目标接口，首次调用复用既有宿主确认。
   实现与作者契约见 [通用投递目标](plugin-task-api-implementation.md#通用投递目标增量接口尚未发布)。
+  同一批准也允许 IM 插件通过 `tasks.imProjects/create/followImProject` 复用侧栏项目与官方机器人
+  的模型、来源和权限设置；仅接续插件自己的任务，不能搬动其他项目的任务。
+  增量字段、旧任务回执兼容与发送时复核见[插件 IM 共用项目与模型](protocol-compatibility/plugin-im-projects.md)。
 - `agent.observe` 是独立能力，不依赖 `agent.tasks`，单列 `agent:observe` 权限并要求 Host receipt 的 `observeCapabilityApproved` 显式批准。
   只读返回已登记本机项目中任务的标题、Agent 类型、归档与状态元数据，并可在主窗口打开其中的任务；不返回消息、计划或文件，也不能发送、修改或停止任务。
   旧 tasks/targets 批准与历史未知字段不授予查看；首次调用复用既有宿主确认。实现见 [只读查看项目任务](plugin-task-api-implementation.md#只读查看项目任务增量接口尚未发布)。
@@ -964,13 +967,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 ## 5. 存量插件兼容：升级必须无感（红线）
 
-本地模式首次云登录采用插件时，内容目录必须连同原 receipt、技能快照、实例记录和市场
-来源账本一起交接，保留 revision、启停态与原批准能力，不重新铸造批准。仅最终持久认领
-`local-v1` 的首个云账号可采用；已有目标插件状态不自动混合，源资料保留。交接在账号
-隔离区内完成，复制中断由冻结计划恢复；未完成安装事务须先恢复，不能把 pending journal
-当成有效安装。OAuth 锁与账号授权不复制。凭证范围及回滚见
-[本地模式首次云登录的凭证交接](credentials-and-local-storage.md#本地模式首次云登录的凭证交接)。
-回归入口为 `localProfileAssetsMigration.test.ts` 的实际 GhostManager/receipt 重载。
+本地模式首次云登录的插件交接随 #10357 暂时回退；已交接资料保持原样，未完成的交接
+暂不继续。已知限制与恢复要求见[资产交接回退说明](credentials-and-local-storage.md#本地模式首次云登录资产交接暂时回退)。
 
 `tools[].parameters` 的 16KB 约束：新包入口 `validateGhostManifest` 按 JSON 序列化后的
 UTF-8 字节计量；历史市场 release 入口 `validateStoredGhostManifest` 和已装快照入口
@@ -1154,6 +1152,8 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
   绑定；启动窗口创建前的固定配置读取和一次性 CLI 不受请求预算约束。
 
 ## 6. 作者契约与编写手册同步
+
+随包作者手册只描述随包版本的当前能力，不写发布状态或首个可用版本；用到新能力时，`minCindyVersion` 填开发测试所用的 Cindy 版本。
 
 插件界面扩展的作者入口为随包 `references/plugin-host-ui.md`，具名视图和原生入口仍共用
 MCP Apps，不能另建页面 SDK 或逐历史消息 render/query。`mcpApps.host` 能力以整版安装/更新

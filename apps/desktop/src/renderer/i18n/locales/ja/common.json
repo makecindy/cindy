@@ -4434,14 +4434,7 @@
         "installCancel": "インストールをキャンセル",
         "installFailed": "Ollama のインストールに失敗しました",
         "installPhase": {
-          "resolving": "公式リリースを確認中…",
-          "downloading": "ダウンロード中…",
-          "verifying": "検証中…",
-          "extracting": "インストール中…",
-          "starting": "起動中…",
-          "success": "インストール済み",
-          "error": "インストール失敗",
-          "cancelled": "キャンセル済み"
+          "error": "インストール失敗"
         },
         "openWebsite": "Ollama のサイトを開く",
         "recheck": "インストール済み、再検出",
@@ -4476,20 +4469,6 @@
         "retryDownload": "再試行",
         "libraryName": "正確な Ollama ライブラリ名",
         "pullingTitle": "{{name}} をダウンロード中",
-        "pullIndeterminate": "準備中",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "ダウンロードを準備しています…",
-          "manifest": "マニフェストを取得しています…",
-          "downloading": "モデルファイルをダウンロードしています",
-          "verifying": "検証しています…",
-          "writing": "書き込んでいます…",
-          "success": "ダウンロード完了",
-          "error": "ダウンロードに失敗しました",
-          "paused": "一時停止中",
-          "cancelled": "キャンセル済み"
-        },
         "pauseDownload": "一時停止",
         "resumeDownload": "ダウンロードを再開",
         "cancelDownload": "未完了のダウンロードを削除",
@@ -5496,6 +5475,13 @@
       },
       "toggleAria": "質問ナビゲーションレールを切り替え"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "モデルで worktree に名前を付ける",
+        "description": "新しいタスクの worktree に、最初のメッセージをもとに短い英語名（例：fix-login-timeout）を付け、フォルダとブランチの用途がひと目でわかるようにします。補助モデルで生成し、失敗した場合はランダムな名前を使います。今後作成する worktree にのみ適用されます。"
+      },
+      "toggleAria": "モデルによる worktree の命名を切り替え"
+    },
     "promptRecommendation": {
       "label": "次の入力候補",
       "description": "返信後、入力欄に次のメッセージの候補を表示します。Tab キーで入力できます。",
@@ -5934,8 +5920,6 @@
           "notChecked": "未確認",
           "action": "更新",
           "updating": "更新中…",
-          "downloadingPercent": "ダウンロード中 {{percent}}%（{{downloaded}}/{{total}} MB）…",
-          "downloadingBytes": "ダウンロード中、{{downloaded}} MB 完了…",
           "installing": "ダウンロード完了、インストール中…",
           "toast": {
             "success": "cua-driver を最新バージョンに更新しました",
@@ -8391,6 +8375,7 @@
             "contentStyle": "メッセージの間隔と吹き出しを変更する"
           },
           "positions": {
+            "composer_header": "入力欄の上部",
             "composer_toolbar": "入力欄のツールバー",
             "session_header": "タスクのヘッダー",
             "statusbar": "ステータスバー",
@@ -13683,12 +13668,6 @@
         "ASSESSMENT_FAILED": "設定状況を更新できませんでした。もう一度お試しください。",
         "TIMEOUT": "設定がタイムアウトしました。もう一度お試しください。"
       },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AIモデルサービス",
-          "description": "プラグインが宣言した画像または動画機能を使用する前に、利用可能なモデルサービスへ接続してください。"
-        }
-      },
       "form": {
         "placeholder": "{{label}}を入力",
         "required": "{{label}}を入力してください",
@@ -15472,6 +15451,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "このファイルは現在のセッション作業ディレクトリ外にあるため、サイドバーのファイルブラウザで特定できません",
       "openInDefaultBrowser": "ブラウザで開く",
       "copyLink": "リンクをコピー",
+      "addPrToHeader": "上部に追加",
+      "prAlreadyInHeader": "上部に追加済み",
+      "prAddedToHeader": "上部に追加しました。ステータスはこのタスクに紐づきます。",
+      "prAssociatedNotInHeader": "関連付け済み・上部には非表示",
+      "prSavedNotInHeader": "関連付けを保存しました。上部の3件は埋まっています。タスク上部の PR 管理からこの PR を固定できます。",
       "linkCopied": "リンクをコピーしました",
       "viewSourceFile": "ソースを表示",
       "openInSidebarFailed": "サイドバーのブラウザで開けませんでした",
@@ -15644,6 +15628,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。",
       "MCP_APPROVAL_AUTO_BLOCKED": "このツール呼び出しは自動審査でブロックされました。手動で拒否された記録はありません。",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "操作の詳細が不足しているため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "指示が変更されたか、まだ同期されていないため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "ディレクトリの権限が変更されたため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "委任された権限が変更されたため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "プラグインまたはタスクの承認が失効したため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "この操作を許可するユーザーの指示がないため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "作業計画が対応するサイズを超えているため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "実行する Agent が登録済みの作業計画と一致しないため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "タスクの作業ディレクトリが変更されたため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "委任されたタスクの範囲が未指定または無効なため、自動承認がこのツール呼び出しをブロックしました。",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "権限の確認がタイムアウトし、有効な確認結果を受信できませんでした。タイムアウトだけでは、ボタンをクリックしたかどうかは判断できません。",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "権限の確認を完了できませんでした。手動で拒否された記録はありません。",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "このモデルはパソコン側でのリクエスト転送が必要ですが、今のリモート接続では転送できません。Cindy AI に切り替えるか、このパソコン上のタスクで使ってください。",
@@ -19534,6 +19528,40 @@
       "notSupported": "このアカウントでは残高照会を利用できません。",
       "unavailable": "残高を取得できません。更新してもう一度お試しください。"
     },
+    "giftCard": {
+      "action": "ギフトカードを使う",
+      "title": "ギフトカードを使う",
+      "inputLabel": "引き換えコード",
+      "inputHint": "16 文字のコードを入力するか、ギフトカードのリンクを貼り付けてください。",
+      "continue": "続ける",
+      "confirmTitle": "このギフトカードを受け取りますか？",
+      "confirmAction": "受け取る",
+      "from": "{{sender}} より",
+      "cardLabel": "Cindy ギフトカード、{{amount}}",
+      "fields": {
+        "validity": "有効期間",
+        "validityValue_other": "受け取りから {{count}} 日間",
+        "claimBy": "受け取り期限",
+        "destination": "追加先"
+      },
+      "doneTitle": "{{amount}} を追加しました",
+      "doneDescription": "特典残高に追加しました。{{date}} まで有効です。",
+      "doneDescriptionNoDate": "特典残高に追加しました。",
+      "pendingTitle": "ギフトカードを受け取りました",
+      "pendingDescription": "{{amount}} を追加中です。まもなく特典残高に反映されます。もう一度受け取る必要はありません。",
+      "alreadyYours": "このギフトカードはすでに受け取り済みです。",
+      "done": "完了",
+      "errors": {
+        "notFound": "コードが無効です。確認してもう一度お試しください。",
+        "wrongRegionCn": "このギフトカードは Cindy 中国本土版用のため、このアカウントでは受け取れません。",
+        "wrongRegionGlobal": "このギフトカードは Cindy 国際版用のため、このアカウントでは受け取れません。",
+        "alreadyClaimed": "このギフトカードはすでに受け取られています。",
+        "expired": "このギフトカードは受け取り期限を過ぎています。",
+        "voided": "このギフトカードは無効になりました。",
+        "rateLimited": "試行回数が多すぎます。しばらくしてからもう一度お試しください。",
+        "failed": "ギフトカードを受け取れませんでした。しばらくしてからもう一度お試しください。"
+      }
+    },
     "usage": {
       "title": "残高使用量",
       "observedAt": "残高更新: {{date}}",
@@ -19549,6 +19577,7 @@
         "empty": "特典の付与履歴はありません。",
         "incomplete": "付与履歴が多いため、最新の{{count}}件のみ表示しています。",
         "unnamed": "特典残高",
+        "giftCard": "ギフトカード · {{sender}} より",
         "original": "付与額",
         "used": "使用済み",
         "remaining": "残り",
@@ -21756,5 +21785,28 @@
     "archivedNotice": "未使用のタスクを自動アーカイブしました：{{count}}",
     "undo": "取り消す",
     "undoFailed": "取り消せませんでした。アーカイブ済みのタスクから復元してください。"
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "残り {{time}}",
+    "attempt": "{{attempt}} 回目",
+    "phase": {
+      "preparing": "準備中…",
+      "queued": "待機中…",
+      "downloading": "ダウンロード中…",
+      "retrying": "再試行中…",
+      "verifying": "検証中…",
+      "installing": "インストール中…",
+      "paused": "一時停止中",
+      "completed": "完了",
+      "failed": "ダウンロードに失敗しました",
+      "cancelled": "キャンセルしました"
+    },
+    "retry": {
+      "slow": "通信が遅いため再接続しています…",
+      "network": "接続が切れました。再試行しています…",
+      "timeout": "接続がタイムアウトしました。再試行しています…",
+      "server": "サーバーが混雑しています。再試行しています…"
+    }
   }
 }

@@ -4477,14 +4477,7 @@
         "installCancel": "Cancel install",
         "installFailed": "Couldn’t install Ollama",
         "installPhase": {
-          "resolving": "Looking up the official release…",
-          "downloading": "Downloading…",
-          "verifying": "Verifying…",
-          "extracting": "Installing…",
-          "starting": "Starting…",
-          "success": "Installed",
-          "error": "Install failed",
-          "cancelled": "Cancelled"
+          "error": "Install failed"
         },
         "openWebsite": "Open Ollama website",
         "recheck": "I installed it, check again",
@@ -4519,20 +4512,6 @@
         "retryDownload": "Retry",
         "libraryName": "Exact Ollama library name",
         "pullingTitle": "Downloading {{name}}",
-        "pullIndeterminate": "Preparing",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Preparing download…",
-          "manifest": "Fetching manifest…",
-          "downloading": "Downloading model files",
-          "verifying": "Verifying…",
-          "writing": "Writing…",
-          "success": "Download complete",
-          "error": "Download failed",
-          "paused": "Paused",
-          "cancelled": "Cancelled"
-        },
         "pauseDownload": "Pause",
         "resumeDownload": "Resume Download",
         "cancelDownload": "Delete Incomplete Download",
@@ -5539,6 +5518,13 @@
       },
       "toggleAria": "Toggle question navigation rail"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Name worktrees with a model",
+        "description": "Gives a new task's worktree a short English name based on its first message (e.g. fix-login-timeout), so the folder and branch show what they're for. Uses the auxiliary models; if naming fails, a random name is used. Only affects worktrees created from now on."
+      },
+      "toggleAria": "Toggle naming worktrees with a model"
+    },
     "promptRecommendation": {
       "label": "Input Suggestions",
       "description": "After a reply, the input shows a suggestion for your next message. Press Tab to insert it.",
@@ -5977,8 +5963,6 @@
           "notChecked": "Not checked yet",
           "action": "Update",
           "updating": "Updating…",
-          "downloadingPercent": "Downloading {{percent}}% ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "Downloading, {{downloaded}} MB so far…",
           "installing": "Download complete, installing…",
           "toast": {
             "success": "cua-driver updated to the latest version",
@@ -8434,6 +8418,7 @@
             "contentStyle": "Change message spacing and bubble styling"
           },
           "positions": {
+            "composer_header": "area above the input box",
             "composer_toolbar": "input toolbar",
             "session_header": "task header",
             "statusbar": "status bar",
@@ -13737,12 +13722,6 @@
         "ASSESSMENT_FAILED": "Couldn't refresh the setup status. Try again.",
         "TIMEOUT": "Setup timed out. Try again."
       },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AI Model Service",
-          "description": "Connect an available model service before using the image or video capabilities declared by this plugin."
-        }
-      },
       "form": {
         "placeholder": "Enter {{label}}",
         "required": "Enter {{label}}",
@@ -15537,6 +15516,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "This file is outside the current session working directory and cannot be located in the sidebar file browser",
       "openInDefaultBrowser": "Open in browser",
       "copyLink": "Copy link",
+      "addPrToHeader": "Add to Header",
+      "prAlreadyInHeader": "Already in Header",
+      "prAddedToHeader": "Added to the header — status follows this task.",
+      "prAssociatedNotInHeader": "Linked, not in Header",
+      "prSavedNotInHeader": "Link saved. The header is full; pin this PR in the task header’s PR manager.",
       "linkCopied": "Link copied",
       "viewSourceFile": "View source",
       "openInSidebarFailed": "Failed to open in sidebar browser",
@@ -15709,6 +15693,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again.",
       "MCP_APPROVAL_AUTO_BLOCKED": "Automatic approval review blocked this tool call. No manual rejection was received.",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "Auto approve blocked this tool call because its action details are incomplete.",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "Auto approve blocked this tool call because your instructions changed or are not yet synchronized.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "Auto approve blocked this tool call because directory permissions changed.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "Auto approve blocked this tool call because its delegated authorization changed.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "Auto approve blocked this tool call because its plugin or task authorization is no longer active.",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "Auto approve blocked this tool call because no user request authorizes the action.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "Auto approve blocked this tool call because the work plan exceeds the supported size.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "Auto approve blocked this tool call because the executing Agent does not match the registered work plan.",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "Auto approve blocked this tool call because the task’s working directory changed.",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "Auto approve blocked this tool call because its delegated task scope is missing or invalid.",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "The permission request timed out without a confirmed decision. A timeout does not show whether you clicked a button.",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "Permission confirmation could not be completed. No manual rejection was received.",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "This model needs this computer to forward requests, and the remote connection cannot do that yet. Switch to Cindy AI, or use this model in a local task.",
@@ -19610,6 +19604,41 @@
       "notSupported": "Balance lookup is not supported for this account.",
       "unavailable": "Balance is temporarily unavailable. Refresh to try again."
     },
+    "giftCard": {
+      "action": "Redeem Gift Card",
+      "title": "Redeem gift card",
+      "inputLabel": "Redeem code",
+      "inputHint": "Enter the 16-character code, or paste a gift card link.",
+      "continue": "Continue",
+      "confirmTitle": "Redeem this gift card?",
+      "confirmAction": "Redeem",
+      "from": "From {{sender}}",
+      "cardLabel": "Cindy gift card, {{amount}}",
+      "fields": {
+        "validity": "Valid for",
+        "validityValue_one": "{{count}} day after redeeming",
+        "validityValue_other": "{{count}} days after redeeming",
+        "claimBy": "Redeem by",
+        "destination": "Added to"
+      },
+      "doneTitle": "{{amount}} added",
+      "doneDescription": "Added to your Promotional Balance. Valid until {{date}}.",
+      "doneDescriptionNoDate": "Added to your Promotional Balance.",
+      "pendingTitle": "Gift card redeemed",
+      "pendingDescription": "{{amount}} is being added and will appear in your Promotional Balance shortly. You do not need to redeem it again.",
+      "alreadyYours": "You already redeemed this gift card.",
+      "done": "Done",
+      "errors": {
+        "notFound": "This code is not valid. Check it and try again.",
+        "wrongRegionCn": "This gift card is for the China mainland edition of Cindy and cannot be redeemed with this account.",
+        "wrongRegionGlobal": "This gift card is for the international edition of Cindy and cannot be redeemed with this account.",
+        "alreadyClaimed": "This gift card has already been redeemed.",
+        "expired": "This gift card can no longer be redeemed. Its deadline has passed.",
+        "voided": "This gift card has been voided.",
+        "rateLimited": "Too many attempts. Try again later.",
+        "failed": "Couldn't redeem the gift card. Try again later."
+      }
+    },
     "usage": {
       "title": "Balance Usage",
       "observedAt": "Balance updated {{date}}",
@@ -19625,6 +19654,7 @@
         "empty": "No promotional grants are available.",
         "incomplete": "There are many grant records. Only the latest {{count}} are shown.",
         "unnamed": "Promotional Grant",
+        "giftCard": "Gift card · from {{sender}}",
         "original": "Original",
         "used": "Used",
         "remaining": "Remaining",
@@ -21838,5 +21868,28 @@
     "archivedNotice": "Automatically archived idle tasks: {{count}}",
     "undo": "Undo",
     "undoFailed": "Could not undo. Restore the tasks from Archived."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "{{time}} left",
+    "attempt": "Attempt {{attempt}}",
+    "phase": {
+      "preparing": "Preparing…",
+      "queued": "Queued…",
+      "downloading": "Downloading…",
+      "retrying": "Retrying…",
+      "verifying": "Verifying…",
+      "installing": "Installing…",
+      "paused": "Paused",
+      "completed": "Done",
+      "failed": "Download failed",
+      "cancelled": "Cancelled"
+    },
+    "retry": {
+      "slow": "Slow connection, reconnecting…",
+      "network": "Connection lost, retrying…",
+      "timeout": "Connection timed out, retrying…",
+      "server": "Server busy, retrying…"
+    }
   }
 }

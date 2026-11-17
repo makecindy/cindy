@@ -301,7 +301,7 @@ Webhook 跨电脑配置（2026-11-06）：`schedule_create` / `schedule_update` 
 
 伙伴例行任务送达与发现（2026-10-30；2026-11-08 起 V2 不再适用：`routine_save`、`routine_delivery_targets` 与 `routineTools` 已移除）：Pi 直接 `routine_save` 与 helper 同时提供 `modelOverride`、`sessionMode`、`delivery`；伙伴 essential tools 提供 `schedule_list_models` 和 `routine_delivery_targets`。价格与能力来自实际连接来源，保留 unknown；本机位置 `local` 保存为 null。桌面、Agent 和另一电脑上的设置共用 `routineTools`，默认结果直接显示在发起伙伴主任务；显式处理才唤醒模型，IM 只使用已连接机器人的已知收件人。执行和送达失败分开记录，静默检查仍静默。
 
-PR 关联只通过用户手动添加或 Agent 显式调用建立；消息链接、导入与历史回填不自动关联，查询与引用不代表承接 PR。既有关联保留，展示与后台跟进独立。GitHub 查询与关联的独立语义、缓存和游标合同见 [GitHub 状态与关联](github-status-and-associations.md)。
+可见消息提及自动关联，用户和 Agent 仍可显式添加、移除与恢复；查询工具不关联，展示与后台跟进独立。GitHub 查询与关联的独立语义、缓存和游标合同见 [GitHub 状态与关联](github-status-and-associations.md)。
 
 ### 普通提问入口（2026-11-08）
 

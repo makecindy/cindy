@@ -6,7 +6,7 @@
  *   自建中转的 401 只表示中转凭证失效,不能把 Cindy 账号登出。
  * - 只走 V2 的网络(别人分享的中转,§5.5):设备目录、改名、移除走 V2 的签名请求;没有旧版 REST。
  */
-import type { ApiFetchOptions } from '../serverApiClient.js';
+import { ServerApiError, type ApiFetchOptions } from '../serverApiClient.js';
 import { isAgentNetOnlyRelay, type ActiveSelfHostedRelay } from './selfHostedRelayRouting.js';
 
 export interface DeviceLinkApiPorts {
@@ -15,8 +15,10 @@ export interface DeviceLinkApiPorts {
   activeSelfHostedRelay(): ActiveSelfHostedRelay | null;
   readCurrentDeviceDirectory: typeof import('./agentNetDeviceDirectory.js').readCurrentDeviceDirectory;
   legacyDeviceView: typeof import('./agentNetDeviceDirectory.js').projectAgentNetDevice;
+  /** Capture owner and Agent-Net selection before any async preparation. */
+  managementScopeKey(): string;
   // Keep preparation as an await boundary; route/owner checks must run after it.
-  prepareAgentNetRuntime(): Promise<Pick<typeof import('./agentNetRuntime.js'), 'agentNetClientForRelay'>>;
+  prepareAgentNetRuntime(): Promise<Pick<typeof import('./agentNetRuntime.js'), 'agentNetClientForRelay' | 'currentAgentNetClient' | 'agentNetSelectionKey' | 'agentNetRequiresEncryption'>>;
   prepareOwnerScope(): Promise<Pick<typeof import('../appSessionState.js'), 'activeOwnerScopeKey' | 'isAppSessionBoundaryPending'>>;
   prepareRelayConfig(): Promise<Pick<typeof import('./selfHostedRelayConfig.js'), 'readRelaySecrets'>>;
 }
@@ -81,6 +83,73 @@ async function deviceLinkApiFetch<T>(
       return readCurrentDeviceDirectory(() => officialDeviceLinkApiFetch(apiPath, opts), () => {
         if (activeSelfHostedRelay() || officialDeviceLinkApiBase() !== base) throw new Error('DEVICE_LINK_SCOPE_CHANGED');
       }) as Promise<T>;
+    }
+    const device = /^\/api\/device-link\/devices\/([^/?#]+)$/.exec(apiPath);
+    if (device && (opts.method === 'PATCH' || opts.method === 'DELETE')) {
+      const base = officialDeviceLinkApiBase();
+      const managementScope = ports.managementScopeKey();
+      const { activeOwnerScopeKey, isAppSessionBoundaryPending } = await ports.prepareOwnerScope();
+      const scope = activeOwnerScopeKey();
+      const assertOwner = () => {
+        if (managementScope !== ports.managementScopeKey() || activeSelfHostedRelay() || officialDeviceLinkApiBase() !== base
+          || scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('DEVICE_LINK_SCOPE_CHANGED');
+      };
+      assertOwner();
+      const runtime = await ports.prepareAgentNetRuntime();
+      assertOwner();
+      const selection = runtime.agentNetSelectionKey();
+      const assertCurrent = () => {
+        opts.signal?.throwIfAborted();
+        assertOwner();
+        if (selection !== runtime.agentNetSelectionKey()) throw new Error('DEVICE_LINK_SCOPE_CHANGED');
+      };
+      const api = runtime.currentAgentNetClient();
+      if (!api && runtime.agentNetRequiresEncryption()) throw new Error('AGENT_NET_ENCRYPTED_IDENTITY_REQUIRED');
+      const target = decodeURIComponent(device[1]);
+      let deleteEncryptedMember = false;
+      if (api) {
+        const directory = await api.directory();
+        assertCurrent();
+        // V1 and V2 keep independent management records. Update even an offline
+        // V2 row so it cannot restore stale metadata when it comes online again.
+        if (directory.some(d => d.certificate.deviceId === target)) {
+          if (opts.method === 'DELETE') {
+            // V2 removal revokes identity and disconnects the peer. Do not do
+            // that before the legacy service has accepted the deletion.
+            deleteEncryptedMember = true;
+          } else {
+            await api.request('PATCH', '/devices/' + encodeURIComponent(target), opts.body);
+            assertCurrent();
+          }
+        }
+      }
+      assertCurrent();
+      let result: T;
+      try {
+        result = await serverApiFetch<T>(apiPath, {
+          ...opts,
+          // The legacy client may refresh and retry. Its resolver runs outside
+          // network-error wrapping and before token lookup on every actual send.
+          baseUrl: () => { assertCurrent(); return base; },
+        });
+      } catch (error) {
+        assertCurrent();
+        // Official V2 enrollment does not require a V1 device row. Only its
+        // explicit absence permits removal of the verified V2 member; denials
+        // and unavailable legacy services must still stop before revocation.
+        if (!api || !deleteEncryptedMember || !(error instanceof ServerApiError)
+          || error.statusCode !== 404 || error.code !== 'NOT_FOUND') throw error;
+        const removed = await api.request('DELETE', '/devices/' + encodeURIComponent(target), undefined);
+        assertCurrent();
+        return removed as T;
+      }
+      assertCurrent();
+      const deletion = result as { deviceId?: unknown; deleted?: unknown } | null;
+      if (api && deleteEncryptedMember && deletion?.deleted === true && deletion.deviceId === target) {
+        await api.request('DELETE', '/devices/' + encodeURIComponent(target), undefined);
+        assertCurrent();
+      }
+      return result;
     }
     return officialDeviceLinkApiFetch<T>(apiPath, opts);
   }
