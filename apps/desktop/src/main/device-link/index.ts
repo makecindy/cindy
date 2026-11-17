@@ -287,7 +287,10 @@ function hasSeparateCrossAccountConnection(): boolean {
  */
 export function deviceLinkPeerDataPath(deviceId: string): 'direct' | 'relay' | null {
   if (!client) return null;
-  return client.getPeerPath(deviceId);
+  // 必须问**承载这个对端的那条连接**:RoutedDeviceLinkClient 把一部分对端路由到独立的
+  // legacy / scoped 连接上,而它没有覆写 getPeerPath —— 问外层 client 只会读到外层自己
+  // 那份 transport 表,把实际走直连的对端说成走中继。
+  return client.connectionFor(deviceId).getPeerPath(deviceId);
 }
 
 /** relay REST base(media presign / devices 等);供 mediaTransfer / ipc 复用。 */
