@@ -14,7 +14,7 @@
 | `control` | `cindy_helper` | 任务运行与管理 |
 | `handoff` | `cindy_helper` | 工具目录中归属此组的协作能力 |
 | `settings` | `cindy_helper` | 应用设置与运行配置 |
-| `usage` | `cindy_helper` | 当前 Cindy 账号在执行电脑上的订阅用量，只读 |
+| `usage` | `cindy_helper` | 本机订阅配额、已记录用量与供应商组状态；后两者可指定同账号已授权电脑，只读 |
 | `scheduler` | `cindy_scheduler` | 定时任务管理 |
 | `terminal` | `cindy_helper` | 宿主管理的命令、交互终端与后台作业 |
 | `files` | `cindy_helper` | 授权目录的文件操作与监听；调用 `file_request` |
@@ -124,6 +124,8 @@ Node Host 的插件 computer 调用与未装配的 scheduler、SSH 和文档服�
 
 声明 `agent.hostTools:["usage"]` 的插件与 Agent 调用同一宿主只读处理器，不需要当前任务或伪造 sessionId。
 不声明 `usage` 的旧插件权限不变；扩权更新走既有整体安装确认，不另存分项批准或增加逐次确认。
+首次发布的 `usage` 安装说明覆盖本机订阅配额、已记录的按日/型号用量与估算费用、供应商组配置/状态和
+可见成员/设备标识、名称与头像；后两类读取含同账号已授权的其它电脑，不代表跨账号读取。
 仅声明 `settings` 不允许调用下面两个读取。订阅额度使用已有的 `get_subscription_usage`，字段与本机范围见下文「读取订阅用量」。
 
 ```js
@@ -148,7 +150,9 @@ await cindy.host.call('cindy_helper', 'get_provider_group', {
 筛选、合并、费用与停止线由插件计算。
 
 `get_provider_group({providerId,device?})` 返回原 ProviderGroupView，包括组配置、成员/设备标识、设备与供应商显示名、
-可见 ownerName、appVersion、state、running、并发/暂停配置、冷却及已知 quota；原本可见的 reshare 还可能包含受邀成员的
+可见 ownerName、appVersion、state、running、并发/暂停配置、冷却及已知 quota。插件返回中的当前 `members[].providerName`
+和 `config.members[].providerName` 快照，若为宿主生成的 `Claude · 登录身份` 或 `OpenAI · 登录身份`，只保留品牌；
+不修改原视图、普通名称或 Agent/UI 的显示。原本可见的 reshare 还可能包含受邀成员的
 memberId/displayName/avatarUrl 和批准状态。分享来的电脑仍沿原匿名与额度可见性边界；缺 quota 是未知，不是零。
 两个读取的 device 默认本机，异机只经既有同账号授权管理通道，旧端不支持就明确报错，不退回本机数据。
 不新增页面轮询、跨电脑额度协议或宿主聚合；额度分配、暂停/恢复策略、看板与提醒属于插件，不能保证严格零超用。

@@ -1400,7 +1400,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
                 deps.invokeRemote(target, channel, args, { ...options, preSend: () => { guard(); options?.preSend?.(); } }),
               device, request);
             },
-          }, assertCurrent);
+          }, assertCurrent, Boolean(plugin));
         }),
       },
       providerSharing: {

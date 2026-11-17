@@ -5,10 +5,13 @@
 现有 `usage` 组增量注册 `get_provider_usage_history` / `get_provider_group`，Agent/插件共用原 usage-history 与组 get 处理器，
 异机复用现有同账号 manage-share / manage-group；无新 action、channel、额度 DTO、缓存或服务端请求种类。
 不声明 `usage` 的旧插件权限不变，扩权更新走既有安装确认；仅有 `settings` 不授予这些读取。
+该组首次发布前的安装确认说明（12语言）已统一包含订阅配额、已记录用量与估算、供应商组配置/状态和可见成员/设备信息；
+后两类覆盖同账号已授权其它电脑。不新建权限组、版本化重批或额外授权记录。
 `list_model_providers` 与 `configure_model_provider` 的 `subscriptionAccounts/read` 仍要求原本机任务上下文，
 插件订阅额度只经 `get_subscription_usage` 的既有字段白名单投影，不返回登录邮箱、CLI 目录、内部账号指纹或凭证。
 历史视图包含成员/分享标识、日期、模型、token、估算费用及中转设备名；组视图包含设备/供应商显示名、可见 ownerName、
 运行与组配置，原本可见的 reshare 还含受邀者显示名/头像/批准状态，保留分享来源的匿名边界；具体字段见作者手册。
+插件返回的当前成员与配置快照 `providerName` 中，宿主生成的品牌加登录身份只保留品牌；不修改原组视图或 Agent/UI 名称。
 原截断标记 coverageStart、当天累积、缺失/未知和错误语义保持，旧端不认识工具/命令时明确不支持，不退回本机/零数据。
 插件 Host 调用签名、manifest、receipt、自建中转透传及原 UI/Agent 命令保持，不涉及迁移。
 

@@ -5,6 +5,25 @@ import { runProviderReadRequest } from '../providerReadTools.js';
 // this new caller adapter. One existing command proves unchanged data, explicit
 // remote scope, no fallback, and owner invalidation before returning data.
 describe('provider reads through existing management', () => {
+  // Unit / #10794 privacy: subscription login names are embedded in generated
+  // providerName values, including the persisted group snapshot. Existing tests
+  // use empty members and cannot catch this leak. Minimal input is one account.
+  it.each(['local', 'computer'])('hides generated account names for plugins on %s without changing Agent/UI data', async device => {
+    const raw = { providerId: 'anthropic',
+      members: [{ key: 'local', providerName: 'Claude · current@example.invalid', running: 2 },
+        { key: 'team', providerName: 'Team models' }],
+      config: { strategy: 'order', members: [{ key: 'local', providerName: 'OpenAI · saved-login' }] } };
+    const ports = { local: vi.fn(async () => raw), remote: vi.fn(async () => raw) };
+    const request = { action: 'group' as const, providerId: 'anthropic', device };
+    const result = await runProviderReadRequest(request, ports, () => undefined, true);
+    expect(result).toMatchObject({ providerId: 'anthropic',
+      members: [{ key: 'local', providerName: 'Claude', running: 2 }, { key: 'team', providerName: 'Team models' }],
+      config: { strategy: 'order', members: [{ key: 'local', providerName: 'OpenAI' }] } });
+    expect(raw.members[0].providerName).toBe('Claude · current@example.invalid');
+    expect(raw.config.members[0].providerName).toBe('OpenAI · saved-login');
+    expect(await runProviderReadRequest(request, ports, () => undefined)).toBe(raw);
+  });
+
   it.each(['usage-history', 'group'] as const)('delegates %s and returns the original view', async action => {
     const raw = { providerId: 'anthropic', coverageStart: '2026-11-15', members: [], unknown: null };
     const local = vi.fn(async () => raw);
