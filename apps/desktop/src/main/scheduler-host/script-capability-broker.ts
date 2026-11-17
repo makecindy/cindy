@@ -4,6 +4,8 @@ import { isAbsolute } from 'node:path';
 
 import type { Schedule, ScriptCapability } from '@cindy/maker-scheduler';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '@cindy/maker-core';
+import { providerReadInputSchema, providerShareMembersInputSchema, providerShareModelAccessInputSchema,
+  subscriptionUsageInputSchema, type ProviderSharingRequest } from '@cindy/mcps';
 
 import type { GhostToolCallResult } from '../../shared/ghost.js';
 import { hasDeliveryNamespace, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
@@ -312,28 +314,37 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
       case 'usage.get_provider_usage_history':
       case 'usage.get_provider_group': {
         requireCapability(granted, request.method.startsWith('usage.') ? 'usage.read' : 'settings.read');
-        rejectHostOwnedParams(params, ['callerSessionId', 'hostCaller', 'owner', 'operation']);
         const settings = this.runtime.settings;
         if (!settings) fail('UNSUPPORTED_CAPABILITY', 'Host reads are unavailable on this host');
         const assertCurrent = settings.captureScope();
-        const device = params.device === undefined ? 'local' : requireString(params, 'device');
-        const target = device === settings.deviceId() ? 'local' : device;
         if (request.method === 'usage.get_subscription_usage') {
-          if (target !== 'local') fail('INVALID_ARGS', 'Subscription usage is read on the execution computer');
-          const result = await settings.usage(params.providerId === undefined ? undefined : requireString(params, 'providerId'));
+          const input = subscriptionUsageInputSchema.safeParse(params);
+          if (!input.success) fail('INVALID_ARGS', input.error.message);
+          const result = await settings.usage(input.data.providerId);
           assertCurrent();
           return result;
         }
         if (request.method === 'settings.list_provider_share_members' || request.method === 'settings.get_provider_share_model_access') {
-          return runProviderSharingRequest(request.method === 'settings.list_provider_share_members'
-            ? { action: 'members', device: target, ...(params.providerId === undefined ? {} : { providerId: requireString(params, 'providerId') }) }
-            : { action: 'get-models', device: target, providerId: requireString(params, 'providerId'), memberId: requireString(params, 'memberId') }, {
+          let input: ProviderSharingRequest;
+          if (request.method === 'settings.list_provider_share_members') {
+            const parsed = providerShareMembersInputSchema.safeParse(params);
+            if (!parsed.success) fail('INVALID_ARGS', parsed.error.message);
+            input = { action: 'members', ...parsed.data };
+          } else {
+            const parsed = providerShareModelAccessInputSchema.safeParse(params);
+            if (!parsed.success) fail('INVALID_ARGS', parsed.error.message);
+            input = { action: 'get-models', ...parsed.data };
+          }
+          input.device = input.device === settings.deviceId() ? 'local' : input.device;
+          return runProviderSharingRequest(input, {
             command: settings.shares,
             remote: (deviceId, command, guard) => settings.remote(deviceId, { action: 'manage-share', command }, guard),
           }, assertCurrent);
         }
+        const input = providerReadInputSchema.safeParse(params);
+        if (!input.success) fail('INVALID_ARGS', input.error.message);
         return runProviderReadRequest({ action: request.method === 'usage.get_provider_group' ? 'group' : 'usage-history',
-          providerId: requireString(params, 'providerId'), device: target }, {
+          ...input.data, device: input.data.device === settings.deviceId() ? 'local' : input.data.device }, {
           local: (input, guard) => {
             guard();
             return input.action === 'manage-share' ? settings.shares(input.command, guard) : settings.group(input.command);

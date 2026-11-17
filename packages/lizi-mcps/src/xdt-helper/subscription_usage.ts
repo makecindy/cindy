@@ -7,11 +7,13 @@ export interface SubscriptionUsageCallbacks {
   read(context: LiziMcpSessionContext, providerId?: string): Promise<Record<string, unknown>>;
 }
 
+export const subscriptionUsageInputSchema = z.strictObject({ providerId: z.string().regex(/^[a-z0-9_-]{1,40}$/).optional() });
+
 export function registerSubscriptionUsageTools(registry: XdtHelperToolRegistry, callbacks: SubscriptionUsageCallbacks,
   current: () => LiziMcpSessionContext): void {
   registry.register({ name: 'get_subscription_usage', category: 'usage',
     description: '只读查询执行电脑上当前 Cindy 账号已连接的 Claude/Codex 订阅用量。返回每个账号的本地标识、供应商、套餐、额度窗口、更新时间和数据状态；省略 providerId 读取全部本机订阅账号。与界面共用缓存，不强制刷新。没有数据不是零用量；不含邮箱、凭证、目录、内部身份指纹或其他电脑/分享供应商的账号。插件需声明 agent.hostTools:["usage"]。',
-    inputShape: { providerId: z.string().regex(/^[a-z0-9_-]{1,40}$/).optional() },
+    inputShape: subscriptionUsageInputSchema.shape,
     handler: async ({ providerId }) => {
       const context = current();
       if (context.remoteHostId || (!context.sessionId && !context.hostCaller))

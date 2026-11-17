@@ -12,10 +12,12 @@ export interface ProviderReadCallbacks {
   call(input: ProviderReadRequest & { callerSessionId?: string }): Promise<Record<string, unknown>>;
 }
 
+export const providerReadInputSchema = z.strictObject({ providerId: z.string().trim().min(1).max(128),
+  device: z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/).optional() });
+
 export function registerProviderReadTools(registry: XdtHelperToolRegistry, callbacks: ProviderReadCallbacks,
   context: () => LiziMcpSessionContext): void {
-  const inputShape = { providerId: z.string().trim().min(1).max(128),
-    device: z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/).optional() };
+  const inputShape = providerReadInputSchema.shape;
   const invoke = async (request: ProviderReadRequest) => {
     const caller = context();
     if ((!caller.sessionId && caller.hostCaller?.kind !== 'plugin') || caller.remoteHostId)

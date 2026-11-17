@@ -166,6 +166,41 @@ describe('SchedulerScriptCapabilityBroker', () => {
     expect(raw.config.members[0].providerName).toBe('OpenAI · saved-login');
   });
 
+  // Unit regression: the real broker must interpret inputs exactly like the
+  // existing tools. Happy-path routing did not catch untrimmed ids, ignored
+  // fields or invalid quota ids. These inputs previously reached host reads.
+  it('normalizes provider and member ids with the existing tool schemas', async () => {
+    const broker = new SchedulerScriptCapabilityBroker();
+    providerReads.shares.mockImplementation(async command => command.action === 'owned'
+      ? { ready: true, includeUsage: false, shares: [{ shareId: 'share', providerId: 'anthropic', members: [{ memberId: 'member', status: 'active' }] }] }
+      : command.action === 'get-model-access' ? { models: [`${command.providerId}:${command.memberId}`] }
+        : { providerId: command.providerId });
+    providerReads.group.mockImplementation(async (_deps, command) => ({ members: [], providerId: command.providerId }));
+    for (const method of ['usage.get_provider_usage_history', 'usage.get_provider_group']) {
+      expect(await broker.call({ method, params: { providerId: ' anthropic ' } },
+        new Set(['usage.read']), { schedule: schedule() })).toMatchObject({ providerId: 'anthropic' });
+    }
+    expect(await broker.call({ method: 'settings.get_provider_share_model_access',
+      params: { providerId: ' anthropic ', memberId: ' member ' } },
+    new Set(['settings.read']), { schedule: schedule() })).toMatchObject({ models: ['anthropic:member'] });
+    expect(await broker.call({ method: 'settings.list_provider_share_members', params: { providerId: ' anthropic ' } },
+      new Set(['settings.read']), { schedule: schedule() })).toMatchObject({ members: [{ providerId: 'anthropic' }] });
+  });
+
+  it.each([
+    ['usage.get_subscription_usage', { providerId: 'Anthropic' }],
+    ['usage.get_subscription_usage', { device: 'local' }],
+    ['usage.get_provider_usage_history', { providerId: 'anthropic', extra: true }],
+    ['usage.get_provider_group', { providerId: 'anthropic', device: 'invalid/device' }],
+    ['settings.list_provider_share_members', { providerId: 'a'.repeat(129) }],
+    ['settings.get_provider_share_model_access', { providerId: 'anthropic', memberId: 'member', extra: true }],
+  ] as const)('rejects original-schema violations for %s before reading', async (method, params) => {
+    await expect(new SchedulerScriptCapabilityBroker().call({ method, params },
+      new Set(['settings.read', 'usage.read']), { schedule: schedule() })).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    for (const read of [providerReads.usage, providerReads.shares, providerReads.group, providerReads.remote])
+      expect(read).not.toHaveBeenCalled();
+  });
+
   it('rejects missing or other-group grants, caller injection and raw account/writing methods', async () => {
     const broker = new SchedulerScriptCapabilityBroker();
     for (const grants of [[], ['settings.read']] as const) {
