@@ -46,6 +46,10 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 
 ## 0. 项目清单（2026-11-13）
 
+插件 IM 入口可经批准的 `tasks.imProjects/create/followImProject` 使用同一份项目与配置，
+不读私有文件、不另存模型默认值；微信包装插件按群/私聊保存项目选择。具体合同见
+[插件 IM 共用项目与模型](protocol-compatibility/plugin-im-projects.md)。官方渠道原有命令和镜像协议不变。
+
 **侧栏的本机项目就是 IM 机器人用的项目**，不另设「工作目录映射」这一层概念；界面与机器人文案一律叫
 「项目」，「工作目录」只指 Agent 实际干活的那个目录（术语表）。
 

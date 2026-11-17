@@ -695,7 +695,8 @@ function respondRequestTooLarge(opts: {
   /** Content-Length 预检命中时的声明字节数;流式守卫命中时为 null。 */
   declaredBytes: number | null;
   receivedBytes: number;
-  reason?: 'request_body_too_large' | 'attachment_recovery_storage_exhausted';
+  reason?: 'request_body_too_large' | 'attachment_recovery_storage_exhausted'
+    | 'attachment_recovery_unavailable' | 'recovered_body_too_large';
 }): void {
   const { req, res, logger } = opts;
   const storageExhausted = opts.reason === 'attachment_recovery_storage_exhausted';
@@ -2593,10 +2594,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === 'REQUEST_TOO_LARGE' || msg === 'RECOVERY_STORAGE_EXHAUSTED') {
+        const recoveryReason = (err as { recoveryReason?: string }).recoveryReason;
         respondRequestTooLarge({
           req, res, logger, reqId, method, url, headers,
           limitBytes: maxBodyBytes,
-          reason: msg === 'RECOVERY_STORAGE_EXHAUSTED' ? 'attachment_recovery_storage_exhausted' : 'request_body_too_large',
+          reason: msg === 'RECOVERY_STORAGE_EXHAUSTED' ? 'attachment_recovery_storage_exhausted'
+            : recoveryReason === 'attachment_recovery_unavailable' || recoveryReason === 'recovered_body_too_large'
+              ? recoveryReason : 'request_body_too_large',
           declaredBytes: null,
           receivedBytes: (err as { receivedBytes?: number }).receivedBytes ?? 0,
         });

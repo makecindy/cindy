@@ -82,43 +82,9 @@ describe('computer use plugin IPC invariants', () => {
     expect(onDeferred).toHaveBeenCalledOnce();
   });
 
-  it('returns the non-blocking refresh result after global plugin persistence', () => {
-    const registerSource = fs.readFileSync(
-      path.resolve(__dirname, '../maker-ipc/register.ts'),
-      'utf-8',
-    );
-    const setEnabledStart = registerSource.indexOf(
-      'ipcMain.handle(MAKER_INVOKE.PLUGINS_SET_ENABLED',
-    );
-    const clearEnabledStart = registerSource.indexOf(
-      'ipcMain.handle(MAKER_INVOKE.PLUGINS_CLEAR_ENABLED',
-    );
-    expect(setEnabledStart).toBeGreaterThanOrEqual(0);
-    expect(clearEnabledStart).toBeGreaterThan(setEnabledStart);
-
-    const setEnabledBody = registerSource.slice(setEnabledStart, clearEnabledStart);
-    const clearEnabledEnd = registerSource.indexOf(
-      'registerProjectPluginPolicyHandlers',
-      clearEnabledStart,
-    );
-    expect(clearEnabledEnd).toBeGreaterThan(clearEnabledStart);
-    const clearEnabledBody = registerSource.slice(clearEnabledStart, clearEnabledEnd);
-
-    for (const body of [setEnabledBody, clearEnabledBody]) {
-      expect(body).toContain('GLOBAL_PLUGIN_IDS.has(id)');
-      expect(body).toContain("id !== 'browser'");
-      expect(body).toContain('await getPluginRegistry()');
-      expect(body).toContain('return { codexMcpRefreshed: true };');
-      expect(body).toContain('return refreshCodexMcpEnvironment({');
-      expect(body.indexOf('await getPluginRegistry()')).toBeLessThan(
-        body.indexOf('GLOBAL_PLUGIN_IDS.has(id)'),
-      );
-      expect(body.indexOf('GLOBAL_PLUGIN_IDS.has(id)')).toBeLessThan(
-        body.indexOf('return refreshCodexMcpEnvironment({'),
-      );
-      expect(body).not.toContain('await shutdownCodexEnvironment();');
-    }
-  });
+  // Enable/clear persistence and refresh results now run through the actual IPC
+  // handlers in maker-ipc/__tests__/pluginEnableHandlers.test.ts and the Pi HTTP
+  // bridge regression. The former source-layout assertion is no longer needed.
 
   it('keeps the @ desktop-window gate machine-scoped', () => {
     const registerSource = fs.readFileSync(

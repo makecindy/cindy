@@ -705,6 +705,8 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     try {
       const { handle, stream, events, fakeQuery } = await startSessionWithStream();
 
+      const cancelled = vi.fn();
+      handle.onTurnContinuationChange?.(cancelled);
       await handle.send({ type: 'user', content: 'spawn background work' });
       stream.emit(taskStarted('task-agent', 'local_agent'));
       await vi.advanceTimersByTimeAsync(0);
@@ -729,12 +731,48 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
           (event) => event.type === 'done' && event.turnContinuationId === undefined,
         )?.data,
       ).toMatchObject({ reason: 'turn_continuation_cancelled' });
+      // #10547: preserve the specific cause across the production callback.
+      expect(cancelled).toHaveBeenCalledWith(continuationId, 'cancelled', 'wake_contract_unfulfilled');
       expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
       expect(handle.isTurnRunning?.()).toBe(false);
       // 对账不是用户 Stop:不得触碰 stopTask / interrupt。
       expect(fakeQuery.stopTask).not.toHaveBeenCalled();
       expect(fakeQuery.interrupt).not.toHaveBeenCalled();
 
+      stream.end();
+      await handle.close().catch(() => undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retains the cancellation cause until the queued parent boundary is acknowledged (#10547)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { handle, stream } = await startSessionWithStream(undefined, { autoCollect: false });
+      const changed = vi.fn();
+      handle.onTurnContinuationChange?.(changed);
+      await handle.send({ type: 'user', content: 'spawn background work' });
+      stream.emit(taskStarted('task-agent', 'local_agent'));
+      stream.emit(turnResult('waiting'));
+      stream.emit(taskNotification('task-agent', 'completed'));
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(WAKE_CONTRACT_GRACE_MS);
+      const id = changed.mock.calls[0]?.[0] as number;
+      expect(id).toBeTypeOf('number');
+      expect(handle.beginTurnContinuationWait?.(id)).toBe('cancelled');
+      expect(handle.getTurnContinuationCancellationReason?.(id)).toBe('wake_contract_unfulfilled');
+      expect(handle.getTurnContinuationCancellationReason?.(id + 1)).toBeUndefined();
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      for (;;) {
+        const item = await iterator.next();
+        if (item.done) throw new Error('missing parent boundary');
+        if (item.value.type === 'done' && item.value.turnContinuationId === id) break;
+      }
+      // Yielding to Session does not release accounting until its next read.
+      expect(handle.getTurnContinuationCancellationReason?.(id)).toBe('wake_contract_unfulfilled');
+      await iterator.next();
+      expect(handle.getTurnContinuationCancellationReason?.(id)).toBeUndefined();
       stream.end();
       await handle.close().catch(() => undefined);
     } finally {

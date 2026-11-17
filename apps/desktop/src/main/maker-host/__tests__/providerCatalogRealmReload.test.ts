@@ -341,6 +341,8 @@ import {
   refreshDiscoveredCodexModels,
 } from '../createDesktopProviderService.js';
 import { createGuestProviderRouteBinder, guestProviderModelIds } from '../../remote-agent/host/providerAccess.js';
+import { hostedProviderOffersModel } from '../guest-provider-route-store.js';
+import { bindHostedSessionProvider } from '../session-provider-store.js';
 import {
   buildCodexCustomProviderArgs,
   deriveCodexCustomProviderRoutes,
@@ -391,6 +393,39 @@ describe('provider catalog realm reload', () => {
       h.claudeModelRefresh.mockReset().mockResolvedValue(false);
     }
     expect(explicitDone).toBe(true);
+  });
+  // Unit regression: a pool-only model passes remote admission but the first
+  // inference request reads the empty default-account catalog and returns 403.
+  // Earlier coverage stops at admission. Exercise the live outbound guard too,
+  // including revoked permission and removed membership, without real CLI state.
+  it('uses pooled membership for hosted inference after remote admission', async () => {
+    const previous = getActiveCatalog();
+    const model = { id: 'pool-inference-only', name: 'Pool inference only', contextWindow: 100_000,
+      efforts: [], defaultEffort: null };
+    h.pool = { strategy: 'least', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
+    h.poolModels = [model];
+    let allowed = true;
+    const binding = bindHostedSessionProvider('pool-inference', 'openai', () => allowed);
+    try {
+      setDiscoveredCodexModels([]);
+      const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ snapshotOnly: true });
+      expect(guestProviderModelIds(views, 'openai', 'codex')).toContain(model.id);
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(true);
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', 'not-offered')).toBe(false);
+      allowed = false;
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(false);
+      allowed = true;
+      h.poolModels = [{ ...model, disabled: true }];
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(false);
+      h.poolModels = [];
+      expect(hostedProviderOffersModel('pool-inference', 'openai', 'codex', model.id)).toBe(false);
+    } finally {
+      binding.release();
+      h.pool = null;
+      h.poolModels = null;
+      setDiscoveredCodexModels([]);
+      setActiveCatalog(previous);
+    }
   });
   // #10405, unit: merging A(a1,a2) into B must not remove a2-only m2 from a saved
   // schedule's strict route resolver. Picker/guest membership still cannot borrow B's m3.

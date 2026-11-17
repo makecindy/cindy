@@ -55,6 +55,7 @@ import {
 import { adoptLegacySessionBeforeOpen } from '../../session-import/legacy';
 import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../../device-link/invoke-context';
 import { onMessageCreated as onChatMessageCreatedForEmbedding } from '../../embedders/chat-history-embedder';
+import { recomputePrRefsForSession, recordPrRefsForMessage } from '../../git-context/prRefsStore';
 import {
   isSyntheticTriggerText,
   mergeDismissedIntoErrorContent,
@@ -101,6 +102,7 @@ const MESSAGE_DELETION_USER_BOUNDARY_PAGE_SIZE = 32;
 
 // Normal publication stays non-blocking. Authoritative corrections/retractions
 // settle the exact row's create/update hooks before reconciling derived state.
+const pendingPrRefWrites = new WeakMap<DbClient, Map<string, Promise<void>>>();
 const pendingMediaWrites = new WeakMap<DbClient, Map<string, Set<Promise<void>>>>();
 
 function trackMessageMediaWrite(dbClient: DbClient, rowId: string, write: Promise<void>): Promise<void> {
@@ -980,6 +982,8 @@ export async function commitMessageDeletion(
     });
   }
 
+  void recomputePrRefsForSession(sessionId).catch(() => undefined);
+
   // sessions:patched 的消费者只做 shallow merge，不会主动重拉。删除后同步带出 canonical
   // preview，避免其它窗口 / device-link 控制端继续显示已删除的末条消息。preview 口径与
   // sessions:list 的 LATEST_MSG_CONTENT_SQL 一致：可见 user/assistant，过滤 rewind_at /
@@ -1087,6 +1091,7 @@ export const rewindPersistedUserMessageAfterClear = createMessageClearRecovery({
   collectCindyMediaHashes: content => collectCindyMediaHashes(content),
   removeSessionAttachmentRefIfUnreferencedByLiveMessage: params => removeSessionAttachmentRefIfUnreferencedByLiveMessage(params),
   broadcastMessageDeleted: (payload, scope) => broadcastMessageDeleted(payload, scope),
+  recomputePrRefsForSession: id => recomputePrRefsForSession(id),
   log,
 });
 
@@ -1197,6 +1202,15 @@ async function reconcileAssistantDerivedState(
       error: error instanceof Error ? error.message : String(error),
     });
   });
+  await pendingPrRefWrites.get(dbClient)?.get(row.id);
+  try {
+    if (isCurrent()) await recomputePrRefsForSession(row.sessionId, { dbClient, isCurrent });
+  } catch (error) {
+    log.warn('assistant correction PR reference reconciliation failed', {
+      sessionId: row.sessionId, clientId: row.clientId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   if (!refreshPreview || !isCurrent()) return;
   try {
     const latest = await latestVisiblePreviewRow(row.sessionId);
@@ -1272,6 +1286,10 @@ export async function updateMessageContent(
   // The correction already committed: settle its original publication even if
   // clear/owner changed or another deletion removed the row during readback.
   if (original) await reconcileAssistantDerivedState(original, dbClient, isCurrent, ownerScope, false);
+  else if (row && (row.role === 'user' || row.role === 'assistant')) {
+    await pendingPrRefWrites.get(dbClient)?.get(row.id);
+    if (isCurrent()) await recomputePrRefsForSession(sessionId, { dbClient, isCurrent });
+  }
   return row ? messageToCamel(row) : null;
 }
 
@@ -1403,6 +1421,20 @@ export async function createMessage(
   void onChatMessageCreatedForEmbedding(msg).catch(() => {
     // 双保险: chat-history-embedder.onMessageCreated 内部已 try/catch,
     // 此处 .catch 仅防御该函数将来被 refactor 时漏掉的异常路径。
+  });
+  // session-git-pr-context hook —— fire-and-forget。内部限定 user/assistant 角色,
+  // 每条消息跑一次锚定正则线性扫描(开销可忽略);失败仅 log warn。
+  const prRefsWrite = recordPrRefsForMessage(msg).catch(() => {
+    // recordPrRefsForMessage 内部已 try/catch,此处兜底防御 refactor 漏网异常。
+  });
+  let pendingPrRefs = pendingPrRefWrites.get(dbClient);
+  if (!pendingPrRefs) {
+    pendingPrRefs = new Map();
+    pendingPrRefWrites.set(dbClient, pendingPrRefs);
+  }
+  pendingPrRefs.set(msg.id, prRefsWrite);
+  void prRefsWrite.then(() => {
+    if (pendingPrRefs.get(msg.id) === prRefsWrite) pendingPrRefs.delete(msg.id);
   });
   return msg;
 }

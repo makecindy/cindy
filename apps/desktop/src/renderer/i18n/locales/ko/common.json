@@ -5475,6 +5475,13 @@
       },
       "toggleAria": "질문 내비게이션 레일 전환"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "모델로 worktree 이름 짓기",
+        "description": "새 작업의 worktree에 첫 메시지를 바탕으로 짧은 영어 이름(예: fix-login-timeout)을 붙여 폴더와 브랜치의 용도를 한눈에 알 수 있게 합니다. 보조 모델이 생성하며, 실패하면 무작위 이름을 사용합니다. 앞으로 만드는 worktree에만 적용됩니다."
+      },
+      "toggleAria": "모델로 worktree 이름 짓기 전환"
+    },
     "promptRecommendation": {
       "label": "다음 입력 제안",
       "description": "답변 후 입력창에 다음 메시지를 제안합니다. Tab 키를 누르면 입력됩니다.",
@@ -8368,6 +8375,7 @@
             "contentStyle": "메시지 간격 및 말풍선 모양 변경"
           },
           "positions": {
+            "composer_header": "입력창 위",
             "composer_toolbar": "입력창 도구 모음",
             "session_header": "작업 머리글",
             "statusbar": "상태 표시줄",
@@ -19519,6 +19527,40 @@
       "notSupported": "이 계정에서는 잔액 조회를 지원하지 않습니다.",
       "unavailable": "잔액을 불러올 수 없습니다. 새로고침 후 다시 시도하세요."
     },
+    "giftCard": {
+      "action": "기프트 카드 사용",
+      "title": "기프트 카드 사용",
+      "inputLabel": "교환 코드",
+      "inputHint": "16자리 코드를 입력하거나 기프트 카드 링크를 붙여넣으세요.",
+      "continue": "계속",
+      "confirmTitle": "이 기프트 카드를 받으시겠습니까?",
+      "confirmAction": "받기",
+      "from": "{{sender}} 님이 보냄",
+      "cardLabel": "Cindy 기프트 카드, {{amount}}",
+      "fields": {
+        "validity": "유효 기간",
+        "validityValue_other": "받은 후 {{count}}일",
+        "claimBy": "받기 기한",
+        "destination": "추가 위치"
+      },
+      "doneTitle": "{{amount}} 추가됨",
+      "doneDescription": "프로모션 잔액에 추가되었습니다. {{date}}까지 유효합니다.",
+      "doneDescriptionNoDate": "프로모션 잔액에 추가되었습니다.",
+      "pendingTitle": "기프트 카드를 받았습니다",
+      "pendingDescription": "{{amount}}을(를) 추가하는 중이며 곧 프로모션 잔액에 표시됩니다. 다시 받을 필요가 없습니다.",
+      "alreadyYours": "이미 받은 기프트 카드입니다.",
+      "done": "완료",
+      "errors": {
+        "notFound": "코드가 올바르지 않습니다. 확인한 뒤 다시 시도하세요.",
+        "wrongRegionCn": "이 기프트 카드는 Cindy 중국 본토판용이라 이 계정으로 받을 수 없습니다.",
+        "wrongRegionGlobal": "이 기프트 카드는 Cindy 국제판용이라 이 계정으로 받을 수 없습니다.",
+        "alreadyClaimed": "이미 다른 사람이 받은 기프트 카드입니다.",
+        "expired": "이 기프트 카드는 받기 기한이 지났습니다.",
+        "voided": "이 기프트 카드는 무효화되었습니다.",
+        "rateLimited": "시도 횟수가 너무 많습니다. 잠시 후 다시 시도하세요.",
+        "failed": "기프트 카드를 받지 못했습니다. 잠시 후 다시 시도하세요."
+      }
+    },
     "usage": {
       "title": "잔액 사용량",
       "observedAt": "잔액 업데이트: {{date}}",
@@ -19534,6 +19576,7 @@
         "empty": "프로모션 지급 내역이 없습니다.",
         "incomplete": "지급 내역이 많아 최근 {{count}}건만 표시합니다.",
         "unnamed": "프로모션 잔액",
+        "giftCard": "기프트 카드 · {{sender}} 님이 보냄",
         "original": "지급액",
         "used": "사용",
         "remaining": "잔여",
