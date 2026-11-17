@@ -977,7 +977,7 @@ import { normalizeSessionContextWindowBoundsRoute } from '../../shared/sessionCo
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { readSessionBackgroundTaskOutputTail } from '../background-task-output/reader.js';
 import { AgentInputCoordinator, markManualSchedulerContinuation, SESSION_REWIND_INPUT_LOCK_ID } from './agent-input-coordinator.desktop.js';
-import { createAutomaticContinueEligibility, createScheduledQuotaDispatchGuard, isActiveCompanionFailoverSession } from './automaticContinueEligibility.js';
+import { createAutomaticContinueEligibility, createScheduledQuotaDispatchGuard, isQuotaScheduleCurrent, isActiveCompanionFailoverSession } from './automaticContinueEligibility.js';
 import { notePromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
 import {
   estimateReferenceTokens,
@@ -1844,9 +1844,9 @@ async function isSavedUsageLimitWaitValid(record: SavedUsageLimitWait): Promise<
     (row.userSendAt ?? 0) > record.savedAt || usageLimitSavedRoute(row) !== record.route) return false;
   const origin = record.item.origin;
   if (origin?.kind === 'scheduler') {
-    const [schedule] = await getDbClient().drizzle.select({ status: schedules.status })
+    const [schedule] = await getDbClient().drizzle.select({ status: schedules.status, targetSessionId: schedules.targetSessionId })
       .from(schedules).where(eq(schedules.id, origin.scheduleId)).limit(1);
-    if (!schedule || schedule.status !== 'active') return false;
+    if (!isQuotaScheduleCurrent(schedule, record.sessionId)) return false;
   }
   return true;
 }
@@ -18354,10 +18354,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createDbMessage: createUserMessageDurably,
     assertQuotaContinuation: createScheduledQuotaDispatchGuard({
       origin: (sessionId, clientId) => agentInputCoordinatorHolder?.scheduledQuotaOrigin(sessionId, clientId),
-      isScheduleActive: async scheduleId => {
-        const [schedule] = await getDbClient().drizzle.select({ status: schedules.status })
+      isScheduleActive: async (scheduleId, sessionId) => {
+        const [schedule] = await getDbClient().drizzle.select({ status: schedules.status, targetSessionId: schedules.targetSessionId })
           .from(schedules).where(eq(schedules.id, scheduleId)).limit(1);
-        return schedule?.status === 'active';
+        return isQuotaScheduleCurrent(schedule, sessionId);
       },
       reject: () => throwIpcError('PRECONDITION_FAILED', 'Scheduled continuation is no longer active'),
     }),
@@ -18479,9 +18479,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const quotaOrigin = options?.clientId ? agentInputCoordinatorHolder?.scheduledQuotaOrigin(sessionId, options.clientId) : undefined;
       const scheduled = options?.scheduled || !!quotaOrigin;
       if (quotaOrigin?.kind === 'scheduler') {
-        const [schedule] = await getDbClient().drizzle.select({ status: schedules.status })
+        const [schedule] = await getDbClient().drizzle.select({ status: schedules.status, targetSessionId: schedules.targetSessionId })
           .from(schedules).where(eq(schedules.id, quotaOrigin.scheduleId)).limit(1);
-        if (!schedule || schedule.status !== 'active') throwIpcError('PRECONDITION_FAILED', 'Schedule is no longer active');
+        if (!isQuotaScheduleCurrent(schedule, sessionId)) throwIpcError('PRECONDITION_FAILED', 'Schedule is no longer active for this task');
       }
       if (!scheduled) await scheduledModelScope.restore(sessionId);
       await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId);
@@ -19699,6 +19699,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         void usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken).then(armed => {
           if (!armed) finishSchedulerUsageLimitWait(sessionId, candidateToken);
         });
+        return;
+      }
+      // Restored provenance is not a live runner. Re-arm quota waiting without
+      // rebinding its expired run or entering immediate provider-group recovery.
+      if (inputCoordinator.scheduledQuotaOrigin(sessionId)) {
+        void usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
         return;
       }
       // 供应商组分配的任务先试自动换电脑，不换时由它交回额度重置后自动继续。

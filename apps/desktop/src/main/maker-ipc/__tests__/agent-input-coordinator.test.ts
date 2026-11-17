@@ -16687,7 +16687,8 @@ describe('usage-limit wait (ordinary tasks)', () => {
     const token = original.onUsageLimitedTurnError.mock.calls.at(-1)?.[3] as number;
     const snapshot = original.coordinator.snapshotUsageLimitRecovery(sid, token)!;
     expect(snapshot.kind).toBe(kind);
-    const restarted = createHarness();
+    const groupCandidate = vi.fn(() => 'usage-limit' as const);
+    const restarted = createHarness({ providerGroupSwitchCandidate: groupCandidate });
     restarted.setHasAssistantProgressAfter(async () => true);
     // Also cover restoration when the same queued input is already in memory.
     if (kind === 'queue-head' && action === 'cancel') {
@@ -16721,10 +16722,19 @@ describe('usage-limit wait (ordinary tasks)', () => {
     expect(restarted.sendToAgent.mock.calls[0][1]).toMatchObject({ content: kind === 'active-turn' ? CONTINUE_AFTER_ERROR_PROMPT : 'work' });
     expect(await restarted.coordinator.continueAfterUsageLimitReset(sid, restored, INFO)).toBe('superseded');
     restarted.setRunning(false);
-    restarted.coordinator.onTurnEvent(sid, 'error', 'ordinary failure', { sdkError: 'authentication_failed' });
+    // Restored automatic work must retain quota classification on a second limit.
+    restarted.coordinator.onTurnEvent(sid, 'error', action === 'auto' ? 'weekly limit' : 'ordinary failure',
+      action === 'auto' ? LIMIT_SIGNALS : { sdkError: 'authentication_failed' });
     restarted.coordinator.onTurnEvent(sid, 'done');
     await flush();
     expect(restarted.coordinator.getProjection(sid).recovery?.kind).toBe('active-turn');
+    if (action === 'auto') {
+      expect(groupCandidate).not.toHaveBeenCalled();
+      expect(restarted.coordinator.getProviderGroupSwitchHoldId(sid)).toBeNull();
+      expect(restarted.coordinator.scheduledQuotaOrigin(sid)).toEqual(snapshot.item.origin);
+      const nextToken = restarted.onUsageLimitedTurnError.mock.calls.at(-1)![3];
+      expect(restarted.coordinator.snapshotUsageLimitRecovery(sid, nextToken)?.item.origin).toEqual(snapshot.item.origin);
+    }
     await restarted.coordinator.retryLastError(sid); await flush();
     expect(restarted.sendToAgent).toHaveBeenCalledTimes(2);
     expect(restarted.sendToAgent.mock.calls[0][3].origin).toBeUndefined();

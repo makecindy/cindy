@@ -1,10 +1,16 @@
 import type { ProviderGroupEligibilityContext } from '../provider-group/service.js';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 
+export function isQuotaScheduleCurrent(schedule: { status: string; targetSessionId?: string | null } | undefined,
+  sessionId: string): boolean {
+  // Unbound schedules create a new task per run; a bound schedule must still own this task.
+  return schedule?.status === 'active' && (!schedule.targetSessionId || schedule.targetSessionId === sessionId);
+}
+
 /** Invoked at the provider boundary, after asynchronous group/runtime preparation. */
 export function createScheduledQuotaDispatchGuard(deps: {
   origin(sessionId: string, clientId: string): AgentInputQueuedMessage['origin'];
-  isScheduleActive(scheduleId: string): Promise<boolean>;
+  isScheduleActive(scheduleId: string, sessionId: string): Promise<boolean>;
   reject(): never;
 }) {
   return async (sessionId: string, sendOpts: unknown): Promise<void> => {
@@ -12,7 +18,7 @@ export function createScheduledQuotaDispatchGuard(deps: {
     if (!clientId) return;
     const origin = deps.origin(sessionId, clientId);
     if (origin?.kind !== 'scheduler') return;
-    if (!await deps.isScheduleActive(origin.scheduleId) || deps.origin(sessionId, clientId) !== origin) deps.reject();
+    if (!await deps.isScheduleActive(origin.scheduleId, sessionId) || deps.origin(sessionId, clientId) !== origin) deps.reject();
   };
 }
 
