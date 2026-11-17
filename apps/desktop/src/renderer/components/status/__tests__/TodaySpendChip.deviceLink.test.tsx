@@ -42,6 +42,8 @@ const mocks = vi.hoisted(() => ({
   remoteRouteDeviceIds: [] as Array<string | null>,
   remoteCodexPayload: null as Record<string, unknown> | null,
   remoteCodexDeviceIds: [] as Array<string | null>,
+  remoteCodexLive: [] as boolean[],
+  remoteCodexRefresh: vi.fn(),
   remoteClaudeQuota: null as Record<string, unknown> | null,
   remoteXaiSnapshot: null as Record<string, unknown> | null,
   openCodeUsageProviderIds: [] as Array<string | undefined>,
@@ -164,7 +166,10 @@ vi.mock('@/hooks/useRemoteDeviceUsage', async () => {
     selectRemoteCodexAccountUsage: actual.selectRemoteCodexAccountUsage,
     requestRemoteCodexAccountRefresh: vi.fn(),
     requestRemoteXaiSubscriptionRefresh: vi.fn(),
-    useRemoteCodexAccountUsage: (deviceId: string | null) => {
+    requestRemoteCodexLiveRefresh: mocks.remoteCodexRefresh,
+    useRemoteCodexRefreshState: () => ({ failed: false, refreshing: false }),
+    useRemoteCodexAccountUsage: (deviceId: string | null, _provider?: string, options?: { live?: boolean }) => {
+      mocks.remoteCodexLive.push(options?.live === true);
       mocks.remoteCodexDeviceIds.push(deviceId);
       return deviceId ? mocks.remoteCodexPayload : null;
     },
@@ -225,6 +230,8 @@ beforeEach(() => {
   mocks.remoteRouteDeviceIds = [];
   mocks.remoteCodexPayload = null;
   mocks.remoteCodexDeviceIds = [];
+  mocks.remoteCodexLive = [];
+  mocks.remoteCodexRefresh.mockClear();
   mocks.remoteClaudeQuota = null;
   mocks.remoteXaiSnapshot = null;
   mocks.openCodeUsageProviderIds = [];
@@ -447,6 +454,8 @@ describe('TodaySpendChip device-link remote sessions', () => {
     expect(mocks.localCodexLimitsEnabled.every(enabled => !enabled)).toBe(true);
     fireEvent.mouseEnter(screen.getByRole('button'));
     act(() => vi.advanceTimersByTime(300));
+    expect(mocks.remoteCodexLive).toContain(true);
+    expect(mocks.remoteCodexRefresh).toHaveBeenCalledWith('device-abc', 'openai');
     expect(screen.getByText('remote@example.com')).toBeTruthy();
     expect(screen.queryByText('local@example.com')).toBeNull();
   });

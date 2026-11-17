@@ -39,6 +39,8 @@ import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionU
 
 /** 被控端 readCodexAccountUsageSnapshot 的组合 payload(与本机 push 同形)。 */
 export type RemoteCodexAccountUsagePayload = RateLimitSnapshot & {
+  /** Renderer-only: a native read failed and this is the host's retained snapshot. */
+  refreshFailed?: boolean;
   webSnapshot?: RateLimitSnapshot | null;
   appServerBuckets?: Record<string, RateLimitSnapshot> | null;
 };
@@ -92,12 +94,20 @@ const codexNativeRateLimitsMirror = createRemoteDeviceUsageMirror<MobileCodexRat
   decodePush: (value) => (value === null ? null : undefined),
 });
 
-/** Account cards and model lists read app-server directly, just like Mobile. */
+/** Task chips, account cards and model lists share visible native reads. */
 const codexRateLimitsMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUsagePayload>({
   invokeChannel: 'maker:usage:codex-rate-limits',
-  pushChannel: null,
+  pushChannel: 'usage:codex-account-changed',
+  providerPushChannel: 'usage:codex-provider-account-changed',
   defaultProviderId: 'openai',
   refreshIntervalMs: 60_000,
+  refreshOnReconnect: true,
+  minimumRequestIntervalMs: 5_000,
+  failureBackoffMs: 60_000,
+  isStale: snapshot => snapshot.refreshFailed === true,
+  // The native read itself emits the generic account push before returning its
+  // complete bucket table. Do not let that partial projection cancel the read.
+  decodePush: value => value === null ? null : undefined,
   async read(deviceId, providerId = 'openai', scheduling) {
     const owner = getDataOwnerGeneration();
     const matchesProvider = (value: { providerId?: string }) =>
@@ -136,8 +146,8 @@ const codexRateLimitsMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUs
     ) as (RemoteCodexAccountUsagePayload & { providerId?: string }) | null;
     // A successful empty account read is authoritative (for example after logout).
     if (fallback === null) return null;
-    if (!fallback || !matchesProvider(fallback)) return undefined;
-    return fallback;
+    if (!fallback || !matchesProvider(fallback)) throw new Error('Remote Codex quota unavailable');
+    return { ...fallback, refreshFailed: true };
   },
 });
 
@@ -190,6 +200,15 @@ export function requestRemoteCodexAccountRefresh(
   scheduling?: { background?: boolean },
 ): void {
   codexAccountMirror.request(deviceId, providerId, queueIfPending, scheduling);
+}
+
+/** Same native quota entry as Settings; never query the sharing permission boundary here. */
+export function useRemoteCodexRefreshState(deviceId: string | null, providerId?: string) {
+  return codexRateLimitsMirror.useReadState(isProviderShareAgentDeviceId(deviceId) ? null : deviceId, providerId);
+}
+
+export function requestRemoteCodexLiveRefresh(deviceId: string, providerId?: string): void {
+  if (!isProviderShareAgentDeviceId(deviceId)) codexRateLimitsMirror.request(deviceId, providerId, false, undefined, true);
 }
 
 /** Query the execution computer's native account RPC even when another card has a cached result. */

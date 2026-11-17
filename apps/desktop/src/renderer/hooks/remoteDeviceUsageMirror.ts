@@ -17,7 +17,8 @@ function isSnapshotShape(value: unknown): value is Record<string, unknown> {
 
 export interface RemoteDeviceUsageMirror<T> {
   useMirror(deviceId: string | null, providerId?: string, options?: { live?: boolean; refreshEpoch?: number }): T | null;
-  request(deviceId: string, providerId?: string, queueIfPending?: boolean, scheduling?: { background?: boolean }): void;
+  useReadState(deviceId: string | null, providerId?: string): { failed: boolean; refreshing: boolean };
+  request(deviceId: string, providerId?: string, queueIfPending?: boolean, scheduling?: { background?: boolean }, recover?: boolean): void;
   resetForTest(): void;
 }
 
@@ -31,8 +32,12 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
   ) => Promise<unknown>;
   /** Only visible, mounted consumers poll; all consumers still share the entry. */
   refreshIntervalMs?: number;
-  /** Native group quota owns one recovery observer per shared account entry. */
+  /** Native quota owns one recovery observer per shared account entry. */
   refreshOnReconnect?: boolean;
+  /** Bound repeated opening/focus and failed automatic refreshes for native reads. */
+  minimumRequestIntervalMs?: number;
+  failureBackoffMs?: number;
+  isStale?: (snapshot: T) => boolean;
   decodeRead?: (value: unknown) => T | null | undefined;
   /** A read may return a richer contract than its invalidation push. */
   decodePush?: (value: unknown) => T | null | undefined;
@@ -48,6 +53,9 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     revision: number;
     unsupportedUntil: number;
     pending: boolean;
+    failed: boolean;
+    failures: number;
+    retryAt: number;
     refreshQueued: boolean;
     liveObservers: number;
     hasLiveObservation: boolean;
@@ -60,6 +68,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     requestedAt: number;
     owner: ReturnType<typeof getDataOwnerGeneration>;
     listeners: Set<() => void>;
+    stateListeners: Set<() => void>;
   };
   const entries = new Map<string, Entry>();
   let cacheOwner = getDataOwnerGeneration();
@@ -77,6 +86,9 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         revision: 0,
         unsupportedUntil: 0,
         pending: false,
+        failed: false,
+        failures: 0,
+        retryAt: 0,
         refreshQueued: false,
         liveObservers: 0,
         hasLiveObservation: false,
@@ -85,6 +97,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         requestedAt: 0,
         owner: cacheOwner,
         listeners: new Set(),
+        stateListeners: new Set(),
       };
       entries.set(key, entry);
     }
@@ -92,9 +105,12 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
   }
   function apply(entry: Entry, snapshot: T | null): void {
     entry.snapshot = snapshot;
+    entry.failed = snapshot !== null && cfg.isStale?.(snapshot) === true;
+    if (!entry.failed) { entry.failures = 0; entry.retryAt = 0; }
     entry.revision++;
     entry.settledAt = Date.now();
     for (const notify of entry.listeners) notify();
+    for (const notify of entry.stateListeners) notify();
   }
   function request(deviceId: string, providerId?: string, queueIfPending = false, scheduling?: { background?: boolean }, retryUnsupported = false): void {
     if (!cfg.invokeChannel && !cfg.read) return;
@@ -111,12 +127,15 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     }
     if (retryUnsupported) entry.unsupportedUntil = 0;
     if (Date.now() < entry.unsupportedUntil) return;
+    if (!retryUnsupported && Date.now() < entry.retryAt) return;
+    if (entry.requestedAt > 0 && Date.now() - entry.requestedAt < (cfg.minimumRequestIntervalMs ?? 0)) return;
     const revision = entry.revision;
     const args = [...(cfg.invokeArgs ?? [])];
     // Keep the legacy builtin call shape; scoped reads must explicitly name their provider.
     if (providerId && providerId !== cfg.defaultProviderId) args.push(providerId);
     entry.pending = true;
     entry.requestedAt = Date.now();
+    for (const notify of entry.stateListeners) notify();
     const reading = cfg.read
       ? cfg.read(deviceId, providerId ?? cfg.defaultProviderId, scheduling)
       : scheduling
@@ -145,6 +164,9 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
       })
       .catch((error: unknown) => {
         if (!isDataOwnerGenerationCurrent(entry.owner) || entry.revision !== revision) return;
+        entry.failed = true;
+        entry.failures++;
+        if (cfg.failureBackoffMs) entry.retryAt = Date.now() + Math.min(5, 2 ** (entry.failures - 1)) * cfg.failureBackoffMs;
         if (
           extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' ||
           (error instanceof Error && /\[(?:DEVICE_LINK_)?CHANNEL_NOT_ALLOWED\]/.test(error.message))
@@ -155,6 +177,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
       })
       .finally(() => {
         entry.pending = false;
+        if (isDataOwnerGenerationCurrent(entry.owner)) for (const notify of entry.stateListeners) notify();
         const liveQueued = entry.liveRefreshes.size > 0;
         entry.liveRefreshes.clear();
         if (entry.refreshQueued || liveQueued) {
@@ -182,7 +205,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
       // Consumers of one device/account (session chip, model picker rail and rows) share this
       // entry, so a mount beside a live consumer reuses its fresh snapshot. With no listener a
       // clear push (logout, account switch) may have been missed, and pushes are also lost while
-      // the link is down; both cases read the device again. Explicit request() always reads.
+      // the link is down; both cases request another read within the configured cooldown.
       const settled =
         entry.listeners.size > 0 &&
         entry.settledAt > 0 &&
@@ -206,13 +229,15 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         }
       }
       entry.listeners.add(notify);
+      const visible = () => document.visibilityState !== 'hidden'
+        && !document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR);
       if (cfg.refreshOnReconnect && firstObserver) {
         // Subscribe once per entry, rather than once per card: contextBridge
         // can clone the same host event separately for different consumers.
         let online: boolean | null = true;
         let relay: 'stopped' | 'connecting' | 'online' | null = null;
         const recover = () => {
-          if (isDataOwnerGenerationCurrent(entry.owner) && entry.listeners.size > 0) {
+          if (isDataOwnerGenerationCurrent(entry.owner) && entry.listeners.size > 0 && (!cfg.refreshIntervalMs || visible())) {
             request(deviceId, providerId, true, undefined, true);
           }
         };
@@ -235,8 +260,6 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
       }
       // The existing gate also includes native hide/minimize broadcasts: Electron
       // can keep visibilityState "visible" while active turns disable throttling.
-      const visible = () => document.visibilityState !== 'hidden'
-        && !document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR);
       // An explicit live recovery rechecks capabilities; ordinary polling still
       // respects the negative cache, including after another unsupported reply.
       if ((!settled || resumed) && (!cfg.refreshIntervalMs || visible())) request(deviceId, providerId, resumePending, undefined, resumed || (cfg.refreshOnReconnect && firstObserver));
@@ -305,6 +328,17 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
   }
   return {
     useMirror,
+    useReadState(deviceId, providerId) {
+      const entry = deviceId ? entryFor(deviceId, providerId) : null;
+      const [, rerender] = useState(0);
+      useEffect(() => {
+        if (!entry) return;
+        const notify = () => rerender(value => value + 1);
+        entry.stateListeners.add(notify);
+        return () => { entry.stateListeners.delete(notify); };
+      }, [entry]);
+      return { failed: entry?.failed ?? false, refreshing: entry?.pending ?? false };
+    },
     request,
     resetForTest: () => {
       for (const entry of entries.values()) entry.stopReconnect?.();
