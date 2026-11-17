@@ -30,6 +30,10 @@ export function classifyTurnUsageLimit(data: unknown): boolean {
   };
   // 余额 / 计费耗尽要充值、不会周期重置,文案里带 quota 也不算(保持 blocked)。
   if (isBillingDepletionError(data)) return false;
+  // 采样重试预算已耗尽(`responseTooManyFailedAttempts`):报错里通常还带嵌套的 429,
+  // 但重投同一个请求只会重开一整个采样周期。目标模式直接 `Session.send()`,不经过
+  // interruptedTurnAutoResume 的排除条件,所以这里必须自己挡住(交回用户)。
+  if (d.codexErrorInfo === 'responseTooManyFailedAttempts') return false;
   // 结构化 tag(权威)。
   if (d.sdkError === 'rate_limit') return true;
   if (d.codexErrorInfo === 'usageLimitExceeded') return true;
@@ -91,6 +95,9 @@ export function classifyTurnOverload(data: unknown): boolean {
   // codex 二进制里硬编码的用户可见提示语, 随版本漂移; 只靠文案判定会在某次升级后
   // 静默失效, 而这条判定决定的是「60s 短窗口自动续跑」还是「判 blocked 交回用户」
   // —— 漏判等于把可自愈的容量抖动变成需要人工 resume 的死局。
+  // 同上:耗尽标记优先于 529 与文案判定,否则会把「重试预算已用完」当成一分钟就能
+  // 恢复的容量抖动,续跑时把整轮采样重开一遍。
+  if (d.codexErrorInfo === 'responseTooManyFailedAttempts') return false;
   if (d.codexErrorInfo === 'serverOverloaded') return true;
   if (d.errorStatus === 529) return true;
   const msg = typeof d.message === 'string' ? d.message : '';
