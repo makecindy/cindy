@@ -499,7 +499,7 @@ class Builder {
     return this.input.settings.privacy ? { label: source.brand } : source.shared;
   }
 
-  /** Short name under a tube and in sentences: the other computer, else the account handle, else the brand. */
+  /** Account/computer identity, with the same privacy projection as the detail. */
   private baseName(source: MenubarSourceInput): string {
     if (source.kind === 'subscription') return this.sharedIdentity(source)?.label ??
       (source.pooled ? this.handle(source) ?? source.device?.name : source.device?.name ?? this.handle(source)) ?? source.brand;
@@ -508,20 +508,44 @@ class Builder {
   }
 
   private who(source: MenubarSourceInput): string {
-    const name = this.baseName(source);
-    if (source.kind !== 'subscription' || !source.pooled || source.shared) return name;
+    if (source.kind !== 'subscription' || source.family === 'shared' || source.shared) return this.baseName(source);
+    const name = this.subscriptionName(source);
     const peers = this.input.sources.filter((candidate): candidate is MenubarSubscriptionInput =>
-      candidate.kind === 'subscription' && !!candidate.pooled && !candidate.shared && this.baseName(candidate) === name);
+      candidate.kind === 'subscription' && !candidate.shared && candidate.family === source.family
+      && this.subscriptionName(candidate) === name);
     if (peers.length < 2) return name;
+    const identity = this.baseName(source);
+    const sameIdentity = peers.filter(candidate => this.baseName(candidate) === identity);
+    // Stable ordinals distinguish workspaces even when privacy masks their handles
+    // identically. Never expose an opaque account/source ID as a display name.
+    const ordinal = sameIdentity.length > 1
+      ? String(sameIdentity.map(candidate => candidate.id).sort().indexOf(source.id) + 1)
+      : '';
+    const label = [name, ordinal].filter(Boolean).join(' ');
+    return identity !== source.brand ? `${label} · ${identity}` : label;
+  }
+
+  private subscriptionName(source: MenubarSubscriptionInput): string {
+    return [source.brand, source.plan?.trim()].filter(Boolean).join(' ');
+  }
+
+  /** Keep account differences at the front of narrow columns when a service repeats. */
+  private cellName(source: MenubarSubscriptionInput): string {
+    if (source.family === 'shared' || source.shared) return this.who(source);
+    const peers = this.input.sources.filter((candidate): candidate is MenubarSubscriptionInput =>
+      candidate.kind === 'subscription' && !candidate.shared && candidate.family === source.family
+      && candidate.brand === source.brand);
+    if (peers.filter(candidate => this.visible.includes(candidate)).length < 2) return this.subscriptionName(source);
+    const identity = this.baseName(source);
+    const sameIdentity = peers.filter(candidate => this.baseName(candidate) === identity);
+    if (sameIdentity.length < 2) return identity;
     const plan = source.plan?.trim() || '';
-    const samePlan = peers.filter(candidate => (candidate.plan?.trim() || '') === plan);
-    // Prefix the distinguishing part so narrow tubes do not truncate it away. Use
-    // opaque source IDs only for stable ordering, never as user-facing identity.
+    const samePlan = sameIdentity.filter(candidate => (candidate.plan?.trim() || '') === plan);
     const ordinal = samePlan.length > 1
       ? String(samePlan.map(candidate => candidate.id).sort().indexOf(source.id) + 1)
       : '';
     const qualifier = [plan, ordinal].filter(Boolean).join(' ');
-    return qualifier ? `${qualifier} · ${name}` : name;
+    return qualifier ? `${qualifier} · ${identity}` : identity;
   }
 
   private sourceTitle(source: MenubarSourceInput): string {
@@ -707,7 +731,9 @@ class Builder {
       };
     }
     const state = this.state(source);
-    const name = this.who(source);
+    const name = this.cellName(source);
+    const fullName = this.who(source);
+    const accessibleName = source.shared && fullName !== source.brand ? `${source.brand} ${fullName}` : fullName;
     if (!state.limit || state.remaining === null) {
       return {
         ...base,
@@ -721,7 +747,7 @@ class Builder {
         reserve: false,
         when: this.t('cell.noData'),
         whenLevel: 'normal',
-        accessibilityLabel: this.t('a11y.noData', { name: `${source.brand} ${name}`.trim() }),
+        accessibilityLabel: this.t('a11y.noData', { name: accessibleName }),
       };
     }
     const remaining = state.remaining;
@@ -761,8 +787,8 @@ class Builder {
       ...(unusedAtReset ? { unusedAtReset: true } : {}),
       ...(seenAtMs !== null ? { stale: true } : {}),
       accessibilityLabel: reserve
-        ? `${this.t('a11y.reserve', { name: `${source.brand} ${name}` })} · ${source.creditsUnlimited ? this.t('fact.unlimited') : source.credits?.toLocaleString(this.input.locale, { maximumSignificantDigits: 21 })} ${this.t('cell.credits')}`
-        : this.t('a11y.remaining', { name: source.brand === name ? name : `${source.brand} ${name}`, n: Math.round(remaining) }),
+        ? `${this.t('a11y.reserve', { name: accessibleName })} · ${source.creditsUnlimited ? this.t('fact.unlimited') : source.credits?.toLocaleString(this.input.locale, { maximumSignificantDigits: 21 })} ${this.t('cell.credits')}`
+        : this.t('a11y.remaining', { name: accessibleName, n: Math.round(remaining) }),
     };
   }
 

@@ -60,6 +60,52 @@ function input(sources: MenubarSourceInput[], options: { locale?: SupportedLocal
 }
 
 describe('buildMenubarView', () => {
+  // #10935, unit: cross-service accounts sharing a handle used to lose their
+  // service identity. Existing pool tests only compared accounts within Codex.
+  // The real panel and widget projections must name the service even without a
+  // plan or pool membership, and privacy must not remove that identity.
+  it.each([false, true])('names services before same-name accounts (privacy=%s)', privacy => {
+    const sources = [
+      codex('claude', 80, { family: 'claude', brand: 'Claude', plan: 'Pro', account: 'same@example.com', pooled: true }),
+      codex('codex', 40, { plan: 'Plus', account: 'same@example.com', pooled: true }),
+      codex('grok', 20, { family: 'grok', brand: 'Grok', plan: null, account: 'same@example.com' }),
+    ];
+    const view = buildMenubarView(input(sources, { settings: { privacy } }));
+    const names = ['Claude Pro', 'Codex Plus', 'Grok'];
+    expect(view.sources.map(source => source.name)).toEqual(names);
+    expect(view.headlinePrimary).toBe('Grok has the most left.');
+    expect(view.manage.map(source => source.title)).toEqual(names);
+    expect(buildUsageWidgetSnapshot(view, NOW, key => rawMainString(key, 'en'))?.sources.map(source => source.name)).toEqual(names);
+    expect(view.sources[0].accessibilityLabel).toBe('Claude Pro, 20% left');
+    if (privacy) expect(JSON.stringify(view)).not.toContain('same@example.com');
+  });
+
+  // A hidden duplicate must not strip the brand from the only visible service tube.
+  it('names the visible service even when another account of that service is hidden', () => {
+    const sources = [
+      codex('visible', 20, { account: 'same@example.com', pooled: true }),
+      codex('hidden', 30, { account: 'same@example.com', pooled: true }),
+      codex('claude', 50, { family: 'claude', brand: 'Claude', account: 'same@example.com', pooled: true }),
+    ];
+    const view = buildMenubarView(input(sources, { settings: { hidden: ['hidden'] } }));
+    expect(view.sources.map(source => source.name)).toEqual(['Codex Pro', 'Claude Pro']);
+    expect(buildUsageWidgetSnapshot(view, NOW, key => rawMainString(key, 'en'))?.sources.map(source => source.name)).toEqual(['Codex Pro', 'Claude Pro']);
+    expect(view.manage.find(source => source.id === 'hidden')?.hidden).toBe(true);
+  });
+
+  it('keeps cross-service names out of same-service ordinals after privacy masking', () => {
+    const sources = [
+      codex('pool-a', 80, { pooled: true, account: 'anna@example.com' }),
+      codex('pool-b', 20, { pooled: true, account: 'aria@example.com' }),
+      codex('claude', 50, { family: 'claude', brand: 'Claude', pooled: true, account: 'anna@example.com' }),
+    ];
+    const view = buildMenubarView(input(sources, { settings: { privacy: true } }));
+    expect(view.sources.map(source => source.name)).toEqual(['Pro 1 · a•••a', 'Pro 2 · a•••a', 'Claude Pro']);
+    expect(view.headlinePrimary).toBe('Codex Pro 2 · a•••a has the most left.');
+    expect(view.manage.map(source => source.title)).toEqual(['Codex Pro 1 · a•••a', 'Codex Pro 2 · a•••a', 'Claude Pro']);
+    expect(JSON.stringify(view)).not.toMatch(/anna|aria|pool-a has|pool-b has/);
+  });
+
   // #10110, unit: two accounts on one peer must have distinct labels in both panel and
   // widget. Provider-only fixtures could not catch identical device labels or a task
   // action falsely promising to pick the displayed pool account.
@@ -88,8 +134,8 @@ describe('buildMenubarView', () => {
     const handle = privacy ? 's•••e' : 'same';
     const names = [`Plus · ${handle}`, `Team · ${handle}`];
     expect(view.sources.map(source => source.name)).toEqual(names);
-    expect(view.headlinePrimary).toBe(`${names[1]} has the most left.`);
-    expect(view.manage.map(source => source.title)).toEqual(names);
+    expect(view.headlinePrimary).toBe('Codex Team has the most left.');
+    expect(view.manage.map(source => source.title)).toEqual(['Codex Plus', 'Codex Team']);
     expect(buildUsageWidgetSnapshot(view, NOW, key => rawMainString(key, 'en'))?.sources.map(source => source.name)).toEqual(names);
     if (privacy) expect(JSON.stringify(view)).not.toContain('same@example.com');
   });
@@ -103,12 +149,12 @@ describe('buildMenubarView', () => {
     expect(namesById(view)).toEqual({ 'pool-a': `${prefix}1 · same`, 'pool-b': `${prefix}2 · same` });
     const reordered = buildMenubarView(input([...sources].reverse(), { settings: { order: ['pool-b', 'pool-a'] } }));
     expect(namesById(reordered)).toEqual(namesById(view));
-    expect(reordered.headlinePrimary).toBe(`${prefix}2 · same has the most left.`);
+    expect(reordered.headlinePrimary).toBe(`Codex ${prefix}2 · same has the most left.`);
   });
 
   it('recommends the source with the most room and outlines its tube', () => {
     const view = buildMenubarView(input([codex('alpha', 80), codex('beta', 20)]));
-    expect(view.headlinePrimary).toBe('beta has the most left.');
+    expect(view.headlinePrimary).toBe('Codex Pro · beta has the most left.');
     const beta = view.sources.find((s) => s.id === 'beta');
     expect(beta).toMatchObject({ value: '80', valueUnit: '%', level: 'normal', fill: 0.8, emphasized: true });
     expect(view.sources.find((s) => s.id === 'alpha')?.emphasized).toBe(false);
@@ -216,20 +262,20 @@ describe('buildMenubarView', () => {
     expect(detail.facts).toContainEqual(expect.objectContaining({ label: 'Usage limit resets', value: '2 resets' }));
   });
 
-  it('names an account on another computer by that computer and does not start a task on it', () => {
+  it('names a remote subscription by service and keeps its computer in management', () => {
     const remote = codex('alpha', 30, {
       id: 'remote:dev-2:anthropic', account: null, device: { id: 'dev-2', name: 'Studio' },
     });
     const view = buildMenubarView(input([remote]));
-    expect(view.sources[0].name).toBe('Studio');
+    expect(view.sources[0].name).toBe('Codex Pro');
     expect(view.manage[0].subtitle).toBe('Studio · Codex · Pro');
     expect(view.details[remote.id].action).toEqual({ kind: 'open-app' });
     expect(view.details[remote.id].facts).toContainEqual(expect.objectContaining({ label: 'Computer', value: 'Studio' }));
   });
 
-  it('names a signed-in account on another computer by that computer, not the handle', () => {
+  it('uses the computer to distinguish a remote account from another subscription of the same service', () => {
     const remote = codex('alpha', 30, { id: 'remote:dev-2:openai', device: { id: 'dev-2', name: 'Studio' } });
-    const view = buildMenubarView(input([remote]));
+    const view = buildMenubarView(input([remote, codex('local', 50)]));
     expect(view.sources[0].name).toBe('Studio');
   });
 
@@ -355,7 +401,7 @@ describe('buildMenubarView', () => {
     });
     const view = buildMenubarView(input([low, codex('beta', 20)]));
     expect(view.sources.find((cell) => cell.id === 'alpha')).toMatchObject({ when: '3h 5m', whenLevel: 'normal', level: 'error' });
-    expect(view.headlineSecondary).toBe('alpha resets in 3h 5m.');
+    expect(view.headlineSecondary).toBe('Codex Pro · alpha resets in 3h 5m.');
     expect(view.headlineAlert).toBe(true);
   });
 
@@ -371,7 +417,7 @@ describe('buildMenubarView', () => {
 
   it('localizes the headline', () => {
     const view = buildMenubarView(input([codex('alpha', 80), codex('beta', 20)], { locale: 'zh-CN' }));
-    expect(view.headlinePrimary).toBe('beta 余量最足。');
+    expect(view.headlinePrimary).toBe('Codex Pro · beta 余量最足。');
   });
 });
 
