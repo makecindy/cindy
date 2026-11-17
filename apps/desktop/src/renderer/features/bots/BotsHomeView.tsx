@@ -1,5 +1,7 @@
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/input';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { BotProfileSourceField } from './BotProfileSourceField';
+import { BOT_PROFILE_SOURCE_MAX_LENGTH } from '../../../shared/botProfileSources';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
@@ -107,6 +109,7 @@ export function BotSettings({
   onOpenSession: (sessionId: string, searchJump?: ConversationSearchJump) => void;
 }) {
   const { t } = useBotTranslation();
+  const { confirm } = useConfirmDialog();
   const navigate = useNavigate();
   // The computer these pages read from and write to: this one, or the teammate's own computer.
   const target = useBotSettingsTarget();
@@ -232,14 +235,37 @@ export function BotSettings({
     commit: commitProfile,
   });
 
+  const sourceTooLong = (identitySource.trim().length > BOT_PROFILE_SOURCE_MAX_LENGTH
+      && identitySource.trim() !== savedSettingsRef.current.identitySource)
+    || (userContextSource.trim().length > BOT_PROFILE_SOURCE_MAX_LENGTH
+      && userContextSource.trim() !== savedSettingsRef.current.userContextSource);
   const canLeave = useCallback(async () => {
     if (avatarInFlight.current) return false;
     await autosave.flush();
-    if (autosave.isDirty()) return false;
+    if (autosave.isDirty()) {
+      if (!sourceTooLong) return false;
+      const discard = await confirm({
+        title: t('bots.memory.unsavedTitle'),
+        description: t('bots.remoteSettings.leaveDescription'),
+        confirmText: t('bots.memory.discard'),
+        cancelText: t('bots.memory.continueEditing'),
+      });
+      if (!discard) return false;
+      const saved = savedSettingsRef.current;
+      autosave.discard();
+      setName(saved.name);
+      setDescription(saved.description);
+      setIdentitySource(saved.identitySource);
+      setUserContextSource(saved.userContextSource);
+      setAvatar(saved.avatar);
+      setAvatarColor(saved.avatarColor);
+      setSelectedSkills(saved.skills);
+      setCapabilities(saved.capabilities);
+    }
     if (!((await voiceLeaveRef.current?.()) ?? true)) return false;
     if (!((await memoryLeaveRef.current?.()) ?? true)) return false;
     return (await capabilityLeaveRef.current?.()) ?? true;
-  }, [autosave.flush, autosave.isDirty]);
+  }, [autosave.flush, autosave.isDirty, autosave.discard, sourceTooLong, confirm, t]);
   useEffect(() => {
     if (!beforeCloseRef) return;
     beforeCloseRef.current = canLeave;
@@ -483,13 +509,13 @@ export function BotSettings({
           ) : autosave.status === 'error' ? (
             <p className="flex items-center gap-2 text-11 text-[var(--text-danger)]" role="alert">
               {t(autosave.errorKey ?? 'bots.profileSaveFailed')}
-              <button
+              {!sourceTooLong && <button
                 type="button"
                 onClick={() => void autosave.retry()}
                 className="font-medium text-[var(--text-primary)]"
               >
                 {t('bots.autosave.retry')}
-              </button>
+              </button>}
             </p>
           ) : null}
         </div>
@@ -592,7 +618,8 @@ export function BotSettings({
           ) : null}
         </div>
         <div hidden={page !== 'personality'} className="pt-3">
-          <Textarea
+          <BotProfileSourceField
+            label={t('bots.profile.personality')}
             aria-label={t('bots.profile.personality')}
             readOnly={!!invitationPending}
             value={identitySource}
@@ -603,7 +630,7 @@ export function BotSettings({
             onBlur={() => void autosave.flush()}
             {...autosave.composition}
             rows={6}
-            className="min-h-40 resize-none p-3 leading-6 [field-sizing:content]"
+            className="min-h-40 max-h-96 resize-none overflow-y-auto p-3 leading-6 [field-sizing:content]"
           />
         </div>
         <section

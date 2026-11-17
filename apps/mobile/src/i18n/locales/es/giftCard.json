@@ -1,6 +1,6 @@
 {
   "sectionTitle": "Tarjetas de regalo",
-  "settingsFooter": "Introduce un código de canje o pega el enlace de una tarjeta de regalo para añadirla a tu saldo promocional.",
+  "settingsFooter": "Introduce un código de canje o pega el enlace de una tarjeta de regalo para añadirla a tu saldo promocional. Las tarjetas de regalo solo se pueden canjear con una cuenta personal.",
   "action": "Canjear tarjeta de regalo",
   "title": "Canjear tarjeta de regalo",
   "inputLabel": "Código de canje",
@@ -35,6 +35,7 @@
     "expired": "Esta tarjeta de regalo ya no se puede canjear porque venció su plazo.",
     "voided": "Esta tarjeta de regalo se ha anulado.",
     "rateLimited": "Demasiados intentos. Inténtalo de nuevo más tarde.",
-    "failed": "No se pudo canjear la tarjeta de regalo. Inténtalo de nuevo más tarde."
+    "failed": "No se pudo canjear la tarjeta de regalo. Inténtalo de nuevo más tarde.",
+    "personalRequired": "Las tarjetas de regalo solo se pueden canjear con una cuenta personal."
   }
 }

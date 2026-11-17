@@ -78,7 +78,7 @@ export async function readNativeAccount(
   provider: SubscriptionProvider,
   directory: string,
   options?: { force?: boolean },
-): Promise<AuthState & { plan?: string; planTier?: string; planType?: string; loginExpiresAt?: string }> {
+): Promise<AuthState & { plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string }> {
   if (provider === 'anthropic') {
     const result = await refreshClaudeCliLoginStatus({
       configDir: directory === path.join(homedir(), '.claude') ? undefined : directory,
@@ -90,6 +90,7 @@ export async function readNativeAccount(
       authSource: 'oauth',
       plan: result.subscriptionType,
       planTier: result.planTier,
+      planDisplayName: result.planDisplayName,
       ...(result.loginExpiresAt ? { loginExpiresAt: result.loginExpiresAt } : {}),
     };
   }
