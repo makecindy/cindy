@@ -413,6 +413,7 @@ export function remoteErrorMessageForBanner(msg: string): string {
  * key('empty-response' / 'turn-failed'), message 仅作非 renderer 消费方(IM/orca)的兜底。
  */
 function liveErrorBannerText(message: string, reason: string | undefined): string {
+  if (reason === 'unexecuted-tool-markup') return i18n.t('logic.errors.unexecutedToolMarkup');
   // The banner localizes this stable reason. Keep the host's bounded cause in
   // the raw detail/diagnosis path instead of replacing it with summary copy.
   if (reason === 'silent-stop-exhausted') return message;
