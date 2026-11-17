@@ -10245,7 +10245,8 @@
       "deviceTooOld": "L'appareil distant utilise une ancienne version de {{appName}} qui ne prend pas en charge la navigation de fichiers à distance. Mettez-la à jour et réessayez",
       "loadFailed": "Impossible de charger l'arborescence des fichiers",
       "unsupportedDropFile": "Ce format de fichier ne peut pas encore être prévisualisé",
-      "multipleDropFilesUnsupported": "Déposez un seul fichier à la fois"
+      "multipleDropFilesUnsupported": "Déposez un seul fichier à la fois",
+      "pushNow": "Pousser"
     },
     "browser": {
       "newTab": "Nouvel onglet",

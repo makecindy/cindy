@@ -10129,7 +10129,8 @@
       "deviceTooOld": "對方裝置的 {{appName}} 版本過舊，不支援遠端檔案瀏覽，請升級後重試",
       "loadFailed": "檔案樹載入失敗",
       "unsupportedDropFile": "暫時不支援展示該格式的檔案",
-      "multipleDropFilesUnsupported": "一次只能拖入一個檔案"
+      "multipleDropFilesUnsupported": "一次只能拖入一個檔案",
+      "pushNow": "推送"
     },
     "browser": {
       "newTab": "新標籤",

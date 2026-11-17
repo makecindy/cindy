@@ -622,6 +622,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   gitReview: {
     get: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:get', params),
+    commitMessage: (params: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('git-review:commit-message', params),
     summary: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:summary', params),
     commits: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:commits', params),
     commitDiff: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:commit-diff', params),

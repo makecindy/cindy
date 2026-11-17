@@ -10245,7 +10245,8 @@
       "deviceTooOld": "El dispositivo remoto usa una versión anterior de {{appName}} que no admite la exploración remota de archivos. Actualízala e inténtalo de nuevo",
       "loadFailed": "No se pudo cargar el árbol de archivos",
       "unsupportedDropFile": "Aún no se puede obtener una vista previa de este formato de archivo",
-      "multipleDropFilesUnsupported": "Suelta un archivo a la vez"
+      "multipleDropFilesUnsupported": "Suelta un archivo a la vez",
+      "pushNow": "Push"
     },
     "browser": {
       "newTab": "Nueva pestaña",

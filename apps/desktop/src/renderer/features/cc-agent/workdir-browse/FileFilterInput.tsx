@@ -13,15 +13,24 @@
 import { Search, X as XIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import gitChangesIcon from '@/assets/giticon.svg';
 import { cn } from '@/lib/utils';
 
 export interface FileFilterInputProps {
   placeholder?: string;
   value: string;
   onChange: (next: string) => void;
+  changedOnly?: boolean;
+  onToggleChangedOnly?: () => void;
 }
 
-export function FileFilterInput({ value, onChange, placeholder }: FileFilterInputProps) {
+export function FileFilterInput({
+  value,
+  onChange,
+  placeholder,
+  changedOnly = false,
+  onToggleChangedOnly,
+}: FileFilterInputProps) {
   const { t } = useTranslation();
   // padding 上 12 / 下 8(2026-07-01 用户:下面再小 1/3,12 → 8):
   //   - 上间距 = TreeHeader pb-1(4) + Input pt-2(8) = 12
@@ -30,32 +39,60 @@ export function FileFilterInput({ value, onChange, placeholder }: FileFilterInpu
   // 列表,更紧凑,符合"筛选输入 → 即将看到的结果"的连续阅读节奏。
   return (
     <div className="shrink-0 px-3 pt-2">
-      <div className="relative">
-        <Search
-          size={12}
-          strokeWidth={2}
-          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sidebar-action-icon"
-        />
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder ?? t('rightSidebar.fileBrowser.filterPlaceholder')}
-          className={cn(
-            'h-7 w-full rounded-md border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-            'pl-7 pr-7 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)]',
-            'outline-none transition-colors',
-            'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
+      <div className="flex items-center gap-1.5">
+        <div className="relative min-w-0 flex-1">
+          <Search
+            size={12}
+            strokeWidth={2}
+            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sidebar-action-icon"
+          />
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder ?? t('rightSidebar.fileBrowser.filterPlaceholder')}
+            className={cn(
+              'h-7 w-full rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+              'pl-7 pr-7 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)]',
+              'outline-none transition-colors',
+              'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
+            )}
+          />
+          {value && (
+            <button
+              type="button"
+              onClick={() => onChange('')}
+              aria-label={t('rightSidebar.fileBrowser.filterClear')}
+              className="absolute right-1 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
+            >
+              <XIcon size={12} strokeWidth={2} />
+            </button>
           )}
-        />
-        {value && (
+        </div>
+        {onToggleChangedOnly && (
           <button
             type="button"
-            onClick={() => onChange('')}
-            aria-label={t('rightSidebar.fileBrowser.filterClear')}
-            className="absolute right-1 top-1/2 -translate-y-1/2 flex size-5 items-center justify-center rounded text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
+            aria-label={t('rightSidebar.fileBrowser.changedOnly')}
+            aria-pressed={changedOnly}
+            title={t('rightSidebar.fileBrowser.changedOnly')}
+            onClick={onToggleChangedOnly}
+            className={cn(
+              'flex size-7 shrink-0 items-center justify-center rounded-lg border border-[var(--border-default)]',
+              'text-sidebar-action-icon transition-colors hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
+              'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
+              changedOnly && 'bg-sidebar-item-active text-sidebar-item-active-foreground',
+            )}
           >
-            <XIcon size={12} strokeWidth={2} />
+            <span
+              aria-hidden
+              className="size-[13px] bg-current"
+              style={{
+                maskImage: `url("${gitChangesIcon}")`,
+                maskPosition: 'center',
+                maskRepeat: 'no-repeat',
+                maskSize: 'contain',
+              }}
+            />
           </button>
         )}
       </div>

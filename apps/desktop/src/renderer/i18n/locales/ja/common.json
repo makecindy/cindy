@@ -10129,7 +10129,8 @@
       "deviceTooOld": "相手のデバイスの {{appName}} のバージョンが古く、リモートファイルブラウズに対応していません。アップデート後にもう一度お試しください",
       "loadFailed": "ファイルツリーの読み込みに失敗しました",
       "unsupportedDropFile": "この形式のファイルはまだプレビューできません",
-      "multipleDropFilesUnsupported": "一度にドラッグできるファイルは1つだけです"
+      "multipleDropFilesUnsupported": "一度にドラッグできるファイルは1つだけです",
+      "pushNow": "プッシュ"
     },
     "browser": {
       "newTab": "新しいタブ",

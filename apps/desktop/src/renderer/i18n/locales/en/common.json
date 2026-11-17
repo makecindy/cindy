@@ -10172,7 +10172,8 @@
       "deviceTooOld": "The remote device is running an older {{appName}} version that does not support remote file browsing. Update it and try again.",
       "loadFailed": "Failed to load the file tree",
       "unsupportedDropFile": "This file format cannot be previewed yet",
-      "multipleDropFilesUnsupported": "Drop one file at a time"
+      "multipleDropFilesUnsupported": "Drop one file at a time",
+      "pushNow": "Push"
     },
     "browser": {
       "newTab": "New tab",

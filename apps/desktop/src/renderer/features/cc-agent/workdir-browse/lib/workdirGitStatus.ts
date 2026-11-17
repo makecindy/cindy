@@ -6,7 +6,10 @@ export type WorkdirGitStatusKind =
   'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'typechange' | 'untracked' | 'unmerged';
 
 export interface WorkdirGitFileChange {
+  /** workdir 相对路径，用于展示与树匹配。 */
   path: string;
+  /** 仓库相对路径，用于 git 操作（回退 / 暂存）。workdir 是仓库子目录时两者不同。 */
+  repoPath: string;
   oldPath: string | null;
   kind: WorkdirGitStatusKind;
   staged: boolean;
@@ -66,6 +69,7 @@ export function buildWorkdirGitMaps(data: ReviewData, workdir: string): WorkdirG
     const kind = fileStatusKind(file);
     files.set(path, {
       path,
+      repoPath: file.path,
       oldPath: file.oldPath,
       kind,
       staged: file.sources.includes('staged'),

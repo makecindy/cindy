@@ -9,6 +9,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { runGit } from './gitRunner.js';
+import { readReviewBranchWebUrl } from './webUrl.js';
 import type {
   FileStatus,
   GitIndexStatus,
@@ -286,6 +287,11 @@ export async function readStatus(scope: ReviewScope): Promise<ReviewStatus> {
     maxStdoutBytes: STATUS_MAX_STDOUT_BYTES,
   });
   const status = parsePorcelainV2Status(stdout, scope);
+  status.scope.branchWebUrl = await readReviewBranchWebUrl(
+    scope.repoRoot,
+    status.scope.branch,
+    runGit,
+  );
   // SSH review is read-only regardless of merge/rebase markers. Never probe a
   // controlled-side path with the controller's local fs APIs.
   status.inProgress = scope.source === 'remote' ? [] : await readInProgressState(scope.repoRoot);

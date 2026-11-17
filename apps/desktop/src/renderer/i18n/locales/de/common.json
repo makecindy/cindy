@@ -10172,7 +10172,8 @@
       "deviceTooOld": "Auf dem Remote-Gerät läuft eine ältere Version von {{appName}}, die keinen Remote-Dateizugriff unterstützt. Aktualisiere sie und versuche es erneut",
       "loadFailed": "Dateibaum konnte nicht geladen werden",
       "unsupportedDropFile": "Für dieses Dateiformat ist noch keine Vorschau verfügbar",
-      "multipleDropFilesUnsupported": "Lege jeweils nur eine Datei ab"
+      "multipleDropFilesUnsupported": "Lege jeweils nur eine Datei ab",
+      "pushNow": "Push"
     },
     "browser": {
       "newTab": "Neuer Tab",

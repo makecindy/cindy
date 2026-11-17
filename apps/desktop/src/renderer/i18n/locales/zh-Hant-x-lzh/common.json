@@ -10129,7 +10129,8 @@
       "deviceTooOld": "彼裝置之 {{appName}} 版本過舊，不支援遠端覽卷，請升級後再試",
       "loadFailed": "卷樹載入未成",
       "unsupportedDropFile": "此格式之卷，暫不能展示",
-      "multipleDropFilesUnsupported": "一次僅可拖入一卷"
+      "multipleDropFilesUnsupported": "一次僅可拖入一卷",
+      "pushNow": "推"
     },
     "browser": {
       "newTab": "新分頁",

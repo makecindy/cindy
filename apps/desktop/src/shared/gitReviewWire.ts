@@ -33,6 +33,8 @@ export interface ReviewScope {
   headOid: string | null;
   isDetached: boolean;
   isUnborn: boolean;
+  /** Sanitized web page for the current branch's push remote. */
+  branchWebUrl?: string | null;
   source: 'telemetry' | 'worktree' | 'workingDir' | 'remote' | null;
   aheadBehind: AheadBehind;
   disabledReason: ReviewDisableReason | null;
@@ -404,6 +406,11 @@ export interface ReviewCommitResult {
   commitOid: string;
   stdout: string;
   stderr: string;
+}
+
+export interface ReviewCommitMessageDraft {
+  message: string;
+  source: 'ai' | 'fallback';
 }
 
 export interface ReviewPushConfirmForce {
