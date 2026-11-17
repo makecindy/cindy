@@ -58,7 +58,7 @@ import {
   type RemoteAgentReverseRequest,
   type RemoteAgentTeardownReason,
 } from '@cindy/device-link';
-import { TurnDispatchRejectedError, type AgentEvent, type AgentSessionHandle, type SendOptions, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
+import { AgentStartupStoppedError, TurnDispatchRejectedError, type AgentEvent, type AgentSessionHandle, type SendOptions, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
 
 import { EXEC_SERVER_WS_PATH } from '../controller/execServerRelay';
 import { RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke, type RemoteAgentPoller } from '../controller/runClient';
@@ -81,6 +81,7 @@ import {
   type RelayRunFailure,
 } from './groupRelay';
 import { PROVIDER_GROUP_LOCAL_MEMBER_KEY } from '../../../shared/providerGroup';
+import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
 import { isAccountUsageLimitError } from '../../maker-ipc/usageLimitAutoResume';
 import { projectPathText } from '../executor/workspace';
 import { listManagedSkillFiles, managedSkillDigest } from '../managedSkillDigest';
@@ -285,6 +286,8 @@ export interface RemoteAgentHostDeps {
    * 组内电脑运行，本机中转。不提供 = 受邀者的任务一律在本机运行(现有接线)。
    */
   groupRelay?: RemoteAgentGroupRelayDeps;
+  /** Owner-side probe only: another account inside this exact shared provider can accept the task. */
+  canSwitchLocalAccount?(input: { providerId: string; hostSessionId: string; model: string }): Promise<boolean>;
   groupContinuity?(): boolean;
   /** Group owner chooses an executor; executor accepts a bounded grant from its authenticated owner peer. */
   directGuestExecution?: {
@@ -1781,7 +1784,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   async function offerSwitchAfterResumeFailure(run: Run, member: GroupRelayMember, error: unknown, model: string): Promise<void> {
     if (!run.acceptsGroupSwitch || run.closing) return;
     const message = error instanceof Error ? error.message : String(error);
-    const token = await groupSwitchOfferFor(run, member, { message }, model, 'start').catch(() => null);
+    const token = await groupSwitchOfferFor(run, member, { message }, model, 'start', error instanceof AgentStartupStoppedError).catch(() => null);
     if (token && !run.closing) append(run, { t: 'state', state: { [GROUP_SWITCH_STATE_KEY]: token } });
   }
 
@@ -2065,9 +2068,43 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     failure: RelayRunFailure,
     model: string,
     phase: 'start' | 'run' = 'run',
+    localAccountRecovery = true,
   ): Promise<string | null> {
     const relayDeps = deps.groupRelay;
     if (!relayDeps || !run.providerId || !run.hostSessionId) return null;
+    // An ordinary shared provider can grow into a local account pool without becoming a
+    // computer group. Its old native sessions still need a handoff before selecting again.
+    // Reuse the guest/task switch token and round budget; never move an old native ID.
+    const round = groupSwitchRounds.get(key(run.controller, run.hostSessionId));
+    const decision = decideProviderGroupFailure(failure, phase);
+    if (localAccountRecovery && member.memberKey === PROVIDER_GROUP_LOCAL_MEMBER_KEY && run.acceptsGroupSwitch
+      && deps.canSwitchLocalAccount && decision.action === 'switch'
+      && (decision.cause === 'usage-limit' || decision.cause === 'auth')
+      && (!round || now() - round.at > GROUP_SWITCH_ROUND_MS || !round.tried.has(member.memberKey))) {
+      const sendCallId = run.lastSendCallId;
+      const authorizedModel = run.authorizedModel;
+      const providerId = run.providerId;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let available = false;
+      try {
+        available = await Promise.race([
+          deps.canSwitchLocalAccount({ providerId: run.providerId, hostSessionId: run.hostSessionId, model }),
+          new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 2_000); }),
+        ]);
+      } catch { /* An optional probe cannot replace the original failure. */ }
+      finally { if (timer) clearTimeout(timer); }
+      // A stopped/replaced turn cannot issue a late token or consume the new
+      // turn's local handoff. Model changes likewise invalidate the old probe.
+      if (run.closing || run.abortRequested || run.lastSendCallId !== sendCallId
+        || run.authorizedModel !== authorizedModel || run.providerId !== providerId
+        || !deps.isOwnerCurrent(run.owner) || !deps.isControllerAuthorized(run.controller)
+        || !deps.providerAccess?.isAllowed(run.providerId, run.controller, model, run.sessionId)) return null;
+      if (available) {
+        const exclude = noteGroupSwitchTried(run, member);
+        exclude.delete(member.memberKey);
+        return issueGroupSwitchToken(run, exclude);
+      }
+    }
     const canSwitch = phase === 'start'
       ? relayDeps.noteStartFailure(run.providerId, member, failure.message ?? '', model)
       : relayDeps.noteRunFailure(run.providerId, member, failure, model);
