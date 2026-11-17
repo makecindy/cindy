@@ -8418,6 +8418,7 @@
             "contentStyle": "Nachrichtenabstand und Sprechblasen ändern"
           },
           "positions": {
+            "composer_header": "der Leiste über dem Eingabefeld",
             "composer_toolbar": "Eingabe-Werkzeugleiste",
             "session_header": "Aufgabenkopf",
             "statusbar": "Statusleiste",
