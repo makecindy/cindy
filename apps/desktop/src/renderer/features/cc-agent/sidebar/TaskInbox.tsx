@@ -7,16 +7,22 @@ import {
   taskSnoozeUntil,
   type TaskInboxSection,
 } from '@cindy/maker-shared/live-task-priority';
+import {
+  getRemoteSessionActivity,
+  useRemoteSessionActivityRevision,
+} from '@/features/device-link/remoteSessionActivityStore';
 import { useActiveFollowUpSessions } from '@/features/scheduler/lib/scheduleSessionBinding';
 import type { Session } from '@/lib/ccAgent.types';
 import { SessionEntryRows, type SessionEntryRowsProps } from './SessionEntryList';
 import { SectionCollapse } from './SectionCollapse';
 import { sessionRowKey } from './sessionRowKey';
 import {
+  sessionNaturalPriorityRank,
   sessionPriorityRank,
   sortSessionsForMainList,
   type MainListPriorityContext,
 } from '../lib/mainListModel';
+import { sidebarPriorityContext } from '../lib/sidebarPriorityContext';
 
 type Props = Omit<SessionEntryRowsProps, 'entries'> & {
   sessions: readonly Session[];
@@ -26,6 +32,15 @@ const SECTIONS: TaskInboxSection[] = ['inbox', 'working', 'snoozed', 'archived']
 export function TaskInbox({ sessions, priorityContext, ...rows }: Props) {
   const { t, i18n } = useTranslation();
   const followingSessions = useActiveFollowUpSessions(sessions);
+  // The inbox spans more tasks than the regular list (e.g. outside its status filter), so remote
+  // running / unread / waiting phases are read for every inbox task, not only the list's scope.
+  const remoteActivityRevision = useRemoteSessionActivityRevision();
+  const inboxContext = useMemo(
+    () => sidebarPriorityContext(priorityContext, sessions,
+      (session) => getRemoteSessionActivity(session.id, session.deviceLinkDeviceId)?.phase),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表整表远程活动
+    [priorityContext, sessions, remoteActivityRevision],
+  );
   const [now, setNow] = useState(Date.now);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
     () => new Set(['working', 'snoozed', 'archived']),
@@ -46,14 +61,17 @@ export function TaskInbox({ sessions, priorityContext, ...rows }: Props) {
   }, [sessions, now]);
   const groups = useMemo(() => {
     const result = new Map<TaskInboxSection, Session[]>(SECTIONS.map((key) => [key, []]));
-    for (const session of sortSessionsForMainList([...sessions], 'priority', priorityContext)) {
+    for (const session of sortSessionsForMainList([...sessions], 'priority', inboxContext)) {
       if (session.status === 'deleted') continue;
       result
         .get(
           taskInboxSection(
             session,
             {
-              ...taskInboxSignalsFromRank(sessionPriorityRank(session, priorityContext)),
+              ...taskInboxSignalsFromRank(
+                sessionPriorityRank(session, inboxContext),
+                sessionNaturalPriorityRank(session, inboxContext),
+              ),
               following: followingSessions.has(session),
             },
             now,
@@ -63,7 +81,7 @@ export function TaskInbox({ sessions, priorityContext, ...rows }: Props) {
     }
     result.get('snoozed')!.sort((a, b) => taskSnoozeUntil(a) - taskSnoozeUntil(b));
     return result;
-  }, [sessions, priorityContext, now, followingSessions]);
+  }, [sessions, inboxContext, now, followingSessions]);
   return (
     <div className="flex flex-col gap-2 pt-1 pl-3">
       {SECTIONS.map((section) => {

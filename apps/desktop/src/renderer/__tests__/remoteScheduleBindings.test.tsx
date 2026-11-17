@@ -267,6 +267,10 @@ it('updates follow-up grouping when bindings pause, resume, retarget or disappea
     { ...binding(), preRunHook: { command: 'node gate.mjs https://gitlab.example.com/g/r/-/merge_requests/3' } },
   ])));
   expect(screen.getByTestId('following').textContent).toBe('local,A');
+  // Hosts' binding projection carries only the derived flag (dispatch.ts).
+  act(() => remoteProjectsStore.setDeviceScheduleBindings('A', parseScheduleBindings([{ ...binding(), followsPr: true }])));
+  expect(screen.getByTestId('following').textContent).toBe('local,A');
+  expect(() => parseScheduleBindings([{ ...binding(), followsPr: 'yes' }])).toThrow();
   act(() => remoteProjectsStore.setDeviceScheduleBindings('A', [prBinding(), prBinding({ id: 'paused', status: 'paused' })]));
   expect(screen.getByTestId('following').textContent).toBe('local,A');
   act(() => remoteProjectsStore.setDeviceScheduleBindings('A', [prBinding({ status: 'paused' })]));

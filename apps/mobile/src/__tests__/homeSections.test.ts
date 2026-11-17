@@ -362,3 +362,15 @@ it('puts a quiet followed task in working and returns it to inbox for results, w
   item.scheduleInfo.hasActiveFollowUp = false;
   expect(workingCount()).toBe(0);
 });
+
+// Bug 2026-11-18: a task that finished while open kept its held running rank and stayed in
+// working until another task was opened.
+it('moves a task that finished while open to inbox right away, keeping held unread in place', () => {
+  const item = listItem('open', '2026-11-18T08:00:00Z');
+  const home = presentation({ chats: [item] });
+  const section = (ctx: Parameters<typeof buildInboxHomeSections>[2]) =>
+    buildInboxHomeSections(home, new Set(), ctx, Date.now()).find(s => s.count === 1)?.key;
+  const idle = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
+  expect(section({ ...idle, runningSessionIds: new Set(['open']), heldPriorityRanks: new Map([['open', 2]]) })).toBe('inbox-working');
+  expect(section({ ...idle, heldPriorityRanks: new Map([['open', 2]]) })).toBe('inbox-inbox');
+});

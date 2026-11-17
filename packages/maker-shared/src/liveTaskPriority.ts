@@ -73,12 +73,19 @@ export function scheduleFollowsPr(schedule: { preRunHook?: { command?: string } 
   return /https?:\/\/[^\s'"]+\/(?:pull|-\/merge_requests)\/[1-9]\d*(?![0-9])/i.test(command);
 }
 
-/** Signals for taskInboxSection from a (possibly held) live priority rank. */
-export function taskInboxSignalsFromRank(rank: number): Pick<LiveTaskPrioritySignals, 'waiting' | 'unread' | 'running'> {
+/**
+ * Signals for taskInboxSection. The viewed task keeps a held unread / waiting rank until the
+ * user leaves it, but running always comes from the natural rank: a task that finishes while
+ * open must leave working at once instead of staying there until another task is opened.
+ */
+export function taskInboxSignalsFromRank(
+  viewedRank: number,
+  naturalRank: number,
+): Pick<LiveTaskPrioritySignals, 'waiting' | 'unread' | 'running'> {
   return {
-    waiting: rank === LIVE_TASK_PRIORITY.waiting,
-    unread: rank === LIVE_TASK_PRIORITY.unread,
-    running: rank === LIVE_TASK_PRIORITY.running,
+    waiting: viewedRank === LIVE_TASK_PRIORITY.waiting,
+    unread: viewedRank === LIVE_TASK_PRIORITY.unread,
+    running: naturalRank === LIVE_TASK_PRIORITY.running,
   };
 }
 

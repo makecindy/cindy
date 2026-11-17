@@ -6,6 +6,7 @@ import {
   activityMsFromIso,
   collectHomePriorityContext,
   EMPTY_HOME_PRIORITY_CONTEXT,
+  naturalPriorityRankForId,
   sessionPriorityRank,
   sessionPriorityRecencyMs,
   type HomeListPriorityContext,
@@ -391,9 +392,10 @@ export function buildInboxHomeSections(
   });
   const sections: HomeSection[] = [];
   const groups = new Map<string, HomeRow[]>(['inbox', 'working', 'snoozed', 'archived'].map(key => [key, []]));
-  // Folded automation runs are listed one by one here, so their own unread/waiting signals count.
+  // Every listed task (including folded automation runs and tasks outside the regular list's
+  // scope) contributes its own unread / waiting signals.
   const members = original.flatMap(section => section.data)
-    .flatMap(row => row.kind === 'session' ? row.item.automationGroup?.items ?? [] : []);
+    .flatMap(row => row.kind === 'session' ? [row.item, ...row.item.automationGroup?.items ?? []] : []);
   const memberContext = collectHomePriorityContext(members, priorityContext.runningSessionIds, {
     heldPriorityRanks: new Map(), recentlyViewedAtMs: new Map(),
   });
@@ -409,7 +411,7 @@ export function buildInboxHomeSections(
       for (const item of row.item.automationGroup?.items ?? [row.item]) {
         const task = item.session;
         const group = taskInboxSection(task, {
-          ...taskInboxSignalsFromRank(sessionPriorityRank(task.id, ctx)),
+          ...taskInboxSignalsFromRank(sessionPriorityRank(task.id, ctx), naturalPriorityRankForId(task.id, ctx)),
           following: item.scheduleInfo?.hasActiveFollowUp === true,
         }, nowMs);
         const until = taskSnoozeUntil(task);

@@ -1,4 +1,5 @@
 import type { readUsageWidgetSnapshot } from '../quota-overview/service.js';
+import { scheduleFollowsPr } from '@cindy/maker-shared/live-task-priority';
 import type { configureStandbyGuestCleanup } from './providerShareAvailabilityGuests.js';
 import type { prepareShareAvailability } from './providerShareAvailability.js';
 import { parseKimiUsageRequest, isKimiCodingProvider } from '../../shared/kimiCodingUsage.js';
@@ -1118,6 +1119,8 @@ function projectInvokeResultForTunnel(
       intervalMs: row.intervalMs,
       // 保留运行模式与旧控制端兼容；当前归档提醒包含持续会话，运行时恢复原普通任务。
       ...(row.persistentSession === true ? { persistentSession: true } : {}),
+      // Inbox needs PR follow-ups; send only the derived flag, never the pre-run command.
+      ...(scheduleFollowsPr(row) ? { followsPr: true } : {}),
     }));
   }
   if (channel !== 'maker:provider:list') {
