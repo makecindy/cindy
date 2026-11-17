@@ -18,6 +18,7 @@ export default {
     pinned: { about: 'Signed in here, but the user chose to run this provider on MBP-M5' },
     'never-signed-in': { about: 'Anthropic was never signed in here; it is still listed and runs on MBP-M5' },
     'single-computer': { about: 'No other computer offers the provider: the row is hidden' },
+    'local-management': { about: 'Five saved local accounts retain management and inline recovery while using remote models' },
   },
   async ready(page) {
     await page.getByRole('heading').first().waitFor();
@@ -39,6 +40,23 @@ export default {
     await row.waitFor();
     await row.scrollIntoViewIfNeeded();
     await ui.capture('row');
+    if (ui.case === 'local-management') {
+      const accounts = page.getByTestId('subscription-accounts');
+      await accounts.getByText('account1@example.com', { exact: true }).waitFor();
+      await accounts.getByText(await ui.t('settings.providers.detail.runLocation.optionLocal'), { exact: true }).waitFor();
+      assert.equal(await accounts.getByTestId('subscription-account').count(), 5);
+      await accounts.getByRole('button', { name: await ui.t('subscriptionAccounts.add'), exact: true }).waitFor();
+      await accounts.getByTestId('subscription-account').first().getByRole('button', {
+        name: await ui.t('subscriptionAccounts.loginAccountAria', { name: 'account1@example.com' }), exact: true,
+      }).waitFor();
+      await accounts.getByTestId('subscription-account').nth(1).getByRole('button', { name: await ui.t('commonUi.retry'), exact: true }).click();
+      const commands = await page.evaluate(() => window.providerSourcesFixture.subscriptionControl.commands);
+      assert.ok(commands.length > 1);
+      assert.ok(commands.every(command => command.action === 'read'));
+      assert.match(await row.textContent() ?? '', /MBP-M5/);
+      await ui.capture('local-account-management');
+      return;
+    }
     if (ui.case === 'borrowing') {
       await page.getByRole('button', { name: await ui.t('settings.providers.detail.moreActionsAria') }).click();
       await page.getByRole('menuitem', { name: await ui.t('settings.providers.detail.runLocation.signInHere') }).waitFor();

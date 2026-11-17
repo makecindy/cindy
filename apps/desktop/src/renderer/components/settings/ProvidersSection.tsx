@@ -712,7 +712,7 @@ function DetailHeader({
 }) {
   const { t } = useTranslation();
   const management = useProviderManagement(provider);
-  // Borrowing another computer's sign-in: this computer's own accounts and "not connected" do not apply.
+  // Model execution can be remote while account management still belongs to this computer.
   const borrowing = useProviderBorrow(provider).borrowed !== null;
   const canRename = !!provider && provider.id !== 'xd' && !isOrganizationManagedProvider(provider);
   const resolvedDelete =

@@ -198,7 +198,6 @@ describe('SubscriptionAccountsSection usage', () => {
     expect(screen.queryByTestId('original-card')).toBeNull();
     expect(screen.getAllByTestId('subscription-account-usage')).toHaveLength(2);
   });
-  // Regression: a connected account's menu offered plain "Sign in", reading as if it were signed out.
   // Unit regression: a first failed account read had no in-place recovery action.
   // Unlike the refresh-failure case above, no cached account rows exist yet.
   it('retries a failed initial read in place without creating or replacing accounts', async () => {
@@ -214,6 +213,25 @@ describe('SubscriptionAccountsSection usage', () => {
     expect(screen.getAllByTestId('subscription-account')).toHaveLength(2);
   });
 
+  // Unit: a disconnected OpenAI account had no inline recovery, and a transient
+  // status-read failure must retry reads instead of starting a new login.
+  it.each(['signed-out', 'unavailable'] as const)('recovers an OpenAI %s account from its own row', async status => {
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
+    command.mockResolvedValue({ ...view, providerId: 'openai', accounts: [{ ...view.accounts[1], status }] });
+    render(<SubscriptionAccountsSection providerId="openai" />);
+    const row = await screen.findByTestId('subscription-account');
+    command.mockClear();
+    const name = status === 'signed-out' ? 'Sign in again to second@example.test' : 'commonUi.retry';
+    fireEvent.click(within(row).getByRole('button', { name }));
+    if (status === 'signed-out') await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'login', providerId: 'openai', accountId: 'cindy-owner-second', loginKey: expect.any(String),
+    }));
+    else await waitFor(() => expect(command).toHaveBeenCalledWith({ action: 'read', providerId: 'openai' }));
+    expect(command.mock.calls.every(([request]) => request.action === 'read' || request.action === 'login')).toBe(true);
+    if (status === 'unavailable') expect(command.mock.calls.every(([request]) => request.action === 'read')).toBe(true);
+  });
+
+  // Regression: a connected account's menu offered plain "Sign in", reading as if it were signed out.
   it.each([
     ['ready', 'subscriptionAccounts.loginAgain'],
     ['signed-out', 'subscriptionAccounts.login'],

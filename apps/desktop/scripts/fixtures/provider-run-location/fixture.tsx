@@ -73,6 +73,7 @@ mountPage({
       fixture.devices.push({ deviceId: 'mbp', name: 'MBP-M5', platform: 'darwin' }, { deviceId: 'mini', name: 'Chris的Mac mini', platform: 'darwin' });
       for (const id of ['mbp', 'mini']) fixture.catalogs.set(id, { providers: remote, loading: false, error: null });
     }
+    if (ctx.case.startsWith('local-management')) snapshot.providers[0] = { ...snapshot.providers[0], connected: false, subscriptionAccountPool: 'openai', runLocation: 'mbp' } as typeof snapshot.providers[0];
     if (ctx.case === 'borrowing') snapshot.providers[0] = { ...snapshot.providers[0], connected: false };
     // Anthropic was never signed in here (no removed flag): it must still be listed, borrowed from another computer.
     if (ctx.case === 'never-signed-in') snapshot.providers[1] = { ...snapshot.providers[1], connected: false };
@@ -102,6 +103,13 @@ mountPage({
           const defaultAccount = { id: 'default', identity: 'alex@example.com',
             plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: 'ready', directory,
             running: 0, paused: false, limit: 4, weight: 1 };
+          if (ctx.case.startsWith('local-management') && command.providerId === 'openai') {
+            return { providerId: 'openai', configured: true, strategy: 'least', accounts: Array.from({ length: 5 }, (_, index) => ({
+              ...defaultAccount, id: index === 0 ? 'default' : `account-${index}`,
+              identity: `account${index + 1}@example.com`,
+              status: index === 1 ? 'unavailable' : 'signed-out',
+            })) };
+          }
           return { providerId: command.providerId, configured, strategy: 'least', accounts: configured ? [
             { ...defaultAccount, usage: accountUsage(command.providerId, [12, 34, 8]) },
           ] : command.action === 'preview' ? [defaultAccount] : [] };

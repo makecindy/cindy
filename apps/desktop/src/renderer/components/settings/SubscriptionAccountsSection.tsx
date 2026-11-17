@@ -498,9 +498,9 @@ export function SubscriptionAccountsSection({
                                 </span>
                               </Tip>
                             )}
-                            {kind === 'anthropic' && ((connected && expiring) || account.status === 'signed-out') && (
+                            {(account.status === 'signed-out' || (kind === 'anthropic' && connected && expiring)) && (
                               <Button
-                                data-settings-search-action="Sign in again to this Claude account"
+                                data-settings-search-action="Sign in again to this subscription account"
                                 variant="secondary"
                                 tone="quiet"
                                 size="sm"
@@ -509,6 +509,12 @@ export function SubscriptionAccountsSection({
                                 onClick={signIn}
                               >
                                 {t('subscriptionAccounts.loginAgain')}
+                              </Button>
+                            )}
+                            {account.status === 'unavailable' && (
+                              <Button variant="secondary" tone="quiet" size="sm"
+                                disabled={refreshing || busy} onClick={() => void refresh()}>
+                                {t('commonUi.retry')}
                               </Button>
                             )}
                           </div>
