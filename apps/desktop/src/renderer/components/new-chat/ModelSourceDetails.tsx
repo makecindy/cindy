@@ -350,7 +350,7 @@ export function ModelSourceDetails({
   const identity = poolParts?.length
     ? undefined
     : pickerAccount
-      ? (pickerAccount.identity ?? t('subscriptionAccounts.unassigned'))
+      ? pickerAccount.identity
       : accountIdentity;
   const source = [providerAccountLabel(label, identity), plan].filter(Boolean).join(' · ');
   return (
