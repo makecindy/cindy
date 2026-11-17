@@ -25,6 +25,8 @@ export interface HostSilentStopPorts<Turn> {
   listActivity(): Pick<SessionListActivityTracker, 'captureContinuation' | 'commit'> | null;
   /** Coexistence plan A (input-queue.mjs holdForDesktop): the profile is the desktop's while held. */
   isProfileHeld(): boolean;
+  /** The owner runtime is stopping: an account boundary or the Host's shutdown began (input-queue.mjs beginStop). */
+  isStopping(): boolean;
   /** A row of the task (the continuation's user row, the exhausted marker), behind its reply rows. */
   writeRow: SilentStopTurnEndPorts['createDbMessage'];
   /** The exhausted banner's error event, to the task's clients (the window and /api/chat). */
@@ -107,9 +109,10 @@ export function createHostSilentStop<Turn>(ports: HostSilentStopPorts<Turn>) {
     return explicitPorts<SilentStopTurnEndPorts>({
       silentStopTurnLeaseGate: gate,
       agentInputCoordinatorHolder: {
-        // While the profile is held, its writes are the desktop's: no continuation is sent, as no queued
-        // input would be, and the turn settles as one that had queued work.
-        hasPendingQueuedWork: id => ports.isProfileHeld() || ports.coordinator.hasPendingQueuedWork(id),
+        // While the profile is held, its writes are the desktop's; once an account boundary or the shutdown
+        // began, a continuation would be a write torn down at once. Either way none is sent, as no queued
+        // input would be, and the turn settles as one that had queued work (as an interruption once stopping).
+        hasPendingQueuedWork: id => ports.isProfileHeld() || ports.isStopping() || ports.coordinator.hasPendingQueuedWork(id),
         noteHostTurnContinuation: (id, generation) => {
           ports.adoptGeneration(turn, generation);
           ports.coordinator.noteHostTurnContinuation(id, generation);

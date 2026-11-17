@@ -5736,6 +5736,27 @@ test('owner boundary, logout: the running turn stops before the revoke, stays in
   assert.equal(await b.interruptedAtNextStart(), true);
 });
 
+// Review item 3 (8g B, 2026-11-18): a silent-stop decision that comes due after the boundary began sends no
+// continuation (a write, torn down at once); the turn ends as an interruption.
+test('owner boundary: a silent stop decided after the boundary began sends no continuation, and the turn ends', async t => {
+  const id = 'boundary-silent-stop';
+  const b = await boundaryTask(t, id);
+  const session = await b.startTurn();
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  t.after(() => t.mock.timers.reset());
+  const stamp = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId };
+  session.emit({ type: 'status', data: { isRunning: true }, ...stamp });
+  session.emit({ type: 'text', data: { text: 'half done', isFinal: true }, ...stamp });
+  session.emit({ type: 'status', data: { isRunning: false }, ...stamp });
+  session.emit({ type: 'done', data: { silentStop: true }, ...stamp });
+  await settle();
+  const release = b.boundary.begin();
+  t.after(release);
+  t.mock.timers.tick(SILENT_STOP_DECISION_DELAY_MS);
+  await settleUntil(() => !b.h.queue.projection(id).turnInProgress, 'the turn ends');
+  assert.equal(session.sent.length, 1, 'no continuation once the boundary began');
+});
+
 for (const [path, steps] of [
   // Session invalidation: requests paused, confirmations and plugins closed before the runtime (main.ts).
   ['session invalidation', session => ({ beforeDispose: () => failRunningTurn(session) })],

@@ -97,6 +97,7 @@ export function createTurnExecutor(deps) {
     guard: () => deps.getAutoResume?.()?.silentStopAutoResumeGuard ?? null,
     listActivity: () => deps.productTurn?.listActivity ?? null,
     isProfileHeld: () => deps.isProfileHeld?.() === true,
+    isStopping: () => deps.isStoppingRuntime() === true,
     writeRow: (id, message, options) => behindDurableWrites(id, `silent-stop-row:${id}`, () => deps.persistMessage(id, message, options)),
     // As the desktop broadcasts the banner (register.ts surfaceSilentStopExhaustedBanner, source as there),
     // with the turn's input so /api/chat ends on it.
@@ -336,7 +337,9 @@ export function createTurnExecutor(deps) {
     turn.silentStopPending = false;
     if (turn.resumeOf !== undefined) deps.resumeAnswered?.(sessionId, turn.resumeOf);
     void finish(sessionId, turn).then(() => {
-      if (reason === 'exhausted' || turn.abortRequested || typeof turn.clientId !== 'string' || !deps.isCurrent()) return;
+      // A turn the owner boundary interrupted gets no receipt from here (/api/chat ends on the boundary's).
+      if (reason === 'exhausted' || turn.abortRequested || turn.interruptedByShutdown
+        || typeof turn.clientId !== 'string' || !deps.isCurrent()) return;
       deps.hub.publish({ type: 'input_receipt', sessionId, ...turnStreamFields(turn), clientId: turn.clientId, status: 'recorded' });
     }, () => {});
   }
