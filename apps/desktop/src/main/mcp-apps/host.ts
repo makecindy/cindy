@@ -267,7 +267,7 @@ export class McpAppsHost {
   }>();
   private readonly connectionIds = new WeakMap<AppConnection, string>();
   private readonly resourceCache = new OwnerScopedAppResourceCache<{
-    html: string; meta: import('@modelcontextprotocol/ext-apps').McpUiResourceMeta;
+    html: string; hostFullscreenButton: boolean; meta: import('@modelcontextprotocol/ext-apps').McpUiResourceMeta;
     policy: ReturnType<typeof appCsp>;
   }>();
   private sweepTimer?: ReturnType<typeof setInterval>;
@@ -565,6 +565,7 @@ export class McpAppsHost {
       // Private restoration data is execution-host owned, including on the first open.
       delete context[VIEW_STATE_KEY];
       delete context.viewState;
+      delete context['cindy/host-controls'];
       // Independently opened resources have no persisted card to own a snapshot.
       const stateStorage = sessionId !== null && record
         ? this.deps.viewState?.(owner, sessionId, clientId, record) : undefined;
@@ -749,6 +750,12 @@ export class McpAppsHost {
         bridge.oninitialized = () => {
           if (view.initialized || !bridge.getAppCapabilities()) return;
           view.initialized = true;
+          // Host-generated presentation fact. Page requests cannot forge this key.
+          const appModes = bridge.getAppCapabilities()?.availableDisplayModes;
+          view.context = { ...view.context, 'cindy/host-controls': {
+            fullscreenButton: resource.hostFullscreenButton && view.context.availableDisplayModes?.includes('fullscreen') === true &&
+              (!appModes || appModes.includes('fullscreen')),
+          } };
           void assertCurrent()
             .then(async () => {
               const attachments = (record?.tool._meta as Record<string, unknown> | undefined)?.['cindy/attachments'];

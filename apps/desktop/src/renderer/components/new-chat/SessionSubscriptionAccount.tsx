@@ -299,6 +299,7 @@ export interface SessionAccountDisplay {
   identity: string | null;
   plan?: string;
   planTier?: string;
+  planDisplayName?: string;
   planType?: string;
   /** False only for an older host or a task with no account binding. */
   replacesUsage: boolean;
@@ -333,11 +334,12 @@ export function sessionAccountDisplay(
     return { identity: t('subscriptionAccounts.unassigned'), ...replaces };
   if (account.state === 'unavailable')
     return { identity: t('subscriptionAccounts.boundUnavailable'), ...replaces };
-  const { identity, number, plan, planTier, planType } = account.account;
+  const { identity, number, plan, planTier, planDisplayName, planType } = account.account;
   return {
     identity: identity ?? t('providerGroup.member.accountFallback', { index: number }),
     ...(plan ? { plan } : {}),
     ...(planTier ? { planTier } : {}),
+    ...(planDisplayName ? { planDisplayName } : {}),
     ...(planType ? { planType } : {}),
     ...replaces,
   };

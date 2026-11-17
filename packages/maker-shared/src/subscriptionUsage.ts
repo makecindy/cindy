@@ -53,6 +53,8 @@ export interface ClaudeSubscriptionUsageSnapshot {
   subscriptionType?: string | null;
   /** Official CLI tier, when available. Older clients may omit it. */
   planTier?: string | null;
+  /** Official CLI display name; presentation only. Null clears a previous name. */
+  planDisplayName?: string | null;
   /** headers 源的整体状态:allowed / allowed_warning / rejected。 */
   rateLimitStatus?: string | null;
   /** headers 源:当前代表性(最紧)窗口名,如 'five_hour' / 'seven_day'。 */

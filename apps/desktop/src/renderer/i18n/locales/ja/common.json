@@ -14970,6 +14970,7 @@
       "pluginDisabledUnnamed": "自動チェックが停止しています：必要なプラグインが有効になっていません。有効にすると自動で再開します。",
       "installPlugin": "プラグインをインストール",
       "openPlugin": "プラグインを開く",
+      "enablePlugin": "プラグインを有効にする",
       "dismissTitle": "過去の失敗通知を閉じる"
     },
     "worktreeRestoreBanner": {
@@ -20938,7 +20939,7 @@
     "loadFailed": "アプリを読み込めませんでした。接続を確認して再読み込みしてください。",
     "updateRequired": "このコンピューターはまだ MCP Apps に対応していません。このコンピューターの Cindy を更新してから、もう一度お試しください。",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "$t(mcpApps.appName)「{{name}}」から送信",
     "serverId": "MCP サーバー ID：{{id}}",
     "exitFullscreen": "全画面表示を終了",
@@ -20952,7 +20953,19 @@
     "pluginCspRejected": "ページが未宣言のドメインを要求したため、読み込みを拒否しました。",
     "filesOnExecutionComputer": "ファイルの内容は実行側のコンピューターで確認してください",
     "awaitingApproval": "確認を待っています",
-    "pendingApprovals": "{{count}} 件の確認待ち"
+    "pendingApprovals": "{{count}} 件の確認待ち",
+    "source": {
+      "official": "Cindy 公式",
+      "organization": "組織 · {{namespace}}",
+      "market": "プラグインマーケット",
+      "third-party": "サードパーティの提供元",
+      "local": "ローカルインストール",
+      "unknown": "提供元不明"
+    },
+    "customMcp": "カスタム MCP",
+    "sourceLabel": "提供元",
+    "signatureLabel": "署名",
+    "fullscreen": "全画面"
   },
   "richAnswer": {
     "invalidImageReference": "画像の参照先が無効なため、表示できません。",

@@ -1320,17 +1320,17 @@
       "install": {
         "title": "須裝「{{plugin}}」法器",
         "body": "此務於他機開 {{device}}。於本機裝「{{plugin}}」法器，即可於右欄觀之、操之。",
-        "action": "往裝"
+        "action": "裝之"
       },
       "enable": {
         "title": "須啟「{{plugin}}」法器",
         "body": "此務於他機開 {{device}}。於本機啟「{{plugin}}」法器，即可於右欄觀之、操之。",
-        "action": "往啟"
+        "action": "啟之"
       },
       "update": {
         "title": "須更「{{plugin}}」法器",
         "body": "此務於他機開 {{device}}。更本機「{{plugin}}」法器至新版，即可於右欄觀之、操之。",
-        "action": "往更"
+        "action": "更之"
       }
     },
     "lockOnExitHintPrivacy": "退出遠端桌面後覆以隱私畫面，AI 可續作；有人觸機即鎖屏。",
@@ -14961,6 +14961,7 @@
       "pluginDisabledUnnamed": "自動查驗暫受阻：所需法器未啟，啟之自復。",
       "installPlugin": "裝法器",
       "openPlugin": "觀法器",
+      "enablePlugin": "啟法器",
       "dismissTitle": "闔往昔未成之示"
     },
     "worktreeRestoreBanner": {
@@ -20938,7 +20939,7 @@
     "loadFailed": "應用程式載入未成。請察連線後重載。",
     "updateRequired": "此機尚不支援 MCP Apps，請更新該機之 Cindy 後再試。",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "由 $t(mcpApps.appName)「{{name}}」所遣",
     "serverId": "MCP 伺服器 ID：{{id}}",
     "exitFullscreen": "離全螢幕",
@@ -20952,7 +20953,19 @@
     "pluginCspRejected": "此頁請求未宣告之網域，已拒其載入",
     "filesOnExecutionComputer": "卷之內容請於執行之機覽之",
     "awaitingApproval": "候君確認",
-    "pendingApprovals": "{{count}} 項待確"
+    "pendingApprovals": "{{count}} 項待確",
+    "source": {
+      "official": "Cindy 官方",
+      "organization": "組織 · {{namespace}}",
+      "market": "法器市集",
+      "third-party": "他方來源",
+      "local": "本機裝入",
+      "unknown": "來源未詳"
+    },
+    "customMcp": "自訂 MCP",
+    "sourceLabel": "來源",
+    "signatureLabel": "簽章",
+    "fullscreen": "滿屏"
   },
   "richAnswer": {
     "invalidImageReference": "圖之引用無效，未能示之。",
