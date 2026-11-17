@@ -209,7 +209,7 @@ export class GhostSubscriptionGateway {
   private readonly entries = new Map<string, SubEntry>();
   private readonly pendingHooks = new Map<string, PendingHook>();
   private discovery: { owner: unknown; promise: Promise<InstalledGhost[]> } | null = null;
-  private readonly contentRecipients = new WeakMap<GhostPipeEventPush, InstalledGhost>();
+  private readonly contentRecipients = new WeakMap<GhostPipeEventPush, { ghost: InstalledGhost; allowed?: (ghost: InstalledGhost) => boolean }>();
 
   constructor(private readonly deps: GhostSubscriptionGatewayDeps) {}
 
@@ -258,8 +258,9 @@ export class GhostSubscriptionGateway {
   }
 
   /** Indexed content/state subscribers; avoids discovery on every message or state event. */
-  publishIndexed(ghosts: InstalledGhost[], topic: GhostSubscribeTopic, name: GhostDidEventName, data: GhostDidEventData): void {
-    this.publishTo(ghosts, topic, name, data);
+  publishIndexed(ghosts: InstalledGhost[], topic: GhostSubscribeTopic, name: GhostDidEventName, data: GhostDidEventData,
+    allowed?: (ghost: InstalledGhost) => boolean): void {
+    this.publishTo(ghosts, topic, name, data, allowed);
   }
 
   private publishTo(
@@ -267,6 +268,7 @@ export class GhostSubscriptionGateway {
     topic: GhostSubscribeTopic,
     name: GhostDidEventName,
     data: GhostDidEventData,
+    allowed?: (ghost: InstalledGhost) => boolean,
   ): void {
     for (const candidate of ghosts) {
       if (!candidate.enabled || !candidate.manifest.subscribe?.topics?.includes(topic)) continue;
@@ -276,7 +278,7 @@ export class GhostSubscriptionGateway {
       if (!ghost || ghostInstallApprovalToken(ghost.approval) !== ghostInstallApprovalToken(candidate.approval)) continue;
       if (!ghost.enabled || !ghostTaskEventApproved(ghost, topic)) continue;
       if (!ghost.manifest.subscribe?.topics?.includes(topic)) continue;
-      this.dispatchTo(ghost, topic, name, data);
+      if (!allowed || allowed(ghost)) this.dispatchTo(ghost, topic, name, data, allowed);
     }
   }
 
@@ -304,6 +306,7 @@ export class GhostSubscriptionGateway {
     topic: GhostSubscribeTopic,
     name: GhostDidEventName,
     data: GhostDidEventData,
+    allowed?: (ghost: InstalledGhost) => boolean,
   ): void {
     const ghostId = installedGhostStoragePart(ghost);
     const e = this.entry(ghostId);
@@ -324,7 +327,7 @@ export class GhostSubscriptionGateway {
       ts: this.deps.now(),
       data,
     };
-    if (topic === 'message' || topic === 'task-state' || topic === 'tool-execution') this.contentRecipients.set(evt, ghost);
+    if (topic === 'message' || topic === 'task-state' || topic === 'tool-execution') this.contentRecipients.set(evt, { ghost, allowed });
 
     // 直投条件:在跑 + 缓冲已清 + 无唤醒在途——三者缺一都排队,否则新事件
     // 会插到缓冲里旧事件前面(seq 乱序)。投递失败(刚崩窗口期)同样回落缓冲。
@@ -348,9 +351,10 @@ export class GhostSubscriptionGateway {
     }
     const recipient = this.contentRecipients.get(evt);
     if (recipient && 'topic' in evt) {
-      const live = this.deps.findGhostForDelivery ? this.deps.findGhostForDelivery(ghostId) : recipient;
+      const live = this.deps.findGhostForDelivery ? this.deps.findGhostForDelivery(ghostId) : recipient.ghost;
       // A queue belongs to the exact approved install. Drop stale events instead of retrying into an update.
-      if (!live?.enabled || ghostInstallApprovalToken(live.approval) !== ghostInstallApprovalToken(recipient.approval)
+      if (!live?.enabled || (recipient.allowed && !recipient.allowed(live))
+        || ghostInstallApprovalToken(live.approval) !== ghostInstallApprovalToken(recipient.ghost.approval)
         || !live.manifest.subscribe?.topics?.includes(evt.topic) || !ghostTaskEventApproved(live, evt.topic)) return true;
     }
     const payload = e.pendingDropped > 0 ? { ...evt, dropped: e.pendingDropped } : evt;

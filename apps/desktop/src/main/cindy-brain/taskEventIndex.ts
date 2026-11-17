@@ -20,11 +20,13 @@ export class GhostTaskEventIndex {
   wantsToolEvent(type: string): boolean { return this.topics.has('tool-execution') && isToolExecutionEvent(type); }
 
   publishTool(sessionId: string, event: { type: string; data?: unknown; source?: string },
-    owner: DataOwnerPushStamp, gateway: () => GhostSubscriptionGateway): void {
+    owner: DataOwnerPushStamp, gateway: () => GhostSubscriptionGateway, allowed?: (ghost: InstalledGhost) => boolean): void {
     const ghosts = this.topics.get('tool-execution');
     if (!ghosts?.length || !this.owner || owner.dataOwnerId !== this.owner.dataOwnerId
       || owner.ownerGeneration !== this.owner.ownerGeneration || !isToolExecutionEvent(event.type)) return;
-    gateway().publishIndexed(ghosts, 'tool-execution', 'did-tool-execution', projectToolExecutionEvent(sessionId, event));
+    const recipients = allowed ? ghosts.filter(allowed) : ghosts;
+    if (!recipients.length) return;
+    gateway().publishIndexed(recipients, 'tool-execution', 'did-tool-execution', projectToolExecutionEvent(sessionId, event), allowed);
   }
 
   subscribedKinds(): TaskChangeEvent['kind'][] {

@@ -378,6 +378,56 @@ describe('indexed task content and state events', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  // Unit / #11057: production projection previously leaked structured Basic
+  // credentials and native Base64 media. A single real indexed tool event is enough.
+  it('masks structured credential fields while retaining ordinary tool input', async () => {
+    const g = ghost('reader', { topics: ['tool-execution'] });
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g }); running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    index.publishTool('task', { type: 'tool_use', data: { input: {
+      headers: { Authorization: 'Basic c3ludGhldGljOnRlc3Q=', Cookie: 'unit_cookie=private' },
+      apiKey: 'unit_api_secret', nested: { password: 'unit_password' }, timeout: 30,
+    } } }, owner, () => gw);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const body = JSON.stringify(sent[0]!.payload);
+    for (const secret of ['c3ludGhldGljOnRlc3Q=', 'unit_cookie=private', 'unit_api_secret', 'unit_password']) expect(body).not.toContain(secret);
+    expect(sent[0]!.payload).toMatchObject({ data: { payload: { input: { headers: { Authorization: '[REDACTED]' }, timeout: 30 } } } });
+  });
+
+  it('omits native and embedded media bytes without losing ordinary result text', async () => {
+    const g = ghost('reader', { topics: ['tool-execution'] });
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g }); running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    index.publishTool('task', { type: 'tool_result_full', data: { fullText: 'preview ready',
+      processMedia: [{ kind: 'image', mimeType: 'image/png', data: 'bmF0aXZlLW1lZGlh' }],
+      content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aW5saW5lLW1lZGlh' } },
+        { type: 'resource', resource: { mimeType: 'image/png', blob: 'cmVzb3VyY2UtbWVkaWE=' } }, { type: 'text', text: 'kept' }],
+      thumbnail: 'data:image/png;base64,dXJpLW1lZGlh',
+    } }, owner, () => gw);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const body = JSON.stringify(sent[0]!.payload);
+    for (const media of ['bmF0aXZlLW1lZGlh', 'aW5saW5lLW1lZGlh', 'cmVzb3VyY2UtbWVkaWE=', 'dXJpLW1lZGlh']) expect(body).not.toContain(media);
+    expect(sent[0]!.payload).toMatchObject({ data: { truncated: true, payload: { fullText: 'preview ready', content: [null, { resource: null }, { type: 'text', text: 'kept' }] } } });
+  });
+
+  // Project disablement must be checked before copying and again after the
+  // asynchronous boundary. Existing install/owner tests did not cover this policy.
+  it('does not project or deliver tool events when their project visibility is revoked', async () => {
+    const g = ghost('reader', { topics: ['tool-execution'] });
+    const { gw, sent, running, deps } = makeGateway({ findGhostForDelivery: () => g }); running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    let visible = false;
+    const read = vi.fn(() => ({ input: 'project content' }));
+    const event = { type: 'tool_use', get data() { return read(); } };
+    const allowed = () => visible;
+    index.publishTool('task', event, owner, () => gw, allowed);
+    expect(read).not.toHaveBeenCalled(); expect(deps.wake).not.toHaveBeenCalled();
+    visible = true; index.publishTool('task', event, owner, () => gw, allowed);
+    visible = false;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent).toHaveLength(0);
+  });
+
   // Unit, #9801 scope reduction: lifecycle events reuse immediate delivery and
   // the existing cold queue; they add no timer and must not fold a finished turn.
   it('delivers running, completed and running immediately in order without a timer', () => {
