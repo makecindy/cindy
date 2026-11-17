@@ -14,6 +14,7 @@
 | `control` | `cindy_helper` | 任务运行与管理 |
 | `handoff` | `cindy_helper` | 工具目录中归属此组的协作能力 |
 | `settings` | `cindy_helper` | 应用设置与运行配置 |
+| `usage` | `cindy_helper` | 当前 Cindy 账号在执行电脑上的订阅用量，只读 |
 | `scheduler` | `cindy_scheduler` | 定时任务管理 |
 | `terminal` | `cindy_helper` | 宿主管理的命令、交互终端与后台作业 |
 | `files` | `cindy_helper` | 授权目录的文件操作与监听；调用 `file_request` |
@@ -77,7 +78,7 @@ const { scope, services } = JSON.parse(result.content.find(item => item.type ===
 
 动态安装和开发迭代继续走现有 Forge 安装所选实例的流程，同版本更新亦可；不要经宿主工具入口管理其他插件。
 批准版本、启用状态和账号变化使旧调用失效。逻辑页退出和 Node Worker 显式停止走各自宿主的同一资源清理入口，
-释放文件监听、终端和电脑观察/驱动连接；旧电脑快照不能用于新一轮操作。
+释放网络连接、文件监听、终端和电脑观察/驱动连接；旧电脑快照不能用于新一轮操作。
 已注册的浏览器执行端继续由原 bridge 的 reconcile/prepareUpdate 接管，用户选择不被插件代码替代。
 持久数据仍按原卸载、换源和作品库规则处理；运行资源退出本身不删除 KV、凭证或作品。
 
@@ -120,6 +121,78 @@ Node Host 的插件 computer 调用与未装配的 scheduler、SSH 和文档服�
 停用、卸载、换版和来源变化撤销旧桥接，已有配对和用户选择按原实例保存，多个实现不静默混用。
 
 ## 定时任务与应用设置
+
+`settings` 组也提供供应商分享成员工具。先用 `list_provider_share_members({providerId?,device?})`
+查询精确的 `providerId` 与 `memberId`；只返回自己分享的成员 id、名字和状态，不包含分享给我的供应商。
+`device` 默认本机，另一台电脑必须属于同账号并已授权远控；沿用现有 Device Link 管理入口，旧端明确不支持。
+名单复用原 `owned` 的 `includeUsage:false` 读取，不计算历史用量或激活管理页快速轮询；缺少明确回执的旧电脑返回
+`UNSUPPORTED_CAPABILITY`，不会反复退回完整读取。暂停/恢复仅需 memberId，模型范围需要 providerId 与 memberId。
+
+```js
+await cindy.host.call('cindy_helper', 'set_provider_share_member_status', {
+  memberId: selectedMemberId, status: 'pause' // 或 resume
+});
+const access = await cindy.host.call('cindy_helper', 'get_provider_share_model_access', {
+  providerId: 'anthropic', memberId: selectedMemberId
+});
+// 从 access 的工具结果读取准确型号 id，再提交完整名单。
+await cindy.host.call('cindy_helper', 'set_provider_share_model_access', {
+  providerId: 'anthropic', memberId: selectedMemberId, models: selectedModelIds
+});
+```
+
+关闭分享会立即打断该成员在跑的任务，成功回执不等全部关停完成；恢复只允许后续消息，不自动续跑。
+模型名单 `null` 跟随供应商范围，`[]` 禁止所有模型；不改成员预算等其它设置。调用超时或失败可能已产生
+副作用，先查询，不自动重发。插件不借用任务身份，也不新增逐次审批或分项补批；受邀者不能通过该入口
+获得分享者的管理权限。未装配供应商分享服务的 Host 不提供这些工具。
+共享任务中的 Agent 按任务权限可管理主人的分享成员。
+
+### 读取订阅用量
+
+声明 `"agent": { "hostTools": ["usage"] }`，安装或扩权更新获准后调用：
+
+```js
+const result = await cindy.host.call('cindy_helper', 'get_subscription_usage', {});
+// 也可按返回的 providerId 筛选；内置供应商为 anthropic / openai。
+const claude = await cindy.host.call('cindy_helper', 'get_subscription_usage', { providerId: 'anthropic' });
+```
+
+结果沿用 MCP `content` / `isError`；成功文本 JSON 为 `{ok:true, scope:'local', accounts:[...]}`。
+`local` 始终指**执行插件的电脑**。只包括当前 Cindy 账号授权使用的本机 Claude/Codex
+订阅账号，不查询其他电脑、供应商组或别人分享的供应商；已移除、已断开、未授权的系统 CLI 登录不返回。
+普通本机 Agent 也能使用同一工具；Node Host 尚未接入该读取服务时目录标为不支持。
+
+每个账号的结构：
+
+```json
+{
+  "providerId": "anthropic", "provider": "anthropic", "accountId": "second",
+  "status": "connected", "plan": { "type": "max", "tier": "max_20x" },
+  "windows": [{ "id": "five_hour", "usedPercent": 24, "windowMinutes": 300,
+    "resetsAt": 1794844800, "updatedAt": 1794841200000 }],
+  "updatedAt": 1794841200000, "usageStatus": "available"
+}
+```
+
+- `provider` 为 `anthropic` / `openai`；`providerId` 是账号所在的供应商，包含用户单独创建的供应商。
+  `accountId` 是 Cindy 本机账号标识，和 `provider` 一起定位账号；不是邮箱、上游账号 ID 或登录凭证。
+  移动账号不改变 `accountId`。接口不返回账号目录、邮箱、内部指纹、任务内容或凭证。
+- `status` 为 `connected` / `signed-out` / `unavailable`；`plan.type`、`plan.tier` 保留上游已知套餐，未知为 `null`。
+- Claude 窗口 ID 为 `five_hour`、`seven_day`、`weekly:<modelId 或名称>`；Codex 为 `<额度桶>:primary/secondary`。
+  `usedPercent` 为 0–100 **已用**百分比，未知为 `null`，不能当作 0；未知时长、重置时间也为 `null`。
+- `resetsAt` 是 Unix 秒；`updatedAt` 是 Unix 毫秒，表示用量观测时间，不是插件本次读取时间。
+  窗口保留各自时间，账号级时间为最新窗口时间。没有用量时 `windows:[]`、`updatedAt:null`。
+  部分 SDK 事件会保留未更新的窗口；无法证明各窗口观测时间时，保留用量值但时间为 `null`、
+  状态为 `stale`，不会用最新事件时间冒充所有窗口的更新时间。下一次完整读取恢复已知时间。
+- `usageStatus` 为 `available` / `stale` / `unavailable`。任一窗口更新时间未知、超过既有 180 秒缓存窗口
+  或重置时刻已过则为 `stale`；没有用量为 `unavailable`。过期数据不能当成当前剩余额度。
+- 与设置页共用逐账号身份校验、缓存和并发合并，不接收强制刷新、owner、目录或设备参数。
+  失败只返回脱敏错误，不能回退读宿主数据库。插件停用、批准版本或 Cindy 账号变化后，旧调用不交付数据。
+
+`usage` 与 `settings` 权限独立：只读用量不授予改账号、登录、文件读取或设置权限。
+旧版宿主没有本工具时按不支持处理；旧插件不新增声明则权限与行为保持不变。
+
+### 管理定时任务与应用设置
 
 `scheduler` 组直接复用 `cindy_scheduler` 的完整管理工具：`schedule_create`、`schedule_update`、
 `schedule_pause`、`schedule_resume`、`schedule_delete`、`schedule_run_now` 与 `schedule_list_runs`。
@@ -240,6 +313,7 @@ Node Host 已提供的 `browser` 平台 provider 同时接入 Agent 与插件入
 Node Host 插件的 `computer` 在创建观察 runtime 或驱动执行之前返回 `UNSUPPORTED_CAPABILITY`，
 `host_services` 同样报告不可用：现有平台桥尚未接通 Node 插件的安装归属与调用生命周期。
 不新增跨进程授权证明；Node Agent 与 Desktop 插件的电脑调用保留原路径、快照生命周期和门禁。
+已保存凭证的既有引用可由 Node Host 通过共享管理器注入，撤回来源后拒绝；建立引用仍只在可信 Desktop 详情页完成。
 需要定时任务时使用已提供调度器的执行宿主，不循环重试不支持结果。
 
 ## 完整历史与附件

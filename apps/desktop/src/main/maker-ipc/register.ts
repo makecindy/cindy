@@ -48,7 +48,7 @@ import { openSession, setSessionOpeningModelAdmission } from '../localDb/session
 import { createPluginTaskReviewResolver } from './pluginTaskReviewContext.js';
 import { createPluginTargetReviewLoader } from '../cindy-brain/pluginTargetReview.js';
 import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
-import { resolveRemotePluginTaskRoute } from './pluginTaskModelRoute.js';
+import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from './pluginTaskModelRoute.js';
 import { resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
 import { PluginWriteAccessGate } from './pluginWriteAccessGate.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
@@ -476,7 +476,7 @@ import {
   isDbClientNotReadyError,
   tryGetDbClient,
 } from '../localDb/client/current.js';
-import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
+import { canRecreateOwnerWorkingDirectory, createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
 import { createWorkingDirectoryPreflight } from './workingDirectoryPreflight.js';
 import { allocateDialogueRecoveryWorkspace, findDialogueRecoveryWorkspace, requiredDialogueRecoveryRoot } from './dialogueRecoveryWorkspace.js';
 import { workdirDiagnosticContext, workdirDiagnosticErrorCode } from '../workdirDiagnostics.js';
@@ -706,6 +706,7 @@ import {
 import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupChatServiceDeps, type BotGroupLaneTerminal } from './botGroupChatService.js';
 import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
 import { isRetiredGroupWelcomeInput, withChatServer } from './chatServer.js';
+import { withBotGroupUiMock } from './botGroupUiMock.js';
 import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
 import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
@@ -1212,7 +1213,7 @@ import {
   prependHandoffToUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
-import { sanitizeSourceName } from '@cindy/maker-shared/message-source';
+import { readMessageSourcePluginRelay, sanitizeSourceName } from '@cindy/maker-shared/message-source';
 import { registerSessionHandoffIpc } from './sessionHandoffIpc.js';
 import {
   installLocalAgentVisibleSessionHost,
@@ -1645,7 +1646,15 @@ import { installSessionTurnObserver } from './sessionTurnObserver.js';
 
 const log = createLogger('maker-ipc');
 const workdirLog = createLogger('workdir-diagnostics');
-const workingDirectoryRecovery = createWorkingDirectoryRecovery({ stat: statWorkingDirectory, mkdir: mkdirWorkingDirectory, realpath: realpathWorkingDirectory, requiredRoot: requiredDialogueRecoveryRoot, findFallback: findDialogueRecoveryWorkspace }, allocateDialogueRecoveryWorkspace, workdirLog);
+const workingDirectoryRecovery = createWorkingDirectoryRecovery({
+  stat: statWorkingDirectory,
+  mkdir: mkdirWorkingDirectory,
+  realpath: realpathWorkingDirectory,
+  requiredRoot: requiredDialogueRecoveryRoot,
+  findFallback: findDialogueRecoveryWorkspace,
+  canRecreateDirectory: (dir) => !isAppSessionBoundaryPending() &&
+    canRecreateOwnerWorkingDirectory(app.getPath('userData'), ownerScopedUserDataPath(), dir),
+}, allocateDialogueRecoveryWorkspace, workdirLog);
 
 function localModelWindowSwitchErrorCode(code: IpcErrorCode): IpcErrorCode {
   return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;
@@ -5341,6 +5350,10 @@ export function isSchedulerTargetSessionBusy(sessionId: string): boolean {
   return schedulerQueueBridgeHolder?.isSessionBusy(sessionId) ?? false;
 }
 
+export function hasPendingSchedulerTargetInput(sessionId: string): boolean {
+  return schedulerQueueBridgeHolder?.hasPendingInput(sessionId) ?? false;
+}
+
 export function hasQueuedSchedulerPrompt(sessionId: string, scheduleId: string): boolean {
   return schedulerQueueBridgeHolder?.hasQueuedPrompt(sessionId, scheduleId) ?? false;
 }
@@ -5361,6 +5374,10 @@ export function isSchedulerPromptTracked(sessionId: string, clientId: string): b
 
 export function removeQueuedSchedulerPrompt(sessionId: string, clientId: string): void {
   schedulerQueueBridgeHolder?.removeQueuedPrompt(sessionId, clientId);
+}
+
+export function releaseQueuedSchedulerPrompt(sessionId: string, clientId: string): void {
+  schedulerQueueBridgeHolder?.releasePrompt(sessionId, clientId);
 }
 
 function sessionMetaForIsland(session: {
@@ -7654,9 +7671,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 改用不抛的判定决定「这次读取要不要放行本机绑定自愈 + 清单拉取」。
     isTrustedSender: (event) =>
       isTrustedAppRendererEvent(event as Parameters<typeof isTrustedAppRendererEvent>[0]),
-    // 动态清单重新发现:目前没有需要主动重拉的供应商(anthropic 清单来自 Claude Code
-    // 会话 init 的 SDK 捕获,没有 HTTP 发现通道,也就没有失败态)。
-    rediscoverModels: async () => null,
+    // Independent subscription ids use the same account routing as native refresh;
+    // their editable display names never select a provider or CLI profile.
+    rediscoverModels: async (providerId) => {
+      const ref = resolveSubscriptionPoolProviderRef(providerId);
+      if (ref && !(await getMaker().refreshAgentLocalModels(ref.kind === 'anthropic' ? 'claude-code' : 'codex', {
+        providerId, credentialMode: 'oauth-bearer',
+      }))) throw new Error('Subscription model discovery did not produce a current snapshot');
+      return null;
+    },
     refreshBuiltinModels: refreshProviderModelsManually,
     requestModelsAutoRefresh: requestProviderModelAutoRefresh,
     scanLocalCli: () => scanLocalCliAuth(createLocalCliScanDeps()),
@@ -13725,7 +13748,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     log,
   };
-  botGroupChatServiceHolder = withChatServer(createBotGroupChatService(botGroupChatDeps), botGroupChatDeps);
+  botGroupChatServiceHolder = withBotGroupUiMock(withChatServer(createBotGroupChatService(botGroupChatDeps), botGroupChatDeps), botGroupChatDeps);
   unsubscribeCompanionCloudBroadcast?.();
   unsubscribeCompanionCloudBroadcast = companionHomes.onChange((snapshot) => {
     const scope = captureDataOwnerBroadcastScope();
@@ -14120,7 +14143,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { ...body, ...execution, effort: execution.effort ?? '',
       agentKind: execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind };
   });
-  setPluginTaskConfigValidator(async config => { await resolveSessionExecution(config); });
+  // A saved run location is checked against that computer's (or share's) catalog, the
+  // same reader explicit remote plugin routes use; it never falls back to a local namesake.
+  const readPluginRouteProviders = (deviceId: string) => readDeviceProviderViews(remoteBackgroundInvoke, deviceId);
+  setPluginTaskConfigValidator(async config => {
+    const remote = savedPluginTaskRemoteRoute(config);
+    if (remote) {
+      await resolveRemotePluginTaskRoute(remote, { readProviders: readPluginRouteProviders, assertCurrent: () => {} });
+      return;
+    }
+    await resolveSessionExecution(config);
+  });
+  /**
+   * Execution for the legacy errand adapter and workspace drafts: the shared resolver,
+   * or the saved run location revalidated against that computer's catalog each time.
+   */
+  const resolvePluginSavedExecution = async (
+    config: Parameters<typeof resolveSessionExecution>[0] & { agentDeviceId?: string | null },
+    sourceSessionId?: string,
+    existing?: Parameters<typeof resolveSessionExecution>[2],
+  ): Promise<Awaited<ReturnType<typeof resolveSessionExecution>> & { agentDeviceId?: string }> => {
+    const remote = savedPluginTaskRemoteRoute(config);
+    if (!remote) return resolveSessionExecution(config, sourceSessionId, existing);
+    const route = await resolveRemotePluginTaskRoute(remote, {
+      readProviders: readPluginRouteProviders, assertCurrent: captureSessionOwner(),
+    });
+    return { agentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind, model: route.model,
+      providerId: route.providerId, ...(route.effort ? { effort: route.effort as Effort } : {}),
+      fastMode: route.fastMode, agentDeviceId: route.agentDeviceId };
+  };
 
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走
   // sendToSessionInternal 这一条主机通路，因此会话恢复、繁忙排队、消息落库与
@@ -14179,13 +14230,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const routeUnavailable = (): never => { throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected provider, model or effort is unavailable'); };
     const resolveRoute = async (pluginId: string, requested?: PluginTaskRoute, callId?: string): Promise<PluginTaskRoute> => {
       assertPlugin(pluginId);
-      if (requested?.agentDeviceId) {
-        return resolveRemotePluginTaskRoute(requested, {
-          readProviders: deviceId => readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
+      const defaults = getPluginTaskDefaults(pluginId);
+      // Without an explicit route the user's saved choice applies together with its run
+      // location; an explicit route (local or remote) replaces the whole saved choice.
+      const remote = requested ? (requested.agentDeviceId ? requested : null) : savedPluginTaskRemoteRoute(defaults ?? {});
+      if (remote) {
+        return resolveRemotePluginTaskRoute(remote, {
+          readProviders: readPluginRouteProviders,
           assertCurrent: () => assertPlugin(pluginId),
         });
       }
-      const selection = { ...getPluginTaskDefaults(pluginId), ...requested };
+      const { agentDeviceId: _savedLocation, ...localDefaults } = defaults ?? {};
+      const selection = { ...localDefaults, ...requested };
       const sourceSessionId = getPluginTaskSourceSessionId(pluginId, callId);
       if (callId && !sourceSessionId && !(selection.agentKind && selection.model && selection.providerId)) throw new PluginTaskError('ROUTE_UNAVAILABLE', '发起任务已不可用，请重新调用，或在面板选择模型后创建任务');
       try {
@@ -14288,7 +14344,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return current.workingDir === cfg.workingDir && current.permissionMode === cfg.permissionMode
             && current.agentKind === cfg.agentKind && current.model === cfg.model
             && current.providerId === cfg.providerId && current.effort === cfg.effort
-            && current.fastMode === cfg.fastMode;
+            && current.fastMode === cfg.fastMode && current.agentDeviceId === cfg.agentDeviceId;
         };
         // Receipt persistence/provider lookup can yield after the first resolution.
         // Reuse the resolver with the original request, then guard this configuration
@@ -14388,10 +14444,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { taskId, title: row.title, status: row.status, revision, resolvedConfig, workingDir: row.workingDir ?? undefined, permissionMode: row.permissionMode, planModeEnabled: !!row.planModeEnabled, hidden: row.hiddenAt != null };
       },
       scheduleAutoTitle: schedulePluginAutoTitle,
-      dispatch: async (pluginId, taskId, clientId, text, images = [], context) => {
+      dispatch: async (pluginId, taskId, clientId, text, images = [], context, relay) => {
         assertPlugin(pluginId);
         // 插件来源只用于标签与 `[消息来源]` 说明;不新增 origin 类型,也不是权限判据。
         const pluginName = sanitizeSourceName(getInstalledGhostName(pluginId));
+        // 转发出处是插件自报的展示上下文:宿主按落库读取的同一口径清洗后盖章,发送方仍是插件。
+        const sourceRelay = readMessageSourcePluginRelay(relay);
         const message = buildPluginMessage(text, context, t('newChat.pastedText.pluginContextLabel'));
         const validate = async () => { assertPlugin(pluginId); await pluginTaskServiceForCurrentOwner!().assertDispatch(pluginId, taskId); assertPlugin(pluginId); };
         return withPluginMessageAttachments(images, () => assertPlugin(pluginId), async files => {
@@ -14399,7 +14457,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const outcome = await sendToSessionInternal({ targetSessionId: taskId, clientId,
             message: message.text, pastedTextRanges: message.pastedTextRanges,
             autoReviewUserText: text, forceQueue: true, files,
-            sourcePlugin: { pluginId, ...(pluginName ? { name: pluginName } : {}) },
+            sourcePlugin: { pluginId, ...(pluginName ? { name: pluginName } : {}), ...(sourceRelay ? { relay: sourceRelay } : {}) },
             authorizationGuard: { validate, assertCurrent: () => assertPlugin(pluginId) }, onAccepted: validate });
           await awaitAgentInputQueueSnapshotPersistence(taskId);
           assertCurrent();
@@ -15034,6 +15092,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             providerId: sessions.providerId,
             effort: sessions.effort,
             fastMode: sessions.fastMode,
+            agentDeviceId: sessions.agentDeviceId,
             permissionMode: sessions.permissionMode,
             workingDir: sessions.workingDir,
             workspaceKind: sessions.workspaceKind,
@@ -15063,7 +15122,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return sessionId;
       },
       getGhostName: getInstalledGhostName,
-      resolveExecution: resolveSessionExecution,
+      resolveExecution: resolvePluginSavedExecution,
       captureOwner: captureSessionOwner,
       normalizeWorkingDir: (dir) => normalizeWorkingDirForStorage(dir),
       isUserPickedDir: isGhostPickedDir,
@@ -15144,7 +15203,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createDraftSession: async (params) => {
       const assertOwner = captureSessionOwner();
       const config = getPluginTaskDefaults(params.ghostId);
-      const execution = await resolveSessionExecution(config ?? {}, params.sourceSessionId);
+      const execution = await resolvePluginSavedExecution(config ?? {}, params.sourceSessionId);
       assertOwner();
       const sessionId = await createPluginDraftSession({
         ...params,
@@ -19676,7 +19735,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       schedulerQueuedPromptPreparations.delete(item.clientId);
       // 返回 promise 让 coordinator 在 onPersisted 链路里 await —— worker 运行态与
       // pending auto-bridge 副作用必须先于 turn 启动完成；失败仍吞错落日志，不拦派发。
-      await orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item, restoredFromSnapshot);
+      await orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item, restoredFromSnapshot,
+        schedulerQueueBridgeHolder?.recoverySourceClientId(sessionId, item));
       const pluginTaskSession = maker.getSession(sessionId);
       if (pluginTaskSession && pluginTaskServiceForCurrentOwner) {
         await pluginTaskServiceForCurrentOwner().accept(sessionId, item, { instanceId: pluginTaskSession.instanceId, generation: pluginTaskSession.getTurnGeneration() });
@@ -19816,7 +19876,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected');
       interruptedTurnAutoResumeHooks.onRejectedUserTurn(sessionId, item);
     },
-    persistTerminalSendError: (sessionId, message) => {
+    persistTerminalSendError: (sessionId, message, attemptToken) => {
+      if (attemptToken !== undefined) {
+        autoResumeBookkeeping.stashSuppressedError(sessionId, { message }, attemptToken);
+        return;
+      }
       onTurnErrorEvent(
         sessionId,
         {
@@ -19827,7 +19891,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       );
     },
     onUnconfirmedAutoResumeTurn: interruptedTurnAutoResumeHooks.onUnconfirmedAutoResumeTurn,
-    onPersistedSendRejected: (sessionId, message) => {
+    onPersistedSendRejected: (sessionId, message, item, recovering) => {
+      schedulerQueueBridgeHolder?.onPersistedSendRejected(sessionId, message, item, recovering);
       if (!isPiPromptRpcTimeoutError({ message })) return;
       // 第一次 timeout：只关掉卡住的原生进程，不自动 replay。用户重试时再 hidden rebuild。
       void maker.closeSession(sessionId).catch((error) => {
@@ -20093,6 +20158,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createId,
     discardWatchers: schedulerQueuedPromptDiscardWatchers,
     preparations: schedulerQueuedPromptPreparations,
+    discardAcceptedCallback: orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback,
     enqueue: enqueueSendToSessionMessage,
   });
 

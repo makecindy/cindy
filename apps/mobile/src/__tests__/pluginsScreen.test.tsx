@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement } from "react";
+import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PluginUiEnablePrompt } from "@/plugins/PluginUiEnablePrompt";
@@ -10,6 +10,7 @@ import { createPluginPromptReads } from "@/plugins/pluginPromptReads";
 
 const fixture = vi.hoisted(() => ({
   props: new Map<string, any>(),
+  originalSettingsMounts: 0,
   appStateListeners: new Set<(state: string) => void>(),
   promptReads: null as ReturnType<typeof createPluginPromptReads> | null,
   realManagement: false,
@@ -53,7 +54,26 @@ vi.mock("@/plugins/usePluginManagement", async (importOriginal) => {
 vi.mock("@/plugins/PluginPromptReadsContext", () => ({ usePluginPromptReads: () => fixture.promptReads }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => "screen-operation" }));
 vi.mock("@/plugins/PluginOriginalSettings", () => ({
-  PluginOriginalSettings: (p: any) => { fixture.props.set("originalSettings", p); return null; },
+  PluginOriginalSettings: (p: any) => {
+    fixture.props.set("originalSettings", p);
+    useEffect(() => { fixture.originalSettingsMounts += 1; }, []);
+    return null;
+  },
+}));
+vi.mock("@/device-link/useDeviceProviders", () => ({
+  useDeviceProviders: () => ({ providers: [], ready: true, loading: false }),
+}));
+vi.mock("@/device-link/useMobileMakerTransport", () => ({
+  useMobileMakerTransport: () => ({ getCapabilities: async () => null }),
+}));
+vi.mock("@/session/useRemoteAgentCatalogs", () => ({
+  useRemoteAgentCatalogs: () => [{ deviceId: "share:abc", name: "Shared", providers: [] }],
+}));
+vi.mock("@/session/ModelPickerSheet", () => ({
+  ModelPickerSheet: (p: any) => { fixture.props.set("taskModelPicker", p); return null; },
+}));
+vi.mock("@/session/permissionPresentation", () => ({
+  permissionPresentation: (mode: string) => ({ label: mode }),
 }));
 vi.mock("@/plugins/pluginManagementClient", async (importOriginal) => {
   const actual = await importOriginal<any>();
@@ -77,7 +97,10 @@ vi.mock("react-native", async () => {
     Alert: { alert: fixture.alert },
     BackHandler: { addEventListener: () => ({ remove() {} }) },
     Image: view,
-    Pressable: (p: any) => { if (p.accessibilityLabel) fixture.props.set("pressable." + p.accessibilityLabel, p); return view(p); },
+    Pressable: (p: any) => {
+      if (p.accessibilityLabel) fixture.props.set("pressable." + p.accessibilityLabel, p);
+      return React.createElement("button", { onClick: p.onPress, disabled: p.disabled }, p.children);
+    },
     RefreshControl: view,
     ScrollView: view,
     View: view,
@@ -238,8 +261,10 @@ vi.mock("@/plugins/pluginClient", () => ({
 }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: ReturnType<typeof createRoot>;
+let element: HTMLDivElement;
 beforeEach(() => {
   fixture.props.clear();
+  fixture.originalSettingsMounts = 0;
   fixture.realManagement = false;
   fixture.promptReads = null;
   fixture.accountGeneration = 0;
@@ -279,7 +304,8 @@ beforeEach(() => {
   }));
   fixture.refresh.mockReset().mockResolvedValue(undefined);
   fixture.alert.mockClear();
-  root = createRoot(document.createElement("div"));
+  element = document.createElement("div");
+  root = createRoot(element);
 });
 afterEach(() => act(() => root.unmount()));
 async function openDetail() {
@@ -885,7 +911,7 @@ it("mounts original settings with Host approval and retains the old-Host fallbac
     },
   ];
   await openDetail();
-  expect(fixture.props.get("detail").settingsContent.props.identity).toEqual({
+  expect(fixture.props.get("originalSettings").identity).toEqual({
     deviceId: "mac",
     instanceId: "demo",
     expectedInstalledApproval: "approved:12345678-1234-4123-8123-123456789abc",
@@ -893,6 +919,63 @@ it("mounts original settings with Host approval and retains the old-Host fallbac
   snapshot.settingsPage = false;
   await act(async () => root.render(createElement(PluginsScreen)));
   expect(fixture.props.get("detail").settingsContent).toBeUndefined();
+});
+// PR #10879: the remote model component had no production caller. Exercise the real
+// screen and Host settings component; only transport/catalog and picker visuals are leaves.
+// Minimum input: a task-capable Host and one shared model. tier: unit.
+it.each([
+  { tasks: true, remoteRoutes: true },
+  { tasks: true, remoteRoutes: false },
+  { tasks: false, remoteRoutes: false },
+])("opens and saves the Host task model with tasks=$tasks remoteRoutes=$remoteRoutes", async ({ tasks, remoteRoutes }) => {
+  managedScreen();
+  fixture.blocks = [{ id: "capabilities", primitive: "plugin-capabilities", data: { tasks } }];
+  const preferences = { revision: "tasks-1", config: {}, permissionModes: ["ask"],
+    defaultPermissionMode: "ask", ...(remoteRoutes ? { remoteRoutes: true } : {}) };
+  fixture.invoke.mockImplementation(async (_invoke, device, plugin, action, input) => {
+    expect([device, plugin]).toEqual(["mac", "demo"]);
+    if (action === "task-settings:get") return preferences;
+    if (action === "task-settings:set") return { ...preferences, revision: "tasks-2", config: input.model };
+  });
+  await openDetail();
+  const modelButton = [...element.querySelectorAll("button")].find(button => button.textContent?.includes("plugins.taskModel"));
+  if (!tasks) {
+    expect(modelButton).toBeUndefined();
+    expect(fixture.invoke).not.toHaveBeenCalled();
+    return;
+  }
+  expect(modelButton).toBeDefined();
+  await act(async () => modelButton!.click());
+  const picker = fixture.props.get("taskModelPicker");
+  expect(picker.visible).toBe(true);
+  if (remoteRoutes) expect(picker.unified.remote.hostDeviceId).toBe("mac");
+  else expect(picker.unified.remote).toBeUndefined();
+  const choice = { agent: "codex", providerId: remoteRoutes ? "shared-provider" : "host-provider",
+    modelId: remoteRoutes ? "shared-model" : "host-model", effort: "high", fast: false };
+  await act(async () => picker.unified.onSelect(choice, remoteRoutes ? { deviceId: "share:abc" } : undefined));
+  expect(fixture.invoke).toHaveBeenCalledWith(expect.any(Function), "mac", "demo", "task-settings:set", {
+    expectedRevision: "tasks-1",
+    model: { agentKind: "codex", providerId: choice.providerId, model: choice.modelId,
+      ...(remoteRoutes ? { agentDeviceId: "share:abc" } : {}), effort: "high", fastMode: false },
+  });
+  expect(fixture.props.get("taskModelPicker").visible).toBe(false);
+  if (remoteRoutes) expect(element.textContent).toContain("plugins.remoteQuickAnswerHint");
+  const originalMounts = fixture.originalSettingsMounts;
+  fixture.management.state.online = false;
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(element.textContent).not.toContain("plugins.taskModel");
+  expect(fixture.originalSettingsMounts).toBe(originalMounts);
+  fixture.management.state.online = true;
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(element.textContent).toContain("plugins.taskModel");
+  expect(fixture.originalSettingsMounts).toBe(originalMounts);
+  fixture.online = false;
+  await act(async () => root.render(createElement(PluginsScreen)));
+  expect(element.textContent).not.toContain("plugins.taskModel");
+  const calls = fixture.invoke.mock.calls.length;
+  expect(await picker.unified.onSelect({ agent: "codex", providerId: "shared-provider",
+    modelId: "shared-model", effort: "high", fast: false }, { deviceId: "share:abc" })).toBe(false);
+  expect(fixture.invoke).toHaveBeenCalledTimes(calls);
 });
 // Production screen → hook → controller → client. Transport and visual leaves remain isolated.
 function realManagementHost() {

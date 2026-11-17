@@ -14,6 +14,21 @@ vi.mock('../../downloader/http', () => ({ requestResponse: fetchMock }));
 
 import { downloadVerifiedPlugin } from '../download';
 
+const realSetTimeout = globalThis.setTimeout;
+/** Fake-time driver for retrying downloads: lets real file I/O finish between timer steps. */
+async function settle(result: Promise<unknown>, maxMs: number): Promise<void> {
+  let done = false;
+  void result.then(
+    () => (done = true),
+    () => (done = true),
+  );
+  for (let elapsed = 0; elapsed < maxMs && !done; elapsed += 500) {
+    await vi.advanceTimersByTimeAsync(500);
+    await new Promise((resolve) => realSetTimeout(resolve, 1));
+  }
+  await result;
+}
+
 const files: string[] = [];
 beforeEach(() => { host.packaged = false; host.endpoint = 'http://127.0.0.1:43340'; });
 
@@ -79,9 +94,11 @@ describe('downloadVerifiedPlugin', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('allows the exact archive limit to reach the download boundary', async () => {
-    fetchMock.mockResolvedValue(new Response(null, { status: 503 }));
-    await expect(
+  // Retry decision 2026-11-17: market packages get up to 3 tries instead of failing on one blip.
+  it('allows the exact archive limit to reach the download boundary and retries a busy server', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(async () => new Response(null, { status: 503 }));
+    const result = expect(
       downloadVerifiedPlugin(
         'https://downloads.example.test/a',
         {
@@ -91,7 +108,22 @@ describe('downloadVerifiedPlugin', () => {
         target(),
       ),
     ).rejects.toMatchObject({ code: 'GHOST_DOWNLOAD_FAILED' });
-    expect(fetchMock).toHaveBeenCalledOnce();
+    await settle(result, 10_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('recovers when a retry succeeds', async () => {
+    vi.useFakeTimers();
+    const bytes = Buffer.from('fixture');
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(bytes));
+    const file = target();
+    await settle(
+      downloadVerifiedPlugin('https://downloads.example.test/a', expected(bytes), file),
+      5_000,
+    );
+    expect(fs.readFileSync(file).equals(bytes)).toBe(true);
   });
 
   it.each([0, -1, NaN, 1.5])('rejects invalid release size %s', async (sizeBytes) => {
@@ -133,14 +165,16 @@ describe('downloadVerifiedPlugin', () => {
   });
 
   it('sanitizes native network errors including signed URLs', async () => {
+    vi.useFakeTimers();
     fetchMock.mockRejectedValue(new Error('net::ERR_FAILED https://private.test/?secret=signed'));
     const file = target();
-    await expect(
+    const result = expect(
       downloadVerifiedPlugin('https://downloads.example.test/a', expected(Buffer.from('a')), file),
     ).rejects.toMatchObject({
       code: 'GHOST_DOWNLOAD_FAILED',
       message: expect.not.stringContaining('signed'),
     });
+    await settle(result, 10_000);
     expect(fs.existsSync(file)).toBe(false);
   });
 
@@ -157,8 +191,8 @@ describe('downloadVerifiedPlugin', () => {
       downloadVerifiedPlugin('https://downloads.example.test/a', expected(Buffer.from('a')), file),
     ).rejects.toMatchObject({ code: 'GHOST_DOWNLOAD_TIMEOUT' });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    await vi.advanceTimersByTimeAsync(60_000);
-    await result;
+    // Each try waits 60s for headers; retries stop at the 120s total budget.
+    await settle(result, 125_000);
     expect(fs.existsSync(file)).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -190,8 +224,7 @@ describe('downloadVerifiedPlugin', () => {
       downloadVerifiedPlugin('https://downloads.example.test/a', expected(Buffer.from('ab')), file),
     ).rejects.toMatchObject({ code: 'GHOST_DOWNLOAD_TIMEOUT' });
     await vi.waitFor(() => expect(pulls).toBe(2));
-    await vi.advanceTimersByTimeAsync(60_000);
-    await result;
+    await settle(result, 125_000);
     expect(fs.existsSync(file)).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });

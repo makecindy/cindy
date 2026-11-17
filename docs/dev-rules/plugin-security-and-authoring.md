@@ -32,6 +32,15 @@ Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 
 
 ## 事实来源
 
+订阅用量读取（2026-11-16）：独立 `agent.hostTools:['usage']` 工具组仅开放
+`get_subscription_usage`。与 `settings` 分开授权，沿用 Host 工具网关的安装批准、启用状态、
+版本和 owner 代次检查。只读执行电脑当前 Cindy 账号已连接的 Claude/Codex 账号，通过
+`subscription-accounts/usageView.ts` 白名单返回账号标识、套餐、额度窗口及观测时间；
+不展开原生账号对象、凭证、目录、邮箱、内部指纹或远程分享。参数不接受调用方身份、owner、路径
+或强制刷新；跨账号切换和插件撤权后的迟到回包不交付。原有插件未声明该组时行为与批准不变。
+实现与回归见 `subscription-accounts/runtime.ts` 及其测试、`hostToolSlot.test.ts`、
+`ghostInstallConsent.test.ts`；作者用法见随包 `plugin-host-tools.md`「读取订阅用量」。
+
 | 内容                                                 | 权威来源                                                                                                                                                                                                                                                                                                          |
 | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 编写手册（作者唯一教材，现拿现读）                   | `apps/desktop/resources/system-skills/cindy-plugin-creator/`；`SKILL.md` 编排创建流程，`references/` 保存完整作者契约；`ghost_forge_guide` 兼容读取同一份资料                                                                                                                                                                                                                    |
@@ -244,7 +253,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   不执行工具且立即关闭；不关闭插件正在用的电脑连接。服务开关与本实例声明/整体安装批准现查，不投影独立 approved 状态，Node 未供应的服务明确不可用。
   该目录是投影，不持有服务实现、凭证、批准或插件管理权；不开放 ghost_* 写入口。
   服务依赖沿用 agent.hostTools，执行时查找当前 provider，不新增强依赖启动状态机或 setup 字段。
-  逻辑页和 Node Worker 显式退出共用各宿主已有资源清理入口；文件监听、终端和电脑连接由原服务释放。
+  逻辑页和 Node Worker 显式退出共用各宿主已有资源清理入口；网络、文件监听、终端和电脑连接由原服务释放。
   UI 的 stop/crash/update 同样销毁电脑连接与观察引用，不只覆盖 Node 停止。持久存储及浏览器 provider 继续由原所有者处理。
   `terminal` 复用 `main/terminal/PtyManager`，界面与 MCP 共用 `HostTerminalService` 的同一注册表；
   不另写插件进程实现。Host 核准的插件实例/安装代次或真实 Session 绑定作业 owner，id 不授予归属。
@@ -552,11 +561,24 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   忙碌跳过和失败退避，保留启停态、实例键和同来源用户数据。实现与回归见
   `main/plugin-market/service.ts` 及其 `__tests__/service.test.ts`。
 - 本地种子（开发或个人构建放进 `resources/builtin-ghosts` 的种子；安装包不带种子，见
-  [协议兼容 §2](protocol-compatibility.md#2-插件来源)）与同 id 的服务端市场安装按版本取新、相同取商店：
+  [协议兼容 §2](protocol-compatibility.md#2-插件来源)）与同 id 的 root 服务端市场安装按版本取新、相同取商店：
   种子版本严格更新才覆盖已装实例（旧布局 `<id>` 或新布局 `_ns/_root/<id>` 原位替换，保留启停态与数据键），
   相同、更旧或不可比时不动商店字节。实例仍在播种台账内、种子已撤或当前种子不比 Release 新时，自动更新按原
   商店路由把种子字节换回商店包，不算换源；播种发现已装的是商店字节后摘除台账。受众与孤儿回收不删除有商店
-  安装的实例。只放行播种台账内的根 namespace 已批准实例，不用于授权查找，其它来源冲突仍需用户显式替换。
+  安装的实例。播种按物理目录的注册表／批准回执取得 namespace，再严格查对应账本；企业旧裸 id 目录不能当 root，
+  证据缺失、损坏或冲突时保留现状。企业新布局与同名 root 分开处理。
+  迁移旧 namespace 时，同名种子或播种台账也不能单独证明 root；无市场身份的旧种子须有官方批准回执，
+  且现存目录摘要匹配该回执的目录摘要，才可原位迁移。市场包的归档摘要不能替代目录摘要；
+  证据不足的待迁移实例保留既有批准与启停状态，不因市场同步为空而被种子接管。
+  无 receipt 的历史安装仍先按旧 manifest、启停和信任记录补回原批准，不因同名种子跳过，
+  不回填 namespace 或包摘要。只有没有市场身份冲突、且目录与当前可信种子完整字节一致时，
+  才沿用种子批准并完成 root 确认；字节不同或市场证据不可读时保留旧批准与内容，不猜 root。
+  历史 root 种子覆盖企业旧目录时，只有注册表仍保留同一市场资源与企业身份、原账本路由匹配、
+  root 回执摘要同时匹配可信种子与现存目录，才通过正常市场更新事务原位恢复。身份未确认期间不授予新权限；
+  新包继续通过 Release 校验与正常权限确认，保留实例键、启停和同来源数据。OAuth 沿用客户端变更事务，
+  有原签发客户端标记的账号在包提交后恢复；无法证明签发来源时保留凭据并使用已有重新连接提示。
+  无法核实种子的历史安装保留既有冲突／更新失败提示，
+  不猜身份或伪造批准；其它来源冲突仍需用户显式替换。
   实现与回归见 `main/cindy-brain/builtinGhostProvisioner.ts`、`main/plugin-market/service.ts`
   （`seededBuiltinYieldsToRelease`）及对应测试。
 - 同一 release 自动更新失败后，在当前进程内按 owner、来源路由和 release 做指数退避
@@ -678,7 +700,33 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   明确 `resetRequired`；原调用结束或 Stop 即释放。UI 与 Node Host 接线均须提供相同的身份与取消语义。
   `data` 和 `save` 原行为、旧 manifest/receipt/批准保持不变。回归见 `fsSlot.test.ts`，作者用法见 §4.10。
 
-- 自主 network 只允许 manifest 白名单域名；凭证由主机保险库注入，**无明文读回**
+- 自主 network 只允许 manifest 白名单目标：既有域名模式只代表 HTTPS:443；`network.hosts`
+  可用完整 origin 精确声明自定义端口、HTTP、本机或内网地址，不能含路径、凭证、通配或查询。
+  来源逐条进入原安装/更新确认与详情展示，跨协议/端口不继承旧域名批准。`preview.hosts`
+  仍只接受原域名格式，本项不扩大页面导航/CSP。凭证只允许经 HTTPS/WSS 注入，没有明文例外。
+  所有 HTTP/WS 请求仅允许字面量私网/回环 IP、localhost 及其子域，不能携带 Host 注入的凭证；
+  公网与普通主机名明文来源拒绝。安装/更新和随包批准由 Desktop main 与 Node Host 共用的
+  GhostManager 提前校验声明，返回原结构化 file-invalid 或批准错误 NETWORK_INSECURE_ORIGIN。
+  plugin-protocol 的 manifest 解析保持零运行依赖，仅检查格式；真正强制边界在每次派发与每一跳，
+  同步复用现有 net-policy/loopback 分类器、不查 DNS。`http://gitlab.internal` 等内网主机名须 HTTPS。
+  插件网络统一拒绝 URL 中的云元数据字面量，不因 HTTPS/WSS 或来源批准而放行：
+  `169.254.169.254`、腾讯云 `169.254.0.23`（复用既有 IP 规范化及映射支持）和现有 `isCloudMetadataIpAddress` 覆盖的
+  `100.100.100.200`、`fd00:ec2::254` 和嵌入形式。安装/批准和运行时每跳使用同一插件策略，
+  返回既有 `NETWORK_INSECURE_ORIGIN`；其他私网、CGNAT、ULA 和 link-local 范围不变。
+  不改共享云元数据分类器或 Browser direct 策略，不增加 DNS 解析或跨请求缓存。
+  既有域名凭证不扩到新端口；Host 身份令牌、动态连接和 Node 代发授权仍限原 HTTPS:443。
+  `as:'stream'` 返回 Host 持有的文本流连接；`network-request` 提供 WS 精确来源的
+  open/read/send/close。两者共用 `HostNetworkConnections` 的插件归属、非消费游标与有界缓冲，
+  缺口明确返回 resetRequired；不自动重放。Node 私有控制帧走同一网络入口，剥除自报 callId，
+  凭证只在 Host 注入；旧反向 JSON-RPC 规则不变。停用/重载/安装变化、账号切换与 Host 关闭
+  回收连接，带在途 callId 的文本流随调用释放；读取/发送续期 5 分钟空闲窗口。
+  自存密钥、动态连接 PAT、复用的已保存密钥/连接 PAT 和 OAuth 账号使用原 `credentialGuards`：
+  删除/替换密钥或断开账号后，匹配长连接在下次 send/read 关闭并报错；轮换后的新请求仍可复用新值。
+  企业身份的 membership/audience/目标范围或登录邮箱变化也使原流失效。仅长连接启用直接凭证复核，
+  普通缓冲请求保留原读取次数，复用引用在原精确复读中比较已注入值，不增加读取次数。
+  本机 `gh` 主令牌只有异步读取端口，外部登录变化不即时使已有连接失效，沿原缓存与连接到期行为；
+  不为此新增状态、监听、票据或跨模块接线。
+  凭证由主机保险库注入，**无明文读回**
   给沙箱。Agent 在途调用可凭严格 `callId` 访问未预声明的普通 HTTPS 地址，仍须通过
   主机 URL、SSRF、超时、体积与重定向守门。此途径不注入任何未在 manifest 中声明且
   未命中目标 host 的托管凭证。
@@ -695,6 +743,41 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   连接分类、用户名和来源，不返回响应原文。插件设置页只能读取 `hostAvailable`、
   `hostManagedSetup` 布尔与备用 PAT 的 `saved/tail` 状态。该来源
   不允许 `exchange` 或 `setup.requires` 引用。安装确认须说明它能使用本机 GitHub 账号的实际权限。
+- OAuth 已连接账号复用沿用现有 `source:'oauth'` 服务端点、scope 与注入范围声明，由
+  `GhostOauthAccountManager` 管理。只列当前 owner 下已批准、启用的来源，授权/token 端点必须相同，
+  注入头形态一致且目标范围不超出原来源，所需 scope 不超出账号授权范围快照（旧账号无快照时
+  按原来源声明比较，实际访问仍由服务端决定）。整体安装批准有效、已启用且声明匹配时，
+  用户在可信详情区点“使用”即保存引用，不追加确认；插件页面不能建立引用。原 OAuth 账号记录只保存引用，不复制 refresh/client 凭证，
+  取得令牌后、实际派发前及每次流读取时重新核对来源与目标声明/安装代次；停用、断开、撤销或
+  范围不再匹配即拒绝后续派发/读取，上传准备期间撤销也不得继续带凭证派发。
+  broker 刷新仍以原来源插件身份执行，不向受用插件授予 broker 资格。401 作废走原来源缓存，
+  断开受用插件只删除该引用。复用结果只供宿主网络注入，`node.secretBindings` 返回
+  `HOST_INJECTION_REQUIRED`，不能借旧 Node 明文绑定读取所引用的账号令牌。旧账号存储保持原义。
+  Cindy 自有详情区通过 trusted-renderer-only 的账号目录与操作 IPC 办理选择/停止使用，
+  插件页面不能调用。停止使用在 OAuth 原变更锁内复读当前记录，停用插件也可撤销；
+  引用删除落库失败必须回失败，`/oauth` 同样不能返回 204 假称已断开。界面目录与请求结果
+  按 owner generation 丢弃，不能在切换账号后显示旧账号资料。
+- 已保存 PAT／普通网络凭证沿用同一可信详情区、整体安装批准和变更锁，不追加确认。目标仍声明普通
+  `network.secrets`；来源限当前 owner 已批准、启用插件的普通网络密钥、gh-cli 的已保存
+  备用 PAT 或某条 `network.connections` PAT。注入头／格式和 exchange 一致且流向不扩张；
+  不读取平台密钥、供应商密钥、gh CLI 当前 token 或 Node 专用凭证。`GhostSavedCredentialManager`
+  只在既有加密 vault 的派生键保存引用，原凭证位的非密钥标记本身不能授权，插件不能写入
+  Host 派生键伪造引用。普通 `/secrets` 写入保留标记返回 400；普通密钥成功替换或删除时，
+  在同一同步段清除派生引用，写入失败则保留原引用。已有值的状态读取不受该写入限制影响。
+  选择会替换目标当前填写的密钥，原来源仍独立管理；普通密钥的热路径
+  不新增引用读取。注入和流续读复核两端安装／owner 与来源资格，禁止引用链；Node 明文绑定
+  返回 `HOST_INJECTION_REQUIRED`。停止使用不删除来源，删除落盘失败不得假称成功。
+  Node Host 通过同一个管理器解析既有引用并注入，来源撤回后拒绝后续请求；不在 Node Host 建立新引用或迁移凭证。
+  不新增 manifest 字段、凭证库、授权账本或跨调用批准缓存，手机端建立引用尚未开放。
+  来源卸载复用已有 journal：先撤批准并隔离，再清理指向它的账号／已保存凭证引用，最后删除包。
+  消费方锁或 vault 失败保留原 journal 与包，重试／既有启动恢复成功前不能重装；同物理键重装不能继承旧复用。
+  Desktop 和 Node Host 接同一管理器回调；只读 Host 清单没有凭证端口时保留隔离，不提前清掉 journal。
+  真正换源时，引用的来源键随既有用户数据归档改指不可运行的 archive 键，详情按既有失效状态展示，
+  可停止使用或重新选用；换源失败／重启恢复沿原逆向归档还原。普通同来源更新、凭证轮换继续有效。
+  不持久化 receipt revision，不加 journal；仅卸载／归档时枚举已装目标（含停用实例），
+  通过现有 owner vault 一次只列派生引用键名，覆盖已从声明移除的孤儿引用，不打开普通凭证值；
+  命中引用后按原消费方变更锁复读写入。
+  锁顺序为安装 mutation 队列先于来源凭证锁，来源锁释放后才处理消费方引用，避免互相引用形成等待环。
 - `source: "oidc-token"` 是 Host 托管的短时 Cindy Connection JWT：只对当前企业
   Membership 生效。资格有两条默认基座：当前组织的 Plugin Market organization 安装记录仍有效、
   且安装目录 `ghost.json` 的 raw SHA（旧记录迁移前为集中 legacy digest）与记录一致；
@@ -880,6 +963,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   [`feature-retirements.md`](../product-rules/feature-retirements.md)。
 
 ## 5. 存量插件兼容：升级必须无感（红线）
+
+本地模式首次云登录采用插件时，内容目录必须连同原 receipt、技能快照、实例记录和市场
+来源账本一起交接，保留 revision、启停态与原批准能力，不重新铸造批准。仅最终持久认领
+`local-v1` 的首个云账号可采用；已有目标插件状态不自动混合，源资料保留。交接在账号
+隔离区内完成，复制中断由冻结计划恢复；未完成安装事务须先恢复，不能把 pending journal
+当成有效安装。OAuth 锁与账号授权不复制。凭证范围及回滚见
+[本地模式首次云登录的凭证交接](credentials-and-local-storage.md#本地模式首次云登录的凭证交接)。
+回归入口为 `localProfileAssetsMigration.test.ts` 的实际 GhostManager/receipt 重载。
 
 `tools[].parameters` 的 16KB 约束：新包入口 `validateGhostManifest` 按 JSON 序列化后的
 UTF-8 字节计量；历史市场 release 入口 `validateStoredGhostManifest` 和已装快照入口

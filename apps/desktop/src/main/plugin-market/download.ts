@@ -29,7 +29,8 @@ export async function downloadVerifiedPlugin(
       redirect: 'error',
       resume: false,
       existingTarget: 'error',
-      retry: { maxAttempts: 1 },
+      // Up to 3 tries within the same total budget (user decision 2026-11-17).
+      retry: { maxAttempts: 3 },
       timeout: { connectMs: 60_000, idleMs: 60_000, totalMs: 120_000 },
     });
   } catch (error) {

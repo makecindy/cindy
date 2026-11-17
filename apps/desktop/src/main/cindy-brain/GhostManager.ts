@@ -3,6 +3,7 @@ import { MCP_APPS_MAX_BYTES } from '../mcp-apps/protocol.js';
 import { findFeatureRetirement } from '../../shared/featureRetirements.js';
 import { FeatureRetirementStore } from './featureRetirementStore.js';
 import { GhostNotificationIndex } from './ghostNotificationIndex.js';
+import { ghostDeclaredNetworkTransportRejection } from './networkOriginPolicy.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -24,6 +25,7 @@ import {
   hasDeliveryNamespace,
   installedGhostStoragePart,
   isValidPluginInstallRelId,
+  LOCAL_PLUGIN_NAMESPACE,
   parsePluginInstallRelId,
   parsePluginStoragePart,
   PLUGIN_NS_INSTALL_ROOT,
@@ -103,6 +105,7 @@ import {
 } from './ghostBackgroundRefresh.js';
 import {
   commitPendingNamespaceMigration,
+  namespaceCommitReceiptSnapshot,
   reconcilePendingNamespaceMigrations,
   type NamespaceCommitReceiptSnapshot,
 } from './pluginNamespaceMigration.js';
@@ -336,6 +339,8 @@ export interface GhostManagerOptions {
    * 生产接线明确放行。
    */
   isTrustedBundledId?: (id: string) => boolean;
+  /** Historical seed ownership only restricts namespace inference; it never grants approval. */
+  wasBuiltinSeeded?: (id: string) => boolean;
   /**
    * tokenBroker 装入闸。缺省拒绝（测试夹具须显式注入）。生产接线问
    * first-party 判据：名称前缀不构成资格。
@@ -382,6 +387,8 @@ export interface GhostManagerOptions {
   onNamespaceCommitted?: (ghostId: string, namespace: string | null) => void;
   beforeNamespaceCommit?: (ghostId: string, namespace: string | null) => void;
   onArchiveSourceState?: (fromPart: string, archivePart: string) => Promise<void>;
+  /** Revoke incoming account references while the existing uninstall journal isolates the source. */
+  onUninstallSourceState?: (fromPart: string) => Promise<void>;
   /** sourceDir 是否就是该 id 的随包只读种子目录，而非任意本机可变目录。 */
   isTrustedBundledSource?: (id: string, sourceDir: string) => boolean;
   /** Persist the user's builtin-uninstall intent before approval/content removal. */
@@ -652,13 +659,14 @@ export interface GhostExclusiveMutation {
     sourceDir: string,
     options: {
       disabled: boolean;
+      installedRelId?: string;
       trust?: typeof CINDY_OFFICIAL_GHOST_TRUST;
     },
   ): Promise<void>;
   approveTrustedBundledInstall(
     manifest: GhostManifest,
     markerEnabled: boolean,
-    options: { sourceDir: string },
+    options: { sourceDir: string; installedRelId?: string },
   ): Promise<boolean>;
   removeInstallApproval(id: string): Promise<boolean>;
   uninstall(id: string, options?: GhostUninstallOptions): Promise<UninstallResult>;
@@ -967,6 +975,14 @@ export class GhostManager {
 
   private instanceRecordForAddress(id: string): PluginInstanceRecord | null {
     return this.instanceRegistryService.recordForAddress(id);
+  }
+
+  /** Physical provenance only; an unconfirmed namespace never grants capabilities. */
+  readInstanceForContent(relId: string): Readonly<PluginInstanceRecord> | null {
+    this.ensureCurrentOwnerContextSync();
+    const record = this.instanceRecordForAddress(relId);
+    if (this.instanceRegistryService.isBlocked()) throw new Error('Plugin instance registry is unavailable');
+    return record?.contentRelId === relId ? { ...record } : null;
   }
 
   /** Author management must not turn an unreadable installation scan into "not installed". */
@@ -1294,6 +1310,23 @@ export class GhostManager {
     basis: NamespaceMigrationBasis,
     expectedReceipt?: NamespaceCommitReceiptSnapshot,
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (namespace === null && (basis === 'builtin' || (basis === 'manual-after-sync' &&
+        (this.options.isTrustedBundledId?.(ghostId) || this.options.wasBuiltinSeeded?.(ghostId))))) {
+      const approval = this.readApproval(ghostId);
+      if (approval.state === 'approved' && !hasDeliveryNamespace(approval.receipt)) {
+        // A roster/tombstone id is not root provenance. Pre-namespace bundled
+        // receipts use the approved directory hash, while market/manual packages
+        // use the archive hash. Verify the old seed's actual approved bytes so a
+        // newer bundle can still migrate it without adopting a same-name market
+        // install when its ledger is absent (also after seed withdrawal).
+        if (!isCindyOfficialTrustInfo(approval.receipt.trust) ||
+            approval.receipt.installOrigin === 'agent-forge' || !approval.receipt.packageSha256 ||
+            await hashApprovedDirectory(this.contentPath(ghostId)) !== approval.receipt.packageSha256) {
+          return { ok: false, reason: 'awaiting-builtin-provenance' };
+        }
+        expectedReceipt ??= namespaceCommitReceiptSnapshot(approval);
+      }
+    }
     return commitPendingNamespaceMigration({
       ownerContextKey: () => this.currentOwnerContextKey(),
       ensureCensus: () => this.ensureNamespaceMigrationCensus(),
@@ -1448,6 +1481,11 @@ export class GhostManager {
     return retry;
   }
 
+  hasPendingMutationRecovery(): boolean {
+    return this.untrustedApprovals.size > 0 || this.recoveryBlockedApprovalNamespaces.size > 0 ||
+      this.pendingRecoverySideEffects.size > 0;
+  }
+
   private currentOwnerContextKey(): string {
     return `${this.options.getOwnerContextKey?.() ?? ''}\u0000${this.resolveContentRoot()}\u0000${this.resolveStateRoot()}`;
   }
@@ -1560,7 +1598,35 @@ export class GhostManager {
             }
             this.options.recordBuiltinTombstone(parsePluginInstallRelId(id)!.ghostId);
           }
+          const fromPart = this.options.onUninstallSourceState ? this.storageKeyForContent(id) : '';
           this.receiptStore.removeSync(id);
+          if (this.options.onUninstallSourceState) {
+            const recoveryKey = this.isolationKey(id);
+            if (!this.pendingMutationRecoveries.has(recoveryKey)) {
+              const recoveryOwner = this.currentOwnerContextKey();
+              this.pendingMutationRecoveries.add(recoveryKey);
+              const recovery = this.runExclusiveMutation(async () => {
+                if (this.currentOwnerContextKey() !== recoveryOwner ||
+                    JSON.stringify(this.receiptStore.readPendingMutationSync(id)) !== JSON.stringify(markerResult)) {
+                  throw new Error('uninstall recovery transaction superseded');
+                }
+                await this.cleanupUninstallSourceState(id, fromPart);
+                if (this.recoveryEntryKind(finalDir) === 'directory') fs.rmSync(finalDir, { recursive: true, force: true });
+                this.forgetPendingNamespaceMigration(id);
+                this.receiptStore.clearPendingMutationSync(id);
+                this.untrustedApprovals.delete(recoveryKey);
+              }).catch(error => this.options.log?.warn('ghost uninstall reference cleanup failed; journal retained', {
+                id, error: error instanceof Error ? error.message : String(error),
+              }));
+              this.pendingRecoverySideEffects.add(recovery);
+              const clearRecovery = () => {
+                this.pendingRecoverySideEffects.delete(recovery);
+                this.pendingMutationRecoveries.delete(recoveryKey);
+              };
+              void recovery.then(clearRecovery, clearRecovery);
+            }
+            continue;
+          }
           if (this.recoveryEntryKind(finalDir) === 'directory') {
             fs.rmSync(finalDir, { recursive: true, force: true });
           }
@@ -2249,10 +2315,10 @@ export class GhostManager {
       const mutation: GhostExclusiveMutation = {
         writeDisabledMarker: (id) => {
           assertCapabilityActive();
-          if (!isValidGhostId(id) || !this.isRealDirChild(this.contentRootDir(), id)) {
+          if (!isValidPluginInstallRelId(id) || !this.isRealDirChildRel(id)) {
             throw new Error('ghost disabled marker target is not a managed plugin directory');
           }
-          this.writeDisabledMarkerSync(path.join(this.contentRootDir(), id));
+          this.writeDisabledMarkerSync(this.contentPath(id));
         },
         publishTrustedBundledSeed: async (id, sourceDir, options) => {
           assertCapabilityActive();
@@ -2260,7 +2326,19 @@ export class GhostManager {
         },
         approveTrustedBundledInstall: async (manifest, markerEnabled, options) => {
           assertCapabilityActive();
-          return this.approveTrustedBundledInstallUnlocked(manifest, markerEnabled, options);
+          const relId = this.bundledInstallRelId(manifest.id, options?.installedRelId);
+          const pendingNamespace = relId === manifest.id && this.isPendingLegacyNamespace(manifest.id);
+          if (pendingNamespace) this.ensureNamespaceMigrationCensus();
+          const changed = await this.approveTrustedBundledInstallUnlocked(manifest, markerEnabled, {
+            ...options, installedRelId: relId,
+          });
+          // A proven seed's first receipt must also finish its legacy census;
+          // pending identity would still block its existing Host credentials.
+          if (pendingNamespace) {
+            const committed = await this.commitPendingNamespaceUnlocked(manifest.id, null, 'builtin');
+            if (!committed.ok) throw new Error(`Builtin namespace confirmation deferred: ${committed.reason}`);
+          }
+          return changed;
         },
         removeInstallApproval: async (id) => {
           assertCapabilityActive();
@@ -2296,8 +2374,8 @@ export class GhostManager {
    * - **只写状态根、绝不动安装目录**:三份旧文件原样保留,因此回滚到旧客户端时它照旧
    *   从安装目录判定启停,不会错位(§5 兜底第 4 条 回滚余地)。
    *
-   * 随包种子 id 跳过 —— 它们走 provisioning 的 `approveTrustedBundledInstall`(有权威
-   * 字节可比,是更强的迁移形态)。
+   * 同名随包种子不替代旧安装事实：先恢复原批准，不推断 namespace 或包摘要。
+   * provisioning 只有核实可信种子字节后，才可通过原入口补成种子批准。
    */
   async migrateLegacyApprovalsOnce(): Promise<{
     migrated: string[];
@@ -2387,11 +2465,6 @@ export class GhostManager {
       // 判据走 ghostContentTree(lstat 分类),不信 Dirent 类型位:根子项是 junction/
       // 链接时一律不进迁移,也与 §3「只有真目录才算安装」同向。
       if (classifyGhostDirEntrySync(path.join(root, ...id.split('/'))) !== 'directory') continue;
-      // 随包种子交给 provisioning,不在迁移范围。
-      if (this.options.isTrustedBundledId?.(id)) {
-        result.skipped.push(id);
-        continue;
-      }
       // 续跑轮只认动笔前钉死的清单:清单外的 id(迁移窗口期间新装再删 receipt 的)
       // 骗不到续跑重铸,保持 fail closed。
       if (resumePending && !resumePending.has(id)) {
@@ -2444,8 +2517,8 @@ export class GhostManager {
       blockedByPendingJournal.length === 0 &&
       unreadableReceiptIds.length === 0
     ) {
-      // 历史 mixed 状态若只剩有效的非随包 receipt，补写 completed 收口；空目录或
-      // 只有随包目录仍不落台账，给 owner legacy 恢复流程留门。
+      // 历史 mixed 状态若只剩有效 receipt，补写 completed 收口；空目录
+      // 仍不落台账，给 owner legacy 恢复流程留门。
       if (sawApprovedNonBundledInstall) {
         await this.receiptStore.writeMigrationLedger({
           version: 1,
@@ -2572,7 +2645,7 @@ export class GhostManager {
    * 为什么允许绕过一次性 ledger 门:`ids` 来自恢复流程**刚从旧布局根搬进安装根**的
    * 目录 —— 这个来源本身就是旧世界的授权事实(与首轮迁移同一信任级),不是可变安装
    * 目录里凭空冒出来的目录。调用方只传本次恢复实际搬动/新增的 id;逐 id 仍然只在
-   * 没有有效 receipt 时 backfill,随包 id 照旧交给 provisioning。结果并进 ledger,
+   * 没有有效 receipt 时 backfill，不因同名种子跳过。结果并进 ledger,
    * 事后可分辨来源。
    */
   /**
@@ -2609,7 +2682,6 @@ export class GhostManager {
       const workIds = [...new Set(ids)].filter(
         (id): id is string =>
           isValidGhostId(id) &&
-          this.options.isTrustedBundledId?.(id) !== true &&
           !permanentlyBlockedIds.has(id),
       );
       // Persist the complete recovery work queue before the first backfill. If the
@@ -3712,6 +3784,8 @@ export class GhostManager {
     if (!v.ok) {
       return { rejection: { code: 'file-invalid', reason: `清单不合格:${v.reason}` } };
     }
+    const transportError = ghostDeclaredNetworkTransportRejection(v.manifest);
+    if (transportError) return { rejection: { code: 'file-invalid', reason: `NETWORK_INSECURE_ORIGIN: ${transportError}` } };
     if (findFeatureRetirement(v.manifest)) {
       return {
         rejection: {
@@ -4404,11 +4478,15 @@ export class GhostManager {
       expectedInstalledApproval: string;
       /** Main-selected instance key; never a renderer-supplied path or a logical namespace address. */
       expectedInstalledInstanceId?: string;
+      /** Host-only recovery of a retained market instance overwritten by this bundled source. */
+      seededMarketRecovery?: { pluginId: string; sourceDir: string };
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'manual' | 'agent-forge';
       namespace?: string | null;
       sourceStateArchiveId?: string;
+      /** Acquire the existing credential lock only after entering the mutation lane. */
+      withCredentialMutation?: <T>(operation: () => Promise<T>) => Promise<T>;
       /** Host-only official market transition; package authors cannot request this. */
       simulatorPreviousRelId?: string;
       simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
@@ -4417,7 +4495,9 @@ export class GhostManager {
       onPackagePlaced?: () => void;
     },
   ) {
-    return this.runExclusiveMutation(() => this.updateUnlocked(lizFilePath, opts));
+    return this.runExclusiveMutation(() => opts.withCredentialMutation
+      ? opts.withCredentialMutation(() => this.updateUnlocked(lizFilePath, opts))
+      : this.updateUnlocked(lizFilePath, opts));
   }
 
   private async updateUnlocked(
@@ -4438,6 +4518,7 @@ export class GhostManager {
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
       expectedInstalledInstanceId?: string;
+      seededMarketRecovery?: { pluginId: string; sourceDir: string };
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'manual' | 'agent-forge';
@@ -4530,7 +4611,23 @@ export class GhostManager {
     const approvalResult = this.readApproval(sourceRelId);
     if (selectedInstance && approvalResult.state === 'approved' &&
         hasDeliveryNamespace(approvalResult.receipt) && approvalResult.receipt.namespace !== opts.namespace) {
-      return { rejection: { code: 'state-changed', reason: '插件安装状态在检查后发生了变化，请重试' } };
+      const recovery = opts.seededMarketRecovery;
+      const mayRecover = recovery && opts.manifestSource === 'stored-release' &&
+        selectedInstance.namespaceState === 'unconfirmed' && selectedInstance.source === 'market' &&
+        selectedInstance.pluginId === recovery.pluginId && selectedInstance.contentRelId === manifest.id &&
+        typeof opts.namespace === 'string' && opts.namespace !== LOCAL_PLUGIN_NAMESPACE &&
+        approvalResult.receipt.namespace === null &&
+        this.options.isTrustedBundledId?.(manifest.id) === true &&
+        this.options.isTrustedBundledSource?.(manifest.id, recovery.sourceDir) === true;
+      // A retained namespace is an address, not an approval. Only the actual
+      // root seed may be replaced through this recovery path; the incoming
+      // market package still requires the normal consent and SHA checks.
+      if (!mayRecover || !approvalResult.receipt.packageSha256 ||
+          await hashApprovedDirectory(recovery.sourceDir) !== approvalResult.receipt.packageSha256 ||
+          await hashApprovedDirectory(sourceDir) !== approvalResult.receipt.packageSha256 ||
+          approvalTokenFor(this.readApproval(sourceRelId)) !== opts.expectedInstalledApproval) {
+        return { rejection: { code: 'state-changed', reason: '插件安装状态在检查后发生了变化，请重试' } };
+      }
     }
     if (previousRelId && (approvalResult.state !== 'approved' || approvalResult.receipt.namespace != null)) {
       return { rejection: { code: 'state-changed', reason: 'Simulator migration needs an approved root installation' } };
@@ -4889,6 +4986,16 @@ export class GhostManager {
     return { ghost: projected.ghost };
   }
 
+  private bundledInstallRelId(id: string, installedRelId?: string): string {
+    const rootRelId = pluginNewInstallRelId(createPluginLogicalIdentity(null, id));
+    if (!isValidGhostId(id) || (installedRelId !== undefined && installedRelId !== id && installedRelId !== rootRelId)) {
+      throw new Error('builtin target must be the matching legacy or root installation');
+    }
+    // The provisioner supplies its exact target. Keep legacy callers compatible.
+    return installedRelId ?? (this.isRealDirChildRel(id) ? id
+      : this.isRealDirChildRel(rootRelId) ? rootRelId : id);
+  }
+
   /**
    * 随包种子已经由 provisioning 层逐字节对账后，为其建立 Host 安装验证状态。
    * 该入口不得用于市场包或任意本地目录；id 必须落在注入的
@@ -4906,6 +5013,7 @@ export class GhostManager {
     sourceDirInput: string,
     options: {
       disabled: boolean;
+      installedRelId?: string;
       trust?: typeof CINDY_OFFICIAL_GHOST_TRUST;
     },
   ): Promise<void> {
@@ -4922,11 +5030,9 @@ export class GhostManager {
     }
     const packageSha256 = await hashApprovedDirectory(sourceDir);
     const root = this.contentRootDir();
-    const relId = this.isRealDirChildRel(id) ? id
-      : this.isRealDirChildRel(pluginNewInstallRelId(createPluginLogicalIdentity(null, id)))
-        ? pluginNewInstallRelId(createPluginLogicalIdentity(null, id)) : id;
+    const relId = this.bundledInstallRelId(id, options.installedRelId);
     const storagePart = pluginInstallStoragePart(relId);
-    const finalDir = path.join(root, ...relId.split('/'));
+    const finalDir = this.contentPath(relId);
     const rand = crypto.randomBytes(4).toString('hex');
     const stagingDir = path.join(root, `.cindy-installing-${storagePart}-${rand}`);
     const backupDir = path.join(root, `.cindy-updating-${storagePart}-${rand}`);
@@ -5013,7 +5119,7 @@ export class GhostManager {
   async approveTrustedBundledInstall(
     manifest: GhostManifest,
     markerEnabled: boolean,
-    options: { sourceDir: string },
+    options: { sourceDir: string; installedRelId?: string },
   ): Promise<boolean> {
     return this.runExclusiveMutation((mutation) =>
       mutation.approveTrustedBundledInstall(manifest, markerEnabled, options),
@@ -5023,14 +5129,14 @@ export class GhostManager {
   private async approveTrustedBundledInstallUnlocked(
     manifest: GhostManifest,
     markerEnabled: boolean,
-    options: { sourceDir: string },
+    options: { sourceDir: string; installedRelId?: string },
   ): Promise<boolean> {
     if (this.options.isTrustedBundledId?.(manifest.id) !== true) {
       throw new Error(
         `approveTrustedBundledInstall 只服务随包种子插件:${manifest.id} 不在种子清单里`,
       );
     }
-    const relId = this.resolvePhysicalRelId(manifest.id) ?? manifest.id;
+    const relId = this.bundledInstallRelId(manifest.id, options?.installedRelId);
     const dir = this.contentPath(relId);
     if (!options || typeof options.sourceDir !== 'string' || options.sourceDir.trim() === '') {
       throw new Error('approveTrustedBundledInstall requires a verified bundled source directory');
@@ -5062,6 +5168,8 @@ export class GhostManager {
     // v2 作者清单仍带 slots，进入运行时后则会被投影成直接能力字段。批准链只比较、
     // 持久化规范化结果，避免同一份 v2 清单因作者格式和运行时格式不同而被误判为扩权。
     const approvedManifest = expectedManifest.manifest;
+    const transportError = ghostDeclaredNetworkTransportRejection(approvedManifest);
+    if (transportError) throw Object.assign(new Error(transportError), { code: 'NETWORK_INSECURE_ORIGIN' });
     const localeResources = this.readApprovedLocaleResources(sourceDir, approvedManifest);
     const iconDataUrl = this.readInstalledIconDataUrl(sourceDir, approvedManifest) ?? undefined;
     const packageSha256 = await hashApprovedDirectory(sourceDir);
@@ -5335,6 +5443,19 @@ export class GhostManager {
     this.instanceRegistryService.release(relId);
   }
 
+  private async cleanupUninstallSourceState(relId: string, fromPart: string): Promise<void> {
+    const owner = this.currentOwnerContextKey();
+    const pending = this.receiptStore.readPendingMutationSync(relId);
+    const approval = this.receiptStore.readForRecovery(relId);
+    if (pending.state !== 'valid' || pending.mutation.kind !== 'uninstall') throw new Error('uninstall journal changed');
+    await this.options.onUninstallSourceState!(fromPart);
+    if (this.currentOwnerContextKey() !== owner ||
+        JSON.stringify(this.receiptStore.readPendingMutationSync(relId)) !== JSON.stringify(pending) ||
+        JSON.stringify(this.receiptStore.readForRecovery(relId)) !== JSON.stringify(approval)) {
+      throw new Error('uninstall recovery transaction superseded');
+    }
+  }
+
   private async uninstallUnlocked(
     id: string,
     options: GhostUninstallOptions = {},
@@ -5392,8 +5513,11 @@ export class GhostManager {
     }
     // 走同一个撤销入口:成功即清掉隔离记录,失败由该入口转进程内隔离并记日志。撤批准
     // 在删目录之前 —— 即便随后删目录失败/崩溃,也不会留下"目录在 + 旧 receipt 授权"。
+    const fromPart = this.options.onUninstallSourceState ? this.storageKeyForContent(relId) : '';
     const approvalRemoved = await this.removeInstallApprovalUnlocked(relId);
+    if (this.options.onUninstallSourceState) this.untrustedApprovals.add(this.isolationKey(relId));
     try {
+      if (this.options.onUninstallSourceState) await this.cleanupUninstallSourceState(relId, fromPart);
       await fs.promises.rm(dir, { recursive: true, force: true });
     } catch (err) {
       // 批准已撤、标记还在:插件此刻已 fail closed(list 无 receipt → legacy-unapproved),

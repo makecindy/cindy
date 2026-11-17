@@ -93,7 +93,7 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
       className={cn(showAvatars && 'pr-1', corner && cn('h-7 gap-1 px-1.5 text-13 [--button-face-bg:var(--surface-elevated)]',
         reaction.me ? '[--button-face-border:var(--text-tertiary)]' : '[--button-face-border:var(--border-default)]'))}
       onClick={onToggle}>
-      <span>{reaction.emoji}</span>
+      <span className="text-[color:rgb(from_var(--text-primary)_r_g_b_/_1)]">{reaction.emoji}</span>
       {showAvatars ? (
         // Fixed slots sized by the count, so loading and remote updates never shift the row.
         <span aria-hidden className="flex items-center -space-x-1.5" data-testid="reaction-avatars">

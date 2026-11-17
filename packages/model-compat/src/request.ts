@@ -8,6 +8,7 @@ import { normalizeXaiResponsesWebSearch } from './upstream/adapters/xai-web-sear
 import { isXaiSchemaTarget, normalizeXaiToolParameters } from './upstream/adapters/xai-tool-schema';
 import { stripResponsesOnlyEncryptedMarker } from './upstream/adapters/responses-tool-schema';
 import { normalizeOpenCodeGoAdditionalTools } from './upstream/adapters/opencode-go-additional-tools';
+import { normalizeUnsupportedCodexWebSearch } from './providers/mimo';
 
 /** Provider parameter policy shared by all harnesses, after protocol translation.
  * A harness's private tool dialect is handled separately in the request-owned Responses adapter.
@@ -15,7 +16,9 @@ import { normalizeOpenCodeGoAdditionalTools } from './upstream/adapters/opencode
 export function normalizeProviderRequest(body: unknown, route: CompatibilityRoute, options: { reasoningEffortAlreadyMapped?: boolean } = {}): unknown {
   if (!isPlainObject(body)) return body;
   const profile = resolveProviderCompatibilityProfile(route);
-  let next = body;
+  // Match the actual channel, not a model alias on another gateway. Pi and Claude keep
+  // their native tool contracts; MiMo's Chat search plugin is a different protocol.
+  let next = normalizeUnsupportedCodexWebSearch(body, route);
   const set = (key: string, value: unknown) => {
     if (next[key] === value) return;
     if (next === body) next = { ...body };

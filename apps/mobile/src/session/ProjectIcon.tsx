@@ -100,7 +100,12 @@ export function ProjectIcon({
     return (
       <Image
         source={{ uri: source }}
-        style={{ width: size, height: size }}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size * 0.25,
+          overflow: "hidden",
+        }}
         onError={() => setFailedSource(source)}
       />
     );

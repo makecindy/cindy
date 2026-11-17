@@ -44,7 +44,7 @@ const ev = (e: Record<string, unknown>): PiRpcEvent => e as unknown as PiRpcEven
 describe('pi translator', () => {
   // #8887: prior retry tests omitted the second native agent_start. Each
   // completed request must be observable before settlement (unit, no I/O).
-  it.each(['success', 'exhausted'] as const)('accounts before settlement and preserves retry usage (%s)', outcome => {
+  it.each(['success', 'exhausted', 'stop'] as const)('accounts before settlement and preserves retry usage (%s)', outcome => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
     const request = (input: number) => ev({ type: 'message_end', message: {
@@ -58,9 +58,18 @@ describe('pi translator', () => {
     translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 2 }), queue, ctx);
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     translatePiEvent(request(20), queue, ctx);
-    if (outcome === 'exhausted') translatePiEvent(ev({ type: 'auto_retry_end', success: false, finalError: 'quota exceeded' }), queue, ctx);
+    if (outcome === 'stop') markPiHostAbortRequested(ctx);
+    translatePiEvent(ev({ type: 'auto_retry_end', success: outcome === 'success', finalError: 'quota exceeded' }), queue, ctx);
+    // #10277: exhausted retry must release admission without a native settled
+    // frame; successful retry still waits for the remaining automatic work.
+    expect(ctx.isStreaming).toBe(outcome === 'success');
+    expect(ctx.turnSettled).toBe(outcome !== 'success');
+    expect(events.filter(e => e.type === 'done')).toHaveLength(outcome === 'success' ? 0 : 1);
     translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    expect(events.filter(e => e.type === 'done')).toHaveLength(1);
+    expect(events.filter(e => e.type === 'error')).toHaveLength(outcome === 'exhausted' ? 1 : 0);
     const done = events.find(e => e.type === 'done')!;
+    expect(done.data).toMatchObject({ status: outcome === 'success' ? 'completed' : outcome === 'stop' ? 'cancelled' : 'failed' });
     expect(done.data).toMatchObject({ usage: { inputTokens: 120, outputTokens: 4, cacheReadTokens: 6, cacheCreationTokens: 2 } });
     const receipts = events.filter(e => e.type === 'account_usage').map(e => (e.data as any).usage);
     expect(receipts).toHaveLength(2);

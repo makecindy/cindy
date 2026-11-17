@@ -452,18 +452,17 @@ describe('Shared create project picker', () => {
 
   it('merges branch and worktree into a single joined pill (Claude Code style)', () => {
     // 2026-07-29 用户裁决:[⎇ 分支 │ ☑ worktree] 是一个 pill、两个点击区;
-    // 分支选择与 checkbox 独立,未勾时也可先选源分支;悬停任一半区时分隔线隐去。
+    // 分支选择与 checkbox 独立;未勾时操作实际分支,悬停任一半区时分隔线隐去。
     expect(worktreeChipsSource).toContain('function BranchWorktreeChip');
     expect(worktreeChipsSource).toContain('data-testid="create-agent-branch-worktree"');
     expect(worktreeChipsSource).toContain(
-      '!(disabled || branchDisabled || environmentDisabled) && baseRepo !== null',
+      '!(disabled || branchDisabled || environmentDisabled || checkout.busy) &&',
     );
     expect(worktreeChipsSource).toContain('aria-disabled={!branchInteractive}');
     expect(worktreeChipsSource).toContain('tabIndex={branchInteractive ? 0 : -1}');
     expect(worktreeChipsSource).not.toMatch(/\n\s+disabled=\{!branchInteractive\}/);
-    expect(worktreeChipsSource).toContain(
-      "const branchLabel = sourceBranch || branches.current || currentBranch || 'HEAD'",
-    );
+    // OFF actual branch vs ON source selection is exercised through the real
+    // component in BranchWorktreeChip.test.tsx, including stale-label refresh.
     expect(worktreeChipsSource).toContain(
       'effectiveWorktreeEnabled || branchListWanted ? baseRepo : null',
     );
@@ -480,13 +479,12 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain('if (wd && !isRemoteProjectDraft');
     // device-link 草稿的 git 探测经隧道在被控端执行(本机 git 对远程路径必然误报);
     // SSH(worktreeDisabled)仍不探测。
-    expect(worktreeChipsSource).toContain('deviceLinkReconnectEpoch,');
+    expect(worktreeChipsSource).toContain('deviceLinkReconnectEpoch + branchCheckEpoch,');
     expect(newMakerDraftRouteSource).toContain(
       'deviceLinkReconnectEpoch={remoteDraftRefreshEpoch}',
     );
-    expect(worktreeChipsSource).toContain(
-      "sourceBranch || branches.current || currentBranch || 'HEAD'",
-    );
+    // Old controlled hosts keep the detect-cwd label; the component regression
+    // exercises that fallback without invoking their unsupported checkout channel.
     expect(worktreeChipsSource).not.toContain("sourceBranch || branches.current || 'main'");
   });
 
@@ -853,7 +851,7 @@ describe('Shared create project picker', () => {
   it('disables and guards workspace switching while a send is in flight', () => {
     // 设备、工作区以及本次创建会消费的 worktree 配置都要冻结。
     expect(
-      (newMakerDraftRouteSource.match(/disabled=\{wtCreating \|\| sendInFlight \|\| directoryRecoverySelecting\}/g) ?? []).length,
+      (newMakerDraftRouteSource.match(/disabled=\{\s*wtCreating \|\| (?:wtCheckoutBusy \|\| )?sendInFlight \|\| directoryRecoverySelecting\s*\}/g) ?? []).length,
     ).toBe(3);
     const handler = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const handleModePickerSelect = useCallback('),

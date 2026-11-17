@@ -204,6 +204,27 @@ export interface BotGroupMemberView {
   status: BotGroupMemberStatus;
 }
 
+/** Group roles never confer control of another account's execution. */
+export function canStopBotGroupWork(member: Pick<BotGroupMemberView, 'assistant' | 'isOwned'> | undefined, isSelfRequested: boolean): boolean {
+  return !!member && (member.assistant === true ? isSelfRequested : member.isOwned === true);
+}
+
+/** Also used with older remote hosts: do not trust their legacy canStopAll flag. */
+export function canStopBotGroupSpeaker(group: { serverBacked?: boolean; supportsOwnedStop?: boolean; members: BotGroupMemberView[] }, speaker: Pick<BotGroupSpeaker, 'botId' | 'executionId' | 'isSelfRequested' | 'activity'>): boolean {
+  if (!group.serverBacked && !speaker.executionId) return true;
+  if (group.serverBacked && group.supportsOwnedStop !== true) return false;
+  // Planning runs for the requester before any companion execution exists; the organizer may be someone else's.
+  if (speaker.activity === 'planning' && !speaker.executionId) return speaker.isSelfRequested === true;
+  return canStopBotGroupWork(group.members.find(member => member.botId === speaker.botId), speaker.isSelfRequested === true);
+}
+
+/** A plan stop must not indirectly cancel somebody else's companion. Missing steps fail closed. */
+export function canStopBotGroupPlan(plan: { creator_id: string; steps?: Array<{ botId: string; status: string }> }, selfId: string,
+  canStop: (botId: string, requesterId: string) => boolean): boolean {
+  return plan.creator_id === selfId && Array.isArray(plan.steps) && plan.steps.length > 0
+    && plan.steps.every(step => ['done', 'skipped'].includes(step.status) || canStop(step.botId, plan.creator_id));
+}
+
 export interface BotGroupMessageView {
   /** Owner-only process reads use the existing task permission; this is only a public locator. */
   process?: BotGroupProcessRef;
@@ -452,6 +473,8 @@ export type BotGroupPlanStatus =
 export type BotGroupPlanStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 
 export interface BotGroupPlanStepView {
+  /** Owner-scoped control, independent of the group's management role. */
+  canStop?: boolean;
   position: number;
   botId: string;
   /** Name snapshot; the Bot may have been renamed or removed since. */
@@ -480,8 +503,10 @@ export interface BotGroupPlanView {
   branch: string | null;
   /** Server groups: `talk` queues teammates answering in turn (the first five go on by themselves); `work` divides work into steps. */
   kind?: 'talk' | 'work';
-  /** Server groups: the viewer may continue or stop it (creator, owner or admin). */
+  /** Server groups: the viewer may manage the arrangement (creator, owner or admin). */
   canManage?: boolean;
+  /** Stopping additionally requires ownership of all unfinished work. */
+  canStop?: boolean;
   /** Server supports marking future talk turns skipped; absent on older hosts. */
   supportsPendingSkip?: boolean;
   /** Server groups: what the viewer sends without naming anyone goes to the step under way (creator, or a human owner/admin). */
@@ -537,6 +562,10 @@ export interface BotGroupSpeaker {
   executionId?: string;
   /** Stable history position (e.g. server enqueue time), independent of elapsed work. */
   timelineAt?: number;
+  /** Authenticated projection of requester identity; absence on old hosts grants no control. */
+  isSelfRequested?: boolean;
+  /** Public requester name for this execution of the group's Cindy. */
+  requesterName?: string;
   startedAt?: number;
   stopping?: boolean;
   executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';
@@ -556,9 +585,9 @@ export interface BotGroupRoundView {
   speakers: BotGroupSpeaker[];
   /** True when the latest round ended naturally and may be continued. */
   canContinue: boolean;
-  /** Server groups: someone else's request or teammate is also working, so stopping only yours leaves it running. */
+  /** Server groups: another account's work is also active and remains running when you stop yours. */
   othersActive?: boolean;
-  /** This account has work it can stop with the default scope; canStopAll is separate. Absent on older hosts. */
+  /** This account has work it owns and can stop. Absent on older hosts. */
   canStop?: boolean;
 }
 
@@ -567,6 +596,9 @@ export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';
 export interface BotGroupSummary {
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
+  /** Manager-controlled friend invitations; absent on old servers/hosts. */
+  supportsMemberInvites?: boolean;
+  allowMemberInvites?: boolean;
   /** Owner-controlled companion broadcast; absent on old servers/hosts. */
   supportsMentionAudiences?: boolean;
   allowMentionAllBots?: boolean;
@@ -581,6 +613,8 @@ export interface BotGroupSummary {
   supportsDissolve?: boolean;
   /** Upgraded host forwards leave explicitly; absent on old compatibility hosts. */
   supportsGroupLeave?: boolean;
+  /** Host can let an owner withdraw their own companion without group management privileges. */
+  supportsOwnBotRemoval?: boolean;
   supportsListRemoval?: boolean;
   supportsMemberAvatar?: boolean;
   supportsNotificationSettings?: boolean;
@@ -589,9 +623,11 @@ export interface BotGroupSummary {
   archived?: boolean;
   migrationPending?: boolean;
   canInvite?: boolean;
-  /** Server groups: an owner or admin may also stop everyone's work, not only their own. */
+  /** Legacy wire field; new hosts always return false and new clients ignore it. */
   canStopAll?: boolean;
-  /** Explicit host/client support for stop scope; older hosts ignore scope and must not offer all. */
+  /** Host enforces companion ownership / public Cindy requester isolation, including legacy scopes. */
+  supportsOwnedStop?: boolean;
+  /** Legacy scope capability, retained for wire compatibility; use supportsOwnedStop for controls. */
   supportsScopedStop?: boolean;
   /**
    * Server groups whose server gives each request one teammate (the lead when nobody is named)
@@ -741,6 +777,7 @@ export interface BotGroupCreateInput {
 }
 
 export interface BotGroupUpdateInput {
+  allowMemberInvites?: boolean;
   allowMentionAllBots?: boolean;
   groupId: string;
   /** Optional optimistic precondition for server-backed settings. */
@@ -1046,7 +1083,7 @@ export interface ChatInvitePreview {
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; assistant?: boolean }
+  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; allowMemberInvites?: boolean; assistant?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'ban' | 'unban' | 'role'; role?: 'admin' | 'member' }

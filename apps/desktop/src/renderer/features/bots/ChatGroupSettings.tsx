@@ -61,7 +61,7 @@ export function resolveChatGroupSettingsPage(group: BotGroupSummary, value: stri
   if (value === 'profile') return self?.actorId ? { kind: 'profile' } : null;
   if (!value.startsWith(COMPANION_PAGE)) return null;
   const actorId = value.slice(COMPANION_PAGE.length);
-  const member = group.members.find(candidate => candidate.actorId === actorId && candidate.actorKind === 'bot' && candidate.isOwned === true);
+  const member = group.members.find(candidate => candidate.actorId === actorId && candidate.actorKind === 'bot' && candidate.isOwned === true && candidate.assistant !== true);
   return member ? { kind: 'companion', member } : null;
 }
 
@@ -236,11 +236,27 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
     next.set('settingsBot', member.botId);
     setSearchParams(next);
   }
+  const removing = useRef(false);
+  async function removeMember(member: BotGroupMemberView) {
+    if (removing.current || busyRef.current) return;
+    removing.current = true;
+    try {
+      const mine = member.actorKind === 'bot' && member.isOwned === true && member.assistant !== true;
+      const active = group.round?.speakers.some(speaker => speaker.botId === member.botId);
+      const note = mine ? t(key('removeOwnHint'), { name: member.name, group: group.name })
+        + (active ? `\n\n${t(key('removeOwnActiveHint'))}` : '') : t(key('removeHint'));
+      const generation = getDataOwnerGeneration();
+      if (!await confirm({ title: t(key('removeTitle'), { name: member.name }), description: note,
+        confirmText: t(key(mine && active ? 'stopAndRemove' : 'removeOwn')), cancelText: t('bots.cancel'), confirmVariant: 'destructive' })
+        || !mounted.current || !isDataOwnerGenerationCurrent(generation)) return;
+      if (await mutate({ type: 'member', actorId: member.actorId!, action: 'remove' }) && mine) go(null);
+    } finally { removing.current = false; }
+  }
   const memberActions: MemberActions = {
     access: member => go(`${COMPANION_PAGE}${member.actorId}`),
     role: member => void mutate({ type: 'member', actorId: member.actorId!, action: 'role', role: member.role === 'admin' ? 'member' : 'admin' }),
     transfer: member => void confirmed({ type: 'transfer', actorId: member.actorId! }, t(key('transferTitle'), { name: member.name }), t(key('transferHint'))),
-    remove: member => void confirmed({ type: 'member', actorId: member.actorId!, action: 'remove' }, t(key('removeTitle'), { name: member.name }), t(key('removeHint'))),
+    remove: member => void removeMember(member),
   };
 
   let body: ReactNode;
@@ -252,6 +268,15 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
     const assistantAnswers = group.supportsGroupAssistant === true && group.assistantEnabled === true;
     body = <>
       {group.archived && <SettingsNotice>{t(key('archived'))}</SettingsNotice>}
+      {group.supportsMemberInvites && <SettingsSection title={t(key('inviteEntry'))}>
+        <SettingsCard>
+          <SettingsRow wrap title={t(shared('allowMemberInvites'))} hint={t(shared('allowMemberInvitesHint'))}
+            trailing={<Switch aria-label={t(shared('allowMemberInvites'))} checked={group.allowMemberInvites === true}
+              disabled={busy || group.revision === undefined || group.archived} onCheckedChange={allowMemberInvites => {
+                if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, allowMemberInvites });
+              }} />} />
+        </SettingsCard>
+      </SettingsSection>}
       {/* Whether unaddressed messages wake anyone; independent of the order teammates answer in. */}
       <SettingsSection title={t(key('replies'))}>
         <SettingsCard>
@@ -360,6 +385,9 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
         </div>
       </div>
       <ChatBotAccessField groupId={group.id} member={member} disabled={busy} />
+      <SettingsSection caption={t(key('removeOwnScope'))}><SettingsCard>
+        <SettingsRow danger title={t(key('removeOwn'))} disabled={busy} onClick={() => void removeMember(member)} />
+      </SettingsCard></SettingsSection>
       {profiles.some(bot => bot.id === member.botId) && <SettingsSection caption={t(key('capabilityScope'), { name: member.name })}>
         <SettingsCard>
           <SettingsRow title={t(key('capabilitiesRow'), { name: member.name })} onClick={() => openCapabilities(member)}
@@ -438,7 +466,7 @@ function Hero({ group, name, me, invite }: { group: BotGroupSummary; name: strin
   const { t } = useTranslation();
   const role = me?.role === 'owner' ? t(key('youAreOwner')) : me?.role === 'admin' ? t(key('youAreAdmin')) : null;
   return <div className="flex items-center gap-3">
-    <BotGroupSidebarAvatar members={group.members} compact surface="panel" />
+    <BotGroupSidebarAvatar members={group.members} compact />
     <div className="min-w-0 flex-1">
       <p className="text-16 font-medium leading-[1.375] text-[var(--text-primary)] [overflow-wrap:anywhere]">{name}</p>
       <p className="mt-0.5 text-13 leading-[1.38] tabular-nums text-[var(--text-secondary)]">

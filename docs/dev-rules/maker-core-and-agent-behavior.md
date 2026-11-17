@@ -53,6 +53,11 @@ Claude Code 在原有 per-sidechain 回调里检测所有模型；Pi / Codex 在
 失败、混合执行、重定向或源文件读取不套用该例外。等待调用不清空普通调用的循环轨迹。
 这仍是有界启发式，不是任意长度循环的证明，也不以没有文件改动作为失败依据。
 
+工具结果正文因超限被省略时，`tool_result_full.data.outputOmitted: 'oversized'` 只表示正文未知。
+Session 仍配对收口工具、移除循环检测器的在途调用，但占位文案不参与输出相等指纹；未知结果
+打断完全相同结果与长只读窗口，不算作进展证据。工具名和参数仍参与已有疑似复核。
+回归见 `session.tool-loop.test.ts` 的真实 Codex translator 链路与 `loop-guard.test.ts`。
+
 Codex code mode 下脚本在后台运行，模型同时继续回应；app-server 只逐个上报脚本内部的工具调用，
 不标注调用属于哪段脚本，用量通知与思考 item 也会落在同一段脚本的调用之间，后台脚本与模型采样
 还会交叠，所以不能按“模型回应”分组，也不能凭全局最近一次结果推断调用归属。Codex 的 Guard 只用

@@ -52,6 +52,11 @@
   workspace 打开对应普通任务；任务能力批准和写权限仍沿用 Host 校验、确认与回滚链。
 - `cindy.tasks` 与统一任务接口共用创建、继续、结果查询、模型目录和改模型能力。
   任务设置复用 `pluginTaskPrefsStore` 和 `validatePluginTaskConfig`，保留旧偏好及私有工作目录。
+  `PluginsScreen` 按宿主 `capabilities.tasks` 挂载独立的 `PluginTaskSettings` 原生内容，与作者原始设置共存；
+  tasks/errand/workspace 使用同一入口，`showTaskPreferences:false` 只隐藏卡片。宿主未声明
+  `remoteRoutes` 时仍能选择本机模型。任务卡只在当前插件已批准启用、详情可见且宿主在线时挂载，
+  按电脑／物理实例／批准版本／连接代次隔离；关闭或后台停用卸载任务卡，不重挂作者原始设置。
+  回归见 `apps/mobile/src/__tests__/pluginsScreen.test.tsx` 与 Desktop `mobilePageService.test.ts`。
 - 目录由原生选择器确认；schedule 打开普通自动化草稿，支持每天、工作日、间隔和自定义 Cron，
   使用统一模型选择器，只有用户保存才创建。旧内置模拟器跳转已下线；收到旧客户端的该类消息时，显示通用不支持提示。
 - 图片进入原生图片查看器；视频进入已有媒体播放器并提供原生分享。外部预览沿用 Host URL 白名单。

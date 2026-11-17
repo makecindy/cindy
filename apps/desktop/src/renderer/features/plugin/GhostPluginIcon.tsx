@@ -1,6 +1,7 @@
 /**
  * Shared Plugin icon renderer for catalog, detail, and composer surfaces.
- * Real package assets win; missing assets and the legacy scaffold use a theme-aware functional symbol.
+ * Real package assets win; missing, failed, and legacy scaffold assets use a theme-aware functional symbol.
+ * Error fallback survives initial effects and resets when the image source changes.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -14,7 +15,7 @@ import {
   Workflow,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useState, type Ref } from 'react';
+import { useState, type Ref } from 'react';
 
 import { cn } from '@/lib/utils';
 import {
@@ -81,11 +82,14 @@ export function GhostPluginIcon({
   onIconLoadError?: () => void;
   size?: GhostPluginIconSize;
 }) {
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  useEffect(() => {
-    setFailedSrc(null);
-  }, [iconDataUrl]);
-  const resolvedIconDataUrl = failedSrc !== iconDataUrl ? ghostPluginIconSource(iconDataUrl) : undefined;
+  const [imageState, setImageState] = useState({ source: iconDataUrl, failed: false });
+  // Reset with the source, before committing the image. A passive reset can
+  // otherwise erase an error delivered before the first effect runs.
+  if (imageState.source !== iconDataUrl) {
+    setImageState({ source: iconDataUrl, failed: false });
+  }
+  const failed = imageState.source === iconDataUrl && imageState.failed;
+  const resolvedIconDataUrl = !failed ? ghostPluginIconSource(iconDataUrl) : undefined;
   const svg = resolvedIconDataUrl ? isSvgIconSrc(resolvedIconDataUrl) : false;
   const fallbackKind = ghostFallbackIconKind(iconName, iconId);
   const FallbackIcon = FALLBACK_ICONS[fallbackKind];
@@ -109,7 +113,7 @@ export function GhostPluginIcon({
           referrerPolicy="no-referrer"
           onLoad={onIconLoad}
           onError={() => {
-            setFailedSrc(resolvedIconDataUrl);
+            setImageState({ source: iconDataUrl, failed: true });
             onIconLoadError?.();
           }}
           className={cn(

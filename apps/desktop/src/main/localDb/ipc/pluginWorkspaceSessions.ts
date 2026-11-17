@@ -80,6 +80,8 @@ export async function createPluginDraftSession(params: {
     effort?: string;
     fastMode?: boolean | 'ultrafast';
     providerId?: string | null;
+    /** 插件设置保存的运行位置(另一台电脑或 share:<id>);任务与目录仍在本机。 */
+    agentDeviceId?: string;
   };
   /**
    * 意识旁听通知(cindy-brain notifyGhostSessionEvent,由 register 静态注入;

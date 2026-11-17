@@ -57,6 +57,7 @@ vi.mock('../transport.js', async (importOriginal) => {
         const result = { content: [{ type: 'text', text: 'fixture build complete' }] };
         let rpcLost = false;
         let eofOnAbort = false;
+        let retryEndOnAbort = false;
         let loseNextPrompt = false;
         const finish = (omit) => {
           if (omit !== 'tool_execution_end') output({ type: 'tool_execution_end', toolCallId: 'build-1', toolName: 'bash', result });
@@ -67,6 +68,10 @@ vi.mock('../transport.js', async (importOriginal) => {
         readline.createInterface({ input: process.stdin }).on('line', line => {
           const cmd = JSON.parse(line);
           if (rpcLost) return process.exit(23);
+          if (cmd.type === 'fixture_frames') {
+            for (const frame of cmd.frames) output(frame);
+            return;
+          }
           if (cmd.type === 'fixture_usage_retry') {
             const message = input => ({ type: 'message_end', message: { role: 'assistant', model: 'm',
               content: [], usage: { input, output: 2, cacheRead: 3, cacheWrite: 1 } } });
@@ -84,6 +89,7 @@ vi.mock('../transport.js', async (importOriginal) => {
           }
           if (cmd.type === 'fixture_eof_tail') return endOutput(JSON.stringify(cmd.frame));
           if (cmd.type === 'fixture_eof_on_abort') { eofOnAbort = true; return; }
+          if (cmd.type === 'fixture_retry_end_on_abort') { retryEndOnAbort = true; return; }
           if (cmd.type === 'fixture_retry_exhausted_eof') {
             output({ type: 'auto_retry_end', success: false, finalError: 'The operation timed out.' });
             return endOutput();
@@ -128,6 +134,7 @@ vi.mock('../transport.js', async (importOriginal) => {
           }
           if (cmd.type === 'abort') {
             if (eofOnAbort) endOutput();
+            else if (retryEndOnAbort) output({ type: 'auto_retry_end', success: false });
             else output({ type: 'agent_settled' });
           }
         });
@@ -242,7 +249,10 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
         cacheReadTokens: 6, cacheCreationTokens: 2, receipts: [
           expect.objectContaining({ inputTokens: 100 }), expect.objectContaining({ inputTokens: 20 }),
         ] } });
-      if (cause !== 'stop') expect(events.filter(e => e.type === 'done')).toEqual([]);
+      if (cause === 'exhausted') {
+        expect(events.filter(e => e.type === 'done')).toHaveLength(1);
+        expect(events.find(e => e.type === 'done')?.data).toMatchObject({ status: 'failed' });
+      } else if (cause !== 'stop') expect(events.filter(e => e.type === 'done')).toEqual([]);
     },
   );
 
@@ -620,6 +630,97 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
     expect(events.some(event => event.type === 'error')).toBe(false);
     expect(events.find(event => event.type === 'done')?.data).toMatchObject({ status: 'cancelled' });
+  });
+
+  // #10277: the existing retry tests always supplied settled or disconnected
+  // RPC. A live executor can omit settled after retry exhaustion. Exercise the
+  // real PiAgent/Session admission path, not just the translator's error text.
+  it('admits the next message after exhausted retry without agent_settled', async () => {
+    const { events, transport, handle, nativeFrames } = await start();
+    await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+      { type: 'auto_retry_end', success: false, finalError: '429 预算超额' },
+    ] }));
+    await vi.waitFor(() => expect(events.some(event => event.type === 'error')).toBe(true));
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(session!.isTurnRunning()).toBe(false);
+    expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+    expect(events.some(event => event.type === 'status' &&
+      (event.data as { isRunning?: boolean }).isRunning === false)).toBe(true);
+
+    const boundary = events.length;
+    // Deliver the old native tail while the next prompt is being prepared.
+    // It must not clear the next turn's running state or complete it early.
+    const writeLine = transport.writeLine.bind(transport);
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>(resolve => { releasePrompt = resolve; });
+    let promptPending = false;
+    const write = vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+      if (JSON.parse(line).type === 'prompt') {
+        promptPending = true;
+        await promptGate;
+      }
+      await writeLine(line);
+    });
+    const send = session!.send('Continue the same task after restoring quota');
+    try {
+      await vi.waitFor(() => expect(promptPending).toBe(true));
+      await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+        { type: 'agent_settled' },
+      ] }));
+      await vi.waitFor(() => expect(nativeFrames).toContain('agent_settled'));
+      expect(session!.isTurnRunning()).toBe(true);
+      expect(events.slice(boundary).some(event => event.type === 'done' || event.type === 'error')).toBe(false);
+    } finally {
+      releasePrompt();
+      await send;
+      write.mockRestore();
+    }
+    await vi.waitFor(() => expect(events.slice(boundary).some(event => event.type === 'tool_use')).toBe(true));
+    expect(session!.isTurnRunning()).toBe(true);
+    expect(events.slice(boundary).some(event => event.type === 'done' || event.type === 'error')).toBe(false);
+    await transport.writeLine(JSON.stringify({ type: 'fixture_finish' }));
+    await vi.waitFor(() => expect(events.slice(boundary).some(event => event.type === 'done')).toBe(true));
+    expect(events.slice(boundary).find(event => event.type === 'done')?.data).toMatchObject({
+      status: 'completed', result: 'Build finished.',
+    });
+    expect(session!.isTurnRunning()).toBe(false);
+  });
+
+  it.each([
+    ['failed', 'done'], ['cancelled', 'done'], ['cancelled', 'status'],
+  ] as const)('keeps the %s turn tail on its generation when the user immediately sends again at %s', async (outcome, boundary) => {
+    const { events, transport } = await start();
+    let nextSend: ReturnType<Session['send']> | undefined;
+    session!.onEvent(event => {
+      // Exercise reentrant admission at both boundaries of Stop's terminal
+      // batch; a failure deliberately holds admission until the paired done.
+      const atBoundary = boundary === 'done'
+        ? event.type === 'done' && (event.data as { status?: string }).status === outcome
+        : event.type === 'status' && (event.data as { isRunning?: boolean }).isRunning === false;
+      if (atBoundary && !nextSend) {
+        nextSend = session!.send('Continue after restoring quota');
+        void nextSend.catch(() => {}); // Assert dispatch below, without an unhandled rejection.
+      }
+    });
+    if (outcome === 'cancelled') {
+      await transport.writeLine(JSON.stringify({ type: 'fixture_retry_end_on_abort' }));
+      await session!.abort();
+    } else {
+      await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+        { type: 'auto_retry_end', success: false, finalError: '429 预算超额' },
+      ] }));
+    }
+    await vi.waitFor(() => expect(nextSend).toBeDefined());
+    await nextSend;
+    const generation = session!.getTurnGeneration();
+    const currentEvents = () => events.filter(event => event.sessionTurnGeneration === generation);
+    await vi.waitFor(() => expect(currentEvents().some(event => event.type === 'tool_use')).toBe(true));
+    expect(session!.isTurnRunning()).toBe(true);
+    expect(currentEvents().some(event => event.type === 'done' || event.type === 'error' ||
+      (event.type === 'status' && (event.data as { isRunning?: boolean }).isRunning === false))).toBe(false);
+    await transport.writeLine(JSON.stringify({ type: 'fixture_finish' }));
+    await vi.waitFor(() => expect(currentEvents().some(event => event.type === 'done')).toBe(true));
+    expect(currentEvents().find(event => event.type === 'done')?.data).toMatchObject({ status: 'completed' });
   });
 
   it.each([false, true])('does not inherit the previous retry failure before a new prompt agent_start (Stop: %s)', async (stop) => {

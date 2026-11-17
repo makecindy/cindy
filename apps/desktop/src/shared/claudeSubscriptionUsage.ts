@@ -368,6 +368,7 @@ export function mergeClaudeSubscriptionUsageSnapshot(
   return {
     ...incoming,
     subscriptionType: incoming.subscriptionType ?? prev.subscriptionType,
+    planTier: incoming.planTier ?? prev.planTier,
     accountFingerprint: incoming.accountFingerprint ?? prev.accountFingerprint,
   };
 }

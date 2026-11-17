@@ -1,5 +1,6 @@
 import { appendPendingQueueItems } from './pendingQueueItems';
 import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
 import { usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
@@ -363,6 +364,8 @@ import {
 import { CARD_EXPAND_TOGGLE_EVENT, GhostToolCard } from './GhostToolCard';
 import {
   ensureCard,
+  ensureRemoteCard,
+  retainRemoteCardSession,
   ensureSessionCards,
   getGhostCardSnapshot,
   subscribeGhostCards,
@@ -471,6 +474,7 @@ interface MessageStreamProps {
   ownerDeviceId?: string | null;
   /** Task origin. Personal WeChat must not be told to switch to Full access. */
   sessionSource?: string | null;
+  canConfigureAutoReview?: boolean;
   onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
   /** Session working directory; passed down so MarkdownRenderer / UserMessage
    *  can resolve relative paths in markdown links and inline @-chips
@@ -2820,6 +2824,7 @@ function renderWorkGroupChild(
     agentKind?: 'cc' | 'codex' | 'pi';
     remoteHostId?: string | null;
     sessionSource?: string | null;
+    canConfigureAutoReview?: boolean;
     onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
     isSessionStreaming: boolean;
     firstUserMessageClientId: string | null;
@@ -2871,6 +2876,7 @@ function renderWorkGroupChild(
         agentKind={props.agentKind}
         remoteHostId={props.remoteHostId}
         sessionSource={props.sessionSource}
+        canConfigureAutoReview={props.canConfigureAutoReview}
         onDiagnoseError={props.onDiagnoseError}
         sessionRunning={props.isSessionStreaming}
         assistantForkBlocked={shouldBlockAssistantFork(
@@ -2999,6 +3005,7 @@ export function MessageStream({
   remoteHostId,
   ownerDeviceId,
   sessionSource,
+  canConfigureAutoReview,
   onDiagnoseError,
   workingDir,
   assistantAvatar,
@@ -3244,17 +3251,25 @@ export function MessageStream({
   // 出口钩子的 turn 级自绘卡,后者 callId = assistant 消息 clientId),让"该气泡
   // 被自绘替换"的判定在重启/回放后成立;再对 settled 消息里的 xdt_card_id 逐个
   // ensureCard 兜底(幂等,批量已 ready 者直接跳过)。
+  // A task on another computer reads its cards from there (shared-task guests have no card access).
+  const remoteCardDeviceId = ownerDeviceId && !isSharedTaskPeer(ownerDeviceId) ? ownerDeviceId : null;
   useEffect(() => {
-    if (sessionId) ensureSessionCards(sessionId);
-  }, [sessionId]);
+    if (remoteCardDeviceId && sessionId) return retainRemoteCardSession(remoteCardDeviceId, sessionId);
+  }, [remoteCardDeviceId, sessionId]);
+  useEffect(() => {
+    if (sessionId && !ownerDeviceId) ensureSessionCards(sessionId);
+  }, [sessionId, ownerDeviceId]);
   useEffect(() => {
     for (const m of messages) {
       if (m.role === 'tool_result') {
         const cardId = extractGhostCardId(m.content);
-        if (cardId) ensureCard(cardId);
+        if (!cardId) continue;
+        // Anything else (local tasks, shared-task guests) resolves here; a missing card keeps the tool row.
+        if (remoteCardDeviceId && sessionId) ensureRemoteCard(remoteCardDeviceId, sessionId, cardId);
+        else ensureCard(cardId);
       }
     }
-  }, [messages]);
+  }, [messages, remoteCardDeviceId, sessionId]);
 
   const turnChangeSets = useTurnChangeSets(sessionId, remoteHostId);
 
@@ -6412,6 +6427,7 @@ export function MessageStream({
       agentKind,
       remoteHostId,
       sessionSource,
+      canConfigureAutoReview,
       onDiagnoseError,
       isSessionStreaming,
       firstUserMessageClientId,
@@ -6434,6 +6450,7 @@ export function MessageStream({
       agentKind,
       remoteHostId,
       sessionSource,
+      canConfigureAutoReview,
       onDiagnoseError,
       isSessionStreaming,
       firstUserMessageClientId,
@@ -6867,6 +6884,7 @@ export function MessageStream({
                         simplifiedBotConversation={simplifiedBotConversation}
                         starterOptionsLocked={Boolean(lastUserMessageClientId)}
                         sessionSource={sessionSource}
+                        canConfigureAutoReview={canConfigureAutoReview}
                         onDiagnoseError={onDiagnoseError}
                       />
                     );
@@ -7056,6 +7074,7 @@ const MessageItem = memo(function MessageItem({
   simplifiedBotConversation,
   starterOptionsLocked,
   sessionSource,
+  canConfigureAutoReview,
   onDiagnoseError,
 }: {
   pluginUi: PluginUiMessageCandidates;
@@ -7113,6 +7132,7 @@ const MessageItem = memo(function MessageItem({
   /** True once the user has written anything in this task, which retires the opening's starter buttons. */
   starterOptionsLocked?: boolean;
   sessionSource?: string | null;
+  canConfigureAutoReview?: boolean;
   onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
@@ -7309,6 +7329,7 @@ const MessageItem = memo(function MessageItem({
           toolLoop={message.toolLoop}
           outputLimit={message.outputLimit}
           sessionSource={sessionSource}
+          canConfigureAutoReview={canConfigureAutoReview}
           onDiagnose={onDiagnoseError}
         />
       );

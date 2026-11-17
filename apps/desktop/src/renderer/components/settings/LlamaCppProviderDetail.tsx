@@ -11,7 +11,8 @@ import {
   type LlamaCppFile,
   type LlamaCppSnapshot,
 } from '../../../shared/llamaCpp';
-import { DownloadMeter, formatDownloadBytes } from './DownloadMeter';
+import { DownloadMeter, formatDownloadBytes } from '@/components/ui/download-meter';
+import { initialDownloadProgress, type DownloadProgress } from '../../../shared/downloadProgress';
 import {
   LlamaCppCandidates,
   sameLlamaCppDownload,
@@ -24,6 +25,21 @@ import {
   LocalModelManualDownload,
   LocalRuntimeInstallView,
 } from './LocalModelDownloadUI';
+
+/** Main's standard progress; derived from the byte counters if a status lacks it. */
+function llamaCppProgress(operation: NonNullable<LlamaCppSnapshot['operation']>): DownloadProgress {
+  const total = operation.total > 0 ? operation.total : null;
+  const progress = operation.download ?? {
+    ...initialDownloadProgress('downloading', total),
+    loaded: operation.completed,
+    percent: total ? Math.min(100, (operation.completed / total) * 100) : null,
+    speedBps: operation.bytesPerSecond ?? 0,
+  };
+  // `paused` is the service's own state and wins over a progress value still in flight.
+  return operation.paused
+    ? { ...progress, phase: 'paused', speedBps: 0, etaSeconds: null }
+    : progress;
+}
 
 export function LlamaCppProviderDetail({ onChanged }: { onChanged: () => void }) {
   const { t } = useTranslation();
@@ -126,25 +142,17 @@ export function LlamaCppProviderDetail({ onChanged }: { onChanged: () => void })
   const currentDownload: LlamaCppDownloadState | undefined = activeInput
     ? {
         input: activeInput,
-        progress: {
-          label: t(
-            operation?.paused
-              ? 'settings.providers.local.pullPhase.paused'
-              : operation?.total && operation.completed >= operation.total
-                ? 'settings.providers.local.pullPhase.verifying'
-                : 'settings.providers.local.pullPhase.downloading',
-          ),
-          completed: operation?.completed,
-          total: operation?.total,
-          bytesPerSecond: operation?.bytesPerSecond,
-          paused: operation?.paused,
-        },
+        progress:
+          operation?.kind === 'download'
+            ? llamaCppProgress(operation)
+            : initialDownloadProgress('preparing'),
       }
     : failed
       ? {
           input: failed,
           failed: true,
-          progress: { label: t('settings.providers.llamacpp.failed'), error: true },
+          progress: initialDownloadProgress('failed'),
+          error: t('settings.providers.llamacpp.failed'),
         }
       : undefined;
   const locked = !!busy || !!operation || state?.canConfigure === false;
@@ -179,12 +187,14 @@ export function LlamaCppProviderDetail({ onChanged }: { onChanged: () => void })
           )}
           canInstall={state?.supported === true && !locked}
           installing={installing}
-          progress={
+          download={
             installing
               ? {
                   label: t(`settings.providers.llamacpp.progress.${operation?.kind ?? 'install'}`),
-                  completed: operation?.completed,
-                  total: operation?.total,
+                  progress:
+                    operation?.kind === 'install'
+                      ? llamaCppProgress(operation)
+                      : initialDownloadProgress('preparing'),
                 }
               : undefined
           }
@@ -259,14 +269,20 @@ export function LlamaCppProviderDetail({ onChanged }: { onChanged: () => void })
             ) : (
               <LocalDownloadActions
                 active
-                paused={customDownload.progress.paused}
+                paused={customDownload.progress.phase === 'paused'}
                 onCancel={cancel}
                 onPause={state?.canPauseDownload ? () => controlDownload('pause') : undefined}
                 onResume={state?.canPauseDownload ? () => controlDownload('resume') : undefined}
               />
             )
           }
-          progress={<DownloadMeter progress={customDownload.progress} />}
+          progress={
+            <DownloadMeter
+              label={customDownload.input.file}
+              progress={customDownload.progress}
+              error={customDownload.error}
+            />
+          }
         />
       )}
       {state?.running && state.canManageRuntime === true && (
