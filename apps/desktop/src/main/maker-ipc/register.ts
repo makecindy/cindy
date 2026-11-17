@@ -17473,7 +17473,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await beforeMutation();
         if (createOpts.agentKind !== 'claude-code') return compactSessionFromHost(id, instructions, beforeMutation);
         if (instructions !== undefined) throwIpcError('UNSUPPORTED_CAPABILITY', 'Claude compact control does not accept custom instructions');
-        return inputCoordinator.compact(id, createOpts);
+        return inputCoordinator.compact(id, createOpts, { beforeMutation });
       },
     }),
     getPluginCaller: () => {

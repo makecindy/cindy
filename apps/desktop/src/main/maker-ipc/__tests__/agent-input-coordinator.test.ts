@@ -908,6 +908,60 @@ describe('discarding the welcome an unfinished meeting queued', () => {
 });
 
 describe('AgentInputCoordinator Orca priority queue transactions', () => {
+  // Unit / #11043: real shared retry and coordinator compact must retain the
+  // initiating call's revocation guard across history reads and queued dispatch.
+  // Prior coverage exercised owner retries only; a revoked plugin is the minimal failure.
+  it.each(['progress', 'snapshot'] as const)('rejects revoked control retry after the %s read without consuming recovery', async phase => {
+    const read = deferred<any>();
+    const h = createHarness({ getRecoveryContextSnapshot: async () => read.promise });
+    const sid = `control-retry-${phase}`;
+    h.coordinator.enqueue(sid, makeItem('original', 'original'));
+    await flush();
+    h.setRunning(false); h.coordinator.onTurnEvent(sid, 'error', 'failed'); await flush();
+    h.setHasAssistantProgressAfter(async () => phase === 'progress' ? read.promise : true);
+    let current = true;
+    const beforeMutation = async () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
+    const retry = runSessionExecutionAction({ targetSessionId: sid, action: 'retry', beforeMutation }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: async () => {},
+    });
+    const outcome = retry.then(() => 'accepted', error => (error as Error).message);
+    await flush(); current = false;
+    read.resolve(phase === 'progress' ? false : { contextTokens: 0, contextWindow: 1, progressCount: 0, recentProgress: [] });
+    expect(await outcome).toBe('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection(sid)).toMatchObject({ recovery: { kind: 'active-turn' }, error: 'failed' });
+  });
+
+  it('discards a control retry revoked after it was queued without sending the recovery copy', async () => {
+    const h = createHarness(), sid = 'control-retry-queued';
+    h.coordinator.enqueue(sid, makeItem('original', 'original')); await flush();
+    h.setRunning(false); h.coordinator.onTurnEvent(sid, 'error', 'failed'); await flush();
+    h.setHasAssistantProgressAfter(async () => false);
+    h.setRunning(true);
+    let current = true;
+    const beforeMutation = async () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
+    await runSessionExecutionAction({ targetSessionId: sid, action: 'retry', beforeMutation }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: async () => {},
+    });
+    current = false; h.setRunning(false); h.coordinator.wakeSession(sid, 'idle'); await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+  });
+
+  it('does not dispatch a queued compact after its initiating control call is revoked', async () => {
+    const h = createHarness(), sid = 'control-compact-queued';
+    h.setRunning(true);
+    let current = true;
+    const beforeMutation = async () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
+    await h.coordinator.compact(sid, makeItem('compact', '').createOpts, { beforeMutation });
+    current = false; h.setRunning(false); h.coordinator.onTurnEvent(sid, 'done'); await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    h.coordinator.enqueue(sid, makeItem('owner', 'owner input')); await flush();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({ content: 'owner input' });
+  });
+
   // Unit / shared control contract: pause an empty real queue, enqueue a user message,
   // then resume via the new production action. Existing tests only called coordinator methods directly.
   it('shared execution actions hold new input and resume the original queue', async () => {

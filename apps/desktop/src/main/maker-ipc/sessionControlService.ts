@@ -7,7 +7,7 @@ import type {
   SessionGracefulStopResult,
   SessionTurnControlSnapshot,
 } from '@cindy/maker-core';
-import { assertTaskActionCurrent, bindTaskActionInput, combineInputGuards, hasTaskActionAuthorization } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, bindTaskActionInput, captureTaskActionDeliveryGuard, combineInputGuards, hasTaskActionAuthorization } from './taskActionAuthorization.js';
 import { revokeTrustedDesktopQueuedOrigin } from './queuedInputOrigin.js';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
@@ -176,7 +176,9 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       instructions?: string;
     }): Promise<{ ok: true; result: unknown } | Failure<string>> {
       const plugin = deps.getPluginCaller?.();
-      const beforeMutation = async () => { await assertTaskActionCurrent(); plugin?.assertCurrent(); };
+      await assertTaskActionCurrent();
+      const deliveryGuard = captureTaskActionDeliveryGuard();
+      const beforeMutation = async () => { await deliveryGuard?.(); plugin?.assertCurrent(); };
       const missing = await ensureTarget(params.targetSessionId);
       await beforeMutation();
       if (missing) return missing;

@@ -12,7 +12,7 @@ export async function runSessionExecutionAction(params: {
     isExecutionPaused(id: string): boolean;
     isQueuePaused(id: string): boolean;
     resume(id: string): unknown;
-    retryLastError(id: string): Promise<unknown>;
+    retryLastError(id: string, beforeMutation?: () => Promise<void>): Promise<unknown>;
   };
   persist(id: string): Promise<void>;
   compact(id: string, instructions: string | undefined, beforeMutation: () => Promise<void>): Promise<unknown>;
@@ -29,7 +29,7 @@ export async function runSessionExecutionAction(params: {
   else if (action === 'resume') {
     coordinator.setExecutionPaused(id, false);
     coordinator.resume(id);
-  } else await coordinator.retryLastError(id);
+  } else await coordinator.retryLastError(id, beforeMutation);
   await deps.persist(id);
   await beforeMutation();
   return { ok: true as const, result: { executionPaused: coordinator.isExecutionPaused(id), queuePaused: coordinator.isQueuePaused(id) } };

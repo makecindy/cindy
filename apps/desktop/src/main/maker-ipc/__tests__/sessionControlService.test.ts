@@ -164,6 +164,24 @@ function setup(opts?: {
 }
 
 describe('session control domain service', () => {
+  // Unit / #11043: a queued retry/compact callback can outlive the action scope.
+  // Existing revocation tests stayed inside admission.run; retain the actual grant.
+  it('retains control admission authority after the action scope has ended', async () => {
+    const { deps, service } = setup();
+    let current = true, delayed: (() => Promise<void>) | undefined;
+    deps.runSessionAction.mockImplementationOnce(async params => { delayed = params.beforeMutation; return { ok: true as const, result: {} }; });
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'caller', tool: 'control_session', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {
+        if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      } },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await decision.run(() => service.controlSession({ targetSessionId: 'target', action: 'retry' }));
+    current = false;
+    await expect(delayed!()).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  });
+
   it('returns the native unsupported compact error rather than an internal failure', async () => {
     const { deps, service } = setup();
     deps.runSessionAction.mockRejectedValue(Object.assign(new Error('Native compact is unavailable'), { code: 'UNSUPPORTED_CAPABILITY' }));

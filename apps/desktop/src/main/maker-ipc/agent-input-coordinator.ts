@@ -3,7 +3,7 @@ import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequ
 import { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
-import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
+import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, bindTaskActionInput, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
@@ -745,6 +745,7 @@ interface ActiveTurn {
 interface PendingCompactRequest {
   createOpts: AgentInputCreateOpts;
   userName?: string;
+  beforeMutation?: () => Promise<void>;
   waitForClientIds: string[];
 }
 
@@ -2373,7 +2374,7 @@ export class AgentInputCoordinator {
   async compact(
     sessionId: string,
     createOpts: AgentInputCreateOpts,
-    opts?: { userName?: string },
+    opts?: { userName?: string; beforeMutation?: () => Promise<void> },
   ): Promise<AgentInputProjection> {
     const state = this.getState(sessionId);
     // 手动 /compact 是用户接管，与 composer 新消息同语义。先撤掉尚未跨过
@@ -2398,6 +2399,7 @@ export class AgentInputCoordinator {
     const request: PendingCompactRequest = {
       createOpts,
       userName: opts?.userName,
+      beforeMutation: opts?.beforeMutation,
       waitForClientIds: state.pendingQueue.map((item) => item.clientId),
     };
 
@@ -2450,6 +2452,8 @@ export class AgentInputCoordinator {
     this.emit(sessionId);
 
     try {
+      if (request.beforeMutation) await request.beforeMutation();
+      if (!this.isActiveTurnCurrent(sessionId, active)) return this.getProjection(sessionId);
       active.sendStarted = true;
       active.dispatchLifecycle = 'sending';
       const result = await this.deps.sendToAgent(
@@ -2462,6 +2466,7 @@ export class AgentInputCoordinator {
           throwOnStartFailure: true,
           expectedClearBoundaryMs: active.clearBoundaryMs,
           expectedInputGeneration: active.generation,
+          ...(request.beforeMutation ? { [MCP_APP_MESSAGE_GUARD]: request.beforeMutation } : {}),
           onVendorTurnReserved: (generation) =>
             this.captureReservedVendorGeneration(sessionId, active, generation),
         },
@@ -3463,8 +3468,8 @@ export class AgentInputCoordinator {
   }
 
   /** 用户点「重试 / 继续任务」。行为见 performRetryLastError。 */
-  async retryLastError(sessionId: string): Promise<AgentInputProjection> {
-    const { projection } = await this.performRetryLastError(sessionId);
+  async retryLastError(sessionId: string, beforeMutation?: () => Promise<void>): Promise<AgentInputProjection> {
+    const { projection } = await this.performRetryLastError(sessionId, { beforeMutation });
     return projection;
   }
 
@@ -3505,6 +3510,7 @@ export class AgentInputCoordinator {
     opts?: {
       auto?: boolean;
       attemptToken?: number;
+      beforeMutation?: () => Promise<void>;
       /** Quota/group continuation shares the wait token, but retains its actual recovery owner. */
       usageLimitWait?: { token: number; info: AutoResumeInfo; recoveryOwner: 'quota-reset' | 'provider-group' };
     },
@@ -3747,6 +3753,11 @@ export class AgentInputCoordinator {
         return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
       }
     }
+    if (opts?.beforeMutation) {
+      await opts.beforeMutation();
+      if (this.getState(sessionId).recovery !== recovery)
+        return { projection: this.getProjection(sessionId), outcome: 'superseded' };
+    }
     state.error = null;
     clearErrorProjectionSignals(state);
     state.stickyError = null;
@@ -3801,6 +3812,7 @@ export class AgentInputCoordinator {
       // Manual retry is a user takeover. The old scheduler waiter settles as
       // failed; its FireContext must not be inherited by the user's new turn.
       if (!automatic && isSchedulerOriginItem(item)) item.origin = undefined;
+      if (opts?.beforeMutation) bindTaskActionInput(sessionId, item, opts.beforeMutation);
       if (usageWait && state.queuePausedByRestore) this.restoredUsageLimitRetryItems.add(item);
       state.pendingQueue.unshift(item);
       this.prependPendingCompactWaitClientId(state, item.clientId);
