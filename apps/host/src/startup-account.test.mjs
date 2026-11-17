@@ -233,7 +233,8 @@ const renewalParts = [];
     renewalParts.push(node.getText(source));
   else ts.forEachChild(node, visitRenewal);
 })(source);
-assert.equal(renewalParts.length, renewalSource.length + renewalConstants.length, 'every renewal function is found in main.ts');
+// The source is only compiled and run, never asserted on; a renamed function fails the harness here.
+if (renewalParts.length !== renewalSource.length + renewalConstants.length) throw new Error('a renewal function is missing from main.ts');
 const renewalCompiled = ts.transpileModule(`
 let currentSessionToken = null, accountUser = null, currentDeviceId = null, remoteIdentityReady = false;
 let account = { authenticated: true, realm: 'global' };
