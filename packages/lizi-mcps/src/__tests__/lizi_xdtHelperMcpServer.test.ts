@@ -7,6 +7,66 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Unit / #10794 permission boundary: the real registry must not expose the raw
+// account view or provider directory to a plugin without a task. The original
+// plugin read case allowed both. Minimal input is subscriptionAccounts/read.
+it('keeps raw account reads and provider management unavailable to plugins without a Session', async () => {
+  const models = vi.fn(async () => ({ providers: [] }));
+  const server = createXdtHelperMcpServer({ modelSettings: { call: models } }, {
+    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  try {
+    expect(parsePayload(await server.hostTools.call('list_model_providers', {})))
+      .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    expect(parsePayload(await server.hostTools.call('configure_model_provider', {
+      change: { action: 'subscriptionAccounts', providerId: 'anthropic', command: { action: 'read' } },
+    }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    for (const action of ['login', 'configure', 'remove']) {
+      expect(parsePayload(await server.hostTools.call('configure_model_provider', {
+        change: { action: 'subscriptionAccounts', providerId: 'anthropic', command: { action, accountId: 'a' } },
+      }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    }
+    expect(parsePayload(await server.hostTools.call('configure_model_provider', {
+      change: { action: 'rename', providerId: 'anthropic', name: 'renamed' },
+    }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    expect(models).not.toHaveBeenCalled();
+  } finally { await server.close(); }
+});
+
+// Unit / existing provider-group management query: keep original payloads and
+// truncation instead of calculating a plugin-only aggregate. Minimal one-row
+// response exercises new discovery and no-session plugin routing.
+it('exposes original usage history and provider group views through the shared registry', async () => {
+  const history = { providerId: 'anthropic', todayKey: '2026-11-16', coverageStart: '2026-11-15',
+    self: { lastUsedAt: null, days: [] }, relays: [], members: [{ shareId: 's', memberId: 'm', lastUsedAt: 1, days: [
+      { day: '2026-11-16', model: 'model-a', inputTokens: 3, outputTokens: 2, cacheCreateTokens: 4, cacheReadTokens: 5 },
+    ] }] };
+  const group = { providerId: 'anthropic', config: null, members: [] };
+  const call = vi.fn(async (input: { action: string }) => input.action === 'usage-history' ? history : group);
+  const server = createXdtHelperMcpServer({ providerReads: { call } }, {
+    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  const client = new Client({ name: 'provider-read-discovery', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+    expect(overview).toMatchObject({ categories: expect.arrayContaining([
+      expect.objectContaining({ name: 'usage', description: expect.stringContaining('device') }),
+    ]) });
+    const detail = parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: 'models.provider-state' } }));
+    expect(detail).toMatchObject({ control: expect.objectContaining({ summary: expect.stringContaining('device') }) });
+    expect(server.hostTools.describe('get_provider_usage_history')).toMatchObject({ category: 'usage' });
+    expect(parsePayload(await server.hostTools.call('get_provider_usage_history', { providerId: 'anthropic', device: 'computer' })))
+      .toEqual({ ok: true, ...history });
+    expect(call).toHaveBeenLastCalledWith({ action: 'usage-history', providerId: 'anthropic', device: 'computer', callerSessionId: undefined });
+    expect(parsePayload(await server.hostTools.call('get_provider_group', { providerId: 'anthropic' }))).toEqual({ ok: true, ...group });
+    expect(parsePayload(await server.hostTools.call('get_provider_usage_history', { providerId: 'anthropic', groupBy: 'day' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledTimes(2);
+  } finally { await client.close(); await server.close(); }
+});
+
 // Unit, provider-sharing.md §7 / agent-user-parity.md: the real registry must
 // expose owner management to an installed plugin without borrowing a task.
 // Existing model/settings tests do not exercise member operations or their schema.
@@ -38,70 +98,6 @@ it('offers provider share member tools to plugins without a Session and validate
     expect(call).toHaveBeenCalledTimes(2);
     const found = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '供应商分享成员' } }));
     expect(JSON.stringify(found)).toContain('models.provider-sharing');
-  } finally { await client.close(); await server.close(); }
-});
-
-// Unit / agent-user-parity and plugin host-tools: use the real registry for an
-// installed plugin without a task. Existing settings cases only covered tasks.
-// Minimal input is an existing subscriptionAccounts/read; identity stays intact.
-it('allows the existing account read for plugins without enabling adjacent model writes', async () => {
-  const raw = { scope: 'local', providerId: 'anthropic', accounts: { providerId: 'anthropic', configured: true,
-    strategy: 'order', accounts: [{ id: 'a', identity: 'example@example.invalid', directory: '/synthetic/account-a',
-      accountKey: 'synthetic-digest', plan: 'max', status: 'ready', running: 0, paused: false, limit: 1, weight: 1 }] } };
-  const models = vi.fn(async (input: { operation: string }) => input.operation === 'list' ? { providers: [] } : raw);
-  const server = createXdtHelperMcpServer({ modelSettings: { call: models } }, {
-    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
-  });
-  try {
-    expect(parsePayload(await server.hostTools.call('list_model_providers', {}))).toEqual({ ok: true, providers: [] });
-    expect(parsePayload(await server.hostTools.call('configure_model_provider', {
-      change: { action: 'subscriptionAccounts', providerId: 'anthropic', command: { action: 'read' } },
-    }))).toEqual({ ok: true, ...raw });
-    expect(models).toHaveBeenLastCalledWith({ callerSessionId: undefined, operation: 'provider',
-      change: { action: 'subscriptionAccounts', providerId: 'anthropic', command: { action: 'read' } } });
-    for (const action of ['login', 'configure', 'remove']) {
-      expect(parsePayload(await server.hostTools.call('configure_model_provider', {
-        change: { action: 'subscriptionAccounts', providerId: 'anthropic', command: { action, accountId: 'a' } },
-      }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
-    }
-    expect(parsePayload(await server.hostTools.call('configure_model_provider', {
-      change: { action: 'rename', providerId: 'anthropic', name: 'renamed' },
-    }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
-    expect(models).toHaveBeenCalledTimes(2);
-  } finally { await server.close(); }
-});
-
-// Unit / existing provider-group management query: keep original payloads and
-// truncation instead of calculating a plugin-only aggregate. Minimal one-row
-// response exercises new discovery and no-session plugin routing.
-it('exposes original usage history and provider group views through the shared registry', async () => {
-  const history = { providerId: 'anthropic', todayKey: '2026-11-16', coverageStart: '2026-11-15',
-    self: { lastUsedAt: null, days: [] }, relays: [], members: [{ shareId: 's', memberId: 'm', lastUsedAt: 1, days: [
-      { day: '2026-11-16', model: 'model-a', inputTokens: 3, outputTokens: 2, cacheCreateTokens: 4, cacheReadTokens: 5 },
-    ] }] };
-  const group = { providerId: 'anthropic', config: null, members: [] };
-  const call = vi.fn(async (input: { action: string }) => input.action === 'usage-history' ? history : group);
-  const server = createXdtHelperMcpServer({ providerReads: { call } }, {
-    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
-  });
-  const client = new Client({ name: 'provider-read-discovery', version: '1' });
-  const [ct, st] = InMemoryTransport.createLinkedPair();
-  await Promise.all([server.connect(st), client.connect(ct)]);
-  try {
-    const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
-    expect(overview).toMatchObject({ categories: expect.arrayContaining([
-      expect.objectContaining({ name: 'settings', description: expect.stringContaining('device') }),
-    ]) });
-    const detail = parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: 'models.provider-state' } }));
-    expect(detail).toMatchObject({ control: expect.objectContaining({ summary: expect.stringContaining('device') }) });
-    expect(server.hostTools.describe('get_provider_usage_history')).toMatchObject({ category: 'settings' });
-    expect(parsePayload(await server.hostTools.call('get_provider_usage_history', { providerId: 'anthropic', device: 'computer' })))
-      .toEqual({ ok: true, ...history });
-    expect(call).toHaveBeenLastCalledWith({ action: 'usage-history', providerId: 'anthropic', device: 'computer', callerSessionId: undefined });
-    expect(parsePayload(await server.hostTools.call('get_provider_group', { providerId: 'anthropic' }))).toEqual({ ok: true, ...group });
-    expect(parsePayload(await server.hostTools.call('get_provider_usage_history', { providerId: 'anthropic', groupBy: 'day' })))
-      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
-    expect(call).toHaveBeenCalledTimes(2);
   } finally { await client.close(); await server.close(); }
 });
 
@@ -165,6 +161,28 @@ it('discovers Host services through the common validated registry', async () => 
     expect(list).toHaveBeenCalledOnce();
   } finally { await server.close(); }
 });
+// Unit: plugin callers have no Session; the new usage entry must use their attested
+// context and reject arbitrary owner/path/refresh parameters before touching host data.
+it('exposes read-only subscription usage to the common validated tool registry', async () => {
+  const read = vi.fn(async () => ({ scope: 'local', accounts: [{ accountId: 'second', windows: [] }] }));
+  const hostCaller = { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 };
+  const server = createXdtHelperMcpServer({ subscriptionUsage: { read } }, { agentKind: 'codex', workingDir: '', hostCaller });
+  try {
+    expect(server.hostTools.describe('get_subscription_usage')).toMatchObject({ category: 'usage' });
+    expect(parsePayload(await server.hostTools.call('get_subscription_usage', { providerId: 'anthropic' })))
+      .toMatchObject({ ok: true, accounts: [{ accountId: 'second' }] });
+    expect(read.mock.calls[0]).toEqual([expect.objectContaining({ hostCaller }), 'anthropic']);
+    for (const key of ['ownerId', 'accountPath', 'refresh', 'deviceId', 'sessionId']) {
+      expect(parsePayload(await server.hostTools.call('get_subscription_usage', { [key]: 'other' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    }
+    expect(read).toHaveBeenCalledOnce();
+    read.mockRejectedValueOnce(new Error('secret host path'));
+    const failed = await server.hostTools.call('get_subscription_usage', {});
+    expect(parsePayload(failed)).toMatchObject({ errorCode: 'SUBSCRIPTION_USAGE_UNAVAILABLE' });
+    expect(JSON.stringify(failed)).not.toContain('secret host path');
+  } finally { await server.close(); }
+});
+
 // Unit, #9801 / 4537273680: external-history scan/status callbacks also recover
 // interrupted imports. Existing task tests did not cover a plugin caller. The
 // real shared dispatcher must reject all three tools before any callback (and

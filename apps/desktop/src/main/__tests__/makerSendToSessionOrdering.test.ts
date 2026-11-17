@@ -190,7 +190,7 @@ describe('sendToSession ordering', () => {
     const pluginStateBlock = extractBetween(
       source,
       'ipcMain.handle(\n    MAKER_INVOKE.PLUGINS_GET_STATE',
-      'ipcMain.handle(MAKER_INVOKE.PLUGINS_SET_ENABLED',
+      'registerPluginEnableHandlers(',
     );
 
     expect(pluginStateBlock).toContain('resolveLocalCollabPolicyWorkingDir(');
@@ -331,7 +331,13 @@ describe('sendToSession ordering', () => {
       'const runQueuedOrcaInterAgentAcceptedCallback = (',
       'const dispatchOrEnqueueOrcaInterAgentMessage = async (',
     );
-    expect(runQueuedCallback).toContain('return queuedAccepted.run(sessionId, item);');
+    // #10803: a persisted scheduler recovery must inherit the original callback
+    // only through the bridge's verified source; otherwise run ownership is lost.
+    // Runtime recovery and cancellation are covered by runnerQueuedDispatch.test.ts.
+    expect(runQueuedCallback).toContain('return queuedAccepted.run(sessionId, item, recoverySourceClientId);');
+    expect(coordinatorBlock).toMatch(
+      /await orcaInterAgentDispatcher\.runQueuedOrcaInterAgentAcceptedCallback\(\s*sessionId,\s*item,\s*restoredFromSnapshot,\s*schedulerQueueBridgeHolder\?\.recoverySourceClientId\(sessionId, item\),?\s*\);/,
+    );
     expect(dispatchBlock).toMatch(
       /registerQueuedOrcaInterAgentAcceptedCallback\(\s*clientId,\s*params\.onAccepted,\s*params\.onAcceptedRollback,\s*params\.onAcceptedCommit,?\s*\);/,
     );

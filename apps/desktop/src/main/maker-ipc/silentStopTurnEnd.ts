@@ -8,6 +8,7 @@ import { SILENT_STOP_RESUME_PROMPT, type SilentStopAutoResumeGuard } from './sil
 import type { SilentStopTurnLeaseGate } from './sessionTurnLease.js';
 import type { SessionListActivityTracker } from './sessionTurnActivityTracker.js';
 import type { ProductTurnWallClockTracker } from './turnWallClock.js';
+import type { SilentStopFailureCause } from './silentStopFailure.js';
 
 type SilentStopSession = NonNullable<ReturnType<Maker['getSession']>>;
 
@@ -31,7 +32,7 @@ export interface SilentStopTurnEndPorts {
     session: SilentStopSession,
     generation: number,
   ): Promise<void>;
-  surfaceSilentStopExhaustedBanner(sessionId: string): Promise<void>;
+  surfaceSilentStopExhaustedBanner(sessionId: string, cause: SilentStopFailureCause): Promise<void>;
   log: {
     debug(message: string, meta?: Record<string, unknown>): void;
     info(message: string, meta?: Record<string, unknown>): void;
@@ -142,7 +143,7 @@ export async function handleSilentStopTurnEndWithPorts(
           sessionId: session.id,
           reason: outcome.reason,
         });
-        await surfaceSilentStopExhaustedBanner(session.id);
+        await surfaceSilentStopExhaustedBanner(session.id, 'dispatch-not-accepted');
         await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
       } else {
         // 只在供应商确认派发后丢弃原结束时间；未派发或抛出时由失败收口按原时间提交。
@@ -156,13 +157,13 @@ export async function handleSilentStopTurnEndWithPorts(
         sessionId: session.id,
         error: err instanceof Error ? err.message : String(err),
       });
-      await surfaceSilentStopExhaustedBanner(session.id);
+      await surfaceSilentStopExhaustedBanner(session.id, 'dispatch-error');
       await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
     }
     return;
   }
   if (decision.action === 'exhausted') {
-    await surfaceSilentStopExhaustedBanner(session.id);
+    await surfaceSilentStopExhaustedBanner(session.id, decision.cause);
     await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
   }
   if (decision.action === 'skip') {

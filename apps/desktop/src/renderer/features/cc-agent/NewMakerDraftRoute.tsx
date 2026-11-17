@@ -72,6 +72,7 @@ import {
   type FolderPickerSelectSource,
 } from '@/components/new-chat/FolderPickerPopover';
 import { DeviceSwitcherPill } from '@/components/new-chat/DeviceSwitcherPill';
+import { WorktreeCreatingOverlay } from '@/components/new-chat/WorktreeCreatingOverlay';
 import {
   AddRemoteProjectDialog,
   type RemoteProjectTarget,
@@ -200,6 +201,8 @@ import {
   rewriteBuiltInSkillDraftForSend,
 } from '@/lib/slashCommands';
 import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
+import { resolveTaskWorktreeName } from '@/lib/worktreeModelNaming';
+import { getWorktreeModelNamingEnabled } from '@/hooks/useWorktreeModelNamingPreference';
 import { useRefreshWorktreeForSession } from '@/contexts/WorktreeContext';
 import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
 import {
@@ -287,7 +290,7 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { extractIpcError } from '@/utils/ipcError';
-import { rememberRemoteDraftDefaults, forgetRemoteDraftDefaults, getRemoteDraftDefaults } from './remoteDraftDefaultsCache';
+import { rememberRemoteDraftDefaults, forgetRemoteDraftDefaults } from './remoteDraftDefaultsCache';
 import { nextRemoteDraftEngine } from './remoteDraftEngineFollow';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import {
@@ -921,7 +924,10 @@ export function NewMakerDraftRoute() {
   // 配对驱动 isDragOver,亮全区虚线遮罩 + 透传 ChatInput 卡内提示文案。
   const pageDragCounterRef = useRef(0);
   const [pageDragOver, setPageDragOver] = useState(false);
-  const [wtCreating, setWtCreating] = useState(false);
+  // 远程与 Goal 先建 worktree 再建任务,期间还停在新建页:记下目标分支与开始时刻,在输入框
+  // 下方显示与任务页同款的创建中卡片和已等待时长(Multibox 同步克隆可达一两分钟)。
+  const [wtCreatingInfo, setWtCreatingInfo] = useState<{ branch: string; startedAt: number } | null>(null);
+  const wtCreating = wtCreatingInfo !== null;
   const [wtCheckoutBusy, setWtCheckoutBusy] = useState(false);
   const wtCheckoutBusyRef = useRef(false);
   const wtCheckoutBranchViewRef = useRef<CheckoutBranchView | null>(null);
@@ -4721,8 +4727,13 @@ export function NewMakerDraftRoute() {
                 await forgetPendingRemotePrecreatedWorktree(reservation, isCurrentDataOwner);
                 throw new RemotePrecreatedWorktreeCleanupPendingError();
               }
-              setWtCreating(true);
+              const startedAt = Date.now();
+              setWtCreatingInfo({ branch: getWorktreeModelNamingEnabled() ? '' : getBranchName(name), startedAt });
               try {
+                // This computer names it; the remote receives an ordinary explicit name.
+                name = await resolveTaskWorktreeName(message, name);
+                if (!isCurrentDataOwner()) throw new RemotePrecreatedWorktreeOwnerChangedError();
+                setWtCreatingInfo({ branch: getBranchName(name), startedAt });
                 const createRequest: RemoteWorktreeCreateRequest = {
                   sessionId: presetSessionId,
                   baseRepo,
@@ -4781,7 +4792,7 @@ export function NewMakerDraftRoute() {
                 // 交给重连/重启恢复；不能把“不知道”展示成普通创建失败后允许重试。
                 throw new RemotePrecreatedWorktreeCleanupPendingError({ cause: err });
               } finally {
-                setWtCreating(false);
+                setWtCreatingInfo(null);
               }
             }
             if (precreatedWorktree && !(await resolveBuiltInSkillForDirectory(remoteWorkingDir))) {
@@ -5155,9 +5166,12 @@ export function NewMakerDraftRoute() {
               planModeEnabled: effectivePlanMode,
               remoteHostId: effectiveRemoteHostId ?? null,
             });
+            // With model naming on, the random name is only a fallback: keep it off the
+            // "Creating worktree" overlay until the real name is known.
+            const namingWithModel = getWorktreeModelNamingEnabled() && message.trim().length > 0;
             worktreeCreationStore.set(newSession.id, {
               status: 'creating',
-              name: branchName,
+              name: namingWithModel ? '' : branchName,
             });
 
             // navigate FIRST, 然后再清 draft store —— 避免用户看到 "draft 输入框清空
@@ -5206,6 +5220,20 @@ export function NewMakerDraftRoute() {
                   preNavBrowserComments,
                   rehomedFiles,
                 );
+                // Named after navigation so the model call never holds the Send click.
+                if (namingWithModel) {
+                  name = await resolveTaskWorktreeName(message, name);
+                  if (!isCurrentDataOwner()) {
+                    worktreeCreationStore.clear(newSession.id);
+                    clearSessionStarting(newSession.id);
+                    return;
+                  }
+                  branchName = getBranchName(name);
+                  worktreeCreationStore.set(newSession.id, {
+                    status: 'creating',
+                    name: branchName,
+                  });
+                }
                 const resp = await window.electronAPI.worktreeCreate({
                   sessionId: newSession.id,
                   baseRepo,
@@ -5636,7 +5664,7 @@ export function NewMakerDraftRoute() {
               : (getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed')),
           );
         } finally {
-          setWtCreating(false);
+          setWtCreatingInfo(null);
           markSendInFlight(false);
         }
       })();
@@ -5951,10 +5979,15 @@ export function NewMakerDraftRoute() {
               await forgetPendingRemotePrecreatedWorktree(reservation, isCurrentDataOwner);
               throw new RemotePrecreatedWorktreeCleanupPendingError();
             }
-            setWtCreating(true);
+            const startedAt = Date.now();
+            setWtCreatingInfo({ branch: getWorktreeModelNamingEnabled() ? '' : getBranchName(name), startedAt });
             try {
               let resp: ReturnType<typeof parseRemoteWorktreeCreateResult>;
               try {
+                // This computer names it; the remote receives an ordinary explicit name.
+                name = await resolveTaskWorktreeName(objective, name);
+                if (!isCurrentDataOwner()) throw new RemotePrecreatedWorktreeOwnerChangedError();
+                setWtCreatingInfo({ branch: getBranchName(name), startedAt });
                 const createRequest: RemoteWorktreeCreateRequest = {
                   sessionId: presetSessionId,
                   baseRepo: selectedWorktree.baseRepo,
@@ -5987,7 +6020,7 @@ export function NewMakerDraftRoute() {
                 isCurrentDataOwner,
               );
             } finally {
-              setWtCreating(false);
+              setWtCreatingInfo(null);
             }
           }
           // 与 handleSend 同口径先存一份 args:临时行要按实际提交的值组装(见 commitRemoteSessionHandoff)。
@@ -6208,13 +6241,20 @@ export function NewMakerDraftRoute() {
             goalWorktreeName = (suggestResp.name ?? '').trim();
           }
           if (!goalWorktreeName) goalWorktreeName = `auto-${Date.now().toString(36).slice(-6)}`;
-          goalWorktreeBranchName = getBranchName(goalWorktreeName);
           // The local API needs a session id, so this is a compensated saga:
           // create an empty base-repo session, then create the worktree and move
           // workingDir. Any setup failure soft-deletes that empty session before
           // retry; Goal never starts against the base repository.
           goalWorkingDir = baseRepo;
-          setWtCreating(true);
+          const startedAt = Date.now();
+          setWtCreatingInfo({
+            branch: getWorktreeModelNamingEnabled() ? '' : getBranchName(goalWorktreeName),
+            startedAt,
+          });
+          goalWorktreeName = await resolveTaskWorktreeName(objective, goalWorktreeName);
+          if (!isCurrentDataOwner()) throw new RemotePrecreatedWorktreeOwnerChangedError();
+          goalWorktreeBranchName = getBranchName(goalWorktreeName);
+          setWtCreatingInfo({ branch: goalWorktreeBranchName, startedAt });
         }
         const newSession = await createSession({
           id: goalSessionId,
@@ -6358,7 +6398,7 @@ export function NewMakerDraftRoute() {
         }
         throw error;
       } finally {
-        setWtCreating(false);
+        setWtCreatingInfo(null);
         markSendInFlight(false);
       }
     },
@@ -7015,6 +7055,14 @@ export function NewMakerDraftRoute() {
                     }
                   />
                   {!newGoalOpen && directoryRecoveryNotice}
+                  {!newGoalOpen && wtCreatingInfo ? (
+                    <div className="mt-3 w-full">
+                      <WorktreeCreatingOverlay
+                        branchName={wtCreatingInfo.branch}
+                        startedAt={wtCreatingInfo.startedAt}
+                      />
+                    </div>
+                  ) : null}
                 </div>
                 {/* device-link:为远程设备项目新建对话时的明显标识。让用户清楚这条对话会建在
                     被控设备上、属于那台机器的项目,而不是本机。放输入框正下方并与其水平居中
@@ -7092,6 +7140,12 @@ export function NewMakerDraftRoute() {
                   onOpenChange={setNewGoalOpen}
                   onCreate={handleCreateGoal}
                   initialObjective={newGoalInitialObjective}
+                  creationProgress={wtCreatingInfo ? (
+                    <WorktreeCreatingOverlay
+                      branchName={wtCreatingInfo.branch}
+                      startedAt={wtCreatingInfo.startedAt}
+                    />
+                  ) : undefined}
                   creationRecovery={directoryRecoveryNotice}
                   creationRecoveryBusy={directoryRecoverySelecting}
                 />

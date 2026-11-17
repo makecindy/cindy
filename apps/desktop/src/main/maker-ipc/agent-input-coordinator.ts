@@ -150,6 +150,7 @@ function attachmentSourceKey(value: unknown): string | null {
 
 function stripQueuedMessageImages(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
   const remainingFiles = item.files?.filter((file) => !isMakerImageAttachment(file));
+  const remainingContextFiles = item.contextFiles?.filter((file) => !isMakerImageAttachment(file));
   const remainingImageSources = new Set(
     (remainingFiles ?? [])
       .filter((file) => file.category === 'image')
@@ -208,6 +209,8 @@ function stripQueuedMessageImages(item: AgentInputQueuedMessage): AgentInputQueu
   };
   if (remainingFiles && remainingFiles.length > 0) stripped.files = remainingFiles;
   else delete stripped.files;
+  if (remainingContextFiles && remainingContextFiles.length > 0) stripped.contextFiles = remainingContextFiles;
+  else delete stripped.contextFiles;
   return stripped;
 }
 
@@ -215,6 +218,7 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
   return (
     getAgentFacingText(item).trim().length > 0 ||
     (item.files?.length ?? 0) > 0 ||
+    (item.contextFiles?.length ?? 0) > 0 ||
     (item.mentions?.length ?? 0) > 0 ||
     (item.sessionRefs?.length ?? 0) > 0
   );
@@ -585,10 +589,14 @@ export interface AgentInputCoordinatorDeps {
   /**
    * 用户消息已落库、但 vendor 派发失败时补一条可重试的 error 行。
    * 没有这条，聊天里只剩用户气泡、没有红条，重试入口也不稳定。
+   * attemptToken is an existing automatic recovery owner: stash once in its
+   * bookkeeping instead of persisting an error that recovery is still handling.
    */
-  persistTerminalSendError?: (sessionId: string, message: string) => void;
+  persistTerminalSendError?: (sessionId: string, message: string, attemptToken?: number) => void;
   /** 已落库但 vendor reject：宿主可关掉卡住的原生会话，等用户重试再换窗。 */
-  onPersistedSendRejected?: (sessionId: string, message: string) => void;
+  onPersistedSendRejected?: (
+    sessionId: string, message: string, item?: AgentInputQueuedMessage, recovering?: boolean,
+  ) => void;
   /**
    * 已落库的隐藏 CONTINUE 无法确认 vendor 是否 accept。host 必须结算
    * AutoResumeBookkeeping（pending outcome + suppressed error + guard），
@@ -4985,6 +4993,8 @@ export class AgentInputCoordinator {
     delete projected.mergedDeliveryClientIds;
     delete projected.autoReviewUserText;
     delete projected.botTaskCoordination;
+    // Model-only reference attachments carry Host paths and are not part of the visible message.
+    delete projected.contextFiles;
     delete projected.fromDeviceLinkClient;
     // Main-only wire-assembly hint; renderers mask rows from `text` alone.
     delete projected.agentOmitsTriggerPrefix;
@@ -5904,24 +5914,25 @@ export class AgentInputCoordinator {
       latest.error = rewound ? null : errorMessage(err);
       clearErrorProjectionSignals(latest);
       latest.stickyError = null;
-      // 同 handleSendNotDispatched:调度来源的 prompt 不留可被人手动 Retry 的 recovery
-      // (review #944 第九轮 P1;判据内建在 setActiveTurnRecovery)。
+      // Manual retries must not replay a closed scheduler run. Only an approved
+      // automatic takeover below may retain this run's input.
       const schedulerOrigin = this.setActiveTurnRecovery(latest, head, {
         persistedFailure: !rewound,
       }) === 'dropped-scheduler';
       // 已落库的派发失败必须立刻放开边界。否则 coordinator 会一直占着 activeTurn,
       // 下一轮被 dispatch-boundary-busy 挡住,界面上只剩用户气泡、没有红条、也不能重试。
       latest.activeTurn = null;
+      const recovering = !rewound && this.recoverPersistedSchedulerPreparation(sessionId, latest, active, head, errorMessage(err), err);
       this.notifyRejectedUserTurn(sessionId, head);
       this.notifyUndispatchedUserTurn(sessionId, head, 'failed');
       if (!rewound) {
-        this.persistTerminalSendError(sessionId, latest.error!);
-        this.notifyPersistedSendRejected(sessionId, latest.error!);
+        this.persistTerminalSendError(sessionId, errorMessage(err), recovering ? latest.autoResumeAttemptToken ?? undefined : undefined);
+        this.notifyPersistedSendRejected(sessionId, errorMessage(err), head, recovering);
       }
       this.emit(sessionId);
       // 派发边界刚刚放开,队里可能还压着别的消息 —— 用户那条路靠 clearError 顺带唤醒,
       // scheduler 这条没有人点,必须自己唤一次。
-      if (schedulerOrigin) this.scheduleDrain(sessionId, 'scheduler-prompt-cancelled');
+      if (schedulerOrigin && !recovering) this.scheduleDrain(sessionId, 'scheduler-prompt-cancelled');
       // Thread 3 fix: item was removed from the queue by drain but not put back
       // (persisted path). If no other work is pending, any deferred completion must
       // be replayed now; otherwise Agent Island stays in "running" indefinitely.
@@ -6077,7 +6088,7 @@ export class AgentInputCoordinator {
     }
 
     if (item.autoResume) {
-      this.settlePersistedAutoResumeSendFailure(sessionId, latest, item, result);
+      this.settlePersistedAutoResumeSendFailure(sessionId, latest, item, result, message);
       return;
     }
 
@@ -6085,12 +6096,8 @@ export class AgentInputCoordinator {
     latest.error = rewoundScheduler ? null : message;
     clearErrorProjectionSignals(latest);
     latest.stickyError = null;
-    // 调度来源的 prompt **不留 active-turn recovery**。它的 Retry 走的是普通用户 turn:
-    // 没有 scheduler 回调、没有 run 跟踪 —— 而这条 run 此刻已经顺延或落终态了,留着就等于
-    // 让一条已收口的调度 prompt 之后还能被人手动跑一次(review #944 第九轮 P1)。
-    // 未撤回的失败只授予隐藏续跑资格,不保留或重放已结束的 scheduler prompt。
-    // 注:isPromptTracked 用的 hasQueuedItemWhere 默认不含 recovery,所以摘掉它不会影响
-    // runner 的排队存活探测。
+    // Closed scheduler runs cannot retain a manual replay target. A granted
+    // pre-dispatch recovery below keeps the original run and callback instead.
     const cancelledByUserBoundary =
       latest.queueAbortPending &&
       result.kind === 'session-dispatch' &&
@@ -6098,6 +6105,8 @@ export class AgentInputCoordinator {
     const schedulerOrigin = this.setActiveTurnRecovery(latest, item, {
       persistedFailure: !rewoundScheduler && !cancelledByUserBoundary,
     }) === 'dropped-scheduler';
+    const recovering = !rewoundScheduler && !cancelledByUserBoundary
+      && this.recoverPersistedSchedulerPreparation(sessionId, latest, active, item, message, result);
     if (!cancelledByUserBoundary) this.notifyRejectedUserTurn(sessionId, item);
     this.notifyUndispatchedUserTurn(
       sessionId,
@@ -6112,7 +6121,9 @@ export class AgentInputCoordinator {
       latest.queueAbortPending = false;
     }
     log.warn(
-      schedulerOrigin
+      recovering
+        ? 'send not dispatched after persistence; retained scheduler automatic recovery'
+        : schedulerOrigin
         ? 'send not dispatched after persistence; dropped scheduler prompt (no user retry)'
         : 'send not dispatched after persistence; kept active-turn recovery',
       {
@@ -6122,13 +6133,13 @@ export class AgentInputCoordinator {
       },
     );
     if (!cancelledByUserBoundary && !rewoundScheduler) {
-      this.persistTerminalSendError(sessionId, message);
-      this.notifyPersistedSendRejected(sessionId, message);
+      this.persistTerminalSendError(sessionId, message, recovering ? latest.autoResumeAttemptToken ?? undefined : undefined);
+      this.notifyPersistedSendRejected(sessionId, message, item, recovering);
     }
     this.emit(sessionId);
     // activeTurn 上面已置空,但队里可能还压着别的消息 —— 用户那条路靠 clearError 顺带
     // 唤醒,scheduler 这条没有 recovery、没有人点,必须自己唤一次(review #944 第十轮 P1)。
-    if (schedulerOrigin) this.scheduleDrain(sessionId, 'scheduler-prompt-cancelled');
+    if (schedulerOrigin && !recovering) this.scheduleDrain(sessionId, 'scheduler-prompt-cancelled');
     // Thread 3 fix: item was removed from the queue by drain but not put back
     // (persisted path). If no other work is pending, any deferred completion must
     // be replayed now; otherwise Agent Island stays in "running" indefinitely.
@@ -6535,18 +6546,18 @@ export class AgentInputCoordinator {
     state: SessionInputState,
     item: AgentInputQueuedMessage,
     outcome: unknown,
+    message = errorMessage(outcome),
   ): void {
     state.activeTurn = null;
+    this.notifyPersistedSendRejected(sessionId, message, item);
     if (isTurnDispatchUnconfirmedError(outcome) && this.autoResumeAttemptIsCurrent(state, item)) {
       this.commitAutoResumeDispatch(sessionId, item);
       this.notifyUnconfirmedAutoResumeTurn(sessionId, item);
-      const message = errorMessage(outcome);
       state.error = message;
       clearErrorProjectionSignals(state);
       state.stickyError = null;
       this.notifyRejectedUserTurn(sessionId, item);
       this.persistTerminalSendError(sessionId, message);
-      this.notifyPersistedSendRejected(sessionId, message);
       log.warn('auto-resume send unconfirmed after persist; committed without replay', {
         sessionId,
         clientId: item.clientId,
@@ -7176,6 +7187,38 @@ export class AgentInputCoordinator {
       ...entry,
       waitForClientIds: [clientId, ...entry.waitForClientIds.filter((id) => id !== clientId)],
     }));
+  }
+
+  private recoverPersistedSchedulerPreparation(
+    sessionId: string,
+    state: SessionInputState,
+    active: ActiveTurn,
+    item: AgentInputQueuedMessage,
+    message: string,
+    outcome: unknown,
+  ): boolean {
+    // Only the pre-vendor hook boundary is proven safe here. An uncertain send,
+    // permission rejection or a user cancellation must not acquire a new retry.
+    if (item.origin?.kind !== 'scheduler' || !item.origin.runId
+      || active.dispatchLifecycle !== 'awaiting-dispatch-hooks'
+      || state.queueAbortPending || state.autoResumePending) return false;
+    const failure = outcome as { code?: unknown; reason?: unknown } | null;
+    if (isTurnDispatchUnconfirmedError(outcome) || failure?.code === 'PRECONDITION_FAILED'
+      || failure?.reason === 'cancelled-before-dispatch'
+      || message.startsWith('[SEND_CANCELLED_BEFORE_DISPATCH]')) return false;
+    const signals = message === 'Snapshot operation deadline exceeded'
+      ? { reason: 'scheduler-snapshot-preparation' } : undefined;
+    if (!this.isResumableTurnErrorCandidate(sessionId, message, signals, item)) return false;
+    this.setActiveTurnRecovery(state, item, { allowSchedulerAutoResume: true });
+    const takeover = this.notifyResumableTurnError(sessionId, item, message, signals, false);
+    if (!takeover) {
+      this.setActiveTurnRecovery(state, item, { persistedFailure: true });
+      return false;
+    }
+    state.error = null;
+    state.autoResumePending = takeover;
+    state.autoResumeAttemptToken = takeover.sessionTotal;
+    return true;
   }
 
   /**
@@ -7921,10 +7964,11 @@ export class AgentInputCoordinator {
     }
   }
 
-  private persistTerminalSendError(sessionId: string, message: string): void {
+  private persistTerminalSendError(sessionId: string, message: string, attemptToken?: number): void {
     if (!message.trim()) return;
     try {
-      this.deps.persistTerminalSendError?.(sessionId, message);
+      if (attemptToken === undefined) this.deps.persistTerminalSendError?.(sessionId, message);
+      else this.deps.persistTerminalSendError?.(sessionId, message, attemptToken);
     } catch (err) {
       log.warn('persistTerminalSendError failed', {
         sessionId,
@@ -7933,9 +7977,11 @@ export class AgentInputCoordinator {
     }
   }
 
-  private notifyPersistedSendRejected(sessionId: string, message: string): void {
+  private notifyPersistedSendRejected(
+    sessionId: string, message: string, item?: AgentInputQueuedMessage, recovering = false,
+  ): void {
     try {
-      this.deps.onPersistedSendRejected?.(sessionId, message);
+      this.deps.onPersistedSendRejected?.(sessionId, message, item, recovering);
     } catch (err) {
       log.warn('onPersistedSendRejected failed', {
         sessionId,

@@ -210,6 +210,7 @@ import {
   classifyCodexError,
   translateErrorNotification,
   translateItemNotification,
+  translateOmittedItem,
   beginCodexGenerationTurn,
   codexGenerationDurationMs,
   finalizeCodexGenerationTurn,
@@ -3883,6 +3884,9 @@ assertRouteCurrent();
     // different turn ids, but their changes belong to the active root turn;
     // retain each thread's latest snapshot and publish one merged diff.
     const turnDiffSnapshots = new Map<string, string>();
+    // 最近一次累计 diff 超过 app-server 单行上限、被宿主丢弃正文的线程。它们本轮的 diff
+    // 未知, 合并结果不能当成完整改动发布。
+    const oversizedTurnDiffThreads = new Set<string>();
     const splitTurnDiffBlocks = (diff: string): string[] => diff
       .split(/(?=^diff --git )/m)
       .filter((block) => block.startsWith('diff --git '));
@@ -3919,9 +3923,20 @@ assertRouteCurrent();
       }
       return { diff, complete };
     };
-    const publishTurnDiff = (threadKey: string, turnId: string, diff: string): void => {
+    /** `diff` 为 null 表示宿主丢弃了这次超限的累计 diff, 该线程本轮内容未知。 */
+    const publishTurnDiff = (threadKey: string, turnId: string, diff: string | null): void => {
       if (diff) turnDiffSnapshots.set(threadKey, diff);
       else turnDiffSnapshots.delete(threadKey);
+      if (diff === null) oversizedTurnDiffThreads.add(threadKey);
+      else oversizedTurnDiffThreads.delete(threadKey);
+      if (oversizedTurnDiffThreads.size > 0) {
+        eventQueue.push({
+          type: 'turn_diff',
+          data: { turnId, diff: '', cwd: opts.workingDir, omitted: 'oversized' },
+          source: 'codex',
+        });
+        return;
+      }
       const merged = mergeTurnDiffSnapshots();
       eventQueue.push({
         type: 'turn_diff',
@@ -5943,8 +5958,14 @@ assertRouteCurrent();
       let key: string | undefined;
       let pending: Promise<AutoReviewDecision> | undefined;
       return withAutoReviewContext(request, this.deps.reviewAutoPermissionAction, (prepared) => {
+        // 这三处是 Cindy 自己的确定性文案(不含用户数据),标 policyReason 才能进诊断/UI 通道;
+        // 缺标会被当成模型自由文本过滤掉,通知只剩一句通用文案。
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)) {
-          return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
+          return Promise.resolve({
+            verdict: 'block',
+            reason: 'User instructions changed; retry against the current request.',
+            policyReason: true,
+          });
         }
         key = JSON.stringify([prepared, hostAutoApprove, hostShortcutOnly]);
         const cached = autoReviewDecisionCache.get(key);
@@ -5960,10 +5981,18 @@ assertRouteCurrent();
         if (!pending || !key) return decision;
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)
             || autoReviewDecisionCache.get(key) !== pending) {
-          return { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' };
+          return {
+            verdict: 'block',
+            reason: 'User instructions changed; retry against the latest authorization.',
+            policyReason: true,
+          };
         }
         if (directoryGeneration !== autoReviewDirectoryGeneration) {
-          return { verdict: 'block', reason: 'Directory permissions changed; retry with the current scope.' };
+          return {
+            verdict: 'block',
+            reason: 'Directory permissions changed; retry with the current scope.',
+            policyReason: true,
+          };
         }
         autoReviewActionContext.record(action, decision);
         return decision;
@@ -6348,7 +6377,7 @@ assertRouteCurrent();
         }
       }
       if (method === 'turn/diff/updated') {
-        const diffParams = params as { turnId?: unknown; diff?: unknown } | null;
+        const diffParams = params as { turnId?: unknown; diff?: unknown; cindyOmitted?: unknown } | null;
         if (
           currentTurnId
           && !descendantTurnIsTerminal
@@ -6356,7 +6385,11 @@ assertRouteCurrent();
           && typeof diffParams.turnId === 'string'
           && typeof diffParams.diff === 'string'
         ) {
-          publishTurnDiff(childThreadId, currentTurnId, diffParams.diff);
+          publishTurnDiff(
+            childThreadId,
+            currentTurnId,
+            diffParams.cindyOmitted === 'oversized' ? null : diffParams.diff,
+          );
         }
       }
       const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
@@ -8275,19 +8308,31 @@ assertRouteCurrent();
       let denialReason = formatPermissionDenial('system', 'Approval was cancelled or became stale.');
       const decision = await withCodexGenerationPaused<ApprovalDecision>(requestThreadId, turnId, timingPauseId, async () => {
         // Native Codex currently flattens MCP declines to "user rejected" and
-        // discards response content/_meta on that path. Preserve the cause in
-        // Cindy's diagnostic/UI channel; this notice is NOT model context.
-        const reportMcpDenial = (source: 'auto-review' | 'system' | 'user', reason?: string, visible = true) => {
+        // discards response content/_meta on that path (codex-rs
+        // core/src/mcp_tool_call.rs: ElicitationAction::Decline =>
+        // ReviewDecision::denied("user rejected MCP tool call")). The model
+        // facing text is owned by the app-server, so the real cause can only be
+        // preserved in Cindy's diagnostic/UI channel; this notice is NOT model
+        // context. Keep it truthful: it must never claim a user rejection that
+        // did not happen, and it must say why the call never reached the user.
+        const reportMcpDenial = (
+          source: 'auto-review' | 'system' | 'user',
+          reason?: string,
+          visible = true,
+          policyCause?: string,
+        ) => {
           if (kind !== 'mcpServerElicitation') return;
           const timedOut = source === 'system' && isSystemPermissionDenialReason(reason) &&
             (reason === 'timeout' || reason?.endsWith('_timeout'));
           const code = source === 'auto-review' ? 'MCP_APPROVAL_AUTO_BLOCKED'
             : timedOut ? 'MCP_APPROVAL_CONFIRMATION_TIMEOUT' : 'MCP_APPROVAL_CONFIRMATION_UNAVAILABLE';
           // IDs and a closed set of causes only: no arguments, credentials, or
-          // free-text reviewer output may enter the diagnostic log.
+          // free-text reviewer output may enter the diagnostic log. Cindy's own
+          // policy reasons are fixed copy without user data and may be carried.
           log.info('MCP approval denied', {
             threadId: requestThreadId, turnId, requestId, itemId: opts?.itemId,
             source, cause: source === 'user' ? 'user-denied' : code,
+            ...(policyCause ? { causeDetail: policyCause } : {}),
           });
           if (source === 'user' || !visible) return;
           const text = source === 'auto-review'
@@ -8295,8 +8340,15 @@ assertRouteCurrent();
             : timedOut
               ? 'The permission request timed out without a confirmed decision. This does not establish whether the user clicked a button.'
               : 'The permission confirmation could not be completed. No user rejection was received.';
-          emitAutoReviewRuntimeNotice(`[${code}] ${text}`);
+          emitAutoReviewRuntimeNotice(`[${code}] ${text}${policyCause ? ` ${policyCause}` : ''}`);
         };
+        /**
+         * Cindy 自己的确定性判定原因（动作文本超限、证据不足、授权范围变化）。
+         * 这些是固定文案，不含用户数据，可以原样进诊断/UI 通道；审阅模型的自由
+         * 文本可能含参数、路径、片段，一律不进（policyReason 缺省即视为模型文本）。
+         */
+        const policyReason = (decision: AutoReviewDecision): string | undefined =>
+          decision.policyReason === true ? decision.reason : undefined;
         const turnPolicyForcePrompt = req.kind === 'permission'
           && forceTurnConfirmation(req.toolName, req.input);
         let forcePrompt = opts?.forcePrompt === true || turnPolicyForcePrompt;
@@ -8377,14 +8429,17 @@ assertRouteCurrent();
           } else if (reviewPermissionMode === 'auto' && decision.verdict === 'block') {
             denialReason = formatPermissionDenial('auto', decision.reason);
             // Keep the denial, but distinguish it from a user decision in Cindy.
-            reportMcpDenial('auto-review');
+            // Carry Cindy's own reason (oversized action text, missing evidence)
+            // so the banner says why the call never reached the user. Model
+            // free text stays out of the diagnostic channel.
+            reportMcpDenial('auto-review', undefined, true, policyReason(decision));
             return 'decline';
           } else {
             // AI ask decisions reach the user and cannot be remembered.
             // 审阅器故障降级来的 ask 提示一次,让用户知道为何突然开始被问。
             // 用户点「允许」只批准当前这一次,不再重新跑审阅器。
             if (decision.unavailable) {
-              autoReviewUnavailableNotice.notify();
+              autoReviewUnavailableNotice.notify(decision);
               unavailableHandoff = true;
             }
             if (approvalRequest.kind === 'permission') {
@@ -8834,6 +8889,7 @@ assertRouteCurrent();
 
       resetCodexGenerationTiming(translatorRt, true);
       turnDiffSnapshots.clear();
+      oversizedTurnDiffThreads.clear();
       translatorRt.samplingSegments.clear();
       proposedPlanText = null;
       translatorRt.lastAuthErrorKey = null;
@@ -9562,6 +9618,30 @@ assertRouteCurrent();
       return input;
     }
 
+    /**
+     * MCP 调用的审阅证据必须是**原始调用**，不是确认卡的渲染结果。
+     *
+     * codex 会把同一份 tool_params 再渲染一份 tool_params_display 一起发给客户端
+     * （codex-rs core/src/mcp_tool_call.rs 的 build_mcp_tool_approval_display_params：
+     * 同一对象的逐字段副本，不是截断版）。两份都进证据等于把同一个动作数两遍 ——
+     * 完整证据按 131,072 字符预算计量（MAX_AUTO_REVIEW_ACTION_TEXT_CHARS；另一个
+     * 4,096 是同步静态解析自己的上限 MAX_AUTO_REVIEW_STATIC_TEXT_CHARS，超了只是
+     * 转完整模型审阅，不是拦截），同一份几 KB 指令的参数被数两遍就凭空多出一倍。
+     *
+     * 这里只去掉**重复的那一份**：原始参数一字不删地保留，审阅模型看到的动作内容
+     * 与之前完全一致，变的只是同一份内容不再被计两次。上下文（elicitation 的
+     * message）本来就在 input 里，也不再重复一份。
+     *
+     * 另外要分清两件事：完整证据**真的**超预算时，裁决是 `ask`（交用户确认，见
+     * 854c36412a），不是静默拦截。所以去掉副本不是为了「让调用通过」，而是让
+     * 预算只按真实动作量计一次，别把普通调用误判成超限。
+     */
+    function mcpToolReviewAction(toolName: string, input: Record<string, unknown>): ReviewableAction {
+      const rawInput: Record<string, unknown> = { ...input };
+      delete rawInput.toolParamsDisplay;
+      return { kind: 'other', description: JSON.stringify({ toolName, input: rawInput }) };
+    }
+
     function mcpToolApprovalContext(params: McpServerElicitationRequestParams) {
       const meta = mcpElicitationMeta(params);
       let toolName = stringFromMeta(meta, 'tool_name');
@@ -9796,9 +9876,12 @@ assertRouteCurrent();
           // Display text is not execution evidence. An absent argument payload
           // must hit the shared missing-evidence denial, never reach AI as a
           // seemingly complete action made only of server/title/message fields.
-          ...(policyPermissionInput.toolParams === undefined
-            ? { autoReviewAction: { kind: 'other' as const, description: undefined } }
-            : {}),
+          // Present arguments are reviewed as the raw call: the confirmation
+          // card's rendering of the same arguments must not be counted twice
+          // against the review budget (see mcpToolReviewAction).
+          autoReviewAction: policyPermissionInput.toolParams === undefined
+            ? { kind: 'other' as const, description: undefined }
+            : mcpToolReviewAction(`mcp:${params.serverName}`, policyPermissionInput),
           ...(toolUseId ? { itemId: toolUseId } : {}),
         },
       );
@@ -10751,6 +10834,19 @@ assertRouteCurrent();
       ) return undefined;
       return `${turnId}:${candidate.id}`;
     };
+
+    const collabTerminalEventQueue = (turnId: string, background: boolean): AsyncQueue<AgentEvent> =>
+      background ? {
+        push: (event: AgentEvent) => eventQueue.push({
+          ...event,
+          turnScope: 'background',
+          backgroundTurnStartedAt: turnOriginByTurnId.get(turnId)?.startedAtMs ?? 0,
+        }),
+        end: () => eventQueue.end(),
+        clear: () => eventQueue.clear(),
+        get pending() { return eventQueue.pending; },
+        [Symbol.asyncIterator]: () => eventQueue[Symbol.asyncIterator](),
+      } : eventQueue;
 
     const collabItemHasRunningAgentState = (item: unknown): boolean => {
       if (!item || typeof item !== 'object') return false;
@@ -12755,7 +12851,7 @@ assertRouteCurrent();
       turnDiffUpdated: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.turnDiffUpdated?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
-        publishTurnDiff(threadId, params.turnId, params.diff);
+        publishTurnDiff(threadId, params.turnId, params.cindyOmitted === 'oversized' ? null : params.diff);
       },
       turnCompleted: (params) => {
         if (ownsManualCompact(params.turn.id)) {
@@ -12950,27 +13046,14 @@ assertRouteCurrent();
           params.turnId,
           'completed',
         );
-        const itemEventQueue = isLateCollabTerminal
-          ? {
-            push: (event: AgentEvent) => eventQueue.push({
-              ...event,
-              turnScope: 'background',
-              // Missing ownership fails closed only if a later /clear exists.
-              backgroundTurnStartedAt:
-                turnOriginByTurnId.get(params.turnId)?.startedAtMs ?? 0,
-            }),
-            end: () => eventQueue.end(),
-            clear: () => eventQueue.clear(),
-            get pending() { return eventQueue.pending; },
-            [Symbol.asyncIterator]: () => eventQueue[Symbol.asyncIterator](),
-          } as AsyncQueue<AgentEvent>
-          : eventQueue;
+        const itemEventQueue = collabTerminalEventQueue(params.turnId, isLateCollabTerminal);
         const denialKey = approvalDenialKey(params.threadId, params.turnId, params.item.id);
         const approvalDenialReason = approvalDenials.get(denialKey)?.reason;
         approvalDenials.delete(denialKey);
         translateItemNotification('completed', translatedParams, itemEventQueue, {
           rt: translatorRt,
           log,
+          background: isLateCollabTerminal,
           approvalDenialReason,
           compactTrigger: manualCompact?.turnId === params.turnId ? 'manual' : 'auto',
           onCompactBoundary: handleCompactBoundary,
@@ -13001,6 +13084,44 @@ assertRouteCurrent();
         // turn/completed 在 turn 结束时会 push 'Done' 终态, 不需要在这里特判。
         // 迟到的旧 turn 收口只允许发 background 结果,不能给当前 turn 注入前台状态。
         if (isTurnInFlight && !isLateCollabTerminal) pushStatus('Generating...');
+      },
+      itemOmitted: (params) => {
+        // 正文超限被宿主丢弃的条目不再展示, 但它仍是这一轮真实发生过的工作 (常见是写过大文件):
+        // 与 itemStarted / itemCompleted 一样记产出, 否则容量 / 429 后会整轮重放、重复副作用。
+        // 读不到 type 时 itemRepresentsModelWork 按有产出处理。
+        const modelWork = itemRepresentsModelWork(params.item);
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemOmitted?.(params), { modelWork })) return;
+        const collabTerminalKey = params.phase === 'completed'
+          ? collabTerminalItemKey(params.turnId, params.item) : undefined;
+        if (collabTerminalKey && handledCollabTerminalItemIds.has(collabTerminalKey)) return;
+        let isLateCollabTerminal = false;
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) {
+          if (!collabTerminalKey || !params.item.id
+            || !translatorRt.collabToolItems.has(params.item.id)
+            || (!completedTurnIds.has(params.turnId) && !terminalErroredTurnIds.has(params.turnId))) return;
+          isLateCollabTerminal = true;
+        }
+        if (collabTerminalKey) handledCollabTerminalItemIds.add(collabTerminalKey);
+        if (modelWork) {
+          producedOutputTurnIds.add(params.turnId);
+          noteRecoveryModelWork(params.turnId, params.item);
+        }
+        if (params.phase === 'completed') completeActiveToolContext(params.item, params.turnId);
+        if (params.phase !== 'updated' && !isLateCollabTerminal) noteToolItemLifecycle(params.item, params.phase);
+        // started 已经出过 tool_use 的工具要补一个不含正文的收尾, 否则会话一直认为它在跑。
+        const terminalCollab = translateOmittedItem(params.phase, params,
+          collabTerminalEventQueue(params.turnId, isLateCollabTerminal), {
+            rt: translatorRt, log, background: isLateCollabTerminal,
+          });
+        if (terminalCollab) {
+          // Closing a spawn tool does not prove its child completed. Reassert
+          // the existing tracker state without inventing omitted agent states.
+          const update = noteSubagentSpawnItem(terminalCollab, params.turnId, 'completed');
+          if (update) emitSubagentCardUpdate(update, isLateCollabTerminal ? {
+            turnScope: 'background',
+            backgroundTurnStartedAt: turnOriginByTurnId.get(params.turnId)?.startedAtMs ?? 0,
+          } : {});
+        }
       },
       agentMessageDelta: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.agentMessageDelta?.(params), {
@@ -13535,7 +13656,7 @@ assertRouteCurrent();
       getAutoReviewOwner: () => currentApprovalConfig().approvalsReviewer === 'auto_review' ? 'native' : 'cindy',
       reviewAutoPermissionAction: async (action) => {
         const decision = await reviewAutoAction(action);
-        if (decision.unavailable) autoReviewUnavailableNotice.notify();
+        if (decision.unavailable) autoReviewUnavailableNotice.notify(decision);
         return decision;
       },
       get id() { return sdkSessionId ?? '<pending>'; },

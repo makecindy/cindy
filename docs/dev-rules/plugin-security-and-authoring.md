@@ -32,6 +32,19 @@ Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 
 
 ## 事实来源
 
+用量与供应商组读取（2026-11-16）：独立 `agent.hostTools:['usage']` 工具组提供
+`get_subscription_usage`、`get_provider_usage_history` 和 `get_provider_group`。与 `settings` 分开授权，沿用 Host 工具网关的安装批准、启用状态、
+版本和 owner 代次检查。当前安装说明覆盖本机订阅配额、已记录用量与估算、供应商组配置/状态，以及可见成员和设备信息；
+后两类可指定同账号已授权其它电脑，不新增权限组或版本化重批。订阅配额只读执行电脑当前 Cindy 账号已连接的 Claude/Codex 账号，通过
+`subscription-accounts/usageView.ts` 白名单返回账号标识、套餐、额度窗口及观测时间；
+不展开原生账号对象、凭证、目录、邮箱、内部指纹或远程分享。参数不接受调用方身份、owner、路径
+或强制刷新；用量与组状态复用原管理通道和数据可见性，组内自动供应商名称中的订阅身份只在插件返回投影清除，Agent/UI 不变。
+跨账号切换和插件撤权后的迟到回包不交付。原有插件未声明该组时行为与批准不变。
+manifest 新增 `usage` 声明走原整体安装确认；已有该组批准调用新增组内读取不补批。
+beta 存量同意范围扩展及维护者确认要求见[平台契约的授权记录](protocol-compatibility/plugin-host-tools-platform.md#usage-组范围扩展的维护确认)。
+实现与回归见 `subscription-accounts/runtime.ts` 及其测试、`hostToolSlot.test.ts`、
+`ghostInstallConsent.test.ts`；作者用法见随包 `plugin-host-tools.md`「读取订阅用量」。
+
 | 内容                                                 | 权威来源                                                                                                                                                                                                                                                                                                          |
 | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 编写手册（作者唯一教材，现拿现读）                   | `apps/desktop/resources/system-skills/cindy-plugin-creator/`；`SKILL.md` 编排创建流程，`references/` 保存完整作者契约；`ghost_forge_guide` 兼容读取同一份资料                                                                                                                                                                                                                    |
@@ -213,7 +226,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   批准后，插件创建的任务及 Worker 中的 Agent 按普通任务的权限使用已连接工具；
   创建回执仅约束插件直接管理该任务，不参与任务内 Agent 的工具权限判定。
   插件直接调用 `cindy.tasks` 仍只管理本插件的任务。
-- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` / `browser` / `computer` / `ssh` / `docs` / `discovery` 工具组，安装/更新确认中展示各项声明。
+- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` / `browser` / `computer` / `ssh` / `docs` / `discovery` / `usage` 工具组，安装/更新确认中展示各项声明。
   安装/更新确认是整体决定：接受即授予该版本 manifest 的全部已知声明能力，拒绝则不安装或不更新。整体安装批准有效、已启用且 manifest 声明对应组即放行，不另存分项批准，也不提供补批入口。
   旧 receipt 的 `approvedHostToolGroups` / `approvedEventTopics` 字段读取时忽略，不迁移或清理数据，不建立替代许可。新增声明随整体更新确认，移除声明、停用、卸载或撤销整体安装批准立即失效。
   `cindy.host.call(server, tool, args)` 的 UI 与 Node 请求共用 `hostToolSlot`，通过同一 provider / registry 调用 Agent 工具处理器，禁止另写插件业务实现。
@@ -289,6 +302,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   可查询本机项目、任务和伙伴的目标元数据，并投递文字/图片；该接口本身不授予其他任务的历史读取、设置修改或停止权限。
   安装/更新复用既有权限确认；历史 tasks 批准和未知 targets 字段不能自动扩权，缺新批准时只阻止新目标接口，首次调用复用既有宿主确认。
   实现与作者契约见 [通用投递目标](plugin-task-api-implementation.md#通用投递目标增量接口尚未发布)。
+  同一批准也允许 IM 插件通过 `tasks.imProjects/create/followImProject` 复用侧栏项目与官方机器人
+  的模型、来源和权限设置；仅接续插件自己的任务，不能搬动其他项目的任务。
+  增量字段、旧任务回执兼容与发送时复核见[插件 IM 共用项目与模型](protocol-compatibility/plugin-im-projects.md)。
 - `agent.observe` 是独立能力，不依赖 `agent.tasks`，单列 `agent:observe` 权限并要求 Host receipt 的 `observeCapabilityApproved` 显式批准。
   只读返回已登记本机项目中任务的标题、Agent 类型、归档与状态元数据，并可在主窗口打开其中的任务；不返回消息、计划或文件，也不能发送、修改或停止任务。
   旧 tasks/targets 批准与历史未知字段不授予查看；首次调用复用既有宿主确认。实现见 [只读查看项目任务](plugin-task-api-implementation.md#只读查看项目任务增量接口尚未发布)。
@@ -552,11 +568,24 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   忙碌跳过和失败退避，保留启停态、实例键和同来源用户数据。实现与回归见
   `main/plugin-market/service.ts` 及其 `__tests__/service.test.ts`。
 - 本地种子（开发或个人构建放进 `resources/builtin-ghosts` 的种子；安装包不带种子，见
-  [协议兼容 §2](protocol-compatibility.md#2-插件来源)）与同 id 的服务端市场安装按版本取新、相同取商店：
+  [协议兼容 §2](protocol-compatibility.md#2-插件来源)）与同 id 的 root 服务端市场安装按版本取新、相同取商店：
   种子版本严格更新才覆盖已装实例（旧布局 `<id>` 或新布局 `_ns/_root/<id>` 原位替换，保留启停态与数据键），
   相同、更旧或不可比时不动商店字节。实例仍在播种台账内、种子已撤或当前种子不比 Release 新时，自动更新按原
   商店路由把种子字节换回商店包，不算换源；播种发现已装的是商店字节后摘除台账。受众与孤儿回收不删除有商店
-  安装的实例。只放行播种台账内的根 namespace 已批准实例，不用于授权查找，其它来源冲突仍需用户显式替换。
+  安装的实例。播种按物理目录的注册表／批准回执取得 namespace，再严格查对应账本；企业旧裸 id 目录不能当 root，
+  证据缺失、损坏或冲突时保留现状。企业新布局与同名 root 分开处理。
+  迁移旧 namespace 时，同名种子或播种台账也不能单独证明 root；无市场身份的旧种子须有官方批准回执，
+  且现存目录摘要匹配该回执的目录摘要，才可原位迁移。市场包的归档摘要不能替代目录摘要；
+  证据不足的待迁移实例保留既有批准与启停状态，不因市场同步为空而被种子接管。
+  无 receipt 的历史安装仍先按旧 manifest、启停和信任记录补回原批准，不因同名种子跳过，
+  不回填 namespace 或包摘要。只有没有市场身份冲突、且目录与当前可信种子完整字节一致时，
+  才沿用种子批准并完成 root 确认；字节不同或市场证据不可读时保留旧批准与内容，不猜 root。
+  历史 root 种子覆盖企业旧目录时，只有注册表仍保留同一市场资源与企业身份、原账本路由匹配、
+  root 回执摘要同时匹配可信种子与现存目录，才通过正常市场更新事务原位恢复。身份未确认期间不授予新权限；
+  新包继续通过 Release 校验与正常权限确认，保留实例键、启停和同来源数据。OAuth 沿用客户端变更事务，
+  有原签发客户端标记的账号在包提交后恢复；无法证明签发来源时保留凭据并使用已有重新连接提示。
+  无法核实种子的历史安装保留既有冲突／更新失败提示，
+  不猜身份或伪造批准；其它来源冲突仍需用户显式替换。
   实现与回归见 `main/cindy-brain/builtinGhostProvisioner.ts`、`main/plugin-market/service.ts`
   （`seededBuiltinYieldsToRelease`）及对应测试。
 - 同一 release 自动更新失败后，在当前进程内按 owner、来源路由和 release 做指数退避
@@ -942,6 +971,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 ## 5. 存量插件兼容：升级必须无感（红线）
 
+本地模式首次云登录的插件交接随 #10357 暂时回退；已交接资料保持原样，未完成的交接
+暂不继续。已知限制与恢复要求见[资产交接回退说明](credentials-and-local-storage.md#本地模式首次云登录资产交接暂时回退)。
+
 `tools[].parameters` 的 16KB 约束：新包入口 `validateGhostManifest` 按 JSON 序列化后的
 UTF-8 字节计量；历史市场 release 入口 `validateStoredGhostManifest` 和已装快照入口
 `validateInstalledGhostManifest` 保留原 UTF-16 长度上限 16,384。市场详情解析与
@@ -1124,6 +1156,8 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
   绑定；启动窗口创建前的固定配置读取和一次性 CLI 不受请求预算约束。
 
 ## 6. 作者契约与编写手册同步
+
+随包作者手册只描述随包版本的当前能力，不写发布状态或首个可用版本；用到新能力时，`minCindyVersion` 填开发测试所用的 Cindy 版本。
 
 插件界面扩展的作者入口为随包 `references/plugin-host-ui.md`，具名视图和原生入口仍共用
 MCP Apps，不能另建页面 SDK 或逐历史消息 render/query。`mcpApps.host` 能力以整版安装/更新

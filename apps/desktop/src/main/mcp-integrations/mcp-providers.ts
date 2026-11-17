@@ -1,4 +1,5 @@
 import { resolveAutomaticProjectIcon } from '../projectAutomaticIcon.desktop.js';
+import { readSubscriptionUsage } from '../subscription-accounts/runtime.js';
 import { parseProjectSymbol, parseProjectLetters } from '@cindy/maker-shared/project-alias-sync';
 import { readProjectInfo } from '../projectInfoCore.js';
 import { updateProjectInfo } from '../localDb/ipc/projectAliases.js';
@@ -23,6 +24,7 @@ import { manageAppModels } from '../app-settings/models.js';
 import { runProviderReadRequest } from './providerReadTools.js';
 import { runProviderSharingRequest } from './providerSharingTools.js';
 import { executeProviderShareManagementCommand } from '../device-link/providerShareRuntime.js';
+import { createProviderGroupCommandDeps, executeProviderGroupCommand } from '../provider-group/ipc.js';
 import { invokeProviderManagement } from '../provider-group/managementClient.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { classifyOrigin } from '../input-handoff/originPolicy.js';
@@ -57,7 +59,6 @@ import { and, eq, isNull } from 'drizzle-orm';
 
 import {
   createLiziMcpProviders,
-  isReadOnlyAppModelsRequest,
   resolveLiziMcpSessionContext,
   setSessionPathAuthorizer,
   type LiziMcpProvider,
@@ -740,6 +741,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 启动早期跑, 那时 registerMakerIpc 还没执行, holder 是 null; 回调真正被调时
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
+      subscriptionUsage: { read: (context, providerId) => withAccountDataAccess(context.sessionId, async assertCurrent => {
+        const result = await readSubscriptionUsage(providerId);
+        await assertCurrent();
+        return result;
+      }) },
       hostServices: createHostServiceToolExecutor(hostServiceCatalog, { pluginCall: getPluginHostToolCaller, getGhost: findGhostForInstanceId }),
       files: createFileToolExecutor(getGhostFsSlot, getPluginHostToolCaller),
       storage: createStorageToolExecutor(getGhostStorageService, getPluginHostToolCaller),
@@ -1344,15 +1350,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
       modelSettings: {
         call: ({ callerSessionId, ...input }, signal) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
-          const readOnly = isReadOnlyAppModelsRequest(input);
-          if (!callerSessionId && !readOnly) throw new Error('NO_SESSION_CONTEXT');
           const guard = async () => {
             await assertCurrent();
-            if (!readOnly && (input.operation === 'set' || input.operation === 'provider' || input.operation === 'connection' ||
-                (input.operation === 'mediaGuide' && input.change.action === 'save'))) await assertTaskActionCurrent();
+            if (input.operation === 'set' || input.operation === 'provider' || input.operation === 'connection' ||
+                (input.operation === 'mediaGuide' && input.change.action === 'save')) await assertTaskActionCurrent();
           };
           return manageAppModels(input, guard, async (name, endpoints, lifetime) => {
-            if (!callerSessionId) throw new Error('NO_SESSION_CONTEXT');
             await guard();
             if (await isInputHandoffDisabledForSession(callerSessionId)) throw new Error('DISABLED_BY_OWNER');
             await guard();
@@ -1374,6 +1377,32 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }, signal);
         }),
       },
+      providerReads: {
+        call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async () => {
+          const plugin = !callerSessionId ? getPluginHostToolCaller() : undefined;
+          const owner = activeOwnerScopeKey();
+          const assertCurrent = () => {
+            plugin?.assertCurrent();
+            if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_SCOPE_CHANGED');
+          };
+          return runProviderReadRequest({ ...input, device: input.device === getDeviceId() ? 'local' : input.device }, {
+            local: async (request, guard) => {
+              if (request.action === 'manage-share') {
+                guard();
+                return executeProviderShareManagementCommand(request.command);
+              }
+              guard();
+              return executeProviderGroupCommand(createProviderGroupCommandDeps(), request.command);
+            },
+            remote: async (device, request, guard) => {
+              guard();
+              return invokeProviderManagement((target, channel, args, options) =>
+                deps.invokeRemote(target, channel, args, { ...options, preSend: () => { guard(); options?.preSend?.(); } }),
+              device, request);
+            },
+          }, assertCurrent, Boolean(plugin));
+        }),
+      },
       providerSharing: {
         call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async assertAccess => {
           const write = input.action === 'status' || input.action === 'set-models';
@@ -1393,35 +1422,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               (target, channel, args, options) => remoteInvoke(target, channel, args, { ...options,
                 preSend: () => { guard(); options?.preSend?.(); } }),
               device, { action: 'manage-share', command }),
-          }, assertCurrent);
-        }),
-      },
-      providerReads: {
-        call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async () => {
-          const plugin = !callerSessionId ? getPluginHostToolCaller() : undefined;
-          const owner = activeOwnerScopeKey();
-          const assertCurrent = () => {
-            plugin?.assertCurrent();
-            if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_SCOPE_CHANGED');
-          };
-          return runProviderReadRequest({ ...input, device: input.device === getDeviceId() ? 'local' : input.device }, {
-            local: async (request, guard) => {
-              if (request.action === 'manage-share') {
-                const { executeProviderShareManagementCommand } = await import('../device-link/providerShareRuntime.js');
-                guard();
-                return executeProviderShareManagementCommand(request.command);
-              }
-              const { createProviderGroupCommandDeps, executeProviderGroupCommand } = await import('../provider-group/ipc.js');
-              guard();
-              return executeProviderGroupCommand(createProviderGroupCommandDeps(), request.command);
-            },
-            remote: async (device, request, guard) => {
-              const { invokeProviderManagement } = await import('../provider-group/managementClient.js');
-              guard();
-              return invokeProviderManagement((target, channel, args, options) =>
-                deps.invokeRemote(target, channel, args, { ...options, preSend: () => { guard(); options?.preSend?.(); } }),
-              device, request);
-            },
           }, assertCurrent);
         }),
       },

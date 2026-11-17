@@ -80,7 +80,17 @@ export function createQueuedAcceptedCallbacks(log?: AcceptedCallbackLogger) {
   const run = (
     sessionId: string,
     item: AgentInputQueuedMessage,
+    recoverySourceClientId?: string,
   ): Promise<void> | undefined => {
+    // The scheduler bridge verifies the session/run owner before transferring
+    // an unaccepted callback to its coordinator-owned automatic replacement.
+    if (!callbacks.has(item.clientId) && recoverySourceClientId) {
+      const original = callbacks.get(recoverySourceClientId);
+      if (original && !original.didRun) {
+        callbacks.delete(recoverySourceClientId);
+        callbacks.set(item.clientId, original);
+      }
+    }
     const callback = callbacks.get(item.clientId);
     if (!callback) return undefined;
     callback.didRun = true;

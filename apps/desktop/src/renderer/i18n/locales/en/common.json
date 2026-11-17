@@ -4477,14 +4477,7 @@
         "installCancel": "Cancel install",
         "installFailed": "Couldn’t install Ollama",
         "installPhase": {
-          "resolving": "Looking up the official release…",
-          "downloading": "Downloading…",
-          "verifying": "Verifying…",
-          "extracting": "Installing…",
-          "starting": "Starting…",
-          "success": "Installed",
-          "error": "Install failed",
-          "cancelled": "Cancelled"
+          "error": "Install failed"
         },
         "openWebsite": "Open Ollama website",
         "recheck": "I installed it, check again",
@@ -4519,20 +4512,6 @@
         "retryDownload": "Retry",
         "libraryName": "Exact Ollama library name",
         "pullingTitle": "Downloading {{name}}",
-        "pullIndeterminate": "Preparing",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Preparing download…",
-          "manifest": "Fetching manifest…",
-          "downloading": "Downloading model files",
-          "verifying": "Verifying…",
-          "writing": "Writing…",
-          "success": "Download complete",
-          "error": "Download failed",
-          "paused": "Paused",
-          "cancelled": "Cancelled"
-        },
         "pauseDownload": "Pause",
         "resumeDownload": "Resume Download",
         "cancelDownload": "Delete Incomplete Download",
@@ -5539,6 +5518,13 @@
       },
       "toggleAria": "Toggle question navigation rail"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Name worktrees with a model",
+        "description": "Gives a new task's worktree a short English name based on its first message (e.g. fix-login-timeout), so the folder and branch show what they're for. Uses the auxiliary models; if naming fails, a random name is used. Only affects worktrees created from now on."
+      },
+      "toggleAria": "Toggle naming worktrees with a model"
+    },
     "promptRecommendation": {
       "label": "Input Suggestions",
       "description": "After a reply, the input shows a suggestion for your next message. Press Tab to insert it.",
@@ -5773,7 +5759,8 @@
             "statusFailed": "the controller status check failed",
             "recoveryFailed": "the control connection could not be rebuilt",
             "extensionDisconnected": "no browser extension is connected (install and enable the Cindy Chrome plugin and its extension)",
-            "pluginMissing": "the Cindy Chrome plugin is not installed or enabled"
+            "pluginMissing": "the Cindy Chrome plugin is not installed or enabled",
+            "browserMissing": "Chrome is not installed on this computer"
           },
           "reconnect": "Reconnect Browser",
           "recover": "Recover Browser",
@@ -5793,7 +5780,7 @@
         },
         "userBrowser": {
           "title": "My browser",
-          "description": "Works in the Chrome or Edge you are using, with your existing sign-ins. New pages open in a background window and stay out of your way."
+          "description": "Your own Chrome on this computer (Edge also works). The Agent works in it directly, with your existing sign-ins. New pages open in a background window and stay out of your way."
         },
         "userBrowserSetup": {
           "installPluginTitle": "Install the Cindy Chrome plugin",
@@ -5812,7 +5799,9 @@
           "updatePluginTitle": "Update the Cindy Chrome plugin",
           "updatePluginBody": "The installed Cindy Chrome plugin is too old for “My browser”. Update it to the latest version, then follow its prompt to add the extension.",
           "updatePlugin": "Update",
-          "storeOpened": "Opened the Cindy extension page in your browser. Choose Add to Chrome and it connects on its own."
+          "storeOpened": "Opened the Cindy extension page in your browser. Choose Add to Chrome and it connects on its own.",
+          "installBrowserTitle": "Install Chrome first",
+          "installBrowserBody": "Chrome is not installed on this computer. My browser needs Chrome (or Edge) for the Cindy extension. Once it is installed, this moves on to the next step automatically."
         }
       },
       "android": {
@@ -5974,8 +5963,6 @@
           "notChecked": "Not checked yet",
           "action": "Update",
           "updating": "Updating…",
-          "downloadingPercent": "Downloading {{percent}}% ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "Downloading, {{downloaded}} MB so far…",
           "installing": "Download complete, installing…",
           "toast": {
             "success": "cua-driver updated to the latest version",
@@ -7932,7 +7919,6 @@
         "install": "Install",
         "details": "Details",
         "detailsAria": "View details for {{name}}",
-        "loadingDetails": "Loading details…",
         "update": "Update from market",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",
@@ -8241,6 +8227,8 @@
         "hostTools_controlDetail": "Use Cindy’s task tools to edit, archive, restore and control existing tasks and projects, and import native task files on this computer.",
         "hostTools_handoff": "Task Messaging",
         "hostTools_handoffDetail": "Use Cindy’s task tools to send messages to existing tasks. Operations needing a current task require an explicit task target.",
+        "hostTools_usage": "Read usage and provider group status",
+        "hostTools_usageDetail": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, provider group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings.",
         "hostTools_settings": "App Settings",
         "hostTools_settingsDetail": "Use Cindy’s settings tools to read and change app configuration. Secrets are not returned, and private input remains yours to provide.",
         "hostTools_scheduler": "Automation Management",
@@ -8430,6 +8418,7 @@
             "contentStyle": "Change message spacing and bubble styling"
           },
           "positions": {
+            "composer_header": "area above the input box",
             "composer_toolbar": "input toolbar",
             "session_header": "task header",
             "statusbar": "status bar",
@@ -8528,6 +8517,7 @@
           "workdirClear": "Reset to default folder",
           "followAuxiliary": "Follow system auxiliary model · {{model}}",
           "followAuxiliaryUnset": "Follow system auxiliary model",
+          "remoteQuickAnswerHint": "This model doesn’t run on this computer. Quick answers are sent from this computer, so they use the system auxiliary model.",
           "restoreModel": "Reset model"
         },
         "toolsTitle": "Tools",
@@ -8863,23 +8853,10 @@
         "projectReadFailed": "Could not read project settings. Try again."
       },
       "usage": {
-        "title": "Your calls",
-        "explanationLabel": "How usage is counted",
-        "explanation": "Tool calls dispatched on this computer by the current account, including failures, timeouts and cancellations. The last 7 days is a rolling 168 hours. Panels, Skills and debugging are excluded. Records remain until cleared.",
-        "clear": "Clear records",
-        "loading": "Loading records…",
-        "unavailable": "Personal records unavailable",
-        "retry": "Retry",
-        "lastUsed": "Last call",
-        "last7Days": "Calls in last 7 days",
-        "never": "No calls yet",
-        "clearTitle": "Clear this Plugin’s usage records?",
-        "clearDescription": "Remove call records and Session links for this account on this computer. New calls start a fresh history. Shared totals already received by the server are not withdrawn.",
         "downloadExplanation": "Cumulative download URL requests. Each successfully issued package URL counts once, including updates, reinstalls and retries that request a new URL. This is not a count of completed installations.",
-        "clearAction": "Clear",
         "downloadsValue": "{{value}} downloads",
         "usesValue": "{{value}} uses",
-        "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience. Your calls below count only this account on this computer."
+        "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience."
       },
       "contribution": {
         "unreadReview": "New plugin result",
@@ -10903,7 +10880,12 @@
       "summary": "Self-introduction",
       "summaryPlaceholder": "For example: a novelist who loves serial fiction, has a dry sense of humor, and is fascinated by what makes characters tick.",
       "avatarSelectionFailed": "Couldn’t read the image. Choose a PNG, JPEG, or WebP image up to 5 MB.",
-      "personality": "Personality & conversation"
+      "personality": "Personality & conversation",
+      "sourceLength": "{{length}} / {{limit}} UTF-16 units (surrounding whitespace excluded).",
+      "sourceExcess": "{{excess}} units over the limit. Shorten the text before saving.",
+      "sourceTooLong": "This text is too long to save. Edit it to continue.",
+      "sourceRecovery": "The saved original is unchanged and the full draft remains on this page. After copying, paste it somewhere safe and check that the full text is there before shortening it or discarding these changes.",
+      "sourceCopy": "Copy full text"
     },
     "nameLabel": "What Should We Call Them?",
     "close": "Close",
@@ -10929,6 +10911,7 @@
       "duplicate": "Duplicate buddy",
       "moreActions": "More actions for {{name}}",
       "viewIcons": "Icons",
+      "showCollapsedTeammateAvatars": "Show avatars when collapsed",
       "sectionExpand": "Expand buddies",
       "showLess": "Show less",
       "sectionCollapse": "Collapse buddies",
@@ -11426,6 +11409,8 @@
         "projectDirNote": "Buddies work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
         "autoContinueSaveFailed": "Couldn’t save step handoffs. Try again.",
         "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again.",
+        "allowMemberInvites": "Let all members invite friends",
+        "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
         "allowMentionAllBots": "Allow @all buddies",
         "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
       },
@@ -11531,6 +11516,7 @@
         "threadRecent": "Recent messages in the thread",
         "threadNew": "New messages in the thread",
         "replyingTo": "Replying to “{{name}}”: {{text}}",
+        "filesOutsideWorkingDir": "Files outside the working directory were not attached.",
         "earlierOmitted": "(Earlier messages omitted)",
         "actingFor": "{{name}} · for {{person}}",
         "checkout": {
@@ -11703,6 +11689,11 @@
           "transferHint": "They will become the owner and you will become an admin.",
           "removeTitle": "Remove {{name}} from this group?",
           "removeHint": "They will lose access to messages. Their companions will also leave.",
+          "removeOwn": "Remove from group",
+          "removeOwnScope": "This only affects this group. Your companion stays in your account.",
+          "removeOwnHint": "{{name}} will no longer receive messages from “{{group}}”. Message history stays; other groups and private chats are unaffected.",
+          "removeOwnActiveHint": "Removing this companion stops its active requests in this group. Tasks opened independently keep running.",
+          "stopAndRemove": "Stop and remove",
           "leave": "Leave group",
           "leaveHint": "You and your companions will leave this group. You will no longer receive new messages or have access to its history.",
           "soleOwnerHint": "You’re the only member left. Archive this group to keep its history and restore it later.",
@@ -12943,6 +12934,7 @@
       },
       "shared": {
         "retry": {
+          "autoReviewNoAvailableModel": "No automatic review model is available. On the computer running the Agent, enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. Actions that need review still require your confirmation.",
           "autoReviewUnavailable": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
           "autoReviewUnavailableWechat": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
           "autoReviewConfirmUndelivered": "Auto-review didn't finish, and the confirmation either wasn't delivered or wasn't answered. This denial didn't come from you.",
@@ -12982,7 +12974,7 @@
           "reasoningDominated": "Thinking used up most of the output budget, so the reply may be incomplete. Lower the reasoning effort, or compact the conversation first, then continue.",
           "generic": "The model hit its output length limit, so this reply may be incomplete. Send a new message to continue. If it keeps happening, lower the reasoning effort or compact the conversation first.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "The model returned empty responses several times in a row, so automatic continuation is paused."
+          "silentStopExhausted": "An empty response was detected. Automatic continuation is paused."
         },
         "permission": {
           "autoReviewUnavailable": "Auto-review didn't finish. Confirm whether to allow this action.",
@@ -13735,12 +13727,6 @@
         "ASSESSMENT_FAILED": "Couldn't refresh the setup status. Try again.",
         "TIMEOUT": "Setup timed out. Try again."
       },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AI Model Service",
-          "description": "Connect an available model service before using the image or video capabilities declared by this plugin."
-        }
-      },
       "form": {
         "placeholder": "Enter {{label}}",
         "required": "Enter {{label}}",
@@ -14108,7 +14094,8 @@
     },
     "worktreeCreatingOverlay": {
       "heading": "Creating worktree · input disabled",
-      "subtitle": "Target branch {{branch}} · will unlock automatically"
+      "subtitle": "Target branch {{branch}} · will unlock automatically",
+      "elapsed": "Waiting for {{duration}}"
     },
     "worktree": {
       "detecting": "Detecting environment…",
@@ -15534,6 +15521,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "This file is outside the current session working directory and cannot be located in the sidebar file browser",
       "openInDefaultBrowser": "Open in browser",
       "copyLink": "Copy link",
+      "addPrToHeader": "Add to Header",
+      "prAlreadyInHeader": "Already in Header",
+      "prAddedToHeader": "Added to the header — status follows this task.",
+      "prAssociatedNotInHeader": "Linked, not in Header",
+      "prSavedNotInHeader": "Link saved. The header is full; pin this PR in the task header’s PR manager.",
       "linkCopied": "Link copied",
       "viewSourceFile": "View source",
       "openInSidebarFailed": "Failed to open in sidebar browser",
@@ -15695,6 +15687,7 @@
       "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
       "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
+      "AUTO_REVIEW_NO_AVAILABLE_MODEL": "No automatic review model is available. On the computer running the Agent, enable and connect a review provider in Model providers, or customize Auxiliary models in Settings. Actions that need review still require your confirmation.",
       "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
       "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
       "AUTO_REVIEW_CONFIRM_UNDELIVERED": "Automatic review was unavailable, and the confirmation request was not completed. This is not a user rejection.",
@@ -15705,6 +15698,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again.",
       "MCP_APPROVAL_AUTO_BLOCKED": "Automatic approval review blocked this tool call. No manual rejection was received.",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "Auto approve blocked this tool call because its action details are incomplete.",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "Auto approve blocked this tool call because your instructions changed or are not yet synchronized.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "Auto approve blocked this tool call because directory permissions changed.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "Auto approve blocked this tool call because its delegated authorization changed.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "Auto approve blocked this tool call because its plugin or task authorization is no longer active.",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "Auto approve blocked this tool call because no user request authorizes the action.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "Auto approve blocked this tool call because the work plan exceeds the supported size.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "Auto approve blocked this tool call because the executing Agent does not match the registered work plan.",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "Auto approve blocked this tool call because the task’s working directory changed.",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "Auto approve blocked this tool call because its delegated task scope is missing or invalid.",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "The permission request timed out without a confirmed decision. A timeout does not show whether you clicked a button.",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "Permission confirmation could not be completed. No manual rejection was received.",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "This model needs this computer to forward requests, and the remote connection cannot do that yet. Switch to Cindy AI, or use this model in a local task.",
@@ -15715,7 +15718,12 @@
       "REMOTE_PROVIDER_UPDATING": "This model provider’s credentials are updating. Try again in a moment.",
       "REMOTE_WORKDIR_UNAVAILABLE": "The remote working directory is unavailable. Check that the folder still exists on that computer, then try again.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice.",
-      "REMOTE_AGENT_UNAVAILABLE": "The connection to the computer running the Agent dropped. Try again. If it keeps happening, make sure that computer is online and allows remote control.",
+      "REMOTE_AGENT_UNAVAILABLE": "Could not communicate with the computer running the Agent. Check the error details.",
+      "REMOTE_AGENT_TIMEOUT": "Timed out waiting for the computer running the Agent. The result is unknown. Check the task before retrying.",
+      "REMOTE_AGENT_LINK_BUSY": "Communication with the computer running the Agent is busy. Wait a moment before retrying.",
+      "REMOTE_AGENT_UNRESPONSIVE": "The computer running the Agent repeatedly failed to respond, so calls were temporarily paused. Wait a moment before retrying.",
+      "REMOTE_AGENT_OFFLINE": "The computer running the Agent is offline. Retry after it reconnects.",
+      "REMOTE_AGENT_ACCESS_DENIED": "Remote access to the computer running the Agent was denied. Check its access settings before retrying.",
       "REMOTE_AGENT_PEER_TOO_OLD": "Cindy on the other computer is too old for this action. Update Cindy there first.",
       "REMOTE_AGENT_EXPIRED": "This session already ended on the computer running the Agent. Send your message again.",
       "REMOTE_AGENT_NOT_FOUND": "This session already ended on the computer running the Agent. Send your message again.",
@@ -19041,7 +19049,7 @@
       "steerFailed": "Steer failed: {{message}}",
       "qrExpired": "QR code expired. Start again.",
       "registrationFailed": "Creation failed. Try again later.",
-      "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click “Continue” to resume the task.",
+      "silentStopExhausted": "An empty response was detected. Automatic continuation is paused.",
       "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
       "outputLimit": "The model reached its output limit, so this response may be incomplete. Send a new message to continue; if this repeats, lower the reasoning effort or compact the conversation history first.",
       "outputLimitReasoning": "Reasoning consumed most of this request’s output budget, so the response may be incomplete. Lower the reasoning effort or compact the conversation history before continuing.",
@@ -19603,6 +19611,42 @@
       "notSupported": "Balance lookup is not supported for this account.",
       "unavailable": "Balance is temporarily unavailable. Refresh to try again."
     },
+    "giftCard": {
+      "action": "Redeem Gift Card",
+      "title": "Redeem gift card",
+      "inputLabel": "Redeem code",
+      "inputHint": "Enter the 16-character code, or paste a gift card link.",
+      "continue": "Continue",
+      "confirmTitle": "Redeem this gift card?",
+      "confirmAction": "Redeem",
+      "from": "From {{sender}}",
+      "cardLabel": "Cindy gift card, {{amount}}",
+      "fields": {
+        "validity": "Valid for",
+        "validityValue_one": "{{count}} day after redeeming",
+        "validityValue_other": "{{count}} days after redeeming",
+        "claimBy": "Redeem by",
+        "destination": "Added to"
+      },
+      "doneTitle": "{{amount}} added",
+      "doneDescription": "Added to your Promotional Balance. Valid until {{date}}.",
+      "doneDescriptionNoDate": "Added to your Promotional Balance.",
+      "pendingTitle": "Gift card redeemed",
+      "pendingDescription": "{{amount}} is being added and will appear in your Promotional Balance shortly. You do not need to redeem it again.",
+      "alreadyYours": "You already redeemed this gift card.",
+      "done": "Done",
+      "errors": {
+        "notFound": "This code is not valid. Check it and try again.",
+        "wrongRegionCn": "This gift card is for the China mainland edition of Cindy and cannot be redeemed with this account.",
+        "wrongRegionGlobal": "This gift card is for the international edition of Cindy and cannot be redeemed with this account.",
+        "alreadyClaimed": "This gift card has already been redeemed.",
+        "expired": "This gift card can no longer be redeemed. Its deadline has passed.",
+        "voided": "This gift card has been voided.",
+        "rateLimited": "Too many attempts. Try again later.",
+        "failed": "Couldn't redeem the gift card. Try again later.",
+        "personalRequired": "Gift cards can only be redeemed by personal accounts."
+      }
+    },
     "usage": {
       "title": "Balance Usage",
       "observedAt": "Balance updated {{date}}",
@@ -19618,6 +19662,7 @@
         "empty": "No promotional grants are available.",
         "incomplete": "There are many grant records. Only the latest {{count}} are shown.",
         "unnamed": "Promotional Grant",
+        "giftCard": "Gift card · from {{sender}}",
         "original": "Original",
         "used": "Used",
         "remaining": "Remaining",
@@ -21831,5 +21876,28 @@
     "archivedNotice": "Automatically archived idle tasks: {{count}}",
     "undo": "Undo",
     "undoFailed": "Could not undo. Restore the tasks from Archived."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "{{time}} left",
+    "attempt": "Attempt {{attempt}}",
+    "phase": {
+      "preparing": "Preparing…",
+      "queued": "Queued…",
+      "downloading": "Downloading…",
+      "retrying": "Retrying…",
+      "verifying": "Verifying…",
+      "installing": "Installing…",
+      "paused": "Paused",
+      "completed": "Done",
+      "failed": "Download failed",
+      "cancelled": "Cancelled"
+    },
+    "retry": {
+      "slow": "Slow connection, reconnecting…",
+      "network": "Connection lost, retrying…",
+      "timeout": "Connection timed out, retrying…",
+      "server": "Server busy, retrying…"
+    }
   }
 }

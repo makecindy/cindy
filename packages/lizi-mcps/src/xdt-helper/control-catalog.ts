@@ -30,6 +30,7 @@ const helper = (key: string, domain: string, title: string, summary: string, too
   ({ key, domain, title, summary, tools, aliases, notes, server: 'cindy_helper' });
 export const CONTROL_CATALOG: readonly Control[] = [
   helper('models.provider-sharing', 'models', '供应商分享成员', '查询自己分享的成员、暂停恢复与成员模型范围；默认本机，可指定同账号已授权电脑。', ['list_provider_share_members', 'set_provider_share_member_status', 'get_provider_share_model_access', 'set_provider_share_model_access'], ['供应商分享成员', '供应商组', '分享', '成员', '暂停分享', 'provider', 'sharing']),
+  helper('models.subscription-usage', 'models', '订阅用量', '只读查询执行电脑上各 Claude/Codex 账号的套餐、额度窗口与更新时间；插件需声明用量读取权限。', ['get_subscription_usage'], ['usage', 'quota', '用量', '额度', '配额', '订阅', '账号', 'Claude', 'Codex']),
   helper('application.settings-navigation', 'application', '设置跳转与连接入口', '生成绑定目标电脑的设置链接；桌面、手机和远程查看均保留归属。需要用户去设置时展示此入口，账号授权优先用连接卡片。', ['get_settings_link'], ['设置', '跳转', '卡片', '打开设置', 'settings', 'navigation', 'link', '连接']),
   setting('tasks.auto-archive', 'tasks', '存储空间与自动归档', '当前账号在本机的闲置任务自动归档开关、保留天数、可归档与保留的任务数量。', 'task-management', ['自动归档', '闲置任务', '存储空间', 'auto archive', 'idle tasks', 'retention']),
   helper('devices.remote-consent', 'devices', '远程控制授权请求', '请求同账号在线电脑弹出本机确认窗口，由用户开启持续有效的远程控制设置。', ['request_remote_control'], ['远程控制', '授权', '弹窗', 'remote control', 'consent'], '使用 list_machines 的精确设备 ID；只有目标电脑返回 enabled 才能继续原操作。拒绝、超时或旧版无响应不代表同意。'),
@@ -44,7 +45,7 @@ export const CONTROL_CATALOG: readonly Control[] = [
   setting('models.auxiliary', 'models', '辅助模型', '辅助模型优先与备用。', 'auxiliary-models', ['auxiliary', '辅助模型']),
   setting('models.vision', 'models', '视觉桥', '视觉桥开关、目标模型与主备用视觉模型。', 'vision-bridge', ['vision', '视觉桥']),
   helper('models.configuration', 'models', '模型与供应商配置', '本机 API 连接、媒体能力声明与调用 Guide、安全密钥输入、型号发现；型号参数、供应商启停及 Claude/Codex 多订阅账号。', ['list_model_providers', 'get_model_configuration', 'set_model_configuration', 'configure_model_provider', 'configure_model_connection', 'manage_media_guide'], ['model', 'provider', '模型', '供应商', '媒体', '图片', '视频', 'guide', '上下文', '压缩', '价格', '订阅', '账号', 'Claude', 'Codex', '负载均衡']),
-  helper('models.provider-state', 'models', '供应商用量与供应组状态', '原样读取已记录用量、截断范围、组成员状态与已知额度；筛选和汇总由调用方处理。device 可指定同账号已授权电脑，缺省为本机。', ['get_provider_usage_history', 'get_provider_group'], ['供应组', '用量', '额度', '成员用量', 'usage', 'quota', 'provider group']),
+  helper('models.provider-state', 'models', '供应商用量与供应组状态', '原样读取已记录用量、截断范围、组成员状态与已知额度；筛选和汇总由调用方处理。device 可指定同账号已授权电脑，缺省为本机；插件需声明 usage 组。', ['get_provider_usage_history', 'get_provider_group'], ['供应组', '用量', '额度', '成员用量', 'usage', 'quota', 'provider group']),
   helper('models.default', 'models', '默认模型', '普通任务的新任务默认选择；伙伴调用时依其原默认模型语义。', ['get_app_default_model', 'set_app_default_model'], ['default model', '默认模型'], '单个伙伴覆盖请查 teammates.profile；不要把新任务默认和伙伴默认混为同一设置。'),
   helper('teammates.profile', 'teammates', '当前伙伴资料与模型', '修改当前调用任务绑定的伙伴资料和模型链。', ['get_teammate_state', 'update_teammate_profile'], ['teammate', 'companion', 'bot', '伙伴', '人设', '伙伴模型', '伙伴默认模型'], '仅绑定该伙伴的任务可用；不是任意 botId 管理接口。使用 expectedVersion；运行中切模遵循原安全边界。'),
   helper('teammates.capabilities', 'teammates', '伙伴能力与技能', '查询并选择当前伙伴的 Skill、MCP、工具和特性。', ['find_teammate_capabilities', 'set_teammate_capability', 'list_teammate_skills', 'read_teammate_skill', 'save_teammate_skill'], ['伙伴能力', '伙伴技能', 'capability']),

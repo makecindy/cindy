@@ -18,6 +18,7 @@ export const {
   activeSelfHostedRelay: () => activeSelfHostedRelay(),
   readCurrentDeviceDirectory: (...args) => readCurrentDeviceDirectory(...args),
   legacyDeviceView: (...args) => projectAgentNetDevice(...args),
+  managementScopeKey: () => JSON.stringify([ownerScope.activeOwnerScopeKey(), agentNetRuntime.agentNetSelectionKey()]),
   prepareAgentNetRuntime: async () => agentNetRuntime,
   prepareOwnerScope: async () => ownerScope,
   prepareRelayConfig: async () => relayConfig,

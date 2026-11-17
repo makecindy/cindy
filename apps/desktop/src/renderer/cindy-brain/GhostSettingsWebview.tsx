@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { Spinner } from '@/components/ui/spinner';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LayoutGrid, MoonStar } from 'lucide-react';
@@ -142,6 +143,7 @@ function SettingsWebviewBody({
 }): ReactNode {
   const [crashed, setCrashed] = useState(false);
   const [generation, setGeneration] = useState(0);
+  const [showLoading, setShowLoading] = useState(false);
   const [directory, setDirectory] = useState<RemotePluginSettingsDirectory | null>(null);
   const remoteView = useRef<string | null>(null);
   const answeredDirectory = useRef<string | null>(null);
@@ -175,6 +177,8 @@ function SettingsWebviewBody({
     // 先透明留位,主题与布局注入完成后直接展示真实页面,不覆盖历史画面。
     webview.setAttribute('style', 'display:flex;flex:1 1 auto;width:100%;height:100%;opacity:0;');
     let disposed = false;
+    setShowLoading(false);
+    const loadingTimer = setTimeout(() => { if (!disposed) setShowLoading(true); }, 300);
     let remoteViewId: string | undefined;
     let themeTimer: ReturnType<typeof setTimeout> | null = null;
     const measureTimers: Array<ReturnType<typeof setTimeout>> = [];
@@ -194,6 +198,8 @@ function SettingsWebviewBody({
     // insertCSS 必已作用于 guest,首个可见帧就是成品样式。
     const reveal = () => {
       if (disposed) return;
+      clearTimeout(loadingTimer);
+      setShowLoading(false);
       webview.style.opacity = '1';
     };
     // 自适应量高:宿主主动 executeJavaScript 读 guest 文档高度(零桥模型
@@ -313,6 +319,7 @@ function SettingsWebviewBody({
       remoteView.current = null;
       unsubscribeDirectory?.();
       injector.dispose();
+      clearTimeout(loadingTimer);
       if (themeTimer !== null) clearTimeout(themeTimer);
       for (const timer of measureTimers) clearTimeout(timer);
       unobserveTheme();
@@ -388,7 +395,11 @@ function SettingsWebviewBody({
           fixedHeight === undefined && 'overflow-hidden',
         )}
         style={{ height: fixedHeight ?? autoHeight }}
-      />
+      >
+        {showLoading ? <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-13 text-[var(--text-tertiary)]">
+          <Spinner size={15} /><span>{t('ccAgent.common.loading')}</span>
+        </div> : null}
+      </div>
       {directory && directory.viewId === remoteView.current && remoteDeviceId && (
         <AddRemoteProjectDialog
           open
