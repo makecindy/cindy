@@ -2212,6 +2212,29 @@ describe('快问快答(oneshot_text)', () => {
     expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: false, errorCode });
   });
 
+  // #11001 review:handleModelRequest 必须按执行层推断的供应商分类,不能将缺 key 的
+  // 自配路线误报为等待 Cindy。现有用例只覆盖显式 providerId;最小输入是仅 agent/model
+  // 的固定选择 + no_candidate + Cindy 凭证下发中。unit,不出网。
+  it.each([
+    ['byo', 'NO_CANDIDATE'],
+    ['xd', 'INTERNAL'],
+    [undefined, 'NO_CANDIDATE'],
+  ] as const)('缺供应商的固定路线实际解析为 %s 时无候选 → %s', async (providerId, errorCode) => {
+    const oneshotText = vi.fn(async () => ({
+      ok: false as const, reason: 'no_candidate' as const, message: '不行', providerId,
+    }));
+    const { slot } = withText({
+      oneshotText,
+      getOneshotModelSelection: () => ({ agentKind: 'codex' as const, model: 'm' }),
+      isModelAccessReady: () => false,
+      isModelAccessTransientlyUnavailable: () => true,
+    });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: false, errorCode });
+    expect(oneshotText).toHaveBeenCalledWith(expect.objectContaining({
+      route: { kind: 'catalog', agentKind: 'codex', model: 'm' },
+    }));
+  });
+
   it('expectJson:剥围栏后可解析 → 返回清洗后的 JSON 文本;不可解析 → BAD_MODEL_OUTPUT', async () => {
     const good = withText({
       oneshotText: vi.fn(async () => ({

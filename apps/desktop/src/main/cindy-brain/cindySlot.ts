@@ -301,7 +301,13 @@ export interface CindySlotDeps {
     route?: OneshotRoute;
   }): Promise<
     | { ok: true; text: string; model?: string }
-    | { ok: false; reason: 'no_candidate' | 'timeout' | 'failed'; message: string }
+    | {
+        ok: false;
+        reason: 'no_candidate' | 'timeout' | 'failed';
+        message: string;
+        /** 执行层实际解析的供应商,仅供主机分类错误,不透传给插件。 */
+        providerId?: string;
+      }
   >;
   /**
    * 把身份卡声明的偏好模型 id 解析成当前目录里可路由的 供应商×agent×模型;
@@ -1691,8 +1697,9 @@ export class GhostCindySlot {
         });
         // 链上无候选可能只是 Cindy 凭证还没写入:按链路失败(INTERNAL,重试由调方决定)
         // 回复,与账号切换期间的口径一致。显式钉在非 Cindy(xd)供应商上的路由不回落
-        // Cindy,凭证下发好了也救不回来,无候选就是终态,保留 NO_CANDIDATE。
-        const pinnedOutsideCindy = route?.providerId !== undefined && route.providerId !== 'xd';
+        // Cindy,凭证下发好了也救不回来,无候选就是终态,保留 NO_CANDIDATE。缺省供应商
+        // 用执行层的实际推断结果;固定路线仍无法解析时同样是终态,不借 Cindy 状态解释。
+        const pinnedOutsideCindy = route !== undefined && (route.providerId ?? outcome.providerId) !== 'xd';
         if (
           outcome.reason === 'no_candidate' &&
           (this.deps.isOwnerBoundaryPending() ||

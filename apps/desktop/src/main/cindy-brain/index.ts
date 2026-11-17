@@ -6187,6 +6187,7 @@ export function getGhostCindySlot(): GhostCindySlot {
           return {
             ok: false,
             reason: 'no_candidate',
+            providerId: r.attempts[0]?.providerId,
             message: '当前没有可用的快速通道模型(用户未配置或凭证不可用),请如实告知用户并优雅降级',
           };
         }

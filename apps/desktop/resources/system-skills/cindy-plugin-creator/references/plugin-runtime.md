@@ -124,8 +124,10 @@ const search = await cindy.send({
 // search = { ok:true, provider:'cindy', results:[{ title, url, snippet }] }
 // 失败 = { ok:false, message, errorCode },errorCode 怎么处理:
 //   'UPSTREAM_UNAVAILABLE' = 暂时不可用(上游故障、账号切换中,或刚登录凭证
-//     还在下发 / 同步暂时失败:这段窗口里"未配置"会改报成它)。稍后可以用同一个
-//     tool-call 再发一次;
+//     还在下发 / 同步暂时失败:这段窗口里"未配置"会改报成它)。仅能确认未出网的
+//     凭证准备失败时,才允许同一个 tool-call 的原请求受控重试一次。已出网后的
+//     超时、传输故障或账号切换不能复用该调用;不要只凭错误码自动重试,无法确认时
+//     如实告知用户,必要时由 Agent 发起新的工具调用;
 //   'NOT_CONFIGURED' = 主机或服务端确实没配好搜索,重试没用,如实告诉用户;
 //   'QUOTA_EXHAUSTED' / 'AUTH_REJECTED' = 额度或账号问题,提示用户处理,别重试;
 //   'RATE_LIMITED' = 退避后再试;'INVALID_PARAMS' / 'PERMISSION_DENIED' = 调用
