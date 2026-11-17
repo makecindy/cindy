@@ -5588,6 +5588,13 @@
       },
       "toggleAria": "Ativar/desativar barra de navegação de perguntas"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Nomear worktrees com um modelo",
+        "description": "Dá ao worktree de uma nova tarefa um nome curto em inglês com base na primeira mensagem (p. ex., fix-login-timeout), para que a pasta e a branch mostrem para que servem. Gerado pelos modelos auxiliares; se falhar, é usado um nome aleatório. Afeta apenas os worktrees criados a partir de agora."
+      },
+      "toggleAria": "Ativar ou desativar a nomeação de worktrees com um modelo"
+    },
     "promptRecommendation": {
       "label": "Sugestões de escrita",
       "description": "Após uma resposta, o campo de escrita mostra uma sugestão para a próxima mensagem. Prima Tab para a inserir.",

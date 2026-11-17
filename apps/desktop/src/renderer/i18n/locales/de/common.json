@@ -5530,6 +5530,13 @@
       },
       "toggleAria": "Fragen-Navigationsleiste umschalten"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Worktrees per Modell benennen",
+        "description": "Gibt dem Worktree einer neuen Aufgabe einen kurzen englischen Namen auf Basis der ersten Nachricht (z. B. fix-login-timeout), damit Ordner und Branch zeigen, wofür sie da sind. Erzeugt von den Hilfsmodellen; schlägt das fehl, wird ein zufälliger Name verwendet. Gilt nur für ab jetzt erstellte Worktrees."
+      },
+      "toggleAria": "Benennung von Worktrees per Modell umschalten"
+    },
     "promptRecommendation": {
       "label": "Eingabevorschläge",
       "description": "Nach einer Antwort zeigt das Eingabefeld einen Vorschlag für deine nächste Nachricht. Drücke die Tab-Taste, um ihn einzufügen.",

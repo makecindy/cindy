@@ -5688,6 +5688,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('worktree:reveal', req),
   worktreeSuggestName: (req: { baseRepo: string }): Promise<unknown> =>
     ipcRenderer.invoke('worktree:suggest-name', req),
+  worktreeGenerateName: (req: { taskText: string }): Promise<unknown> =>
+    ipcRenderer.invoke('worktree:generate-name', req),
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncStatus> => ipcRenderer.invoke('worktree:branch-sync-status', req),
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncReply> => ipcRenderer.invoke('worktree:sync-branch', req),
   worktreeListBranches: (req: { baseRepo: string }): Promise<unknown> =>

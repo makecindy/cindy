@@ -5588,6 +5588,13 @@
       },
       "toggleAria": "Alternar barra de navegación de preguntas"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Nombrar worktrees con un modelo",
+        "description": "Da al worktree de una tarea nueva un nombre corto en inglés basado en su primer mensaje (p. ej., fix-login-timeout), para que la carpeta y la rama muestren para qué sirven. Lo generan los modelos auxiliares; si falla, se usa un nombre aleatorio. Solo afecta a los worktrees que se creen a partir de ahora."
+      },
+      "toggleAria": "Activar o desactivar el nombrado de worktrees con un modelo"
+    },
     "promptRecommendation": {
       "label": "Sugerencias de entrada",
       "description": "Tras una respuesta, el cuadro de entrada muestra una sugerencia para tu próximo mensaje. Pulsa Tab para insertarla.",

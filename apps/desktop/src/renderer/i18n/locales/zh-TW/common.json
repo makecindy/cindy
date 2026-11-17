@@ -5487,6 +5487,13 @@
       },
       "toggleAria": "切換提問導覽列"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "用模型為 worktree 命名",
+        "description": "新任務的 worktree 會依第一則訊息取一個英文短名（如 fix-login-timeout），資料夾和分支一看就知道用途。由輔助模型產生，命名失敗時仍使用隨機名稱；只影響之後新建的 worktree。"
+      },
+      "toggleAria": "切換用模型為 worktree 命名"
+    },
     "promptRecommendation": {
       "label": "輸入建議",
       "description": "回覆後建議下一句，按 Tab 填入",

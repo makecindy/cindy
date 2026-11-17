@@ -196,6 +196,8 @@ import {
   rewriteBuiltInSkillDraftForSend,
 } from '@/lib/slashCommands';
 import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
+import { resolveTaskWorktreeName } from '@/lib/worktreeModelNaming';
+import { getWorktreeModelNamingEnabled } from '@/hooks/useWorktreeModelNamingPreference';
 import { useRefreshWorktreeForSession } from '@/contexts/WorktreeContext';
 import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
 import {
@@ -4662,6 +4664,8 @@ export function NewMakerDraftRoute() {
               }
               setWtCreating(true);
               try {
+                // This computer names it; the remote receives an ordinary explicit name.
+                name = await resolveTaskWorktreeName(message, name);
                 const createRequest: RemoteWorktreeCreateRequest = {
                   sessionId: presetSessionId,
                   baseRepo,
@@ -5094,9 +5098,12 @@ export function NewMakerDraftRoute() {
               planModeEnabled: effectivePlanMode,
               remoteHostId: effectiveRemoteHostId ?? null,
             });
+            // With model naming on, the random name is only a fallback: keep it off the
+            // "Creating worktree" overlay until the real name is known.
+            const namingWithModel = getWorktreeModelNamingEnabled() && message.trim().length > 0;
             worktreeCreationStore.set(newSession.id, {
               status: 'creating',
-              name: branchName,
+              name: namingWithModel ? '' : branchName,
             });
 
             // navigate FIRST, 然后再清 draft store —— 避免用户看到 "draft 输入框清空
@@ -5145,6 +5152,15 @@ export function NewMakerDraftRoute() {
                   preNavBrowserComments,
                   rehomedFiles,
                 );
+                // Named after navigation so the model call never holds the Send click.
+                if (namingWithModel) {
+                  name = await resolveTaskWorktreeName(message, name);
+                  branchName = getBranchName(name);
+                  worktreeCreationStore.set(newSession.id, {
+                    status: 'creating',
+                    name: branchName,
+                  });
+                }
                 const resp = await window.electronAPI.worktreeCreate({
                   sessionId: newSession.id,
                   baseRepo,
@@ -5880,6 +5896,8 @@ export function NewMakerDraftRoute() {
             try {
               let resp: ReturnType<typeof parseRemoteWorktreeCreateResult>;
               try {
+                // This computer names it; the remote receives an ordinary explicit name.
+                name = await resolveTaskWorktreeName(objective, name);
                 const createRequest: RemoteWorktreeCreateRequest = {
                   sessionId: presetSessionId,
                   baseRepo: selectedWorktree.baseRepo,
@@ -6133,13 +6151,14 @@ export function NewMakerDraftRoute() {
             goalWorktreeName = (suggestResp.name ?? '').trim();
           }
           if (!goalWorktreeName) goalWorktreeName = `auto-${Date.now().toString(36).slice(-6)}`;
-          goalWorktreeBranchName = getBranchName(goalWorktreeName);
           // The local API needs a session id, so this is a compensated saga:
           // create an empty base-repo session, then create the worktree and move
           // workingDir. Any setup failure soft-deletes that empty session before
           // retry; Goal never starts against the base repository.
           goalWorkingDir = baseRepo;
           setWtCreating(true);
+          goalWorktreeName = await resolveTaskWorktreeName(objective, goalWorktreeName);
+          goalWorktreeBranchName = getBranchName(goalWorktreeName);
         }
         const newSession = await createSession({
           id: goalSessionId,
