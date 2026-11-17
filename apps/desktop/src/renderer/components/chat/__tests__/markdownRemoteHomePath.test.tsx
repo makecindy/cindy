@@ -1,0 +1,197 @@
+// @vitest-environment jsdom
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
+import { Tooltip } from '@/components/ui/tooltip';
+import { MarkdownRenderer } from '../MarkdownRenderer';
+import { ChatSessionFileProvider } from '../ChatSessionFileContext';
+import { _clearRemotePathVerdictCache } from '@/lib/remoteFileOpen';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { openHtmlFileByPreference } from '../messageLinkActions';
+import type { SessionFileOrigin } from '@/lib/sessionFileOrigin';
+
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'home-path-test' } }) }));
+vi.mock('react-i18next', async (original) => ({
+  ...(await original<typeof import('react-i18next')>()),
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
+vi.mock('../messageLinkActions', async (original) => ({
+  ...(await original<typeof import('../messageLinkActions')>()),
+  openHtmlFileByPreference: vi.fn(),
+}));
+
+// #11145: real MarkdownRenderer entry, unlike the pure stat-cache tests, must
+// turn an inline ~/ reference into an actionable file on its owning device.
+// Minimal failing input: `~/Documents/report.html` in /remote/project.
+// Unit/DOM tier: synthetic IPC only; this fixture also exercises mounted
+// recovery and changing file origins, which static renderer guards cannot.
+const href = '~/Documents/report.html';
+const resolved = '/Users/remote/Documents/report.html'; // Remote POSIX wire path, not host OS.
+const invoke = vi.fn();
+const chatStat = vi.fn();
+const localResolve = vi.fn();
+const events = new Map<string, Set<(value: any) => void>>();
+const eventNames = ['onPresenceChanged', 'onStatusChanged', 'onPeerLinkReopened'];
+const emit = (name: string, value: unknown) => events.get(name)?.forEach(listener => listener(value));
+
+function reply(content = '`' + href + '`', deviceId = 'remote-a', workingDir = '/remote/project', origin?: SessionFileOrigin) {
+  return <MemoryRouter><Tooltip.Provider>
+    <ChatSessionFileProvider value={{ sessionId: 'session', workingDir, origin: origin ?? { kind: 'device', deviceId } }}>
+      <MarkdownRenderer content={content} workingDir={workingDir} currentSessionId="session" />
+    </ChatSessionFileProvider>
+  </Tooltip.Provider></MemoryRouter>;
+}
+
+beforeEach(() => {
+  setDataOwnerGeneration('home-path-test');
+  events.clear();
+  vi.mocked(openHtmlFileByPreference).mockClear();
+  localResolve.mockReset().mockResolvedValue({});
+  invoke.mockReset().mockResolvedValue({ status: 'unique', candidates: [resolved], kind: 'file' });
+  chatStat.mockReset().mockImplementation(async ({ absPath }) => ({ verdict: absPath === resolved ? 'file' : 'nonfile' }));
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    deviceLink: { invoke, ...Object.fromEntries(eventNames.map(name => [name, (listener: (value: any) => void) => {
+      const listeners = events.get(name) ?? new Set();
+      events.set(name, listeners);
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }])) },
+    fileBrowser: { chatStat }, resolvePath: localResolve, resolvePathBatch: localResolve,
+  } });
+});
+afterEach(() => {
+  cleanup();
+  _clearRemotePathVerdictCache();
+  delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  document.documentElement.removeAttribute('data-app-hidden');
+});
+
+describe('remote home references', () => {
+  it('resolves on the file owner before verifying and lighting duplicate references', async () => {
+    const view = render(reply('`' + href + '` and `' + href + '`'));
+    await act(async () => {});
+    expect(view.container.querySelectorAll('code[role="button"]')).toHaveLength(2);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith('remote-a', 'fs:resolve-path', [{ href, workingDir: '/remote/project' }]);
+    expect(chatStat).toHaveBeenCalledTimes(1);
+    expect(chatStat).toHaveBeenCalledWith({ origin: { kind: 'device', deviceId: 'remote-a' }, workdir: '/remote/project', absPath: resolved });
+    await act(async () => fireEvent.click(view.container.querySelector('code[role="button"]')!));
+    expect(openHtmlFileByPreference).toHaveBeenCalledWith('session', resolved, expect.any(Function), expect.objectContaining({ origin: { kind: 'device', deviceId: 'remote-a' } }));
+    expect(localResolve).not.toHaveBeenCalled();
+  });
+
+  it.each(['focus', 'onPresenceChanged', 'onPeerLinkReopened', 'onStatusChanged'])('recovers mounted references on %s without local fallback or duplicate calls', async event => {
+    invoke.mockRejectedValueOnce(new Error('offline'));
+    const view = render(reply('`' + href + '` and `' + href + '`'));
+    await act(async () => {});
+    expect(view.container.querySelector('code[role="button"]')).toBeNull();
+    expect(chatStat).not.toHaveBeenCalled();
+    expect(localResolve).not.toHaveBeenCalled();
+    await act(async () => {
+      emit('onPresenceChanged', { deviceId: 'unrelated', online: true });
+    });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      if (event === 'focus') fireEvent.focus(window);
+      else emit(event, { deviceId: 'remote-a', online: true, status: 'online' });
+    });
+    expect(view.container.querySelectorAll('code[role="button"]')).toHaveLength(2);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    view.unmount();
+    expect([...events.values()].every(listeners => listeners.size === 0)).toBe(true);
+    await act(async () => fireEvent.focus(window));
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('discards a pre-reconnection result and leaves another peer untouched', async () => {
+    let finish!: (value: unknown) => void;
+    invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const a = render(reply());
+    const b = render(reply(undefined, 'remote-b'));
+    await act(async () => {});
+    expect(b.container.querySelector('code[role="button"]')).not.toBeNull();
+    await act(async () => {
+      emit('onPresenceChanged', { deviceId: 'remote-a', online: true });
+      emit('onPeerLinkReopened', { deviceId: 'remote-a' });
+      finish({ status: 'unique', candidates: ['/old-owner/report.html'], kind: 'file' });
+    });
+    expect(a.container.querySelector('code[role="button"]')).not.toBeNull();
+    expect(invoke.mock.calls.filter(([device]) => device === 'remote-a')).toHaveLength(2);
+    expect(invoke.mock.calls.filter(([device]) => device === 'remote-b')).toHaveLength(1);
+    expect(chatStat.mock.calls.some(([args]) => args.absPath === '/old-owner/report.html')).toBe(false);
+  });
+
+  it('does not carry a resolved href across device, workdir or owner changes', async () => {
+    const view = render(reply());
+    await act(async () => {});
+    expect(view.container.querySelector('code[role="button"]')).not.toBeNull();
+    invoke.mockRejectedValue(new Error('offline'));
+    view.rerender(reply(undefined, 'remote-b'));
+    expect(view.container.querySelector('code[role="button"]')).toBeNull();
+    await act(async () => {});
+    view.rerender(reply(undefined, 'remote-a', '/other/project'));
+    expect(view.container.querySelector('code[role="button"]')).toBeNull();
+    await act(async () => {});
+    setDataOwnerGeneration('another-owner');
+    view.rerender(reply());
+    expect(view.container.querySelector('code[role="button"]')).toBeNull();
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledTimes(4);
+  });
+
+  it('retries an authored link and keeps the remote HTML preview destination', async () => {
+    invoke.mockRejectedValueOnce(new Error('offline'));
+    const view = render(reply('[Read report](' + href + ')'));
+    await act(async () => {});
+    await act(async () => fireEvent.click(view.getByText('Read report')));
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(openHtmlFileByPreference).toHaveBeenCalledWith('session', resolved, expect.any(Function), expect.objectContaining({ origin: { kind: 'device', deviceId: 'remote-a' } }));
+    expect(localResolve).not.toHaveBeenCalled();
+  });
+
+  it('keeps hidden references idle and retries only when visible again', async () => {
+    document.documentElement.setAttribute('data-app-hidden', '');
+    const view = render(reply());
+    await act(async () => fireEvent.focus(window));
+    expect(invoke).not.toHaveBeenCalled();
+    document.documentElement.removeAttribute('data-app-hidden');
+    await act(async () => fireEvent.focus(window));
+    expect(view.container.querySelector('code[role="button"]')).not.toBeNull();
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a failed stat bounded after resolving home, without losing its owner', async () => {
+    chatStat.mockRejectedValue(new Error('disconnected after home lookup'));
+    const view = render(reply());
+    await act(async () => {});
+    expect(view.container.querySelector('code[role="button"]')).not.toBeNull();
+    expect(chatStat).toHaveBeenCalledTimes(1);
+    await act(async () => fireEvent.focus(window));
+    expect(chatStat).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(localResolve).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['/reports/report.html', { kind: 'device', deviceId: 'remote-a' }, '/reports/report.html'],
+    ['./report.html', { kind: 'device', deviceId: 'remote-a' }, '/remote/project/./report.html'],
+    ['report.html', { kind: 'ssh', remoteHostId: 'ssh-a' }, '/remote/project/report.html'],
+  ] as const)('preserves exact remote resolution for %s / %j', async (path, origin, expected) => {
+    chatStat.mockResolvedValue({ verdict: 'file' });
+    const view = render(reply('`' + path + '`', 'remote-a', '/remote/project', origin));
+    await act(async () => {});
+    expect(view.container.querySelector('code[role="button"]')).not.toBeNull();
+    expect(chatStat).toHaveBeenCalledWith({ origin, workdir: '/remote/project', absPath: expected });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('keeps local home resolution on the local batch service', async () => {
+    localResolve.mockResolvedValue({ [href]: { status: 'unique', candidates: ['/local/Documents/report.html'], kind: 'file' } });
+    const view = render(reply(undefined, '', '/local/project', { kind: 'local' }));
+    await act(async () => {});
+    expect(view.container.querySelector('code[role="button"]')).not.toBeNull();
+    expect(localResolve).toHaveBeenCalledWith({ hrefs: [href], workingDir: '/local/project' });
+    expect(invoke).not.toHaveBeenCalled();
+    expect(chatStat).not.toHaveBeenCalled();
+  });
+});

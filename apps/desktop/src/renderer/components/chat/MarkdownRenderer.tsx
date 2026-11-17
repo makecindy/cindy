@@ -59,6 +59,7 @@ import {
   STREAMING_MARKDOWN_THROTTLE_BASE_MS,
 } from './streamingMarkdownChunks';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { isHomePath, resolveRemoteHomePath, useRemoteHomePath } from '@/hooks/useRemoteHomePath';
 import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
 import type { Components, UrlTransform } from 'react-markdown';
@@ -1313,15 +1314,18 @@ function useResolvedMarkdownTarget(
   workingDir: string,
   isStreaming: boolean,
 ): MarkdownTarget {
-  // remote 会话:`fs:resolve-path`(存在性 + 本地 BFS)打的是**本机**文件系统,
-  // 对远程 workingDir 结果不可靠(远端文件本机必然不存在 → 永远 none → chip
-  // 永不点亮)。改为:按 workdir 分隔符风格 join 出远端绝对路径,再经
+  // Remote ~ paths resolve on their owning device through its existing
+  // fs:resolve-path handler. Other paths retain exact joining (no remote BFS).
+  // 按 workdir 分隔符风格 join 出远端绝对路径,再经
   // chat-file:stat **远端精确 stat 验证后**才点亮——目录 / 不存在 / SSH workdir
   // 外保持纯文本(与本机"存在且唯一才点亮"的语义对齐);链路断等无法判定时
   // 乐观点亮,点击链路自带 NOT_FOUND / stale 兜底。不做远程 BFS(monorepo 裸
   // 文件名自动搜子包是本机专属能力,远程按 join 结果判定)。
   const { origin: fileOrigin } = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(fileOrigin) ? fileOrigin : null;
+  const remoteHomePath = useRemoteHomePath(
+    fileOrigin, workingDir, !isStreaming && target.kind === 'local-candidate' ? target.href : null,
+  );
 
   // 远程点亮态**只有一个真值来源:模块缓存**;本组件不自己存任何结论,只存「缓存的
   // 哪一版」。原来是 syncResolved(useMemo)?? asyncResolved(useState)两处并存 —— memo
@@ -1333,8 +1337,9 @@ function useResolvedMarkdownTarget(
   // 任何一条边都只有 resolveFromCache 一个地方需要改对(PR #1144 第 10 轮止损重构)。
   const remoteAbsPath = useMemo(() => {
     if (isStreaming || target.kind !== 'local-candidate' || !remoteOrigin) return '';
+    if (isHomePath(target.href)) return remoteHomePath ?? '';
     return resolveLocalPath(target.href, workingDir) || '';
-  }, [isStreaming, target, workingDir, remoteOrigin]);
+  }, [isStreaming, target, workingDir, remoteOrigin, remoteHomePath]);
 
   // 缓存里**本 key** 的状态变了(确定态落库 / unknown 负缓存到期)→ 递增 → 重新派生。
   // 按 key 过滤:一屏几十个引用,全量通知会让首屏 N 次 stat 引发 N×N 次重渲染。
@@ -1368,31 +1373,21 @@ function useResolvedMarkdownTarget(
     return cached ? resolvedLocalFromResult(candidate, cached) : null;
   }, [isStreaming, target, workingDir, remoteOrigin, remoteAbsPath]);
 
-  // 惰性初值:上次已解析过的引用第一帧就画成 chip,不闪纯文本(这是原 syncResolved
-  // memo 的唯一职责,合并进初值即可)。
-  const [resolved, setResolved] = useState<MarkdownTarget | null>(resolveFromCache);
-
   useEffect(() => {
-    // **无条件**按当前缓存重新派生。缓存说什么就是什么,不存在「保留旧结论」的分支 ——
-    // 那正是前三轮漏边的形状。
-    setResolved(resolveFromCache());
     if (isStreaming || target.kind !== 'local-candidate') return;
     const candidate = target;
     let cancelled = false;
     if (remoteOrigin) {
       // 有确定结论就不必重验;unknown 的限流由 verifyRemotePathCached 内部的负缓存承担。
       if (!remoteAbsPath || peekRemotePathVerdict(remoteOrigin, workingDir, remoteAbsPath)) return;
-      void verifyRemotePathCached(remoteOrigin, workingDir, remoteAbsPath).then(() => {
-        // 不看返回值:结论已落缓存,统一重新派生(降级 / 升级都走同一条路)。
-        if (!cancelled) setResolved(resolveFromCache());
-      });
-      return () => {
-        cancelled = true;
-      };
+      // Cache notifications drive rendering; a cached unknown must not trigger
+      // a promise -> state -> effect loop while its retry TTL is active.
+      void verifyRemotePathCached(remoteOrigin, workingDir, remoteAbsPath);
+      return;
     }
     if (peekResolveLocalPathSmart(candidate.href, workingDir)) return;
     void resolveLocalPathSmartCached(candidate.href, workingDir).then(() => {
-      if (!cancelled) setResolved(resolveFromCache());
+      if (!cancelled) setCacheGen((n) => n + 1);
     });
     return () => {
       cancelled = true;
@@ -1400,6 +1395,9 @@ function useResolvedMarkdownTarget(
     // cacheGen:本 key 的缓存状态变化(TTL 到期 / 别处写入确定态)→ 重新派生。
   }, [isStreaming, remoteOrigin, target, workingDir, remoteAbsPath, resolveFromCache, cacheGen]);
 
+  // A reused component can switch device/workdir with the same authored href.
+  // Never expose the previous owner's resolved path while its effect catches up.
+  const resolved = resolveFromCache();
   return isResolvedForTarget(resolved, target) ? resolved : target;
 }
 
@@ -1579,7 +1577,15 @@ function MarkdownTargetLink({
       try {
         let result: SmartResolveResult;
         if (isRemoteFileOrigin(fileCtx.origin)) {
-          const absPath = resolveLocalPath(target.href, workingDir);
+          const absPath = isHomePath(target.href)
+            ? fileCtx.origin.kind === 'device'
+              ? await resolveRemoteHomePath(fileCtx.origin.deviceId, workingDir, target.href)
+              : null
+            : resolveLocalPath(target.href, workingDir);
+          if (!absPath) {
+            toast.error(t('chat.markdownRenderer.fileUnavailable'));
+            return;
+          }
           const { verdict } = await window.electronAPI.fileBrowser.chatStat({
             origin: fileCtx.origin,
             workdir: workingDir,
