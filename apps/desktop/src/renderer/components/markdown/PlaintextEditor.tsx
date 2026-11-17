@@ -102,6 +102,7 @@ import {
 } from './docSearchRanges';
 import { computeFenceLineRoles, type FenceLineRole } from './markdownFenceLines';
 import { getPlaintextEditorChrome } from './plaintextEditorChrome';
+import { showMinimap } from '@replit/codemirror-minimap';
 import { useIsDarkMode } from './useIsDarkMode';
 
 export interface PlaintextEditorSearchHandle {
@@ -235,6 +236,119 @@ const activeDeco = Decoration.mark({ class: 'cm-doc-search-match cm-doc-search-a
 
 // 导出供测试直接复用:测试要验证"正文 mark 高亮与表格 widget 高亮同时存在",
 // 若测试自己重写一份 decoration 就会与生产实现漂移。
+// ── 代码缩略图（minimap）─────────────────────────────────────────────────
+// 右侧缩略图 + 文档里的 `// MARK: 标题` 标注。缩略图由 @replit/codemirror-minimap
+// 渲染；我们只负责建 DOM 容器、把 MARK 标注贴到对应高度上。
+const MINIMAP_MARK_RE = /^\s*\/\/\s*MARK\s*[:：]\s*-?\s*(.+?)\s*$/i;
+const MINIMAP_SCALE = 4;
+
+type MinimapMark = { line: number; label: string };
+
+/** `// MARK: 色彩定义` / `//MARK：- 网络层` → 标题；不是 MARK 行返回 null。 */
+export function parseMinimapMarkLabel(lineText: string): string | null {
+  return MINIMAP_MARK_RE.exec(lineText)?.[1].trim().slice(0, 80) || null;
+}
+
+function createCodeMinimap() {
+  return showMinimap.compute([], () => ({
+    create: () => {
+      const dom = document.createElement('div');
+      const labels = document.createElement('div');
+      labels.className = 'cm-minimap-mark-labels';
+      dom.appendChild(labels);
+      return { dom };
+    },
+    showOverlay: 'mouse-over',
+  }));
+}
+
+function collectMinimapMarks(view: EditorView): MinimapMark[] {
+  const marks: MinimapMark[] = [];
+  for (let lineNumber = 1; lineNumber <= view.state.doc.lines; lineNumber += 1) {
+    const label = parseMinimapMarkLabel(view.state.doc.line(lineNumber).text);
+    if (label) marks.push({ line: lineNumber, label });
+  }
+  return marks;
+}
+
+/** 把文档行号换算成缩略图画布内的像素位置；超出当前可见缩略图范围返回 null。 */
+function getMinimapMarkTop(view: EditorView, lineNumber: number): number | null {
+  const canvas = view.dom.querySelector<HTMLCanvasElement>('.cm-minimap-inner canvas');
+  const canvasHeight =
+    Number.parseFloat(canvas?.style.height ?? '') || canvas?.getBoundingClientRect().height;
+  if (!canvasHeight) return null;
+  const contentStyle = getComputedStyle(view.contentDOM);
+  const lineHeight =
+    (Number.parseFloat(contentStyle.lineHeight) ||
+      Number.parseFloat(contentStyle.fontSize) * 1.5) /
+    MINIMAP_SCALE;
+  if (!Number.isFinite(lineHeight) || lineHeight <= 0) return null;
+  const { clientHeight, scrollHeight, scrollTop } = view.scrollDOM;
+  const scrollPercent =
+    scrollHeight > clientHeight ? scrollTop / (scrollHeight - clientHeight) : 0;
+  const paddingTop = view.documentPadding.top / MINIMAP_SCALE;
+  const paddingBottom = view.documentPadding.bottom / MINIMAP_SCALE;
+  const totalHeight = paddingTop + paddingBottom + view.state.doc.lines * lineHeight;
+  const canvasTop = Math.max(0, scrollPercent * (totalHeight - canvasHeight));
+  const offsetTop = Math.max(0, paddingTop - canvasTop);
+  const startIndex = Math.round(Math.max(0, canvasTop - paddingTop) / lineHeight);
+  const endIndex = startIndex + Math.round((canvasHeight - offsetTop) / lineHeight);
+  if (lineNumber <= startIndex || lineNumber > endIndex) return null;
+  return Math.max(6, Math.min(canvasHeight - 6, offsetTop + (lineNumber - 1) * lineHeight));
+}
+
+/** MARK 标注层：随滚动/缩放重算位置，只在帧内渲染一次。 */
+class MinimapMarkLabels {
+  private readonly resizeObserver: ResizeObserver | null;
+  private marks: MinimapMark[];
+  private frame: number | null = null;
+
+  constructor(private readonly view: EditorView) {
+    this.marks = collectMinimapMarks(view);
+    view.scrollDOM.addEventListener('scroll', this.schedule, { passive: true });
+    this.resizeObserver =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => this.schedule());
+    this.resizeObserver?.observe(view.dom);
+    this.schedule();
+  }
+
+  update(update: ViewUpdate) {
+    if (update.docChanged) this.marks = collectMinimapMarks(update.view);
+    if (update.docChanged || update.geometryChanged) this.schedule();
+  }
+
+  destroy() {
+    this.view.scrollDOM.removeEventListener('scroll', this.schedule);
+    this.resizeObserver?.disconnect();
+    if (this.frame !== null) window.cancelAnimationFrame(this.frame);
+  }
+
+  private readonly schedule = () => {
+    if (this.frame !== null) return;
+    this.frame = window.requestAnimationFrame(() => {
+      this.frame = null;
+      this.render();
+    });
+  };
+
+  private render() {
+    const layer = this.view.dom.querySelector<HTMLElement>('.cm-minimap-mark-labels');
+    if (!layer) return;
+    layer.replaceChildren();
+    for (const mark of this.marks) {
+      const top = getMinimapMarkTop(this.view, mark.line);
+      if (top === null) continue;
+      const label = document.createElement('div');
+      label.className = 'cm-minimap-mark-label';
+      label.textContent = mark.label;
+      label.style.top = `${top}px`;
+      layer.appendChild(label);
+    }
+  }
+}
+
+const minimapMarkLabels = ViewPlugin.fromClass(MinimapMarkLabels);
+
 export const searchHighlightField = StateField.define<DecorationSet>({
   create: () => Decoration.none,
   update(value, tr) {
@@ -1311,6 +1425,7 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
       //   - skipHighlight 或没有 parser → 不挂 langExtension + syntaxHighlighting,
       //     这样 Lezer 不会被触发, init 时间从 2-5s 跌回 50-100ms。
       //   - code chrome → 始终挂 lineNumbers gutter,即使 parser 缺失。
+      const codeMinimap = createCodeMinimap();
       const extensions = [
         history(),
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
@@ -1318,6 +1433,8 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
         ),
         lineNumbersCompartment.of(
           (showLineNumbers ?? initialConfig.useCodeChrome) ? lineNumbers() : []),
+        // 缩略图只跟代码/文本模式的 chrome 一起挂；markdown live preview 不挂。
+        ...(initialConfig.useCodeChrome ? [codeMinimap, minimapMarkLabels] : []),
         ...highlightExtensions,
         // .diff/.patch rows keep their red/green fill even when highlighting is skipped.
         ...(isDiffLanguage(initialConfig.language) ? [diffLineHighlight] : []),
