@@ -209,7 +209,6 @@ import {
   planModeComposerDraftText,
   shouldPreservePlanModeComposerDraft,
 } from './planModeComposerCommand';
-import { resolveSoleSteerableQueuedMessage } from './pendingQueueRowPresentation';
 import { SendButton } from './SendButton';
 import { FolderPickerPopover, addRecentFolder, type FolderPickerOption } from './FolderPickerPopover';
 import { SlashCommandPalette } from './SlashCommandPalette';
@@ -293,6 +292,7 @@ import {
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
   pluginSkillSetupName,
   rewriteBuiltInSkillDraftForSend,
+  startsWithDesktopSlashCommand,
   leadingSlashInvocation,
   rebaseInlineRangesAfterSlashCommandRewrite,
   type PluginSkillSetupPaletteEntry,
@@ -336,6 +336,12 @@ import {
   resolveComposerEnterIntent,
   useComposerSendShortcutPreference,
 } from '@/hooks/useComposerSendShortcutPreference';
+import {
+  getComposerFollowUpBehavior,
+  useComposerFollowUpHintDismissed,
+  useComposerFollowUpPreference,
+} from '@/hooks/useComposerFollowUpPreference';
+import { ComposerFollowUpHint } from './ComposerFollowUpHint';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 import { usePromptRecommendationPrediction } from '@/hooks/usePromptRecommendationPrediction';
 import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
@@ -1478,6 +1484,10 @@ export function ChatInput({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
+  const { preference: followUpBehavior, setPreference: setFollowUpBehavior } =
+    useComposerFollowUpPreference();
+  const { dismissed: followUpHintDismissed, dismiss: dismissFollowUpHint } =
+    useComposerFollowUpHintDismissed();
   // ── 推荐提示词 ────────────────────────────────────────────────────
   // 设置开关:通过 shared hook 订阅,与 TipsSection 同源,切换后立即生效。
   const { enabled: recommendationEnabled } = usePromptRecommendationPreference();
@@ -1615,6 +1625,11 @@ export function ChatInput({
   }, [onStop]);
   const showStopButtonRef = useRef(showStopButton);
   showStopButtonRef.current = showStopButton;
+  // Only surfaces that can steer a running turn (the task view) honor a steer default.
+  const runningDeliveryMode: MessageDeliveryMode = onQueueSteer ? followUpBehavior : 'queue';
+  // What a click or the configured submit command sends: the follow-up default
+  // while a turn runs, an ordinary send otherwise.
+  const defaultDeliveryMode: MessageDeliveryMode = showStopButton ? runningDeliveryMode : 'queue';
 
   // turnGen 继续作为 renderer 侧请求代次；跨 session / 新 turn 的真实归属由
   // promptRecommendationStore 的 sessionId + completion revision + requestSeq 保证。
@@ -1649,7 +1664,6 @@ export function ChatInput({
   const hasPredictionMessages = (messages?.length ?? 0) > 0;
   const queueEditingClientIdRef = useRef(queueEditingClientId);
   queueEditingClientIdRef.current = queueEditingClientId;
-  const steerSoleQueuedMessageRef = useRef<() => boolean>(() => false);
   const onQueueEditCancelRef = useRef(onQueueEditCancel);
   onQueueEditCancelRef.current = onQueueEditCancel;
   const queueEditCancelAllowedRef = useRef(true);
@@ -3018,6 +3032,7 @@ export function ChatInput({
         const enterIntent = resolveComposerEnterIntent(event, getComposerSendShortcutPreference(), {
           turnRunning: showStopButtonRef.current,
           platform: window.electronAPI?.platform,
+          followUpBehavior: getComposerFollowUpBehavior(),
         });
         if (enterIntent === 'native') return false;
         if (enterIntent === 'ignore') {
@@ -3745,6 +3760,7 @@ export function ChatInput({
       const enterIntent = resolveComposerEnterIntent(event, getComposerSendShortcutPreference(), {
         turnRunning: showStopButtonRef.current,
         platform,
+        followUpBehavior: getComposerFollowUpBehavior(),
       });
       const isModifiedEnter = hasComposerModifier(event, platform);
       if (
@@ -3756,7 +3772,6 @@ export function ChatInput({
         event.preventDefault();
         event.stopPropagation();
         if (panelBridgeRef.current?.captureKey(event)) return;
-        if (steerSoleQueuedMessageRef.current()) return;
         clearPressTimer();
         voiceShortcutPressRef.current = null;
         void voiceInputStopAndSendRef.current(enterIntent);
@@ -6546,7 +6561,15 @@ export function ChatInput({
             filesToSend,
             mentionsToSend,
             {
-              deliveryMode,
+              // Steer skips Desktop command dispatch, so a steer *default* never
+              // swallows a known Desktop command; paths and Skills retain their
+              // selected delivery.
+              deliveryMode:
+                deliveryMode === 'steer' &&
+                getComposerFollowUpBehavior() === 'steer' &&
+                startsWithDesktopSlashCommand(routedText, slashCommandsReady ? mergedCommands : null)
+                  ? 'queue'
+                  : deliveryMode,
               providerId: sendProviderId,
               ...(canAttemptBaselineRecovery ? { baselineRecovery: true } : {}),
               ...(builtInSkillIntent
@@ -6642,25 +6665,6 @@ export function ChatInput({
     },
     [onQueueSteer],
   );
-  steerSoleQueuedMessageRef.current = () => {
-    // 可见推荐也是待发内容，和正文、附件、评论、语音稿一样保留原发送路径。
-    if (
-      !onQueueSteer ||
-      voiceBusyOnCurrentComposer ||
-      showRecommendationRef.current ||
-      !composerFullyEmptyRef.current()
-    ) {
-      return false;
-    }
-    const clientId = resolveSoleSteerableQueuedMessage(pendingQueue ?? [], {
-      editingClientId: queueEditingClientId,
-      steeringClientIds: steeringQueueClientIds,
-    });
-    if (!clientId) return false;
-    void handleQueueSteer(clientId);
-    return true;
-  };
-
   const queueEditActive = Boolean(queueEditingClientId && onQueueEditSubmit);
   const submitQueueEdit = useCallback(async () => {
     if (
@@ -6781,10 +6785,17 @@ export function ChatInput({
       voiceInput.isListening,
     ],
   );
+  // Entry points that send "like the Send button" (long-press release, submit
+  // commands, programmatic submit requests) follow the running-turn default;
+  // keyboard intents pass their own mode through voiceInputStopAndSendRef.
+  const handleDefaultSend = useCallback(
+    () => handleClickSend(defaultDeliveryMode),
+    [handleClickSend, defaultDeliveryMode],
+  );
   useEffect(() => {
     voiceInputStopAndSendRef.current = handleClickSend;
-    composerSubmitRequestSendRef.current = handleClickSend;
-  }, [handleClickSend]);
+    composerSubmitRequestSendRef.current = handleDefaultSend;
+  }, [handleClickSend, handleDefaultSend]);
 
   // 别处的一键动作 (截图「翻译」等) 已把草稿写好并请求发送: 等编辑器与附件同步到位,
   // 按普通发送键同一路径发一次; 发送中 / 语音占用时与键盘输入同锁, 稍后再试直到过期。
@@ -8694,7 +8705,7 @@ export function ChatInput({
       if (action.type !== 'command') return false;
       switch (action.commandId) {
         case 'composer.submit':
-          void handleClickSend();
+          void handleDefaultSend();
           return true;
         case 'composer.toggleFastMode':
           void handleFastModeChange(!composerSelection.display.fastMode);
@@ -8733,7 +8744,7 @@ export function ChatInput({
     ownsHardwareComposerActions,
     effectiveSourceId,
     composerSelection.display.fastMode,
-    handleClickSend,
+    handleDefaultSend,
     handleEffortChange,
     handleFastModeChange,
     handleVoiceInputPlainStop,
@@ -9442,6 +9453,12 @@ export function ChatInput({
   }, [showPromptPreview]);
   // 可见推荐本身就是一次可发送输入：按钮点击时会先把它同步写入正文，再走现有发送链。
   const canSend = hasComposerPayload || showRecommendationOverlay;
+  const showFollowUpHint =
+    showStopButton &&
+    Boolean(onQueueSteer) &&
+    hasComposerPayload &&
+    !queueEditActive &&
+    !followUpHintDismissed;
   const makeNeedsNoModel = CINDY_MAKE_ENABLED && (noConnectedSource || selectedSourceDisconnected) && !!editor &&
     !hasPreparedOrPendingAttachments && classifyCindyMakeCommand(
       serializeEditorContent(editor).text, slashCommandsReady ? mergedCommands : null,
@@ -9571,7 +9588,7 @@ export function ChatInput({
           divs would overlap, and the later one in the DOM would hide the other.
           Stacked here (voice error on top, rejections below) so both stay
           visible when present simultaneously. */}
-      {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
+      {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0 || showFollowUpHint) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
           {voiceInput.lastError ? (
             <VoiceInputStatusNotice message={voiceInput.lastError} />
@@ -9580,6 +9597,13 @@ export function ChatInput({
           ) : null}
           {rejections.length > 0 && (
             <AttachmentRejectionStrip rejections={rejections} onDismiss={dismissRejection} />
+          )}
+          {showFollowUpHint && (
+            <ComposerFollowUpHint
+              behavior={runningDeliveryMode}
+              onSwitch={() => setFollowUpBehavior(runningDeliveryMode === 'steer' ? 'queue' : 'steer')}
+              onDismiss={dismissFollowUpHint}
+            />
           )}
         </div>
       )}
@@ -10434,7 +10458,7 @@ export function ChatInput({
                       onHoldChange={setVoiceButtonHolding}
                       emptyComposer={voiceHintEmpty}
                       onStop={handleVoiceInputPlainStop}
-                      onStopAndSend={handleClickSend}
+                      onStopAndSend={handleDefaultSend}
                       sendTargetRef={sendButtonRef}
                       canReleaseToSend={canReleaseVoiceToSend}
                       releaseToSendActive={voiceReleaseToSendActive}
@@ -10480,13 +10504,7 @@ export function ChatInput({
                             : voiceInput.isListening && !sendButtonDisabled
                               ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · ${composerSendShortcutLabel}`
                               : showStopButton
-                                ? composerSendShortcutPreference === 'modifier-enter'
-                                  ? t('newChat.sendButton.queueTooltipSendMode', {
-                                      shortcut: composerSendShortcutLabel,
-                                    })
-                                  : t('newChat.sendButton.queueTooltip', {
-                                      shortcut: steerShortcutLabel,
-                                    })
+                                ? `${t(`newChat.sendButton.${runningDeliveryMode}`)} · ${composerSendShortcutLabel}`
                                 : !sendButtonDisabled
                                   ? `${t('newChat.sendButton.send')} · ${composerSendShortcutLabel}`
                                   : selectedSourceDisconnected
@@ -10521,12 +10539,12 @@ export function ChatInput({
                                 : queueEditActive
                                 ? t('newChat.pendingQueue.editSaveAria')
                                 : showStopButton
-                                  ? t('newChat.sendButton.queue')
+                                  ? t(`newChat.sendButton.${runningDeliveryMode}`)
                                   : t('newChat.sendButton.send')
                             }
                             onClick={() => {
                               if (mainSlotIsVoice) onStartVoiceConversation?.();
-                              else void handleClickSend();
+                              else void handleDefaultSend();
                             }}
                           />
                         </span>

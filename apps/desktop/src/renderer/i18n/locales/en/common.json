@@ -5461,8 +5461,19 @@
       "title": "Message input",
       "sendShortcut": {
         "label": "Use {{shortcut}} to send",
-        "hint": "When enabled, {{shortcut}} sends messages. When disabled, Enter sends messages and Shift+Enter inserts a new line.",
-        "ariaLabel": "Use {{shortcut}} to send messages"
+        "hint": "Enter sends. Shift+Enter inserts a new line.",
+        "ariaLabel": "Use {{shortcut}} to send messages",
+        "hintModifierEnter": "{{shortcut}} sends. Enter inserts a new line."
+      },
+      "followUp": {
+        "label": "While a task is running",
+        "hintQueue": "While a task runs, the Send button and {{send}} queue the message.",
+        "hintSteer": "While a task runs, the Send button and {{send}} steer the running task.",
+        "ariaLabel": "Message delivery while a task is running",
+        "options": {
+          "queue": "Queue",
+          "steer": "Steer"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -13651,9 +13662,8 @@
     "sendButton": {
       "send": "Send message",
       "queue": "Queue message",
-      "queueTooltip": "Click to queue; press {{shortcut}} to steer without interrupting the task",
-      "queueTooltipSendMode": "Click to queue; press {{shortcut}} to send this message",
-      "stop": "Stop generating"
+      "stop": "Stop generating",
+      "steer": "Steer running task"
     },
     "pluginSetup": {
       "account": {
@@ -14310,7 +14320,8 @@
         "descriptionNativeHistory": "The full conversation record is copied over and continues from where it left off. If it can’t be restored, it continues from a handoff summary instead, and thinking and similar details may not carry over completely. Takes effect when you send the next message.",
         "confirm": "Switch computer",
         "cancel": "Keep as is"
-      }
+      },
+      "steerFellBackToQueue": "No running turn to steer, so this message was queued."
     },
     "agentSelect": {
       "label": "Engine",
@@ -14547,6 +14558,13 @@
       "runningWithWorktree_one": "Wait for it to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
       "runningWithWorktree_other": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
       "runningWithWorktree_many": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other."
+    },
+    "followUpHint": {
+      "queueDefault": "Messages sent while a task is running are queued.",
+      "steerDefault": "Messages sent while a task is running steer the current task.",
+      "switchToSteer": "Steer by default",
+      "switchToQueue": "Queue by default",
+      "dismiss": "Dismiss tip"
     }
   },
   "onboarding": {

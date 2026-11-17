@@ -86,6 +86,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 import { makerChatStore, type QueuedMessage } from '@/lib/makerChatStore';
 import { AnnotationBurnInError } from '@/lib/annotationBurnIn';
 import { toast } from '@/lib/toast';
+import i18n from '@/i18n';
 
 const MODEL = 'claude-opus-4-7';
 const EFFORT = 'medium';
@@ -1174,6 +1175,60 @@ describe('renderer input queue facade', () => {
     expect(input.clearError).toHaveBeenCalledWith(sid);
     expect(legacySend).not.toHaveBeenCalled();
     expect(legacySteer).not.toHaveBeenCalled();
+  });
+
+  describe('composer steer that main could not inject', () => {
+    const steeredItem = () =>
+      (input.steer.mock.calls.at(-1) as unknown as [string, AgentInputQueuedMessage, unknown])[1];
+
+    it('stays silent when the steer landed (no queue row, or only the in-flight steer marker)', async () => {
+      const warning = vi.spyOn(toast, 'warning').mockImplementation(() => '' as never);
+      const sid = `steer-landed-${Math.random().toString(36).slice(2, 8)}`;
+      input.getProjection.mockImplementationOnce(async (sessionId: string) => projection(sessionId));
+      expect(await makerChatStore.steerMessage(sid, 'landed', MODEL, EFFORT, PERM, WD)).toBe(true);
+      await flushPromises();
+      expect(warning).not.toHaveBeenCalled();
+
+      input.getProjection.mockImplementationOnce(async (sessionId: string) =>
+        projection(sessionId, { pendingQueue: [steeredItem()], steeringQueueClientIds: [steeredItem().clientId] }),
+      );
+      expect(await makerChatStore.steerMessage(sid, 'landing', MODEL, EFFORT, PERM, WD)).toBe(true);
+      await flushPromises();
+      expect(warning).not.toHaveBeenCalled();
+      warning.mockRestore();
+    });
+
+    it('says once that the message was queued when main fell back to a normal dispatch', async () => {
+      const warning = vi.spyOn(toast, 'warning').mockImplementation(() => '' as never);
+      const sid = `steer-fallback-${Math.random().toString(36).slice(2, 8)}`;
+      input.getProjection.mockImplementationOnce(async (sessionId: string) =>
+        projection(sessionId, { pendingQueue: [steeredItem()] }),
+      );
+
+      const ok = await makerChatStore.steerMessage(sid, 'no active turn', MODEL, EFFORT, PERM, WD);
+      await flushPromises();
+
+      expect(ok).toBe(true);
+      expect(warning).toHaveBeenCalledTimes(1);
+      expect(warning).toHaveBeenCalledWith(i18n.t('newChat.chatInput.steerFellBackToQueue'));
+      expect(input.steer).toHaveBeenCalledTimes(1);
+      warning.mockRestore();
+    });
+
+    it('keeps the steer accepted, silent and not resent when the projection refresh fails', async () => {
+      const warning = vi.spyOn(toast, 'warning').mockImplementation(() => '' as never);
+      const sid = `steer-projection-fail-${Math.random().toString(36).slice(2, 8)}`;
+      input.getProjection.mockRejectedValueOnce(new Error('projection unavailable'));
+
+      const ok = await makerChatStore.steerMessage(sid, 'accepted anyway', MODEL, EFFORT, PERM, WD);
+      await flushPromises();
+
+      expect(ok).toBe(true);
+      expect(warning).not.toHaveBeenCalled();
+      expect(input.steer).toHaveBeenCalledTimes(1);
+      expect(input.enqueue).not.toHaveBeenCalled();
+      warning.mockRestore();
+    });
   });
 
   it('settles a materialized composer steer as handled so the composer draft clears', async () => {

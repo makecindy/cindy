@@ -5352,8 +5352,19 @@
       "title": "消息输入",
       "sendShortcut": {
         "label": "使用 {{shortcut}} 发送",
-        "hint": "开启后按 {{shortcut}} 发送消息；关闭后按 Enter 发送消息，按 Shift+Enter 换行。",
-        "ariaLabel": "使用 {{shortcut}} 发送消息"
+        "hint": "按 Enter 发送，Shift+Enter 换行。",
+        "ariaLabel": "使用 {{shortcut}} 发送消息",
+        "hintModifierEnter": "按 {{shortcut}} 发送，Enter 换行。"
+      },
+      "followUp": {
+        "label": "运行中发送方式",
+        "hintQueue": "任务运行时，发送按钮和 {{send}} 会排队发送。",
+        "hintSteer": "任务运行时，发送按钮和 {{send}} 会插话到当前任务。",
+        "ariaLabel": "任务运行中的发送方式",
+        "options": {
+          "queue": "排队",
+          "steer": "插话"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -13597,9 +13608,8 @@
     "sendButton": {
       "send": "发送消息",
       "queue": "排队发送",
-      "queueTooltip": "点击排队发送；按 {{shortcut}} 插话，不打断当前任务",
-      "queueTooltipSendMode": "点击可排队；按 {{shortcut}} 发送此消息",
-      "stop": "停止生成"
+      "stop": "停止生成",
+      "steer": "插话到当前任务"
     },
     "pluginSetup": {
       "account": {
@@ -14256,7 +14266,8 @@
         "descriptionNativeHistory": "完整对话记录会复制过去接着用；如果恢复不了，会改用交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
         "confirm": "换电脑运行",
         "cancel": "保持不变"
-      }
+      },
+      "steerFellBackToQueue": "当前没有可插话的运行轮次，这条消息已排队"
     },
     "agentSelect": {
       "label": "引擎",
@@ -14487,6 +14498,13 @@
       "runningWithWorktree_one": "它跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_other": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_many": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。"
+    },
+    "followUpHint": {
+      "queueDefault": "任务运行中发送的消息默认排队。",
+      "steerDefault": "任务运行中发送的消息默认插话到当前任务。",
+      "switchToSteer": "默认改为插话",
+      "switchToQueue": "默认改为排队",
+      "dismiss": "关闭提示"
     }
   },
   "onboarding": {

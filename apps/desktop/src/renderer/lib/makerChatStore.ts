@@ -16622,7 +16622,22 @@ async function steerMessageCore(
       if (ok) {
         _disposedLiveErrorIntents.delete(sessionId);
         commitAutoTitle();
-        requestInputProjection(sessionId);
+        // Main answers a steer with no live turn by dispatching the text as a normal
+        // turn: it is back in pendingQueue, not injected. A composer steer that landed
+        // never sits in pendingQueue (direct steers are only a marker), so use the
+        // projection we already refresh to say it did not steer. Accepted stays true
+        // and a failed refresh stays silent.
+        void requestInputProjection(sessionId)
+          .then((result) => {
+            if (
+              result?.current &&
+              result.projection.pendingQueue.some((item) => item.clientId === queued.clientId) &&
+              !result.projection.steeringQueueClientIds?.includes(queued.clientId)
+            ) {
+              toast.warning(i18n.t('newChat.chatInput.steerFellBackToQueue'));
+            }
+          })
+          .catch(() => {});
         recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
         return true;
       }

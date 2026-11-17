@@ -8,6 +8,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { useLocale } from '@/hooks/useLocale';
 import { useNotificationSettings } from '@/hooks/useNotificationSettings';
 import { useComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
+import { useComposerFollowUpPreference } from '@/hooks/useComposerFollowUpPreference';
 import { useLinkOpenPreference } from '@/hooks/useLinkOpenPreference';
 import { useStreamFadePreference } from '@/hooks/useStreamFadePreference';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
@@ -21,6 +22,7 @@ import { refreshLocalThemes } from '@/themes/local-themes';
 const persisted: Record<keyof AppPreferencePatch, { key: string; absent?: unknown }> = {
   theme: { key: 'theme' }, themeFamily: { key: 'theme.familyId' }, language: { key: 'language' },
   notifications: { key: 'notifications.enabled' }, sendShortcut: { key: 'chat.sendShortcutPreference', absent: 'enter' },
+  followUpBehavior: { key: 'chat.followUpBehavior', absent: 'queue' },
   webLinks: { key: 'chat.webLinkOpenPreference', absent: 'external' },
   localLinks: { key: 'chat.localLinkOpenPreference', absent: 'sidebar' },
   streamFade: { key: 'chat.streamFadePreference', absent: 'on' },
@@ -33,12 +35,12 @@ const persisted: Record<keyof AppPreferencePatch, { key: string; absent?: unknow
 /** Mounted once in the main App. Reuses the same setters and subscribers as Settings. */
 export function AppPreferenceControl() {
   const theme = useTheme(); const locale = useLocale(); const notifications = useNotificationSettings();
-  const shortcut = useComposerSendShortcutPreference(); const web = useLinkOpenPreference('web');
+  const shortcut = useComposerSendShortcutPreference(); const followUp = useComposerFollowUpPreference(); const web = useLinkOpenPreference('web');
   const local = useLinkOpenPreference('local'); const fade = useStreamFadePreference();
   const navigation = useMessageNavRailPreference(); const files = useFileBrowserPreference();
   const home = useHomeUsageDashboardPreference(); const recommendations = usePromptRecommendationPreference();
   const state: Required<AppPreferencePatch> = { theme: theme.theme, themeFamily: theme.familyId,
-    language: locale.locale, notifications: notifications.enabled, sendShortcut: shortcut.preference,
+    language: locale.locale, notifications: notifications.enabled, sendShortcut: shortcut.preference, followUpBehavior: followUp.preference,
     webLinks: web.preference, localLinks: local.preference, streamFade: fade.preference,
     messageNavigation: navigation.enabled, showIgnoredDirectories: files.showIgnoredDirs,
     homeUsageDashboard: home.enabled, promptRecommendations: recommendations.enabled };
@@ -48,6 +50,7 @@ export function AppPreferenceControl() {
     // The shortcut setter can reject a voice-input conflict, before other fields change.
     if (patch.sendShortcut !== undefined && !shortcut.setPreference(patch.sendShortcut).ok) throw new Error('SHORTCUT_CONFLICT');
     const applyOtherFields = () => {
+      if (patch.followUpBehavior !== undefined) followUp.setPreference(patch.followUpBehavior);
       if (patch.language !== undefined) locale.setLocale(patch.language);
       if (patch.notifications !== undefined) notifications.setEnabled(patch.notifications);
       if (patch.webLinks !== undefined) web.setPreference(patch.webLinks);

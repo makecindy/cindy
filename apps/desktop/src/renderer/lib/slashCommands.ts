@@ -97,6 +97,20 @@ export function rewriteAgentSkillInvocationForDispatch(
   return `${message.slice(0, leading.start)}/${command.runtimeCommandName}${message.slice(leading.end)}`;
 }
 
+/**
+ * Whether the message opens with a Desktop command from the loaded roster. Only
+ * Desktop commands need Desktop dispatch, which a steer skips; paths, Skills and
+ * agent commands such as `/Users/me/project` or `/compact` keep their delivery.
+ */
+export function startsWithDesktopSlashCommand(
+  message: string,
+  commands: readonly UnifiedCommand[] | null,
+): boolean {
+  const name = /^\/(\S+)/.exec(message)?.[1]?.toLowerCase();
+  if (!name || !commands) return false;
+  return commands.some((command) => command.kind === 'desktop' && command.name.toLowerCase() === name);
+}
+
 /** Rewrite `/git` → `/skill:git` even when the skill is still `discovered`. */
 export function rewritePiSkillAliasFromCommand(
   message: string,
