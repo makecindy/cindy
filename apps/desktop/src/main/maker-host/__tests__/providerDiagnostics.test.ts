@@ -257,6 +257,20 @@ describe('buildProbeRequest', () => {
     expect(JSON.parse(String(init.body)).model).toBe('glm-5.3');
   });
 
+  it.each(['pi', 'codex'] as const)(
+    '%s probe 保留字面 [1m] ID：仅 cc 有剥后缀约定,Pi/Codex 按字面 ID 路由',
+    (agent) => {
+      const { init } = buildProbeRequest({
+        agent,
+        wireProtocol: 'anthropic-messages',
+        baseUrl: 'https://provider.example/v1',
+        modelId: 'foo[1m]',
+        apiKey: 'sk-test',
+      });
+      expect(JSON.parse(String(init.body)).model).toBe('foo[1m]');
+    },
+  );
+
   it('codex wire：/responses + Bearer', () => {
     const { url, init } = buildProbeRequest({
       agent: 'codex',
