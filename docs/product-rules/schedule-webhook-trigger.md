@@ -1,6 +1,14 @@
 # 自动化任务的 Webhook 触发
 
-> **读取时机**：修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前。
+> **读取时机**：新增或修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前。
+> **适用路径**：`apps/desktop/src/main/scheduler-host/webhook/**`、`packages/maker-scheduler/src/**/webhook-*`、
+> `packages/lizi-mcps/src/scheduler/*webhook*`、
+> `apps/desktop/src/renderer/features/scheduler/components/**/Webhook*`、
+> `apps/desktop/src/renderer/features/scheduler/lib/webhookEventOptions.ts`、
+> `apps/desktop/src/shared/webhookAccount.ts`、
+> `apps/desktop/scripts/fixtures/{webhook-detail,webhook-account}/**`、
+> `packages/lizi-mcps/src/scheduler/{create,update}.ts`
+> **要点**：事件只是门铃，正文不进任务，密钥不进任务记录。
 
 ## 用户行为
 

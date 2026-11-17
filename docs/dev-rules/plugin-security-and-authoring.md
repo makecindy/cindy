@@ -4,6 +4,13 @@
 > **读取时机**：新增或修改插件（`.cindy`）的运行时、沙箱、权限、能力声明、面板供片、
 > 网络／凭证／文件交接、插件市场分页读取、安装扫描、实例核对、使用统计与远程插件状态读取，插件作者可见的
 > 身份卡、管子协议、打包与编写手册，或批准状态、安装布局、指纹格式等**存量安装读得到的任何东西**之前
+> **适用路径**：`apps/desktop/src/main/cindy-brain/**`、`apps/desktop/src/main/plugin-*/**`、
+> `apps/desktop/src/main/mcp-integrations/**/ghost*`、
+> `apps/desktop/src/main/maker-ipc/**/{ghost,plugin,runtimePlugins}*`、
+> `apps/desktop/src/shared/**/{ghost,plugin}*`、`apps/desktop/src/preload/**/ghost*`、
+> `apps/desktop/src/renderer/cindy-brain/**`、`apps/desktop/src/renderer/features/plugin/**`、
+> `apps/host/src/plugins/**`、`apps/mobile/src/plugins/**`、`packages/plugin-protocol/**`、
+> `packages/cindy-tools/src/ghost/**`、`apps/desktop/resources/system-skills/cindy-plugin-creator/**`
 
 本文治理 Cindy 中运行的插件——以 `ghost.json` 为身份卡的 `.cindy` 包。它约束三件
 互为支撑的事：**运行时权限安全**（宿主如何隔离并授权插件）、**存量插件兼容**（升级

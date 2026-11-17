@@ -4,6 +4,20 @@
 > `apps/desktop/src/main/mcp-integrations/piEnvironment.ts`,或任何 PI 会话行为、权限、
 > 配置、system prompt 之前必读本文件。PI(github.com/earendil-works/pi)被定位为 Cindy
 > 未来的基座 harness,集成原则与其余 harness 有别 —— 详见「设计原则」。
+>
+> **读取时机**：修改 PI harness 集成、PI 会话权限／配置／system prompt／桥接，或做 PI 相关的上线判断之前
+> **适用路径**：`packages/maker-core/src/agents/pi/**`、`packages/maker-core/src/types/pi-*`、
+> `packages/maker-pi-manager/**`、`apps/desktop/src/main/maker-host/**/pi*`、
+> `apps/desktop/src/main/mcp-integrations/**/pi*`、
+> `apps/desktop/src/main/maker-ipc/**/pi{-kernel,IdleReleaseWatcher,PackageMutationIpc,UsageReceipts}*`、
+> `apps/desktop/src/main/agent-binaries/**/pi-*`、`apps/host/src/agent/pi-*`、
+> `apps/desktop/src/shared/pi{Packages,Kernel,RuntimeInitialization}.ts`、
+> `apps/desktop/src/renderer/components/settings/**/Pi*`、
+> `packages/lizi-mcps/src/xdt-helper/pi_runtime.ts`、`tools/pi/**`
+> **要点**：**Pi 原生能力非退化是红线**（§3.1）：Pi 原生允许的安装、更新、扩展加载与 Agent 自助修复，
+> Cindy 不得以静态分析、TUI／RPC 兼容提示、内容指纹、宿主审批或新增的“安全增强”为由拒绝、停用或变成
+> 不可逆流程；显式用户命令即授权。Cindy 只能增加可跳过的提示和更顺畅的 GUI，不能让 Cindy Pi 比同版本
+> 原生 Pi 更难用。
 
 ## 1. 架构总览
 

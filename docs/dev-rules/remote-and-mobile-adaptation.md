@@ -1,5 +1,12 @@
 # 远程连接与手机版适配
 
+> **读取时机**：新增或修改涉及 workdir 文件、agent 进程、会话数据的功能，新增 IPC channel／推送事件，
+> 或修改 device-link 的重试／超时／断链恢复逻辑之前；功能不在下列路径内时同样适用
+> **适用路径**：`packages/{device-link,remote-file-service,maker-remote-ssh}/**`、
+> `apps/desktop/src/main/device-link/**`、`apps/mobile/src/device-link/**`、
+> `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
+> `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
+
 ## 弱网下的备用截图与视频恢复（2026-11-15）
 
 备用截图仍走原有远程桌面请求，发送端将 JPEG 压到 64 KiB 以内；base64 与回复包装
