@@ -1,0 +1,165 @@
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import ts from 'typescript';
+import { afterEach, expect, it, vi } from 'vitest';
+import * as slash from '../../../lib/slashCommands';
+import { rebaseQueueComposerEditContentAfterSlashCommandRewrite } from '../../../lib/queueComposerEdit';
+
+// #11112: execute the actual send/dispatch closures, not copies of their logic.
+// Guard tier: this cross-hook startup race cannot be reproduced by testing the
+// reconciler alone (which already supports preparation). The large view closes
+// over navigation, stores and IPC; isolate those ports instead of booting the app.
+// Minimum failure: cold /demo, discovered with no runtime alias, normal or steer.
+const source = ts.createSourceFile('CCAgentSessionView.tsx', readFileSync(
+  new URL('../CCAgentSessionView.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const callbacks = new Map<string, string>();
+function visit(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
+    const call = node.initializer as ts.CallExpression;
+    if (call.expression.getText(source) === 'useCallback') {
+      callbacks.set(node.name.getText(source), ts.transpileModule(`(${call.arguments[0].getText(source)})`, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022 },
+      }).outputText);
+    }
+  }
+  ts.forEachChild(node, visit);
+}
+visit(source);
+
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+function harness(agentKind = 'pi', remoteDeviceId?: string) {
+  vi.stubGlobal('window', { setTimeout });
+  const discovered: slash.UnifiedCommand = {
+    kind: 'agent-skill', source: 'skill', name: 'demo', scope: 'repo', runtimeStatus: 'discovered',
+  };
+  const loaded: slash.UnifiedCommand = { ...discovered, runtimeStatus: 'loaded', runtimeCommandName: 'skill:demo' };
+  let ready = false;
+  let release!: () => void;
+  const preparation = new Promise<void>(resolve => { release = () => { ready = true; resolve(); }; });
+  const create = vi.fn((..._args: any[]) => preparation);
+  const send = vi.fn(async (..._args: any[]) => false);
+  const session = { id: 'cold', agentKind, model: 'saved-model', effort: 'high', permissionMode: 'ask',
+    workingDir: '/project', status: 'active', source: 'user', orcaRole: null };
+  const environment: Record<string, any> = {
+    ...slash, session, sessionId: session.id, remoteDeviceId,
+    dbToMakerAgentKind: (kind: string) => kind,
+    buildCreateOptsForCurrentSession: (_id: string, model: string, effort: string, permissionMode: string, workingDir: string) =>
+      ({ model, effort, permissionMode, workingDir }),
+    window: { setTimeout, electronAPI: { maker: { createSession: create }, deviceLink: { invoke: create } } },
+    CINDY_MAKE_ENABLED: true, allCommandsRef: { current: [discovered] },
+    getHelpCommandsSnapshot: async () => [discovered],
+    loadAllCommands: async () => ready ? [loaded] : [discovered],
+    setAllCommands: vi.fn(), isRemoteSession: false,
+    readOnly: false, cindyMakeInputLocked: false, invalidateHistoryRecoveryNavigation: vi.fn(),
+    matchNavigationCommandName: () => null, tryHandleNavigationCommand: async () => false,
+    navigate: vi.fn(), t: (key: string) => key, canNavigateSession: true, navigationMode: 'default',
+    maybeShowContextUsage: async () => false, sessionRef: { current: session },
+    displayAgentKind: agentKind, isCodex: agentKind === 'codex', agentSwitchIntent: null,
+    vendorAuthGate: { checkAndConfirm: async () => ({ proceed: true }) },
+    folderPickerOpen: false, sessionHandoffPreparing: false, isOrcaLeadSession: () => false,
+    isRunningRef: { current: true }, botChatIdentity: null,
+    readSendFollowCancelGeneration: () => 0, requestFollowLatest: vi.fn(), sendMessage: send, steerMessage: send,
+  };
+  const bind = (name: string) => {
+    const code = callbacks.get(name);
+    if (!code) return undefined;
+    return environment[name] = runInNewContext(code, environment);
+  };
+  bind('preparePiRuntimeForDispatch');
+  bind('maybeDispatchDesktopSlashCommand');
+  const handleSend = bind('handleSend');
+  return { create, send, release, environment, handleSend, bind };
+}
+
+it.each(['queue', 'steer'])('waits beyond the retry budget before sending a cold skill (%s)', async deliveryMode => {
+  vi.useFakeTimers();
+  const h = harness();
+  const submission = h.handleSend('/demo hello', 'chosen-model', 'medium', 'ask', [], [], {
+    deliveryMode, pastedTextRanges: [{ start: 6, end: 11 }],
+  });
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(h.send).not.toHaveBeenCalled();
+  expect(h.create).toHaveBeenCalledOnce();
+  h.release();
+  await submission;
+  expect(h.send.mock.calls[0][0]).toBe('/skill:demo hello');
+  expect(h.send.mock.calls[0][7].pastedTextRanges).toEqual([{ start: 12, end: 17 }]);
+  expect(h.create.mock.calls[0][0]).toMatchObject({ id: 'cold', model: 'chosen-model', workingDir: '/project' });
+});
+
+it('prepares on the controlled device for callers without a custom preparation callback', async () => {
+  const h = harness('pi', 'controlled-device');
+  const dispatch = h.environment.maybeDispatchDesktopSlashCommand('/demo', [], {
+    allowDesktopDispatch: false, piRuntimeRetryDelaysMs: [], workingDirOverride: '/selected-project',
+  });
+  h.release();
+  await expect(dispatch).resolves.toMatchObject({ message: '/skill:demo', handled: false });
+  expect(h.create.mock.calls[0]).toEqual(['controlled-device', 'maker:create-session', [expect.objectContaining({
+    id: 'cold', workingDir: '/selected-project', model: 'saved-model',
+  })]]);
+});
+
+it.each(['literal', 'codex', 'claude-code'])('leaves %s input unchanged without starting Pi', async kind => {
+  const h = harness(kind === 'literal' ? 'pi' : kind);
+  await h.handleSend('/demo hello', 'chosen-model', 'medium', 'ask', [], [], { literalText: kind === 'literal' });
+  expect(h.create).not.toHaveBeenCalled();
+  expect(h.send.mock.calls[0][0]).toBe('/demo hello');
+});
+
+it('does not send plain text after runtime preparation fails', async () => {
+  const h = harness();
+  h.create.mockRejectedValueOnce(new Error('runtime unavailable'));
+  await expect(h.handleSend('/demo', 'chosen-model', 'medium', 'ask')).rejects.toThrow('runtime unavailable');
+  expect(h.send).not.toHaveBeenCalled();
+});
+
+it('keeps unknown commands literal without starting Pi', async () => {
+  const h = harness();
+  await h.handleSend('/unknown hello', 'chosen-model', 'medium', 'ask');
+  expect(h.create).not.toHaveBeenCalled();
+  expect(h.send.mock.calls[0][0]).toBe('/unknown hello');
+});
+
+it('waits for a cold skill before saving a queue edit and rebases its metadata', async () => {
+  const h = harness();
+  const update = vi.fn(async () => true);
+  Object.assign(h.environment, {
+    activeQueueComposerEdit: { clientId: 'queued', sessionId: 'cold', draftKey: 'draft' },
+    queueComposerEditSavingRef: { current: false }, queueComposerEditCleanupRef: { current: null },
+    rebaseQueueComposerEditContentAfterSlashCommandRewrite, updateQueueItemContent: update,
+    clearComposerDraftAndNotify: vi.fn(), isCurrentQueueComposerEdit: () => false,
+  });
+  const submission = h.bind('submitQueueComposerEdit')('queued', {
+    text: '/demo hello', pastedTextRanges: [{ start: 6, end: 11 }], agentReferences: [], slashCommandRanges: [],
+  }, []);
+  await vi.waitFor(() => expect(h.create).toHaveBeenCalledOnce());
+  expect(update).not.toHaveBeenCalled();
+  h.release();
+  await expect(submission).resolves.toBe(true);
+  expect(update).toHaveBeenCalledWith('queued', expect.objectContaining({ content: expect.objectContaining({
+    text: '/skill:demo hello', pastedTextRanges: [{ start: 12, end: 17 }],
+  }) }));
+});
+
+it('resumes directory selection with the pending model and rewritten skill', async () => {
+  const h = harness();
+  let completed!: () => void;
+  const submission = new Promise<void>(resolve => { completed = resolve; });
+  Object.assign(h.environment, {
+    refreshServerSession: vi.fn(), log: { warn: vi.fn() },
+    pendingSendRef: { current: {
+      message: '/demo hello', model: 'pending-model', effort: 'medium', permissionMode: 'ask',
+      files: [], mentions: [], pastedTextRanges: [{ start: 6, end: 11 }], resolveSubmission: completed,
+    } },
+  });
+  h.bind('handleWorkingDirChange')('/selected-project');
+  await vi.waitFor(() => expect(h.create).toHaveBeenCalledOnce());
+  expect(h.send).not.toHaveBeenCalled();
+  h.release();
+  await submission;
+  expect(h.send.mock.calls[0][0]).toBe('/skill:demo hello');
+  expect(h.send.mock.calls[0][4]).toBe('/selected-project');
+  expect(h.send.mock.calls[0][7].pastedTextRanges).toEqual([{ start: 12, end: 17 }]);
+  expect(h.create.mock.calls[0][0]).toMatchObject({ model: 'pending-model', workingDir: '/selected-project' });
+});

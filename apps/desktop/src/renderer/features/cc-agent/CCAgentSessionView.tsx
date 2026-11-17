@@ -254,7 +254,7 @@ import {
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
   rebaseInlineRangesAfterSlashCommandRewrite,
   reconcilePiRuntimeCommandForDispatch,
-  reconcilePiRuntimeCommandForDispatchWithRetry,
+  reconcilePiRuntimeCommandForSessionDispatch,
   rewriteAgentSkillInvocationForDispatch,
   rewriteBuiltInSkillDraftForSend,
   type UnifiedCommand,
@@ -3652,6 +3652,33 @@ function CCAgentSessionContent({
   // dispatch 前于 renderer 侧快照,待 main 广播 DESKTOP_COMMAND_TRIGGERED 回流时取用。
   const pendingIssueFilesRef = useRef<AttachedFile[] | undefined>(undefined);
 
+  const preparePiRuntimeForDispatch = useCallback(async (
+    workingDir: string | null | undefined = session?.workingDir,
+    model = session?.model,
+    effort = session?.effort,
+    permissionMode = session?.permissionMode,
+    vendorOptions?: Record<string, unknown>,
+  ) => {
+    if (!sessionId || !workingDir || !model || !permissionMode
+      || dbToMakerAgentKind(session?.agentKind) !== 'pi') return;
+    const createOpts = {
+      id: sessionId,
+      ...buildCreateOptsForCurrentSession(
+        sessionId, model, effort ?? '', permissionMode, workingDir,
+        vendorOptions ? { vendorOptions } : undefined,
+      ),
+      agentKind: 'pi' as const,
+      workingDir,
+      orcaRole: session?.orcaRole ?? null,
+    };
+    if (remoteDeviceId) {
+      await window.electronAPI.deviceLink.invoke(remoteDeviceId, 'maker:create-session', [createOpts]);
+    } else {
+      await window.electronAPI.maker.createSession(createOpts);
+    }
+  }, [sessionId, session?.workingDir, session?.model, session?.effort,
+    session?.permissionMode, session?.agentKind, session?.orcaRole, remoteDeviceId]);
+
   const maybeDispatchDesktopSlashCommand = useCallback(
     async (
       message: string,
@@ -3721,9 +3748,9 @@ function CCAgentSessionContent({
           ),
       };
       const reconciled = options?.piRuntimeRetryDelaysMs
-        ? await reconcilePiRuntimeCommandForDispatchWithRetry({
+        ? await reconcilePiRuntimeCommandForSessionDispatch({
             ...reconcileParams,
-            prepareRuntime: options.preparePiRuntime,
+            prepareRuntime: options.preparePiRuntime ?? (() => preparePiRuntimeForDispatch(workingDir)),
             retryDelaysMs: options.piRuntimeRetryDelaysMs,
           })
         : await reconcilePiRuntimeCommandForDispatch(reconcileParams);
@@ -3812,6 +3839,7 @@ function CCAgentSessionContent({
       return { handled: true, accepted: true, message };
     },
     [
+      preparePiRuntimeForDispatch,
       getHelpCommandsSnapshot,
       isRemoteSession,
       agentDeviceId,
@@ -3916,32 +3944,9 @@ function CCAgentSessionContent({
                   piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
                   workingDirOverride: newDir,
                   builtInSkillIntent: pending.builtInSkillIntent,
-                  preparePiRuntime: async () => {
-                    if (!sessionId || dbToMakerAgentKind(session?.agentKind) !== 'pi') return;
-                    const createOpts = {
-                      id: sessionId,
-                      ...buildCreateOptsForCurrentSession(
-                        sessionId,
-                        pending.model,
-                        pending.effort,
-                        pending.permissionMode,
-                        newDir,
-                        pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : undefined,
-                      ),
-                      agentKind: 'pi' as const,
-                      workingDir: newDir,
-                      orcaRole: session?.orcaRole ?? null,
-                    };
-                    if (remoteDeviceId) {
-                      await window.electronAPI.deviceLink.invoke(
-                        remoteDeviceId,
-                        'maker:create-session',
-                        [createOpts],
-                      );
-                    } else {
-                      await window.electronAPI.maker.createSession(createOpts);
-                    }
-                  },
+                  preparePiRuntime: () => preparePiRuntimeForDispatch(
+                    newDir, pending.model, pending.effort, pending.permissionMode, pending.vendorOptions,
+                  ),
                 },
               );
           if (slashDispatch.handled) {
@@ -4048,6 +4053,7 @@ function CCAgentSessionContent({
     },
     [
       maybeDispatchDesktopSlashCommand,
+      preparePiRuntimeForDispatch,
       refreshServerSession,
       remoteDeviceId,
       session?.agentKind,
@@ -4233,9 +4239,11 @@ function CCAgentSessionContent({
           ? await maybeDispatchDesktopSlashCommand(message, files, {
               allowDesktopDispatch: false,
               piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+              preparePiRuntime: () => preparePiRuntimeForDispatch(session?.workingDir, model, effort, permissionMode),
             })
           : await maybeDispatchDesktopSlashCommand(message, files, {
               piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+              preparePiRuntime: () => preparePiRuntimeForDispatch(session?.workingDir, model, effort, permissionMode),
             });
       if (slashDispatch.handled) {
         if (slashDispatch.accepted) {
@@ -4499,6 +4507,7 @@ function CCAgentSessionContent({
     },
     [
       maybeDispatchDesktopSlashCommand,
+      preparePiRuntimeForDispatch,
       maybeShowContextUsage,
       invalidateHistoryRecoveryNavigation,
       folderPickerOpen,
