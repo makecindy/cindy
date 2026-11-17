@@ -40,7 +40,7 @@ import { createCodexLocalCliAuth } from './runtime.ts';
 import { createHostCodexSystemLogin } from './codex-system-login.ts';
 import { invalidateHostCodexLogin } from './codex-invalidation.ts';
 import { createHostCodexCredentials } from './codex-credentials.ts';
-import { createBridgeTokenReader } from './codex-runtime.ts';
+import { createBridgeTokenReader, createHostBridgeLoginPorts } from './codex-runtime.ts';
 import { createAnthropicResponsesBridgeHost } from '../../../desktop/src/main/maker-host/anthropicResponsesBridgeHostCore.ts';
 import { bindNativeProviderAuth, isNativeProviderAuthBound } from '../../../desktop/src/main/maker-host/nativeProviderAuthBinding.ts';
 import { currentCodexCredentialGeneration } from '../../../desktop/src/main/maker-host/codexCredentialRead.ts';
@@ -198,24 +198,29 @@ test('while a desktop uses the profile, reading the Codex state does not reconci
 
 /*
  * 测试价值
- * - 生产入口：订阅桥（共用的 anthropicResponsesBridgeHostCore.ts，Host 在 codex-runtime.ts 里这样装）向
- *   createBridgeTokenReader 取 ChatGPT 令牌，再读 codex-home/auth.json、必要时续期（getChatgptBridgeAuth，
- *   请求发出前就走这一步）。对账用真实的 createHostCodexSystemLogin，凭据是临时 profile 里的真实文件。
- * - 规则：并存方案 A（审核方 2026-11-17 定）。闸门关着时桥读令牌不对账：对账会改写桌面也在用的 auth.json；
- *   令牌已过期时也不续期（两边各自续期会把对方的 refresh token 挤掉），这次请求以认证失败结束，错误说得出原因。
+ * - 生产入口：订阅桥（共用的 anthropicResponsesBridgeHostCore.ts）用 Host 给它的登录端口
+ *   （codex-runtime.ts 的 createHostBridgeLoginPorts，createHostCodexRuntime 原样装上）取 ChatGPT 令牌、读
+ *   codex-home/auth.json 或单独添加的 Codex 账号目录、必要时续期（getChatgptBridgeAuth，请求发出前就走这一步），
+ *   上游拒绝令牌时经 invalidateChatgptBridgeAuth 作废。对账用真实的 createHostCodexSystemLogin，凭据是临时
+ *   profile 里的真实文件。
+ * - 规则：并存方案 A（审核方 2026-11-17 定）。闸门关着时：桥读令牌不对账（对账会改写桌面也在用的 auth.json）；
+ *   快过期的令牌不续期（两边各自续期会把对方的 refresh token 挤掉），请求带原因失败；上游拒绝时不作废（不删登录
+ *   文件、不解绑、不写作废标记），只在本进程记住，之后的请求不再发上游、带同一原因失败；闸门放开后第一次读取照常
+ *   对账，确实作废的登录走正常路径。单独添加的 Codex 账号的目录也在共用 profile 里，同样处理。
  * - 现有覆盖缺口：上面的“reconciles before it reads the native token”只测了放开时的顺序。
- * - 最小失败输入：闸门关着时取一次令牌，令牌未过期与已过期各一次。
+ * - 最小失败输入：闸门关着时取一次令牌（有效、已过期、快过期），上游拒绝一次再取一次。
  * - tier：unit（临时目录里的真实文件；续期请求是记录调用的桩，不联网）。
  */
-test('while a desktop uses the profile, the subscription bridge neither reconciles nor renews the ChatGPT token', { timeout: TEST_TIMEOUT_MS }, async t => {
-  t = lifoCleanup(t);
-  const { root, profileDir, codexHome } = isolatedProfile(t, 'bridge-held-owner');
+function bridgeFixture(t, ownerId) {
+  const { root, profileDir, codexHome } = isolatedProfile(t, ownerId);
   const systemAuth = path.join(root, 'fake-home', '.codex', 'auth.json');
   fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+  const accountHome = path.join(profileDir, 'codex-accounts', 'owner-hash', 'acct');
+  fs.mkdirSync(accountHome, { recursive: true });
   const jwt = expSec => `h.${Buffer.from(JSON.stringify({ exp: expSec })).toString('base64url')}.s`;
-  const writeLogin = token => {
+  const writeLogin = (home, token) => {
     const body = JSON.stringify({ tokens: { access_token: token, refresh_token: 'refresh-fixture', account_id: 'workspace-a' } });
-    fs.writeFileSync(path.join(codexHome, 'auth.json'), body, { mode: 0o600 });
+    fs.writeFileSync(path.join(home, 'auth.json'), body, { mode: 0o600 });
     // A different system login: a reconciliation would act on it.
     fs.writeFileSync(systemAuth, authJson('system-token-other'), { mode: 0o600 });
   };
@@ -231,57 +236,91 @@ test('while a desktop uses the profile, the subscription bridge neither reconcil
     walk(root);
     return out;
   };
-  const accounts = { isCodexAccountLoginActive: () => false, isCodexAccountProvider: () => false };
+  let held = true;
+  const counts = { reconcile: 0, renew: 0, invalidateNative: [], invalidateAccount: [] };
+  // The account service as the bridge and the credential reader see it: one added account, signed in.
+  const accounts = { isCodexAccountLoginActive: () => false, isCodexAccountProvider: id => id === 'acct',
+    codexAccountHome: id => (id === 'acct' ? accountHome : null), codexAccountState: () => ({ authenticated: true }),
+    invalidateCodexAccount: async (...args) => { counts.invalidateAccount.push(args); } };
   const credentials = createHostCodexCredentials(profileDir, accounts);
-  const bridgeWith = held => {
-    const real = createHostCodexSystemLogin({ codexHome, systemAuthPath: systemAuth, loginActive: () => false });
-    const counts = { reconcile: 0, renew: 0 };
-    const systemLogin = { ...real, reconcile: (...args) => { counts.reconcile++; return real.reconcile(...args); } };
-    const bridge = createAnthropicResponsesBridgeHost({
-      subscriptionRequestAllowsFast: () => false, isXaiSubscriptionProviderId: () => false, app: { getPath: () => profileDir },
-      // The renewal request: answered with a failure, so a test run never writes a renewed login.
-      outboundFetch: async () => { counts.renew++; return new Response('{}', { status: 500 }); },
-      getGrokAccessToken: async () => null, peekGrokAccessToken: () => null, invalidateXaiBridgeAuth: async () => false,
-      chatgptAccountIdFromTokens: tokens => tokens?.account_id ?? null,
-      desktopCodexAuthAdapter: {
-        getAccessToken: createBridgeTokenReader({ check() {}, systemLogin, readAccessToken: id => credentials.readAccessToken(id), isProfileHeld: () => held }),
-        invalidate: async () => { throw new Error('not expected'); }, captureOAuthDispatchProof: () => () => true,
-      },
-      codexAccountHome: () => null, codexAccountState: () => ({ authenticated: false }), invalidateCodexAccount: async () => {},
-      isOpenAiSubscriptionProviderId: id => id === 'openai', recordXaiRateLimitSnapshot: () => {},
-    });
-    return { bridge, counts };
-  };
+  const real = createHostCodexSystemLogin({ codexHome, systemAuthPath: systemAuth, loginActive: () => false });
+  const ports = createHostBridgeLoginPorts({
+    check() {}, systemLogin: { ...real, reconcile: (...args) => { counts.reconcile++; return real.reconcile(...args); } },
+    native: credentials, accounts,
+    invalidateNative: async reason => { counts.invalidateNative.push(reason); },
+    isProfileHeld: () => held,
+  });
+  const bridge = createAnthropicResponsesBridgeHost({
+    subscriptionRequestAllowsFast: () => false, isXaiSubscriptionProviderId: () => false, app: { getPath: () => profileDir },
+    // The renewal request: answered with a failure, so a test run never writes a renewed login.
+    outboundFetch: async () => { counts.renew++; return new Response('{}', { status: 500 }); },
+    getGrokAccessToken: async () => null, peekGrokAccessToken: () => null, invalidateXaiBridgeAuth: async () => false,
+    chatgptAccountIdFromTokens: tokens => tokens?.account_id ?? null,
+    ...ports,
+    isOpenAiSubscriptionProviderId: id => id === 'openai' || id === 'acct', recordXaiRateLimitSnapshot: () => {},
+  });
+  const now = () => Math.floor(Date.now() / 1000);
+  // A new login on disk is read by the next request, as after a login change (the bridge keeps a token up to 30 s).
+  const login = (dir, token) => { writeLogin(dir, token); bridge.clearChatgptBridgeCredentialCache(); };
+  return { codexHome, accountHome, jwt, writeLogin: login, snapshot, bridge, counts, now, setHeld: value => { held = value; },
+    // What the bridge does with an upstream 401 that names a revoked token.
+    reject: (providerId, token) => bridge.invalidateChatgptBridgeAuth({ status: 401,
+      body: '{"error":{"code":"token_revoked","message":"Your authentication token has been revoked."}}', failedAccessToken: token }, providerId) };
+}
 
-  // Held, a valid token: used as it is.
-  const valid = jwt(Math.floor(Date.now() / 1000) + 3600);
-  writeLogin(valid);
-  let before = snapshot();
-  let held = bridgeWith(true);
-  assert.equal((await held.bridge.getChatgptBridgeAuth('openai')).accessToken, valid);
-  assert.deepEqual(held.counts, { reconcile: 0, renew: 0 });
-  assert.deepEqual(snapshot(), before, 'no file under the profile or the system login changed');
+for (const [label, providerId, home] of [['the ChatGPT login', 'openai', 'codexHome'], ['an independently added Codex account', 'acct', 'accountHome']]) {
+  test(`while a desktop uses the profile, the subscription bridge neither reconciles nor renews ${label}`, { timeout: TEST_TIMEOUT_MS }, async t => {
+    t = lifoCleanup(t);
+    const f = bridgeFixture(t, `bridge-held-${providerId}`);
+    // Held, a valid token: used as it is.
+    const valid = f.jwt(f.now() + 3600);
+    f.writeLogin(f[home], valid);
+    let before = f.snapshot();
+    assert.equal((await f.bridge.getChatgptBridgeAuth(providerId)).accessToken, valid);
+    assert.deepEqual([f.counts.reconcile, f.counts.renew], [0, 0]);
+    assert.deepEqual(f.snapshot(), before, 'no file under the profile or the system login changed');
+    // Held, an expired token, and one the bridge would renew early (within its 120 seconds): the
+    // request fails, saying why; nothing is renewed or written.
+    for (const exp of [f.now() - 60, f.now() + 60]) {
+      f.writeLogin(f[home], f.jwt(exp));
+      before = f.snapshot();
+      await assert.rejects(f.bridge.getChatgptBridgeAuth(providerId),
+        /^Error: HOST_PROFILE_IN_USE_BY_DESKTOP: the ChatGPT sign-in has expired, and it is not renewed while a Cindy desktop app/);
+      assert.deepEqual([f.counts.reconcile, f.counts.renew], [0, 0]);
+      assert.deepEqual(f.snapshot(), before);
+    }
+    // Released, the same read tries to renew the expiring token (and reconciles the default login).
+    f.setHeld(false);
+    await f.bridge.getChatgptBridgeAuth(providerId).catch(() => {});
+    assert.equal(f.counts.renew, 1);
+    assert.equal(f.counts.reconcile > 0, providerId === 'openai');
+  });
 
-  // Held, an expired token: the request fails, saying why; nothing is renewed or written.
-  writeLogin(jwt(Math.floor(Date.now() / 1000) - 60));
-  before = snapshot();
-  held = bridgeWith(true);
-  await assert.rejects(held.bridge.getChatgptBridgeAuth('openai'),
-    /^Error: HOST_PROFILE_IN_USE_BY_DESKTOP: the ChatGPT sign-in has expired, and it is not renewed while a Cindy desktop app/);
-  assert.deepEqual(held.counts, { reconcile: 0, renew: 0 });
-  assert.deepEqual(snapshot(), before);
-
-  // Held, a token the bridge would renew early (it expires within the bridge's 120 seconds): refused too.
-  writeLogin(jwt(Math.floor(Date.now() / 1000) + 60));
-  before = snapshot();
-  held = bridgeWith(true);
-  await assert.rejects(held.bridge.getChatgptBridgeAuth('openai'), /HOST_PROFILE_IN_USE_BY_DESKTOP: the ChatGPT sign-in has expired/);
-  assert.deepEqual(held.counts, { reconcile: 0, renew: 0 });
-  assert.deepEqual(snapshot(), before);
-
-  // Released, the same read reconciles and tries to renew the expiring token.
-  const open = bridgeWith(false);
-  await open.bridge.getChatgptBridgeAuth('openai').catch(() => {});
-  assert.ok(open.counts.reconcile > 0);
-  assert.equal(open.counts.renew, 1);
-});
+  test(`while a desktop uses the profile, an upstream rejection of ${label} writes nothing and is not retried`, { timeout: TEST_TIMEOUT_MS }, async t => {
+    t = lifoCleanup(t);
+    const f = bridgeFixture(t, `bridge-reject-${providerId}`);
+    const token = f.jwt(f.now() + 3600);
+    f.writeLogin(f[home], token);
+    assert.equal((await f.bridge.getChatgptBridgeAuth(providerId)).accessToken, token);
+    const before = f.snapshot();
+    // Held: the rejection marks, unbinds and removes nothing.
+    await f.reject(providerId, token);
+    assert.deepEqual([f.counts.invalidateNative, f.counts.invalidateAccount], [[], []]);
+    assert.deepEqual(f.snapshot(), before);
+    // Later requests with that token fail before the upstream, with the same reason.
+    for (let i = 0; i < 2; i++) {
+      await assert.rejects(f.bridge.getChatgptBridgeAuth(providerId),
+        /^Error: HOST_PROFILE_IN_USE_BY_DESKTOP: OpenAI rejected this ChatGPT sign-in \(token_revoked\)/);
+    }
+    assert.deepEqual([f.counts.reconcile, f.counts.renew], [0, 0]);
+    assert.deepEqual(f.snapshot(), before);
+    // Released: the first read reconciles (the default login) and uses the login again; a
+    // rejection now takes the normal invalidation.
+    f.setHeld(false);
+    assert.equal((await f.bridge.getChatgptBridgeAuth(providerId)).accessToken, token);
+    assert.equal(f.counts.reconcile > 0, providerId === 'openai');
+    await f.reject(providerId, token);
+    if (providerId === 'openai') assert.deepEqual(f.counts.invalidateNative, ['token_revoked']);
+    else assert.deepEqual(f.counts.invalidateAccount, [['acct', 'token_revoked', token]]);
+  });
+}
