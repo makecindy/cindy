@@ -5518,6 +5518,38 @@ describe('restored account useful-work participation', () => {
       expect(s.dispatches).toEqual(['openai/second', 'openai/default', 'openai/second']);
     });
   });
+  it('rechecks destination model permission at the durable recovery commit boundary', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore();
+      s.deps.rebuild.mockImplementationOnce(async (_id: string, assertCurrent: () => void) => {
+        h.routeAllowed.mockReturnValue(false); assertCurrent();
+      });
+      await expect(s.prepare()).rejects.toThrow('target subscription route permission changed');
+      expect(h.bindings.get('task:continuing')?.accountId).toBe('default');
+      expect(s.row.sdkSessionId).not.toBeNull();
+      expect(s.dispatches).toHaveLength(2);
+      h.routeAllowed.mockReturnValue(true);
+      expect(await s.prepare()).toBe(true); await s.start(); await s.send();
+      expect(s.dispatches).toHaveLength(3);
+    });
+  });
+  it('rejects a recovered target moved to another provider before the durable commit', async () => {
+    await recoveryCase(async s => {
+      await s.failThenContinueOnDefault(); await s.restore();
+      s.deps.rebuild.mockImplementationOnce(async (_id: string, assertCurrent: () => void) => {
+        h.placement['openai:second'] = 'openai-sub-87654321';
+        assertCurrent();
+      });
+      await expect(s.prepare()).rejects.toThrow('target subscription account provider changed');
+      expect(h.bindings.get('task:continuing')?.accountId).toBe('default');
+      expect(s.row.sdkSessionId).not.toBeNull();
+      expect(s.dispatches).toHaveLength(2);
+      expect(h.recoveries.openai?.second?.['model:gpt-6.1-sol']).toBeDefined();
+      delete h.placement['openai:second'];
+      expect(await s.prepare()).toBe(true); await s.start(); await s.send();
+      expect(s.dispatches).toHaveLength(3);
+    });
+  });
   it('disabling before durable rebuild cancels the optional handoff without consuming or replaying it', async () => {
     await recoveryCase(async s => {
       await s.failThenContinueOnDefault(); await s.restore();

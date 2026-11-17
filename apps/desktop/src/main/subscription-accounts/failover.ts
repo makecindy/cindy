@@ -18,7 +18,8 @@
  * continues on the merged `openai` route, whose own model switches must allow its model.
  */
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { readPool } from './store.js';
+import { readPool, readLegacyCodexProviderId } from './store.js';
+import { legacyCodexAccountCanRun, subscriptionRouteAllowsModel } from './legacyAccountAccess.js';
 import { accountProviderId, providerAccounts, readProviderAutoRejoinRecovered, resolveSubscriptionPoolProvider } from './placement.js';
 import {
   acquireSubscriptionAccount,
@@ -230,6 +231,14 @@ export async function prepareSubscriptionAccountFailover(
     const assertCurrent = () => {
       assertOwner();
       if (!blocked && !rebuilt && !recoveryEnabled()) throw new Error('Recovered account participation was disabled');
+      if (!rebuilt) {
+        if (accountProviderId(bound.provider, lease!.accountId) !== bound.providerId)
+          throw new Error('The target subscription account provider changed');
+        const imported = bound.provider === 'openai' ? readLegacyCodexProviderId(lease!.accountId) : undefined;
+        if (!subscriptionRouteAllowsModel(bound.providerId, bound.model)
+          || (imported && !legacyCodexAccountCanRun(imported, bound.model, { remote: false, newRoute: true })))
+          throw new Error('The target subscription route permission changed');
+      }
       lease!.assertDispatchable();
       if (deps.isRunning(sessionId)) throw new Error('Cannot switch a running task subscription account');
       const current = readTaskPoolAccount(sessionId, row!);

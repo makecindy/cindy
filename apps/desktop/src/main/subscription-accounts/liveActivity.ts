@@ -8,27 +8,31 @@ interface LiveRoot {
   requestSessionId: string;
   getStatus(): string;
   isTurnRunning(): boolean;
+  getTurnGeneration?(): number;
   listBackgroundTasks(): unknown[];
   hasLiveBackgroundWork?(): Promise<boolean>;
 }
 
 // Coalesce the official native RPC while a bounded read has already returned busy.
 // No timer loop or follow-up request: only a later actual activity read can use the result.
-const probeFlights = new WeakMap<LiveRoot, Promise<boolean>>();
+const probeFlights = new WeakMap<LiveRoot, { generation: number | undefined; promise: Promise<boolean> }>();
 async function readNativeBusy(root: LiveRoot, budgetMs: number): Promise<boolean> {
   if (!root.hasLiveBackgroundWork) return false;
+  const generation = root.getTurnGeneration?.();
   let flight = probeFlights.get(root);
   if (!flight) {
-    flight = Promise.resolve().then(() => root.hasLiveBackgroundWork!()).catch(() => true);
+    flight = { generation, promise: Promise.resolve().then(() => root.hasLiveBackgroundWork!()).catch(() => true) };
     probeFlights.set(root, flight);
     const current = flight;
-    void current.finally(() => { if (probeFlights.get(root) === current) probeFlights.delete(root); });
+    void current.promise.finally(() => { if (probeFlights.get(root) === current) probeFlights.delete(root); });
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([flight, new Promise<boolean>(resolve => {
+    const busy = await Promise.race([flight.promise, new Promise<boolean>(resolve => {
       timer = setTimeout(() => resolve(true), budgetMs);
     })]);
+    // An old empty result cannot release capacity used by a newer native turn.
+    return busy || flight.generation !== generation || root.getTurnGeneration?.() !== generation;
   } finally { if (timer !== undefined) clearTimeout(timer); }
 }
 

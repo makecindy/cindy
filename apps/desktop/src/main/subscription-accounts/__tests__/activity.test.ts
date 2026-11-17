@@ -8,7 +8,7 @@ import { reconcileLegacySubscriptionAccount } from '../reconcile.js';
 function root(id = 'old') {
   return { id, agentKind: 'codex', requestSessionId: 'native-' + id, remoteHostId: null as string | null,
     agentDeviceId: null as string | null, getStatus: () => 'active', isTurnRunning: () => true,
-    hasLiveBackgroundWork: async () => false,
+    hasLiveBackgroundWork: async () => false, getTurnGeneration: () => 0,
     listBackgroundTasks: () => [] as unknown[] };
 }
 describe('live subscription root provenance', () => {
@@ -53,6 +53,24 @@ describe('live subscription root provenance', () => {
       await Promise.resolve();
       expect(vi.getTimerCount()).toBe(0);
     } finally { finish(false); vi.useRealTimers(); }
+  });
+  it('never uses a shared old-turn empty probe to release newer native work', async () => {
+    const old = root(); old.isTurnRunning = () => false;
+    let generation = 1;
+    old.getTurnGeneration = () => generation;
+    let finish!: (value: boolean) => void;
+    old.hasLiveBackgroundWork = vi.fn(() => new Promise<boolean>(resolve => { finish = resolve; }));
+    const deps = { roots: () => [old], usesOpenai: () => true, accountForRoot: async () => 'second' };
+    const first = readLiveSubscriptionActivity(deps);
+    await Promise.resolve(); await Promise.resolve();
+    generation++;
+    const later = readLiveSubscriptionActivity(deps);
+    await Promise.resolve(); await Promise.resolve();
+    finish(false);
+    for (const result of await Promise.all([first, later])) {
+      expect(unleasedSubscriptionActivity(result, () => false).get('openai:second')).toBe(1);
+    }
+    expect(old.hasLiveBackgroundWork).toHaveBeenCalledOnce();
   });
   it('counts unknown native liveness as occupied and drops a root replaced during the official probe', async () => {
     const old = root(); old.isTurnRunning = () => false;
