@@ -13,7 +13,7 @@ import {
   isDesktopInput,
   isRemoteDesktopChannelRequest,
   parseRemoteDesktopChannelReply,
-  REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+  remoteDesktopChannelTimeoutMs,
   type RemoteDesktopCapabilities,
   type RemoteDesktopDisplayMode,
   type RemoteDesktopVideoSettings,
@@ -313,6 +313,7 @@ export class DesktopViewerController {
       lease &&
       this.streaming &&
       this.state.caps?.channelRequests === true &&
+      (request.op !== 'heartbeat' || this.state.caps.signalingContinuity === true) &&
       isRemoteDesktopChannelRequest(request) &&
       'lease' in request &&
       request.lease === lease.lease
@@ -328,7 +329,7 @@ export class DesktopViewerController {
     return new Promise((resolve) => {
       const timer = setTimeout(
         () => settle({ kind: 'error', code: 'INVOKE_TIMEOUT' }),
-        REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+        remoteDesktopChannelTimeoutMs(request),
       );
       const settle = (outcome: ChannelOutcome) => {
         if (this.channelRequests.get(id)?.settle !== settle) return;
@@ -1220,6 +1221,9 @@ export class DesktopViewerController {
         });
       }
     } catch (error) {
+      // A screenshot timeout is obsolete once this lease is receiving video.
+      // Host revocation and other explicit failures still terminate normally.
+      if (this.streaming && error instanceof Error && error.message === 'INVOKE_TIMEOUT') return;
       if (this.session.lease === lease) this.fail(error, 'frame');
     } finally {
       if (this.frameBusy === lease.lease) this.frameBusy = null;

@@ -29,6 +29,8 @@ import {
   LayoutGrid,
   LayoutList,
   Check,
+  Clock,
+  GripVertical,
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -40,6 +42,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
@@ -71,6 +75,9 @@ import { remoteLampOf } from '../../lib/sessionLampAggregation';
 import { useRemoteSessionActivityRevision } from '@/features/device-link/remoteSessionActivityStore';
 import { absorbSessionStarting } from '@/lib/sessionStartingStore';
 import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activity';
+import type { PinnedSidebarEntry } from '../../lib/pinnedSidebarOrder';
+import type { PinnedSortBy } from '../../hooks/helpers/sidebarFilterCore';
+export type { PinnedSidebarEntry } from '../../lib/pinnedSidebarOrder';
 
 const HEADER_HOVER_ACTION_CLASS = cn(
   'pointer-events-none opacity-0 transition-opacity duration-150',
@@ -104,17 +111,21 @@ function viewStyleIcon(mode: SidebarViewMode): LucideIcon {
 }
 
 /**
- * ViewStyleMenu — Pinned 段头的"显示样式"切换弹层(文字版 / 卡片版 / 列表)。
+ * ViewStyleMenu — Pinned 段头的显示菜单(排序 + 文字版 / 卡片版 / 列表)。
  * trigger 由调用方提供(段头右侧 hover 出现、图标随当前模式变化),菜单写回全局
  * sidebar 显示模式(useSidebarCardMode 的 mode),与 Settings → 外观 同源。
  */
 function ViewStyleMenu({
   mode,
   setMode,
+  sortBy,
+  setSortBy,
   children,
 }: {
   mode: SidebarViewMode;
   setMode: (next: SidebarViewMode) => void;
+  sortBy: PinnedSortBy;
+  setSortBy: (next: PinnedSortBy) => void;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -123,6 +134,33 @@ function ViewStyleMenu({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
       <DropdownMenuContent side="bottom" align="end" sideOffset={4} className="min-w-[128px]">
+        <DropdownMenuLabel>{t('ccAgent.sidebar.filterSortByHeading')}</DropdownMenuLabel>
+        {(
+          [
+            {
+              value: 'manual',
+              labelKey: 'ccAgent.sidebar.filterSortBy.manual',
+              Icon: GripVertical,
+            },
+            { value: 'recency', labelKey: 'ccAgent.sidebar.filterSortBy.activity', Icon: Clock },
+          ] as const
+        ).map((opt) => (
+          <DropdownMenuItem
+            key={opt.value}
+            onSelect={() => setSortBy(opt.value)}
+            className={MENU_ITEM_CLASS}
+          >
+            <opt.Icon
+              size={15}
+              strokeWidth={1.75}
+              className="shrink-0 text-[var(--cmd-palette-item-meta)]"
+            />
+            <span className="truncate">{t(opt.labelKey)}</span>
+            {sortBy === opt.value && <Check size={15} className="ml-auto shrink-0" />}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>{t('ccAgent.sidebar.displayHeading')}</DropdownMenuLabel>
         {OPTIONS.map((opt) => (
           <DropdownMenuItem
             key={opt.value}
@@ -143,16 +181,9 @@ function ViewStyleMenu({
   );
 }
 
-export type PinnedSidebarEntry =
-  | { kind: 'session'; id: string; session: Session }
-  | {
-      kind: 'project';
-      id: string;
-      project: ProjectNodeData;
-      displaySessions: ProjectNodeData['sessions'];
-    };
-
 export interface PinnedSectionProps {
+  sortBy: PinnedSortBy;
+  onSortByChange: (next: PinnedSortBy) => void;
   /** 已按筛选和持久化顺序排好的置顶对话与项目。 */
   entries: PinnedSidebarEntry[];
   /**
@@ -184,6 +215,8 @@ export interface PinnedSectionProps {
 }
 
 export function PinnedSection({
+  sortBy,
+  onSortByChange,
   entries,
   allKnownProjects,
   renderProject,
@@ -418,7 +451,7 @@ export function PinnedSection({
         {/* 显示样式切换:固定最右,hover 浮现(菜单打开时保持可见)。
             图标 = 当前选中的显示模式(2026-08-12 用户裁决),不再恒为网格。 */}
         <div className={cn(HEADER_HOVER_ACTION_CLASS, 'flex items-center gap-0.5')}>
-          <ViewStyleMenu mode={mode} setMode={setMode}>
+          <ViewStyleMenu mode={mode} setMode={setMode} sortBy={sortBy} setSortBy={onSortByChange}>
             <Tip text={t('ccAgent.sidebar.viewStyle')} side="bottom">
               <button
                 type="button"

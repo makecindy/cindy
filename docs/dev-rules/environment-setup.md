@@ -1,6 +1,7 @@
 # 开发环境与依赖准备
 
-> **读取时机**：首次克隆、创建新 worktree、缺少依赖或安装命令失败时
+> **读取时机**：首次克隆、创建新 worktree、缺少依赖或安装命令失败时，或修改依赖安装配置之前
+> **适用路径**：`pnpm-workspace.yaml`、`.npmrc`、`.nvmrc`、`scripts/ensure-deps.mjs`
 
 ## 环境要求
 
@@ -121,6 +122,14 @@ test -t 0 && test -t 1 &&
 只说明 Desktop 启动就绪，不能单独证明菜单栏功能已通过验收。编译入口与失败处理见
 [`MacMenubarNativeHost.ts`](../../apps/desktop/src/main/menubar/MacMenubarNativeHost.ts)，
 隔离与启动参数见 [`desktop-development.md`](desktop-development.md)。
+
+## Mobile 原生编译：Rust 版本
+
+编译手机端原生部分需要 **Rust 1.88 或更高版本**。`packages/agent-net-core` 使用了
+Rust 2024 edition 的 let-chain 写法和 `slice_as_chunks`（`as_chunks` 方法），两者在
+[Rust 1.88](https://blog.rust-lang.org/2025/06/26/Rust-1.88.0/) 才稳定；Rust 1.85 虽支持
+2024 edition，仍会编译失败。仓库目前没有 `rust-toolchain` / `rust-toolchain.toml` 固定版本，
+原生编译前应在实际执行构建的终端用 `rustc --version` 核对生效版本，不能只看已安装版本列表。
 
 ## macOS：iOS 模拟器构建工具链
 

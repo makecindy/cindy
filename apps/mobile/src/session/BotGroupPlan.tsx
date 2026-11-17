@@ -411,7 +411,7 @@ export function BotGroupPlanFollowUpRow({ plan, followUp, identityFor, deviceId,
         </View>}
       <View style={[styles.followUpActions, Platform.OS !== 'ios' && styles.followUpActionsBounded, stackedActions && styles.followUpActionsStacked]}>
         <BotGroupPlanActions onStacked={() => setStackedActions(true)} actions={[
-          { label: t(plan?.kind === 'talk' ? 'groupChat.timeline.endTalk' : 'groupChat.timeline.endPlan'), busy: pending === 'dismiss', disabled: busy || !online, onPress: onEnd, testID: 'botGroup.followUp.end' },
+          ...(plan?.kind ? plan.canStop === true : plan?.canStop !== false) ? [{ label: t(plan?.kind === 'talk' ? 'groupChat.timeline.endTalk' : 'groupChat.timeline.endPlan'), busy: pending === 'dismiss', disabled: busy || !online, onPress: onEnd, testID: 'botGroup.followUp.end' }] : [],
           { label: t(failed ? 'groupChat.timeline.retryStep' : 'groupChat.timeline.continuePlan'), tone: 'primary', busy: pending === primary, disabled: busy || !online, onPress: failed ? onRetry : onContinue, testID: `botGroup.followUp.${primary}` },
         ]} />
       </View>

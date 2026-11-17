@@ -26,6 +26,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
+import piSystemPrompt from '../../../../../../apps/desktop/src/main/maker-host/pi-system-prompt.md?raw';
 
 import { createXdtHelperMcpServer } from '../../../../../lizi-mcps/src/lizi_xdtHelperMcpServer.js';
 import { createWorkerSpecSchema } from '../../../../../lizi-mcps/src/xdt-helper/create_worker.js';
@@ -203,6 +204,33 @@ function scriptedAnthropicTurn(requestBody: string): string {
     ];
     const step = calls[toolResultCount];
     return step ? anthropicToolTurn(toolResultCount + 1, step.name, step.input) : anthropicTextTurn(8, 'Controls verified');
+  }
+  // #10691: malformed plugin calls -> actionable feedback -> corrected calls.
+  // This scripts model output; it tests real Pi routing, not model decision quality.
+  if (requestBody.includes('correct plugin gateway arguments')) {
+    const request = JSON.parse(requestBody) as { system?: Array<{ text?: string }> };
+    const system = (request.system ?? []).map(part => part.text ?? '').join('\n');
+    // Consume the published wire example from the actual model request. A
+    // missing/misnested example must fail at the real gateway, not merely at a
+    // source-text assertion. This does not simulate an LLM's selection quality.
+    const example = system.match(/\{"server":"[^"]+","tool":"[^"]+","args":\{"ghost_id":"[^"]+"\}\}/)?.[0];
+    const infoCall = example ? JSON.parse(example) as { server: string; tool: string; args: Record<string, unknown> }
+      : { server: 'cindy', tool: 'ghost_info', args: {} };
+    if (example) infoCall.args = { ...infoCall.args, ghost_id: 'calendar', namespace: null };
+    const calls = [
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy', tool: 'ghost_info' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'cindy', tool: 'ghost_info', args: { args: { ghost_id: 'calendar' } } } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'cindy', tool: 'ghost_info' } },
+      { name: 'cindy_mcp_call_tool', input: infoCall },
+      { name: 'cindy_mcp_list_tools', input: { server: 'cindy', tool: 'ghost_call' } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'calendar' } } },
+      { name: 'cindy_mcp_call_tool', input: { server: 'cindy', tool: 'ghost_call', args: {
+        ghost_id: 'calendar', tool: 'call_tool', args: { name: 'list_calendars', args: { include_hidden: false } },
+      } } },
+    ];
+    const call = calls[toolResultCount];
+    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
+      : anthropicTextTurn(8, 'Calendars listed');
   }
   if (requestBody.includes('verify MCP structured result')) {
     const scenario = requestBody.includes('structured failure') ? 'failure'
@@ -408,6 +436,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const orcaCalls: Array<Record<string, unknown>> = [];
   const controlCalls: Array<Record<string, unknown>> = [];
   const handoffCalls: Array<Record<string, unknown>> = [];
+  const pluginWireCalls: Array<{ name: string; arguments: unknown }> = [];
   let controlSize = 16;
   const echoCalls: Array<{ text: unknown }> = [];
   const statusCalls: Array<Record<string, never>> = [];
@@ -673,13 +702,14 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         await transport.handleRequest(req, res, body ? JSON.parse(body) : undefined);
         return;
       }
+      const isPlugins = req.url?.includes('/plugins') ?? false;
       const isOrca = req.url?.includes('/orca') ?? false;
       const isWorkspace = req.url?.includes('/workspace') ?? false;
       const isContacts = req.url?.includes('/contacts') ?? false;
       const isHelper = req.url?.includes('/helper') ?? false;
       const isMemory = req.url?.includes('/memory') ?? false;
       const server = new McpServer({
-        name: isOrca ? 'cindy_orca' : isWorkspace
+        name: isPlugins ? 'cindy' : isOrca ? 'cindy_orca' : isWorkspace
           ? 'cindy_workspace'
           : isContacts
             ? 'cindy_contacts'
@@ -690,7 +720,14 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
               : 'cindy_echo',
         version: '1.0.0',
       });
-      if (isOrca) {
+      if (isPlugins) {
+        server.registerTool('ghost_info', { description: 'Inspect one plugin', inputSchema: {
+          ghost_id: z.string(), namespace: z.string().nullable().optional(),
+        } }, async ({ ghost_id }) => ({ content: [{ type: 'text', text: JSON.stringify({ id: ghost_id, tools: [{ name: 'call_tool' }] }) }] }));
+        server.registerTool('ghost_call', { description: 'Call a plugin tool', inputSchema: {
+          ghost_id: z.string(), tool: z.string(), args: z.record(z.string(), z.unknown()).optional(),
+        } }, async () => ({ content: [{ type: 'text', text: 'CALENDARS[primary]' }] }));
+      } else if (isOrca) {
         server.registerTool('create_worker', {
           description: 'Create an Orca Worker', inputSchema: createWorkerSpecSchema.shape,
         }, async args => {
@@ -805,7 +842,9 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       res.on('close', () => { void transport.close(); void server.close(); });
       await server.connect(transport);
       const body = await readBody(req);
-      await transport.handleRequest(req, res, body ? JSON.parse(body) : undefined);
+      const parsed = body ? JSON.parse(body) : undefined;
+      if (isPlugins && parsed?.method === 'tools/call') pluginWireCalls.push(parsed.params);
+      await transport.handleRequest(req, res, parsed);
     });
     await new Promise<void>((r) => mcpHttp.listen(0, '127.0.0.1', r));
     const mAddr = mcpHttp.address();
@@ -820,7 +859,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
 
   function buildDeps(
     bridgeMode:
-        | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' | 'recovery' = 'local',
+        | 'plugins' | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'remote-failures' | 'recovery' = 'local',
     logger: Logger = noopLogger,
   ): AgentDeps {
     return {
@@ -832,7 +871,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       },
       runtimeConfig: {
         endpoint: gatewayUrl,
-        systemPrompt: 'CINDY_HOST_IDENTITY_CANARY',
+        systemPrompt: 'CINDY_HOST_IDENTITY_CANARY' + (bridgeMode === 'plugins' ? '\n\n' + piSystemPrompt : ''),
         answerDeliveryPrompt: 'CINDY_ANSWER_DELIVERY_CANARY',
       },
       getGhostRosterPrompt: () => 'WORKDIR_GHOST_ROSTER_CANARY',
@@ -854,6 +893,9 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       // `?session=` —— 既验 PiAgent.startSession 把 opts.sessionId 透传进 ctx,
       // 又让假 server 能观察到真 pi 是否原样转发该 query(见 seenMcpUrls 断言)。
       preparePiExtraSpawnConfig: async (_providers, ctx): Promise<PiExtraSpawnConfig> => {
+        if (bridgeMode === 'plugins') return {
+          mcpBridge: { token: MCP_TOKEN, servers: [{ name: 'cindy', url: mcpUrl + '/plugins' }] },
+        };
         if (bridgeMode === 'controls') return {
           mcpBridge: { token: MCP_TOKEN, servers: [{ name: 'cindy_helper', url: mcpUrl + '/controls' }] },
         };
@@ -1027,7 +1069,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     permissionMode: 'ask' | 'bypassPermissions',
     resolver: (req: InteractionRequest) => Promise<InteractionDecision>,
     bridgeMode:
-        | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'recovery' = 'local',
+        | 'plugins' | 'controls' | 'local' | 'orca' | 'local-multi' | 'bot-memory' | 'remote' | 'remote-sse' | 'remote-paginated' | 'recovery' = 'local',
     prompt = 'call the echo tool',
     localHostOnly: boolean | 'native' = false,
     // 披露记录按 sessionId 落盘，所以要真正走到「首次未披露」必须给独立会话；
@@ -1082,6 +1124,39 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       rmSync(cwd, { recursive: true, force: true });
     }
   }
+
+  // #10691 integration: Pi native validation -> production bridge/approval hook
+  // -> SDK MCP. Assert raw tools/call, not just handlers: SDK errors happen earlier.
+  it.each(['ask', 'bypassPermissions'] as const)('corrects plugin wrappers without dispatching or approving invalid calls (%s)', { timeout: 90_000 }, async mode => {
+    pluginWireCalls.length = 0;
+    const approvals: Array<{ toolName: string; input: unknown }> = [];
+    const { requests } = await runOneTurn(mode, async request => {
+      if (request.kind === 'permission') approvals.push({ toolName: request.toolName, input: request.input });
+      return { kind: 'permission', behavior: 'allow' };
+    }, 'plugins', 'correct plugin gateway arguments', false, 'plugin-correction-' + mode);
+    expect(pluginWireCalls).toEqual([
+      { name: 'ghost_info', arguments: { ghost_id: 'calendar', namespace: null } },
+      { name: 'ghost_call', arguments: {
+        ghost_id: 'calendar', tool: 'call_tool', args: { name: 'list_calendars', args: { include_hidden: false } },
+      } },
+    ]);
+    expect(approvals).toEqual(mode === 'ask' ? pluginWireCalls.map(call => ({
+      toolName: 'mcp__cindy__' + call.name, input: call.arguments,
+    })) : []);
+    const errors = requests.flatMap(request => (request.messages as any[]).flatMap(message =>
+      (Array.isArray(message.content) ? message.content : []).filter((block: any) => block.type === 'tool_result' && block.is_error)));
+    expect(errors.some(block => JSON.stringify(block).includes('args.ghost_id'))).toBe(true);
+    expect(errors.some(block => JSON.stringify(block).includes('args.tool'))).toBe(true);
+    expect(errors.every(block => JSON.stringify(block).includes('Expected args schema'))).toBe(true);
+    expect(latestToolResultContent(requests.at(-1)!)).toContain('CALENDARS[primary]');
+    expect((requests[0].system as Array<{ text?: string }>).map(part => part.text ?? '').join('\n'))
+      .toContain(piSystemPrompt.trim());
+    // Tool definitions and the system prefix stay stable for the whole task.
+    for (const request of requests) {
+      expect(request.tools).toEqual(requests[0].tools);
+      expect(request.system).toEqual(requests[0].system);
+    }
+  });
 
   // Integration: the real Pi binary must traverse both discovery layers with
   // the production helper schemas. Scripted model only; no claim of model choice quality.

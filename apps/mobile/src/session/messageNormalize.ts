@@ -35,6 +35,7 @@ import {
   readMessageSourceGroup,
   readMessageSourcePlugin,
   sanitizeSourceName,
+  splitPluginMessage,
   type MessageSourceDevice,
   type MessageSourceGroup,
   type MessageSourcePlugin,
@@ -307,7 +308,7 @@ export function normalizeRemoteMessages(
       if (app) {
         result.push({ key: messageNormalizeKey(message), source: message, kind: 'system', role: message.role,
           label: 'system:mcp-app', body: '', systemCardType: 'mcp-app',
-          systemCardData: { title: app.title, fallbackText: app.text }, align: 'agent', createdAt: message.createdAt });
+          systemCardData: { title: app.title, fallbackText: app.text, plugin: app.plugin, customMcp: app.customMcp }, align: 'agent', createdAt: message.createdAt });
         continue;
       }
       const authorization = readRecord(message.agentMeta?.botAuthorization);
@@ -631,10 +632,16 @@ export function normalizeRemoteMessages(
     const rawBody = userContent
       ? (isAsyncQuestionReplyClientId(message.clientId) ? asyncQuestionReplyDisplayText(userContent.text) : userContent.text)
       : contentToPreview(message.content);
-    const hookSource = message.role === 'user' ? readHookSource(message, rawBody) : undefined;
+    const imHookSource = message.role === 'user' ? readHookSource(message, rawBody) : undefined;
+    const pluginRelay = message.role === 'user' && !imHookSource
+      ? readPluginRelayHookSource(message, rawBody, userContent?.pastedTextRanges)
+      : undefined;
+    const hookSource = imHookSource ?? pluginRelay?.hookSource;
     // /goal 裁决块只给 Desktop 驱动续跑,与 Desktop 一致只在显示层剥掉(原文仍在 source)。
     // 本机 IM 落库的就是用户原文:正文保持完整落库内容,分叉 / 回退据此恢复草稿。
-    const body = hookSource && !hookSource.userTextContent
+    // 插件转发的 IM 消息只显示插件的可见正文,分叉 / 回退也以它为草稿。
+    const body = pluginRelay ? pluginRelay.body
+      : hookSource && !hookSource.userTextContent
       ? hookSource.userText
       : message.role === 'assistant' ? stripGoalVerdictBlock(rawBody)
         : readRecord(message.agentMeta?.origin)?.kind === 'session' ? forwardedRequestDisplayText(rawBody) : rawBody;
@@ -650,7 +657,8 @@ export function normalizeRemoteMessages(
       attachments: userContent?.attachments,
       ...(userContent?.quotesEncoded === true ? { quotesEncoded: true } : {}),
       sessionReferences: userContent?.sessionReferences,
-      ...(userContent?.pastedTextRanges?.length
+      // 转发卡片的正文已去掉资料段,原正文上的范围不再适用。
+      ...(userContent?.pastedTextRanges?.length && !pluginRelay
         ? { pastedTextRanges: userContent.pastedTextRanges }
         : {}),
       ...(userContent?.slashCommandRanges !== undefined
@@ -762,6 +770,9 @@ function toolResultContentToPreview(content: unknown): string {
 }
 
 function uncachedToolResultContentToPreview(content: unknown): string {
+  // History and durable row pushes carry decoded JSON. Unwrapping only `text`
+  // would discard the managed media needed by tool previews and their viewer.
+  if (Array.isArray(readRecord(content)?.cindy_process_media)) return JSON.stringify(content);
   const compacted = parseToolResultCompactionMarker(content);
   if (!compacted) return contentToPreview(content);
   return i18n.t('message.renderer.toolResultCompacted', {
@@ -797,6 +808,12 @@ function parseToolUse(message: RemoteMessage): ToolUsePayload {
   const payload = { ...sharedTool, summary, diff };
   toolUsePayloadByMessage.set(message, payload);
   return payload;
+}
+
+/** Same decoding used by user bubbles, including JSON-encoded durable rows. */
+export function remoteUserMessageIsSynthetic(content: unknown): boolean {
+  const parsed = parseMaybeJsonObject(content);
+  return isSyntheticTriggerText(typeof parsed?.text === 'string' ? parsed.text : contentToPreview(content));
 }
 
 function parseUserContent(content: unknown): {
@@ -1258,6 +1275,25 @@ function readHookSource(message: RemoteMessage, fallbackBody: string): Normalize
     userTextContent: source.contentFormat === 'user-text',
     ...(channelName ? { channelName } : {}),
     ...(threadContext.length > 0 ? { threadContext } : {}),
+  };
+}
+
+/**
+ * 插件经 tasks.send 转进来的 IM 消息(主机盖章的 agentMeta.sourcePlugin.relay):已知平台按本机 IM 卡片显示,
+ * 卡头沿用「Cindy · 来自 X」(手机端不显示发言人、群名与背景,与其它 IM 一致),正文只取插件的可见 text。
+ * 插件来源标签照常显示在卡片上方;未知平台保持插件气泡。只是展示投影,不改落库数据。
+ */
+function readPluginRelayHookSource(
+  message: RemoteMessage,
+  rawBody: string,
+  pastedTextRanges: Array<{ start: number; end: number }> | undefined,
+): { hookSource: NormalizedHookSource; body: string } | undefined {
+  const relay = readMessageSourcePlugin(message.agentMeta)?.relay;
+  if (!relay || !isMobileImPlatform(relay.platform)) return undefined;
+  const { text } = splitPluginMessage(rawBody, pastedTextRanges);
+  return {
+    hookSource: { im: relay.platform, userText: text.slice(0, 20_000), userTextContent: true },
+    body: text,
   };
 }
 

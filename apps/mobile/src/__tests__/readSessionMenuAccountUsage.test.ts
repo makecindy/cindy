@@ -59,7 +59,7 @@ describe("existing remote quota compatibility", () => {
     expect(result).toMatchObject({
       source: "chatgpt",
       accountOnly: true,
-      plan: "pro",
+      plan: "Pro",
       windows: [{ remainingPercent: 75, minutes: 300 }],
     });
     expect(r.getCodexRateLimits).toHaveBeenCalledOnce();
@@ -208,7 +208,7 @@ describe("existing remote quota compatibility", () => {
       r,
     );
     expect(result).toMatchObject({
-      plan: "plus",
+      plan: "Plus",
       accountOnly: false,
       windows: [{ remainingPercent: 80 }],
     });
@@ -386,6 +386,7 @@ describe("subscription quota for every subscription family", () => {
   const nowSec = () => Math.floor(Date.now() / 1000);
   const claudeSnapshot = () => ({
     subscriptionType: "max",
+    planTier: "max_20x",
     updatedAt: 2000,
     fiveHour: { utilization: 30, resetsAt: nowSec() + 3600 },
     sevenDay: { utilization: 55, resetsAt: nowSec() + 86400 },
@@ -407,7 +408,7 @@ describe("subscription quota for every subscription family", () => {
       expect(r.getSubscriptionUsage).toHaveBeenCalledWith("claude", "anthropic");
       expect(result).toMatchObject({
         source: "claude",
-        plan: "max",
+        plan: "Max 20×",
         updatedAt: 2000,
         amounts: [],
       });
@@ -438,6 +439,20 @@ describe("subscription quota for every subscription family", () => {
       r,
     );
     expect(result).toMatchObject({ source: "claude", windows: [], plan: null });
+  });
+
+  // Unit: a remote host's display name must survive the mobile projection, even when its plan code is pro.
+  it("uses the execution host's official Claude plan display name", async () => {
+    const r = reader();
+    r.getSubscriptionUsage.mockResolvedValue({
+      ...claudeSnapshot(), subscriptionType: "pro", planTier: "pro", planDisplayName: "Ultra",
+    });
+    const result = await readSessionMenuAccountUsage(
+      { ...session, agentKind: "cc", providerId: "anthropic", model: "claude-opus-5-5" },
+      r,
+    );
+    expect(result.plan).toBe("Ultra");
+    expect(result.windows.map(window => window.remainingPercent)).toEqual([70, 45, 8]);
   });
 
   it("reads an independent subscription account by its own id", async () => {

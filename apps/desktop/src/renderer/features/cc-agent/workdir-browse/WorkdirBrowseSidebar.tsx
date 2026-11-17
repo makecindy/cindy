@@ -21,7 +21,7 @@
  * the Projects view, this component unmounts, watcher closes.
  */
 
-import { openHtmlFileByPreference } from '@/components/chat/useOpenWithMenu';
+import { openHtmlFileByPreference } from '@/components/chat/messageLinkActions';
 import { resolveSessionFileOrigin } from '@/lib/sessionFileOrigin';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';

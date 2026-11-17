@@ -77,11 +77,19 @@ interface ButtonValueWrapper {
   [key: string]: unknown;
 }
 
-function buttonElement(text: string, type: 'primary' | 'default' | 'danger', value: ButtonValueWrapper): unknown {
+function buttonElement(
+  text: string,
+  type: 'primary' | 'default' | 'danger',
+  value: ButtonValueWrapper,
+  fill: boolean,
+): unknown {
   return {
     tag: 'button',
     text: { tag: 'plain_text', content: text },
     type,
+    // fill: 按钮按卡片最大宽度展开(JSON 1.0 按钮的 width 属性), 选项列表
+    // 一行一个, 文字不再因同行挤多个按钮而被压缩省略。
+    ...(fill ? { width: 'fill' } : {}),
     value,
   };
 }
@@ -101,10 +109,15 @@ function chunkButtons<T>(items: readonly T[], size: number): T[][] {
 /**
  * Build a feishu v1 interactive card JSON from an InteractiveCardSpec.
  * Buttons are split across action modules of FEISHU_V1_ACTION_MAX_COMPONENTS
- * (同一模块内飞书会自动换行, 但单模块不能超过 5 个).
+ * (单模块不能超过 5 个).
+ *
+ * 默认横排: 同一模块内的按钮按窄屏自适应布局挤在一行, 按钮多、文案长时
+ * 飞书会压缩文字。`buttonLayout: 'list'` 的选项卡改为 flow 布局 + 满宽按钮,
+ * 每个选项独占一行、完整显示文案; 按钮 value 与回调路径不变。
  */
 export function buildInteractiveCardV1(spec: InteractiveCardSpec): unknown {
   const elements: unknown[] = [];
+  const list = spec.buttonLayout === 'list';
 
   if (spec.title) {
     elements.push({
@@ -122,11 +135,17 @@ export function buildInteractiveCardV1(spec: InteractiveCardSpec): unknown {
     for (const group of chunkButtons(spec.buttons, FEISHU_V1_ACTION_MAX_COMPONENTS)) {
       elements.push({
         tag: 'action',
+        ...(list ? { layout: 'flow' } : {}),
         actions: group.map((b) =>
-          buttonElement(b.label, b.type ?? 'default', {
-            id: b.id,
-            ...(b.payload ?? {}),
-          }),
+          buttonElement(
+            b.label,
+            b.type ?? 'default',
+            {
+              id: b.id,
+              ...(b.payload ?? {}),
+            },
+            list,
+          ),
         ),
       });
     }

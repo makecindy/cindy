@@ -199,6 +199,5 @@ export function createTaskInstallConsentPrompt(
       untrack();
     }
   };
-  prompt.hostUiCapabilityApproval = true;
   return prompt;
 }

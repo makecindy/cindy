@@ -1,3 +1,5 @@
+import { parseSettingsNavigationUrl } from '@cindy/maker-shared/settings-navigation';
+import { SettingsLinkChip } from './SettingsLinkChip';
 import '@/styles/chatContentDirection.css';
 import { VideoSitePreview } from './VideoSitePreview';
 import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
@@ -137,8 +139,8 @@ import {
   isHtmlFilePath,
   openHtmlFileByPreference,
   activateMessageUrl,
-  useOpenWithMenu,
-} from './useOpenWithMenu';
+} from './messageLinkActions';
+import { useOpenWithMenu } from './useOpenWithMenu';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import { useLinkContextMenu } from './useLinkContextMenu';
 
@@ -2014,6 +2016,8 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             );
           }
         }
+        const settingsTarget = allowPrivilegedLinks && href ? parseSettingsNavigationUrl(href) : null;
+        if (settingsTarget) return <SettingsLinkChip target={settingsTarget} />;
         if (allowPrivilegedLinks && href != null && hasDeepLinkPathPrefix(href, 'session/')) {
           // 深链 → 会话 chip:显示会话标题(查不到降级短 ID),点击跳转;
           // 带 ?message= 锚点时进一步定位并高亮目标消息。作者显式写的

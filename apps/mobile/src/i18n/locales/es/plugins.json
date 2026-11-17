@@ -86,6 +86,7 @@
   "taskPermission": "Permisos de tareas",
   "followDefault": "Seguir los valores predeterminados",
   "taskSettingsHint": "Se aplica a las tareas creadas por este complemento de ahora en adelante. Las tareas existentes mantienen su modelo y permisos.",
+  "remoteQuickAnswerHint": "Este modelo se ejecuta en otra computadora. Las respuestas rápidas se envían desde la computadora del complemento, así que usan el modelo auxiliar del sistema.",
   "permissionHint": "Elige los permisos para las nuevas tareas de complementos. Los permisos de la tarea actual no se heredan.",
   "autoPermissionHint": "La aprobación automática permite a Cindy evaluar las solicitudes de permiso automáticamente. ¿Usarla para futuras tareas de complementos?",
   "settingsReload": "Vuelve a cargar la configuración para comprobar si la acción se guardó",

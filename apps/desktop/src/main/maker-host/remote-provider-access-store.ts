@@ -117,17 +117,17 @@ function notifyAll(): void {
  * 只对跑过 11-10 迁移的文件做一次；其余供应商一律不动。
  */
 /**
- * 撤回 11-10 默认开放时要补记的供应商：分享了的供应商，加上分享出去的 OpenAI 账号池里从旧 Codex 连接
- * 导入的账号——受邀者用这个池时会逐个核对这些旧连接的「允许被远程调用」，只补 openai 本身会让分享失效。
+ * 撤回 11-10 默认开放时要补记的供应商：分享了的供应商，加上当前仍属于这些分享池的旧 Codex 连接
+ * （拆回独立供应商的历史映射不算分享意图）——受邀者用这个池时会逐个核对这些旧连接的「允许被远程调用」，只补 openai 本身会让分享失效。
  */
 export function sharedProviderIdsForRevert(
   shares: readonly { providerId: string }[],
   /** 账号池读不了时返回 null：这时不能确定要补哪些旧连接，整次补记推迟到下次。 */
-  readOpenAiLegacyAccounts: () => Readonly<Record<string, string>> | null,
+  readSharedLegacyAccounts: (sharedProviders: ReadonlySet<string>) => Readonly<Record<string, string>> | null,
 ): Set<string> | null {
   const ids = new Set(shares.map((share) => share.providerId));
-  if (!ids.has('openai')) return ids;
-  const legacy = readOpenAiLegacyAccounts();
+  if (ids.size === 0) return ids;
+  const legacy = readSharedLegacyAccounts(ids);
   if (!legacy) return null;
   for (const legacyId of Object.keys(legacy)) ids.add(legacyId);
   return ids;

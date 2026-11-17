@@ -121,8 +121,12 @@ export default function IncomingShareScreen() {
   const text = batch ? incomingShareText(batch.payloads) : '';
   const files = batch?.payloads.filter(item => item.shareType !== 'text' && item.shareType !== 'url') ?? [];
   const handoffBatchId = useRef<string | null>(null);
+  const [leaving, setLeaving] = useState(false);
   useEffect(() => {
-    if (focused) handoffBatchId.current = null;
+    if (focused) {
+      handoffBatchId.current = null;
+      setLeaving(false);
+    }
   }, [focused, batch?.id]);
   const choose = (destination: string, action: () => void) => {
     // A queued second press must not replace the destination during transition.
@@ -133,9 +137,11 @@ export default function IncomingShareScreen() {
   };
   // Removing the chooser during a handoff retains the batch for its composer.
   // Header/gesture cancellation still acknowledges and cleans the owned copies.
-  usePreventRemove(!!batch, ({ data }) => {
-    leaveIncomingShareChooser(batch && handoffBatchId.current !== batch.id ? batch.id : null,
-      () => navigation.dispatch(data.action));
+  usePreventRemove(!!batch && !leaving, ({ repeat }) => {
+    // repeat releases this screen's prevention before replaying the action.
+    // The batch deliberately survives handoff or a failed native cancellation.
+    setLeaving(true);
+    leaveIncomingShareChooser(batch && handoffBatchId.current !== batch.id ? batch.id : null, repeat);
   });
   const back = () => goBackGuarded(router);
   return <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.root}>

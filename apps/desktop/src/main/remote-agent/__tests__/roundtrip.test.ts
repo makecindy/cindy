@@ -33,6 +33,7 @@ import { createDeviceAgentStarter, liveDirectGuestSession } from '../controller/
 import { credentialGrantFor, forgetCredentialGrants } from '../executor/credentialGrants';
 import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
+import { hostedAttachmentPreservation } from '../../maker-host/attachmentPreservation';
 import { hostedStartOptions } from '../host/service';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service';
 import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch';
@@ -279,6 +280,50 @@ function createHost(
 }
 
 describe('remote agent round trip', () => {
+  // Hosted 413 integration: production open/host/reverse HTTP/projection must
+  // return an attachment readable by the native executor, not a provider file.
+  // Prior tests exercised tools but never a host-initiated preservation batch.
+  it('preserves hosted attachments on the controller and releases the binding on close', async () => {
+    const storage = path.join(root, 'attachments');
+    fs.mkdirSync(storage);
+    const bytes = Buffer.alloc(600_000, 7); // Cross one transport chunk boundary.
+    const host = createHost();
+    let handle: AgentSessionHandle | undefined;
+    let hostedId = '';
+    try {
+      handle = await startRemoteAgentSession('pi', { sessionId: 'attachment-task', workingDir: project, model: 'm', permissionMode: 'bypassPermissions' }, {
+        ...makeDeps(host),
+        attachmentStorageRoots: () => ({ files: storage }),
+        attachmentPreservation: () => async (signal, operation) => {
+          const staged: Array<{ file: string; bytes: Buffer }> = [];
+          const result = await operation(async (content, _mime, index) => {
+            const file = path.join(storage, `${index}.bin`);
+            staged.push({ file, bytes: content });
+            return file;
+          });
+          signal.throwIfAborted();
+          if (result !== null) for (const item of staged) fs.writeFileSync(item.file, item.bytes);
+          return result;
+        },
+      });
+      const input = hostInputs[0];
+      hostedId = input.hostSessionId;
+      const batch = hostedAttachmentPreservation(hostedId);
+      expect(batch).toBeDefined();
+      const reference = await batch!(new AbortController().signal, preserve => preserve(bytes, 'application/octet-stream', 0));
+      expect(reference).not.toBe(path.join(storage, '0.bin'));
+      const response = await fetch(`${input.tunnel.url}/exec/fs.read`, { method: 'POST',
+        headers: { authorization: `Bearer ${input.tunnel.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ path: reference, encoding: 'base64' }) });
+      expect(response.status).toBe(200);
+      const read = await response.json() as { data: string };
+      // Native byte comparison retains the full 600 kB round-trip assertion
+      // without Vitest walking every Buffer index (seconds on CI workers).
+      expect(Buffer.from(read.data, 'base64').equals(bytes)).toBe(true);
+    } finally { await handle?.close(); host.dispose(); }
+    expect(hostedAttachmentPreservation(hostedId)).toBeUndefined();
+  });
+
   // #9263 integration: the real starter, host advertisement, JSON wire and
   // dispatch must preserve guest iMessage permissions through send and steer.
   it('delivers iMessage policy and identity to the remote execution handle', async () => {
@@ -1381,9 +1426,12 @@ describe('remote agent round trip', () => {
       expect(host.limitUsage().total).toBe(1);
       cancelPendingRemoteStart(sessionId);
       await expect(starting).rejects.toThrow('[REMOTE_AGENT_EXPIRED]');
-      await vi.waitFor(() => expect(host.limitUsage().total).toBe(0), { interval: 1, timeout: 1000 });
+      // Cancellation ends the controller's wait, but the native startup still
+      // owns its slot until the late handle has actually been closed.
+      expect(host.limitUsage().total).toBe(1);
       finishStart();
       await vi.waitFor(() => expect(closed).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(host.limitUsage().total).toBe(0), { interval: 1, timeout: 1000 });
       expect(hostSends).toEqual([]);
     } finally {
       finishStart();
@@ -1562,7 +1610,7 @@ describe('shared startup lease budget', () => {
     const owner = 'share:startup-budget';
     const target = providerShareHostPeer('startup-budget', 'executor-m');
     const generation = '11111111-1111-4111-8111-111111111111';
-    const calls: Array<{ device: string; op: string; sessionId?: string; generation?: string; runId?: string }> = [];
+    const calls: Array<{ device: string; op: string; method?: string; model?: string; callId?: string; sessionId?: string; generation?: string; runId?: string }> = [];
     const runs = new Map<string, Run>();
     const sessions = new Map<string, string>();
     const disposed: string[] = [];
@@ -1571,7 +1619,7 @@ describe('shared startup lease budget', () => {
     const allocation = deferred();
     let allocations = 0;
     const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
-    const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false,
+    const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
       startFailure: '', startFailureName: 'AgentStartupStoppedError', localFailure: '',
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
       blockClose: false, blockPrepare: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false };
@@ -1587,7 +1635,7 @@ describe('shared startup lease budget', () => {
     });
     vi.spyOn(RemoteAgentPoller.prototype, 'unregister').mockImplementation(() => {});
     const remoteInvoke = vi.fn(async (device: string, _channel: string, args: unknown[]) => {
-      const request = args[0] as { op: string; sessionId?: string; generation?: string; runId?: string; callId?: string; payload?: { json?: { sessionId: string } } };
+      const request = args[0] as { op: string; method?: string; sessionId?: string; generation?: string; runId?: string; callId?: string; payload?: { json?: { sessionId: string } } };
       calls.push({ device, ...request });
       if (device === owner && state.ownerOffline) throw Object.assign(new Error('owner offline'), { code: 'NOT_CONNECTED' });
       // remoteBackgroundInvoke resolves `share:` before any transport and throws the share's own state.
@@ -1624,7 +1672,9 @@ describe('shared startup lease budget', () => {
       }
       if (request.op === 'call') {
         const run = runs.get(request.runId!);
-        if (run) emit(run, { t: 'result', callId: request.callId, ok: true, value: null });
+        if (run && !(state.holdSend && request.method === 'send') && !(state.holdModel && request.method === 'setModel')) {
+          emit(run, { t: 'result', callId: request.callId, ok: true, value: null });
+        }
       }
       return { ok: true, result: {} };
     });
@@ -1657,6 +1707,68 @@ describe('shared startup lease budget', () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
   });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); historyInvoke.mockReset(); historyOpenLink.mockReset(); });
+
+  // Unit, direct-execution authorization contract: prompt preparation can keep
+  // a send pending. Existing renewal cases returned its RPC result immediately,
+  // hiding the shared send/authorization queue that let an online task expire.
+  // A 90s grant puts renewal at the first 60s tick without real-time waiting.
+  it.each([false, true])('renews during an unsettled send without extending an offline grant: ownerOffline=%s', async ownerOffline => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 90_000; f.state.holdSend = true;
+    const handle = await f.open();
+    let sendSettled = false;
+    const sending = handle.send({ type: 'user', content: 'long running turn' }).finally(() => { sendSettled = true; });
+    // Closing/expiry rejects a pending RPC; retain the result for cleanup.
+    const outcome = sending.catch(() => undefined);
+    try {
+      await flush();
+      expect(f.calls.filter(call => call.op === 'call')).toHaveLength(1);
+      f.state.ownerOffline = ownerOffline;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(sendSettled).toBe(false);
+      expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(31_000);
+      if (ownerOffline) {
+        expect(f.disposed).toContain('pending');
+        expect(liveSharedTaskTarget('pending', f.owner)).toBeNull();
+      } else {
+        expect(f.disposed).toEqual([]);
+        expect(liveSharedTaskTarget('pending', f.owner)).toBe(f.target);
+        expect(sendSettled).toBe(false);
+      }
+      // Renewal never replays the send or reopens the executor.
+      expect(f.calls.filter(call => call.op === 'call')).toHaveLength(1);
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+    } finally {
+      f.state.ownerOffline = false;
+      await handle.close({ reason: 'account-boundary' });
+      await outcome;
+    }
+  });
+
+  it('keeps the changing model grant until its RPC settles before renewing again', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 360_000; f.state.holdModel = true;
+    const handle = await f.open();
+    await vi.advanceTimersByTimeAsync(30_000);
+    const changing = handle.setModel!('m2');
+    const outcome = changing.catch(() => undefined);
+    try {
+      await flush();
+      expect(f.calls.filter(call => call.op === 'allocate').map(call => call.model)).toEqual(['m', 'm2']);
+      await vi.advanceTimersByTimeAsync(270_000);
+      // The model grant is already m2, but the local handle still reports m.
+      // A renewal here must not replace M's m2 grant with that old snapshot.
+      expect(f.calls.filter(call => call.op === 'allocate').map(call => call.model)).toEqual(['m', 'm2']);
+      const call = f.calls.find(call => call.op === 'call' && call.method === 'setModel')!;
+      f.emit(f.runs.get(call.runId!)!, { t: 'result', callId: call.callId, ok: true, value: null });
+      await changing;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(f.calls.filter(call => call.op === 'allocate').map(call => call.model)).toEqual(['m', 'm2', 'm2']);
+      expect(f.disposed).toEqual([]);
+    } finally {
+      await handle.close({ reason: 'account-boundary' });
+      await outcome;
+    }
+  });
 
   // Unit: real starter -> remote start-failed -> group startup recovery -> fresh
   // open. Previously only running handles were covered; a pinned native resume

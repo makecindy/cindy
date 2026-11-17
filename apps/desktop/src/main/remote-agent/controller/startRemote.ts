@@ -1,3 +1,5 @@
+import { createAttachmentPreservationReceiver } from '../attachmentPreservation.js';
+import type { PreserveAttachmentBatch } from '../../maker-host/attachmentPreservation.js';
 import { currentSessionCreationSignal } from '../../localDb/sessionRuntimeCleanup.js';
 /**
  * 在另一台电脑上启动 Agent、任务留在本机(控制端入口)。
@@ -68,6 +70,8 @@ export interface PreparedRemoteMcp {
 }
 
 export interface StartRemoteAgentDeps {
+  attachmentPreservation?(sessionId: string): PreserveAttachmentBatch;
+  attachmentStorageRoots?(sessionId: string): Record<string, string>;
   /** Cancellation for this startup attempt only; never cancels other starts of the task. */
   startupSignal?: AbortSignal;
   /** A direct share must renew the original executor's grant before reopening. */
@@ -440,6 +444,13 @@ async function prepareAndStartRemoteAgentSession(
         }
       : {}),
   });
+  const attachmentRoots = !hostToolsOnly ? deps.attachmentStorageRoots?.(opts.sessionId!) : undefined;
+  const attachments = attachmentRoots && deps.attachmentPreservation
+    ? createAttachmentPreservationReceiver(deps.attachmentPreservation(opts.sessionId!), async file => {
+      const projected = workspace.toAgentPath(file);
+      if (projected === file) throw new Error('Attachment path projection unavailable');
+      return projected;
+    }) : undefined;
   let preparedMcp: PreparedRemoteMcp | undefined;
   let executorDisposal: Promise<void> | undefined;
   const disposePreparation = async (): Promise<void> => {
@@ -447,7 +458,7 @@ async function prepareAndStartRemoteAgentSession(
     preparedMcp = undefined;
     executorDisposal ??= Promise.resolve().then(() => executor.close());
     const results = await Promise.allSettled([
-      executorDisposal, Promise.resolve().then(() => prepared?.dispose()),
+      executorDisposal, Promise.resolve().then(() => prepared?.dispose()), Promise.resolve().then(() => attachments?.dispose()),
     ]);
     const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
     if (failures.length) throw new AggregateError(failures, 'Remote agent preparation cleanup failed');
@@ -470,7 +481,7 @@ async function prepareAndStartRemoteAgentSession(
   } finally {
     signal.removeEventListener('abort', cancelPreparation);
   }
-  const router = createReverseHttpRouter({ executor, mcpTarget: (name) => mcp.servers.get(name), hostToolsOnly });
+  const router = createReverseHttpRouter({ executor, mcpTarget: (name) => mcp.servers.get(name), hostToolsOnly, attachments });
 
   // 连回对方时按最新值打开(换模型、推理强度等在已让出名额时只记在这里)。
   let model = opts.model;
@@ -640,6 +651,10 @@ async function prepareAndStartRemoteAgentSession(
       } else workspace.setAliases(aliases);
       managedAliasFroms = managed;
       workspace.setVirtualRoot(virtualRoot);
+      if (virtualRoot && attachmentRoots) {
+        const native = /^[A-Za-z]:|^\\\\/.test(virtualRoot) ? path.win32 : path.posix;
+        workspace.addAliases(Object.entries(attachmentRoots).map(([name, to]) => ({ from: native.join(virtualRoot, 'additional', 'attachments', name), to })));
+      }
     };
     const client: RemoteAgentRunClient = new RemoteAgentRunClient(deps.newId(), poller, {
       onEvent: (event) => {
@@ -901,6 +916,7 @@ async function prepareAndStartRemoteAgentSession(
     return {
       sessionId: opts.sessionId!,
       acceptsImageDeliveryReceipts: true,
+      ...(attachments ? { acceptsAttachmentPreservation: true } : {}),
       ...(imageDeliveryEpoch !== undefined ? { imageDeliveryEpoch } : {}),
       virtualWorkspace: true,
       options: encodeStartOptions(startOptions),

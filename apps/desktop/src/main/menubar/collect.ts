@@ -1,4 +1,6 @@
 import type { ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
+import { formatClaudeSubscriptionPlanLabel, formatCodexPlanLabel } from '@cindy/maker-shared/subscription-usage';
+import { codexAccountDisplayKey } from '../maker-host/codex-auth-identity.js';
 import { kimiUsageWindowMinutes } from '../../shared/kimiCodingUsage.js';
 import { opencodeGoUsageWindowMinutes } from '../../shared/opencodeGoUsage.js';
 /**
@@ -286,7 +288,7 @@ export function sameSubscriptionAccount(a: MenubarSubscriptionInput, b: MenubarS
   // hosts have no workspace ID, so keep those entries separate rather than
   // hiding a quota or assigning one workspace's running marker to another.
   if (a.family === 'codex' && (a.pooled || b.pooled) &&
-      !left.some(key => key.startsWith('codex:id:') && right.includes(key))) return false;
+      !left.some(key => (key.startsWith('codex:id:') || key.startsWith('codex:verified:')) && right.includes(key))) return false;
   if (left.some((key) => right.includes(key))) return true;
   // Pool entries are known distinct accounts; similar windows alone cannot identify them.
   if (a.pooled || b.pooled) return false;
@@ -336,22 +338,18 @@ function identityKeys(family: string, provider: ProviderView, ...ids: [string, u
   }
   const identity = accountIdentity(provider);
   if (identity) keys.push(`${family}:identity:${identity.toLowerCase()}`);
+  if (family === 'codex') {
+    const workspace = ids.find(([kind]) => kind === 'id')?.[1];
+    const verified = provider.openAiAccount?.accountKey
+      ?? (identity && typeof workspace === 'string' ? codexAccountDisplayKey(identity, workspace) : undefined);
+    if (verified) keys.push(`codex:verified:${verified}`);
+  }
   return keys;
 }
 
 function accountIdentity(provider: ProviderView): string | null {
   const identity = provider.openAiAccount?.identity ?? provider.subscriptionAccount?.identity ?? null;
   return identity && identity.trim() ? identity.trim() : null;
-}
-
-/** "pro" → "Pro", "max_20x" → "Max 20x"; product names stay as the service writes them. */
-export function planLabel(raw: string | null | undefined): string | null {
-  if (!raw || !raw.trim()) return null;
-  return raw
-    .trim()
-    .split(/[_\s-]+/)
-    .map((word) => (/^[a-z]/.test(word) ? word[0].toUpperCase() + word.slice(1) : word))
-    .join(' ');
 }
 
 /** A window whose reset already passed has unknown usage until the next read. */
@@ -407,7 +405,7 @@ export function codexSource(
     logoSvg: familyLogo('codex'),
     brand: 'Codex',
     account: accountIdentity(provider),
-    plan: planLabel(bucket?.planType ?? full?.planType),
+    plan: formatCodexPlanLabel(bucket?.planType ?? full?.planType),
     windows,
     credits: creditAmount,
     creditsUnlimited: credits?.unlimited === true,
@@ -432,8 +430,10 @@ export function subscriptionPoolSources(provider: ProviderView, pool: Subscripti
       ...source,
       id: account.id === 'default' ? provider.id : `${provider.id}:account:${account.id}`,
       account: identity,
-      plan: planLabel(account.plan) ?? source.plan,
-      accountKeys: [...(source.accountKeys ?? []), ...(identity ? [`${source.family}:identity:${identity.toLowerCase()}`] : [])],
+      plan: (source.family === 'claude'
+        ? formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName)
+        : formatCodexPlanLabel(account.planType ?? account.plan)) ?? source.plan,
+      accountKeys: [...(source.accountKeys ?? []), ...(account.accountKey ? [`${source.family}:verified:${account.accountKey}`] : []), ...(identity ? [`${source.family}:identity:${identity.toLowerCase()}`] : [])],
       pooled: true,
       consuming: account.running > 0,
       resetCredits: null,
@@ -447,6 +447,7 @@ function codexPoolPayload(usage: SubscriptionAccountUsage['codex']): CodexAccoun
     value && typeof value.usedPercent === 'number' && Number.isFinite(value.usedPercent)
       ? { ...value, usedPercent: value.usedPercent } : null;
   return {
+    planType: usage.planType,
     appServerBuckets: Object.fromEntries(Object.entries(usage.buckets).map(([id, bucket]) => [id, {
       ...bucket, primary: window(bucket.primary), secondary: window(bucket.secondary),
     }])),
@@ -479,7 +480,7 @@ export function claudeSource(
     logoSvg: familyLogo('claude'),
     brand: 'Claude',
     account: provider.id === 'anthropic' ? null : accountIdentity(provider),
-    plan: planLabel(snapshot?.subscriptionType),
+    plan: formatClaudeSubscriptionPlanLabel(snapshot?.subscriptionType, snapshot?.planTier, snapshot?.planDisplayName),
     windows,
     credits: null,
     creditsUnlimited: false,

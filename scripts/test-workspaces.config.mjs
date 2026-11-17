@@ -243,6 +243,11 @@ const desktopGuardInclude = [
   // the full device-link singleton would start Electron runtime wiring. Keep it in the explicit
   // guard tier rather than letting its source extraction enter ordinary unit tests.
   'src/main/mcp-apps/__tests__/remoteViews.test.ts',
+  // Executes the picker admission and confirmation branches it extracts from the source text of
+  // register.ts and of sessionRuntimeSelectionApply.ts (handleSetModel moved there). Importing
+  // register.ts would load Electron, so the test reads source text instead; that extraction stays in
+  // the guard tier, as remoteViews above.
+  'src/main/maker-ipc/__tests__/orcaModelSelectionIntent.test.ts',
   'src/renderer/features/cc-agent/sidebar/__tests__/sessionCardReviewRegressions.test.ts',
   'src/renderer/__tests__/orcaModelWindowSelection.test.ts',
   'src/renderer/__tests__/markdownRendererXdtAudio.test.ts',

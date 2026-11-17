@@ -27,7 +27,7 @@ import type {
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { GroupHistoryAccessScope } from './groupHistoryAccess';
-import type { ChannelToolScope } from './channelToolScope';
+import type { ChannelToolScope, TelegramReplyMediaScope } from './channelToolScope';
 import type { ImChannelNoteSource } from './channelNote';
 import type { ImOutputDriver, IMAttachment, IMMessageEvent, IMUnsupportedEntry, TextChannelIM } from '@cindy/im';
 
@@ -303,6 +303,8 @@ export interface ImChannelAdapter {
    * provider 开始前登记、终态释放(channelToolScope.ts)；不实现即本轮没有渠道工具。
    */
   channelToolScopeFor?(event: IMMessageEvent): ChannelToolScope | undefined;
+  /** Only for an already admitted background reply to this exact lane. */
+  replyMediaScopeFor?(userId: string): TelegramReplyMediaScope;
   /**
    * 本条消息的 `[渠道说明]` 来源事实（只进模型正文, 见 channelNote.ts）。
    * 缺省按入站事件通用推断（imChannelNoteSourceFromEvent）; 渠道有更准确的

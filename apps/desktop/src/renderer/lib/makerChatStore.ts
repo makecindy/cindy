@@ -11,12 +11,14 @@ import {
   formatAsyncQuestionSupplement, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
 } from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
+import { findErrorTailMessage } from './errorTailMessage';
 import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './pluginSetupCommandError';
 export type { PluginSetupCommandError } from './pluginSetupCommandError';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
 import { normalizeTaskTags } from '@cindy/maker-shared';
-import type { ImMessageSource } from '../../shared/imMessageSource';
+import { createPluginRelayImSource, type ImMessageSource } from '../../shared/imMessageSource';
+import { splitPluginMessage } from '../../shared/pluginMessage';
 import { sharedTaskAuthorMemberId, sharedTaskAuthorName } from '@cindy/maker-shared';
 import { readBotAuthorizationCard } from '../../shared/botAuthorization';
 import { readBotStarterOptions } from '../../shared/botStarterOptions';
@@ -146,7 +148,7 @@ import type {
   GhostSetupStepPhase,
 } from '../../shared/ghost';
 import * as messageService from '@/lib/messageService';
-import { parseMcpAppHistory, parseMcpAppRecord } from '@cindy/maker-shared/mcp-apps';
+import { parseMcpAppHistory } from '@cindy/maker-shared/mcp-apps';
 import * as sessionService from '@/lib/sessionService';
 // device-link 透明传输:远程(被控设备)会话的操作/读取走隧道,本地会话零变化。
 import {
@@ -411,15 +413,17 @@ export function remoteErrorMessageForBanner(msg: string): string {
  * key('empty-response' / 'turn-failed'), message 仅作非 renderer 消费方(IM/orca)的兜底。
  */
 function liveErrorBannerText(message: string, reason: string | undefined): string {
+  if (reason === 'unexecuted-tool-markup') return i18n.t('logic.errors.unexecutedToolMarkup');
+  // The banner localizes this stable reason. Keep the host's bounded cause in
+  // the raw detail/diagnosis path instead of replacing it with summary copy.
+  if (reason === 'silent-stop-exhausted') return message;
   return reason === 'empty-response'
     ? i18n.t('logic.errors.emptyResponse')
     : reason === 'turn-failed'
       ? i18n.t('logic.errors.turnFailed')
-      : reason === 'silent-stop-exhausted'
-        ? i18n.t('logic.errors.silentStopExhausted')
-        : reason === 'codex-auto-review-unavailable'
-          ? i18n.t('logic.errors.codexAutoReviewUnavailable')
-          : remoteErrorMessageForBanner(message);
+      : reason === 'codex-auto-review-unavailable'
+        ? i18n.t('logic.errors.codexAutoReviewUnavailable')
+        : remoteErrorMessageForBanner(message);
 }
 // 专门给"出现在用户面前的红色 ErrorBanner"打日志,scope 以 `maker/` 开头
 // 是为了让它落在统一 agent 流(agent-*.ndjson,跟 agent runtime 抛出的底层错误同一份,
@@ -1034,7 +1038,7 @@ export interface PendingGhostGrantConfirm {
    * outside_workdir = 文档/电脑等内置工具读写工作目录外的路径。
    */
   lane:
-    | 'attachments' | 'handoff' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'fs_delete' | 'workspace' | 'forge_source' | 'outside_workdir';
+    | 'attachments' | 'handoff' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
   sourceTool?: string;
   operation?: 'read' | 'write';
   items: Array<{
@@ -4125,8 +4129,45 @@ function _trimMessagesIfNeeded(): void {
 function _trimSessionMessages(sessionId: string): void {
   const state = sessions.get(sessionId);
   if (!state || state.messages.length <= TRIM_THRESHOLD) return;
-  if (_isSessionBusy(sessionId, state)) return;
-  if (_activeViewSessions.has(sessionId)) return;
+  // 裁剪地板集合:所有约束解析成功才允许裁,start 取 min(len - TRIM_TARGET, 各地板)。
+  const floors: number[] = [];
+  // 正在被看：读者视口必须在窗口尾部（贴底）。但渲染窗口会折叠工具过程、隐藏子代理
+  // 内部行 —— 贴底不代表原始前缀已离屏（一轮提问+300 条折叠工具行+回答可以同屏），
+  // 所以还必须按「渲染窗口覆盖地板」裁：窗口外的原始行没有 DOM，裁掉才可证不可见；
+  // 上翻阅读中不裁；快照缺 windowFloorClientId（旧快照/窗口未建立）时无法证明前缀
+  // 不可见，同样不裁。
+  if (_activeViewSessions.has(sessionId)) {
+    const scroll = readSessionScroll(sessionId);
+    if (scroll?.isNearBottom === false) return;
+    const floorIdx = scroll?.windowFloorClientId
+      ? messageIndexByClientId(state.messages, scroll.windowFloorClientId)
+      : -1;
+    if (floorIdx < 0) return;
+    floors.push(floorIdx);
+  }
+  // 正在忙：不再整窗豁免，改为以「在途轮起始行」为地板 —— 完成轮照裁，运行轮整体
+  // 保留（pending 交互、running 快照、远端乐观气泡都住在当前轮里）。轮起点是最后
+  // 一条非插话 user 行（delivery: 'steer' 的插话不打断轮，与 MessageStream 的轮
+  // 边界判定同源）；找不到时无法定位轮边界，维持原豁免。此前 busy + 挂载双豁免
+  // 叠加时窗口只增不减：长协作（Orca worker 连续派活）攒出几千行，切任务迟滞、
+  // 提问导航条堆成刻度墙。
+  if (_isSessionBusy(sessionId, state)) {
+    let turnStart = -1;
+    for (let i = state.messages.length - 1; i >= 0; i -= 1) {
+      const m = state.messages[i];
+      if (m.role === 'user' && m.delivery !== 'steer') {
+        turnStart = i;
+        break;
+      }
+    }
+    if (turnStart < 0) return;
+    floors.push(turnStart);
+  }
+  const start = Math.min(
+    state.messages.length - TRIM_TARGET,
+    ...floors,
+  );
+  if (start <= 0) return;
 
   // 裁剪等于一次代际重置:它砍掉窗口中段。in-flight 的翻页 / 跳转补齐若仍按 pre-trim
   // 游标提交,就会把更老的一页直接接到保留的尾部上 —— 中间被裁掉的区间成了新的空洞,
@@ -4140,7 +4181,14 @@ function _trimSessionMessages(sessionId: string): void {
     if (s.messages.length <= TRIM_THRESHOLD) {
       return s.isLoadingMore ? { ...s, isLoadingMore: false } : s;
     }
-    const retained = s.messages.slice(-TRIM_TARGET);
+    // 各地板与外层守卫同源（setState 同步拿到同一份 state，见上）。任一地板下
+    // 保留行数可以超过 TRIM_TARGET —— 那是还在跑的整轮/仍被渲染窗口覆盖的行，
+    // 砍它才出问题。
+    const windowStart = Math.min(
+      s.messages.length - TRIM_TARGET,
+      ...floors,
+    );
+    const retained = windowStart > 0 ? s.messages.slice(windowStart) : s.messages;
     // 连续尾段被裁短、孤岛已不在保留窗口里:游标清成 null,loadOlderMessages 走
     // beforeTs(messages[0]),从新的窗口下沿接着往更早翻。
     // 保留窗口里还夹着孤岛(最新连续尾段不足 200 行):必须留下「最新连续段最老一行」
@@ -4687,7 +4735,13 @@ function _softEvictSession(sessionId: string): void {
 
 function _ensureSoftEvictionTimer(): void {
   if (_softEvictionTimerHandle) return;
-  _softEvictionTimerHandle = setInterval(_softEvictIdleSessions, SOFT_EVICTION_CHECK_INTERVAL_MS);
+  // 30s 维护拍：软淘汰之外顺带跑一次窗口裁剪。trim 原本只有 leaveView 一个触发
+  // 点，持续挂载的 view（Orca worker 面板）和常驻 busy 的会话没有离开时机，窗口
+  // 只增不减 —— 在这里补上；贴底/地板规则见 _trimSessionMessages。
+  _softEvictionTimerHandle = setInterval(() => {
+    _trimMessagesIfNeeded();
+    _softEvictIdleSessions();
+  }, SOFT_EVICTION_CHECK_INTERVAL_MS);
 }
 
 function _stopSoftEvictionTimer(): void {
@@ -16938,7 +16992,7 @@ function disposeLiveErrorPersist(sessionId: string): void {
     return;
   }
   if (!state?.error) return;
-  const tailRowId = persistedTailRowIdForLiveError(state);
+  const tailRowId = getLiveErrorMessageClientId(state);
   if (tailRowId) markLiveErrorRowDisposed(sessionId, tailRowId);
   _disposedLiveErrorIntents.set(sessionId, {
     text: state.error,
@@ -16961,7 +17015,7 @@ function markLiveErrorRowDisposed(sessionId: string, clientId: string): void {
 }
 
 /**
- * live 横幅没有绑定落库行时，找出它对应的已落库尾部错误行。
+ * 返回 live 横幅拥有的精确落库行；旧 Host 没有绑定时才按尾部与文案安全认领。
  *
  * 错误落库后若用户没在看这个任务(或之后离开过)，live 横幅会交给历史错误卡，绑定一并清掉；
  * main 的输入投影仍带着这次错误，之后任何一次投影(打开任务、队列变化、协同派活等)都会把
@@ -16969,15 +17023,19 @@ function markLiveErrorRowDisposed(sessionId: string, clientId: string): void {
  * 保留绑定：后来的新错误(远程断线期间漏收的新一轮、scheduler 发送前失败直接换掉错误等)
  * 可能不经过新一轮启动就顶替旧错误，保留的绑定会被错用到新错误上，关闭标掉的是旧行。
  *
- * 改在关闭时按当前看到的内容认领：已加载历史的最后一条(与尾部错误卡同一判定)是未处置的
- * error 行，且文案与 live 横幅一致(liveErrorTextMatchesRow)，才认为是同一次错误。对不上
- * (历史未加载、尾部不是 error、文案不同)就什么都不标，不会标到无关行。
+ * 改在显示/关闭时按当前看到的内容认领：共享尾部选择器找到未处置的 error 行
+ * (跳过位置/模型/历史边界卡)，且文案与 live 横幅一致(liveErrorTextMatchesRow)，才认为
+ * 是同一次错误。历史未加载、已有真实进展或文案不同就不认领，不会标到无关行。
  * 关闭的错误可能还没落库：尾部仍是同文案的旧行时，这里会把旧行一起标掉(它不在尾部之后
  * 就不再显示，没有可见影响)，真正那一行由 claimDisposedLiveErrorRow 等它落库后补标。
  */
-function persistedTailRowIdForLiveError(state: SessionChatState): string | null {
-  if (!state.error || !state.historyLoaded) return null;
-  const tail = state.messages[state.messages.length - 1];
+export function getLiveErrorMessageClientId(
+  state: Pick<SessionChatState, 'error' | 'errorPersistId' | 'historyLoaded' | 'messages' | 'disposedErrorPersistId'>,
+): string | null {
+  if (!state.error) return null;
+  if (state.errorPersistId) return state.errorPersistId;
+  if (!state.historyLoaded) return null;
+  const tail = findErrorTailMessage(state.messages, state.disposedErrorPersistId);
   return tail && isUndisposedErrorRowFor(tail, state.error, state.disposedErrorPersistId)
     ? tail.clientId
     : null;
@@ -18203,7 +18261,6 @@ function parseGhostGrantConfirmRequest(request: {
     lane !== 'save_dir' &&
     lane !== 'reveal_path' &&
     lane !== 'fs_write' &&
-    lane !== 'fs_delete' &&
     lane !== 'workspace' &&
     lane !== 'forge_source' &&
     lane !== 'outside_workdir'
@@ -18647,16 +18704,12 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
   // session when the action started.
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
   const triggerApi = remoteDeviceId ? makerApiForDevice(remoteDeviceId) : makerApiFor(sessionId);
-  const originalTail = state.messages[state.messages.length - 1];
   // Freeze the row the user acted on before session lookup / dispatch. A fast
   // continuation failure may append a new error before send resolves; that new
   // error must keep its retry banner.
-  const continuedErrorTailClientId =
-    syntheticTriggerKind(prompt) === 'continue' &&
-    originalTail?.role === 'error' &&
-    !originalTail.errorDismissed
-      ? originalTail.clientId
-      : null;
+  const continuedErrorTailClientId = syntheticTriggerKind(prompt) === 'continue'
+    ? findErrorTailMessage(state.messages, state.disposedErrorPersistId)?.clientId
+    : null;
   // device-link 远程会话:get/enqueue 都走传输层(getSessionFor 远程读被控 row,
   // makerApiFor(...) 远程隧道到被控端 coordinator)。
   return getSessionFor(sessionId)
@@ -19448,6 +19501,11 @@ export const makerChatStore = {
   __activeViewTest: {
     getActiveSessionIds: () => [..._activeViewSessions.keys()],
     getLastViewedAt: (sessionId: string) => _lastViewedAt.get(sessionId),
+    // 单测注入 busy 态（isStreaming）：trim 依赖 _isSessionBusy，生产入口是 IPC 流
+    // 事件链，测试里直接置位避免整条 mock；断言仍是可观察的窗口行数。
+    setStreamingForTest: (sessionId: string, isStreaming: boolean) => {
+      setState(sessionId, (s) => ({ ...s, isStreaming }));
+    },
     setSoftEvictionBudget: (budget: { messages: number; characters: number } | null) => {
       softEvictionBudget = budget ?? SOFT_EVICTION_DEFAULT_BUDGET;
     },
@@ -19948,7 +20006,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     if (mcpApp) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'mcp-app' as const,
-      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: (parseMcpAppRecord(m.content)?.tool._meta as Record<string, unknown> | undefined)?.['cindy/plugin'] },
+      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: mcpApp.plugin, customMcp: mcpApp.customMcp },
       mcpAppClientId: m.clientId,
     };
     const persistedCindyCard =
@@ -20349,12 +20407,17 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       const automationOrigin = toMessageAutomationOrigin(m.agentMeta?.origin);
       const delivery = m.agentMeta?.delivery;
       const goalObjective = m.agentMeta?.goalObjective;
-      // Both ingress paths share the Desktop card, but local IM must not opt
-      // older Mobile clients into legacy Hook/system-card semantics.
-      const hookSource = m.agentMeta?.imSource ?? m.agentMeta?.hookSource;
       // 发送设备 / 插件来源:宽容读取(平台未知等不完整数据不出标签)。
       const sourceDevice = readMessageSourceDevice(m.agentMeta);
       const sourcePlugin = readMessageSourcePlugin(m.agentMeta);
+      // Both ingress paths share the Desktop card, but local IM must not opt
+      // older Mobile clients into legacy Hook/system-card semantics.
+      // 插件转发的 IM 消息(sourcePlugin.relay)只在这里派生同一张卡片,不落库成 imSource;
+      // 插件来源标签照常显示在卡片上方。
+      const hookSource = m.agentMeta?.imSource ?? m.agentMeta?.hookSource
+        ?? (sourcePlugin?.relay
+          ? createPluginRelayImSource(sourcePlugin.relay, splitPluginMessage(parsed.text, parsed.pastedTextRanges))
+          : undefined);
       return {
         sharedAuthorName: sharedTaskAuthorName(m.agentMeta),
         sharedAuthorMemberId: sharedTaskAuthorMemberId(m.agentMeta),

@@ -1,5 +1,13 @@
 # 通知上的按钮：回答提问、回复、允许一次、拒绝
 
+> **读取时机**：新增或修改手机通知上的按钮（回答提问、回复、允许一次、拒绝）、哪些通知带按钮、按钮点击在后台的执行、
+> 没送到时的提示，或登录凭证在钥匙串里的可读时机之前
+> **适用路径**：`apps/mobile/src/notifications/**`、
+> `apps/mobile/src/__tests__/{notificationActions,lockedLaunchGate,secureStorage}*`、
+> `apps/mobile/plugins/notification-content/**`、`apps/mobile/plugins/with-notification-content.js`、
+> `apps/mobile/modules/cindy-background-work/**`、`apps/mobile/src/device-link/backgroundConnection.ts`、
+> `apps/mobile/src/auth/secureStorage.ts`、`apps/desktop/src/main/device-link/**/mobileNotify*`
+
 2026-11-12，用户裁决：任务通知在 iPhone 锁屏与 Apple Watch 上可以直接作答——Agent 提问时可以点选项或
 直接回复，任务完成的可以「回复」，等批准的可以「允许一次／拒绝」。同日用户补充：回答提问比批准更重要，
 是这项能力的主要用途。Apple Watch 只是镜像 iPhone 的通知与按钮，没有独立的手表 App；按钮由 iPhone 上的

@@ -177,9 +177,11 @@ afterEach(() => vi.useRealTimers());
 describe('Claude profile renewal', () => {
   it('reads the selected profile expiry and forwards a verified renewal request', async () => {
     vi.mocked(refreshClaudeCliLoginStatus).mockResolvedValueOnce({ loggedIn: true,
-      email: 'second@example.test', loginExpiresAt: '2030-01-05T00:00:00.000Z' });
+      email: 'second@example.test', loginExpiresAt: '2030-01-05T00:00:00.000Z',
+      subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra' });
     expect(await readNativeAccount('anthropic', '/fixture/claude-second', { force: true })).toMatchObject({
       authenticated: true, identity: 'second@example.test', loginExpiresAt: '2030-01-05T00:00:00.000Z',
+      plan: 'pro', planTier: 'pro', planDisplayName: 'Ultra',
     });
     expect(refreshClaudeCliLoginStatus).toHaveBeenLastCalledWith({ configDir: '/fixture/claude-second', force: true, requireFresh: true });
     const signal = new AbortController().signal;

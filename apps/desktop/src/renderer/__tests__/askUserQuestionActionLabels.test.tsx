@@ -30,6 +30,13 @@ vi.mock('@/components/chat/useOpenWithMenu', async (original) => ({
   openHtmlFileByPreference: links.html,
   activateMessageUrl: links.url,
 }));
+// Navigation helpers moved out of the hook module; components import them
+// directly, so the test must mock that module too.
+vi.mock('@/components/chat/messageLinkActions', async (original) => ({
+  ...await original<typeof import('@/components/chat/messageLinkActions')>(),
+  openHtmlFileByPreference: links.html,
+  activateMessageUrl: links.url,
+}));
 
 beforeEach(async () => {
   await i18n.changeLanguage('en');
