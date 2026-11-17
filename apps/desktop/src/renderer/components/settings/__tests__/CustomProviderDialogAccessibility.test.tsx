@@ -659,7 +659,8 @@ describe('ProviderConnectionDialog accessibility', () => {
   // previous UNKNOWN-only coverage could not detect a lost diagnostic code at this boundary.
   it.each(['UNKNOWN', 'CERT_ERROR'] as const)('测试连接失败时显示 %s 及主进程返回的被测模型', async code => {
     window.electronAPI.maker.testProviderConnection = vi.fn(async () => ({
-      ok: false, code, latencyMs: 1, modelId: 'probed-by-main',
+      ok: false, code, ...(code === 'CERT_ERROR' ? { decision: 'blocked' as const } : {}),
+      latencyMs: 1, modelId: 'probed-by-main',
     }));
     await openFailingTest();
     expect(await screen.findByText('settings.providers.custom.test.model:probed-by-main')).toBeTruthy();

@@ -172,9 +172,11 @@ async function attempt(
     }
     if (signal.aborted) return { ok: false, code: 'TIMEOUT', latencyMs: 0, decision: 'inconclusive' };
     if (rejected) return rejected;
+    // A certificate failure is actionable before HTTP; do not hide it behind
+    // the ambiguous-execution warning or suggest retrying the same request.
     if (!accepted && networkCode) {
       const cls = classifyProviderError({ networkErrorCode: networkCode });
-      return { ok: false, code: cls.code, detail: cls.detail, latencyMs: 0, decision: 'inconclusive' };
+      return { ok: false, code: cls.code, detail: cls.detail, latencyMs: 0, decision: cls.code === 'CERT_ERROR' ? 'blocked' : 'inconclusive' };
     }
     if (nativeOk && observer.state.terminal && (observer.state.generated || nativeGenerated) && !observer.state.error) {
       return { ok: true, latencyMs: 0, decision: 'success', selected: candidate };
@@ -183,7 +185,7 @@ async function attempt(
   } catch {
     if (rejected) return rejected;
     const cls = classifyProviderError({ networkErrorCode: signal.aborted ? 'TimeoutError' : networkCode ?? 'UNKNOWN' });
-    return { ok: false, code: cls.code, detail: cls.detail, latencyMs: 0, decision: 'inconclusive' };
+    return { ok: false, code: cls.code, detail: cls.detail, latencyMs: 0, decision: cls.code === 'CERT_ERROR' ? 'blocked' : 'inconclusive' };
   }
 }
 

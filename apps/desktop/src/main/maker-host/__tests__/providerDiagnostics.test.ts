@@ -1531,7 +1531,7 @@ describe('provider certificate diagnostics (#11007)', () => {
     const expected = { ok: false, code: 'CERT_ERROR', detail: 'DEPTH_ZERO_SELF_SIGNED_CERT' };
     expect(await runProviderProbe(spec, fetcher)).toMatchObject(expected);
     expect(await fetchProviderModels(spec, fetcher)).toMatchObject(expected);
-    expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({ ...expected, decision: 'inconclusive' });
+    expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({ ...expected, decision: 'blocked' });
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
