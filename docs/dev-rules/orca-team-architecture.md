@@ -746,9 +746,12 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
    `hasLiveBackgroundWork`，保护不在任务快照中的原生工作，读取失败则保留运行时。
    异步查询之后复核运行时身份、轮次和排队输入，最终关闭仍与发送预留同步互斥。
    完成确认被拒后沿既有终态边界重试；watcher 只有关闭成功才写释放标记。
+   跨电脑 Worker 当前只提供前台运行状态，不能据此证明后台任务或 continuation 已结束；
+   `orcaRemoteWorkers.wrapTeamDeps` 对自动空闲关闭返回 false，保留 done 和回报状态。
+   在通道提供可靠后台证据前，无后台工作的远程 Worker 也不会自动确认到 idle，仍可显式 idle。
    显式 idle、归档与结束团队继续沿原来的关闭路径，不把任意脱管 shell 进程当成已跟踪任务。
    回归见 `session.close.test.ts`、Claude `abort-stops-background-tasks.test.ts`、
-   `orcaTeamService.test.ts` 与 `orcaIdleReleaseWatcher.test.ts`。
+   `orcaTeamService.test.ts`、`orcaRemoteWorkers.test.ts` 与 `orcaIdleReleaseWatcher.test.ts`。
 
 3. **idle worker 恢复必须保留 extraDirs（状态：不变量）**<br>
    idle worker 被 `switch_focus` 或 `send_to_worker` 唤醒时，要从 DB 读取 `extra_dirs` 并带回 `bootstrapSession`，否则恢复后的 worker 会丢附加目录上下文。实现指针：`register.ts` 的 idle worker resume helper。

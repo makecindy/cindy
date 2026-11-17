@@ -724,7 +724,10 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
       },
       closeWorkerSessionIfIdle: async (sessionId, sendLockHeld) =>
         (await isRemoteWorker(sessionId))
-          ? !runtime.isTurnRunning(sessionId)
+          // Remote foreground status cannot prove background tasks or wake
+          // continuations are idle. Keep automatic done acknowledgement pending
+          // until that evidence exists; explicit idle/stop still uses abort above.
+          ? false
           : base.closeWorkerSessionIfIdle(sessionId, sendLockHeld),
       hasPendingWorkerInput: async (sessionId) =>
         (await isRemoteWorker(sessionId))
