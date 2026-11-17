@@ -1258,6 +1258,7 @@ import { peekGoalInactiveNote } from '../goal-host/inactiveNote.js';
 import { readReplyQuoteNote, REPLY_QUOTE_SOURCE_CONTENT } from './chatReplyQuoteNote.js';
 import { readBotDmThreadContextNote } from './botDmThreadContext.js';
 import { readTurnUsageResetAt } from '../goal-host/usageLimit.js';
+import { resolveSessionUsageReset } from './sessionUsageReset.js';
 import {
   readAccountUsageLimit,
   readRemoteAccountUsageLimit,
@@ -1791,38 +1792,28 @@ async function resolveSessionUsageResetAt(
   const agentKind = row?.agentKind ? dbToMakerAgentKind(row.agentKind) : null;
   if (!row || !agentKind) return null;
   const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
-  let family = subscriptionFamilyOf(agentKind, providerId);
-  if (!family && row.agentDeviceId && !row.remoteHostId && providerId) {
-    const views = await readDeviceProviderViews(remoteBackgroundInvoke, row.agentDeviceId);
-    family = views.find(view => view.id === providerId)?.auth.native ?? null;
-  }
-  if (!family) return null;
-  // SSH 远程会话 / 远程 Agent 的报错用那台机器的本地时间:不带时区的钟点不按本机时区理解。
-  const otherMachineAccount = sessionUsesOtherMachineAccount(row);
-  const fromError = readTurnUsageResetAt(signals, Date.now(), {
-    localTimeZoneTrusted: !otherMachineAccount,
-  });
-  if (fromError !== null && signals.usageResetAt !== undefined) return fromError;
-  // Ask the actual account for its dated windows before relying on a text-only clock.
-  // SSH has no account-usage RPC; never substitute a local account there.
-  try {
-    const scope = activeOwnerScopeKey();
-    const limit = row.remoteHostId ? null : row.agentDeviceId && providerId
-      ? await readRemoteAccountUsageLimit({ deviceId: row.agentDeviceId, providerId, family, agentKind, modelId, sdkSessionId: row.sdkSessionId },
+  return resolveSessionUsageReset({ agentKind, providerId, modelId,
+    agentDeviceId: row.agentDeviceId ?? null, remoteHostId: row.remoteHostId ?? null,
+    sdkSessionId: row.sdkSessionId ?? null }, signals, {
+    now: () => Date.now(),
+    scopeKey: activeOwnerScopeKey,
+    localFamilyOf: subscriptionFamilyOf,
+    readRemoteProviders: (deviceId) => readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
+    readRemoteLimit: async (route, family) => {
+      const scope = activeOwnerScopeKey();
+      return readRemoteAccountUsageLimit({ deviceId: route.agentDeviceId, providerId: route.providerId,
+        family, agentKind: route.agentKind, modelId: route.modelId, sdkSessionId: route.sdkSessionId },
         (deviceId, channel, args) => remoteBackgroundInvoke(deviceId, channel, args, {
           preSend: () => { if (scope !== activeOwnerScopeKey()) throw new Error('Account changed'); },
-        }))
-      : family === 'claude'
+        }));
+    },
+    readLocalLimit: async ({ agentKind, providerId, modelId }, family) => family === 'claude'
         ? claudeAccountUsageLimit(await readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId ?? undefined, { fresh: true }), modelId)
         : family === 'codex'
           ? codexAccountUsageLimit(await readCodexAccountUsageSnapshotWithWebRefresh(providerId ?? undefined, { fresh: true }), { agentKind, modelId })
-          : await readAccountUsageLimit(agentKind, providerId, modelId);
-    if (scope !== activeOwnerScopeKey()) return null;
-    if (limit?.limited && limit.resetAtMs !== null) return limit.resetAtMs;
-  } catch (error) {
-    log.info('usage reset lookup unavailable; retaining provider error hint', { sessionId, error: String(error) });
-  }
-  return fromError;
+          : readAccountUsageLimit(agentKind, providerId, modelId),
+    unavailable: (error) => log.info('usage reset lookup unavailable; retaining provider error hint', { sessionId, error: String(error) }),
+  });
 }
 
 // 普通任务撞上账号限额:照常报错，保存等待并在额度重置后自动继续。
@@ -8956,7 +8947,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }));
   }
 
-  async function resolveProviderGroupImplicitProvider(agentKind: AgentKind, model: string): Promise<string | null> {
+  async function resolveProviderGroupImplicitProvider(agentKind: AgentKind, model: string, agentDeviceId?: string): Promise<string | null> {
+    if (agentDeviceId) {
+      const { provider } = await readRemoteProviderRoute({ agentDeviceId, agentKind, model, providerId: null });
+      return provider.id;
+    }
     const providers = await getDesktopProviderService().listProviders({
       allowSideEffects: false,
       catalog: getActiveCatalog(),
