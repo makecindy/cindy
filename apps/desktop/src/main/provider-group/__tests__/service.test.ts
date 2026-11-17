@@ -217,6 +217,22 @@ describe('companion group failover eligibility', () => {
     expect(await h.eligibility.usageLimit('s1')).toBe(false);
   });
 
+  // Unit regression: the real eligibility gate used to reject every shared
+  // task before the group could move an exhausted/offline member to another.
+  it.each([{ sdkError: 'rate_limit' }, { message: '[REMOTE_AGENT_UNAVAILABLE] offline' }])(
+    'relocates shared ordinary tasks but keeps delayed quota waits disabled: %j', async signals => {
+      const h = companionHarness();
+      h.state.source = 'desktop';
+      h.eligibilityDeps.isShared = () => true;
+      await h.service.onTurnError('s1', signals, 1);
+      expect(h.row.agentDeviceId).toBe('mini');
+      expect(h.deps.continueSession).toHaveBeenCalledOnce();
+      expect(h.deps.fallback).not.toHaveBeenCalled();
+      expect(await h.eligibility.usageLimit('s1')).toBe(false);
+      expect(await h.eligibility.providerGroup('s1', { kind: 'rebalance' })).toBe(false);
+    },
+  );
+
   it('moves a retry away from the exhausted member before sending, without balancing healthy inputs', async () => {
     const h = companionHarness();
     await h.service.beforeSend('s1', { clientId: 'retry' });

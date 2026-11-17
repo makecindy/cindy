@@ -17185,6 +17185,34 @@ describe('usage-limit wait (ordinary tasks)', () => {
 });
 
 describe('provider group computer switch hold', () => {
+  // Unit regression: accepted guest turns must reach group recovery and retain
+  // their attribution, but must never become a persisted, delayed quota wait.
+  it.each([false, true])('recovers a shared guest turn through the group (output=%s)', async hasOutput => {
+    const sid = 'shared-group-recovery';
+    const h = createHarness({ providerGroupSwitchCandidate: () => 'usage-limit' });
+    const author = { sharedTaskId: 'st', sessionId: sid, memberId: 'm', accountId: 'guest', displayName: 'Guest' };
+    h.coordinator.enqueue(sid, { ...makeItem('guest-original', 'guest request'), sharedTaskAuthor: author });
+    await flush();
+    h.setHasAssistantProgressAfter(async () => hasOutput);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', "You've hit your session limit", { sdkError: 'rate_limit' });
+    await flush();
+    expect(h.onUsageLimitedTurnError).toHaveBeenCalledOnce();
+    const token = h.onUsageLimitedTurnError.mock.calls[0][3];
+    expect(h.coordinator.getProviderGroupSwitchHoldId(sid)).not.toBeNull();
+    expect(h.coordinator.armUsageLimitWait(sid, token, 9_000_000)).toBe(false);
+    expect(h.coordinator.snapshotUsageLimitRecovery(sid, token)).toBeNull();
+    const lease = h.coordinator.leaseUsageLimitRecovery(sid, token)!;
+    const continueToken = h.coordinator.rearmUsageLimitWait(sid, lease, Date.now())!;
+    await h.coordinator.continueAfterProviderGroupRecovery(sid, continueToken, {
+      reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON, attempt: 1, maxAttempts: 1, sessionTotal: 0,
+      agentSwitch: { from: 'A', to: 'B', cause: 'usage-limit' },
+    });
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.coordinator.isActiveInputAccountScoped(sid)).toBe(false);
+  });
+
   // Unit integration: real coordinator + eligibility + guest-switch service.
   // Existing tests replaced eligibility with true; they could not catch bot's
   // exclusion or a second replay after a handoff closed the native session.

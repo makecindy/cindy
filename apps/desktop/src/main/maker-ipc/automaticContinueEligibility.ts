@@ -46,7 +46,9 @@ export function createAutomaticContinueEligibility(deps: {
       if (deps.ownerEpoch() !== owner || deps.isPaused(sessionId)
         || !deps.ownsCompanionInput(sessionId, context)) return false;
     }
-    if (deps.isShared(sessionId)) return false;
+    // Sharing must not disable recovery within the owner's selected group.
+    // Delayed quota waits and proactive rebalancing still require owner control.
+    if (deps.isShared(sessionId) && (!context || context.kind === 'rebalance' || row.source === 'bot')) return false;
     if (await deps.goalOwnsRecovery(sessionId)) return false;
     return row.source !== 'bot' || (deps.ownerEpoch() === owner && !deps.isPaused(sessionId)
       && !deps.isShared(sessionId) && !!context && deps.ownsCompanionInput(sessionId, context));
