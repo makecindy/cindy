@@ -264,7 +264,7 @@ async function readClaudeAccount(
     await reader.getSubscriptionUsage("claude", accountScope(session)),
   );
   const result = empty("claude");
-  result.plan = formatClaudeSubscriptionPlanLabel(snapshot.subscriptionType, snapshot.planTier);
+  result.plan = formatClaudeSubscriptionPlanLabel(snapshot.subscriptionType, snapshot.planTier, snapshot.planDisplayName);
   result.updatedAt = finite(snapshot.updatedAt) ? snapshot.updatedAt : null;
   const now = Date.now();
   const add = (

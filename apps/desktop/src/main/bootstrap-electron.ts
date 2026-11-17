@@ -6023,13 +6023,16 @@ const registerIpcHandlers = () => {
   //   - SDK supportedModels 捕获(maker-core 会话 init 后上报)是能力字段权威。
   setClaudeSupportedModelsListener(noteAnthropicSdkSupportedModels);
   // CLI 登录态在 Cindy 之外变化(终端里登录 / 登出)时同步连接态;登出与手动断开同款收尾。
-  onClaudeCliLoginStatusChange((status) => {
+  onClaudeCliLoginStatusChange(() => {
     void broadcastClaudeAuthStateChanged();
     syncClaudeSubscriptionUsageForAuthChange();
+  });
+  // 套餐显示名可能随文本状态查询暂时缺失;展示照常刷新,不重置模型发现世代。
+  onClaudeCliLoginStatusChange((status) => {
     if (!status.loggedIn) resetProviderModelAutoRefreshCooldowns('anthropic');
     // 登出清空清单;登录(含在终端里登录)后主动读一次;直接换号先清旧账号再读。
     syncAnthropicModelsWithClaudeLogin(status);
-  });
+  }, { includeDisplayNameChanges: false });
   // 启动时后台读一次(不阻塞):已连接的用户由 provider 目录加载等这次结果;
   // 从未连接的用户据此自动沿用本机登录。明确断开过的用户不再读。
   if (!isNativeProviderAuthRevoked('anthropic')) void readClaudeCliLoginStatus();

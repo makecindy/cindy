@@ -15,8 +15,9 @@ Claude Code 与 Codex 都不再有面向用户的「默认账号」或「设为�
 不更换存储键。旧用量入口的 native/WHAM 投影存在同一行的 `legacySnapshot` 槽，不能覆盖账号池的已验证身份与额度；清除该兼容槽不清除已验证额度，移除账号才清整行。换登录身份后不沿用另一身份的兼容槽。移动官方 CLI 账号仍要求当前 owner 的原有 native binding，移动记录不能授予使用系统登录的权限，显式撤销仍生效。旧键只在新键不存在时读取，清除留下空值阻止旧数据复活。恢复额度先核对官方 CLI 当前账号身份，
 Codex 同时核对工作区；缓存不能证明登录有效。新额度观测落盘，普通缓存读取不重复写，迟到观测不跨用户或复活已移除账号。
 
-Claude 保留官方 `subscriptionType` 与 `planTier`，已知具体档位显示为 Max 5× / Max 20×；缺失或未知
-档位只显示已知套餐，不猜测 Ultra。Codex 保留 `planType`；旧 `plan` 字段仍兼容。桌面、任务账号查询、
+Claude 保留官方 `subscriptionType` 与 `planTier`，另存可选 `planDisplayName`。显示名来自官方 CLI，
+有值时优先显示（例如机器代码仍为 `pro`、显示名为 `Ultra`）；显示名缺失或只报通用 Max 时，已知具体档位显示为 Max 5× / Max 20×，
+未知档位只显示已知套餐，不从用量或旧机器代码猜测 Ultra。Codex 保留 `planType`；旧 `plan` 字段仍兼容。桌面、任务账号查询、
 模型选择器、菜单栏和手机沿用同一份元数据与格式化规则。供应商组与分享额度也逐账号读取，不为官方 CLI 账号另取一份供应商额度。实现见 `subscription-accounts/runtime.ts`、
 `usage/accountUsageStorage.ts` 和 `maker-shared/src/subscriptionPlanLabel.ts`。
 

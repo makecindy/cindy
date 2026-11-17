@@ -389,7 +389,7 @@ export function SubscriptionAccountsSection({
                 const plan =
                   kind === 'openai'
                     ? formatCodexPlanLabel(account.planType ?? account.plan)
-                    : formatClaudeSubscriptionPlanLabel(account.plan, account.planTier);
+                    : formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName);
                 const usage = buildSubscriptionAccountUsageCard(
                   account.usage,
                   t,
