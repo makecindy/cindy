@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from assets/usage-widgets/text.json (the picker reads these). -->
+<resources>
+  <string name="cindy_widget_quota_label">Kuota langganan</string>
+  <string name="cindy_widget_quota_description">Sisa kuota tiap langganan dan kapan diisi ulang.</string>
+  <string name="cindy_widget_usage_label">Penggunaan harian</string>
+  <string name="cindy_widget_usage_description">Penggunaan hari ini dan tren beberapa hari terakhir.</string>
+</resources>

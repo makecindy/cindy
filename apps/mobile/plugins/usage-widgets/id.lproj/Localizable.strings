@@ -1,0 +1,15 @@
+"Data source" = "Sumber data";
+"Choose which computer this widget shows." = "Pilih komputer yang ingin kamu tampilkan di widget ini.";
+"Computer" = "Komputer";
+"Automatic" = "Otomatis";
+"The computer that answered last" = "Komputer yang terakhir merespons";
+"Account" = "Akun";
+"Choose which computer this widget shows, which accounts come first and which to hide. Other accounts, including ones added later, follow in that computer's order." = "Pilih komputer yang ingin kamu tampilkan di widget ini, akun mana yang didahulukan, dan akun mana yang disembunyikan. Akun lain, termasuk yang ditambahkan nanti, mengikuti urutan di komputer tersebut.";
+"Accounts first" = "Akun yang didahulukan";
+"Hidden accounts" = "Akun tersembunyi";
+"activity.waitingForUpdate" = "Menunggu pembaruan";
+"activity.lastUpdated" = "Terakhir diperbarui";
+"activity.toReview" = "Perlu ditinjau";
+"activity.inProgress" = "Sedang berlangsung";
+"activity.pendingCount %lld" = "%lld tertunda";
+"activity.unreadCount %lld" = "%lld belum dibaca";
