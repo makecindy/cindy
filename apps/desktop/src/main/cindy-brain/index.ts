@@ -738,10 +738,7 @@ import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { bindingStore } from '../im/binding.js';
 import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
-import {
-  formatAuxiliaryModelRefLabel,
-  getEffectiveAuxiliaryModelChain,
-} from '../utility-model/resolveAuxiliaryModelChain.js';
+import { getEffectiveAuxiliaryModelLabel } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { isKnownEmbeddingModel } from '@cindy/embedding-client';
 import { resolveOneshotCatalogModel } from '../utility-model/textOneshotPinOptions.js';
 import { hasOneshotProviderCredential } from '../utility-model/oneshotProviderUsability.js';
@@ -9336,10 +9333,7 @@ export function registerGhostIpc(): void {
       },
     },
     preferences: new RemotePluginPreferences({
-      auxiliaryModelLabel: () => {
-        const ref = getEffectiveAuxiliaryModelChain().refs[0] ?? null;
-        return ref === null ? null : formatAuxiliaryModelRefLabel(ref);
-      },
+      auxiliaryModelLabel: getEffectiveAuxiliaryModelLabel,
       tasks: taskSettings,
       sidebar: {
         read: id => requireRemotePluginManagementServices().sidebar.read(id),
@@ -10829,10 +10823,9 @@ export function registerGhostIpc(): void {
   // The same model fields also drive the plugin's quick answers (cindy.text.oneshot);
   // auxiliaryModelLabel names the system auxiliary model the "follow default" row uses.
   ipcMain.on('ghosts:errand-prefs', (event, ghostId: unknown) => {
-    const auxiliaryRef = getEffectiveAuxiliaryModelChain().refs[0] ?? null;
     event.returnValue = {
       config: typeof ghostId === 'string' ? readPluginTaskConfig(ghostId) : {},
-      auxiliaryModelLabel: auxiliaryRef === null ? null : formatAuxiliaryModelRefLabel(auxiliaryRef),
+      auxiliaryModelLabel: getEffectiveAuxiliaryModelLabel(),
     };
   });
   ipcMain.handle('ghosts:errand-prefs:set', async (event, ghostId: unknown, config: unknown) => {

@@ -163,5 +163,12 @@ function parsedAuxiliaryModelRefs(refs: readonly string[]): ParsedAuxiliaryModel
   return parsed;
 }
 
-return { getEffectiveAuxiliaryModelChain, getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs, formatAuxiliaryModelRefLabel, parsedAuxiliaryModelRefs };
+/** Label the same local candidate chain used by plugin execution, not a retained remote head. */
+function getEffectiveAuxiliaryModelLabel(): string | null {
+  const first = parsedAuxiliaryModelRefs(getEffectiveAuxiliaryModelChain().refs)[0];
+  if (!first) return null;
+  return formatAuxiliaryModelRefLabel(first.kind === 'profile' ? first.id : encodeCatalogModelPin(first.route));
+}
+
+return { getEffectiveAuxiliaryModelChain, getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs, getEffectiveAuxiliaryModelLabel, formatAuxiliaryModelRefLabel, parsedAuxiliaryModelRefs };
 }
