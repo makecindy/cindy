@@ -31,6 +31,7 @@ import {
 export interface UseProvidersReturn {
   providers: ProviderView[];
   providerOrder: string[];
+  disabledProviders?: Record<string, boolean>;
   ownerGeneration: number | null;
   loading: boolean;
   error: LocalCatalogFailure | null;
@@ -79,6 +80,7 @@ export function useProviders(): UseProvidersReturn {
   return {
     providers: currentSnapshot?.providers ?? [],
     providerOrder: currentSnapshot?.providerOrder ?? [],
+    disabledProviders: currentSnapshot?.disabledProviders,
     ownerGeneration: currentSnapshot?.ownerGeneration ?? null,
     loading: currentSnapshot == null,
     error,

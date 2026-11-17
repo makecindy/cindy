@@ -1,4 +1,5 @@
 import { UI_MOCK_SHOWCASE_PROJECTS, UI_MOCK_SHOWCASE_TASKS } from './uiMockShowcase';
+import { UI_MOCK_BIDI_TASK } from './uiMockBidi';
 export { UI_MOCK_SHOWCASE_PROJECTS };
 
 /**
@@ -58,6 +59,7 @@ export type UiMockMessage =
   | { role: 'user'; text: string }
   | { role: 'assistant'; text: string }
   | { role: 'thinking'; text: string }
+  | { role: 'error'; text: string }
   | { role: 'tool'; name: string; input: Record<string, unknown>; result: string }
   /** New task "Let a plugin choose": the one-line note under the first message. */
   | { role: 'plugin-route'; note: Record<string, unknown> };
@@ -129,6 +131,35 @@ const RICH_ANSWER = [
  */
 export const UI_MOCK_TASKS: readonly UiMockTask[] = [
   ...UI_MOCK_SHOWCASE_TASKS,
+  UI_MOCK_BIDI_TASK,
+  {
+    id: 'ui-mock-remote-communication',
+    title: '远程通信错误指引',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-6-astra', effort: 'xhigh',
+    status: 'active', source: 'desktop', minutesAgo: 0,
+    messages: [
+      { role: 'user', text: '查看合成的通信错误，检查错误详情与恢复指引。' },
+      { role: 'error', text: '[REMOTE_AGENT_OFFLINE] [DEVICE_OFFLINE] synthetic peer offline' },
+      { role: 'error', text: '[REMOTE_AGENT_ACCESS_DENIED] [ACCESS_REVOKED] synthetic access denied' },
+      { role: 'error', text: '[REMOTE_AGENT_LINK_BUSY] [BACKPRESSURE] synthetic send buffer busy' },
+      { role: 'error', text: '[REMOTE_AGENT_UNRESPONSIVE] [DEVICE_UNRESPONSIVE] synthetic circuit open' },
+      { role: 'error', text: '[REMOTE_AGENT_TIMEOUT] [INVOKE_TIMEOUT] no invoke-result within 30000ms after first socket write\nrequestedTarget=mock-peer; channel=maker:remote-agent' },
+    ],
+  },
+  {
+    id: 'ui-mock-remote-resume-rejected',
+    title: '远程任务无法恢复',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-6-astra', effort: 'xhigh',
+    status: 'active', source: 'desktop', minutesAgo: 0,
+    messages: [
+      { role: 'user', text: '继续整理演示项目的发布说明。' },
+      { role: 'assistant', text: '已完成变更清单，接下来整理验证步骤。' },
+      { role: 'user', text: '请继续。' },
+      { role: 'error', text: 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer' },
+    ],
+  },
   {
     id: 'visual-issue-confirm',
     title: '反馈手机上的问题',
@@ -446,7 +477,7 @@ export interface UiMockSessionRow {
   messageCount: number;
 }
 
-export type UiMockMessageRole = 'user' | 'assistant' | 'thinking' | 'tool_use' | 'tool_result';
+export type UiMockMessageRole = 'user' | 'assistant' | 'thinking' | 'error' | 'tool_use' | 'tool_result';
 
 export interface UiMockMessageRow {
   id: string;
@@ -528,6 +559,9 @@ function taskMessageRows(task: UiMockTask, endsAt: number): UiMockMessageRow[] {
         break;
       case 'thinking':
         push('thinking', { kind: 'thinking', text: message.text, durationMs: 1_500, isRedacted: false });
+        break;
+      case 'error':
+        push('error', { message: message.text });
         break;
       case 'tool': {
         const toolUseId = `${UI_MOCK_ID_PREFIX}${task.id}-tool-${index + 1}`;

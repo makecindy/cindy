@@ -29,6 +29,8 @@ export interface ApiFetchOptions {
   body?: unknown;
   timeoutMs?: number;
   cache?: 'no-store';
+  /** Sensitive share requests must not follow redirects to another origin. */
+  redirect?: 'error';
   /** Reject stale account-scoped work before transport or auth side effects. */
   assertCurrent?: () => void;
   /** Extra request headers (e.g. Chat Server's X-Chat-Actor); never overrides auth or content type. */
@@ -101,6 +103,7 @@ export async function apiFetchRaw<T>(
         body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
         signal: controller?.signal ?? opts.signal,
         ...(opts.cache ? { cache: opts.cache } : {}),
+        ...(opts.redirect ? { redirect: opts.redirect } : {}),
       });
       let nextData: unknown = null;
       try {

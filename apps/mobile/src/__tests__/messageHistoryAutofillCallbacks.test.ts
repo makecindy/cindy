@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { shouldAutoLoadEarlier } from '@/session/messageScroll';
 
 // Execute the production progress-key calculation and callback, including the early dedupe guard.
@@ -13,7 +13,7 @@ let progressKeySource = '';
 const pagingCallbacks = new Map<string, string>();
 function visit(node: ts.Node) {
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)
-    && ['requestLoadEarlier', 'flushQueuedLoadEarlier', 'scheduleQueuedLoadEarlierFlush'].includes(node.name.getText(source))) {
+    && ['requestLoadEarlier', 'flushQueuedLoadEarlier', 'scheduleQueuedLoadEarlierFlush', 'handoffHistoryPrependToUser', 'scheduleHistoryPrependUserHandoffSettle', 'maybeFinishHistoryPrependTransaction', 'finishHistoryPrependTransaction'].includes(node.name.getText(source))) {
     pagingCallbacks.set(node.name.getText(source), node.initializer.arguments[0].getText(source));
   }
   if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'attemptAutoLoadEarlier'
@@ -32,6 +32,7 @@ function fixture() {
   const requestLoadEarlier = vi.fn();
   const bindings = {
     historyActiveRef: { current: true },
+    historyPositioningRef: { current: true },
     onLoadEarlier: () => {},
     readingOlderRef: { current: false },
     queuedLoadEarlierRef: { current: false },
@@ -120,6 +121,8 @@ describe('history prefetch during a gesture', () => {
     const frames: Array<() => void> = [];
     const bindings = {
       MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR: appOwnedAnchor,
+      historyActiveRef: { current: true },
+      historyPositioningRef: { current: true },
       onLoadEarlier: vi.fn(),
       beginLoadEarlier: vi.fn(),
       readingOlderRef: { current: false },
@@ -135,7 +138,7 @@ describe('history prefetch during a gesture', () => {
       setHistoryPrependNativeMvcpDisabled: vi.fn(),
       requestAnimationFrame: (fn: () => void) => frames.push(fn),
     };
-    const compiled = ts.transpileModule([...pagingCallbacks].map(([name, body]) =>
+    const compiled = ts.transpileModule([...pagingCallbacks].filter(([name]) => ['requestLoadEarlier', 'flushQueuedLoadEarlier', 'scheduleQueuedLoadEarlierFlush'].includes(name)).map(([name, body]) =>
       `const ${name} = ${body};`).join('\n'), {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
     }).outputText;
@@ -181,5 +184,122 @@ return { requestLoadEarlier, flushQueuedLoadEarlier };`)(...Object.values(bindin
     h.bindings.queuedLoadEarlierRef.current = false;
     h.frame();
     expect(h.bindings.beginLoadEarlier).not.toHaveBeenCalled();
+  });
+});
+
+// Unit regression: production visibility + paging handlers, with only native anchor
+// verification replaced by an explicit ack. The old visibility handler clears the
+// gesture but never releases the committed-page handoff or restarts its queued request.
+describe('history pagination across interrupted gestures', () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+  function fixture(pageCommitted: boolean, promiseSettled = true, eol = '\n') {
+    vi.useFakeTimers();
+    vi.stubGlobal('requestAnimationFrame', (fn: () => void) => setTimeout(fn, 16));
+    vi.stubGlobal('cancelAnimationFrame', (id: ReturnType<typeof setTimeout>) => clearTimeout(id));
+    const transaction = { generation: 1, pageCommitted, promiseSettled, userHandoffPending: false,
+      userControlledAfterCommit: false, userControlledDuringRequest: false, anchorStable: false,
+      pendingCorrection: null, verifyDeadlineAt: 0, continueAfterRegroup: false, userInitiated: true };
+    const bindings: Record<string, any> = {
+      historyPositioning: true, historyPositioningRef: { current: true }, historyActiveRef: { current: true },
+      MOBILE_HISTORY_PREPEND_USES_APP_OWNED_ANCHOR: true,
+      historyPrependTransactionRef: { current: transaction }, historyAnchorVerifyFrameRef: { current: null },
+      readingOlderRef: { current: true }, loadingEarlierRef: { current: !promiseSettled },
+      isDraggingRef: { current: true }, isMomentumScrollingRef: { current: false },
+      historyTouchStartYRef: { current: 100 }, historyTouchTriggeredRef: { current: true }, dragStartOffsetYRef: { current: 500 },
+      nearBottomRef: { current: false }, userScrollForOlderRef: { current: true },
+      tailFollowerRef: { current: { reset: vi.fn() } }, getTailFollower: () => ({ reconcile: vi.fn() }),
+      captureCurrentHistoryAnchor: () => ({ key: 'reading', viewportOffset: 15 }), clearProgrammaticScroll: vi.fn(),
+      regroupedHistoryContinuationRef: { current: false }, setHistoryPrependNativeMvcpDisabled: vi.fn(),
+      setLoadEarlierEvaluationVersion: vi.fn(), scheduleHistoryAnchorRestore: vi.fn(),
+      queuedLoadEarlierRef: { current: false }, queuedLoadEarlierFlushFrameRef: { current: null },
+      historyPrependNativeMvcpDisabledRef: { current: true }, onLoadEarlier: vi.fn(), beginLoadEarlier: vi.fn(),
+    };
+    // Exercise Windows checkouts on every platform, without depending on the
+    // host Git core.autocrlf setting. Match the effect independently of whitespace.
+    const visibilitySource = ts.createSourceFile('renderer.tsx', source.text.replace(/\r?\n/g, eol),
+      ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let visibility = '';
+    function visit(node: ts.Node) {
+      if (ts.isCallExpression(node) && node.expression.getText(visibilitySource) === 'useEffect'
+        && node.arguments[0]?.getText(visibilitySource).includes('if (!historyPositioning)')
+        && node.arguments[0].getText(visibilitySource).includes('tailFollowerRef.current?.reset()')) {
+        visibility = node.arguments[0].getText(visibilitySource);
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(visibilitySource);
+    if (!visibility) throw new Error('Missing production visibility effect');
+    const compile = ts.transpileModule([...pagingCallbacks].filter(([name]) => name !== 'requestLoadEarlier')
+      .map(([name, body]) => `const ${name} = ${body};`).join('\n')
+      + `\nreturn { ${[...pagingCallbacks.keys()].filter(name => name !== 'requestLoadEarlier').join(', ')}, visibility: ${visibility} };`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const callbacks = () => new Function(...Object.keys(bindings), compile)(...Object.values(bindings));
+    const setVisible = (value: boolean) => {
+      bindings.historyPositioning = value; bindings.historyPositioningRef.current = value;
+      bindings.historyActiveRef.current = value;
+      callbacks().visibility();
+    };
+    return { bindings, transaction, callbacks, setVisible };
+  }
+  it.each([true, false].flatMap(committed => ['\n', '\r\n'].map(eol => ({ committed, eol }))))(
+    'resumes a handed-off page after hiding (committed=$committed, eol=$eol)', ({ committed, eol }) => {
+    const h = fixture(committed, true, eol);
+    h.callbacks().handoffHistoryPrependToUser();
+    h.setVisible(false);
+    h.callbacks().scheduleHistoryPrependUserHandoffSettle();
+    vi.advanceTimersByTime(64);
+    expect(h.bindings.scheduleHistoryAnchorRestore).not.toHaveBeenCalled();
+    expect(h.bindings.readingOlderRef.current).toBe(true);
+    h.setVisible(true); h.setVisible(true);
+    vi.advanceTimersByTime(64);
+    if (committed) {
+      expect(h.transaction.userControlledAfterCommit).toBe(false);
+      expect(h.bindings.scheduleHistoryAnchorRestore).toHaveBeenCalledWith(1);
+      // Native verification acknowledges the restored reading anchor.
+      h.transaction.anchorStable = true;
+      h.callbacks().maybeFinishHistoryPrependTransaction(1);
+    }
+    expect(h.bindings.readingOlderRef.current).toBe(false);
+    expect(h.bindings.nearBottomRef.current).toBe(false);
+    expect(h.bindings.setHistoryPrependNativeMvcpDisabled).toHaveBeenCalledOnce();
+  });
+  it('resumes a committed page whose anchor frame was suspended without a gesture handoff', () => {
+    const h = fixture(true);
+    h.bindings.isDraggingRef.current = false;
+    h.bindings.historyTouchStartYRef.current = null;
+    const staleFrame = vi.fn();
+    h.bindings.historyAnchorVerifyFrameRef.current = requestAnimationFrame(staleFrame);
+    h.setVisible(false);
+    vi.advanceTimersByTime(64);
+    expect(staleFrame).not.toHaveBeenCalled();
+    h.setVisible(true);
+    expect(h.bindings.scheduleHistoryAnchorRestore).toHaveBeenCalledWith(1);
+    h.transaction.anchorStable = true;
+    h.callbacks().maybeFinishHistoryPrependTransaction(1);
+    expect(h.bindings.readingOlderRef.current).toBe(false);
+  });
+  it('keeps an in-flight request until it settles after reentry', () => {
+    const h = fixture(false, false);
+    h.callbacks().handoffHistoryPrependToUser();
+    h.setVisible(false); h.setVisible(true);
+    vi.advanceTimersByTime(64);
+    expect(h.bindings.readingOlderRef.current).toBe(true);
+    h.transaction.promiseSettled = true;
+    h.bindings.loadingEarlierRef.current = false;
+    h.callbacks().scheduleHistoryPrependUserHandoffSettle();
+    vi.advanceTimersByTime(64);
+    expect(h.bindings.readingOlderRef.current).toBe(false);
+  });
+  it('restarts an interrupted queued request only after returning, once', () => {
+    const h = fixture(false);
+    h.bindings.historyPrependTransactionRef.current = null;
+    h.bindings.queuedLoadEarlierRef.current = true;
+    h.setVisible(false);
+    h.callbacks().scheduleQueuedLoadEarlierFlush();
+    vi.advanceTimersByTime(64);
+    expect(h.bindings.beginLoadEarlier).not.toHaveBeenCalled();
+    h.setVisible(true); h.setVisible(true);
+    vi.advanceTimersByTime(64);
+    expect(h.bindings.beginLoadEarlier).toHaveBeenCalledOnce();
   });
 });

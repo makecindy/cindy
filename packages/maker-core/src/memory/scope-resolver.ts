@@ -62,6 +62,8 @@ export interface ResolveMemoryScopeKeyDeps {
 
 /** 单次 git 探测超时。会话启动路径, 宁可回落也不卡 spawn。 */
 const GIT_PROBE_TIMEOUT_MS = 3_000;
+/** Windows: how long a timed-out probe waits for its git tree to exit after taskkill answers. */
+const GIT_PROBE_FORCE_SETTLE_MS = 1_500;
 /** 缓存 TTL (正/负结果一致)。目录身份中途变化是极端场景, 60s 收敛足够。 */
 const CACHE_TTL_MS = 60_000;
 
@@ -92,12 +94,63 @@ async function defaultExecGit(args: string[], cwd: string): Promise<string> {
   // 用 `git -C <dir>` 而不是 child 的 cwd 选项: Windows 上子进程的 CWD 会锁住
   // 该目录, 会话用临时 cwd 的测试/短命场景在 teardown 删目录时 EPERM。
   // 相对路径输出 (--git-common-dir) 相对 -C 目录解析, 与 cwd 选项语义一致。
+  // 真正的 git 进程仍会切进 -C 目录, 所以它活着时目录照样被占住, 见下方超时处理。
+  if (process.platform === 'win32') return execGitWithTreeTimeout(args, cwd);
   const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
     timeout: GIT_PROBE_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
     windowsHide: true,
   });
   return stdout;
+}
+
+/**
+ * Windows: `git` is normally the Git for Windows launcher (`cmd\git.exe`), which runs the real
+ * `mingw64\bin\git.exe` as its child. execFile's own timeout kills only the launcher, so the real
+ * git kept running inside the probed folder, holding it as its current directory: the folder
+ * could not be deleted (EBUSY) until that git ended. On timeout the whole tree is ended instead,
+ * and the probe settles when its output pipes close, that is once every git in the tree has
+ * exited. Should taskkill fail, only the launcher is killed, as before. taskkill is fire-and-forget
+ * and a process it missed can keep the pipes open, so the probe also gives up a short while after
+ * taskkill answers: it always settles, and the caller falls back to the folder as it is.
+ */
+function execGitWithTreeTimeout(args: string[], cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let forceSettle: ReturnType<typeof setTimeout> | undefined;
+    const child = execFile('git', ['-C', cwd, ...args], { maxBuffer: 1024 * 1024, windowsHide: true },
+      (error, stdout) => {
+        settled = true;
+        clearTimeout(timer);
+        clearTimeout(forceSettle);
+        if (error) reject(error);
+        else resolve(stdout);
+      });
+    const killLauncher = () => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.kill();
+    };
+    const settleSoon = () => {
+      if (settled) return;
+      forceSettle = setTimeout(() => {
+        killLauncher();
+        reject(new Error(`git probe did not end ${GIT_PROBE_FORCE_SETTLE_MS}ms after it was stopped`));
+      }, GIT_PROBE_FORCE_SETTLE_MS);
+    };
+    const timer = setTimeout(() => {
+      if (!child.pid || child.exitCode !== null) {
+        killLauncher();
+        settleSoon();
+        return;
+      }
+      execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: GIT_PROBE_TIMEOUT_MS },
+        (error) => {
+          if (error) killLauncher();
+          settleSoon();
+        });
+    }, GIT_PROBE_TIMEOUT_MS);
+  });
 }
 
 interface CacheEntry {

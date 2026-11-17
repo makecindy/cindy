@@ -626,7 +626,7 @@ describe('virtual workspace', () => {
     await executor.close();
   });
 
-  it('projects Cindy MCP path arguments and JSON/SSE results while leaving file content arguments intact', async () => {
+  it('projects Cindy MCP paths and JSON/SSE results while preserving opaque content arguments', async () => {
     const { workspace, project, executor } = setup('/Users/agent/workspace');
     let received: any;
     for (const sse of [false, true]) {
@@ -642,7 +642,9 @@ describe('virtual workspace', () => {
         },
       });
       const reply = await router({ method: 'POST', path: '/mcp/cindy_helper', headers: [], body: Buffer.from(JSON.stringify({
-        method: 'tools/call', params: { name: 'file_tool', arguments: { path: '/Users/agent/workspace/a.txt', content: '/Users/agent/workspace' } },
+        method: 'tools/call', params: { name: 'file_tool', arguments: {
+          path: '/Users/agent/workspace/a.txt', content: '/Users/agent/workspace', encoding: 'opaque',
+        } },
       })).toString('base64') });
       expect(received.params.arguments.path).toBe(path.join(project, 'a.txt'));
       expect(received.params.arguments.content).toBe('/Users/agent/workspace');
@@ -655,6 +657,97 @@ describe('virtual workspace', () => {
       }
     }
     await executor.close();
+  });
+
+  /**
+   * #9718: the old router preserves shadow paths in plugin/MCP bodies, then masks the bad
+   * write on readback. Existing file and scheduler tests do not cover this tool boundary.
+   * Minimal failure: ghost_call -> call_tool -> args.message containing the virtual root.
+   * Review regressions: serialized NUL/opaque payloads, URL parentheses and a file's
+   * encoding alongside commit_message were missing from the original boundary coverage.
+   * Tier: unit; real router, captured outgoing request and temporary stored bytes, no network.
+   */
+  it.each([
+    { virtual: '/home/agent/workspace', sse: false, serialized: false },
+    { virtual: 'C:\\Agent\\workspace', sse: true, serialized: true },
+  ])('stores plugin text with real paths through nested args at $virtual', async ({ virtual, sse, serialized }) => {
+    const { workspace, project, executor, gate } = setup(virtual);
+    const api = virtual.startsWith('C:') ? path.win32 : path.posix;
+    const file = path.join(project, 'report.txt');
+    const virtualFile = api.join(virtual, 'report.txt');
+    const localFile = written(file, virtual);
+    const url = 'https://example.test/view?reference=(' + virtual.replace(/\\/g, '/') + '/report.txt)';
+    const unchanged = '中文 /api/v1 relative/input.txt ' + url;
+    // Source text is deliberately not a whole path. Its slash/escape semantics must survive.
+    const source = 'const file = ' + JSON.stringify(virtualFile) + '; const api = "/api/v1";';
+    const localSource = 'const file = ' + JSON.stringify(localFile) + '; const api = "/api/v1";';
+    const nested = (target: string) => '{ "content": ' + JSON.stringify(JSON.stringify({ text: 'See ' + target })) + ', "n": 1.00 }';
+    const payload = {
+      message: 'Edit ' + virtualFile,
+      commit_message: 'Update ' + virtualFile,
+      body: 'At ' + virtualFile + ' ' + unchanged,
+      description: 'At ' + virtualFile,
+      text: ['See ' + virtualFile],
+      opaque: virtualFile,
+      token: virtualFile,
+      file_update: {
+        content: 'aGVsbG8=', encoding: 'base64', commit_message: 'Update ' + virtualFile, message: 'See ' + virtualFile,
+      },
+      actions: [
+        { file_path: virtualFile, content: source, encoding: 'text' },
+        { content: nested(virtualFile) },
+        { content: Buffer.from(virtualFile).toString('base64'), encoding: 'base64' },
+        { content: virtualFile, encoding: 'opaque' },
+        { content: '\0' + virtualFile },
+        { content: JSON.stringify({ text: '\0' + virtualFile }) },
+        { content: JSON.stringify({ content: JSON.stringify([{ content: virtualFile, encoding: 'opaque' }]) }) },
+        { content: 'Payload:\n' + JSON.stringify({ text: '\0' + virtualFile }) },
+        { content: JSON.stringify({ text: 'See ' + virtualFile, nested: { content: virtualFile, encoding: 'base64' } }) },
+      ],
+    };
+    let received: typeof payload | undefined;
+    const stored = path.join(project, 'tool-request.json');
+    const router = createReverseHttpRouter({
+      executor, mcpTarget: () => ({ url: 'http://unused', headers: {} }),
+      fetch: async (_url, options) => {
+        const request = JSON.parse(Buffer.from(options!.body as Uint8Array).toString('utf8'));
+        const wrapper = request.params.arguments.args;
+        received = typeof wrapper.args === 'string' ? JSON.parse(wrapper.args) : wrapper.args;
+        fs.writeFileSync(stored, JSON.stringify(received));
+        const result = { result: { content: [{ type: 'text', text: JSON.stringify({ message: received!.message }) }] } };
+        return new Response(sse ? 'data: ' + JSON.stringify(result) + '\n\n' : JSON.stringify(result), {
+          headers: { 'content-type': sse ? 'text/event-stream' : 'application/json' },
+        });
+      },
+    });
+    try {
+      const reply = await router({ method: 'POST', path: '/mcp/cindy', headers: [], body: Buffer.from(JSON.stringify({
+        method: 'tools/call', params: { name: 'ghost_call', arguments: {
+          ghost_id: 'test-plugin', tool: 'call_tool', args: { name: 'create_commit', args: serialized ? JSON.stringify(payload) : payload },
+        } },
+      })).toString('base64') });
+      const expected = {
+        ...payload, message: 'Edit ' + localFile, commit_message: 'Update ' + localFile,
+        body: 'At ' + localFile + ' ' + unchanged,
+        description: 'At ' + localFile, text: ['See ' + localFile],
+        file_update: { ...payload.file_update, commit_message: 'Update ' + localFile, message: 'See ' + localFile },
+        actions: [
+          { file_path: file, content: localSource, encoding: 'text' },
+          { content: nested(localFile) },
+          ...payload.actions.slice(2),
+        ],
+      };
+      expect(received).toEqual(expected);
+      expect(fs.readFileSync(stored)).toEqual(Buffer.from(JSON.stringify(expected)));
+      if (reply.type !== 'http') throw new Error('expected MCP HTTP reply');
+      const body = Buffer.from(reply.body!, 'base64').toString('utf8');
+      const result = JSON.parse(sse ? body.split('\n')[0].slice(6) : body);
+      expect(JSON.parse(result.result.content[0].text)).toEqual({ message: payload.message });
+      const outside = workspace.virtualizeDirs([path.join(root, 'outside')])[0];
+      expect(gate.authorize({ kind: 'write', path: workspace.resolve(outside) }).ok).toBe(false);
+    } finally {
+      await executor.close();
+    }
   });
 
   it.each([
@@ -773,7 +866,7 @@ describe('virtual workspace', () => {
     }
   });
 
-  it('restores helper, plugin and document path parameters while preserving their content and media identifiers', async () => {
+  it('restores helper, plugin and document paths and text while preserving opaque values and media identifiers', async () => {
     const virtual = '/Users/agent/workspace';
     const { project, executor } = setup(virtual);
     let received: Record<string, unknown> | undefined;
@@ -796,7 +889,7 @@ describe('virtual workspace', () => {
           workers: [{ working_dir: virtual }],
           out_file: virtual + '/result.json', absPath: virtual + '/upload.txt',
           workspace_root: virtual, anchorFile: virtual + '/index.ts', file_paths: [virtual + '/input.txt'],
-          content, text: virtual,
+          content, text: virtual, opaque: content,
         } },
       })).toString('base64') });
       expect(received).toEqual({
@@ -807,7 +900,9 @@ describe('virtual workspace', () => {
         workers: [{ working_dir: project }],
         out_file: path.join(project, 'result.json'), absPath: path.join(project, 'upload.txt'),
         workspace_root: project, anchorFile: path.join(project, 'index.ts'), file_paths: [path.join(project, 'input.txt')],
-        content, text: virtual,
+        // #9718 replaces the old shadow-content expectation with the real tool payload;
+        // opaque values and media identifiers must retain the original preservation contract.
+        content: JSON.stringify({ path: project }), text: written(project, virtual), opaque: content,
       });
     } finally {
       await executor.close();
@@ -954,8 +1049,11 @@ describe('virtual workspace', () => {
         const sent = await call(server, name, args);
         expect(sameSeparators((sent.args ?? sent).message!)).toBe(sameSeparators(localText));
       }
-      // 插件自己的业务参数不做文本替换，哪怕字段也叫 message。
-      expect((await call('some_plugin', 'post', { message: text })).message).toBe(text);
+      // #9718：插件 message 按正文保真规则还原；initial_task 仍只属于指定的派活服务。
+      expect(await call('some_plugin', 'post', { message: text, initial_task: text })).toEqual({
+        message: '任务说明在 ' + written(brief, virtual) + '，接口 /api/v1 保持不变', initial_task: text,
+      });
+      expect((await call('some_plugin', 'post', { message: text, encoding: 'opaque' })).message).toBe(text);
     } finally {
       await executor.close();
     }

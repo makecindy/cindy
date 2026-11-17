@@ -1,9 +1,10 @@
 import { isProviderAccessDeniedError, isScopedPeer, PROVIDER_GROUP_REMOTE_CHANNEL } from '@cindy/device-link';
-import type { ProviderGroupConfig, ProviderGroupRemotePick } from '../../shared/providerGroup.js';
+import { effectiveConcurrencyLimit, type ProviderGroupConfig, type ProviderGroupRemotePick } from '../../shared/providerGroup.js';
 import { parseGroupContinuityAck } from '../../shared/providerGroupContinuity.js';
+import { PROVIDER_GROUP_FULL_ERROR } from './failurePolicy.js';
 import { ProviderGroupLocalCapacityError } from './localCapacity.js';
 import type { ProviderGroupRemoteClient, ProviderGroupRemoteInvoke } from './remoteClient.js';
-import { pickProviderGroupMember } from './scheduler.js';
+import { pickProviderGroupMember, providerGroupMembersFull } from './scheduler.js';
 
 type Input = Parameters<ProviderGroupRemoteClient['pick']>[1];
 type Pick = Extract<ProviderGroupRemotePick, { kind: 'member' }>;
@@ -125,11 +126,13 @@ export function createGroupContinuityClient(deps: {
     const cursor = JSON.stringify([owner, input.providerId, input.agentKind, input.model]);
     const excluded = new Set(input.exclude);
     while (true) {
-      const key = pickProviderGroupMember(first.config.members.map(member => ({ ...member,
+      const members = first.config.members.map(member => ({ ...member,
         usable: live.some(row => row.row.pick.member.key === member.key && valid(row.row)),
         running: live.find(row => row.row.pick.member.key === member.key)?.running ?? 0,
-      })), first.config.strategy, { exclude: excluded, lastPicked: cursors.get(cursor) });
-      if (!key) throw original;
+        limit: effectiveConcurrencyLimit(member),
+      }));
+      const key = pickProviderGroupMember(members, first.config.strategy, { exclude: excluded, lastPicked: cursors.get(cursor) });
+      if (!key) throw providerGroupMembersFull(members, { exclude: excluded }) ? new Error(PROVIDER_GROUP_FULL_ERROR) : original;
       const selected = live.find(row => row.row.pick.member.key === key)!;
       const row = selected.row, id = row.pick.continuity!.id;
       try {

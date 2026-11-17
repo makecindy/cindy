@@ -214,7 +214,7 @@ describe('maker:session:handoff (receiving computer)', () => {
   // this host advertises that so newer senders stop quoting. Unit/protocol.
   it('accepts a plain checked hand-off only with its exact text and advertises the capability', async () => {
     const s = setup();
-    expect(SESSION_HANDOFF_CAPABILITY).toEqual({ taskActionVersion: 1, plainRequestBody: 1 });
+    expect(SESSION_HANDOFF_CAPABILITY).toEqual({ taskActionVersion: 1, plainRequestBody: 1, pluginCaller: 1 });
     const source = { sessionId: 'source', clientId: 'human', plainBody: true, delegatedText: 'Fix #12 and merge it.' };
     await s.handle('device-A', { ...request, message: 'Fix #12 and merge it.', requestSource: source });
     expect(s.send).toHaveBeenCalledWith(expect.objectContaining({ message: 'Fix #12 and merge it.',
@@ -368,6 +368,43 @@ describe('maker:session:handoff (receiving computer)', () => {
 
 // Review regression, unit/protocol: successful queued deliveries used to exhaust
 // the pending-receipt limit. Exercise both real transport ends, body binding and cleanup.
+// Unit/protocol: both production transport ends and the existing receipt validator.
+// A plugin has no sender task, old peers receive no body, and queued input remains revocable.
+it.each(['delivered', 'old-peer', 'revoked'] as const)('uses an explicit plugin actor across computers (%s)', async scenario => {
+  let current = true;
+  let queued: Parameters<Parameters<typeof createSessionHandoffHandler>[0]['send']>[0] | undefined;
+  let wire: unknown;
+  const handle = createSessionHandoffHandler({
+    validate: (_source, input) => validateRemoteTaskActionReceipt('target-device', input),
+    send: async params => { queued = params; return { ok: true, agentKind: 'codex', wakeKind: 'queued', targetTitle: null, targetLastUserSendAt: null }; },
+  });
+  const send = createRemoteSessionHandoff({ captureAccess: () => () => { if (!current) throw new Error('PERMISSION_DENIED'); },
+    invoke: async (_device, _channel, args) => {
+      if ((args[0] as { action?: string }).action === 'task-action-capability') return { ok: true, result: {
+        taskActionVersion: 1, plainRequestBody: 1, ...(scenario !== 'old-peer' ? { pluginCaller: 1 } : {}),
+      } };
+      wire = args[0]; return { ok: true, result: await handle('source-device', wire) };
+    },
+  });
+  const result = await send({ deviceId: 'target-device', sessionId: 'target' }, { message: 'Continue',
+    sender: async () => ({ kind: 'plugin', pluginId: 'dashboard', name: 'Dashboard' }) });
+  if (scenario === 'old-peer') {
+    expect(result).toMatchObject({ ok: false, errorCode: 'REMOTE_UNSUPPORTED' });
+    expect(wire).toBeUndefined(); expect(queued).toBeUndefined(); return;
+  }
+  expect(result).toMatchObject({ ok: true });
+  expect(queued).toMatchObject({ sourcePlugin: { pluginId: 'source-device::dashboard', name: 'Dashboard' },
+    autoReviewUserText: 'Continue', resumeWithStoredPermissionMode: true, inheritTargetPlanMode: true });
+  expect(queued).not.toHaveProperty('origin');
+  const receiptId = (wire as { taskActionReceipt: string }).taskActionReceipt;
+  expect(await validateRemoteTaskActionReceipt('target-device', { receiptId, sessionId: 'dashboard', targetSessionId: 'target', message: 'Continue' })).toBe(false);
+  expect(await validateRemoteTaskActionReceipt('target-device', { receiptId, pluginId: 'other', targetSessionId: 'target', message: 'Continue' })).toBe(false);
+  expect(buildMessageSourceNote(messageSourceSenderFromMeta(queued))).toContain('source-device::dashboard');
+  expect(await handle('source-device', wire)).toMatchObject({ ok: false });
+  if (scenario === 'revoked') { current = false; await expect(queued!.taskActionDeliveryGuard!()).rejects.toThrow('AUTHORIZATION_EXPIRED'); }
+  else { await queued!.taskActionDeliveryGuard!(); await queued!.taskActionDeliveryGuard!.onSettled?.(); }
+});
+
 it('releases consumed receipts without allowing replay for quoted owner requests and plain automation', async () => {
   let includeOriginal = true;
   let lastWire: unknown;

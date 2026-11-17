@@ -1,8 +1,9 @@
 /**
- * Classical reply styles: while a classical UI edition is shown (文言 for the Chinese
- * editions today; Japanese 古文 / Korean 한문 editions can add their own family later)
- * the AI answers in that register, shaped by the output style the user picked next to
- * the language.
+ * Classical reply styles: the AI answers in a classical register (文言 for the Chinese
+ * editions today; Japanese 古文 / Korean 한문 editions can add their own family later),
+ * shaped by the output style the user picked next to the language.
+ *
+ * Only classical interface editions offer these styles.
  *
  * The choice belongs to the client the user is typing on, the same way the UI language
  * does: Desktop keeps it locally and Mobile sends it with each turn. Only a known style
@@ -42,11 +43,42 @@ export type ClassicalReplyStyleId = (typeof CLASSICAL_REPLY_STYLES)[ClassicalFam
 
 export const DEFAULT_CLASSICAL_REPLY_STYLE: ClassicalReplyStyleId = 'prose';
 
+/** Only classical interface editions may activate a literary reply style. */
+export const REPLY_STYLE_FAMILY_BY_LOCALE = CLASSICAL_FAMILY_BY_LOCALE;
+
 export function classicalFamilyOf(locale: string | null | undefined): ClassicalFamily | null {
   if (typeof locale !== 'string') return null;
   return Object.prototype.hasOwnProperty.call(CLASSICAL_FAMILY_BY_LOCALE, locale)
     ? CLASSICAL_FAMILY_BY_LOCALE[locale as keyof typeof CLASSICAL_FAMILY_BY_LOCALE]
     : null;
+}
+
+/** The style family this interface edition may use, or null when it offers none. */
+export function replyStyleFamilyOf(locale: string | null | undefined): ClassicalFamily | null {
+  if (typeof locale !== 'string') return null;
+  return Object.prototype.hasOwnProperty.call(REPLY_STYLE_FAMILY_BY_LOCALE, locale)
+    ? REPLY_STYLE_FAMILY_BY_LOCALE[locale as keyof typeof REPLY_STYLE_FAMILY_BY_LOCALE]
+    : null;
+}
+
+/**
+ * Style used while the user has not chosen one. A classical interface is itself the
+ * choice, so it answers in that register; other interfaces use ordinary replies.
+ */
+export function defaultClassicalReplyStyleFor(locale: string | null | undefined): ClassicalReplyStyleId {
+  return classicalFamilyOf(locale) ? DEFAULT_CLASSICAL_REPLY_STYLE : 'plain';
+}
+
+/**
+ * Retain the two storage contexts for compatibility. Only the classical context
+ * can activate a style; old modern choices remain stored but have no effect.
+ */
+export type ClassicalReplyStyleContext = 'classical' | 'modern';
+
+export function classicalReplyStyleContextOf(
+  locale: string | null | undefined,
+): ClassicalReplyStyleContext {
+  return classicalFamilyOf(locale) ? 'classical' : 'modern';
 }
 
 const ALL_STYLE_IDS: ReadonlySet<string> = new Set(

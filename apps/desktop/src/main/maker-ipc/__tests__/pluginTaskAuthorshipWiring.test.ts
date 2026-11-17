@@ -1,3 +1,6 @@
+import { createMakerSteerTransaction } from '../makerSteerTransaction.js';
+import { createWireNoteMemory } from '../wireNoteMemory.js';
+import { DEFAULT_CLASSICAL_REPLY_STYLE } from '@cindy/maker-shared/classical-reply';
 import { bindTaskActionInput } from '../taskActionAuthorization.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -107,21 +110,34 @@ it.each([false, true])('preserves target scope through accepted delivery (delega
   }
 });
 
+// Exercise the shared production transaction instead of compiling its old location.
+function sharedSteer(steer: (content: never, options: SendOptions & { beforeProviderStart?: () => Promise<void> }) => Promise<void>, context?: {
+  text: string; assertCurrent(): Promise<void>; consume(): void;
+}) {
+  const session = { steer, agentKind: 'codex', capabilities: { sameTurnSteer: { supported: true } },
+    isTurnRunning: () => true, getTurnGeneration: () => 1 };
+  return createMakerSteerTransaction({
+    maker: { getSession: () => session as never, getSessionMeta: async () => ({}) },
+    assertInputAllowed: async () => {}, assertInputCurrent: () => {},
+    prepareUserMessageForAgent: async (_id, message) => message as string,
+    readReplyQuoteNote: async () => null, readAutoReviewHistory: async () => [],
+    readSessionSource: async () => null, getHostSourceDevice: () => undefined,
+    getResolvedMainLocale: () => null, getMainClassicalStyle: () => DEFAULT_CLASSICAL_REPLY_STYLE,
+    wireNoteMemory: createWireNoteMemory(), inputHandoffSteerNote: () => null,
+    inputHandoffNoteDelivered: () => {}, mcpAppModelContext: async () => context
+      ?? { text: '', assertCurrent: async () => {}, consume() {} },
+    publishUiSessionIntervention: () => {}, log: { info() {}, warn() {}, debug() {} },
+  });
+}
+
 it.each(['Do not publish.', '', undefined])('keeps live authority through the final delegated steer boundary: %j', async previous => {
-  const start = source.indexOf('await sess.steer(steerPayload as never, {');
-  expect(start).toBeGreaterThan(0);
-  const end = source.indexOf('\n      });', start) + '\n      });'.length;
-  const deliver = new Function('sess', 'steerPayload', 'so', 'meta', 'restoredSteerIntent',
-    'MAIN_OWNED_SEND_CONTEXT', 'AUTO_REVIEW_SOURCE_CONTENT', 'AUTO_REVIEW_USER_INTENT', 'AUTO_REVIEW_DELEGATED_CONTINUATION', 'ASYNC_QUESTION_ANSWER', 'SUPERSEDE_ASYNC_QUESTIONS', 'MCP_APP_MESSAGE_GUARD', 'appContext',
-    compile(`return (async () => { ${source.slice(start, end)} })();`));
   const invoke = async (delegated: boolean) => {
     let result;
     const steer = vi.fn(async (content: string, options: SendOptions) => {
       result = appendAutoReviewUserIntent(previous, content, options);
     });
-    await deliver({ steer }, 'Publish now', { [AUTO_REVIEW_SOURCE_CONTENT]: '',
-      ...(delegated ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true } : {}) }, {}, 'Old persisted permission',
-      MAIN_OWNED_SEND_CONTEXT, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, MCP_APP_MESSAGE_GUARD);
+    await sharedSteer(steer)('task', 'Publish now', { [AUTO_REVIEW_USER_INTENT]: 'Old persisted permission', [AUTO_REVIEW_SOURCE_CONTENT]: '',
+      ...(delegated ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true } : {}) });
     expect(steer).toHaveBeenCalledOnce();
     return result;
   };
@@ -132,14 +148,6 @@ it.each(['Do not publish.', '', undefined])('keeps live authority through the fi
 it.each(['context', 'message', 'none'] as const)(
   'revalidates App steer authority after async preparation (%s revocation)',
   async (revocation) => {
-    const start = source.indexOf('await sess.steer(steerPayload as never, {');
-    const marker = '      appContext?.consume();';
-    const end = source.indexOf(marker, start) + marker.length;
-    expect(start).toBeGreaterThan(0);
-    expect(end).toBeGreaterThan(start);
-    const deliver = new Function('sess', 'steerPayload', 'so', 'meta', 'restoredSteerIntent',
-      'MAIN_OWNED_SEND_CONTEXT', 'AUTO_REVIEW_SOURCE_CONTENT', 'AUTO_REVIEW_USER_INTENT', 'AUTO_REVIEW_DELEGATED_CONTINUATION', 'ASYNC_QUESTION_ANSWER', 'SUPERSEDE_ASYNC_QUESTIONS', 'MCP_APP_MESSAGE_GUARD', 'appContext',
-      compile(`return (async () => { ${source.slice(start, end)} })();`));
     let prepared = false;
     const provider = vi.fn();
     const messageGuard = vi.fn(async () => {
@@ -158,8 +166,7 @@ it.each(['context', 'message', 'none'] as const)(
       await opts.beforeProviderStart?.();
       provider();
     });
-    const pending = deliver({ steer }, 'Continue', { [MCP_APP_MESSAGE_GUARD]: messageGuard }, {}, '',
-      MAIN_OWNED_SEND_CONTEXT, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, MCP_APP_MESSAGE_GUARD, context);
+    const pending = sharedSteer(steer, context)('task', 'Continue', { [MCP_APP_MESSAGE_GUARD]: messageGuard });
     if (revocation === 'none') {
       await pending;
       expect(provider).toHaveBeenCalledOnce();
@@ -170,7 +177,7 @@ it.each(['context', 'message', 'none'] as const)(
       expect(provider).not.toHaveBeenCalled();
       expect(context.consume).not.toHaveBeenCalled();
     }
-    expect(messageGuard).toHaveBeenCalledOnce();
+    expect(messageGuard).toHaveBeenCalledTimes(2);
   },
 );
 

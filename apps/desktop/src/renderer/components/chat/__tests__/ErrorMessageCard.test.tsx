@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { exists: (key: string) => key.startsWith('chat.remoteError.REMOTE_AGENT_'), language: 'en' } }),
   initReactI18next: { type: '3rdParty', init: () => undefined },
 }));
 
@@ -18,6 +18,24 @@ const STREAM_RAW =
 afterEach(cleanup);
 
 describe('ErrorMessageCard', () => {
+  // #10187, unit: persisted failures need the same specific recovery as live errors.
+  it.each([
+    ['LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer', 'REMOTE_AGENT_RESUME_UNAVAILABLE'],
+    ['[REMOTE_AGENT_INVALID] invalid request', 'REMOTE_AGENT_INVALID'],
+    ['[REMOTE_AGENT_INVALID] This conversation cannot be resumed on this computer.', 'REMOTE_AGENT_RESUME_UNAVAILABLE'],
+  ])('preserves the cause of a persisted remote failure: %s', (message, code) => {
+    render(<ErrorMessageCard message={message} />);
+    expect(screen.getByText(`chat.remoteError.${code}`)).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.retry')).toBeNull();
+  });
+
+  // Unit: a persisted startup failure must retain the same cause as the live banner.
+  it('shows the bound account limit with its reset time in history', () => {
+    render(<ErrorMessageCard message={"LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic\nresetAtMs=1900000000000"} />);
+    expect(screen.getByText('chat.subscriptionAccountError.limitedUntil')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+  });
+
   // Historical execution failures must offer the same diagnosis as live failures.
   it('offers diagnosis only after expanding a persisted execution error', () => {
     const onDiagnose = vi.fn();

@@ -52,7 +52,13 @@ export const imBotSettings = defineSettings({
     sectionKey: 'settings.imBot.groups.cindy',
     descriptionKey: 'settings.remoteControl.hook.feishu.description',
     // 关联码只在关联中显示, 搜「关联码」也能找到这张卡。
-    keywordKeys: ['settings.remoteControl.hook.feishu.bindCode.label', 'settings.remoteControl.hook.feishu.bindCode.hint'],
+    keywordKeys: [
+      'settings.remoteControl.hook.feishu.bindCode.label', 'settings.remoteControl.hook.feishu.bindCode.hint',
+      'settings.remoteControl.hook.feishu.disabledHint', 'settings.remoteControl.hook.feishu.chooseBot',
+      'settings.remoteControl.hook.feishu.connectBot', 'settings.remoteControl.hook.feishu.linkAnotherAccount',
+      'settings.remoteControl.hook.feishu.bridgeTitle', 'settings.remoteControl.hook.feishu.bridgeDescription', 'settings.remoteControl.hook.feishu.settingsTitle',
+      'settings.remoteControl.hook.feishu.settingsDescription',
+    ],
     aliases: ['Feishu', 'Lark', '飞书', 'Feishu bot', 'Lark bot'],
   },
   cindyFeishuWorkingDevice: {
@@ -62,6 +68,7 @@ export const imBotSettings = defineSettings({
     tab: 'im-bot',
     targetId: 'cindy-im-feishu-working-device',
     titleKey: 'settings.remoteControl.hook.feishu.setWorkingDevice',
+    keywordKeys: ['settings.remoteControl.hook.feishu.workingDeviceLabel', 'settings.remoteControl.hook.feishu.workingDeviceThisComputer', 'settings.remoteControl.hook.feishu.workingDeviceUnknown', 'settings.remoteControl.hook.feishu.workingDeviceUnnamed'],
     sectionKey: 'settings.imBot.groups.cindy',
     aliases: ['Feishu', 'Lark', '工作电脑'],
   },

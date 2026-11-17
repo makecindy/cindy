@@ -879,7 +879,6 @@ function WorkerTabsList({
   selectedWorkerId,
   onSwitchFocus,
   onArchiveWorker,
-  onEditWorker,
   clearAttentionWhenVisible = true,
 }: {
   leadSessionId?: string;
@@ -887,7 +886,6 @@ function WorkerTabsList({
   selectedWorkerId: string | null;
   onSwitchFocus: (workerId: string) => void;
   onArchiveWorker: (workerId: string) => void;
-  onEditWorker?: (workerId: string) => void;
   clearAttentionWhenVisible?: boolean;
 }) {
   const { t } = useTranslation();
@@ -1025,8 +1023,7 @@ function WorkerTabsList({
                   type="button"
                   ref={selected ? focusedTabRef : undefined}
                   className={cn(
-                    'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border py-0 pl-2 text-11 leading-none transition-colors',
-                    onEditWorker ? 'pr-10' : 'pr-6',
+                    'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border py-0 pl-2 pr-6 text-11 leading-none transition-colors',
                     selected
                       ? isError
                         ? 'border-[var(--error-fg)] bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
@@ -1049,26 +1046,6 @@ function WorkerTabsList({
                       (会连带裁剪垂直溢出), 角标朝上溢出会被切掉; 行内则始终在 pill 边界内。 */}
                   {isError && <WorkerErrorBadge className="ml-0.5" />}
                 </button>
-                {onEditWorker && (
-                  <button
-                    type="button"
-                    className={cn(
-                      'absolute right-[21px] top-1/2 inline-flex h-[18px] w-[18px] -translate-y-1/2 items-center justify-center rounded-full opacity-0 transition-opacity group-hover:opacity-100',
-                      selected
-                        ? 'text-[var(--surface-on-card)] hover:text-[var(--surface-on-card)]'
-                        : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)]',
-                    )}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onEditWorker(worker.workerId);
-                    }}
-                    aria-label={t('orca.rolePill.editWorkerAria', {
-                      name: getWorkerArchiveDisplayName(worker),
-                    })}
-                  >
-                    <Pencil size={11} />
-                  </button>
-                )}
                 <button
                   type="button"
                   className={cn(
@@ -1218,7 +1195,6 @@ export function WorkerListToolbar({
             selectedWorkerId={selectedWorkerId}
             onSwitchFocus={onSwitchFocus}
             onArchiveWorker={onArchiveWorker}
-            onEditWorker={onEditWorker}
             clearAttentionWhenVisible={clearAttentionWhenVisible}
           />
         </>

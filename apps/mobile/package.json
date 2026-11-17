@@ -124,5 +124,14 @@
     "test:e2e:local:full": "node scripts/local-device-link-smoke.mjs --mock-host --flow-suite full",
     "test:e2e:local:full:ios": "node scripts/local-device-link-smoke.mjs --start-server --start-expo --mock-host --flow-suite full --profile ios-iphone-17-pro-expo-go --api-base http://localhost:3333"
   },
+  "expo": {
+    "autolinking": {
+      "android": {
+        "buildFromSource": [
+          "expo-image"
+        ]
+      }
+    }
+  },
   "private": true
 }

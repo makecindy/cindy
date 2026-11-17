@@ -19,7 +19,11 @@ import {
   type RemoteLiveScreen,
 } from '@cindy/device-link';
 import type { GhostPipeNodeResult, InstalledGhost } from '../../shared/ghost.js';
-import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import {
+  installedGhostStoragePart,
+  installedGhostLogicalIdentity,
+  pluginStoragePart,
+} from '../../shared/pluginIdentity.js';
 
 /** Event shapes the worker receives; remote desktop maps viewer input to these. */
 export type LiveScreenEvent =
@@ -157,6 +161,7 @@ function parseScreens(plugin: InstalledGhost, value: unknown): RemoteLiveScreen[
       : [];
     screens.push({
       plugin: pluginId,
+      pluginIdentity: pluginStoragePart(installedGhostLogicalIdentity(plugin)),
       pluginName: plugin.manifest.name,
       id,
       name,
@@ -192,14 +197,20 @@ export class LiveScreenHost {
     method: string,
     params: Record<string, unknown>,
     timeoutMs: number,
+    identity?: string,
   ): Promise<Record<string, unknown>> {
     const ghost = this.provider(plugin);
+    const logical = pluginStoragePart(installedGhostLogicalIdentity(ghost));
+    if (identity !== undefined && identity !== logical)
+      throw new LiveScreenError('DESKTOP_SCREEN_UNAVAILABLE');
     const reply = await this.deps.request(
       installedGhostStoragePart(ghost),
       method,
       { ...params, _locale: this.deps.locale() },
       timeoutMs,
     );
+    if (pluginStoragePart(installedGhostLogicalIdentity(this.provider(plugin))) !== logical)
+      throw new LiveScreenError('DESKTOP_SCREEN_UNAVAILABLE');
     if (!reply.ok)
       throw new LiveScreenError(
         reply.errorCode === 'TIMEOUT' ? 'DESKTOP_SCREEN_TIMEOUT' : 'DESKTOP_SCREEN_UNAVAILABLE',
@@ -237,27 +248,33 @@ export class LiveScreenHost {
     return results.flat().slice(0, MAX_SCREENS);
   }
 
-  async open(plugin: string, id: string): Promise<LiveScreenOpened> {
-    const result = await this.call(plugin, 'liveScreen.open', { id }, OPEN_TIMEOUT_MS);
+  async open(plugin: string, id: string, identity?: string): Promise<LiveScreenOpened> {
+    const result = await this.call(plugin, 'liveScreen.open', { id }, OPEN_TIMEOUT_MS, identity);
     const screen = parseLiveScreenDescriptor(result.screen);
     if (!isLiveScreenFrameUrl(result.url) || !screen)
       throw new LiveScreenError('DESKTOP_SCREEN_FAILED');
     return { url: result.url, screen };
   }
 
-  async input(plugin: string, id: string, events: LiveScreenEvent[]): Promise<void> {
-    await this.call(plugin, 'liveScreen.input', { id, events }, INPUT_TIMEOUT_MS);
+  async input(
+    plugin: string,
+    id: string,
+    events: LiveScreenEvent[],
+    identity?: string,
+  ): Promise<void> {
+    await this.call(plugin, 'liveScreen.input', { id, events }, INPUT_TIMEOUT_MS, identity);
   }
 
   async control(
     plugin: string,
     id: string,
     options: { fps?: number; keyframe?: boolean },
+    identity?: string,
   ): Promise<void> {
-    await this.call(plugin, 'liveScreen.control', { id, ...options }, INPUT_TIMEOUT_MS);
+    await this.call(plugin, 'liveScreen.control', { id, ...options }, INPUT_TIMEOUT_MS, identity);
   }
 
-  async close(plugin: string, id: string): Promise<void> {
-    await this.call(plugin, 'liveScreen.close', { id }, INPUT_TIMEOUT_MS);
+  async close(plugin: string, id: string, identity?: string): Promise<void> {
+    await this.call(plugin, 'liveScreen.close', { id }, INPUT_TIMEOUT_MS, identity);
   }
 }

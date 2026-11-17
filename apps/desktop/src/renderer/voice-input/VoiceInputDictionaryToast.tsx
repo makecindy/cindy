@@ -44,7 +44,7 @@ export function VoiceInputDictionaryToast() {
   const terms = entries.map((entry) => entry.term);
   const termText = useMemo(() => {
     if (terms.length === 0) return t('settings.voiceInput.refinement.dictionary.label');
-    const visibleTerms = terms.slice(0, 3).join('、');
+    const visibleTerms = terms.slice(0, 3).join(t('commonUi.listSeparator'));
     if (terms.length <= 3) return visibleTerms;
     return t('settings.voiceInput.refinement.dictionary.toast.termsSummary', {
       terms: visibleTerms,

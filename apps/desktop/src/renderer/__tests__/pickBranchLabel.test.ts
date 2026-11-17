@@ -21,6 +21,12 @@ describe('pickBranchLabel', () => {
     ).toBe('feat/wt');
   });
 
+  it('切到新 linked worktree 后，旧 PR 分支不能盖过当前 worktree 分支', () => {
+    expect(
+      pickBranchLabel({ localBranch: 'fix/new', prBranch: 'fix/old', branchSource: 'worktree', hasPrRefs: true }),
+    ).toBe('fix/new');
+  });
+
   it('remote 来源可信:显示远端分支,即使有 PR 也优先', () => {
     expect(
       pickBranchLabel({ localBranch: 'feat/remote', prBranch: 'pr/remote', branchSource: 'remote', hasPrRefs: true }),

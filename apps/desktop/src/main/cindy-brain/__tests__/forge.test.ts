@@ -2608,6 +2608,18 @@ describe('packGhostDir · manual 渐进披露手册', () => {
   });
 });
 
+// 生产入口：真实 packGhostDir；新具名资源示例须保留 Host 声明和 HTML，不靠占位工具。
+// 原工具卡样例不覆盖无资源关联的工具 + 具名页面。最小输入为随包三文件示例，tier: unit。
+it('packs the named Host UI author example through the original packer', async () => {
+  const dir = path.join(workDir, 'host-ui-example');
+  await fs.promises.cp(new URL('../../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/', import.meta.url), dir, { recursive: true });
+  const packed = await packGhostDir(dir);
+  expect(packed).toMatchObject({ ok: true, manifest: { mcpApps: {
+    ui: { tools: { refresh: { visibility: ['app'] } } },
+    host: { views: [{ id: 'board', scope: 'global' }, { id: 'task-board', scope: 'task' }] },
+  } } });
+});
+
 // Unit / §3.2: the real packer must include the page and enforce its first release.
 // Generic pack cases lack ui and do not distinguish a prerelease floor from a
 // stable-only floor. Minimal input: one HTML page, changing only minCindyVersion;

@@ -325,6 +325,45 @@ describe('Bot named worker transactions', () => {
     expect(h.current().model).toBe('runtime-fallback');
   });
 
+  // #9960: exercise the worker transaction, not a projection of its singleton predicate.
+  // Shadow ids are a main-owned input; legacy callers omit it. No row is archived or re-keyed.
+  it('excludes only the supplied inactive Cindy from creation and restore, preserving effective conflicts', () => {
+    const args = { id: 'orphan', displayName: 'Old Cindy', description: '', avatar: '🤖', avatarColor: 'blue',
+      identitySource: 'Identity', capabilitiesJson: '{"templateId":"cindy"}', now: 1 };
+    tx(db, { name: 'bots.createProfile', args });
+    const original = db.prepare('SELECT * FROM bot_profiles WHERE id = ?').get('orphan');
+    tx(db, { name: 'bots.createProfile', args: { ...args, id: 'incoming', displayName: 'Cloud Cindy', inactiveCindyIds: ['orphan'] } });
+    expect(db.prepare('SELECT * FROM bot_profiles WHERE id = ?').get('orphan')).toEqual(original);
+    // A second live Cindy is still rejected even though the orphan is excluded.
+    expect(() => tx(db, { name: 'bots.createProfile', args: { ...args, id: 'third', displayName: 'Third', inactiveCindyIds: ['orphan'] } }))
+      .toThrow('matching companion');
+    expect(() => tx(db, { name: 'bots.updateProfile', args: { id: 'orphan', expectedCurrentVersion: 1, now: 2,
+      inactiveCindyIds: [], profileContentChanged: false } })).toThrow('matching companion');
+    // Deleting reserves the identity until that lifecycle finishes, even for a shadowed id.
+    db.prepare("UPDATE bot_profiles SET status = 'deleting' WHERE id = 'orphan'").run();
+    db.prepare("UPDATE bot_profiles SET status = 'archived' WHERE id = 'incoming'").run();
+    expect(() => tx(db, { name: 'bots.createProfile', args: { ...args, id: 'third', displayName: 'Third', inactiveCindyIds: ['orphan'] } }))
+      .toThrow('matching companion');
+    expect(() => tx(db, { name: 'bots.createProfile', args: { ...args, id: 'third', inactiveCindyIds: true } }))
+      .toThrow('inactiveCindyIds');
+  });
+
+  // #6578: a confirmed cloud deletion releases the name, without deleting the local identity/history.
+  // Existing archive coverage bypassed the cloud-copy transaction; this is the smallest worker/db input.
+  it('retires a cloud copy without deleting its profile version, and releases its name', () => {
+    const args = { id: 'old', displayName: 'Mia', description: '', avatar: '🤖', avatarColor: 'blue', identitySource: 'Identity', capabilitiesJson: '{}', now: 1 };
+    tx(db, { name: 'bots.createProfile', args });
+    expect(tx(db, { name: 'bots.retireCloudCopy', args: { botId: 'old', at: 2 } })).toEqual({ changed: true });
+    expect(tx(db, { name: 'bots.retireCloudCopy', args: { botId: 'old', at: 3 } })).toEqual({ changed: false });
+    tx(db, { name: 'bots.createProfile', args: { ...args, id: 'new' } });
+    expect(db.prepare('SELECT id,status FROM bot_profiles ORDER BY id').all()).toEqual([
+      { id: 'new', status: 'active' }, { id: 'old', status: 'archived' },
+    ]);
+    expect(db.prepare('SELECT identity_source FROM bot_profile_versions WHERE bot_id=?').get('old')).toEqual({ identity_source: 'Identity' });
+    db.prepare("UPDATE bot_profiles SET status='deleting' WHERE id='new'").run();
+    expect(tx(db, { name: 'bots.retireCloudCopy', args: { botId: 'new', at: 4 } })).toEqual({ changed: false });
+  });
+
   it('atomically rejects duplicate names and a second Cindy without touching the first profile', () => {
     const args = { id: 'first', displayName: 'Renamed', description: '', avatar: '🤖', avatarColor: 'blue', identitySource: 'Custom identity', capabilitiesJson: '{"templateId":"cindy"}', now: 1 };
     tx(db, { name: 'bots.createProfile', args });

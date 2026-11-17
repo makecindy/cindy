@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -49,7 +50,7 @@ const renderAssistant = (content: string) =>
     <MemoryRouter>
       <Tooltip.Provider>
         <ConfirmDialogProvider>
-          <AssistantMessage workingDir="/w" content={content} />
+          <AssistantMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} workingDir="/w" content={content} />
         </ConfirmDialogProvider>
       </Tooltip.Provider>
     </MemoryRouter>,

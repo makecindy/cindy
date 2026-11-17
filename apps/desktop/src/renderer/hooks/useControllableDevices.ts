@@ -3,13 +3,13 @@
  *
  * 与 useDeviceLinkSettings(被控开关 / controlledBy / 轮询 / getState 全套)不同,这里只
  * 拉设备列表 + 订阅 presence / 本地控制偏好,筛出**可控目标**:
- * `online && remoteControlEnabled && controlEnabled && !isSelf && !isMobilePlatform(platform)`。
+ * `online && remoteControlEnabled && controlEnabled && !isSelf && isCindyApp(app) && !isMobilePlatform(platform)`。
  * 供「添加远程项目」弹窗的设备下拉 + 入口 gate(useHasAnyRemoteTarget)共用,避免在首页
  * 常驻时背上整套设置页的订阅开销。device-link 不可用(未登录 / relay 断)→ 静默空列表。
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { isCindyApp, isControllableDevice as isControllableCindyDevice, isMobilePlatform } from '@cindy/maker-shared/device-list';
 
 export interface ControllableDevice {
   deviceId: string;
@@ -23,13 +23,7 @@ export interface ControllableDevice {
  * 纯函数,供 hook 过滤 + 单测复用(守住这条准入,避免误把离线 / 未开被控 / 本机 / 手机列进去)。
  */
 export function isControllableDevice(d: DeviceLinkDeviceView): boolean {
-  return (
-    d.online &&
-    d.remoteControlEnabled &&
-    d.controlEnabled &&
-    !d.isSelf &&
-    !isMobilePlatform(d.platform)
-  );
+  return d.controlEnabled && isControllableCindyDevice(d);
 }
 
 /** 把设备全量列表(含本机/离线/未开被控)收敛成可控目标视图。纯函数,便于单测整条 transform。 */
@@ -81,7 +75,7 @@ export interface SelectableDevice extends ControllableDevice {
 export function isSelectableDevice(d: DeviceLinkDeviceView): boolean {
   // 手机端是控制端而非被控端。即便旧版本或异常 presence 报出 remoteControlEnabled=true，
   // 也不能把 iOS / Android 暴露成新建对话的运行目标。
-  if (d.isSelf || !d.controlEnabled || isMobilePlatform(d.platform)) return false;
+  if (d.isSelf || !d.controlEnabled || !isCindyApp(d.app) || isMobilePlatform(d.platform)) return false;
   return d.online ? d.remoteControlEnabled : true;
 }
 

@@ -26,7 +26,7 @@ describe('restart diagnosis', () => {
     ] });
     const service = createCrashDiagnosisService({ collect, currentRunStartedAt: Date.parse(at) + 1000, reports: () => [
       report('clean'), report('still-running'), report('crash-exit', 'signal:SIGTERM'),
-      report('shutdown-incomplete', 'update-relaunch'), report('abnormal'),
+      report('shutdown-incomplete', 'update-relaunch'), report('shutdown-incomplete', 'session-end'), report('ended-asleep'), report('abnormal'),
       report('crash-exit', 'uncaughtException'), report('shutdown-incomplete', 'render-process-gone:crashed'),
     ] });
     expect(service.summary()?.count).toBe(3);

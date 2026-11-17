@@ -47,7 +47,7 @@ vi.mock('../agentNetRuntime.js', () => ({ agentNetClientForRelay: () => ({
 agentNetRequiresEncryption: () => mocks.onlyEncrypted, agentNetSelectionKey: () => mocks.selection }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => mocks.scope, isAppSessionBoundaryPending: () => false }));
 
-import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi';
+import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi.desktop';
 import { setSelfHostedRelaySource } from '../selfHostedRelayRouting';
 import { remoteLocalAgentModels } from '../../local-agent/remoteCatalog.js';
 

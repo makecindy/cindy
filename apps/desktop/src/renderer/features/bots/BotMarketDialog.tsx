@@ -196,7 +196,7 @@ export function BotMarketDialog({ onClose, initialPackageId, api = window.electr
     const info = plugins[id] ?? (bundledPluginNames[id] ? { name: bundledPluginNames[id] } : undefined);
     return info ? [[id, info]] : [];
   }));
-  const closeButton = <Dialog.Close aria-label={t('bots.close')} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"><X size={18} /></Dialog.Close>;
+  const closeButton = <Dialog.Close aria-label={t('bots.close')} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"><X size={18} /></Dialog.Close>;
   const lastRowStart = entries.length - (entries.length % 2 || 2);
   return <>
     <Dialog.Root open onOpenChange={open => { if (!open) onClose(); }}>
@@ -243,7 +243,7 @@ export function BotMarketDialog({ onClose, initialPackageId, api = window.electr
                     <h2 className="text-24 font-medium text-[var(--text-primary)]">{selection.name}</h2>
                     <button type="button" disabled={!!busyId}
                       onClick={() => { if (selection.installation?.saved) void openBot(selection.installation.botId); else void invite(selection); }}
-                      className="group relative mt-2 flex max-w-full cursor-pointer rounded-xl text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)] active:opacity-80 disabled:cursor-default disabled:opacity-60">
+                      className="group relative mt-2 flex max-w-full cursor-pointer rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] active:opacity-80 disabled:cursor-default disabled:opacity-60">
                       {/* Same recipe as the user's message bubble; hover and focus step up to --surface-hover so it reads as tappable without borrowing the CTA fill. */}
                       <span className="flex min-w-0 items-center gap-2 rounded-xl rounded-bl-none border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-14 leading-6 text-[var(--text-primary)] transition-colors group-hover:bg-[var(--surface-hover)] group-focus-visible:bg-[var(--surface-hover)]">
                         <span className="min-w-0">{selection.bubble}</span>
@@ -288,7 +288,7 @@ export function BotMarketDialog({ onClose, initialPackageId, api = window.electr
                   <img src={entry.avatar} alt="" className="h-14 w-14 shrink-0 rounded-full object-cover" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-3">
-                      <button type="button" data-open-detail onClick={() => setSelectedId(entry.packageId)} className="min-w-0 cursor-pointer text-left text-16 font-medium text-[var(--text-primary)] after:absolute after:inset-0 after:content-[''] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] after:focus-visible:rounded-lg">{entry.name}</button>
+                      <button type="button" data-open-detail onClick={() => setSelectedId(entry.packageId)} className="min-w-0 cursor-pointer text-left text-16 font-medium text-[var(--text-primary)] after:absolute after:inset-0 after:content-[''] focus-visible:outline-none focus-visible:after:rounded-lg focus-visible:after:ring-2 focus-visible:after:ring-[var(--focus-ring)]">{entry.name}</button>
                       <div className="relative z-10 shrink-0">{action(entry, false)}</div>
                     </div>
                     <p className="mt-2 text-13 leading-5 text-[var(--text-secondary)]">{entry.description}</p>

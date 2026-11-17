@@ -36,6 +36,7 @@ vi.mock('@/hooks/useLogin', () => ({ useLogin: () => loginHook.value }));
 vi.mock('@/components/title-bar/WindowControls', () => ({ WindowControls: () => null }));
 
 import { LoginPage } from '../LoginPage';
+import { loginPreparingErrorState } from '../../../../shared/authIpc';
 
 const NAMED_CODES = [
   'AUTH_SERVICE_UNAVAILABLE',
@@ -325,4 +326,15 @@ describe('error-copy 桌面 19 码表 + 兜底(现网 i18n verbatim,#D91F37 族)
     const input = screen.getByTestId('login-input');
     expect(input.getAttribute('style')).toContain('var(--login-error-fg)');
   });
+});
+
+// #10617, unit: real LoginPage and translations; old generic failure hid HTTP status.
+it('shows network/proxy guidance and HTTP status for a non-JSON providers failure', () => {
+  loginHook.value.errorCode = 'INVALID_RESPONSE';
+  loginHook.value.loginState = loginPreparingErrorState('INVALID_RESPONSE', undefined, 418);
+  render(<LoginPage />);
+  expect(screen.getByText('HTTP 418')).toBeTruthy();
+  expect(screen.getByText(zhCN.login.networkResponseHint)).toBeTruthy();
+  fireEvent.click(screen.getByTestId('login-error-retry'));
+  expect(loginHook.value.dispatch).toHaveBeenCalledWith({ type: 'reset' });
 });

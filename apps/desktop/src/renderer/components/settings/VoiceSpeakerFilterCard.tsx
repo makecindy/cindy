@@ -74,7 +74,6 @@ export function VoiceSpeakerFilterCard({
 
   const deleteProfile = async (): Promise<void> => {
     const confirmed = await confirm({
-      presentation: 'standard',
       title: t('settings.voiceInput.speakerFilter.profile.deleteConfirm.title'),
       description: t('settings.voiceInput.speakerFilter.profile.deleteConfirm.description'),
       confirmText: t('settings.voiceInput.speakerFilter.profile.deleteConfirm.confirm'),

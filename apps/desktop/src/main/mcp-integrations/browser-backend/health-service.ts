@@ -54,6 +54,8 @@ export class BrowserBackendHealthService {
   constructor(
     private readonly controller: HealthController,
     private readonly logger: HealthLogger,
+    /** Whether a Chromium browser that can host the extension is installed; read only while disconnected. */
+    private readonly hasUserBrowser?: () => boolean,
   ) {}
 
   async getHealth(): Promise<BrowserBackendHealth> {
@@ -174,6 +176,16 @@ export class BrowserBackendHealthService {
     };
   }
 
+  private isUserBrowserMissing(): boolean {
+    try {
+      return this.hasUserBrowser?.() === false;
+    } catch (err) {
+      // An unreadable install location must not hide the plugin / extension guidance.
+      this.logger.warn('user browser install check failed', { err });
+      return false;
+    }
+  }
+
   private async probe(ensureHost = false): Promise<BrowserBackendHealth> {
     const active = this.controller.getCurrentBackendKind();
     // The user's own browser is reached through the plugin-owned extension
@@ -189,16 +201,21 @@ export class BrowserBackendHealthService {
         const diagnostic = typeof errorCode === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/.test(errorCode)
           ? { errorCode } : {};
         // Missing plugin, failed probe and disconnected extension require different guidance.
+        const reason: BrowserBackendHealthReason = !status.ok || data?.error ? 'status-failed'
+          : data?.configured === false
+            ? data.reason === 'plugin-updating' || data.reason === 'plugin-selection-required'
+              ? data.reason : 'plugin-missing'
+            : 'extension-disconnected';
+        // Without Chrome / Edge there is nowhere to add the extension, so installing a browser
+        // comes first. A pending plugin update or a failed probe keeps its own guidance.
+        const browserMissing = (reason === 'plugin-missing' || reason === 'extension-disconnected') &&
+          this.isUserBrowserMissing();
         return {
           active,
           status: 'error',
           canRecover: false,
           ...diagnostic,
-          reason: !status.ok || data?.error ? 'status-failed'
-            : data?.configured === false
-              ? data.reason === 'plugin-updating' || data.reason === 'plugin-selection-required'
-                ? data.reason : 'plugin-missing'
-              : 'extension-disconnected',
+          reason: browserMissing ? 'browser-missing' : reason,
         };
       } catch (err) {
         this.logger.warn('user browser status probe failed', { err });

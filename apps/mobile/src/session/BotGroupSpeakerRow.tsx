@@ -1,6 +1,6 @@
 import { BotGroupProcessEntries } from './BotGroupProcess';
 import { TeammateProcess, useTeammateElapsedTitle } from './TeammateProcess';
-import { BOT_GROUP_CLIENT_ID, readBotGroupProcessMessages, type BotGroupProcessMessage } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_CLIENT_ID, readBotGroupProcessMessages, isBotGroupProcessMessageVisible, type BotGroupProcessMessage } from '@cindy/maker-shared/botGroupChat';
 import { useRemoteSessionMessages } from './remoteSessionStore';
 import { useCallback, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -119,10 +119,9 @@ function BotGroupLiveNotes({ deviceId, sessionId, clientId, groupId, executionId
   }, [deviceId, sessionId, clientId, groupId, executionId, invoke]));
   const start = messages.findIndex(message => message.clientId === clientId);
   const live = messages.slice(start >= 0 ? start + 1 : 0).filter(message => {
-    const meta = message.agentMeta;
-    return !meta?.botPrivateReply && !meta?.failedSamplingAttempt
+    return isBotGroupProcessMessageVisible(message)
       && (start >= 0 || since !== undefined && Date.parse(message.createdAt) >= since);
   });
   const merged = [...new Map([...history, ...live].map(message => [message.clientId, message])).values()];
-  return <BotGroupProcessEntries messages={merged} id={`group-live:${executionId}`} running={running} />;
+  return <BotGroupProcessEntries messages={merged} id={`group-process:${executionId}`} deviceId={deviceId} sessionId={sessionId} running={running} />;
 }

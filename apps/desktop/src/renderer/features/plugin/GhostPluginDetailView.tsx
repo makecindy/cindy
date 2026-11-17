@@ -2,7 +2,10 @@ import { getPluginToolUi } from '@cindy/plugin-protocol';
 import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
 import { PluginShareButton } from './PluginShareButton';
+import { PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
+import { permissionItemDetail } from '../../../shared/ghostPermissionDetail';
 import { Button } from '@/components/ui/button';
+import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
@@ -34,7 +37,6 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { PluginUsageCard } from './PluginUsageCard';
 import { PluginReadmeSection, usePluginReadme } from './PluginReadmeSection';
 import { PluginSharedUsage } from './PluginSharedUsage';
 import { PluginPublisherBadge, PluginPublisherDescription } from './PluginPublisherBadge';
@@ -42,6 +44,7 @@ import { pluginPresentationOrigin, type PluginPresentationOrigin } from './lib/p
 import type { PluginMarketItem } from '../../../shared/pluginMarket';
 import { GhostLibrarySection } from './GhostLibrarySection';
 import { GhostHandoffFilesSection } from './GhostHandoffFilesSection';
+import { GhostAccountReuseSection } from './GhostAccountReuseSection';
 import { PluginBackgroundTasksSection } from './PluginBackgroundTasksSection';
 import { PluginControlPointsSection } from './PluginControlPointsSection';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
@@ -61,6 +64,7 @@ import { cn } from '@/lib/utils';
 import {
   declaredGhostControlPoints,
   ghostDeclaresHiddenTasks,
+  ghostInstallApprovalToken,
   ghostToolDeclaresHandoff,
   ghostTrustLabelKey,
   type GhostPermissionItem,
@@ -96,11 +100,10 @@ interface GhostPluginDetailViewProps {
   sharePluginId?: string;
   detail: GhostPluginDetail;
   marketItem?: PluginMarketItem | null;
+  installationPending?: boolean;
   panelStatus: string | null;
   enabledOverride?: boolean;
   onBack: () => void;
-  usageOwnerKey?: string;
-  confirmClearUsage?: () => Promise<boolean>;
   publishingSection?: ReactNode;
   onToggle: (enabled: boolean) => void;
   /** 主动作:面板型「使用」/ 指令或 Host 能力型「对话」;纯工具型不渲染主按钮。 */
@@ -156,8 +159,7 @@ export function GhostPluginDetailView({
   onToggle,
   onUse,
   marketItem,
-  usageOwnerKey,
-  confirmClearUsage,
+  installationPending = false,
   mainViewSidebarVisible = true,
   onMainViewSidebarVisibleChange,
   onUpdate,
@@ -236,6 +238,7 @@ export function GhostPluginDetailView({
           marketItem={marketItem}
           origin={detail.origin}
           publisherKind={detail.publisherKind}
+          installationPending={installationPending}
           installationLabel={detail.installationLabelKey ? t(`settings.ghosts.detail.${detail.installationLabelKey}`, { name: detail.installationNamespace }) : undefined}
           iconDataUrl={detail.iconDataUrl}
           onIconLoadError={onIconLoadError}
@@ -408,14 +411,6 @@ export function GhostPluginDetailView({
           ) : null}
         </PluginDetailHeader>
 
-        {ghost && !remote ? (
-          <PluginUsageCard
-            key={`${usageOwnerKey ?? 'local'}:${detail.id}`}
-            ghostId={detail.id}
-            confirmClear={confirmClearUsage}
-          />
-        ) : null}
-
         <PluginReadmeSection readme={readme} />
 
         {remote ? remoteConfiguration : hasConfiguration ? (
@@ -492,9 +487,10 @@ export function GhostPluginDetailView({
                       reloadKey={githubConnectionVersion}
                       account={
                         hasGithubConnection ? (
-                          <GithubAccountCard
-                            onConnected={() => setGithubConnectionVersion((version) => version + 1)}
-                          />
+                          <div>
+                            <GithubAccountCard onConnected={() => setGithubConnectionVersion((version) => version + 1)} />
+                            {ghost.manifest.id === 'cindy-github' && ghost.namespace === null && <GithubAppCard />}
+                          </div>
                         ) : undefined
                       }
                       ghost={ghost}
@@ -556,6 +552,7 @@ export function GhostPluginDetailView({
 
         {detail.permissions.length > 0 ? <PermissionSummary items={detail.permissions} /> : null}
         {ghost && pluginHasToolUi(ghost.manifest) && <section className="mt-4 space-y-3">
+          {!remote && <PluginUiMenu ghostId={detail.id} />}
           <h3 className="text-14 font-medium text-[var(--text-primary)]">{t('settings.ghosts.perm.mcpUi')}</h3>
           {ghost.manifest.tools?.filter(tool => getPluginToolUi(ghost.manifest)?.tools[tool.name]).map(tool => <div key={tool.name} className="text-13 text-[var(--text-secondary)]">
             <p>{tool.name}</p>
@@ -612,6 +609,7 @@ export function GhostPluginDetailView({
           </Button>
         ) : null}
 
+        {!remote ? <GhostAccountReuseSection key={`${detail.id}:${ghostInstallApprovalToken(ghost?.approval)}`} ghostId={detail.id} enabled={enabled} declared={ghost?.manifest.network?.secrets?.some(secret => !secret.source || secret.source === 'user' || secret.source === 'oauth') === true} /> : null}
         {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} /> : null}
         {!remote ? (
           <GhostHandoffFilesSection
@@ -652,6 +650,7 @@ export function PluginDetailHeader({
   origin,
   publisherKind,
   installationLabel,
+  installationPending = false,
   iconDataUrl,
   actions,
   children,
@@ -666,6 +665,7 @@ export function PluginDetailHeader({
   origin?: PluginPresentationOrigin;
   publisherKind?: PluginMarketItem['publisherKind'];
   installationLabel?: string;
+  installationPending?: boolean;
   iconDataUrl?: string;
   actions?: ReactNode;
   children?: ReactNode;
@@ -736,7 +736,7 @@ export function PluginDetailHeader({
             <PluginPublisherBadge origin={source} kind={kind} />
           </div>
           <GhostPluginMetadata author={visibleAuthor} version={version} marketItem={marketItem} />
-          {installationLabel ? <p className="mt-1 break-words text-12 text-[var(--text-tertiary)]">{installationLabel}</p> : null}
+          {installationLabel || installationPending ? <p aria-hidden={!installationLabel || undefined} className="mt-1 break-words text-12 text-[var(--text-tertiary)]">{installationLabel || '\u00a0'}</p> : null}
         </div>
 
         {actions}
@@ -932,7 +932,7 @@ export function PermissionSummary({ items }: { items: readonly GhostPermissionIt
           key: item.key,
           title: t('settings.ghosts.perm.' + item.labelKey, item.labelArgs),
           descriptions: [
-            item.detailKey ? t('settings.ghosts.perm.' + item.detailKey, item.detailArgs) : '',
+            permissionItemDetail(item, t) ?? '',
             item.detail ?? '',
           ].filter(Boolean),
           icon: permissionItemIcon(item),

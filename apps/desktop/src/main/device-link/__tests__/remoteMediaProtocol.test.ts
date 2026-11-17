@@ -37,7 +37,7 @@ vi.mock('../index', () => ({ remoteInvoke }));
 const downloadToBuffer = vi.hoisted(() => vi.fn());
 const openMediaStream = vi.hoisted(() => vi.fn());
 const removeRemote = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('../mediaTransfer', () => ({ downloadToBuffer, openMediaStream, removeRemote }));
+vi.mock('../mediaTransfer.desktop', () => ({ downloadToBuffer, openMediaStream, removeRemote }));
 
 const lookup = vi.hoisted(() => vi.fn());
 const recordLocal = vi.hoisted(() => vi.fn());

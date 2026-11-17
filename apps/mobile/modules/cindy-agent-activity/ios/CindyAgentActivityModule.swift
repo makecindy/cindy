@@ -74,6 +74,8 @@ private final class AgentActivityController {
             "supportsInputPushToken": supportsInputPushToken,
             "enabled": ActivityAuthorizationInfo().areActivitiesEnabled,
             "isStale": current?.activityState == .stale,
+            "confirmedAt": current?.content.state.confirmedAt as Any? ?? NSNull(),
+            "staleAt": current?.content.staleDate?.timeIntervalSince1970 as Any? ?? NSNull(),
             "startToken": hex(startToken), "updateToken": hex(current?.pushToken),
             "activityId": current?.id as Any? ?? NSNull(),
             "dismissed": account != nil && dismissedAccount == account]
@@ -95,6 +97,9 @@ private final class AgentActivityController {
     watches[activity.id] = [Task {
       for await content in activity.contentUpdates {
         log.debug("content observed; expiry: \(content.staleDate?.timeIntervalSince1970 ?? 0)")
+        // Let the phone-local diagnostic recorder observe content arrival. JS
+        // strips these dates before comparing/sending registration payloads.
+        registrationChanged?()
       }
     }, Task {
       for await _ in activity.pushTokenUpdates { registrationChanged?() }

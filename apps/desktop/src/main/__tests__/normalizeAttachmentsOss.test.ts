@@ -73,7 +73,7 @@ const downloadToFile = vi.hoisted(() => vi.fn(async () => {}));
 const copyPeerAttachment = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../device-link/peerAttachmentStore', () => ({ copyPeerAttachment }));
 const removeRemote = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('../device-link/mediaTransfer.js', () => ({ downloadToFile, removeRemote }));
+vi.mock('../device-link/mediaTransfer.desktop.js', () => ({ downloadToFile, removeRemote }));
 
 vi.mock('../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -84,7 +84,7 @@ import {
   normalizeUserMessage,
   materializeQueuedOssAttachmentsDeferred,
   collectQueuedAttachmentRefs,
-} from '../maker-ipc/normalizeAttachments';
+} from '../maker-ipc/normalizeAttachments.desktop';
 import { QueuedAttachmentOwnershipRegistry } from '../maker-ipc/queuedAttachmentOwnership';
 import { buildAttachmentOssRef } from '../../shared/attachmentOssRef';
 import { buildPeerAttachmentRef } from '@cindy/device-link';

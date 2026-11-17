@@ -48,6 +48,7 @@ mountPage({
       },
       state: async () => data.state,
       dismiss: forbid('setupMigration.dismiss'),
+      firstSignInOffer: async () => ({ open: false }),
       onProgress: (listener: ProgressListener) => {
         progressListeners.add(listener);
         return () => progressListeners.delete(listener);

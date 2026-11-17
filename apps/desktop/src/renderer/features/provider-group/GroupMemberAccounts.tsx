@@ -14,7 +14,6 @@ import {
 } from '@/components/status/QuotaHoverCard';
 import {
   buildSubscriptionAccountUsageCard,
-  type UsageCardAccount,
 } from '@/components/status/usageCardModel';
 import {
   getDataOwnerGeneration,
@@ -22,6 +21,7 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import { useDeviceLinkReconnectEpoch } from '@/features/device-link/useDeviceLinkReconnectEpoch';
 import { cn } from '@/lib/utils';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 
 import {
   SUBSCRIPTION_ACCOUNTS_CHANNEL,
@@ -44,7 +44,7 @@ function listedAccounts(raw: unknown, providerId: SubscriptionProvider): GroupMe
   const view = raw as { providerId?: unknown; accounts?: unknown } | null | undefined;
   if (view?.providerId !== providerId || !Array.isArray(view.accounts)) return [];
   return (view.accounts as SubscriptionAccountView[]).flatMap((account, index) =>
-    isUnusedDefaultAccount(account) ? [] : [{ account, number: index + 1 }],
+    account.paused || isUnusedDefaultAccount(account) ? [] : [{ account, number: index + 1 }],
   );
 }
 
@@ -97,7 +97,11 @@ export function useGroupMemberAccounts(
     void refresh();
     const timer = window.setInterval(() => void refresh(), REFRESH_MS);
     const offChanged = deviceId
-      ? undefined
+      ? window.electronAPI.deviceLink.onRemotePush?.((push, stamp) => {
+          if (push.deviceId === deviceId && push.channel === 'subscription-accounts:changed' &&
+              (push.payload as { providerId?: unknown } | null)?.providerId === observed &&
+              isDeviceLinkRemotePushCurrent(push, stamp)) void refresh();
+        })
       : window.electronAPI.subscriptionAccounts.onChanged((event) => {
           if (event.providerId === observed) void refresh();
         });
@@ -113,14 +117,12 @@ export function useGroupMemberAccounts(
   return { accounts: current?.accounts ?? null, loading: pool !== null && current === null };
 }
 
-/** `defaultCard` 是这台电脑原有的用量卡，它属于 CLI 默认账号，保留实时刷新与 Codex 重置次数。 */
+/** Every listed account displays its own quota; unavailable snapshots remain unknown. */
 export function GroupMemberAccountList({
   accounts,
-  defaultCard,
   hideAccountNames = false,
 }: {
   accounts: GroupMemberAccount[];
-  defaultCard: UsageCardAccount | null;
   hideAccountNames?: boolean;
 }) {
   const { t, i18n } = useTranslation();
@@ -132,10 +134,7 @@ export function GroupMemberAccountList({
         {accounts.map(({ account, number }) => {
           const name =
             account.identity || t('providerGroup.member.accountFallback', { index: number });
-          const usage =
-            account.id === 'default' && defaultCard
-              ? defaultCard
-              : buildSubscriptionAccountUsageCard(account.usage, t, Date.now(), locale);
+          const usage = buildSubscriptionAccountUsageCard(account.usage, t, Date.now(), locale);
           // 正常的账号不写状态，只有不能分配或读不到时才说明。
           const status = account.paused
             ? t('providerGroup.member.status.paused')

@@ -20,6 +20,7 @@ import {
 } from '@cindy/plugin-protocol';
 import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { readGhostReadmeFromDir } from '../cindy-brain/ghostReadme.js';
+import { isRetainedSeedMarketTarget } from '../cindy-brain/builtinSeedStoreInstall.js';
 import { app, dialog } from 'electron';
 
 import {
@@ -109,6 +110,8 @@ import {
   hasDeliveryNamespace,
   installedGhostPhysicalRelId,
   installedGhostStoragePart,
+  pluginInstallStoragePart,
+  pluginNewInstallRelId,
   knownDeliveryNamespacesDiffer,
   pluginLedgerRecordKey,
   sameDeliveryNamespaceState,
@@ -193,6 +196,18 @@ const CUSTOM_ICON_PROJECTION_TOKEN_RE = /^[a-f0-9]{16}$/;
 const CUSTOM_MARKET_SNAPSHOT_TIMEOUT_MS = 3_000;
 const AUTOMATIC_UPGRADE_RETRY_BASE_MS = 5 * 60 * 1_000;
 const AUTOMATIC_UPGRADE_RETRY_MAX_MS = 6 * 60 * 60 * 1_000;
+const LOCAL_REFRESH_CONTEXT_TTL_MS = 10 * 60 * 1_000;
+const LOCAL_REFRESH_CONTEXT_LIMIT = 8;
+/**
+ * Known performance debt: exact "not installed" counts below this limit are
+ * derived by resolving installed plugins in batches, so a search can issue up
+ * to this many extra requests.
+ * Above the limit we hide counts instead of growing the fan-out.
+ * Future work: move to catalog-level counts or a privacy-preserving aggregate;
+ * local installation state must not leave the device, and pages/searches must
+ * not resolve per installed plugin.
+ */
+const MARKET_COUNT_DEDUCTION_MAX_BATCHES = 10;
 
 function captureMarketOwner(): ActiveAppSession {
   const session = getActiveAppSession();
@@ -266,7 +281,7 @@ async function yieldMarketReconciliation(owner: ActiveAppSession): Promise<void>
 
 function installedGhostMatchingMarketPlugin(
   plugin: { ghostId: string; namespace?: string | null; scope?: string },
-  ghosts: readonly InstalledGhost[] = listMarketInstallations(),
+  ghosts: readonly InstalledGhost[],
 ): InstalledGhost | undefined {
   if (!isValidGhostId(plugin.ghostId)) {
     return ghosts.find((ghost) => ghost.manifest.id === plugin.ghostId);
@@ -281,6 +296,30 @@ function installedGhostMatchingMarketPlugin(
   return installed ?? (isSimulatorMigrationTarget(plugin)
     ? findInstalledGhostByIdentity(ghosts, createPluginLogicalIdentity(null, LEGACY_SIMULATOR_ID))
     : isLegacySimulatorListing(plugin) ? findInstalledGhostByIdentity(ghosts, createPluginLogicalIdentity(null, SIMULATOR_ID)) : undefined);
+}
+
+/** Exact instance first; fall back to one explicit scan for install and mutation preflight. */
+export function installedGhostMatchingMarketPluginNow(
+  plugin: { ghostId: string; namespace?: string | null; scope?: string },
+): InstalledGhost | undefined {
+  const manager = getGhostManager();
+  const expectedNamespace = hasDeliveryNamespace(plugin) ? plugin.namespace : null;
+  if (typeof manager.findInstalledInstance === 'function') {
+    const candidates = new Set<string>([plugin.ghostId]);
+    if (isValidGhostId(plugin.ghostId)) {
+      try {
+        candidates.add(pluginInstallStoragePart(pluginNewInstallRelId(
+          createPluginLogicalIdentity(expectedNamespace, plugin.ghostId),
+        )));
+      } catch { /* invalid logical identity falls back to the full list */ }
+    }
+    for (const candidate of candidates) {
+      let exact: InstalledGhost | undefined;
+      try { exact = manager.findInstalledInstance(candidate); } catch { /* fall through */ }
+      if (exact && exact.namespace === expectedNamespace && exact.manifest.id === plugin.ghostId) return exact;
+    }
+  }
+  return installedGhostMatchingMarketPlugin(plugin, listMarketInstallations());
 }
 
 
@@ -547,7 +586,7 @@ function ghostIdCounts(plugins: readonly VisiblePluginSummary[]): Map<string, nu
 
 function isGhostBusy(
   plugin: { ghostId: string; namespace?: string | null },
-  ghosts?: readonly InstalledGhost[],
+  ghosts: readonly InstalledGhost[],
 ): boolean {
   const ghost = installedGhostMatchingMarketPlugin(plugin, ghosts);
   const runtimeId = ghost ? installedGhostStoragePart(ghost) : plugin.ghostId;
@@ -779,8 +818,8 @@ function serverRecordMatchesDelivery(
 /**
  * 内置种子覆盖了这个商店安装，而种子已撤或当前 Release 不比种子旧（种子与商店按版本
  * 取新，相同取商店）：已装字节虽与账本不符（装着的是种子），仍按原商店路由更新回商店包。
- * 只认播种台账里的根 namespace 已批准实例，且账本仍指向当前目录项；不改变其它
- * 来源冲突的判定，也不用于授权查找。
+ * 只认播种台账里的根实例，或注册表仍保留原企业市场来源、被种子写成 root receipt 的旧目录。
+ * 企业恢复还须在实际更新事务中核对可信种子与现存字节；这里仅选路，不用于授权查找。
  */
 function seededBuiltinYieldsToRelease(
   plugin: VisiblePluginSummary,
@@ -793,7 +832,8 @@ function seededBuiltinYieldsToRelease(
     (record.source === 'market' || record.source === 'legacy-adopted') &&
     record.ghostId === plugin.ghostId &&
     ghost.manifest.id === plugin.ghostId &&
-    (!hasDeliveryNamespace(ghost) || ghost.namespace === null) &&
+    ((!hasDeliveryNamespace(ghost) || ghost.namespace === null) ||
+      isRetainedSeedMarketTarget(ghost, record, getGhostManager())) &&
     ghost.approval.state === 'approved' &&
     serverRecordMatchesSummaryRoute(plugin, record) &&
     builtinSeedYieldsToStoreVersion(plugin.ghostId, plugin.currentRelease.version),
@@ -1003,6 +1043,8 @@ export class PluginMarketService {
   private readonly snapshotFlights = new Map<string, MarketSnapshotFlight>();
   private readonly catalogFlights = new Map<string, Promise<MarketCatalog>>();
   private readonly localReadFlights = new Map<string, Promise<LocalInstallSnapshot>>();
+  private readonly localRefreshContexts = new Map<string, { context: PluginMarketRefreshContext; lastUsed: number }>();
+  private readonly countDeductionMaxBatches = MARKET_COUNT_DEDUCTION_MAX_BATCHES;
   private lastMaintenanceCatalog: { owner: string; fingerprint: string } | null = null;
   private readonly mutations = new Map<string, Promise<unknown>>();
   private ledgerMutation: Promise<void> = Promise.resolve();
@@ -1294,7 +1336,7 @@ export class PluginMarketService {
         state = value;
       } catch { throwIpcError('INVALID_PARAMS', 'Invalid Plugin market cursor'); }
     }
-    const local = owner ? await this.readLocalInstallSnapshot(owner) : EMPTY_LOCAL_INSTALL_SNAPSHOT;
+    const local = owner ? await this.readLocalInstallSnapshot(owner, !input.cursor) : EMPTY_LOCAL_INSTALL_SNAPSHOT;
     assertCurrent();
     const customSourceNames = owner ? this.customSourceNamesSafe(owner) : [];
     const includeCounts = !input.cursor && input.counts !== false;
@@ -1333,17 +1375,34 @@ export class PluginMarketService {
           const installedTargets = Object.values(local.installations).filter(record => record.installed && isValidPluginResourceId(record.pluginId))
             .map(record => ({ key: record.pluginId, pluginId: record.pluginId }));
           const targets = [...new Map(installedTargets.map(target => [target.key, target])).values()];
-          const deducted = new Set<string>();
-          for (let offset = 0; offset < targets.length; offset += 100) {
-            const result = await this.api.resolve(targets.slice(offset, offset + 100), query || undefined);
-            assertCurrent();
-            for (const row of result.results) if (row.status === 'available' && row.matchesQuery && !deducted.has(row.plugin.id)
-              && isInstalled(this.toItem(row.plugin, local))) {
-              deducted.add(row.plugin.id);
-              queryCounts[row.plugin.scope]--; queryCounts.all--;
+          if (targets.length > this.countDeductionMaxBatches * 100) {
+            // Known limitation: bounded client-side deduction; see the budget constant above.
+            // Future optimization should remove this path instead of raising the cap.
+            counts = null;
+            log.warn('plugin market installed count deduction skipped', { installedTargets: targets.length });
+          } else {
+            const deducted = new Set<string>();
+            const deduct = (plugin: VisiblePluginSummary) => {
+              if (!deducted.has(plugin.id) && isInstalled(this.toItem(plugin, local))) {
+                deducted.add(plugin.id);
+                queryCounts[plugin.scope]--; queryCounts.all--;
+              }
+            };
+            if (page.legacyQueryPlugins) {
+              // The legacy page already contains every query match across sources.
+              // Reuse it only for this request; resolving each batch would reread it.
+              const installedIds = new Set(targets.map(target => target.pluginId));
+              for (const plugin of page.legacyQueryPlugins) if (installedIds.has(plugin.id)
+                && (owner.mode === 'cloud' || plugin.scope === 'public')) deduct(plugin);
+            } else {
+              for (let offset = 0; offset < targets.length; offset += 100) {
+                const result = await this.api.resolve(targets.slice(offset, offset + 100), query || undefined);
+                assertCurrent();
+                for (const row of result.results) if (row.status === 'available' && row.matchesQuery) deduct(row.plugin);
+              }
             }
+            if (Object.values(queryCounts).some(value => value < 0)) throwIpcError('PLUGIN_LIST_CHANGED', 'Plugin query changed while counting installed matches');
           }
-          if (Object.values(queryCounts).some(value => value < 0)) throwIpcError('PLUGIN_LIST_CHANGED', 'Plugin query changed while counting installed matches');
         }
       }
       if (page.nextCursor && page.nextCursor === state.serverCursor) throwIpcError('PRECONDITION_FAILED', 'Plugin cursor did not advance');
@@ -1723,7 +1782,7 @@ export class PluginMarketService {
           requireSameMarketOwner(owner);
           log.warn('plugin usage reporting provenance unavailable');
         }
-        if (rebound) await refreshPluginUsageBindings();
+        if (rebound) await refreshPluginUsageBindings(true);
       }
       await yieldMarketReconciliation(owner);
       await this.backfillOfficialCindyGithubTrust(ledger, owner, refresh);
@@ -2183,7 +2242,7 @@ export class PluginMarketService {
       }
       const installSubject = defaultInstallSubject(owner);
       requireSameMarketOwner(owner);
-      const installed = installedGhostMatchingMarketPlugin(record);
+      const installed = installedGhostMatchingMarketPluginNow(record);
       // Instance missing: only close this ledger row. A bare ghostId fallback
       // would uninstall a coexisting public sibling.
       if (installed) {
@@ -2406,7 +2465,7 @@ export class PluginMarketService {
         if (releaseId !== options.expectedReleaseId) {
           throwIpcError('PRECONDITION_FAILED', 'Plugin release changed after selection');
         }
-        const existing = installedGhostMatchingMarketPlugin(plugin);
+        const existing = installedGhostMatchingMarketPluginNow(plugin);
         if (automatic && isPluginDowngrade(plugin.version, existing)) {
           throwIpcError('PRECONDITION_FAILED', 'Automatic Plugin downgrade is not allowed');
         }
@@ -2486,7 +2545,7 @@ export class PluginMarketService {
             ? { mode: 'unprompted' }
             : await obtainGhostInstallConsent(
                 consent.mode === 'prompt' ? { ...consent, trust: packed.inspected.trust.level } : consent,
-                installedGhostMatchingMarketPlugin(plugin),
+                installedGhostMatchingMarketPluginNow(plugin),
                 packed.inspected.manifest,
                 packed.inspected.packageSha256,
               );
@@ -2498,7 +2557,7 @@ export class PluginMarketService {
           beforeCommit: async () => {
             requireSameMarketOwner(owner);
             assertCurrent?.();
-            if (automatic && isGhostBusy(plugin)) {
+            if (automatic && isGhostBusy(plugin, listMarketInstallations())) {
               throw new SilentUpgradeBusyError('Plugin is busy');
             }
             // 所选来源必须**仍然存在且仍是同一个来源**:移除来源会先拿
@@ -2517,7 +2576,7 @@ export class PluginMarketService {
             // 会把"更新"降级成"首装+带电启用";反向地,窗口内新装入的同 id
             // 本地 .cindy 会被更新分支静默覆盖。判据与选择时刻同一份:
             // 在场状态一致 + 已装内容摘要未变。
-            const current = installedGhostMatchingMarketPlugin(plugin);
+            const current = installedGhostMatchingMarketPluginNow(plugin);
             if (Boolean(current) !== Boolean(existing)) {
               throwIpcError(
                 'PRECONDITION_FAILED',
@@ -2556,7 +2615,7 @@ export class PluginMarketService {
           beforePackagePlacement: () => {
             requireSameMarketOwner(owner);
             assertCurrent?.();
-            if (automatic && isGhostBusy(plugin)) {
+            if (automatic && isGhostBusy(plugin, listMarketInstallations())) {
               throw new SilentUpgradeBusyError('Plugin is busy');
             }
             const record = ledger.installationForPlugin(plugin);
@@ -3006,7 +3065,7 @@ export class PluginMarketService {
           ? { mode: 'unprompted' }
           : await obtainGhostInstallConsent(
               options.consent.mode === 'prompt' ? { ...options.consent, trust: inspected.trust.level } : options.consent,
-              installedGhostMatchingMarketPlugin(plugin),
+              installedGhostMatchingMarketPluginNow(plugin),
               inspected.manifest,
               inspected.packageSha256,
             );
@@ -3092,7 +3151,7 @@ export class PluginMarketService {
     ledger: PluginMarketLedger,
   ): Promise<InstalledGhost> {
     return withPluginDeliveryInstallLock(plugin, async () => {
-      const installedNow = installedGhostMatchingMarketPlugin(plugin);
+      const installedNow = installedGhostMatchingMarketPluginNow(plugin);
       const currentRecordNow = serverInstallation(ledger, plugin);
       if (isLegacySimulatorListing(plugin) && installedNow?.manifest.id === SIMULATOR_ID) {
         throwIpcError('PRECONDITION_FAILED', 'The migrated simulator cannot be replaced by a legacy-ID package');
@@ -3370,7 +3429,7 @@ export class PluginMarketService {
           requireSameMarketOwner(owner);
           const record = ledger.installationForPlugin(candidate);
           if (!record?.installed || record.rawManifestSha256 !== undefined) return;
-          const installed = installedGhostMatchingMarketPlugin(record);
+          const installed = installedGhostMatchingMarketPluginNow(record);
           const identity = this.manifestIdentityForBackfill(record, installed);
           if (!identity) return;
 
@@ -3479,7 +3538,7 @@ export class PluginMarketService {
             ghostId: ghost.manifest.id,
             ...deliveryNamespaceFields(ghost),
           })) return;
-          const currentGhost = installedGhostMatchingMarketPlugin({
+          const currentGhost = installedGhostMatchingMarketPluginNow({
             ghostId: ghost.manifest.id,
             ...deliveryNamespaceFields(ghost),
           });
@@ -3561,7 +3620,9 @@ export class PluginMarketService {
       }
 
       const findRecoveryCandidate = (ghosts?: readonly InstalledGhost[]): InstalledGhost | undefined => {
-        const installed = installedGhostMatchingMarketPlugin(record, ghosts);
+        const installed = ghosts
+          ? installedGhostMatchingMarketPlugin(record, ghosts)
+          : installedGhostMatchingMarketPluginNow(record);
         if (installed) return installed;
         const lookup = ledger.lookupInstallationsForNamespaceMigration(record.ghostId);
         if (lookup.kind !== 'found' || lookup.records.length !== 1) return undefined;
@@ -3724,7 +3785,7 @@ export class PluginMarketService {
         const cleared = await this.withMutation(record.pluginId, () =>
           withGhostInstallLock(record.ghostId, async () => {
             requireSameMarketOwner(owner);
-            const installed = installedGhostMatchingMarketPlugin(record);
+            const installed = installedGhostMatchingMarketPluginNow(record);
             const identity = installed?.approval.state === 'approved'
               ? readInstalledMarketManifestIdentity(installed.dir)
               : null;
@@ -4261,7 +4322,7 @@ export class PluginMarketService {
               expectedInstalled: true,
               expectedInstalledApproval: ghostInstallApprovalToken(freshInstalled.approval),
               beforeCommitInLock: () => {
-                if (isGhostBusy(fresh.target)) {
+                if (isGhostBusy(fresh.target, freshLocal.ghosts)) {
                   throw new SilentUpgradeBusyError('Plugin is busy');
                 }
               },
@@ -4361,17 +4422,47 @@ export class PluginMarketService {
   }
 
   /** Coalesce pending read-only scans; completed approval/installation facts are never cached. */
-  private readLocalInstallSnapshot(owner: ActiveAppSession): Promise<LocalInstallSnapshot> {
-    const key = marketOwnerKey(owner);
+  private readLocalInstallSnapshot(owner: ActiveAppSession, fresh = false): Promise<LocalInstallSnapshot> {
+    const ownerKey = marketOwnerKey(owner);
+    const key = ownerKey + (fresh ? ':fresh' : ':reuse');
     const pending = this.localReadFlights.get(key);
     if (pending) return pending;
-    const flight = this.localInstallSnapshotAsync(owner, this.ledgerForOwner(owner), {
-      installed: createMarketBackgroundRefresh(),
-    }).finally(() => {
-      if (this.localReadFlights.get(key) === flight) this.localReadFlights.delete(key);
-    });
+    const flight = this.localInstallSnapshotAsync(owner, this.ledgerForOwner(owner), this.localRefreshContext(owner, fresh))
+      .finally(() => {
+        if (this.localReadFlights.get(key) === flight) this.localReadFlights.delete(key);
+      });
     this.localReadFlights.set(key, flight);
     return flight;
+  }
+
+  /** Keep one read-only installation view per owner so pagination reuses the same scan. */
+  private localRefreshContext(owner: ActiveAppSession, fresh = false): PluginMarketRefreshContext {
+    const key = marketOwnerKey(owner);
+    const now = Date.now();
+    const existing = this.localRefreshContexts.get(key);
+    if (existing && !fresh) {
+      if (now - existing.lastUsed <= LOCAL_REFRESH_CONTEXT_TTL_MS) {
+        existing.lastUsed = now;
+        return existing.context;
+      }
+    }
+    if (existing) this.localRefreshContexts.delete(key);
+    const context: PluginMarketRefreshContext = { installed: createMarketBackgroundRefresh() };
+    this.localRefreshContexts.set(key, { context, lastUsed: now });
+    this.pruneLocalRefreshContexts(now);
+    return context;
+  }
+
+  private pruneLocalRefreshContexts(now: number): void {
+    for (const [key, entry] of this.localRefreshContexts) {
+      if (now - entry.lastUsed > LOCAL_REFRESH_CONTEXT_TTL_MS) this.localRefreshContexts.delete(key);
+    }
+    while (this.localRefreshContexts.size > LOCAL_REFRESH_CONTEXT_LIMIT) {
+      const oldest = [...this.localRefreshContexts.entries()]
+        .sort((left, right) => left[1].lastUsed - right[1].lastUsed)[0];
+      if (!oldest) return;
+      this.localRefreshContexts.delete(oldest[0]);
+    }
   }
 
   private localInstallSnapshot(

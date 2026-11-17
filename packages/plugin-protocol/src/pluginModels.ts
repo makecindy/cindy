@@ -14,6 +14,16 @@ export interface GhostModelsNeeds {
   types: string[];
 }
 
+/** Explicit model route shared by new-task, turn and request control points. */
+export interface GhostModelRoute {
+  agentKind: 'cc' | 'codex' | 'pi';
+  model: string;
+  providerId: string;
+  agentDeviceId?: string;
+  effort?: string;
+  fastMode?: boolean | 'ultrafast';
+}
+
 export interface GhostPublishedModelText {
   name?: string;
   description?: string;
@@ -41,6 +51,24 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const isText = (value: unknown, max: number): value is string =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= max;
+
+/** Shape validation only. The execution host must still verify current model availability. */
+export function parseGhostModelRoute(value: unknown): GhostModelRoute | undefined {
+  if (!isRecord(value)) return undefined;
+  const text = (raw: unknown) => isText(raw, 256) ? raw.trim() : undefined;
+  const agentKind = value.agentKind === 'cc' || value.agentKind === 'codex' || value.agentKind === 'pi'
+    ? value.agentKind : undefined;
+  const model = text(value.model);
+  const providerId = text(value.providerId);
+  if (!agentKind || !model || !providerId) return undefined;
+  const agentDeviceId = text(value.agentDeviceId);
+  if (value.agentDeviceId !== undefined && (!agentDeviceId || agentDeviceId.length > 128)) return undefined;
+  if (value.fastMode !== undefined && typeof value.fastMode !== 'boolean' && value.fastMode !== 'ultrafast') return undefined;
+  const effort = text(value.effort);
+  return { agentKind, model, providerId,
+    ...(agentDeviceId ? { agentDeviceId } : {}), ...(effort ? { effort } : {}),
+    ...(value.fastMode !== undefined ? { fastMode: value.fastMode } : {}) };
+}
 
 export function parseGhostModelsNeeds(raw: unknown): GhostModelsNeeds | null {
   if (!isRecord(raw) || !Array.isArray(raw.types) || raw.types.length === 0) return null;

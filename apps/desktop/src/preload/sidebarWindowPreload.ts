@@ -636,6 +636,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     push: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:push', params),
   },
   maker: {
+    mcpApps: (sessionId: string | null, input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:mcp-apps:v1', sessionId, input),
+    onPluginUiAction: (cb: (input: unknown) => void) => onPayload('plugin-ui:action', cb),
+    onPluginUiState: (cb: (input: { epoch: string; updates: import('../shared/pluginUi').PluginUiStateChange[] }) => void) => onPayload('plugin-ui:state', cb),
     // Read-only catalogs needed by the same model selector used in the main window.
     listProviders: () => ipcRenderer.invoke('maker:provider:list'),
     // The shared catalog reader needs the same owner lease even when legacy migration is deferred.

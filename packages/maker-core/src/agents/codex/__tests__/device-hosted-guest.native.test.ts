@@ -120,6 +120,9 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
     const agent = new CodexAgent({
       binaryPath: binaryPath!,
       logger,
+      // #10533: the executor offers memory, but the guest host has no local
+      // memory transport and the controller explicitly disables Maker Memory.
+      ...(guest ? { mcpProviders: [{ name: 'cindy_memory' }] } : {}),
       runtimeConfig: {
         systemPrompt: 'CINDY_HOST_IDENTITY_CANARY',
         answerDeliveryPrompt: 'CINDY_ANSWER_DELIVERY_CANARY',

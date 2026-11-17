@@ -11,7 +11,7 @@ export default {
     'src/renderer/features/device-link/stickySessionOrigin':
       'export const getStickySessionDeviceId = () => undefined;',
     'src/renderer/features/device-link/remoteProjectsStore':
-      'export const remoteProjectsStore = { subscribe: () => () => {} };',
+      'export const getSessionDeviceId = () => undefined; export const remoteProjectsStore = { subscribe: () => () => {} };',
   },
   cases: { default: { about: 'Failed App retains saved text and offers retry' } },
   async ready(page) { await page.getByRole('alert').waitFor(); },

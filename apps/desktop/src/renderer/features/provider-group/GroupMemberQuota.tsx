@@ -260,7 +260,7 @@ export function GroupMemberQuota({
     pausedStructuredQuota?.deviceId ?? remoteDeviceId,
     { live: true, active: !quotaOffline && !!provider },
   );
-  // 这台电脑上的账号：两个及以上分别列出；只有一个时不加账号名，默认账号继续用原来的卡。
+  // 每个账号使用自身额度；只有一个时省略重复的账号名。
   const { accounts, loading: accountsLoading } = useGroupMemberAccounts(
     target.kind === 'share' ? null : target.providerId,
     remoteDeviceId,
@@ -268,8 +268,7 @@ export function GroupMemberQuota({
     !quotaOffline && !!provider && !provider.removed && provider.auth?.method === 'oauth' &&
       (!provider.access || provider.access.kind === 'subscription'),
   );
-  const listedAccounts = accounts && (accounts.length > 1 ||
-    (accounts.length === 1 && accounts[0].account.id !== 'default')) ? accounts : null;
+  const listedAccounts = accounts?.length ? accounts : null;
   const [waitedOut, setWaitedOut] = useState(false);
   const [loadingVisible, setLoadingVisible] = useState(false);
   const waitKey = target.kind === 'share' ? '' : `${remoteDeviceId ?? ''}\n${target.providerId}`;
@@ -285,11 +284,12 @@ export function GroupMemberQuota({
   }, [waitKey]);
   // 先确定账号列表，避免先显示默认账号，随后整块换成多账号布局。沿用原来的等待上限，
   // 旧电脑不支持列表或长时间不回包时，仍可查看已有的默认账号额度。
-  const visibleCard = accountsLoading && !waitedOut ? null : card;
+  const visibleCard = (accountsLoading && !waitedOut) || accounts?.length === 0 ? null : card;
 
   let note: string | null = null;
   if (target.kind === 'share') note = t('providerGroup.member.quota.share');
   else if (quotaOffline) note = t('providerGroup.member.quota.offline');
+  else if (accounts?.length === 0) note = t('providerGroup.member.quota.unavailable');
   else if (!visibleCard && !listedAccounts) {
     if (!accountsLoading && provider && !providerWeeklyQuotaSource({ ...provider, suspended: false })) {
       note = t('providerGroup.member.quota.none');
@@ -305,7 +305,7 @@ export function GroupMemberQuota({
     // 空内容不能带负边距，否则它会折叠到外层，把点击的格子先拉矮 4px。
     <div id={id} data-testid="provider-group-member-quota" className={cn((listedAccounts || visibleCard || note) && '-mt-1', inset)}>
       {listedAccounts ? (
-        <GroupMemberAccountList accounts={listedAccounts} defaultCard={card} hideAccountNames={listedAccounts.length === 1} />
+        <GroupMemberAccountList accounts={listedAccounts} hideAccountNames={listedAccounts.length === 1} />
       ) : visibleCard ? (
         <QuotaHoverCard variant="embedded" hideIdentity account={visibleCard} />
       ) : note ? (

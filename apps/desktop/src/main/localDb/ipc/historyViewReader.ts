@@ -27,6 +27,8 @@ export interface HistoryPageShape {
   fingerprints: string[];
   /** Running top-level leaf work items, key → revision exactly as delivered. */
   running: Map<string, string>;
+  /** Outline suffix appended to every work summary revision of this page, if any. */
+  revisionSuffix?: string;
 }
 
 export interface HistoryPageOptions {
@@ -289,12 +291,17 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       // The cursor can also supply grouping context without appearing in raw.
       const anchors = raw.length ? [raw[0].id, raw[raw.length - 1].id] : [];
       if (beforeAnchor) anchors.push(beforeAnchor.id);
-      await Promise.all(anchors.map((id) => deps.anchor(sessionId, id, outlined)));
+      const uniqueAnchors = [...new Set(anchors)];
+      // Validation needs membership, not the endpoint bodies. Reuse the same
+      // bounded clear/rewind-aware batch validator as detail reads.
+      if (uniqueAnchors.length && deps.validate) await deps.validate(sessionId, uniqueAnchors);
+      else await Promise.all(uniqueAnchors.map((id) => deps.anchor(sessionId, id, outlined)));
       if (fingerprints) {
         options.onShape!({
           keys: selected.map((item) => item.key),
           fingerprints: selected.map((item) => fingerprints.get(item)!),
           running: new Map(selected.filter(isRunningLeafWork).map((item) => [item.key, item.summary.revision])),
+          ...(outlined ? { revisionSuffix: `:${outlineRevision}` } : {}),
         });
       }
       return { version: 1, items: selected, hasMore,

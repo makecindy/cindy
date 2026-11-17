@@ -48,6 +48,7 @@ export {
   type SessionImportCallbacks,
   type SessionImportDeps,
 } from './session_import.js';
+export type { SessionShareCallbacks } from './session_share.js';
 // multi-worker Phase 1 control tools
 export {
   registerStartTeamTool,

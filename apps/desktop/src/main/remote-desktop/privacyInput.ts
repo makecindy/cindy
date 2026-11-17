@@ -20,6 +20,8 @@ export async function watchPrivacyInput(
     spawn: (binary: string): ChildProcessWithoutNullStreams =>
       spawn(binary, ['--privacy-input'], { stdio: 'pipe', windowsHide: true }),
   },
+  /** Physical pointer movement (never a lock trigger): the screen's notice brightens. */
+  pointer: () => void = () => {},
 ): Promise<PrivacyInputMonitor> {
   const child = runtime.spawn(await runtime.resolveBinary());
   // Process close proves the OS has removed its hooks, unlike merely sending EOF.
@@ -73,6 +75,7 @@ export async function watchPrivacyInput(
       buffer = buffer.slice(end + 1);
       if (line === pending?.expected) pending.done();
       else if (line === 'local-input') localInput();
+      else if (line === 'pointer') pointer();
       else return fail();
     }
   });
@@ -107,7 +110,8 @@ export interface AwayGuardInputMonitor extends PrivacyInputMonitor {
  * as the lock is up and then exits.
  */
 export async function watchAwayGuardInput(
-  ended: (locked: boolean) => void,
+  /** `failure` is the helper's fixed word when it reported an unconfirmed lock. */
+  ended: (locked: boolean, failure?: string) => void,
   /** Fixed word naming what made the helper lock (key, click, heartbeat, …), for logs. */
   lockingBecause: (reason: string) => void = () => {},
   runtime = {
@@ -115,21 +119,29 @@ export async function watchAwayGuardInput(
     spawn: (binary: string): ChildProcessWithoutNullStreams =>
       spawn(binary, ['--away-guard'], { stdio: 'pipe', windowsHide: true }),
   },
+  /** Physical pointer movement (never a lock trigger): the screen's notice brightens. */
+  pointer: () => void = () => {},
 ): Promise<AwayGuardInputMonitor> {
   const child = runtime.spawn(await runtime.resolveBinary());
-  const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
+  let finished = false;
+  const closed = new Promise<void>((resolve) => child.once('close', () => {
+    finished = true;
+    resolve();
+  }));
   let locked = false;
-  let ready = false;
+  let failure: string | undefined;
+  let watching = false;
   let reported = false;
   let lockedNow: (() => void) | undefined;
   const lockConfirmed = new Promise<void>((resolve) => {
     lockedNow = resolve;
   });
   const report = () => {
-    if (reported || !ready) return;
+    if (reported || !watching) return;
     reported = true;
     clearInterval(heartbeat);
-    ended(locked);
+    if (!locked && failure) ended(false, failure);
+    else ended(locked);
   };
   let buffer = '';
   let settleReady: ((error?: Error) => void) | undefined;
@@ -158,17 +170,28 @@ export async function watchAwayGuardInput(
     while ((end = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, end).trim();
       buffer = buffer.slice(end + 1);
-      if (line === 'ready') {
-        ready = true;
+      // Old Windows helpers treat unknown switches as ordinary input mode and
+      // also print ready; require a mode-specific acknowledgement before masking.
+      if (line === (process.platform === 'win32' ? 'away-ready' : 'ready')) {
         settleReady?.();
       } else if (/^reason [a-z-]{1,16}$/.test(line)) {
         lockingBecause(line.slice('reason '.length));
+      } else if (line === 'pointer') {
+        if (!locked) pointer();
+      } else if (/^lock-failed( [a-z-]{1,16})?$/.test(line)) {
+        failure = line.slice('lock-failed '.length) || 'unknown';
+        // macOS exits after failure; Windows retains its physical-input fence.
+        if (process.platform !== 'win32') finished = true;
       } else if (line === 'locked') {
+        finished = true;
         locked = true;
         lockedNow?.();
         report();
+      } else if (['permission', 'error', 'released'].includes(line)) {
+        finished = true;
       }
-      // `permission`, `error`, `released` and `lock-failed` all end with process exit.
+      // Windows lock-failed retains the helper and its input hooks; the bounded
+      // lock() call reports failure without removing them.
     }
   });
   void closed.then(() => {
@@ -181,24 +204,37 @@ export async function watchAwayGuardInput(
     // Once locked, the helper has stopped reading input and is exiting by itself.
     if (locked) return Promise.resolve();
     write(command);
-    const timer = setTimeout(() => child.kill(), timeoutMs);
-    timer.unref();
-    return Promise.race([closed, lockConfirmed]).finally(() => clearTimeout(timer));
+    let timer: ReturnType<typeof setTimeout>;
+    const timedOut = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        // Windows keeps its physical-input hooks when locking fails. Killing it
+        // here would undo that protection while the desktop remains unlocked.
+        if (process.platform === 'win32' && command === 'lock') resolve();
+        else child.kill();
+      }, timeoutMs);
+      timer.unref();
+    });
+    return Promise.race([closed, lockConfirmed, timedOut]).finally(() => clearTimeout(timer));
   };
   try {
     await readyPromise;
+    // Main can resume after the helper has already locked/exited. Do not publish
+    // that dead input shield or call ended before the caller has its monitor.
+    if (finished) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
   } catch (error) {
     child.kill();
     await closed;
     throw error;
   }
+  watching = true;
   return {
     confirm: () => Promise.reject(new Error('DESKTOP_PRIVACY_UNAVAILABLE')),
     resume: () => Promise.reject(new Error('DESKTOP_PRIVACY_UNAVAILABLE')),
     stop: () => finish('release', 2000),
     lock: async () => {
-      // The helper waits up to 3 s for the OS to report the lock before giving up.
-      await finish('lock', 6000);
+      // A timeout returns failure; Windows keeps its hooks until confirmed lock.
+      // macOS tries the system lock, then the shortcut: about 5 s at worst.
+      await finish('lock', 8000);
       return locked;
     },
     lockOnExit: () => write('lock'),

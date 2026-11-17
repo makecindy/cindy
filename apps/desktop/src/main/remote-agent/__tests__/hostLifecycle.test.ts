@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemoteAgentPoller } from '../controller/poller';
 import { RemoteAgentRunClient } from '../controller/runClient';
 import { createRemoteAgentHost, hostSessionIdFor, type HostedStartInput } from '../host/runHost';
+import * as runTunnel from '../host/tunnel';
 
 /** 协议层 id 是 36 位 UUID 形态。 */
 const RUN_1 = '11111111-1111-4111-8111-111111111111';
@@ -119,6 +120,42 @@ function sessionRoot(controller: string, sessionId: string): string {
 }
 
 describe('hosted shadow workspace cleanup', () => {
+  // Unit regression: a cancelled open can finish before createRunTunnel returns.
+  // Existing disposal tests wait for startHosted, after the tunnel is installed.
+  // The real loopback endpoint must stop listening even when it arrives late.
+  it('closes a tunnel created after its run was already closed', async () => {
+    const created = whenStarted();
+    const releaseTunnel = whenStarted();
+    const create = runTunnel.createRunTunnel;
+    let tunnel: runTunnel.RunTunnel | undefined;
+    const creation = vi.spyOn(runTunnel, 'createRunTunnel').mockImplementation(async handlers => {
+      tunnel = await create(handlers);
+      created.resolve();
+      await releaseTunnel.promise;
+      return tunnel;
+    });
+    const startHosted = vi.fn(async (input: HostedStartInput) => idleHandle(input));
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true, startHosted,
+      isControllerAuthorized: () => true, captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot,
+    });
+    try {
+      await host.handle('controller-1', { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('task-1') } });
+      await created.promise;
+      expect((await fetch(tunnel!.url)).status).toBe(401);
+      await host.handle('controller-1', { op: 'close', runId: RUN_1, mode: 'close', reason: 'navigation' });
+      releaseTunnel.resolve();
+      await host.dispose();
+      expect(startHosted).not.toHaveBeenCalled();
+      await expect(fetch(tunnel!.url)).rejects.toThrow();
+    } finally {
+      releaseTunnel.resolve();
+      await host.dispose();
+      await tunnel?.close();
+      creation.mockRestore();
+    }
+  });
+
   it('authorizes policy updates before persistence and waits for native confirmation', async () => {
     let allowed = false;
     let confirm!: () => void;

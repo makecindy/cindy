@@ -25,6 +25,11 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
   };
 }): TItem[] {
   const { view, snapshot, structure } = options;
+  // An expanded full range owns the display. A running range read can split into
+  // a group that requests the folded preview; if that request switched this range
+  // to the preview, the split group would vanish, release it and reappear (React #185).
+  const readsPreview = (summary: HistoryWorkSummary, expanded: ReadonlySet<string>) =>
+    !!summary.preview && expanded.has(summary.preview.key) && !expanded.has(summary.key);
   const rows: T[] = [];
   const seen = new Set<string>();
   const placeholders = new Set<string>();
@@ -66,7 +71,7 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     const summary = item.summary;
     const full = snapshot.details.get(summary.key);
     const preview = !(full?.complete && full.revision === summary.revision)
-      && summary.preview && snapshot.expanded.has(summary.preview.key);
+      && readsPreview(summary, snapshot.expanded);
     const range = preview ? summary.preview! : summary;
     const state = snapshot.details.get(range.key);
     const cached = state?.messages ?? [];
@@ -158,7 +163,7 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     const summaries = [...refs.values()];
     const expanded = summaries.some((summary) => snapshot.expanded.has(summary.key));
     const states = summaries.map((summary) => snapshot.details.get(
-      summary.preview && snapshot.expanded.has(summary.preview.key) ? summary.preview.key : summary.key));
+      readsPreview(summary, snapshot.expanded) ? summary.preview!.key : summary.key));
     const lines = [...summaries].reverse().find((summary) => summary.lines)?.lines;
     // A read preview can end in prose that seals this group in the regrouped render.
     // Deciding from that render would collapse and reopen the preview without end.
@@ -177,7 +182,7 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
       setVisible,
       toggle: () => { for (const summary of summaries) view.setExpanded(summary.key, !expanded); },
       retry: () => { for (const summary of summaries) void view.loadDetails(
-        summary.preview && view.getSnapshot().expanded.has(summary.preview.key) ? summary.preview : summary); },
+        readsPreview(summary, view.getSnapshot().expanded) ? summary.preview! : summary); },
     });
   };
   return options.build(rows, options.streaming, historyWorkSummaries(snapshot.items).flatMap((summary) => summary.artifacts ?? [])).map(bind);

@@ -8,6 +8,11 @@ import { createRoot } from "react-dom/client";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 // This suite renders zh-CN only. Keep the real i18n initializer, Chinese catalog
 // and English fallback without collecting the ten unused locale catalogs.
+// Window geometry is a native boundary; preview placement has its own production-hook suite.
+vi.mock('@/session/usePreviewChromeFrame', () => ({ usePreviewChromeFrame: () => ({
+  top: 0, bottom: 0, left: 12, right: 12, contentTop: 48,
+  documentContentTop: 64, documentHeaderHeight: 64, sharedStatusRow: false,
+}) }));
 vi.mock('@/i18n/locales/es', () => ({ default: {} }));
 vi.mock('@/i18n/locales/fr', () => ({ default: {} }));
 vi.mock('@/i18n/locales/de', () => ({ default: {} }));
@@ -44,6 +49,8 @@ vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null })
 // Fee-button accessibility is rendered by the real component; the unopened
 // native sheet is outside this suite's scope.
 vi.mock('@/session/SheetModal', () => ({ SheetModal: () => null }));
+// Card previews have their own regression suite; this suite preserves the message/source-label assertions.
+vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
 
 // Screen reader toggle and the system action menu availability, for the companion menu case.
 const a11y = vi.hoisted(() => ({ screenReader: null as null | ((enabled: boolean) => void), systemMenu: false }));

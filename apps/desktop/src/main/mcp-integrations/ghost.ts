@@ -1,3 +1,4 @@
+import { EvaluationError } from '../cindy-evaluate/errors.js';
 import { getPluginToolUi } from '@cindy/plugin-protocol';
 
 import { pluginToolVisible, compareCindyVersions, PLUGIN_UI_MIN_CINDY_VERSION } from '@cindy/plugin-protocol';
@@ -53,6 +54,7 @@ import type {
 import { toolAutoReviewAction, type PermissionMode, type ReviewableAction, type AutoReviewDecision } from '@cindy/maker-core';
 
 import {
+  authorizedSessionPathStillBound,
   getLiziMcpSessionContext,
   resolveLiziMcpSessionContext,
   type LiziMcpSessionContext,
@@ -251,6 +253,9 @@ export interface CindyGhostsHostDeps {
   onToolResultImagesFailed?: (sessionId: string, attemptedCount: number) => void;
 }
 export interface GhostGatewayPorts {
+  callEvaluate: typeof import('../cindy-evaluate/service.js').callEvaluate;
+  readEvaluationImageFile: typeof import('../cindy-evaluate/service.js').readEvaluationImageFile;
+  resolveEvaluationImage: (url: string) => { absPath: string };
   publishPluginAppResult: typeof import('../mcp-apps/pluginCards.js').publishPluginAppResult;
   pluginModelResult: typeof import('../mcp-apps/pluginCards.js').pluginModelResult;
   community: typeof import('../plugin-contributions/host.js');
@@ -290,7 +295,7 @@ export interface GhostGatewayPorts {
 
 /** Shared plugin discovery, authorization and tool execution. The launchers supply
  * their real platform services; all consent, identity and grant rules stay here. */
-type PlatformService = "community" | "contributionOwnerKey" | "assertContributionOwner" | "getPreparedContribution" | "createPluginMarketAgentTools" | "createTaskInstallConsentPrompt" | "publishImage" | "ghostForgeForbiddenRootDirs" | "installOrUpdateLocalGhostPackageFromForge" | "writeForgeScaffoldWithStableParent" | "currentPublisherIdentity" | "getPluginPublisherOrchestrator" | "startPluginPublish" | "callCindyMedia" | "forkForgeIconConversionHost" | "openGithubSignIn" | "readGithubConnection";
+type PlatformService = "callEvaluate" | "readEvaluationImageFile" | "resolveEvaluationImage" | "community" | "contributionOwnerKey" | "assertContributionOwner" | "getPreparedContribution" | "createPluginMarketAgentTools" | "createTaskInstallConsentPrompt" | "publishImage" | "ghostForgeForbiddenRootDirs" | "installOrUpdateLocalGhostPackageFromForge" | "writeForgeScaffoldWithStableParent" | "currentPublisherIdentity" | "getPluginPublisherOrchestrator" | "startPluginPublish" | "callCindyMedia" | "forkForgeIconConversionHost" | "openGithubSignIn" | "readGithubConnection";
 export type PluginGatewayPorts = Omit<GhostGatewayPorts, PlatformService> & Partial<Pick<GhostGatewayPorts, PlatformService>> & {
   getGhostGrantConfirmBridge?: typeof desktopGrantBridge;
   getGhostSetupCoordinator?: typeof desktopSetupCoordinator;
@@ -1950,6 +1955,14 @@ function visibleChipGhosts(
 }
 
 
+/** A cold registry cannot prove absence; list() restores it before exact matching. */
+function findInstalledGhostForToolCall(instanceId: string): InstalledGhost | undefined {
+  const manager = getGhostManager();
+  return manager.findInstalledInstance(instanceId)
+    ?? findInstalledGhostByInstanceId(manager.list(), instanceId);
+}
+
+
 const ghostVisibilityDeps = {
   listGhosts: () => getGhostManager().list(),
   findInstalledInstance: (id: string) => getGhostManager().findInstalledInstance(id),
@@ -2287,6 +2300,40 @@ function getCindyGhostsMcpDeps(
       return { ok: true, status: 'ready', ghostId: target.id,
         message: 'Host setup is ready. No plugin business operation was executed. Platform permissions are verified only by the requested operation.' };
     },
+    callEvaluate: async (request, signal) => {
+      if (!ports.callEvaluate) return { ok: false, errorCode: 'UNAVAILABLE', message: '当前主机尚未接入决策和重排模型', retryable: false, outcomeKnown: true };
+      const imageGrants: Array<() => boolean> = [];
+      const sessionContext = resolveSessionContext();
+      const assertCurrent = () => {
+        const live = requireLiveSessionInstance(sessionContext?.sessionId, sessionContext?.sessionInstanceId, hostDeps.getLiveSessionGrantState);
+        if (!live.ok) throw new EvaluationError('PERMISSION_DENIED', live.message);
+        if (imageGrants.some(isCurrent => !isCurrent())) throw new EvaluationError('PERMISSION_DENIED', '图片文件授权已变化');
+      };
+      return requireService('callEvaluate')(request, {
+        sessionId: sessionContext?.sessionId, signal, assertCurrent,
+        readImage: async ref => {
+          assertCurrent();
+          if (!sessionContext?.workingDir || Boolean(sessionContext.remoteHostId)) throw new EvaluationError('PERMISSION_DENIED', '无法读取当前任务的本机图片');
+          const candidate = ref.startsWith('cindy-media://') ? blobStore.resolveSafe(ref).absPath
+            : ref.startsWith('xdt-image://') ? requireService('resolveEvaluationImage')(ref).absPath
+            : path.resolve(sessionContext.workingDir, ref);
+          const source = classifyLocalAttachmentPath(candidate, sessionContext.workingDir, { mimeForExt: blobStore.mimeForExt });
+          if (source.kind === 'not-local' || source.kind === 'unsupported-type' || !source.mimeType.startsWith('image/')) throw new EvaluationError('INVALID_INPUT', '请提供实际存在的图片文件');
+          const target = source.absPath;
+          const authorization = await authorizeDesktopSessionPath({ ...sessionContext,
+            path: target, toolName: 'evaluate.decisions', operation: 'read',
+          }, hostDeps.getLiveSessionGrantState);
+          if (!authorization.allowed) throw new EvaluationError('PERMISSION_DENIED', '当前任务没有读取此图片的权限');
+          if (authorization.isCurrent) imageGrants.push(authorization.isCurrent);
+          assertCurrent();
+          if (!await authorizedSessionPathStillBound(sessionContext.workingDir, target)) throw new EvaluationError('PERMISSION_DENIED', '图片路径已变化');
+          const bytes = await requireService('readEvaluationImageFile')(target);
+          assertCurrent();
+          if (!await authorizedSessionPathStillBound(sessionContext.workingDir, target)) throw new EvaluationError('PERMISSION_DENIED', '图片路径已变化');
+          return bytes;
+        },
+      });
+    },
     callMedia: async (request) => {
       const sessionContext = resolveSessionContext();
       const sessionId = sessionContext?.sessionId;
@@ -2301,7 +2348,7 @@ function getCindyGhostsMcpDeps(
           }, hostDeps.getLiveSessionGrantState),
         });
       }
-      const downloadContext = (request.action === 'request' || request.action === 'poll') && sessionId && sessionContext?.sessionInstanceId
+      const downloadContext = (request.action === 'request' || request.action === 'poll' || (request.action === 'prepare' && request.sourceInvocationId)) && sessionId && sessionContext?.sessionInstanceId
         ? hostDeps.createMediaDownloadContext?.(sessionId, sessionContext.sessionInstanceId)
         : undefined;
       let result: Record<string, unknown>;
@@ -2458,7 +2505,10 @@ function getCindyGhostsMcpDeps(
       const sessionIdForConfirm = sessionContext?.sessionId ?? null;
       const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
       const sessionWorkdir = sessionContext?.workingDir ?? null;
-      const installed = await listInstalledGhostsAsync();
+      // Page authority already binds a physical instance; do not rediscover
+      // every installed plugin for each page interaction.
+      const pageGhost = pageCall ? findInstalledGhostForToolCall(pageCall.instance) : undefined;
+      const installed = pageCall ? (pageGhost ? [pageGhost] : []) : await listInstalledGhostsAsync();
       const initialVisibility = classifyGhostVisibility(
         ghostId,
         sessionWorkdir,
@@ -2469,7 +2519,7 @@ function getCindyGhostsMcpDeps(
       const target = { ...initialVisibility.ghost };
       if (pageCall && (pageCall.instance !== installedGhostStoragePart(target) || pageCall.tool !== tool ||
           target.approval.state !== 'approved' || target.approval.revision !== pageCall.revision ||
-          pageCall.sessionId !== sessionContext?.sessionId)) return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Page call authorization changed' };
+          pageCall.sessionId !== (sessionContext?.sessionId ?? null))) return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Page call authorization changed' };
       const instanceId = installedGhostStoragePart(target);
       // Capture result privacy from this approved revision before any async work.
       // Missing historical HTML disables pages, not the original view-only data boundary.
@@ -2827,10 +2877,7 @@ function getCindyGhostsMcpDeps(
       // a same-ID plugin replacement removing the declaration during the await.
       if (preDispatch.manifest.sessionContext === true) {
         const ctx = await buildGhostSessionContext(sessionIdForConfirm, sessionWorkdir);
-        const postCtxManifest = findInstalledGhostByInstanceId(
-          getGhostManager().list(),
-          instanceId,
-        )?.manifest;
+        const postCtxManifest = findInstalledGhostForToolCall(instanceId)?.manifest;
         if (postCtxManifest?.sessionContext === true) {
           mergedArgs = { ...mergedArgs, session_context: ctx };
         }
