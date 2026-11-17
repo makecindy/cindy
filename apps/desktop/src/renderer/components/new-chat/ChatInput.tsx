@@ -2692,7 +2692,9 @@ export function ChatInput({
         // structured document model as a typed list marker. Paste does not run
         // Tiptap input rules, so normalize it explicitly at this boundary.
         if (text && !segments) {
-          const normalizedPaste = plainTextToComposerDocument(text);
+          // Paste only recognizes Markdown markers; the CJK ordinal is not
+          // Markdown and stays literal unless the user typed it.
+          const normalizedPaste = plainTextToComposerDocument(text, true);
           const { state } = view;
           const { $from } = state.selection;
           const pasteIntoTrailingEmptyLine = isTrailingEmptyTopLevelParagraph(view);

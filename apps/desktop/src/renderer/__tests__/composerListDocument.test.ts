@@ -186,6 +186,16 @@ describe('composer list document normalization', () => {
     });
   });
 
+  it('parses only Markdown markers in pasted text', () => {
+    expect(plainTextToComposerDocument('324325、123423、235233', true)).toEqual({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: '324325、123423、235233' }] },
+      ],
+    });
+    expect(plainTextToComposerDocument('1. first', true).content?.[0]?.type).toBe('orderedList');
+  });
+
   it('preserves accepted unordered marker syntax and spacing', () => {
     expect(plainTextToComposerDocument('+   item\n• next')).toEqual({
       type: 'doc',

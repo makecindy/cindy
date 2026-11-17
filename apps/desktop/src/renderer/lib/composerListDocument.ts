@@ -62,7 +62,7 @@ function splitParagraphLines(paragraph: JSONContent): ComposerLine[] {
   return lines;
 }
 
-function parseListMarker(text: string): ListMarker | null {
+function parseListMarker(text: string, markdownOnly = false): ListMarker | null {
   // Only unindented rows are promoted here. Indented rows may be nested
   // Markdown, and the visual fallback remains responsible for those until
   // their parent item is also represented structurally.
@@ -81,6 +81,9 @@ function parseListMarker(text: string): ListMarker | null {
   const ordered = text.match(ORDERED_RE);
   if (ordered) {
     const marker = ordered[2] as OrderedMarker;
+    // Pasted text is only parsed as Markdown; the CJK ordinal is not Markdown
+    // syntax, so it stays literal there.
+    if (markdownOnly && marker === '、') return null;
     if (marker !== '、' && ordered[3].length === 0) return null;
     return {
       kind: 'ordered',
@@ -117,10 +120,11 @@ function paragraphFromLine(line: ComposerLine, attrs?: JSONContent['attrs']): JS
 function listFromLines(
   lines: ComposerLine[],
   marker: ListMarker,
+  markdownOnly: boolean,
   paragraphAttrs?: JSONContent['attrs'],
 ): JSONContent {
   const items = lines.map((line) => {
-    const lineMarker = parseListMarker(line.text);
+    const lineMarker = parseListMarker(line.text, markdownOnly);
     const content =
       stripPrefix(line.content, lineMarker?.prefixLength ?? marker.prefixLength) ?? line.content;
     return {
@@ -180,6 +184,7 @@ function isFenceClosing(text: string, state: FenceState): boolean {
 function paragraphToBlocks(
   paragraph: JSONContent,
   initialFence: FenceState | null,
+  markdownOnly: boolean,
 ): { blocks: JSONContent[]; fence: FenceState | null } {
   const lines = splitParagraphLines(paragraph);
   let scannedFence: FenceState | null = initialFence;
@@ -189,7 +194,7 @@ function paragraphToBlocks(
       if (isFenceClosing(line.text, scannedFence)) scannedFence = null;
       continue;
     }
-    if (parseListMarker(line.text)) hasPromotableList = true;
+    if (parseListMarker(line.text, markdownOnly)) hasPromotableList = true;
     const opening = fenceOpening(line.text);
     if (opening) scannedFence = opening;
   }
@@ -210,7 +215,7 @@ function paragraphToBlocks(
   };
   const flushList = () => {
     if (listLines.length === 0 || !listMarker) return;
-    blocks.push(listFromLines(listLines, listMarker, paragraph.attrs));
+    blocks.push(listFromLines(listLines, listMarker, markdownOnly, paragraph.attrs));
     listLines = [];
     listMarker = null;
   };
@@ -229,7 +234,7 @@ function paragraphToBlocks(
       fence = opening;
       continue;
     }
-    const marker = parseListMarker(line.text);
+    const marker = parseListMarker(line.text, markdownOnly);
     if (!marker) {
       flushList();
       plainLines.push(line);
@@ -286,14 +291,19 @@ function mergeLists(left: JSONContent, right: JSONContent): JSONContent {
  * nested rows, and paragraphs containing inline atoms that obscure the marker
  * remain plain text and can still use the compatibility renderer.
  */
-export function normalizeComposerDocumentJSON(document: JSONContent): JSONContent {
+export function normalizeComposerDocumentJSON(
+  document: JSONContent,
+  markdownOnly = false,
+): JSONContent {
   if (document.type !== 'doc' || !Array.isArray(document.content)) return document;
 
   const normalized: JSONContent[] = [];
   let fence: FenceState | null = null;
   for (const node of stripHostCapabilityChips(document).content!) {
     const result: { blocks: JSONContent[]; fence: FenceState | null } =
-      node.type === 'paragraph' ? paragraphToBlocks(node, fence) : { blocks: [node], fence };
+      node.type === 'paragraph'
+        ? paragraphToBlocks(node, fence, markdownOnly)
+        : { blocks: [node], fence };
     fence = result.fence;
     for (const block of result.blocks) {
       const previous = normalized.at(-1);
@@ -376,7 +386,7 @@ export function insertComposerDocumentForRestore(
 }
 
 /** Build a normalized composer document from plain clipboard/history text. */
-export function plainTextToComposerDocument(text: string): JSONContent {
+export function plainTextToComposerDocument(text: string, markdownOnly = false): JSONContent {
   const content = text
     .split('\n')
     .map((line) =>
@@ -384,7 +394,7 @@ export function plainTextToComposerDocument(text: string): JSONContent {
         ? { type: 'paragraph', content: [{ type: 'text', text: line }] }
         : { type: 'paragraph' },
     );
-  return normalizeComposerDocumentJSON({ type: 'doc', content });
+  return normalizeComposerDocumentJSON({ type: 'doc', content }, markdownOnly);
 }
 
 export function composerDocumentContainsList(document: JSONContent): boolean {
