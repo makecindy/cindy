@@ -5518,6 +5518,13 @@
       },
       "toggleAria": "Toggle question navigation rail"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "Name worktrees with a model",
+        "description": "Gives a new task's worktree a short English name based on its first message (e.g. fix-login-timeout), so the folder and branch show what they're for. Uses the auxiliary models; if naming fails, a random name is used. Only affects worktrees created from now on."
+      },
+      "toggleAria": "Toggle naming worktrees with a model"
+    },
     "promptRecommendation": {
       "label": "Input Suggestions",
       "description": "After a reply, the input shows a suggestion for your next message. Press Tab to insert it.",
