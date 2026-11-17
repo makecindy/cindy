@@ -7,7 +7,7 @@
  * boundTaskDigest 保证;这里只负责事实。
  */
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
-import { redactLocalPaths } from '../maker-ipc/coldPiRehydrationFailure.js';
+import { redactLocalPathText } from '../maker-ipc/coldPiRehydrationFailure.js';
 import type { TaskDigestPhase, TaskDigestRoute, TaskDigestWire } from '@cindy/mcps';
 import type { WatchedSession } from '../../shared/botAutonomy.js';
 
@@ -359,6 +359,6 @@ export function sessionFactsFromRow(row: unknown): TaskDigestSessionFacts | null
 /** Redact before bounding: a truncated credential must never become unrecognizable. */
 export function taskDigestErrorSummary(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
-  const text = redactLocalPaths(redactSensitiveText(value)).replace(/\s+/g, ' ').trim();
+  const text = redactLocalPathText(redactSensitiveText(value));
   return text ? Array.from(text).slice(0, 300).join('') : null;
 }
