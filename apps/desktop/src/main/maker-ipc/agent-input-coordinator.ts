@@ -1802,7 +1802,19 @@ export class AgentInputCoordinator {
     // 判 duplicate 顺延 —— 无人值守自动化整体停摆(PR #972 review P1)。直接
     // 丢弃并走 onDiscarded 释放回调注册表;下一轮 cron fire 按当下状态重新走
     // 排队/直发,不丢任务只丢陈旧副本。
-    const restorable = boundaryFilteredItems.filter((item) => !existingIds.has(item.clientId));
+    const restorable = boundaryFilteredItems.filter((item) => {
+      if (existingIds.has(item.clientId)) return false;
+      // V1 private messages and delegation commands have no delivery owner in
+      // V2. Discard before transcript persistence/accepted callbacks: rejecting
+      // them there would leave a terminal error and block the following input
+      // (#10239). Completion receipts are still valid and must be retained.
+      if (item.clientId.startsWith('bot-dm:')
+        || /^bot-delegation-(?:start|resume|unpause|interject):/.test(item.clientId)) {
+        this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        return false;
+      }
+      return true;
+    });
     const staleSchedulerItems = restorable.filter((item) => item.origin?.kind === 'scheduler');
     // A group lane is reusable, but an execution lease is not. Snapshot rows
     // have lost the originating execution's callbacks; a new claim on this

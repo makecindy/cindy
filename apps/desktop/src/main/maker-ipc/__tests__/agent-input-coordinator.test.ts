@@ -332,6 +332,66 @@ describe('trusted owner queue edits', () => {
   });
 });
 
+describe('retired V1 teammate queue restoration (#10239)', () => {
+  // Production restore/resume must remove V1 inputs before transcript persistence
+  // or accepted callbacks. Existing recovery tests did not cover these old IDs.
+  // Minimal input: one retired row followed by owner input; in-memory unit tier.
+  const retiredIds = [
+    'bot-dm:old:message',
+    'bot-delegation-start:old',
+    'bot-delegation-resume:old',
+    'bot-delegation-unpause:old',
+    'bot-delegation-interject:old',
+  ];
+
+  it.each(retiredIds)('discards %s before accepting the following owner input', async clientId => {
+    const h = createHarness(), sid = 'retired-mixed';
+    const retired = makeItem(clientId, 'Obsolete input');
+    h.setLoadQueueSnapshot(async () => [retired, makeItem('following', 'Next user message')]);
+    await h.coordinator.ensureQueueRestored(sid);
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['following']);
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledExactlyOnceWith(sid, retired);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    h.coordinator.resume(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.onAcceptedQueuedMessage).toHaveBeenCalledExactlyOnceWith(sid, expect.objectContaining({ clientId: 'following' }), true);
+    expect(h.onUserMessagePersisting).toHaveBeenCalledExactlyOnceWith(sid, expect.objectContaining({ clientId: 'following' }));
+    expect(h.persistTerminalSendError).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid)).toMatchObject({ error: null, recovery: null, pendingQueue: [] });
+    expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual([]);
+  });
+
+  it('settles a retired-only snapshot once and allows the next live input', async () => {
+    const h = createHarness(), sid = 'retired-only';
+    h.setLoadQueueSnapshot(async () => retiredIds.map(id => makeItem(id, 'Obsolete input')));
+    await h.coordinator.ensureQueueRestored(sid);
+    await h.coordinator.ensureQueueRestored(sid);
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledTimes(retiredIds.length);
+    expect(h.coordinator.getProjection(sid)).toMatchObject({ error: null, recovery: null, pendingQueue: [], queuePaused: false });
+    expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual([]);
+    expect(h.onAcceptedQueuedMessage).not.toHaveBeenCalled();
+    expect(h.onUserMessagePersisting).not.toHaveBeenCalled();
+    h.coordinator.enqueue(sid, makeItem('next-live', 'Continue normally'));
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.persistTerminalSendError).not.toHaveBeenCalled();
+  });
+
+  it('keeps completion receipts and similar non-retired IDs in their original order', async () => {
+    const h = createHarness(), sid = 'retired-controls';
+    const ids = ['bot-delegation-completion:old', 'bot-delegation-result:old:1', 'bot-delegation-started:valid', 'bot-dm-thread:valid', 'plugin-target:valid', 'ordinary'];
+    h.setLoadQueueSnapshot(async () => ids.map(id => makeItem(id, 'Valid input')));
+    await h.coordinator.ensureQueueRestored(sid);
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(ids);
+    expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    h.coordinator.resume(sid);
+    await flush();
+    expect(h.onAcceptedQueuedMessage).toHaveBeenCalledExactlyOnceWith(sid, expect.objectContaining({ clientId: ids[0] }), true);
+    expect(h.persistTerminalSendError).not.toHaveBeenCalled();
+  });
+});
+
 describe('MCP App queued message grants', () => {
   function appItem(guard: () => Promise<void>) {
     return {
