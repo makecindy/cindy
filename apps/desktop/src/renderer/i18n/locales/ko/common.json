@@ -5475,6 +5475,13 @@
       },
       "toggleAria": "질문 내비게이션 레일 전환"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "모델로 worktree 이름 짓기",
+        "description": "새 작업의 worktree에 첫 메시지를 바탕으로 짧은 영어 이름(예: fix-login-timeout)을 붙여 폴더와 브랜치의 용도를 한눈에 알 수 있게 합니다. 보조 모델이 생성하며, 실패하면 무작위 이름을 사용합니다. 앞으로 만드는 worktree에만 적용됩니다."
+      },
+      "toggleAria": "모델로 worktree 이름 짓기 전환"
+    },
     "promptRecommendation": {
       "label": "다음 입력 제안",
       "description": "답변 후 입력창에 다음 메시지를 제안합니다. Tab 키를 누르면 입력됩니다.",

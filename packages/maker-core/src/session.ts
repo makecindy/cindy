@@ -74,6 +74,7 @@ import type {
   SendOptions,
   StartSessionOptions,
   TurnContinuationState,
+  TurnContinuationCancellationReason,
 } from './agents/base-agent.js';
 import {
   AUTO_REVIEW_SOURCE_CONTENT,
@@ -1653,9 +1654,15 @@ export class Session {
 
   /** Subscribe to provider-owned continuation lifecycle transitions. */
   onTurnContinuationChange(
-    listener: (continuationId: number, state: TurnContinuationState) => void,
+    listener: (continuationId: number, state: TurnContinuationState, reason?: TurnContinuationCancellationReason) => void,
   ): () => void {
     return this.handle.onTurnContinuationChange?.(listener) ?? (() => undefined);
+  }
+
+  /** Read only the cause belonging to this exact retained continuation claim. */
+  getTurnContinuationCancellationReason(continuationId: number): TurnContinuationCancellationReason | undefined {
+    if (this.status === 'closed' || this.status === 'error') return undefined;
+    return this.handle.getTurnContinuationCancellationReason?.(continuationId);
   }
 
   /** True once teardown has started, including an unconfirmed failed close. */
