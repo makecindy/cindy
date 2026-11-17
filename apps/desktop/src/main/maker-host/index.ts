@@ -287,6 +287,8 @@ import {
 import { ensureCurrentAccountProviderReadiness } from './account-provider-readiness-ensure.js';
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderReadiness.js';
 import { listBotImConnectionsForBot } from '../im/shared/botImConnectionStore.js';
+import { isSharedChannelSession, noteSessionStartAccountIndex } from '../im/shared/channelSessionLanes.js';
+import { withholdAccountMemoryIndexInSharedConversation } from './shared-conversation-memory.js';
 import {
   armCodexHttpRecovery,
   clearCodexProxyAuthInjection,
@@ -2769,6 +2771,13 @@ export function getMaker(): Maker {
             });
             if (mount) createOpts.hostSkills = [mount];
           }
+          // 伙伴的记忆快照已在上一步给出; 这里只处理用 Cindy 记忆的任务。
+          await withholdAccountMemoryIndexInSharedConversation(sessionId, createOpts, {
+            isSharedSession: isSharedChannelSession,
+            noteStart: noteSessionStartAccountIndex,
+            manager: makerMemoryManager,
+            warn: (message, fields) => desktopMakerLogger.warn(message, fields),
+          });
           if (botRuntimeSnapshot?.unavailableSkills.length) {
             desktopMakerLogger.warn('Bot configured Skills unavailable for runtime', {
               botId: botRuntimeSnapshot.botId,

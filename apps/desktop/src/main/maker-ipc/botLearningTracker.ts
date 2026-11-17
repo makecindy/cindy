@@ -36,13 +36,11 @@ interface Turn {
 /** Capture the write's owner before awaiting storage. Late completions retain this object. */
 export function createBotLearningTracker() {
   const current = new Map<string, Turn>();
-  // V2 teammates write their project's memory (not a `bot:` scope); their writes still count as learning.
-  const projectTeammateSessions = new Set<string>();
+  // V2 teammates may save memory with native file tools; their receipts are read back from disk.
   const nativeReceipts = new Map<string, NativeReceiptReader>();
   const latestIdentity = new Map<string, string>();
   return {
     async prepareProjectTeammate(sessionId: string, createReader?: () => Promise<NativeReceiptReader>) {
-      projectTeammateSessions.add(sessionId);
       if (!createReader) { nativeReceipts.delete(sessionId); return; }
       // Queueing input performs observational resource preflights while the current turn
       // is busy. Keep its pre-write baseline, and avoid another scan in that case.
@@ -51,13 +49,8 @@ export function createBotLearningTracker() {
       if (!current.has(sessionId)) nativeReceipts.set(sessionId, reader);
     },
     markProjectTeammate(sessionId: string, readNativeReceipts?: NativeReceiptReader) {
-      projectTeammateSessions.add(sessionId);
       if (readNativeReceipts) nativeReceipts.set(sessionId, readNativeReceipts);
       else nativeReceipts.delete(sessionId);
-    },
-    learnsFrom(sessionId: string | undefined, memoryScopeKey: string | undefined): string {
-      if (!sessionId) return '';
-      return memoryScopeKey?.startsWith('bot:') || projectTeammateSessions.has(sessionId) ? sessionId : '';
     },
     observe(sessionId: string, identity: string, publish: Turn['publish']) {
       latestIdentity.set(sessionId, identity);

@@ -5,7 +5,7 @@ import type { MemoryChangeParts } from '../maker-ipc/deferredCodexRestart.js';
 export type NativeMemoryPatch = Partial<Omit<MemorySettings, 'maker'>>;
 interface Deps {
   makerMemory: Pick<MakerMemoryManager, 'isEnabled' | 'enable' | 'disable' | 'syncNativeAgentsOff'>;
-  maker: { setAgentMemory(kind: 'claude-code' | 'codex' | 'pi', enabled: boolean): Promise<unknown> };
+  maker: { setAgentMemory(kind: 'claude-code' | 'codex', enabled: boolean): Promise<unknown> };
   writeMemorySetting: typeof writeMemorySetting;
   applyChange<T extends object>(parts: MemoryChangeParts<T>): Promise<T & { codexRestartDeferred: boolean }>;
   invalidateBridge(reason: string): Promise<void>;
@@ -20,7 +20,7 @@ export async function updateMakerMemorySettings(enabled: boolean, nativePatch: N
     persist: async () => {
       // Save the native fields from this same request before capturing the
       // maker toggle's runtime callback. Never push Codex mid-turn here.
-      for (const key of ['claudeCode', 'codex', 'pi'] as const) {
+      for (const key of ['claudeCode', 'codex'] as const) {
         if (nativePatch[key] !== undefined) writeMemorySetting(key, nativePatch[key]);
       }
       // Persist before changing the manager. A failed maker:false write must reject the toggle
@@ -36,9 +36,6 @@ export async function updateMakerMemorySettings(enabled: boolean, nativePatch: N
         await makerMemory.syncNativeAgentsOff(['claude-code']);
       } else if (!settingsState.value.maker) {
         await maker.setAgentMemory('claude-code', settingsState.value.claudeCode);
-      }
-      if (nativePatch.pi !== undefined) {
-        await maker.setAgentMemory('pi', settingsState.value.pi);
       }
       return {
         ...result,
