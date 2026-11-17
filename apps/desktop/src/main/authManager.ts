@@ -55,7 +55,7 @@ import { probeBetaManifest } from './manifestService';
 import { isEnableBetaUserCustomized, readUpdateChannelSettings } from './updateChannelStore';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import * as canaryFlagStore from './canaryFlagStore';
-import { decodeAccessTokenOrgSlug } from './authTokenClaims';
+import { accessTokenRefreshDelayMs, decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { AuthRefreshBackoff } from './authRefreshBackoff';
 import {
   ACCOUNT_DELETION_RECEIPT_KEY,
@@ -3187,8 +3187,7 @@ function scheduleRefresh(token: string): void {
   // 轮换本身不会踢人:2026-07-27 两个实例每 55 分钟互刷一次,primary 每次都靠
   // replacement-retry 恢复,一次没掉线;把 primary 踢下线的是删除凭证。
   try {
-    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf-8'));
-    const delay = (payload.exp - 300) * 1000 - Date.now();
+    const delay = accessTokenRefreshDelayMs(token, Date.now());
     if (delay <= 0) {
       refresh();
     } else {

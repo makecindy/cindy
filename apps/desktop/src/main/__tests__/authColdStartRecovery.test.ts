@@ -11,6 +11,7 @@ import {
   commitColdStartRefreshIfCurrent,
 } from '../authStartupGate';
 import { loginPreparingErrorState } from '../../shared/authIpc';
+import { accessTokenRefreshDelayMs } from '../authTokenClaims';
 
 // Test value (unit): execute the production cold-start and login-action entrypoints with
 // in-memory credentials/network. On 2026-10-29 three DNS failures stranded a valid login;
@@ -141,6 +142,7 @@ function setup(random = 0) {
       saved.session = { version: 1, realm, refreshToken };
     },
     metadataFromMembership: (membership: unknown) => membership,
+    accessTokenRefreshDelayMs,
     AuthRefreshBackoff: class extends AuthRefreshBackoff {
       constructor() {
         super(
