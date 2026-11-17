@@ -898,6 +898,7 @@ export class Maker {
       }
       agentStartAttempted = true;
       if (startOpts.fastModePolicy && !(startOpts.fastModePolicy.isRequestAllowed?.() ?? startOpts.fastModePolicy.isAllowed())) startOpts.fastMode = false;
+      if (opts.agentKind === 'antigravity' && (startOpts.agentDeviceId || startOpts.remoteHostId)) throw new AgentStartupStoppedError(new Error('ANTIGRAVITY_LOCAL_ONLY'));
       if (startOpts.agentDeviceId) {
         if (startOpts.remoteHostId) {
           throw new Error('A session cannot run its agent on another computer and on an SSH host at the same time');

@@ -741,6 +741,21 @@ describe('Bot canonical Session lifecycle', () => {
       .get(canonical.session.id);
     expect(row).toMatchObject({ agent_kind: 'codex', model: 'gpt-5.6-sol', provider_id: 'openai', effort: 'medium' });
   });
+  it('persists a Google teammate and creates its canonical task on the exact subscription route with full permissions', async () => {
+    const route = { harness: 'antigravity', providerId: 'google-antigravity-subscription',
+      model: 'gemini-4-hydrogen', effort: '', fastMode: false };
+    h.providers = [{ id: route.providerId, name: 'Google AI', source: 'builtin', connected: true, agents: ['antigravity'],
+      auth: { method: 'oauth' }, access: { kind: 'subscription', product: 'Google AI Pro' },
+      routing: { antigravity: { transport: 'acp', upstream: '', authStrategy: 'oauth-passthrough' } },
+      models: { antigravity: [{ id: route.model, name: 'Gemini 4 Hydrogen', contextWindow: 0, efforts: [], defaultEffort: null }] } }] satisfies ProviderView[];
+    const created = await invoke('local-db:bots:create', { id: 'google-validation', name: 'Gemini validation',
+      capabilities: { modelChainOverride: [route], permissions: 'trusted' } });
+    const canonical = await invoke('local-db:bots:create-canonical-session', { botId: created.id,
+      expectedCanonicalSessionId: created.canonicalSessionId ?? null, expectedProfileVersion: 1 });
+    expect(h.sqlite!.prepare('SELECT agent_kind, model, provider_id, permission_mode FROM sessions WHERE id = ?')
+      .get(canonical.session.id)).toEqual({ agent_kind: 'antigravity', model: route.model,
+        provider_id: route.providerId, permission_mode: 'bypassPermissions' });
+  });
 
   it('uses the official Bot defaults when created without renderer capabilities', async () => {
     await invoke('local-db:bots:create', {

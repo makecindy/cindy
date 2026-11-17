@@ -240,6 +240,8 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
   const startAttempt = async (input: StartInput, skipDirect: boolean,
     attempt: ReturnType<typeof registerPendingRemoteStart>, recoverLostHistoryGrant = true,
     reissuedHistory = false): Promise<AgentSessionHandle> => {
+    const remoteKind = input.agentKind;
+    if (remoteKind === 'antigravity') throw new Error('ANTIGRAVITY_LOCAL_ONLY');
     const initialShareId = parseProviderShareAgentDeviceId(input.deviceId);
     const initialAccessEpoch = initialShareId && findReceivedShare(initialShareId)?.status === 'active'
       ? providerShareAccessEpoch(initialShareId) : undefined;
@@ -320,14 +322,14 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       const allocationStartedAt = Date.now();
       const allocationStartedMonotonic = performance.now();
       requireCurrent();
-      const history = await authorizeSharedTaskHistory(input.deviceId, sessionId, input.agentKind, opts.model, attempt.signal);
+      const history = await authorizeSharedTaskHistory(input.deviceId, sessionId, remoteKind, opts.model, attempt.signal);
       if (attempt.signal.aborted) void releaseFailedDirectAllocation(history.generation);
       requireCurrent();
       const authorization = reissuedHistory ? { ...history, reused: false } : history;
       target = authorization.target;
       const taskKey = `${shareId}:${sessionId}`;
       directTasks.delete(taskKey);
-      if (authorization.direct) directTasks.set(taskKey, { target, availability: authorization.availability, agentKind: input.agentKind, model: opts.model,
+      if (authorization.direct) directTasks.set(taskKey, { target, availability: authorization.availability, agentKind: remoteKind, model: opts.model,
         ...(authorization.reused ? { reused: true } : {}),
         accessEpoch: providerShareAccessEpoch(shareId),
         until: Math.min(allocationStartedAt + 25 * 60_000, authorization.authorizedUntil ?? Infinity),
@@ -342,7 +344,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       const taskKey = `${shareId}:${sessionId}`;
       const cached = directTasks.get(taskKey);
       if (cached && cached.accessEpoch === providerShareAccessEpoch(shareId) && cached.until > Date.now()
-        && cached.wallDeadline > Date.now() && cached.leaseDeadline > performance.now() && cached.agentKind === input.agentKind && cached.model === opts.model) {
+        && cached.wallDeadline > Date.now() && cached.leaseDeadline > performance.now() && cached.agentKind === remoteKind && cached.model === opts.model) {
         try {
           // M's grant is memory-only. A process restart can invalidate it even
           // while G's cached route still has time left.
@@ -373,9 +375,9 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           const allocationStartedMonotonic = performance.now();
           const availability = cloudAllocation;
           const allocation = availability
-            ? await allocateShareAvailability(shareId, sessionId, input.agentKind, opts.model)
+            ? await allocateShareAvailability(shareId, sessionId, remoteKind, opts.model)
             : await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
-              op: 'allocate', agentKind: input.agentKind, model: opts.model, sessionId,
+              op: 'allocate', agentKind: remoteKind, model: opts.model, sessionId,
             }]);
           const row = allocation && typeof allocation === 'object'
             ? allocation as { deviceId?: unknown; generation?: unknown } : null;
@@ -400,7 +402,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
               requireCurrent();
               const caps = await RemoteAgentRunClient.caps(remoteAgentInvoker(proposed, deps.remoteInvoke));
               requireCurrent();
-              if (!caps.directGuestExecution || !caps.agents.some(agent => agent.kind === input.agentKind && agent.available)) {
+              if (!caps.directGuestExecution || !caps.agents.some(agent => agent.kind === remoteKind && agent.available)) {
                 throw new Error('[REMOTE_AGENT_PEER_TOO_OLD] shared executor cannot accept this task');
               }
               if (leaseDeadline <= performance.now()) throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared task authorization has expired');
@@ -412,7 +414,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
             target = proposed;
             for (const [key, route] of directTasks) if (route.until <= Date.now()) directTasks.delete(key);
             if (directTasks.size >= 512) directTasks.delete(directTasks.keys().next().value!);
-            directTasks.set(taskKey, { target, agentKind: input.agentKind, model: opts.model, availability,
+            directTasks.set(taskKey, { target, agentKind: remoteKind, model: opts.model, availability,
               accessEpoch: providerShareAccessEpoch(shareId),
               until: allocationStartedAt + 25 * 60_000,
               authorizedUntil: allocationStartedAt + 29 * 60_000,
@@ -453,7 +455,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     // Keep this attempt's grant even if another start replaces the task's route cache.
     const openingDirectRoute = selectedDirectRoute;
     const startupAuthorization = opts.resumeSessionId && sessionId && openingDirectRoute
-      ? captureSharedTaskAuthorizationCheck(input.deviceId, sessionId, input.agentKind, opts.model, target) : null;
+      ? captureSharedTaskAuthorizationCheck(input.deviceId, sessionId, remoteKind, opts.model, target) : null;
     let reusedHistory = openingDirectRoute?.reused === true;
     let leaseDeadline = openingDirectRoute?.leaseDeadline ?? performance.now();
     let wallDeadline = openingDirectRoute?.wallDeadline ?? Date.now();
@@ -483,7 +485,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const collect = { skipCredentials: shared };
     let cancelPreparedHandle: (() => void) | undefined;
     let restartedHistory = false;
-    const handle = await startRemoteAgentSession(input.agentKind, opts, {
+    const handle = await startRemoteAgentSession(remoteKind, opts, {
       startupSignal: attempt.signal,
       reconnectAuthorization: (isCurrent, options) => reconnectAuthorization?.(isCurrent, options) ?? Promise.resolve(),
       onTaskGrantRenewable: (renewable) => { grantRenewable = renewable; },
@@ -553,11 +555,11 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       },
       collectProjectFiles: (workingDir) => collectProjectInstructionFiles(workingDir, collect),
       // Codex 经执行环境在本机直接读取项目与上级目录的说明，不必同步。
-      collectAncestorFiles: input.agentKind === 'codex'
+      collectAncestorFiles: remoteKind === 'codex'
         ? undefined
         : (workingDir) => collectAncestorInstructionFiles(workingDir, collect),
       // Codex 建线程时沿上级目录逐级查找 .git 与插件清单：先把有没有报过去，对方不再逐个经设备互联来问。
-      ...(input.agentKind === 'codex' ? { collectAncestorMarkers } : {}),
+      ...(remoteKind === 'codex' ? { collectAncestorMarkers } : {}),
       collectPersonal: async (kind, projectFiles, agent) => {
         // 与本机引擎同一规则：隔离运行的伙伴按授权挑托管 Skill；V2 伙伴在自己项目里的对话按普通任务，
         // 不套伙伴授权。停用的都不带；个人 Skill 只按停用过滤。
@@ -616,7 +618,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
             // M restarted and lost its memory-only grant. Reissue only for the
             // original M through O; never send native history to another peer.
             const reauthorized = await authorizeSharedTaskExecutor(input.deviceId, sessionId,
-              input.agentKind, opts.model, original.deviceId, false, attempt.signal,
+              remoteKind, opts.model, original.deviceId, false, attempt.signal,
               openingDirectRoute?.reused ? { ...openingDirectRoute, direct: true } : undefined);
             if (!reauthorized.direct || reauthorized.target !== target) throw error;
             requireCurrent();
@@ -760,9 +762,9 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         const allocationStartedMonotonic = performance.now();
         const allocationAccessEpoch = providerShareAccessEpoch(shareId);
         const value = selectedDirectRoute?.availability
-          ? await allocateShareAvailability(shareId, sessionId, input.agentKind, model)
+          ? await allocateShareAvailability(shareId, sessionId, remoteKind, model)
           : await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
-            op: 'allocate', agentKind: input.agentKind, model, sessionId,
+            op: 'allocate', agentKind: remoteKind, model, sessionId,
             preferredExecutorDeviceId: targetDeviceId,
           }]);
         const row = value && typeof value === 'object'
@@ -786,7 +788,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         if (stopped || !isCurrent() || performance.now() >= leaseDeadline
           || providerShareAccessEpoch(shareId) !== allocationAccessEpoch) return releaseStoppedGrant();
         const nextLeaseDeadline = sharedTaskLeaseDeadline(value, allocationStartedMonotonic) ?? allocationStartedMonotonic + 30 * 60_000;
-        directTasks.set(taskKey, { target, agentKind: input.agentKind, model, availability: selectedDirectRoute?.availability,
+        directTasks.set(taskKey, { target, agentKind: remoteKind, model, availability: selectedDirectRoute?.availability,
           accessEpoch: allocationAccessEpoch,
           until: allocationStartedAt + 25 * 60_000,
           authorizedUntil: allocationStartedAt + 29 * 60_000,
@@ -799,7 +801,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         authorizedAccessEpoch = allocationAccessEpoch;
         leaseDeadline = nextLeaseDeadline;
         wallDeadline = allocationStartedAt + nextLeaseDeadline - allocationStartedMonotonic;
-        rememberSharedTaskAuthorization(input.deviceId, sessionId, input.agentKind, model,
+        rememberSharedTaskAuthorization(input.deviceId, sessionId, remoteKind, model,
           { ...directTasks.get(taskKey)!, direct: true });
         armLeaseExpiry();
         nextRenewAt = directTasks.get(taskKey)!.renewAt;
@@ -825,7 +827,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         // Restoring a live history handle has the same original window as
         // reopening it. Only an explicit renewal/model change may replace it.
         const restored = await authorizeSharedTaskExecutor(input.deviceId, sessionId,
-          input.agentKind, authorizedModel, targetDeviceId, false, attempt.signal, { ...previous, direct: true });
+          remoteKind, authorizedModel, targetDeviceId, false, attempt.signal, { ...previous, direct: true });
         if (stopped || !isCurrent() || directTasks.get(taskKey) !== previous
           || liveDirectGuestSessions.get(sessionId)?.identity !== directIdentity) {
           await releaseFailedDirectAllocation(restored.generation);
@@ -862,7 +864,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       const direct = liveDirectGuestSessions.get(sessionId);
       if (direct?.identity === directIdentity) direct.captureRecovery = () => {
         const isCurrent = captureSharedTaskAuthorizationCheck(input.deviceId, sessionId,
-          input.agentKind, authorizedModel, target);
+          remoteKind, authorizedModel, target);
         return isCurrent ? { ownerRoute: direct.ownerRoute, isCurrent, requestSwitch: async () => {
           if (!isCurrent()) return undefined;
           const token = await direct.requestSwitch();
@@ -985,7 +987,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         }
         stop(); await close(options);
       };
-      if (permissionCurrent()) rememberSharedTaskAuthorization(input.deviceId, sessionId, input.agentKind, authorizedModel,
+      if (permissionCurrent()) rememberSharedTaskAuthorization(input.deviceId, sessionId, remoteKind, authorizedModel,
         { ...directTasks.get(taskKey)!, direct: true });
       offPermissionChange = onProviderShareReceivedChanged(() => { if (!permissionCurrent()) expireLive?.(); });
       if (!permissionCurrent()) {

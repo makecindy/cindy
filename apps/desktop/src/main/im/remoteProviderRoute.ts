@@ -14,11 +14,13 @@ export async function readImRemoteAutomaticDefaults<T extends ImDefaultSettings>
     providerId?: string | null;
   },
 ): Promise<T | null> {
+  const requestedAgent = options.agentKind;
+  if (requestedAgent === 'antigravity') throw new Error('ANTIGRAVITY_LOCAL_ONLY');
   const { remoteBackgroundInvoke } = await import('../device-link');
   const providers = await readDeviceProviderViews(remoteBackgroundInvoke, options.agentDeviceId, {
     visibleOnly: true,
   });
-  const resolved = resolveAutomaticImSettings(settings, providers, options);
+  const resolved = resolveAutomaticImSettings(settings, providers, { ...options, agentKind: requestedAgent });
   if (!resolved) return null;
   return {
     ...resolved,
@@ -37,6 +39,7 @@ export async function readImRemotePermissionModes(
   agentDeviceId: string,
   agentKind: AgentKind,
 ): Promise<string[]> {
+  if (agentKind === 'antigravity') throw new Error('ANTIGRAVITY_LOCAL_ONLY');
   const { remoteBackgroundInvoke } = await import('../device-link');
   const response = await remoteBackgroundInvoke(agentDeviceId, 'maker:get-capabilities', [
     agentKind,

@@ -2,7 +2,7 @@ import { normalizeModelRoute, modelRouteLocationKey, type ModelRoute } from '@ci
 
 export const BOT_MODEL_CHAIN_MAX = 5;
 
-export type BotHarness = 'claude' | 'codex' | 'pi';
+export type BotHarness = 'claude' | 'codex' | 'pi' | 'antigravity';
 
 export type BotModelRoute = ModelRoute;
 
@@ -15,7 +15,7 @@ export function botModelRouteRuntimeKey(
 }
 
 export function normalizeBotHarness(value: unknown): BotHarness {
-  return value === 'codex' || value === 'pi' || value === 'claude' ? value : 'claude';
+  return value === 'codex' || value === 'pi' || value === 'claude' || value === 'antigravity' ? value : 'claude';
 }
 
 export const normalizeBotModelRoute = normalizeModelRoute;

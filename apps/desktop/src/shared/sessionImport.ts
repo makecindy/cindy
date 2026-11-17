@@ -20,7 +20,7 @@ export const IMPORT_SOURCE_IDS = [
 export type ImportSourceId = (typeof IMPORT_SOURCE_IDS)[number];
 
 /** Cindy 自带、能原样续做的引擎（sessions.agent_kind 值域）。 */
-export type NativeHarness = 'cc' | 'codex' | 'pi';
+export type NativeHarness = 'cc' | 'codex' | 'pi' | 'antigravity';
 
 export const SESSION_IMPORT_PROGRESS_CHANNEL = 'session-import:progress';
 

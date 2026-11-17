@@ -904,7 +904,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
         version: probed.version,
         capabilities,
         requires,
-      }),
+      }).filter((agent): agent is Exclude<typeof agent, 'antigravity'> => agent !== 'antigravity'),
     };
   }
 

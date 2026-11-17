@@ -391,7 +391,7 @@ export function messageToCamel(row: MessageRow): Message {
     content: projectMcpAppHistory(content, agentMeta?.mcpApp === true),
     toolUseId: row.toolUseId,
     agentMeta,
-    agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | null) ?? null,
+    agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | 'antigravity' | null) ?? null,
     createdAt: new Date(row.createdAt).toISOString(),
   };
 }
@@ -573,7 +573,7 @@ export function messageCreateToRow(
     content: unknown;
     toolUseId?: string;
     agentMeta?: AgentMeta | null;
-    agentKind?: 'cc' | 'codex' | 'pi' | null;
+    agentKind?: 'cc' | 'codex' | 'pi' | 'antigravity' | null;
     createdAt?: number;
   },
   now: number,

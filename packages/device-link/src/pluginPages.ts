@@ -275,7 +275,7 @@ export interface PluginPagePoll {
 export interface PluginModelSelection {
   /** Optional Agent location relative to the plugin's execution computer. */
   agentDeviceId?: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'antigravity';
   providerId: string;
   model: string;
   effort: string;
@@ -340,7 +340,7 @@ export function isPluginPageSurface(
 export interface PluginTaskPreferences {
   revision: string;
   config: {
-    agentKind?: "cc" | "codex" | "pi";
+    agentKind?: "cc" | "codex" | "pi" | "antigravity";
     model?: string;
     providerId?: string;
     /** Remote run location, null = explicit Host choice, omitted = legacy default/reuse behavior. */

@@ -38,7 +38,7 @@ import {
   type MenubarView,
 } from '../../shared/menubarQuota.js';
 
-export type MenubarHarness = 'claude-code' | 'codex' | 'pi';
+export type MenubarHarness = 'claude-code' | 'codex' | 'pi' | 'antigravity';
 export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi' | 'opencode-go' | 'shared';
 
 export interface MenubarWindowInput {

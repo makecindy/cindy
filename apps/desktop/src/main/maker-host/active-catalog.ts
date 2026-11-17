@@ -1,3 +1,4 @@
+import { antigravityProvider } from './antigravity-state.js';
 import type { ModelImageInputCatalogModel } from '../../shared/modelImageInputOverride.js';
 import { effectiveGatewayModelCost } from '../../shared/modelPriceQuote.js';
 import { projectCurrentModelSources } from './model-source-snapshots.js';
@@ -234,7 +235,7 @@ export interface XdGatewayModelInfo {
   /**
    * 新对话默认种子的 agent 标记(服务端 /models 下发的 newSessionDefault)。
    */
-  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: ('claude-code' | 'codex' | 'pi' | 'antigravity')[];
   /** 展示图标 id(AI Gateway 设定;缺省 / 未知值渲染层回落来源供应商标)。 */
   icon?: string;
   modalities?: { input: string[]; output: string[] };
@@ -700,7 +701,7 @@ function modelRegistryMetaFields(
 ): RegistryMetaFields | undefined {
   // 模型 registry 的路由与 perAgent 覆盖只按 claude-code / codex 建键;Pi 是动态 BYOM,
   // 无 registry per-agent 覆盖,按 agent 无关处理(取条目基线元数据)。
-  const registryAgent = agent === 'pi' ? undefined : agent;
+  const registryAgent = agent === 'pi' || agent === 'antigravity' ? undefined : agent;
   const catalog = base ?? BUNDLED_CATALOG;
   const matched = findModelRegistryRoute(catalog.modelRegistry, providerId, modelId, registryAgent);
   if (!matched) return undefined;
@@ -989,8 +990,8 @@ function materializeXaiAccountModels(
     // The server catalog may predate a client-known variant. Its bundled visibility
     // remains a sparse fallback; explicit server and later user choices still win.
     const bundledEntry = findModelRegistryRoute(BUNDLED_CATALOG.modelRegistry, 'xai', entry.id,
-      agent === 'pi' ? undefined : agent)?.entry;
-    const bundledDefaultEnabled = (agent === 'pi' ? undefined : bundledEntry?.perAgent?.[agent]?.defaultEnabled)
+      agent === 'pi' || agent === 'antigravity' ? undefined : agent)?.entry;
+    const bundledDefaultEnabled = (agent === 'pi' || agent === 'antigravity' ? undefined : bundledEntry?.perAgent?.[agent]?.defaultEnabled)
       ?? bundledEntry?.defaultEnabled;
     const { efforts, defaultEffort } = resolveXaiAccountCapabilities(
       entry,
@@ -1936,7 +1937,7 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
           ? model.id.replace(/^chatgpt\//, '') : model.id;
         const matched = findModelRegistryRoute(
           b.modelRegistry, metadataProviderId, rootId,
-          agent === 'pi' ? undefined : agent as RootAgentKind,
+          agent === 'pi' || agent === 'antigravity' ? undefined : agent as RootAgentKind,
         );
         const identity = matched?.entry.modelRef ?? findBaseModel(b.modelRegistry, rootId)?.id;
         // Known public identities take precedence, including other vendors using
@@ -2051,7 +2052,8 @@ export function getActiveCatalog(): Catalog {
     const catalog = computeMerged();
     merged = { ...catalog, providers: catalog.providers.map(projectCurrentModelSources) };
   }
-  return merged;
+  const local = antigravityProvider();
+  return local ? { ...merged, providers: [...merged.providers.filter(p => p.id !== local.id), local] } : merged;
 }
 
 let pooledCodexProjection: { revision: number; catalogs: WeakMap<readonly CatalogModel[], Catalog> } | undefined;

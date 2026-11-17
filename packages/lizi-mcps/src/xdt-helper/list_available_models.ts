@@ -72,7 +72,7 @@ export interface ListAvailableModelsDeps {
   /** 调用方任务(可选)：它的 Agent 在另一台电脑运行时，按那台的模型目录列出。 */
   getSessionContext?: () => { sessionId?: string };
   listAvailableModels: (params: {
-    agent?: 'claude-code' | 'codex' | 'pi';
+    agent?: 'claude-code' | 'codex' | 'pi' | 'antigravity';
     callerSessionId?: string;
     executionDeviceId?: string;
     /** 列哪里的模型：省略 = Lead 所在位置；null = 任务所在电脑；string = 那台电脑或分享。 */

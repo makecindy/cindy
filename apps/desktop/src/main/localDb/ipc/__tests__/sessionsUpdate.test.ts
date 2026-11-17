@@ -2119,6 +2119,13 @@ it('opens a normal renderer task through shared model admission', async () => {
   expect(h.sqlite!.prepare('SELECT model, provider_id, effort, permission_mode FROM sessions WHERE id = ?').get('normal-open'))
     .toEqual({ model: 'selected-model', provider_id: 'selected-provider', effort: '', permission_mode: 'auto' });
 });
+it.each(['ask', 'auto', 'acceptEdits', 'bypassPermissions'])('creates a provisional Gemini task through the real renderer handler with %s', async permissionMode => {
+  await invokeCreate({ id: 'google-open', agentKind: 'antigravity', model: 'gemini-4-hydrogen',
+    providerId: 'google-antigravity-subscription', effort: '', fastMode: false,
+    workspaceKind: 'dialogue', permissionMode, provisional: true });
+  expect(h.sqlite!.prepare('SELECT agent_kind, model, provider_id, permission_mode FROM sessions WHERE id = ?').get('google-open'))
+    .toEqual({ agent_kind: 'antigravity', model: 'gemini-4-hydrogen', provider_id: 'google-antigravity-subscription', permission_mode: permissionMode });
+});
 it('does not create a renderer task when common model admission fails', async () => {
   setSessionOpeningModelAdmission(async () => { throw new Error('model unavailable'); });
   await expect(invokeCreate({ id: 'rejected-open', title: 'Rejected task' })).rejects.toThrow('model unavailable');

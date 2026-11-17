@@ -54,7 +54,7 @@ const fableSource = () => ({
 const providerRouting = (
   defaults: Partial<Record<AgentKind, string>> = {},
 ): OrcaWorkerProviderRoutingContext => ({
-  availability: {
+  availability: { antigravity: [],
     'claude-code': [{
       id: 'anthropic',
       name: 'Anthropic',
@@ -284,7 +284,7 @@ describe('resolveSendToSessionExecutionConfig', () => {
     // 自定义来源只填了 id/name:目录与路由快照都没有档位声明,[] 只是占位,不是 valid: none。
     const undeclared = { id: 'custom/step-5-preview', efforts: [], defaultEffort: null, effortsUnknown: true };
     const routing: OrcaWorkerProviderRoutingContext = {
-      availability: {
+      availability: { antigravity: [],
         codex: [], pi: [],
         'claude-code': [{
           id: 'custom-anthropic',
@@ -322,8 +322,7 @@ describe('resolveSendToSessionExecutionConfig', () => {
       availableModels: [declaredNone],
       providerRouting: {
         ...routing,
-        availability: {
-          ...routing.availability,
+        availability: { ...routing.availability,
           'claude-code': [{
             ...routing.availability['claude-code'][0]!,
             models: [declaredNone.id],
@@ -359,7 +358,7 @@ describe('resolveSendToSessionExecutionConfig', () => {
         defaultEffort: 'xhigh',
       }],
       providerRouting: {
-        availability: {
+        availability: { antigravity: [],
           'claude-code': [],
           codex: [{
             id: 'xd',
@@ -461,7 +460,7 @@ describe('resolveSendToSessionCreateRoute', () => {
   const deviceSnapshot = (models: string[] = ['claude-fable-5']): SendToSessionRoutingSnapshot => ({
     availableModels: available('claude-code').filter((model) => models.includes(model.id)),
     providerRouting: {
-      availability: {
+      availability: { antigravity: [],
         'claude-code': [{
           id: 'device-b-anthropic',
           name: 'Anthropic (device-b)',

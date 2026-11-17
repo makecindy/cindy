@@ -140,6 +140,6 @@ export interface DocsMcpDeps {
  * workingDir 为根,解析不出来就 fail closed(见 _paths.ts)。
  */
 export interface DocsMcpSessionCtx extends LiziMcpSessionContext {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
   workingDir: string;
 }

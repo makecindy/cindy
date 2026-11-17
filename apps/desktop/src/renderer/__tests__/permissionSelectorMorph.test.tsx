@@ -53,6 +53,14 @@ function getTrigger(): HTMLElement {
 }
 
 describe('PermissionSelector (MorphPopover pilot)', () => {
+  it.each([
+    ['ask', '默认权限'], ['acceptEdits', '允许编辑'], ['auto', '自动审批'], ['bypassPermissions', '完全访问'],
+  ] as const)('Google routes the visible %s choice without substituting a permission mode', async (mode, label) => {
+    const { onChange } = renderSelector({ vendorKey: 'antigravity' });
+    fireEvent.click(getTrigger());
+    fireEvent.click(await screen.findByRole('option', { name: label }));
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(mode);
+  });
   // 2026-07-22:PermissionSelector 只在 composer 使用,已统一为「恒走脱身上浮 morph」——
   // 移除 origin/main 的 useMorphPopover opt-in/Radix 回退开关,故删去原「默认用 Radix」用例。
   it('点击 trigger 打开 listbox,四档选项齐全,aria-expanded 同步', async () => {

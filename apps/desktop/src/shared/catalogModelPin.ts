@@ -9,7 +9,7 @@
 
 export const CATALOG_MODEL_PIN_PREFIX = 'cat:';
 
-export type CatalogModelPinAgentKind = 'codex' | 'claude-code' | 'pi';
+export type CatalogModelPinAgentKind = 'codex' | 'claude-code' | 'pi' | 'antigravity';
 
 export interface CatalogModelPinRoute {
   providerId: string;

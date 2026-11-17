@@ -22,7 +22,7 @@ export const MODEL_GROUP_STRATEGIES = ['expiring', 'order', 'rotate', 'cheapest'
  */
 export type ModelGroupStrategy = (typeof MODEL_GROUP_STRATEGIES)[number];
 
-export type ModelGroupAgentKind = 'cc' | 'codex' | 'pi';
+export type ModelGroupAgentKind = 'cc' | 'codex' | 'pi' | 'antigravity';
 
 /** 一个已连接的模型：与新任务选择器选中一行时得到的组合相同。 */
 export interface ModelGroupCandidate {

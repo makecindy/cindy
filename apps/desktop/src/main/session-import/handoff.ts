@@ -11,7 +11,7 @@ import { getDbClient } from '../localDb/client/current.js';
 import { buildHandoffText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
 import type { NativeHarness } from './types.js';
 
-const HARNESS_LABEL: Record<NativeHarness, string> = { cc: 'Claude Code', codex: 'Codex', pi: 'Pi' };
+const HARNESS_LABEL: Record<NativeHarness, string> = { cc: 'Claude Code', codex: 'Codex', pi: 'Pi', antigravity: 'Antigravity' };
 /** 交接只需要近期逐字与早期一行提要：近期取足够多的行，早期只取用户消息。 */
 const RECENT_ROWS = 600;
 const EARLY_USER_TEXT_CAP = 600;

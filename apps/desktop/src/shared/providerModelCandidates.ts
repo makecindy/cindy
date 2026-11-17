@@ -18,7 +18,7 @@ const sameRoute = (a: ProviderModelRouteConfig, b: ProviderModelRouteConfig) =>
 export function presetCandidateRoute(preset: ProviderPreset, agent: AgentKind, baseUrl?: string): ProviderModelRouteConfig {
   const runtime = preset.runtimes[agent]!;
   return { baseUrl: baseUrl ?? runtime.baseUrl,
-    wireProtocol: runtime.wireProtocol ?? (agent === 'claude-code' ? 'anthropic-messages' : agent === 'pi' ? 'openai-chat' : 'openai-responses'),
+    wireProtocol: runtime.wireProtocol ?? (agent === 'claude-code' ? 'anthropic-messages' : (agent === 'pi' || agent === 'antigravity') ? 'openai-chat' : 'openai-responses'),
     ...(runtime.requestPath ? { requestPath: runtime.requestPath } : {}),
   };
 }
@@ -52,7 +52,7 @@ export function presetModelCandidate(
   if (matches.length > 1 || matches.some(({ entry, route }) => entry.status === 'retired' || route.interfaces?.length === 0)) return;
   // A compatible interface cannot grant CC/Codex membership denied by an exact
   // Registry route. Pi's membership is maintained separately in its inventory.
-  if (agent !== 'pi' && matches.some(({ route }) => !route.agents.includes(agent))) return;
+  if (agent !== 'pi' && agent !== 'antigravity' && matches.some(({ route }) => !route.agents.includes(agent))) return;
   const hasBinding = matches.some(({ route }) => route.interfaces !== undefined);
   const profiles = registry?.schemaVersion === 6 ? (registry.interfaceProfiles ?? []).filter(profile =>
     profile.providerId === preset.id && (!profile.modelIds || profile.modelIds.includes(model.id))
@@ -98,7 +98,7 @@ export function presetSupplementalModels(
   // Declared (including retired) profiles keep the stricter interface resolver.
   const hasInterfaceProfiles = presetRouteHasInterfaceProfiles(preset, registry, route);
   for (const source of sources) {
-    const protocol = agent === 'pi' && !hasInterfaceProfiles ? undefined : source.wireProtocol;
+    const protocol = (agent === 'pi' || agent === 'antigravity') && !hasInterfaceProfiles ? undefined : source.wireProtocol;
     for (const model of providerModelsForRoute(source.baseUrl, protocol)) {
       if (candidates.has(model.id)) continue;
       const candidate = presetModelCandidate(preset, agent, model, registry, route, source);

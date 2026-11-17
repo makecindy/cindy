@@ -1,4 +1,16 @@
 {
+  "googleSubscription": {
+    "usage": "Google 用量",
+    "quotaUnavailable": "帳號剩餘額度暫時無法取得",
+    "quotaGuide": "此版本 ACP 未提供帳號額度及重設時間，可在官方 Antigravity CLI 輸入 /usage 查看。",
+    "openQuotaGuide": "查看官方額度查詢方法",
+    "moneyUnavailable": "目前介面未提供 credits 餘額及實際費用。",
+    "context": "本工作階段上下文（最近回報）",
+    "lastTurnTokens": "最近一輪 Tokens",
+    "unavailable": "暫時無法取得",
+    "modelControlsThinking": "此模型自行控制推理強度。",
+    "noFastMode": "此來源未提供獨立的 Fast / Standard 切換。"
+  },
   "runtimePlugins": {
     "save": "儲存",
     "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",

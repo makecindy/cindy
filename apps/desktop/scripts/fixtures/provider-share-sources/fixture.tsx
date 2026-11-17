@@ -68,6 +68,10 @@ mountPage({
   route: '/settings?tab=providers&connect=anthropic',
   host: ctx => {
     refreshControl.defer = ctx.case === 'wizard-reopen';
+    if (ctx.case === 'antigravity-subscription') {
+      snapshot.providers.push({ id: 'google-antigravity-subscription', name: 'Google AI · Antigravity', source: 'builtin', agents: ['antigravity'], connected: false, auth: { method: 'oauth' }, access: { kind: 'subscription', product: 'Google AI' }, routing: { antigravity: { transport: 'acp', upstream: '', authStrategy: 'oauth-passthrough' } }, models: { antigravity: [] } });
+      snapshot.providerOrder.push('google-antigravity-subscription');
+    }
     if (ctx.case.startsWith('legacy-upgrade')) providers.push(...['one', 'two'].map(suffix => ({
       ...provider('openai'), id: `legacy-openai-${suffix}`, name: `Old login ${suffix}`,
       source: 'user' as const, subscriptionPoolAlias: true as const,

@@ -5,7 +5,7 @@ import type { MemoryChangeParts } from '../maker-ipc/deferredCodexRestart.js';
 export type NativeMemoryPatch = Partial<Omit<MemorySettings, 'maker'>>;
 interface Deps {
   makerMemory: Pick<MakerMemoryManager, 'isEnabled' | 'enable' | 'disable' | 'syncNativeAgentsOff'>;
-  maker: { setAgentMemory(kind: 'claude-code' | 'codex' | 'pi', enabled: boolean): Promise<unknown> };
+  maker: { setAgentMemory(kind: 'claude-code' | 'codex' | 'pi' | 'antigravity', enabled: boolean): Promise<unknown> };
   writeMemorySetting: typeof writeMemorySetting;
   applyChange<T extends object>(parts: MemoryChangeParts<T>): Promise<T & { codexRestartDeferred: boolean }>;
   invalidateBridge(reason: string): Promise<void>;

@@ -20,12 +20,14 @@ import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 
 const log = createLogger('useAgentCapabilities');
 
-export type AgentKind = 'claude-code' | 'codex' | 'pi';
+export type AgentKind = 'claude-code' | 'codex' | 'pi' | 'antigravity';
 
 // capability 生命周期(预取 / 驱逐通知 / 本地快照刷新 / 启动预载)必须覆盖全部 agent，
 // 少一个就会让该 agent 的远程会话在断链或 provider revision 后收不到 loading 事件、
-// 也不再被重新预取，界面永久停在旧模型/能力快照(codex review)。新增 agent 只改这里。
-const ALL_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
+// 也不再被重新预取，界面永久停在旧模型/能力快照(codex review)。
+// 这里只声明可识别的 kind；本地预取还必须按宿主实际注册结果筛选。
+const LEGACY_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
+const ALL_AGENT_KINDS = [...LEGACY_AGENT_KINDS, 'antigravity'] as const;
 
 // renderer 视角: id 全部是不透明 string, 渲染只读 displayName。
 // effort 的合法 id 集合 = capabilities.effortLevels 上每个项的 id。
@@ -61,7 +63,7 @@ export interface ModelDescriptor {
    * 解耦;生产环境 XD 网关由服务端按区域下发)。消费点见 modelDefinitions.newSessionDefaultModelId
    * 与 draftModelCalibration:被标记且可用的模型优先作新对话默认。
    */
-  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: ('claude-code' | 'codex' | 'pi' | 'antigravity')[];
 }
 
 export interface EffortDescriptor {
@@ -675,7 +677,7 @@ export function getCachedCapabilities(
  * 模型下拉 / fast / effort 不为空、modelDefinitions 同步层已热。失败 swallow(轮询/打开会话会再取)。
  */
 export async function prefetchDeviceCapabilities(deviceId: string): Promise<void> {
-  await Promise.allSettled(ALL_AGENT_KINDS.map((agent) => fetchCapabilities(agent, deviceId)));
+  await Promise.allSettled(LEGACY_AGENT_KINDS.map((agent) => fetchCapabilities(agent, deviceId)));
 }
 
 export function evictControlledDeviceCapabilities(taskDeviceId: string): void {
@@ -771,7 +773,7 @@ export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilities
   const results = await Promise.allSettled(
     agents.map(async (agent): Promise<readonly [AgentKind, AgentCapabilities] | null> => {
       try {
-        return [agent, await api.getCapabilities(agent)] as const;
+        return [agent, parseAgentCapabilities(await api.getCapabilities(agent))] as const;
       } catch (error) {
         const message =
           error instanceof Error
@@ -779,8 +781,8 @@ export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilities
             : typeof error === 'object' && error !== null && 'message' in error
               ? String(error.message)
               : String(error);
-        if (agent !== 'pi' || !message.includes("Agent 'pi' is not registered")) throw error;
-        log.warn('optional Pi capabilities unavailable; continuing with core agents:', error);
+        if ((agent !== 'pi' && agent !== 'antigravity') || !message.includes(`Agent '${agent}' is not registered`)) throw error;
+        log.warn('optional agent capabilities unavailable; continuing with core agents:', { agent });
         return null;
       }
     }),
@@ -835,7 +837,13 @@ export async function refreshLocalCapabilities(): Promise<void> {
  * 让 modelDefinitions.ts 这种 sync 兼容层立刻有数据。
  */
 export async function preloadAllCapabilities(): Promise<void> {
-  const load = () => Promise.all(ALL_AGENT_KINDS.map((agent) => fetchCapabilities(agent)));
+  const load = async () => {
+    const api = getMakerApi();
+    if (!api) throw new Error('maker IPC not available');
+    const available = new Set(await api.listAvailableAgents());
+    const agents = ALL_AGENT_KINDS.filter(agent => available.has(agent));
+    await Promise.all(agents.map((agent) => fetchCapabilities(agent)));
+  };
 
   // 防御性重试：EnvCheckGuard 已保证 handler 已注册，这里兜底瞬时 IPC 故障
   for (let attempt = 0; attempt < 3; attempt++) {

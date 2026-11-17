@@ -33,7 +33,9 @@
     "./agents/codex": {
       "import": "./src/agents/codex/index.ts",
       "default": "./src/agents/codex/index.ts"
-    }
+    },
+    "./agents/antigravity": "./src/agents/acp/antigravity-agent.ts",
+    "./agents/antigravity-transport": "./src/agents/acp/transport.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

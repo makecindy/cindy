@@ -8,7 +8,7 @@ export function createStaticPromptProvider(deps: {
   readSettings(sessionId: string): RuntimePluginSettings | undefined;
   find(pluginId: string): InstalledGhost | undefined;
 }) {
-  return (sessionId: string, agentKind: 'cc' | 'codex' | 'pi', supported = true): string => {
+  return (sessionId: string, agentKind: 'cc' | 'codex' | 'pi' | 'antigravity', supported = true): string => {
     const targets = deps.readSettings(sessionId)?.['system-prompt'];
     if (!targets?.length) return '';
     const sections: SystemPromptSection[] = [];

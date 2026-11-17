@@ -3379,7 +3379,7 @@ export function stopPiIdleReleaseWatcher(): void {
 }
 
 function requireAgentKind(value: unknown): AgentKind {
-  if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
+  if (value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'antigravity') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
 
@@ -9039,7 +9039,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const taskPrompt = o.id ? readTaskPrompt(o.id, o.agentKind, o.agentDeviceId) : '';
     if (!taskPrompt) return maker.createSession(o, signal);
     const runtimeOpts = { ...o,
-      ...(o.agentKind === 'pi' ? { [TASK_SYSTEM_PROMPT]: taskPrompt } : {
+      ...((o.agentKind === 'pi' || o.agentKind === 'antigravity') ? { [TASK_SYSTEM_PROMPT]: taskPrompt } : {
         userPrompt: assembleSystemPromptSections(o.userPrompt?.trim() ?? '', [{ name: 'task', order: 0, text: taskPrompt }]),
       }),
     };
@@ -10084,7 +10084,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertSessionCreationCurrent();
     await ensureRemoteHostReady(remoteHostIdToEnsure);
     assertSessionCreationCurrent();
-    const ensureAgentKind: 'claude-code' | 'codex' | 'pi' | null =
+    const ensureAgentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity' | null =
       session?.agentKind === 'codex' ||
       session?.agentKind === 'claude-code' ||
       session?.agentKind === 'pi'
@@ -10930,7 +10930,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...(additionalWorkingDirs.length > 0 ? { additionalWorkingDirs } : {}),
       };
       return {
-        sourceAgentKind: source.agentKind as 'cc' | 'codex' | 'pi',
+        sourceAgentKind: source.agentKind as 'cc' | 'codex' | 'pi' | 'antigravity',
         prompt: builtPrompt.prompt,
         replyLanguage: builtPrompt.replyLanguage,
         inputSummary: buildReviewInputSummary({
@@ -17997,6 +17997,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           requestedAgentDeviceId ??= null;
         }
         if (executionDeviceId) {
+          if (agent === 'antigravity') throw new Error('ANTIGRAVITY_LOCAL_ONLY');
           if (!orcaRemoteWorkersForHost) throw new Error('[HOST_NOT_READY] Worker service is not ready');
           const result = await orcaRemoteWorkersForHost.readModels(executionDeviceId, {
             ...(agent ? { agent } : {}), agentDeviceId: requestedAgentDeviceId ?? null,
@@ -20594,7 +20595,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (
       msg.createOpts.agentKind !== 'claude-code' &&
       msg.createOpts.agentKind !== 'codex' &&
-      msg.createOpts.agentKind !== 'pi'
+      msg.createOpts.agentKind !== 'pi' &&
+      msg.createOpts.agentKind !== 'antigravity'
     ) {
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
@@ -22231,7 +22233,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ? atomicSelection.effort
       : ((runtimeStatus.effort ?? null) as SessionRuntimeProfile['effort']);
     const targetFastMode = atomicSelection?.fastMode ?? runtimeStatus.fastMode;
-    const agentKind = dbToMakerAgentKind(runtimeStatus.agentKind as 'cc' | 'codex' | 'pi');
+    const agentKind = dbToMakerAgentKind(runtimeStatus.agentKind as 'cc' | 'codex' | 'pi' | 'antigravity');
     if (internalOptions.source === 'user' && !internalOptions.applyingUserSelectionOnSend) {
       assertRuntimeOwnerCurrent();
       assertSharedTaskCurrent.admit();

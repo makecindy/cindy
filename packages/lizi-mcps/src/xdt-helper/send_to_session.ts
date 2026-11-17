@@ -140,7 +140,7 @@ const DESCRIPTION = [
   "- 不传 target_session_id → create:新建任务并发送首条消息，可用 title 指定简短标题。本机 Agent / model / effort / Fast 缺省继承当前任务；device 指向另一台电脑时采用那台电脑的新任务默认。返回 wake_kind=created、target_session_id、project_path 与实际 working_dir；后续消息用返回的 id。",
   "【项目】本机省略 project_path 时继承来源任务的项目。远程创建不继承来源电脑的路径；省略项目时按目标 working_dir 匹配已有项目，否则创建不绑项目的任务。list_projects(device) 查询目标电脑项目。来源本来不绑项目时：working_dir 在某个已登记且可见的项目里，就归到最近的那个项目（回执 project_note 会说明）；否则新任务也不绑项目。无法可靠确定来源归属时明确失败。也可显式复用 get_current_session_id.project_path；跨项目用 control/list_projects 选择已有项目。传 project_path:null 明确创建不绑项目的任务。临时目录、仓库子目录、worktree 都不会变成新项目。确需新增或恢复项目时，单独调用 create_project。",
   "",
-  "【执行配置(仅 create 模式)】agent_kind 可选 claude-code / codex / pi；model 使用宿主模型目录返回的精确 id；effort / fast 按目标模型能力校验。只改 Agent 却留下不属于目标 Agent 的继承模型会返 INVALID_ARGS，不会自动挑列表第一项。跨 Agent/model 时模型来源交给 host 既有默认路由解析。本机完全不传这些字段时保持原有 dispatcher 继承行为；远程创建按目标电脑默认配置。jump 模式忽略这些字段，不修改既有 session。",
+  "【执行配置(仅 create 模式)】agent_kind 可选 claude-code / codex / pi / antigravity（Google 订阅仅本机）；model 使用宿主模型目录返回的精确 id；effort / fast 按目标模型能力校验。只改 Agent 却留下不属于目标 Agent 的继承模型会返 INVALID_ARGS，不会自动挑列表第一项。跨 Agent/model 时模型来源交给 host 既有默认路由解析。本机完全不传这些字段时保持原有 dispatcher 继承行为；远程创建按目标电脑默认配置。jump 模式忽略这些字段，不修改既有 session。",
   "",
   "【provider_device_id(旧名 agent_device_id，仅 create 模式)】新任务的 Agent 使用哪台电脑的远程供应商：取 list_available_models 的 locations[].provider_device_id；\"local\" 或本机设备 id 表示本机。本机缺省继承当前任务的位置；远程创建缺省使用目标电脑本机供应商，local 也相对目标电脑。本机创建时位置与当前任务不同且没传 model 时沿用当前任务的模型 id，按那台电脑的供应商重新解析来源；那台没有这个模型、离线、未开启远程控制或分享不可用 → PROVIDER_ROUTE_UNAVAILABLE；格式不对，或当前任务是 SSH 任务 → INVALID_ARGS。失败时不创建任务、不自动换电脑，由调用方决定换哪一台重试。jump 模式忽略。",
   "",
@@ -261,7 +261,7 @@ export function registerSendToSessionTool(
         "仅 create：字符串选择目标电脑 list_projects 中已有的可见项目；null 明确不绑项目。本机省略时继承来源归属；来源不绑项目或远程创建时，按目标 working_dir 匹配已有项目，否则不绑项目。隐藏、未登记或归属不明确时拒绝。jump 忽略。",
       ),
       agent_kind: z
-        .enum(["claude-code", "codex", "pi"])
+        .enum(["claude-code", "codex", "pi", "antigravity"])
         .optional()
         .describe(
           "仅 create 模式可选:目标 Agent/harness。本机缺省继承 dispatcher，远程采用目标默认；jump 模式忽略。",

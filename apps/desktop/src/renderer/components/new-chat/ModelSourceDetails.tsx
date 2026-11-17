@@ -260,6 +260,15 @@ export function ModelSourceDetails({
   const pickerAccount = useModelPickerAccount(providerId);
   // Created subscription providers (2026-11-13) report their pool kind; built-ins are their own.
   const codex = (pickerAccount?.kind ?? providerId) === 'openai';
+  if (providerId === 'google-antigravity-subscription') {
+    return (
+      <div data-model-source-details title={t('googleSubscription.quotaGuide')} className="flex w-0 min-w-full items-center gap-1 pl-[26px] pt-px text-12 leading-[1.4] text-[var(--text-secondary)]">
+        <span className="min-w-0 truncate">{providerAccountLabel(label, accountIdentity)}</span>
+        <span aria-hidden>·</span>
+        <span className="min-w-0 truncate">{t('googleSubscription.quotaUnavailable')}</span>
+      </div>
+    );
+  }
   const poolParts = pickerAccount?.members?.map((account, index) => {
     const view = modelSourceQuota(
       {

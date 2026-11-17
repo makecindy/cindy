@@ -11,6 +11,7 @@ import { isCodexGatewayWireModel, isOpenAiSubscriptionProvider, type AgentKind }
 import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
+import { GoogleSubscriptionUsageChip } from './GoogleSubscriptionUsageChip';
 /**
  * TodaySpendChip — 右下角用量指示器与所有渠道共用的悬浮卡片入口。
  *
@@ -866,7 +867,10 @@ function renderSegmentedLabel(segments: React.ReactNode[], wrap = false): React.
 }
 
 interface TodaySpendChipProps {
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  /** Provider-reported context snapshot; it is not the account's remaining quota. */
+  contextUsage?: { used: number; size: number };
+  turnTokens?: number;
+  vendorKey?: 'cc' | 'codex' | 'pi' | 'antigravity';
   /** 当前会话模型;codex/ 折扣 GPT 恒走 gateway API, 即使 oauth-bearer spawn 也按 API 形态显示。 */
   modelId?: string | null;
   /**
@@ -899,7 +903,14 @@ interface TodaySpendChipProps {
   usageAccount?: UsageAccountLocation;
 }
 
-export function TodaySpendChip({
+export function TodaySpendChip(props: TodaySpendChipProps) {
+  if (props.vendorKey === 'antigravity' && props.providerId === 'google-antigravity-subscription') {
+    return <GoogleSubscriptionUsageChip context={props.contextUsage} turnTokens={props.turnTokens} />;
+  }
+  return <LegacyTodaySpendChip {...props} />;
+}
+
+function LegacyTodaySpendChip({
   vendorKey = 'cc',
   modelId,
   providerId,

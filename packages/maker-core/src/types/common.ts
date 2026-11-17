@@ -5,7 +5,7 @@
  * 故意保持兼容以便 desktop adapter 层零代码翻译。
  */
 
-export type AgentKind = 'claude-code' | 'codex' | 'pi';
+export type AgentKind = 'claude-code' | 'codex' | 'pi' | 'antigravity';
 export type WorkspaceKind = 'project' | 'dialogue';
 
 /**
@@ -68,6 +68,8 @@ export interface AuthState {
   expiresAt?: number;
   errorReason?: string;
   authSource?: 'oauth' | 'api-key';
+  /** Safe subscription eligibility returned by the native provider; never credentials. */
+  subscriptionTier?: { id: string; name: string };
   oauthWritesBlocked?: boolean;
   /**
    * Codex OAuth 凭证当前的物理存储范围。

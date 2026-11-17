@@ -23,7 +23,7 @@ export function creationOperation(input: RemoteSessionCreation): string {
 
 export interface RemoteSessionCreated {
   targetSessionId: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity';
   targetTitle: string | null;
   projectDir: string | null;
   workspaceKind: 'project' | 'dialogue';

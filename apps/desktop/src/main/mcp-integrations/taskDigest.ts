@@ -333,7 +333,7 @@ export function sessionFactsFromRow(row: unknown): TaskDigestSessionFacts | null
   const record = row as Record<string, unknown>;
   const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : null);
   const agentKind = text(record.agentKind);
-  const harness = agentKind === 'codex' || agentKind === 'pi' ? agentKind : agentKind ? 'claude-code' : null;
+  const harness = agentKind === 'codex' || agentKind === 'pi' || agentKind === 'antigravity' ? agentKind : agentKind ? 'claude-code' : null;
   const model = text(record.model);
   // local DB rows use unix ms; the existing remote session mapper returns ISO.
   const clearedAt = typeof record.clearedAt === 'number' ? record.clearedAt

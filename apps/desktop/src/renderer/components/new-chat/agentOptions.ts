@@ -1,3 +1,4 @@
+import { Sparkles } from 'lucide-react';
 /**
  * agentOptions —— Agent 引擎(harness)的**展示元数据**,由 lib/agentVendors 的
  * SELECTABLE_VENDORS 派生。
@@ -30,6 +31,7 @@ const VENDOR_PRESENTATION: Record<SelectableVendor, Omit<AgentOption, 'vendor'>>
   cc: { label: 'Claude', Mark: ClaudeMark },
   codex: { label: 'Codex', Mark: CodexMark },
   pi: { label: 'Pi', Mark: PiMark },
+  antigravity: { label: 'Antigravity', Mark: Sparkles },
 };
 
 export const AGENT_OPTIONS: readonly AgentOption[] = SELECTABLE_VENDORS.map((vendor) => ({
