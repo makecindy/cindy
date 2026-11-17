@@ -336,6 +336,8 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   const accessGeneration = useRef(0);
   const freshRead = useRef(false);
   const fullRead = useRef({ identity, at: 0 });
+  // Whether the actor list on screen was actually read, not the empty stand-in for a failed read.
+  const actorsRead = useRef({ identity, ok: false });
   // Phone-local timing of one opening: when something was first shown, and when it was verified.
   const opening = useRef({ identity, at: Date.now(), shownMs: cached ? 0 : -1, source: cached ? 'memory' : '', fresh: false });
   if (opening.current.identity !== identity) opening.current = { identity, at: Date.now(), shownMs: cached ? 0 : -1, source: cached ? 'memory' : '', fresh: false };
@@ -404,8 +406,11 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       const oldest = previous?.messages.filter(message => !threadRootId || message.threadRootId === threadRootId).reduce<string | undefined>((oldest, message) => !oldest || BigInt(message.seq) < BigInt(oldest) ? message.seq : oldest, undefined);
       // The account's actors say which computer runs each owned companion (live task cards);
       // the group still reads when that list is unavailable.
+      // A list that failed to load is asked for again; only a successful read is reused.
+      const knownActors = verified && actorsRead.current.identity === identity && actorsRead.current.ok ? verified.actors : null;
       const [next, self, actors] = await Promise.all([api.client.load(groupId, oldest, threadRootId, 0, verified?.page), api.client.me(),
-        verified ? verified.actors : api.client.actors().catch((): ChatActor[] => [])]);
+        knownActors ?? api.client.actors().then(value => { actorsRead.current = { identity, ok: true }; return value; },
+          (): ChatActor[] => { actorsRead.current = { identity, ok: false }; return []; })]);
       if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
       // Replace the reauthorized window; no stale history survives changed access.
       if (api.client.personalList.hidden(groupId)) { loseAccess(); return; }

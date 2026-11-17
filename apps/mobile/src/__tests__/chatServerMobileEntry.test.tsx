@@ -119,6 +119,11 @@ it('keeps an unchanged direct group timeline stable across refresh and thread hy
 describe('opening a group the account already knows', () => {
   const requests = () => h.auth.apiFetch.mock.calls.map(([path]) => String(path).replace(`/v1/conversations/${id}`, '').replace(/\?.*/, ''));
   const roomReads = ['/executions', '/execution-failures', '/plans', '/messages', '/v1/actors'];
+  // The shared fixture has no actor list; here its successful read is part of what is counted.
+  beforeEach(() => {
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => path === '/v1/actors' ? [] : original(path, options));
+  });
   function sockets() {
     const opened: Array<{ onmessage: ((event: { data: string }) => void) | null; send: ReturnType<typeof vi.fn> }> = [];
     vi.stubGlobal('WebSocket', class {
@@ -146,6 +151,27 @@ describe('opening a group the account already knows', () => {
     expect(requests()).toEqual(expect.arrayContaining(['/v1/changes', '/snapshot']));
     expect(requests().filter(path => roomReads.includes(path))).toEqual([]);
     expect(chat.state.kind).toBe('ready');
+  });
+  // Review finding on the first version: a failed actor read became an empty list that the
+  // handshake then reused, so the owner's running companions stayed without their computer.
+  it('asks for the actor list again at the handshake when the first read of it failed', async () => {
+    const socket = sockets();
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    let fail = true;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path === '/v1/actors') { if (fail) throw new Error('offline'); return [{ id: self, kind: 'human', externalId: 'owner', name: 'Me', avatar: null }]; }
+      return original(path, options);
+    });
+    showChat = true; await render();
+    expect(chat.state.kind).toBe('ready');
+    fail = false; h.auth.apiFetch.mockClear();
+    await socket.frame({ type: 'ready', actorId: self });
+    expect(requests().filter(path => path === '/v1/actors')).toHaveLength(1);
+    // Once read, the next handshake-only refresh leaves it alone.
+    h.auth.apiFetch.mockClear();
+    await socket.frame({ type: 'changes', scope: `actor:${self}`, cursor: '2', changes: [{ type: 'read.changed', entityId: id,
+      data: { readSeq: '0', threadRootId: null, following: false, muted: false } }] });
+    expect(requests().filter(path => path === '/v1/actors')).toEqual([]);
   });
   it('re-reads the room when its cursor moved before the handshake', async () => {
     const socket = sockets();
