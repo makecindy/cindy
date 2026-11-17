@@ -333,10 +333,10 @@ export function createTurnExecutor(deps) {
   // The pending card leaves the Host's broker (interactions.mjs) as the desktop's clearPendingInteraction;
   // the decision of a question or plan is saved, as the desktop's persistInteractionDecision; the
   // floating island is a desktop window.
-  function interactionDismissedPorts(history) {
+  function interactionDismissedPorts(sessionId, history) {
     return {
       handleAgentIslandInteractionDismissed: () => {},
-      clearPendingInteraction: requestId => deps.interactions?.clearPending(requestId) ?? null,
+      clearPendingInteraction: requestId => deps.interactions?.clearPending(requestId, sessionId) ?? null,
       defaultDecisionForPending,
       persistInteractionDecision: (id, persistId, kind, request, decision) => {
         if (kind === 'ask_user_question' || kind === 'plan_review') history.onInteractionResolved(id, persistId, kind, request, decision);
@@ -353,7 +353,7 @@ export function createTurnExecutor(deps) {
     bindings.get(sessionId)?.unsubscribe();
     const history = historyFor(sessionId);
     const standalonePorts = standaloneTextPorts(session);
-    const dismissedPorts = interactionDismissedPorts(history);
+    const dismissedPorts = interactionDismissedPorts(sessionId, history);
     history.noteSessionAgentKind(sessionId, dbKind(session.agentKind ?? turns.get(sessionId)?.dbKind));
     deps.interactions?.attach(session, sessionId, { history, isCurrent: deps.isCurrent,
       isPaused: () => deps.isExecutionPaused?.(sessionId) === true });
@@ -372,18 +372,27 @@ export function createTurnExecutor(deps) {
       // Host's records, publishing and rows: a follow-up of Session.holdEventStream was handled by the
       // host that held it (as the desktop), and an owner that is not current has its coordinator closing.
       const prepared = !event.hostProjection && deps.isCurrent();
-      // As the desktop's preparation (sessionEventPreparationSteps.ts), in or out of a turn: a standalone
-      // notice is its own row, not a reply nor a client event; a card the runtime closed itself leaves
-      // the pending cards with its decision saved; a Claude Opus plan-mode terminal error carries its
-      // normalized reason, before the coordinator and the records see it, as on the desktop.
+      // As the desktop's preparation (sessionEventPreparation.ts and its shared steps), in or out of a
+      // turn and in its order: a standalone notice is its own row, not a reply nor a client event; a
+      // Claude Opus plan-mode terminal error carries its normalized reason before the coordinator and the
+      // records see it; then, after the attempt's bookkeeping, a card the runtime closed itself leaves the
+      // pending cards with its decision saved, and a Codex generated image is stored and delivered as its
+      // imagegen tool rows (agent/generated-images.ts), which the stream waits for
+      // (Session.holdEventStream); the raw image event, with its bytes, is neither history nor sent.
       if (prepared) {
         if (routeStandaloneTextEvent(standalonePorts, session, event, history.onStandaloneTextEvent)) return;
-        if (handleInteractionDismissedEvent(dismissedPorts, session, event)) return;
         const opusPlanErrorData = claudeOpusPlanTerminalErrorData({ log }, session, event);
         if (opusPlanErrorData) event = { ...event, data: opusPlanErrorData };
       }
       if (prepared) noteAutoResumeEventBeforeTerminal(session, event);
       const handedOver = prepared && handTerminalToCoordinator(sessionId, event);
+      if (prepared) {
+        if (handleInteractionDismissedEvent(dismissedPorts, session, event)) return;
+        if (event.type === 'image' && event.source === 'codex' && deps.deliverCodexGeneratedImage) {
+          if (!isQuietScheduledOutput(event)) session.holdEventStream(deps.deliverCodexGeneratedImage(sessionId, event));
+          return;
+        }
+      }
       const turn = turns.get(sessionId);
       if (!turn || turn.session !== session || !deps.isCurrent()) return;
       // The context usage a status event carries, decided as the desktop decides it
@@ -418,13 +427,6 @@ export function createTurnExecutor(deps) {
       // As the desktop (sessionEventPreparation.ts): the diff is kept by the change record only; it is
       // not saved as history or sent to clients (it can be several megabytes).
       if (event.type === 'turn_diff') return;
-      // As the desktop (sessionEventPreparation.ts): a Codex generated image is stored and delivered as
-      // its imagegen tool rows (agent/generated-images.ts), which the stream waits for
-      // (Session.holdEventStream); the raw event, with its bytes, is neither history nor sent to clients.
-      if (event.type === 'image' && event.source === 'codex' && deps.deliverCodexGeneratedImage) {
-        if (!isQuietScheduledOutput(event)) session.holdEventStream(deps.deliverCodexGeneratedImage(sessionId, event));
-        return;
-      }
       if (turn.changeRecordStarted && event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
         const rawTurn = event.data?.raw;
         // Desktop settles a silent-stop done once its guard declines to resume

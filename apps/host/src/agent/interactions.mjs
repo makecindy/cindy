@@ -123,10 +123,11 @@ export function createInteractionBroker(deps) {
     },
 
     /** As the desktop's clearPendingInteraction (register.ts): the card leaves the pending ones, unsettled;
-     * the caller resolves it and saves its decision (sessionEventPreparationSteps.ts). */
-    clearPending(requestId) {
+     * the caller resolves it and saves its decision (sessionEventPreparationSteps.ts). Only the task's own
+     * card: another task's request id is not this runtime's to close. */
+    clearPending(requestId, sessionId) {
       const entry = pending.get(requestId);
-      if (!entry) return null;
+      if (!entry || entry.binding.sessionId !== sessionId) return null;
       pending.delete(requestId);
       return { kind: entry.request.kind, request: entry.request, persistId: entry.persistId, resolve: entry.resolve };
     },

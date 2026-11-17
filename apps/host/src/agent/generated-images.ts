@@ -9,6 +9,8 @@ import { readGeneratedImageFile } from '../../../desktop/src/main/cindy-media/ge
 import { uiText } from '../../../desktop/src/main/uiText.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
 import type { Message } from '../../../desktop/src/renderer/lib/ccAgent.types.js';
+import { isDataOwnerBroadcastScopeCurrent } from '../../../desktop/src/main/device-link/broadcast-tap.js';
+import type { DataOwnerBroadcastScope } from '../../../desktop/src/main/device-link/broadcastTapCore.js';
 import { hostBlobStore, hostChatAttachments, hostMediaIngest, hostMediaJournal } from '../media-store.js';
 
 /** The desktop's generated-image storage (generatedImageStorageCore.ts) over the Host's media store. */
@@ -37,9 +39,12 @@ export function createHostGeneratedImages(deps: {
     releaseGeneratedImageUpstream: (storage, record, invoke) =>
       hostGeneratedImageStorage.releaseGeneratedImageUpstream(storage, record, invoke),
     createMessage: (sessionId, body, opts) => deps.createMessage(sessionId, body, opts),
-    // The desktop's broadcastMessageRow: the committed row reaches clients as a created message.
-    broadcastMessageRow: (sessionId: string, message: Message) =>
-      deps.publish({ type: 'message_created', sessionId, messageId: message.id, message }),
+    // The desktop's broadcastMessageRow: the committed row reaches clients as a created message, only
+    // while the owner it was captured under is still current.
+    broadcastMessageRow: (sessionId: string, message: Message, ownerScope?: DataOwnerBroadcastScope | null) => {
+      if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+      deps.publish({ type: 'message_created', sessionId, messageId: message.id, message });
+    },
     commitChatImageUrls: (params, db) => hostChatAttachments.commitChatImageUrls(params, db),
     // The catalog always has both keys (chat.imageDelivery.stored / failed).
     t: key => uiText(key, key),

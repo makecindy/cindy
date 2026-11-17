@@ -5919,7 +5919,11 @@ async function generatedImageFixture(t, id) {
     .all(id, 'tool_use', 'tool_result');
   // The fixture's database is fresh: every media reference in it is this image's.
   const refs = () => db.db.prepare('SELECT hash, ref_kind, ref_id FROM media_refs').all();
-  return { published, holds, emitImage, rows, refs };
+  const endTurn = async () => {
+    session.emit({ type: 'done', data: {}, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+    await waitFor(() => published.some(event => event.type === 'done'));
+  };
+  return { published, holds, emitImage, rows, refs, endTurn };
 }
 const resultOf = row => JSON.parse(JSON.parse(row.content));
 
@@ -5944,13 +5948,19 @@ test('a Codex generated image is stored, saved as its imagegen rows with a media
   assert.equal(f.published.some(event => event.type === 'image'), false);
   assert.ok(f.published.some(event => event.type === 'tool_result_full' && event.persistId === result.client_id
     && event.resolvedContent.includes(content.xdt_image_url)));
+  // The result row reaches clients twice, as on the desktop: when written, and once committed
+  // (broadcastMessageRow, for the devices that read rows).
+  assert.equal(f.published.filter(event => event.type === 'message_created' && event.message.clientId === result.client_id
+    && JSON.stringify(event.message.content).includes(content.xdt_image_url)).length, 2);
 });
 
-test('a Codex generated image that cannot be stored is saved and published as a failed delivery, never as base64', { timeout: 30_000 }, async t => {
+test('a Codex generated image that cannot be stored, arriving after its turn ended, is saved and published as a failed delivery, never as base64', { timeout: 30_000 }, async t => {
   bindHostUiText(() => ['en']);
   t.after(() => configureUiText((_key, fallback) => fallback));
   const f = await generatedImageFixture(t, 'image-failed');
   const notAnImage = Buffer.from('these bytes are not an image').toString('base64');
+  // After the turn has ended, as the desktop handles it in or out of a turn.
+  await f.endTurn();
   f.emitImage({ data: notAnImage });
   assert.deepEqual((await f.holds[0]).map(event => event.type), ['tool_use', 'tool_result_full', 'tool_result']);
   const content = resultOf(f.rows()[1]);
