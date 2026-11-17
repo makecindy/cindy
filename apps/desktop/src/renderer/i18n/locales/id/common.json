@@ -1895,7 +1895,7 @@
         "missing": "Verifikasi kunci host SSH belum diatur. Koneksi ditolak.",
         "read": "Cindy tidak dapat membaca kunci host yang dipercaya: {{reason}}. Koneksi ditolak.",
         "write": "Cindy tidak dapat menyimpan kunci host yang dipercaya: {{reason}}. Koneksi ditolak.",
-        "mismatch": "Kunci host untuk {{host}} berubah ({{fingerprint}}) dan tidak lagi cocok dengan fingerprint yang dipercaya Cindy. Ini bisa berarti server dipasang ulang atau ada serangan man-in-the-middle. Koneksi ditolak.",
+        "mismatch": "Kunci host untuk \"{{host}}\" berubah ({{fingerprint}}) dan tidak lagi cocok dengan fingerprint yang dipercaya Cindy. Ini bisa berarti server dipasang ulang atau ada serangan man-in-the-middle. Koneksi ditolak.",
         "file": "Berkas kunci host yang dipercaya:\n{{filePath}}",
         "repair": "Cindy tidak membaca ~/.ssh/known_hosts. Fingerprint lama ada di:\n{{filePath}}\nNama entri adalah “{{host}}”.\nJika kamu yakin perubahan ini tepercaya: keluar dari Cindy, hapus hanya entri ini, biarkan berkas dan host lain, lalu sambungkan lagi. Fingerprint baru akan ditulis pada koneksi pertama. Jangan hapus seluruh berkas.",
         "verifyChange": "Verifikasi perubahan dengan admin server sebelum memperbarui catatan kepercayaan kunci host."
@@ -14617,7 +14617,7 @@
     "reloginRiskTitle": "Tetap masuk lewat Cindy?",
     "reloginRiskDescription": "Cindy akan membuat otorisasi OpenAI OAuth baru. Aplikasi ChatGPT biasanya tidak terpengaruh; jika masih berbagi kredensial dengan Codex sistem, aplikasi terkait mungkin meminta kamu masuk lagi.",
     "reloginRiskConfirm": "Terima risiko dan lanjutkan",
-    "devWriteBlocked": "Build pengembangan secara bawaan memakai login ChatGPT komputer ini dalam mode hanya-baca dan tidak bisa memulai OAuth atau mengubah kredensialnya. Untuk menguji OAuth, pakai sandbox terisolasi dan setel XDT_ALLOW_DEV_OAUTH_WRITE=1 secara eksplisit.",
+    "devWriteBlocked": "Build pengembangan memakai login ChatGPT komputer ini dalam mode hanya-baca dan tidak bisa memulai OAuth atau mengubah kredensialnya. Untuk menguji OAuth, jalankan: pnpm restart:desktop:remote -- --isolated-auth --isolated. Skrip mulai ulang baru mengizinkan penulisan setelah memeriksa sandbox.",
     "devReadOnly": "Hanya-baca di pengembangan",
     "checking": "Memeriksa…",
     "recheck": "Periksa lagi",

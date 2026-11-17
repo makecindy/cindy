@@ -118,7 +118,7 @@ export const ENDPOINT_MANIFEST_DIALOG_COPY: Record<
   "id": {
     "networkTitle": "Cindy tidak dapat terhubung",
     "configTitle": "Cindy tidak dapat dimulai",
-    "networkBody": "Cindy tidak bisa terhubung ke layanannya saat mulai. Pastikan perangkat ini online, lalu coba mulai lagi. Jika kamu memakai proxy atau jaringan kantor, coba ganti jaringan.",
+    "networkBody": "Cindy tidak bisa terhubung ke layanannya saat mulai. Pastikan perangkat ini online, lalu coba mulai lagi. Jika kamu memakai Proxy atau jaringan kantor, coba ganti jaringan.",
     "configBody": "Cindy belum bisa selesai dimulai saat ini. Coba lagi nanti. Jika masalah berlanjut, hubungi dukungan.",
     "errorLine": "Error: {{error}}",
     "diagnosticsHint": "Jika butuh bantuan, salin diagnostik ke pesan dukunganmu.",

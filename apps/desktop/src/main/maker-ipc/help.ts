@@ -79,6 +79,7 @@ const LOCALE_NAME: Record<HelpLocale, string> = {
   "de": "German",
   "pt-PT": "European Portuguese",
   "pt-BR": "Brazilian Portuguese",
+  "id": "Indonesian",
   "zh-Hant-x-lzh": "Classical Chinese (文言) in Traditional characters, keeping UI names exactly as shown in the app",
   "zh-Hans-x-lzh": "Classical Chinese (文言) in Simplified characters, keeping UI names exactly as shown in the app",
 };
