@@ -337,10 +337,12 @@ async function loginEnvironment(t, root, profile, port) {
   const records = new Map();
   const store = { read: (key) => records.get(key) ?? null, write: (key, value) => records.set(key, value), remove: (key) => records.delete(key) };
   const { runLoginCommand } = await import('./login-cli.mjs');
+  const { CindyAuthClient } = await import('@cindy/auth-client');
   const login = (deps = {}) => runLoginCommand(['--no-open'], { stdout: () => {}, stderr: () => {}, deps: {
     store, readStatus: async () => ({ running: false }), scanDesktops: async () => [],
     // The manifest must be https (endpoints.mjs); the fake server listens on plain loopback HTTP.
-    fetch: (input, init) => fetch(String(input).replace(/^https:/, 'http:'), init), ...deps } });
+    createAuthClient: (options) => new CindyAuthClient({ ...options, fetch: (input, init) => fetch(String(input).replace(/^https:/, 'http:'), init) }),
+    ...deps } });
   return { login, records };
 }
 
@@ -493,4 +495,27 @@ test('25b L1: /api/agent-skills drops a Skill the user switched off, and only li
   held = true;
   assert.deepEqual((await list({ agentKind: 'pi' })).skills.map((skill) => skill.name), ['kept']);
   assert.equal(refreshes, 1, 'held: listed without refreshing');
+});
+
+// Review follow-ups (25b): the browser step can take minutes, so the desktop scan and serve's state are
+// read again right before the commit; a running serve's account must not be transitioned under it; a
+// save that fails ends the issued session. Minimal failures: a desktop appearing after the first scan
+// is ignored; serve running A with an unset boundary loses A's links; a failed commit leaves a session.
+test('25b: login re-checks right before committing, protects a running serve, and ends a session it could not save', async (t) => {
+  const { root, home, profile, boundary } = await skillBoundaryProfile(t);
+  const auth = await fakeLoginAuth(t);
+  const { login, records } = await loginEnvironment(t, root, profile, auth.port);
+  // A desktop appears while the browser step runs (the second scan sees it).
+  let scans = 0;
+  await assert.rejects(login({ scanDesktops: async () => (scans++ === 0 ? [] : [4242]) }), /Quit the Cindy desktop app/);
+  assert.equal(records.size, 0);
+  assert.equal(fs.existsSync(boundary.__testing.filePath()), false);
+  assert.equal(auth.hits.filter((hit) => hit === '/api/auth/logout').length, 1, 'the unsaved session is ended');
+  // serve runs A, the boundary is not set yet: A signing in again is refused, A's links stay.
+  const links = await plantOwnerSkillLinks(profile, home, 'member-a');
+  await assert.rejects(login({ readStatus: async () => ({ running: true, runtime: { state: 'ready', owner: 'member-a' } }) }),
+    /Stop Cindy Host \(cindy-host stop\), run cindy-host login again/);
+  assert.equal(linkExists(links.shared), true);
+  assert.equal(records.size, 0);
+  assert.equal(auth.hits.filter((hit) => hit === '/api/auth/logout').length, 2);
 });

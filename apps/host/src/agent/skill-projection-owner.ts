@@ -18,6 +18,7 @@ import path from 'node:path';
 
 import {
   configureProjectionBoundaryOwnerCommit,
+  isGhostSkillProjectionBoundaryStableForOwner,
   withSharedSkillRootsLock,
   withStableOwnerBoundaryMutation,
 } from '../../../desktop/src/main/authBoundaryQuarantine.ts';
@@ -83,14 +84,17 @@ export async function sweepOwnerSkillProjectionsAtLogout(input: {
     input.warn('skill projection sweep skipped at logout: a desktop is using this profile', { outcome: 'skipped-profile-held' });
     return 'skipped-profile-held';
   }
+  if (!isGhostSkillProjectionBoundaryStableForOwner(input.ownerId)) {
+    input.warn('skill projection sweep skipped at logout: the boundary is no longer this owner\'s', { outcome: 'skipped-not-stable' });
+    return 'skipped-not-stable';
+  }
   try {
     await withStableOwnerBoundaryMutation(input.ownerId, () => revokeOwnerSkillProjections(input.userDataDir, input.ownerId));
     return 'revoked';
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const outcome: LogoutSkillSweep = /not stable for the active owner|quarantined/.test(message) ? 'skipped-not-stable' : 'failed';
-    input.warn('skill projection sweep at logout did not run to completion', { outcome });
-    return outcome;
+  } catch {
+    // Includes the boundary changing between the check above and the locked re-check.
+    input.warn('skill projection sweep at logout did not run to completion', { outcome: 'failed' });
+    return 'failed';
   }
 }
 

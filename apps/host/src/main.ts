@@ -194,7 +194,7 @@ const command = process.argv[2];
 /** The status command's boundary category: the running Host's, else a lock-free read of the profile. */
 function readStatusSkillProjectionBoundary(processStatus: { running: boolean | null; runtime?: { skillProjectionBoundary?: string } }) {
   if (processStatus.running) return processStatus.runtime?.skillProjectionBoundary ?? null;
-  const owner = discoverHostOwner(resolveHostDataDir()).ownerId;
+  const owner = process.env.CINDY_HOST_OWNER?.trim() || discoverHostOwner(resolveHostDataDir()).ownerId;
   if (!owner) return null;
   configureUserDataDir(resolveHostDataDir());
   return readSkillProjectionBoundaryStatus(owner);
@@ -675,8 +675,9 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   configureProvisionalSessions(dataDir, { onSwept: sessionId => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }) });
   await sweepLeftoverProvisionalSessions();
   // As the desktop at startup (bootstrap-electron.ts): Cindy-owned Skill activation and the home-level
-  // projections, through the stable-owner boundary. Failures are logged and never block startup.
-  await sharedGlobalSkills.ensureSharedGlobalSkills();
+  // projections, through the stable-owner boundary. Not awaited: the core logs failures, and every launch
+  // and Skill list runs it again before it needs the result, so startup does not wait on its locks.
+  void sharedGlobalSkills.ensureSharedGlobalSkills();
   // Desktop runs this repair once the account DB is ready (bootstrap-electron.ts):
   // savepoint refs of tasks this DB marks deleted are removed from their repos.
   void reconcileSavepointRefsForDeletedSessions().catch(error =>

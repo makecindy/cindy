@@ -18,7 +18,7 @@ import { readAuthEndpoints } from './auth/endpoints.mjs';
 import { runHostLogin } from './auth/login.mjs';
 import { hostPackageRegion } from './auth/region-policy.ts';
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.ts';
-import { readGhostSkillProjectionBoundaryState, withGhostSkillProjectionOwnerCommit } from '../../desktop/src/main/authBoundaryQuarantine.ts';
+import { isGhostSkillProjectionBoundaryStableForOwner, readGhostSkillProjectionBoundaryState, withGhostSkillProjectionOwnerCommit } from '../../desktop/src/main/authBoundaryQuarantine.ts';
 import { withCrossProcessLock } from '../../desktop/src/main/device-link/crossProcessLock.ts';
 import { configureAppDataDir, configureUserDataDir } from '../../desktop/src/main/userDataPath.ts';
 import { createDesktopScanner } from './agent/profile-coexistence.ts';
@@ -107,13 +107,15 @@ export async function runLoginCommand(argv, io = {}) {
   });
 
   const deviceId = getOrCreateHostDeviceId(userDataDir);
-  const client = new CindyAuthClient({
+  const clientOptions = {
     baseUrl: endpoints.authApiBaseUrl,
     region,
     deviceId,
     clientType: 'desktop',
-    fetch: deps.fetch ?? ((input, init) => hostAuthFetch(input, init)),
-  });
+    fetch: (input, init) => hostAuthFetch(input, init),
+  };
+  // Tests replace the transport only (their fake auth servers listen on plain loopback HTTP).
+  const client = deps.createAuthClient ? deps.createAuthClient(clientOptions) : new CindyAuthClient(clientOptions);
 
   const noOpen = argv.includes('--no-open') || (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY);
   out(noOpen ? 'Open the following Cindy login page on a device with a browser.' : 'Opening the Cindy login page in your browser…');
@@ -126,6 +128,16 @@ export async function runLoginCommand(argv, io = {}) {
     warn: err,
     admitAccount,
     persistSession: async (record, membership) => {
+      // The browser step can take minutes: check the desktop and serve again right before committing.
+      await assertNoDesktopOnProfile(deps.scanDesktops ?? createDesktopScanner(userDataDir));
+      const now = await (deps.readStatus ?? readHostProcessStatus)(userDataDir);
+      serveLoginAdmission(now)(membership);
+      // A running serve's sessions use the current projections: a transition would revoke them under
+      // it, and serve cannot project them again. Only a boundary already stable for this account may
+      // be committed while serve runs; otherwise serve must stop first.
+      if (now.running === true && now.runtime?.owner && !isGhostSkillProjectionBoundaryStableForOwner(membership.id)) {
+        throw new Error('Stop Cindy Host (cindy-host stop), run cindy-host login again, then start it: this sign-in needs to set up the account\'s Skills.');
+      }
       const stable = readGhostSkillProjectionBoundaryState();
       const previousOwnerId = stable?.phase === 'stable' ? stable.ownerId : discoverHostOwner(userDataDir).ownerId;
       await commitLoginSessionAndOwner({

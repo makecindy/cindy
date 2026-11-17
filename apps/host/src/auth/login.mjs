@@ -124,8 +124,11 @@ export async function runHostLogin(deps) {
   }
   const record = deps.deviceId ? serializeHostSession(deps.region, pair.refreshToken, deps.deviceId) : serializeAuthSessionRecord(deps.region, pair.refreshToken);
   // The Skill projection owner commit (login-cli.mjs) saves the session inside its own transaction.
-  if (deps.persistSession) await deps.persistSession(record, pair.membership);
-  else deps.store.write(AUTH_SESSION_KEY, record);
+  if (deps.persistSession) {
+    // A save or commit that fails leaves an issued session nobody holds: end it, as a refusal does.
+    try { await deps.persistSession(record, pair.membership); }
+    catch (error) { await endRefusedSession(deps, pair.accessToken); throw error; }
+  } else deps.store.write(AUTH_SESSION_KEY, record);
   return { authenticated: true, realm: deps.region, method: method.providerOrConnectionId ?? method.type };
 }
 
