@@ -21,6 +21,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { electronProxyResults } from './macos-system-proxy-reference.mjs';
+
 import { createChromiumProxyHelper } from '../src/chromium-proxy.ts';
 
 if (process.platform !== 'win32' || process.env.GITHUB_ACTIONS !== 'true'
@@ -73,25 +75,12 @@ const GROUPS = [
   { name: 'pac-and-manual', values: { ProxyEnable: 1, ProxyServer: '10.0.0.1:3128', ProxyOverride: null, AutoConfigURL: pacUrl } },
 ];
 
-function electronResults() {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-proxy-compare-electron-'));
-  const env = { ...process.env, CINDY_COMPARE_USER_DATA: userData };
-  delete env.ELECTRON_RUN_AS_NODE;
-  const result = spawnSync(electronBinary, [path.join(scriptsDir, 'macos-system-proxy-electron.cjs'), JSON.stringify(URLS)], {
-    encoding: 'utf8', timeout: 60_000, env,
-  });
-  fs.rmSync(userData, { recursive: true, force: true });
-  const line = (result.stdout ?? '').trim().split('\n').at(-1);
-  if (result.status !== 0 || !line) throw new Error(`Electron exited ${result.status ?? result.signal}: ${result.stderr}`);
-  return JSON.parse(line);
-}
-
 const report = [];
 let mismatches = 0;
 try {
   for (const group of GROUPS) {
     for (const [name, value] of Object.entries(group.values)) writeValue(name, value);
-    const electron = electronResults();
+    const electron = await electronProxyResults(electronBinary, URLS);
     const helper = createChromiumProxyHelper({ profileDir: fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-proxy-compare-helper-')) });
     for (const url of URLS) {
       let host;
@@ -102,6 +91,10 @@ try {
         }
       }
       const chromium = electron[url];
+      // Check the PAC's verdict independently: two DIRECT answers could both have missed the PAC.
+      if (group.name.startsWith('pac') && url === 'https://api.example.test/' && chromium !== 'PROXY 10.9.9.9:8080') {
+        throw new Error(`PAC did not take effect for ${url}: Electron returned ${chromium}`);
+      }
       const applied = !(group.mustProxy === url && !/PROXY/.test(String(chromium)));
       const ok = host === chromium && applied;
       if (!ok) mismatches += 1;
