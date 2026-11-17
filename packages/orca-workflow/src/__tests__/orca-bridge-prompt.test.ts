@@ -195,33 +195,44 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).not.toContain('prefixed with [From Orca Worker].');
   });
 
-  it('steers user follow-ups on running tasks back to the owning worker', () => {
+  it('routes user follow-ups by the worker latest settling report state', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
-    expect(prompt).toContain(
-      '2a. While an Orca team is active and an Orca Worker has a task in flight',
+    expect(prompt).toContain('2a. A user follow-up message that belongs to a worker');
+    expect(prompt).toContain('[Orca Worker report: <state>]');
+    expect(prompt).toContain('is normally the worker');
+    // 状态驱动：任务仍开着才转发；终态任务的后续归 Lead 自己处理。
+    expect(prompt).toContain('waiting, blocked, or no settling report yet');
+    expect(prompt).toContain('the follow-up is the worker');
+    expect(prompt).toContain('ready, failed, or dropped');
+    expect(prompt).toContain('the follow-up is yours');
+    expect(prompt).toContain('a closed task is not a running one');
+    // 终态分支不得再给转发指令，否则两条分支互相抵消。
+    const closedBranch = prompt.slice(
+      prompt.indexOf('- ready, failed, or dropped'),
+      prompt.indexOf('If you cannot uniquely tell which worker'),
     );
-    expect(prompt).toContain("is the worker's to handle, not yours");
-    expect(prompt).toContain("in the user's original wording");
+    expect(closedBranch).not.toContain('forward it with send_to_worker');
+    // 开着的任务仍走既有修正/中断/队列纪律，不新增第二条修正通道。
+    expect(prompt).toContain('original wording');
     expect(prompt).toContain('delivered per the correction, interruption, and queue rules above');
     expect(prompt).toContain('interrupt_worker only when the task must stop and be replaced');
     expect(prompt).toContain('reconcile other_queued_messages before you end');
     expect(prompt).toContain('then end the turn per rule 5');
-    expect(prompt).toContain(
-      'If you cannot uniquely tell which worker the message belongs to, ask the user',
-    );
-    // review P1 回归钉：2a 不得自带“可选 steer 否则排队”的第二条修正通道（与既有修正纪律冲突）。
+    expect(prompt).toContain('If you cannot uniquely tell which worker the message belongs to, ask the user');
     expect(prompt).not.toContain('you may explicitly choose delivery=steer');
     expect(prompt).not.toContain('otherwise send it plainly and let it queue');
-    // 姊妹条目：2a 落在 rule 2 与 rule 3 之间，rule 1–4 既有文本不动。
+    // 敌对口径：不许退回“有任务在跑就无条件转发”。
+    expect(prompt).not.toContain('While an Orca team is active and an Orca Worker has a task in flight');
+    // 姊妹条目：2a 落在 rule 2 与 rule 3 之间，rule 1-4 既有文本不动。
     expect(prompt).toContain('1. Discuss task breakdown with the user before dispatching.');
     expect(prompt).toContain('2. Before any dispatch, call get_workspace_info.');
     expect(prompt).toContain('3. Dispatches must include Intent, Decisions, Boundaries, and Task;');
     expect(prompt).toContain('4. If a worker explicitly asks you to reply via send_to_worker, do so.');
     expect(prompt.indexOf('2. Before any dispatch')).toBeLessThan(
-      prompt.indexOf('2a. While an Orca team is active'),
+      prompt.indexOf('2a. A user follow-up message'),
     );
-    expect(prompt.indexOf('2a. While an Orca team is active')).toBeLessThan(
+    expect(prompt.indexOf('2a. A user follow-up message')).toBeLessThan(
       prompt.indexOf('3. Dispatches must include'),
     );
   });
