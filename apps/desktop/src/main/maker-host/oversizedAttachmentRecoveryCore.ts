@@ -10,8 +10,7 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { sessions, mediaRefs } from '../localDb/schema.js';
 import { addRef, removeRefById } from '../cindy-media/ledger.js';
 import { createLogger } from '../logger.js';
-import { hostedAttachmentPreservation, type PreserveAttachment, type PreserveAttachmentBatch } from './attachmentPreservation.js';
-import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
+import { attachmentMimeType, hostedAttachmentPreservation, type PreserveAttachment, type PreserveAttachmentBatch } from './attachmentPreservation.js';
 
 
 export function createAttachmentRecoveryService(ports: {
@@ -98,11 +97,13 @@ async function serializeRecovery<T>(key: string, run: () => Promise<T>): Promise
         try { ({ bytesRead } = await handle.read(probe, 0, probe.length, 0)); }
         finally { await handle.close(); }
         assertCurrent();
-        const mimeType = sniffMediaMime(probe.subarray(0, bytesRead), attachment.mimeType);
+        const detectedMime = attachmentMimeType(probe.subarray(0, bytesRead), attachment.mimeType);
+        const mediaExt = extForMime(detectedMime);
+        const mimeType = mediaExt ? detectedMime : null;
         const hash = await hashFile(attachment.filePath);
         body.signal.throwIfAborted();
         assertCurrent();
-        const ext = mimeType ? extForMime(mimeType)! : probe.subarray(0, 5).toString() === '%PDF-' ? '.pdf' : '.bin';
+        const ext = mediaExt ?? (detectedMime === 'application/pdf' ? '.pdf' : '.bin');
         const file = mimeType
           ? resolveSafe(blobUrl(hash, ext)).absPath
           : path.join(getUserDataDir(), 'hook-attachments', sessionId, `${hash}-recovered${ext}`);
@@ -306,8 +307,10 @@ function attachmentPreservation(sessionId: string, bindingCurrent: () => void = 
         const preserve: PreserveAttachment = async (bytes, declaredMime, index) => {
           assertCurrent();
           const hash = createHash('sha256').update(bytes).digest('hex');
-          const mimeType = sniffMediaMime(bytes.subarray(0, 64 * 1024), declaredMime);
-          const ext = mimeType ? extForMime(mimeType)! : bytes.subarray(0, 5).toString() === '%PDF-' ? '.pdf' : '.bin';
+          const detectedMime = attachmentMimeType(bytes, declaredMime);
+          const mediaExt = extForMime(detectedMime);
+          const mimeType = mediaExt ? detectedMime : null;
+          const ext = mediaExt ?? (detectedMime === 'application/pdf' ? '.pdf' : '.bin');
           const destination = mimeType
             ? resolveSafe(blobUrl(hash, ext)).absPath
             : path.join(getUserDataDir(), 'hook-attachments', sessionId, `${hash}-recovered${ext}`);

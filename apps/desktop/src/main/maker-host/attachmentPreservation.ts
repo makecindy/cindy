@@ -1,3 +1,11 @@
+import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
+
+/** Lookup and storage must classify the same bytes, not trust their declared MIME. */
+export function attachmentMimeType(bytes: Buffer, declaredMime: string): string {
+  return sniffMediaMime(bytes.subarray(0, 64 * 1024), declaredMime)
+    ?? (bytes.subarray(0, 5).toString() === '%PDF-' ? 'application/pdf' : 'application/octet-stream');
+}
+
 /** A batch publishes only after the caller has produced a usable request. */
 export interface PreserveAttachment {
   (bytes: Buffer, mimeType: string, index: number): Promise<string>;

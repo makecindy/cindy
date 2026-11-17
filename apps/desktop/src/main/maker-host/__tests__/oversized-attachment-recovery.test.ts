@@ -29,7 +29,7 @@ vi.mock('../../cindy-media/refCompensationJournal.desktop.js', () => ({
 }));
 vi.mock('../../cindy-media/ledger.js', () => ({ addRef: (...args: unknown[]) => state.addRef(...args), removeRefById: (...args: unknown[]) => state.removeRef(...args) }));
 vi.mock('../../cindy-media/ingest.js', () => ({ ingestMedia: (...args: unknown[]) => state.ingest(...args) }));
-vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ blobUrl: () => 'cindy-media://blobs/test.png', extForMime: () => '.png', resolveSafe: () => ({ absPath: path.join(state.root, 'saved.png') }) }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ blobUrl: () => 'cindy-media://blobs/test.png', extForMime: (mime: string) => mime === 'image/png' ? '.png' : null, resolveSafe: () => ({ absPath: path.join(state.root, 'saved.png') }) }));
 import { createAttachmentRecovery, createRequestSizeController, attachmentPreservation } from '../oversized-attachment-recovery.js';
 import { bindHostedAttachmentPreservation } from '../attachmentPreservation.js';
 import { createAttachmentPreservationReceiver, remoteAttachmentPreservation, ATTACHMENT_PRESERVATION_PATH } from '../../remote-agent/attachmentPreservation.js';
@@ -106,6 +106,28 @@ async function hostedRecovery() {
   const unbind = bindHostedAttachmentPreservation('provider-task', remote);
   return { actions, remote, workspace, close: async () => { unbind(); await receiver.dispose(); } };
 }
+
+// Unit regression for #10966 review: declared MIME can disagree with the bytes.
+// Existing budget cases only used correctly labelled PNGs. A second preservation
+// of the same bytes must reuse the first readable file without another chunk.
+it.each([
+  { name: 'PDF declared as binary', bytes: Buffer.from('%PDF-1.7\nexample'), declared: 'application/octet-stream', ext: '.pdf' },
+  { name: 'PNG declared as binary', bytes: Buffer.from('89504e470d0a1a0a00000000', 'hex'), declared: 'application/octet-stream', ext: '.png' },
+  { name: 'binary declared as PNG', bytes: Buffer.from('opaque attachment'), declared: 'image/png', ext: '.bin' },
+])('reuses hosted $name by its stored type', async ({ bytes, declared, ext }) => {
+  const hosted = await hostedRecovery();
+  const preserve = () => hosted.remote(new AbortController().signal, save => save(bytes, declared, 0));
+  try {
+    const first = await preserve();
+    expect(path.extname(first!)).toBe(ext);
+    expect(await readFile(hosted.workspace.mapAlias(first!))).toEqual(bytes);
+    if (ext === '.png') state.existing = { id: 'retained-ref' };
+    hosted.actions.length = 0;
+    expect(await preserve()).toBe(first);
+    expect(hosted.actions).not.toContain('chunk');
+    expect(hosted.actions).not.toContain('prepare');
+  } finally { await hosted.close(); }
+});
 
 it.each(['responses', 'anthropic', 'chat'] as const)('budgets a hosted request without a provider DB row and preserves readable %s task files across retries', async format => {
   const hosted = await hostedRecovery();

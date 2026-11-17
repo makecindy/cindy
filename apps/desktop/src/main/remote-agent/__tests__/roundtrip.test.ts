@@ -317,7 +317,9 @@ describe('remote agent round trip', () => {
         body: JSON.stringify({ path: reference, encoding: 'base64' }) });
       expect(response.status).toBe(200);
       const read = await response.json() as { data: string };
-      expect(Buffer.from(read.data, 'base64')).toEqual(bytes);
+      // Native byte comparison retains the full 600 kB round-trip assertion
+      // without Vitest walking every Buffer index (seconds on CI workers).
+      expect(Buffer.from(read.data, 'base64').equals(bytes)).toBe(true);
     } finally { await handle?.close(); host.dispose(); }
     expect(hostedAttachmentPreservation(hostedId)).toBeUndefined();
   });

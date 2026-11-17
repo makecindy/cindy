@@ -3,7 +3,7 @@ import { appendFile, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { reserveAttachmentTransferDisk } from '@cindy/anthropic-compat-proxy';
-import type { PreserveAttachment, PreserveAttachmentBatch } from '../maker-host/attachmentPreservation.js';
+import { attachmentMimeType, type PreserveAttachment, type PreserveAttachmentBatch } from '../maker-host/attachmentPreservation.js';
 
 export const ATTACHMENT_PRESERVATION_PATH = '/cindy/attachment-preservation';
 const CHUNK_BYTES = 512 * 1024;
@@ -40,7 +40,8 @@ export function remoteAttachmentPreservation(exchange: Exchange, assertCurrent: 
           begun = true;
           await send({ action: 'begin' });
         }
-        const found = await send({ action: 'find', hash: createHash('sha256').update(bytes).digest('hex'), mimeType });
+        const found = await send({ action: 'find', hash: createHash('sha256').update(bytes).digest('hex'),
+          mimeType: attachmentMimeType(bytes, mimeType) });
         if (found && (found as { path?: unknown }).path != null) return preservedPath(found);
         for (let offset = 0; offset < bytes.length; offset += CHUNK_BYTES) {
           await send({ action: 'chunk', index, offset, data: bytes.subarray(offset, offset + CHUNK_BYTES).toString('base64') });
