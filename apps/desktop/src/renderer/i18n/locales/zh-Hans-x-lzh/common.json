@@ -1362,7 +1362,7 @@
     "REMOTE_PROVIDER_UPDATING": "供方凭证方更新，请稍后再试",
     "REMOTE_PROVIDER_UNSUPPORTED": "此供方不支持 SSH 远程会话，请易来源",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "远程差事不可用 Claude 订阅，请择网关或 API Key 模型",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "目标设备久无回应，请察远程设备而后再试",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "目标设备暂无回应，或网络迟滞，或设备繁忙。Cindy 自当续察，待连接复通而后再试",
     "INTERNAL": "操作未成，请稍后再试。",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "SSH 设置已于磁盘上变更，请重载而后再试。",
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 设置已存，然 Cindy 重整未成。请重载 SSH 设置。",

@@ -1397,7 +1397,7 @@
     "REMOTE_PROVIDER_UPDATING": "Les identifiants du fournisseur sont en cours de mise à jour. Réessayez dans un instant",
     "REMOTE_PROVIDER_UNSUPPORTED": "Ce fournisseur n'est pas pris en charge dans les sessions SSH distantes. Choisissez une autre source",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Les tâches distantes ne peuvent pas utiliser un abonnement Claude. Choisissez un modèle via passerelle ou clé API",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "L'appareil cible ne répond pas. Vérifiez l'appareil distant et réessayez.",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "L'appareil cible ne répond pas pour le moment. Le réseau est peut-être lent ou l'appareil occupé. Cindy vérifie la connexion automatiquement ; réessayez une fois qu'elle est rétablie.",
     "INTERNAL": "Échec de l'opération. Réessayez plus tard.",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "La configuration SSH a été modifiée sur le disque. Rechargez-la et réessayez.",
     "SSH_CONFIG_RELOAD_REQUIRED": "La configuration SSH a été enregistrée, mais Cindy n'a pas pu l'actualiser. Rechargez la configuration SSH.",

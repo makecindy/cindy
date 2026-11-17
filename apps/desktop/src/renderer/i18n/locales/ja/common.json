@@ -1366,7 +1366,7 @@
     "REMOTE_PROVIDER_UPDATING": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
     "REMOTE_PROVIDER_UNSUPPORTED": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "リモートタスクでは Claude サブスクリプションを使用できません。ゲートウェイまたは API キーのモデルを選択してください",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスが応答していません。リモートデバイスを確認して再試行してください。",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスから現在応答がありません。ネットワークが遅いか、デバイスが混み合っている可能性があります。Cindy が自動で確認を続けるので、接続が回復してから再試行してください。",
     "INTERNAL": "操作に失敗しました。しばらくしてから再試行してください。",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "SSH 設定がディスク上で変更されました。再読み込みしてからもう一度お試しください。",
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定は保存されましたが、Cindy で再読み込みできませんでした。SSH 設定を再読み込みしてください。",

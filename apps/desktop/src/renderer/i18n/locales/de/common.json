@@ -1379,7 +1379,7 @@
     "REMOTE_PROVIDER_UPDATING": "Die Zugangsdaten des Anbieters werden aktualisiert – versuch es gleich erneut",
     "REMOTE_PROVIDER_UNSUPPORTED": "Dieser Anbieter wird in SSH-Remote-Sitzungen nicht unterstützt – wähle eine andere Quelle",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Remote-Aufgaben können kein Claude-Abonnement nutzen – wähle ein Gateway- oder API-Schlüssel-Modell",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "Das Zielgerät antwortet nicht. Überprüfe das entfernte Gerät und versuch es erneut.",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "Das Zielgerät antwortet gerade nicht. Das Netzwerk ist möglicherweise langsam oder das Gerät ausgelastet. Cindy prüft die Verbindung automatisch; versuch es erneut, sobald sie wieder steht.",
     "INTERNAL": "Vorgang fehlgeschlagen. Versuch es später erneut.",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "Die SSH-Konfiguration auf dem Datenträger wurde geändert. Lade sie neu und versuch es erneut.",
     "SSH_CONFIG_RELOAD_REQUIRED": "Die SSH-Konfiguration wurde gespeichert, aber Cindy konnte sie nicht aktualisieren. Lade die SSH-Konfiguration neu.",
