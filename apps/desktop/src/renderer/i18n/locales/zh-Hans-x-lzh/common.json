@@ -1320,17 +1320,17 @@
       "install": {
         "title": "须装「{{plugin}}」法器",
         "body": "此务于他机开 {{device}}。于本机装「{{plugin}}」法器，即可于右栏观之、操之。",
-        "action": "往装"
+        "action": "装之"
       },
       "enable": {
         "title": "须启「{{plugin}}」法器",
         "body": "此务于他机开 {{device}}。于本机启「{{plugin}}」法器，即可于右栏观之、操之。",
-        "action": "往启"
+        "action": "启之"
       },
       "update": {
         "title": "须更「{{plugin}}」法器",
         "body": "此务于他机开 {{device}}。更本机「{{plugin}}」法器至新版，即可于右栏观之、操之。",
-        "action": "往更"
+        "action": "更之"
       }
     },
     "lockOnExitHintPrivacy": "退出远程桌面后覆以隐私画面，AI 可续作；有人触机即锁屏。",
@@ -8170,8 +8170,8 @@
         "hostTools_controlDetail": "得循 Cindy 之器改、藏、复及治既有任务与项目，并在本机导入原生任务文件。",
         "hostTools_handoff": "任务传言",
         "hostTools_handoffDetail": "得循 Cindy 之器传消息于既有任务。需当前任务之境者，须明指任务。",
-        "hostTools_usage": "查订阅用量",
-        "hostTools_usageDetail": "可查此机现用 Cindy 账号所接 Claude、Codex 之账号标识、方案、限额时段及更新时刻。不得取邮址、凭证、档案或他机资料，亦不得改账号",
+        "hostTools_usage": "查用量及供应商组状态",
+        "hostTools_usageDetail": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、供应商组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置",
         "hostTools_settings": "应用设置",
         "hostTools_settingsDetail": "得循 Cindy 之器阅改应用设置；不返密钥，秘文仍由主人亲填。",
         "hostTools_scheduler": "自动化治办",
@@ -10837,7 +10837,12 @@
       "summary": "自述",
       "summaryPlaceholder": "如：一嗜作小说之文士，略带诙谐，好揣摩人物之微心。",
       "avatarSelectionFailed": "不能读头像，请择 5 MB 以内之 PNG、JPEG 或 WebP 图",
-      "personality": "性情与言谈之习"
+      "personality": "性情与言谈之习",
+      "sourceLength": "{{length}} / {{limit}} 个 UTF-16 单元（首尾空白不计）。",
+      "sourceExcess": "逾限 {{excess}} 个单元，删简后方可存。",
+      "sourceTooLong": "此文过长，修之方可存。",
+      "sourceRecovery": "已保存的原文不变，完整草稿仍留此页。复制后，请先粘贴到安全处，核对全文无缺，再删减或放弃本次修改。",
+      "sourceCopy": "录全文"
     },
     "nameLabel": "何以称之",
     "close": "阖",
@@ -12918,7 +12923,7 @@
           "reasoningDominated": "思已耗此番所出之大半，覆或不全。宜减思之深浅，或先压缩言谈录，再续。",
           "generic": "模型所出已达长度上限，此轮之覆或不全。可遣新讯以续；若屡见之，请减思之深浅，或先压缩言谈录。",
           "join": "{{usage}}{{guidance}}",
-          "silentStopExhausted": "模型屡返空应，自动续行已暂止。"
+          "silentStopExhausted": "察得空答，自动续行已暂止。"
         },
         "permission": {
           "autoReviewUnavailable": "自动审批未竟，请确认是否许此操作。",
@@ -14958,6 +14963,7 @@
       "pluginDisabledUnnamed": "自动查验暂受阻：所需法器未启，启之自复。",
       "installPlugin": "装法器",
       "openPlugin": "观法器",
+      "enablePlugin": "启法器",
       "dismissTitle": "阖往昔未成之示"
     },
     "worktreeRestoreBanner": {
@@ -18969,7 +18975,7 @@
       "steerFailed": "插话未成：{{message}}",
       "qrExpired": "二维码已逾时，请重新起始",
       "registrationFailed": "立之未成，请稍后再试",
-      "silentStopExhausted": "模型屡返空答，自动续行已暂止。点「续」以复差事。",
+      "silentStopExhausted": "察得空答，自动续行已暂止。",
       "executionResultUnavailable": "未得行之结果，自动接续已止。可请助手察既有之结果。",
       "outputLimit": "模型已达输出之限，此答或有不全。可遣新讯以续；若屡至此限，宜减思之深浅，或先压缩言谈录。",
       "outputLimitReasoning": "思考已耗本次输出预算之大半，此答或有不全。宜减思之深浅，或先压缩言谈录，而后续之。",
@@ -19561,7 +19567,8 @@
         "expired": "这张礼品卡已过领取期限。",
         "voided": "这张礼品卡已作废。",
         "rateLimited": "尝试次数过多，请稍后再试。",
-        "failed": "暂时无法兑换，请稍后重试。"
+        "failed": "暂时无法兑换，请稍后重试。",
+        "personalRequired": "礼品卡仅限个人用户领取。"
       }
     },
     "usage": {
@@ -20930,7 +20937,7 @@
     "loadFailed": "应用程序加载未成。请察连接后重载。",
     "updateRequired": "此机尚不支持 MCP Apps，请更新该机之 Cindy 后再试。",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "由 $t(mcpApps.appName)「{{name}}」所遣",
     "serverId": "MCP 服务器 ID：{{id}}",
     "exitFullscreen": "离全屏",
@@ -20944,7 +20951,19 @@
     "pluginCspRejected": "此页请求未声明之网域，已拒其加载",
     "filesOnExecutionComputer": "卷之内容请于运行之机览之",
     "awaitingApproval": "候君确认",
-    "pendingApprovals": "{{count}} 项待确"
+    "pendingApprovals": "{{count}} 项待确",
+    "source": {
+      "official": "Cindy 官方",
+      "organization": "组织 · {{namespace}}",
+      "market": "法器市集",
+      "third-party": "他方来源",
+      "local": "本机装入",
+      "unknown": "来源未详"
+    },
+    "customMcp": "自定 MCP",
+    "sourceLabel": "来源",
+    "signatureLabel": "签名",
+    "fullscreen": "满屏"
   },
   "richAnswer": {
     "invalidImageReference": "图之引用无效，未能示之。",

@@ -1,3 +1,4 @@
+import { parsePluginInstallationSource } from '@cindy/maker-shared/mcp-apps';
 import { getPluginToolUi } from '@cindy/plugin-protocol';
 import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
@@ -1081,8 +1082,13 @@ export function DetailsSection({
         ]
       : []),
     {
+      key: 'source',
+      label: t('mcpApps.sourceLabel'),
+      value: t(`mcpApps.source.${parsePluginInstallationSource(detail.installationSource).kind}`, { namespace: detail.installationSource?.namespace }),
+    },
+    {
       key: 'trust',
-      label: t('settings.ghosts.detail.infoTrust'),
+      label: t('mcpApps.signatureLabel'),
       value: t(`settings.ghosts.trust.${trustLabelKey}`, {
         publisher: detail.trust.publisherName ?? t('settings.ghosts.trust.unknownPublisher'),
       }),

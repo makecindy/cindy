@@ -43,6 +43,8 @@ export interface GiftCardRedeemOptions {
 /** 兑换流程：输入 → 查询 → 确认 → 领取。与桌面端弹窗同一套步骤与失败处理。 */
 export function useGiftCardRedeem({ visible, code, invalidLink, onBusyChange }: GiftCardRedeemOptions) {
   const api = useGiftCardClient();
+  // 组织身份不能领取：打开面板或提交时直接说明，不发请求。
+  const personal = api.personal !== false;
   const [input, setInput] = useState('');
   const [state, setState] = useState<State>({ owner: api.owner, step: { kind: 'input' }, problem: null });
   const epoch = useRef(0);
@@ -62,6 +64,11 @@ export function useGiftCardRedeem({ visible, code, invalidLink, onBusyChange }: 
     if (!parsed) {
       cancel();
       setState({ owner: api.owner, step: { kind: 'input' }, problem: { reason: 'INVALID', code: null } });
+      return;
+    }
+    if (!personal) {
+      cancel();
+      setState({ owner: api.owner, step: { kind: 'input' }, problem: { reason: 'PERSONAL_REQUIRED', code: parsed } });
       return;
     }
     const { signal, current } = begin();
@@ -110,11 +117,16 @@ export function useGiftCardRedeem({ visible, code, invalidLink, onBusyChange }: 
     if (!visible) return;
     setInput(code ? formatGiftCardCode(code) : '');
     if (code) void preview(code);
-    else setState({ owner: api.owner, step: { kind: 'input' }, problem: invalidLink ? { reason: 'INVALID', code: null } : null });
+    else {
+      // 组织身份：一打开就提示「仅限个人用户领取」，不等用户输完兑换码才知道领不了。
+      const problem: GiftCardProblem | null = !personal ? { reason: 'PERSONAL_REQUIRED', code: null }
+        : invalidLink ? { reason: 'INVALID', code: null } : null;
+      setState({ owner: api.owner, step: { kind: 'input' }, problem });
+    }
     return cancel;
     // 接口对象按账号与区域稳定；回调变化不应重启在途的查询。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api.owner, visible, code, invalidLink]);
+  }, [api.owner, visible, code, invalidLink, personal]);
 
   const shown = state.owner === api.owner ? state : { owner: api.owner, step: { kind: 'reading' } as GiftCardStep, problem: null };
   return {

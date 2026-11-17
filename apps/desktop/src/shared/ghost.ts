@@ -1987,6 +1987,8 @@ export function ghostFallbackDisplayAuthor(ghost: Pick<InstalledGhost, 'manifest
 
 /** 已装入主机的插件(批准清单 + 安装位置 + 启用态)。 */
 export interface InstalledGhost {
+  /** Host-derived display provenance, independent of trust and publishing authority. */
+  installationSource?: import('@cindy/maker-shared/mcp-apps').PluginInstallationSource;
   /** Read-only Host provenance, not authorship or publication permission. Missing is unknown. */
   publishingSource?:
     | { kind: 'local'; source: 'manual' | 'agent-forge' }

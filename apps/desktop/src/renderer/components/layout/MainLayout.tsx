@@ -491,7 +491,12 @@ export function MainLayout() {
   // (下面的 `!isSettingsRoute && <ChromeActions>`)，快捷键不能跟着一起消失——
   // hook 的语义包含「从设置等栈外页后退回最近任务」。浏览栈按数据所有者
   // (账号 + 恢复代次)隔离：切号时不能把上一个账号的任务带过来。
-  const { dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration } = useAuth();
+  const { dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration, mode: authMode, user: authUser } = useAuth();
+  // 礼品卡链接到达时的身份。只在确定不是个人身份（未登录 Cindy 账号，或当前是组织身份）时拦下；
+  // 账号资料还没加载出来时照常放行，由计费页自己的可见性判断兜底。用 ref 读最新值，
+  // 不让链接处理器随身份变化重建。
+  const canRedeemGiftCardRef = useRef(true);
+  canRedeemGiftCardRef.current = authMode === 'cloud' && authUser?.membershipKind !== 'org';
   const browseHistory = useSessionBrowseHistory({
     ownerKey: `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`,
   });
@@ -801,6 +806,12 @@ export function MainLayout() {
         return;
       }
       if (payload.type === 'gift-card') {
+        // 礼品卡仅限个人用户领取，兑换入口所在的计费页也只对个人身份显示。组织身份或
+        // 未登录时不跳转（否则会落到「通用」页、什么都不发生），提示后丢弃兑换码。
+        if (!canRedeemGiftCardRef.current) {
+          toast.error(t('billing.giftCard.errors.personalRequired'));
+          return;
+        }
         // 兑换码不进路由 URL：暂存在内存，计费页消费意图时取走。
         setPendingGiftCardCode(payload.code);
         navigate('/settings?tab=billing&intent=redeem-gift-card');
