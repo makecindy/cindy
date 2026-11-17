@@ -80,6 +80,7 @@ function refreshPluginApps(
         directory,
         title: ghost.manifest.name,
         trust: ghost.trust?.level ?? 'unverified',
+        installationSource: ghost.installationSource ?? { kind: 'unknown' },
         domains: pluginUiDomains(ghost.manifest),
         assertCurrent,
         createTransport: () =>

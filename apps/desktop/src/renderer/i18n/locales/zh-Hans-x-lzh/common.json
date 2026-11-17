@@ -20935,7 +20935,7 @@
     "loadFailed": "应用程序加载未成。请察连接后重载。",
     "updateRequired": "此机尚不支持 MCP Apps，请更新该机之 Cindy 后再试。",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "由 $t(mcpApps.appName)「{{name}}」所遣",
     "serverId": "MCP 服务器 ID：{{id}}",
     "exitFullscreen": "离全屏",
@@ -20949,7 +20949,19 @@
     "pluginCspRejected": "此页请求未声明之网域，已拒其加载",
     "filesOnExecutionComputer": "卷之内容请于运行之机览之",
     "awaitingApproval": "候君确认",
-    "pendingApprovals": "{{count}} 项待确"
+    "pendingApprovals": "{{count}} 项待确",
+    "source": {
+      "official": "Cindy 官方",
+      "organization": "组织 · {{namespace}}",
+      "market": "法器市集",
+      "third-party": "他方来源",
+      "local": "本机装入",
+      "unknown": "来源未详"
+    },
+    "customMcp": "自定 MCP",
+    "sourceLabel": "来源",
+    "signatureLabel": "签名",
+    "fullscreen": "满屏"
   },
   "richAnswer": {
     "invalidImageReference": "图之引用无效，未能示之。",

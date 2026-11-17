@@ -21016,7 +21016,7 @@
     "loadFailed": "The app could not load. Check the connection and reload.",
     "updateRequired": "This computer does not support MCP Apps yet. Update Cindy on that computer and try again.",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "Sent by $t(mcpApps.appName) “{{name}}”",
     "serverId": "MCP Server ID: {{id}}",
     "exitFullscreen": "Exit Fullscreen",
@@ -21030,7 +21030,19 @@
     "pluginCspRejected": "The page requested an undeclared domain and was blocked.",
     "filesOnExecutionComputer": "View file contents on the execution computer",
     "awaitingApproval": "Waiting for your approval",
-    "pendingApprovals": "{{count}} pending approvals"
+    "pendingApprovals": "{{count}} pending approvals",
+    "source": {
+      "official": "Cindy official",
+      "organization": "Organization · {{namespace}}",
+      "market": "Plugin market",
+      "third-party": "Third-party source",
+      "local": "Locally installed",
+      "unknown": "Unknown source"
+    },
+    "customMcp": "Custom MCP",
+    "sourceLabel": "Source",
+    "signatureLabel": "Signature",
+    "fullscreen": "Fullscreen"
   },
   "richAnswer": {
     "invalidImageReference": "This image reference is invalid.",
