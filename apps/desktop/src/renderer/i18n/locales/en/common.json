@@ -9469,24 +9469,24 @@
       "checkAgain": "Check Again",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
-          "body": "This data belongs to a different account than the sign-in the background service saved.",
-          "action": "Run cindy-host login with the original account, then restart the background service."
+          "body": "This data belongs to a different account than the sign-in the Cindy background service saved.",
+          "action": "Run cindy-host login with the original account, then restart the Cindy background service."
         },
         "HOST_DATABASE_LOCKED": {
           "body": "Another Cindy app is using this data.",
-          "action": "Close it, then restart the background service."
+          "action": "Close it, then restart the Cindy background service."
         },
         "HOST_DATABASE_UNAVAILABLE": {
           "body": "This account's data can't be opened.",
-          "action": "If you recently used a newer version of Cindy, first update Cindy on this computer to the latest version, then restart the background service. Otherwise, run cindy-host status to see why."
+          "action": "If you recently used a newer version of Cindy, first update Cindy on this computer to the latest version, then restart the Cindy background service. Otherwise, run cindy-host status to see why."
         },
         "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
           "body": "The Cindy background service couldn't reach the sign-in service while starting.",
-          "action": "Check your network, then restart the background service."
+          "action": "Check your network, then restart the Cindy background service."
         },
         "HOST_START_FAILED": {
           "body": "The Cindy background service ran into an error while starting.",
-          "action": "Restart the background service. If it happens again, run cindy-host status to see why."
+          "action": "Restart the Cindy background service. If it happens again, run cindy-host status to see why."
         }
       }
     },
@@ -19056,7 +19056,7 @@
     "errors": {
       "piStartupCloudFile": "A cloud-only instruction file may be delaying Pi startup: {{path}}. Download this file in Finder, wait until it is available locally, then retry. The timeout may have another cause.",
       "hostProfileInUseByDesktop": "This data is in use by the Cindy desktop app running on its own. Quit it, then send again.",
-      "hostProfileInUseByDesktopAtStart": "This data is in use by the Cindy desktop app running on its own, so the Cindy background service did not start. Quit that app, then restart the background service.",
+      "hostProfileInUseByDesktopAtStart": "This data is in use by the Cindy desktop app running on its own, so the Cindy background service did not start. Quit that app, then restart the Cindy background service.",
       "hostProfileInUseByDesktopRetry": "This data is in use by the Cindy desktop app running on its own, so this can’t be changed right now. Quit that app, then try again.",
       "openFileFailed": "Cannot open file in system",
       "emptyResponse": "The model returned no content. Try again. If the context is very long, switch models.",

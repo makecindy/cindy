@@ -9541,24 +9541,24 @@
       "checkAgain": "Verificar novamente",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
-          "body": "Estes dados pertencem a uma conta diferente da sessão guardada pelo serviço em segundo plano.",
-          "action": "Execute cindy-host login com a conta original e reinicie o serviço em segundo plano."
+          "body": "Estes dados pertencem a uma conta diferente da sessão guardada pelo serviço em segundo plano da Cindy.",
+          "action": "Execute cindy-host login com a conta original e reinicie o serviço em segundo plano da Cindy."
         },
         "HOST_DATABASE_LOCKED": {
           "body": "Outra aplicação da Cindy está a usar estes dados.",
-          "action": "Feche-a e reinicie o serviço em segundo plano."
+          "action": "Feche-a e reinicie o serviço em segundo plano da Cindy."
         },
         "HOST_DATABASE_UNAVAILABLE": {
           "body": "Não é possível abrir os dados desta conta.",
-          "action": "Se usou recentemente uma versão mais recente da Cindy, atualize primeiro a Cindy neste computador para a versão mais recente e reinicie o serviço em segundo plano. Caso contrário, execute cindy-host status para ver o motivo."
+          "action": "Se usou recentemente uma versão mais recente da Cindy, atualize primeiro a Cindy neste computador para a versão mais recente e reinicie o serviço em segundo plano da Cindy. Caso contrário, execute cindy-host status para ver o motivo."
         },
         "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
           "body": "O serviço em segundo plano da Cindy não conseguiu aceder ao serviço de início de sessão ao arrancar.",
-          "action": "Verifique a sua rede e reinicie o serviço em segundo plano."
+          "action": "Verifique a sua rede e reinicie o serviço em segundo plano da Cindy."
         },
         "HOST_START_FAILED": {
           "body": "O serviço em segundo plano da Cindy encontrou um erro ao arrancar.",
-          "action": "Reinicie o serviço em segundo plano. Se voltar a acontecer, execute cindy-host status para ver o motivo."
+          "action": "Reinicie o serviço em segundo plano da Cindy. Se voltar a acontecer, execute cindy-host status para ver o motivo."
         }
       }
     },
@@ -19238,7 +19238,7 @@
     "errors": {
       "piStartupCloudFile": "Um ficheiro de instruções disponível apenas na nuvem pode estar a atrasar o arranque do Pi: {{path}}. Descarrega este ficheiro no Finder, espera até estar disponível localmente e tenta novamente. O tempo limite excedido pode ter outra causa.",
       "hostProfileInUseByDesktop": "Estes dados estão a ser usados pela aplicação de computador da Cindy, que está a ser executada sozinha. Fecha-a e envia novamente.",
-      "hostProfileInUseByDesktopAtStart": "Estes dados estão a ser usados pela aplicação de computador da Cindy, que está a ser executada sozinha, por isso o serviço em segundo plano da Cindy não arrancou. Fecha-a e reinicia o serviço em segundo plano.",
+      "hostProfileInUseByDesktopAtStart": "Estes dados estão a ser usados pela aplicação de computador da Cindy, que está a ser executada sozinha, por isso o serviço em segundo plano da Cindy não arrancou. Fecha-a e reinicia o serviço em segundo plano da Cindy.",
       "hostProfileInUseByDesktopRetry": "Estes dados estão a ser usados pela aplicação de computador da Cindy, que está a ser executada sozinha, por isso não é possível alterar agora. Fecha-a e tenta novamente.",
       "openFileFailed": "Não é possível abrir o ficheiro no sistema",
       "emptyResponse": "O modelo não devolveu conteúdo. Tente novamente. Se o contexto for muito longo, mude de modelo.",
