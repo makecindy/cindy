@@ -9148,6 +9148,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       statDirectory: usingFallback ? statWorkingDirectory : undefined,
       realpathDirectory: usingFallback ? realpathWorkingDirectory : undefined,
       preservePersistedGrants: usingFallback,
+      readPersistedExtraDirs: async (sessionId) => {
+        const dirs = await readSessionExtraDirsFromDb(sessionId);
+        assertAccess?.();
+        return dirs;
+      },
       readPersistedWritableDirs: readSessionWritableDirsFromDb,
       persistExistingSession: async (sessionId, patch) => {
         const [existing] = await getDbClient()

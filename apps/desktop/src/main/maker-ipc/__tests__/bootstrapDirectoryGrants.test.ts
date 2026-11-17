@@ -45,6 +45,37 @@ function createOpts(
 }
 
 describe('prepareDirectoryGrantsForBootstrap', () => {
+  // #11112, unit tier: cold CREATE omits grants while lazy SEND restored them.
+  // Exercise the production bootstrap boundary with a user root + Host Library
+  // slot; a renderer callback test cannot verify their runtime provenance.
+  it('restores saved user and Host Library grants for an existing cold session', async () => {
+    const { workspace, shared, specs, output } = makeGrantTree();
+    const opts = createOpts(workspace, [], []);
+    delete opts.extraDirs;
+    const persistExistingSession = vi.fn(async () => {});
+    await prepareDirectoryGrantsForBootstrap(opts, {
+      readPersistedExtraDirs: async () => [specs, libraryExtraDirSlot(shared)],
+      readPersistedWritableDirs: async () => [output],
+      persistExistingSession,
+    });
+    expect(opts.extraDirs).toEqual([specs, shared]);
+    expect(opts[LIBRARY_READ_ROOT]).toBe(shared);
+    expect(opts.writableDirs).toEqual([output]);
+    expect(persistExistingSession).not.toHaveBeenCalled();
+  });
+
+  it('does not replace an explicit empty user directory selection with saved grants', async () => {
+    const { workspace, shared } = makeGrantTree();
+    const readPersistedExtraDirs = vi.fn(async () => [shared]);
+    const opts = createOpts(workspace, [], []);
+    await prepareDirectoryGrantsForBootstrap(opts, {
+      readPersistedExtraDirs, readPersistedWritableDirs: async () => [],
+      persistExistingSession: vi.fn(async () => {}),
+    });
+    expect(readPersistedExtraDirs).not.toHaveBeenCalled();
+    expect(opts.extraDirs).toEqual([]);
+  });
+
   it('rejects forged slots before reading or persisting grants', async () => {
     const { workspace, shared } = makeGrantTree();
     const readPersistedWritableDirs = vi.fn(async () => []);

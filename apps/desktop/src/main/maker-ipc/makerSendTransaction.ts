@@ -83,6 +83,7 @@ export interface BootstrapDirectoryGrantDeps {
   preservePersistedGrants?: boolean;
   statDirectory?: (dir: string) => Promise<{ isDirectory(): boolean }>;
   realpathDirectory?: (dir: string) => Promise<string>;
+  readPersistedExtraDirs?(sessionId: string): Promise<string[]>;
   readPersistedWritableDirs(sessionId: string): Promise<string[]>;
   persistExistingSession(
     sessionId: string,
@@ -103,6 +104,14 @@ export async function prepareDirectoryGrantsForBootstrap(
   opts: CreateOpts,
   deps: BootstrapDirectoryGrantDeps,
 ): Promise<void> {
+  // Direct cold-start preparation has no renderer-owned directory snapshot.
+  // Restore the Host's saved grants, including its private Library marker,
+  // before applying the same validation as lazy SEND. Explicit [] stays [];
+  // wire callers still cannot supply a Host-owned Library slot.
+  if (opts.extraDirs === undefined && !opts.remoteHostId && typeof opts.id === 'string' && opts.id
+    && deps.readPersistedExtraDirs) {
+    Object.assign(opts, directoryGrantsForRuntime(await deps.readPersistedExtraDirs(opts.id)));
+  }
   const libraryRoot = opts.remoteHostId ? undefined : opts[LIBRARY_READ_ROOT];
   const runtimeDirs = opts.extraDirs ?? [];
   if (runtimeDirs.some((dir) => isLibraryExtraDirSlot(dir.trim()))) {
