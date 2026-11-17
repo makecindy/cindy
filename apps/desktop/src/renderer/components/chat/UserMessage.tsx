@@ -25,6 +25,7 @@ import { hasEmbeddedImPrompt } from './userMessageDisplayText';
  */
 
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
+import { MarkdownRenderer } from './MarkdownRenderer';
 import { type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
@@ -1479,9 +1480,16 @@ export function UserMessage({
               </button>
               {orcaExpanded && (
                 <div className="border-t border-[var(--msg-tool-card-border)] px-3 py-2">
-                  <pre data-selection-quote-body="" className="chat-content-text m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-foreground">
-                    {displayContent}
-                  </pre>
+                  <div
+                    data-selection-quote-body=""
+                    className="chat-content-text min-w-0 text-13 text-foreground [&_.msg-markdown>*:first-child]:mt-0 [&_.msg-markdown>*:last-child]:mb-0"
+                  >
+                    <MarkdownRenderer
+                      content={displayContent}
+                      workingDir={workingDir}
+                      allowPrivilegedLinks={allowPrivilegedLinks}
+                    />
+                  </div>
                 </div>
               )}
             </div>
