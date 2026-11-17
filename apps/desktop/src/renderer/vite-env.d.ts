@@ -1592,7 +1592,7 @@ interface ElectronAPI {
       failed?: true;
     }>;
     /** Pick a file here and upload it for a remote task's mail card. attachment null: cancelled. */
-    uploadRemoteMailAttachment: () => Promise<{ ok: boolean; attachment: { url: string; name: string } | null }>;
+    uploadRemoteMailAttachment: (deviceId: string) => Promise<{ ok: boolean; attachment: { url: string; name: string } | null }>;
     /** 权威实测高回填:GhostToolCard 量出内容真实高度后写回卡片库,历史
      *  回放据此零动画首帧贴合(行不存在主机静默跳过)。 */
     reportCardHeight: (callId: string, height: number) => Promise<{ ok: true }>;
