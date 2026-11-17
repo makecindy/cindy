@@ -17179,6 +17179,16 @@
       "imagePreview": {
         "loadFailed": "画像を読み込めません",
         "viewLarge": "拡大表示"
+      },
+      "gitStatus": {
+        "modified": "変更済み",
+        "added": "追加済み",
+        "deleted": "削除済み",
+        "renamed": "名前変更済み",
+        "copied": "コピー済み",
+        "typechange": "種類変更",
+        "untracked": "未追跡",
+        "unmerged": "競合"
       }
     },
     "search": {

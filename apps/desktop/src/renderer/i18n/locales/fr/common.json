@@ -17419,7 +17419,17 @@
         "loadFailed": "Impossible de charger l'image",
         "viewLarge": "Afficher en taille réelle"
       },
-      "activeSessionCount_many": "{{count}} sessions actives"
+      "activeSessionCount_many": "{{count}} sessions actives",
+      "gitStatus": {
+        "modified": "Modifié",
+        "added": "Ajouté",
+        "deleted": "Supprimé",
+        "renamed": "Renommé",
+        "copied": "Copié",
+        "typechange": "Type modifié",
+        "untracked": "Non suivi",
+        "unmerged": "En conflit"
+      }
     },
     "search": {
       "open": "Rechercher",

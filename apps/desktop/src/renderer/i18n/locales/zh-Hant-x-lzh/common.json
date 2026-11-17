@@ -17179,6 +17179,16 @@
       "imagePreview": {
         "loadFailed": "圖不能載",
         "viewLarge": "覽大圖"
+      },
+      "gitStatus": {
+        "modified": "已改",
+        "added": "新增",
+        "deleted": "已刪",
+        "renamed": "已易名",
+        "copied": "已複製",
+        "typechange": "類型易",
+        "untracked": "未隨",
+        "unmerged": "有衝突"
       }
     },
     "search": {

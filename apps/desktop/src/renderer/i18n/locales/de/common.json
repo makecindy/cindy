@@ -17253,6 +17253,16 @@
       "imagePreview": {
         "loadFailed": "Bild konnte nicht geladen werden",
         "viewLarge": "In voller Größe anzeigen"
+      },
+      "gitStatus": {
+        "modified": "Geändert",
+        "added": "Hinzugefügt",
+        "deleted": "Gelöscht",
+        "renamed": "Umbenannt",
+        "copied": "Kopiert",
+        "typechange": "Typ geändert",
+        "untracked": "Nicht verfolgt",
+        "unmerged": "Konflikt"
       }
     },
     "search": {
