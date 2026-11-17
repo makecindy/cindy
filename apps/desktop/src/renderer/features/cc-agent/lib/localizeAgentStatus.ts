@@ -4,6 +4,7 @@ import type { ChatMessage as Message } from '@/lib/makerChatStore';
 import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
 
 const STATUS_KEYS = new Map<string, string>([
+  ['waiting for remote response', 'ccAgent.agentStatus.waitingRemoteResponse'],
   ['thinking', 'ccAgent.agentStatus.thinking'],
   ['generating', 'ccAgent.agentStatus.generating'],
   ['editing files', 'ccAgent.agentStatus.editingFiles'],
@@ -38,6 +39,30 @@ function normalizeStaticStatus(status: string): string {
     .replace(/(?:\.{3}|…)$/, '')
     .trim()
     .toLowerCase();
+}
+
+/** Only replace the initial generic status; never hide real work or interaction states. */
+export function remoteResponsePendingStatus(
+  status: string,
+  agentDeviceId: string | null | undefined,
+  isRunning: boolean,
+  messages: readonly Message[],
+): string {
+  if (!agentDeviceId || !isRunning) return status;
+  const normalized = normalizeStaticStatus(status);
+  if (!['thinking', 'working', 'running', 'generating', 'just wait', ''].includes(normalized)
+    && !TURN_START_NAME_PATTERNS.some(pattern => pattern.test(status.trim()))) return status;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    // Steers belong to the existing turn, so they must not restart its preparation label.
+    if (message.role === 'user' && message.delivery !== 'steer' && !message.isSyntheticTrigger) break;
+    // Use transcript boundaries rather than comparing clocks on two computers.
+    if (message.systemCardType) continue;
+    if (message.role === 'tool_use' || message.role === 'tool_result'
+      || message.role === 'thinking'
+      || (message.role === 'assistant' && message.content.trim())) return status;
+  }
+  return 'Waiting for remote response';
 }
 
 /** Plain composer copy uses the same runtime status as the task status bar.

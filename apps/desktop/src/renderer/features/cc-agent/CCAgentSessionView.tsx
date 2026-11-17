@@ -386,7 +386,8 @@ import {
   type DeferredUiAssignment,
 } from './deferredUiAssignment';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
-import { localizeAgentStatus } from './lib/localizeAgentStatus';
+import { localizeAgentStatus, remoteResponsePendingStatus } from './lib/localizeAgentStatus';
+import { useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { findActiveReconnect } from '@/lib/autoResumePresentation';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
 import { hasInlineOverloadRetry } from './lib/inlineRetryError';
@@ -2523,11 +2524,23 @@ function CCAgentSessionContent({
         })
       : t('chat.systemCard.autoResumePending.label')
     : null;
+  const settledStartingSessions = useMemo(() => new Set(
+    session?.agentDeviceId && sessionId && (agentStatus.isRunning || error || queuePaused || credentialSwitchWait
+      || pendingPermission || pendingAskUser || pendingPluginSetup || pendingPlanReview)
+      ? [sessionId] : [],
+  ), [session?.agentDeviceId, sessionId, agentStatus.isRunning, error, queuePaused, credentialSwitchWait,
+    pendingPermission, pendingAskUser, pendingPluginSetup, pendingPlanReview]);
+  const startingSessions = useStartingSessionIds(settledStartingSessions);
+  const waitingRemoteStart = Boolean(session?.agentDeviceId && sessionId
+    && startingSessions.has(sessionId) && !settledStartingSessions.has(sessionId));
   const composerStatus = runningWorkflow
     ? runningWorkflow.total > 0
       ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
       : t('ccAgent.agentStatus.waitingWorkflow')
-    : agentStatus.status;
+    : waitingRemoteStart ? 'Waiting for remote response' : remoteResponsePendingStatus(
+        agentStatus.status, session?.agentDeviceId, agentStatus.isRunning,
+        messages,
+      );
 
   // error-tail-banner:会话尾部停在未忽略的 role='error' 行 → 输入框上方显示
   // 可操作红条(与 live ErrorBanner 同风格;2026-07-05 产品决策统一——所有尾部
@@ -5707,7 +5720,7 @@ function CCAgentSessionContent({
 
   const composerRuntimeVisible =
     !pendingPlanReview &&
-    (agentStatus.isRunning || backgroundTasksActive || runningWorkflow !== null);
+    (agentStatus.isRunning || waitingRemoteStart || backgroundTasksActive || runningWorkflow !== null);
 
   const content = (
     // Layout: single scroll container (full height) + sticky input overlay at bottom.
@@ -5977,12 +5990,13 @@ function CCAgentSessionContent({
                   sessionKey={sessionId ?? null}
                   status={composerStatus}
                   reconnectStatus={reconnectStatus}
-                  tokenUsage={agentStatus.tokenUsage}
-                  outputTokens={agentStatus.outputTokens ?? 0}
-                  generationDurationMs={agentStatus.generationDurationMs ?? 0}
-                  generationReliable={agentStatus.generationReliable ?? true}
-                  tokenSpeed={agentStatus.tokenSpeed}
-                  startedAt={agentStatus.startedAt}
+                  preparing={waitingRemoteStart}
+                  tokenUsage={waitingRemoteStart ? 0 : agentStatus.tokenUsage}
+                  outputTokens={waitingRemoteStart ? 0 : agentStatus.outputTokens ?? 0}
+                  generationDurationMs={waitingRemoteStart ? 0 : agentStatus.generationDurationMs ?? 0}
+                  generationReliable={!waitingRemoteStart && (agentStatus.generationReliable ?? true)}
+                  tokenSpeed={waitingRemoteStart ? undefined : agentStatus.tokenSpeed}
+                  startedAt={waitingRemoteStart ? null : agentStatus.startedAt}
                   visible={composerRuntimeVisible || (!pendingPlanReview && activeReconnect !== null)}
                   inputWidth={inputWidth}
                   sideTaskRunning={agentStatus.sideTaskRunning ?? false}
@@ -6789,8 +6803,9 @@ function HandoffSourcePill({
 const STATUS_BAR_FADE_MS = 400;
 const CONTROLLED_BANNER_MAX_WIDTH = 420;
 
-function RunningStatusBar({
+export function RunningStatusBar({
   status,
+  preparing = false,
   reconnectStatus = null,
   tokenUsage,
   outputTokens = 0,
@@ -6813,6 +6828,8 @@ function RunningStatusBar({
   className,
 }: {
   status: string;
+  /** No current runtime metrics exist while a remote send is still being prepared. */
+  preparing?: boolean;
   /** Same pending row / continuation owner as the message stream; overrides stale agent status. */
   reconnectStatus?: string | null;
   tokenUsage: number;
@@ -6874,8 +6891,8 @@ function RunningStatusBar({
   const [ratePanelPinned, setRatePanelPinned] = useState(false);
   const reconnecting = reconnectStatus !== null;
   useEffect(() => {
-    if (reconnecting) setRatePanelPinned(false);
-  }, [reconnecting]);
+    if (reconnecting || preparing) setRatePanelPinned(false);
+  }, [reconnecting, preparing]);
 
   useEffect(() => {
     if (visible) {
@@ -7118,7 +7135,7 @@ function RunningStatusBar({
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
       <div className="flex min-w-0 items-center justify-self-end gap-2">
         {rightLeadingSlot}
-        {(!suppressContent && (!isHidden || ratePanelPinned)) && (
+        {(!preparing && !suppressContent && (!isHidden || ratePanelPinned)) && (
           <div
             data-running-status-meta="true"
             className="flex min-w-0 items-center gap-[6px]"

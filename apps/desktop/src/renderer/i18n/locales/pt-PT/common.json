@@ -16150,6 +16150,7 @@
       "saveFailed": "Falha ao guardar o escalão da janela de contexto"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "A aguardar a resposta remota…",
       "readingMemory": "A ler a memória…",
       "savingMemory": "A guardar memória…",
       "deletingMemory": "A eliminar memória…",

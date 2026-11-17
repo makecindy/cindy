@@ -15925,6 +15925,7 @@
       "saveFailed": "保存上下文窗口档位失败"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "正在等待远端响应…",
       "readingMemory": "正在读取记忆…",
       "savingMemory": "正在保存记忆…",
       "deletingMemory": "正在删除记忆…",

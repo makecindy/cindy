@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import '@/i18n';
 import i18n from '@/i18n';
-import { localizeAgentStatus } from '@/features/cc-agent/lib/localizeAgentStatus';
+import { localizeAgentStatus, remoteResponsePendingStatus } from '@/features/cc-agent/lib/localizeAgentStatus';
+import type { ChatMessage } from '@/lib/makerChatStore';
 
 beforeEach(async () => {
   await i18n.changeLanguage('zh-CN');
@@ -13,6 +14,29 @@ afterEach(async () => {
 });
 
 describe('localizeAgentStatus', () => {
+  // Regression: a remote turn with no response looked identical to local thinking.
+  // Production status selector + localizer; unit tier, no transport or timer changes.
+  it('distinguishes remote response waiting without changing local or terminal states', () => {
+    const status = (device: string | null, running = true, raw = 'Thinking...') =>
+      localizeAgentStatus(remoteResponsePendingStatus(raw, device, running, []), i18n.t);
+    expect(status('remote-device')).toBe('正在等待远端响应…');
+    expect(status('provider-share:share')).toBe('正在等待远端响应…');
+    expect(status(null)).toBe('正在思考…');
+    expect(status('remote-device', false, 'Done')).toBe('已完成');
+    expect(status('remote-device', true, 'Compacting...')).toBe('正在压缩上下文…');
+    expect(status('remote-device', true, 'Waiting on approval')).toBe(localizeAgentStatus('Waiting on approval', i18n.t));
+  });
+
+  it.each(['assistant', 'thinking', 'tool_use', 'tool_result'] as const)(
+    'restores normal status after remote %s activity, including after a steer', (role) => {
+      const message = { clientId: 'activity', role, content: 'response', createdAt: new Date(1100).toISOString() } as ChatMessage;
+      const steer = { clientId: 'steer', role: 'user', delivery: 'steer', content: 'more', createdAt: new Date(1200).toISOString() } as ChatMessage;
+      expect(remoteResponsePendingStatus('Thinking...', 'remote', true, [message, steer])).toBe('Thinking...');
+      const nextInput = { ...steer, clientId: 'next', delivery: undefined };
+      expect(remoteResponsePendingStatus('Thinking...', 'remote', true, [message, nextInput])).toBe('Waiting for remote response');
+    },
+  );
+
   it('localizes Cindy-owned static status labels', () => {
     expect(localizeAgentStatus('Thinking...', i18n.t)).toBe('正在思考…');
     expect(localizeAgentStatus('Editing files...', i18n.t)).toBe('正在编辑文件…');
