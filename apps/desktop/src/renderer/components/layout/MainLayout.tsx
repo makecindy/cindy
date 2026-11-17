@@ -192,9 +192,13 @@ const RSB_TERRITORY_SELECTOR = '[data-panel-drag-root="right-tabs"], [data-rsb-t
  */
 function readCollapsedFor(sessionId: string | null, defaultOpen: boolean): boolean {
   if (!sessionId) return true;
-  // Mac 上按「默认展开」偏好决定,Windows 保留 per-session 记忆。
-  if (window.electronAPI?.platform === 'darwin') return !defaultOpen;
-  return readPanelCollapsed('right-tabs', { sessionId }, true);
+  const stored = readPanelCollapsed('right-tabs', { sessionId }, true);
+  // Mac 主窗按「默认展开」偏好决定，但**显式展开过**的任务（例如跨任务唤起审查面板
+  // 时先写入了展开记录）必须优先，否则打开请求会被默认值盖掉。
+  if (window.electronAPI?.platform === 'darwin' && !isSecondaryWindow()) {
+    return stored === false ? false : !defaultOpen;
+  }
+  return stored;
 }
 
 function writeCollapsedFor(sessionId: string | null, collapsed: boolean): void {
@@ -375,10 +379,13 @@ export function MainLayout() {
         detachedHostSessionIdRef.current,
         sessionId,
       );
+      const sameSession = rightSidebarSessionIdRef.current === sessionId;
       setRightSidebarSessionId(sessionId);
       setRightSidebarSubagentsAvailable(sessionId ? opts.subagentsAvailable : undefined);
       if (!sessionId || !rsbWindow.loaded || rsbDetached) return;
       const hasInitialCollapsed = typeof opts.initialCollapsed === 'boolean';
+      // 同一任务的再次声明（subagentsAvailable 变化等）不能把用户刚手动开关的状态重置回默认。
+      if (sameSession && !hasInitialCollapsed) return;
       const nextCollapsed = hasInitialCollapsed
         ? opts.initialCollapsed === true
         : readCollapsedFor(sessionId, defaultRightSidebarOpenRef.current);
@@ -1061,6 +1068,15 @@ export function MainLayout() {
       const targetSessionId = opts.sessionId ?? currentSessionId;
       const targetCollapsed = visibility === 'close';
       const windowState = getRsbWindowUiState();
+      // 常驻模式下关掉最后一个页签（含浏览器关页）不收起面板，回到空状态。
+      if (
+        targetCollapsed &&
+        !isSecondaryWindow() &&
+        window.electronAPI?.platform === 'darwin' &&
+        defaultRightSidebarOpenRef.current
+      ) {
+        return;
+      }
       if (!windowState.loaded) return;
       const detachedNow = !isSecondaryWindow() && windowState.detached;
       // detached 模式:可见性 = 子窗口开闭。呼起必须跟发起方 session,不能只认
@@ -1989,7 +2005,7 @@ export function MainLayout() {
                       collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
                       onToggle={handleToggleRightSidebar}
                       side={rightSidebarSide}
-                      onLongPress={toggleDefaultRightSidebarOpen}
+                      onLongPress={isSecondaryWindow() ? undefined : toggleDefaultRightSidebarOpen}
                       persistent={defaultRightSidebarOpen}
                     />
                   </div>

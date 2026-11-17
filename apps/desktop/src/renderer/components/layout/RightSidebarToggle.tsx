@@ -148,7 +148,8 @@ export function RightSidebarToggle({
       Math.hypot(event.clientX - active.startX, event.clientY - active.startY) >
       LONG_PRESS_MOVE_TOLERANCE_PX
     ) {
-      clearLongPress();
+      // 已经触发过长按：移动取消手势时也要拦住这次 click，否则松手会把刚打开的面板又收起。
+      clearLongPress(active.didLongPress);
     }
   };
 
@@ -180,6 +181,8 @@ export function RightSidebarToggle({
         onPointerCancel={handlePointerEnd}
         aria-label={label}
         aria-expanded={action === 'close' ? undefined : !collapsed}
+        // 常驻偏好只有长按入口，读屏要能听到当前值；状态点本身是纯装饰。
+        {...(onLongPress ? { 'aria-description': tipText } : {})}
       >
         {holdProgress > 0 && (
           <svg

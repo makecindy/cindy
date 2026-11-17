@@ -9,6 +9,12 @@ vi.mock('react-i18next', () => ({
 
 import { RightSidebarToggle } from '../RightSidebarToggle';
 
+// jsdom 未实现 PointerEvent；不补的话 React 不会注册 onPointerDown，长按手势无法在单测里驱动。
+if (typeof window !== 'undefined' && !('PointerEvent' in window)) {
+  // @ts-expect-error 测试环境垫片
+  window.PointerEvent = window.MouseEvent;
+}
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -89,5 +95,16 @@ describe('RightSidebarToggle', () => {
     fireEvent.pointerUp(button, { pointerId: 1 });
     fireEvent.click(button);
     expect(onToggle).not.toHaveBeenCalled();
+  });
+});
+
+describe('RightSidebarToggle long press', () => {
+  it('still toggles on a plain click', () => {
+    const onToggle = vi.fn();
+    render(
+      <RightSidebarToggle action="toggle" collapsed onToggle={onToggle} onLongPress={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'contentHeader.expandPanel' }));
+    expect(onToggle).toHaveBeenCalledOnce();
   });
 });
