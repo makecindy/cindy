@@ -735,7 +735,105 @@ describe('stale device directory', () => {
     });
     expect(listDevices.mock.calls.length).toBe(afterOnline + 1);
   });
-});
+
+  // 故障半径三问(第 3 问):触及断链/重试恢复路径的改动必须带多 peer 拓扑的用例 ——
+  // 一个 peer 静默 / 被限流时,其它 peer 的行、同步资格与在途请求零感知
+  // (docs/dev-rules/remote-and-mobile-adaptation.md「故障半径三问」;评审意见 4593345655)。
+  //
+  // 测试价值
+  // - 生产入口与可观察结果:useDeviceLinkRemoteProjects 的目录重读退避 + 周期对账 ——
+  //   relay 重连后目录只剩有界旧快照、且服务端给了限流期限时,断言 'healthy' 的行还在、
+  //   它仍在周期对账名单里(周期读 local-db:sessions:list),并且它那次在途的会话读完成后
+  //   结果照常落地;静默的那台('slow',subscribe 永不 settle)全程没牵动它。
+  // - Bug/规则依据:「故障半径三问」第 3 问(多 peer 拓扑下的零感知用例);本 PR 的恢复动作
+  //   (目录有界重读 + 退避 + 限流期限)必须证明作用半径不超过「目录读/信息新鲜度」这一层。
+  // - 现有覆盖缺口:既有用例各管一头 —— 「旧快照全员 offline」的单设备同步资格
+  //   (keeps an online peer in the sync list ...)、退避阶梯、限流期限各自单测;没有覆盖
+  //   「两台被控设备并存 + 一台静默 + 限流期限 + 另一台有在途请求」同时成立的情形。
+  // - 最小失败输入:listDevices 先给权威目录、之后恒返回 stale + retryAtMs;'slow' 的
+  //   subscribe 永不 settle;'healthy' 的会话读被 deferred 住;relay 掉线再上线。
+  // - 失败证据:去掉旧快照 offline 行的豁免(把已合格设备也按 offline 应用)→ 同步资格被
+  //   撤销,「周期对账仍读它」变红;去掉有界重读 → 「过了期限才重读一次」变红。
+  // - tier:unit(electronAPI 为进程内 fake,假计时器)。
+  it('keeps a healthy peer unaware of a silent peer and a throttled directory', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    const deadline = Date.now() + 30_000;
+    let stale = false;
+    listDevices.mockImplementation(async () => (stale
+      ? { devices: stalePeers(), stale: true, retryAtMs: deadline }
+      : { devices: peers }));
+
+    // 'slow' 停止 ACK:subscribe 永不 settle。
+    subscribe.mockImplementation((peer: string) =>
+      peer === 'slow' ? new Promise(() => {}) : Promise.resolve({}));
+
+    const row = (id: string) => ({
+      id,
+      title: `t-${id}`,
+      workingDir: null,
+      model: 'gpt-x',
+      status: 'active',
+      agentKind: 'codex',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    // 'healthy' 的会话读:第一次落地;重连后的那次在途(等它落地)。
+    const inflight = deferred<unknown[]>();
+    let healthyReads = 0;
+    invoke.mockImplementation(async (peer: string, channel: string) => {
+      if (channel === 'maker:schedule:list-sidebar-index-runs') return { runs: [] };
+      if (peer !== 'healthy' || channel !== 'local-db:sessions:list') return [];
+      healthyReads += 1;
+      if (healthyReads === 1) return [row('s-healthy')];
+      return inflight.promise;
+    });
+
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    expect(remoteProjectsStore.getDeviceSessions('healthy').map((session) => session.id)).toEqual(['s-healthy']);
+
+    // relay 掉线再上线:presence 视图已清空,目录补齐失败 → 只剩有界旧快照,
+    // 而且服务端给了限流期限(429)。
+    stale = true;
+    act(() => listeners.onStatusChanged({ status: 'connecting', directDataDeviceIds: [] }));
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+
+    // 行还在:旧快照里的 offline 行不是 presence 证据,不能把已合格的设备踢掉。
+    expect(remoteProjectsStore.hasDevice('healthy')).toBe(true);
+    expect(remoteProjectsStore.getDeviceSessions('healthy').map((session) => session.id)).toEqual(['s-healthy']);
+
+    // 目录重读有界:限流期限(30 秒)没到之前不追问。
+    const readsAfterFlap = listDevices.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(readsAfterFlap);
+    // 过了期限才重读一次(恢复动作不放大请求)。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(readsAfterFlap + 1);
+
+    // 在途请求零感知:重连后的那次读落地后,结果照常并进 store(没被恢复动作取消或顶掉)——
+    // 落地前是首次读的那一行,落地后换成在途读带回的那一行。
+    expect(remoteProjectsStore.getDeviceSessions('healthy').map((session) => session.id)).toEqual(['s-healthy']);
+    inflight.resolve([row('s-healthy-2')]);
+    await settle();
+    expect(
+      remoteProjectsStore.getDeviceSessions('healthy').map((session) => session.id),
+    ).toEqual(['s-healthy-2']);
+    expect(remoteProjectsStore.getDeviceSessions('healthy')[0].deviceLinkConnectionStatus).toBe('connected');
+
+    // 同步资格还在:周期对账照常读它(60 秒一拍),没被旧快照的 offline 行撤销。
+    invoke.mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(
+      invoke.mock.calls.filter(([peer, channel]) => peer === 'healthy' && channel === 'local-db:sessions:list'),
+    ).not.toHaveLength(0);
+  });});
 
 // Review (#8381): a cache read that lands after getState() seeds `connecting` shards. They must
 // be settled against what the link will do: a standby instance (another Cindy owns the link)
