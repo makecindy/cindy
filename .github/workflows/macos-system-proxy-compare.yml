@@ -1,24 +1,32 @@
-# macOS system proxy comparison (docs/host/personal-migration-release-table.md, row 28, 28b).
+# System proxy comparison, macOS and Windows (docs/host/personal-migration-release-table.md, row 28, 28b and 28c).
 #
-# Compares the Host's reading of the macOS static system proxy settings (apps/host/src/macos-system-proxy.ts)
-# with Electron's session.resolveProxy, under groups of settings the job sets itself.
+# Compares the Host's outbound proxy answers with Electron's session.resolveProxy, under groups of settings the
+# jobs set themselves: on macOS the static settings (apps/host/src/macos-system-proxy.ts) and, for PAC and
+# auto-discovery, the Host's Chromium proxy helper (apps/host/src/chromium-proxy.ts); on Windows the helper for
+# everything. Both jobs first run the helper's acceptance (apps/host/scripts/chromium-proxy-worker.e2e.mjs), which
+# needs the Electron binary these jobs install; the macOS job then asserts that the helper, started the production
+# way, created no "Cindy Proxy Safe Storage" keychain item.
 #
-# The job CHANGES THE RUNNER'S SYSTEM PROXY SETTINGS (networksetup with sudo). It therefore runs only on
-# GitHub-hosted macOS runners, which are discarded afterwards, and only when needed: started by hand, or for
-# a pull request that changes this implementation (the three paths below). Ordinary pull requests do not run
-# it. An Electron upgrade reaches it through a guard test: CHROMIUM_RULES_ELECTRON_VERSION in
+# The jobs CHANGE THE RUNNER'S SYSTEM PROXY SETTINGS (networksetup with sudo; the current user's Internet
+# Settings on Windows). They therefore run only on GitHub-hosted runners, which are discarded afterwards, and
+# only when needed: started by hand, or for a pull request that changes this implementation (the paths below).
+# Ordinary pull requests do not run them. An Electron upgrade reaches it through a guard test: CHROMIUM_RULES_ELECTRON_VERSION in
 # macos-system-proxy.ts must equal the Electron version in apps/desktop/package.json, so the upgrade changes
 # that file and this comparison runs on the upgrade's pull request.
 # Never change system proxy settings on a development machine or your own computer to reproduce it; the
-# script refuses to start anywhere but a GitHub-hosted runner.
-name: macOS system proxy comparison
+# scripts refuse to start anywhere but a GitHub-hosted runner.
+name: System proxy comparison
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - 'apps/host/src/macos-system-proxy.ts'
+      - 'apps/host/src/chromium-proxy.ts'
+      - 'apps/host/src/chromium-proxy-worker.cjs'
       - 'apps/host/scripts/macos-system-proxy-*'
+      - 'apps/host/scripts/windows-system-proxy-compare.mjs'
+      - 'apps/host/scripts/chromium-proxy-worker.e2e.mjs'
       - '.github/workflows/macos-system-proxy-compare.yml'
 
 permissions:
@@ -51,6 +59,9 @@ jobs:
       # With the Electron binary: the comparison runs the repository's Electron.
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Chromium proxy helper acceptance (loopback PAC; changes no settings)
+        working-directory: apps/host
+        run: node --import tsx --import ./src/loaders/register-raw.mjs scripts/chromium-proxy-worker.e2e.mjs
       - name: Compare (changes this runner's system proxy settings, then restores them)
         working-directory: apps/host
         env:
@@ -61,5 +72,43 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-system-proxy-compare
+          path: ${{ runner.temp }}/system-proxy-compare
+          if-no-files-found: warn
+
+  compare-windows:
+    name: Host vs Electron system proxy results (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      XDT_SKIP_AGENT_BIN_INSTALL: '1'
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      # With the Electron binary: the helper and the comparison run the repository's Electron.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Chromium proxy helper acceptance (loopback PAC; changes no settings)
+        working-directory: apps/host
+        run: node --import tsx --import ./src/loaders/register-raw.mjs scripts/chromium-proxy-worker.e2e.mjs
+      - name: Compare (changes this runner's proxy settings, then restores them)
+        working-directory: apps/host
+        env:
+          CINDY_SYSTEM_PROXY_COMPARE: '1'
+        run: node --import tsx --import ./src/loaders/register-raw.mjs scripts/windows-system-proxy-compare.mjs "$env:RUNNER_TEMP/system-proxy-compare"
+      - name: Upload the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-system-proxy-compare
           path: ${{ runner.temp }}/system-proxy-compare
           if-no-files-found: warn

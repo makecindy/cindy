@@ -11,8 +11,11 @@
 // It saves each group's scutil output as a sample (the runner holds no real settings or credentials; the
 // authenticated group uses a fixture user and password), writes a report, and restores the settings.
 //
-// Expected differences, by group: with a PAC URL the Host reports every URL unresolved (it does not run
-// PAC); with an authenticated proxy it reports unresolved every URL Electron sends through that proxy.
+// With PAC or auto-discovery the Host asks its Chromium proxy helper (28c, src/chromium-proxy.ts), started here
+// exactly as in production (no test switch), so those groups must agree too. Expected difference: with an
+// authenticated proxy the Host reports unresolved every URL Electron sends through that proxy.
+// Afterwards (28c, reviewer 2026-11-18): the keychain must hold no "Cindy Proxy Safe Storage" item, i.e. the helper,
+// started the production way and asked under a PAC URL, did not set up Chromium's Safe Storage.
 //
 // usage (on the runner, from apps/host):
 //   node --import tsx --import ./src/loaders/register-raw.mjs scripts/macos-system-proxy-compare.mjs <out-dir>
@@ -24,6 +27,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { createChromiumProxyHelper } from '../src/chromium-proxy.ts';
 import { createMacSystemProxySession, readScutilProxyOutput } from '../src/macos-system-proxy.ts';
 
 if (process.platform !== 'darwin' || process.env.GITHUB_ACTIONS !== 'true'
@@ -89,7 +93,7 @@ const GROUPS = [
     '10.0.0.0/8', 'ex?mple.com', 'https://www.example.com', 'a.example.com, b.example.com', 'fd00::/8']] },
   { name: 'subtract-implicit', settings: [HTTP, HTTPS, ['-setproxybypassdomains', '<-loopback>']] },
   { name: 'auto-discovery', settings: [HTTPS, ['-setproxyautodiscovery', 'on']] },
-  { name: 'pac', expect: 'pac', settings: [HTTPS, ['-setautoproxyurl', pacUrl]] },
+  { name: 'pac', settings: [HTTPS, ['-setautoproxyurl', pacUrl]] },
   // Only the HTTPS proxy names a user: what Electron sends through it the Host leaves unresolved, the rest agrees.
   { name: 'authenticated', expect: 'auth', authenticatedProxy: 'PROXY 10.0.0.2:3129',
     settings: [['-setsecurewebproxy', '10.0.0.2', '3129', 'on', 'ci-proxy-user', 'ci-proxy-pass'], HTTP] },
@@ -118,28 +122,41 @@ try {
     await new Promise(resolve => setTimeout(resolve, 2000));
     const sample = await readScutilProxyOutput();
     fs.writeFileSync(path.join(outDir, `scutil-${group.name}.txt`), sample);
-    const session = createMacSystemProxySession(async () => sample);
+    // A new helper per group, started the production way (default launcher and assets, no test switch).
+    const helper = createChromiumProxyHelper({ profileDir: fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-proxy-compare-helper-')) });
+    const session = createMacSystemProxySession(async () => sample, helper);
     const electron = electronResults();
     for (const url of URLS) {
       let host;
-      try {
-        host = await session.resolveProxy(url);
-      } catch (error) {
-        host = `ERROR: ${error.message}`;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          host = await session.resolveProxy(url);
+          break;
+        } catch (error) {
+          host = `ERROR: ${error.message}`;
+          // The helper may still be starting (each answer waits at most 1.8 s): ask again for up to 20 s.
+          if (helper.state() !== 'starting' || attempt >= 20) break;
+        }
       }
       const chromium = electron[url];
       const hostFailed = host.startsWith('ERROR: ');
-      const ok = group.expect === 'pac' ? hostFailed
-        : group.expect === 'auth' ? (chromium === group.authenticatedProxy ? hostFailed : host === chromium)
-          : host === chromium;
+      const ok = group.expect === 'auth' ? (chromium === group.authenticatedProxy ? hostFailed : host === chromium)
+        : host === chromium;
       if (!ok) mismatches += 1;
       report.push({ group: group.name, url, chromium, host, ok });
     }
+    await helper.close();
   }
 } finally {
   resetSettings();
   pacServer.close();
 }
+
+// The helper ran the production way under a PAC URL above: Chromium must not have created its Safe Storage item.
+const keychain = spawnSync('/usr/bin/security', ['find-generic-password', '-s', 'Cindy Proxy Safe Storage'], { encoding: 'utf8' });
+const safeStorageCreated = keychain.status === 0;
+report.push({ group: 'keychain', url: 'Cindy Proxy Safe Storage', chromium: '-', host: safeStorageCreated ? 'present' : 'absent', ok: !safeStorageCreated });
+if (safeStorageCreated) mismatches += 1;
 
 fs.writeFileSync(path.join(outDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
 const table = ['| group | url | Chromium | Host | |', '|---|---|---|---|---|',
