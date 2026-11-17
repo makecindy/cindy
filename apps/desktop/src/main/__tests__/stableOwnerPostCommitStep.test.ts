@@ -100,6 +100,7 @@ function pipeline() {
     authManager: {
       setStableOwnerPostCommitTask: (task: Parameters<typeof coordinator.setTask>[0]) =>
         coordinator.setTask(task),
+      isLocalAssetHandoffPending: () => false,
     },
     isAppSessionBoundaryPending: () => false,
     activeOwnerScopeKey: () => scope,
