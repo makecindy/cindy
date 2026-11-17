@@ -30,6 +30,13 @@ vi.mock('../../model-access/gatewayKeyRejection.js', () => ({ reportCindyGateway
 vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomProviderKey: () => null }));
 vi.mock('../../local-model-runtime/preflight.js', () => ({ ensureManagedOllamaReadyForSession: async () => { throw new Error('no local runtime'); } }));
 vi.mock('../../utility-model/UtilityModelSelection.js', () => ({ getUtilityModelChainProfiles: () => { throw new Error('legacy profile chain read'); } }));
+// This gateway-only fixture has no subscription accounts. Keep the real catalog
+// shared with Host, without loading Desktop's UI/provider-service assembly.
+vi.mock('../createDesktopProviderService.js', async () => {
+  const { getActiveCatalog } = await import('../active-catalog.js');
+  return { getDesktopSelectableCatalog: () => getActiveCatalog() };
+});
+vi.mock('../../subscription-accounts/runtime.js', () => ({ acquireSubscriptionAccount: async () => null }));
 
 import { desktopMakerLogger } from '../logger-adapter.js';
 import { createAutoPermissionReviewer } from '../auto-permission-reviewer.js';
