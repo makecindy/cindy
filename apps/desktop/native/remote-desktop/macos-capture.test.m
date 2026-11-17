@@ -5,6 +5,11 @@
 #undef main
 #import <objc/runtime.h>
 #include <assert.h>
+#include <errno.h>
+#include <spawn.h>
+#include <sys/event.h>
+#include <sys/wait.h>
+extern char **environ;
 
 static NSCursor *unavailableCursor(id receiver, SEL selector) { return nil; }
 static NSCursor *testHand;
@@ -117,7 +122,115 @@ static void testCaptureLifetime(void) {
   puts("PASS capture lifetime: pending start, late setup, stop completion/error, bounded exit");
 }
 
-int main(void) {
+// Regression for the SkyLight first-call deadlock: on some macOS 13 systems
+// (seen on dual-GPU MacBookPro14,3) the first display API call in a process
+// can hang forever inside SkyLight's initDisplayState() — CGDisplayIsOnline()
+// resolves to SLSDisplayStatusQuery, which deadlocks on an internal lock.
+// main() warms up with CGMainDisplayID() first to avoid it. The deadlock is
+// per-process initialization state, so the check must run in a fresh child.
+static void testFirstDisplayQueryDoesNotHang(const char *self) {
+  pid_t pid = 0;
+  const char *args[] = {self, "--display-probe", NULL};
+  // Keep spawn out of assert(): under NDEBUG the assert would drop the call
+  // entirely, leaving pid == 0 and kill(0, ...) would signal the whole
+  // process group instead of just the child.
+  int spawnErr = posix_spawn(&pid, self, NULL, NULL, (char *const *)args, environ);
+  if (spawnErr != 0 || pid <= 0) {
+    fprintf(stderr, "FAIL first display query: spawn failed (%d)\n", spawnErr);
+    exit(1);
+  }
+  // Event-driven bounded wait for the child's exit (kqueue NOTE_EXIT); no
+  // fixed sleeps. The 5s budget is only consumed when the display query
+  // hangs, which is exactly the failure this test exists to catch. All exit
+  // orderings are covered: probe exiting before the registration below is
+  // refused with ESRCH on Darwin and reaped as the healthy fast path; a
+  // probe exiting after registration queues NOTE_EXIT immediately; only a
+  // probe that never exits reaches the budget timeout.
+  int status = 0;
+  int kq = kqueue();
+  if (kq < 0) {
+    fprintf(stderr, "FAIL first display query: kqueue create failed (%d)\n", errno);
+    if (pid > 0) kill(pid, SIGKILL);
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    exit(1);
+  }
+  struct kevent change;
+  EV_SET(&change, pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
+  if (kevent(kq, &change, 1, NULL, 0, NULL) == 0) {
+    struct timespec budget = {5, 0};
+    struct kevent event;
+    int ready;
+    do { // an EINTR retry may only relax the bound marginally; fine for a test.
+      ready = kevent(kq, NULL, 0, &event, 1, &budget);
+    } while (ready < 0 && errno == EINTR);
+    close(kq);
+    if (ready == 0) { // timeout: the display query hung.
+      if (pid > 0) kill(pid, SIGKILL);
+      while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+      fprintf(stderr, "FAIL first display query: fresh process hung\n");
+      exit(1);
+    }
+    if (ready < 0) {
+      int saved = errno;
+      if (pid > 0) kill(pid, SIGKILL);
+      while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+      fprintf(stderr, "FAIL first display query: kevent wait failed (%d)\n", saved);
+      exit(1);
+    }
+  } else if (errno == ESRCH) {
+    // Darwin refuses EVFILT_PROC registration once the probe has already
+    // exited (even before it is reaped), so ESRCH means the healthy fast
+    // path won the race; fall through to reap and verify the exit status.
+    close(kq);
+  } else {
+    int saved = errno;
+    close(kq);
+    if (pid > 0) kill(pid, SIGKILL);
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    fprintf(stderr, "FAIL first display query: kqueue setup failed (%d)\n", saved);
+    exit(1);
+  }
+  pid_t reaped;
+  do { // reap; unlike assert, these checks also hold in NDEBUG builds.
+    reaped = waitpid(pid, &status, 0);
+  } while (reaped < 0 && errno == EINTR);
+  if (reaped != pid) {
+    fprintf(stderr, "FAIL first display query: probe reap failed (%d)\n", errno);
+    exit(1);
+  }
+  // Contract: a bogus display id must make the production display-validation
+  // path fail promptly and never report success. The concrete failure code
+  // is a function of the runtime (2 = argument/display-id rejection at
+  // macos-capture.m:321/335, 3 = TCC denied at :322, 4 = display-stream
+  // symbols absent at :332, 5 = stream creation failure at :500), so the
+  // assertion requires prompt nonzero completion, not a specific status,
+  // and reports the observed status for diagnostics. The probe argv is the
+  // documented two-argument invocation form (accepted at :300), so a
+  // healthy run necessarily traverses the display validation.
+  if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+    printf("PASS first display query: fresh process exits promptly (no SkyLight hang), status %d\n", WEXITSTATUS(status));
+    return;
+  }
+  if (WIFSIGNALED(status))
+    fprintf(stderr, "FAIL first display query: probe died by signal %d\n", WTERMSIG(status));
+  else if (WIFEXITED(status))
+    fprintf(stderr, "FAIL first display query: probe reported success for an unknown display id (status 0)\n");
+  else
+    fprintf(stderr, "FAIL first display query: unexpected probe status %d\n", status);
+  exit(1);
+}
+
+int main(int argc, const char *argv[]) {
+  if (argc == 2 && strcmp(argv[1], "--display-probe") == 0) {
+    // Unknown display id: the production display-validation path must fail
+    // promptly through this documented two-argument invocation without
+    // hanging, exactly as a failed connection attempt does. Which failure
+    // code occurs (2-5) depends on the runtime; the parent asserts prompt
+    // nonzero completion and reports the observed status.
+    const char *probe[] = {"macos-capture", "123456789", NULL};
+    return captureHelperMain(2, probe);
+  }
+  testFirstDisplayQueryDoesNotHang(argv[0]);
   @autoreleasepool {
     testCaptureLifetime();
     testHand = [[NSCursor alloc] initWithImage:[[NSImage alloc] initWithSize:NSMakeSize(16, 16)]

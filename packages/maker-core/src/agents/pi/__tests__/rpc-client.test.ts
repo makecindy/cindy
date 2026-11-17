@@ -328,6 +328,19 @@ describe('PiRpcProcess close semantics (bridge-disconnect vs explicit close)', (
     });
   });
 
+  it('fails a pending get_tree immediately when the transport drops an oversized frame', async () => {
+    const { transport, emitOversized, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+    const pending = proc.request({ type: 'get_tree' });
+    drain();
+    emitOversized();
+    await expect(pending).resolves.toMatchObject({
+      success: false,
+      command: 'get_tree',
+      error: PI_RPC_OVERSIZED_FRAME_ERROR,
+    });
+  });
+
   it('does not fail a lone pending steer when an oversized event frame is dropped', async () => {
     const { transport, emitLine, emitOversized, drain } = makeFakeTransport();
     const { proc } = makeProc({ transport });

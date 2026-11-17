@@ -15,6 +15,7 @@ import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import { CindyMakeTaskCard } from '@/components/cindy-make/CindyMakeTaskCard';
 import { CindyMakeDependencyProgress } from '@/components/cindy-make/CindyMakeDependencyProgress';
+import { DownloadMeter } from '@/components/ui/download-meter';
 import { useCindyMakeState } from '@/lib/cindyMakeState';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import {
@@ -30,6 +31,7 @@ import {
   type MakeUpstreamDecision,
   type MakeUpstreamItem,
 } from '../../../shared/cindyMakeDoctor';
+import appI18n from 'i18next';
 
 export function CindyMakeDoctorCard({
   data,
@@ -484,7 +486,17 @@ export function MakeDoctorReportCard({
                           ` · ${t(`cindyMake.prepare.source.${check.source}`)}`}
                       </span>
                     </div>
-                    {check.status === 'downloading' && check.progress && (
+                    {check.download &&
+                      (check.status === 'downloading' || check.status === 'installing') && (
+                        <div className="ml-5 mt-1">
+                          <DownloadMeter
+                            label={t(`cindyMakeDoctor.checks.${check.id}`)}
+                            progress={check.download}
+                          />
+                        </div>
+                      )}
+                    {/* Reports stored before the shared download progress only carry `progress`. */}
+                    {!check.download && check.status === 'downloading' && check.progress && (
                       <div className="ml-5 mt-1 space-y-1 text-12 text-[var(--text-secondary)]">
                         <p>
                           {t('cindyMake.prepare.downloadProgress', {
@@ -731,7 +743,7 @@ export function MakeDoctorReportCard({
               </Button>
               <Button
                 variant="primary"
-                className="[--button-face-border:var(--border-default)] enabled:hover:[--button-face-border:var(--button-primary-hover)] enabled:active:[--button-face-border:var(--button-primary-pressed)]"
+                className="[--button-face-border:var(--border-default)]"
                 disabled={!onChoose || startingCode}
                 loading={startingCode}
                 onClick={() => onChoose?.('personal')}
@@ -906,7 +918,7 @@ function MakeUpstreamResult({ item }: { item: MakeUpstreamItem }) {
             {t(`cindyMake.upstream.state.${item.state}`)}
             {item.author ? ` · ${t('cindyMake.upstream.author', { author: item.author })}` : ''}
             {item.updatedAt
-              ? ` · ${t('cindyMake.upstream.updated', { date: new Date(item.updatedAt).toLocaleDateString() })}`
+              ? ` · ${t('cindyMake.upstream.updated', { date: new Date(item.updatedAt).toLocaleDateString(appI18n.language) })}`
               : ''}
           </p>
           {item.summary && (

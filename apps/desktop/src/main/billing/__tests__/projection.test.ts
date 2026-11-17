@@ -4,6 +4,7 @@ import {
   projectBillingCatalog,
   projectBillingCurrentSubscription,
   projectBillingOrderList,
+  projectBillingPaymentHistory,
   projectBillingPaymentOrder,
   projectBillingPlanChange,
   projectModelAccessBalance,
@@ -11,6 +12,51 @@ import {
 } from '../projection.js';
 
 const now = '2026-07-23T12:00:00.000Z';
+
+function historyRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    recordId: 'SUBSCRIPTION_INVOICE:invoice_1', sourceType: 'SUBSCRIPTION_INVOICE', sourceId: 'invoice_1',
+    subscriptionId: 'ended-subscription', productName: 'Plus', billingReason: 'subscription_cycle',
+    amountPaidMinor: 1100, amount: '11.00', currency: 'usd', provider: 'stripe', providerTransactionId: 'pi_fixture',
+    paidAt: now, createdAt: now, periodStartAt: now, periodEndAt: '2026-08-23T12:00:00.000Z',
+    refundSummary: { status: 'PARTIALLY_REFUNDED', refundedMinor: 100, refundedAmount: '1.00' },
+    ...overrides,
+  };
+}
+
+describe('paid history projection', () => {
+  it('projects settled invoice data and removes private provider fields', () => {
+    const record = historyRecord();
+    expect(projectBillingPaymentHistory({ records: [{ ...record, providerSnapshot: { private: true } }], nextCursor: 'next_page' }))
+      .toEqual({ records: [record], nextCursor: 'next_page' });
+  });
+
+  it('preserves legacy unknown amounts and payment times', () => {
+    const record = historyRecord({
+      amountPaidMinor: null, amount: null, paidAt: null, productName: null,
+      refundSummary: { status: null, refundedMinor: 100, refundedAmount: '1.00' },
+    });
+    expect(projectBillingPaymentHistory({ records: [record], nextCursor: null }).records).toEqual([record]);
+  });
+
+  it('accepts older history responses without a transaction reference', () => {
+    const record = historyRecord({ providerTransactionId: undefined });
+    expect(projectBillingPaymentHistory({ records: [record], nextCursor: null }).records[0])
+      .toMatchObject({ providerTransactionId: null });
+  });
+
+  it.each([
+    { sourceType: 'UNKNOWN' }, { recordId: 'different-record' }, { paidAt: 'yesterday' },
+    { amount: null }, { amountPaidMinor: -1 }, { providerTransactionId: 123 }, { providerTransactionId: 'x'.repeat(256) },
+    { refundSummary: { status: 'REFUNDED', refundedMinor: -1, refundedAmount: '0' } },
+  ])('fails the entire page rather than silently dropping a malformed paid record: %j', (overrides) => {
+    expect(() => projectBillingPaymentHistory({ records: [historyRecord(), historyRecord(overrides)], nextCursor: null })).toThrow();
+  });
+
+  it('rejects unbounded cursors at the main-process boundary', () => {
+    expect(() => projectBillingPaymentHistory({ records: [], nextCursor: 'x'.repeat(1025) })).toThrow();
+  });
+});
 
 function order(overrides: Record<string, unknown> = {}) {
   return {
@@ -161,6 +207,48 @@ describe('billing response projection', () => {
       scale: 9,
       observedAt: '2026-07-23T12:00:00.123456789Z',
     });
+  });
+
+  // 契约：礼品卡来源越过主进程边界时只保留类型与赠送方；来源只是展示信息，
+  // 认不出或不合规时按没有来源处理，不能让整份余额读取失败。
+  it('keeps a gift card source on a grant and drops sources it cannot vouch for', () => {
+    const grant = (grantId: string, source: unknown) => ({
+      grantId,
+      displayName: null,
+      originalAmount: '1',
+      usedAmount: '0',
+      remainingAmount: '1',
+      expiresAt: '2026-08-01T00:00:00Z',
+      state: 'active',
+      ...(source === undefined ? {} : { source }),
+    });
+    const sources: unknown[] = [
+      { type: 'gift_card', senderName: 'Cindy Team', cardId: 'internal' },
+      undefined,
+      null,
+      { type: 'coupon', senderName: 'Someone' },
+      { type: 'gift_card', senderName: '' },
+      { type: 'gift_card', senderName: 'x'.repeat(81) },
+      { type: 'gift_card' },
+      'gift_card',
+    ];
+    const usage = projectModelAccessCreditUsage({
+      available: String(sources.length),
+      plan: { remaining: '0', used: '0', total: '0' },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: String(sources.length), used: '0', total: String(sources.length) },
+      promotionalGrants: sources.map((source, index) => grant(`grant-${index}`, source)),
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'OBSERVED',
+      ledgerUpdatedAt: null,
+      scale: 9,
+      observedAt: '2026-07-23T12:00:00Z',
+    });
+
+    expect(usage.promotionalGrants[0].source).toEqual({ type: 'gift_card', senderName: 'Cindy Team' });
+    for (const projected of usage.promotionalGrants.slice(1)) {
+      expect(projected).not.toHaveProperty('source');
+    }
   });
 
   it('rejects inconsistent pool identities and dishonest promotional histories', () => {

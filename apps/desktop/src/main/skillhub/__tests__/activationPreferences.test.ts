@@ -1,17 +1,23 @@
+import { configureAppDataDir, configureUserDataDir } from '../../userDataPath';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-skill-preferences-'));
+configureAppDataDir(root);
+configureUserDataDir(root);
 vi.mock('electron', () => ({ app: { getPath: () => root } }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
 beforeAll(async () => {
   const bundledRoot = path.join(root, 'bundled');
-  for (const name of ['cindy-skill-creator', 'learn', 'cindy-plugin-creator']) {
+  for (const name of ['cindy-skill-creator', 'learn', 'cindy-plugin-creator', 'cindy-theme-creator']) {
     fs.mkdirSync(path.join(bundledRoot, name), { recursive: true });
     fs.writeFileSync(path.join(bundledRoot, name, 'SKILL.md'), `# ${name}\n`);
   }
+  // The bundle version is counted from its record files; a bundle without one is refused.
+  fs.mkdirSync(path.join(bundledRoot, '_versions'));
+  fs.writeFileSync(path.join(bundledRoot, '_versions', 'fixture.md'), 'fixture bundle\n');
   const { prepareBuiltInSkills } = await import('../../maker-host/built-in-skills');
   const result = await prepareBuiltInSkills({
     userDataDir: root, appDataDir: root, homeDir: path.join(root, 'fixture-home'), bundledRoot,
@@ -74,6 +80,9 @@ describe('Skill activation preferences', () => {
     await expect(setCindySkillEnabled(a, false, () => false)).rejects.toThrow('context changed');
     expect(isCindySkillEnabled(a)).toBe(true);
     vi.resetModules();
+    const paths = await import('../../userDataPath');
+    paths.configureAppDataDir(root);
+    paths.configureUserDataDir(root);
     const reloaded = await import('../activationPreferences');
     expect(reloaded.isCindySkillEnabled(b)).toBe(false);
     await reloaded.setCindySkillEnabled(b, true);
@@ -217,6 +226,9 @@ describe('Skill activation preferences', () => {
     fs.symlinkSync(source, alias, process.platform === 'win32' ? 'junction' : 'dir');
     await prefs.setCindySkillEnabled(source, false, () => true, [alias]);
     vi.resetModules();
+    const paths = await import('../../userDataPath');
+    paths.configureAppDataDir(root);
+    paths.configureUserDataDir(root);
     const reloaded = await import('../activationPreferences');
     const { piDisabledDiscoveryPaths, applyPiDisabledSkillSettings } = await import(
       '../../../../../../packages/maker-core/src/agents/pi/skill-activation');

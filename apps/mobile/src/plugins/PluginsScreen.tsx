@@ -69,6 +69,8 @@ import {
   isMobileAuthOwnerCurrent,
 } from "@/auth/authOwnerGeneration";
 import { PluginOriginalSettings } from "./PluginOriginalSettings";
+import { PluginTaskSettings } from "./PluginTaskSettings";
+import { PluginReadmePage } from "./PluginReadmePage";
 import { usePluginManagement } from "./usePluginManagement";
 import { PluginManagementMenu } from "./PluginManagementMenu";
 import { PluginManagementConfirmation } from "./PluginManagementConfirmation";
@@ -144,6 +146,7 @@ function PluginDirectory() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailFailed, setDetailFailed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [readmeOpen, setReadmeOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const enableLock = useRef(false);
@@ -255,14 +258,17 @@ function PluginDirectory() {
     pageBack.current = handler;
   }, []);
   const goBack = useCallback(() => {
-    if (settingsOpen) setSettingsOpen(false);
+    if (readmeOpen) setReadmeOpen(false);
+    else if (settingsOpen) setSettingsOpen(false);
     else if (detailOpen && selected?.surface) setDetailOpen(false);
     else if (selected?.surface && pageBack.current) pageBack.current();
     else if (selected && !wide) {
       detailGeneration.current += 1;
       setSelected(undefined);
     } else goBackGuarded(router);
-  }, [detailOpen, settingsOpen, selected, wide, router]);
+  }, [detailOpen, readmeOpen, settingsOpen, selected, wide, router]);
+  // The introduction belongs to one plugin's detail page.
+  useEffect(() => setReadmeOpen(false), [selected?.row.key, detailOpen]);
   useEffect(() => {
     if (!focused || !selected || wide) return;
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -942,6 +948,29 @@ function PluginDirectory() {
     }
   };
   const noticeOwner = getMobileAuthOwner();
+  const originalSettingsContent = selected && originalSettings && managed ? (
+    <PluginOriginalSettings
+      key={JSON.stringify([selected.row.host.deviceId, managed.instanceKey, pluginApprovalToken(managed), connectionEpoch])}
+      identity={{
+        deviceId: selected.row.host.deviceId,
+        instanceId: managed.instanceKey,
+        expectedInstalledApproval: pluginApprovalToken(managed),
+      }}
+      active={focused && online && detailOpen && !managementPending}
+      onNotice={(notice) => {
+        if (
+          renderedGeneration === detailGeneration.current &&
+          liveSelection.current.key === selected.row.key &&
+          liveSelection.current.focused &&
+          isMobileAuthOwnerCurrent(noticeOwner)
+        )
+          showSettingsNotice(notice);
+      }}
+    />
+  ) : undefined;
+  const taskSettingsAvailable = model?.taskPreferences && managed?.approval.state === "approved" &&
+    managed.enabled && enabled && online && focused && detailOpen && !busy &&
+    managementAvailable && !detailLoading && !detailFailed;
   const detailView =
     selected && model ? (
       <PluginDetailView
@@ -969,30 +998,17 @@ function PluginDirectory() {
             : undefined
         }
         settingsContent={
-          originalSettings && managed ? (
-            <PluginOriginalSettings
-              key={JSON.stringify([
-                selected.row.host.deviceId,
-                managed.instanceKey,
-                pluginApprovalToken(managed),
-                connectionEpoch,
-              ])}
-              identity={{
-                deviceId: selected.row.host.deviceId,
-                instanceId: managed.instanceKey,
-                expectedInstalledApproval: pluginApprovalToken(managed),
-              }}
-              active={focused && online && detailOpen && !managementPending}
-              onNotice={(notice) => {
-                if (
-                  renderedGeneration === detailGeneration.current &&
-                  liveSelection.current.key === selected.row.key &&
-                  liveSelection.current.focused &&
-                  isMobileAuthOwnerCurrent(noticeOwner)
-                )
-                  showSettingsNotice(notice);
-              }}
-            />
+          originalSettingsContent || (taskSettingsAvailable && managed) ? (
+            <View style={{ gap: spacing.lg }}>
+              {taskSettingsAvailable && managed ? (
+                <PluginTaskSettings
+                  key={JSON.stringify(["tasks", selected.row.host.deviceId, managed.instanceKey, pluginApprovalToken(managed), connectionEpoch])}
+                  deviceId={selected.row.host.deviceId}
+                  pluginId={managed.instanceKey}
+                />
+              ) : null}
+              {originalSettingsContent}
+            </View>
           ) : undefined
         }
         settingsOpen={settingsOpen}
@@ -1000,6 +1016,7 @@ function PluginDirectory() {
           if (model.canToggle) void enable(value);
         }}
         onOpen={(surface) => open(selected.row, surface)}
+        onOpenReadme={model.readme ? () => setReadmeOpen(true) : undefined}
         onNewTask={() => newTask()}
         onChooseTask={() => {
           if (model.canUseTasks && !busy) setTaskPicker(true);
@@ -1017,7 +1034,8 @@ function PluginDirectory() {
       <SimpleStackHeader
         title={
           selected && !wide
-            ? (settingsOpen && t("plugins.settings")) ||
+            ? (readmeOpen && t("plugins.detail.readme")) ||
+              (settingsOpen && t("plugins.settings")) ||
               (!detailOpen && selected.surface && pageTitle) ||
               text(selected.row.item.display.title)
             : t("plugins.title")
@@ -1112,7 +1130,17 @@ function PluginDirectory() {
                 />
               </View>
             ) : null}
-            {!selected?.surface || detailOpen ? detailView : null}
+            {!selected?.surface || detailOpen
+              ? readmeOpen && selected
+                ? (
+                    <PluginReadmePage
+                      key={selected.row.key}
+                      deviceId={selected.row.host.deviceId}
+                      pluginId={selected.row.item.ref.id}
+                    />
+                  )
+                : detailView
+              : null}
             {settingsNotice && transientScope.current === noticeScope ? (
               <View pointerEvents="none" style={styles.toast}>
                 <PluginNotice

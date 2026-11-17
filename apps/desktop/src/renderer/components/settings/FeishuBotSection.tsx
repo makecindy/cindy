@@ -1,3 +1,4 @@
+import { imBotSettings } from './ImBotSection.settings-search';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, Trash2, Check, RefreshCw, Link } from 'lucide-react';
@@ -116,8 +117,8 @@ export function FeishuBotSection({
 
   return (
     <ImChannelSettingsCard
-      id="personal-im-feishu"
-      title={t('settings.feishuBot.title')}
+      id={imBotSettings.feishu.targetId}
+      title={t(imBotSettings.feishu.titleKey)}
       description={t('settings.feishuBot.description')}
       routeSummary={
         routeSummary
@@ -298,7 +299,7 @@ function SavedCredentialsCard(props: {
       </div>
       <div className="flex flex-wrap items-center gap-2 pt-1">
         {!hasError && reconnectButton}
-        <Button
+        <Button data-settings-search-action="Clear the failed bot connection"
           tone="quiet"
           size="sm"
           loading={props.isClearing}
@@ -340,7 +341,7 @@ function ManualConfig(props: {
         >
           {t('settings.feishuBot.serviceLabel')}
         </legend>
-        <SegmentedControl
+        <SegmentedControl data-setting-id={imBotSettings.feishu.id}
           aria-label={t('settings.feishuBot.serviceAria')}
           value={props.service}
           onValueChange={props.setService}
@@ -360,7 +361,7 @@ function ManualConfig(props: {
       >
         {t('settings.feishuBot.appIdLabel')}
       </label>
-      <input
+      <input data-setting-id={imBotSettings.feishu.id}
         type="text"
         value={props.appId}
         onChange={(e) => props.setAppId(e.target.value)}
@@ -383,7 +384,7 @@ function ManualConfig(props: {
         {t('settings.feishuBot.appSecretLabel')}
       </label>
       <div className="relative">
-        <input
+        <input data-setting-id={imBotSettings.feishu.id}
           type={props.showSecret ? 'text' : 'password'}
           value={props.appSecret}
           onChange={(e) => props.setAppSecret(e.target.value)}
@@ -398,7 +399,7 @@ function ManualConfig(props: {
           )}
           style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
         />
-        <button
+        <button data-settings-search-action="Reveal or conceal the entered secret"
           type="button"
           onClick={() => props.setShowSecret(!props.showSecret)}
           className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
@@ -427,7 +428,7 @@ function ManualConfig(props: {
               className="text-12 text-[var(--settings-source-meta)]"
               style={{ letterSpacing: '0.12px' }}
             >
-              <button
+              <button data-settings-search-action="Open the bot setup guide"
                 type="button"
                 onClick={props.onOpenLauncher}
                 className="cursor-pointer bg-transparent p-0 font-medium text-[var(--settings-source-link)] underline decoration-[var(--settings-source-link)] decoration-1 underline-offset-2"
@@ -442,7 +443,7 @@ function ManualConfig(props: {
         </div>
       </div>
 
-      <Button
+      <Button data-settings-search-action="Save the bot connection form"
         variant="cta"
         size="lg"
         loading={props.isSaving}

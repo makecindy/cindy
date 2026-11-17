@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import type { TelegramHistoryImageRef } from '@cindy/im';
-import { resolveSafe } from '../../cindy-media/blobStore';
+import { resolveSafe } from '../../cindy-media/blobStore.desktop';
 import { getBlobInfo } from '../../cindy-media/ledger';
 import { integrationCacheGet, integrationCachePut } from '../../cindy-media/integrationCache';
 import { getCurrentDbClientSnapshot } from '../../localDb/client/current';

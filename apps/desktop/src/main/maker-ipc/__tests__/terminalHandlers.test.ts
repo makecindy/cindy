@@ -12,10 +12,8 @@ vi.mock('electron', () => ({
   ipcMain: { handle: mocks.ipcHandle },
 }));
 
-vi.mock('../../terminal/ptyManager.js', () => ({
-  PtyManager: class {
-    create = mocks.managerCreate;
-  },
+vi.mock('../../terminal/terminalService.desktop.js', () => ({
+  getDesktopHostTerminalService: () => ({ bindUi: vi.fn(), manager: { create: mocks.managerCreate } }),
 }));
 
 vi.mock('../../terminal/shellResolver.js', () => ({

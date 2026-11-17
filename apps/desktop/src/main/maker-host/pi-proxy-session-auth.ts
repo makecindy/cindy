@@ -8,12 +8,14 @@
  */
 
 import { timingSafeEqual } from 'node:crypto';
+import type { NativeSubscriptionAccount } from '@cindy/maker-core';
 
 interface ActivePiProxySession {
   token: string;
   controller: AbortController;
   resolveProviderId: () => string | null;
   scope: 'session' | 'subagent-route';
+  nativeSubscriptionAccount?: NativeSubscriptionAccount;
 }
 
 const activeSessions = new Map<string, Map<string, ActivePiProxySession>>();
@@ -40,7 +42,7 @@ export function registerPiProxySession(
   sessionId: string,
   token: string,
   resolveProviderId: () => string | null = () => null,
-  options: { scope?: 'session' | 'subagent-route' } = {},
+  options: { scope?: 'session' | 'subagent-route'; nativeSubscriptionAccount?: NativeSubscriptionAccount } = {},
 ): () => void {
   if (!sessionId || !token)
     throw new Error('Pi proxy session registration requires an id and token');
@@ -48,6 +50,7 @@ export function registerPiProxySession(
     token,
     controller: new AbortController(),
     resolveProviderId,
+    nativeSubscriptionAccount: options.nativeSubscriptionAccount,
     scope: options.scope === 'subagent-route' ? 'subagent-route' as const : 'session' as const,
   };
   const registrations = activeSessions.get(sessionId) ?? new Map();
@@ -70,6 +73,12 @@ export function authenticatePiProxySession(sessionId: string, candidate: string 
 /** Lifetime of the exact authenticated runtime, including separately scoped children. */
 export function getPiProxySessionSignal(sessionId: string, candidate: string | null): AbortSignal | null {
   return findPiProxySession(sessionId, candidate)?.controller.signal ?? null;
+}
+
+export function getPiProxySubscriptionAccount(sessionId: string, candidate: string | null): NativeSubscriptionAccount | undefined {
+  const account = findPiProxySession(sessionId, candidate)?.nativeSubscriptionAccount;
+  account?.assertCurrent();
+  return account;
 }
 
 /**

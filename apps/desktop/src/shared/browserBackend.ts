@@ -84,7 +84,11 @@ export type BrowserBackendHealthReason =
   /** user-browser:提供页面控制的插件已启用,但浏览器扩展尚未连接。 */
   | 'extension-disconnected'
   /** user-browser:没有已安装并启用的页面控制插件。 */
-  | 'plugin-missing';
+  | 'plugin-missing'
+  /** user-browser:尚未连接,且这台电脑上找不到 Chrome / Edge 等可装扩展的浏览器。 */
+  | 'browser-missing'
+  | 'plugin-updating'
+  | 'plugin-selection-required';
 
 /**
  * 「我的浏览器」推荐安装的页面控制插件(官方 Cindy Chrome)。任何声明

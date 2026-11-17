@@ -1,6 +1,6 @@
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { subscriptionAccountKind } from './subscription-account-auth.js';
-import { getGrokAccessToken, peekGrokAccessToken, hasGrokOAuthLogin } from './grok-oauth-login.js';
+import { getGrokAccessToken, peekGrokAccessToken, hasGrokOAuthLogin } from './grok-oauth-login.desktop.js';
 import { refreshXaiModelsFromHttp } from './model-discovery/xai.js';
 import { setXaiDiscoveredModels } from './active-catalog.js';
 import { invalidateXaiBridgeAuth } from './xai-auth-invalidation-host.js';

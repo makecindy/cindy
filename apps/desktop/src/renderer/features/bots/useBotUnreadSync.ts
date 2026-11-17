@@ -1,48 +1,64 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
-import { refreshBotProfiles, useBotProfiles } from './botStore';
+import { getBotProfiles, refreshBotProfiles, useBotProfiles } from './botStore';
 import { subscribeBotReadState } from './botReadState';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { startBotGroupSync } from './botGroupStore';
-import { startBotGroupOutbox } from './botGroupOutbox';
 
-/** Main-window lifetime: entering a section is never a read receipt. */
+/** Per-window list mirrors; entering a section is never a read receipt. */
 export function useBotUnreadSync(): void {
   const bots = useBotProfiles();
   const owner = getDataOwnerGeneration();
   const running = useSyncExternalStore(makerChatStore.subscribeAll, makerChatStore.getRunningSnapshot, makerChatStore.getRunningSnapshot);
   const runningBots = bots.flatMap(bot => bot.sessions.filter(session => running.get(session.id)?.isRunning).map(session => session.id)).sort().join(',');
-  // Final seals patch an existing message; they need not emit messages:created.
-  useEffect(() => { refreshBotProfiles(); }, [runningBots, owner]);
+  const scheduledRefresh = useRef<(() => void) | null>(null);
+  const lastMountedOwner = useRef<typeof owner | null>(null);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = () => {
       if (!isDataOwnerGenerationCurrent(owner) || timer) return;
-      timer = setTimeout(() => { timer = undefined; refreshBotProfiles(); }, 120);
+      timer = setTimeout(() => {
+        timer = undefined;
+        if (isDataOwnerGenerationCurrent(owner)) refreshBotProfiles();
+      }, 120);
     };
-    refreshBotProfiles();
+    scheduledRefresh.current = refresh;
     const maker = window.electronAPI?.maker;
     const subscriptions = [
       maker?.onBotProfileChanged?.(refresh),
       maker?.onBotLifecycleChanged?.((_payload, stamp) => { if (isDataOwnerPushCurrent(stamp)) refresh(); }),
       subscribeBotReadState(refresh),
       startBotGroupSync(),
-      startBotGroupOutbox(),
+      window.electronAPI?.localDb?.messages?.onCreated?.((payload, stamp) => {
+        if (!isDataOwnerPushCurrent(stamp) || !isDataOwnerGenerationCurrent(owner)) return;
+        // During a live turn only sealed replies enter the preview. Its state
+        // transition above refreshes again after the final seal. Unknown/stopped
+        // sessions still refresh: late tool rows can change legacy visibility.
+        const role = payload.message?.role;
+        if ((role === 'tool_use' || role === 'tool_result' || role === 'thinking')
+          && makerChatStore.getRunningSnapshot().get(payload.sessionId)?.isRunning) return;
+        // Read current membership without tying the subscription or its pending
+        // refresh to a profile array that an older list request may replace.
+        if (getBotProfiles().some(bot => bot.sessions.some(session => session.id === payload.sessionId))) refresh();
+      }),
     ];
     window.addEventListener('focus', refresh);
     return () => {
+      if (scheduledRefresh.current === refresh) scheduledRefresh.current = null;
       if (timer) clearTimeout(timer);
       subscriptions.forEach(unsubscribe => unsubscribe?.());
       window.removeEventListener('focus', refresh);
     };
   }, [owner]);
+  // Final seals patch an existing message; they need not emit messages:created.
+  // They share the 120 ms event window so a seal plus its message is one refresh.
+  // Initial entry/account changes still load immediately.
   useEffect(() => {
-    const ids = new Set(bots.flatMap(bot => bot.sessions.map(session => session.id)));
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const unsubscribe = window.electronAPI?.localDb?.messages?.onCreated?.((payload, stamp) => {
-      if (!isDataOwnerPushCurrent(stamp) || !isDataOwnerGenerationCurrent(owner) || !ids.has(payload.sessionId) || timer) return;
-      timer = setTimeout(() => { timer = undefined; refreshBotProfiles(); }, 120);
-    });
-    return () => { if (timer) clearTimeout(timer); unsubscribe?.(); };
-  }, [bots, owner]);
+    if (lastMountedOwner.current !== owner) {
+      lastMountedOwner.current = owner;
+      refreshBotProfiles();
+    } else {
+      scheduledRefresh.current?.();
+    }
+  }, [runningBots, owner]);
 }

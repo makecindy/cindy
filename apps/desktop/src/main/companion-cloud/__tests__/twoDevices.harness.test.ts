@@ -134,6 +134,15 @@ async function createDevice(name: string, peers: () => DeviceLinkDeviceView[], o
 
   let selfDeviceId = '';
   let humanActorId = '';
+  let storeOffered = false;
+  /** Bucket transfers as chatServerMedia does them (the local server signs loopback URLs). */
+  const transfer = {
+    putBlob: async (url: string, type: string, bytes: Buffer) => {
+      const response = await fetch(url, { method: 'PUT', headers: { 'Content-Type': type }, body: new Uint8Array(bytes) });
+      if (!response.ok) throw Object.assign(new Error('MEDIA_UPLOAD_FAILED'), { status: response.status });
+    },
+    getBlob: async (url: string) => Buffer.from(await (await fetch(url)).arrayBuffer()),
+  };
   let actors: CompanionRuntimeActor[] = [];
   let runtime: CompanionCloudRuntime;
   const publish = () => {
@@ -160,14 +169,16 @@ async function createDevice(name: string, peers: () => DeviceLinkDeviceView[], o
       bots: () => actors.filter(actor => actor.kind === 'bot' && !actor.disabled && actor.homeDeviceId === selfDeviceId
         && profiles.get(actor.externalId)?.status === 'active' && !runtime.isShadowed(actor.externalId))
         .map(actor => ({ botId: actor.externalId, actorId: actor.id, name: actor.name })),
-      actors: () => actors, refresh, publish, initialKick: false, uploadIntervalMs: 3_600_000, mirrorIntervalMs: 3_600_000 });
+      actors: () => actors, refresh, publish, initialKick: false, uploadIntervalMs: 3_600_000, mirrorIntervalMs: 3_600_000,
+      store: { enabled: () => storeOffered, transfer } });
   };
-  const me = await api<{ actor: { id: string }; deviceId: string }>('/me');
+  const me = await api<{ actor: { id: string }; deviceId: string; capabilities?: { companionStore?: number } }>('/me');
+  storeOffered = me.capabilities?.companionStore === 1;
   humanActorId = me.actor.id;
   selfDeviceId = me.deviceId;
   start();
   return {
-    name, api, calls, deliver: host.deliverToCanonical, profiles, memories, skills, sessions, rows, deliveries, rebuilds, homes, addRow, ensureSession, visible, refresh,
+    name, api, calls, storeOffered, deliver: host.deliverToCanonical, profiles, memories, skills, sessions, rows, deliveries, rebuilds, homes, addRow, ensureSession, visible, refresh,
     get runtime() { return runtime; },
     get humanActorId() { return humanActorId; },
     actor: (botId: string) => actors.find(actor => actor.kind === 'bot' && actor.externalId === botId),
@@ -337,6 +348,33 @@ describe.skipIf(!BASE)('cloud companions against a real chat-server (two devices
     expect(laptop.homes.snapshot().actors.some(actor => actor.externalId === BOT)).toBe(false);
     const retired = (await laptop.api<Array<{ id: string; disabled: boolean }>>('/actors')).find(actor => actor.id === actorId);
     expect(retired?.disabled).toBe(true);
+    macmini.stop();
+    laptop.stop();
+  });
+
+  it('takes memories too large for the preferences to the other computer when the server keeps them', { timeout: 60_000 }, async () => {
+    const bot = `bot_e2e_big_${randomUUID().slice(0, 8)}`;
+    const macmini = await createDevice('macmini', () => [eligible('laptop')]);
+    const laptop = await createDevice('laptop', () => [eligible('macmini')]);
+    // Over the preferences' 64 KiB, and over the store's inline limit (through the bucket).
+    const large = `---\ntitle: Notes\n---\n${'meeting notes '.repeat(7_000)}`;
+    const huge = `---\ntitle: Archive\n---\n${'archived conversation '.repeat(15_000)}`;
+    macmini.profiles.set(bot, { status: 'active', displayName: 'E2E Big', description: '', soul: 'big', user: '', systemPrompt: '' });
+    macmini.memories.set(bot, new Map([['small.md', 'fits'], ['large.md', large], ['huge.md', huge]]));
+    await macmini.refresh();
+    await macmini.runtime.syncNow();
+    await laptop.refresh();
+    expect(await laptop.runtime.takeOver(bot)).toEqual({ ok: true });
+    const arrived = laptop.memories.get(bot)!;
+    expect(arrived.get('small.md')).toBe('fits');
+    if (macmini.storeOffered) {
+      expect(arrived.get('large.md')).toBe(large);
+      expect(arrived.get('huge.md')).toBe(huge);
+    } else {
+      // Store switched off: the old behaviour, large values stay on the computer they were written on.
+      expect(arrived.has('large.md')).toBe(false);
+      expect(arrived.has('huge.md')).toBe(false);
+    }
     macmini.stop();
     laptop.stop();
   });

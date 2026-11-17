@@ -37,7 +37,7 @@ vi.mock('../index', () => ({ remoteInvoke }));
 const downloadToBuffer = vi.hoisted(() => vi.fn());
 const openMediaStream = vi.hoisted(() => vi.fn());
 const removeRemote = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('../mediaTransfer', () => ({ downloadToBuffer, openMediaStream, removeRemote }));
+vi.mock('../mediaTransfer.desktop', () => ({ downloadToBuffer, openMediaStream, removeRemote }));
 
 const lookup = vi.hoisted(() => vi.fn());
 const recordLocal = vi.hoisted(() => vi.fn());
@@ -65,7 +65,7 @@ vi.mock('../../file-browser/ssh-media', () => ({ serveSshRemoteMedia }));
 // cindy-media 本地优先短路的依赖:blobStore 解析、ledger LRU 刷新、fs 读盘。
 // 默认(beforeEach)设为「本机无此 blob」,既有远程管线用例语义不变。
 const blobResolveSafe = vi.hoisted(() => vi.fn());
-vi.mock('../../cindy-media/blobStore', () => ({ resolveSafe: blobResolveSafe }));
+vi.mock('../../cindy-media/blobStore.desktop', () => ({ resolveSafe: blobResolveSafe }));
 const touchBlob = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../../cindy-media/ledger', () => ({ touchBlob, hasNonCacheBlob: vi.fn(async () => true) }));
 const fsReadFile = vi.hoisted(() => vi.fn());

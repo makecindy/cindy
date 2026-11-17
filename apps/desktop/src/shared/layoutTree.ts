@@ -65,6 +65,8 @@ export type PaneNode = {
   collapsed?: boolean;
   /** 面板最小宽度(px)。chat-main 默认 400,见 createDefaultLayout。 */
   minWidth?: number;
+  /** Explicit user-chosen width in CSS pixels; absent until the user resizes a pane. */
+  preferredWidth?: number;
 };
 
 /** 分割节点:往某个方向切一刀,children 的 fraction 为该方向上的占比。 */
@@ -251,6 +253,11 @@ function validateNodeShape(
       !(Number.isFinite(node.minWidth) && (node.minWidth as number) > 0)
     ) {
       return { ok: false, reason: 'minWidth must be a positive finite number' };
+    }
+    if (node.preferredWidth !== undefined &&
+        !(Number.isFinite(node.preferredWidth) && (node.preferredWidth as number) >= 120 &&
+          (node.preferredWidth as number) <= 16000)) {
+      return { ok: false, reason: 'preferredWidth must be between 120 and 16000' };
     }
     panes.push(node as unknown as PaneNode);
     return { ok: true };

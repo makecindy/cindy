@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   DEFAULT_AGENT_ISLAND_DISPLAY_TARGET,
+  DEFAULT_AGENT_ISLAND_LIVE_ACTIVITY,
   DEFAULT_AGENT_ISLAND_MASCOT_SKIN,
   DEFAULT_AGENT_ISLAND_SOUND_SETTINGS,
   cloneAgentIslandDisplayTarget,
@@ -31,13 +32,27 @@ const STORAGE_KEY = 'notifications.agentIslandEnabled';
 const SOUND_STORAGE_KEY = 'notifications.agentIslandSoundSettings';
 const MASCOT_SKIN_STORAGE_KEY = 'notifications.agentIslandMascotSkin';
 const DISPLAY_TARGET_STORAGE_KEY = 'notifications.agentIslandDisplayTarget';
+const SUBTLE_REMINDERS_STORAGE_KEY = 'notifications.agentIslandSubtleReminders';
+/** Present only when the user overrode the default (on). */
+const LIVE_ACTIVITY_STORAGE_KEY = 'notifications.agentIslandLiveActivity';
 const DEFAULT_ENABLED = false;
+const DEFAULT_SUBTLE_REMINDERS = false;
 
 const log = createLogger('AgentIslandSettings');
 const subscribers = new Set<() => void>();
 
 function notifySubscribers(): void {
   for (const cb of subscribers) cb();
+}
+
+/** Observe preferences without syncing native state or loading display options. */
+export function subscribeAgentIslandSettings(onChange: () => void): () => void {
+  subscribers.add(onChange);
+  window.addEventListener('storage', onChange);
+  return () => {
+    subscribers.delete(onChange);
+    window.removeEventListener('storage', onChange);
+  };
 }
 
 function persistAgentIslandDisplayTargetLocally(target: AgentIslandDisplayTarget): void {
@@ -81,6 +96,127 @@ export function getAgentIslandEnabled(): boolean {
     // localStorage 不可用——退回默认。
   }
   return DEFAULT_ENABLED;
+}
+
+export function getAgentIslandSubtleReminders(): boolean {
+  try {
+    const raw = localStorage.getItem(SUBTLE_REMINDERS_STORAGE_KEY);
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+  } catch {
+    // localStorage 不可用时使用当前默认值。
+  }
+  return DEFAULT_SUBTLE_REMINDERS;
+}
+
+function isAgentIslandSubtleRemindersCustomized(): boolean {
+  try {
+    return localStorage.getItem(SUBTLE_REMINDERS_STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+async function applyAgentIslandSubtleRemindersToMain(enabled: boolean): Promise<boolean> {
+  if (!isAgentIslandSupported()) return false;
+  const apply = window.electronAPI?.agentIsland?.setSubtleReminders;
+  if (typeof apply !== 'function') return false;
+  try {
+    await apply(enabled);
+    return true;
+  } catch (err) {
+    log.warn('agent island setSubtleReminders failed', err);
+    return false;
+  }
+}
+
+export async function setAgentIslandSubtleReminders(next: boolean): Promise<boolean> {
+  return updateAgentIslandSubtleRemindersOverride(next);
+}
+
+export async function resetAgentIslandSubtleReminders(): Promise<boolean> {
+  return updateAgentIslandSubtleRemindersOverride(null);
+}
+
+async function updateAgentIslandSubtleRemindersOverride(next: boolean | null): Promise<boolean> {
+  const previous = getAgentIslandSubtleReminders();
+  if (!await applyAgentIslandSubtleRemindersToMain(next ?? DEFAULT_SUBTLE_REMINDERS)) return false;
+  try {
+    if (next === null) localStorage.removeItem(SUBTLE_REMINDERS_STORAGE_KEY);
+    else localStorage.setItem(SUBTLE_REMINDERS_STORAGE_KEY, String(next));
+  } catch {
+    await applyAgentIslandSubtleRemindersToMain(previous);
+    return false;
+  }
+  notifySubscribers();
+  return true;
+}
+
+export function getAgentIslandLiveActivity(): boolean {
+  try {
+    const raw = localStorage.getItem(LIVE_ACTIVITY_STORAGE_KEY);
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+  } catch {
+    // localStorage 不可用时使用当前默认值。
+  }
+  return DEFAULT_AGENT_ISLAND_LIVE_ACTIVITY;
+}
+
+function isAgentIslandLiveActivityCustomized(): boolean {
+  try {
+    return localStorage.getItem(LIVE_ACTIVITY_STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+async function applyAgentIslandLiveActivityToMain(enabled: boolean): Promise<boolean> {
+  if (!isAgentIslandSupported()) return false;
+  const apply = window.electronAPI?.agentIsland?.setLiveActivity;
+  if (typeof apply !== 'function') return false;
+  try {
+    await apply(enabled);
+    return true;
+  } catch (err) {
+    log.warn('agent island setLiveActivity failed', err);
+    return false;
+  }
+}
+
+export async function setAgentIslandLiveActivity(next: boolean): Promise<boolean> {
+  return updateAgentIslandLiveActivityOverride(next);
+}
+
+export async function resetAgentIslandLiveActivity(): Promise<boolean> {
+  return updateAgentIslandLiveActivityOverride(null);
+}
+
+async function updateAgentIslandLiveActivityOverride(next: boolean | null): Promise<boolean> {
+  const previous = getAgentIslandLiveActivity();
+  if (!await applyAgentIslandLiveActivityToMain(next ?? DEFAULT_AGENT_ISLAND_LIVE_ACTIVITY)) return false;
+  try {
+    if (next === null) localStorage.removeItem(LIVE_ACTIVITY_STORAGE_KEY);
+    else localStorage.setItem(LIVE_ACTIVITY_STORAGE_KEY, String(next));
+  } catch {
+    await applyAgentIslandLiveActivityToMain(previous);
+    return false;
+  }
+  notifySubscribers();
+  return true;
+}
+
+/** Whether this Mac can show Cindy as a Live Activity (macOS 27.3+, addon shipped). */
+export async function loadAgentIslandLiveActivitySupport(): Promise<boolean> {
+  if (!isAgentIslandSupported()) return false;
+  const getSupport = window.electronAPI?.agentIsland?.getLiveActivitySupport;
+  if (typeof getSupport !== 'function') return false;
+  try {
+    return (await getSupport()).supported === true;
+  } catch (err) {
+    log.warn('agent island getLiveActivitySupport failed', err);
+    return false;
+  }
 }
 
 export function getAgentIslandSoundSettings(): AgentIslandSoundSettings {
@@ -250,6 +386,8 @@ export function syncAgentIslandEnabledToMain(): void {
   if (!isAgentIslandSupported()) return;
   void (async () => {
     await Promise.all([
+      applyAgentIslandSubtleRemindersToMain(getAgentIslandSubtleReminders()),
+      applyAgentIslandLiveActivityToMain(getAgentIslandLiveActivity()),
       applyAgentIslandSoundSettingsToMain(getAgentIslandSoundSettings()),
       applyAgentIslandMascotSkinToMain(getAgentIslandMascotSkin()),
       applyAgentIslandDisplayTargetToMain(getAgentIslandDisplayTarget()),
@@ -358,6 +496,15 @@ export function previewAgentIslandSound(sound: AgentIslandSoundChoice): void {
 export function useAgentIslandSettings(): {
   enabled: boolean;
   setEnabled: (next: boolean) => void;
+  subtleReminders: boolean;
+  subtleRemindersCustomized: boolean;
+  setSubtleReminders: (next: boolean) => Promise<boolean>;
+  resetSubtleReminders: () => Promise<boolean>;
+  liveActivity: boolean;
+  liveActivityCustomized: boolean;
+  liveActivitySupported: boolean;
+  setLiveActivity: (next: boolean) => Promise<boolean>;
+  resetLiveActivity: () => Promise<boolean>;
   soundSettings: AgentIslandSoundSettings;
   soundCustomized: boolean;
   mascotSkin: AgentIslandMascotSkin;
@@ -373,6 +520,11 @@ export function useAgentIslandSettings(): {
   supported: boolean;
 } {
   const [enabled, setEnabledState] = useState<boolean>(getAgentIslandEnabled);
+  const [subtleReminders, setSubtleRemindersState] = useState(getAgentIslandSubtleReminders);
+  const [subtleRemindersCustomized, setSubtleRemindersCustomizedState] = useState(isAgentIslandSubtleRemindersCustomized);
+  const [liveActivity, setLiveActivityState] = useState(getAgentIslandLiveActivity);
+  const [liveActivityCustomized, setLiveActivityCustomizedState] = useState(isAgentIslandLiveActivityCustomized);
+  const [liveActivitySupported, setLiveActivitySupported] = useState(false);
   const [soundSettings, setSoundSettingsState] = useState<AgentIslandSoundSettings>(getAgentIslandSoundSettings);
   const [soundCustomized, setSoundCustomizedState] = useState<boolean>(isAgentIslandSoundSettingsCustomized);
   const [mascotSkin, setMascotSkinState] = useState<AgentIslandMascotSkin>(getAgentIslandMascotSkin);
@@ -461,24 +613,43 @@ export function useAgentIslandSettings(): {
   }, [supported]);
 
   useEffect(() => {
+    if (!supported) return;
+    let cancelled = false;
+    void loadAgentIslandLiveActivitySupport().then((next) => {
+      if (!cancelled) setLiveActivitySupported(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [supported]);
+
+  useEffect(() => {
     const onChange = () => {
       setEnabledState(getAgentIslandEnabled());
+      setSubtleRemindersState(getAgentIslandSubtleReminders());
+      setSubtleRemindersCustomizedState(isAgentIslandSubtleRemindersCustomized());
+      setLiveActivityState(getAgentIslandLiveActivity());
+      setLiveActivityCustomizedState(isAgentIslandLiveActivityCustomized());
       setSoundSettingsState(getAgentIslandSoundSettings());
       setSoundCustomizedState(isAgentIslandSoundSettingsCustomized());
       setMascotSkinState(getAgentIslandMascotSkin());
       setDisplayTargetState(getAgentIslandDisplayTarget());
     };
-    subscribers.add(onChange);
-    window.addEventListener('storage', onChange);
-    return () => {
-      subscribers.delete(onChange);
-      window.removeEventListener('storage', onChange);
-    };
+    return subscribeAgentIslandSettings(onChange);
   }, []);
 
   return {
     enabled,
     setEnabled,
+    subtleReminders,
+    subtleRemindersCustomized,
+    setSubtleReminders: setAgentIslandSubtleReminders,
+    resetSubtleReminders: resetAgentIslandSubtleReminders,
+    liveActivity,
+    liveActivityCustomized,
+    liveActivitySupported,
+    setLiveActivity: setAgentIslandLiveActivity,
+    resetLiveActivity: resetAgentIslandLiveActivity,
     soundSettings,
     soundCustomized,
     mascotSkin,

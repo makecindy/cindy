@@ -80,6 +80,11 @@ describe('cardActionDispatch owner boundary', () => {
     expect(await dispatcher.dispatch('c', 'pick', undefined, undefined, undefined, false, undefined, route)).toEqual({ ok: false, reason: 'model-unavailable' });
     expect(await dispatcher.dispatch('c', 'pick', undefined, undefined, undefined, false, undefined, { ...route, x: 1 })).toEqual({ ok: false, reason: 'bad-model-selection' });
     expect(sendToGhost).toHaveBeenCalledTimes(1);
+    // A desktop controlling this computer makes the same choice through its interaction page.
+    expect(await dispatcher.dispatch('c', 'pick', undefined, 'page', undefined, false, undefined, route)).toEqual({ ok: true });
+    expect(sendToGhost.mock.calls[1][1].modelSelection).toEqual(route);
+    isModelRouteAvailable.mockResolvedValueOnce(false);
+    expect(await dispatcher.dispatch('c', 'pick', undefined, 'page', undefined, false, undefined, route)).toEqual({ ok: false, reason: 'model-unavailable' });
   });
   it('rechecks the owner after wake and never sends to a stale Ghost', async () => {
     let releaseWake!: () => void;

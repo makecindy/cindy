@@ -1,8 +1,4 @@
 import { TextDocumentPreview } from "@/session/TextDocumentPreview";
-import {
-  PreviewFooter,
-  PreviewCollectionContext,
-} from "@/session/PreviewChrome";
 import { ModelDocumentPreview } from "@/session/ModelDocumentPreview";
 import { DiagramDocumentPreview } from "@/session/DiagramDocumentPreview";
 import { File } from "expo-file-system";
@@ -57,6 +53,7 @@ import { deviceLinkMediaApiBaseUrl } from '@/device-link/selfHostedRelayRouting'
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { formatRemoteError } from '@/device-link/remoteStatus';
+import { filePreviewFailureText } from '@/session/filePreviewFailure';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import type { FileBrowserReadFileResult, MobileMakerTransport } from '@/device-link/mobileMakerTransport';
@@ -593,7 +590,7 @@ function RemoteFilePreviewContent() {
       if (run.cancelled) return;
       await sharing.shareAsync(localUri, { mimeType: mime });
     } catch (err) {
-      if (!run.cancelled) showNotice(formatRemoteError(err));
+      if (!run.cancelled) showNotice(filePreviewFailureText(err));
     } finally {
       if (exportRunRef.current === run) {
         exportRunRef.current = null;
@@ -715,11 +712,7 @@ function RemoteFilePreviewContent() {
   return (
     <SafeAreaView edges={[]} style={styles.safeArea} testID="filePreview.screen">
       <FlatList
-        style={
-          siblings.length > 1
-            ? { marginBottom: 56 + chromeFrame.bottom }
-            : undefined
-        }
+        style={{ flex: 1 }}
         onLayout={(event) => setMeasuredPageWidth(Math.max(1, event.nativeEvent.layout.width))}
         data={siblings}
         getItemLayout={(_, index) => ({ index, length: pageWidth, offset: pageWidth * index })}
@@ -807,36 +800,7 @@ function RemoteFilePreviewContent() {
         windowSize={3}
       />
 
-      {!lightboxUrl ? (
-        <PreviewFooter
-          collection={{
-            index: pageIndex,
-            names: siblings.map((item) => item.name),
-            onSelect: (next) => {
-              setPageIndex(next);
-              pagerRef.current?.scrollToOffset({
-                animated: false,
-                offset: next * pageWidth,
-              });
-            },
-          }}
-        />
-      ) : null}
       {lightboxImages.length > 0 ? (
-        <PreviewCollectionContext.Provider
-          value={{
-            index: pageIndex,
-            names: siblings.map((item) => item.name),
-            onSelect: (next) => {
-              setLightboxUrl(null);
-              setPageIndex(next);
-              pagerRef.current?.scrollToOffset({
-                animated: false,
-                offset: next * pageWidth,
-              });
-            },
-          }}
-        >
           <ImageLightbox
           images={lightboxImages}
           initialUrl={lightboxImages[0].url}
@@ -846,7 +810,6 @@ function RemoteFilePreviewContent() {
               goBackGuarded(router);
             }}
           />
-        </PreviewCollectionContext.Provider>
       ) : null}
     </SafeAreaView>
   );
@@ -903,7 +866,7 @@ function FilePreviewPage({
   const insets = useSafeAreaInsets();
   const chromeFrame = usePreviewChromeFrame();
   const contentPadding = {
-    paddingTop: insets.top + 64,
+    paddingTop: chromeFrame.documentContentTop,
     paddingBottom: insets.bottom + spacing.xs,
     paddingLeft: insets.left,
     paddingRight: insets.right,
@@ -1124,6 +1087,7 @@ function PdfPreviewPage({
   workdir: string;
 }) {
   const insets = useSafeAreaInsets();
+  const chromeFrame = usePreviewChromeFrame();
   const model = /\.(glb|gltf)$/i.test(item.relPath);
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -1215,7 +1179,7 @@ function PdfPreviewPage({
   return (
     <View
       style={[styles.pdfView,
-        !model && { paddingTop: insets.top + 64, paddingBottom: insets.bottom },
+        !model && { paddingTop: chromeFrame.documentContentTop, paddingBottom: insets.bottom, paddingLeft: insets.left, paddingRight: insets.right },
       ]}>
     <>
         {model ? (
@@ -1282,7 +1246,7 @@ function TextPreviewPage({
   const chromeFrame = usePreviewChromeFrame();
   const browserTop = chromeFrame.top;
   const browserBottom = chromeFrame.bottom;
-  const browserContentInset = { top: richKind === "html" ? chromeFrame.contentTop : insets.top + 64, bottom: browserBottom + (richKind === 'html' ? HTML_BROWSER_CONTROL_SIZE : 0) + spacing.xs };
+  const browserContentInset = { top: richKind === "html" ? chromeFrame.contentTop : chromeFrame.documentContentTop, bottom: browserBottom + (richKind === 'html' ? HTML_BROWSER_CONTROL_SIZE : 0) + spacing.xs };
   const browserRef = useRef<WebView>(null);
   const [website, setWebsite] = useState<WebsiteVisit | null>(null);
   const [browserNavigation, setBrowserNavigation] = useState<{
@@ -1600,11 +1564,13 @@ function ImagePreviewPage({
     if (!active || requestedRef.current || !workdir) return undefined;
     requestedRef.current = true;
     let cancelled = false;
+    let completed = false;
     setFailure(null);
-    void exportToUrl(item.relPath, item.mtimeMs, { stream: false })
+    void exportToUrl(item.relPath, item.mtimeMs, { stream: false, isCancelled: () => cancelled })
       .then((url) => retainRemoteFilePreview(url, shareMimeForFileName(item.name), item.name))
       .then((source) => {
         if (cancelled) { source.release(); return; }
+        completed = true;
         releaseSourceRef.current?.();
         releaseSourceRef.current = source.release;
         setFullUrl(source.uri);
@@ -1612,10 +1578,13 @@ function ImagePreviewPage({
       .catch((err) => {
         if (cancelled) return;
         requestedRef.current = false; // 允许「重试」按钮/重进再次发起
-        setFailure(formatRemoteError(err));
+        setFailure(filePreviewFailureText(err));
       });
     return () => {
       cancelled = true;
+      // A pending request cancelled by paging or a transport refresh must be
+      // eligible to restart; otherwise the thumbnail remains forever.
+      if (!completed) requestedRef.current = false;
     };
   }, [active, attempt, exportToUrl, item.mtimeMs, item.name, item.relPath, workdir,
   ]);

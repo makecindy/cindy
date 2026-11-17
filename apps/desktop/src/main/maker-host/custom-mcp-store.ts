@@ -14,11 +14,8 @@
  */
 
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
-import { safeStorage } from 'electron';
-import { oauthSecureStorageAvailable } from '../plugin-oauth/identityStore.js';
 
 import { HARNESS_MCP_SERVER_NAMES } from './harnessMcpCatalog.js';
-import { getDbClient } from '../localDb/client/current.js';
 import { customMcpServers } from '../localDb/schema.js';
 import {
   MCP_TRANSPORTS,
@@ -168,14 +165,16 @@ function parseHeaders(raw: string): Record<string, string> {
   return out;
 }
 
+/** One encrypted configuration store for every launcher; codecs keep the original format. */
+export function createCustomMcpStore(ports: {
+  getDbClient: typeof import('../localDb/client/current.js').getDbClient;
+  credentials: { assertAvailable(): void; encrypt(value: string): string; decrypt(value: string): string };
+}) {
+const { getDbClient, credentials } = ports;
 const ENCRYPTED_HEADERS_PREFIX = 'safe-storage:v1:';
 
 function requireHeaderEncryption(): void {
-  if (!oauthSecureStorageAvailable({
-    platform: process.platform,
-    available: safeStorage.isEncryptionAvailable(),
-    backend: safeStorage.getSelectedStorageBackend?.(),
-  })) throw new Error('MCP header encryption is unavailable');
+  credentials.assertAvailable();
 }
 
 /** Encrypt before the atomic DB write: failures cannot partially replace a configuration. */
@@ -183,7 +182,7 @@ function encodeHeaders(headers: Record<string, string>): string {
   if (Object.keys(headers).length === 0) return '{}';
   requireHeaderEncryption();
   try {
-    return ENCRYPTED_HEADERS_PREFIX + safeStorage.encryptString(JSON.stringify(headers)).toString('base64');
+    return ENCRYPTED_HEADERS_PREFIX + credentials.encrypt(JSON.stringify(headers));
   } catch {
     throw new Error('MCP header encryption failed');
   }
@@ -198,9 +197,7 @@ async function rowToConfig(
     requireHeaderEncryption();
     // A corrupt/unreadable blob must not masquerade as an empty credential map.
     try {
-      const value: unknown = JSON.parse(safeStorage.decryptString(
-        Buffer.from(row.headers.slice(ENCRYPTED_HEADERS_PREFIX.length), 'base64'),
-      ));
+      const value: unknown = JSON.parse(credentials.decrypt(row.headers.slice(ENCRYPTED_HEADERS_PREFIX.length)));
       if (!value || typeof value !== 'object' || Array.isArray(value) ||
           Object.values(value).some((v) => typeof v !== 'string')) throw new Error();
       headers = value as Record<string, string>;
@@ -232,7 +229,7 @@ async function rowToConfig(
 }
 
 /** 列出当前账号的全部自定义 MCP（按 sortOrder 升序，再按 createdAt）。 */
-export async function listCustomMcpServers(): Promise<CustomMcpConfig[]> {
+async function listCustomMcpServers(): Promise<CustomMcpConfig[]> {
   const db = getDbClient().drizzle;
   const rows = await db
     .select()
@@ -242,7 +239,7 @@ export async function listCustomMcpServers(): Promise<CustomMcpConfig[]> {
 }
 
 /** Names for the source consent prompt: never load headers or upgrade legacy rows. */
-export async function listCustomMcpNamesForSetup(ids: readonly string[]): Promise<Array<{ id: string; name: string }>> {
+async function listCustomMcpNamesForSetup(ids: readonly string[]): Promise<Array<{ id: string; name: string }>> {
   if (ids.length === 0) return [];
   return await getDbClient().drizzle
     .select({ id: customMcpServers.id, name: customMcpServers.name })
@@ -252,7 +249,7 @@ export async function listCustomMcpNamesForSetup(ids: readonly string[]): Promis
 }
 
 /** Secret-free generation markers for freezing a Bot task's MCP capability set. */
-export async function listCustomMcpRuntimeGenerations(): Promise<Array<{
+async function listCustomMcpRuntimeGenerations(): Promise<Array<{
   id: string;
   transport: McpTransport;
   updatedAt: number;
@@ -275,14 +272,14 @@ export async function listCustomMcpRuntimeGenerations(): Promise<Array<{
 }
 
 /** 取单个；不存在返回 null。 */
-export async function getCustomMcpServer(id: string): Promise<CustomMcpConfig | null> {
+async function getCustomMcpServer(id: string): Promise<CustomMcpConfig | null> {
   const db = getDbClient().drizzle;
   const row = await db.select().from(customMcpServers).where(eq(customMcpServers.id, id)).get();
   return row ? rowToConfig(row, db) : null;
 }
 
 /** 该 id 是否已存在。 */
-export async function customMcpServerExists(id: string): Promise<boolean> {
+async function customMcpServerExists(id: string): Promise<boolean> {
   return (await getCustomMcpServer(id)) != null;
 }
 
@@ -290,7 +287,7 @@ export async function customMcpServerExists(id: string): Promise<boolean> {
  * 新建。调用方须先 `validateCustomMcpConfig` + 处理重名（`customMcpServerExists`）。
  * 返回入库后的规整配置。
  */
-export async function createCustomMcpServer(
+async function createCustomMcpServer(
   config: CustomMcpConfig,
   now: number = Date.now(),
 ): Promise<CustomMcpConfig> {
@@ -318,7 +315,7 @@ export async function createCustomMcpServer(
  * 更新（id 不可改）。调用方须先 `validateCustomMcpConfig`。返回更新后的规整配置；
  * 行不存在时返回 null（handler 映射成 NOT_FOUND）。
  */
-export async function updateCustomMcpServer(
+async function updateCustomMcpServer(
   id: string,
   config: CustomMcpConfig,
   now: number = Date.now(),
@@ -345,7 +342,10 @@ export async function updateCustomMcpServer(
 }
 
 /** 删除（幂等：不存在也不报错）。 */
-export async function deleteCustomMcpServer(id: string): Promise<void> {
+async function deleteCustomMcpServer(id: string): Promise<void> {
   const db = getDbClient().drizzle;
   await db.delete(customMcpServers).where(eq(customMcpServers.id, id));
+}
+
+return { listCustomMcpServers, listCustomMcpNamesForSetup, listCustomMcpRuntimeGenerations, getCustomMcpServer, customMcpServerExists, createCustomMcpServer, updateCustomMcpServer, deleteCustomMcpServer };
 }

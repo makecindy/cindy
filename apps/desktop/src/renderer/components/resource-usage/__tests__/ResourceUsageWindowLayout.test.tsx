@@ -39,6 +39,7 @@ vi.mock('@/lib/logger', () => ({
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
+import { DEFAULT_APPEARANCE_SETTINGS } from '../../../../shared/appearanceSettings';
 import { ResourceUsageWindowRoot } from '../ResourceUsageWindowLayout';
 
 afterEach(() => {
@@ -88,6 +89,21 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     render(<ResourceUsageWindowRoot />);
 
     expect(screen.getByText('titleBar.menuItems.resourceUsage')).toBeTruthy();
+  });
+
+  // The window has no native backdrop bridge, so with no wallpaper it must stay opaque.
+  it('does not enter the desktop background mode when no wallpaper is chosen', () => {
+    const electronAPI = window.electronAPI as unknown as Record<string, unknown>;
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ...electronAPI,
+        appearanceSettings: { getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'none' }) },
+      },
+    });
+    render(<ResourceUsageWindowRoot />);
+
+    expect(document.documentElement.dataset.desktopBackground).toBeUndefined();
   });
 
   it('removes the macOS traffic-light inset in native fullscreen', () => {

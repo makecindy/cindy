@@ -5,6 +5,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { feishuEvents } from '../events.js';
+import { createFeishuScope, runInScope } from '../moduleScope.js';
 import type { IMMessageEvent } from '../../types.js';
 
 type EventHandler = (data: unknown) => Promise<unknown> | unknown;
@@ -301,6 +302,28 @@ describe('feishu group inbound gate', () => {
     expect(mocks.resolveReplyMessage).toHaveBeenCalledWith('om_parent', 'oc_chat1');
   });
 
+  // 测试价值(#9245): 生产入口是 wsClient 的 im.message.receive_v1。直接转发的模板/
+  // 第三方卡片抽不出正文, 修复前空门禁把事件丢掉, 用户看不到任何回复。引用解析
+  // 仍须留空(incomingContent 的 template 用例), 所以这条只覆盖入站可见性。
+  // 最小失败输入: p2p interactive 模板卡。tier: unit。
+  it('emits an unsupported entry for a private card with no readable text instead of dropping it (#9245)', async () => {
+    await connect();
+    const events = collectEvents();
+    const incoming = groupMessage({});
+    incoming.message.chat_type = 'p2p';
+    incoming.message.message_type = 'interactive';
+    incoming.message.content = JSON.stringify({ type: 'template', data: { template_id: 'ctp_alert' } });
+    incoming.message.mentions = [];
+    await mocks.eventHandlers['im.message.receive_v1']!(incoming);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      senderId: OWNER,
+      text: '',
+      attachments: [],
+      unsupported: [{ type: 'interactive', label: '卡片消息' }],
+    });
+  });
+
   it('fetches directly received merged forwards instead of silently dropping them', async () => {
     mocks.resolveReplyMessage.mockResolvedValueOnce({ replyContext: { author: 'Alice', text: 'forwarded content' } });
     await connect();
@@ -406,6 +429,32 @@ describe('feishu group inbound gate', () => {
     expect(events[0]!.senderId).toBe(OWNER);
     expect(events[0]!.speaker).toBeUndefined();
     expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
+  });
+
+  // 测试价值：SDK 入站 handler 的实际事件；复现伙伴 guests=true 同时开放陌生私聊。
+  // 原有默认 scope 测试不含开放群成员的伙伴配置；最小输入为已绑定后的非主人 p2p。
+  // unit tier，SDK/出站均为内存 fake；群 @ 和主人私聊必须保持可用。
+  it('guest group access never grants private-message access', async () => {
+    await runInScope(createFeishuScope({ host: null, guests: true }), async () => {
+      try {
+        await connect();
+        const events = collectEvents();
+        const dm = groupMessage({ sender: STRANGER, messageId: 'om_guest_dm', text: '最近更新的有哪些项目' });
+        dm.message.chat_type = 'p2p';
+        await mocks.eventHandlers['im.message.receive_v1']!(dm);
+        expect(events).toHaveLength(0);
+
+        dm.sender.sender_id.open_id = OWNER;
+        dm.message.message_id = 'om_owner_dm';
+        await mocks.eventHandlers['im.message.receive_v1']!(dm);
+        await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({ sender: STRANGER, messageId: 'om_guest_group' }));
+        expect(events.map((event) => event.senderId)).toEqual([OWNER, 'g/oc_chat1']);
+        expect(events[1].speaker?.isOwner).toBe(false);
+      } finally {
+        await wsClient.stop({ announceOffline: false, reason: 'test-cleanup' });
+        feishuEvents.removeAllListeners('message');
+      }
+    });
   });
 });
 

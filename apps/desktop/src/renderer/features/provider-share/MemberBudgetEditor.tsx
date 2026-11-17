@@ -2,11 +2,14 @@ import { useTranslation } from 'react-i18next';
 import { unifiedModelKeyId } from '@cindy/model-providers';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Select } from '@/components/ui/select';
 import type { ProviderShareBudgetRule, ProviderShareBudgetStatus, ProviderShareMemberBudget } from '../../../shared/providerShareBudget';
 
 const key = 'providerShare.memberBudget.';
 const empty: ProviderShareMemberBudget = { basis: 'member-input-output-7d', enabled: false, recommendedModel: null, rules: [] };
-const selectClass = 'min-h-9 max-w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)]';
+// Radix Select items cannot use '': this value stands for "no recommendation".
+const NO_RECOMMENDATION = '__none';
 
 export function MemberBudgetEditor({ value, onChange, models, budgetModelIds, recommendationModelIds, disabled, canAddRules, status }: {
   value: ProviderShareMemberBudget | null;
@@ -27,16 +30,17 @@ export function MemberBudgetEditor({ value, onChange, models, budgetModelIds, re
   const updateRule = (id: string, next: Partial<ProviderShareBudgetRule>) =>
     patch({ rules: policy.rules.map(rule => rule.id === id ? { ...rule, ...next } : rule) });
   return <section className="mt-5 shrink-0 space-y-4 border-t border-[var(--border-default)] pt-4">
-    <label className="flex flex-wrap items-center justify-between gap-3 text-13 text-[var(--text-primary)]">
+    <div className="flex flex-wrap items-center justify-between gap-3 text-13 text-[var(--text-primary)]">
       <span>{t(key + 'recommended')}</span>
-      <select className={selectClass} value={policy.recommendedModel ?? ''} disabled={disabled}
-        onChange={event => patch({ recommendedModel: event.target.value || null })}>
-        <option value="">{t(key + 'none')}</option>
-        {recommendations.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
-        {policy.recommendedModel && !recommendations.some(model => model.id === policy.recommendedModel)
-          && <option value={policy.recommendedModel}>{policy.recommendedModel} · {t(key + 'modelUnavailable')}</option>}
-      </select>
-    </label>
+      <Select label={t(key + 'recommended')} width="sm" truncateOptions value={policy.recommendedModel ?? NO_RECOMMENDATION} disabled={disabled}
+        onValueChange={next => patch({ recommendedModel: next === NO_RECOMMENDATION ? null : next })}
+        options={[
+          { value: NO_RECOMMENDATION, label: t(key + 'none') },
+          ...recommendations.map(model => ({ value: model.id, label: model.name })),
+          ...(policy.recommendedModel && !recommendations.some(model => model.id === policy.recommendedModel)
+            ? [{ value: policy.recommendedModel, label: `${policy.recommendedModel} · ${t(key + 'modelUnavailable')}` }] : []),
+        ]} />
+    </div>
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h3 className="text-13 font-medium text-[var(--text-primary)]">{t(key + 'title')}</h3>
       <span className="text-12 text-[var(--text-secondary)]">{t(key + (policy.enabled ? 'active' : 'draft'))}</span>
@@ -51,15 +55,15 @@ export function MemberBudgetEditor({ value, onChange, models, budgetModelIds, re
         ? (status.modelUsage.find(item => item.model === unifiedModelKeyId(selected))?.tokens ?? 0) / status.totalTokens * 100
         : used?.usedPercent;
       return <div key={rule.id} className="space-y-3 rounded-xl border border-[var(--border-default)] p-4">
-        <select className={`${selectClass} w-full`} value={selected} disabled={disabled}
-          aria-label={t(key + 'chooseModels')}
-          onChange={event => updateRule(rule.id, { models: [event.target.value] })}>
-          <option value="" disabled>{t(key + 'chooseModels')}</option>
-          {budgetModels.map(model => <option key={model.id} value={model.id}
-            disabled={policy.rules.some(other => other.id !== rule.id && other.models.some(id => unifiedModelKeyId(id) === unifiedModelKeyId(model.id)))}>{model.name}</option>)}
-          {selected && !budgetModels.some(model => model.id === selected)
-            && <option value={selected}>{selected} · {t(key + 'modelUnavailable')}</option>}
-        </select>
+        {/* An empty selection shows the label as the Select placeholder. */}
+        <Select label={t(key + 'chooseModels')} width="full" truncateOptions value={selected} disabled={disabled}
+          onValueChange={next => updateRule(rule.id, { models: [next] })}
+          options={[
+            ...budgetModels.map(model => ({ value: model.id, label: model.name,
+              disabled: policy.rules.some(other => other.id !== rule.id && other.models.some(id => unifiedModelKeyId(id) === unifiedModelKeyId(model.id))) })),
+            ...(selected && !budgetModels.some(model => model.id === selected)
+              ? [{ value: selected, label: `${selected} · ${t(key + 'modelUnavailable')}` }] : []),
+          ]} />
         <div className="flex flex-wrap items-center justify-between gap-3">
           <label htmlFor={`budget-percent-${rule.id}`} className="text-13 text-[var(--text-primary)]">{t(key + 'maxPercent')}</label>
           <div className="w-24">
@@ -87,8 +91,7 @@ export function MemberBudgetEditor({ value, onChange, models, budgetModelIds, re
         if (next) patch({ rules: [...policy.rules, { id: crypto.randomUUID(), models: [next.id], maxPercent: 30 }] });
       }}>{t(key + 'addGroup')}</Button>
     <label className="flex min-h-9 items-center gap-2 text-13 text-[var(--text-primary)]">
-      <input type="checkbox" checked={policy.enabled} disabled={disabled || !canAddRules || !policy.rules.length}
-        className="h-4 w-4 accent-[var(--text-primary)]"
+      <Checkbox checked={policy.enabled} disabled={disabled || !canAddRules || !policy.rules.length}
         onChange={event => patch({ enabled: event.target.checked })} />
       {t(key + 'enable')}
     </label>

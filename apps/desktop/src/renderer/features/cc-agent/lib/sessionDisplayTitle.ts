@@ -20,6 +20,7 @@ import {
 } from '../../../../shared/cindyMakeMerge';
 import { formatCindyMakeMergeTitle } from '../../../../shared/cindyMakeMergeTitle';
 import { SUPPORTED_LOCALES } from '../../../../shared/locale';
+import { getCrossLocaleString } from '@/i18n/crossLocale';
 
 import {
   getAutomationSessionDisplayTitle,
@@ -33,9 +34,12 @@ const MAKE_MERGE_TITLE_KEYS = [
   'cindyMake.history.revertTaskTitle',
 ] as const;
 
-type TranslateSessionTitle = (key: string, options?: { lng: string }) => string;
+type TranslateSessionTitle = (key: string) => string;
 
-/** Recognize old default titles in their creation language without rewriting saved or custom names. */
+/**
+ * Recognize old default titles in their creation language without rewriting saved or custom names.
+ * Other languages' packs may not be loaded, so their titles come from the cross-locale table.
+ */
 function getLegacyMakeTitleKey(
   session: Session,
   translate?: TranslateSessionTitle,
@@ -47,9 +51,10 @@ function getLegacyMakeTitleKey(
     (key) =>
       title === formatCindyMakeTitle(key, worktree) ||
       (translate &&
-        SUPPORTED_LOCALES.some(
-          (lng) => title === formatCindyMakeTitle(translate(key, { lng }), worktree),
-        )),
+        SUPPORTED_LOCALES.some((lng) => {
+          const label = getCrossLocaleString(lng, key);
+          return label !== undefined && title === formatCindyMakeTitle(label, worktree);
+        })),
   );
 }
 

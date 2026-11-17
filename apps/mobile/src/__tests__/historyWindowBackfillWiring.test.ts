@@ -150,7 +150,8 @@ describe('live stream interruption wiring', () => {
     expect(sendSubscribe).toContain('await confirmTrackedSubscription({');
     // 反向竞态同样要守住：快速释放后又切回时，旧 unsubscribe 在真正发帧前必须
     // 剔除已经重新被 owner 持有的 topic，不能落在新 subscribe 后把实时流再关掉。
-    expect(source).toContain('(topic) => presenceAvailableByDeviceRef.current.get(deviceId) !== false && !registryRef.current.hasTopic(deviceId, topic)');
+    // A cleanup from a replaced client must also be fenced before it sends.
+    expect(source).toMatch(/\(?topic\)?\s*=>\s*clientRef\.current === client\s*&&\s*presenceAvailableByDeviceRef\.current\.get\(deviceId\) !== false\s*&&\s*!registryRef\.current\.hasTopic\(deviceId, topic\)/);
     expect(source).toMatch(
       /const toSend = shouldSendTopic \? topics\.filter\(shouldSendTopic\) : topics;[\s\S]*client\.invoke\(deviceId, \{\s*channel: DL_UNSUBSCRIBE_CHANNEL,\s*args: \[\{ topics: toSend \}\]/,
     );

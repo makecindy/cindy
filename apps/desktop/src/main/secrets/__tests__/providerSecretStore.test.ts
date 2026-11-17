@@ -55,6 +55,7 @@ import {
   readGhostSecretStrict,
   readGhostSecretTailFromIo,
   migrateGhostSecrets,
+  listGhostAccountReferenceKeys,
   resolveOwnerScopedSecretStorageKey,
   setProviderSecretsClearedListener,
   UNRECOVERABLE_PROVIDER_CREDENTIAL,
@@ -94,6 +95,37 @@ function createMemoryIo(): SecretStorageIo & { store: Map<string, string> } {
     list: () => [...store.keys()],
   };
 }
+
+// #10130 lifecycle cleanup must include references orphaned by manifest edits.
+// Unit: the production encrypted-store adapter lists this owner's derived names
+// once, without reading/decrypting values or exposing another owner's entries.
+it('enumerates only current-owner account reference names without opening records', () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-reference-names-'));
+  const previousSession = { ...sessionState }, previousElectron = { ...electronState };
+  sessionState.mode = 'cloud'; sessionState.dataOwnerId = 'reference-owner'; electronState.userData = userData;
+  const read = vi.spyOn(fs, 'readFileSync');
+  const decrypt = vi.spyOn(safeStorage, 'decryptString');
+  let restoreList: (() => void) | undefined;
+  try {
+    const dir = path.join(userData, 'safe-storage'); fs.mkdirSync(dir);
+    for (const key of ['owner_reference-owner_ghost_secret_target_token-reused-credential',
+      'owner_reference-owner_ghost_secret_target_oauth-accounts', 'owner_reference-owner_ghost_secret_target_token',
+      'owner_reference-owner_provider_oauth_example', 'owner_other-owner_ghost_secret_target_other-reused-credential']) {
+      fs.writeFileSync(path.join(dir, key + '.enc'), 'unread-test-record');
+    }
+    const list = vi.spyOn(fs, 'readdirSync'); restoreList = () => list.mockRestore();
+    const result = listGhostAccountReferenceKeys(['target']);
+    expect(result.map(item => ({ ...item, keys: [...item.keys].sort() }))).toEqual([
+      { instanceKey: 'target', keys: ['oauth-accounts', 'token-reused-credential'] },
+    ]);
+    expect(list).toHaveBeenCalledOnce(); expect(read).not.toHaveBeenCalled(); expect(decrypt).not.toHaveBeenCalled();
+    expect(listGhostAccountReferenceKeys([])).toEqual([]); expect(list).toHaveBeenCalledOnce();
+  } finally {
+    restoreList?.(); read.mockRestore(); decrypt.mockRestore();
+    Object.assign(sessionState, previousSession); Object.assign(electronState, previousElectron);
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
 
 describe('ghost secret relocation rollback', () => {
   const source = ghostSecretStorageKey('helper', 'one');
@@ -742,4 +774,30 @@ describe('custom MCP token replacement', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+// Unit regression: a crash can leave only a resource directory, without an
+// environment blob. Presence/cleanup must see it and remain account-scoped.
+it('detects and removes orphaned resource archives only for the current owner', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-resource-cleanup-'));
+  const previous = { ...electronState }, previousSession = { ...sessionState };
+  try {
+    electronState.userData = root; electronState.encryptionAvailable = false;
+    sessionState.mode = 'cloud'; sessionState.dataOwnerId = 'resource-owner';
+    const key = `bot_environment_${'b'.repeat(64)}`;
+    const directory = path.join(root, 'safe-storage', `${resolveOwnerScopedSecretStorageKey(key)}.resources`);
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'interrupted.enc.tmp'), 'encrypted fixture');
+    expect(botEnvironmentSecretIo.has(key)).toBe(true);
+    sessionState.dataOwnerId = 'other-owner';
+    expect(botEnvironmentSecretIo.has(key)).toBe(false);
+    await botEnvironmentSecretIo.removeResourceFiles(key, () => {});
+    expect(fs.existsSync(directory)).toBe(true);
+    sessionState.dataOwnerId = 'resource-owner';
+    await botEnvironmentSecretIo.removeResourceFiles(key, () => {});
+    expect(botEnvironmentSecretIo.has(key)).toBe(false);
+  } finally {
+    Object.assign(electronState, previous); Object.assign(sessionState, previousSession);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

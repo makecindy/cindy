@@ -94,6 +94,7 @@ export function InlineQueueSection({
     projection.errorReason,
     projection.toolLoop ?? null,
     projection.error ?? '',
+    projection.outputLimit,
   );
   const projectionErrorKey = projection.error
     ? inputProjectionErrorI18nKey(projection.error)

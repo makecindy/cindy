@@ -6,6 +6,7 @@
  * main 端 extraDirsValidator.ts 兜底 — 这里只做 UX 预判。
  */
 
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import { createLogger } from '@/lib/logger';
 import { stripTrailingPathSeparators } from '../../../shared/pathText';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir';
@@ -132,6 +133,7 @@ export function selectableRecentExtraDirs<T extends { path: string; missing?: bo
   return options.filter(
     (option) =>
       !option.missing &&
+      !isTeammateProjectPath(option.path) &&
       !hasExtraDir(addedDirs, option.path) &&
       !(
         workingDir &&

@@ -2,7 +2,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { apiFetchRaw } from '@/api/client';
 import { installPeerUpload } from '@/device-link/peerFileRegistry';
-import { buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
+import { installMobileAgentNetMedia } from '@/device-link/agentNetMediaRegistry';
+import { buildPeerAttachmentRef, parsePeerAttachmentRef, sharedTaskHostPeer } from '@cindy/device-link';
 import { DEVICE_LINK_API_BASE_URL, getOfficialDeviceLinkApiBaseUrl, setDeviceLinkApiBaseOverride } from '@/config/env';
 import { i18n } from '@/i18n';
 import { buildAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
@@ -27,6 +28,50 @@ const readFileChunk = vi.fn(async (_uri: string, _position: number, length: numb
 beforeEach(() => setMobileAuthOwner('alice'));
 
 describe('mobileAttachmentUpload', () => {
+  // Unit: the production attachment entries must retain the scoped destination
+  // supplied by useMobileLocalAttachments. Existing encrypted tests only used a
+  // same-account device, so dropping deviceId for sharedTaskId went unnoticed.
+  it.each((['body', 'file'] as const).flatMap(path => [false, true].map(onlyEncrypted => ({ path, onlyEncrypted }))))
+    ('keeps shared-task $path uploads encrypted (onlyEncrypted=$onlyEncrypted)', async ({ path, onlyEncrypted }) => {
+      const deviceId = sharedTaskHostPeer('unit-shared-task', 'host'), legacy = vi.fn();
+      const off = installMobileAgentNetMedia({ available: device => device === deviceId, requiresEncryption: () => onlyEncrypted,
+        async upload(options) {
+          expect(options.deviceId).toBe(deviceId);
+          expect(await options.read(0, 3)).toEqual(new Uint8Array([120, 120, 120]));
+          return { key: 'agent-net-v3/unit-shared-fixture', sha256: 'a'.repeat(64) };
+        } });
+      try {
+        const options = { token: 'unit-unused-token', deviceId, sharedTaskId: 'unit-shared-task',
+          deps: { apiFetch: legacy, fetch: legacy, readFileChunk: async () => 'eHh4' } };
+        const candidate = { name: 'note.txt', size: 3, mimeType: 'text/plain' };
+        const attachment = path === 'body'
+          ? await uploadMobileAttachment(candidate, new Uint8Array([120, 120, 120]).buffer, options)
+          : await uploadMobileAttachmentFromFile(candidate, 'file:///unit-note', options);
+        expect(parseAttachmentOssRef(attachment.path)?.ossKey).toBe('agent-net-v3/unit-shared-fixture');
+        expect(legacy).not.toHaveBeenCalled();
+      } finally { off(); }
+    });
+  // Production file upload must select the V2 encrypting adapter before OSS,
+  // and a native failure must not send the same attachment through plaintext.
+  it.each(['success', 'failure', 'unavailable'] as const)('keeps an encrypted upload on its selected adapter (native result=%s)', async (result) => {
+    const legacy = vi.fn(), readFileChunk = vi.fn(async () => 'eHh4');
+    const off = installMobileAgentNetMedia({ available: device => device === 'paired-v2', requiresEncryption: () => result !== 'unavailable',
+      async upload(options) {
+        expect(await options.read(0, 3)).toEqual(new Uint8Array([120, 120, 120]));
+        if (result === 'failure') throw new Error('NATIVE_UPLOAD_FAILED');
+        if (result === 'unavailable') return null;
+        return { key: 'agent-net-v3/unit-public-fixture', sha256: 'a'.repeat(64) };
+      } });
+    try {
+      const work = uploadMobileAttachmentFromFile({ name: 'note.txt', size: 3, mimeType: 'text/plain' }, 'file:///unit-note', {
+        token: 'unit-unused-account-token', deviceId: 'paired-v2', deps: { apiFetch: legacy, readFileChunk },
+      });
+      if (result === 'failure') await expect(work).rejects.toThrow('NATIVE_UPLOAD_FAILED');
+      else if (result === 'unavailable') await expect(work).rejects.toThrow('AGENT_NET_MEDIA_PEER_UNAVAILABLE');
+      else expect(parseAttachmentOssRef((await work).path)?.ossKey).toBe('agent-net-v3/unit-public-fixture');
+      expect(legacy).not.toHaveBeenCalled();
+    } finally { off(); }
+  });
   // Unit: late peer completion must not retain removed uploads or an invalidated owner's pixels.
   it.each(['cancelled', 'outbox-removed', 'account-switched'] as const)('does not retain a late upload after %s', async (reason) => {
     const abort = new AbortController();
@@ -561,6 +606,54 @@ describe('mobileAttachmentUpload', () => {
     const uploadFile = vi.fn().mockResolvedValueOnce({ status }).mockResolvedValueOnce({ status: 200 });
     await putMobileAttachmentUploadFromFile('https://oss.example/upload', 'file:///tmp/x.png', 'image/png', { uploadFile });
     expect(uploadFile).toHaveBeenCalledTimes(2);
+  });
+
+  // Overseas accelerate fallback: presign-put may return an optional accelerateUrl (same bucket/key).
+  // Only the existing retry switches to it, for both production upload entries; a non-retryable
+  // rejection never touches it, and a missing/malformed one keeps the original same-URL retry.
+  it.each([
+    { name: 'file: retry via accelerate route', path: 'file', accelerateUrl: 'https://bucket.oss-accelerate.example/upload', first: 'network', urls: ['put', 'accelerate'], ok: true },
+    { name: 'memory: retry via accelerate route', path: 'body', accelerateUrl: 'https://bucket.oss-accelerate.example/upload', first: 'network', urls: ['put', 'accelerate'], ok: true },
+    { name: '403 never uses accelerate route', path: 'file', accelerateUrl: 'https://bucket.oss-accelerate.example/upload', first: 403, urls: ['put'], ok: false },
+    { name: 'no accelerate: retry signed URL', path: 'file', accelerateUrl: undefined, first: 'network', urls: ['put', 'put'], ok: true },
+    { name: 'malformed accelerate is ignored', path: 'body', accelerateUrl: 'ftp://oss.example/upload', first: 'network', urls: ['put', 'put'], ok: true },
+    { name: 'invalid HTTPS accelerate preserves the normal retry', path: 'file', accelerateUrl: 'https://[bad', first: 'network', urls: ['put', 'put'], ok: true },
+  ] as const)('$name', async ({ path, accelerateUrl, first, urls, ok }) => {
+    vi.useFakeTimers();
+    try {
+      const putUrl = 'https://oss.example/upload';
+      const key = 'cindy/device-link/u/accelerate.txt';
+      const apiFetch = vi.fn(async (endpoint: string) => endpoint === '/api/device-link/media/presign-put'
+        ? { putUrl, key, expiresAt: 'x', ...(accelerateUrl ? { accelerateUrl } : {}) }
+        : { deleted: true });
+      const seen: string[] = [];
+      const respond = (url: string) => {
+        seen.push(url === putUrl ? 'put' : url === accelerateUrl ? 'accelerate' : url);
+        if (seen.length > 1) return 200;
+        if (first === 'network') throw new Error('The network connection was lost.');
+        return first;
+      };
+      const uploadFile = vi.fn(async (url: string) => ({ status: respond(url) }));
+      const fetchPut = vi.fn(async (url: string) => {
+        const status = respond(url);
+        return { ok: status === 200, status, text: async () => '' } as unknown as Response;
+      });
+      const candidate = { name: 'accelerate.txt', size: 3, mimeType: 'text/plain' };
+      const options = { token: 'token', deps: { apiFetch: apiFetch as unknown as typeof apiFetchRaw, uploadFile, fetch: fetchPut as unknown as typeof fetch, readFileChunk: async () => 'eHh4' } };
+      const pending = path === 'file'
+        ? uploadMobileAttachmentFromFile(candidate, 'file:///accelerate.txt', options)
+        : uploadMobileAttachment(candidate, new Uint8Array([120, 120, 120]).buffer, options);
+      const settled = pending.then((attachment) => ({ attachment }), (error: Error) => ({ error }));
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await settled;
+      if (ok) {
+        expect('attachment' in result && parseAttachmentOssRef(result.attachment.path)?.ossKey).toBe(key);
+      } else {
+        expect('error' in result && result.error.message).toContain('HTTP 403');
+        expect(apiFetch).toHaveBeenCalledWith('/api/device-link/media', expect.objectContaining({ body: { key } }));
+      }
+      expect(seen).toEqual(urls);
+    } finally { vi.useRealTimers(); }
   });
 
   it('bounds Blob uploads even when fetch ignores abort', async () => {

@@ -252,6 +252,21 @@ describe('ModelListEntry 溯源', () => {
 // ── 3. options 边界 ──────────────────────────────────────────────────────────
 
 describe('deriveModelList options', () => {
+  // PR #9900, unit: aliases are hidden in lists, not disconnected for saved-route
+  // validators. Previous list fixtures had no migrated account or retained selection.
+  it.each(['all-for-agent', 'connected-for-agent', 'as-given'] as const)(
+    'hides imported duplicates and retains only their selected model (%s)', providerScope => {
+      const providers = [
+        provider('openai', ['codex'], { codex: [model('test-model')] }),
+        provider('old-openai', ['codex'], { codex: [model('test-model'), model('other')] }, { subscriptionPoolAlias: true }),
+      ];
+      const options = { providers, agent: 'codex' as const, providerScope, dedupe: 'none' as const };
+      expect(deriveModelList(options).map(row => row.sourceProviderId)).toEqual(['openai']);
+      expect(deriveModelList({ ...options, keepSelected: { providerId: 'old-openai', modelId: 'test-model' } })
+        .map(row => [row.sourceProviderId, row.id]))
+        .toEqual([['openai', 'test-model'], ['old-openai', 'test-model']]);
+    },
+  );
   it("providerScope: 'connected-for-agent' 剔除断开来源;'all-for-agent' 保留", () => {
     const connected = deriveModelList({
       providers: fixtureProviders(),

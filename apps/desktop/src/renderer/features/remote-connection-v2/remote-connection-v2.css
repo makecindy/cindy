@@ -1,0 +1,121 @@
+/*
+ * 远程连接 V2 拓扑(DESIGN.md §4「Remote connection V2 topology」)。
+ * 图块是 --surface-chip 底上的单色系统标志,平时 --text-secondary,悬停 / 浮层打开 / 有消息在走时
+ * 提到 --text-primary;离线整块降到一半不透明。状态只用颜色(拓扑容器上定义):绿 --rcv2-ok 连着没消息
+ * (实线、图块描边与图标绿)、蓝 --rcv2-live 有消息在走(蓝色流动虚线、图块描边与图标蓝并带柔光)、
+ * 心动橙 --warning-accent 设备忙碌(右上角呼吸小圆点)、红 --rcv2-error 出错 / 要处理;
+ * 灰色只留给离线和未建链。
+ * 状态变了颜色、描边与光晕都用 --motion-enter 线性淡过去(照 hhh 蓝图,不跳变)。
+ * 流动虚线见 TopologyFlow.tsx(只动 transform / opacity)。
+ */
+.rcv2-tile {
+  background-color: var(--surface-chip);
+  border-color: transparent;
+  color: var(--text-secondary);
+  transition:
+    border-color var(--motion-enter) linear,
+    color var(--motion-enter) linear,
+    box-shadow var(--motion-enter) linear,
+    opacity var(--motion-enter) linear;
+}
+/* design: intrinsic-geometry —— 手机是竖着的窄条,顶上一道「灵动岛」,一眼和电脑方块区分开(用户要求 2026-11-06)。 */
+.rcv2-tile[data-form='phone'] {
+  border-radius: 7px;
+}
+.rcv2-island {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  width: 8px;
+  height: 2px;
+  border-radius: 9999px;
+  background-color: currentColor;
+  opacity: 0.45;
+  transform: translateX(-50%);
+}
+/* 图块颜色跟着线(用户裁决 2026-11-07):连着没消息是绿;有消息在走是蓝,外面一圈同色柔光;
+   要处理是红;离线和未建链保持中性。 */
+.rcv2-tile[data-linked='true'] {
+  border-color: var(--rcv2-ok);
+  color: var(--rcv2-ok);
+}
+.rcv2-tile[data-live='true'] {
+  border-color: var(--rcv2-live);
+  color: var(--rcv2-live);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--rcv2-live) 30%, transparent),
+    0 4px 18px color-mix(in srgb, var(--rcv2-live) 22%, transparent);
+}
+.rcv2-tile[data-error='true'] {
+  border-color: var(--rcv2-error);
+  color: var(--rcv2-error);
+}
+.rcv2-tile[data-dim='true'] {
+  opacity: 0.5;
+}
+/* 忙碌:图块右上角 8px 心动橙小圆点,外面一圈卡片底色把它和描边隔开;呼吸动画是全局的
+   session-status-breathing(只动 opacity,减弱动效与窗口隐藏时停)。 */
+.rcv2-busy {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background-color: var(--warning-accent);
+  box-shadow: 0 0 0 2px var(--settings-theme-card-bg);
+}
+/* 图块外层按钮:只管位置与点击,透明;悬停 / 浮层打开时点亮里层图块。 */
+.rcv2-hit {
+  display: block;
+  padding: 0;
+  background: transparent;
+}
+.rcv2-hit:hover .rcv2-tile:not([data-live='true']):not([data-linked='true']):not([data-error='true']),
+.rcv2-hit[data-state='open'] .rcv2-tile:not([data-live='true']):not([data-linked='true']):not([data-error='true']) {
+  border-color: var(--text-tertiary);
+  color: var(--text-primary);
+}
+.rcv2-hit:focus-visible,
+.rcv2-hub:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* design: intrinsic-geometry —— 这台电脑是圆盘 + 一圈细环,是图的中心而不是一张卡。 */
+.rcv2-hub {
+  background-color: var(--surface-chip);
+  border-color: transparent;
+  color: var(--text-primary);
+  transition: border-color var(--motion-instant) var(--motion-ease-out);
+}
+.rcv2-hub:hover,
+.rcv2-hub[data-state='open'] {
+  border-color: var(--text-tertiary);
+}
+
+/* design: intrinsic-geometry —— 中转站是线上的一个路过点:小圆、只有描边,和设备图块区分开;它是连着的一段,用绿色。 */
+.rcv2-relay {
+  background-color: var(--settings-theme-card-bg);
+  border-color: var(--rcv2-ok);
+  color: var(--rcv2-ok);
+  transition:
+    border-color var(--motion-enter) linear,
+    color var(--motion-enter) linear;
+}
+
+/* 流动虚线的空隙(尺寸 = topologyGeometry SPECK_W × SPECK_H):卡片底色,把绿线切成一节一节往前走。
+   位置与透明度全部由 Web Animations 驱动,平时透明。 */
+.rcv2-gap {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 5px;
+  height: 3px;
+  background-color: var(--settings-theme-card-bg);
+  opacity: 0;
+  /* 关键帧自己把中心挪到线上(translate → rotate → 回退半个尺寸),旋转必须绕左上角,
+     否则竖直、弯曲的那几段会偏到线旁边去。 */
+  transform-origin: 0 0;
+  will-change: transform, opacity;
+}

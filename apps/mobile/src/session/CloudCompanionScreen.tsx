@@ -1,6 +1,7 @@
+import type { ScrollViewInstance } from 'react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, ScrollView, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
-import { Stack, useRouter } from 'expo-router';
+import { Stack, useNavigation, useRouter } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -9,7 +10,7 @@ import { Text } from '@/components/AppText';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { chatHttpsUrl } from '@/chat/chatServerClient';
 import {
-  CLOUD_SWITCH_POLL_MS, cloudCompanionMessages, cloudSwitchAfterSetHome, cloudSwitchCandidates, cloudSwitchTick,
+  CLOUD_SWITCH_POLL_MS, cloudCompanionMessages, cloudSwitchArrival, cloudSwitchAfterSetHome, cloudSwitchCandidates, cloudSwitchTick,
   type CloudSwitchCandidate, type CloudSwitchState,
 } from '@/chat/cloudCompanion';
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
@@ -21,7 +22,7 @@ import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { useUserBubbleAppearance } from '@/theme/userBubblePreference';
-import { goBackGuarded } from '@/utils/backGuard';
+import { useTaskListBack } from '@/utils/useTaskListBack';
 import { BOT_GROUP_MESSAGE_AVATAR_SIZE } from './BotGroupAvatars';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { BotGroupMarkdownText, BotGroupUserText } from './BotGroupMessageText';
@@ -37,6 +38,7 @@ import { CHAT_HEADER_MARK_SIZE, ChatIdentityHeader, ChatIdentitySubtitle } from 
 import { CompanionCardActions, CompanionCardButton } from './CompanionCardButton';
 import { CompanionSettingsRow } from './CompanionSettingsRow';
 import { CompanionSheet } from './CompanionSheet';
+import { staleCompanionChatCount } from './teammateNavigation';
 import { useTeammateNavigation } from './useTeammateNavigation';
 import { TEAMMATE_COLLECTION_ID, useTeammateRoster } from './useTeammateRoster';
 
@@ -69,6 +71,7 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
   const answerLayout = useMemo(() => buildMessageContentLayout({ screenWidth: width }), [width]);
   const styles = useThemedStyles(makeStyles);
   const router = useRouter();
+  const backToTaskList = useTaskListBack();
   const { user, accountGeneration } = useAuth();
   const [openMedia, setOpenMedia] = useState<Extract<MessagePayload, { kind: 'media' }> | null>(null);
   const openPayload = useCallback((payload: MessagePayload) => {
@@ -146,9 +149,10 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
     }
   };
 
-  // Watch the roster only while the new main computer is getting ready.
+  // The roster re-reads on focus, foreground and presence changes; it polls only while a new main
+  // computer is getting ready.
   const waiting = switching.phase === 'waiting';
-  const roster = useTeammateRoster(waiting);
+  const roster = useTeammateRoster(true);
   const rosterRef = useRef(roster); rosterRef.current = roster;
   const openTeammate = useRef(navigation.openTeammate); openTeammate.current = navigation.openTeammate;
   const tick = useCallback(() => {
@@ -163,6 +167,23 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
   }, [botId, deviceId]);
   // Every roster change may be the arrival; the interval re-reads the roster and enforces the timeout.
   useEffect(() => { if (waiting) tick(); });
+  // The cloud view is only the fallback: once this phone reads the companion live from its main
+  // computer again (it came online, or allowed control), open that chat instead (2026-11-10).
+  // Only when opened from the list: a cloud view opened from that chat (messages not reaching the
+  // computer) stays until the owner leaves it.
+  const stackNavigation = useNavigation();
+  const handedBack = useRef<boolean | null>(null);
+  if (handedBack.current === null) {
+    const state = stackNavigation.getState();
+    handedBack.current = state ? staleCompanionChatCount(state.routes.slice(0, state.index + 1), botId, deviceId) > 0 : false;
+  }
+  useEffect(() => {
+    if (handedBack.current || switching.phase !== 'idle' || !currentHome) return;
+    const back = cloudSwitchArrival(roster.items, currentHome, botId, row => roster.isOnline(row.host));
+    if (!back) return;
+    handedBack.current = true;
+    void openTeammate.current(back, { replace: true });
+  });
   useEffect(() => {
     if (!waiting) return;
     const timer = setInterval(() => { void rosterRef.current.refresh(); tick(); }, CLOUD_SWITCH_POLL_MS);
@@ -171,7 +192,7 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
 
   // Timeline: newest at the bottom; older pages load near the top.
   const messages = useMemo(() => cloudCompanionMessages(room.messages, actorId), [actorId, room.messages]);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const stickToBottom = useRef(true);
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
@@ -271,7 +292,7 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
         <ChatIdentitySubtitle>{homeOffline}</ChatIdentitySubtitle>
       </View>}
       identityLabel={[name, homeOffline].join(', ')}
-      onBack={() => goBackGuarded(router)} />
+      onBack={backToTaskList} />
     <View style={styles.banner} testID="cloudCompanion.banner">
       <Text style={styles.bannerTitle}>{homeOffline}</Text>
       {status ?? <Text style={styles.bannerCopy}>{t('devices.cloudCompanion.readOnlyNote')}</Text>}

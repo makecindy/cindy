@@ -1,17 +1,58 @@
 import { BrowserWindow, ipcMain } from 'electron';
 
 import type { LocalThemeWriteRequest } from '../../shared/local-themes';
-import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedCindyRendererWindow,
+} from '../security/trustedAppRenderer.js';
+import { createLogger } from '../logger';
 import { importExternalTheme } from './importer';
 import { loadLocalThemes, loadLocalThemesSync } from './loader';
+import { watchOmarchyTheme } from './omarchy';
 import { openLocalThemesDir, writeLocalTheme } from './writer';
+import { refreshAppearanceTheme } from '../appearance-settings-ipc';
+
+const log = createLogger('local-themes/register');
+
+export async function broadcastLocalThemes(): Promise<void> {
+  try { await refreshAppearanceTheme(); }
+  catch (error) { log.warn('Selected theme appearance could not be restored:', error); }
+  const payload = await loadLocalThemes();
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!isTrustedCindyRendererWindow(window)) continue;
+    try {
+      window.webContents.send('local-themes:changed', payload);
+    } catch (error) {
+      log.warn(`Failed to push local themes to window ${window.id}:`, error);
+    }
+  }
+}
+
+export function startOmarchyThemeSync(): void {
+  try {
+    const watcher = watchOmarchyTheme(() => {
+      log.info('Omarchy theme switched; pushing themes to windows');
+      void broadcastLocalThemes();
+    });
+    if (!watcher) return;
+    log.info('Watching Omarchy theme switches');
+    watcher.on('error', (error) => log.error('Omarchy theme watcher failed:', error));
+  } catch (error) {
+    log.error('Omarchy theme watcher not started:', error);
+  }
+}
 
 export function registerLocalThemesIpc(): void {
+  startOmarchyThemeSync();
   ipcMain.on('local-themes:list-sync', (event) => {
     event.returnValue = loadLocalThemesSync();
   });
 
-  ipcMain.handle('local-themes:list', async () => loadLocalThemes());
+  ipcMain.handle('local-themes:list', async () => {
+    try { await refreshAppearanceTheme(); }
+    catch (error) { log.warn('Selected theme appearance could not be restored:', error); }
+    return loadLocalThemes();
+  });
   ipcMain.handle('local-themes:write', async (_event, req: LocalThemeWriteRequest) =>
     writeLocalTheme(req));
   ipcMain.handle('local-themes:open-dir', async () => openLocalThemesDir());

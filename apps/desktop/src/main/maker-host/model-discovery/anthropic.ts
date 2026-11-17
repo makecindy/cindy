@@ -47,6 +47,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import type { CatalogModel, Effort } from '@cindy/model-providers';
+import type { NativeSubscriptionAccount } from '@cindy/maker-core';
 
 import { createLogger } from '../../logger.js';
 import {
@@ -57,8 +58,13 @@ import {
   setAnthropicDiscoveredModels,
 } from '../active-catalog.js';
 import { hasClaudeNativeLogin } from '../claude-native-auth.js';
+import { hasConnectedSubscriptionPool, refreshSubscriptionPoolClaudeModels, setSubscriptionPoolClaudeModelProbe,
+  resetDefaultSubscriptionClaudeDiscovery } from '../../subscription-accounts/runtime.js';
+import { readPool } from '../../subscription-accounts/store.js';
 
 const log = createLogger('model-discovery:anthropic');
+// Legacy default-profile capture/cache only. Pooled profiles use their own auth and discovery below.
+const hasConnectedClaudeAccount = () => hasClaudeNativeLogin() || hasConnectedSubscriptionPool('anthropic');
 
 const VALID_EFFORTS: ReadonlySet<string> = new Set([
   'minimal',
@@ -98,7 +104,7 @@ function enqueueCacheMutation(task: () => Promise<void>): Promise<void> {
 }
 
 function generationCanApply(generation: number, models: CatalogModel[]): boolean {
-  return generation === authGeneration && (models.length === 0 || hasClaudeNativeLogin());
+  return generation === authGeneration && (models.length === 0 || hasConnectedClaudeAccount());
 }
 
 /**
@@ -118,7 +124,8 @@ const unresolvedAliasLogged = new Set<string>();
 /**
  * SDK 条目 → 目录模型 id;无法确定时返回 null(该条目不进清单)。
  *
- * 显式 `claude-*` id 原样归一化。SDK 对每个系列的当前型号常只报简称
+ * SDK resolvedModel 优先提供真实型号；显式 `claude-*` id 原样归一化。
+ * 旧 SDK 对每个系列的当前型号常只报简称
  * (`default` / `opus` / `sonnet` …),具体版本只写在 description 开头
  * (如 "Opus 5.5 · …" / "Opus 4.7 with 1M context · …")。简称按说明里的系列与版本
  * 拼出 `claude-<系列>-<主>-<次>`(Anthropic 的 id 规则)。目录尚未登记的新版本
@@ -245,6 +252,34 @@ export interface SdkMappedModel {
   hasFastModeInfo: boolean;
 }
 
+/** Partial SDK replies refine explicit capabilities without replacing membership. */
+function mergePartialSdkCapabilities(
+  previous: readonly CatalogModel[], patches: ReadonlyMap<string, SdkMappedModel>,
+): CatalogModel[] {
+  return previous.map(current => {
+    const patch = patches.get(current.id);
+    if (!patch) return current;
+    let next = current;
+    if (patch.hasEffortInfo) next = {
+      ...next,
+      discoveredMetadata: { ...next.discoveredMetadata, ...pickModelMetadata({
+        efforts: patch.model.discoveredMetadata?.efforts,
+        defaultEffort: patch.model.discoveredMetadata?.defaultEffort,
+      }) },
+      efforts: patch.model.efforts,
+      defaultEffort: patch.model.defaultEffort,
+    };
+    if (patch.hasFastModeInfo) next = {
+      ...next,
+      discoveredMetadata: { ...next.discoveredMetadata, ...pickModelMetadata({
+        supportsFastMode: patch.model.discoveredMetadata?.supportsFastMode,
+      }) },
+      supportsFastMode: patch.model.supportsFastMode,
+    };
+    return next;
+  });
+}
+
 /**
  * 动态通道无能力信息时:产品目录基线优先；未知模型按当代旗舰能力合成 5 档，让新 Opus /
  * Sonnet / Haiku 上线后无需等客户端目录更新即可使用 xhigh / max。
@@ -275,6 +310,7 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
     if (!entry || typeof entry !== 'object') continue;
     const e = entry as {
       value?: unknown;
+      resolvedModel?: unknown;
       displayName?: unknown;
       description?: unknown;
       supportsEffort?: unknown;
@@ -282,7 +318,12 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
       supportsFastMode?: unknown;
     };
     if (typeof e.value !== 'string' || e.value.length === 0) continue;
-    const id = resolveSdkModelId(e.value, e.description);
+    // Claude Code 2.1.321 的说明不再包含版本；使用 SDK 明示的执行型号。
+    // 未提供真实 Claude id 时保留旧版 value/description 解析路径。
+    const resolved = typeof e.resolvedModel === 'string' ? normalizeModelId(e.resolvedModel) : null;
+    const id = resolved?.startsWith('claude-')
+      ? resolved
+      : resolveSdkModelId(e.value, e.description);
     if (!id || seen.has(id)) continue;
     seen.add(id);
     const reportedName =
@@ -478,11 +519,11 @@ async function applyModels(
  * 残留缓存也不能代表可用性);缓存缺失 / 坏 JSON 静默跳过(等 SDK 通道)。
  */
 export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
-  if (!hasClaudeNativeLogin()) return;
+  if (!hasConnectedClaudeAccount()) return;
   const generation = authGeneration;
   try {
     const raw: unknown = JSON.parse(await fsp.readFile(cacheFilePath(), 'utf-8'));
-    if (generation !== authGeneration || !hasClaudeNativeLogin()) return;
+    if (generation !== authGeneration || !hasConnectedClaudeAccount()) return;
     const models = (raw as { models?: unknown } | null)?.models;
     if (!Array.isArray(models) || models.length === 0) return;
     // 恢复「窗口来自 HTTP 明说」的记账,否则重启后首个 SDK 捕获会把精确窗口打回猜测值。
@@ -606,7 +647,7 @@ export function noteAnthropicSdkSupportedModels(
   raw: unknown,
   generation: number = authGeneration,
 ): void {
-  if (!hasClaudeNativeLogin() || generation !== authGeneration) return;
+  if (!hasConnectedClaudeAccount() || generation !== authGeneration) return;
   const mapped = mapAnthropicSdkModels(raw);
   if (mapped.length === 0) return;
   const mappedWithWindows = mapped.map(({ model, hasEffortInfo, hasFastModeInfo }) => {
@@ -639,38 +680,7 @@ export function noteAnthropicSdkSupportedModels(
         .filter(({ hasEffortInfo, hasFastModeInfo }) => hasEffortInfo || hasFastModeInfo)
         .map((entry) => [entry.model.id, entry] as const),
     );
-    const merged = lastApplied.map((current) => {
-      const patch = capabilityPatches.get(current.id);
-      if (!patch) return current;
-      let next = current;
-      if (patch.hasEffortInfo) {
-        next = {
-          ...next,
-          discoveredMetadata: {
-            ...next.discoveredMetadata,
-            ...pickModelMetadata({
-              efforts: patch.model.discoveredMetadata?.efforts,
-              defaultEffort: patch.model.discoveredMetadata?.defaultEffort,
-            }),
-          },
-          efforts: patch.model.efforts,
-          defaultEffort: patch.model.defaultEffort,
-        };
-      }
-      if (patch.hasFastModeInfo) {
-        next = {
-          ...next,
-          discoveredMetadata: {
-            ...next.discoveredMetadata,
-            ...pickModelMetadata({
-              supportsFastMode: patch.model.discoveredMetadata?.supportsFastMode,
-            }),
-          },
-          supportsFastMode: patch.model.supportsFastMode,
-        };
-      }
-      return next;
-    });
+    const merged = mergePartialSdkCapabilities(lastApplied, capabilityPatches);
     const mergedExplicitEffortIds = new Set(explicitEffortModelIds);
     const mergedExplicitFastModeIds = new Set(explicitFastModeModelIds);
     for (const [id, patch] of capabilityPatches) {
@@ -703,7 +713,7 @@ export function noteAnthropicSdkSupportedModels(
  * 主动清单探测(生产 = maker.refreshAgentLocalModels('claude-code', { onSupportedModels })),
  * maker 就绪后注入。结果只交给传入的回调,不经全局捕获监听器。
  */
-type AnthropicModelProbe = (onModels: (models: unknown[]) => void) => Promise<boolean>;
+type AnthropicModelProbe = (onModels: (models: unknown[]) => void, account?: NativeSubscriptionAccount) => Promise<boolean>;
 let modelProbe: AnthropicModelProbe | null = null;
 /** 同一授权世代内的在途探测;换代后不复用旧世代的探测。 */
 let probeInflight: { generation: number; promise: Promise<boolean> } | null = null;
@@ -712,6 +722,30 @@ let probeInflight: { generation: number; promise: Promise<boolean> } | null = nu
 export function setAnthropicModelProbe(probe: AnthropicModelProbe | null): void {
   modelProbe = probe;
   probeInflight = null;
+  setSubscriptionPoolClaudeModelProbe(probe ? async (account, previous) => {
+    let captured: CatalogModel[] | null = null;
+    const delivered = await probe(raw => {
+      const old = new Map(previous.map(model => [model.id, model]));
+      const mapped = mapAnthropicSdkModels(raw);
+      // Match the established SDK-capture contract: empty/unrecognized replies are
+      // not evidence that an authenticated account lost every model.
+      if (mapped.length === 0) return;
+      captured = mapped.map(({ model, hasEffortInfo, hasFastModeInfo }) => {
+        const known = old.get(model.id);
+        if (!known) return model;
+        return { ...model,
+          ...(!hasEffortInfo ? { efforts: known.efforts, defaultEffort: known.defaultEffort } : {}),
+          ...(!hasFastModeInfo ? { supportsFastMode: known.supportsFastMode } : {}),
+          discoveredMetadata: { ...known.discoveredMetadata, ...model.discoveredMetadata },
+        };
+      });
+      // Keep the established quality guard within this account, never across accounts.
+      if (isDegenerateModelListShrink(previous.length, captured.length)) {
+        captured = mergePartialSdkCapabilities(previous, new Map(mapped.map(entry => [entry.model.id, entry])));
+      }
+    }, account);
+    return delivered ? captured : null;
+  } : null);
 }
 
 /**
@@ -723,8 +757,9 @@ export function setAnthropicModelProbe(probe: AnthropicModelProbe | null): void 
  * 返回本次是否拿到了属于当前世代的清单;未登录或 maker 未就绪时返回 false。
  */
 export function refreshAnthropicModelsFromProbe(): Promise<boolean> {
+  if (readPool('anthropic')) return refreshSubscriptionPoolClaudeModels(true);
   const probe = modelProbe;
-  if (!probe || !hasClaudeNativeLogin()) return Promise.resolve(false);
+  if (!probe || !hasConnectedClaudeAccount()) return Promise.resolve(false);
   const generation = authGeneration;
   if (probeInflight?.generation === generation) return probeInflight.promise;
   const isCurrent = () => modelProbe === probe && generation === authGeneration;
@@ -758,7 +793,9 @@ export function syncAnthropicModelsWithClaudeLogin(status: {
   loggedIn: boolean;
   email?: string;
 }): void {
+  resetDefaultSubscriptionClaudeDiscovery(status.loggedIn);
   if (!status.loggedIn) {
+    if (hasConnectedSubscriptionPool('anthropic')) { requestAnthropicModelProbe(); return; }
     lastClaudeLoginEmail = undefined;
     void clearAnthropicDiscoveredModels().catch(() => undefined);
     return;
@@ -779,7 +816,10 @@ export function syncAnthropicModelsWithClaudeLogin(status: {
 
 /** 后台请求一次主动探测;失败只记日志。 */
 export function requestAnthropicModelProbe(): void {
-  void refreshAnthropicModelsFromProbe().then(
+  // Login/attach already invalidates the affected account. A background notification
+  // joins its current discovery; only manual refresh needs a forced follow-up.
+  const discovery = readPool('anthropic') ? refreshSubscriptionPoolClaudeModels() : refreshAnthropicModelsFromProbe();
+  void discovery.then(
     (applied) => {
       if (!applied) log.info('anthropic model probe returned no current model list');
     },

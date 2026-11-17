@@ -1,4 +1,5 @@
 import type { FavoriteStore } from '@/state/useRemoteModelFavorites';
+import { getProviderModelMemoryOwner } from '@/state/providerModelMemory';
 /**
  * useUnifiedRowActions —— 统一模型选择器面板里**所有会改用户数据的动作**的单点集合
  * (model-selector-unified §1.4 / §1.5 / §1.6)。
@@ -26,7 +27,7 @@ import { clampEffortToSupported, type UnifiedModelEntry } from '@cindy/model-pro
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
-import { clearModelEngineOverride, setModelEngineOverride } from '@/state/modelEnginePrefs';
+import { clearModelEngineOverride, setModelEngineOverride, editModelEngineOverrides, getModelEnginePrefsOwner, getModelEngineOverride } from '@/state/modelEnginePrefs';
 import {
   addModelFavorite,
   getModelFavorite,
@@ -46,6 +47,7 @@ import {
   engineOfAgentKind,
   enginePreferenceModelIds,
   wireModelIdOf,
+  entryWireIds, entryModelIds,
   type UnifiedAnchor,
   type UnifiedEngine,
   type UnifiedRowConfig,
@@ -75,6 +77,8 @@ export interface UnifiedRowActionsOptions {
    * 但副本已经不是正在跑的配置。缺省按关(与行配置合成一致)。
    */
   liveFast?: boolean | 'ultrafast' | undefined;
+  liveThinking?: boolean;
+  onThinkingChangeLive?: (enabled: boolean) => ActionResult;
   modelMemory?: ModelMemoryAccessors | undefined;
   /**
    * live 选中行改深度。返回值 = **这次写入真的落下去了没有**(`false` / 抛错 = 没落;
@@ -477,6 +481,10 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    * 那是面板展示 / 意图目标。冷加载 runtime 未到时回落,会把意图目标当成真实引擎,
    * 点它就绕过确认(2026-08-20 review)。
    */
+  const aliasOwner = modelMemory?.editMany
+    ? { engine: getModelEnginePrefsOwner(), memory: getProviderModelMemoryOwner() } : undefined;
+  const aliasOwnerCurrent = () => aliasOwner !== undefined && aliasOwner.engine === getModelEnginePrefsOwner() &&
+    aliasOwner.memory === getProviderModelMemoryOwner();
   const runtimeAgent = sessionEngineFilter?.runtimeAgent;
   const pendingTarget = sessionEngineFilter?.pendingTarget;
   /** 挂着下一条才落地的切换意图。点回真实引擎也要走事务清掉它,不能当普通 SET_MODEL。 */
@@ -850,11 +858,13 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
           }),
         ).then((applied) => {
           if (!applied) return false;
+            if (entry.aliasEntries) return aliasOwnerCurrent() && editModelEngineOverrides(anchor.providerId, entryModelIds(entry).map((modelId) => ({ modelId, agent: engine })));
           (options.engineStore?.set ?? setModelEngineOverride)(anchor.providerId, enginePreferenceModelIds(entry)[0]!, engine);
         });
       }
       return;
     }
+    if (entry.aliasEntries) return aliasOwnerCurrent() && editModelEngineOverrides(anchor.providerId, entryModelIds(entry).map((modelId) => ({ modelId, agent: engine })));
     (options.engineStore?.set ?? setModelEngineOverride)(anchor.providerId, enginePreferenceModelIds(entry)[0]!, engine);
   };
 
@@ -883,6 +893,23 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         commit,
       });
     }
+    if (entry.aliasEntries && !aliasOwnerCurrent()) return false;
+    if (entry.aliasEntries && isLiveRow(entry, config) && onEffortChangeLive) {
+      return runLive(() => onEffortChangeLive(effort)).then(async (applied) => {
+        if (!applied || !aliasOwnerCurrent()) return false;
+        const saved = modelMemory?.editMany?.(entryWireIds(entry, config.agent).map((model) => ({
+          kind: 'set-effort' as const, agent: config.agent, providerId: anchor.providerId, model, effort,
+        }))) ?? false;
+        if (!saved) {
+          if (liveEffort) await runLive(() => onEffortChangeLive(liveEffort));
+          return false;
+        }
+        if (selectedFavoriteUid && onSelectedFavoriteAnchorClear) {
+          return clearFavoriteAnchorForLiveRow(anchor, { ...config, effort });
+        }
+        return true;
+      });
+    }
     if (isLiveRow(entry, config) && onEffortChangeLive) {
       // 当前选中的是一条收藏,而用户改的是**同模型的普通模型行** → 写成功后清锚点
       // (见 clearFavoriteAnchorForLiveRow 的头注)。顺序与本文件其它入口一致:先应用、后落状态。
@@ -902,6 +929,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       // 第 4 参(preferredEntry)不传 —— 「配置应用」不是一次模型选择,最近使用不在此记录。
       return selectRow(anchor, { ...config, effort }, undefined, undefined, true);
     }
+    if (entry.aliasEntries) return modelMemory?.editMany?.(entryWireIds(entry, config.agent).map((model) => ({
+      kind: 'set-effort' as const, agent: config.agent, providerId: anchor.providerId, model, effort,
+    }))) ?? false;
     modelMemory?.setEffort(
       config.agent,
       anchor.providerId,
@@ -934,6 +964,23 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         commit,
       });
     }
+    if (entry.aliasEntries && !aliasOwnerCurrent()) return false;
+    if (entry.aliasEntries && isLiveRow(entry, config) && onFastModeChangeLive) {
+      return runLive(() => onFastModeChangeLive(enabled)).then(async (applied) => {
+        if (!applied || !aliasOwnerCurrent()) return false;
+        const saved = modelMemory?.editMany?.(entryWireIds(entry, config.agent).map((model) => ({
+          kind: 'set-fast' as const, agent: config.agent, providerId: anchor.providerId, model, enabled,
+        }))) ?? false;
+        if (!saved) {
+          await runLive(() => onFastModeChangeLive(liveFast ?? false));
+          return false;
+        }
+        if (selectedFavoriteUid && onSelectedFavoriteAnchorClear) {
+          return clearFavoriteAnchorForLiveRow(anchor, { ...config, fast: enabled });
+        }
+        return true;
+      });
+    }
     if (isLiveRow(entry, config) && onFastModeChangeLive) {
       // 同 applyEffort:改的是**普通模型行**的实时 Fast,而当前选中的是一条收藏 → 写成功后清锚点。
       if (selectedFavoriteUid && onSelectedFavoriteAnchorClear) {
@@ -950,6 +997,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     if ((!modelMemory || modelMemory.supportsAgent?.(config.agent) === false) && onConfigure) {
       return selectRow(anchor, { ...config, fast: enabled }, undefined, undefined, true);
     }
+    if (entry.aliasEntries) return modelMemory?.editMany?.(entryWireIds(entry, config.agent).map((model) => ({
+      kind: 'set-fast' as const, agent: config.agent, providerId: anchor.providerId, model, enabled,
+    }))) ?? false;
     modelMemory?.setFast(
       config.agent,
       anchor.providerId,
@@ -958,7 +1008,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     );
   };
 
-  const resetToRecommended: UnifiedRowActions['resetToRecommended'] = (anchor, entry, config) => {
+  const resetConfiguration: UnifiedRowActions['resetToRecommended'] = (anchor, entry, config) => {
     if (interactionDisabled || anchor.kind === 'fav') return;
     const recommendedAgent = entry.recommended;
     const recommendedEngine = engineOfAgentKind(recommendedAgent);
@@ -980,7 +1030,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         wireModelId: recommendedWireId,
         defaultEffort,
       },
-    ].filter(
+    ].flatMap((slot) => entry.aliasEntries
+      ? entryWireIds(entry, slot.agent).map((wireModelId) => ({ ...slot, wireModelId })) : [slot]).filter(
       (slot, index, slots) =>
         slots.findIndex(
           (candidate) =>
@@ -990,6 +1041,20 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
 
     /** 「跟随推荐」的持久化部分:删 override + 删掉当前与推荐引擎两格的深度 / Fast 记忆。 */
     const resetStoredConfig = (): void => {
+      if (entry.aliasEntries) {
+        if (!aliasOwnerCurrent()) throw new Error('Alias preference owner changed');
+        const before = entryModelIds(entry).map((modelId) => ({ modelId, agent: getModelEngineOverride(anchor.providerId, modelId) }));
+        if (!editModelEngineOverrides(anchor.providerId, before.map(({ modelId }) => ({ modelId })))) throw new Error('Alias preference save failed');
+        const ok = modelMemory?.editMany?.(memorySlots.flatMap((slot) => [
+          { kind: 'clear-effort' as const, agent: slot.agent, providerId: anchor.providerId, model: slot.wireModelId },
+          { kind: 'clear-fast' as const, agent: slot.agent, providerId: anchor.providerId, model: slot.wireModelId },
+        ]));
+        if (!ok) {
+          editModelEngineOverrides(anchor.providerId, before);
+          throw new Error('Alias preference reset failed');
+        }
+        return;
+      }
       for (const id of enginePreferenceModelIds(entry)) (options.engineStore?.clear ?? clearModelEngineOverride)(anchor.providerId, id);
       // ★ 删,不是写快照(2026-08-17 review H3)。记忆表是 override 表:表里没有该键
       // ⇒ 跟随当前版本的目录默认。此前这里把**这一版**的 defaultEffort 快照写回记忆槽,
@@ -1085,6 +1150,35 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         favoriteUid: null,
         onApplied: resetStoredConfig,
       });
+    }
+  };
+
+  const resetToRecommended: UnifiedRowActions['resetToRecommended'] = async (anchor, entry, config) => {
+    if (interactionDisabled || anchor.kind !== 'model') return;
+    const owner = getProviderModelMemoryOwner();
+    const resetThinking = config.agent === 'pi' && config.capability?.thinkingToggle === true;
+    const restoreLiveThinking = resetThinking && isLiveRow(entry, config) && options.liveThinking === false;
+    // Keep the existing write lock and owner-aware callback. Never clear a saved
+    // preference before the runtime accepts the restored switch.
+    if (restoreLiveThinking && (!options.onThinkingChangeLive ||
+      !await runLive(() => options.onThinkingChangeLive!(true)))) return false;
+    if (owner !== getProviderModelMemoryOwner()) return false;
+    if (!await runLive(() => resetConfiguration(anchor, entry, config))) {
+      // A later configuration write failed: restore the old switch as well.
+      if (restoreLiveThinking && owner === getProviderModelMemoryOwner())
+        await runLive(() => options.onThinkingChangeLive!(false));
+      return false;
+    }
+    if (owner === getProviderModelMemoryOwner()) {
+      // Like effort/Fast, clear both engine slots: switching back to the
+      // recommendation must not revive its previously saved thinking override.
+      for (const agent of new Set([config.agent, entry.recommended])) {
+        if (entry.capabilities[agent]?.thinkingToggle !== true) continue;
+        for (const model of entryWireIds(entry, agent)) {
+          if (modelMemory?.clearThinking) modelMemory.clearThinking(agent, anchor.providerId, model);
+          else modelMemory?.setThinking?.(agent, anchor.providerId, model, true);
+        }
+      }
     }
   };
 

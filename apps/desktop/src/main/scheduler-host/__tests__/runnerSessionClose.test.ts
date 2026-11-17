@@ -10,6 +10,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import type {
   AgentEvent,
+  InteractionDecision,
   Maker,
   Session,
   SessionSendResult,
@@ -38,6 +39,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  getSessionFsSnapshot: mocks.getSessionRowSnapshot,
   touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -60,7 +62,13 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
+import type { MakerScheduleRunnerDeps } from '../runner';
+import { Session as RuntimeSession } from '../../../../../../packages/maker-core/src/session.js';
+import { createAsyncQueue } from '../../../../../../packages/maker-core/src/agents/shared/async-queue.js';
+import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator.js';
+import { createGhostAgentTurnRunner } from '../../maker-ipc/ghostAgentTurnRunner.js';
+import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
@@ -156,7 +164,7 @@ function createFireContext(): FireContext {
   };
 }
 
-function createRunnerHarness(session: Session) {
+function createRunnerHarness(session: Session, extraDeps: Partial<MakerScheduleRunnerDeps> = {}) {
   const notifier: Notifier = { notify: vi.fn(async () => undefined) };
   const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
   const closeSession = vi.fn(async () => undefined);
@@ -165,12 +173,15 @@ function createRunnerHarness(session: Session) {
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession,
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
+  const actualMaker = extraDeps.maker ?? maker;
   const runner = new MakerScheduleRunner({
     maker,
     getDb: () => ({}) as never,
     notifier,
     logger,
+    ...extraDeps,
   });
   const schedulerUpdate = vi.fn(async () => ({}) as never);
   runner.attachScheduler({
@@ -178,7 +189,7 @@ function createRunnerHarness(session: Session) {
     isRunSilenced: () => false,
     isRunAbandoned: () => false,
   } as unknown as Scheduler);
-  return { runner, maker, closeSession, logger };
+  return { runner, maker: actualMaker, closeSession: actualMaker.closeSession as typeof closeSession, logger };
 }
 
 async function fireToCompletion(
@@ -203,6 +214,24 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/wt/dir' });
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
     mocks.isSessionInTurn.mockReturnValue(false);
+  });
+
+  it('keeps the fire-entry owner guard until session creation', async () => {
+    const h = createSessionHarness();
+    let owner = 'a';
+    const bootstrapSession = vi.fn(async (_opts, _signal, assertOwner) => {
+      assertOwner?.();
+      return h.session;
+    });
+    const context = createFireContext();
+    const captured = owner;
+    context.assertFireContext = () => { if (owner !== captured) throw new Error('owner changed'); };
+    const { runner } = createRunnerHarness(h.session, {
+      findUsageLimitWait: async () => { owner = 'b'; return null; },
+      bootstrapSession,
+    });
+    await expect(runner.fire(baseSchedule(), context)).rejects.toThrow('owner changed');
+    expect(bootstrapSession).toHaveBeenCalledOnce();
   });
 
   it('ephemeral dialogue 任务:run 成功后关闭会话', async () => {
@@ -275,6 +304,304 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
     await fireToCompletion(runner, baseSchedule(), h);
 
     expect(closeSession).not.toHaveBeenCalled();
+  });
+
+  // #10742: existing close tests only model an already-running takeover. Exercise
+  // the accepted queue -> preparing boundary with real Session/Coordinator/Ghost
+  // runners. Provider and DB ports are in-memory; no model, mail or native I/O.
+  it.each(['plugin', 'user'] as const)(
+    'hands the runtime to accepted %s input before its next turn starts', async source => {
+      const deferred = () => {
+        let resolve!: () => void;
+        const promise = new Promise<void>(r => { resolve = r; });
+        return { promise, resolve };
+      };
+      const events = createAsyncQueue<AgentEvent>();
+      const firstSend = deferred();
+      const preparing = deferred();
+      const allowDispatch = deferred();
+      const dispatched = deferred();
+      const abortEntered = deferred();
+      const allowAbort = deferred();
+      const handle = {
+        id: 'fixture-provider', agentKind: 'pi' as const, model: 'fixture-model',
+        send: vi.fn(async () => {}),
+        events: () => events, close: async () => { events.end(); },
+        abort: async () => { abortEntered.resolve(); await allowAbort.promise; },
+        isTurnRunning: () => false, setInteractionResolver: () => {},
+      };
+      const logger = { trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: () => logger };
+      const session = new RuntimeSession({
+        id: 'scheduler-session', agentKind: 'pi', workDir: process.cwd(),
+        handle: handle as never, capabilities: { sameTurnSteer: { supported: true } } as never, logger: logger as never, turnStallMs: 0,
+        permissionMode: 'bypassPermissions',
+      });
+      const discarded = vi.fn();
+      const terminalErrors = vi.fn();
+      const coordinator = new AgentInputCoordinator({
+        sendToAgent: async (_id, message, _opts, sendOpts) => {
+          const text = typeof message === 'string' ? message : message.content;
+          if (typeof text !== 'string') throw new Error('This fixture only sends text');
+          const result = await session.send(text, {
+            signal: sendOpts.signal, onTurnReserved: sendOpts.onVendorTurnReserved,
+            onAccepted: async () => {
+              sendOpts.persistUserMessage?.onPersisting?.();
+              await sendOpts.persistUserMessage?.onPersisted?.();
+            },
+          });
+          expect(result.accepted).not.toBe(false);
+          dispatched.resolve();
+          return { kind: 'session-dispatch', source: 'local', dispatched: true } as const;
+        },
+        steerToAgent: async () => {}, abortSession: async () => {},
+        isTurnRunning: () => session.isTurnRunning(), isLiveTurnRunning: () => session.isTurnRunning(),
+        isLiveSessionPresent: () => true, hasPendingInteraction: () => false,
+        getTurnGeneration: () => session.getTurnGeneration(), getTurnSessionIdentity: () => session,
+        getAgentKind: () => 'pi', getSdkSessionId: async () => handle.id,
+        createUserMessage: async () => ({} as never), touchUserSend: async () => {},
+        emitProjection: () => {}, persistTerminalSendError: terminalErrors,
+        onDiscardedQueuedMessage: discarded,
+        screenUserMessage: async () => {
+          preparing.resolve();
+          await allowDispatch.promise;
+          return { action: 'allow' };
+        },
+      });
+      session.onEvent(event => {
+        if (event.type === 'done') coordinator.onTurnEvent(session.id, 'done');
+      });
+      session.onStatusChange(status => { if (status === 'closed') coordinator.onSessionClosed(session.id); });
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', permissionMode: 'bypassPermissions', planModeEnabled: false });
+      const { runner, closeSession } = createRunnerHarness(session, {
+        applyPiModelSelectionUnderLock: async () => ({ status: 'applied' }),
+        maker: {
+          createSession: async () => session, getSession: () => session,
+          getSessionMeta: async () => ({ model: 'fixture-model', agentKind: 'pi' }),
+          isSessionAlive: () => true, recyclePiRuntimeIfResourcesDrifted: async () => false,
+          closeSession: vi.fn(() => session.close()),
+          closeSessionIfCurrent: vi.fn(async () => await session.closeIfIdle() ? 'closed' : undefined),
+        } as unknown as Maker,
+        schedulerQueue: {
+          isSessionBusy: id => coordinator.shouldQueueNewTurn(id),
+          hasPendingInput: id => coordinator.hasPendingQueuedWork(id)
+            || coordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true }),
+          hasQueuedPrompt: () => false, isPromptTracked: () => true,
+          removeQueuedPrompt: () => {},
+          enqueuePrompt: async req => {
+            await req.onPreparing?.();
+            await session.send(req.text, { origin: req.origin, onAccepted: () => req.onAccepted({ permissionMode: 'bypassPermissions', planMode: false }) });
+            firstSend.resolve();
+            return { clientId: 'scheduled-input' };
+          },
+        },
+      });
+      const enqueue = (text: string, sourcePlugin?: AgentInputQueuedMessage['sourcePlugin']) => {
+        coordinator.enqueue(session.id, {
+          clientId: 'follow-up', text, persistedContent: text, model: 'fixture-model',
+          effort: 'medium', permissionMode: 'default', workingDir: process.cwd(),
+          chatMessage: { clientId: 'follow-up', role: 'user', content: text, createdAt: new Date().toISOString() },
+          createOpts: { agentKind: 'pi', workingDir: process.cwd(), model: 'fixture-model',
+            effort: 'medium', permissionMode: 'default', userPrompt: '' },
+          ...(sourcePlugin ? { sourcePlugin } : {}),
+        });
+      };
+      const fire = runner.fire(baseSchedule({ agentKind: 'pi', model: 'fixture-model' }), createFireContext());
+      void fire.catch(() => {});
+      try {
+        await Promise.race([firstSend.promise, fire.then(() => { throw new Error('fire ended before send'); })]);
+        if (source === 'plugin') {
+          const ghost = createGhostAgentTurnRunner({
+            readSessionMeta: async () => ({}), admitLocalSession: async () => {},
+            readPluginName: () => 'Fixture plugin',
+            send: async params => {
+              enqueue(params.message, params.sourcePlugin);
+              return { ok: true, targetSessionId: session.id, wakeKind: 'queued' };
+            },
+            readLatestAssistant: async () => undefined, forkSessionAtMessage: async () => ({ id: 'unused' }),
+            broadcastSessionCreated: () => {},
+          });
+          expect(await ghost({ ghostId: 'fixture-plugin', ghostVersion: '1', sourceSessionId: session.id,
+            mode: 'continue', prompt: 'Completion receipt', persistedContent: 'Completion receipt' }))
+            .toMatchObject({ ok: true, disposition: 'queued' });
+        } else enqueue('Follow-up question');
+        events.push({ type: 'text', data: 'Report complete', source: 'pi' });
+        events.push({ type: 'done', data: { stopReason: 'stop' }, source: 'pi' });
+        await preparing.promise;
+        vi.useFakeTimers();
+        await fire;
+        // The original turn is settled but the next input is still preparing.
+        expect(session.isTurnRunning()).toBe(false);
+        expect(closeSession).not.toHaveBeenCalled();
+        allowDispatch.resolve();
+        await dispatched.promise;
+        expect(handle.send).toHaveBeenCalledTimes(2);
+        expect(coordinator.getProjection(session.id).error).toBeNull();
+        expect(discarded).not.toHaveBeenCalled();
+        expect(terminalErrors).not.toHaveBeenCalled();
+        // Async questions intentionally outlive done; cleanup must keep them answerable.
+        let answerQuestion!: (answer: InteractionDecision) => void;
+        session.setInteractionListener(() => new Promise(resolve => { answerQuestion = resolve; }));
+        const question = session.askUserQuestionAsync([{ question: 'Which follow-up scope?' }]);
+        events.push({ type: 'done', data: { stopReason: 'stop' }, source: 'pi' });
+        await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(session.getStatus()).toBe('active');
+        expect(session.manageAsyncUserQuestions({ action: 'list' }).questions).toHaveLength(1);
+        if (source === 'plugin') {
+          // A late answer must actually reach the provider in a third turn.
+          const answer: InteractionDecision = {
+            kind: 'ask_user_question', answers: { 'Which follow-up scope?': 'Keep the original scope' },
+          };
+          await expect(session.submitAsyncQuestionAnswer(question.request_id, answer)).resolves.toBe(true);
+          answerQuestion(answer);
+          await vi.waitFor(() => expect(session.manageAsyncUserQuestions({ action: 'list' }).questions).toHaveLength(0));
+          expect(handle.send).toHaveBeenCalledTimes(3);
+          events.push({ type: 'done', data: { stopReason: 'stop' }, source: 'pi' });
+          await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
+        } else {
+          const abort = session.abort();
+          await abortEntered.promise;
+          expect(session.getStatus()).toBe('aborting');
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(session.getStatus()).toBe('aborting');
+          allowAbort.resolve();
+          await abort;
+          expect(session.manageAsyncUserQuestions({ action: 'withdraw',
+            request_ids: [question.request_id], reason: 'No longer needed' }).results)
+            .toEqual([{ request_id: question.request_id, status: 'withdrawn' }]);
+        }
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(session.getStatus()).toBe('closed');
+      } finally {
+        vi.useRealTimers();
+        allowDispatch.resolve();
+        allowAbort.resolve();
+        await fire.catch(() => {});
+        await session.close();
+      }
+    },
+  );
+
+  it.each(['removed', 'owner-changed', 'runtime-replaced', 'probe-new-input', 'probe-owner-changed', 'probe-runtime-replaced', 'probe-aborting', 'probe-new-turn'] as const)(
+    'deferred cleanup respects %s after queued input takes ownership', async outcome => {
+      vi.useFakeTimers();
+      const h = createSessionHarness();
+      let pending = true;
+      let inTurn = false;
+      let background = false;
+      let wakes = 0;
+      let nativeWork = false;
+      let probeRaceApplied = false;
+      let status: 'active' | 'aborting' = 'active';
+      let generation = 0;
+      Object.assign(h.session, {
+        getStatus: () => status,
+        getTurnGeneration: () => generation,
+        listBackgroundTasks: () => background ? [{}] : [],
+        countPendingWakeContinuations: () => wakes,
+        manageAsyncUserQuestions: () => ({ questions: [] }),
+        hasLiveBackgroundWork: async () => {
+          const snapshot = nativeWork;
+          await Promise.resolve();
+          if (!probeRaceApplied) {
+            probeRaceApplied = true;
+            if (outcome === 'probe-new-input') pending = true;
+            if (outcome === 'probe-aborting') status = 'aborting';
+            if (outcome === 'probe-new-turn') { generation++; nativeWork = true; }
+            if (outcome === 'probe-owner-changed') owner = false;
+            if (outcome === 'probe-runtime-replaced') current = { ...h.session } as Session;
+          }
+          return snapshot;
+        },
+      });
+      let owner = true;
+      let current: Session | null = h.session;
+      const retire = vi.fn(async () => 'closed' as const);
+      const { runner, closeSession } = createRunnerHarness(h.session, {
+        maker: {
+          createSession: async () => h.session, getSession: () => current,
+          getSessionMeta: async () => null, isSessionAlive: () => false,
+          closeSession: vi.fn(), closeSessionIfCurrent: retire,
+          recyclePiRuntimeIfResourcesDrifted: async () => false,
+        } as unknown as Maker,
+        schedulerQueue: {
+          isSessionBusy: () => false, hasPendingInput: () => pending,
+          hasQueuedPrompt: () => false, isPromptTracked: () => false,
+          removeQueuedPrompt: () => {},
+          enqueuePrompt: async () => { throw new Error('initial dispatch failed'); },
+        },
+      });
+      const context = createFireContext();
+      context.assertFireContext = () => { if (!owner) throw new Error('owner changed'); };
+      try {
+        await expect(runner.fire(baseSchedule(), context)).rejects.toThrow('initial dispatch failed');
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(retire).not.toHaveBeenCalled();
+        pending = false;
+        inTurn = true;
+        mocks.isSessionInTurn.mockImplementation(() => inTurn);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(retire).not.toHaveBeenCalled();
+        inTurn = false;
+        if (outcome === 'removed') {
+          background = true;
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(retire).not.toHaveBeenCalled();
+          background = false;
+          wakes = 1;
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(retire).not.toHaveBeenCalled();
+          wakes = 0;
+          nativeWork = true;
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(retire).not.toHaveBeenCalled();
+          nativeWork = false;
+        }
+        if (outcome === 'owner-changed') owner = false;
+        if (outcome === 'runtime-replaced') current = { ...h.session } as Session;
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(closeSession).not.toHaveBeenCalled();
+        if (outcome === 'probe-new-input') {
+          expect(retire).not.toHaveBeenCalled();
+          pending = false;
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        if (outcome === 'probe-aborting' || outcome === 'probe-new-turn') {
+          expect(retire).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(retire).not.toHaveBeenCalled();
+          status = 'active';
+          nativeWork = false;
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        if (outcome === 'removed' || outcome === 'probe-new-input'
+          || outcome === 'probe-aborting' || outcome === 'probe-new-turn') {
+          expect(retire).toHaveBeenCalledExactlyOnceWith(h.session, 'requested', { onlyIfIdle: true });
+        } else expect(retire).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally { vi.useRealTimers(); }
+    },
+  );
+
+  it('closes a fresh empty runtime when queue restoration fails before acceptance', async () => {
+    const h = createSessionHarness();
+    const coordinator = new AgentInputCoordinator({
+      loadQueueSnapshot: async () => { throw new Error('snapshot unavailable'); },
+    } as never);
+    await expect(coordinator.ensureQueueRestored(h.session.id)).rejects.toThrow('snapshot unavailable');
+    const { runner, closeSession } = createRunnerHarness(h.session, {
+      schedulerQueue: {
+        isSessionBusy: id => coordinator.shouldQueueNewTurn(id),
+        hasPendingInput: id => coordinator.hasPendingQueuedWork(id)
+          || coordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true }),
+        hasQueuedPrompt: () => false, isPromptTracked: () => false,
+        removeQueuedPrompt: () => {}, enqueuePrompt: async () => ({ retry: true }),
+      },
+    });
+    await runner.fire(baseSchedule(), createFireContext());
+    expect(coordinator.isQueueRestored(h.session.id)).toBe(false);
+    expect(h.session.send).not.toHaveBeenCalled();
+    expect(closeSession).toHaveBeenCalledOnce();
   });
 
   it('closeSession 抛错不影响 fire 结果(仅 warn)', async () => {

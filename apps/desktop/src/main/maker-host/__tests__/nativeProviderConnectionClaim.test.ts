@@ -33,6 +33,8 @@ const h = vi.hoisted(() => ({
   codexLoginReadOnly: vi.fn(() => false),
   readClaudeStatus: vi.fn(),
   readNativeLogin: vi.fn(),
+  codexIdentity: undefined as string | undefined,
+  codexWorkspace: 'workspace-a',
 }));
 
 vi.mock('electron', () => ({
@@ -48,9 +50,21 @@ vi.mock('../../appSessionState.js', () => ({
   }),
   activeOwnerScopeKey: () => `local:${h.dataOwnerId ?? 'none'}:${h.generation}`,
   isAppSessionBoundaryPending: () => false,
+  ownerScopedUserDataPath: (...segments: string[]) => path.join(h.userDataDir, ...segments),
+  dataOwnerStorageKey: (ownerId: string) => ownerId,
+}));
+vi.mock('../../userDataPath.js', () => ({
+  userDataPath: (...segments: string[]) => path.join(h.userDataDir, ...segments),
+}));
+vi.mock('../../ownerContext.js', () => ({
+  configureOwnerContext: () => {},
+  activeDataOwnerId: () => h.dataOwnerId,
+  isOwnerBoundaryPending: () => false,
+  ownerGeneration: () => h.generation,
   // model-disable-store(经 createDesktopProviderService 引入)按 owner 定位 override
   // 文件;指到本用例的临时 userData 即可(store 是惰性读,文件缺席 = 全启用)。
-  ownerScopedUserDataPath: (...segments: string[]) => path.join(h.userDataDir, ...segments),
+  ownerScopedPath: (...segments: string[]) => path.join(h.userDataDir, ...segments),
+  hasCommittedOwner: () => Boolean(h.dataOwnerId),
 }));
 
 // 本机 CLI 登录态:*Unbound 是「CLI 登没登录」,无绑定语义;带绑定的读取叠加 owner 校验,
@@ -67,13 +81,13 @@ vi.mock('../claude-native-connection.js', () => ({
       : null;
   },
 }));
-vi.mock('../claude-native-cli.js', () => ({
+vi.mock('../claude-native-cli.desktop.js', () => ({
   readClaudeCliLoginStatus: async () => {
     h.readClaudeStatus();
     return { loggedIn: h.claudeCredentialPresent };
   },
 }));
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   grokAccountIdentity: () => 'grok@example.test',
   hasGrokOAuthLoginUnbound: () => h.grokCredentialPresent,
   hasGrokOAuthLogin: () => h.grokCredentialPresent && isBoundToCurrentOwner('xai'),
@@ -114,9 +128,14 @@ vi.mock('../auth-adapters.js', () => ({
   desktopCodexAuthAdapter: {
     hasCodexOAuthLogin: h.codexLoginWithSideEffects,
     hasCodexOAuthLoginReadOnly: h.codexLoginReadOnly,
-    readAccountPresentationState: async () => ({ authenticated: h.codexLoginReadOnly() }),
+    readAccountPresentationState: async () => ({ authenticated: h.codexLoginReadOnly(), identity: h.codexIdentity }),
     hasCodexOAuthLoginUnbound: () => false,
   },
+}));
+
+vi.mock('../../subscription-accounts/nativeCli.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../subscription-accounts/nativeCli.js')>(),
+  readNativeCodexTokens: async () => ({ chatgptAccountId: h.codexWorkspace, canDispatch: () => true }),
 }));
 
 vi.mock('../../authManager.js', () => ({
@@ -187,7 +206,9 @@ beforeEach(() => {
   h.hasAnthropicModels = true;
   h.refreshAnthropicModelsFromProbe.mockClear();
   h.codexLoginWithSideEffects.mockClear();
-  h.codexLoginReadOnly.mockClear();
+  h.codexLoginReadOnly.mockReset().mockReturnValue(false);
+  h.codexIdentity = undefined;
+  h.codexWorkspace = 'workspace-a';
   h.readClaudeStatus.mockClear();
   h.readNativeLogin.mockClear();
 });
@@ -197,6 +218,18 @@ afterEach(() => {
 });
 
 describe('native provider connection claim on read', () => {
+  it('projects verified workspace identity for a native login without creating an account pool', async () => {
+    h.codexLoginReadOnly.mockReturnValue(true);
+    h.codexIdentity = 'same@example.test';
+    const first = (await listProviders(false)).find(provider => provider.id === 'openai')!;
+    expect(first.subscriptionAccountKeys).toHaveLength(1);
+    expect(first.subscriptionAccountPool).toBeUndefined();
+    h.codexWorkspace = 'workspace-b';
+    const second = (await listProviders(false)).find(provider => provider.id === 'openai')!;
+    expect(second.subscriptionAccountKeys).not.toEqual(first.subscriptionAccountKeys);
+    expect(second.subscriptionAccountKeys?.[0]).not.toContain('workspace');
+  });
+
   it('snapshot reads never probe CLI or account identity, while normal reads still refresh', async () => {
     const service = getDesktopProviderService({ allowSideEffects: false });
     for (const present of [false, true]) {

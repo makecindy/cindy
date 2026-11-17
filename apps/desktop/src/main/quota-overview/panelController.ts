@@ -18,7 +18,8 @@ import type {
   MenubarView,
 } from '../../shared/menubarQuota.js';
 import { getAgentIslandService } from '../agent-island/service.js';
-import { isAppSessionBoundaryPending } from '../appSessionState.js';
+import { getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
+import { onAuthStateChange } from '../authManager.js';
 import {
   focusMainWindow,
   openMainWindowBillingTopUp,
@@ -26,15 +27,18 @@ import {
   openMainWindowRemoteControlSettings,
   openMainWindowVoiceSettings,
 } from '../deepLink.js';
-import { getActiveControllers } from '../device-link/dispatch.js';
-import { getResolvedMainLocale, rawMainString } from '../i18n.js';
+import { getActiveControllers } from '../device-link/dispatch.desktop.js';
+import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 import { inspectAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { applyNewMakerDraftRoute } from '../maker-ipc/register.js';
 import { getDesktopNotificationsEnabled } from '../notificationService.js';
+import { emptyMenubarInputs } from '../menubar/collect.js';
+import { MENUBAR_HARNESS_LOGOS } from '../menubar/logos.js';
 import { buildMenubarActivities } from '../menubar/activity.js';
-import { isLowOnEverything, type MenubarBuildInput } from '../menubar/snapshot.js';
-import { createMenubarTranslate } from '../menubar/strings.js';
+import { buildMenubarView, isLowOnEverything, type MenubarBuildInput } from '../menubar/snapshot.js';
+import { buildMenubarUiStrings, createMenubarTranslate } from '../menubar/strings.js';
+import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { getQuotaOverviewService, type QuotaOverviewBuild, type QuotaOverviewService } from './service.js';
 
 const log = createLogger('quota-panel');
@@ -102,6 +106,12 @@ export class QuotaPanelController {
     this.disposers.push(this.overview.subscribe((build) => this.publish(build)));
     const island = getAgentIslandService();
     if (island) this.disposers.push(island.subscribeTaskOverview(() => this.publishTaskOverview()));
+    // The last view belongs to the old owner (received shares included): clear it at the account
+    // boundary or sign-out instead of waiting for the next owner's first build.
+    this.disposers.push(
+      onAppSessionInvalidated(() => this.publishUnavailableOverview()),
+      onAuthStateChange(() => { if (!this.overview.latest()) this.publishUnavailableOverview(); }),
+    );
     // Subscribed first, so the first build after acquiring reaches the presentation.
     this.disposers.push(this.overview.acquire());
     const current = this.overview.latest();
@@ -183,6 +193,24 @@ export class QuotaPanelController {
       return;
     }
     this.updateLowAlert(isLowOnEverything(build.input), build.input);
+  }
+
+  /** Identity invalidation cannot wait for an overview still collecting the old owner's data. */
+  private publishUnavailableOverview(): void {
+    if (!this.started) return;
+    const nowMs = Date.now();
+    const locale = getResolvedMainLocale();
+    const raw = (key: string) => rawMainString(key, locale);
+    const view = buildMenubarView({
+      ...emptyMenubarInputs(nowMs, ''), nowMs, locale,
+      moneySymbol: currentLedgerCurrency() === 'CNY' ? '¥' : '$', settings: this.settings,
+      harnessLogos: MENUBAR_HARNESS_LOGOS,
+      uiStrings: buildMenubarUiStrings(mainStringKeysUnder('menubar.ui'), raw, locale),
+      t: createMenubarTranslate(locale, raw),
+      ...(!getActiveAppSession().dataOwnerId ? { gate: 'sign-in' as const } : {}),
+    });
+    this.wasLow = null;
+    this.show({ ...view, ...this.taskOverview('sign-in'), ...controlState('sign-in') });
   }
 
   /** Unread changes must not wait for quota/history/network reads to finish. */

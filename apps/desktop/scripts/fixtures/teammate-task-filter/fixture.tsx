@@ -54,7 +54,7 @@ mountPage({
         claimLegacyRendererOwner: () => ({ ...snapshot, claimed: true, canInitialize: true, pinnedLegacyConsumed: true }),
         onPinnedOrderChanged: subscription('pinned'),
       },
-      maker: { onBotWorkbenchChanged: subscription('workbench'), onBotDelegationChanged: subscription('delegation') },
+      maker: { onBotWorkbenchChanged: subscription('workbench') },
       localDb: { bots: { workbench: { followScopes: async () => [
         { botId: 'cindy-default', delegatedSessionIds: ['cindy-local'] },
         { botId: 'dash', sessionIds: ['local', 'owner'], delegatedSessionIds: ['local'] },

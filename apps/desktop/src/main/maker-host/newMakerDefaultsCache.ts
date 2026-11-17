@@ -6,6 +6,7 @@ import {
   resolveOrcaWorkerPermissionMode,
   type OrcaWorkerPermissionMode,
 } from '../../shared/orca-worker-permission-mode.js';
+import type { OrcaWorkerRoles } from '@cindy/device-link';
 
 /**
  * newMakerDefaultsCache —— renderer "New Maker" 面板用户当前选择的 main 端缓存。
@@ -62,6 +63,8 @@ export function subscribeNewMakerDefaults(listener: (confirmedRequestId?: string
 export interface WorkerCreationPrefsSnapshot {
   workerPermissionMode: OrcaWorkerPermissionMode;
   selection?: WorkerCreationSelection | null;
+  /** 当前账号的角色清单与每个角色的记忆；供手机与远程控制的电脑读取。 */
+  roles?: OrcaWorkerRoles | null;
   ownerStamp?: DataOwnerPushStamp;
 }
 
@@ -302,6 +305,18 @@ export interface RemoteNewMakerDefaults {
    * 播种 worktree 开关默认态。旧版被控端不回 → undefined → 控制端按未勾选兜底。
    */
   worktreeEnabled?: boolean;
+  /**
+   * 被控端新建任务当前选中的引擎(vendor 无关根字段,取自 selectedRoute.harness)。控制端在
+   * 「到这台电脑新建任务」时据此切到同一引擎,远程草稿与被控端自己的新建任务一致,不受控制端
+   * 本机引擎影响。旧版被控端不回 → undefined → 控制端保持原引擎。
+   */
+  selectedAgentKind?: 'claude-code' | 'codex' | 'pi';
+}
+
+function selectedAgentKindFromRoute(route: BotModelRoute | undefined): RemoteNewMakerDefaults['selectedAgentKind'] {
+  if (route?.harness === 'claude') return 'claude-code';
+  if (route?.harness === 'codex' || route?.harness === 'pi') return route.harness;
+  return undefined;
 }
 
 export function getRemoteNewMakerDefaults(
@@ -316,7 +331,9 @@ export function getRemoteNewMakerDefaults(
   // 否则空草稿的工作端上,手机/控制端永远读不到勾选态。
   const providerModelMemory = providerMemoryCache ?? undefined;
   const modelChosenByUser = cache?.modelChosenByVendor?.[vendor];
+  const selectedAgentKind = selectedAgentKindFromRoute(cache?.selectedRoute);
   const base: RemoteNewMakerDefaults = {
+    ...(selectedAgentKind ? { selectedAgentKind } : {}),
     ...(providerModelMemory ? { providerModelMemory } : {}),
     ...(cache ? { worktreeEnabled: cache.worktreeEnabled === true } : {}),
     ...(typeof modelChosenByUser === 'boolean' ? { modelChosenByUser } : {}),
@@ -369,6 +386,14 @@ export function getNewMakerModelTuning(ownerScope: string, agent: 'claude-code' 
   const fastMode = preset?.fastByModel?.[model] ?? provider?.fastByModel?.[model] ?? cache.fastModeByModel[model];
   return { ...(typeof effort === 'string' ? { effort } : {}),
     ...((typeof fastMode === 'boolean' || fastMode === 'ultrafast') ? { fastMode } : {}) };
+}
+
+/** 角色清单镜像同样按账号与代次隔离；还没镜像到或换了账号时返回 null，不拿别的账号的记忆顶替。 */
+export function getWorkerRolesMirror(owner: DataOwnerPushStamp): OrcaWorkerRoles | null {
+  const stamp = workerCreationPrefsCache?.ownerStamp;
+  return stamp?.dataOwnerId === owner.dataOwnerId && stamp?.ownerGeneration === owner.ownerGeneration
+    ? workerCreationPrefsCache?.roles ?? null
+    : null;
 }
 
 /** Route mirrors are owner/generation fenced; changing permission alone preserves them. */

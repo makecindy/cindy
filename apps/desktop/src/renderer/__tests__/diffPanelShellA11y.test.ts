@@ -38,7 +38,7 @@ describe('DiffPanelShell — drawer accessibility contract', () => {
   it('floating preview uses default width and does not render the resize handle', () => {
     expect(source).toContain('const panelWidth = isFloating ? defaultWidth : width');
     expect(source).toMatch(
-      /style=\{\{\s*width:\s*`\$\{panelWidth\}px`,\s*maxWidth:\s*'90vw'\s*\}\}/,
+      /style=\{\{\s*width:\s*`\$\{panelWidth\}px`,\s*maxWidth:\s*isFloating \? 'calc\(100% - 24px\)' : '90vw'\s*\}\}/,
     );
   });
 
@@ -50,10 +50,7 @@ describe('DiffPanelShell — drawer accessibility contract', () => {
     expect(source).toContain("propertyName !== 'transform'");
     expect(source).toContain('if (!open) setRetainShadow(false)');
     expect(source).toContain('onTransitionEnd={onShadowTransitionEnd}');
-    expect(source).toContain(
-      "showShadow && (isFloating ? 'shadow-[var(--shadow-menu)]' : 'shadow-xl')",
-    );
-    expect(source).not.toContain('text-popover-foreground shadow-xl');
+    expect(source).toContain("showShadow && 'shadow-[shadow:var(--shadow-menu)]'");
   });
 
   it('resizeHandleAria remains translated in all supported locales while drawer references it', () => {

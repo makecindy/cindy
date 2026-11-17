@@ -3,11 +3,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   controllerAvailable: true,
+  awaitReady: vi.fn(),
   setGoal: vi.fn(),
   getStatus: vi.fn(),
   resumeOnOpen: vi.fn(),
   resumeGoal: vi.fn(),
   updateGoal: vi.fn(),
+  scope: 'owner-a:1',
+  boundaryPending: false,
+}));
+
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => mocks.scope,
+  isAppSessionBoundaryPending: () => mocks.boundaryPending,
 }));
 
 vi.mock('electron', () => ({
@@ -19,17 +27,16 @@ vi.mock('electron', () => ({
   },
 }));
 
-vi.mock('../../goal-host/index.js', () => ({
-  getGoalController: () => mocks.controllerAvailable
-    ? {
-        setGoal: mocks.setGoal,
-        getStatus: mocks.getStatus,
-        resumeOnOpen: mocks.resumeOnOpen,
-        resumeGoal: mocks.resumeGoal,
-        updateGoal: mocks.updateGoal,
-      }
-    : null,
-}));
+vi.mock('../../goal-host/index.js', () => {
+  const read = () => mocks.controllerAvailable ? {
+    setGoal: mocks.setGoal, getStatus: mocks.getStatus, resumeOnOpen: mocks.resumeOnOpen,
+    resumeGoal: mocks.resumeGoal, updateGoal: mocks.updateGoal,
+  } : null;
+  return {
+    getGoalController: read,
+    waitForGoalController: async () => { await mocks.awaitReady(); return read(); },
+  };
+});
 
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn() }),
@@ -62,6 +69,9 @@ describe('goal update IPC errors', () => {
     vi.clearAllMocks();
     mocks.handlers.clear();
     mocks.controllerAvailable = true;
+    mocks.scope = 'owner-a:1';
+    mocks.boundaryPending = false;
+    mocks.awaitReady.mockResolvedValue(undefined);
     registerGoalHandlers();
   });
 
@@ -74,6 +84,40 @@ describe('goal update IPC errors', () => {
       code: 'INTERNAL',
       message: expect.stringContaining('goal controller not started'),
     });
+  });
+
+  // 2026-11-10: eager IPC preceded account-host startup. Existing tests only
+  // covered an already available/missing controller. Unit, controlled startup promise.
+  it('keeps a cold-start status read pending and returns the persisted goal after startup', async () => {
+    mocks.controllerAvailable = false;
+    let release!: () => void;
+    mocks.awaitReady.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    const status = { sessionId: 's1', status: 'paused' };
+    mocks.getStatus.mockResolvedValueOnce(status);
+    const result = handlerFor(MAKER_INVOKE.GOAL_GET_STATUS)({}, 's1');
+    expect(mocks.getStatus).not.toHaveBeenCalled();
+    mocks.controllerAvailable = true;
+    release();
+    await expect(result).resolves.toEqual(status);
+  });
+
+  it('does not report a successful resume when startup was superseded by an account switch', async () => {
+    mocks.controllerAvailable = false;
+    const failure = Object.assign(new Error('account changed'), { code: 'PRECONDITION_FAILED' });
+    mocks.awaitReady.mockRejectedValueOnce(failure);
+    await expect(handlerFor(MAKER_INVOKE.GOAL_RESUME)({}, 's1')).rejects.toBe(failure);
+    expect(mocks.resumeGoal).not.toHaveBeenCalled();
+  });
+
+  it('rejects a Goal request during an account switch and one whose owner changed while waiting', async () => {
+    mocks.boundaryPending = true;
+    await expect(handlerFor(MAKER_INVOKE.GOAL_RESUME)({}, 's1')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mocks.awaitReady).not.toHaveBeenCalled();
+
+    mocks.boundaryPending = false;
+    mocks.awaitReady.mockImplementationOnce(async () => { mocks.scope = 'owner-b:2'; });
+    await expect(handlerFor(MAKER_INVOKE.GOAL_RESUME)({}, 's1')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mocks.resumeGoal).not.toHaveBeenCalled();
   });
 
   it('maps the initial Goal status read failure to INTERNAL without leaking storage details', async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { UnsupportedInboundMediaError } from '@cindy/im';
 
 import { verifiedInboundMediaMime } from '../inboundMediaVerify';
 
@@ -15,6 +16,13 @@ describe('verifiedInboundMediaMime', () => {
   it('rejects bytes that are not real media, whatever the name or MIME claimed', () => {
     expect(() => verifiedInboundMediaMime(PDF, 'image/png', 'image')).toThrow();
     expect(() => verifiedInboundMediaMime(PDF, 'video/mp4', 'av')).toThrow();
+  });
+
+  // Tier 1, #9250: HEIC is classified as image but not accepted by the media store.
+  // The transport needs a permanent rejection signal distinct from disk/network failures.
+  it('identifies unsupported HEIC bytes as a permanent rejection', () => {
+    const heic = Uint8Array.from([0, 0, 0, 16, ...new TextEncoder().encode('ftypheic'), 0, 0, 0, 0]);
+    expect(() => verifiedInboundMediaMime(heic, 'image/heic', 'image')).toThrow(UnsupportedInboundMediaError);
   });
 
   it('rejects media of the wrong family for the requested store', () => {

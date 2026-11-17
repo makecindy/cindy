@@ -32,7 +32,7 @@ function harness(
   const setComposerModel = vi.fn(async()=>saved);
   const confirmMobileSessionAgentSwitch = vi.fn(async()=>confirmed);
   // 换电脑确认:按 confirmed 点「换电脑运行」或「保持不变」。
-  const relocationAlert = vi.fn((_title: string, _message?: string, buttons?: { onPress?: () => void }[]) => {
+  const relocationAlert = vi.fn((_title: string, _message?: string, buttons?: Parameters<NonNullable<Parameters<typeof confirmAgentLocationForPick>[1]>>[2]) => {
     buttons?.[confirmed ? 1 : 0]?.onPress?.();
   });
   const resolveAgentCapability = vi.fn(() => ({ supportsFastMode: true }));

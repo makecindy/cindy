@@ -231,7 +231,46 @@ describe('BrowserBackendHealthService', () => {
     await expect(service.getHealth()).resolves.toEqual({
       active: 'user-browser', status: 'error', canRecover: false, reason: 'plugin-missing',
     });
+    // Preserve the actual reason through the settings health projection (2026-11-07 regression).
+    for (const reason of ['plugin-updating', 'plugin-selection-required']) {
+      ctl.call.mockResolvedValueOnce({ ok: true, action: 'status', status: 200, data: { configured: false, reason } });
+      await expect(service.getHealth()).resolves.toMatchObject({ reason, canRecover: false });
+    }
     expect(ctl.restartEmbedded).not.toHaveBeenCalled();
     expect(ctl.probeActiveControl).not.toHaveBeenCalled();
   });
+  // 2026-11-16: with no Chrome / Edge installed, My browser asks for a browser before the plugin
+  // or extension steps; a pending update or failed probe keeps its own guidance.
+  it('asks for a browser first when none is installed', async () => {
+    const ctl = controller();
+    ctl.getCurrentBackendKind.mockReturnValue('user-browser');
+    let installed = false;
+    const service = new BrowserBackendHealthService(ctl, logger(), () => installed);
+    for (const data of [{ configured: false }, { configured: true, connected: false }]) {
+      ctl.call.mockResolvedValueOnce({ ok: true, action: 'status', status: 200, data });
+      await expect(service.getHealth()).resolves.toMatchObject({ status: 'error', reason: 'browser-missing' });
+    }
+    ctl.call.mockResolvedValueOnce({ ok: true, action: 'status', status: 200, data: { configured: false, reason: 'plugin-updating' } });
+    await expect(service.getHealth()).resolves.toMatchObject({ reason: 'plugin-updating' });
+    installed = true;
+    ctl.call.mockResolvedValueOnce({ ok: true, action: 'status', status: 200, data: { configured: false } });
+    await expect(service.getHealth()).resolves.toMatchObject({ reason: 'plugin-missing' });
+    // An unreadable install location must not hide the plugin step.
+    const failing = new BrowserBackendHealthService(ctl, logger(), () => { throw new Error('EACCES'); });
+    ctl.call.mockResolvedValueOnce({ ok: true, action: 'status', status: 200, data: { configured: false } });
+    await expect(failing.getHealth()).resolves.toMatchObject({ reason: 'plugin-missing' });
+  });
+  // Unit regression: transport/probe errors must not become an extension-install instruction.
+  it.each(['result', 'bridge', 'throw'])('reports %s probe failures separately from disconnection', async (kind) => {
+    const ctl = controller();
+    ctl.getCurrentBackendKind.mockReturnValue('user-browser');
+    if (kind === 'throw') ctl.call.mockRejectedValueOnce(new Error('probe unavailable'));
+    else ctl.call.mockResolvedValueOnce(kind === 'result'
+      ? { ok: false, action: 'status', status: 503 }
+      : { ok: true, action: 'status', status: 200, data: { configured: true, error: 'BRIDGE_UNAVAILABLE' } });
+    await expect(new BrowserBackendHealthService(ctl, logger()).getHealth()).resolves.toMatchObject({
+      status: 'error', reason: 'status-failed', canRecover: false,
+    });
+  });
+
 });

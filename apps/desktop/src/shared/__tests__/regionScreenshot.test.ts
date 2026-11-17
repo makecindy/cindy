@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ScrollCapture, matchScrollFrames } from '../scrollCapture';
-import { recordingControlsBounds, scrollCaptureLayout, scrollPreviewBounds, validRecordingBytes } from '../regionCapture';
+import { recordingControlsBounds, recordingControlsTipSide, scrollCaptureLayout, scrollPreviewBounds, validRecordingBytes } from '../regionCapture';
 import type { RegionScreenshotBitmap } from '../regionScreenshot';
 
 import {
@@ -210,6 +210,14 @@ describe('continuous region capture', () => {
     const panel = recordingControlsBounds(selection, display, false)!;
     expect(panel).not.toBeNull();
     expect(panel.y >= selection.y + selection.height || panel.x >= selection.x + selection.width).toBe(true);
+    // Hover labels on the controls open away from the selection, never into the recorded pixels.
+    expect(recordingControlsTipSide(panel, selection)).toBe('bottom');
+    const low = { x: 200, y: 600, width: 1200, height: 400 };
+    expect(recordingControlsTipSide(recordingControlsBounds(low, display, false)!, low)).toBe('top');
+    const tall = { x: 0, y: 0, width: 1300, height: 1080 };
+    expect(recordingControlsTipSide(recordingControlsBounds(tall, display, false)!, tall)).toBe('right');
+    const right = { x: 620, y: 0, width: 1300, height: 1080 };
+    expect(recordingControlsTipSide(recordingControlsBounds(right, display, false)!, right)).toBe('left');
     expect(recordingControlsBounds({ ...display, x: 0, y: 0 }, display, false)).toBeNull();
     // The former tall panel rejected this region; compact controls fit while annotations do not.
     const wide = { x: 0, y: 0, width: 1920, height: 980 };

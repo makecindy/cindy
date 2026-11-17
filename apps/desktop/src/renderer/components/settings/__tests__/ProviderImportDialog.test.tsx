@@ -317,9 +317,10 @@ describe('ProviderImportDialog', () => {
     await screen.findByText('Vendor Demo');
     const next = deferred<ProviderImportPreview>();
     maker.previewProviderImport.mockImplementationOnce(() => next.promise);
-    fireEvent.change(screen.getByLabelText('settings.providers.import.destination'), {
-      target: { value: 'old-connection' },
-    });
+    // The destination is the shared Select: open it and choose the existing connection.
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'settings.providers.import.destination' }), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /old-connection/ }));
     expect(
       (screen.getByText('settings.providers.import.create').closest('button') as HTMLButtonElement)
         .disabled,

@@ -10,6 +10,8 @@ const registerSource = readFileSync(
 // Retain local characterization guards at the production stages they describe.
 // Cross-stage delivery and recovery timing run in sessionEventPipeline.test.ts.
 const eventSource = [
+  // The pipeline's auto-resume steps are in sessionEventAutoResumeSteps.ts; the pipeline calls them in place.
+  'sessionEventAutoResumeSteps',
   'sessionEventPreparation',
   'sessionEventStream',
   'sessionEventDelivery',
@@ -79,21 +81,11 @@ describe('interrupted continuation enqueue contract', () => {
   });
 
   it('keeps a scheduler auto-resume owned until dispatch and fails it when discarded', () => {
-    const scheduleStart = registerSource.indexOf('autoResumeBookkeeping.schedule(');
-    const scheduleEnd = registerSource.indexOf('steerToAgent:', scheduleStart);
-    expect(scheduleStart).toBeGreaterThan(-1);
-    expect(scheduleEnd).toBeGreaterThan(scheduleStart);
-    const scheduleHook = registerSource.slice(scheduleStart, scheduleEnd);
-    expect(scheduleHook).not.toMatch(/clearSchedulerAutoResumePending\s*\(/);
-    expect(scheduleHook).toMatch(/\(attempt\)\s*=>\s*\{\s*return\s*\(async/);
-    expect(scheduleHook).not.toMatch(/void\s*\(async\s*\(\)\s*=>/);
+    // The auto-resume hooks are in interruptedTurnAutoResumeHooks.ts; register.ts hands them to the coordinator.
+    // The hooks' own schedule and discard steps are guarded in hostDesktopSourceContracts.guard.test.ts.
+    expect(registerSource).toContain('onResumableTurnError: interruptedTurnAutoResumeHooks.onResumableTurnError,');
 
     expect(eventSource).toMatch(/getAutoResumeDeferredOwner\(session\.id\)/);
-    const ownerDiscardedStart = registerSource.indexOf('onResumableTurnErrorDiscarded:');
-    const ownerDiscardedEnd = registerSource.indexOf('onResumableTurnError:', ownerDiscardedStart);
-    expect(registerSource.slice(ownerDiscardedStart, ownerDiscardedEnd)).toMatch(
-      /deferredOwner:\s*options\.owner/,
-    );
 
     const dispatchedStart = registerSource.indexOf('onDispatchedUserTurn:');
     const dispatchedEnd = registerSource.indexOf('noteSessionClearBoundary', dispatchedStart);
@@ -273,13 +265,13 @@ describe('interrupted continuation enqueue contract', () => {
     expect(sessionViewSource).toMatch(
       /if \(syntheticContinuationPending && sessionInterruptAcked\) \{\s*setSessionInterruptAcked\(false\);\s*\}/,
     );
-    // 恰好三处消费点(error-tail / interrupted / unread-failed-schedule banner
-    // 的互斥渲染条件),多一处就要回来审视是否绕过了「抑制交给排队/在飞状态」
-    // 这条契约。
+    // 四处消费点：原有 error-tail / interrupted / unread-failed-schedule banner
+    // 的互斥渲染条件，以及分享任务恢复弹窗的 active 门。弹窗同样必须让排队／
+    // 在飞的自动继续优先，不能在后台恢复期间要求用户换电脑。
     // 注:PR #879 加的「挂起状态落回 false 的边沿 → 重算告警红点」effect 走的是
     // 早退写法(`if (!was || syntheticContinuationPending) return;`),不消费这个
     // 否定形式,故计数不变。
-    expect(matchIndexes(sessionViewSource, /!syntheticContinuationPending/)).toHaveLength(3);
+    expect(matchIndexes(sessionViewSource, /!syntheticContinuationPending/)).toHaveLength(4);
   });
 
   it('defers Orca worker terminal while auto-resume owns the failure, and finalizes on surface', () => {

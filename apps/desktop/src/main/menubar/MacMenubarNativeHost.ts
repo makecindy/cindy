@@ -21,6 +21,7 @@ import {
   type MenubarView,
 } from '../../shared/menubarQuota.js';
 import { createLogger } from '../logger.js';
+import { CURRENT_APP_ID } from '../../shared/brandRegion.js';
 
 const log = createLogger('menubar:native');
 
@@ -244,6 +245,9 @@ export class MacMenubarNativeHost {
         if (!settled) settle(false);
         log.debug('menu bar helper lost', { reason, code, signal });
         if (wasCurrent && this.pendingView && !this.permanentlyFailed) this.scheduleRestart(code, signal);
+        // The replacement starts with its panel closed. End the visible-panel lease now;
+        // schedule backoff first because clearing its readings can publish a new view.
+        if (wasCurrent) this.options.onMessage({ type: 'panel', open: false });
       };
       child.stdin.on('error', (error) => onLost(`stdin: ${error.message}`, null, null));
       child.on('error', (error) => onLost(`process: ${error.message}`, null, null));
@@ -387,22 +391,31 @@ async function resolveHelperBinary(): Promise<string> {
   return devBinaryPath();
 }
 
-/** Dev builds compile the single-file helper on demand, keyed by the source hash. */
+/** The embedded Info.plist gives AppKit an application domain for status-item autosave. */
 async function buildDevHelper(): Promise<void> {
   const source = devSourcePath(HELPER_SOURCE_RELATIVE);
   const binary = devBinaryPath();
   if (!fs.existsSync(source)) throw new Error(`menu bar helper source missing at ${source}`);
   copyDevAssets(path.dirname(source), path.dirname(binary));
-  const sourceHash = createHash('sha256').update(fs.readFileSync(source)).digest('hex');
+  // A profile keeps its placement across rebuilds without sharing it with release
+  // or another isolated dev instance. Never embed the user's path in metadata.
+  const profile = createHash('sha256').update(app.getPath('userData')).digest('hex').slice(0, 24);
+  const infoPlist = fs.readFileSync(path.join(path.dirname(source), 'Info.plist'), 'utf8')
+    .replace('$(PRODUCT_BUNDLE_IDENTIFIER)', `${CURRENT_APP_ID}.menubar.dev-${profile}`);
+  const sourceHash = createHash('sha256').update(fs.readFileSync(source)).update(infoPlist).digest('hex');
   const hashFile = `${binary}.sha256`;
   if (fs.existsSync(binary) && fs.existsSync(hashFile) && fs.readFileSync(hashFile, 'utf8').trim() === sourceHash) {
     return;
   }
   fs.mkdirSync(path.dirname(binary), { recursive: true });
+  const infoPlistPath = `${binary}.Info.plist`;
+  fs.writeFileSync(infoPlistPath, infoPlist, 'utf8');
   const arch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
   await execFilePromise(
     'swiftc',
-    [source, '-O', '-parse-as-library', '-target', `${arch}-apple-${HELPER_DEPLOYMENT_TARGET}`, '-o', binary],
+    [source, '-O', '-parse-as-library', '-target', `${arch}-apple-${HELPER_DEPLOYMENT_TARGET}`,
+      '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', infoPlistPath,
+      '-o', binary],
     DEV_BUILD_TIMEOUT_MS,
   );
   fs.chmodSync(binary, 0o755);

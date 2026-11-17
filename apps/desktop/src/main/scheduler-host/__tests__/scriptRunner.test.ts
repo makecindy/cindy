@@ -53,7 +53,8 @@ vi.mock('../proc-util', async (importOriginal) => {
   return { ...actual, killProcessTree: killProcessTreeMock };
 });
 
-import { ScriptScheduleRunner, buildScriptEnv } from '../script-runner';
+import { ScriptScheduleRunner, buildScriptEnv } from '../script-runner.desktop';
+import { ScheduleNotifier } from '../notifier';
 
 function childProcess() {
   const child = new EventEmitter() as EventEmitter & {
@@ -105,6 +106,24 @@ describe('ScriptScheduleRunner', () => {
     executePreRunHookMock.mockReset();
     restoreArchivedSessionForSend.mockReset();
     killProcessTreeMock.mockClear();
+  });
+
+  // PR #9059 / unit: hook outcomes were covered, but a deadline becoming invalid
+  // during preparation was not. The real fire entry must start no host process.
+  it.each(['before-hook', 'after-hook'])('defers an invalidated script dispatch (%s)', async (boundary) => {
+    let allowed = boundary === 'after-hook';
+    executePreRunHookMock.mockImplementation(async () => {
+      allowed = false;
+      return { decision: 'allow', exitCode: 0, durationMs: 1, stdout: '', stderr: '', timedOut: false };
+    });
+    spawnMock.mockImplementation(() => { throw new Error('script must not start'); });
+    const runner = new ScriptScheduleRunner({ broker: { call: vi.fn() }, logger: {} });
+    await expect(runner.fire({ ...schedule(), preRunHook: { command: 'check' } }, {
+      runId: 'run-deadline', firedAt: 1, signal: new AbortController().signal,
+      canDispatch: () => allowed,
+    })).resolves.toMatchObject({ sessionId: '', deferred: true });
+    expect(executePreRunHookMock).toHaveBeenCalledTimes(boundary === 'after-hook' ? 1 : 0);
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it.each(['deleted', 'missing'])('pauses a bound script with a %s owner before any hook or process', async (status) => {
@@ -899,6 +918,59 @@ describe('ScriptScheduleRunner', () => {
       expect.anything(),
       expect.objectContaining({ status: 'failed' }),
     );
+  });
+
+  it('reports the end of stderr when debug output exceeds the collection limit', async () => {
+    const child = childProcess();
+    spawnMock.mockReturnValue(child);
+    const notifier = { notify: vi.fn(async () => {}) };
+    const runner = new ScriptScheduleRunner({ broker: { call: vi.fn() }, logger: {}, notifier });
+    const resultPromise = runner.fire(schedule(), {
+      runId: 'run-1', firedAt: 1, signal: new AbortController().signal,
+    });
+
+    child.stderr.write('DEBUG log\n'.repeat(7_000));
+    const error = Buffer.from('fatal: 连接失败\n');
+    child.stderr.write(error.subarray(0, 8));
+    child.stderr.write(error.subarray(8));
+    child.emit('close', 1);
+
+    await expect(resultPromise).rejects.toThrow('fatal: 连接失败');
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ status: 'failed', errorMsg: expect.stringContaining('fatal: 连接失败') }),
+    );
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ errorMsg: expect.stringMatching(/^[\s\S]{0,1030}$/) }),
+    );
+  });
+
+  // Issue #10698 / integration: the external notification must retain the actual
+  // error after a long stderr stream, for both channels sharing the formatter.
+  it('delivers the script error tail to Feishu and WeCom', async () => {
+    const child = childProcess();
+    spawnMock.mockReturnValue(child);
+    const sendMarkdownText = vi.fn(async (_owner: string, _text: string) => ({}));
+    const publishMarkdown = vi.fn(async (_text: string) => undefined);
+    const notifier = new ScheduleNotifier({
+      feishuIm: { getOwnerOpenId: () => 'owner', sendMarkdownText } as never,
+      wecomGroupPublisher: { publishMarkdown } as never,
+      logger: {}, shouldNotifyDesktop: () => false, isRunAlertShownElsewhere: () => false,
+    }, {
+      getMobileNotifyGeneration: () => 0, isSessionNotificationsMutedSync: () => false,
+      showSessionNotification: () => {}, sendMobileSessionNotify: () => {},
+    });
+    const runner = new ScriptScheduleRunner({ broker: { call: vi.fn() }, logger: {}, notifier });
+    const result = runner.fire({ ...schedule(), notify: { desktop: false, feishu: true, wecomGroup: true } }, {
+      runId: 'run-1', firedAt: 1, signal: new AbortController().signal,
+    });
+    child.stderr.write('DEBUG log\n'.repeat(7000) + 'fatal: connection failed\n');
+    child.emit('close', 1);
+    await expect(result).rejects.toThrow('fatal: connection failed');
+    await vi.waitFor(() => expect(publishMarkdown).toHaveBeenCalledOnce());
+    expect(sendMarkdownText.mock.calls[0]?.[1]).toContain('fatal: connection failed');
+    expect(publishMarkdown.mock.calls[0]?.[0]).toContain('fatal: connection failed');
   });
 
   it('still notifies when a genuine failure message happens to contain the word "abort" (codex review 三次发现)', async () => {

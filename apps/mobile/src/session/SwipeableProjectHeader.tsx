@@ -1,5 +1,6 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
-import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
+import { useWindowWidth } from '@/platform/windowDimension';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import { Pressable, StyleSheet, View } from "react-native";
 import Animated, {
   interpolate,
   useAnimatedStyle,
@@ -21,6 +22,7 @@ import {
   type ThemeColors,
 } from "@/theme";
 import { radius, spacing } from "@/theme/tokens";
+import { usePaneEdgeInset } from './SessionPaneDivider';
 
 // Match the floating circular actions in SwipeableSessionRow on both platforms.
 const ACTION_SIZE = 56;
@@ -50,8 +52,10 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const { width } = useWindowDimensions();
+  const width = useWindowWidth();
   const methods = useRef<SwipeableMethods | null>(null);
+  const edgeInset = usePaneEdgeInset();
+  const hitSlop = useMemo(() => ({ ...EDGE_HIT_SLOP, right: -edgeInset }), [edgeInset]);
   const translation = useRef<SharedValue<number> | null>(null);
   const rowKey = `project:${projectKey}`;
   const close = useCallback(() => methods.current?.close(), []);
@@ -95,8 +99,8 @@ export const SwipeableProjectHeader = memo(function SwipeableProjectHeader({
       testID={`home.projectSwipe.${projectKey}`}
       containerStyle={styles.surface}
       childrenContainerStyle={styles.surface}
-      // Leave the screen edge available to native back navigation.
-      hitSlop={EDGE_HIT_SLOP}
+      // Leave the screen edge to native back and the pane edge to resizing.
+      hitSlop={hitSlop}
       overshootLeft={false}
       onSwipeableOpenStartDrag={handleOpenStartDrag}
       onSwipeableClose={handleClose}

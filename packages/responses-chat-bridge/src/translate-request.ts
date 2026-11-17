@@ -34,6 +34,16 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Codex normally sends message content as an array, but partner/collaboration
+ * bootstrap items can contain one content part directly. Treat that equivalent
+ * single-part form like a one-element array; keep other shapes fail-closed.
+ */
+function contentParts(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value;
+  return isPlainObject(value) && typeof value.type === 'string' ? [value] : null;
+}
+
 /** Collect system/developer messages in order and emit a single leading system message. */
 export function coalesceLeadingSystemMessages(messages: ChatMessage[]): ChatMessage[] {
   const systems: string[] = [];
@@ -154,6 +164,30 @@ function mediaPart(
   return undefined;
 }
 
+/**
+ * 只含合法元数据且 content 为 null 的 assistant 历史项。
+ *
+ * Codex 在历史回放里会把「上一轮只有工具调用、没有正文」的产物写成
+ * `{ type: 'message', role: 'assistant', content: null }`。messageContent 对既非字符串
+ * 也非数组的 content 一律抛 unsupported_feature,于是这条无害的历史项会让后续每一轮
+ * 续聊都被拒(#9344)。Anthropic 桥接已在 #6676 对同一形状做跳过,这里对齐。
+ */
+function isEmptyAssistantMessageWithSupportedMetadata(item: Record<string, unknown>): boolean {
+  if (item.role !== 'assistant' || item.content !== null) return false;
+  if (item.type !== undefined && item.type !== 'message') return false;
+  if (['id', 'status', 'phase'].some((fieldName) => (
+    item[fieldName] !== undefined && typeof item[fieldName] !== 'string'
+  ))) return false;
+  return Object.keys(item).every((fieldName) => (
+    fieldName === 'type'
+    || fieldName === 'id'
+    || fieldName === 'role'
+    || fieldName === 'content'
+    || fieldName === 'status'
+    || fieldName === 'phase'
+  ));
+}
+
 function messageContent(
   item: Extract<ResponsesInputItem, { role: string }>,
   itemIndex: number,
@@ -162,7 +196,8 @@ function messageContent(
   dropUnsupportedHistoricalImages = false,
 ): string | ChatUserContentPart[] {
   if (typeof item.content === 'string') return item.content;
-  if (!Array.isArray(item.content)) {
+  const rawParts = contentParts(item.content);
+  if (!rawParts) {
     throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
   }
 
@@ -172,7 +207,7 @@ function messageContent(
   let text = '';
   let hasMedia = false;
   const content: ChatUserContentPart[] = [];
-  for (const rawPart of item.content) {
+  for (const rawPart of rawParts) {
     if (!isPlainObject(rawPart) || typeof rawPart.type !== 'string') {
       throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
     }
@@ -346,11 +381,12 @@ function agentMessageText(item: Record<string, unknown>, itemIndex: number): str
   const author = normalizedAuthor || 'agent';
   let body = '';
   let omittedEncryptedContent = false;
+  const rawParts = contentParts(item.content);
   if (typeof item.content === 'string') {
     body = item.content;
-  } else if (Array.isArray(item.content)) {
+  } else if (rawParts) {
     const parts: string[] = [];
-    for (const part of item.content) {
+    for (const part of rawParts) {
       if (!isPlainObject(part) || typeof part.type !== 'string') {
         throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
       }
@@ -368,6 +404,10 @@ function agentMessageText(item: Record<string, unknown>, itemIndex: number): str
       throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content.${part.type}`);
     }
     body = parts.join('\n');
+  } else if (item.content === null || item.content === undefined) {
+    // 无正文的协作消息没有可翻译的内容(Codex 回放里会出现 content: null),
+    // 按「空内容」降级,而不是把整单判成 unsupported_feature 让会话卡死(#9344)。
+    body = '';
   } else {
     throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
   }
@@ -424,6 +464,9 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
     if (!isPlainObject(item)) continue;
+    // Tool-only wrappers carry a role but are not messages; they must not move the
+    // newest-user boundary (which decides which images are still current-turn).
+    if ((item as Record<string, unknown>).type === 'additional_tools') continue;
     const role = (item as Record<string, unknown>).role;
     if (typeof role !== 'string') continue;
     if (role === 'user') {
@@ -590,7 +633,20 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
     if (!isPlainObject(item)) throw new UnsupportedResponsesFeatureError(`input[${index}]`);
     const record = item as Record<string, unknown>;
 
+    // Responses Lite / v2 inlines extra top-level tool groups as input items. They carry a
+    // role but no content: the declarations are already catalogued by
+    // ChatBridgeToolContext.collectHistoryTools, and the wrapper is not conversation, so it
+    // must be dropped before the role branch treats it as a message. A wrapper whose `tools` is
+    // not an array is a shape we cannot honour, so it keeps failing closed instead of being
+    // silently dropped and turning a tool-requiring turn into plain chat.
+    if (item.type === 'additional_tools') {
+      if (Array.isArray(record.tools)) continue;
+      throw new UnsupportedResponsesFeatureError(`input[${index}].tools`);
+    }
+
     if ('role' in item && typeof item.role === 'string') {
+      // 只有工具调用、没有正文的 assistant 历史项整条跳过(#9344,与 Anthropic 桥接 #6676 对齐)。
+      if (isEmptyAssistantMessageWithSupportedMetadata(record)) continue;
       const content = messageContent(
         item as Extract<ResponsesInputItem, { role: string }>,
         index,
@@ -751,6 +807,26 @@ function reportDroppedTools(
   });
 }
 
+/**
+ * Tools declared by the newest inline `additional_tools` group.
+ *
+ * Responses Lite / v2 ships extra top-level declarations inside `input`. Only the newest group
+ * belongs to this turn (replayed groups are history), so only that one may widen the Chat
+ * catalog or satisfy a tool choice.
+ */
+function currentTurnInlineTools(input: ResponsesRequest['input']): unknown[] {
+  if (!Array.isArray(input)) return [];
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    if (
+      isPlainObject(item)
+      && item.type === 'additional_tools'
+      && Array.isArray(item.tools)
+    ) return item.tools;
+  }
+  return [];
+}
+
 function hasDroppedWebSearchTool(tools: ResponsesRequest['tools']): boolean {
   return (tools ?? []).some((tool) => (
     isPlainObject(tool) && tool.type === 'web_search'
@@ -761,7 +837,8 @@ function hasRetainedTool(
   tools: ResponsesRequest['tools'],
   kind: 'function' | 'custom',
   name: string,
-  namespace?: string,
+  namespace: string | undefined,
+  context: ChatBridgeToolContext,
 ): boolean {
   for (const tool of tools ?? []) {
     if (typeof tool === 'string') {
@@ -783,12 +860,20 @@ function hasRetainedTool(
       ))) return true;
     }
   }
+  // A declaration this turn catalogued answers the selector even when the declaration lives in a
+  // namespace or keeps the bare name (a loaded `web_search` function does). Ask the current-turn
+  // resolver and confirm the catalog actually advertises what it returned.
+  if (context.chatTools !== undefined) {
+    const resolved = context.chatNameForToolChoice(name, namespace, kind);
+    if (context.lookupChatName(resolved) !== undefined) return true;
+  }
   return false;
 }
 
 function explicitlySelectsDroppedWebSearch(
   tools: ResponsesRequest['tools'],
   choice: unknown,
+  context: ChatBridgeToolContext,
 ): boolean {
   if (!isPlainObject(choice)) return false;
   if (choice.type === 'web_search') return true;
@@ -797,7 +882,7 @@ function explicitlySelectsDroppedWebSearch(
   const name = typeof choice.name === 'string' ? choice.name : nestedFunction?.name;
   if (name !== 'web_search') return false;
   const namespace = typeof choice.namespace === 'string' ? choice.namespace : undefined;
-  return !hasRetainedTool(tools, choice.type, name, namespace);
+  return !hasRetainedTool(tools, choice.type, name, namespace, context);
 }
 
 function translateToolChoice(
@@ -813,10 +898,15 @@ function translateToolChoice(
     (choice.type === 'function' || choice.type === 'custom')
     && typeof choice.name === 'string'
   ) {
+    // A present but non-string namespace is malformed: never let it fall back to the bare
+    // selector path, which would authorize a tool the caller only half-named.
+    if ('namespace' in choice && typeof choice.namespace !== 'string') {
+      throw new UnsupportedResponsesFeatureError('tool_choice.namespace');
+    }
     return {
       type: 'function',
       function: {
-        name: context.chatNameForResponse(
+        name: context.chatNameForToolChoice(
           choice.name,
           typeof choice.namespace === 'string' ? choice.namespace : undefined,
           choice.type,
@@ -913,15 +1003,20 @@ export function translateResponsesRequestWithContext(
   const capabilities = opts.capabilities ?? {};
   const developerRole = capabilities.developerRole ?? 'system';
   const toolContext = ChatBridgeToolContext.fromRequest(input);
+  const inlineTools = currentTurnInlineTools(input.input);
+  const declaredTools = [
+    ...(input.tools ?? []),
+    ...inlineTools,
+  ] as NonNullable<ResponsesRequest['tools']>;
   reportDroppedTools(input.tools, opts.onDroppedTool);
-  if (hasDroppedWebSearchTool(input.tools)) {
+  if (hasDroppedWebSearchTool(declaredTools)) {
     // Ordinary/auto requests keep degrading (web_search removed, other tools preserved). Stay
     // fail-closed only when the request can be satisfied *solely* by the dropped web_search:
     // either it explicitly selects web_search, or it demands `required` while every convertible
     // tool was dropped, leaving no tool the upstream could call. Otherwise `required` is silently
     // relaxed and a search-less provider answers as though no tool were requested.
     const requiresDroppedWebSearch =
-      explicitlySelectsDroppedWebSearch(input.tools, input.tool_choice)
+      explicitlySelectsDroppedWebSearch(declaredTools, input.tool_choice, toolContext)
       || (
         input.tool_choice === 'required'
         && capabilities.forceAutoToolChoice !== true

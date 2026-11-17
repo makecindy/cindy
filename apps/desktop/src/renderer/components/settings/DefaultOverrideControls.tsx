@@ -1,8 +1,8 @@
 import { RotateCcw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
-import { cn } from '@/lib/utils';
 
 export function DefaultOverrideControls({
   isCustomized,
@@ -31,21 +31,20 @@ export function DefaultOverrideControls({
           {t('settings.defaults.customizedBadge')}
         </span>
       ) : null}
+      {/* Per-setting reset (CONTROLS decision 3): 28px quiet pill icon button on the shared Button. */}
       <Tip text={t('settings.defaults.restore')} side="top">
-        <button
-          type="button"
+        <Button
+          data-settings-search-action="Restore this setting to its default value"
+          variant="secondary"
+          tone="quiet"
+          size="sm"
+          className="w-7 px-0"
           onClick={onReset}
           disabled={resetDisabled}
           aria-label={t('settings.defaults.restore')}
-          className={cn(
-            'flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg',
-            'text-[var(--settings-section-desc)] transition-colors',
-            'hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
-            'disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent',
-          )}
         >
-          <RotateCcw size={15} />
-        </button>
+          <RotateCcw size={15} aria-hidden />
+        </Button>
       </Tip>
     </div>
   );

@@ -55,6 +55,8 @@ export function splitImportedMemoryText(text: string): string[] {
 interface BotMemoryOwner {
   canonicalSessionId: string | null;
   assertCurrent?: () => void;
+  /** A project-mode teammate keeps its memory in its project, like an ordinary task there. */
+  scopeKey?: string;
 }
 
 export interface BotMemoryServiceDeps {
@@ -154,10 +156,10 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
     botId: string,
   ): Promise<{ store: MakerMemoryStore; owner: BotMemoryOwner }> {
     const owner = await deps.readBot(botId);
-    if (!owner) throwIpcError('NOT_FOUND', 'Teammate not found');
+    if (!owner) throwIpcError('NOT_FOUND', 'Buddy not found');
     try {
       owner.assertCurrent?.();
-      const store = await deps.getStore(buildBotMemoryScopeKey(botId));
+      const store = await deps.getStore(owner.scopeKey ?? buildBotMemoryScopeKey(botId));
       owner.assertCurrent?.();
       return { store, owner };
     } catch (error) {
@@ -324,7 +326,8 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
           if (error instanceof MemoryError && error.code === 'not-found') return null;
           throw error;
         });
-        await store.write({ type: type as BotMemoryType, name: name!, title, description, body,
+        // 传完整文件名: 恢复要原样重建旧分片 (可能带 <type>- 前缀), 不能当成新 slug
+        await store.write({ type: type as BotMemoryType, name: filename, title, description, body,
           mode: existing ? 'update' : 'create', preserveBody: exact }).catch(translateStoreError);
         owner.assertCurrent?.();
       });

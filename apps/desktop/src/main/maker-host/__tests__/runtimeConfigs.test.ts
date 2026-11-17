@@ -7,6 +7,11 @@ let memorySettings = {
   pi: false,
 };
 
+import { configureUserDataDir } from '../../userDataPath.js';
+
+// The settings stores read the profile root from the injected host facts.
+configureUserDataDir('/tmp/xdt-maker-test-user-data');
+
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
@@ -40,8 +45,11 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
 });
 
 describe('runtime-configs', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
+    // resetModules clears the injected host facts, so reinstall them per test.
+    const { configureUserDataDir: configure } = await import('../../userDataPath.js');
+    configure('/tmp/xdt-maker-test-user-data');
     memorySettings = {
       maker: true,
       claudeCode: false,
@@ -122,6 +130,9 @@ describe('runtime-configs', () => {
       // 来源判定必须落在可观察的清单标注上，并且无标注时 fail-closed 回落到
       // 「先跑 Cindy 侧 Skill」，否则这条规则对模型不可执行 (#1650 review)。
       expect(prompt).toMatch(/available-Skills listing already labels each Skill/u);
+      // Cindy 自有 Skill 在 Claude 里挂在 `cindy` / `cindy-plugin-<id>` 插件命名空间下
+      // (managed-skills.ts)。规则只写「有插件命名空间即下游」时，会把它们排到下游之后。
+      expect(prompt).toMatch(/`cindy` or\s+`cindy-plugin-\*` namespace marks a Cindy-side Skill/u);
       expect(prompt).toMatch(
         /no usable source\s+label, treat the Skill as downstream and still run the applicable Cindy-side Skill first/u,
       );
@@ -142,6 +153,8 @@ describe('runtime-configs', () => {
 
     for (const prompt of [claudeConfig.systemPrompt, desktopCodexRuntimeConfig.systemPrompt]) {
       expect(prompt).toContain('## User-facing plans');
+      expect(prompt?.match(/## User-facing plans/gu)).toHaveLength(1);
+      expect(prompt).not.toContain('cindy_mcp_list_tools');
       expect(prompt).toContain('Write for a general user, not as internal engineering notes.');
       expect(prompt).toContain('Name the real action and visible result instead.');
     }
@@ -150,6 +163,8 @@ describe('runtime-configs', () => {
 
 it('never treats a retired independent Claude account as a connected subscription for spawn flags', async () => {
   vi.resetModules();
+  const { configureUserDataDir: configure } = await import('../../userDataPath.js');
+  configure('/tmp/xdt-maker-test-user-data');
   const readBuiltin = vi.fn(() => true);
   vi.doMock('../active-catalog.js', () => ({ getActiveCatalog: () => ({ providers: [
     { id: 'claude-work', auth: { method: 'oauth', native: 'claude' } },
@@ -163,11 +178,11 @@ it('never treats a retired independent Claude account as a connected subscriptio
     const flags = buildDesktopClaudeRuntimeConfig(() => 'http://localhost').behaviorFlags;
     if (typeof flags !== 'function') throw new Error('expected spawn flags');
     expect(flags({ credentialMode: 'provider-oauth', sessionProviderId: 'claude-work' } as never))
-      .toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '0', ENABLE_TOOL_SEARCH: 'auto' });
+      .toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '0', ENABLE_TOOL_SEARCH: 'true' });
     // 独立账号不借用本机 Claude Code 登录的连接态。
     expect(readBuiltin).not.toHaveBeenCalled();
     expect(flags({ credentialMode: 'oauth-bearer', sessionProviderId: 'anthropic' } as never))
-      .toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '1', ENABLE_TOOL_SEARCH: 'auto' });
+      .toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '1', ENABLE_TOOL_SEARCH: 'true' });
     expect(readBuiltin).toHaveBeenCalledTimes(1);
     // issue #7524:用户显式的 ENABLE_TOOL_SEARCH 经 runtime-configs 接线压过来源默认值,
     // 且只对本机 spawn 生效;远端 spawn 不读本机配置。

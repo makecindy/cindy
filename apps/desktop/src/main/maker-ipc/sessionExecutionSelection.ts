@@ -20,6 +20,7 @@ export function resolveSessionExecutionSelection(params: {
   availableModels: Admission['availableModels'];
   providerRouting: Admission['providerRouting'];
   hasCindyAiApiKey: boolean;
+  locationChanged?: boolean;
 }): SessionExecutionSelection {
   const { selection, source, providerRouting } = params;
   const agentKind = selection.agentKind === 'cc' ? 'claude-code' : selection.agentKind ?? source?.agentKind;
@@ -44,8 +45,9 @@ export function resolveSessionExecutionSelection(params: {
   const result = resolveSendToSessionExecutionConfig({
     source: candidate, overrides: { effort: candidate.effort, fastMode: candidate.fastMode },
     availableModels: params.availableModels, providerRouting, hasCindyAiApiKey: params.hasCindyAiApiKey,
+    locationChanged: params.locationChanged,
   });
-  if (!result.ok) throw new Error(`${result.message} ${recover}不会自动更换模型或供应商。`);
+  if (!result.ok) throw Object.assign(new Error(`${result.message} ${recover}不会自动更换模型或供应商。`), { code: result.errorCode });
   return result.config;
 }
 

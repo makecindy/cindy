@@ -227,6 +227,25 @@ describe('mapServerMessages auto-resume 分隔线', () => {
     expect(row?.content).toBe('');
   });
 
+  // Bug: answering a Codex question added a bubble holding the reply markup sent to the model.
+  // The question card already shows the answer, so its row stays out of the conversation;
+  // a reply saved in the model format (older rows, supplements) reads as question and answer.
+  it('keeps an answer shown on its question card out of the conversation', async () => {
+    const modelCopy = '<send_user_message_question_reply>\n[{"questionItemId":"q1","question":"Install?","answer":"Yes"}]\n</send_user_message_question_reply>';
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      serverMessage({ clientId: 'question-reply:answered:q1:digest', role: 'user', content: '> Install?\n\nYes' }),
+      serverMessage({ clientId: 'question-reply:q1:digest', role: 'user', content: modelCopy }),
+    ]);
+    makerChatStore.ensureInitialMessages(SID);
+    await flush();
+    await flush();
+
+    const row = (clientId: string) => makerChatStore.getSnapshot(SID).messages.find((m) => m.clientId === clientId);
+    expect(row('question-reply:answered:q1:digest')).toMatchObject({ content: '', isSyntheticTrigger: true });
+    expect(row('question-reply:q1:digest')?.content).toBe('> Install?\n\nYes');
+    expect(row('question-reply:q1:digest')?.isSyntheticTrigger).toBeUndefined();
+  });
+
   // Unit / PR #6611: the first queued input resumes without a hidden clone.
   // Previously only autoResume=true rows carried an activity, losing this record on reload.
   it('keeps a quota-resumed first input visible with its activity metadata', async () => {

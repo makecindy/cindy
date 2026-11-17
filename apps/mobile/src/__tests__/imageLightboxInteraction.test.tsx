@@ -44,10 +44,14 @@ const runtime = vi.hoisted(() => ({
   alerts: [] as Array<[string, string, Array<{ text: string; style?: string; onPress?: () => void }>]>,
   scrollToOffset: vi.fn(),
   renderPageIndex: 0,
-  collectionSize: 2,
 }));
 
 // 预览外壳的液态玻璃与系统菜单:测试环境没有原生模块,走实色底与底部面板回退。
+// Keep the real preview layout hook so rotation assertions exercise production geometry.
+vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => ({
+  ...runtime.dimensions, insets: runtime.insets, regularWidth: false, regularHeight: true,
+  barEdge: 'none', reservedRegionsSupported: false, regions: [],
+}) }));
 vi.mock('expo-glass-effect', () => ({ GlassView: ({ children }: any) => children }));
 vi.mock('@/session/useLiquidGlassAvailable', () => ({ useLiquidGlassAvailable: () => false }));
 vi.mock('@/platform/chrome', () => ({
@@ -114,16 +118,8 @@ vi.mock("react-native", async () => {
       absoluteFill: {},
       hairlineWidth: 1,
     },
-    // Gesture scenarios use a fixed canvas; add the shared chrome outside it.
-    useWindowDimensions: () => ({
-      ...runtime.dimensions,
-      height:
-        runtime.dimensions.height +
-        runtime.insets.top +
-        runtime.insets.bottom +
-        64 +
-        (runtime.collectionSize > 1 ? 112 : 56),
-    }),
+    // 图片页铺满整屏,浮动 chrome 盖在图上:手势画布就是整个窗口。
+    useWindowDimensions: () => runtime.dimensions,
     FlatList: (props: any) => {
       runtime.nodes.set("FlatList", props);
       useImperativeHandle(
@@ -259,6 +255,12 @@ vi.mock("react-native-reanimated", async () => {
 let root: Root;
 let container: HTMLDivElement;
 const isMounted = (id: string) => !!container.querySelector(`[data-testid="${id}"]`);
+/** 当前显示的是第几张(手机不再显示「2 / 7」计数,从各页的 active 读出)。 */
+const activePosition = () => {
+  const list = runtime.nodes.get('FlatList');
+  const index = list.data.findIndex((item: any, i: number) => list.renderItem({ item, index: i }).props.active);
+  return `${index + 1} / ${list.data.length}`;
+};
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   runtime.nodes.clear();
@@ -295,7 +297,6 @@ function mount(overrides: Partial<ImageLightboxProps> = {}) {
     ...overrides,
   };
   const render = () => {
-    runtime.collectionSize = props.images.length;
     act(() => root.render(<ImageLightbox {...props} />));
   };
   render();
@@ -533,7 +534,7 @@ describe('pending image gallery updates', () => {
     })));
     props.images = lightboxImagesForPayload(updated, clicked, 'pending', props.images);
     render();
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe(updated[1].url);
     // Paging away from the originally clicked page must also survive a row handoff.
@@ -541,7 +542,7 @@ describe('pending image gallery updates', () => {
     props.images = lightboxImagesForPayload([], clicked, 'pending', props.images, false, true);
     render();
     expect(runtime.nodes.get('FlatList').data).toHaveLength(2);
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('1 / 2');
+    expect(activePosition()).toBe('1 / 2');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe(updated[0].url);
   });
@@ -764,7 +765,7 @@ describe('pending image gallery updates', () => {
     const { props, render } = mount({ images: initial, initialUrl: initial[0].url });
     props.images = collect(thumbs);
     render();
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     expect(runtime.scrollToOffset).toHaveBeenLastCalledWith({ animated: false, offset: 400 });
   });
 
@@ -791,7 +792,7 @@ describe('pending image gallery updates', () => {
       render();
       const index = props.images.findIndex((image) => image.key === initial[1].key);
       expect(index).toBe(attachments.indexOf(files[1]));
-      expect(runtime.nodes.get("preview.collectionCount").children).toBe(`${index + 1} / 2`);
+      expect(activePosition()).toBe(`${index + 1} / 2`);
       await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
       expect(onShareImage.mock.lastCall?.[0].url).toBe(files[1].path);
     }
@@ -806,7 +807,7 @@ describe('pending image gallery updates', () => {
     const replacement = { ...original[index], key: `${original[index].key}:replaced`, uri: 'https://example.invalid/replacement.jpg' };
     props.images = collect(original.map((thumb, slot) => (slot === index ? replacement : thumb)));
     render();
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe(`${index + 1} / 2`);
+    expect(activePosition()).toBe(`${index + 1} / 2`);
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe(replacement.uri);
   });
@@ -817,7 +818,7 @@ describe('pending image gallery updates', () => {
     const list = runtime.nodes.get('FlatList');
     expect(list.initialScrollIndex).toBe(index);
     expect(list.renderItem({ item: images[index], index }).props.active).toBe(true);
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe(`${index + 1} / 2`);
+    expect(activePosition()).toBe(`${index + 1} / 2`);
   });
 
   it('keeps the replacement and its annotation when an earlier image becomes readable', async () => {
@@ -865,7 +866,7 @@ describe('pending image gallery updates', () => {
     render();
     const page = runtime.nodes.get('FlatList').renderItem({ item: props.images[1], index: 1 }).props;
     expect(page.active).toBe(true);
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     expect(runtime.scrollToOffset).toHaveBeenLastCalledWith({ animated: false, offset: 400 });
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0]).toBe(props.images[1].payload.media);
@@ -916,7 +917,7 @@ describe('pending image gallery updates', () => {
     const replacement = { ...thumbs[1], key: 'replacement', uri: 'file:///replacement.jpg' };
     props.images = collect([{ ...waiting[1], uri: 'file:///earlier.jpg' }, replacement]);
     render();
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0]).toBe(props.images[1].payload.media);
   });
@@ -930,7 +931,7 @@ describe('pending image gallery updates', () => {
     render();
     props.images = collect([replacement, thumbs[1], thumbs[0]]);
     render();
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('1 / 3');
+    expect(activePosition()).toBe('1 / 3');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe(replacement.uri);
   });
@@ -943,10 +944,10 @@ describe('pending image gallery updates', () => {
     const { props, render } = mount({ images: initial, initialUrl: last.uri, onShareImage });
     props.images = collect([thumbs[1], last]);
     render();
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     props.images = collect([thumbs[1], replacement, thumbs[0]]);
     render();
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('2 / 3');
+    expect(activePosition()).toBe('2 / 3');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe(replacement.uri);
   });
@@ -1008,7 +1009,7 @@ describe('pending image gallery updates', () => {
     const images = lightboxImagesForPayload(updated, clicked, 'pending');
     mount({ images, initialUrl: images[galleryImageIndexForPayload(images, clicked)]?.url ?? clicked.media.url });
     expect(runtime.nodes.get('FlatList').initialScrollIndex).toBe(1);
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
   });
 
   it.each([false, true])('opens the clicked second slot after replacement before mounting (duplicate URL: %s)', async (duplicate) => {
@@ -1024,7 +1025,7 @@ describe('pending image gallery updates', () => {
       initialImageKey: initialImage?.key ?? clicked.galleryImageKey,
       initialUrl: initialImage?.url ?? clicked.media.url, onShareImage });
     expect(runtime.nodes.get('FlatList').initialScrollIndex).toBe(1);
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0]).toBe(images[1].payload.media);
 
@@ -1032,7 +1033,7 @@ describe('pending image gallery updates', () => {
     props.images = [{ ...images[0], key: 'inserted',
       payload: { ...images[0].payload, galleryImageKey: 'inserted' } }, ...images];
     render();
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('3 / 3');
+    expect(activePosition()).toBe('3 / 3');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0]).toBe(images[1].payload.media);
   });
@@ -1075,7 +1076,7 @@ describe('pending image gallery updates', () => {
     expect(page().annotationStrokes).toEqual([]);
     expect(page().annotationDraftStroke).toBeNull();
     expect(page().naturalSize).toBeNull();
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('1 / 2');
+    expect(activePosition()).toBe('1 / 2');
     act(() => runtime.nodes.get('Image').onLoad({ source: { width: 800, height: 400 } }));
     fire(draw(), 'onStart', { x: 200, y: 400 });
     fire(draw(), 'onFinalize', {}, true);
@@ -1094,14 +1095,14 @@ describe('pending image gallery updates', () => {
     const { props, render } = mount({ images: initial, initialUrl: initial[1].url, onShareImage });
     props.images = initial.map((image) => ({ ...image, key: `completed:${image.key}` }));
     render();
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('2 / 2');
+    expect(activePosition()).toBe('2 / 2');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe(initial[1].url);
     // After rebuilding the keys, moving this page must follow its adopted key.
     const updated = collect([{ ...thumbs[1], uri: 'https://example.invalid/current.jpg' }])[0];
     props.images = [{ ...updated, key: props.images[1].key }, props.images[0]];
     render();
-    expect(runtime.nodes.get("preview.collectionCount").children).toBe('1 / 2');
+    expect(activePosition()).toBe('1 / 2');
     await act(async () => runtime.nodes.get('message.imageLightboxShareButton').onPress());
     expect(onShareImage.mock.lastCall?.[0].url).toBe('https://example.invalid/current.jpg');
   });
@@ -1143,9 +1144,7 @@ describe('gallery prefetch boundaries', () => {
       expect(download.mock.calls.map(([media]) => media.url)).toEqual(['block-1', 'block-2', image.url]);
       await act(async () => { pending.get(image.url)!(result(image.key)); });
       expect(runtime.nodes.get('Image').source.uri).toBe(`file:///${image.key}.png`);
-      expect(
-          runtime.nodes.get("message.imageLightboxShareButton").disabled,
-        ).toBe(true);
+      expect(isMounted('message.imageLightboxShareButton')).toBe(false);
       act(() => runtime.nodes.get('Image').onLoad({ source: { width: 1600, height: 900 } }));
       await act(async () => { press('message.imageLightboxShareButton'); });
       expect(onShareImage).toHaveBeenCalledWith(image.payload.media, `file:///${image.key}.png`, 'image/png', 1);
@@ -1998,8 +1997,8 @@ describe("chrome toggle, loading and video pages", () => {
     fire(singleTap(), "onEnd", {}, true);
     finishAnimations();
     expect(props.onClose).not.toHaveBeenCalled();
-    expect(isMounted("message.imageLightboxCloseButton")).toBe(true);
-    expect(isMounted("preview.collectionCount")).toBe(false);
+    // 单击收起顶栏与底栏,再点一下出来(用户定稿 2026-11-06)。
+    expect(isMounted("message.imageLightboxCloseButton")).toBe(false);
 
     doubleTapAtCorner();
     finishAnimations();
@@ -2007,7 +2006,6 @@ describe("chrome toggle, loading and video pages", () => {
     finishAnimations();
     expect(props.onClose).not.toHaveBeenCalled();
     expect(isMounted("message.imageLightboxCloseButton")).toBe(true);
-    expect(isMounted("preview.collectionCount")).toBe(true);
   });
 
   it("lets the placeholder zoom and shows a loading bar instead of the tools while the original is loading", async () => {
@@ -2036,15 +2034,10 @@ describe("chrome toggle, loading and video pages", () => {
     expect(
       runtime.nodes.get("message.imageLightboxLoadingBar").accessibilityLabel,
     ).toBe("message.lightbox.loadingOriginal");
-    expect(runtime.nodes.get("message.imageLightboxShareButton").disabled).toBe(
-      true,
-    );
-    expect(
-      runtime.nodes.get("message.imageLightboxSendToChatButton").disabled,
-    ).toBe(true);
-    expect(
-      runtime.nodes.get("message.imageLightboxAnnotateButton").disabled,
-    ).toBe(true);
+    // 载入中整条底栏只有载入提示,不摆一排点不动的按钮。
+    expect(isMounted("message.imageLightboxShareButton")).toBe(false);
+    expect(isMounted("message.imageLightboxSendToChatButton")).toBe(false);
+    expect(isMounted("message.imageLightboxAnnotateButton")).toBe(false);
 
     act(() => preview().onLoad({ source: { width: 160, height: 90 } }));
     doubleTapAtCorner();
@@ -2223,9 +2216,12 @@ describe("chrome toggle, loading and video pages", () => {
     const player = runtime.nodes.get("message.imageLightboxVideoPlayer");
     expect(runtime.nodes.get('message.videoDownload')).toMatchObject({ source: resolved.url, mimeType: 'video/mp4',
     });
-    // The common footer is outside the media viewport; native playback retains its own controls.
-    expect(runtime.nodes.get('message.imageLightboxVideoPage').style.height,
-    ).toBe(runtime.dimensions.height);
+    // 视频页 chrome 常驻:页面铺满整屏,但让出顶栏和底栏,系统播放控件不被底栏压住。
+    expect(runtime.nodes.get('message.imageLightboxVideoPage').style).toMatchObject({
+      height: runtime.dimensions.height,
+      paddingTop: runtime.insets.top + 64,
+      paddingBottom: runtime.insets.bottom + 56,
+    });
     expect(player.url).toBe(resolved.url);
     expect(player.visible).toBe(true);
     expect(runtime.nodes.has("message.imageLightboxShareButton")).toBe(false);

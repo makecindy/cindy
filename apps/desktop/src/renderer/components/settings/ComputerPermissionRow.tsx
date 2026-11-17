@@ -20,14 +20,14 @@ export function ComputerPermissionRow({
   onAction: () => void;
 }) {
   return (
-    <button
+    <button data-settings-search-action="Grant or open the listed computer permission"
       type="button"
       onClick={onAction}
       disabled={pending}
       className={cn(
         'flex w-full min-w-0 items-center text-left',
         compact
-          ? 'min-h-8 gap-2 rounded-md py-1'
+          ? 'min-h-8 gap-2 rounded-lg py-1'
           : 'min-h-[64px] gap-3 rounded-xl border border-solid border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3.5 py-3',
         'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
         'disabled:cursor-default disabled:hover:bg-[var(--settings-input-bg)]',

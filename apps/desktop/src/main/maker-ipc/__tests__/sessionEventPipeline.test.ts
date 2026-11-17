@@ -2,10 +2,20 @@ import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { createDrizzleProxy } from '../../localDb/client/drizzleProxy.js';
+import type { DbTransport } from '../../localDb/client/DbTransport.js';
+import { createRemoteAgentHandle } from '../../remote-agent/controller/proxyHandle.js';
+import { ExecutorWorkspace } from '../../remote-agent/executor/workspace.js';
 import { handleSessionEvent, type SessionEventDependencies } from '../sessionEventPipeline.js';
+import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from '../piUsageReceipts.js';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
+import type { DbClient } from '../../localDb/client/DbClient.js';
+import type { PiUsageWrite } from '../../localDb/worker/opHandlers/piUsageTx.js';
+import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { createBotCompactRuntimeRefreshCoordinator } from '../botCompactRuntimeRefresh.js';
 import { createContextOverflowRollover } from '../contextOverflowRollover.js';
-import { setMainLocale } from '../../i18n.js';
+import { setMainLocale } from '../../i18n.desktop.js';
 import { installSessionTurnObserver } from '../sessionTurnObserver.js';
 import { onChannelTurn } from '../channelTurnSignal.js';
 import { createSessionBindingLifecycle } from '../sessionBindingLifecycle.js';
@@ -21,6 +31,7 @@ import { createProviderGroupHeldWorkerTerminals } from '../../provider-group/hel
 import { isGatewayProxyTokenRecoveryErrorEventForProvider } from '../gatewayProxyTokenRecovery.js';
 import { GATEWAY_PROXY_TOKEN_INVALID_REASON } from '@cindy/maker-shared/error-redaction';
 import { reportCindyGatewayKeyRejectedForCurrentKey } from '../../model-access/gatewayKeyRejection.js';
+import { GIT_SETTLEMENT_SEQUENCES } from './gitBaselineSettlementSequences.js';
 
 const effects = vi.hoisted(() => {
   const calls: string[] = [];
@@ -57,9 +68,15 @@ vi.mock('../../maker-host/auth-adapters.js', () => ({
   readClaudeApiKey: effects.fn('readClaudeApiKey'),
 }));
 vi.mock('../../sessionSpendBroadcaster.js', () => ({
+  broadcastSessionSpend: effects.fn('broadcastSessionSpend'),
+  broadcastSessionTokens: effects.fn('broadcastSessionTokens'),
   recordSessionTurnSpend: effects.fn('recordSessionTurnSpend'),
   recordSessionTurnTokens: effects.fn('recordSessionTurnTokens'),
   recordSessionContextSnapshot: effects.fn('recordSessionContextSnapshot'),
+}));
+vi.mock('../../localDb/client/current.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../localDb/client/current.js')>(),
+  getDbClient: effects.fn('getDbClient'),
 }));
 vi.mock('../../turnCostBroadcaster.js', () => ({
   recordSchedulerTurnCost: effects.fn('recordSchedulerTurnCost'),
@@ -69,9 +86,6 @@ vi.mock('../../turnCostBroadcaster.js', () => ({
 }));
 vi.mock('../../modelMismatchBroadcaster.js', () => ({
   recordModelMismatchOnMessage: effects.fn('recordModelMismatchOnMessage'),
-}));
-vi.mock('../botLearningReview.js', () => ({
-  reviewTeammateLearning: effects.fn('reviewTeammateLearning'),
 }));
 vi.mock('../../usage/claudeAccountUsage.js', () => ({
   triggerClaudeAccountUsageRefresh: effects.fn('triggerClaudeAccountUsageRefresh'),
@@ -93,6 +107,8 @@ vi.mock('../../usage/referenceModelPricing.js', () => ({
 }));
 vi.mock('../../usage/ledgerCurrency.js', () => ({
   currentLedgerCurrency: effects.fn('currentLedgerCurrency'),
+  isLedgerCurrencyKnown: effects.fn('isLedgerCurrencyKnown'),
+  LEDGER_CURRENCY_FALLBACK: 'USD',
 }));
 vi.mock('../usage.js', () => ({
   triggerClaudeSubscriptionUsageRefresh: effects.fn('triggerClaudeSubscriptionUsageRefresh'),
@@ -119,13 +135,13 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
 vi.mock('../../maker-host/claude-session-route-registry.js', () => ({
   readClaudeSessionRoute: effects.fn('readClaudeSessionRoute'),
 }));
-vi.mock('../../maker-host/codex-proxy-host.js', () => ({
+vi.mock('../../maker-host/codex-proxy-host.desktop.js', () => ({
   getCodexProxyAuthInjection: effects.fn('getCodexProxyAuthInjection'),
 }));
 vi.mock('../../maker-host/provider-route.js', () => ({
   isUserProviderSession: effects.fn('isUserProviderSession'),
 }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   reserveTurnErrorPersistId: effects.fn('reserveTurnErrorPersistId'),
   backgroundTurnPredatesSessionClear: effects.fn('backgroundTurnPredatesSessionClear'),
   noteAgentMeta: effects.fn('noteAgentMeta'),
@@ -140,6 +156,7 @@ vi.mock('../../messagePersistBroadcaster.js', () => ({
   onThinkingEvent: effects.fn('onThinkingEvent'),
   onToolResultEvent: effects.fn('onToolResultEvent'),
   onToolResultFullEvent: effects.fn('onToolResultFullEvent'),
+  persistToolProcessMedia: effects.fn('persistToolProcessMedia'),
   onToolUseEvent: effects.fn('onToolUseEvent'),
   consumeLastAssistantPersistId: effects.fn('consumeLastAssistantPersistId'),
   consumeLastTopLevelAssistantPersistId: effects.fn('consumeLastTopLevelAssistantPersistId'),
@@ -157,7 +174,11 @@ vi.mock('../../messagePersistBroadcaster.js', () => ({
   resetTurnPersistState: effects.fn('resetTurnPersistState'),
   saveTurnStartedAtForDeferred: effects.fn('saveTurnStartedAtForDeferred'),
 }));
-vi.mock('../../maker-host/claude-session-background-activity.js', () => ({
+vi.mock('../../maker-host/claude-session-background-activity.js', async (importOriginal) => ({
+  hasWorkingBackgroundCommand: (
+    await importOriginal<typeof import('../../maker-host/claude-session-background-activity.js')>()
+  ).hasWorkingBackgroundCommand,
+  noteClaudeSessionBackgroundCommandWork: effects.fn('noteClaudeSessionBackgroundCommandWork'),
   noteClaudeSessionTurnState: effects.fn('noteClaudeSessionTurnState'),
 }));
 vi.mock('../../subagentObservationRewindFence.js', () => ({
@@ -230,7 +251,9 @@ function event(
   return { type, source: 'codex', data, ...extra } as AgentEvent;
 }
 
-function harness() {
+const actualSnapshotWriter = await vi.importActual<typeof import('../../sessionSpendBroadcaster.js')>('../../sessionSpendBroadcaster.js');
+
+function harness(remoteHandle?: AgentSessionHandle) {
   const log = {
     trace: vi.fn(),
     debug: vi.fn(),
@@ -241,7 +264,7 @@ function harness() {
     child: () => log,
   };
   const ended = deferred();
-  const handle = {
+  const handle = remoteHandle ?? {
     id: 'provider',
     agentKind: 'codex',
     model: 'test-model',
@@ -283,10 +306,8 @@ function harness() {
     deferUnsuccessfulProductTurn: (owner: Parameters<typeof failureGate.defer>[0]) => failureGate.defer(owner),
     log,
     botCompactRuntimeRefreshCoordinator: { noteBoundary: vi.fn() },
-    workingMemoryRefresh: { markCompacted: vi.fn() },
     wireNoteMemory: { reset: vi.fn() },
     attemptBotCompactRuntimeRefresh: vi.fn(),
-    botDelegationServiceHolder: { settleSession: vi.fn(async () => {}) },
     isFencedStaleSessionTerminal: vi.fn(() => false),
     redactEventForRenderer: vi.fn((value: AgentEvent): AgentEvent => ({ ...value, data: { redacted: true } })),
     interruptedTurnAutoResumeGuard: {
@@ -344,6 +365,7 @@ function harness() {
       isActiveTaskCoordination: vi.fn(() => false),
       getQueueControlSnapshot: vi.fn(() => ({ pendingQueue: [] as unknown[] })),
       onTurnEvent: vi.fn(),
+      bindErrorPersistId: vi.fn(),
       noteSuppressedTerminalError: vi.fn(),
       onExternalTurnSettled: vi.fn(),
       isAutoResumePending: vi.fn(() => false),
@@ -419,6 +441,7 @@ beforeEach(() => {
     effects.fn(name).mockResolvedValue(undefined);
   effects.fn('getActiveCatalog').mockReturnValue({ providers: [] });
   effects.fn('currentLedgerCurrency').mockReturnValue('USD');
+  effects.fn('isLedgerCurrencyKnown').mockReturnValue(true);
   effects.fn('reserveTurnErrorPersistId').mockImplementation(() => {
     effects.calls.push('reserve');
     return 'error-row';
@@ -444,6 +467,22 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
+  // #8147 follow-up: the ID used by live delivery must also be retained by
+  // the coordinator so subsequent projection-only readers can deduplicate.
+  it('binds the reserved error row to the snapshot owner before broadcasting it', async () => {
+    const current = harness();
+    current.deps.redactEventForRenderer.mockImplementation(value => value);
+    try {
+      current.emit(event('error', { message: 'failed', isTerminal: true }));
+      expect(current.deps.agentInputCoordinatorHolder.bindErrorPersistId)
+        .toHaveBeenCalledWith('task', 'error-row', 'failed');
+      const delivered = current.deps.broadcastToAllWindows.mock.calls.find(
+        ([channel]) => channel === 'maker:event',
+      );
+      expect(delivered?.[1]).toMatchObject({ persistId: 'error-row' });
+    } finally { await current.dispose(); }
+  });
+
   it('accepts only provider-confirmed sampling items and releases the remainder at done', async () => {
     const current = harness();
     try {
@@ -1030,6 +1069,21 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
+  // The Host settles the same sequences in its turn executor (apps/host input-queue.test.mjs).
+  it.each(GIT_SETTLEMENT_SEQUENCES)('settles the Git baseline of $name as the shared table says', async ({ steps, desktop }) => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }));
+    effects.calls.length = 0;
+    for (const step of steps) {
+      if (step === 'stop') continue; // abort() returning is not an event the pipeline sees.
+      if (step === 'error') h.emit(event('error', { message: 'provider failed', isTerminal: true }));
+      else h.emit(event('done', {}, step === 'continuation-done' ? { turnContinuationId: 0 } : {}));
+    }
+    await microtasks();
+    expect(effects.calls.filter(call => call === 'git-end' || call === 'git-abort').map(call => call.slice(4))).toEqual(desktop);
+    await h.dispose();
+  });
+
   it('keeps the silent-stop decision window running and rejects an unowned late terminal', async () => {
     const h = harness();
     h.emit(event('done', { silentStop: true }));
@@ -1061,6 +1115,109 @@ describe('production Session event pipeline', () => {
       await h.dispose();
     },
   );
+
+  // #10198 (unit): end-of-turn coverage missed native compaction inside a live
+  // turn. Remote poll chunks may deliver status before its cached state. Drive
+  // the real proxy -> pipeline -> writer and reopen SQLite (db tier, no files).
+  it.each([false, true])('persists remote Pi compaction across split delivery (state first=%s)', async (stateFirst) => {
+    const oldUsage = { tokenUsage: 0, costUsd: 0, contextTokens: 579216, contextWindow: 272000 };
+    const proxy = createRemoteAgentHandle({
+      started: { id: 'remote', agentKind: 'pi', model: 'test', shadowDir: '/remote', methods: [],
+        state: { usage: oldUsage, turnRunning: true } },
+      link: { live: async () => null, ensure: vi.fn(), begin: () => () => {}, close: async () => {} },
+      workspace: new ExecutorWorkspace({ workingDir: process.cwd() }),
+      recordApproval: vi.fn(), newId: () => 'request', dispose: async () => {},
+    });
+    const h = harness(proxy.handle);
+    const iterator = proxy.handle.events()[Symbol.asyncIterator]();
+    const deliver = async (value: AgentEvent) => {
+      proxy.onEvent(value);
+      const next = await iterator.next();
+      expect(next.done).toBe(false);
+      h.emit(next.value!);
+    };
+    const sqlite = new Database(':memory:');
+    sqlite.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, context_tokens INTEGER,
+      context_window INTEGER, context_window_runtime INTEGER);
+      INSERT INTO sessions VALUES ('task', 579216, 272000, 272000);`);
+    const transport: DbTransport = {
+      async send<R>(op: string, args: unknown): Promise<R> {
+        const { sql, params } = args as { sql: string; params: unknown[] };
+        const statement = sqlite.prepare(sql);
+        return (op === 'run' ? statement.run(...params) : op === 'rawGet'
+          ? statement.raw().get(...params) : statement.raw().all(...params)) as R;
+      },
+      on() {}, onTerminated() {}, async close() {},
+    };
+    const unexpectedDbCall = async (): Promise<never> => { throw new Error('Expected snapshot Drizzle path'); };
+    const db: DbClient = {
+      drizzle: createDrizzleProxy(transport),
+      query: unexpectedDbCall, queryOne: unexpectedDbCall, exec: unexpectedDbCall, tx: unexpectedDbCall,
+      vecAvailable: false, async dispose() {},
+    };
+    const writes: Promise<void>[] = [];
+    setCurrentDbClient(db, 'compaction-test');
+    effects.fn('getDbClient').mockReturnValue(db);
+    effects.fn('recordSessionContextSnapshot').mockImplementation((id, tokens, window) => {
+      effects.calls.push('recordSessionContextSnapshot');
+      const write = actualSnapshotWriter.recordSessionContextSnapshot(id as string, tokens as number, window as number);
+      writes.push(write);
+      return write;
+    });
+    try {
+      await deliver(event('status', { isRunning: true }, { source: 'pi' }));
+      const boundary = event('compact_boundary', { postTokens: 46703 }, { source: 'pi' });
+      await deliver(boundary);
+      expect(proxy.handle.getUsageSnapshot().contextTokens).toBe(579216);
+      expect(effects.fn('recordSessionContextSnapshot')).not.toHaveBeenCalled();
+      const usage = { ...oldUsage, contextTokens: 46703 };
+      if (stateFirst) proxy.onState({ usage });
+      effects.calls.length = 0;
+      await deliver(event('status', { ...usage, isRunning: true, status: 'Working…',
+        contextSnapshotAuthoritative: true }, { source: 'pi' }));
+      ordered('broadcast', 'recordSessionContextSnapshot');
+      await Promise.all(writes);
+      if (!stateFirst) proxy.onState({ usage });
+      const reopened = new Database(sqlite.serialize());
+      try {
+        expect(reopened.prepare('SELECT context_tokens, context_window, context_window_runtime FROM sessions').get()).toEqual({
+          context_tokens: 46703, context_window: 272000, context_window_runtime: 272000,
+        });
+      } finally { reopened.close(); }
+      expect(h.activity.isSessionInTurn('task')).toBe(true);
+      expect(h.deps.notifyGoalIdleAfterTurnSettled).not.toHaveBeenCalled();
+      proxy.onState({ usage: { ...usage, contextTokens: 58000 } });
+      await deliver(boundary);
+      expect(effects.fn('recordSessionContextSnapshot')).toHaveBeenCalledTimes(1);
+      await deliver(event('tool_use', { toolUseId: 'after-compact', toolName: 'read', input: {} }, { source: 'pi' }));
+      expect(effects.fn('onToolUseEvent')).toHaveBeenCalled();
+      expect(h.activity.isSessionInTurn('task')).toBe(true);
+    } finally {
+      await Promise.all(writes);
+      clearCurrentDbClient(db);
+      sqlite.close();
+      await h.dispose();
+      await iterator.return?.();
+    }
+  });
+
+  it.each([
+    ['missing', undefined, {}],
+    ['NaN', NaN, {}],
+    ['negative', -1, {}],
+    ['infinite', Infinity, {}],
+    ['old generation', 46703, { sessionTurnGeneration: -1 }],
+    ['old instance', 46703, { sessionInstanceId: 'retired-instance' }],
+    ['background', 46703, { turnScope: 'background' as const }],
+  ])('does not persist a %s compaction over active work', async (_label, postTokens, scope) => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }, { source: 'pi' }));
+    h.emit(event('compact_boundary', { postTokens }, { source: 'pi', ...scope }));
+    h.emit(event('status', { isRunning: true, status: 'Working…', contextSnapshotAuthoritative: true,
+      contextTokens: postTokens, contextWindow: 272000 }, { source: 'pi', ...scope }));
+    expect(effects.fn('recordSessionContextSnapshot')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
 
   it.each([
     ['xd', 1],
@@ -1193,6 +1350,36 @@ describe('production Session event pipeline', () => {
     );
     expect(h.deps.overflowSuppressedBroadcasts.size).toBe(0);
     await h.dispose();
+  });
+
+  // The Node Host holds the same terminal errors for context recovery (apps/host context-recovery.ts
+  // holdsOverflowBroadcast); a class added here must be added there.
+  it('holds the same terminal errors as the Host context recovery', async () => {
+    // A non-literal specifier: the Host's source is loaded at run time, outside the desktop's type program.
+    const hostModule = 'context-recovery.ts';
+    const { holdsOverflowBroadcast } = await import(`../../../../../host/src/agent/${hostModule}`) as {
+      holdsOverflowBroadcast(session: { remoteHostId?: string | null }, event: AgentEvent): boolean;
+    };
+    const { CODEX_HISTORY_OVERSIZED_REASON, CONTEXT_OVERFLOW_REASON, UNSUPPORTED_REQUEST_OPTION_REASON } = await import('@cindy/maker-core');
+    const cases: Array<[string, unknown]> = [
+      ['context overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' }],
+      ['context overflow by message', { message: 'prompt is too long: 210000 tokens > 200000 maximum' }],
+      ['oversized history', { reason: CODEX_HISTORY_OVERSIZED_REASON, message: 'history too large' }],
+      ['unsupported request option', { reason: UNSUPPORTED_REQUEST_OPTION_REASON, message: 'rejected option' }],
+      ['retryable overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long', isTerminal: false }],
+      ['ordinary failure', { message: 'boom', reason: 'sdk_crash' }],
+    ];
+    for (const [name, data] of cases) {
+      const h = harness();
+      h.activity.setSessionInTurn('task', true);
+      // Keeps a held broadcast in the map instead of the no-owner path re-sending it at once.
+      (h.deps.agentInputCoordinatorHolder as { isAutoResumeDeferred: ReturnType<typeof vi.fn> })
+        .isAutoResumeDeferred.mockReturnValue(true);
+      const terminal = event('error', data);
+      h.emit(terminal);
+      expect(holdsOverflowBroadcast(h.session, terminal), name).toBe(h.deps.overflowSuppressedBroadcasts.size === 1);
+      await h.dispose();
+    }
   });
 
   it('does not flush a stale suppressed error onto a later unrelated error', async () => {
@@ -1540,16 +1727,52 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
-  it.each([null, 'ssh-host'])(
-    'only records local Codex account snapshots (remote=%s)',
-    async (remoteHostId) => {
+  // 任务列表的「后台命令仍在工作」来自会话的权威后台任务快照:任务表变化与回合收尾各刷新一次
+  // (收尾先刷新再记回合结束,换代清表不带事件)。SSH 远程任务的终态可能丢在断连窗口里,不参与。
+  it.each([
+    ['local task still running a test command', null, 'work', [true, true]],
+    ['local task that only left a dev server', null, 'service', [false, false]],
+    ['SSH remote task', 'ssh-host', 'work', []],
+  ] as const)(
+    'refreshes background command work from the session snapshot: %s',
+    async (_label, remoteHostId, backgroundCommandKind, expected) => {
       const h = harness();
       Object.defineProperty(h.session, 'remoteHostId', { value: remoteHostId });
+      vi.spyOn(h.session, 'listBackgroundTasks').mockReturnValue([
+        { taskId: 'bash-1', taskType: 'local_bash', backgroundCommandKind },
+      ]);
+      h.emit(event('status', { isRunning: true }));
+      h.emit(event('agent_task_update', { provider: 'claude-code', taskId: 'bash-1', status: 'running' }));
+      h.emit(event('done', { reason: 'completed' }));
+      expect(effects.fn('noteClaudeSessionBackgroundCommandWork').mock.calls).toEqual(
+        expected.map((hasWork) => ['task', hasWork]),
+      );
+      if (expected.length > 0) {
+        const calls = effects.calls.filter(
+          (name) => name === 'noteClaudeSessionBackgroundCommandWork' || name === 'noteClaudeSessionTurnState',
+        );
+        expect(calls.slice(-2)).toEqual([
+          'noteClaudeSessionBackgroundCommandWork',
+          'noteClaudeSessionTurnState',
+        ]);
+      }
+      await h.dispose();
+    },
+  );
+
+  it.each([
+    [null, null], ['ssh-host', null], [null, 'remote-computer'], [null, 'share:example'],
+  ])(
+    'only records local Codex account snapshots (ssh=%s, device=%s)',
+    async (remoteHostId, agentDeviceId) => {
+      const h = harness();
+      Object.defineProperty(h.session, 'remoteHostId', { value: remoteHostId });
+      Object.defineProperty(h.session, 'agentDeviceId', { value: agentDeviceId });
       h.emit(event('account_usage', { remaining: 42 }));
       expect(effects.fn('recordCodexAccountUsageSnapshot')).toHaveBeenCalledTimes(
-        remoteHostId ? 0 : 1,
+        remoteHostId || agentDeviceId ? 0 : 1,
       );
-      if (!remoteHostId) ordered('broadcast', 'recordCodexAccountUsageSnapshot');
+      if (!remoteHostId && !agentDeviceId) ordered('broadcast', 'recordCodexAccountUsageSnapshot');
       await h.dispose();
     },
   );
@@ -1596,10 +1819,10 @@ describe('provider turn observer on real Session.send', () => {
   });
 
   it.each([
-    [undefined, 'provider-wake-local'],
-    [{ kind: 'user' as const, surface: 'im' as const }, 'provider-wake'],
-    [{ kind: 'scheduler' as const, scheduleId: 'hook:slack', surface: 'im' as const }, 'provider-wake'],
-  ])('inherits the dispatched origin %j when announcing a harness wake-up', async (origin, expectedSource) => {
+    [undefined, 'provider-wake-local', true],
+    [{ kind: 'user' as const, surface: 'im' as const }, 'provider-wake', false],
+    [{ kind: 'scheduler' as const, scheduleId: 'hook:slack', surface: 'im' as const }, 'provider-wake', false],
+  ])('inherits the dispatched origin %j when announcing a harness wake-up', async (origin, expectedSource, zeroOutput) => {
     const pushed: Array<AgentEvent | null> = [];
     let wake: (() => void) | null = null;
     let running = false;
@@ -1630,7 +1853,11 @@ describe('provider turn observer on real Session.send', () => {
       await microtasks();
     };
     const order: string[] = [];
-    const dispose = installSessionTurnObserver(observerDeps(), session);
+    const dispose = installSessionTurnObserver({ ...observerDeps(), onProviderInitiatedTurn: (target, generation) => {
+      expect(target).toBe(session);
+      expect(generation).toBe(session.getTurnGeneration());
+      order.push('recovery-boundary');
+    } }, session);
     const unsubscribe = onChannelTurn((target, phase, source) => {
       if (target === session) order.push(`${phase}:${source ?? 'none'}`);
     });
@@ -1639,9 +1866,11 @@ describe('provider turn observer on real Session.send', () => {
       await session.send('launch background work', { origin });
       await emit(event('text', { text: 'launched agents' }));
       await emit(event('done'));
-      await emit(event('text', { text: 'agent result' }));
+      await emit(zeroOutput
+        ? event('status', { isRunning: true, providerInitiatedTurn: true }, { source: 'claude-code' })
+        : event('text', { text: 'agent result' }));
       await emit(event('done'));
-      expect(order).toEqual(['starting:none', 'text', 'done', `starting:${expectedSource}`, 'text', 'done']);
+      expect(order).toEqual(['starting:none', 'text', 'done', 'recovery-boundary', `starting:${expectedSource}`, zeroOutput ? 'status' : 'text', 'done']);
     } finally { off(); unsubscribe(); dispose(); await session.close(); }
   });
 
@@ -1667,7 +1896,7 @@ describe('provider turn observer on real Session.send', () => {
       expect(h.handle.send).not.toHaveBeenCalled();
       gate.resolve();
       await sending;
-      expect(ready).toHaveBeenCalledWith({ providerId: 'cindy-local-llamacpp', onlyIfStopped: true });
+      expect(ready).toHaveBeenCalledWith({ providerId: 'cindy-local-llamacpp', onlyIfStopped: true, signal: expect.any(AbortSignal) });
       expect(h.handle.send).toHaveBeenCalledOnce();
       h.emit(event('done', {}));
       ready.mockRejectedValue(new Error('NOT_INSTALLED'));
@@ -1675,6 +1904,61 @@ describe('provider turn observer on real Session.send', () => {
       expect(h.handle.send).toHaveBeenCalledOnce();
     } finally {
       gate.resolve();
+      dispose();
+      await h.dispose();
+    }
+  });
+
+  // PR #9420: a cold Ollama restore must release the send reservation on Stop.
+  // Unit tier, real Session + observer: previous readiness coverage only settled the service.
+  it.each(['stop', 'pending', 'external'] as const)('cancels Ollama readiness via %s and permits another send', async (cancel) => {
+    const h = harness();
+    h.handle.abort = vi.fn(async () => undefined);
+    const deps = observerDeps();
+    const entered = deferred();
+    const release = deferred();
+    const external = new AbortController();
+    const beforeProviderStart = vi.fn();
+    const onAccepted = vi.fn();
+    let readinessSignal: AbortSignal | undefined;
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-ollama');
+    const ready = effects.fn('ensureManagedOllamaReadyForSession').mockImplementationOnce(
+      async (opts: { signal?: AbortSignal }) => {
+        readinessSignal = opts.signal;
+        entered.resolve();
+        await new Promise<void>((resolve, reject) => {
+          release.promise.then(resolve);
+          opts.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      },
+    );
+    const phases: string[] = [];
+    const unsubscribe = onChannelTurn((_session, phase) => { phases.push(phase); });
+    const dispose = installSessionTurnObserver(deps, h.session);
+    const sending = h.session.send('cold start', { signal: external.signal, beforeProviderStart, onAccepted });
+    try {
+      await entered.promise;
+      expect(readinessSignal).toBeInstanceOf(AbortSignal);
+      if (cancel === 'stop') await h.session.abort();
+      else if (cancel === 'pending') expect(h.session.cancelPendingSend()).toBe(true);
+      else external.abort();
+      await expect(sending).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+      expect(readinessSignal?.aborted).toBe(true);
+      expect(h.handle.send).not.toHaveBeenCalled();
+      expect(beforeProviderStart).not.toHaveBeenCalled();
+      expect(onAccepted).not.toHaveBeenCalled();
+      expect(deps.sessionTurnLeaseTracker.markTurnStarted).not.toHaveBeenCalled();
+      expect(phases).toEqual([]);
+      expect(h.session.isTurnRunning()).toBe(false);
+      await expect(h.session.send('retry')).resolves.toEqual({ accepted: true });
+      expect(ready).toHaveBeenCalledTimes(2);
+      expect(h.handle.send).toHaveBeenCalledOnce();
+      expect(deps.sessionTurnLeaseTracker.markTurnStarted).toHaveBeenCalledOnce();
+      expect(phases).toEqual(['starting']);
+    } finally {
+      release.resolve();
+      await sending.catch(() => undefined);
+      unsubscribe();
       dispose();
       await h.dispose();
     }
@@ -1899,6 +2183,214 @@ describe('usage through the production event pipeline', () => {
     effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
   }
 
+  // #8887: production pipeline, unit tier. A request followed by a blocked
+  // price lookup must commit tokens now, retain its owner, and drain at teardown.
+  it('persists Pi requests before settlement and drains the captured owner while pricing waits', async () => {
+    const h = harness();
+    pricing(false);
+    const writes = vi.fn(async () => ({ changed: true }));
+    const otherWrites = vi.fn(async () => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => ({ total: 130, legacy: 0.2, amount: 0.1, currency: 'USD', approximate: 0 }) });
+    let release!: (value: unknown) => void;
+    effects.fn('getGatewayModelPricingForModel').mockReturnValue(new Promise(resolve => { release = resolve; }));
+    const receiptUsage = { ...usage('pi'), settlementId: 'receipt-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+    ] };
+    h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
+    await microtasks();
+    expect(writes).toHaveBeenCalledWith('usage.recordPiUsage', [expect.objectContaining({ amount: null, inputTokens: 100 })]);
+    expect(effects.fn('recordModelTurnUsage')).not.toHaveBeenCalled();
+    let drained = false;
+    const draining = flushSessionPiTurnUsage().then(() => { drained = true; });
+    effects.fn('getDbClient').mockReturnValue({ tx: otherWrites });
+    await microtasks();
+    expect(drained).toBe(false);
+    release({ xd: { 'test-model': effects.fn('getModelPriceQuote')() } });
+    await draining;
+    expect(otherWrites).not.toHaveBeenCalled();
+    expect(writes).toHaveBeenCalledTimes(2);
+    expect(writes.mock.calls[1]).toEqual(['usage.recordPiUsage', [expect.objectContaining({ amount: expect.any(Number) })]]);
+    expect(effects.fn('broadcastSessionSpend')).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: h.session.id, totalCostUsd: expect.closeTo(0.3),
+    }), expect.anything());
+    await h.dispose();
+  });
+
+  it('settles Pi error and done receipts without the legacy aggregate double-count path', async () => {
+    const h = harness();
+    pricing(false);
+    const writes = vi.fn(async () => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => ({ total: 130 }) });
+    const receiptUsage = { ...usage('pi'), settlementId: 'paired-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+    ] };
+    h.emit(event('error', { isTerminal: true, message: 'quota exceeded', usage: receiptUsage }, { source: 'pi' }));
+    h.emit(event('done', { status: 'failed', usage: receiptUsage }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes).toHaveBeenCalled();
+    expect(effects.fn('recordModelTurnUsage')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSessionTurnTokens')).not.toHaveBeenCalled();
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledTimes(1);
+    await h.dispose();
+  });
+
+  it('leaves unavailable Pi pricing pending so terminal replay can finish it', async () => {
+    const h = harness();
+    pricing(false);
+    const quote = effects.fn('getModelPriceQuote')();
+    effects.fn('getGatewayModelPricingForModel').mockResolvedValue(null);
+    const writes = vi.fn(async () => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    const receiptUsage = { ...usage('pi'), settlementId: 'missing-quote', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+    ] };
+    h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(writes.mock.calls[0]).toEqual(['usage.recordPiUsage', [expect.objectContaining({ amount: null })]]);
+    effects.fn('getGatewayModelPricingForModel').mockResolvedValue({ xd: { 'test-model': quote } });
+    h.emit(event('done', { usage: receiptUsage }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes.mock.calls[2]).toEqual(['usage.recordPiUsage', [expect.objectContaining({ amount: expect.any(Number), actualCost: true })]]);
+    await h.dispose();
+  });
+
+  // #9030 review P2, unit: a resolved managed-provider reference estimate is
+  // intentionally message-only, whereas a missing quote must remain recoverable.
+  it.each(['estimate', 'missing'] as const)('finalizes only resolved managed-provider receipts (%s)', async mode => {
+    const h = harness();
+    pricing(false);
+    effects.fn('getSessionProvider').mockReturnValue('managed-provider');
+    effects.fn('isUserProviderSession').mockReturnValue(true);
+    effects.fn('getActiveCatalog').mockReturnValue({ providers: [
+      { id: 'managed-provider', auth: { method: 'api-key' }, access: { kind: 'managed' } },
+    ] });
+    const quote = {
+      providerId: 'managed-provider', modelId: 'test-model', currency: 'USD',
+      source: 'provider-reference', inputPerMtok: 1, outputPerMtok: 2, cacheReadPerMtok: 0.1,
+    };
+    effects.fn('getReferenceModelPricing').mockReturnValue(mode === 'missing' ? {} : {
+      'managed-provider': { 'test-model': quote },
+    });
+    const writes = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    h.emit(event('account_usage', { usage: { settlementId: 'managed-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:managed' },
+    ] } }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes).toHaveBeenCalledTimes(mode === 'estimate' ? 2 : 1);
+    expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+      amount: mode === 'estimate' ? 0 : null, actualCost: false,
+    })]);
+    expect(effects.fn('broadcastSessionSpend')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
+  // #9030 review P1, unit: the existing price-delay test keeps USD throughout.
+  // Use the production pipeline to prove that currency recovery does not freeze
+  // fallback USD into a receipt, either within a write or across product turns.
+  it.each(['during-write', 'next-turn', 'terminal-replay'] as const)(
+    'prices Pi subscription receipts in the recovered account currency (%s)', async mode => {
+      const h = harness();
+      pricing(true);
+      effects.fn('isLedgerCurrencyKnown').mockReturnValue(false);
+      let release!: (result: { changed: boolean }) => void;
+      const writes = vi.fn(async () => ({ changed: true }));
+      if (mode === 'during-write') writes.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+      effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+      const receiptUsage = { ...usage('pi'), settlementId: 'currency-turn-1', receipts: [
+        { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+      ] };
+      h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
+      if (mode !== 'during-write') {
+        await flushSessionPiTurnUsage();
+        // Unknown currency is pending, not a final USD estimate.
+        expect(writes.mock.calls.every(call => (call as unknown as [string, Array<{ amount: unknown }>])[1]
+          .every(row => row.amount === null))).toBe(true);
+      }
+      effects.fn('currentLedgerCurrency').mockReturnValue('CNY');
+      effects.fn('isLedgerCurrencyKnown').mockReturnValue(true);
+      if (mode === 'during-write') release({ changed: true });
+      else h.emit(event(mode === 'terminal-replay' ? 'done' : 'account_usage', {
+        usage: { ...receiptUsage, settlementId: mode === 'next-turn' ? 'currency-turn-2' : receiptUsage.settlementId },
+      }, { source: 'pi' }));
+      await flushSessionPiTurnUsage();
+      expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+        currency: 'CNY', amount: expect.any(Number), actualCost: false,
+      })]);
+      await h.dispose();
+    },
+  );
+
+  it('keeps a confirmed Pi currency with its owner when a late write crosses an account boundary', async () => {
+    const h = harness();
+    pricing(true);
+    const currentScope = vi.spyOn(broadcastTap, 'isDataOwnerBroadcastScopeCurrent').mockReturnValue(true);
+    let release!: (result: { changed: boolean }) => void;
+    const writes = vi.fn(async () => ({ changed: true }))
+      .mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    try {
+      h.emit(event('account_usage', { usage: { settlementId: 'owner-currency', receipts: [
+        { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+      ] } }, { source: 'pi' }));
+      currentScope.mockReturnValue(false);
+      effects.fn('currentLedgerCurrency').mockReturnValue('CNY');
+      release({ changed: true });
+      await flushSessionPiTurnUsage();
+      expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+        currency: 'USD', amount: expect.any(Number), actualCost: false,
+      })]);
+    } finally { currentScope.mockRestore(); await h.dispose(); }
+  });
+
+  // #9030 P1, unit: exercise the startup/catalog-recovery entry without a live
+  // Session or terminal replay, including owner changes during async pricing.
+  it.each(['recover', 'owner-switch', 'unavailable'] as const)('recovers durable Pi receipts without a terminal event (%s)', async mode => {
+    const h = harness();
+    pricing(false);
+    const quote = effects.fn('getModelPriceQuote')();
+    effects.fn('getGatewayModelPricingForModel').mockResolvedValue(null);
+    const writes = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    h.emit(event('account_usage', { usage: { settlementId: 'recover-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:recover' },
+    ] } }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    const saved = JSON.parse(writes.mock.calls[0][1][0].pricingPayload!);
+    // A later timezone change must not move the money to a different day.
+    saved.day = '2020-01-01';
+    await h.dispose();
+    const pendingRow = { rowId: 1, sessionId: 'task', settlementId: 'recover-turn', receiptId: 'pi:recover', payload: JSON.stringify(saved) };
+    const replayWrites = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+    const rows = mode === 'unavailable' ? Array.from({ length: 20 }, (_, index) => ({ ...pendingRow, rowId: index + 1 })) : [pendingRow];
+    const query = vi.fn(async (_sql: string, params: number[]) => params[0] === 0 ? rows : []);
+    const db = { tx: replayWrites, query, queryOne: async () => null } as unknown as DbClient;
+    setCurrentDbClient(db, 'pi-recovery-owner');
+    let release!: (value: unknown) => void;
+    effects.fn('getGatewayModelPricing').mockReturnValue(new Promise(resolve => { release = resolve; }));
+    effects.fn('getGatewayModelPricingForModel').mockClear();
+    effects.fn('broadcastSessionTokens').mockClear();
+    effects.fn('rebroadcastTodaySpend').mockClear();
+    try {
+      const recovery = retryPendingPiUsageReceipts();
+      await microtasks();
+      expect(replayWrites).not.toHaveBeenCalled();
+      if (mode === 'owner-switch') clearCurrentDbClient();
+      release(mode === 'unavailable' ? null : { xd: { 'test-model': quote } });
+      await recovery;
+      expect(replayWrites).toHaveBeenCalledTimes(mode === 'recover' ? 1 : 0);
+      expect(effects.fn('getGatewayModelPricing')).toHaveBeenCalledTimes(1);
+      expect(effects.fn('getGatewayModelPricingForModel')).not.toHaveBeenCalled();
+      expect(effects.fn('broadcastSessionTokens')).not.toHaveBeenCalled();
+      expect(effects.fn('rebroadcastTodaySpend')).toHaveBeenCalledTimes(mode === 'recover' ? 1 : 0);
+      if (mode === 'recover') expect(replayWrites).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+        amount: expect.any(Number), actualCost: true, day: '2020-01-01', receiptId: 'pi:recover',
+      })]);
+    } finally { clearCurrentDbClient(db); await flushSessionPiTurnUsage(); }
+  });
+
   it.each(['priced', 'missing-write-price', 'legacy-summary'] as const)(
     'preserves Codex cache writes without guessing cost (%s)', async (mode) => {
       const h = harness();
@@ -1950,7 +2442,7 @@ describe('usage through the production event pipeline', () => {
     async (source, subscription) => {
       const h = harness();
       pricing(subscription);
-      h.emit(event('done', { usage: usage(source) }, { source }));
+      h.emit(event('done', { usage: { ...usage(source), reasoningTokens: 5 } }, { source }));
       await microtasks();
       expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledWith('task', 130);
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(
@@ -1968,6 +2460,21 @@ describe('usage through the production event pipeline', () => {
       );
       expect(effects.fn('recordTurnSpend')).toHaveBeenCalledTimes(subscription ? 0 : 1);
       expect(effects.fn('recordSessionTurnSpend')).toHaveBeenCalledTimes(subscription ? 0 : 1);
+      if (source === 'codex') {
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(2);
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+          model: `test-model#billing=${subscription ? 'subscription' : 'api'}`,
+          money: expect.objectContaining({ kind: subscription ? 'value-estimate' : 'actual-cost' }),
+          inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
+        }));
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+          turnUsageDetails: expect.objectContaining({
+            providerId: subscription ? 'openai' : 'xd',
+            billingSource: subscription ? 'subscription' : 'cindy-ai',
+          }),
+        }));
+        expect(effects.fn('triggerClaudeAccountUsageRefresh')).toHaveBeenCalledTimes(subscription ? 0 : 1);
+      }
       ordered('broadcast', 'recordSessionTurnTokens');
       await h.dispose();
     },
@@ -2099,6 +2606,107 @@ describe('usage through the production event pipeline', () => {
       await h.dispose();
     },
   );
+
+  // Unit regression: SSH-only coverage above did not check billing identity or
+  // device-link runs. A remote OpenAI done with local env-key must retain tokens
+  // without inventing gateway spend, subscription value, or local quota traffic.
+  it.each(([
+    ['agentDeviceId', 'remote-computer', 'openai', 'test-model'],
+    ['agentDeviceId', 'share:example', 'xd', 'codex/test-model'],
+    ['agentDeviceId', 'remote-computer', 'custom-api', 'test-model'],
+    ['agentDeviceId', 'remote-computer', 'xai', 'xai/grok-4.6'],
+    ['remoteHostId', 'ssh-host', 'openai', 'test-model'],
+  ] as const).flatMap(row => ['env-key', 'oauth-bearer'].map(auth => [...row, auth] as const)))(
+    'keeps remote Codex billing unknown (%s, %s, %s, %s, local %s)',
+    async (location, remoteId, providerId, model, auth) => {
+      const h = harness();
+      pricing(false);
+      Object.defineProperty(h.session, location, { value: remoteId });
+      effects.fn('getSessionProvider').mockReturnValue(providerId);
+      effects.fn('getCodexProxyAuthInjection').mockReturnValue(auth);
+      effects.fn('readClaudeApiKey').mockReturnValue('test-key');
+      // A same-named local subscription is not evidence about the remote route.
+      effects.fn('getActiveCatalog').mockReturnValue({ providers: [
+        { id: providerId, auth: { method: 'oauth' }, access: { kind: 'subscription' } },
+      ] });
+      h.deps.readSessionModelForUsage.mockResolvedValue(model);
+      h.emit(event('done', { usage: usage('codex') }, {
+        turnOrigin: { kind: 'scheduler', scheduleId: 'test-schedule', scheduleName: 'Test', runId: 'test-run' },
+      }));
+      await microtasks();
+      expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledWith('task', 130);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        model, money: undefined, inputTokensDelta: 100, outputTokensDelta: 20, cacheReadTokensDelta: 10,
+      }));
+      expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+        clientId: 'assistant-row',
+        turnUsageDetails: expect.objectContaining({ providerId, billingSource: 'unknown', totalTokens: 130 }),
+      }));
+      for (const name of ['recordTurnSpend', 'recordSessionTurnSpend', 'recordSchedulerTurnCost',
+        'getCodexProxyAuthInjection', 'readClaudeApiKey', 'getGatewayModelPricingForModel',
+        'getReferenceModelPricing', 'triggerClaudeAccountUsageRefresh',
+        'triggerClaudeSubscriptionUsageRefresh', 'triggerXaiSubscriptionUsageRefresh']) {
+        expect(effects.fn(name), name).not.toHaveBeenCalled();
+      }
+      await h.dispose();
+    },
+  );
+
+  it.each(['agentDeviceId', 'remoteHostId'] as const)(
+    'retains remote Codex tokens without local quota fallback when model lookup rejects (%s)', async location => {
+      const h = harness();
+      pricing(false);
+      Object.defineProperty(h.session, location, { value: 'remote-computer' });
+      effects.fn('readClaudeApiKey').mockReturnValue('test-key');
+      h.deps.readSessionModelForUsage.mockRejectedValue(new Error('model unavailable'));
+      h.emit(event('done', { usage: usage('codex') }));
+      await microtasks();
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        model: 'unknown', money: undefined, inputTokensDelta: 100, outputTokensDelta: 20,
+      }));
+      expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+        turnUsageDetails: expect.objectContaining({ providerId: 'xd', billingSource: 'unknown', totalTokens: 130 }),
+      }));
+      expect(effects.fn('triggerClaudeAccountUsageRefresh')).not.toHaveBeenCalled();
+      expect(effects.fn('readClaudeApiKey')).not.toHaveBeenCalled();
+      expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
+      await h.dispose();
+    },
+  );
+
+  // Replaces the source-text Codex guard in makerEventHotPathOrdering.test.ts.
+  // Unit: a delayed gateway quote must not delay token persistence or count the
+  // same tokens again when cost arrives. Immediate-price coverage misses this.
+  it('persists Codex tokens before a cold price lookup and later writes only money', async () => {
+    const h = harness();
+    pricing(false);
+    const pendingPrice = deferred<unknown>();
+    effects.fn('getGatewayModelPricingForModel').mockReturnValue(pendingPrice.promise);
+    h.emit(event('done', { usage: { ...usage('codex'), reasoningTokens: 5 } }));
+    await microtasks();
+    expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledExactlyOnceWith('task', 130);
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      model: 'test-model#billing=api', money: undefined,
+      inputTokensDelta: 100, outputTokensDelta: 20, cacheReadTokensDelta: 10, cacheCreateTokensDelta: 0,
+    }));
+    expect(effects.fn('rebroadcastCodexTodayUsage')).toHaveBeenCalledOnce();
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
+    pendingPrice.resolve({});
+    await microtasks();
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(2);
+    expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+      model: 'test-model#billing=api', money: expect.objectContaining({ kind: 'actual-cost' }),
+      inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
+    }));
+    expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledOnce();
+    expect(effects.fn('recordTurnSpend')).toHaveBeenCalledOnce();
+    expect(effects.fn('recordSessionTurnSpend')).toHaveBeenCalledOnce();
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: 'assistant-row', money: expect.objectContaining({ kind: 'actual-cost' }),
+    }));
+    await h.dispose();
+  });
 
   it.each(['codex', 'pi'] as const)(
     'retains %s token facts when pricing rejects',
@@ -2263,24 +2871,6 @@ describe('usage through the production event pipeline', () => {
 
 
 describe('Bot adapters in the shared event pipeline', () => {
-  it.each(['a long but incomplete answer', ''])('settles output-limit with its available result (%j) before the paired done', async (result) => {
-    const h = harness();
-    h.emit(event('error', {
-      reason: 'output-limit', message: 'Pi reached the model output limit.',
-      isTerminal: true, result,
-    }, { source: 'pi', sessionTurnGeneration: 4 }));
-    await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      childSessionId: 'task', outcome: 'error', resultText: result,
-      error: 'Pi reached the model output limit.',
-    }));
-    h.deps.autoResumeBookkeeping.consumeFailedTurnCompletionTail.mockReturnValue(true);
-    h.emit(event('done', { status: 'failed', result }, { source: 'pi', sessionTurnGeneration: 4 }));
-    await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledOnce();
-    await h.dispose();
-  });
-
   it('keeps peer replies private in persistence and broadcast before done clears the input', () => {
     const h = harness();
     h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:thread:delivery');
@@ -2520,17 +3110,12 @@ describe('Bot adapters in the shared event pipeline', () => {
     h.deps.attemptBotCompactRuntimeRefresh.mockImplementation(() => { void coordinator.attempt(h.session); });
     h.emit(event('compact_boundary'));
     expect(h.deps.botCompactRuntimeRefreshCoordinator.noteBoundary).not.toHaveBeenCalled();
-    // 原生摘要可能丢掉账本内容:下一次发送补一份工作记忆。
-    expect(h.deps.workingMemoryRefresh.markCompacted).toHaveBeenCalledWith('task');
     // 原生摘要可能丢掉了环境说明:下一轮整体重发。
     expect(h.deps.wireNoteMemory.reset).toHaveBeenCalledWith('task');
     expect(h.deps.attemptBotCompactRuntimeRefresh).not.toHaveBeenCalled();
     h.deps.agentInputCoordinatorHolder.getQueueControlSnapshot.mockReturnValue({ pendingQueue: [{}] });
     h.emit(event('done', { result: 'first result' }));
     await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledWith(expect.objectContaining({
-      childSessionId: 'task', resultText: 'first result', hadPendingInputAtTerminal: true,
-    }));
     expect(h.deps.attemptBotCompactRuntimeRefresh).toHaveBeenCalledWith(h.session, 'event:done');
     expect(close).not.toHaveBeenCalled();
     expect(bootstrap).not.toHaveBeenCalled();

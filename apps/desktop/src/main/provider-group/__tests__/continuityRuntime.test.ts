@@ -15,7 +15,7 @@ vi.mock('@cindy/device-link', async () => import('./deviceLinkTestFacade.js'));
 type PrepareWire = Extract<GroupContinuityRequest, { action: 'continuity-prepare' }>;
 
 const io = vi.hoisted(() => ({
-  owner: 'account', realm: 'realm', epoch: 0, allowed: true, supported: true,
+  owner: 'account', realm: 'realm', epoch: 0, allowed: true, ownSwitch: false, supported: true,
   remoteControl: true, revokedControllers: [] as string[], prepares: [] as unknown[],
   self: 'M',
   group: undefined as unknown, changed: undefined as undefined | ((group: string) => void),
@@ -27,7 +27,7 @@ vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => io.owner
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => io.realm }));
 vi.mock('../../device-link/index.js', () => ({ getRemoteLinkCloseEpoch: () => 0,
   getSelfDeviceId: () => io.self, remoteBackgroundInvoke: io.invoke }));
-vi.mock('../../device-link/settings-store.js', () => ({
+vi.mock('../../device-link/settings-store.desktop.js', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: io.remoteControl,
     revokedControllers: io.revokedControllers }),
 }));
@@ -40,6 +40,7 @@ vi.mock('../managementScope.js', () => ({ captureProviderManagementScope: () => 
 } }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: () => io.allowed, remoteProviderAccessEpoch: () => String(io.epoch),
+  isRemoteProviderOpenToOwnComputers: () => io.allowed || io.ownSwitch,
   onRemoteProviderAccessChanged: () => () => {},
 }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({
@@ -85,7 +86,8 @@ function setRemoteControl(enabled: boolean): void {
   syncRemoteControlAccessGeneration();
 }
 beforeEach(() => {
-  vi.clearAllMocks(); io.owner = 'account'; io.realm = 'realm'; io.epoch = 0; io.allowed = true; io.supported = true;
+  vi.clearAllMocks(); io.owner = 'account'; io.realm = 'realm'; io.epoch = 0; io.allowed = true; io.ownSwitch = false;
+  io.supported = true;
   io.remoteControl = true; io.revokedControllers = []; io.prepares.length = 0; io.self = 'M';
   io.slowInspect = false; io.entered = undefined; io.inspectGate = Promise.resolve();
   io.inspectError = undefined;
@@ -199,9 +201,12 @@ describe('group continuity Main wiring', () => {
     expect(await f.runtime.handle('C', request)).toMatchObject({ id: grant!.id, running: 2 });
     expect(io.received).toHaveBeenCalledWith('O', 'openai');
     expect(io.receive).toHaveBeenCalledExactlyOnceWith('O', { group: 'openai', revision: 7, allowFast: false,
-      binding: { sessionId: 'new-task', controllerDeviceId: 'C' } }, 'M', expect.any(Function));
+      binding: { sessionId: 'new-task', controllerDeviceId: 'C' } }, 'M', expect.any(Function), undefined, true);
     io.received.mockReturnValue(undefined);
-    await expect(f.runtime.handle('C', { ...request, sessionId: 'without-policy' })).rejects.toThrow('ACCESS_REVOKED');
+    await expect(f.runtime.handle('C', { ...request, sessionId: 'without-policy' }))
+      .resolves.toMatchObject({ id: grant!.id });
+    expect(io.receive).toHaveBeenLastCalledWith('O', { group: 'openai', revision: 0, allowFast: false,
+      binding: { sessionId: 'without-policy', controllerDeviceId: 'C' } }, 'M', expect.any(Function), undefined, true);
   });
   it('deducts capability-probe time from the executor grant instead of starting a fresh window at M', async () => {
     const clock = { wall: 0, mono: 0 };
@@ -799,6 +804,19 @@ describe('group continuity Main wiring', () => {
     await expect(f.runtime.handle('C', { action: 'continuity-admit', id: grant!.id,
       ownerDeviceId: 'O', sessionId: 'new-task' })).rejects.toThrow('ACCESS_REVOKED');
     expect(io.receive).not.toHaveBeenCalled();
+  });
+  // Bug(PR #10150 review)：M 的供应商只靠「让我的其他电脑用本机模型」开放时，直接启动任务能用，
+  // 但组内续用的执行端核对只认「允许被远程调用」，O 暂时连不上后 C 拿未到期的续用去问 M 得到
+  // ACCESS_REVOKED，在线的 M 被移出候选。修复前第一次 admit 拒绝，修复后放行；M 自己给这个供应商建了组时仍拒绝。
+  it('admits a same-account continuity on M opened only by the own-computer switch, except a provider M groups itself', async () => {
+    // 同一进程同时扮演 O 与 M：O 的组供应商逐个打开着才会准备续用；之后只把 M 侧状态换成「仅靠开关、没建组」。
+    const f = fixture(), grant = await f.prepare(); expect(grant).toBeDefined();
+    io.allowed = false; io.ownSwitch = true;
+    const group = io.group; io.group = undefined;
+    const request = { action: 'continuity-admit', id: grant!.id, ownerDeviceId: 'O', sessionId: 'new-task' };
+    await expect(f.runtime.handle('C', request)).resolves.toMatchObject({ id: grant!.id, running: 2 });
+    io.group = group;
+    await expect(f.runtime.handle('C', { ...request, sessionId: 'grouped-on-m' })).rejects.toThrow('ACCESS_REVOKED');
   });
   it('does not serialize different owners through the production continuity handler', async () => {
     const f = fixture();

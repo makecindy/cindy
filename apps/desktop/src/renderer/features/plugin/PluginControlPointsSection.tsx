@@ -12,7 +12,8 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import type { GhostControlPointInfo } from '../../../shared/ghost';
+import { GHOST_CONTROL_POINTS, type GhostControlPointInfo } from '../../../shared/ghost';
+import { isRuntimePluginPoint } from '../../../shared/pluginRuntime';
 
 const SECTION_CLASS = 'mt-10';
 const HEADING_CLASS = 'text-18 font-medium leading-[1.444] text-[var(--text-primary)]';
@@ -46,11 +47,11 @@ function PluginControlPointsSectionInner({ ghostId }: { ghostId: string }) {
   return (
     <section className={SECTION_CLASS} aria-labelledby="ghost-control-points-title">
       <h2 id="ghost-control-points-title" className={HEADING_CLASS}>
-        {t(withStartTask ? 'settings.ghosts.controlPoints.titleWithStartTask' : 'settings.ghosts.controlPoints.title')}
+        {t(points.some(point => isRuntimePluginPoint(point.id)) ? 'runtimePlugins.title' : withStartTask ? 'settings.ghosts.controlPoints.titleWithStartTask' : 'settings.ghosts.controlPoints.title')}
       </h2>
       <p className="mt-2 max-w-[760px] text-13 leading-5 text-[var(--text-secondary)]">
         {t(
-          withStartTask
+          points.some(point => isRuntimePluginPoint(point.id)) ? 'runtimePlugins.description' : withStartTask
             ? 'settings.ghosts.controlPoints.descriptionWithStartTask'
             : 'settings.ghosts.controlPoints.description',
         )}
@@ -59,12 +60,13 @@ function PluginControlPointsSectionInner({ ghostId }: { ghostId: string }) {
         {points.map((point) => (
           <li key={point.id} className="px-5 py-3.5">
             <p className="text-14 font-medium leading-[1.571] text-[var(--text-primary)]">
-              {t(`settings.ghosts.controlPoints.points.${point.id}`)}
+              {t(isRuntimePluginPoint(point.id) ? `settings.ghosts.perm.${GHOST_CONTROL_POINTS[point.id].labelKey}` : `settings.ghosts.controlPoints.points.${point.id}`)}
             </p>
             <p className="mt-0.5 text-13 leading-5 text-[var(--text-secondary)]">
               {t(
                 !point.active
                   ? 'settings.ghosts.controlPoints.inactive'
+                  : isRuntimePluginPoint(point.id) ? 'runtimePlugins.description'
                   : point.id === 'will-start-task'
                     ? 'settings.ghosts.controlPoints.usageStartTask'
                     : 'settings.ghosts.controlPoints.usage',

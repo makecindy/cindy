@@ -13,8 +13,6 @@ import { useProvisionalDraftProjectTaskId } from './useProvisionalDraftProjectTa
 
 import type { Session } from '@/lib/ccAgent.types';
 import { useRemoteSshHosts } from '@/hooks/useRemoteSshHosts';
-import { buildBotSessionOwners } from '@/features/bots/botSessionOwners';
-import { useBotProfiles } from '@/features/bots/botStore';
 import { remoteProjectAliases } from '@/features/device-link/remoteProjectAliases';
 import {
   type PersistentLocalProject,
@@ -42,12 +40,6 @@ export function useProjectGroups(
   const hostProjectAliases = useSyncExternalStore(remoteProjectAliases.subscribe, remoteProjectAliases.getSnapshot);
   const selectGroups = useMemo(() => createProjectGroupsSelector(), []);
   const provisionalDraftTaskId = useProvisionalDraftProjectTaskId();
-  /*
-    伙伴归属表。会话行本身不带 botId,归属只有伙伴档案知道 —— 档案还没加载完的
-    那一瞬间这张表是空的,伙伴任务就走原来的分组落到别处,**不会消失**。
-  */
-  const botProfiles = useBotProfiles();
-  const botOwnerBySessionId = useMemo(() => buildBotSessionOwners(botProfiles), [botProfiles]);
 
   const groups = useMemo(() => {
     if (equivalentResult) return equivalentResult;
@@ -56,7 +48,6 @@ export function useProjectGroups(
       remoteProjectAliases: hostProjectAliases,
       projectAliasMembers,
       includePinnedInProjects,
-      botOwnerBySessionId,
       persistentLocalProjects,
       localPlatform,
       provisionalDraftTaskId,
@@ -71,7 +62,6 @@ export function useProjectGroups(
     includePinnedInProjects,
     persistentLocalProjects,
     localPlatform,
-    botOwnerBySessionId,
     provisionalDraftTaskId,
   ]);
   const projectDevices = useMemo(

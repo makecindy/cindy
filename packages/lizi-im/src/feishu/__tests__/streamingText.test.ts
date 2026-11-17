@@ -34,6 +34,28 @@ function requestBytes(card: unknown): number {
   return Buffer.byteLength(JSON.stringify({ content: JSON.stringify(card) }), 'utf8');
 }
 
+type CardElement = { tag: string; content?: string; img_key?: string };
+
+function cardElements(card: unknown): CardElement[] {
+  return (card as { body: { elements: CardElement[] } }).body.elements;
+}
+
+/** The answer text one card carries (markdown elements only, in order). */
+function cardMarkdown(card: unknown): string {
+  return cardElements(card)
+    .filter((element) => element.tag === 'markdown')
+    .map((element) => element.content ?? '')
+    .join('\n');
+}
+
+/** Every card of one final answer, in delivery order: the edited card, then the new ones. */
+function deliveredCards(): unknown[] {
+  return [
+    ...mocks.patchCardRaw.mock.calls.map((call) => call[1]),
+    ...mocks.sendCardRaw.mock.calls.slice(1).map((call) => call[1]),
+  ];
+}
+
 describe('feishu streaming text', () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -86,27 +108,137 @@ describe('feishu streaming text', () => {
     expect(mocks.recallMessage).not.toHaveBeenCalled();
   });
 
-  it('truncates an oversized final card within Feishu request limits', async () => {
-    const handle = await start('ou_owner');
-    const longMarkdown = [
-      '| 列一 | 列二 |',
-      '| --- | --- |',
-      '| 很长的内容 | 更多内容 |',
-      '```ts',
-      'const answer = "很长的代码块";',
-      '```',
-    ].join('\n').repeat(500);
-    await handle.finalize(longMarkdown);
+  // Rule: an answer that does not fit one Feishu card (30 KB request body, 4 tables per
+  // markdown element) is delivered in full across cards, never truncated.
+  // Production entry: finalize -> patchCardRaw (first card) + sendCardRaw (the rest).
+  // Coverage gap: the previous test only pinned the truncation notice this replaces.
+  // Minimal failing input: one code block and one table that each exceed a card, plus
+  // more small tables than one card may hold; unit tier with mocked outbound.
+  it('delivers an oversized final in full across cards, keeping code blocks and tables whole', async () => {
+    const handle = await start('ou_owner', 'working', { threadTs: 'om_root' });
+    const codeLines = Array.from({ length: 1500 }, (_, i) => `const line${i} = "代码行";`);
+    const tableRows = Array.from({ length: 1200 }, (_, i) => `| 行${i} | 一些内容 |`);
+    const smallTables = Array.from(
+      { length: 6 },
+      (_, i) => `小表 ${i}\n\n| 名称 | 值 |\n| --- | --- |\n| k${i} | v${i} |`,
+    );
+    await handle.finalize(
+      [
+        '# 标题\n\n开头的说明。',
+        ['```ts', ...codeLines, '```'].join('\n'),
+        ['| 列一 | 列二 |', '| --- | --- |', ...tableRows].join('\n'),
+        ...smallTables,
+        '结尾的总结。',
+      ].join('\n\n'),
+    );
 
-    const card = mocks.patchCardRaw.mock.calls[0][1];
-    expect(requestBytes(card)).toBeLessThanOrEqual(FEISHU_CARD_REQUEST_MAX_BYTES);
-    expect(markdownContent(card)).toContain('完整内容仍可在 Cindy 桌面端查看');
+    const cards = deliveredCards();
+    expect(cards.length).toBeGreaterThan(2);
+    expect(mocks.patchCardRaw).toHaveBeenCalledExactlyOnceWith('om_stream', expect.anything());
+    for (const call of mocks.sendCardRaw.mock.calls.slice(1)) {
+      expect(call[2]).toEqual({ threadTs: 'om_root', advanceRound: false });
+    }
+    const texts = cards.map(cardMarkdown);
+    for (const [index, card] of cards.entries()) {
+      const text = texts[index];
+      expect(requestBytes(card)).toBeLessThanOrEqual(FEISHU_CARD_REQUEST_MAX_BYTES);
+      expect(text.split('\n').filter((line) => line === '| --- | --- |').length).toBeLessThanOrEqual(4);
+      // A part that carries code opens and closes its own fence; table rows sit under a header.
+      expect(text.split('\n').filter((line) => line.startsWith('```')).length % 2).toBe(0);
+      const firstRow = text.split('\n').findIndex((line) => line.startsWith('| 行'));
+      if (firstRow >= 0) {
+        expect(text.split('\n').slice(firstRow - 2, firstRow)).toEqual(['| 列一 | 列二 |', '| --- | --- |']);
+      }
+      expect(text).toContain(messages.streaming.partNote(index + 1, cards.length));
+    }
+    const everything = texts.join('\n');
+    expect(everything.split('\n').filter((line) => line.startsWith('const line'))).toEqual(codeLines);
+    expect(everything.split('\n').filter((line) => line.startsWith('| 行'))).toEqual(tableRows);
+    for (const piece of ['开头的说明。', '| k5 | v5 |', '结尾的总结。']) expect(everything).toContain(piece);
+    expect(everything).not.toContain('桌面端');
+    expect(mocks.sendText).not.toHaveBeenCalled();
+  });
+
+  // Rule: splitting must not change what the reader receives. Review #9746 (codex P2): the splitter
+  // trimmed trailing spaces and blank lines at a cut inside a code block, so Python triple-quoted
+  // strings, heredocs and text samples came back different. Production entry: finalize.
+  // Minimal failing input: one code block whose lines end in two spaces and include blank lines,
+  // longer than a card; unit tier.
+  it('keeps trailing spaces and blank lines of a code block that is split across cards', async () => {
+    const handle = await start('ou_owner');
+    const codeLines = Array.from({ length: 1500 }, (_, i) => (i % 7 === 3 ? '' : `const line${i} = "代码行";  `));
+    await handle.finalize(['```py', ...codeLines, '```'].join('\n'));
+
+    const cards = deliveredCards();
+    expect(cards.length).toBeGreaterThan(1);
+    const received = cards.flatMap((card) => {
+      const body = cardElements(card).find((element) => element.tag === 'markdown')?.content ?? '';
+      return body.split('\n').slice(1, -1);
+    });
+    expect(received).toEqual(codeLines);
+  });
+
+  // Review #9746 (greptile P2): a single table row longer than a card was cut by characters without
+  // its header, so later cards began mid-cell with no columns. Production entry: finalize.
+  // Minimal failing input: a header, a separator and one row whose first cell exceeds 30 KB; unit tier.
+  it('keeps the table header on every card when one row alone exceeds a card', async () => {
+    const handle = await start('ou_owner');
+    const header = '| 列一 | 列二 |';
+    const separator = '| --- | --- |';
+    await handle.finalize([header, separator, `| ${'很长的内容'.repeat(5000)} | 第二列 |`].join('\n'));
+
+    const cards = deliveredCards();
+    expect(cards.length).toBeGreaterThan(2);
+    const bodies = cards.map((card) => cardElements(card).find((element) => element.tag === 'markdown')?.content ?? '');
+    for (const [index, card] of cards.entries()) {
+      expect(requestBytes(card)).toBeLessThanOrEqual(FEISHU_CARD_REQUEST_MAX_BYTES);
+      expect(bodies[index].split('\n').slice(0, 2)).toEqual([header, separator]);
+    }
+    // Nothing of the long cell or the second column is lost.
+    expect(bodies.join('').split('很').length - 1).toBe(5000);
+    expect(bodies.at(-1)).toContain('第二列');
+  });
+
+  // Rule: a later card that cannot be sent stops the sequence with one visible notice;
+  // the remaining parts are not posted after a gap. Unit tier; no earlier coverage.
+  it('stops with a notice when a following card cannot be sent', async () => {
+    const handle = await start('ou_owner');
+    mocks.sendCardRaw.mockReset();
+    mocks.sendCardRaw.mockRejectedValue(new Error('rate limited'));
+    await handle.finalize(Array.from({ length: 4000 }, (_, i) => `第 ${i} 段内容，足够长。`).join('\n\n'));
+
+    expect(mocks.patchCardRaw).toHaveBeenCalledTimes(1);
+    expect(mocks.sendCardRaw).toHaveBeenCalledTimes(1);
+    expect(mocks.sendText).toHaveBeenCalledExactlyOnceWith(
+      'ou_owner',
+      messages.streaming.continuationFailed,
+      undefined,
+    );
+  });
+
+  // Rule: the turn's process record stays reviewable after completion as a collapsed
+  // panel above the answer (previously the process region was dropped at done).
+  // Production entry: finalize(text, { process }); unit tier; no earlier coverage.
+  it('keeps the process record as a collapsed panel above the final answer', async () => {
+    const handle = await start('ou_owner');
+    await handle.finalize('正文', {
+      process: { title: '过程记录 · 2 项 · 8s', lines: ['✓ 读取 a.ts', '✓ 搜索 foo'] },
+    });
+
+    const [panel, body] = cardElements(mocks.patchCardRaw.mock.calls[0][1]) as Array<
+      CardElement & { expanded?: boolean; header?: { title: { content: string } }; elements?: CardElement[] }
+    >;
+    expect(panel.tag).toBe('collapsible_panel');
+    expect(panel.expanded).toBe(false);
+    expect(panel.header?.title.content).toBe('过程记录 · 2 项 · 8s');
+    expect(panel.elements?.[0].content).toBe('✓ 读取 a.ts\n✓ 搜索 foo');
+    expect(body).toEqual({ tag: 'markdown', content: '正文' });
   });
 
   // Regression: an oversized intermediate frame used to bypass the final-card byte cap.
   // Production entry: append/timer -> patchCardRaw; existing coverage only checked finalize.
   // Minimal failing input: one multi-byte Markdown frame; unit tier with fake timers/mocks.
-  it('truncates an oversized intermediate card within Feishu request limits', async () => {
+  it('shows the fitting head of an oversized intermediate frame and says the rest will follow', async () => {
     vi.useFakeTimers();
     try {
       const handle = await start('ou_owner');
@@ -117,7 +249,8 @@ describe('feishu streaming text', () => {
       expect(mocks.patchCardRaw).toHaveBeenCalledTimes(1);
       const card = mocks.patchCardRaw.mock.calls[0][1];
       expect(requestBytes(card)).toBeLessThanOrEqual(FEISHU_CARD_REQUEST_MAX_BYTES);
-      expect(markdownContent(card)).toContain('完整内容仍可在 Cindy 桌面端查看');
+      expect(markdownContent(card).endsWith(messages.streaming.replyContinues)).toBe(true);
+      expect(markdownContent(card).length).toBeGreaterThan(5000);
       expect(mocks.sendCardRaw).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
   });
@@ -132,15 +265,23 @@ describe('feishu streaming text', () => {
     expect(mocks.recallMessage).not.toHaveBeenCalled();
   });
 
-  it('uses a bounded plain card when image elements alone exceed the limit', async () => {
+  // Rule: images that do not fit the answer's card follow in further cards instead of
+  // replacing the whole answer with a failure notice. Unit tier with mocked uploads.
+  it('sends images that overflow one card in following cards', async () => {
     mocks.uploadImage.mockImplementation(async (path: string) => `${path}-${'x'.repeat(128)}`);
     const handle = await start('ou_owner');
     for (let i = 0; i < 200; i++) handle.addExtraImageAbsPath?.(`/tmp/${i}.png`);
     await handle.finalize('正文');
 
-    const card = mocks.patchCardRaw.mock.calls[0][1];
-    expect(requestBytes(card)).toBeLessThanOrEqual(FEISHU_CARD_REQUEST_MAX_BYTES);
-    expect(markdownContent(card)).toBe(messages.streaming.deliveryFailed);
+    const cards = deliveredCards();
+    expect(cards.length).toBeGreaterThan(1);
+    for (const card of cards) expect(requestBytes(card)).toBeLessThanOrEqual(FEISHU_CARD_REQUEST_MAX_BYTES);
+    expect(markdownContent(cards[0])).toBe('正文');
+    const imageKeys = cards.flatMap((card) =>
+      cardElements(card).filter((element) => element.tag === 'img').map((element) => element.img_key),
+    );
+    expect(imageKeys).toHaveLength(200);
+    expect(new Set(imageKeys).size).toBe(200);
   });
 
   // Regression for PR #6817: start/finalize must edit the existing message.

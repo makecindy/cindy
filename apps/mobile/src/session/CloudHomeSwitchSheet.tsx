@@ -94,7 +94,9 @@ export function CloudHomeSwitchSheet({ visible, onClose, botId, name, homeDevice
   };
 
   const confirm = (target: CompanionCloudRemoteTarget) => {
-    Alert.alert(t('devices.cloudCompanion.moveTitle', { name, device: target.name }), t('devices.cloudCompanion.moveDescription', { name, device: target.name }), [
+    const description = t('devices.cloudCompanion.moveDescription', { name, device: target.name });
+    Alert.alert(t('devices.cloudCompanion.moveTitle', { name, device: target.name }), target.outdated
+      ? `${description}\n\n${t('devices.cloudCompanion.olderTargetNote', { name, device: target.name })}` : description, [
       { text: t('devices.common.cancel'), style: 'cancel' },
       { text: t('devices.cloudCompanion.moveAction', { device: target.name }), onPress: () => void move(target) },
     ]);
@@ -107,7 +109,7 @@ export function CloudHomeSwitchSheet({ visible, onClose, botId, name, homeDevice
       {phase.kind === 'moving' ? <Text style={styles.note}>{t('devices.cloudCompanion.moving', { name, device: phase.target.name })}</Text> : null}
       {phase.kind === 'note' ? <Text style={styles.note}>{t(`devices.cloudCompanion.${phase.key}`, { device: homeName })}</Text> : null}
       {phase.kind === 'ready' ? phase.targets.map(target => <CompanionSettingsRow key={target.deviceId} icon={null} trailing="chevron"
-        label={t('devices.cloudCompanion.moveTo', { device: target.name || t('devices.cloudCompanion.unknownDevice') })}
+        label={`${t('devices.cloudCompanion.moveTo', { device: target.name || t('devices.cloudCompanion.unknownDevice') })}${target.outdated ? ` · ${t('devices.cloudCompanion.olderTarget')}` : ''}`}
         onPress={() => confirm(target)} testID={`cloudHome.target.${target.deviceId}`} />) : null}
       {error ? <Text style={styles.note} accessibilityRole="alert">{error}</Text> : null}
     </View>

@@ -1,0 +1,32 @@
+== orig 1
+PASS  invoke 往返  (ms {"n":200,"p50":0.65,"p95":1.18,"max":3.83})
+PASS  3 MiB 结果经可靠分片完整送达  (484ms)
+12/12 通过
+== new 1
+PASS  invoke 往返  (ms {"n":200,"p50":0.65,"p95":0.97,"max":2.46})
+PASS  3 MiB 结果经可靠分片完整送达  (523ms)
+传输：quic。12/12 通过
+== orig 2
+PASS  invoke 往返  (ms {"n":200,"p50":0.65,"p95":0.96,"max":2.96})
+PASS  3 MiB 结果经可靠分片完整送达  (476ms)
+12/12 通过
+== new 2
+PASS  invoke 往返  (ms {"n":200,"p50":0.57,"p95":0.88,"max":2.8})
+PASS  3 MiB 结果经可靠分片完整送达  (578ms)
+传输：quic。12/12 通过
+== orig 3
+PASS  invoke 往返  (ms {"n":200,"p50":0.66,"p95":0.92,"max":2.5})
+PASS  3 MiB 结果经可靠分片完整送达  (704ms)
+12/12 通过
+== new 3
+PASS  invoke 往返  (ms {"n":200,"p50":1.05,"p95":1.62,"max":4.17})
+PASS  3 MiB 结果经可靠分片完整送达  (804ms)
+传输：quic。12/12 通过
+== orig 4
+PASS  invoke 往返  (ms {"n":200,"p50":0.87,"p95":1.58,"max":9.45})
+PASS  3 MiB 结果经可靠分片完整送达  (681ms)
+12/12 通过
+== new 4
+PASS  invoke 往返  (ms {"n":200,"p50":0.8,"p95":1.12,"max":3.78})
+PASS  3 MiB 结果经可靠分片完整送达  (700ms)
+传输：quic。12/12 通过

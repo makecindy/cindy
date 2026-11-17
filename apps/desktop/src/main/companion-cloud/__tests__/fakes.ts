@@ -22,7 +22,9 @@ export type ApiHandler = (route: string, method: string, data: unknown, actorId?
 
 export function fakeApi(handler: ApiHandler) {
   const calls: Array<{ route: string; method: string; data: unknown; actorId?: string }> = [];
-  const api = vi.fn(async (route: string, method = 'GET', data?: unknown, actorId?: string) => {
+  const api = vi.fn(async (requested: string, method = 'GET', data?: unknown, actorId?: string) => {
+    // A single-row read answers like an older server (every row); the caller picks its row.
+    const route = requested.startsWith('/preferences?key=') ? '/preferences' : requested;
     calls.push({ route, method, data, actorId });
     return handler(route, method, data, actorId);
   }) as unknown as CompanionApi;

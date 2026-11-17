@@ -25,6 +25,7 @@ import {
 } from '@/lib/promptRecommendationStore';
 import { isComposerReadyForPromptRecommendation } from '@/components/new-chat/composerPromptRecommendation';
 import { usePromptRecommendationPrediction } from '../usePromptRecommendationPrediction';
+import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
 
 const READY = {
   enabled: true, hydrated: true, hasMessage: false, hasAttachments: false,
@@ -38,7 +39,8 @@ function complete(): void {
   vi.advanceTimersByTime(500);
 }
 
-function useHarness(sessionId: string, ready: typeof READY, predict: () => Promise<string | null>) {
+function useHarness(sessionId: string, ready: typeof READY,
+  predict: (revision: number, isCurrent: () => boolean) => Promise<string | null>) {
   const recommendation = usePromptRecommendation(sessionId);
   usePromptRecommendationPrediction({
     sessionId, recommendation, canPredict: isComposerReadyForPromptRecommendation(ready), predict,
@@ -57,6 +59,31 @@ afterEach(() => {
 });
 
 describe('composer prediction lifecycle', () => {
+  // Unit: the transport-only test cannot verify the hook's current-request fence
+  // or whether a recovered response actually becomes a visible-ready recommendation.
+  it.each(['recover', 'dismiss'] as const)('timeout recovery stays attached to its live candidate: %s', async outcome => {
+    const api = { predictNextPrompt: vi.fn()
+      .mockRejectedValueOnce(new Error('[DEVICE_LINK_TIMEOUT] slow'))
+      .mockResolvedValue({ prompt: 'Recovered remote recommendation' }) };
+    const hook = renderHook(() => useHarness('a', READY, async (revision, isCurrent) => {
+      const result = await predictPromptUntilDisabled(api, {
+        sessionId: 'a', agentKind: 'codex', messages: [], turnGen: 0, completionRevision: revision,
+      }, isCurrent);
+      return result.prompt;
+    }));
+    await act(async () => { complete(); });
+    expect(hook.result.current?.phase).toBe('predicting');
+    if (outcome === 'dismiss') act(() => dismissPromptRecommendation('a'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    if (outcome === 'recover') {
+      expect(hook.result.current).toMatchObject({ phase: 'ready', prompt: 'Recovered remote recommendation' });
+      expect(api.predictNextPrompt).toHaveBeenCalledTimes(2);
+    } else {
+      expect(hook.result.current).toBeUndefined();
+      expect(api.predictNextPrompt).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it.each([
     { hasMessage: true }, { hasAttachments: true }, { hasBrowserComments: true },
     { hasVoiceDraftText: true }, { mutationLocked: true }, { hydrated: false },

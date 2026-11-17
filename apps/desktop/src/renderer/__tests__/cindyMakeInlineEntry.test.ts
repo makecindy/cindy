@@ -62,13 +62,17 @@ describe('Cindy Make composer presentation', () => {
     expect(condition).toBeDefined();
     const prompts = ['pendingPlanReview', 'pendingPermission', 'pendingAskUser', 'pendingPluginSetup',
       'pendingIssueConfirm', 'pendingRenameSessionsConfirm', 'pendingGhostGrantConfirm'];
-    const hidesComposer = new Function('isSharedTaskPeer', 'remoteDeviceId', ...prompts,
+    const hidesComposer = new Function('isSharedTaskPeer', 'remoteDeviceId', 'askUserViewerState', ...prompts,
       `return Boolean(${condition!.getText(ast)});`);
     for (const deviceId of [undefined, 'own-device', sharedTaskHostPeer('m', 'desktop')]) {
-      expect(hidesComposer(isSharedTaskPeer, deviceId, ...prompts.map(() => false))).toBe(false);
-      for (const active of prompts) {
-        expect(hidesComposer(isSharedTaskPeer, deviceId, ...prompts.map((name) => name === active)),
-          `${deviceId ?? 'local'}: ${active}`).toBe(deviceId !== sharedTaskHostPeer('m', 'desktop'));
+      for (const viewerState of ['expanded', 'minimized']) {
+        expect(hidesComposer(isSharedTaskPeer, deviceId, viewerState, ...prompts.map(() => false))).toBe(false);
+        for (const active of prompts) {
+          expect(hidesComposer(isSharedTaskPeer, deviceId, viewerState, ...prompts.map((name) => name === active)),
+            `${deviceId ?? 'local'}: ${active}/${viewerState}`).toBe(
+              deviceId !== sharedTaskHostPeer('m', 'desktop') && (active !== 'pendingAskUser' || viewerState !== 'minimized'),
+            );
+        }
       }
     }
     expect(sessionView).toContain('if (cindyMakeInputLocked) return false;');
@@ -106,7 +110,7 @@ describe('Cindy Make composer presentation', () => {
       expect(child).toBe(parent.whenFalse);
       expect(Boolean(evaluate(parent.condition, {
         isSharedTaskPeer, remoteDeviceId: undefined,
-        pendingPlanReview: null, pendingPermission: null, pendingAskUser: null,
+        pendingPlanReview: null, pendingPermission: null, pendingAskUser: null, askUserViewerState: 'expanded',
         pendingPluginSetup: null, pendingIssueConfirm: null,
         pendingRenameSessionsConfirm: null, pendingGhostGrantConfirm: null,
         sessionBinding: { attached: false }, sessionId: 'task-a', session: { id: 'task-a' },

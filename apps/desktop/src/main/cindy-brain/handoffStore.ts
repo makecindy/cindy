@@ -301,7 +301,7 @@ export class GhostHandoffStore {
   }
 
   /** Open a live copy without following links; the caller closes the handle. */
-  async open(instance: string, ref: string): Promise<{ file: fs.FileHandle; info: GhostHandoffFile } | null> {
+  async open(instance: string, ref: string): Promise<{ file: fs.FileHandle; info: GhostHandoffFile; filePath: string } | null> {
     const id = GHOST_HANDOFF_REF_RE.exec(ref)?.[1];
     if (!id) return null;
     const dir = this.instanceDir(instance);
@@ -325,7 +325,9 @@ export class GhostHandoffStore {
         await file.close();
         return null;
       }
-      return { file, info: toFile(meta) };
+      // Host-only: native import UI needs the authorized copy's path. Public
+      // page/read/upload adapters continue returning only bytes or receipts.
+      return { file, info: toFile(meta), filePath: blob };
     } catch {
       await file.close();
       return null;

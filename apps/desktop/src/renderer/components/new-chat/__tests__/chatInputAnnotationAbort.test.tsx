@@ -189,6 +189,26 @@ function renderComposer(extra: Partial<ComponentProps<typeof ChatInput>> = {}) {
   return { ...view, props };
 }
 
+// Unit regression: existing-task hydration used to scan default Claude/global
+// before the real Codex project arrived. Exercise the actual mounted composer,
+// not just the command loader, and preserve the new-dialogue global roster.
+it('waits for task identity and loads its authoritative project only once', async () => {
+  const view = renderComposer({ sessionId: 'skill-hydration', runtimeAgentKind: null,
+    vendorKey: 'cc', initialWorkingDir: undefined });
+  await act(async () => {});
+  expect(h.listAgentSkills).not.toHaveBeenCalled();
+  view.rerender(<ChatInput {...view.props} runtimeAgentKind="codex" vendorKey="codex"
+    initialWorkingDir="/fixture/real-project" />);
+  await waitFor(() => expect(h.listAgentSkills).toHaveBeenCalledTimes(1));
+  expect(h.listAgentSkills).toHaveBeenLastCalledWith('codex', {
+    sessionId: 'skill-hydration', workingDir: '/fixture/real-project',
+  });
+  view.unmount();
+  h.listAgentSkills.mockClear();
+  renderComposer();
+  await waitFor(() => expect(h.listAgentSkills).toHaveBeenCalledTimes(1));
+});
+
 function supplyRangeGeometry() {
   // jsdom has no layout. Keep real ranges/selections while ProseMirror focuses.
   const createRange = document.createRange.bind(document);
@@ -462,6 +482,40 @@ it.each(['recommendation', 'preview'] as const)('keeps %s visible while hovering
   }
 });
 
+// Remote recommendation regression (unit/jsdom): a late busy prop used to consume
+// an already received result. The store tests do not mount ChatInput's layout effect.
+it('shows the received recommendation again after a delayed busy projection clears', async () => {
+  const sessionId = 'remote-recommendation-delayed-busy';
+  const prompt = 'Continue with the remote result';
+  const view = renderComposer({ sessionId });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  vi.spyOn(makerChatStore, 'getPromptRecommendationCompletionStatus').mockReturnValue({
+    turnStoppedByUser: false, hasTerminalError: false, sideTask: false,
+    hasBackgroundAgentWork: false, hasAutoDrainingQueue: false,
+  });
+  try {
+    await act(async () => {
+      promptRecommendations.applyRunningSnapshot(new Map([[sessionId, { isRunning: true }]]));
+      promptRecommendations.noteTurnEnded(sessionId, 200);
+      promptRecommendations.applyRunningSnapshot(new Map());
+      promptRecommendations.settleCompletion(sessionId);
+      const seq = beginPromptRecommendationPrediction(sessionId, 200)!;
+      resolvePromptRecommendationPrediction(sessionId, 200, seq, prompt);
+    });
+    expect(screen.getByText(prompt)).toBeTruthy();
+    view.rerender(<ChatInput {...view.props} isAgentBusy />);
+    expect(screen.queryByText(prompt)).toBeNull();
+    view.rerender(<ChatInput {...view.props} isAgentBusy={false} />);
+    expect(screen.getByText(prompt)).toBeTruthy();
+    supplyRangeGeometry();
+    await act(async () => { fireEvent.keyDown(h.editor!.view.dom, { key: 'Tab' }); });
+    expect(h.editor!.getText()).toBe(prompt);
+    expect(promptRecommendations.getSessionSnapshot(sessionId)).toBeUndefined();
+  } finally {
+    clearPromptRecommendationSession(sessionId);
+  }
+});
+
 // #374 / voiceInputButtonAnchor: the real toolbar must keep the voice control
 // immediately beside the main action while listening, submitting, refining,
 // and returning to idle. A source-text guard could miss a misplaced rendered
@@ -658,7 +712,7 @@ it.each(['Enter', 'Tab'])('consumes %s for an empty slash result without sending
 // off to the install flow: it must not insert `/pr`, send, or keep the typed query.
 it('hands a plugin Skill setup row to its owner instead of inserting it', async () => {
   const onSelect = vi.fn();
-  const view = renderComposer({ sessionId: 'slash-plugin-setup', pluginSkillSetup: {
+  const view = renderComposer({ sessionId: 'slash-plugin-setup', runtimeAgentKind: 'codex', vendorKey: 'codex', pluginSkillSetup: {
     entries: [{ skillName: 'pr', description: 'needs GitHub', meta: 'not installed' }], onSelect } });
   await waitFor(() => expect(h.editor).not.toBeNull());
   await act(async () => {

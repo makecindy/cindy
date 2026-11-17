@@ -28,7 +28,7 @@ import type {
   McpProviderContext,
 } from '@cindy/maker-core';
 
-import type { CustomMcpConfig } from '../maker-host/custom-mcp-store.js';
+import type { CustomMcpConfig } from '../maker-host/custom-mcp-store.desktop.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AppServerConfig } from '../mcp-apps/connection.js';
 
@@ -83,6 +83,7 @@ function hasAuthorizationHeader(headers: Record<string, string>): boolean {
  */
 export class CustomMcpProvider implements McpProvider {
   readonly name: string;
+  readonly displayName: string;
   private readonly config: CustomMcpConfig;
   private readonly tokenReader: (id: string) => string | null;
   readonly supportsApps: boolean;
@@ -91,6 +92,7 @@ export class CustomMcpProvider implements McpProvider {
   constructor(config: CustomMcpConfig, tokenReader: (id: string) => string | null, appProxy?: CustomMcpProvider['appProxy']) {
     this.config = config;
     this.name = config.id;
+    this.displayName = config.name.trim();
     this.tokenReader = tokenReader;
     this.appProxy = appProxy;
     this.supportsApps = Boolean(appProxy);

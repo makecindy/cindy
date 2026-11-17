@@ -5,7 +5,7 @@ import type { ChatActor, ChatSetHomeResult } from './chatServerClient';
 import { useChatClient } from './useChatServer';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { cacheCloudHome, patchCachedCloudHome, peekCachedCloudHome, readCachedCloudHome,
-  remoteResourceCacheRevision, subscribeRemoteResourceCache } from '@/device-link/remoteResourceCache';
+  subscribeRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { forgetCloudConversation } from './cloudConversationCache';
 
@@ -22,8 +22,8 @@ const NO_NAMES: ReadonlyMap<string, string> = new Map();
 export function useCloudCompanionHome(enabled: boolean) {
   const api = useChatClient();
   const { readDeviceList } = useDeviceLink();
-  useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
-  const cached = peekCachedCloudHome(api.userId, api.realm);
+  const getSnapshot = useCallback(() => peekCachedCloudHome(api.userId, api.realm), [api.userId, api.realm]);
+  const cached = useSyncExternalStore(subscribeRemoteResourceCache, getSnapshot, getSnapshot);
   const deviceNames = useMemo(() => cached ? new Map(cached.deviceNames) : NO_NAMES, [cached]);
   const [failure, setFailure] = useState<{ owner: string; error: string } | null>(null);
   const generation = useRef(0);

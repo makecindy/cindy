@@ -6,7 +6,7 @@ export interface CodexInteractionBrokerKey {
 }
 
 export interface CodexInteractionBrokerMeta extends CodexInteractionBrokerKey {
-  kind: 'request_user_input' | 'dynamic_tool';
+  kind: 'request_user_input' | 'dynamic_tool' | 'mcp_elicitation';
   threadId?: string;
   turnId?: string | null;
   itemId?: string | null;

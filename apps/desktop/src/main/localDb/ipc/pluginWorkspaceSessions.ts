@@ -80,6 +80,8 @@ export async function createPluginDraftSession(params: {
     effort?: string;
     fastMode?: boolean | 'ultrafast';
     providerId?: string | null;
+    /** 插件设置保存的运行位置(另一台电脑或 share:<id>);任务与目录仍在本机。 */
+    agentDeviceId?: string;
   };
   /**
    * 意识旁听通知(cindy-brain notifyGhostSessionEvent,由 register 静态注入;
@@ -128,7 +130,7 @@ export async function createPluginDraftSession(params: {
 }
 
 /**
- * Persist a visible ordinary local task created by a plugin, without starting an Agent.
+ * Persist an ordinary task on the plugin host, without starting its local or remote Agent.
  * The tasks API and legacy errand adapter both use this creator. The caller resolves
  * and validates the complete model tuple and user permission before reaching here.
  * No directory preference means a Host-managed dialogue directory; a project root
@@ -147,6 +149,7 @@ export async function createPluginTaskSession(params: {
   effort?: string;
   fastMode?: boolean | 'ultrafast';
   providerId?: string | null;
+  agentDeviceId?: string;
   permissionMode: GhostErrandPermissionMode;
   /** 用户亲选的项目目录(绝对路径);缺省 = 专属 dialogue 目录。 */
   workingDir?: string;
@@ -170,6 +173,7 @@ export async function createPluginTaskSession(params: {
     body: { workingDir: projectDir, workspaceKind, permissionMode: params.permissionMode,
       agentKind: params.agentKind, model: params.model, effort: params.effort,
       fastMode: params.fastMode, providerId: params.providerId,
+      ...(params.agentDeviceId ? { agentDeviceId: params.agentDeviceId } : {}),
       ...(params.title ? { title: params.title } : {}) },
     assertCurrent: () => { if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed'); },
     onPersistenceStarted: params.onPersistenceStarted,

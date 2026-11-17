@@ -458,6 +458,17 @@ describe('inputProjection', () => {
     }).toolLoop).toBeNull();
   });
 
+  it('carries reasoning usage from the controlled host into localized live guidance', () => {
+    const projection = normalizeInputProjection({ sessionId: 'limited', error: 'limit',
+      errorReason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064, raw: 'discard' } });
+    expect(projection.outputLimit).toEqual({ outputTokens: 131072, reasoningTokens: 131064 });
+    const text = localizeAgentError(projection.errorReason, null, '', projection.outputLimit);
+    expect(text).toContain('131064');
+    expect(text).toContain('131072');
+    expect(text).toContain(i18n.t('session.tail.outputLimitReasoning'));
+    expect(normalizeInputProjection({ error: 'other error' }).outputLimit).toBeNull();
+  });
+
   it('localizes the output-limit reason carried by the live projection', () => {
     const projection = normalizeInputProjection({
       sessionId: 'output-limit', error: 'Pi reached the model output limit.', errorReason: 'output-limit',

@@ -38,6 +38,59 @@ const raw = JSON.stringify({ error: {
 } });
 afterEach(cleanup);
 
+it('keeps the shared Codex account reset guidance instead of replacing it with generic budget text', async () => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  render(<I18nextProvider i18n={i18n}><ErrorBanner error='429 usage_limit: usage limit reached'
+    agentKind="codex" agentDeviceId="share:one" onRetry={vi.fn()} onChooseComputer={vi.fn()}
+    usageLimitRecovery={{ isAccountUsageLimit: true, resetAtMs: Date.now() + 60_000 }} /></I18nextProvider>);
+  expect(screen.queryByText(en.sharedTaskRecovery.reason.budget)).toBeNull();
+  expect(screen.queryByRole('button', { name: en.sharedTaskRecovery.choose })).toBeNull();
+});
+
+it.each([['DEVICE_OFFLINE', 'offline'], ['TIMEOUT', 'timeout']] as const)(
+  'distinguishes terminal runtime %s from an unknown allocation failure', async (code, reason) => {
+    const i18n = createInstance();
+    await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+    render(<I18nextProvider i18n={i18n}><ErrorBanner error={`[${code}] runtime probe failed`}
+      agentDeviceId="share:one" onRetry={vi.fn()} onChooseComputer={vi.fn()} /></I18nextProvider>);
+    expect(screen.getByText(en.sharedTaskRecovery.reason[reason])).toBeTruthy();
+  },
+);
+
+it('offers a route choice for confirmed shared-provider quota exhaustion without misclassifying local billing', async () => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const choose = vi.fn();
+  const error = 'insufficient_quota: You exceeded your current quota, please check your plan and billing details';
+  const h = render(<I18nextProvider i18n={i18n}><ErrorBanner error={error} onRetry={vi.fn()}
+    agentDeviceId="share:one" onChooseComputer={choose} /></I18nextProvider>);
+  expect(screen.getByText(en.sharedTaskRecovery.reason.budget)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: en.sharedTaskRecovery.choose }));
+  expect(choose).toHaveBeenCalledOnce();
+  h.rerender(<I18nextProvider i18n={i18n}><ErrorBanner error={error} onRetry={vi.fn()}
+    onChooseComputer={choose} /></I18nextProvider>);
+  expect(screen.queryByRole('button', { name: en.sharedTaskRecovery.choose })).toBeNull();
+});
+
+// Unit: both live and persisted terminal errors expose the same reason and
+// route-choice action. An allocation failure must not become "computer offline".
+it.each(['live', 'tail', 'history'] as const)('offers a computer choice for a specific %s shared-task failure', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const choose = vi.fn();
+  const message = '[REMOTE_AGENT_UNAVAILABLE] [SHARED_TASK_RECOVERY_timeout] [SHARED_TASK_STAGE_executor] Shared task recovery failed';
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={message} errorReason="turn-failed" onRetry={vi.fn()} onChooseComputer={choose} />
+    : surface === 'tail' ? <ErrorTailErrorBanner errorText={message} errorReason="turn-failed" onContinue={vi.fn()} onDismiss={vi.fn()} onChooseComputer={choose} />
+    : <ErrorMessageCard message={message} reason="turn-failed" />}</I18nextProvider>);
+  expect(screen.getByText(zhCN.sharedTaskRecovery.reason.timeout)).toBeTruthy();
+  if (surface !== 'history') {
+    fireEvent.click(screen.getByRole('button', { name: zhCN.sharedTaskRecovery.choose }));
+    expect(choose).toHaveBeenCalledOnce();
+  }
+});
+
 it.each(['thread not found', 'app-server force-retired: auth changed'])(
   'retains the specific execution failure in details: %s',
   async (error) => {
@@ -119,7 +172,7 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(locales[locale].chat.errorBanner.networkShowRaw)).toBeNull();
   });
 
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])('preserves curated %s guidance and follows language changes', async code => {
+  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])('preserves curated %s guidance and follows language changes', async code => {
     const i18n = createInstance();
     await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
     const message = `Error invoking remote method device-link:invoke: Error: [${code}] upstream fallback api_key=private-test-value`;
@@ -157,22 +210,37 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(error)).toBeNull();
   });
 
-  it.each(['live', 'tail'] as const)('keeps known remote recovery guidance in the %s banner across language changes', async surface => {
+  // #10796, unit: a transport timeout used to lose its cause in both banners.
+  it.each([
+    ['live', 'REMOTE_LOCAL_ONLY_PROVIDER'], ['tail', 'REMOTE_LOCAL_ONLY_PROVIDER'],
+    ['live', 'REMOTE_AGENT_TIMEOUT'], ['tail', 'REMOTE_AGENT_TIMEOUT'],
+  ] as const)('keeps %s %s guidance across language changes', async (surface, code) => {
     const i18n = createInstance();
     await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
-    const code = 'REMOTE_LOCAL_ONLY_PROVIDER';
-    const rawRemoteError = `[${code}] upstream HTTP 502 api_key=private-test-value`;
+    const rawRemoteError = `[${code}] ${code === 'REMOTE_AGENT_TIMEOUT' ? '[INVOKE_TIMEOUT] no invoke-result within 30000ms after first socket write' : 'upstream HTTP 502'}; api_key=private-test-value`;
+    const retry = vi.fn();
+    const choose = vi.fn();
+    const agentDeviceId = code === 'REMOTE_AGENT_TIMEOUT' ? 'share:timeout-target' : undefined;
     const bannerError = remoteErrorMessageForBanner(rawRemoteError);
     expect(bannerError).toContain(`[${code}]`);
     render(<I18nextProvider i18n={i18n}>{surface === 'live'
-      ? <ErrorBanner error={bannerError} onRetry={vi.fn()} />
-      : <ErrorTailErrorBanner errorText={bannerError} onContinue={vi.fn()} onDismiss={vi.fn()} />}</I18nextProvider>);
+      ? <ErrorBanner error={bannerError} agentDeviceId={agentDeviceId} retryText="original message" onRetry={retry} onChooseComputer={choose} />
+      : <ErrorTailErrorBanner errorText={bannerError} agentDeviceId={agentDeviceId} onContinue={retry} onDismiss={vi.fn()} onChooseComputer={choose} />}</I18nextProvider>);
     expect(screen.getByText(locales[locale].chat.remoteError[code])).toBeTruthy();
     expect(screen.queryByText(locales[locale].chat.errorBanner.replyFailed)).toBeNull();
     expect(screen.queryByText(rawRemoteError)).toBeNull();
     fireEvent.click(screen.getByText(locales[locale].chat.errorBanner.networkShowRaw));
-    expect(screen.getByText(/upstream HTTP 502/).textContent).toContain('[REDACTED]');
+    expect(screen.getByText(code === 'REMOTE_AGENT_TIMEOUT' ? /no invoke-result within 30000ms/ : /upstream HTTP 502/).textContent).toContain('[REDACTED]');
     expect(screen.queryByText(/private-test-value/)).toBeNull();
+    expect(retry).not.toHaveBeenCalled();
+    if (code === 'REMOTE_AGENT_TIMEOUT') {
+      expect(screen.queryByText(locales[locale].sharedTaskRecovery.reason.timeout)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: locales[locale].sharedTaskRecovery.choose }));
+      expect(choose).toHaveBeenCalledOnce();
+      expect(retry).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByTitle(locales[locale].chat.errorBanner.retryTitle));
+      expect(retry).toHaveBeenCalledOnce();
+    }
     const next = locale === 'en' ? 'ja' : 'en';
     await act(async () => { await i18n.changeLanguage(next); });
     expect(screen.getByText(locales[next].chat.remoteError[code])).toBeTruthy();

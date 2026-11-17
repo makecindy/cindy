@@ -8,7 +8,7 @@
  * opt-in。文件只存被改过的字段，未改过的字段随未来默认值变化流动。
  */
 
-import { app } from 'electron';
+import { getUserDataDir } from '../userDataPath.js';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './logger-adapter.js';
@@ -28,7 +28,7 @@ const DEFAULTS: SharedGlobalSkillsSettings = {
 };
 
 function settingsFilePath(): string {
-  return path.join(app.getPath('userData'), 'shared-global-skills-settings.json');
+  return path.join(getUserDataDir(), 'shared-global-skills-settings.json');
 }
 
 function normalize(raw: unknown): SharedGlobalSkillsSettings {

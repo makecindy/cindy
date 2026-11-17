@@ -9,7 +9,7 @@ import * as prRefsStore from '../../../git-context/prRefsStore';
 import * as previewRows from '../../latestMessageText';
 import { commitMessageMediaRefs } from '../../../cindy-media/chatAttachments';
 import { onAssistantTextEvent, clearSessionPersistState, drainPersistQueue,
-  flushAssistantBlock, noteSessionClearBoundary } from '../../../messagePersistBroadcaster';
+  flushAssistantBlock, noteSessionClearBoundary } from '../../../messagePersistBroadcaster.desktop';
 
 const h = vi.hoisted(() => ({
   sqlite: null as Database.Database | null,
@@ -91,13 +91,15 @@ function setupDb(): void {
       origin_kind TEXT, origin_id TEXT, label TEXT, created_at INTEGER NOT NULL
     );
     CREATE TABLE session_pr_refs (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner TEXT NOT NULL,
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+      provider TEXT NOT NULL DEFAULT 'github', host TEXT NOT NULL DEFAULT 'github.com',
+      owner TEXT NOT NULL,
       repo TEXT NOT NULL, pr_number INTEGER NOT NULL, url TEXT NOT NULL,
       first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
       pinned INTEGER NOT NULL DEFAULT 0, priority INTEGER NOT NULL DEFAULT 0,
       manually_added INTEGER NOT NULL DEFAULT 0, removed_at INTEGER,
       association_source TEXT NOT NULL DEFAULT 'legacy', association_origin TEXT,
-      UNIQUE(session_id, owner, repo, pr_number)
+      UNIQUE(session_id, provider, host, owner, repo, pr_number)
     );
   `);
   sqlite.prepare("INSERT INTO sessions (id, cleared_at, status) VALUES ('s1', NULL, 'active')").run();
@@ -480,6 +482,17 @@ it('publishes a null preview when an ordinary latest-message rewrite has an empt
   await updateMessageContent('s1', 'target', '');
   expect(h.broadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
     sessionId: 's1', patch: { preview: null },
+  });
+});
+
+// Empty rows no longer win the list preview, so the push must carry what the list will show.
+it('publishes the surviving preview when an ordinary latest-message rewrite has an empty body', async () => {
+  const insert = h.sqlite!.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, 's1', 'assistant', ?, ?)");
+  insert.run('previous', 'previous', JSON.stringify('Previous answer'), 1);
+  insert.run('target', 'target', JSON.stringify('Old body'), 2);
+  await updateMessageContent('s1', 'target', '');
+  expect(h.broadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+    sessionId: 's1', patch: { preview: 'Previous answer' },
   });
 });
 

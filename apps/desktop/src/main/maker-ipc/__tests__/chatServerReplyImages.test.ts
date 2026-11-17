@@ -5,7 +5,7 @@ const f = vi.hoisted(() => ({ realpath: vi.fn(), stat: vi.fn(), canRead: vi.fn()
 vi.mock('node:fs/promises', () => ({ default: { stat: f.stat, realpath: f.realpath } }));
 vi.mock('../../cindy-media/taskImageDelivery.js', () => ({ materializeTaskImageTextResult: f.materialize }));
 vi.mock('../../cindy-media/ledger.js', () => ({ sessionCanRead: f.canRead }));
-vi.mock('../../cindy-media/blobStore.js', async original => ({ ...await original<typeof import('../../cindy-media/blobStore.js')>(), resolveSafe: f.resolve }));
+vi.mock('../../cindy-media/blobStore.desktop.js', async original => ({ ...await original<typeof import('../../cindy-media/blobStore.desktop.js')>(), resolveSafe: f.resolve }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: f.db }) }));
 import { materializeTaskImageMarkdown } from '../../cindy-media/taskImageMarkdown.js';
 import { prepareChatReplyImages } from '../chatServerReplyImages.js';

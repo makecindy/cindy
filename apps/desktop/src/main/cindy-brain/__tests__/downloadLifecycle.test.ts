@@ -17,9 +17,15 @@ it('uninstall waits for actual Node exit before removing plugin files and cache'
 });
 
 it('Node receipt handoff rechecks the original logic page identity after acquiring files', () => {
-  const start = source.indexOf("if (type === 'node-request')");
-  const body = source.slice(start, source.indexOf('\n    }', start));
-  expect(body).toContain('pluginDownloads.withNodeDownloads(');
+  const start = source.indexOf('const executionPipe = createGhostExecutionPipe(');
+  expect(start).toBeGreaterThan(0);
+  const assembly = source.slice(start, source.indexOf('\n});', start));
+  expect(assembly).toContain('pluginDownloads.withNodeDownloads(');
+  expect(assembly).toContain('node: (id, payload, current)');
+  expect(assembly).toContain('current)');
+  const handlerStart = source.indexOf("ipcMain.handle('ghost-pipe:send'");
+  const body = source.slice(handlerStart, source.indexOf('if (coreResult !== undefined)', handlerStart));
+  expect(body).toContain('executionPipe(id, payload,');
   expect(body).toContain(
     '!event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id',
   );
@@ -92,6 +98,7 @@ it.each([false, true])('uninstall cannot delete private data before MCP exits (f
     run({ uninstall: async () => { events.push('package-removed'); return {}; } }) };
   const { uninstallGhostAndCleanupLocked } = createUninstall({
     beginGhostMutation: () => noop, requireGhostAvailableForActiveSession: noop,
+    withActiveOwnerGhostOauthMutationLock: async (_id: string, task: () => unknown) => task(),
     findGhostForInstanceId: () => ghost, getBotAuthorizationService: () => null,
     getGhostManager: () => manager, getGhostRuntime: () => ({ stop: noop }),
     pluginDeviceSync: { beginMutation: () => noop },

@@ -23,7 +23,7 @@ export function createTaskWorktreeHost(): CreateTaskWorktree {
     createWorktree: (req: Parameters<typeof WorktreeManager.createWorktree>[0]) => WorktreeManager.createWorktree(req, { awaitFullCheckout: true }),
     resolveFreshSource: resolveFreshSourceBranch,
   };
-  return ({ callerSessionId, repoDir }) => {
+  return ({ callerSessionId, repoDir, baseRef }) => {
     const pending = inFlight.get(callerSessionId);
     if (pending) return pending;
     const run = withLocalProjectContext<Omit<Extract<CreateTaskWorktreeResult, { ok: true }>, 'ok'>>(
@@ -42,6 +42,7 @@ export function createTaskWorktreeHost(): CreateTaskWorktree {
           sessionId: callerSessionId,
           caller,
           ...(repoDir ? { repoDir } : {}),
+          ...(baseRef ? { baseRef } : {}),
         });
         if (!result.ok) return result;
         if (result.created) {

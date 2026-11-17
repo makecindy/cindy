@@ -36,3 +36,21 @@ export function getTextPreviewSearchHost(): HTMLElement | null {
   const roots = document.querySelectorAll<HTMLElement>('[data-text-lightbox-search-host]');
   return roots.item(roots.length - 1);
 }
+
+/** Background shortcuts yield to the document in both rendered and source modes. */
+export function getTextPreviewHost(): HTMLElement | null {
+  const roots = document.querySelectorAll<HTMLElement>('[data-text-lightbox-card]');
+  return roots.item(roots.length - 1);
+}
+
+/** A preview's menus and described tooltips dismiss before its search or document. */
+export function isPreviewPopupKeyEvent(event: KeyboardEvent, host: HTMLElement): boolean {
+  if (event.target instanceof Element && event.target.closest(
+    '[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]',
+  )) return true;
+  return [...host.querySelectorAll('[aria-describedby]')].some(element =>
+    (element.getAttribute('aria-describedby') ?? '').split(/\s+/).some(id =>
+      document.getElementById(id)?.getAttribute('role') === 'tooltip',
+    ),
+  );
+}

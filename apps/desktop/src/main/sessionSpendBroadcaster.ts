@@ -23,6 +23,7 @@ import { sql } from 'drizzle-orm';
 
 import { sessions } from './localDb/schema';
 import { getDbClient } from './localDb/client/current';
+import { recordSessionContextSnapshotWith } from './localDb/sessionContextSnapshotPersistence.js';
 import { createLogger } from './logger';
 import * as broadcastTap from './device-link/broadcast-tap.js';
 import {
@@ -197,13 +198,14 @@ export async function recordSessionTurnTokens(
       .where(sql`${sessions.id} = ${sessionId}`)
       .get();
     if (!isOwnerScopeCurrent(ownerScope)) return;
-    broadcastTokens({ sessionId, totalTokens: row?.totalTokenUsage ?? 0 }, ownerScope);
+    broadcastSessionTokens({ sessionId, totalTokens: row?.totalTokenUsage ?? 0 }, ownerScope);
   } catch (err) {
     log.warn('recordSessionTurnTokens failed:', err instanceof Error ? err.message : String(err));
   }
 }
 
-function broadcastTokens(payload: SessionTokensPayload, ownerScope: OwnerScope | null = null): void {
+export function broadcastSessionTokens(payload: SessionTokensPayload, ownerScope: OwnerScope | null = null): void {
+  if (!isOwnerScopeCurrent(ownerScope)) return;
   const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
   if (ownerScope === null) {
     broadcastTap.tapWindowBroadcast(USAGE_SESSION_TOKENS_CHANGED, payload);
@@ -222,7 +224,7 @@ function broadcastTokens(payload: SessionTokensPayload, ownerScope: OwnerScope |
 }
 
 /**
- * 写入本 session 的 context 快照 (turn 结束时由 register.ts 调)。
+ * 写入本 session 的 context 快照（turn 结束或成功的 Pi 压缩边界）。
  *
  * 字段写入语义:
  *   - contextTokens: 总是覆盖写 (包括 0 —— SDK 自动压缩后真值可能很小, 不能因 ">0"
@@ -231,55 +233,17 @@ function broadcastTokens(payload: SessionTokensPayload, ownerScope: OwnerScope |
  *   - contextWindow: 仅在 > 0 时写 (0 = "SDK 未给", 不能覆盖已有真值;
  *     与 usage-tracker.ts:84-86 setContextWindow 同语义)
  *
- * 调用方 (register.ts) 已确保只在 turn end 调一次, 不会高频 IO。
+ * 调用方仅在这些离散边界记录，不跟随 token 流高频写入。
  */
 export async function recordSessionContextSnapshot(
   sessionId: string,
   contextTokens: number,
   contextWindow: number,
 ): Promise<void> {
-  if (!sessionId) return;
-  if (!Number.isFinite(contextTokens) || contextTokens < 0) return;
-  if (contextTokens === 0 && (!Number.isFinite(contextWindow) || contextWindow <= 0)) return;
-  const ownerScope = captureOwnerScope();
-  try {
-    const db = getDbClient().drizzle;
-    const updates: { contextTokens: number; contextWindow?: number; contextWindowRuntime?: number } = {
-      contextTokens: Math.floor(contextTokens),
-    };
-    if (Number.isFinite(contextWindow) && contextWindow > 0) {
-      updates.contextWindow = Math.floor(contextWindow);
-      updates.contextWindowRuntime = updates.contextWindow;
-    }
-    await db
-      .update(sessions)
-      .set(updates)
-      .where(sql`${sessions.id} = ${sessionId}`)
-      .run();
-    // 回读保证广播的是 DB 最终值 (而非入参 —— contextWindow 可能没改)
-    const row = await db
-      .select({
-        contextTokens: sessions.contextTokens,
-        contextWindow: sessions.contextWindow,
-      })
-      .from(sessions)
-      .where(sql`${sessions.id} = ${sessionId}`)
-      .get();
-    if (!isOwnerScopeCurrent(ownerScope)) return;
-    broadcastContext(
-      {
-        sessionId,
-        contextTokens: row?.contextTokens ?? 0,
-        contextWindow: row?.contextWindow ?? 0,
-      },
-      ownerScope,
-    );
-  } catch (err) {
-    log.warn(
-      'recordSessionContextSnapshot failed:',
-      err instanceof Error ? err.message : String(err),
-    );
-  }
+  return recordSessionContextSnapshotWith(
+    { captureOwnerScope, isOwnerScopeCurrent, broadcastContext, log },
+    sessionId, contextTokens, contextWindow,
+  );
 }
 
 function broadcastContext(payload: SessionContextPayload, ownerScope: OwnerScope | null = null): void {

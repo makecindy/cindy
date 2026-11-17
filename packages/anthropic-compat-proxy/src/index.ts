@@ -18,6 +18,31 @@ export { recoverInlineAttachments, recoverOversizedMessage } from './oversized-a
 export type { OversizedBody, RecoveredAttachment, AttachmentKeeper } from './oversized-attachments.js';
 export type { OversizedRequestRecovery } from './types.js';
 export {
+  controlRequestSize,
+  countInlineRequestImages,
+  hasRequestMediaMarkers,
+  mergeRequestSizeBudgets,
+  requestSizeBudgetAfterRejection,
+  requestSizeModelFamily,
+  hashImageBytes,
+  routeInfoFor,
+  DEFAULT_QUICK_PATH_BYTES,
+  DEFAULT_REQUEST_SIZE_TARGET,
+  DEFAULT_REQUEST_SIZE_TRIGGER,
+  NOOP_IMAGE_PREPROCESSOR,
+} from './request-size-control.js';
+export type {
+  ImageRouteInfo,
+  InlineImagePreprocessor,
+  PreparedImage,
+  RequestSizePolicy,
+  RequestSizeBudget,
+  RequestSizeResult,
+  WireFormat,
+} from './request-size-control.js';
+export { classifyRequestSizeError } from './request-size-errors.js';
+export type { RequestSizeError, RequestSizeErrorKind } from './request-size-errors.js';
+export {
   createEnvOutboundProxyResolver,
   hasProxyEnvConfig,
   isLoopbackHostname,
@@ -38,6 +63,8 @@ export {
 } from './instructions-injection.js';
 export {
   createActiveStripTransform,
+  createToolReferenceRecoveryRule,
+  lowerToolReferencesFromBody,
   createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
@@ -96,8 +123,11 @@ export type {
 export type {
   ForwardLifecycleObserver,
   ForwardLifecycleFailure,
+  InboundAdmissionCtx,
+  InboundRejection,
   LocalRequestHandler,
   OversizedRequestCompactor,
+  RequestSizeController,
   ProxyHandle,
   ProxyLogger,
   ProxyOptions,
@@ -113,3 +143,4 @@ export type {
 } from './types.js';
 
 export { createWebSocketMessageTransform } from './websocket-message-transform.js';
+export { reserveAttachmentTransferDisk } from './oversized-attachments.js';

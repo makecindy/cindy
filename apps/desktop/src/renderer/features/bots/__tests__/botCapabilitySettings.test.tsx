@@ -239,26 +239,26 @@ it('offers turning on an unavailable tool and keeps tool settings in the group h
   expect(view.queryByRole('switch', { name: 'Computer' })).toBeNull();
 });
 
-it('turns a system Skill off for this teammate without touching shared references', async () => {
+// 2026-11-10 owner (third-round review #1): a V2 teammate has the same capabilities in every
+// session, so its page offers no tool / MCP / Skill selection, only its own Skills.
+it('offers no capability selection for a V2 teammate', async () => {
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
-    localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [] } },
+    localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: {
+      listSkills: async () => [{ slug: 'hand-off', name: 'hand-off', enabled: true }],
+    } },
     maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list,
-      listAgentSkills: async () => ({ success: true, skills: [] }), plugins: { list: async () => [] } },
+      listAgentSkills: async () => ({ success: true, skills: [{ name: 'agent-ops', enabled: true }] }),
+      plugins: { list: async () => [{ id: 'browser', name: 'Browser', available: true }] } },
   } });
-  const onChange = vi.fn();
-  const onSystemSkillChange = vi.fn();
-  const view = render(<BotCapabilitySettings expanded onSystemSkillChange={onSystemSkillChange}
+  const view = render(<BotCapabilitySettings expanded
     bot={{ id: 'bot-1', canonicalSessionId: 's1' } as BotProfile}
-    capabilities={{ modelChain: [], modelChainOverride: null, mcpServers: [], toolsets: [],
-      systemSkillsOff: ['routine'] } as unknown as BotProfile['capabilities']}
-    skills={[]} onChange={onChange} />);
-  const todo = view.getByRole('switch', { name: 'bots.capabilities.system.items.todo.name' });
-  const routine = view.getByRole('switch', { name: 'bots.capabilities.system.items.routine.name' });
-  expect(todo.getAttribute('aria-checked')).toBe('true');
-  expect(routine.getAttribute('aria-checked')).toBe('false');
-  fireEvent.click(todo);
-  expect(onSystemSkillChange).toHaveBeenCalledExactlyOnceWith('todo', false);
-  expect(onChange).not.toHaveBeenCalled();
+    capabilities={{ modelChain: [], modelChainOverride: null, mcpServers: [], toolsets: [], projectMode: true } as unknown as BotProfile['capabilities']}
+    skills={[]} onChange={vi.fn()} />);
+  expect(await view.findByRole('switch', { name: 'hand-off' })).toBeTruthy();
+  await waitFor(() => expect(h.list).toHaveBeenCalled());
+  expect(view.queryByRole('switch', { name: 'Browser' })).toBeNull();
+  expect(view.queryByRole('switch', { name: 'agent-ops' })).toBeNull();
+  expect(view.queryByText('bots.capabilities.core.name')).toBeNull();
 });
 
 // Greptile #8330: back and closing settings must not silently drop an edited learned Skill.
@@ -291,4 +291,35 @@ it('asks before leaving a learned Skill editor with unsaved changes', async () =
   expect(await backRef.current!()).toBe(true);
   await waitFor(() => expect(h.skillPage?.view.editing).toBe(false));
   expect(h.confirm).toHaveBeenCalledTimes(3);
+});
+
+ it('shows official skills as inherited and keeps personal skills selectable', async () => {
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [] } },
+    maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list,
+      listAgentSkills: async () => ({ success: true, skills: [
+        { name: 'PR', cindyOfficial: true, enabled: true },
+        { name: 'Disabled official', cindyOfficial: true, enabled: false },
+        { name: 'Personal', enabled: true },
+        { name: 'PR', enabled: true },
+      ] }), plugins: { list: async () => [] },
+    },
+  } });
+  const onChange = vi.fn();
+  const view = render(<BotCapabilitySettings expanded
+    bot={{ id: 'bot-1', canonicalSessionId: 's1' } as BotProfile}
+    capabilities={{ modelChain: [], modelChainOverride: null, mcpServers: [], toolsets: [] } as unknown as BotProfile['capabilities']}
+    skills={[]} onChange={onChange} />);
+  await waitFor(() => expect(view.getByRole('switch', { name: 'PR' })).toBeTruthy());
+  const official = view.getByRole('switch', { name: 'PR' }) as HTMLButtonElement;
+  expect(official.disabled).toBe(true);
+  expect(official.getAttribute('aria-checked')).toBe('true');
+  // The same-name namesake does not hide the official entry; a disabled official keeps its explanation.
+  expect(view.getAllByRole('switch', { name: 'PR' })).toHaveLength(1);
+  expect(view.getAllByText('bots.capabilities.officialInherited')).toHaveLength(2);
+  expect(view.getByRole('switch', { name: 'Disabled official' }).getAttribute('aria-checked')).toBe('false');
+  const personal = view.getByRole('switch', { name: 'Personal' }) as HTMLButtonElement;
+  expect(personal.disabled).toBe(false);
+  fireEvent.click(personal);
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('skill', ['Personal']);
 });

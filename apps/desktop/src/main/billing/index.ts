@@ -7,13 +7,21 @@ import {
   type CreateBillingTopupRequest,
 } from '../../shared/billing.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
+import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.desktop.js';
 import { requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import { isAllowedBillingRedirectUrl } from './paymentRedirect.js';
+import { normalizeGiftCardCode } from '../../shared/giftCard.js';
+import {
+  GIFT_CARD_ERROR_CODES,
+  giftCardFailureOf,
+  projectBillingGiftCardPreview,
+  projectBillingGiftCardRedemption,
+} from './giftCard.js';
 import {
   projectBillingCatalog,
   projectBillingCurrentSubscription,
   projectBillingOrderList,
+  projectBillingPaymentHistory,
   projectBillingPortalSession,
   projectBillingPaymentOrder,
   projectBillingPlanChange,
@@ -231,6 +239,37 @@ export function createBillingHandlers(
       throwBillingFetchError(error);
     }
   };
+  /**
+   * 礼品卡请求：兑换码只走请求体。服务端明确给出的卡片状态作为结果返回，由
+   * Renderer 逐一说明；其它失败沿用计费请求的统一错误。
+   */
+  const giftCard = async <T extends object>(
+    path: string,
+    raw: unknown,
+    project: (value: unknown) => T,
+  ) => {
+    const payload = requireObject(raw);
+    assertOnlyKeys(payload, ['code'], 'payload');
+    const code = typeof payload.code === 'string' ? normalizeGiftCardCode(payload.code) : null;
+    if (!code) return { ok: false as const, reason: 'NOT_FOUND' as const };
+    let response: unknown;
+    try {
+      response = await fetch<unknown>(path, {
+        method: 'POST',
+        body: { code },
+        timeoutMs: BILLING_REQUEST_TIMEOUT_MS,
+        redactErrorDetails: true,
+        allowedRedactedErrorCodes: GIFT_CARD_ERROR_CODES,
+        expectedErrors: [{ status: 404 }, { status: 409 }, { status: 429 }],
+        baseUrl: getBaseUrl,
+      });
+    } catch (error) {
+      const reason = giftCardFailureOf(error);
+      if (reason) return { ok: false as const, reason };
+      throwBillingFetchError(error);
+    }
+    return { ok: true as const, ...projectResponse(response, project) };
+  };
   const protect =
     (handler: (payload?: unknown) => Promise<unknown>): BillingHandler =>
     async (event, payload) => {
@@ -277,6 +316,19 @@ export function createBillingHandlers(
         throwIpcError('INVALID_PARAMS', 'catalog request does not accept a payload');
       }
       return projectResponse(await invoke<unknown>('/api/billing/catalog'), projectBillingCatalog);
+    }),
+    [BILLING_INVOKE.LIST_PAYMENT_HISTORY]: protect(async (raw) => {
+      const payload = requireObject(raw);
+      assertOnlyKeys(payload, ['limit', 'cursor'], 'payload');
+      if (typeof payload.limit !== 'number' || !Number.isInteger(payload.limit) || payload.limit < 1 || payload.limit > 100) {
+        throwIpcError('INVALID_PARAMS', 'limit must be an integer between 1 and 100');
+      }
+      if (payload.cursor !== undefined && (typeof payload.cursor !== 'string' || !/^[A-Za-z0-9_-]{1,1024}$/.test(payload.cursor))) {
+        throwIpcError('INVALID_PARAMS', 'cursor must be a bounded history cursor');
+      }
+      const query = new URLSearchParams({ limit: String(payload.limit) });
+      if (typeof payload.cursor === 'string') query.set('cursor', payload.cursor);
+      return projectResponse(await invoke<unknown>(`/api/billing/payment-history?${query}`), projectBillingPaymentHistory);
     }),
     [BILLING_INVOKE.LIST_ORDERS]: protect(async (raw) => {
       const payload = requireObject(raw);
@@ -461,6 +513,12 @@ export function createBillingHandlers(
         return { success: false };
       }
     }),
+    [BILLING_INVOKE.PREVIEW_GIFT_CARD]: protect((raw) =>
+      giftCard('/api/gift-cards/preview', raw, projectBillingGiftCardPreview),
+    ),
+    [BILLING_INVOKE.REDEEM_GIFT_CARD]: protect((raw) =>
+      giftCard('/api/gift-cards/redeem', raw, projectBillingGiftCardRedemption),
+    ),
   };
 }
 

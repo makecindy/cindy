@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -38,23 +38,33 @@ type GateDecision =
  */
 const MAX_DECISION_RETRIES = 2;
 const DECISION_RETRY_DELAY_MS = 1_000;
+const CHECKING_DECISION: GateDecision = { phase: 'checking' };
 
 export function LocalDbGate() {
   const { t } = useTranslation();
-  const { dataOwnerId, mode, logout, exitLocalMode } = useAuth();
+  const { dataOwnerId, dataOwnerGeneration, mode, logout, exitLocalMode } = useAuth();
   const { reportLocalDbGate } = useAppShellCover();
   const navigate = useNavigate();
-  const [decision, setDecision] = useState<GateDecision>({ phase: 'checking' });
+  const [result, setResult] = useState<{
+    dataOwnerId: string | null; generation: number; decision: GateDecision;
+  } | null>(null);
+  // Mask old results during render, before effects for a new owner have run.
+  const decision = result && result.dataOwnerId === dataOwnerId && result.generation === dataOwnerGeneration
+    ? result.decision : CHECKING_DECISION;
+  const setDecision = useCallback((next: GateDecision) => {
+    setResult({ dataOwnerId, generation: dataOwnerGeneration, decision: next });
+  }, [dataOwnerId, dataOwnerGeneration]);
   const [retryNonce, setRetryNonce] = useState(0);
   const retryCountRef = useRef(0);
-  const previousOwnerIdRef = useRef<string | null>(null);
+  const previousOwnerRef = useRef<{ id: string | null; generation: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const ownerId = dataOwnerId;
-    const ownerChanged = previousOwnerIdRef.current !== ownerId;
-    previousOwnerIdRef.current = ownerId;
+    const ownerChanged = previousOwnerRef.current?.id !== ownerId
+      || previousOwnerRef.current?.generation !== dataOwnerGeneration;
+    previousOwnerRef.current = { id: ownerId, generation: dataOwnerGeneration };
     // user 变化 = 一次全新决策,重试额度整体归零;只有 retryNonce 驱动的重跑才
     // 继承计数(否则重试永远数不满,fatal 不可达)。
     if (ownerChanged) {
@@ -87,6 +97,7 @@ export function LocalDbGate() {
 
       try {
         const maintenanceResult = await window.electronAPI.localDb.maintenance.getLastResult();
+        if (cancelled) return;
         if (
           maintenanceResult &&
           !shownDbSlimmingResultIds.has(maintenanceResult.id)
@@ -109,6 +120,7 @@ export function LocalDbGate() {
       } catch (error) {
         log.warn('database slimming result read failed (non-fatal)', error);
       }
+      if (cancelled) return;
 
       // Signal main "user logged in + localDb is open" so account integrations can
       // come online after provider discovery. Gated and idempotent in main — re-mounts
@@ -145,7 +157,7 @@ export function LocalDbGate() {
     };
     // 依赖 user.id——切账号 blank;同账号 refresh 不因对象引用变化卸载 Outlet。
     // retryNonce 驱动失败后的有限重试重跑。
-  }, [dataOwnerId, retryNonce, t]);
+  }, [dataOwnerId, dataOwnerGeneration, retryNonce, t, setDecision]);
 
   useEffect(() => {
     if (!dataOwnerId || decision.phase === 'checking') {
@@ -158,7 +170,7 @@ export function LocalDbGate() {
     return () => {
       reportLocalDbGate('pending');
     };
-  }, [dataOwnerId, decision, reportLocalDbGate]);
+  }, [dataOwnerId, dataOwnerGeneration, decision, reportLocalDbGate]);
 
   if (!dataOwnerId || decision.phase === 'checking') {
     // 主界面还不能画。视觉盖由 AppShellCover + Splash / 品牌层承接

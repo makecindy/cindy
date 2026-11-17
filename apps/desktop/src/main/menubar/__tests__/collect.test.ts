@@ -1,5 +1,10 @@
 import type { ProviderView } from '@cindy/model-providers';
-import { describe, expect, it } from 'vitest';
+import { codexAccountDisplayKey } from '../../maker-host/codex-auth-identity';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { remoteProviderDisableKey } from '@cindy/model-providers';
+const disabled = vi.hoisted(() => ({ providers: {} as Record<string, boolean> }));
+vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => ({ disabledProviders: disabled.providers }) }));
+beforeEach(() => { disabled.providers = {}; });
 
 import {
   kimiSource,
@@ -9,14 +14,15 @@ import {
   dayKeysEndingAt,
   distinctRemoteSubscriptions,
   paygSource,
-  planLabel,
   type MenubarCollectDeps,
   modelDisplayNames,
+  opencodeGoSource,
   usageScope,
 } from '../collect';
-import { retainRemoteSubscriptions, REMOTE_RETAIN_MS, type RemoteSeen } from '../remoteSubscriptions';
+import { readRemoteSubscriptions, retainRemoteSubscriptions, REMOTE_RETAIN_MS, type RemoteSeen, type RemoteSubscriptionDeps } from '../remoteSubscriptions';
 import { topModels, type MenubarSubscriptionInput } from '../snapshot';
 import type { UsageHistoryPayload, UsageHistoryTask } from '../../usage/usageHistory';
+import type { SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
 
 const NOW = Date.UTC(2026, 9, 11, 3, 0, 0);
 const nowSec = NOW / 1000;
@@ -95,12 +101,6 @@ describe('source mapping', () => {
     });
   });
 
-  it('formats plan labels', () => {
-    expect(planLabel('max_20x')).toBe('Max 20x');
-    expect(planLabel('SuperGrok Heavy')).toBe('SuperGrok Heavy');
-    expect(planLabel('  ')).toBeNull();
-  });
-
   it('lists calendar days across a month boundary', () => {
     expect(dayKeysEndingAt('2026-10-02', 3)).toEqual(['2026-09-30', '2026-10-01', '2026-10-02']);
   });
@@ -160,6 +160,252 @@ describe('collectMenubarInputs', () => {
     expect(errors).toEqual(['claude:anthropic']);
     const claude = collected.sources[1];
     expect(claude.kind === 'subscription' && claude.windows).toEqual([]);
+  });
+
+  // #10110, unit: collectMenubarInputs must display accounts rather than provider entries.
+  // Existing coverage only deduplicated remote sources. Minimal failure: one provider,
+  // two accounts; or two local providers pointing at the same account.
+  const pool: SubscriptionPoolView = {
+    providerId: 'openai', configured: true, strategy: 'round',
+    accounts: ['default', 'extra'].map((id, index) => ({
+      id, paused: false, limit: 4, weight: 1, directory: `/fixture/${id}`,
+      identity: `${id}@example.com`, plan: index ? 'pro' : 'plus', status: 'ready', running: index,
+      usage: { codex: { credits: null, buckets: { codex: {
+        limitId: 'codex', limitName: null, updatedAt: NOW,
+        primary: null, secondary: { usedPercent: index ? 35 : 90, windowMinutes: 10_080, resetsAt: nowSec + 86_400 },
+      } } } },
+    })),
+  };
+
+  it('shows each pooled account with its own plan, quota and running marker', async () => {
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai', openAiAccount: { identity: 'wrong@example.com' } } as never)],
+      readSubscriptionPool: async () => pool,
+      readCodexResets: async () => ({ count: 2, earliestExpiryMs: null }),
+    }));
+    expect(collected.sources).toMatchObject([
+      { id: 'openai', account: 'default@example.com', plan: 'Plus', consuming: false,
+        windows: [{ usedPercent: 90 }], resetCredits: { count: 2 } },
+      { id: 'openai:account:extra', providerId: 'openai', account: 'extra@example.com', plan: 'Pro', consuming: true,
+        windows: [{ usedPercent: 35 }], resetCredits: null },
+    ]);
+  });
+
+  // #10405, unit: a legacy connection can own several accounts. Previous fixtures only
+  // used built-in ids, hiding both the missed pool read and the wrong Claude projection.
+  it.each(['local', 'remote'])('reads a legacy Codex target pool on %s', async location => {
+    const legacy = provider({ id: 'legacy-codex', subscriptionAccountPool: 'openai',
+      auth: { method: 'oauth', native: 'codex' }, remoteInvocationEnabled: true,
+      agents: ['codex'], models: { codex: [] } });
+    const owned: SubscriptionPoolView = { ...pool, providerId: legacy.id, kind: 'openai',
+      accounts: pool.accounts.map((account, index) => ({ ...account, id: `owned-${index}` })) };
+    const calls: string[] = [];
+    const remote = location === 'remote' ? (await readRemoteSubscriptions(remoteDeps(async (_device, channel) => {
+      calls.push(channel);
+      return { ok: true, result: owned };
+    }, [legacy]))).sources.filter(source => source.providerId === legacy.id) : [];
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => location === 'local' ? [legacy] : [],
+      readSubscriptionPool: async id => { expect(id).toBe(legacy.id); return owned; },
+      readRemoteSubscriptions: async () => remote,
+    }));
+    expect(collected.sources).toMatchObject([
+      { providerId: legacy.id, family: 'codex', account: 'default@example.com', windows: [{ usedPercent: 90 }] },
+      { providerId: legacy.id, family: 'codex', account: 'extra@example.com', windows: [{ usedPercent: 35 }] },
+    ]);
+    if (location === 'remote') expect(calls).not.toContain('maker:usage:account');
+  });
+
+  // #10110 review: email is not a Codex workspace identity. Previous fixtures
+  // only covered different emails; two legal pool entries sharing an email lost
+  // one quota and transferred its running marker. Unit, real collector/peer reader.
+  it.each(['local', 'remote'])('keeps same-email Codex workspaces separate on %s', async (location) => {
+    const workspaces = { ...pool, accounts: pool.accounts.map((account, index) => ({
+      ...account, identity: 'same@example.com', plan: index ? 'team' : 'plus',
+    })) };
+    const remote = location === 'remote'
+      ? (await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: workspaces })))).sources : [];
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => location === 'local' ? [provider({ id: 'openai' })] : [],
+      readSubscriptionPool: async () => workspaces,
+      readRemoteSubscriptions: async () => remote,
+    }));
+    expect(collected.sources).toHaveLength(2);
+    expect(collected.sources).toMatchObject([
+      { plan: 'Plus', windows: [{ usedPercent: 90 }], consuming: false },
+      { plan: 'Team', windows: [{ usedPercent: 35 }], consuming: location === 'local' },
+    ]);
+  });
+
+  it('counts a verified pooled subscription once across providers and own computers', async () => {
+    const owned = { ...pool, accounts: [{ ...pool.accounts[0], accountKey: 'verified-person-workspace' }] };
+    const peer = (await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: owned })))).sources;
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai' }), provider({ id: 'independent', subscriptionAccountPool: 'openai' })],
+      readSubscriptionPool: async id => ({ ...owned, providerId: id, kind: 'openai',
+        accounts: owned.accounts.map(account => ({ ...account, running: id === 'independent' ? 1 : 0 })) }),
+      readRemoteSubscriptions: async () => peer,
+    }));
+    expect(collected.sources).toHaveLength(1);
+    expect(collected.sources[0]).toMatchObject({ providerId: 'openai', consuming: true, windows: [{ usedPercent: 90 }] });
+  });
+
+  it('recognizes the same native login before and after adding an account pool', async () => {
+    const identity = 'default@example.com';
+    const key = codexAccountDisplayKey(identity, 'workspace')!;
+    const owned = { ...pool, accounts: [{ ...pool.accounts[0], accountKey: key }] };
+    const peer = (await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: owned })))).sources;
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai', auth: { method: 'oauth', native: 'codex' }, openAiAccount: { identity, source: 'oauth' } })],
+      readCodex: async () => ({ accountId: 'workspace', primary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } }) as never,
+      readRemoteSubscriptions: async () => peer,
+    }));
+    expect(collected.sources).toHaveLength(1);
+    expect(collected.sources[0]).toMatchObject({ id: 'openai', account: identity });
+  });
+
+  it('deduplicates local accounts while retaining different people in one workspace', async () => {
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => ['openai', 'legacy', 'other'].map((id) => provider({
+        id, auth: { method: 'oauth', native: 'codex' },
+        openAiAccount: { identity: id === 'other' ? 'other@example.com' : 'same@example.com' },
+      } as never)),
+      readCodex: async () => ({ accountId: 'workspace', primary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } }) as never,
+    }));
+    expect(collected.sources.map((source) => source.id)).toEqual(['openai', 'other']);
+  });
+
+  // #10204 review, unit: quota-only plan metadata was overwritten with null.
+  // Prior fixtures supplied the same plan in both places and missed this loss.
+  it.each(['local', 'remote'])('keeps Claude pool plans and per-model windows attached to their account on %s', async location => {
+    const claudePool: SubscriptionPoolView = {
+      ...pool, providerId: 'anthropic', accounts: pool.accounts.map((account, index) => ({
+        ...account, plan: index ? 'max' : undefined, planTier: index ? 'max_20x' : undefined, usage: { claude: {
+          updatedAt: NOW, subscriptionType: 'pro',
+          fiveHour: { utilization: index ? 25 : 80, resetsAt: nowSec + 3600 },
+          sevenDay: { utilization: index ? 35 : 90, resetsAt: nowSec + 86_400 },
+          scoped: [{ modelDisplayName: 'Sonnet', utilization: index ? 40 : 95, resetsAt: nowSec + 86_400 }],
+        } },
+      })),
+    };
+    const remote = location === 'remote'
+      ? (await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: claudePool }), [], 'anthropic'))).sources : [];
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => location === 'local' ? [provider({ id: 'anthropic' })] : [],
+      readSubscriptionPool: async () => claudePool,
+      readRemoteSubscriptions: async () => remote,
+    }));
+    const prefix = location === 'remote' ? 'remote:peer:' : '';
+    expect(collected.sources).toMatchObject([
+      { id: `${prefix}anthropic`, account: 'default@example.com', plan: 'Pro',
+        windows: [{ usedPercent: 80 }, { usedPercent: 90 }, { label: 'Sonnet', usedPercent: 95 }] },
+      { id: `${prefix}anthropic:account:extra`, account: 'extra@example.com', plan: 'Max 20×',
+        windows: [{ usedPercent: 25 }, { usedPercent: 35 }, { label: 'Sonnet', usedPercent: 40 }] },
+    ]);
+  });
+
+  it('does not resurrect a paused pooled account through its migrated provider alias', async () => {
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai' }), provider({ id: 'legacy', subscriptionPoolAlias: true,
+        auth: { method: 'oauth', native: 'codex' }, openAiAccount: { identity: 'extra@example.com' } } as never)],
+      readSubscriptionPool: async () => ({ ...pool, accounts: pool.accounts.map(account => ({ ...account, paused: true })) }),
+    }));
+    expect(collected.sources).toEqual([]);
+  });
+
+  it.each(['paused', 'signed-out', 'unavailable', 'failed'] as const)('never borrows default quota when pool is %s', async (state) => {
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai', openAiAccount: { identity: 'wrong@example.com' } } as never)],
+      readSubscriptionPool: async () => {
+        if (state === 'failed') throw new Error('offline');
+        return { ...pool, accounts: [ { ...pool.accounts[1],
+          paused: state === 'paused', status: state === 'paused' ? 'ready' : state,
+        } ] };
+      },
+    }));
+    if (state === 'paused') expect(collected.sources).toEqual([]);
+    else {
+      expect(collected.sources).toHaveLength(1);
+      expect(collected.sources[0]).toMatchObject({ windows: [] });
+      expect(collected.sources[0]).not.toMatchObject({ account: 'wrong@example.com' });
+    }
+  });
+
+  // Same regression through the peer reader: provider identity must never label another
+  // pooled account's quota. Only unsupported peers may use the default-account fallback.
+  function remoteDeps(invoke: RemoteSubscriptionDeps['invoke'], aliases: ProviderView[] = [], providerId = 'openai'): RemoteSubscriptionDeps {
+    return { nowMs: NOW, listDevices: async () => ({ devices: [{
+      deviceId: 'peer', name: 'Peer', isSelf: false, online: true, remoteControlEnabled: true,
+      controlEnabled: true, platform: 'darwin', appVersion: '9.0.0',
+    }] as never }), invoke: async (id, channel, args) => channel === 'maker:provider:list'
+      ? { ok: true, result: { providers: [provider({ id: providerId, remoteInvocationEnabled: true,
+          agents: ['codex'], models: { codex: [] }, openAiAccount: { identity: 'wrong@example.com' } } as never), ...aliases] } }
+      : invoke(id, channel, args),
+    };
+  }
+
+  it('removes locally stopped remote accounts from live quota and offline retention', async () => {
+    const first = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: pool })));
+    expect(first.sources.length).toBeGreaterThan(0);
+    const previous = retainRemoteSubscriptions(new Map(), first, NOW).seen;
+    disabled.providers[remoteProviderDisableKey('peer', 'openai')] = true;
+    const next = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: pool })));
+    expect(next.sources).toEqual([]);
+    const offline = { ...next, unreachable: new Set(['peer']) };
+    expect(retainRemoteSubscriptions(previous, offline, NOW + 1).sources).toEqual([]);
+  });
+
+  it('does not resurrect paused peer accounts through migrated aliases', async () => {
+    const calls: unknown[] = [];
+    const result = await readRemoteSubscriptions(remoteDeps(async (_id, channel, args) => {
+      calls.push([channel, args]);
+      return { ok: true, result: { ...pool, accounts: pool.accounts.map(account => ({ ...account, paused: true })) } };
+    }, [provider({ id: 'legacy', subscriptionPoolAlias: true, remoteInvocationEnabled: true,
+      agents: ['codex'], models: { codex: [] }, auth: { method: 'oauth', native: 'codex' } } as never)]));
+    expect(result.sources).toEqual([]);
+    expect(result.failed.size).toBe(0);
+    expect(calls).toEqual([['maker:subscription-accounts', [{ action: 'read', providerId: 'openai' }]]]);
+  });
+
+  it('expands the peer account pool and retains its entries across a temporary read failure', async () => {
+    const result = await readRemoteSubscriptions(remoteDeps(async (_id, channel) => {
+      expect(channel).toBe('maker:subscription-accounts');
+      return { ok: true, result: pool };
+    }));
+    expect(result.sources).toMatchObject([
+      { id: 'remote:peer:openai', account: 'default@example.com', plan: 'Plus', consuming: false, windows: [{ usedPercent: 90 }] },
+      { id: 'remote:peer:openai:account:extra', account: 'extra@example.com', plan: 'Pro', consuming: false, windows: [{ usedPercent: 35 }] },
+    ]);
+    const previous = retainRemoteSubscriptions(new Map(), result, NOW);
+    const failed = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: false, error: { code: 'TIMEOUT', message: 'offline' } })));
+    expect(failed.sources).toEqual([]);
+    expect(retainRemoteSubscriptions(previous.seen, failed, NOW + 1000).sources).toHaveLength(2);
+    const removed = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: { ...pool, accounts: [] } })));
+    expect(retainRemoteSubscriptions(previous.seen, removed, NOW + 1000).sources).toEqual([]);
+  });
+
+  it.each(['openai', 'anthropic'])('uses a serializable default scope for an older %s peer', async (providerId) => {
+    const result = await readRemoteSubscriptions(remoteDeps(async (_id, channel, args) => {
+      if (channel === 'maker:subscription-accounts') return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'old peer' } };
+      // A missing array argument becomes null over device-link; the legacy reader rejects
+      // null provider IDs, so pass an explicit provider instead of an undefined placeholder.
+      expect(JSON.parse(JSON.stringify(args))).toEqual(providerId === 'openai'
+        ? ['codex', 'openai', 'default-subscription-account']
+        : ['anthropic', false, 'default-subscription-account']);
+      return { ok: true, result: providerId === 'openai'
+        ? { primary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } }
+        : { sevenDay: { utilization: 20, resetsAt: nowSec + 86_400 } } };
+    }, [], providerId));
+    expect(result.sources).toMatchObject([{ id: `remote:peer:${providerId}`, windows: [{ usedPercent: 20 }] }]);
+  });
+
+  it('rejects a peer pool for the wrong provider without borrowing default quota', async () => {
+    const result = await readRemoteSubscriptions(remoteDeps(async (_id, channel) => {
+      expect(channel).toBe('maker:subscription-accounts');
+      return { ok: true, result: { ...pool, providerId: 'anthropic' } };
+    }));
+    expect(result.sources).toEqual([]);
+    expect(result.failed.has('remote:peer:openai')).toBe(true);
   });
 
   it('keeps a Codex account that needs reconnecting as a subscription without numbers', async () => {
@@ -383,6 +629,22 @@ it('maps Kimi periods and removes expired or stale numbers from the menu bar', (
   expect(source.windows).toMatchObject([{ kind: 'session', usedPercent: 20, windowMinutes: 300 }, { kind: 'period', usedPercent: 30, windowMinutes: 0 }]);
   expect(kimiSource(account, { ...result, stale: true } as never, NOW).windows).toEqual([]);
   expect(kimiSource(account, { status: 'unavailable', error: 'auth' }, NOW).windows).toEqual([]);
+});
+
+it('maps OpenCode Go rolling, weekly and monthly windows without showing stale numbers', () => {
+  const account = provider({ id: 'opencode-go', name: 'OpenCode Go' });
+  const result = { status: 'ready', stale: false, snapshot: { kind: 'opencode-go-quota', fetchedAt: NOW, windows: [
+    { id: 'rolling', usedPercent: 12, limited: false, resetsAt: NOW + 3600_000 },
+    { id: 'weekly', usedPercent: 34, limited: false, resetsAt: NOW + 86_400_000 },
+    { id: 'monthly', usedPercent: 100, limited: true, resetsAt: NOW - 1 },
+  ] } } as const;
+  const source = opencodeGoSource(account, result as never, NOW);
+  expect(source).toMatchObject({ family: 'opencode-go', brand: 'OpenCode Go', account: null, plan: null, credits: null });
+  expect(source.windows).toMatchObject([
+    { kind: 'session', label: 'rolling', usedPercent: 12, windowMinutes: 300 },
+    { kind: 'week', label: 'weekly', usedPercent: 34, windowMinutes: 10_080 },
+  ]);
+  expect(opencodeGoSource(account, { ...result, stale: true } as never, NOW).windows).toEqual([]);
 });
 
 // iPhone usage widgets split each day by model: the five with the most tokens in the last 30 days keep

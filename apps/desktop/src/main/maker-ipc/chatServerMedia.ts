@@ -4,7 +4,7 @@ import { net } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile as readMedia, supportedMime } from '../cindy-media/blobStore.js';
+import { readFile as readMedia, supportedMime } from '../cindy-media/blobStore.desktop.js';
 import { captureRemoteMediaCacheValidity, chatMediaPersistentCache, remoteMediaCacheGeneration } from '../device-link/remoteMediaPersistentCache.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { botGroupAttachmentsPath } from './botGroupWorkDir.js';
@@ -27,6 +27,8 @@ export type ChatUploadAttachment = BotGroupAttachment & {
 const MAX_SIZE = 100 * 1024 * 1024;
 /** Files of one send uploaded at once; each holds its bytes in memory until sealed. */
 const UPLOAD_CONCURRENCY = 3;
+/** The server's limit for one companion store value in the bucket. */
+const COMPANION_BLOB_MAX_BYTES = 100 * 1024 * 1024;
 export function createChatMedia(api: ChatApi, current: () => boolean, endpoint: string, log?: { warn(message: string, meta?: Record<string, unknown>): void }, options: { allowLoopback?: boolean } = {}) {
   // Images keep only in-flight transfers here; ordinary files retain service-local reuse.
   const cache = new Map<string, Promise<BotGroupAttachment>>();
@@ -38,6 +40,35 @@ export function createChatMedia(api: ChatApi, current: () => boolean, endpoint: 
   };
   return {
     get cacheGeneration() { return remoteMediaCacheGeneration(); },
+    /** Signed private-bucket transfers of the companion store, under the same URL rules as room files. */
+    companionTransfer: {
+      async putBlob(url: string, type: string, bytes: Buffer) {
+        check();
+        const response = await net.fetch(signedUrl(url), { method: 'PUT', redirect: 'error',
+          headers: { 'Content-Type': type }, body: new Uint8Array(bytes), signal: AbortSignal.timeout(60000) });
+        if (!response.ok) throw Object.assign(new Error('MEDIA_UPLOAD_FAILED'), { status: response.status });
+      },
+      async getBlob(url: string, size: number) {
+        check();
+        if (!Number.isSafeInteger(size) || size <= 0 || size > COMPANION_BLOB_MAX_BYTES) throw new Error('INVALID_MEDIA_SIZE');
+        const response = await net.fetch(signedUrl(url), { redirect: 'error', signal: AbortSignal.timeout(60000) });
+        if (!response.ok || !response.body) throw Object.assign(new Error('MEDIA_DOWNLOAD_FAILED'), response.ok ? {} : { status: response.status });
+        // Read no more than announced, like room files below.
+        const chunks: Uint8Array[] = []; let received = 0;
+        const reader = response.body.getReader();
+        try {
+          for (;;) {
+            const next = await reader.read(); check();
+            if (next.done) break;
+            received += next.value.byteLength;
+            if (received > size) throw new Error('INVALID_MEDIA_SIZE');
+            chunks.push(next.value);
+          }
+        } finally { await reader.cancel(); }
+        if (received !== size) throw new Error('INVALID_MEDIA_SIZE');
+        return Buffer.concat(chunks);
+      },
+    },
     /**
      * Uploads a send's files a few at a time (prepare → PUT → complete each), keeping the
      * blocks in the files' order. Every file settles before a failure is reported, so no
@@ -76,24 +107,43 @@ export function createChatMedia(api: ChatApi, current: () => boolean, endpoint: 
           await checkFile();
           if (!bytes || !bytes.length || bytes.length > MAX_SIZE) throw new Error('ATTACHMENT_UNAVAILABLE');
           const key = createHash('sha256').update(source).update(attachment.id).update(bytes).digest('hex');
-          // Expired abandoned uploads must get a new prepare receipt, but a successful
-          // message keeps the same content even when the request's ACK was lost.
+          const metadata = { name: attachment.name, type: attachment.mimeType, size: bytes.length };
+          // Try the old key first: successful uploads (including lost ACKs) keep their receipt.
           let upload: { id: string; uploadUrl: string };
+          let replacedExpired = false;
+          const prepare = async (operationId: string): Promise<typeof upload> => {
+            try {
+              return await api(`/conversations/${roomId}/media`, 'POST', { operationId, ...metadata }, actorId);
+            } catch (error) {
+              if (replacedExpired || !(error instanceof Error) || error.message !== 'UPLOAD_EXPIRED') throw error;
+              await checkFile();
+              // Preserve the existing replacement of an abandoned upload, including a
+              // recovery receipt that expired. At most one expiry replacement per call.
+              replacedExpired = true;
+              return api(`/conversations/${roomId}/media`, 'POST', { operationId: `${operationId}:${randomUUID()}`, ...metadata }, actorId);
+            }
+          };
           stage = 'prepare';
           try {
-            upload = await api(`/conversations/${roomId}/media`, 'POST', {
-              operationId: `media:${key}`, name: attachment.name, type: attachment.mimeType, size: bytes.length,
-            }, actorId);
+            upload = await prepare(`media:${key}`);
           } catch (error) {
-            if (!(error instanceof Error) || error.message !== 'UPLOAD_EXPIRED') throw error;
-            upload = await api(`/conversations/${roomId}/media`, 'POST', {
-              operationId: `media:${key}:${randomUUID()}`, name: attachment.name, type: attachment.mimeType, size: bytes.length,
-            }, actorId);
+            const conflict = error instanceof Error && error.message === 'OPERATION_CONFLICT'
+              && (error as { status?: unknown }).status === 409;
+            if (!conflict) throw error;
+            await checkFile();
+            // A definitive conflict can be a legacy key shared by different filenames/types.
+            // One fully scoped, deterministic recovery key survives retries/restarts without
+            // allocating a new upload each time. Do not rotate it again on another conflict.
+            // Including expiry replacement above, prepare makes at most three requests.
+            const retryId = `media:${createHash('sha256')
+              .update(JSON.stringify(['prepare-v2', endpoint, roomId, actorId, source, attachment.id, metadata]))
+              .update(bytes).digest('hex')}`;
+            upload = await prepare(retryId);
           }
           await checkFile();
           stage = 'upload';
           const response = await net.fetch(signedUrl(upload.uploadUrl), { method: 'PUT', redirect: 'error',
-            headers: { 'Content-Type': attachment.mimeType }, body: new Uint8Array(bytes), signal: AbortSignal.timeout(60000) });
+            headers: { 'Content-Type': metadata.type }, body: new Uint8Array(bytes), signal: AbortSignal.timeout(60000) });
           if (!response.ok) throw Object.assign(new Error('MEDIA_UPLOAD_FAILED'), { status: response.status,
             ...(response.status === 429 ? { retryAt: retryAfterDeadline(response) } : {}) });
           await checkFile();
@@ -110,7 +160,7 @@ export function createChatMedia(api: ChatApi, current: () => boolean, endpoint: 
             } catch { log?.warn('Chat image cache write failed', { stage: 'retain' }); }
             check(); attachment.assertCurrent?.();
           }
-          return { type: 'media', mediaId: upload.id, caption: attachment.name };
+          return { type: 'media', mediaId: upload.id, caption: metadata.name };
         } catch (error) {
           log?.warn('Chat media upload failed', { stage, groupId: roomId,
             trace: createHash('sha256').update(source).digest('hex').slice(0, 16), durationMs: Date.now() - started, ...chatErrorDiagnostic(error) });

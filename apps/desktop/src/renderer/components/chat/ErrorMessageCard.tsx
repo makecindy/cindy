@@ -1,3 +1,5 @@
+import { localizeOutputLimit } from './outputLimitI18n';
+import { type OutputLimitDetails } from '@cindy/maker-shared';
 import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 /**
  * ErrorMessageCard — 消息流里的静态错误记录卡
@@ -6,7 +8,7 @@ import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
  * 落库)。定位是**事后可追溯的时间线记录**,与输入框上方的 ErrorBanner 分工:
  *  - ErrorBanner:live 报错,带 Retry / Cancel / auth 同步等交互;
  *  - 本卡:历史加载时还原"这一轮在这里失败了"。Retry 语义不成立(turn 早已收场),
- *    唯一交互是友好文案/协议拆封后的「查看原始错误」,与 live ErrorBanner 对齐。
+ *    保留错误详情与适用的设置恢复入口,与 live ErrorBanner 对齐。
  *
  * 文案:errorReason 是 maker-core 的稳定 key,优先走 i18n(规则 18;与 live
  * ErrorBanner 的 reason → i18n 映射同款);未知错误使用本地化摘要，
@@ -18,11 +20,14 @@ import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { AutoReviewRecoveryActions } from './AutoReviewRecoveryActions';
 import { useTranslation } from 'react-i18next';
 import {
   isCindyGatewayProxyTokenInvalidError,
+  isRemoteAgentResumeRejectedError,
   isResponsesLiteParallelToolCallsError,
   redactSensitiveText,
+  localizeSubscriptionAccountError,
 } from '@cindy/maker-shared/error-redaction';
 import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
 import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
@@ -36,7 +41,9 @@ export function ErrorMessageCard({
   reason,
   providerId,
   toolLoop,
+  outputLimit,
   sessionSource,
+  canConfigureAutoReview = false,
   kind = 'reply-error',
   onDiagnose,
 }: {
@@ -48,13 +55,16 @@ export function ErrorMessageCard({
   providerId?: string;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails;
+  outputLimit?: OutputLimitDetails;
   /** 当前任务来源。个人微信不能建议切到完全访问。 */
   sessionSource?: string | null;
+  canConfigureAutoReview?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const decoded = decodeRemoteErrorMessage(message);
   const parsedRemoteKey = remoteErrorI18nKey(message);
-  const remoteKey = isMemberBudgetPaused(message) ? 'providerShare.memberBudget.paused' : parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
+  const remoteKey = isRemoteAgentResumeRejectedError(message) ? 'chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE'
+    : isMemberBudgetPaused(message) ? 'providerShare.memberBudget.paused' : parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
     ? chatRemoteErrorGuidanceKey('AUTO_REVIEW_UNAVAILABLE', sessionSource)
     : parsedRemoteKey;
   const isAttachmentAccessDenied = kind === 'reply-error'
@@ -69,20 +79,25 @@ export function ErrorMessageCard({
   });
   const toolLoopI18nKey = reason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
-    toolLoopI18nKey && toolLoop
-      ? t(toolLoopI18nKey, { count: toolLoop.count })
-      : i18nKey
-        ? t(i18nKey)
-        : undefined;
+    reason === 'output-limit'
+      ? localizeOutputLimit(t, outputLimit)
+      : toolLoopI18nKey && toolLoop
+        ? t(toolLoopI18nKey, { count: toolLoop.count })
+        : i18nKey
+          ? t(i18nKey)
+          : undefined;
+  const subscriptionGuidance = localizeSubscriptionAccountError(message, t, i18n.resolvedLanguage ?? i18n.language);
+  const fallbackText = isResponsesLiteParallelToolCallsError(decoded)
+    ? t('chat.errorBanner.requestFormatError')
+    : isStreamInterrupted
+      ? t('chat.errorBanner.streamInterruptedNoRetry')
+      : isGatewayProxyTokenInvalid
+        ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
+        : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
+          ?? localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
   const text = kind === 'blocked-input'
     ? redactSensitiveText(decoded)
-    : isResponsesLiteParallelToolCallsError(decoded)
-      ? t('chat.errorBanner.requestFormatError')
-      : isStreamInterrupted
-        ? t('chat.errorBanner.streamInterruptedNoRetry')
-        : isGatewayProxyTokenInvalid
-          ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
-          : localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
+    : subscriptionGuidance ?? fallbackText;
   const showRawToggle = kind === 'reply-error' && Boolean(decoded);
 
   if (!text) return null;
@@ -93,6 +108,8 @@ export function ErrorMessageCard({
       message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : text}
       description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery') : undefined}
       details={showRawToggle ? message : undefined}
+      actions={canConfigureAutoReview && parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_NO_AVAILABLE_MODEL'
+        ? <AutoReviewRecoveryActions /> : undefined}
       onDiagnose={showRawToggle && onDiagnose ? () => onDiagnose({ message: text, details: message, reason }) : undefined}
       data-testid="error-message-card"
     />

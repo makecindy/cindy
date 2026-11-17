@@ -81,6 +81,8 @@ export const RecipeSchema = z.object({
   /** Host substrings this recipe applies to (advisory, surfaced via siteguide). */
   match: z.array(z.string()).optional(),
   description: z.string().optional(),
+  /** Advisory URL path prefixes: literal segments or :parameters, never regex. */
+  recommendationPaths: z.array(z.string().startsWith("/")).optional(),
   inputs: z.record(z.string(), z.object({ required: z.boolean().optional(), type: z.string().optional(), default: z.unknown().optional(), description: z.string().optional(), choices: z.array(z.string()).optional() })).optional(),
   /** A fixed bundled command id, never an arbitrary module path. */
   adapter: z.string().optional(),
@@ -268,10 +270,11 @@ export function loadSiteGuides(): Map<string, SiteGuide> {
   // reviews) without replacing its upstream guide or duplicating the site.
   for (const recipe of loadRecipes().values()) {
     if (recipe.adapter) continue;
-    const host = recipe.match?.find(host => guides.has(host));
-    if (!host) continue;
-    const guide = guides.get(host)!;
-    guide.recipes = [...new Set([...(guide.recipes ?? []), recipe.id])];
+    for (const host of recipe.match ?? []) {
+      const guide = guides.get(host) ?? { site: host, recipes: [] };
+      guide.recipes = [...new Set([...(guide.recipes ?? []), recipe.id])];
+      guides.set(host, guide);
+    }
   }
   return guides;
 }

@@ -7,7 +7,7 @@
  * getClientEndpoint 每次调用时惰性求值——端点清单在 app.ready 内解析,
  * 模块加载期不可读。
  */
-import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient';
+import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.desktop';
 import { getClientEndpoint } from '../clientEndpointsService';
 
 function requireSkillhubApiBaseUrl(): string {

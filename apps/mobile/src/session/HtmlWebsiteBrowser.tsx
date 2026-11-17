@@ -96,7 +96,7 @@ export function HtmlWebsiteBrowser({ visit, insets, chrome, onReturn }: {
             setPaintedEpoch(rendererEpoch);
             if (script) webView.current?.injectJavaScript(script);
           }}
-          onScroll={({ nativeEvent: { contentOffset } }) => {
+          onScroll={({ nativeEvent: { contentOffset } }: { nativeEvent: { contentOffset: { x: number; y: number } } }) => {
             if (live.current) webView.current?.injectJavaScript(browserViewportScrollScript(contentOffset.x, contentOffset.y));
           }}
           onNavigationStateChange={state => {

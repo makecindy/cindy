@@ -99,8 +99,9 @@ export async function requestAuxiliaryText(
       && getEffectiveAuxiliaryModelChainSnapshot() === auxiliaryChainSnapshot
       && currentModels === snapshot;
   };
-  const beforeSessionAgentDispatch = async () =>
-    !(await isAgentOneShotRouteDisabled(args.agentKind)) && await beforeDispatch();
+  // `route.model` 是 agent 实际选中的模型(Codex 默认模型在 thread/start 后才知道)。
+  const beforeSessionAgentDispatch = async (route?: { model?: string }) =>
+    !(await isAgentOneShotRouteDisabled(args.agentKind, route?.model)) && await beforeDispatch();
   const result = await deps.requestText(args.prompt, {
     maxTokens: args.maxTokens,
     timeoutMs: args.timeoutMs,

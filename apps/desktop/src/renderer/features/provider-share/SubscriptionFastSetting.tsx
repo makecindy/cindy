@@ -7,12 +7,7 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
-import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-} from '@/components/settings/settingsRowClasses';
+import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { providerShareManagementCommand } from '../provider-group/providerManagement';
 
 /** Provider/account control, intentionally absent for custom API connections and older hosts. */
@@ -65,21 +60,19 @@ export function SubscriptionFastSetting({
     }
   };
   return (
-    <div className={SETTINGS_CARD_CLASS}>
-      <div className={SETTINGS_ROW_CLASS}>
-        <div className="flex min-w-0 flex-col gap-1">
-          <span className={SETTINGS_ROW_LABEL_CLASS}>{t('subscriptionFastPolicy.label')}</span>
-          <span className={SETTINGS_ROW_HINT_CLASS}>
-            {t('subscriptionFastPolicy.providerHint')}
-          </span>
-        </div>
-        <Switch
-          checked={allowed}
-          disabled={busy}
-          aria-label={t('subscriptionFastPolicy.label')}
-          onCheckedChange={(value) => void change(value)}
-        />
-      </div>
-    </div>
+    <SettingsCard>
+      <SettingsRow
+        title={t('subscriptionFastPolicy.label')}
+        hint={t('subscriptionFastPolicy.providerHint')}
+        trailing={
+          <Switch
+            checked={allowed}
+            disabled={busy}
+            aria-label={t('subscriptionFastPolicy.label')}
+            onCheckedChange={(value) => void change(value)}
+          />
+        }
+      />
+    </SettingsCard>
   );
 }

@@ -7,6 +7,7 @@ import { BotGroupChatView } from '../../../src/renderer/features/bots/BotGroupCh
 import { BotGroupSettingsDrawer } from '../../../src/renderer/features/bots/BotGroupSettingsDrawer';
 import { refreshBotGroups } from '../../../src/renderer/features/bots/botGroupStore';
 import { GroupMaskContext, type GroupMaskSettings, type GroupMaskStatus, type GroupMaskPresentation, type GroupMaskMention } from '../../../src/renderer/features/bots/groupMaskPresentation';
+import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 
 const groupId = 'mask-preview-group';
 const self = { id: 'self', name: 'Alex', avatar: '', avatarUrl: ctx.data.selfAvatar ? 'https://avatar.example.test/self.jpg' : undefined, avatarColor: 'gray' };
@@ -47,6 +48,15 @@ let counter = 10;
 void mountPage({
   route: `/bots/groups/${groupId}`,
   host: () => ({
+    voiceInput: {
+      getDataSnapshot: () => ({ settings: { ...getDefaultVoiceInputSettings('win32'), fastActivationEnabled: false }, history: [] }),
+      onDataChanged: subscription('voiceDataChanged'),
+      onEvent: subscription('voiceEvent'),
+      onGlobalShortcutTrigger: subscription('voiceShortcut'),
+      setGlobalShortcut: async () => ({ ok: true }),
+      prewarm: async () => ({ ok: true }),
+      start: forbid('voiceInput.start'),
+    },
     maker: {
       resolveCompanionAvatar: async () => ctx.data.selfAvatar ?? null,
       listBotGroups: async () => ({ ok: true, groups: [group] }),
@@ -157,7 +167,7 @@ function Fixture() {
     markMentionsRead: ids => setUnreadMentions(previous => ids ? previous.filter(entry => !ids.includes(entry.messageId)) : []) };
   return <GroupMaskContext.Provider value={value}>
     <div className="flex h-screen min-h-0 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-default)] px-4 py-2 text-12 text-[var(--text-secondary)]" data-testid="mask-preview-controls">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-default)] px-4 py-2 text-12 text-[var(--text-secondary)]" data-testid="mask-preview-controls" data-ui-page-control>
         <span>测试版 · 示例群，不发送真实消息</span>
         <button type="button" onClick={request}>模拟 @ 我</button>
         <button type="button" onClick={advance}>模拟离开 {settings.resumeMinutes} 分钟</button>

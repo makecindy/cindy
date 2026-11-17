@@ -13,6 +13,7 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-group-store-test-
 let activeOwner = 'owner-test';
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpDir } }));
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({ disableShareAvailability: vi.fn() }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
@@ -23,13 +24,30 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 
 const store = await import('../store.js');
-const bindings = await import('../bindings.js');
+const bindings = await import('../bindings.desktop.js');
 const locks = await import('../../device-link/crossProcessLock.js');
 
 afterEach(() => { scope.boundaryPending = false; activeOwner = 'owner-test'; vi.restoreAllMocks(); });
 afterAll(async () => { await fs.promises.rm(tmpDir, { recursive: true, force: true }); });
 
 describe('provider group store', () => {
+  // Unit persistence regression (provider-groups.md §3): the prior fixture only had
+  // one connection per device. Save both independent IDs and reload the actual file.
+  it('persists two independent subscription members on one device without merging their identities', async () => {
+    const a = { kind: 'device', agentDeviceId: 'one-host', providerId: 'openai-sub-12345678', providerName: 'Codex A' };
+    const b = { ...a, providerId: 'openai-sub-abcdef01', providerName: 'Codex B' };
+    const first = await store.writeProviderGroup('openai', { strategy: 'round', members: [a] });
+    await store.writeProviderGroup('openai', { strategy: 'round', members: [a, b] }, first);
+    const disk = JSON.parse(fs.readFileSync(path.join(tmpDir, 'provider-group-prefs.json'), 'utf8'));
+    const reloaded = store.__testing.normalize(disk).groups.openai;
+    expect(reloaded.members.map((m) => [m.key, m.providerId, m.providerName])).toEqual([
+      ['device:one-host:openai-sub-12345678', a.providerId, 'Codex A'],
+      ['device:one-host:openai-sub-abcdef01', b.providerId, 'Codex B'],
+    ]);
+    expect(store.readProviderGroup('openai')).toEqual(reloaded);
+    await store.writeProviderGroup('openai', null);
+  });
+
   it.each(['save', 'delete'])('does not %s when teardown starts before the file lock is acquired', async (action) => {
     const initial = (await store.writeProviderGroup('boundary', { members: [{ kind: 'local' }] }))!;
     const pending = store.writeProviderGroup('boundary', action === 'delete' ? null : { ...initial, autoSwitch: false }, initial);
@@ -70,7 +88,7 @@ describe('provider group store', () => {
       await store.writeProviderGroup(providerId, initial);
       // reset-modules: verify binding cleanup survives a fresh process after the account boundary.
       vi.resetModules();
-      const restarted = await import('../bindings.js');
+      const restarted = await import('../bindings.desktop.js');
       expect(restarted.readProviderGroupBinding(sessionId)).toBeNull();
       expect(restarted.isProviderGroupReleased(sessionId, { providerId })).toBe(true);
       expect(restarted.listProviderGroupBindings()[sessionId]).toBeUndefined();
@@ -271,7 +289,7 @@ describe('provider group store', () => {
     legacy.writePatch({ groups: { ...legacy.read().groups, [providerId]: config } });
     // reset-modules: reload bindings after a legacy writer changes the on-disk schema.
     vi.resetModules();
-    const restarted = await import('../bindings.js');
+    const restarted = await import('../bindings.desktop.js');
     expect(store.listProviderGroupBindingCleanups()[providerId]).toEqual(pending);
     expect(restarted.readProviderGroupBinding('legacy-pending-task')).toBeNull();
     expect(restarted.isProviderGroupReleased('legacy-pending-task', { providerId })).toBe(true);
@@ -428,7 +446,7 @@ describe('provider group bindings', () => {
     // 切回原账号并重建运行时，解除记录仍须保留，不能把任务重新自动纳入。
     // reset-modules: account switch must be observed by a newly loaded bindings runtime.
     vi.resetModules();
-    const restarted = await import('../bindings.js');
+    const restarted = await import('../bindings.desktop.js');
     expect(restarted.readProviderGroupBinding('scope-task')).toBeNull();
     expect(restarted.isProviderGroupReleased('scope-task', { providerId: 'anthropic' })).toBe(true);
   });
@@ -529,7 +547,7 @@ describe('provider group bindings', () => {
     legacy.writePatch({ sessions: { ...legacy.read().sessions, 'legacy-release': { providerId: 'legacy-group', memberKey: 'local', at: 20 } } });
     // reset-modules: reload bindings to exercise compatibility with the older writer's persisted shape.
     vi.resetModules();
-    const restarted = await import('../bindings.js');
+    const restarted = await import('../bindings.desktop.js');
     expect(restarted.readProviderGroupBinding('legacy-release')).toBeNull();
     expect(restarted.isProviderGroupReleased('legacy-release', { providerId: 'legacy-group' })).toBe(true);
     await restarted.writeProviderGroupBinding('legacy-release', { providerId: 'legacy-group', memberKey: 'local' }, 30);

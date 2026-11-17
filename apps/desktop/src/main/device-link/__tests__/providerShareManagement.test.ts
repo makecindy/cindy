@@ -1,8 +1,12 @@
+const standby = vi.hoisted(() => ({ publish: vi.fn(), refresh: vi.fn(), flush: vi.fn(), usage: vi.fn() }));
+vi.mock('../providerShareAvailability.js', () => ({ publishShareAvailability: standby.publish, refreshStandbyGuests: standby.refresh }));
+vi.mock('../providerShareAvailabilityUsage.js', () => ({ flushStandbyUsage: standby.flush, importStandbyUsage: standby.usage }));
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ipcMain } from 'electron';
+import { ipcMain, type BrowserWindow } from 'electron';
 import { PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL, REMOTE_AGENT_CHANNEL, type InvokeResultPayload,
   type ProviderShareOwned, type ProviderShareReceived } from '@cindy/device-link';
 
@@ -11,27 +15,39 @@ import type { ProviderUsageHistoryView } from '../../../shared/providerShare';
 import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 
 const state = vi.hoisted(() => ({ owner: 'owner-a', boundaryPending: false }));
+const windowRouting = vi.hoisted(() => ({
+  windows: [] as BrowserWindow[], focusMain: vi.fn(), notifications: [] as EventEmitter[],
+}));
+vi.mock('../../deepLink.js', () => ({ focusMainWindow: windowRouting.focusMain }));
+vi.mock('../../notificationService.js', () => ({ getDesktopNotificationsEnabled: () => true }));
 const received = vi.hoisted(() => ({ shares: [] as ProviderShareReceived[], ready: true }));
 vi.mock('electron', () => ({
   app: { getPath: () => 'test-provider-share-user-data' },
   ipcMain: { handle: vi.fn() },
-  BrowserWindow: { getAllWindows: () => [] },
-  Notification: class { show() {} },
+  BrowserWindow: { getAllWindows: () => windowRouting.windows },
+  Notification: class extends EventEmitter {
+    static isSupported() { return true; }
+    constructor() { super(); windowRouting.notifications.push(this); }
+    show() { this.emit('show'); }
+  },
 }));
 const api = vi.hoisted(() => ({ createLink: vi.fn(), approve: vi.fn(), reject: vi.fn(), setMember: vi.fn() }));
 const host = vi.hoisted(() => ({
   refresh: vi.fn(), snapshot: vi.fn(), quiet: vi.fn(), active: vi.fn(), decision: vi.fn(), member: vi.fn(),
+  complete: vi.fn(), changed: vi.fn(),
 }));
+const accessMigration = vi.hoisted(() => ({ ids: vi.fn(), keep: vi.fn() }));
 const listProviders = vi.hoisted(() => vi.fn());
 const identityCard = vi.hoisted(() => vi.fn());
 const remember = vi.hoisted(() => vi.fn());
-const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(), priceOverrides: vi.fn(),
+const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberQuery: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(), priceOverrides: vi.fn(),
   enqueueDirectCleanup: vi.fn(), listPendingDirectCleanup: vi.fn(), acknowledgeDirectCleanup: vi.fn(),
   actual: null as ReturnType<typeof import('../providerShareUsageStore').createProviderShareUsageStore> | null }));
 const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
+const reshareList = vi.hoisted(() => vi.fn());
 vi.mock('../providerShareQuota.js', () => ({ readProviderShareQuota: vi.fn(), readProviderShareQuotaAccount: vi.fn() }));
 const visibility = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
-const modelAccess = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn(), allows: vi.fn() }));
+const modelAccess = vi.hoisted(() => ({ subscribe: () => () => undefined, read: vi.fn(), set: vi.fn(), allows: vi.fn() }));
 const fastPolicy = vi.hoisted(() => ({ allows: vi.fn(), set: vi.fn(), changed: vi.fn(), publish: vi.fn() }));
 const localBroadcast = vi.hoisted(() => vi.fn());
 vi.mock('../index.js', () => ({ broadcast: localBroadcast }));
@@ -47,12 +63,14 @@ vi.mock('../../appSessionState.js', () => ({
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: state.owner, ownerGeneration: 1 }),
 }));
 vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device' }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
-vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders }),
 }));
-vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true }));
+vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true,
+  onRemoteProviderAccessChanged: () => () => undefined,
+  sharedProviderIdsForRevert: accessMigration.ids, keepSharedProvidersOpen: accessMigration.keep }));
 vi.mock('../../textClipboard.js', () => ({ rememberIssuedClipboardText: remember }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: () => 'USD' }));
@@ -69,13 +87,13 @@ vi.mock('../../usage/providerPartyUsageStore.js', () => ({
 }));
 vi.mock('../providerShareUsageStore.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../providerShareUsageStore.js')>(),
-  getProviderShareUsageStore: () => usageStores.actual ?? ({ history: usageStores.memberHistory, memberTokenSnapshot: usageStores.memberTokenSnapshot,
+  getProviderShareUsageStore: () => usageStores.actual ?? ({ query: usageStores.memberQuery, history: usageStores.memberHistory, memberTokenSnapshot: usageStores.memberTokenSnapshot,
     enqueueDirectCleanup: usageStores.enqueueDirectCleanup,
     listPendingDirectCleanup: usageStores.listPendingDirectCleanup,
     acknowledgeDirectCleanup: usageStores.acknowledgeDirectCleanup }),
   providerUsageLocalDay: () => '2026-10-17',
 }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
+vi.mock('../settings-store.desktop.js', () => ({ onDeviceLinkSettingChanged: () => () => undefined, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareApi: api,
   fetchIdentityCard: identityCard,
@@ -83,22 +101,26 @@ vi.mock('../providerShareApi.js', () => ({
   providerShareLinkFor: () => 'https://cindy.app/s#test-link',
   providerShareOwnerKey: () => state.owner,
 }));
-vi.mock('../dispatch.js', () => ({
+vi.mock('../dispatch.desktop.js', () => ({
   notifyProviderShareCatalogChanged: fastPolicy.publish,
   getControllerDisplayName: vi.fn(), providerShareActiveControllers: vi.fn(),
   revalidateRemoteModelAccess: vi.fn(async () => undefined), revokeProviderShareControllers: vi.fn(async () => undefined), setProviderShareAccess: vi.fn(),
 }));
 vi.mock('../providerShareReshare.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../providerShareReshare.js')>(),
+  listProviderShareReshares: reshareList,
   pruneProviderShareReshares: vi.fn(async () => undefined),
 }));
 vi.mock('../providerShareHost.js', () => ({
   startProviderShareHost: vi.fn(), stopProviderShareHost: vi.fn(),
+  getProviderShareHostLoadedSnapshot: () => null, getProviderShareHostCompleteSnapshot: host.complete,
+  onProviderShareHostChanged: host.changed,
   refreshProviderShareHost: host.refresh, getProviderShareHostSnapshot: host.snapshot,
   clearProviderShareRequestQuiet: vi.fn(),
   providerShareAccessRevision: vi.fn(), providerShareGuestAccess: vi.fn(), ownedProviderShareGuestAccess: vi.fn(),
   providerShareGuestDenial: vi.fn(), ensureProviderSharePeerKnown: vi.fn(),
   quietProviderShareRequests: host.quiet, markProviderShareHostActive: host.active,
+  getProviderShareQuietRequestIds: () => [], getProviderShareWatchedRequests: () => [],
   applyLocalRequestDecision: host.decision, applyLocalMemberChange: host.member,
   providerShareMemberMatcher: (member: { shareId: string; memberId: string }) => (controller: string) => {
     try {
@@ -115,6 +137,7 @@ vi.mock('../providerShareGuestPrefs.js', () => ({ configureProviderShareGuestPre
 vi.mock('../providerShareGuestPrefsIpc.js', () => ({ setProviderShareCredentialConsentFromIpc: vi.fn() }));
 
 import {
+  openProviderShareJoin,
   executeProviderShareManagementCommand,
   parseProviderShareCommand,
   registerProviderShareIpc,
@@ -122,13 +145,14 @@ import {
   stopProviderShareRuntime,
   trimProviderUsageHistory,
 } from '../providerShareRuntime';
+import { markAppContentWindow } from '../../windowFocusClassifier';
 import { startProviderShareHost } from '../providerShareHost';
 import { startProviderShareGuest } from '../providerShareGuest';
 import { setBroadcastTapListener } from '../broadcast-tap';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../../shared/controlledModelCatalog';
 import { PROVIDER_SHARE_IPC } from '../../../shared/providerShare';
 import { createProviderShareUsageStore } from '../providerShareUsageStore';
-import { revokeProviderShareControllers } from '../dispatch';
+import { providerShareActiveControllers, revalidateRemoteModelAccess, revokeProviderShareControllers } from '../dispatch.desktop';
 import {
   clearAllProviderShareCatalogs,
   getCachedProviderShareCatalogs,
@@ -158,6 +182,9 @@ function saveMemberNote(entry: 'local' | 'same-account'): Promise<unknown> {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  windowRouting.windows = [];
+  windowRouting.notifications = [];
+  windowRouting.focusMain.mockReturnValue(true);
   state.owner = 'owner-a';
   state.boundaryPending = false;
   usageStores.actual = null;
@@ -171,7 +198,12 @@ beforeEach(() => {
   api.reject.mockResolvedValue({ ok: true });
   api.setMember.mockResolvedValue({ status: 'removed' });
   host.refresh.mockResolvedValue(undefined);
+  host.complete.mockReturnValue(null);
+  host.changed.mockReturnValue(() => undefined);
   memberNotes.read.mockReturnValue({});
+  reshareList.mockReturnValue([]);
+  usageStores.memberQuery.mockReturnValue([]);
+  vi.mocked(providerShareActiveControllers).mockReturnValue([]);
   memberNotes.set.mockResolvedValue(undefined);
   modelAccess.read.mockReturnValue({ models: null, providerModels: null });
   modelAccess.set.mockImplementation(async (_provider, _models, _member, assertCurrent) => { assertCurrent(); });
@@ -193,6 +225,83 @@ beforeEach(() => {
 });
 
 afterEach(() => { setBroadcastTapListener(null); stopProviderShareRuntime(); });
+
+// #10398 review / unit: content deduplication must not strand the one-time access
+// migration. Existing startup tests always had an incomplete snapshot. Exercise
+// the actual runtime subscription across unavailable local input and a failed write.
+it('retries unfinished access migration on unchanged refreshes and stops after success', async () => {
+  stopProviderShareRuntime();
+  const refreshed = new Set<() => void>();
+  host.changed.mockImplementation((listener, options) => {
+    if (options?.refreshed) refreshed.add(listener);
+    return () => refreshed.delete(listener);
+  });
+  const refresh = () => { for (const listener of refreshed) listener(); };
+  startProviderShareRuntime(vi.fn());
+  expect(accessMigration.keep).not.toHaveBeenCalled();
+  host.complete.mockReturnValue([{ providerId: 'openai' }]);
+  accessMigration.ids.mockReturnValue(null); // Legacy account pool cannot be read yet.
+  refresh();
+  expect(accessMigration.keep).not.toHaveBeenCalled();
+  const ids = new Set(['openai', 'legacy-account']);
+  accessMigration.ids.mockReturnValue(ids);
+  accessMigration.keep.mockRejectedValueOnce(new Error('synthetic unavailable'));
+  refresh(); refresh();
+  expect(accessMigration.keep).toHaveBeenCalledExactlyOnceWith(ids);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  accessMigration.keep.mockResolvedValue(undefined);
+  refresh();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  refresh(); refresh();
+  expect(accessMigration.keep).toHaveBeenCalledTimes(2);
+  expect(accessMigration.ids).toHaveBeenCalledTimes(3);
+  stopProviderShareRuntime();
+  expect(refreshed.size).toBe(0);
+});
+
+// #9437 / unit: real share entry points must not show the first hidden data host.
+// Earlier management coverage always returned no BrowserWindows. The shared
+// deepLink suite separately verifies restoration/focus of the registered main window.
+function backgroundWindow(focused = false): BrowserWindow {
+  return {
+    isDestroyed: () => false, isMinimized: () => false, isVisible: () => true,
+    isFocused: () => focused, restore: vi.fn(), show: vi.fn(), focus: vi.fn(), setAlwaysOnTop: vi.fn(),
+  } as unknown as BrowserWindow;
+}
+
+it.each([true, false])('routes invitation activation to main without touching a helper (main available: %s)', (available) => {
+  const helper = backgroundWindow();
+  windowRouting.windows = [helper];
+  windowRouting.focusMain.mockReturnValue(available);
+  openProviderShareJoin('cindy://provider-share/join?test=synthetic');
+  expect(helper.show).not.toHaveBeenCalled();
+  expect(helper.focus).not.toHaveBeenCalled();
+  expect(windowRouting.focusMain).toHaveBeenCalledOnce();
+});
+
+it.each(['background', 'helper-focused', 'app-focused'] as const)(
+  'keeps receipt passive and only notification activation focuses main (%s)', async (foreground) => {
+    const helper = backgroundWindow(foreground === 'helper-focused');
+    const main = backgroundWindow(foreground === 'app-focused');
+    markAppContentWindow(main);
+    windowRouting.windows = [helper, main];
+    const callbacks = vi.mocked(startProviderShareHost).mock.calls.at(-1)![0];
+    callbacks.requested({
+      requestId: 'synthetic', displayName: 'Test', avatarUrl: null, region: 'global', pairingCode: '4827',
+      createdAt: '2026-11-09T00:00:00Z', expiresAt: '2026-11-10T00:00:00Z',
+    }, { shareId: 'synthetic', hostDeviceId: 'host-device', providerId: 'test', providerLabel: 'Test', createdAt: '', members: [], requests: [] }, false);
+    expect(windowRouting.focusMain).not.toHaveBeenCalled();
+    if (foreground === 'app-focused') {
+      expect(windowRouting.notifications).toHaveLength(0);
+    } else {
+      await vi.waitFor(() => expect(windowRouting.notifications).toHaveLength(1));
+      windowRouting.notifications[0].emit('click');
+      expect(windowRouting.focusMain).toHaveBeenCalledOnce();
+    }
+    expect(helper.show).not.toHaveBeenCalled();
+    expect(helper.focus).not.toHaveBeenCalled();
+  },
+);
 
 // #8010 review / unit: real runtime callbacks must reach the device-link tap,
 // not just local windows. Existing management tests only observed local delivery.
@@ -269,6 +378,9 @@ it('propagates a per-share provider denial as an empty zero-budget catalog and k
   expect(producerById.get('a')?.catalog).toEqual({ providers: [],
     providerContinuity: { stale: true, remainingMs: 0 } });
   expect((producerById.get('b')?.catalog as { providers?: unknown[] } | null)?.providers).toHaveLength(1);
+  expect(producerById.get('b')).toMatchObject({
+    favoriteSource: { shareId: 'b', memberId: 'm-b', providerId: 'anthropic', owner: { region: 'global' } },
+  });
   expect(producerById.get('c')?.catalog).toBeNull();
   expect(producerById.get('d')?.catalog).toEqual({ providers: [],
     providerContinuity: { stale: true, remainingMs: 0 } });
@@ -603,6 +715,37 @@ describe('shared provider classification', () => {
   });
 });
 
+// Unit / owner management: owned must support background reads without usage or
+// renewing the fast-poll window. Existing classification coverage only exercises
+// shared-provider-ids. Minimal failure input is one share and includeUsage:false.
+describe('owned without usage', () => {
+  it.each(['local', 'same-account'] as const)('echoes the read scope without usage or polling (%s)', async entry => {
+    const command = parseProviderShareCommand({ action: 'owned', range: 'all', includeUsage: false });
+    expect(command).toEqual({ action: 'owned', range: 'all', includeUsage: false });
+    const result = entry === 'local' ? await (async () => {
+      const handle = vi.spyOn(ipcMain, 'handle');
+      try {
+        registerProviderShareIpc();
+        return await handle.mock.calls.find(([channel]) => channel === PROVIDER_SHARE_IPC.COMMAND)![1]({} as Electron.IpcMainInvokeEvent, command);
+      } finally { handle.mockRestore(); }
+    })() : await executeProviderShareManagementCommand(command as ProviderShareManagementCommand);
+    expect(result).toMatchObject({ ready: true, includeUsage: false, shares: [{ members: [{ memberId: 'm1' }] }] });
+    expect(usageStores.memberQuery).not.toHaveBeenCalled();
+    expect(usageStores.priceOverrides).not.toHaveBeenCalled();
+    expect(usageStores.pricing).not.toHaveBeenCalled();
+    expect(host.active).not.toHaveBeenCalled();
+  });
+  it('keeps the legacy owned read and polling when no scope is requested', async () => {
+    expect(parseProviderShareCommand({ action: 'owned', range: 'all' })).toEqual({ action: 'owned', range: 'all' });
+    await expect(executeProviderShareManagementCommand({ action: 'owned', range: 'all' })).resolves.toMatchObject({ ready: true });
+    expect(usageStores.memberQuery).toHaveBeenCalledTimes(1);
+    expect(host.active).toHaveBeenCalledExactlyOnceWith(60_000);
+  });
+  it.each(['false', null, 0])('rejects malformed includeUsage %j', includeUsage => {
+    expect(() => parseProviderShareCommand({ action: 'owned', range: 'all', includeUsage })).toThrow('INVALID_PARAMS');
+  });
+});
+
 describe('provider share usage history wire budget', () => {
   it('caps the global row count even when the newest day alone has more rows', () => {
     const trimmed = trimProviderUsageHistory(historyWithRows(Array.from({ length: 5_001 }, (_, index) => historyRow(index))));
@@ -701,6 +844,28 @@ describe('member note management', () => {
 });
 
 describe('same-account share management during account transitions', () => {
+  // Unit, plugin host-tools invocation lifetime: the UI tests covered owner
+  // changes, but not a plugin disabled while refreshing before its member write.
+  it('rechecks the calling installation after refresh and before changing a member', async () => {
+    let installed = true;
+    host.refresh.mockImplementationOnce(async () => { installed = false; });
+    await expect(executeProviderShareManagementCommand({ action: 'set-member', memberId: 'm1', status: 'pause' }, () => {
+      if (!installed) throw new Error('PERMISSION_DENIED');
+    })).rejects.toThrow('PERMISSION_DENIED');
+    expect(api.setMember).not.toHaveBeenCalled();
+    expect(host.member).not.toHaveBeenCalled();
+  });
+  // A committed pause must finish owner-local revocation even if its plugin
+  // stops while REST is in flight. Pre-write revocation is covered above.
+  it('applies a committed pause before refusing a result to the stopped caller', async () => {
+    let installed = true;
+    api.setMember.mockImplementationOnce(async () => { installed = false; return { status: 'paused' }; });
+    await expect(executeProviderShareManagementCommand({ action: 'set-member', memberId: 'm1', status: 'pause' }, () => {
+      if (!installed) throw new Error('PERMISSION_DENIED');
+    })).rejects.toThrow('PERMISSION_DENIED');
+    expect(host.member).toHaveBeenCalledExactlyOnceWith('m1', 'paused');
+    expect(host.refresh).toHaveBeenLastCalledWith('member');
+  });
   it.each([
     createLink, ...mutations,
     { action: 'get-run-limits' },
@@ -826,10 +991,20 @@ describe('remote model access management', () => {
     ] } }]);
     host.snapshot.mockReturnValue([{ providerId: 'anthropic', requests: [], members: [{ memberId: 'm1' }] }]);
   });
+  it('finishes persisted model revocation before refusing the stopped caller result', async () => {
+    let installed = true;
+    modelAccess.set.mockImplementationOnce(async (_provider, _models, _member, before, _budget, after) => {
+      before(); installed = false; after?.();
+    });
+    await expect(executeProviderShareManagementCommand({ action: 'set-model-access', providerId: 'anthropic', memberId: 'm1', models: [] }, () => {
+      if (!installed) throw new Error('PERMISSION_DENIED');
+    })).rejects.toThrow('PERMISSION_DENIED');
+    expect(revalidateRemoteModelAccess).toHaveBeenCalledTimes(1);
+  });
   it.each([undefined, 'm1'])('saves remote model permissions in the managed owner scope: member=%s', async (memberId) => {
     const command = parseProviderShareCommand({ action: 'set-model-access', providerId: 'anthropic', memberId, models: ['small'] }) as ProviderShareManagementCommand;
     const result = await executeProviderShareManagementCommand(command);
-    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], memberId, expect.any(Function), undefined);
+    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], memberId, expect.any(Function), undefined, expect.any(Function));
     expect(result).toMatchObject({ version: 1, availableModels: [{ id: 'small', name: 'Small' }, { id: 'large', name: 'Large' }] });
     expect(api.setMember).not.toHaveBeenCalled();
   });
@@ -934,4 +1109,41 @@ describe('subscription Fast management through the owner command', () => {
     expect(fastPolicy.set).not.toHaveBeenCalled();
     expect(fastPolicy.publish).not.toHaveBeenCalled();
   });
+});
+
+// Exercise the production scheduler with deferred fake network work, never real shares.
+it('coalesces pending syncs, ignores unchanged polling and retains periodic refresh', async () => {
+  vi.useFakeTimers();
+  let finish!: () => void;
+  const blocked = new Promise<void>(resolve => { finish = resolve; });
+  standby.publish.mockImplementationOnce(() => blocked);
+  const events = vi.mocked(startProviderShareHost).mock.lastCall![0];
+  const flush = async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
+  try {
+    events.changed(host.snapshot());
+    await flush();
+    expect(standby.publish).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 20; i++) events.changed(host.snapshot());
+    await flush();
+    finish(); await flush();
+    expect(standby.publish).toHaveBeenCalledTimes(1);
+    let release!: () => void;
+    standby.publish.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    // The timer was installed before fake timers, so restart with the fake clock.
+    startProviderShareRuntime(vi.fn());
+    const current = vi.mocked(startProviderShareHost).mock.lastCall![0];
+    current.changed(host.snapshot()); await flush();
+    expect(standby.publish).toHaveBeenCalledTimes(2);
+    for (let i = 0; i < 20; i++) {
+      host.snapshot.mockReturnValue([{ shareId: 'share', members: [{ memberId: 'm1', joinedAt: String(i), status: 'active' }] }]);
+      current.changed(host.snapshot());
+    }
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(standby.publish).toHaveBeenCalledTimes(2);
+    release(); await flush();
+    expect(standby.publish).toHaveBeenCalledTimes(3);
+    expect(standby.publish.mock.lastCall![0][0].members[0].joinedAt).toBe('19');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(standby.publish).toHaveBeenCalledTimes(4);
+  } finally { finish(); stopProviderShareRuntime(); vi.useRealTimers(); }
 });

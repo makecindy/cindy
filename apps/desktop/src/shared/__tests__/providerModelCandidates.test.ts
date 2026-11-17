@@ -13,6 +13,13 @@ function fixture() {
 }
 
 describe('supplemental preset candidates', () => {
+  it('accepts newly discovered OpenHubs models through the connection default without a model whitelist', () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'openhubs')!;
+    const route = presetCandidateRoute(preset, 'pi');
+    const model = { id: 'unknown-openai-tagged', name: 'Unknown' };
+    expect(presetModelCandidate(preset, 'pi', model, BUNDLED_CATALOG.modelRegistry, route))
+      .toMatchObject({ ...model, interfaceId: 'auto' });
+  });
   it('uses exact declared APIs for all engines without changing recommendations', () => {
     const { preset, registry } = fixture();
     const before = structuredClone(preset);

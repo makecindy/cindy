@@ -89,6 +89,13 @@ function isSafeHttpsUrl(v: unknown): v is string {
   }
 }
 
+/** One-time bind code: 4-32 uppercase letters or digits, inner hyphens allowed. */
+const PROVIDER_BIND_CODE_PATTERN = /^[A-Z0-9][A-Z0-9-]{2,30}[A-Z0-9]$/;
+
+function isProviderBindCode(v: unknown): v is string {
+  return typeof v === 'string' && PROVIDER_BIND_CODE_PATTERN.test(v);
+}
+
 function validateProvider(v: unknown, path: string): string | null {
   if (!HOOK_PROVIDERS.includes(v as never)) {
     return `${path} must be one of: ${HOOK_PROVIDERS.join(', ')}`;
@@ -532,6 +539,7 @@ const MESSAGE_OP_PURPOSE_KINDS: Record<string, readonly string[]> = {
   'turn-progress': ['send', 'edit', 'delete'],
   'turn-final': ['send', 'media'],
   'interaction-card': ['send', 'edit'],
+  'turn-notice': ['send', 'edit'],
 };
 
 /**
@@ -540,6 +548,19 @@ const MESSAGE_OP_PURPOSE_KINDS: Record<string, readonly string[]> = {
  */
 function validateMessageOpPurpose(p: Record<string, unknown>, kind: unknown): string | null {
   const purpose = p.purpose;
+  if (p.purpose !== 'turn-notice' && p.questionMode !== undefined) return 'questionMode only applies to turn-notice';
+  if (p.purpose === 'turn-notice') {
+    const action = p.action as Record<string, unknown>;
+    if (!isNonEmptyString(p.requestId) || !isNonEmptyString(p.interactionId)
+      || (p.questionMode !== 'blocking' && p.questionMode !== 'async')
+      || !['send', 'edit'].includes(String(kind)) || !['html', 'plain'].includes(String(action.tier))
+      || !Array.isArray(action.buttons) || action.delivery !== undefined
+      || action.replyToMessageId !== undefined || action.effectId !== undefined || action.silent !== undefined
+      || p.finalPart !== undefined || (p.interactionClosed !== undefined
+        && (kind !== 'edit' || typeof p.interactionClosed !== 'boolean'))) {
+      return 'turn-notice requires a question identity and a card send/edit without placement fields';
+    }
+  }
   if (purpose === undefined) {
     if (p.finalPart !== undefined || p.interactionId !== undefined || p.interactionClosed !== undefined) {
       return 'msg.op.finalPart / interactionId / interactionClosed require a matching purpose';
@@ -551,7 +572,7 @@ function validateMessageOpPurpose(p: Record<string, unknown>, kind: unknown): st
     typeof purpose === 'string' && Object.hasOwn(MESSAGE_OP_PURPOSE_KINDS, purpose)
       ? MESSAGE_OP_PURPOSE_KINDS[purpose]
       : undefined;
-  if (!kinds) return 'msg.op.purpose must be one of: turn-progress, turn-final, interaction-card';
+  if (!kinds) return 'msg.op.purpose must be one of: turn-progress, turn-final, interaction-card, turn-notice';
   // purpose 按 requestId 归属到一轮(服务端据此核验设备归属并登记消息), 缺了它服务端
   // 无从判断这条消息归谁清理。
   if (!isNonEmptyString(p.requestId)) return `msg.op.requestId is required when purpose is ${purpose}`;
@@ -565,7 +586,7 @@ function validateMessageOpPurpose(p: Record<string, unknown>, kind: unknown): st
   } else if (p.finalPart !== undefined) {
     return 'msg.op.finalPart only applies to purpose turn-final';
   }
-  if (purpose === 'interaction-card') {
+  if (purpose === 'interaction-card' || purpose === 'turn-notice') {
     if (!isNonEmptyString(p.interactionId)) {
       return 'msg.op.interactionId is required when purpose is interaction-card';
     }
@@ -853,6 +874,19 @@ function validateProviderBindRevoke(p: Record<string, unknown>): string | null {
   return null;
 }
 
+function validateProviderBindSelect(p: Record<string, unknown>): string | null {
+  return validateProviderBindRevoke(p)?.replaceAll('provider.bind.revoke', 'provider.bind.select') ?? null;
+}
+function validWorkingDevice(value: unknown): boolean {
+  return isPlainObject(value) && isNullableNonEmptyString(value.name) && typeof value.isCurrent === 'boolean';
+}
+function validateProviderBindSelection(p: Record<string, unknown>): string | null {
+  return validateProviderBindRevoke(p)?.replaceAll('provider.bind.revoke', 'provider.bind.selection')
+    ?? (typeof p.ok === 'boolean' ? null : 'provider.bind.selection.ok must be boolean')
+    ?? (p.workingDevice !== undefined && (p.provider !== 'feishu' || p.ok !== true || !validWorkingDevice(p.workingDevice))
+      ? 'provider.bind.selection.workingDevice is invalid' : null);
+}
+
 const PROVIDER_BIND_ID_FIELDS = [
   'attemptId',
   'bindingId',
@@ -869,6 +903,23 @@ const PROVIDER_BIND_FAILURE_STATES = [
   'revoked',
   'superseded',
 ] as const;
+
+/** Compare binding data, excluding snapshot carriers and request correlation. */
+function sameProviderBindingProjection(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const fields = ['provider', 'state', 'attemptId', 'bindingId', 'principalId', 'principalName',
+    'scopeId', 'scopeName', 'connectUrl', 'bindCode', 'expiresAt', 'reason', 'remediationUrl', 'tenantKey'] as const;
+  if (!fields.every((field) => (a[field] ?? null) === (b[field] ?? null))) return false;
+  if (!Array.isArray(a.actions) || !Array.isArray(b.actions)
+    || a.actions.length !== b.actions.length || a.actions.some((action, index) => action !== (b.actions as unknown[])[index])) return false;
+  const aDevice = isPlainObject(a.workingDevice) ? a.workingDevice : null;
+  const bDevice = isPlainObject(b.workingDevice) ? b.workingDevice : null;
+  if (aDevice === null || bDevice === null) { if (aDevice !== bDevice) return false; }
+  else if (aDevice.name !== bDevice.name || aDevice.isCurrent !== bDevice.isCurrent) return false;
+  const left = isPlainObject(a.appInfo) ? a.appInfo : null;
+  const right = isPlainObject(b.appInfo) ? b.appInfo : null;
+  if (left === null || right === null) return left === right;
+  return ['appId', 'brand', 'appType', 'botName', 'organization', 'tenantName'].every((key) => left[key] === right[key]);
+}
 
 /** provider.bind.update/state share one strict, replacement-safe snapshot shape. */
 function validateProviderBindStatus(
@@ -891,6 +942,11 @@ function validateProviderBindStatus(
   if (p.connectUrl !== null && !isSafeHttpsUrl(p.connectUrl)) {
     return `${label}.connectUrl must be a safe HTTPS URL or null`;
   }
+  // Optional field: peers that predate it omit it entirely.
+  const bindCode = p.bindCode === undefined ? null : p.bindCode;
+  if (bindCode !== null && !isProviderBindCode(bindCode)) {
+    return `${label}.bindCode must be 4-32 uppercase letters, digits or inner hyphens, or null`;
+  }
   if (p.remediationUrl !== null && !isSafeHttpsUrl(p.remediationUrl)) {
     return `${label}.remediationUrl must be a safe HTTPS URL or null`;
   }
@@ -906,6 +962,81 @@ function validateProviderBindStatus(
   if (p.actions.length > 16) return `${label}.actions must have at most 16 items`;
   if (new Set(p.actions).size !== p.actions.length) {
     return `${label}.actions must not contain duplicates`;
+  }
+
+  if (p.workingDevice !== undefined && (p.provider !== 'feishu' || p.state !== 'confirmed' || !validWorkingDevice(p.workingDevice))) {
+    return `${label}.workingDevice is invalid`;
+  }
+  const validApp = (app: unknown): app is Record<string, unknown> => isPlainObject(app)
+    && isNonEmptyString(app.appId) && ['feishu', 'lark'].includes(app.brand as string)
+    && ['self_built', 'store'].includes(app.appType as string)
+    && (app.botName === null || typeof app.botName === 'string')
+    && (app.organization === null || typeof app.organization === 'string')
+    && (app.tenantName === undefined || app.tenantName === null || isNonEmptyString(app.tenantName));
+  if (p.appInfo !== undefined && (p.provider !== 'feishu' || !validApp(p.appInfo) || p.appInfo.appId !== p.scopeId)) return `${label}.appInfo is invalid`;
+  if (p.applications !== undefined) {
+    if (label !== 'provider.bind.state' || p.provider !== 'feishu' || !Array.isArray(p.applications)
+      || p.applications.length > 16) return `${label}.applications is invalid`;
+    if (p.applications.length === 0) {
+      if (p.state !== 'none' || p.scopeId !== null || p.scopeName !== null || p.appInfo !== undefined || p.actions.length !== 0
+        || (p.bindings !== undefined && (!Array.isArray(p.bindings) || p.bindings.length !== 0))) return `${label}.applications empty set must have an empty legacy projection`;
+    } else {
+      const apps = new Set<string>(); const ids = new Set<string>();
+      for (const entry of p.applications) {
+        if (!isPlainObject(entry) || !validApp(entry.app) || !Array.isArray(entry.bindings)
+          || apps.has(entry.app.appId as string)) return `${label}.applications contains an invalid app`;
+        apps.add(entry.app.appId as string);
+        const principals = new Set<string>();
+        for (const row of entry.bindings) {
+          if (!isPlainObject(row) || row.applications !== undefined || row.bindings !== undefined
+            || row.provider !== 'feishu' || row.state !== 'confirmed' || row.completedAttemptId !== undefined
+            || row.scopeId !== entry.app.appId || validateProviderBindStatus(row, label) !== null
+            || ids.has(row.bindingId as string) || principals.has(row.principalId as string)) return `${label}.applications contains an invalid binding`;
+          const info = row.appInfo;
+          const enclosingApp = entry.app;
+          if (isPlainObject(info) && ['appId', 'brand', 'appType'].some((key) => info[key] !== enclosingApp[key])) {
+            return `${label}.applications binding appInfo must match the enclosing app identity`;
+          }
+          ids.add(row.bindingId as string); principals.add(row.principalId as string);
+        }
+        if (entry.app.appType === 'self_built' && entry.bindings.length > 1) return `${label}.applications self-built apps have one identity`;
+      }
+      if (!apps.has(p.scopeId as string)) return `${label}.applications must include the legacy scope`;
+      const projection = p.applications.find((entry: Record<string, unknown>) => (entry.app as Record<string, unknown>).appId === p.scopeId)!.bindings as Array<Record<string, unknown>>;
+      if (p.state === 'confirmed' ? (projection.length === 0 || !sameProviderBindingProjection(p, projection[0]!))
+        : p.state !== 'none' || projection.length !== 0) return `${label}.applications must agree with the legacy state`;
+      if (p.bindings !== undefined && (!Array.isArray(p.bindings) || p.bindings.length !== projection.length
+        || p.bindings.some((row: unknown, index: number) => !isPlainObject(row) || !sameProviderBindingProjection(row, projection[index]!)))) return `${label}.applications must agree with bindings`;
+    }
+  }
+  if (p.tenantKey !== undefined && (p.provider !== 'feishu' || !isNullableNonEmptyString(p.tenantKey))) {
+    return `${label}.tenantKey must be a Feishu installation tenant or null`;
+  }
+  if (p.completedAttemptId !== undefined && (p.provider !== 'feishu' || p.state !== 'confirmed'
+    || !isNonEmptyString(p.completedAttemptId))) {
+    return `${label}.completedAttemptId must identify a completed Feishu attempt`;
+  }
+  if (p.bindings !== undefined) {
+    if (label !== 'provider.bind.state' || p.provider !== 'feishu' || !Array.isArray(p.bindings)) {
+      return `${label}.bindings is only valid on a Feishu state snapshot`;
+    }
+    const ids = new Set<string>();
+    const principals = new Set<string>();
+    for (const row of p.bindings) {
+      if (!isPlainObject(row) || row.bindings !== undefined || row.applications !== undefined || row.completedAttemptId !== undefined
+        || row.provider !== 'feishu' || row.state !== 'confirmed' || row.scopeId !== p.scopeId
+        || validateProviderBindStatus(row, label) !== null) {
+        return `${label}.bindings must contain confirmed bindings in the same scope`;
+      }
+      const id = row.bindingId as string;
+      const principal = row.principalId as string;
+      if (ids.has(id) || principals.has(principal)) return `${label}.bindings must not contain duplicate identities`;
+      ids.add(id); principals.add(principal);
+    }
+    if (p.bindings.length === 0 ? p.state !== 'none' : p.state !== 'confirmed'
+      || !sameProviderBindingProjection(p, p.bindings[0] as Record<string, unknown>)) {
+      return `${label}.bindings must agree with the legacy binding`;
+    }
   }
 
   const state = p.state as ProviderBindStatusPayload['state'];
@@ -942,6 +1073,9 @@ function validateProviderBindStatus(
   if (state !== 'pending' && p.connectUrl !== null) {
     return `${label}.connectUrl must be null unless state is pending`;
   }
+  if (state !== 'pending' && bindCode !== null) {
+    return `${label}.bindCode must be null unless state is pending`;
+  }
   if (state === 'confirmed') {
     for (const field of ['bindingId', 'principalId', 'scopeId'] as const) {
       if (!isNonEmptyString(p[field])) {
@@ -976,6 +1110,12 @@ function validateQueryRequest(p: Record<string, unknown>): string | null {
   if (!isNonEmptyString(p.queryId)) return 'query.request.queryId must be a non-empty string';
   if (!QUERY_KINDS.includes(p.kind as never)) {
     return `query.request.kind must be one of: ${QUERY_KINDS.join(', ')}`;
+  }
+  if (
+    p.recipient !== undefined &&
+    !(isPlainObject(p.recipient) && isNonEmptyString(p.recipient.scopeId) && isNonEmptyString(p.recipient.principalId))
+  ) {
+    return 'query.request.recipient must be { scopeId, principalId } non-empty strings when present';
   }
   if (p.kind === 'session-new') {
     if (!isPlainObject(p.sessionNew)) {
@@ -1022,6 +1162,9 @@ function validateAgentModels(v: unknown): string | null {
         return `${path}.defaultEffort must be a string or null`;
       if (m.group !== undefined && !isNullableString(m.group)) {
         return `${path}.group must be a string or null when present`;
+      }
+      if (m.provider !== undefined && !isNullableString(m.provider)) {
+        return `${path}.provider must be a string or null when present`;
       }
     }
     // permissionModes 可选(旧版 desktop 不发); present 时校验形状
@@ -1128,7 +1271,11 @@ function validateInteractionRequest(p: Record<string, unknown>): string | null {
   if (!isNonEmptyString(p.kind)) return 'interaction.request.kind must be a non-empty string';
   if (!isNonEmptyString(p.title)) return 'interaction.request.title must be a non-empty string';
   if (typeof p.body !== 'string') return 'interaction.request.body must be a string';
-  if (!Array.isArray(p.buttons) || p.buttons.length === 0) {
+  if (p.questionMode !== undefined && (p.kind !== 'ask_user_question'
+    || !['blocking', 'async'].includes(p.questionMode as string)
+    || typeof p.questionCode !== 'string' || !/^Q[0-9a-f]{16}$/.test(p.questionCode))) return 'invalid question metadata';
+  if (p.questionCode !== undefined && p.questionMode === undefined) return 'questionCode requires questionMode';
+  if (!Array.isArray(p.buttons) || (p.buttons.length === 0 && p.questionMode === undefined)) {
     return 'interaction.request.buttons must be a non-empty array';
   }
   if (p.buttons.length > MAX_INTERACTION_BUTTONS) {
@@ -1153,6 +1300,8 @@ function validateInteractionRequest(p: Record<string, unknown>): string | null {
 }
 
 function validateInteractionDecision(p: Record<string, unknown>): string | null {
+  if (p.answerText !== undefined && (p.buttonId !== 'question:reply' || typeof p.answerText !== 'string'
+    || !p.answerText.trim() || p.answerText.length > 4096)) return 'invalid question answerText';
   if (!isNonEmptyString(p.requestId))
     return 'interaction.decision.requestId must be a non-empty string';
   if (!isNonEmptyString(p.interactionId)) {
@@ -1641,6 +1790,8 @@ const PAYLOAD_VALIDATORS: Record<HookMessageType, (p: Record<string, unknown>) =
   'provider.bind.start': validateProviderBindStart,
   'provider.bind.cancel': validateProviderBindCancel,
   'provider.bind.revoke': validateProviderBindRevoke,
+  'provider.bind.select': validateProviderBindSelect,
+  'provider.bind.selection': validateProviderBindSelection,
   'provider.bind.update': (p) => validateProviderBindStatus(p, 'provider.bind.update'),
   'provider.bind.state': (p) => validateProviderBindStatus(p, 'provider.bind.state'),
   'query.request': validateQueryRequest,

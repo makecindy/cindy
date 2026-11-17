@@ -41,6 +41,7 @@ export function buildMobileMessageCopyText(message: NormalizedRemoteMessage): st
 }
 
 export interface MobileMessageActionBarInput {
+  role: NormalizedRemoteMessage['role'];
   /** 归一化 kind(「user 行渲染系统卡」形态在渲染层已降级为 'system')。 */
   kind: NormalizedRemoteMessage['kind'];
   /** 该行渲染成系统边界卡(agent-switch / auto-resume / goal / slash 命令卡)。 */
@@ -52,7 +53,8 @@ export interface MobileMessageActionBarInput {
 }
 
 /**
- * 消息行是否挂完成态操作条(复制 / 新任务 / 时间 / 花费 / More)。三条规则都对齐桌面:
+ * 消息行是否挂完成态操作条(复制 / 新任务 / 时间 / 花费 / More)。规则对齐桌面:
+ * - 错误通知不挂操作条(桌面独立渲染 ErrorMessageCard);
  * - 流式 assistant 不挂操作行或状态占位;
  * - assistant 只有每轮收尾正文挂(桌面 AssistantMessage 的 showActionBar,#456);
  * - 系统边界卡整行不挂:它不是任何人的发言,没有复制 / 分叉 / 消息锚点 / 发送时间
@@ -61,6 +63,7 @@ export interface MobileMessageActionBarInput {
  *   「··· 刚刚」。
  */
 export function mobileMessageShowsActionBar(input: MobileMessageActionBarInput): boolean {
+  if (input.role === 'error') return false;
   if (input.isStreamingAssistant) return false;
   if (input.hasSystemCard) return false;
   return input.kind !== 'assistant' || input.isTurnFinalAssistant;

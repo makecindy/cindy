@@ -32,9 +32,10 @@ type：feat / fix / refactor / perf / chore / docs / test / revert / build / ci
 
 <!-- 涉及 UI 时附截图或录屏，并注明平台；不涉及则写“不涉及”。
 普通 Desktop 界面改动用单页验证截图即可：`pnpm ui:check --changed --theme all`（修旧问题加
-`--compare` 出改前／改后对照），再运行 `pnpm ui:check:publish`，它把截图发到作者 fork 的
-`pr-assets/<分支>`，输出带图片链接的本段内容，原样贴到这里。涉及登录、发送、跨设备等单页验证
-覆盖不到的变化，仍附完整 Cindy 截图；设计系统 PR 的证据要求见
+`--compare` 出改前／改后对照，改动集中在一个元素时加 `--focus`），再运行 `pnpm ui:check:publish`，
+它把截图发到作者 fork 的 `pr-assets/<分支>`，输出本段内容，原样贴到这里：正文只放与改动
+相关的并排截图，全量总览只给链接；不要把总览图直接嵌进正文。涉及登录、发送、跨设备等
+单页验证覆盖不到的变化，仍附完整 Cindy 截图，只放能说明改动的画面；设计系统 PR 的证据要求见
 docs/design-rules/design-governance.md §6。
 公开截图遵循 docs/dev-rules/desktop-development.md 里 PR 截图那一段的隐私原则。 -->
 
@@ -57,6 +58,10 @@ docs/design-rules/cindy-design-system.md）。写到具体章节/条款，
 <!-- 如果本 PR 新增或改写测试，请在这里或 PR 正文逐文件补充 engineering-conventions.md
      §3.2 的“测试价值”各项（含单独运行该文件的实测耗时）；没有真实入口、最小失败输入或
      规则依据的测试不应提交，超过 10 秒的单测文件需写明原因。 -->
+
+<!-- 「提交前检查」里读写开销那一项的次数和字节写在这里或「手工验证」，回包字节注明是实测还是推导；
+     涉及通知时说明是否覆盖突发、持续通知和共用连接上的其他业务。未测的写进「未执行的验证」，
+     不要求每个 PR 都做压测。 -->
 
 ```text
 pnpm ...
@@ -95,13 +100,12 @@ branch/worktree、Metro 归属与 __DEV__ build label 证据。 -->
 必须写清影响和回滚/降级方式；不涉及风险时明确写“无”。
 
 命中「存量插件兼容」时，必须写明「存量插件影响：无」或「有 + 迁移与提示方案」，并说明
-基于旧布局的升级用例跑在哪。会让用户已装插件失效或需要重装／重新确认的改动与冷更同级，
+基于旧布局的升级用例跑在哪。会让用户已装插件失效或需要重装／重新确认的改动，
 需把关人对该影响明确确认；规则见 docs/dev-rules/plugin-security-and-authoring.md 第 5 节。
 
 改动会改变 mobile runtime fingerprint（即触发冷更）时，还要写明为什么冷更不可避免、
-存量装机的影响范围与发版节奏建议；这类 PR 与技术框架变动同级，需仓库指定的把关人针对
-冷更明确确认后才能合并（提交者身份不构成例外）。冷更 PR 可保持 Ready 并正常审查，
-不因冷更要求新建讨论 issue 或转为 draft；确认可直接留在 PR 中。规则见
+存量装机的影响范围与发版节奏建议。冷更 PR 按普通流程审查与合并，可保持 Ready，
+不因冷更要求新建讨论 issue 或转为 draft。规则见
 docs/dev-rules/mobile-development.md 的「冷更边界」。 -->
 
 ### 提交前检查
@@ -112,3 +116,7 @@ docs/dev-rules/mobile-development.md 的「冷更边界」。 -->
 - [ ] 未提交凭证、令牌或授权文件
 - [ ] 已核对受影响的文档，行为变化涉及的旧结论已同步修订（不涉及则无需修改文档）
 - [ ] 已确认测试结果或说明未执行原因
+- [ ] 涉及数据读取、通知后刷新、界面频繁写入或常驻组件时，已在「怎么验证的」写明：每个用户动作
+  和每次通知触发几次 list/扫描/IPC/写事务（读远程数据再写远程调用次数和回包字节），以及隐藏或
+  卸载后是否停止（见 `docs/dev-rules/engineering-conventions.md` §8；远程读取同时见
+  `docs/dev-rules/server-channel-review.md`）

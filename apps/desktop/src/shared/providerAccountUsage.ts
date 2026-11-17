@@ -10,6 +10,7 @@
  */
 
 import type { KimiCodingUsageSnapshot } from './kimiCodingUsage';
+import type { OpenCodeGoUsageSnapshot } from './opencodeGoUsage';
 
 import type { AgentKind } from '@cindy/model-providers';
 
@@ -44,7 +45,8 @@ export interface DeepSeekAccountUsageSnapshot {
 export type ProviderAccountUsageSnapshot =
   | DeepSeekAccountUsageSnapshot
   | ZhipuCodingPlanQuotaSnapshot
-  | KimiCodingUsageSnapshot;
+  | KimiCodingUsageSnapshot
+  | OpenCodeGoUsageSnapshot;
 
 /** 智谱 GLM Coding Plan 一个计费窗口的已用比例与重置时间。 */
 export interface ZhipuCodingPlanWindow {
@@ -118,6 +120,8 @@ export function getProviderAccountUsageDashboardUrl(upstream: string): string | 
         return ZHIPU_CODING_PLAN_USAGE_URL;
       case 'https://api.z.ai':
         return 'https://z.ai/manage-apikey/coding-plan/personal/my-plan';
+      case 'https://opencode.ai':
+        return 'https://opencode.ai/console';
     }
   } catch {
     // 未配置或非法地址没有对应的官方看板。
@@ -156,4 +160,31 @@ export function parseKimiAccountUsageResult(value: unknown): ProviderAccountUsag
     windows.push({ id: window.id, usedPercent: window.usedPercent, resetsAt: window.resetsAt });
   }
   return { status: 'ready', stale: raw.stale, snapshot: { kind: 'kimi-coding-quota', windows, fetchedAt: snapshot.fetchedAt } };
+}
+
+/** Sanitize an OpenCode Go result received from another computer. */
+export function parseOpenCodeGoAccountUsageResult(value: unknown): ProviderAccountUsageResult {
+  const invalid: ProviderAccountUsageResult = { status: 'unavailable', error: 'invalid-response' };
+  if (!value || typeof value !== 'object') return invalid;
+  const raw = value as Record<string, unknown>;
+  const errors: ProviderAccountUsageError[] = ['no-credentials', 'updating', 'auth', 'rate-limited', 'network', 'server', 'invalid-response', 'throttled', 'unknown'];
+  if (raw.status === 'unsupported') return { status: 'unsupported' };
+  if (raw.status === 'unavailable' && errors.includes(raw.error as ProviderAccountUsageError)) {
+    return { status: 'unavailable', error: raw.error as ProviderAccountUsageError };
+  }
+  const snapshot = raw.snapshot as OpenCodeGoUsageSnapshot | undefined;
+  if (raw.status !== 'ready' || typeof raw.stale !== 'boolean' || !snapshot
+    || snapshot.kind !== 'opencode-go-quota' || !Number.isFinite(snapshot.fetchedAt)
+    || !Array.isArray(snapshot.windows) || snapshot.windows.length > 3) return invalid;
+  const ids = new Set<string>();
+  const windows: OpenCodeGoUsageSnapshot['windows'] = [];
+  for (const window of snapshot.windows) {
+    if (!window || !['rolling', 'weekly', 'monthly'].includes(window.id) || ids.has(window.id)
+      || typeof window.limited !== 'boolean' || !Number.isFinite(window.usedPercent)
+      || window.usedPercent < 0 || window.usedPercent > 100
+      || (window.resetsAt !== null && (!Number.isFinite(window.resetsAt) || window.resetsAt <= 0))) return invalid;
+    ids.add(window.id);
+    windows.push({ id: window.id, usedPercent: window.usedPercent, limited: window.limited, resetsAt: window.resetsAt });
+  }
+  return { status: 'ready', stale: raw.stale, snapshot: { kind: 'opencode-go-quota', windows, fetchedAt: snapshot.fetchedAt } };
 }

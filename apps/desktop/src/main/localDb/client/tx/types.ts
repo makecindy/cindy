@@ -3,6 +3,8 @@ import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
 import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
 
 export type DbTxName =
+  | 'mcpApps.viewState.save'
+  | 'usage.recordPiUsage'
   | 'chatCache.execute'
   | 'usage.recordMediaSpend'
   | 'authorization.readProjection'
@@ -49,20 +51,16 @@ export type DbTxName =
   | 'bots.replaceCanonicalSession'
   | 'bots.prepareRuntime'
   | 'bots.finishRuntime'
-  | 'bots.finishDelegation'
-  | 'bots.reparentDelegations'
-  | 'bots.createDelegation'
-  | 'bots.reopenDelegation'
   | 'bots.pauseLifecycle'
   | 'bots.resumeLifecycle'
   | 'bots.archiveLifecycle'
+  | 'bots.retireCloudCopy'
   | 'bots.deleteProfile'
   | 'bots.prepareProfileDeletion'
   | 'bots.reconcileLanePermission'
   | 'bots.persistSessionPermission'
   | 'bots.createGroupLane'
   | 'bots.createChannelLane'
-  | 'bots.createRoutineLane'
   | 'bots.createThreadLane'
   | 'bots.archiveChannelLanes'
   | 'botGroups.create'
@@ -373,6 +371,8 @@ export interface SessionsSetStatusArgs {
 export interface SessionsSetTerminalStatusArgs {
   sessionId: string;
   status: 'archived' | 'deleted';
+  /** Internal automatic housekeeping only; never accepted as renderer metadata. */
+  idleArchiveCutoff?: number;
 }
 
 export interface SessionsSetTerminalStatusResult extends Omit<SessionsSetStatusResultItem, 'status'> {
@@ -398,6 +398,8 @@ export interface ContextRebuildArgs {
   updatedAt: number;
   /** 读历史时看到的 sessions.cleared_at；提交时必须仍相同，否则 /clear 竞态整单回滚。 */
   expectedClearedAt?: number | null;
+  /** Resume recovery clears only this rejected native ID; it never rewrites route settings. */
+  expectedSdkSessionId?: string;
   /** Same transaction as the durable handoff; source SDK ownership must still match. */
   replacementRoute?: {
     expectedSdkSessionId: string;
@@ -649,6 +651,8 @@ export interface ImDeleteBindingsArgs {
 
 export interface BotsCreateProfileArgs {
   id: string;
+  /** Main-owned, already shadowed copies that do not run on this computer; not a public input. */
+  inactiveCindyIds?: string[];
   displayName: string;
   description: string;
   avatar: string;
@@ -666,6 +670,8 @@ export interface BotsCreateProfileArgs {
 
 export interface BotsUpdateProfileArgs {
   id: string;
+  /** Cloud restore only: recheck the effective Cindy singleton atomically with the profile write. */
+  inactiveCindyIds?: string[];
   /** A saved model choice supersedes automation restores in the same commit. */
   clearScheduledModelBaseline?: boolean;
   /** Explicit settings changes also update the permanent chat in this transaction. */
@@ -777,67 +783,24 @@ export interface BotsFinishRuntimeArgs {
   eventType: 'runtime-applied' | 'runtime-failed';
   eventPayloadJson: string;
 }
-export interface BotsFinishDelegationArgs {
-  expectedRunSequence?: number;
-  expectedExecution?: { instanceId: string; generation: number };
-  delegationId: string;
-  status: 'completed' | 'failed' | 'cancelled' | 'timed-out';
-  resultSummary: string | null;
-  outputArtifactsJson: string;
-  lastError: string | null;
-  tokensUsed?: number;
-  completedAt: number;
-}
-
-export interface BotsFinishDelegationResult {
-  id: string;
-  targetBotId: string | null;
-  runSequence: number;
-  parentSessionId: string | null;
-  childSessionId: string | null;
-  status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
-}
-
-export interface BotsReparentDelegationsArgs {
-  botId: string;
-  previousParentSessionId: string;
-  nextParentSessionId: string;
-  now: number;
-}
-
-export interface BotsReparentDelegationsResult {
-  delegationIds: string[];
-}
-
-export interface BotsCreateDelegationArgs {
-  maxActiveChildren: number;
-  delegation: {
-    id: string;
-    requestingBotId: string;
-    targetBotId: string | null;
-    parentSessionId: string;
-    childSessionId: string;
-    objective: string;
-    contextRefsJson: string;
-    permissionSnapshotJson: string;
-    lineageJson: string;
-    targetProfileVersion: number | null;
-    depth: number;
-    createdAt: number;
-  };
-  session: BotsReplaceCanonicalSessionArgs['session'];
-}
 
 export interface BotGroupsCreateLaneArgs {
   botId: string;
   groupId: string;
   routeKey: string;
   session: BotsReplaceCanonicalSessionArgs['session'];
+  /**
+   * The lane must work in `session.workingDir` (the group's project folder, or back in the
+   * Home workspace): an active lane elsewhere is archived and replaced by this one.
+   */
+  replaceOtherWorkingDir?: boolean;
 }
 
 export interface BotGroupsCreateLaneResult {
   sessionId: string;
   created: boolean;
+  /** The lane archived because it worked in another folder. */
+  replacedSessionId?: string;
   /** Existing runtimes must follow a canonical permission repaired during creation. */
   permissionRepairCanonicalSessionId?: string;
 }
@@ -981,27 +944,6 @@ export interface BotGroupsAppendMessageResult {
   created: boolean;
 }
 
-export interface BotsReopenDelegationArgs {
-  worktreePath?: string | null;
-  maxActiveChildren: number;
-  delegationId: string;
-  requestingBotId: string;
-  expectedStatus: 'completed' | 'failed' | 'cancelled' | 'timed-out';
-  parentSessionId: string;
-  childSessionId: string;
-  objective: string;
-  permissionSnapshotJson: string;
-  targetBotId: string | null;
-  targetProfileVersion: number | null;
-  session: BotsReplaceCanonicalSessionArgs['session'];
-  reopenedAt: number;
-}
-
-export interface BotsReopenDelegationResult {
-  reopened: boolean;
-  previousParentSessionId: string | null;
-}
-
 export interface BotsLifecycleTransitionArgs {
   botId: string;
   canonicalSessionId: string | null;
@@ -1018,6 +960,8 @@ export interface BotsDeleteProfileArgs {
   sessionIds: string[];
   keepTaskHistory: boolean;
   at: number;
+  /** Tasks in the teammate's own project (automation runs, tasks it opened there); kept or deleted like its own. */
+  projectSessionIds?: string[];
 }
 export interface ImRotateSessionArgs {
   previousSessionId: string | null;
@@ -1374,6 +1318,7 @@ export type SkillUsageApplyMutationArgs =
   | { kind: 'promote'; analyzerVersion: string };
 
 export interface MediaSpendArgs {
+  approximate?: boolean;
   providerName?: string;
   day: string;
   model: string;
@@ -1385,7 +1330,9 @@ export interface MediaSpendArgs {
 }
 
 export type DbTxArgsByName = {
+  'mcpApps.viewState.save': { binding: import('../../worker/opHandlers/mcpAppViewState.js').ViewStateBinding; json: string | null; bytes: number };
   'usage.recordMediaSpend': MediaSpendArgs;
+  'usage.recordPiUsage': import('../../worker/opHandlers/piUsageTx.js').PiUsageWrite[];
   'authorization.readProjection': { sessionId: string; leadId: string };
   'rewind.commit': RewindCommitArgs;
   'session.treeRehydrate': SessionTreeRehydrateArgs;
@@ -1431,20 +1378,16 @@ export type DbTxArgsByName = {
   'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionArgs;
   'bots.prepareRuntime': BotsPrepareRuntimeArgs;
   'bots.finishRuntime': BotsFinishRuntimeArgs;
-  'bots.finishDelegation': BotsFinishDelegationArgs;
-  'bots.reparentDelegations': BotsReparentDelegationsArgs;
-  'bots.createDelegation': BotsCreateDelegationArgs;
-  'bots.reopenDelegation': BotsReopenDelegationArgs;
   'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
   'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
+  'bots.retireCloudCopy': { botId: string; at: number };
   'bots.deleteProfile': BotsDeleteProfileArgs;
   'bots.prepareProfileDeletion': { botId: string };
   'bots.reconcileLanePermission': { sessionId: string };
   'bots.persistSessionPermission': { sessionId: string; mode: string };
   'bots.createGroupLane': BotGroupsCreateLaneArgs;
   'bots.createChannelLane': BotsCreateChannelLaneArgs;
-  'bots.createRoutineLane': BotsCreateChannelLaneArgs;
   'bots.createThreadLane': BotsCreateThreadLaneArgs;
   'bots.archiveChannelLanes': BotsArchiveChannelLanesArgs;
   'botGroups.create': BotGroupsCreateArgs;
@@ -1478,6 +1421,8 @@ export type DbTxArgsByName = {
 };
 
 export type DbTxResultByName = {
+  'mcpApps.viewState.save': void;
+  'usage.recordPiUsage': { changed: boolean };
   'usage.recordMediaSpend': {
     legacyUsd: number;
     amount: number;
@@ -1485,7 +1430,7 @@ export type DbTxResultByName = {
     approximate: number;
   } | null;
   'authorization.readProjection': import('../../autoReviewProjection.js').StoredAutoReviewProjection;
-  'rewind.commit': undefined;
+  'rewind.commit': string[];
   'session.treeRehydrate': { messageCount: number; hiddenClientIds: string[] };
   'fork.session': { messageCount: number };
   'embedding.markDone': undefined;
@@ -1533,20 +1478,16 @@ export type DbTxResultByName = {
   'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionResult;
   'bots.prepareRuntime': undefined;
   'bots.finishRuntime': boolean;
-  'bots.finishDelegation': BotsFinishDelegationResult | null;
-  'bots.reparentDelegations': BotsReparentDelegationsResult;
-  'bots.createDelegation': undefined;
-  'bots.reopenDelegation': BotsReopenDelegationResult;
   'bots.pauseLifecycle': undefined;
   'bots.resumeLifecycle': undefined;
   'bots.archiveLifecycle': { sessions: number };
+  'bots.retireCloudCopy': { changed: boolean };
   'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
   'bots.prepareProfileDeletion': undefined;
   'bots.reconcileLanePermission': { mode: string | null; changed: boolean; canonicalSessionId?: string };
   'bots.persistSessionPermission': { updated: boolean };
   'bots.createGroupLane': BotGroupsCreateLaneResult;
   'bots.createChannelLane': BotGroupsCreateLaneResult;
-  'bots.createRoutineLane': BotGroupsCreateLaneResult;
   'bots.createThreadLane': BotGroupsCreateLaneResult;
   'bots.archiveChannelLanes': { archivedSessionIds: string[] };
   'botGroups.create': undefined;

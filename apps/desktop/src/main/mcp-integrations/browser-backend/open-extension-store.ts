@@ -56,3 +56,21 @@ export async function openExtensionStoreInUserBrowser(
     return { ok: false, error: 'OPEN_FAILED' };
   }
 }
+
+/** Start the normal browser without navigating or changing its profile.
+ * Use normal profile startup so extensions initialize too. macOS opens behind
+ * the current app and uses a new process (-n) so a running dedicated-profile instance of the same
+ * App cannot swallow the launch; Chromium on other platforms is asked to start minimized. Never use --user-data-dir or a debugging port here.
+ */
+export async function startUserBrowser(deps: OpenExtensionStoreDeps): Promise<void> {
+  let browser: InstalledChromium;
+  try { browser = deps.resolveBrowser(); }
+  catch { throw new Error('未找到可用的 Chrome / Edge，请先安装浏览器。'); }
+  const platform = deps.platform ?? process.platform;
+  const appBundle = platform === 'darwin' ? /^(.*?\.app)\//.exec(browser.executablePath)?.[1] : undefined;
+  const launch = deps.launch ?? defaultLaunch;
+  try {
+    if (appBundle) await launch('/usr/bin/open', ['-g', '-n', '-a', appBundle, '--args', '--start-minimized']);
+    else await launch(browser.executablePath, ['--start-minimized']);
+  } catch { throw new Error('未能启动浏览器，请检查 Chrome / Edge 是否可以正常打开。'); }
+}

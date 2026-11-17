@@ -251,3 +251,27 @@ describe('飞书群卡片 lane 丢失时的 /ctr fail-closed', () => {
     );
   });
 });
+
+describe('公共对话(服务器频道)里的接管 / 项目卡片', () => {
+  it.each(['control:session-pick', 'control:new'])(
+    '旧卡片的 %s 按钮不执行',
+    async (buttonId) => {
+      const im = makeIm();
+      const adapter = {
+        ...feishuAdapter,
+        blocksLocalTaskAccess: (userId: string) => userId.startsWith('g/'),
+      } as unknown as ImChannelAdapter;
+
+      await press(
+        im,
+        { ...SESSION_PICK, buttonId, senderId: 'g/200000000000000001/300000000000000001' },
+        adapter,
+      );
+
+      expect(mocks.bindingAttach).not.toHaveBeenCalled();
+      expect(mocks.bindingAttachWithResult).not.toHaveBeenCalled();
+      expect(mocks.createSession).not.toHaveBeenCalled();
+      expect(im.updateInteractiveCard).not.toHaveBeenCalled();
+    },
+  );
+});

@@ -113,8 +113,8 @@ export async function preparePluginLocalPreview(
               .join(phoneOrigin);
             if (mime === "text/html")
               text = withSnapshotHtmlCsp(PLUGIN_PREVIEW_QUERY_SCRIPT + text);
-            destination.write(text);
-          } else destination.write(bytes);
+            destination.writeSync(text);
+          } else destination.writeSync(bytes);
           check();
           accepted = await server.resolveRequest!(
             token,

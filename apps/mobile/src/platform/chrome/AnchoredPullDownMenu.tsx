@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 /**
  * Android 的「贴着触发控件弹出」菜单:与 iOS UIMenu 同一交互(点触发器在旁边弹出、点外面
  * 收起、选中项打勾、内联分组带标题、子菜单逐层进入、keepPresented 的项点完不收起),
@@ -120,7 +121,7 @@ export function AnchoredPullDownMenu({
   onOpenChange?(open: boolean): void;
 }) {
   const styles = useThemedStyles(makeStyles);
-  const anchorRef = useRef<View>(null);
+  const anchorRef = useRef<ViewInstance>(null);
   const [anchor, setAnchor] = useState<Anchor | null>(null);
   const [path, setPath] = useState<string[]>([]);
   const open = anchor !== null;

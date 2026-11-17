@@ -1,0 +1,26 @@
+CMD ['cargo', 'test', '--profile', 'sim', '-p', 'agent-net-sim', '--features', 'kcp', '--test', 'reliability', 'repeated_outages_recover_fast', '--locked', '--offline', '--', '--nocapture']
+
+running 1 test
+fixed eight-seed p99 1933.437 ms
+test repeated_outages_recover_fast ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.27s
+
+   Compiling agent-net-core v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/fair)
+warning: method `retire_repaired_idle_packets` is never used
+   --> src/connection.rs:897:8
+    |
+324 | impl Connection {
+    | --------------- method in this implementation
+...
+897 |     fn retire_repaired_idle_packets(&mut self, now_us: u64) {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling agent-net-sim v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/fair/sim)
+warning: `agent-net-core` (lib) generated 1 warning
+    Finished `sim` profile [optimized] target(s) in 1.76s
+     Running tests/reliability.rs (/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/fair-target/sim/deps/reliability-9596e5a306619ca9)
+
+EXIT 0

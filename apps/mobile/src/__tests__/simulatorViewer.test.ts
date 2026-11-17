@@ -27,6 +27,7 @@ function loadCli(file: string, mocks: Record<string, unknown>) {
   runInNewContext(readFileSync(file, "utf8"), {
     exports,
     require: (name: string) => {
+      if (name === '../events' || name === '../../doctor/events') return { debugEvent() {} };
       if (name in mocks) return mocks[name];
       throw new Error(`Unexpected dependency: ${name}`);
     },

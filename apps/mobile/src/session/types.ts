@@ -1,3 +1,4 @@
+import type { OutputLimitDetails } from '@cindy/maker-shared';
 import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-link-contract';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { RemoteMoney } from '@/session/remoteMoney';
@@ -84,7 +85,8 @@ export interface RemoteSession {
   agentDeviceId?: string | null;
   /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。 */
   agentSwitchIntent?: RemoteSessionAgentSwitchIntent | null;
-  source?: string;
+  /** 任务来源；null = 已确认是普通任务，缺省 = 来源未知（任务入口须先向电脑核对）。 */
+  source?: string | null;
   companion?: import("./teammateTaskSource").TaskCompanion;
   taskTeammate?: import("./teammateTaskSource").TaskTeammate | null;
   orcaRole?: 'lead' | 'worker' | string | null;
@@ -246,7 +248,7 @@ export interface QueuedRemoteMessage {
   userName?: string;
   /** Interface language of this phone. The desktop stamps it only for a remote turn. */
   uiLanguage?: string;
-  /** Classical output style chosen next to the language; used only with a classical uiLanguage. */
+  /** Classical output style chosen next to the language; used only with a Chinese uiLanguage. */
   classicalStyle?: string;
   createOpts: {
     agentKind: 'claude-code' | 'codex' | 'pi';
@@ -299,6 +301,7 @@ export interface InputProjection {
   errorReason?: string | null;
   /** Bounded details for tool-loop errors; older projections may omit them. */
   toolLoop?: MobileToolLoopErrorDetails | null;
+  outputLimit?: OutputLimitDetails | null;
   recovery?: unknown;
   errorRetryText: string | null;
   /** Explicit failed-turn continuation eligibility; absent on older hosts. */

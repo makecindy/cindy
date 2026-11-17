@@ -1,6 +1,6 @@
 import { cindyAiAccountName, cindyAiAccountLogoKind } from '../shared/cindyAiPresentation.js';
 import { getAuthState } from './authManager.js';
-import { t } from './i18n.js';
+import { t } from './i18n.desktop.js';
 
 /** Read the current account each time; this name is safe to send to remote clients. */
 export function getCindyAiProviderName(): string {

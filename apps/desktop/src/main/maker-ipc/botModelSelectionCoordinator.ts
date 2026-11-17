@@ -16,6 +16,7 @@ export function coordinateBotModelSelection<T>(sessionIds: readonly string[], op
  * when the fire-and-forget runtime refresh has not acquired its lock yet. */
 export function createBotModelSelectionCoordinator(deps: {
   acquireSessionLock(sessionId: string): Promise<() => void>;
+  cancelRecovery(sessionId: string): void;
   invalidate(sessionId: string): void;
 }): Coordinator {
   return async (sessionIds, operation) => {
@@ -24,7 +25,13 @@ export function createBotModelSelectionCoordinator(deps: {
     try {
       for (const id of ids) releases.push(await deps.acquireSessionLock(id));
       const result = await operation();
-      for (const id of ids) deps.invalidate(id);
+      for (const id of ids) {
+        // The group may have handed recovery to the input coordinator already.
+        // Revoke waiting, queued and preparing continuation before releasing
+        // the saved model's send lock; already dispatched work stays intact.
+        deps.cancelRecovery(id);
+        deps.invalidate(id);
+      }
       return result;
     } finally {
       for (const release of releases.reverse()) release();

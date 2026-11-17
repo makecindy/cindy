@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { useMemo, type ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FeatureSidebarSlotProvider, useRegisterSidebarUpper } from '@/features/feature-context';
@@ -137,5 +137,48 @@ describe('Sidebar secondary-window lazy feature content', () => {
 
     expect(screen.getByTestId('conversation-search-provider')).toBeTruthy();
     expect(screen.getByTestId('sidebar-upper')).toBeTruthy();
+  });
+
+  // Unit integration: retained frost must follow the actual painted region,
+  // not the saved expanded width. Existing mounting cases never exercise the
+  // native bridge. Layout/animation pixels are checked in the desktop fixture.
+  it('sends visible sidebar width, deduplicates it and clears material on unmount', () => {
+    const previous = window.electronAPI;
+    const send = vi.fn();
+    let notify = () => {};
+    let rect = { left: 0, right: 260, height: 800 };
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(() => rect as DOMRect);
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { notify = callback; }
+      observe() {}
+      disconnect() {}
+    });
+    window.electronAPI = { ...previous, platform: 'darwin',
+      theme: { ...previous?.theme, setSidebarWidth: send } } as typeof previous;
+    const view = render(<Harness isCollapsed={false} />);
+    try {
+      expect(send).toHaveBeenLastCalledWith(260);
+      expect(document.documentElement.style.getPropertyValue('--sidebar-visible-width')).toBe('260px');
+      act(() => notify());
+      expect(send).toHaveBeenCalledTimes(1);
+      rect = { left: 0, right: 78, height: 800 };
+      act(() => notify());
+      expect(send).toHaveBeenLastCalledWith(78);
+      rect = { left: -200, right: 60, height: 800 };
+      act(() => notify());
+      expect(send).toHaveBeenLastCalledWith(60);
+      rect = { left: -260, right: 0, height: 800 };
+      act(() => notify());
+      expect(send).toHaveBeenLastCalledWith(0);
+      expect(document.documentElement.style.getPropertyValue('--sidebar-visible-width')).toBe('0px');
+    } finally {
+      view.unmount();
+      window.electronAPI = previous;
+      bounds.mockRestore();
+      vi.unstubAllGlobals();
+    }
+    expect(send).toHaveBeenLastCalledWith(0);
+    expect(document.documentElement.style.getPropertyValue('--sidebar-visible-width')).toBe('');
   });
 });

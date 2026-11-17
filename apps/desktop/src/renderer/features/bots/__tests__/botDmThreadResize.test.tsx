@@ -14,13 +14,17 @@
  *   （botSessionPresentation 等）把 `BotDmThreadHost` 整个 mock 掉了。
  * - 最小失败输入：修复前私聊面板没有 separator；已有话题 A 时打开 B，并延迟 B 的 URL 提交，不能回到 A。
  * - 新增覆盖缺口（#8531）：窄窗恢复、切换／重开保宽，以及真实 data router pending URL 时序；原假路由无法覆盖后者。
- * - 实测耗时：2026-11-05，3 项用例共 1.12 秒（单 worker）。
+ * - 实测耗时：2026-11-17，3 项用例共 0.15 秒（单 worker，文件 2.00 秒）。
  * - tier：unit（jsdom + 与群聊用例同款 geometry stub；无真实窗口、无网络）。
  */
+import { transferableAbortController } from 'node:util';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useCallback } from 'react';
 import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// React Router's Node-native Request requires a matching native AbortSignal.
+const NativeAbortController = transferableAbortController().constructor;
 
 const h = vi.hoisted(() => ({
   ensure: vi.fn(),
@@ -90,6 +94,7 @@ beforeEach(() => {
     localDb: { bots: { dmThread: { ensure: h.ensure } } },
   } });
 
+  vi.stubGlobal('AbortController', NativeAbortController);
   vi.stubGlobal('ResizeObserver', class {
     constructor(private callback: ResizeObserverCallback) {}
     observe(element: Element) { observed.set(element, this.callback); }
@@ -146,9 +151,10 @@ describe('private topic panel resize', () => {
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 100 });
     expect(panel.style.width).toBe('648px');
 
+    // Shared clamp keeps half the row for the chat: 600px available => max 300px.
     available = 600;
     act(() => [...observed.values()].forEach(callback => callback([], {} as ResizeObserver)));
-    expect(panel.style.width).toBe('360px');
+    expect(panel.style.width).toBe('300px');
     available = 1200;
     act(() => [...observed.values()].forEach(callback => callback([], {} as ResizeObserver)));
     expect(panel.style.width).toBe('648px');

@@ -37,6 +37,13 @@ function snapshot(revision = 1): GhostSetupInteractionSnapshot {
 }
 
 describe('GhostSetupInteractionBridge', () => {
+  it('preserves the actionable issue snapshot and correlates its remote dismissal', () => {
+    const request = { kind: 'issue_confirm', requestId: 'issue-confirm-123', remoteConfirmSupported: true,
+      draft: { title: 'Bug', body: 'Steps', type: 'bug' }, submissionIdentity: { kind: 'platform', login: 'bot' } };
+    expect(projectInteractionRequestForRemote(request)).toEqual(request);
+    expect(projectPendingInteractionsForRemote([{ request }], true)).toEqual([{ request }]);
+    expect(projectInteractionDismissedForRemote({ requestId: request.requestId })).toEqual({ requestId: request.requestId });
+  });
   it('keeps run_action pending and broadcasts full revisioned snapshots', async () => {
     const broadcast = vi.fn();
     const onCommand = vi.fn();

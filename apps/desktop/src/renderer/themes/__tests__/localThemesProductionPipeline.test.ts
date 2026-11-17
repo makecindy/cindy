@@ -43,8 +43,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadLocalThemesSync, resetLocalThemesMigrationForTest } from '../../../main/local-themes/loader';
+import { resetOmarchyThemeForTest } from '../../../main/local-themes/omarchy';
 import '../colors';
-import { bootstrapLocalThemesSync, getLocalThemes } from '../local-themes';
+import { tryGetFamily } from '../families';
+import type { LocalThemesResult } from '../../../shared/local-themes';
+import { bootstrapLocalThemesSync, getLocalThemes, onLocalThemesChange } from '../local-themes';
 import type { Theme } from '../types';
 
 const FIXTURE_DIR = fileURLToPath(new URL('./fixtures/local-themes/', import.meta.url));
@@ -56,6 +59,8 @@ const FIXTURE_FILES = [
   'external-import-missing-switch.json',
 ] as const;
 
+let pushLocalThemes: (payload: LocalThemesResult) => void = () => {};
+
 /** 用真实 loader 读盘并走 renderer 生产装载路径，返回按 id 索引的 Theme。 */
 function loadViaProductionPipeline(): Map<string, Theme> {
   const payload = loadLocalThemesSync();
@@ -66,6 +71,10 @@ function loadViaProductionPipeline(): Map<string, Theme> {
     electronAPI: {
       localThemes: {
         listSync: () => payload,
+        onChanged: (cb: (next: LocalThemesResult) => void) => {
+          pushLocalThemes = cb;
+          return () => {};
+        },
       },
     },
   });
@@ -149,5 +158,90 @@ describe('DS-2b · 用户主题生产组合不变量（loader → mapWireTheme �
     expect(loaded?.family).toBeUndefined();
     expect(loaded?.name).toBe('DS2b Legacy Placeholder');
     expect(loaded?.type).toBe('light');
+  });
+});
+
+// 换主题重写；坏文件诊断
+describe('Omarchy 主题经生产链路成为 omarchy 家族', () => {
+  const OMARCHY_LIGHT = JSON.stringify({
+    name: 'Omarchy',
+    type: 'light',
+    colors: {
+      'editor.background': '#faf4ed',
+      'editor.foreground': '#575279',
+      'button.background': '#286983',
+    },
+  });
+
+  const currentDir = () => path.join(osMock.homedir, '.local', 'state', 'omarchy', 'current');
+
+  function writeOmarchyTheme(content: string): void {
+    fs.mkdirSync(path.join(currentDir(), 'theme'), { recursive: true });
+    fs.writeFileSync(path.join(currentDir(), 'theme', 'vscode-theme.json'), content);
+    fs.writeFileSync(path.join(currentDir(), 'theme.name'), 'rose-pine\n');
+  }
+
+  beforeEach(() => {
+    osMock.homedir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'omarchy-pipeline-home-')));
+    resetLocalThemesMigrationForTest();
+    resetOmarchyThemeForTest();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fs.rmSync(osMock.homedir, { recursive: true, force: true });
+  });
+
+  it('当前 Omarchy 主题按其明暗成为无本地后缀的家族', () => {
+    writeOmarchyTheme(OMARCHY_LIGHT);
+    loadViaProductionPipeline();
+    const family = tryGetFamily('omarchy');
+    expect(family?.name).toBe('Omarchy');
+    expect(family?.dark).toBeNull();
+    expect(family?.light?.colors.surface).toBe('#faf4ed');
+  });
+
+  it('无法转换的 Omarchy 文件不进列表并留下诊断', () => {
+    writeOmarchyTheme('{"name":"Omarchy"}');
+    const payload = loadLocalThemesSync();
+    expect(payload.success && payload.themes).toEqual([]);
+    expect(payload.diagnostics.map((entry) => entry.file)).toEqual(['vscode-theme.json']);
+  });
+
+  it('换主题间隙读不到文件时保留上一个主题并记诊断', () => {
+    writeOmarchyTheme(OMARCHY_LIGHT);
+    loadLocalThemesSync();
+    fs.rmSync(path.join(currentDir(), 'theme'), { recursive: true });
+    const payload = loadLocalThemesSync();
+    expect(payload.success && payload.themes.map((theme) => theme.id)).toEqual(['omarchy']);
+    expect(payload.diagnostics).toEqual([{ file: 'vscode-theme.json', error: 'ENOENT' }]);
+  });
+
+  const cannotDenyAccess = process.platform === 'win32' || process.getuid?.() === 0;
+  it.skipIf(cannotDenyAccess)('标记检查非 ENOENT 失败时记诊断而非当作未安装', () => {
+    writeOmarchyTheme(OMARCHY_LIGHT);
+    fs.chmodSync(currentDir(), 0o000);
+    try {
+      const payload = loadLocalThemesSync();
+      expect(payload.diagnostics).toEqual([{ file: 'vscode-theme.json', error: 'EACCES' }]);
+    } finally {
+      fs.chmodSync(currentDir(), 0o755);
+    }
+  });
+
+  it('Omarchy 换主题推送后窗口内主题随之更新', () => {
+    writeOmarchyTheme(OMARCHY_LIGHT);
+    loadViaProductionPipeline();
+    const onChange = vi.fn();
+    const unsubscribe = onLocalThemesChange(onChange);
+    writeOmarchyTheme(JSON.stringify({
+      name: 'Omarchy',
+      type: 'dark',
+      colors: { 'editor.background': '#142620', 'editor.foreground': '#dfede5' },
+    }));
+    pushLocalThemes(loadLocalThemesSync());
+    unsubscribe();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(tryGetFamily('omarchy')?.dark?.colors.surface).toBe('#142620');
   });
 });

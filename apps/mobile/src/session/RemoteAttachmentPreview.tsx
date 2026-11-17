@@ -1,3 +1,4 @@
+import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { ImageLightbox } from "./ImageLightbox";
 import { buildMediaPayload } from "./messagePayload";
 import {
@@ -26,7 +27,6 @@ import { spacing, textStyles, useTheme } from "@/theme";
 import {
   PreviewHeader,
   PreviewFooter,
-  PreviewCollectionContext,
 } from "./PreviewChrome";
 import { PdfDocumentPreview } from "./PdfDocumentPreview";
 import { ModelDocumentPreview } from "./ModelDocumentPreview";
@@ -160,7 +160,7 @@ function RemoteAttachmentBody({
   const { colors } = useTheme();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
-  const collection = useContext(PreviewCollectionContext);
+  const chromeFrame = usePreviewChromeFrame();
   const shareAbort = useRef<AbortController | null>(null);
   const resolver = useRef(resolve);
   resolver.current = resolve;
@@ -258,9 +258,8 @@ function RemoteAttachmentBody({
         style={[
           styles.root,
           {
-            paddingTop: insets.top + 64,
-            paddingBottom:
-              insets.bottom + ((collection?.names.length ?? 0) > 1 ? 56 : 0),
+            paddingTop: chromeFrame.documentContentTop,
+            paddingBottom: insets.bottom,
             paddingLeft: insets.left,
             paddingRight: insets.right,
           },

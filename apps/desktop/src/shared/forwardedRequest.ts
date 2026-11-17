@@ -31,15 +31,28 @@ const FORWARDED_REQUEST_COPY = {
 
 /** Host-owned source evidence. It describes authorship, never execution permission. */
 export interface ForwardedRequestSource {
-  userText: string | null;
+  /**
+   * The owner's words, quoted by the pre-2026-11-05 envelope. Plain-body receipts omit it:
+   * where the request started is the ids below, and what was asked is `delegatedText`.
+   */
+  userText?: string | null;
+  /** The task and accepted input where the owner's request started. */
   sessionId?: string;
   clientId?: string;
   /**
-   * The sending host admitted this relay as the owner's request or its accepted continuation.
-   * Only then does the receiver treat userText as the owner's
-   * request for this task. Optional on the wire; older hosts drop or never send it.
+   * Older envelopes only: the sending host admitted this relay as the owner's request or its
+   * accepted continuation, so `userText` is the owner's request for this task. Optional on the
+   * wire; older hosts drop or never send it. Plain-body receipts use `delegatedText` instead.
    */
   ownerVerified?: true;
+  /** The message body is the agent's own text, not the 用户原话 / Agent补充 envelope (2026-11-05). */
+  plainBody?: true;
+  /**
+   * The sending host checked, in a turn that spoke for the owner, that the owner asked for this
+   * hand-off (its Auto review, the owner's own confirmation, or Full Access); the body is exactly
+   * this text. Its presence is the owner authority; the receiver reviews against it.
+   */
+  delegatedText?: string;
 }
 
 /** Kept under the existing protected, non-human input receipt. */
@@ -52,14 +65,21 @@ export function readForwardedRequestSource(value: unknown): ForwardedRequestSour
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const source = value as Record<string, unknown>;
   if (source.userText === null) return { userText: null };
-  if (typeof source.userText !== 'string' || typeof source.sessionId !== 'string'
-    || !source.sessionId || typeof source.clientId !== 'string' || !source.clientId) return null;
+  if (typeof source.sessionId !== 'string' || !source.sessionId
+    || typeof source.clientId !== 'string' || !source.clientId) return null;
+  if (source.plainBody === true) {
+    return { sessionId: source.sessionId, clientId: source.clientId, plainBody: true,
+      ...(typeof source.delegatedText === 'string' && source.delegatedText.trim()
+        ? { delegatedText: source.delegatedText } : {}) };
+  }
+  if (typeof source.userText !== 'string') return null;
   return { userText: source.userText, sessionId: source.sessionId, clientId: source.clientId,
     ...(source.ownerVerified === true ? { ownerVerified: true as const } : {}) };
 }
 
 /** JSON string quoting keeps an agent-written label inside the supplement. No trimming or summarizing. */
 export function formatForwardedRequest(source: ForwardedRequestSource, supplement: string, locale: SupportedLocale = DEFAULT_LOCALE): string {
+  if (source.plainBody) return supplement;
   // New UI languages must also reach receivers released before those catalogs.
   // Until the wire negotiates dialect support, emit an existing English envelope.
   const wireLocale = locale === 'es' || locale === 'fr' || locale === 'de' || locale === 'pt-PT' || locale === 'pt-BR'
@@ -78,6 +98,8 @@ function formatReceiptDialect(source: ForwardedRequestSource, supplement: string
 
 /** Validate the sender's locale independently of this computer's language. Includes the original Chinese format. */
 export function matchesForwardedRequest(source: ForwardedRequestSource, body: string): boolean {
+  // A plain body carries no quotation to compare; only a checked hand-off names its exact text.
+  if (source.plainBody) return source.delegatedText !== undefined && source.delegatedText === body;
   const lines = body.split('\n');
   if (lines.length !== 3) return false;
   return SUPPORTED_LOCALES.some(locale => {

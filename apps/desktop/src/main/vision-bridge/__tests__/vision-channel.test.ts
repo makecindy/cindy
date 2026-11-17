@@ -2,7 +2,8 @@
  * vision-channel 单元测试。
  *
  * 覆盖：resolveVisionBackendEndpoint（api-key / none / gateway-key / 不支持 OAuth 抛错）、
- * extractChatContent（string / array / 空）。
+ * extractChatContent（string / array / 空）、
+ * extractAnthropicContent（thinking 在前、只有 thinking、普通 text、多 text 拼接）。
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -14,9 +15,11 @@ import type { Provider } from '@cindy/model-providers';
 
 import {
   describeImageWithProvider,
+  extractAnthropicContent,
   extractChatContent,
   MAX_DESCRIPTION_CHARS,
   resolveVisionBackendEndpoint,
+  VISION_ANTHROPIC_MAX_TOKENS,
   VisionBackendError,
   type VisionChannelDeps,
 } from '../vision-channel.js';
@@ -248,6 +251,56 @@ describe('extractChatContent', () => {
     expect(extractChatContent({ choices: [] })).toBeNull();
     expect(extractChatContent({})).toBeNull();
     expect(extractChatContent({ choices: [{ message: { content: '' } }] })).toBeNull();
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：extractAnthropicContent。视觉桥只把 text 块当成图片描述。
+// - Bug／规则依据：#4580。思考模型把 token 花在 thinking 块上时，正文为空被当成图片不可用。
+// - 现有覆盖缺口：原来只断言过 type=text 的成功响应，没有 thinking / redacted_thinking。
+// - 最小失败输入：thinking 块自己带 text 字段，排在真正的 text 块前面；或响应里只有 thinking。
+// - tier：unit。纯函数，不碰网络。修复前「thinking 带 text」会把思考串进描述或当成成功。
+describe('extractAnthropicContent', () => {
+  it('keeps the text block when a thinking block comes first', () => {
+    expect(
+      extractAnthropicContent({
+        content: [
+          { type: 'thinking', thinking: 'hidden reasoning', text: 'should not leak' },
+          { type: 'redacted_thinking', data: 'opaque', text: 'also hidden' },
+          { type: 'text', text: 'a red button' },
+        ],
+      }),
+    ).toBe('a red button');
+  });
+
+  it('returns null when the reply is only thinking, so the caller still fails closed', () => {
+    expect(
+      extractAnthropicContent({
+        content: [{ type: 'thinking', thinking: 'only thoughts', text: 'not a description' }],
+      }),
+    ).toBeNull();
+    expect(
+      extractAnthropicContent({
+        content: [{ type: 'redacted_thinking', data: 'opaque', text: 'not a description' }],
+      }),
+    ).toBeNull();
+  });
+
+  it('extracts a plain text block', () => {
+    expect(extractAnthropicContent({ content: [{ type: 'text', text: 'a blue sky' }] })).toBe(
+      'a blue sky',
+    );
+  });
+
+  it('concatenates multiple text blocks', () => {
+    expect(
+      extractAnthropicContent({
+        content: [
+          { type: 'text', text: 'a blue ' },
+          { type: 'text', text: 'sky' },
+        ],
+      }),
+    ).toBe('a blue sky');
   });
 });
 
@@ -573,10 +626,41 @@ describe('describeImageWithProvider', () => {
     // anthropic-messages 缺省路径 /v1/messages + image block（data URL 转 base64 source）。
     expect(url).toBe('https://api.example.com/v1/messages');
     const body = JSON.parse(init.body);
+    // #4580：预算必须盖住 thinking 块。1024 会被思考吃光，正文变空。
+    expect(body.max_tokens).toBe(VISION_ANTHROPIC_MAX_TOKENS);
+    expect(VISION_ANTHROPIC_MAX_TOKENS).toBe(4096);
     expect(body.messages[0].content[1]).toEqual({
       type: 'image',
       source: { type: 'base64', media_type: 'image/png', data: 'QUJD' },
     });
+  });
+
+  it('throws empty when an anthropic reply is only a thinking block', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'thinking', thinking: 'looks like a button', text: 'not the description' }],
+      }),
+    } as unknown as Response);
+    const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
+    d.getProviderById = () =>
+      fakeProvider({
+        routing: {
+          'claude-code': {
+            wireProtocol: 'anthropic-messages',
+            upstream: 'https://api.example.com',
+            authStrategy: 'api-key-header',
+          },
+        },
+      });
+    await expect(
+      describeImageWithProvider(
+        'user-x',
+        'vision-x',
+        { imageUrl: 'data:image/png;base64,QUJD', prompt: 'what?' },
+        d,
+      ),
+    ).rejects.toMatchObject({ code: 'empty', name: 'VisionBackendError' });
   });
 
   it('sends openai-responses request with input_image when routing is responses', async () => {

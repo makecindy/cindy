@@ -13,6 +13,7 @@ import {
   nextDateBuildNumber,
   replaceBuildNumberInAppJson,
   resolveIosSigningEnv,
+  archiveIosSymbols,
 } from '../../scripts/lib/ios-local.mjs';
 
 const resp = (status, { json, ok } = {}) => ({
@@ -141,6 +142,38 @@ describe('buildExportOptionsPlist', () => {
     });
     expect(plist).toContain('<string>enterprise</string>');
     expect(plist).not.toContain('<string>development</string>');
+  });
+});
+
+// 测试价值:生产入口 archiveIosSymbols(build-ios.mjs 导出 .ipa 后调用),可观察结果是 .ipa 旁边
+// 是否留下 .dSYMs.zip。依据:2026-11 排查线上崩溃时发现历史 iOS 包的符号全部随临时目录丢失,
+// App 自身调用帧无法还原。最小失败输入:archive 的 dSYMs 目录里有 .dSYM。tier:unit(注入 fs/zip)。
+describe('archiveIosSymbols(发版留存崩溃符号)', () => {
+  const fsWith = (entries) => ({ existsSync: () => entries !== null, readdirSync: () => entries ?? [] });
+  it('archive 带 dSYM → 打包到 .ipa 同目录同名的 .dSYMs.zip 并返回其路径', () => {
+    const calls = [];
+    const out = archiveIosSymbols({
+      archivePath: '/tmp/build/app.xcarchive',
+      ipaPath: '/tmp/build/export/Cindy.ipa',
+      zip: (from, to) => calls.push([from, to]),
+      fs: fsWith(['Cindy.app.dSYM', 'hermesvm.framework.dSYM']),
+    });
+    expect(out).toBe('/tmp/build/export/Cindy.dSYMs.zip');
+    expect(calls).toEqual([['/tmp/build/app.xcarchive/dSYMs', '/tmp/build/export/Cindy.dSYMs.zip']]);
+  });
+  it.each([
+    ['没有 dSYMs 目录', null],
+    ['目录里没有 .dSYM', ['Info.plist']],
+  ])('%s → 返回 null 且不打包(由调用方告警)', (_name, entries) => {
+    const calls = [];
+    const out = archiveIosSymbols({
+      archivePath: '/tmp/build/app.xcarchive',
+      ipaPath: '/tmp/build/export/Cindy.ipa',
+      zip: (from, to) => calls.push([from, to]),
+      fs: fsWith(entries),
+    });
+    expect(out).toBeNull();
+    expect(calls).toEqual([]);
   });
 });
 

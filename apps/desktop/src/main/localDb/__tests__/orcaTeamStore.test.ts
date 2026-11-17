@@ -189,6 +189,23 @@ describe('orcaTeamStore', () => {
     await expect(
       client.queryOne('SELECT role, label FROM orca_workers WHERE id = ?', ['worker-1']),
     ).resolves.toEqual({ role: 'reviewer', label: 'reviewer-2' });
+
+    // 同名 Worker 归档后让出名字（与创建时一致）：改名成功，归档记录保留、label 带上自身 id。
+    // 依据：2026-11-10 协同任务里归档 Worker 仍占名，按原名重建全部 DUPLICATE_LABEL。
+    await client.exec("UPDATE sessions SET status = 'archived' WHERE id = ?", ['worker-session-2']);
+    await expect(
+      updateWorkerIdentity({
+        workerId: 'worker-1',
+        role: 'reviewer',
+        label: 'Tester-2',
+        previousRole: 'reviewer',
+        previousLabel: 'reviewer-2',
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(client.query('SELECT id, label FROM orca_workers ORDER BY id')).resolves.toEqual([
+      { id: 'worker-1', label: 'Tester-2' },
+      { id: 'worker-2', label: 'tester-2~worker-2' },
+    ]);
   });
 
   it('requires workerId and workerSessionId to match the same row when both are supplied', async () => {
@@ -232,6 +249,13 @@ describe('orcaTeamStore', () => {
     const pending = { clientIds: ['c-1'], baselineMessageId: 'old-reply' };
     await store.saveWorkerRemoteReport('worker-1', pending);
     expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: pending });
+    // #9346: a restart must retain the Lead receipt identity as well as remote input IDs.
+    const handoff = { ...pending, delivery: { clientId: 'lead-report-1', inputClientIds: ['c-1'],
+      kind: 'automatic' as const, messageId: 'reply-1' } };
+    const previous = { clientId: 'unknown-report', inputClientIds: ['c-1'], kind: 'manual' as const };
+    const chainedHandoff = { ...handoff, delivery: { ...handoff.delivery, previous } };
+    await store.saveWorkerRemoteReport('worker-1', chainedHandoff);
+    expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: chainedHandoff });
     await store.saveWorkerRemoteReport('worker-1', null, 'reply-1');
     await store.markWorkerRemoteStopConfirmed('worker-1', 1234);
     expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toMatchObject({ pendingReport: null,
@@ -618,6 +642,7 @@ describe('orcaTeamStore', () => {
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL DEFAULT 'New Maker',
         working_dir TEXT,
+        project_dir TEXT,
         workspace_kind TEXT NOT NULL DEFAULT 'project',
         model TEXT NOT NULL DEFAULT 'gpt-5.4',
         scheduled_model_baseline TEXT,

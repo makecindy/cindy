@@ -18,6 +18,8 @@ import { deriveCindyMediaConfig } from '../cindyMediaCatalog.js';
 
 import { GhostCindySlot, type CindySlotDeps } from '../cindySlot';
 import { sniffMediaMime } from '../../cindy-media/sniffMediaMime';
+import { probeImageSize } from '../imageProbe.js';
+import type { LegacyMediaResult } from '../../cindy-media/legacyMediaInvocation.js';
 import {
   GHOST_CINDY_DEPOSIT_BURST,
   GHOST_CINDY_DEPOSIT_MAX_BYTES,
@@ -36,6 +38,7 @@ function fakeGhost(
       media?: string[];
       text?: string[];
       embed?: string[];
+      models?: string[];
       search?: string[];
       oneshotModel?: string;
     } | null;
@@ -63,11 +66,28 @@ function fakeGhost(
           }),
     },
     dir: '/fake/brain/art',
+    approval: { state: 'approved', revision: 'test-revision' },
     enabled: overrides.enabled ?? true,
   } as InstalledGhost;
 }
 
-function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
+type MediaFixture = {
+  buffer: Uint8Array; mimeType: string;
+  videoParams?: LegacyMediaResult['videoParams'];
+};
+type FixtureParams = {
+  prompt: string; model: string; providerId?: string; imagePaths?: string[];
+  aspectRatio?: string; refMode?: string; duration?: number;
+  resolution?: string; ratio?: string; fps?: number; audio?: boolean;
+};
+type FixtureDeps = Partial<CindySlotDeps> & {
+  generateImage?: (params: FixtureParams) => Promise<MediaFixture>;
+  editImage?: (params: FixtureParams) => Promise<MediaFixture>;
+  generateVideo?: (params: FixtureParams) => Promise<MediaFixture>;
+  editVideo?: (params: FixtureParams) => Promise<MediaFixture>;
+};
+
+function makeSlot(overrides: FixtureDeps = {}): {
   slot: GhostCindySlot;
   generateImage: ReturnType<typeof vi.fn>;
   editImage: ReturnType<typeof vi.fn>;
@@ -118,7 +138,9 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
       : null,
   );
   const imageCapabilities = vi.fn(() => null);
-  const resolveOwnedMedia = vi.fn(async (_ghostId: string, hash: string) => `/disk/${hash}.png`);
+  const resolveOwnedMedia = vi.fn(async (_ghostId: string, hash: string) => ({
+    absPath: `/disk/${hash}.png`, url: `cindy-media://blobs/${hash}.png`,
+  }));
   const getImageConfig = vi.fn(() => ({
     models: [
     { id: 'gpt-image-2', label: 'GPT Image 2' },
@@ -170,10 +192,34 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     getGhost: () => fakeGhost(),
     getOwnerScopeKey: () => 'cloud:test-owner:1',
     isOwnerBoundaryPending: () => false,
-    generateImage,
-    editImage,
-    generateVideo,
-    editVideo,
+    // Provider byte fixtures stand in for Core. Slot itself now consumes only
+    // already-ingested references; retain the old parameter/permission assertions.
+    invokeMedia: async (request) => {
+      const params: FixtureParams = {
+        prompt: request.prompt, model: request.model,
+        ...(request.providerId ? { providerId: request.providerId } : {}),
+        ...(request.aspectRatio !== undefined ? { aspectRatio: request.aspectRatio } : {}),
+        ...(request.kind.startsWith('edit_') ? { imagePaths: request.imagePaths } : {}),
+        ...(request.refMode ? { refMode: request.refMode } : {}),
+      };
+      for (const key of ['duration', 'resolution', 'ratio', 'fps', 'audio'] as const) {
+        if (request[key] !== undefined) Object.assign(params, { [key]: request[key] });
+      }
+      const generators = {
+        gen_image: overrides.generateImage ?? generateImage,
+        edit_image: overrides.editImage ?? editImage,
+        gen_video: overrides.generateVideo ?? generateVideo,
+        edit_video: overrides.editVideo ?? editVideo,
+      };
+      const generated = await generators[request.kind](params);
+      const dims = request.kind.endsWith('image') ? probeImageSize(generated.buffer) : null;
+      return {
+        url: 'cindy-media://blobs/abc.png', hash: 'a'.repeat(64), ext: '.png',
+        mimeType: generated.mimeType, bytes: generated.buffer.byteLength,
+        ...(dims ?? {}),
+        ...('videoParams' in generated ? { videoParams: generated.videoParams } : {}),
+      };
+    },
     resolveOwnedMedia,
     getImageConfig,
     getVideoConfig,
@@ -213,6 +259,44 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
 const REQ = { type: 'cindy-request', kind: 'gen_image', prompt: '一只猫' };
 const HASH_S = '5'.repeat(64);
 const EDIT_REQ = { type: 'cindy-request', kind: 'edit_image', prompt: '加顶帽子', hashes: [HASH_S] };
+
+describe('Core 媒体兼容入口', () => {
+  it('改图把归属校验得到的受管引用交给 Core，保留视频适配器所需的路径', async () => {
+    const url = `cindy-media://blobs/${HASH_S}.png`;
+    const output = { url, hash: HASH_S, ext: '.png', mimeType: 'image/png', bytes: 1 };
+    const invokeMedia = vi.fn(async () => output);
+    const { slot } = makeSlot({
+      invokeMedia,
+      resolveOwnedMedia: vi.fn(async () => ({ absPath: '/disk/source.png', url })),
+    });
+    expect(await slot.handleModelRequest('art', {
+      kind: 'edit_image', prompt: '换成蓝色', hashes: [HASH_S],
+    })).toMatchObject({ ok: true });
+    expect(invokeMedia).toHaveBeenCalledWith(expect.objectContaining({
+      imagePaths: ['/disk/source.png'], imageRefs: [url],
+    }));
+  });
+
+  it('保留 Core 已入仓的结果，不要求再次生成图片字节', async () => {
+    const media = {
+      url: `cindy-media://blobs/${'a'.repeat(64)}.png`,
+      hash: 'a'.repeat(64), ext: '.png', mimeType: 'image/png',
+      bytes: 1024, width: 512, height: 512,
+    };
+    const invokeMedia = vi.fn(async () => media);
+    const saveGhostMedia = vi.fn(async () => media);
+    const { slot, generateImage } = makeSlot({
+      invokeMedia, saveGhostMedia,
+    } as unknown as Partial<CindySlotDeps>);
+
+    expect(await slot.handleModelRequest('art', REQ)).toMatchObject({
+      ok: true, url: media.url, hash: media.hash, width: 512, height: 512,
+    });
+    expect(invokeMedia).toHaveBeenCalledOnce();
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(saveGhostMedia).toHaveBeenCalledWith(expect.objectContaining({ media }));
+  });
+});
 
 describe('载荷校验', () => {
   it('未知 kind / 空 prompt / 超长 prompt → 结构化拒绝', async () => {
@@ -812,7 +896,9 @@ describe('视频代办(gen_video / edit_video)', () => {
     expect(r).toMatchObject({ ok: true, model: 'seedance-fast', modelLabel: 'Seedance 快速' });
     expect(getVideoConfig).toHaveBeenCalledWith('generate');
     expect(generateVideo).toHaveBeenCalledWith({ prompt: '一只猫奔跑', model: 'seedance-fast' });
-    expect(saveGhostMedia).toHaveBeenCalledWith(expect.objectContaining({ mimeType: 'video/mp4' }));
+    expect(saveGhostMedia).toHaveBeenCalledWith(expect.objectContaining({
+      media: expect.objectContaining({ mimeType: 'video/mp4' }),
+    }));
   });
 
   it('tier 档位查视频翻译表(best → seedance-pro);失效点名回落默认', async () => {
@@ -1016,7 +1102,7 @@ describe('代办链路', () => {
     expect(saveGhostMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         ghostId: 'art',
-        mimeType: 'image/png',
+        media: expect.objectContaining({ mimeType: 'image/png' }),
         ownerScopeKey: 'cloud:test-owner:1',
       }),
     );
@@ -1120,7 +1206,7 @@ describe('代办链路', () => {
     const { slot } = makeSlot({
       generateImage: vi.fn(
         () => new Promise<{ buffer: Uint8Array; mimeType: string }>((res) => pending.push(res)),
-      ) as unknown as CindySlotDeps['generateImage'],
+      ) as unknown as NonNullable<FixtureDeps['generateImage']>,
     });
 
     const first = slot.handleModelRequest('art', REQ);
@@ -1136,7 +1222,7 @@ describe('代办链路', () => {
     let release: (v: { buffer: Uint8Array; mimeType: string }) => void = () => {};
     const gate = new Promise<{ buffer: Uint8Array; mimeType: string }>((res) => (release = res));
     const { slot } = makeSlot({
-      generateImage: vi.fn(() => gate) as unknown as CindySlotDeps['generateImage'],
+      generateImage: vi.fn(() => gate) as unknown as NonNullable<FixtureDeps['generateImage']>,
       getInflightLimit: vi.fn(() => 1) as unknown as CindySlotDeps['getInflightLimit'],
     });
 
@@ -1158,7 +1244,7 @@ describe('代办链路', () => {
     const { slot } = makeSlot({
       generateImage: vi.fn(
         () => new Promise<{ buffer: Uint8Array; mimeType: string }>((res) => pending.push(res)),
-      ) as unknown as CindySlotDeps['generateImage'],
+      ) as unknown as NonNullable<FixtureDeps['generateImage']>,
       getInflightLimit: vi.fn(() => 2) as unknown as CindySlotDeps['getInflightLimit'],
     });
 
@@ -1277,7 +1363,7 @@ describe('改图代办(edit_image)', () => {
   it('任一源图不在本意识名下 → 整单拒(统一话术)', async () => {
     const { slot, editImage } = makeSlot({
       resolveOwnedMedia: vi.fn(async (_g: string, hash: string) =>
-        hash === HASH_S ? `/disk/${hash}.png` : null,
+        hash === HASH_S ? { absPath: `/disk/${hash}.png`, url: `cindy-media://blobs/${hash}.png` } : null,
       ) as unknown as CindySlotDeps['resolveOwnedMedia'],
     });
     const r = await slot.handleModelRequest('art', {
@@ -1295,7 +1381,7 @@ describe('改图代办(edit_image)', () => {
       async (_ghostId: string, hash: string, taskOwnerScopeKey: string) => {
         expect(taskOwnerScopeKey).toBe('cloud:owner-a:1');
         ownerScopeKey = 'cloud:owner-b:2';
-        return `/disk/${hash}.png`;
+        return { absPath: `/disk/${hash}.png`, url: `cindy-media://blobs/${hash}.png` };
       },
     );
     const editImage = vi.fn();
@@ -1317,7 +1403,7 @@ describe('改图代办(edit_image)', () => {
     const HASH = 'a'.repeat(64);
     const blob = `assets/${HASH.slice(0, 2)}/${HASH}/blob.png`;
     const resolveOwnedMedia = vi.fn(async (_g: string, key: string) =>
-      key === blob ? `/library/${blob}` : null,
+      key === blob ? { absPath: `/library/${blob}`, url: `cindy-media://blobs/${HASH}.png` } : null,
     );
     const { slot, editImage } = makeSlot({
       resolveOwnedMedia,
@@ -1648,7 +1734,7 @@ describe('寄存(deposit_media / release_media)', () => {
     // 归属账本认寄存物(生产由 ledger.ghostCanRead 的 ghost-deposit 分支保证)。
     const { slot, editImage } = makeSlot({
       resolveOwnedMedia: vi.fn(async (_g: string, hash: string) =>
-        hash === HASH_D ? `/disk/${hash}.png` : null,
+        hash === HASH_D ? { absPath: `/disk/${hash}.png`, url: `cindy-media://blobs/${hash}.png` } : null,
       ),
     } as Partial<CindySlotDeps>);
     const dep = await slot.handleModelRequest('art', depositReq(b64(PNG)));
@@ -2636,4 +2722,23 @@ describe('文本转向量(embed_text)· 失败码与时间预算', () => {
       timeoutMs: GHOST_CINDY_EMBED_TIMEOUT_MS,
     });
   });
+});
+
+// Unit: new paid model requests must enforce the plugin declaration and the existing
+// inflight limit. Legacy media/oneshot tests do not exercise the new kind dispatch.
+it('requires declared model API and shares the existing inflight limit', async () => {
+  const evaluate = vi.fn(async () => ({ ok: true, models: [{ id: 'example', provider_id: 'xd', name: 'Example' }] }));
+  const denied = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0) });
+  expect(await denied.slot.handleModelRequest('art', { kind: 'list_models', api: 'rerank' })).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+  expect(evaluate).not.toHaveBeenCalled();
+  const legacy = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0), getGhost: () => fakeGhost({ model: { image: ['generate'], models: ['rerank'] } }) });
+  for (const request of [{ kind: 'list_models', api: 'rerank' }, { kind: 'rerank', query: 'q', documents: ['d'] }]) {
+    expect(await legacy.slot.handleModelRequest('art', request)).toMatchObject({ errorCode: 'PERMISSION_DENIED' });
+  }
+  expect(evaluate).not.toHaveBeenCalled();
+  const allowed = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0), getGhost: () => ({ ...fakeGhost({ model: { models: ['rerank'] } }), approvedCindyModelActions: ['rerank'] }) });
+  expect(await allowed.slot.handleModelRequest('art', { kind: 'list_models', api: 'rerank' })).toEqual({ ok: true, models: [{ model: 'example', providerId: 'xd', name: 'Example' }] });
+  const busy = makeSlot({ evaluate, readEvaluationImage: async () => Buffer.alloc(0), getGhost: () => ({ ...fakeGhost({ model: { models: ['rerank'] } }), approvedCindyModelActions: ['rerank'] }), getInflightLimit: () => 0 });
+  expect(await busy.slot.handleModelRequest('art', { kind: 'rerank', query: 'q', documents: ['d'] })).toMatchObject({ ok: false, errorCode: 'BUSY' });
+  expect(evaluate).toHaveBeenCalledTimes(1);
 });

@@ -185,6 +185,52 @@ describe('model price override sparse persistence', () => {
     ).toBe(false);
   });
 
+  // Settings expose a single cache-write price. The 1h tariff must follow that
+  // edit (keeping the provider's 1h/5m ratio) and, being non-editable, must
+  // not turn an existing saved override into a "reference changed" conflict.
+  it('projects the 1h cache-write price with cache-write edits and keeps it out of conflicts', () => {
+    const target = { providerId: 'anthropic', agent: 'claude-code' as const, modelId: 'claude-opus-5-5' };
+    const reference = providerReferencePriceQuote(
+      'anthropic', 'claude-opus-5-5', BUNDLED_CATALOG.modelRegistry,
+      { agent: 'claude-code', at: '2026-11-05' },
+    )!;
+    expect(reference.cacheCreate1hPerMtok).toBe(8);
+    expect(__testing.mergedQuote(target, reference, { inputPerMtok: 3 })?.cacheCreate1hPerMtok).toBe(8);
+    expect(__testing.mergedQuote(target, reference, { cacheCreatePerMtok: 10 })?.cacheCreate1hPerMtok).toBe(16);
+    expect(__testing.mergedQuote(target, reference, { cacheCreatePerMtok: null })?.cacheCreate1hPerMtok)
+      .toBeUndefined();
+
+    const savedBeforeThisField = __testing.comparable({
+      ...reference,
+      inputTokenPriceBands: reference.inputTokenPriceBands?.map((band) => {
+        const { cacheCreate1hPerMtok, ...rest } = band;
+        void cacheCreate1hPerMtok;
+        return rest;
+      }),
+    });
+    expect(__testing.sameComparable(savedBeforeThisField, __testing.comparable(reference))).toBe(true);
+  });
+
+  it('keeps the long-context multiplier on the 1h cache-write price of a band', () => {
+    const merged = __testing.mergedQuote(
+      { providerId: 'custom', agent: 'claude-code', modelId: 'model' },
+      {
+        providerId: 'custom', modelId: 'model', currency: 'USD', source: 'provider-reference',
+        approximate: true, inputPerMtok: 5, outputPerMtok: 25,
+        cacheCreatePerMtok: 6.25, cacheCreate1hPerMtok: 10,
+        inputTokenPriceBands: [{
+          minInputTokens: 200_000, inputPerMtok: 10, outputPerMtok: 50,
+          cacheCreatePerMtok: 12.5, cacheCreate1hPerMtok: 20,
+        }],
+      },
+      { cacheCreatePerMtok: 10 },
+    );
+    expect(merged?.cacheCreate1hPerMtok).toBe(16);
+    expect(merged?.inputTokenPriceBands?.[0]).toMatchObject({
+      cacheCreatePerMtok: 20, cacheCreate1hPerMtok: 32,
+    });
+  });
+
   it('preserves remote long-context multipliers when applying a sparse local override', () => {
     const inputTokenPriceBands = [
       {

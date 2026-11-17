@@ -21,7 +21,10 @@ import {
   recommendForHost,
   resolveCuratedOllamaCatalog,
   resolveManagedOllamaAgents,
+  installDownloadProgress,
+  pullDownloadProgress,
 } from '../localModelRuntime.js';
+import { initialDownloadProgress } from '../downloadProgress.js';
 
 describe('localModelRuntime', () => {
   it('maps known Ollama library tags to catalog display names', () => {
@@ -93,6 +96,27 @@ describe('localModelRuntime', () => {
     ).toBe('not-gguf');
     expect(classifyOllamaPullError('not-found')).toBe('not-found');
     expect(classifyOllamaPullError('connection refused')).toBe('refused');
+  });
+
+  // #6311 / maintainer comment6230690779: explicit DNS failures take priority
+  // over model/permission guesses, including status-like numbers inside a hostname.
+  it.each([
+    ['lookup huggingface.co: no such host', undefined],
+    ['getaddrinfo ENOTFOUND huggingface.co', undefined],
+    ['lookup models404.example: no such host', undefined],
+    ['getaddrinfo ENOTFOUND models401.example', undefined],
+    ['lookup huggingface.co: no such host', 'hf.co/example/Example-MLX'],
+    ['getaddrinfo ENOTFOUND huggingface.co', 'hf.co/example/Example-MLX'],
+    ['getaddrinfo ENOTFOUND models404.example', undefined],
+  ])('keeps DNS failure %s generic', (message, pullName) => {
+    expect(classifyOllamaPullError(new Error(message), pullName)).toBe('generic');
+  });
+
+  it.each([
+    ['pull model manifest: 404: file does not exist', 'not-found'],
+    ['pull model manifest: 401: unauthorized', 'unauthorized'],
+  ] as const)('preserves model response %s as %s', (message, expected) => {
+    expect(classifyOllamaPullError(message)).toBe(expected);
   });
 
   it('picks mlx then mxfp8 by unified memory', () => {
@@ -416,5 +440,74 @@ describe('localModelRuntime', () => {
     expect(isLocalRuntimeBetaProviderId('vllm-3')).toBe(true);
     expect(isLocalRuntimeBetaProviderId('openrouter')).toBe(false);
     expect(isLocalRuntimeBetaProviderId('litellm')).toBe(false);
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：installDownloadProgress / pullDownloadProgress 决定设置页 Ollama
+//   安装与模型拉取进度条在没有 download 字段时显示什么。
+// - Bug／规则依据：verified-downloads.md「下载进度与界面」；启动 Ollama、安装结果和重启后恢复的
+//   暂停拉取不带 download，不能让进度条清零或显示错误阶段。
+// - 现有覆盖缺口：新增的兼容转换，无其它入口覆盖。
+// - 最小失败输入：下载完成后的 starting／success；磁盘恢复的 paused 记录。
+// - tier：unit（纯函数）。
+describe('standard download progress for Ollama surfaces', () => {
+  const lastBytes = {
+    phase: 'verifying' as const,
+    loaded: 90,
+    total: 100,
+    percent: 90,
+    speedBps: 5,
+    etaSeconds: 2,
+  };
+
+  it.each([
+    ['starting', 'installing', 90],
+    ['success', 'completed', 100],
+    ['cancelled', 'cancelled', 90],
+  ] as const)('keeps the last bytes when install step %s has none', (phase, shown, percent) => {
+    expect(installDownloadProgress({ phase, done: false }, lastBytes)).toMatchObject({
+      phase: shown,
+      percent,
+      speedBps: 0,
+      etaSeconds: null,
+    });
+  });
+
+  it('shows a restored paused pull with its stored bytes', () => {
+    expect(
+      pullDownloadProgress({
+        name: 'qwen3.8:27b',
+        status: 'paused',
+        phase: 'paused',
+        completed: 40,
+        total: 100,
+        percent: 40,
+        done: true,
+      }),
+    ).toMatchObject({ phase: 'paused', loaded: 40, total: 100, percent: 40, speedBps: 0 });
+  });
+
+  // PR #10938 review: a paused checkpoint copied the last live frame, so the meter kept showing
+  // speed and time left (or "verifying") while the button already offered to resume.
+  it('lets a settled pull outrank the last live meter frame it still carries', () => {
+    const live = {
+      ...initialDownloadProgress('verifying', 100),
+      loaded: 60,
+      percent: 60,
+      speedBps: 900,
+      etaSeconds: 3,
+    };
+    expect(
+      pullDownloadProgress({
+        name: 'qwen3.8:27b',
+        status: 'paused',
+        phase: 'paused',
+        completed: 60,
+        total: 100,
+        done: true,
+        download: live,
+      }),
+    ).toMatchObject({ phase: 'paused', loaded: 60, percent: 60, speedBps: 0, etaSeconds: null });
   });
 });

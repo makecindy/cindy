@@ -12,7 +12,7 @@ const host = vi.hoisted(() => ({
 }));
 vi.mock('../../authManager', () => ({ getDeviceId: () => 'computer' }));
 vi.mock('../../localDb/client/current', () => ({ getCurrentDbClientSnapshot: () => host.account }));
-vi.mock('../../maker-host/outbound-fetch', () => ({ outboundFetch: host.fetch }));
+vi.mock('../../maker-host/outbound-fetch.desktop', () => ({ outboundFetch: host.fetch }));
 vi.mock('../ghCliTokenSource', () => ({
   getSharedGhCliTokenSource: () => ({
     readTokenDetailed: async () => ({ ok: true, token: 'fake' }),
@@ -34,6 +34,7 @@ function setup() {
         ...pr,
         ok: true,
         status: 'open',
+        conflicts: true,
         title: 'Test',
         branch: 'branch',
         htmlUrl: 'https://github.com/o/r/pull/1',
@@ -96,6 +97,7 @@ describe('shared GitHub read protocol', () => {
     expect(await h.service().read('get_pr_status', { pr })).toMatchObject({
       ok: true,
       head_sha: 'abc',
+      conflicts: true,
       checks: { total: 0 },
       partial: false,
     });

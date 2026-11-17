@@ -1,0 +1,960 @@
+--- <scratch>/base-s0/connection.rs	2026-11-01 23:02:26
++++ src/connection.rs	2026-11-02 03:04:39
+@@ -12,6 +12,7 @@
+ use crate::congestion::{Bbr, RECOVERY_TIMEOUTS, RateSample};
+ use crate::parity::{self, MAX_UNKNOWNS};
+ use crate::rtt::RttEstimator;
++use crate::stream::{DEFAULT_STREAM, HEADED_LENGTH_BIT, Priority, RecvStream, STREAM_HEADER_LEN, Scheduler, SendStream, StreamEvent, StreamHeader};
+ use crate::wire::{self, Frame};
+ 
+ const MAX_SEGMENTS_PER_PACKET: usize = 16;
+@@ -106,6 +107,22 @@
+ const LIMITER_EXCESS_LOSS_PPM: u64 = 30_000;
+ /// 待发和没确认的数据加起来不超过这么多个分片，算零散消息。
+ const SPARSE_BACKLOG_SEGMENTS: u64 = 64;
++/// 所有流加起来没读走的分片上限，是接收窗口的这么多倍。一条流最多占一个窗口，读得慢的流拖不住别的流。
++const MAX_UNREAD_WINDOWS: usize = 4;
++/// 所有流加起来的发送缓冲上限，是 `send_buffer_bytes` 的这么多倍。一条流写满缓冲时别的流还能写。
++const MAX_SEND_BUFFERS: usize = 2;
++/// 读走窗口的这么多分之一就更新额度。
++const GRANT_FRACTION: u64 = 8;
++/// 新的流量额度跟着这么多个确认发出去，确认丢了也不用等超时。
++const GRANT_REPEATS: u8 = 3;
++/// 最近这么久发过数据的流，算还在发。
++const STREAM_ACTIVE_US: u64 = 1_000_000;
++/// 交互流和大量数据同时在发时，发送窗口留出这么多分之一给交互流。
++const INTERACTIVE_WINDOW_RESERVE: u64 = 16;
++/// 每个往返最多这么多个分片的交互流数据不用等节奏和拥塞窗口。
++const INTERACTIVE_ROUND_SEGMENTS: usize = 8;
++/// 一个确认包最多带这么多条流的额度。
++const MAX_GRANTS_PER_PACKET: usize = 2;
+ 
+ /// 传输策略；只影响发送节奏和冗余，不改变线格式。
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+@@ -126,9 +143,11 @@
+     pub max_packet_size: usize,
+     /// 同时在途的分片上限。
+     pub send_window: u32,
+-    /// 接收窗口，单位是分片。
++    /// 接收窗口，单位是分片。每条流各有这么大的窗口。
+     pub recv_window: u32,
+-    /// 发送缓冲字节上限。写满后 `send` 只接受部分数据。
++    /// 每个方向同时存在的流数上限，含默认流。
++    pub max_streams: u32,
++    /// 每条流的发送缓冲字节上限。写满后 `send` 只接受部分数据。
+     pub send_buffer_bytes: usize,
+     pub initial_rto_us: u64,
+     pub min_rto_us: u64,
+@@ -142,7 +161,7 @@
+     pub dead_after_us: u64,
+     pub probe_initial_us: u64,
+     pub probe_max_us: u64,
+-    /// 起始序号。测试用来覆盖 32 位回绕，产品代码保持 0。
++    /// 起始序号。测试用来覆盖 32 位回绕，正常使用保持 0。
+     pub initial_sequence: u64,
+     pub initial_packet_number: u64,
+ }
+@@ -154,6 +173,7 @@
+             max_packet_size: 1400,
+             send_window: 128,
+             recv_window: 128,
++            max_streams: 64,
+             send_buffer_bytes: 1 << 20,
+             initial_rto_us: 200_000,
+             min_rto_us: 30_000,
+@@ -219,12 +239,30 @@
+ }
+ 
+ struct Segment {
++    /// 分片内容，带流头时流头在最前面。
+     data: Vec<u8>,
++    stream: u32,
++    headed: bool,
++    /// 属于交互流，丢了先补。
++    urgent: bool,
+     acked: bool,
+     in_flight: bool,
+     sent_before: bool,
+ }
+ 
++/// 收到的分片。校验包可能还要用到，所以交付给流以后内容还留着。
++struct Received {
++    body: Vec<u8>,
++    headed: bool,
++    /// 属于哪条流的第几个分片。没带流头时要等前一个分片到了才知道。
++    place: Option<(u32, u64)>,
++    delivered: bool,
++}
++
++fn coded_length(length: usize, headed: bool) -> u16 {
++    length as u16 | if headed { HEADED_LENGTH_BIT } else { 0 }
++}
++
+ #[derive(Clone, Copy)]
+ struct SentPacket {
+     number: u64,
+@@ -288,11 +326,22 @@
+     segments: VecDeque<Segment>,
+     snd_una: u64,
+     snd_sent: u64,
+-    snd_end: u64,
+-    send_buffered: usize,
+-    /// 待重传的分片，序号最小的先发：它堵着对端所有已到的后续数据。
++    send_buffered: usize,
++    send_streams: BTreeMap<u32, SendStream>,
++    scheduler: Scheduler,
++    next_stream_id: u32,
++    /// 交互流和其他流都在发：其他流要给它让路，也要少占网络里的队列。
++    mixed_traffic: bool,
++    last_interactive_at: Option<u64>,
++    last_other_at: Option<u64>,
++    /// 这个往返里发了多少交互流的数据。
++    urgent_round_at: u64,
++    urgent_round_bytes: usize,
++    /// 上一个切出来的分片属于哪条流，下一个流内序号。接下来的分片接得上就不用带流头。
++    tail_stream: (u32, u64),
++    /// 待重传的分片，交互流的先发，其余序号最小的先发：它堵着对端所有已到的后续数据。
+     /// 按丢失先后排队会让它排在几百片后面，瓶颈很小时几十秒都轮不到。
+-    retransmit: BTreeSet<u64>,
++    retransmit: BTreeSet<(bool, u64)>,
+     /// 待发送的重传副本。窗口被卡住时重传再丢一次就要多等一个往返，发两份几乎不会再丢。
+     duplicates: VecDeque<u64>,
+     /// 上一个校验包之后发的新分片数。
+@@ -346,13 +395,18 @@
+ 
+     // 接收侧。
+     rcv_next: u64,
+-    reorder: BTreeMap<u64, Vec<u8>>,
++    /// 序号还没连上的分片，`rcv_next` 之后的都在这里。
++    reorder: BTreeMap<u64, Received>,
+     reorder_bytes: usize,
+-    ready: VecDeque<Vec<u8>>,
+-    ready_offset: usize,
++    recv_streams: BTreeMap<u32, RecvStream>,
++    /// 所有流交付了、应用还没读走的分片和字节。
++    unread_segments: usize,
+     ready_bytes: usize,
+-    /// 读过但还留着的分片，紧接在 `ready` 前面。
+-    history: VecDeque<Vec<u8>>,
++    /// `rcv_next` 之前的那个分片属于哪条流，下一个流内序号。
++    rcv_tail: (u32, u64),
++    events: VecDeque<StreamEvent>,
++    /// 序号已经连上、校验包可能还要用的分片，紧接在 `rcv_next` 前面。
++    history: VecDeque<Received>,
+     history_bytes: usize,
+     pending_parity: VecDeque<PendingParity>,
+     /// 这个包带来了暂存的校验包等着的分片。
+@@ -414,8 +468,16 @@
+             segments: VecDeque::new(),
+             snd_una: sequence,
+             snd_sent: sequence,
+-            snd_end: sequence,
+             send_buffered: 0,
++            send_streams: BTreeMap::from([(DEFAULT_STREAM, SendStream::new(Priority::Normal, 0))]),
++            scheduler: Scheduler::default(),
++            next_stream_id: DEFAULT_STREAM + 1,
++            mixed_traffic: false,
++            last_interactive_at: None,
++            last_other_at: None,
++            urgent_round_at: 0,
++            urgent_round_bytes: 0,
++            tail_stream: (DEFAULT_STREAM, 0),
+             retransmit: BTreeSet::new(),
+             duplicates: VecDeque::new(),
+             parity_pending: 0,
+@@ -458,9 +520,11 @@
+             rcv_next: sequence,
+             reorder: BTreeMap::new(),
+             reorder_bytes: 0,
+-            ready: VecDeque::new(),
+-            ready_offset: 0,
++            recv_streams: BTreeMap::from([(DEFAULT_STREAM, RecvStream::new(0))]),
++            unread_segments: 0,
+             ready_bytes: 0,
++            rcv_tail: (DEFAULT_STREAM, 0),
++            events: VecDeque::new(),
+             history: VecDeque::new(),
+             history_bytes: 0,
+             pending_parity: VecDeque::new(),
+@@ -511,13 +575,23 @@
+         let flying = self.segments.iter().filter(|segment| segment.in_flight).count() as u32;
+         assert_eq!(self.in_flight, flying, "in_flight counter");
+         let buffered: usize = self.segments.iter().map(|segment| segment.data.len()).sum();
+-        assert_eq!(self.send_buffered, buffered, "send buffer accounting");
+-        assert_eq!(self.segments.len() as u64, self.snd_end - self.snd_una, "segment queue length");
+-        assert!(self.snd_una <= self.snd_sent && self.snd_sent <= self.snd_end, "send sequence order");
+-        assert_eq!(self.reorder_bytes, self.reorder.values().map(Vec::len).sum::<usize>(), "reorder accounting");
+-        let ready: usize = self.ready.iter().map(Vec::len).sum();
+-        assert_eq!(self.ready_bytes, ready - self.ready_offset, "ready accounting");
+-        assert_eq!(self.history_bytes, self.history.iter().map(Vec::len).sum::<usize>(), "history accounting");
++        let pending: usize = self.send_streams.values().map(|stream| stream.pending.len()).sum();
++        assert_eq!(self.send_buffered, buffered + pending, "send buffer accounting");
++        for (&id, stream) in &self.send_streams {
++            let unacked: usize = self.segments.iter().filter(|segment| segment.stream == id).map(|segment| segment.data.len()).sum();
++            assert_eq!(stream.unacked, unacked, "stream {id} send accounting");
++        }
++        assert_eq!(self.segments.len() as u64, self.snd_sent - self.snd_una, "segment queue length");
++        assert!(self.snd_una <= self.snd_sent, "send sequence order");
++        assert_eq!(self.reorder_bytes, self.reorder.values().map(|entry| entry.body.len()).sum::<usize>(), "reorder accounting");
++        let ready: usize = self.recv_streams.values().flat_map(|stream| stream.ready.iter()).map(Vec::len).sum();
++        let offsets: usize = self.recv_streams.values().map(|stream| stream.ready_offset).sum();
++        assert_eq!(self.ready_bytes, ready - offsets, "ready accounting");
++        assert_eq!(self.unread_segments, self.recv_streams.values().map(|stream| stream.ready.len()).sum::<usize>(), "unread accounting");
++        assert_eq!(self.history_bytes, self.history.iter().map(|entry| entry.body.len()).sum::<usize>(), "history accounting");
++        assert!(self.send_streams.len() <= self.config.max_streams as usize, "send stream bound");
++        assert!(self.recv_streams.len() <= self.config.max_streams as usize, "receive stream bound");
++        assert!(self.recv_streams.values().all(|stream| stream.waiting.len() <= self.config.recv_window as usize), "out of order stream bound");
+         assert!(self.history.len() <= MAX_HISTORY_SEGMENTS, "history bound");
+         assert!(self.pending_parity.len() <= MAX_PENDING_PARITY, "pending parity bound");
+         assert!(self.reorder.keys().all(|&sn| sn > self.rcv_next), "reorder holds delivered data");
+@@ -532,7 +606,7 @@
+ 
+     /// 还有数据未被对端确认。
+     pub fn has_unacked_data(&self) -> bool {
+-        !self.segments.is_empty()
++        !self.segments.is_empty() || self.send_streams.values().any(SendStream::has_data)
+     }
+ 
+     fn take_buffer(&mut self) -> Vec<u8> {
+@@ -546,97 +620,157 @@
+         }
+     }
+ 
+-    /// 写入字节流，返回接受的字节数；缓冲满时可能小于 `data.len()`。
++    /// 写入默认流，返回接受的字节数；缓冲满时可能小于 `data.len()`。
+     pub fn send(&mut self, now_us: u64, data: &[u8]) -> usize {
++        self.send_stream(now_us, DEFAULT_STREAM, data)
++    }
++
++    /// 开一条发往对端的流，返回流号。流数到了上限时返回 `None`。
++    pub fn open_stream(&mut self, priority: Priority) -> Option<u32> {
++        if self.send_streams.len() >= self.config.max_streams as usize || self.max_segment <= STREAM_HEADER_LEN {
++            return None;
++        }
++        let id = self.next_stream_id;
++        self.next_stream_id = id.checked_add(1)?;
++        self.send_streams.insert(id, SendStream::new(priority, self.config.recv_window as u64));
++        Some(id)
++    }
++
++    /// 调整流的优先级，下一个分片起生效。流不存在时返回 false。
++    pub fn set_priority(&mut self, stream: u32, priority: Priority) -> bool {
++        self.send_streams.get_mut(&stream).map(|state| state.priority = priority).is_some()
++    }
++
++    /// 写入一条流，返回接受的字节数。流不存在或已经结束时返回 0。
++    pub fn send_stream(&mut self, now_us: u64, stream: u32, data: &[u8]) -> usize {
+         if self.dead || data.is_empty() {
+             return 0;
+         }
+-        if self.segments.is_empty() {
++        if !self.has_unacked_data() {
+             self.last_heard = now_us;
+         }
+-        let room = self.config.send_buffer_bytes.saturating_sub(self.send_buffered);
+-        let mut rest = &data[..data.len().min(room)];
+-        let accepted = rest.len();
+-
+-        // 还没发出去的尾部分片可以继续填，小写入不会各占一个分片。
+-        if self.snd_sent < self.snd_end
+-            && let Some(last) = self.segments.back_mut()
+-        {
+-            let take = (self.max_segment - last.data.len()).min(rest.len());
+-            last.data.extend_from_slice(&rest[..take]);
+-            rest = &rest[take..];
+-        }
+-        while !rest.is_empty() {
+-            let take = self.max_segment.min(rest.len());
+-            let mut chunk = self.take_buffer();
+-            chunk.extend_from_slice(&rest[..take]);
+-            rest = &rest[take..];
+-            self.segments.push_back(Segment { data: chunk, acked: false, in_flight: false, sent_before: false });
+-            self.snd_end += 1;
+-        }
++        let per_stream = self.config.send_buffer_bytes;
++        let total_room = per_stream.saturating_mul(MAX_SEND_BUFFERS).saturating_sub(self.send_buffered);
++        let Some(state) = self.send_streams.get_mut(&stream).filter(|state| !state.finishing) else { return 0 };
++        let room = per_stream.saturating_sub(state.pending.len() + state.unacked).min(total_room);
++        let accepted = data.len().min(room);
++        state.pending.extend(&data[..accepted]);
+         self.send_buffered += accepted;
+         accepted
+     }
+ 
+-    /// 按序读出已到达的数据。
++    /// 这条流不再写了。之前写入的数据发完后，对端会收到 [`StreamEvent::Finished`]。默认流不能结束。
++    pub fn finish_stream(&mut self, stream: u32) -> bool {
++        if stream == DEFAULT_STREAM {
++            return false;
++        }
++        self.send_streams.get_mut(&stream).map(|state| state.finishing = true).is_some()
++    }
++
++    /// 取下一个流事件。
++    pub fn poll_event(&mut self) -> Option<StreamEvent> {
++        self.events.pop_front()
++    }
++
++    fn push_event(&mut self, event: StreamEvent) {
++        // 应用不取事件时也不能无限涨。
++        if self.events.len() < self.config.max_streams as usize * 4 {
++            self.events.push_back(event);
++        }
++    }
++
++    /// 按序读出默认流已到达的数据。
+     pub fn recv(&mut self, now_us: u64, out: &mut [u8]) -> usize {
++        self.recv_stream(now_us, DEFAULT_STREAM, out)
++    }
++
++    /// 按序读出一条流已到达的数据。
++    pub fn recv_stream(&mut self, now_us: u64, stream: u32, out: &mut [u8]) -> usize {
+         let window_before = self.advertised_window();
++        let Self { recv_streams, spare_buffers, ready_bytes, unread_segments, .. } = self;
++        let Some(state) = recv_streams.get_mut(&stream) else { return 0 };
+         let mut written = 0;
+         while written < out.len() {
+-            let Some(front) = self.ready.front() else { break };
+-            let available = &front[self.ready_offset..];
++            let Some(front) = state.ready.front() else { break };
++            let available = &front[state.ready_offset..];
+             let take = available.len().min(out.len() - written);
+             out[written..written + take].copy_from_slice(&available[..take]);
+             written += take;
+-            self.ready_offset += take;
+-            self.ready_bytes -= take;
+-            if self.ready_offset == front.len() {
+-                self.ready_offset = 0;
+-                if let Some(buffer) = self.ready.pop_front() {
+-                    self.retire_buffer(now_us, buffer);
++            state.ready_offset += take;
++            *ready_bytes -= take;
++            if state.ready_offset == front.len() {
++                state.ready_offset = 0;
++                state.consumed += 1;
++                *unread_segments -= 1;
++                if let Some(mut buffer) = state.ready.pop_front()
++                    && spare_buffers.len() < MAX_SPARE_BUFFERS
++                {
++                    buffer.clear();
++                    spare_buffers.push(buffer);
+                 }
+             }
+         }
+-        // 窗口重新打开时主动告诉对端，不用等对端下一次探测。
+-        let half = self.config.recv_window / 2;
+-        let window_after = self.advertised_window();
+-        if (window_before == 0 && window_after > 0) || (window_before < half && window_after >= half) {
+-            self.request_ack(now_us);
++        if stream == DEFAULT_STREAM {
++            // 窗口重新打开时主动告诉对端，不用等对端下一次探测。
++            let half = self.config.recv_window / 2;
++            let window_after = self.advertised_window();
++            if (window_before == 0 && window_after > 0) || (window_before < half && window_after >= half) {
++                self.request_ack(now_us);
++            }
++        } else {
++            self.grant_credit(now_us, stream);
++            self.close_if_drained(stream);
+         }
+         written
+     }
+ 
+-    /// 应用读完一个分片。最近见过校验包就先留着，算校验时可能要用到。
+-    fn retire_buffer(&mut self, now_us: u64, buffer: Vec<u8>) {
+-        if self.parity_seen_at.is_none_or(|at| at + PARITY_HISTORY_US < now_us) {
++    /// 应用读走了数据，就告诉对端可以接着发。等得太久的话，额度跟不上路径速度，流会被自己的窗口卡住。
++    fn grant_credit(&mut self, now_us: u64, stream: u32) {
++        let window = self.config.recv_window as u64;
++        let Some(state) = self.recv_streams.get_mut(&stream) else { return };
++        if state.fin_seq.is_none() && state.consumed + window >= state.granted_end + (window / GRANT_FRACTION).max(1) {
++            state.granted_end = state.consumed + window;
++            state.grant_repeats = GRANT_REPEATS;
++            self.request_ack(now_us);
++        }
++    }
++
++    fn close_if_drained(&mut self, stream: u32) {
++        if stream != DEFAULT_STREAM && self.recv_streams.get(&stream).is_some_and(RecvStream::is_drained) {
++            self.recv_streams.remove(&stream);
++            self.push_event(StreamEvent::Finished(stream));
++        }
++    }
++
++    /// 序号连上的分片，最近见过校验包就先留着，算校验时可能要用到。
++    fn retire_received(&mut self, entry: Received) {
++        if self.parity_seen_at.is_none_or(|at| at + PARITY_HISTORY_US < self.last_heard) {
+             while let Some(old) = self.history.pop_front() {
+-                self.history_bytes -= old.len();
+-                self.recycle_buffer(old);
++                self.history_bytes -= old.body.len();
++                self.recycle_buffer(old.body);
+             }
+-            self.recycle_buffer(buffer);
++            self.recycle_buffer(entry.body);
+             return;
+         }
+-        self.history_bytes += buffer.len();
+-        self.history.push_back(buffer);
++        self.history_bytes += entry.body.len();
++        self.history.push_back(entry);
+         if self.history.len() > MAX_HISTORY_SEGMENTS
+             && let Some(old) = self.history.pop_front()
+         {
+-            self.history_bytes -= old.len();
+-            self.recycle_buffer(old);
++            self.history_bytes -= old.body.len();
++            self.recycle_buffer(old.body);
+         }
+     }
+ 
+     /// 已收到的分片内容，没收到或已经丢弃时为空。
+-    fn received_segment(&self, sn: u64) -> Option<&[u8]> {
+-        if sn >= self.rcv_next {
+-            return self.reorder.get(&sn).map(Vec::as_slice);
+-        }
+-        let ready_start = self.rcv_next - self.ready.len() as u64;
+-        if sn >= ready_start {
+-            return self.ready.get((sn - ready_start) as usize).map(Vec::as_slice);
+-        }
+-        let index = (sn + self.history.len() as u64).checked_sub(ready_start)?;
+-        self.history.get(index as usize).map(Vec::as_slice)
++    fn received_segment(&self, sn: u64) -> Option<(&[u8], bool)> {
++        let entry = if sn >= self.rcv_next {
++            self.reorder.get(&sn)
++        } else {
++            let index = (sn + self.history.len() as u64).checked_sub(self.rcv_next)?;
++            self.history.get(index as usize)
++        };
++        entry.map(|entry| (entry.body.as_slice(), entry.headed))
+     }
+ 
+     /// 把暂存的校验包理一遍，能算的分片都算出来。算不了的留着：等后面的校验包或重传到了再试。
+@@ -723,10 +857,12 @@
+                     None => complete = false,
+                 }
+             }
+-            let length = length as usize;
++            let headed = length & HEADED_LENGTH_BIT != 0;
++            let length = (length & !HEADED_LENGTH_BIT) as usize;
+             let sn = holes[column];
+             // 校验内容来自已认证的对端，长度不对只可能是实现有错；丢掉即可，重传会补上。
+-            if complete && length > 0 && length <= restored.len() && length <= self.max_segment && self.accept_segment(sn, &restored[..length]) {
++            let sized = length > 0 && length <= restored.len() && length <= self.max_segment && (!headed || length >= STREAM_HEADER_LEN);
++            if complete && sized && self.accept_segment(sn, &restored[..length], headed) {
+                 self.stats.recovered_segments += 1;
+             }
+             self.recycle_buffer(restored);
+@@ -747,12 +883,12 @@
+             if holes.contains(&sn) {
+                 continue;
+             }
+-            let Some(segment) = self.received_segment(sn) else {
++            let Some((segment, headed)) = self.received_segment(sn) else {
+                 self.recycle_buffer(data);
+                 return None;
+             };
+             let factor = parity::coefficient(parity.symbol, sn);
+-            length ^= parity::scale_length(segment.len() as u16, factor);
++            length ^= parity::scale_length(coded_length(segment.len(), headed), factor);
+             parity::add_scaled(&mut data, segment, factor);
+         }
+         Some((data, length))
+@@ -774,8 +910,10 @@
+         self.parity_dirty = true;
+     }
+ 
++    /// 确认帧里的窗口只管默认流，别的流各有额度，一条流不读不会卡住别的流。
+     fn advertised_window(&self) -> u32 {
+-        self.config.recv_window.saturating_sub(self.ready.len() as u32)
++        let unread = self.recv_streams.get(&DEFAULT_STREAM).map_or(0, |stream| stream.ready.len());
++        self.config.recv_window.saturating_sub(unread as u32)
+     }
+ 
+     fn request_ack(&mut self, now_us: u64) {
+@@ -838,15 +976,24 @@
+         let mut pos = wire::PACKET_HEADER_LEN;
+         while pos < packet.len() {
+             match wire::parse_frame(packet, &mut pos).ok_or(PacketError::Malformed)? {
+-                Frame::Data { sn, payload } => {
++                Frame::Data { sn, payload, headed } => {
+                     ack_eliciting = true;
+-                    accepted &= self.accept_segment(wire::expand(sn, self.rcv_next, wire::SEQUENCE_BITS), payload);
++                    accepted &= self.accept_segment(wire::expand(sn, self.rcv_next, wire::SEQUENCE_BITS), payload, headed);
+                 }
+                 Frame::Ack(ack) => self.apply_ack(now_us, &ack),
+                 Frame::Ping => {
+                     ack_eliciting = true;
+                     urgent = true;
++                    // 对端可能是等额度等到了探测：额度帧丢光时靠这里补。
++                    for state in self.recv_streams.values_mut() {
++                        state.grant_repeats = state.grant_repeats.max(1);
++                    }
+                 }
++                Frame::Credit { stream, end } => {
++                    if let Some(state) = self.send_streams.get_mut(&stream) {
++                        state.credit_end = state.credit_end.max(wire::expand(end, state.credit_end, wire::SEQUENCE_BITS));
++                    }
++                }
+                 Frame::Parity { first, count, index, length, payload } => {
+                     ack_eliciting = true;
+                     self.on_parity(now_us, wire::expand(first, self.rcv_next, wire::PARITY_FIRST_BITS), count, index, length, payload);
+@@ -1154,6 +1301,12 @@
+         if let Some(segment) = self.segments.pop_front() {
+             self.send_buffered -= segment.data.len();
+             self.snd_una += 1;
++            if let Some(state) = self.send_streams.get_mut(&segment.stream) {
++                state.unacked -= segment.data.len();
++                if state.is_done() {
++                    self.send_streams.remove(&segment.stream);
++                }
++            }
+             self.recycle_buffer(segment.data);
+         }
+     }
+@@ -1210,8 +1363,9 @@
+                 continue;
+             }
+             segment.in_flight = false;
++            let urgent = segment.urgent;
+             self.in_flight -= 1;
+-            self.retransmit.insert(sn);
++            self.retransmit.insert((!urgent, sn));
+         }
+     }
+ 
+@@ -1247,29 +1401,167 @@
+     }
+ 
+     /// 收下一个分片。返回 false 表示超出窗口、没有收下。
+-    fn accept_segment(&mut self, sn: u64, payload: &[u8]) -> bool {
++    fn accept_segment(&mut self, sn: u64, payload: &[u8], headed: bool) -> bool {
+         if sn < self.rcv_next || self.reorder.contains_key(&sn) {
+             return true;
+         }
+-        if sn - self.rcv_next >= self.advertised_window() as u64 {
++        let window = self.config.recv_window as usize;
++        if sn - self.rcv_next >= window as u64 || self.unread_segments >= window * MAX_UNREAD_WINDOWS {
+             return false;
+         }
++        // 没带流头的分片接着前一个分片的流，要等前一个到了才知道归谁；它们受分片窗口限制，占不了多少。
++        if headed && !self.admits_header(payload) {
++            return false;
++        }
+         self.parity_dirty |= self.pending_parity.iter().any(|parity| sn < parity.end());
+         self.reorder_bytes += payload.len();
+-        let mut buffer = self.take_buffer();
+-        buffer.extend_from_slice(payload);
+-        self.reorder.insert(sn, buffer);
+-        while let Some(segment) = self.reorder.remove(&self.rcv_next) {
+-            self.reorder_bytes -= segment.len();
+-            self.ready_bytes += segment.len();
+-            self.ready.push_back(segment);
++        let mut body = self.take_buffer();
++        body.extend_from_slice(payload);
++        self.reorder.insert(sn, Received { body, headed, place: None, delivered: false });
++        self.resolve_places(sn);
++        while self.reorder.get(&self.rcv_next).is_some_and(|entry| entry.place.is_some()) {
++            let Some(entry) = self.reorder.remove(&self.rcv_next) else { break };
++            self.reorder_bytes -= entry.body.len();
+             self.rcv_next += 1;
++            if let Some((stream, seq)) = entry.place {
++                self.rcv_tail = (stream, seq + 1);
++                // 流内序号接不上的分片过不了这一步，只有伪造的包才会这样。
++                if !entry.delivered
++                    && let Some(state) = self.recv_streams.get_mut(&stream)
++                {
++                    state.waiting.remove(&seq);
++                }
++            }
++            self.retire_received(entry);
+         }
+         true
+     }
+ 
++    /// 这个流头的分片现在能不能收下。流数到了上限就不再开新流。
++    /// 不用查额度：内存已经被分片窗口和未读上限限住，流内序号接不上的分片也留不下来。
++    fn admits_header(&self, body: &[u8]) -> bool {
++        let Some(header) = StreamHeader::parse(body) else { return false };
++        self.recv_streams.contains_key(&header.stream) || self.recv_streams.len() < self.config.max_streams as usize
++    }
++
++    /// 从 `sn` 起，能确定归属的分片都交给各自的流。
++    fn resolve_places(&mut self, mut sn: u64) {
++        loop {
++            let previous = if sn == self.rcv_next {
++                Some(self.rcv_tail)
++            } else {
++                sn.checked_sub(1).and_then(|before| self.reorder.get(&before)).and_then(|entry| entry.place).map(|(stream, seq)| (stream, seq + 1))
++            };
++            let Some(entry) = self.reorder.get(&sn).filter(|entry| entry.place.is_none()) else { return };
++            let (stream, seq, fin) = if entry.headed {
++                let Some(header) = StreamHeader::parse(&entry.body) else { return };
++                if !self.recv_streams.contains_key(&header.stream) {
++                    self.recv_streams.insert(header.stream, RecvStream::new(self.config.recv_window as u64));
++                    self.push_event(StreamEvent::Opened(header.stream));
++                }
++                let next = self.recv_streams.get(&header.stream).map_or(0, |state| state.next_seq);
++                (header.stream, wire::expand(header.seq, next, wire::SEQUENCE_BITS), header.fin)
++            } else {
++                let Some((stream, seq)) = previous else { return };
++                (stream, seq, false)
++            };
++            if let Some(entry) = self.reorder.get_mut(&sn) {
++                entry.place = Some((stream, seq));
++            }
++            if let Some(state) = self.recv_streams.get_mut(&stream) {
++                if fin && stream != DEFAULT_STREAM {
++                    state.fin_seq = Some(seq);
++                }
++                if seq >= state.next_seq {
++                    state.waiting.insert(seq, sn);
++                }
++            }
++            self.deliver(stream);
++            sn += 1;
++        }
++    }
++
++    /// 把一条流里接得上的分片交给应用。分片内容还留在连接这边，校验包可能要用。
++    fn deliver(&mut self, stream: u32) {
++        let Self { recv_streams, reorder, spare_buffers, ready_bytes, unread_segments, max_segment, .. } = self;
++        let Some(state) = recv_streams.get_mut(&stream) else { return };
++        while let Some(sn) = state.waiting.remove(&state.next_seq) {
++            let Some(entry) = reorder.get_mut(&sn) else { break };
++            entry.delivered = true;
++            state.next_seq += 1;
++            let payload = &entry.body[if entry.headed { STREAM_HEADER_LEN } else { 0 }..];
++            if payload.is_empty() {
++                state.consumed += 1;
++                continue;
++            }
++            let mut buffer = spare_buffers.pop().unwrap_or_else(|| Vec::with_capacity(*max_segment));
++            buffer.extend_from_slice(payload);
++            *ready_bytes += buffer.len();
++            *unread_segments += 1;
++            state.ready.push_back(buffer);
++        }
++        self.close_if_drained(stream);
++    }
++
++    /// 这条流还有没有对端给的额度。默认流看确认帧里的窗口，别的流看各自的额度。
++    fn peer_allows(&self, id: u32, stream: &SendStream) -> bool {
++        if id == DEFAULT_STREAM { self.snd_sent < self.peer_una + self.peer_window as u64 } else { stream.next_seq < stream.credit_end }
++    }
++
+     fn window_blocked(&self) -> bool {
+-        self.snd_sent < self.snd_end && self.snd_sent >= self.peer_una + self.peer_window as u64
++        self.send_streams.iter().any(|(&id, stream)| stream.has_data() && !self.peer_allows(id, stream))
++    }
++
++    /// 下一个新分片该给哪条流，现在没有能发的就是 `None`。
++    fn next_stream(&self) -> Option<u32> {
++        let room = (self.snd_una + self.config.send_window as u64).saturating_sub(self.snd_sent);
++        // 给交互流留一点窗口：窗口被丢包卡住时，新消息不用等大量数据。
++        let reserve = if self.mixed_traffic { (self.config.send_window as u64 / INTERACTIVE_WINDOW_RESERVE).max(1) } else { 0 };
++        self.scheduler.pick(&self.send_streams, |id, stream| {
++            let allowed = if stream.priority == Priority::Interactive { room > 0 } else { room > reserve };
++            allowed && stream.has_data() && self.peer_allows(id, stream)
++        })
++    }
++
++    fn update_mixed_traffic(&mut self, now_us: u64) {
++        let active = |at: Option<u64>| at.is_some_and(|at| now_us.saturating_sub(at) < STREAM_ACTIVE_US);
++        self.mixed_traffic = active(self.last_interactive_at) && active(self.last_other_at);
++        self.congestion.set_low_queue(self.mixed_traffic);
++    }
++
++    /// 从这条流切一个分片。放不进 `room` 字节时不切。
++    fn cut_segment(&mut self, now_us: u64, id: u32, room: usize) -> Option<u64> {
++        let max_segment = self.max_segment;
++        let tail_stream = self.tail_stream;
++        let state = self.send_streams.get(&id)?;
++        let continuing = tail_stream == (id, state.next_seq);
++        let capacity = if continuing && !state.finishing { max_segment } else { max_segment - STREAM_HEADER_LEN };
++        let count = state.pending.len().min(capacity);
++        let fin = state.finishing && count == state.pending.len();
++        let headed = !continuing || fin;
++        let size = count + if headed { STREAM_HEADER_LEN } else { 0 };
++        if size > room {
++            return None;
++        }
++        let mut data = self.take_buffer();
++        let state = self.send_streams.get_mut(&id)?;
++        if headed {
++            StreamHeader { stream: id, seq: state.next_seq as u32, fin }.write(&mut data);
++        }
++        state.take_pending(count, &mut data);
++        state.unacked += size;
++        state.next_seq += 1;
++        state.fin_sent |= fin;
++        let (next_seq, priority) = (state.next_seq, state.priority);
++        self.send_buffered += size - count;
++        self.tail_stream = (id, next_seq);
++        let lower_waiting = self.send_streams.values().any(|stream| stream.has_data() && stream.priority.is_lower_than(priority));
++        self.scheduler.record(id, priority, lower_waiting);
++        let urgent = priority == Priority::Interactive;
++        *(if urgent { &mut self.last_interactive_at } else { &mut self.last_other_at }) = Some(now_us);
++        self.update_mixed_traffic(now_us);
++        self.segments.push_back(Segment { data, stream: id, headed, urgent, acked: false, in_flight: false, sent_before: false });
++        Some(self.snd_sent)
+     }
+ 
+     /// 退避按“每次超时”计，不按“每个包”计：包之间可能只隔 0.1 毫秒，
+@@ -1280,7 +1572,8 @@
+         if self.consecutive_timeouts == 0 {
+             return Some(aged);
+         }
+-        let sparse = self.snd_end - self.snd_una <= SPARSE_BACKLOG_SEGMENTS;
++        let pending: usize = self.send_streams.values().map(|stream| stream.pending.len()).sum();
++        let sparse = self.snd_sent - self.snd_una + pending.div_ceil(self.max_segment) as u64 <= SPARSE_BACKLOG_SEGMENTS;
+         let backoff = self.rtt.timeout_us(self.consecutive_timeouts, self.long_outage(self.last_timeout_at), sparse);
+         Some(aged.max(self.last_timeout_at + backoff + self.reorder_delay_us))
+     }
+@@ -1324,7 +1617,7 @@
+         if self.dead {
+             return;
+         }
+-        if !self.segments.is_empty() && now_us.saturating_sub(self.last_heard) >= self.config.dead_after_us {
++        if self.has_unacked_data() && now_us.saturating_sub(self.last_heard) >= self.config.dead_after_us {
+             self.dead = true;
+             return;
+         }
+@@ -1337,7 +1630,7 @@
+             // 整个初始窗口白重发一遍，误判的丢包还把第一轮带宽估计压到很低。只剩零散小消息时第二回起按整批超时处理：
+             // 重发它们很便宜，能少等。快要按断网恢复时也整批判丢：那时拥塞窗口收到很小，其余包还算在途的话，
+             // 连探测包都发不出去，连接会一直卡到判死。
+-            let bulk_probe = self.snd_sent < self.snd_end && self.consecutive_timeouts + 1 < RECOVERY_TIMEOUTS;
++            let bulk_probe = self.send_streams.values().any(SendStream::has_data) && self.consecutive_timeouts + 1 < RECOVERY_TIMEOUTS;
+             let initial_probe = self.rtt.srtt_us() == 0 && (self.consecutive_timeouts == 0 || bulk_probe);
+             let mut lost_data = false;
+             while let Some(&packet) = self.sent.front() {
+@@ -1398,14 +1691,14 @@
+                 consider(at.max(self.congestion.next_send_wake()));
+             }
+         }
+-        if !self.segments.is_empty() {
++        if self.has_unacked_data() {
+             consider(self.last_heard + self.config.dead_after_us);
+         }
+         wake
+     }
+ 
+     fn has_data_to_send(&self) -> bool {
+-        !self.retransmit.is_empty() || !self.duplicates.is_empty() || self.snd_sent < self.new_data_limit()
++        !self.retransmit.is_empty() || !self.duplicates.is_empty() || self.next_stream().is_some()
+     }
+ 
+     /// 下一个校验包什么时候该发：攒够了分片，或者窗口满了后面暂时不会再有新数据。
+@@ -1419,7 +1712,7 @@
+             return Some(0);
+         }
+         // 所有数据都发完了：后面不会再有新分片，校验包不用等。
+-        (self.snd_sent >= self.new_data_limit()).then_some(self.parity_flush_at)
++        self.next_stream().is_none().then_some(self.parity_flush_at)
+     }
+ 
+     fn parity_due(&self, now_us: u64) -> bool {
+@@ -1516,7 +1809,7 @@
+         for sn in first..end {
+             let segment = &self.segments[(sn - self.snd_una) as usize];
+             let factor = parity::coefficient(symbol, sn);
+-            length ^= parity::scale_length(segment.data.len() as u16, factor);
++            length ^= parity::scale_length(coded_length(segment.data.len(), segment.headed), factor);
+             parity::add_scaled(&mut data, &segment.data, factor);
+         }
+         let used = wire::write_parity(out, used, first, (end - first) as u8, symbol, length, &data);
+@@ -1554,14 +1847,9 @@
+         loss >= threshold
+             && !self.congestion.is_rate_limited()
+             && self.duplicates.len() < MAX_DUPLICATES_QUEUED
+-            && self.snd_sent >= self.new_data_limit()
++            && self.next_stream().is_none()
+     }
+ 
+-    fn new_data_limit(&self) -> u64 {
+-        let window_end = (self.snd_una + self.config.send_window as u64).min(self.peer_una + self.peer_window as u64);
+-        window_end.min(self.snd_end)
+-    }
+-
+     fn within_flight_limits(&self) -> bool {
+         // 校验包不占发送窗口，但算在途字节。要留出它的位置，否则校验越多能发的数据越少。
+         let cwnd = self.congestion.cwnd();
+@@ -1569,8 +1857,19 @@
+         self.in_flight < self.config.send_window && self.bytes_in_flight < cwnd + parity_room
+     }
+ 
+-    fn may_send(&self, now_us: u64) -> bool {
+-        self.within_flight_limits() && (self.in_flight < UNPACED_SEGMENTS || self.congestion.can_send(now_us))
++    fn may_send(&mut self, now_us: u64) -> bool {
++        if self.within_flight_limits() && (self.in_flight < UNPACED_SEGMENTS || self.congestion.can_send(now_us)) {
++            return true;
++        }
++        // 交互消息不用排在大量数据后面等节奏和拥塞窗口。丢包时在途量会远超窗口，这时更要让它走。
++        // 用量按往返算：大量数据就算标成交互流，超出这点额度后也要照常排节奏，不能把瓶颈顶爆。
++        if now_us.saturating_sub(self.urgent_round_at) >= self.rtt.srtt_us().max(1) {
++            self.urgent_round_at = now_us;
++            self.urgent_round_bytes = 0;
++        }
++        self.urgent_round_bytes < INTERACTIVE_ROUND_SEGMENTS * self.config.max_packet_size
++            && self.in_flight < self.config.send_window
++            && self.next_is_urgent()
+     }
+ 
+     fn next_duplicate(&mut self) -> Option<u64> {
+@@ -1583,16 +1882,43 @@
+         None
+     }
+ 
+-    fn next_segment_to_send(&mut self) -> Option<u64> {
+-        while let Some(&sn) = self.retransmit.first() {
++    fn next_retransmit(&mut self) -> Option<(bool, u64)> {
++        while let Some(&(routine, sn)) = self.retransmit.first() {
+             if sn >= self.snd_una && self.segment_mut(sn).is_some_and(|segment| !segment.acked && !segment.in_flight) {
+-                return Some(sn);
++                return Some((routine, sn));
+             }
+             self.retransmit.pop_first();
+         }
+-        (self.snd_sent < self.new_data_limit()).then_some(self.snd_sent)
++        None
++    }
++
++    /// 下一个新分片是不是交互流的。
++    fn next_interactive_stream(&self) -> Option<u32> {
++        self.next_stream().filter(|id| self.send_streams.get(id).is_some_and(|stream| stream.priority == Priority::Interactive))
+     }
+ 
++    /// 接下来要发的是交互流的数据。
++    fn next_is_urgent(&mut self) -> bool {
++        matches!(self.next_retransmit(), Some((false, _))) || self.next_interactive_stream().is_some()
++    }
++
++    /// 下一个要发的分片，放不进 `room` 字节时是 `None`。
++    fn next_segment_to_send(&mut self, now_us: u64, room: usize) -> Option<u64> {
++        let retransmit = self.next_retransmit();
++        // 先发交互流的重传和新消息，再发其他重传：成片丢包后的重传队列很长，新消息不能排在它后面。
++        if !matches!(retransmit, Some((false, _)))
++            && let Some(id) = self.next_interactive_stream()
++        {
++            return self.cut_segment(now_us, id, room);
++        }
++        if let Some((_, sn)) = retransmit {
++            let size = self.segment_mut(sn)?.data.len();
++            return (size <= room).then_some(sn);
++        }
++        let id = self.next_stream()?;
++        self.cut_segment(now_us, id, room)
++    }
++
+     /// 取下一个要发的包，写入 `out` 并返回长度；暂时没有要发的返回 `None`。
+     /// `out` 至少要有 `max_packet_size` 字节。
+     pub fn poll_transmit(&mut self, now_us: u64, out: &mut [u8]) -> Option<usize> {
+@@ -1606,11 +1932,12 @@
+                 return None;
+             }
+         }
++        self.update_mixed_traffic(now_us);
+         let out = &mut out[..self.config.max_packet_size];
+         let mut bundled = [0u64; MAX_BUNDLED_SEGMENTS];
+         let mut bundled_count = 0;
+         let can_send_data =
+-            self.may_send(now_us) && (self.parity_due(now_us) || self.next_duplicate().is_some() || self.next_segment_to_send().is_some());
++            self.may_send(now_us) && (self.parity_due(now_us) || self.next_duplicate().is_some() || self.next_retransmit().is_some() || self.next_stream().is_some());
+         let ack_due = self.ack_pending && self.ack_deadline <= now_us;
+         if !ack_due && !can_send_data && !self.probe_due {
+             return None;
+@@ -1631,6 +1958,7 @@
+             self.late_packet_count = 0;
+             self.ack_pending = false;
+             self.unacked_packets = 0;
++            used = self.write_grants(out, used);
+         }
+ 
+         // 校验内容一直到包尾，这个包不再放别的。排在数据前面，否则满载时永远轮不到它。
+@@ -1650,7 +1978,7 @@
+             if used + wire::DATA_HEADER_LEN + segment.data.len() > out.len() {
+                 break;
+             }
+-            used = wire::write_data(out, used, sn, &segment.data);
++            used = wire::write_data(out, used, sn, &segment.data, segment.headed);
+             self.duplicates.pop_front();
+             bundled[bundled_count] = sn;
+             bundled_count += 1;
+@@ -1663,16 +1991,18 @@
+         let mut protected_by = 0;
+         // 校验包到期但这个包放不下时先停一下：双向传输时每个包都带确认，继续发新数据的话校验包永远轮不到。
+         while !parity_sent && !self.parity_due(now_us) && count < MAX_SEGMENTS_PER_PACKET && self.may_send(now_us) {
+-            let Some(sn) = self.next_segment_to_send() else { break };
+-            let Some(segment) = self.segment_mut(sn) else { break };
+-            if used + wire::DATA_HEADER_LEN + segment.data.len() > out.len() {
+-                break;
+-            }
+-            used = wire::write_data(out, used, sn, &segment.data);
++            let Some(sn) = self.next_segment_to_send(now_us, (out.len() - used).saturating_sub(wire::DATA_HEADER_LEN)) else { break };
++            let Some(segment) = self.segment_mut(sn) else { break };
++            used = wire::write_data(out, used, sn, &segment.data, segment.headed);
+             let retransmission = core::mem::replace(&mut segment.sent_before, true);
++            let urgent = segment.urgent;
++            let size = segment.data.len();
+             segment.in_flight = true;
++            if urgent {
++                self.urgent_round_bytes += size;
++            }
+             self.in_flight += 1;
+-            if !self.retransmit.remove(&sn) {
++            if !self.retransmit.remove(&(!urgent, sn)) {
+                 self.snd_sent += 1;
+             }
+             if !retransmission {
+@@ -1697,6 +2027,9 @@
+             }
+             if retransmission {
+                 self.stats.retransmitted_segments += 1;
++                if !urgent {
++                    self.scheduler.record_retransmission();
++                }
+                 if self.should_duplicate() {
+                     self.duplicates.push_back(sn);
+                 }
+@@ -1734,7 +2067,7 @@
+             }
+             // 对端窗口卡住时测到的速率同样不代表路径能力，要和“应用没东西发”一样对待。
+             let app_limited = !self.has_data_to_send();
+-            let app_idle = self.retransmit.is_empty() && self.snd_sent >= self.snd_end;
++            let app_idle = self.retransmit.is_empty() && !self.send_streams.values().any(SendStream::has_data);
+             let below_capacity = app_idle || self.congestion.sends_below_capacity();
+             self.sent.push_back(SentPacket {
+                 number,
+@@ -1760,6 +2093,22 @@
+         Some(used)
+     }
+ 
++    /// 把还没告诉对端的流量额度写进这个包，放不下的留给后面的确认。
++    fn write_grants(&mut self, out: &mut [u8], mut used: usize) -> usize {
++        let mut written = 0;
++        for (&id, state) in self.recv_streams.iter_mut() {
++            if written == MAX_GRANTS_PER_PACKET || used + wire::CREDIT_FRAME_LEN > out.len() {
++                break;
++            }
++            if state.grant_repeats > 0 && id != DEFAULT_STREAM {
++                state.grant_repeats -= 1;
++                used = wire::write_credit(out, used, id, state.granted_end);
++                written += 1;
++            }
++        }
++        used
++    }
++
+     /// 稳定丢包时，把小消息的冗余分散到独立包中，不必等下一条消息才修复。
+     /// 副本预算沿用原来的捎带份数；已经复制的原件平时不再捎带旧数据，避免叠加两套冗余，成片丢包时例外。
+     fn queue_small_message_copies(&mut self, now_us: u64, sn: u64) -> bool {
+@@ -1818,7 +2167,7 @@
+             if used + wire::DATA_HEADER_LEN + segment.data.len() > out.len() {
+                 continue;
+             }
+-            used = wire::write_data(out, used, sn, &segment.data);
++            used = wire::write_data(out, used, sn, &segment.data, segment.headed);
+             bundled[added] = sn;
+             added += 1;
+             self.stats.bundled_segments += 1;

@@ -1,4 +1,5 @@
 import type { Schedule, ScheduleRun, SchedulerInflightRunPolicy } from '@cindy/maker-scheduler';
+import type { ScheduleMissingPlugin } from '@cindy/maker-shared/schedule-model';
 
 /** Sidebar 聚合索引用的轻量 run wire 形态，由 main 侧 SQLite 查询直接返回。 */
 export interface ScheduleSidebarIndexRun {
@@ -17,6 +18,7 @@ export interface ScheduleSidebarIndexRun {
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
   errorMsg?: string;
   failureRecovered?: boolean;
+  missingPlugin?: ScheduleMissingPlugin;
 }
 
 /**

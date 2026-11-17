@@ -29,6 +29,23 @@ describe('provider share usage store', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('imports offline standby totals exactly once across restart and advances only by the delta', async () => {
+    const file = path.join(dir, 'usage.json');
+    const now = new Date('2026-11-08T12:00:00Z').getTime();
+    let store = createProviderShareUsageStore(file, { now: () => now });
+    const total = { id: 'a'.repeat(64), memberId: 'guest', guestDeviceId: 'guest-pc', sessionId: 'task', generation: 'grant',
+      executorDeviceId: 'standby', providerId: 'group', kind: 'codex', day: '2026-11-08', model: 'gpt', sequence: 1,
+      totals: { turns: 1, inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0 } };
+    await store.importStandbyTotal('share', total);
+    store = createProviderShareUsageStore(file, { now: () => now });
+    await store.importStandbyTotal('share', total);
+    await store.importStandbyTotal('share', { ...total, sequence: 2, totals: { ...total.totals, inputTokens: 150 } });
+    const result = store.query(new Set(['share']), 'all');
+    expect(result[0].models[0]).toMatchObject({ inputTokens: 150, outputTokens: 50, turns: 1 });
+    await expect(store.importStandbyTotal('share', { ...total, sequence: 3 })).rejects.toThrow('decreased');
+    await store.flush();
+  });
+
   // Unit, real ledger entry: personal ratios must isolate identity/provider/date and exclude cache.
   // Existing range tests do not cover midnight recovery or a failed ledger becoming a false 0%.
   it('reconstructs only one member/provider over seven local dates and advances at midnight', async () => {

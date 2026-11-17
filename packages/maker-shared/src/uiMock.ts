@@ -1,4 +1,5 @@
 import { UI_MOCK_SHOWCASE_PROJECTS, UI_MOCK_SHOWCASE_TASKS } from './uiMockShowcase';
+import { UI_MOCK_BIDI_TASK } from './uiMockBidi';
 export { UI_MOCK_SHOWCASE_PROJECTS };
 
 /**
@@ -58,6 +59,7 @@ export type UiMockMessage =
   | { role: 'user'; text: string }
   | { role: 'assistant'; text: string }
   | { role: 'thinking'; text: string }
+  | { role: 'error'; text: string }
   | { role: 'tool'; name: string; input: Record<string, unknown>; result: string }
   /** New task "Let a plugin choose": the one-line note under the first message. */
   | { role: 'plugin-route'; note: Record<string, unknown> };
@@ -129,6 +131,84 @@ const RICH_ANSWER = [
  */
 export const UI_MOCK_TASKS: readonly UiMockTask[] = [
   ...UI_MOCK_SHOWCASE_TASKS,
+  UI_MOCK_BIDI_TASK,
+  {
+    id: 'ui-mock-auto-review-model-unavailable',
+    title: '自动审批模型不可用',
+    project: 'cindy-demo',
+    agentKind: 'pi', model: 'custom-demo', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 0,
+    messages: [
+      { role: 'user', text: '请运行项目构建。' },
+      { role: 'error', text: '[AUTO_REVIEW_NO_AVAILABLE_MODEL] No automatic review model is available.' },
+      { role: 'assistant', text: '审批需要你确认后才能继续。可在设置中连接审批供应商或自定义辅助模型。' },
+      { role: 'error', text: '[AUTO_REVIEW_NO_AVAILABLE_MODEL] No automatic review model is available.' },
+    ],
+  },
+  {
+    id: 'ui-mock-remote-communication',
+    title: '远程通信错误指引',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-6-astra', effort: 'xhigh',
+    status: 'active', source: 'desktop', minutesAgo: 0,
+    messages: [
+      { role: 'user', text: '查看合成的通信错误，检查错误详情与恢复指引。' },
+      { role: 'error', text: '[REMOTE_AGENT_OFFLINE] [DEVICE_OFFLINE] synthetic peer offline' },
+      { role: 'error', text: '[REMOTE_AGENT_ACCESS_DENIED] [ACCESS_REVOKED] synthetic access denied' },
+      { role: 'error', text: '[REMOTE_AGENT_LINK_BUSY] [BACKPRESSURE] synthetic send buffer busy' },
+      { role: 'error', text: '[REMOTE_AGENT_UNRESPONSIVE] [DEVICE_UNRESPONSIVE] synthetic circuit open' },
+      { role: 'error', text: '[REMOTE_AGENT_TIMEOUT] [INVOKE_TIMEOUT] no invoke-result within 30000ms after first socket write\nrequestedTarget=mock-peer; channel=maker:remote-agent' },
+    ],
+  },
+  {
+    id: 'ui-mock-remote-resume-rejected',
+    title: '远程任务无法恢复',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-6-astra', effort: 'xhigh',
+    status: 'active', source: 'desktop', minutesAgo: 0,
+    messages: [
+      { role: 'user', text: '继续整理演示项目的发布说明。' },
+      { role: 'assistant', text: '已完成变更清单，接下来整理验证步骤。' },
+      { role: 'user', text: '请继续。' },
+      { role: 'error', text: 'LAZY_CREATE_FAILED: [REMOTE_AGENT_INVALID] this conversation cannot be resumed on this computer' },
+    ],
+  },
+  {
+    id: 'visual-issue-confirm',
+    title: '反馈手机上的问题',
+    project: 'cindy-demo',
+    agentKind: 'cc', model: 'claude-sonnet-5', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 1,
+    messages: [
+      { role: 'user', text: '手机上反馈问题时，确认卡提示只能回电脑处理。' },
+      { role: 'assistant', text: '已整理好反馈，请检查标题、正文和公开署名，确认后提交。' },
+    ],
+  },
+  {
+    id: 'ui-mock-inline-math',
+    title: '行内公式语义验收',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-5.5', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 1,
+    messages: [
+      { role: 'user', text: '检查行内公式的符号、参数和上下标。' },
+      { role: 'assistant', text: String.raw`单字符参数：$e\in\mathcal E$。
+
+花括号参数：$e\in\mathcal{E}$。
+
+符号边界：$\mathrm{\alpha}x$；嵌套样式：$\mathbf{\mathcal{E}}$。
+
+分数与根号：$\frac\mathrm{12}2$，$\sqrt\mathrm{2}$。
+
+上下标：$x^{\mathrm{12}}+y_\mathrm i$。
+
+字面花括号：$e\in\mathrm{\{E\}}$。
+
+块级公式对照：
+
+$$e\in\mathcal{E},\quad x^{12}+y_i$$` },
+    ],
+  },
   {
     id: 'visual-running',
     title: '重构登录页布局',
@@ -410,7 +490,7 @@ export interface UiMockSessionRow {
   messageCount: number;
 }
 
-export type UiMockMessageRole = 'user' | 'assistant' | 'thinking' | 'tool_use' | 'tool_result';
+export type UiMockMessageRole = 'user' | 'assistant' | 'thinking' | 'error' | 'tool_use' | 'tool_result';
 
 export interface UiMockMessageRow {
   id: string;
@@ -492,6 +572,9 @@ function taskMessageRows(task: UiMockTask, endsAt: number): UiMockMessageRow[] {
         break;
       case 'thinking':
         push('thinking', { kind: 'thinking', text: message.text, durationMs: 1_500, isRedacted: false });
+        break;
+      case 'error':
+        push('error', { message: message.text });
         break;
       case 'tool': {
         const toolUseId = `${UI_MOCK_ID_PREFIX}${task.id}-tool-${index + 1}`;

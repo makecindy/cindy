@@ -1,7 +1,10 @@
 import type {
   BillingCatalog,
   BillingCurrentSubscription,
+  BillingGiftCardPreviewResult,
+  BillingGiftCardRedeemResult,
   BillingOrderList,
+  BillingPaymentHistory,
   BillingPaymentOrder,
   BillingPlanChange,
   BillingSubscriptionPortalResult,
@@ -23,6 +26,9 @@ export const billingApi = {
   },
   listOrders(limit = 20): Promise<BillingOrderList> {
     return window.electronAPI.billing.listOrders({ limit });
+  },
+  listPaymentHistory(limit = 10, cursor?: string): Promise<BillingPaymentHistory> {
+    return window.electronAPI.billing.listPaymentHistory({ limit, ...(cursor ? { cursor } : {}) });
   },
   getOrder(orderId: string): Promise<BillingPaymentOrder> {
     return window.electronAPI.billing.getOrder({ orderId });
@@ -77,5 +83,11 @@ export const billingApi = {
   },
   openPaymentRedirect(url: string): Promise<{ success: boolean }> {
     return window.electronAPI.billing.openPaymentRedirect({ url });
+  },
+  previewGiftCard(code: string): Promise<BillingGiftCardPreviewResult> {
+    return window.electronAPI.billing.previewGiftCard({ code });
+  },
+  redeemGiftCard(code: string): Promise<BillingGiftCardRedeemResult> {
+    return window.electronAPI.billing.redeemGiftCard({ code });
   },
 };

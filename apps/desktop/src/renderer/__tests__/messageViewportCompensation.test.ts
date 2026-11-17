@@ -163,6 +163,7 @@ describe('restored reading position handoff through MessageStream.handleScroll',
       RENDER_WINDOW_GROWTH_ITEMS: 80, NO_UNREAD_KEYS: new Set<string>(),
       // A restoration that has settled at scrollTop 200 with a measured anchor.
       scrollRef: { current: el },
+      contentRef: { current: null },
       restoringRef: { current: true },
       restoreLoadRef: { current: 'settled' },
       restoredScrollGeometryRef: { current: measureRestoredScrollGeometry(el, anchor) },

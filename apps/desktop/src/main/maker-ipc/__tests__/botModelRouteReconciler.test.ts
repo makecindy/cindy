@@ -21,6 +21,66 @@ function harness() {
 }
 
 describe('permanent Bot model selection', () => {
+  // Unit regression: ordinary sends/reopen must keep a verified group member
+  // after failover; the old fallback tests only covered runtime overrides.
+  it('keeps the selected group member across sends and reopen, but applies an explicit profile save', async () => {
+    const h = harness();
+    h.state.current = { agentKind: 'codex', model: 'luna', providerId: 'member-account',
+      agentDeviceId: 'member-device', effort: 'medium', fastMode: false };
+    h.state.chain[0]!.agentDeviceId = 'group-owner';
+    const deps = { ownerEpoch: () => 'owner', read: h.read, apply: h.apply,
+      readAppliedGroup: async () => ({ providerId: 'xd', groupDeviceId: 'group-owner' }) };
+    const reconcile = createBotModelRouteReconciler(deps);
+    await reconcile('canonical');
+    await reconcile('canonical');
+    await createBotModelRouteReconciler(deps)('canonical');
+    expect(h.apply).not.toHaveBeenCalled();
+    expect(await reconcile.preview('canonical')).toEqual(h.state.current);
+    await reconcile.profileChanged('canonical');
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('canonical', expect.objectContaining({
+      agentDeviceId: 'group-owner', providerId: 'xd',
+    }), h.state.current);
+  });
+  // 依据：Slack 反馈（2026-11-06）——例行任务里手动换的模型每跑一次就被改回伙伴的模型；
+  // 实测确认重开任务后内存记录丢失。最小失败输入：已套用配置后任务里换了模型，再发送 / 重启再发送。tier：unit。
+  it('keeps a model picked in the task across sends and restart until the configuration changes', async () => {
+    const h = harness();
+    const saved = new Map<string, string>();
+    const applied = { get: async (id: string) => saved.get(id), set: async (id: string, key: string) => { saved.set(id, key); } };
+    const deps = { ownerEpoch: () => 'owner', read: h.read, apply: h.apply, applied };
+    await createBotModelRouteReconciler(deps)('lane');
+    expect(h.apply).toHaveBeenCalledOnce();
+    h.apply.mockClear();
+    h.state.current = { agentKind: 'pi', model: 'picked', providerId: 'xd', effort: 'high', fastMode: false };
+    const reconcile = createBotModelRouteReconciler(deps);
+    await reconcile('lane');
+    await createBotModelRouteReconciler(deps)('lane');
+    expect(h.apply).not.toHaveBeenCalled();
+    h.state.chain = [{ harness: 'codex', model: 'sol', providerId: 'xd', effort: 'medium', fastMode: false }];
+    await reconcile('lane');
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('lane', expect.objectContaining({ model: 'sol' }), h.state.current);
+  });
+  // 实测（2026-11-07）：例行任务跑过一次后留下自动化临时路由，之后在任务里换模型，下次运行仍被改回。tier：unit。
+  it('keeps a task choice made after an automation ran on the task', async () => {
+    const h = harness();
+    const state = { ...h.state, scheduledModelBaseline: JSON.stringify({ ...h.state.current, scopeId: 'automation' }) as string | null };
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: async () => state, apply: h.apply });
+    await reconcile('lane');
+    state.scheduledModelBaseline = null;
+    state.current = { agentKind: 'pi', model: 'picked', providerId: 'xd', effort: 'high', fastMode: false };
+    await reconcile.acceptTaskChoice('lane');
+    await reconcile('lane');
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+  it.each(['model', 'group', 'unbound'] as const)('applies a changed %s instead of preserving an unrelated group member', async change => {
+    const h = harness();
+    h.state.current = { agentKind: 'codex', model: change === 'model' ? 'old-model' : 'luna',
+      providerId: 'member', agentDeviceId: 'device', effort: 'medium', fastMode: false };
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: h.read, apply: h.apply,
+      readAppliedGroup: async () => change === 'unbound' ? null : { providerId: change === 'group' ? 'other' : 'xd', groupDeviceId: null } });
+    await reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('canonical', expect.objectContaining({ model: 'luna', providerId: 'xd' }), h.state.current);
+  });
   // Real companion automation failed before queued dispatch because its ordinary
   // send reconciler switched back to the profile. Cover that consumer's decision,
   // including cold startup and companions following the global default (unit tier).
@@ -33,9 +93,14 @@ describe('permanent Bot model selection', () => {
     await reconcile('canonical');
     await createBotModelRouteReconciler(deps)('canonical');
     expect(h.apply).not.toHaveBeenCalled();
+    // The automation scope restores the task's own route itself; the unchanged
+    // configuration is not applied over it, but a changed one is.
     state.scheduledModelBaseline = null;
     await reconcile('canonical');
-    expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ model: 'luna' }), state.current);
+    expect(h.apply).not.toHaveBeenCalled();
+    state.chain = [{ harness: 'codex', model: 'sol', providerId: 'xd', effort: 'medium', fastMode: false }];
+    await reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ model: 'sol' }), state.current);
   });
   // Capability grants apply to the next ordinary turn, including after restart.
   // The temporary automation route must not choose a different Harness catalog.

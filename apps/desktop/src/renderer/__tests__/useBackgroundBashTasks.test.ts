@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { listRunningClaudeBashTasks } from '@/hooks/useBackgroundBashTasks';
+import { countWorkingBashTasks, listRunningClaudeBashTasks } from '@/hooks/useBackgroundBashTasks';
 import type { AgentTaskUpdate } from '@/lib/makerChatStore';
 
 function toMap(updates: AgentTaskUpdate[]): ReadonlyMap<string, AgentTaskUpdate> {
@@ -34,6 +34,21 @@ describe('listRunningClaudeBashTasks', () => {
       ]),
     );
     expect(tasks).toEqual([{ taskId: 'b1', title: 'pnpm test:unit' }]);
+  });
+
+  // 状态栏按种类选文案:有命令仍在工作 →「正在后台工作」;只剩长驻服务 →「后台服务运行中」。
+  it('marks long-lived services so only commands still working count as work', () => {
+    const tasks = listRunningClaudeBashTasks(
+      toMap([
+        { provider: 'claude-code', taskId: 'tests', status: 'running', taskType: 'local_bash', backgroundCommandKind: 'work' },
+        { provider: 'claude-code', taskId: 'server', status: 'running', taskType: 'local_bash', backgroundCommandKind: 'service' },
+        // 种类未知按工作算
+        { provider: 'claude-code', taskId: 'unknown', status: 'running', taskType: 'local_bash' },
+      ]),
+    );
+    expect(tasks).toEqual([{ taskId: 'tests' }, { taskId: 'server', service: true }, { taskId: 'unknown' }]);
+    expect(countWorkingBashTasks(tasks)).toBe(2);
+    expect(countWorkingBashTasks(tasks.filter((task) => task.service))).toBe(0);
   });
 
   it('returns an empty list for empty or missing maps', () => {

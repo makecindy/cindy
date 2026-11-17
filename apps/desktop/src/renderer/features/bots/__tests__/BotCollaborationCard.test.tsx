@@ -21,10 +21,6 @@ const mocks = vi.hoisted(() => ({
   activity: null as any,
   resolved: true,
   stale: false,
-  cancel: vi.fn(),
-  send: vi.fn(),
-  trace: vi.fn(),
-  toast: vi.fn(),
   prs: [] as any[],
 }));
 vi.mock('react-i18next', async (importOriginal) => ({
@@ -35,15 +31,10 @@ vi.mock('react-i18next', async (importOriginal) => ({
   }),
 }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
-vi.mock('../botDelegationLive', () => ({
-  useBotDelegation: () => ({ row: mocks.row, resolved: mocks.resolved, stale: mocks.stale }),
-  isActiveDelegationStatus: (status: string) => ['queued', 'running', 'waiting'].includes(status),
+vi.mock('../botDelegationHistory', () => ({
+  useBotDelegationRecord: () => ({ row: mocks.row, resolved: mocks.resolved, stale: mocks.stale }),
 }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [] }));
-vi.mock('@/lib/makerTransport', () => ({
-  makerApiForSticky: () => ({ cancelBotDelegation: mocks.cancel }),
-}));
-vi.mock('@/lib/toast', () => ({ toast: { success: mocks.toast } }));
 vi.mock('@/cindy-brain/ghostUnreadStore', () => ({ useElementVisible: () => ({ ref: () => {}, visible: false }) }));
 vi.mock('@/contexts/PrRefsContext', () => ({
   usePrActions: () => ({ registerPrConsumer: () => () => {}, invalidateRemotePrRefs: () => {} }),
@@ -83,7 +74,6 @@ vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: {
     subscribeAll: () => () => {},
     getRunningSnapshot: () => mocks.running,
-    sendMessage: mocks.send,
   },
 }));
 vi.mock('@/lib/sessionAttentionStore', () => ({ useSessionAttentionKind: () => undefined }));
@@ -133,8 +123,6 @@ beforeEach(() => {
   mocks.resolved = true;
   mocks.stale = false;
   mocks.prs = [];
-  mocks.cancel.mockResolvedValue({ ok: true, delegationId: 'd', childSessionId: 'child' });
-  mocks.send.mockResolvedValue(true);
   mocks.remoteRows = [];
   mocks.remoteReadCurrent = true;
   mocks.remoteGet.mockResolvedValue({
@@ -157,12 +145,10 @@ beforeEach(() => {
     permissionMode: 'default',
   });
   mocks.route.mockResolvedValue('/cc-agent/child');
-  mocks.trace.mockResolvedValue({ ok: true, delegationId: 'd' });
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
       deviceLink: { invoke: mocks.remoteGet },
-      maker: { traceBotDelegationNote: mocks.trace },
       openExternal: vi.fn(async () => ({ success: true })),
     },
   });
@@ -196,99 +182,36 @@ it('takes actual runtime state instead of treating an ended delegation as comple
   await waitFor(() => expect(cardState()).toBe('running'));
   expect(screen.queryByText('bots.collab.status.done')).toBeNull();
 });
-it('shows the current action and elapsed time while running, and stops through the delegation', async () => {
+it('shows the current action and elapsed time while the original task runs, with no live controls', async () => {
   vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
   vi.setSystemTime(at + 65_000);
   try {
     mocks.row = delegation({ status: 'running' });
+    mocks.running.set('child', { isRunning: true });
     mocks.activity = { phase: 'running', compactDetail: 'Running pnpm test', currentTurnActive: true };
     render(<BotSessionTaskCard data={data()} sessionId="parent" />);
+    await act(async () => {});
     expect(cardState()).toBe('running');
     expect(screen.getByText('Running pnpm test')).toBeTruthy();
     expect(screen.getByText(/bots\.collab\.elapsed/).textContent).toContain('bots.collab.duration.minutes');
     expect(screen.getByRole('button', { name: /bots\.collab\.watchWork/ })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /bots\.collab\.stop/ }));
-    await act(async () => {});
-    expect(mocks.cancel).toHaveBeenCalledWith('parent', 'd');
+    expect(screen.queryByRole('button', { name: /bots\.collab\.stop/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /bots\.collab\.addNote/ })).toBeNull();
   } finally {
     vi.useRealTimers();
   }
 });
-it('reports a failed stop without pretending the task stopped', async () => {
-  mocks.row = delegation({ status: 'running' });
-  mocks.cancel.mockResolvedValue({ ok: false, errorCode: 'X', message: 'Could not stop' });
+it.each(['queued', 'running', 'waiting'])('shows a stored %s row as unknown once the original task is not running', async (status) => {
+  // Nothing updates V1 task rows any more: a stored unfinished status is never shown as live.
+  mocks.row = delegation({ status, pendingInteraction: status === 'waiting' ? { summary: 'Allow npm install', kind: 'permission' } : null });
   render(<BotSessionTaskCard data={data()} sessionId="parent" />);
-  fireEvent.click(screen.getByRole('button', { name: /bots\.collab\.stop/ }));
-  expect((await screen.findByRole('alert')).textContent).toBe('Could not stop');
-  expect(cardState()).toBe('running');
-});
-it('adds a note to a local running task as the owner, with the task runtime settings', async () => {
-  mocks.row = delegation({ status: 'running' });
-  render(<BotSessionTaskCard data={data()} sessionId="parent" />);
-  fireEvent.click(screen.getByRole('button', { name: /bots\.collab\.addNote/ }));
-  const input = screen.getByRole('textbox', { name: 'bots.collab.addNote' });
-  fireEvent.change(input, { target: { value: '  Cover offline reconnect  ' } });
-  fireEvent.submit(input.closest('form')!);
-  await waitFor(() => expect(mocks.send).toHaveBeenCalledWith(
-    'child', 'Cover offline reconnect', 'gpt-x', 'high', 'default', '/child',
-  ));
-  // The Bot's chat keeps the「已告诉后台任务」trace of what the owner told the task.
-  await waitFor(() => expect(mocks.trace).toHaveBeenCalledWith('parent', 'd', 'Cover offline reconnect'));
-  await waitFor(() => expect(screen.queryByRole('textbox')).toBeNull());
-  expect(mocks.toast).toHaveBeenCalledWith('bots.collab.addNoteSent');
-});
-it.each([4000, 4001])('checks the trace length limit before delivering a %i-character note', async length => {
-  mocks.row = delegation({ status: 'running' });
-  render(<BotSessionTaskCard data={data()} sessionId="parent" />);
-  fireEvent.click(screen.getByRole('button', { name: /bots\.collab\.addNote/ }));
-  const input = screen.getByRole('textbox', { name: 'bots.collab.addNote' }) as HTMLInputElement;
-  const text = '字'.repeat(length);
-  // Programmatic change bypasses the native input limit: submit must also validate before sending.
-  fireEvent.change(input, { target: { value: text } });
-  fireEvent.submit(input.closest('form')!);
-  if (length === 4000) {
-    await waitFor(() => expect(mocks.trace).toHaveBeenCalledWith('parent', 'd', text));
-    expect(mocks.send).toHaveBeenCalledWith('child', text, 'gpt-x', 'high', 'default', '/child');
-    expect(mocks.toast).toHaveBeenCalledWith('bots.collab.addNoteSent');
-  } else {
-    expect((await screen.findByRole('alert')).textContent).toBe('bots.collab.actionFailed');
-    expect(mocks.send).not.toHaveBeenCalled();
-    expect(mocks.trace).not.toHaveBeenCalled();
-    expect(mocks.toast).not.toHaveBeenCalled();
-    expect(input.value).toBe(text);
-  }
-  expect(input.maxLength).toBe(4000);
-});
-it('still reports a delivered note when only its chat trace fails, and leaves no trace for an undelivered one', async () => {
-  mocks.row = delegation({ status: 'running' });
-  mocks.trace.mockRejectedValueOnce(new Error('offline'));
-  const { unmount } = render(<BotSessionTaskCard data={data()} sessionId="parent" />);
-  fireEvent.click(screen.getByRole('button', { name: /bots\.collab\.addNote/ }));
-  const input = screen.getByRole('textbox', { name: 'bots.collab.addNote' });
-  fireEvent.change(input, { target: { value: 'Keep the risk list' } });
-  fireEvent.submit(input.closest('form')!);
-  await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('bots.collab.addNoteSent'));
-  expect(screen.queryByRole('alert')).toBeNull();
-  unmount();
-
-  mocks.send.mockResolvedValueOnce(false);
-  render(<BotSessionTaskCard data={data()} sessionId="parent" />);
-  fireEvent.click(screen.getByRole('button', { name: /bots\.collab\.addNote/ }));
-  const again = screen.getByRole('textbox', { name: 'bots.collab.addNote' });
-  fireEvent.change(again, { target: { value: 'Never delivered' } });
-  fireEvent.submit(again.closest('form')!);
-  expect((await screen.findByRole('alert')).textContent).toBe('bots.collab.actionFailed');
-  expect(mocks.trace).toHaveBeenCalledTimes(1);
-});
-it('shows what the task waits for and lets the user look at it', async () => {
-  mocks.row = delegation({ status: 'waiting', pendingInteraction: { summary: 'Allow npm install', kind: 'permission' } });
-  render(<BotSessionTaskCard data={data()} sessionId="parent" />);
-  expect(cardState()).toBe('waiting');
-  expect(screen.getByText(/bots\.collab\.awaitingConfirm:.*Allow npm install/)).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: /bots\.collab\.lookAt/ }));
+  await screen.findByRole('button', { name: 'Current title' });
+  expect(cardState()).toBe('unknown');
+  expect(screen.getByText('bots.collab.status.unknown')).toBeTruthy();
+  expect(screen.queryByText(/Allow npm install/)).toBeNull();
+  expect(screen.queryByRole('button', { name: /bots\.collab\.stop/ })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /bots\.collab\.watchWork/ }));
   await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/child'));
-  expect(screen.getByRole('button', { name: /bots\.collab\.stop/ })).toBeTruthy();
-  expect(screen.queryByRole('button', { name: /bots\.collab\.addNote/ })).toBeNull();
 });
 it('shows the result summary when completed and expands the result in place', async () => {
   mocks.row = delegation({ status: 'completed', completedAt: at + 14 * 60_000, resultSummary: 'Retry capped at 3.',
@@ -357,8 +280,6 @@ it('pins remote child reads and navigation to the parent device', async () => {
   expect(mocks.remoteGet).toHaveBeenCalledWith('mac-a', 'local-db:sessions:get', ['child']);
   expect(mocks.get).not.toHaveBeenCalled();
   expect(screen.getByText('bots.collab.backgroundTask · Pi')).toBeTruthy();
-  // Sending as the owner is local-only; a remote task keeps open/stop.
-  expect(screen.queryByRole('button', { name: /bots\.collab\.addNote/ })).toBeNull();
   act(() => {
     mocks.remoteRows = [{ ...mocks.remoteRows[0], title: 'Remote renamed' }];
     mocks.remoteChanged();

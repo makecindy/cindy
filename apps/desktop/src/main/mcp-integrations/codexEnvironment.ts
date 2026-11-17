@@ -19,30 +19,10 @@ import {
   CINDY_MAKE_MCP_SERVER_NAME,
   isCindyMakeVendorOptions,
 } from '../../shared/cindyMakeSession.js';
-
-import {
-  startCodexHttpBridge,
-  type CodexHttpBridge,
-  withMcpRouteIdentity,
-} from './codexHttpBridge.js';
-import { getRemoteMcpBridgeToken } from './remoteMcpBridgeToken.js';
-import { appServerIds } from '../mcp-apps/runtime.js';
+import type { CodexHttpBridge } from './codexHttpBridge.js';
 import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
 
-const TOKEN_ENV = 'LIZI_MCP_TOKEN';
-const MCP_TIMEOUT_SEC = 10 * 60;
 
-/**
- * 把一个 header 名渲染成 codex `-c` override 里合法的 TOML dotted-key 段。
- *
- * 常见 HTTP header(`X-Api-Key`、`xd-themis-sk` 等)只含 [A-Za-z0-9_-],正好是
- * TOML 裸键允许字符,直接原样输出。含点号等特殊字符的少见 header 用 TOML 引号键
- * 包裹并转义 `\` 与 `"`,避免点号被误解析成嵌套表。
- */
-function tomlDottedKeySegment(key: string): string {
-  if (/^[A-Za-z0-9_-]+$/.test(key)) return key;
-  return `"${key.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-}
 
 export interface CodexExtraSpawnConfig {
   /** 拼到 codex spawn 的 extraArgs 里：-c 'mcp_servers.xxx.url=...' 等 */
@@ -68,6 +48,26 @@ export interface GetCodexExtraSpawnConfigOptions {
   logger: Logger;
 }
 
+/** Shared MCP transport with launcher-owned runtime and credentials. */
+export function createCodexEnvironment(ports: { startCodexHttpBridge: ReturnType<typeof import('./codexHttpBridge.js').createCodexHttpBridgeRuntime>['startCodexHttpBridge']; withMcpRouteIdentity: ReturnType<typeof import('./codexHttpBridge.js').createCodexHttpBridgeRuntime>['withMcpRouteIdentity']; getRemoteMcpBridgeToken: () => string | null; appServerIds: () => string[]; }) {
+const { startCodexHttpBridge, withMcpRouteIdentity, getRemoteMcpBridgeToken, appServerIds } = ports;
+
+
+const TOKEN_ENV = 'LIZI_MCP_TOKEN';
+const MCP_TIMEOUT_SEC = 10 * 60;
+
+/**
+ * 把一个 header 名渲染成 codex `-c` override 里合法的 TOML dotted-key 段。
+ *
+ * 常见 HTTP header(`X-Api-Key`、`xd-themis-sk` 等)只含 [A-Za-z0-9_-],正好是
+ * TOML 裸键允许字符,直接原样输出。含点号等特殊字符的少见 header 用 TOML 引号键
+ * 包裹并转义 `\` 与 `"`,避免点号被误解析成嵌套表。
+ */
+function tomlDottedKeySegment(key: string): string {
+  if (/^[A-Za-z0-9_-]+$/.test(key)) return key;
+  return `"${key.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
 let cached: Promise<CodexExtraSpawnConfig> | null = null;
 let activeBridge: CodexHttpBridge | null = null;
 let activeBridgeServerNames: string[] | null = null;
@@ -91,7 +91,7 @@ const callerProvenanceByThread = new Map<
  *
  * 跟 AppServerHost.startPromise 同款模式 (host.ts:170-209)。
  */
-export function getCodexExtraSpawnConfig(
+function getCodexExtraSpawnConfig(
   opts: GetCodexExtraSpawnConfigOptions,
 ): Promise<CodexExtraSpawnConfig> {
   if (cached) return cached;
@@ -114,7 +114,7 @@ export function getCodexExtraSpawnConfig(
  */
 let shutdownHook: (() => void) | null = null;
 
-export function setCodexEnvironmentShutdownHook(fn: (() => void) | null): void {
+function setCodexEnvironmentShutdownHook(fn: (() => void) | null): void {
   shutdownHook = fn;
 }
 
@@ -123,7 +123,7 @@ export function setCodexEnvironmentShutdownHook(fn: (() => void) | null): void {
  * null)。live send 的轻量 MCP 漂移判定 (hasPendingRemoteMcpDrift) 用它
  * 区分「bridge 不在 ⇒ 必 ensure」与「比对实例代际」。
  */
-export function getActiveCodexBridgeInstanceId(): string | null {
+function getActiveCodexBridgeInstanceId(): string | null {
   return activeBridge?.instanceId ?? null;
 }
 
@@ -134,14 +134,14 @@ export function getActiveCodexBridgeInstanceId(): string | null {
  * per-session flag 钳制必须以本快照为准, 不能只看 manager 现值, 否则
  * prompt 注入与工具面失配、drift 永不收敛 (review R2 P2)。
  */
-export function getActiveCodexBridgeServerNames(): string[] | null {
+function getActiveCodexBridgeServerNames(): string[] | null {
   // 与 activeBridge 同生共死 (doStart 同步赋值 / shutdown finally 同步清空)。
   // 返回防御性拷贝: 内部数组同时是 drift 判定 / stale-bridge 钳制的数据源,
   // 调用方误改不得污染快照。
   return activeBridgeServerNames ? [...activeBridgeServerNames] : null;
 }
 
-export async function shutdownCodexEnvironment(): Promise<void> {
+async function shutdownCodexEnvironment(): Promise<void> {
   const cur = cached;
   if (!cur) return;
   cached = null;
@@ -168,7 +168,7 @@ export async function shutdownCodexEnvironment(): Promise<void> {
   }
 }
 
-export function registerCodexMcpThreadContext(
+function registerCodexMcpThreadContext(
   threadId: string,
   ctx: LiziMcpSessionContext,
 ): void {
@@ -227,7 +227,7 @@ export function registerCodexMcpThreadContext(
 }
 
 /** Capture only the current bridge generation; confirmation cannot target a replacement. */
-export function prepareCodexMcpToolCancellation(identity: {
+function prepareCodexMcpToolCancellation(identity: {
   sessionId: string; sessionInstanceId: string; threadId: string;
 }): () => void {
   const bridge = activeBridge;
@@ -235,7 +235,7 @@ export function prepareCodexMcpToolCancellation(identity: {
   return () => { if (activeBridge === bridge) cancel?.(); };
 }
 
-export function unregisterCodexMcpThreadContext(
+function unregisterCodexMcpThreadContext(
   threadId: string,
   expectedSessionInstanceId?: string,
 ): void {
@@ -464,6 +464,9 @@ async function doStart(
             // Telegram Bot API 直通同理: 只有带 Telegram 渠道标记(专线 chat / 伙伴绑了 Telegram)
             // 的线程看得到, 普通桌面任务按线程关掉。工具本身没有租约也 fail closed, 这里是让
             // 工具清单别在无关任务里出现。
+            ...(bridgeServerNames.includes('cindy_imessage')
+              && !hasImChannelVendorOptions(session?.vendorOptions, 'imessage')
+              ? { 'mcp_servers.cindy_imessage.enabled': false } : {}),
             ...(bridgeServerNames.includes(TELEGRAM_BOT_MCP_SERVER_NAME)
               && !hasImChannelVendorOptions(session?.vendorOptions, 'telegram')
               ? { [`mcp_servers.${TELEGRAM_BOT_MCP_SERVER_NAME}.enabled`]: false }
@@ -475,9 +478,11 @@ async function doStart(
 }
 
 /** Native startup discovery is earlier than the thread registration callback. */
-export function withCodexMcpDiscoveryContext<T>(
+function withCodexMcpDiscoveryContext<T>(
   ctx: LiziMcpSessionContext,
   run: () => Promise<T>,
 ): Promise<T> {
   return activeBridge ? activeBridge.withDiscoveryContext(ctx, run) : run();
+}
+return { getCodexExtraSpawnConfig, setCodexEnvironmentShutdownHook, getActiveCodexBridgeInstanceId, getActiveCodexBridgeServerNames, shutdownCodexEnvironment, registerCodexMcpThreadContext, prepareCodexMcpToolCancellation, unregisterCodexMcpThreadContext, withCodexMcpDiscoveryContext };
 }

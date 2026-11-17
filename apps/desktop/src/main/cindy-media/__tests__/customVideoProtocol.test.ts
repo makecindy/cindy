@@ -1,17 +1,65 @@
 import { describe, expect, it } from 'vitest';
 import { buildUserProvider } from '@cindy/model-providers';
 import { resolveCustomMediaConnection } from '../../cindy-brain/customMediaConnection.js';
-import { customVideoGuide, validateCustomVideoBody, videoConnectionRevision } from '../customVideoProtocol.js';
+import { validateCustomVideoBody, videoConnectionRevision } from '../customVideoProtocol.js';
 import { parsePreparedMediaInvocationGuide } from '../../../shared/mediaInvocation.js';
 
 const model = { id: 'private-video', name: 'Video', providerId: 'relay', mode: 'video_generation' as const, modalities: { input: ['text', 'image'], output: ['video'] } };
 
 describe('custom xAI Videos protocol', () => {
-  it.each(['video.generate', 'video.image_to_video'] as const)('persists and restores %s without a credential', capability => {
-    const guide = customVideoGuide(model, capability, '1:opaque-binding');
-    expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(guide)))).toMatchObject({ ok: true });
-    expect(guide.inputSchema.required).toEqual(capability === 'video.generate' ? ['prompt'] : ['prompt', 'image']);
-    expect(guide.response.mode).toBe('async');
+  // /v1/videos 回归：标准图片输入在付费边界不得被当作未知字段；原测试只有 MiniMax content。
+  // unit，最小输入为 prompt + 一条受管图片引用；仍拒绝非图片、超量、混合格式和文生视频引用。
+  it('validates relay input_reference as one or two images without MiniMax content', () => {
+    const ref = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    for (const input_reference of [ref, [ref, 'https://images.example/last.png']]) {
+      expect(() => validateCustomVideoBody({ prompt: 'move', input_reference }, true, 'openai-videos')).not.toThrow();
+    }
+    for (const input_reference of [[], [ref, ref, ref], 'file:///private/file', 'data:video/mp4;base64,AA==']) {
+      expect(() => validateCustomVideoBody({ prompt: 'move', input_reference }, true, 'openai-videos')).toThrow();
+    }
+    expect(() => validateCustomVideoBody({ prompt: 'move', input_reference: ref, content: [] }, true, 'openai-videos')).toThrow();
+    expect(() => validateCustomVideoBody({ prompt: 'move', input_reference: ref }, false, 'openai-videos')).toThrow();
+  });
+
+  it.each([
+    ['minimax-videos', 'https://video.example/v1', 'https://video.example'],
+    ['minimax-videos', 'https://video.example/prefix/v1', 'https://video.example/prefix'],
+    ['openai-videos', 'https://video.example/v1', 'https://video.example/v1'],
+  ] as const)('resolves the declared %s connection without borrowing the chat route', (videoApi, baseUrl, expected) => {
+    const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+      pi: { baseUrl, wireProtocol: 'openai-chat', videoApi, models: [{ ...model }] },
+    } });
+    expect(resolveCustomMediaConnection({ getProvider: () => provider, readApiKey: () => 'test-key',
+      isOwnerBoundaryPending: () => false }, model.id, 'video')).toMatchObject({ baseUrl: expected, videoApi });
+  });
+
+  it('changing the explicit video API invalidates the connection while old xAI digests remain compatible', () => {
+    const binding = { agent: 'pi' as const, baseUrl: 'https://video.example/v1', headers: { authorization: 'Bearer test-key' } };
+    const original = videoConnectionRevision('relay', model.id, binding);
+    expect(videoConnectionRevision('relay', model.id, { ...binding, videoApi: 'xai-videos' })).toBe(original);
+    expect(videoConnectionRevision('relay', model.id, { ...binding, videoApi: 'openai-videos' })).not.toBe(original);
+  });
+
+  it('restores a legacy paid task and its original connection digest without a credential', () => {
+    const legacySnapshot = {
+      schemaVersion: 1, guideId: 'cindy-provider-xai-video-v1', revision: '1:opaque-binding',
+      modelId: model.id, connection: { providerId: 'relay' }, capability: 'video.generate',
+      request: { method: 'POST', path: '/videos/generations', bodyModelPath: ['model'], timeoutMs: 120_000, maxRequestBytes: 70 * 1024 * 1024, maxResponseBytes: 1024 * 1024 },
+      response: { mode: 'async', taskIdPath: ['request_id'], poll: {
+        method: 'GET', path: '/videos/{taskId}', statusPath: ['status'],
+        successValues: ['done'], failureValues: ['failed', 'expired'],
+        recommendedIntervalMs: 5_000, timeoutMs: 30_000, maxResponseBytes: 1024 * 1024,
+        media: [{ path: ['video', 'url'], encoding: 'url', kind: 'video', allowedUrlHosts: ['vidgen.x.ai'] }],
+      } },
+      instructions: '轮询原任务', exampleBody: { prompt: 'cat' }, inputSchema: { type: 'object' },
+      officialDocs: 'https://docs.x.ai/developers/model-capabilities/video/generation',
+    };
+    expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(legacySnapshot)))).toMatchObject({
+      ok: true, value: {
+        revision: '1:opaque-binding',
+        binding: { providerId: 'relay', executor: 'provider-video', connectionRevision: '1:opaque-binding' },
+      },
+    });
   });
 
   it.each(['https://video.example/v1', 'https://router.requesty.ai/v1'])

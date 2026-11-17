@@ -35,6 +35,7 @@
  */
 
 import { GHOST_SECRET_VALUE_MAX_CHARS } from '../../../shared/ghost.js';
+import { GHOST_SAVED_CREDENTIAL_MARKER, ghostSavedCredentialReferenceKey } from '../../../shared/pluginAccountReuse.js';
 import { GhostKvError } from '../ghostKvStore.js';
 import { assertGhostProtocolTargetCurrent, GhostProtocolTargetChangedError } from './ghostProtocolTargetGuard.js';
 
@@ -182,9 +183,11 @@ export async function handleGhostSecretsRequest(args: {
         : undefined;
     if (typeof value !== 'string' || value.trim().length === 0) return { status: 400 };
     if (value.length > GHOST_SECRET_VALUE_MAX_CHARS) return { status: 413 };
+    if (value.trim() === GHOST_SAVED_CREDENTIAL_MARKER) return { status: 400 };
     try {
       assertGhostProtocolTargetCurrent(args.isCurrent);
       if (!vault.store(instanceKey, secretKey, value.trim())) return { status: 500 };
+      vault.remove(instanceKey, ghostSavedCredentialReferenceKey(secretKey));
     } catch (err) {
       if (err instanceof GhostProtocolTargetChangedError) return { status: 403 };
       log?.warn('ghost secret 入库意外失败', { instanceKey, secretKey, err: String(err) });
@@ -206,6 +209,7 @@ export async function handleGhostSecretsRequest(args: {
     try {
       assertGhostProtocolTargetCurrent(args.isCurrent);
       vault.remove(instanceKey, secretKey);
+      vault.remove(instanceKey, ghostSavedCredentialReferenceKey(secretKey));
       return { status: 204 };
     } catch (err) {
       if (err instanceof GhostProtocolTargetChangedError) return { status: 403 };

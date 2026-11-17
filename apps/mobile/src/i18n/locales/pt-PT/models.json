@@ -74,6 +74,11 @@
     "cancel": "Manter como está"
   },
   "unified": {
+    "accountUnassigned": "Conta por atribuir",
+    "accountCount_one": "{{count}} conta",
+    "accountCount_other": "{{count}} contas",
+    "accountFallback": "Conta {{index}}",
+    "accountCount_many": "{{count}} contas",
     "favoriteConfiguration": "Adicionar esta configuração aos favoritos",
     "savedConfiguration": "Nos favoritos · Toque para remover",
     "currentConfiguration": "Configuração atual",
@@ -114,6 +119,12 @@
       "minute": "m",
       "second": "s"
     },
-    "groupBadge_many": "Grupo de fornecedores · {{count}} computadores"
+    "groupBadge_many": "Grupo de fornecedores · {{count}} computadores",
+    "quotaAverage": "Média restante {{percent}}%",
+    "quotaUpdating": "Quota a aguardar atualização",
+    "quotaResetSoon": "Reposição em breve",
+    "quotaResetIn": "Reposição dentro de {{duration}}",
+    "quotaAverageHint": "Quota semanal · Peso igual por conta",
+    "quotaResetHint": "Ao ritmo atual, pode restar quota na reposição: amarelo até 24 horas, vermelho até 6 horas."
   }
 }

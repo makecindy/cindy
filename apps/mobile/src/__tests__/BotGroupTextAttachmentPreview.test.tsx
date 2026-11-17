@@ -1,3 +1,4 @@
+vi.mock("@/session/usePreviewChromeFrame", () => ({ usePreviewChromeFrame: () => ({ documentContentTop: 64, documentHeaderHeight: 64, top: 0, bottom: 0, left: 12, right: 12, sharedStatusRow: false }) }));
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

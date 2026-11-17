@@ -17,6 +17,8 @@ export interface AuthLoginOptions {
 }
 
 export interface AuthAdapterOptions {
+  /** Trusted host-selected CLI profile. Never accepted from a serialized request. */
+  nativeSubscriptionAccount?: NativeSubscriptionAccount;
   /**
    * 本次 agent 子进程期望使用的凭证形态。
    *
@@ -37,6 +39,21 @@ export interface AuthAdapterOptions {
    */
   model?: string;
 }
+
+/** A directory capability, minted by the executing host after owner/route checks. */
+export interface NativeSubscriptionAccount {
+  id: string;
+  configDir: string;
+  defaultProfile?: boolean;
+  assertCurrent(): void;
+  readState(): Promise<AuthState>;
+  /** Codex-only existing host bridge; credentials never leave the executing host. */
+  readCodexTokens?(refresh?: boolean): Promise<{ accessToken: string; chatgptAccountId: string; canDispatch?: () => boolean }>;
+  invalidateAuth?(reason: string, failedAccessToken: string): void;
+}
+
+/** Symbol deliberately prevents JSON/device-link clients from selecting local homes. */
+export const NATIVE_SUBSCRIPTION_ACCOUNT = Symbol('native-subscription-account');
 
 export interface AuthAdapter {
   /** 检查当前鉴权状态，不触发登录 */

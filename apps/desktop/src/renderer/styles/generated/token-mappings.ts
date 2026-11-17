@@ -34,6 +34,180 @@ export const TAILWIND_LINE_HEIGHTS = {
   "4xl": 40,
   "5xl": 48
 };
+export const SCALABLE_APPEARANCE_TOKENS = {
+  "--motion-instant": {
+    "value": 80,
+    "unit": "ms"
+  },
+  "--motion-fast": {
+    "value": 150,
+    "unit": "ms"
+  },
+  "--motion-base": {
+    "value": 200,
+    "unit": "ms"
+  },
+  "--motion-enter": {
+    "value": 250,
+    "unit": "ms"
+  },
+  "--motion-exit": {
+    "value": 150,
+    "unit": "ms"
+  },
+  "--motion-spinner-cycle": {
+    "value": 1000,
+    "unit": "ms"
+  },
+  "--motion-sidebar-title-marquee-per-viewport": {
+    "value": 2400,
+    "unit": "ms"
+  },
+  "--space-0": {
+    "value": 0,
+    "unit": "px"
+  },
+  "--space-1": {
+    "value": 0.25,
+    "unit": "rem"
+  },
+  "--space-2": {
+    "value": 0.5,
+    "unit": "rem"
+  },
+  "--space-3": {
+    "value": 0.75,
+    "unit": "rem"
+  },
+  "--space-4": {
+    "value": 1,
+    "unit": "rem"
+  },
+  "--space-5": {
+    "value": 1.25,
+    "unit": "rem"
+  },
+  "--space-6": {
+    "value": 1.5,
+    "unit": "rem"
+  },
+  "--space-7": {
+    "value": 1.75,
+    "unit": "rem"
+  },
+  "--space-8": {
+    "value": 2,
+    "unit": "rem"
+  },
+  "--space-9": {
+    "value": 2.25,
+    "unit": "rem"
+  },
+  "--space-10": {
+    "value": 2.5,
+    "unit": "rem"
+  },
+  "--space-11": {
+    "value": 2.75,
+    "unit": "rem"
+  },
+  "--space-12": {
+    "value": 3,
+    "unit": "rem"
+  },
+  "--space-14": {
+    "value": 3.5,
+    "unit": "rem"
+  },
+  "--space-16": {
+    "value": 4,
+    "unit": "rem"
+  },
+  "--space-20": {
+    "value": 5,
+    "unit": "rem"
+  },
+  "--space-24": {
+    "value": 6,
+    "unit": "rem"
+  },
+  "--space-28": {
+    "value": 7,
+    "unit": "rem"
+  },
+  "--space-32": {
+    "value": 8,
+    "unit": "rem"
+  },
+  "--space-36": {
+    "value": 9,
+    "unit": "rem"
+  },
+  "--space-40": {
+    "value": 10,
+    "unit": "rem"
+  },
+  "--space-44": {
+    "value": 11,
+    "unit": "rem"
+  },
+  "--space-48": {
+    "value": 12,
+    "unit": "rem"
+  },
+  "--space-52": {
+    "value": 13,
+    "unit": "rem"
+  },
+  "--space-56": {
+    "value": 14,
+    "unit": "rem"
+  },
+  "--space-60": {
+    "value": 15,
+    "unit": "rem"
+  },
+  "--space-64": {
+    "value": 16,
+    "unit": "rem"
+  },
+  "--space-72": {
+    "value": 18,
+    "unit": "rem"
+  },
+  "--space-80": {
+    "value": 20,
+    "unit": "rem"
+  },
+  "--space-96": {
+    "value": 24,
+    "unit": "rem"
+  },
+  "--space-px": {
+    "value": 1,
+    "unit": "px"
+  },
+  "--space-0_5": {
+    "value": 0.125,
+    "unit": "rem"
+  },
+  "--space-1_5": {
+    "value": 0.375,
+    "unit": "rem"
+  },
+  "--space-2_5": {
+    "value": 0.625,
+    "unit": "rem"
+  },
+  "--space-3_5": {
+    "value": 0.875,
+    "unit": "rem"
+  },
+  "--space-input-lg": {
+    "value": 12,
+    "unit": "px"
+  }
+};
 export const NUMERIC_TEXT_CLASSES = [
   "10",
   "11",

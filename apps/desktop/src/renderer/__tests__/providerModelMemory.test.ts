@@ -49,6 +49,24 @@ async function loadModule() {
 }
 
 describe('providerModelMemory store', () => {
+  // PR #10445 / configuration-and-overrides §4, unit: reset a disabled MiMo
+  // switch through the real store. Existing clear tests covered only effort/Fast.
+  it('clears thinking defaults across source copies without deleting other preferences', async () => {
+    const m = await loadModule();
+    m.setProviderModelThinking('pi', 'mimo-cn', 'mimo-v2.6-pro', false);
+    m.setProviderModelThinking('pi', 'mimo-sgp', 'mimo-v2.6-pro', false);
+    m.setProviderModelThinking('pi', 'mimo-cn', 'mimo-v2.6', false);
+    m.setProviderModelEffort('pi', 'mimo-cn', 'mimo-v2.6-pro', 'high');
+    m.clearProviderModelThinking('pi', 'mimo-cn', 'mimo-v2.6-pro');
+    const saved = memStorage.getItem(m.__STORAGE_KEY)!;
+    m.__resetForTest();
+    memStorage.setItem(m.__STORAGE_KEY, saved);
+    expect(m.getProviderModelThinking('pi', 'mimo-cn', 'mimo-v2.6-pro')).toBeUndefined();
+    expect(m.getProviderModelThinking('pi', 'mimo-sgp', 'mimo-v2.6-pro')).toBeUndefined();
+    expect(m.getProviderModelThinking('pi', 'mimo-cn', 'mimo-v2.6')).toBe(false);
+    expect(m.getProviderModelEffort('pi', 'mimo-cn', 'mimo-v2.6-pro')).toBe('high');
+  });
+
   // Standard tier: speed presets must survive persistence without collapsing Ultrafast to true.
   it('preserves Ultrafast in saved model presets and host snapshots', async () => {
     const m = await loadModule();
@@ -1114,4 +1132,40 @@ it('does not stamp previous-owner model tuning during the auth handoff', async (
   memory.setProviderModelMemoryOwner('B');
   expect(memory.snapshotForSeed('B')).toEqual({});
   expect(memory.snapshotForSeed('A')).toBeNull();
+});
+
+
+describe('alias model memory batch', () => {
+  it('retains explicit false, writes both aliases, and resets only the requested agents', async () => {
+    const m = await loadModule();
+    m.setProviderModelEffort('pi', 'p', 'old', 'low');
+    m.setProviderModelEffort('codex', 'other-provider', 'other', 'low');
+    const writes = ['old', 'new'].flatMap((model) => [
+      { kind: 'set-effort' as const, agent: 'codex' as const, providerId: 'p', model, effort: 'high' as const },
+      { kind: 'set-fast' as const, agent: 'codex' as const, providerId: 'p', model, enabled: false },
+    ]);
+    expect(m.editProviderModelMemoryBatch(writes)).toBe(true);
+    for (const model of ['old', 'new']) {
+      expect(m.getProviderModelEffort('codex', 'p', model)).toBe('high');
+      expect(m.getProviderModelFast('codex', 'p', model)).toBe(false);
+    }
+    expect(m.editProviderModelMemoryBatch(['old', 'new'].flatMap((model) => [
+      { kind: 'clear-effort' as const, agent: 'codex' as const, providerId: 'p', model },
+      { kind: 'clear-fast' as const, agent: 'codex' as const, providerId: 'p', model },
+    ]))).toBe(true);
+    expect(m.getProviderModelEffort('codex', 'p', 'old')).toBeUndefined();
+    expect(m.getProviderModelFast('codex', 'p', 'new')).toBeUndefined();
+    expect(m.getProviderModelEffort('pi', 'p', 'old')).toBe('low');
+    expect(m.getProviderModelEffort('codex', 'other-provider', 'other')).toBe('low');
+  });
+  it('does not partly update aliases on storage failure', async () => {
+    const m = await loadModule();
+    m.setProviderModelEffort('codex', 'p', 'old', 'low');
+    memStorage.setWritesFail(true);
+    expect(m.editProviderModelMemoryBatch(['old', 'new'].map((model) => ({
+      kind: 'set-effort' as const, agent: 'codex' as const, providerId: 'p', model, effort: 'high' as const,
+    })))).toBe(false);
+    expect(m.getProviderModelEffort('codex', 'p', 'old')).toBe('low');
+    expect(m.getProviderModelEffort('codex', 'p', 'new')).toBeUndefined();
+  });
 });

@@ -5,6 +5,7 @@ import IOKit.graphics
 import Security
 import Darwin
 import Vision
+import LocalAuthentication
 
 #if !DESKTOP_INPUT_TEST
 // This guard precedes every entrypoint, including selection and permission UI.
@@ -296,9 +297,26 @@ func applyEvent(_ event: [String: Any]) {
 // Armed -> draining -> confirming. Draining lets the input helper release its
 // pressed keys/buttons before Main opens a dialog; confirming rejects injection.
 // Held initiating keys/buttons are consumed through release (including repeats).
+/// Physical pointer movement under the privacy screen brings its notice back to full
+/// brightness (docs/product-rules/privacy-screen.md). Reported as the fixed word
+/// `pointer`, at most once per interval; it never locks and never carries positions.
+struct PointerNotice {
+  static let interval = 2.0
+  private var lastAt = -Double.infinity
+  static func isMove(_ type: CGEventType) -> Bool {
+    [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type)
+  }
+  mutating func due(_ now: Double) -> Bool {
+    if now - lastAt < Self.interval { return false }
+    lastAt = now
+    return true
+  }
+}
+
 struct PrivacyInputGate {
   var phase = 0
   var swallowed = Set<Int64>()
+  var pointer = PointerNotice()
   mutating func consume(physical: Bool, press: Int64?, down: Bool, trigger: Bool, scroll: Bool = false) -> (Bool, Bool) {
     if !physical { return (phase == 2, false) }
     if scroll {
@@ -320,6 +338,31 @@ struct PrivacyInputGate {
       return (true, false)
     }
     return (false, false)
+  }
+}
+
+/// Away guard: which physical input at a covered Mac means "someone is here". Only a
+/// deliberate press counts. Releases, pointer drift, Caps Lock and a stray scroll tick
+/// are swallowed without locking: idle mice, wireless receivers and some keypads emit
+/// these on their own (2026-11-06 previews locked within 0.1 s of covering).
+struct AwayInputGate {
+  static let scrollPoints = 30.0
+  private var scrollSum = 0.0
+  private var scrollStart = -Double.infinity
+  mutating func isPresence(_ type: CGEventType, flags: CGEventFlags, scroll: Double, now: Double) -> Bool {
+    switch type {
+    case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown:
+      return true
+    case .flagsChanged:
+      // A modifier going down; releases and Caps Lock carry none of these.
+      return !flags.intersection([.maskCommand, .maskShift, .maskControl, .maskAlternate]).isEmpty
+    case .scrollWheel:
+      if now - scrollStart > 1 { scrollStart = now; scrollSum = 0 }
+      scrollSum += abs(scroll)
+      return scrollSum >= Self.scrollPoints
+    default:
+      return false
+    }
   }
 }
 
@@ -908,8 +951,10 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--handoff-qr"] {
     if count <= 0 { break }
     data.append(chunk, count: count)
   }
-  guard data.count == length, let session = CGSessionCopyCurrentDictionary() as? [String: Any],
-    !(session["CGSSessionScreenIsLocked"] as? Bool ?? false) else { handoffRespond(["error": "unavailable"]) }
+  // Decode only the bytes Main supplied, including screenshots from another
+  // device. This never reads the desktop, so it remains usable while locked.
+  // Caller authentication above and the --handoff window lock gate still apply.
+  guard data.count == length else { handoffRespond(["error": "unavailable"]) }
   handoffRespond(["codes": handoffDetectQr(data)])
 }
 if CommandLine.arguments.contains("--lock-state") {
@@ -921,27 +966,87 @@ if CommandLine.arguments.contains("--request-permission") {
   let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
   print(AXIsProcessTrustedWithOptions(options) ? "ready" : "permission"); exit(0)
 }
-if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--lock-screen" {
-  func ownedSession() -> [String: Any]? {
-    guard let state = CGSessionCopyCurrentDictionary() as? [String: Any],
-      (state[kCGSessionUserIDKey as String] as? NSNumber)?.uint32Value == geteuid(),
-      state[kCGSessionOnConsoleKey as String] as? Bool == true,
-      state[kCGSessionLoginDoneKey as String] as? Bool == true else { return nil }
-    return state
+func ownedConsoleSession() -> [String: Any]? {
+  guard let state = CGSessionCopyCurrentDictionary() as? [String: Any],
+    (state[kCGSessionUserIDKey as String] as? NSNumber)?.uint32Value == geteuid(),
+    state[kCGSessionOnConsoleKey as String] as? Bool == true,
+    state[kCGSessionLoginDoneKey as String] as? Bool == true else { return nil }
+  return state
+}
+/// Why a lock was not confirmed. Fixed words for Main's log, never session contents.
+enum SessionLockFailure: String {
+  /// Not this user's logged-in console session (fast user switching, login window).
+  case session
+  /// Main's identity check failed while locking.
+  case caller
+  /// No system lock entry point and no Accessibility for the shortcut.
+  case permission
+  /// Requested, but the OS never reported the lock.
+  case timeout
+}
+/// loginwindow's own immediate lock (login.framework). Unlike Control-Command-Q it does
+/// not depend on the frontmost app handling the Apple menu's key equivalent: a hung app,
+/// a full-screen game or a VM / remote client that captures keys swallowed the shortcut,
+/// and the away cover leaves whatever app was frontmost in front. The entry point is
+/// private, so it is resolved at run time; a missing symbol only means the shortcut.
+func systemLockScreen() -> (@convention(c) () -> Int32)? {
+  guard let handle = dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login", RTLD_LAZY),
+    let symbol = dlsym(handle, "SACLockScreenImmediate") else { return nil }
+  return unsafeBitCast(symbol, to: (@convention(c) () -> Int32).self)
+}
+/// Locks this user's own console session and waits until the OS reports it; nil once
+/// locked. `requireCaller` is false only for the away guard's orphan path: once Main is
+/// gone the only remaining action is locking, which never needs Main's authority.
+func lockOwnedSession(requireCaller: Bool) -> SessionLockFailure? {
+  func awaitLock(_ seconds: TimeInterval) -> SessionLockFailure? {
+    let deadline = Date().addingTimeInterval(seconds)
+    repeat {
+      guard let current = ownedConsoleSession() else { return .session }
+      guard !requireCaller || inputCaller.code() != nil else { return .caller }
+      if current["CGSSessionScreenIsLocked"] as? Bool == true { return nil }
+      usleep(50_000)
+    } while Date() < deadline
+    return .timeout
   }
-  guard let state = ownedSession(), inputCaller.code() != nil else { exit(2) }
-  if state["CGSSessionScreenIsLocked"] as? Bool == true { print("locked"); exit(0) }
-  guard AXIsProcessTrusted(), ownedSession() != nil else { exit(2) }
-  // Fixed system lock shortcut. No password, shell command or caller-provided key.
+  // Already locked, or not ours to lock: nothing is requested.
+  let initial = awaitLock(0)
+  if initial != .timeout { return initial }
+  let system = systemLockScreen()
+  if let lockNow = system {
+    _ = lockNow()
+    let failure = awaitLock(1.5)
+    if failure != .timeout { return failure }
+  }
+  guard AXIsProcessTrusted() else { return system == nil ? .permission : .timeout }
+  // Fallback: the fixed system lock shortcut. No password, shell command or caller key.
   key(59, true); key(55, true); key(12, true)
   key(12, false); key(55, false); key(59, false)
-  let deadline = Date().addingTimeInterval(3)
-  while Date() < deadline {
-    guard let current = ownedSession(), inputCaller.code() != nil else { exit(2) }
-    if current["CGSSessionScreenIsLocked"] as? Bool == true { print("locked"); exit(0) }
-    usleep(50_000)
+  return awaitLock(3)
+}
+// `--verify-owner <reason>`: only when the privacy screen could not lock this Mac
+// (docs/product-rules/privacy-screen.md). The system's own Touch ID / password prompt
+// verifies the owner; this process never sees a credential, only success. Fixed words
+// on stdout: verified, denied, unavailable.
+if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--verify-owner" {
+  guard inputCaller.code() != nil, ownedConsoleSession() != nil else { print("unavailable"); exit(2) }
+  let context = LAContext()
+  var problem: NSError?
+  guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &problem) else {
+    print("unavailable"); exit(0)
   }
+  let reason = String(CommandLine.arguments[2].prefix(200))
+  context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, _ in
+    print(success ? "verified" : "denied"); fflush(stdout); exit(0)
+  }
+  // The prompt is out of process; keep this one-shot alive until it answers.
+  RunLoop.main.run()
   exit(2)
+}
+if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--lock-screen" {
+  if let failure = lockOwnedSession(requireCaller: true) {
+    print("lock-failed \(failure.rawValue)"); exit(2)
+  }
+  print("locked"); exit(0)
 }
 guard AXIsProcessTrusted() else { print("permission"); fflush(stdout); exit(2) }
 if CommandLine.arguments == [CommandLine.arguments[0], "--handoff"] {
@@ -998,6 +1103,10 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--privacy-input"] {
       let (consume, notify) = state.pointee.consume(physical: physical, press: press,
         down: type == .keyDown || mouseDown, trigger: type == .keyDown || mouseDown || type == .flagsChanged, scroll: type == .scrollWheel)
       if notify { print("local-input"); fflush(stdout) }
+      else if physical && PointerNotice.isMove(type)
+        && state.pointee.pointer.due(ProcessInfo.processInfo.systemUptime) {
+        print("pointer"); fflush(stdout)
+      }
       return consume ? nil : Unmanaged.passUnretained(event)
     }, userInfo: context), let runSource = CFMachPortCreateRunLoopSource(nil, tap, 0) else {
       print("error"); fflush(stdout); exit(2)
@@ -1029,6 +1138,107 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--privacy-input"] {
   timer.schedule(deadline: .now() + 1, repeating: 1)
   timer.setEventHandler {
     if Date().timeIntervalSince(heartbeat) > 5 || inputCaller.code() == nil || !AXIsProcessTrusted() { exit(2) }
+  }
+  timer.resume()
+  CFRunLoopRun()
+  exit(0)
+}
+// Away guard (Settings → Keep working while away): Main shows the privacy masks
+// while an Agent works and nobody is at this Mac. Physical input is consumed and
+// becomes the real system lock, so the owner unlocks with Touch ID or password;
+// injected Agent input passes. Losing Main (EOF, missed heartbeat, dead parent)
+// locks as well, so a crashed Cindy never leaves an unlocked desktop behind.
+// All state lives on the main queue; only fixed words cross stdout.
+final class AwayGuard {
+  var tap: CFMachPort?
+  var gate = AwayInputGate()
+  var pointer = PointerNotice()
+  private var ended = false
+  private let lockSession: () -> SessionLockFailure?
+  init(lockSession: @escaping () -> SessionLockFailure?) { self.lockSession = lockSession }
+  /// `reason` is a fixed word for Main's log; it never carries event contents.
+  func finish(lock: Bool, reason: String) {
+    if ended { return }
+    ended = true
+    if lock { print("reason \(reason)"); fflush(stdout) }
+    DispatchQueue.global().async { [self] in
+      if !lock { print("released"); fflush(stdout); exit(0) }
+      if let failure = lockSession() { print("lock-failed \(failure.rawValue)"); fflush(stdout); exit(3) }
+      // The lock screen owns input now; never hold the owner's keys or clicks after unlock.
+      DispatchQueue.main.sync { if let tap = tap { CGEvent.tapEnable(tap: tap, enable: false) } }
+      print("locked"); fflush(stdout); exit(0)
+    }
+  }
+}
+if CommandLine.arguments == [CommandLine.arguments[0], "--away-guard"] {
+  // Locking is the only action left once Main is gone; it never needs Main's authority.
+  let away = AwayGuard(lockSession: { lockOwnedSession(requireCaller: false) })
+  // A dead Main closes our stdout; writing the status word must not kill us before
+  // the lock (2026-11-06: a force-quit Cindy left the desktop uncovered and unlocked).
+  signal(SIGPIPE, SIG_IGN)
+  // Being terminated along with Cindy also ends in the lock, never in an open desktop.
+  var terminations: [DispatchSourceSignal] = []
+  for number in [SIGTERM, SIGHUP, SIGINT] {
+    signal(number, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+    source.setEventHandler { away.finish(lock: true, reason: "terminated") }
+    source.resume()
+    terminations.append(source)
+  }
+  var heartbeat = Date()
+  let events: [CGEventType] = [.keyDown, .keyUp, .flagsChanged, .leftMouseDown, .leftMouseUp,
+    .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp, .mouseMoved,
+    .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel]
+  let mask = events.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+  guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
+    options: .defaultTap, eventsOfInterest: mask, callback: { _, type, event, info in
+      let away = Unmanaged<AwayGuard>.fromOpaque(info!).takeUnretainedValue()
+      if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        away.finish(lock: true, reason: "tap-disabled")
+        return Unmanaged.passUnretained(event)
+      }
+      let physical = event.getIntegerValueField(.eventSourceUnixProcessID) == 0
+        && event.getIntegerValueField(.eventSourceStateID) == Int64(CGEventSourceStateID.hidSystemState.rawValue)
+      if !physical { return Unmanaged.passUnretained(event) }
+      // Physical input never reaches the apps behind the cover; only a deliberate press
+      // turns into the lock (see AwayInputGate).
+      let scroll = Double(abs(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1))
+        + abs(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)))
+      let now = ProcessInfo.processInfo.systemUptime
+      if PointerNotice.isMove(type) && away.pointer.due(now) { print("pointer"); fflush(stdout) }
+      if away.gate.isPresence(type, flags: event.flags, scroll: scroll, now: now) {
+        let reason = type == .scrollWheel ? "scroll" : type == .flagsChanged ? "modifier"
+          : type == .keyDown ? "key" : "click"
+        away.finish(lock: true, reason: reason)
+      }
+      return nil
+    }, userInfo: Unmanaged.passUnretained(away).toOpaque()), let runSource = CFMachPortCreateRunLoopSource(nil, tap, 0) else {
+      print("error"); fflush(stdout); exit(2)
+    }
+  away.tap = tap
+  CFRunLoopAddSource(CFRunLoopGetMain(), runSource, .commonModes)
+  CGEvent.tapEnable(tap: tap, enable: true)
+  print("ready"); fflush(stdout)
+  DispatchQueue.global().async {
+    while let command = readLine() {
+      DispatchQueue.main.async {
+        heartbeat = Date()
+        switch command {
+        case "ping": break
+        case "release": away.finish(lock: false, reason: "")
+        case "lock": away.finish(lock: true, reason: "requested")
+        // Anything unexpected ends in the safe state.
+        default: away.finish(lock: true, reason: "command")
+        }
+      }
+    }
+    DispatchQueue.main.async { away.finish(lock: true, reason: "main-closed") }
+  }
+  let timer = DispatchSource.makeTimerSource(queue: .main)
+  timer.schedule(deadline: .now() + 1, repeating: 1)
+  timer.setEventHandler {
+    if Date().timeIntervalSince(heartbeat) > 5 { away.finish(lock: true, reason: "heartbeat") }
+    if inputCaller.code() == nil { away.finish(lock: true, reason: "main-gone") }
   }
   timer.resume()
   CFRunLoopRun()

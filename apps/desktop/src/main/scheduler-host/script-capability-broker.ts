@@ -7,18 +7,20 @@ import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '@cindy/maker-core';
 
 import type { GhostToolCallResult } from '../../shared/ghost.js';
 import { hasDeliveryNamespace, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
-import {
-  findTrustedXdGhostForScript,
-  getGhostCardService,
-  getGhostPipeDispatcher,
-} from '../cindy-brain/index.js';
 import { validateFsRelPath } from '../cindy-brain/fsSlot.js';
-import { tryGetOrcaCollabService } from '../maker-ipc/register.js';
-import { getSessionRowSnapshotStrict, restoreArchivedSessionForSend } from '../localDb/ipc/sessions';
 import { assertReviewSessionExternalInputAllowed } from '../reviewer/reviewSessionInputPolicy';
 import { isManagedScheduledTarget } from './restore-target';
-import type { ScriptCapabilityBroker, ScriptCapabilityCall } from './script-runner';
+import type { ScriptCapabilityBroker, ScriptCapabilityCall } from './script-runner.desktop';
 // model 兜底与 runner 同源(2026-06 曾因多份拷贝不同步导致 UI 显示与实跑模型不一致)
+
+export interface SchedulerScriptRuntime {
+  findTrustedXdGhostForScript: typeof import('../cindy-brain/index.js').findTrustedXdGhostForScript;
+  getGhostCardService: typeof import('../cindy-brain/index.js').getGhostCardService;
+  getGhostPipeDispatcher: typeof import('../cindy-brain/index.js').getGhostPipeDispatcher;
+  tryGetOrcaCollabService: typeof import('../maker-ipc/register.js').tryGetOrcaCollabService;
+  getSessionRowSnapshotStrict: typeof import('../localDb/sessionDispatchSnapshot.js').getSessionRowSnapshotStrict;
+  restoreArchivedSessionForSend: typeof import('../localDb/ipc/sessions').restoreArchivedSessionForSend;
+}
 
 type DispatchEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
@@ -76,13 +78,14 @@ function rejectHostOwnedParams(params: Record<string, unknown>, keys: string[]):
  * runId 缺省(非 runner 调用方)归入共享桶,保持原行为。
  */
 async function callGhostForScript(
+  runtime: SchedulerScriptRuntime,
   request: { ghostId: string; tool: string; args: Record<string, unknown> },
   schedule: Pick<Schedule, 'workingDir'>,
   runId: string,
   active: Map<string, Set<string>>,
   writePath: string | null,
 ): Promise<GhostToolCallResult> {
-  const ghost = findTrustedXdGhostForScript(request.ghostId);
+  const ghost = runtime.findTrustedXdGhostForScript(request.ghostId);
   const pendingLegacy = ghost?.namespaceState === 'pending'
     && !hasDeliveryNamespace(ghost) && ghost.approval.state === 'approved';
   // Unconfirmed still projects the last namespace. That is not a grant.
@@ -103,7 +106,7 @@ async function callGhostForScript(
   // 不带 out_file 时若触发插件自动泄洪,只是回落 truncated,无回归。
   const rawWorkdir = typeof schedule.workingDir === 'string' ? schedule.workingDir : '';
   const scriptWorkdir = writePath !== null && rawWorkdir.trim() && isAbsolute(rawWorkdir) ? rawWorkdir : null;
-  const cardService = getGhostCardService();
+  const cardService = runtime.getGhostCardService();
   cardService.registerCall(callId, {
     ghostId,
     toolUseId: null,
@@ -119,7 +122,7 @@ async function callGhostForScript(
   }
   bucket.add(callId);
   try {
-    return await getGhostPipeDispatcher().callGhostTool({ ...request, ghostId, callId });
+    return await runtime.getGhostPipeDispatcher().callGhostTool({ ...request, ghostId, callId });
   } finally {
     bucket.delete(callId);
     if (bucket.size === 0) active.delete(runId);
@@ -148,6 +151,7 @@ function optionalOutFile(params: Record<string, unknown>): string | undefined {
  * registry 直调一致;非 data 形态原样透传(自带 hint,脚本能看懂)。
  */
 async function callFeishu(
+  runtime: SchedulerScriptRuntime,
   name: string,
   args: Record<string, unknown>,
   schedule: Pick<Schedule, 'workingDir'>,
@@ -155,6 +159,7 @@ async function callFeishu(
   active: Map<string, Set<string>>,
 ): Promise<unknown> {
   const result = await callGhostForScript(
+    runtime,
     { ghostId: 'xd-feishu', tool: 'call_tool', args: { name, args } },
     schedule,
     runId,
@@ -169,6 +174,7 @@ async function callFeishu(
 }
 
 async function callJira(
+  runtime: SchedulerScriptRuntime,
   args: Record<string, unknown>,
   schedule: Pick<Schedule, 'workingDir'>,
   runId: string,
@@ -176,6 +182,7 @@ async function callJira(
   writePath: string | null,
 ): Promise<unknown> {
   const result = await callGhostForScript(
+    runtime,
     { ghostId: 'xd-atlassian', tool: 'jira_issues', args },
     schedule,
     runId,
@@ -219,7 +226,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
       agent: Schedule['agentKind'],
       preferredProviderId?: string | null,
     ) => Promise<{ model: string; providerId: string | null; catalogKnown?: boolean } | null>;
-  } = {}) {}
+  }, private readonly runtime: SchedulerScriptRuntime) {}
 
   /** 新建任务的配置:模型留空时按新建任务口径实时解析,不写死型号。 */
   private async createDefaultsFor(schedule: Schedule) {
@@ -257,7 +264,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
   finalizeActiveCalls(runId: string): void {
     const bucket = this.activeScriptCallIds.get(runId);
     if (!bucket || bucket.size === 0) return;
-    const cardService = getGhostCardService();
+    const cardService = this.runtime.getGhostCardService();
     for (const callId of bucket) cardService.finalizeCall(callId);
     this.activeScriptCallIds.delete(runId);
   }
@@ -293,7 +300,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         requireCapability(granted, 'jira.read');
         const fields = optionalStringArray(params, 'fields');
         const outFile = optionalOutFile(params);
-        return callJira({
+        return callJira(this.runtime, {
           action: 'get',
           issue_key: requireString(params, 'issue_key'),
           ...(fields ? { fields } : {}),
@@ -315,7 +322,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         }
         const fields = optionalStringArray(params, 'fields');
         const outFile = optionalOutFile(params);
-        return callJira({
+        return callJira(this.runtime, {
           action: 'search_jql',
           jql: requireString(params, 'jql'),
           ...(fields ? { fields } : {}),
@@ -343,9 +350,9 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           if (typeof bodyAdf !== 'object' || bodyAdf === null || Array.isArray(bodyAdf)) {
             fail('INVALID_ARGS', 'body_adf must be an ADF document object');
           }
-          return callJira({ action: 'add_comment', issue_key: issueKey, body_adf: bodyAdf }, context.schedule, runId, this.activeScriptCallIds, null);
+          return callJira(this.runtime, { action: 'add_comment', issue_key: issueKey, body_adf: bodyAdf }, context.schedule, runId, this.activeScriptCallIds, null);
         }
-        return callJira({
+        return callJira(this.runtime, {
           action: 'add_comment',
           issue_key: issueKey,
           body_text: requireString(params, 'body_text'),
@@ -363,7 +370,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         ) {
           fail('INVALID_ARGS', 'count must be an integer between 1 and 50');
         }
-        return callFeishu('im_list_chats', {
+        return callFeishu(this.runtime, 'im_list_chats', {
           sort_type: 'ByActiveTimeDesc',
           page_size: chatCount ?? 20,
         }, context.schedule, runId, this.activeScriptCallIds);
@@ -383,7 +390,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         if (startTime !== undefined && typeof startTime !== 'string' && typeof startTime !== 'number') {
           fail('INVALID_ARGS', 'start_time must be a Unix timestamp or ISO string');
         }
-        return callFeishu('im_read_messages', {
+        return callFeishu(this.runtime, 'im_read_messages', {
           container_id: requireString(params, 'chat_id'),
           ...(count === undefined ? {} : { page_size: count }),
           // 增量扫描游标:只取该时刻之后的消息(配本地已处理游标去重)
@@ -403,7 +410,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           'use_worktree',
           'working_dir',
         ]);
-        const service = tryGetOrcaCollabService();
+        const service = this.runtime.tryGetOrcaCollabService();
         if (!service) fail('HOST_NOT_READY', 'session dispatch service is not ready');
         const schedule = context.schedule;
         const requestedTarget = typeof params.target_session_id === 'string'
@@ -421,11 +428,11 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         // Bound owners are restored once at fire admission. A later archive must
         // not be undone by the same run. Unbound scripts first choose their target here.
         if (targetSessionId && !schedule.targetSessionId) {
-          const target = await getSessionRowSnapshotStrict(targetSessionId);
+          const target = await this.runtime.getSessionRowSnapshotStrict(targetSessionId);
           // Use the dispatcher's Review policy before any lifecycle mutation.
           await assertReviewSessionExternalInputAllowed(targetSessionId, () => target?.source ?? null);
           if (target && !isManagedScheduledTarget(target)) {
-            await restoreArchivedSessionForSend(targetSessionId);
+            await this.runtime.restoreArchivedSessionForSend(targetSessionId);
           }
         }
         const result = await service.sendToSession({

@@ -1,3 +1,4 @@
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 /**
  * WorktreeChipsRow — folder chip + [分支 │ ☑ worktree] 联合控件。
  *
@@ -9,8 +10,8 @@
  * 状态不变量:**勾选状态只属于用户**——
  *   - 系统/环境因素(切项目、探测结果、播种)永远不改 checkbox;资格不满足只是
  *     在 OFF 时禁用开启;
- *   - 唯一改动路径 = 用户点击 checkbox 本体,并写入工作端勾选记忆;
- *   - 分支选择始终只修改 worktree 源分支,永远不联动 checkbox。
+ *   - 用户点击 checkbox 本体或显式「改用 worktree」按钮，写入同一勾选记忆;
+ *   - 未勾时分支选择只切换主目录；已勾时才写源分支记忆，不联动 checkbox。
  *
  * 2026-08-07 用户裁决(取代 2026-07-29「已 ON 保留关闭入口 + fail-closed」形态):
  * 勾选记忆**只对具备 worktree 资格的目录生效**——
@@ -19,9 +20,6 @@
  *   - 探测进行中 / 探测失败(断线、老端通道缺失等)时**不算**确认不合格:已 ON 则
  *     照旧显示并由上层 fail closed 拦截——一次弱网不能把用户要求的隔离静默降级。
  * 两种状态的区分经 onConfirmedIneligibleChange 上报(null = 尚未确认)。
- *
- * 分支区语义:始终选择新 worktree 的源分支;checkbox 只决定本次新 session 是否
- * 真正创建 worktree。两者是独立控制,允许用户先选分支、再决定是否隔离。
  *
  * worktree 名称 **自动生成**（不暴露 UI），由 useSuggestName 拉取后透传给上层。
  */
@@ -48,6 +46,8 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip, Tooltip } from '@/components/ui/tooltip';
 import { Spinner } from '@/components/ui/spinner';
@@ -59,10 +59,34 @@ import {
 } from './FolderPickerPopover';
 import { useBranchSync } from '@/hooks/useBranchSync';
 import { resolveBranchPick } from './branchPick';
+import { useCheckout } from '@/hooks/useCheckout';
+import {
+  CheckoutError,
+  CheckoutNotice,
+  CheckoutDialog,
+  CheckoutStashes,
+  CheckoutSessions,
+} from './CheckoutFeedback';
+import type { ReactNode } from 'react';
 import { useBranches, useDetectCwd, useSuggestName } from '@/hooks/useWorktreeQueries';
 import { getProjectPickerDisplayName } from '@/hooks/useProjectPickerOptions';
 
 export type FolderPickerMode = 'folder' | 'project';
+
+/** Derived for display/creation only; never persisted as a source preference. */
+export interface WorktreeDefaultSource {
+  baseRepo: string | null;
+  deviceId: string | null;
+  sourceBranch: string;
+}
+
+/** The exact OFF label and its scoped refresh, shared with the explicit-start check. */
+export interface CheckoutBranchView {
+  cwd: string | null;
+  deviceId: string | null;
+  displayedBranch: string;
+  refresh: () => void;
+}
 
 export interface WorktreeChipsRowProps {
   cwd: string | null;
@@ -79,12 +103,15 @@ export interface WorktreeChipsRowProps {
   emptyProjectLabel?: string;
   enabled: boolean;
   /**
-   * 用户点击 checkbox 本体切换 worktree——**唯一**的状态改动路径,上层必持久化
+   * 用户点击 checkbox 或显式「改用 worktree」按钮,上层必持久化
    * (写工作端勾选记忆)。系统任何路径都不得调用它替用户翻状态。
    */
   onEnabledChange: (v: boolean) => void;
   sourceBranch: string;
   onSourceBranchChange: (v: string) => void;
+  onDefaultSourceBranchChange?: (value: WorktreeDefaultSource) => void;
+  onCheckoutBranchViewChange?: (value: CheckoutBranchView | null) => void;
+  onCheckoutBusyChange?: (busy: boolean) => void;
   onBaseRepoChange?: (baseRepo: string | null) => void;
   /**
    * 被控端是否支持 recoveryKey 预创建回收。null 表示当前探测结果尚未就绪；
@@ -138,6 +165,9 @@ export function WorktreeChipsRow({
   onEnabledChange,
   sourceBranch,
   onSourceBranchChange,
+  onDefaultSourceBranchChange,
+  onCheckoutBusyChange,
+  onCheckoutBranchViewChange,
   onBaseRepoChange,
   onRecoveryKeyDiscardSupportChange,
   onConfirmedIneligibleChange,
@@ -155,10 +185,11 @@ export function WorktreeChipsRow({
   // 统一创建页的 project-picker 模式下, cwd 为空表示即将创建纯对话。
   // worktree/branch 依赖真实项目目录,这里隐藏 Advanced 并清掉残留状态。
   const advancedHidden = folderPickerMode === 'project' && !cwd;
+  const [branchCheckEpoch, setBranchCheckEpoch] = useState(0);
   const detect = useDetectCwd(
     worktreeDisabled ? null : (cwd ?? null),
     deviceLinkDeviceId,
-    deviceLinkReconnectEpoch,
+    deviceLinkReconnectEpoch + branchCheckEpoch,
   );
   // 探测成功且三种资格(已装 git / 是 git 仓库 / 未嵌套)同时满足为 true;
   // detect.data 未到达(探测中/失败)时为 null——与「确认不合格」不同,后者必须
@@ -252,52 +283,180 @@ export function WorktreeChipsRow({
 
   // ── 分支 chip 状态 ──
   const currentBranch = detect.data?.currentBranch ?? null;
-  // 分支与 checkbox 独立:未勾时也要回显用户刚选的源分支,否则菜单虽然可点、
-  // 选择后却仍显示当前 HEAD,看起来像没有生效。首次未选择时回退当前 checkout。
-  const branchLabel = sourceBranch || branches.current || currentBranch || 'HEAD';
+  const checkout = useCheckout(
+    baseRepo,
+    deviceLinkDeviceId,
+    detect.data?.supportsCheckout === true,
+    onCheckoutBusyChange,
+    !effectiveWorktreeEnabled && !environmentDisabled && !advancedHidden,
+  );
+  const actualBranch = checkout.status
+    ? checkout.status.current === checkout.status.head
+      ? 'HEAD'
+      : checkout.status.current
+    : branches.current || currentBranch || 'HEAD';
+  const refreshDisplayedBranch = useCallback(() => {
+    if (detect.data?.supportsCheckout) {
+      void checkout.refresh();
+    } else {
+      // Older controlled computers have no checkout status. Refresh their
+      // existing probe (and the branch list only if it was already requested).
+      setBranchCheckEpoch((epoch) => epoch + 1);
+      if (branchListWanted) branches.refetch();
+    }
+  }, [detect.data?.supportsCheckout, checkout.refresh, branchListWanted, branches.refetch]);
+  useLayoutEffect(() => {
+    onCheckoutBranchViewChange?.({
+      cwd,
+      deviceId: deviceLinkDeviceId ?? null,
+      displayedBranch: actualBranch,
+      refresh: refreshDisplayedBranch,
+    });
+    return () => onCheckoutBranchViewChange?.(null);
+  }, [cwd, deviceLinkDeviceId, actualBranch, refreshDisplayedBranch, onCheckoutBranchViewChange]);
+
+  const defaultSourceBranch = branches.loading
+    ? ''
+    : branches.remoteDefaultBranch ||
+      (branches.branches.includes('main')
+        ? 'main'
+        : branches.branches.includes('master')
+          ? 'master'
+          : actualBranch);
+  useLayoutEffect(() => {
+    onDefaultSourceBranchChange?.({
+      baseRepo,
+      deviceId: deviceLinkDeviceId ?? null,
+      sourceBranch: baseRepo ? defaultSourceBranch : '',
+    });
+  }, [baseRepo, deviceLinkDeviceId, defaultSourceBranch, onDefaultSourceBranchChange]);
+  const branchLabel = effectiveWorktreeEnabled
+    ? sourceBranch || defaultSourceBranch || actualBranch
+    : actualBranch;
   // 确认不合格(2026-08-07 裁决)→ 整条控件隐藏,勾选记忆保留、发送侧放行普通会话;
   // 探测中/失败(confirmedIneligible === null)时已 ON 仍显示,由上层 fail closed。
   const showBranchChip =
     !advancedHidden && confirmedIneligible !== true && (enabled || !!detect.data?.isGitRepo);
   // 分支选择与 checkbox 是两条独立轴；仅环境不具备 worktree 资格或创建在途时禁用。
   const branchInteractive =
-    !(disabled || branchDisabled || environmentDisabled) && baseRepo !== null;
+    !(disabled || branchDisabled || environmentDisabled || checkout.busy) &&
+    baseRepo !== null &&
+    (effectiveWorktreeEnabled || detect.data?.supportsCheckout === true);
 
   const handleBranchPick = useCallback(
     (picked: string) => {
       const effect = resolveBranchPick(
-        { worktreeEnabled: effectiveWorktreeEnabled, currentBranch, sourceBranch: branchLabel },
+        { worktreeEnabled: effectiveWorktreeEnabled, currentBranch: actualBranch, sourceBranch },
         picked,
       );
       if (effect.kind === 'set-source') onSourceBranchChange(effect.branch);
+      if (effect.kind === 'checkout') void checkout.pick(effect.branch);
     },
-    [effectiveWorktreeEnabled, currentBranch, branchLabel, onSourceBranchChange],
+    [effectiveWorktreeEnabled, actualBranch, sourceBranch, onSourceBranchChange, checkout.pick],
   );
 
+  const canUseWorktree =
+    !switchDisabled && !environmentDisabled && !effectiveWorktreeEnabled && !checkout.busy;
+  const useWorktree = (branch?: string) => {
+    if (branch) onSourceBranchChange(branch);
+    onEnabledChange(true);
+    checkout.usedWorktree();
+  };
+  const menuStatus = !effectiveWorktreeEnabled ? checkout.status : undefined;
   const branchWorktree = showBranchChip ? (
-    <BranchWorktreeChip
-      baseRepo={baseRepo ?? undefined}
-      deviceId={deviceLinkDeviceId}
-      remoteDefaultBranch={branches.remoteDefaultBranch}
-      branchLabel={branchLabel}
-      branches={branches.branches}
-      branchesLoading={branches.loading}
-      branchesFailed={branches.failed}
-      onRetryBranches={branches.refetch}
-      checked={enabled}
-      branchSourceSelected={!!sourceBranch}
-      branchInteractive={branchInteractive}
-      checkboxDisabled={switchDisabled}
-      cantUseReason={cantUseReason ?? undefined}
-      onPick={handleBranchPick}
-      onOpenRequested={() => {
-        setBranchListWanted(true);
-        // 上次拉取失败的话,重新打开菜单就自动重试一次,不逼用户去点重试项。
-        if (branches.failed && !branches.loading) branches.refetch();
-      }}
-      onToggle={onEnabledChange}
-      compact={compact}
-    />
+    <>
+      <div className="min-w-0">
+        <BranchWorktreeChip
+          baseRepo={baseRepo ?? undefined}
+          deviceId={deviceLinkDeviceId}
+          remoteDefaultBranch={branches.remoteDefaultBranch}
+          branchLabel={branchLabel}
+          branches={branches.branches}
+          branchesLoading={branches.loading}
+          branchesFailed={branches.failed}
+          onRetryBranches={branches.refetch}
+          checked={enabled}
+          branchSourceSelected={effectiveWorktreeEnabled && !!sourceBranch}
+          branchInteractive={branchInteractive}
+          checkoutBusy={checkout.busy}
+          checkboxDisabled={switchDisabled || checkout.busy}
+          cantUseReason={cantUseReason ?? undefined}
+          onPick={handleBranchPick}
+          onOpenRequested={() => {
+            void checkout.refresh();
+            setBranchListWanted(true);
+            branches.refetch();
+            // 上次拉取失败的话,重新打开菜单就自动重试一次,不逼用户去点重试项。
+            if (branches.failed && !branches.loading) branches.refetch();
+          }}
+          onToggle={onEnabledChange}
+          optionDisabledReason={
+            effectiveWorktreeEnabled
+              ? undefined
+              : (branch) => {
+                  if (branch === actualBranch) return undefined;
+                  if (!menuStatus) return t('newChat.worktree.detecting');
+                  if (menuStatus.blocked === 'busy' || menuStatus.blocked === 'operation')
+                    return t(`newChat.checkout.errors.${menuStatus.blocked}`);
+                  return undefined;
+                }
+          }
+          currentBranchRunning={
+            !effectiveWorktreeEnabled &&
+            menuStatus?.blocked === 'busy' &&
+            menuStatus.sessions.some((s) => s.running)
+          }
+          menuHeader={
+            <>
+              <CheckoutStashes checkout={checkout} />
+              {!effectiveWorktreeEnabled && menuStatus && (
+                <>
+                  {(menuStatus.blocked === 'busy' && menuStatus.sessions.some((s) => s.running)) ||
+                  !menuStatus.blocked ? (
+                    <CheckoutSessions
+                      status={menuStatus}
+                      onUseWorktree={canUseWorktree ? () => useWorktree() : undefined}
+                    />
+                  ) : (
+                    menuStatus.blocked !== 'occupied' && (
+                      <CheckoutNotice
+                        warning
+                        action={
+                          canUseWorktree &&
+                          (menuStatus.blocked === 'busy' || !!menuStatus.sessions.length) ? (
+                            <Button
+                              compact
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => useWorktree()}
+                            >
+                              {t('newChat.checkout.useWorktree')}
+                            </Button>
+                          ) : undefined
+                        }
+                      >
+                        <CheckoutError code={menuStatus.blocked} status={menuStatus} />
+                        {canUseWorktree &&
+                          (menuStatus.blocked === 'busy' || !!menuStatus.sessions.length) && (
+                            <p className="mt-1 text-muted-foreground">
+                              {t('newChat.worktree.chipTooltip')}
+                            </p>
+                          )}
+                      </CheckoutNotice>
+                    )
+                  )}
+                </>
+              )}
+            </>
+          }
+          compact={compact}
+        />
+      </div>
+      <CheckoutDialog
+        checkout={checkout}
+        onUseWorktree={canUseWorktree ? useWorktree : undefined}
+      />
+    </>
   ) : null;
 
   // advancedOnly:项目选择交给页面自己的 pill,这里出 [分支 │ ☑ worktree] 联合控件
@@ -441,13 +600,20 @@ export function BranchWorktreeChip({
   checked,
   branchSourceSelected,
   branchInteractive,
+  checkoutBusy = false,
   checkboxDisabled,
   cantUseReason,
   onPick,
   onOpenRequested,
   onToggle,
   compact,
+  menuHeader,
+  currentBranchRunning,
+  optionDisabledReason,
 }: {
+  menuHeader?: ReactNode;
+  currentBranchRunning?: boolean;
+  optionDisabledReason?: (branch: string) => string | undefined;
   baseRepo?: string;
   deviceId?: string | null;
   remoteDefaultBranch?: string;
@@ -466,12 +632,14 @@ export function BranchWorktreeChip({
   branchSourceSelected: boolean;
   /** 分支菜单是否可开(与 checkbox 状态独立)。 */
   branchInteractive: boolean;
+  /** Preserve the chevron slot while checkout temporarily disables the menu. */
+  checkoutBusy?: boolean;
   checkboxDisabled?: boolean;
   cantUseReason?: string;
   onPick: (branch: string) => void;
-  /** 菜单打开时通知上层解锁分支列表懒加载(失败态由上层顺带自动重试)。 */
+  /** 菜单打开时刷新分支列表和切换资格。 */
   onOpenRequested: () => void;
-  /** 用户点击 checkbox——唯一的状态改动路径(上层持久化到工作端)。 */
+  /** checkbox 与显式「改用 worktree」按钮共用的偏好写入路径。 */
   onToggle: (v: boolean) => void;
   compact?: boolean;
 }) {
@@ -479,14 +647,12 @@ export function BranchWorktreeChip({
 
   const sync = useBranchSync(baseRepo, branchLabel, deviceId);
   const allBranches = useMemo(
-    () =>
-      (checked || branchOnly) && remoteDefaultBranch
-        ? [remoteDefaultBranch, ...branches]
-        : branches,
+    () => (remoteDefaultBranch ? [remoteDefaultBranch, ...branches] : branches),
     [checked, branchOnly, remoteDefaultBranch, branches],
   );
   const displayBranch = (value: string) =>
     value === remoteDefaultBranch ? value.replace(/^refs\/remotes\//, '') : value;
+  const syncDisabled = sync.disabled || checkoutBusy;
 
   // 分支菜单内搜索词(2026-08-20 用户裁决:对齐 Codex 分支选择器,菜单顶部加搜索框)。
   // 菜单关闭即清空——搜索只是本次挑选的临时过滤,不是需要记忆的偏好。
@@ -502,27 +668,79 @@ export function BranchWorktreeChip({
   // typeahead 或焦点冒泡,可打印字符输入与选项导航各走各的,互不干扰。
   const [activeBranchIndex, setActiveBranchIndex] = useState(0);
   const listboxId = useId();
+  const listboxRef = useRef<HTMLDivElement>(null);
+  // Refreshes must not steal keyboard focus from the menu's existing actions.
+  const focusBranchSearch = useCallback((el: HTMLInputElement | null) => {
+    el?.focus({ preventScroll: true });
+  }, []);
+  const noticesRef = useRef<HTMLDivElement>(null);
+  const autoLocate = useRef(true);
+  const keyboardLocate = useRef(false);
   const optionRefs = useRef<Array<HTMLDivElement | null>>([]);
   // 过滤后列表可能变短,钳住下标避免指向已不可见的项;空列表用 -1 表示无高亮。
   const clampedActiveIndex =
     visibleBranches.length === 0 ? -1 : Math.min(activeBranchIndex, visibleBranches.length - 1);
 
+  const revealBranch = useCallback((index: number) => {
+    const list = listboxRef.current;
+    const option = optionRefs.current[index];
+    if (!list || !option) return;
+    const viewport = list.getBoundingClientRect();
+    const row = option.getBoundingClientRect();
+    // Nearest-edge scrolling limited to the list, never the surrounding page.
+    if (row.top < viewport.top) list.scrollTop -= viewport.top - row.top;
+    else if (row.bottom > viewport.bottom) list.scrollTop += row.bottom - viewport.bottom;
+  }, []);
+
   useEffect(() => {
-    if (!branchMenuOpen || clampedActiveIndex < 0) return;
-    optionRefs.current[clampedActiveIndex]?.scrollIntoView({ block: 'nearest' });
-  }, [branchMenuOpen, clampedActiveIndex]);
+    if (!branchMenuOpen || branchesLoading || branchesFailed) return;
+    let frame: number;
+    const locate = () => {
+      if (autoLocate.current) revealBranch(allBranches.indexOf(branchLabel));
+    };
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(locate);
+    });
+    // The portal, notices and available-height constraint can settle in separate
+    // layouts. Keep watching until the user takes over, with no fixed delay.
+    frame = requestAnimationFrame(() => {
+      const list = listboxRef.current;
+      if (!list) return;
+      observer.observe(list);
+      if (noticesRef.current) observer.observe(noticesRef.current);
+      for (const group of list.querySelectorAll('[role="group"]')) observer.observe(group);
+      locate();
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [branchMenuOpen, branchesLoading, branchesFailed, allBranches, branchLabel, revealBranch]);
+
+  // Explicit keyboard navigation continues to reveal its highlighted option,
+  // even after automatic positioning of the current branch has been cancelled.
+  useEffect(() => {
+    if (!branchMenuOpen || !keyboardLocate.current) return;
+    const frame = requestAnimationFrame(() => {
+      keyboardLocate.current = false;
+      revealBranch(clampedActiveIndex);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [branchMenuOpen, clampedActiveIndex, revealBranch]);
 
   // 打开菜单、或菜单开着时分支列表异步到达/刷新,都要把高亮重新定位到当前源
   // 分支——不能依赖 branches 数组里恰好排第几位(该接口不保证顺序,参见
   // WorktreeManager.listBranches 用的是 `git branch` 默认序)。只在用户还没
   // 输入搜索词时接管,避免打断已经在筛选/用方向键挑选的操作。
   useEffect(() => {
-    if (!branchMenuOpen || normalizedBranchQuery) return;
+    if (!branchMenuOpen || !autoLocate.current || normalizedBranchQuery) return;
     const current = allBranches.indexOf(branchLabel);
     setActiveBranchIndex(current >= 0 ? current : 0);
   }, [branchMenuOpen, allBranches, branchLabel, normalizedBranchQuery]);
 
   const pickBranch = (branch: string) => {
+    if (optionDisabledReason?.(branch)) return;
     onPick(branch);
     setBranchMenuOpen(false);
     setBranchQuery('');
@@ -540,6 +758,8 @@ export function BranchWorktreeChip({
       // 拦截 Home/End)。
       case 'ArrowDown':
       case 'ArrowUp': {
+        autoLocate.current = false;
+        keyboardLocate.current = true;
         e.preventDefault();
         if (clampedActiveIndex < 0) return;
         setActiveBranchIndex(
@@ -565,6 +785,7 @@ export function BranchWorktreeChip({
     <button
       type="button"
       aria-disabled={!branchInteractive}
+      aria-busy={checkoutBusy || undefined}
       tabIndex={branchInteractive ? 0 : -1}
       data-testid="create-agent-branch-chip"
       className={cn(
@@ -588,12 +809,18 @@ export function BranchWorktreeChip({
       <span className="min-w-0 truncate" title={branchDisplayLabel}>
         {branchDisplayLabel}
       </span>
-      {branchInteractive && (
+      {checkoutBusy ? (
+        <Spinner
+          size={12}
+          aria-hidden
+          className={checked ? 'text-primary' : 'text-muted-foreground'}
+        />
+      ) : branchInteractive ? (
         <ChevronDown
           size={12}
           className={cn('shrink-0', checked ? 'text-primary' : 'text-muted-foreground')}
         />
-      )}
+      ) : null}
     </button>
   );
 
@@ -615,6 +842,8 @@ export function BranchWorktreeChip({
       onOpenChange={(open) => {
         setBranchMenuOpen(open);
         if (open) {
+          autoLocate.current = true;
+          keyboardLocate.current = false;
           onOpenRequested();
           void sync.refresh();
           // 高亮定位交给上面的 useEffect(依赖 branches,分支异步到达/刷新时
@@ -626,6 +855,7 @@ export function BranchWorktreeChip({
     >
       <PopoverTrigger asChild>{branchTipped}</PopoverTrigger>
       <PopoverContent
+        style={WINDOW_NO_DRAG_STYLE}
         align="end"
         sideOffset={4}
         // IME 组合中的 Escape 只是取消候选,不能关弹层(CJK 高频路径)。
@@ -634,8 +864,11 @@ export function BranchWorktreeChip({
         onEscapeKeyDown={(e) => {
           if (e.isComposing) e.preventDefault();
         }}
-        className="max-h-[280px] w-auto min-w-[200px] overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-lg"
+        className="flex max-h-[min(480px,var(--radix-popover-content-available-height))] flex-col w-auto min-w-[min(280px,calc(100vw-32px))] max-w-[min(360px,calc(100vw-32px))] overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-[shadow:var(--shadow-menu)]"
       >
+        <div ref={noticesRef} className="shrink-0" data-testid="checkout-menu-notices">
+          {menuHeader}
+        </div>
         {branchesLoading ? (
           <div className="px-3 py-1.5 text-13 text-muted-foreground">
             {t('newChat.branchChip.loading')}
@@ -655,20 +888,14 @@ export function BranchWorktreeChip({
           </button>
         ) : (
           <>
-            <div className="sticky top-0 z-10 bg-popover pb-1">
+            <div className="shrink-0 bg-popover pb-1">
               <div className="relative">
                 <Search
                   size={12}
                   className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
                 />
                 <input
-                  // 打开菜单的下一个动作几乎总是输入过滤:等 Radix 的 open autofocus
-                  // 落定后再补一次聚焦;已聚焦时(用户在输入)不重抢。
-                  ref={(el) => {
-                    if (el && document.activeElement !== el) {
-                      requestAnimationFrame(() => el.focus());
-                    }
-                  }}
+                  ref={focusBranchSearch}
                   role="combobox"
                   aria-expanded
                   aria-autocomplete="list"
@@ -680,6 +907,7 @@ export function BranchWorktreeChip({
                   }
                   value={branchQuery}
                   onChange={(e) => {
+                    autoLocate.current = false;
                     setBranchQuery(e.target.value);
                     // 过滤集合变了,高亮回到首项,避免停留在已不可见的位置。
                     setActiveBranchIndex(0);
@@ -699,7 +927,22 @@ export function BranchWorktreeChip({
                 />
               </div>
             </div>
-            <div role="listbox" id={listboxId} aria-label={t('newChat.branchChip.label')}>
+            <div
+              ref={listboxRef}
+              onWheel={() => {
+                autoLocate.current = false;
+              }}
+              onTouchMove={() => {
+                autoLocate.current = false;
+              }}
+              onPointerDown={() => {
+                autoLocate.current = false;
+              }}
+              className="min-h-0 overflow-y-auto"
+              role="listbox"
+              id={listboxId}
+              aria-label={t('newChat.branchChip.label')}
+            >
               {['remote', 'local'].map((group) => {
                 const values = visibleBranches.filter(
                   (b) => (b === remoteDefaultBranch) === (group === 'remote'),
@@ -707,7 +950,7 @@ export function BranchWorktreeChip({
                 if (!values.length) return null;
                 return (
                   <div key={group} role="group" aria-label={t(`newChat.branchSync.${group}Group`)}>
-                    {(checked || branchOnly) && remoteDefaultBranch && (
+                    {remoteDefaultBranch && (
                       <div className="px-3 py-1 text-12 text-muted-foreground">
                         {t(`newChat.branchSync.${group}Group`)}
                       </div>
@@ -723,16 +966,27 @@ export function BranchWorktreeChip({
                           id={`${listboxId}-option-${index}`}
                           role="option"
                           aria-selected={b === branchLabel}
+                          aria-disabled={!!optionDisabledReason?.(b)}
                           onMouseMove={() => setActiveBranchIndex(index)}
                           onClick={() => pickBranch(b)}
                           className={cn(
-                            'cursor-pointer rounded-[8px] px-3 py-1.5 text-13 text-foreground',
+                            'cursor-pointer break-words rounded-[8px] px-3 py-1.5 text-13 text-foreground',
+                            optionDisabledReason?.(b) && 'cursor-default opacity-60',
                             index === clampedActiveIndex
                               ? 'bg-accent text-accent-foreground'
                               : b === branchLabel && 'bg-accent/60',
                           )}
                         >
-                          {displayBranch(b)}
+                          {currentBranchRunning && b === branchLabel ? (
+                            <span className="flex items-center justify-between gap-2">
+                              <span className="min-w-0 break-words">{displayBranch(b)}</span>
+                              <span className="shrink-0 text-11 text-[var(--text-tertiary)]">
+                                ● {t('newChat.checkout.running')}
+                              </span>
+                            </span>
+                          ) : (
+                            displayBranch(b)
+                          )}
                           {b === branchLabel && sync.details && (
                             <div className="text-12 text-muted-foreground">{sync.details}</div>
                           )}
@@ -764,16 +1018,11 @@ export function BranchWorktreeChip({
   );
 
   const checkboxSegment = (
-    <button
-      type="button"
-      onClick={() => !checkboxDisabled && onToggle(!checked)}
-      disabled={checkboxDisabled}
+    <label
       data-testid="create-agent-worktree-chip"
-      aria-pressed={checked}
-      aria-label={t('newChat.worktree.toggleAria')}
       className={cn(
         'inline-flex h-full items-center transition-colors',
-        'disabled:cursor-not-allowed disabled:opacity-50',
+        checkboxDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
         compact
           ? 'gap-1.5 pl-2 pr-3 text-12 font-medium leading-[1.167]'
           : 'gap-2.5 pl-2.5 pr-[18px] text-14 font-medium',
@@ -785,33 +1034,16 @@ export function BranchWorktreeChip({
         checked && !checkboxDisabled && 'hover:bg-primary/10',
       )}
     >
-      <span
-        className={cn(
-          'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded',
-          'border-[1.5px] transition-colors',
-          checked
-            ? // CREATE AGENT 的深色主题 primary-foreground 与 primary 可能同为浅色，
-              // 直接使用全局 primary 会让勾选符号和背景缺少对比度。
-              // 复用草稿页已有的反色中性色，保证 light/dark 都能看清勾选状态。
-              'border-[var(--create-agent-send-bg)] bg-[var(--create-agent-send-bg)] text-[var(--create-agent-send-icon)]'
-            : 'border-muted-foreground bg-transparent',
-        )}
-      >
-        {checked && (
-          <svg
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2.5}
-            className="h-[10px] w-[10px]"
-          >
-            <path d="M3 8l3.5 3.5L13 5" />
-          </svg>
-        )}
-      </span>
+      <Checkbox
+        checked={checked}
+        disabled={checkboxDisabled}
+        onChange={() => onToggle(!checked)}
+        aria-label={t('newChat.worktree.toggleAria')}
+        className="disabled:opacity-100"
+      />
       {/* 术语表裁决:worktree 四语一律保留英文小写原词,故 label 不走 locale 分叉。 */}
       <span>worktree</span>
-    </button>
+    </label>
   );
 
   // 不可用时 tooltip 说明原因;可用时解释语义。禁用只针对 checkbox 半区,
@@ -829,12 +1061,18 @@ export function BranchWorktreeChip({
     ) : checkboxDisabled ? (
       checkboxSegment
     ) : (
-      <Tip text={t('newChat.worktree.chipTooltip')}>{checkboxSegment}</Tip>
+      <Tip
+        text={t('newChat.worktree.chipTooltip')}
+        contentClassName="max-w-[min(360px,calc(100vw-32px))] break-words"
+      >
+        {checkboxSegment}
+      </Tip>
     );
 
   return (
     <div
       data-testid="create-agent-branch-worktree"
+      style={WINDOW_NO_DRAG_STYLE}
       className={cn(
         'group inline-flex items-stretch overflow-hidden rounded-full border transition-colors',
         compact
@@ -850,14 +1088,14 @@ export function BranchWorktreeChip({
           <Tooltip.Trigger asChild>
             <span
               className="inline-flex h-full"
-              tabIndex={sync.disabled ? 0 : undefined}
+              tabIndex={syncDisabled ? 0 : undefined}
               onMouseEnter={sync.onHover}
               onFocus={sync.onHover}
             >
               <button
                 type="button"
-                disabled={sync.disabled}
-                aria-disabled={sync.disabled}
+                disabled={syncDisabled}
+                aria-disabled={syncDisabled}
                 aria-label={sync.hint}
                 onClick={() => void sync.sync()}
                 className={cn(

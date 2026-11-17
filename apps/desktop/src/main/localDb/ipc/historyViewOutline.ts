@@ -51,6 +51,8 @@ export function historyOutlineContent(): SQL<string> {
         END)
     WHEN ${messages.role} = 'tool_result'
       AND instr(${body}, 'xdt_') = 0 AND instr(${body}, 'xdt-file:') = 0 AND instr(${body}, 'cindy-media:') = 0
+      -- A send_to_session receipt stays readable: the teammate chat lists the task it started.
+      AND NOT (length(${body}) <= 16384 AND instr(${body}, '"target_session_id"') > 0 AND instr(${body}, '"wake_kind"') > 0)
       THEN json_quote(CASE WHEN instr(${body}, '<tool_use_error>') > 0 OR CASE
         WHEN json_valid(json_extract(${body}, '$')) THEN
           json_extract(json_extract(${body}, '$'), '$.ok') IS 0

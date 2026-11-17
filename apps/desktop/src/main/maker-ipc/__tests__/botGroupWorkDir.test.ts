@@ -31,10 +31,11 @@ describe('botGroupWorkDir', () => {
     });
   }
 
-  it("creates the group's own folder when no project folder is set", async () => {
-    const workDir = create();
+  it("uses the group's resolved folder when no explicit project is set", async () => {
+    const folder = path.join(root, 'workspace', 'Group-g1');
+    await mkdir(folder, { recursive: true });
+    const workDir = create({ defaultFolder: async () => folder });
     const prepared = await workDir.prepare({ groupId: 'g1', projectDir: null });
-    const folder = botGroupFolderPath(path.join(root, 'owner'), 'g1');
     expect(prepared).toEqual({ ok: true, workDir: folder, branch: null, ownerSessionId: null });
     expect((await stat(folder)).isDirectory()).toBe(true);
   });
@@ -114,7 +115,7 @@ describe('botGroupWorkDir', () => {
   it("moves the group's folder to the trash, never deleting it", async () => {
     const trashItem = vi.fn(async () => undefined);
     const workDir = create({ trashItem });
-    await workDir.prepare({ groupId: 'g1', projectDir: null });
+    await mkdir(botGroupFolderPath(path.join(root, 'owner'), 'g1'), { recursive: true });
     await workDir.trashGroupFolder('g1');
     expect(trashItem).toHaveBeenCalledWith(path.join(root, 'owner', 'bot-groups', 'g1'));
     await workDir.trashGroupFolder('never-created');

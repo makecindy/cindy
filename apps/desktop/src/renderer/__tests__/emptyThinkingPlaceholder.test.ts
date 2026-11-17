@@ -92,6 +92,15 @@ describe('isNonAnchorHistoryRow — 历史初始页 backfill 判定', () => {
     expect(isNonAnchor(synthetic({ text: '帮我查一下' }))).toBe(false);
   });
 
+  // Bug (PR #9727 review): a hidden answer row counted as a visible anchor, so a latest page made of
+  // such rows and other hidden rows rendered nothing and never paged back to the question card.
+  it('已在提问卡上展示的回答行算无锚点,普通回答行仍是锚点', () => {
+    const reply = (clientId: string): Message =>
+      ({ id: 'r', clientId, sessionId: SESSION_ID, role: 'user', content: '> Q?\n\nA', createdAt: '2026-07-02T00:00:00.000Z' } as unknown as Message);
+    expect(isNonAnchor(reply('question-reply:answered:q1:digest'))).toBe(true);
+    expect(isNonAnchor(reply('question-reply:q1:digest'))).toBe(false);
+  });
+
   it('子代理内部行算无锚点(buildRenderItems 整体剔除,漏登记会渲染 0 项)', () => {
     // 子代理密集的会话最新一页可能全部是这类行(实测本机库单会话上万条)。
     const subagentRow = (parentUuid: string, role = 'assistant'): Message =>
@@ -262,5 +271,71 @@ describe('mapServerMessages — omitted thinking placeholder (restore)', () => {
       thinkingRow('t-legacy', { kind: 'thinking' }),
     ]);
     expect(mapped.map((m) => m.clientId)).not.toContain('t-legacy');
+  });
+});
+
+describe('mapServerMessages — 隐藏 thinking 仍是活动边界', () => {
+  const mapServer = makerChatStore.__mapServerMessagesForTest;
+  const row = (clientId: string, role: Message['role'], content: unknown, createdAt: string): Message => ({
+    id: `row-${clientId}`, clientId, sessionId: SESSION_ID, role, content, createdAt,
+  } as unknown as Message);
+  const hiddenThinking = (clientId: string, createdAt: string) => row(
+    clientId, 'thinking', { kind: 'thinking', text: '', durationMs: 0 }, createdAt,
+  );
+
+  // #8655 review P2: 主进程 canonicalReplyVisibility 仍把 thinking 行算作「后续活动」，
+  // 但映射阶段已经把它从渲染序列里删掉。边界必须挂到相邻可见消息上，否则收尾回复
+  // 判定会把中断前的过程文字提升成正式回复。
+  it('marks the following visible row when a thinking placeholder is dropped', () => {
+    const mapped = mapServer([
+      row('u', 'user', 'Check the inbox', '2026-11-05T00:00:00.000Z'),
+      row('wake', 'assistant', 'Woke up: inbox empty', '2026-11-05T00:01:00.000Z'),
+      row('prose', 'assistant', 'Opening the second mailbox', '2026-11-05T00:02:00.000Z'),
+      hiddenThinking('t-empty', '2026-11-05T00:03:00.000Z'),
+      row('error', 'error', { message: 'Usage limit reached' }, '2026-11-05T00:04:00.000Z'),
+    ]);
+    expect(mapped.find((m) => m.clientId === 't-empty')).toBeUndefined();
+    expect(mapped.find((m) => m.clientId === 'error')).toMatchObject({ hiddenThinkingBefore: true });
+    expect(mapped.find((m) => m.clientId === 'prose')?.hiddenThinkingBefore).toBeUndefined();
+  });
+
+  it('marks the previous visible row when the placeholder is last', () => {
+    const mapped = mapServer([
+      row('u', 'user', 'Check the inbox', '2026-11-05T00:00:00.000Z'),
+      row('prose', 'assistant', 'Opening the second mailbox', '2026-11-05T00:02:00.000Z'),
+      hiddenThinking('t-trailing', '2026-11-05T00:03:00.000Z'),
+    ]);
+    expect(mapped.find((m) => m.clientId === 'prose')).toMatchObject({ hiddenThinkingAfter: true });
+  });
+});
+
+describe('mapServerMessages — 未确认采样透传', () => {
+  const mapServer = makerChatStore.__mapServerMessagesForTest;
+  const assistantRow = (clientId: string, agentMeta: Record<string, unknown>): Message => ({
+    id: `row-${clientId}`, clientId, sessionId: SESSION_ID, role: 'assistant',
+    content: 'Opening the second mailbox', agentMeta, createdAt: '2026-11-05T00:02:00.000Z',
+  } as unknown as Message);
+
+  // #8655 review P2: 主进程 canonicalReplyVisibility 排除 `samplingAttemptPending` 的记录，
+  // 映射层必须把这层状态透传出去，否则收尾判定会把未确认输出当成正式回复。
+  it('passes a pending sampling attempt through to the ChatMessage', () => {
+    const mapped = mapServer([assistantRow('pending', { samplingAttemptPending: { runtimeId: 'rt-1' } })]);
+    expect(mapped[0]).toMatchObject({ samplingAttemptPending: true });
+  });
+
+  it('maps a settled sampling attempt as an explicit false', () => {
+    const mapped = mapServer([assistantRow('settled', { samplingAttemptPending: false })]);
+    // 必须是显式 false(而不是省略):确认广播靠它覆盖内存里旧的 true。
+    expect(mapped[0]).toMatchObject({ samplingAttemptPending: false });
+    expect(Object.hasOwn(mapped[0] as object, 'samplingAttemptPending')).toBe(true);
+  });
+
+  it('clears a stale pending flag when the accepted snapshot is merged', () => {
+    const merge = makerChatStore.__mergeMessagesForTest;
+    const accepted = mapServer([assistantRow('reply', { samplingAttemptPending: false })]);
+    const inMemory = mapServer([assistantRow('reply', { samplingAttemptPending: { runtimeId: 'rt-1' } })]);
+    expect(inMemory[0]?.samplingAttemptPending).toBe(true);
+    const merged = merge(accepted, inMemory);
+    expect(merged.find((m) => m.clientId === 'reply')?.samplingAttemptPending).toBe(false);
   });
 });

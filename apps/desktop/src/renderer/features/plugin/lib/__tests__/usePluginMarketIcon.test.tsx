@@ -16,6 +16,7 @@ import {
   __resetPluginMarketIconStoreForTest,
   usePluginMarketIcon,
 } from '../usePluginMarketIcon';
+import { LEGACY_SCAFFOLD_ICON_SHA256 } from '../../__tests__/fixtures/legacyScaffoldIcon';
 
 function testHex(value: string, length: number): string {
   const encoded = [...value]
@@ -79,6 +80,31 @@ afterEach(() => {
 });
 
 describe('usePluginMarketIcon', () => {
+  // 市场只有短期 URL；已有本地图标缓存用例未覆盖旧占位图指纹。Tier: unit。
+  it('uses the server icon hash to hide only the historical placeholder and accepts its replacement', () => {
+    const item: PluginMarketItem = {
+      ...customItem('torch-announcements'),
+      sourceType: 'server',
+      customIconKey: undefined,
+      icon: {
+        mimeType: 'image/png',
+        sha256: LEGACY_SCAFFOLD_ICON_SHA256,
+        sizeBytes: 329,
+        url: 'https://plugins.example.test/icon.png?signature=current',
+        expiresAt: '2026-11-05T12:00:00.000Z',
+      },
+    };
+    const { result, rerender } = renderHook(
+      ({ current }) => usePluginMarketIcon(current, { deferUntilVisible: false }),
+      { initialProps: { current: item } },
+    );
+    expect(result.current.iconDataUrl).toBeUndefined();
+    expect(localIcons).not.toHaveBeenCalled();
+
+    rerender({ current: { ...item, icon: { ...item.icon!, sha256: 'a'.repeat(64) } } });
+    expect(result.current.iconDataUrl).toBe(item.icon!.url);
+  });
+
   it('merges same-frame consumers into one request and reuses the shared cache', async () => {
     const alpha = customItem('alpha');
     const beta = customItem('beta');

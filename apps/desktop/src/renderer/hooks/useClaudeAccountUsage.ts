@@ -1,28 +1,13 @@
 /**
- * useClaudeAccountUsage — 订阅 Claude 账号配额 (LiteLLM spend / max_budget + 今日 daily) 实时推送。
+ * 订阅 Cindy AI 企业账号额度；接口沿用 Claude 历史命名。
  *
- * 数据语义: snapshot.spend = 月度跨客户端累计 (LiteLLM /v2/user/info); snapshot.todaySpend =
- * 今日 (UTC 日, 本 user 跨所有客户端 / 所有 key) 累计 (LiteLLM /user/daily/activity)。
- * null 表示对应端点暂时拉不到。详见 main/usage/claudeAccountUsage.ts 顶部注释。
+ * main/usage/claudeAccountUsage.ts 通过 Model Access GET /api/model-access/quota
+ * 读取周期及服务端统计口径的当天跨客户端用量（8 秒超时、10 秒节流），沿
+ * usage:claude-account-changed 推送。失败保留同账号缓存，权威 clear 才清除。
  *
- * 数据通道:
- *   main/usage/claudeAccountUsage.ts triggerClaudeAccountUsageRefresh()
- *     → 走 ANTHROPIC_BASE_URL+/v2/user/info, 2s 超时, 10s 节流
- *     → broadcast usage:claude-account-changed
- *   IPC 出口: electronAPI.maker.usage.{getAccount('claude-code'), onClaudeAccountChanged}
- *
- * 触发时机:
- *   - mount / 手动刷新时调 getAccount('claude-code')，main 按既有节流查询后返回快照
- *   - 后续每个 cc turn done 后, main fire-and-forget 拉取并 push, 本 hook 收 push 直接覆盖
- *
- * 与 useAccountUsage(codex) 的差异:
- *   - 没有 sessionId 过滤 — 是账号级数据, 全局共享一份 module-local cache
- *   - enabled=false 直接返 null (不订阅, 节省一次回调过滤)
- *
- * enabled 语义 (而非 vendorKey): 这份 quota 是"XD gateway key 在 LiteLLM 上的 spend",
- * 与发起请求的 agent 无关。cc 固然要看; codex 的 'api' 鉴权模式复用同一把 XD key 走
- * 同一个 AI Gateway, 所以也该看同一份 quota。调用方只在当前会话实际走 Gateway 时
- * 启用；自定义供应商即使复用相同 host 也不会读这份账号配额。
+ * mount / 手动刷新通过 getAccount('claude-code') 读取；任务收尾及空闲刷新由
+ * main 触发。账号级缓存与 agent 无关，Claude Code / Codex 走 Cindy AI 时共用，
+ * 自定义供应商不读取这份配额。enabled=false 返回 null 且不订阅。
  */
 
 import { CLAUDE_QUOTA_STATE_READ, isClaudeQuotaClear } from '../../shared/claudeQuotaState';
@@ -32,22 +17,17 @@ import type { MoneyCurrency } from '../../shared/regionalMoney';
 import { useAuth } from '../contexts/AuthContext';
 
 export interface ClaudeAccountUsageSnapshot {
-  /** 月度周期跨客户端累计，保持 Gateway 部署区域的原生金额。 */
+  /** 月度周期跨客户端累计，保持服务端账号金额口径。 */
   spend: number;
-  /** 月度周期上限，保持 Gateway 部署区域的原生金额。 */
+  /** 月度周期上限，保持服务端账号金额口径。 */
   maxBudget: number;
-  /** Gateway 账号金额的原生币种。 */
+  /** 服务端账号金额的原生币种。 */
   currency: MoneyCurrency;
   /** 下次月度 reset 时间 ISO8601。 */
   budgetResetAt?: string | null;
-  /**
-   * 今日 (UTC 日) 跨客户端累计，保持 Gateway 部署区域的原生金额，来自
-   * LiteLLM /user/daily/activity 的
-   * results[0].metrics.spend。null 表示该端点暂时不可用 (跟 cycle 是独立 fetch),
-   * 此时消费方应隐藏 daily 段。
-   */
+  /** 服务端统计口径的当天跨客户端累计；日额度未启用或明细不可用时为 null。 */
   todaySpend: number | null;
-  /** 企业日额度开关；false 隐藏日额度和读取失败提示，旧网关路径不设置。 */
+  /** 企业日额度开关；false 隐藏日额度和读取失败提示，旧主机可能不设置。 */
   dailyLimitEnabled?: boolean;
   fetchedAt: number;
 }

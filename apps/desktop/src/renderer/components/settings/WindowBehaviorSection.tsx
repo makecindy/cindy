@@ -1,17 +1,18 @@
+import { windowBehaviorSettings } from './WindowBehaviorSection.settings-search';
 /**
  * WindowBehaviorSection — 「应用行为」section:本机相关的应用级开关。
  *
  * 应用设置:
  *  - 登录电脑后自动启动:Windows / macOS 的系统登录启动项,默认不注册。
  *  - 菜单栏余量:macOS 14+ 的原生菜单栏项,默认开启。
- *  1. 「保持电脑唤醒」(keepAwake):main 用 powerSaveBlocker 防系统休眠、放行锁屏,
- *     让后台 agent / 定时任务持续运行。跨平台生效(mac/win/linux),故常驻显示。
+ *  「保持电脑唤醒」与「用隐私屏代替锁屏」已移到「离开电脑时」分组(AwayFromComputerSection,
+ *  见 docs/product-rules/privacy-screen.md)。
  *  2. 「关闭主窗口时」:Windows 选择退出或收起到托盘,Linux 选择退出或最小化。
  *  3. 「后台窗口首次左键点击仅激活不透传」(swallowActivationClick,PR #446):仅
  *     macOS + Windows 有实际效果,Linux 上两条底层路径均 no-op,故该行在 Linux 隐藏。
  *
- * 各项放在同一张卡片里、以分割线隔开,与「协同」「Agent 资源占用」同一套设置行样式
- * (settingsRowClasses)。平台不支持的行不渲染,分割线只出现在可见行之间。
+ * 各项放在同一张 SettingsCard 里、以分割线隔开,与「协同」「Agent 资源占用」同一套设置行
+ * (settings-rows)。平台不支持的行不渲染,分割线只出现在可见行之间。
  */
 
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
@@ -19,18 +20,9 @@ import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
 
-import { Switch } from '@/components/ui/switch';
-import { cn } from '@/lib/utils';
-import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_DIVIDER_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from './settingsRowClasses';
+import { SETTINGS_HINT, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useSwallowActivationClickSettings } from '@/hooks/useSwallowActivationClickSettings';
-import { useKeepAwakeSetting } from '@/hooks/useKeepAwakeSetting';
+import { BehaviorRow } from './BehaviorRow';
 import { useLoginItemSetting } from '@/hooks/useLoginItemSetting';
 import { useMenubarSetting } from '@/hooks/useMenubarSetting';
 import {
@@ -42,51 +34,8 @@ import {
 
 type DesktopCloseBehavior = LinuxCloseBehavior | WindowsCloseBehavior;
 
-/** 一行开关:左侧标签 + 说明(+ 可选补充说明行),右侧开关。 */
-function BehaviorRow({
-  id,
-  label,
-  hint,
-  note,
-  checked,
-  onCheckedChange,
-  ariaLabel,
-  disabled,
-}: {
-  id?: string;
-  label: string;
-  hint: string;
-  note?: ReactNode;
-  checked: boolean;
-  onCheckedChange: (next: boolean) => void;
-  ariaLabel: string;
-  disabled?: boolean;
-}) {
-  return (
-    <div id={id} className={SETTINGS_ROW_CLASS}>
-      <div className="flex min-w-0 flex-col gap-1">
-        <p className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-          {label}
-        </p>
-        <p className={cn('whitespace-pre-line', SETTINGS_ROW_HINT_CLASS)}>
-          {hint}
-        </p>
-        {note}
-      </div>
-
-      <Switch
-        checked={checked}
-        onCheckedChange={onCheckedChange}
-        aria-label={ariaLabel}
-        disabled={disabled}
-      />
-    </div>
-  );
-}
-
 export function WindowBehaviorSection() {
   const { enabled, setEnabled } = useSwallowActivationClickSettings();
-  const { keepAwake, setKeepAwake } = useKeepAwakeSetting();
   const loginItem = useLoginItemSetting();
   const menubar = useMenubarSetting();
   const { t } = useTranslation();
@@ -136,34 +85,21 @@ export function WindowBehaviorSection() {
     ? ['minimize', 'quit']
     : ['tray', 'quit'];
 
-  const rows: { key: string; node: ReactNode }[] = [
-    {
-      key: 'keep-awake',
-      node: (
-        <BehaviorRow
-          id="settings-search-settings-devices-keepAwake"
-          label={t('settings.devices.keepAwake')}
-          hint={t('settings.devices.keepAwakeHint')}
-          checked={keepAwake}
-          onCheckedChange={(v) => void setKeepAwake(v)}
-          ariaLabel={t('settings.devices.keepAwake')}
-        />
-      ),
-    },
-  ];
+  const rows: { key: string; node: ReactNode }[] = [];
 
   if (loginItem.supported) {
     rows.push({
       key: 'login-item',
       node: (
         <BehaviorRow
-          id="settings-search-login-item"
-          label={t('settings.windowBehavior.loginItem.label')}
-          hint={t('settings.windowBehavior.loginItem.hint')}
+          id={windowBehaviorSettings.loginItemLabel.targetId}
+          data-setting-id={windowBehaviorSettings.loginItemLabel.id}
+          label={t(windowBehaviorSettings.loginItemLabel.titleKey)}
+          hint={t(windowBehaviorSettings.loginItemLabel.descriptionKey)}
           checked={Boolean(loginItem.state?.enabled || loginItem.state?.requiresApproval)}
           disabled={!loginItem.state?.available || loginItem.busy}
           onCheckedChange={(enabled) => void loginItem.setEnabled(enabled)}
-          ariaLabel={t('settings.windowBehavior.loginItem.label')}
+          ariaLabel={t(windowBehaviorSettings.loginItemLabel.titleKey)}
           note={
             <div
               className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]"
@@ -188,13 +124,14 @@ export function WindowBehaviorSection() {
       key: 'menubar',
       node: (
         <BehaviorRow
-          id="settings-search-menubar"
-          label={t('settings.windowBehavior.menubar.label')}
-          hint={t('settings.windowBehavior.menubar.hint')}
+          id={windowBehaviorSettings.menubarLabel.targetId}
+          data-setting-id={windowBehaviorSettings.menubarLabel.id}
+          label={t(windowBehaviorSettings.menubarLabel.titleKey)}
+          hint={t(windowBehaviorSettings.menubarLabel.descriptionKey)}
           checked={menubar.state?.enabled === true}
           disabled={menubar.busy}
           onCheckedChange={(enabled) => void menubar.setEnabled(enabled)}
-          ariaLabel={t('settings.windowBehavior.menubar.label')}
+          ariaLabel={t(windowBehaviorSettings.menubarLabel.titleKey)}
         />
       ),
     });
@@ -204,29 +141,26 @@ export function WindowBehaviorSection() {
     rows.push({
       key: 'close-behavior',
       node: (
-        <div className="cindy-segmented-row px-4 py-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p id="settings-search-settings-windowBehavior-closeBehavior-label"
-              className={SETTINGS_ROW_LABEL_CLASS}
-              style={{ letterSpacing: '0.12px' }}
-            >
-              {t('settings.windowBehavior.closeBehavior.label')}
-            </p>
-            <p className={SETTINGS_ROW_HINT_CLASS}>
-              {t('settings.windowBehavior.closeBehavior.hint')}
-            </p>
-          </div>
-
-          <SegmentedControl
-            aria-label={t('settings.windowBehavior.closeBehavior.aria')}
-            value={closeBehavior}
-            onValueChange={setCloseBehavior}
-            options={closeBehaviorOptions.map((behavior) => ({
-              value: behavior,
-              label: t(`settings.windowBehavior.closeBehavior.${behavior}`),
-            }))}
-          />
-        </div>
+        <SettingsRow
+          className="cindy-segmented-row"
+          title={
+            <span id={windowBehaviorSettings.closeBehaviorLabel.targetId}>
+              {t(windowBehaviorSettings.closeBehaviorLabel.titleKey)}
+            </span>
+          }
+          hint={t(windowBehaviorSettings.closeBehaviorLabel.descriptionKey)}
+          trailing={
+            <SegmentedControl data-setting-id={windowBehaviorSettings.closeBehaviorLabel.id}
+              aria-label={t('settings.windowBehavior.closeBehavior.aria')}
+              value={closeBehavior}
+              onValueChange={setCloseBehavior}
+              options={closeBehaviorOptions.map((behavior) => ({
+                value: behavior,
+                label: t(`settings.windowBehavior.closeBehavior.${behavior}`),
+              }))}
+            />
+          }
+        />
       ),
     });
   }
@@ -236,12 +170,13 @@ export function WindowBehaviorSection() {
       key: 'activation-click',
       node: (
         <BehaviorRow
-          id="settings-search-activation-click"
-          label={t('settings.windowBehavior.swallowActivationClickLabel')}
-          hint={t('settings.windowBehavior.swallowActivationClickHint')}
+          id={windowBehaviorSettings.swallowActivationClickLabel.targetId}
+          data-setting-id={windowBehaviorSettings.swallowActivationClickLabel.id}
+          label={t(windowBehaviorSettings.swallowActivationClickLabel.titleKey)}
+          hint={t(windowBehaviorSettings.swallowActivationClickLabel.descriptionKey)}
           note={
             isMac ? (
-              <p className={SETTINGS_ROW_HINT_CLASS}>
+              <p className={SETTINGS_HINT}>
                 {t('settings.windowBehavior.macRestartNote')}
               </p>
             ) : undefined
@@ -255,19 +190,12 @@ export function WindowBehaviorSection() {
   }
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className={SETTINGS_SECTION_TITLE_CLASS}>
-        {t('settings.windowBehavior.title')}
-      </h2>
-
-      <div className={SETTINGS_CARD_CLASS}>
-        {rows.map((row, index) => (
-          <Fragment key={row.key}>
-            {index > 0 ? <div className={SETTINGS_ROW_DIVIDER_CLASS} /> : null}
-            {row.node}
-          </Fragment>
+    <SettingsSection title={t('settings.windowBehavior.title')}>
+      <SettingsCard>
+        {rows.map((row) => (
+          <Fragment key={row.key}>{row.node}</Fragment>
         ))}
-      </div>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

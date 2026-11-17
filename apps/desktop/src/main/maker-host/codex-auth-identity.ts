@@ -1,3 +1,10 @@
+import { createHash } from 'node:crypto';
+
+/** Non-secret presentation equality; an email alone cannot identify a ChatGPT workspace. */
+export function codexAccountDisplayKey(email: string, workspaceId: string): string | undefined {
+  if (!email.trim() || !workspaceId.trim()) return undefined;
+  return createHash('sha256').update(JSON.stringify(['openai', email.trim().toLowerCase(), workspaceId])).digest('hex');
+}
 interface ChatgptIdTokenClaims {
   chatgpt_account_id?: unknown;
   sub?: unknown;
@@ -27,4 +34,37 @@ export function codexWorkspaceIdFromTokens(
   if (typeof nested === 'string' && nested.length > 0) return nested;
   const topLevel = claims?.chatgpt_account_id;
   return typeof topLevel === 'string' && topLevel.length > 0 ? topLevel : null;
+}
+
+
+
+export interface AccountIdentity {
+  principal: string;
+  label: string;
+}
+
+
+/** Pure parser: never return tokens through account status or IPC. */
+export function parseCodexAccountIdentity(raw: string): AccountIdentity | null {
+  try {
+    const value = JSON.parse(raw);
+    if (typeof value.tokens?.access_token !== 'string' || !value.tokens.access_token) return null;
+    const jwt = value.tokens.id_token ?? value.tokens.access_token;
+    const claims = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
+    const account =
+      value.tokens.account_id ?? claims['https://api.openai.com/auth']?.chatgpt_account_id;
+    const subject = claims.sub;
+    if (typeof account !== 'string' || typeof subject !== 'string') return null;
+    return {
+      principal: createHash('sha256').update(`${subject}\0${account}`).digest('hex'),
+      label:
+        typeof claims.email === 'string'
+          ? claims.email
+          : typeof claims.name === 'string'
+            ? claims.name
+            : 'ChatGPT',
+    };
+  } catch {
+    return null;
+  }
 }

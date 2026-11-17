@@ -13,7 +13,7 @@ const flush = async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 function fixture(poll: () => Promise<unknown> = never) {
   const invoke = vi.fn(
-    async (_session: string, input: Record<string, unknown>): Promise<unknown> =>
+    async (_session: string | null, input: Record<string, unknown>): Promise<unknown> =>
       input.op === 'open' ? document : input.op === 'poll' ? poll()
         : input.op === 'authorize-link' ? { authorized: true, validForMs: 30_000 } : {},
   );
@@ -44,7 +44,7 @@ describe('MCP App transport lifecycle', () => {
     f.controller.receive({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} });
     f.controller.receive({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
     f.controller.receive({ jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height: 420 } });
-    expect(f.invoke.mock.calls.map(([, input]) => input.op)).toEqual(['open']);
+    expect(f.invoke.mock.calls.map(([, input]) => (input as { op: string }).op)).toEqual(['open']);
     expect(f.post).not.toHaveBeenCalled();
     expect(f.state.mock.calls.map(([message]) => message.method)).toEqual([
       'ui/notifications/initialized', 'ui/notifications/size-changed',
@@ -52,6 +52,31 @@ describe('MCP App transport lifecycle', () => {
     f.controller.prepareNativeClose();
     await f.controller.close();
     expect(f.invoke).toHaveBeenLastCalledWith('task', { op: 'teardown', viewId: 'view', alreadyNotified: false });
+  });
+  // PR-E, unit: only an explicitly suspended Desktop sandbox uses local controls.
+  // Observe invoke order and context suppression through the public controller.
+  it('serializes local suspension and resume without polling or reopening', async () => {
+    const f = fixture();
+    f.invoke.mockImplementation(async (_session, input) => input.op === 'open'
+      ? { viewId: 'view', transport: 'sandbox', prefersBorder: true } : {});
+    await f.controller.open({});
+    const suspended = f.controller.suspend();
+    await f.controller.context({ theme: 'dark' });
+    const resumed = f.controller.resume();
+    const suspendedAgain = f.controller.suspend();
+    await Promise.all([suspended, resumed, suspendedAgain]);
+    await f.controller.suspend();
+    expect(f.invoke.mock.calls.map(([, input]) => input.op)).toEqual(['open', 'suspend', 'resume', 'suspend']);
+    await f.controller.close();
+    await f.controller.resume();
+    expect(f.invoke.mock.calls.map(([, input]) => input.op)).toEqual(['open', 'suspend', 'resume', 'suspend', 'teardown']);
+  });
+  it('does not send local retention operations for native/device-link Views', async () => {
+    const f = fixture();
+    await f.controller.open({});
+    await f.controller.suspend(); await f.controller.resume();
+    expect(f.invoke.mock.calls.map(([, input]) => (input as { op: string }).op)).toEqual(['open', 'poll']);
+    await f.controller.close();
   });
   it('relays initialization and complete HTML only after sandbox ready', async () => {
     const f = fixture();
@@ -156,10 +181,56 @@ describe('MCP App transport lifecycle', () => {
     release();
     await pending;
   });
+
+  it('finishes a view-state save during native close before sending teardown', async () => {
+    let deliver!: (events: unknown[]) => void;
+    const f = fixture(() => new Promise((resolve) => { deliver = resolve; }));
+    await f.controller.open({});
+    f.controller.sandboxReady();
+    f.controller.prepareNativeClose();
+    const teardown = f.post.mock.calls.at(-1)![0] as AppRpc;
+    const pending = f.controller.close();
+    const save: AppRpc = {
+      jsonrpc: '2.0', id: 'save', method: 'cindy/view-state/set', params: { state: { version: 1, page: 2 } },
+    };
+    f.controller.receive(save);
+    await flush();
+    expect(f.invoke).toHaveBeenCalledWith('task', expect.objectContaining({
+      op: 'message', viewId: 'view', message: save,
+    }));
+    deliver([{ seq: 1, message: { jsonrpc: '2.0', id: save.id, result: {} } }]);
+    await flush();
+    expect(f.post).toHaveBeenCalledWith(expect.objectContaining({ id: save.id, result: {} }));
+    expect(f.invoke.mock.calls.some(([, input]) => input.op === 'teardown')).toBe(false);
+    f.controller.receive({ jsonrpc: '2.0', id: teardown.id, result: {} });
+    await pending;
+    const operations = f.invoke.mock.calls.map(([, input]) => input.op);
+    expect(operations.indexOf('message')).toBeLessThan(operations.indexOf('teardown'));
+  });
+
+  it('continues to drop tools and other requests during native close', async () => {
+    const f = fixture();
+    await f.controller.open({});
+    f.controller.sandboxReady();
+    f.controller.prepareNativeClose();
+    const pending = f.controller.close();
+    f.controller.receive({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} });
+    f.controller.receive({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+    await flush();
+    expect(f.invoke).not.toHaveBeenCalledWith('task', expect.objectContaining({
+      op: 'message', message: expect.objectContaining({ method: 'tools/call' }),
+    }));
+    expect(f.invoke).not.toHaveBeenCalledWith('task', expect.objectContaining({
+      op: 'message', message: expect.objectContaining({ method: 'ui/notifications/initialized' }),
+    }));
+    const teardown = f.post.mock.calls.at(-1)![0] as AppRpc;
+    f.controller.receive({ jsonrpc: '2.0', id: teardown.id, result: {} });
+    await pending;
+  });
   it('closes a View that finishes opening after its card unmounts', async () => {
     let resolve!: (value: unknown) => void;
     const invoke = vi.fn(
-      async (_session: string, input: Record<string, unknown>) =>
+      async (_session: string | null, input: Record<string, unknown>) =>
         input.op === 'open' ? new Promise<unknown>((done) => {
           resolve = done;
         }) : {},
@@ -202,7 +273,7 @@ describe('MCP App transport lifecycle', () => {
     await f.controller.open({});
     f.controller.receive({ jsonrpc: '2.0', method: 'ui/notifications/sandbox-escape' });
     expect(f.invoke).toHaveBeenLastCalledWith('task', { op: 'display-mode', viewId: 'view', mode: 'inline' });
-    expect(f.state).not.toHaveBeenCalled();
+    expect(f.state).toHaveBeenCalledWith({ jsonrpc: '2.0', method: 'ui/notifications/sandbox-escape' });
     await f.controller.close();
   });
   it('times out initialization and releases the View without restarting a write', async () => {

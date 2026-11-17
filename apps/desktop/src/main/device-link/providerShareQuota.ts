@@ -1,5 +1,12 @@
 import type { ProviderView } from '@cindy/model-providers';
-import type { ProviderShareQuotaAccount } from '../../shared/providerShareInsights.js';
+import { MAX_PROVIDER_SHARE_QUOTA_ACCOUNTS } from '../../shared/providerShareInsights.js';
+import type {
+  ProviderShareQuotaAccount,
+  ProviderShareQuotaAccountResult,
+} from '../../shared/providerShareInsights.js';
+import {
+  MAX_SUBSCRIPTION_ACCOUNTS,
+} from '../../shared/subscriptionAccounts.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
@@ -11,7 +18,9 @@ import { codexSource, claudeSource, xaiSource } from '../menubar/collect.js';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
 import { invokeProviderManagement } from '../provider-group/managementClient.js';
 import { readProviderGroup } from '../provider-group/store.js';
-import { serverApiFetch } from '../serverApiClient.js';
+import { readSubscriptionPoolAccountUsages } from '../subscription-accounts/runtime.js';
+import type { CodexAccountUsagePayload } from '../usageBroadcaster.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import {
   readClaudeAccountUsageSnapshot,
   readClaudeAccountQuotaClear,
@@ -34,6 +43,22 @@ const empty = (state: ProviderShareQuotaAccount['state']): ProviderShareQuotaAcc
 });
 let cacheOwner = '';
 const cache = new Map<string, { until: number; pending: Promise<ProviderShareQuotaAccount> }>();
+
+function windowsAccount(value: ReturnType<typeof claudeSource>): ProviderShareQuotaAccount {
+  const windows = value.windows.filter((window) => window.kind !== 'period').map((window) => ({
+    kind: window.kind as 'session' | 'week' | 'scoped',
+    label: window.label ?? null,
+    remainingPercent: Math.max(0, 100 - window.usedPercent),
+    resetsAt: window.resetsAtMs,
+    windowMinutes: window.windowMinutes,
+  }));
+  return {
+    state: windows.length ? 'ready' : 'unavailable',
+    updatedAt: value.updatedAtMs,
+    windows,
+    balance: null,
+  };
+}
 
 async function readAccount(provider: ProviderView): Promise<ProviderShareQuotaAccount> {
   if (!provider.connected || provider.removed || provider.suspended) return empty('unavailable');
@@ -60,19 +85,7 @@ async function readAccount(provider: ProviderView): Promise<ProviderShareQuotaAc
               (await readCodexRateLimitsForHost(provider.id))?.rateLimits ?? null,
               now,
             );
-    const windows = value.windows.filter((window) => window.kind !== 'period').map((window) => ({
-      kind: window.kind as 'session' | 'week' | 'scoped',
-      label: window.label ?? null,
-      remainingPercent: Math.max(0, 100 - window.usedPercent),
-      resetsAt: window.resetsAtMs,
-      windowMinutes: window.windowMinutes,
-    }));
-    return {
-      state: windows.length ? 'ready' : 'unavailable',
-      updatedAt: value.updatedAtMs,
-      windows,
-      balance: null,
-    };
+    return windowsAccount(value);
   }
   if (provider.id !== 'xd') return empty('unsupported');
   const auth = getAuthState();
@@ -157,15 +170,42 @@ export async function readProviderShareQuotaAccount(
   return JSON.stringify(latest) === key ? result : empty('unavailable');
 }
 
+/**
+ * A subscription account pool lists each assignable signed-in account's own quota snapshot.
+ * Only hosts without a pool use the provider's compatibility reader.
+ */
+export async function readProviderShareQuotaAccounts(
+  providerId: string,
+): Promise<ProviderShareQuotaAccount[]> {
+  const assertCurrent = captureProviderManagementScope();
+  const pooled = await readSubscriptionPoolAccountUsages(providerId);
+  assertCurrent();
+  if (pooled === undefined)
+    return [await readProviderShareQuotaAccount(providerId)];
+  const provider = (
+    await getDesktopProviderService().listProviders({ allowSideEffects: false })
+  ).find((item) => item.id === providerId);
+  assertCurrent();
+  if (!provider?.connected || provider.removed || provider.suspended)
+    return [empty('unavailable')];
+  if (pooled.length === 0) return provider.subscriptionPoolAlias
+    ? [await readProviderShareQuotaAccount(providerId)] : [empty('unavailable')];
+  const now = Date.now();
+  return pooled.map(({ usage }) => windowsAccount(
+    providerWeeklyQuotaSource(provider) === 'claude'
+      ? claudeSource(provider, usage?.claudeUsage ?? null, now)
+      : // Pool buckets omit windows without a percentage; codexSource skips those.
+        codexSource(provider, (usage?.codexUsage ?? null) as unknown as CodexAccountUsagePayload | null, now),
+  ));
+}
+
 async function readGroupQuota(providerId: string) {
   const assertCurrent = captureProviderManagementScope();
   const group = readProviderGroup(providerId);
-  if (!group)
-    return {
-      group: false,
-      partial: false,
-      accounts: [await readProviderShareQuotaAccount(providerId)],
-    };
+  if (!group) {
+    const accounts = await readProviderShareQuotaAccounts(providerId);
+    return { group: accounts.length > 1, partial: false, accounts };
+  }
   const accounts: ProviderShareQuotaAccount[] = [];
   const ownMembers = group.members.filter((member) => member.kind !== 'share');
   for (let offset = 0; offset < ownMembers.length; offset += 3) {
@@ -174,7 +214,7 @@ async function readGroupQuota(providerId: string) {
       ...(await Promise.all(
         ownMembers.slice(offset, offset + 3).map(async (member) => {
           if (member.kind === 'local' || !member.agentDeviceId)
-            return readProviderShareQuotaAccount(member.providerId);
+            return readProviderShareQuotaAccounts(member.providerId);
           try {
             const raw = (await invokeProviderManagement(
               remoteBackgroundInvoke,
@@ -183,26 +223,47 @@ async function readGroupQuota(providerId: string) {
                 action: 'manage-share',
                 command: { action: 'quota-account', providerId: member.providerId },
               },
-            )) as ProviderShareQuotaAccount;
-            return sanitizeQuotaAccount(raw);
+            )) as ProviderShareQuotaAccountResult;
+            // Older computers return only their default account.
+            return Array.isArray(raw?.accounts) && raw.accounts.length > 0
+              ? raw.accounts.slice(0, MAX_SUBSCRIPTION_ACCOUNTS).map(sanitizeQuotaAccount)
+              : [sanitizeQuotaAccount(raw)];
           } catch (error) {
             const message = error instanceof Error ? error.message : '';
-            return empty(
-              /UNSUPPORTED_CAPABILITY|CHANNEL_NOT_ALLOWED/.test(message)
-                ? 'needs-update'
-                : /OFFLINE|NOT_CONNECTED|LINK_NOT_OPEN/.test(message)
-                  ? 'offline'
-                  : 'unavailable',
-            );
+            return [
+              empty(
+                /UNSUPPORTED_CAPABILITY|CHANNEL_NOT_ALLOWED/.test(message)
+                  ? 'needs-update'
+                  : /OFFLINE|NOT_CONNECTED|LINK_NOT_OPEN/.test(message)
+                    ? 'offline'
+                    : 'unavailable',
+              ),
+            ];
           }
         }),
-      )),
+      )).flat(),
     );
   }
   assertCurrent();
   if (JSON.stringify(group) !== JSON.stringify(readProviderGroup(providerId)))
     throwIpcError('PRECONDITION_FAILED', 'Provider group changed');
-  return { group: true, partial: ownMembers.length !== group.members.length, accounts };
+  // Keep the existing v1 receiver limit, including for older recipients.
+  return {
+    group: true,
+    partial:
+      ownMembers.length !== group.members.length ||
+      accounts.length > MAX_PROVIDER_SHARE_QUOTA_ACCOUNTS,
+    accounts: accounts.slice(0, MAX_PROVIDER_SHARE_QUOTA_ACCOUNTS),
+  };
+}
+
+/** Group owners read this from member computers. The first account stays at the top level so
+ * older owners keep showing one account; newer owners list every pooled account. */
+export async function readProviderShareQuotaAccountResult(
+  providerId: string,
+): Promise<ProviderShareQuotaAccountResult> {
+  const accounts = await readProviderShareQuotaAccounts(providerId);
+  return accounts.length > 1 ? { ...accounts[0], accounts } : accounts[0];
 }
 
 function sanitizeQuotaAccount(raw: ProviderShareQuotaAccount): ProviderShareQuotaAccount {

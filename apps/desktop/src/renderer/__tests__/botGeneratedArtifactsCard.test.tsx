@@ -31,7 +31,7 @@ vi.mock('react-i18next', async (importOriginal) => {
   };
 });
 
-vi.mock('../components/chat/useOpenWithMenu', () => ({
+vi.mock('../components/chat/messageLinkActions', () => ({
   isHtmlFilePath: (path: string) => /\.(html?|xhtml)$/i.test(path),
   openHtmlFileByPreference: mocks.openHtmlFileByPreference,
 }));

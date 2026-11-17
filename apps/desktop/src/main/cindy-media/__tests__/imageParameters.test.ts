@@ -2,6 +2,30 @@ import { describe, expect, it } from 'vitest';
 import { imageParameterSchema, normalizeImageParameters } from '../imageParameters.js';
 
 describe('image options use the selected channel and model', () => {
+  // #8673 / unit: native options must survive the production normalizer used
+  // at each dispatch boundary. The old tests only cover convenience fields.
+  it.each(['openai', 'gemini', 'xai'] as const)('preserves unenumerated %s native options', (protocol) => {
+    const nativeParameters = { seed: 0, future_option: { enabled: false, values: ['native', 1] } };
+    expect(normalizeImageParameters(protocol, 'account/future-image', { nativeParameters })).toEqual({ nativeParameters });
+    expect(() => normalizeImageParameters(undefined, 'legacy-image', { nativeParameters })).toThrow('not supported');
+  });
+
+  // The current media result contract delivers one final image. Opening body
+  // options must not pay for a stream/batch and then silently lose its results.
+  it.each([
+    ['openai', { n: 2 }],
+    ['openai', { stream: true }],
+    ['gemini', { generationConfig: { candidateCount: 2 } }],
+  ] as const)('rejects %s native options that change the single-image result protocol', (protocol, nativeParameters) => {
+    expect(() => normalizeImageParameters(protocol, 'account/image', { nativeParameters })).toThrow('single');
+  });
+
+  it.each(['images', 'contents', 'image[]'])('keeps native %s on the host-managed reference path', (field) => {
+    expect(() => normalizeImageParameters('openai', 'account/image', {
+      nativeParameters: { [field]: ['unmanaged-reference'] },
+    })).toThrow('host');
+  });
+
   it('keeps supported large native sizes and all Sunburst quality levels', () => {
     for (const quality of ['auto', 'low', 'medium', 'high', 'xhigh', 'max']) {
       expect(

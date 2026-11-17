@@ -17,7 +17,8 @@ import { projectAutomationConsents, schedules, sessions } from '../localDb/schem
 import { projectAutomationConsentToRow } from '../localDb/mapper';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths';
 import { migrateLegacyXdmakerDir } from '../utils/legacyXdmakerMigration';
-import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage';
+import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage.desktop';
+import type { TeammateProjectState } from './ownTeammateProject';
 
 /**
  * ProjectAutomationLoader reads .cindy/automations/schedules.json and syncs it
@@ -47,6 +48,7 @@ export interface ProjectScheduleConfig {
   recurring?: boolean;
   manual?: boolean;
   intervalMs?: number;
+  expireAt?: number;
   agentKind?: 'claude-code' | 'codex' | 'pi';
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
@@ -108,6 +110,7 @@ export class ProjectAutomationLoader {
   private readonly cache = new Map<string, { value: CachedRead; ts: number }>();
   private readonly inflight = new Map<string, Promise<CachedRead>>();
   private readonly listeners = new Set<Listener>();
+  private readonly mutationTails = new Map<string, Promise<void>>();
 
   constructor(
     private readonly deps: {
@@ -115,6 +118,8 @@ export class ProjectAutomationLoader {
       storage: DrizzleScheduleStorage;
       getDb: () => SchedulerDrizzleDb;
       logger: Logger;
+      /** null for ordinary projects; deleted teammate folders must never be imported again. */
+      getTeammateProjectState?: (workingDir: string) => Promise<TeammateProjectState | null>;
     },
   ) {}
 
@@ -164,6 +169,16 @@ export class ProjectAutomationLoader {
   }
 
   async reconcile(workingDir: string, approvedHash?: string): Promise<ReconcileResult> {
+    return this.serializeProjectMutation(workingDir, () => this.reconcileUnlocked(workingDir, approvedHash));
+  }
+
+  private async reconcileUnlocked(workingDir: string, approvedHash?: string): Promise<ReconcileResult> {
+    const teammateState = await this.deps.getTeammateProjectState?.(workingDirKey(workingDir));
+    // The profile is removed before its directory. A queued discovery must not
+    // recreate schedules from a file that cleanup has not removed yet.
+    if (teammateState === 'deleted') {
+      return { workingDir, inserted: 0, updated: 0, deleted: 0, skipped: null };
+    }
     // Never accept a cached snapshot for an approval: the file may have changed
     // while its confirmation was visible.
     const read = await this.readProjectAutomations(workingDir, { force: true });
@@ -198,7 +213,10 @@ export class ProjectAutomationLoader {
       const current = byConfigId.get(config.id);
       return !current || schedulesDiffer(current, config, workingDir);
     });
-    if (changed && approvedHash !== read.configHash) {
+    // A teammate's project is Cindy's own folder, not something brought in from elsewhere: sync it
+    // directly. Only a real teammate project of this account: a folder that merely looks like one asks.
+    if (changed && approvedHash !== read.configHash
+      && !teammateState) {
       const pendingImport = {
         workingDir, configHash: read.configHash, schedules: read.schedules,
         removedNames: removed.map((s) => s.name),
@@ -259,7 +277,22 @@ export class ProjectAutomationLoader {
   async upsertSchedule(
     workingDir: string,
     config: ProjectScheduleConfig,
+    /** Host writers (a teammate's own automations) must not replace a file they cannot read whole. */
+    options: { keepUnreadable?: boolean } = {},
   ): Promise<ReconcileResult> {
+    return this.serializeProjectMutation(workingDir, () => this.upsertScheduleUnlocked(workingDir, config, options));
+  }
+
+  private async upsertScheduleUnlocked(
+    workingDir: string,
+    config: ProjectScheduleConfig,
+    options: { keepUnreadable?: boolean },
+  ): Promise<ReconcileResult> {
+    if (await this.deps.getTeammateProjectState?.(workingDirKey(workingDir)) === 'deleted') {
+      const err = new Error('project automations belong to a deleted teammate');
+      (err as { code?: string }).code = 'PRECONDITION_FAILED';
+      throw err;
+    }
     if (!isProjectScheduleConfig(config)) {
       throwInvalidParams('invalid project schedule config');
     }
@@ -267,6 +300,11 @@ export class ProjectAutomationLoader {
       throwInvalidParams('project schedule id must be kebab-case ascii');
     }
     const read = await this.readProjectAutomationsFromDisk(workingDir);
+    if (options.keepUnreadable && read.kind !== 'loaded' && read.kind !== 'missing') {
+      const err = new Error(`project automations unreadable (${read.kind}); left as it is`);
+      (err as { code?: string }).code = 'PRECONDITION_FAILED';
+      throw err;
+    }
     const schedules = read.kind === 'loaded' ? read.schedules : [];
     const next: ProjectAutomationsFile = {
       version: 1,
@@ -275,20 +313,31 @@ export class ProjectAutomationLoader {
         config,
       ],
     };
-    await this.writeProjectAutomationsFile(workingDir, next);
+    const writtenContent = await this.writeProjectAutomationsFile(workingDir, next);
     // The save action approves this one definition, not unrelated repository data.
     const current = (await this.deps.storage.list()).find((s) => s.source === 'project'
       && sameWorkingDir(s.workingDir, workingDir) && s.projectConfigId === config.id);
     const inserted = current ? 0 : 1;
     const updated = current && schedulesDiffer(current, config, workingDir) ? 1 : 0;
-    if (!current) await this.deps.scheduler.create(scheduleConfigToCreateInput(config, workingDir));
-    else if (updated) await this.deps.scheduler.update(current.id, scheduleConfigToUpdateInput(config, workingDir));
+    try {
+      if (!current) await this.deps.scheduler.create(scheduleConfigToCreateInput(config, workingDir));
+      else if (updated) await this.deps.scheduler.update(current.id, scheduleConfigToUpdateInput(config, workingDir));
+    } catch (err) {
+      // A rejected save (e.g. a model its computer cannot run) must not leave the rejected
+      // choice in the project file while the saved automation keeps its old configuration.
+      await this.restoreProjectAutomationsFile(workingDir, read, writtenContent);
+      throw err;
+    }
     this.emit({ type: 'reconciled', workingDir, inserted, updated, deleted: 0,
       isFirstTime: !current, hashChanged: true });
     return { workingDir, inserted, updated, deleted: 0, skipped: null };
   }
 
   async removeSchedule(workingDir: string, id: string): Promise<ReconcileResult> {
+    return this.serializeProjectMutation(workingDir, () => this.removeScheduleUnlocked(workingDir, id));
+  }
+
+  private async removeScheduleUnlocked(workingDir: string, id: string): Promise<ReconcileResult> {
     if (!id.trim()) {
       throwInvalidParams('project schedule id is required');
     }
@@ -318,6 +367,10 @@ export class ProjectAutomationLoader {
   }
 
   async deleteProjectSchedules(workingDir: string): Promise<number> {
+    return this.serializeProjectMutation(workingDir, () => this.deleteProjectSchedulesUnlocked(workingDir));
+  }
+
+  private async deleteProjectSchedulesUnlocked(workingDir: string): Promise<number> {
     const existing = (await this.deps.storage.list()).filter(
       (schedule) => schedule.source === 'project' && sameWorkingDir(schedule.workingDir, workingDir),
     );
@@ -325,6 +378,23 @@ export class ProjectAutomationLoader {
       await this.deps.scheduler.delete(schedule.id);
     }
     return existing.length;
+  }
+
+  /** Keep file snapshots, validation, DB writes and deletion in the same project order. */
+  private async serializeProjectMutation<T>(workingDir: string, mutation: () => Promise<T>): Promise<T> {
+    const key = workingDirKey(workingDir);
+    const previous = this.mutationTails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const tail = previous.then(() => gate);
+    this.mutationTails.set(key, tail);
+    await previous;
+    try {
+      return await mutation();
+    } finally {
+      release();
+      if (this.mutationTails.get(key) === tail) this.mutationTails.delete(key);
+    }
   }
 
   private async readProjectAutomations(
@@ -390,10 +460,48 @@ export class ProjectAutomationLoader {
     }
   }
 
+  /** Best effort: restore only our own write, never a later edit seen after validation settles. */
+  private async restoreProjectAutomationsFile(
+    workingDir: string, read: CachedRead, writtenContent: string,
+  ): Promise<void> {
+    const filePath = path.join(workingDir, AUTOMATIONS_REL_PATH);
+    let tmpPath: string | undefined;
+    try {
+      if (read.kind !== 'loaded' && read.kind !== 'missing') return;
+      if (read.kind === 'loaded') {
+        tmpPath = `${filePath}.tmp.${randomUUID()}`;
+        await fs.writeFile(tmpPath, read.content, 'utf8');
+      }
+      // Compare raw bytes, not parsed configs: even a partial external edit must survive.
+      // Stage the restoration before this check so its I/O cannot hide a newer write.
+      if (await fs.readFile(filePath, 'utf8') !== writtenContent) return;
+      if (tmpPath) {
+        await fs.rename(tmpPath, filePath);
+      } else {
+        await fs.rm(filePath, { force: true });
+      }
+    } catch (restoreErr) {
+      // Deleting the file while validation was pending is also a later user decision.
+      if ((restoreErr as NodeJS.ErrnoException).code === 'ENOENT') return;
+      this.deps.logger.warn?.('[project-automation] restore after rejected save failed', {
+        workingDir,
+        error: restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
+      });
+    } finally {
+      this.cache.delete(path.resolve(workingDir));
+      if (tmpPath) await fs.rm(tmpPath, { force: true }).catch((cleanupErr: unknown) => {
+        this.deps.logger.warn?.('[project-automation] restore temp cleanup failed', {
+          workingDir,
+          error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+        });
+      });
+    }
+  }
+
   private async writeProjectAutomationsFile(
     workingDir: string,
     file: ProjectAutomationsFile,
-  ): Promise<void> {
+  ): Promise<string> {
     const filePath = path.join(workingDir, AUTOMATIONS_REL_PATH);
     const dir = path.dirname(filePath);
     await fs.mkdir(dir, { recursive: true });
@@ -401,6 +509,9 @@ export class ProjectAutomationLoader {
     const content = `${JSON.stringify(file, null, 2)}\n`;
     await fs.writeFile(tmpPath, content, 'utf8');
     await fs.rename(tmpPath, filePath);
+    // A read cached before this write (e.g. "no file yet") must not hide it.
+    this.cache.delete(path.resolve(workingDir));
+    return content;
   }
 
   private async listKnownWorkingDirs(): Promise<string[]> {
@@ -472,6 +583,7 @@ function scheduleConfigToCreateInput(
     recurring: config.recurring ?? true,
     manual: config.manual ?? false,
     intervalMs: config.intervalMs,
+    expireAt: config.expireAt,
     agentKind: config.agentKind ?? 'claude-code',
     // 恒带 key：配置删除显式选择后，reconcile 清除已保存的标记。
     modelAgentKind: config.modelAgentKind,
@@ -517,6 +629,7 @@ export function schedulesDiffer(
     schedule.recurring !== expected.recurring ||
     schedule.manual !== expected.manual ||
     schedule.intervalMs !== expected.intervalMs ||
+    schedule.expireAt !== expected.expireAt ||
     schedule.agentKind !== expected.agentKind ||
     schedule.modelAgentKind !== expected.modelAgentKind ||
     schedule.modelAgentDeviceId !== expected.modelAgentDeviceId ||
@@ -553,12 +666,12 @@ export const __testing = {
 };
 
 function sameWorkingDir(a: string | undefined, b: string): boolean {
-  if (!a) return false;
-  const left = path.resolve(a);
-  const right = path.resolve(b);
-  return process.platform === 'win32'
-    ? left.toLowerCase() === right.toLowerCase()
-    : left === right;
+  return !!a && workingDirKey(a) === workingDirKey(b);
+}
+
+function workingDirKey(workingDir: string): string {
+  const resolved = path.resolve(workingDir);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 function isProjectAutomationsFile(value: unknown): value is ProjectAutomationsFile {
@@ -588,6 +701,7 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
     optionalBoolean(config.recurring) &&
     optionalBoolean(config.manual) &&
     optionalNumber(config.intervalMs) &&
+    optionalNumber(config.expireAt) &&
     optionalAgentKind(config.agentKind) &&
     optionalAgentKind(config.modelAgentKind) &&
     (config.modelAgentDeviceId === undefined || (typeof config.modelAgentDeviceId === 'string' &&

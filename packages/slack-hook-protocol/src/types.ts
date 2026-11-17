@@ -230,6 +230,8 @@ export const HOOK_MESSAGE_TYPES = [
   'provider.bind.start',
   'provider.bind.cancel',
   'provider.bind.revoke',
+  'provider.bind.select',
+  'provider.bind.selection',
   'provider.bind.update',
   'provider.bind.state',
   'query.request',
@@ -860,7 +862,7 @@ export interface BindStatePayload {
  * capability — an old peer that does not know the new id never negotiates it,
  * and its parse rejects stray frames without dropping the connection.
  */
-export const HOOK_PROVIDERS = ['slack', 'telegram', 'x'] as const;
+export const HOOK_PROVIDERS = ['slack', 'telegram', 'x', 'feishu'] as const;
 export type HookProvider = (typeof HOOK_PROVIDERS)[number];
 
 /**
@@ -884,6 +886,8 @@ export type ProviderBindState = (typeof PROVIDER_BIND_STATES)[number];
 export const PROVIDER_BIND_ACTIONS = [
   'open_connect_url',
   'copy_connect_url',
+  'copy_bind_code',
+  'select_device',
   'cancel',
   'retry',
   'revoke',
@@ -915,12 +919,45 @@ export interface ProviderBindRevokePayload {
   bindingId: string;
 }
 
+export const PROVIDER_BIND_SELECT_TIMEOUT_MS = 10_000;
+
+/** Display-only working computer metadata; never grants binding/task authority. */
+export interface ProviderWorkingDevice { name: string | null; isCurrent: boolean }
+
+/** Select this confirmed binding as the working device; requires the select_device action. */
+export type ProviderBindSelectPayload = ProviderBindRevokePayload;
+/** Acknowledges only the requested selection; does not change any device’s binding state. */
+export interface ProviderBindSelectionPayload extends ProviderBindRevokePayload {
+  ok: boolean;
+  /** Also sent unsolicited to already-bound computers after a selection changes. */
+  workingDevice?: ProviderWorkingDevice;
+}
+
 /**
  * Shared payload for provider.bind.update and provider.bind.state. update is an
  * event/reply; state is an authoritative point-in-time snapshot for one scope.
  * All nullable fields are explicit so an old value cannot survive a snapshot.
  */
+export interface FeishuBotAppInfo {
+  appId: string;
+  brand: 'feishu' | 'lark';
+  appType: 'self_built' | 'store';
+  botName: string | null;
+  organization: string | null;
+  /** Feishu company display name for this application's tenant; omitted by older peers. */
+  tenantName?: string | null;
+}
+
+export interface FeishuApplicationState {
+  app: FeishuBotAppInfo;
+  bindings: ProviderBindStatusPayload[];
+}
+
 export interface ProviderBindStatusPayload {
+  /** Optional Feishu display state; absent on older servers and unconfirmed attempts. */
+  workingDevice?: ProviderWorkingDevice;
+  appInfo?: FeishuBotAppInfo;
+  applications?: FeishuApplicationState[];
   provider: HookProvider;
   /** Request id being answered, or null for an unsolicited state push. */
   replyTo: string | null;
@@ -933,6 +970,13 @@ export interface ProviderBindStatusPayload {
   scopeName: string | null;
   /** One-time provider deep link; present only while state=pending. */
   connectUrl: string | null;
+  /**
+   * One-time short code the user can send to the provider bot instead of
+   * opening connectUrl (Feishu / Lark fallback when web authorization is
+   * unavailable, e.g. users outside the app's tenant). Present only while
+   * state=pending; omitted by peers that predate the field.
+   */
+  bindCode?: string | null;
   /** Unix milliseconds; required for pending/awaiting_confirmation attempts. */
   expiresAt: number | null;
   /** Stable machine-readable reason; required for unsuccessful terminal states. */
@@ -940,6 +984,12 @@ export interface ProviderBindStatusPayload {
   /** Optional safe recovery/provider URL interpreted by the host application. */
   remediationUrl: string | null;
   actions: ProviderBindAction[];
+  /** Store-app multi-account snapshot, only after feishu-store-multi-bind-v1 negotiation. */
+  bindings?: ProviderBindStatusPayload[];
+  /** The exact additive attempt completed by this confirmation. */
+  completedAttemptId?: string;
+  /** Installation tenant, used to distinguish store accounts; not a global person identifier. */
+  tenantKey?: string | null;
 }
 
 export type ProviderBindUpdatePayload = ProviderBindStatusPayload;
@@ -966,6 +1016,12 @@ export interface QueryRequestPayload {
     options?: TaskDispatchOptions;
     source?: TaskSource;
   };
+  /**
+   * 收件身份: 由多个组织共用的服务(官方飞书)发出的查询代表哪个 IM 应用(`scopeId`)的哪个账号
+   * (`principalId`)。桌面端与本机已确认绑定的 `scopeId` / `principalId` 核对一致才回答。可选 ——
+   * 其它服务不发, 旧桌面端忽略。
+   */
+  recipient?: { scopeId: string; principalId: string };
 }
 
 /**
@@ -973,6 +1029,10 @@ export interface QueryRequestPayload {
  * group 是目录分组 id(如 'gpt' / 'gpt-budget'): 骨折版与官方版 displayName
  * 故意同名、仅靠分组区分, server 渲染下拉时据此加区分后缀, 否则出现两个
  * 一模一样的 "GPT-5.5"(线上实撞)。可选 —— 旧桌面端不发, server 视为无分组。
+ * provider 是提供这个模型的供应商的展示名(如 'Cindy AI' / 'OpenRouter'): 不同供应商
+ * 会提供同名模型, server 渲染选择卡时把它写在模型名前面。只用于展示, 不参与选择 ——
+ * 选中后回传的仍只有模型 id, 由桌面端按自己的规则决定走哪家。可选 —— 旧桌面端不发,
+ * server 只显示模型名。
  */
 export interface QueryModelEntry {
   id: string;
@@ -980,6 +1040,7 @@ export interface QueryModelEntry {
   efforts: string[];
   defaultEffort: string | null;
   group?: string | null;
+  provider?: string | null;
 }
 
 /**
@@ -1079,7 +1140,12 @@ export interface InteractionButton {
  * kind 是开放集合(当前 'ask_user_question' / 'plan_review'), server 只透传
  * 日志不理解语义 —— 新 kind 不需要 server 升级。
  */
+export const HOOK_FEATURE_IM_QUESTIONS = 'im-question-cards-v1';
+
 export interface InteractionRequestPayload {
+  /** Negotiated ordinary-question surface; updates reuse interactionId. */
+  questionMode?: 'blocking' | 'async';
+  questionCode?: string;
   /** 所属任务(server 据此定位回帖 thread 并校验归属)。 */
   requestId: string;
   /** 交互唯一标识(maker-core InteractionRequest.requestId), 决策配对键。 */
@@ -1097,6 +1163,8 @@ export interface InteractionRequestPayload {
  * 按钮->决策映射(语义不过网线)。迟到/未知的 decision 静默忽略。
  */
 export interface InteractionDecisionPayload {
+  /** Text answer to a requester-bound IM question; buttonId must be question:reply. */
+  answerText?: string;
   requestId: string;
   interactionId: string;
   buttonId: string;
@@ -1365,6 +1433,8 @@ export const HOOK_FEATURE_MULTI_TEAM = 'multi-team';
 
 /** Both peers must advertise this before using provider.bind.* frames. */
 export const HOOK_FEATURE_PROVIDER_BIND = 'provider-bind-v1';
+/** Additive Feishu identities for store apps only; both peers must advertise it. */
+export const HOOK_FEATURE_FEISHU_STORE_MULTI_BIND = 'feishu-store-multi-bind-v1';
 
 /** Both peers must advertise this before using provider.prefs.* frames. */
 export const HOOK_FEATURE_PROVIDER_PREFS = 'provider-prefs-v1';
@@ -1383,6 +1453,9 @@ export const HOOK_FEATURE_PROVIDER_TELEGRAM = 'provider:telegram';
 
 /** Server capability announcing that its provider registry enables X (Twitter). */
 export const HOOK_FEATURE_PROVIDER_X = 'provider:x';
+
+/** Server capability announcing that its provider registry enables Feishu / Lark. */
+export const HOOK_FEATURE_PROVIDER_FEISHU = 'provider:feishu';
 
 /**
  * server 支持 hello.lifecycleAnnouncement 与 lifecycle.preference,可由
@@ -1541,6 +1614,8 @@ export interface MessageOpPayload {
   requestId?: string;
   scope: MessageOpScope;
   action: MessageOpAction;
+  /** Required on turn-notice question cards; only async questions survive turn.end. */
+  questionMode?: 'blocking' | 'async';
   /**
    * 这次操作在 turn 里承担什么角色(可选; 缺席 = 普通独立操作, 与本字段出现前
    * 的语义逐字相同)。见 MessageOpPurpose。
@@ -1552,10 +1627,10 @@ export interface MessageOpPayload {
    * 同一规则), 且它是续跑锚点的候选。其余 purpose 不得携带。
    */
   finalPart?: number;
-  /** `purpose: 'interaction-card'` 时必填(parse 强制): 这张卡对应的 interactionId。 */
+  /** `purpose: 'interaction-card' | 'turn-notice'` 时必填: 这张卡对应的 interactionId。 */
   interactionId?: string;
   /**
-   * 只用于 `purpose: 'interaction-card'` 的 `edit`: 这是收口编辑(卡片已决 / 超时 /
+   * 只用于 `purpose: 'interaction-card' | 'turn-notice'` 的 `edit`: 这是收口编辑(卡片已决 / 超时 /
    * 撤销)。服务端执行编辑后作废这张卡全部回调映射, 迟到的点按不再转成 decision。
    */
   interactionClosed?: boolean;
@@ -1615,7 +1690,8 @@ export interface MessageOpPayload {
  * `MESSAGE_OP_ERROR_IDEMPOTENCY_CONFLICT`。所以回执未知时客户端必须原样重发
  * (同 opId 同正文), 不得沿用 opId 换正文。
  */
-export type MessageOpPurpose = 'turn-progress' | 'turn-final' | 'interaction-card';
+/** `turn-notice` sends and edits durable requester-bound question cards under HOOK_FEATURE_TELEGRAM_QUESTION_OPS. */
+export type MessageOpPurpose = 'turn-progress' | 'turn-final' | 'interaction-card' | 'turn-notice';
 
 /*
  * msg.op.result.errorCode: 服务端**自己**判定的拒绝(未调用 Bot API, 或调用结果
@@ -1688,6 +1764,26 @@ export const HOOK_FEATURE_TELEGRAM_PROGRESS_OPS = 'telegram-progress-ops-v1';
  * 服务端发送)。
  */
 export const HOOK_FEATURE_TELEGRAM_FINAL_OPS = 'telegram-final-ops-v1';
+
+/**
+ * 双向能力标识: 官方飞书 / Lark 的**进度卡**由 desktop 用与个人飞书 bot 同一份排版经
+ * msg.op 驱动(须同时协商 HOOK_FEATURE_MESSAGE_OPS)。形状沿用 `purpose: 'turn-progress'`
+ * 的 `send` / `edit`, 但 `action.text` 是序列化后的卡片 JSON(schema 2.0), 不带 `tier` 与
+ * 按钮。服务端只核验这一轮属于该设备、把卡片发在这一轮的回复位置并登记归属; 一轮只有
+ * 一张承载卡, 已存在时 `send` 原地更新它而不新建。turn.progress 照发(续期)。
+ * 缺席时进度照旧由服务端按 turn.progress 排版。
+ */
+export const HOOK_FEATURE_FEISHU_PROGRESS_OPS = 'feishu-progress-ops-v1';
+
+/**
+ * 双向能力标识: 官方飞书 / Lark **不带附件的成功终稿**由 desktop 排版并经
+ * `purpose: 'turn-final'` 的 `send` 发布(须同时协商 HOOK_FEATURE_MESSAGE_OPS)。
+ * `finalPart = 0` 是答案的第一张: 服务端把它落在这一轮已有的进度卡上(没有或改不了时
+ * 新发); `finalPart ≥ 1` 依次新发。`action.text` 同样是卡片 JSON。全部成功后 turn.end 带
+ * `clientFinal.complete = true`, 服务端不再排版; 否则服务端撤掉 desktop 另发的后续卡片并
+ * 照旧发布完整终稿。失败 / 取消 / 带附件的轮次始终由服务端发布。
+ */
+export const HOOK_FEATURE_FEISHU_FINAL_OPS = 'feishu-final-ops-v1';
 
 /**
  * 双向能力标识: 官方 Telegram 执行中交互卡(ask / plan / 权限)由 desktop 用与个人 bot
@@ -1969,6 +2065,8 @@ export type HookProviderBindRevokeMessage = HookEnvelope<
   'provider.bind.revoke',
   ProviderBindRevokePayload
 >;
+export type HookProviderBindSelectMessage = HookEnvelope<'provider.bind.select', ProviderBindSelectPayload>;
+export type HookProviderBindSelectionMessage = HookEnvelope<'provider.bind.selection', ProviderBindSelectionPayload>;
 export type HookProviderBindUpdateMessage = HookEnvelope<
   'provider.bind.update',
   ProviderBindUpdatePayload
@@ -2047,6 +2145,8 @@ export type HookMessage =
   | HookProviderBindStartMessage
   | HookProviderBindCancelMessage
   | HookProviderBindRevokeMessage
+  | HookProviderBindSelectMessage
+  | HookProviderBindSelectionMessage
   | HookProviderBindUpdateMessage
   | HookProviderBindStateMessage
   | HookProviderPrefsGetMessage
@@ -2063,3 +2163,9 @@ export type HookMessage =
 
 /** parseHookMessage 的结果 —— 不抛异常, 坏帧以 error 字符串描述具体原因。 */
 export type HookParseResult = { ok: true; message: HookMessage } | { ok: false; error: string };
+
+/** Multiple independently enabled Feishu apps on one connection; each app keeps its own identities. */
+export const HOOK_FEATURE_FEISHU_MULTI_APP = 'feishu-multi-app-v1';
+
+/** Durable requester-bound question cards in the originating lane, independent of turn cleanup. */
+export const HOOK_FEATURE_TELEGRAM_QUESTION_OPS = 'telegram-question-ops-v1';

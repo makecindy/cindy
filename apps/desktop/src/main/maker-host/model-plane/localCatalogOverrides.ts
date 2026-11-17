@@ -1,3 +1,4 @@
+import type { ModelImageInputCatalogModel } from '../../../shared/modelImageInputOverride.js';
 import {
   BUILTIN_PROVIDERS,
   validModelMetadata,
@@ -432,11 +433,21 @@ function entryRootAgents(entry: ModelCatalogOverrideEntry, providerId: string): 
   return policy.roots.filter((agent) => membership.includes(agent));
 }
 
-function overlayFields(model: CatalogModel, f: ModelCatalogOverrideFields): CatalogModel | string {
+function imageInputModalities(modalities: CatalogModel['modalities'], supported: boolean): CatalogModel['modalities'] {
+  if (!modalities) return modalities;
+  const input = modalities.input.filter(modality => modality !== 'image');
+  return { ...modalities, input: supported ? [...input, 'image'] : input };
+}
+
+function overlayFields(model: ModelImageInputCatalogModel, f: ModelCatalogOverrideFields, imageInputPatch = true): ModelImageInputCatalogModel | string {
   if (f.efforts?.length === 0 && f.defaultEffort !== undefined && f.defaultEffort !== null) {
     return 'local patch sets a defaultEffort for a fixed-effort model';
   }
-  let next: CatalogModel = {
+  const source = model.imageInputDefault ?? model;
+  const defaultModalities = f.modalities ?? source.modalities;
+  // Clearing the image patch retains other metadata and complete local additions.
+  const keepDefault = model.imageInputDefault !== undefined || (imageInputPatch && f.supportsImageInput !== undefined);
+  let next: ModelImageInputCatalogModel = {
     ...model,
     ...(f.name !== undefined ? { name: f.name } : {}),
     ...(f.group !== undefined ? { group: f.group } : {}),
@@ -452,17 +463,19 @@ function overlayFields(model: CatalogModel, f: ModelCatalogOverrideFields): Cata
     ...(f.efforts !== undefined ? { efforts: f.efforts } : {}),
     ...(f.defaultEffort !== undefined ? { defaultEffort: f.defaultEffort } : {}),
     ...(f.supportsFastMode !== undefined ? { supportsFastMode: f.supportsFastMode } : {}),
+    ...(keepDefault ? { imageInputDefault: {
+      supportsImageInput: !imageInputPatch && f.supportsImageInput !== undefined
+        ? f.supportsImageInput : source.supportsImageInput,
+      modalities: !imageInputPatch && f.supportsImageInput !== undefined
+        ? imageInputModalities(defaultModalities, f.supportsImageInput) : defaultModalities,
+    } } : {}),
     ...(f.supportsImageInput !== undefined ? { supportsImageInput: f.supportsImageInput } : {}),
     ...(f.status !== undefined
       ? { status: f.status === 'preview' ? ('alpha' as const) : f.status }
       : {}),
   };
   if (f.supportsImageInput !== undefined && next.modalities) {
-    const input = next.modalities.input.filter((modality) => modality !== 'image');
-    next = { ...next, modalities: {
-      ...next.modalities,
-      input: f.supportsImageInput ? [...input, 'image'] : input,
-    } };
+    next = { ...next, modalities: imageInputModalities(next.modalities, f.supportsImageInput) };
   }
   if (next.efforts.length === 0) next = { ...next, defaultEffort: null };
   else if (next.defaultEffort !== null && !next.efforts.includes(next.defaultEffort)) {
@@ -537,7 +550,7 @@ export function applyLocalConsumerOverrides(
   for (const section of ['additions', 'patches'] as const) {
     const entry = overrides[section][`${encodeURIComponent(providerId)}:${rootModelId}`];
     if (!entry || !entryMembershipAgents(entry, policyProviderId).includes(consumer)) continue;
-    const patched = overlayFields(out, effectiveFields(entry, consumer));
+    const patched = overlayFields(out, effectiveFields(entry, consumer), section === 'patches');
     if (typeof patched === 'string') {
       warnings.push({
         source: 'local',

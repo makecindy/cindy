@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { refreshCodexMcpEnvironment } from '../maker-ipc/codexMcpRefresh.js';
 
+// The live computer/android provider snapshot is covered through the real
+// createDesktopMcpProviders entry in collabSendOutcome.test.ts, not source text.
 describe('computer use plugin IPC invariants', () => {
   it('stops the shared Codex host before shutting down its MCP bridge', async () => {
     const calls: string[] = [];
@@ -80,57 +82,9 @@ describe('computer use plugin IPC invariants', () => {
     expect(onDeferred).toHaveBeenCalledOnce();
   });
 
-  it('returns the non-blocking refresh result after global plugin persistence', () => {
-    const registerSource = fs.readFileSync(
-      path.resolve(__dirname, '../maker-ipc/register.ts'),
-      'utf-8',
-    );
-    const setEnabledStart = registerSource.indexOf(
-      'ipcMain.handle(MAKER_INVOKE.PLUGINS_SET_ENABLED',
-    );
-    const clearEnabledStart = registerSource.indexOf(
-      'ipcMain.handle(MAKER_INVOKE.PLUGINS_CLEAR_ENABLED',
-    );
-    expect(setEnabledStart).toBeGreaterThanOrEqual(0);
-    expect(clearEnabledStart).toBeGreaterThan(setEnabledStart);
-
-    const setEnabledBody = registerSource.slice(setEnabledStart, clearEnabledStart);
-    const clearEnabledEnd = registerSource.indexOf(
-      'registerProjectPluginPolicyHandlers',
-      clearEnabledStart,
-    );
-    expect(clearEnabledEnd).toBeGreaterThan(clearEnabledStart);
-    const clearEnabledBody = registerSource.slice(clearEnabledStart, clearEnabledEnd);
-
-    for (const body of [setEnabledBody, clearEnabledBody]) {
-      expect(body).toContain('GLOBAL_PLUGIN_IDS.has(id)');
-      expect(body).toContain("id !== 'browser'");
-      expect(body).toContain('await getPluginRegistry()');
-      expect(body).toContain('return { codexMcpRefreshed: true };');
-      expect(body).toContain('return refreshCodexMcpEnvironment({');
-      expect(body.indexOf('await getPluginRegistry()')).toBeLessThan(
-        body.indexOf('GLOBAL_PLUGIN_IDS.has(id)'),
-      );
-      expect(body.indexOf('GLOBAL_PLUGIN_IDS.has(id)')).toBeLessThan(
-        body.indexOf('return refreshCodexMcpEnvironment({'),
-      );
-      expect(body).not.toContain('await shutdownCodexEnvironment();');
-    }
-  });
-
-  it('preserves the live Codex bridge plugin gate while refresh is deferred', () => {
-    const providersSource = fs.readFileSync(
-      path.resolve(__dirname, '../mcp-integrations/mcp-providers.ts'),
-      'utf-8',
-    );
-
-    expect(providersSource).toContain(
-      "context?.agentKind === 'codex' || pluginRegistry.isEnabled('android')",
-    );
-    expect(providersSource).toContain(
-      "context?.agentKind === 'codex' || pluginRegistry.isEnabled('computer')",
-    );
-  });
+  // Enable/clear persistence and refresh results now run through the actual IPC
+  // handlers in maker-ipc/__tests__/pluginEnableHandlers.test.ts and the Pi HTTP
+  // bridge regression. The former source-layout assertion is no longer needed.
 
   it('keeps the @ desktop-window gate machine-scoped', () => {
     const registerSource = fs.readFileSync(
@@ -328,15 +282,8 @@ describe('computer use platform copy invariants', () => {
       'utf-8',
     );
     expect(sectionSource).toContain("nextStatus.permissionState?.platform === 'macos'");
-    const macPermissionBlockStart = sectionSource.indexOf(
-      "{window.electronAPI.platform === 'darwin' ? (",
-    );
-    const permissionTitle = sectionSource.indexOf(
-      "t('settings.computerUse.directControl.permissions.title')",
-      macPermissionBlockStart,
-    );
-    expect(macPermissionBlockStart).toBeGreaterThanOrEqual(0);
-    expect(permissionTitle).toBeGreaterThan(macPermissionBlockStart);
+    // Actual permission-row visibility is verified by the component tests in
+    // ComputerUseSection.driverUpdate.test.tsx, independent of translation syntax.
 
     for (const locale of ['en', 'ja', 'ko', 'zh-CN']) {
       const messages = JSON.parse(

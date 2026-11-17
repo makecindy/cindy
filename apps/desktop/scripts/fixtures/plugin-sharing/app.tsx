@@ -5,7 +5,7 @@ import i18next from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
-import 'harmonyos-sans-sc-webfont-splitted';
+import '@/styles/cjk-webfont.css';
 import '@/styles/globals.css';
 import '@/themes/colors';
 import { themeService } from '@/themes/theme-service';

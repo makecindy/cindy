@@ -1,4 +1,4 @@
-import { buildUserProvider, BUNDLED_CATALOG } from '@cindy/model-providers';
+import { buildUserProvider, BUNDLED_CATALOG, DEFAULT_CUSTOM_CONTEXT_WINDOW } from '@cindy/model-providers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
@@ -9,6 +9,7 @@ import {
   customProviderModelConfigFromCatalogModel,
   customProviderWireProtocolForSave,
   deleteCustomProvider,
+  fetchCustomProviderModelsForRefresh,
   piCatalogProviderIdAfterRouteEdit,
   providerViewToCustomProviderConfig,
   readCustomProviderKey,
@@ -19,8 +20,114 @@ import type {
   ProviderRuntimeModelConfig,
   ProviderView,
 } from '@cindy/model-providers';
+import { fetchProviderModels, buildModelsFetchRequest } from '../../../main/maker-host/provider-model-fetch';
+import { acceptsModelSourceSnapshot, modelSourceRequestSignature } from '../../../main/maker-host/model-source-snapshots';
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('saved Hinoki refresh batch', () => {
+  const agents = ['claude-code', 'codex', 'pi'] as const;
+  function fixture() {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'hinoki')!;
+    const raw = { id: 'saved-hinoki', name: 'Hinoki', runtimes: structuredClone(preset.runtimes) };
+    const provider = { ...buildUserProvider(raw, { presets: [preset] }), connected: true } as ProviderView;
+    expect(provider.agents).toEqual(expect.arrayContaining([...agents]));
+    return { provider, config: providerViewToCustomProviderConfig(provider) };
+  }
+  function bridge(read: (key: string) => Promise<string | null>, transport: typeof fetch) {
+    const ipc = vi.fn(input => fetchProviderModels(input, transport));
+    vi.stubGlobal('window', { electronAPI: { safeStorageRead: read, maker: { fetchProviderModels: ipc } } });
+    return ipc;
+  }
+  it('waits for all saved keys, then shares one HTTP read with independent agent receipts', async () => {
+    const { provider, config } = fixture();
+    let release!: () => void;
+    const keyGate = new Promise<void>(resolve => { release = resolve; });
+    const read = vi.fn(async key => {
+      if (key === customProviderSecretStorageKey(provider.id, 'pi')) await keyGate;
+      return 'fake-hinoki-key';
+    });
+    // Synthetic provenance-marker response, not a claimed Hinoki API payload.
+    const transport = vi.fn(async () => new Response(JSON.stringify({ data: [{
+      id: 'future-model', owned_by: 'fake-source', magpie_label: 'Model · fake-source',
+    }] })));
+    const ipc = bridge(read, transport);
+    const pending = fetchCustomProviderModelsForRefresh(provider, config);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+    expect(ipc).not.toHaveBeenCalled();
+    release();
+    const results = (await pending)!;
+    expect(ipc).toHaveBeenCalledTimes(3);
+    expect(transport).toHaveBeenCalledOnce();
+    const snapshots = new Set<string>();
+    for (const { agent, result } of results) {
+      expect(result.ok).toBe(true);
+      const model = result.models![0]; snapshots.add(model.discoverySnapshotId!);
+      const request = ipc.mock.calls.find(([input]) => input.agent === agent)![0];
+      expect(request).toMatchObject({ savedProviderId: provider.id, apiKey: 'fake-hinoki-key', wireProtocol: 'openai-chat' });
+      const { url, init } = buildModelsFetchRequest(request);
+      const signature = modelSourceRequestSignature(url, init);
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'new', agent, signature)).toBe(true);
+      expect(acceptsModelSourceSnapshot(model.id, model.discoveredSource, 'new', agents.find(a => a !== agent)!, signature)).toBe(false);
+    }
+    expect(snapshots.size).toBe(3);
+    expect(results[0].result.models).not.toBe(results[1].result.models);
+    // A later user refresh is a fresh read, not a completed response cache.
+    await fetchCustomProviderModelsForRefresh(provider, config);
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+  it('keeps distinct saved keys separate at the real Main discovery entry', async () => {
+    const { provider, config } = fixture();
+    const transport = vi.fn<typeof fetch>(async () => new Response('{"data":[{"id":"future-model"}]}'));
+    bridge(async storageKey => 'fake-' + storageKey, transport);
+    const results = (await fetchCustomProviderModelsForRefresh(provider, config))!;
+    expect(results.every(r => r.result.ok)).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(3);
+    expect(new Set(transport.mock.calls.map(([, init]) => new Headers(init?.headers).get('authorization'))).size).toBe(3);
+  });
+  it.each(['network', 'http', 'json', 'business', 'empty'] as const)
+  ('preserves %s results and allows the next refresh to recover', async kind => {
+    const { provider, config } = fixture(); let recovered = false;
+    const transport = vi.fn(async () => {
+      if (recovered) return new Response('{"data":[{"id":"recovered"}]}');
+      if (kind === 'network') throw new TypeError('controlled network failure');
+      return new Response(kind === 'json' ? 'invalid-json' : kind === 'business'
+        ? '{"error":"fake invalid key","data":[]}' : '{"data":[]}', { status: kind === 'http' ? 401 : 200 });
+    });
+    bridge(async () => 'fake-hinoki-key', transport);
+    const results = (await fetchCustomProviderModelsForRefresh(provider, config))!;
+    expect(transport).toHaveBeenCalledOnce();
+    expect(results.every(r => r.result.ok === (kind === 'empty'))).toBe(true);
+    if (kind === 'empty') expect(results.map(r => r.result.models)).toEqual([[], [], []]);
+    if (kind === 'http') expect(results.every(r => r.result.status === 401)).toBe(true);
+    recovered = true;
+    expect((await fetchCustomProviderModelsForRefresh(provider, config))!.every(r => r.result.ok)).toBe(true);
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+  it('leaves changed directory views and other suppliers on their existing caller path', async () => {
+    for (const modelsUrl of ['https://inference.hinoki.security/v1/models?view=chat', 'https://other.example/v1/models']) {
+      const { provider, config } = fixture();
+      for (const rt of Object.values(config.runtimes)) rt!.modelsUrl = modelsUrl;
+      const read = vi.fn(); const ipc = vi.fn();
+      vi.stubGlobal('window', { electronAPI: { safeStorageRead: read, maker: { fetchProviderModels: ipc } } });
+      expect(await fetchCustomProviderModelsForRefresh(provider, config)).toBeNull();
+      expect(read).not.toHaveBeenCalled(); expect(ipc).not.toHaveBeenCalled();
+    }
+  });
+  it('leaves native OAuth on its existing caller path without reading an API key', async () => {
+    const { provider, config } = fixture(); provider.auth = { method: 'oauth', native: 'claude' };
+    const read = vi.fn(); const ipc = vi.fn();
+    vi.stubGlobal('window', { electronAPI: { safeStorageRead: read, maker: { fetchProviderModels: ipc } } });
+    expect(await fetchCustomProviderModelsForRefresh(provider, config)).toBeNull();
+    expect(read).not.toHaveBeenCalled(); expect(ipc).not.toHaveBeenCalled();
+  });
+  it('does not start partial discovery if a stored key cannot be read', async () => {
+    const { provider, config } = fixture(); const transport = vi.fn();
+    bridge(async key => { if (key === customProviderSecretStorageKey(provider.id, 'pi')) throw new Error('controlled key read failure'); return 'fake-key'; }, transport);
+    await expect(fetchCustomProviderModelsForRefresh(provider, config)).rejects.toThrow('controlled key read failure');
+    expect(transport).not.toHaveBeenCalled();
+  });
 });
 
 describe('piCatalogProviderIdAfterRouteEdit', () => {
@@ -224,7 +331,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
       customProviderModelConfigFromCatalogModel({
         id: 'default-context',
         name: 'Default Context',
-        contextWindow: 200_000,
+        contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
       }),
     ).toEqual({
       id: 'default-context',
@@ -246,21 +353,34 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
     });
   });
 
-  it('preserves an explicit override equal to the current default (explicit flag wins)', () => {
-    // 用户显式填了 200000:值恰好等于当前默认,但显式覆盖必须在未来默认升级后
-    // 原样保留——不能靠等值推断丢掉字段(PR review P1)。
+  it.each([200_000, 500_000])('preserves an explicit %i override across default changes', contextWindow => {
     expect(
       customProviderModelConfigFromCatalogModel({
         id: 'pinned-default',
         name: 'Pinned',
-        contextWindow: 200_000,
+        contextWindow,
         contextWindowExplicit: true,
       }),
     ).toEqual({
       id: 'pinned-default',
       name: 'Pinned',
-      contextWindow: 200_000,
+      contextWindow,
     });
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('keeps materialized defaults sparse through the %s edit round trip', agent => {
+    for (const contextWindow of [200_000, 500_000]) {
+      const model = { id: 'private-default', name: 'Private', contextWindow, contextWindowExplicit: false };
+      const saved = customProviderModelConfigFromCatalogModel(model, agent);
+      expect(saved).toEqual({ id: model.id, name: model.name });
+      const rebuilt = buildUserProvider({
+        id: 'round-trip', name: 'Round Trip',
+        runtimes: { [agent]: { baseUrl: 'https://private.example/v1', wireProtocol: 'openai-chat', models: [saved] } },
+      }).models[agent]![0];
+      expect(rebuilt.contextWindow).toBe(500_000);
+      expect(rebuilt.contextWindowExplicit).toBeUndefined();
+      expect(model.contextWindow).toBe(contextWindow);
+    }
   });
 
   it('preserves hidden defaults while round-tripping catalog models', () => {
@@ -268,7 +388,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
       customProviderModelConfigFromCatalogModel({
         id: 'discovered',
         name: 'Discovered',
-        contextWindow: 200_000,
+        contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
         defaultEnabled: false,
       }),
     ).toEqual({
@@ -283,7 +403,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
       customProviderModelConfigFromCatalogModel({
         id: 'vision-model',
         name: 'Vision Model',
-        contextWindow: 200_000,
+        contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
         supportsImageInput: true,
       }),
     ).toEqual({
@@ -298,7 +418,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
       customProviderModelConfigFromCatalogModel({
         id: 'glm-5.3',
         name: 'GLM-5.3',
-        contextWindow: 200_000,
+        contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
         route: {
           baseUrl: 'https://open.bigmodel.cn/api/v1',
           wireProtocol: 'openai-responses',
@@ -318,7 +438,7 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
     const catalogModel = {
       id: 'reasoner',
       name: 'Reasoner',
-      contextWindow: 200_000,
+      contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
       efforts: ['low', 'high', 'xhigh'] as CatalogModel['efforts'],
       defaultEffort: 'xhigh' as const,
     };
@@ -439,7 +559,7 @@ describe('providerViewToCustomProviderConfig', () => {
           {
             id: 'local-model',
             name: 'Local Model',
-            contextWindow: 200_000,
+            contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
             efforts: [],
             defaultEffort: null,
           },
@@ -485,7 +605,7 @@ describe('providerViewToCustomProviderConfig', () => {
           {
             id: 'glm-5.3',
             name: 'GLM-5.3',
-            contextWindow: 200_000,
+            contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
             efforts: [],
             defaultEffort: null,
             route: {
@@ -572,7 +692,7 @@ describe('providerViewToCustomProviderConfig', () => {
           {
             id: 'reasoner',
             name: 'Reasoner',
-            contextWindow: 200_000,
+            contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
             efforts: ['low', 'high', 'xhigh'],
             defaultEffort: 'high',
           },

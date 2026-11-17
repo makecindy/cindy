@@ -7,6 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DbSlimmingStartupProgress } from '../../../../shared/localDbMaintenance';
+import {
+  initialDownloadProgress,
+  type DownloadProgress,
+} from '../../../../shared/downloadProgress';
 
 /**
  * SplashScreen wave4 统一面板版测试(implementation-plan Step 3b WHAT1/WHAT3)。
@@ -28,6 +32,7 @@ const mocks = vi.hoisted(() => ({
       speed?: string;
       downloaded?: string;
       total?: string;
+      download?: DownloadProgress;
     },
     resetSignal: 0,
     tipsText: null as string | null,
@@ -235,6 +240,91 @@ describe('SplashScreen wave4 统一面板', () => {
     expect(stats.textContent).toContain('24.8 MB');
     expect(stats.textContent).toContain('65.3 MB');
   });
+
+  // #9564: existing cases only supplied integers. Exercise the real component's
+  // visible label with Linux fallback telemetry; keep the underlying bar precise.
+  it.each(['splash_downloading', 'splash_updating'])(
+    '%s: rounds fractional percentage text without changing transfer details',
+    (phase) => {
+      mocks.splash.downloadProgress = 8.181846572494996;
+      mocks.splash.downloadInfo = {
+        progress: 8.181846572494996,
+        speed: '411.2 KB/s',
+        downloaded: '8.5 MB',
+        total: '103.5 MB',
+      };
+      renderSplash(phase);
+
+      const stats = screen.getByTestId('splash-progress-stats');
+      expect(stats.textContent).toBe('8%·411.2 KB/s·8.5 MB / 103.5 MB');
+      expect(parseFloat(screen.getByTestId('splash-progress-fill').style.width)).toBeCloseTo(
+        8.181846572494996,
+        4,
+      );
+    },
+  );
+
+  // Regression (2026-11-17): a retry left the bar frozen with stale speed and no reason.
+  it.each<[Partial<DownloadProgress>, string]>([
+    [
+      { phase: 'retrying', retryReason: 'slow', attempt: 2 },
+      '42%·downloadProgress.retry.slow·downloadProgress.attempt',
+    ],
+    [{ phase: 'verifying' }, '42%·downloadProgress.phase.verifying'],
+    [
+      { phase: 'downloading', speedBps: 1024, etaSeconds: 30 },
+      '42%·411.2 KB/s·8.5 MB / 20 MB·downloadProgress.eta',
+    ],
+  ])('explains the shared download phase on the stats line: %o', (download, label) => {
+    mocks.splash.downloadProgress = 42;
+    mocks.splash.downloadInfo = {
+      progress: 42,
+      speed: '411.2 KB/s',
+      downloaded: '8.5 MB',
+      total: '20 MB',
+      download: { ...initialDownloadProgress('downloading', 100), percent: 42, ...download },
+    };
+    renderSplash('splash_downloading');
+    expect(screen.getByTestId('splash-progress-stats').textContent).toBe(label);
+  });
+
+  it.each<[number, string]>([
+    [0, '0%'],
+    [38, '38%'],
+    [100, '100%'],
+    [-1, '0%'],
+    [101, '100%'],
+    [Number.NaN, '0%'],
+    [Number.POSITIVE_INFINITY, '0%'],
+  ])('keeps percentage text finite and bounded for %s', (progress, label) => {
+    mocks.splash.downloadProgress = progress;
+    renderSplash('splash_downloading');
+    expect(screen.getByTestId('splash-progress-stats').textContent).toBe(label);
+  });
+
+  // PR #9566: rounding 99.5 must not announce completion before the transfer does.
+  it.each(['splash_downloading', 'splash_updating'])(
+    '%s: reserves 100 percent for completed progress',
+    (phase) => {
+      mocks.splash.downloadProgress = 99.5;
+      const { rerender } = renderSplash(phase);
+
+      for (const [progress, label] of [
+        [99.5, '99%'],
+        [99.999, '99%'],
+        [100, '100%'],
+      ] as const) {
+        mocks.splash.downloadProgress = progress;
+        rerender(<SplashScreen />);
+
+        expect(screen.getByTestId('splash-progress-stats').textContent).toBe(label);
+        expect(parseFloat(screen.getByTestId('splash-progress-fill').style.width)).toBeCloseTo(
+          progress,
+          4,
+        );
+      }
+    },
+  );
 
   it('update_done:统一面板 + 现网 updateDone 文案 + spinner(379:607 样式)', () => {
     renderSplash('splash_update_done');

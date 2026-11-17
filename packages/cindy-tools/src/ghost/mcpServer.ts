@@ -3,6 +3,7 @@ import { GHOST_MANIFEST_SUMMARY_MAX_CHARS } from "@cindy/plugin-protocol";
 import { z } from "zod";
 
 import type {
+  CindyEvaluateToolRequest,
   CindyForgeScaffoldTemplate,
   CindyGhostInfo,
   CindyGhostSetupAllowedAction,
@@ -33,13 +34,14 @@ const ghostNamespaceInput = z
   .union([z.string().min(1).max(128), z.null()])
   .optional()
   .describe(
-    '插件企业身份。字符串为企业 orgSlug。JSON null（不带引号）表示已确认 root；字符串 "null" 表示名为 null 的企业，不是 root。按发现结果保留类型，不要把 null 转成字符串。候选里没有 namespace 字段的待迁移旧安装也会标成 null，旁边还有另一个同名实例且没有已确认 root 时，传 null 会选中那份旧安装。省略时仅当同名实例唯一才兼容解析；多个同名实例返回 GHOST_AMBIGUOUS 并列出候选。',
+    '插件身份。local 为本地开发副本，其它字符串为企业 orgSlug。JSON null（不带引号）表示已确认 root；字符串 "null" 是企业名。按发现结果保留类型。省略时，同名 public/local 副本选择可用的较新版本，同版本选 public；其它同名多实例仍返回 GHOST_AMBIGUOUS。显式 namespace 精确寻址，不自动换源。候选里未提供 namespace 的待迁移旧安装也会标成 null；没有已确认 root 且存在同名实例时，null 可选择该待迁移安装。',
   );
 
 const D_GHOST_LIST = [
   "列出用户当前已安装并启用、提供工具或手册的插件(Ghost)。",
   "插件是扩展 Cindy 能力的 .cindy 能力包,可能由 Cindy 内置或由用户安装;",
   "清单是实时的:用户随时可能安装/卸载/启用/停用插件。",
+  "同名 public/local 副本只列可用的较新版本，同版本列 public；企业与身份未确认的旧安装保持独立。",
   "完全没有目标 id/名称/指令/花名册命中时才用本工具获取全量清单;它的保底价值是实时性,能发现会话中途的插件变动,system 段快照看不到的以本工具为准。",
   "已经从花名册、用户点名或上文知道 ghost_id、但没有现成工具清单时,直接用 ghost_info 精准查询,不要先拉全量清单。",
   "若用户消息的[插件指令]已附带目标插件工具清单,可直接 ghost_call 免查。",
@@ -61,7 +63,7 @@ const D_GHOST_INFO = [
   "按 ghost_id 精准查询单个当前可用插件的完整详情,包括工具说明/参数 schema、setup 与召回线索。花名册命中即满足已知目标条件。",
   "已经从花名册、用户点名或上文知道目标插件、但没有现成工具清单时直接用本工具;完全没有目标线索时才用 ghost_list。",
   "若用户消息的[插件指令]已附带目标插件工具清单,可直接 ghost_call 免查。",
-  "返回单条完整形态:id、namespace(null=root，字符串=企业 orgSlug)、name、command、recall、setup、tools 与可选 manual 轻量索引。示例:ghost_info({ghost_id:\"helper\", namespace:\"acme\"})；省略 namespace 仅当同名实例唯一。拿到目标工具后用 ghost_call,需要长文时用 ghost_manual。",
+  "返回单条完整形态:id、namespace(null=root，local=本地，其它字符串=企业 orgSlug)、name、command、recall、setup、tools 与可选 manual 轻量索引。示例:ghost_info({ghost_id:\"helper\", namespace:\"acme\"})；省略 namespace 时，同名 public/local 选可用的较新版本，同版本选 public；其它多实例须明确身份。拿到目标工具后用 ghost_call,需要长文时用 ghost_manual。",
   "tools 可能为空:Manual-only 插件仍返回完整详情与 manual 索引,通过 ghost_manual 读取;这不授予任何 ghost_call 工具能力。",
   "查询实时反映安装、启用、账号与当前工作目录状态,不要缓存或依赖会话早前的结果。",
   "GHOST_NAMESPACE_MISMATCH 表示插件已安装但 namespace 不匹配；按返回身份核对并修正参数，保留 JSON 类型，不能据此判断插件已卸载或自动改选其他实例。",
@@ -126,9 +128,12 @@ const D_MEDIA = [
   "查看图片供自己分析不等于把图片发给用户；用户要求查看成果时，应在回复中展示可交付图片，不能仅说「已发送」或只给本机路径。用户反馈打不开时，根据工具结果检查或重新导入已知原文件，不要反复发送同一失效地址；原文件不在上下文中时才询问文件来源。不得自行拼接 hash、冒用其它沙盒地址或把导入成功说成手机已经下载。",
   "生成新图片或视频时，插件负责场景语义和可选 UI，Core 负责模型调用与媒体交付。Agent 先调用插件工具，读取插件返回的普通 JSON，再自行调用本工具；不存在 mediaIntent 等保留结果格式，Host 也不会自动把插件结果转成本工具调用。",
   "如果插件需要消费最终结果，Agent 可在本工具成功后再调用插件声明的普通工具，并通过 ghost_call.attachments 显式交接；这不是生成请求的必经步骤。",
-  "模型存在性来自当前账号的 Model Access model group；list_models 只投影同时满足 Gateway modalities、Guide operation 与当前客户端协议支持度的可执行模型。",
+  "list_models 使用 Cindy AI 与用户自带连接共用的媒体目录，自带模型按媒体声明及可见性呈现，不预读 Guide。清单为空时，先用 cindy_helper.list_model_providers 核对目标连接是否停用、实际 runtime 是否声明媒体 mode/modalities，需要时通过 configure_model_connection 补齐；不要直接判断上游不支持，也不要为了出现候选而开启 Cindy AI。",
   "媒体生成必须由当前 Agent 通过本工具发起；插件面板和插件沙箱代码不得直接提交生成请求。",
-  "插件已返回用户配置的 model_id/provider_id 时必须原样传给 prepare，再按目标 capability 走 prepare → request；provider_id 用于区分不同 Provider 下的同名模型。没有已配置模型时，先用 list_models 查询。Gateway 模型的 prepare 会由 Server 根据 model_id 返回 Guide，并在 Guide 不存在或不支持该 capability 时明确报错。",
+  "插件已返回用户配置的 model_id/provider_id 时原样传给 prepare；指定了 source_agent 时也须原样保留。同名多连接返回 CONNECTION_AMBIGUOUS 时请用户选择实际连接。每次 prepare 按需获取 Guide，自定义优先、官方后备，随后固定快照。缺失时用 cindy_helper.manage_media_guide 根据用户提供的文档、cURL 或提示 validate/save，不要求用户写 JSON，也没有加载/重载。",
+  "配置、验证调用和附件交接都走当前任务的 Ask/Auto/完全访问权限；不得用 shell/raw HTTP 或切换权限绕过。自定义契约被上游明确拒绝时，先核对参数，可用同一 provider/model/source_agent、guide_source=official 新 prepare 尝试官方；不暗换 host、凭证或计费账号，不循环后备。只有实际媒体交付才可报告接入验证成功。",
+  "根据返回的 HTTP 状态、脱敏错误和任务状态自行判断原因及下一步。鉴权、额度或限流问题按连接/账号的既有流程处理；接口契约不适配才考虑官方 Guide 或请用户补资料。Core 不替你做业务错误分类或自动重试。",
+  "原调用已经提交但 Guide 提错任务编号、状态或媒体字段时，补好 Guide 后为原 provider/model/source_agent 重新 prepare，并传 source_invocation_id=原付费调用。prepare 固定新 Guide 并复用原回执，随后直接按 next_action 调 request（body={}，只交付已有结果）或 poll，不再提交生成。旧 Guide 快照不变；原回执缺失时说明无法恢复，不自动重新生成。所有调用和交接仍走当前任务权限。",
   "异步任务的 request 返回 pending 时，再按 recommended_poll_after_ms 调 poll；同步任务会直接返回 xdt_image_urls / xdt_video_urls。",
   "Core 图片完成结果由当前 Agent 控制呈现：在最终回复中用返回的受管地址只嵌入展示一次，不要同时重复口播或再次附同一图片。",
   "生成结果返回受管媒体地址和元数据，不会自动把图片送给模型。是否查看图片或视频由 Agent 按任务需要决定；需要查看时先用 resolve_local_path 取得路径，再使用已有的文件查看或分析工具。",
@@ -137,6 +142,25 @@ const D_MEDIA = [
   "模型 id、endpoint、Authorization 和 wire model 均由 Host 管理，不要写进 body，不要猜测或覆盖。",
   "Guide 缺失、能力不匹配或当前客户端不支持协议时，结果会带稳定 errorCode、retryable、outcomeKnown 和 allowedActions；可按 allowedActions 换模型、改用其它已授权工具或仍存在的旧链路，不要把 INTERNAL 当成协议能力结论。",
   "prepare 返回的 invocation_id 是一次性付费提交令牌；request 超时或返回 SUBMISSION_OUTCOME_UNKNOWN 时不要自动重提，以免重复扣费。",
+].join("\n");
+
+// Usage, billing and retry lines are repeated on purpose: each description must stand alone.
+const D_EVALUATION_BILLING = "每次调用都会使用用户的 Cindy AI 额度，结果附带估算费用 estimated_cost（缺少价格时为 null）；请求超时或返回 outcomeKnown=false 时不要自动重提，以免重复扣费。";
+const D_EVALUATION_MODELS = "先用 action=list_models 查可用模型，结果同时说明返回字段的含义；model_id、provider_id 用它返回的值。";
+
+const D_DECISIONS = [
+  "调用决策模型，对 state 中的材料回答是否题、单选、等级评分和图片框选，只返回概率、选项、分数或坐标，不生成文字或理由。",
+  "仅在用户明确要求使用决策模型，或需要把概率、分数作为数据交付（例如给一批材料逐条打标签、写入表格）时使用。其他判断由 Agent 自己完成，包括用户直接提出的问题，以及工作中的理解意图、选择做法、检查结果对不对、决定下一步；不要把这些判断交给本工具，也不要先调用本工具再根据分数决定。",
+  D_EVALUATION_BILLING,
+  D_EVALUATION_MODELS,
+  "图片放在 state 顶层数组的 image_url.url，传受管地址或本机路径，不要自行转 Base64。",
+].join("\n");
+
+const D_RERANK = [
+  "调用重排模型，按 query 给 documents 中的每段文本打相关度分数，只返回分数和下标，不生成文字。",
+  "仅在用户明确要求使用重排模型，或需要把相关度分数作为数据交付时使用。Agent 自己阅读材料、挑选相关内容、决定引用哪些段落时直接自己判断；不要把这些判断交给本工具，也不要先调用本工具再根据分数决定。",
+  D_EVALUATION_BILLING,
+  D_EVALUATION_MODELS,
 ].join("\n");
 
 const D_GHOST_FORGE_GUIDE = [
@@ -153,6 +177,7 @@ const D_GHOST_FORGE_SCAFFOLD = [
   "template 可选:plain(普通沙箱工具)、agent-action(卡片点击后让 Agent 继续/分叉/新建)、",
   "node-json-rpc(普通随包 Node 服务)、node-mcp(随包 stdio MCP)。Node 模板只写零依赖示例",
   "源码，不会执行 npm install / npx / postinstall。生成后按需求修改，再调用 ghost_forge_pack。",
+  "骨架不生成占位图或预填 icon；请用户提供图标，或经用户同意后生成，见手册 §7.1。",
   "四种模板均可叠加 withUi:true，生成标准 MCP Apps 交互页面和 main.js 工具；不需要页面构建。参见 §4.23。",
   "骨架不自动填写 ghost.json.releaseNotes；首次上架可省略，后续更新须补写相对上一已上架版本完整变化的纯文本说明，见 ghost_forge_guide 的第 2、7.3 章。",
   "会话工作目录内直接生成；工作目录外(例如相邻 worktree)走当前会话权限:",
@@ -162,13 +187,13 @@ const D_GHOST_FORGE_SCAFFOLD = [
 const D_GHOST_FORGE_PACK = [
   "把一个插件源码目录校验并打包成 .cindy。只生成产物，不安装或更新插件。",
   "缺省只打包并返回产物路径；intent=publish 时额外返回一次性 publishToken。",
-  "intent=publish 仅企业组织成员可用；个人账号仍可使用缺省的纯打包模式。",
+  "intent=publish 仅企业组织成员可用，用于发布到当前组织；公开市场投稿走 §7.3，个人账号仍可使用缺省的纯打包模式。",
   "releaseNotes 若填写须为 ghost.json 顶层纯文本；缺字段仍可打包、安装；首次上架可省略，曾上架插件的后续提审必须非空。打包成功不代表通过发布预检，个人发布从已安装实例走 ghost_contribution_prepare，见手册 §7.3。",
   "dir 传源码目录的绝对路径(目录里须有 ghost.json;打包自动跳过 .git / node_modules /",
   "隐藏文件 / *.cindy)。会话工作目录内直接打包；工作目录外走当前会话权限",
   "(本地 Full Access 自动放行,Auto 交审阅,Ask 向用户确认),不要因此改换目录或空转重试。",
   "仅当用户明确选择 AI 生成图标时,可把图片工具结果的",
-  "xdt_image_url 取单张地址；若只有 xdt_image_urls 则取数组第一项，再把得到的 cindy-media:// 地址传给 icon_source;主机会 best-effort 嵌入,失败保留默认图标继续打包。",
+  "xdt_image_url 取单张地址；若只有 xdt_image_urls 则取数组第一项，再把得到的 cindy-media:// 地址传给 icon_source;主机会 best-effort 嵌入，失败时保留原图标或缺省状态继续打包，不制作占位图。",
   "失败返回结构化错误(MANIFEST_INVALID 等,message 带具体原因),",
   "按 message 修正源码后重新打包即可。成功只表示 cindyPath 对应的产物已经生成；",
   "只有用户明确发起安装后，插件才会进入 Cindy。publish 同样不会触发装入。",
@@ -602,8 +627,11 @@ export async function handleMedia(
     capability?: CindyMediaCapability;
     url?: string;
     provider_id?: string;
+    source_agent?: 'claude-code' | 'codex' | 'pi';
+    guide_source?: 'auto' | 'official';
     model_id?: string;
     invocation_id?: string;
+    source_invocation_id?: string;
     body?: Record<string, unknown>;
   },
 ): Promise<McpTextResult> {
@@ -662,6 +690,9 @@ export async function handleMedia(
       result = await deps.callMedia({
         action: "prepare",
         ...(input.provider_id ? { providerId: input.provider_id } : {}),
+        ...(input.source_agent ? { sourceAgent: input.source_agent } : {}),
+        ...(input.guide_source ? { guideSource: input.guide_source } : {}),
+        ...(input.source_invocation_id ? { sourceInvocationId: input.source_invocation_id } : {}),
         modelId: input.model_id,
         capability: input.capability,
       });
@@ -1321,10 +1352,10 @@ export function createCindyGhostsMcpServer(
     },
   );
 
-  const hostConnectionIds: readonly CindyHostConnectionId[] = ["grok", "im-telegram", "im-feishu", "im-wecom", "im-dingtalk", "im-discord"];
+  const hostConnectionIds: readonly CindyHostConnectionId[] = ["grok", "im-telegram", "im-feishu", "im-wecom", "im-dingtalk", "im-discord", "im-imessage"];
   if (deps.connectAccount) server.tool(
     "connect_account",
-    "Request an account connection for an installed plugin in the current conversation: kind=plugin and its real ghost_id. The Host presents its supported setup card, including protected manual connection forms, without calling a plugin business tool. Use reauthorize=true when the user asks to reconnect, replace a token, update authorization, or reconfigure an existing connection; saved configuration must not skip that request. Ordinary tasks wait until setup completes or is cancelled; teammate tasks may return a pending card immediately, then the Host resumes them after authorization. Follow the returned status and do not infer provider access from setup readiness. Only if the Host reports no supported setup action, follow the installed plugin's documented login method on the machine running the task. Never request credentials in chat or tool arguments. Built-in Grok login (kind=host, id=grok) remains available only in teammate conversations and does not authorize X or change your model. Teammates connect a messaging platform bot to themselves with kind=host, id=im-telegram, im-feishu, im-wecom, im-dingtalk or im-discord; the owner types its credentials on the card on the trusted desktop, never in chat. Do not invent connectors, URLs or credentials.",
+    "Request an account connection for an installed plugin in the current conversation: kind=plugin and its real ghost_id. When a requested task needs missing or expired plugin authorization, call this tool with the discovered plugin identity to show its native connection button instead of sending the user to settings. The Host presents its supported setup card, including protected manual connection forms, without calling a plugin business tool; the user starts authorization with the card button and the connection stays on the task device. Use reauthorize=true when the user asks to reconnect, replace a token, update authorization, or reconfigure an existing connection; saved configuration must not skip that request. Ordinary tasks wait until setup completes or is cancelled; teammate tasks may return a pending card immediately, then the Host resumes them after authorization. Follow the returned status and do not infer provider access from setup readiness. Only if the Host reports no supported setup action, follow the installed plugin's documented login method on the machine running the task. Never request credentials in chat or tool arguments. Built-in Grok login (kind=host, id=grok) remains available only in teammate conversations and does not authorize X or change your model. Teammates connect a messaging platform bot to themselves with kind=host, id=im-telegram, im-feishu, im-wecom, im-dingtalk, im-discord or im-imessage (local BlueBubbles iMessage); the owner types its credentials on the card on the trusted desktop, never in chat. Do not invent connectors, URLs or credentials.",
     { kind: z.enum(["host", "plugin"]), id: z.string().min(1).max(256), namespace: ghostNamespaceInput, reauthorize: z.boolean().optional().describe("Reopen supported setup for an explicit reconnect, token replacement, authorization update or reconfiguration request, or a known authorization/scope failure") },
     async ({ kind, id, namespace, reauthorize }, extra) => {
       const hostId = hostConnectionIds.find((candidate) => candidate === id);
@@ -1415,6 +1446,51 @@ export function createCindyGhostsMcpServer(
       handleGhostCall(deps, input, extractAgentToolUseId(extra), extra.signal),
   );
 
+  const evaluationModelFields = {
+    model_id: z.string().max(256).optional().describe("list_models 返回的模型 id；只有一个可用模型时可省略"),
+    provider_id: z.string().max(128).optional().describe("list_models 返回的 provider_id"),
+  };
+  const callEvaluation = async (request: CindyEvaluateToolRequest, signal: AbortSignal) => {
+    if (!deps.callEvaluate) return textResult({ ok: false, errorCode: "UNAVAILABLE", message: "当前主机不支持决策和重排" }, true);
+    const result = await deps.callEvaluate(request, signal);
+    return textResult(result, result.ok === false);
+  };
+
+  server.tool(
+    "model_decisions",
+    D_DECISIONS,
+    {
+      action: z.enum(["list_models", "request"]),
+      ...evaluationModelFields,
+      questions: z.record(z.string(), z.object({
+        type: z.enum(["noul", "choice", "score", "box"]).describe("noul 是否题；choice 单选；score 按等级打分；box 在图片中框出目标，需要图片且仅部分模型支持"),
+        instructions: z.string().describe("这道题要判断的内容"),
+        criteria: z.unknown().optional().describe("noul 可省略，或 {\"true\":\"成立的标准\",\"false\":\"不成立的标准\"}；choice 必填 {\"选项ID\":\"选项说明\"}；score 必填，按从低到高排列的等级说明数组，如 [\"平静\",\"不满\",\"愤怒\"]；box 省略"),
+      })).optional().describe("request 必填：键是自定的问题 ID，answers 用同一 ID 返回"),
+      state: z.unknown().optional().describe("request 必填的判断材料：字符串、对象或数组。图片仅放在顶层数组的 {type:'image_url',image_url:{url:'本机路径或受管地址'}} 中"),
+    },
+    async ({ action, ...input }, extra) => callEvaluation(
+      action === "list_models" ? { action, api: "decisions" } : { action: "decisions", ...input },
+      extra.signal,
+    ),
+  );
+
+  server.tool(
+    "model_rerank",
+    D_RERANK,
+    {
+      action: z.enum(["list_models", "request"]),
+      ...evaluationModelFields,
+      query: z.string().optional().describe("request 必填：用来衡量相关度的问题或查询"),
+      documents: z.array(z.string()).optional().describe("request 必填：候选文本；结果中的 index 是这里的下标（从 0 开始）"),
+      top_n: z.number().int().positive().optional().describe("可选：只返回最相关的前 N 条，不超过 documents 数量"),
+    },
+    async ({ action, ...input }, extra) => callEvaluation(
+      action === "list_models" ? { action, api: "rerank" } : { action: "rerank", ...input },
+      extra.signal,
+    ),
+  );
+
   server.tool(
     "media",
     D_MEDIA,
@@ -1442,6 +1518,8 @@ export function createCindyGhostsMcpServer(
         .max(128)
         .optional()
         .describe("prepare 时可选；插件或 list_models 返回 provider_id 时必须原样传入，以区分同名模型的执行来源"),
+      source_agent: z.enum(['claude-code', 'codex', 'pi']).optional().describe('prepare 时指定实际连接；同名多连接时从 source_agents 中明确选择，不能按当前 Harness 猜密钥'),
+      guide_source: z.enum(['auto', 'official']).optional().describe('prepare 缺省自定义优先；official 只改用官方 Guide，不改变供应商和实际连接，仍走当前权限'),
       url: z
         .string()
         .max(4096)
@@ -1452,6 +1530,7 @@ export function createCindyGhostsMcpServer(
         .max(128)
         .optional()
         .describe("request / poll 时必填；必须来自 prepare 返回"),
+      source_invocation_id: z.string().max(128).optional().describe("prepare 时可传原付费调用的 invocation_id，以新 Guide 复用原回执；返回后直接 request/poll，不重新生成"),
       body: z
         .record(z.string(), z.unknown())
         .optional()
@@ -1508,13 +1587,13 @@ export function createCindyGhostsMcpServer(
         .string()
         .optional()
         .describe(
-          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 xdt_image_url，或 xdt_image_urls 数组第一项(cindy-media:// 地址)；失败会保留默认图标继续打包",
+          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 xdt_image_url，或 xdt_image_urls 数组第一项(cindy-media:// 地址)；失败时保留原图标或缺省状态继续打包，不制作占位图",
         ),
       intent: z
         .enum(["publish"])
         .optional()
         .describe(
-          "缺省不传:只打包并返回产物路径；publish:额外返回一次性发布票据。publish 仅企业组织成员可用，个人账号仍可使用缺省的纯打包模式",
+          "缺省不传:只打包并返回产物路径；publish:为发布到当前组织返回一次性发布票据。publish 仅企业组织成员可用，个人账号仍可使用缺省的纯打包模式；公开市场投稿走贡献流程",
         ),
     },
     async (input) => handleForgePack(deps, input),
@@ -1532,7 +1611,7 @@ export function createCindyGhostsMcpServer(
         .string()
         .optional()
         .describe(
-          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 cindy-media:// 地址；失败会保留默认图标继续安装",
+          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 cindy-media:// 地址；失败时保留原图标或缺省状态继续安装，不制作占位图",
         ),
     },
     async (input) => handleForgeInstall(deps, input),
