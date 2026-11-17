@@ -1,5 +1,16 @@
 # 校验下载与受管工具安装
 
+> **读取时机**：新增或修改文件下载、受管工具安装、下载／安装进度或它们的界面之前
+> **适用路径**：`apps/desktop/src/main/{downloader,managed-tools,agent-binaries}/**`、
+> `apps/desktop/src/shared/downloadProgress.ts`、
+> `apps/desktop/src/renderer/components/ui/**/download*`、
+> `apps/desktop/src/main/git-context/{ghArtifact,ghBinary,githubSetup,githubSetupIpc}.ts`、
+> `apps/desktop/src/renderer/features/cc-agent/GithubSetupDialog.tsx`、
+> `apps/desktop/src/main/local-model-runtime/{ollamaInstall,llamaCppDownloads}.ts`、
+> `apps/desktop/src/main/{plugin-market/download,skillhub/installService,cindy-brain/downloadSlot,wallpaper-video,updateService}.ts`、
+> `apps/desktop/src/main/voice-input/speaker/speakerModelStore.ts`、
+> `apps/desktop/src/main/cindy-make/{toolInstaller,prepare}.ts`
+
 Desktop 下载已知大小／SHA-256 的发行资产，统一调用
 `apps/desktop/src/main/downloader/index.ts` 的 `download()`。
 Agent runtime、Cindy Make 工具、GitHub CLI、Ollama runtime、llama.cpp runtime 与 GGUF 模型、

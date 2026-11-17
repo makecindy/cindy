@@ -2,6 +2,11 @@
 
 > **读取时机**：新增或修改模型组（模式）的配置、选路、选择器入口、任务里的说明，
 > 或要让模型组在新任务以外的地方生效之前
+> **适用路径**：`apps/desktop/src/main/model-groups/**`、`apps/desktop/src/renderer/features/model-groups/**`、
+> `apps/desktop/src/shared/{modelGroups,modelGroupDecisions}.ts`、
+> `apps/desktop/src/renderer/components/new-chat/**/ModelGroupsPickerSection*`、
+> `apps/desktop/src/renderer/components/settings/**/ModelGroup*`、
+> `apps/desktop/src/renderer/components/new-chat/ModelSelector.tsx`
 
 ## 1. 定位
 

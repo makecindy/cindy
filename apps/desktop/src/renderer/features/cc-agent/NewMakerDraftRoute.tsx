@@ -60,6 +60,7 @@ import { themeService } from '@/themes/theme-service';
 import type { Theme as ColorTheme } from '@/themes/types';
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
 import { ChatInput } from '@/components/new-chat/ChatInput';
+import { useTaskBotMentions } from './hooks/useTaskBotMentions';
 import {
   WorktreeChipsRow,
   type WorktreeDefaultSource,
@@ -414,15 +415,15 @@ function makeDraftSessionId(): string {
   return crypto.randomUUID();
 }
 
-function stripLocalMentionChips(node: JSONContent | null): JSONContent | null {
+function stripLocalMentionChips(node: JSONContent | null, deviceChanged = false): JSONContent | null {
   if (!node) return null;
   if (node.type === 'mentionChip') {
     const kind = (node.attrs as { kind?: string } | undefined)?.kind;
-    if (kind === 'file' || kind === 'dir' || kind === 'agent') return null;
+    if (kind === 'file' || kind === 'dir' || kind === 'agent' || (deviceChanged && kind === 'bot')) return null;
   }
   if (!node.content) return node;
   const filtered = node.content
-    .map((child) => stripLocalMentionChips(child))
+    .map((child) => stripLocalMentionChips(child, deviceChanged))
     .filter((c): c is JSONContent => c !== null);
   return { ...node, content: filtered };
 }
@@ -831,6 +832,8 @@ export function NewMakerDraftRoute() {
     const key =
       code === 'REMOTE_PROVIDER_UPDATING'
         ? 'ccAgent.draft.remoteProviderUpdating'
+        : code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
+          ? 'settings.remote.startSession.unsupportedCodexSource'
         : code === 'REMOTE_PROVIDER_UNSUPPORTED'
           ? 'ccAgent.draft.remoteProviderUnsupported'
           : code === 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
@@ -1015,7 +1018,7 @@ export function NewMakerDraftRoute() {
   // 让附件能在"切走再切回"时存活。
   const attachmentState = useAttachments(undefined, NEW_MAKER_DRAFT_KEY);
   /**
-   * 剥掉 @file / @dir / @agent mention chip —— 触发条件是**项目变了**,不只是设备变了。
+   * 剥掉项目相对的 @file / @dir / @agent chip；换设备时另剥只在原电脑可解析的伙伴引用。
    *
    * 关键事实(Codex review 第 29 轮给出的新证据):ChatInput 把这些 chip 的 `path` 存成**项目相对**
    * 路径(`attrs.path = item.relPath`,源码注释原文「for files/dirs we stash the relative path
@@ -1027,12 +1030,12 @@ export function NewMakerDraftRoute() {
    * 我前几轮判断「同机换项目文件系统没变,剥 chip 是功能退化」—— 那个判断建立在「chip 存绝对路径」
    * 这个错误前提上。对绝对路径成立,对相对路径不成立。
    */
-  const stripProjectRelativeMentions = useCallback(() => {
+  const stripProjectRelativeMentions = useCallback((deviceChanged = false) => {
     const composerDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
     if (!composerDraft?.text) return;
     saveComposerDraft(NEW_MAKER_DRAFT_KEY, {
       ...composerDraft,
-      text: stripLocalMentionChips(composerDraft.text),
+      text: stripLocalMentionChips(composerDraft.text, deviceChanged),
     });
   }, []);
   const effectiveWorkingDir = draft.workingDir;
@@ -1042,6 +1045,10 @@ export function NewMakerDraftRoute() {
   // 归一成 string | undefined(能力 hook / getModelById / ChatInput prop 都按此签名;
   // 下面 isDeviceLinkDraft 与 create 分支的真值收窄对 undefined 同样成立)。
   const effectiveDeviceLinkDeviceId = draft.deviceLinkDeviceId ?? undefined;
+  const composerBotMentions = useTaskBotMentions(
+    effectiveDeviceLinkDeviceId ?? null,
+    effectiveRemoteHostId,
+  );
   const effectiveDeviceLinkDeviceName = draft.deviceLinkDeviceName;
   /**
    * 远程控制下新建任务(建到被控电脑上)时,Agent 同样可以在第三台电脑运行(与手机新建任务、
@@ -2899,7 +2906,7 @@ export function NewMakerDraftRoute() {
    *
    * ## 每处状态绑在哪一半上(这就是全部规则)
    *
-   *   · mention chip —— 绑 **workingDir**(存项目相对路径),设备或项目任一变化都剥;
+   *   · file/dir/agent chip —— 绑 **workingDir**，设备或项目任一变化都剥；伙伴 chip 只在换设备时剥；
    *   · 路径型附件 —— 绑 **设备**(存绝对路径),同机换项目仍有效,不动;
    *   · 能力 / 供应商 / Git safety 快照 —— 绑**目标设备**,指过去之前一律作废(无 TTL,只在设备
    *     下线才 evict,那台机器在线期间装了新模型 / 断了供应商,控制端不会知道);
@@ -2923,8 +2930,8 @@ export function NewMakerDraftRoute() {
       });
       const workingDirChanged = req.workingDir !== draft.workingDir;
 
-      // 引用绑定目标目录；控制端附件由出站上传层搬运，切换设备时保留。
-      if (deviceChanged || workingDirChanged) stripProjectRelativeMentions();
+      // 项目引用绑定目录，伙伴引用绑定电脑；控制端附件由出站上传层搬运，切换设备时保留。
+      if (deviceChanged || workingDirChanged) stripProjectRelativeMentions(deviceChanged);
 
       // 作废那三个无 TTL 快照 —— 但**不是**「指向设备就做」(Codex review 第 30 轮 P1,我上一轮
       // 收敛时写错的条件)。evict 不是幂等清理,而是一次**有副作用的状态转移**:它 notify
@@ -3269,9 +3276,9 @@ export function NewMakerDraftRoute() {
             existingDraft.browserComments,
             newSession.id,
           );
-          // SSH 环境下本地 @file/@dir mention 无效,从 Tiptap 文档中剥离。
+          // SSH 环境无法解析原电脑的文件、agent 和伙伴引用。
           const strippedText = existingDraft.text
-            ? stripLocalMentionChips(existingDraft.text)
+            ? stripLocalMentionChips(existingDraft.text, true)
             : existingDraft.text;
           saveComposerDraft(newSession.id, {
             ...existingDraft,
@@ -4566,6 +4573,12 @@ export function NewMakerDraftRoute() {
           const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
           const model = routedTo?.model ?? sendBaseRoute.model;
           const providerId = routedTo ? routedTo.providerId : sendBaseRoute.providerId;
+          // The composer guards its visible selection, but a late route override
+          // must satisfy the same SSH Codex boundary before creating a session.
+          if (effectiveRemoteHostId && persistedAgentKind === 'codex' && providerId && providerId !== 'openai') {
+            toast.error(t('settings.remote.startSession.unsupportedCodexSource'));
+            return;
+          }
           const submittedEffort = routedTo ? (routedTo.effort ?? '') as Effort : sendBaseRoute.submittedEffort;
           const effectiveFastMode = routedTo ? false : sendBaseRoute.effectiveFastMode;
           const writePluginRouteNote = (sessionId: string) => {
@@ -4809,13 +4822,32 @@ export function NewMakerDraftRoute() {
               }
               return;
             }
+            // 标题预览必须在 create-session **之前**按最终 id 登记:被控端先广播新会话、
+            // 后返回 RPC,回包前侧边栏就会收到仍带哨兵的新行,预览晚一步用户就先看到
+            // 「未命名任务」。非 worktree 流程也预生成 id(手机端同口径)。
+            presetSessionId ??= makeDraftSessionId();
+            const firstMessageTitle = optimisticFirstMessageTitle(
+              message,
+              files,
+              mentions,
+              opts,
+              autoTitleLabels,
+            );
+            const firstMessageTitleIsUserText = Boolean(normalizeAutoTitle(message));
+            if (firstMessageTitle) {
+              remoteProjectsStore.setPendingTitlePreview(
+                presetSessionId,
+                firstMessageTitle,
+                firstMessageTitleIsUserText,
+              );
+              remoteOptimisticTitleSessionId = presetSessionId;
+            }
             // 提出来存一份:交接收尾要按**实际提交的** model / effort / permission / workspaceKind
             // 组装临时会话行(见 commitRemoteSessionHandoff),不能再各自推一遍。
             const createArgs = resolveDeviceLinkSubmission({
               agentKind: persistedAgentKind,
               // 远程 worktree:workingDir 换成刚建好的 worktree 路径(真实存在,被控端
               // remote-workdir-guard 按"存在的目录"放行);id 与 worktree 绑定同值。
-              // 非 worktree 流程两者保持原值 / 缺省。
               id: presetSessionId,
               workingDir: remoteWorkingDir,
               extraDirs: effectiveExtraDirs,
@@ -4858,30 +4890,31 @@ export function NewMakerDraftRoute() {
               created = { sessionId: remoteSessionId, workDir: remoteWorkingDir };
             }
             if (!remoteSessionId) {
+              if (remoteOptimisticTitleSessionId) {
+                remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);
+                remoteOptimisticTitleSessionId = null;
+              }
               // device-link 创建失败:错误来自被控端 RPC,与 useCCSessions().error 无关,
               // 不应读 state 里的 REMOTE_* code(copilot review #1035)。
               toast.error(t('ccAgent.draft.createSessionFailed'));
               return;
             }
+            if (
+              firstMessageTitle
+              && remoteOptimisticTitleSessionId
+              && remoteOptimisticTitleSessionId !== remoteSessionId
+            ) {
+              // 被控端没采用预设 id 时,把预览挪到回包里的真实 id 上。
+              remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);
+              remoteProjectsStore.setPendingTitlePreview(
+                remoteSessionId,
+                firstMessageTitle,
+                firstMessageTitleIsUserText,
+              );
+              remoteOptimisticTitleSessionId = remoteSessionId;
+            }
             if (!isCurrentDataOwner()) {
               throw new RemotePrecreatedWorktreeOwnerChangedError();
-            }
-            {
-              const optimisticTitle = optimisticFirstMessageTitle(
-                message,
-                files,
-                mentions,
-                opts,
-                autoTitleLabels,
-              );
-              if (optimisticTitle) {
-                remoteProjectsStore.setPendingTitlePreview(
-                  remoteSessionId,
-                  optimisticTitle,
-                  Boolean(normalizeAutoTitle(message)),
-                );
-                remoteOptimisticTitleSessionId = remoteSessionId;
-              }
             }
             // remoteSessionId 到手就是**提交点**:对端会话已经建出来了。此后任何一步都不许再把它
             // 退化成「创建失败」—— 用户会照着提示重试,于是对端多出第二个会话,第一个空着永久滞留。
@@ -5662,6 +5695,8 @@ export function NewMakerDraftRoute() {
           toast.error(
             isRemotePrecreatedWorktreeCleanupPendingError(err)
               ? t('ccAgent.draft.remoteWorktreeCleanupPending')
+              : extractIpcError(err)?.code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
+                ? t('settings.remote.startSession.unsupportedCodexSource')
               : (getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed')),
           );
         } finally {
@@ -5765,6 +5800,8 @@ export function NewMakerDraftRoute() {
       markSendInFlight(true);
       let goalSessionId: string | null = null;
       let optimisticGoalTitle: string | null = null;
+      // 远程目标在 create-session 之前登记的标题预览;对端建成前失败要在 catch 里撤回。
+      let remoteGoalTitlePreviewId: string | null = null;
       try {
         const selectedWorkingDir = effectiveWorkingDir?.trim() || undefined;
         const selectedWorktree = { ...wtRef.current };
@@ -6024,6 +6061,14 @@ export function NewMakerDraftRoute() {
               setWtCreatingInfo(null);
             }
           }
+          // 与发送路径同口径:预生成 id,并在 create-session 之前登记标题预览,
+          // 被控端先广播的新行才不会露出「未命名任务」。
+          presetSessionId ??= makeDraftSessionId();
+          const remoteGoalTitle = normalizeAutoTitle(objective);
+          if (remoteGoalTitle) {
+            remoteProjectsStore.setPendingTitlePreview(presetSessionId, remoteGoalTitle, true);
+            remoteGoalTitlePreviewId = presetSessionId;
+          }
           // 与 handleSend 同口径先存一份 args:临时行要按实际提交的值组装(见 commitRemoteSessionHandoff)。
           const createArgs = resolveDeviceLinkSubmission({
             agentKind: persistedAgentKind,
@@ -6076,16 +6121,15 @@ export function NewMakerDraftRoute() {
             throw new Error(t('ccAgent.draft.createSessionFailed'));
           }
           goalSessionId = remoteSessionId;
-          {
-            const optimisticGoalTitle = normalizeAutoTitle(objective);
-            if (optimisticGoalTitle) {
-              remoteProjectsStore.setPendingTitlePreview(
-                remoteSessionId,
-                optimisticGoalTitle,
-                true,
-              );
+          if (remoteGoalTitle && remoteGoalTitlePreviewId !== remoteSessionId) {
+            // 被控端没采用预设 id 时,把预览挪到回包里的真实 id 上。
+            if (remoteGoalTitlePreviewId) {
+              remoteProjectsStore.clearPendingTitlePreview(remoteGoalTitlePreviewId);
             }
+            remoteProjectsStore.setPendingTitlePreview(remoteSessionId, remoteGoalTitle, true);
           }
+          // 会话已在对端建成:此后预览交给权威标题回流收口,catch 不再撤回。
+          remoteGoalTitlePreviewId = null;
           // 与发送路径共用同一段交接收尾(钉归属 → 补临时行 → 触发回流)。三条不变量对目标路径
           // 同样成立,只是后果换了个形状:goalApiFor 也按归属路由,漏了钉子它就把 setGoal 发给本机
           // maker、对端刚建好的会话永远拿不到目标;而它不抛这条在这里更要紧 —— 抛出去 NewGoalDialog
@@ -6383,6 +6427,9 @@ export function NewMakerDraftRoute() {
         // 预览在 createSession 之前登记。worktree 建议名 / 建树 / 回滚失败都走这里,
         // 不撤回会让空会话或未建成的 goalSessionId 一直顶着目标原文。
         if (goalSessionId && optimisticGoalTitle) emitAutoTitlePreviewCleared(goalSessionId);
+        if (remoteGoalTitlePreviewId) {
+          remoteProjectsStore.clearPendingTitlePreview(remoteGoalTitlePreviewId);
+        }
         if (goalSessionId) clearSessionStarting(goalSessionId);
         if (isLocalGoalWorktreeCleanupPendingError(error)) {
           log.error('[draft goal] incomplete local worktree session cleanup failed', {
@@ -6920,6 +6967,7 @@ export function NewMakerDraftRoute() {
                     </div>
                   )}
                   <ChatInput
+                    botMentions={composerBotMentions}
                     onSend={handleSend}
                     onComposerTyping={openProvisionalDraftTask}
                     onComposerVoiceBusyChange={onProvisionalVoiceBusyChange}

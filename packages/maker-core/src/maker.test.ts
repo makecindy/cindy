@@ -1466,18 +1466,36 @@ describe('Maker session close events', () => {
     queue.end();
   });
 
-  it('recycles drifted pi runtimes with the runtime-refresh reason for direct senders', async () => {
+  // Unit #11060: send-time drift recycling must retain background work just as
+  // closeIfIdle does. Earlier coverage only recycled an already-empty runtime.
+  it.each(['none', 'task', 'continuation', 'unavailable'] as const)('recycles drifted pi runtimes after background %s settles', async (kind) => {
     const queue = createAsyncQueue<AgentEvent>();
     const handle = createHandle({ id: 'drifted', agentKind: 'pi' });
     handle.hasProjectResourceDrift = () => true;
+    let busy = kind !== 'none';
+    handle.listBackgroundTasks = () => {
+      if (busy && kind === 'unavailable') throw new Error('snapshot unavailable');
+      return busy && kind === 'task' ? [{ taskId: 'subagent', taskType: 'local_agent' }] : [];
+    };
+    handle.countPendingWakeContinuations = () => busy && kind === 'continuation' ? 1 : 0;
     handle.events = () => queue;
     const start = vi.fn().mockResolvedValue(handle);
     const maker = new Maker({ agents: { pi: createAgent(start, 'pi') }, storage: createStorage(), logger: createLogger() });
     const session = await maker.createSession({ id: 'drifted', agentKind: 'pi' as const, workingDir: '/repo', model: 'm' });
-    expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(true);
-    expect(maker.getSessionCloseReason(session)).toBe('runtime-refresh');
-    expect(maker.getSession(session.id)).toBeUndefined();
-    queue.end();
+    try {
+      if (busy) {
+        expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(false);
+        expect(maker.getSession(session.id)).toBe(session);
+        expect(session.hasStartedClosing()).toBe(false);
+      }
+      busy = false;
+      expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(true);
+      expect(maker.getSessionCloseReason(session)).toBe('runtime-refresh');
+      expect(maker.getSession(session.id)).toBeUndefined();
+    } finally {
+      queue.end();
+      await session.close();
+    }
   });
 
   it('recycle is a no-op when project resources have not drifted', async () => {

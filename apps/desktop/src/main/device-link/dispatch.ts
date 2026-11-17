@@ -5,6 +5,7 @@ import { parseKimiUsageRequest, isKimiCodingProvider } from '../../shared/kimiCo
 import { isOpenCodeGoProvider, parseOpenCodeGoUsageRequest } from '../../shared/opencodeGoUsage.js';
 import type { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
 import { PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
+import { sharedTaskRecoveryError } from '../../shared/sharedTaskRecovery.js';
 import { hasRichAnswer, compactRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
 import type { RemoteAgentLimitUsage } from '../../shared/remoteAgentLimits.js';
 import type { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
@@ -3636,7 +3637,7 @@ function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload |
   if (isProviderSharePeer(src)) {
     if (providerShareGuestAccess(src)) return null;
     logProviderShareDenial(src, 'admission');
-    return PROVIDER_SHARE_ACCESS_FAILURE;
+    return providerShareInvokeAccessFailure(src);
   }
   if (isSharedTaskPeer(src)) return captureSharedTaskPeer(src) ? null : sharedTaskAccessFailure(src);
   if (!readDeviceLinkSettings().remoteControlEnabled) {
@@ -3952,7 +3953,7 @@ function trySendInvokeResult(
     }
   }
   // 撤权后迟到的结果(含 outbox 重发)不再带出数据。
-  if (isProviderSharePeer(src) && !providerShareGuestAccess(src)) result = PROVIDER_SHARE_ACCESS_FAILURE;
+  if (isProviderSharePeer(src) && !providerShareGuestAccess(src)) result = providerShareInvokeAccessFailure(src);
   // 开关撤销和关后重开都使旧投影失效；关系仍有效不代表可继续发送旧额度。
   if (isProviderSharePeer(src) && channel === PROVIDER_SHARE_INSIGHTS_CHANNEL && result.ok
     && !providerShareAccess?.insightsCurrent?.(src, result.result)) result = PROVIDER_SHARE_ACCESS_FAILURE;
@@ -4671,6 +4672,18 @@ const PROVIDER_SHARE_ACCESS_FAILURE: InvokeResultPayload = {
   ok: false,
   error: { code: 'ACCESS_REVOKED', message: 'provider share is not available' },
 };
+
+function providerShareInvokeAccessFailure(src: string): InvokeResultPayload {
+  // These two local verdicts mean access is not yet confirmed, not revoked.
+  // Still refuse the invoke/result, exposing only the existing bounded marker.
+  const denial = providerShareAccess?.denial?.(src);
+  if (denial === 'snapshot-not-loaded' || denial === 'member-cleanup-pending') {
+    return { ok: false, error: {
+      code: 'IPC_ERROR', message: sharedTaskRecoveryError('owner', 'authorization').message,
+    } };
+  }
+  return PROVIDER_SHARE_ACCESS_FAILURE;
+}
 /**
  * The only channels a provider-share guest may invoke: the remote agent, and the read-only
  * catalog reads its model picker and send gate need (provider list, agent capabilities,
@@ -4852,7 +4865,7 @@ async function runProviderShareInvoke(
   const access = providerShareGuestAccess(src);
   if (!access) {
     logProviderShareDenial(src, `invoke ${typeof payload?.channel === 'string' ? payload.channel : '?'}`);
-    return PROVIDER_SHARE_ACCESS_FAILURE;
+    return providerShareInvokeAccessFailure(src);
   }
   if (!payload || typeof payload.channel !== 'string') return PROVIDER_SHARE_ACCESS_FAILURE;
   // An executor's short lease authorizes only remote Agent execution, never the share owner's catalog or management reads.
@@ -4867,7 +4880,7 @@ async function runProviderShareInvoke(
     try {
       if (args.length !== 1) throw new Error('[INVALID_PARAMS] Expected one insights request');
       const result = await providerShareAccess.insights(src, args[0]);
-      if (!providerShareGuestAccess(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
+      if (!providerShareGuestAccess(src)) return providerShareInvokeAccessFailure(src);
       return { ok: true, result };
     } catch {
       return { ok: false, error: { code: 'IPC_ERROR', message: '[PERMISSION_DENIED] Provider share insights are unavailable or access changed' } };
@@ -4877,10 +4890,10 @@ async function runProviderShareInvoke(
     return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] unknown agent' } };
   }
   const result = await runAuthorizedInvoke(src, payload, timing);
-  if (!providerShareGuestAccess(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
+  if (!providerShareGuestAccess(src)) return providerShareInvokeAccessFailure(src);
   if (payload.channel === REMOTE_AGENT_CHANNEL || !result.ok) return result;
   const projected = await projectProviderShareRead(src, payload.channel, args, result.result, access.providerId);
-  if (!providerShareGuestAccess(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
+  if (!providerShareGuestAccess(src)) return providerShareInvokeAccessFailure(src);
   return projected.ok ? { ...result, result: projected.value } : projected;
 }
 

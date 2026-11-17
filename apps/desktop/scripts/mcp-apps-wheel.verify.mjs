@@ -139,7 +139,8 @@ try {
           else text='<!doctype html><style>html,body{margin:0}#content{height:'+globalThis.wheelHeight+'px;background:linear-gradient(white,gray)}</style><div id="content">App content</div><script>parent.postMessage({jsonrpc:"2.0",method:"ui/notifications/initialized"},"*");parent.postMessage({jsonrpc:"2.0",method:"ui/notifications/size-changed",params:{height:'+globalThis.wheelHeight+'}},"*");</script>';
           return new Response(text,{headers:{'Content-Type':'text/html'}});
         });
-        const win=new BrowserWindow({show:false,width:800,height:700,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,nodeIntegrationInSubFrames:false,nodeIntegrationInWorker:false,webSecurity:true,allowRunningInsecureContent:false,experimentalFeatures:false,plugins:false,navigateOnDragDrop:false}});
+        // Windows needs a visible window for CDP wheel delivery and screenshots (#11056).
+        const win=new BrowserWindow({show:process.platform==='win32',width:800,height:700,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,nodeIntegrationInSubFrames:false,nodeIntegrationInWorker:false,webSecurity:true,allowRunningInsecureContent:false,experimentalFeatures:false,plugins:false,navigateOnDragDrop:false}});
         win.loadURL('http://127.0.0.1:${server.address().port}/');
       });`,
     },

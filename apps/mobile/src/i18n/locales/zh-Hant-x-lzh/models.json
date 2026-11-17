@@ -74,7 +74,6 @@
     "cancel": "仍舊"
   },
   "unified": {
-    "accountUnassigned": "名籍待定",
     "accountCount_other": "{{count}} 個名籍",
     "accountFallback": "名籍 {{index}}",
     "favoriteConfiguration": "藏此設定",

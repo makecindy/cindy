@@ -22,7 +22,9 @@ describe('Orca delivery authority wiring', () => {
   it('uses the delivery guard at acceptance and at deferred acknowledgement', () => {
     expect(service).toMatch(/assertAcceptedCurrent\s*=\s*params\.assertDeliveryCurrent\s*\?\?\s*params\.assertCurrent/);
     expect(service).toMatch(/assertDeliveryCurrent:\s*await deps\.captureDeliveryAuthority\?\.\(link\.leadSessionId\)/);
-    expect(service.match(/captureDeferredAuthority\(params\.callerLeadSessionId, opts\)/g)).toHaveLength(2);
+    // Active turn, send lock, and refused conditional close all retain the
+    // delivery guard. The last path also covers live background work (#11042).
+    expect(service.match(/captureDeferredAuthority\(params\.callerLeadSessionId, opts\)/g)).toHaveLength(3);
   });
 });
 

@@ -35,202 +35,72 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 | Mobile：Expo 页面、远程调用、原生配置与模块；在手机上查看效果 | [apps/mobile/AGENTS.md](apps/mobile/AGENTS.md) | [Mobile 开发与冷更边界](docs/dev-rules/mobile-development.md) |
 | maker-core：Agent 编排、prompt、工具、translator、用量 | [packages/maker-core/AGENTS.md](packages/maker-core/AGENTS.md) | [Agent 行为](docs/dev-rules/maker-core-and-agent-behavior.md) |
 
-## 当前规则索引
+## 找到要读的规则
 
-修改前按下列场景读取相关正文；涉及多个主题时同时适用。产品、设计、工程的完整导航
+专题规则在各自文档的开头声明读取时机与适用路径，[规则索引](docs/dev-rules/rule-index.md)由这些
+声明生成。动手前按要改的路径运行 `pnpm rules:for <路径…>` 或直接查索引，提交前运行
+`pnpm rules:changed`，把列出的规则读完；索引里判定为「主题」的规则不能由路径判定，按读取时机
+判断。没有 pnpm 时用 `node scripts/rule-index.mjs for <路径…>`。产品、设计、工程的完整导航
 分别见 [产品规则](docs/product-rules/README.md)、[设计规则](docs/design-rules/README.md)、
-[开发规则](docs/dev-rules/README.md)。
+[开发规则](docs/dev-rules/README.md)。新增规则不在本文件登记，写法见
+`docs/dev-rules/development-workflow.md` §4、§5。
+
+下列规则多数任务都会碰到，始终适用；涉及多个主题时同时适用。
 
 - 首次接触本仓、需要定位功能代码位置或判断新代码归属模块时，先读仓库地图
   `docs/dev-rules/repo-map.md`。
-- 只为检查界面而需要启动 Desktop 或 Mobile 模拟器、且不需要真实账号时，用 `--mock`
-  免登录模拟数据启动。`--mock` 不阻止 Desktop 调用真实模型（会沿用本机命令行登录），只看
-  界面时不要在里面发送消息；新增或修改模拟任务、`--mock` 行为前先读 `docs/dev-rules/ui-mock-data.md`。
 - 首次安装、修复依赖或准备新 worktree 时，必须先读
   `docs/dev-rules/environment-setup.md`。
-- 首次理解模型配置架构，新增模型／供应商，更新模型窗口／价格／推理档位／默认值／本地推荐，
-  或排查目录下发与显示错误前，必须先读 `docs/dev-rules/model-catalog-maintenance.md`：
-  先看结构、覆盖顺序与修改位置，再按其中导航读取专题规则和实际代码；Server 正本与客户端
-  离线副本需协调更新，客户端已支持、Server 已实现和生产已部署必须分别核验。
 - 修改凭证或授权信息处理、文件落盘位置、用户持久数据、临时文件或测试目录前，必须
   先读 `docs/dev-rules/credentials-and-local-storage.md`。
-- 新增或修改媒体生成、导入、缓存、附件、持久化、协议解析或回收逻辑前，必须先读
-  `docs/dev-rules/media-storage-and-protocols.md`。
-- 新增或修改邮件卡（阅读、编辑、草稿同步、发送、头像）或邮箱插件与 Cindy 之间的分工前，
-  必须先读 `docs/product-rules/mail-card.md`。
 - 新增或调整产品功能、判断能力应进入 Core / Skill / 插件、设计人机交互或多端体验
   前，必须先读 `docs/product-rules/core-product-principles.md`。
-- 新增或修改 Agent 管理用户自己的任务、定时任务、项目、伙伴的工具（`cindy_helper` /
-  `cindy_scheduler` 等），或调整工具索引、工具的作用范围说明前，必须先读
-  `docs/product-rules/agent-user-parity.md`：用户本人能做的（含跨电脑）Agent 也要能做并能在
-  索引第一步发现；改完把现状台账写回去。
-- 修改「迁移助理」（新电脑从其他电脑迁移）的入口、迁移范围、`maker:setup-snapshot` /
-  `maker:setup-transfer` 协议、计划与应用规则或一次性配置清单，或新增一类可迁移的设置前，必须先读
-  `docs/product-rules/new-device-setup-migration.md`：密钥只在原电脑的人允许后一次性加密复制，
-  OAuth 登录与私钥不复制，写入只走本机原有安装器与设置存储，不覆盖本机已改过的设置。
-- 修改开始引导（首次登录后的综合引导）的出现条件、步骤与顺序、各步骤复用的能力，或它与旧版数据
-  迁移的衔接前，必须先读 `docs/product-rules/first-run-guide.md`：引导只发现和带路、不代做，
-  Global 与中国大陆版流程一致，旧版数据迁移的区域边界是数据归属、不得顺手放开。
-- 修改共享任务、跨账号访客邀请、共享上下文或共享成员权限前，必须先读
-  `docs/product-rules/shared-task-mode.md`；复用 device-link，同账号远控行为不变。
-- 修改 IM 工具授权、来源消息、多端确认或暂停期间的确认回执，或新增 IM 渠道前，
-  必须先读 `docs/product-rules/im-permission-confirmation.md`；Desktop、Mobile 与共享
-  packages 共用同一最终决定，渠道收到回答不代表执行已恢复。
-- 新增或修改手机通知上的按钮（回答提问、回复、允许一次、拒绝）、哪些通知带按钮、按钮点击在后台的执行、没送到时的提示，
-  或登录凭证在钥匙串里的可读时机前，必须先读 `docs/product-rules/notification-actions.md`：按钮是 App 之外的
-  作答入口，看不全、说不清或高风险的操作不能在通知上批准，答复只作用于通知描述的那一条请求。
-- 新增或修改代输入（`request_input_handoff`、宿主步骤读取与执行、代输入卡、截图扫码、终端 askpass、
-  单窗口实时画面、设备码识别，或任何经手主人填写值的路径）前，必须先读
-  `docs/product-rules/input-handoff.md`：主人填写的值只交给宿主执行，不进模型、记录、日志、IM 与推送。
-- 新增或修改隐私屏（离开时遮住屏幕、远程控制时的遮罩、远程结束后的保护）、物理输入转锁屏、锁屏失败处理、
-  屏幕常亮策略，或「离开电脑时」设置与遥控端「安全」面板里的相关开关前，必须先读
-  `docs/product-rules/privacy-screen.md`：隐私屏不是认证边界，任何情况下不露出一个没锁的桌面；
-  怎么保护只由被控电脑本机决定，遥控端只决定这一次连接什么时候保护。
-- 新增或修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前，必须先读
-  `docs/product-rules/schedule-webhook-trigger.md`：事件只是门铃，正文不进任务，密钥不进任务记录。
-- 新增或修改模型组（把模型供应商里已有的来源合成路线与模式）的配置、选路、选择器入口、任务里的说明，
-  或要让它在新任务以外的地方生效前，必须先读 `docs/product-rules/model-groups.md`：模型供应商页原样保留、
-  模型组只做加法，只决定新任务用哪个已连接的模型，排序与供应商组共用同一把尺子。
-- 修改账号用量上限的判定、重置时刻来源，或普通任务／目标模式撞上限额后的等待与自动继续前，
-  必须先读 `docs/product-rules/usage-limit-auto-continue.md`。
-- 新增或修改自动发送／远程发送消息的路径、消息来源标签，或发给模型的来源说明前，必须先读
-  `docs/product-rules/message-source.md`：界面标签与模型说明同源，两侧一起改。
-- 修改伙伴（Bot）的身份、伙伴项目、Session 生命周期、模型 fallback、工作目录、Skill / MCP 装配、
-  伙伴间协作或伙伴设置前，必须先读 `docs/product-rules/cindy-bots-runtime.md`。
-- 新增或修改只对伙伴生效的工具、提示词规则、回执或定时工作等专属机制前，先读
-  `docs/product-rules/teammate-capability-ledger.md`：伙伴的工作方式属于伙伴自己的规则，先判断
-  普通任务或项目能力能否做到；做不到时优先补成通用能力。这是引导，不是审批。
-- 修改伙伴调用任务写工具的权限（2026-11-08 起不设伙伴专属权限门）、转达主人原话的来源记录，
-  或伙伴提示词里对应的说法前，必须先读 `docs/product-rules/teammate-authority.md`。
-- 修改伙伴的跨电脑身份、主力电脑（登记、接管、交出、降级）、云端对话层与资料上传，或
-  `apps/desktop/src/main/companion-cloud/`、Chat Server 的伙伴 actor／1:1 房间合同前，必须先读
-  `docs/product-rules/cloud-companions.md`。
-- 新增或修改伙伴群聊的数据、发言编排、群专线 Session、分工（负责人、安排、分工 Session、群工作目录）、
-  群聊界面或手机端群聊（`bot-groups` 远程资源、群推送深链）前，必须先读 `docs/product-rules/bot-group-chat.md`。
-- 新增或修改 `/review`、Reviewer 任务、成果快照、Finding 协议、复核入口、结果呈现或
-  复核生命周期前，必须先读 `docs/product-rules/review-product-direction.md`。
-- 新增或修改按区域（`cn` / `global`）分支的逻辑、构建身份与命名、端点选择、区域相关
-  UI 标注，或涉及两个版本关系的对外文案前，必须先读
-  `docs/product-rules/region-and-editions.md`：**无限定词身份归 Global，未显式指定
-  区域一律落在 `global`，只标注中国大陆版**。
-- 新增或修改供应商分享（把远程供应商分享给其他账号）、分享链接、分享申请与审批、
-  分享管理页，或受邀者使用分享供应商的任何路径前，必须先读
-  `docs/product-rules/provider-sharing.md`；它为远程 Agent 通道新增跨账号授权，并允许
-  中国大陆版与 Global 互享，与共享任务是两套独立授权。
-- 新增或修改供应商组（把多台电脑上的同一个供应商合成一组）、组策略、组内电脑的添加与状态、
-  经供应商组的任务分配或转发，或「远程与分享」页的组与用量前，必须先读
-  `docs/product-rules/provider-groups.md`：Agent 始终在被选中的组内电脑上运行，组所在电脑
-  只选电脑与转发，并负责按使用方隔离。
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
   `docs/design-rules/DESIGN.md` 开头的「阅读路由」，再按路由读相关章节与专题，不需要
-  通读全文；设计文档索引见 `docs/design-rules/cindy-design-system.md`。
-- 做 UI 圆角分类或点击目标尺寸审查时，必须同时读 `docs/design-rules/DESIGN.md §5` 与
-  `docs/design-rules/design-governance.md §13`；普通 UI 改动同样适用，不限于设计系统迁移 PR。
-- 新增或修改设计 Token、主题系统、标准 UI 组件（primitive / pattern）、视觉类门禁脚本，
-  或参与设计系统迁移 PR 前，必须先读治理合同
-  `docs/design-rules/design-governance.md`：真相源边界、兼容红线、两级证据合同与
-  PR 风险分类均以它为准；视觉规则本身仍以 `DESIGN.md` 为准。
-- 新增或修改任何 UI 文案里的**产品术语**前，必须先查术语表 `i18n/GLOSSARY.md`：已裁决
-  的术语照用，不自造译法；表里没有或拿不准的，在 `i18n/glossary.json` 加
-  `status: "proposed"` 条目再讨论。门禁为 `pnpm check:i18n-glossary`，规则见
-  `docs/dev-rules/engineering-conventions.md` §5.1。
-- 新增或修改**任一 Telegram bot 的用户可见行为**（命令、消息呈现、收口策略、群行为、
-  权限口径、附件与表情）前，必须先读能力台账 `docs/product-rules/telegram-bot-parity.md`：
-  两个 bot 是两套架构，差异可以有但必须登记在表里；表里标「有意不同」的行**不要去
-  "统一"**，动它要先推翻对应裁决。改完记得把对应行写回去。
-- 文案里出现**任务 / 对话 / 消息**这几个词时，必须先读
-  `docs/product-rules/task-and-conversation-naming.md`：`session` 面向用户叫「任务」，
-  「对话」只用于任务内的交流过程与内容，单条往来叫「消息」；**「任务」与 `task` 同句出现
-  时必须消解歧义**。这三个词的边界拿不准会直接做出用户能看见的不一致。
-- 所有新增或修改的 UI 必须同时**实现** Light 与 Dark 两种模式（颜色一律走语义 token，
-  禁止只适配一种模式的硬编码或条件补丁）；只实现一种模式视为未完成。**两种模式的实机
-  目检不是硬性门槛**——能目检更好，做不到时如实写明哪种模式未验证，不得把「复用了 themed
-  样式」当成「双模式已验证」。具体要求以 `docs/design-rules/DESIGN.md` 的双模式交付门槛
-  为准。
-- 修改 Orca 多 Agent 协同时，必须先读
-  `docs/dev-rules/orca-team-architecture.md`。
-- 新增或修改 Agent 使用多台机器的能力（`list_machines`、机器状态、按机器执行），或要为 Agent 的资源使用加上限前，必须先读
-  `docs/product-rules/cindy-machines.md`：**宿主暴露情况，不替大脑做资源决策**，不写死「最多几个」这类决策上限；结果不完整必须明说。
+  通读全文。Light／Dark 双模式交付门槛、圆角与点击目标、术语表、「任务／对话／消息」
+  的叫法、Token 与标准组件的治理都从这张路由进入。
 - 修改任何进入模型 system 段的提示词前（无论文件位于哪个模块），必须先读
   `docs/dev-rules/maker-core-and-agent-behavior.md`。
-- 修改 PI harness 集成（`packages/maker-core/src/agents/pi/**`、`pi-host.ts`、
-  `piEnvironment.ts`）、PI 会话权限／配置／system prompt／桥接，或 PI 相关的上线判断前，
-  必须先读 `docs/dev-rules/pi-harness.md`（含设计原则、维护不变量与上线清单）。其中
-  **Pi 原生能力非退化是红线**：Pi 原生允许的安装、更新、扩展加载与 Agent 自助修复，Cindy
-  不得以静态分析、TUI／RPC 兼容提示、内容指纹、宿主审批或新增的“安全增强”为由拒绝、停用
-  或变成不可逆流程；显式用户命令即授权。Cindy 只能增加可跳过的提示和更顺畅的 GUI，不能让
-  Cindy Pi 比同版本原生 Pi 更难用。完整裁决见 `docs/dev-rules/pi-harness.md`「Pi 上游 GUI
-  非退化红线」。
-- 修改插件（`.cindy`）运行时、沙箱、权限、能力 slot、面板供片、网络／凭证／文件交接、
-  插件市场分页读取、安装扫描、实例核对、使用统计或远程插件状态读取，或身份卡、管子协议、
-  打包与编写手册前，必须先读 `docs/dev-rules/plugin-security-and-authoring.md`。其中**存量插件兼容是红线**：任何
-  插件系统改动（含批准状态 schema、指纹格式、manifest 校验、安装布局、包格式）都必须
-  向下兼容——用户升级后什么都不做，已装、已批准、已启用的插件必须照旧可用，**绝不允许
-  要求用户重新安装、重新确认权限或重新配置**。做不到就必须自带从旧版数据的自动迁移；
-  自动迁移也做不到时，必须有明确提示 + 一次性批量恢复入口，且不丢用户已存的凭证与偏好。
-  漏迁移 = P0，规则正文见该文件第 5 节。**改到插件基座**（运行时／沙箱、批准状态记录、
-  能力 slot、打包与内容判据、manifest 契约、装入与权限确认 UI、已装列表投影）的 PR 一律
-  走白名单确认门，需放行人明确 Approve 才能合并，不看 diff 大小、不因「是 bugfix／纯技术
-  改动」豁免。
-- 修改插件发现链（花名册注入、`ghost_list` / `ghost_info` / `ghost_call`）、插件运行期
-  可见性门禁或 FORGE_GUIDE 作者契约前，必须先读 `docs/ghost-progressive-discovery.md`。
-- 新增或修改 Browser Use（专用浏览器、侧边栏、「我的浏览器」）的工具层、配方目录、外链处理
-  或任一浏览器后端前，必须先读 `docs/dev-rules/browser-use.md`：优化做在共享层让三端都受益，
-  能力不设限、风险交给审批。
-- 新增或修改插件持久 Library（library 槽、binding / 目录选择、随时迁移、
-  回收站删除、SQLite 语句门或 `/library/` 面板投影）前，必须先读
-  `docs/dev-rules/plugin-library-storage.md`。
-- 新增或修改文件下载、安装进度或它们的界面前，必须先读 `docs/dev-rules/verified-downloads.md`：
-  传输走统一下载器（必须带 SHA-256，自带重试、续传和龟速换连接），给用户看的进度统一为
-  `DownloadProgress` 并用标准 `DownloadMeter` 显示，不各自画进度条、格式化速度或处理重试提示。
-- 修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）前，必须先读
-  `docs/dev-rules/cindy-updater.md`。
 - 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、客户端本地或远程数据读取／
   扫描、变化通知后的刷新、界面频繁触发的持久化写入、缓存与轮询性能、跨平台（macOS／Windows）
-  行为，或任何 UI 文案的 i18n 落地前，必须先读 `docs/dev-rules/engineering-conventions.md`。
-- 新增一处每个功能都要来登记的列表、台账、注册表或版本号前，先读
-  `docs/dev-rules/engineering-conventions.md` §9：不规定「加在开头／末尾」，不让多个 PR
-  改同一行；一项一个文件、按键排序或从内容推导。
-- 新增或改写任一测试前，必须先读
-  `docs/dev-rules/engineering-conventions.md` §3.2「新增测试的价值门槛」。测试必须通过
-  真实生产入口验证可观察结果，并说明 Bug／规则依据、现有覆盖缺口、最小失败输入和 tier；
-  没有新的结果、错误、权限、持久化、协议或时序差异时停止增加用例。纯跨文件安全、
-  权限、协议或设计契约才进入 guard；不得为了覆盖率、测试数量或复制常量／JSX／CSS／
-  源码字面量而新增测试。同时遵守该节「性能预算」：新文件单独运行本机 5 秒内并在 PR
-  填实测耗时；被测模块只加载一次，不在 `beforeEach`／逐用例 helper 里 `vi.resetModules()`；
-  不做 ≥100ms 真实等待；同一模块的用例并入已有文件。`pnpm check:test-hygiene` 在 CI
-  阻断违规，基线只减不增，不得手改基线放行。
-- 修改客户端日志采集／脱敏／上报链路（`apps/desktop/src/main/log-upload/**`）、`logger.ts`
-  的 main 日志行格式、崩溃判定或待补传标记前，必须先读
-  `docs/dev-rules/log-upload-and-redaction.md`。其中三条是**不变量**：**记录边界**（写侧
-  续行转义与读侧切分是同一条不变量的两半，破坏任一侧即隐私逃逸）、**白名单方向**
-  （deny-by-default，不得改成黑名单——调试级别的功能日志是用户内容的主要泄漏源）、
-  **标记代次 + 原子清除**（并发实例下仅靠时间戳会误删另一实例刚写的新崩溃标记）。
-  脱敏规则**只增不减**，放宽任一条视为隐私变更、需重新评审。
+  行为、每个功能都要登记的列表或版本号，或任何 UI 文案的 i18n 落地前，必须先读
+  `docs/dev-rules/engineering-conventions.md`。
+- 新增或改写任一测试前，必须先读该文件 §3.2「新增测试的价值门槛」与其中的「性能预算」：
+  测试经真实生产入口验证可观察结果，写明依据、覆盖缺口、最小失败输入和 tier；
+  `pnpm check:test-hygiene` 在 CI 阻断违规，基线只减不增。
 - 修改本地协议 package、插件分发来源边界或 device-link 协议／relay／隧道
   payload／IPC allowlist，或任何改动跨端 wire protocol 前，必须先读
-  `docs/dev-rules/protocol-compatibility.md`。
-- 新增或修改 agent-net（Agent 网络）的传输核心、节点模型、能力清单、加密、中继选择、网络分享或拓扑界面前，
-  必须先读 `docs/product-rules/agent-net.md` 与 `docs/agent-net-plan.md`：两节点之间任何路径都必须
-  端到端加密、不允许明文降级，用户自建中继是一等能力，现有 device-link 能力不得退化；
-  `packages/agent-net-core` 是通用的可靠 UDP 协议层，不得写入 Cindy 专属设计。
-- 修改 Device Link 客户端、协议、relay、设备／媒体接口、能力协商或连接恢复行为前，必须先读
-  `docs/dev-rules/protocol-compatibility.md` 的「自建中转同步维护」：凡影响自建中转的改动，
-  必须在同一次改动中完成必要的同步适配与互通验证，不得留到后续。
+  `docs/dev-rules/protocol-compatibility.md`；影响自建中转的改动要在同一次改动里完成同步
+  适配与互通验证。
 - 新增或修改直接／间接的服务器请求、订阅、推送、同步、轮询或重试（包括界面调用方）前，
   必须先读 `docs/dev-rules/server-channel-review.md`：结合通道用途、共享容量与累计压力
   检查调用方式及次数频率；自审与 AI review 按实际严重程度报告问题，不排除 P2 缺陷。
 - 修改 package 依赖方向、main 进程模块加载方式、桌面与 Node Host（`apps/host`）共用的业务主体
   （`*.desktop.ts` 装配、工厂端口注入），或主界面布局树结构前，必须先读
   `docs/dev-rules/architecture-invariants.md`；改共用主体后还要跑 Host 的测试和类型检查（§5）。
-- 新增或修改 Settings UI、配置文件、本地偏好、运行时 profile，或 agent／MCP／provider
-  开关前，必须先读 `docs/dev-rules/configuration-and-overrides.md`。
 - 新增或修改涉及 workdir 文件、agent 进程、会话数据的功能，新增 IPC channel／推送事件，
   或修改 device-link 的重试／超时／断链恢复逻辑前，必须先读
   `docs/dev-rules/remote-and-mobile-adaptation.md`；其中恢复路径改动必须回答该文件的
   「故障半径三问」。
 - 在 Cindy 内嵌 worktree 会话里工作、准备提交或直推、或做 code review 前，必须先读
   `docs/dev-rules/development-workflow.md`。
+
+### 红线
+
+漏读会造成难以挽回的后果。改到对应路径时规则索引同样会列出它们。
+
+- **存量插件兼容**：修改插件（`.cindy`）运行时、沙箱、权限、能力 slot、批准状态、manifest、
+  安装布局、包格式或插件市场前，必须先读 `docs/dev-rules/plugin-security-and-authoring.md`。
+  用户升级后什么都不做，已装、已批准、已启用的插件必须照旧可用，不得要求重新安装、重新确认
+  权限或重新配置；漏迁移 = P0。改到插件基座的 PR 需放行人明确 Approve 才能合并。
+- **Pi 原生能力非退化**：修改 PI harness 集成、PI 会话权限／配置／system prompt／桥接或上线
+  判断前，必须先读 `docs/dev-rules/pi-harness.md`。Pi 原生允许的安装、更新、扩展加载与 Agent
+  自助修复，Cindy 不得拒绝、停用或变成不可逆流程，不能让 Cindy Pi 比同版本原生 Pi 更难用。
+- **自动更新链路**：修改 `cindy-updater` 或 Electron 侧更新服务前，必须先读
+  `docs/dev-rules/cindy-updater.md`，并先取得仓库维护者确认。
+- **日志脱敏**：修改客户端日志采集／脱敏／上报链路、main 日志行格式、崩溃判定或待补传标记
+  前，必须先读 `docs/dev-rules/log-upload-and-redaction.md`。记录边界、白名单方向、标记代次
+  三条不变量不得破坏，脱敏规则只增不减。
 
 ## Git 与交付
 

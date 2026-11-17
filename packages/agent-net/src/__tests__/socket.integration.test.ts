@@ -273,13 +273,28 @@ it.each(['shared-task', 'provider-share'] as const)('carries %s requests with ho
   expect(await lease.acquire()).toBe(delegation);
   expect(headers.length).toBeGreaterThan(3); expect(headers.every(value => value.startsWith('AgentNetIdentity '))).toBe(true);
   const api = new AgentNetClient(f.a.base, guest, f.a.certificate, f.a.rootPublicKey, delegation);
-  const visitor = f.make(api, false);
+  let visitor = f.make(api, false);
   await visitor.waitUntilOnline(3000);
   const peer = kind === 'shared-task' ? sharedTaskHostPeer(resourceId, 'a-host') : providerShareHostPeer(resourceId, 'a-host');
   await visitor.openLink(peer, openPayload);
   expect(await visitor.invoke(peer, { channel: 'test:echo', args: ['scoped confidential value'] })).toMatchObject({
     ok: true, result: 'scoped confidential value',
   });
+  // #10995: the same authenticated guest starts a new SDK/transport instance.
+  // Its old inbound channel can still occupy the host's peer slot. Keep both
+  // the host and real self-hosted relay running, with another peer in use.
+  await f.controller.openLink('a-host', openPayload);
+  const neighbor = f.controller.invoke('a-host', { channel: 'test:echo', args: ['neighbor during guest restart'] });
+  const hostSocketBeforeRestart = f.sockets.find(socket => socket.deviceId === 'a-host')!;
+  visitor.stop();
+  visitor = f.make(api, false);
+  await visitor.waitUntilOnline(3000);
+  await visitor.openLink(peer, openPayload);
+  expect(await visitor.invoke(peer, { channel: 'test:echo', args: ['guest recovered without host restart'] }))
+    .toMatchObject({ ok: true, result: 'guest recovered without host restart' });
+  expect(await neighbor).toMatchObject({ ok: true, result: 'neighbor during guest restart' });
+  expect(f.sockets.filter(socket => socket.deviceId === 'a-host')).toEqual([hostSocketBeforeRestart]);
+  expect(f.host.getStatus()).toBe('online');
   const hostSocket = f.sockets.find(socket => socket.deviceId === 'a-host')!;
   const guestPeer = kind === 'shared-task' ? sharedTaskGuestPeer(resourceId, memberId, guest.deviceId)
     : providerShareGuestPeer(resourceId, memberId, guest.deviceId);
@@ -295,7 +310,7 @@ it.each(['shared-task', 'provider-share'] as const)('carries %s requests with ho
     const first = await grantAgentNetSharingExecutor(ownerOptions, input);
     const executorOptions = { client: f.b, sharing: business(f.b.identity, 'owner-account', f.b), assertCurrent() {} };
     await expect(checkAgentNetSharingExecutor(executorOptions, input)).resolves.toMatchObject({ active: true, generation: first.generation, ownerDeviceId: f.a.identity.deviceId });
-    const executorPeer = providerShareHostPeer(resourceId, f.b.identity.deviceId), guestSocket = f.sockets.find(s => s.deviceId === guest.deviceId)!;
+    const executorPeer = providerShareHostPeer(resourceId, f.b.identity.deviceId), guestSocket = f.sockets.filter(s => s.deviceId === guest.deviceId).at(-1)!;
     await vi.waitFor(() => expect(guestSocket.scopedPeerTarget(executorPeer)).toMatchObject({ relayId: f.b.identity.deviceId }));
     await visitor.openLink(executorPeer, openPayload);
     expect(await visitor.invoke(executorPeer, { channel: 'test:echo', args: ['direct executor secret'] })).toMatchObject({ ok: true, result: 'direct executor secret' });

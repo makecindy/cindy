@@ -310,9 +310,12 @@ export function TelegramPersonaSettings() {
 
   useEffect(() => {
     let cancelled = false;
-    void window.electronAPI.telegramBot.getPersona().then((value) => {
-      if (!cancelled) setPersona(value);
-    });
+    void window.electronAPI.telegramBot
+      .getPersona()
+      .then((value) => {
+        if (!cancelled) setPersona(value);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -342,12 +345,11 @@ export function TelegramPersonaSettings() {
     // 本次调用带的就是最新值, 去抖窗口的待存内容随之落盘。
     pendingSave.current = null;
     setSyncState('syncing');
-    const result = await window.electronAPI.telegramBot.setPersona({
-      botName: persona.botName,
-      soul: persona.soul,
-      syncProfile: true,
-    });
-    setSyncState(result.profileSynced ? 'done' : 'failed');
+    const synced = await window.electronAPI.telegramBot
+      .setPersona({ botName: persona.botName, soul: persona.soul, syncProfile: true })
+      .then((result) => result.profileSynced === true)
+      .catch(() => false);
+    setSyncState(synced ? 'done' : 'failed');
     setTimeout(() => setSyncState('idle'), 2500);
   };
 

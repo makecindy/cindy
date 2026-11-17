@@ -40,6 +40,11 @@ export async function loginLegacyCodexAccount(signal: AbortSignal): Promise<void
 export async function readLegacyCodexProviderAccount(providerId: string, directory: string) {
   const { codexAccountState } = await import('../maker-host/codex-account-auth.desktop.js');
   const state = codexAccountState(providerId);
+  // Right after a restart the connection may not be in the provider catalog yet (custom providers
+  // load once the database is ready). That says nothing about the login: report a failed read, so
+  // the snapshot retries within seconds instead of caching "requires login" and failing the
+  // interrupted task's automatic resume (2026-11-18).
+  if (state.errorReason === 'provider_unavailable') throw new Error('Codex connection is not loaded');
   return state.authenticated ? readNativeAccount('openai', directory) : state;
 }
 
