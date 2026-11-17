@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { collectGhostCallsByUserTurn, ghostCallMapsEqual } from '../components/chat/MessageStream';
+import { buildRenderItems, collectGhostCallsByUserTurn, ghostCallMapsEqual } from '../components/chat/MessageStream';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
 const user = (clientId: string, extra: Partial<ChatMessage> = {}): ChatMessage =>
@@ -45,6 +45,28 @@ describe('plugin annotation follows actual calls, not the assistant turn', () =>
     expect(partial?.running).toBe(true);
     expect([...(partial?.pendingGhostIds ?? [])]).toEqual(['art']);
     expect(collectGhostCallsByUserTurn([...messages, result('c1'), result('c3'), result('c2')], true).get('u1')?.running).toBe(false);
+  });
+
+  // A primary-only coalesced summary and A's out-of-order individual result
+  // have the same persisted shape. Unlike a generic work log row, a completion
+  // badge must not guess that B returned merely because A's result is adjacent.
+  it.each(['poster', 'art'])('does not guess that a second %s call completed from another ID', (secondGhost) => {
+    const calls = [call('c1'), call('c2', secondGhost)].map(message => ({ ...message, role: 'tool_use' as const }));
+    const pending = [user('u1'), ...calls];
+    expect(collectGhostCallsByUserTurn(pending, true).get('u1')?.running).toBe(true);
+    const returned = [...pending, result('c1')];
+    const settled = buildRenderItems(returned).items.flatMap(item =>
+      item.type === 'tool_segment' ? [...item.settledIds] : []);
+    expect(settled).toEqual(['c1', 'c2']);
+    for (const streaming of [true, false]) {
+      const state = collectGhostCallsByUserTurn(JSON.parse(JSON.stringify(returned)) as ChatMessage[], streaming).get('u1');
+      expect(state?.running).toBe(streaming);
+      expect([...(state?.pendingGhostIds ?? [])]).toEqual([secondGhost]);
+    }
+    const completed = collectGhostCallsByUserTurn([...returned, result('c2')], true).get('u1');
+    expect(completed?.running).toBe(false);
+    expect(completed?.pendingGhostIds.size).toBe(0);
+    expect(collectGhostCallsByUserTurn([...returned, user('u2')], true).has('u2')).toBe(false);
   });
 
   it('does not carry old calls or their spinner into the next ordinary message', () => {

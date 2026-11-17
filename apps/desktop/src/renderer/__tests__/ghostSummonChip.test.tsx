@@ -120,9 +120,9 @@ describe('GhostSummonCard(chip 形态)', () => {
     const content = (kind === 'command' ? '$xd-feishu ' : '') + '帮我看看方案。\n\n' + raw;
     const messages: ChatMessage[] = [
       { clientId: 'm1', role: 'user', content },
-      ...(callSelected ? [{ clientId: 'a', role: 'tool_use', toolUseId: 'a',
+      ...(callSelected ? [{ clientId: 'a', role: 'tool_use', content: '', toolUseId: 'a',
         toolName: 'mcp__cindy__ghost_call', toolInput: { ghost_id: 'xd-feishu', tool: 'run' } } as ChatMessage] : []),
-      { clientId: 'b', role: 'tool_use', toolUseId: 'b', toolName: 'mcp__cindy__ghost_call',
+      { clientId: 'b', role: 'tool_use', content: '', toolUseId: 'b', toolName: 'mcp__cindy__ghost_call',
         toolInput: { ghost_id: 'github', namespace: null, tool: 'run' } },
     ];
     const bubble = (history: ChatMessage[]) => (
