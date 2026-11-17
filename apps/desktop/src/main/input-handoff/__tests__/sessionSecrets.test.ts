@@ -117,16 +117,21 @@ function answer(step: InputHandoffSnapshot) {
 }
 
 describe('代输入 secrets', () => {
-  // Unit/security: rejecting an incomplete form must not discard its known URL.
+  // Unit/security: rejecting a form or field plan must not discard its known URL.
   // Exercise the actual page-read taint before capture and after picture typing.
-  it.each(['capacity', 'truncated'])('protects the page when %s forces picture input', async (reason) => {
+  it.each(['capacity', 'truncated', 'plan-mismatch', 'plan-ambiguous'])('protects the page when %s forces picture input', async (reason) => {
     clearSecretPages();
     const page = loginPage('--remote-debugging-port=9222');
     const url = 'https://login.example.com/signin';
+    const rejectedPlan = reason.startsWith('plan-');
     const read = page.driver.snapshot;
     page.driver.snapshot = async (...args) => {
       const raw = await read(...args);
       if ('error' in raw) return raw;
+      if (rejectedPlan) {
+        if (reason === 'plan-ambiguous') raw.nodes[2].title = 'Email';
+        return raw;
+      }
       raw.nodes = [raw.nodes[0], ...Array.from({ length: reason === 'capacity' ? 40 : 1 }, (_, i) =>
         node(`0.${i}`, 'AXTextField', { title: `Field ${i}` })),
         ...(reason === 'capacity' ? [node('0.40', 'AXTextField', { title: 'Password', secure: true })] : [])];
@@ -146,18 +151,25 @@ describe('代输入 secrets', () => {
     const { session, latest } = start(page.driver, target => {
       entered.push(target.url);
       markSecretEntered(target.url);
-    });
+    }, rejectedPlan ? [
+      { label: 'Account', contentType: 'username', targets: [{ label: reason === 'plan-mismatch' ? 'Missing label' : 'Email' }] },
+      { label: 'Password', contentType: 'password', targets: [{ label: 'Password' }] },
+    ] : undefined);
     try {
       await session.start();
       expect(latest()).toMatchObject({ phase: 'ready', picture: true, source: { origin: 'https://login.example.com' } });
       expect(protectedAtCapture).toEqual([true]);
       expect(latest().controls).toEqual([{ id: 'typed', kind: 'text', label: '', contentType: 'password' }]);
+      // Recovery must not depend on another successful AX read after typing.
+      if (rejectedPlan) page.driver.snapshot = async () => { throw new Error('AX unavailable'); };
       await session.submit({ expectedRevision: latest().revision, values: { typed: 'synthetic-secret' }, action: { kind: 'submit' } });
       expect(typed).toEqual([expect.objectContaining({ kind: 'type', secure: true, value: 'synthetic-secret' })]);
       expect(entered.length).toBeGreaterThan(1);
       expect(entered.every(value => value === url)).toBe(true);
       expect(isSecretPage(url)).toBe(true);
       expect(latest()).toMatchObject({ picture: true, source: { origin: 'https://login.example.com' } });
+      session.cancel();
+      expect(isSecretPage(url)).toBe(true);
     } finally {
       session.cancel();
       clearSecretPages();

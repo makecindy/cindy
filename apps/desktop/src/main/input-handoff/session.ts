@@ -1294,6 +1294,10 @@ export class InputHandoffSession {
       if (surface === this.fieldPlanSurface && applyFieldPlan(step, this.options.fields)) {
         // Keep the same logical fields through validation errors and repeated reads.
       } else if (this.submissions === 0 && !this.directSignInOffered()) {
+        // Rejecting the plan must not discard the page's verified source or
+        // leave picture input unprotected while later AX reads are unavailable.
+        this.unreadablePage = { source: step.source, url: step.url, signIn: step.signIn };
+        this.guardSignInPage(this.unreadablePage);
         throw new Error('Field plan no longer matches the screen');
       } else {
         // The owner can advance on the original window without submitting our form.
