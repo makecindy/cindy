@@ -360,12 +360,12 @@ async function submit(options: {
     commitRemoteSessionHandoff: () => {}, rememberRecoverableHandoff: () => {},
     deliverRecoverableHandoff: (_id: string, deliver: () => Promise<boolean>) => deliver(),
     getBranchName: (name: string) => `cindy/${name}`,
-    sessionService: { touchUserSend: async () => {}, get: async () => ({ status: 'active' }), update: async () => {} },
+    sessionService: { touchUserSend: vi.fn(async () => {}), get: async () => ({ status: 'active' }), update: async () => {} },
     crossAgentConvertService: { detect: async () => ({ items: [] }) },
     refreshWorktreeForSession: async () => {},
-    worktreeCreationStore: { clear: finishWorktree, set: (_id: string, state: { status: string }) => {
+    worktreeCreationStore: { clear: finishWorktree, set: vi.fn((_id: string, state: { status: string }) => {
       if (state.status === 'failed') finishWorktree();
-    } },
+    }) },
     saveComposerDraft: vi.fn(),
     draftEnableOrcaOptions: () => ({}), createDeferredUiAssignment: () => undefined,
     rememberDeferredUiAssignment: () => {}, getCurrentRoutePath: () => '/elsewhere',
@@ -431,6 +431,22 @@ async function submit(options: {
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  // PR #11152 / unit: execute Send rather than scan the exact worktree if gate.
+  // A single local new tree must expose a real task and its creating state before
+  // starting Git. Previously only source positions guarded this ordering.
+  it('enters a real session before creating its worktree in the background', async () => {
+    const result = await submit({ worktree: { enabled: true, sourceBranch: 'main' } });
+    expect(result.errors).toEqual([]);
+    expect(result.createSession).toHaveBeenCalledOnce();
+    const { sessionService, worktreeCreationStore, navigate } = result.environment;
+    expect(sessionService.touchUserSend).toHaveBeenCalledWith('created', expect.any(Number));
+    expect(worktreeCreationStore.set).toHaveBeenCalledWith('created', expect.objectContaining({ status: 'creating' }));
+    expect(navigate).toHaveBeenCalledWith('/cc-agent/created', { replace: true });
+    expect(result.createWorktree).toHaveBeenCalledOnce();
+    const order = [result.createSession, sessionService.touchUserSend, worktreeCreationStore.set,
+      navigate, result.createWorktree].map(mock => mock.mock.invocationCallOrder[0]);
+    expect(order.every((at, index) => index === 0 || order[index - 1] < at)).toBe(true);
+  });
   // PR #10972 / unit: execute the real submit callbacks with a model reply that
   // arrives after the owner generation changes. Previous cases held the owner
   // fixed, missing old task content creating worktrees/goals in a new account.
