@@ -22310,6 +22310,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertRuntimeOwnerCurrent();
         assertSharedTaskCurrent.admit();
       }
+      // Axis-only revisions keep the receipt for this exact route, as local selections do.
+      // A new model, provider, harness or explicit execution target needs its own confirmation.
+      const previousIntent = agentSwitchPending.get(sessionId);
+      const acknowledgedWindow = targetContextWindow ?? (
+        previousIntent?.sameAgentSelection && previousIntent.model === model &&
+        previousIntent.targetAgentKind === agentKind && previousIntent.providerId === targetProviderId &&
+        (previousIntent.targetAgentDeviceId === undefined || previousIntent.targetAgentDeviceId === runtimeStatus.agentDeviceId)
+          ? previousIntent.confirmedContextWindow : undefined);
       const intent = {
         ...(internalOptions.runtimeSource ? { runtimeSource: internalOptions.runtimeSource } : {}),
         ...(internalOptions.configStaged === true ? { configStaged: true } : {}),
@@ -22319,7 +22327,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         providerId: targetProviderId,
         effort: targetEffort ?? undefined,
         fastMode: targetFastMode,
-        ...(targetContextWindow ? { confirmedContextWindow: targetContextWindow } : {}),
+        ...(acknowledgedWindow !== undefined ? { confirmedContextWindow: acknowledgedWindow } : {}),
       };
       agentSwitchPending.set(sessionId, intent);
       agentSwitchDeps.onPendingSwitchChanged?.(sessionId, projectPendingAgentSwitchIntent(intent));
