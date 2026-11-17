@@ -7,9 +7,10 @@
  * widths with decorations.
  */
 import { InputRule, Node, mergeAttributes, wrappingInputRule, type NodeConfig } from '@tiptap/core';
-import { Fragment, type Node as PMNode, type NodeType } from '@tiptap/pm/model';
-import { liftListItem, splitListItem } from '@tiptap/pm/schema-list';
-import { Selection, TextSelection } from '@tiptap/pm/state';
+import { Fragment, NodeRange, Slice, type Node as PMNode, type NodeType } from '@tiptap/pm/model';
+import { liftListItem, sinkListItem, splitListItem } from '@tiptap/pm/schema-list';
+import { Selection, TextSelection, type EditorState } from '@tiptap/pm/state';
+import { canJoin, ReplaceAroundStep } from '@tiptap/pm/transform';
 import type { EditorView } from '@tiptap/pm/view';
 import type { ComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
 import { applyListContinuation } from '@/lib/composerListContinuation';
@@ -360,13 +361,63 @@ function selectedListItemIsEmpty(view: EditorView, depth: number): boolean {
   );
 }
 
+/**
+ * liftListItem for the composer schema. The composer's listItem is in the
+ * `block` group, so prosemirror-schema-list's liftTarget stops at the parent
+ * item and leaves a nested item directly inside it — a shape the Markdown
+ * serializer skips, dropping the item's text on send. Nested items therefore
+ * lift into the outer list explicitly; top-level items keep the library's
+ * lift-out-of-list behavior.
+ */
+function liftComposerListItem(view: EditorView, itemType: NodeType): boolean {
+  const { state } = view;
+  const { $from, $to } = state.selection;
+  let range = $from.blockRange(
+    $to,
+    (node) => node.childCount > 0 && node.firstChild?.type === itemType,
+  );
+  if (!range) return false;
+  if (range.depth < 2 || $from.node(range.depth - 1).type !== itemType) {
+    return liftListItem(itemType)(state, view.dispatch);
+  }
+
+  // Same steps as prosemirror-schema-list's liftToOuterList, with the outer
+  // list (two levels above the nested list) as the explicit target.
+  const tr = state.tr;
+  const outerListDepth = range.depth - 2;
+  const end = range.end;
+  const endOfList = range.$to.end(range.depth);
+  if (end < endOfList) {
+    // Later siblings become children of the last lifted item.
+    tr.step(
+      new ReplaceAroundStep(
+        end - 1,
+        endOfList,
+        end,
+        endOfList,
+        new Slice(Fragment.from(itemType.create(null, range.parent.copy())), 1, 0),
+        1,
+        true,
+      ),
+    );
+    range = new NodeRange(tr.doc.resolve(range.$from.pos), tr.doc.resolve(endOfList), range.depth);
+  }
+  tr.lift(range, outerListDepth);
+  const $after = tr.doc.resolve(tr.mapping.map(end, -1) - 1);
+  if (canJoin(tr.doc, $after.pos) && $after.nodeBefore?.type === $after.nodeAfter?.type) {
+    tr.join($after.pos);
+  }
+  view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
 function liftEmptyStructuredListItem(view: EditorView, itemType: NodeType): boolean {
   const { $from } = view.state.selection;
   const paragraph = $from.parent;
   if (paragraph.type.name === 'paragraph' && paragraph.content.size > 0) {
     view.dispatch(view.state.tr.delete($from.start(), $from.end()));
   }
-  return liftListItem(itemType)(view.state, view.dispatch);
+  return liftComposerListItem(view, itemType);
 }
 
 function selectedListItemIsOnlyTaskParagraph(view: EditorView, depth: number): boolean {
@@ -404,7 +455,7 @@ function clearTaskPrefixAndLift(
   }
   view.dispatch(view.state.tr.delete(taskPrefix.from, taskPrefix.to));
   const itemType = view.state.schema.nodes.listItem;
-  if (itemType) liftListItem(itemType)(view.state, view.dispatch);
+  if (itemType) liftComposerListItem(view, itemType);
   return true;
 }
 
@@ -487,6 +538,43 @@ export function handleComposerListEnter(
   ) return false;
 
   return handleStructuredListBreak(view) || applyListContinuation(view);
+}
+
+function listItemAncestorCount($pos: EditorState['selection']['$from']): number {
+  let count = 0;
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    if ($pos.node(depth).type.name === 'listItem') count += 1;
+  }
+  return count;
+}
+
+/**
+ * Tab / Shift+Tab change the nesting level of structured list items, like an
+ * outliner. While the selection is in a list these keys belong to the list:
+ * Tab on the first item and Shift+Tab on a top-level item stay put instead of
+ * moving focus away or falling through to the permission-mode shortcut.
+ */
+export function handleComposerListTab(view: EditorView, event: KeyboardEvent): boolean {
+  if (
+    event.key !== 'Tab' ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    event.isComposing
+  ) return false;
+  const itemType = view.state.schema.nodes.listItem;
+  if (!itemType || selectedListItemDepth(view) === null) return false;
+
+  const { $from, $to } = view.state.selection;
+  if (event.shiftKey) {
+    // Lifting a top-level item would move it out of the list; only nested
+    // items move one level up.
+    const nested = listItemAncestorCount($from) > 1 && listItemAncestorCount($to) > 1;
+    if (nested) liftComposerListItem(view, itemType);
+  } else {
+    sinkListItem(itemType)(view.state, view.dispatch);
+  }
+  return true;
 }
 
 /** Exit an empty structured item with one Backspace, matching plain-list input. */

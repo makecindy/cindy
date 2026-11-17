@@ -28,6 +28,7 @@ import {
   type LinkAcceptPayload,
   type LinkClosePayload,
   type PresenceSetPayload,
+  type PresenceSnapshot,
   type PushOwnerStamp,
   type Envelope,
 } from './protocol.js';
@@ -101,6 +102,12 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     this.onStatusChange((status) => {
       if (status !== 'stopped') this.syncCrossAccount();
     });
+    // 先于任何 host 订阅登记:快照在交给 host 之前已经记下。
+    this.trackPresence(this, (cb) => super.onPresenceChanged(cb));
+    if (this.legacy) {
+      const legacy = this.legacy;
+      this.trackPresence(legacy, (cb) => legacy.onPresenceChanged(cb));
+    }
   }
 
   /** Installed only after the host verifies a resource's pinned network/root.
@@ -296,6 +303,71 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     };
   }
 
+  /**
+   * 同账号设备的在线状态只取承载它的那条连接:走兼容连接的设备用兼容连接上的 presence,
+   * 主连接对它的看法(例如新协议连接重建时对尚未建立通道的设备报的离线)不作数;反之亦然。
+   * 2026-11-17:兼容连接设备的真实 presence 被丢弃,host 只能靠一次唤醒时恰好失败的目录读取
+   * 判断它在线,界面因此误报离线 40 多分钟。
+   * 共享任务 / 供应商分享等范围化 peer 维持原语义,只看主连接。兼容连接未运行时一切照旧。
+   */
+  override onPresenceChanged(cb: (snap: PresenceSnapshot) => void): () => void {
+    // 范围化 peer:只看主连接,原样转交。
+    const offScoped = super.onPresenceChanged((snap) => { if (isScopedPeer(snap.deviceId)) cb(snap); });
+    const subscriber = { cb, delivered: new Map<string, PresenceSnapshot>() };
+    this.presenceSubscribers.add(subscriber);
+    return () => { offScoped(); this.presenceSubscribers.delete(subscriber); };
+  }
+
+  /**
+   * 每条连接各自记下同账号 peer 最近一次 presence。承载连接可能晚于 presence 才确定或之后切换
+   * (兼容连接先就绪、Agent-Net 名单晚到;入站 link-open / 出站探测改变路由),所以不在到达时
+   * 一次性决定取舍,而是每当 presence、连接状态或路由变化时,把承载连接上的最新快照交给 host;
+   * 已交过的同一份快照不重复。连接离线时它的快照作废,不会在之后被当作在线补发。
+   */
+  private readonly presenceByConnection = new Map<DeviceLinkClient, Map<string, PresenceSnapshot>>();
+  private readonly presenceSubscribers = new Set<{ cb: (snap: PresenceSnapshot) => void; delivered: Map<string, PresenceSnapshot> }>();
+
+  private trackPresence(connection: DeviceLinkClient, onPresence: (cb: (snap: PresenceSnapshot) => void) => () => void): void {
+    const cache = new Map<string, PresenceSnapshot>();
+    this.presenceByConnection.set(connection, cache);
+    onPresence((snap) => {
+      if (isScopedPeer(snap.deviceId)) return;
+      cache.set(snap.deviceId, snap);
+      this.routePresence(snap.deviceId);
+    });
+    connection.onStatusChange((status) => {
+      if (status !== 'online') {
+        cache.clear();
+        // host 在主连接断开时清空自己的在线视图;重连后承载连接上仍有效的快照要重新交一次。
+        if (connection === this) for (const subscriber of this.presenceSubscribers) subscriber.delivered.clear();
+        return;
+      }
+      for (const peer of this.presencePeers()) this.routePresence(peer);
+    });
+  }
+
+  private presencePeers(): Set<string> {
+    const peers = new Set<string>();
+    for (const cache of this.presenceByConnection.values()) for (const peer of cache.keys()) peers.add(peer);
+    return peers;
+  }
+
+  /** 把承载该 peer 的连接上的最新快照交给 host;承载连接还没有快照时不猜测。 */
+  private routePresence(peer: string): void {
+    const carrier = this.connectionFor(peer);
+    const snap = this.presenceByConnection.get(carrier)?.get(peer);
+    if (!snap) return;
+    for (const subscriber of this.presenceSubscribers) {
+      if (subscriber.delivered.get(peer) === snap) continue;
+      subscriber.delivered.set(peer, snap);
+      try {
+        subscriber.cb(snap);
+      } catch {
+        // 与基类一致:一个订阅方抛错不影响其它订阅方。
+      }
+    }
+  }
+
   override onFrame(cb: InboundFrameHandler): () => void {
     return this.both(super.onFrame(frame => {
       if (!frame.src || this.acceptsScopedEvent(this, frame.src)) cb(frame);
@@ -309,6 +381,7 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
           if (this.legacyOptions?.prefersPrimary?.(frame.payload) ?? (this.legacyOptions?.primaryCapability && caps?.includes(this.legacyOptions.primaryCapability))) {
             this.setLegacyRoute(frame.src, true);
           } else { this.setLegacyRoute(frame.src, false); }
+          this.routePresence(frame.src);
         }
         if (frame.kind === 'invoke' && this.legacyPrefersPrimary.has(frame.src)) {
           this.blockedLegacyFrames.add(frame);
@@ -325,7 +398,10 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
           }
           this.legacyReplies.add(frame.src + '\0' + frame.id);
         }
-        if (!this.legacyPrefersPrimary.has(frame.src)) this.legacyRoutes.add(frame.src);
+        if (!this.legacyPrefersPrimary.has(frame.src) && !this.legacyRoutes.has(frame.src)) {
+          this.legacyRoutes.add(frame.src);
+          this.routePresence(frame.src);
+        }
       }
       cb(frame);
     }));
@@ -461,12 +537,16 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
       && (route === this.legacy || this.legacyOptions?.probeForPeer?.(dst))) {
       return this.legacy.openLink(dst, payload, timeoutMs).then((accepted) => {
         if (this.legacyOptions?.prefersPrimary?.(accepted) ?? (this.legacyOptions?.primaryCapability && accepted.capabilities?.includes(this.legacyOptions.primaryCapability))) {
-          // 探测结果把归属从 legacy 交给主连接:补发一次路径变化,否则「这条对端现在走
-          // 哪条 socket」换了却没有任何事件(桌面端 #9537 的 Codex review P1)。
+          // 归属从 legacy 交给主连接:换人之后要把新承载连接上的事实重新交一次 ——
+          // 在线快照走 routePresence,「这个对端走哪条 socket」走 setLegacyRoute 的
+          // onPeerRouteOwnerChanged(桌面端 #9537 的 Codex review P1)。
           this.setLegacyRoute(dst, true);
+          this.routePresence(dst);
           return super.openLink(dst, payload, timeoutMs);
         }
-        this.setLegacyRoute(dst, false); return accepted;
+        this.setLegacyRoute(dst, false);
+        this.routePresence(dst);
+        return accepted;
       });
     }
     return route?.openLink(dst, payload, timeoutMs) ?? super.openLink(dst, payload, timeoutMs);

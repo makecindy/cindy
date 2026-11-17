@@ -42,8 +42,27 @@ vi.mock('@/lib/sidebarWindow', () => ({ isSidebarWindow: () => mocks.sidebarWind
 vi.mock('@/hooks/useCCSessions', () => ({
   useCCSessions: () => ({ sessions: mocks.sessions, isLoading: mocks.sessionsLoading }),
 }));
+const origins = vi.hoisted(() => {
+  const map = new Map<string, string>();
+  const listeners = new Set<() => void>();
+  return {
+    map,
+    store: {
+      getSessionDeviceId: (sessionId: string) => map.get(sessionId),
+      pinSessionOrigin: (deviceId: string, sessionId: string) => {
+        map.set(sessionId, deviceId);
+        for (const listener of listeners) listener();
+      },
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+    },
+  };
+});
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   useRemoteProjectSessions: () => [],
+  remoteProjectsStore: origins.store,
 }));
 vi.mock('@/hooks/useWindowVisible', () => ({
   useWindowVisible: () => mocks.windowVisible,
@@ -72,7 +91,7 @@ vi.mock('../../right-sidebar/lib/mergeSidebarWindowBack', () => ({
 vi.mock('@/lib/toast', () => ({ toast: { error: mocks.toastError } }));
 vi.mock('../CCAgentSessionView', () => ({
   CCAgentSessionView: (props: Record<string, unknown>) => {
-    mocks.sessionViewProps = props;
+    mocks.sessionViewProps = { ...props, originAtMount: origins.map.get(props.sessionIdProp as string) ?? null };
     return null;
   },
 }));
@@ -287,6 +306,43 @@ describe('OrcaWorkerPanel worker on another computer', () => {
     render(<OrcaWorkerPanel leadSessionId="lead-1" deviceId={null} viewVisible />);
     expect(mocks.remotePaneProps).toBeNull();
     expect(mocks.sessionViewProps).toMatchObject({ sessionIdProp: 'proxy-1' });
+    expect(origins.map.has('proxy-1')).toBe(false);
+  });
+
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：真实 OrcaWorkerPanel；远程 Lead 的同机 worker 在任务视图挂载时
+   *   已登记到 Lead 的设备，列表里其它同机 worker 也已登记（工具栏的项目行不再走本机 IPC）。
+   * - Bug 依据：2026-11-17 唤醒后 Mac Studio 的分片尚未刷新，worker 不在镜像里，协同面板走本机
+   *   local-db:sessions:get → 「找不到这条任务」，并报 maker:worker:project-label「Local project required」。
+   * - 规则：remote-and-mobile-adaptation「Orca 远程 worker」—— 数据库读取失败不得回退到本机。
+   * - 现有覆盖缺口：只覆盖了单独运行设备的 worker（RemoteWorkerSessionPane 自行登记）与本机 Lead。
+   * - 最小失败输入：deviceId='studio'，选中 worker 无 executionDevice，归属表为空。
+   * - tier：unit（jsdom）。
+   */
+  it('routes a remote Lead\'s same-device workers to that device before the task view mounts', () => {
+    origins.map.clear();
+    const localWorker: Record<string, unknown> = { ...remoteWorker };
+    delete localWorker.executionDevice;
+    const sibling = { ...localWorker, workerId: 'w-2', sessionId: 'proxy-2', focused: false };
+    const elsewhere = { ...remoteWorker, workerId: 'w-3', sessionId: 'proxy-3', focused: false };
+    const known = { ...localWorker, workerId: 'w-4', sessionId: 'proxy-known', focused: false };
+    origins.map.set('proxy-known', 'mac-mini');
+    mocks.selection = {
+      workers: [localWorker, sibling, elsewhere, known],
+      focusedWorker: localWorker,
+      selectedWorkerRecord: localWorker,
+      selectedWorkerId: 'w-1',
+      workerSessionId: 'proxy-1',
+    };
+    render(<OrcaWorkerPanel leadSessionId="lead-1" deviceId="studio" viewVisible />);
+    expect(mocks.sessionViewProps).toMatchObject({ sessionIdProp: 'proxy-1', originAtMount: 'studio' });
+    expect(origins.map.get('proxy-2')).toBe('studio');
+    // A worker on its own execution device keeps that device's pane; no lead-device pin.
+    expect(origins.map.has('proxy-3')).toBe(false);
+    // An origin already known for another device is never overwritten.
+    expect(origins.map.get('proxy-known')).toBe('mac-mini');
+    origins.map.clear();
   });
 
   // PR #6787: the work computer no longer depends on the Lead's Agent location.

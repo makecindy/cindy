@@ -34,6 +34,15 @@ export function useComposerWebViewRecovery(inject: (script: string) => void, inv
     callbacks.current.invalidate();
     recover('content-process-terminated');
   }, [generation, recover]);
+  const onInteraction = useCallback(() => {
+    // Keep automatic crash recovery bounded, but do not leave a dead editor
+    // permanently inert until the user backgrounds the app. An explicit touch
+    // or focus request permits one more rebuild of a known terminated page.
+    if (!terminated.current || AppState.currentState !== 'active') return false;
+    attempted.current = false;
+    recover('interaction-after-termination');
+    return true;
+  }, [recover]);
   const onPong = useCallback((id: number) => {
     if (id === probe.current) cancelProbe();
   }, [cancelProbe]);
@@ -63,5 +72,5 @@ export function useComposerWebViewRecovery(inject: (script: string) => void, inv
     });
     return () => { subscription.remove(); cancelProbe(); };
   }, [cancelProbe, recover]);
-  return { generation, current, onTerminated, onPong, onReady };
+  return { generation, current, onTerminated, onInteraction, onPong, onReady };
 }

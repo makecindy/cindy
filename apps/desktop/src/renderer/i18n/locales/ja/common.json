@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "この Pi の実行場所ではシステム指示の追加に対応していません。",
+    "nativeHooksUnsupported": "ツールフックはローカルの Claude Code と Pi のみ対応しています。",
     "title": "タスクのプラグイン",
     "description": "このタスクで使うプラグインを選択します。変更は次のメッセージから反映されます。",
     "unsupported": "リクエストごとの処理はローカルの Pi のみ対応しています。このタスクのエンジンでは利用できません。",
@@ -1365,7 +1366,7 @@
     "REMOTE_PROVIDER_UPDATING": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
     "REMOTE_PROVIDER_UNSUPPORTED": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "リモートタスクでは Claude サブスクリプションを使用できません。ゲートウェイまたは API キーのモデルを選択してください",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスが応答していません。リモートデバイスを確認して再試行してください。",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスから現在応答がありません。ネットワークが遅いか、デバイスが混み合っている可能性があります。Cindy が自動で確認を続けるので、接続が回復してから再試行してください。",
     "INTERNAL": "操作に失敗しました。しばらくしてから再試行してください。",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "SSH 設定がディスク上で変更されました。再読み込みしてからもう一度お試しください。",
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定は保存されましたが、Cindy で再読み込みできませんでした。SSH 設定を再読み込みしてください。",
@@ -4302,7 +4303,6 @@
           "label": "実行するコンピュータ",
           "optionLocal": "このコンピュータ",
           "notSignedIn": "未ログイン",
-          "autoBorrowing": "このコンピュータは未ログインのため、新しいタスクは {{device}} で実行します。ログインは不要です。",
           "local": "新しいタスクはこのコンピュータで実行します。ログイン済みの別のコンピュータも選べます。",
           "pinned": "新しいタスクは {{device}} で、そのコンピュータのログインを使って実行します。実行中のタスクはそのままです。",
           "inline": "実行先",
@@ -8243,6 +8243,8 @@
         "subscribeTopics": "セッションの動きを把握(ターン・セッションイベント、メッセージ内容は含まない)",
         "subscribeMessage": "メッセージ内容のイベント",
         "subscribeMessageDetail": "保存済みのユーザーメッセージと AI の返信を受信します。添付ファイルは別の読み取りと受け渡しで取得します。",
+        "subscribeToolExecution": "ツール実行イベント",
+        "subscribeToolExecutionDetail": "ツール名、入力、結果、エラーを受信します。実行は変更せず、監視のみ行います。",
         "subscribeTaskState": "タスク状態のイベント",
         "subscribeTaskStateDetail": "タスクの実行、待機、完了、アーカイブ、非表示の状態変更を受信します。",
         "subscribeActivity": "AI が思考中のタイミングと、あなたの操作を待っているタイミングを把握",
@@ -8265,6 +8267,10 @@
         "subscribeStartTurnDetail": "タスクでこのプラグインを選んだ場合のみ、現在のメッセージを読み、接続済みモデル、推論強度、Fast を選べます。エラー時はタスクの設定に従い、操作を代わりに承認することはできません。",
         "subscribeModelRequest": "選択したタスクの各モデルリクエストを処理できます",
         "subscribeModelRequestDetail": "タスクでこのプラグインを選んだ場合のみ、モデルへのリクエストを読み、モデル、パラメーター、内容を調整できます。現在はローカルの Pi のみ対応し、エラー時はタスクの設定に従います。接続の認証情報は含まれません。",
+        "subscribeToolCall": "選択したタスクのツール呼び出しを処理できます",
+        "subscribeToolCallDetail": "エンジンが対応する範囲でツールの引数を読み取り、変更、拒否できます。代わりに操作を承認することはできません。",
+        "subscribeToolResult": "選択したタスクのツール結果を処理できます",
+        "subscribeToolResultDetail": "結果を読み取り、エンジンが対応する範囲でコンテキストの追加や結果の置換ができます。実行済みの操作は取り消せません。",
         "subscribeStartTask": "新しいタスクのモデルを選べます",
         "subscribeStartTaskDetail": "新しいタスクでこのプラグインのモデルを選ぶと、最初のメッセージを読んで、接続済みのモデルから 1 つ選びます。この処理は最初のメッセージを送る前に一度だけ実行されます。",
         "card": "メッセージカードを描画",
@@ -12542,6 +12548,7 @@
       "createOwnApp": "自分の App を作成 ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ {{count}} 件の添付ファイルを送信できませんでした：{{names}}",
+    "outboundAttachmentOverLimit": "{{name}}（上限 {{limit}} MB を超過）",
     "unnamedAttachment": "名前のない添付ファイル",
     "text": {
       "discord": {
@@ -13480,9 +13487,17 @@
         "submitLabel": "回答を送信",
         "multiSelectHint": "（複数選択可）",
         "resolved": "✅ 選択: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "このカードは期限切れです",
         "textHint": "質問者のみ回答できます。{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。",
-        "replyHint": "質問者のみ回答できます。選択肢をタップし、複数の質問・複数選択の場合は選択後に送信してください。\n{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。"
+        "replyHint": "質問者のみ回答できます。選択肢をタップし、複数の質問・複数選択の場合は選択後に送信してください。\n{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。",
+        "nextLabel": "次の質問",
+        "stepHint": "質問者のみ回答できます。選択肢をタップするか、{{code}} の後に回答を入力してください。",
+        "stepSubmitHint": "質問者のみ回答できます。選んでから「{{action}}」をタップするか、{{code}} の後に回答を入力し、最後に「{{code}} OK」を送ってください。",
+        "stepTextHint": "質問者のみ回答できます。{{code}} の後に回答を入力してください。",
+        "unanswered": "⚠️ 未回答の質問があります：{{numbers}}。すべて回答してから送信してください。",
+        "unansweredSingle": "⚠️ まだ回答がありません。先に選択肢を選ぶか、回答を入力してください。",
+        "numberSeparator": "、"
       }
     }
   },
@@ -13974,6 +13989,14 @@
         "standard": "標準",
         "fast": "高速",
         "ultrafast": "超高速"
+      },
+      "discoveredCopy": {
+        "title": "「{{device}}」の {{provider}} を使いますか？",
+        "description": "{{unavailable}}続けると「{{device}}」で実行します。ここからいつでも戻せます。",
+        "unavailableHere": "このパソコンの {{provider}} は現在使えません。",
+        "unavailableOn": "「{{device}}」の {{provider}} は現在使えません。",
+        "confirm": "使う",
+        "cancel": "このままにする"
       }
     },
     "permissionSelector": {
@@ -14264,7 +14287,8 @@
         "description": "元のパソコンにある会話の記録は移せないため、引き継ぎの要約から続けます。思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
         "descriptionNativeHistory": "会話の記録をすべてコピーして、続きから再開します。復元できない場合は引き継ぎの要約から続けるため、思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
         "confirm": "パソコンを切り替える",
-        "cancel": "このままにする"
+        "cancel": "このままにする",
+        "discoveredDescription": "{{reason}}{{description}}"
       }
     },
     "agentSelect": {
@@ -14850,6 +14874,8 @@
       "failed": "画像を生成できませんでした。もう一度お試しください"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "このタスクでは cindy_helper が有効ですが、利用できません。タスクの結果を報告できない可能性があります。",
+      "codexHelperUnverified": "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。",
       "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
       "replyFailed": "返信を完了できませんでした",
       "retryTitle": "最後のメッセージを再送信",
@@ -15925,6 +15951,7 @@
       "saveFailed": "コンテキストウィンドウの段階を保存できませんでした"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "リモートからの応答を待っています…",
       "readingMemory": "記憶を読んでいます…",
       "savingMemory": "記憶を保存しています…",
       "deletingMemory": "記憶を削除しています…",
@@ -16196,7 +16223,8 @@
         "project": "プロジェクト",
         "flat": "フラット表示",
         "device": "デバイス",
-        "dialogue": "チャット"
+        "dialogue": "チャット",
+        "automation": "自動化"
       },
       "filterGroupByDeviceManualTip": "手動並び替え中はデバイス別のグループ化を使用できません",
       "deviceGroup": {
@@ -16544,6 +16572,7 @@
       "groupSummary": {
         "project": "プロジェクト",
         "dialogue": "チャット",
+        "automation": "自動化",
         "device": "デバイス"
       },
       "taskStatusHeading": "セッションの状態",
@@ -17240,7 +17269,9 @@
           "jira_read": "Jira の読み取り",
           "jira_comment": "Jira へのコメント",
           "sessions_dispatch": "セッションのディスパッチ",
-          "feishu_read": "Feishu メッセージの読み取り"
+          "feishu_read": "Feishu メッセージの読み取り",
+          "settings_read": "共有メンバーを読み取る",
+          "usage_read": "使用量とプロバイダーグループの状態を読み取る"
         },
         "project": "プロジェクトディレクトリ",
         "capabilitiesLabel": "許可する機能",
@@ -17252,7 +17283,9 @@
           "jira_read": "Jira 課題の照会・読み取り（キー指定 / JQL 検索）",
           "jira_comment": "Jira 課題へのコメント追加",
           "sessions_dispatch": "{{appName}} セッションの作成・再開とメッセージ送信",
-          "feishu_read": "最近アクティブなチャットの一覧取得、指定チャット（グループ/DM）の最新メッセージ取得"
+          "feishu_read": "最近アクティブなチャットの一覧取得、指定チャット（グループ/DM）の最新メッセージ取得",
+          "settings_read": "自分が共有したメンバーと利用可能なモデルを、このコンピューターまたは同じアカウントで許可された他のコンピューターから読み取る。変更は行わない",
+          "usage_read": "現在の Cindy アカウントに接続された、このコンピューター上の Claude/Codex のアカウント ID、プラン、クォータ期間、更新時刻を読み取ります。このコンピューターと、同じアカウントで許可された他のコンピューターの記録済みの日別・モデル別使用量、推定費用、プロバイダーグループの設定と状態、表示可能なメンバー・デバイスの ID、名前、アバターも読み取ります。サブスクリプションのログインメール、アカウントのディレクトリ、内部フィンガープリント、認証情報、ファイルの読み取りや、アカウント・設定の変更はできません。"
         },
         "capabilityWarn": {
           "ghostMissing": "「{{name}}」プラグインが必要ですが未インストールです——実行時にこの機能は失敗します",

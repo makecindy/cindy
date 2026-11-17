@@ -45,7 +45,8 @@ export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
   effectiveProfile?: SessionRuntimeProfile;
   pendingMutation?: {
     generation: number;
-    source: 'agent' | 'fallback';
+    /** user = 用户在面板里登记、下一次发送才生效的选择。 */
+    source: 'agent' | 'fallback' | 'user';
     profile: SessionRuntimeProfile;
   } | null;
   fallbackEnabled?: boolean;
@@ -368,7 +369,7 @@ export function registerGetSessionRuntimeTool(
     description:
       '只读查询本机 session 的统一状态：记录生命周期、运行/等待/正常结束/出错结束、标题工作流语义、' +
       '开始时间、最后活动时间、动作摘要、优雅停止状态，以及运行时模型组合、待生效修改和 generation；' +
-      '不返回提示词正文、工具参数或凭证。',
+      'pending.source=user 表示用户在面板里登记、下一条消息发送时才生效的选择。不返回提示词正文、工具参数或凭证。',
     inputShape: {
       session_id: z.string().min(1).optional().describe('目标 session id；省略时查询当前任务。'),
     },
@@ -434,7 +435,8 @@ export function registerSetSessionRuntimeTool(
       '原子调整当前或指定本机任务的模型来源、模型、推理强度与 Fast。省略 session_id 时作用于当前任务；' +
       '临时调整在忙碌任务的当前 turn 结束后生效。先用 get_session_runtime 读取 generation，再用 expected_generation 防止覆盖并发修改。' +
       '提供 harness 时必须同时指定 model：完整选择会保存到目标任务，并在下一条消息发送时切换（返回 next_send）；' +
-      '省略 harness 保持临时调整语义。不修改全局默认选择。',
+      '省略 harness 保持临时调整语义；但目标任务已有等待下一条消息生效的选择时，省略 harness 改为修改那次选择（未提供的字段沿用它），同样返回 next_send。' +
+      '协同 Worker 出错或撞用量上限时，登记新选择后用 send_to_worker 发下一条消息：宿主先换到新路线再启动，不会先用旧路线。不修改全局默认选择。',
     inputShape: {
       harness: z.enum(['claude-code', 'codex', 'pi']).optional().describe('目标执行引擎；提供时必须同时指定 model。'),
       session_id: z.string().min(1).optional().describe('目标 session id；省略时使用当前任务。'),

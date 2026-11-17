@@ -1468,6 +1468,19 @@ export async function readSubscriptionSessionAccount(
   };
 }
 
+/** A share stays on its published provider, even when its original account was merged elsewhere. */
+export async function canSwitchHostedSubscriptionAccount(
+  providerId: string, sessionId: string, model: string,
+): Promise<boolean> {
+  const ref = resolveSubscriptionPoolProvider(providerId);
+  if (!ref) return false;
+  const view = await readSubscriptionSessionAccount(ref.kind, {
+    sessionId, model, routeProviderId: providerId,
+  }, { remote: true });
+  return view.state === 'bound' && view.account.blocked === true && view.account.switchAvailable === true
+    && (!view.replacementProviderId || view.replacementProviderId === providerId);
+}
+
 export async function readSubscriptionPoolUsage(
   providerId: string,
 ): Promise<Usage | null | undefined> {
