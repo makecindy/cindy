@@ -499,6 +499,18 @@ describe('Host copies of desktop expressions', () => {
     assert.equal(hostSearch.params, desktopSearch.params);
     assert.deepEqual(hostSearch.body.filter(line => line !== 'readDeviceId: input.deviceId,').map(line => search.get(line) ?? line), desktopSearch.body);
   });
+
+  // 规则：并存方案 A（审核方 2026-11-17）。闸门关着时，Host 交给订阅桥的登录端口拒绝桥会提前续期的令牌
+  // （apps/host/src/agent/codex-runtime.ts 的 BRIDGE_REFRESH_MARGIN_SEC），这个秒数照抄桥自己的续期提前量
+  // （anthropicResponsesBridgeHostCore.ts 的 REFRESH_MARGIN_SEC）。失效后果：桥的提前量改大而 Host 没跟上时，
+  // 闸门关着时 Host 会放行一个桥随后就续期的令牌，续期结果写回桌面也在用的登录文件；改小时 Host 会拒掉桥不会续期的令牌。
+  it('refuses the tokens the subscription bridge would renew, with the bridge\'s own margin', () => {
+    const bridge = /^const REFRESH_MARGIN_SEC = (\d+);$/m.exec(read(path.join(desktopMain, 'maker-host/anthropicResponsesBridgeHostCore.ts')))?.[1];
+    const host = /^export const BRIDGE_REFRESH_MARGIN_SEC = (\d+);$/m.exec(read(path.join(hostAgent, 'codex-runtime.ts')))?.[1];
+    assert.ok(bridge, 'REFRESH_MARGIN_SEC is declared in anthropicResponsesBridgeHostCore.ts');
+    assert.ok(host, 'BRIDGE_REFRESH_MARGIN_SEC is declared in apps/host/src/agent/codex-runtime.ts');
+    assert.equal(host, bridge, `桥的续期提前量是 ${bridge} 秒，Host 的 BRIDGE_REFRESH_MARGIN_SEC 是 ${host} 秒：两边要一起改`);
+  });
 });
 
 // 以下断言原在桌面普通单测里读 register.ts；第一批桌面准备把被守护的代码原样搬进共用文件
