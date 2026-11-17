@@ -58,7 +58,7 @@ import {
   type RemoteAgentReverseRequest,
   type RemoteAgentTeardownReason,
 } from '@cindy/device-link';
-import { AgentStartupStoppedError, TurnDispatchRejectedError, type AgentEvent, type AgentSessionHandle, type SendOptions, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
+import { AgentNotAuthenticatedError, AgentStartupStoppedError, TurnDispatchRejectedError, type AgentEvent, type AgentSessionHandle, type SendOptions, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
 
 import { EXEC_SERVER_WS_PATH } from '../controller/execServerRelay';
 import { RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke, type RemoteAgentPoller } from '../controller/runClient';
@@ -81,7 +81,7 @@ import {
   type RelayRunFailure,
 } from './groupRelay';
 import { PROVIDER_GROUP_LOCAL_MEMBER_KEY } from '../../../shared/providerGroup';
-import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
+import { decideProviderGroupFailure, providerGroupFailureSignals } from '../../provider-group/failurePolicy';
 import { isAccountUsageLimitError } from '../../maker-ipc/usageLimitAutoResume';
 import { projectPathText } from '../executor/workspace';
 import { listManagedSkillFiles, managedSkillDigest } from '../managedSkillDigest';
@@ -535,8 +535,8 @@ interface Run {
   abortRequested?: boolean;
   /** 本机 Agent 上一次报来的「正在运行一轮」。 */
   turnRunning?: boolean;
-  /** 同一次发送的限额 RPC 失败与终态事件共用一次交付，下一次发送时作废。 */
-  quotaFailure?: { delivery: Promise<void>; deliver?: () => void };
+  /** 同一次发送的账号认证／限额 RPC 失败与终态事件共用一次交付，下一次发送时作废。 */
+  accountFailure?: { delivery: Promise<void>; deliver?: () => void };
   lastSendCallId?: string;
 }
 
@@ -591,6 +591,19 @@ export function remoteAgentErrorInfo(error: unknown): RemoteAgentErrorInfo {
   const code = /^\[([A-Z][A-Z0-9_]+)\]/.exec(err.message)?.[1]
     ?? (typeof rawCode === 'string' && rawCode ? rawCode : 'AGENT_ERROR');
   return { code: code.slice(0, 128), message: err.message.slice(0, 2048), name: err.name };
+}
+
+/** Native terminal events prove the attempt ended; share the existing failure policy. */
+function isAccountFailure(failure: RelayRunFailure): boolean {
+  const decision = decideProviderGroupFailure(failure, 'run');
+  return isAccountUsageLimitError(failure) || (decision.action === 'switch' && decision.cause === 'auth');
+}
+
+/** This stable allocator rejection happens before native send. A generic 401 or
+ * auth-looking exception after invocation is not proof that work was rejected. */
+function isAccountSendFailure(failure: RemoteAgentErrorInfo): boolean {
+  return isAccountUsageLimitError(failure) || failure.code === 'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED'
+    || failure.message.startsWith('[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED]');
 }
 
 /** 本机侧的任务 id：控制端设备 + 控制端任务 id 派生，避免与本机自己的任务撞 id。 */
@@ -1783,8 +1796,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
    */
   async function offerSwitchAfterResumeFailure(run: Run, member: GroupRelayMember, error: unknown, model: string): Promise<void> {
     if (!run.acceptsGroupSwitch || run.closing) return;
-    const message = error instanceof Error ? error.message : String(error);
-    const token = await groupSwitchOfferFor(run, member, { message }, model, 'start', error instanceof AgentStartupStoppedError).catch(() => null);
+    const stopped = error instanceof AgentStartupStoppedError || error instanceof AgentNotAuthenticatedError;
+    const token = await groupSwitchOfferFor(run, member, providerGroupFailureSignals(error), model, 'start', stopped).catch(() => null);
     if (token && !run.closing) append(run, { t: 'state', state: { [GROUP_SWITCH_STATE_KEY]: token } });
   }
 
@@ -1857,9 +1870,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         }
         meterRunUsage(run, handle.model, event);
         const failure = currentTerminal ? relayRunFailureOf(event) : null;
-        if (failure && isAccountUsageLimitError(failure)) {
+        if (failure && isAccountFailure(failure)) {
           groupTurnFailed = true;
-          await deliverQuotaFailure(run, localGroupMember(run.providerId ?? ''), failure, handle.model, () => {
+          await deliverAccountFailure(run, localGroupMember(run.providerId ?? ''), failure, handle.model, () => {
             append(run, { t: 'event', event });
           });
           continue;
@@ -1874,7 +1887,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             if (run.closing) break;
             if (token) append(run, { t: 'state', state: { [GROUP_SWITCH_STATE_KEY]: token } });
           } else if (isProductTurnDoneEvent(event)) {
-            noteGroupSwitchTurnEnded(run, groupTurnFailed || !!run.quotaFailure);
+            noteGroupSwitchTurnEnded(run, groupTurnFailed || !!run.accountFailure);
             groupTurnFailed = false;
           }
         }
@@ -1888,15 +1901,15 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     // Native close can end this stream. Its caller owns teardown; the event pump
     // must not join that finish and become part of a close -> pump -> close wait.
     if (run.closing) return;
-    // RPC 的限额拒绝可能先到、没有原生终态；流结束或抛错都不能抢先作废切换入口。
-    await waitForQuotaFailureDelivery(run).catch(error => {
+    // RPC 的账号故障拒绝可能先到、没有原生终态；流结束或抛错都不能抢先作废切换入口。
+    await waitForAccountFailureDelivery(run).catch(error => {
       if (!streamFailed) streamError = error;
       streamFailed = true;
     });
     // 受邀者的任务按组分到了本机这一台、一轮进行中本机的 Agent 意外结束(进程退出、事件流中断)：与组内电脑上的
     // 任务意外结束一样可以换一台——凭证排在收尾前面，收尾按出错处理，受邀者那边才会把这一轮当作失败。
     const midTurn = run.activeTurn === true;
-    if (run.acceptsGroupSwitch && !run.closing && midTurn && !groupTurnFailed && !run.quotaFailure) {
+    if (run.acceptsGroupSwitch && !run.closing && midTurn && !groupTurnFailed && !run.accountFailure) {
       const info = streamFailed ? remoteAgentErrorInfo(streamError) : RELAY_UNAVAILABLE_ERROR;
       const token = await groupSwitchOfferFor(run, localGroupMember(run.providerId!), {
         reason: 'remote_agent_closed',
@@ -2130,33 +2143,33 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   }
 
   /**
-   * SDK 的限额终态与 send() 拒绝可能按任意顺序到达。先交付凭证与唯一一次终态，再返回 RPC 失败，
+   * SDK 的账号故障终态与 send() 拒绝可能按任意顺序到达。先交付凭证与唯一一次终态，再返回 RPC 失败，
    * 控制端才能在 active turn 仍在时接管；迟到的同次终态不再触发第二次交接或续跑。
    */
-  function deliverQuotaFailure(
+  function deliverAccountFailure(
     run: Run,
     member: GroupRelayMember,
     failure: RelayRunFailure,
     model: string,
     deliver?: () => void,
   ): Promise<void> {
-    if (run.quotaFailure) {
+    if (run.accountFailure) {
       // 选下一台期间原生终态到了，优先保留它的结构化字段与事件来源。
-      if (deliver) run.quotaFailure.deliver = deliver;
-      return run.quotaFailure.delivery;
+      if (deliver) run.accountFailure.deliver = deliver;
+      return run.accountFailure.delivery;
     }
     const pending = { delivery: Promise.resolve(), deliver };
-    run.quotaFailure = pending;
+    run.accountFailure = pending;
     pending.delivery = Promise.resolve().then(async () => {
       const token = run.relay || run.acceptsGroupSwitch || run.groupLoad
         ? await groupSwitchOfferFor(run, member, failure, model).catch(() => null)
         : null;
-      if (run.closing || run.quotaFailure !== pending) return;
+      if (run.closing || run.accountFailure !== pending) return;
       if (token) append(run, { t: 'state', state: { [GROUP_SWITCH_STATE_KEY]: token } });
       if (pending.deliver) pending.deliver();
       else append(run, {
         t: 'event',
-        event: { type: 'error', source: run.kind, data: { ...failure, isTerminal: true, usageLimit: true } },
+        event: { type: 'error', source: run.kind, data: { ...failure, isTerminal: true, ...(isAccountUsageLimitError(failure) ? { usageLimit: true } : {}) } },
       });
       emitState(run);
     });
@@ -2164,12 +2177,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   }
 
   /** 只供被动结束等待；显式关闭仍直接走 finishRun，不等待组选下一台。 */
-  async function waitForQuotaFailureDelivery(run: Run): Promise<void> {
-    let pending = run.quotaFailure;
+  async function waitForAccountFailureDelivery(run: Run): Promise<void> {
+    let pending = run.accountFailure;
     while (!run.closing && pending) {
       await pending.delivery;
-      if (run.quotaFailure === pending) return;
-      pending = run.quotaFailure;
+      if (run.accountFailure === pending) return;
+      pending = run.accountFailure;
     }
   }
 
@@ -2189,7 +2202,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         run.activeTurn === true, run.abortRequested === true);
       run.abortRequested = false;
       run.activeTurn = true;
-      run.quotaFailure = undefined;
+      run.accountFailure = undefined;
       run.lastSendCallId = callId;
     }
     const opts = args[1];
@@ -2284,15 +2297,15 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       let turnFailed = false;
       /** 失败时先(异步)判定要不要发凭证，期间那台转来的内容暂存，凭证排在错误前面。 */
       const holdForGroupSwitch = (failure: RelayRunFailure, deliver: () => void): void => {
-        const quota = isAccountUsageLimitError(failure);
-        if (quota && held) {
-          void deliverQuotaFailure(run, current, failure, backend.model ?? payload.options.model, deliver);
+        const accountFailure = isAccountFailure(failure);
+        if (accountFailure && held) {
+          void deliverAccountFailure(run, current, failure, backend.model ?? payload.options.model, deliver);
           return;
         }
-        const queue: Array<() => void> = quota ? [] : [deliver];
+        const queue: Array<() => void> = accountFailure ? [] : [deliver];
         held = queue;
-        const delivery = quota
-          ? deliverQuotaFailure(run, current, failure, backend.model ?? payload.options.model, deliver)
+        const delivery = accountFailure
+          ? deliverAccountFailure(run, current, failure, backend.model ?? payload.options.model, deliver)
           : groupSwitchOfferFor(run, current, failure, backend.model ?? payload.options.model);
         void delivery
           .catch(() => null)
@@ -2322,8 +2335,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           });
           void finishRun(run, reason, 'navigation', false, true);
         };
-        if (run.quotaFailure) {
-          void waitForQuotaFailureDelivery(run).then(() => emit(finish), finish);
+        if (run.accountFailure) {
+          void waitForAccountFailureDelivery(run).then(() => emit(finish), finish);
           return;
         }
         // 一轮进行中那台的任务意外结束(离线、崩溃等)：与终态错误一样可以换一台。
@@ -2363,13 +2376,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           }
           if (failure) {
             turnFailed = true;
-            if (!held || isAccountUsageLimitError(failure)) {
+            if (!held || isAccountFailure(failure)) {
               holdForGroupSwitch(failure, deliver);
               return;
             }
           }
           if (isProductTurnDoneEvent(typed)) {
-            noteGroupSwitchTurnEnded(run, turnFailed || !!run.quotaFailure);
+            noteGroupSwitchTurnEnded(run, turnFailed || !!run.accountFailure);
             turnFailed = false;
           }
           emit(deliver);
@@ -2585,19 +2598,19 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         ? error.info.code === 'TURN_DISPATCH_REJECTED' : info.code === 'TURN_DISPATCH_REJECTED';
       if (dispatchRejected) info.code = 'TURN_DISPATCH_REJECTED';
       if (method === 'send' && run.lastSendCallId === callId && run.relay === relay) {
-        const quota = run.quotaFailure !== undefined || isAccountUsageLimitError(info);
-        const previous = dispatchRejected && !quota && !run.closing ? run.terminalOwnership?.rejectSend(callId) : undefined;
+        const accountFailure = run.accountFailure !== undefined || isAccountSendFailure(info);
+        const previous = dispatchRejected && !accountFailure && !run.closing ? run.terminalOwnership?.rejectSend(callId) : undefined;
         // A post-invocation timeout can still have accepted work. Preserve any
         // live turn, without rearming one already ended by a terminal or Stop.
         if (previous) {
           run.abortRequested = run.abortRequested === true || previous.aborted;
           run.activeTurn = !run.abortRequested && previous.active;
-        } else if (!sendInvoked || dispatchRejected || quota) {
+        } else if (!sendInvoked || dispatchRejected || accountFailure) {
           run.activeTurn = false;
         }
-        if (run.quotaFailure) await run.quotaFailure.delivery;
-        else if (isAccountUsageLimitError(info)) {
-          await deliverQuotaFailure(run, relay.member, info, relay.model ?? run.authorizedModel ?? '');
+        if (run.accountFailure) await run.accountFailure.delivery;
+        else if (isAccountSendFailure(info)) {
+          await deliverAccountFailure(run, relay.member, info, relay.model ?? run.authorizedModel ?? '');
         }
       }
       append(run, { t: 'result', callId, ok: false, error: info });
@@ -2895,18 +2908,18 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       const info = remoteAgentErrorInfo(error);
       if (error instanceof TurnDispatchRejectedError) info.code = error.code;
       if (method === 'send' && run.lastSendCallId === callId) {
-        const quota = run.quotaFailure !== undefined || isAccountUsageLimitError(info);
-        const previous = info.code === 'TURN_DISPATCH_REJECTED' && !quota && !run.closing
+        const accountFailure = run.accountFailure !== undefined || isAccountSendFailure(info);
+        const previous = info.code === 'TURN_DISPATCH_REJECTED' && !accountFailure && !run.closing
           ? run.terminalOwnership?.rejectSend(callId) : undefined;
         if (previous) {
           run.abortRequested = run.abortRequested === true || previous.aborted;
           run.activeTurn = !run.abortRequested && previous.active;
-        } else if (!sendInvoked || info.code === 'TURN_DISPATCH_REJECTED' || quota) {
+        } else if (!sendInvoked || info.code === 'TURN_DISPATCH_REJECTED' || accountFailure) {
           run.activeTurn = false;
         }
-        if (run.quotaFailure) await run.quotaFailure.delivery;
-        else if (isAccountUsageLimitError(info)) {
-          await deliverQuotaFailure(run, localGroupMember(run.providerId ?? ''), info, handle?.model ?? run.authorizedModel ?? '');
+        if (run.accountFailure) await run.accountFailure.delivery;
+        else if (isAccountSendFailure(info)) {
+          await deliverAccountFailure(run, localGroupMember(run.providerId ?? ''), info, handle?.model ?? run.authorizedModel ?? '');
         }
       }
       append(run, { t: 'result', callId, ok: false, error: info });

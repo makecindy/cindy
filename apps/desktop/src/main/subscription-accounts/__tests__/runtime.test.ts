@@ -5395,6 +5395,10 @@ describe('shared subscription recovery through controller and account allocation
     { original: 'second', phase: 'run', boundary: 'none' },
     { original: 'default', phase: 'run', boundary: 'all-run-limited' },
     { original: 'default', phase: 'cold', boundary: 'none' },
+    { original: 'default', phase: 'auth-cold', boundary: 'none' },
+    { original: 'default', phase: 'auth-send', boundary: 'none' },
+    { original: 'default', phase: 'auth-send', boundary: 'no-spare' },
+    { original: 'default', phase: 'auth-pending-start', boundary: 'none' },
     { original: 'default', phase: 'pre-pool', boundary: 'none' },
     { original: 'default', phase: 'pending-start', boundary: 'none' },
     { original: 'default', phase: 'cold', boundary: 'all-limited' },
@@ -5432,10 +5436,14 @@ describe('shared subscription recovery through controller and account allocation
     let probeEntered!: () => void;
     let resolveProbe: (() => void) | undefined;
     const probeGate = new Promise<void>(resolve => { probeEntered = resolve; });
+    let nativeSequence = 0;
+    const pendingStart = phase === 'pending-start' || phase === 'auth-pending-start';
     const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async (options: StartSessionOptions) => {
       starts.push(options);
+      if (phase === 'auth-cold' && options.resumeSessionId) throw new AgentNotAuthenticatedError('claude-code');
+      if (phase === 'auth-pending-start') throw new AgentStartupCleanupPendingError('not authenticated', { cause: 'not authenticated', whenStopped });
       if (phase === 'pending-start') throw new AgentStartupCleanupPendingError('usage limit exceeded', { cause: 'usage limit exceeded', whenStopped });
-      const id = `isolated-native-${starts.length}`;
+      const id = `isolated-native-${++nativeSequence}`;
       const queue: AgentEvent[] = [];
       let ended = false;
       let wake: (() => void) | undefined;
@@ -5538,8 +5546,8 @@ describe('shared subscription recovery through controller and account allocation
       const hostTask = hostSessionIdFor(peer, task);
       if (phase !== 'pre-pool') h.bindings.set(`task:${hostTask}`, { providerId: 'anthropic', accountId: original, via: published });
       else delete h.pools.anthropic;
-      if (phase === 'pending-start') {
-        await expect(open()).rejects.toThrow('usage limit exceeded');
+      if (pendingStart) {
+        await expect(open()).rejects.toThrow(phase === 'auth-pending-start' ? 'not authenticated' : 'usage limit exceeded');
         expect(await canSwitchHostedSubscriptionAccount(published, hostTask, model)).toBe(true);
         expect((await readSubscriptionPool(a)).accounts.map(entry => entry.running)).toEqual([1, 0]);
         expect(await service.prepareGuestStartSwitch(task)).toBeNull();
@@ -5558,7 +5566,42 @@ describe('shared subscription recovery through controller and account allocation
       if (phase === 'pre-pool') h.pools.anthropic = { strategy: 'order', accounts: [account('default'), account('second')].map(entry => ({ ...entry, limit: 4 })) };
       const originalLease = await acquireSubscriptionAccount(published, model, [`task:${hostTask}`], true,
         { accountId: original, remote: true });
-      if (phase === 'cold' || phase === 'pre-pool') {
+      if (phase === 'auth-cold') {
+        originalLease!.release();
+        await active.close('close', 'navigation');
+        // Cached allocator admission remains healthy; the real wrapper releases
+        // the lease after target.startSession's definite no-process auth failure.
+        await expect(open(oldNative)).rejects.toThrow('agent-not-authenticated:claude-code');
+        expect(wireOrder).toContain('token');
+        expect(wireOrder.indexOf('token')).toBeLessThan(wireOrder.indexOf('start-failed'));
+        const recovery = await service.prepareGuestStartSwitch(task);
+        expect(recovery).not.toBeNull();
+        try { await relocate(recovery!.isCurrent); } finally { recovery!.dispose(); }
+        await continueSession();
+      } else if (phase === 'auth-send') {
+        originalLease!.release();
+        h.pools.anthropic!.accounts[0].reloginIdentity = 'previous@example.invalid';
+        if (boundary === 'no-spare') h.pools.anthropic!.accounts[1].paused = true;
+        h.read.mockImplementation(async (_kind: string, dir: string) => ({ authenticated: !dir.endsWith(original), identity: dir }));
+        await refreshSubscriptionPool(a, true);
+        const count = received.length;
+        await expect(active.call('send', [{ type: 'user', content: 'Continue.' }])).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+        expect(received).toHaveLength(count); // lease.assertDispatchable rejected before native send; no native terminal exists.
+        if (boundary === 'no-spare') {
+          expect(guestSwitch.hasOffer(task)).toBe(false);
+          expect(wireOrder).not.toContain('token');
+          expect(starts).toHaveLength(1);
+          return;
+        }
+        expect(wireOrder).toContain('token');
+        await vi.waitFor(() => expect(events.some(event => event.type === 'error')).toBe(true));
+        const authError = events.find(event => event.type === 'error')!.data as { message: string; usageLimit?: boolean };
+        expect(authError.message).toContain('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+        expect(authError.usageLimit).not.toBe(true);
+        expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+        expect(wireOrder.indexOf('token')).toBeLessThan(wireOrder.indexOf('error'));
+        await service.onTurnError(task, authError, 1);
+      } else if (phase === 'cold' || phase === 'pre-pool') {
         await active.close('close', 'navigation');
         expect(originalLease!.observeFailure({ sdkError: 'rate_limit' }, model, 'run')).toBe(true);
         expect(readSubscriptionAccountBlocked('anthropic', original, model)).toBe(true);
@@ -5622,9 +5665,9 @@ describe('shared subscription recovery through controller and account allocation
         return;
       }
       await vi.waitFor(() => expect(events.filter(event => event.type === 'done').length).toBe(2));
-      expect(starts).toHaveLength(2);
-      expect(starts[1]![NATIVE_SUBSCRIPTION_ACCOUNT]!.configDir).toBe(`anthropic/${nextAccount}`);
-      expect(starts[1]!.resumeSessionId).toBeUndefined();
+      expect(starts).toHaveLength(phase === 'auth-cold' ? 3 : 2);
+      expect(starts.at(-1)![NATIVE_SUBSCRIPTION_ACCOUNT]!.configDir).toBe(`anthropic/${nextAccount}`);
+      expect(starts.at(-1)!.resumeSessionId).toBeUndefined();
       expect(h.bindings.get(`native:${oldNative}`)?.accountId).toBe(original);
       expect(h.bindings.get('native:isolated-native-2')?.accountId).toBe(nextAccount);
       expect(h.bindings.get(`task:${hostTask}`)?.accountId).toBe(nextAccount);

@@ -1766,13 +1766,17 @@ describe('provider group "switch to another computer" for shared users', () => {
   // provider-groups.md §6.1, unit: exercise the real host, relay and run client.
   // Existing cases emitted a terminal event independently of send(), missing the
   // quota RPC rejection that could overtake the switch offer and lose recovery.
-  // Cover local/relayed execution and both native-event orders; one failure must
+  // Cover quota/auth, local/relayed execution and both native-event orders; one failure must
   // produce one offer/error before rejecting send, then one send on the new host.
-  it.each(['local', 'member'] as const)('settles quota replies through one switch offer on %s', async placement => {
+  it.each((['local', 'member'] as const).flatMap(placement => (['quota', 'auth'] as const).map(cause => ({ placement, cause }))))(
+    'settles $cause replies through one switch offer on $placement', async ({ placement, cause }) => {
+    const rejection = cause === 'quota' ? 'You have hit your usage limit' : '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login';
+    const terminal: AgentEvent = cause === 'quota' ? USAGE_LIMIT_ERROR
+      : { type: 'error', data: { message: rejection, sdkError: 'authentication_failed', errorStatus: 401, isTerminal: true } } as AgentEvent;
     for (const eventFirst of [true, false]) {
       const onSend = (record: Started) => {
-        if (eventFirst) record.emit(USAGE_LIMIT_ERROR);
-        throw new Error('You have hit your usage limit');
+        if (eventFirst) record.emit(terminal);
+        throw new Error(rejection);
       };
       const env = setup({
         plans: [
@@ -1786,16 +1790,17 @@ describe('provider group "switch to another computer" for shared users', () => {
       const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
       try {
         await expect(first.client.call('send', [{ type: 'user', content: 'finish the task' }, { throwOnStartFailure: true }]))
-          .rejects.toThrow('usage limit');
+          .rejects.toThrow(rejection);
         const token = switchTokenIn(first.stream);
         expect(token).toBeDefined();
         const errors = () => first.stream.filter(item => item.t === 'event' && item.event.type === 'error');
         expect(errors()).toHaveLength(1);
+        if (cause === 'auth') expect((errors()[0] as { event: AgentEvent }).event.data).not.toHaveProperty('usageLimit', true);
         expect(first.stream.findIndex(item => item.t === 'state' && item.state.providerGroupSwitch === token))
           .toBeLessThan(first.stream.findIndex(item => item.t === 'event' && item.event.type === 'error'));
 
         // A late or repeated SDK terminal must not offer another switch or resume.
-        record.emit(USAGE_LIMIT_ERROR);
+        record.emit(terminal);
         record.emit({ type: 'status', source: 'claude-code', data: { status: 'quota-tail-flushed' } });
         await waitFor(() => first.stream.some(item => item.t === 'event'
           && (item.event.data as { status?: string })?.status === 'quota-tail-flushed'));
@@ -1960,12 +1965,12 @@ describe('provider group "switch to another computer" for shared users', () => {
       } finally { release(); await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
     });
 
-  it('does not turn an uncertain send timeout into a quota event or switch offer', async () => {
-    const env = setup({ mini: { onSend: () => { throw new Error('request timed out'); } } });
+  it.each(['request timed out', 'not authenticated'] as const)('does not turn an uncertain send rejection into an account event or switch offer: %s', async rejection => {
+    const env = setup({ mini: { onSend: () => { throw new Error(rejection); } } });
     const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
     try {
       await expect(first.client.call('send', [{ type: 'user', content: 'finish the task' }, {}]))
-        .rejects.toThrow('request timed out');
+        .rejects.toThrow(rejection);
       expect(switchTokenIn(first.stream)).toBeUndefined();
       expect(first.stream.some(item => item.t === 'event' && item.event.type === 'error')).toBe(false);
       expect(env.relay.noteRunFailure).not.toHaveBeenCalled();

@@ -21,12 +21,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 // External authentication/status/quota use isolated fixtures. CLI execution,
 // account selection/placement/bindings, hosted transport, message assembly and handoff are real.
-const poolCli = vi.hoisted(() => ({ active: false, limited: new Set<string>() }));
+const poolCli = vi.hoisted(() => ({ active: false, limited: new Set<string>(), signedOut: new Set<string>() }));
 vi.mock('../../subscription-accounts/nativeCli.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../../subscription-accounts/nativeCli.js')>();
   return { ...actual,
     readNativeAccount: async (...args: Parameters<typeof actual.readNativeAccount>) => poolCli.active
-      ? { authenticated: true, authSource: 'oauth', identity: args[1] } : actual.readNativeAccount(...args),
+      ? { authenticated: !poolCli.signedOut.has(args[1]), authSource: 'oauth', identity: args[1] } : actual.readNativeAccount(...args),
     readNativeAccountUsage: async (...args: Parameters<typeof actual.readNativeAccountUsage>) => poolCli.active
       ? { claudeUsage: { updatedAt: Date.now(), fiveHour: { utilization: poolCli.limited.has(args[1]) ? 100 : 10,
         resetsAt: Date.now() / 1000 + 3600 }, sevenDay: null, scoped: [] } } : actual.readNativeAccountUsage(...args),
@@ -551,15 +551,17 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
   afterAll(async () => {
     poolCli.active = false;
     poolCli.limited.clear();
+    poolCli.signedOut.clear();
     commitVolatileAppSession(priorSession.mode, priorSession.dataOwnerId, true);
     configureUserDataDir(priorData);
     vi.unstubAllEnvs();
     await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
-  async function exercise(original: 'a' | 'b', failure: 'cold' | 'run', disconnectHandoff = false) {
+  async function exercise(original: 'a' | 'b', failure: 'cold' | 'run' | 'cold-auth' | 'send-auth', disconnectHandoff = false) {
     commitVolatileAppSession('local', undefined, true);
     poolCli.limited.clear();
+    poolCli.signedOut.clear();
     const caseRoot = path.join(root, randomUUID());
     const project = path.join(caseRoot, 'project');
     fs.mkdirSync(project, { recursive: true });
@@ -634,6 +636,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
     const engines = new Map<string, ClaudeCodeAgent>();
+    const startupAuthDenied = new Set<string>();
     const starts: StartSessionOptions[] = [];
     const nativeAgent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async (options: StartSessionOptions) => {
       starts.push(options);
@@ -642,7 +645,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
       if (!engine) {
         engine = new ClaudeCodeAgent({ binaryPath: CLAUDE, logger: noopLogger,
           runtimeConfig: { endpoint, behaviorFlags: { ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_MAX_RETRIES: '0' } },
-          auth: { getState: async () => ({ authenticated: true, authSource: 'api-key' }),
+          auth: { getState: async () => ({ authenticated: !startupAuthDenied.has(profile), authSource: 'api-key' }),
             triggerLogin: async () => ({ authenticated: true }), logout: async () => {},
             getAuthEnv: async () => ({ ANTHROPIC_API_KEY: 'invalid-pool-e2e-key', CLAUDE_CONFIG_DIR: profile }) },
         });
@@ -752,11 +755,16 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
       const originalDir = accountDirectory('anthropic', accounts[original]);
       const hostTask = hostSessionIdFor(guest, task);
       expect(readAccountBinding(`native:${oldNative}`, 'anthropic')?.accountId).toBe(accounts[original]);
-      if (failure === 'cold') {
+      if (failure === 'cold' || failure === 'cold-auth') {
         await active.close({ reason: 'navigation' });
-        poolCli.limited.add(originalDir);
-        await refreshSubscriptionPool(published, true);
-        await expect(open(oldNative)).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+        if (failure === 'cold-auth') startupAuthDenied.add(originalDir);
+        else {
+          poolCli.limited.add(originalDir);
+          await refreshSubscriptionPool(published, true);
+        }
+        // cold-auth passes cached allocator admission, then the real
+        // ClaudeCodeAgent auth gate throws its definite no-process error.
+        await expect(open(oldNative)).rejects.toThrow(failure === 'cold-auth' ? 'not authenticated' : 'SUBSCRIPTION_ACCOUNT_LIMITED');
         expect(order).toContain('token');
         expect(order.indexOf('token')).toBeLessThan(order.indexOf('start-failed'));
         const recovery = await service.prepareGuestStartSwitch(task);
@@ -764,11 +772,27 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         try { await relocate(recovery!.isCurrent); } finally { recovery!.dispose(); }
         await sendContinuation();
       } else {
-        failOriginal = true;
-        await active.send({ type: 'user', content: 'Continue the remaining work.' });
+        if (failure === 'send-auth') {
+          poolCli.signedOut.add(originalDir);
+          await updatePool('anthropic', value => ({ ...value, accounts: value.accounts.map(account => account.id === accounts[original]
+            ? { ...account, reloginIdentity: 'previous@example.invalid' } : account) }));
+          await refreshSubscriptionPool(published, true);
+          const originalRequests = observations.filter(request => request.nativeId === oldNative).length;
+          await expect(active.send({ type: 'user', content: 'Continue the remaining work.' })).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+          expect(observations.filter(request => request.nativeId === oldNative)).toHaveLength(originalRequests);
+        } else {
+          failOriginal = true;
+          await active.send({ type: 'user', content: 'Continue the remaining work.' });
+        }
         await vi.waitFor(() => expect(events.some(event => event.type === 'error')).toBe(true), { timeout: 30_000, interval: 20 });
         expect(order.indexOf('token')).toBeLessThan(order.indexOf('error'));
         expect(guestSwitch.hasOffer(task)).toBe(true);
+        if (failure === 'send-auth') {
+          const authError = events.find(event => event.type === 'error')!.data as { message: string; usageLimit?: boolean };
+          expect(authError.message).toContain('SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED');
+          expect(authError.usageLimit).not.toBe(true);
+          expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+        }
         await service.onTurnError(task, events.find(event => event.type === 'error')!.data as { sdkError: string }, 1);
       }
       await vi.waitFor(() => expect(events.filter(event => event.type === 'done').length).toBeGreaterThanOrEqual(2), { timeout: 30_000, interval: 20 });
@@ -811,6 +835,8 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
   it.each(['a', 'b'].flatMap(original => ['cold', 'run'].map(failure => ({ original, failure }))))(
     'continues the same shared task from account $original after $failure exhaustion', { timeout: 90_000 },
     async ({ original, failure }) => exercise(original as 'a' | 'b', failure as 'cold' | 'run'));
+  it.each(['cold-auth', 'send-auth'] as const)('continues the same shared task after %s rejection without relabeling it as quota', { timeout: 90_000 },
+    async failure => exercise('a', failure));
   it('fails to finish the remaining action when the production handoff sink is disconnected', { timeout: 90_000 }, async () => {
     await expect(exercise('a', 'cold', true)).rejects.toThrow('fresh CLI request must include old tool receipt');
   });
