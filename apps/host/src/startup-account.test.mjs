@@ -18,6 +18,10 @@ import { projectAdoptedSession } from './credentials/session.mjs';
 import { OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.ts';
 import { createDesktopScanner, HostProfileInUseError } from './agent/profile-coexistence.ts';
 import { spawn } from 'node:child_process';
+import { request as httpRequest } from 'node:http';
+import { classifyHostStartFailure, HostAccountMismatchError, HostSignInRequiredError } from './start-failure.ts';
+import { projectHostAuthState } from './auth-state.ts';
+import { createHostServer } from './server.mjs';
 import { once } from 'node:events';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -53,6 +57,7 @@ function setup(overrides = {}) {
     acquireHostRuntimeLease: () => ({ held: true, release() {} }),
     // No desktop on the profile (coexistence plan A); the refusal below scans a real one.
     createDesktopScanner: () => async () => [], OwnerDatabaseError, HostProfileInUseError,
+    HostAccountMismatchError, HostSignInRequiredError,
     readAdoptedSessionState: async () => ({ authenticated: true, realm: 'global' }),
     openOwnerDatabase: async (args) => { opens.push(args); steps.push('open'); throw new Error('database opened'); },
     path: { join: (...parts) => parts.join('/') }, layout: { packaged: false, drizzleDir: 'desktop/drizzle', sqliteVecPath: 'desktop/vec0' }, process,
@@ -359,3 +364,89 @@ test('a renewal failing for now retries with the desktop\'s backoff; a definitiv
   assert.deepEqual(h.invalidated, ['account-unavailable']);
   assert.equal(h.timer(), null, 'nothing is armed after a definitive failure');
 });
+
+/*
+ * 甲 (2026-11-17): a failed or refused start now tells the windows why, as one fixed code in the auth state
+ * (`hostUnavailable`), so a window does not offer its own sign-in beside a Host that stays down.
+ * Production entry: the real errors of ensureRuntime / resolveAccountUser (this harness), the real
+ * classification (start-failure.ts, what main.ts's startup catch stores), the real projection
+ * (auth-state.ts) and the real `/api/auth/state` route (server.mjs + service.mjs). Gap: before, every
+ * failed start projected the same signed-out state as "no session". Minimal input: one failing start per
+ * reason, with a sentinel in the error text; an ordinary signed-out start. Tier: unit (loopback HTTP only).
+ */
+const SENTINEL = 'sentinel-detail-/Users/someone/pid-4242';
+const TOKEN = 'start-failure-test-token';
+
+async function authStateAfter(t, error) {
+  const unavailable = classifyHostStartFailure(error);
+  const server = createHostServer({
+    token: TOKEN,
+    probe: () => ({ status: 'ok' }),
+    me: () => ({ authenticated: false }),
+    getAuthState: () => projectHostAuthState({ account: { authenticated: false, realm: 'global' }, accountUser: null,
+      owner: null, generation: 1, deviceId: null, unavailable }),
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const { port } = server.address();
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(`http://127.0.0.1:${port}/api/auth/state`,
+      { method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' } }, response => {
+        let text = '';
+        response.setEncoding('utf8');
+        response.on('data', chunk => { text += chunk; });
+        response.on('end', () => resolve({ status: response.statusCode, text, body: JSON.parse(text) }));
+      });
+    req.on('error', reject);
+    req.end('{}');
+  });
+}
+
+const failedStart = (overrides, owner = 'account-b') => setup(overrides).start(owner).then(() => null, error => error);
+
+for (const [reason, start] of [
+  ['HOST_ACCOUNT_MISMATCH', () => failedStart({}, 'account-a')],
+  ['HOST_PROFILE_IN_USE_BY_DESKTOP', () => failedStart({ createDesktopScanner: () => async () => [4242] })],
+  ['HOST_DATABASE_LOCKED', () => failedStart({ acquireHostRuntimeLease: () => ({ held: false, reason: SENTINEL }) })],
+  ['HOST_DATABASE_UNAVAILABLE', () => failedStart({ openOwnerDatabase: async () => { throw new OwnerDatabaseError('MIGRATE_FAILED', SENTINEL); } })],
+  // The auth client's own transport failures, typed: a renewal that got no response, and /me without one.
+  ['HOST_SIGN_IN_SERVICE_UNREACHABLE', () => failedStart({ refreshHostSession: async () => {
+    throw new HostRefreshDeferredError(`the renewal failed for now: ${SENTINEL}`, { networkFailure: true });
+  } })],
+  ['HOST_SIGN_IN_SERVICE_UNREACHABLE', () => failedStart({
+    CindyAuthClient: class { async getMe() { throw new AuthApiError('NETWORK_ERROR', 0, SENTINEL); } },
+  })],
+  // A renewal deferred for another reason is not "unreachable", whatever its text says.
+  ['HOST_START_FAILED', () => failedStart({ refreshHostSession: async () => {
+    throw new HostRefreshDeferredError('the network of the vault lock is busy', { networkFailure: false });
+  } })],
+  ['HOST_START_FAILED', () => failedStart({ openOwnerDatabase: async () => { throw new Error(SENTINEL); } })],
+]) {
+  test(`a start that fails as ${reason} tells the windows that code and nothing of its text`, async t => {
+    const error = await start();
+    assert.ok(error, 'the start failed');
+    const response = await authStateAfter(t, error);
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.hostUnavailable, { reason });
+    assert.equal(response.body.authenticated, false);
+    assert.ok(!response.text.includes(SENTINEL), 'no error text in /api/auth/state');
+  });
+}
+
+for (const [name, start] of [
+  ['no saved session', () => failedStart({ readAdoptedSessionState: async () => ({ authenticated: false, realm: 'global' }) })],
+  ['the saved session is gone', () => failedStart({ refreshHostSession: async () => { throw new HostSessionMissingError(); } })],
+  ['the server rejected the session', () => failedStart({ refreshHostSession: async () => {
+    throw new AuthApiError('INVALID_REFRESH_TOKEN', 401, SENTINEL);
+  } })],
+  ['a personal account of another region', () => failedStart({ hostPackageRegion: () => 'cn',
+    CindyAuthClient: class { async getMe() { return { membership: { id: 'account-b', kind: 'personal' } }; } } })],
+]) {
+  test(`an ordinary signed-out start (${name}) carries no start-failure reason`, async t => {
+    const error = await start();
+    assert.ok(error, 'the start ended signed out');
+    const response = await authStateAfter(t, error);
+    assert.equal('hostUnavailable' in response.body, false);
+    assert.equal(response.body.mode, 'signed-out');
+  });
+}

@@ -13,6 +13,8 @@ import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
 import { configureWindowsAtomicRename } from '../../desktop/src/main/windowsAtomicRename.js';
 import { isDefinitiveRefreshError } from '../../desktop/src/main/authRefreshError.js';
+import type { HostStartFailureReason } from '../../desktop/src/shared/hostStartFailure.js';
+import { classifyHostStartFailure, HostAccountMismatchError, HostSignInRequiredError } from './start-failure.js';
 import { AuthRefreshBackoff } from '../../desktop/src/main/authRefreshBackoff.js';
 import { AUTH_ACCOUNT_VAULT_LOCK_FILE } from '../../desktop/src/main/authRefreshCommit.js';
 import { createUserSession } from '../../desktop/src/main/localDb/ipc/createUserSession.js';
@@ -329,6 +331,12 @@ interface RuntimeState {
    * again once its running turns end.
    */
   coexistence?: { state: CoexistenceState['state'] | 'waiting-for-turns'; desktops: number[] };
+  /**
+   * Why the last start failed or was refused (start-failure.ts), the code the windows are given in the auth
+   * state and the 409 of an owner request; never the text of `detail`. Null for an ordinary signed-out start,
+   * and cleared once a runtime opens or the account signs out.
+   */
+  unavailable?: HostStartFailureReason | null;
 }
 
 const runtime: RuntimeState = { state: 'uninitialized', owner: null, storage: 'unopened' };
@@ -441,7 +449,7 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
     account = { authenticated: false, realm: null };
     throw error;
   }
-  if (expectedOwner && expectedOwner !== membership.id) throw new Error('The signed-in account does not match the active Host profile');
+  if (expectedOwner && expectedOwner !== membership.id) throw new HostAccountMismatchError();
   currentSessionToken = sessionToken;
   currentDeviceId = verifiedDeviceId;
   remoteIdentityReady = canRegisterHostDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, ''));
@@ -718,7 +726,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined,
     });
     account = { authenticated: false, realm: state.realm };
-    if (!state.authenticated) throw new Error('Sign in with `cindy-host login` before opening account data');
+    if (!state.authenticated) throw new HostSignInRequiredError();
     if (state.authenticated) {
       const user = await resolveAccountUser(ownerId);
       if (!user) throw new Error('Unable to verify the signed-in Host account');
@@ -1040,6 +1048,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   await pluginGateway.refresh();
   startProfileCoexistence(dataDir, scanProfile);
   runtime.state = 'ready';
+  runtime.unavailable = null;
 }
 
 const eventHub = createEventHub();
@@ -1368,9 +1377,12 @@ const serverDeps = {
   }),
   instanceId,
   isOwnerReady: () => runtime.state === 'ready' && account.authenticated && !isAppSessionBoundaryPending(),
-  // A start refused by a desktop on this profile (coexistence plan A): why, and what to do.
-  ownerUnavailableReason: () => (runtime.state === 'blocked' && runtime.coexistence?.state === 'desktop-running'
-    ? { reason: HOST_PROFILE_IN_USE_BY_DESKTOP, message: profileInUseAtStartMessage() } : null),
+  // Why the start failed or was refused (start-failure.ts), the same code as the auth state's
+  // `hostUnavailable`. A start refused by a desktop on this profile (coexistence plan A) also says what to do.
+  ownerUnavailableReason: () => (!runtime.unavailable ? null
+    : runtime.unavailable === HOST_PROFILE_IN_USE_BY_DESKTOP
+      ? { reason: runtime.unavailable, message: profileInUseAtStartMessage() }
+      : { reason: runtime.unavailable }),
   requestStop: () => stop(),
   subagentRuns: subagentReads,
   token: apiToken,
@@ -1906,7 +1918,7 @@ const serverDeps = {
 
 function projectAuthState() {
   return projectHostAuthState({ account, accountUser, owner: runtime.owner,
-    generation: getActiveAppSession().generation, deviceId: currentDeviceId });
+    generation: getActiveAppSession().generation, deviceId: currentDeviceId, unavailable: runtime.unavailable ?? null });
 }
 
 /** Ordered disposal also runs after partial startup or a failed sign-out. */
@@ -1989,6 +2001,8 @@ async function disposeOwnerRuntime(): Promise<void> {
     runtime.state = 'uninitialized';
     runtime.storage = 'unopened';
     runtime.owner = null;
+    // A sign-out or a new start ends what the last failed start reported; a start that fails again sets it anew.
+    runtime.unavailable = null;
   }
   if (errors.length) throw new AggregateError(errors, 'Owner runtime cleanup failed');
 }
@@ -2074,7 +2088,7 @@ server.listen(PORT, '127.0.0.1', () => {
       const discovered = discoverHostOwner(resolveHostDataDir());
       if (discovered.ownerId) {
         owner = discovered.ownerId;
-        if (!existsSync(ownerDatabasePath(resolveHostDataDir(), owner))) throw new Error('owner database is missing');
+        if (!existsSync(ownerDatabasePath(resolveHostDataDir(), owner))) throw new OwnerDatabaseError('DB_INIT_FAILED', 'owner database is missing');
       } else {
         // A newly signed-in preview has credentials but no database yet. Resolve
         // the authenticated membership before creating its first owner database;
@@ -2107,6 +2121,7 @@ server.listen(PORT, '127.0.0.1', () => {
     finally { commitVolatileAppSession('signed-out', null, true); }
     runtime.state = blocked ? 'blocked' : 'error';
     runtime.detail = error instanceof Error ? error.message : String(error);
+    runtime.unavailable = classifyHostStartFailure(error);
     console.error('cindy-host initialization failed:', runtime.detail);
   });
 });

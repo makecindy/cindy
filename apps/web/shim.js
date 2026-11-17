@@ -525,6 +525,8 @@ import { installAnalyticsRegionGuard } from './analytics-region-guard.js';
     // local profile, which is what the desktop client shows when signed out.
     'authGetLoginState': () => ({ success: true, state: { step: 'entry' } }),
     'authInitialize': () => hostChannels['auth.getState'](),
+    // The login page's "Check Again" while the Host reports that it did not start: a plain read.
+    'authGetHostState': () => hostChannels['auth.getState'](),
     'authRefresh': () => hostChannels['auth.refresh'](),
     'checkEnvironment': () => {
       const harness = window.__cindyBoot?.harness ?? {};
