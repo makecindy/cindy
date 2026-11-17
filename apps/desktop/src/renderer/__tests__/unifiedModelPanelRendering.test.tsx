@@ -5573,7 +5573,7 @@ it.each([
   { identity: 'a-very-long-subscription-account-name@example.test', truncated: true },
 ])('shows the full single account exactly once in the source rail tooltip: $identity', async ({ identity, truncated }) => {
   const originalProviders = providersRef.providers;
-  if (truncated) providersRef.providers = originalProviders.map(provider => provider.id === 'anthropic'
+  if (truncated) providersRef.providers = (originalProviders as ProviderView[]).map(provider => provider.id === 'anthropic'
     ? { ...provider, name: `Anthropic · ${identity}`.slice(0, 50) } : provider);
   try {
     const command = vi.fn(async ({providerId}: {providerId:string}) => ({
