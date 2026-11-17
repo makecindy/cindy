@@ -73,7 +73,6 @@ import {
 } from '@/features/scheduler/lib/archiveScheduleWarning';
 import { ScheduleBindingBadge } from './sidebar/ScheduleBindingBadge';
 import { RemoteProjectIcon } from './sidebar/RemoteProjectIcon';
-import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { MENU_ITEM_CLASS } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
 import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
@@ -86,55 +85,8 @@ import { Tip } from '@/components/ui/tooltip';
 import { Spinner } from '@/components/ui/spinner';
 import { TaskTagDots, TaskTagMenuSection, TaskTagEditor } from '@/features/task-tags/TaskTags';
 import { isSharedTaskPeer } from '@cindy/device-link';
-import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
-import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 
 const log = createLogger('SessionContentHeader');
-
-/**
- * 任务在本机、Agent 在同账号另一台电脑上运行:标明那台电脑，离线时如实提示(不自动改在本机跑)。
- * 图标与侧栏同款:Agent 图标 + 右上信号波纹。
- */
-function AgentDeviceIndicator({
-  deviceId,
-  agentKind,
-}: {
-  deviceId: string;
-  agentKind: Session['agentKind'];
-}) {
-  const { t } = useTranslation();
-  const devices = useDeviceLinkDeviceList();
-  // 分享来的供应商(`share:<id>`)不在同账号设备列表里，名字取自已收到的分享。
-  const { nameFor: providerShareDeviceName } = useProviderShareAgentDevices();
-  const device = devices?.find((item) => item.deviceId === deviceId);
-  const name = deviceDisplayName(deviceId, device?.name || providerShareDeviceName(deviceId));
-  const offline = device ? !device.online : false;
-  const vendor = agentKindToVendor(agentKind);
-  return (
-    <Tip
-      text={t(
-        offline ? 'ccAgent.sessionHeader.agentDeviceOffline' : 'ccAgent.sessionHeader.agentDevice',
-        { device: name },
-      )}
-    >
-      <span
-        role="img"
-        aria-label={t('ccAgent.sessionHeader.agentDevice', { device: name })}
-        className="inline-flex"
-        style={WINDOW_NO_DRAG_STYLE}
-      >
-        {/* 波纹向右上溢出约 3px,右边距比其它标题前缀图标多留一些。 */}
-        <VendorIcon
-          vendor={vendor}
-          size={vendor === 'cc' ? 14 : 13}
-          remote
-          colorClassName="text-[var(--cmd-palette-item-meta)]"
-          className={cn('mr-2', offline && 'opacity-75')}
-        />
-      </span>
-    </Tip>
-  );
-}
 
 /**
  * 注册器组件：由路由直挂的 CCAgentSessionView 条件渲染（仅当该实例"拥有"
@@ -648,9 +600,7 @@ export function SessionContentHeader({
           />
         </Tip>
       )}
-      {!isEditing && !remoteIconKind && session.agentDeviceId && (
-        <AgentDeviceIndicator deviceId={session.agentDeviceId} agentKind={session.agentKind} />
-      )}
+      {/* Agent 在另一台电脑运行时，标题不再加标识(2026-11-17 用户要求)：侧栏任务图标的波纹与悬停说明已标明运行电脑。 */}
 
       {session.workspaceKind === 'dialogue' ? (
         <span className="mr-1 inline-flex size-5 shrink-0 items-center justify-center text-[var(--text-secondary)]" aria-hidden="true">
