@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "存之",
     "promptUnsupported": "此 Pi 所在之处不支持系统提示词片段。",
+    "nativeHooksUnsupported": "工具钩子惟本机 Claude Code、Pi 可用。",
     "title": "差事法器",
     "description": "为此差事择法器，改动自下一讯起生效。",
     "unsupported": "逐次请求前处置仅本机 Pi 可用，此差事引擎不支持。",
@@ -8199,6 +8200,8 @@
         "hostTools_terminalDetail": "得于此机以主人身份启命令及交互终端，阅其输出、输入及止本法器之进程。命令可取主人文件与应用。",
         "agentHiddenTasks": "可立不见于差事录之背后差事",
         "agentHiddenTasksDetail": "本法器所立之差事，可不现于差事录、搜索与告中。君可随时于法器详情之「背后差事」中观之、启之，或令显于差事录；卸除法器时，此等差事将复显示。",
+        "agentModelPreferences": "可读改君之模型珍藏，并读君近用之模型",
+        "agentModelPreferencesDetail": "可读此机之模型珍藏与近用之模型（含思之深浅与 Fast），并可增、改、去珍藏，所改亦见于 Cindy 之择模。于法器中所择之模型不记入近用。不含君他机之模型与人所分享者，亦不予凭证。",
         "agentErrand": "可立差事、行事并读结果",
         "agentErrandDetail": "所立差事现于 Cindy 差事录中，可观其历程并续言谈。",
         "agentSchedule": "可请君新立自运",
@@ -8227,6 +8230,8 @@
         "subscribeTopics": "旁听君之差事动态(每轮往来与差事事件，不含讯之内容)",
         "subscribeMessage": "讯之内容",
         "subscribeMessageDetail": "收已存之君讯与 AI 之答；附件另循读取与交接之途。",
+        "subscribeToolExecution": "工具行事",
+        "subscribeToolExecutionDetail": "收工具之名、输入、结果与过误；惟观之，不改其行。",
         "subscribeTaskState": "差事状态",
         "subscribeTaskStateDetail": "收差事运行、候答、完毕、归档及隐显之变。",
         "subscribeActivity": "旁听 AI 何时思之、何时候君",
@@ -8395,6 +8400,10 @@
         "subscribeStartTurnDetail": "仅在差事选用此法器时，彼可阅本条消息，择已连之模型、思之深浅及 Fast。出错依差事所设处理，不得代君批准操作。",
         "subscribeModelRequest": "可处理所选差事之每次模型请求",
         "subscribeModelRequestDetail": "仅在差事选用此法器时，彼可阅并调整模型请求之内容、模型及参数。现仅支持本机 Pi；出错依差事所设处理，不含连接凭证。",
+        "subscribeToolCall": "可处理所选任务的工具调用",
+        "subscribeToolCallDetail": "可读取、修改或拒绝工具参数，实际支持随引擎而异；不能替你批准操作。",
+        "subscribeToolResult": "可处理所选任务的工具结果",
+        "subscribeToolResultDetail": "可读取结果，按引擎能力补充上下文或改写结果；不会撤销已执行的操作。",
         "subscribeStartTask": "可为新差事择模型",
         "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。此节唯于首条消息发出前行一次。"
       },
@@ -16763,6 +16772,7 @@
         "openInFileBrowser": "于卷浏览器览之",
         "showInFolder": "于卷匣中示之",
         "copyFilePath": "录卷路径",
+        "copyFolderPath": "录卷匣路径",
         "deleteFile": "删卷"
       },
       "searchPanel": {
@@ -17236,7 +17246,9 @@
           "jira_read": "读 Jira",
           "jira_comment": "评 Jira",
           "sessions_dispatch": "派差事",
-          "feishu_read": "读飞书之讯"
+          "feishu_read": "读飞书之讯",
+          "settings_read": "读分享成员",
+          "usage_read": "查用量及供应商组状态"
         },
         "project": "案之目录",
         "capabilitiesLabel": "许呼之能",
@@ -17248,7 +17260,9 @@
           "jira_read": "查读 Jira 单（依 key 读 / JQL 寻）",
           "jira_comment": "于 Jira 单增评",
           "sessions_dispatch": "立或唤 {{appName}} 差事，并递讯",
-          "feishu_read": "列近日活跃之言谈；取指定言谈（群/单聊）之近讯"
+          "feishu_read": "列近日活跃之言谈；取指定言谈（群/单聊）之近讯",
+          "settings_read": "读己所分享成员及其可用模型，含同账号已授权他机；不改设置",
+          "usage_read": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、供应商组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置"
         },
         "capabilityWarn": {
           "ghostMissing": "依「{{name}}」法器，今未纳——差事行时此能必败",

@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Save",
     "promptUnsupported": "This Pi execution location does not support system prompt fragments.",
+    "nativeHooksUnsupported": "Tool hooks support local Claude Code and Pi only.",
     "title": "Task plugins",
     "description": "Select plugins for this task. Changes apply from your next message.",
     "unsupported": "Per-request processing is supported only for local Pi. This task’s engine does not support it.",
@@ -8256,6 +8257,8 @@
         "hostTools_terminalDetail": "Start commands and interactive terminals as your user on this computer, read output, send input and stop this plugin’s processes. Commands can access your files and apps.",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
+        "agentModelPreferences": "Read and edit your model favorites, and read your recently used models",
+        "agentModelPreferencesDetail": "Can read the model favorites and recently used models on this computer, including effort and Fast settings, and add, change or remove favorites. Changes also appear in Cindy’s model picker. Models chosen in the plugin are not added to recently used. Models on your other computers or shared with you are not included, and no credentials are shared.",
         "agentErrand": "Create tasks, perform work, and read results",
         "agentErrandDetail": "Created tasks appear in Cindy’s task list, where you can view progress and continue the conversation.",
         "agentSchedule": "Can ask you to create an automation",
@@ -8284,6 +8287,8 @@
         "subscribeTopics": "Observes your session activity (turn and session events, no message content)",
         "subscribeMessage": "Message content events",
         "subscribeMessageDetail": "Receives saved user messages and AI replies. Attachments use separate reading and handoff.",
+        "subscribeToolExecution": "Tool execution events",
+        "subscribeToolExecutionDetail": "Receives tool names, inputs, results and errors. Observes without changing execution.",
         "subscribeTaskState": "Task state events",
         "subscribeTaskStateDetail": "Receives changes to running, waiting, completion, archive and hidden task states.",
         "subscribeActivity": "Observes when the AI is thinking and when it is waiting on you",
@@ -8306,6 +8311,10 @@
         "subscribeStartTurnDetail": "Only tasks where you select this plugin share the current message with it. It can choose a connected model, effort and Fast. Errors follow that task’s setting; it cannot approve actions for you.",
         "subscribeModelRequest": "Can process each model request in selected tasks",
         "subscribeModelRequestDetail": "Only tasks where you select this plugin share their model requests with it. It can adjust models, parameters and request content. Currently supported only for local Pi; errors follow the task’s setting. Connection credentials are excluded.",
+        "subscribeToolCall": "Can process tool calls in selected tasks",
+        "subscribeToolCallDetail": "Can read, change or reject tool parameters as supported by the engine. Cannot approve operations for you.",
+        "subscribeToolResult": "Can process tool results in selected tasks",
+        "subscribeToolResultDetail": "Can read results and add context or replace results where the engine supports it. Cannot undo completed operations.",
         "subscribeStartTask": "Can choose the model for new tasks",
         "subscribeStartTaskDetail": "When a new task uses a model it provides, it reads the first message and picks one of your connected models. This entry point runs only before the first message.",
         "card": "Renders message cards",
@@ -16837,6 +16846,7 @@
         "openInFileBrowser": "Open in file browser",
         "showInFolder": "Show In Folder",
         "copyFilePath": "Copy File Path",
+        "copyFolderPath": "Copy Folder Path",
         "deleteFile": "Delete File"
       },
       "searchPanel": {
@@ -17310,7 +17320,9 @@
           "jira_read": "Read Jira",
           "jira_comment": "Comment on Jira",
           "sessions_dispatch": "Dispatch sessions",
-          "feishu_read": "Read Feishu messages"
+          "feishu_read": "Read Feishu messages",
+          "settings_read": "Read share members",
+          "usage_read": "Read usage and provider group status"
         },
         "project": "Project directory",
         "capabilitiesLabel": "Allowed capabilities",
@@ -17322,7 +17334,9 @@
           "jira_read": "Read Jira issues (get by key / JQL search)",
           "jira_comment": "Add comments to Jira issues",
           "sessions_dispatch": "Create or wake {{appName}} sessions and deliver messages",
-          "feishu_read": "List recently-active chats; fetch recent messages from a chat (group or DM)"
+          "feishu_read": "List recently-active chats; fetch recent messages from a chat (group or DM)",
+          "settings_read": "Read your share members and allowed models on this computer or other authorized computers on the same account; no changes",
+          "usage_read": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, provider group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings."
         },
         "capabilityWarn": {
           "ghostMissing": "Requires the “{{name}}” plugin, which is not installed — this capability will fail at run time",

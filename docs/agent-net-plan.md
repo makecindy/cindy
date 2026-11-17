@@ -4,6 +4,13 @@
 > 自研第 1 到第 6 步已完成，第 7 步的核心、本机和真实网络验证完成（两边都在 NAT 后面的公网打洞只测了公司对称型 NAT ↔ 家庭宽带，打不通、稳定走中转，和模拟器预测一致）。Desktop 私有中转开始接入实验开关，尚未发布或完成全业务验收；当前接线见下方记录。每一步验收并经用户确认后才进入下一步。产品规则见 [`product-rules/agent-net.md`](product-rules/agent-net.md)，
 > 拓扑交互稿见 [`design-previews/agent-net/index.html`](design-previews/agent-net/index.html)，
 > 验证脚本与复跑方法见 [`prototypes/agent-net-spike/README.md`](../prototypes/agent-net-spike/README.md)。
+> **读取时机**：新增或修改 agent-net 的传输核心、节点模型、能力清单、加密、中继选择、网络分享或拓扑界面之前，
+> 与产品规则 `product-rules/agent-net.md` 一起读。
+> **适用路径**：`packages/agent-net*/**`、`packages/device-link-relay/src/agentNet.ts`、
+> `packages/device-link/src/agentNetSwitch.ts`、`apps/desktop/src/main/device-link/**/agentNet*`、
+> `apps/desktop/src/renderer/features/remote-connection-v2/**`、`apps/mobile/modules/cindy-agent-net/**`、
+> `apps/mobile/src/**/{agentNet,AgentNet}*`、`prototypes/agent-net-spike/**`、
+> `scripts/check-agent-net-native.mjs`、`.github/workflows/agent-net-native.yml`
 
 ## 0. 当前路线：自研传输层（2026-10-30 用户裁决，优先于下文）
 

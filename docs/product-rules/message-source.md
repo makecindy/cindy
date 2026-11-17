@@ -1,5 +1,12 @@
 # 消息来源：界面标签与模型说明同源
 
+> **读取时机**：新增或修改自动发送／远程发送消息的路径、消息来源标签，或发给模型的来源说明之前
+> **适用路径**：`packages/maker-shared/src/**/{messageSource,syntheticTrigger}*`、
+> `apps/desktop/src/main/maker-ipc/**/{messageSourceNote,forwardedRequest}*`、
+> `apps/desktop/src/shared/**/{imMessageSource,forwardedRequest}*`、
+> `apps/desktop/src/renderer/**/{MessageSourceLabels,messageSourceLabel,userMessageSourceLabels,AutomationOriginBadge}*`、
+> `apps/mobile/src/**/messageSourceLabels*`、`apps/desktop/src/main/device-link/**/sharedTaskMessageOrigin*`
+
 2026-10-05 裁决。非本机用户亲手输入的消息，界面上显示的来源与模型收到的来源说明必须来自
 同一份 host 盖章的数据、说同一件事。新增任何自动发送或远程发送路径时，两侧一起补。
 

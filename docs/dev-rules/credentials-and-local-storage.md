@@ -3,6 +3,14 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改凭证或授权信息处理、文件落盘位置、用户持久数据、临时文件、
 > 测试目录或运行时生成物之前
+> **适用路径**：`apps/desktop/src/main/secrets/**`、
+> `apps/desktop/src/main/**/*{C,c}redential*.ts`、
+> `apps/desktop/src/main/{devKeychain,safeStorage}*.ts`、
+> `apps/desktop/src/main/{userDataPath,regionUserData,legacyUserDataMigration}.ts`、
+> `apps/desktop/src/test/vitest/{user-data-dir-setup,testDirectoryTemplate}.ts`、
+> `apps/mobile/src/auth/secureStorage.ts`、`apps/mobile/src/**/*{C,c}redential*.ts`、
+> `packages/**/*{C,c}redential*.ts`、
+> `apps/desktop/src/main/authManager.ts`、`apps/desktop/src/main/localProfile*Migration*.ts`、`apps/desktop/src/main/maker-host/codex-auth-*.ts`
 
 本文约束 Desktop、Mobile、共享 package、脚本和测试中的本地文件写入。数据库 migration
 另见 [`database-and-migrations.md`](database-and-migrations.md)，Renderer 与 IPC 边界另见

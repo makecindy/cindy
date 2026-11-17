@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Speichern",
     "promptUnsupported": "Dieser Pi-Ausführungsort unterstützt keine Systemanweisungsfragmente.",
+    "nativeHooksUnsupported": "Werkzeug-Hooks unterstützen nur lokales Claude Code und Pi.",
     "title": "Aufgaben-Plugins",
     "description": "Plugins für diese Aufgabe auswählen. Änderungen gelten ab der nächsten Nachricht.",
     "unsupported": "Die Verarbeitung jeder Anfrage wird nur mit lokalem Pi unterstützt. Die Engine dieser Aufgabe unterstützt sie nicht.",
@@ -8256,6 +8257,8 @@
         "hostTools_terminalDetail": "Befehle und interaktive Terminals mit deinen Benutzerrechten auf diesem Computer starten, Ausgaben lesen, Eingaben senden und Prozesse dieses Plugins stoppen. Befehle können auf deine Dateien und Apps zugreifen.",
         "agentHiddenTasks": "Kann Hintergrundaufgaben erstellen, die in der Aufgabenliste ausgeblendet sind",
         "agentHiddenTasksDetail": "Von diesem Plugin erstellte Aufgaben können in der Aufgabenliste, der Suche und den Benachrichtigungen ausgeblendet bleiben. Unter „Hintergrundaufgaben“ auf der Seite dieses Plugins kannst du sie jederzeit ansehen, öffnen oder in der Aufgabenliste einblenden; bei der Deinstallation des Plugins werden sie wieder eingeblendet.",
+        "agentModelPreferences": "Deine Modellfavoriten lesen und bearbeiten sowie zuletzt verwendete Modelle lesen",
+        "agentModelPreferencesDetail": "Kann die Modellfavoriten und zuletzt verwendeten Modelle auf diesem Computer lesen, einschließlich Denkintensität und Fast, und Favoriten hinzufügen, ändern oder entfernen. Änderungen erscheinen auch in der Modellauswahl von Cindy. Im Plugin gewählte Modelle werden nicht unter „Zuletzt verwendet“ erfasst. Modelle auf deinen anderen Computern oder mit dir geteilte Modelle sind nicht enthalten, und es werden keine Zugangsdaten weitergegeben.",
         "agentErrand": "Aufgaben erstellen, Arbeiten ausführen und Ergebnisse lesen",
         "agentErrandDetail": "Erstellte Aufgaben erscheinen in der Aufgabenliste von Cindy. Dort kannst du den Fortschritt ansehen und das Gespräch fortsetzen.",
         "agentSchedule": "Kann dich bitten, eine Automatisierung zu erstellen",
@@ -8284,6 +8287,8 @@
         "subscribeTopics": "Beobachtet deine Sitzungsaktivität (Runden- und Sitzungsereignisse, keine Nachrichteninhalte)",
         "subscribeMessage": "Ereignisse mit Nachrichteninhalt",
         "subscribeMessageDetail": "Empfängt gespeicherte Nutzernachrichten und KI-Antworten. Anhänge werden separat gelesen und übergeben.",
+        "subscribeToolExecution": "Ereignisse zur Werkzeugausführung",
+        "subscribeToolExecutionDetail": "Empfängt Werkzeugnamen, Eingaben, Ergebnisse und Fehler. Beobachtet, ohne die Ausführung zu ändern.",
         "subscribeTaskState": "Ereignisse zum Aufgabenstatus",
         "subscribeTaskStateDetail": "Empfängt Änderungen bei Ausführung, Warten, Abschluss, Archivierung und ausgeblendeten Aufgaben.",
         "subscribeActivity": "Erkennt, wann die KI nachdenkt und wann sie auf dich wartet",
@@ -8306,6 +8311,10 @@
         "subscribeStartTurnDetail": "Nur Aufgaben, in denen du dieses Plugin auswählst, geben die aktuelle Nachricht an das Plugin weiter. Es kann ein verbundenes Modell, Denkintensität und Fast wählen. Fehler folgen der Aufgabeneinstellung; es kann keine Aktionen für dich genehmigen.",
         "subscribeModelRequest": "Kann jede Modellanfrage in ausgewählten Aufgaben verarbeiten",
         "subscribeModelRequestDetail": "Nur Aufgaben, in denen du dieses Plugin auswählst, geben ihre Modellanfragen an das Plugin weiter. Es kann Modelle, Parameter und Inhalte anpassen. Derzeit nur mit lokalem Pi unterstützt; Fehler folgen der Aufgabeneinstellung. Verbindungsdaten werden nicht weitergegeben.",
+        "subscribeToolCall": "Kann Werkzeugaufrufe in ausgewählten Aufgaben verarbeiten",
+        "subscribeToolCallDetail": "Kann Parameter lesen, ändern oder ablehnen, soweit die Engine dies unterstützt. Kann keine Vorgänge für dich genehmigen.",
+        "subscribeToolResult": "Kann Werkzeugergebnisse in ausgewählten Aufgaben verarbeiten",
+        "subscribeToolResultDetail": "Kann Ergebnisse lesen und je nach Engine Kontext hinzufügen oder Ergebnisse ersetzen. Bereits ausgeführte Vorgänge werden nicht rückgängig gemacht.",
         "subscribeStartTask": "Kann das Modell für neue Aufgaben wählen",
         "subscribeStartTaskDetail": "Wenn eine neue Aufgabe ein Modell dieses Plugins nutzt, liest es die erste Nachricht und wählt eines deiner verbundenen Modelle. Dieser Einstieg wird nur einmal vor der ersten Nachricht ausgeführt.",
         "card": "Stellt Nachrichtenkarten dar",
@@ -16837,6 +16846,7 @@
         "openInFileBrowser": "Im Dateimanager öffnen",
         "showInFolder": "Im Ordner anzeigen",
         "copyFilePath": "Dateipfad kopieren",
+        "copyFolderPath": "Ordnerpfad kopieren",
         "deleteFile": "Datei löschen"
       },
       "searchPanel": {
@@ -17310,7 +17320,9 @@
           "jira_read": "Jira lesen",
           "jira_comment": "In Jira kommentieren",
           "sessions_dispatch": "Sitzungen zuweisen",
-          "feishu_read": "Feishu-Nachrichten lesen"
+          "feishu_read": "Feishu-Nachrichten lesen",
+          "settings_read": "Freigabemitglieder lesen",
+          "usage_read": "Nutzung und Anbietergruppenstatus lesen"
         },
         "project": "Projektverzeichnis",
         "capabilitiesLabel": "Erlaubte Funktionen",
@@ -17322,7 +17334,9 @@
           "jira_read": "Jira-Vorgänge lesen (per Schlüssel / JQL-Suche)",
           "jira_comment": "Kommentare zu Jira-Vorgängen hinzufügen",
           "sessions_dispatch": "{{appName}}-Sitzungen erstellen oder aktivieren und Nachrichten zustellen",
-          "feishu_read": "Zuletzt aktive Chats auflisten; aktuelle Nachrichten aus einem Chat abrufen (Gruppe oder Direktnachricht)"
+          "feishu_read": "Zuletzt aktive Chats auflisten; aktuelle Nachrichten aus einem Chat abrufen (Gruppe oder Direktnachricht)",
+          "settings_read": "Liest Mitglieder deiner Freigaben und deren erlaubte Modelle auf diesem Computer oder anderen autorisierten Computern desselben Kontos; keine Änderungen",
+          "usage_read": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Anbietergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen."
         },
         "capabilityWarn": {
           "ghostMissing": "Erfordert das Plugin „{{name}}“, das nicht installiert ist — diese Funktion wird zur Laufzeit fehlschlagen",

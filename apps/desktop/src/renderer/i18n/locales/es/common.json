@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Esta ubicación de ejecución de Pi no admite fragmentos de instrucciones del sistema.",
+    "nativeHooksUnsupported": "Los hooks de herramientas solo admiten Claude Code y Pi locales.",
     "title": "Complementos de la tarea",
     "description": "Selecciona los complementos de esta tarea. Los cambios se aplican desde el siguiente mensaje.",
     "unsupported": "El procesamiento de cada solicitud solo está disponible con Pi local. El motor de esta tarea no lo admite.",
@@ -8328,6 +8329,8 @@
         "hostTools_terminalDetail": "Iniciar comandos y terminales interactivos con tus permisos en este equipo, leer la salida, enviar entradas y detener los procesos de este complemento. Los comandos pueden acceder a tus archivos y aplicaciones.",
         "agentHiddenTasks": "Puede crear tareas en segundo plano ocultas de la lista de tareas",
         "agentHiddenTasksDetail": "Las tareas que crea este complemento pueden permanecer fuera de la lista de tareas, la búsqueda y las notificaciones. Siempre puedes verlas, abrirlas o mostrarlas en la lista de tareas desde Tareas en segundo plano en la página de este complemento; al desinstalar el complemento, vuelven a mostrarse.",
+        "agentModelPreferences": "Leer y editar tus modelos favoritos, y leer tus modelos usados recientemente",
+        "agentModelPreferencesDetail": "Puede leer los modelos favoritos y los usados recientemente en esta computadora, incluida la intensidad de razonamiento y Fast, y añadir, cambiar o quitar favoritos. Los cambios también aparecen en el selector de modelo de Cindy. Los modelos elegidos en el complemento no se añaden a los recientes. No incluye modelos de tus otras computadoras ni compartidos contigo, y no comparte credenciales.",
         "agentErrand": "Crear tareas, realizar trabajos y leer resultados",
         "agentErrandDetail": "Las tareas creadas aparecen en la lista de tareas de Cindy, donde puedes ver el progreso y continuar la conversación.",
         "agentSchedule": "Puede pedirte que crees una automatización",
@@ -8356,6 +8359,8 @@
         "subscribeTopics": "Observa la actividad de tus sesiones (eventos de turno y de sesión, sin contenido de mensajes)",
         "subscribeMessage": "Eventos de contenido de mensajes",
         "subscribeMessageDetail": "Recibe mensajes guardados del usuario y respuestas de la IA. Los adjuntos se leen y transfieren por separado.",
+        "subscribeToolExecution": "Eventos de ejecución de herramientas",
+        "subscribeToolExecutionDetail": "Recibe nombres, entradas, resultados y errores de herramientas. Observa sin cambiar la ejecución.",
         "subscribeTaskState": "Eventos de estado de tareas",
         "subscribeTaskStateDetail": "Recibe cambios de ejecución, espera, finalización, archivo y ocultación de tareas.",
         "subscribeActivity": "Observa cuándo la IA está pensando y cuándo te está esperando",
@@ -8378,6 +8383,10 @@
         "subscribeStartTurnDetail": "Solo las tareas en las que seleccionas este complemento comparten el mensaje actual con él. Puede elegir un modelo conectado, la intensidad de razonamiento y Fast. Los errores siguen la configuración de la tarea; no puede aprobar acciones por ti.",
         "subscribeModelRequest": "Puede procesar cada solicitud al modelo en tareas seleccionadas",
         "subscribeModelRequestDetail": "Solo las tareas en las que seleccionas este complemento comparten sus solicitudes al modelo con él. Puede ajustar modelos, parámetros y contenido. Actualmente solo se admite Pi local; los errores siguen la configuración de la tarea. No se incluyen credenciales de conexión.",
+        "subscribeToolCall": "Puede procesar llamadas a herramientas en las tareas seleccionadas",
+        "subscribeToolCallDetail": "Puede leer, cambiar o rechazar parámetros según lo permita el motor. No puede aprobar operaciones por ti.",
+        "subscribeToolResult": "Puede procesar resultados de herramientas en las tareas seleccionadas",
+        "subscribeToolResultDetail": "Puede leer resultados y añadir contexto o sustituir resultados si el motor lo permite. No deshace operaciones ya realizadas.",
         "subscribeStartTask": "Puede elegir el modelo de las tareas nuevas",
         "subscribeStartTaskDetail": "Cuando una tarea nueva usa un modelo que ofrece, lee el primer mensaje y elige uno de tus modelos conectados. Este punto solo se ejecuta antes del primer mensaje.",
         "card": "Representa tarjetas de mensajes",
@@ -16999,6 +17008,7 @@
         "openInFileBrowser": "Abrir en el explorador de archivos",
         "showInFolder": "Mostrar en carpeta",
         "copyFilePath": "Copiar ruta del archivo",
+        "copyFolderPath": "Copiar ruta de la carpeta",
         "deleteFile": "Eliminar archivo"
       },
       "searchPanel": {
@@ -17475,7 +17485,9 @@
           "jira_read": "Leer Jira",
           "jira_comment": "Comentar en Jira",
           "sessions_dispatch": "Enviar sesiones",
-          "feishu_read": "Leer mensajes de Feishu"
+          "feishu_read": "Leer mensajes de Feishu",
+          "settings_read": "Leer miembros con acceso compartido",
+          "usage_read": "Leer el uso y el estado de los grupos de proveedores"
         },
         "project": "Directorio del proyecto",
         "capabilitiesLabel": "Capacidades permitidas",
@@ -17487,7 +17499,9 @@
           "jira_read": "Leer incidencias de Jira (obtener por clave / búsqueda JQL)",
           "jira_comment": "Agregar comentarios a incidencias de Jira",
           "sessions_dispatch": "Crear o reactivar sesiones de {{appName}} y entregar mensajes",
-          "feishu_read": "Listar chats con actividad reciente; obtener mensajes recientes de un chat (grupal o directo)"
+          "feishu_read": "Listar chats con actividad reciente; obtener mensajes recientes de un chat (grupal o directo)",
+          "settings_read": "Lee los miembros con los que compartes y sus modelos permitidos en este equipo u otros equipos autorizados de la misma cuenta; no realiza cambios",
+          "usage_read": "Lee los ID, planes, períodos de cuota y horas de actualización de las cuentas locales de Claude/Codex conectadas a tu cuenta de Cindy. Lee el uso diario y por modelo registrado, los costes estimados, la configuración y el estado de los grupos de proveedores y los ID, nombres y avatares visibles de miembros y dispositivos, tanto en este equipo como en otros equipos autorizados de la misma cuenta. No permite leer correos de inicio de sesión de las suscripciones, directorios de cuentas, huellas de identidad internas, credenciales ni archivos, ni modificar cuentas o ajustes."
         },
         "capabilityWarn": {
           "ghostMissing": "Requiere el complemento \"{{name}}\", que no está instalado; esta capacidad fallará al ejecutarse",

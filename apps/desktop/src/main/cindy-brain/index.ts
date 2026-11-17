@@ -4,6 +4,7 @@ import { createRuntimePluginControl } from './runtimeControl.js';
 import { createRuntimeContextProviders } from './runtimeContext.js';
 import { createStaticPromptProvider } from './staticPrompt.js';
 import { readRuntimePluginSettings, warmRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
+import { createPluginToolLifecycle } from './toolLifecycleControl.js';
 import { createGhostExecutionPipe } from './executionPipe.js';
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
 import { ownsPersonalBuildMonitor } from '../personalBuildMonitor.js';
@@ -101,8 +102,12 @@ import { makerStartupGate } from '../maker-host/startup-gate.js';
 import {
   createGhostAgentModelsCache,
   projectGhostAgentModels,
+  withGhostModelDescriptions,
   type GhostAgentLocationsReadResult,
 } from './ghostAgentModels.js';
+import { createGhostModelPreferencesProvider } from './ghostModelPreferences.js';
+import { applyHostModelFavorite, readHostModelPreferences } from '../maker-ipc/modelFavoritesSync.js';
+import { modelDescriptionKey } from '../../shared/modelDescriptionKey.js';
 import { GhostModelPicker, chooseModelPickerWindow, readPluginModelRouteCatalog, getPluginModelPickerAgents, isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, type RemotePluginRouteAgentStatus } from './ghostModelPicker.js';
 import type { PluginModelPickerRoute } from '../../shared/pluginModelPicker.js';
 import { installGhostPageModelPicker } from './ghostPageModelPicker.js';
@@ -389,6 +394,7 @@ import {
   setGhostModelsHandler,
   setGhostMediaModelsProvider,
   setGhostAgentModelsProvider,
+  setGhostModelPreferencesProvider,
   setGhostModelPickerProvider,
   setGhostOauthHandler,
   setGhostSandboxDevToolsDisabled,
@@ -431,7 +437,7 @@ import { cancelActiveGhostOauthFlow } from './ghostOauthFlow.js';
 import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
-import { getResolvedMainLocale, t } from '../i18n.desktop.js';
+import { getResolvedMainLocale, rawMainString, t } from '../i18n.desktop.js';
 import { refreshGhostLocalizationIfChanged } from './ghostLocalizationRefresh.js';
 import type { SupportedLocale } from '../../shared/locale.js';
 import { getDeepLinkMainWindow } from '../deepLink.js';
@@ -2951,8 +2957,8 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
         const r = await getGhostRuntime().spawn(ghost);
         if (!r.ok) throw new Error(r.reason);
       },
-      sendToGhost: (ghostId, payload) => {
-        const ghost = findGhostNotificationTarget(ghostId);
+      sendToGhost: (ghostId, payload, synchronousInstall) => {
+        const ghost = synchronousInstall ?? findGhostNotificationTarget(ghostId);
         // 适配:底层返回 false 表示投递失败(网关契约是抛错 → 走缓冲/熔断)。
         if (!ghost?.enabled || ('topic' in payload && !ghost.manifest.subscribe?.topics?.includes(payload.topic))
           || !sendToGhostLogic(installedGhostStoragePart(ghost), payload)) {
@@ -3154,6 +3160,12 @@ export function createGhostSessionTap(sessionId: string): {
   return {
     handleEvent(ev) {
       if (disposed) return;
+      // Tool observers cover all tasks, independently of the legacy primary-task metadata filter.
+      if (taskEventIndex.wantsToolEvent(ev.type)) {
+        const owner = getGhostOwnerPushStamp();
+        try { if (owner) taskEventIndex.publishTool(sessionId, ev, owner, getGhostSubscriptionGateway); }
+        catch { log.warn('tool observation projection failed'); }
+      }
       // 记来源要在过滤**之前**:自动化轮次的事件正是"当前轮次不是用户发起"的唯一线索。
       origin.noteEvent(ev);
       if (ev.turnOrigin?.kind && ev.turnOrigin.kind !== 'user') return;
@@ -3288,6 +3300,7 @@ export function getGhostRuntimePluginControl(): ReturnType<typeof createRuntimeP
   });
 }
 let ghostRuntimeControl: ReturnType<typeof createRuntimePluginControl> | undefined;
+export const ghostToolLifecycleControl = createPluginToolLifecycle({ readSettings: readRuntimePluginSettings, control: getGhostRuntimePluginControl });
 let ghostRuntimeContexts: ReturnType<typeof createRuntimeContextProviders> | undefined;
 function runtimeContextProviders() {
   return ghostRuntimeContexts ??= createRuntimeContextProviders(getGhostRuntimePluginControl());
@@ -3306,13 +3319,13 @@ export function searchGhostRuntimeMemories(query: string,
 }
 
 export function screenGhostControlPoint(
-  point: 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory',
+  point: 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory' | 'will-tool-call' | 'did-tool-result',
   data: GhostControlPointData,
   target: { pluginId: string; onFailure: GhostControlPointFailureAction },
   timeoutMs?: number,
 ): Promise<GhostRuntimeControlPointResult>;
 export function screenGhostControlPoint(
-  point: Exclude<GhostControlPointId, 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory'>,
+  point: Exclude<GhostControlPointId, 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory' | 'will-tool-call' | 'did-tool-result'>,
   data: GhostControlPointData,
   target: { pluginId: string; onFailure: GhostControlPointFailureAction },
 ): Promise<GhostControlPointResult>;
@@ -9471,6 +9484,11 @@ export function registerGhostIpc(): void {
   setGhostAppContextProvider(currentGhostAppContext);
   setGhostModelPickerProvider((id, options, current, signal) => getGhostModelPicker().request(id, options, current, signal));
   setGhostMediaModelsProvider(getGhostConfigurableMediaModels);
+  // Same localized blurb as the picker row (`localizedModelDescription`), in the Main UI language.
+  const describeGhostModel = (model: { id: string; group?: string }): string | undefined => {
+    const key = modelDescriptionKey(model);
+    return (key && rawMainString(`modelDescriptions.${key}`)) || undefined;
+  };
   setGhostAgentModelsProvider(async (instanceId, agentDeviceId) => {
     const owner = activeOwnerScopeKey();
     if (!findGhostForInstanceId(instanceId)?.enabled) {
@@ -9485,7 +9503,7 @@ export function registerGhostIpc(): void {
       if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled) {
         return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
       }
-      return catalog;
+      return withGhostModelDescriptions(catalog, describeGhostModel);
     }
     const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
     if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled) {
@@ -9499,7 +9517,8 @@ export function registerGhostIpc(): void {
     if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled || !maker) {
       return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model runtimes unavailable' };
     }
-    const projected = projectGhostAgentModels(views, maker.listAvailableAgents(), getModelVisibilityOverride);
+    const projected = withGhostModelDescriptions(
+      projectGhostAgentModels(views, maker.listAvailableAgents(), getModelVisibilityOverride), describeGhostModel);
     if (!projected.ok) return projected;
     if (!listGhostAgentLocations) return { ...projected, supportsRemoteRoutes: true };
     const locations = await ghostAgentModelsCache.locations(owner, listGhostAgentLocations);
@@ -9508,6 +9527,14 @@ export function registerGhostIpc(): void {
     }
     return { ...projected, supportsRemoteRoutes: true, ...(locations ? { locations } : {}) };
   });
+  // agent.modelPreferences:收藏读写/最近使用只读,复用 device-link 同一条 owner 围栏的
+  // renderer 收藏桥(maker-ipc/modelFavoritesSync),不建第二份收藏或最近使用存储。
+  setGhostModelPreferencesProvider(createGhostModelPreferencesProvider({
+    getGhost: findGhostForInstanceId,
+    ownerKey: activeOwnerScopeKey,
+    read: readHostModelPreferences,
+    apply: applyHostModelFavorite,
+  }));
   // 面板唤醒电子脑(cindy-ghost://<id>/wake 供片分支):面板零桥,唤醒经它
   // 自己的协议通道进来。只对"已装且唤醒"的意识放行;熔断态不清账(重载 /
   // 重新唤醒才 resetFuse),spawn 幂等所以重复唤醒零成本。

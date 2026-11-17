@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "儲存",
     "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",
+    "nativeHooksUnsupported": "工具掛鉤僅支援本機 Claude Code 與 Pi。",
     "title": "任務插件",
     "description": "為這個任務選擇插件。修改從下一則訊息起生效。",
     "unsupported": "每次請求前處理僅支援本機 Pi，目前任務的引擎不支援。",
@@ -8213,6 +8214,8 @@
         "hostTools_terminalDetail": "在這台電腦以你的使用者身分啟動命令和互動終端機、讀取輸出、輸入及停止此插件的處理程序。命令可存取你的檔案與應用程式。",
         "agentHiddenTasks": "可建立不顯示在任務列表裡的背景任務",
         "agentHiddenTasksDetail": "本插件建立的任務可以不出現在任務列表、搜尋和通知裡。你可以隨時在插件詳情的「背景任務」中查看、開啟，或顯示到任務列表；解除安裝插件時這些任務會恢復顯示。",
+        "agentModelPreferences": "讀取並修改你的模型收藏，讀取你最近使用的模型",
+        "agentModelPreferencesDetail": "可讀取這台電腦上的模型收藏和最近使用的模型（含推理強度與 Fast 設定），並新增、修改或移除收藏，變更會同步顯示在 Cindy 的模型選擇器裡。在插件裡選擇的模型不會記入最近使用。不包含你其他電腦上或別人分享給你的模型，也不提供任何憑證。",
         "agentErrand": "可建立任務、執行工作並讀取結果",
         "agentErrandDetail": "建立的任務會顯示在 Cindy 任務列表中，可查看過程並繼續交流。",
         "agentSchedule": "可以請你新建自動化",
@@ -8241,6 +8244,8 @@
         "subscribeTopics": "旁聽你的任務動態（每輪往來與任務事件，不含訊息內容）",
         "subscribeMessage": "訊息內容事件",
         "subscribeMessageDetail": "接收已儲存的使用者訊息與 AI 回覆；附件透過個別讀取與交接取得。",
+        "subscribeToolExecution": "工具執行過程",
+        "subscribeToolExecutionDetail": "接收工具名稱、輸入、結果與錯誤；僅旁聽，不改變執行。",
         "subscribeTaskState": "任務狀態事件",
         "subscribeTaskStateDetail": "接收任務的執行、等待、完成、封存與隱藏狀態變更。",
         "subscribeActivity": "旁聽 AI 何時在思考、何時在等你",
@@ -8263,6 +8268,10 @@
         "subscribeStartTurnDetail": "僅在你為任務選擇此插件時，讀取本則訊息並選擇已連接的模型、推理強度及 Fast。出錯按該任務的設定處理，不能替你批准操作。",
         "subscribeModelRequest": "可在選定任務中處理每次模型請求",
         "subscribeModelRequestDetail": "僅在你為任務選擇此插件時，讀取並處理傳送給模型的請求內容，調整模型和參數。目前僅支援本機 Pi；出錯按任務設定處理，不包含連接憑證。",
+        "subscribeToolCall": "可處理所選任務的工具呼叫",
+        "subscribeToolCallDetail": "可讀取、修改或拒絕工具參數，實際支援隨引擎而異；不能替你批准操作。",
+        "subscribeToolResult": "可處理所選任務的工具結果",
+        "subscribeToolResultDetail": "可讀取結果，按引擎能力補充上下文或改寫結果；不會撤銷已執行的操作。",
         "subscribeStartTask": "可為新任務選模型",
         "subscribeStartTaskDetail": "新任務選了它提供的模型時，它會看第一則訊息，從你已連接的模型裡選一個。這個節點只在第一則訊息送出前執行一次。",
         "card": "渲染訊息卡片",
@@ -16763,6 +16772,7 @@
         "openInFileBrowser": "在檔案瀏覽器檢視",
         "showInFolder": "在資料夾中顯示",
         "copyFilePath": "複製檔案路徑",
+        "copyFolderPath": "複製資料夾路徑",
         "deleteFile": "刪除檔案"
       },
       "searchPanel": {
@@ -17236,7 +17246,9 @@
           "jira_read": "讀取 Jira",
           "jira_comment": "評論 Jira",
           "sessions_dispatch": "派發任務",
-          "feishu_read": "讀取飛書訊息"
+          "feishu_read": "讀取飛書訊息",
+          "settings_read": "讀取分享成員",
+          "usage_read": "讀取用量與供應商組狀態"
         },
         "project": "專案目錄",
         "capabilitiesLabel": "允許呼叫的能力",
@@ -17248,7 +17260,9 @@
           "jira_read": "查詢與讀取 Jira Issue（按 key 讀取 / JQL 搜尋）",
           "jira_comment": "向 Jira Issue 新增評論",
           "sessions_dispatch": "建立或喚醒 {{appName}} 任務並投遞訊息",
-          "feishu_read": "列出最近活躍的對話；取得指定對話（群組／私訊）的最近訊息"
+          "feishu_read": "列出最近活躍的對話；取得指定對話（群組／私訊）的最近訊息",
+          "settings_read": "讀取自己分享的成員及模型範圍，含同帳號已授權電腦；不修改",
+          "usage_read": "讀取目前 Cindy 帳號在本機已連接的 Claude/Codex 帳號識別碼、方案、配額時段及更新時間，以及本機或同帳號已授權其他電腦上已記錄的每日/型號用量、估算費用、供應商組設定與狀態、可見的成員和裝置識別碼、名稱及頭像。無法讀取訂閱登入電子郵件、帳號目錄、內部指紋、憑證或檔案，也無法修改帳號或設定"
         },
         "capabilityWarn": {
           "ghostMissing": "依賴「{{name}}」插件，目前未安裝——執行時該能力會失敗",
