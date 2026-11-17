@@ -605,6 +605,7 @@ async function enqueueUntilSent(h, id, item, count) {
         fail(`the input ${item?.clientId} settled without reaching the engine`);
       }
     });
+    // real-wait: a guard against hanging, never the expected wait: it fires only when neither event comes (a failure); normally the send's event resolves first and the timer is cleared. A real timer because tests mock setTimeout and tick past 30 s.
     limit = setRealTimeout(() => fail(`message ${count} did not reach the engine for ${id} and the input did not settle within ${ENQUEUE_EVENT_LIMIT_MS} ms`), ENQUEUE_EVENT_LIMIT_MS);
   });
   // Awaited only while the send is still on its way; a rejection before that is reported below instead.
