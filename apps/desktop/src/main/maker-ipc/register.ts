@@ -519,6 +519,7 @@ import {
   sessionQueueOriginForDispatcher,
 } from './sessionControlService.js';
 import { runSessionExecutionAction } from './sessionExecutionActions.js';
+import { isAuthorizedExternalDelivery } from './crashRestoreQueueRelease.js';
 import {
   createQueueReorderAdapter,
   type SessionQueueMoveResult,
@@ -12994,6 +12995,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     pluginReply?: MessageSourcePluginReply;
     /** Host-only hook to record a new local task before its first input is dispatched. */
     beforeLocalTaskDispatch?: (taskId: string) => Promise<void>;
+    /**
+     * 投递点宿主盖章:这条投递是「外部已授权投递」(伙伴房间),见
+     * `crashRestoreQueueRelease.ts`。只由受信任的投递点设置,用来决定这条入队
+     * 能不能放行崩溃恢复出来的暂停队列(#7209)。
+     */
+    externalAuthorizedDelivery?: boolean;
   }, hostDispatch?: 'bot' | 'group' | 'group-assistant', localSessionTool = false): Promise<SendToSessionInternalResult> {
     await assertTaskActionCurrent();
     if (hasTaskActionAuthorization()) params = { ...params, forceQueue: true };
@@ -13344,6 +13351,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await enqueueSendToSessionMessage({ targetSessionId: session.id, message,
             persistedContent: persistedContent ?? message, clientId, meta, dbRow,
             origin: queuedOrigin, sourcePlugin, autoReviewUserText: params.autoReviewUserText,
+            externalAuthorizedDelivery: params.externalAuthorizedDelivery,
             onAccepted: async () => { broadcastSessionCreated(session.id); },
             taskActionDeliveryGuard: params.taskActionDeliveryGuard,
           });
@@ -13542,6 +13550,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           onAcceptedRollback,
           onAcceptedCommit,
           origin: queuedOrigin,
+          externalAuthorizedDelivery: params.externalAuthorizedDelivery,
           sourcePlugin,
           autoReviewUserText: params.autoReviewUserText,
           botTaskCoordination: params.botTaskCoordination,
@@ -13636,6 +13645,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             onAcceptedRollback,
             onAcceptedCommit,
             origin: queuedOrigin,
+            externalAuthorizedDelivery: params.externalAuthorizedDelivery,
             sourcePlugin,
             autoReviewUserText: params.autoReviewUserText,
             botTaskCoordination: params.botTaskCoordination,
@@ -13772,6 +13782,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               onAcceptedRollback,
               onAcceptedCommit,
               origin: queuedOrigin,
+              externalAuthorizedDelivery: params.externalAuthorizedDelivery,
               sourcePlugin,
               autoReviewUserText: params.autoReviewUserText,
               botTaskCoordination: params.botTaskCoordination,
@@ -13905,6 +13916,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             onAcceptedRollback,
             onAcceptedCommit,
             origin: queuedOrigin,
+            externalAuthorizedDelivery: params.externalAuthorizedDelivery,
             sourcePlugin,
             autoReviewUserText: params.autoReviewUserText,
             botTaskCoordination: params.botTaskCoordination,
@@ -13963,6 +13975,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     authorizationGuard?: BotAuthorizationInputGuard;
     /** Host-only fence checked synchronously at the final enqueue boundary. */
     assertDispatchCurrent?: () => void;
+    /**
+     * 投递点宿主盖章:这条投递是「外部已授权投递」(伙伴房间),见
+     * `crashRestoreQueueRelease.ts`。只由受信任的投递点设置。
+     */
+    externalAuthorizedDelivery?: boolean;
     toolsDisabled?: boolean;
     /** Only the invitation service may authorize welcome recovery. Never wire input. */
     invitationWelcome?: true;
@@ -14551,9 +14568,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const ensured = await ensureBotCanonicalSession(botId, { onCreated: broadcastSessionCreated });
         if (!ensured.ok) return { ok: false as const, errorCode: ensured.errorCode };
         // Content from the cloud room must not wake the task with more permission than the user chose.
+        // 主人从另一台设备在伙伴房间里发来的这条消息是「外部已授权投递」:同账号、
+        // 已过本机的远控开关校验,宿主盖章后它能放行崩溃恢复出来的暂停队列(#7209)。
         const result = await dispatchBotSessionMessage({ targetSessionId: ensured.sessionId, message: text, clientId,
           files: attachments?.map(toTaskFile),
-          resumeWithStoredPermissionMode: true });
+          resumeWithStoredPermissionMode: true, externalAuthorizedDelivery: true });
         return result.ok ? { ok: true as const } : { ok: false as const, errorCode: result.errorCode };
       },
     }),
@@ -16588,23 +16607,36 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     authorizationGuard?: BotAuthorizationInputGuard;
     /** Host-only fence checked synchronously at the final enqueue boundary. */
     assertDispatchCurrent?: () => void;
+    /**
+     * 投递点宿主盖章:这条投递是「外部已授权投递」(伙伴房间),见
+     * `crashRestoreQueueRelease.ts`。只由受信任的投递点设置。
+     */
+    externalAuthorizedDelivery?: boolean;
   }): Promise<void> {
     const queued = await buildSessionControlInputItem(params);
     // 崩溃恢复排序:确保先读回持久化队列再追加本条(见 ensureQueueRestored)。
     // 失败时 enqueue 照常入队(shouldQueueNewTurn 已守住不会直发)。
     await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
     await assertTaskActionCurrent();
-    // 崩溃恢复暂停的解挂(#7209):Bot 私聊投递是外部 Bot 的合法新输入,必须能推进
-    // 被恢复暂停卡住的队列。否则该会话跨重启永久假忙——队列不出队 →
-    // shouldQueueNewTurn 恒为真 → 后续所有投递都被判 busy,日志持续打
-    // 「send_to_session queued while target busy」(#7209 实测 126 次)。
+    // 崩溃恢复暂停的解挂(#7209):外部已授权投递(伙伴发来的消息、伙伴房间里主人
+    // 发来的消息)是合法新输入,必须能推进被恢复暂停卡住的队列。否则该会话跨
+    // 重启永久假忙——队列不出队 → shouldQueueNewTurn 恒为真 → 后续所有投递都被
+    // 判 busy,日志持续打「send_to_session queued while target busy」(#7209 实测
+    // 连续 126 次)。
     //
-    // 放行范围只有 Bot 私聊车道:该 clientId 由 Bot 私聊投递链路生成(发送方已过
-    // 授权校验),外部无法伪造;其它来源(scheduler / orca / 插件派活等)仍按
-    // 「自动来源不代表用户表态」不放行,不得借此把用户恢复出来的草稿自动发出去。
+    // 放行口径是**宿主盖章的来源**,不是 clientId 前缀:V1 的 `bot-dm:` 车道已于
+    // 2026-11-08 退役(f7c977b274),伙伴改用 send_to_session 互发消息,按前缀判
+    // 永远命不中。判据见 `isAuthorizedExternalDelivery`:伙伴发来的消息带
+    // `origin.senderBotId`(发送方身份由宿主按发送方 session 的伙伴绑定从库里读
+    // 出来),伙伴房间投递由投递点盖章;其它来源(scheduler / orca / 插件派活等)
+    // 仍按「自动来源不代表用户表态」不放行,不得借此把用户恢复出来的草稿自动
+    // 发出去。
     // 只放行崩溃恢复这一种暂停:「重启伙伴」的排队请求保留但不自动重放,外部投递
     // 不得放行它(docs/product-rules/cindy-bots-runtime.md「重启伙伴」)。
-    const resumeCrashRestoredPausedQueue = params.clientId.startsWith('bot-dm:');
+    const resumeCrashRestoredPausedQueue = isAuthorizedExternalDelivery({
+      externalAuthorizedDelivery: params.externalAuthorizedDelivery,
+      origin: params.origin,
+    });
     const enqueue = () => {
       params.assertDispatchCurrent?.();
       if (params.onAccepted) {
@@ -21775,7 +21807,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 排队输入崩溃恢复(issue #761):快照写入 fire-and-forget(模块内 per-session
     // 写链保序 + 失败落日志),读回由 ensureQueueRestored 懒触发。恢复前先严格
     // 水合 durable /clear 边界，所有入口共用，避免仅 projection 路径安全。
-    persistQueueSnapshot: (sessionId, items, stopped) => saveAgentInputQueueSnapshot(sessionId, items, stopped),
+    persistQueueSnapshot: (sessionId, items, stopped, pauseHeld) =>
+      saveAgentInputQueueSnapshot(sessionId, items, stopped, pauseHeld),
     awaitQueuePersistence: awaitAgentInputQueueSnapshotPersistence,
     canRestoreOrcaReport: async (sessionId, item) => {
       const owner = activeOwnerScopeKey();
