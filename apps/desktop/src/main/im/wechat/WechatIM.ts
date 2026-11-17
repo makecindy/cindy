@@ -1660,7 +1660,10 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     ) {
       // Keep the original chunk and its idempotency key intact (including full-
       // size chunks and media-only output). Retries/restarts reuse a separate,
-      // deterministic notice ID; never deliver stale content if its notice fails.
+      // deterministic notice ID within this persisted context and delivery window.
+      // A notice can succeed while the body fails: fresh inbound context or a
+      // later window must show attribution again instead of deduplicating it away.
+      // Never deliver stale content if its notice fails.
       const notice = imText('imBot.text.wechat.reply.delayedReply', {
         createdAt: new Date(item.createdAt).toISOString(),
         receivedAt: new Date(item.receivedAt).toISOString(),
@@ -1677,7 +1680,10 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         peerId,
         text: question ? `${notice}\n${imText('imBot.text.wechat.reply.delayedReplyQuestion', { question })}` : notice,
         contextToken: item.contextToken,
-        clientId: createHash('sha256').update(`wechat-delayed-reply:${item.clientId}`).digest('hex').slice(0, 32),
+        clientId: createHash('sha256').update(JSON.stringify([
+          'wechat-delayed-reply', item.clientId, item.contextRevision,
+          Math.floor(this.#now() / DELAYED_REPLY_NOTICE_AFTER_MS),
+        ])).digest('hex').slice(0, 32),
       }, signal);
       this.#assertSendEpochCurrent(bindingEpoch, signal);
     }

@@ -74,6 +74,7 @@ export interface WechatOutboxRecord {
   createdAt: number;
   receivedAt: number;
   taskPayloadJson: string;
+  contextRevision: string;
   attempts: number;
   contextToken: string;
 }
@@ -83,7 +84,7 @@ export interface WechatActiveBinding {
   cursor: string;
 }
 
-interface WechatOutboxRow extends Omit<WechatOutboxRecord, 'contextToken'> {
+interface WechatOutboxRow extends Omit<WechatOutboxRecord, 'contextToken' | 'contextRevision'> {
   bindingEpoch: string;
   contextNonce: string;
   contextCiphertext: string;
@@ -420,6 +421,7 @@ export class WechatTaskStore {
     );
     return rows.map(({ contextNonce, contextCiphertext, contextTag, ...row }) => ({
       ...row,
+      contextRevision: contextNonce,
       contextToken: decryptWechatContextToken(
         {
           nonce: contextNonce,

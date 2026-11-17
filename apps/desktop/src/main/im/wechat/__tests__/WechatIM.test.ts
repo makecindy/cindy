@@ -1044,7 +1044,7 @@ function restoredConnection(queued: () => number, policyDisabled = false) {
 // #10135: unit tier, real SQLite/store/worker and public outbox lifecycle. The
 // prior fake DB cases never exercised aged rows after context recovery. Transport
 // and secrets are synthetic; the historical attempt count is seeded, not traffic.
-it.each(['text', 'notice-unknown', 'media'] as const)('labels recovered old output and preserves fresh long-task results: %s', async mode => {
+it.each(['text', 'notice-unknown', 'media', 'body-failed', 'body-failed-same-context'] as const)('labels recovered old output and preserves fresh long-task results: %s', async mode => {
   vi.useFakeTimers();
   const Database = (await import('better-sqlite3')).default;
   const { readFileSync } = await import('node:fs');
@@ -1089,6 +1089,10 @@ it.each(['text', 'notice-unknown', 'media'] as const)('labels recovered old outp
   const transport = blockingLiveTransport();
   const sends: Array<Parameters<WechatTransport['sendMessage']>[0]> = [];
   let noticeAckLost = mode === 'notice-unknown';
+  const bodyFailureCase = mode.startsWith('body-failed');
+  let oldBodyBlocked = true;
+  const receivedIds = new Set<string>();
+  const visible: Array<Parameters<WechatTransport['sendMessage']>[0]> = [];
   const order: string[] = [];
   transport.uploadMedia = vi.fn<WechatTransport['uploadMedia']>(async () => {
     order.push('upload');
@@ -1100,9 +1104,17 @@ it.each(['text', 'notice-unknown', 'media'] as const)('labels recovered old outp
     order.push('text');
     if (input.contextToken === 'new-question-context' && input.clientId !== 'old-client' && noticeAckLost) {
       noticeAckLost = false;
+      receivedIds.add(input.clientId);
+      visible.push({ ...input });
       throw new WechatIlinkError('NETWORK_ERROR', 'synthetic unknown notice result', true);
     }
-    if (input.contextToken === 'old-context') throw new WechatIlinkError('PROTOCOL_ERROR', 'synthetic refusal', true);
+    if (input.contextToken === 'old-context' && (!bodyFailureCase || (input.clientId === 'old-client' && oldBodyBlocked))) {
+      throw new WechatIlinkError('PROTOCOL_ERROR', 'synthetic refusal', true);
+    }
+    if (!receivedIds.has(input.clientId)) {
+      receivedIds.add(input.clientId);
+      visible.push({ ...input });
+    }
     return { clientId: input.clientId };
   });
   const createIM = () => new WechatIM(deps({ host: host({ secretRead: name => name === 'wechat_data_key_v1' ? key.toString('base64') : name === 'wechat_credentials_epoch' ? JSON.stringify(credentials) : null }),
@@ -1119,8 +1131,12 @@ it.each(['text', 'notice-unknown', 'media'] as const)('labels recovered old outp
     await im.init();
     sends.length = 0;
     order.length = 0;
-    now += 2000;
-    await store.refreshPendingOutboxContext({ bindingEpoch: 'epoch', peerId: 'owner', contextToken: 'new-question-context', now });
+    visible.length = 0; // New question's timeline; receiver dedup IDs survive.
+    now += bodyFailureCase ? 4 * 24 * 60 * 60 * 1000 : 2000;
+    oldBodyBlocked = false;
+    if (mode !== 'body-failed-same-context') {
+      await store.refreshPendingOutboxContext({ bindingEpoch: 'epoch', peerId: 'owner', contextToken: 'new-question-context', now });
+    }
     await vi.waitFor(() => expect(sql.prepare("SELECT status FROM wechat_outbox WHERE task_id='old'").pluck().get()).toBe('delivered'), { timeout: 4000 });
     // A separate notice keeps the original payload/client ID unchanged, including
     // a retry whose upstream result was unknown. The notice has its own stable ID.
@@ -1129,13 +1145,18 @@ it.each(['text', 'notice-unknown', 'media'] as const)('labels recovered old outp
     expect(sends[0]?.text).toContain('old-question');
     expect(sends[0]?.text).toContain('延迟');
     expect(sends[0]?.clientId).not.toBe('old-client');
-    expect(sends[0]?.clientId).toBe(originalNotice?.clientId);
     expect(sends[0]?.text).toBe(originalNotice?.text);
+    if (bodyFailureCase) {
+      expect(visible).toHaveLength(2);
+      expect(visible[0]?.text).toContain('old-question');
+      expect(visible[0]?.text).toContain('2026-11-07T15:14:00.000Z');
+      expect(visible[1]?.text).toBe('old-reply');
+    }
     if (mode === 'media') {
       expect(order).toEqual(['text', 'upload', 'media']);
       expect(transport.sendMedia).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'old-media-client', contextToken: 'new-question-context' }), expect.any(AbortSignal));
     } else {
-      expect(sends.at(-1)).toMatchObject({ text: 'old-reply', contextToken: 'new-question-context', clientId: 'old-client' });
+      expect(sends.at(-1)).toMatchObject({ text: 'old-reply', contextToken: mode === 'body-failed-same-context' ? 'old-context' : 'new-question-context', clientId: 'old-client' });
       if (mode === 'notice-unknown') expect(sends[0]).toEqual(sends[1]);
     }
     expect(sql.prepare("SELECT attempts,text FROM wechat_outbox WHERE task_id='old'").get()).toEqual({ attempts: mode === 'notice-unknown' ? 9758 : 9757, text: mode === 'media' ? '' : 'old-reply' });
