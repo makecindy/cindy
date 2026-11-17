@@ -197,6 +197,7 @@ import {
   mobileNotificationIdentity,
   buildBotGroupNotifyPayload,
   buildSessionNotifyPayload,
+  shouldSuppressForActivity,
   type MobileSessionEventKind,
   type PermissionAlert,
   type QuestionAlert,
@@ -2701,6 +2702,8 @@ export function sendMobileSessionNotify(payload: {
    * 那一行的静音标记管不到这条远端事件,不参与手机通道的免打扰判定。
    */
   muteExempt?: boolean;
+  /** Explicit schedule notifications follow the schedule preference, not Agent Island attention. */
+  attentionExempt?: boolean;
   /** Execution host for a remotely mirrored session. */
   remoteDeviceId?: string;
   /** needs-reply only: one waiting tool permission the alert describes and can answer. */
@@ -2736,7 +2739,7 @@ export function sendMobileSessionNotify(payload: {
   const now = Date.now();
   if (!mobileNotifyDeduper.shouldSend(payload.sessionId, payload.kind, now, payload.eventId)) return false;
   const activity = !payload.remoteDeviceId ? notificationActivity?.(payload.sessionId) : undefined;
-  if (!payload.muteExempt && activity && (payload.kind === 'needs-reply' ? activity.phase !== 'needs-interaction' : !activity.attention)) return false;
+  if (!payload.muteExempt && shouldSuppressForActivity(payload.kind, activity, payload.attentionExempt)) return false;
   const sent = client.sendNotify(
     { notificationId, recipientId: authManager.getCurrentUserId() ?? undefined, ...buildSessionNotifyPayload({
       sessionId: payload.sessionId,

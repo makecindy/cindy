@@ -4533,14 +4533,7 @@
         "installCancel": "Annuler l'installation",
         "installFailed": "Impossible d'installer Ollama",
         "installPhase": {
-          "resolving": "Recherche de la version officielle…",
-          "downloading": "Téléchargement…",
-          "verifying": "Vérification…",
-          "extracting": "Installation…",
-          "starting": "Démarrage…",
-          "success": "Installé",
-          "error": "Échec de l'installation",
-          "cancelled": "Annulé"
+          "error": "Échec de l'installation"
         },
         "openWebsite": "Ouvrir le site d'Ollama",
         "recheck": "Je l'ai installé, vérifier à nouveau",
@@ -4575,20 +4568,6 @@
         "retryDownload": "Réessayer",
         "libraryName": "Nom exact dans la bibliothèque Ollama",
         "pullingTitle": "Téléchargement de {{name}}",
-        "pullIndeterminate": "Préparation",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Préparation du téléchargement…",
-          "manifest": "Récupération du manifeste…",
-          "downloading": "Téléchargement des fichiers du modèle",
-          "verifying": "Vérification…",
-          "writing": "Écriture…",
-          "success": "Téléchargement terminé",
-          "error": "Échec du téléchargement",
-          "paused": "En pause",
-          "cancelled": "Annulé"
-        },
         "pauseDownload": "Mettre en pause",
         "resumeDownload": "Reprendre le téléchargement",
         "cancelDownload": "Supprimer le téléchargement incomplet",
@@ -6042,8 +6021,6 @@
           "notChecked": "Pas encore vérifié",
           "action": "Mettre à jour",
           "updating": "Mise à jour…",
-          "downloadingPercent": "Téléchargement {{percent}} % ({{downloaded}}/{{total}} Mo)…",
-          "downloadingBytes": "Téléchargement, {{downloaded}} Mo pour l'instant…",
           "installing": "Téléchargement terminé, installation…",
           "toast": {
             "success": "cua-driver mis à jour vers la dernière version",
@@ -15648,6 +15625,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "Ce fichier se trouve en dehors du répertoire de travail de la session actuelle et ne peut pas être localisé dans le navigateur de fichiers de la barre latérale",
       "openInDefaultBrowser": "Ouvrir dans le navigateur",
       "copyLink": "Copier le lien",
+      "addPrToHeader": "Ajouter à l’en-tête",
+      "prAlreadyInHeader": "Déjà dans l’en-tête",
+      "prAddedToHeader": "Ajouté à l’en-tête — le statut accompagne cette tâche.",
+      "prAssociatedNotInHeader": "Liée, absente de l’en-tête",
+      "prSavedNotInHeader": "Lien enregistré. Les trois places de l’en-tête sont prises ; épinglez cette PR dans la gestion des PR de l’en-tête de la tâche.",
       "linkCopied": "Lien copié",
       "viewSourceFile": "Voir la source",
       "openInSidebarFailed": "Impossible d'ouvrir dans le navigateur de la barre latérale",
@@ -22050,5 +22032,28 @@
     "archivedNotice": "Tâches inactives archivées automatiquement : {{count}}",
     "undo": "Annuler",
     "undoFailed": "Annulation impossible. Restaurez les tâches depuis les archives."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "Encore {{time}}",
+    "attempt": "Tentative {{attempt}}",
+    "phase": {
+      "preparing": "Préparation…",
+      "queued": "En file d’attente…",
+      "downloading": "Téléchargement…",
+      "retrying": "Nouvelle tentative…",
+      "verifying": "Vérification…",
+      "installing": "Installation…",
+      "paused": "En pause",
+      "completed": "Terminé",
+      "failed": "Échec du téléchargement",
+      "cancelled": "Annulé"
+    },
+    "retry": {
+      "slow": "Connexion lente, reconnexion…",
+      "network": "Connexion perdue, nouvelle tentative…",
+      "timeout": "Délai de connexion dépassé, nouvelle tentative…",
+      "server": "Serveur occupé, nouvelle tentative…"
+    }
   }
 }

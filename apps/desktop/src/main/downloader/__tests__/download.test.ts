@@ -385,3 +385,162 @@ describe('shared verified downloads', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+// Regression (2026-11-17): a GitHub CLI install sat at 93% for minutes. The release CDN
+// kept trickling bytes, so the 30s idle deadline never fired and nothing retried.
+describe('slow and flaky connections', () => {
+  let clock = 0;
+  const fastRetry = { baseDelayMs: 1, jitterRatio: 0 };
+  /** Serves body[from..] in `parts`, moving the clock `stepMs` before each part; 'reset' drops the connection. */
+  function serve(
+    body: Buffer,
+    from: number,
+    parts: Array<number | 'reset'>,
+    stepMs = 0,
+    headers: Record<string, string> = { 'accept-ranges': 'bytes' },
+  ) {
+    let at = from;
+    let index = 0;
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          const part = parts[index++];
+          if (part === undefined) return controller.close();
+          if (part === 'reset') return controller.error(new Error('connection reset'));
+          clock += stepMs;
+          controller.enqueue(new Uint8Array(body.subarray(at, at + part)));
+          at += part;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return new Response(
+      stream,
+      from === 0
+        ? { status: 200, headers: { ...headers, 'content-length': String(body.length) } }
+        : {
+            status: 206,
+            headers: {
+              ...headers,
+              'content-range': `bytes ${from}-${body.length - 1}/${body.length}`,
+              'content-length': String(body.length - from),
+            },
+          },
+    );
+  }
+  function target(body: Buffer) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-downloader-'));
+    roots.push(root);
+    return {
+      url: 'https://publisher.test/file',
+      targetPath: path.join(root, 'archive'),
+      sha256: createHash('sha256').update(body).digest('hex'),
+      expectedSize: body.length,
+    };
+  }
+
+  it('reconnects a trickling transfer and resumes from the bytes already written', async () => {
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const body = Buffer.alloc(10_000, 7);
+    const onRetry = vi.fn();
+    // 1000 bytes over 31s is far below 4 KiB/s; the reconnect then gets a healthy route.
+    fetchMock
+      .mockResolvedValueOnce(serve(body, 0, [1000, 1000], 31_000))
+      .mockResolvedValueOnce(serve(body, 1000, [9000]));
+    const opts = { ...target(body), retry: { maxAttempts: 2, ...fastRetry }, onRetry };
+    await expect(download(opts)).resolves.toMatchObject({ resumedFromBytes: 1000 });
+    expect(onRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ cause: expect.objectContaining({ timeoutReason: 'slow' }) }),
+    );
+    expect(fetchMock.mock.calls[1][1].headers).toMatchObject({ Range: 'bytes=1000-' });
+    expect(fs.readFileSync(opts.targetPath)).toEqual(body);
+  });
+
+  const quarters = [1000, 1000, 1000, 1000];
+  it.each([
+    ['resume is disabled', { resume: false, retry: { maxAttempts: 2 } }, undefined, quarters],
+    ['retries are disabled', { retry: { maxAttempts: 1 } }, undefined, quarters],
+    ['the server cannot resume', { retry: { maxAttempts: 2 } }, {}, quarters],
+    // A reconnect at offset == size cannot resume and would restart the whole file.
+    ['the slow chunk completes the file', { retry: { maxAttempts: 2 } }, undefined, [4000]],
+  ])('keeps a slow transfer going when %s', async (_case, policy, headers, parts) => {
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const body = Buffer.alloc(4000, 3);
+    fetchMock.mockResolvedValueOnce(serve(body, 0, parts, 31_000, headers));
+    const opts = { ...target(body), ...policy };
+    await expect(download(opts)).resolves.toMatchObject({ size: body.length });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not spend the retry budget on drops that each kept new data', async () => {
+    const part = 70 * 1024;
+    const body = Buffer.alloc(part * 4, 9);
+    // Three drops with maxAttempts 2 used to fail; each one here kept a 70 KiB resume point.
+    fetchMock
+      .mockResolvedValueOnce(serve(body, 0, [part, 'reset']))
+      .mockResolvedValueOnce(serve(body, part, [part, 'reset']))
+      .mockResolvedValueOnce(serve(body, part * 2, [part, 'reset']))
+      .mockResolvedValueOnce(serve(body, part * 3, [part]));
+    const opts = { ...target(body), retry: { maxAttempts: 2, ...fastRetry } };
+    await expect(download(opts)).resolves.toMatchObject({ resumedFromBytes: part * 3 });
+    expect(fs.readFileSync(opts.targetPath)).toEqual(body);
+    // Drops without new data still use the budget.
+    fetchMock
+      .mockResolvedValueOnce(serve(body, 0, ['reset']))
+      .mockResolvedValueOnce(serve(body, 0, ['reset']));
+    await expect(
+      download({ ...target(body), retry: { maxAttempts: 2, ...fastRetry } }),
+    ).rejects.toMatchObject({
+      code: 'NETWORK',
+    });
+  });
+
+  // Review finding: on a link that is simply slow every 30s cut used to count as a failure,
+  // so a download that finished before the reconnect feature now failed after ~3 minutes.
+  it('finishes a link that stays slow: probes three new routes, then keeps the trickle', async () => {
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const body = Buffer.alloc(5000, 5);
+    const onRetry = vi.fn();
+    fetchMock
+      .mockResolvedValueOnce(serve(body, 0, [1000, 1000], 31_000))
+      .mockResolvedValueOnce(serve(body, 1000, [1000, 1000], 31_000))
+      .mockResolvedValueOnce(serve(body, 2000, [1000, 1000], 31_000))
+      .mockResolvedValueOnce(serve(body, 3000, [1000, 1000], 31_000));
+    const opts = { ...target(body), retry: { maxAttempts: 2, ...fastRetry }, onRetry };
+    await expect(download(opts)).resolves.toMatchObject({ resumedFromBytes: 3000 });
+    expect(onRetry).toHaveBeenCalledTimes(3);
+    expect(fs.readFileSync(opts.targetPath)).toEqual(body);
+  });
+
+  it('publishes a part that already holds every byte without downloading it again', async () => {
+    const body = Buffer.alloc(3000, 1);
+    const opts = target(body);
+    // A pause or quit between the last byte and publication leaves a complete part behind.
+    fs.writeFileSync(`${opts.targetPath}.part`, body);
+    writeMeta(opts.targetPath, {
+      url: opts.url,
+      expectedSize: body.length,
+      expectedSha256: opts.sha256,
+      downloadedBytes: body.length,
+      etag: null,
+      lastModified: null,
+      createdAt: '',
+      updatedAt: '',
+    });
+    await expect(download(opts)).resolves.toMatchObject({ resumedFromBytes: body.length });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fs.readFileSync(opts.targetPath)).toEqual(body);
+  });
+
+  it('reports the final bytes before verifying, never progress after it', async () => {
+    const body = Buffer.alloc(3000, 2);
+    const events: string[] = [];
+    fetchMock.mockResolvedValueOnce(serve(body, 0, [1000, 2000]));
+    await download({
+      ...target(body),
+      onProgress: (e) => events.push(`progress:${e.loaded}`),
+      onVerifying: () => events.push('verifying'),
+    });
+    expect(events.slice(-2)).toEqual(['progress:3000', 'verifying']);
+  });
+});

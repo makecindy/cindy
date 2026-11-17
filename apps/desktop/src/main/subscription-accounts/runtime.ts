@@ -13,7 +13,7 @@ import {
   isNativeProviderAuthBound,
   isNativeProviderAuthSharedSystemCredential,
 } from '../maker-host/nativeProviderAuthBinding.js';
-import { pickProviderGroupMember, providerGroupMembersFull, type SchedulableMember } from '../provider-group/scheduler.js';
+import { pickProviderGroupMember, providerGroupMembersFull, providerGroupSchedulingCandidates, type SchedulableMember } from '../provider-group/scheduler.js';
 import { concurrencyLimitPatch, effectiveConcurrencyLimit } from '../../shared/providerGroup.js';
 import { providerGroupMemberUsageState } from '../provider-group/usage.js';
 import {
@@ -40,6 +40,7 @@ import type {
   SubscriptionProvider,
   SubscriptionPoolView,
   SubscriptionSessionAccountView,
+  SubscriptionPoolScheduling,
 } from '../../shared/subscriptionAccounts.js';
 import {
   DEFAULT_SUBSCRIPTION_ACCOUNT,
@@ -1970,6 +1971,20 @@ export interface SubscriptionAccountLease {
   running(active: boolean): void;
   release(): void;
 }
+
+/** Read exactly the admission/selection used by a new task, without reserving,
+ * binding or advancing either cursor. Quota previews deliberately remain separate. */
+export async function readSubscriptionPoolScheduling(
+  providerId: string, model: string,
+  options: { remote?: boolean; ownComputer?: boolean } = {},
+): Promise<SubscriptionPoolScheduling | null> {
+  let summary: SubscriptionPoolScheduling | null = null;
+  await acquireSubscriptionAccount(providerId, model, [], false, {
+    ...options, resuming: false, dryRun: true,
+    reportScheduling: value => { summary = value; },
+  });
+  return summary;
+}
 /** Await status first; selection and reservation then happen in one synchronous segment. */
 export async function acquireSubscriptionAccount(
   /** Any provider that owns accounts (placement.ts): built-in, created, or a legacy Codex connection. */
@@ -1987,6 +2002,8 @@ export async function acquireSubscriptionAccount(
     exclude?: ReadonlySet<string>;
     /** Only check that the policy can select an account (throws otherwise); reserve nothing, return null. */
     dryRun?: boolean;
+    /** Internal read-only projection, delivered only with dryRun before admission errors. */
+    reportScheduling?(value: SubscriptionPoolScheduling): void;
   } = {},
 ): Promise<SubscriptionAccountLease | null> {
   const ref = resolveSubscriptionPoolProvider(providerId);
@@ -2137,6 +2154,30 @@ export async function acquireSubscriptionAccount(
     const grouped = accountCandidates(state, provider, members, {
       lastPicked: state.lastPicked.get(selectionProvider), exclude,
     });
+    if (options.dryRun && options.reportScheduling) {
+      // An explicitly weighted pool cannot predict its next random account without
+      // reserving it. Keep the physical-member fallback rather than overriding weights.
+      if (providerStrategy(selectionProvider, provider, latest) === 'weight') return { scheduling: true as const };
+      // A legacy alias with no own accounts is pinned for history, not new capacity.
+      // The summary also cannot count the ungranted CLI default as an extra account.
+      const eligible = grouped.candidates.map(m => ({ ...m,
+        usable: m.usable && !m.unavailable && (m.id !== 'default' || defaultAccountBound(provider)),
+      }));
+      const open = providerGroupSchedulingCandidates(eligible, grouped);
+      const selected = pickProviderGroupMember(eligible, providerStrategy(selectionProvider, provider, latest), { ...grouped,
+        // A read must not draw from or advance the actual weighted scheduler's random stream.
+        random: () => 0,
+      });
+      const next = open.find(m => m.key === selected);
+      if (!next && pendingReads.size) return null;
+      options.reportScheduling({ version: 1, accounts: next && !pinned ? open.length : 0,
+        running: next?.running ?? 0,
+        totalRunning: grouped.candidates.reduce((sum, m) => sum + m.running, 0),
+        full: !pinned && providerGroupMembersFull(eligible, grouped),
+        urgency: next?.urgency ?? null, fiveHourTight: next?.fiveHourTight ?? false,
+      });
+      return { scheduling: true as const };
+    }
     let choice =
       pinned ??
       pickProviderGroupMember(grouped.candidates, providerStrategy(selectionProvider, provider, latest), grouped);
@@ -2179,6 +2220,7 @@ export async function acquireSubscriptionAccount(
     await Promise.race(pendingReads);
     selection = selectAccount();
   }
+  if ('scheduling' in selection) return null;
   const { selected, pinned, pending, pendingKey } = selection;
   if (options.dryRun) return null;
   const token = randomUUID();

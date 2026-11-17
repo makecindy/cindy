@@ -4434,14 +4434,7 @@
         "installCancel": "罢安装",
         "installFailed": "Ollama 安装未成",
         "installPhase": {
-          "resolving": "方寻官方版本…",
-          "downloading": "方取下…",
-          "verifying": "方校验…",
-          "extracting": "方安装…",
-          "starting": "方启动…",
-          "success": "已安装",
-          "error": "安装未成",
-          "cancelled": "已罢"
+          "error": "安装未成"
         },
         "openWebsite": "往 Ollama 官网",
         "recheck": "已装，再侦之",
@@ -4476,20 +4469,6 @@
         "retryDownload": "再试",
         "libraryName": "精确之 Ollama 库名",
         "pullingTitle": "方取下 {{name}}",
-        "pullIndeterminate": "方备",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "备取下…",
-          "manifest": "方取清单…",
-          "downloading": "方取模型卷帙",
-          "verifying": "方校验…",
-          "writing": "方写入…",
-          "success": "取下已毕",
-          "error": "取下未成",
-          "paused": "已暂止",
-          "cancelled": "已罢"
-        },
         "pauseDownload": "暂止",
         "resumeDownload": "续取",
         "cancelDownload": "删未竟之取下",
@@ -5941,8 +5920,6 @@
           "notChecked": "尚未察更新",
           "action": "新之",
           "updating": "方更新…",
-          "downloadingPercent": "方取下 {{percent}}%（{{downloaded}}/{{total}} MB）…",
-          "downloadingBytes": "方取下，已得 {{downloaded}} MB…",
           "installing": "取下已毕，方安装…",
           "toast": {
             "success": "cua-driver 已至最新，本姑娘办事，君放心。",
@@ -15470,6 +15447,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "此卷不在今差事之工作目录内，不能于侧栏卷浏览器中定位",
       "openInDefaultBrowser": "于浏览器开",
       "copyLink": "录链接",
+      "addPrToHeader": "加入顶列",
+      "prAlreadyInHeader": "已在顶列",
+      "prAddedToHeader": "已入顶列，状态随差事而行",
+      "prAssociatedNotInHeader": "已关联，未入顶列",
+      "prSavedNotInHeader": "关联已存；顶列三席已满，可于差事顶列之 PR 管理中固定之",
       "linkCopied": "链接已录",
       "viewSourceFile": "观原码",
       "openInSidebarFailed": "于侧栏浏览器中开之未成",
@@ -21763,5 +21745,28 @@
     "archivedNotice": "已自动封存 {{count}} 件闲置差事",
     "undo": "复原",
     "undoFailed": "未能复原，请於已封存差事中恢复。"
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "余 {{time}}",
+    "attempt": "第 {{attempt}} 试",
+    "phase": {
+      "preparing": "方备…",
+      "queued": "方候…",
+      "downloading": "方取下…",
+      "retrying": "方再试…",
+      "verifying": "方校验…",
+      "installing": "方安装…",
+      "paused": "已暂止",
+      "completed": "已毕",
+      "failed": "取下未成",
+      "cancelled": "已罢"
+    },
+    "retry": {
+      "slow": "网络迟滞，方重连…",
+      "network": "连接中断，方再试…",
+      "timeout": "连接超时，方再试…",
+      "server": "服务器繁忙，方再试…"
+    }
   }
 }

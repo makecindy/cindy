@@ -1,4 +1,10 @@
+import type { MessageSourcePluginRelay } from '@cindy/maker-shared/message-source';
 import type { PluginMessageAttachment } from './pluginAttachments.js';
+/**
+ * Optional `tasks.send` relay: where the plugin says this IM message came from. Display and
+ * `[消息来源]` context only; the Host still stamps the plugin as the sender, never a grant.
+ */
+export type PluginTaskMessageRelay = MessageSourcePluginRelay;
 /** Ordinary Session API. Task data stays on the plugin host; execution may be remote. */
 export interface PluginTaskRoute {
   /** Omitted = plugin host; a paired computer or share:<id> selects remote Agent execution. */
@@ -125,9 +131,14 @@ export type PluginTaskRequest = (
       text: string;
       /** Supplementary material, collapsed in the conversation but sent to the Agent. */
       context?: string;
+      /** The message's own images, audio/video or files; shown with it. `text` may be '' when present. */
       attachments?: PluginMessageAttachment[];
+      /** Model-only references (for example group history); never shown or saved with the message. */
+      contextAttachments?: PluginMessageAttachment[];
       /** Optional Host-issued parent invocation; correlation only, not execution authority. */
       invocationId?: string;
+      /** Optional IM relay context (capabilities().messageRelay); rendered as an IM card. */
+      relay?: PluginTaskMessageRelay;
     }
   | { type: 'tasks-request'; kind: 'getRun'; runId: string }
   | { type: 'tasks-request'; kind: 'listRuns'; taskId: string; after?: string; limit?: number }

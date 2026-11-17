@@ -428,6 +428,54 @@ it('persists automatic naming intent and dispatches separate context without dup
     .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
 });
 
+// unit: message-source.md「插件转发的 IM 消息」(2026-11-16). relay joins the send identity only when
+// present: the digest literal below was written by the build before relay existed, so a plugin
+// retrying an old requestKey still replays instead of conflicting. Relay reaches dispatch as-is.
+it('keeps relay-free send receipts replayable and binds a relay to its request key', async () => {
+  const f = fixture(), task = await f.create();
+  const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'send',
+    text: '群里有人问发布时间', context: '<group_chat_context>' };
+  await f.service.send('p', request);
+  const receipt = [...f.rows.values()].find(row => row.operation === 'send')!;
+  expect(receipt.fingerprint).toBe('b80eb91c8bf354d5846b2e1f951852685d31a52722cf00fdcb7a1a8db9f026e1');
+  expect(f.deps.dispatch).toHaveBeenCalledExactlyOnceWith('p', task.taskId, expect.any(String), request.text, [], request.context);
+  const relay = { platform: 'wechat', chatType: 'group' as const, chatName: '产品群', sender: { id: 'wxid_a', name: 'Chris', isOwner: false } };
+  await expect(f.service.send('p', { ...request, relay })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  const run = await f.service.send('p', { ...request, requestKey: 'relay', relay });
+  expect(f.deps.dispatch).toHaveBeenLastCalledWith('p', task.taskId, run.inputMessageId, request.text, [], request.context, relay);
+  // Key order is not identity; a changed relay is.
+  const { sender, ...rest } = relay;
+  expect(await f.service.send('p', { ...request, requestKey: 'relay', relay: { sender, ...rest } })).toEqual(run);
+  await expect(f.service.send('p', { ...request, requestKey: 'relay', relay: { ...relay, sender: { ...sender, isOwner: true } } }))
+    .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  expect(f.deps.dispatch).toHaveBeenCalledTimes(2);
+});
+
+// unit: plugin-agent-tasks.md「消息附件」(2026-11-17). A relayed photo may come without words, and
+// model-only references (group history) bind to the request key and reach dispatch separately.
+it('accepts an attachment-only relay through the public boundary and binds its context attachments', async () => {
+  const f = fixture(), task = await f.create();
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64');
+  const ghost = { enabled: true, taskCapabilityApproved: true, approval: { state: 'approved' },
+    manifest: { agent: { tasks: true } } } as InstalledGhost;
+  const send = (request: Record<string, unknown>) => handlePluginTaskRequest('p', {
+    type: 'tasks-request', kind: 'send', taskId: task.taskId, expectedRevision: task.revision, ...request,
+  } as never, { getGhost: () => ghost, isCurrent: () => true,
+    handler: (pluginId, value) => f.service.send(pluginId, value as never) });
+  // Words are still required when nothing of the message itself is attached.
+  expect(await send({ requestKey: 'empty', text: '', contextAttachments: [{ base64: png }] }))
+    .toMatchObject({ ok: false, error: { code: 'INVALID_REQUEST' } });
+  const first = await send({ requestKey: 'photo', text: '', attachments: [{ base64: png, name: 'photo.png' }],
+    contextAttachments: [{ base64: png, name: 'earlier.png' }] });
+  expect(first).toMatchObject({ ok: true });
+  expect(f.deps.dispatch).toHaveBeenCalledExactlyOnceWith('p', task.taskId, expect.any(String), '',
+    [expect.objectContaining({ name: 'photo.png', kind: 'image' })], undefined, undefined,
+    [expect.objectContaining({ name: 'earlier.png', kind: 'image' })]);
+  expect(await send({ requestKey: 'photo', text: '', attachments: [{ base64: png, name: 'photo.png' }] }))
+    .toMatchObject({ ok: false, error: { code: 'IDEMPOTENCY_CONFLICT' } });
+  expect(f.deps.dispatch).toHaveBeenCalledOnce();
+});
+
 // unit: a failed naming-metadata read must not leave an unsent receipt that
 // suppresses the retry. Inject the store failure after host bookkeeping starts.
 it('retries after a failed naming-metadata read without leaving an unsent receipt', async () => {
@@ -513,18 +561,20 @@ it.each(['INVALID_ATTACHMENTS', 'TASK_BUSY'] as const)('preserves %s across the 
   const pending: Promise<unknown>[] = [];
   try {
     if (code === 'TASK_BUSY') {
-      const large = Buffer.alloc(PLUGIN_ATTACHMENT_MAX_BYTES);
+      // Two held sends, each using the whole per-send budget across shown and context attachments.
+      const large = Buffer.alloc(PLUGIN_ATTACHMENT_MAX_BYTES / 2);
       png.copy(large);
       const attachments = [{ base64: large.toString('base64') }];
-      pending.push(withParsedPluginMessageAttachments(attachments, () => held));
-      pending.push(withParsedPluginMessageAttachments(attachments, () => held));
+      pending.push(withParsedPluginMessageAttachments(attachments, () => held, attachments));
+      pending.push(withParsedPluginMessageAttachments(attachments, () => held, attachments));
     }
     const ghost = { enabled: true, taskCapabilityApproved: true, approval: { state: 'approved' },
       manifest: { agent: { tasks: true } } } as InstalledGhost;
     const result = await handlePluginTaskRequest('p', {
       type: 'tasks-request', kind: 'send', taskId: task.taskId, requestKey: 'attachment-error',
       expectedRevision: task.revision, text: 'context',
-      attachments: [{ base64: (code === 'TASK_BUSY' ? png : Buffer.from('not an image')).toString('base64') }],
+      // Non-canonical base64 (padding bits set) cannot be decoded faithfully.
+      attachments: [{ base64: code === 'TASK_BUSY' ? png.toString('base64') : 'AB==' }],
     }, {
       getGhost: () => ghost, isCurrent: () => true,
       handler: (pluginId, request) => {
