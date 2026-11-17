@@ -21593,14 +21593,14 @@
     "openFailed": "未能开启 GitHub"
   },
   "hostConnection": {
-    "connecting": "正连 Cindy 后台…",
+    "connecting": "正连 Cindy 后台服务…",
     "restoring": "正复差事之态…",
     "retrying": "差事之态未同步，正重试…",
     "pairing": "连接须再授权",
-    "pairingHelp": "请留此页。于启动 Cindy 后台之终端重行打开网页之命令，于新页配对毕，再返此页。",
+    "pairingHelp": "请留此页。于启动 Cindy 后台服务之终端重行打开网页之命令，于新页配对毕，再返此页。",
     "keepDraft": "草稿仍存。连接复通，差事之态将自同步。",
     "retry": "重试连接",
-    "desktopAuthHelp": "请于启动终端更新后台连接设置，再启此实验客户端。"
+    "desktopAuthHelp": "请于启动终端更新 Cindy 后台服务之连接设置，再启此实验客户端。"
   },
   "remoteControlConsent": {
     "title": "许远控此机乎？",

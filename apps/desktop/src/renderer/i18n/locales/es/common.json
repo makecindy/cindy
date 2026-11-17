@@ -21880,14 +21880,14 @@
     "openFailed": "No se pudo abrir GitHub."
   },
   "hostConnection": {
-    "connecting": "Conectando con Cindy…",
+    "connecting": "Conectando con el servicio en segundo plano de Cindy…",
     "restoring": "Restaurando el estado de las tareas…",
     "retrying": "Las tareas aún no están sincronizadas. Reintentando…",
     "pairing": "Se necesita autorizar la conexión",
-    "pairingHelp": "Mantén esta página abierta. En el terminal donde iniciaste Cindy Host, repite el comando para abrir el cliente web. Vincula la nueva página y vuelve aquí.",
+    "pairingHelp": "Mantén esta página abierta. En el terminal donde iniciaste el servicio en segundo plano de Cindy, repite el comando para abrir el cliente web. Vincula la nueva página y vuelve aquí.",
     "keepDraft": "Tu borrador se conserva. Las tareas se sincronizarán cuando se restablezca la conexión.",
     "retry": "Reconectar",
-    "desktopAuthHelp": "Actualiza la configuración de conexión del Host en el terminal de inicio y vuelve a abrir este cliente experimental."
+    "desktopAuthHelp": "Actualiza la configuración de conexión del servicio en segundo plano de Cindy en el terminal de inicio y vuelve a abrir este cliente experimental."
   },
   "remoteControlConsent": {
     "title": "¿Permitir el control remoto de esta computadora?",

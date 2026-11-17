@@ -21593,14 +21593,14 @@
     "openFailed": "GitHub를 열지 못했습니다."
   },
   "hostConnection": {
-    "connecting": "Cindy에 연결 중…",
+    "connecting": "Cindy 백그라운드 서비스에 연결 중…",
     "restoring": "작업 상태 복원 중…",
     "retrying": "작업 상태를 다시 동기화하는 중…",
     "pairing": "연결 인증이 필요합니다",
-    "pairingHelp": "이 페이지를 열어 두세요. Cindy Host를 시작한 터미널에서 웹 화면을 여는 명령을 다시 실행하고 새 페이지에서 페어링한 후 돌아오세요.",
+    "pairingHelp": "이 페이지를 열어 두세요. Cindy 백그라운드 서비스를 시작한 터미널에서 웹 화면을 여는 명령을 다시 실행하고 새 페이지에서 페어링한 후 돌아오세요.",
     "keepDraft": "작성 중인 초안은 유지됩니다. 연결이 복구되면 작업 상태가 동기화됩니다.",
     "retry": "다시 연결",
-    "desktopAuthHelp": "시작 터미널에서 Host 연결 설정을 업데이트한 후 이 실험용 클라이언트를 다시 여세요."
+    "desktopAuthHelp": "시작 터미널에서 Cindy 백그라운드 서비스 연결 설정을 업데이트한 후 이 실험용 클라이언트를 다시 여세요."
   },
   "remoteControlConsent": {
     "title": "이 컴퓨터의 원격 제어를 허용할까요?",
