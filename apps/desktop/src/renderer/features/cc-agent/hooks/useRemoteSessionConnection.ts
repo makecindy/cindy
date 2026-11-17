@@ -150,12 +150,33 @@ export function useRemoteSessionConnection(deviceId: string | undefined): Remote
  * direct / 探测失败一律 null —— `unknown` 是「没问出判定」的 fail-open 兜底,不是「确认无
  * 代理」,不得当事实展示。降级恢复后清空,再次降级时重新探(用户可能中途改了系统代理)。
  * deviceId 让 main 取这个对端实际走的 transport URL(协议 + path 都与真实 socket 一致)。
+ *
+ * 对端的数据面路径(直连↔中继)变了要**重探**:路径一变,承载这次流量的通路就换了,
+ * 旧判定针对的是另一条路 —— 直连化之后还挂着中继的代理提示,是条自信的假提示;反过来
+ * 从直连回到中继时也拿不到该有的提示(Codex review P1)。路径变化由 main 的
+ * STATUS_CHANGED(dataPathChangedDeviceId)告知,这里用代数把它并进探测的依赖。
  */
 export function useOutboundProxyVerdict(
   active: boolean,
   deviceId?: string,
 ): DeviceLinkProxyVerdict | null {
   const [verdict, setVerdict] = useState<DeviceLinkProxyVerdict | null>(null);
+  // 对端数据面路径变化的代数:变了就重探(见上面的注释)。
+  const [pathEpoch, setPathEpoch] = useState(0);
+
+  useEffect(() => {
+    if (!active || !deviceId) return;
+    let cancelled = false;
+    const off = window.electronAPI.deviceLink.onStatusChanged((p) => {
+      if (cancelled) return;
+      if (p.dataPathChangedDeviceId !== deviceId) return;
+      setPathEpoch((e) => e + 1);
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [active, deviceId]);
 
   useEffect(() => {
     if (!active) {
@@ -178,7 +199,7 @@ export function useOutboundProxyVerdict(
     return () => {
       cancelled = true;
     };
-  }, [active, deviceId]);
+  }, [active, deviceId, pathEpoch]);
 
   return active ? verdict : null;
 }

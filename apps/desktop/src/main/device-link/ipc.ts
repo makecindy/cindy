@@ -72,6 +72,7 @@ import {
   getDirectDataDeviceIds,
   deviceLinkPeerTransportUrl,
   deviceLinkPeerDataPath,
+  deviceLinkPeerPinnedProxy,
   hasOfflineDirectPath,
   isDeviceDataPathAvailable,
   isPeerControlAvailable,
@@ -391,6 +392,10 @@ export function handleGetPeerLinks(deps: DeviceLinkIpcDeps): DeviceLinkPeerLinks
  * routedClient crossAccountConnection),无自建中转时两者相同、退化为单候选。判定不
  * 一致(PAC 逐 path / NO_PROXY / loopback 直连例外)时探针返回 null —— 宁可不报,
  * 也不谎称走了代理。
+ *
+ * 有**活的 socket** 时以它建连时钉住的判定为准(见 deviceLinkPeerPinnedProxy):
+ * 探针是「现在的配置解析出来是什么」,socket 是「它当初选定的出口」,两者可能已经
+ * 不一致(系统 / PAC 代理在建连之后被改过)。报告后者才是这条连接的真相。
  */
 export async function handleGetProxyVerdict(
   deps: DeviceLinkIpcDeps,
@@ -401,6 +406,15 @@ export async function handleGetProxyVerdict(
   // 中继)。这时探中继 URL 的代理得到的是一条「自信的假提示」—— 用户看到「本机可能在走
   // 代理」,而卡住的那条路根本没走中转(例如应用/数据库超时)。宁可不报。
   if (deviceId && deviceLinkPeerDataPath(deviceId) === 'direct') return null;
+  // 活着的 socket 走没走代理,问**它建连时钉住的判定**,不要重新解析当前配置:系统 /
+  // PAC 代理在 socket 建立之后改过,重新解析得到的结论可能与这条 socket 正好相反 ——
+  // banner 会指认一个根本没在用的代理,或者漏报真实在用的那个(Codex review P1)。
+  const pinned = deviceId ? deviceLinkPeerPinnedProxy(deviceId) : null;
+  if (pinned) {
+    return pinned.kind === 'proxy'
+      ? { kind: 'proxy', proxy: pinned.proxy }
+      : { kind: 'direct', proxy: null };
+  }
   const transportUrl = deviceId ? deviceLinkPeerTransportUrl(deviceId) : null;
   // 指名了设备、却查不到它实际走的 transport URL(主连接由 agent-net 承载 / 对端在
   // scoped 路由连接上 / client 未就绪):这条对端根本不走下面那两条 REST base,探它们

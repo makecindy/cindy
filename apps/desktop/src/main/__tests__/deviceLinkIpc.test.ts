@@ -14,6 +14,10 @@ const dataPath = vi.hoisted(() => ({ available: vi.fn<(deviceId: string) => bool
 const peerTransport = vi.hoisted(() => ({ url: null as string | null }));
 // 对端当前的数据面路径(null = 判定不了,'direct' = 可靠帧走直连通道)。
 const peerDataPath = vi.hoisted(() => ({ path: null as 'direct' | 'relay' | null }));
+// 活着的 relay socket 在建连时钉住的出站判定(null = 没有钉住的判定)。
+const peerPinnedProxy = vi.hoisted(() => ({
+  decision: null as { kind: 'proxy'; proxy: string } | { kind: 'direct'; reason: string } | null,
+}));
 vi.mock('../appSessionState.js', async importOriginal => ({
   ...await importOriginal<typeof import('../appSessionState.js')>(), activeOwnerScopeKey: () => `${metadataOwner.key}:${metadataOwner.generation}`,
 }));
@@ -100,6 +104,7 @@ vi.mock('../device-link/index', () => ({
   getDeviceLinkPeerLinks: () => ({ links: [], relayRttMs: null }),
   deviceLinkPeerTransportUrl: () => peerTransport.url,
   deviceLinkPeerDataPath: () => peerDataPath.path,
+  deviceLinkPeerPinnedProxy: () => peerPinnedProxy.decision,
   hasOfflineDirectPath: () => false,
   isDeviceDataPathAvailable: dataPath.available,
   clearDeviceResponsiveness: vi.fn(),
@@ -262,6 +267,7 @@ describe('device-link IPC handlers', () => {
     metadataOwner.key = 'directory-owner-a';
     peerTransport.url = null;
     peerDataPath.path = null;
+    peerPinnedProxy.decision = null;
     metadataOwner.generation = 0;
     __resetDeviceListCoalescingForTests(); // /devices 合并窗口:不让上一用例的在途请求漏到下一个
     vi.restoreAllMocks();
@@ -348,6 +354,41 @@ describe('device-link IPC handlers', () => {
     await expect(
       handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a'),
     ).resolves.toBeNull();
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  // Codex review P1:系统 / PAC 代理在 socket 建立之后被改过时,重新解析会得到与这条
+  // **活着的** socket 不同的结论 —— banner 于是指认一个根本没在用的代理,或者漏报真实
+  // 在用的那个。判定必须取自 socket 建连那一刻钉住的那份。
+  it('#9537 出站路径判定:有活着的 socket → 用它建连时钉住的判定,不重新解析当前配置', async () => {
+    peerPinnedProxy.decision = { kind: 'proxy', proxy: 'http://10.0.0.2:8080' };
+    peerTransport.url = 'wss://relay.example.com/api/device-link/ws';
+    const probe = vi.fn(async () => ({
+      source: 'system' as const,
+      kind: 'direct' as const,
+      upstream: 'wss://relay.example.com',
+      at: 0,
+    }));
+    await expect(
+      handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a'),
+    ).resolves.toEqual({ kind: 'proxy', proxy: 'http://10.0.0.2:8080' });
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  // 钉住的判定是「直连」时,如实回 direct(渲染侧据此不显示代理提示),同样不重新解析。
+  it('#9537 出站路径判定:钉住的判定是直连 → direct,不重新解析当前配置', async () => {
+    peerPinnedProxy.decision = { kind: 'direct', reason: 'no-proxy' };
+    peerTransport.url = 'wss://relay.example.com/api/device-link/ws';
+    const probe = vi.fn(async () => ({
+      source: 'system' as const,
+      kind: 'proxy' as const,
+      proxy: 'http://127.0.0.1:7890',
+      upstream: 'wss://relay.example.com',
+      at: 0,
+    }));
+    await expect(
+      handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a'),
+    ).resolves.toEqual({ kind: 'direct', proxy: null });
     expect(probe).not.toHaveBeenCalled();
   });
 

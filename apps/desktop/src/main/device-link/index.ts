@@ -88,7 +88,7 @@ import { markStartupMilestone } from '../startupTimeline';
 import { onQuit } from '../lifecycle';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
-import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop';
+import { createOutboundHttpAgentWithDecision, type OutboundSocketProxyDecision } from '../maker-host/outbound-fetch.desktop';
 import {
   DeviceLinkOwnershipArbiter,
   createSqliteExclusiveFileLock,
@@ -237,6 +237,16 @@ const relayDnsLookup = createDnsFallbackLookup({ log });
 // 注意:不回退到 apiBaseUrl —— device-link 已从主 server 摘除,主 server 没有这组端点。
 const WS_PATH = '/api/device-link/ws';
 
+/**
+ * 每条 relay socket 在**建连那一刻**钉住的出站判定(脱敏地址 / 直连原因)。
+ *
+ * 诊断(#9537)必须报「活着的 socket 走没走代理」,而不是「现在这份系统 / PAC 配置解析
+ * 出来是什么」:socket 建立之后改了系统代理,重新解析会得到与这条 socket 不同的结论,
+ * banner 于是信心十足地指认一个根本没在用的代理,或者反过来漏报真实在用的那个
+ * (Codex review P1)。判定随建连产生、重连时覆盖。
+ */
+const pinnedSocketProxyByUrl = new Map<string, OutboundSocketProxyDecision>();
+
 /** 官方中转的 WebSocket 地址:主连接走自建中转时,跨账号 peer 仍连这里。 */
 function officialWsUrl(): string {
   return officialDeviceLinkApiBase().replace(/^http/, 'ws') + WS_PATH;
@@ -291,6 +301,22 @@ export function deviceLinkPeerDataPath(deviceId: string): 'direct' | 'relay' | n
   // legacy / scoped 连接上,而它没有覆写 getPeerPath —— 问外层 client 只会读到外层自己
   // 那份 transport 表,把实际走直连的对端说成走中继。
   return client.connectionFor(deviceId).getPeerPath(deviceId);
+}
+
+/**
+ * 承载这个对端的那条 relay socket 在**建连时**钉住的出站判定。
+ *
+ * 与 `deviceLinkPeerTransportUrl` 配对:先问出这个对端实际走哪条 socket,再取那条
+ * socket 建立时选定的出口。回答的是「这条活着的 socket 走没走代理」,不是「当前配置
+ * 解析出来是什么」—— 后者会与活着的 socket 不一致(见 pinnedSocketProxyByUrl)。
+ *
+ * 拿不到(socket 还没建 / 对端在 agent-net 路由连接上 / client 未就绪)返回 null:
+ * 调用方按「没有判定」处理,宁可不报也不谎称走了代理。
+ */
+export function deviceLinkPeerPinnedProxy(deviceId: string): OutboundSocketProxyDecision | null {
+  const url = deviceLinkPeerTransportUrl(deviceId);
+  if (!url) return null;
+  return pinnedSocketProxyByUrl.get(url) ?? null;
 }
 
 /** relay REST base(media presign / devices 等);供 mediaTransfer / ipc 复用。 */
@@ -1032,14 +1058,20 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 行为与不传一致(见 maker-host/outbound-fetch)。
     // lookup:DNS 失败/慢解析时回退最近成功地址(弱网 VPN 下 DNS 单段可吃掉
     // 大半个握手窗口);代理模式下由代理解析域名,本层自然旁路。
-    createWebSocket: async (url, headers) =>
-      new WebSocket(url, {
+    createWebSocket: async (url, headers) => {
+      // 建连这一刻就把「这条 socket 走没走代理」钉下来:诊断要报的是**活着的 socket**
+      // 的事实,不是当前系统 / PAC 配置的重新解析结果 —— socket 建好之后改了系统代理,
+      // 再解析一次得到的结论可能与这条 socket 正好相反(Codex review P1)。重连时覆盖。
+      const { agent, decision } = await createOutboundHttpAgentWithDecision(url);
+      pinnedSocketProxyByUrl.set(url, decision);
+      return new WebSocket(url, {
         headers,
-        agent: await createOutboundHttpAgent(url),
+        agent,
         // ClientOptions 类型未声明 lookup,但 ws 会把额外选项透传给
         // http.request(其 RequestOptions 原生支持 lookup)→ net/tls 建连。
         lookup: relayDnsLookup,
-      } as WebSocket.ClientOptions),
+      } as WebSocket.ClientOptions);
+    },
     logger: {
       debug: (...args) => log.debug(...args),
       info: (...args) => log.info(...args),

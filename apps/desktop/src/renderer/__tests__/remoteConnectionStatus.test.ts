@@ -71,6 +71,24 @@ describe('deriveRemoteConnectionStatus', () => {
 });
 
 describe('useOutboundProxyVerdict (#9537 degraded 诊断)', () => {
+  // 代理诊断除了探测本身,还要接住 main 推来的「对端数据面路径变了」通知
+  // (STATUS_CHANGED 的 dataPathChangedDeviceId)—— 路径变了旧判定就要作废。
+  type StatusEvent = { status: 'stopped' | 'connecting' | 'online'; directDataDeviceIds?: string[]; dataPathChangedDeviceId?: string };
+  function mockProxyVerdictApi(getProxyVerdict: () => Promise<DeviceLinkProxyVerdict | null>) {
+    const statusListeners = new Set<(p: StatusEvent) => void>();
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { deviceLink: {
+        getProxyVerdict,
+        onStatusChanged: (cb: (p: StatusEvent) => void) => {
+          statusListeners.add(cb);
+          return () => { statusListeners.delete(cb); };
+        },
+      } },
+    });
+    return statusListeners;
+  }
+
   // Issue #9537:连接反复失败只说「设备无响应」,用户无法区分「对端不可达」与「本机网络 /
   // Proxy 问题」。banner 只在 degraded 时探一次出站路径判定,且只把已确证的 kind='proxy'
   // 当事实展示;unknown 是 fail-open 兜底(「没问出判定」≠「确认无代理」),direct / 失败
@@ -79,10 +97,7 @@ describe('useOutboundProxyVerdict (#9537 degraded 诊断)', () => {
     const getProxyVerdict = vi.fn(
       async (): Promise<DeviceLinkProxyVerdict | null> => ({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' }),
     );
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: { deviceLink: { getProxyVerdict } },
-    });
+    mockProxyVerdictApi(getProxyVerdict);
     const hook = renderHook(
       ({ active, deviceId }: { active: boolean; deviceId?: string }) => useOutboundProxyVerdict(active, deviceId),
       { initialProps: { active: false, deviceId: 'peer-a' } },
@@ -124,10 +139,7 @@ describe('useOutboundProxyVerdict (#9537 degraded 诊断)', () => {
     const getProxyVerdict = vi.fn(
       () => new Promise<DeviceLinkProxyVerdict | null>((resolve) => { resolveProbe = resolve; }),
     );
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: { deviceLink: { getProxyVerdict } },
-    });
+    mockProxyVerdictApi(getProxyVerdict);
     const hook = renderHook(
       ({ deviceId }: { deviceId: string }) => useOutboundProxyVerdict(true, deviceId),
       { initialProps: { deviceId: 'peer-a' } },
@@ -152,10 +164,7 @@ describe('useOutboundProxyVerdict (#9537 degraded 诊断)', () => {
       if (calls === 1) return { kind: 'proxy', proxy: 'http://127.0.0.1:7890' };
       throw new Error('probe failed');
     });
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: { deviceLink: { getProxyVerdict } },
-    });
+    mockProxyVerdictApi(getProxyVerdict);
     const hook = renderHook(
       ({ deviceId }: { deviceId?: string }) => useOutboundProxyVerdict(true, deviceId),
       { initialProps: { deviceId: 'peer-a' as string | undefined } },
@@ -168,6 +177,34 @@ describe('useOutboundProxyVerdict (#9537 degraded 诊断)', () => {
     await act(async () => {});
     hook.rerender({ deviceId: 'peer-a' });
     await act(async () => {});
+    expect(hook.result.current).toBeNull();
+  });
+
+  // Codex review P1:对端的数据面路径变了(直连↔中继),承载流量的通路就换了,旧判定
+  // 必须在重探前作废 —— 否则直连化之后还挂着中继的代理提示(一条自信的假提示),
+  // 反向(直连→中继)则永远拿不到该有的提示。
+  it('对端数据面路径变了 → 作废旧判定并重探', async () => {
+    const getProxyVerdict = vi.fn(
+      async (): Promise<DeviceLinkProxyVerdict | null> => ({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' }),
+    );
+    const statusListeners = mockProxyVerdictApi(getProxyVerdict);
+    const hook = renderHook(() => useOutboundProxyVerdict(true, 'peer-a'));
+    await act(async () => {});
+    expect(getProxyVerdict).toHaveBeenCalledTimes(1);
+    expect(hook.result.current).toEqual({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
+
+    // 别的对端路径变了:与本对端无关,不重探。
+    await act(async () => {
+      for (const cb of statusListeners) cb({ status: 'online', dataPathChangedDeviceId: 'peer-b' });
+    });
+    expect(getProxyVerdict).toHaveBeenCalledTimes(1);
+
+    // 本对端中继→直连:旧判定作废并重探;重探回 direct → 界面上不再挂代理提示。
+    getProxyVerdict.mockResolvedValue({ kind: 'direct', proxy: null });
+    await act(async () => {
+      for (const cb of statusListeners) cb({ status: 'online', dataPathChangedDeviceId: 'peer-a' });
+    });
+    expect(getProxyVerdict).toHaveBeenCalledTimes(2);
     expect(hook.result.current).toBeNull();
   });
 });
