@@ -915,6 +915,33 @@ describe('Host macOS system proxy rules', () => {
   });
 });
 
+let hostImportGraphResult: Promise<string[]> | undefined;
+
+/**
+ * The modules the Host bundles (apps/host/scripts/build.mjs entries) and the acceptance scripts load, built
+ * once and shared by the guards below that classify what the Host loads.
+ */
+function hostImportGraph(): Promise<string[]> {
+  return hostImportGraphResult ??= (async () => {
+    const scripts = fs.readdirSync(path.join(repo, 'apps/host/scripts')).filter(name => name.endsWith('.e2e.mjs')).sort()
+      .map(name => `apps/host/scripts/${name}`);
+    const result = await build({
+      absWorkingDir: repo, bundle: true, write: false, metafile: true, splitting: true, platform: 'node', format: 'esm',
+      target: 'node22', outdir: path.join(os.tmpdir(), 'cindy-host-graph-unused'), logLevel: 'silent',
+      entryPoints: ['apps/host/src/main.ts', 'apps/host/src/plugins/node-worker.ts', 'apps/host/src/agent/pi-subagent-runner-process.cts',
+        'apps/desktop/src/main/cindy-brain/libraryDbWorker.ts', 'apps/desktop/src/main/cindy-brain/ghostSnapshotWorkerProcess.ts', ...scripts],
+      plugins: [{ name: 'host-graph', setup(builder) {
+        builder.onResolve({ filter: /\?raw$/ }, () => ({ path: 'raw', namespace: 'raw' }));
+        builder.onLoad({ filter: /.*/, namespace: 'raw' }, () => ({ contents: '', loader: 'text' }));
+        builder.onResolve({ filter: /^[^./]/ }, args => (isBuiltin(args.path)
+          || !(args.path.startsWith('@cindy/') || /^cindy-tools(\/|$)/.test(args.path) || args.path.startsWith('#'))
+          ? { path: args.path, external: true } : undefined));
+      } }],
+    });
+    return Object.keys(result.metafile.inputs).filter(file => /\.(ts|tsx|mts|cts|js|mjs|cjs)$/.test(file));
+  })();
+}
+
 /**
  * Rule: a shared module may keep a port in a module variable that the desktop fills once at startup
  * (setX(impl)). Unlike a factory port it fails nothing when unbound: the module falls back to null, a
@@ -943,26 +970,6 @@ describe('module-level port setters the Host loads, classified for the Host', ()
   const SETTER = /^(set|register|bind|configure|install|init)[A-Z]/;
   const MUTATORS = new Set(['set', 'push', 'add', 'unshift', 'splice', 'delete', 'clear']);
   type Entry = { status: string; where?: string; reason?: string };
-
-  /** The modules the Host bundles (apps/host/scripts/build.mjs entries) and the acceptance scripts load. */
-  async function hostGraph(): Promise<string[]> {
-    const scripts = fs.readdirSync(path.join(repo, 'apps/host/scripts')).filter(name => name.endsWith('.e2e.mjs')).sort()
-      .map(name => `apps/host/scripts/${name}`);
-    const result = await build({
-      absWorkingDir: repo, bundle: true, write: false, metafile: true, splitting: true, platform: 'node', format: 'esm',
-      target: 'node22', outdir: path.join(os.tmpdir(), 'cindy-host-graph-unused'), logLevel: 'silent',
-      entryPoints: ['apps/host/src/main.ts', 'apps/host/src/plugins/node-worker.ts', 'apps/host/src/agent/pi-subagent-runner-process.cts',
-        'apps/desktop/src/main/cindy-brain/libraryDbWorker.ts', 'apps/desktop/src/main/cindy-brain/ghostSnapshotWorkerProcess.ts', ...scripts],
-      plugins: [{ name: 'host-graph', setup(builder) {
-        builder.onResolve({ filter: /\?raw$/ }, () => ({ path: 'raw', namespace: 'raw' }));
-        builder.onLoad({ filter: /.*/, namespace: 'raw' }, () => ({ contents: '', loader: 'text' }));
-        builder.onResolve({ filter: /^[^./]/ }, args => (isBuiltin(args.path)
-          || !(args.path.startsWith('@cindy/') || /^cindy-tools(\/|$)/.test(args.path) || args.path.startsWith('#'))
-          ? { path: args.path, external: true } : undefined));
-      } }],
-    });
-    return Object.keys(result.metafile.inputs).filter(file => /\.(ts|tsx|mts|cts|js|mjs|cjs)$/.test(file));
-  }
 
   function settersIn(file: string): { setters: string[]; containers: string[] } {
     const sf = ts.createSourceFile(file, read(path.join(repo, file)), ts.ScriptTarget.Latest, true);
@@ -1070,7 +1077,7 @@ describe('module-level port setters the Host loads, classified for the Host', ()
   }
 
   it('classifies every setter the Host loads, and only those', async () => {
-    const graph = await hostGraph();
+    const graph = await hostImportGraph();
     const texts = new Map(graph.map(file => [file, read(path.join(repo, file))]));
     const collected = new Set<string>();
     for (const file of graph) {
@@ -1114,3 +1121,130 @@ describe('module-level port setters the Host loads, classified for the Host', ()
   });
 });
 
+/**
+ * Rule: the build region is fixed per Host release (release table 甲 20, region-and-editions.md §2.4):
+ * scripts/build.mjs bakes --region into shared/brandRegion.ts, loaders/raw-hook.mjs follows
+ * CINDY_HOST_REGION from source. A desktop module that reads it therefore behaves as the Host's edition,
+ * not as the desktop build it was written for; each one the Host loads is judged and listed in
+ * apps/host/src/desktop-region-readers.ts.
+ * Collection: the Host's import graph of the setter guard above (hostImportGraph); in its desktop and
+ * package sources (generated and vendored code excluded), imports and re-exports of CURRENT_CINDY_REGION
+ * or CURRENT_APP_ID from shared/brandRegion, and direct reads of VITE_CINDY_AUTH_REGION or
+ * CINDY_AUTH_REGION on import.meta.env or process.env (comments and strings do not count); in the Host's
+ * own sources, region fallbacks `x === 'cn' ? 'cn' : 'global'` (either way round), keyed by the enclosing
+ * function: they fall to a fixed region rather than the release's, and are listed with why they cannot be
+ * reached (startDeviceLink and disableShareAvailability: only after sign-in sets the realm).
+ * Failure: a module that starts reading the region, or a reader that comes into the graph (the desktop
+ * inventory's 40 files outside it today), fails until the table says how it behaves on the Host; an entry
+ * whose file no longer reads fails too, so a fallback that moves to another function is judged again.
+ * Not seen: values derived from the region and exported under other names (regionalMoney.ts's
+ * DEFAULT_USAGE_CURRENCY, legalLinks.ts's LEGAL_LINKS): their modules are the listed readers.
+ */
+describe('desktop modules the Host loads that read the build region, classified for the Host', () => {
+  const tableFile = path.join(hostSrc, 'desktop-region-readers.ts');
+  const REGION_CONSTANTS = new Set(['CURRENT_CINDY_REGION', 'CURRENT_APP_ID']);
+  const REGION_ENV = /^(VITE_)?CINDY_AUTH_REGION$/;
+
+  /** The Host's own `x === 'cn' ? 'cn' : 'global'` fallbacks, by enclosing function. */
+  function fallbacksIn(file: string): string[] {
+    const sf = ts.createSourceFile(file, read(path.join(repo, file)), ts.ScriptTarget.Latest, true);
+    const found = new Set<string>();
+    const isRegion = (n: ts.Expression) => ts.isStringLiteralLike(n) && (n.text === 'cn' || n.text === 'global');
+    const enclosing = (n: ts.Node): string => {
+      for (let at: ts.Node | undefined = n.parent; at; at = at.parent) {
+        if ((ts.isFunctionDeclaration(at) || ts.isMethodDeclaration(at)) && at.name) return at.name.getText(sf);
+        if ((ts.isArrowFunction(at) || ts.isFunctionExpression(at)) && ts.isVariableDeclaration(at.parent)) return at.parent.name.getText(sf);
+      }
+      return '<module>';
+    };
+    const visit = (n: ts.Node): void => {
+      if (ts.isConditionalExpression(n) && isRegion(n.whenTrue) && isRegion(n.whenFalse)
+        && (n.whenTrue as ts.StringLiteralLike).text !== (n.whenFalse as ts.StringLiteralLike).text
+        && ts.isBinaryExpression(n.condition) && n.condition.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+        && isRegion(n.condition.right) && (n.condition.right as ts.StringLiteralLike).text === (n.whenTrue as ts.StringLiteralLike).text) {
+        found.add(`${enclosing(n)}:realm-fallback`);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    return [...found];
+  }
+
+  function readsIn(file: string): string[] {
+    const sf = ts.createSourceFile(file, read(path.join(repo, file)), ts.ScriptTarget.Latest, true);
+    const found = new Set<string>();
+    const isEnv = (n: ts.Expression) => /^(import\.meta\.env|process\.env)$/.test(n.getText(sf).replace(/\?/g, ''));
+    const visit = (n: ts.Node): void => {
+      if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)
+        && /(^|\/)brandRegion(\.(js|ts))?$/.test(n.moduleSpecifier.text)) {
+        const named = ts.isImportDeclaration(n) ? n.importClause?.namedBindings : n.exportClause;
+        if (named && ts.isNamespaceImport(named)) found.add('*');
+        if (named && (ts.isNamedImports(named) || ts.isNamedExports(named))) {
+          for (const element of named.elements) {
+            const name = (element.propertyName ?? element.name).text;
+            if (REGION_CONSTANTS.has(name)) found.add(name);
+          }
+        }
+        if (ts.isExportDeclaration(n) && !n.exportClause) found.add('*');
+      }
+      if (ts.isPropertyAccessExpression(n) && REGION_ENV.test(n.name.text) && isEnv(n.expression)) found.add('env');
+      if (ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression)
+        && REGION_ENV.test(n.argumentExpression.text) && isEnv(n.expression)) found.add('env');
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    return [...found];
+  }
+
+  /** The table as written: key, its `host` note, and whether the entry sits on one line. */
+  function table(): Array<{ key: string; host: string; oneLine: boolean }> {
+    const sf = ts.createSourceFile(tableFile, read(tableFile), ts.ScriptTarget.Latest, true);
+    let literal: ts.ObjectLiteralExpression | undefined;
+    const visit = (n: ts.Node): void => {
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === 'DESKTOP_REGION_READERS'
+        && n.initializer && ts.isObjectLiteralExpression(n.initializer)) literal = n.initializer;
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    assert.ok(literal, 'DESKTOP_REGION_READERS not found');
+    const line = (pos: number) => sf.getLineAndCharacterOfPosition(pos).line;
+    return literal.properties.map(property => {
+      assert.ok(ts.isPropertyAssignment(property) && ts.isStringLiteral(property.name) && ts.isObjectLiteralExpression(property.initializer),
+        `unexpected entry ${property.getText(sf)}`);
+      let host = '';
+      for (const field of property.initializer.properties) {
+        assert.ok(ts.isPropertyAssignment(field) && ts.isIdentifier(field.name) && field.name.text === 'host'
+          && ts.isStringLiteral(field.initializer), `unexpected field in ${property.name.text}`);
+        host = field.initializer.text;
+      }
+      return { key: property.name.text, host, oneLine: line(property.getStart(sf)) === line(property.getEnd()) };
+    });
+  }
+
+  it('lists every region reader the Host loads, and only those', async () => {
+    const collected = new Set<string>();
+    for (const file of await hostImportGraph()) {
+      // Parse only files that can match: each rule needs one of these words in the text.
+      const text = read(path.join(repo, file));
+      if (/^apps\/host\/src\//.test(file) && /['"`]cn['"`]/.test(text)) for (const what of fallbacksIn(file)) collected.add(`${file}#${what}`);
+      if (!/^(apps\/desktop\/src|packages\/[^/]+\/src)\//.test(file) || /\/(_generated|vendor)\//.test(file)) continue;
+      if (/brandRegion|CINDY_AUTH_REGION/.test(text)) for (const what of readsIn(file)) collected.add(`${file}#${what}`);
+    }
+    const keys = table().map(row => row.key);
+    expect([...collected].filter(key => !keys.includes(key)).sort(), 'region readers missing from desktop-region-readers.ts').toEqual([]);
+    expect(keys.filter(key => !collected.has(key)), 'entries that no longer read the region').toEqual([]);
+  }, 60_000);
+
+  it('keeps the table sorted, one entry per line, each with how it behaves on the Host', () => {
+    const rows = table();
+    const keys = rows.map(row => row.key);
+    expect(keys).toEqual([...keys].sort());
+    expect(rows.filter(row => !row.oneLine).map(row => row.key)).toEqual([]);
+    expect(rows.filter(row => !row.host.trim()).map(row => row.key)).toEqual([]);
+    for (const { key, host } of rows) {
+      // As the setter table: name the file and function, not `file.ts:12`, and wait on nothing unnamed.
+      expect(host, key).not.toMatch(/\.(ts|tsx|mts|cts|js|mjs|cjs):\d/);
+      expect(host, key).not.toMatch(/\bto be (assigned|decided|added)\b/i);
+    }
+  });
+});
