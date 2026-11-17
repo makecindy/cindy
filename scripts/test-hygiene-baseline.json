@@ -481,9 +481,6 @@
     "apps/desktop/src/renderer/__tests__/automationGroupCollapse.test.ts": {
       "resetModules": 2
     },
-    "apps/desktop/src/renderer/__tests__/brandLoadingMarkContract.test.ts": {
-      "sourceReads": 2
-    },
     "apps/desktop/src/renderer/__tests__/ccAgentSessionViewThemeContract.test.ts": {
       "sourceReads": 1
     },
