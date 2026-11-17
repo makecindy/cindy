@@ -376,6 +376,21 @@ const page = await cindy.tasks.readMessages({ taskId: task.taskId, limit: 50 });
 // 保存 nextCursor；下一页传 after，不以最后一条 assistant 推断 run 已完成。
 ```
 
+**边生成边显示（新增接口，尚未发布）**：`capabilities().runPreview === true` 时，`getRun` 在
+`status === 'running'` 且任务当前执行的正是这次输入时，可额外返回 `preview: { text }`：
+Agent 正在输出的那一段回答（最多 32768 个 UTF-16 字符，超出只保留开头），已去掉内部引用标记。
+它只是过程中的草稿：一次工具调用后会从新的一段重新开始，不是完整回答，也不是最终结果；
+没有正在输出的文字、run 已结束或任务正在执行别的输入时不带此字段。最终回答仍在 run 结束后
+按 `outputMessageId` 用 `readMessages` 读取，不要把最后一次 preview 当结果保存。
+无需新声明，归属检查与 `getRun` 相同，只能看到本插件这次 run 的内容。旧 Host 没有该标记，
+插件照常只显示阶段，不要为了取草稿而缩短轮询间隔（约 700 ms 足够）。
+
+```js
+const caps = await cindy.tasks.capabilities();
+const state = await cindy.tasks.getRun({ runId: run.runId });
+if (caps.runPreview === true && state.preview) showDraft(state.preview.text); // 可能变短或重置
+```
+
 SDK 成功返回 data，失败抛出带 code 的错误。原始管子响应为 `{ok:true,data}` 或
 `{ok:false,error:{code,message,retryable}}`。不要将请求键换掉来绕过不确定的派发结果。
 create/send 的 requestKey 持久去重；同键不同内容拒绝。删除后的记录不自动重建。

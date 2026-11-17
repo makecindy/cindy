@@ -77,7 +77,14 @@ export interface PluginTaskRun {
   completedAt?: number;
   error?: string;
   usage: { status: 'unavailable'; reason: string };
+  /**
+   * getRun only (capabilities().runPreview): the assistant text block currently streaming in this
+   * run's live execution. Partial, may reset after a tool call, never the final output; never stored.
+   */
+  preview?: { text: string };
 }
+/** UTF-16 chars kept from the start of a streaming preview. */
+export const PLUGIN_TASK_RUN_PREVIEW_MAX_CHARS = 32_768;
 export interface PluginTeamPlan {
   concurrency: number | null;
   /** Plugin-authored scope, authenticated by Host registration; never user-authored intent. */

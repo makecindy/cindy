@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Session } from '@cindy/maker-core';
 import { GHOST_ERRAND_PERMISSION_MODES } from '../../shared/ghost.js';
 import type { PluginTaskMessageRelay, PluginTaskPermissionMode, PluginTaskRoute, PluginTaskRun, PluginTaskView, PluginTeamPlan } from '../../shared/pluginTasks.js';
-import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../shared/pluginTasks.js';
+import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS, PLUGIN_TASK_RUN_PREVIEW_MAX_CHARS } from '../../shared/pluginTasks.js';
+import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import type { PluginMessageAttachment } from '../../shared/pluginAttachments.js';
 import { withParsedPluginMessageAttachments, type PluginMessageImage } from '../cindy-media/pluginMessageAttachments.js';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
@@ -164,6 +165,11 @@ export interface PluginTaskServiceDeps {
   inspect(
     taskId: string,
   ): Promise<{ execution: SessionExecutionIdentity | null; pending: readonly OwnedQueuedInput[] }>;
+  /**
+   * The live execution and its in-flight (unflushed) assistant text block, read together and
+   * synchronously so the text can be attributed to exactly one execution. Raw text, not yet cleaned.
+   */
+  readLivePreview?(taskId: string): { execution: SessionExecutionIdentity | null; text: string | null };
   cancel(
     pluginId: string,
     taskId: string,
@@ -648,8 +654,24 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         throw new PluginTaskError(code, code, code === 'TASK_BUSY');
       throw error;
     })),
-    getRun: async (pluginId: string, runId: string) =>
-      reconcile(await exclusive(() => ownRun(pluginId, runId))),
+    getRun: async (pluginId: string, runId: string): Promise<PluginTaskRun> => {
+      const run = await reconcile(await exclusive(() => ownRun(pluginId, runId)));
+      if (run.status !== 'running' || !run.execution || !deps.readLivePreview) return run;
+      // The preview read stays outside the receipt queue (like readMessages); it is synchronous,
+      // so account and approval are rechecked right before it, like listRuns' tail check.
+      deps.assertCurrent();
+      deps.assertAuthorized(pluginId);
+      const live = deps.readLivePreview(run.taskId);
+      // Only this run's own execution: a later input's answer in the same task is not this run's.
+      if (!live.text || !isSameSessionExecution(live.execution, run.execution)) return run;
+      let text = stripInternalWebCitations(live.text);
+      if (text.length > PLUGIN_TASK_RUN_PREVIEW_MAX_CHARS) {
+        const end = PLUGIN_TASK_RUN_PREVIEW_MAX_CHARS;
+        // Do not cut a surrogate pair in half.
+        text = text.slice(0, /[\uD800-\uDBFF]/.test(text[end - 1]!) ? end - 1 : end);
+      }
+      return text ? { ...run, preview: { text } } : run;
+    },
     listRuns: async (pluginId: string, taskId: string, after = '', limit = 50) => {
       const rows = await exclusive(async () => {
         await ownTask(pluginId, taskId);

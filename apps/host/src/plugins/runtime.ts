@@ -343,7 +343,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
           onChanged: key => authorization.changed(input.ghostId, 'connection', key), log });
       },
       ghostModelPickerProvider: null,
-      ghostAgentModelsProvider: null, ghostMediaModelsProvider: null,
+      ghostAgentModelsProvider: null, ghostModelPreferencesProvider: null, ghostMediaModelsProvider: null,
       serveGhostMedia: (id, file, range) => files.read(id, `cindy-media://blobs/${file}`, new Request(origin, { headers: range ? { range } : {} })),
       serveGhostLibraryFile: (id, file, range) => files.read(id, `library:${file}`, new Request(origin, { headers: range ? { range } : {} })),
       serveGhostGallery: async id => {
