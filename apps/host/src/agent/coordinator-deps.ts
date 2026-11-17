@@ -35,8 +35,7 @@ export interface HostCoordinatorQueueDeps {
   supersedeRetriedUserTurn?: Deps['supersedeRetriedUserTurn'];
   /**
    * The task's activity time when a person's turn is dispatched or steered (register.ts
-   * touchSessionActivityInDb). Not given yet: it lands with the updatedAt alignment unit (release
-   * table A5); until then a dispatch leaves the activity time as the send set it.
+   * touchSessionActivityInDb); main.ts gives the Host's write (session-activity.ts, release table 甲 10).
    */
   touchSessionActivity?: (sessionId: string, atMs?: number) => Promise<void>;
 }

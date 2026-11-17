@@ -144,6 +144,7 @@ import { createTaskTagService } from '../../desktop/src/main/localDb/ipc/taskTag
 import { executeConversationSearch } from '../../desktop/src/main/localDb/ipc/search.js';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../desktop/src/main/device-link/broadcast-tap.js';
 import { createInputQueue } from './agent/input-queue.mjs';
+import { createHostSessionActivity } from './agent/session-activity.ts';
 import { readClaudeIdleMinutesFrom } from '../../desktop/src/main/maker-host/claudeIdleReleaseSettingsCore.js';
 import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
 import { bindHostSessionRuntimeHooks, createHostRuntimeSelection, hostRuntimeSelectionQueueHooks } from './agent/runtime-selection.ts';
@@ -1182,6 +1183,9 @@ const contextRecovery = createHostContextRecoveryWiring({
 });
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
+  // The task list's activity time when a person's turn is dispatched or steered (register.ts
+  // touchSessionActivityInDb, the same write: agent/session-activity.ts).
+  touchSessionActivity: createHostSessionActivity({ getOwner: getCurrentDbClientSnapshot, publish: event => eventHub.publish(event) }),
   // The runtime selection's hooks (runtime-selection.ts): a model or engine the user picked lands when
   // the message is sent; as register.ts, the coordinator holds a task's queue while a credential switch
   // waits for its turn to end or a gateway Codex restart is running (deferredRestartQueueWiring.ts), and

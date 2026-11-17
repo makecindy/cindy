@@ -5792,6 +5792,51 @@ test('turn seal: continuation boundaries and background turns are sealed as the 
 });
 
 /*
+ * Task list activity time at dispatch and steer (release table 甲 10, the coordinator half).
+ * - Production entry and observable result: the input coordinator over the Host executor and a real profile
+ *   database, with the activity write main.ts gives it (agent/session-activity.ts); the task row's
+ *   last_activity_at and the session_changed patch.
+ * - Rule: the desktop's coordinator hooks (register.ts onDispatchedUserTurn / onSteerAccepted) write
+ *   touchSessionActivityInDb for a person's input: at dispatch with the time before the vendor call, at an
+ *   accepted steer with now; an automatic resume writes nothing. Same write, now shared
+ *   (localDb/sessionActivityWrite.ts).
+ * - Coverage gap: the Host left the port empty, so the activity time stayed as the send set it.
+ * - Minimal failing input: one dispatched input leaves last_activity_at unset.
+ * - Tier: unit (node:test, real profile database, the Host coordinator).
+ */
+test('list activity: a dispatched or steered input moves the task\'s activity time forward, as the desktop does', { timeout: 30_000 }, async t => {
+  const db = await recoveryDatabase(t);
+  const { createHostSessionActivity } = await import('./session-activity.ts');
+  const events = [];
+  const write = createHostSessionActivity({ getOwner: getCurrentDbClientSnapshot, publish: event => events.push(event) });
+  const calls = [];
+  const { h } = assembledRuntime(t, db, {
+    touchSessionActivity: async (id, atMs) => { calls.push({ id, atMs }); await write(id, atMs); },
+  });
+  const activity = id => db.db.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get(id).last_activity_at;
+  await db.createTask('activity');
+  const beforeDispatch = Date.now();
+  await h.queue.enqueue('activity', { clientId: 'activity-input', text: 'work' });
+  await waitFor(() => h.maker.sessions.get('activity')?.sent.length === 1);
+  await waitFor(() => calls.length === 1);
+  assert.equal(calls[0].id, 'activity');
+  // The coordinator's own pre-vendor time is one millisecond before now (agent-input-coordinator.ts).
+  assert.ok(calls[0].atMs >= beforeDispatch - 1 && calls[0].atMs <= Date.now(), 'the time before the vendor call');
+  await waitFor(() => activity('activity') >= calls[0].atMs);
+  // A steer writes now. Move the stored time back so the forward-only write shows within the same millisecond.
+  db.db.prepare('UPDATE sessions SET last_activity_at = 1, updated_at = 1 WHERE id = ?').run('activity');
+  const session = h.maker.sessions.get('activity');
+  session.steer = async () => {};
+  await h.queue.steer('activity', { clientId: 'activity-steer', text: 'continue' });
+  await waitFor(() => calls.length === 2 && activity('activity') > 1);
+  assert.equal(calls[1].atMs, undefined, 'a steer writes the current time');
+  const row = db.db.prepare('SELECT last_activity_at, updated_at FROM sessions WHERE id = ?').get('activity');
+  // The patch the clients get, as broadcastSessionPatched sends it.
+  assert.deepEqual(events.at(-1), { type: 'session_changed', sessionId: 'activity',
+    patch: { lastActivityAt: new Date(row.last_activity_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString() } });
+});
+
+/*
  * List preview after a done (release table 甲 13, the preview half).
  * - Production entry and observable result: the Host executor's turn end over a real profile database; the
  *   session_changed event with the task's list preview.
