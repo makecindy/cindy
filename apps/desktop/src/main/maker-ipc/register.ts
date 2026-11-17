@@ -487,7 +487,7 @@ import * as imageCacheStore from '../imageCacheStore.desktop.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
 import { materializeSshRemoteMedia } from '../file-browser/ssh-media.js';
 import { readGeneratedImageFile, MAX_GENERATED_IMAGE_BYTES } from '../cindy-media/generatedMedia.js';
-import { createGeneratedImageDelivery } from '../cindy-media/generatedImageDelivery.js';
+import { createDesktopGeneratedImageDelivery } from '../cindy-media/generatedImageDelivery.desktop.js';
 import { authorizeSharedTaskHistory, liveSharedTaskTarget } from '../remote-agent/controller/providerShareTaskLocation.js';
 import { resolveRemoteAgentTarget } from '../device-link/providerShareGuest.js';
 import { setGeneratedImageRecovery } from '../cindy-media/generatedImageRecovery.js';
@@ -22798,7 +22798,7 @@ export function registerComputerUseIpc(): void {
   );
 }
 
-const generatedImageDelivery = createGeneratedImageDelivery({
+const generatedImageDelivery = createDesktopGeneratedImageDelivery({
   invoke: remoteBackgroundInvoke,
   liveSharedTaskTarget,
   resolveSharedOwnerTarget: async (ownerRoute) => resolveRemoteAgentTarget(ownerRoute),
