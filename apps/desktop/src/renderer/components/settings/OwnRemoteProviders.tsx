@@ -161,6 +161,7 @@ export function OwnRemoteProviderRows({
             <button
               type="button"
               data-testid="own-remote-provider-row"
+              data-listed-source={`${entry.deviceId}:${entry.provider.id}`}
               aria-current={selected}
               aria-label={label}
               onClick={() => onSelect(entry.key)}
