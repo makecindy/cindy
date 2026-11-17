@@ -1123,6 +1123,17 @@ var cindyMail = (function () {
           const readBack = latest?.ok && latest.data?.readBack;
           if (readBack?.status !== 'read_back' || readBack.draftId !== record.draftId || !readBack.editor)
             return latest?.ok ? { ok: false, execution: 'not_executed', message: (await mailCopy()).unavailable } : latest || { ok: false, execution: 'not_executed', message: (await mailCopy()).failed };
+          // Private card edits belong to their task. A different task follows
+          // the ordinary mailbox-read path with its own provider-only card.
+          const saved = sourceCallId && await cindy.send({ type: 'mail-draft-read', callId: record.callId, sourceCallId });
+          const activeRecord = (await mailRecords())[key];
+          if (mailEdits.get(key) !== edit || activeRecord?.state !== 'draft' || activeRecord.callId !== record.callId)
+            return { ok: false, execution: 'not_executed', message: (await mailCopy()).missing };
+          if (!saved?.ok || saved.draft?.key !== key) {
+            const selected = await adapter.selectAccount(account);
+            if (selected.ok && sourceCallId) await showMailDraft({ callId: sourceCallId }, selected, readBack);
+            return latest;
+          }
           const remote = draftValues(readBack);
           // If the mailbox confirms the exact attempted save, later typing is
           // relative to that save rather than an overlapping remote edit.

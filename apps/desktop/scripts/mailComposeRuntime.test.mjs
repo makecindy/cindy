@@ -100,9 +100,13 @@ function fixture({
     cindy: {
       onHostMessage() {},
       async send(card) {
+        // Match Host ownership checks when a tool tries to republish another
+        // task's card. A fresh card at the current tool call remains allowed.
+        if (card.type === 'mail-draft-update' && card.sourceCallId && card.callId !== card.sourceCallId && !allowCardRead)
+          return { ok: false };
         if (card.type === 'mail-draft-read') {
           const stored = cards.findLast(c => c.draft && c.callId === card.callId);
-          if (!stored || !allowCardRead) return { ok: false };
+          if (!stored || (!allowCardRead && card.callId !== card.sourceCallId)) return { ok: false };
           const draft = copy(stored.draft);
           // Host persists status-only patches as part of the same card.
           for (const update of cards.slice(cards.indexOf(stored) + 1)) {
@@ -669,6 +673,39 @@ for (const restartBeforeRead of [false, true]) test(`failed completed save recov
   assert.equal(sent.ok, true);
   assert.equal(f.writes.filter(r => !r.send).length, 1);
   assert.equal(f.writes.filter(r => r.send).length, 1);
+});
+
+// A foreign-task read must use mailbox content, not the old task's private
+// unsynced editor. Existing same-task recovery tests cannot enforce ownership.
+for (const conflict of [false, true]) test(`another task gets only the mailbox recovery card: ${conflict}`, async () => {
+  let f;
+  f = fixture({ allowCardRead: false, write: async request => {
+    if (request.send || f.writes.length > 1) return;
+    f.externalEdit({ body: conflict ? 'Remote replacement' : request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  const oldKey = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Saved replacement' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Private typing', subject: 'Private subject' });
+  const oldCard = copy(f.cards.findLast(c => c.draft));
+  const read = await f.tool('get');
+  assert.equal(read.ok, true);
+  assert.equal(read.data.cardEdits, undefined);
+  const card = f.cards.at(-1);
+  assert.equal(card.callId, 'agent-call');
+  assert.notEqual(card.draft.key, oldKey);
+  assert.equal(card.draft.fields.find(x => x.name === 'body').value,
+    conflict ? 'Remote replacement' : 'Saved replacement');
+  assert.equal(card.draft.fields.find(x => x.name === 'subject').value, 'Meeting');
+  assert.equal(f.writes.length, 1); // Reading never replays the failed save.
+  assert.deepEqual(f.cards.findLast(c => c.draft?.key === oldKey), oldCard);
+  assert.equal((await f.resolve()).callId, 'agent-call');
+  f.restart();
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.filter(x => x.send).length, 1);
+  assert.equal(f.writes.at(-1).fields.subject, 'Meeting');
 });
 
 test('failed completed autosave preserves typing during recovery and uses the new locator', async () => {
