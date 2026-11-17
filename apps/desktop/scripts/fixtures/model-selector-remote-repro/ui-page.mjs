@@ -13,7 +13,7 @@ export default {
     'src/renderer/hooks/useAgentCapabilities': { partial: 'const state = { capabilities: { hasFastMode: false, availableModels: [{ id: "gpt-6-astra", displayName: "GPT-6-Astra" }], effortLevels: [{ id: "high", displayName: "High" }], permissionModes: [] }, loading: false, error: null }; export const useAgentCapabilities = () => state;' },
     'src/renderer/hooks/useProviders': { partial: 'export const useProviders = () => window.selectorRepro.local;' },
     'src/renderer/hooks/useDeviceProviders': { partial: 'export const useDeviceProviders = id => id ? window.selectorRepro.target : window.selectorRepro.empty;' },
-    'src/renderer/hooks/useDevicesProviders': { partial: 'export const useDevicesProviders = () => new Map();' },
+    'src/renderer/hooks/useDevicesProviders': { partial: 'export const useDevicesProviders = keys => new Map(keys.flatMap(key => { const hit = Object.entries(window.selectorRepro.others).find(([id]) => key === id || key.includes(JSON.stringify(id))); return hit ? [[key, hit[1]]] : []; }));' },
     'src/renderer/features/provider-group/useLocalProviderGroups': { partial: 'export const useLocalProviderGroups = () => ({});' },
   },
   cases: {
@@ -24,10 +24,15 @@ export default {
     'remote-current': { about: 'A currently used duplicate route remains visible' },
     'remote-distinct': { about: 'Different verified account identities remain separate despite equal display names' },
     'remote-extra-model': { about: 'A source with additional models is not hidden' },
+    'remote-other-computer': { about: 'Task on another computer: a third computer offering the same source is not listed again' },
+    'remote-other-distinct': { about: 'Task on another computer: a third computer with a different account stays listed' },
   },
   async check(page, ui) {
     await page.locator('[data-repro-trigger] button').first().click();
     await page.getByRole('listbox').waitFor();
+    const otherRails = await page.locator('[data-rail-item^="remote:"]').count();
+    if (ui.case.startsWith('remote-other-'))
+      assert.equal(otherRails, ui.case === 'remote-other-distinct' ? 1 : 0, `Observed other-computer rails: ${otherRails}`);
     const rails = page.locator('[data-rail-item^="provider:"]');
     const count = await rails.count();
     const separate = ['remote-current', 'remote-distinct', 'remote-extra-model'].includes(ui.case);

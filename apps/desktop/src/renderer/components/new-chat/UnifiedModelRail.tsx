@@ -329,7 +329,8 @@ function RailButtonView({
   const tooltip = pool && (pool.hasAccountDetails || pool.warning) ? (
     <>
       <div>{displayLabel}</div>
-      <ModelPoolQuotaDetails pool={pool} />
+      {/* 单账号时标题已带账号，明细不再重复这一行；供应商组的标题不带账号，照常列出。 */}
+      <ModelPoolQuotaDetails pool={pool} accountInTitle={!groupNote} />
     </>
   ) : quotaLabel || note ? (
     <>
