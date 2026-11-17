@@ -21630,7 +21630,11 @@
     "sourceShort_blank": "空白專案",
     "sourceShort_existing": "現有資料夾",
     "sourceShort_repository": "儲存庫匯入",
-    "automaticMain": "主目錄 · 自動建立"
+    "automaticMain": "主目錄 · 自動建立",
+    "source_local": "本機資料夾",
+    "sourceShort_local": "本機資料夾",
+    "sourceHint_local": "填寫名稱自動建立，也可以選擇現有資料夾。",
+    "chooseExistingFolder": "選擇現有資料夾"
   },
   "taskManagement": {
     "scope": "僅用於本機當前名籍之差事。",

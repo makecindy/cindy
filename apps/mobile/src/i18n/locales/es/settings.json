@@ -508,6 +508,10 @@
     "sourceShort_blank": "Nuevo",
     "sourceShort_existing": "Carpeta",
     "sourceShort_repository": "Repositorio",
-    "automaticMain": "Principal · Automático"
+    "automaticMain": "Principal · Automático",
+    "source_local": "Carpeta local",
+    "sourceShort_local": "Carpeta local",
+    "sourceHint_local": "Escribe un nombre para crear una carpeta o elige una existente.",
+    "chooseExistingFolder": "Elegir carpeta existente"
   }
 }

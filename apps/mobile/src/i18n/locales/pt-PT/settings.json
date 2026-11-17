@@ -508,6 +508,10 @@
     "sourceShort_blank": "Novo",
     "sourceShort_existing": "Pasta",
     "sourceShort_repository": "Repositório",
-    "automaticMain": "Principal · Automático"
+    "automaticMain": "Principal · Automático",
+    "source_local": "Pasta local",
+    "sourceShort_local": "Pasta local",
+    "sourceHint_local": "Introduza um nome para criar uma pasta ou escolha uma existente.",
+    "chooseExistingFolder": "Escolher pasta existente"
   }
 }

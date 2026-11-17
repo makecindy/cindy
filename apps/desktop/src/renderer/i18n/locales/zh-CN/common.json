@@ -21630,7 +21630,11 @@
     "sourceShort_blank": "空白项目",
     "sourceShort_existing": "已有文件夹",
     "sourceShort_repository": "仓库导入",
-    "automaticMain": "主目录 · 自动创建"
+    "automaticMain": "主目录 · 自动创建",
+    "source_local": "本地文件夹",
+    "sourceShort_local": "本地文件夹",
+    "sourceHint_local": "填写名称自动创建，也可以选择已有文件夹。",
+    "chooseExistingFolder": "选择已有文件夹"
   },
   "taskManagement": {
     "scope": "仅应用于当前账号在这台电脑上的任务。",

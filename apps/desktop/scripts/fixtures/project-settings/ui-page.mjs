@@ -88,6 +88,8 @@ export default {
     if (['create-auto', 'create-repository', 'create-blank'].includes(ui.case)) {
       const repositoryInput = page.getByRole('textbox', { name: await ui.t('projectSettings.repository'), exact: true });
       if (await repositoryInput.count()) throw new Error('Repository field appeared before opting in');
+      if (await page.getByRole('group', { name: await ui.t('projectSettings.source'), exact: true }).count()) throw new Error('Unexpected source group');
+      if (await page.getByRole('radio').count() !== 2) throw new Error('Creation must expose only two sources');
       const repository = ui.case === 'create-repository';
       if (ui.case === 'create-auto') {
         const name = page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true });
@@ -106,8 +108,14 @@ export default {
         await repositoryInput.fill('https://github.com/example/Demo');
         if (await page.getByText(await ui.t('projectSettings.invalidRepository'), { exact: true }).count()) throw new Error('Repository error persisted after editing');
         await ui.capture('repository-options');
-        await page.getByRole('radio', { name: await ui.t('projectSettings.source_blank'), exact: true }).click();
+        await page.getByRole('radio', { name: await ui.t('projectSettings.source_local'), exact: true }).click();
         if (await repositoryInput.count()) throw new Error('Repository field remained after switching to blank');
+      }
+      if (ui.case === 'create-auto') {
+        await page.evaluate(() => window.projectPickerCancelled = true);
+        await page.getByRole('button', { name: await ui.t('projectSettings.chooseExistingFolder'), exact: true }).click();
+        await page.getByText(await ui.t('projectSettings.automaticMain'), { exact: true }).waitFor();
+        await page.evaluate(() => window.projectPickerCancelled = false);
       }
       await ui.capture('automatic-location');
       if (ui.case === 'create-auto') await page.getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true }).click();
@@ -127,13 +135,12 @@ export default {
       return;
     }
     if (ui.case === 'create-primary') {
-      await page.getByRole('radio', { name: await ui.t('projectSettings.source_existing'), exact: true }).click();
       for (const path of ['/Projects/First', '/Projects/Second']) {
         await page.evaluate((path) => {
           window.projectPickerPath = path;
         }, path);
         await page
-          .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
+          .getByRole('button', { name: await ui.t(path === '/Projects/First' ? 'projectSettings.chooseExistingFolder' : 'projectSettings.addDirectory'), exact: true })
           .click();
       }
       await page.getByText(await ui.t('projectSettings.mainDirectory'), { exact: true }).waitFor();
@@ -156,13 +163,11 @@ export default {
       return;
     }
     if (ui.case === 'create-existing') {
-      await page.getByRole('radio', { name: await ui.t('projectSettings.source_existing'), exact: true }).click();
-      if (!(await page.getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true }).isDisabled())) throw new Error('Existing mode requires a folder');
       await page.evaluate((path) => {
         window.projectPickerPath = path;
       }, '/Projects/Cindy');
       await page
-        .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
+        .getByRole('button', { name: await ui.t('projectSettings.chooseExistingFolder'), exact: true })
         .click();
       await page.getByText('/Projects/Reference', { exact: true }).waitFor();
       if (
@@ -208,7 +213,6 @@ export default {
 
     if (ui.case === 'directories' || ['create', 'create-legacy'].includes(ui.case)) {
       if (['create', 'create-legacy'].includes(ui.case)) {
-        if (ui.case === 'create') await page.getByRole('radio', { name: await ui.t('projectSettings.source_existing'), exact: true }).click();
         if (ui.case === 'create-legacy') {
           if (await page.getByRole('textbox', { name: await ui.t('projectSettings.repository'), exact: true }).count()) throw new Error('Old host exposed cloning');
           await page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true }).fill('Demo');
@@ -221,7 +225,7 @@ export default {
           window.projectPickerPath = path;
         }, '/Projects/Example');
         await page
-          .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
+          .getByRole('button', { name: await ui.t(ui.case === 'create-legacy' ? 'projectSettings.addDirectory' : 'projectSettings.chooseExistingFolder'), exact: true })
           .click();
         await page.evaluate(() => {
           window.projectPickerPath = '/Projects/Reference';

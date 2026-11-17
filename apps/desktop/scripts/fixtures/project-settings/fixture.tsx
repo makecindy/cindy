@@ -9,7 +9,7 @@ Object.assign(window, { projectSettingsWrites: writes });
 mountPage({
   host: (ctx) => ({
     showOpenDirectoryDialog: async () => ({
-      canceled: false,
+      canceled: (window as unknown as { projectPickerCancelled?: boolean }).projectPickerCancelled === true,
       path:
         (window as unknown as { projectPickerPath?: string }).projectPickerPath ??
         '/Projects/Reference',

@@ -508,6 +508,10 @@
     "sourceShort_blank": "Blank",
     "sourceShort_existing": "Folder",
     "sourceShort_repository": "Repository",
-    "automaticMain": "Primary · Automatic"
+    "automaticMain": "Primary · Automatic",
+    "source_local": "Local folder",
+    "sourceShort_local": "Local folder",
+    "sourceHint_local": "Enter a name to create a folder, or choose an existing one.",
+    "chooseExistingFolder": "Choose existing folder"
   }
 }

@@ -118,11 +118,9 @@ export function ProjectSettingsSheet({
   const defaultName = projectDirectoryName(directory);
   const [name, setName] = useState(title);
   const [repositoryUrl, setRepositoryUrl] = useState("");
-  const [source, setSource] = useState<"blank" | "existing" | "repository">(
-    "blank",
-  );
+  const [source, setSource] = useState<"local" | "repository">("local");
   const repositoryExpanded = source === "repository";
-  const chooseSource = (next: "blank" | "existing" | "repository") => {
+  const chooseSource = (next: "local" | "repository") => {
     if (next === source) return;
     setSource(next);
     setRepositoryUrl("");
@@ -131,8 +129,7 @@ export function ProjectSettingsSheet({
     setError(null);
   };
   const repositoryCreation = create && (snapshot?.settingsVersion ?? 0) >= 7;
-  const automaticDirectory =
-    repositoryCreation && source !== "existing" && !directory;
+  const automaticDirectory = repositoryCreation && !directory;
   const directoryPreview = automaticDirectory
     ? `${snapshot?.creationRoot ?? ""}/${projectCreationFolderName(name || parseProjectRepository(repositoryUrl)?.name || "Project")}`
     : directory;
@@ -289,9 +286,7 @@ export function ProjectSettingsSheet({
       lock.current ||
       !available ||
       !dirty ||
-      (create &&
-        ((snapshot?.settingsVersion ?? 0) < 7 || source === "existing") &&
-        !directory.trim()) ||
+      (create && (snapshot?.settingsVersion ?? 0) < 7 && !directory.trim()) ||
       !snapshot?.ownerStamp ||
       !isMobileAuthOwnerCurrent(owner)
     )
@@ -507,8 +502,7 @@ export function ProjectSettingsSheet({
             (stage === "profile"
               ? !dirty ||
                 (create &&
-                  ((snapshot?.settingsVersion ?? 0) < 7 ||
-                    source === "existing") &&
+                  (snapshot?.settingsVersion ?? 0) < 7 &&
                   !directory.trim())
               : pickerInvalid),
           onPress: () => {
@@ -532,20 +526,18 @@ export function ProjectSettingsSheet({
               {repositoryCreation && (
                 <View style={{ gap: spacing.sm }}>
                   <View style={styles.tabs}>
-                    {(["blank", "existing", "repository"] as const).map(
-                      (item) => (
-                        <MainWindowOptionButton
-                          key={item}
-                          variant="segmented"
-                          label={label(`sourceShort_${item}`)}
-                          accessibilityLabel={label(`source_${item}`)}
-                          selected={source === item}
-                          disabled={disabled}
-                          style={{ flex: 1 }}
-                          onPress={() => chooseSource(item)}
-                        />
-                      ),
-                    )}
+                    {(["local", "repository"] as const).map((item) => (
+                      <MainWindowOptionButton
+                        key={item}
+                        variant="segmented"
+                        label={label(`sourceShort_${item}`)}
+                        accessibilityLabel={label(`source_${item}`)}
+                        selected={source === item}
+                        disabled={disabled}
+                        style={{ flex: 1 }}
+                        onPress={() => chooseSource(item)}
+                      />
+                    ))}
                   </View>
                   <Text style={[styles.note, noteColor]}>
                     {label(`sourceHint_${source}`)}
@@ -710,6 +702,18 @@ export function ProjectSettingsSheet({
                     {deviceName || label("thisComputer")}
                   </Text>
                 </View>
+                {repositoryCreation && source === "local" && (
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={disabled}
+                    onPress={() => browse("main")}
+                    style={[styles.reset, { alignSelf: "flex-start" }]}
+                  >
+                    <Text style={[styles.path, textColor]}>
+                      {label("chooseExistingFolder")}
+                    </Text>
+                  </Pressable>
+                )}
                 <ProjectDirectoriesEditor
                   mainDirectory={directoryPreview}
                   automatic={automaticDirectory}
@@ -719,7 +723,6 @@ export function ProjectSettingsSheet({
                     create && !automaticDirectory
                       ? (path) => {
                           setDirectory(path);
-                          if (path && source === "blank") setSource("existing");
                         }
                       : undefined
                   }

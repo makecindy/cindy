@@ -99,9 +99,9 @@ export function ProjectSettingsDialog({
   const defaultName = projectDirectoryName(directory);
   const [name, setName] = useState(project.displayName);
   const [repositoryUrl, setRepositoryUrl] = useState('');
-  const [source, setSource] = useState<'blank' | 'existing' | 'repository'>('blank');
+  const [source, setSource] = useState<'local' | 'repository'>('local');
   const repositoryExpanded = source === 'repository';
-  const chooseSource = (next: 'blank' | 'existing' | 'repository') => {
+  const chooseSource = (next: 'local' | 'repository') => {
     if (next === source) return;
     setSource(next);
     setRepositoryUrl('');
@@ -110,7 +110,7 @@ export function ProjectSettingsDialog({
     setError(null);
   };
   const repositoryCreation = create && (snapshot?.settingsVersion ?? 0) >= 7;
-  const automaticDirectory = repositoryCreation && source !== 'existing' && !directory;
+  const automaticDirectory = repositoryCreation && !directory;
   const directoryPreview = automaticDirectory
     ? `${snapshot?.creationRoot ?? ''}/${projectCreationFolderName(name || parseProjectRepository(repositoryUrl)?.name || 'Project')}`
     : directory;
@@ -208,9 +208,7 @@ export function ProjectSettingsDialog({
       lock.current ||
       !available ||
       !dirty ||
-      (create &&
-        ((snapshot?.settingsVersion ?? 0) < 7 || source === 'existing') &&
-        !directory.trim()) ||
+      (create && (snapshot?.settingsVersion ?? 0) < 7 && !directory.trim()) ||
       !snapshot?.ownerStamp ||
       !isDataOwnerGenerationCurrent(owner)
     )
@@ -426,7 +424,7 @@ export function ProjectSettingsDialog({
                         disabled={busy || !available}
                         fullWidth
                         optionClassName="min-w-0 flex-1 px-2"
-                        options={(['blank', 'existing', 'repository'] as const).map((item) => ({
+                        options={(['local', 'repository'] as const).map((item) => ({
                           value: item,
                           label: label(`sourceShort_${item}`),
                           'aria-label': label(`source_${item}`),
@@ -549,6 +547,33 @@ export function ProjectSettingsDialog({
                       <Monitor size={15} />
                       <span>{project.deviceLinkDeviceName || label('thisComputer')}</span>
                     </div>
+                    {repositoryCreation && source === 'local' && (
+                      <Button
+                        variant="secondary"
+                        tone="quiet"
+                        className="self-start"
+                        disabled={busy || !available}
+                        onClick={async () => {
+                          if (project.deviceLinkDeviceId) {
+                            setRemoteBrowse('main');
+                            return;
+                          }
+                          try {
+                            const result = await window.electronAPI.showOpenDirectoryDialog();
+                            if (
+                              !result.canceled &&
+                              result.path &&
+                              isDataOwnerGenerationCurrent(owner)
+                            )
+                              setDirectory(result.path);
+                          } catch {
+                            setError(label('failed'));
+                          }
+                        }}
+                      >
+                        {label('chooseExistingFolder')}
+                      </Button>
+                    )}
                     <ProjectDirectoriesEditor
                       mainDirectory={directoryPreview}
                       automatic={automaticDirectory}
@@ -558,7 +583,6 @@ export function ProjectSettingsDialog({
                         create && !automaticDirectory
                           ? (path) => {
                               setDirectory(path);
-                              if (path && source === 'blank') setSource('existing');
                             }
                           : undefined
                       }
@@ -837,9 +861,7 @@ export function ProjectSettingsDialog({
                     !available ||
                     (stage === 'profile'
                       ? !dirty ||
-                        (create &&
-                          ((snapshot?.settingsVersion ?? 0) < 7 || source === 'existing') &&
-                          !directory.trim())
+                        (create && (snapshot?.settingsVersion ?? 0) < 7 && !directory.trim())
                       : pickerInvalid)
                   }
                   onClick={() => {
@@ -862,8 +884,8 @@ export function ProjectSettingsDialog({
           open
           existingOnly
           fixedDeviceId={project.deviceLinkDeviceId}
-          title={label('addDirectory')}
-          confirmText={label('addDirectory')}
+          title={label(remoteBrowse === 'main' ? 'chooseExistingFolder' : 'addDirectory')}
+          confirmText={label(remoteBrowse === 'main' ? 'chooseExistingFolder' : 'addDirectory')}
           onOpenChange={(open) => {
             if (!open) setRemoteBrowse(null);
           }}

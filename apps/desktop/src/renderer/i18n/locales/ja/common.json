@@ -21630,7 +21630,11 @@
     "sourceShort_blank": "新規",
     "sourceShort_existing": "フォルダ",
     "sourceShort_repository": "リポジトリ",
-    "automaticMain": "メイン · 自動作成"
+    "automaticMain": "メイン · 自動作成",
+    "source_local": "ローカルフォルダ",
+    "sourceShort_local": "ローカルフォルダ",
+    "sourceHint_local": "名前を入力して作成するか、既存のフォルダを選択します。",
+    "chooseExistingFolder": "既存フォルダを選択"
   },
   "taskManagement": {
     "scope": "このコンピューターの現在のアカウントにのみ適用されます。",
