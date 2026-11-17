@@ -1435,6 +1435,7 @@
     "UPSTREAM_ERROR": "Erreur du serveur en amont (5xx). Réessayez plus tard",
     "UPSTREAM_UNREACHABLE": "Impossible de joindre l'endpoint. Vérifiez votre réseau et l'URL de base",
     "TIMEOUT": "Délai de connexion dépassé. Vérifiez votre réseau et l'URL de base",
+    "CERT_ERROR": "La vérification du certificat a échoué. Vérifiez la chaîne de certificats et la configuration de confiance de l’autorité de certification de votre organisation.",
     "UNKNOWN": "Erreur inconnue. Consultez les journaux pour plus de détails",
     "upstreamToast": "Échec de la requête au fournisseur « {{provider}} » : {{message}}"
   },

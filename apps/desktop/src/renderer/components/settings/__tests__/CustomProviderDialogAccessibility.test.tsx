@@ -655,12 +655,15 @@ describe('ProviderConnectionDialog accessibility', () => {
 
   // #8679: the failure line alone ("upstream 5xx") never said which model the probe used. The saved
   // provider's probe model is chosen by Main, so the label must follow the result, not the form's first row.
-  it('测试连接失败时标明主进程返回的被测模型', async () => {
+  // #11007 unit: project the structured certificate result through the actual dialog;
+  // previous UNKNOWN-only coverage could not detect a lost diagnostic code at this boundary.
+  it.each(['UNKNOWN', 'CERT_ERROR'] as const)('测试连接失败时显示 %s 及主进程返回的被测模型', async code => {
     window.electronAPI.maker.testProviderConnection = vi.fn(async () => ({
-      ok: false, code: 'UNKNOWN' as const, latencyMs: 1, modelId: 'probed-by-main',
+      ok: false, code, latencyMs: 1, modelId: 'probed-by-main',
     }));
     await openFailingTest();
     expect(await screen.findByText('settings.providers.custom.test.model:probed-by-main')).toBeTruthy();
+    expect(await screen.findByText('providerError.' + code)).toBeTruthy();
   });
 
   // The probe can throw after the response headers (first stream frame lost); Main rethrows unchanged and

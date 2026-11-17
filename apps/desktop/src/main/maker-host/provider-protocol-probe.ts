@@ -4,7 +4,7 @@ import {
   type PiModelApi, type ProviderProtocolCandidate, type ProviderModelRecord,
 } from '@cindy/model-providers';
 import type { ProviderConnectionProbeSpec, ProviderConnectionTestResult, ProtocolProbeDecision } from '../../shared/providerConnectionTest.js';
-import { classifyProviderError } from '../../shared/providerErrors.js';
+import { classifyProviderError, providerNetworkErrorCode } from '../../shared/providerErrors.js';
 import { invocationModelRecord, probePiProvider, readBoundedResponseText } from './pi-provider-transport.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 
@@ -119,8 +119,7 @@ async function attempt(
     }
     try { response = await fetchImpl(input, { ...init, headers: requestHeaders, redirect: 'error', signal }); }
     catch (error) {
-      networkCode = (error as { cause?: { code?: string }; name?: string }).cause?.code
-        ?? (error as { name?: string }).name;
+      networkCode = providerNetworkErrorCode(error);
       throw error;
     }
     if (!response.ok) {
@@ -174,7 +173,8 @@ async function attempt(
     if (signal.aborted) return { ok: false, code: 'TIMEOUT', latencyMs: 0, decision: 'inconclusive' };
     if (rejected) return rejected;
     if (!accepted && networkCode) {
-      return { ok: false, code: classifyProviderError({ networkErrorCode: networkCode }).code, latencyMs: 0, decision: 'inconclusive' };
+      const cls = classifyProviderError({ networkErrorCode: networkCode });
+      return { ok: false, code: cls.code, detail: cls.detail, latencyMs: 0, decision: 'inconclusive' };
     }
     if (nativeOk && observer.state.terminal && (observer.state.generated || nativeGenerated) && !observer.state.error) {
       return { ok: true, latencyMs: 0, decision: 'success', selected: candidate };
@@ -183,7 +183,7 @@ async function attempt(
   } catch {
     if (rejected) return rejected;
     const cls = classifyProviderError({ networkErrorCode: signal.aborted ? 'TimeoutError' : networkCode ?? 'UNKNOWN' });
-    return { ok: false, code: cls.code, latencyMs: 0, decision: 'inconclusive' };
+    return { ok: false, code: cls.code, detail: cls.detail, latencyMs: 0, decision: 'inconclusive' };
   }
 }
 

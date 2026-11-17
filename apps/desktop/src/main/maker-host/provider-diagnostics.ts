@@ -30,6 +30,7 @@ import { joinAnthropicMessagesUrl } from '@cindy/responses-anthropic-bridge';
 
 import {
   classifyProviderError,
+  providerNetworkErrorCode,
   type ProviderErrorClassification,
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
@@ -260,16 +261,6 @@ function classifyStreamedError(error: Record<string, unknown>): ProviderErrorCla
   return classifyProviderError({ status: inferredStatus, bodyText });
 }
 
-/** 从 Error（fetch 抛出）提取网络层错误码。 */
-function networkErrorCode(err: unknown): string {
-  if (err instanceof Error) {
-    if (err.name === 'TimeoutError' || err.name === 'AbortError') return err.name;
-    const cause = (err as { cause?: { code?: unknown } }).cause;
-    if (cause && typeof cause.code === 'string') return cause.code;
-    return err.name || 'UNKNOWN_NETWORK_ERROR';
-  }
-  return 'UNKNOWN_NETWORK_ERROR';
-}
 
 /** 上游 origin(协议 + host + 端口),不带路径 / query / 凭证——只用于日志定位。 */
 function probeUpstreamOrigin(baseUrl: string): string {
@@ -368,7 +359,7 @@ async function runProviderProbeUnlogged(
         ...(result.stopReason === 'aborted' ? { networkErrorCode: 'AbortError' } : {}) });
       return { ok: false, code: cls.code, status, latencyMs: Date.now() - start, detail: cls.detail };
     } catch (err) {
-      const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
+      const cls = classifyProviderError({ networkErrorCode: providerNetworkErrorCode(err) });
       return { ok: false, code: cls.code, latencyMs: Date.now() - start, detail: cls.detail };
     }
   }
@@ -377,7 +368,7 @@ async function runProviderProbeUnlogged(
   try {
     res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
   } catch (err) {
-    const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
+    const cls = classifyProviderError({ networkErrorCode: providerNetworkErrorCode(err) });
     return { ok: false, code: cls.code, latencyMs: Date.now() - start, detail: cls.detail };
   }
   const latencyMs = Date.now() - start;

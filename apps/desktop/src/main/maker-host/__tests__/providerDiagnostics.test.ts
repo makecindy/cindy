@@ -14,6 +14,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 const probeLog = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
 vi.mock('../logger-adapter', () => ({
   createMakerLogger: () => ({ ...probeLog, child: () => probeLog }),
+  desktopMakerLogger: { ...probeLog, child: () => probeLog },
 }));
 
 import { BUNDLED_CATALOG, buildUserProvider, PROVIDER_MODEL_CATALOG, providerPresetOAuth } from '@cindy/model-providers';
@@ -28,6 +29,7 @@ import {
   testProviderConnection,
 } from '../provider-diagnostics.js';
 import { probeProviderProtocols } from '../provider-protocol-probe.js';
+import { fetchProviderModels } from '../provider-model-fetch.js';
 import { setCustomProviders } from '../active-catalog.js';
 import {
   __resetModelVisibilityMirrorForTest,
@@ -1506,4 +1508,65 @@ it.each([false, true])('checks connection values across catalog rebuilds (target
   release('fake-refreshed');
   expect(await pending).toMatchObject(targetChanged ? { ok: false, code: 'AUTH_INVALID' } : { ok: true });
   expect(fetcher).toHaveBeenCalledTimes(targetChanged ? 0 : 1);
+});
+
+/** #11007 unit regression: existing tests only covered shallow connection failures.
+ * Exercise all three public settings operations with direct, nested and aggregate
+ * certificate failures; assert safe diagnostics and no automatic request replay.
+ * Real TLS handshake reproduction is a separate loopback experiment, not a mock claim.
+ */
+describe('provider certificate diagnostics (#11007)', () => {
+  const spec = { agent: 'codex' as const, baseUrl: 'https://provider.example',
+    modelId: 'synthetic-model', wireProtocol: 'openai-responses' as const, apiKey: 'synthetic-key' };
+  const certificate = () => Object.assign(new Error('private endpoint and credential must not escape'),
+    { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
+  it.each([
+    ['direct', () => certificate()],
+    ['fetch cause', () => new TypeError('fetch failed', { cause: certificate() })],
+    ['nested aggregate', () => new TypeError('fetch failed', { cause: new AggregateError([
+      new Error('transport wrapper', { cause: certificate() }),
+    ]) })],
+  ])('%s errors reach all settings operations without replay or sensitive details', async (_shape, makeError) => {
+    const fetcher = vi.fn<typeof fetch>(async () => { throw makeError(); });
+    const expected = { ok: false, code: 'CERT_ERROR', detail: 'DEPTH_ZERO_SELF_SIGNED_CERT' };
+    expect(await runProviderProbe(spec, fetcher)).toMatchObject(expected);
+    expect(await fetchProviderModels(spec, fetcher)).toMatchObject(expected);
+    expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({ ...expected, decision: 'inconclusive' });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'CERT_HAS_EXPIRED',
+    'CERT_NOT_YET_VALID', 'CERT_REVOKED', 'CERT_UNTRUSTED', 'CERT_REJECTED',
+    'ERR_TLS_CERT_ALTNAME_INVALID',
+  ])('%s is a non-retryable certificate failure', networkErrorCode => {
+    expect(classifyProviderError({ networkErrorCode })).toEqual({
+      code: 'CERT_ERROR', retryable: false, detail: networkErrorCode,
+    });
+  });
+
+  it.each([
+    ['ERR_SSL_WRONG_VERSION_NUMBER', 'UNKNOWN'], ['ERR_TLS_INVALID_PROTOCOL_VERSION', 'UNKNOWN'],
+    ['ECONNREFUSED', 'UPSTREAM_UNREACHABLE'], ['ENOTFOUND', 'UPSTREAM_UNREACHABLE'],
+    ['ETIMEDOUT', 'TIMEOUT'],
+  ])('preserves non-certificate failure %s', async (networkErrorCode, code) => {
+    const error = new TypeError('fetch failed', { cause: new AggregateError([
+      Object.assign(new Error('private message'), { code: networkErrorCode }),
+    ]) });
+    const fetcher = async () => { throw error; };
+    expect(await runProviderProbe(spec, fetcher)).toMatchObject({ ok: false, code });
+    expect(await fetchProviderModels(spec, fetcher)).toMatchObject({ ok: false, code });
+    expect(await probeProviderProtocols(spec, false, fetcher)).toMatchObject({ ok: false, code });
+  });
+
+  it('terminates cyclic causes and keeps explicit cancellation distinct from certificate errors', async () => {
+    const cycle = new Error('private cyclic message');
+    cycle.cause = cycle;
+    const cyclicFetch = async () => { throw cycle; };
+    expect(await fetchProviderModels(spec, cyclicFetch)).toMatchObject({ ok: false, code: 'UNKNOWN' });
+    const aborted = new Error('cancelled', { cause: certificate() });
+    aborted.name = 'AbortError';
+    expect(await runProviderProbe(spec, async () => { throw aborted; })).toMatchObject({ ok: false, code: 'TIMEOUT' });
+  });
 });

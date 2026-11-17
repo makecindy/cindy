@@ -1417,6 +1417,7 @@
     "UPSTREAM_ERROR": "Fehler beim vorgelagerten Server (5xx). Versuch es später erneut",
     "UPSTREAM_UNREACHABLE": "Endpunkt nicht erreichbar. Prüfe dein Netzwerk und die Basis-URL",
     "TIMEOUT": "Zeitüberschreitung der Verbindung. Prüfe dein Netzwerk und die Basis-URL",
+    "CERT_ERROR": "Die Zertifikatsprüfung ist fehlgeschlagen. Prüfe die Zertifikatskette und die CA-Vertrauenseinstellungen deiner Organisation.",
     "UNKNOWN": "Unbekannter Fehler. Weitere Informationen findest du in den Protokollen",
     "upstreamToast": "Anfrage an Anbieter „{{provider}}“ fehlgeschlagen: {{message}}"
   },

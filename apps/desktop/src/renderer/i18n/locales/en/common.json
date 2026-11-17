@@ -1417,6 +1417,7 @@
     "UPSTREAM_ERROR": "Upstream server error (5xx). Try again later",
     "UPSTREAM_UNREACHABLE": "Cannot reach the endpoint. Check your network and the base URL",
     "TIMEOUT": "Connection timed out. Check your network and the base URL",
+    "CERT_ERROR": "Certificate verification failed. Check the certificate chain and your organization’s CA trust configuration.",
     "UNKNOWN": "Unknown error. Check the logs for details",
     "upstreamToast": "Provider “{{provider}}” request failed: {{message}}"
   },

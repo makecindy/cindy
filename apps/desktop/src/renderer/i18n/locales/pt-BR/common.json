@@ -1435,6 +1435,7 @@
     "UPSTREAM_ERROR": "Erro no servidor upstream (5xx). Tente novamente mais tarde",
     "UPSTREAM_UNREACHABLE": "Não foi possível acessar o endpoint. Verifique sua rede e a URL base",
     "TIMEOUT": "A conexão expirou. Verifique sua rede e a URL base",
+    "CERT_ERROR": "A verificação do certificado falhou. Verifique a cadeia de certificados e a configuração de confiança da CA da sua organização.",
     "UNKNOWN": "Erro desconhecido. Consulte os logs para mais detalhes",
     "upstreamToast": "Falha na requisição ao provedor \"{{provider}}\": {{message}}"
   },

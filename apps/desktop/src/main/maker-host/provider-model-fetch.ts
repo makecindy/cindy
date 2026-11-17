@@ -23,7 +23,7 @@ import {
   type Provider,
 } from '@cindy/model-providers';
 
-import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
+import { classifyProviderError, providerNetworkErrorCode, type ProviderErrorCode } from '../../shared/providerErrors.js';
 import {
   deriveModelsDiscoveryUrl,
   readGenericOAuthAccessToken,
@@ -272,16 +272,6 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   };
 }
 
-/** 从 Error（fetch 抛出）提取网络层错误码（同 provider-diagnostics）。 */
-function networkErrorCode(err: unknown): string {
-  if (err instanceof Error) {
-    if (err.name === 'TimeoutError' || err.name === 'AbortError') return err.name;
-    const cause = (err as { cause?: { code?: unknown } }).cause;
-    if (cause && typeof cause.code === 'string') return cause.code;
-    return err.name || 'UNKNOWN_NETWORK_ERROR';
-  }
-  return 'UNKNOWN_NETWORK_ERROR';
-}
 
 /** Count decoded stream bytes before buffering/parsing, including missing or false length headers. */
 async function readLimitedBody(res: Response, limit: number): Promise<string> {
@@ -335,7 +325,7 @@ export async function fetchProviderModels(
   try {
     res = await fetchModelsResponse(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }, fetchImpl);
   } catch (err) {
-    const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
+    const cls = classifyProviderError({ networkErrorCode: providerNetworkErrorCode(err) });
     return { ok: false, code: cls.code, detail: cls.detail };
   }
   if (!res.ok) {
