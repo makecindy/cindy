@@ -16999,6 +16999,7 @@
         "openInFileBrowser": "Abrir no gestor de ficheiros",
         "showInFolder": "Mostrar na pasta",
         "copyFilePath": "Copiar caminho do ficheiro",
+        "copyFolderPath": "Copiar caminho da pasta",
         "deleteFile": "Eliminar ficheiro"
       },
       "searchPanel": {

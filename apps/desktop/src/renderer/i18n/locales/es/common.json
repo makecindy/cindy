@@ -16999,6 +16999,7 @@
         "openInFileBrowser": "Abrir en el explorador de archivos",
         "showInFolder": "Mostrar en carpeta",
         "copyFilePath": "Copiar ruta del archivo",
+        "copyFolderPath": "Copiar ruta de la carpeta",
         "deleteFile": "Eliminar archivo"
       },
       "searchPanel": {

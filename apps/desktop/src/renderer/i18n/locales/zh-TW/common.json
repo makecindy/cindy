@@ -16763,6 +16763,7 @@
         "openInFileBrowser": "在檔案瀏覽器檢視",
         "showInFolder": "在資料夾中顯示",
         "copyFilePath": "複製檔案路徑",
+        "copyFolderPath": "複製資料夾路徑",
         "deleteFile": "刪除檔案"
       },
       "searchPanel": {
