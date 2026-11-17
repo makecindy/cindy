@@ -9,15 +9,10 @@ export const DIRECT_LINK_CAPABILITY = 'direct-link-v1';
 export const PROVIDER_SHARE_DIRECT_CAPABILITY = 'provider-share-direct-v1';
 export const DIRECT_LINK_SIGNAL = 'device-link:direct-signal';
 export const DIRECT_LINK_TIMEOUT_MS = 15_000;
-/**
- * Retry backoff after a failed negotiation: 5s doubling to 5 min. Networks that block
- * peer-to-peer (client isolation, symmetric NAT, some VPNs) fail every attempt; a one-minute
- * ceiling meant hundreds of futile offers a day, each one a relay round trip and a
- * WebRTC setup. Relay traffic never waits for this, and a local network change restarts
- * from the first step so a newly usable path is found within seconds.
- */
+/** Keep the one-minute ceiling: a receiver network change cannot wake an older
+ * initiator through the existing signal protocol. Local changes still reset backoff. */
 export const DIRECT_LINK_RETRY_BASE_MS = 5_000;
-export const DIRECT_LINK_RETRY_MAX_MS = 5 * 60_000;
+export const DIRECT_LINK_RETRY_MAX_MS = 60_000;
 export const DIRECT_LINK_MAX_SDP = 128 * 1024;
 
 export type DirectRuntimeCloseReason = 'channel-closed' | 'network-failed' | 'runtime-timeout' | 'runtime-failed' | 'runtime-unavailable';
@@ -364,7 +359,7 @@ export class DirectLinkNegotiator {
       || this.deps.identity()! >= (this.deps.peerDeviceId ? this.deps.peerDeviceId(peerId) ?? '' : peerId)) {
       this.forget(peerId); return;
     }
-    const backoff = Math.min(DIRECT_LINK_RETRY_MAX_MS, DIRECT_LINK_RETRY_BASE_MS * 2 ** Math.min(peer.failures++, 6));
+    const backoff = Math.min(DIRECT_LINK_RETRY_MAX_MS, DIRECT_LINK_RETRY_BASE_MS * 2 ** Math.min(peer.failures++, 4));
     // Spread simultaneous peer failures even at the cap, without exceeding the retry ceiling.
     const delay = Math.floor(backoff * (0.8 + Math.random() * 0.2));
     peer.retry = setTimeout(() => {

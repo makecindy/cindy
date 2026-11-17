@@ -333,8 +333,8 @@ it('spreads simultaneous failed peers across the first retry window', async () =
   } finally { fixture.controller.clear(); }
 });
 
-// A network that blocks peer-to-peer failed every minute all day (860 failures in one
-// day's log); retries now back off to five minutes while the peer stays in use.
+// Keep retries bounded at one minute: receiver-side network changes cannot wake
+// the initiator through the existing protocol, so a larger cap delays recovery.
 it.each([0, 0.999999])('bounds jittered exponential retries through the capped stage (random=%s)', async random => {
   vi.useFakeTimers();
   vi.spyOn(Math, 'random').mockReturnValue(random);
@@ -342,7 +342,7 @@ it.each([0, 0.999999])('bounds jittered exponential retries through the capped s
   fixture.create.mockImplementation(() => { throw new Error('runtime unavailable'); });
   try {
     fixture.controller.ready('b');
-    for (const base of [5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 300_000, 300_000]) {
+    for (const base of [5_000, 10_000, 20_000, 40_000, 60_000, 60_000, 60_000, 60_000]) {
       const before = fixture.create.mock.calls.length;
       const delay = Math.floor(base * (0.8 + random * 0.2));
       await vi.advanceTimersByTimeAsync(delay - 1);

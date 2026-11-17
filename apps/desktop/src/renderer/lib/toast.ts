@@ -301,7 +301,9 @@ function createItem(variant: ToastVariant, rawMessage: string, options?: ToastOp
     const duplicate = findDuplicateAlert(variant, message);
     if (duplicate) {
       // 已在显示：重新计时；仍在排队：入场时自然按完整时长计时。
-      if (timers.has(duplicate.id) || expireAtMs.has(duplicate.id)) {
+      if (pausedRemainingMs.has(duplicate.id)) {
+        pausedRemainingMs.set(duplicate.id, duplicate.duration);
+      } else if (timers.has(duplicate.id) || expireAtMs.has(duplicate.id)) {
         clearItemTimer(duplicate.id);
         startTimer(duplicate.id, duplicate.duration);
       }
