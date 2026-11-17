@@ -798,9 +798,11 @@ func handoffAct(_ request: [String: Any]) -> [String: Any] {
     // Keys go to whichever app is in front: never type unless it is this one.
     guard front, handoffFocus(app, element), handoffFrontPid() == pid else { return ["error": "focus_failed"] }
     handoffKey(0, flags: .maskCommand) // select all
-    handoffKey(51) // delete
-    // Focus and selection changes are asynchronous in browser secure fields.
-    // Let the clear finish before the first replacement character arrives.
+    // Empty code cells often use Backspace to focus the previous cell. Replace
+    // the selection directly instead, whether this cell is empty or already filled.
+    if !codeCell { handoffKey(51) } // delete
+    // Focus and selection changes are asynchronous in browsers. Let them
+    // settle before the first replacement character arrives.
     usleep(100000)
     guard handoffFocused(app, is: element), handoffFrontPid() == pid else { return ["error": "focus_failed"] }
     handoffTypeAndSettle(value)

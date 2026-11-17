@@ -7,8 +7,9 @@ export default {
   cases: {
     default: { about: 'Short account and password form', data: { count: 2 } },
     long: { about: 'Forty fields scroll without hiding the Continue button', data: { count: 40 } },
+    description: { about: 'Maximum purpose and note leave fields and Continue reachable', data: { count: 2, description: true } },
   },
-  async check(page) {
+  async check(page, ui) {
     const dialog = page.getByTestId('input-handoff-dialog');
     await dialog.waitFor();
     const button = page.locator('[data-input-handoff-continue]');
@@ -21,6 +22,10 @@ export default {
     assert(Math.abs(before.y - after.y) < 1, 'Continue stays fixed while the fields scroll');
     assert(last.y >= 0 && last.y + last.height <= after.y, 'Focused final field is visible above Continue');
     assert(after.y + after.height <= await page.evaluate(() => window.innerHeight), 'Continue stays inside the window');
+    await dialog.getByRole('heading').scrollIntoViewIfNeeded();
+    await ui.capture('details');
+    const detailsButton = await button.boundingBox();
+    assert(detailsButton && Math.abs(detailsButton.y - before.y) < 1, 'Continue stays fixed while reading the description');
     await inputs.first().focus();
   },
 };

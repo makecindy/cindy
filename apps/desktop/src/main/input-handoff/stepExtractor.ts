@@ -205,6 +205,10 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
   const origin = topWeb?.url && (browser || /^https?:/i.test(topWeb.url))
     ? classifyOrigin(topWeb.url, browser)
     : undefined;
+  // Included fields can be offscreen; keep their closest ancestor's verified
+  // origin even while they are plain inputs that a field plan may later mask.
+  const nestedAreas = topWeb ? snapshot.nodes.filter((node) =>
+    node.role === 'AXWebArea' && node !== topWeb && isWithin(node.ref, topWeb.ref)) : [];
 
   const textNodes: Array<{ node: NativeAxNode; index: number }> = [];
   inScope.forEach((node, index) => {
@@ -267,8 +271,11 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
       // Static validation text can shift AX indices without changing a field.
       // Only depend on position when neither DOM id nor fingerprint is unique.
       const stable = (node.domId && domIds.get(node.domId) === 1) || fingerprints.get(node.fp) === 1;
-      const identity = JSON.stringify([node.domId, node.fp, label, stable ? null : node.ref]);
-      bindings.set(controlId, { kind: 'text', ref: node.ref, fp: node.fp, identity, secure: !!node.secure });
+      const frameArea = nestedAreas.filter((area) => isWithin(node.ref, area.ref))
+        .sort((a, b) => b.ref.length - a.ref.length)[0];
+      const frameOrigin = frameArea?.url ? classifyOrigin(frameArea.url, browser).origin : undefined;
+      const identity = JSON.stringify([node.domId, node.fp, label, stable ? null : node.ref, frameOrigin]);
+      bindings.set(controlId, { kind: 'text', ref: node.ref, fp: node.fp, identity, secure: !!node.secure, ...(frameOrigin ? { frameOrigin } : {}) });
       refs.set(controlId, node.ref);
       return;
     }
@@ -389,21 +396,7 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     ...(origin?.origin ? { origin: origin.origin } : {}),
     ...(origin?.warning ? { warning: origin.warning } : {}),
   };
-  if (!source.warning && topWeb && hasSecure) {
-    // Included fields may be below the viewport. Their ancestor origins must
-    // come from the complete tree too, including clipped or zero-size web areas.
-    const nestedAreas = snapshot.nodes.filter((node) =>
-      node.role === 'AXWebArea' && node !== topWeb && isWithin(node.ref, topWeb.ref));
-    const crossOriginPassword = inScope.some((node) => {
-      if (!node.secure) return false;
-      const frameArea = nestedAreas
-        .filter((area) => isWithin(node.ref, area.ref))
-        .sort((a, b) => b.ref.length - a.ref.length)[0];
-      const nested = frameArea?.url ? classifyOrigin(frameArea.url, browser) : undefined;
-      return !!nested?.origin && !!origin?.origin && nested.origin !== origin.origin;
-    });
-    if (crossOriginPassword) source.warning = 'embedded-frame';
-  }
+  warnForEmbeddedPasswords(source, controls, bindings);
   const texts = inScope.map((node) => textOf(node)).filter((text): text is string => !!text);
   const fieldTypes = controls.flatMap((control) => (control.kind === 'text' ? [control.contentType] : []));
   const labels = inScope.filter((node) => !TEXT_ROLES.has(node.role)).map((node) => textOf(node)).filter((text): text is string => !!text);
@@ -495,6 +488,15 @@ function capControls(
   return controls.filter((control) => keep.has(control.id));
 }
 
+function warnForEmbeddedPasswords(source: InputHandoffSource, controls: ScreenControl[], bindings: Map<string, ControlBinding>): void {
+  if (source.warning || !source.origin) return;
+  if (controls.some(control => {
+    if (control.kind !== 'text' || control.contentType !== 'password') return false;
+    const binding = bindings.get(control.id);
+    return binding?.kind === 'text' && !!binding.frameOrigin && binding.frameOrigin !== source.origin;
+  })) source.warning = 'embedded-frame';
+}
+
 /** Validate the entire plan before replacing any field. Ambiguous labels never guess a target. */
 export function applyFieldPlan(step: ExtractedStep, plan: HandoffFieldPlan[]): boolean {
   const fields = step.shown.filter((c): c is Extract<InputHandoffControl, { kind: 'text' }> => c.kind === 'text');
@@ -533,6 +535,7 @@ export function applyFieldPlan(step: ExtractedStep, plan: HandoffFieldPlan[]): b
   step.hasSecure ||= replacements.some((r) => r.control.contentType === 'password');
   if (step.hasSecure || replacements.some((r) => r.control.contentType === 'one-time-code')) step.signIn = true;
   step.shown = ownerControls(step.controls);
+  warnForEmbeddedPasswords(step.source, step.controls, step.bindings);
   step.signature = signatureOf(step.source, step.controls);
   return true;
 }

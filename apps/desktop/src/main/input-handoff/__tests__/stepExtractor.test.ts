@@ -63,6 +63,26 @@ describe('extractStep', () => {
     }
   });
 
+  // Unit/security: an accepted plan can make a plain field a logical password.
+  // The final warning must describe that target's frame, including clipped frames.
+  it.each([
+    { url: 'https://other.example/login', height: 100, warning: 'embedded-frame' },
+    { url: 'https://other.example/login', height: 0, warning: 'embedded-frame' },
+    { url: 'https://example.test/nested', height: 100, warning: undefined },
+  ])('checks a planned password frame origin: %j', ({ url, height, warning }) => {
+    const frame = [100, height ? 200 : 900, 400, height];
+    const step = extractStep(snapshot([
+      node('0', 'AXWebArea', { url: 'https://example.test/login', frame: [0, 60, 1200, 840] }),
+      node('0.1', 'AXWebArea', { url, frame }),
+      node('0.1.0', 'AXTextField', { title: 'Entry', frame }),
+    ]));
+    expect(step.source.warning).toBeUndefined();
+    expect(applyFieldPlan(step, [{ label: 'Password', contentType: 'password', targets: [{ label: 'Entry' }] }])).toBe(true);
+    expect(step.shown[0]).toMatchObject({ contentType: 'password' });
+    expect(step.source.origin).toBe('https://example.test');
+    expect(step.source.warning).toBe(warning);
+  });
+
   it('never asks for a browser\'s address bar when its page cannot be read', () => {
     for (const [desc, placeholder] of [['地址和搜索栏', '问问 Google 或输入网址'], ['Address and search bar', 'Search Google or type a URL']]) {
       const step = extractStep(snapshot([node('0', 'AXTextField', { desc, placeholder, hasValue: true, frame: [40, 10, 600, 20] })]));
