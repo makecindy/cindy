@@ -33,6 +33,17 @@ export const personalizationDetailsSettings = defineSettings({
     descriptionKey: 'settings.memory.maker.description',
     aliases: ['maker memory', '记忆'],
   },
+  // 「查看记忆」子页（Cindy 记忆）：入口是 Cindy 行上的按钮，搜索定位到记忆分区。
+  memoryEntriesTitle: {
+    id: 'settings.memory.entries.title',
+    fallbackTargetId: 'settings-search-target-personalization-memory',
+    tab: 'personalization',
+    targetId: 'settings-search-target-personalization-memory',
+    titleKey: 'settings.memory.entries.title',
+    sectionKey: 'settings.sections.memory',
+    descriptionKey: 'settings.memory.entries.description',
+    aliases: ['view memories', 'saved memories', 'edit memory', 'delete memory', '查看记忆', '已存的记忆', '删除记忆'],
+  },
   memoryAgentsClaudeCodeLabel: {
     id: 'settings.memory.agents.claude-code.label',
     fallbackTargetId: 'settings-search-target-personalization-memory',
@@ -50,15 +61,6 @@ export const personalizationDetailsSettings = defineSettings({
     titleKey: 'settings.memory.agents.codex.label',
     sectionKey: 'settings.sections.memory',
     descriptionKey: 'settings.memory.agents.codex.description',
-  },
-  memoryAgentsPiLabel: {
-    id: 'settings.memory.agents.pi.label',
-    fallbackTargetId: 'settings-search-target-personalization-memory',
-    tab: 'personalization',
-    targetId: 'settings-search-target-personalization-memory',
-    titleKey: 'settings.memory.agents.pi.label',
-    sectionKey: 'settings.sections.memory',
-    descriptionKey: 'settings.memory.agents.pi.description',
   },
   auxiliaryModelsTitle: {
     id: 'settings.auxiliaryModels.title',

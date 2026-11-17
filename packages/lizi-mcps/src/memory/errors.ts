@@ -43,7 +43,8 @@ export function classifyMemoryError(err: unknown): MemoryToolError {
       code === 'description-has-newline' ||
       code === 'shard-too-large' ||
       code === 'path-traversal' ||
-      code === 'ambiguous-address'
+      code === 'ambiguous-address' ||
+      code === 'index-too-large'
     ) {
       return { code: 'INVALID_PARAMS', message };
     }

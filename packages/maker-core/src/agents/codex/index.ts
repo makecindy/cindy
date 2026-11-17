@@ -273,7 +273,6 @@ import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './syst
 import { nativeAutoReviewContinuationConfig } from './native-auto-review-policy.js';
 import { sendCodexApprovalFeedback } from './approval-feedback.js';
 import { loadMemoryContext } from '../../memory/context.js';
-import { MemoryFlushController } from '../../memory/flush-controller.js';
 import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import { CODEX_AGENT_COMMANDS } from './commands.js';
 import {
@@ -3755,7 +3754,6 @@ assertRouteCurrent();
     // proxy active 时两条路径都用同一份构建结果登记到 registry。跟 userPrompt 同语义 — 启动时快照,跨 session 不实时同步。
     let makerMemoryRules = '';
     let makerMemoryIndex = '';
-    let memoryFlushController: MemoryFlushController | null = null;
     // opts.makerMemoryEnabled 优先 (per-session, renderer 透传); fallback 到 runtimeConfig。
     const makerMemoryFlag = reviewMode
       ? false
@@ -3783,11 +3781,6 @@ assertRouteCurrent();
         });
         makerMemoryRules = memoryContext.rules;
         makerMemoryIndex = memoryContext.index;
-        memoryFlushController = new MemoryFlushController({
-          logger: log.child('memory-flush'),
-          workdir: memoryScopeKey,
-          agentKind: 'codex',
-        });
         log.debug('maker memory loaded for session', {
           rulesBytes: makerMemoryRules.length,
           indexBytes: makerMemoryIndex.length,
@@ -4489,13 +4482,10 @@ assertRouteCurrent();
     /**
      * codex 投出 contextCompaction 边界时的统一入口。
      *
-     * 无条件注册: 压缩风暴熔断与 Maker Memory 是否开启无关, 而这个回调此前只在
-     * memoryFlushController 存在时才挂上去 —— 关掉 Maker Memory 的用户会连熔断
-     * 一起失去。memory flush 侧仍保持原有的「controller 存在才通知」语义。
+     * 无条件注册: 压缩风暴熔断与 Maker Memory 是否开启无关。
      */
     const handleCompactBoundary = (): void => {
       compactionStormTracker.noteCompaction();
-      memoryFlushController?.onCompactBoundary();
     };
     // Collab terminal notifications are one-shot across the whole handle lifetime.
     // The server can retry one after its parent turn/completed notification; remembering
@@ -12793,11 +12783,6 @@ assertRouteCurrent();
             if (calibration) log.debug('SDK ▷ token speed calibration', { turnId: params.turnId, ...calibration });
           }
           maybePushUsageRefresh();
-          // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
-          if (memoryFlushController) {
-            const snap = usageTracker.snapshot();
-            memoryFlushController.onUsageUpdate(snap.contextTokens, snap.contextWindow);
-          }
         } else {
           log.debug('ignoring duplicate or out-of-order Codex usage snapshot', {
             threadId: params.threadId,
