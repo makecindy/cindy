@@ -2,6 +2,7 @@ import { APP_ICONS, isAppIcon, type AppIcon } from '@cindy/maker-shared/app-icon
 import { DEFAULT_FONT_SIZES } from './generated/appearance-tokens';
 import { normalizePluginAppearanceSettings, type PluginAppearanceSettingsFields } from './pluginAppearance';
 import type { AppearanceFontResource } from './pluginAppearance';
+import type { DownloadProgress } from './downloadProgress';
 
 /**
  * Desktop appearance preferences shared by main, preload and renderer.
@@ -45,8 +46,11 @@ export const WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL =
 export interface WallpaperDownloadProgress {
   wallpaperId: WallpaperId;
   kind: 'image' | 'video';
+  /** Raw bytes of the current attempt; the tile bar draws this. */
   loaded: number;
   total: number;
+  /** Standard phase (retrying and why, completed) for assistive text. */
+  download?: DownloadProgress;
 }
 
 export interface AppearanceSettings extends PluginAppearanceSettingsFields {

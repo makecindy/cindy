@@ -131,7 +131,7 @@ import {
   type InteractionRouteLease,
 } from '../../maker-ipc/interactionRouter';
 import { beginGroupHistoryAccess, type GroupHistoryAccessScope } from './groupHistoryAccess';
-import { beginChannelToolScope, type ChannelToolScope } from './channelToolScope';
+import { beginTelegramReplyMediaScope, beginChannelToolScope, type ChannelToolScope } from './channelToolScope';
 import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleton';
 import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../../maker-ipc/agentHandoff';
 import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
@@ -426,6 +426,7 @@ interface SessionState {
    * 桌面输入等其它来源不回传；在该轮终态清除，避免沿用到下一轮。
    */
   relayedTurn: boolean;
+  replyMediaRelease?: () => void;
 }
 
 /**
@@ -2233,6 +2234,24 @@ export function createTurnRunner(
     return !state.preserveSessionConfig || state.botLane === 'channel';
   }
 
+  function updateReplyMediaScope(state: SessionState): void {
+    state.replyMediaRelease?.();
+    state.replyMediaRelease = undefined;
+    if (!state.relayedTurn || !ownsChannelOutput(state) || state.queue.length ||
+        state.makerSession.remoteHostId || !adapter.replyMediaScopeFor) return;
+    const session = state.makerSession;
+    const scope = adapter.replyMediaScopeFor(state.userId);
+    const botId = scope.im.getBotId();
+    state.replyMediaRelease = beginTelegramReplyMediaScope({
+      sessionId: session.id,
+      sessionInstanceId: session.instanceId,
+      scope,
+      isActive: () => sessionStates.get(session.id) === state &&
+        state.makerSession === session && state.relayedTurn && state.queue.length === 0 &&
+        im.getStatus().kind === 'connected' && scope.im.getBotId() === botId,
+    });
+  }
+
   /** Rebind observation without discarding accepted or queued IM messages. */
   function rebindSessionOutput(state: SessionState, current: MakerSession, userId: string): void {
     for (const unsubscribe of state.unsubscribers) {
@@ -2993,6 +3012,7 @@ export function createTurnRunner(
         // 下一条撞上 SESSION_RUNNING）。
         if (isProductTurnDoneEvent(event) || isTerminalAgentErrorEvent(event)) {
           state.relayedTurn = false;
+          updateReplyMediaScope(state);
           maybeDispatchNextQueued(state, userId);
           return;
         }
@@ -4502,6 +4522,8 @@ export function createTurnRunner(
   /** detach / dispose 路径: 清掉 in-flight turn 的过程区 ticker 与 silent-stop
    *  settle 订阅, 防定时器 / 陈旧回调泄漏。 */
   function clearQueuedTurnTimers(state: SessionState): void {
+    state.replyMediaRelease?.();
+    state.replyMediaRelease = undefined;
     for (const turn of state.queue) {
       releaseAttachedImTurnHeadless(turn);
       clearActivityTicker(turn);
@@ -4764,6 +4786,7 @@ export function createTurnRunner(
           existing.scopeKey = route.scopeKey;
         }
         if (existing.makerSession !== session || userChanged) rebindSessionOutput(existing, session, userId);
+        updateReplyMediaScope(existing);
         return;
       }
       ensureMakerCloseSubscription(getMaker());
@@ -4788,12 +4811,14 @@ export function createTurnRunner(
       };
       sessionStates.set(session.id, state);
       state.unsubscribers.push(session.onEvent(handleEventFor(session.id, userId)));
+      updateReplyMediaScope(state);
     },
     noteChannelTurnSource: (session, source) => {
       const state = sessionStates.get(session.id);
       // An IM turn still in the queue owns whatever runs now; it is delivered once, as itself.
       if (state?.makerSession !== session || state.queue.length > 0) return;
       state.relayedTurn = isRelayedChannelTurnSource(source);
+      updateReplyMediaScope(state);
     },
     runAgentTurn,
     persistInboundUserMessageEarly,

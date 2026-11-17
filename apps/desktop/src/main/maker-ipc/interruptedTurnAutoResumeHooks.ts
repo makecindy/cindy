@@ -67,7 +67,9 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
   notifySchedulerAutoResumeFailed, autoResumeAttemptToken, log,
 }: InterruptedTurnAutoResumeHookPorts<RuntimeSession>) {
   const canRecoverTurn = (signals: InterruptedTurnErrorSignals, item?: AgentInputQueuedMessage | null) =>
-    signals.reason === 'orca-report-preparation'
+    signals.reason === 'scheduler-snapshot-preparation'
+      ? item?.origin?.kind === 'scheduler' && !!item.origin.runId
+      : signals.reason === 'orca-report-preparation'
       ? !!item?.orcaReportDelivery && item.origin?.kind === 'orca' && canRecoverUndeliveredOrcaReport(signals.message)
       : isInterruptedTurnError(signals) ||
         (!!item && botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals));
@@ -105,7 +107,8 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       const botInput = botFallbackInputs.has(item.createOpts);
       const requireRouteChange = botInput && isBotCandidateUnavailable(signals);
       const reportPreparation = signals.reason === 'orca-report-preparation';
-      const sameRouteRetryable = reportPreparation || isInterruptedTurnError(signals);
+      const localPreparation = signals.reason === 'scheduler-snapshot-preparation';
+      const sameRouteRetryable = reportPreparation || localPreparation || isInterruptedTurnError(signals);
       const erroredAt = Date.now();
       const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);
       if (decision.action !== 'resume') {
@@ -164,7 +167,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
             try {
               // Report retries must enter the original queue checkpoint before any
               // allocation. Runtime fallback can eagerly bootstrap a different route.
-              const fallback: RuntimeFallbackResult<RuntimeSession> = reportPreparation
+              const fallback: RuntimeFallbackResult<RuntimeSession> = reportPreparation || localPreparation
                 ? { session: null, outcome: 'unchanged' }
                 : await maybeApplySessionRuntimeFallback(
                   sessionId,

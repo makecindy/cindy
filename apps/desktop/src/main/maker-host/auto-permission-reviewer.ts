@@ -19,6 +19,12 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
 
+/** Host-owned diagnostics, never parsed from model output or exception text. */
+export type AutoReviewTextFailure = {
+  failure: 'no_available_model' | 'configuration_unavailable' | 'http_error'
+    | 'request_failed' | 'timeout' | 'empty_response' | 'malformed';
+};
+
 interface AutoPermissionReviewerLogger {
   debug(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
@@ -29,7 +35,7 @@ export interface AutoPermissionReviewerDeps {
     request: AutoReviewRequest,
     prompt: string,
     context: { signal: AbortSignal },
-  ): Promise<string | null>;
+  ): Promise<string | AutoReviewTextFailure | null>;
   logger: AutoPermissionReviewerLogger;
   /**
    * `true` when requestText owns candidate fallback and transient retries. The reviewer then
@@ -81,7 +87,7 @@ const RETRY_BACKOFF_MS = AUTO_REVIEW_RETRY_BACKOFF_MS;
 const RETRY_SCHEDULING_SLACK_MS = AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS;
 
 /** 单次尝试的失败形态。区分它们决定了「该不该再试一次」。 */
-type AttemptFailure = 'timeout' | 'empty' | 'malformed' | 'error';
+type AttemptFailure = 'timeout' | 'empty' | 'malformed' | 'error' | AutoReviewTextFailure['failure'];
 
 /**
  * 只有基础设施性的失败才值得重试。
@@ -314,7 +320,7 @@ async function attemptReview(
   request: AutoReviewRequest,
   prompt: string,
   requestTimeoutMs: number,
-): Promise<{ decision: AutoReviewDecision } | { failure: AttemptFailure; error?: string }> {
+): Promise<{ decision: AutoReviewDecision } | { failure: AttemptFailure }> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const controller = new AbortController();
   try {
@@ -329,14 +335,13 @@ async function attemptReview(
     ]);
     if (text === REVIEW_TIMEOUT) return { failure: 'timeout' };
     if (!text) return { failure: 'empty' };
+    if (typeof text !== 'string') return text;
     const decision = parseAutoPermissionReviewDecision(text);
     if (!decision) return { failure: 'malformed' };
     return { decision };
-  } catch (error) {
-    return {
-      failure: 'error',
-      error: error instanceof Error ? error.message : String(error),
-    };
+  } catch {
+    // Provider exceptions can contain request bodies, credentials, or model output.
+    return { failure: 'error' };
   } finally {
     if (timeout) clearTimeout(timeout);
   }
@@ -456,7 +461,6 @@ export function createAutoPermissionReviewer(
         maxAttempts: attempts,
         failure: result.failure,
         durationMs: Date.now() - startedAt,
-        ...(result.error ? { error: result.error } : {}),
       });
       if (!isRetriableFailure(result.failure)) break;
     }
@@ -468,6 +472,9 @@ export function createAutoPermissionReviewer(
       failure: lastFailure,
       durationMs: Date.now() - startedAt,
     });
+    if (lastFailure === 'no_available_model') {
+      return { verdict: 'ask', unavailable: true, unavailableReason: 'no_available_model' };
+    }
     return null;
   };
 }

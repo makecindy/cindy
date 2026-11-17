@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · pour {{person}}"
+  },
   "progress": {
     "stop": "Arrêter",
     "stopMine": "Arrêter les miennes",
@@ -301,6 +304,8 @@
       "loading": "Chargement des paramètres…",
       "unavailable": "Impossible de charger les paramètres du groupe. Réessayez."
     },
+    "allowMemberInvites": "Tous les membres peuvent inviter des amis",
+    "allowMemberInvitesHint": "Si activé, tous les membres du groupe peuvent inviter des amis. Seuls le propriétaire et les administrateurs peuvent modifier ce réglage.",
     "allowMentionAllBots": "Autoriser @tous les amis",
     "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les amis peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous.",
     "notifications": {
@@ -586,6 +591,11 @@
     "transferHint": "Cette personne deviendra propriétaire et vous deviendrez administrateur.",
     "removeTitle": "Retirer {{name}} de ce groupe ?",
     "removeHint": "Cette personne perdra l’accès aux messages. Ses amis quitteront également le groupe.",
+    "removeOwn": "Retirer du groupe",
+    "removeOwnScope": "Cela ne concerne que ce groupe. Votre partenaire reste dans votre compte.",
+    "removeOwnHint": "{{name}} ne recevra plus les messages de « {{group}} ». L’historique est conservé ; les autres groupes et discussions privées ne sont pas affectés.",
+    "removeOwnActiveHint": "Ses demandes en cours dans ce groupe seront arrêtées. Les tâches lancées indépendamment continueront.",
+    "stopAndRemove": "Arrêter et retirer",
     "confirm": "Confirmer",
     "inviteTitle": "Inviter dans le groupe",
     "reusableLink": "Sans expiration · Réutilisable par plusieurs personnes",

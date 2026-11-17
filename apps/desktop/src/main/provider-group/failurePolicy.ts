@@ -104,6 +104,13 @@ const CONNECTION_LOST_CODES = new Set(['REMOTE_AGENT_DEVICE_UNREACHABLE', 'REMOT
 /** 可能连不上：现读一次再说。 */
 const CONNECTION_CHECK_CODES = new Set([
   'REMOTE_AGENT_UNAVAILABLE',
+  // runClient distinguishes these for display; keep the same connection check
+  // as their former REMOTE_AGENT_UNAVAILABLE wrapper, including serialized errors.
+  'REMOTE_AGENT_TIMEOUT',
+  'REMOTE_AGENT_LINK_BUSY',
+  'REMOTE_AGENT_UNRESPONSIVE',
+  'REMOTE_AGENT_OFFLINE',
+  'REMOTE_AGENT_ACCESS_DENIED',
   'REMOTE_AGENT_SHARE_UNAVAILABLE',
   'REMOTE_AGENT_BUSY',
   'DEVICE_LINK_DEVICE_OFFLINE',

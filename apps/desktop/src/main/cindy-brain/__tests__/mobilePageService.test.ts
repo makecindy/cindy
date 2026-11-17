@@ -192,6 +192,25 @@ describe('mobile plugin pages', () => {
     expect(h.taskSettings.read).toHaveBeenCalledWith('practice', 'r1');
   });
 
+  // Workspace plugins create ordinary tasks too; reuse the same trusted Host settings API.
+  // Opt-out hides the card without revoking the existing owner's settings access. tier: unit.
+  it.each([true, false])('offers workspace task settings with card visibility %s', async (showTaskPreferences) => {
+    const h = setup();
+    h.ghost.manifest.workspace = true;
+    h.ghost.manifest.showTaskPreferences = showTaskPreferences;
+    const detail = await h.provider.get!({ controllerDeviceId: 'phone-a' }, {
+      ref: { collectionId: 'plugins', kind: 'plugin', id: 'practice' },
+      client: { protocolVersion: 1, primitives: ['plugin-capabilities'] },
+    });
+    expect(detail.blocks?.find(block => block.id === 'capabilities')?.data)
+      .toMatchObject({ tasks: showTaskPreferences });
+    await h.invoke('task-settings:get');
+    expect(h.taskSettings.read).toHaveBeenCalledWith('practice', 'r1');
+    await h.invoke('task-settings:set', { expectedRevision: 'settings-r1', permissionMode: 'ask' });
+    expect(h.taskSettings.update).toHaveBeenCalledWith('practice', 'r1',
+      { expectedRevision: 'settings-r1', permissionMode: 'ask' }, expect.any(Function));
+  });
+
   // Detailed introduction: the detail resource only carries a flag; the phone fetches the
   // content for its own locale, and one reply stays within the device-link message budget.
   it('offers the detailed introduction on demand within the reply budget', async () => {
