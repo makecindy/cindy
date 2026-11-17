@@ -14,6 +14,7 @@ import { messages as messageTable, sessions as sessionTable } from '../../../des
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.js';
 import type { Message } from '../../../desktop/src/renderer/lib/ccAgent.types.js';
 import { explicitPorts } from './explicit-ports.js';
+import { recoverGeneratedImagesForHistory } from '../../../desktop/src/main/cindy-media/generatedImageRecovery.js';
 
 const messageRowid = sql<number>`"messages"."rowid"`;
 
@@ -31,6 +32,10 @@ export async function readMessagesList(sessionId: string, opts: HistoryListOptio
   const limit = Math.max(1, Math.min(opts.limit ?? 200, 2000));
   const before = opts.before?.trim() || null;
   const after = opts.after?.trim() || null;
+  // As the desktop's messages list (localHistoryViewReader.ts createReadMessagesList): its first page
+  // starts the task's generated-image recovery without waiting (agent/generated-images.ts binds it).
+  // The history view reads outlines, which do not.
+  if (!before && !after) void recoverGeneratedImagesForHistory(sessionId).catch(() => undefined);
 
   // Session clearedAt boundary
   const [session] = await db

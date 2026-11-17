@@ -23,7 +23,7 @@ import { logoutHostSession } from '../auth/logout.mjs';
 import { serializeAuthSessionRecord } from '@cindy/auth-client';
 import { AUTH_SESSION_KEY } from '../../../desktop/src/main/authCredentialKeys.ts';
 
-import { createHostHistoryReader } from './history.ts';
+import { createHostHistoryReader, readMessagesList } from './history.ts';
 import { createInputQueue, holdTaskForProfile, PROFILE_HOLD_LOCK } from './input-queue.mjs';
 import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../desktop/src/shared/agentInputQueue.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
@@ -91,6 +91,7 @@ import { createInteractionBroker } from './interactions.mjs';
 import { consumeClaudeOpusPlanMismatch, createClaudeGatewayErrorObserver } from '../../../desktop/src/main/maker-host/claude-gateway-error-observer.ts';
 import { recordClaudeRequestRoute } from '../../../desktop/src/main/maker-host/claude-session-route-registry.ts';
 import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../desktop/src/shared/claudeGatewayError.ts';
+import { reconcileGeneratedImageRecovery, recoverGeneratedImagesForHistory } from '../../../desktop/src/main/cindy-media/generatedImageRecovery.ts';
 
 function assertOwnerChangedDisposal(disposal) {
   return assert.rejects(disposal, error =>
@@ -2937,7 +2938,9 @@ async function recoveryDatabase(t) {
   const createTask = id => new OwnerSessionStorage({ db: () => database }).create({ id, title: 'Recovery fixture',
     agentKind: 'claude-code', model: 'stored-model', workDir: root });
   const errorRows = id => opened.db.prepare("SELECT client_id FROM messages WHERE session_id = ? AND role = 'error'").all(id);
-  return { root, db: opened.db, createTask, errorRows, persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: () => {} }) };
+  // As main.ts deleteSession removes the task row (OwnerSessionStorage.delete).
+  const deleteTask = id => new OwnerSessionStorage({ db: () => database }).delete(id);
+  return { root, db: opened.db, createTask, deleteTask, errorRows, persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: () => {} }) };
 }
 
 test('context recovery: at the shutdown limit the Host writes the running recovery\'s error row once; after restart the task is an unhandled error and takes new input', { timeout: 30_000 }, async t => {
@@ -5907,23 +5910,28 @@ async function generatedImageFixture(t, id) {
     readSession: async sid => ({ id: sid, status: 'active', agentKind: 'codex', model: 'm', workingDir: db.root,
       providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }) });
   t.after(() => h.queue.dispose());
-  await db.createTask(id);
-  await enqueue(h, id, { clientId: `${id}-input`, text: 'draw it' });
-  const session = h.maker.getSession(id);
-  const holds = [];
-  session.holdEventStream = followUps => { holds.push(followUps); return true; };
-  const emitImage = data => session.emit({ type: 'image', source: 'codex', sessionTurnGeneration: session.generation,
-    sessionInstanceId: session.instanceId, data: { kind: 'generation', blockId: 'block-1', threadId: 'thread-1',
-      turnId: 'turn-1', status: 'completed', ...data } });
-  const rows = () => db.db.prepare('SELECT client_id, role, content FROM messages WHERE session_id = ? AND role IN (?, ?) ORDER BY created_at')
-    .all(id, 'tool_use', 'tool_result');
-  // The fixture's database is fresh: every media reference in it is this image's.
-  const refs = () => db.db.prepare('SELECT hash, ref_kind, ref_id FROM media_refs').all();
-  const endTurn = async () => {
-    session.emit({ type: 'done', data: {}, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
-    await waitFor(() => published.some(event => event.type === 'done'));
+  // The fixture's database is fresh: every media reference in it is one of its tasks' images.
+  const refs = () => db.db.prepare('SELECT hash, ref_kind, ref_id FROM media_refs ORDER BY ref_id').all();
+  // A running task of this queue, which can emit a Codex image (its stream hold is recorded).
+  const openTask = async taskId => {
+    await db.createTask(taskId);
+    await enqueue(h, taskId, { clientId: `${taskId}-input`, text: 'draw it' });
+    const session = h.maker.getSession(taskId);
+    const holds = [];
+    session.holdEventStream = followUps => { holds.push(followUps); return true; };
+    const emitImage = data => session.emit({ type: 'image', source: 'codex', sessionTurnGeneration: session.generation,
+      sessionInstanceId: session.instanceId, data: { kind: 'generation', blockId: 'block-1', threadId: 'thread-1',
+        turnId: 'turn-1', status: 'completed', ...data } });
+    const rows = () => db.db.prepare('SELECT client_id, role, content FROM messages WHERE session_id = ? AND role IN (?, ?) ORDER BY created_at')
+      .all(taskId, 'tool_use', 'tool_result');
+    const endTurn = async () => {
+      session.emit({ type: 'done', data: {}, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+      await waitFor(() => published.some(event => event.type === 'done' && event.sessionId === taskId));
+    };
+    return { session, holds, emitImage, rows, endTurn };
   };
-  return { published, holds, emitImage, rows, refs, endTurn };
+  const first = await openTask(id);
+  return { ...first, db, h, published, refs, openTask };
 }
 const resultOf = row => JSON.parse(JSON.parse(row.content));
 
@@ -6013,7 +6021,7 @@ async function preparationFixture(t, id, { getOwner = getCurrentDbClientSnapshot
   };
   const rows = role => db.db.prepare('SELECT content FROM messages WHERE session_id = ? AND role = ?').all(id, role)
     .map(row => { try { return JSON.parse(row.content); } catch { return row.content; } });
-  return { db, published, interactions, session, turnEvent, endTurn, rows };
+  return { db, h, published, interactions, session, turnEvent, endTurn, rows };
 }
 
 test('a question the runtime withdraws after its turn ended leaves the pending cards, and its withdrawal is saved', { timeout: 30_000 }, async t => {
@@ -6218,4 +6226,80 @@ test('a runtime retirement receipt after the owner changed saves and publishes n
   assert.equal(f.published.length, before);
   assert.deepEqual(f.rows('assistant'), []);
   otherOwner = null; // the fixture closes under its own owner
+});
+
+// Unit, over a migrated profile database and the Host's media store: what the Host's bindings of the
+// shared image recovery (agent/generated-images.ts setGeneratedImageRecovery) do to stored images
+// (甲 11, the reviewer's four additions). Rules, as the desktop: deleting a task releases its own
+// image references and leaves another task's use of the same image; the startup reconcile keeps an
+// image the history still references and clears one no task references; reading the history
+// recovers an image whose delivery failed once its source is there. Gap: these bindings had no test.
+// Minimal input: the same image in two tasks, then one task deleted (with and without its release);
+// one image whose file appears after its first delivery failed.
+test('deleting a task releases only its own generated-image references; another task\'s use of the same image stays', { timeout: 30_000 }, async t => {
+  const a = await generatedImageFixture(t, 'image-delete-a');
+  const b = await a.openTask('image-delete-b');
+  a.emitImage({ data: PNG_1X1 });
+  b.emitImage({ data: PNG_1X1 });
+  await Promise.all([a.holds[0], b.holds[0]]);
+  const hash = createHash('sha256').update(Buffer.from(PNG_1X1, 'base64')).digest('hex');
+  await waitFor(() => a.refs().length === 2);
+  // As main.ts deleteSession: the task row goes, then the shared recovery releases its images.
+  await a.db.deleteTask('image-delete-a');
+  await recoverGeneratedImagesForHistory('image-delete-a');
+  assert.deepEqual(a.refs(), [{ hash, ref_kind: 'session-attachment', ref_id: 'image-delete-b' }]);
+  assert.ok(existsSync(hostBlobStore.resolveSafe(resultOf(b.rows()[1]).xdt_image_url).absPath), 'the shared bytes stay');
+});
+
+test('the startup reconcile keeps an image the history still references and clears one no task references', { timeout: 30_000 }, async t => {
+  const kept = await generatedImageFixture(t, 'image-kept');
+  const orphan = await kept.openTask('image-orphan');
+  kept.emitImage({ data: PNG_1X1 });
+  orphan.emitImage({ data: PNG_1X1 });
+  await Promise.all([kept.holds[0], orphan.holds[0]]);
+  await waitFor(() => kept.refs().length === 2);
+  // A task deleted without its release (the process stopped first): only the reconcile can clear it.
+  await kept.db.deleteTask('image-orphan');
+  await reconcileGeneratedImageRecovery();
+  const hash = createHash('sha256').update(Buffer.from(PNG_1X1, 'base64')).digest('hex');
+  assert.deepEqual(kept.refs(), [{ hash, ref_kind: 'session-attachment', ref_id: 'image-kept' }]);
+  assert.equal(resultOf(kept.rows()[1]).native_image_delivery.state, 'stored');
+});
+
+test('reading the history recovers a generated image whose delivery failed, once its source is there', { timeout: 30_000 }, async t => {
+  const f = await generatedImageFixture(t, 'image-recover');
+  const file = path.join(f.db.root, 'generated image.png');
+  f.emitImage({ path: file });
+  await f.holds[0];
+  assert.deepEqual(resultOf(f.rows()[1]).native_image_delivery.state, 'failed');
+  writeFileSync(file, Buffer.from(PNG_1X1, 'base64'));
+  // The first page of the task's messages (/api/messages/list, main.ts messagesList), as the
+  // desktop's messages list, starts the recovery.
+  await readMessagesList('image-recover');
+  await waitFor(() => resultOf(f.rows()[1]).native_image_delivery.state === 'stored');
+  const hash = createHash('sha256').update(Buffer.from(PNG_1X1, 'base64')).digest('hex');
+  assert.equal(resultOf(f.rows()[1]).xdt_image_url, `cindy-media://blobs/${hash}.png`);
+  await waitFor(() => f.refs().length === 1);
+  assert.deepEqual(f.refs(), [{ hash, ref_kind: 'session-attachment', ref_id: 'image-recover' }]);
+});
+
+// Unit: the Host broker's clearPending only takes the dismissing task's own card (甲 12). Rule: a
+// runtime closes its own cards; another task's request id leaves the card pending and unsaved.
+// Gap: the check had no test. Minimal input: one pending question, dismissed by another task's runtime.
+test('a dismissal from another task\'s runtime leaves this task\'s card pending and unsaved', { timeout: 30_000 }, async t => {
+  const f = await preparationFixture(t, 'card-owner');
+  await f.db.createTask('card-other');
+  await enqueue(f.h, 'card-other', { clientId: 'card-other-input', text: 'go' });
+  const other = f.h.maker.getSession('card-other');
+  const answer = f.session.interactionListener({ requestId: 'question-own', kind: 'ask_user_question',
+    questions: [{ question: 'Which one?', options: [] }] }, new AbortController().signal);
+  await waitFor(() => f.interactions.pending('card-owner').length === 1 && f.rows('ask_user').length === 1);
+  other.emit({ type: 'interaction_dismissed', data: { requestId: 'question-own', reason: 'question_withdrawn', withdrawalReason: 'not this task' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.interactions.pending('card-owner').length, 1);
+  assert.notEqual(f.rows('ask_user')[0].status, 'cancelled');
+  // The task's own runtime still closes it.
+  f.session.emit({ type: 'interaction_dismissed', data: { requestId: 'question-own', reason: 'question_withdrawn' } });
+  await waitFor(() => f.interactions.pending('card-owner').length === 0);
+  assert.deepEqual(await answer, { kind: 'ask_user_question', answers: {}, dismissed: true });
 });
