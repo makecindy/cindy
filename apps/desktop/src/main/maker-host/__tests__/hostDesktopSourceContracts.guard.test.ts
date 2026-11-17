@@ -9,6 +9,7 @@
  * 上同一任务的行为悄悄分叉，对照测试与放行表的“已对齐”结论随之失效。
  */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { isBuiltin } from 'node:module';
 import os from 'node:os';
@@ -420,6 +421,32 @@ describe('Host copies of desktop expressions', () => {
     const cut = (text: string, from: string, to: string) => { const start = text.indexOf(from); assert.ok(start >= 0, from); return text.slice(start, text.indexOf(to, start)); };
     assert.equal(shape(cut(host, 'request.kind === \'permission\'', ': request;')),
       shape(cut(desktop, "req.kind === 'permission'", ': req;')).replaceAll('...req,', '...request,').replaceAll('req.', 'request.').replace(' as Record<string, unknown>', ''));
+  });
+
+  // 规则：Host 的生成图读来源（apps/host/src/agent/generated-images.ts 的 readSource）是 Host 自己的一份，
+  // 照桌面 register.ts createDesktopGeneratedImageDelivery 的 readSource 写，去掉了 SSH 文件服务与旧的
+  // xdt-image 两支（放行表第七节第 31 项）。这里钉住桌面那段的文本（去掉缩进、空行与注释后的 sha256）。
+  // 失效后果：桌面改了读来源的次序、回落或限制，Host 那份不跟着改，同一张图在两边读法不同。
+  // 变红时：对照桌面新文本改 Host 那份（或在第 31 项写明为什么不跟），再更新这里的指纹。
+  it('pins the desktop generated-image readSource that the Host copy follows', () => {
+    const desktop = read(path.join(desktopMain, 'maker-ipc/register.ts'));
+    const text = between(desktop, 'readSource: async (_sessionId, image, session) => {', 'setGeneratedImageRecovery((sessionId)');
+    const fingerprint = createHash('sha256').update(text).digest('hex');
+    expect(fingerprint, 'register.ts readSource changed: compare apps/host/src/agent/generated-images.ts readSource '
+      + '(release table section 7, item 31), then update this fingerprint').toBe(
+      '0cb159a4a79191099771e36a47a9157da6d63ad9f41d1221c8d60130e139536f');
+  });
+
+  // 规则：Host 的 deliverCodexGeneratedImage（apps/host/src/agent/generated-images.ts）与桌面 register.ts 的
+  // 同名函数逐行相同，只有交付实例的名字不同（放行表第七节第 32 项）。
+  // 失效后果：一边改了开始交付、失败记录或交出事件的方式，另一边没跟上。
+  it('starts a live generated-image delivery with the desktop function, line for line', () => {
+    const signature = 'function deliverCodexGeneratedImage(sessionId: string, event: AgentEvent): Promise<readonly AgentEvent[]> {';
+    const desktop = between(read(path.join(desktopMain, 'maker-ipc/register.ts')), signature, '\nfunction broadcastSyntheticToolEvent(');
+    const host = between(read(path.join(hostAgent, 'generated-images.ts')), signature, 'return { delivery, deliverCodexGeneratedImage };');
+    assert.ok(desktop.split('\n').length > 8);
+    expect(host, 'compare apps/host/src/agent/generated-images.ts with register.ts deliverCodexGeneratedImage '
+      + '(release table section 7, item 32)').toBe(desktop.replaceAll('generatedImageDelivery.start(', 'delivery.start('));
   });
 
   // 规则：视觉桥的提示文案与去重时间，是桌面 broadcastVisionBridgeEvent 的同一段。
