@@ -146,7 +146,8 @@ export function rulesForFiles(rules, files) {
 	return hits;
 }
 
-const cell = (value) => value.replace(/\s+/g, " ").replace(/\|/g, "\\|").trim();
+// 先转义反斜杠再转义竖线，否则原文里的「\|」会被读成一个转义过的竖线。
+const cell = (value) => value.replace(/\s+/g, " ").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").trim();
 function ruleLink(rule) {
 	const target = toPosix(path.posix.relative(path.posix.dirname(RULE_INDEX_PATH), rule.file));
 	return `[${cell(rule.title || rule.file)}](${target})`;

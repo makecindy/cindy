@@ -510,6 +510,13 @@ test("rule declarations use anchored, directory-aware path patterns", () => {
 		{ when: "改 A 或 B 之前", globs: ["a/**", "b/c.ts"], topic: false },
 	);
 	assert.equal(parseRuleHeader("# T\n\n> **读取时机**：x\n> **适用路径**：按主题\n").topic, true);
+	// Table cells escape backslashes before pipes, so a literal "\\|" in a doc cannot end a cell early.
+	const row = renderIndex([
+		{ file: "docs/dev-rules/x.md", title: "a\\b|c", when: "w", declared: true, topic: true, globs: [] },
+	])
+		.split("\n")
+		.find((line) => line.startsWith("| ["));
+	assert.equal(row, "| [a\\\\b\\|c](x.md) | w | 主题 |");
 });
 
 // 根 AGENTS.md 每个任务完整加载；上限只减不调高，超出时把内容移进专题（development-workflow §5）。
