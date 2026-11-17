@@ -551,8 +551,8 @@ Desktop 收到 `powerMonitor` 的 `suspend` 即调用 `suspendConnectionsForSyst
 ### 唤醒后远程设备列表的恢复（Desktop，2026-11-17）
 
 现场：MacBook 合盖睡眠一夜，唤醒后 Mac Studio 的请求 1–3 秒成功、手机正常，界面却 40 多分钟显示
-「远程设备已离线」，打开任务只有缓存，协同面板「找不到这条任务」。走兼容连接的同账号设备，其在线
-状态不经主连接上报(`routedClient.ts`)，界面判定它可控主要靠一次设备目录读取；唤醒时这次读取失败，
+「远程设备已离线」，打开任务只有缓存，协同面板「找不到这条任务」。当时走兼容连接的同账号设备，其在线
+状态不会交给 host(见下文「在线状态的来源」)，界面判定它可控主要靠一次设备目录读取；唤醒时这次读取失败，
 main 退回有界的过期快照，数据通道还没就绪的设备在快照里是 `online:false`，界面据此把它移出合格集，
 而所有恢复途径都只看合格集、设备一直在线不会再来上线通知，周期对账又受「5 分钟内有键鼠操作」限制。
 
@@ -572,6 +572,14 @@ main 退回有界的过期快照，数据通道还没就绪的设备在快照里
 该设备首拉)，不重连中转、不碰其它设备；③ `deviceLinkRemoteRecovery.test.tsx`「wake-from-sleep
 recovery」覆盖过期目录、离线报告后的目录补读、无用户操作的首拉补齐，并断言健康设备请求数不变。
 不改 wire 协议与中转行为，自建中转无需同步修改。
+
+在线状态的来源(`RoutedDeviceLinkClient.onPresenceChanged`)：同账号设备的 presence 只取承载它的那条
+连接——走兼容连接的设备用兼容连接上的 presence，主连接对它的看法(如新协议连接重建时对尚未建立通道的
+设备报的离线)不作数，反之亦然；共享任务 / 供应商分享等范围化 peer 仍只看主连接，兼容连接未运行时
+行为不变。此前兼容连接上的真实 presence 被整体丢弃，host 对这类设备只能靠目录读取判断在线，这正是
+上面目录读取一失败就卡住的前提。Desktop 与 Mobile 共用该入口；每条连接内部的离线闸门本来就按各自
+presence 运作，这里只修正交给 host 的那份。回归：`routedClient.test.ts`「reports each peer's presence
+from the connection that carries it」；`device-link-relay` interop 通过，中转无需改动。
 
 ## 远程 Agent 的拉取与恢复(`maker:remote-agent:v1`)
 
