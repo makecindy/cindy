@@ -155,6 +155,7 @@ export function registerControlSessionTool(registry: XdtHelperToolRegistry, deps
   registry.register({
     name: 'control_session', category: 'control',
     description: '控制本机指定任务：pause 暂停后续输入和待答交互的执行，不中止已在运行的模型或工具；' +
+      '暂停不冻结 IM 渠道已发出提问的原有超时，到期按原逻辑取消。' +
       'resume 解除执行暂停并恢复原队列；retry 复用原错误重试；compact 复用引擎原生手动压缩。' +
       '送达未知的消息不会自动重放；显式 resume/retry 沿用用户继续／重试入口，调用前须核实投递状态。' +
       '原生能力不支持时明确报错。Agent 与声明 control 的插件共用原生产事务。',

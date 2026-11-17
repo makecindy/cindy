@@ -52,6 +52,7 @@ const result = await cindy.host.call('cindy_helper', 'control_session', {
 
 - `pause`：使用原执行暂停锁，阻止后续输入和待答交互继续执行；不终止已经在跑的模型或工具。
   与只暂停自动化、请求优雅停止不同。任务空队列时也生效，后来入队的消息仍保留。
+  暂停不冻结 IM 渠道已发出提问的原有超时，到期按原逻辑取消。
 - `resume`：解除该执行暂停，发布暂停期间暂存的交互回答并恢复原队列；不是新发一条“继续”消息。
 - `retry`：调用原错误恢复事务，按已有失败阶段重试；不会凭正文创建第二份消息，也不会解除执行暂停锁。
 - `compact`：Claude Code 复用原 `/compact` 队列，不接受 `instructions`；Codex/Pi 复用原生手动压缩，
