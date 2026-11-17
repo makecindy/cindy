@@ -272,9 +272,9 @@ describe('new model generation defaults', () => {
   });
 
   it('reuses serializer mappings without copying the predecessor identity, prices, endpoint or headers', () => {
-    const source = providerModelRecord('gpt-6.1-sol', 'https://api.openai.com/v1', 'openai-responses')!;
+    const source = providerModelRecord('gpt-6.2-sol', 'https://api.openai.com/v1', 'openai-responses')!;
     const inherited = providerModelGenerationRecord('gpt-9-sol', 'https://relay.example/v1', 'openai-responses')!;
-    expect(inherited).toMatchObject({ id: 'gpt-9-sol', name: 'gpt-9-sol', upstream: 'https://relay.example/v1', inheritedFrom: 'gpt-6.1-sol' });
+    expect(inherited).toMatchObject({ id: 'gpt-9-sol', name: 'gpt-9-sol', upstream: 'https://relay.example/v1', inheritedFrom: 'gpt-6.2-sol' });
     expect(inherited.execution.pi.thinkingLevelMap).toEqual(source.execution.pi.thinkingLevelMap);
     expect(inherited.execution.pi.compat).toEqual(source.execution.pi.compat);
     expect(inherited.cost).toBeUndefined();

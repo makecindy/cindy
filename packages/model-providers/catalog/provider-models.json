@@ -31609,6 +31609,70 @@
         }
       },
       {
+        "id": "gpt-6.2-sol",
+        "name": "GPT-6.2 Sol",
+        "upstream": "https://api.openai.com/v1",
+        "contextWindow": 272000,
+        "maxOutput": 128000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "cost": {
+          "input": 2,
+          "output": 10,
+          "cacheRead": 0.1,
+          "cacheWrite": 2.5,
+          "tiers": [
+            {
+              "inputTokensAbove": 272000,
+              "input": 4,
+              "output": 15,
+              "cacheRead": 0.2,
+              "cacheWrite": 5
+            }
+          ]
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-responses",
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": "xhigh",
+              "max": "max"
+            },
+            "compat": {
+              "supportsStrictMode": true,
+              "supportsOpenAIGrammarTools": true,
+              "supportsAdditionalTools": true,
+              "supportsToolSearch": true,
+              "supportsMidConvoSystemMessages": true,
+              "supportsExplicitPromptCacheMode": true,
+              "supportsMidConvoEffort": true
+            }
+          }
+        }
+      },
+      {
         "id": "gpt-daybreak-blue-latest",
         "name": "Daybreak Blue",
         "upstream": "https://api.openai.com/v1",
@@ -75984,6 +76048,14 @@
       ],
       "checkedAt": "2026-11-13",
       "scope": "Copilot Chat transport only; shared Argon IDE headers and compatibility. No capacity, pricing or input capability claims."
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+      "modelIds": [
+        "gpt-6.2-sol"
+      ],
+      "checkedAt": "2026-11-18",
+      "scope": "Official OpenAI API endpoint only, added ahead of the Pi public catalog. Same Responses parameters and 272K working window as the GPT-6.1 Sol record; prices from the official model page. Upstream Pi metadata replaces this row once published."
     }
   ]
 }
