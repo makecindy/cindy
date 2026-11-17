@@ -10834,7 +10834,12 @@
       "summary": "自己紹介",
       "summaryPlaceholder": "例：連載小説を書くのが大好きな小説家。少しユーモアがあり、登場人物の心の動きを考えるのが好き。",
       "avatarSelectionFailed": "画像を読み込めませんでした。5 MB 以下の PNG、JPEG、WebP 画像を選んでください。",
-      "personality": "性格と話し方"
+      "personality": "性格と話し方",
+      "sourceLength": "{{length}} / {{limit}} UTF-16 コード単位（前後の空白を除く）。",
+      "sourceExcess": "上限を {{excess}} 単位超えています。保存するには文章を短くしてください。",
+      "sourceTooLong": "文章が長すぎるため保存できません。編集して続けてください。",
+      "sourceRecovery": "保存済みの原文は変更されていません。下書きは全文このページに残っています。短くしたり変更を破棄したりする前に、安全な場所にコピーしてください。",
+      "sourceCopy": "全文をコピー"
     },
     "nameLabel": "呼び名",
     "close": "閉じる",

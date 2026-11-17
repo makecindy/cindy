@@ -10963,7 +10963,12 @@
       "summary": "Presentación personal",
       "summaryPlaceholder": "Por ejemplo: un novelista al que le encanta la ficción por entregas, tiene un humor seco y siente fascinación por lo que motiva a los personajes.",
       "avatarSelectionFailed": "No se pudo leer la imagen. Elige una imagen PNG, JPEG o WebP de hasta 5 MB.",
-      "personality": "Personalidad y conversación"
+      "personality": "Personalidad y conversación",
+      "sourceLength": "{{length}} / {{limit}} unidades UTF-16 (sin espacios iniciales ni finales).",
+      "sourceExcess": "Supera el límite en {{excess}} unidades. Acorta el texto para guardarlo.",
+      "sourceTooLong": "El texto es demasiado largo para guardarlo. Edítalo para continuar.",
+      "sourceRecovery": "El original guardado no ha cambiado. El borrador completo permanece en esta página. Cópialo en un lugar seguro antes de acortarlo o descartar los cambios.",
+      "sourceCopy": "Copiar texto completo"
     },
     "nameLabel": "¿Cómo deberíamos llamarlo?",
     "close": "Cerrar",

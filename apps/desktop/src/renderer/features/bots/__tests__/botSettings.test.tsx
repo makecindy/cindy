@@ -284,6 +284,50 @@ afterEach(() => {
   cleanup();
 });
 
+// #10985 unit: real settings input/leave guard. Existing transient-error cases
+// did not cover imported oversized originals, equal-length edits, full copy,
+// cancel/discard, or zero invalid host requests. Minimal input: 12001 units.
+it('retains a long original and draft, offers full copy, and resumes saving after correction', async () => {
+  const original = 'x'.repeat(12001);
+  const writeText = vi.fn(async () => undefined);
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+  const view = renderSettings({ identitySource: original });
+  fireEvent.click(screen.getByRole('button', { name: 'bots.profile.personality' }));
+  const input = screen.getByRole('textbox', { name: 'bots.profile.personality' });
+  expect(input).toHaveProperty('value', original);
+  expect(screen.getByText('bots.profile.sourceLength:{"length":12001,"limit":12000}')).toBeTruthy();
+  expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+  const edited = 'y' + original.slice(1);
+  fireEvent.change(input, { target: { value: edited } });
+  await act(async () => { fireEvent.blur(input); });
+  expect(screen.queryByRole('button', { name: 'bots.autosave.retry' })).toBeNull();
+  expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'bots.profile.sourceCopy' })); });
+  expect(writeText).toHaveBeenCalledWith(edited);
+  fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'bots.memory.continueEditing' }));
+  expect(input).toHaveProperty('value', edited);
+  fireEvent.change(input, { target: { value: edited.slice(0, 12000) } });
+  await act(async () => { fireEvent.blur(input); });
+  expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+  expect(mocks.updateBotProfile).toHaveBeenCalledWith('bot-1', { identitySource: edited.slice(0, 12000) });
+  view.unmount();
+});
+
+it('only discards an oversized edit on explicit confirmation and never resubmits on unmount', async () => {
+  const original = 'x'.repeat(12001);
+  const view = renderSettings({ identitySource: original });
+  fireEvent.click(screen.getByRole('button', { name: 'bots.profile.personality' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'bots.profile.personality' }), { target: { value: 'y' + original.slice(1) } });
+  fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'bots.memory.discard' }));
+  await screen.findByRole('button', { name: 'bots.profile.personality' });
+  fireEvent.click(screen.getByRole('button', { name: 'bots.profile.personality' }));
+  expect(screen.getByRole('textbox', { name: 'bots.profile.personality' })).toHaveProperty('value', original);
+  view.unmount();
+  expect(mocks.updateBotProfile).not.toHaveBeenCalled();
+});
+
 describe('Bot entry after deletion', () => {
   it('opens an ordinary teammate when Cindy is absent without flashing creation', () => {
     mocks.profiles = [bot()];
@@ -697,6 +741,7 @@ describe('Bot settings profile consolidation', () => {
 
     render(
       <BotSettings bot={bot()} initialPage="channels" onBack={vi.fn()} onOpenSession={vi.fn()} />,
+      { wrapper: ConfirmDialogProvider },
     );
     expect(screen.getByTestId('bot-channels-page')).toBeTruthy();
   });
@@ -704,7 +749,7 @@ describe('Bot settings profile consolidation', () => {
   it('keeps the current inner page and its draft when saving before navigation fails', async () => {
     mocks.updateBotProfile.mockRejectedValue(new Error('offline'));
     const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
-    render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />);
+    render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />, { wrapper: ConfirmDialogProvider });
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'Keep this draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
@@ -1331,13 +1376,13 @@ describe('same-Bot capability updates while editing settings', () => {
 
 it('opens voice settings from the companion settings list and supports the dedicated entry page', async () => {
   const companion = { ...bot(), canonicalSessionId: 'canonical-voice' };
-  const view = render(<BotSettings bot={companion} onBack={vi.fn()} onOpenSession={vi.fn()} />);
+  const view = render(<BotSettings bot={companion} onBack={vi.fn()} onOpenSession={vi.fn()} />, { wrapper: ConfirmDialogProvider });
   fireEvent.click(screen.getByRole('button', { name: 'bots.voiceMode.settingsTitle' }));
   expect(screen.getByTestId('companion-voice-settings').textContent).toBe(`${companion.id}:canonical-voice`);
   fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
   await waitFor(() => expect(screen.queryByTestId('companion-voice-settings')).toBeNull());
   expect(screen.getByRole('button', { name: 'bots.voiceMode.settingsTitle' })).toBe(document.activeElement);
   view.unmount();
-  render(<BotSettings bot={companion} initialPage="voice" onBack={vi.fn()} onOpenSession={vi.fn()} />);
+  render(<BotSettings bot={companion} initialPage="voice" onBack={vi.fn()} onOpenSession={vi.fn()} />, { wrapper: ConfirmDialogProvider });
   expect(screen.getByTestId('companion-voice-settings')).toBeTruthy();
 });

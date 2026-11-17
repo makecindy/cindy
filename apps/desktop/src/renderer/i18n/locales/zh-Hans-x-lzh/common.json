@@ -10834,7 +10834,12 @@
       "summary": "自述",
       "summaryPlaceholder": "如：一嗜作小说之文士，略带诙谐，好揣摩人物之微心。",
       "avatarSelectionFailed": "不能读头像，请择 5 MB 以内之 PNG、JPEG 或 WebP 图",
-      "personality": "性情与言谈之习"
+      "personality": "性情与言谈之习",
+      "sourceLength": "{{length}} / {{limit}} 个 UTF-16 单元（首尾空白不计）。",
+      "sourceExcess": "逾限 {{excess}} 个单元，删简后方可存。",
+      "sourceTooLong": "此文过长，修之方可存。",
+      "sourceRecovery": "已保存的原文不变，完整草稿仍保留在此页。请先复制到安全的地方备份，再缩短内容或放弃本次更改。",
+      "sourceCopy": "录全文"
     },
     "nameLabel": "何以称之",
     "close": "阖",

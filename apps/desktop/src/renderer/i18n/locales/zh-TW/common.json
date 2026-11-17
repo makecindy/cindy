@@ -10834,7 +10834,12 @@
       "summary": "自我介紹",
       "summaryPlaceholder": "例如：一位熱愛寫小說的作家，有點幽默，喜歡琢磨人物的小心思。",
       "avatarSelectionFailed": "無法讀取頭像，請選擇 5 MB 以內的 PNG、JPEG 或 WebP 圖片",
-      "personality": "個性與說話習慣"
+      "personality": "個性與說話習慣",
+      "sourceLength": "{{length}} / {{limit}} 個 UTF-16 單元（不計首尾空白）。",
+      "sourceExcess": "超出 {{excess}} 個單元，縮短後才能儲存。",
+      "sourceTooLong": "資料過長，修改後才能儲存。",
+      "sourceRecovery": "已儲存的原文不變，完整草稿仍保留在此頁。請先複製到安全的地方備份，再縮短內容或放棄本次變更。",
+      "sourceCopy": "複製完整內容"
     },
     "nameLabel": "怎麼稱呼",
     "close": "關閉",

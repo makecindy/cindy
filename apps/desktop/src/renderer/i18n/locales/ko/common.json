@@ -10834,7 +10834,12 @@
       "summary": "자기소개",
       "summaryPlaceholder": "예: 웹소설 쓰기를 사랑하는 소설가. 유머가 있고 등장인물의 속마음을 상상하는 것을 좋아해요.",
       "avatarSelectionFailed": "이미지를 읽지 못했어요. 5 MB 이하의 PNG, JPEG, WebP 이미지를 선택해 주세요.",
-      "personality": "성격과 대화 방식"
+      "personality": "성격과 대화 방식",
+      "sourceLength": "{{length}} / {{limit}} UTF-16 코드 단위(앞뒤 공백 제외).",
+      "sourceExcess": "한도를 {{excess}}단위 초과했습니다. 내용을 줄여야 저장할 수 있습니다.",
+      "sourceTooLong": "내용이 너무 길어 저장할 수 없습니다. 수정 후 계속하세요.",
+      "sourceRecovery": "저장된 원문은 변경되지 않았습니다. 초안 전체는 이 페이지에 남아 있습니다. 내용을 줄이거나 변경 사항을 버리기 전에 안전한 곳에 복사하세요.",
+      "sourceCopy": "전체 내용 복사"
     },
     "nameLabel": "어떻게 부를까요?",
     "close": "닫기",
