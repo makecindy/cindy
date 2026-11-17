@@ -167,6 +167,8 @@ const desktopGuardInclude = [
   // Build fuses and Node worker entrypoints are a cross-file packaging contract.
   'src/main/cindy-brain/__tests__/nodeRuntimePackaging.test.ts',
   'src/renderer/components/settings/__tests__/settingsSearchCatalog.guard.test.ts',
+  // User copy rule (2026-11-18): the Cindy background service is never called "Host" in any locale.
+  'src/renderer/i18n/__tests__/hostWordInCopy.guard.test.ts',
   // Cross-file host/engine prompt ownership and remote-authorization isolation.
   'src/main/plugin-oauth/__tests__/runtimePrompt.test.ts',
   // Cross-hook voice stop/refine ownership and composer hydration race wiring.
