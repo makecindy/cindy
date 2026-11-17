@@ -192,7 +192,7 @@ describe('maker:event hot path ordering', () => {
   // silentStopTurnEnd.ts, guarded in hostDesktopSourceContracts.guard.test.ts.
 
   it('uses the assistant API message id as Vertex output-lag evidence', () => {
-    const wireSessionSource = readEventModule('sessionClaudeTurnUsage');
+    const wireSessionSource = readEventModule('sessionClaudeTurnUsageCore');
 
     expect(wireSessionSource).toContain('assistant_message_id?: unknown;');
     expect(wireSessionSource).toContain("typeof doneData?.assistant_message_id === 'string'");
@@ -936,7 +936,7 @@ describe('maker:event hot path ordering', () => {
   // sessionEventPipeline.test.ts, including remote isolation and deferred pricing.
 
   it('claude-code 费用按完整请求段定价，累计 cost 首帧只建基线', () => {
-    const wireSessionSource = readEventModule('sessionClaudeTurnUsage');
+    const wireSessionSource = readEventModule('sessionClaudeTurnUsageCore');
     const claudeDoneIndex = wireSessionSource.indexOf(
       "event.type === 'done' && event.source === 'claude-code'",
     );
@@ -999,7 +999,7 @@ describe('maker:event hot path ordering', () => {
   });
 
   it('pi subscription turns estimate value from the shared reference-price helper', () => {
-    const wireSessionSource = readEventModule('sessionPiTurnUsage');
+    const wireSessionSource = readEventModule('sessionPiTurnUsageCore');
     const piDoneIndex = wireSessionSource.indexOf("if ((event.type === 'done' || (identified && isTerminalAgentErrorEvent(event))) && event.source === 'pi')");
     expect(piDoneIndex).toBeGreaterThanOrEqual(0);
     const piDoneSource = wireSessionSource.slice(piDoneIndex);
