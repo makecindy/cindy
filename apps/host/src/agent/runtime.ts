@@ -434,7 +434,17 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
           const local = native ?? await readCodexLocalAuthState(codexHome);
           return { authenticated: false, errorReason: (local.authenticated ? undefined : local.errorReason) ?? sharedLinkReason ?? 'no_oauth' };
         }
-        return { authenticated: false, errorReason: native?.errorReason ?? 'oauth_not_bound' };
+        return { authenticated: false, errorReason: native?.errorReason ?? sharedLinkReason ?? 'oauth_not_bound' };
+      }
+      // As the desktop's default readState (auth-adapters.ts:1589-1590): with neither a gateway
+      // credential nor an OAuth login, say the signed-in system login is unreachable instead of
+      // "no gateway key" — the generic reason sends users to enter a key they never had. A valid
+      // gateway credential keeps winning, exactly as readClaudeApiKey() does on the desktop, so
+      // only the unauthenticated fallback changes. `getState()` with no arguments is the entry
+      // BaseAgent.getAuthState() uses, so this is the branch that decides what a failing implicit
+      // session reports (codex-code-review P1).
+      if (!gatewayState.authenticated && sharedLinkReason) {
+        return { ...local, authenticated: false, errorReason: sharedLinkReason };
       }
       return gatewayState;
     },
