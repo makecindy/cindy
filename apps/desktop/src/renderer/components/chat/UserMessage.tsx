@@ -1473,6 +1473,7 @@ export function UserMessage({
                     <MarkdownRenderer
                       content={displayContent}
                       workingDir={workingDir}
+                      currentSessionId={sessionId}
                       allowPrivilegedLinks={allowPrivilegedLinks}
                     />
                   </div>
