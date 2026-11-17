@@ -66,3 +66,24 @@ it('keeps privileged browser settings out of the web adapter', async () => {
   await handlers['auth.logout']();
   expect(requests).toEqual(['/api/auth/logout']);
 });
+
+// #10644: exercise the exported client adapter, preserving preload's three
+// create arguments and structured discovery failure. Existing contracts omitted
+// both routes. Tier: unit; no credentials or network.
+it('forwards custom provider creation and discovery without changing their results', async () => {
+  const calls: unknown[] = [];
+  const handlers = createHostChannelHandlers(async (...args) => {
+    calls.push(args);
+    return args[0].endsWith('/create') ? { ok: true } : { ok: false, code: 'AUTH' };
+  });
+  const config = { id: 'fixture' };
+  const keys = { pi: 'synthetic-key' };
+  const options = { source: 'manual-settings' };
+  const input = { agent: 'pi', baseUrl: 'https://fixture.example.test/v1' };
+  expect(await handlers['maker.createCustomProvider']([config, keys, options])).toEqual({ ok: true });
+  expect(await handlers['maker.fetchProviderModels']([input])).toEqual({ ok: false, code: 'AUTH' });
+  expect(calls).toEqual([
+    ['/api/providers/custom/create', { config, keys, options }, 'POST'],
+    ['/api/providers/models-fetch', { input }, 'POST'],
+  ]);
+});

@@ -122,7 +122,9 @@ test('active task queries retain their options object', async () => {
 
 // Event delivery is part of the same preload contract as IPC. Retractions,
 // persisted errors and subagent changes must update a connected browser too.
-test('history events reach the browser preload subscribers exactly once', async () => {
+// PR #11050: a single provider push from another tab's create previously never
+// reached onProvidersChanged. The wizard RPC tests miss this SSE path (unit).
+test('history and provider events reach the browser preload subscribers exactly once', async () => {
   const frames = [
     { seq: 1, type: 'message_deleted', sessionId: 'task', clientId: 'draft', clientIds: ['draft'] },
     { seq: 2, type: 'error_persisted', sessionId: 'task', persistId: 'err' },
@@ -130,13 +132,16 @@ test('history events reach the browser preload subscribers exactly once', async 
     { seq: 4, type: 'task_tags_changed', payload: { tags: [{ id: 'tag', name: 'Review', color: 'blue' }] }, ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 } },
     { seq: 5, type: 'input_receipt', sessionId: 'task', inputClientId: 'stopped', clientId: 'stopped', status: 'interrupted' },
     { seq: 6, type: 'text', sessionId: 'task', inputClientId: 'next', data: { text: 'next reply' } },
+    { seq: 7, type: 'plugin_push', channel: 'maker:provider:changed' },
   ];
   const b = browser(() => ({}), source, () => new Response(new ReadableStream({ start(controller) {
     controller.enqueue(new TextEncoder().encode(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('')));
   } })));
   const received = [];
   const agentEvents = [];
+  const providerChanges = [];
   b.api.maker.onEvent(event => agentEvents.push(event));
+  b.api.maker.onProvidersChanged((...args) => providerChanges.push(args));
   b.api.localDb.messages.onDeleted(event => received.push(event));
   b.api.localDb.messages.onErrorPersisted(event => received.push(event));
   b.api.localDb.subagentRuns.onChanged(event => received.push(event));
@@ -151,6 +156,7 @@ test('history events reach the browser preload subscribers exactly once', async 
   assert.equal(agentEvents.length, 1);
   assert.equal(agentEvents[0].event.type, 'text');
   assert.equal(agentEvents[0].event.data.text, 'next reply');
+  assert.deepEqual(providerChanges, [[undefined]]);
   b.close();
 });
 
@@ -467,4 +473,24 @@ test('typed Host errors reach the renderer as [CODE] message; other failures as 
     const text = typeof body === 'string' ? body : JSON.stringify(body);
     await assert.rejects(b.api.localDb.sessions.list(), { code: `HTTP_${status}`, message: text });
   }
+});
+
+// #10644: the wizard previously rejected create and silently returned null for
+// discovery. Public shim methods must preserve all preload arguments/results.
+// Tier: unit; existing auth aliases do not exercise these provider operations.
+test('the web provider wizard forwards create and discovery through the shared contract', async () => {
+  const b = browser(url => url.endsWith('/create') ? { ok: true } : { ok: true, models: [{ id: 'fixture-model' }] });
+  const config = { id: 'fixture', runtimes: { pi: { baseUrl: 'https://fixture.example.test/v1' } } };
+  const keys = { pi: 'synthetic-key' };
+  const options = { source: 'manual-settings' };
+  const input = { agent: 'pi', baseUrl: 'https://fixture.example.test/v1', authMethod: 'apiKey', apiKey: 'synthetic-key' };
+  assert.equal((await b.api.maker.createCustomProvider(config, keys, options)).ok, true);
+  assert.equal((await b.api.maker.fetchProviderModels(input)).models[0].id, 'fixture-model');
+  assert.deepEqual(b.calls.map(({ url, body }) => ({ url, body })), [
+    { url: '/api/providers/custom/create', body: { config, keys, options } },
+    { url: '/api/providers/models-fetch', body: { input } },
+  ]);
+  assert.ok(b.calls.every(call => call.credentials === 'same-origin'));
+  for (const method of ['updateCustomProvider', 'deleteCustomProvider', 'disconnectCustomProvider'])
+    await assert.rejects(b.api.maker[method]('fixture'), /HOST_CHANNEL_UNSUPPORTED/);
 });
