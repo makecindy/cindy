@@ -5758,6 +5758,39 @@ test('turn seal: the Host seals the last reply of a turn as the desktop does', {
   }
 });
 
+// The same seal at the boundaries that do not end the Host's turn (release table 甲 9): the desktop's
+// terminal stage runs on every done and terminal error, so a continuation boundary of the foreground turn
+// and a background turn's terminal each write their reply and seal it. Gap: the Host sealed only at its
+// turn end, so the segment before a continuation kept no seal (and was written with the next one only
+// when that one began). Minimal failing input: reply, continuation done, reply, done.
+test('turn seal: continuation boundaries and background turns are sealed as the desktop seals them', { timeout: 30_000 }, async t => {
+  const db = await recoveryDatabase(t);
+  const { h } = assembledRuntime(t, db);
+  await db.createTask('seal-continued');
+  await h.queue.enqueue('seal-continued', { clientId: 'seal-continued-input', text: 'work' });
+  await waitFor(() => h.maker.sessions.get('seal-continued')?.sent.length === 1);
+  const session = h.maker.sessions.get('seal-continued');
+  const stamp = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId };
+  const replies = () => db.db.prepare("SELECT content, agent_meta FROM messages WHERE session_id = ? AND role = 'assistant' ORDER BY rowid")
+    .all('seal-continued').map(row => ({ text: row.content, turnCompleted: JSON.parse(row.agent_meta ?? '{}').turnCompleted }));
+  session.emit({ type: 'text', data: { text: 'first segment' }, ...stamp });
+  session.emit({ type: 'done', data: {}, turnContinuationId: 0, ...stamp });
+  // The boundary writes and seals the first segment now, before the next one starts.
+  await waitFor(() => replies().length === 1 && replies()[0].turnCompleted === true);
+  session.emit({ type: 'text', data: { text: 'second segment' }, ...stamp });
+  session.emit({ type: 'done', data: {}, ...stamp });
+  await waitFor(() => !h.queue.projection('seal-continued').turnInProgress);
+  // A background turn after the foreground one ended goes through the same terminal stage.
+  session.emit({ type: 'text', data: { text: 'background reply' }, turnScope: 'background' });
+  session.emit({ type: 'done', data: {}, turnScope: 'background' });
+  await waitFor(() => replies().length === 3 && replies()[2].turnCompleted !== undefined);
+  assert.deepEqual(replies(), [
+    { text: 'first segment', turnCompleted: true },
+    { text: 'second segment', turnCompleted: true },
+    { text: 'background reply', turnCompleted: true },
+  ]);
+});
+
 /*
  * List preview after a done (release table 甲 13, the preview half).
  * - Production entry and observable result: the Host executor's turn end over a real profile database; the
