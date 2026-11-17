@@ -14686,7 +14686,10 @@ assertRouteCurrent();
           } else {
             restoreUpstreamIdle(upstreamIdleRemainingAtStop);
           }
-          if (reconnectRemainingAtStop !== null) {
+          // A reconnect notification during the Stop handshake may already
+          // have armed a newer episode (including a status-less one). Restore
+          // the old diagnosis only together with its actually restored timer.
+          if (reconnectRemainingAtStop !== null && !reconnectStallTimer && reconnectStallRemainingMs <= 0) {
             restoreReconnectStall(
               turnId,
               reconnectGenerationAtStop,

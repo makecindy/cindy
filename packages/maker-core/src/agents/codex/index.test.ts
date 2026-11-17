@@ -33484,6 +33484,38 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  // #11032 review: a failed Stop must not roll a newer native diagnosis back.
+  it.each([
+    { before: undefined, during: 502, expected: 502 },
+    { before: 502, during: 503, expected: 503 },
+    { before: 502, during: undefined, expected: undefined },
+    { before: 502, during: null, expected: 502 },
+  ])('preserves current reconnect facts when Stop fails: %j', async scenario => {
+    vi.useFakeTimers();
+    try {
+      const ack = deferred<unknown>();
+      const { host, handle, handlers, seen } = await startReconnectTurn(new CodexAgent(createDeps()), 'stop-diagnostics', ack.promise);
+      const reconnect = (status?: number) => handlers.error?.({
+        threadId: 'start-thread-id', turnId: 'turn-1', willRetry: true,
+        error: { message: 'Reconnecting... 1/5',
+          ...(status === undefined ? {} : { codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: status } } }),
+        },
+      } as never);
+      reconnect(scenario.before);
+      const stopping = expect(handle.requestGracefulStop?.()).rejects.toThrow('interrupt rejected');
+      // null means no new notification; undefined is a fresh status-less episode.
+      if (scenario.during !== null) reconnect(scenario.during);
+      ack.reject(new Error('interrupt rejected'));
+      await stopping;
+      host.request.mockImplementation(async method => method === Method.TurnInterrupt ? {} : undefined);
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      const terminal = seen.find(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'codex_reconnect_stalled');
+      expect(terminal).toBeDefined();
+      expect((terminal!.data as { errorStatus?: number }).errorStatus).toBe(scenario.expected);
+      await handle.close();
+    } finally { vi.useRealTimers(); }
+  });
+
   // #7055: after WebSocket retries Codex uploads the full history over HTTPS and emits
   // nothing until the upload ends; on a slow link that exceeds the reconnect deadline.
   it('HTTPS 回退开始后不再按重连 deadline 中断正在上传的请求', async () => {
