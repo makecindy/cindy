@@ -6918,6 +6918,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       // 直接按捕获的发送快照合并回 A 的草稿库，并保留 A 期间新输入的后续文字。
       restoreRecoverableItemsToDraft(sessionId, [capturedDraftRecoveryItem()]);
     };
+    // 消息被接收后收起输入框与软键盘(与下拉收起同口径),把屏幕让给对话。
+    // 只在输入框已因本次发送清空时调用:等待期间用户又打了字就不打断输入;
+    // 发送失败不收起,附件托盘与恢复的草稿留在原处供重试。
+    const collapseComposerAfterSend = () => {
+      setComposerVoiceHoldArmed(false);
+      composerInputRef.current?.blur();
+    };
     if (!independent && text && !useDurableOutbox
       && composerDocumentsEqual(composerDocumentRef.current, documentBeforeSend)) {
       applyComposerDocument(documentAfterOptimisticClear);
@@ -7032,6 +7039,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           }
           if (!independent && composerDocumentsEqual(composerDocumentRef.current, documentBeforeSend)) {
             applyComposerDocument(documentAfterOptimisticClear);
+            collapseComposerAfterSend();
           }
           rememberSentAttachmentPreviews(record.item.clientId, readyAttachments, (attachment) => {
             const slot = item.attachmentSlots.findIndex((a) => a?.id === attachment.id);
@@ -7455,6 +7463,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       // 取消归档属于任务本身,不属于页面:电脑已接收就要做,即使用户已离开这个页面。
       if (enqueueAccepted) void unarchiveSessionAfterSend(sessionId, deviceId, invoke);
       if (!sendScopeStillAlive()) return messageAccepted;
+      if (enqueueAccepted && !independent
+        && composerDocumentsEqual(composerDocumentRef.current, documentAfterOptimisticClear)) {
+        collapseComposerAfterSend();
+      }
       if (sessionAtSend.permissionMode === 'plan') {
         // 一次性语义(对齐桌面 PR#494 / 产品决策):计划模式只对本条消息生效,发送后
         // 自动恢复进入前的权限档;本条消息通常已按 plan 派发,切换只影响后续消息。
