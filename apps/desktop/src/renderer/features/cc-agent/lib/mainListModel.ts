@@ -27,6 +27,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { withProjectSessions } from './projectGrouping';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
+import { sessionRowKey } from '../sidebar/sessionRowKey';
 import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
 import {
   MACHINE_ALL,
@@ -374,7 +375,8 @@ export function partitionAutomationSessions({
   const regular = (sessions: readonly Session[]) =>
     sessions.filter((session) => {
       if (!getAutomationSidebarGroupInfo(session, scheduleSessionIndex)) return true;
-      automations.set(session.id, session);
+      // 不同电脑上可能有同 id 的任务(恢复 / 复制的数据库),按设备 + id 区分,与 sessionRowKey 同口径。
+      automations.set(sessionRowKey(session), session);
       return false;
     });
   const regularProjects = projects.flatMap((project) => {

@@ -544,6 +544,17 @@ describe('buildMainListEntries — 混排(recency)', () => {
 });
 
 describe('automations sidebar group', () => {
+  it('keeps same-id automation runs from different computers', () => {
+    const local = session({ id: 'run', title: 'local', source: 'scheduler', updatedAt: '2026-11-16T00:00:00Z' });
+    const remote = session({ id: 'run', title: 'remote', source: 'scheduler', deviceLinkDeviceId: 'mac-2', updatedAt: '2026-11-15T00:00:00Z' });
+    const entries = buildMainListEntries({
+      projects: [], dialogues: [local, remote], groupBy: 'project', groupDialogue: true,
+      groupAutomation: true, sortBy: 'recency', manualProjectOrder: [],
+    });
+    const group = entries.find((entry) => entry.kind === 'automations-group');
+    expect(group && getMainListEntrySessions(group).map((item) => item.title)).toEqual(['local', 'remote']);
+  });
+
   it('keeps chat-group bulk actions off tasks moved into the automations group', () => {
     const digest = session({ title: 'digest', source: 'scheduler', pinnedAt: '2026-11-14T00:00:00Z', updatedAt: '2026-11-14T00:00:00Z' });
     const chat = session({ title: 'chat', pinnedAt: '2026-11-13T00:00:00Z', updatedAt: '2026-11-13T00:00:00Z' });
