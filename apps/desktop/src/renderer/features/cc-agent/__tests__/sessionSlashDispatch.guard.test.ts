@@ -40,7 +40,8 @@ function harness(agentKind = 'pi', remoteDeviceId?: string) {
   const create = vi.fn((..._args: any[]) => preparation);
   const send = vi.fn(async (..._args: any[]) => false);
   const session = { id: 'cold', agentKind, model: 'saved-model', effort: 'high', permissionMode: 'ask',
-    workingDir: '/project', status: 'active', source: 'user', orcaRole: null };
+    workingDir: '/project', status: 'active', source: 'user', orcaRole: null,
+    extraDirs: ['/reference'], writableDirs: ['/output'] };
   const environment: Record<string, any> = {
     ...slash, session, sessionId: session.id, remoteDeviceId,
     dbToMakerAgentKind: (kind: string) => kind,
@@ -85,7 +86,10 @@ it.each(['queue', 'steer'])('waits beyond the retry budget before sending a cold
   await submission;
   expect(h.send.mock.calls[0][0]).toBe('/skill:demo hello');
   expect(h.send.mock.calls[0][7].pastedTextRanges).toEqual([{ start: 12, end: 17 }]);
-  expect(h.create.mock.calls[0][0]).toMatchObject({ id: 'cold', model: 'chosen-model', workingDir: '/project' });
+  expect(h.create.mock.calls[0][0]).toMatchObject({
+    id: 'cold', model: 'chosen-model', workingDir: '/project',
+    extraDirs: ['/reference'], writableDirs: ['/output'],
+  });
 });
 
 it('prepares on the controlled device for callers without a custom preparation callback', async () => {

@@ -3669,6 +3669,8 @@ function CCAgentSessionContent({
       ),
       agentKind: 'pi' as const,
       workingDir,
+      extraDirs: session?.extraDirs ?? [],
+      writableDirs: session?.writableDirs ?? [],
       orcaRole: session?.orcaRole ?? null,
     };
     if (remoteDeviceId) {
@@ -3677,7 +3679,8 @@ function CCAgentSessionContent({
       await window.electronAPI.maker.createSession(createOpts);
     }
   }, [sessionId, session?.workingDir, session?.model, session?.effort,
-    session?.permissionMode, session?.agentKind, session?.orcaRole, remoteDeviceId]);
+    session?.permissionMode, session?.agentKind, session?.extraDirs, session?.writableDirs,
+    session?.orcaRole, remoteDeviceId]);
 
   const maybeDispatchDesktopSlashCommand = useCallback(
     async (
