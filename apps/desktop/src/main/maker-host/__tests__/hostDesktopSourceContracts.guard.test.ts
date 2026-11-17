@@ -60,6 +60,40 @@ describe('Host main.ts wiring', () => {
     assert.equal(registration.includes('platformTools.providers'), false);
   });
 
+  // 规则：放行表第五节“甲：账号边界停止提前置位”。退出登录、会话失效、有序关闭都经 runOwnerBoundary
+  // （agent/owner-boundary.ts），它的 begin 是这条路的第一步，早于任何拆除；退出登录的登出与吊销在 dispose 之后；
+  // HTTP 退出登录入口先 begin、再关平台客户端。失效后果：拆依赖时失败的回合写下结束时间与错误行，显示成错误。
+  // main 顶层会启动 Host，单测只能驱动 runOwnerBoundary 本身，故接线在 guard 层钉住。
+  it('begins every owner boundary through runOwnerBoundary, before its teardown', () => {
+    const main = read(path.join(hostSrc, 'main.ts'));
+    assert.equal(main.split('runOwnerBoundary(ownerBoundary, {').length - 1, 3);
+    assert.equal(main.split('ownerBoundary.begin()').length - 1, 1, 'the only direct begin is the HTTP logout dep');
+    const logout = main.slice(main.indexOf('  logout: async () => {'), main.indexOf('  listSessions: async'));
+    const logoutBoundary = logout.indexOf('runOwnerBoundary(ownerBoundary, {');
+    assert.ok(logoutBoundary > 0);
+    for (const teardown of ['disposeOwnerRuntime', 'logoutHostSession(', 'withCrossProcessLock(']) {
+      assert.ok(logout.indexOf(teardown) > logoutBoundary, `${teardown} runs inside the logout boundary`);
+    }
+    assert.ok(logout.indexOf('dispose: disposeOwnerRuntime') < logout.indexOf('afterDispose:'), 'sign out after dispose');
+    assert.ok(logout.indexOf('logoutHostSession(') > logout.indexOf('afterDispose:'));
+    const invalidate = main.slice(main.indexOf('function invalidateHostSession('), main.indexOf('const serverApi = '));
+    const invalidateBoundary = invalidate.indexOf('runOwnerBoundary(ownerBoundary, {');
+    assert.ok(invalidateBoundary > 0);
+    for (const teardown of ['beginAppSessionBoundary()', 'pauseOwnerRequests()', 'interactionBroker.dispose()', 'disposeOwnerRuntime']) {
+      assert.ok(invalidate.indexOf(teardown) > invalidateBoundary, `${teardown} runs inside the invalidation boundary`);
+    }
+    const stop = main.slice(main.indexOf('const stop = () => {'), main.indexOf("process.once('SIGINT', stop);"));
+    const stopBoundary = stop.indexOf('runOwnerBoundary(ownerBoundary, {');
+    assert.ok(stopBoundary > 0);
+    for (const teardown of ['server.stopAccepting()', 'beginAppSessionBoundary()', 'reapCodexToolTreesSync();', 'await disposeOwnerRuntime();']) {
+      assert.ok(stop.indexOf(teardown) > stopBoundary, `${teardown} runs inside the shutdown boundary`);
+    }
+    const server = read(path.join(hostSrc, 'server.mjs'));
+    const httpLogout = server.slice(server.indexOf('  const logout = () => {'), server.indexOf('  const server = createServer('));
+    assert.ok(httpLogout.indexOf('deps.beginOwnerBoundaryStop?.()') > 0);
+    assert.ok(httpLogout.indexOf('deps.beginOwnerBoundaryStop?.()') < httpLogout.indexOf('deps.platformClient?.()?.close()'));
+  });
+
   // 规则：Host 的 main.ts 先加载 boot-env（清掉终端继承来的 Anthropic 变量），紧接着 boot-settings
   // （读不懂的设置文件保留）。失效后果：别的模块先读到继承来的凭据，或在默认值设好之前删掉用户的设置文件。
   it('loads boot-env first and boot-settings right after it', () => {
