@@ -19614,6 +19614,7 @@
         "empty": "Keine Aktionsgutschriften verfügbar.",
         "incomplete": "Es gibt viele Gutschriften. Nur die neuesten {{count}} werden angezeigt.",
         "unnamed": "Aktionsgutschrift",
+        "rolloverName": "Übertrag",
         "original": "Ursprünglich",
         "used": "Verwendet",
         "remaining": "Verbleibend",
@@ -19849,6 +19850,8 @@
       "basicModels": "Zugriff auf einige Modelle",
       "subscription": "Abotarif",
       "rollover": "Bis zu {{amount}} ungenutztes Guthaben für {{period}} behalten",
+      "rolloverMonthly": "Bis zu {{amount}} ungenutztes Guthaben als Aktionsguthaben übertragen\n1 Monat gültig, ohne weiteren Übertrag\nVor Tarifguthaben und Aufladeguthaben genutzt",
+      "rolloverMonthlySummary": "Bis zu {{amount}} ungenutztes Guthaben übertragen, 1 Monat gültig",
       "nextPeriod": {
         "MONTH": "den nächsten Monat",
         "YEAR": "das nächste Jahr",

@@ -19538,6 +19538,7 @@
         "empty": "今无赠予之记。",
         "incomplete": "赠予之记甚多，今唯示最近 {{count}} 笔。",
         "unnamed": "赠予余资",
+        "rolloverName": "滚存额度",
         "original": "原额",
         "used": "已用",
         "remaining": "余",
@@ -19773,6 +19774,8 @@
       "basicModels": "可用若干模型",
       "subscription": "订阅之约",
       "rollover": "所余可留至{{period}}，至多 {{amount}}",
+      "rolloverMonthly": "剩余余额最多滚存 {{amount}}，转为赠送余额\n1 个月内有效，不再继续滚存\n优先于订阅余资和储值余资使用",
+      "rolloverMonthlySummary": "剩余余额最多滚存 {{amount}}，1 个月内有效",
       "nextPeriod": {
         "MONTH": "次月",
         "YEAR": "次年",

@@ -109,6 +109,7 @@ const GMAIL_COMPOSE_URL = 'https://mail.google.com/mail/?view=cm&fs=1';
  * 沿用现有每页10笔的密度；服务端统一查询成功充值和每笔已付订阅账单。
  */
 const ORDER_HISTORY_LIMIT = 10;
+const PROMOTIONAL_GRANTS_PAGE_SIZE = 10;
 
 /** 订单号展示保留首尾用于对单，中段固定脱敏；复制仍使用服务端返回的完整原值。 */
 function maskedOrderId(orderId: string): string {
@@ -1166,20 +1167,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
             </BillingGroup>
           )}
 
-          {creditUsage && (
-            <BillingGroup
-              title={t('billing.usage.promotionalDetails.title')}
-              badge={
-                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
-                  {t('billing.usage.promotionalDetails.count', {
-                    count: creditUsage.promotionalGrants.length,
-                  })}
-                </span>
-              }
-            >
-              <PromotionalGrantsCard usage={creditUsage} />
-            </BillingGroup>
-          )}
+          {creditUsage && <PromotionalGrantsCard usage={creditUsage} />}
 
           {(orderHistory.records.length > 0 || ordersError) && <BillingGroup
             title={t('billing.orders.title')}
@@ -1768,60 +1756,114 @@ function CreditPoolRow({
 function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const [requestedPage, setPage] = useState(1);
+  const pageCount = Math.max(
+    1,
+    Math.ceil(usage.promotionalGrants.length / PROMOTIONAL_GRANTS_PAGE_SIZE),
+  );
+  const page = Math.min(requestedPage, pageCount);
+  const now = Date.now();
+  const grants = [...usage.promotionalGrants].sort((left, right) => {
+    const leftExpiry = Date.parse(left.expiresAt);
+    const rightExpiry = Date.parse(right.expiresAt);
+    return Number(leftExpiry <= now) - Number(rightExpiry <= now) || leftExpiry - rightExpiry;
+  });
+  const pageGrants = grants.slice(
+    (page - 1) * PROMOTIONAL_GRANTS_PAGE_SIZE,
+    page * PROMOTIONAL_GRANTS_PAGE_SIZE,
+  );
+
   return (
-    <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
-      {!usage.promotionalGrantsComplete && (
-        <p className="border-b border-[var(--border-default)] px-5 py-3 text-11 leading-4 text-[var(--text-tertiary)]">
-          {t('billing.usage.promotionalDetails.incomplete', {
-            count: usage.promotionalGrants.length,
-          })}
-        </p>
-      )}
-      {usage.promotionalGrants.length === 0 ? (
-        <p className="px-5 py-4 text-12 text-[var(--text-secondary)]">
-          {t('billing.usage.promotionalDetails.empty')}
-        </p>
-      ) : (
-        <div
-          className="max-h-[360px] divide-y divide-[var(--border-default)] overflow-y-auto [scrollbar-gutter:stable]"
-          role="list"
-        >
-          {usage.promotionalGrants.map((grant) => (
-            <div
-              key={grant.grantId}
-              role="listitem"
-              className="grid grid-cols-3 gap-x-3 gap-y-2 px-5 py-3 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(80px,0.7fr))] lg:items-center"
-            >
-              <div className="col-span-3 min-w-0 lg:col-span-1">
-                <div className="flex min-w-0 items-center gap-2">
-                  <p className="truncate text-12 font-medium text-[var(--text-primary)]">
-                    {grant.displayName ?? t('billing.usage.promotionalDetails.unnamed')}
-                  </p>
-                  <PromotionalGrantStatus state={grant.state} />
-                </div>
-                <p className="mt-1 truncate text-10 text-[var(--text-tertiary)]">
-                  {t('billing.usage.promotionalDetails.expiresAt', {
-                    date: formatLedgerTimestamp(grant.expiresAt, billingLocale),
-                  })}
-                </p>
-              </div>
-              <GrantAmount
-                label={t('billing.usage.promotionalDetails.original')}
-                amount={grant.originalAmount}
-              />
-              <GrantAmount
-                label={t('billing.usage.promotionalDetails.used')}
-                amount={grant.usedAmount}
-              />
-              <GrantAmount
-                label={t('billing.usage.promotionalDetails.remaining')}
-                amount={grant.remainingAmount}
-              />
+    <BillingGroup
+      title={t('billing.usage.promotionalDetails.title')}
+      badge={
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+            {t('billing.usage.promotionalDetails.count', { count: usage.promotionalGrants.length })}
+          </span>
+          {pageCount > 1 && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
+                disabled={page === 1}
+                onClick={() => setPage(page - 1)}
+              >
+                {t('billing.orders.history.previous')}
+              </Button>
+              <span aria-live="polite" className="text-11 tabular-nums text-[var(--text-secondary)]">
+                {page}/{pageCount}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
+                disabled={page === pageCount}
+                onClick={() => setPage(page + 1)}
+              >
+                {t('billing.orders.history.next')}
+              </Button>
             </div>
-          ))}
+          )}
         </div>
-      )}
-    </section>
+      }
+    >
+      <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+        {!usage.promotionalGrantsComplete && (
+          <p className="border-b border-[var(--border-default)] px-5 py-3 text-11 leading-4 text-[var(--text-tertiary)]">
+            {t('billing.usage.promotionalDetails.incomplete', { count: usage.promotionalGrants.length })}
+          </p>
+        )}
+        {grants.length === 0 ? (
+          <p className="px-5 py-4 text-12 text-[var(--text-secondary)]">
+            {t('billing.usage.promotionalDetails.empty')}
+          </p>
+        ) : (
+          <div
+            key={page}
+            className="max-h-[360px] divide-y divide-[var(--border-default)] overflow-y-auto [scrollbar-gutter:stable]"
+            role="list"
+          >
+            {pageGrants.map((grant) => (
+              <div
+                key={grant.grantId}
+                role="listitem"
+                className="grid grid-cols-3 gap-x-3 gap-y-2 px-5 py-3 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(80px,0.7fr))] lg:items-center"
+              >
+                <div className="col-span-3 min-w-0 lg:col-span-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <p className="truncate text-12 font-medium text-[var(--text-primary)]">
+                      {grant.source === 'subscription_rollover'
+                        ? t('billing.usage.promotionalDetails.rolloverName')
+                        : grant.displayName ?? t('billing.usage.promotionalDetails.unnamed')}
+                    </p>
+                    <PromotionalGrantStatus state={grant.state} />
+                  </div>
+                  <p className="mt-1 truncate text-10 text-[var(--text-tertiary)]">
+                    {t('billing.usage.promotionalDetails.expiresAt', {
+                      date: formatLedgerTimestamp(grant.expiresAt, billingLocale),
+                    })}
+                  </p>
+                </div>
+                <GrantAmount
+                  label={t('billing.usage.promotionalDetails.original')}
+                  amount={grant.originalAmount}
+                />
+                <GrantAmount
+                  label={t('billing.usage.promotionalDetails.used')}
+                  amount={grant.usedAmount}
+                />
+                <GrantAmount
+                  label={t('billing.usage.promotionalDetails.remaining')}
+                  amount={grant.remainingAmount}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </BillingGroup>
   );
 }
 
@@ -2471,17 +2513,27 @@ function BillingOfferDialog({
                       </p>
                     )}
                     {selected.offer.rolloverCap !== null && (
-                      <p className="text-12 text-[var(--text-secondary)]">
-                        {t('billing.comparison.rollover', {
-                          amount: formatMoney(
-                            selected.offer.rolloverCap,
-                            selected.offer.currency,
-                            billingLocale,
-                          ),
-                          period: t(
-                            `billing.comparison.nextPeriod.${selected.offer.interval ?? 'OTHER'}`,
-                          ),
-                        })}
+                      <p
+                        className={cn(
+                          'text-12 text-[var(--text-secondary)]',
+                          selected.offer.interval === 'MONTH' && 'whitespace-pre-line',
+                        )}
+                      >
+                        {t(
+                          selected.offer.interval === 'MONTH'
+                            ? 'billing.comparison.rolloverMonthly'
+                            : 'billing.comparison.rollover',
+                          {
+                            amount: formatMoney(
+                              selected.offer.rolloverCap,
+                              selected.offer.currency,
+                              billingLocale,
+                            ),
+                            period: t(
+                              `billing.comparison.nextPeriod.${selected.offer.interval ?? 'OTHER'}`,
+                            ),
+                          },
+                        )}
                       </p>
                     )}
                   </div>

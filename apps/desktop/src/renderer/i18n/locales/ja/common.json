@@ -19538,6 +19538,7 @@
         "empty": "特典の付与履歴はありません。",
         "incomplete": "付与履歴が多いため、最新の{{count}}件のみ表示しています。",
         "unnamed": "特典残高",
+        "rolloverName": "繰り越し分",
         "original": "付与額",
         "used": "使用済み",
         "remaining": "残り",
@@ -19773,6 +19774,8 @@
       "basicModels": "一部のモデルを利用",
       "subscription": "サブスクリプション",
       "rollover": "未使用残高は{{period}}も利用可能（最大 {{amount}}）",
+      "rolloverMonthly": "未使用残高を最大{{amount}}まで繰り越し、特典残高に\n1か月間有効、再繰り越し不可\nプラン残高とチャージ残高より先に使用",
+      "rolloverMonthlySummary": "未使用残高を最大{{amount}}まで繰り越し、1か月間有効",
       "nextPeriod": {
         "MONTH": "翌月",
         "YEAR": "翌年",

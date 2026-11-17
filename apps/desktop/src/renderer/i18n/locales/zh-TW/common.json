@@ -19538,6 +19538,7 @@
         "empty": "當前沒有贈送記錄。",
         "incomplete": "贈送記錄較多，當前僅顯示最近的 {{count}} 筆。",
         "unnamed": "贈送餘額",
+        "rolloverName": "滾存額度",
         "original": "原始金額",
         "used": "已用",
         "remaining": "剩餘",
@@ -19773,6 +19774,8 @@
       "basicModels": "可用部分模型",
       "subscription": "訂閱方案",
       "rollover": "剩餘餘額可留到{{period}}，最多 {{amount}}",
+      "rolloverMonthly": "剩餘餘額最多滾存 {{amount}}，轉為贈送餘額\n1 個月內有效，不再繼續滾存\n優先於訂閱餘額和儲值餘額使用",
+      "rolloverMonthlySummary": "剩餘餘額最多滾存 {{amount}}，1 個月內有效",
       "nextPeriod": {
         "MONTH": "下個月",
         "YEAR": "下一年",

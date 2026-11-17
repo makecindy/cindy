@@ -274,6 +274,7 @@ function projectPromotionalGrant(value: unknown): ModelAccessPromotionalGrantUsa
   return {
     grantId,
     displayName,
+    ...(typeof value.source === 'string' || value.source === null ? { source: value.source } : {}),
     originalAmount: originalAmount.source,
     usedAmount: usedAmount.source,
     remainingAmount: remainingAmount.source,

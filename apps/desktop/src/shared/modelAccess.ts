@@ -62,6 +62,8 @@ export type ModelAccessPromotionalGrantState = 'active' | 'depleted' | 'expired'
 export interface ModelAccessPromotionalGrantUsage {
   grantId: string;
   displayName: string | null;
+  /** Stable server origin tag; older responses may omit it. */
+  source?: string | null;
   originalAmount: string;
   usedAmount: string;
   remainingAmount: string;

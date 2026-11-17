@@ -19797,6 +19797,7 @@
         "empty": "Nenhuma concessão promocional disponível.",
         "incomplete": "Há muitos registros de concessões. Apenas os {{count}} mais recentes são exibidos.",
         "unnamed": "Concessão promocional",
+        "rolloverName": "Saldo acumulado",
         "original": "Original",
         "used": "Usado",
         "remaining": "Restante",
@@ -20032,6 +20033,8 @@
       "basicModels": "Acesso a alguns modelos",
       "subscription": "Plano de assinatura",
       "rollover": "Mantenha até {{amount}} de saldo não utilizado para {{period}}",
+      "rolloverMonthly": "Acumule até {{amount}} de saldo não utilizado como saldo promocional\nVálido por 1 mês, sem novo acúmulo\nUtilizado antes do Saldo do plano e do Saldo de recarga",
+      "rolloverMonthlySummary": "Acumule até {{amount}} de saldo não utilizado, válido por 1 mês",
       "nextPeriod": {
         "MONTH": "o próximo mês",
         "YEAR": "o próximo ano",

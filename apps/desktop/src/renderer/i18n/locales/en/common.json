@@ -19614,6 +19614,7 @@
         "empty": "No promotional grants are available.",
         "incomplete": "There are many grant records. Only the latest {{count}} are shown.",
         "unnamed": "Promotional Grant",
+        "rolloverName": "Rollover grant",
         "original": "Original",
         "used": "Used",
         "remaining": "Remaining",
@@ -19849,6 +19850,8 @@
       "basicModels": "Access some models",
       "subscription": "Subscription plan",
       "rollover": "Keep up to {{amount}} in unused balance for {{period}}",
+      "rolloverMonthly": "Roll over up to {{amount}} in unused balance as promotional balance\nValid for 1 month, with no further rollover\nUsed before Plan Balance and Top-up Balance",
+      "rolloverMonthlySummary": "Roll over up to {{amount}} in unused balance, valid for 1 month",
       "nextPeriod": {
         "MONTH": "next month",
         "YEAR": "next year",

@@ -123,6 +123,8 @@ describe('billing response projection', () => {
     ).toThrow();
   });
 
+  // D17: the real credit-usage projector must retain nullable source for localized
+  // rollover names; its old allowlist dropped the field before renderer received it (unit).
   it('projects exact pool usage and independent promotional grant states', () => {
     expect(
       projectModelAccessCreditUsage({
@@ -134,6 +136,7 @@ describe('billing response projection', () => {
           {
             grantId: 'welcome',
             displayName: 'Welcome',
+            source: 'subscription_rollover',
             originalAmount: '2',
             usedAmount: '1',
             remainingAmount: '1',
@@ -144,6 +147,7 @@ describe('billing response projection', () => {
           {
             grantId: 'expired',
             displayName: null,
+            source: null,
             originalAmount: '5',
             usedAmount: '1.25',
             remainingAmount: '0',
@@ -176,6 +180,7 @@ describe('billing response projection', () => {
         {
           grantId: 'welcome',
           displayName: 'Welcome',
+          source: 'subscription_rollover',
           originalAmount: '2',
           usedAmount: '1',
           remainingAmount: '1',
@@ -185,6 +190,7 @@ describe('billing response projection', () => {
         {
           grantId: 'expired',
           displayName: null,
+          source: null,
           originalAmount: '5',
           usedAmount: '1.25',
           remainingAmount: '0',
