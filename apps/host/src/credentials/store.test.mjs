@@ -140,3 +140,20 @@ test('native codec rejects an incomplete identity and does not replace a record 
   assert.equal(fs.readFileSync(path.join(storageDir, 'synthetic.enc'), 'utf8'), 'existing ciphertext');
   assert.deepEqual(fs.readdirSync(storageDir), ['synthetic.enc']);
 });
+
+// Test value: createCredentialStore -> a second Electron helper decrypts the
+// value written by the first helper. Issue #9708; existing native-codec tests
+// stub the child process, so the minimum gap is one fake value across two real
+// processes. Host integration tier, Windows-only, with an isolated temp profile.
+test('Windows native credentials survive a second helper process', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  const userDataDir = tempProfile(t);
+  fs.writeFileSync(path.join(userDataDir, 'keychain-identity'), 'CindyDev\n');
+
+  const writer = await createCredentialStore({ userDataDir, platform: 'win32' });
+  writer.write('synthetic', 'test-only-round-trip-value');
+
+  const reader = await createCredentialStore({ userDataDir, platform: 'win32' });
+  assert.equal(reader.read('synthetic'), 'test-only-round-trip-value');
+});
