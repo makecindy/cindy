@@ -514,6 +514,13 @@ html:lang(ko) {
   vertical-align: top;
   overflow-wrap: anywhere;
 }
+/* 引用行(`> `)不吃列表的 1em 基础缩进:`>` 与上下文正文左对齐,自动换行的
+   续行仍悬挂在引用正文起点;次级文字色把引用原文与自己的评论区分开。 */
+.ProseMirror .composer-list-block-indent.composer-list-quote,
+.ProseMirror .composer-list-line-indent.composer-list-quote {
+  padding-left: var(--composer-list-hang, 1.25em);
+  color: var(--text-secondary);
+}
 .ProseMirror .composer-list-tab-indent {
   /* Keep the browser's tab advance aligned with the deterministic prefix-width
      estimate. Do not measure and rewrite decoration DOM from a plugin view:

@@ -46,6 +46,10 @@ export default {
     'voice-speaker-filtered': {
       about: 'Recording explains above the composer that the voiceprint filter ignored someone else',
     },
+    'quote-comment': {
+      about:
+        'A `> ` quote stays put and left-aligned with the comment typed under it during IME composition; Tab nests a list item',
+    },
     default: {
       about:
         'Empty/text/attachment action switch, stable target, keyboard send, call return and stop/queue',
@@ -110,6 +114,51 @@ export default {
       await send.click();
       await call.waitFor();
       assert.equal(await page.getByTestId('sent').textContent(), ui.data.recommendation);
+      return;
+    }
+    if (ui.case === 'quote-comment') {
+      // User report (2026-11-17 video): composing a Chinese comment under a
+      // `> ` quote made the quote jump left on every IME composition. jsdom has
+      // no layout, so measure the real glyph position while Chromium composes.
+      const editor = page.locator('.ProseMirror');
+      await editor.click();
+      await editor.pressSequentially('> ');
+      await page.keyboard.insertText('这是一个引用块，引用 agent 上一轮的回复。');
+      await editor.press('Shift+Enter');
+      await editor.press('Backspace');
+      const firstGlyphLeft = (index) => editor.evaluate((root, paragraphIndex) => {
+        const paragraph = root.querySelectorAll(':scope > p')[paragraphIndex];
+        const text = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT).nextNode();
+        const range = document.createRange();
+        range.setStart(text, 0);
+        range.setEnd(text, 1);
+        return range.getBoundingClientRect().left;
+      }, index);
+      const quoteLeft = await firstGlyphLeft(0);
+
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Input.imeSetComposition', { text: 'wo', selectionStart: 2, selectionEnd: 2 });
+      assert.equal(await editor.evaluate((node) => node.editor.view.composing), true);
+      assert.ok(Math.abs((await firstGlyphLeft(0)) - quoteLeft) < 0.5, 'quote moved while composing');
+      await ui.capture('composing');
+      await cdp.send('Input.insertText', { text: '我想针对这个引用块说几句话' });
+      await page.waitForFunction(() => !document.querySelector('.ProseMirror').editor.view.composing);
+      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+      assert.ok(Math.abs((await firstGlyphLeft(0)) - quoteLeft) < 0.5, 'quote moved after composing');
+      // `>` starts at the same left edge as the comment typed under it.
+      assert.ok(Math.abs((await firstGlyphLeft(1)) - quoteLeft) < 1, 'quote and comment are misaligned');
+      await ui.capture('quote-comment');
+
+      await editor.press('Shift+Enter');
+      await editor.pressSequentially('- ');
+      await page.keyboard.insertText('第一项');
+      await editor.press('Shift+Enter');
+      await page.keyboard.insertText('第二项');
+      await editor.press('Tab');
+      assert.equal(await editor.locator('ul ul > li').count(), 1);
+      await ui.capture('nested-list');
+      await editor.press('Shift+Tab');
+      assert.equal(await editor.locator('ul ul > li').count(), 0);
       return;
     }
     if (ui.case === 'voice-speaker-filtered') {
