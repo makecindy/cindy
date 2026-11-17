@@ -53,7 +53,10 @@ const preview: SubscriptionPoolView = {
     },
   ],
 };
+/** What the sign-in step reads to offer providers to join (2026-11-13). */
+let listedProviders: ProviderView[] = [];
 function renderWizard(providerId: string, onDone = vi.fn(), connected = false) {
+  listedProviders = ['anthropic', 'openai'].map((id) => ({ ...provider(id), connected }));
   return render(
     <AddProviderWizard
       providers={['anthropic', 'openai'].map((id) => ({ ...provider(id), connected }))}
@@ -66,8 +69,9 @@ function renderWizard(providerId: string, onDone = vi.fn(), connected = false) {
 }
 beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
-    subscriptionAccounts: { command: vi.fn(async () => preview) },
+    subscriptionAccounts: { command: vi.fn(async () => preview), onChanged: vi.fn(() => () => undefined) },
     maker: {
+      listProviders: vi.fn(async () => ({ providers: listedProviders })),
       listProviderPresets: vi.fn(async () => ({ presets: [] })),
       localModelList: vi.fn(async () => ({
         status: { runtime: 'ollama', kind: 'absent', appInstalled: false },
@@ -110,6 +114,11 @@ describe('AddProviderWizard — explicit subscription account choice', () => {
               : 'subscriptionAccounts.signIn.anotherAccount',
         }),
       );
+      // Another account asks where it goes (2026-11-13); joining the built-in keeps this intent.
+      if (target === 'new') {
+        fireEvent.click((await screen.findAllByRole('radio'))[1]!);
+        fireEvent.click(screen.getByText('subscriptionAccounts.placement.signInContinue'));
+      }
       await waitFor(() => expect(onDone).toHaveBeenCalledExactlyOnceWith(providerId));
       expect(window.electronAPI.subscriptionAccounts.command).toHaveBeenCalledWith({
         action: 'connect',

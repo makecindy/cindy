@@ -10,7 +10,10 @@ import { makerChatStore } from '../lib/makerChatStore';
 import { createGithubStarPromptEnvironment } from '../lib/githubStarPromptHost';
 import { createMemoryRouter } from 'react-router-dom';
 import { saveDraft, clearDraft } from '../lib/composerDraftStore';
-vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
+vi.mock('@/i18n', () => {
+  const i18n = { t: (key: string) => key, exists: () => false, language: 'en' };
+  return { default: i18n, i18n };
+});
 
 // Unit: production controller/installer. A send plus idle used to interrupt active work,
 // queue behind other notices and repeat after restart. Toast rendering tests cannot cover

@@ -41,6 +41,37 @@ token）与 [`engineering-conventions.md`](engineering-conventions.md)（i18n）
   自定义标记，**不把完整默认配置复制进用户配置**。
 - 未自定义的用户随版本获得新默认值，已自定义的用户保留自己的选择。
 
+### 完整主题与外观设置
+
+Desktop 的 `main/appearance/service.ts` 是唯一外观覆盖所有者；
+`appearance-settings.json` 只保存明确覆盖。仅选中新主题包时，有效值依次为内置默认、
+主题包的内存默认层、用户或已批准固定能力的明确覆盖。主题包不把默认值复制成覆盖，
+也不直接写 DOM；`renderer/appearance/AppearancePresenter.ts` 和原壁纸消费者统一投影。
+插件不提供／注册主题；固定字体、壁纸、阅读样式等操作保留原调用、声明、批准和资源校验，
+其最终写入复用相同的定义转换与原子设置存储。
+
+主题模式／家族继续由 renderer localStorage 的 `theme` / `theme.familyId`、原
+`setTheme` / `setFamily` 和跨窗口 storage 同步持有，不迁入宿主。内置主题、旧 loose
+JSON 和无包用户保留原启动、切换、重置、落盘及回滚行为；旧 loose 的未知 `appearance`
+字段仍忽略。升级不操作时保留原主题与字体、壁纸。
+
+Host 启动时没有主题包投影；renderer 按当前选择先同步应用配色和用户原字体、壁纸，再
+通过现有 `selectTheme` 异步准备包资源。投影只在内存，旧文件里的 `themeSelection` 忽略。
+主动选中新主题包时，先通过同一入口准备，成功后才提交原选择与配色；失败只提示，
+不写 localStorage，不切换配色。沿用在途请求身份丢弃迟到结果；Agent 回执确认实际结果。
+从主题包切回内置或 loose 才撤掉包默认层；从未选包的用户不发准备或清理 IPC。
+只有主题包生效时，单项恢复删除相应覆盖并跟随包默认；没有主题包时仍按原静态默认写入。
+
+全量恢复仅清外观覆盖，不重置主题模式或家族。字号恢复不清字体家族，壁纸恢复不清字体。
+密度／动效默认 1，不添加可见设置项；动效服从系统减少动效。主题格式与素材限制见内置
+`cindy-theme-creator` 的 package-format.md；回归入口为 `useTheme.test.tsx`、
+`appearanceSettingsStore.test.ts` 和 `packages.test.ts`。
+
+已知限制：没有选用主题包时，用户或插件显式设置为与 Cindy 默认值相同的外观项
+（例如 `uiSize=14`、`wallpaperMotion=static`）不会记为覆盖；之后选择主题包时，
+这些项目会采用主题包的默认值。此行为保留现有覆盖设置与“恢复默认”的语义。
+主题包目前没有原生卸载入口，可以通过“打开目录”手动移除。
+
 模型资料的系统层再区分公共默认、供应商默认、供应商实报与服务端明确修正；用户覆盖始终最高。
 发现快照和用户字段分开持久化，详见 [模型资料优先级](../product-rules/model-metadata-precedence.md)。
 

@@ -1,4 +1,4 @@
-import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
 import { ProvidersSection } from '../../../src/renderer/components/settings/ProvidersSection';
 import { mountPage, subscription, forbid } from '../../ui-page/harness';
 import type { SubscriptionAccountCommand } from '../../../src/shared/subscriptionAccounts';
@@ -15,7 +15,7 @@ const provider = (id: string, name?: string) => ({
   connected: true, remoteInvocationEnabled: true,
   ...(name ? { name } : {}),
 });
-const providers = [provider('anthropic'), provider('openai')];
+const providers: ProviderView[] = [provider('anthropic'), provider('openai')];
 const group = {
   strategy: 'least', autoSwitch: true,
   members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'fixture-executor', providerId: 'anthropic' }],
@@ -68,6 +68,14 @@ mountPage({
   route: '/settings?tab=providers&connect=anthropic',
   host: ctx => {
     refreshControl.defer = ctx.case === 'wizard-reopen';
+    if (ctx.case.startsWith('legacy-upgrade')) providers.push(...['one', 'two'].map(suffix => ({
+      ...provider('openai'), id: `legacy-openai-${suffix}`, name: `Old login ${suffix}`,
+      source: 'user' as const, subscriptionPoolAlias: true as const,
+      ...(ctx.case === 'legacy-upgrade-shared' && suffix === 'one' ? { connected: false, suspended: true } : {}),
+      models: { codex: [{ id: 'fixture-model', name: 'Fixture model', efforts: [], defaultEffort: null }] },
+    })));
+    // These connections were already listed before upgrade, including their saved order.
+    if (ctx.case.startsWith('legacy-upgrade')) snapshot.providerOrder = providers.map(item => item.id);
     if (ctx.case === 'builtin-save-guard') snapshot.providers.push({
       ...provider('anthropic'), id: 'gemini', name: 'Gemini', connected: false,
       agents: [], auth: { method: 'apiKey' }, audioModels: [{ id: 'fixture-media', name: 'Fixture' }],
@@ -83,9 +91,9 @@ mountPage({
             });
             subscriptionControl.connected = true;
           }
-          const configured = ctx.case === 'subscription-pool' || subscriptionControl.connected;
+          const configured = ctx.case === 'subscription-pool' || ctx.case.startsWith('legacy-upgrade') || subscriptionControl.connected;
           const directory = command.providerId === 'anthropic' ? '/Users/alex/.claude' : '/Users/alex/.codex';
-          const defaultAccount = { id: 'default', identity: 'alex@example.com',
+          const defaultAccount = { id: ctx.case.startsWith('legacy-upgrade') ? 'imported-one' : 'default', identity: 'alex@example.com',
             plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: 'ready', directory,
             running: 0, paused: false, limit: 4, weight: 1 };
           return { providerId: command.providerId, configured, strategy: 'least', accounts: configured ? [
@@ -114,7 +122,8 @@ mountPage({
       },
       deviceLink: { getState: async () => ({ remoteControlEnabled: true }) },
       providerShare: {
-        command: async () => ({ ready: true, providerIds: ctx.case === 'no-outgoing-shares' ? [] : ['openai'] }),
+        command: async () => ({ ready: true, providerIds: ctx.case === 'no-outgoing-shares' ? []
+          : ctx.case === 'legacy-upgrade-shared' ? ['legacy-openai-one'] : ['openai'] }),
         onOwnedChanged: subscription('ownedChanged'),
       },
       providerGroup: {

@@ -1,3 +1,4 @@
+import { closeFirstRunGuide } from '@/features/first-run-guide/firstRunGuideStore';
 import { resetTaskTagCatalogCache } from '@/features/task-tags/taskTagEvents';
 import {
   createContext,
@@ -146,6 +147,7 @@ function publishDataOwnerGeneration(
   const previousOwnerId = getDataOwnerGeneration().dataOwnerId;
   const ownerChanged = previousOwnerId !== dataOwnerId;
   if (ownerChanged) {
+    closeFirstRunGuide();
     resetTaskTagCatalogCache();
     invalidateRemoteCatalogSnapshots();
   }

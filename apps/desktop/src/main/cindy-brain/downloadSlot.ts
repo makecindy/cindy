@@ -4,11 +4,12 @@ import path from 'node:path';
 import { ghostNetworkHostMatches, type InstalledGhost } from '../../shared/ghost.js';
 import type { DownloadOptions, DownloadRequest, DownloadResult } from '../downloader/index.js';
 import { DownloadError } from '../downloader/types.js';
-import { guardedOutboundFetch } from '../maker-host/outbound-fetch.js';
+import type { createOutboundTransport } from '../maker-host/outbound-fetch.js';
 import { PluginDownloadCache } from './downloadCache.js';
 
 /** Verified public artifacts, in the requesting plugin's host-managed cache only. */
 export interface PluginDownloadDeps {
+  guardedFetch: ReturnType<typeof createOutboundTransport>['guardedOutboundFetch'];
   getGhost(id: string): InstalledGhost | null;
   root(id: string): string;
   scope(): string;
@@ -247,7 +248,7 @@ export class PluginDownloadSlot {
             } catch {
               throw new DownloadError('SIZE', 'Download cache cannot reserve replacement space');
             }
-            return guardedOutboundFetch(url, { ...init, credentials: 'omit' }, () => {
+            return this.deps.guardedFetch(url, { ...init, credentials: 'omit' }, () => {
               controller.signal.throwIfAborted();
               // A revoked owner is final: do not let the downloader retry this hop.
               if (!isUrlAllowed(url))

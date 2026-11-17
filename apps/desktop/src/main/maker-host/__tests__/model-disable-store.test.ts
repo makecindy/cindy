@@ -24,7 +24,8 @@ vi.mock('../../ownerContext.js', () => ({
   hasCommittedOwner: () => true,
 }));
 
-const { __testing, migrateLegacyNamespacedModelDisableOverrides, setModelsDisabled } =
+const { __testing, migrateLegacyNamespacedModelDisableOverrides, setModelsDisabled,
+  copyProviderDisableOverrides, clearProviderDisableOverrides, setProviderDisabled } =
   await import('../model-disable-store.js');
 
 function readPrefsFile(): { disabledModels: Record<string, unknown> } {
@@ -88,6 +89,19 @@ describe('旧媒体 modelId 停用项迁移', () => {
     expect(readPrefsFile().disabledModels['ambiguous-xd:gpt-image-2']).toBe(true);
     expect(readPrefsFile().disabledModels['ambiguous-xd:openai/gpt-image-2']).toBeUndefined();
   });
+});
+
+// PR #10405, unit: taking an account out must keep the source model switches. This checks the
+// production store's actual persisted values, which account-selection mocks cannot cover.
+it('copies model access overrides before publishing a separate subscription provider', () => {
+  setModelsDisabled('source', ['gpt-6', 'chatgpt/gpt-6'], true);
+  setProviderDisabled('source', true);
+  copyProviderDisableOverrides('source', 'openai-sub-12345678');
+  expect(readPrefsFile()).toMatchObject({ disabledModels: {
+    'source:gpt-6': true, 'openai-sub-12345678:gpt-6': true, 'openai-sub-12345678:chatgpt/gpt-6': true,
+  }, disabledProviders: { 'openai-sub-12345678': true } });
+  clearProviderDisableOverrides('source');
+  clearProviderDisableOverrides('openai-sub-12345678');
 });
 
 describe('单 section 总量硬上限(深防线)', () => {

@@ -25,7 +25,7 @@ import { useRemoteBotSync, useRemoteBots, useRemoteCindyIds, markRemoteBotRead }
 import { parseRemoteCollectionListRequest, REMOTE_RESOURCE_INVOKE_CHANNEL, REMOTE_RESOURCE_LIST_CHANNEL, REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
 import { parseRemoteBots, remoteBotKey, isRemoteBotUnread } from '../remoteBotRoster';
 import { setDataOwnerGeneration, getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { resetBotReadStateForTests, startBotReadStateSync, getBotReadStateSyncStatus } from '../botReadState';
+import { resetBotReadStateForTests, startBotReadStateSync, getBotReadStateSyncStatus, subscribeBotReadState } from '../botReadState';
 import { botReadStateFixture } from './botReadStateFixture';
 let reads: ReturnType<typeof botReadStateFixture>;
 let stopReads: () => void;
@@ -50,6 +50,16 @@ const collection = (name = 'Writer') => ({
 function useRoster() {
   useRemoteBotSync();
   return useRemoteBots();
+}
+/** Bootstrap commits every legacy row through the fixture's real Main files before `ready`; on a
+ * loaded Windows runner 205 atomic writes outlast vi.waitFor's 1 s poll, so await the phase event. */
+async function readStateSettled() {
+  const settled = () => getBotReadStateSyncStatus().phase !== 'loading' && getBotReadStateSyncStatus().phase !== 'idle';
+  await new Promise<void>(resolve => {
+    const off = subscribeBotReadState(() => { if (settled()) { off(); resolve(); } });
+    if (settled()) { off(); resolve(); }
+  });
+  expect(getBotReadStateSyncStatus().phase).toBe('ready');
 }
 beforeEach(async () => {
   window.history.replaceState({}, '', '/');
@@ -79,7 +89,7 @@ beforeEach(async () => {
     },
   } as any;
   stopReads = startBotReadStateSync();
-  await vi.waitFor(() => expect(getBotReadStateSyncStatus().phase).toBe('ready'));
+  await readStateSettled();
 });
 afterEach(async () => {
   cleanup(); stopReads(); resetBotReadStateForTests();
@@ -117,7 +127,7 @@ it('restores all cached rows beyond 200 and imports legacy device-qualified ackn
     avatar: '', avatarColor: '', description: '', preview: '', activityAt: 100, lastReplyAt: 200, readAt: 300 }));
   localStorage.setItem(`cindy.remoteBots.v1.${h.owner}`, JSON.stringify(rows));
   stopReads = startBotReadStateSync();
-  await vi.waitFor(() => expect(getBotReadStateSyncStatus().phase).toBe('ready'));
+  await readStateSettled();
   h.devices = [host('a', false)];
   const { result } = renderHook(useRoster);
   await waitFor(() => expect(result.current).toHaveLength(205));
@@ -129,7 +139,7 @@ it('keeps a corrupt migration source intact even after the main window obtains a
   const key = `cindy.remoteBots.v1.${h.owner}`;
   localStorage.setItem(key, '{corrupt');
   stopReads = startBotReadStateSync();
-  await vi.waitFor(() => expect(getBotReadStateSyncStatus().phase).toBe('ready'));
+  await readStateSettled();
   const { result } = renderHook(useRoster);
   await waitFor(() => expect(result.current).toHaveLength(2));
   expect(getBotReadStateSyncStatus().corruptSources).toContain(key);

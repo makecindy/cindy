@@ -5,6 +5,8 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { validateGhostManifest } from '../../../shared/ghost';
+import { handlePluginHostToolRequest } from '../hostToolSlot';
+import { getPluginHostToolCaller } from '../../mcp-integrations/hostToolCaller';
 
 import {
   createGhostInstallReceipt,
@@ -162,6 +164,69 @@ describe('GhostInstallReceiptStore cleanup', () => {
       skillContentSha256: {},
     });
   }
+
+  // Unit, #9801 scope reduction: every Host approval lookup reopens the receipt,
+  // including two lookups in one synchronous segment and queued revocation.
+  it('reads fresh receipt bytes throughout a host call without an authorization cache', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { hostTools: ['history'] };
+    receipt.approvedHostToolGroups = ['history'];
+    await store.write(receipt);
+    const receiptPath = path.join(stateRoot, 'hello.json');
+    const originalOpen = fs.openSync;
+    let reads = 0;
+    vi.spyOn(fs, 'openSync').mockImplementation((...args: Parameters<typeof fs.openSync>) => {
+      if (String(args[0]) === receiptPath) reads++;
+      return originalOpen(...args);
+    });
+    const getGhost = () => {
+      const read = store.read('hello');
+      return read.state === 'approved' ? { manifest: read.receipt.manifest, dir: '/fixture/plugin', enabled: read.receipt.enabled,
+        approval: { state: 'approved' as const, revision: read.receipt.revision }, approvedHostToolGroups: read.receipt.approvedHostToolGroups } as never : null;
+    };
+    let revoke: 'none' | 'after-await' | 'queued' = 'none';
+    const write = vi.fn();
+    const call = () => handlePluginHostToolRequest('hello', { type: 'host-tool-request', server: 'cindy_helper', tool: 'list_sessions', args: {} }, () => true, {
+      getGhost, owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), policy: () => 'auto-approve',
+      approveGroup: async (_id, _group, current) => { getGhost(); return current(); }, confirm: async () => true,
+      createRuntime: () => ({ describe: () => ({ name: 'list_sessions', category: 'history' }), close: async () => {},
+        call: async () => {
+          const caller = getPluginHostToolCaller()!;
+          const before = reads;
+          getGhost(); getGhost();
+          expect(reads - before).toBe(2);
+          caller.assertCurrent(); caller.assertCurrent();
+          await Promise.resolve();
+          if (revoke === 'queued') {
+            // A queued callback must observe revocation before any write.
+            const pending = Promise.resolve().then(() => {
+              const value = JSON.parse(fs.readFileSync(receiptPath, 'utf8')); value.enabled = false;
+              fs.writeFileSync(receiptPath, JSON.stringify(value));
+              caller.assertCurrent(); write();
+            });
+            caller.assertCurrent();
+            await pending;
+          } else if (revoke === 'after-await') {
+            const value = JSON.parse(fs.readFileSync(receiptPath, 'utf8')); value.enabled = false;
+            fs.writeFileSync(receiptPath, JSON.stringify(value));
+          }
+          caller.assertCurrent();
+          return { content: [{ type: 'text', text: '{"ok":true}' }] };
+        } }),
+    });
+    expect(await call()).toMatchObject({ content: [{ text: '{"ok":true}' }] });
+    const previous = reads;
+    revoke = 'after-await';
+    expect(await call()).toMatchObject({ isError: true, content: [{ text: expect.stringContaining('PERMISSION_DENIED') }] });
+    expect(reads).toBeGreaterThan(previous);
+    const enabled = JSON.parse(fs.readFileSync(receiptPath, 'utf8')); enabled.enabled = true;
+    fs.writeFileSync(receiptPath, JSON.stringify(enabled));
+    revoke = 'queued';
+    expect(await call()).toMatchObject({ isError: true, content: [{ text: expect.stringContaining('PERMISSION_DENIED') }] });
+    expect(write).not.toHaveBeenCalled();
+    reads = 0; store.read('hello'); store.read('hello');
+    expect(reads).toBe(2); // Ordinary callers never receive an approval cache.
+  });
 
   // Async discovery adds an await window: preserve the sync reader's no-follow
   // parent gate. A linked namespace must never become an approved installation.
@@ -369,6 +434,21 @@ describe('GhostInstallReceiptStore cleanup', () => {
 
   // Rule: approved control points persist across reads, keep only names this manifest still declares,
   // and an older receipt without the field stays approved with no control point granted.
+  // Unit: real receipt write/read dropped a static capability because it is
+  // declared outside subscribe.hooks. Installation must preserve that consent.
+  it('round trips approved static prompt fragments through the installation receipt', async () => {
+    const base = createSetupReceipt();
+    const fragments = [{ id: 'style', text: 'Static task instructions', order: 10, scope: 'selected-task' as const }];
+    const receipt = createGhostInstallReceipt({ ...base,
+      manifest: { ...base.manifest, schemaVersion: 3, minCindyVersion: '0.0.0', systemPrompt: fragments },
+      approvedControlPoints: ['system-prompt'],
+    });
+    await store.write(receipt);
+    expect(await store.readAsync('hello')).toMatchObject({ state: 'approved', receipt: {
+      manifest: { systemPrompt: fragments }, approvedControlPoints: ['system-prompt'],
+    } });
+  });
+
   it('round trips approved control points and keeps older receipts approved without them', async () => {
     const receipt = createSetupReceipt();
     receipt.manifest.subscribe = { hooks: ['will-routine-run', 'will-later-point'] as never };
@@ -395,6 +475,20 @@ describe('GhostInstallReceiptStore cleanup', () => {
     expect(old.receipt.observeCapabilityApproved).toBeUndefined();
     await store.write({ ...old.receipt, observeCapabilityApproved: true });
     expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { observeCapabilityApproved: true, revision: receipt.revision } });
+  });
+
+  // §1.2/§5: older approved receipts stay enabled; unknown and removed groups cannot gain authority.
+  it('keeps old receipts usable and persists only explicitly approved, still-declared host groups', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, hostTools: ['history', 'future-group'] };
+    receipt.taskCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    expect(old).toMatchObject({ state: 'approved', receipt: { enabled: true, taskCapabilityApproved: true } });
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.approvedHostToolGroups).toBeUndefined();
+    await store.write({ ...old.receipt, approvedHostToolGroups: ['history', 'control', 'history', 'future-group'] as never });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { approvedHostToolGroups: ['history'], revision: receipt.revision } });
   });
 
   it('round trips companions approval without inferring it from other grants', async () => {

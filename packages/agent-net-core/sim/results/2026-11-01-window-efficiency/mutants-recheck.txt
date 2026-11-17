@@ -1,0 +1,9 @@
+survived  窗口受限时节奏仍压着  
+caught    断网时不捎带最老的分片  repeated_outages_recover_fast, result:
+survived  丢包后不保持捎带  
+caught    捎带份数不随丢包率增加  lost_messages_do_not_wait_for_the_next_one, small_messages_stay_covered_on_long_paths, res
+caught    抖动也算晚到  jitter_is_not_counted_as_holes, result:
+caught    受保护的包不等校验结果  parity_recovers_losses_without_a_round_trip, result:
+caught    超时只判最老的包  recovery_policies_keep_streams_intact_and_make_progress, every_seed_delivers_an_intact_ord
+caught    首字节版本位不校验  packets_of_another_version_are_rejected, result:
+MU_DONE

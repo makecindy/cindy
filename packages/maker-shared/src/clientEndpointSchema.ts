@@ -76,6 +76,8 @@ export const CLIENT_ENDPOINT_KEYS = [
   'authDesktopCallbackUrl',
   'chatApiBaseUrl',
   'deviceLinkApiBaseUrl',
+  // Independent V2 service. Empty keeps official V2 unconfigured; never guess a host or borrow V1.
+  'agentNetApiBaseUrl',
   'oauthBrokerApiBaseUrl',
   // oss-server(公开资产直传预签名,当前场景:头像上传)。
   'ossApiBaseUrl',
@@ -163,6 +165,7 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   authDesktopCallbackUrl: ['https:'],
   chatApiBaseUrl: ['https:'],
   deviceLinkApiBaseUrl: ['https:'],
+  agentNetApiBaseUrl: ['https:'],
   oauthBrokerApiBaseUrl: ['https:'],
   ossApiBaseUrl: ['https:'],
   heartbeatUrl: ['https:'],

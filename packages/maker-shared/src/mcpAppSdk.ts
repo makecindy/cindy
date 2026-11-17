@@ -1,13 +1,14 @@
 import { parse, type DefaultTreeAdapterTypes } from 'parse5';
 
 const moduleName = '@modelcontextprotocol/ext-apps';
+const addonNames = ['@cindy/ext-apps', '@cindy/ext-apps/react'] as const;
 const htmlNamespace = 'http://www.w3.org/1999/xhtml';
 function environmentPlan(html: string) {
   // A byte-order mark is an encoding marker, not text before the doctype.
   const offset = html.startsWith('\ufeff') ? 1 : 0;
   const document = parse(html.slice(offset), { sourceCodeLocationInfo: true });
   let insertion = offset;
-  let authoredSdk = false;
+  const authored = new Set<string>();
   let authoredMap: { start: number; end: number; value: Record<string, unknown> } | undefined;
   const visit = (node: DefaultTreeAdapterTypes.Node) => {
     if (node.nodeName === '#documentType') insertion = (node.sourceCodeLocation?.endOffset ?? 0) + offset;
@@ -21,10 +22,9 @@ function environmentPlan(html: string) {
         if (type === 'importmap') {
           try {
             const map = JSON.parse(text);
-            authoredSdk ||= Object.entries(map?.imports ?? {}).some(([name, address]) =>
-              (name === moduleName || (name.endsWith('/') && moduleName.startsWith(name))) &&
-              (address === null || (typeof address === 'string' &&
-                (name === moduleName || address.endsWith('/')))));
+            for (const target of [moduleName, ...addonNames]) if (Object.entries(map?.imports ?? {}).some(([name, address]) =>
+              (name === target || (name.endsWith('/') && target.startsWith(name))) &&
+              (address === null || (typeof address === 'string' && (name === target || address.endsWith('/')))))) authored.add(target);
             const location = node.sourceCodeLocation;
             if (!authoredMap && map && typeof map === 'object' && !Array.isArray(map) &&
                 (map.imports === undefined || (map.imports && typeof map.imports === 'object' && !Array.isArray(map.imports))) &&
@@ -38,7 +38,7 @@ function environmentPlan(html: string) {
     if ('childNodes' in node) node.childNodes.forEach(visit);
   };
   visit(document);
-  return { insertion, authoredMap, authoredSdk };
+  return { insertion, authoredMap, authored };
 }
 
 // The default form action is always disabled by CSP. Cancel it before Chromium
@@ -76,18 +76,22 @@ const runtime = `<script data-cindy-runtime>
 </script>`;
 
 /** Prepare the App environment outside the chat contract's startup dependency graph. */
-export function withHostAppSdk(html: string, sdkUrl: string): string {
+export function withHostAppSdk(html: string, sdkUrl: string, addons?: { coreUrl: string; reactUrl: string }): string {
   if (!new URL(sdkUrl).hostname) throw new Error('MCP_APP_SDK_URL_REQUIRED');
-  const { insertion, authoredMap, authoredSdk } = environmentPlan(html);
+  const { insertion, authoredMap, authored } = environmentPlan(html);
   let prefix = runtime;
-  if (!authoredSdk) {
+  const imports: Record<string, string> = {};
+  if (!authored.has(moduleName)) imports[moduleName] = sdkUrl;
+  if (addons && !authored.has(addonNames[0])) imports[addonNames[0]] = addons.coreUrl;
+  if (addons && !authored.has(addonNames[1])) imports[addonNames[1]] = addons.reactUrl;
+  if (Object.keys(imports).length) {
     if (authoredMap) {
       const value = { ...authoredMap.value, imports: {
-        ...(authoredMap.value.imports as Record<string, unknown> | undefined), [moduleName]: sdkUrl,
+        ...(authoredMap.value.imports as Record<string, unknown> | undefined), ...imports,
       } };
       html = html.slice(0, authoredMap.start) + JSON.stringify(value).replace(/</g, '\\u003c') + html.slice(authoredMap.end);
     } else {
-      prefix += '<script type="importmap">' + JSON.stringify({ imports: { [moduleName]: sdkUrl } }) + '</script>';
+      prefix += '<script type="importmap">' + JSON.stringify({ imports }) + '</script>';
     }
   }
   return html.slice(0, insertion) + prefix + html.slice(insertion);

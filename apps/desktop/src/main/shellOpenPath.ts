@@ -2,7 +2,7 @@
 
 import path from 'node:path';
 
-import * as cindyMediaBlobStore from './cindy-media/blobStore.js';
+import * as cindyMediaBlobStore from './cindy-media/blobStore.desktop.js';
 import { stripWindowsDriveUriSlash } from '../shared/pathText';
 
 /**

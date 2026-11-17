@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createPluginMarketAgentTools } from '../agentTools.js';
 import type { PluginMarketDetail, PluginMarketPage } from '../../../shared/pluginMarket.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
-import { ServerApiError } from '../../serverApiClient.js';
+import { ServerApiError } from '../../serverApiClient.desktop.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import type { PluginMarketInstallContext } from '../service.js';
 

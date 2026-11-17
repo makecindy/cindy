@@ -24,8 +24,12 @@ import { Button } from '@/components/ui/button';
  * 与那三条的区别是**不进 main 侧的 pending-alerts 批量查询**:worktree 状态要
  * fs.access 探目录 + spawn git 查分支/快照 ref,对未打开会话批量算比纯读 sessions 表
  * 贵一个数量级(见 main/worktree/restore.ts)。故未打开的会话不主动亮点,红点只在
- * 会话被打开、自查出结果后建立。点 X 只是本视图隐藏(不落库),重开会话自查照旧
- * 命中、红点重新打上 —— 告警确实还在,行为自洽。
+ * 会话被打开、自查出结果后建立。
+ *
+ * 点 X = 用户已处置这条提示:记到本机(lib/worktreeRestoreBannerDismissal),重开
+ * 任务、重启应用后同一条提示都不再弹出,也不再打红点。不恢复并不丢东西 —— 继续
+ * 发消息时发送链会自动重建 worktree。记录在自查到「目录已在且无待应用快照」时清掉,
+ * 所以恢复之后再次被回收、或提示内容变了(目录不存在 → 有未应用快照)仍会照常提示。
  *
  * 颜色走主题 token(规则 16):error 语义豁免色组(工作区缺失属破坏性状态提示)。
  */
@@ -39,11 +43,22 @@ import { useRefreshWorktreeForSession } from '@/contexts/WorktreeContext';
 import { addSessionAttention } from '@/lib/sessionAttentionStore';
 import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
 import { refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
+import {
+  clearWorktreeRestoreBannerDismissal,
+  dismissWorktreeRestoreBanner,
+  isWorktreeRestoreBannerDismissed,
+  worktreeRestoreBannerSignature,
+} from '@/lib/worktreeRestoreBannerDismissal';
 
 type BannerPhase = 'hidden' | 'restorable' | 'restoring';
 /** missing = 目录不存在需重建;pending = 目录在但有未应用快照。决定文案与按钮词。 */
 type BannerVariant = 'missing' | 'pending';
 type RestoreFailureReason = 'gone' | 'no-worktree' | 'git-error' | 'unknown';
+
+/** 托管 worktree 的名字就是目录名(`<baseRepo>/.cindy-worktrees/<name>`),兼容两种分隔符。 */
+function worktreeNameFromPath(worktreePath: string): string {
+  return worktreePath.split(/[\\/]/).filter(Boolean).pop() ?? '';
+}
 
 function restoreFailureKey(reason: RestoreFailureReason | undefined): string {
   switch (reason) {
@@ -71,6 +86,8 @@ export function WorktreeRestoreBanner({
   const refreshWorktreeForSession = useRefreshWorktreeForSession();
   const [phase, setPhase] = useState<BannerPhase>('hidden');
   const [variant, setVariant] = useState<BannerVariant>('missing');
+  /** 自查到的 worktree 目录:文案里的名字与关闭记录的身份都从它来。 */
+  const [worktreePath, setWorktreePath] = useState('');
   /** 本组件给哪个会话打过红点 —— 清点只清自己打的,不误伤 live error 等其它来源。 */
   const markedSessionRef = useRef<string | null>(null);
 
@@ -101,17 +118,34 @@ export function WorktreeRestoreBanner({
         const status = (await window.electronAPI.worktreeRestoreStatus(sessionId)) as {
           state?: string;
           hasSnapshot?: boolean;
+          worktreePath?: string;
         };
         if (cancelled) return;
+        let nextVariant: BannerVariant;
         if (status?.state === 'restorable') {
-          setVariant('missing');
-          setPhase('restorable');
+          nextVariant = 'missing';
         } else if (status?.state === 'present' && status.hasSnapshot) {
-          setVariant('pending');
-          setPhase('restorable');
+          nextVariant = 'pending';
         } else {
+          // worktree 确认已在且没有待应用快照 = 上一条提示已成过去,清掉关闭记录,
+          // 之后再次被回收时照常提示。其余状态(查不到、分支已没)不动记录:它们
+          // 可能只是一次查询失败,清了会让已关闭的提示又弹出来。
+          if (status?.state === 'present') clearWorktreeRestoreBannerDismissal(sessionId);
           return;
         }
+        const nextPath = status.worktreePath ?? '';
+        // 用户关过这条提示 → 不再弹出,也不打红点。
+        if (
+          isWorktreeRestoreBannerDismissed(
+            sessionId,
+            worktreeRestoreBannerSignature(nextVariant, nextPath),
+          )
+        ) {
+          return;
+        }
+        setWorktreePath(nextPath);
+        setVariant(nextVariant);
+        setPhase('restorable');
         // 横幅要展示 = 有未处理告警 → 打红点(与错误三条同一个 'error' 语义色)。
         markedSessionRef.current = sessionId;
         addSessionAttention(sessionId, 'error');
@@ -153,6 +187,7 @@ export function WorktreeRestoreBanner({
           setPhase('hidden');
           // 恢复成功 = 告警消失,清**发起时那个会话**的红点(过期完成会被忽略)。
           clearOwnAttentionFor(target);
+          clearWorktreeRestoreBannerDismissal(target);
         }
         void refreshWorktreeForSession(target);
       } else {
@@ -176,6 +211,7 @@ export function WorktreeRestoreBanner({
   if (phase === 'hidden') return null;
   const restoring = phase === 'restoring';
   const pending = variant === 'pending';
+  const name = worktreeNameFromPath(worktreePath);
 
   return (
     <ErrorNotice
@@ -185,12 +221,17 @@ export function WorktreeRestoreBanner({
       icon={<FolderX size={16} />}
       message={
         pending
-          ? t('chat.worktreeRestoreBanner.textPendingSnapshot')
-          : t('chat.worktreeRestoreBanner.text')
+          ? t('chat.worktreeRestoreBanner.textPendingSnapshot', { name })
+          : t('chat.worktreeRestoreBanner.text', { name })
       }
       onDismiss={() => {
         setPhase('hidden');
-        if (sessionId) clearOwnAttentionFor(sessionId);
+        if (!sessionId) return;
+        dismissWorktreeRestoreBanner(
+          sessionId,
+          worktreeRestoreBannerSignature(variant, worktreePath),
+        );
+        clearOwnAttentionFor(sessionId);
       }}
       dismissLabel={t('chat.worktreeRestoreBanner.dismissTitle')}
       actions={

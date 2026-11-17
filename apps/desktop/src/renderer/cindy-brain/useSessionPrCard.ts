@@ -67,6 +67,34 @@ export function projectPrCard(html: string) {
     </style>` +
       actions.outerHTML +
       (gear?.outerHTML ?? '');
+  } else {
+    // Another task follows this PR: this task's card is a read-only reference whose
+    // only control is the link to that task. Show the same state and link here.
+    const taskLink = container.querySelector<HTMLButtonElement>(
+      'button[data-ghost-action="pr:open-task"]',
+    );
+    if (taskLink) {
+      let card: Element = taskLink;
+      while (card.parentElement && card.parentElement !== container) card = card.parentElement;
+      // The card header ends with its state, after the last separator of the meta line.
+      const state = [...(card.firstElementChild?.querySelectorAll('span') ?? [])]
+        .map((separator) => separator.nextSibling)
+        .filter((node) => node?.nodeType === Node.TEXT_NODE && node.textContent?.trim())
+        .pop()
+        ?.textContent?.trim();
+      const row = document.createElement('div');
+      row.className = 'pr-summary-actions';
+      row.style.cssText =
+        'display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;min-height:32px';
+      if (state) {
+        const label = document.createElement('div');
+        label.style.cssText = 'padding:0 4px;font-size:13px;color:var(--text-secondary)';
+        label.textContent = state;
+        row.append(label);
+      }
+      row.append(taskLink);
+      summaryHtml = styles + row.outerHTML;
+    }
   }
   let settingsHtml: string | null = null;
   if (settingsPanel) {

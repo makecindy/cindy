@@ -1,3 +1,4 @@
+import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import type { RenderItem } from './messageWorkGroups';
 
@@ -11,7 +12,8 @@ export function appendPendingQueueItems(
   for (const item of rendered) if (item.type === 'message') seen.add(item.message.clientId);
   const extra: RenderItem[] = [];
   for (const message of pending) {
-    if (seen.has(message.clientId)) continue;
+    // The answer is already on its question card, including while delivery waits.
+    if (isAnsweredAsyncQuestionClientId(message.clientId) || seen.has(message.clientId)) continue;
     seen.add(message.clientId);
     extra.push({ type: 'message', key: `msg-${message.clientId}`, message, pending: true });
   }

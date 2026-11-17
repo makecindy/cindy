@@ -37,6 +37,11 @@ export interface MakerMemoryHostContext {
   logger: Logger;
   /** Bot scopes keep their records inside the Bot Home. */
   botMemoryDir?(ownerRoot: string, botId: string): string;
+  /**
+   * A project that keeps its memory inside its own folder (a V2 teammate's project), versioned
+   * with it and switched by its own setting: that folder, or null for the historical place.
+   */
+  projectMemoryDir?(scopeKey: string, ownerRoot: string): string | null;
   isOneShotRouteDisabled?(agent: AgentKind): Promise<boolean>;
   reviewOneShot?: MakerMemoryManagerDeps['reviewOneShot'];
   reviewAgent?: AgentKind;
@@ -68,13 +73,20 @@ export function createMakerMemoryManagerForHost(ctx: MakerMemoryHostContext): Ma
     resolveBasePath: resolveOwnerRoot,
     ownerScopeKey,
     reloadEnabled: () => ctx.readEnabled(resolveOwnerRoot()),
-    ...(ctx.botMemoryDir
+    ...(ctx.botMemoryDir || ctx.projectMemoryDir
       ? {
           resolveStorageDir: (scopeKey: string, ownerRoot: string) => {
             const botId = parseBotMemoryScopeKey(scopeKey);
-            return botId ? ctx.botMemoryDir!(ownerRoot, botId) : null;
+            if (botId) return ctx.botMemoryDir ? ctx.botMemoryDir(ownerRoot, botId) : null;
+            return ctx.projectMemoryDir?.(scopeKey, ownerRoot) ?? null;
           },
-          isIndependentScope: (scopeKey: string) => parseBotMemoryScopeKey(scopeKey) !== null,
+          isIndependentScope: (scopeKey: string) => {
+            if (parseBotMemoryScopeKey(scopeKey) !== null) return !!ctx.botMemoryDir;
+            const ownerRoot = resolveOwnerRoot();
+            if (!ownerRoot || !ctx.projectMemoryDir) return false;
+            // A project folder whose memory is a link refuses to resolve; it is still the project's own.
+            try { return ctx.projectMemoryDir(scopeKey, ownerRoot) !== null; } catch { return true; }
+          },
         }
       : {}),
     sqliteFactory: ctx.sqliteFactory,

@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const fixture = vi.hoisted(() => ({
   realm: "global",
+  appState: { currentState: "active" },
   relay: null as { baseUrl: string } | null,
   application: {
     getPushNotificationServiceEnvironmentAsync: vi.fn(),
@@ -17,7 +18,7 @@ const fixture = vi.hoisted(() => ({
     addListener: vi.fn(() => ({ remove: vi.fn() })),
   },
 }));
-vi.mock("react-native", () => ({ Platform: { OS: "ios" } }));
+vi.mock("react-native", () => ({ Platform: { OS: "ios" }, AppState: fixture.appState }));
 vi.mock("expo-modules-core", () => ({
   requireOptionalNativeModule: (name: string) => name === "ExpoApplication" ? fixture.application : fixture.native,
 }));
@@ -47,7 +48,7 @@ const registration = () => ({
 });
 const options = () => ({
   accountScope: activityAccountScope("a"),
-  getAccessToken: vi.fn(async () => "test-credential"),
+  getAccessToken: vi.fn(async (): Promise<string | null> => "test-credential"),
   onRegistered: vi.fn(),
   urlScheme: "cindy",
   labels: {
@@ -66,6 +67,7 @@ beforeEach(() => {
   fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
   vi.stubGlobal("fetch", fetchMock);
   fixture.realm = "global";
+  fixture.appState.currentState = "active";
   fixture.relay = null;
   fixture.application.getPushNotificationServiceEnvironmentAsync.mockResolvedValue("development");
   fixture.application.getApplicationReleaseTypeAsync.mockResolvedValue(0);
@@ -231,4 +233,66 @@ it("waits for a sent registration before logout DELETE and rejects its late succ
   ]);
   expect(opts.onRegistered).not.toHaveBeenCalled();
   sync.dispose();
+});
+
+// Unit: an unchanged update token used to suppress foreground recovery forever.
+// Exercise the transport, including the no-extra-request and ownership boundaries.
+it("refreshes a stale registered activity on resume without publishing local diagnostics", async () => {
+  vi.useFakeTimers();
+  const opts = options();
+  fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), updateToken: "update", isStale: false });
+  const sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), updateToken: "update", isStale: true });
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1]!.body as string)).not.toHaveProperty("isStale");
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(30_000);
+    fetchMock.mockResolvedValue({ ok: false, status: 503 } as Response);
+    opts.onRegistered.mockClear();
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(opts.onRegistered).not.toHaveBeenCalledWith(false);
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
+
+// Unit: a stale ActivityKit event while suspended must not add background network work.
+it("defers background stale recovery until foreground and preserves ownership without auth", async () => {
+  const opts = options();
+  fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), updateToken: "update", isStale: false });
+  const sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    fixture.appState.currentState = "background";
+    fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), updateToken: "update", isStale: true });
+    await sync.sync();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fixture.appState.currentState = "active";
+    opts.getAccessToken.mockResolvedValueOnce(null);
+    opts.onRegistered.mockClear();
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(opts.onRegistered).not.toHaveBeenCalledWith(false);
+    await sync.sync(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  } finally { sync.dispose(); }
+});
+
+// Unit: a reconnect rebuilds the syncer; a failed first attempt must not undo an
+// already confirmed server takeover (it would re-enable the partial local mirror).
+it("keeps a confirmed server takeover when a rebuilt syncer fails to register", async () => {
+  const opts = { ...options(), initiallyRegistered: true };
+  fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), updateToken: "update" });
+  fetchMock.mockResolvedValue({ ok: false, status: 503 } as Response);
+  const sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    expect(fetchMock).toHaveBeenCalled();
+    expect(opts.onRegistered).not.toHaveBeenCalledWith(false);
+  } finally { sync.dispose(); }
 });

@@ -459,7 +459,7 @@ function SetupMigrationDialogBody() {
                   {group.title}
                 </label>
                 <span className="text-12 text-[var(--confirm-desc)]">
-                  {t('setupMigration.review.groupCount', { selected: checkedCount, total: ready.length })}
+                  {t('setupMigration.review.groupCount', { count: checkedCount, selected: checkedCount, total: ready.length })}
                 </span>
               </div>
               {group.description ? (

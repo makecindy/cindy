@@ -9,7 +9,14 @@ import { assertMcpAppDocumentCaller, mountRemoteAppDocument, unmountRemoteAppDoc
 
 const id = z.string().min(1).max(256);
 const documentSchema = z.object({
-  sdk: z.object({ source: z.string().max(MCP_APPS_MAX_BYTES) }).optional().catch(undefined),
+  sdk: z.object({
+    source: z.string().max(MCP_APPS_MAX_BYTES),
+    addons: z.object({
+      'cindy/view-state': z.object({
+        source: z.string().max(16 * 1024), reactSource: z.string().max(16 * 1024),
+      }).optional(),
+    }).optional().catch(undefined),
+  }).optional().catch(undefined),
   viewId: id, html: z.string(), csp: z.string(), prefersBorder: z.boolean(),
   policy: z.object({
     connectDomains: z.array(z.string()).optional(), resourceDomains: z.array(z.string()).optional(),

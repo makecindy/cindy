@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 import * as Linking from "expo-linking";
 import { useTranslation } from "react-i18next";
@@ -40,6 +40,9 @@ export function AgentActivityBridge() {
     hasActivity: boolean;
   } | null>(null);
   const registrationKey = `${scope}:${accountGeneration}`;
+  // A reconnect rebuilds the syncer; it must inherit a confirmed server takeover.
+  const registeredRef = useRef(registered);
+  registeredRef.current = registered;
   useEffect(() => {
     if (!native || !initialized) return;
     if (native.configureAccount) {
@@ -64,8 +67,11 @@ export function AgentActivityBridge() {
         running: t("devices.companions.avatarStatus.running"),
         completed: t("devices.companions.avatarStatus.done"),
         error: t("devices.companions.avatarStatus.error"),
-        stale: t("devices.companions.stale"),
+        stale: t("devices.liveActivity.waitingForUpdate"),
       },
+      initiallyRegistered:
+        registeredRef.current?.key === registrationKey &&
+        registeredRef.current.hasActivity,
       onRegistered: (hasActivity) =>
         setRegistered((previous) =>
           previous?.key === registrationKey &&
@@ -75,7 +81,7 @@ export function AgentActivityBridge() {
         ),
     });
     const listener = AppState.addEventListener("change", (state) => {
-      if (state === "active") sync.sync();
+      if (state === "active") sync.sync(true);
     });
     return () => {
       listener.remove();
@@ -133,7 +139,7 @@ export function AgentActivityBridge() {
           Linking.createURL(`/sessions/${encodeURIComponent(session.id)}`, {
             queryParams: { deviceId: session.deviceLinkDeviceId! },
           }),
-        t("devices.companions.stale"),
+        t("devices.liveActivity.waitingForUpdate"),
       );
       // An idle online peer cannot attest that an unreachable peer has finished.
       // Prefer a displayable live activity; otherwise retain the last stale one.
@@ -151,7 +157,7 @@ export function AgentActivityBridge() {
       )
         return undefined;
       return state ? JSON.stringify({ accountId: scope, state }) : null;
-    }, native);
+    }, native, () => AppState.currentState === "active");
     const unsubscribe = remoteSessionStore.subscribeHomeStatus(() =>
       controller.sync(),
     );
@@ -164,7 +170,6 @@ export function AgentActivityBridge() {
       heartbeat = setInterval(() => controller.sync(), 60_000);
     };
     resume();
-    if (AppState.currentState !== "active") controller.sync();
     const listener = AppState.addEventListener("change", (state) => {
       if (state === "active") resume();
       else {

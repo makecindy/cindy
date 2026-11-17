@@ -933,8 +933,10 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--handoff-qr"] {
     if count <= 0 { break }
     data.append(chunk, count: count)
   }
-  guard data.count == length, let session = CGSessionCopyCurrentDictionary() as? [String: Any],
-    !(session["CGSSessionScreenIsLocked"] as? Bool ?? false) else { handoffRespond(["error": "unavailable"]) }
+  // Decode only the bytes Main supplied, including screenshots from another
+  // device. This never reads the desktop, so it remains usable while locked.
+  // Caller authentication above and the --handoff window lock gate still apply.
+  guard data.count == length else { handoffRespond(["error": "unavailable"]) }
   handoffRespond(["codes": handoffDetectQr(data)])
 }
 if CommandLine.arguments.contains("--lock-state") {

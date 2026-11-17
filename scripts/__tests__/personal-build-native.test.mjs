@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {sdkSupported,nativeIdentity,detachRuntime,personalBundleId} from '../personal-build/native-capabilities.mjs';
+import {sdkSupported,nativeIdentity,detachRuntime,personalBundleId,preparePersonalInput} from '../personal-build/native-capabilities.mjs';
 test('Live Activity SDK gate rejects old/invalid SDKs and accepts newer SDKs',()=>{
  for(const v of ['27.0','27.2','26.9','','invalid']) assert.equal(sdkSupported(v),false,v);
  for(const v of ['27.3','27.3.1','28.0']) assert.equal(sdkSupported(v),true,v);
@@ -83,7 +83,7 @@ test('runtime reuse, failure isolation, live selection guard and previous-versio
 // Existing cache tests only covered a symlink. Tier: filesystem integration, injected rename failure.
 test('fixed installation reuses its path and resumes a failed switch with old runtime retained',async()=>{
  const {prepareRuntime}=await import('../personal-build/runtime-store.mjs');
- const {installFixedRuntime,verifyInstalledRuntime}=await import('../personal-build/fixed-install.mjs');
+ const {installFixedRuntime,verifyInstalledRuntime,preflightFixedRuntime}=await import('../personal-build/fixed-install.mjs');
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'personal-fixed-install-'));
  try {
   const prepare=(v,identity='fixture')=>prepareRuntime({store:path.join(dir,'store'),inputs:{bundleId:'personal-test',version:v},signingIdentity:identity,
@@ -92,6 +92,9 @@ test('fixed installation reuses its path and resumes a failed switch with old ru
   const app=path.join(fs.realpathSync(dir),'Applications','Cindy Personal.app');
   const options={isRunning:()=>false,verifySignature:()=>{}};
   installFixedRuntime(first,app,options);
+  assert.deepEqual(preflightFixedRuntime(second,app,{...options,requirement:()=> 'same designated requirement'}),{installed:true,sameRequirement:true});
+  // Same certificate/bundle ID is insufficient: reject changed designated requirements before quit.
+  assert.throws(()=>preflightFixedRuntime(second,app,{...options,requirement:where=>where === app ? 'old' : 'new'}),/signing requirement changed/);
   assert.equal(fs.lstatSync(app).isSymbolicLink(),false);
   const before=fs.statSync(path.join(app,'binary')).mtimeMs;
   installFixedRuntime(first,app,{...options,isRunning:()=>true});
@@ -103,6 +106,8 @@ test('fixed installation reuses its path and resumes a failed switch with old ru
   assert.equal(fs.existsSync(app),false);
   const pending=JSON.parse(fs.readFileSync(app+'.personal-transition.json'));
   assert.equal(fs.readFileSync(path.join(pending.backup,'binary'),'utf8'),'one');
+  assert.equal(path.dirname(pending.backup),path.join(fs.realpathSync(dir),'store','install-backups'));
+  assert.ok(!pending.backup.endsWith('.app'));
   installFixedRuntime(second,app,options);
   assert.equal(verifyInstalledRuntime(second,app,()=>{}),app);
   assert.equal(fs.readFileSync(path.join(app,'binary'),'utf8'),'two');
@@ -116,6 +121,18 @@ test('fixed installation reuses its path and resumes a failed switch with old ru
   installFixedRuntime(third,app,{...options,isRunning:()=>true});
   assert.equal(fs.statSync(app).ino,inode);
   verifyInstalledRuntime(third,app,()=>{});
+  // OS registration failures must never strand the installation or its recovery.
+  const fourth=prepare('four');const registrations=[];
+  installFixedRuntime(fourth,app,{...options,registry:{unregister:()=>{throw Error('registry unavailable');},register:fixed=>registrations.push(fixed)}});
+  assert.equal(fs.existsSync(app+'.personal-transition.json'),false);
+  assert.deepEqual(registrations,[app]);
+  const metadata=JSON.parse(fs.readFileSync(app+'.personal-install.json'));
+  assert.deepEqual(metadata.registrationPending.errors,['registry unavailable']);
+  verifyInstalledRuntime(fourth,app,()=>{});
+  // Recovery to the old runtime also completes even if indexing remains unavailable.
+  installFixedRuntime(third,app,{...options,registry:{unregister:()=>{throw Error('registry unavailable');},register:()=>{throw Error('index offline');}}});
+  verifyInstalledRuntime(third,app,()=>{});
+  assert.equal(fs.existsSync(app+'.personal-transition.json'),false);
   const foreign=path.join(dir,'Other.app');fs.mkdirSync(foreign);fs.writeFileSync(path.join(foreign,'keep'),'mine');
   assert.throws(()=>installFixedRuntime(first,foreign,options),/unmanaged/);
   assert.equal(fs.readFileSync(path.join(foreign,'keep'),'utf8'),'mine');
@@ -137,4 +154,78 @@ test('personal shell accepts task URLs, folders and cartridges without claiming 
   assert.ok(!p.CFBundleDocumentTypes.some(t=>t.CFBundleTypeExtensions?.includes('cshare')));
  }
  assert.throws(()=>personalOpenTypes('unknown'),/Invalid/);
+});
+
+// Regression: native preparation omitted the input executable, forcing a profile
+// cache build with an unrelated ad-hoc identity. Filesystem integration with a
+// fake compiler checks the production build entry and cleanup on compiler failure.
+test('personal preparation embeds the input helper and propagates build failure',()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'personal-input-build-'));
+ try {
+  for(const [file,text] of [
+   ['packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift','caller fixture'],
+   ['apps/desktop/native/remote-desktop/macos-input.swift','input fixture'],
+  ]) {const p=path.join(root,file);fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,text);}
+  const app=path.join(root,'Cindy.app');let temporary;
+  preparePersonalInput(root,app,(cmd,args)=>{
+   assert.equal(cmd,'xcrun');assert.deepEqual(args.slice(0,4),['swiftc','-D','DESKTOP_INPUT_PERSONAL','-O']);
+   temporary=path.dirname(args[4]);assert.equal(fs.readFileSync(args[4],'utf8'),'caller fixture\ninput fixture');
+   fs.writeFileSync(args.at(-1),'compiled fixture');
+  });
+  assert.equal(fs.readFileSync(path.join(app,'Contents/Resources/tools/remote-desktop/cindy-macos-desktop-input'),'utf8'),'compiled fixture');
+  assert.equal(fs.existsSync(temporary),false);
+  assert.throws(()=>preparePersonalInput(root,app,(_cmd,args)=>{
+   temporary=path.dirname(args[4]);throw Error('compiler failed');
+  }),/compiler failed/);
+  assert.equal(fs.existsSync(temporary),false);
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+// Registration is not filesystem retention: even a renamed .bundle can remain registered.
+// Exercise exact bundle-ID selection and the production unregister/register order without system writes.
+test('LaunchServices retirement removes the old path then re-registers the stable installation',async()=>{
+ const {parseRegisteredApps,appRegistry}=await import('../personal-build/app-registry.mjs');
+ const dump='--------------------\npath: /tmp/old.bundle (0x123)\nidentifier: app.cindy.personal.fixture\n--------------------\npath: /tmp/official.app (0x456)\nidentifier: com.xd.cindy\n';
+ assert.deepEqual(parseRegisteredApps(dump,'app.cindy.personal.fixture'),['/tmp/old.bundle']);
+ const calls=[];appRegistry(args=>calls.push(args)).retire('/tmp/old.bundle','/tmp/Personal.app');
+ assert.deepEqual(calls,[['-u','/tmp/old.bundle'],['-f','/tmp/Personal.app']]);
+});
+
+test('registry repair preserves running, foreign and unverifiable copies',async()=>{
+ const {reconcileRegistrations}=await import('../personal-build/app-registry.mjs');
+ const removed=[],registered=[];
+ const result=reconcileRegistrations('/fixed.app',{paths:['/fixed.app','/old.bundle','/running.app','/foreign.app','/tampered.app'],
+  canonical:copy=>copy,
+  verify:copy=>{if(copy==='/tampered.app')throw Error('invalid signature');},
+  isRunning:copy=>copy==='/running.app',sameBundle:copy=>copy!=='/foreign.app',
+  registry:{unregister:copy=>removed.push(copy),register:copy=>registered.push(copy)}});
+ assert.deepEqual(removed,['/old.bundle']);assert.deepEqual(registered,['/fixed.app']);
+ assert.equal(result.ok,false);assert.equal(result.results.filter(r=>r.state==='retained').length,3);
+});
+
+test('registry repair never unregisters an alias of the fixed application',async t=>{
+ const {reconcileRegistrations}=await import('../personal-build/app-registry.mjs');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'registry-alias-'));
+ t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const app=path.join(dir,'Fixed.app'),alias=path.join(dir,'Alias.app');
+ fs.mkdirSync(app);fs.symlinkSync(app,alias);
+ const removed=[];
+ const result=reconcileRegistrations(app,{paths:[alias],verify:()=>{},isRunning:()=>false,sameBundle:()=>true,
+  registry:{unregister:copy=>removed.push(copy),register:()=>{}}});
+ assert.deepEqual(removed,[]);assert.equal(result.ok,false);
+ assert.match(result.results[0].reason,/Alias/);
+});
+
+test('registry repair retires managed ad-hoc copies and missing entries without touching foreign apps',async()=>{
+ const {reconcileRegistrations}=await import('../personal-build/app-registry.mjs');
+ const removed=[];
+ const result=reconcileRegistrations('/fixed.app',{
+  paths:['/state/old.bundle','/state/foreign.bundle','/external/ad-hoc.app','/missing.app','/state/running.bundle'],
+  canonical:copy=>{if(copy==='/missing.app')throw Object.assign(Error('missing'),{code:'ENOENT'});return copy;},
+  managed:copy=>copy.startsWith('/state/'),sameBundle:copy=>copy!=='/state/foreign.bundle',
+  isRunning:copy=>copy==='/state/running.bundle',verify:copy=>{if(copy!=='/fixed.app')throw Error('certificate differs');},
+  registry:{unregister:copy=>removed.push(copy),register:()=>{}}});
+ assert.deepEqual(removed,['/state/old.bundle','/missing.app']);
+ assert.equal(result.results.filter(r=>r.state==='retained').length,3);
+ assert.equal(result.ok,false);
 });

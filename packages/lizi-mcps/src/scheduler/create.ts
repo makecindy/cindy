@@ -97,7 +97,7 @@ export function registerScheduleCreateTool(
       agentKind: z.enum(AGENT_KIND).describe('claude-code / codex / pi'),
       modelAgentKind: z.enum(AGENT_KIND).optional().describe('显式模型选择的引擎；绑定任务仅在下次执行时临时切换，结束后恢复'),
       fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('模型速度：false 标准、true 快速、ultrafast 超快；按所选模型支持的档位执行'),
-      modelAgentDeviceId: z.string().optional().describe('模型运行位置：远程或分享供应商的 agentDeviceId；空字符串=自动化所在电脑（schedule_list_models 的 local 在此须转为空字符串），省略=沿用绑定任务，首次新建则用 agentDeviceId 默认位置。远程选择须同时传 modelAgentKind、model、providerId；绑定任务或持续模式显式选择本机也须传 modelAgentKind 和 model；工作目录和工具仍属于自动化所在电脑'),
+      modelAgentDeviceId: z.string().optional().describe('模型运行位置必须与所选模型来源配套：明确选择本机模型时也要传空字符串，不能省略后误用绑定任务的远程电脑；远程或分享供应商传其 agentDeviceId；空字符串=自动化所在电脑（schedule_list_models 的 local 在此须转为空字符串），省略=沿用绑定任务，首次新建则用 agentDeviceId 默认位置。远程选择须同时传 modelAgentKind、model、providerId；绑定任务或持续模式显式选择本机也须传 modelAgentKind 和 model；工作目录和工具仍属于自动化所在电脑'),
       kind: z
         .literal('cron')
         .default('cron')
@@ -169,7 +169,7 @@ export function registerScheduleCreateTool(
         })
         .nullable()
         .optional()
-        .describe('Webhook 触发：外部事件到达时运行本任务（事件只作门铃，内容以不可信元数据传入）。manual=false 时与定时条件并存，manual=true 时只由事件触发；不能用于定时的一次性任务（recurring=false 且 manual=false）。同一任务两轮至少间隔 5 分钟。创建后用 schedule_get 读 webhookStatus 取接收地址；签名密钥只能由用户在任务详情设置，工具拿不到。支持已登录且有接收服务的目标电脑。'),
+        .describe('Webhook 触发：外部事件到达时运行本任务（事件只作门铃，内容以不可信元数据传入）。manual=false 时与定时条件并存，manual=true 时只由事件触发；不能用于定时的一次性任务（recurring=false 且 manual=false）。同一任务两轮至少间隔 5 分钟。GitHub App 用 source={preset:"github-app",repositories:["owner/repository"]}，复用目标电脑在 GitHub 插件中的账号连接与仓库授权，无需任务地址或密钥。其他发送方创建后用 schedule_get 读 webhookStatus 取接收地址；签名密钥只能由用户在任务详情设置，工具拿不到。支持已登录且有接收服务的目标电脑。'),
       preRunHook: z
         .object({
           command: z

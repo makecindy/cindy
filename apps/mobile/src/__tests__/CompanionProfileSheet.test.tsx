@@ -41,8 +41,6 @@ import { CompanionProfileSheet, CompanionCreateSheet } from '@/session/Companion
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const resource = { ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' }, display: { title: 'Cindy' }, links: [], revision: 'v1' };
 const panel = { id: 'profile', values: { name: 'Cindy' }, action: { id: 'grant', label: 'Save', fields: [{ id: 'name', label: 'Name', kind: 'text' }] } };
-import { CompanionFollowUpInvitation } from '@/session/CompanionFollowUpInvitation';
-import { parseCompanionProfileData } from '@/session/companionProfileData';
 let root: Root | undefined;
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(CompanionProfileSheet, { visible: true, resource, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online: true, onClose: h.close, onClosed: h.closed, onDeleted: h.deleted, onOpenSearch() {} }))); }
 beforeEach(() => { vi.clearAllMocks(); h.account = 1; h.read.mockResolvedValue({ resource, panels: [panel, { ...panel, id: 'models', values: { modelChain: '[]', followsDefault: false }, action: { id: 'model-grant', fields: [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }] } }] }); h.invoke.mockResolvedValue({ effects: [] }); });
@@ -127,23 +125,6 @@ it.each([false, true])('retains an unchanged primary selection on a legacy host 
   expect(h.view.page).toBe('home');
 });
 
-it('does not mistake a task edit for primary recovery support on a legacy host', async () => {
-  const primary = { harness: 'pi', model: 'saved', providerId: 'provider', effort: '', fastMode: false };
-  const values = { modelChain: JSON.stringify([primary]), followsDefault: false,
-    taskFollowsPrimary: true, taskModel: JSON.stringify([primary]) };
-  h.read.mockResolvedValue({ resource, panels: [{ ...panel, id: 'models', values,
-    action: { id: 'model-grant', fields: Object.keys(values).map(id => ({ id, kind: 'text' })) } }] });
-  await render(); await act(async () => h.view.onOpen('models'));
-  await act(async () => h.model.onPick(0));
-  await act(async () => h.view.onClosed());
-  await act(async () => h.picker.onSelect({ ...primary, model: 'task-only' }));
-  await act(async () => h.picker.onClose()); await act(async () => h.picker.onClosed());
-  // The primary is still the configured route; selecting it explicitly must not be acknowledged.
-  await act(async () => h.primary.onChange({ ...h.view.values }));
-  await act(async () => h.view.onSubmit(h.view.panel));
-  expect(h.invoke).not.toHaveBeenCalled(); expect(h.view.dirty).toBe(true);
-});
-
 it('still saves an actual primary change to a legacy host', async () => {
   const primary = { harness: 'pi', model: 'saved', providerId: 'provider', effort: '', fastMode: false };
   const values = { modelChain: JSON.stringify([primary]), followsDefault: false };
@@ -157,24 +138,24 @@ it('still saves an actual primary change to a legacy host', async () => {
   expect(h.view.dirty).toBe(false);
 });
 
-it('keeps the primary route while choosing a task model with a different harness', async () => {
+// 2026-11-09: the teammate task model setting is retired. An older host still lists its fields:
+// only the primary chain is shown, and a primary change goes back without them.
+it('hides an older host\'s retired task model and saves only the primary change', async () => {
   const primary = { harness: 'claude', model: 'claude-opus-5-5', providerId: 'anthropic', effort: 'medium', fastMode: false };
-  const task = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai:account', effort: 'high', fastMode: true };
+  const next = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai:account', effort: 'high', fastMode: true };
+  h.model = {}; h.primary = {};
   h.read.mockResolvedValue({ resource, panels: [{ ...panel, id: 'models',
-    values: { modelChain: JSON.stringify([primary]), followsDefault: false, taskFollowsPrimary: true, taskModel: JSON.stringify([primary]) },
+    values: { modelChain: JSON.stringify([primary]), followsDefault: false, taskFollowsPrimary: false, taskModel: JSON.stringify([next]) },
     action: { id: 'model-grant', fields: ['modelChain', 'followsDefault', 'taskModel', 'taskFollowsPrimary'].map(id => ({ id, kind: 'text' })) } }] });
   await render(); await act(async () => h.view.onOpen('models'));
-  expect(h.model.single).toBe(true); expect(h.model.values.followsDefault).toBe(true);
+  expect(h.model).toBe(h.primary);
   await act(async () => h.model.onPick(0));
   await act(async () => h.view.onClosed());
-  await act(async () => h.picker.onSelect(task));
+  await act(async () => h.picker.onSelect(next));
   await act(async () => h.picker.onClose()); await act(async () => h.picker.onClosed());
-  expect(JSON.parse(h.view.values.modelChain)).toEqual([primary]);
-  expect(JSON.parse(h.view.values.taskModel)).toEqual([task]);
-  expect(h.view.values.taskFollowsPrimary).toBe(false);
   await act(async () => h.view.onSubmit(h.view.panel));
   expect(h.invoke).toHaveBeenCalledWith(expect.anything(), { deviceId: 'host', deviceName: 'Mac' }, expect.objectContaining({
-    actionId: 'model-grant', input: { taskModel: JSON.stringify([task]), taskFollowsPrimary: false },
+    actionId: 'model-grant', input: { modelChain: JSON.stringify([next]), followsDefault: false },
   }), 'en');
 });
 it('ignores a late save response after changing accounts', async () => {
@@ -410,27 +391,6 @@ it.each([undefined, JSON.stringify([{ harness: 'pi', model: 'default', providerI
     expect(h.invoke.mock.calls[0][2].input).not.toHaveProperty('modelChain');
   },
 );
-
-// Invitation reads do not authorize a model run. Only a button sends the opaque host action.
-it.each([true, false])('mobile follow-up invitation saves the explicit choice, enable=%s', async enable => {
-  const ref = { collectionId: 'teammates', kind: 'bot', id: 'settings:cindy-default/follow-up' };
-  const raw = { ref, revision: '1', display: { title: 'Follow up' }, links: [],
-    blocks: [{ id: 'follow-up', primitive: 'form', fallbackMarkdown: 'Reads summaries on the teammate computer; uses model allowance.',
-      data: { actionId: 'enable-grant', values: { enabled: false }, invitationAvailable: true, operationActions: { dismiss: 'dismiss-grant' } } }],
-    actions: [{ id: 'enable-grant', label: 'Follow up', fields: [{ id: 'enabled', kind: 'toggle', label: 'Enabled' }] }, { id: 'dismiss-grant', label: 'Not now' }],
-  };
-  h.read.mockResolvedValue(parseCompanionProfileData(raw, ref));
-  const container = document.createElement('div'); root = createRoot(container);
-  await act(async () => root!.render(<CompanionFollowUpInvitation deviceId="host" deviceName="Mac" botId="cindy-default" />));
-  expect(h.invoke).not.toHaveBeenCalled();
-  expect(container.textContent).toContain(raw.blocks[0].fallbackMarkdown);
-  const buttons = container.querySelectorAll('button'); expect(buttons).toHaveLength(2);
-  await act(async () => buttons[enable ? 1 : 0].click());
-  expect(h.invoke).toHaveBeenCalledWith(expect.any(Function), { deviceId: 'host', deviceName: 'Mac' }, {
-    collectionId: 'teammates', resourceRef: ref, actionId: enable ? 'enable-grant' : 'dismiss-grant', input: enable ? { enabled: true } : {},
-  }, 'en');
-  expect(container.querySelectorAll('button')).toHaveLength(0);
-});
 
 // Both platform views share dismissal/navigation: no resource binding may follow an IM task.
 it('opens the original IM task on its computer after the settings sheet closes', async () => {

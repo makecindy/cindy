@@ -427,3 +427,16 @@ export async function loadAgentInputQueueSnapshot(
   }
   return items;
 }
+
+export async function getPersistedInputClientIds(
+  sessionId: string,
+  clientIds: string[],
+): Promise<Set<string>> {
+  if (clientIds.length === 0) return new Set<string>();
+  const db = getDbClient().drizzle;
+  const rows = await db
+    .select({ clientId: messages.clientId })
+    .from(messages)
+    .where(and(eq(messages.sessionId, sessionId), inArray(messages.clientId, clientIds)));
+  return new Set(rows.map((row) => row.clientId));
+}

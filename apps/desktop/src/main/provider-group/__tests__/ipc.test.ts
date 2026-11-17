@@ -6,7 +6,7 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron';
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
 vi.mock('../fastPolicyRuntime.js', () => ({ groupFastPolicyPending: vi.fn(() => false), syncGroupFastPolicy: vi.fn(async () => {}) }));
-vi.mock('../../device-link/dispatch.js', () => ({ notifyProviderShareCatalogChanged: vi.fn() }));
+vi.mock('../../device-link/dispatch.desktop.js', () => ({ notifyProviderShareCatalogChanged: vi.fn() }));
 vi.mock('../runtime.js', () => ({
   getProviderGroupDirectory: vi.fn(),
   getProviderGroupRouter: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock('../runtime.js', () => ({
   setProviderGroupRebalancePreference: vi.fn(),
 }));
 vi.mock('../store.js', () => ({ readProviderGroup: vi.fn(), writeProviderGroup: vi.fn(), listProviderGroups: vi.fn() }));
-vi.mock('../bindings.js', () => ({ pruneProviderGroupBindings: vi.fn() }));
+vi.mock('../bindings.desktop.js', () => ({ pruneProviderGroupBindings: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: vi.fn(() => 'owner-a'),
   isAppSessionBoundaryPending: vi.fn(() => false),
@@ -51,7 +51,7 @@ import { executeProviderShareManagementCommand, parseProviderShareCommand } from
 import { getProviderGroupDirectory, getProviderGroupRouter } from '../runtime';
 import { invokeProviderManagement } from '../managementClient';
 import { captureProviderShareGroupRecovery } from '../../device-link/providerShareGuest';
-import { pruneProviderGroupBindings } from '../bindings';
+import { pruneProviderGroupBindings } from '../bindings.desktop';
 import { readProviderGroup, writeProviderGroup } from '../store';
 import { broadcast } from '../../device-link/index';
 

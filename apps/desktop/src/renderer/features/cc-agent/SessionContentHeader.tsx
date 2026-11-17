@@ -1,5 +1,6 @@
 import { deviceDisplayName } from '@/lib/deviceName';
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
+import { PluginUiSlot, PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
 import { TaskMigrationStatus } from './TaskMigrationStatus';
 /**
  * SessionContentHeader — 会话视图注入 ContentHeader 的中部内容
@@ -603,6 +604,8 @@ export function SessionContentHeader({
 
   return (
     <div className="flex min-w-0 items-center gap-0.5 pl-1">
+      <PluginUiSlot position="session.header" sessionId={session.id} disabled={!!session.remoteHostId || !!session.deviceLinkDeviceId} />
+      {!session.remoteHostId && !session.deviceLinkDeviceId && <PluginUiMenu sessionId={session.id} />}
       {session.source === 'side-chat' && session.parentSessionId && (
         <Tip text={t('chat.sideChat.returnMain')}>
           <Button variant="secondary" tone="quiet" size="sm" className="w-7 p-0" style={WINDOW_NO_DRAG_STYLE}

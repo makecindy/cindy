@@ -5,6 +5,9 @@ import Foundation
 import IOKit.pwr_mgt
 import Security
 import SystemConfiguration
+#if DEBUG
+import os
+#endif
 
 /// Only an already logged-in, foreground session owned by this helper is eligible.
 struct MacConsoleState {
@@ -147,6 +150,91 @@ struct MacUnlockProcessIdentity: Equatable {
   }
 }
 
+/// 只输出固定阶段/结果和耗时；不接收密码、AXValue、账户或原始 OS 错误。
+@MainActor
+final class MacUnlockTrace {
+  enum Stage: String { case write, button, finalCheck, press, wait, cleanup }
+  enum Result: String { case start, success, cannotComplete, failed, cancelled }
+  private let started = ProcessInfo.processInfo.systemUptime
+  func record(_ stage: Stage, _ result: Result) {
+    #if DEBUG
+    let elapsedMs = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+    Logger(subsystem: "app.cindy.remote-desktop", category: "auto-unlock").debug(
+      "stage=\(stage.rawValue, privacy: .public) result=\(result.rawValue, privacy: .public) elapsedMs=\(elapsedMs, privacy: .public)"
+    )
+    #endif
+  }
+}
+
+/// 生产提交编排；注入 AX/时钟以便用假对象覆盖取消、瞬态按钮和单次提交。
+enum MacUnlockSubmission {
+  @MainActor
+  static func run<Element>(
+    field: Element,
+    current: () async throws -> Void,
+    validate: () throws -> (elements: [Element], nodes: [MacUnlockProfile.Node]),
+    same: (Element, Element) -> Bool,
+    write: (Element) -> AXError,
+    press: (Element) -> AXError,
+    unlocked: () throws -> Bool,
+    record: (MacUnlockTrace.Stage, MacUnlockTrace.Result) -> Void,
+    now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+    sleep: (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
+  ) async throws {
+    var stage = MacUnlockTrace.Stage.write
+    do {
+      try await current()
+      _ = try validate()
+      record(.write, .start)
+      guard write(field) == .success else { throw CredentialError.unlockUnavailable }
+      record(.write, .success)
+      stage = .button
+      record(.button, .start)
+      try await current()
+      var submission: (elements: [Element], selection: MacUnlockProfile.Selection)?
+      let submitDeadline = now() + 2
+      while now() < submitDeadline {
+        try await current()
+        let next = try validate()
+        if let selection = try? MacUnlockProfile.select(next.nodes) {
+          submission = (next.elements, selection)
+          break
+        }
+        try await sleep(50_000_000)
+      }
+      guard let submission else { throw CredentialError.unlockUnavailable }
+      record(.button, .success)
+      stage = .finalCheck
+      record(.finalCheck, .start)
+      try await current()
+      let final = try validate()
+      let finalSelection = try MacUnlockProfile.select(final.nodes)
+      guard same(submission.elements[submission.selection.submit], final.elements[finalSelection.submit]) else {
+        throw CredentialError.unlockUnavailable
+      }
+      record(.finalCheck, .success)
+      stage = .press
+      record(.press, .start)
+      // cannotComplete 也可能已经提交；只检查锁状态，绝不重按。
+      let action = press(final.elements[finalSelection.submit])
+      guard action == .success || action == .cannotComplete else { throw CredentialError.unlockUnavailable }
+      record(.press, action == .success ? .success : .cannotComplete)
+      stage = .wait
+      record(.wait, .start)
+      let deadline = now() + 7
+      while now() < deadline {
+        try await current()
+        if try unlocked() { record(.wait, .success); return }
+        try await sleep(100_000_000)
+      }
+      throw CredentialError.unlockUnavailable
+    } catch {
+      record(stage, error is CancellationError || (error as? CredentialError) == .cancelled ? .cancelled : .failed)
+      throw error
+    }
+  }
+}
+
 @MainActor
 final class MacScreenUnlocker {
   static let shared = MacScreenUnlocker()
@@ -174,49 +262,44 @@ final class MacScreenUnlocker {
       throw CredentialError.unlockUnavailable
     }
     defer { IOPMAssertionRelease(activity) }
+    let trace = MacUnlockTrace()
     let target = try await prepare(account: account, current: current)
     let field = target.elements[target.selection.field]
     var wrote = false
     defer {
       // Clear only the same still-verified secure object; never chase new focus.
-      if wrote, (try? validate(target, account: account, forCleanup: true)) != nil {
-        _ = AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, "" as CFString)
+      if wrote {
+        trace.record(.cleanup, .start)
+        if (try? validate(target, account: account, forCleanup: true)) != nil {
+          AXUIElementSetMessagingTimeout(field, 2)
+          let status = AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, "" as CFString)
+          trace.record(.cleanup, status == .success ? .success : .failed)
+        } else {
+          trace.record(.cleanup, .failed)
+        }
       }
     }
-    try await current()
-    _ = try validate(target, account: account)
-    wrote = true
-    guard AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, text as CFString) == .success else {
-      throw CredentialError.unlockUnavailable
-    }
-    try await current()
-    // The submit button is created/enabled only after text is inserted on
-    // modern loginwindow. Wait for it while retaining the original field.
-    var submission: Snapshot?
-    let submitDeadline = ProcessInfo.processInfo.systemUptime + 2
-    while ProcessInfo.processInfo.systemUptime < submitDeadline {
-      try await current()
-      let next = try validate(target, account: account)
-      if (try? MacUnlockProfile.select(next.nodes)) != nil { submission = next; break }
-      try await Task.sleep(nanoseconds: 50_000_000)
-    }
-    guard let submission else { throw CredentialError.unlockUnavailable }
-    let selected = try MacUnlockProfile.select(submission.nodes)
-    try await current()
-    let final = try validate(target, account: account)
-    let finalSelection = try MacUnlockProfile.select(final.nodes)
-    guard CFEqual(submission.elements[selected.submit], final.elements[finalSelection.submit]) else { throw CredentialError.unlockUnavailable }
-    // Exactly one targeted action. cannotComplete may mean the action already
-    // ran; inspect the session instead of ever resubmitting the password.
-    let action = AXUIElementPerformAction(final.elements[finalSelection.submit], kAXPressAction as CFString)
-    guard action == .success || action == .cannotComplete else { throw CredentialError.unlockUnavailable }
-    let deadline = ProcessInfo.processInfo.systemUptime + 7
-    while ProcessInfo.processInfo.systemUptime < deadline {
-      try await current()
-      if !(try MacConsoleState.read(account: account).locked) { return }
-      try await Task.sleep(nanoseconds: 100_000_000)
-    }
-    throw CredentialError.unlockUnavailable
+    try await MacUnlockSubmission.run(
+      field: field,
+      current: current,
+      validate: {
+        let next = try validate(target, account: account)
+        return (next.elements, next.nodes)
+      },
+      same: { CFEqual($0, $1) },
+      write: {
+        // loginwindow secure writes can exceed the 0.1s traversal budget.
+        AXUIElementSetMessagingTimeout($0, 2)
+        wrote = true
+        return AXUIElementSetAttributeValue($0, kAXValueAttribute as CFString, text as CFString)
+      },
+      press: {
+        AXUIElementSetMessagingTimeout($0, 2)
+        return AXUIElementPerformAction($0, kAXPressAction as CFString)
+      },
+      unlocked: { try !MacConsoleState.read(account: account).locked },
+      record: trace.record
+    )
   }
 
   /// Fixed metadata only: never read a secure AXValue or return account text.

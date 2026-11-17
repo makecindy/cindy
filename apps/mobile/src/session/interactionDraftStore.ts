@@ -18,6 +18,24 @@ export interface PlanReviewDraft {
 
 const askUserDrafts = new Map<string, AskUserDraft>();
 const planReviewDrafts = new Map<string, PlanReviewDraft>();
+export interface IssueConfirmDraft {
+  title: string;
+  body: string;
+  type: 'bug' | 'feature';
+  publicName: string;
+  identityKind: 'platform' | 'github-user';
+}
+const issueConfirmDrafts = new Map<string, IssueConfirmDraft>();
+export function readIssueConfirmDraft(id: string): IssueConfirmDraft | undefined {
+  const draft = issueConfirmDrafts.get(id);
+  return draft && { ...draft };
+}
+export function saveIssueConfirmDraft(id: string, draft: IssueConfirmDraft): void {
+  issueConfirmDrafts.set(id, { ...draft });
+}
+export function clearIssueConfirmDraft(id: string): void {
+  issueConfirmDrafts.delete(id);
+}
 
 export function readAskUserDraft(requestId: string): AskUserDraft | null {
   const draft = askUserDrafts.get(requestId);
@@ -68,6 +86,7 @@ export function clearPlanReviewDraft(requestId: string): void {
 export function clearAllInteractionDrafts(): void {
   askUserDrafts.clear();
   planReviewDrafts.clear();
+  issueConfirmDrafts.clear();
 }
 
 function cloneDraft(draft: AskUserDraft): AskUserDraft {

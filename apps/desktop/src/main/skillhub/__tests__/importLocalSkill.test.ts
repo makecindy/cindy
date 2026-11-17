@@ -1,3 +1,4 @@
+import { configureAppDataDir } from '../../userDataPath';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -5,6 +6,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import JSZip from 'jszip';
 
 const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-import-local-skill-test-'));
+configureAppDataDir(path.join(TEST_ROOT, 'userData'));
 
 function removeTestRoot(): void {
   fs.rmSync(TEST_ROOT, {

@@ -14,7 +14,8 @@ import { createLiziMcpProviders } from '../../../../packages/lizi-mcps/src/index
 
 import { dataOwnerStorageKey } from '../../../desktop/src/main/dataOwnerPath.ts';
 import { createBetterSqliteDatabase } from '../../../desktop/src/main/localDb/betterSqliteFactory.ts';
-import { LOGGER } from './runtime.mjs';
+import { LOGGER } from './runtime.ts';
+import { getActiveAppSession, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.ts';
 
 const DEFAULTS = Object.freeze({ maker: true, claudeCode: true, codex: true, pi: true });
 
@@ -48,14 +49,16 @@ const sqliteFactory = (filePath) => {
  * @param {{ userDataDir: string, ownerId: string }} options
  */
 export function createHostMemoryManager({ userDataDir, ownerId }) {
+  const scope = getActiveAppSession();
+  if (scope.dataOwnerId !== ownerId || isAppSessionBoundaryPending()) throw new Error('Memory owner is not ready');
   return createMakerMemoryManagerForHost({
     userDataDir,
-    readSession: () => ({
-      dataOwnerId: ownerId,
-      generation: 1,
-      mode: 'host',
-      boundaryPending: false,
-    }),
+    readSession: () => {
+      const current = getActiveAppSession();
+      const invalid = current.dataOwnerId !== ownerId || current.generation !== scope.generation;
+      return { dataOwnerId: invalid ? null : ownerId, generation: current.generation,
+        mode: current.mode, boundaryPending: invalid || isAppSessionBoundaryPending() };
+    },
     ownerSegment: (id) => dataOwnerStorageKey(id),
     readEnabled: (ownerRoot) => readMemorySettings(ownerRoot).maker,
     sqliteFactory,
@@ -64,7 +67,7 @@ export function createHostMemoryManager({ userDataDir, ownerId }) {
   });
 }
 
-/** The cindy_memory MCP server for Claude turns; Codex needs the desktop bridge (TODO). */
+/** The cindy_memory MCP server; Codex reaches it through the Host MCP bridge (mcp-runtime codexDeps), checked by codex-runtime.e2e.mjs. */
 export function createHostMemoryMcpProviders(manager) {
   return createLiziMcpProviders({
     enabled: ['cindy_memory'],

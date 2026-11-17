@@ -80,7 +80,6 @@ export type ProviderUsageStatus = 'loading' | 'ready' | 'failed' | 'legacy';
 type StackBy = 'party' | 'computer' | 'model';
 
 /** 热力图与「设置 → 用量」共用；这里只按 token 着色，金额占位不显示。 */
-const HEATMAP_WINDOW_DAYS = 140;
 const ZERO_MONEY: RegionalMoney = { amount: 0, currency: DEFAULT_USAGE_CURRENCY, approximate: false, kind: 'actual-cost' };
 /** 「更早的记录」(当时没有区分电脑)在柱图里的分段键。 */
 const UNATTRIBUTED = '\u0000unattributed';
@@ -157,7 +156,7 @@ export function ProviderUsageSection({
   const breakdownId = useId();
   const [stackChoice, setStack] = useState<StackBy>('party');
   const stack: StackBy = !group && stackChoice === 'computer' ? 'party' : stackChoice;
-  const [heatmapWeeks, setHeatmapWeeks] = useState(20);
+  const [heatmapWeeks, setHeatmapWeeks] = useState(53);
   const todayKey = sharedUsage?.todayKey ?? history?.todayKey ?? '';
 
   const rows = useMemo<ProviderUsageRow[]>(() => {
@@ -443,9 +442,10 @@ export function ProviderUsageSection({
       {charts && (
         <UsageCard title={t('usageHistory.heatmap.title')} subtitle={t('usageHistory.heatmap.subtitle', { count: heatmapWeeks })}>
           <UsageHeatmap
+            fillWidth
             days={heatDays}
             todayKey={todayKey}
-            windowDays={HEATMAP_WINDOW_DAYS}
+            windowDays="auto"
             metric="tokens"
             selectedDay={selectedDay}
             onDayClick={handleDayClick}

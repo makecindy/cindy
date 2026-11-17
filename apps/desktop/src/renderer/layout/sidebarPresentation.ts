@@ -15,19 +15,11 @@ export function useSidebarPresentation(
   collapsed: boolean,
   ready: boolean,
   expansionWidth: () => number,
-  sidebarWidth: () => number = () => 0,
 ): SidebarPresentation {
   const [presentation, setPresentation] = useState<SidebarPresentation>({ collapsed, instant: false });
   const expansion = useRef(expansionWidth);
   expansion.current = expansionWidth;
-  const measureSidebar = useRef(sidebarWidth);
-  measureSidebar.current = sidebarWidth;
-  const openedGeometry = useRef<{ growth: number; sidebar: number } | null>(null);
-  const pendingGrowth = useRef<number | null>(null);
-  const pendingAdopt = useRef(false);
   const previous = useRef<boolean | null>(null);
-  // The expansion was retracted because the sidebar became unavailable (e.g. a Settings route).
-  const retracted = useRef(false);
   const generation = useRef(0);
   const frame = useRef<number | null>(null);
   const latest = useRef(presentation);
@@ -42,28 +34,21 @@ export function useSidebarPresentation(
     frame.current = null;
     const resize = window.electronAPI.windowSidebarExpansion;
     const width = root.current?.getBoundingClientRect().width ?? 0;
-    // Returning to a sidebar route re-expands; only a first mount adopts the restored bounds.
-    const reentering = ready && wasCollapsed === null && retracted.current && !collapsed;
-    if (ready) retracted.current = false;
-    if (!ready || (wasCollapsed === null && !reentering) || !resize || width <= 0) {
+    // Saved native bounds are standalone; a restored-open sidebar expands normally.
+    const openingFromMount = ready && wasCollapsed === null && !collapsed;
+    if (!ready || (wasCollapsed === null && collapsed) || !resize || width <= 0) {
       if (!ready && wasCollapsed === false && resize) {
-        retracted.current = true;
-        openedGeometry.current = null;
         void resize(0).catch(() => undefined);
       }
-      pendingAdopt.current = ready && !collapsed && width > 0 && !!resize;
       setPresentation({ collapsed, instant: true,
         ...(ready && !collapsed && width > 0 ? { expandedWidth: width } : {}),
       });
       return;
     }
     // The sidebar consumes this same snapshot, so it cannot begin its own animation yet.
-    setPresentation({ ...latest.current, ...(reentering ? { collapsed: true } : {}), frozenWidth: width });
+    setPresentation({ ...latest.current, ...(openingFromMount ? { collapsed: true } : {}), frozenWidth: width });
     const viewport = window.innerWidth;
-    const geometry = openedGeometry.current;
-    const shrink = collapsed && geometry
-      ? Math.max(0, geometry.growth + measureSidebar.current() - geometry.sidebar) : undefined;
-    void resize(collapsed ? 0 : expansion.current(), shrink).then((delta) => {
+    void resize(collapsed ? 0 : expansion.current()).then((delta) => {
       if (id !== generation.current) return;
       const growth = typeof delta === 'number' ? delta : 0;
       const target = viewport + growth;
@@ -77,8 +62,6 @@ export function useSidebarPresentation(
           return;
         }
         frame.current = null;
-        pendingGrowth.current = !collapsed && growth > 0 ? growth : null;
-        if (collapsed) openedGeometry.current = null;
         setPresentation({ collapsed, instant: growth !== 0,
           ...(!collapsed ? { expandedWidth: width + growth } : {}),
         });
@@ -89,22 +72,6 @@ export function useSidebarPresentation(
       if (id === generation.current) setPresentation({ collapsed, instant: false });
     });
   }, [collapsed, ready, root]);
-
-  useLayoutEffect(() => {
-    if (pendingAdopt.current && !presentation.collapsed && presentation.frozenWidth === undefined) {
-      pendingAdopt.current = false;
-      const sidebar = measureSidebar.current();
-      const id = generation.current;
-      if (sidebar > 0) void window.electronAPI.windowSidebarExpansion?.(0, sidebar + 1, true).then((growth) => {
-        if (id === generation.current && typeof growth === 'number' && growth > 0) {
-          openedGeometry.current = { growth, sidebar };
-        }
-      }).catch(() => undefined);
-    }
-    if (pendingGrowth.current === null || presentation.collapsed || presentation.frozenWidth !== undefined) return;
-    openedGeometry.current = { growth: pendingGrowth.current, sidebar: measureSidebar.current() };
-    pendingGrowth.current = null;
-  }, [presentation]);
 
   useLayoutEffect(() => () => {
     generation.current++;

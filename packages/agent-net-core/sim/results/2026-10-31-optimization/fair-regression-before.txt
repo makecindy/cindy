@@ -1,0 +1,27 @@
+
+running 1 test
+test link_tests::burst_calendar_is_independent_of_packet_count ... FAILED
+
+failures:
+
+---- link_tests::burst_calendar_is_independent_of_packet_count stdout ----
+
+thread 'link_tests::burst_calendar_is_independent_of_packet_count' (9318967) panicked at sim/src/lib.rs:736:13:
+assertion `left == right` failed: burst calendar shifted at 242000us
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    link_tests::burst_calendar_is_independent_of_packet_count
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling agent-net-sim v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/fair/sim)
+   Compiling agent-net-core v0.0.0 (/private/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/fair)
+    Finished `sim` profile [optimized] target(s) in 0.88s
+     Running unittests src/lib.rs (/var/folders/5q/jtyznds12rjf0tqkwvczcmvh0000gn/T/cindy-agent-net-opt-iwx5iyl4/fair-target/sim/deps/agent_net_sim-99383d70840e21a3)
+error: test failed, to rerun pass `-p agent-net-sim --lib`
+
+EXIT 101

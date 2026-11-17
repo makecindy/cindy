@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { InteractionRequest, Session } from '@cindy/maker-core';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { requestHostInteraction } from '../maker-ipc/interactionRouter.js';
 import { MediaDownloadError, type MediaDownloadContext } from './mediaDownload.js';
 

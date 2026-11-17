@@ -8,7 +8,7 @@
  */
 import type { ToolRowWording } from '@cindy/maker-shared/message-presentation';
 
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import {
   FILE_CHANGE_FILES_I18N_KEY,
   INTENT_ROW_VERB_KEY,

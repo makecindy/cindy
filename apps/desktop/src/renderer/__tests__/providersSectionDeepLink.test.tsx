@@ -236,6 +236,31 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 深链定位', () => {
+  // #9517 review, unit: exercise the real provider header's default-account
+  // reconnect. Wizard/account-list tests do not cover this independent catch.
+  it.each([
+    ['SUBSCRIPTION_CODEX_PROVIDER_AUTH', 'subscriptionAccounts.providerManagedAuth'],
+    ['SUBSCRIPTION_LOGIN_CANCELLED', null],
+    ['SUBSCRIPTION_ACCOUNT_FAILED', 'subscriptionAccounts.failed'],
+  ] as const)('preserves pooled header reconnect feedback for %s', async (code, expectedMessage) => {
+    providersState.providers = [makeProvider('openai', { name: 'OpenAI', connected: true, agents: ['codex'] })];
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
+    command.mockImplementation(async (input) => {
+      if (input.action === 'login') throw new Error(`[${code}] synthetic sign-in result`);
+      return { providerId: 'openai', configured: true, strategy: 'least', accounts: [] };
+    });
+    renderAt('?tab=providers&connect=openai');
+    const loginButton = await screen.findByRole('button', { name: 'subscriptionAccounts.login' });
+    fireEvent.click(loginButton);
+    await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'login', providerId: 'openai', accountId: 'default', loginKey: expect.any(String),
+    }));
+    await waitFor(() => expect(loginButton.textContent).toBe('subscriptionAccounts.login'));
+    expect((loginButton as HTMLButtonElement).disabled).toBe(false);
+    if (expectedMessage) expect(toastError).toHaveBeenCalledExactlyOnceWith(expectedMessage);
+    else expect(toastError).not.toHaveBeenCalled();
+  });
+
   it('does not rediscover a deleted local Codex provider into the settings list', async () => {
     providersState.providers.push(makeProvider('openai', {
       name: 'Deleted local account', removed: true, imageModels: [{ id: 'image', name: 'Image' }],

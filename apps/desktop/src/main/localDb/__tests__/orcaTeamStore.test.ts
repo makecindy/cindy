@@ -189,6 +189,23 @@ describe('orcaTeamStore', () => {
     await expect(
       client.queryOne('SELECT role, label FROM orca_workers WHERE id = ?', ['worker-1']),
     ).resolves.toEqual({ role: 'reviewer', label: 'reviewer-2' });
+
+    // 同名 Worker 归档后让出名字（与创建时一致）：改名成功，归档记录保留、label 带上自身 id。
+    // 依据：2026-11-10 协同任务里归档 Worker 仍占名，按原名重建全部 DUPLICATE_LABEL。
+    await client.exec("UPDATE sessions SET status = 'archived' WHERE id = ?", ['worker-session-2']);
+    await expect(
+      updateWorkerIdentity({
+        workerId: 'worker-1',
+        role: 'reviewer',
+        label: 'Tester-2',
+        previousRole: 'reviewer',
+        previousLabel: 'reviewer-2',
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(client.query('SELECT id, label FROM orca_workers ORDER BY id')).resolves.toEqual([
+      { id: 'worker-1', label: 'Tester-2' },
+      { id: 'worker-2', label: 'tester-2~worker-2' },
+    ]);
   });
 
   it('requires workerId and workerSessionId to match the same row when both are supplied', async () => {

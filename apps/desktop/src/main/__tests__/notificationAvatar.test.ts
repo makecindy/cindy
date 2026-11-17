@@ -3,7 +3,7 @@ import sharp from 'sharp';
 
 const readAvatarFile = vi.hoisted(() => vi.fn());
 vi.mock('node:fs/promises', () => ({ readFile: readAvatarFile }));
-vi.mock('../cindy-media/blobStore', () => ({ resolveSafe: vi.fn(() => ({ absPath: '/managed/avatar.png' })) }));
+vi.mock('../cindy-media/blobStore.desktop', () => ({ resolveSafe: vi.fn(() => ({ absPath: '/managed/avatar.png' })) }));
 import { encodeNotificationAvatar, notificationAvatar } from '../notificationAvatar';
 
 describe('notification avatars', () => {

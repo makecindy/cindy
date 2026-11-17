@@ -10,7 +10,9 @@
  */
 
 import { compareCindyVersions } from '@cindy/plugin-protocol';
+
 import { isValidGhostId, type InstalledGhost } from '../../shared/ghost.js';
+
 import {
   findInstalledGhostByInstanceId,
   formatInstalledGhostAmbiguity,
@@ -20,7 +22,7 @@ import {
   resolveInstalledGhost,
   hasDeliveryNamespace,
 } from '../../shared/pluginIdentity.js';
-import { t } from '../i18n.js';
+
 
 export type GhostVisibilityResult =
   | { ok: true; ghost: InstalledGhost }
@@ -30,6 +32,7 @@ export type GhostVisibilityResult =
       message: string;
       candidates?: Array<{ ghostId: string; namespace: string | null }>;
     };
+
 
 export interface GhostVisibilityDeps {
   listGhosts: () => InstalledGhost[];
@@ -44,12 +47,14 @@ export interface GhostVisibilityDeps {
    */
   isDiscoverable?: (ghost: InstalledGhost) => boolean;
 }
+export function createGhostVisibility(t: (key: string) => string) {
+
 
 /** Discovery policy only: never merge installation identity, credentials or state.
  * A disabled/unavailable copy cannot hide a usable one. Organizations and
  * unresolved legacy identities remain independent.
  */
-export function preferLatestLocalOrPublicGhosts(
+function preferLatestLocalOrPublicGhosts(
   ghosts: InstalledGhost[],
   isEligible: (ghost: InstalledGhost) => boolean = () => true,
 ): InstalledGhost[] {
@@ -81,7 +86,8 @@ export function preferLatestLocalOrPublicGhosts(
   return ghosts.filter((ghost) => !hidden.has(ghost));
 }
 
-export function classifyGhostVisibility(
+
+function classifyGhostVisibility(
   ghostId: string,
   workdir: string | null,
   deps: GhostVisibilityDeps,
@@ -152,6 +158,7 @@ export function classifyGhostVisibility(
   return classifyGhostAvailability(resolved.ghost, workdir, deps);
 }
 
+
 function classifyGhostAvailability(
   ghost: InstalledGhost,
   workdir: string | null,
@@ -187,7 +194,8 @@ function classifyGhostAvailability(
   return { ok: true, ghost };
 }
 
-export function classifyInstalledGhostVisibility(
+
+function classifyInstalledGhostVisibility(
   target: InstalledGhost,
   workdir: string | null,
   deps: GhostVisibilityDeps,
@@ -206,4 +214,6 @@ export function classifyInstalledGhostVisibility(
     return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
   }
   return classifyGhostAvailability(ghost, workdir, deps);
+}
+return { preferLatestLocalOrPublicGhosts, classifyGhostVisibility, classifyInstalledGhostVisibility };
 }

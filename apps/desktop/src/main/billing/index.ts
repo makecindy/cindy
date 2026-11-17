@@ -7,7 +7,7 @@ import {
   type CreateBillingTopupRequest,
 } from '../../shared/billing.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
+import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.desktop.js';
 import { requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import { isAllowedBillingRedirectUrl } from './paymentRedirect.js';
 import {

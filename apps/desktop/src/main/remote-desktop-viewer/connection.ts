@@ -1,5 +1,6 @@
 import {
   handoffWindowCapabilities,
+  liveScreenCapabilities,
   isRemoteDesktopChannelRequest,
   parseRemoteDesktopRequest,
   REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
@@ -18,6 +19,7 @@ import type {
 } from '../../shared/remoteDesktopViewer.js';
 import {
   DEFAULT_VIEWER_PREFERENCES,
+  sameViewerScope,
   parseRememberedViewerResolution,
   parseRemoteViewerChannelOutcome,
   type RemoteViewerChannelOutcome,
@@ -83,10 +85,7 @@ export class RemoteViewerConnection {
   ) {}
   bind(target: RemoteViewerTarget): void {
     const owner = this.deps.owner();
-    const sameScope =
-      this.owner === owner &&
-      this.target?.deviceId === target.deviceId &&
-      this.target.handoff === target.handoff;
+    const sameScope = this.owner === owner && sameViewerScope(this.target, target);
     this.deactivate();
     if (!sameScope) this.lifecycle = null;
     this.owner = owner;
@@ -202,6 +201,14 @@ export class RemoteViewerConnection {
       // The window decides whether this is a 代输入 window view; the page cannot widen or swap it.
       if (request.op === 'start' && request.handoff !== this.target?.handoff)
         throw new Error('DESKTOP_UNAVAILABLE');
+      // Likewise a device screen: the page shows exactly the one this window was opened for.
+      if (
+        request.op === 'start' &&
+        (request.screen?.plugin !== this.target?.screen?.plugin ||
+          request.screen?.pluginIdentity !== this.target?.screen?.pluginIdentity ||
+          request.screen?.id !== this.target?.screen?.id)
+      )
+        throw new Error('DESKTOP_UNAVAILABLE');
       // Clipboard contents and credentials are handled only by dedicated Main adapters.
       if (
         request.op === 'clipboard' ||
@@ -243,7 +250,7 @@ export class RemoteViewerConnection {
           const outgoing =
             request.op === 'offer' && request.settings
               ? { ...request, settings: remoteDesktopVideoSettingsWire(request.settings) }
-              : request.op === 'start' || request.op === 'heartbeat'
+              : (request.op === 'start' || request.op === 'heartbeat') && !target.screen
                 ? {
                     ...request,
                     lockOnExit: this.preferencesValue.lockOnExit,
@@ -257,8 +264,13 @@ export class RemoteViewerConnection {
             check();
             const caps = result as RemoteDesktopCapabilities;
             // A window view never runs whole-desktop safety features (masks, mute, clipboard sync).
+            // Nor does a device screen: nothing on it acts on the computer itself.
             this.caps =
-              target.handoff && caps?.handoffWindow ? handoffWindowCapabilities(caps) : caps;
+              target.handoff && caps?.handoffWindow
+                ? handoffWindowCapabilities(caps)
+                : target.screen && caps?.liveScreens
+                  ? liveScreenCapabilities(caps)
+                  : caps;
           }
           if (isStart) {
             const lease = result as RemoteDesktopLease;
@@ -559,7 +571,8 @@ export class RemoteViewerConnection {
   }
   async credential(generation: number, action: unknown, enabled: unknown) {
     this.check(generation);
-    if (!this.deps.credentials) throw new Error('CREDENTIAL_UNAVAILABLE');
+    // A device screen never unlocks or signs in to the computer that shows it.
+    if (!this.deps.credentials || this.target?.screen) throw new Error('CREDENTIAL_UNAVAILABLE');
     return this.deps.credentials.run(
       this.target!.deviceId,
       this.caps?.platform,
@@ -574,6 +587,7 @@ export class RemoteViewerConnection {
     this.check(generation);
     const lockScreen =
       !this.target?.handoff &&
+      !this.target?.screen &&
       (forceLock || this.preferencesValue.lockOnExit) &&
       this.caps?.lockOnExit === true;
     // A start reply may arrive after close. Its own cleanup must retain the

@@ -1,5 +1,7 @@
 import type { GeneratedImageUpstream } from '../../cindy-media/generatedImageJournal';
 import { remoteAgentStartupTiming } from '../startupTiming';
+import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
+import { isProductTurnDoneEvent } from '@cindy/maker-shared/turn-continuation';
 import { parseProviderSharePeer, providerShareGuestPeer } from '@cindy/device-link';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits, type RemoteAgentLimitUsage } from '../../../shared/remoteAgentLimits.js';
 /**
@@ -54,10 +56,10 @@ import {
   type RemoteAgentReverseRequest,
   type RemoteAgentTeardownReason,
 } from '@cindy/device-link';
-import type { AgentEvent, AgentSessionHandle, DeviceHostedLinkActivity, InteractionRequest, ForkSdkSessionOptions, ForkSdkSessionResult } from '@cindy/maker-core';
+import { TurnDispatchRejectedError, type AgentEvent, type AgentSessionHandle, type SendOptions, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
 
 import { EXEC_SERVER_WS_PATH } from '../controller/execServerRelay';
-import { RemoteAgentRunClient, type RemoteAgentInvoke, type RemoteAgentPoller } from '../controller/runClient';
+import { RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke, type RemoteAgentPoller } from '../controller/runClient';
 import { EventLog, waitForAny } from '../eventLog';
 import { createExecServerShortcut, type ExecServerShortcutLayout } from './execServerShortcut';
 import { createExecServerStartupBatch } from './execServerStartupBatch';
@@ -139,8 +141,8 @@ const RELAY_CLOSE_WAIT_MS = 5_000;
 const RELAY_SLOW_PUSH_MS = 2_000;
 /** 删除受邀者时没通知到的组内电脑(离线等)，多久后再试一次。 */
 const FORGET_RETRY_MS = 10 * 60_000;
-/** 那台上的任务以这些原因结束是正常收尾，不算失败。 */
-const NORMAL_RELAY_CLOSE_REASONS = new Set(['closed', 'detached', 'ended', 'superseded', 'controller-disconnected']);
+/** Replacement and explicit owner disconnect must not trigger automatic recovery. */
+const INTENTIONAL_RELAY_CLOSE_REASONS = new Set(['superseded', 'controller-disconnected']);
 const UPLOAD_IDLE_MS = 2 * 60_000;
 const MAX_STAGED_BYTES_PER_CONTROLLER = REMOTE_AGENT_MAX_PAYLOAD_BYTES * 2;
 const MAX_DECOMPRESSED_BYTES = 128 * 1024 * 1024;
@@ -223,6 +225,8 @@ export interface RemoteAgentHostDeps {
   forkHosted?(kind: RemoteAgentKind, options: ForkSdkSessionOptions): Promise<ForkSdkSessionResult>;
   /** 本机仍允许该控制端远程控制(总开关打开且未撤销)。 */
   isControllerAuthorized(controller: string): boolean;
+  /** 同账号的这台电脑被关了「用本机模型」：拒绝时报「没有开放供应商」而不是「不能远程控制」。 */
+  isControllerModelUseRevoked?(controller: string): boolean;
   /**
    * 控制端是否是本机同账号的设备。不提供 = 全部按同账号处理(现有接线)。返回 guest 时：
    * 载荷按白名单复核、只开放已隔离的 Agent、只能恢复自己建立的会话。
@@ -292,7 +296,7 @@ export interface RemoteAgentHostDeps {
     allocate(controller: string, request: Extract<RemoteAgentRequest, { op: 'allocate' }>): Promise<{ deviceId: string; generation: string; leaseDurationMs?: number } | null>;
     status(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-status' }>): void;
     release(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-release' }>): Promise<void>;
-    switch(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-switch' }>): Promise<{ token?: string }>;
+    switch(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-switch' }>): Promise<{ token?: string; generation?: string }>;
     switched?(controller: string, sessionId: string, token: string): Promise<void>;
     sessionAllowed(controller: string, sessionId: string): boolean;
     /** Unlike sessionAllowed, true only for a current, local G→M delegation. */
@@ -518,6 +522,11 @@ interface Run {
   groupResumed?: boolean;
   /** 本机这次运行经隧道告诉了控制端已打开、还没关掉的 WebSocket 连接(换去中转时补发关闭)。 */
   localWs?: Set<string>;
+  /** Product turn awaiting done/terminal error; shared by local and relayed execution. */
+  activeTurn?: boolean;
+  terminalOwnership?: RemoteTurnTerminalOwnership;
+  /** Stop fences queued foreground output until its terminal or a new send. */
+  abortRequested?: boolean;
   /** 本机 Agent 上一次报来的「正在运行一轮」。 */
   turnRunning?: boolean;
   /** 同一次发送的限额 RPC 失败与终态事件共用一次交付，下一次发送时作废。 */
@@ -1201,6 +1210,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     });
     if (typeof state.turnRunning === 'boolean') {
       run.turnRunning = state.turnRunning;
+      if (run.activeTurn === undefined && state.turnRunning) run.activeTurn = true;
       run.groupLoad?.setRunning(state.turnRunning);
     }
     const serialized = JSON.stringify(state);
@@ -1707,6 +1717,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         return;
       }
       run.handle = handle;
+      run.terminalOwnership = new RemoteTurnTerminalOwnership();
       if (run.trust === 'guest' || run.forkWorkspaceIds.length) {
         await timing.measure('session-registration', () =>
           recordGuestSession(run.controller, run.relayKey, hostSessionId, [handle.id, handle.requestSessionId], undefined, run.forkWorkspaceIds),
@@ -1802,15 +1813,19 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   async function pumpEvents(run: Run, handle: AgentSessionHandle): Promise<void> {
     /** 供应商组：本机这一台上这一轮出过终态错误。 */
     let groupTurnFailed = false;
-    let lastEventType: string | undefined;
     let streamError: unknown;
     let streamFailed = false;
     try {
       for await (const event of handle.events()) {
         if (run.closing) break;
-        lastEventType = event.type;
+        if (!run.abortRequested && startsRemoteProductTurn(event)) run.activeTurn = true;
+        const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(event);
+        if (currentTerminal) {
+          run.activeTurn = false;
+          run.abortRequested = false;
+        }
         meterRunUsage(run, handle.model, event);
-        const failure = relayRunFailureOf(event);
+        const failure = currentTerminal ? relayRunFailureOf(event) : null;
         if (failure && isAccountUsageLimitError(failure)) {
           groupTurnFailed = true;
           await deliverQuotaFailure(run, localGroupMember(run.providerId ?? ''), failure, handle.model, () => {
@@ -1827,7 +1842,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               .catch(() => null);
             if (run.closing) break;
             if (token) append(run, { t: 'state', state: { [GROUP_SWITCH_STATE_KEY]: token } });
-          } else if (event.type === 'done') {
+          } else if (isProductTurnDoneEvent(event)) {
             noteGroupSwitchTurnEnded(run, groupTurnFailed || !!run.quotaFailure);
             groupTurnFailed = false;
           }
@@ -1849,7 +1864,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     });
     // 受邀者的任务按组分到了本机这一台、一轮进行中本机的 Agent 意外结束(进程退出、事件流中断)：与组内电脑上的
     // 任务意外结束一样可以换一台——凭证排在收尾前面，收尾按出错处理，受邀者那边才会把这一轮当作失败。
-    const midTurn = run.turnRunning === true && lastEventType !== 'done';
+    const midTurn = run.activeTurn === true;
     if (run.acceptsGroupSwitch && !run.closing && midTurn && !groupTurnFailed && !run.quotaFailure) {
       const info = streamFailed ? remoteAgentErrorInfo(streamError) : RELAY_UNAVAILABLE_ERROR;
       const token = await groupSwitchOfferFor(run, localGroupMember(run.providerId!), {
@@ -2098,7 +2113,17 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
    * 之前因故换下、现在已恢复的电脑又能接手。标记只在本机读，去掉后再交给 Agent 或转给组内电脑。
    */
   function takeGroupNewRound(run: Run, callId: string, method: RemoteAgentMethod, args: unknown[]): unknown[] {
+    if (method === 'abort') {
+      run.terminalOwnership?.abort();
+      run.abortRequested = true;
+      run.activeTurn = false;
+    }
     if (method === 'send') {
+      (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).beginSend(
+        run.activeTurn === true || run.abortRequested === true, callId,
+        run.activeTurn === true, run.abortRequested === true);
+      run.abortRequested = false;
+      run.activeTurn = true;
       run.quotaFailure = undefined;
       run.lastSendCallId = callId;
     }
@@ -2135,13 +2160,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   }
 
   /** 受邀者交接后重新打开时带回的凭证：短期内幂等，失败重开仍避开原电脑。只认同一受邀者和任务。 */
-  function takeGroupSwitchToken(controller: string, hostSessionId: string, token: string | undefined): string[] {
-    if (!token) return [];
+  function takeGroupSwitchToken(controller: string, hostSessionId: string, token: string | undefined): string[] | undefined {
+    if (!token) return undefined;
     const entry = groupSwitchTokens.get(token);
-    if (!entry || entry.controller !== controller || entry.hostSessionId !== hostSessionId) return [];
+    if (!entry || entry.controller !== controller || entry.hostSessionId !== hostSessionId) return undefined;
     if (entry.expiresAt > now()) return entry.exclude;
     groupSwitchTokens.delete(token);
-    return [];
+    return undefined;
   }
 
   /**
@@ -2237,7 +2262,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           return;
         }
         // 一轮进行中那台的任务意外结束(离线、崩溃等)：与终态错误一样可以换一台。
-        const unexpected = backend.turnRunning && !NORMAL_RELAY_CLOSE_REASONS.has(reason);
+        const unexpected = run.activeTurn === true
+          && !INTENTIONAL_RELAY_CLOSE_REASONS.has(reason);
         if (unexpected && !held) {
           holdForGroupSwitch({ reason: 'remote_agent_closed', ...(error?.message ? { message: error.message } : {}) }, finish);
           return;
@@ -2262,7 +2288,14 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               relay: relayKeyFor(run.controller),
             });
           };
-          const failure = relayRunFailureOf(event);
+          const typed = event as AgentEvent;
+          if (!run.abortRequested && startsRemoteProductTurn(typed)) run.activeTurn = true;
+          const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(typed);
+          const failure = currentTerminal ? relayRunFailureOf(event) : null;
+          if (currentTerminal) {
+            run.activeTurn = false;
+            run.abortRequested = false;
+          }
           if (failure) {
             turnFailed = true;
             if (!held || isAccountUsageLimitError(failure)) {
@@ -2270,7 +2303,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               return;
             }
           }
-          if ((event as { type?: unknown }).type === 'done') {
+          if (isProductTurnDoneEvent(typed)) {
             noteGroupSwitchTurnEnded(run, turnFailed || !!run.quotaFailure);
             turnFailed = false;
           }
@@ -2283,6 +2316,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           if (typeof state.model === 'string') backend.model = state.model;
           if (typeof state.turnRunning === 'boolean') {
             backend.turnRunning = state.turnRunning;
+            // A resumed run may already be busy. After its first terminal, only
+            // new product activity can own a turn; late snapshots cannot rearm it.
+            if (run.activeTurn === undefined && state.turnRunning) run.activeTurn = true;
             backend.load.setRunning(state.turnRunning);
           }
           for (const field of ['turnRunning', 'preparing', 'backgroundTasks', 'pendingWake'] as const) {
@@ -2341,6 +2377,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         holdsRemote: () => run.heldAt !== undefined && now() - run.heldAt < REMOTE_HOLD_FRESH_MS,
       }, randomUUID, deps.log);
       run.relay = backend;
+      run.terminalOwnership = new RemoteTurnTerminalOwnership();
       try {
         const caps = await RemoteAgentRunClient.caps(connection.invoke);
         backend.modelAccess = caps.relayModelAccess === true && !!deps.providerAccess?.models;
@@ -2445,6 +2482,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
 
   /** 受邀者对中转任务的方法调用：按受邀者复核后用同一个 callId 转给组内电脑；载荷不解码、不落盘。 */
   async function relayCall(run: Run, relay: RelayBackend, callId: string, method: RemoteAgentMethod, payload: RemoteAgentPayload): Promise<void> {
+    let sendInvoked = false;
     try {
       const raw = await resolvePayload(run.controller, payload);
       const args = takeGroupNewRound(run, callId, method, Array.isArray(raw) ? raw : []);
@@ -2470,13 +2508,28 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         }
         callArgs = [args[0], { ...opts, providerId: relay.member.providerId }, ...args.slice(2)];
       }
+      if (method === 'send') sendInvoked = true;
       const value = await relay.client.callWithId(callId, method, callArgs);
+      if (method === 'send') run.terminalOwnership?.acceptSend(callId);
       if (method === 'setModel' && typeof args[0] === 'string') run.authorizedModel = args[0];
       if (method === 'commitRewindFiles' && run.kind === 'claude-code') run.rewindPending = true;
       append(run, { t: 'result', callId, ok: true, ...(value !== undefined ? { value: JSON.parse(JSON.stringify(value)) } : {}) });
     } catch (error) {
       const info = relayErrorInfoFrom(error);
+      const dispatchRejected = error instanceof RemoteAgentRemoteError
+        ? error.info.code === 'TURN_DISPATCH_REJECTED' : info.code === 'TURN_DISPATCH_REJECTED';
+      if (dispatchRejected) info.code = 'TURN_DISPATCH_REJECTED';
       if (method === 'send' && run.lastSendCallId === callId && run.relay === relay) {
+        const quota = run.quotaFailure !== undefined || isAccountUsageLimitError(info);
+        const previous = dispatchRejected && !quota && !run.closing ? run.terminalOwnership?.rejectSend(callId) : undefined;
+        // A post-invocation timeout can still have accepted work. Preserve any
+        // live turn, without rearming one already ended by a terminal or Stop.
+        if (previous) {
+          run.abortRequested = run.abortRequested === true || previous.aborted;
+          run.activeTurn = !run.abortRequested && previous.active;
+        } else if (!sendInvoked || dispatchRejected || quota) {
+          run.activeTurn = false;
+        }
         if (run.quotaFailure) await run.quotaFailure.delivery;
         else if (isAccountUsageLimitError(info)) {
           await deliverQuotaFailure(run, relay.member, info, relay.model ?? run.authorizedModel ?? '');
@@ -2664,12 +2717,14 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     const handle = run.handle;
     let rollbackProvider: (() => void) | undefined;
     let standbyTurn: Run['standbyTurn'];
+    let sendInvoked = false;
     try {
       if (run.closing) fail('REMOTE_AGENT_EXPIRED', 'task has ended');
       if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
       if (!handle) fail('REMOTE_AGENT_UNAVAILABLE', 'agent has not started');
       const raw = await resolvePayload(run.controller, payload);
-      const args = takeGroupNewRound(run, callId, method, Array.isArray(raw) ? raw : []);
+      const rawArgs = Array.isArray(raw) ? raw : [];
+      const args = method === 'send' ? rawArgs : takeGroupNewRound(run, callId, method, rawArgs);
       const target = (handle as unknown as Record<string, unknown>)[method];
       if (typeof target !== 'function') fail('REMOTE_AGENT_UNSUPPORTED', `${method} is not supported by this agent`);
       let callArgs: unknown[] = args;
@@ -2749,7 +2804,18 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
       }
       try {
+        if (method === 'send') {
+          try {
+            handle.validateSendOptions?.(callArgs[1] as SendOptions);
+          } catch (error) {
+            if (error instanceof TurnDispatchRejectedError) throw error;
+            throw new TurnDispatchRejectedError(error instanceof Error ? error.message : String(error), { cause: error });
+          }
+          takeGroupNewRound(run, callId, method, rawArgs);
+          sendInvoked = true;
+        }
         value = await (target as (...a: unknown[]) => unknown).apply(handle, callArgs);
+        if (method === 'send') run.terminalOwnership?.acceptSend(callId);
       } catch (error) {
         rollbackProvider?.();
         throw error;
@@ -2760,7 +2826,17 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       append(run, { t: 'result', callId, ok: true, ...(value !== undefined ? { value: JSON.parse(JSON.stringify(value)) } : {}) });
     } catch (error) {
       const info = remoteAgentErrorInfo(error);
+      if (error instanceof TurnDispatchRejectedError) info.code = error.code;
       if (method === 'send' && run.lastSendCallId === callId) {
+        const quota = run.quotaFailure !== undefined || isAccountUsageLimitError(info);
+        const previous = info.code === 'TURN_DISPATCH_REJECTED' && !quota && !run.closing
+          ? run.terminalOwnership?.rejectSend(callId) : undefined;
+        if (previous) {
+          run.abortRequested = run.abortRequested === true || previous.aborted;
+          run.activeTurn = !run.abortRequested && previous.active;
+        } else if (!sendInvoked || info.code === 'TURN_DISPATCH_REJECTED' || quota) {
+          run.activeTurn = false;
+        }
         if (run.quotaFailure) await run.quotaFailure.delivery;
         else if (isAccountUsageLimitError(info)) {
           await deliverQuotaFailure(run, localGroupMember(run.providerId ?? ''), info, handle?.model ?? run.authorizedModel ?? '');
@@ -3072,7 +3148,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
 
   async function handleRequest(controller: string, request: RemoteAgentRequest,
     signal?: AbortSignal, directLocked = false): Promise<unknown> {
-    if (!deps.isControllerAuthorized(controller)) fail('REMOTE_AGENT_UNAVAILABLE', 'remote control is not allowed');
+    if (!deps.isControllerAuthorized(controller)) {
+      if (deps.isControllerModelUseRevoked?.(controller)) {
+        fail('REMOTE_AGENT_PROVIDER_NOT_ALLOWED', 'this computer does not let you use its models');
+      }
+      fail('REMOTE_AGENT_UNAVAILABLE', 'remote control is not allowed');
+    }
     switch (request.op) {
       case 'native-history': {
         if (trustOf(controller) !== 'owner' || !deps.nativeHistory) fail('REMOTE_AGENT_UNSUPPORTED', 'native history transfer is unavailable');
@@ -3476,12 +3557,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             // 在本机运行过的会话接着在本机运行：计入本机这一台的负载。
             if (!relayTo) reserved = deps.groupRelay.trackRun(providerId, PROVIDER_GROUP_LOCAL_MEMBER_KEY);
           } else {
-            avoid = takeGroupSwitchToken(
+            const switchExclusion = takeGroupSwitchToken(
               controller,
               hostSessionIdFor(controller, payload.sessionId),
               payload.groupSwitchToken,
             );
-            if (avoid.length && payload.groupSwitchToken) {
+            avoid = switchExclusion ?? [];
+            if (switchExclusion && payload.groupSwitchToken) {
               // A valid token binds this guest and task to the move. Retire its
               // old direct assignment before planning a new executor, so a
               // failed open can retry with the token without reviving old M.
@@ -3716,17 +3798,21 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   return {
     handle,
     /** O alone may issue a one-use switch token after validating a direct guest assignment. */
-    issueDirectGroupSwitchToken(controller: string, sessionId: string, exclude: ReadonlySet<string>): string | null {
+    issueDirectGroupSwitchToken(controller: string, sessionId: string, exclude: ReadonlySet<string>, retryAccount = false): string | null {
       const peer = parseProviderSharePeer(controller);
       if (disposed || peer?.role !== 'guest' || !deps.isControllerAuthorized(controller)
         || !/^[A-Za-z0-9_-]{1,128}$/.test(sessionId) || exclude.size === 0 || exclude.size > 32) return null;
       const hostSessionId = hostSessionIdFor(controller, sessionId);
       const roundKey = key(controller, hostSessionId);
       const previous = groupSwitchRounds.get(roundKey);
-      const tried = new Set([...(previous && now() - previous.at <= GROUP_SWITCH_ROUND_MS ? previous.tried : []), ...exclude]);
+      const earlier = new Set(previous && now() - previous.at <= GROUP_SWITCH_ROUND_MS ? previous.tried : []);
+      // One same-computer account handoff per recovery round. A later failure
+      // must exclude M, even if another stale account probe still looks healthy.
+      if (retryAccount && [...exclude].some(member => earlier.has(member))) return null;
+      const tried = new Set([...earlier, ...exclude]);
       if (tried.size > 32) return null;
       groupSwitchRounds.set(roundKey, { tried, at: now() });
-      return issueGroupSwitchTokenFor(controller, hostSessionId, tried);
+      return issueGroupSwitchTokenFor(controller, hostSessionId, retryAccount ? earlier : tried);
     },
     limitUsage(): RemoteAgentLimitUsage {
       const counts = [...usageByDevice().values()];

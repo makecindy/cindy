@@ -30,7 +30,7 @@ vi.mock('../../logger', () => ({
 vi.mock('../../maker-host/auth-adapters', () => ({
   readClaudeApiKey: () => 'usage-key-sent',
 }));
-vi.mock('../../maker-host/outbound-fetch', () => ({ outboundFetch: mocks.outboundFetch }));
+vi.mock('../../maker-host/outbound-fetch.desktop', () => ({ outboundFetch: mocks.outboundFetch }));
 vi.mock('../../maker-host/runtime-configs', () => ({
   claudeUpstreamEndpoint: () => 'https://gateway.test.invalid',
 }));

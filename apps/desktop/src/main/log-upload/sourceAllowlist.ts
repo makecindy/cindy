@@ -128,6 +128,9 @@ const ALLOWED_EXACT_SCOPES: readonly string[] = [
   // 各进程内存采样(process-monitor/memory-log.ts):只有进程类型与 MB 数字,不带标题、
   // serviceName、pid 或路径。用来回答「越用越卡」是哪个进程在涨。
   'memory-usage',
+  // Linux 远程桌面黑屏诊断(#9712,remote-desktop/index.ts):每次运行至多一条,只有固定标签
+  // 与 `wayland-N` socket 名,不带路径、窗口标题或画面内容。`remote-desktop` 根与其他子 scope 不放行。
+  'remote-desktop:display-backend',
 ];
 
 /**

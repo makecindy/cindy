@@ -23,7 +23,7 @@ vi.mock('../authManager', () => ({
   refresh: mocks.refresh,
   invalidateSession: mocks.invalidateSession,
 }));
-vi.mock('../i18n.js', () => ({
+vi.mock('../i18n.desktop.js', () => ({
   getResolvedMainLocale: () => 'zh-CN',
 }));
 vi.mock('../clientEndpointsService.js', () => ({
@@ -33,7 +33,7 @@ vi.mock('../logger', () => ({
   createLogger: () => mocks.logger,
 }));
 
-import { serverApiFetch, ServerApiError } from '../serverApiClient';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop';
 import { readOrganizationAccountUsage } from '../usage/organizationAccountUsage';
 
 describe('serverApiFetch', () => {

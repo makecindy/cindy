@@ -21,7 +21,7 @@ import { useWindowWidth } from '@/platform/windowDimension';
  *  - 全滑判定在 onSwipeableWillOpen(松手后的 JS 回调)同步读 translation,不在
  *    worklet 拖动中触发 —— 手指还按着时行被移除会拆手势树。
  */
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import {
   ReanimatedSwipeable as Swipeable,
@@ -60,6 +60,7 @@ import {
   type ThemeColors,
 } from "@/theme";
 import { radius, spacing } from "@/theme/tokens";
+import { usePaneEdgeInset } from './SessionPaneDivider';
 
 /** 圆形按钮直径(静置态是正圆,拖长后变胶囊;78 高的行内上下各留 11)。 */
 const BUTTON_SIZE = 56;
@@ -125,6 +126,9 @@ function SwipeableSessionRowInner({
   const fullSwipeThreshold = windowWidth * FULL_SWIPE_RATIO;
 
   const methodsRef = useRef<SwipeableMethods | null>(null);
+  // Leave the pane edge's drag band to resizing (see usePaneEdgeInset).
+  const edgeInset = usePaneEdgeInset();
+  const hitSlop = useMemo(() => ({ right: -edgeInset }), [edgeInset]);
   // render*Actions 的回调参数是库内部的 translation SharedValue,渲染期存进 ref,
   // 供松手回调(handleWillOpen)同步读取当前位移做全滑判定。
   const translationRef = useRef<SharedValue<number> | null>(null);
@@ -277,6 +281,7 @@ function SwipeableSessionRowInner({
   return (
     <Swipeable
       ref={methodsRef}
+      hitSlop={hitSlop}
       childrenContainerStyle={{ backgroundColor: colors.surface }}
       containerStyle={{ backgroundColor: colors.surface }}
       onSwipeableClose={handleClose}

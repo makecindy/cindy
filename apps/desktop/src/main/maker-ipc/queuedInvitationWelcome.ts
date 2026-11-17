@@ -1,6 +1,6 @@
 import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
-import type { AgentInputCoordinator } from './agent-input-coordinator.js';
+import type { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 
 /** The hidden greeting request the invitation queues: text-only, marked as a host UI trigger. */
 function isQueuedInvitationWelcome(item: Pick<AgentInputQueuedMessage, 'text' | 'toolsDisabled'>): boolean {

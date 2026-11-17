@@ -111,6 +111,8 @@ const MAX_DEFERRED_COMMANDS_PER_SESSION = 32;
  * worker,tab 落在 lead 的桶),其余命令宿主即自身 sessionId。
  */
 function commandHostSessionId(cmd: RsbWindowCommand): string {
+  // Global commands are delivered directly, without a task bucket or adoption.
+  if (cmd.type === 'open-plugin-view') return '';
   return cmd.type === 'open-turn-review' ? (cmd.hostSessionId ?? cmd.sessionId) : cmd.sessionId;
 }
 
@@ -466,6 +468,14 @@ export class RsbWindowController {
       : request.command;
     const userInitiated = request.userInitiated !== false;
     if (!this.deps.settings.read().detached) return 'attached';
+    if (command.type === 'open-plugin-view') {
+      if (allowOpen) await this.ensureOpenForAutomation({ userInitiated });
+      if (!this.deps.settings.read().detached) return 'attached';
+      const win = this.winRef;
+      if (!win || win.isDestroyed() || !this.presentationReady || !this.visible) return 'stale-context';
+      this.deps.sendToWindow(win, this.deps.commandChannel, command);
+      return 'routed';
+    }
     const hostSessionId = commandHostSessionId(command);
     if (!allowOpen) {
       const windowReady =

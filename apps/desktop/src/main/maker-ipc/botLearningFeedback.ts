@@ -11,7 +11,7 @@ import {
   broadcastMessageAgentMetaUpdate,
   patchMessageAgentMetaWithResult,
 } from '../localDb/ipc/messages.js';
-import { enqueueDurableWrite } from '../messagePersistBroadcaster.js';
+import { enqueueDurableWrite } from '../messagePersistBroadcaster.desktop.js';
 import { botLearningTracker } from './botLearningTracker.js';
 
 export function learningTurnIdentity(session: Session, generation = session.getTurnGeneration()) {

@@ -63,7 +63,6 @@ export function useSessionLinkTarget(href: string) {
   const navigationMode = useSessionNavigationMode();
   const reportSessionNavigation = useSessionNavigationIntent();
   const target = useMemo(() => parseSessionDeepLinkHref(href), [href]);
-  const remoteSessions = useRemoteProjectSessions();
   const navigationRequestVersionRef = useRef(0);
   const sessionId = target?.sessionId ?? null;
   const messageClientId = target?.messageClientId ?? null;
@@ -74,10 +73,12 @@ export function useSessionLinkTarget(href: string) {
     },
     [sessionId, messageClientId, targetDeviceId, navigationMode],
   );
-  const remoteSession = remoteSessions.find((s) =>
-    s.id === sessionId && (!targetDeviceId || s.deviceLinkDeviceId === targetDeviceId)) ?? null;
   const openTarget = async (separate: boolean) => {
     if (!target || !sessionId) return;
+    // 只在点击时读一次远程镜像快照：不订阅整份远程任务列表，避免每个链接/来源标签
+    // 在列表变化时重渲染并各自扫描（来源标签随长聊天大量挂载）。
+    const remoteSession = remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) =>
+      s.id === sessionId && (!targetDeviceId || s.deviceLinkDeviceId === targetDeviceId)) ?? null;
     const navigationRequestVersion = ++navigationRequestVersionRef.current;
     const resolveTargetRoute = async () => {
       let deviceId = targetDeviceId ?? remoteProjectsStore.getSessionDeviceId(sessionId);

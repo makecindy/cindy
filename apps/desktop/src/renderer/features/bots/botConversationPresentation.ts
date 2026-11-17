@@ -3,6 +3,7 @@ import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
+import { collectBotTurnContinuations } from '@cindy/maker-shared/botTimeline';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import {
   isCompletedAssistantMessage,
@@ -14,6 +15,38 @@ import {
 } from '@/components/chat/messageWorkGroups';
 
 type WorkGroupItem = Extract<RenderItem, { type: 'work_group' }>;
+
+export function botTurnContinuations(items: readonly RenderItem[]): ReadonlySet<string> {
+  return collectBotTurnContinuations(items, item => ({
+    kind: item.type === 'work_group' ? 'process'
+      : item.type === 'message' ? item.message.role === 'assistant' && !item.message.systemCardType ? 'reply'
+        : ['bot-session-task', 'bot-session-task-result', 'bot-session-task-message', 'bot-direct-message']
+          .includes(item.message.systemCardType ?? '') ? 'artifact' : 'boundary'
+      : item.type === 'fork_origin' ? 'boundary' : 'artifact',
+    completed: isProse(item) && item.message.turnCompleted === true,
+    start: renderItemStartMs(item),
+    end: renderItemEndMs(item),
+  }));
+}
+
+/** NEW marks the whole portrait's reply, not the seam between its process and prose.
+ * Keep unread selection/receipts unchanged; only project that message to its row owner. */
+export function botUnreadBoundaryItemKey(
+  items: readonly RenderItem[],
+  unreadClientId: string | null,
+  continuations: ReadonlySet<string>,
+): string | null {
+  if (!unreadClientId) return null;
+  let ownerKey: string | null = null;
+  for (const item of items) {
+    const portraitRow = item.type === 'work_group' || isProse(item);
+    if (portraitRow && (ownerKey === null || !continuations.has(item.key))) ownerKey = item.key;
+    if (item.type === 'message' && item.message.clientId === unreadClientId) {
+      return (portraitRow ? ownerKey : null) ?? item.key;
+    }
+  }
+  return null;
+}
 
 function isProse(item: RenderItem): item is MessageRenderItem {
   return item.type === 'message' && item.message.role === 'assistant'
@@ -117,7 +150,7 @@ export function botProcessItems(
       && item.message.assistantPhase !== 'final_answer' && !item.message.explicitDelivery
       && !item.message.sourceGroup && !hasRichAnswer(item.message.content)
       && (item.message.assistantPhase === 'commentary' || (liveItems.has(item))),
-    isRecovery: item => item.type === 'message' && ['agent-switch', 'auto-resume', 'context-rebuild'].includes(item.message.systemCardType ?? ''),
+    isRecovery: item => item.type === 'message' && ['auto-resume', 'context-rebuild'].includes(item.message.systemCardType ?? ''),
     start: renderItemStartMs, end: renderItemEndMs,
     streaming: item => item.type === 'work_group' ? item.isStreaming === true
       : liveItems.has(item),

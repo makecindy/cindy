@@ -40,6 +40,15 @@ describe("file transfer signaling", () => {
     for (const sessionBound of [undefined, false, 1, "true", null])
       expect(parseFilePeerRequest({ ...offer, sessionBound })).toEqual(offer);
   });
+  it('validates negotiated bounded ranges without changing old full-file requests', () => {
+    const base = { action: 'open', connection, url: 'xdt-file://test' };
+    const range = { start: 1, end: 1048576, version: 'a'.repeat(64) };
+    expect(parseFilePeerRequest({ ...base, range })).toEqual({ ...base, range });
+    for (const bad of [null, { ...range, start: -1 }, { ...range, end: 1048577 },
+      { ...range, end: 0 }, { ...range, version: '' }, { ...range, start: 1.5 }])
+      expect(() => parseFilePeerRequest({ ...base, range: bad })).toThrow('FILE_PEER_RANGE');
+    expect(parseFilePeerRequest(base)).toEqual(base);
+  });
   it("accepts empty files and rejects unbounded metadata", () => {
     expect(
       parseFilePeerFile({ ticket: connection, size: 0, mimeType: "text/html" })

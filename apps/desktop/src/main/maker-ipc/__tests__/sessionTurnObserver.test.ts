@@ -15,6 +15,7 @@ vi.mock('../botPermissionDispatch.js', () => ({ prepareBotPermissionDispatch: h.
 
 import type { Session } from '@cindy/maker-core';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp.js';
+import { MANAGED_OLLAMA_PROVIDER_ID } from '../../../shared/localModelRuntime.js';
 import { installSessionTurnObserver } from '../sessionTurnObserver.js';
 
 type Observer = { beforeProviderStart: (turnGeneration: number) => Promise<void>; onDispatching?: () => void };
@@ -122,6 +123,49 @@ describe('installSessionTurnObserver provider precheck', () => {
     const local = setup({});
     await local.start();
     expect(h.ensureLlama).toHaveBeenCalledTimes(1);
+    expect(h.ensureLlama).toHaveBeenCalledWith({ providerId: MANAGED_LLAMACPP_PROVIDER_ID, onlyIfStopped: true, signal: undefined });
+  });
+
+  it('starts the managed Ollama sidecar for an existing local session turn', async () => {
+    // 既有 ollama 会话在 sidecar 停止（如系统升级重启）后，发送必须先过就绪边界，
+    // 与新建会话的 admitLocalRoute 同一契约。
+    h.provider.mockReturnValue(MANAGED_OLLAMA_PROVIDER_ID);
+    h.verdict.mockResolvedValue({ kind: 'pass' });
+    const { deps, start } = setup({});
+    await start();
+    expect(h.ensureLlama).toHaveBeenCalledTimes(1);
+    expect(h.ensureLlama).toHaveBeenCalledWith({ providerId: MANAGED_OLLAMA_PROVIDER_ID, onlyIfStopped: true, signal: undefined });
+    expect(deps.sessionTurnLeaseTracker.markTurnStarted).toHaveBeenCalledWith('s1', 'i1:1');
+  });
+
+  it("does not start this computer's managed Ollama for an Agent on another computer", async () => {
+    h.provider.mockReturnValue(MANAGED_OLLAMA_PROVIDER_ID);
+    const remote = setup({ agentDeviceId: 'device-2' });
+    await remote.start();
+    expect(h.ensureLlama).not.toHaveBeenCalled();
+    expect(remote.deps.sessionTurnLeaseTracker.markTurnStarted).toHaveBeenCalledWith('s1', 'i1:1');
+  });
+
+  it('does not touch the managed sidecar for an unrelated provider', async () => {
+    // beforeEach 默认 provider 是非托管的 magpie-…；托管守卫不得越界触发。
+    h.verdict.mockResolvedValue({ kind: 'pass' });
+    const { start } = setup({});
+    await start();
+    expect(h.ensureLlama).not.toHaveBeenCalled();
+  });
+
+  it('aborts the turn before lease start when the managed sidecar restore fails', async () => {
+    h.provider.mockReturnValue(MANAGED_OLLAMA_PROVIDER_ID);
+    h.verdict.mockResolvedValue({ kind: 'pass' });
+    h.ensureLlama.mockRejectedValueOnce(
+      new Error('[LOCAL_OLLAMA_NOT_READY] Local model service is not ready (absent). Open Settings → Model Providers → Ollama.'),
+    );
+    const { deps, start } = setup({});
+    await expect(start()).rejects.toMatchObject({
+      message: expect.stringContaining('LOCAL_OLLAMA_NOT_READY'),
+    });
+    expect(deps.sessionTurnLeaseTracker.markTurnStarted).not.toHaveBeenCalled();
+    expect(deps.silentStopTurnLeaseGate.supersede).not.toHaveBeenCalled();
   });
 
   it('keeps the SSH early return unchanged', async () => {

@@ -1,5 +1,12 @@
 {
   "githubPrs": {
+    "status": {
+      "open": "オープン",
+      "draft": "ドラフト",
+      "merged": "マージ済み",
+      "closed": "クローズ済み"
+    },
+    "statusUnavailable": "ステータスはまだ取得していません",
     "title": "PR リンクを管理",
     "hint": "上部に最大 3 件表示。固定した PR を優先します",
     "empty": "GitHub PR または GitLab MR のリンクを貼り付けて追加",
@@ -32,7 +39,7 @@
     "hint": "左右にドラッグして列の幅を調整します"
   },
   "sideChat": {
-    "collapse": "サイドチャットを閉じる",
+    "collapse": "サイドチャットを折りたたむ",
     "resume": "サイドチャットを続ける",
     "list": "サイドチャット一覧",
     "summary": "サイドチャット · {{count}} 件",
@@ -52,7 +59,7 @@
     "loadFailed": "サイドチャットを読み込めませんでした。コンピューターの接続を確認してください。古いデスクトップ版では更新が必要です。",
     "createFailed": "サイドチャットを作成できませんでした。元のセッションはそのままです。",
     "unsupported": "このコンピューターはサイドチャットに未対応です。デスクトップアプリを更新してください。",
-    "waitForReply": "元のセッションの最初の回答が完了してから作成してください。"
+    "waitForReply": "元のセッションの最初の回答が完了してから、サイドチャットを作成してください。"
   },
   "leaveWhileUploading": {
     "title": "送信を中止しますか？",
@@ -115,9 +122,9 @@
   },
   "presentation": {
     "collaboration": {
-      "labelLead": "コラボレーション Lead",
-      "labelWorker": "コラボレーション Worker",
-      "labelRole": "コラボレーション {{role}}"
+      "labelLead": "協同 Lead",
+      "labelWorker": "協同 Worker",
+      "labelRole": "協同 {{role}}"
     },
     "composer": {
       "voice": {
@@ -170,7 +177,7 @@
         "attachmentsWithText": "添付ファイル {{count}} 件と入力欄のテキストを送信します。",
         "attachmentsOnly": "添付ファイル {{count}} 件だけを送信します。送信前に説明を追加することもできます。",
         "attachmentPickerOpen": "スマートフォンの写真、スクリーンショット、ファイルを追加できます。",
-        "draft": "送信をタップすると、現在のタスク設定でメッセージがコンピューター側のキューに追加されます。",
+        "draft": "送信をタップすると、現在のセッション設定でメッセージがコンピューター側のキューに追加されます。",
         "quotesOnly": "引用 {{count}} 件を送信します。送信前に説明を追加することもできます。",
         "canStop": "コンピューター側で実行中です。別のメッセージをキューに追加するか、停止をタップして現在のキューを保持できます。",
         "empty": "テキストを入力して開始します。/ でコマンド、@ でプロジェクトのリソースを参照できます。"
@@ -182,7 +189,7 @@
         "ready": "準備完了"
       },
       "operation": {
-        "sessionSyncing": "このタスクはまだ同期が完了していません。",
+        "sessionSyncing": "このセッションはまだ同期が完了していません。",
         "pendingInteraction": "入力を続ける前に、コンピューターからの保留中のリクエストを処理してください。"
       }
     },
@@ -197,10 +204,22 @@
         "deleted": "削除済み"
       },
       "actions": {
-        "settings": { "label": "設定", "a11y": "タスク設定を開く" },
-        "usage": { "label": "使用量", "a11y": "タスクの使用量を表示" },
-        "files": { "label": "ファイル", "a11y": "リモートファイルを参照" },
-        "queue": { "label": "キュー", "a11y": "キューパネルを開く" },
+        "settings": {
+          "label": "設定",
+          "a11y": "セッション設定を開く"
+        },
+        "usage": {
+          "label": "使用量",
+          "a11y": "セッションの使用量を表示"
+        },
+        "files": {
+          "label": "ファイル",
+          "a11y": "リモートファイルを参照"
+        },
+        "queue": {
+          "label": "キュー",
+          "a11y": "キューパネルを開く"
+        },
         "search": {
           "label": "検索",
           "openA11y": "メッセージを検索",
@@ -208,7 +227,7 @@
         }
       },
       "disabled": {
-        "files": "このタスクにはリモート作業ディレクトリがないため、ファイルを参照できません。",
+        "files": "このセッションにはリモート作業ディレクトリがないため、ファイルを参照できません。",
         "search": "検索できるメッセージはまだありません。",
         "queueUnavailable": "リモートのパソコンは一時的に利用できません。再同期してからキューを確認してください。",
         "queuePending": "先に保留中のリクエストを処理してください。完了するとキューパネルが使えるようになります。",
@@ -218,16 +237,16 @@
       },
       "actionCopy": {
         "pending": "先に保留中のリクエストを処理してください。完了すると入力欄が使えるようになります。",
-        "archived": "このタスクはアーカイブされています。メッセージを送信すると自動でアーカイブ解除されます。",
-        "deleted": "このタスクは削除されているため、操作できません。",
+        "archived": "このセッションはアーカイブされています。メッセージを送信すると自動でアーカイブ解除されます。",
+        "deleted": "このセッションは削除されているため、操作できません。",
         "queuePaused": "キューは一時停止中です。キューパネルから再開できます。"
       }
     },
     "controls": {
       "spend": {
-        "title": "タスク使用量",
-        "unavailable": "タスクの使用量はまだありません",
-        "taskCost": "このタスク {{cost}}",
+        "title": "セッションの使用量",
+        "unavailable": "セッションの使用量はまだありません",
+        "taskCost": "このセッション {{cost}}",
         "contextWithLimit": "コンテキスト {{used}} / {{total}} · {{percentage}}",
         "context": "コンテキスト {{used}} tokens"
       },
@@ -241,7 +260,7 @@
           "plugins": "プラグイン一覧",
           "memoryRules": "メモリの指示",
           "memoryIndex": "メモリ索引",
-          "profile": "チームメイトのプロフィール",
+          "profile": "仲間のプロフィール",
           "user": "ユーザーの指示",
           "directories": "追加ディレクトリ",
           "native": "Pi の指示",
@@ -336,7 +355,7 @@
     "operationFailed": "操作に失敗しました",
     "sessionDeviceNotFound": "このセッションが属するデバイスが見つかりません。対象のデバイスが接続されているか確認して再試行してください。",
     "deleteMessageTitle": "このメッセージを削除しますか？",
-    "deleteMessageBody": "ユーザーメッセージはこの1件のみ削除されます。AI メッセージの場合は、直前のユーザー入力以降に生成されたターン全体が削除されます。以降の会話は保持されます。次回の送信時に、残った記録から AI のコンテキストが再構築されます。",
+    "deleteMessageBody": "ユーザーメッセージはこの1件のみ削除されます。AI メッセージの場合は、直前のユーザー入力以降に生成されたターン全体が削除されます。以降のメッセージは保持されます。次回の送信時に、残った記録から AI のコンテキストが再構築されます。",
     "deleteMessageAction": "このメッセージを削除",
     "deleteMessageBusy": "現在の応答が終わってからメッセージを削除してください。",
     "readingCapabilities": "{{agent}} の実行機能を読み込み中…",
@@ -383,7 +402,7 @@
     "shareMessage": "このメッセージを共有"
   },
   "new": {
-    "goalCommandNeedsSession": "目標を解除するには既存のセッションを開いてください。",
+    "goalCommandNeedsSession": "ゴールを解除するには既存のセッションを開いてください。",
     "selectDevice": "デバイスを選択",
     "workspaceDialogue": "会話",
     "workspaceProject": "プロジェクト",
@@ -394,7 +413,7 @@
     "slowSend": {
       "preparing": "送信を準備中…",
       "uploading": "添付ファイルをアップロード中…",
-      "connecting": "コンピュータに接続中…",
+      "connecting": "パソコンに接続中…",
       "checkingModel": "モデル設定を確認中…",
       "creating": "セッションを作成中…",
       "sending": "メッセージを送信中…"
@@ -413,7 +432,7 @@
     "firstMessageUnconfirmed": "最初のメッセージの送信状態を確認できませんでした。内容は入力欄に復元されました。送信前に、このメッセージがすでにセッションにあるか確認してください。",
     "selectControlledDevice": "リモートデバイスを選択",
     "selectDeviceNamed": "デバイス {{name}} を選択",
-    "selectAgent": "エージェントを選択",
+    "selectAgent": "Agent を選択",
     "switchToAgent": "{{label}} に切り替え",
     "selectWorkspace": "ワークスペースを選択",
     "dialogueNoProject": "会話（プロジェクトなし）",
@@ -470,6 +489,11 @@
     "worktreeCleanupPending": "前回の worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。"
   },
   "menu": {
+    "moveToProject": "タスクを移動",
+    "moveFailed": "タスクの移動に失敗しました",
+    "moveRunning": "このタスクは実行中です。完了後に移動してください。",
+    "moveWorktree": "このタスクの作業ディレクトリは worktree のため、他のプロジェクトへは移動できません",
+    "moveUnsupported": "タスクを移動するには、接続先のコンピューターで Cindy を更新してください。",
     "details": "セッションの詳細",
     "chipPinned": "ピン留め済み",
     "chipArchived": "アーカイブ済み",
@@ -542,8 +566,8 @@
       "credits": "Credits",
       "creditsRemaining": "残り {{credits}}",
       "creditsUnlimited": "無制限",
-      "creditsDepleted": "残高なし",
-      "creditsAvailable": "残高あり",
+      "creditsDepleted": "残りなし",
+      "creditsAvailable": "利用可能",
       "lastUpdated": "最終更新 {{time}}",
       "taskUsage": "タスクの使用量",
       "taskValue": "タスクの価値",
@@ -572,9 +596,9 @@
     "openDir": "ディレクトリを開く",
     "copyPath": "パスをコピー",
     "extraDirsSection": "追加参照ディレクトリ",
-    "noExtraDirs": "追加ディレクトリはまだありません。追加ディレクトリは、リモートデバイス上のエージェントに追加コンテキストとして提供されます。",
+    "noExtraDirs": "追加ディレクトリはまだありません。追加ディレクトリは、リモートデバイス上の Agent に追加コンテキストとして提供されます。",
     "remove": "削除",
-    "collapseRemoteDir": "リモートディレクトリを閉じる",
+    "collapseRemoteDir": "リモートディレクトリを折りたたむ",
     "browseRemoteDir": "リモートディレクトリを参照",
     "reading": "読み込み中…",
     "parentDir": "上へ",
@@ -611,8 +635,8 @@
     "dismissNotice": "通知を閉じる",
     "ignore": "無視",
     "executionResultUnavailable": "実行結果を取得できなかったため、自動継続を停止しました。既存の実行結果を確認するようアシスタントに依頼してください。",
-    "outputLimit": "モデルが出力上限に達したため、この応答は不完全な可能性があります。新しいメッセージを送信して続行できます。繰り返す場合は、推論強度を下げるか、先に対話履歴を圧縮してください。",
-    "outputLimitReasoning": "推論が今回の出力予算の大部分を消費したため、応答は不完全な可能性があります。推論強度を下げるか、対話履歴を圧縮してから続行してください。",
+    "outputLimit": "モデルが出力上限に達したため、この応答は不完全な可能性があります。新しいメッセージを送信して続行できます。繰り返す場合は、推論強度を下げるか、先に会話履歴を圧縮してください。",
+    "outputLimitReasoning": "推論が今回の出力予算の大部分を消費したため、応答は不完全な可能性があります。推論強度を下げるか、会話履歴を圧縮してから続行してください。",
     "outputLimitUsage": "今回のモデルリクエストの出力は {{outputTokens}} トークンで、うち {{reasoningTokens}} トークンが推論に使われました。",
     "outputLimitOutputUsage": "今回のモデルリクエストの出力は {{outputTokens}} トークンです。",
     "toolUseLoopDetected": "モデルがツール呼び出しを繰り返したため、無限ループを防ぐためこのターンを停止しました。新しいメッセージを送信して続行できます。",
@@ -647,10 +671,12 @@
     "taskAlreadyCreated": "このセッションはコンピューターに作成済みです。保存されたメッセージは元のセッションで送信を再開します。"
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "このタスクを実行できるアカウントまたはパソコンはすべて同時実行数の上限に達しています。実行中のタスクが終わるのを待つか、プロバイダー設定で上限を引き上げてください。",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "このタスクを実行できるアカウントまたはパソコンはすべて同時実行数の上限に達しています。実行中のタスクが終わるのを待つか、プロバイダー設定で上限を引き上げてください。",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "この SSH タスクでは Harness を切り替えられません。現在の Harness のモデルを選ぶか、必要な Harness で新しい SSH タスクを作成してください。",
-    "MODEL_SELECTION_UNAVAILABLE": "選択したプロバイダーのモデルは利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
+    "MODEL_SELECTION_UNAVAILABLE": "選択したモデルは、そのプロバイダーで利用できなくなりました。設定で接続を確認するか、利用可能なモデルを選び直してください。",
     "HARNESS_SWITCH_NOT_READY": "Harness の切り替えが完了していません。エラーの詳細を確認し、Harness の準備ができてから再試行してください。",
-    "REMOTE_AGENT_GROUP_USAGE_LIMIT": "このモデルを利用できるアカウントの使用量が上限に達しました。別のモデルに切り替えるか、上限のリセット後に続行できます。",
+    "REMOTE_AGENT_GROUP_USAGE_LIMIT": "このモデルを利用できるアカウントの使用量が上限に達しました。別のモデルに切り替えるか、クォータのリセット後に続行できます。",
     "REMOTE_AGENT_GROUP_UNAVAILABLE": "プロバイダーグループ内のパソコンは現在このセッションを実行できません。オフライン、割り当て停止中、クールダウン中、またはこのモデルがない可能性があります。パソコンでこのプロバイダーの「リモートと共有」ページを確認してください。",
     "REMOTE_DAEMON_CLOSED": "リモート接続が切れました。更新中の可能性があります。このターンは終了したので、もう一度送信してください。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "リモートセッションではローカルのファイル/画像の添付にアクセスできません。内容を直接貼り付けてください。",
@@ -661,7 +687,7 @@
     "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません（サインイン後に自動発行されます）。しばらくしてから再試行してください。続く場合は「設定 → モデルプロバイダー」で Cindy AI の接続状態を確認してください。",
     "REMOTE_LOCAL_ONLY_PROVIDER": "このモデルプロバイダーはローカル専用サービス（Ollama など）で、SSH リモートタスクからはアクセスできません。Cindy AI ゲートウェイに切り替えるか、リモートホストから到達可能なプロバイダーを選んでください。",
     "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
-    "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
+    "DEVICE_LINK_BUSY": "接続先のコンピューターが混み合っています。しばらくしてから再試行してください。",
     "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy が元の添付ファイルを読み取れないため、メッセージは送信されていません。「ダウンロード」などアクセス可能なフォルダーにコピーを保存し、元の添付ファイルを削除してから、添付ボタンでコピーを追加し、再送信してください。",
     "MCP_APPROVAL_AUTO_BLOCKED": "このツール呼び出しは自動承認でブロックされました。手動で拒否された記録はありません。",
@@ -684,20 +710,23 @@
     "REMOTE_AGENT_TOTAL_LIMIT": "そのパソコンのリモートセッション総数が上限に達しました。そのパソコンの所有者に不要なセッションの解放、または「リモートと共有」での上限変更を依頼してください。",
     "REMOTE_AGENT_RESUME_LOST": "相手のパソコンでのこれまでの会話に再接続できなかったため、Agent はその文脈なしで続行します。",
     "REMOTE_AGENT_UNSUPPORTED": "相手のパソコンではこの Agent を使えません。そのパソコンでインストールまたはサインインするか、別の Agent を選んでください。",
+    "REMOTE_AGENT_RESUME_UNAVAILABLE": "このパソコンではセッションの以前の実行状態を復元できません。別のパソコンまたはプロバイダーのモデルを選び、コンテキストを引き継いで続けてください。既存のメッセージは保持されます。",
     "REMOTE_AGENT_INVALID": "Agent を実行しているパソコンとの通信でエラーが発生しました。もう一度お試しください。続く場合は両方のパソコンの Cindy を最新版に更新してください。",
+    "REMOTE_AGENT_RESUME_REJECTED": "モデルを実行しているコンピューターでは、このセッションを再開できません。セッション一覧から新しいセッションを作成し、続行に必要な内容をコピーしてください。元のセッションと送信待ちのメッセージは保持されます。",
     "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "このモデルは共有者が設定したモデル使用割合の上限に達しました。別の利用可能なモデルで続行してください。",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーのリモート利用が許可されていません。そのパソコンの「設定 → モデルプロバイダー」で「リモート利用を許可」をオンにするか、別のモデルを選んでください。",
     "REMOTE_AGENT_FORK_FAILED": "Agent を実行しているパソコンで、ここから新しいセッションを始められませんでした。もう一度試すか、別のメッセージでお試しください。",
     "REMOTE_AGENT_SHARE_PAUSED": "共有した人があなたへの共有を一時停止したため、再開されるまでこれらのモデルは使えません。別のモデルに切り替えて続けられます。",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "これは旧方式の共有のため、「Agent-Net のみ使用」がオンの間は使えません。オフにすると続けられます。別のモデルに切り替えることもできます。",
     "REMOTE_AGENT_SHARE_REMOVED": "この共有は利用できなくなりました（共有した人が削除したか、あなたが退出しました）。別のモデルに切り替えて続けられます。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "共有されたプロバイダーは一時的に利用できません。共有した人のパソコンがオフラインか、共有が一時的にオフになっている可能性があります。後でもう一度試すか、別のモデルに切り替えて続けられます。"
   },
   "collab": {
-    "modeLabel": "コラボレーションモード",
+    "modeLabel": "協同モード",
     "enabled": "オン",
-    "title": "コラボレーション",
-    "enableTitle": "コラボレーションを開始",
-    "enableSubmit": "コラボレーションを開始",
+    "title": "協同",
+    "enableTitle": "協同を開始",
+    "enableSubmit": "協同を開始",
     "createWorkerTitle": "新しい Worker",
     "createWorkerSubmit": "Worker を作成",
     "executionDeviceLabel": "実行デバイス",
@@ -710,25 +739,38 @@
     "remoteDirChat": "対話",
     "remoteDirPath": "ディレクトリを指定",
     "remoteDirPlaceholder": "実行デバイスの絶対パス",
-    "remoteDirChatHint": "実行デバイスにプロジェクトと紐付けない対話タスクを作成します。",
+    "remoteDirChatHint": "実行デバイスにプロジェクトと紐付けない対話セッションを作成します。",
     "remoteDirPathHint": "実行デバイスでディレクトリを確認します。存在しない場合はエラーになり、Lead のディレクトリには切り替わりません。",
     "remoteDirInvalid": "実行デバイスの絶対パスを入力してください。",
     "roleLabel": "ロール名",
-    "roleHint": "複数の協力者を見分けるための名前で、能力は変わりません",
-    "customRole": "カスタム",
-    "customRolePlaceholder": "カスタムロール名",
-    "customRolePredefinedError": "カスタムロール名にプリセットのロール名は使えません",
+    "taskLabel": "Worker に任せること",
+    "enableHint": "このタスクが Lead となり、作業の割り振りと確認を担当します。Worker は別の独立した Agent で、作業を実行して結果を報告します。",
+    "roles": {
+      "reviewer": {
+        "name": "レビュー",
+        "task": "Lead の作業を確認して、いくつか提案してください。"
+      },
+      "developer": {
+        "name": "開発"
+      },
+      "tester": {
+        "name": "テスト",
+        "task": "Lead のここまでの成果をテストし、失敗した項目と再現手順を報告してください。"
+      }
+    },
+    "addRole": "ロールを追加",
+    "removeRoleHint": "長押しで削除",
+    "removeRoleConfirmTitle": "「{{role}}」を削除しますか？",
+    "removeRoleConfirmDesc": "「ロールを追加」からいつでも追加し直せます。",
+    "removeRoleConfirm": "ロールを削除",
+    "moreSettings": "その他の設定",
     "agentLabel": "Agent",
-    "modelLabel": "モデル",
     "modelDefault": "デフォルト",
     "modelDefaultHint": "コンピューター側の Worker 既定モデルを使います",
-    "permissionLabel": "権限モード",
     "permissionAuto": "自動承認",
     "permissionFull": "フルアクセス",
-    "permissionAutoHint": "ワークスペース内の読み書きを許可し、権限昇格を自動承認します。高リスクの操作は拒否または確認が必要になることがあります。",
-    "permissionFullHint": "任意のファイル変更やネットワークコマンドを確認なしで実行できます。最もリスクが高く、信頼できるタスク向けです。",
     "initialTaskLabel": "最初のタスク（任意）",
-    "initialTaskPlaceholder": "この Worker に任意で渡す最初のタスク",
+    "initialTaskPlaceholder": "最初に任せることを入力。空欄の場合は待機し、Lead が割り振ります",
     "workerCountSummary_one": "Worker {{count}} 件 · 実行中 {{running}}",
     "workerCountSummary_other": "Worker {{count}} 件 · 実行中 {{running}}",
     "loading": "Worker を読み込み中…",
@@ -739,26 +781,26 @@
     "manageGroup": "管理",
     "hardLimitHint": "上限 {{limit}} 件に達しました · Worker をアーカイブすると作成できます",
     "softLimitHint": "目安の {{limit}} 件を超えています · Worker が多いとメモリ使用量が増えます",
-    "limitSummary": "Worker の目安は {{soft}} 件、上限は {{hard}} 件です。コラボレーション設定はコンピューターで変更してください。",
-    "stop": "コラボレーションを終了",
-    "stopConfirmTitle": "コラボレーションを終了しますか？",
+    "limitSummary": "Worker の目安は {{soft}} 件、上限は {{hard}} 件です。協同設定はコンピューターで変更してください。",
+    "stop": "協同を終了",
+    "stopConfirmTitle": "協同を終了しますか？",
     "stopConfirmDesc": "Worker のセッションは破棄され、実行中のタスクはすぐに停止し、結果は失われます。終了しますか？",
     "cancel": "キャンセル",
     "archive": "アーカイブ",
     "archiveConfirm": "Worker をアーカイブ",
     "archiveConfirmTitle": "Worker {{name}} をアーカイブしますか？",
     "archiveConfirmDesc": "セッションを停止します。履歴はアーカイブとして残ります。アーカイブした Worker は復元できないため、続けるには新しい Worker を作成してください。",
-    "loadingHint": "コラボレーション設定を確認中…",
-    "disabledHint": "コラボレーションモードがオフです。コンピューターの設定で有効にしてください",
-    "unavailableHint": "コラボレーション設定を確認できませんでした。しばらくしてから再試行してください",
-    "barLead_one": "コラボレーション · Worker {{count}} 件 · 実行中 {{running}}",
-    "barLead_other": "コラボレーション · Worker {{count}} 件 · 実行中 {{running}}",
-    "barWorker": "コラボレーション Worker · Lead に戻る",
-    "draftChip": "コラボ",
+    "loadingHint": "協同設定を確認中…",
+    "disabledHint": "協同モードがオフです。コンピューターの設定で有効にしてください。",
+    "unavailableHint": "協同設定を確認できませんでした。しばらくしてから再試行してください。",
+    "barLead_one": "協同 · Worker {{count}} 件 · 実行中 {{running}}",
+    "barLead_other": "協同 · Worker {{count}} 件 · 実行中 {{running}}",
+    "barWorker": "協同 Worker · Lead に戻る",
+    "draftChip": "協同",
     "draftSummary": "最初の Worker：{{role}} · {{agent}}",
     "draftSubmit": "完了",
-    "draftRemove": "コラボレーションを使わない",
-    "startFailedContinue": "コラボレーションを開始できなかったため、単一タスクとして続行します。{{reason}}",
+    "draftRemove": "協同を開始しない",
+    "startFailedContinue": "協同を開始できなかったため、単一タスクとして続行します。{{reason}}",
     "status": {
       "idle": "待機中",
       "running": "実行中",
@@ -766,19 +808,19 @@
       "error": "エラー"
     },
     "errors": {
-      "unsupported": "コンピューターのバージョンが古いため、コラボレーションに対応していません",
+      "unsupported": "コンピューターのバージョンが古いため、協同に対応していません",
       "loadFailed": "Worker を読み込めませんでした。",
       "loadExecutionDevices": "実行デバイスを読み込めませんでした。",
-      "startFailed": "コラボレーションを開始できませんでした。",
+      "startFailed": "協同を開始できませんでした。",
       "createFailed": "Worker を作成できませんでした。",
       "archiveFailed": "Worker をアーカイブできませんでした。",
-      "stopFailed": "コラボレーションを終了できませんでした。",
+      "stopFailed": "協同を終了できませんでした。",
       "WORKER_LIMIT_HARD_EXCEEDED": "Worker の上限に達しました。先に Worker をアーカイブしてください。",
       "NO_PROVIDER_FOR_AGENT": "コンピューターにこの Agent 用のモデルプロバイダーが接続されていません。コンピューターで接続してから再試行してください。",
       "PROVIDER_ROUTE_UNAVAILABLE": "選択したモデルとプロバイダーの経路がコンピューターで利用できません。利用可能なモデルを選んで再試行してください。",
       "BUDGET_MODEL_REQUIRES_API_MODE": "この Codex モデルに必要な API key がコンピューターで設定されていません。設定してから再試行してください。",
-      "INVALID_PARAMS": "選択したモデルまたは設定にコンピューターが対応していません。対応するモデルを選んで再試行してください。",
-      "PRECONDITION_FAILED": "コラボレーションモードがオフか、このタスクはコラボレーションに対応していません。",
+      "INVALID_PARAMS": "選択したモデルまたは協同設定にコンピューターが対応していません。対応するモデルを選んで再試行してください。",
+      "PRECONDITION_FAILED": "協同モードがオフか、このタスクは協同に対応していません。",
       "WORKER_CREATION_IN_PROGRESS": "同じ名前の Worker を作成中です。しばらくしてから再試行してください。",
       "WORKER_NOT_FOUND": "この Worker はもう存在しません。一覧を更新しました。",
       "ORCA_CREATE_UNCONFIRMED": "Worker の作成がタイムアウトし、成功したか確認できませんでした。まず Worker 一覧を確認し、新しい Worker がない場合のみ再試行してください。",
@@ -788,8 +830,8 @@
   "resetAutoUse": {
     "label": "自動使用",
     "rules": "自動使用ルール",
-    "lowQuota": "週間配分の残りが 1% 未満で使用",
-    "resetDistance": "配分リセットまでの残り時間",
+    "lowQuota": "週間クォータの残りが 1% 未満で使用",
+    "resetDistance": "クォータのリセットまでの残り時間",
     "days": "{{count}} 日以上",
     "unlimited": "制限なし",
     "custom": "カスタム…",
@@ -800,15 +842,9 @@
     "leadTime": "使用するタイミング",
     "minutes": "有効期限の {{count}} 分前",
     "hours": "有効期限の {{count}} 時間前",
-    "hint": "いずれかの条件で、期限が近いカードから使用します。全配分が満量の場合は使用しません。このパソコンで Cindy の起動中に実行します。",
+    "hint": "いずれかの条件で、期限が近いカードから使用します。全クォータが満タンの場合は使用しません。このパソコンで Cindy の起動中に実行します。",
     "failed": "保存できませんでした。再試行してください。",
     "restore": "既定に戻す"
-  },
-  "followUp": {
-    "title": "セッションのフォローを始めましょうか？",
-    "start": "フォローを開始",
-    "notNow": "今はしない",
-    "saveFailed": "保存できませんでした。もう一度お試しください"
   },
   "providerGroupRebalance": {
     "title": "{{label}} に切り替えて続けますか？",

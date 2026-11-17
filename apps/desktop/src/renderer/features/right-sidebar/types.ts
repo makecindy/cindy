@@ -32,7 +32,6 @@ export type BuiltinTabKindId =
   | 'subagents'
   | 'side-chat'
   | 'background-tasks'
-  | 'routines'
   | 'resource-usage'
   | 'cindy-make'
   /** 全局页签(不跟对话):承载插件的 mainView / panel 页面,见 globalTabs.ts。 */

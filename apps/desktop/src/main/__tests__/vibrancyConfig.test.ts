@@ -14,8 +14,13 @@ vi.mock('../logger.js', () => ({
 
 import type { BrowserWindow } from 'electron';
 import {
+  fitWindowsBackdropToWindow,
+  isWindowsTransparentWindow,
+  markWindowsTransparentWindow,
+  needsWindowsTransparentWindow,
   resolveVibrancyConfig,
   resolveWindowVibrancyConfig,
+  resolveWindowsWindowTransparent,
   setWindowWallpaperCovered,
   setWindowDesktopBlur,
 } from '../vibrancyConfig';
@@ -156,7 +161,7 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
     process.env.XDT_BACKDROP_MATERIAL = 'none';
     expect(
       resolveVibrancyConfig('cindy', false, 'win32', {
-        getSystemVersion: () => '10.0.22000',
+        getSystemVersion: () => '10.0.22621',
       }),
     ).toEqual({
       vibrancy: null,
@@ -188,6 +193,17 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
     expect(
       resolveVibrancyConfig('cindy', false, 'win32', {
         getSystemVersion: () => '10.0.19045',
+      }),
+    ).toEqual({
+      vibrancy: null,
+      backgroundColor: '#f8f8f6',
+      backgroundMaterial: 'none',
+    });
+    // Windows 11 21H2 has no Electron system backdrop: keep the opaque surface instead
+    // of a translucent Acrylic backing without its material.
+    expect(
+      resolveVibrancyConfig('cindy', false, 'win32', {
+        getSystemVersion: () => '10.0.22000',
       }),
     ).toEqual({
       vibrancy: null,
@@ -263,4 +279,59 @@ it('keeps desktop blur per window and restores it after removing artwork', () =>
   }).backgroundMaterial).toBe('acrylic');
   setWindowDesktopBlur(win, null);
   expect(resolveWindowVibrancyConfig(win, 'default', true, 'darwin').backgroundColor).toBe('#1f1f1e');
+});
+
+// Regression (2026-11-11, Windows 11 build 26200): the main window was created transparent and
+// carried Acrylic. Each time any desktop window was shown or hidden, DWM stopped drawing what was
+// behind it for a few frames and the sidebar flashed to a flat dark fill. Earlier tests only
+// covered the material and backing, never which kind of window carries them.
+describe('Windows transparent window vs system backdrop', () => {
+  const win11 = { getSystemVersion: () => '10.0.22631' };
+  const win10 = { getSystemVersion: () => '10.0.19045' };
+  const acrylic = resolveVibrancyConfig('cindy', true, 'win32', win11);
+  const clearDesktop = resolveVibrancyConfig('cindy', true, 'win32', { ...win11, desktopBlur: 0 });
+  const blurredDesktop = resolveVibrancyConfig('cindy', true, 'win32', { ...win11, desktopBlur: 8 });
+  const opaque = resolveVibrancyConfig('eclipse', true, 'win32', win11);
+
+  it('only a clear desktop needs a transparent window', () => {
+    expect(needsWindowsTransparentWindow(acrylic)).toBe(false);
+    expect(needsWindowsTransparentWindow(blurredDesktop)).toBe(false);
+    expect(needsWindowsTransparentWindow(opaque)).toBe(false);
+    expect(needsWindowsTransparentWindow(clearDesktop)).toBe(true);
+  });
+
+  it('creates a regular window whenever a system backdrop is shown', () => {
+    expect(resolveWindowsWindowTransparent(acrylic, undefined, win11)).toBe(false);
+    expect(resolveWindowsWindowTransparent(acrylic, false, win11)).toBe(false);
+    expect(resolveWindowsWindowTransparent(opaque, undefined, win11)).toBe(false);
+  });
+
+  it('creates a transparent window when the last session needed a clear desktop', () => {
+    expect(resolveWindowsWindowTransparent(acrylic, true, win11)).toBe(true);
+    expect(resolveWindowsWindowTransparent(clearDesktop, undefined, win11)).toBe(true);
+  });
+
+  it('keeps transparent windows where no system backdrop exists', () => {
+    const win10Default = resolveVibrancyConfig('cindy', true, 'win32', win10);
+    expect(win10Default.backgroundMaterial).toBe('none');
+    expect(resolveWindowsWindowTransparent(win10Default, undefined, win10)).toBe(true);
+  });
+
+  it('keeps a regular window frosted when a clear desktop is requested mid-session', () => {
+    expect(fitWindowsBackdropToWindow(clearDesktop, false, win11)).toEqual({
+      ...clearDesktop,
+      backgroundMaterial: 'acrylic',
+    });
+    expect(fitWindowsBackdropToWindow(clearDesktop, true, win11)).toBe(clearDesktop);
+    expect(fitWindowsBackdropToWindow(acrylic, false, win11)).toBe(acrylic);
+    expect(fitWindowsBackdropToWindow(opaque, false, win11)).toBe(opaque);
+  });
+
+  it('remembers which windows were created transparent', () => {
+    const transparent = {} as BrowserWindow;
+    const regular = {} as BrowserWindow;
+    markWindowsTransparentWindow(transparent);
+    expect(isWindowsTransparentWindow(transparent)).toBe(true);
+    expect(isWindowsTransparentWindow(regular)).toBe(false);
+  });
 });

@@ -1,4 +1,23 @@
-# 伙伴例行任务：本地触发与执行
+# 伙伴例行任务：本地触发与执行（V1 存档）
+
+> **2026-11-08 起整篇不再适用（伙伴 V2）。** 例行任务引擎（`@cindy/maker-scheduler` 的 routine engine、Desktop
+> routines service、例行任务工具与系统技能 `routine`、伙伴设置「例行任务」页、远程 `routines` 集合）已移除。
+> V2 伙伴的定时工作是它项目里的普通自动化 `.cindy/automations/schedules.json`，与普通项目自动化同一套调度器、
+> 编辑与执行规则；伙伴项目的自动化直接同步，不弹导入确认。现状正本见 [伙伴运行时合同](./cindy-bots-runtime.md)
+> 开头的 V2 说明与 §4。下文保留为 V1 合同与历史裁决记录，不再描述现行行为。
+>
+> 迁移与兼容：
+> - 升级时（`botV2Migration.ts` / `botV1Routines.ts`）每个伙伴自己的例行任务按原时间、检查脚本、模型与暂停状态转成
+>   项目自动化；触发条件或插件检查搬不过去的保留为暂停的自动化并记说明，曾经发到聊天的也记下；定义原文存档在
+>   `v1-archive/routines.json`。内置的跟进、每天查待办与夜间学习连同其 backing schedule 一并删除，遗留的内置规则运行时跳过。
+> - 记忆整理改为伙伴项目的普通自动化 `teammate-memory-review`（每晚一次，只给目标不规定步骤，可暂停）。
+> - 导入（Hermes / OpenClaw 与内置伙伴包）写成暂停的项目自动化，来源任务暂停后才恢复；依赖已移除导入运行时的
+>   脚本、命令、监控任务不再接管，继续在来源运行。
+> - 从旧电脑经云端伙伴同步来的例行任务，按例行任务 id 各转成一次项目自动化；本机不再上传例行任务，但仍拥有该前缀以清理自己的旧行。
+> - 已有的 `role = 'routine'` 运行任务作为历史照常在任务列表可见、可打开。
+> - 旧控制端调用例行任务设置操作得到 `UNSUPPORTED_CAPABILITY`，读 `routines` 集合与例行任务技能页得到 `NOT_FOUND`。
+> - 插件：声明 `routineEvents`、`will-routine-run` 的插件照常安装，钩子不再触发；`routine-request` 管子对
+>   status / publish 返回稳定的空操作；`routineEvents` 不再让插件常驻。见 [插件安全与编写](../dev-rules/plugin-security-and-authoring.md)。
 
 ## 产品合同
 
@@ -21,7 +40,7 @@ Bot Market 原生包的例行任务只通过原导入服务保存停用定义，
 - `@cindy/maker-scheduler`：例行任务校验、匹配、去重、串行落盘和运行状态机。纯逻辑，不依赖 Electron。
 - Desktop routines service：按当前账号保存本地文件，为每条规则创建或复用独立的伙伴任务，调用现有调度执行器。
 - 插件：第三方身份认证、长连接、消息订阅或本地采集。向宿主报告事件，不指定伙伴、指令或执行权限。
-- 桌面远程控制（2026-10-22）：控制另一台电脑上的伙伴时，桌面伙伴设置里的「例行任务」页就是本机同一个页面，列表、保存、立即运行、删除和运行历史由伙伴所在电脑的同一个管理服务执行（`management:settings` 的 `routines.*` 操作，见 [伙伴设置动作](../dev-rules/protocol-compatibility.md#伙伴设置动作-managementsettingsremote-resource2026-10-22)）；那台电脑上的例行任务变化会推送到打开着的页面重读。这是桌面入口，手机仍不提供管理。
+- 桌面远程控制（2026-10-22）：控制另一台电脑上的伙伴时，桌面伙伴设置里的「例行任务」页就是本机同一个页面，列表、保存、立即运行、删除和运行历史由伙伴所在电脑的同一个管理服务执行（`management:settings` 的 `routines.*` 操作，见 [伙伴设置动作](../dev-rules/protocol-compatibility/teammate-settings-management-action.md)）；那台电脑上的例行任务变化会推送到打开着的页面重读。这是桌面入口，手机仍不提供管理。
 - 桌面 UI / MCP / Remote Resources：共用管理服务，不能冒充事件来源。宿主保留 Remote Resources，当前手机端过滤 `routines` 集合及动作。MCP 管理仅走宿主绑定调用者身份的伙伴必备工具；通用 scheduler MCP 不提供可任意指定 botId 的例行任务入口。
 
 每条需要 Agent 执行的例行任务对应一个持久独立 Session（`bot_session_links.role = 'routine'`，`route_key = 'routine:<routineId>'`），重复触发复用，不向伙伴主任务追加执行上下文。它与原伙伴共享 Profile、Home、记忆、技能和实际权限，权限与资料更新同样同步到专线；`list_agents`、`send_to_agent`、`check_agent_message` 沿用同一伙伴身份（含远程回执核验与排队恢复），逐轮行动授权与防循环上限不变；行动身份仍按本轮来源判定，内置跟进不会因独立任务变成主人授权。
@@ -36,7 +55,7 @@ Bot Market 原生包的例行任务只通过原导入服务保存停用定义，
 
 远程桌面沿用同一设置页，通过 `routines.saveWithModel` 能力协商展示选模；旧主机不显示选模，新主机接受旧客户端保存时保留覆盖。运行方式另由 `routines.saveWithSessionMode` 协商：只接受 `saveWithModel` 的旧主机会丢弃 `sessionMode`，因此不显示该选项，避免保存成功却仍共用上下文。手机当前仍无例行任务管理入口。模型配置随普通规则的伙伴迁移资料保留，执行任务与运行历史留在执行电脑。
 
-事件、时间与立即运行触发的批次都以独立宿主作用域执行，不继承发布事件或发起调用的 Agent 轮次行动凭证；当前账号、伙伴状态、规则版本及目标任务的权限检查仍然生效。发布方轮次结束不使已接收批次失效，目标独立任务忙碌时沿用下述延期与重试规则。实现与回归见 [service.ts](../../apps/desktop/src/main/routines/service.ts)、[service.test.ts](../../apps/desktop/src/main/routines/__tests__/service.test.ts)（#7044）。
+事件、时间与立即运行触发的批次都以独立宿主作用域执行，不继承发布事件或发起调用的 Agent 轮次行动凭证；当前账号、伙伴状态、规则版本及目标任务的权限检查仍然生效。发布方轮次结束不使已接收批次失效，目标独立任务忙碌时沿用下述延期与重试规则。实现与回归原在 `apps/desktop/src/main/routines/service.ts` 及其测试（#7044），已随 V1 例行任务引擎移除；伙伴的定时工作现为它项目的自动化。
 
 直接执行路径必须取得完整的持久权限/计划模式快照；已有 live Session 还必须提供稳定权限状态，并与持久权限一致。缺失、切换中或不一致时保留原批次延期，不回退到旧权限或把未知计划模式当作关闭。异步准备后在创建 Session 和直接发送前再次读取；冷恢复沿用已保存的有效权限和计划模式。运行信息回写跳过伙伴权限字段，不以普通自动化的默认完全访问覆盖用户选择或并发修改。
 
@@ -167,7 +186,7 @@ const receipt = await cindy.routines.request({
 - 触发条件：6 个事件条件（含条件兜底 `sweep`）订阅 `host:sessions`，筛选 `followerBotId` 等于自己；没有时间或间隔条件，
   旧版带的 2 小时间隔条件在下一次 ensure 时被对齐掉。`silentWhenIdle` 开启，
   这一轮的回复不自动发给主人，要主人知道的事显式通知。
-- 指令由宿主模板生成（`apps/desktop/src/main/bot-autonomy/followUpPrompt.ts`），伙伴与主人都不能编辑。
+- 指令由宿主模板生成（V1 `bot-autonomy/followUpPrompt.ts`，已删除），伙伴与主人都不能编辑。
   v7 正文改为宿主口吻（不冒用主人第一人称）：「主人开启了自动跟进；这一轮由宿主的任务事件唤醒，不是主人刚说的话。看看这些任务做得怎么样，有需要主人回复或决策的，给出你的判断和建议。已经交给你跟进的任务，可以让它按原来的目标接着做，或按摘要建议换模型；普通操作沿用当前任务权限；代答授权或恢复暂停等风险操作由宿主显示授权请求，等待主人决定，拒绝后不要重试。没有新情况就不用提醒。」
   升级仍由 `ensureBuiltin` 对齐模板并保留 `enabled=false`；不创建行动授权，也不迁移 follower 为执行委托。
   内置例行任务的轮次是「自主」身份：可观察、提醒、写待办，并让已交给它跟进的任务按原目标继续或按建议换模型；
@@ -184,7 +203,7 @@ const receipt = await cindy.routines.request({
 
 伙伴近况「每天帮我查一次」开关背后的例行任务。2026-10-31 负责人裁决：它不再是宿主内置规则，而是一条普通、可编辑的例行任务；
 什么算待办、去哪些已授权来源查、怎么提醒，由伙伴自己的记忆与技能决定（`teammate-guide` 只保留默认定义、工具用法和安全底线），
-不在宿主代码里固化。实现见 `apps/desktop/src/main/bot-autonomy/todoCheckRoutine.ts` 与 `routineTools.setTodoCheck`。
+不在宿主代码里固化。V1 实现（`bot-autonomy/todoCheckRoutine.ts` 与 `routineTools.setTodoCheck`）已删除。
 
 - id 为 `builtin-todo-check-<伙伴 id>`（过长时改用 sha256 前缀），`builtin-` 是内置时期的已存 id，保留以便近况开关找到同一条；
   派发 schedule id 落在 `routine-builtin-` 前缀下，运行身份仍按宿主发起（autonomous）判定，不因改成可编辑而变成主人常驻授权。
@@ -202,14 +221,14 @@ const receipt = await cindy.routines.request({
 
 伙伴整理自己记忆与技能的唯一后台入口（主人 2026-10-23 裁决）。宿主内置规则 `builtin: 'nightly-learning'`，
 id 为 `builtin-nightly-learning-<伙伴 id>`，过长时同样改用 sha256 前缀。实现见
-`apps/desktop/src/main/bot-autonomy/nightlyLearningRoutine.ts`、`maker-ipc/botNightlyLearning*.ts`。
+V1 `bot-autonomy/nightlyLearningRoutine.ts`、`maker-ipc/botNightlyLearning*.ts`（已删除）。
 
 - **默认开**：每个在用、本机是主力电脑的伙伴，与内置跟进一起在引擎启动、伙伴新建与恢复时幂等 ensure；
   落地失败只记日志，不影响跟进。主人可在伙伴设置「例行任务」里暂停 / 恢复，删除与改内容以 `BUILTIN_ROUTINE` 拒绝。
   与「每天查待办」默认不存在不同：没有新对话时不调用模型，有新对话一次只调用一次辅助模型。
 - **频率**：每天 3:30（缺省）或每周一 3:30，宿主所在时区，在第一次建立时取一次。频率只在伙伴 Home 的
   `nightly-learning.json` 里存用户改过的值，选回每天即删除；改频率时宿主按新模板重写这条规则，不改开关。
-- **运行前检查**：主人与伙伴每完成一轮真实对话计数加一（`botNightlyLearningCounter.ts`，在成功轮次终态处、不调用模型）。
+- **运行前检查**：主人与伙伴每完成一轮真实对话计数加一（V1 `botNightlyLearningCounter.ts`，已删除；在成功轮次终态处、不调用模型）。
   计入主任务、私聊话题与主人本人在 IM 频道发起的轮次；不计子代理、私下回复、群专线和自动化 / 目标 / 协同 /
   其他任务投递的输入。同一条回复只计一次。到点时计数为 0 直接记一次 `skipped`，不调用模型、不发消息或推送；
   手动「现在整理」不看计数。

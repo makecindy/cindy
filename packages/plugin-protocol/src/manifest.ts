@@ -3,6 +3,7 @@ import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from 
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
+import { parseGhostSystemPromptFragments, type GhostSystemPromptFragment } from './runtimeContext.js';
 import { GHOST_LOCALES, type GhostLocale } from './locales.js';
 import { validateGhostReadmeDeclaration } from './readme.js';
 export { GHOST_LOCALES, type GhostLocale } from './locales.js';
@@ -200,6 +201,12 @@ export interface GhostTaskViewDecl {
   title?: string;
   /** 任务页入口（安装目录内安全相对路径）。 */
   html: string;
+  /**
+   * 任务在本账号的另一台电脑上时也显示这个任务页（只接受字面量 true，且需同时声明
+   * `liveScreen`）。页面此时多一个查询参数 `device`（那台电脑的设备 ID），逻辑页经
+   * `cindy.liveScreenView()` 查看并操作那台电脑上同一插件的设备画面。
+   */
+  remote?: true;
 }
 
 /**
@@ -234,7 +241,18 @@ export interface GhostCardNeeds {
  * 声明 `agent` 默认只允许消费宿主在真实用户点击插件卡片时签发的
  * 一次性通行票；可选加档由 Desktop 如实展示，并由 Host 在运行时守门。
  */
+export const GHOST_HOST_TOOL_GROUPS = ['history', 'control', 'handoff', 'settings', 'scheduler', 'terminal', 'files', 'storage', 'browser', 'computer', 'ssh', 'docs', 'discovery'] as const;
+export type GhostHostToolGroup = (typeof GHOST_HOST_TOOL_GROUPS)[number];
+
+/** Unknown groups survive normalization but never become runtime authority. */
+export function declaredGhostHostToolGroups(manifest: { agent?: { hostTools?: unknown } }): GhostHostToolGroup[] {
+  const groups = manifest.agent?.hostTools;
+  return Array.isArray(groups) ? GHOST_HOST_TOOL_GROUPS.filter(group => groups.includes(group)) : [];
+}
+
 export interface GhostAgentNeeds {
+  /** Independently approved groups of the same Host tools exposed to Agents. */
+  hostTools?: string[];
   background?: boolean;
   errand?: boolean;
   tasks?: boolean;
@@ -403,10 +421,10 @@ export interface GhostCindyNeeds {
  * 订阅槽 did- 旁听主题(卡槽①,2026-07-12 开闸)。v1 全部是**元数据级**:
  * turn = 轮次开始/结束(agent/模型/耗时/用量,不含消息内容);
  * session = 会话创建/归档/切换(切换 = 用户把哪个会话切到台前,2026-07-13 增)。
- * 正文级主题(消息内容旁听)刻意不开——隐私最重,等真实场景再议,权限文案
- * 也要另分一档。
+ * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
+ * 两项分别展示权限并记录显式批准；旧元数据主题的批准语义保持。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'message', 'task-state'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
 
 /**
@@ -421,7 +439,7 @@ export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
  * 在场,冷启动延迟不可接受),校验强制。
  */
 export const GHOST_SUBSCRIBE_HOOKS = ['will-user-message', 'will-assistant-message'] as const;
-export type GhostSubscribeHook = (typeof GHOST_SUBSCRIBE_HOOKS)[number];
+export type GhostSubscribeHook = (typeof GHOST_SUBSCRIBE_HOOKS)[number] | 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory';
 
 /**
  * 订阅槽详单(与 slots 含 'subscribe' 成对;有槽无详单允许装入但零事件——
@@ -897,6 +915,8 @@ export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** 已校验的 ghost.json 协议文档；Desktop 会再投影成无 slots 的运行时模型。 */
 export interface GhostManifest {
+  /** Static task-scoped system instructions, reviewed verbatim at install/update. */
+  systemPrompt?: GhostSystemPromptFragment[];
   /** Optional MCP Apps resources and links to existing tools. */
   mcpApps?: unknown;
   /** Host-owned mail editor; providers supply mailbox adapters only. */
@@ -1215,6 +1235,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'mcpApps',
   'routineEvents',
   'models',
+  'systemPrompt',
   'schemaVersion',
   'id',
   'name',
@@ -1777,10 +1798,14 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     if (!isSafeGhostRelativePath(raw.taskView.html)) {
       return { ok: false, reason: 'taskView.html 必填，且必须是安装目录内的安全相对路径' };
     }
+    if (raw.taskView.remote !== undefined && raw.taskView.remote !== true) {
+      return { ok: false, reason: 'taskView.remote 只接受 true' };
+    }
     taskView = {
-      ...unknownDeclarationFields(raw.taskView, ['html', 'title']),
+      ...unknownDeclarationFields(raw.taskView, ['html', 'title', 'remote']),
       ...(raw.taskView.title !== undefined ? { title: raw.taskView.title } : {}),
       html: raw.taskView.html,
+      ...(raw.taskView.remote === true ? { remote: true as const } : {}),
     };
   }
 
@@ -1863,6 +1888,9 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
   }
   if (slots.includes('task-view') && taskView === undefined) {
     return { ok: false, reason: 'slots 声明了 "task-view" 但缺少 taskView(html 必填)' };
+  }
+  if (taskView?.remote === true && !slots.includes('live-screen')) {
+    return { ok: false, reason: 'taskView.remote 需要同时声明 liveScreen: true' };
   }
   if (slots.includes('badge') && panel === undefined) {
     return {
@@ -2076,6 +2104,11 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
   if (routineEvents === null) return { ok: false, reason: 'Invalid routineEvents declaration' };
   const models = raw.models === undefined ? undefined : parseGhostModelsNeeds(raw.models);
   if (models === null) return { ok: false, reason: 'models must be { "types": [...] } with unique type names' };
+  const systemPrompt = prepared.schemaVersion === 3 && raw.systemPrompt !== undefined
+    ? parseGhostSystemPromptFragments(raw.systemPrompt) : undefined;
+  if (raw.systemPrompt !== undefined && !systemPrompt && !preserveHistoricalParameterSize) {
+    return { ok: false, reason: 'systemPrompt 必须是 v3 静态片段数组，含唯一 id、text、整数 order、scope: selected-task' };
+  }
   let subscribe: GhostSubscribeNeeds | undefined;
   if (raw.subscribe !== undefined) {
     if (!isPlainObject(raw.subscribe)) {
@@ -3124,6 +3157,9 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       };
     }
     const agentRaw = raw.agent as Record<string, unknown>;
+    if (agentRaw.hostTools !== undefined && (!Array.isArray(agentRaw.hostTools) || agentRaw.hostTools.some(group => typeof group !== 'string'))) {
+      return { ok: false, reason: 'agent.hostTools must be a string array' };
+    }
     if (agentRaw.background !== undefined && typeof agentRaw.background !== 'boolean') {
       return { ok: false, reason: 'agent.background 必须是布尔值' };
     }
@@ -3984,6 +4020,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(subscribe !== undefined ? { subscribe } : {}),
       ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(models !== undefined ? { models } : {}),
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),

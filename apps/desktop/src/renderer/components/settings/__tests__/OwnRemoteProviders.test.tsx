@@ -318,6 +318,23 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
     expect(onSelect).toHaveBeenCalledWith(entry.key);
   });
 
+  // PR #9941 review, unit: a same-account computer's enterprise provider arrives as an opaque
+  // byok-<uuid> with display-only routing; the host-supplied logoKind must still win over a monogram.
+  it('renders the host-supplied enterprise artwork for a remote organization provider', () => {
+    const enterprise: OwnRemoteProvider = {
+      ...entry,
+      key: ownRemoteProviderKey('mini-a', 'byok-1b2c3d4e'),
+      provider: provider('byok-1b2c3d4e', {
+        name: 'openai-codex', source: 'organization', logoKind: 'openai-spectrum',
+      }) as unknown as OwnRemoteProvider['provider'],
+    };
+    render(<OwnRemoteProviderRows entries={[enterprise]} selectedKey={null} onSelect={() => undefined} />);
+    const mark = screen.getByTestId('own-remote-provider-row').querySelector('[data-remote-source-mark]')!;
+    const gradient = mark.querySelector('linearGradient');
+    expect(gradient).not.toBeNull();
+    expect(mark.querySelector('path[fill^="url"]')?.getAttribute('fill')).toBe(`url(#${gradient!.id})`);
+  });
+
   it('shows the models that computer leaves visible, read-only', () => {
     render(<OwnRemoteProviderDetail entry={entry} />);
     const list = screen.getByTestId('own-remote-provider-models');

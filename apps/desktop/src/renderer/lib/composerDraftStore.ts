@@ -335,6 +335,18 @@ export function draftHasContent(draft: ComposerDraft | undefined): boolean {
  */
 /** Every write to a draft, including silent keystroke saves (the new-task title preview). */
 const contentListeners = new Map<string, Set<DraftListener>>();
+const draftFlushers = new Map<string, DraftListener>();
+
+/** External editor operations first settle the original pending keystroke save. */
+export function registerDraftFlush(sessionId: string, flush: DraftListener): () => void {
+  const key = draftKey(sessionId);
+  draftFlushers.set(key, flush);
+  return () => { if (draftFlushers.get(key) === flush) draftFlushers.delete(key); };
+}
+
+export function flushDraft(sessionId: string): void {
+  draftFlushers.get(draftKey(sessionId))?.();
+}
 
 /** Subscribe to every save / clear of `sessionId`'s draft, including silent keystroke saves. */
 export function subscribeDraftContent(sessionId: string, handler: DraftListener): () => void {

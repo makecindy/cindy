@@ -26,6 +26,16 @@ export function hostGhostManager(options: HostGhostManagerOptions): GhostManager
   const ownerKey = dataOwnerStorageKey(options.ownerId);
   const key = `${options.userDataDir}\u0000${ownerKey}`;
   if (cached?.key === key) return cached.manager;
+  cached?.manager.disposeNotificationIndex();
+  const manager = createHostGhostManager(options);
+  cached = { key, manager };
+  return manager;
+}
+
+/** Runtime-owned manager; released with its owner, never a cached callback from
+ * a previous login generation. The listing helper remains read-only. */
+export function createHostGhostManager(options: HostGhostManagerOptions): GhostManager {
+  const ownerKey = dataOwnerStorageKey(options.ownerId);
   const ownerRoot = path.join(options.userDataDir, 'owners', ownerKey);
   const manager = new GhostManager({
     getRootDir: () => path.join(ownerRoot, 'cindy-brain'),
@@ -34,7 +44,6 @@ export function hostGhostManager(options: HostGhostManagerOptions): GhostManager
     getLocale: () => 'en',
     ...(options.onChanged ? { onChanged: options.onChanged } : {}),
   });
-  cached = { key, manager };
   return manager;
 }
 

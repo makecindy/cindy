@@ -61,7 +61,7 @@ describe('GitHub setup UI', () => {
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
     expect(cancel).toHaveBeenCalledOnce();
   });
-  it('opens setup from a missing-gh PR badge without depending on a composer', async () => {
+  it('opens setup from the missing-gh PR summary without depending on a composer', async () => {
     window.electronAPI = {
       gitContext: { githubSetupStatus: async () => ({ phase: 'idle' }) },
     } as any;
@@ -72,7 +72,9 @@ describe('GitHub setup UI', () => {
     );
     fireEvent.click(screen.getByText('#1'));
     expect(await screen.findByRole('dialog')).toBeTruthy();
-    expect(screen.getByText(`${key}.install`)).toBeTruthy();
+    expect(screen.queryByText(`${key}.install`)).toBeNull();
+    fireEvent.click(screen.getByText('ccAgent.gitContext.pr.guidance.install.hint'));
+    expect(await screen.findByText(`${key}.install`)).toBeTruthy();
   });
   it('requires the connect action, shows the code and opens only GitHub device authorization', async () => {
     const start = vi.fn(async () => ({ phase: 'authorizing', userCode: 'ABCD-1234' }));

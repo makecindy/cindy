@@ -23,7 +23,7 @@ vi.mock('../providerShareDelegatedAccess', async importOriginal => ({
   delegatedProviderShareLeases: () => scope.oldLease ? [{ peer, sessionId: 'old-task', lease: { nonce: 'old-approval' } }] : [],
   invalidateProviderShareDelegation: () => { scope.oldLease = false; },
 }));
-import { __testing, revokeProviderShareControllers, setProviderShareAccess, setRemoteAgentHandler } from '../dispatch';
+import { __testing, revokeProviderShareControllers, setProviderShareAccess, setRemoteAgentHandler } from '../dispatch.desktop';
 import { reconcileStandbyGuest } from '../providerShareAvailabilityGuests';
 
 const peer = providerShareGuestPeer('fake-share', 'fake-member', 'fake-device');

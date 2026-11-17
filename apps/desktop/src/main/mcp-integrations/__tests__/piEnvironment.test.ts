@@ -43,7 +43,7 @@ import {
   getPiExtraSpawnConfig,
   invalidatePiEnvironment,
   shutdownPiEnvironment,
-} from '../piEnvironment.js';
+} from '../piEnvironment.desktop.js';
 
 function noopLogger(): Logger {
   const logger: Logger = {

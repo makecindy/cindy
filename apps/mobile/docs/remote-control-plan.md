@@ -1,5 +1,9 @@
 # Cindy Mobile Remote Control Plan
 
+## 反馈卡片当前范围
+
+反馈范围修订（2026-11-11）：本文旧有的 Issue Confirm「desktop-only／不做手机表单」限制及全屏表单方案已被替代。同账号手机在宿主声明 `remoteConfirmSupported: true` 时，以消息流内反馈卡片预览、按需编辑并明确确认公开提交或取消，正常聊天输入框保留；旧宿主继续显示回电脑处理的提示，共享访客不可处理。当前协议见[反馈确认](../../../docs/dev-rules/protocol-compatibility/mobile-feedback-confirmation.md)，实现见 [`IssueConfirmCard`](../src/session/IssueConfirmCard.tsx)，行为回归见 [`InteractionPanelReceipt.test.tsx`](../src/__tests__/InteractionPanelReceipt.test.tsx)。`mobile-scope-guard` 不再排除反馈 UI／E2E／截图；下文相关旧范围仅作历史记录。真实跨设备与自建 relay 尚未验收。
+
 > 自动化范围修订（2026-09-27）：手机已移除旧 Scheduler 管理页和 Routines，包括「所有任务」下拉及伙伴资料入口；不再把查看、创建、编辑或运行规则列为手机交付、后续计划或验收项。PC 管理与执行、已有任务数据和运行历史保留。本文所有旧自动化管理实现、原型验证和计划记录仅作历史背景，不代表待恢复功能；当前边界以[伙伴运行时合同](../../../docs/product-rules/cindy-bots-runtime.md)为准。
 
 > 版本: 2026-06-16
@@ -1598,8 +1602,8 @@ V2 完成标准:
   临时文件正常关闭时删除，进程异常退出的残留在下次预览时回收。
 - 手机端只承诺应用内预览；切到系统浏览器会使 App 进入后台，不承诺外置浏览器可持续访问。
   不运行项目的后端、开发服务器或动态构建，也不自动访问快照目录外的资源。
-- 此功能新增原生模块，改变 iOS/Android runtime fingerprint，现有安装包需冷更；合并仍遵守
-  `docs/dev-rules/mobile-development.md` 的冷更确认门。服务端不需要新增接口。
+- 此功能新增原生模块，改变 iOS/Android runtime fingerprint，现有安装包需冷更；冷更说明见
+  `docs/dev-rules/mobile-development.md` 的冷更边界。服务端不需要新增接口。
 
 定向行为测试为 `htmlDirectorySnapshot.test.ts`、`mobileHtmlPreview.test.ts` 及既有预览/链接
 测试；macOS 可运行 `node apps/mobile/scripts/test-html-preview-native.mjs --on-demand` 验证生产 Swift

@@ -18,6 +18,11 @@ import type { IPty } from 'node-pty';
 import type { WebContents } from 'electron';
 
 import { PtyManager, type DataPayload, type ExitPayload } from '../ptyManager';
+import { HostTerminalService, type HostTerminalScope } from '../hostTerminalService';
+import { getDesktopHostTerminalService } from '../terminalService.desktop';
+import * as appSessionState from '../../appSessionState';
+import { createTerminalToolExecutor } from '../terminalToolAccess';
+import type { InstalledGhost } from '../../../shared/ghost';
 
 // ---------- Fake IPty ----------
 
@@ -30,6 +35,8 @@ interface FakePty extends IPty {
   __dataListenersDisposed: boolean;
   __exitListenersDisposed: boolean;
   __spawnEnv: Record<string, string | undefined>;
+  __command: string;
+  __args: string[];
 }
 
 function makeFakePty(spawnArgs: { command: string; args: string[]; cols?: number; rows?: number; env?: Record<string, string | undefined> }): FakePty {
@@ -85,6 +92,8 @@ function makeFakePty(spawnArgs: { command: string; args: string[]; cols?: number
     __dataListenersDisposed: false,
     __exitListenersDisposed: false,
     __spawnEnv: spawnArgs.env ?? {},
+    __command: spawnArgs.command,
+    __args: spawnArgs.args,
   };
   return fake;
 }
@@ -162,6 +171,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe('PtyManager.create', () => {
@@ -235,6 +245,289 @@ describe('PtyManager.create', () => {
     mgr.create({ id: 't1', cwd: '/tmp', owner });
     lastSpawn!.__triggerExit({ exitCode: 0 });
     expect(() => mgr.create({ id: 't1', cwd: '/tmp', owner })).toThrow(/already exists/);
+  });
+});
+
+// 生产入口与价值：复用界面 PTY 的 create/read/list/stop，允许断开后凭游标续读。
+// 需求 22 要求宿主托管命令与作业；旧覆盖只有窗口推送，未覆盖续读、内存上限或无窗口 owner。
+// 最小失败输入：两次读取同一游标、缓冲溢出、replace 环境及停止后写入；tier: unit，注入 fake PTY。
+describe('PtyManager host process lifecycle', () => {
+  // Unused-capability cleanup must not allocate the singleton or subscribe to
+  // account changes. Minimal input: cache miss during cleanup; unit, no PTY.
+  it('does not create a Desktop terminal service just to clean an unused plugin', () => {
+    const subscribe = vi.spyOn(appSessionState, 'onAppSessionInvalidated');
+    expect(getDesktopHostTerminalService(false)).toBeUndefined();
+    expect(subscribe).not.toHaveBeenCalled();
+  });
+
+  // Performance contract for #9825: ordinary UI terminals must keep their old
+  // push-only path. The existing managed-job tests do not cover an unused reader.
+  // Minimal input: one UI PTY emitting a 32 KiB frame; unit, injected fake PTY.
+  it('does not retain or measure UI output when no managed reader was requested', () => {
+    const mgr = makeManager();
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    mgr.create({ id: 'ui', cwd: '/tmp', owner });
+    const byteLength = vi.spyOn(Buffer, 'byteLength');
+    const chunk = 'x'.repeat(32 * 1024);
+    lastSpawn!.__triggerData(chunk);
+    expect(dataPayloads).toEqual([{ target: owner, payload: { id: 'ui', chunk } }]);
+    expect(mgr.read('ui').chunks).toEqual([]);
+    expect(byteLength).not.toHaveBeenCalled();
+  });
+
+  it('starts a program with an exact environment and keeps it across restart', () => {
+    vi.stubEnv('CINDY_PRIVATE_TEST_TOKEN', 'host-only');
+    const mgr = makeManager();
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    const program = { command: '/usr/bin/example', args: ['--version'] };
+    const env = { PATH: '/usr/bin', EXPLICIT: 'allowed' };
+    mgr.create({ id: 'p', cwd: '/tmp', owner, program, inheritEnv: false, env });
+    expect(lastSpawn!.__command).toBe('/usr/bin/example');
+    expect(lastSpawn!.__args).toEqual(['--version']);
+    expect(lastSpawn!.__spawnEnv).toMatchObject({ PATH: '/usr/bin', EXPLICIT: 'allowed' });
+    expect(lastSpawn!.__spawnEnv.CINDY_PRIVATE_TEST_TOKEN).toBeUndefined();
+    program.args.push('--changed'); env.EXPLICIT = 'changed';
+    lastSpawn!.__triggerExit({ exitCode: 0 });
+    mgr.restart('p', owner);
+    expect(lastSpawn!.__args).toEqual(['--version']);
+    expect(lastSpawn!.__spawnEnv.EXPLICIT).toBe('allowed');
+    expect(lastSpawn!.__spawnEnv.CINDY_PRIVATE_TEST_TOKEN).toBeUndefined();
+  });
+
+  it('retains non-consuming output and exit state across reattachment, with owner-scoped lists', () => {
+    const mgr = makeManager();
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    const other = makeFakeWebContents() as unknown as WebContents;
+    mgr.create({ id: 'p', cwd: '/tmp', owner, retainOutput: true });
+    lastSpawn!.__triggerData('hello'); lastSpawn!.__triggerData('中文');
+    const first = mgr.read('p');
+    expect(first.chunks.map(chunk => chunk.data)).toEqual(['hello', '中文']);
+    expect(mgr.read('p')).toEqual(first);
+    expect(mgr.read('p', first.cursor, first.generation).chunks).toEqual([]);
+    mgr.create({ id: 'p', cwd: '/ignored', owner: other });
+    expect(mgr.list(owner)).toEqual([]);
+    expect(mgr.list(other)).toMatchObject([{ id: 'p', cwd: '/tmp', status: 'running' }]);
+    lastSpawn!.__triggerExit({ exitCode: 3 });
+    expect(mgr.read('p', first.cursor, first.generation)).toMatchObject({ exit: { code: 3 }, chunks: [] });
+    expect(mgr.list(other)).toMatchObject([{ id: 'p', status: 'exited' }]);
+  });
+
+  it('reports gaps for bounded output and resets a cursor from a previous process generation', () => {
+    const mgr = makeManager();
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    mgr.create({ id: 'p', cwd: '/tmp', owner, retainOutput: true });
+    const initial = mgr.read('p');
+    for (let i = 0; i < 300; i++) lastSpawn!.__triggerData('界'.repeat(10000));
+    const retained = mgr.read('p', 0, initial.generation);
+    expect(retained.resetRequired).toBe(true);
+    expect(retained.hasMore).toBe(true);
+    expect(Buffer.byteLength(retained.chunks.map(chunk => chunk.data).join(''))).toBeLessThanOrEqual(65536);
+    expect(mgr.read('p', retained.cursor, retained.generation).chunks[0]?.sequence).toBeGreaterThan(retained.cursor);
+    lastSpawn!.__triggerExit({ exitCode: 0 });
+    mgr.restart('p', owner); lastSpawn!.__triggerData('new');
+    expect(mgr.read('p', retained.cursor, retained.generation)).toMatchObject({ resetRequired: true, chunks: [{ data: 'new' }] });
+    expect(() => mgr.read('p', -1)).toThrow();
+  });
+
+  it('stops POSIX input while retaining output, then disposes all resources for its owner', async () => {
+    const mgr = makeManager({ platform: 'linux' });
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    mgr.create({ id: 'p', cwd: '/tmp', owner, retainOutput: true });
+    lastSpawn!.__triggerData('retained');
+    mgr.write('p', 'queued'); mgr.stop('p'); await Promise.resolve();
+    expect(lastSpawn!.__killed).toBe(true);
+    expect(lastSpawn!.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(lastSpawn!.__writes).toEqual([]);
+    expect(mgr.list(owner)).toMatchObject([{ id: 'p', status: 'stopping' }]);
+    expect(mgr.read('p').chunks).toMatchObject([{ data: 'retained' }]);
+    mgr.disposeOwner(owner);
+    expect(mgr.list(owner)).toEqual([]);
+    expect(lastSpawn!.__dataListenersDisposed).toBe(true);
+  });
+  it('stops Windows PTYs without passing an unsupported POSIX signal', () => {
+    const mgr = makeManager({ platform: 'win32' });
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    mgr.create({ id: 'p', cwd: '/tmp', owner });
+    mgr.stop('p');
+    expect(lastSpawn!.kill).toHaveBeenCalledExactlyOnceWith();
+  });
+});
+
+// 需求 22 的作用域与断开恢复不能仅由 UI 推送测试覆盖；同一生产服务、fake PTY、unit。
+describe('HostTerminalService caller ownership', () => {
+  function scope(key: string, current: () => boolean = () => true): HostTerminalScope {
+    return { key, revision: 'r1', pluginId: key, defaultCwd: '/tmp', environment: { PATH: '/usr/bin' },
+      assertCurrent: () => { if (!current()) throw new Error('TERMINAL_SCOPE_CHANGED'); } };
+  }
+  function service() {
+    return new HostTerminalService({ spawn: (command, args, options) => {
+      const fake = makeFakePty({ command, args, cols: options.cols, rows: options.rows, env: options.env });
+      lastSpawn = fake; allSpawns.push(fake); return fake;
+    } });
+  }
+  // Performance contract: HostTerminalService is new in this PR; UI create is
+  // covered separately. Unit fake PTYs expose admission, settlement and cleanup
+  // without starting processes. Previous ownership cases never reached capacity.
+  it('rejects the eleventh concurrent start with capacity details and releases a slot only on exit', async () => {
+    const host = service(), a = scope('quota');
+    const results = await Promise.allSettled(Array.from({ length: 11 }, () => host.start(a, {})));
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(10);
+    expect(results.find(result => result.status === 'rejected')).toMatchObject({
+      reason: { message: 'TERMINAL_JOB_LIMIT', current: 10, limit: 10 },
+    });
+    expect(allSpawns).toHaveLength(10);
+    expect(allSpawns.every(pty => !pty.__killed)).toBe(true);
+    const first = host.list(a)[0];
+    host.stop(a, first.id);
+    await expect(host.start(a, {})).rejects.toMatchObject({ message: 'TERMINAL_JOB_LIMIT', current: 10, limit: 10 });
+    allSpawns[0].__triggerExit({ exitCode: 0 });
+    await expect(host.start(a, {})).resolves.toMatchObject({ status: 'running' });
+    await expect(host.start(scope('other'), {})).resolves.toMatchObject({ status: 'running' });
+    host.disposeScoped();
+  });
+  it('bounds live output at 256KiB and settled output at 16KiB without splitting Unicode', async () => {
+    const host = service(), a = scope('output');
+    const job = await host.start(a, {});
+    lastSpawn!.__triggerData('界😀'.repeat(100000));
+    const retained = () => {
+      let cursor = 0, text = '', more = true;
+      while (more) {
+        const page = host.read(a, job.id, cursor, job.generation);
+        text += page.chunks.map(chunk => chunk.data).join('');
+        cursor = page.cursor; more = page.hasMore;
+      }
+      return text;
+    };
+    expect(Buffer.byteLength(retained())).toBeLessThanOrEqual(256 * 1024);
+    lastSpawn!.__triggerExit({ exitCode: 0 });
+    const tail = retained();
+    expect(Buffer.byteLength(tail)).toBeLessThanOrEqual(16 * 1024);
+    expect(tail.length).toBeGreaterThan(0);
+    expect(tail).not.toContain('\uFFFD');
+    host.disposeScoped();
+  });
+  it('evicts the oldest settlement at 101 records while retaining a live job and the most recent 100', async () => {
+    const host = service(), a = scope('history');
+    const live = await host.start(a, {}), livePty = lastSpawn!;
+    const earlierStart = await host.start(a, {}), earlierPty = lastSpawn!;
+    const firstFinished = await host.start(a, {});
+    lastSpawn!.__triggerExit({ exitCode: 0 });
+    earlierPty.__triggerExit({ exitCode: 0 });
+    for (let i = 0; i < 99; i++) {
+      await host.start(a, {});
+      lastSpawn!.__triggerExit({ exitCode: 0 });
+    }
+    const jobs = host.list(a);
+    expect(jobs).toHaveLength(101);
+    expect(jobs.filter(job => job.status === 'exited')).toHaveLength(100);
+    expect(jobs.map(job => job.id)).toContain(earlierStart.id);
+    expect(jobs.map(job => job.id)).toContain(live.id);
+    expect(() => host.read(a, firstFinished.id)).toThrow('TERMINAL_NOT_FOUND');
+    expect(livePty.__killed).toBe(false);
+    host.disposePlugin('history');
+    expect(host.list(a)).toEqual([]);
+    expect(livePty.__killed).toBe(true);
+    expect(allSpawns.every(pty => pty.__dataListenersDisposed && pty.__exitListenersDisposed)).toBe(true);
+    await expect(host.start(a, {})).resolves.toMatchObject({ status: 'running' });
+    host.disposeScoped();
+  });
+  it('cancels pending starts on plugin disposal without spawning or keeping their capacity', async () => {
+    const host = service(), a = scope('pending');
+    const pending = host.start(a, {});
+    host.disposePlugin('pending');
+    await expect(pending).rejects.toThrow('TERMINAL_SCOPE_CHANGED');
+    expect(allSpawns).toHaveLength(0);
+    await expect(host.start(a, {})).resolves.toMatchObject({ status: 'running' });
+    host.disposeScoped();
+  });
+  it('keeps one process across readers and rejects another caller before revealing output or writing', async () => {
+    const host = service(), a = scope('a'), b = scope('b');
+    const started = await host.start(a, { program: { command: '/usr/bin/example', args: [] } });
+    lastSpawn!.__triggerData('private output');
+    expect(host.list(a)).toMatchObject([{ id: started.id }]);
+    expect(host.list(b)).toEqual([]);
+    expect(() => host.read(b, started.id)).toThrow('TERMINAL_NOT_FOUND');
+    expect(() => host.write(b, started.id, 'input')).toThrow('TERMINAL_NOT_FOUND');
+    const output = host.read(a, started.id);
+    expect(host.read({ ...a }, started.id)).toEqual(output);
+    expect(allSpawns).toHaveLength(1);
+    host.disposeScoped(); expect(lastSpawn!.__killed).toBe(true);
+  });
+  it('cleans only the invalidated plugin and rejects stale authority before starting', async () => {
+    const host = service();
+    let current = true;
+    const a = scope('a', () => current), b = scope('b');
+    const started = await host.start(a, {}), first = lastSpawn!;
+    await host.start(b, {}); const second = lastSpawn!;
+    current = false;
+    expect(() => host.read(a, started.id)).toThrow('TERMINAL_SCOPE_CHANGED');
+    host.disposePlugin('a');
+    expect(first.__killed).toBe(true); expect(second.__killed).toBe(false);
+    await expect(host.start(a, {})).rejects.toThrow('TERMINAL_SCOPE_CHANGED');
+    expect(allSpawns).toHaveLength(2);
+    host.disposeScoped();
+  });
+  it('retains stopped output and refuses to forget a running job', async () => {
+    const host = service(), a = scope('a');
+    const started = await host.start(a, {});
+    expect(() => host.forget(a, started.id)).toThrow('TERMINAL_STILL_RUNNING');
+    host.stop(a, started.id); lastSpawn!.__triggerExit({ exitCode: 1 });
+    expect(host.list(a)).toMatchObject([{ id: started.id, status: 'exited' }]);
+    host.forget(a, started.id); expect(host.list(a)).toEqual([]);
+    host.disposeScoped();
+  });
+  it('does not let a stale installation scope dispose jobs from its replacement', async () => {
+    const host = service();
+    let version = 1;
+    const old = scope('same', () => version === 1);
+    await host.start(old, {}); const previous = lastSpawn!;
+    version = 2;
+    const fresh = { ...scope('same', () => version === 2), revision: 'r2' };
+    const started = await host.start(fresh, {}); const replacement = lastSpawn!;
+    expect(previous.__killed).toBe(true);
+    expect(() => host.read(old, started.id)).toThrow('TERMINAL_SCOPE_CHANGED');
+    expect(replacement.__killed).toBe(false);
+    expect(host.list(fresh)).toMatchObject([{ id: started.id }]);
+    host.disposeScoped();
+  });
+  it('requires gateway-attested plugin identity and keeps reconnected clients on the same installation jobs', async () => {
+    const host = service();
+    const caller = { kind: 'plugin' as const, pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 };
+    const ghost = { enabled: true, dir: '/fixture/p', approval: { state: 'approved', revision: 'r1' },
+      approvedHostToolGroups: ['terminal'], manifest: { agent: { hostTools: ['terminal'] } } } as InstalledGhost;
+    let attested = false;
+    const call = createTerminalToolExecutor({ service: host, owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), pending: () => false,
+      getGhost: () => ghost, getSession: () => undefined, pluginDirectory: () => '/tmp',
+      pluginCall: () => attested ? { caller, server: 'cindy_helper', tool: 'terminal_start', argsJson: '{}', assertCurrent() {} } : undefined });
+    const context = { agentKind: 'codex', workingDir: '', hostCaller: caller };
+    await expect(call.call(context, 'terminal_start', {})).rejects.toThrow('PERMISSION_DENIED');
+    expect(allSpawns).toHaveLength(0);
+    attested = true;
+    const result = await call.call(context, 'terminal_start', { cwd: '/tmp' });
+    expect(result).toMatchObject({ scope: 'local', job: { id: expect.any(String) } });
+    const resumed = await call.call({ ...context }, 'terminal_list', {});
+    expect(resumed.jobs).toMatchObject([{ id: (result.job as { id: string }).id }]);
+    ghost.manifest.agent!.hostTools = [];
+    await expect(call.call(context, 'terminal_list', {})).rejects.toThrow('TERMINAL_SCOPE_CHANGED');
+    host.disposeScoped();
+  });
+  it('binds ordinary tasks to the live Session instance and refuses local execution for SSH contexts', async () => {
+    const host = service();
+    const listeners = new Set<(status: string) => void>();
+    const session = { instanceId: 'live', workDir: '/tmp',
+      onStatusChange: (listener: (status: string) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+    const call = createTerminalToolExecutor({ service: host, owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), pending: () => false,
+      getGhost: () => null, getSession: () => session, pluginDirectory: () => '/tmp', pluginCall: () => undefined });
+    await expect(call.call({ agentKind: 'codex', workingDir: '/tmp', sessionId: 's', sessionInstanceId: 'old' }, 'terminal_start', {})).rejects.toThrow('SESSION_REQUIRED');
+    await expect(call.call({ agentKind: 'pi', workingDir: '/remote', sessionId: 's', remoteHostId: 'ssh' }, 'terminal_start', {})).rejects.toThrow('REMOTE_TERMINAL_UNSUPPORTED');
+    expect(allSpawns).toHaveLength(0);
+    expect(await call.call({ agentKind: 'codex', workingDir: '/ignored', sessionId: 's' }, 'terminal_start', {})).toMatchObject({ job: { cwd: expect.stringMatching(/tmp$/) } });
+    for (const listener of listeners) listener('active');
+    expect(lastSpawn!.__killed).toBe(false);
+    for (const listener of listeners) listener('closed');
+    expect(lastSpawn!.__killed).toBe(true);
+    expect(listeners.size).toBe(0);
+    host.disposeScoped();
   });
 });
 

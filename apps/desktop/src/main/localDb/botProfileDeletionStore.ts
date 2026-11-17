@@ -6,6 +6,7 @@ export async function commitBotProfileDeletion(input: {
   botId: string;
   sessionIds: string[];
   keepTaskHistory: boolean;
+  projectSessionIds?: string[];
 }): Promise<{ sessionIds: string[]; status: 'archived' | 'deleted' }> {
   const client = getDbClient();
   const owner = activeOwnerScopeKey();
@@ -22,6 +23,7 @@ export async function commitBotProfileDeletion(input: {
       botId: input.botId,
       sessionIds: [...new Set(input.sessionIds)],
       keepTaskHistory: input.keepTaskHistory,
+      ...(input.projectSessionIds?.length ? { projectSessionIds: [...new Set(input.projectSessionIds)] } : {}),
       at: Date.now(),
     });
   });

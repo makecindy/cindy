@@ -821,7 +821,7 @@ export const sessionsStore = {
    * 确保指定桶已加载（命中即 noop，dedupe 并发请求）。
    * 强制刷新会让已有等待者跟随替换请求；失败由调用方决定如何展示。
    */
-  async ensureByFilter(filter: ListStatusFilter, opts?: { fresh?: boolean }): Promise<void> {
+  async ensureByFilter(filter: ListStatusFilter, opts?: { fresh?: boolean; isCurrent?: () => boolean }): Promise<void> {
     if (!opts?.fresh && cache.has(filter)) return;
     let pending = inflight.get(filter);
     if (!pending) {
@@ -841,9 +841,10 @@ export const sessionsStore = {
           // reset / forceRefresh 会把旧 request 从 inflight 移除。只有仍被
           // 当前桶认领的 request 才能提交，避免旧账号请求回填新账号缓存。
           if (inflight.get(filter) === request) {
-            cache.set(filter, data);
+            const current = !opts?.isCurrent || opts.isCurrent();
+            if (current) cache.set(filter, data);
             inflight.delete(filter);
-            notify();
+            if (current) notify();
             runTrailingFilterBackfill(filter);
           }
           request.resolve();
@@ -861,12 +862,13 @@ export const sessionsStore = {
   },
 
   /** 强制重拉单桶（先 drop 再 ensure）。返回新数据。 */
-  async forceRefresh(filter: ListStatusFilter): Promise<Session[]> {
-    cache.delete(filter);
+  async forceRefresh(filter: ListStatusFilter, isCurrent?: () => boolean): Promise<Session[]> {
+    // Host recovery keeps the last visible list while revalidating it.
+    if (!isCurrent) cache.delete(filter);
     const previous = inflight.get(filter);
     inflight.delete(filter);
     trailingFilterRefreshes.delete(filter);
-    const replacement = this.ensureByFilter(filter, { fresh: true });
+    const replacement = this.ensureByFilter(filter, { fresh: true, isCurrent });
     // 立即转交等待关系，不依赖旧 IPC 返回；连续刷新会自然跟随到最新请求。
     previous?.resolve(replacement);
     await replacement;
@@ -878,11 +880,11 @@ export const sessionsStore = {
    * sessionsBus.onRefresh / sessionsPush.onCreated 走这条 ——
    * 无完整 row 的列表成员变化（main 端新建等）需要让所有活跃订阅者同步刷新。
    */
-  async forceRefreshAll(): Promise<void> {
+  async forceRefreshAll(isCurrent?: () => boolean): Promise<void> {
     // forceRefresh 会暂时移除缓存；这段窗口收到的新建通知仍需触发 fresh 读取。
     const filters = Array.from(new Set([...cache.keys(), ...inflight.keys()]));
     if (filters.length === 0) return;
-    await Promise.all(filters.map((f) => this.forceRefresh(f)));
+    await Promise.all(filters.map((f) => this.forceRefresh(f, isCurrent)));
   },
 
   /**

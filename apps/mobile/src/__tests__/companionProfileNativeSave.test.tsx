@@ -130,14 +130,12 @@ it('sections a host editor list by block title and shows entry subtitles', () =>
   const id = 'settings:bot/skills'; const ref = { collectionId: 'teammates', kind: 'bot', id };
   const editor = parseCompanionProfileData({ ref, revision: 'r1', display: { title: 'Skills' }, links: [], blocks: [
     { id: 'core', primitive: 'list', fallbackMarkdown: '', data: { entries: [{ id: 'core', title: 'Core Skill', subtitle: 'Shared by every teammate', resourceId: `${id}/_core` }] } },
-    { id: 'system', title: 'System Skills', primitive: 'list', fallbackMarkdown: '', data: { entries: [
-      { id: 'todo', title: 'Todos', resourceId: `${id}/_todo` }, { id: 'routine', title: 'Routines', subtitle: 'Off', resourceId: `${id}/_routine` }] } },
-    { id: 'skills', title: 'Personal Skills', primitive: 'list', fallbackMarkdown: '', data: { entries: [{ id: 'learned', title: 'Write briefs', resourceId: `${id}/learned` }] } },
+    { id: 'skills', title: 'Personal Skills', primitive: 'list', fallbackMarkdown: '', data: { entries: [{ id: 'learned', title: 'Write briefs', subtitle: 'Off', resourceId: `${id}/learned` }] } },
   ] }, ref);
   const { container, props } = mount({ page: 'editor', panel: undefined, editor, dirty: false });
   const sections = [...container.querySelectorAll('section')].filter(node => node.querySelector('button'));
   expect(sections.map(node => [node.querySelector('h3')?.textContent ?? null, [...node.querySelectorAll('button')].map(button => button.textContent)])).toEqual([
-    [null, ['Core SkillShared by every teammate']], ['System Skills', ['Todos', 'RoutinesOff']], ['Personal Skills', ['Write briefs']]]);
-  act(() => [...container.querySelectorAll('button')].find(button => button.textContent === 'RoutinesOff')!.click());
-  expect(props.onEditor).toHaveBeenCalledExactlyOnceWith(`${id}/_routine`);
+    [null, ['Core SkillShared by every teammate']], ['Personal Skills', ['Write briefsOff']]]);
+  act(() => [...container.querySelectorAll('button')].find(button => button.textContent === 'Write briefsOff')!.click());
+  expect(props.onEditor).toHaveBeenCalledExactlyOnceWith(`${id}/learned`);
 });

@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { ProviderView } from '@cindy/model-providers';
 import { remoteInvocationModels } from '@cindy/model-providers';
+import { isProviderLogoKind } from '@cindy/model-providers/branding';
 
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
@@ -121,7 +122,7 @@ export function useOwnRemoteProviders(): readonly OwnRemoteProvider[] {
 function RemoteProviderIcon({ provider, size }: { provider: ProviderView; size: number }) {
   return (
     <RemoteSourceMark markSize={size}>
-      {hasProviderLogo(provider.id, provider.routing) ? (
+      {isProviderLogoKind(provider.logoKind) || hasProviderLogo(provider.id, provider.routing) ? (
         <ProviderLogoMark providerId={provider.id} routing={provider.routing} logoKind={provider.logoKind} size={size} />
       ) : (
         <span className="text-15 font-medium leading-none">{providerMonogram(provider.name)}</span>

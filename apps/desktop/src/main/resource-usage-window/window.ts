@@ -23,7 +23,7 @@ import { markAppContentWindow } from '../windowFocusClassifier.js';
 import { installExternalLinkGuards } from '../secondary-windows.js';
 import { installSelectionContextMenu } from '../selection-context-menu.js';
 import { applyAppearanceToWindow } from '../appearance-settings-ipc.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { markResourceUsageWebContentsId } from './registry.js';
 
 const log = createLogger('resource-usage-window');

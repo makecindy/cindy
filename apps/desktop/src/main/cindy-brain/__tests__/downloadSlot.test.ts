@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 const guarded = vi.hoisted(() => ({ fetch: vi.fn() }));
-vi.mock('../../maker-host/outbound-fetch.js', () => ({ guardedOutboundFetch: guarded.fetch }));
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ guardedOutboundFetch: guarded.fetch }));
 import { PluginDownloadSlot } from '../downloadSlot';
 import { PluginDownloadCache } from '../downloadCache';
 import type { InstalledGhost } from '../../../shared/ghost';
@@ -20,7 +20,7 @@ it('rechecks replacement quota only after a real downloader cache miss and befor
   const download = createDownloader();
   let target = '';
   guarded.fetch.mockReset();
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: id => path.join(root, id), scope: () => 'owner', send() {},
     getGhost: () => ({ enabled: true, approval: {}, manifest: { node: {}, network: { hosts: ['github.com'] } } }) as unknown as InstalledGhost,
     download: async options => {
@@ -48,7 +48,7 @@ it('drains a destroyed page before a new page resumes the same download id', asy
   let oldPage = true, calls = 0, started!: () => void, release!: () => void;
   const ready = new Promise<void>(resolve => { started = resolve; });
   const cleanup = new Promise<void>(resolve => { release = resolve; });
-  const slot = new PluginDownloadSlot({root: id => path.join(root,id),scope:()=> 'owner',send(){},
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,root: id => path.join(root,id),scope:()=> 'owner',send(){},
     getGhost:()=>({enabled:true,approval:{},manifest:{node:{},network:{hosts:['github.com']}}}) as unknown as InstalledGhost,
     download:async o => {
       if (++calls === 1) {
@@ -74,7 +74,7 @@ it('drains a destroyed page before a new page resumes the same download id', asy
 it('admits 8 GiB archives and rejects an extra byte before invoking the downloader', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-size-')));
   const download = vi.fn(async () => { throw new Error('fixture stops before allocating bytes'); });
-  const slot = new PluginDownloadSlot({ root: id => path.join(root,id), scope: () => 'owner', send() {}, download,
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch, root: id => path.join(root,id), scope: () => 'owner', send() {}, download,
     getGhost: () => ({enabled:true,approval:{},manifest:{node:{},network:{hosts:['github.com']}}}) as unknown as InstalledGhost,
   });
   try {
@@ -89,7 +89,7 @@ it('admits 8 GiB archives and rejects an extra byte before invoking the download
 it('keeps display progress monotonic across restart retries and resets for a new request', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-progress-')));
   const events: any[] = [];
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: (id) => path.join(root, id),
     scope: () => 'owner',
     send: (_, event) => events.push(event),
@@ -148,7 +148,7 @@ it('a destroyed caller cannot enter Node after a delayed lease, even if the plug
       return { path: '/fixture/artifact', release };
     });
   let active = true;
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: () => '/fixture',
     scope: () => 'owner',
     send() {},
@@ -187,7 +187,7 @@ it('shutdown drains cancelled downloads and rejects new downloads and Node hando
   const drained = new Promise<void>((resolve) => {
     finish = resolve;
   });
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: (id) => path.join(root, id),
     scope: () => 'anonymous',
     send() {},
@@ -248,7 +248,7 @@ it('restricts redirects, rejects arbitrary paths and isolates owner delivery', a
     manifest: { node: {}, network: { hosts: ['github.com'] } },
   } as unknown as InstalledGhost;
   let calls = 0;
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: (id) => path.join(root, id),
     scope: () => scope,
     getGhost: () => ghost,
@@ -302,7 +302,7 @@ it('cancel drains the matching request before acknowledging an immediate same-id
   let finish!: () => void;
   const cleanup = new Promise<void>((r) => (finish = r));
   let calls = 0;
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: (id) => path.join(root, id),
     scope: () => 'a',
     getGhost: () => ghost,
@@ -365,7 +365,7 @@ it('hands opaque receipts only to the owning Node call and preserves legacy para
     approval: { revision: 'a' },
     manifest: { node: {}, network: { hosts: ['github.com'] } },
   } as unknown as InstalledGhost;
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: (id) => path.join(alias, id),
     scope: () => scope,
     getGhost: () => ghost,
@@ -458,7 +458,7 @@ it('sends plugin downloads through the SSRF guard without credentials and stops 
     check();
     return { response: new Response('ok'), release };
   });
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: (id) => path.join(root, id),
     scope: () => 'a',
     getGhost: () => ghost,

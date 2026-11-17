@@ -4,16 +4,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 
-import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import type { AgentInputQueuedMessage, AgentInputMakerMessage } from '../../../shared/agentInputQueue.js';
 import {
   createOrcaInterAgentDispatcher,
   type OrcaInterAgentDispatcherDeps,
 } from '../orcaInterAgentDispatcher.js';
+import { AgentInputCoordinator, type AgentInputSendOpts } from '../agent-input-coordinator.js';
+import { AUTO_BRIDGE_BATCH_MAX_CHARS, AUTO_BRIDGE_BATCH_MAX_ITEMS } from '../orcaAutoBridgeBatch.js';
 
 const mocks = vi.hoisted(() => ({
   logger: {
+    debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
+    error: vi.fn(),
   },
 }));
 
@@ -458,6 +462,29 @@ describe('Orca lead/worker dispatcher', () => {
       clientId: 'client-1',
     }));
     expect(liveSession.send).not.toHaveBeenCalled();
+  });
+
+  it('recycles a drifted runtime before live dispatch and rebuilds via the queued path', async () => {
+    // Orca 直发绕过发送事务:漂移时先回收(重建窗口内),本条消息转
+    // sendToSessionInternal 的 lazy/queued 路径重扫重建投递,不拿旧 argv 跑。
+    const recycleProjectResourceRuntime = vi.fn(async () => true);
+    const h = createHarness({ recycleProjectResourceRuntime });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Run with the refreshed skill set',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'drift-recycle-test' },
+    });
+
+    expect(recycleProjectResourceRuntime).toHaveBeenCalledWith('target-session');
+    expect(h.liveSession.send).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(h.deps.sendToSessionInternal).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'target-session',
+      clientId: 'client-1',
+    }));
   });
 
   it('still sends through the live handle after prepare leaves it open', async () => {
@@ -1309,4 +1336,544 @@ it.each(['rejected', 'throw', 'running'] as const)('keeps history for retry afte
     expect(firstQueuedItem(h.queuedItems).text).not.toContain('Pending history');
     expect(firstQueuedItem(h.queuedItems).persistedContent).not.toContain('Pending history');
   }
+});
+
+// 测试价值：Orca 系统兜底回报在 Lead 忙碌时逐条入队，旧实现派发时仍逐条唤醒 Lead，
+// 多 Worker 同时完成会制造多个本可合并的 turn。规则依据：orca-team-architecture.md
+// 「消息派发与 auto-bridge」与用户批准的“仅系统兜底回报合批”。现有 dispatcher 测试只覆盖
+// 单条派发/插话，coordinator 手动 merge 测试不覆盖 drain 前自动合批。最小失败输入：两条连续
+// origin.autoBridge=true 的 Worker 回报；tier=unit，直接调用生产 coordinator/dispatcher。
+describe('Orca auto-bridge queue coalescing at dispatch', () => {
+  const sid = 'lead-auto-bridge';
+
+  function report(clientId: string, workerId: string, body: string, status: 'done' | 'error' = 'done'): AgentInputQueuedMessage {
+    const raw = `[Auto-bridged: worker ${status === 'done' ? '已完成，系统自动回传结果' : '异常终止'}]\n\n${body}`;
+    const text = `[From Orca Worker ${workerId} (worker_id: ${workerId})]\n${raw}`;
+    const persistedContent = JSON.stringify({ orcaSource: 'worker', content: raw });
+    return {
+      clientId,
+      text,
+      persistedContent,
+      model: 'gpt-5.4',
+      effort: 'medium',
+      permissionMode: 'bypassPermissions',
+      workingDir: 'C:\\repo',
+      chatMessage: { clientId, role: 'user', content: persistedContent, createdAt: '2026-11-10T00:00:00.000Z' },
+      createOpts: { agentKind: 'codex', workingDir: 'C:\\repo', model: 'gpt-5.4', permissionMode: 'bypassPermissions' },
+      origin: {
+        kind: 'orca', senderLabel: workerId, senderSessionId: `${workerId}-session`,
+        displayText: raw, autoBridge: true,
+      },
+    };
+  }
+
+  function createQueueHarness(opts: { restored?: AgentInputQueuedMessage[]; failFirstDispatch?: 'session-running' } = {}) {
+    let nextId = 0;
+    let dispatchCalls = 0;
+    const sent: Array<{ message: AgentInputMakerMessage; opts: AgentInputSendOpts }> = [];
+    const snapshots: AgentInputQueuedMessage[][] = [];
+    let running = true;
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (_sessionId, message, _createOpts, sendOpts) => {
+        dispatchCalls += 1;
+        if (opts.failFirstDispatch === 'session-running' && dispatchCalls === 1) {
+          throw Object.assign(new Error('[SESSION_RUNNING] busy'), { code: 'SESSION_RUNNING' });
+        }
+        sent.push({ message, opts: sendOpts });
+        await sendOpts.persistUserMessage?.onPersisted?.();
+        running = true;
+        return { kind: 'session-dispatch', source: 'test', dispatched: true };
+      },
+      steerToAgent: async () => {},
+      abortSession: async () => {},
+      isTurnRunning: () => running,
+      hasPendingInteraction: () => false,
+      getAgentKind: () => 'codex',
+      getSdkSessionId: async () => undefined,
+      emitProjection: () => {},
+      persistQueueSnapshot: (_sessionId, items) => { snapshots.push(items); },
+      loadQueueSnapshot: async () => opts.restored ?? [],
+      loadClearBoundary: async () => null,
+      touchUserSend: async () => {},
+      createUserMessage: vi.fn(),
+    });
+    const h = createHarness({
+      createId: () => `q-${++nextId}`,
+      getLiveSession: () => undefined,
+      shouldQueueNewTurn: () => running,
+      enqueueQueuedMessage: (sessionId, item) => coordinator.enqueue(sessionId, item),
+      // 真实链路里 dispatcher 经 resolveWorkerSessionLink 写入 senderSessionId；夹具必须注入，
+      // 否则产出的 origin 天生无来源，会掩盖“合批丢授权证据”这条 P1。
+      resolveWorkerSessionLink: async (workerId) => ({ leadSessionId: sid, workerSessionId: `${workerId}-session` }),
+    });
+    return { coordinator, sent, snapshots, dispatcher: h.dispatcher, setRunning: (value: boolean) => { running = value; } };
+  }
+
+  function sentText(message: AgentInputMakerMessage): string {
+    return typeof message === 'string' ? message : String(message.content);
+  }
+
+  it('merges only the contiguous auto-bridge prefix when the Lead becomes idle', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    const first = report('r1', 'backend', 'API ready');
+    const second = report('r2', 'frontend', 'UI ready', 'error');
+    const tail = { ...report('r3', 'tester', 'tests passed'), origin: { kind: 'orca' as const, senderLabel: 'Lead', displayText: 'next task' } };
+    h.coordinator.enqueue(sid, first);
+    h.coordinator.enqueue(sid, second);
+    h.coordinator.enqueue(sid, tail);
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['r1', 'r2', 'r3']);
+    expect(h.sent).toHaveLength(0);
+
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+
+    const dispatched = h.sent[0]!;
+    const text = sentText(dispatched.message);
+    expect(text.startsWith('[Auto-bridged batch: 2 worker reports]\n\n')).toBe(true);
+    expect(text).toContain(first.text);
+    expect(text).toContain(second.text);
+    expect(dispatched.opts.persistUserMessage?.clientId).toBe('r1');
+    expect(dispatched.opts.persistUserMessage?.origin).toMatchObject({ kind: 'orca', autoBridge: true, autoBridgeBatchCount: 2, senderLabel: '', senderSessionId: 'backend-session' });
+    // P1 回归：批次仍保留首条来源作 Host 团队授权证据（taskActionHost.readOrcaTeam 承重，见 taskActionAuthorization.test.ts）。
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ originKind: 'orca', orcaSenderSessionId: 'backend-session' });
+    const persisted = JSON.parse(dispatched.opts.persistUserMessage?.content ?? '{}');
+    expect(persisted.orcaSource).toBe('worker');
+    // 可见正文与单条一致：留 role 前缀、去 worker_id；worker_id 只在 agent text 里供路由。
+    expect(persisted.content).toContain('[From Orca Worker backend]');
+    expect(persisted.content).toContain('[From Orca Worker frontend]');
+    expect(persisted.content).not.toContain('(worker_id:');
+    expect(persisted.content).toContain('API ready');
+    expect(persisted.content).toContain('UI ready');
+    expect(persisted.content).toContain('异常终止');
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['r3']);
+    expect(h.snapshots.some(items => items.length === 2 && items[0]?.clientId === 'r1' && items[0]?.origin?.kind === 'orca' && items[0].origin.autoBridgeBatchCount === 2)).toBe(true);
+  });
+
+  it('stamps only host auto-bridge reports on queued and direct paths', async () => {
+    const params = { targetSessionId: 'target-session', rawContent: 'done', source: 'worker' as const, senderLabel: 'Worker', workerId: 'worker-1', meta: { source: 'orca', context: 'auto-bridge-mark' } };
+    const queued = createHarness({ shouldQueueNewTurn: () => true });
+    await queued.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...params, autoBridge: true });
+    expect(firstQueuedItem(queued.queuedItems).origin).toMatchObject({ kind: 'orca', autoBridge: true });
+    const manual = createHarness({ shouldQueueNewTurn: () => true });
+    await manual.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(params);
+    const manualOrigin = firstQueuedItem(manual.queuedItems).origin;
+    expect(manualOrigin?.kind === 'orca' ? manualOrigin.autoBridge : undefined).toBeUndefined();
+    const direct = createHarness();
+    await direct.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...params, autoBridge: true });
+    expect(direct.deps.createDbMessage).toHaveBeenCalledWith('target-session', expect.objectContaining({
+      agentMeta: expect.objectContaining({ origin: expect.objectContaining({ kind: 'orca', autoBridge: true }) }),
+    }));
+  });
+
+  it('keeps worker_id in agent text for routing, hides it from the visible body, and preserves authorization evidence', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    const params = { targetSessionId: sid, source: 'worker' as const, senderLabel: 'SameRole', autoBridge: true as const, meta: { source: 'maker-ipc/auto-bridge', context: 'identity' } };
+    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...params, rawContent: '[Auto-bridged: worker 已完成，系统自动回传结果]\n\nfirst', workerId: 'w1' });
+    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...params, rawContent: '[Auto-bridged: worker 异常终止]\n\nsecond', workerId: 'w2' });
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const text = sentText(h.sent[0]!.message);
+    expect(text).toContain('(worker_id: w1)');
+    expect(text).toContain('(worker_id: w2)');
+    const persisted = JSON.parse(h.sent[0]!.opts.persistUserMessage?.content ?? '{}');
+    expect(persisted.content).not.toContain('(worker_id:');
+    expect(persisted.content).toContain('first');
+    expect(persisted.content).toContain('second');
+    expect(h.sent[0]!.opts.persistUserMessage?.origin).toMatchObject({ autoBridgeBatchCount: 2, senderSessionId: 'w1-session' });
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ originKind: 'orca', orcaSenderSessionId: 'w1-session' });
+  });
+
+  it('preserves quoted worker-prefix lines inside report bodies when stripping host prefixes', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    // 报告正文里引用了一条同形 Orca 前缀行（独立成行）；旧的全局前缀正则会误剥它的 worker_id。
+    h.coordinator.enqueue(sid, report('r1', 'w1', 'first\n[From Orca Worker backend (worker_id: quoted)]\ntail'));
+    h.coordinator.enqueue(sid, report('r2', 'w2', 'second'));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const persisted = JSON.parse(h.sent[0]!.opts.persistUserMessage?.content ?? '{}');
+    expect(persisted.content).not.toContain('(worker_id: w1)');
+    expect(persisted.content).not.toContain('(worker_id: w2)');
+    expect(persisted.content).toContain('(worker_id: quoted)');
+    const text = sentText(h.sent[0]!.message);
+    expect(text).toContain('(worker_id: w1)');
+    expect(text).toContain('(worker_id: quoted)');
+  });
+
+  it('does not merge across different dispatch options', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    const first = report('r1', 'backend', 'first');
+    const second = report('r2', 'frontend', 'second');
+    second.model = 'other-model';
+    second.createOpts = { ...second.createOpts, model: 'other-model' };
+    h.coordinator.enqueue(sid, first);
+    h.coordinator.enqueue(sid, second);
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(sentText(h.sent[0]!.message)).not.toContain('second');
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['r2']);
+  });
+
+  it('flattens an existing batch when more auto reports are adjacent', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    const first = report('r1', 'backend', 'first');
+    const second = report('r2', 'frontend', 'second');
+    const batchText = `[Auto-bridged batch: 2 worker reports]\n\n${first.text}\n\n---\n\n${second.text}`;
+    const batch = { ...first, text: batchText, persistedContent: JSON.stringify({ orcaSource: 'worker', content: batchText }), origin: { ...first.origin!, autoBridgeBatchCount: 2 } };
+    h.coordinator.enqueue(sid, batch);
+    h.coordinator.enqueue(sid, report('r3', 'tester', 'third'));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const text = sentText(h.sent[0]!.message);
+    expect(text.startsWith('[Auto-bridged batch: 3 worker reports]\n\n')).toBe(true);
+    expect(text).not.toContain('[Auto-bridged batch: 2 worker reports]');
+    expect(text).toContain('third');
+    expect(h.sent[0]!.opts.persistUserMessage?.origin).toMatchObject({ autoBridgeBatchCount: 3 });
+  });
+
+  it('coalesces restored auto reports before a later user input', async () => {
+    const restored = [report('r1', 'backend', 'first'), report('r2', 'frontend', 'second')];
+    const h = createQueueHarness({ restored });
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(false);
+    h.coordinator.enqueue(sid, { ...report('user', 'owner', 'go'), text: 'go', persistedContent: 'go', origin: undefined });
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const text = sentText(h.sent[0]!.message);
+    expect(text).toContain(restored[0]!.text);
+    expect(text).toContain(restored[1]!.text);
+    expect(h.sent[0]!.opts.persistUserMessage?.clientId).toBe('r1');
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['user']);
+  });
+
+  it('never merges across a user message', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, report('r1', 'backend', 'first'));
+    h.coordinator.enqueue(sid, { ...report('user', 'owner', 'user input'), origin: undefined });
+    h.coordinator.enqueue(sid, report('r2', 'frontend', 'second'));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(sentText(h.sent[0]!.message)).toContain('first');
+    expect(sentText(h.sent[0]!.message)).not.toContain('second');
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['user', 'r2']);
+  });
+
+  it('does not merge ordinary Orca messages without the host auto-bridge mark', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    const first = report('r1', 'backend', 'manual report');
+    const second = report('r2', 'frontend', 'another manual report');
+    h.coordinator.enqueue(sid, { ...first, origin: { kind: 'orca', senderLabel: 'backend', displayText: 'manual report' } });
+    h.coordinator.enqueue(sid, { ...second, origin: { kind: 'orca', senderLabel: 'frontend', displayText: 'another manual report' } });
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(sentText(h.sent[0]!.message)).not.toContain('another manual report');
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['r2']);
+  });
+
+  it('keeps original rows when a persisted payload cannot be batched', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    const malformed = { ...report('r1', 'backend', 'first'), persistedContent: '{not json' };
+    h.coordinator.enqueue(sid, malformed);
+    h.coordinator.enqueue(sid, report('r2', 'frontend', 'second'));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(h.sent[0]!.opts.persistUserMessage?.clientId).toBe('r1');
+    expect(h.sent[0]!.opts.persistUserMessage?.content).toBe('{not json');
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['r2']);
+  });
+
+  it('does not coalesce or drain a paused queue', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, report('r1', 'backend', 'first'));
+    h.coordinator.enqueue(sid, report('r2', 'frontend', 'second'));
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await Promise.resolve();
+    expect(h.sent).toHaveLength(0);
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['r1', 'r2']);
+  });
+
+  it('does not merge when a non-head target is edit-locked', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, report('r1', 'backend', 'first'));
+    h.coordinator.enqueue(sid, report('r2', 'frontend', 'second'));
+    // 锁的是非队首的第二条：drain 的队首编辑锁闸门拦不到，必须由合批预检拦下。
+    h.coordinator.setEditLock(sid, 'r2', true);
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(sentText(h.sent[0]!.message)).toContain('first');
+    expect(sentText(h.sent[0]!.message)).not.toContain('second');
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['r2']);
+  });
+
+  const unbatchableHeadCases: Array<{ name: string; mutate: (r: AgentInputQueuedMessage) => void }> = [
+    { name: 'zero batch count', mutate: r => { if (r.origin?.kind === 'orca') r.origin.autoBridgeBatchCount = 0; } },
+    { name: 'negative batch count', mutate: r => { if (r.origin?.kind === 'orca') r.origin.autoBridgeBatchCount = -1; } },
+    { name: 'fractional batch count', mutate: r => { if (r.origin?.kind === 'orca') r.origin.autoBridgeBatchCount = 1.5; } },
+    { name: 'an attachment', mutate: r => { r.files = [{ id: 'f1', name: 'a.png', path: '/a.png', ext: '.png', size: 1, category: 'image', mimeType: 'image/png' }]; } },
+    { name: 'a mention', mutate: r => { r.mentions = [{ type: 'file', name: 'a', path: '/a' }]; } },
+    { name: 'a session reference', mutate: r => { r.sessionRefs = [{ sessionId: 'other' }]; } },
+    { name: 'an agent reference', mutate: r => { r.agentReferences = [{ kind: 'session', start: 0, end: 1, href: 'cindy://session/other', sessionId: 'other', title: 'Other' }]; } },
+  ];
+  it.each(unbatchableHeadCases)('does not merge a head report carrying $name', async ({ mutate }) => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    const first = report('r1', 'backend', 'first');
+    mutate(first);
+    h.coordinator.enqueue(sid, first);
+    h.coordinator.enqueue(sid, report('r2', 'frontend', 'second'));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    // 带附件/引用的队首仍正常单独派发，但不参与合批；第二条留在队里。
+    expect(h.sent[0]!.opts.persistUserMessage?.clientId).toBe('r1');
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['r2']);
+  });
+
+  it('does not merge when a non-head report carries an attachment', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    const second = report('r2', 'frontend', 'second');
+    second.files = [{ id: 'f1', name: 'a.png', path: '/a.png', ext: '.png', size: 1, category: 'image', mimeType: 'image/png' }];
+    h.coordinator.enqueue(sid, report('r1', 'backend', 'first'));
+    h.coordinator.enqueue(sid, second);
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    // 队首干净但第二条带附件：合批在第二条处 break，队首单独派发。
+    expect(h.sent[0]!.opts.persistUserMessage?.clientId).toBe('r1');
+    expect(sentText(h.sent[0]!.message)).not.toContain('second');
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['r2']);
+  });
+
+  const configMismatchCases: Array<{ name: string; mutate: (r: AgentInputQueuedMessage) => void }> = [
+    { name: 'effort', mutate: r => { r.effort = 'high'; } },
+    { name: 'permissionMode', mutate: r => { r.permissionMode = 'auto'; } },
+    { name: 'workingDir', mutate: r => { r.workingDir = 'D:\\other'; } },
+    { name: 'createOpts', mutate: r => { r.createOpts = { ...r.createOpts, model: 'other-model' }; } },
+    { name: 'vendorOptions', mutate: r => { r.vendorOptions = { foo: 'bar' }; } },
+  ];
+  it.each(configMismatchCases)('does not merge across a differing $name', async ({ mutate }) => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    const second = report('r2', 'frontend', 'second');
+    mutate(second);
+    h.coordinator.enqueue(sid, report('r1', 'backend', 'first'));
+    h.coordinator.enqueue(sid, second);
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(sentText(h.sent[0]!.message)).not.toContain('second');
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['r2']);
+  });
+
+  it('requeues a failed batch as one item and re-flattens it with a later report', async () => {
+    const h = createQueueHarness({ failFirstDispatch: 'session-running' });
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, report('r1', 'backend', 'first'));
+    h.coordinator.enqueue(sid, report('r2', 'frontend', 'second'));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    // 首次派发撞 SESSION_RUNNING：整批回队（不丢、不拆），无阻塞 recovery。
+    await vi.waitFor(() => {
+      const origin = h.coordinator.getProjection(sid).pendingQueue[0]?.origin;
+      expect(origin?.kind === 'orca' ? origin.autoBridgeBatchCount : undefined).toBe(2);
+    });
+    expect(h.sent).toHaveLength(0);
+    h.coordinator.enqueue(sid, report('r3', 'tester', 'third'));
+    h.coordinator.wakeSession(sid, 'retry');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const text = sentText(h.sent[0]!.message);
+    expect(text.startsWith('[Auto-bridged batch: 3 worker reports]\n\n')).toBe(true);
+    expect(text).not.toContain('[Auto-bridged batch: 2 worker reports]');
+    expect(text).toContain('first');
+    expect(text).toContain('second');
+    expect(text).toContain('third');
+    expect(h.sent[0]!.opts.persistUserMessage?.origin).toMatchObject({ autoBridgeBatchCount: 3 });
+  });
+
+  it('keeps every worker_id out of the visible body when a requeued batch is re-merged', async () => {
+    const h = createQueueHarness({ failFirstDispatch: 'session-running' });
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, report('r1', 'w1', 'first'));
+    h.coordinator.enqueue(sid, report('r2', 'w2', 'second'));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => {
+      const origin = h.coordinator.getProjection(sid).pendingQueue[0]?.origin;
+      expect(origin?.kind === 'orca' ? origin.autoBridgeBatchCount : undefined).toBe(2);
+    });
+    h.coordinator.enqueue(sid, report('r3', 'w3', 'third'));
+    h.coordinator.wakeSession(sid, 'retry');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const persisted = JSON.parse(h.sent[0]!.opts.persistUserMessage?.content ?? '{}');
+    expect(persisted.content).not.toContain('(worker_id:');
+    expect(persisted.content).toContain('first');
+    expect(persisted.content).toContain('second');
+    expect(persisted.content).toContain('third');
+    const text = sentText(h.sent[0]!.message);
+    expect(text).toContain('(worker_id: w1)');
+    expect(text).toContain('(worker_id: w2)');
+    expect(text).toContain('(worker_id: w3)');
+  });
+
+  it('does not merge a retry recovery copy with a fresh report', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, { ...report('a', 'w1', 'A'), retrySourceClientId: 'orig-a' });
+    h.coordinator.enqueue(sid, report('b', 'w2', 'B'));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(sentText(h.sent[0]!.message)).not.toContain('[Auto-bridged batch:');
+    expect(sentText(h.sent[0]!.message)).toContain('A');
+    // 恢复副本单独派发，B 未被合批吞掉，仍留在队列等待送达。
+    expect(h.coordinator.getProjection(sid).pendingQueue.map((i) => i.clientId)).toEqual(['b']);
+  });
+
+  it('preserves report order in the batch', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, report('r1', 'backend', 'alpha'));
+    h.coordinator.enqueue(sid, report('r2', 'frontend', 'beta'));
+    h.coordinator.enqueue(sid, report('r3', 'tester', 'gamma'));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const text = sentText(h.sent[0]!.message);
+    expect(text.indexOf('alpha')).toBeLessThan(text.indexOf('beta'));
+    expect(text.indexOf('beta')).toBeLessThan(text.indexOf('gamma'));
+    expect(text.indexOf('(worker_id: backend)')).toBeLessThan(text.indexOf('(worker_id: frontend)'));
+    expect(text.indexOf('(worker_id: frontend)')).toBeLessThan(text.indexOf('(worker_id: tester)'));
+    expect(h.sent[0]!.opts.persistUserMessage?.origin).toMatchObject({ autoBridgeBatchCount: 3 });
+  });
+
+  it('caps a batch at the item limit and leaves the rest for the next turn', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    for (let i = 1; i <= AUTO_BRIDGE_BATCH_MAX_ITEMS + 1; i++) h.coordinator.enqueue(sid, report(`r${i}`, `w${i}`, `body ${i}`));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(h.sent[0]!.opts.persistUserMessage?.origin).toMatchObject({ autoBridgeBatchCount: AUTO_BRIDGE_BATCH_MAX_ITEMS });
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(i => i.clientId)).toEqual([`r${AUTO_BRIDGE_BATCH_MAX_ITEMS + 1}`]);
+  });
+
+  it('does not let a requeued full batch absorb more reports on retry', async () => {
+    const h = createQueueHarness({ failFirstDispatch: 'session-running' });
+    await h.coordinator.ensureQueueRestored(sid);
+    for (let i = 1; i <= AUTO_BRIDGE_BATCH_MAX_ITEMS; i++) h.coordinator.enqueue(sid, report(`r${i}`, `w${i}`, `body ${i}`));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    // 首派撞 SESSION_RUNNING：count=8 的批次整体回队为一行。
+    await vi.waitFor(() => {
+      const origin = h.coordinator.getProjection(sid).pendingQueue[0]?.origin;
+      expect(origin?.kind === 'orca' ? origin.autoBridgeBatchCount : undefined).toBe(AUTO_BRIDGE_BATCH_MAX_ITEMS);
+    });
+    expect(h.sent).toHaveLength(0);
+    // 追加第 9 条：已满批次不得在 retry 时把它吸收进去（上限按真实报告数，而非队列行数）。
+    h.coordinator.enqueue(sid, report('r9', 'w9', 'body 9'));
+    h.coordinator.wakeSession(sid, 'retry');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(h.sent[0]!.opts.persistUserMessage?.origin).toMatchObject({ autoBridgeBatchCount: AUTO_BRIDGE_BATCH_MAX_ITEMS });
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(i => i.clientId)).toEqual(['r9']);
+  });
+
+  it('does not merge two reports whose combined body plus packaging exceeds the char budget', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    const body = 'x'.repeat(16_000);
+    h.coordinator.enqueue(sid, report('r1', 'backend', body));
+    h.coordinator.enqueue(sid, report('r2', 'frontend', body));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    // 两条各 ~16000，加批次头/分隔符会超 32000：不得合并，队首独发、第二条留队。
+    expect(sentText(h.sent[0]!.message)).not.toContain('[Auto-bridged batch');
+    expect(h.sent[0]!.opts.persistUserMessage?.clientId).toBe('r1');
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(i => i.clientId)).toEqual(['r2']);
+  });
+
+  it('keeps the merged batch body within the char budget including packaging', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    for (let i = 1; i <= 5; i++) h.coordinator.enqueue(sid, report(`r${i}`, `w${i}`, 'y'.repeat(6_000)));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    const text = sentText(h.sent[0]!.message);
+    expect(text).toContain('[Auto-bridged batch:');
+    expect(text.length).toBeLessThanOrEqual(AUTO_BRIDGE_BATCH_MAX_CHARS);
+  });
+
+  it('does not let a restored full batch absorb more reports', async () => {
+    const parts = Array.from({ length: AUTO_BRIDGE_BATCH_MAX_ITEMS }, (_, i) => report(`r${i + 1}`, `w${i + 1}`, `body ${i + 1}`));
+    const batchText = `[Auto-bridged batch: ${AUTO_BRIDGE_BATCH_MAX_ITEMS} worker reports]\n\n${parts.map(p => p.text).join('\n\n---\n\n')}`;
+    const batchPersisted = JSON.stringify({ orcaSource: 'worker', content: batchText });
+    const base = parts[0]!;
+    const batch = {
+      ...base,
+      text: batchText,
+      persistedContent: batchPersisted,
+      chatMessage: { ...base.chatMessage, content: batchPersisted },
+      origin: { kind: 'orca' as const, senderLabel: '', senderSessionId: 'w1-session', displayText: batchText, autoBridge: true as const, autoBridgeBatchCount: AUTO_BRIDGE_BATCH_MAX_ITEMS },
+    };
+    const h = createQueueHarness({ restored: [batch, report('r9', 'w9', 'body 9')] });
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(false);
+    h.coordinator.enqueue(sid, { ...report('user', 'owner', 'go'), text: 'go', persistedContent: 'go', origin: undefined });
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    // 恢复的满额批次独发，不吸收 r9；r9 与用户消息留队。
+    expect(h.sent[0]!.opts.persistUserMessage?.origin).toMatchObject({ autoBridgeBatchCount: AUTO_BRIDGE_BATCH_MAX_ITEMS });
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(i => i.clientId)).toEqual(['r9', 'user']);
+  });
+
+  it('caps a batch at the char budget and dispatches the remainder next turn', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    const bodySize = 10_000;
+    const expected = Math.floor(AUTO_BRIDGE_BATCH_MAX_CHARS / (bodySize + 100));
+    for (let i = 1; i <= expected + 1; i++) h.coordinator.enqueue(sid, report(`r${i}`, `w${i}`, 'x'.repeat(bodySize)));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(h.sent[0]!.opts.persistUserMessage?.origin).toMatchObject({ autoBridgeBatchCount: expected });
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(i => i.clientId)).toEqual([`r${expected + 1}`]);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(2));
+    expect(h.sent[1]!.opts.persistUserMessage?.clientId).toBe(`r${expected + 1}`);
+  });
+
+  it('dispatches an over-budget head alone without blocking or truncating', async () => {
+    const h = createQueueHarness();
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, report('r1', 'backend', 'x'.repeat(AUTO_BRIDGE_BATCH_MAX_CHARS + 1000) + 'TAIL_SENTINEL'));
+    h.coordinator.enqueue(sid, report('r2', 'frontend', 'small'));
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(h.sent[0]!.opts.persistUserMessage?.clientId).toBe('r1');
+    expect(sentText(h.sent[0]!.message)).not.toContain('[Auto-bridged batch');
+    expect(sentText(h.sent[0]!.message)).toContain('TAIL_SENTINEL');
+    expect(h.coordinator.getProjection(sid).pendingQueue.map(i => i.clientId)).toEqual(['r2']);
+  });
 });

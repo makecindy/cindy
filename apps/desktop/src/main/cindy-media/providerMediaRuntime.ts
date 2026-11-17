@@ -1,4 +1,4 @@
-import type { MediaCapability } from '@cindy/model-providers';
+import type { MediaCapability, ProviderVideoApi } from '@cindy/model-providers';
 import type { ImageParameters, ImageProtocol } from './imageParameters.js';
 import { supportsMediaCapability } from './mediaCapabilities.js';
 
@@ -10,7 +10,7 @@ export interface ProviderMediaRuntimeModel {
   modalities: { input: string[]; output: string[] };
   officialDocs?: string;
   imageProtocol?: ImageProtocol;
-  videoProtocol?: 'xai-videos';
+  videoProtocol?: ProviderVideoApi;
 }
 
 export interface ProviderVideoConnection {
@@ -18,6 +18,9 @@ export interface ProviderVideoConnection {
   headers: Record<string, string>;
   /** Opaque binding revision; never contains the source's credentials. */
   revision: string;
+  /** Native account adapters may resolve a namespaced catalog id at the wire boundary. */
+  requestModelId?: string;
+  onAuthRejected?(failure: { status: number; body: string }): Promise<unknown>;
   assertCurrent(): void;
 }
 
@@ -41,7 +44,7 @@ interface ProviderMediaRuntime {
   /** Settings readiness; must include hidden models so the display switch stays togglable. */
   listExecutableModels?(): ProviderMediaRuntimeModel[];
   listExecutableVideoModels?(): ProviderMediaRuntimeModel[];
-  resolveVideoConnection?(providerId: string, modelId: string): ProviderVideoConnection | null;
+  resolveVideoConnection?(providerId: string, modelId: string): ProviderVideoConnection | null | Promise<ProviderVideoConnection | null>;
   invoke(request: ProviderMediaRuntimeRequest): Promise<ProviderMediaRuntimeResult>;
 }
 
@@ -58,7 +61,7 @@ export function listProviderMediaModels(): ProviderMediaRuntimeModel[] {
   ];
 }
 
-export function resolveProviderVideoConnection(providerId: string, modelId: string): ProviderVideoConnection | null {
+export function resolveProviderVideoConnection(providerId: string, modelId: string): ProviderVideoConnection | null | Promise<ProviderVideoConnection | null> {
   return runtime?.resolveVideoConnection?.(providerId, modelId) ?? null;
 }
 

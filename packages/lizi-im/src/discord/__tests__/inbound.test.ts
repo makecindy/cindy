@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DiscordIM } from '../index.js';
-import { normalizeDmMessage } from '../inbound.js';
+import { normalizeInboundMessage } from '../inbound.js';
 import type { AttachmentLike, StickerLike } from '../inbound.js';
 import type { IMHost, IMHostMediaCache, IMMessageEvent, IMStatus } from '../../types.js';
 
@@ -32,9 +32,9 @@ describe('Discord routing identity', () => {
   });
 });
 
-describe('normalizeDmMessage', () => {
+describe('normalizeInboundMessage', () => {
   it('normalizes plain DM text fields', async () => {
-    const event = await normalizeDmMessage(message({ content: 'hello' }), {
+    const event = await normalizeInboundMessage(message({ content: 'hello' }), {
       contextId: 'app-1',
       download: vi.fn(),
     });
@@ -57,7 +57,7 @@ describe('normalizeDmMessage', () => {
     // `channelId: ''` flows through the helper because `'' ?? 'dm-1'` is `''`
     // (only null/undefined triggers the default). Asserts an explicit empty
     // string is treated as a missing channel.
-    const emptyString = await normalizeDmMessage(
+    const emptyString = await normalizeInboundMessage(
       message({ content: 'hello', channelId: '' }),
       { contextId: 'app-1', download: vi.fn() },
     );
@@ -67,14 +67,14 @@ describe('normalizeDmMessage', () => {
     // e.g. a partial presence update or a guild event leaking past the DM
     // filter — must also be suppressed. The `message()` helper defaults a
     // missing channelId to 'dm-1', so construct the raw object directly.
-    const channelLess = await normalizeDmMessage(
+    const channelLess = await normalizeInboundMessage(
       {
         id: 'msg-x',
         content: 'leaked guild text',
         author: { id: 'user-1' },
         attachments: [],
         stickers: [],
-      } as Parameters<typeof normalizeDmMessage>[0],
+      } as Parameters<typeof normalizeInboundMessage>[0],
       { contextId: 'app-1', download: vi.fn() },
     );
     expect(channelLess).toBeNull();
@@ -85,7 +85,7 @@ describe('normalizeDmMessage', () => {
     const media = makeMedia();
     const files = makeFiles();
 
-    const event = (await normalizeDmMessage(
+    const event = (await normalizeInboundMessage(
       message({
         attachments: [
           { id: 'att-o', name: 'scan.JPG', url: 'https://cdn.example/scan', size: 10, contentType: 'application/octet-stream' },
@@ -105,7 +105,7 @@ describe('normalizeDmMessage', () => {
     const download = vi.fn(async () => new Uint8Array([1, 2, 3]));
     const media = makeMedia();
 
-    const event = (await normalizeDmMessage(
+    const event = (await normalizeInboundMessage(
       message({
         attachments: [
           {
@@ -147,7 +147,7 @@ describe('normalizeDmMessage', () => {
     const files = makeFiles();
     const stagedDiscards: Array<() => Promise<void>> = [];
 
-    const event = (await normalizeDmMessage(
+    const event = (await normalizeInboundMessage(
       message({
         attachments: [
           { id: 'att-1', name: 'photo.png', url: 'https://cdn.example/photo.png', size: 1024, contentType: 'image/png' },
@@ -210,7 +210,7 @@ describe('normalizeDmMessage', () => {
     const media = makeMedia();
     media.cacheImage.mockRejectedValueOnce(new Error('db not ready'));
 
-    const event = (await normalizeDmMessage(
+    const event = (await normalizeInboundMessage(
       message({
         attachments: [
           { id: 'att-1', name: 'photo.png', url: 'https://cdn.example/photo.png', size: 1024, contentType: 'image/png' },
@@ -233,7 +233,7 @@ describe('normalizeDmMessage', () => {
       { id: 'att-4', name: 'voice.ogg', url: 'https://cdn.example/voice.ogg', size: 1024, contentType: 'audio/ogg' },
     ];
 
-    const bare = (await normalizeDmMessage(message({ attachments }), { contextId: 'app-1', download }))!;
+    const bare = (await normalizeInboundMessage(message({ attachments }), { contextId: 'app-1', download }))!;
     expect(download).not.toHaveBeenCalled();
     expect(bare.attachments).toEqual([]);
     expect(bare.unsupported).toEqual([
@@ -245,7 +245,7 @@ describe('normalizeDmMessage', () => {
 
     // host.media without cacheMedia: images still go to the store, audio/video stay unsupported.
     const imageOnlyMedia: IMHostMediaCache = { ...makeMedia(), cacheMedia: undefined };
-    const partial = (await normalizeDmMessage(message({ attachments }), {
+    const partial = (await normalizeInboundMessage(message({ attachments }), {
       contextId: 'app-1',
       download,
       media: imageOnlyMedia,
@@ -266,7 +266,7 @@ describe('normalizeDmMessage', () => {
     files.stage.mockRejectedValueOnce(new Error('disk full'));
     const stagedDiscards: Array<() => Promise<void>> = [];
 
-    const event = (await normalizeDmMessage(
+    const event = (await normalizeInboundMessage(
       message({
         attachments: [
           { id: 'att-2', name: 'notes.pdf', url: 'https://cdn.example/notes.pdf', size: 1024, contentType: 'application/pdf' },
@@ -284,14 +284,14 @@ describe('normalizeDmMessage', () => {
     const download = vi.fn(async () => new Uint8Array([1]));
     const media = makeMedia();
 
-    const empty = (await normalizeDmMessage(message({ type: 'VoiceMessage' }), {
+    const empty = (await normalizeInboundMessage(message({ type: 'VoiceMessage' }), {
       contextId: 'app-1',
       download,
       media,
     }))!;
     expect(empty.unsupported).toEqual([{ type: 'audio', label: 'audio message' }]);
 
-    const withClip = (await normalizeDmMessage(
+    const withClip = (await normalizeInboundMessage(
       message({
         type: 'VoiceMessage',
         attachments: [
@@ -313,7 +313,7 @@ describe('normalizeDmMessage', () => {
     const download = vi.fn();
     const files = makeFiles();
 
-    const event = (await normalizeDmMessage(
+    const event = (await normalizeInboundMessage(
       message({
         attachments: [
           {
@@ -335,7 +335,7 @@ describe('normalizeDmMessage', () => {
   });
 
   it('marks stickers unsupported', async () => {
-    const event = (await normalizeDmMessage(
+    const event = (await normalizeInboundMessage(
       message({ stickers: [{ id: 'sticker-1', name: 'wave' }] }),
       { contextId: 'app-1', download: vi.fn() },
     ))!;
@@ -351,7 +351,7 @@ describe('normalizeDmMessage', () => {
     });
 
     const [first, second] = await Promise.all([
-      normalizeDmMessage(
+      normalizeInboundMessage(
         message({
           id: 'msg-a',
           attachments: [
@@ -366,7 +366,7 @@ describe('normalizeDmMessage', () => {
         }),
         { contextId: 'app-1', download, media },
       ),
-      normalizeDmMessage(
+      normalizeInboundMessage(
         message({
           id: 'msg-b',
           attachments: [
@@ -395,7 +395,7 @@ describe('normalizeDmMessage', () => {
     const media = makeMedia();
     const download = vi.fn(async () => new Uint8Array([1]));
 
-    const event = (await normalizeDmMessage(
+    const event = (await normalizeInboundMessage(
       message({
         id: 'msg-a',
         attachments: [

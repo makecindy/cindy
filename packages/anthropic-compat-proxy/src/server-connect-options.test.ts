@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
+import { closeTestConnections, fetchOverTestConnections as fetch, listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createEncryptedContentRecoveryRule } from './transform.js';
 import type { ProxyHandle } from './types.js';
 
@@ -33,6 +33,7 @@ let closeUpstream: (() => Promise<void>) | null = null;
 
 afterEach(async () => {
   if (proxy) { await proxy.dispose(); proxy = null; }
+  await closeTestConnections();
   if (closeUpstream) { await closeUpstream(); closeUpstream = null; }
   capturedOptions.length = 0;
   testSocketTimeoutMs = undefined;

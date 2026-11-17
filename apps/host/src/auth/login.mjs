@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 import { createServer } from 'node:http';
 
 import { serializeAuthSessionRecord } from '@cindy/auth-client';
+import { serializeHostSession } from './device-identity.mjs';
 
 import { AUTH_SESSION_KEY } from '../../../desktop/src/main/authCredentialKeys.ts';
 import {
@@ -85,7 +86,7 @@ export async function runHostLogin(deps) {
 
   const pair = await deps.client.exchangeAuthorizationCode(authorization.code, verifier);
   if (!pair?.refreshToken) throw new Error('authorization exchange returned no refresh token');
-  deps.store.write(AUTH_SESSION_KEY, serializeAuthSessionRecord(deps.region, pair.refreshToken));
+  deps.store.write(AUTH_SESSION_KEY, deps.deviceId ? serializeHostSession(deps.region, pair.refreshToken, deps.deviceId) : serializeAuthSessionRecord(deps.region, pair.refreshToken));
   return { authenticated: true, realm: deps.region, method: method.providerOrConnectionId ?? method.type };
 }
 

@@ -50,11 +50,11 @@ function text(doc: unknown): string {
 
 type Setup = ReturnType<typeof usePluginSkillSetup>;
 const latest: { setup?: Setup; path?: string } = {};
-function Harness(props: { targetKey?: string; enabled?: boolean; draftKey?: string }) {
+function Harness(props: { targetKey?: string; enabled?: boolean; draftKey?: string; workingDir?: string }) {
   latest.setup = usePluginSkillSetup({
     enabled: props.enabled ?? true,
     ownerId: OWNER,
-    workingDir: '/repo',
+    workingDir: props.workingDir ?? '/repo',
     targetKey: props.targetKey ?? SESSION_TARGET,
     draftKey: props.draftKey ?? 's1',
   });
@@ -90,6 +90,7 @@ beforeEach(() => {
     ghosts: {
       listSync: () => ({ ghosts: installed.ghosts }),
       workdirPrefsSync: () => ({ disabled: disabledInWorkdir }),
+      workdirPrefs: async () => ({ disabled: disabledInWorkdir, workdirKey: '/repo' }),
       recommendationsSync: () => ({ ownerId: OWNER, sources: [], recentIds: [], newlyInstalledId: null }),
     },
     pluginMarket: { lookup: async () => ({ items: marketItems }) },
@@ -97,6 +98,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   clearDraft('s1');
   clearDraft('s2');
   cancelPendingPluginSuggestion();
@@ -124,6 +126,16 @@ describe('plugin Skill setup state', () => {
     expect(await pluginSetupRoute(undefined, 'cindy-github')).toBeNull();
   });
 
+  // Unit, #4540881698: a stamped organization install keeps its physical route;
+  // the existing route test only covered root and could not detect source mixups.
+  it('keeps the exact installed route only for the expected logical identity', async () => {
+    const stamped = { ...github(false), namespace: 'acme', instanceKey: 'cindy-github' };
+    expect(await pluginSetupRoute(stamped, 'cindy-github', { namespace: 'acme', ghostId: 'cindy-github' }))
+      .toBe('/plugins?ghost=cindy-github');
+    expect(await pluginSetupRoute(stamped, 'cindy-github', { namespace: null, ghostId: 'cindy-github' }))
+      .toBeNull();
+  });
+
   it('prepends the Skill and keeps what the user wrote', () => {
     expect(text(prependSlashSkill(null, 'pr'))).toBe('/pr ');
     expect(text(prependSlashSkill(plainTextToTiptapDoc('fix the login bug'), 'pr'))).toBe(
@@ -135,6 +147,31 @@ describe('plugin Skill setup state', () => {
 });
 
 describe('usePluginSkillSetup', () => {
+  // PB97: task switching must render without waiting synchronously for main.
+  // Unit: a delayed directory policy must neither leak an old setup row nor
+  // lose the existing enable action once that policy arrives.
+  it('renders without synchronous IPC and ignores the previous directory response', async () => {
+    installed.ghosts = [github(true)];
+    const pending = new Map<string, (value: { disabled: string[]; workdirKey: string }) => void>();
+    const sync = vi.spyOn(window.electronAPI.ghosts, 'workdirPrefsSync');
+    vi.spyOn(window.electronAPI.ghosts, 'workdirPrefs').mockImplementation((dir) => new Promise((resolve) => pending.set(dir, resolve)));
+    const view = render(<MemoryRouter><Harness workingDir="/a" /></MemoryRouter>);
+    expect(latest.setup).toBeUndefined();
+    expect(sync).not.toHaveBeenCalled();
+    await act(async () => {});
+    view.rerender(<MemoryRouter><Harness workingDir="/b" /></MemoryRouter>);
+    await act(async () => {});
+    await act(async () => pending.get('/a')!({ disabled: ['cindy-github'], workdirKey: '/a' }));
+    expect(latest.setup).toBeUndefined();
+    await act(async () => pending.get('/b')!({ disabled: ['cindy-github'], workdirKey: '/b' }));
+    expect(latest.setup?.entries[0].replacesInstalled).toBe(true);
+    expect(sync).not.toHaveBeenCalled();
+    // Selection still checks the current policy and keeps the existing draft.
+    saveDraft('s1', { text: plainTextToTiptapDoc('keep this'), attachments: [] });
+    act(() => latest.setup!.onSelect('pr'));
+    expect(sync).toHaveBeenCalledWith('/b');
+    expect(text(getDraft('s1')?.text)).toBe('/pr |keep this');
+  });
   it('sends a missing plugin to its market page and fills the task composer on return', async () => {
     saveDraft('s1', { text: plainTextToTiptapDoc('fix the login bug'), attachments: [] });
     const first = renderAt('/cc-agent/s1');
@@ -156,13 +193,13 @@ describe('usePluginSkillSetup', () => {
     installed.ghosts = [github(true)];
     expect(readyPendingPluginSuggestion(pending.nonce, OWNER, 'cindy-github')).toBe(pending.nonce);
     // Another task's composer on the same screen leaves the request alone.
-    renderAt(
+    await act(async () => renderAt(
       { pathname: '/cc-agent/s1', state: { pluginSuggestionNonce: pending.nonce } },
       <Harness targetKey={JSON.stringify(['session', 's2'])} draftKey="s2" />,
-    );
+    ));
     expect(getPendingPluginSuggestion()?.nonce).toBe(pending.nonce);
     cleanup();
-    renderAt({ pathname: '/cc-agent/s1', state: { pluginSuggestionNonce: pending.nonce } });
+    await act(async () => renderAt({ pathname: '/cc-agent/s1', state: { pluginSuggestionNonce: pending.nonce } }));
     expect(text(getDraft('s1')?.text)).toBe('/pr |fix the login bug');
     expect(getDraft('s2')).toBeUndefined();
     expect(getPendingPluginSuggestion()).toBeNull();
@@ -172,7 +209,7 @@ describe('usePluginSkillSetup', () => {
   it('opens the installed page for a disabled plugin', async () => {
     installed.ghosts = [github(false)];
     renderAt('/cc-agent/s1');
-    expect(latest.setup?.entries[0].meta).toBe('commandPalette.pluginSkillSetup.enable');
+    await waitFor(() => expect(latest.setup?.entries[0].meta).toBe('commandPalette.pluginSkillSetup.enable'));
     expect(latest.setup?.entries[0].replacesInstalled).toBe(true);
     act(() => latest.setup!.onSelect('pr'));
     await waitFor(() => expect(latest.path).toMatch(/^\/plugins\?ghost=cindy-github&recommendation=/));

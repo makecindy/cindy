@@ -8,7 +8,6 @@ import { companionEnvironmentStore } from './runtime.js';
 import { IMPORTED_TOOL_LIMIT, listImportedTools, withImportedConnection } from './connections.js';
 import { object, string, type ImportItem, type ImportedMcpServer } from './types.js';
 import { connectionRedactions, importedContentRedactions, publicConnectionName, redactImportedTool, restoreImportedArguments } from './connectionCatalog.js';
-import { verifyImportedDelivery } from './delivery.js';
 import { fingerprint, writeImportFiles } from './files.js';
 import { importedProcessEnvironment, isPublicImportSetting, redactEnvironmentValues, redactEnvironmentData, runImportedProcess } from './process.js';
 import { importedHttpBases, publicImportHttpBases, resolveImportHttpPath } from './httpBindings.js';
@@ -54,7 +53,6 @@ export async function verifyImportedAutomation(root: string, botId: string, item
     if (!environment || !item.automation) return { verified: false, reason: 'CREDENTIAL_STORAGE_UNAVAILABLE' };
     const command = importedCommand(item.automation.original);
     const bot = await getBotRemoteResourceSource(botId); assertOwner();
-    await verifyImportedDelivery(environment, item.automation.deliveries ?? [], assertOwner);
     const monitorUrl = item.automation.original.monitor_url;
     const contentSecrets = importedContentRedactions(environment, monitorUrl ? [string(monitorUrl)] : []);
     let monitorVerified = false;
@@ -91,8 +89,8 @@ export async function verifyImportedAutomation(root: string, botId: string, item
         assertOwner();
       }
     }
-    // Delivery credentials are required for selection/handover, but are not data
-    // reads. Remove only delivery roots before expanding read dependencies: a
+    // Former chat destinations (older checkpoints) are not data reads, and results now stay in
+    // the automation's task. Remove only delivery roots before expanding read dependencies: a
     // shared variable (or a credential referenced by a skill) must still be checked.
     const deliveryIds = new Set(item.automation.deliveries?.map(delivery => delivery.connectionId));
     const referencedIds = new Set((item.view.dependsOn ?? []).filter(id => !deliveryIds.has(id)));

@@ -1,5 +1,5 @@
 import { captureTurnUsageContext, turnBillingSource, type TurnUsageContext } from './turnUsageContext.js';
-import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
+import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.desktop.js';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from '../maker-host/subscription-account-auth.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';

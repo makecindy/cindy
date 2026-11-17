@@ -5,7 +5,7 @@
   "changedDimensions": ["modelRoute", "nativeProviders"],
   "agentBackend": "pi",
   "agentBinaryPath": "/opt/cindy-headless/bin/pi/pi",
-  "agentBinaryVersion": "1.4.0",
+  "agentBinaryVersion": "1.5.2",
   "supportedModelIds": ["deepseek/deepseek-v4-flash"],
   "model": {
     "provider": "example-gateway",
@@ -34,7 +34,7 @@
   ],
   "permissionMode": "bypassPermissions",
   "systemPromptFile": "prompt.md",
-  "expectedSystemPromptDigest": "8c30f6d0acb69279f7cfaa172366c0f9071f70dd80f4c3de1a32cdd9d2e20772",
+  "expectedSystemPromptDigest": "cea02c128380de8264bcc494e5ead4bc905bf51fea72d8578927a8db3e4d1a8a",
   "makerMemory": true,
   "nativeMemory": false,
   "projectContext": true,

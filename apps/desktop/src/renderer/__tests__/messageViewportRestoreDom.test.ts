@@ -41,7 +41,7 @@ function setup() {
   measure(row, 120);
   const bindings = {
     useCallback: (callback: unknown) => callback,
-    scrollRef: { current: container }, itemsRef: { current: items },
+    messageViewportRef: { current: null }, scrollRef: { current: container }, itemsRef: { current: items },
     pickIntersectingChildAnchor, readViewportChildAnchorClientId, viewportAnchorCorrection,
     CSS: { escape: (id: string) => id }, isLoadingMore: false,
     prevScrollHeightRef: { current: 0 }, prevScrollTopAtLoadRef: { current: 0 },

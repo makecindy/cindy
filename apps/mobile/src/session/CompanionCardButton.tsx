@@ -44,17 +44,20 @@ export function CompanionCardButton({ label, onPress, primary = false, busy = fa
  * width (long English / Japanese copy on a narrow card), the whole group switches once to one
  * full-width button per row, like the teammate permission card.
  */
-export function CompanionCardActions({ children }: { children: ReactNode }) {
+export function CompanionCardActions({ children, style, onStacked }: {
+  children: ReactNode; style?: StyleProp<ViewStyle>; onStacked?(): void;
+}) {
   const styles = useThemedStyles(makeStyles);
   const [stacked, setStacked] = useState(false);
-  const stack = useMemo(() => ({ stacked, onWrap: () => setStacked(true) }), [stacked]);
+  const stack = useMemo(() => ({ stacked, onWrap: () => { setStacked(true); onStacked?.(); } }), [stacked, onStacked]);
   return <StackContext.Provider value={stack}>
-    <View style={styles.actions} testID={stacked ? 'companion.cardActions.stacked' : undefined}>{children}</View>
+    <View style={[styles.actions, style, stacked && styles.actionsStacked]} testID={stacked ? 'companion.cardActions.stacked' : undefined}>{children}</View>
   </StackContext.Provider>;
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.md },
+  actionsStacked: { width: '100%', flexWrap: 'wrap', gap: spacing.sm },
   button: { flex: 1, minHeight: HEIGHT, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md },
   primary: { backgroundColor: colors.cta },
   secondary: { backgroundColor: colors.surfaceChip },

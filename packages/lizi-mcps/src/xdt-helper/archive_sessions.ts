@@ -31,7 +31,7 @@ export interface SessionStatusChangeItem {
   sessionId: string;
   title: string | null;
   workingDir: string | null;
-  status: SessionStatus;
+  status: SessionStatus | 'deleted';
 }
 
 /**
@@ -145,7 +145,7 @@ function registerSessionStatusTool(
       }
 
       const ctx = deps.getSessionContext();
-      if (!ctx.sessionId) {
+      if (!ctx.sessionId && !ctx.hostCaller) {
         return errorPayload(
           'NO_SESSION_CONTEXT',
           `本次 MCP 调用没有绑定 ${BRAND_NAME} session,无法写库。`,
@@ -153,7 +153,7 @@ function registerSessionStatusTool(
       }
 
       // 归档不允许把"当前正在运行的这个 session"自己归档掉(取消归档时它已是 active,无需拦)。
-      if (config.targetStatus === 'archived' && ids.includes(ctx.sessionId)) {
+      if (config.targetStatus === 'archived' && ctx.sessionId && ids.includes(ctx.sessionId)) {
         return errorPayload(
           'INVALID_ARGS',
           '不能归档当前正在运行的 session。请把它从 session_ids 里去掉(或先切换到别的会话再归档它)。',

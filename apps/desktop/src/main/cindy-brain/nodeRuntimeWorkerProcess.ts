@@ -33,7 +33,7 @@ import { NodeDeviceAuthorizationClient } from './nodeDeviceAuthorizationClient.j
 import { NodeHostServicesClient } from './nodeHostServicesClient.js';
 import { NodeAuthorizationClient } from './nodeAuthorizationClient.js';
 
-interface ParentPortLike {
+export interface NodeWorkerParentPort {
   postMessage(message: unknown): void;
   on(event: 'message', listener: (event: { data: unknown }) => void): void;
 }
@@ -42,10 +42,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-const parentPort = (process as unknown as { parentPort?: ParentPortLike }).parentPort;
-const entryPath = process.argv[2];
-const childMode = process.argv[3] === GHOST_NODE_CHILD_MODE_FLAG;
-const childArgs = childMode ? process.argv.slice(4) : [];
+export function runNodeRuntimeWorker(parentPort: NodeWorkerParentPort, entryPath: string, args: string[] = []) {
+const childMode = args[0] === GHOST_NODE_CHILD_MODE_FLAG;
+const childArgs = childMode ? args.slice(1) : [];
 
 if (!parentPort) throw new Error('Node 插件工作进程缺少 parentPort');
 if (
@@ -251,6 +250,11 @@ if (childMode) {
   // 的认知读参数;不暴露 spawnEntry(树深恒为 1,子进程不能再生孙进程)。
   process.argv = [process.argv[0], entryPath, ...childArgs];
 } else {
+  Object.defineProperty(globalThis, 'cindy', {
+    configurable: false, enumerable: false, writable: false,
+    value: Object.freeze({ host: Object.freeze({ call: (server: string, tool: string, args: Record<string, unknown> = {}) =>
+      hostServices.hostCall(server, tool, args) }) }),
+  });
   // 普通模式 argv 保持旧形状([electron, 引导层, entryPath]),存量插件零变化。
   Object.defineProperty(globalThis, '__CINDY_NODE__', {
     configurable: false,
@@ -262,5 +266,7 @@ if (childMode) {
   });
 }
 
-const requireFromWorker = createRequire(__filename);
+const requireFromWorker = createRequire(entryPath);
 requireFromWorker(entryPath);
+
+}

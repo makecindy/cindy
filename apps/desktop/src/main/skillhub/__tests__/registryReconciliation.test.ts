@@ -1,3 +1,4 @@
+import { configureAppDataDir, configureUserDataDir } from '../../userDataPath';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -5,6 +6,8 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-scan-maintenance-'));
+configureAppDataDir(root);
+configureUserDataDir(root);
 vi.mock('electron', () => ({ app: { getPath: () => root } }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../registry', () => ({ registryService: { getInstall: vi.fn(), removeInstall: vi.fn() } }));
@@ -54,6 +57,9 @@ describe('background registry maintenance', () => {
     lease.retainUntilComplete(token);
     await lease();
     vi.resetModules();
+    const paths = await import('../../userDataPath');
+    paths.configureAppDataDir(root);
+    paths.configureUserDataDir(root);
     const restarted = await import('../registryReconciliation');
     await restarted.reconcileScannedInstall(record, false);
     expect(fs.existsSync(link)).toBe(false);

@@ -7,3 +7,6 @@
 "Choose which computer this widget shows, which accounts come first and which to hide. Other accounts, including ones added later, follow in that computer's order." = "选择这个小组件显示哪台电脑的数据、哪些账号排在前面、哪些隐藏。其余账号（包括以后新加的）按那台电脑上的顺序排在后面。";
 "Accounts first" = "排在前面的账号";
 "Hidden accounts" = "隐藏的账号";
+
+"activity.waitingForUpdate" = "等待更新";
+"activity.lastUpdated" = "上次更新";

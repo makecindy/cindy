@@ -239,6 +239,15 @@ function ctx(over: Partial<InvocationCatalogContext> = {}): InvocationCatalogCon
   return { providers: providers(), getPermissionModes: PERM_MODES, ...over };
 }
 
+// 2026-11-11 upgrade, unit: saved automatic-task source IDs must not fall back to a different account.
+it('retains an explicitly saved imported connection when composing an invocation', () => {
+  const entries = providers();
+  const original = entries.find(provider => provider.id === 'openai')!;
+  entries.push({ ...original, id: 'openai-old', connected: true, subscriptionPoolAlias: true });
+  const result = resolveModelInvocation({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai-old' }, SCENARIO, ctx({ providers: entries }));
+  expect(result.providerId).toBe('openai-old');
+});
+
 describe('resolveModelInvocation — 六元组回落链', () => {
   it('keeps an explicit Pi invocation instead of falling back to the scenario agent', () => {
     const r = resolveModelInvocation(

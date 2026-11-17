@@ -10,10 +10,14 @@
  * 每条安装路径都必须显式交出一个策略：用户或 Agent 发起的安装走 `prompt`，后台自动
  * 更新走 `automatic`（需要确认就跳过，不替用户点头），只有服务端默认安装走 `exempt`。
  */
-import { pluginHasToolUi } from '@cindy/plugin-protocol';
+import { declaredGhostHostToolGroups, pluginHasToolUi, type GhostHostToolGroup } from '@cindy/plugin-protocol';
 import {
   declaredAutoApproveTools,
+  declaredGhostTaskEventTopics,
+  type GhostTaskEventTopic,
   declaredGhostControlPoints,
+  ghostHostUiApprovalTokens,
+  ghostPermissionProjectionKey,
   GHOST_CONTROL_POINTS,
   type GhostControlPointId,
   type GhostManifest,
@@ -37,6 +41,7 @@ export type GhostInstallConsentPrompt = ((
 ) => Promise<boolean>) & {
   /** Main-owned negotiation: legacy remote controllers cannot approve page capabilities. */
   uiCapabilityApproval?: boolean;
+  hostUiCapabilityApproval?: boolean;
 };
 
 export type GhostInstallConsentPolicy =
@@ -57,12 +62,26 @@ export type GhostInstallConsentPolicy =
 
 /** 求得的确认结论；随安装请求一路交到安装锁内复核。 */
 export type GhostInstallConsentDecision =
-  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true }
+  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true; hostUiCapabilityUnsupported?: true }
   /** 求确认时判定无需确认；落位前必须仍然无需确认。 */
   | { mode: 'unprompted' }
   | { mode: 'exempt'; reason: 'server-default-install' };
 
 const pendingPromptAborts = new Set<AbortController>();
+
+/** Only the individual group rows actually presented by this Host confer authority. */
+export function confirmedHostToolGroups(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): GhostHostToolGroup[] {
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return declaredGhostHostToolGroups(next).filter(group => shown?.some(item => item.key === `agent:host-tools:${group}`));
+}
+export function confirmedEventTopics(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): GhostTaskEventTopic[] {
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return declaredGhostTaskEventTopics(next).filter(topic => shown?.some(item => item.key === `subscribe:topics:${topic}`));
+}
 
 /** Use only after assertGhostInstallConsent binds the confirmed facts to this package/receiver. */
 export function confirmedTaskCapability(
@@ -186,6 +205,7 @@ export async function obtainGhostInstallConsent(
   return {
     mode: 'confirmed',
     ...(policy.prompt.uiCapabilityApproval === false ? { uiCapabilityUnsupported: true as const } : {}),
+    ...(ghostHostUiApprovalTokens(manifest).length && policy.prompt.hostUiCapabilityApproval !== true ? { hostUiCapabilityUnsupported: true as const } : {}),
     ...(forced ? { forced: true as const } : {}),
     key: ghostInstallConsentKey(
       facts,
@@ -237,4 +257,12 @@ export function confirmedUiCapability(decision: GhostInstallConsentDecision, ins
   const facts = evaluateGhostInstallConsent(installed, next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return shown?.some(item => item.key === 'ui:pages') ? decision.uiCapabilityUnsupported !== true : undefined;
+}
+
+export function confirmedHostUiPermissions(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): string[] {
+  if (decision.mode === 'exempt') return ghostHostUiApprovalTokens(next);
+  if (decision.mode !== 'confirmed' || decision.hostUiCapabilityUnsupported) return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added ?? [];
+  return shown.filter(item => item.key.startsWith('ui:host:')).map(ghostPermissionProjectionKey);
 }

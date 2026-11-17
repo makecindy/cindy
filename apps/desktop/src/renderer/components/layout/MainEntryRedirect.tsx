@@ -4,10 +4,14 @@ import { useAuth } from '@/contexts/AuthContext';
 import { MainViewHistoryContext } from '@/contexts/MainViewHistoryContext';
 import { mainEntryRouteForPath, readMainEntryRoute, rememberMainEntry } from '@/lib/mainEntryPreference';
 
-/** Only the unqualified home route restores; explicit routes always win. */
+/** Restore the current account's in-app destination; cold starts use only its saved area. */
 export function MainEntryRedirect() {
   const { dataOwnerId } = useAuth();
-  return <Navigate to={readMainEntryRoute(dataOwnerId)} replace />;
+  const history = useContext(MainViewHistoryContext);
+  // Settings returns through `/`. Resolving only the saved area would discard
+  // the remote teammate and send computers with no local teammates to creation.
+  const destination = history?.current.paths[history.current.lastMatchedKey];
+  return <Navigate to={destination ?? readMainEntryRoute(dataOwnerId)} replace />;
 }
 
 export function useRememberMainEntry(): void {

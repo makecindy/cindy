@@ -53,7 +53,7 @@ import { createLogger } from '../logger';
 import { readClaudeApiKey } from '../maker-host/auth-adapters';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection';
-import { outboundFetch } from '../maker-host/outbound-fetch';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs';
 import { getGatewayAccountCurrency } from './modelPricing';
 import { currentLedgerCurrency } from './ledgerCurrency';

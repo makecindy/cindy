@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { authorizeGroupTool, registerGroupToolAuthority, GroupToolAuthorizationError } from '../botGroupToolAuthorization.js';
-import { setMainLocale } from '../../i18n.js';
+import { setMainLocale } from '../../i18n.desktop.js';
 
 const releases: Array<() => void> = [];
 afterEach(() => { releases.splice(0).forEach(release => release()); setMainLocale('en'); });

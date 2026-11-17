@@ -138,7 +138,7 @@ async function attempt(
   try {
     const api = API[candidate.wireProtocol];
     const known = providerModelRecord(spec.modelId, candidate.baseUrl, api)
-      ?? providerPresetModelRecord(spec.catalogPresetId, spec.modelId, api);
+      ?? providerPresetModelRecord(spec.catalogPresetId, spec.modelId, api, candidate.baseUrl);
     const row = spec.nativeModel ?? known ?? invocationModelRecord({ id: spec.modelId, name: spec.modelId, group: 'custom',
       contextWindow: 4096, maxOutput: 256, efforts: [], defaultEffort: null, api }, candidate.baseUrl)!;
     const headers = withOpenCodeGoSessionHeader(Object.fromEntries(Object.entries(spec.headers ?? {}).filter(([name]) =>

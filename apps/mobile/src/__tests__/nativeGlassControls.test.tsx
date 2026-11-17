@@ -551,3 +551,36 @@ it.each(["light", "dark"])("pairs permission-guide primary labels without changi
     });
   }
 });
+
+// PR #9826 / unit: iOS must show the failure without disabling an already loaded folder.
+it("allows an explicit folder retry while displaying a move error", () => {
+  const props = directoryProps({ actionError: "Move failed" });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  expect(host.textContent).toContain("Move failed");
+  act(() => (host.querySelector('[data-testid="newSession.remoteBrowseSelectCurrent"]') as HTMLButtonElement).click());
+  expect(props.onChoose).toHaveBeenCalledExactlyOnceWith("/project");
+});
+
+// PR #9826 / unit: keep current project membership selected and disabled in move mode.
+it("does not dispatch the disabled current project membership", () => {
+  const props = directoryProps({ page: "workspace", workspaces: [{ title: "Project", workingDir: "/project", disabled: true }] });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  const row = host.querySelector('[data-testid="newSession.workspaceProjectOption"]') as HTMLButtonElement;
+  expect(row.getAttribute("aria-pressed")).toBe("true");
+  expect(row.disabled).toBe(true);
+  act(() => row.click());
+  expect(props.onProject).not.toHaveBeenCalled();
+});
+
+// PR #9826: browseLoading may stay true after returning to workspace on the new-task page.
+it.each([false, true])("gates workspace selection only for its own loading (%s)", workspaceLoading => {
+  const props = directoryProps({ page: "workspace", loading: true, workspaceLoading,
+    workspaces: [{ title: "Project", workingDir: "/project" }] });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  for (const name of ["Dialogue", "Project", "Browse"]) {
+    act(() => (host.querySelector(`[data-testid="newSession.workspace${name}Option"]`) as HTMLButtonElement).click());
+  }
+  expect(props.onDialogue).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
+  expect(props.onProject).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
+  expect(props.onBrowse).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
+});

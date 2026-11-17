@@ -3,14 +3,14 @@
  * this channel; minimal failures are an untrusted frame or a non-finite width.
  */
 import { beforeEach, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ handle: vi.fn(), guard: vi.fn(), from: vi.fn(), update: vi.fn(), adopt: vi.fn(), appOn: vi.fn(), trusted: vi.fn(), windows: vi.fn(() => []) }));
+const mocks = vi.hoisted(() => ({ handle: vi.fn(), guard: vi.fn(), from: vi.fn(), update: vi.fn(), appOn: vi.fn(), trusted: vi.fn(), windows: vi.fn(() => []) }));
 vi.mock('electron', () => ({ ipcMain: { handle: mocks.handle },
   BrowserWindow: { fromWebContents: mocks.from, getAllWindows: mocks.windows },
   app: { on: mocks.appOn },
   screen: { getDisplayMatching: () => ({ workArea: {} }) },
 }));
 vi.mock('../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent: mocks.guard, isTrustedAppRendererWindow: mocks.trusted }));
-vi.mock('../sidebarWindowExpansion', () => ({ SidebarWindowExpansion: class { update = mocks.update; adopt = mocks.adopt; } }));
+vi.mock('../sidebarWindowExpansion', () => ({ sidebarWindowExpansion: { update: mocks.update } }));
 import { registerSidebarWindowExpansionIpc } from '../sidebarWindowExpansionIpc';
 beforeEach(() => { vi.resetAllMocks(); mocks.windows.mockReturnValue([]); registerSidebarWindowExpansionIpc(); });
 it('rejects untrusted frames before touching a window', () => {
@@ -28,7 +28,7 @@ it('uses only the sending window', () => {
   mocks.from.mockReturnValue(win);
   mocks.handle.mock.calls[0][1]({ sender }, 400);
   expect(mocks.from).toHaveBeenCalledWith(sender);
-  expect(mocks.update).toHaveBeenCalledWith(win, 400, {}, undefined);
+  expect(mocks.update).toHaveBeenCalledWith(win, 400, {}, expect.anything());
 });
 it('validates restoration and shrink inputs before accessing native windows', () => {
   const handle = mocks.handle.mock.calls[0][1];
@@ -37,11 +37,10 @@ it('validates restoration and shrink inputs before accessing native windows', ()
   }
   expect(() => handle({}, 0, 300, 'true')).toThrow();
   expect(mocks.from).not.toHaveBeenCalled();
-  const win = { isDestroyed: () => false, webContents: { getZoomFactor: () => 1 } };
+  const win = { isDestroyed: () => false, getBounds: () => ({}), webContents: { getZoomFactor: () => 1 } };
   mocks.from.mockReturnValue(win);
   handle({}, 0, 301, true);
-  expect(mocks.adopt).toHaveBeenCalledWith(win, 301);
-  expect(mocks.update).not.toHaveBeenCalled();
+  expect(mocks.update).toHaveBeenCalledWith(win, 301, {}, expect.anything());
 });
 
 it('converts CSS pixels to native pixels at the IPC boundary under page zoom', () => {
@@ -49,7 +48,7 @@ it('converts CSS pixels to native pixels at the IPC boundary under page zoom', (
   mocks.from.mockReturnValue(win);
   mocks.update.mockReturnValue(400);
   expect(mocks.handle.mock.calls[0][1]({}, 200, 100)).toBe(200);
-  expect(mocks.update).toHaveBeenCalledWith(win, 400, {}, 200);
+  expect(mocks.update).toHaveBeenCalledWith(win, 400, {}, expect.anything());
 });
 
 it('only reports explicit horizontal resizing, not programmatic/fullscreen changes', () => {

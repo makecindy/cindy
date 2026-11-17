@@ -70,3 +70,18 @@ kind 隐藏）；根横排里包着 `chat-main` 的那块是唯一的弹性区�
 重试和恢复的范围与故障范围相称：一个请求或一台控制端出故障，不拆掉其他设备正在用的共享
 连接。拓扑、通道准入与恢复约束见[远程与手机适配](remote-and-mobile-adaptation.md)，跨版本
 交互见[协议兼容](protocol-compatibility.md)。
+
+## 5. 共用主体与两个启动器（桌面装配、Node Host）
+
+任务、账号、插件、调度等业务主体由桌面和 Node Host（`apps/host`）共用，只写一份：
+
+- **共用主体不直接依赖 Electron。** 需要窗口、钥匙串、原生对话框等平台能力时，由主体声明
+  端口（工厂参数，例如 `createCodexProxyHost(ports)`），平台自己注入。
+- **桌面装配放在 `*.desktop.ts`。** 这类文件可以 import `electron`，只负责把桌面实现绑定到
+  端口；Host 在 `apps/host` 里绑定自己的实现。共用主体里不要再 import `*.desktop.ts`。
+- **给共用主体新增依赖或端口，两个启动器都要接。** 只改桌面装配，桌面的类型检查和测试都会
+  通过，Host 却要到运行时才报错。
+- **改完共用主体运行 Host 的测试和类型检查：** `pnpm --filter @cindy/host test` 与
+  `pnpm --filter @cindy/host typecheck`；CI 会在相关改动上执行同样的两项。
+
+Host 的实验范围与已知缺口见 [docs/host/headless-runtime-plan.md](../host/headless-runtime-plan.md)。

@@ -1,0 +1,53 @@
+[
+  {
+    "step": "build",
+    "code": 0,
+    "seconds": 3.49,
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "agent-net-sim",
+      "--features",
+      "kcp",
+      "--bin",
+      "compare",
+      "--bin",
+      "netperf"
+    ]
+  },
+  {
+    "step": "auto",
+    "code": 0,
+    "seconds": 49.18,
+    "scenarios": 32,
+    "seeds": 16,
+    "windows": [
+      128,
+      1024
+    ]
+  },
+  {
+    "step": "lean",
+    "code": 0,
+    "seconds": 10.63,
+    "scenarios": 32,
+    "seeds": 16,
+    "windows": [
+      128,
+      1024
+    ]
+  },
+  {
+    "step": "fast",
+    "code": 0,
+    "seconds": 161.82,
+    "scenarios": 32,
+    "seeds": 16,
+    "windows": [
+      128,
+      1024
+    ]
+  }
+]

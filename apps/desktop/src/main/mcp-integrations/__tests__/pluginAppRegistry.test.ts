@@ -7,6 +7,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { sharedPluginConnection, type AppServerConfig } from '../../mcp-apps/connection.js';
 import { McpAppsHost, appServerRevision } from '../../mcp-apps/host.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import { ghostHostUiApprovalTokens } from '../../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import type { McpAppRecord } from '../../../shared/mcpApps.js';
 import { publishPluginAppResult } from '../../mcp-apps/pluginCards.js';
 import { refreshGhostLocalizationIfChanged } from '../../cindy-brain/ghostLocalizationRefresh.js';
@@ -38,7 +40,7 @@ vi.mock('../../cindy-brain/ghostContentTree.js', async (importOriginal) => {
 });
 import { resetAppServers, setMcpAppsHost, readAppServer } from '../../mcp-apps/runtime.js';
 import { pagePermissionGrants } from '../../mcp-apps/pagePermissions.js';
-import { refreshPluginApps, pluginAppServerId } from '../plugin-app-registry.js';
+import { refreshPluginApps, pluginAppServerId, readPluginHostUi } from '../plugin-app-registry.js';
 // Production registration entry, no Node process or network. Existing App host tests
 // do not own plugin receipts. Minimal failure: missing ui fact or old owner callback.
 // Tier: unit; mocks only external account/storage boundaries, real SDK discovery.
@@ -91,6 +93,47 @@ function fixture() {
     },
   };
 }
+
+// Registered native settings do not imply approval for an MCP App transport.
+// Minimal failure: a settings-approved plugin with UI approval absent (unit).
+it('projects settings without opening UI servers and revokes an old UI binding independently', () => {
+  const f = fixture();
+  f.ghost.manifest.mcpApps = { ui: getPluginToolUi(f.ghost.manifest), host: {
+    views: [{ id: 'view', title: 'View', resourceUri: 'ui://form' }],
+    settings: [{ id: 'enabled', title: 'Enabled', type: 'boolean', default: true }] } };
+  f.ghost.approvedHostUi = ghostHostUiApprovalTokens(f.ghost.manifest);
+  const instance = installedGhostStoragePart(f.ghost);
+  f.refresh();
+  const old = readPluginHostUi(instance)!;
+  f.setGhost({ ...f.ghost, uiCapabilityApproved: undefined });
+  expect(() => old.config.plugin!.assertCurrent()).toThrow();
+  f.refresh();
+  expect(readPluginHostUi(instance)?.host.settings).toHaveLength(1);
+  expect(readPluginHostUi(instance)?.host.views).toBeUndefined();
+  expect(state.configs.size).toBe(0);
+});
+
+// Stable binding identity is part of View lifecycle: list/localization updates
+// cannot reload a live resource, while actual approval changes must revoke it (unit).
+it('preserves Host UI bindings across unchanged directory refreshes and revokes changed approval', () => {
+  const f = fixture();
+  f.ghost.manifest.mcpApps = { ui: getPluginToolUi(f.ghost.manifest), host: {
+    views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://form' }], capabilities: ['context'],
+  } };
+  f.ghost.approvedHostUi = ghostHostUiApprovalTokens(f.ghost.manifest);
+  const instance = installedGhostStoragePart(f.ghost);
+  f.refresh();
+  const binding = readPluginHostUi(instance);
+  expect(binding).toBeDefined();
+  f.ghost.manifest.name = 'Localized';
+  f.refresh();
+  expect(readPluginHostUi(instance)).toBe(binding);
+  expect(state.reads).toBe(0);
+  f.setGhost({ ...f.ghost, approval: { state: 'approved', revision: 'two' } });
+  f.refresh();
+  expect(readPluginHostUi(instance)).not.toBe(binding);
+  expect(() => binding!.config.plugin!.assertCurrent()).toThrow();
+});
 
 // PR #8752: locale-only refresh skipped App registry localization, so new cards
 // retained the old title. Unit through the real locale entry, registry and card writer;

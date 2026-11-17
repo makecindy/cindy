@@ -28,12 +28,14 @@ import {
   sharedTaskGuestPeer,
   sharedTaskHostPeer,
   sharedTaskTopics,
+  shortDeviceRef,
   type Envelope,
   type InvokePayload,
   type InvokeResultPayload,
   type LinkOpenPayload,
   type WsLike,
 } from '@cindy/device-link';
+import * as deviceLink from '@cindy/device-link';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc';
@@ -84,8 +86,12 @@ const inboundAcceptedRegistration = new Script(ts.transpileModule(inboundAccepte
 }).outputText);
 
 function productionFunction(source: ts.SourceFile, name: string): string {
-  const declaration = source.statements.find((node): node is ts.FunctionDeclaration =>
-    ts.isFunctionDeclaration(node) && node.name?.text === name);
+  let declaration: ts.FunctionDeclaration | undefined;
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === name) declaration = node;
+    else ts.forEachChild(node, visit);
+  };
+  visit(source);
   if (!declaration) throw new Error(`Missing production function: ${name}`);
   return declaration.getText(source).replace(/^export /, '');
 }
@@ -101,11 +107,16 @@ const remoteSubscribeEntry = new Script(ts.transpileModule(
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
 ).outputText);
 // Each simulated desktop needs its own module-level registry. Compile the actual
-// dependency-free module once, then instantiate separate exports; no resetModules.
+// module once, then instantiate separate exports; no resetModules. Its only runtime
+// import is the shared device-link package, handed to each instance as-is.
 const subscriptionRegistry = new Script(ts.transpileModule(
   readFileSync(resolve(mainRoot, 'device-link/subscriptions.ts'), 'utf8'),
   { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } },
 ).outputText);
+function subscriptionRegistryRequire(id: string): unknown {
+  if (id === '@cindy/device-link') return deviceLink;
+  throw new Error(`subscriptions.ts sandbox: unexpected runtime import ${id}`);
+}
 
 /** FIFO relay adapter only: production clients perform handshake, ACK and recovery. */
 class RecoveryRelay {
@@ -174,7 +185,7 @@ class RecoverySocket implements WsLike {
 
 function recoveryDesktop(relay: RecoveryRelay, id: string) {
   const exports = {} as typeof SubscriptionRegistry;
-  subscriptionRegistry.runInNewContext({ exports });
+  subscriptionRegistry.runInNewContext({ exports, require: subscriptionRegistryRequire });
   const registry = exports;
   const diagnostic = { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const client = new DeviceLinkClient({
@@ -185,7 +196,7 @@ function recoveryDesktop(relay: RecoveryRelay, id: string) {
   });
   const noOp = () => {};
   const context = createContext({
-    client, subscriptions: registry, isProviderSharePeer, isSharedTaskPeer,
+    client, ports: {}, subscriptions: registry, isProviderSharePeer, isSharedTaskPeer,
     cancelLinkAcceptRetry: noOp, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }),
     isControllerRevoked: () => false, resolveControllerName: (_peer: string, name: string) => name,
     // This recovery-only harness fixes permissions to allowed; bind the new
@@ -201,7 +212,8 @@ function recoveryDesktop(relay: RecoveryRelay, id: string) {
     scheduleLinkAcceptRetry: () => { throw new Error('Unexpected failed link accept'); },
     onOrdinaryPeerLinkAccepted: undefined,
     setOrdinaryPeerLinkAcceptedListener: (listener: (peer: string) => void) => { context.onOrdinaryPeerLinkAccepted = listener; },
-    log: diagnostic, shortId: (peer: string) => peer.slice(0, 8),
+    // Extracted production callbacks retain their real diagnostic dependency.
+    log: diagnostic, shortId: shortDeviceRef, shortDeviceRef,
   });
   const accept = inboundDispatch.runInContext(context) as
     (client: DeviceLinkClient, src: string, requestId: string, payload: LinkOpenPayload) => void;
@@ -262,7 +274,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     // presence(wasAvailable=undefined)同样必须触发重放,接续 DEVICE_OFFLINE
     // 结束的恢复轮次(#1520 review P1)。
     expect(deviceLinkHost).toContain('if (available && wasAvailable !== true)');
-    expect(deviceLinkHost).toContain('replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);');
+    expect(deviceLinkHost).toContain('replayActiveSubscriptions(`presence-online:${shortDeviceRef(snap.deviceId)}`, snap.deviceId);');
     expect(deviceLinkHost).toContain('createSubscriptionReplayScheduler({');
     // Preserve unknown after reconnect; only explicit unavailability stops retries.
     expect(deviceLinkHost).toContain(
@@ -298,6 +310,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
       client: { onPeerStreamAccepted: (callback: typeof callbacks[number]) => callbacks.push(callback) },
       isProviderSharePeer,
       parseSharedTaskPeer,
+      shortDeviceRef,
       replayActiveSubscriptions,
       sharedHostStreams,
       sharedHostSourceEpoch: 1,
@@ -508,7 +521,9 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     const dispatch = readFileSync(resolve(mainRoot, 'device-link/dispatch.ts'), 'utf8');
 
     expect(dispatch).toContain('DL_VOICE_DICTIONARY_LEARNING_CHANNEL');
-    expect(dispatch).toContain("import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';");
+    const desktop = readFileSync(resolve(mainRoot, 'device-link/dispatch.desktop.ts'), 'utf8');
+    expect(desktop).toContain("import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';");
+    expect(desktop).toContain('adviseAndRecordVoiceInputDictionaryLearning: (...args) => adviseAndRecordVoiceInputDictionaryLearning(...args)');
     expect(dispatch).toContain('if (payload.channel === DL_VOICE_DICTIONARY_LEARNING_CHANNEL)');
     expect(dispatch).toContain('handleMobileVoiceDictionaryLearning(src, (payload.args ?? [])[0])');
   });

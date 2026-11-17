@@ -1,5 +1,5 @@
 import type { AgentEvent } from '@cindy/maker-core';
-import type { AgentInputCoordinator } from './agent-input-coordinator.js';
+import type { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 
 /** Read at each boundary: delivery/idle callbacks may change recovery ownership. */
 export function isSessionErrorSuppressed(

@@ -62,8 +62,8 @@ export interface AutomationSessionGroup {
   /** 远程设备上的自动化分组（组键已按设备作用域隔离，组内会话同属这台设备）。 */
   deviceLinkDeviceId?: string;
   /**
-   * 伙伴例行任务分组（同一伙伴同一条规则）。规则由伙伴例行任务引擎管理，不是 schedule：
-   * 组头只提供标为已读，运行与编辑去伙伴设置的「例行任务」页。
+   * 旧伙伴例行任务分组（同一伙伴同一条规则）。不是 schedule，规则引擎已移除：
+   * 已有运行照旧成组可读，组头只提供标为已读。
    */
   teammateRoutine?: { botId: string; routineId: string };
   title: string;

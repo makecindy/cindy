@@ -55,6 +55,13 @@ module.exports = {
       reasons: ["native message menu assets"],
     }))
     .concat([
+      ...["Cargo.toml", "Cargo.lock", "src", "include", "CindyAgentNetNative.podspec", "build-ios.mjs", "build-android.mjs"].map((entry) => ({
+        type: entry === "src" || entry === "include" ? "dir" : "file",
+        filePath: `../../packages/agent-net-native/${entry}`,
+        reasons: ["Agent-Net native transport implementation"],
+      })),
+      { type: "dir", filePath: "../../packages/agent-net-core/src", reasons: ["Agent-Net native state machine"] },
+      { type: "file", filePath: "../../packages/agent-net-core/Cargo.toml", reasons: ["Agent-Net native core dependency contract"] },
       // These files are read by config plugins, then compiled/bundled into
       // the share extension. Metro cannot update them on an installed binary.
       ...[
@@ -67,6 +74,11 @@ module.exports = {
         type: "dir",
         filePath: "plugins/communication-notifications",
         reasons: ["notification service extension native source"],
+      },
+      {
+        type: "dir",
+        filePath: "plugins/notification-content",
+        reasons: ["notification content extension native source"],
       },
       {
         type: "dir",

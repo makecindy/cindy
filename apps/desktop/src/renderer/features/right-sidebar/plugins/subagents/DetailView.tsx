@@ -35,6 +35,7 @@ import type {
 import { AssistantMessage } from '@/components/chat/AssistantMessage';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { UserMessage } from '@/components/chat/UserMessage';
+import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import {
@@ -275,6 +276,7 @@ function PiDurableDetailView({
   onDiagnose,
 }: SubagentDetailViewProps) {
   const { t } = useTranslation();
+  const pluginUi = usePluginUiMessageCandidates();
   const { preference: sendShortcutPreference } = useComposerSendShortcutPreference();
   const [controlDrafts, setControlDrafts] = useState<Record<string, string>>({});
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
@@ -550,6 +552,7 @@ function PiDurableDetailView({
 
           {showAssignmentFallback ? (
             <UserMessage
+              pluginUi={pluginUi}
               workingDir={workdir}
               allowPrivilegedLinks={allowPrivilegedLinks}
               content={assignment}
@@ -571,6 +574,7 @@ function PiDurableDetailView({
               render it a second time. */}
           {showDurableResultFallback ? (
             <AssistantMessage
+              pluginUi={pluginUi}
               workingDir={workdir}
               allowPrivilegedLinks={allowPrivilegedLinks}
               content={visibleResult}

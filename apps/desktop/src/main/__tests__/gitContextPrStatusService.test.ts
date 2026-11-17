@@ -17,10 +17,111 @@ import {
 import type { GhCliTokenReadResult } from '../git-context/ghCliTokenSource';
 import { fetchPrSummary, summarizeChecks } from '../git-context/prSummary';
 import { PrFollowWatch, prStatusSignature } from '../git-context/prFollowWatch';
+import { followedGithubPrs } from '../scheduler-host/webhook/github';
+import { cachedGithubPrHeads, refreshGithubPrEvents } from '../git-context/githubPrEvents';
 import type { GithubClient } from '@cindy/github-client';
 
 const Q = { owner: 'makecindy', repo: 'cindy', prNumber: 85 };
 const TOKEN_OK = async (): Promise<GhCliTokenReadResult> => ({ ok: true, token: 'ghp_x' });
+
+// Real shared status cache/event reader, synthetic clock and network. Verify request
+// counts and current facts, not implementation strings: healthy vs failed delivery,
+// explicit refresh, account switching and an overflow larger than the API batch cap.
+describe('GitHub App status refresh policy', () => {
+  it('reduces only covered PR reads, keeps bounded reconciliation, and falls back immediately when unhealthy', async () => {
+    let now = 0;
+    let healthy = true;
+    const fetchPr = vi.fn(async () => remote({}));
+    const svc = new PrStatusService({ readToken: TOKEN_OK, fetchPr, now: () => now, staleTtlMs: 0,
+      eventCacheTtlMs: q => healthy && q.prNumber === Q.prNumber ? 300_000 : undefined });
+    const other = { ...Q, prNumber: 86 };
+    await svc.getStatuses([Q, other]);
+    now = 90_000;
+    await svc.getStatuses([Q, other]);
+    expect(fetchPr).toHaveBeenCalledTimes(3); // only the uncovered PR polls
+    now = 180_000;
+    await svc.getStatuses([Q]);
+    expect(fetchPr).toHaveBeenCalledTimes(3);
+    now = 300_000;
+    await svc.getStatuses([Q]);
+    expect(fetchPr).toHaveBeenCalledTimes(4); // bounded read even on a quiet socket
+    now = 390_000;
+    healthy = false;
+    await svc.getStatuses([Q]);
+    expect(fetchPr).toHaveBeenCalledTimes(5); // original 60s TTL, no extended stale window
+    healthy = true;
+    await svc.getStatuses([Q], { refresh: true });
+    expect(fetchPr).toHaveBeenCalledTimes(6); // user/event force refresh bypasses TTL
+  });
+
+  // Unit: one review changes the summary and supplies an explicit doorbell. The real
+  // observer and event reader must produce one run, not a deferred duplicate at 60s.
+  it('coalesces a changed summary and its explicit doorbell but keeps unchanged comments', async () => {
+    vi.useFakeTimers();
+    let head = 'first';
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+    const runNow = vi.fn(async () => null);
+    const watch = new PrFollowWatch({
+      listActive: async () => [{ id: 'follow', status: 'active', recurring: true,
+        preRunHook: { command: `node gate.mjs ${url}` } }] as never,
+      inflight: () => 0, autoRunAllowed: () => true, hasCapacity: () => true, runNow,
+    });
+    const svc = new PrStatusService({ readToken: TOKEN_OK, fetchPr: async () => remote({ head_sha: head }),
+      onObserved: (query, result) => watch.observe(query, result) });
+    try {
+      await svc.getStatuses([Q]);
+      head = 'second';
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'event', notify: [url] });
+      expect(runNow).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).toHaveBeenCalledTimes(1);
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'event', notify: [url] });
+      expect(runNow).toHaveBeenCalledTimes(2);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it('times out a hung PR read without sending a follow-up notification', async () => {
+    vi.useFakeTimers();
+    const notify = vi.fn();
+    try {
+      const service = { getStatuses: () => new Promise(() => {}) } as unknown as PrStatusService;
+      const url = 'https://github.com/example/project/pull/1';
+      const check = refreshGithubPrEvents(service, { notify, observedSignature: () => undefined }, [url], () => true, { reason: 'event', notify: [url] });
+      const rejected = expect(check).rejects.toThrow('PR_VERIFICATION_TIMEOUT');
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+      expect(notify).not.toHaveBeenCalled();
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  it('rechecks all overflow PRs, propagates failures for retry, and keeps old-owner heads private', async () => {
+    let scope = 'first';
+    let current = true;
+    let fail = false;
+    const fetchPr = vi.fn(async () => { if (fail) throw new Error('offline'); return remote({ head_sha: 'a'.repeat(40) }); });
+    const svc = new PrStatusService({ readToken: TOKEN_OK, fetchPr, scope: async () => scope });
+    const notify = vi.fn(async () => {});
+    const urls = Array.from({ length: 12 }, (_, i) => `https://github.com/example/project/pull/${i + 1}`);
+    await refreshGithubPrEvents(svc, { notify, observedSignature: () => undefined }, urls, () => current, { reason: 'overflow', notify: urls });
+    expect(fetchPr).toHaveBeenCalledTimes(12);
+    expect(notify).toHaveBeenCalledTimes(12);
+    expect(Object.keys(await cachedGithubPrHeads(svc, urls))).toHaveLength(12);
+    expect(fetchPr).toHaveBeenCalledTimes(12); // head lookup never polls
+    notify.mockClear();
+    await refreshGithubPrEvents(svc, { notify, observedSignature: () => undefined }, [urls[0]!], () => current, { reason: 'event', notify: [] });
+    expect(notify).not.toHaveBeenCalled(); // unchanged CI does not force the gate
+    fail = true;
+    await expect(refreshGithubPrEvents(svc, { notify, observedSignature: () => undefined }, urls, () => current, { reason: 'overflow', notify: urls }))
+      .rejects.toThrow('PR_VERIFICATION_FAILED');
+    scope = 'other';
+    expect(await cachedGithubPrHeads(svc, urls)).toEqual({});
+    current = false;
+    const reads = fetchPr.mock.calls.length;
+    await refreshGithubPrEvents(svc, { notify, observedSignature: () => undefined }, urls, () => current, { reason: 'overflow', notify: urls });
+    expect(fetchPr).toHaveBeenCalledTimes(reads);
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
 
 // Production summary + cache entry points. New counts must cover both GitHub APIs,
 // truncated and unavailable results, absent from the prior four-state tests.
@@ -704,7 +805,7 @@ describe('PR follow watch', () => {
       await svc.getStatuses([Q], { waitForFresh: true });
       await new Promise((resolve) => setImmediate(resolve));
     };
-    return { look, runNow, inflight, hasCapacity, autoRunAllowed };
+    return { look, runNow, inflight, hasCapacity, autoRunAllowed, watch };
   }
 
   it('runs only recurring schedules naming this PR, once per change, skipping in-flight and recent ones', async () => {
@@ -747,6 +848,86 @@ describe('PR follow watch', () => {
     await look(10);
     await look(100_000, 'b2');
     expect(runNow).not.toHaveBeenCalled();
+  });
+
+  // App comments can be new without changing the PR summary. Queued wakeups retain owner guards.
+  it('handles doorbells without a baseline and drops pending work when its connection changes', async () => {
+    const { watch, runNow, hasCapacity, look } = setup();
+    let current = true;
+    hasCapacity.mockReturnValue(false);
+    await watch.notify('https://github.com/makecindy/cindy/pull/85', () => current);
+    expect(runNow).not.toHaveBeenCalled();
+    current = false;
+    hasCapacity.mockReturnValue(true);
+    await look(10);
+    expect(runNow).not.toHaveBeenCalled();
+    await watch.notify('https://github.com/makecindy/cindy/pull/85', () => true);
+    expect(runNow).toHaveBeenCalledTimes(1);
+    await watch.notify('https://github.com/makecindy/cindy/pull/85', () => true);
+    expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  // Explicit PR pre-run checks keep their existing event wakeup. Busy peers must
+  // recover without another GitHub read, and must not rerun siblings that already handled the bell.
+  it('wakes gated follows after capacity returns without repeating an already handled sibling', async () => {
+    vi.useFakeTimers();
+    let busy = true;
+    const url = 'https://github.com/example/project/pull/85';
+    const runNow = vi.fn<(id: string) => Promise<null>>(async () => null);
+    const watch = new PrFollowWatch({
+      listActive: async () => ['first', 'busy', 'paused', 'explicit-app'].map(id => schedule(id, url, {
+        status: id === 'paused' ? 'paused' : 'active',
+        webhookTrigger: id === 'explicit-app' ? { source: { preset: 'github-app', repositories: ['example/project'] } } : undefined,
+      })),
+      inflight: id => id === 'busy' && busy ? 1 : 0,
+      hasCapacity: () => true, autoRunAllowed: () => true, runNow,
+    });
+    try {
+      await watch.notify(url);
+      expect(runNow.mock.calls.map(call => call[0])).toEqual(['first']);
+      busy = false;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(runNow.mock.calls.map(call => call[0])).toEqual(['first', 'busy']);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(runNow).toHaveBeenCalledTimes(2);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  // PR #9378 security review: a PR URL in an ordinary script is not event consent.
+  // Unit: subscription discovery + real comment/status wakeups, including deferred work;
+  // the previous script-only happy path did not distinguish consent from incidental URLs.
+  it('does not subscribe or wake ordinary scripts that only mention a PR URL', async () => {
+    vi.useFakeTimers();
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+    let tasks = [schedule('ordinary', url, {
+      preRunHook: undefined, executionMode: 'script', scriptConfig: { command: `node report.mjs ${url}` },
+    })];
+    const runNow = vi.fn(async () => null);
+    let capacity = false;
+    const watch = new PrFollowWatch({ listActive: async () => tasks,
+      inflight: () => 0, hasCapacity: () => capacity, autoRunAllowed: () => true, runNow });
+    const ok = (headSha: string) => ({ ok: true, status: 'open', prNumber: 85, headSha }) as never;
+    try {
+      expect(followedGithubPrs(tasks)).toEqual([]);
+      await watch.notify(url);
+      watch.observe(Q, ok('old'));
+      watch.observe(Q, ok('new'));
+      await vi.advanceTimersByTimeAsync(5_000);
+      capacity = true;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).not.toHaveBeenCalled();
+
+      // Removing a genuine follower's gate while it waits must also revoke its wakeup.
+      capacity = false;
+      tasks = [schedule('ordinary', url)];
+      expect(followedGithubPrs(tasks)).toEqual([url]);
+      await watch.notify(url);
+      tasks = [schedule('ordinary', url, { preRunHook: undefined,
+        executionMode: 'script', scriptConfig: { command: `node report.mjs ${url}` } })];
+      capacity = true;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).not.toHaveBeenCalled();
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
 
   it('treats failed reads as no news and keeps the baseline', async () => {

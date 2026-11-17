@@ -5,6 +5,8 @@ import { useRef, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Tooltip } from '@/components/ui/tooltip';
+import { toast } from '@/lib/toast';
+import { copyTextToClipboard } from '../../../../main/textClipboard';
 import type { PrStatusResult, SessionPrRef, SessionPrRefAction } from '@cindy/maker-shared';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
@@ -88,7 +90,7 @@ describe('GitContextBadge', () => {
       </Tooltip.Provider>,
     );
 
-    expect(screen.getByRole('button', { name: /pr.openAria/ }).textContent).toContain('#7');
+    expect(screen.getByRole('button', { name: /pr.summaryAria/ }).textContent).toContain('#7');
     expect(screen.queryByLabelText(/ccAgent\.gitContext\.branchAria/)).toBeNull();
   });
 
@@ -107,7 +109,7 @@ describe('GitContextBadge', () => {
           <GitContextBadge session={{ ...dialogueSession, deviceLinkDeviceId }} />
         </Tooltip.Provider>,
       );
-      const triggers = screen.getAllByRole('button', { name: /pr.openAria/ });
+      const triggers = screen.getAllByRole('button', { name: /pr.summaryAria/ });
       expect(triggers).toHaveLength(2);
       pointer(triggers[0], 'over');
       advance(300);
@@ -162,24 +164,25 @@ describe('GitContextBadge', () => {
         <GitContextBadge session={dialogueSession} />
       </Tooltip.Provider>,
     );
-    expect(screen.queryAllByRole('button', { name: /pr.openAria/ })).toHaveLength(0);
+    expect(screen.queryAllByRole('button', { name: /pr.summaryAria/ })).toHaveLength(0);
     expect(manager()).toBeTruthy();
   });
 
   // Unit regression for review of #8238: the gear lives in a portaled panel, so
   // keyboard users need Tab to hand focus over without the preview closing.
-  it('键盘可从PR徽标Tab进入齿轮，预览不因焦点移入而关闭，Shift+Tab返回', async () => {
+  it('键盘可从PR徽标Tab进入链接，预览不因焦点移入而关闭，Shift+Tab返回', async () => {
     const {
       triggers: [trigger],
     } = renderHeader();
     vi.spyOn(trigger, 'matches').mockImplementation((selector) => selector === ':focus-visible');
     fireEvent.focus(trigger);
     const gear = screen.getByRole('button', { name: 'ccAgent.gitContext.pr.manage.title' });
+    const link = screen.getByRole('link');
     fireEvent.keyDown(trigger, { key: 'Tab' });
-    expect(document.activeElement).toBe(gear);
-    fireEvent.blur(trigger, { relatedTarget: gear });
+    expect(document.activeElement).toBe(link);
+    fireEvent.blur(trigger, { relatedTarget: link });
     expect(screen.getByRole('dialog')).toBeTruthy();
-    fireEvent.keyDown(gear, { key: 'Tab', shiftKey: true });
+    fireEvent.keyDown(link, { key: 'Tab', shiftKey: true });
     expect(document.activeElement).toBe(trigger);
     gear.focus();
     await act(async () => {
@@ -190,10 +193,71 @@ describe('GitContextBadge', () => {
     ]);
   });
 
-  // Unit: one PR is now one navigation button. Previous tests pinned a popover
-  // on click, which is no longer a supported behavior. Minimum timing inputs:
-  // first hover 299/300ms, an already-open sibling, leaving and re-entering.
-  // Production header and fake timers verify focus, navigation and visible data.
+  // Unit regression #10146: real GitContextBadge copies unissued PR/MR URLs.
+  // Existing hover/navigation tests never clicked Copy. The previous Main-only
+  // bridge rejects these URLs; keep that boundary real and verify local clipboard
+  // contents plus success/failure feedback through the production button.
+  it.each([
+    { provider: 'github', fails: false },
+    { provider: 'gitlab', fails: false },
+    { provider: 'github', fails: true },
+  ])('copies $provider links locally (write fails: $fails)', async ({ provider, fails }) => {
+    const { context, rerender } = renderHeader();
+    const ref = provider === 'gitlab'
+      ? { ...context.prRefs[0], provider: 'gitlab' as const, host: 'git.example.com', owner: 'group/sub' }
+      : context.prRefs[0];
+    const url = provider === 'gitlab'
+      ? 'https://git.example.com/group/sub/repo/-/merge_requests/7'
+      : 'https://github.com/octo/repo/pull/7';
+    let clipboardText = 'previous clipboard';
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const writeText = vi.fn(async (text: string) => {
+      if (fails) throw new Error('clipboard unavailable');
+      clipboardText = text;
+    });
+    const nativeWrite = vi.fn();
+    const copyIssuedText = (params: { text: string }) => copyTextToClipboard(
+      {} as Parameters<typeof copyTextToClipboard>[0], params, {
+        assertTrustedSender: () => {}, assertFocusedSender: () => {},
+        write: nativeWrite, read: () => clipboardText,
+      },
+    );
+    Object.assign(window.electronAPI, { copyTextToClipboard: copyIssuedText });
+    // Unregistered PR/MR links stay rejected by the Main-issued-text API.
+    await act(async () => {
+      await expect(copyIssuedText({ text: url })).rejects.toThrow('PERMISSION_DENIED');
+    });
+    const success = vi.spyOn(toast, 'success');
+    const error = vi.spyOn(toast, 'error');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      gitContextMock.mockReturnValue({ ...context, prRefs: [ref], prStatuses: new Map() });
+      rerender(<Tooltip.Provider><GitContextBadge session={dialogueSession} /></Tooltip.Provider>);
+      fireEvent.click(screen.getByRole('button', { name: /summaryAria/ }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'sharing.copyLink' }));
+      });
+      expect(clipboardText).toBe(fails ? 'previous clipboard' : url);
+      expect(nativeWrite).not.toHaveBeenCalled();
+      if (fails) {
+        expect(error).toHaveBeenCalledWith('ccAgent.sidebar.deepLink.copyFailed');
+        expect(success).not.toHaveBeenCalled();
+      } else {
+        expect(success).toHaveBeenCalledWith('ccAgent.sidebar.deepLink.copied');
+        expect(error).not.toHaveBeenCalled();
+      }
+    } finally {
+      if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+      success.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  // Unit: clicking the production header must keep its existing summary open;
+  // only its link navigates. Previous coverage required direct navigation.
+  // Minimal regression: click a chip, leave for 300ms, then click the panel link.
+  // Fake timers also cover hover previews, dismissal and sibling transitions.
   function renderHeader(unresolvedCount = 2) {
     vi.useFakeTimers();
     const openExternal = vi.fn();
@@ -245,7 +309,7 @@ describe('GitContextBadge', () => {
         <GitContextBadge session={dialogueSession} />
       </Tooltip.Provider>,
     );
-    const triggers = screen.getAllByRole('button', { name: /pr.openAria/ });
+    const triggers = screen.getAllByRole('button', { name: /pr.summaryAria/ });
     const composer = screen.getByRole('textbox');
     composer.focus();
     return { ...view, triggers, composer, openExternal, context };
@@ -317,27 +381,50 @@ describe('GitContextBadge', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('评论和检查区域都直接打开PR，点击收起并抑制原位重弹，标题仍可打开链接', () => {
+  it('点击PR、评论或检查区域固定浮窗，再点收起；只有浮窗内链接跳转', () => {
     const {
       triggers: [trigger],
       openExternal,
     } = renderHeader();
-    pointer(trigger, 'over');
-    advance(300);
-    fireEvent.click(screen.getByRole('link'));
-    expect(openExternal).toHaveBeenLastCalledWith('https://github.com/octo/repo/pull/7');
-    for (const icon of ['message-square', 'circle-x']) {
-      fireEvent.click(trigger.querySelector(`.lucide-${icon}`)!);
-      expect(openExternal).toHaveBeenLastCalledWith('https://github.com/octo/repo/pull/7');
-      expect(screen.queryByRole('dialog')).toBeNull();
-      pointer(trigger, 'over');
-      advance(500);
-      expect(screen.queryByRole('dialog')).toBeNull();
-      pointer(trigger, 'out');
+    for (const target of [
+      trigger,
+      trigger.querySelector('.lucide-message-square')!,
+      trigger.querySelector('.lucide-circle-x')!,
+    ]) {
       pointer(trigger, 'over');
       advance(300);
+      fireEvent.click(target);
+      pointer(trigger, 'out');
+      advance(500);
       expect(screen.getByRole('dialog')).toBeTruthy();
+      expect(trigger.getAttribute('aria-expanded')).toBe('true');
+      expect(openExternal).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('link'));
+      expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://github.com/octo/repo/pull/7');
+      openExternal.mockClear();
+      fireEvent.click(trigger);
+      expect(screen.queryByRole('dialog')).toBeNull();
     }
+  });
+
+  it('点击立即打开，Escape关闭；切换PR后不残留固定状态', () => {
+    const {
+      triggers: [a, b],
+      openExternal,
+    } = renderHeader();
+    fireEvent.click(a);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    fireEvent.keyDown(a, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(a);
+    pointer(b, 'over');
+    expect(screen.getByRole('link').textContent).toContain('#8');
+    pointer(b, 'out');
+    pointer(a, 'over');
+    pointer(a, 'out');
+    advance(300);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(openExternal).not.toHaveBeenCalled();
   });
 
   it('focus-visible显示只读面板且失焦/Escape关闭，鼠标及触屏焦点不打开', () => {
@@ -363,7 +450,7 @@ describe('GitContextBadge', () => {
     matches.mockRestore();
   });
 
-  it('触屏和笔只点击跳转，不打开悬停面板', () => {
+  it('触屏和笔点击打开浮窗，不触发悬停或直接跳转', () => {
     const {
       triggers: [trigger],
       openExternal,
@@ -375,7 +462,10 @@ describe('GitContextBadge', () => {
       advance(500);
       expect(screen.queryByRole('dialog')).toBeNull();
       fireEvent.click(trigger);
-      expect(openExternal).toHaveBeenLastCalledWith('https://github.com/octo/repo/pull/7');
+      expect(screen.getByRole('dialog')).toBeTruthy();
+      expect(openExternal).not.toHaveBeenCalled();
+      fireEvent.click(trigger);
+      expect(screen.queryByRole('dialog')).toBeNull();
       fireEvent.blur(trigger);
       pointer(trigger, 'out', type);
     }
@@ -393,7 +483,7 @@ describe('GitContextBadge', () => {
     );
     gitContextMock.mockReturnValue({ ...context, prStatuses: new Map() });
     rerender(header);
-    pointer(screen.getAllByRole('button', { name: /pr.openAria/ })[0], 'over');
+    pointer(screen.getAllByRole('button', { name: /pr.summaryAria/ })[0], 'over');
     advance(300);
     expect(screen.getByText('ccAgent.gitContext.pr.statusNotFetched')).toBeTruthy();
     expect(screen.queryByText('ccAgent.gitContext.pr.statusUnknown')).toBeNull();
@@ -421,10 +511,10 @@ describe('GitContextBadge', () => {
     expect(screen.queryByText('ccAgent.gitContext.pr.statusNotFetched')).toBeNull();
   });
 
-  // Unit: the new MR guidance must name its own host and keep click-to-open.
-  // Prior GitHub guidance opens a setup dialog; an MR must never take that path.
+  // Unit: MR summaries retain host-specific guidance and their own link;
+  // an MR must never open the GitHub setup dialog.
   it.each(['glab-missing', 'glab-not-logged-in'] as const)(
-    'shows host-specific MR guidance for %s and still opens the MR',
+    'shows host-specific MR guidance for %s and opens the MR from its summary',
     (reason) => {
       const { context, rerender, openExternal } = renderHeader();
       const ref = {
@@ -445,7 +535,7 @@ describe('GitContextBadge', () => {
           <GitContextBadge session={dialogueSession} />
         </Tooltip.Provider>,
       );
-      const trigger = screen.getByRole('button', { name: /gitlab.openAria/ });
+      const trigger = screen.getByRole('button', { name: /gitlab.summaryAria/ });
       pointer(trigger, 'over');
       advance(300);
       expect(
@@ -455,6 +545,8 @@ describe('GitContextBadge', () => {
       ).toContain('git.example.com');
       expect(screen.queryByRole('button', { name: /guidance/ })).toBeNull();
       fireEvent.click(trigger);
+      expect(openExternal).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('link'));
       expect(openExternal).toHaveBeenLastCalledWith(
         'https://git.example.com/group/sub/repo/-/merge_requests/7',
       );
@@ -470,7 +562,7 @@ describe('GitContextBadge', () => {
             />
           </Tooltip.Provider>,
         );
-        pointer(screen.getByRole('button', { name: /gitlab.openAria/ }), 'over');
+        pointer(screen.getByRole('button', { name: /gitlab.summaryAria/ }), 'over');
         advance(300);
         expect(screen.queryByText(/gitlab\.(missing|notLoggedIn)/)).toBeNull();
         expect(
@@ -499,10 +591,9 @@ describe('GitContextBadge', () => {
         </Tooltip.Provider>,
       );
       const trigger = screen.getByRole('button', {
-        name: reason === 'gh-missing' ? /guidance.install.aria/ : /guidance.login.aria/,
+        name: /pr.summaryAria.*7/,
       });
-      pointer(trigger, 'over');
-      advance(300);
+      fireEvent.click(trigger);
       expect(screen.getByRole('link').textContent).toContain('octo/repo #7');
       expect(
         screen.getByText(
@@ -592,7 +683,7 @@ describe('GitContextBadge', () => {
           <GitContextBadge session={dialogueSession} />
         </Tooltip.Provider>,
       );
-      const trigger = screen.getAllByRole('button', { name: /pr.openAria/ })[0];
+      const trigger = screen.getAllByRole('button', { name: /pr.summaryAria/ })[0];
       expect(trigger.querySelector('svg')?.style.color).toBe(color);
       expect(trigger.getAttribute('aria-label')?.includes('pr.conflicts')).toBe(shown);
       pointer(trigger, 'over');
@@ -621,7 +712,7 @@ describe('GitContextBadge', () => {
         <GitContextBadge session={dialogueSession} />
       </Tooltip.Provider>,
     );
-    const trigger = screen.getAllByRole('button', { name: /pr.openAria/ })[0];
+    const trigger = screen.getAllByRole('button', { name: /pr.summaryAria/ })[0];
     expect(trigger.querySelector('.lucide-git-merge')).toBeTruthy();
     expect(trigger.querySelector(`.lucide-${icon}`)).toBeNull();
     pointer(trigger, 'over');
@@ -647,7 +738,7 @@ describe('GitContextBadge', () => {
         <GitContextBadge session={dialogueSession} />
       </Tooltip.Provider>,
     );
-    const trigger = screen.getAllByRole('button', { name: /pr.openAria/ })[0];
+    const trigger = screen.getAllByRole('button', { name: /pr.summaryAria/ })[0];
     expect(trigger.querySelector(`.lucide-${icon}`)).toBeTruthy();
     expect(trigger.querySelector(`.lucide-${icon}`)?.parentElement?.textContent).toBe('');
     pointer(trigger, 'over');

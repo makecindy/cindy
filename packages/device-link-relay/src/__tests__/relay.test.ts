@@ -6,6 +6,7 @@
  * - Bug/规则依据:docs/self-hosted-relay-plan.md §5.2、§6(线协议必须与官方 relay 对齐,客户端才能
  *   不改协议直接连);§8 安全(凭证认证、加入码一次性、主人才能管理、媒体签名地址)。
  * - 现有覆盖缺口:新包,此前没有中转服务端实现;scripts/device-link/relayFixture.ts 只是测试用假中转。
+ *   agent-net 数据报转发(docs/agent-net-plan.md 第 7 步)默认关闭,关闭时 `/relay/info` 与升级路径必须和以前一样。
  * - 最小失败输入:每条用例各对应一个结果分支,例如伪造 src、重复使用加入码、成员调用管理接口、
  *   篡改媒体签名、上传超过声明大小、同意时附的证书不是发给申请里那把公钥、加入链接里的主人公钥与中转不符。
  * - tier:unit。只用本机回环端口与临时目录,无外部服务;过期用注入时钟,不做真实等待。
@@ -64,7 +65,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function setup(options: { publicUrl?: string; trustProxyHeaders?: boolean } = {}): Promise<Harness> {
+async function setup(options: { publicUrl?: string; trustProxyHeaders?: boolean; agentNet?: boolean } = {}): Promise<Harness> {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'cindy-relay-test-'));
   const owner = createDeviceCredential();
   const ownerKey = createRelaySigningKey(crypto);
@@ -658,5 +659,108 @@ describe('media relay', () => {
     expect(stored).toEqual([]);
     const get = await api(h.base, 'POST', '/api/device-link/media/presign-get', { credential: h.ownerCredential, body: { key: put.json.key } });
     expect(get.status).toBe(404);
+  });
+});
+
+/** agent-net 数据报帧:`[1][设备号长度][设备号][长度 2,大端][数据报]…`,线协议见 src/agentNet.ts。 */
+function agentNetFrame(deviceId: string, datagrams: Buffer[]): Buffer {
+  const id = Buffer.from(deviceId, 'utf8');
+  const parts = datagrams.flatMap((datagram) => [Buffer.from([datagram.length >> 8, datagram.length & 0xff]), datagram]);
+  return Buffer.concat([Buffer.from([1, id.length]), id, ...parts]);
+}
+
+interface AgentNetPeer {
+  ws: WebSocket;
+  frames: Buffer[];
+  next(): Promise<Buffer>;
+  closed: Promise<number>;
+}
+
+async function openAgentNet(h: Harness, credential: string): Promise<AgentNetPeer> {
+  const ws = new WebSocket(`${h.base.replace(/^http/, 'ws')}/api/device-link/agent-net`, { headers: { authorization: `CindyRelay ${credential}` } });
+  ws.on('error', () => undefined);
+  const frames: Buffer[] = [];
+  const waiters: Array<(frame: Buffer) => void> = [];
+  ws.on('message', (data) => {
+    const frame = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+    const waiter = waiters.shift();
+    if (waiter) waiter(frame);
+    else frames.push(frame);
+  });
+  const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
+  cleanups.push(async () => {
+    ws.terminate();
+  });
+  await new Promise<void>((resolve, reject) => {
+    ws.once('open', () => resolve());
+    ws.once('unexpected-response', (_req, res) => reject(new Error(`upgrade rejected ${res.statusCode}`)));
+  });
+  return {
+    ws,
+    frames,
+    closed,
+    next: () => (frames.length > 0 ? Promise.resolve(frames.shift()!) : new Promise((resolve) => waiters.push(resolve))),
+  };
+}
+
+function agentNetUpgradeStatus(base: string, authorization?: string): Promise<number> {
+  const ws = new WebSocket(`${base.replace(/^http/, 'ws')}/api/device-link/agent-net`, { headers: authorization ? { authorization } : {} });
+  ws.on('error', () => undefined);
+  cleanups.push(async () => {
+    ws.terminate();
+  });
+  return new Promise((resolve) => {
+    ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0));
+    ws.once('open', () => resolve(101));
+  });
+}
+
+describe('agent-net datagram relay (experimental)', () => {
+  it('stays off unless enabled: no feature in /relay/info and no upgrade path', async () => {
+    const h = await setup();
+    const info = await api(h.base, 'GET', '/api/device-link/relay/info');
+    expect(info.json.features).toEqual(['pairing-v1', 'device-signatures-v1']);
+    expect(await agentNetUpgradeStatus(h.base, `CindyRelay ${h.ownerCredential}`)).toBe(404);
+  });
+
+  it('forwards datagram batches with the relay-assigned sender and drops what it cannot deliver', async () => {
+    const h = await setup({ agentNet: true });
+    const info = await api(h.base, 'GET', '/api/device-link/relay/info');
+    expect(info.json.features).toContain('agent-net-relay-v1');
+    expect(await agentNetUpgradeStatus(h.base)).toBe(401);
+    expect(await agentNetUpgradeStatus(h.base, 'Bearer whatever')).toBe(401);
+
+    const member = await pair(h, 'member-phone');
+    const owner = await openAgentNet(h, h.ownerCredential);
+    const phone = await openAgentNet(h, member);
+    const batch = [Buffer.from([0xa0, 1, 2, 3]), Buffer.alloc(1400, 7)];
+    owner.ws.send(agentNetFrame('member-phone', batch));
+    // 收到的帧里设备号换成了发件设备,数据报原样。
+    expect(await phone.next()).toEqual(agentNetFrame(OWNER_DEVICE, batch));
+
+    // 发给不在线的设备、发给自己、文本帧、格式不对的帧都直接丢掉,不回错误、不断开。
+    phone.ws.send(agentNetFrame('nobody', [Buffer.from([1])]));
+    phone.ws.send(agentNetFrame('member-phone', [Buffer.from([1])]));
+    phone.ws.send('{"kind":"push"}');
+    phone.ws.send(Buffer.from([1, 40, 0x6f]));
+    phone.ws.send(agentNetFrame(OWNER_DEVICE, [Buffer.from([9, 9])]));
+    expect(await owner.next()).toEqual(agentNetFrame('member-phone', [Buffer.from([9, 9])]));
+    expect(phone.frames).toEqual([]);
+
+    // 同一台设备再连一条,旧的被顶掉,之后的帧送到新的那条。
+    const again = await openAgentNet(h, member);
+    expect(await phone.closed).toBe(4409);
+    owner.ws.send(agentNetFrame('member-phone', [Buffer.from([5])]));
+    expect(await again.next()).toEqual(agentNetFrame(OWNER_DEVICE, [Buffer.from([5])]));
+  });
+
+  it('disconnects a removed device at once and refuses its credential afterwards', async () => {
+    const h = await setup({ agentNet: true });
+    const member = await pair(h, 'member-laptop');
+    const laptop = await openAgentNet(h, member);
+    const removed = await api(h.base, 'DELETE', '/api/device-link/devices/member-laptop', { credential: h.ownerCredential });
+    expect(removed.status).toBe(200);
+    expect(await laptop.closed).toBe(4410);
+    expect(await agentNetUpgradeStatus(h.base, `CindyRelay ${member}`)).toBe(401);
   });
 });

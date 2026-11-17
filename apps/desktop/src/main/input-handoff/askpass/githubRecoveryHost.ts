@@ -6,7 +6,7 @@ import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { getSessionFsSnapshot } from '../../localDb/ipc/sessions.js';
 import { getSharedGhCliTokenSource } from '../../git-context/ghCliTokenSource.js';
 import { githubConnection } from '../../git-context/githubConnection.js';
-import { outboundFetch } from '../../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../../maker-host/outbound-fetch.desktop.js';
 import { readGhostSecret } from '../../secrets/providerSecretStore.js';
 import { createGithubAuthRecovery } from './githubRecovery.js';
 

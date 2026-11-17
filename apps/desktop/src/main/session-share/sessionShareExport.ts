@@ -44,10 +44,10 @@ import {
 import { readCodexThreadStorageReadOnly } from '../maker-host/codex-thread-storage.js';
 import { defaultClaudeConfigDirCandidates } from '../maker-orchestration/claudeTranscriptAnchors.js';
 import { readBoundClaudeConfigDir } from '../subscription-accounts/store.js';
-import { resolveSafe as resolveImageUrl } from '../imageCacheStore.js';
+import { resolveSafe as resolveImageUrl } from '../imageCacheStore.desktop.js';
 import { resolveSafe as resolveVideoUrl } from '../videoCacheStore.js';
 import { resolveSafe as resolveModelUrl } from '../modelCacheStore.js';
-import { resolveSafe as resolveCindyMediaUrl, getBlobsRoot as cindyMediaBlobsRoot } from '../cindy-media/blobStore.js';
+import { resolveSafe as resolveCindyMediaUrl, getBlobsRoot as cindyMediaBlobsRoot } from '../cindy-media/blobStore.desktop.js';
 import { app } from 'electron';
 
 import {

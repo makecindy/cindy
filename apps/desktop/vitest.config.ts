@@ -55,6 +55,9 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
+      // Browser-only built-in module: mirror its host importmap for hook tests.
+      '@cindy/ext-apps/react': path.resolve(__dirname, 'src/main/mcp-apps/viewStateSdkReact.js'),
+      '@cindy/ext-apps': path.resolve(__dirname, 'src/main/mcp-apps/viewStateSdk.js'),
       // Mirror the renderer alias from tsconfig.json so any test that reaches
       // into renderer code can resolve '@/...' the same way the build does.
       '@': path.resolve(__dirname, 'src/renderer'),

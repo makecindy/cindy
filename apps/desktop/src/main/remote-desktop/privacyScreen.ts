@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, screen, session } from 'electron';
 import { createLogger } from '../logger';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { privacyScreenHtml } from './privacyScreenHtml';
 import { watchPrivacyInput, type PrivacyInputMonitor } from './privacyInput';
 import { scheduleMainAppPresenceRestore } from '../appPresence';

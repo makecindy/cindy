@@ -24,6 +24,7 @@ import type {
   SetupMigrationApplyResponse,
   SetupMigrationChecklistItem,
   SetupMigrationDismissRequest,
+  SetupMigrationFirstRunGuide,
   SetupMigrationPlan,
   SetupMigrationProgress,
   SetupMigrationSource,
@@ -43,6 +44,8 @@ import type { SetupTransferApplyDeps } from './transferApply.js';
 
 const PLAN_TTL_MS = 30 * 60_000;
 const MAX_PLANS = 4;
+/** Computers read for the sign-in question; the rest are not offered this time. */
+const MAX_FIRST_SIGN_IN_SOURCES = 3;
 
 export interface SetupDeviceFact {
   deviceId: string;
@@ -57,6 +60,11 @@ export interface SetupDeviceFact {
 
 export interface PersistedSetupMigrationState {
   lastRun: { sourceName: string; finishedAt: number; checklist: SetupMigrationChecklistItem[] } | null;
+  /**
+   * The get-started guide was shown for this account on this computer (or an earlier version's
+   * migration suggestion was answered). Never shown automatically again once true.
+   * (Name kept from the earlier "not now" answer so existing state files keep their meaning.)
+   */
   suggestionDismissed: boolean;
 }
 
@@ -90,6 +98,8 @@ export interface SetupMigrationServiceDeps {
   checklistItemDone(item: SetupMigrationChecklistItem): boolean | null;
   /** True when this computer has none of the user's plugins, providers or MCP yet. */
   looksNew(): Promise<boolean>;
+  /** Earlier-version data was brought over during this process's sign-in. */
+  legacyMigrated(): boolean;
   source: SetupSnapshotSourceDeps;
 }
 
@@ -108,6 +118,22 @@ export function isSetupMigrationSourceCandidate(device: SetupDeviceFact): boolea
 
 function isMobilePlatform(platform: string): boolean {
   return platform === 'ios' || platform === 'android';
+}
+
+/**
+ * Whether another computer holds something the assistant can bring over that a new computer
+ * lacks: plugins the user added, skills, custom providers, custom MCP, SSH servers or saved
+ * built-in keys. Changed settings alone do not open the assistant by themselves.
+ */
+export function isSetupSnapshotWorthMigrating(snapshot: SetupSnapshot): boolean {
+  return (
+    snapshot.plugins.some((plugin) => plugin.source === 'market' || plugin.source === 'custom-market')
+    || snapshot.skills.length > 0
+    || snapshot.providers.length > 0
+    || snapshot.mcpServers.length > 0
+    || snapshot.sshHosts.length > 0
+    || snapshot.hints.builtinKeys.length > 0
+  );
 }
 
 function toSource(device: SetupDeviceFact): SetupMigrationSource {
@@ -332,7 +358,7 @@ export function createSetupMigrationService(deps: SetupMigrationServiceDeps) {
   }
 
   async function state(): Promise<SetupMigrationState> {
-    if (!deps.ownerKey()) return { lastRun: null, suggestion: null };
+    if (!deps.ownerKey()) return { lastRun: null };
     const persisted = deps.readState();
     const lastRun = persisted.lastRun
       ? {
@@ -342,26 +368,73 @@ export function createSetupMigrationService(deps: SetupMigrationServiceDeps) {
           ),
         }
       : null;
-    let suggestion: SetupMigrationState['suggestion'] = null;
-    if (!persisted.lastRun && !persisted.suggestionDismissed) {
-      try {
-        if (await deps.looksNew()) {
-          const candidate = (await sources()).find((source) => !source.unavailable);
-          if (candidate) suggestion = { deviceId: candidate.deviceId, name: candidate.name };
+    return { lastRun };
+  }
+
+  /** Bounded read of the account's other computers: does one hold something to bring here? */
+  async function otherComputerWorthMigrating(owner: string): Promise<boolean> {
+    try {
+      const readable = (await sources())
+        .filter((source) => !source.unavailable)
+        .slice(0, MAX_FIRST_SIGN_IN_SOURCES);
+      for (const source of readable) {
+        let snapshot: SetupSnapshot;
+        try {
+          snapshot = await readSnapshot(source.deviceId);
+        } catch {
+          continue;
         }
-      } catch {
-        suggestion = null;
+        if (deps.ownerKey() !== owner) return false;
+        if (isSetupSnapshotWorthMigrating(snapshot)) return true;
       }
+    } catch {
+      // No account directory (local mode, offline): nothing to offer from another computer.
     }
-    return { lastRun, suggestion };
+    return false;
+  }
+
+  /**
+   * After a sign-in or local-mode entry on this computer: show the get-started guide at most
+   * once per account here. It is shown on a computer that looks new, or right after data of
+   * an earlier app version was brought over; `migration` tells the guide to lead with the
+   * Migration Assistant. Other computers that cannot be read now are simply not offered.
+   */
+  async function decideFirstRunGuide(): Promise<SetupMigrationFirstRunGuide> {
+    const hidden: SetupMigrationFirstRunGuide = { show: false, migration: false, legacyMigrated: false };
+    const owner = deps.ownerKey();
+    if (!owner) return hidden;
+    const persisted = deps.readState();
+    if (persisted.lastRun || persisted.suggestionDismissed) return hidden;
+    const legacyMigrated = deps.legacyMigrated();
+    if (!legacyMigrated && !(await deps.looksNew())) return hidden;
+    const migration = await otherComputerWorthMigrating(owner);
+    if (deps.ownerKey() !== owner) return hidden;
+    await deps.writeState({ ...deps.readState(), suggestionDismissed: true });
+    return { show: true, migration, legacyMigrated };
+  }
+
+  let firstRunGuideInFlight: { owner: string | null; answer: Promise<SetupMigrationFirstRunGuide> } | null = null;
+
+  /** One decision per account at a time; a failed read is "not now", never an error for the window. */
+  function firstRunGuide(): Promise<SetupMigrationFirstRunGuide> {
+    const owner = deps.ownerKey();
+    if (firstRunGuideInFlight?.owner === owner) return firstRunGuideInFlight.answer;
+    const flight = {
+      owner,
+      answer: decideFirstRunGuide()
+        .catch((): SetupMigrationFirstRunGuide => ({ show: false, migration: false, legacyMigrated: false }))
+        .finally(() => {
+          if (firstRunGuideInFlight === flight) firstRunGuideInFlight = null;
+        }),
+    };
+    firstRunGuideInFlight = flight;
+    return flight.answer;
   }
 
   async function dismiss(request: SetupMigrationDismissRequest): Promise<SetupMigrationState> {
     requireOwner();
     const current = deps.readState();
-    if (request.kind === 'suggestion') {
-      await deps.writeState({ ...current, suggestionDismissed: true });
-    } else if (request.kind === 'checklist') {
+    if (request.kind === 'checklist') {
       await deps.writeState({ ...current, lastRun: null, suggestionDismissed: true });
     } else if (current.lastRun) {
       await deps.writeState({
@@ -385,7 +458,7 @@ export function createSetupMigrationService(deps: SetupMigrationServiceDeps) {
     return collectSetupSnapshot(deps.source);
   }
 
-  return { sources, preview, apply, state, dismiss, handleRemote, isRendererOwnedKey };
+  return { sources, preview, apply, state, dismiss, firstRunGuide, handleRemote, isRendererOwnedKey };
 }
 
 export type SetupMigrationService = ReturnType<typeof createSetupMigrationService>;

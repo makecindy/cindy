@@ -1,7 +1,7 @@
-import { isLoopbackProviderUrl, type AgentKind, type Provider } from '@cindy/model-providers';
+import { isLoopbackProviderUrl, type AgentKind, type Provider, type ProviderVideoApi } from '@cindy/model-providers';
 import { withProviderAppAttribution } from '../maker-host/provider-app-attribution.js';
 
-export interface CustomMediaConnection { agent: AgentKind; baseUrl: string; headers: Record<string, string>; }
+export interface CustomMediaConnection { agent: AgentKind; baseUrl: string; headers: Record<string, string>; videoApi?: ProviderVideoApi; }
 export interface CustomMediaConnectionOptions { getProvider(): Provider | undefined; readApiKey(agent: AgentKind): string | null; isOwnerBoundaryPending(): boolean; }
 
 /** Preserve gateway path prefixes, accepting either an API origin or a /v1 base. */
@@ -51,13 +51,15 @@ export function resolveCustomMediaConnection(
   if (
     !route ||
     route.disabled ||
-    (kind === 'image' ? route.imageApi !== 'openai-images' : route.videoApi !== 'xai-videos') ||
+    (kind === 'image' ? route.imageApi !== 'openai-images' : !route.videoApi) ||
     !model ||
     route.headerOverrideState === 'unknown'
   )
     return null;
   const upstream = model.route?.baseUrl ?? route.upstream;
-  const baseUrl = mediaBaseUrl(upstream);
+  const v1BaseUrl = mediaBaseUrl(upstream);
+  // MiniMax video paths are versioned at the API root (/v2/...), not under /v1.
+  const baseUrl = kind === 'video' && route.videoApi === 'minimax-videos' ? v1BaseUrl?.replace(/\/v1$/, '') : v1BaseUrl;
   if (!baseUrl || !mediaBaseUrl(route.upstream)) return null;
   // Model overrides must stay within the credential owner's origin.
   if (new URL(upstream).origin !== new URL(route.upstream).origin) return null;
@@ -95,12 +97,12 @@ export function resolveCustomMediaConnection(
     if (!key) return null;
     headers.authorization = `Bearer ${key}`;
   }
-  return { agent, baseUrl, headers };
+  return { agent, baseUrl, headers, ...(kind === 'video' ? { videoApi: route.videoApi } : {}) };
 }
 
 export function isCustomVideoProvider(provider: Provider): boolean {
   return provider.source === 'user' && !provider.auth.native &&
     (provider.auth.method === 'apiKey' || provider.auth.method === 'none') &&
     (provider.videoModels?.length ?? 0) > 0 &&
-    Object.values(provider.routing).some(route => route?.videoApi === 'xai-videos');
+    Object.values(provider.routing).some(route => route?.videoApi !== undefined);
 }

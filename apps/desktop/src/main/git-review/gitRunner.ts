@@ -6,7 +6,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 
 export interface GitRunResult {
   stdout: string;
@@ -61,6 +61,12 @@ export interface GitRunOptions {
   allowedExitCodes?: readonly number[];
   extraEnv?: Record<string, string | undefined>;
   signal?: AbortSignal;
+  /**
+   * Run git in its own process group and end the whole group on timeout or abort. Network commands
+   * (`pull` starts `fetch`, which starts the transport helper) otherwise leave children running that
+   * hold the output pipes; POSIX only.
+   */
+  killProcessGroup?: boolean;
 }
 
 export interface GitRunBufferOptions extends GitRunOptions {
@@ -85,6 +91,14 @@ export function withGitExecutionBackend<T>(backend: GitExecutionBackend, task: (
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** Ends a git process: its whole group when it has one, else itself. */
+function stopChild(child: ChildProcess, group: boolean) {
+  if (group && child.pid !== undefined) {
+    try { process.kill(-child.pid, 'SIGTERM'); return; } catch { /* the group is already gone */ }
+  }
+  child.kill();
+}
 
 function buildEnv(extraEnv?: Record<string, string | undefined>): NodeJS.ProcessEnv {
   return {
@@ -113,18 +127,19 @@ async function runGitOnce(args: readonly string[], opts: GitRunOptions = {}): Pr
   }
 
   return new Promise((resolve, reject) => {
+    const group = opts.killProcessGroup === true && process.platform !== 'win32';
     const child = spawn('git', [...args], {
       cwd: opts.cwd,
       env: buildEnv(opts.extraEnv),
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      ...(group ? { detached: true } : {}),
     });
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
     let settled = false;
-    let timedOut = false;
     let stdoutTooLarge = false;
     let timer: NodeJS.Timeout | null = null;
 
@@ -137,7 +152,7 @@ async function runGitOnce(args: readonly string[], opts: GitRunOptions = {}): Pr
     };
 
     const abort = () => {
-      child.kill();
+      stopChild(child, group);
       finish(() => {
         reject(
           new GitRunError({
@@ -152,9 +167,17 @@ async function runGitOnce(args: readonly string[], opts: GitRunOptions = {}): Pr
       });
     };
 
+    // A timeout settles right away: children of git that outlive it may keep the pipes open.
     timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
+      stopChild(child, group);
+      finish(() => reject(new GitRunError({
+        args,
+        cwd: opts.cwd,
+        exitCode: null,
+        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+        stderr: Buffer.concat(stderrChunks).toString('utf8'),
+        message: `git ${args.join(' ')} timed out after ${timeoutMs}ms`,
+      })));
     }, timeoutMs);
 
     opts.signal?.addEventListener('abort', abort, { once: true });
@@ -200,19 +223,6 @@ async function runGitOnce(args: readonly string[], opts: GitRunOptions = {}): Pr
           );
           return;
         }
-        if (timedOut) {
-          reject(
-            new GitRunError({
-              args,
-              cwd: opts.cwd,
-              exitCode: code,
-              stdout,
-              stderr,
-              message: `git ${args.join(' ')} timed out after ${timeoutMs}ms`,
-            }),
-          );
-          return;
-        }
         const exitCode = code ?? 0;
         if (!allowed.has(exitCode)) {
           reject(new GitRunError({ args, cwd: opts.cwd, exitCode, stdout, stderr }));
@@ -243,18 +253,19 @@ async function runGitBufferOnce(args: readonly string[], opts: GitRunBufferOptio
   }
 
   return new Promise((resolve, reject) => {
+    const group = opts.killProcessGroup === true && process.platform !== 'win32';
     const child = spawn('git', [...args], {
       cwd: opts.cwd,
       env: buildEnv(opts.extraEnv),
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      ...(group ? { detached: true } : {}),
     });
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
     let settled = false;
-    let timedOut = false;
     let stdoutTooLarge = false;
     let timer: NodeJS.Timeout | null = null;
 
@@ -267,7 +278,7 @@ async function runGitBufferOnce(args: readonly string[], opts: GitRunBufferOptio
     };
 
     const abort = () => {
-      child.kill();
+      stopChild(child, group);
       finish(() => {
         reject(
           new GitRunError({
@@ -282,9 +293,17 @@ async function runGitBufferOnce(args: readonly string[], opts: GitRunBufferOptio
       });
     };
 
+    // A timeout settles right away: children of git that outlive it may keep the pipes open.
     timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
+      stopChild(child, group);
+      finish(() => reject(new GitRunError({
+        args,
+        cwd: opts.cwd,
+        exitCode: null,
+        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+        stderr: Buffer.concat(stderrChunks).toString('utf8'),
+        message: `git ${args.join(' ')} timed out after ${timeoutMs}ms`,
+      })));
     }, timeoutMs);
 
     opts.signal?.addEventListener('abort', abort, { once: true });
@@ -326,19 +345,6 @@ async function runGitBufferOnce(args: readonly string[], opts: GitRunBufferOptio
               stdout: stdout.toString('utf8'),
               stderr,
               message: `git ${args.join(' ')} exceeded stdout limit of ${opts.maxStdoutBytes} bytes`,
-            }),
-          );
-          return;
-        }
-        if (timedOut) {
-          reject(
-            new GitRunError({
-              args,
-              cwd: opts.cwd,
-              exitCode: code,
-              stdout: stdout.toString('utf8'),
-              stderr,
-              message: `git ${args.join(' ')} timed out after ${timeoutMs}ms`,
             }),
           );
           return;

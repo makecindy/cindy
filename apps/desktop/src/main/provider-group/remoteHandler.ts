@@ -154,6 +154,8 @@ export async function handleProviderGroupRemote(
           agentKind: request.agentKind,
           model: request.model,
           exclude: excluded,
+          // dispatch 只把同账号电脑的请求交到这里(受邀者另走 guestRelay)。
+          ownComputer: true,
           ...(request.quotaRebalance ? { quotaRebalance: request.quotaRebalance } : {}),
           // 带着这一轮试过的来问：那台电脑试过不行，本机现读最新状态再选(状态以本机为准，2026-10-11)。
           ...(excluded.size > 0 ? { fresh: true } : {}),
@@ -166,7 +168,7 @@ export async function handleProviderGroupRemote(
         if (pick.kind === 'unavailable')
           return {
             kind: 'unavailable',
-            ...(pick.usageLimit ? { usageLimit: pick.usageLimit } : {}),
+            ...(pick.full ? { full: true as const } : pick.usageLimit ? { usageLimit: pick.usageLimit } : {}),
           };
         const { key, kind, agentDeviceId, providerId: memberProviderId } = pick.member;
         try {

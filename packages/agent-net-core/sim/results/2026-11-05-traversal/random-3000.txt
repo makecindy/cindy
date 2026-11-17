@@ -1,0 +1,9 @@
+    Finished `sim` profile [optimized] target(s) in 0.04s
+     Running tests\traversal.rs (target\sim\deps\traversal-91928b4e2e2dc756.exe)
+
+running 1 test
+test random_paths_and_changes_deliver_without_flapping has been running for over 60 seconds
+test random_paths_and_changes_deliver_without_flapping ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 339.86s
+

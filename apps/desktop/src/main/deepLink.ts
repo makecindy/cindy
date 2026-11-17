@@ -49,6 +49,7 @@ import { isLocalPluginSnapshotId, isValidPluginResourceId } from '@cindy/plugin-
 import { app, BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
 import { parseProviderShareInvitationIntent, parseSharedTaskInvitationIntent } from '@cindy/device-link';
+import { buildAgentNetSharingInvitation, parseAgentNetSharingInvitation } from '@cindy/agent-net/portable';
 import { createLogger } from './logger';
 import { cancelPendingWindowHide } from './mainWindowCloseBehavior';
 import { isValidGhostId } from '../shared/ghost';
@@ -78,7 +79,7 @@ export type DeepLinkPayload =
   | { type: 'chat-invite'; token: string }
   /** 点开的群邀请链接口令残缺或被改动：不带任何链接内容，只让 Renderer 明确告知。 */
   | { type: 'chat-invite-malformed' }
-  | { type: 'shared-task-join'; invitation: string; server: string }
+  | { type: 'shared-task-join'; invitation: string; server: string; link?: string }
   /** 供应商分享链接：原样交给 Renderer 的申请弹窗，由主进程命令再解析与核对区域。 */
   | { type: 'provider-share-join'; link: string }
   | { type: 'plugin'; pluginId: string }
@@ -138,6 +139,10 @@ export type DeepLinkPayload =
  */
 export function parseDeepLink(url: string): DeepLinkPayload | null {
   if (typeof url !== 'string') return null;
+  const v2 = parseAgentNetSharingInvitation(url, 'shared-task');
+  if (v2) return { type: 'shared-task-join', invitation: v2.receipt.invitation, server: v2.server,
+    link: buildAgentNetSharingInvitation(v2.receipt, v2.server) };
+  if (parseAgentNetSharingInvitation(url, 'provider-share')) return { type: 'provider-share-join', link: url };
   const invitation = parseSharedTaskInvitationIntent(url);
   if (invitation) return { type: 'shared-task-join', ...invitation };
   if (parseProviderShareInvitationIntent(url)) return { type: 'provider-share-join', link: url };
@@ -717,7 +722,10 @@ function isWindowsSlashSwitch(value: string): boolean {
  * 由 bootstrap-electron 启动时调用。open-url listener 另行尽早挂载，以接住冷启动事件。
  */
 export function registerDeepLinkProtocol(): void {
-  if (!app.isPackaged) return;
+  // Packaged smoke runs use a disposable profile, but OS protocol ownership is
+  // outside that profile and must remain with the installed desktop client.
+  if (!app.isPackaged || process.argv.includes('--smoke-test')
+    || process.argv.includes('--no-protocol-registration')) return;
 
   for (const scheme of DEEP_LINK_SCHEMES) {
     const registered = app.setAsDefaultProtocolClient(scheme);

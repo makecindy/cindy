@@ -13,7 +13,7 @@ const flush = async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 function fixture(poll: () => Promise<unknown> = never) {
   const invoke = vi.fn(
-    async (_session: string, input: Record<string, unknown>): Promise<unknown> =>
+    async (_session: string | null, input: Record<string, unknown>): Promise<unknown> =>
       input.op === 'open' ? document : input.op === 'poll' ? poll()
         : input.op === 'authorize-link' ? { authorized: true, validForMs: 30_000 } : {},
   );
@@ -159,7 +159,7 @@ describe('MCP App transport lifecycle', () => {
   it('closes a View that finishes opening after its card unmounts', async () => {
     let resolve!: (value: unknown) => void;
     const invoke = vi.fn(
-      async (_session: string, input: Record<string, unknown>) =>
+      async (_session: string | null, input: Record<string, unknown>) =>
         input.op === 'open' ? new Promise<unknown>((done) => {
           resolve = done;
         }) : {},

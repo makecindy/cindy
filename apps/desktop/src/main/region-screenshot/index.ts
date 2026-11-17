@@ -14,7 +14,7 @@ import {
 import { createLogger } from '../logger';
 import { measureTraceOperation } from '../performance-trace/measure';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import type { SupportedLocale } from '../../shared/locale';
 import {
   getAppShortcutStore,

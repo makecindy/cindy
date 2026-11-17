@@ -1,7 +1,7 @@
 import { ProviderShareScopeChangedError } from '@cindy/device-link';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { serverApiFetch } from '../serverApiClient.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { providerShareOwnerKey } from './providerShareApi.js';
 
 export async function shareAvailabilityRequest<T>(shareId: string, action: string, body: unknown = {}, alternate?: () => Promise<unknown>): Promise<T> {

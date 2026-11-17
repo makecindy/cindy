@@ -1,5 +1,7 @@
 # Cindy Mobile Shared Core Migration Plan
 
+> 反馈范围修订（2026-11-11）：本文旧有的 Issue Confirm「desktop-only／不做手机表单」限制及全屏表单方案仅作历史记录，已由[当前反馈卡片范围](remote-control-plan.md#反馈卡片当前范围)替代。
+
 > 日期: 2026-06-18
 > 目标: 把桌面端和手机版共同依赖的会话展示语义沉到 shared core,让 `apps/mobile` 专注 iOS / Android 原生能力和触控交互。
 > 当前状态: `packages/maker-shared` 已建立,并已迁入 queue/input projection、queue row action model、device list presentation、session controls overview、session action strip/identity model、session list / bulk selection model、system card presentation、agent capability projection、composer palette model、pending interaction model、pending resolve guard、message normalize content preview / stable sort / tool_use parse / tool_result pairing model、message render grouping model、message presentation model、message window/search/load-earlier action model、file browser/preview model、automation/schedule/form/session-mode/event/display-summary/action capability model、device-link controller contract、payload summary/body/preview model 第一刀,以及 C2 session operation/composer action model 第一刀。C2.5 keyboard/native visual check 已开始,远端不可用时的 session read-only state / disabled reason 已补进 shared operation model;键盘、SafeArea、sheet 高度、相机/语音/文件选择、主窗口 screen-width 布局、主窗口 action hierarchy 和真实 native 生命周期仍留在 mobile native shell。

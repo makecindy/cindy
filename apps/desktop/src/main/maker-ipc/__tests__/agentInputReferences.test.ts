@@ -49,12 +49,6 @@ describe('hydrateQueuedAgentReferences message visibility', () => {
         status TEXT NOT NULL,
         prepared_at INTEGER NOT NULL
       );
-      CREATE TABLE bot_delegations (
-        id TEXT PRIMARY KEY,
-        requesting_bot_id TEXT NOT NULL,
-        target_bot_id TEXT NOT NULL,
-        status TEXT NOT NULL
-      );
       INSERT INTO sessions (id, cleared_at) VALUES ('source-session', NULL);
     `);
     client = {
@@ -174,8 +168,6 @@ describe('hydrateQueuedAgentReferences message visibility', () => {
       VALUES ('bot-b', 'bot-b-main', 'canonical', NULL);
       INSERT INTO bot_runtime_snapshots (bot_id, session_id, status, prepared_at)
       VALUES ('bot-b', 'bot-b-main', 'applied', 100);
-      INSERT INTO bot_delegations (id, requesting_bot_id, target_bot_id, status)
-      VALUES ('delegation-1', 'bot-a', 'bot-b', 'running');
     `);
     const href = 'cindy://bot/bot-b';
     const text = `@${href}`;
@@ -203,7 +195,7 @@ describe('hydrateQueuedAgentReferences message visibility', () => {
       hostSnapshot: {
         availability: 'ready',
         activity: 'working',
-        activeDelegations: 1,
+        activeDelegations: 0,
       },
     });
     expect(JSON.parse(hydrated.persistedContent).agentReferences[0])

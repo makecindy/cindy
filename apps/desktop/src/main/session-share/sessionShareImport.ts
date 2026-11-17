@@ -51,16 +51,16 @@ import {
   getSessionDir,
   removeSession as removeSessionImages,
   resolveSafe as resolveImageUrl,
-} from '../imageCacheStore.js';
+} from '../imageCacheStore.desktop.js';
 import { resolveSafe as resolveVideoUrl } from '../videoCacheStore.js';
 import { resolveSafe as resolveModelUrl } from '../modelCacheStore.js';
 import {
   parseBlobUrl,
   mimeForExt,
   resolveHashRef as resolveBlobHashRef,
-} from '../cindy-media/blobStore.js';
+} from '../cindy-media/blobStore.desktop.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
-import type { MediaRefCompensationScope } from '../cindy-media/refCompensationJournal.js';
+import type { MediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop.js';
 import {
   removeSessionRefs as removeSessionMediaRefs,
   removeSessionRefsIfDeleted,

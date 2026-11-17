@@ -88,6 +88,8 @@ export function BotGroupPendingInteraction({
         workingDir={currentQuestionFiles?.workingDir ?? ''}
         remoteHostId={currentQuestionFiles?.remoteHostId}
         pending={light.pendingAskUser}
+        pendingQuestions={light.pendingAskUserQueue}
+        onSelectQuestion={(requestId) => makerChatStore.selectAskUserQuestion(sessionId, requestId)}
         onAnswer={(requestId, answers) => makerChatStore.answerUserQuestion(sessionId, requestId, answers)}
         viewerState={light.askUserViewerState}
         onViewerStateChange={(next) => makerChatStore.setAskUserViewerState(sessionId, next)}

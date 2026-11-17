@@ -15,7 +15,8 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
 }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
   prefetchDeviceProviders: vi.fn(),
-  evictDeviceProviders: vi.fn(),
+  evictDeviceProviders: vi.fn(() => 1),
+  isDeviceProvidersGenerationCurrent: vi.fn(() => true),
 }));
 vi.mock('@/hooks/useGitSafetySettings', () => ({
   prefetchDeviceGitSafetySettings: vi.fn(),
@@ -36,6 +37,8 @@ vi.mock('@/lib/logger', () => ({
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
+import { prefetchDeviceProviders, evictDeviceProviders } from '@/hooks/useDeviceProviders';
+import { prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import { prefetchDeviceGitSafetySettings } from '@/hooks/useGitSafetySettings';
 import { readCachedSessionList } from '@/features/device-link/mirrorCacheClient';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
@@ -122,6 +125,34 @@ afterEach(() => {
 });
 
 describe('multi-device recovery lifecycle', () => {
+  // Unit regression: Main fences all three source-change events, but the renderer
+  // only refreshed providers on one of them, leaving failed in-flight reads stuck.
+  // Exercise the real push listener and refresh coordinator; transport reads are mocked.
+  it.each(['maker:agents:changed', 'provider-group:changed', 'maker:provider:changed'])(
+    'refreshes the affected catalog on %s without reopening a retired target', async (channel) => {
+      setDataOwnerGeneration('test-owner', 1);
+      onTestFinished(() => setDataOwnerGeneration(null));
+      renderHook(() => useDeviceLinkRemoteProjects());
+      await settle();
+      vi.mocked(prefetchDeviceProviders).mockClear();
+      vi.mocked(prefetchDeviceCapabilities).mockClear();
+      vi.mocked(evictDeviceProviders).mockClear();
+      act(() => listeners.onRemotePush({ deviceId: 'healthy', channel, payload: {} }));
+      await settle();
+      expect(prefetchDeviceProviders).toHaveBeenCalledExactlyOnceWith('healthy');
+      expect(prefetchDeviceCapabilities).toHaveBeenCalledExactlyOnceWith('healthy');
+
+      vi.mocked(prefetchDeviceProviders).mockClear();
+      vi.mocked(prefetchDeviceCapabilities).mockClear();
+      act(() => listeners.onRemotePush({ deviceId: 'healthy', channel,
+        payload: { providerContinuity: { stale: true, remainingMs: 0 } } }));
+      await settle();
+      expect(evictDeviceProviders).toHaveBeenLastCalledWith('healthy', { retainDisplaySnapshot: false });
+      expect(prefetchDeviceProviders).not.toHaveBeenCalled();
+      expect(prefetchDeviceCapabilities).not.toHaveBeenCalled();
+    },
+  );
+
   it('late catalog completion cannot clear a newer revocation', async () => {
     const old = deferred<void>();
     vi.mocked(prefetchDeviceGitSafetySettings).mockImplementation((peer) =>

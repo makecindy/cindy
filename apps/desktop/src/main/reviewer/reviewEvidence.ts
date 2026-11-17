@@ -8,9 +8,9 @@ import { and, desc, eq, inArray, isNull, lt, ne, notLike, or } from 'drizzle-orm
 import { getDbClient } from '../localDb/client/current.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
 import { messages } from '../localDb/schema.js';
-import * as imageCacheStore from '../imageCacheStore.js';
+import * as imageCacheStore from '../imageCacheStore.desktop.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
-import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
+import * as cindyMediaBlobStore from '../cindy-media/blobStore.desktop.js';
 import { readReviewBranchDiff, readReviewData } from '../git-review/ipc.js';
 import { getTurnChangeSets, listTurnChangeSets } from '../turn-change-set/store.js';
 import type { TurnChangeSetDetail } from '../../shared/turnChangeSet.js';

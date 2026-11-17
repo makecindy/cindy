@@ -8,7 +8,7 @@ const virtualList = vi.hoisted(() => ({ scrollToOffset: vi.fn() }));
 const theme = vi.hoisted(() => ({ mode: 'light' as 'light' | 'dark' }));
 vi.mock('react-native', async () => {
   const { createElement: el, useImperativeHandle } = await import('react');
-  const View = ({ children, accessibilityElementsHidden, pointerEvents }: any) => el('div', { 'aria-hidden': accessibilityElementsHidden, 'data-pointer-events': pointerEvents }, children);
+  const View = ({ children, accessibilityElementsHidden, pointerEvents, accessibilityValue, accessibilityLabel }: any) => el('div', { 'aria-hidden': accessibilityElementsHidden, 'data-pointer-events': pointerEvents, 'data-quota': accessibilityValue?.now, 'aria-label': accessibilityLabel }, children);
   return {
     Platform: { OS: "android" },
     View, ScrollView: View,
@@ -49,7 +49,7 @@ vi.mock('@/components/AppText', async () => {
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 40, bottom: 20 }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('lucide-react-native', () => ({
-  ...Object.fromEntries(['Brain', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert'].map(key => [key, () => null])),
+  ...Object.fromEntries(['Clock3', 'Brain', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert'].map(key => [key, () => null])),
   Star: ({ fill, color }: any) => createElement('span', { 'data-star-fill': fill, 'data-star-color': color }),
 }));
 vi.mock('react-native-svg', () => ({
@@ -75,7 +75,7 @@ vi.mock('@expo/ui/swift-ui/modifiers', () => ({...Object.fromEntries(
 ), shapes:{rectangle:()=>({}), roundedRectangle:(value: any)=>value}}));
 vi.mock('@expo/ui', () => ({Host:({children}:any)=>children}));
 vi.mock('@/session/ComposerSheet', () => import('@/session/ComposerSheet.ios'));
-vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ children, title }: any) => createElement('div', null, title, children) }));
+vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ children, title, header }: any) => createElement('div', null, header ?? title, children) }));
 vi.mock('@/session/ComposerNativeRow', () => ({ ComposerNativeRow: ({ leading, title }: any) => createElement('div', null, leading, title) }));
 vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: ({ children }: any) => children, NativeSwitch: () => null, usesNativePullDownMenu: () => true }));
 vi.mock('@/components/MobileAgentMark', () => ({ MobileAgentMark: () => null }));
@@ -102,6 +102,23 @@ beforeEach(() => {
   root = createRoot(host);
 });
 afterEach(() => act(() => root.unmount()));
+// A pool is not one synthetic progress bar. Exercise both platform renderers,
+// including the native iOS source row, with separate known and unknown quotas.
+it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as const)(
+  'renders independent account quota bars before allocation on %s', async (_platform, Component) => {
+    const members = [{ remaining: 34, label: 'first@example.test · 34%' },
+      { remaining: 80, label: 'second@example.test · 80%' }, { label: 'unknown@example.test · —' }];
+    await act(async () => root.render(createElement(Component, {
+      visible: true, testID: 'pool', title: 'Models', query: '', filter: 'all', groups: [],
+      filters: [{ id: 'account', label: '3 accounts', providerMark: { name: 'Anthropic' },
+        quota: { label: members.map(member => member.label).join('\n'), members } }],
+    } as any)));
+    await act(async () => (host.querySelector('button[aria-label="models.unified.source"]') as HTMLButtonElement).click());
+    expect([...host.querySelectorAll('[data-quota]')].map(node => node.getAttribute('data-quota'))).toEqual(['34','80']);
+    expect(host.querySelector('[data-quota="34"]')?.getAttribute('aria-label')).toBe('first@example.test · 34%');
+    expect(host.querySelector('[data-quota="80"]')?.getAttribute('aria-label')).toBe('second@example.test · 80%');
+  },
+);
 it.each([null, '2d · 70%'])('keeps both account identities visible with quota %s', async quotaLabel => {
   const rows = ['first@example.com', 'second@example.com'].map(subtitle => ({
     key: subtitle, subtitle, quotaLabel, entry: { displayName: 'Same Model' },
@@ -310,5 +327,30 @@ it.each(["query", "filter"])(
       animated: false,
     });
     expect(host.textContent).toContain("No results");
+  },
+);
+
+// Integration: chosen design C exposes reset warnings once per source and lets
+// a tap reach account details, without selecting a model or changing its route.
+it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as const)(
+  'opens account details from the source average and reset warning on %s', async (_platform, Component) => {
+    const quota = {remaining:57,summary:'Average 57%',resetSoon:true,reset:{remaining:80,time:'6h',level:'crit'},resetParts:['',' 后重置'],resetDescription:'Resets in 6h · Remaining 80%',label:'Account A 34% · Account B 80% · resets in 6h',
+      members:[{remaining:34,label:'Account A 34%'},{remaining:80,label:'Account B 80%'}]};
+    const onSelect=vi.fn(), onFilter=vi.fn();
+    await act(async()=>root.render(createElement(Component, {
+      visible:true,testID:'modelSheet',query:'',filter:'anthropic',onClose:vi.fn(),onSelect,onFilter,
+      filters:[{id:'anthropic',label:'Anthropic',providerMark:{providerId:'anthropic'},quota}],
+      groups:[{key:'anthropic',title:'Anthropic',quota,rows:[]}],
+    } as any)));
+    const button=host.querySelector('button[aria-label="Average 57% · models.unified.quotaResetSoon · Resets in 6h · Remaining 80%"]') as HTMLButtonElement;
+    expect(button).not.toBeNull();
+    expect(button.textContent).toContain('80%6h 后重置');
+    expect(button.textContent).not.toContain('models.unified.quotaResetSoon');
+    expect(button.textContent).not.toContain('Average');
+    expect(button.textContent).toContain('57%');
+    await act(async()=>button.click());
+    expect(host.querySelectorAll('[data-quota="80"]')).toHaveLength(1);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onFilter).not.toHaveBeenCalled();
   },
 );
