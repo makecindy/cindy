@@ -15461,7 +15461,12 @@
       "openInSidebarFailed": "Gagal membuka di browser sidebar",
       "openInCurrentWindow": "Buka di jendela saat ini",
       "locateProject": "Temukan proyek",
-      "shiftClick": "Shift+klik"
+      "shiftClick": "Shift+klik",
+      "addPrToHeader": "Tambahkan ke header",
+      "prAlreadyInHeader": "Sudah ada di header",
+      "prAddedToHeader": "Ditambahkan ke header — status mengikuti tugas ini.",
+      "prAssociatedNotInHeader": "Tertaut, tidak ada di header",
+      "prSavedNotInHeader": "Tautan disimpan. Header sudah penuh; sematkan PR ini di pengelola PR pada header tugas."
     },
     "ghostSummon": {
       "directiveLabel": "Instruksi yang ditambahkan untuk model",
