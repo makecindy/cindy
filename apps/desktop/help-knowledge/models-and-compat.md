@@ -1,7 +1,7 @@
 ---
 id: models-and-compat
 title: Choosing a model
-summary: Pick a task's model from the model selector in the composer; Cindy picks the engine (Claude Code / Codex / Pi) for you, and Customize lets you change engine, reasoning effort, and Fast. Compatibility-mode engines are off by default and are turned on per model in Settings > Providers.
+summary: Pick a task's model from the model selector in the composer; Cindy picks the engine (Claude Code / Codex / Pi) for you, and Customize lets you change engine, reasoning effort, and Fast. Compatibility-mode engines are off by default and are turned on per model in Settings > Providers. Account-pool assignment and engine-specific credential changes are separate.
 tab: providers
 ---
 You pick the model a task uses from the **model selector in the composer toolbar** (the pill showing the current model). It works the same for a new task and inside an existing one.
@@ -21,6 +21,8 @@ You pick the model a task uses from the **model selector in the composer toolbar
 
 - Open the selector and pick a different model. It applies from your **next message**; while a switch is pending, the pill's tooltip shows "Current" and "Next message".
 - If the new model runs on a **different engine**, Cindy asks you to confirm (**Switch Agent?**). The new engine continues from a handoff summary of the conversation, so some reasoning or details may not carry over perfectly.
+- A **provider/account change is not the same as changing the account-pool strategy**. A strategy governs new assignments; healthy existing tasks normally retain their account (see the Providers topic). Changing subscription accounts can require a context handoff and runtime rebuild even when the engine stays the same.
+- **Engine differences:** Claude Code's native account credentials are tied to its process; Codex may need to rebuild when credential mode or native thread identity changes. Pi uses its own runtime compatibility check and may refresh a compatible route, require a rebuild, or reject an unavailable target. Pi is not a guarantee of restart-free subscription-account switching, and these lifecycle differences do not mean that only Pi can use account-pool assignment.
 
 **Using non-Anthropic models:**
 
