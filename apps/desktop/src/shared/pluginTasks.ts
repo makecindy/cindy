@@ -131,7 +131,10 @@ export type PluginTaskRequest = (
       text: string;
       /** Supplementary material, collapsed in the conversation but sent to the Agent. */
       context?: string;
+      /** The message's own images, audio/video or files; shown with it. `text` may be '' when present. */
       attachments?: PluginMessageAttachment[];
+      /** Model-only references (for example group history); never shown or saved with the message. */
+      contextAttachments?: PluginMessageAttachment[];
       /** Optional Host-issued parent invocation; correlation only, not execution authority. */
       invocationId?: string;
       /** Optional IM relay context (capabilities().messageRelay); rendered as an IM card. */

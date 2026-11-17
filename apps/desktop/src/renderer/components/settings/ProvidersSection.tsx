@@ -874,7 +874,12 @@ function DetailHeader({
               data-testid="provider-detail-actions"
               className="flex shrink-0 items-center gap-2.5"
             >
-              {borrowing ? null : status?.kind === 'connected' ? (
+              {borrowing && (status || primaryAction) && (
+                <span className="text-12 text-[var(--text-secondary)]">
+                  {t('settings.providers.detail.runLocation.optionLocal')}
+                </span>
+              )}
+              {status?.kind === 'connected' ? (
                 <ConnectedPill />
               ) : status?.kind === 'reconnect-required' ? (
                 <ReconnectRequiredPill />
@@ -883,7 +888,7 @@ function DetailHeader({
                   {status.label}
                 </span>
               ) : null}
-              {primaryAction && !borrowing && <PillButton {...primaryAction} />}
+              {primaryAction && <PillButton {...primaryAction} />}
             </div>
             {/* 供应商级低频动作(停用/启用):所有供应商详情头统一入口。停用 = 保留凭证、
               整体不可路由(model-disable-store);恢复入口在菜单与下方的已停用条带都有。 */}
@@ -915,11 +920,6 @@ function DetailHeader({
                     <DropdownMenuItem onClick={editAction.onClick} disabled={editAction.disabled}>
                       <Pencil size={18} className="mr-2.5" />
                       {editAction.label}
-                    </DropdownMenuItem>
-                  )}
-                  {borrowing && primaryAction && (
-                    <DropdownMenuItem onClick={primaryAction.onClick} disabled={primaryAction.disabled}>
-                      {t('settings.providers.detail.runLocation.signInHere')}
                     </DropdownMenuItem>
                   )}
                   {menuItems}

@@ -1,4 +1,5 @@
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import { ToastContainer } from '../../../src/renderer/components/ui/toast/ToastContainer';
 import { ProvidersSection } from '../../../src/renderer/components/settings/ProvidersSection';
 import { mountPage, subscription, forbid } from '../../ui-page/harness';
 import type { SubscriptionAccountCommand } from '../../../src/shared/subscriptionAccounts';
@@ -47,7 +48,7 @@ const accountUsage = (providerId: string, [session, week, model]: number[]) => {
     credits: null,
   } };
 };
-const subscriptionControl = { connected: false, commands: [] as { action?: string; providerId: string; loginKey?: string }[], cancel: (): void => {} };
+const subscriptionControl = { connected: false, commands: [] as { action?: string; providerId: string; loginKey?: string }[], cancel: (): void => {}, pending: false, finish: (_ok: boolean): void => {} };
 const unusedReceived = [{
   shareId: 'fixture-received', memberId: 'fixture-member', providerId: 'anthropic',
   providerLabel: 'Anthropic', hostDeviceId: 'fixture-share-host', deviceName: 'Example computer',
@@ -81,7 +82,7 @@ mountPage({
     if (ctx.page === 'provider-own-computers') {
       snapshot.providers[0] = { ...snapshot.providers[0], remoteInvocationEnabled: ctx.case === 'own-provider' };
     }
-    if (ctx.case === 'pinned') snapshot.providers[0] = { ...snapshot.providers[0], runLocation: 'mbp' } as typeof snapshot.providers[0];
+    if (ctx.case === 'pinned' || ctx.case === 'recovery-pinned') snapshot.providers[0] = { ...snapshot.providers[0], runLocation: 'mbp' } as typeof snapshot.providers[0];
     refreshControl.defer = ctx.case === 'wizard-reopen';
     if (ctx.case === 'builtin-save-guard') snapshot.providers.push({
       ...provider('anthropic'), id: 'gemini', name: 'Gemini', connected: false,
@@ -91,6 +92,19 @@ mountPage({
       subscriptionAccounts: {
         command: async (command: SubscriptionAccountCommand) => {
           subscriptionControl.commands.push(command);
+          if (command.action === 'login' && ctx.case.startsWith('recovery-')) {
+            subscriptionControl.pending = true;
+            try {
+              await new Promise<void>((resolve, reject) => {
+                subscriptionControl.cancel = () => reject(new Error('[SUBSCRIPTION_LOGIN_CANCELLED] Could not update the subscription account'));
+                subscriptionControl.finish = ok => ok ? resolve() : reject(new Error('[SUBSCRIPTION_ACCOUNT_FAILED] Could not update the subscription account'));
+              });
+              const f = (window as any).providerSourcesFixture;
+              f.snapshot = { ...f.snapshot, providers: f.snapshot.providers.map((p: any) => p.id === 'openai' ? { ...p, connected: true } : p) };
+              window.dispatchEvent(new Event('repro-provider-change'));
+              (window as any).__uiPage.emit('subscriptionAccountsChanged', { providerId: 'openai' });
+            } finally { subscriptionControl.pending = false; }
+          }
           if (command.action === 'cancel') subscriptionControl.cancel();
           if (command.action === 'add' || command.action === 'connect') {
             if (ctx.case === 'subscription-cancel') await new Promise<void>((_resolve, reject) => {
@@ -101,7 +115,7 @@ mountPage({
           const configured = ctx.case !== 'borrowing' && !(ctx.case === 'never-signed-in' && command.providerId === 'anthropic');
           const directory = command.providerId === 'anthropic' ? '/Users/alex/.claude' : '/Users/alex/.codex';
           const defaultAccount = { id: 'default', identity: 'alex@example.com',
-            plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: 'ready', directory,
+            plan: command.providerId === 'anthropic' ? 'Max' : 'Plus', status: ctx.case.startsWith('recovery-') && !(window as any).providerSourcesFixture.snapshot.providers[0].connected ? 'unavailable' : 'ready', directory,
             running: 0, paused: false, limit: 4, weight: 1 };
           if (ctx.case.startsWith('local-management') && command.providerId === 'openai') {
             return { providerId: 'openai', configured: true, strategy: 'least', accounts: Array.from({ length: 5 }, (_, index) => ({
@@ -147,5 +161,5 @@ mountPage({
       },
     };
   },
-  render: () => <div className="h-screen p-5"><ProvidersSection /></div>,
+  render: () => <div className="h-screen p-5"><ProvidersSection /><ToastContainer /></div>,
 });
