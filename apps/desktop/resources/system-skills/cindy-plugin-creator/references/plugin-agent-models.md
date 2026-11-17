@@ -42,7 +42,7 @@ button.addEventListener('click', async () => {
 所有坐标相对当前顶层插件页面，使用 CSS 像素；不要传屏幕坐标或主窗口坐标。
 此桥仅在本机桌面 WebView 可用，手机／远程控制页面和旧版 Host 继续走原生选模通道，
 必须检查函数是否存在。返回值和错误码与下面 `cindy.pickModel` 相同。
-示例源码见 `scripts/examples/plugin-model-picker/`；新接口发布前不要凭本地开发构建推测版本下限。
+示例源码见 `scripts/examples/plugin-model-picker/`。
 
 不想自行绘制选模界面时，电子脑调用 `cindy.pickModel(options?)`。
 Host 打开与 Cindy 共用的模型选择器，用户确认后返回完整配置；取消、关闭页面或超时不返回配置。
