@@ -85,13 +85,20 @@ export default {
       return;
     }
     if (ui.case === 'orca') {
-      // Orca bodies use a separate plain-text <pre>, not the normal bubble or
-      // Markdown renderer. A Persian-first line reproduces the layout bug.
+      // Orca bodies render through the chat Markdown renderer, so mixed-direction
+      // paragraphs keep their own alignment and Markdown structure is not shown raw.
       // Existing messageLinkActions tests cover content, not browser geometry.
       for (const role of ['Lead', 'Worker']) {
         const toggle = page.getByRole('button', { name: await ui.t(`chat.userMessage.orcaFrom${role}`), exact: true });
         await toggle.click();
-        const body = toggle.locator('..').locator('pre[data-selection-quote-body]');
+        const body = toggle.locator('..').locator('[data-selection-quote-body]');
+        // Markdown structure, not raw markers: heading, bold list item, fenced code.
+        // Skipped on the compare side, which replays the old plain-text body.
+        if (ui.role === 'after') {
+          await body.locator('h3').first().waitFor();
+          await body.locator('li strong').first().waitFor();
+          await body.locator('pre code').first().waitFor();
+        }
         for (const [text, side] of [[rtl, 'right'], [english, 'left'],
           ['مرحبا، الإصدار API 123 جاهز.', 'right'], ['שלום, הקובץ index.html מוכן.', 'right'],
           ['中文段落：文件 index.html，版本 123。', 'left']]) {
@@ -103,7 +110,7 @@ export default {
           range.selectNodeContents(e); selection.removeAllRanges(); selection.addRange(range);
           const text = selection.toString(); selection.removeAllRanges(); return text;
         });
-        assert.equal(selected, original);
+        assert.equal(selected.replace(/\s+/g, ' ').trim(), original.replace(/\s+/g, ' ').trim());
         await toggle.focus(); await toggle.press('Enter');
         await body.waitFor({ state: 'hidden' });
         await toggle.press('Enter');
