@@ -539,8 +539,8 @@ test("rule declarations use anchored, directory-aware path patterns", () => {
 });
 
 // 根 AGENTS.md 每个任务完整加载；上限只减不调高，超出时把内容移进专题（development-workflow §5）。
-const ROOT_AGENTS_MAX_BYTES = 24_500;
-const ROOT_AGENTS_MAX_ENTRIES = 65;
+const ROOT_AGENTS_MAX_BYTES = 10_500;
+const ROOT_AGENTS_MAX_ENTRIES = 25;
 test("root AGENTS.md stays within its size and entry budget", () => {
 	const agents = readText("AGENTS.md");
 	const bytes = Buffer.byteLength(agents, "utf8");
