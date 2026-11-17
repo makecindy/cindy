@@ -2,6 +2,7 @@ import type { AgentKind } from '@cindy/maker-core';
 import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-shared/orca-team';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import type { OrcaHostNoticeKind } from '../../shared/orcaHostNotice.js';
 import {
   buildOrcaDispatchReceiptSummary,
   type OrcaDispatchClaimNotice,
