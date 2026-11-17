@@ -916,7 +916,7 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     vi.useFakeTimers(); vi.setSystemTime(1000);
     const h = createHarness(), sid = 'resume-held-permission', shared = createSharedPermission();
     const expired = vi.fn();
-    const entry = { sessionId: sid, timeoutId: setTimeout(expired, 1000), timeoutDeadlineAt: 2000 as number | undefined,
+    const entry = { sessionId: sid, timeoutId: setTimeout(() => { expired(); }, 1000), timeoutDeadlineAt: 2000 as number | undefined,
       timeoutRemainingMs: undefined as number | undefined, deferredDecision: undefined as InteractionDecision | undefined };
     const pending = new Map([['held', entry]]);
     const deps = { coordinator: h.coordinator, persist: async () => {}, compact: async () => {},
