@@ -297,8 +297,16 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     if (this.state.expanded.has(key) === expanded) return;
     const next = new Set(this.state.expanded);
     if (expanded) next.add(key); else next.delete(key);
-    if (!expanded) this.detailRuns.delete(key);
-    this.publish({ expanded: next, ...(!expanded ? { details: this.trimCollapsedDetails(next) } : {}) });
+    let details = this.state.details;
+    if (!expanded) {
+      this.detailRuns.delete(key);
+      details = this.trimCollapsedDetails(next);
+      const detail = details.get(key);
+      // Cancellation invalidates late replies, so they cannot clear this flag.
+      // Stop the indicator now while retaining any warm body for reopening.
+      if (detail?.loading) details = new Map(details).set(key, { ...detail, loading: false });
+    }
+    this.publish({ expanded: next, details });
     this.sendIntent();
     const summary = historyWorkSummaries(this.state.items).find((value) => value.key === key);
     if (expanded && summary) void this.loadDetails(summary);
@@ -387,12 +395,14 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       const completed = this.state.details.get(summary.key);
       if (completed?.complete && completed.revision === summary.revision && !patch.complete) return;
       const details = new Map(this.state.details);
-      // A reread keeps the previous window until it settles. Publishing each
-      // incoming page would replace the old window with a partial slice of the
-      // new range: the rendered list collapses to the first page and shifts a
-      // bottom-pinned stream before the tail lands.
+      // Only a full range using the detail-preview fallback needs an atomic
+      // first read: a partial body can split past the render-window boundary,
+      // release its full-range owner and switch back to the preview in a loop.
+      // Host lines (including []) do not use that fallback. Ordinary history
+      // and previews keep incremental reads; rereads retain the previous body.
       const settled = patch.complete === true;
-      const messages = !settled && existing?.messages?.length ? existing.messages
+      const deferFirstBody = !!summary.preview && !summary.lines;
+      const messages = !settled && (existing?.messages?.length || deferFirstBody) ? (existing?.messages ?? [])
         : collected.length ? collected : (existing?.messages ?? []);
       details.set(summary.key, { messages, revision: summary.revision,
         lastMessageId: summary.lastMessageId, loading: true, complete: false, error: null, ...patch });
