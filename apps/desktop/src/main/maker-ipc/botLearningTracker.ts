@@ -11,8 +11,11 @@ function nativeWritePaths(event: AgentEvent, input: Record<string, unknown>, nam
   if (event.source === 'codex' && name === 'file_change' && Array.isArray(input.changes)) {
     return input.changes.flatMap(change => {
       if (!change || typeof change !== 'object') return [];
-      const { path, kind } = change as { path?: unknown; kind?: { type?: unknown } };
-      return typeof path === 'string' && path.trim() && (kind?.type === 'add' || kind?.type === 'update') ? [path] : [];
+      const { path, kind } = change as { path?: unknown; kind?: { type?: unknown; move_path?: unknown } };
+      if (typeof path !== 'string' || !path.trim() || (kind?.type !== 'add' && kind?.type !== 'update')) return [];
+      // An update may move the file: only its final destination was written.
+      const target = kind.type === 'update' && typeof kind.move_path === 'string' ? kind.move_path : path;
+      return target.trim() ? [target] : [];
     });
   }
   const file = event.source === 'pi' && (name === 'write' || name === 'edit') ? input.path

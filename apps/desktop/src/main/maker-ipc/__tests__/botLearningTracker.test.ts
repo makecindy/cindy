@@ -2,7 +2,7 @@ import type { AgentEvent } from '@cindy/maker-core';
 import { describe, it, expect, vi } from 'vitest';
 import { createBotLearningTracker } from '../botLearningTracker.js';
 import { botLearningRows } from '@cindy/maker-shared/bot-learning';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rename, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createProjectMemoryReceipts } from '../botProjectLearning.js';
@@ -121,6 +121,35 @@ describe('teammate learning receipt ownership', () => {
       expect(publish).toHaveBeenCalledExactlyOnceWith('reply', [
         { kind: 'memory', key: 'user_tea.md', title: 'Tea', action: 'created' },
       ]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each(['into', 'out of'])('attributes a successful Codex move %s memory only to its destination', async direction => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'native-move-'));
+    try {
+      const dir = path.join(root, '.cindy', 'memory');
+      await mkdir(dir, { recursive: true });
+      const memoryFile = path.join(dir, 'user_tea.md'), stagingFile = path.join(root, 'staged.md');
+      const from = direction === 'into' ? stagingFile : memoryFile;
+      const to = direction === 'into' ? memoryFile : stagingFile;
+      const body = '---\ntitle: Tea\ndescription: Drink\ntype: user\n---\noolong';
+      await writeFile(from, body);
+      const tracker = createBotLearningTracker(), publish = vi.fn();
+      const read = vi.fn(await createProjectMemoryReceipts(root));
+      tracker.markProjectTeammate('s', read);
+      tracker.observe('s', 'i:1', publish);
+      await rename(from, to);
+      // Another task can recreate the old name after a move out; it is not our save.
+      if (direction === 'out of') await writeFile(from, body + '\nAnother writer');
+      successfulWrite(tracker, 's', 'i:1', 'codex', 'file_change', {
+        changes: [{ path: from, kind: { type: 'update', move_path: to } }],
+      });
+      tracker.seal('s', 'i:1', 'reply');
+      await read.mock.results[0].value;
+      if (direction === 'into') expect(publish).toHaveBeenCalledWith('reply', [
+        { kind: 'memory', key: 'user_tea.md', title: 'Tea', action: 'created' },
+      ]);
+      else expect(publish).not.toHaveBeenCalled();
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
