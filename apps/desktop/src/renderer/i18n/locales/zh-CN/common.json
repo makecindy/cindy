@@ -8184,8 +8184,8 @@
         "hostTools_controlDetail": "通过 Cindy 的任务工具修改、归档、恢复和控制已有任务及项目，并在本机导入原生任务文件。",
         "hostTools_handoff": "任务投递",
         "hostTools_handoffDetail": "通过 Cindy 的任务工具给已有任务发送消息。需要当前任务上下文的操作必须显式指定任务。",
-        "hostTools_usage": "读取订阅用量",
-        "hostTools_usageDetail": "读取当前 Cindy 账号在这台电脑上已连接的 Claude 和 Codex 账号标识、套餐、配额窗口及更新时间。不能读取邮箱、凭证、文件或其他电脑的数据，也不能修改账号",
+        "hostTools_usage": "读取用量与供应商组状态",
+        "hostTools_usageDetail": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、供应商组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置",
         "hostTools_settings": "应用设置",
         "hostTools_settingsDetail": "通过 Cindy 的设置工具读取和修改应用配置；不返回密钥，不代替你完成保密输入。",
         "hostTools_scheduler": "自动化管理",
@@ -10835,7 +10835,12 @@
       "summary": "自我介绍",
       "summaryPlaceholder": "例如：一个热爱写网文的小说家，有点幽默，喜欢琢磨人物的小心思。",
       "avatarSelectionFailed": "头像未能读取，请选择 5 MB 以内的 PNG、JPEG 或 WebP 图片",
-      "personality": "性格与说话习惯"
+      "personality": "性格与说话习惯",
+      "sourceLength": "{{length}} / {{limit}} 个 UTF-16 单元（不计首尾空白）。",
+      "sourceExcess": "超出 {{excess}} 个单元，缩短后才能保存。",
+      "sourceTooLong": "资料过长，修改后才能保存。",
+      "sourceRecovery": "已保存的原文不变，完整草稿仍保留在此页。复制后，请先粘贴到安全的地方并核对内容完整，再缩短内容或放弃本次更改。",
+      "sourceCopy": "复制完整内容"
     },
     "nameLabel": "怎么称呼",
     "close": "关闭",
@@ -12916,7 +12921,7 @@
           "reasoningDominated": "思考已消耗本次输出的大部分预算，回复可能不完整。建议降低推理强度，或先压缩对话记录，再继续。",
           "generic": "模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。",
           "join": "{{usage}}{{guidance}}",
-          "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。"
+          "silentStopExhausted": "检测到空响应，自动续跑已暂停。"
         },
         "permission": {
           "autoReviewUnavailable": "自动审批没完成，请确认要不要允许这次操作。",
@@ -18967,7 +18972,7 @@
       "steerFailed": "插话失败：{{message}}",
       "qrExpired": "二维码已过期，请重新开始",
       "registrationFailed": "创建失败，请稍后重试",
-      "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。点击「继续」恢复任务。",
+      "silentStopExhausted": "检测到空响应，自动续跑已暂停。",
       "executionResultUnavailable": "未能取回执行结果，已停止自动续接。可以让助手检查已有的执行结果。",
       "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。",
       "outputLimitReasoning": "思考已消耗本次输出的大部分预算，回复可能不完整。建议降低推理强度，或先压缩对话记录，再继续。",
@@ -19559,7 +19564,8 @@
         "expired": "这张礼品卡已过领取期限。",
         "voided": "这张礼品卡已作废。",
         "rateLimited": "尝试次数过多，请稍后再试。",
-        "failed": "暂时无法兑换，请稍后重试。"
+        "failed": "暂时无法兑换，请稍后重试。",
+        "personalRequired": "礼品卡仅限个人用户领取。"
       }
     },
     "usage": {
