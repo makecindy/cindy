@@ -16763,6 +16763,7 @@
         "openInFileBrowser": "於卷瀏覽器覽之",
         "showInFolder": "於卷匣中示之",
         "copyFilePath": "錄卷路徑",
+        "copyFolderPath": "錄卷匣路徑",
         "deleteFile": "刪卷"
       },
       "searchPanel": {
@@ -18979,6 +18980,7 @@
       "registrationFailed": "立之未成，請稍後再試",
       "silentStopExhausted": "察得空答，自動續行已暫止。",
       "executionResultUnavailable": "未得行之結果，自動接續已止。可請助手察既有之結果。",
+      "unexecutedToolMarkup": "模型以文字述工具之呼叫，未能核其執行結果，此輪未竟。",
       "outputLimit": "模型已達輸出之限，此答或有不全。可遣新訊以續；若屢至此限，宜減思之深淺，或先壓縮言談錄。",
       "outputLimitReasoning": "思考已耗本次輸出預算之大半，此答或有不全。宜減思之深淺，或先壓縮言談錄，而後續之。",
       "outputLimitUsage": "本次模型請求已輸出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用於思考。",

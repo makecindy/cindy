@@ -6,7 +6,10 @@
  * 主进程按供应商记下 `runLocation`(deviceId 或 'local')；改选的电脑此刻不在可用名单里时按默认处理，
  * 不让一台离线的电脑把整项供应商藏起来。
  */
-export const RUN_LOCATION_LOCAL = 'local';
+import { effectiveRunLocation, RUN_LOCATION_LOCAL } from '@cindy/model-providers';
+
+// One run-location rule for Settings and both model pickers (see @cindy/model-providers).
+export { effectiveRunLocation, RUN_LOCATION_LOCAL };
 
 /** 同账号另一台电脑，提供了这个供应商且对本机开放。 */
 export interface RunLocationCandidate {
@@ -20,15 +23,6 @@ export interface RunLocationProvider {
   connected?: boolean;
   suspended?: boolean;
   runLocation?: string;
-}
-
-/** 本机或某台电脑的 deviceId。 */
-export function effectiveRunLocation(provider: RunLocationProvider, candidates: readonly RunLocationCandidate[]): string {
-  const pinned = provider.runLocation;
-  if (pinned === RUN_LOCATION_LOCAL) return RUN_LOCATION_LOCAL;
-  if (pinned && candidates.some((candidate) => candidate.deviceId === pinned)) return pinned;
-  if (provider.connected && !provider.suspended) return RUN_LOCATION_LOCAL;
-  return candidates[0]?.deviceId ?? RUN_LOCATION_LOCAL;
 }
 
 /** 这台电脑的供应商是因为本机用不了才借用另一台(而不是用户特意改选)。 */
