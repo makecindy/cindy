@@ -233,8 +233,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const remoteWritesBlocked = isRemoteSessionWriteBlocked(session);
   const isAutomationGenerated = isAutomationGeneratedSession(session);
   const boundSchedules = useSessionBoundSchedules(session.id, session.deviceLinkDeviceId);
-  const showScheduleBindingBadge = boundSchedules.length > 0;
-  const showAutomationTimer = !showScheduleBindingBadge && isAutomationGenerated;
+  // The inbox sorts by what needs the user, so it drops the automation mark and the project
+  // name (the row's project icon already says where it belongs; 2026-11-18 user decision).
+  const showScheduleBindingBadge = !inboxMode && boundSchedules.length > 0;
+  const showAutomationTimer = !inboxMode && !showScheduleBindingBadge && isAutomationGenerated;
   const displayTitle = getSessionDisplayTitle(
     session,
     t(
@@ -833,7 +835,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                     />
                   )}
                   {/* Agent 在另一台电脑运行(任务在本机)的标识在 Agent 图标上(信号波纹)。 */}
-                  {sourceLabel ? (
+                  {sourceLabel && !inboxMode ? (
                     <span
                       title={sourceLabel}
                       data-project-source
@@ -844,7 +846,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                           : 'text-[var(--cmd-palette-item-meta)]',
                       )}
                     >
-                      {!inboxMode && session.workspaceKind !== 'dialogue' && sessionProjectDirectory(session) && (
+                      {session.workspaceKind !== 'dialogue' && sessionProjectDirectory(session) && (
                         <ResolvedProjectIcon directory={sessionProjectDirectory(session)!}
                           remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
                           name={sourceLabel} size={14} />

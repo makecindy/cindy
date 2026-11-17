@@ -281,9 +281,10 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(automationGroupSource).toContain('sourceLabel: sourceLabelMap?.get(session.id)');
     const cardSource = read('features', 'cc-agent', 'sidebar', 'SessionCard.tsx');
     expect(cardSource).toContain('sourceLabel,');
-    expect(cardSource).toContain('{sourceLabel ? (');
+    // Outside the inbox; the inbox leaves the project name to the row's project icon.
+    expect(cardSource).toContain('{sourceLabel && !inboxMode ? (');
     const itemSource = read('features', 'cc-agent', 'sidebar', 'SessionItem.tsx');
-    expect(itemSource).toContain('{sourceLabel ? (');
+    expect(itemSource).toContain('{sourceLabel && !inboxMode ? (');
   });
 
   // 2026-08-12 用户裁决:筛选各维度选中后菜单不关闭(常要连调几项);排序与显示

@@ -469,7 +469,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   // heartbeat schedule 绑定标识(targetSessionId 指向本会话);schedule 删除/过期后
   // schedulesStore 'changed' 刷新 → 列表为空 → 徽章消失。
   const boundSchedules = useSessionBoundSchedules(session.id, session.deviceLinkDeviceId);
-  const hasAutomationMeta = boundSchedules.length > 0 || isAutomationGenerated;
+  // The inbox drops the automation mark and the project name: the row's project icon already
+  // says where it belongs (2026-11-18 user decision).
+  const hasAutomationMeta = !inboxMode && (boundSchedules.length > 0 || isAutomationGenerated);
   // 单个 automation-generated 会话行的「schedule 反查」:sessionId → scheduleId 走
   // sidebar-index-runs(Session 上没有 scheduleId 字段)。用于两处:
   //   1. 门控 Run 按钮的可见性 —— schedule 已被删除但会话保留(disposition
@@ -1098,7 +1100,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         >
           {/* 绑定徽章优先于普通自动化 Timer:persistentSession 会话两者皆真,
               主图标统一为 Timer，绑定态额外承载频率/暂停信息。 */}
-          {boundSchedules.length > 0 ? (
+          {!hasAutomationMeta ? null : boundSchedules.length > 0 ? (
             <ScheduleBindingBadge
               schedules={boundSchedules}
               deviceLinkDeviceId={session.deviceLinkDeviceId}
@@ -1129,7 +1131,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
             />
           )}
           {/* Agent 在另一台电脑运行(任务在本机)的标识在左侧 Agent 图标上(信号波纹)。 */}
-          {sourceLabel ? (
+          {sourceLabel && !inboxMode ? (
             <span
               title={sourceLabel}
               data-project-source
@@ -1140,7 +1142,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                   : 'text-[var(--cmd-palette-item-meta)]',
               )}
             >
-              {!inboxMode && session.workspaceKind !== 'dialogue' && sessionProjectDirectory(session) && (
+              {session.workspaceKind !== 'dialogue' && sessionProjectDirectory(session) && (
                 <ResolvedProjectIcon directory={sessionProjectDirectory(session)!}
                   remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
                   name={sourceLabel} size={14} />

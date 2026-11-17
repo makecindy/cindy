@@ -80,6 +80,8 @@ export default {
         .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.archived') })
         .click();
       await page.locator('[data-session-id="done"]').waitFor();
+      // The project icon is enough: no project name beside inbox titles (2026-11-18 user decision).
+      assert.equal(await page.locator('[data-project-source]').count(), 0, 'No project name beside inbox titles');
       await ui.capture('inbox-mode');
       return;
     }
@@ -110,6 +112,11 @@ export default {
     await workingSection.locator('[data-session-id="following"]').waitFor();
     assert.equal(await workingSection.locator('[data-session-id="running"]').count(), 1);
     assert.equal(await workingSection.locator('[data-session-id="waiting"]').count(), 0);
+    // Schedules have loaded ('following' sits in Working). The inbox still shows no automation
+    // mark, although 'ready' and 'following' are bound to automations (2026-11-18 user decision).
+    for (const key of ['ccAgent.sidebar.scheduleBinding.viewTask', 'ccAgent.sidebar.scheduleBinding.label']) {
+      assert.equal(await page.locator(`[aria-label="${await ui.t(key)}"]`).count(), 0, 'No automation mark in inbox rows');
+    }
     await ui.capture('all-sections');
     await ready.hover();
     // Inbox shows a one-click Done instead of the two-step archive.
