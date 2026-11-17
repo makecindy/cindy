@@ -33,6 +33,16 @@ it('keeps the open task in its section and slot until the user leaves it', () =>
   expect(left.get('working')).toEqual(['open', 'w']);
 });
 
+// 2026-11-18 用户决定：打开着的任务跑完时立刻回到待处理，不等切换到别的任务。
+it('moves the open task to inbox as soon as its round finishes', () => {
+  const placement = holdViewedInboxPlacement(groups([], ['open', 'w']), id, 'open', null);
+  expect(placement).toEqual({ key: 'open', section: 'working', index: 0 });
+  const finished = groups(['a', 'open'], ['w']);
+  expect(holdViewedInboxPlacement(finished, id, 'open', placement)).toEqual({ key: 'open', section: 'inbox', index: 1 });
+  expect(finished.get('inbox')).toEqual(['a', 'open']);
+  expect(finished.get('working')).toEqual(['w']);
+});
+
 it('applies explicit snooze or archive at once', () => {
   const placement = holdViewedInboxPlacement(groups(['open'], []), id, 'open', null);
   const snoozed = groups([], [], ['open']);

@@ -7,12 +7,11 @@ export interface ViewedInboxPlacement {
   index: number;
 }
 
-const LIVE: ReadonlySet<TaskInboxSection> = new Set(['inbox', 'working']);
-
 /**
- * The open task keeps its section and slot while the user stays on it: sending a message
- * (inbox → working) or a round finishing (working → inbox) must not move the sidebar focus.
- * Explicit snooze / archive / restore apply at once. The task is re-sorted after the user leaves.
+ * The open task keeps its section and slot when the user sends a message (inbox → working), so the
+ * sidebar focus does not jump. A round finishing (working → inbox) moves it at once (2026-11-18
+ * user decision): the user is usually waiting for that result. Explicit snooze / archive / restore
+ * also apply at once. The task is re-sorted after the user leaves.
  * Returns the placement to remember for the next render (null when nothing is open).
  */
 export function holdViewedInboxPlacement<T>(
@@ -31,7 +30,7 @@ export function holdViewedInboxPlacement<T>(
     }
   }
   if (!current) return previous?.key === viewedKey ? previous : null;
-  if (previous?.key !== viewedKey || !LIVE.has(previous.section) || !LIVE.has(current.section)) {
+  if (previous?.key !== viewedKey || previous.section !== 'inbox' || current.section !== 'working') {
     return { key: viewedKey, ...current };
   }
   const source = groups.get(current.section)!;
