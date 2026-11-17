@@ -303,6 +303,7 @@ export function buildAgentRows(payload: UsageHistoryPayload | null): AgentTokenR
   // 走合并后的模型行 —— 同一模型的 api / subscription 两个计费维度已并成一行,
   // 否则 modelCount 会把同一个模型数成两个 (见 buildModelRows 的注释)。
   for (const model of buildModelRows(payload)) {
+    if (model.agentKind === 'auxiliary') continue;
     const tokens = model.tokens;
     if (tokens <= 0) continue;
     const acc = byAgent.get(model.agentKind) ?? {

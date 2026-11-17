@@ -361,5 +361,8 @@ it('shows auxiliary purposes in the selected range with their share of all token
   const today = filterUsageHistoryPayload(history, 'today');
   expect(buildAuxiliaryRows(today)).toEqual([{ source: 'title', tokens: 30, requests: 3, share: 0.3,
     models: ['same-model · provider'] }]);
-  expect(buildAgentRows(history).find(row => row.agentKind === 'auxiliary')?.tokens).toBe(100);
+  const agents = buildAgentRows(history);
+  expect(agents.map(row => row.agentKind)).toEqual(['codex']);
+  expect(agents[0].share).toBe(1);
+  expect(buildModelRows(history).find(row => row.agentKind === 'auxiliary')?.tokens).toBe(100);
 });
