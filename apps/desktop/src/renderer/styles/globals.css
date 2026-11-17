@@ -1236,6 +1236,14 @@ body.resizing-pane [data-ghost-webview] {
    过渡,一次性瞬态允许非合成器属性)→ 光晕从法阵荡开一圈 + ✓ 弹出
    (✓ 复用 Done 语义的唯一批准 overshoot 曲线,同 status-done-pop)。
    motion-reduce 下全部禁用,直接落终态帧。 */
+@keyframes summon-seal-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.summon-seal-spin {
+  animation: summon-seal-spin 2.4s linear infinite;
+}
 .summon-seal-arc {
   transition:
     stroke-dasharray 600ms var(--motion-ease-out),
@@ -1272,6 +1280,7 @@ body.resizing-pane [data-ghost-webview] {
   .summon-seal-arc {
     transition: none;
   }
+  .summon-seal-spin,
   .summon-seal-halo,
   .summon-seal-tick-pop {
     animation: none;

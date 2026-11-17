@@ -697,7 +697,7 @@ describe('GhostSummonCard(chip 形态)', () => {
     expect(screen.getByText('iOS 模拟器')).toBeTruthy();
     expect(screen.getByText('已选择')).toBeTruthy();
     expect(screen.queryByText('调用中…')).toBeNull();
-    expect(container.querySelector('.animate-\\[spin_2\\.4s_linear_infinite\\]')).toBeNull();
+    expect(container.querySelector('.summon-seal-spin')).toBeNull();
     expect(container.querySelector('svg.lucide-check')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { expanded: false }));
@@ -761,7 +761,7 @@ describe('GhostSummonCard(chip 形态)', () => {
     for (const arc of arcs) {
       expect(arc.getAttribute('stroke-dasharray')).toBe('100 0');
     }
-    expect(container.querySelector('.animate-\\[spin_2\\.4s_linear_infinite\\]')).toBeTruthy();
+    expect(container.querySelector('.summon-seal-spin')).toBeTruthy();
 
     // settling:光晕 + ✓ 弹出,旋转已摘除。
     act(() => {
@@ -769,7 +769,7 @@ describe('GhostSummonCard(chip 形态)', () => {
     });
     expect(container.querySelector('.summon-seal-halo')).toBeTruthy();
     expect(container.querySelector('.summon-seal-tick-pop')).toBeTruthy();
-    expect(container.querySelector('.animate-\\[spin_2\\.4s_linear_infinite\\]')).toBeNull();
+    expect(container.querySelector('.summon-seal-spin')).toBeNull();
 
     // done:光晕一次性卸载,✓ 常驻。
     act(() => {
@@ -797,7 +797,7 @@ describe('GhostSummonCard(chip 形态)', () => {
     for (const arc of arcs) {
       expect(arc.getAttribute('stroke-dasharray')).toBe('100 0');
     }
-    expect(container.querySelector('.animate-\\[spin_2\\.4s_linear_infinite\\]')).toBeNull();
+    expect(container.querySelector('.summon-seal-spin')).toBeNull();
     expect(container.querySelector('.summon-seal-halo')).toBeNull();
     expect(container.querySelector('svg.lucide-check')).toBeTruthy();
   });

@@ -202,7 +202,7 @@ function SummonSeal({
         aria-hidden="true"
         className={cn(
           'absolute inset-0',
-          spinning && 'animate-[spin_2.4s_linear_infinite] motion-reduce:animate-none',
+          spinning && 'summon-seal-spin',
         )}
       >
         <svg viewBox="0 0 40 40" aria-hidden="true" className="h-full w-full">
