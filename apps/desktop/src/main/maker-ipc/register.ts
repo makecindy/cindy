@@ -1203,7 +1203,7 @@ import {
   type MakerSessionAgentSwitchHandlerDeps,
   type PendingAgentSwitchIntent,
 } from './sessionAgentSwitchHandler.js';
-import { pendingHarnessRuntimeMutation, setSessionRuntimeHarness } from './sessionRuntimeHarnessSelection.js';
+import { pendingHarnessRuntimeMutation, setSessionRuntimeHarness, stagedSelectionProfile } from './sessionRuntimeHarnessSelection.js';
 import {
   COMPANION_SESSION_IDS_LIMIT,
   buildHandoffText,
@@ -9879,6 +9879,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const live = maker.getSession(target.sessionId);
     if (live) return false;
     if (isCancelled?.()) return false;
+    // A staged route choice lands at the next send, which then starts the new route.
+    // Warming the old route here (focus pre-warm) would only start a runtime the send closes.
+    if (agentSwitchPending.get(target.sessionId)) return false;
 
     const db = getDbClient().drizzle;
     const [row] = await db
@@ -16120,6 +16123,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 与 focus 后台预热共享同一套去重/锁:派活不会和切换触发两次 bootstrap。
       await orcaWorkerResumeScheduler.request(target);
     },
+    hasPendingAgentSwitch: (sessionId) => !!agentSwitchPending.get(sessionId),
     // 归档 / 显式 idle 会释放 runtime；先取消未落地的后台预热，避免释放后被重新拉起。
     cancelWorkerResume: (sessionId) => orcaWorkerResumeScheduler.cancel(sessionId),
     updateWorkerStatus,
@@ -17409,9 +17413,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         return result;
       };
-      if (patch.harness !== undefined || patch.agentDeviceId !== undefined) {
-        const harness = patch.harness ?? (await readSessionRuntimeProfiles(targetSessionId))?.effective.agentKind;
-        if (!harness) return { ok: false, errorCode: 'NOT_FOUND', message: 'Task runtime is unavailable' };
+      // A selection staged for the next send (by the user's picker or a complete agent selection)
+      // owns the next route boundary; the turn-end override path would only be superseded by it.
+      // Revise that selection instead, as choosing again in the picker does.
+      const revisesStagedSelection = patch.harness === undefined && patch.agentDeviceId === undefined &&
+        stagedSelectionProfile(agentSwitchPending.get(targetSessionId)) !== null;
+      if (patch.harness !== undefined || patch.agentDeviceId !== undefined || revisesStagedSelection) {
+        const harness = patch.harness ?? (revisesStagedSelection
+          ? undefined
+          : (await readSessionRuntimeProfiles(targetSessionId))?.effective.agentKind);
+        if (!harness && !revisesStagedSelection) {
+          return { ok: false, errorCode: 'NOT_FOUND', message: 'Task runtime is unavailable' };
+        }
         return keepAsTaskChoice(await setSessionRuntimeHarness({
           withSessionLock: withSendToSessionLock,
           ownerEpoch: captureSessionRuntimeControlOwnerEpoch,
@@ -17448,7 +17461,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               runtimeSource: 'agent', assertSelectionCurrent, beforeMutation,
             });
           },
-        }, { targetSessionId, expectedGeneration, beforeMutation, patch: { ...patch, harness } }));
+        }, { targetSessionId, expectedGeneration, beforeMutation,
+          patch: { ...patch, ...(harness !== undefined ? { harness } : {}) } }));
       }
       const profiles = await readSessionRuntimeProfiles(targetSessionId);
       if (beforeMutation) await beforeMutation();

@@ -724,6 +724,30 @@ describe('OrcaTeamService', () => {
     );
   });
 
+  // 2026-11-17: a Lead staged a new source for Workers stopped at their Claude subscription
+  // usage limit, then send_to_worker failed with SUBSCRIPTION_ACCOUNT_LIMITED: the dormant
+  // Worker was woken on its old route before delivery applied the staged choice. Delivery owns
+  // that start when a choice is staged. Tier: unit (injected deps, production send entry).
+  it('lets delivery start a dormant worker on its staged route instead of waking the old one', async () => {
+    const { deps, service, setWorker } = createDeps({
+      hasPendingAgentSwitch: vi.fn((sessionId: string) => sessionId === 'worker-session-1'),
+    });
+    setWorker(createWorker({ status: 'error' }));
+
+    await expect(
+      service.sendToWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'worker-1',
+        message: '继续',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(deps.resumeWorkerSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ targetSessionId: 'worker-session-1', message: '继续' }),
+    );
+  });
+
   it('does not resume a running worker that still has a live session', async () => {
     const { deps, service, setWorker } = createDeps({
       getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),

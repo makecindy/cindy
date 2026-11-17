@@ -198,6 +198,38 @@ describe('runtime harness selection', () => {
     },
   );
 
+  // 2026-11-17: after staging a Worker's new source, the Lead's follow-up without harness hit
+  // CONFLICT although its generation matched, because the turn-end path yields to any staged
+  // selection. Without harness the patch now revises the staged selection, as choosing again in
+  // the picker does; omitted fields keep the staged values. Tier: unit (real staging transaction).
+  it('revises a staged selection when harness is omitted, keeping its other fields', async () => {
+    const h = setup();
+    await setSessionRuntimeHarness(h.deps, {
+      ...request, patch: { ...request.patch, providerId: 'gateway', effort: 'low' },
+    });
+
+    expect(await setSessionRuntimeHarness(h.deps, {
+      targetSessionId: 's1', expectedGeneration: 5, patch: { fastMode: true },
+    })).toMatchObject({
+      ok: true,
+      status: 'deferred',
+      effectiveBoundary: 'next_send',
+      pendingMutation: {
+        profile: { agentKind: 'codex', model: 'gpt-6-astra', providerId: 'gateway', effort: 'low', fastMode: true },
+      },
+    });
+    expect(h.close).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  it('asks to re-read when the staged selection a revision targets is gone', async () => {
+    const h = setup();
+    expect(await setSessionRuntimeHarness(h.deps, {
+      ...request, patch: { model: 'gpt-6-astra' },
+    })).toMatchObject({ ok: false, errorCode: 'CONFLICT' });
+    expect(h.pending.get('s1')).toBeUndefined();
+  });
+
   it.each([
     { orcaRole: 'lead', running: false },
     { orcaRole: 'lead', running: true },

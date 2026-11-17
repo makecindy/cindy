@@ -405,6 +405,11 @@ export interface OrcaTeamServiceDeps {
     worker: OrcaWorkerRecordSnapshot,
     link: OrcaWorkerLinkSnapshot,
   ): Promise<void>;
+  /**
+   * 任务登记了尚未落地的 Agent／模型／来源选择(下一次发送时生效)。此时不按数据库里的旧路线
+   * 唤醒休眠的 Worker：派发会先应用这次选择，再在新路线上启动。
+   */
+  hasPendingAgentSwitch?(sessionId: string): boolean;
   /** 修订 worker 的 role/label；label 唯一性由 store 的唯一索引把关。 */
   updateWorkerIdentity: (input: {
     workerId: string;
@@ -1363,7 +1368,12 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           // Runtime liveness is independent from the persisted worker status. After a restart a
           // running/error worker can be dormant too, and must rehydrate through the Worker-specific
           // path so its stored permission mode and Orca vendor options are preserved.
-          if (!wasLiveBeforeDispatch) await deps.resumeWorkerSession(target, link);
+          // A staged route choice is the exception: waking the old route first can fail on it
+          // (e.g. its subscription is at its usage limit) before the choice lands. Delivery
+          // applies the choice, then starts the Worker on the new route with the same identity.
+          if (!wasLiveBeforeDispatch && !deps.hasPendingAgentSwitch?.(target.sessionId)) {
+            await deps.resumeWorkerSession(target, link);
+          }
           await params.assertCurrent?.();
           result = await deps.dispatchWorkerMessage({
             targetSessionId: target.sessionId,

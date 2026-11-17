@@ -710,6 +710,15 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
       `get_session_runtime` / `set_session_runtime` 给它换模型（坑点 #6 的发送边界切换，运行设备 Worker
       不适用）；归档重建会丢上下文。它是回报正文的一部分（用户在 Lead 对话里也看得到），不进系统提示词。
       Worker 的用量上限仍不走普通任务的等待续跑（`isUsageLimitAutoResumeEligible`），由 Lead 决定。
+    - **换好的路线在派活时先落地（2026-11-17）**：起因是四个撞了 Claude 订阅上限的 Worker，Lead 已用
+      `set_session_runtime` 登记新来源（`next_send`），`send_to_worker` 却回 `[SUBSCRIPTION_ACCOUNT_LIMITED]`：
+      休眠的 Worker 在派发前先按数据库里的旧路线唤醒（`resumeWorkerSession`），撞上旧订阅的上限，登记的
+      选择根本没机会落地。任务有待生效的选择（`agentSwitchPending`）时，派发不再先唤醒，由
+      `orcaInterAgentDispatcher` 先应用选择、再在新路线上启动（`bootstrapSwitchedSession` 按任务记录带回
+      协同身份与权限档）；切换焦点的后台预热同样跳过。随后 Lead 不带 `harness` 再调 `set_session_runtime`
+      时，generation 一致也回 `CONFLICT`：发送边界的选择优先，turn 结束时生效的临时调整会被它拒绝。
+      现在省略 `harness` 且已有待生效选择时，改为修改那次选择（未给的字段沿用它），与用户在面板里重选一致。
+      回归见 `orcaTeamService.test.ts` 与 `sessionRuntimeHarnessSelection.test.ts`。
     - **Lead 已对该 Worker 采取行动时撤下它的旧回报**：归档（`archiveWorker`）成功后，或向状态为
       `error` 的 Worker 重新派活／打断改派成功后，把该 Worker 排在 Lead 队列里、Lead 还没读到的异常终止
       回报撤下（coordinator `remove`，与 Stop 清队列同一条结清路径）。正文不丢：`archive_worker` 回

@@ -28,6 +28,26 @@ export function pendingHarnessRuntimeMutation(
   };
 }
 
+/**
+ * The complete selection a task has staged for its next send, whoever staged it. Recovery
+ * payloads are internal handoffs, not a choice that can be revised.
+ */
+export function stagedSelectionProfile(
+  intent: PendingAgentSwitchIntent | undefined,
+  currentAgentDeviceId?: string | null,
+): SessionRuntimeProfile | null {
+  if (!intent || intent.resumeFallbackRecovery) return null;
+  const agentDeviceId = intent.targetAgentDeviceId === undefined ? currentAgentDeviceId : intent.targetAgentDeviceId;
+  return {
+    ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
+    agentKind: intent.targetAgentKind,
+    model: intent.model,
+    providerId: intent.providerId ?? null,
+    effort: (intent.effort ?? null) as Effort | null,
+    fastMode: intent.fastMode === 'ultrafast' ? 'ultrafast' : intent.fastMode === true,
+  };
+}
+
 export interface HarnessRuntimeSelectionDeps {
   withSessionLock<T>(sessionId: string, run: () => Promise<T>): Promise<T>;
   ownerEpoch(): string;
@@ -47,7 +67,12 @@ export interface HarnessRuntimeSelectionDeps {
   pending(sessionId: string): PendingAgentSwitchIntent | undefined;
 }
 
-/** Complete selections share the picker/send transaction, never the turn-end override queue. */
+/**
+ * Complete selections share the picker/send transaction, never the turn-end override queue.
+ * Without `harness`, the patch revises the selection already staged for the next send, like
+ * choosing again in the picker: omitted fields keep the staged values. The turn-end queue
+ * cannot run ahead of a staged selection, so this is the only way to change it.
+ */
 export async function setSessionRuntimeHarness(
   deps: HarnessRuntimeSelectionDeps,
   params: {
@@ -55,7 +80,7 @@ export async function setSessionRuntimeHarness(
     expectedGeneration?: number;
     beforeMutation?: () => Promise<void>;
     patch: {
-      harness: AgentKind;
+      harness?: AgentKind;
       agentDeviceId?: string | null;
       model?: string;
       providerId?: string | null;
@@ -65,7 +90,10 @@ export async function setSessionRuntimeHarness(
   },
 ): Promise<SessionRuntimeSetResult> {
   const { targetSessionId: id, expectedGeneration, patch } = params;
-  if (!['claude-code', 'codex', 'pi'].includes(patch.harness) || !patch.model?.trim()) {
+  const revisingStaged = patch.harness === undefined;
+  if (revisingStaged
+    ? patch.model !== undefined && !patch.model.trim()
+    : !['claude-code', 'codex', 'pi'].includes(patch.harness!) || !patch.model?.trim()) {
     return {
       ok: false,
       errorCode: 'INVALID_ARGS',
@@ -98,17 +126,29 @@ export async function setSessionRuntimeHarness(
       if (params.beforeMutation) await params.beforeMutation();
       if (!effective)
         return { ok: false, errorCode: 'NOT_FOUND', message: `session ${id} not found` };
+      const staged = revisingStaged ? stagedSelectionProfile(deps.pending(id), effective.agentDeviceId) : null;
+      if (revisingStaged && !staged) {
+        return {
+          ok: false,
+          errorCode: 'CONFLICT',
+          message: 'the staged selection already landed or was cancelled; read get_session_runtime again',
+        };
+      }
+      const base = staged ?? effective;
       const profile = await deps.resolve(
         {
-          ...(patch.agentDeviceId !== undefined || effective.agentDeviceId !== undefined
-            ? { agentDeviceId: patch.agentDeviceId === undefined ? effective.agentDeviceId : patch.agentDeviceId }
+          ...(patch.agentDeviceId !== undefined || base.agentDeviceId !== undefined
+            ? { agentDeviceId: patch.agentDeviceId === undefined ? base.agentDeviceId : patch.agentDeviceId }
             : {}),
-          agentKind: patch.harness,
-          model: patch.model!,
-          // Never inherit an old harness's provider when selecting a new target.
-          providerId: patch.providerId ?? null,
-          effort: patch.effort !== undefined ? patch.effort : effective.effort,
-          fastMode: patch.fastMode ?? effective.fastMode,
+          agentKind: patch.harness ?? staged!.agentKind,
+          model: patch.model ?? staged!.model,
+          // Never inherit an old harness's provider when selecting a new target; a revision
+          // keeps the staged source unless it names another one.
+          providerId: staged
+            ? (patch.providerId !== undefined ? patch.providerId : staged.providerId)
+            : patch.providerId ?? null,
+          effort: patch.effort !== undefined ? patch.effort : base.effort,
+          fastMode: patch.fastMode ?? base.fastMode,
         },
         { effort: patch.effort !== undefined, fast: patch.fastMode !== undefined },
       );
