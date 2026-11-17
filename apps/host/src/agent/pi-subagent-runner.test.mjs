@@ -152,7 +152,9 @@ test('the runner is ready once, loses its IPC channel before loading, and stops 
       t.diagnostic(JSON.stringify({ home: controlHome, entries: directoryEntries(controlHome), controlRun }));
       diagnoseRunnerDirectories(t, controlRoot);
     }
-    fs.rmSync(root, { recursive: true, force: true });
+    // Windows can briefly retain the exited runner's working-directory handle.
+    // Match the Pi runner integration fixture's bounded cleanup; errors still fail.
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

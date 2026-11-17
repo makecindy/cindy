@@ -12,6 +12,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { Spinner } from '@/components/ui/spinner';
+import { DownloadMeter } from '@/components/ui/download-meter';
 import { Switch } from '@/components/ui/switch';
 import { useVoiceSpeakerFilterStatus } from '@/hooks/useVoiceSpeakerFilterStatus';
 import { createLogger } from '@/lib/logger';
@@ -230,13 +231,22 @@ function ModelRow({ status, onDownload }: { status: VoiceSpeakerFilterStatus; on
   if (status.modelState === 'downloading') {
     return (
       <SettingsBlock className="flex items-center justify-between gap-5">
-        <p className="flex min-w-0 items-center gap-2 text-13 text-[var(--settings-section-title)]">
-          <Spinner size={14} aria-hidden />
-          {t('settings.voiceInput.speakerFilter.model.downloading', {
-            done: formatMegabytes(status.downloadedBytes),
-            total,
-          })}
-        </p>
+        {status.download ? (
+          <div className="min-w-0 flex-1">
+            <DownloadMeter
+              label={t('settings.voiceInput.speakerFilter.label')}
+              progress={status.download}
+            />
+          </div>
+        ) : (
+          <p className="flex min-w-0 items-center gap-2 text-13 text-[var(--settings-section-title)]">
+            <Spinner size={14} aria-hidden />
+            {t('settings.voiceInput.speakerFilter.model.downloading', {
+              done: formatMegabytes(status.downloadedBytes),
+              total,
+            })}
+          </p>
+        )}
         <Button data-settings-search-action="Download or cancel the speaker-filter model download"
           variant="secondary"
           size="md"

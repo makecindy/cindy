@@ -37,6 +37,10 @@ import {
   selectGgufShards,
 } from './llamaCppDownloads.js';
 import { windowsTarBin } from './ollamaInstall.js';
+import {
+  createDownloadProgressReporter,
+  type DownloadProgressReporter,
+} from '../downloader/index.js';
 import { readModelContextLimits } from '../maker-host/model-context-limit-store.js';
 import { assertManagedLlamaCppProvider } from './managedLlamaCppProvider.js';
 import { killProcessTree } from '../scheduler-host/proc-util.js';
@@ -88,6 +92,7 @@ export function createLlamaCppService(
   let ready = false;
   let starting: Promise<void> | undefined;
   let transfer: AbortController | undefined;
+  let progress: DownloadProgressReporter | undefined;
   let wakeDownload: (() => void) | undefined;
   let settled: Promise<void> | undefined;
   let ownerProof: ReviewOwnerLivenessHandle | undefined;
@@ -204,6 +209,16 @@ export function createLlamaCppService(
     const current = new AbortController();
     controller = current;
     operation = { kind, completed: 0, total: 0 };
+    const owned = operation;
+    progress =
+      kind === 'start'
+        ? undefined
+        : createDownloadProgressReporter({
+            throttleMs: 0,
+            emit: (next) => {
+              owned.download = next;
+            },
+          });
     let resolveSettled!: () => void;
     settled = new Promise<void>((resolve) => {
       resolveSettled = resolve;
@@ -214,6 +229,7 @@ export function createLlamaCppService(
     } finally {
       controller = undefined;
       operation = undefined;
+      progress = undefined;
       resolveSettled();
       settled = undefined;
     }
@@ -226,11 +242,13 @@ export function createLlamaCppService(
     if (operation?.kind !== 'download') return;
     operation.paused = true;
     operation.bytesPerSecond = 0;
+    progress?.setPhase('paused');
     transfer?.abort('DOWNLOAD_PAUSED');
   }
   function resume() {
     if (operation?.kind !== 'download') return;
     operation.paused = false;
+    progress?.setPhase('queued');
     wakeDownload?.();
   }
   function closeOwnerProof() {
@@ -294,9 +312,22 @@ export function createLlamaCppService(
       try {
         const archive = path.join(staging, asset.name);
         operation!.total = asset.size;
-        await downloadLlamaCppAsset(asset, archive, 'github', signal, (n) => {
-          operation!.completed = n;
-        });
+        const reporter = progress!;
+        reporter.reset('downloading', asset.size);
+        await downloadLlamaCppAsset(
+          asset,
+          archive,
+          'github',
+          signal,
+          (n, event) => {
+            operation!.completed = n;
+            operation!.bytesPerSecond = event?.speedBps ?? 0;
+            reporter.setBytes(n, asset.size, event?.speedBps);
+          },
+          false,
+          { onRetry: reporter.callbacks.onRetry, onVerifying: reporter.callbacks.onVerifying },
+        );
+        reporter.setPhase('installing');
         const unpacked = path.join(staging, 'unpacked');
         await mkdir(unpacked);
         const tar = process.platform === 'win32' ? windowsTarBin() : '/usr/bin/tar';
@@ -348,6 +379,8 @@ export function createLlamaCppService(
         const disk = await statfs(root);
         if (disk.bavail * disk.bsize < total + 512 * 1024 * 1024) throw new Error('DISK_SPACE');
         operation!.total = total;
+        const reporter = progress!;
+        reporter.reset('downloading', total);
         let completed = 0;
         for (const shard of shards) {
           for (;;) {
@@ -359,8 +392,6 @@ export function createLlamaCppService(
             signal.throwIfAborted();
             const attempt = new AbortController();
             transfer = attempt;
-            const beganAt = Date.now();
-            const initialBytes = operation!.completed;
             try {
               await downloadLlamaCppAsset(
                 {
@@ -371,13 +402,18 @@ export function createLlamaCppService(
                 path.join(staging, path.basename(shard.name)),
                 'hf',
                 AbortSignal.any([signal, attempt.signal]),
-                (n) => {
+                (n, event) => {
+                  // A transfer stopped by pause may still report its last bytes.
+                  if (operation!.paused) return;
                   operation!.completed = completed + n;
-                  operation!.bytesPerSecond =
-                    Math.max(0, operation!.completed - initialBytes) /
-                    Math.max((Date.now() - beganAt) / 1000, 1);
+                  operation!.bytesPerSecond = event?.speedBps ?? 0;
+                  reporter.setBytes(completed + n, total, event?.speedBps);
                 },
                 true,
+                {
+                  onRetry: reporter.callbacks.onRetry,
+                  onVerifying: reporter.callbacks.onVerifying,
+                },
               );
               break;
             } catch (error) {

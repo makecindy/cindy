@@ -1887,3 +1887,152 @@ describe('AppServerHost buffered descendant notification replay', () => {
     await host.shutdown();
   });
 });
+
+describe('AppServerHost oversized notifications', () => {
+  // Host 不暴露 maxLineBytes, 用真实的默认上限 (16Mi UTF-16 code unit) 构造超限行。
+  const bulk = 'x'.repeat(16 * 1024 * 1024 + 1);
+
+  async function startWithSubscriber() {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+    const handlers = {
+      turnDiffUpdated: vi.fn(),
+      itemCompleted: vi.fn(),
+      itemOmitted: vi.fn(),
+      turnCompleted: vi.fn(),
+      hostForcedRetire: vi.fn(),
+    };
+    const subscription = host.subscribeThread('root-thread', handlers);
+    return { transport, host, handlers, subscription };
+  }
+
+  it('routes an oversized cumulative diff as an omitted diff without retiring the host', async () => {
+    const { transport, host, handlers, subscription } = await startWithSubscriber();
+
+    transport.emit({
+      method: 'turn/diff/updated',
+      params: { threadId: 'root-thread', turnId: 'turn-1', diff: bulk },
+    });
+    transport.emit({
+      method: 'turn/completed',
+      params: { threadId: 'root-thread', turn: { id: 'turn-1', status: 'completed' } },
+    });
+
+    expect(handlers.turnDiffUpdated).toHaveBeenCalledWith({
+      threadId: 'root-thread',
+      turnId: 'turn-1',
+      diff: '',
+      cindyOmitted: 'oversized',
+    });
+    expect(handlers.turnCompleted).toHaveBeenCalledTimes(1);
+    expect(handlers.hostForcedRetire).not.toHaveBeenCalled();
+    expect(host.writerCandidate).not.toBeNull();
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('routes an oversized item as an omitted item instead of dropping it silently', async () => {
+    const { transport, host, handlers, subscription } = await startWithSubscriber();
+
+    transport.emit({
+      method: 'item/completed',
+      params: {
+        item: { type: 'fileChange', id: 'patch-1', changes: [{ path: 'data.json', diff: bulk }] },
+        threadId: 'root-thread',
+        turnId: 'turn-1',
+      },
+    });
+    transport.emit({
+      method: 'item/completed',
+      params: { item: { type: 'agentMessage', id: 'msg-1', text: 'done' }, threadId: 'root-thread', turnId: 'turn-1' },
+    });
+
+    expect(handlers.itemOmitted).toHaveBeenCalledWith({
+      threadId: 'root-thread',
+      turnId: 'turn-1',
+      phase: 'completed',
+      item: { id: 'patch-1', type: 'fileChange' },
+    });
+    expect(handlers.itemCompleted).toHaveBeenCalledTimes(1);
+    expect(handlers.itemCompleted.mock.calls[0]?.[0]).toMatchObject({ item: { id: 'msg-1' } });
+    expect(handlers.hostForcedRetire).not.toHaveBeenCalled();
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('still retires the host when an oversized item cannot be routed to its turn', async () => {
+    const { transport, handlers } = await startWithSubscriber();
+
+    // 没有可读的 threadId / turnId: 丢掉它就无法记下这一轮的产出, 宁可沿用退役。
+    transport.emit({
+      method: 'item/completed',
+      params: { item: { type: 'fileChange', id: 'patch-1', changes: [{ path: 'data.json', diff: bulk }] } },
+    });
+
+    expect(handlers.itemOmitted).not.toHaveBeenCalled();
+    expect(handlers.hostForcedRetire).toHaveBeenCalledTimes(1);
+  });
+
+  it('delivers an oversized terminal turn without its items instead of retiring the host', async () => {
+    const { transport, host, handlers, subscription } = await startWithSubscriber();
+
+    // 与 Codex 0.159.2 的 Turn 字段顺序一致: 大条目在 items 里, status 等在 items 之后。
+    transport.emit({
+      method: 'turn/completed',
+      params: {
+        threadId: 'root-thread',
+        turn: {
+          id: 'turn-1',
+          items: [{ type: 'fileChange', id: 'patch-1', changes: [{ path: 'data.json', diff: bulk }] }],
+          itemsView: 'full',
+          status: 'completed',
+          error: null,
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 1000,
+        },
+      },
+    });
+
+    expect(handlers.turnCompleted).toHaveBeenCalledWith({
+      threadId: 'root-thread',
+      turn: {
+        id: 'turn-1',
+        items: [],
+        itemsView: 'notLoaded',
+        status: 'completed',
+        error: null,
+        startedAt: 1,
+        completedAt: 2,
+        durationMs: 1000,
+      },
+    });
+    expect(handlers.hostForcedRetire).not.toHaveBeenCalled();
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('still retires the host when an oversized terminal turn has no readable status', async () => {
+    const { transport, handlers } = await startWithSubscriber();
+
+    // status 被大字段挡住, 两端都读不到: 不能凭猜测给任务收口。
+    transport.emit({
+      method: 'turn/completed',
+      params: { threadId: 'root-thread', turn: { id: 'turn-1', status: 'completed', bulk } },
+    });
+
+    expect(handlers.turnCompleted).not.toHaveBeenCalled();
+    expect(handlers.hostForcedRetire).toHaveBeenCalledTimes(1);
+    expect(handlers.hostForcedRetire.mock.calls[0]?.[0]).toMatchObject({
+      reason: expect.stringContaining('exceeds maxLineBytes'),
+    });
+  });
+});

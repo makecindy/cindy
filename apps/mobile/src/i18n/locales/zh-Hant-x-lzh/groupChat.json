@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · 代 {{person}}"
+  },
   "progress": {
     "stop": "止",
     "stopMine": "止我所發",
@@ -295,6 +298,8 @@
       "loading": "方讀群之設定…",
       "unavailable": "群之設定讀取未成，請再試"
     },
+    "allowMemberInvites": "許諸成員邀友",
+    "allowMemberInvitesHint": "啟之，已入群者皆可邀友。唯群主與管理員可改。",
     "allowMentionAllBots": "許 @諸同僚",
     "allowMentionAllBotsHint": "唯群主可改。同伴或皆作覆，大群慎啟之。此開關不涉 AI 代答。",
     "notifications": {
@@ -578,6 +583,11 @@
     "transferHint": "彼為群主，君將為群執事。",
     "removeTitle": "將 {{name}} 移出此群乎？",
     "removeHint": "該成員將不能再觀或遣訊；其同伴亦將退出。",
+    "removeOwn": "移出群聊",
+    "removeOwnScope": "惟此群受之，夥伴仍存於君之帳號。",
+    "removeOwnHint": "{{name}} 將不復收「{{group}}」之訊息。舊訊仍存，他群與私聊不受影響。",
+    "removeOwnActiveHint": "移出將止其於此群之請求。另啟之任務仍行。",
+    "stopAndRemove": "停止並移出",
     "confirm": "善",
     "inviteTitle": "邀入群議",
     "reusableLink": "長久有效 · 可供多人屢用",

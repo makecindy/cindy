@@ -9,8 +9,6 @@ import { Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { cn } from '@/lib/utils';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
@@ -36,6 +34,7 @@ export interface BotGroupLiveSpeaker {
   startedAt?: number;
   stopping?: boolean;
   executionId?: string;
+  isSelfRequested?: boolean;
   executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';
   /** The group's Cindy for the member who asked: where it runs (computer name, empty for this one) and with which model. */
   executor?: { deviceName: string; here?: boolean; model?: string };
@@ -105,10 +104,10 @@ export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: 
             ) : null}
           </p>
         ) : null}
-        {sessionId ? <Button type="button" variant="secondary" tone="quiet" size="sm" compact className="self-start" onClick={() => navigate(standardSessionRoute(sessionId, speaker.target?.deviceId))}>
+        {sessionId && speaker.isSelfRequested !== false ? <Button type="button" variant="secondary" tone="quiet" size="sm" compact className="self-start" onClick={() => navigate(standardSessionRoute(sessionId, speaker.target?.deviceId))}>
           {t('bots.groupChat.progress.viewProcess')}
         </Button> : null}
-        {sessionId && !speaker.target ? <BotGroupPendingInteraction sessionId={sessionId} bot={pendingBot(speaker)} /> : null}
+        {sessionId && !speaker.target && speaker.isSelfRequested !== false ? <BotGroupPendingInteraction sessionId={sessionId} bot={pendingBot(speaker)} /> : null}
       </div>
     </article>
   );
@@ -116,7 +115,7 @@ export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: 
 
 /** A speaker's pending confirmation beside its timeline execution. */
 export function BotGroupSpeakerInteraction({ speaker }: { speaker: BotGroupLiveSpeaker }) {
-  if (!speaker.sessionId || speaker.target) return null;
+  if (!speaker.sessionId || speaker.target || speaker.isSelfRequested === false) return null;
   return (
     <div className="mt-3 pl-[38px]">
       <BotGroupPendingInteraction sessionId={speaker.sessionId} bot={pendingBot(speaker)} />
@@ -134,7 +133,7 @@ export function BotGroupProgressStrip(props: BotGroupProgressStripProps) {
   // is waiting for its cancel receipt, so the last speaker's state cannot be
   // used as the button's disabled/loading state.
   const hasStoppableExecution = active.some(speaker => !speaker.stopping && speaker.executionStatus !== 'stopping');
-  const stopPending = props.stopping || !hasStoppableExecution;
+  const stopPending = props.stopPending ?? (props.stopping || !hasStoppableExecution);
   if (active.length <= 1) return <BotGroupSingleProgressStrip {...props} />;
   return <>{active.map((speaker, index) => <BotGroupSingleProgressStrip
     key={speaker.executionId ?? `${speaker.member.botId}:${speaker.activity}`}
@@ -148,7 +147,6 @@ interface BotGroupProgressStripProps {
   step: (BotGroupRunningStep & { member: BotGroupMemberView | undefined; displayName: string }) | null;
   speakers: readonly BotGroupLiveSpeaker[];
   onStop?: (scope?: 'all') => void;
-  canStopAll?: boolean;
   canStop?: boolean;
   stopping: boolean;
 }
@@ -157,7 +155,6 @@ function BotGroupSingleProgressStrip({
   step,
   speakers,
   onStop,
-  canStopAll = false,
   canStop = true,
   stopping,
   showStop = !!onStop,
@@ -190,14 +187,14 @@ function BotGroupSingleProgressStrip({
   const waiting = live?.phase === 'needs-interaction' || lead?.executionStatus === 'needs_input';
   if (!step && !lead) return null;
   const member = step ? step.member : lead?.member;
-  const name = step ? step.displayName : lead?.displayName ?? '';
+  const name = lead?.displayName ?? step?.displayName ?? '';
   // A queue turn is someone speaking, not a numbered step of work.
   const workStep = step && step.plan.kind !== 'talk' ? step : null;
   // The Session's compact detail may still be the previous turn's silence marker (NO_REPLY);
   // that is not an action anyone should read.
   const rawAction = live?.currentActionSummary?.trim() || live?.compactDetail?.trim() || '';
   const action = queued || isBotGroupNoReplyText(rawAction) ? '' : rawAction;
-  const canView = !!sessionId;
+  const canView = !!sessionId && lead?.isSelfRequested !== false;
   const title = <span className="inline-flex min-w-0 flex-wrap items-baseline gap-x-2">
     <span className="font-medium text-[var(--text-primary)]">{name}</span>
     <span>{isStopping ? t('bots.groupChat.progress.stopping')
@@ -226,26 +223,7 @@ function BotGroupSingleProgressStrip({
                 {t('bots.groupChat.progress.viewProcess')}
               </Button>
             ) : null}
-            {!showStop || (!canStop && !canStopAll) ? null : canStopAll ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="secondary" tone="quiet" size="sm" compact loading={buttonPending} className="text-[var(--text-danger)]">
-                    {t('bots.groupChat.progress.stop')}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" side="top" className="min-w-[220px]">
-                  {canStop ? <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStop?.()}>
-                    {t('bots.groupChat.progress.stopMine')}
-                  </DropdownMenuItem> : null}
-                  <DropdownMenuItem className={cn(MENU_ITEM_CLASS, 'h-auto items-start py-2')} onSelect={() => onStop?.('all')}>
-                    <span className="flex min-w-0 flex-col gap-0.5">
-                      <span className="text-[var(--text-danger)]">{t('bots.groupChat.progress.stopAll')}</span>
-                      <span className="text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">{t('bots.groupChat.progress.stopAllHint')}</span>
-                    </span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
+            {!showStop || !canStop ? null : (
               <Button
                 type="button"
                 variant="secondary"
@@ -255,6 +233,7 @@ function BotGroupSingleProgressStrip({
                 loading={buttonPending}
                 onClick={() => onStop?.()}
                 className="text-[var(--text-danger)]"
+                title={t('bots.groupChat.progress.stop')}
               >
                 {t('bots.groupChat.progress.stop')}
               </Button>

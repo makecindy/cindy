@@ -7,7 +7,8 @@ const h = vi.hoisted(() => ({ read: vi.fn(), owner: 1 }));
 vi.mock('../../lib/mailPreview', () => ({ readMailPreview: h.read }));
 vi.mock('../../registry', () => ({ registerTabKind: () => {} }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => h.owner, isDataOwnerGenerationCurrent: (o: number) => o === h.owner }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, args?: { from?: string; count?: number }) => args ? key + ' ' + (args.from ?? args.count) : key }) }));
+// Plain-text mail renders UserMessageUrlLink with its real menu hook. Keep the i18n plugin.
+vi.mock('react-i18next', async (original) => ({ ...(await original<typeof import('react-i18next')>()), useTranslation: () => ({ t: (key: string, args?: { from?: string; count?: number }) => args ? key + ' ' + (args.from ?? args.count) : key }) }));
 vi.mock('@/components/chat/GhostCardForm', () => ({ GhostCardForm: ({ fields, readOnly }: { fields: GhostCardFormField[]; readOnly?: boolean }) => <div data-testid="body" data-readonly={readOnly}>{fields.find(f => f.name === 'body')?.value}</div> }));
 vi.mock('@/components/chat/GhostToolCard', () => ({ MailCardEditor: ({ html, callId }: { html: string; callId: string }) => <div data-testid="editor" data-call-id={callId}>{readMailCard(html)?.fields.find(f => f.name === 'body')?.value}</div> }));
 import { MailPreviewBody } from './index';

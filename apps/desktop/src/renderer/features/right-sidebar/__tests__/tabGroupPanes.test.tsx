@@ -36,7 +36,7 @@ import {
   hasPanelKind,
   isPanelKindParked,
 } from '@/panels/registry';
-import { __resetGlobalTabsForTest, addGlobalPluginTab } from '../globalTabs';
+import { __resetGlobalTabsForTest, addGlobalPluginTab, removeGlobalTab } from '../globalTabs';
 import { _resetStore } from '../store';
 import { useTabGroupPanes } from '../tabGroupPanes';
 import { __resetTabGroupsForTest, setTabGroup } from '../tabGroups';
@@ -81,6 +81,59 @@ afterEach(() => {
 });
 
 describe('useTabGroupPanes', () => {
+  // #9496/#9987 regression, unit: named global pages can be opened from /plugins.
+  // Existing cases only cover legacy tabs parked after leaving a task. A named
+  // page must make its actual group present without granting a task or changing layout.
+  it.each(['right', 'left', 'top', 'bottom'] as const)(
+    'shows an explicitly opened global resource on a non-task route in the %s group', group => {
+      installedGhostsMock.list = [{ enabled: true, approval: { state: 'approved', revision: 'one' },
+        manifest: { id: 'alpha', name: 'Alpha', mcpApps: {
+          ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+          host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'global' }] },
+        } } }];
+      const { result } = renderHook(() => useTabGroupPanes({
+        sessionId: null, enabled: true, onChatRoute: false, remoteHostId: null,
+      }));
+      const layoutBefore = currentLayout;
+      let tabId = '';
+      act(() => { tabId = addGlobalPluginTab('alpha', { resourceViewId: 'board', groupId: group })!.id; });
+      if (group === 'right') {
+        expect(result.current).toBe(true);
+        expect(currentLayout).toBe(layoutBefore);
+      } else {
+        expect(hasPanelKind(`tab-group:${group}`)).toBe(true);
+        expect(isPanelKindParked(`tab-group:${group}`)).toBe(false);
+      }
+      act(() => removeGlobalTab(tabId));
+      expect(result.current).toBe(false);
+      if (group !== 'right') expect(hasPanelKind(`tab-group:${group}`)).toBe(false);
+    },
+  );
+
+  it('does not keep a non-task global page present after disabling, detaching or popping it out', () => {
+    const ghost = { enabled: true, approval: { state: 'approved', revision: 'one' },
+      manifest: { id: 'alpha', mcpApps: {
+        ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+        host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'global' }] },
+      } } };
+    installedGhostsMock.list = [ghost];
+    const tab = addGlobalPluginTab('alpha', { resourceViewId: 'board' })!;
+    const { result, rerender } = renderHook(({ enabled }) => useTabGroupPanes({
+      sessionId: null, enabled, onChatRoute: false, remoteHostId: null,
+    }), { initialProps: { enabled: true } });
+    expect(result.current).toBe(true);
+    installedGhostsMock.list = [{ ...ghost, enabled: false }];
+    rerender({ enabled: true });
+    expect(result.current).toBe(false);
+    installedGhostsMock.list = [ghost];
+    rerender({ enabled: false });
+    expect(result.current).toBe(false);
+    rerender({ enabled: true });
+    expect(result.current).toBe(true);
+    act(() => __setSidebarTabWindowsStateForTest({ [tab.id]: { windowId: 'w1', sessionId: null, open: true } }));
+    expect(result.current).toBe(false);
+  });
+
   it('registers an edge group and inserts its pane when a visible tab lands there; unregisters when it leaves', () => {
     const tab = addGlobalPluginTab('alpha')!;
     const { rerender } = renderHook(

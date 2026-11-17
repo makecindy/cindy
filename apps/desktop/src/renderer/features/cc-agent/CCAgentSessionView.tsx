@@ -1801,6 +1801,7 @@ function CCAgentSessionContent({
       agentKind,
       wd,
       {
+        contextReady: !!session,
         skipAgentSkills: isRemoteSession,
         sessionId: session?.id,
       },
@@ -5641,6 +5642,7 @@ function CCAgentSessionContent({
       remoteHostId={session?.remoteHostId ?? null}
       ownerDeviceId={rightSidebarDeviceLinkDeviceId}
       sessionSource={session?.source}
+      canConfigureAutoReview={Boolean(session) && !readOnly && !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId}
       onDiagnoseError={canDiagnoseError ? handleDiagnoseError : undefined}
       // text-lightbox-trigger-extension F1/F2: cwd flows from session
       // owner down through MessageStream → AssistantMessage / UserMessage.
@@ -6267,7 +6269,10 @@ function CCAgentSessionContent({
                   }
                 />
               ) : worktreePreparing && smoothedBranchName ? (
-                <WorktreeCreatingOverlay branchName={smoothedBranchName} />
+                <WorktreeCreatingOverlay
+                  branchName={smoothedBranchName}
+                  startedAt={worktreeCreation?.status === 'creating' ? worktreeCreation.startedAt : undefined}
+                />
               ) : shareSelectionActive && sessionId ? (
                 <ShareSelectionBar
                   sessionId={sessionId}

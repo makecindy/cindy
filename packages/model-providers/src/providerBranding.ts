@@ -15,6 +15,12 @@ export { CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_M
 
 // Additional supplier marks: Lobe Icons 5.14.0 (MIT; included in THIRD-PARTY-NOTICES).
 export const PROVIDER_LOGO_PATHS = {
+  // Lobe Icons Spark Mono (MIT), commit 55746b0b082258211121c70bd26e6878fd3bd292.
+  'iflytek-maas': 'M11.615 0l6.237 6.107c2.382 2.338 2.823 3.743 3.161 6.15-1.197-1.732-1.776-2.02-4.504-2.772C12.48 8.374 11.095 5.933 11.615 0z M9.32 2.122C4.771 6.367 2 9.182 2 13.08c0 5.76 4.288 9.788 9.745 9.918 5.457.13 9.441-5.284 9.095-8.403-.347-3.118-4.418-3.81-4.418-3.81 1.69 3.16-.13 8.098-4.894 8.098-5.154 0-6.8-6.02-4.2-9.008.82 1.617 1.879 2.563 2.674 3.273.717.64 1.219 1.09 1.136 1.664-.173 1.213-1.385.866-1.385.866.346.607 3.6 1.473 4.59-1.342.613-1.741-.423-2.789-1.714-4.096-1.632-1.651-3.672-3.717-3.31-8.118z',
+  // Open Design's Apache-2.0 brand-icon.svg, scaled from 82px to 24px.
+  // https://github.com/nexu-io/open-design/blob/59e4f2ae85de7e7318a5e6bdcf3a34584c4b7582/apps/web/public/brand-icon.svg
+  'open-design': 'M12 0C22.1196 0 24 1.8804 24 12C24 22.1196 22.1196 24 12 24C1.8804 24 0 22.1196 0 12C0 1.8804 1.8804 0 12 0ZM11.96798 4.5959C7.878 4.5959 4.56231 7.9115 4.56231 12.0006V18.421C4.56234 18.9663 5.00224 19.4062 5.54754 19.4062H11.96798C16.058 19.4062 19.37362 16.0906 19.37368 12.0006C19.37368 7.9106 16.058 4.59593 11.96798 4.5959ZM11.96798 6.07798C15.24 6.078 17.89253 8.7305 17.89253 12.0006C17.8925 15.2727 15.24 17.9251 11.96798 17.92513C8.696 17.92513 6.04346 15.2727 6.04343 12.0006C6.04343 8.7284 8.696 6.07798 11.96798 6.07798ZM9.55449 9.228C9.36354 9.1542 9.1757 9.34275 9.24866 9.53498L11.50668 15.47647C11.60034 15.723 11.96398 15.6555 11.96398 15.3916V11.9874H15.41415C15.67624 11.9874 15.74365 11.6225 15.499 11.52783L9.55449 9.228Z',
+
   // Official https://hinoki.security/assets/beta/logomark.svg, scaled to 24px (2026-11-06).
   hinoki: 'M7.41177 0C3.3182 0 0 3.31837 0 7.41174V24H16.58827C20.68173 24 24 20.68156 24 16.58818V0H7.41177Z',
   // Official Magpie mark, scaled from its 44px viewBox to this package's 24px grid.
@@ -102,6 +108,8 @@ export type ProviderLogoRouting = Readonly<
 
 /** Bundled regional presets share a brand and never infer it from display names. */
 const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
+  'iflytek-maas': 'iflytek-maas',
+  'open-design': 'open-design',
   hinoki: 'hinoki',
   agnes: 'agnes',
   openhubs: 'openhubs',
@@ -186,6 +194,8 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
 
 /** Renamed providers retain stable upstream hosts, matched only on DNS boundaries. */
 const PROVIDER_LOGO_KIND_BY_HOST: readonly (readonly [string, ProviderLogoKind])[] = [
+  ['maas-api.cn-huabei-1.xf-yun.com', 'iflytek-maas'],
+  ['amr-link.open-design.ai', 'open-design'],
   ['inference.hinoki.security', 'hinoki'],
   ['apihub.agnes-ai.com', 'agnes'],
   ['openhubs.zhidemai.com', 'openhubs'],
