@@ -176,6 +176,7 @@
 | 读别的设备的任务引用（第一批检查点 2） | 经 Device Link 读来源设备的历史 | 没有 Device Link，按“未连接”处理（`NOT_CONNECTED`，与桌面没连接时相同） | 引用不可用时协调器不带引用历史，消息照发（`agent-input-coordinator.ts` `resolveReferenceContexts`），与桌面相同 |
 | 发送前读取的排队方式（第一批检查点 2） | 计划对账、目标说明的读取，已封计划的清除，本轮模型的记录，都排在全局持久写入队列之后；这个队列遇到失败不暂停 | 排在任务的持久写入队列之后（`turn-executor.mjs` `behindDurableWrites`）。Host 的这个队列在写入失败后会暂停这个任务后面的回复写入、等重试，所以这几项自己失败时只把错误交还调用方，不进暂停（读取失败不带说明，记录失败记日志），与桌面结果相同 | 无 |
 | /api/chat 在“已落库但派发失败”时结束（第一批检查点 2） | 桌面没有这个入口 | 错误行落库后发这条输入的 `interrupted` 回执，`/api/chat` 收到后结束；同一 clientId 重连直接得到 interrupted。只在协调器写错误行的这条路上发：被上下文恢复认领、之后被自动续跑压住的错误不写这一行，流不提前结束 | 之前这个场景的流不结束，调用方一直等。结束条件见第七节第 21 项 |
+| 任务的 PR 关联（主干 9013dae440 带进 Host 导入图，2026-11-17） | 每条 user／assistant 消息落库后提取 PR 与 MR 链接写进 `session_pr_refs`（`localDb/ipc/messages.ts` `createMessage` 调 `recordPrRefsForMessage`）；删除、改正、回退、清除后的恢复都会重算（`recomputePrRefsForSession`）；有变化时经 `setPrRefsChangedListener` 推 `git-context:pr-refs-changed` 给窗口（`git-context/ipc.ts`），窗口经 `git-context:pr-refs:list`、`list-all`、`manage` 读写 | 重算只有两处：清除后的恢复（`message-store.ts` `createHostMessageRecovery`，带 owner 范围，主干带进）与 MCP App 卡片更新（共用的 `mcp-apps/service.ts`）；Host 自己写消息（`createHostMessageStore`，经 `writeMessageRow`）时不提取，撤回已落库的助手回复（`agent/event-persistence.ts` `discardPersistedAssistantMessage`）时不重算（桌面经 `reconcileAssistantDerivedState` 重算）；不装 `setPrRefsChangedListener`（`desktop-module-setters.ts` 记为 pending）；Host 的窗口读不到 PR 关联：网页端 `gitContext.listPrRefs`、`listAllPrRefs` 固定返回空（`apps/web/shim.js`），客户端模式不转发 `git-context:pr-refs:*`（不在 Host 通道合同里） | Host 上的窗口不显示任务的 PR 关联。Host 跑的任务里新提到的 PR 不进 `session_pr_refs`：之后用桌面打开同一份 profile，这些任务的 PR 关联要等一次重算才出现；历史回填（`ensurePrRefsBackfill`）在标记 `git_context_pr_refs_backfill_v4` 写过后不再补。对齐要补三件：Host 写消息时提取、撤回助手回复后重算，窗口的读写通道与推送（第六节对应行） |
 
 ### 订阅账号放置与供应商视图（rc10）
 
@@ -461,6 +462,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | device-link 推送 `HISTORY_WORK_PATCH_CHANNEL`（运行中工作行的增量） | `device-link/historyViewPush.ts` 的 `buildHistoryWorkPatch`，读共用历史读取器的工作页（桌面经 `setHistoryWorkPageReader` 装，`localDb/ipc/messages.ts`）；Host 不装时控制端拿到 `{ kind: refresh }`、整页重读 | 历史读取器共用（第七节第 27 项） |
 | 推送 `local-db:sessions:patched` 的 `lastTurnEndedAt` | `localDb/sessionActiveTurn.ts`，回合结束写库后经 `setOnSessionTurnEndedPersisted` 通知（桌面装成 `broadcastSessionPatched`）；Host 的事件流照常写回合标记，只是不推 | 回合起止：第一批检查点 1 |
 | 推送 `maker:provider:upstream-error` | `maker-host/provider-upstream-error-observer.ts` 的 `reportProviderUpstreamError`，由 Codex 回环代理（`maker-host/codex-proxy-host.ts`）写入（桌面经 `setProviderUpstreamErrorBroadcaster` 广播到窗口）；Host 不装时广播是空操作 | Host 的 Codex 回环代理（`agent/codex-runtime.ts`） |
+| 推送 `git-context:pr-refs-changed`；读写 `git-context:pr-refs:list`、`git-context:pr-refs:list-all`、`git-context:pr-refs:manage` | `git-context/prRefsStore.ts`（`session_pr_refs` 表），有变化时经 `setPrRefsChangedListener` 通知（桌面装成广播给所有窗口，`git-context/ipc.ts`）；Host 不装时通知是空操作。`manage` 加 PR 时要经 GitHub 核实，随 `setGithubReadRuntime`（第 22 行） | 部分：清除后的恢复与 MCP App 卡片更新时重算；Host 写消息时的提取、撤回助手回复后的重算未接（第二节“任务的 PR 关联”） |
 
 ## 七、Host 重写的逻辑
 
@@ -503,7 +505,7 @@ withAccountDataAccess（2026-11-17）：新增第 26 项，减少 0 项。
 | 15 | `agent/claude-proxy-runtime.ts`、`agent/runtime.ts` 的凭据路由 | 桌面代理的凭据路由规则 | 待定（第二批） |
 | 16 | `main.ts` 的模型清单刷新、`agent/providers.mjs` | 桌面 `runModelsSync` 与目录变更点的刷新 | 待定（第二批） |
 | 17 | `agent/auxiliary-model-chain.ts` | 辅助模型链（两处答案故意不同） | 平台差别（第二节） |
-| 18 | `agent/send-preflight.ts` | 桌面 `prepareUserMessageForAgent` 的附件归一化；远程任务的拦截 | 待定（附件随第 12 行）；拦截是平台差别。放开远程执行时要重看 `apps/host/src/desktop-module-setters.ts` 里以此为由的 not-applicable 项（现在是 `bindHostedSessionProvider`） |
+| 18 | `agent/send-preflight.ts` | 桌面 `prepareUserMessageForAgent` 的附件归一化；远程任务的拦截 | 待定（附件随第 12 行）；拦截是平台差别。放开远程执行时要重看 `apps/host/src/desktop-module-setters.ts` 里以此为由的 not-applicable 项（现在是 `bindHostedSessionProvider`、`bindHostedAttachmentPreservation`） |
 | 19 | `agent/turn-executor.mjs` `replay` 用被认领那一轮的 clientId 给重放的事件和回执打标（`agent/context-recovery.ts` `replayClientId`） | 桌面没有对应：桌面重放不带 clientId（只有 Pi 缓存兼容带 `retryUserClientId`） | 平台差别：Host 的 `/api/chat` 靠终态事件的 clientId 结束一条消息的流，桌面渲染层不靠 clientId 判断结束。只打标，不写用户行，事务仍不带 `persistUserMessage`；只在这次恢复进行中有效。新发现（2026-11-15，#10613 评审） |
 | 20 | `agent/turn-executor.mjs` 原来的 `checkWorkDirExists`（只做 stat）。新发现（2026-11-16，第一批检查点 2） | `createWorkingDirectoryPreflight` 与 `createWorkingDirectoryRecovery` | 已改为共用（`agent/working-directory.ts`，Host 的那份已删）。两个端口不同，见第二节“工作目录检查” |
 | 21 | `chat.mjs` 一条消息的流何时结束；`agent/turn-executor.mjs` 在“已落库但派发失败”的错误行落库后发 `interrupted` 回执（第一批检查点 2）；`agent/input-queue.mjs` `inputStatus` 认出派发失败留下的恢复点 | 桌面没有这个入口 | 平台差别（Host 自己的入口）。结束条件与依据：1）账号退出、不能再进入应用；2）投影的恢复点是派发前的本条（`queue-head`），补 `interrupted` 回执后结束；3）本条的 `interrupted` 回执：停止后没有终态事件时（`finish`），以及本条已落库但派发失败、错误行落库之后（协调器的 `persistTerminalSendError`，只在这条路上发）；4）本条的 `done` 或终态错误，不算后台与续接边界；5）连上时查到本条已记录或已中断，直接回执后结束（重连）。被上下文恢复认领的错误不写错误行、不发回执，流等到重放的 `done`。检查点 4 接自动续跑时要重新回答这个入口在续跑路径上的表现 |
