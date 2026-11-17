@@ -330,7 +330,7 @@ export function SubscriptionAccountsSection({
           <p role="alert" className="text-12 text-[var(--text-danger)]">
             {t('subscriptionAccounts.failed')}
           </p>
-          <Button variant="secondary" size="sm" disabled={refreshing || busy} onClick={() => void refresh()}>
+          <Button data-settings-search-action="Retry reading local subscription accounts" variant="secondary" size="sm" disabled={refreshing || busy} onClick={() => void refresh()}>
             {t('commonUi.retry')}
           </Button>
         </div>
@@ -512,7 +512,7 @@ export function SubscriptionAccountsSection({
                               </Button>
                             )}
                             {account.status === 'unavailable' && (
-                              <Button variant="secondary" tone="quiet" size="sm"
+                              <Button data-settings-search-action="Retry reading this unavailable subscription account" variant="secondary" tone="quiet" size="sm"
                                 disabled={refreshing || busy} onClick={() => void refresh()}>
                                 {t('commonUi.retry')}
                               </Button>
