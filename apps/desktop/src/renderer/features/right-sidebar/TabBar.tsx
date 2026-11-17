@@ -354,6 +354,17 @@ export function TabStrip({
   const tabsScrollRef = useRef<HTMLDivElement | null>(null);
   const addButtonWrapperRef = useRef<HTMLDivElement | null>(null);
   const existingKinds = useMemo(() => new Set<TabKindId>(tabs.map((t) => t.kind)), [tabs]);
+  const peerStatesByKind = useMemo(() => {
+    const groups = new Map<TabKindId, unknown[]>();
+    for (const collection of [pinnedTabs, tabs]) {
+      for (const tab of collection) {
+        let peers = groups.get(tab.kind);
+        if (!peers) groups.set(tab.kind, peers = []);
+        peers.push(hydrateTabState(getTabKind(tab.kind), tab.state));
+      }
+    }
+    return groups;
+  }, [pinnedTabs, tabs]);
   // 右键菜单状态:虚拟 trigger 在 rect 位置弹 DropdownMenu(跟 FileTreeView 同款做法,
   // 同时间只可能一个右键菜单打开,统一在 TabStrip 顶层管理避免每 pill 一份实例)。
   const [contextMenu, setContextMenu] = useState<{
@@ -459,6 +470,7 @@ export function TabStrip({
               <TabPill
                 key={tab.id}
                 tab={tab}
+                peerStates={peerStatesByKind.get(tab.kind)}
                 active={tab.id === activeTabId}
                 pinned
                 pillVariant={pillVariant}
@@ -491,6 +503,7 @@ export function TabStrip({
           renderItem={(tab) => (
             <TabPill
               tab={tab}
+              peerStates={peerStatesByKind.get(tab.kind)}
               active={tab.id === activeTabId}
               pillVariant={pillVariant}
               sessionId={sessionId}
@@ -690,6 +703,7 @@ export function TabTitleLabel({ tab, sessionId }: { tab: TabState; sessionId: st
 
 function TabPill({
   tab,
+  peerStates,
   active,
   pinned = false,
   pillVariant,
@@ -703,6 +717,7 @@ function TabPill({
   closeAriaLabel,
 }: {
   tab: TabState;
+  peerStates?: readonly unknown[];
   active: boolean;
   /** 全局页签:标题前带图钉,提示它不随任务切换。 */
   pinned?: boolean;
@@ -768,7 +783,7 @@ function TabPill({
       <button
         type="button"
         onClick={onActivate}
-        className="flex items-center gap-1.5 max-w-[160px]"
+        className={cn('flex min-w-0 items-center gap-1.5', tab.kind === 'file-browser' ? 'max-w-[240px]' : 'max-w-[160px]')}
       >
         {pinned && (
           <Pin
@@ -791,7 +806,7 @@ function TabPill({
         </span>
         <span className="truncate">
           {TitleNode ? (
-            <TitleNode state={hydratedState} sessionId={sessionId} active={active} t={t} />
+            <TitleNode state={hydratedState} peerStates={peerStates} sessionId={sessionId} active={active} t={t} />
           ) : (
             fallbackLabel
           )}

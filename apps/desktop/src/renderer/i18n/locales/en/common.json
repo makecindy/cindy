@@ -16913,6 +16913,7 @@
         "revealFolder": "Show in folder"
       },
       "fileBody": {
+        "templateRules": "Project rules · Cindy template",
         "drawioLoading": "Loading draw.io preview…",
         "pdfLoading": "Loading PDF preview…",
         "selectFile": "Select a file to preview",

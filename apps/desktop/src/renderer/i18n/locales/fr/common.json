@@ -17077,6 +17077,7 @@
         "revealFolder": "Afficher dans le dossier"
       },
       "fileBody": {
+        "templateRules": "Règles du projet · Modèle Cindy",
         "drawioLoading": "Chargement de l'aperçu draw.io…",
         "pdfLoading": "Chargement de l'aperçu PDF…",
         "selectFile": "Sélectionnez un fichier à prévisualiser",

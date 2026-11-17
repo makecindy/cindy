@@ -17077,6 +17077,7 @@
         "revealFolder": "Mostrar na pasta"
       },
       "fileBody": {
+        "templateRules": "Regras do projeto · Modelo Cindy",
         "drawioLoading": "Carregando visualização do draw.io…",
         "pdfLoading": "Carregando visualização do PDF…",
         "selectFile": "Selecione um arquivo para visualizar",

@@ -16839,6 +16839,7 @@
         "revealFolder": "顯示所在資料夾"
       },
       "fileBody": {
+        "templateRules": "專案規則 · Cindy 範本",
         "drawioLoading": "正在載入 draw.io 預覽…",
         "pdfLoading": "正在載入 PDF 預覽…",
         "selectFile": "選擇一個檔案進行預覽",

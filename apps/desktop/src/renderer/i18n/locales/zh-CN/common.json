@@ -16839,6 +16839,7 @@
         "revealFolder": "显示所在文件夹"
       },
       "fileBody": {
+        "templateRules": "项目规则 · Cindy 模板",
         "drawioLoading": "正在加载 draw.io 预览…",
         "pdfLoading": "正在加载 PDF 预览…",
         "selectFile": "选择一个文件进行预览",

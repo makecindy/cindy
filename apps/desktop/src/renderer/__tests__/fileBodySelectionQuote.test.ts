@@ -47,7 +47,6 @@ vi.mock('@/components/markdown/MarkdownImageLightboxHost', () => ({ MarkdownImag
 vi.mock('@/features/cc-agent/workdir-browse/ImagePreview', () => ({ ImagePreview: ({ src, relPath }: { src: string; relPath: string }) => createElement('img', { src, alt: relPath }) }));
 vi.mock('@/features/cc-agent/workdir-browse/PdfPreview', () => ({ PdfPreview: () => null }));
 vi.mock('@/features/cc-agent/workdir-browse/DrawioPreview', () => ({ DrawioPreview: () => null }));
-vi.mock('@/lib/fileBrowserTransport', () => ({ fileBrowserApiFor: () => ({}) }));
 
 const sessionId = 'file-body-selection-quote';
 const workdir = resolve(tmpdir(), 'cindy-file-body-selection-quote');
