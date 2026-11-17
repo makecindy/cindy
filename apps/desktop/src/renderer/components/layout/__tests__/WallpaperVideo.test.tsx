@@ -379,6 +379,48 @@ describe('dynamic wallpaper lifecycle', () => {
     expect(document.documentElement.dataset.wallpaperMotion).toBe('dynamic');
     expect(video.load).not.toHaveBeenCalled();
   });
+  it.each([
+    ['static', 10],
+    ['static', 500],
+    ['reduced', 10],
+    ['reduced', 500],
+  ] as const)(
+    'retains a custom %s frame across hide/restore after %ims waiting',
+    async (mode, delay) => {
+      vi.useFakeTimers();
+      const src = `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`;
+      const { rerender } = render(
+        <WallpaperVideo wallpaperId="custom" motion="dynamic" customWallpaperUrl={src} />,
+      );
+      const video = document.querySelector('video')!;
+      Object.defineProperty(video, 'readyState', { configurable: true, value: 2 });
+      fireEvent.playing(video);
+      fireEvent.waiting(video);
+      act(() => vi.advanceTimersByTime(delay));
+      state.reduced = mode === 'reduced';
+      rerender(
+        <WallpaperVideo
+          wallpaperId="custom"
+          motion={mode === 'static' ? 'static' : 'dynamic'}
+          customWallpaperUrl={src}
+        />,
+      );
+      expect(video.parentElement!.style.opacity).toBe('1');
+      await act(async () => document.documentElement.setAttribute(HIDDEN_ANIMATION_ATTR, 'true'));
+      await act(async () => document.documentElement.removeAttribute(HIDDEN_ANIMATION_ATTR));
+      expect(video.parentElement!.style.opacity).toBe('1');
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      fireEvent(document, new Event('visibilitychange'));
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      fireEvent(document, new Event('visibilitychange'));
+      act(() => vi.advanceTimersByTime(15_000));
+      expect(document.querySelector('video')).toBe(video);
+      expect(video.parentElement!.style.opacity).toBe('1');
+      expect(video.play).toHaveBeenCalledOnce();
+      expect(video.load).not.toHaveBeenCalled();
+      Reflect.deleteProperty(document, 'hidden');
+    },
+  );
   it('releases a failed decoder even during a short wait', () => {
     vi.useFakeTimers();
     render(

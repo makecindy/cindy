@@ -189,6 +189,9 @@ function PlayingWallpaper({
       ) {
         cancelWaiting();
         cancelRecovery();
+        // Static/reduced-motion custom video keeps its decoded frame. A prior
+        // playback wait no longer applies, including on later hide/show syncs.
+        if (!playingRef.current && video.readyState >= 2) interrupted = false;
         if (interrupted) setReady(false);
         video.pause();
       } else {
