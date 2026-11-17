@@ -1,0 +1,86 @@
+diff -u final-R6/congestion.rs final-R8/congestion.rs
+--- a/src/congestion.rs	2026-11-01 14:24:50
++++ b/src/congestion.rs	2026-11-01 15:13:05
+@@ -368,6 +368,10 @@
+     /// 但它一定会丢包，而且只在超速时丢。这时一段时间内的实际送达速率就是真实上限，
+     /// 不管它是令牌桶、固定配额还是很浅的队列。
+     fn sample_period(&mut self, now_us: u64, delivered: u64) {
++        // 还没有 RTT 时的超时是按猜的超时时间判的，长往返路径上第一批包全会被误判成丢包，不能拿来判断上限。
++        if self.min_rtt_us == 0 {
++            return;
++        }
+         let elapsed = now_us.saturating_sub(self.period_started);
+         let period_delivered = delivered.saturating_sub(self.period_delivered);
+         let severe = self.period_lost > period_delivered && elapsed >= SEVERE_PERIOD_MIN_US.max(SEVERE_PERIOD_MIN_RTTS * self.min_rtt_us);
+diff -u final-R6/connection.rs final-R8/connection.rs
+--- a/src/connection.rs	2026-11-01 14:24:50
++++ b/src/connection.rs	2026-11-01 15:13:05
+@@ -88,6 +88,11 @@
+ const JITTER_CEILING_RELAX_PPM: u32 = 2_000;
+ /// 收到的包平均间隔短于这个值（每秒两万个包以上）时，每个包都马上确认。
+ const FAST_ARRIVAL_GAP_US: u64 = 50;
++/// 晚到的包超过这个比例、平均比后发的包晚到这么久以上时逐包确认。
++const JITTERY_LATE_PPM: u32 = 100_000;
++const JITTERY_LATE_US: u64 = 4000;
++/// 记住最近这么多个包的到达时间。
++const RECENT_ARRIVALS: usize = 64;
+ /// 丢包率比随机丢包率的两倍还高出这么多，又量到了上限，就当成限速器在丢包。
+ const LIMITER_EXCESS_LOSS_PPM: u64 = 30_000;
+ /// 待发和没确认的数据加起来不超过这么多个分片，算零散消息。
+@@ -356,6 +361,13 @@
+     /// 收到的包之间的平均间隔。
+     arrival_gap_us: u64,
+     last_arrival_at: u64,
++    /// 最近收到的包的包号和到达时间，用来算晚到的包比后发的包晚了多久。
++    recent_arrivals: [(u64, u64); RECENT_ARRIVALS],
++    recent_cursor: usize,
++    /// 晚到的包（序号比已收到的最大序号小）比后发的包晚到多久，平滑平均。
++    late_arrival_us: u64,
++    /// 收到的包里晚到的比例，单位百万分之一。
++    late_arrival_ppm: u32,
+ }
+ 
+ impl Connection {
+@@ -453,6 +465,10 @@
+             unacked_packets: 0,
+             arrival_gap_us: u64::MAX,
+             last_arrival_at: 0,
++            recent_arrivals: [(0, 0); RECENT_ARRIVALS],
++            recent_cursor: 0,
++            late_arrival_us: 0,
++            late_arrival_ppm: 0,
+             config,
+         }
+     }
+@@ -837,7 +853,18 @@
+         // 空洞补上了：发送方的窗口多半正卡在这里，确认晚一毫秒它就白等一毫秒。
+         urgent |= self.rcv_next > rcv_next_before + 1;
+         let in_order = self.largest_received.is_none_or(|value| number == value + 1);
+-        if self.largest_received.is_some_and(|value| number < value) && self.late_packet_count < MAX_LATE_PACKETS {
++        let arrived_late = self.largest_received.is_some_and(|value| number < value);
++        if arrived_late {
++            // 比它后发、已经到了的包里最早到的那个，到现在过了多久。
++            let first_after = self.recent_arrivals.iter().filter(|&&(n, at)| n > number && at > 0).map(|&(_, at)| at).min();
++            let lateness = first_after.map_or(0, |at| now_us.saturating_sub(at));
++            self.late_arrival_us = (self.late_arrival_us * 7 + lateness) / 8;
++        }
++        self.recent_arrivals[self.recent_cursor] = (number, now_us);
++        self.recent_cursor = (self.recent_cursor + 1) % RECENT_ARRIVALS;
++        let sample = if arrived_late { 1_000_000 } else { 0 };
++        self.late_arrival_ppm = self.late_arrival_ppm - self.late_arrival_ppm / LOSS_SMOOTHING + sample / LOSS_SMOOTHING;
++        if arrived_late && self.late_packet_count < MAX_LATE_PACKETS {
+             self.late_packets[self.late_packet_count] = number;
+             self.late_packet_count += 1;
+         }
+@@ -853,7 +880,10 @@
+             self.unacked_packets += 1;
+             // 包挨得极近（每秒两万个以上）时往返通常只有几毫秒，每个包都马上确认：窗口卡住时，
+             // 一串包的最后一个单独等确认延迟的话，整个窗口要多等这么久才能往前走，占往返的比例不小。
+-            let every = if self.arrival_gap_us < FAST_ARRIVAL_GAP_US { 1 } else { self.config.ack_every };
++            // 抖动把包的先后打乱好几毫秒时也逐包确认：窗口头上那个晚到的包一到，发送方就要马上知道。
++            // 只看比后发的包晚了多久，不看晚了几个包：丢包多时到达间隔被拉长，按包数换算会把丢包当成抖动。
++            let jittery = self.late_arrival_ppm >= JITTERY_LATE_PPM && self.late_arrival_us >= JITTERY_LATE_US;
++            let every = if self.arrival_gap_us < FAST_ARRIVAL_GAP_US || jittery { 1 } else { self.config.ack_every };
+             if urgent || self.unacked_packets >= every {
+                 self.request_ack(now_us);
+             } else if !in_order {

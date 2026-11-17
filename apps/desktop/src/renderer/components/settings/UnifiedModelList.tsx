@@ -31,6 +31,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronDown, Info, Lock, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { Select } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Tip } from '@/components/ui/tooltip';
@@ -43,8 +44,6 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
@@ -1149,6 +1148,22 @@ export function UnifiedModelList({
                 <Spinner icon={RefreshCw} size={14} spinning={refreshing} />
               </button>
             )}
+            {/* Arrangement is a view field, not a menu action (DESIGN.md §4). */}
+            {unionRows.length > 0 && (
+              <Select data-settings-search-action="Choose how the provider model list is arranged"
+                label={t('settings.providers.models.manage.arrange')}
+                size="compact"
+                className="shrink-0"
+                value={managementView}
+                onValueChange={(value) => {
+                  if (value === 'brand' || value === 'model') setManagementView(value);
+                }}
+                options={[
+                  { value: 'brand', label: t('settings.providers.models.manage.byBrand') },
+                  { value: 'model', label: t('settings.providers.models.manage.byName') },
+                ]}
+              />
+            )}
             {(unionRows.length > 0 || onAddSpeechModels) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -1166,23 +1181,6 @@ export function UnifiedModelList({
                   {unionRows.length > 0 && (
                     <>
                       {onAddSpeechModels && <DropdownMenuSeparator />}
-                      <DropdownMenuLabel>
-                        {t('settings.providers.models.manage.arrange')}
-                      </DropdownMenuLabel>
-                      <DropdownMenuRadioGroup
-                        value={managementView}
-                        onValueChange={(value) => {
-                          if (value === 'brand' || value === 'model') setManagementView(value);
-                        }}
-                      >
-                        <DropdownMenuRadioItem value="brand">
-                          {t('settings.providers.models.manage.byBrand')}
-                        </DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="model">
-                          {t('settings.providers.models.manage.byName')}
-                        </DropdownMenuRadioItem>
-                      </DropdownMenuRadioGroup>
-                      <DropdownMenuSeparator />
                       <DropdownMenuLabel>
                         {t('settings.providers.models.manage.selection')}
                       </DropdownMenuLabel>

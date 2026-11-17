@@ -19,7 +19,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import * as blobStore from './blobStore';
+import * as blobStore from './blobStore.desktop';
 import { ingestMedia } from './ingest';
 import type { LedgerDb } from './ledger';
 import { sniffMediaMime } from './sniffMediaMime';

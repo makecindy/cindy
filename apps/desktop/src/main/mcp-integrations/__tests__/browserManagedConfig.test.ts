@@ -25,6 +25,12 @@ function isInNet(host: string, pattern: string, mask: string): boolean {
 }
 
 describe('managed browser runtime config', () => {
+  it('keeps the credential-free test keychain out of daily and copied-login profiles', () => {
+    for (const useRealProfile of [false, true]) {
+      expect(buildManagedConfig({ useRealProfile }).browser?.extraArgs).not.toContain('--use-mock-keychain');
+    }
+    expect(buildManagedConfig({ headless: true, useMockKeychain: true }).browser?.extraArgs).toContain('--use-mock-keychain');
+  });
   // Chromium's launch protocol controls session-cookie restoration after a
   // clean exit. Previously no route/profile enabled it, even with a persistent
   // user-data-dir. Unit tier covers config composition; a real Chrome restart

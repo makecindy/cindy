@@ -13,7 +13,7 @@ import { PR_WATCH_EXPANDED_BLANK_FIXTURE } from '@/__tests__/fixtures/prWatchExp
 
 vi.mock('react-native', () => ({
   Platform: { OS: 'ios' },
-  useWindowDimensions: () => ({ fontScale: 1 }),
+  Dimensions: { get: () => ({ fontScale: 1 }), addEventListener: () => ({ remove() {} }) },
   StyleSheet: { flatten: (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) },
 }));
 vi.mock('react-native-uitextview', () => ({ UITextView: (props: SurfaceProps) => UITextView(props) }));
@@ -168,12 +168,13 @@ const bubbleStatements = rendererFunction('MessageBubble').body!.statements;
 const collapseStart = bubbleStatements.indexOf(bodyStatement('automationOrigin', 'MessageBubble'));
 const collapseEnd = bubbleStatements.indexOf(bodyStatement('longMessageCollapsed', 'MessageBubble'));
 const collapseCode = bubbleStatements.slice(collapseStart, collapseEnd + 1).map(statement => statement.getText(rendererSource)).join(String.fromCharCode(10));
-const markdownStateCode = ['contentWidth', 'handleSettledWidthLayout', 'pinSettledWidth', 'settledTextStyle', 'renderSingleBlock']
+const markdownStateCode = ['measuresSettledWidth', 'useRowState', 'contentWidth', 'handleSettledWidthLayout', 'pinSettledWidth', 'settledTextStyle', 'renderSingleBlock']
   .map(name => bodyStatement(name, 'MarkdownBodyBase').getText(rendererSource)).join(String.fromCharCode(10));
 const markdownReturn = rendererFunction('MarkdownBodyBase').body!.statements.find(ts.isReturnStatement);
 if (!markdownReturn) throw new Error('MarkdownBody return was not found');
 
 let root: Root;
+const harnessPlatform: { OS: 'ios' | 'android' } = { OS: 'ios' };
 let host: HTMLDivElement;
 const nativeLayouts = new Map<string, (event: unknown) => void>();
 const nativeTextLayouts = new Map<string, (event: unknown) => void>();
@@ -239,9 +240,9 @@ function BubbleHarness({ body, kind = 'user', automationOrigin: origin }) {
 return { BubbleHarness, MarkdownHarness };
 `, {
     useContext: React.useContext, useRef: React.useRef, useMemo: React.useMemo,
-    useEffect: React.useEffect, useCallback: React.useCallback, useRecyclingState: React.useState,
+    useEffect: React.useEffect, useCallback: React.useCallback, useRecyclingState: React.useState, useRowStateHook: () => React.useState,
     SelectionQuoteContext: React.createContext(null), useWindowDimensions: () => ({ fontScale: 1 }),
-    Platform: { OS: 'ios' }, StyleSheet: { flatten: (style: unknown) => style },
+    Platform: harnessPlatform, StyleSheet: { flatten: (style: unknown) => style },
     selectableTextVerticalOffset, MAX_FONT_SIZE_MULTIPLIER: 2, i18n,
     View: NativeView, Text, MarkdownSelectableText, ScrollView,
     buildMessageContentLayout, nextSettledContentWidth,
@@ -263,6 +264,7 @@ describe('MessageRenderer bounded long-message native behavior', () => {
     root = createRoot(host);
     nativeLayouts.clear();
     nativeTextLayouts.clear();
+    harnessPlatform.OS = 'ios';
   });
   afterEach(() => act(() => root.unmount()));
 
@@ -295,7 +297,8 @@ describe('MessageRenderer bounded long-message native behavior', () => {
     act(() => host.querySelector<HTMLButtonElement>('[data-testid="message.collapseToggle"]')!.click());
     const markdown = () => host.querySelector('[data-testid="message.markdownBody"]')!;
     const before = markdown().getAttribute('data-style');
-    act(() => nativeLayouts.get('message.markdownBody')!({ nativeEvent: { layout: { width: 402 } } }));
+    // User bubbles hug their content and do not subscribe to width measurement.
+    act(() => nativeLayouts.get('message.markdownBody')?.({ nativeEvent: { layout: { width: 402 } } }));
     expect(markdown().getAttribute('data-style')).toBe(before);
     expect(markdown().firstElementChild?.getAttribute('data-style')).toBe('null');
     act(() => root.render(React.createElement(MarkdownHarness, { text: 'agent', selectable: true, pinContentWidth: true, layout: buildMessageContentLayout({ screenWidth: 402 }) })));
@@ -305,6 +308,19 @@ describe('MessageRenderer bounded long-message native behavior', () => {
     act(() => root.render(React.createElement(MarkdownHarness, { text: code, code: true, layout: buildMessageContentLayout({ screenWidth: 402 }) })));
     expect(host.querySelector('code')?.textContent).toBe(code);
     expect(host.querySelector('[data-scroll]')).toBeNull();
+  });
+
+  // Android 性能回归:二次测宽为 iOS UITextView 设计,旧实现在 Android 上也会在首次布局后
+  // 换 key 重挂 agent 正文,每条回复的原生文本挂载两遍。最小失败输入:Android + agent 正文 + 一次布局回报。
+  it('mounts Android agent markdown once at the stretched width', () => {
+    harnessPlatform.OS = 'android';
+    act(() => root.render(React.createElement(MarkdownHarness, { text: 'agent', selectable: true, pinContentWidth: true, layout: buildMessageContentLayout({ screenWidth: 402 }) })));
+    const markdown = host.querySelector('[data-testid="message.markdownBody"]')!;
+    const text = markdown.querySelector('[data-surface]');
+    act(() => nativeLayouts.get('message.markdownBody')?.({ nativeEvent: { layout: { width: 402 } } }));
+    expect(markdown.querySelector('[data-surface]')).toBe(text);
+    expect(markdown.firstElementChild?.getAttribute('data-style')).toBe('null');
+    expect(JSON.parse(markdown.getAttribute('data-style')!)).toContainEqual({ alignSelf: 'stretch' });
   });
 
   it.each([

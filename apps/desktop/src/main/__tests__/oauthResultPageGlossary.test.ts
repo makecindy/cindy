@@ -21,10 +21,12 @@ import { describe, expect, it } from 'vitest';
 import {
   ELLIPSIS_LOCALES,
   HALFWIDTH_PUNCT_LOCALES,
+  auditEnglishCopy,
   countOccurrences,
   findCaseMismatch,
   findHalfWidthPunct,
   hasAsciiEllipsis,
+  makeEnglishCopyExemptChecker,
   makeExemptChecker,
   normalizeForPunctuation,
   stripNonProse,
@@ -59,8 +61,19 @@ const glossary = JSON.parse(readFileSync(resolve(REPO_ROOT, 'i18n/glossary.json'
   locales: string[];
   sourceLocale: string;
   punctuationExempt?: string[];
+  englishCopyExempt?: Record<string, string[]>;
   terms: GlossaryTerm[];
 };
+
+/**
+ * 引入英文写法规则(DESIGN.md §11.1 / §11.2)时本 catalog 的既有问题,指纹为
+ * `key\trule\t命中次数\t文案摘要`(与根门禁 baseline 同口径,见 auditEnglishCopy)。
+ * 只减不增:修好一条就删一条,新增违规直接失败。
+ */
+const KNOWN_ENGLISH_COPY_ISSUES: readonly string[] = [
+  'desktop:oauthResultPage.ghost.errors.internal\ten-please\tplease×1\t31aaff145ea8',
+  'desktop:oauthResultPage.ghost.errors.invalid-callback\ten-please\tplease×1\td53f3921b575',
+];
 
 /** 该模块用 'zh' 作语言键,术语表用 'zh-CN';不映射的话 zh 分支整段扫不到。 */
 const LANGS: OAuthResultPageLang[] = ['zh', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR', 'zh-Hant-x-lzh', 'zh-Hans-x-lzh'];
@@ -189,5 +202,15 @@ describe('OAuth 结果页文案符合术语表', () => {
       }
     }
     expect(violations, `OAuth 文案标点不符:\n${violations.join('\n')}`).toEqual([]);
+  });
+
+  it('英文写法符合 DESIGN.md §11.1 / §11.2', () => {
+    // 根门禁只读 locale JSON,这里补上英文写法规则,豁免与根门禁同源。
+    const { added, stale } = auditEnglishCopy(
+      entries.filter((e) => e.locale === glossary.sourceLocale),
+      { isExempt: makeEnglishCopyExemptChecker(glossary.englishCopyExempt), known: KNOWN_ENGLISH_COPY_ISSUES },
+    );
+    expect(added, `OAuth 文案英文写法违规:\n${added.join('\n')}`).toEqual([]);
+    expect(stale, 'OAuth 文案已修好的英文写法存量请从清单删除').toEqual([]);
   });
 });

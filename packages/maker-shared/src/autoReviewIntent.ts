@@ -75,7 +75,8 @@ export interface AutoReviewHistoryMessage {
 
 /** Dependency-free factory shared by harnesses and both database worker transports. */
 export function createAutoReviewIntentProjection() {
-  const MAX_USER_INTENT_CHARS = 2_000;
+  // Large enough for long requests and delegations; the action itself may be far larger.
+  const MAX_USER_INTENT_CHARS = 30_000;
   const OMITTED_USER_INTENT =
     "User message omitted because it exceeds the review budget; it cannot establish authorization.";
 
@@ -234,15 +235,25 @@ export function createAutoReviewIntentProjection() {
       JSON.stringify(candidate).length <= MAX_USER_INTENT_CHARS
     )
       return candidate;
-    // Drop all earlier grants together, flag the missing restrictions, and never sample the latest text.
+    // Keep only the newest contiguous messages so a kept grant never outlives a dropped later
+    // restriction; flag the gap and never sample the latest text. Trimming down to half the
+    // budget leaves later appends prefix-stable, which lets a provider that caches prefixes reuse them.
     const omitted = {
-      earlierUserMessages: [],
+      earlierUserMessages: [] as string[],
       currentUserMessage,
       historyOmitted: true as const,
     };
-    return JSON.stringify(omitted).length <= MAX_USER_INTENT_CHARS
-      ? omitted
-      : { ...omitted, currentUserMessage: OMITTED_USER_INTENT };
+    let size = JSON.stringify(omitted).length;
+    if (currentUserMessage === OMITTED_USER_INTENT || size > MAX_USER_INTENT_CHARS)
+      return { ...omitted, currentUserMessage: OMITTED_USER_INTENT };
+    const kept: string[] = [];
+    for (let index = intent.earlierUserMessages.length - 1; index >= 0; index--) {
+      const added = JSON.stringify(intent.earlierUserMessages[index]).length + (kept.length > 0 ? 1 : 0);
+      if (size + added > MAX_USER_INTENT_CHARS / 2) break;
+      size += added;
+      kept.push(intent.earlierUserMessages[index]!);
+    }
+    return { ...omitted, earlierUserMessages: kept.reverse() };
   }
 
   function appendAutoReviewUserIntent(
@@ -486,6 +497,7 @@ export function createAutoReviewIntentProjection() {
   }
 
   return {
+    maxIntentChars: MAX_USER_INTENT_CHARS,
     compact: compactCurrentUserIntent,
     normalize: normalizeAutoReviewUserIntent,
     withReferences: withAutoReviewUserReferences,

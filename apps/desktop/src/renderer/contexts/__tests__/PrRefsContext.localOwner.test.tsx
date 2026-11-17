@@ -18,7 +18,7 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ warn: vi.fn(), debug: vi.fn() }),
 }));
 
-import { PrRefsProvider, usePrRefsForSession, usePrActions, usePrStatuses } from '../PrRefsContext';
+import { PrRefsProvider, usePrRefsForSession, usePrActions, usePrStatuses, useTaskPrArchiveEligibility } from '../PrRefsContext';
 import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
 
 function RefCount() {
@@ -460,5 +460,68 @@ it('invalidates confirmed PR status on not-found across remounts and later trans
   status = { ...ref, ok: true, status: 'merged' };
   await act(async () => fireEvent.click(screen.getByRole('button')));
   expect(screen.getByRole('button', { name: 'merged:fresh' })).toBeTruthy();
+  unmount();
+});
+
+// Regression (unit): one merged PR in a task with an unrendered second PR must
+// not enable archive. The callback retained by leave-time preflight reads the
+// current store even after a refresh failure; old successful values cannot win.
+it('shares task-wide archive eligibility with the final preflight reader', async () => {
+  const refs = [1, 2].map(prNumber => ({ id: `ref-${prNumber}`, sessionId: 'archive',
+    owner: 'a', repo: 'b', prNumber, url: '', firstSeenAt: 1, lastSeenAt: 1 }));
+  let secondMerged = false;
+  let failed = false;
+  let read = () => false;
+  window.electronAPI = { gitContext: {
+    listAllPrRefs: async () => refs, listPrRefs: async () => refs,
+    onPrRefsChanged: () => () => {},
+    getPrStatuses: async () => {
+      if (failed) throw new Error('offline');
+      return refs.map((ref, i) => ({ ...ref, ok: true, status: i === 0 || secondMerged ? 'merged' : 'open' }));
+    },
+  } } as unknown as typeof window.electronAPI;
+  function Probe() {
+    const { registerPrConsumer, fetchStatusesForSession } = usePrActions();
+    const { eligible, checkEligibility } = useTaskPrArchiveEligibility('archive');
+    read = checkEligibility;
+    useEffect(() => registerPrConsumer('archive'), [registerPrConsumer]);
+    return <button onClick={() => fetchStatusesForSession('archive')}>{eligible ? 'complete' : 'incomplete'}</button>;
+  }
+  const { unmount } = render(<PrRefsProvider><Probe /></PrRefsProvider>);
+  await act(async () => {});
+  const preflightRead = read;
+  expect(preflightRead()).toBe(false);
+  secondMerged = true;
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'incomplete' })));
+  expect(screen.getByRole('button', { name: 'complete' })).toBeTruthy();
+  expect(preflightRead()).toBe(true);
+  failed = true;
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'complete' })));
+  expect(preflightRead()).toBe(false);
+  expect(screen.getByRole('button', { name: 'incomplete' })).toBeTruthy();
+  unmount();
+});
+
+// Regression (unit): display surfaces show three PRs, but archive eligibility needs
+// every associated PR. Statuses beyond the first three must still be fetched, in bounded batches.
+it('fetches statuses for every associated PR beyond the displayed three', async () => {
+  const refs = [1, 2, 3, 4, 5].map(prNumber => ({ id: `ref-${prNumber}`, sessionId: 'many',
+    owner: 'a', repo: 'b', prNumber, url: '', firstSeenAt: 1, lastSeenAt: 1 }));
+  const getPrStatuses = vi.fn(async (queries: typeof refs) =>
+    queries.map(q => ({ ...q, ok: true, status: 'merged' })));
+  window.electronAPI = { gitContext: {
+    listAllPrRefs: async () => refs, listPrRefs: async () => refs,
+    onPrRefsChanged: () => () => {}, getPrStatuses,
+  } } as unknown as typeof window.electronAPI;
+  function Probe() {
+    const { registerPrConsumer } = usePrActions();
+    const { eligible } = useTaskPrArchiveEligibility('many');
+    useEffect(() => registerPrConsumer('many'), [registerPrConsumer]);
+    return <div>{eligible ? 'complete' : 'incomplete'}</div>;
+  }
+  const { unmount } = render(<PrRefsProvider><Probe /></PrRefsProvider>);
+  await act(async () => {});
+  expect(screen.getByText('complete')).toBeTruthy();
+  expect(getPrStatuses.mock.calls.flatMap(([queries]) => queries)).toHaveLength(5);
   unmount();
 });

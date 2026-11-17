@@ -17,6 +17,14 @@ export const generalSettings = defineSettings({
     titleKey: 'settings.sections.user',
     sectionKey: 'settings.sections.user',
   },
+  firstRunGuide: {
+    id: 'general.firstRunGuide',
+    tab: 'general',
+    targetId: 'settings-first-run-guide',
+    titleKey: 'firstRunGuide.settings.title',
+    sectionKey: 'firstRunGuide.settings.title',
+    aliases: ['guide', 'onboarding', 'get started', 'welcome', '引导', '新手', '开始使用'],
+  },
   setupMigration: {
     id: 'general.setupMigration',
     tab: 'general',
@@ -59,6 +67,15 @@ export const generalSettings = defineSettings({
     targetId: 'settings-composer',
     titleKey: 'settings.sections.composer',
     sectionKey: 'settings.sections.composer',
+  },
+  defaultNewTaskWorkingDir: {
+    id: 'general.defaultNewTaskWorkingDir',
+    tab: 'general',
+    targetId: 'settings-default-new-task-working-dir',
+    titleKey: 'settings.defaultNewTaskWorkingDir.title',
+    sectionKey: 'settings.tabs.general',
+    descriptionKey: 'settings.defaultNewTaskWorkingDir.hint',
+    keywordKeys: ['settings.defaultNewTaskWorkingDir.label'],
   },
   collaboration: {
     id: 'general.collaboration',

@@ -69,7 +69,10 @@ export function cloudSwitchCandidates(
     .map(row => ({ deviceId: row.device.deviceId, name: row.device.name }));
 }
 
-/** Computers the home offers for the companion (its own view), never the home or this phone. */
+/**
+ * Computers the home offers for the companion (its own view), never the home or this phone. One the
+ * home marks `outdated` (an older Cindy) is offered too: the companion runs there the older way.
+ */
 export function cloudHomeTargets<T extends { deviceId: string; online: boolean }>(targets: readonly T[], home: string, self: string | null): T[] {
   return targets.filter(target => target.online && target.deviceId !== home && target.deviceId !== self);
 }

@@ -3,6 +3,7 @@ import { createReadStream, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { findClaudeSessionJsonl, sanitizeClaudeProjectKey } from '@cindy/maker-core';
 import { defaultClaudeConfigDirCandidates } from '../maker-orchestration/claudeTranscriptAnchors';
+import { readBoundClaudeConfigDir } from '../subscription-accounts/store.js';
 import { readCodexThreadStorageReadOnly } from '../maker-host/codex-thread-storage';
 import { dumpCodexThreadStateRows, importSharedCodexThread, removeSharedCodexThread } from '../maker-host/codex-local-sessions';
 import { migrationNativeContext } from '../session-share/migrationNativeContext';
@@ -17,7 +18,8 @@ export function nativeHistoryStorage(userDataDir: string): NativeHistoryStorage 
       if (kind !== 'pi' && !/^[a-f0-9-]{36}$/i.test(nativeId)) throw new Error('NATIVE_HISTORY_INVALID_ID');
       if (kind === 'claude-code') {
         let file: string | null = null;
-        for (const dir of defaultClaudeConfigDirCandidates()) {
+        const boundDir = readBoundClaudeConfigDir(nativeId);
+        for (const dir of boundDir ? [boundDir] : defaultClaudeConfigDirCandidates()) {
           file = await findClaudeSessionJsonl(nativeId, undefined, path.join(dir, 'projects'));
           if (file) break;
         }

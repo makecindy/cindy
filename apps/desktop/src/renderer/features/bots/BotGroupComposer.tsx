@@ -40,7 +40,7 @@ import {
   type ClipboardEvent,
   type KeyboardEvent,
 } from 'react';
-import { Paperclip, Plus, Users, X } from 'lucide-react';
+import { Mic, Paperclip, Plus, Users, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { AttachmentRejectionStrip, ThumbnailStrip } from '@/components/new-chat/ComposerAttachments';
@@ -53,6 +53,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tip } from '@/components/ui/tooltip';
+import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import type { UseAttachmentsReturn } from '@/hooks/useAttachments';
@@ -62,6 +63,7 @@ import {
   getDraft,
   isDraftDiscardTokenCurrent,
   saveDraft,
+  subscribeDraftContent,
 } from '@/lib/composerDraftStore';
 import type { AttachedFile } from '@/lib/fileTypes';
 import { isAnnotationBurnInError, materializeAnnotatedAttachmentsForSend } from '@/lib/annotationBurnIn';
@@ -112,6 +114,10 @@ import {
 import { GroupMaskIndicator } from './GroupMaskControls';
 import { useGroupMask } from './groupMaskPresentation';
 import { useBotGroupMentionPicker } from './useBotGroupMentionPicker';
+import { useBotGroupVoiceInput } from './useBotGroupVoiceInput';
+import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
+import { isVoiceInputShortcutMatch } from '@/voice-input/shortcut';
+import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 
 /** 话题 replies also accept the Chat Server's own 「everyone」 spellings. */
 const THREAD_ALL_ALIASES = ['所有人', 'all', 'everyone'] as const;
@@ -179,6 +185,7 @@ export function BotGroupComposer({
   draftKey,
   members,
   running,
+  canStop = true,
   disabled = false,
   planState = null,
   divisionSteps = false,
@@ -203,6 +210,7 @@ export function BotGroupComposer({
   draftKey: string;
   members: readonly BotGroupMemberView[];
   running: boolean;
+  canStop?: boolean;
   /** Archived group: nothing can be sent. */
   disabled?: boolean;
   /** The group's open plan, for placeholders and the 「安排分工」 gate. */
@@ -244,15 +252,36 @@ export function BotGroupComposer({
   const [division, setDivision] = useState(false);
   const divisionRef = useRef(division);
   divisionRef.current = division;
-  const groupAttemptRef = useRef<{ clientId: string; signature: string } | null>(null);
+  const savedEdit = thread ? undefined : getDraft(draftKey)?.botGroupEdit;
+  const groupAttemptRef = useRef<{ clientId: string; signature: string; enqueueOperationId?: string;
+    editSource?: { groupId: string; clientId: string; revision: number } } | null>(
+      savedEdit?.source.groupId === groupId
+        ? { clientId: savedEdit.clientId, signature: savedEdit.signature, editSource: savedEdit.source,
+            enqueueOperationId: savedEdit.enqueueOperationId } : null);
   const [menuOpen, setMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const allLabel = t('bots.groupChat.mention.all');
   const threadAllLabels = useMemo(() => [allLabel, ...THREAD_ALL_ALIASES], [allLabel]);
+  const textRef = useRef(text);
+  textRef.current = text;
+  const voice = useBotGroupVoiceInput({
+    draftKey, textareaRef, text, disabled: disabled || sending,
+    onStart: () => groupMask?.participate(),
+    maxLength: thread ? BOT_GROUP_MESSAGE_MAX_CHARS : undefined,
+    onTooLong: () => toast.warning(t('bots.groupChat.composer.tooLong', { max: BOT_GROUP_MESSAGE_MAX_CHARS })),
+    onChange: (value, edit) => {
+      textRef.current = value;
+      mention.onChange(value, edit);
+    },
+  });
+  // The registered outbox handle survives renders; consult current ownership,
+  // including previews that have not yet been committed into textRef.
+  const ownsVoiceDraft = voice.ownsDraft;
   // Same @ picker in the group and in a 话题; the 话题 also resolves the server's aliases.
   const mention = useBotGroupMentionPicker({
     text,
+    disabled: disabled || voice.isBusy,
     onTextChange: (value) => {
       // A 话题 reply is a new attempt as soon as its text changes (even if typed back the same).
       if (thread && threadAttempt && threadAttempt.text !== value.trim()) setBotGroupThreadReplyAttempt(draftKey, null);
@@ -263,8 +292,13 @@ export function BotGroupComposer({
     allLabels: thread ? threadAllLabels : undefined,
     allowMentionAllBots,
   });
-  const textRef = useRef(text);
-  textRef.current = text;
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  useEffect(() => {
+    if (!voice.isListening) return;
+    setRecordingSeconds(0);
+    const timer = window.setInterval(() => setRecordingSeconds(seconds => seconds + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [voice.isListening]);
   const attachmentsRef = useRef(attachmentState.attachments);
   attachmentsRef.current = attachmentState.attachments;
   const quoteRef = useRef(quote?.view ?? null);
@@ -273,6 +307,12 @@ export function BotGroupComposer({
   const focusInputOnMenuCloseRef = useRef(false);
   const sendingRef = useRef(false);
   const stoppingRef = useRef(false);
+  const inputSnapshot = { text, files: attachmentState.attachments, division, quote: quoteView };
+  const inputVersion = useRef({ ...inputSnapshot, revision: 0 });
+  if (inputVersion.current.text !== text || inputVersion.current.files !== attachmentState.attachments
+    || inputVersion.current.division !== division || inputVersion.current.quote !== quoteView) {
+    inputVersion.current = { ...inputSnapshot, revision: inputVersion.current.revision + 1 };
+  }
 
   // A reply can settle in a different mounted composer after the panel was reopened.
   useEffect(() => {
@@ -291,8 +331,8 @@ export function BotGroupComposer({
   const attachmentCount = attachmentState.attachments.length;
   const tooManyAttachments = attachmentCount > BOT_GROUP_ATTACHMENTS_MAX;
   const canSend =
-    !disabled && (trimmed.length > 0 || attachmentCount > 0) && !tooLong && !tooManyAttachments && hasMembers;
-  const showStop = !thread && running && trimmed.length === 0 && attachmentCount === 0;
+    !disabled && !voice.isBusy && (trimmed.length > 0 || attachmentCount > 0) && !tooLong && !tooManyAttachments && hasMembers;
+  const showStop = !voice.isBusy && !thread && canStop && running && trimmed.length === 0 && attachmentCount === 0;
   const divisionBlocked = isBotGroupDivisionBlocked(planState);
 
   // Picking 引用回复 brings the caret here, ready to type the reply; picking the same message
@@ -309,10 +349,21 @@ export function BotGroupComposer({
     if (!existing && !value) return;
     saveDraft(
       draftKey,
-      { ...existing, attachments: existing?.attachments ?? [], text: value ? botGroupDraftDoc(value) : null },
+      { ...existing, attachments: existing?.attachments ?? [], text: value ? botGroupDraftDoc(value) : null,
+        botGroupEdit: groupAttemptRef.current?.editSource
+          ? { source: groupAttemptRef.current.editSource, signature: groupAttemptRef.current.signature,
+              clientId: groupAttemptRef.current.clientId, enqueueOperationId: groupAttemptRef.current.enqueueOperationId } : undefined },
       { silent: true },
     );
   }).current;
+  useEffect(() => {
+    if (thread) return;
+    const owner = getDataOwnerGeneration();
+    return subscribeDraftContent(draftKey, () => {
+      if (isDataOwnerGenerationCurrent(owner) && groupAttemptRef.current?.editSource
+        && !getDraft(draftKey)?.botGroupEdit) groupAttemptRef.current = null;
+    });
+  }, [draftKey, thread]);
   useEffect(() => {
     const timer = window.setTimeout(() => persistDraft(text), DRAFT_SAVE_DELAY_MS);
     return () => window.clearTimeout(timer);
@@ -323,7 +374,7 @@ export function BotGroupComposer({
   // resize, the 话题 panel opening) rewraps the text, so the height is fitted again then.
   useLayoutEffect(() => {
     if (textareaRef.current) fitBotGroupComposerInput(textareaRef.current);
-  }, [text]);
+  }, [text, voice.displayText]);
   useRefitBotGroupComposerInputOnResize(textareaRef);
 
   /**
@@ -334,16 +385,19 @@ export function BotGroupComposer({
    */
   const sendThreadReply = async () => {
     if (!canSend || sendingRef.current || getBotGroupThreadReplyAttempt(draftKey)?.sending || !sendReply) return;
-    groupMask?.participate();
     const files = attachmentState.attachments;
     const attachmentSignature = botGroupAttachmentSignature(files);
     const previous = getBotGroupThreadReplyAttempt(draftKey);
-    const attempt: BotGroupThreadReplyAttempt =
-      previous && previous.text === trimmed
+    const retry = previous && previous.text === trimmed
       && previous.attachmentSignature === attachmentSignature
-      && sameBotGroupMentions(mention.resolve(text, previous.roster), previous.mentions)
-        ? previous
-        : {
+      && sameBotGroupMentions(mention.resolve(text, previous.roster), previous.mentions) ? previous : null;
+    // One @ names one member: a typed name several members share stays in the draft to be picked.
+    // A retry is read against its own roster, like its targets: a later namesake does not hold it.
+    const [ambiguousName] = mention.ambiguous(text, retry?.roster);
+    if (ambiguousName) { setError(t('bots.groupChat.errors.mentionAmbiguous', { name: ambiguousName })); return; }
+    groupMask?.participate();
+    const attempt: BotGroupThreadReplyAttempt =
+      retry ?? {
             text: trimmed, draft: text, clientId: crypto.randomUUID(), attachmentSignature, files,
             mentions: mention.resolve(text), roster: members, tracked: mention.tracked, sending: true,
           };
@@ -421,9 +475,17 @@ export function BotGroupComposer({
   useEffect(
     () => thread ? undefined :
       registerBotGroupComposer(groupId, {
+        prepareRestore: () => {
+          if (ownsVoiceDraft() || textRef.current || attachmentsRef.current.length > 0 || divisionRef.current) return null;
+          const revision = inputVersion.current.revision;
+          return () => !ownsVoiceDraft() && revision === inputVersion.current.revision && !textRef.current
+            && attachmentsRef.current.length === 0 && !divisionRef.current;
+        },
         restore: (entry) => {
-          if (textRef.current || attachmentsRef.current.length > 0 || divisionRef.current) return false;
-          groupAttemptRef.current = { clientId: entry.input.clientId, signature: entry.signature };
+          if (ownsVoiceDraft() || textRef.current || attachmentsRef.current.length > 0 || divisionRef.current) return false;
+          groupAttemptRef.current = { clientId: entry.input.clientId, signature: entry.signature,
+            ...(entry.editHold ? { editSource: { groupId: entry.input.groupId, clientId: entry.input.clientId,
+              revision: entry.editHold.revision } } : {}) };
           textRef.current = entry.draft;
           setText(entry.draft);
           mention.setTracked([...entry.tracked]);
@@ -436,11 +498,12 @@ export function BotGroupComposer({
             onQuoteChangeRef.current?.(entry.quote);
           }
           if (entry.files.length > 0) attachmentsRef.current = restoreAttachmentsRef.current(entry.files);
+          persistDraft(entry.draft);
           return true;
         },
         notifyFailed: (errorKey) => toast.error(tRef.current(errorKey)),
       }),
-    [groupId, thread],
+    [groupId, thread, ownsVoiceDraft],
   );
 
   const send = async () => {
@@ -449,6 +512,12 @@ export function BotGroupComposer({
     if (!canSend || sendingRef.current || textRef.current !== text || attachmentsRef.current !== attachmentState.attachments) return;
     if (!botGroupApi()) {
       toast.error(t('bots.groupChat.composer.sendFailed'));
+      return;
+    }
+    // One @ names one member: a typed name several members share stays in the draft to be picked.
+    const [ambiguousName] = mention.ambiguous(text);
+    if (ambiguousName) {
+      toast.error(t('bots.groupChat.errors.mentionAmbiguous', { name: ambiguousName }));
       return;
     }
     groupMask?.participate();
@@ -467,9 +536,15 @@ export function BotGroupComposer({
       ...(sentQuote ? { quote: { messageId: sentQuote.messageId } } : {}),
     };
     const signature = botGroupSendSignature({ ...fields, clientId: '' }, botGroupAttachmentSignature(files));
-    const clientId = groupAttemptRef.current?.signature === signature ? groupAttemptRef.current.clientId : crypto.randomUUID();
-    // The outbox owns this attempt now; a failure hands it back through `restore`.
-    groupAttemptRef.current = null;
+    const previous = groupAttemptRef.current;
+    const clientId = previous?.signature === signature ? previous.clientId : crypto.randomUUID();
+    const attempt = { clientId, signature,
+      enqueueOperationId: previous?.signature === signature && previous.enqueueOperationId ? previous.enqueueOperationId : crypto.randomUUID(),
+      ...(previous?.editSource ? { editSource: previous.editSource } : {}) };
+    // Retain the exact operation on an unknown/failed enqueue. A later retry is not a new send.
+    groupAttemptRef.current = attempt;
+    const owner = getDataOwnerGeneration();
+    const revision = inputVersion.current.revision;
     sendingRef.current = true; setSending(true);
     try { const saved = enqueueBotGroupSend({
       input: { ...fields, clientId },
@@ -479,15 +554,31 @@ export function BotGroupComposer({
       quote: sentQuote,
       files,
       attachmentScope,
+      enqueueOperationId: attempt.enqueueOperationId,
+      ...(attempt.editSource ? { editSource: attempt.editSource } : {}),
     });
-      if (botGroupApi()?.botGroupOutbox) await saved;
+      if (botGroupApi()?.botGroupOutboxCommand || botGroupApi()?.botGroupOutbox) await saved;
       else void saved.catch(() => undefined);
     } catch {
       toast.error(t('bots.groupChat.composer.sendFailed'));
       return;
     } finally { sendingRef.current = false; setSending(false); }
-    // Clear at once like any chat, so the next message can be written while this one
-    // goes out. The batch leaves the tray without deleting its files: the message has them.
+    if (groupAttemptRef.current === attempt) groupAttemptRef.current = null;
+    // A remounted composer may already hold newer text. Consume only this edit's
+    // metadata; its live subscriber also retires the restored attempt.
+    if (attempt.editSource && isDataOwnerGenerationCurrent(owner)
+      && isDraftDiscardTokenCurrent(discardTokenRef.current)) {
+      const saved = getDraft(draftKey);
+      const source = saved?.botGroupEdit?.source;
+      if (saved && source?.groupId === attempt.editSource.groupId
+        && source.clientId === attempt.editSource.clientId && source.revision === attempt.editSource.revision) {
+        saveDraft(draftKey, { ...saved, botGroupEdit: undefined }, { silent: true });
+      }
+    }
+    // A durable enqueue may return after another input/target/account has taken its place.
+    if (!isDataOwnerGenerationCurrent(owner) || !isDraftDiscardTokenCurrent(discardTokenRef.current)
+      || inputVersion.current.revision !== revision) return;
+    // Main now owns this snapshot. Clearing the tray does not delete its files.
     textRef.current = '';
     setText('');
     mention.reset();
@@ -558,6 +649,10 @@ export function BotGroupComposer({
     ? t('bots.groupChat.composer.stop')
     : thread ? t('bots.groupChat.server.sendReply') : t('bots.send');
   const moreLabel = t('bots.groupChat.composer.more');
+  const voiceLabel = t(voice.isListening ? 'newChat.chatInput.voiceInput.stop'
+    : voice.state === 'refining' ? 'newChat.chatInput.voiceInput.refining'
+      : voice.state === 'submitting' ? 'voiceInputOverlay.status.submitting'
+        : 'newChat.chatInput.voiceInput.start');
   const removeDivisionLabel = t('bots.groupChat.composer.removeDivision');
   const placeholder = thread
     ? t('bots.groupChat.server.replyPlaceholder')
@@ -577,8 +672,9 @@ export function BotGroupComposer({
 
   return (
     <div className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}>
-      <div className={BOT_GROUP_COMPOSER_COLUMN}>
+      <div className={cn(BOT_GROUP_COMPOSER_COLUMN, thread && 'max-w-none')}>
         {error ? <p role="alert" className="mb-2 text-13 text-[var(--error-fg)]">{error}</p> : null}
+        {voice.lastError ? <VoiceInputStatusNotice message={voice.lastError} className="mb-2" /> : null}
         {/* Same floating slot above the card as a task's composer: files that did not attach. */}
         {attachmentState.rejections.length > 0 ? (
           <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
@@ -642,19 +738,35 @@ export function BotGroupComposer({
           ) : null}
           <textarea
             ref={textareaRef}
-            value={text}
+            value={voice.displayText}
             rows={1}
             disabled={disabled}
             aria-label={thread ? t('bots.groupChat.server.replyPlaceholder') : t('bots.groupChat.composer.label')}
             // The Chat Server caps a 话题 reply; the field enforces it as typing does (a pick obeys it too).
             maxLength={thread ? BOT_GROUP_MESSAGE_MAX_CHARS : undefined}
             {...mention.textareaProps}
-            readOnly={sending}
+            readOnly={sending || voice.isBusy}
             placeholder={placeholder}
             onChange={(event) => { mention.onChange(event.target.value); groupMask?.participate(); }}
             onPaste={handlePaste}
             onKeyDown={(event) => {
               if (isComposingKey(event)) return;
+              // The native shortcut owns its gesture, even when configured as Enter.
+              if (isVoiceInputShortcutMatch(event.nativeEvent, getVoiceInputSettings().shortcut)) {
+                event.preventDefault();
+                return;
+              }
+              if (voice.isBusy) {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void voice.cancel();
+                } else if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  if (voice.isListening) void voice.stop();
+                }
+                return;
+              }
               if (mention.onKeyDown(event)) return;
               // Esc takes the quote off before anything else it would close; the text stays.
               if (event.key === 'Escape' && quote && onQuoteChange) {
@@ -760,7 +872,32 @@ export function BotGroupComposer({
               </span>
             </div>
             {/* A mouse click must not move the caret out of the input (the button disables itself right after). */}
-            <span className="inline-flex rounded-full" onMouseDown={keepBotGroupComposerInputFocus(textareaRef)}>
+            <span className="inline-flex items-center gap-1 rounded-full" onMouseDown={keepBotGroupComposerInputFocus(textareaRef)}>
+              <Tip text={voice.shortcutLabel ? `${voiceLabel} · ${voice.shortcutLabel}` : voiceLabel}>
+                <button
+                  type="button"
+                  aria-label={voiceLabel}
+                  aria-pressed={voice.isListening}
+                  disabled={disabled || sending || (voice.isBusy && !voice.isListening)}
+                  onClick={() => {
+                    textareaRef.current?.focus();
+                    if (voice.isListening) void voice.stop(); else voice.start();
+                  }}
+                  className={cn(
+                    'flex h-[30px] min-w-[30px] shrink-0 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--composer-pill-bg)] text-[var(--text-secondary)] outline-none transition-colors hover:bg-[var(--model-trigger-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-60',
+                    voice.isListening && 'bg-[var(--surface-chip)] hover:bg-[var(--surface-chip)]',
+                  )}
+                >
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center" aria-hidden>
+                    {voice.isBusy && !voice.isCaptureReady ? <Spinner size={15} />
+                      : voice.isListening ? <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--settings-badge-error)] motion-reduce:animate-none" />
+                        : <Mic size={15} />}
+                  </span>
+                  {voice.isListening ? <span className="pr-3 text-12 tabular-nums" aria-hidden>
+                    {Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, '0')}
+                  </span> : null}
+                </button>
+              </Tip>
               <Tip text={actionLabel}>
                 <SendButton
                   disabled={showStop ? stopping : sending || !canSend}

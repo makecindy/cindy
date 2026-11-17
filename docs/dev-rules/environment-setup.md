@@ -66,6 +66,47 @@ Cindy Make 的设置入口和指令前置弹窗共用源码准备流程：切到
 准备阶段填充的 pnpm store 缓存，并执行必要的安装脚本；各 worktree 仍保留独立的 `node_modules`，不复制或
 链接个人分支的依赖目录。安装失败或取消可在现有 checkout 上重试，不重置个人分支。
 
+## macOS：SwiftUI helper 缺少宏插件
+
+开发版的菜单栏 helper 会由本机 `swiftc` 按需编译；正式安装包使用随包提供的二进制。
+若开发日志出现 `plugin for module 'SwiftUIMacros' not found`，或
+`external macro implementation type 'SwiftUIMacros.StateMacro' could not be found`，
+先核对当前选择的工具链与 SDK：
+
+```bash
+xcode-select -p
+xcrun --find swiftc
+xcrun swiftc --version
+xcrun --show-sdk-path
+```
+
+2026-10-18 已复现的组合为 Command Line Tools 的 Swift 6.4 与 macOS 27.0 SDK：
+一个只含 SwiftUI `@State` 的最小程序也因缺少该宏插件而无法编译。同机指定已安装的
+macOS 26.5 SDK 后，最小程序和 Cindy 菜单栏 helper 均编译成功。
+
+遇到这一组合且本机已有兼容 SDK 时，可在交互式 Terminal 中只为本次启动设置
+`SDKROOT`。标准输入和标准输出都必须连接 TTY；Agent 需要先为执行工具分配 PTY
+（例如设置 `tty: true`），再在该会话中运行下面的命令。无 TTY 时，启动器会另开
+Terminal，当前转发的环境变量白名单不含 `SDKROOT`，因此直接执行本例不会应用该设置。
+示例先检查 TTY；检查未通过时，应切换到交互式 Terminal 或分配 PTY 后执行。
+以下是中国大陆版隔离实例的已验证示例；Global 使用 `--region=global`：
+
+```bash
+test -t 0 && test -t 1 &&
+  test -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk &&
+  SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
+  pnpm restart:desktop:remote --region=cn --isolated=swiftui-sdk --passive
+```
+
+该设置只影响此命令及其子进程，不修改系统默认工具链。26.5 是此次验证过的兼容 SDK，
+不是项目的固定版本要求；若未安装该 SDK，应先核对所选 Xcode / Command Line Tools
+是否包含所需宏插件，再选择兼容且完整的开发环境。
+
+启动成功后，还应核对菜单栏 helper 的编译与启动日志；`DESKTOP_DEV_VERDICT=ready`
+只说明 Desktop 启动就绪，不能单独证明菜单栏功能已通过验收。编译入口与失败处理见
+[`MacMenubarNativeHost.ts`](../../apps/desktop/src/main/menubar/MacMenubarNativeHost.ts)，
+隔离与启动参数见 [`desktop-development.md`](desktop-development.md)。
+
 ## macOS：iOS 模拟器构建工具链
 
 首次安装开发包不等于首次完整编译。先按 [Mobile 模拟器流程](../../apps/mobile/docs/simulator-debugging.md#截图与当前版本测试)

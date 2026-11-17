@@ -1,5 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { validateGhostManifest as validateProtocolManifest } from '@cindy/plugin-protocol';
+import { validateGhostManifest as validateProtocolManifest, type GhostHostUi } from '@cindy/plugin-protocol';
+
+// Host groups are separate install permissions; unknown groups never become permissions.
+it('validates and projects each host tool group independently in both manifest readers', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'host-tools', name: 'Host tools', version: '1.0.0', entry: 'main.js' };
+  const agent = { hostTools: ['history', 'scheduler', 'terminal', 'future-group'] };
+  for (const validate of [validateGhostManifest, validateProtocolManifest]) {
+    const result = validate({ ...base, agent });
+    expect(result).toMatchObject({ ok: true, manifest: { agent } });
+    for (const hostTools of ['history', [3], [null], {}]) expect(validate({ ...base, agent: { hostTools } }).ok).toBe(false);
+  }
+  const before = validateGhostManifest({ ...base, agent: { hostTools: ['history'] } });
+  const after = validateGhostManifest({ ...base, agent });
+  if (!before.ok || !after.ok) throw new Error('invalid fixture');
+  expect(ghostPermissionItems(after.manifest).filter(item => item.key.startsWith('agent:host-tools:')).map(item => item.key))
+    .toEqual(['agent:host-tools:history', 'agent:host-tools:scheduler', 'agent:host-tools:terminal']);
+  // A command-capable plugin must not be described as unable to access local files.
+  expect(ghostPermissionItems(after.manifest).find(item => item.kind === 'code')?.detailKey).toBe('codeDetailTerminal');
+  expect(diffGhostPermissionItems(before.manifest, after.manifest).added.map(item => item.key)).toEqual(['agent:host-tools:scheduler', 'agent:host-tools:terminal', 'code']);
+});
 
 import {
   GHOST_CARD_ACTION_ID_RE,
@@ -13,6 +32,9 @@ import {
   ghostAppContextLocale,
   ghostAppContextLanguages,
   ghostContentKeys,
+  getApprovedGhostHostUi,
+  ghostHostUiApprovalTokens,
+  ghostHostUiNeedsApproval,
   ghostRequiresCindyAccount,
   ghostExternalLinkUrls,
   ghostLocalePathFor,
@@ -44,10 +66,70 @@ import {
   resolveGhostManifestLocale,
   validateGhostManifest,
   validateGhostManifestLocaleResource,
+  validateInstalledGhostManifest,
+  validateStoredGhostManifest,
   validateNormalizedGhostManifest,
   withGhostResolvedLocale,
   type GhostManifest,
+  type InstalledGhost,
 } from '../ghost';
+
+// Real receipt projection: new resources/fields never inherit an older capability grant.
+describe('host appearance approval', () => {
+  // Unit, #9987 compatibility: exercise the real installed-reader and receipt,
+  // which the protocol-only tests cannot cover. Invalid new fields stay inert.
+  it('retains approved legacy entries and tokens beside invalid historical extensions', () => {
+    const host: GhostHostUi = { contributions: [{ id: 'old', title: 'Toolbar', position: 'composer.toolbar', tool: 'help' }],
+      commands: [{ id: 'open', title: 'Command', tool: 'help', shortcut: 'Mod+Shift+H' }] };
+    const manifest: GhostManifest = { schemaVersion: 3, minCindyVersion: '0.1.61', id: 'example', name: 'Example',
+      version: '1', kind: 'chip', entry: 'main.js', tools: [{ name: 'help', description: 'Help' }], mcpApps: { host } };
+    const approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    const stored = validateInstalledGhostManifest({ ...manifest, mcpApps: { host: { ...host, settings: { vendor: true },
+      contributions: [...host.contributions!, { id: 'future', title: 'Future', position: 'composer.completion', tool: 'help' }] } } });
+    if (!stored.ok) throw new Error(stored.reason);
+    const ghost = { manifest: stored.manifest, approvedHostUi, approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
+    expect(getApprovedGhostHostUi(ghost)).toMatchObject(host);
+    expect(getApprovedGhostHostUi(ghost)?.contributions).toHaveLength(1);
+    expect(getApprovedGhostHostUi(ghost)?.settings).toBeUndefined();
+    expect(ghostHostUiApprovalTokens(stored.manifest)).toEqual(approvedHostUi);
+    expect(ghostHostUiNeedsApproval(ghost)).toBe(false);
+  });
+  it('requires approval for each new field and resource while preserving existing views', () => {
+    const host: GhostHostUi = { capabilities: ['appearance'], appearance: { fields: ['uiFont'] },
+      views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' }] };
+    const manifest: GhostManifest = { schemaVersion: 3, id: 'appearance-example', name: 'Appearance',
+      version: '1', kind: 'chip', entry: 'main.js', mcpApps: {
+        ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+        host,
+      } };
+    const approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    host.appearance = { fields: ['bodyFont', 'future-field'],
+      resources: [{ id: 'font', kind: 'font', path: 'assets/font.woff2' }] };
+    const ghost = { manifest, approvedHostUi, approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
+    expect(getApprovedGhostHostUi(ghost)).toMatchObject({ capabilities: ['appearance'],
+      views: [{ id: 'board' }], appearance: { fields: [], resources: [] } });
+    ghost.approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    expect(getApprovedGhostHostUi(ghost)?.appearance).toEqual({ fields: ['bodyFont'],
+      resources: [{ id: 'font', kind: 'font', path: 'assets/font.woff2' }] });
+    host.appearance.resources![0].path = 'assets/replacement.woff2';
+    expect(getApprovedGhostHostUi(ghost)?.appearance?.resources).toEqual([]);
+  });
+  // Removing the field declaration requests the public default (all fields),
+  // never an implicit expansion of the existing receipt's uiFont approval.
+  it('requires the remaining default fields to be approved after removing a restricted declaration', () => {
+    const host: GhostHostUi = { capabilities: ['appearance'], appearance: { fields: ['uiFont'] } };
+    const manifest = { schemaVersion: 3, id: 'example', name: 'Example', version: '1', kind: 'chip',
+      entry: 'main.js', mcpApps: { host } } as GhostManifest;
+    const ghost = { manifest, approvedHostUi: ghostHostUiApprovalTokens(manifest),
+      approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
+    delete host.appearance;
+    expect(ghostHostUiNeedsApproval(ghost)).toBe(true);
+    expect(getApprovedGhostHostUi(ghost)?.appearance?.fields).toEqual(['uiFont']);
+    ghost.approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    expect(ghostHostUiNeedsApproval(ghost)).toBe(false);
+    expect(getApprovedGhostHostUi(ghost)?.appearance?.fields).toContain('wallpaper');
+  });
+});
 
 /** 一份全绿的清单基底(意识唯一形态:芯片,2026-07-12 单形态定案),单点破坏它来测各字段规则。 */
 function goodManifest(): Record<string, unknown> {
@@ -1034,6 +1116,47 @@ describe('ghost · 清单校验', () => {
     for (const icon of ['../evil.png', '/abs.png', 'a\\b.png', 'icon.svg', 'icon.js', 'icon', 42]) {
       expect(validateGhostManifest({ ...goodManifest(), icon }).ok, String(icon)).toBe(false);
     }
+  });
+
+  it('tools[].parameters 新包按 UTF-8 字节限 16KB,已装快照保留旧口径', () => {
+    const schema = (description: string) => ({ type: 'object', description });
+    const utf8Bytes = (parameters: Record<string, unknown>) =>
+      new TextEncoder().encode(JSON.stringify(parameters)).length;
+    const withParameters = (parameters: Record<string, unknown>) => ({
+      ...goodManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'do_thing', description: '做点事', parameters }],
+    });
+    const atLimit = schema('a'.repeat(16_384 - utf8Bytes(schema(''))));
+    const chineseDescription = '汉'.repeat(5_000);
+    const overLimit = schema(
+      `${chineseDescription}${'a'.repeat(16_385 - utf8Bytes(schema(chineseDescription)))}`,
+    );
+
+    expect(utf8Bytes(atLimit)).toBe(16_384);
+    expect(validateGhostManifest(withParameters(atLimit)).ok).toBe(true);
+
+    expect(JSON.stringify(overLimit).length).toBeLessThan(16_384);
+    expect(utf8Bytes(overLimit)).toBe(16_385);
+    expect(validateGhostManifest(withParameters(overLimit))).toEqual({
+      ok: false,
+      reason: 'tools[].parameters 过大(上限 16KB)',
+    });
+    // 升级前按 UTF-16 长度装入的多字节 schema,读取安装快照时不能因口径收紧失效。
+    expect(validateInstalledGhostManifest(withParameters(overLimit)).ok).toBe(true);
+    // #7408: stored releases get only parameter-size compatibility, not relaxed agent declarations.
+    expect(validateStoredGhostManifest(withParameters(overLimit)).ok).toBe(true);
+    expect(validateStoredGhostManifest({
+      ...withParameters(overLimit), agent: { tasks: 'historical' },
+    }).ok).toBe(false);
+    expect(validateStoredGhostManifest(withParameters(schema('a'.repeat(16_384))))).toEqual({
+      ok: false,
+      reason: 'tools[].parameters 过大(上限 16KB)',
+    });
+    expect(validateInstalledGhostManifest(withParameters(schema('a'.repeat(16_384))))).toEqual({
+      ok: false,
+      reason: 'tools[].parameters 过大(上限 16KB)',
+    });
   });
 });
 
@@ -5145,6 +5268,18 @@ describe('liveScreen declaration', () => {
     );
     const alone = validateGhostManifest({ ...base, liveScreen: true });
     expect(alone.ok).toBe(false);
+  });
+  // 任务在另一台电脑上时也显示任务页：只有提供设备画面的插件能声明，且只接受字面量 true。
+  it('lets a task page opt into tasks on another computer only together with liveScreen', () => {
+    const taskView = { html: 'task.html', remote: true };
+    const declared = validateGhostManifest({ ...base, node, liveScreen: true, taskView });
+    expect(declared.ok && declared.manifest.taskView).toEqual({ html: 'task.html', remote: true });
+    expect(validateGhostManifest({ ...base, taskView }).ok).toBe(false);
+    expect(
+      validateGhostManifest({ ...base, node, liveScreen: true, taskView: { ...taskView, remote: 'yes' } }).ok,
+    ).toBe(false);
+    const local = validateGhostManifest({ ...base, node, liveScreen: true, taskView: { html: 'task.html' } });
+    expect(local.ok && local.manifest.taskView?.remote).toBeUndefined();
   });
 });
 

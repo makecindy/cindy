@@ -9,7 +9,7 @@ import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { SCHEDULE_WEBHOOK_PRESETS } from '@cindy/maker-scheduler/webhook-formats';
-import { parseWebhookFormatText } from '../lib/scheduleFormLogic';
+import { parseWebhookFormatText, validGithubRepositories } from '../lib/scheduleFormLogic';
 import { WebhookEventSelect } from './WebhookEventSelect';
 
 const hintClass = 'text-12 leading-relaxed text-[var(--text-secondary)]';
@@ -19,6 +19,8 @@ interface WebhookSourceFieldsProps {
   signed: boolean;
   formatText: string;
   events: string;
+  repositories?: string;
+  onRepositoriesChange?(value: string): void;
   onEventsChange(value: string): void;
   footerAction?: ReactNode;
   onPresetChange(value: string): void;
@@ -32,6 +34,8 @@ export function WebhookSourceFields({
   signed,
   formatText,
   events,
+  repositories = '',
+  onRepositoriesChange,
   onEventsChange,
   footerAction,
   onPresetChange,
@@ -40,8 +44,10 @@ export function WebhookSourceFields({
 }: WebhookSourceFieldsProps) {
   const { t } = useTranslation();
   const [advancedOpen, setAdvancedOpen] = useState(!signed);
-  const known = preset === 'custom' || SCHEDULE_WEBHOOK_PRESETS.some((item) => item.id === preset);
+  const appSource = preset === 'github-app';
+  const known = appSource || preset === 'custom' || SCHEDULE_WEBHOOK_PRESETS.some((item) => item.id === preset);
   const options = [
+    { value: 'github-app', label: 'GitHub App' },
     ...SCHEDULE_WEBHOOK_PRESETS.map((item) => ({ value: item.id, label: item.label })),
     { value: 'custom', label: t('scheduler.editor.webhook.sourceCustom') },
     // 更新的版本写入的发送方：照原样显示，不改就不会被覆盖。
@@ -67,6 +73,21 @@ export function WebhookSourceFields({
         </FormField>
         <WebhookEventSelect key={preset} preset={preset} value={events} onChange={onEventsChange} />
       </div>
+      {appSource && (
+        <>
+          <FormField
+            label={t('scheduler.editor.webhook.repositoriesLabel')}
+            hint={t('scheduler.editor.webhook.repositoriesHint')}
+            error={repositories.trim() && !validGithubRepositories(repositories)
+              ? t('scheduler.editor.webhook.repositoriesInvalid') : undefined}
+          >
+            {(control) => <Textarea {...control} value={repositories} onChange={value => onRepositoriesChange?.(value)}
+              rows={3} spellCheck={false} placeholder="makecindy/cindy" />}
+          </FormField>
+          <p className={hintClass}>{t('scheduler.editor.webhook.githubAppHint')}</p>
+          {footerAction}
+        </>
+      )}
       {preset === 'custom' ? (
         <FormField
           label={t('scheduler.editor.webhook.customLabel')}
@@ -85,12 +106,12 @@ export function WebhookSourceFields({
           )}
         </FormField>
       ) : null}
-      {preset !== 'custom' && !signed && (
+      {!appSource && preset !== 'custom' && !signed && (
         <p className="text-12 leading-relaxed text-[var(--text-primary)]">
           {t('scheduler.editor.webhook.unsignedWarning')}
         </p>
       )}
-      <div>
+      {!appSource && <div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="secondary"
@@ -129,7 +150,7 @@ export function WebhookSourceFields({
             <p className={hintClass}>{t('scheduler.editor.webhook.quotaHint')}</p>
           </div>
         </Collapse>
-      </div>
+      </div>}
     </div>
   );
 }

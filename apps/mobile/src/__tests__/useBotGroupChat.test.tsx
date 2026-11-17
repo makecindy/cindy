@@ -31,15 +31,16 @@ vi.mock('@/session/remoteHistoryDiskCache', () => ({
     const generation = h.accountGeneration;
     return { key: `${generation}:${device}:${group}`, current: () => generation === h.accountGeneration };
   },
-  readConversationDisk: async (authority: { key: string }, valid: (value: unknown) => boolean) => {
+  readConversationDisk: vi.fn(async (authority: { key: string }, valid: (value: unknown) => boolean) => {
     const value = h.disk.get(authority.key); return valid(value) ? value : null;
-  },
+  }),
   writeConversationDisk: async (authority: { key: string }, value: unknown) => { h.disk.set(authority.key, value); return true; },
   clearHistoryDisk: async () => { h.disk.clear(); },
 }));
 vi.mock('@/device-link/remoteStatus', async () => ({ formatRemoteError: (await import('@cindy/maker-shared/device-link-contract')).formatRemoteError }));
 
 import { useBotGroupChat } from '@/session/useBotGroupChat';
+import { readConversationDisk } from '@/session/remoteHistoryDiskCache';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const host = { deviceId: 'mac', deviceName: 'Mac' };
@@ -103,6 +104,35 @@ it('reopens a saved legacy group while the computer read remains pending', async
   h.link.invoke.mockReturnValue(new Promise(() => {}));
   await render();
   expect(result.state).toMatchObject({ kind: 'ready', group: { name: '官网' } });
+});
+
+// Unit regressions: warm group hydration could roll a newer in-memory view back to an
+// older disk snapshot; equal network refreshes also rebuilt the whole timeline.
+it('reuses the warm group without reading an older disk snapshot', async () => {
+  await render();
+  act(() => root?.unmount()); root = undefined;
+  for (const key of h.disk.keys()) h.disk.set(key, resource('older disk snapshot'));
+  vi.mocked(readConversationDisk).mockClear();
+  h.link.invoke.mockReturnValue(new Promise(() => {}));
+  await render();
+  expect(result.state).toMatchObject({ kind: 'ready', group: { name: '官网' } });
+  expect(readConversationDisk).not.toHaveBeenCalled();
+});
+
+it('keeps equal group snapshots stable and shares unchanged timeline data after a metadata update', async () => {
+  vi.useFakeTimers();
+  await render();
+  const first = result.state;
+  for (let i = 0; i < 10; i++) await pushRecovery();
+  expect(reads()).toHaveLength(11);
+  expect(result.state).toBe(first);
+  h.link.invoke.mockImplementation(async () => resource('新名字'));
+  await pushRecovery();
+  expect(result.state).toMatchObject({ kind: 'ready', group: { name: '新名字' } });
+  if (first.kind === 'ready' && result.state.kind === 'ready') {
+    expect(result.state.group.messages).toBe(first.group.messages);
+    expect(result.state.group.members).toBe(first.group.members);
+  }
 });
 
 it('keeps the conversation on a failed re-read, and reports a missing group', async () => {

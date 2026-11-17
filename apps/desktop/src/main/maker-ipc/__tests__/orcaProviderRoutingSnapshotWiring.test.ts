@@ -47,14 +47,15 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(lazyResume).toContain('...(dbRow.providerId ? { providerId: dbRow.providerId } : {})');
   });
 
-  it('validates explicit execution config before allocating a handoff worktree', () => {
+  // 位置(agent_device_id)与执行配置一起在同一次解析里校验，失败时不留 worktree。
+  it('validates explicit execution config and agent location before allocating a handoff worktree', () => {
     const start = registerSource.indexOf('async function sendToSessionInternal(params: {');
     const end = registerSource.indexOf('const newTitle =', start);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const createSetup = registerSource.slice(start, end);
     const validation = createSetup.indexOf(
-      'const resolvedExecution = resolveSendToSessionExecutionConfig({',
+      'const route = await resolveSendToSessionCreateRoute({',
     );
     const worktreeAllocation = createSetup.indexOf(
       'const prep = await prepareHandoffWorktree(',

@@ -1,6 +1,5 @@
-/** Electron wiring for bounded asynchronous main-process directory probes. */
+/** Bounded asynchronous directory probes shared by both process launchers. */
 
-import { app } from 'electron';
 import path from 'node:path';
 
 import { createLogger } from '../logger.js';
@@ -38,10 +37,4 @@ export async function realpathWorkingDirectory(dir: string): Promise<string> {
 
 export async function findSimilarWorkingDirectory(dir: string): Promise<string | null> {
   return (await directoryOperation(dir, 'similar')).path ?? null;
-}
-
-if (typeof app.once === 'function') {
-  app.once('before-quit', () => {
-    workdirProbeHostClient.dispose();
-  });
 }

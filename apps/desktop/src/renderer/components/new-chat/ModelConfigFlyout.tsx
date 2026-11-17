@@ -34,12 +34,16 @@ export interface ModelConfigFlyoutProps {
   state: ModelConfigFlyoutState;
   /** 来源供应商展示名。 */
   sourceLabel: string;
+  /** Catalog source; only a local catalog may read this computer's preferences/native metadata. */
+  deviceId?: string;
   price: ModelPricePresentation | null;
   /** 档位 → 显示文案(按当前选中引擎取,i18n)。 */
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
   /** 刚刚点过 ☆ 的 0.7s 反馈态(规格 §1.5)。 */
   justFavorited?: boolean;
   disabled?: boolean;
+  /** Portaled menus must stay on the configuration flyout's overlay layer. */
+  overlayContentClassName?: string;
   /** Same-engine views show the current harness without offering a cross-engine switch. */
   engineLocked?: boolean;
   onEngineChange: (engine: UnifiedEngine) => void;
@@ -69,10 +73,12 @@ export function ModelConfigFlyout({
   config,
   state,
   sourceLabel,
+  deviceId,
   price,
   effortLabelOf,
   justFavorited = false,
   disabled = false,
+  overlayContentClassName,
   engineLocked = false,
   onEngineChange,
   onEffortChange,
@@ -84,7 +90,7 @@ export function ModelConfigFlyout({
   const { t } = useTranslation();
   const displayName = localizedModelName(entry.displayName, t);
   const showSlider = config.efforts.length > 1;
-  const contextLimit = useModelContextLimit({
+  const contextLimit = useModelContextLimit(deviceId ? null : {
     providerId: entry.providerId,
     agent: config.engine === 'cc' ? 'claude-code' : config.engine,
     modelId: config.wireModelId ?? entry.modelId,
@@ -161,7 +167,7 @@ export function ModelConfigFlyout({
           <>
             {' · '}
             {t('newChat.modelSelector.meta.context', {
-              value: codexDefaultContext
+              value: codexDefaultContext && !deviceId
                 ? codexContext ? formatContextWindow(codexContext.contextWindow) : t('settings.providers.models.advanced.codexContextUnknown')
                 : formatContextWindow(contextWindow),
             })}
@@ -204,7 +210,7 @@ export function ModelConfigFlyout({
                   <SpeedIcon mode={config.fast} />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent>
+              <DropdownMenuContent className={overlayContentClassName}>
                 <DropdownMenuRadioGroup
                   value={config.fast === 'ultrafast' ? 'ultrafast' : config.fast ? 'fast' : 'standard'}
                   onValueChange={value => onFastChange(value === 'ultrafast' ? 'ultrafast' : value === 'fast')}

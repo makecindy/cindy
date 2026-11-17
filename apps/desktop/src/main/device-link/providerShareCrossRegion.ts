@@ -38,8 +38,8 @@ import {
 import { getActiveAuthRealm, getAuthState, getCurrentUserId, getDeviceId } from '../authManager.js';
 import { getClientEndpointForRealm, loadClientEndpointsForRealm } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
-import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.js';
-import { serverApiFetch } from '../serverApiClient.js';
+import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { deviceName } from './deviceName.js';
 import { desktopDirectRuntime } from './directLink.js';
@@ -140,7 +140,7 @@ function preserveNewerHostOnline(previous: readonly ProviderShareReceived[], nex
     const live = previousShare ? shareHostOnline.get(previousShare) : undefined;
     if (!previousShare || !live || live.sequence <= requestedSequence
       || sharePermissionFingerprint(previousShare) !== sharePermissionFingerprint(share)) return share;
-    const updated = { ...share, hostOnline: live.online, hostCapable: live.online || share.hostCapable };
+    const updated = { ...share, ...(share.standbyOnline !== undefined ? { hostDeviceOnline: live.online } : {}), hostOnline: live.online || share.standbyOnline === true, hostCapable: live.online || share.hostCapable };
     shareHostOnline.set(updated, live);
     return updated;
   });
@@ -397,8 +397,8 @@ function noteHostOnline(rt: Runtime | null, state: RegionState, client: DeviceLi
   const live = { sequence: ++hostOnlineSequence, online };
   shareHostOnline.set(share, live);
   const hostCapable = online || share.hostCapable;
-  if (share.hostOnline === online && share.hostCapable === hostCapable) return;
-  const updated = { ...share, hostOnline: online, hostCapable };
+  if ((share.hostDeviceOnline ?? share.hostOnline) === online && share.hostCapable === hostCapable) return;
+  const updated = { ...share, ...(share.standbyOnline !== undefined ? { hostDeviceOnline: online } : {}), hostOnline: online || share.standbyOnline === true, hostCapable };
   shareHostOnline.set(updated, live);
   const next = state.shares.map(entry => entry === share ? updated : entry);
   noteSharePermissions(state.shares, next);
@@ -837,3 +837,14 @@ export const __testing = {
     userDataDir = dir;
   },
 };
+
+/** Same peer credential as the existing cross-region share, never the home region's access token. */
+export async function crossRegionAvailabilityRequest(shareId: string, action: string, body: unknown): Promise<unknown> {
+  const rt = runtime;
+  const state = stateForShare(shareId);
+  if (!rt || !current(rt) || !state?.credential || state.expiresAt <= Date.now()) throw new Error('Provider share session unavailable');
+  const credential = state.credential;
+  const value = await peerRequest(state.apiBase, `/availability/${encodeURIComponent(shareId)}/${action}`, body, credential);
+  if (!current(rt) || stateForShare(shareId) !== state || state.credential !== credential) throw new Error('Provider share session changed');
+  return value;
+}

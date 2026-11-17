@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWebSocketMessageTransform } from '@cindy/anthropic-compat-proxy';
+import type { NativeSubscriptionAccount } from '@cindy/maker-core';
 
 const state = vi.hoisted(() => ({ owner: 'owner-a', pending: false, provider: 'openai' as string | null, guest: false, hosted: false, fastAllowed: true }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => state.owner, isAppSessionBoundaryPending: () => state.pending }));
-vi.mock('../codex-account-auth.js', () => ({ isOpenAiSubscriptionProviderId: (id: string) => id === 'openai' || id === 'account-b' }));
+vi.mock('../codex-account-auth.desktop.js', () => ({ isOpenAiSubscriptionProviderId: (id: string) => id === 'openai' || id === 'account-b' }));
 vi.mock('../session-provider-store.js', () => ({ getSessionProvider: () => state.provider, hasHostedSessionModelAccess: () => state.hosted }));
 vi.mock('../guest-provider-route-store.js', () => ({ guestProviderRouteForSession: () => state.guest ? {} : null }));
 vi.mock('../anthropic-responses-bridge-host.js', () => ({ getChatgptBridgeAuthForDispatch: vi.fn(), invalidateChatgptBridgeAuth: vi.fn(async () => false) }));
@@ -34,6 +35,22 @@ function frame(body: unknown): Buffer {
 }
 
 describe('Pi subscription WebSocket routing', () => {
+  // Standard: the random runtime token selects a host capability, never a client-supplied directory.
+  it('passes the authenticated profile through auth and invalidation and rejects a forged token', async () => {
+    const account: NativeSubscriptionAccount = { id: 'fixture-profile-b', configDir: '/fixture/.codex-b',
+      assertCurrent: () => {}, readState: async () => ({ authenticated: true }) };
+    registerPiProxySession('fixture-session', 'fixture-token', () => 'openai', { nativeSubscriptionAccount: account });
+    const readAuth = vi.fn(async () => ({ accessToken: 'fixture-token-b', accountId: 'fixture-account-b', canDispatch: () => true }));
+    const invalidate = vi.fn(async () => true);
+    const prepare = createPiWebSocketRequestPreparer(readAuth, invalidate);
+    await expect(prepare(context('openai', 'forged-token'))).rejects.toThrow('UNAVAILABLE');
+    expect(readAuth).not.toHaveBeenCalled();
+    const prepared = await prepare(context());
+    expect(readAuth).toHaveBeenCalledWith('openai', account);
+    expect(prepared.headers['chatgpt-account-id']).toBe('fixture-account-b');
+    await prepared.onUpgradeFailure!(401, '{"error":"token_revoked"}');
+    expect(invalidate).toHaveBeenCalledWith(expect.objectContaining({ failedAccessToken: 'fixture-token-b' }), 'openai', account);
+  });
   beforeEach(() => {
     resetPiProxySessionsForTest();
     state.owner = 'owner-a'; state.pending = false; state.provider = 'openai';

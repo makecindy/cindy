@@ -15,11 +15,16 @@ import {
 } from '@cindy/device-link';
 import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { DeviceLinkProvider, useDeviceLink, type DeviceLinkContextValue } from '../device-link/DeviceLinkContext';
+import { waitForMobileAgentNetPreferences } from '../device-link/agentNetPreferences';
 // Platform process lifecycle is covered in fileWebViewTermination.test.tsx.
 const directTransport = vi.hoisted(() => ({ enabled: false, owner: '' }));
 vi.mock('../device-link/DirectLinkTransport', () => ({ DirectLinkTransport: (props: typeof directTransport) => {
   Object.assign(directTransport, props); return null;
 } }));
+// The existing V1 provider path has no Agent-Net binary or OS notification bridge.
+vi.mock('../../modules/cindy-agent-net/src', () => ({ agentNetNative: null }));
+vi.mock('@/notifications/nativeNotifications', () => ({ default: {} }));
+vi.mock('@/notifications/nativePushEnvironment', () => ({ readIosPushEnvironment: async () => undefined }));
 import { useMobileMakerTransport } from '../device-link/useMobileMakerTransport';
 import type { MobileMakerTransport } from '../device-link/mobileMakerTransport';
 import { acquireDeviceSendSlot, resetDeviceResponsivenessTracking, settleDeviceSend, unresponsiveDevicesStore } from '../device-link/unresponsiveDevicesStore';
@@ -101,6 +106,8 @@ const transport = vi.hoisted(() => {
     restartConnection = vi.fn();
     notifyNetworkChanged = vi.fn();
     getStatus = () => this.status;
+    getConnectionIssue = () => null;
+    hasOnlineConnection = () => this.status === 'online' || this.separate?.status === 'online';
     separate: Client | null = null;
     scopedPeers = new Set<string>();
     connectionFor(deviceId: string) { return this.scopedPeers.has(deviceId) ? this.separate ?? this : this; }
@@ -119,6 +126,7 @@ const transport = vi.hoisted(() => {
     onReliableFrameBeforeLink = () => () => {};
     onSeparateCrossAccountStatus(listener: Client['crossAccountStatusChanged']) { this.crossAccountStatusChanged = listener; return () => {}; }
     onSeparateCrossAccountIssue = () => () => {};
+    onScopedConnectionStatus = () => () => {};
     retainedPeers = new Set<string>();
     readyPeers = new Set<string>();
     isLinkReady = (deviceId: string) => this.readyPeers.has(deviceId) || this.retainedPeers.has(deviceId);
@@ -179,6 +187,8 @@ async function readHistory() {
 }
 
 beforeEach(async () => {
+  // The fake client bypasses the real socket factory that initializes preferences.
+  await waitForMobileAgentNetPreferences();
   networkEvents.read.mockReset().mockRejectedValue(new Error('native lookup unavailable'));
   networkEvents.state = 'active';
   auth.accountGeneration = 1;

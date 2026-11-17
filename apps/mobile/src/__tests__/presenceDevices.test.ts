@@ -39,6 +39,17 @@ function presence(patch: Partial<PresenceSnapshot> = {}): PresenceSnapshot {
   };
 }
 
+// App routing, unit: real presence projection must retain an offline App label
+// and publish a change when only app changes; platform-only coverage missed both.
+it('carries App identity through presence and retains it when legacy updates omit the field', () => {
+  const initial = [device()];
+  const friend = patchDeviceViewsWithPresence(initial, presence({ app: 'cindy-friend' }), 'self');
+  expect(friend.device?.app).toBe('cindy-friend');
+  expect(friend.devices).not.toBe(initial);
+  expect(friend.becameControllable).toBe(false);
+  expect(patchDeviceViewsWithPresence(friend.devices, presence({ online: false }), 'self').device?.app).toBe('cindy-friend');
+});
+
 describe('deviceMirrorCleanupDisposition', () => {
   it('keeps last-known content for recoverable offline devices', () => {
     expect(deviceMirrorCleanupDisposition('offline')).toBe('soft');

@@ -7,10 +7,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const uploadLocalFile = vi.hoisted(() => vi.fn());
 const uploadBuffer = vi.hoisted(() => vi.fn());
-vi.mock('../mediaTransfer', () => ({ uploadLocalFile, uploadBuffer }));
+vi.mock('../mediaTransfer.desktop', () => ({ uploadLocalFile, uploadBuffer }));
 
 const resolveSafe = vi.hoisted(() => vi.fn());
-vi.mock('../../imageCacheStore', () => ({ resolveSafe }));
+vi.mock('../../imageCacheStore.desktop', () => ({ resolveSafe }));
 
 const compressOutboundImage = vi.hoisted(() => vi.fn());
 const mayCompressOutboundImage = vi.hoisted(() => vi.fn());

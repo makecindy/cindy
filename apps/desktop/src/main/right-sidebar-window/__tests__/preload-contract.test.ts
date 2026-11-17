@@ -43,6 +43,12 @@ function exposedNestedKeys(src: string, parent: string): string[] {
   return body === null ? [] : objectKeys(body);
 }
 
+// Electron 边界 §4/5：同一个 App/Host 组件也挂在分离侧栏，须提供同一组用途受限的桥。
+// 纯跨窗口协议契约（guard）；缺口是无插件时 Host 订阅也会调用缺失方法，具名页面无法打开。
+it('exposes the same bound plugin App operations to the detached renderer', () => {
+  expect(exposedNestedKeys(source, 'maker')).toEqual(expect.arrayContaining(['mcpApps', 'onPluginUiAction', 'onPluginUiState']));
+});
+
 function extractBlock(src: string, key: string): string | null {
   const re = new RegExp(`(?:^|\\n)[ \\t]*${key}[ \\t]*:[ \\t]*\\{`, 'm');
   const match = re.exec(src);
@@ -116,8 +122,6 @@ const deviceLinkKeys = exposedNestedKeys(source, 'deviceLink');
 const mirrorCacheKeys = exposedNestedKeys(source, 'mirrorCache');
 const localDbBody = extractBlock(source, 'localDb') ?? '';
 const localDbKeys = objectKeys(localDbBody);
-const botsKeys = exposedNestedKeys(localDbBody, 'bots');
-const botAutonomyKeys = exposedNestedKeys(localDbBody, 'autonomy');
 const rightSidebarTabsKeys = exposedNestedKeys(localDbBody, 'rightSidebarTabs');
 const subagentRunsKeys = exposedNestedKeys(localDbBody, 'subagentRuns');
 const orcaWorkflowKeys = exposedNestedKeys(localDbBody, 'orcaWorkflows');
@@ -218,18 +222,6 @@ describe('sidebarWindowPreload 椤跺眰濂戠害', () => {
       'onChanged', 'onRuntimeChanged', 'onPreviewMedia',
       'unreadSync', 'clearUnread', 'onBadge', 'onUnreadSnapshot',
     ]));
-  });
-
-  it('exposes only the workbench read, change event, and permission action', () => {
-    expect(localDbKeys).toContain('bots');
-    expect(botsKeys).toEqual(['autonomy']);
-    expect(botAutonomyKeys).toEqual(['glance']);
-    expect(makerKeys).toEqual(expect.arrayContaining([
-      'onBotAutonomyChanged', 'getPendingInteractions', 'allowBotWorkbenchPermission',
-    ]));
-    expect(makerKeys).not.toContain('resolveInteraction');
-    expect(source).toContain("ipcRenderer.invoke('local-db:bots:autonomy:glance', botId)");
-    expect(source).toContain("ipcRenderer.invoke('maker:rsb-window:allow-bot-workbench-permission', { botId, sessionId, requestId })");
   });
 
   it('涓嶆毚闇?maker / agent / voice / login 鑷不鑳藉姏', () => {

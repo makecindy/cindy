@@ -61,7 +61,7 @@ export interface FeishuIMOptions {
   secretKeyPrefix?: string;
   /** 是否注册 `feishuBot:*` 设置卡 IPC 并广播状态(缺省 true; 第二份实例必须关掉)。 */
   ipc?: boolean;
-  /** 对外开放: 非主人的私聊与群 @ 进业务层(带非主人标记), 命令仍只认主人。 */
+  /** 允许非主人的群 @ 进业务层；私聊只认已绑定主人，命令仍只认主人。 */
   guests?: boolean;
   /** Process-local notice ownership; secondary hosts may chat without announcing global presence. */
   shouldAnnounceLifecycle?: () => boolean;

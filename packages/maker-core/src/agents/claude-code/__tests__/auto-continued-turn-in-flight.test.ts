@@ -35,6 +35,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }));
 
 import { ClaudeCodeAgent } from '../index.js';
+import { Session } from '../../../session.js';
 
 const tempDirs: string[] = [];
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -142,7 +143,7 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
-async function startSessionWithStream() {
+async function startSessionWithStream(throughSession = false) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
@@ -170,13 +171,18 @@ async function startSessionWithStream() {
   });
 
   const events: AgentEvent[] = [];
-  const collected = (async () => {
+  const session = throughSession ? new Session({
+    id: 'session-auto-turn', agentKind: 'claude-code', workDir: workingDir,
+    handle, capabilities: {} as never, logger: createNoopLogger(),
+  }) : undefined;
+  session?.onEvent((event) => events.push(event));
+  const collected = session ? Promise.resolve() : (async () => {
     for await (const ev of handle.events()) {
       events.push(ev);
     }
   })();
 
-  return { agent, handle, stream, fakeQuery, events, collected };
+  return { agent, handle, stream, fakeQuery, events, collected, session };
 }
 
 function successResult(): Record<string, unknown> {
@@ -222,6 +228,35 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent auto-continued turn in-flight tracking', () => {
+  // Regression: SDK -> Session must deliver a zero-output wake failure to the
+  // host, with its quota deadline. Existing tests only observed the raw handle
+  // or woke the Session with text first. Unit tier; no network/model requests.
+  it('delivers a quota failure and reset deadline when an automatic turn produces no text', async () => {
+    const { session, stream, events } = await startSessionWithStream(true);
+    const resetAtSec = Math.floor(Date.now() / 1000) + 3600;
+    const message = "You've reached your Fable limit. Switch to another model to continue.";
+    try {
+      await session!.send('kick off background work');
+      stream.emit(successResult());
+      await waitFor(() => events.some(e => e.type === 'done'), 'initial success');
+      events.length = 0;
+      stream.emit({ type: 'rate_limit_event', rate_limit_info: {
+        status: 'rejected', rateLimitType: 'seven_day_overage_included', resetsAt: resetAtSec,
+      } });
+      stream.emit({ ...assistantText(message), error: 'rate_limit' });
+      stream.emit({ ...successResult(), is_error: true, terminal_reason: 'api_error', result: message });
+      await waitFor(() => events.some(e => e.type === 'done'), 'quota turn done');
+      expect(events.filter(e => e.type === 'error').map(e => e.data)).toEqual([
+        expect.objectContaining({ message, sdkError: 'rate_limit', isTerminal: true,
+          usageResetAt: resetAtSec * 1000 }),
+      ]);
+      expect(events.some(e => e.type === 'text')).toBe(false);
+    } finally {
+      stream.end();
+      await session!.close();
+    }
+  });
+
   it('marks the turn in-flight when assistant activity arrives without a send, and clears on result', async () => {
     const { handle, stream, events } = await startSessionWithStream();
 

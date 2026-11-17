@@ -11,9 +11,22 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 
-import { ensureSystemBinPathForMachineId } from '../deviceId.js';
+import { ensureSystemBinPathForMachineId, resolveRuntimeDeviceId } from '../deviceId.js';
 
 const PATCHES_PATH = process.platform === 'darwin' || process.platform === 'linux';
+
+// Host used the hardware id even with XDT_DEVICE_ID_OVERRIDE, colliding with a
+// running desktop. Verify the common identity entry without probing hardware.
+it('preserves the isolated identity and only probes hardware for a normal instance', () => {
+  const originalPath = process.env.PATH;
+  try {
+    expect(resolveRuntimeDeviceId(() => { throw new Error('must not probe'); }, ' isolated-host ')).toBe('isolated-host');
+    expect(resolveRuntimeDeviceId(() => 'physical-device', ' ')).toBe('physical-device');
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+});
 
 // Execute the production IPC registration adapter without booting Electron.
 // A sandbox's auth identity can differ from the raw hardware id; renderer link

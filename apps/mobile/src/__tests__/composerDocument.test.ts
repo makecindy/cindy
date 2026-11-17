@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { formatQuoteForSend } from '@cindy/maker-shared/chat-quotes';
+import { buildTodoReferenceHref } from '@cindy/maker-shared/agent-input-projection';
 import {
   appendComposerNode,
   composerDocumentFromEncodedMessage,
@@ -25,7 +26,6 @@ import {
   sessionLinkComposerNode,
   slashCommandTextNode,
   textComposerDocument,
-  todoReferenceComposerNode,
 } from '@/session/composerDocument';
 
 describe('mobile composer document', () => {
@@ -332,9 +332,10 @@ describe('mobile composer document', () => {
     expect(serializeComposerDocument(restored)).toEqual(serialized);
   });
 
-  // 近况里点一条待办：与桌面同一 wire（[标题](cindy://bot-todo/…)）与结构化 todo 引用，伙伴才知道是哪一条。
-  it('sends a quoted todo as the same structured reference as Desktop and restores it for editing', () => {
-    const node = todoReferenceComposerNode({ botId: 'bot-1', todoId: 't 1', title: 'Reply [Lizi]' });
+  // 旧消息里的待办引用（V1 伙伴近况引用的，[标题](cindy://bot-todo/…)）照常序列化并还原以便编辑。
+  it('keeps an older quoted todo as the same structured reference as Desktop and restores it for editing', () => {
+    const href = buildTodoReferenceHref('bot-1', 't 1');
+    const node = { type: 'mention' as const, kind: 'todo' as const, label: 'Reply [Lizi]', raw: `[Reply \\[Lizi\\]](${href})`, href };
     const serialized = serializeComposerDocument({ version: 1, nodes: [node, { type: 'text', text: ' 改到周五' }] });
     expect(serialized.text).toBe(`[Reply \\[Lizi\\]](${node.href}) 改到周五`);
     expect(serialized.agentReferences).toEqual([expect.objectContaining({

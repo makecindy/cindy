@@ -17,6 +17,7 @@ vi.mock('../openInSidebarBrowser', () => ({
 vi.mock('../openPluginTaskTab', () => ({
   openPluginTaskTab: vi.fn(async () => undefined),
 }));
+vi.mock('../openPluginUiView', () => ({ openPluginUiView: vi.fn(async () => undefined) }));
 vi.mock('../openInSidebarFileBrowser', () => ({
   openDirInSidebarFileBrowser: vi.fn(async () => undefined),
   openExternalFileInSidebarFileBrowser: vi.fn(async () => undefined),
@@ -37,6 +38,7 @@ import {
 } from '../../plugins/orca-workers/actions';
 import { executeSidebarCommand } from '../executeSidebarCommand';
 import { openPluginTaskTab } from '../openPluginTaskTab';
+import { openPluginUiView } from '../openPluginUiView';
 import {
   openDirInSidebarFileBrowser,
   openExternalFileInSidebarFileBrowser,
@@ -47,6 +49,13 @@ import { openSubagentsTab } from '../openSubagentsTab';
 
 describe('executeSidebarCommand', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  // Global resource activation must be executed in the selected renderer. tier: unit.
+  it('opens the global named resource in the actual sidebar renderer', async () => {
+    await executeSidebarCommand({ type: 'open-plugin-view', instanceId: 'sim', resourceViewId: 'board', resourceInput: { selected: 'one' } });
+    expect(openPluginUiView).toHaveBeenCalledWith('sim', 'board', null, { selected: 'one' });
+    expect(ensureHydrated).not.toHaveBeenCalled();
+  });
 
   // PR #6939 discussion_r4357929340：分离宿主执行命令不能降级已验证的点击来源。
   // unit：真实 executor 的输出是传给开页入口的来源协议；原用例未覆盖插件命令。

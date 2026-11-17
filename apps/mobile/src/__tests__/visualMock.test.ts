@@ -307,3 +307,27 @@ it('allows preview deep links only for explicit development visual mock fixtures
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
+
+// Regression: --mock had no sidebar group; deep links alone missed task → group navigation.
+// Unit: exercise the actual roster/get/normalization path, including usable rich message data.
+it('opens the group advertised in the ordinary mock sidebar', async () => {
+  const mock = await import('@/debug/visualMock');
+  const { BOT_GROUP_REMOTE_COLLECTION_ID } = await import('@cindy/maker-shared/botGroupChat');
+  const { botGroupChatDataFromResource, BOT_GROUP_CLIENT_PRIMITIVES } = await import('@/session/botGroupRemote');
+  const link = mock.createVisualMockDeviceLinkContext();
+  const host = { deviceId: mock.VISUAL_MOCK_DEVICE_ID, deviceName: mock.VISUAL_MOCK_DEVICE_NAME };
+  const rows = normalizeRemoteCollectionItems(await listRemoteCollection(link.invoke, host, BOT_GROUP_REMOTE_COLLECTION_ID), BOT_GROUP_REMOTE_COLLECTION_ID);
+  const row = rows.find(row => row.ref.id === 'visual-switch-group');
+  expect(row).toBeDefined();
+  const resource = await getRemoteResource(link.invoke, host, row!.ref, 'zh-CN', BOT_GROUP_CLIENT_PRIMITIVES);
+  const group = botGroupChatDataFromResource(resource);
+  expect(group?.id).toBe(row!.ref.id);
+  expect(group?.messages).toHaveLength(24);
+  expect(group?.messages.at(-1)?.content).toContain('最后一条模拟消息');
+  const other = rows.find(row => row.ref.id === 'visual-switch-group-second');
+  expect(other).toBeDefined();
+  const second = botGroupChatDataFromResource(await getRemoteResource(link.invoke, host, other!.ref, 'zh-CN', BOT_GROUP_CLIENT_PRIMITIVES));
+  expect(second?.id).not.toBe(group?.id);
+  expect(second?.messages.at(-1)?.content).toContain('第二个群');
+  expect(second?.messages.some(message => group?.messages.some(first => first.id === message.id))).toBe(false);
+});

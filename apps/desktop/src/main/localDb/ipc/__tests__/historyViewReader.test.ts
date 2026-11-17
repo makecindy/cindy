@@ -21,6 +21,37 @@ function reader(source: HistoryMessageSource[]) {
   return { list, api: createHistoryViewReader({ list, anchor, running: () => false }) };
 }
 describe('host history view', () => {
+  // Unit performance regression: concurrent closed-history pages duplicated DB
+  // scans/projection. Existing pagination tests never overlapped requests.
+  // Two identical in-flight reads must share work, but later reads remain fresh.
+  it('shares in-flight closed pages, fans out shape callbacks and rereads after completion', async () => {
+    const source = [row(0, 'user'), row(1), row(2, 'assistant')];
+    const base = reader(source);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const list = vi.fn(async (...args: Parameters<typeof base.list>) => { await gate; return base.list(...args); });
+    let scope = 'local';
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => 'owner-a:1', anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
+      shareScope: () => scope });
+    const firstShape = vi.fn(), secondShape = vi.fn();
+    const a = api.page('s', undefined, true, { onShape: firstShape });
+    const b = api.page('s', undefined, true, { onShape: secondShape });
+    release();
+    const [first, second] = await Promise.all([a, b]);
+    expect(first).toEqual(second);
+    expect(first.items.map(item => item.type)).toEqual(['messages', 'work', 'messages']);
+    expect(firstShape).toHaveBeenCalledTimes(1);
+    expect(secondShape).toHaveBeenCalledWith(firstShape.mock.calls[0][0]);
+    expect(list).toHaveBeenCalledTimes(1);
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2);
+    // A device-link caller reads with different import side effects: never joined.
+    const local = api.page('s', undefined, true);
+    scope = 'device-link';
+    await Promise.all([local, api.page('s', undefined, true)]);
+    expect(list).toHaveBeenCalledTimes(4);
+  });
   it('reaches a long run through compact outlines and keeps SDK metadata in hydrated details', async () => {
     const source = [row(0, 'user'), ...Array.from({ length: 1100 }, (_, i) => ({
       ...row(i + 1), content: 'thinking', agentMeta: { uuid: `sdk-${i}`, usage: { details: 'x'.repeat(9000) } },

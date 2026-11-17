@@ -97,6 +97,20 @@ it('finds a renamed project without mixing devices and honors project filters', 
   expect(listConversationSearchProjects(sessions, undefined, aliases).map((p) => p.title)).toEqual(['Customer Portal', 'repo']);
 });
 
+// Old group/topic sessions must remain searchable under their Buddy when the host
+// is offline; existing fallback coverage only used execution directories. Unit tier.
+it('keeps old group tasks in the Buddy project during cached search', () => {
+  const task = session({ id: 'group', title: 'Group needle', source: 'bot',
+    workingDir: '/group-repo', projectDir: '/group-repo', workspaceKind: 'dialogue',
+    companion: { id: 'buddy', role: 'group', taskProjectDir: '/home/bots/buddy/workspace' } });
+  const origin = { deviceId: 'dev-a', deviceName: 'Studio', reachable: false };
+  const page = searchCachedDeviceSessions(origin, { query: 'needle', filters: { workingDirs: ['/home/bots/buddy/workspace'] } }, [task]);
+  expect(page.results.map(item => item.session.id)).toEqual(['group']);
+  expect(page.results[0]?.session.workingDir).toBe('/group-repo');
+  expect(listConversationSearchProjects([task])[0]?.workingDir).toBe('/home/bots/buddy/workspace');
+  expect(searchCachedDeviceSessions(origin, { query: 'needle', filters: { workingDirs: ['/group-repo'] } }, [task]).results).toEqual([]);
+});
+
 const studio: ConversationSearchDeviceOrigin = {
   deviceId: 'dev-a',
   deviceName: 'Studio',
@@ -596,4 +610,20 @@ it('preserves companion identity and the selected archived transcript', () => {
   hit.session.companion = { id: 'bot', name: 'Melody', role: 'history', readOnly: true };
   const item = toSearchListItem(hit, Date.now());
   expect(item.title).toBe('Melody · Remote planning');
+});
+
+// Unit regression: indexed hits outside the home cache lost their labels; cached
+// hits also need fresh labels (including removal), with old-host fallback intact.
+it('preserves task tags through indexed and cached search projections', () => {
+  const tags = [{ id: 'red', name: 'Important', color: 'red' as const, favoriteOrder: null, revision: 1 }];
+  const item = indexedPage(['a']).results[0]!;
+  item.session.tags = tags;
+  expect(toSearchListItem(item, Date.now()).session.tags).toEqual(tags);
+  const cached = session({ id: 'a', title: 'needle', tags });
+  item.session.tags = [];
+  expect(toSearchListItem(item, Date.now(), undefined, cached).session.tags).toEqual([]);
+  delete item.session.tags;
+  expect(toSearchListItem(item, Date.now(), undefined, cached).session.tags).toEqual(tags);
+  const page = searchCachedDeviceSessions(studio, { query: 'needle' }, [cached]);
+  expect(page.results[0]?.session.tags).toEqual(tags);
 });

@@ -1119,6 +1119,9 @@ describe('本地 override(local 永远最高)', () => {
 describe('cross-harness defaults', () => {
   it('keeps discovered native/Pi models enabled and makes the Claude Code bridge opt-in', () => {
     setActiveCatalog(baseCatalog([gpt6Entry({ defaultEnabled: true })]));
+    // Compare the resolved baseline: bundled capacities may be projected into
+    // smaller working windows before account discovery adds its own members.
+    const baselinePi = models('openai', 'pi');
     seedCodexAccount('gpt-6');
     expect(models('openai', 'codex').find((m) => m.id === 'gpt-6')?.defaultEnabled).toBe(true);
     expect(
@@ -1132,12 +1135,7 @@ describe('cross-harness defaults', () => {
     expect(pi[0]).toMatchObject({ id: 'chatgpt/gpt-6' });
     expect(pi[0]?.defaultEnabled).not.toBe(false);
     expect(withoutOrder(pi.slice(1))).toEqual(
-      withoutOrder(
-        withNativeMetadata(
-          'openai',
-          BUNDLED_CATALOG.providers.find((p) => p.id === 'openai')?.models.pi,
-        ),
-      ),
+      withoutOrder(baselinePi),
     );
     setActiveCatalog(
       baseCatalog([

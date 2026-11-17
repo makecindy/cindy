@@ -16,9 +16,18 @@ describe('resolvePushAppVariant', () => {
 });
 
 describe('buildPushTokenRegistrationBody', () => {
-  it('组装 iOS APNs 注册 body;dev build 走 sandbox,release 走 prod', () => {
+  it('rejects unknown iOS environments but leaves Android FCM independent', () => {
+    for (const apnsEnvironment of [null, undefined, '', 'sandbox', 'invalid']) {
+      expect(() => buildPushTokenRegistrationBody({ token: 'token', region: 'global', apnsEnvironment }))
+        .toThrow('unknown APNs');
+    }
+    expect(buildPushTokenRegistrationBody({ token: 'token', region: 'global', platform: 'android' }))
+      .toEqual({ token: 'token', platform: 'android', provider: 'fcm', appVariant: 'global' });
+  });
+
+  it('组装 iOS APNs 注册 body;按签名环境选择 sandbox/prod', () => {
     expect(
-      buildPushTokenRegistrationBody({ token: ' abc123 ', region: 'cn', isDevBuild: true }),
+      buildPushTokenRegistrationBody({ token: ' abc123 ', region: 'cn', apnsEnvironment: 'development' }),
     ).toEqual({
       token: 'abc123',
       platform: 'ios',
@@ -27,15 +36,15 @@ describe('buildPushTokenRegistrationBody', () => {
       apnsEnv: 'sandbox',
     });
     expect(
-      buildPushTokenRegistrationBody({ token: 'abc123', region: 'global', isDevBuild: false }),
+      buildPushTokenRegistrationBody({ token: 'abc123', region: 'global', apnsEnvironment: 'production' }),
     ).toMatchObject({ appVariant: 'global', apnsEnv: 'prod' });
     expect(
-      buildPushTokenRegistrationBody({ token: 'dev-token', region: 'dev', isDevBuild: true }),
+      buildPushTokenRegistrationBody({ token: 'dev-token', region: 'dev', apnsEnvironment: 'development' }),
     ).toMatchObject({ appVariant: 'cn', apnsEnv: 'sandbox' });
   });
 
   it('空 token 返回 null', () => {
-    expect(buildPushTokenRegistrationBody({ token: '   ', region: 'cn', isDevBuild: true })).toBeNull();
+    expect(buildPushTokenRegistrationBody({ token: '   ', region: 'cn', apnsEnvironment: 'development' })).toBeNull();
   });
 });
 

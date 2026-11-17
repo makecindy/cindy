@@ -11,7 +11,7 @@ vi.mock('../../appSessionState.js', () => ({
   isAppSessionBoundaryPending: () => false,
 }));
 
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   hasGrokOAuthLogin: () => false,
   isGrokOAuthLoginInProgress: () => session.oauthSlotBusy,
   runGrokOAuthLogin: vi.fn(
@@ -41,7 +41,7 @@ import {
   grokDeviceLoginStatus,
   startGrokDeviceLogin,
 } from '../grok-device-login-service.js';
-import { runGrokOAuthLogin } from '../grok-oauth-login.js';
+import { runGrokOAuthLogin } from '../grok-oauth-login.desktop.js';
 
 it('releases the OAuth slot after an owner switch or cancellation before a new device login', async () => {
   expect(await startGrokDeviceLogin()).toMatchObject({ userCode: 'AAAA-1111' });

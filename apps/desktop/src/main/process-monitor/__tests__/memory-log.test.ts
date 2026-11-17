@@ -22,10 +22,11 @@ describe('formatMemorySample', () => {
     const line = formatMemorySample(
       { rss: 1720 * MB, heapUsed: 640 * MB, heapTotal: 700 * MB, external: 85 * MB, arrayBuffers: 40 * MB },
       metrics,
+      { mcpBridgeSessions: 66 },
     );
     expect(line).toBe(
       'sample main{rss=1720 heapUsed=640 heapTotal=700 external=85 arrayBuffers=40} ' +
-        'processes=4 total=3315 Browser=1720 Tab=1366,180 Utility=49 (MB)',
+        'processes=4 total=3315 mcpBridgeSessions=66 Browser=1720 Tab=1366,180 Utility=49 (MB)',
     );
   });
 });

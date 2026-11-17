@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import { BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron';
 
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import type { LoadedReviewEvidence } from './reviewEvidence.js';
 

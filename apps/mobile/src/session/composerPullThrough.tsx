@@ -1,5 +1,6 @@
+import type { ViewInstance, ScrollViewInstance } from 'react-native';
 import { useCallback, useMemo, useRef, useState, type Ref } from 'react';
-import { Animated, Platform, type ScrollView, type ScrollViewProps, type View } from 'react-native';
+import { Animated, Platform, type ScrollView, type ScrollViewProps } from 'react-native';
 import { measure, runOnJS, useAnimatedReaction, useAnimatedRef, useSharedValue, type AnimatedRef, type SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 
@@ -28,13 +29,13 @@ export interface ComposerPullEvent {
 export interface ComposerPullThroughBridge {
   armed: SharedValue<boolean>;
   event: SharedValue<ComposerPullEvent>;
-  grabberRef: AnimatedRef<View>;
+  grabberRef: AnimatedRef<ViewInstance>;
 }
 
 export function useComposerPullThroughBridge(): ComposerPullThroughBridge {
   const armed = useSharedValue(false);
   const event = useSharedValue<ComposerPullEvent>({ id: 0, active: false, startY: 0, y: 0, successful: false });
-  const grabberRef = useAnimatedRef<View>();
+  const grabberRef = useAnimatedRef<ViewInstance>();
   return useMemo(() => ({ armed, event, grabberRef }), [armed, event, grabberRef]);
 }
 
@@ -69,7 +70,7 @@ const PHASE_HANDED_OFF = 2;
 
 type PullThroughScrollViewProps = ScrollViewProps & {
   bridge: ComposerPullThroughBridge;
-  ref?: Ref<ScrollView>;
+  ref?: Ref<ScrollViewInstance>;
 };
 
 /**
@@ -87,13 +88,13 @@ type PullThroughScrollViewProps = ScrollViewProps & {
  * 另外编排器只在起手（ACTION_DOWN）时认领手势，拖动中途 armed 才变 true 的那次拖动不会接手。
  */
 export function ComposerPullThroughScrollView({ bridge, ref, ...props }: PullThroughScrollViewProps) {
-  const scrollRef = useRef<ScrollView | null>(null);
+  const scrollRef = useRef<ScrollViewInstance | null>(null);
   const scrollEnabledRef = useRef(props.scrollEnabled !== false);
   scrollEnabledRef.current = props.scrollEnabled !== false;
-  const setRef = useCallback((node: ScrollView | null) => {
+  const setRef = useCallback((node: ScrollViewInstance | null) => {
     scrollRef.current = node;
     if (typeof ref === 'function') ref(node);
-    else if (ref) (ref as { current: ScrollView | null }).current = node;
+    else if (ref) (ref as { current: ScrollViewInstance | null }).current = node;
   }, [ref]);
   const setFrozen = useCallback((frozen: boolean) => {
     scrollRef.current?.setNativeProps({ scrollEnabled: frozen ? false : scrollEnabledRef.current });

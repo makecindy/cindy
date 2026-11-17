@@ -10,7 +10,10 @@ const fake = vi.hoisted(() => ({
   windows: [] as any[],
   sessions: [] as any[],
   loadFailure: false,
+  info: vi.fn(),
+  warn: vi.fn(),
 }));
+vi.mock('../../logger', () => ({ createLogger: () => ({ info: fake.info, warn: fake.warn }) }));
 vi.mock('electron', () => ({
   session: {
     fromPartition: vi.fn(() => {
@@ -25,9 +28,24 @@ vi.mock('electron', () => ({
       return ses;
     }),
   },
-  BrowserWindow: class {
+  BrowserWindow: class extends EventEmitter {
     static fromWebContents(owner: any) { return owner; }
     destroyed = false;
+    id = 1;
+    visible = false;
+    calls: string[] = [];
+    topArgs: unknown[] = [];
+    getNativeWindowHandle = () => Buffer.from([6, 4, 18, 0]);
+    isVisible = () => this.visible;
+    isFocused = () => false;
+    isMinimized = () => false;
+    getBounds = () => ({ x: 0, y: 0, width: 135, height: 38 });
+    getContentBounds = () => ({ x: 0, y: 0, width: 120, height: 0 });
+    show = () => { this.calls.push('show'); this.visible = true; this.emit('show'); };
+    showInactive = () => { this.calls.push('showInactive'); this.visible = true; };
+    restore = () => { this.calls.push('restore'); };
+    focus = () => { this.calls.push('focus'); };
+    setAlwaysOnTop = (...args: unknown[]) => { this.calls.push('setAlwaysOnTop'); this.topArgs = args; };
     webContents = Object.assign(new EventEmitter(), {
       mainFrame: { url: '', parent: null },
       isDestroyed: () => this.destroyed,
@@ -35,6 +53,7 @@ vi.mock('electron', () => ({
       setWebRTCIPHandlingPolicy: vi.fn(),
     });
     constructor(public options: any) {
+      super();
       fake.windows.push(this);
     }
     loadURL = vi.fn(async (url: string) => {
@@ -64,12 +83,52 @@ const event = (window: any) =>
 beforeEach(() => {
   fake.windows.length = fake.sessions.length = 0;
   fake.loadFailure = false;
+  fake.info.mockReset();
+  fake.warn.mockReset();
   vi.stubGlobal('DESKTOP_CAPTURE_VITE_DEV_SERVER_URL', 'http://localhost:9988/');
   vi.stubGlobal('DESKTOP_CAPTURE_VITE_NAME', 'desktop_capture');
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+// #9437 / unit: real host startup and visibility methods. Existing capture tests
+// covered transport/security but could not distinguish JS activation from native
+// show events. A hidden host being shown is the minimum diagnostic input.
+it('records sanitized JS callers separately from native events without changing visibility', async () => {
+  const owner = new DesktopCaptureWindow(vi.fn(), 'direct');
+  const ready = owner.start(), win = fake.windows[0];
+  owner.registered(event(win)); await ready;
+  expect(win.visible).toBe(false);
+  expect(fake.warn).not.toHaveBeenCalled();
+  expect(fake.info.mock.calls[0][1]).toMatchObject({ mode: 'direct', nativeHandle: '00120406' });
+  win.emit('show'); // Native event without a JS method call is not a caller stack.
+  expect(fake.warn.mock.calls[0][1]).toMatchObject({ action: 'show', origin: 'native-event' });
+  expect(fake.warn.mock.calls[0][1]).not.toHaveProperty('stack');
+  win.show();
+  expect(win.visible).toBe(true);
+  const call = fake.warn.mock.calls.find(([, details]) => details.origin === 'js-call')![1];
+  expect(call).toMatchObject({ action: 'show', mode: 'direct', contentBounds: { height: 0 } });
+  expect(call.stack.length).toBeGreaterThan(0);
+  expect(call.stack.join('\n')).not.toMatch(/[\\/]|https?:|file:/);
+  expect(call.stack.join('\n')).toContain('captureWindow.test.ts:');
+  owner.dispose();
+});
+
+it('bounds diagnostic records and preserves calls/arguments even when logging fails', async () => {
+  const owner = new DesktopCaptureWindow(vi.fn());
+  const ready = owner.start(), win = fake.windows[0];
+  owner.registered(event(win)); await ready;
+  fake.warn.mockImplementationOnce(() => { throw new Error('synthetic logger failure'); });
+  win.showInactive(); win.restore(); win.focus(); win.setAlwaysOnTop(true, 'screen-saver', 1);
+  for (let i = 0; i < 100; i++) win.show();
+  expect(win.calls).toHaveLength(104);
+  expect(win.calls.slice(0, 4)).toEqual(['showInactive', 'restore', 'focus', 'setAlwaysOnTop']);
+  expect(win.topArgs).toEqual([true, 'screen-saver', 1]);
+  expect(fake.info.mock.calls.filter(([message]) => message.includes('limit reached'))).toHaveLength(1);
+  expect(fake.info.mock.calls.length + fake.warn.mock.calls.length).toBe(33);
+  owner.dispose();
 });
 
 it('only admits the registered top frame and kills the whole process on stop', async () => {

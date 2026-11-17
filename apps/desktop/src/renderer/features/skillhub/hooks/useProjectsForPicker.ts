@@ -9,6 +9,7 @@
  */
 
 import { useMemo } from 'react';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
@@ -34,5 +35,8 @@ export function useProjectsForPicker(): { projects: PickerProject[]; loading: bo
     }));
   }, [sessions, isLoading, provisionalDraftTaskId]);
 
-  return target ? { projects: target.projects, loading: !target.state.bootstrapped } : { projects, loading: isLoading };
+  const source = target ? target.projects : projects;
+  // A teammate's own skills are managed from the teammate, not installed here.
+  const pickable = useMemo(() => source.filter((p) => !isTeammateProjectPath(p.projectRoot)), [source]);
+  return { projects: pickable, loading: target ? !target.state.bootstrapped : isLoading };
 }

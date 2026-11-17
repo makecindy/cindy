@@ -1,4 +1,18 @@
+import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import type { WebContents } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BotGroupOutboxCommandRequest, BotGroupOutboxCommandResult, BotGroupOutboxExecution, BotGroupOutboxStorageRequest, BotGroupOutboxStoredEntry } from '../../../../shared/botGroupOutboxStorage';
+
+vi.mock('../../../../main/appSessionState.js', () => ({ getActiveAppSession: () => ({ dataOwnerId: null, generation: 0 }),
+  isAppSessionBoundaryPending: () => false, ownerScopedUserDataPath: () => '', onAppSessionInvalidated: () => () => {} }));
+vi.mock('../../../../main/localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {} }) }));
+vi.mock('../../../../main/cindy-media/blobStore.desktop.js', () => ({ parseBlobUrl: () => null }));
+vi.mock('../../../../main/cindy-media/ledger.js', () => ({}));
+import { createBotGroupOutboxStorage } from '../../../../main/maker-ipc/botGroupOutboxStorage';
+import * as atomic from '../../../../main/utils/atomicWriteFile';
 
 import type { AttachedFile } from '@/lib/fileTypes';
 import type {
@@ -39,7 +53,9 @@ const mocks = vi.hoisted(() => ({
   getBotGroup: vi.fn(),
   list: { groups: [] as Array<{ id: string }>, loaded: false },
   listListeners: new Set<() => void>(),
-  storage: undefined as undefined | ((request: any) => Promise<any[]>),
+  storage: undefined as undefined | ((request: BotGroupOutboxStorageRequest) => Promise<BotGroupOutboxStoredEntry[]>),
+  command: undefined as undefined | ((request: BotGroupOutboxCommandRequest) => Promise<BotGroupOutboxCommandResult>),
+  mainSend: undefined as undefined | ((input: BotGroupSendInput, execution?: BotGroupOutboxExecution) => Promise<BotGroupSendResult>),
 }));
 
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
@@ -48,7 +64,9 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({
     owner.dataOwnerId === (mocks.owner === null ? null : `account-${mocks.owner}`) && owner.generation === mocks.generation,
 }));
 vi.mock('../botGroupStore', () => ({
-  botGroupApi: () => ({ sendBotGroupMessage: mocks.send, getBotGroup: mocks.getBotGroup, botGroupOutbox: mocks.storage }),
+  botGroupApi: () => ({ sendBotGroupMessage: (input: BotGroupSendInput, execution?: BotGroupOutboxExecution) =>
+    mocks.mainSend ? mocks.mainSend(input, execution) : mocks.send(input),
+    getBotGroup: mocks.getBotGroup, botGroupOutbox: mocks.storage, botGroupOutboxCommand: mocks.command }),
   getBotGroupListSnapshot: () => mocks.list,
   subscribeBotGroups: (listener: () => void) => {
     mocks.listListeners.add(listener);
@@ -143,10 +161,13 @@ function project(groupId: string, messages: BotGroupMessageView[]) {
   );
 }
 
+const tempRoots: string[] = [];
 beforeEach(() => {
   mocks.owner = 1;
   mocks.generation = 0;
   mocks.storage = undefined;
+  mocks.command = undefined;
+  mocks.mainSend = undefined;
   mocks.send.mockReset();
   mocks.materialize.mockReset().mockImplementation(async (files: readonly AttachedFile[]) => [...files]);
   mocks.protectedUrls = [];
@@ -158,6 +179,9 @@ beforeEach(() => {
 
 afterEach(() => {
   resetBotGroupOutboxForTests();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe('botGroupOutbox', () => {
@@ -307,10 +331,10 @@ describe('botGroupOutbox', () => {
     mocks.send.mockResolvedValueOnce({ ok: false, errorCode: 'INTERNAL', message: '' });
     enqueueBotGroupSend(draft());
     await flush();
-    expect(editBotGroupSend('g1', 'c1')).toBe(false);
+    expect(await editBotGroupSend('g1', 'c1')).toBe(false);
     expect(getBotGroupOutbox('g1')).toHaveLength(1);
     restore.mockReturnValue(true);
-    expect(editBotGroupSend('g1', 'c1')).toBe(true);
+    expect(await editBotGroupSend('g1', 'c1')).toBe(true);
     expect(getBotGroupOutbox('g1')).toEqual([]);
   });
 
@@ -950,24 +974,44 @@ describe('botGroupOutbox', () => {
   });
 });
 
+function coordinatedBridge(retain: (entry: unknown) => Promise<() => Promise<void>> = async () => async () => {}) {
+  const root = mkdtempSync(path.join(tmpdir(), 'cindy-outbox-bridge-'));
+  tempRoots.push(root);
+  const owner = () => ({ dataOwnerId: mocks.owner === null ? null : `account-${mocks.owner}`, generation: mocks.generation });
+  const main = createBotGroupOutboxStorage({ currentOwner: owner, boundaryPending: () => mocks.owner === null,
+    ownerRoot: () => path.join(root, String(mocks.owner)), retain: entry => retain(entry), release: async () => {} });
+  const sender = Object.assign(new EventEmitter(), { isDestroyed: () => false }) as unknown as WebContents;
+  mocks.storage = request => main.access(request);
+  mocks.command = request => main.command(sender, request);
+  mocks.mainSend = (input, execution) => main.send(sender, input, execution, mocks.send);
+  return { main, sender, owner, snapshot: () => main.command(sender, { action: 'snapshot', owner: owner() }) };
+}
+
 // Unit regression: a restart between local enqueue and the HTTP response used to lose
 // ownership. The production outbox must save first, then restore the same clientId FIFO.
 it.each(['group', 'direct'] as const)('durably restores %s sends and reconciles both receipt pages without deleting pending entries', async kind => {
   vi.useFakeTimers();
-  const saved = new Map<string, unknown>();
-  mocks.storage = async request => {
-    if (request.action === 'put') saved.set(request.entry.input.clientId, structuredClone(request.entry));
-    if (request.action === 'remove') saved.delete(request.clientId);
-    return request.action === 'list' ? [...saved.values()] : [];
-  };
+  const root = mkdtempSync(path.join(tmpdir(), 'cindy-renderer-outbox-'));
+  tempRoots.push(root);
+  const owner = { dataOwnerId: 'account-1', generation: 0 };
+  const sender = Object.assign(new EventEmitter(), { isDestroyed: () => false }) as unknown as WebContents;
+  const makeMain = () => createBotGroupOutboxStorage({ currentOwner: () => owner, boundaryPending: () => false,
+    ownerRoot: () => root, retain: async () => async () => {}, release: async () => {} });
+  let main = makeMain();
+  const saved = async () => (await main.command(sender, { action: 'snapshot', owner })).entries;
+  mocks.storage = request => main.access(request);
+  mocks.command = request => main.command(sender, request);
+  mocks.mainSend = (input, execution) => main.send(sender, input, execution, mocks.send);
   mocks.send.mockRejectedValueOnce(new Error('offline'));
   const conversation = kind === 'direct' ? { conversationKind: 'direct' as const } : {};
   await enqueueBotGroupSend(draft({ clientId: 'first', ...conversation }));
   await enqueueBotGroupSend(draft({ clientId: 'second', ...conversation }));
   await vi.advanceTimersByTimeAsync(0);
   expect(mocks.send).toHaveBeenCalledTimes(1);
-  expect(saved.size).toBe(2);
+  expect(await saved()).toHaveLength(2);
   resetBotGroupOutboxForTests();
+  main = makeMain();
+  await saved(); // Load real filesystem state before advancing recovery timers.
   mocks.send.mockImplementation(async input => ({ ok: true, messageId: `server-${input.clientId}` }));
   mocks.getBotGroup.mockImplementation(async (_id, options) => kind === 'direct' && options?.conversationKind !== 'direct'
     ? { ok: false, errorCode: 'NOT_FOUND' } : { ok: true, group: { messages: [] } });
@@ -984,13 +1028,171 @@ it.each(['group', 'direct'] as const)('durably restores %s sends and reconciles 
     await vi.advanceTimersByTimeAsync(0);
     expect(getBotGroupOutbox('g1')).toHaveLength(2);
     noteBotGroupTimeline('g1', [msg({ id: 'unrelated', sequence: 20 })], beginBotGroupTimelineRead());
-    expect(saved.size).toBe(2);
+    expect(await saved()).toHaveLength(2);
     mocks.getBotGroup.mockImplementation(async (_id, options) => kind === 'direct' && options?.conversationKind !== 'direct'
       ? { ok: false, errorCode: 'NOT_FOUND' } : ({ ok: true, group: options?.beforeSequence
       ? { messages: [msg({ id: 'server-first', sequence: 1 }), msg({ id: 'server-second', sequence: 2 })], hasMoreBefore: false }
       : { messages: [msg({ id: 'newer', sequence: 20 })], hasMoreBefore: true } }));
     await vi.advanceTimersByTimeAsync(5_000);
     expect(mocks.getBotGroup).toHaveBeenCalledWith('g1', { beforeSequence: 20, ...conversation });
-    expect(saved.size).toBe(0);
-  } finally { stop(); vi.unstubAllGlobals(); vi.useRealTimers(); }
+    expect(await saved()).toHaveLength(0);
+  } finally { stop(); vi.unstubAllGlobals(); vi.useRealTimers(); rmSync(root, { recursive: true, force: true }); }
+});
+
+it('does not recover through uncoordinated whole-row writes when the command bridge is missing', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('window', new EventTarget());
+  mocks.storage = vi.fn(async () => [{ ...draft(), createdAt: 1, status: 'sending' as const, after: 0, attachments: [] }]);
+  mocks.send.mockResolvedValue({ ok: true, messageId: 'm1' });
+  const stop = startBotGroupOutbox();
+  try {
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.storage).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+    await expect(enqueueBotGroupSend(draft({ clientId: 'new' }))).rejects.toThrow('OUTBOX_COORDINATION_UNAVAILABLE');
+  } finally { stop(); vi.unstubAllGlobals(); }
+});
+
+it('rejects a failed durable enqueue instead of sending or deleting another saved snapshot', async () => {
+  const bridge = coordinatedBridge();
+  await bridge.snapshot();
+  vi.spyOn(atomic, 'atomicWriteFileSync').mockImplementationOnce(() => { throw new Error('ENOSPC'); });
+  await expect(enqueueBotGroupSend(draft())).rejects.toThrow('OUTBOX_STORAGE_FAILED');
+  expect((await bridge.snapshot()).entries).toEqual([]);
+  expect(mocks.send).not.toHaveBeenCalled();
+  expect(mocks.materialize).not.toHaveBeenCalled();
+  expect(mocks.cleanupStaged).not.toHaveBeenCalled();
+});
+
+it('keeps the existing attachment serializer shape through Main claim, prepared save and real send admission', async () => {
+  const bridge = coordinatedBridge();
+  mocks.send.mockResolvedValueOnce({ ok: true, messageId: 'image-message' });
+  const file = { id: 'image-id', name: 'marked.png', path: '/staged/marked.png', ext: '.png', size: 12,
+    category: 'image', mimeType: 'image/png', type: 'image', url: 'cindy-media://blobs/marked.png', baseAnnotated: true } as AttachedFile;
+  await enqueueBotGroupSend(draft({ text: '看标注' }, { files: [file] }));
+  await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(1));
+  expect(mocks.send.mock.calls[0]![0].attachments).toEqual([{ id: 'image-id', name: 'marked.png',
+    originalName: 'marked.png', path: '/staged/marked.png', ext: '.png', size: 12,
+    category: 'image', mimeType: 'image/png', url: 'cindy-media://blobs/marked.png', annotated: true }]);
+  await flush();
+  expect((await bridge.snapshot()).entries[0]).toMatchObject({ status: 'sent', messageId: 'image-message' });
+});
+
+it('does not treat an arbitrary resolved enqueue response as accepted', async () => {
+  mocks.command = async request => ({ ok: true, owner: request.owner, instanceId: 'main', revision: 0, entries: [] });
+  await expect(enqueueBotGroupSend(draft())).rejects.toThrow('OUTBOX_ENQUEUE_NOT_ACCEPTED');
+  expect(mocks.send).not.toHaveBeenCalled();
+});
+
+it('queries an accepted operation after a lost enqueue reply, without appending or sending a second copy', async () => {
+  const bridge = coordinatedBridge();
+  const realCommand = mocks.command!;
+  let lose = true;
+  mocks.command = async request => {
+    const result = await realCommand(request);
+    if (request.action === 'enqueue' && lose) { lose = false; throw new Error('reply lost'); }
+    return result;
+  };
+  mocks.send.mockResolvedValue({ ok: true, messageId: 'm1' });
+  const message = draft({}, { enqueueOperationId: 'stable-operation' });
+  await expect(enqueueBotGroupSend(message)).rejects.toThrow('reply lost');
+  expect((await bridge.snapshot()).entries).toHaveLength(1);
+  await enqueueBotGroupSend(message);
+  await flush();
+  expect(mocks.send).toHaveBeenCalledTimes(1);
+  expect((await bridge.snapshot()).entries).toEqual([expect.objectContaining({ status: 'sent', queueOrdinal: 1 })]);
+});
+
+it('retries an unknown edit commit with the same operation while invalidation and snapshot replies are unavailable', async () => {
+  const bridge = coordinatedBridge();
+  mocks.send.mockResolvedValueOnce({ ok: false, errorCode: 'INTERNAL', message: '' });
+  await enqueueBotGroupSend(draft()); await flush();
+  const realCommand = mocks.command!;
+  const operations: string[] = [];
+  mocks.command = async request => {
+    if (request.action === 'snapshot') throw new Error('snapshot unavailable');
+    const result = await realCommand(request);
+    if (request.action === 'edit') {
+      operations.push(request.operationId);
+      if (operations.length === 1) throw new Error('edit reply lost');
+    }
+    return result;
+  };
+  const restore = vi.fn(() => true);
+  registerBotGroupComposer('g1', { restore, prepareRestore: () => () => true, notifyFailed: vi.fn() });
+  await expect(editBotGroupSend('g1', 'c1')).rejects.toThrow('edit reply lost');
+  expect(restore).not.toHaveBeenCalled();
+  expect(await editBotGroupSend('g1', 'c1')).toBe(true);
+  expect(operations).toHaveLength(2); expect(operations[1]).toBe(operations[0]);
+  expect(restore).toHaveBeenCalledOnce();
+  expect((await bridge.snapshot()).entries[0]).toMatchObject({ editHold: { operationId: operations[0] }, retryable: false });
+  expect(mocks.send).toHaveBeenCalledTimes(1);
+});
+
+it('never restores text or resumes a frozen send when durable edit fails, including a later retry tick', async () => {
+  const bridge = coordinatedBridge();
+  mocks.send.mockResolvedValueOnce({ ok: false, errorCode: 'INTERNAL', message: '' });
+  await enqueueBotGroupSend(draft());
+  await flush();
+  const restore = vi.fn(() => true);
+  registerBotGroupComposer('g1', { restore, prepareRestore: () => () => true, notifyFailed: vi.fn() });
+  vi.spyOn(atomic, 'atomicWriteFileSync').mockImplementationOnce(() => { throw new Error('ENOSPC'); });
+  await expect(editBotGroupSend('g1', 'c1')).rejects.toThrow('OUTBOX_STORAGE_FAILED');
+  expect(restore).not.toHaveBeenCalled();
+  retryBotGroupSend('g1', 'c1');
+  await flush();
+  const held = (await bridge.snapshot()).entries[0]!;
+  expect(held).toMatchObject({ status: 'failed', retryable: false, editHold: expect.any(Object), draft: '你好' });
+  expect(mocks.send).toHaveBeenCalledTimes(1);
+  expect(restore).not.toHaveBeenCalled();
+});
+
+it('keeps a durable hold rather than overwriting an input changed while edit was committing', async () => {
+  let block = false;
+  let entered!: () => void;
+  let finish!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const saved = new Promise<void>(resolve => { finish = resolve; });
+  const bridge = coordinatedBridge(async () => {
+    if (block) { entered(); await saved; }
+    return async () => {};
+  });
+  mocks.send.mockResolvedValueOnce({ ok: false, errorCode: 'INTERNAL', message: '' });
+  await enqueueBotGroupSend(draft());
+  await flush();
+  let inputRevision = 1;
+  const restore = vi.fn(() => true);
+  registerBotGroupComposer('g1', { restore, notifyFailed: vi.fn(), prepareRestore: () => {
+    const revision = inputRevision; return () => revision === inputRevision;
+  } });
+  block = true;
+  const editing = editBotGroupSend('g1', 'c1');
+  await started;
+  inputRevision += 1;
+  finish();
+  expect(await editing).toBe(false);
+  expect(restore).not.toHaveBeenCalled();
+  expect((await bridge.snapshot()).entries[0]).toMatchObject({ editHold: expect.any(Object), retryable: false });
+});
+
+it('preserves the losing edit snapshot and source when another window consumes the same hold', async () => {
+  const bridge = coordinatedBridge();
+  mocks.send.mockResolvedValueOnce({ ok: false, errorCode: 'INTERNAL', message: '' });
+  await enqueueBotGroupSend(draft());
+  await flush();
+  const restore = vi.fn(() => true);
+  registerBotGroupComposer('g1', { restore, prepareRestore: () => () => true, notifyFailed: vi.fn() });
+  expect(await editBotGroupSend('g1', 'c1')).toBe(true);
+  const held = (await bridge.snapshot()).entries[0]!;
+  const source = { groupId: 'g1', clientId: 'c1', revision: held.editHold!.revision };
+  const other = Object.assign(new EventEmitter(), { isDestroyed: () => false }) as unknown as WebContents;
+  const accepted = draft({ clientId: 'other', text: '另一窗口的新正文' });
+  await bridge.main.command(other, { action: 'enqueue', owner: bridge.owner(),
+    entry: { ...accepted, createdAt: 1, status: 'sending', attachments: [], after: 0 },
+    enqueueOperationId: 'other-operation', editSource: source });
+  const losing = draft({ clientId: 'mine', text: '我的未发送正文' }, { editSource: source, enqueueOperationId: 'my-operation' });
+  await expect(enqueueBotGroupSend(losing)).rejects.toThrow('OUTBOX_SOURCE_CONSUMED');
+  expect(losing).toMatchObject({ draft: '我的未发送正文', editSource: source, enqueueOperationId: 'my-operation' });
+  expect((await bridge.snapshot()).entries.map(row => row.input.clientId)).toEqual(['other']);
+  expect(mocks.cleanupStaged).not.toHaveBeenCalled();
 });

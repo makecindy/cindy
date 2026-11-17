@@ -23,6 +23,7 @@ import {
   isTurnContinuationBoundaryEvent,
 } from '@cindy/maker-shared/turn-continuation';
 import { promptSafeSourceName } from '@cindy/maker-shared/message-source';
+import { orcaQueuePreview } from '@cindy/maker-shared/orca-queue';
 
 const MAX_CAPTURED_TEXT = 64 * 1024;
 
@@ -158,8 +159,19 @@ export interface OrcaBridgeMcpDeps {
     makerMemoryEnabled?: boolean;
   }>;
   orcaTeamStore?: OrcaTeamStore;
-  /** Capture before dispatch; finish once on acceptance or failure, never at queued drain. */
-  captureLocalWorkerReport?: (sessionId: string) => (accepted: boolean) => Promise<void>;
+  /**
+   * Capture before dispatch; finish once on acceptance or failure, never at queued drain.
+   * The receipt says whether the report reached the Lead now (direct or same-turn steer) or
+   * waits in its queue under `queuedMessageId`, where the Worker may still withdraw it.
+   */
+  captureLocalWorkerReport?: (
+    sessionId: string,
+  ) => (accepted: boolean, receipt?: OrcaWorkerReportReceipt) => Promise<void>;
+  /**
+   * Worker-scoped view and control of the Worker's own reports still waiting in its Lead's
+   * queue. The bridge passes the attested Worker link; callers never choose a session id.
+   */
+  workerReportQueue?: OrcaWorkerReportQueueBridge;
   /**
    * Worker-scoped read-only transcript access. The bridge resolves the owning Lead from the
    * attested Worker link; callers never choose an arbitrary session id.
@@ -200,6 +212,61 @@ export interface OrcaBridgeMcpDeps {
 /** 协同消息投递方式:queue = 普通直发/排队(缺省),steer = 尝试插进对方当前 turn。 */
 export type OrcaMessageDelivery = 'queue' | 'steer';
 
+/** 一份被接收的回报是当场送达 Lead,还是进了 Lead 的队列(可再撤回)。 */
+export interface OrcaWorkerReportReceipt {
+  delivered: boolean;
+  queuedMessageId?: string;
+}
+
+/** 经 resolveWorkerLink 核实的 Worker 身份。 */
+export interface OrcaWorkerReportQueueIdentity {
+  workerId: string;
+  workerSessionId: string;
+  leadSessionId: string;
+}
+
+/** Worker 自己发给 Lead、仍在 Lead 队列里等待的一条回报。 */
+export interface OrcaWorkerQueuedReport {
+  queuedMessageId: string;
+  /** Lead 整个等待队列里的下标(0 = 下一条)。 */
+  position: number;
+  content: string;
+  consuming: boolean;
+}
+
+export interface OrcaWorkerReportQueueStatus {
+  leadIsWorking: boolean;
+  willQueue: boolean;
+  queuePaused: boolean;
+  /** Lead 队列里全部等待中的消息数;其他发送方的条目只计数,不给正文。 */
+  queuedCount: number;
+  reports: OrcaWorkerQueuedReport[];
+}
+
+type OrcaWorkerReportQueueFailure = {
+  ok: false;
+  errorCode: string;
+  message: string;
+  status?: OrcaWorkerReportQueueStatus;
+};
+
+/** 宿主实现见 apps/desktop 的 orcaWorkerReportQueue.ts;只开放 Worker 自己发的条目。 */
+export interface OrcaWorkerReportQueueBridge {
+  list(identity: OrcaWorkerReportQueueIdentity): Promise<OrcaWorkerReportQueueStatus>;
+  update(
+    params: OrcaWorkerReportQueueIdentity & { queuedMessageId: string; message: string },
+  ): Promise<{ ok: true; queuedMessageId: string } | OrcaWorkerReportQueueFailure>;
+  cancel(
+    params: OrcaWorkerReportQueueIdentity & { queuedMessageId: string },
+  ): Promise<{ ok: true; queuedMessageId: string } | OrcaWorkerReportQueueFailure>;
+  merge(
+    params: OrcaWorkerReportQueueIdentity & { queuedMessageIds: string[]; message: string },
+  ): Promise<
+    | { ok: true; queuedMessageId: string; status: OrcaWorkerReportQueueStatus }
+    | OrcaWorkerReportQueueFailure
+  >;
+}
+
 /** 请求 steer 但未插成、消息进入队列时的原因。 */
 export type OrcaSteerFallbackReason = 'STEER_UNSUPPORTED' | 'INPUT_BOUNDARY_BUSY' | 'STEER_UNCERTAIN';
 
@@ -224,6 +291,8 @@ type HostOrcaDispatch = {
   hostDispatched: true;
   queued: boolean;
   steered: boolean;
+  /** Queue id of the message when it queued; the Worker manages it by this id. */
+  clientId: string;
   steerFallbackReason?: OrcaSteerFallbackReason;
 };
 
@@ -248,6 +317,13 @@ interface SanitizedOrcaSendError {
 }
 
 const ORCA_SEND_OWNER = 'orca-workflow';
+/** Tools that change what the Lead reads; nested agents report to the Worker instead. */
+const ROOT_ONLY_WORKER_TOOLS: ReadonlySet<string> = new Set([
+  'send_to_lead',
+  'update_queued_report',
+  'cancel_queued_report',
+  'merge_queued_reports',
+]);
 const SAFE_ERROR_NAME_RE = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
 const SAFE_SEND_ERROR_CODES = new Set(['SESSION_RUNNING']);
 
@@ -260,6 +336,108 @@ export const SEND_TO_LEAD_TOOL_DESCRIPTION = [
   'Combine all results; do not send progress, partial findings, or same-turn corrections.',
   'If the Lead is blocked waiting on this report, delivery=steer delivers it into the Lead\'s current turn; otherwise keep the default.',
 ].join(' ');
+
+// 这四段说明会进入每个 Codex / Pi 任务的工具列表(bridge 对它们全局可见),保持简短。
+export const GET_LEAD_QUEUE_STATUS_TOOL_DESCRIPTION = [
+  'Pass your worker_id.',
+  'Read-only: whether the Lead is busy, and your own reports still waiting in its queue (position = index in the whole queue).',
+  'Messages from other senders are only counted, never shown. Does not wake the Lead; do not poll.',
+].join(' ');
+
+export const UPDATE_QUEUED_REPORT_TOOL_DESCRIPTION = [
+  'Pass your worker_id.',
+  'Replace the full text of one of your own reports still waiting in the Lead\'s queue; its id and position stay.',
+  'Use it instead of sending a message that tells the Lead to ignore an earlier one.',
+  'Errors: QUEUED_MESSAGE_NOT_FOUND (already read), MESSAGE_CONSUMING, NOT_YOUR_MESSAGE.',
+].join(' ');
+
+export const CANCEL_QUEUED_REPORT_TOOL_DESCRIPTION = [
+  'Pass your worker_id.',
+  'Withdraw one of your own queued reports that another message of yours already covers; the Lead never sees it.',
+  'LAST_REPORT means the Lead would hear nothing from you: use update_queued_report instead.',
+  'Other errors: QUEUED_MESSAGE_NOT_FOUND, MESSAGE_CONSUMING, NOT_YOUR_MESSAGE.',
+].join(' ');
+
+export const MERGE_QUEUED_REPORTS_TOOL_DESCRIPTION = [
+  'Pass your worker_id.',
+  'Atomically replace two or more of your own queued reports with one; the first keeps its id and position.',
+  'They must be adjacent in the Lead\'s queue and listed in queue order; otherwise nothing changes (QUEUE_CHANGED, with your latest queued reports).',
+].join(' ');
+
+function workerReportQueueIdentity(link: OrcaWorkerLink): OrcaWorkerReportQueueIdentity {
+  return {
+    workerId: link.workerId,
+    workerSessionId: link.workerSessionId,
+    leadSessionId: link.leadSessionId,
+  };
+}
+
+function projectReportQueueStatus(status: OrcaWorkerReportQueueStatus) {
+  return {
+    lead_is_working: status.leadIsWorking,
+    will_queue: status.willQueue,
+    queue_paused: status.queuePaused,
+    lead_queued_count: status.queuedCount,
+    your_queued_reports: status.reports.map((report) => ({
+      queued_message_id: report.queuedMessageId,
+      position: report.position,
+      content: report.content,
+      consuming: report.consuming,
+    })),
+  };
+}
+
+/**
+ * 排队回执:这条回报的编号与位置,以及 Worker 此前发出、Lead 还没读到的其他回报(只给开头一行)。
+ * Worker 据此判断新旧回报是补充、替代还是无关,而不是再发一条「请忽略前面几条」。
+ * 读队列失败不影响已经成立的投递,只是回执里没有这部分信息。
+ */
+async function describeQueuedReport(
+  deps: OrcaBridgeMcpDeps,
+  link: OrcaWorkerLink,
+  clientId: string,
+  log: Logger,
+): Promise<Record<string, unknown>> {
+  if (!deps.workerReportQueue) return {};
+  try {
+    const status = await deps.workerReportQueue.list(workerReportQueueIdentity(link));
+    const own = status.reports.find((report) => report.queuedMessageId === clientId);
+    return {
+      queued_message_id: clientId,
+      ...(own ? { queue_position: own.position } : {}),
+      lead_queued_count: status.queuedCount,
+      other_queued_reports: status.reports
+        .filter((report) => report.queuedMessageId !== clientId)
+        .map((report) => ({
+          queued_message_id: report.queuedMessageId,
+          position: report.position,
+          starts: orcaQueuePreview(report.content),
+        })),
+    };
+  } catch (err) {
+    log.warn('read lead queue for report receipt failed', {
+      workerId: link.workerId,
+      leadSessionId: link.leadSessionId,
+      errorName: err instanceof Error ? err.name : undefined,
+    });
+    return { queued_message_id: clientId };
+  }
+}
+
+/** 部分兼容层把数组参数折成标量、多套一层或包成 {item};与 Lead 侧合并工具同口径自愈。 */
+function coerceStringArrayArg(value: unknown): unknown {
+  let candidate = value;
+  if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+    const item = (candidate as { item?: unknown }).item;
+    if (item === undefined) return candidate;
+    candidate = item;
+  }
+  if (Array.isArray(candidate)) {
+    return candidate.some((entry) => Array.isArray(entry)) ? candidate.flat(1) : candidate;
+  }
+  if (typeof candidate === 'string' && candidate.trim().length > 0) return [candidate];
+  return candidate;
+}
 
 export function authorizeSendToLeadCaller(ctx: McpProviderContext):
   | { ok: true }
@@ -411,6 +589,7 @@ async function dispatchOrcaToolMessage(input: {
         hostDispatched: true,
         queued: result.mode === 'queued',
         steered: result.mode === 'steered',
+        clientId: result.clientId,
         ...(result.steerFallbackReason ? { steerFallbackReason: result.steerFallbackReason } : {}),
       };
     }
@@ -796,6 +975,8 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             ? deps.captureLocalWorkerReport?.(link.workerSessionId)
             : undefined;
           let reportAccepted = false;
+          // Queued reports settle the obligation too, but have not reached the Lead yet.
+          let reportReceipt: OrcaWorkerReportReceipt = { delivered: false };
           try {
             const dispatchError = await dispatchOrcaToolMessage({
               session: liveEntry.session,
@@ -835,12 +1016,18 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             if (isHostOrcaDispatch(dispatchError)) {
               // Host acceptance includes direct, queued and same-turn steered delivery.
               reportAccepted = true;
+              reportReceipt = dispatchError.queued
+                ? { delivered: false, queuedMessageId: dispatchError.clientId }
+                : { delivered: true };
               return text({
                 ok: true,
                 ...(dispatchError.steered ? { steered: true } : {}),
                 ...(dispatchError.queued ? { queued: true } : {}),
                 ...(dispatchError.queued && dispatchError.steerFallbackReason
                   ? { steer_fallback_reason: dispatchError.steerFallbackReason }
+                  : {}),
+                ...(dispatchError.queued
+                  ? await describeQueuedReport(deps, link, dispatchError.clientId, log)
                   : {}),
                 worker_id: link.workerId,
                 lead_session_id: link.leadSessionId,
@@ -864,13 +1051,14 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               });
             });
             reportAccepted = true;
+            reportReceipt = { delivered: true };
             return text({
               ok: true,
               worker_id: link.workerId,
               lead_session_id: link.leadSessionId,
             });
           } finally {
-            await finishReport?.(reportAccepted);
+            await finishReport?.(reportAccepted, reportReceipt);
           }
         },
       );
@@ -989,6 +1177,119 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
         },
       );
 
+      // Worker 管理自己排在 Lead 队列里的回报。四个工具都只认 resolveWorkerLink 核实出的
+      // Worker 身份;宿主侧再按消息的发送方会话把关,其他发送方的条目既不可见也不可改。
+      async function resolveReportQueue(workerId: string, opts: { mutates?: boolean } = {}) {
+        // 改写、撤回、合并会改变 Lead 读到的内容,与 send_to_lead 同样只允许 Worker 本体调用;
+        // 子代理的发现要先回到 Worker,不能绕过去直接改 Worker 的回报。
+        if (opts.mutates) {
+          const authorization = authorizeSendToLeadCaller(resolveRuntimeMcpContext(ctx));
+          if (!authorization.ok) return { ok: false as const, error: authorization.error };
+        }
+        const resolved = await resolveWorkerLink(deps, ctx, workerId);
+        if (!resolved.ok) return resolved;
+        if (!deps.workerReportQueue) {
+          return { ok: false as const, error: { error: 'lead queue control unavailable' } };
+        }
+        return {
+          ok: true as const,
+          queue: deps.workerReportQueue,
+          identity: workerReportQueueIdentity(resolved.link),
+        };
+      }
+
+      register(
+        'get_lead_queue_status',
+        GET_LEAD_QUEUE_STATUS_TOOL_DESCRIPTION,
+        {
+          worker_id: z.string().min(1).describe('Required. Your assigned worker_id.'),
+        },
+        async ({ worker_id }) => {
+          const resolved = await resolveReportQueue(worker_id);
+          if (!resolved.ok) return text(resolved.error, true);
+          const status = await resolved.queue.list(resolved.identity);
+          return text({
+            worker_id: resolved.identity.workerId,
+            lead_session_id: resolved.identity.leadSessionId,
+            ...projectReportQueueStatus(status),
+          });
+        },
+      );
+
+      register(
+        'update_queued_report',
+        UPDATE_QUEUED_REPORT_TOOL_DESCRIPTION,
+        {
+          worker_id: z.string().min(1).describe('Required. Your assigned worker_id.'),
+          queued_message_id: z.string().min(1).describe('From a queued send_to_lead reply or get_lead_queue_status.'),
+          message: z.string().min(1).describe('The complete replacement text.'),
+        },
+        async ({ worker_id, queued_message_id, message }) => {
+          const resolved = await resolveReportQueue(worker_id, { mutates: true });
+          if (!resolved.ok) return text(resolved.error, true);
+          const result = await resolved.queue.update({
+            ...resolved.identity,
+            queuedMessageId: queued_message_id,
+            message,
+          });
+          if (!result.ok) return text({ error: result.message, code: result.errorCode }, true);
+          return text({ ok: true, queued_message_id: result.queuedMessageId });
+        },
+      );
+
+      register(
+        'cancel_queued_report',
+        CANCEL_QUEUED_REPORT_TOOL_DESCRIPTION,
+        {
+          worker_id: z.string().min(1).describe('Required. Your assigned worker_id.'),
+          queued_message_id: z.string().min(1).describe('From a queued send_to_lead reply or get_lead_queue_status.'),
+        },
+        async ({ worker_id, queued_message_id }) => {
+          const resolved = await resolveReportQueue(worker_id, { mutates: true });
+          if (!resolved.ok) return text(resolved.error, true);
+          const result = await resolved.queue.cancel({
+            ...resolved.identity,
+            queuedMessageId: queued_message_id,
+          });
+          if (!result.ok) return text({ error: result.message, code: result.errorCode }, true);
+          return text({ ok: true, queued_message_id: result.queuedMessageId });
+        },
+      );
+
+      register(
+        'merge_queued_reports',
+        MERGE_QUEUED_REPORTS_TOOL_DESCRIPTION,
+        {
+          worker_id: z.string().min(1).describe('Required. Your assigned worker_id.'),
+          queued_message_ids: z
+            .preprocess(coerceStringArrayArg, z.array(z.string().min(1)).min(2))
+            .describe('At least two ids in queue order, as a flat string array such as ["id_a", "id_b"].'),
+          message: z.string().min(1).describe('The complete text of the merged report.'),
+        },
+        async ({ worker_id, queued_message_ids, message }) => {
+          const resolved = await resolveReportQueue(worker_id, { mutates: true });
+          if (!resolved.ok) return text(resolved.error, true);
+          const result = await resolved.queue.merge({
+            ...resolved.identity,
+            queuedMessageIds: queued_message_ids,
+            message,
+          });
+          if (!result.ok) {
+            return text({
+              error: result.message,
+              code: result.errorCode,
+              ...(result.status ? projectReportQueueStatus(result.status) : {}),
+            }, true);
+          }
+          return text({
+            ok: true,
+            queued_message_id: result.queuedMessageId,
+            merged_count: queued_message_ids.length,
+            ...projectReportQueueStatus(result.status),
+          });
+        },
+      );
+
   }
 
   const registerRoutedTools = (
@@ -998,7 +1299,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
     defineTools(ctx, (name, description, shape, handler) => {
       register(name, description, shape, async (args) => {
         const runtime = resolveRuntimeMcpContext(ctx);
-        if (name === 'send_to_lead') {
+        if (ROOT_ONLY_WORKER_TOOLS.has(name)) {
           const authorization = authorizeSendToLeadCaller(runtime);
           if (!authorization.ok) return text(authorization.error, true);
         }

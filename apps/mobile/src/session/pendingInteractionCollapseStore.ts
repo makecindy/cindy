@@ -73,6 +73,7 @@ export function prunePendingInteractionCollapse<T extends PendingInteractionLike
 ): void {
   if (!sessionId) return;
   const current = getCollapsedPendingRequestIds(sessionId);
+  // New requests start expanded, including async questions. Only prune user intent.
   if (current.length === 0) return;
   write(sessionId, prunePendingInteractionCollapsed(current, pending, options));
 }

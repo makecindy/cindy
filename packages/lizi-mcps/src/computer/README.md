@@ -61,7 +61,10 @@ is usually redundant.
 - `USER_INPUT_ACTIVE`: foreground delivery is refused while system input newer
   than the Agent's own last dispatch is under three seconds old
   (`powerMonitor.getSystemIdleTime`, whole seconds). Background delivery and
-  `set_value` are unaffected.
+  `set_value` are unaffected. The refusal covers that foreground input only: the
+  error and the workflow steer the Agent to background routes (window-local
+  coordinates, `double_click`, menu bar items, `set_value`, files or CLI) and to
+  waiting or asking only when none works.
 - `HOTKEY_BLOCKED`: lock-screen, log-out and sleep chords never reach the driver.
 - `CUA_UNAVAILABLE` carries `reason`: `screen_locked` (host power monitor),
   `window_gone` / `window_not_on_screen` (from recovery discovery) or
@@ -70,6 +73,47 @@ is usually redundant.
   hint that synthetic input is not delivered there, and a `set_value` hint for
   Electron / browser targets. `set_value` was verified on Cindy's own composer:
   the field updates and its send button enables, without focus.
+
+## Background pointer advice (2026-11-06)
+
+On macOS 27, cua-driver 0.37 stamped screen points on window-routed clicks and
+every background coordinate click or element `double_click` missed by the
+window origin (fixed upstream in trycua/cua#5492, first in 0.39 and the
+2026-11-05 nightly). Its delivery note then said to retry with
+`delivery_mode:"foreground"` if nothing changed, which `USER_INPUT_ACTIVE`
+refuses while the person is working. `normalizePointerAdvice` in
+[result.ts](result.ts) replaces that advice on delivered `click`,
+`double_click`, `right_click` and `drag` results with a background-first hint;
+refusals keep the driver's prose, because there only the foreground reaches the
+target.
+
+A `click` on a row label without `AXPress` is answered by an `AXSelected` write
+reported as confirmed. That proves the selection, not the app's click action:
+Xcode's project navigator stays on "No Selection". Cindy reports it as
+`unknown` with a hint to click the row's coordinates or `double_click` it. The
+variant where the driver delivered a coordinate click and read the selection
+back stays confirmed.
+
+## Window-local scroll coordinates
+
+`scroll` accepts `x/y` in the latest `get_window_state` screenshot's pixels,
+with an exact `pid/window_id`. Supply both coordinates and omit element selectors.
+The host forwards the point through the ordinary session, input-ownership and
+driver-contract checks; it does not convert the point to screen coordinates.
+Drivers that do not advertise coordinates reject the call before delivery instead
+of dropping the point and scrolling somewhere else.
+
+On Windows, [cua-driver 0.46.1](https://github.com/trycua/cua/blob/cua-driver-rs-v0.46.1/libs/cua-driver/rust/crates/platform-windows/src/tools/scroll.rs)
+tries the indexed element's UIA scroll action first.
+For a project-row button without that action, its foreground wheel fallback uses
+the window center unless `x/y` is supplied. Use a screenshot point for nested web
+scrollers. A fresh observation must confirm movement; do not replay an uncertain
+scroll automatically. Background refusals and input guards still apply.
+
+This coordinate entry fixes Cindy's previously closed schema, which described
+point targeting but rejected `x/y`. It does not change the upstream element fallback.
+The MCP-entry regression covers coordinate delivery and malformed targets; native
+movement must be validated separately against the running version.
 
 ## Input failure advice
 

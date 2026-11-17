@@ -20,13 +20,26 @@ import {
   type DiscordGateway,
   type DiscordGatewayEvents,
 } from './gateway.js';
-import { normalizeDmMessage } from './inbound.js';
-import type { MessageLike } from './inbound.js';
+import { isBotMentioned, normalizeInboundMessage, stripBotMention } from './inbound.js';
+import type { GuildMessageLike, MessageLike } from './inbound.js';
+import {
+  decodeDiscordLaneUserId,
+  discordLaneOfChannel,
+  discordLaneTargetChannelId,
+  encodeDiscordLaneUserId,
+  EMPTY_DISCORD_CHANNEL_ACCESS,
+  isDiscordLaneEnabled,
+  isDiscordLaneAdmitted,
+  normalizeDiscordChannelAccess,
+} from './lane.js';
+import type { DiscordChannelAccessConfig, DiscordChannelAccessStore, DiscordLane } from './lane.js';
+import { listBotGuilds } from './guildDirectory.js';
+import type { DirectoryClientLike, DiscordGuildInfo } from './guildDirectory.js';
 import { chunkDiscordText } from './chunk.js';
 import { decodeMessageId, encodeMessageId } from './codec.js';
 import { markdownToDiscord } from './markdown.js';
 import { createDmResolver, sendChunked } from './outbound.js';
-import type { ClientLike, DMChannelLike } from './outbound.js';
+import type { ClientLike, DMChannelLike, SentMessageLike } from './outbound.js';
 import {
   DISCORD_CARD_PAGE_BUTTON_ID,
   buildCardMessage,
@@ -34,6 +47,7 @@ import {
 } from './components.js';
 import type { ButtonInteractionLike } from './components.js';
 import { startStreaming } from './streamingText.js';
+import { tt } from '../transportText.js';
 
 const TOKEN_SECRET_KEY = 'discord-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'discord-owner-user-id';
@@ -49,8 +63,10 @@ const RUNTIME_OFFLINE_NOTICE_TIMEOUT_MS = 4_500;
 const RUNTIME_ONLINE_NOTICE_WAIT_TIMEOUT_MS = 1_000;
 const RUNTIME_NOTICE_SHUTDOWN_BUDGET_MS = 5_500;
 const OWNER_NOTICE_TIMEOUT_MS = 4_500;
-const DEFAULT_EXPIRED_CARD_NOTICE = '卡片已过期';
-const SECRET_WRITE_FAILED_REASON = '无法安全保存凭证(系统安全存储不可用)';
+const defaultExpiredCardNotice = (): string =>
+  tt('imBot.text.transport.common.cardExpired', '卡片已过期');
+const secretWriteFailedReason = (): string =>
+  tt('imBot.text.transport.common.secretWriteFailed', '无法安全保存凭证(系统安全存储不可用)');
 const DEFAULT_OWNER_NOTICES = {
   linked: '✅ All linked. Just send a message when you are ready.',
   disconnected: '🔌 Unlinked. Link again whenever you need me.',
@@ -64,10 +80,20 @@ type CardActionHandler = (e: IMCardActionEvent) => void;
 type StatusHandler = (s: IMStatus) => void;
 type OwnerNoticePhase = keyof typeof DEFAULT_OWNER_NOTICES;
 type OwnerNoticeGuard = () => boolean;
+interface AcceptedContext {
+  appId: string;
+  configVersion: number;
+  ownerUserId: string;
+}
 
 interface DiscordFilePayload {
   attachment: string;
   name: string;
+}
+
+/** 调用方必须丢弃原轮次的出站内容，不能改用新身份重发。 */
+class DiscordOutputInvalidatedError extends Error {
+  readonly code = 'IM_OUTPUT_INVALIDATED';
 }
 
 export interface DiscordIMOptions {
@@ -77,9 +103,29 @@ export interface DiscordIMOptions {
   ipc?: boolean;
   resolveImageUrl?: (url: string) => string;
   gatewayFactory?: (ev: DiscordGatewayEvents) => DiscordGateway;
-  expiredCardNotice?: string;
+  /** Expired-card notice; a function is read at send time so it follows the current UI language. */
+  expiredCardNotice?: string | (() => string);
   ownerNoticeText?: Partial<Record<OwnerNoticePhase, string>> | ((phase: OwnerNoticePhase) => string);
+  /**
+   * 服务器频道白名单的存取（宿主持久化）。缺省 = 不开放任何服务器频道，只有主人私聊。
+   * 读是实时的：白名单一改，下一条消息 / 下一次出站 / 下一次点击就按新配置判定。
+   */
+  channelAccess?: DiscordChannelAccessStore;
+  /** 非主人点审批 / 提问卡片时的私密提示。 */
+  ownerOnlyCardNotice?: string | (() => string);
 }
+
+interface FetchedMessage {
+  react(emoji: string): Promise<unknown>;
+  edit(payload: unknown): Promise<unknown>;
+  delete(): Promise<unknown>;
+  reactions: {
+    resolve(token: string): { users: { remove(userId: string | undefined): Promise<unknown> } } | null;
+  };
+}
+
+const MESSAGE_CACHE_CAPACITY = 256;
+const DEFAULT_OWNER_ONLY_CARD_NOTICE = 'Only the owner of this bot can use this button.';
 
 export interface DiscordConfigState {
   status: IMStatus;
@@ -100,6 +146,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private dmResolverClient: unknown = null;
   private dmResolver: ((userId: string) => Promise<DMChannelLike>) | null = null;
   private readonly dmMessageQueues = new Map<string, Promise<void>>();
+  /** 缓存近期发送的 Message，避免编辑依赖读取历史权限；按插入顺序淘汰，换连接时清空。 */
+  private readonly messageCache = new Map<string, { message: FetchedMessage; assertCurrent: () => void }>();
   private suppressNextOnlineNotice = false;
   private pendingOfflineNotice = false;
   private runtimeOnlineAnnounced = false;
@@ -115,6 +163,9 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       onStatus: (s) => this.setStatus(s),
       onDmMessage: (m) => {
         void this.handleDmMessage(m as unknown as MessageLike);
+      },
+      onGuildMessage: (m) => {
+        void this.handleGuildMessage(m as unknown as GuildMessageLike);
       },
       onButtonInteraction: (i) => {
         void this.handleButtonInteraction(i as unknown as ButtonInteractionLike);
@@ -153,8 +204,14 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     await this.waitForRuntimeOnlineNotice(noticeDeadline);
     this.configVersion += 1;
     await this.announceRuntimeOffline(noticeDeadline);
-    await this.gateway.destroy();
+    await this.destroyGateway();
     this.setStatus({ kind: 'idle' });
+  }
+
+  /** 断开网关并丢弃绑在旧连接上的 Message 对象（换号 / 换 bot 后不得继续使用）。 */
+  private async destroyGateway(): Promise<void> {
+    this.messageCache.clear();
+    await this.gateway.destroy();
   }
 
   /** 本实例的 secret 键名(见 DiscordIMOptions.secretKeyPrefix)。 */
@@ -189,7 +246,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     const ownerUserId =
       typeof config.ownerUserId === 'string' ? config.ownerUserId.trim() : '';
     if (!this.host.secrets.isAvailable()) {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason() });
       return configResult();
     }
 
@@ -205,7 +262,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       this.restoreSecret(this.key(TOKEN_SECRET_KEY), previousToken);
       this.restoreSecret(this.key(OWNER_USER_ID_SECRET_KEY), previousOwnerUserId);
       this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+      this.setStatus({ kind: 'error', reason: secretWriteFailedReason() });
       return configResult();
     }
 
@@ -214,7 +271,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       this.connectionRetry.reset();
       this.configVersion += 1;
       const wasConnectedBeforeReconnect = this.status.kind === 'connected';
-      await this.gateway.destroy();
+      await this.destroyGateway();
       this.ownerUserId = nextOwnerUserId;
       this.suppressNextOnlineNotice = true;
       try {
@@ -253,7 +310,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   async reconnect(): Promise<DiscordConfigState> {
     this.connectionRetry.reset();
     const version = ++this.configVersion;
-    await this.gateway.destroy();
+    await this.destroyGateway();
     if (this.disposing || version !== this.configVersion) return this.getConfigState();
     const token = this.host.secrets.read(this.key(TOKEN_SECRET_KEY));
     if (token) await this.reconnectPreviousGateway(token);
@@ -281,7 +338,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     this.clearRuntimeActiveMarker();
     this.pendingOfflineNotice = false;
     this.runtimeOnlineAnnounced = false;
-    await this.gateway.destroy();
+    await this.destroyGateway();
     this.setStatus({ kind: 'idle' });
     return { status: this.status };
   }
@@ -319,6 +376,36 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     });
 
     this.host.ipc.handle('discordBot:disconnect', () => this.disconnect());
+
+    // 服务器频道白名单（设置卡「频道」区）。清单只读连接缓存；保存只收规整后的配置。
+    this.host.ipc.handle('discordBot:list-channels', () => ({
+      status: this.status,
+      guilds: this.listGuilds(),
+    }));
+    this.host.ipc.handle('discordBot:get-channel-access', () => this.readChannelAccess());
+    this.host.ipc.handle('discordBot:set-channel-access', (payload) => {
+      const write = this.opts.channelAccess?.write;
+      if (!write) {
+        return this.host.ipc.throwIpcError('INVALID_PARAMS', 'channel access is not available');
+      }
+      return write.call(this.opts.channelAccess, normalizeDiscordChannelAccess(payload));
+    });
+  }
+
+  /** 机器人当前连接缓存里的服务器与文字频道（含机器人在各频道的权限）；没连上返回空。 */
+  listGuilds(): DiscordGuildInfo[] {
+    return listBotGuilds(this.gateway.client as unknown as DirectoryClientLike | null);
+  }
+
+  /** 当前服务器频道白名单；未配置 / 读失败按「全部不开放」处理（fail-closed）。 */
+  private readChannelAccess(): DiscordChannelAccessConfig {
+    try {
+      return normalizeDiscordChannelAccess(this.opts.channelAccess?.read() ?? EMPTY_DISCORD_CHANNEL_ACCESS);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`discord channel access read failed (treated as closed): ${msg}`);
+      return EMPTY_DISCORD_CHANNEL_ACCESS;
+    }
   }
 
   onMessage(handler: MessageHandler): () => void {
@@ -340,7 +427,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     userId: string,
     text: string,
   ): Promise<{ messageId: string }> {
-    return this.requireDmChannel(userId).then(async (channel) => {
+    return this.requireTargetChannel(userId).then(async (channel) => {
       const result = await sendChunked(channel, text);
       return { messageId: result.firstMessageId };
     });
@@ -350,7 +437,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     userId: string,
     markdown: string,
   ): Promise<{ messageId: string }> {
-    const channel = await this.requireDmChannel(userId);
+    const channel = await this.requireTargetChannel(userId);
     const { text, imageUrls } = markdownToDiscord(markdown);
     const files = this.resolveImageFiles(imageUrls);
 
@@ -390,7 +477,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     userId: string,
     spec: InteractiveCardSpec,
   ): Promise<{ messageId: string }> {
-    const channel = await this.requireDmChannel(userId);
+    const channel = await this.requireTargetChannel(userId);
     const sent = await channel.send(buildCardMessage(spec));
     const messageId = encodeMessageId(channel.id, sent.id);
     this.cardSpecs.set(messageId, cloneCardSpec(spec));
@@ -404,7 +491,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   }
 
   async patchMarkdownCard(messageId: string, markdown: string): Promise<void> {
-    const message = await this.fetchMessage(messageId);
+    const message = await this.fetchMessage(messageId, { cleanup: !markdown.trim() });
     if (!markdown.trim()) {
       await message.delete();
       this.cardSpecs.delete(messageId);
@@ -423,7 +510,9 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     userId: string,
     initial?: string,
   ): Promise<StreamingTextHandle> {
-    const channel = await this.requireDmChannel(userId);
+    const channel = await this.requireTargetChannel(userId);
+    // 服务器频道的流式回复：编辑 / 补传图片同样受发起时的连接代次与白名单约束。
+    const assertCurrent = channel.assertCurrent ?? (() => undefined);
     return startStreaming(
       {
         send: async (text) => {
@@ -431,17 +520,21 @@ export class DiscordIM extends BaseIM implements ChannelIM {
           return encodeMessageId(channel.id, sent.id);
         },
         edit: async (messageId, text) => {
+          assertCurrent();
           const message = await this.fetchMessage(messageId);
+          assertCurrent();
           await message.edit(text);
         },
         markdownToDiscord,
         remove: async (messageId) => {
-          const message = await this.fetchMessage(messageId);
+          const message = await this.fetchMessage(messageId, { cleanup: true });
           await message.delete();
         },
         chunk: chunkDiscordText,
         resolveImageUrl: this.opts.resolveImageUrl,
-        uploadImages: (messageId, absPaths) => this.uploadImages(messageId, absPaths),
+        uploadImages: async (messageId, absPaths) => {
+          await this.uploadImages(messageId, absPaths, assertCurrent);
+        },
       },
       initial,
     );
@@ -462,7 +555,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     if (stat.size > MAX_OUTBOUND_FILE_BYTES) return { ok: false, reason: 'TOO_LARGE' };
 
     try {
-      const channel = await this.requireDmChannel(userId);
+      const channel = await this.requireTargetChannel(userId);
       const sent = await channel.send({
         files: [{ attachment: absPath, name: displayName ?? path.basename(absPath) }],
       });
@@ -890,16 +983,52 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     const acceptedOwnerUserId = this.ownerUserId;
     if (m.author.id !== acceptedOwnerUserId) return;
 
-    const acceptedContext = {
-      appId: this.gateway.appId,
-      configVersion: this.configVersion,
-      ownerUserId: acceptedOwnerUserId,
-    };
-    const queueKey = `${acceptedContext.configVersion}:${dmMessageQueueKey(m)}`;
+    const acceptedContext = this.acceptedContext(acceptedOwnerUserId);
+    return this.enqueueInbound(
+      acceptedContext,
+      dmMessageQueueKey(m),
+      () => this.normalizeAndEmitDmMessage(m, acceptedContext),
+    );
+  }
+
+  /**
+   * 服务器频道 / thread 里的消息。召唤条件全部满足才进业务层：
+   * 在白名单内 → 直接 @ 了机器人 → 发言人是主人，或该频道显式允许成员。
+   * 任何一步不满足都静默丢弃：不回提示（频道里不可被探测）、不落库、不入窗口。
+   */
+  private async handleGuildMessage(m: GuildMessageLike): Promise<void> {
+    if (this.disposing) return;
+    const ownerUserId = this.ownerUserId;
+    const botUserId = this.gateway.client?.user?.id ?? '';
+    if (!ownerUserId || !botUserId) return;
+    const lane = discordLaneOfChannel(m.guildId, m.channelId ?? m.channel?.id ?? '', m.channel);
+    if (!lane) return;
+    const isOwner = m.author.id === ownerUserId;
+    if (!isDiscordLaneAdmitted(this.readChannelAccess(), lane, isOwner)) return;
+    if (!isBotMentioned(m, botUserId)) return;
+
+    const acceptedContext = this.acceptedContext(ownerUserId);
+    const laneUserId = encodeDiscordLaneUserId(lane);
+    return this.enqueueInbound(
+      acceptedContext,
+      laneUserId,
+      () => this.normalizeAndEmitGuildMessage(m, lane, laneUserId, botUserId, acceptedContext),
+    );
+  }
+
+  private acceptedContext(ownerUserId: string): AcceptedContext {
+    return { appId: this.gateway.appId, configVersion: this.configVersion, ownerUserId };
+  }
+
+  /** 同一队列键（私聊：发言人+私聊频道；服务器：整条 lane）串行处理，下载慢的附件不乱序。 */
+  private enqueueInbound(
+    acceptedContext: AcceptedContext,
+    key: string,
+    run: () => Promise<void>,
+  ): Promise<void> {
+    const queueKey = `${acceptedContext.configVersion}:${key}`;
     const previous = this.dmMessageQueues.get(queueKey) ?? Promise.resolve();
-    const current = previous
-      .catch(() => undefined)
-      .then(() => this.normalizeAndEmitDmMessage(m, acceptedContext));
+    const current = previous.catch(() => undefined).then(run);
 
     this.dmMessageQueues.set(queueKey, current);
     void current.finally(() => {
@@ -910,13 +1039,32 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     return current;
   }
 
+  private isAcceptedContextCurrent(acceptedContext: AcceptedContext): boolean {
+    return (
+      !this.disposing &&
+      this.configVersion === acceptedContext.configVersion &&
+      this.ownerUserId === acceptedContext.ownerUserId &&
+      this.gateway.appId === acceptedContext.appId
+    );
+  }
+
+  private emitInbound(event: IMMessageEvent): void {
+    for (const h of this.messageHandlers) {
+      try {
+        h(event);
+      } catch {
+        /* swallow */
+      }
+    }
+  }
+
   private async normalizeAndEmitDmMessage(
     m: MessageLike,
-    acceptedContext: { appId: string; configVersion: number; ownerUserId: string },
+    acceptedContext: AcceptedContext,
   ): Promise<void> {
     const stagedDiscards: Array<() => Promise<void>> = [];
     try {
-      const event = await normalizeDmMessage(m, {
+      const event = await normalizeInboundMessage(m, {
         contextId: acceptedContext.appId,
         download: downloadUrl,
         stagedDiscards,
@@ -924,26 +1072,70 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         ...(this.host.files ? { files: this.host.files } : {}),
       });
       if (!event) return;
-      if (
-        this.disposing ||
-        this.configVersion !== acceptedContext.configVersion ||
-        this.ownerUserId !== acceptedContext.ownerUserId ||
-        this.gateway.appId !== acceptedContext.appId
-      ) {
+      if (!this.isAcceptedContextCurrent(acceptedContext)) {
         // 下载期间换代(登出/换号/换 bot): 回滚本次暂存, 不把旧账号的附件留给新账号。
         for (const discard of stagedDiscards) await discard().catch(() => undefined);
         return;
       }
-      for (const h of this.messageHandlers) {
-        try {
-          h(event);
-        } catch {
-          /* swallow */
-        }
-      }
+      this.emitInbound(event);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`discord inbound message failed: ${msg}`);
+    }
+  }
+
+  private async normalizeAndEmitGuildMessage(
+    m: GuildMessageLike,
+    lane: DiscordLane,
+    laneUserId: string,
+    botUserId: string,
+    acceptedContext: AcceptedContext,
+  ): Promise<void> {
+    const stagedDiscards: Array<() => Promise<void>> = [];
+    try {
+      const isOwner = m.author.id === acceptedContext.ownerUserId;
+      const channelName = lane.threadId ? m.channel?.parent?.name ?? m.channel?.name : m.channel?.name;
+      const speakerName = m.member?.displayName ?? m.author.globalName ?? m.author.username ?? m.author.id;
+      const event = await normalizeInboundMessage(
+        m,
+        {
+          contextId: acceptedContext.appId,
+          download: downloadUrl,
+          stagedDiscards,
+          ...(this.host.media ? { media: this.host.media } : {}),
+          ...(this.host.files ? { files: this.host.files } : {}),
+        },
+        {
+          senderId: laneUserId,
+          text: stripBotMention(m.content ?? '', botUserId),
+          interactionSource: {
+            chatName: [m.guild?.name, channelName ? `#${channelName}` : undefined].filter(Boolean).join(' ') || undefined,
+            ...(lane.threadId && m.channel?.name ? { threadName: m.channel.name } : {}),
+            senderName: speakerName,
+            messageUrl: `https://discord.com/channels/${lane.guildId}/${m.channelId ?? m.channel?.id}/${m.id}`,
+          },
+          speaker: {
+            id: m.author.id,
+            name: speakerName,
+            ...(m.author.username ? { username: m.author.username } : {}),
+            isOwner,
+          },
+        },
+      );
+      if (!event) return;
+      // 附件下载可达数秒：配置换代、白名单被撤销或成员准入被收回，都丢弃这条并回滚暂存。
+      if (
+        !this.isAcceptedContextCurrent(acceptedContext) ||
+        !isDiscordLaneAdmitted(this.readChannelAccess(), lane, isOwner)
+      ) {
+        for (const discard of stagedDiscards) await discard().catch(() => undefined);
+        return;
+      }
+      this.emitInbound(event);
+    } catch (err) {
+      for (const discard of stagedDiscards) await discard().catch(() => undefined);
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`discord guild inbound message failed: ${msg}`);
     }
   }
 
@@ -954,7 +1146,19 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       await this.notifyExpiredInteraction(i);
       return;
     }
-    if (event.senderId !== this.ownerUserId) return;
+    // 点击人必须是主人：频道里谁都看得到卡片，但审批 / 控制只认主人身份（不是频道管理员）。
+    if (i.user.id !== this.ownerUserId) {
+      if (i.guildId) await this.notifyOwnerOnlyInteraction(i);
+      return;
+    }
+    if (i.guildId) {
+      // 频道已被移出白名单：旧卡不再生效，不能借历史卡片继续驱动该频道的任务。
+      const lane = decodeDiscordLaneUserId(event.senderId);
+      if (!lane || !isDiscordLaneEnabled(this.readChannelAccess(), lane)) {
+        await this.notifyExpiredInteraction(i);
+        return;
+      }
+    }
     if (event.buttonId === DISCORD_CARD_PAGE_BUTTON_ID) {
       await this.handleCardPageInteraction(event, i);
       return;
@@ -966,6 +1170,26 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       } catch {
         /* swallow */
       }
+    }
+  }
+
+  private resolveOwnerOnlyCardNotice(): string {
+    const configured = this.opts.ownerOnlyCardNotice;
+    const text = typeof configured === 'function' ? configured() : configured;
+    return text?.trim() || DEFAULT_OWNER_ONLY_CARD_NOTICE;
+  }
+
+  private async notifyOwnerOnlyInteraction(i: ButtonInteractionLike): Promise<void> {
+    const interaction = i as ButtonInteractionLike & {
+      followUp?: (payload: { content: string; ephemeral?: boolean }) => Promise<unknown>;
+    };
+    try {
+      await interaction.followUp?.({
+        content: this.resolveOwnerOnlyCardNotice(),
+        ephemeral: true,
+      });
+    } catch {
+      /* best-effort: 不能在频道里公开回复 */
     }
   }
 
@@ -999,17 +1223,130 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     return this.dmResolver(userId);
   }
 
-  private async fetchChannel(channelId: string): Promise<{
-    messages: {
-      fetch(messageId: string): Promise<{
-        react(emoji: string): Promise<unknown>;
-        edit(payload: unknown): Promise<unknown>;
-        delete(): Promise<unknown>;
-        reactions: {
-          resolve(token: string): { users: { remove(userId: string | undefined): Promise<unknown> } } | null;
-        };
-      }>;
+  /**
+   * 出站目标：lane id 解到对应服务器频道 / thread，其余按私聊 user id。
+   * lane 每次发送都复核白名单（被撤销后进行中的轮次也发不出去），并确认取回的 channel
+   * 确实属于 lane 里的服务器，绝不凭一个 id 就往别处发。
+   */
+  private async requireTargetChannel(userId: string): Promise<DMChannelLike & { assertCurrent?: () => void }> {
+    const lane = decodeDiscordLaneUserId(userId);
+    if (!lane) return this.requireDmChannel(userId);
+    const assertCurrent = this.captureLaneGuard(lane);
+    assertCurrent();
+    const first = await this.fetchLaneChannel(lane).finally(assertCurrent);
+    return {
+      id: first.id,
+      assertCurrent,
+      // 每次真正发送都重新复核「连接代次 + 白名单」并用当前连接取频道：
+      // 持有这个对象的流式回复 / 分段发送，在白名单被撤销或换了 bot 后不会继续发出内容。
+      send: async (payload) => {
+        assertCurrent();
+        const channel = await this.fetchLaneChannel(lane);
+        assertCurrent();
+        const sent = await channel.send(payload);
+        this.rememberMessage(encodeMessageId(channel.id, sent.id), sent, assertCurrent);
+        return sent;
+      },
     };
+  }
+
+  /**
+   * 记下发起时的 bot 身份（gateway appId）与 lane，返回复核函数：连接已释放 / 换了 bot / 该频道已不在
+   * 白名单就抛错。同一个 bot 重连不算换代（出站每次都用当前连接取频道，不依赖旧对象）。
+   */
+  private captureLaneGuard(lane: DiscordLane): () => void {
+    const identity = this.captureIdentityGuard();
+    return () => {
+      identity();
+      if (!isDiscordLaneEnabled(this.readChannelAccess(), lane)) {
+        throw new Error('discord channel is not enabled');
+      }
+    };
+  }
+
+  /**
+   * 记下此刻的 bot 身份（gateway appId）与主人，返回复核函数：实例已释放、换了 bot 或换了主人就抛错。
+   * 同一个 bot、同一个主人的普通重连不算换代。所有会产生副作用的 I/O（发送 / 编辑 / 上传）之前都要过它。
+   */
+  private captureIdentityGuard(): () => void {
+    const appId = this.gateway.appId;
+    const owner = this.ownerUserId;
+    return () => {
+      if (this.disposing || !appId || this.gateway.appId !== appId) {
+        throw new DiscordOutputInvalidatedError('discord connection changed');
+      }
+      if (this.ownerUserId !== owner) throw new DiscordOutputInvalidatedError('discord owner changed');
+    };
+  }
+
+  /** 用当前连接取 lane 对应的频道 / thread，并确认它确实属于 lane 里的服务器。 */
+  private async fetchLaneChannel(
+    lane: DiscordLane,
+  ): Promise<{ id: string; send(payload: unknown): Promise<SentMessageLike & FetchedMessage> }> {
+    const client = this.gateway.client as unknown as {
+      channels?: { fetch(channelId: string): Promise<unknown> };
+    } | null;
+    if (!client?.channels) throw new Error('discord gateway is not connected');
+    const channel = await client.channels.fetch(discordLaneTargetChannelId(lane));
+    if (
+      !isRecord(channel) ||
+      typeof channel.send !== 'function' ||
+      typeof channel.id !== 'string' ||
+      channel.guildId !== lane.guildId
+    ) {
+      throw new Error('discord channel is unavailable');
+    }
+    const send = channel.send as (payload: unknown) => Promise<SentMessageLike & FetchedMessage>;
+    return { id: channel.id, send: (payload) => send.call(channel, payload) };
+  }
+
+  /**
+   * 按 id 取到的服务器频道（缓存没命中时）也要过白名单：lane 由频道自身的 guild / 类型 / 父频道推出。
+   * 私聊频道没有 guildId，不受影响。
+   */
+  private assertFetchedChannelAdmitted(channel: unknown): void {
+    if (!isRecord(channel) || !channel.guildId) return;
+    const lane = discordLaneOfChannel(
+      String(channel.guildId),
+      String(channel.id ?? ''),
+      channel as { type?: number; parentId?: string | null },
+    );
+    if (!lane || !isDiscordLaneEnabled(this.readChannelAccess(), lane)) {
+      throw new Error('discord channel is not enabled');
+    }
+  }
+
+  /**
+   * lane 的可读名（`服务器 #频道 › thread`），只读连接缓存；缓存里没有就返回 null，
+   * 由调用方保留默认标题（不为取名发请求）。
+   */
+  describeLane(userId: string): string | null {
+    const lane = decodeDiscordLaneUserId(userId);
+    if (!lane) return null;
+    const client = this.gateway.client as unknown as {
+      guilds?: { cache?: { get(id: string): { name?: string } | undefined } };
+      channels?: { cache?: { get(id: string): { name?: string } | undefined } };
+    } | null;
+    const guild = client?.guilds?.cache?.get(lane.guildId)?.name;
+    const channel = client?.channels?.cache?.get(lane.channelId)?.name;
+    if (!guild || !channel) return null;
+    const thread = lane.threadId ? client?.channels?.cache?.get(lane.threadId)?.name : undefined;
+    return `${guild} #${channel}${thread ? ` › ${thread}` : ''}`;
+  }
+
+  private rememberMessage(encodedMessageId: string, message: FetchedMessage, assertCurrent: () => void): void {
+    if (typeof message?.edit !== 'function') return;
+    this.messageCache.delete(encodedMessageId);
+    this.messageCache.set(encodedMessageId, { message, assertCurrent });
+    while (this.messageCache.size > MESSAGE_CACHE_CAPACITY) {
+      const oldest = this.messageCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.messageCache.delete(oldest);
+    }
+  }
+
+  private async fetchChannel(channelId: string): Promise<{
+    messages: { fetch(messageId: string): Promise<FetchedMessage> };
   }> {
     const client = this.gateway.client as unknown as {
       channels?: { fetch(channelId: string): Promise<unknown> };
@@ -1018,39 +1355,62 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     if (!isRecord(channel) || !isRecord(channel.messages)) {
       throw new Error('discord channel does not support messages');
     }
-    return channel as {
-      messages: {
-        fetch(messageId: string): Promise<{
-          react(emoji: string): Promise<unknown>;
-          edit(payload: unknown): Promise<unknown>;
-          delete(): Promise<unknown>;
-          reactions: {
-            resolve(token: string): { users: { remove(userId: string | undefined): Promise<unknown> } } | null;
-          };
-        }>;
+    return channel as { messages: { fetch(messageId: string): Promise<FetchedMessage> } };
+  }
+
+  /**
+   * 先用手里的 Message 对象（不需要读历史权限），没有再按 id 去频道里取。服务器频道里的编辑 / 更新每次
+   * 都复核白名单与连接代次（缓存命中走发消息时记下的复核函数，未命中按取到的频道自身判定，await 之后再复核）。
+   * `cleanup` 只用于撤掉机器人自己发出的占位 / 过期卡片：撤销白名单后也允许删除，但不允许改内容。
+   */
+  private async fetchMessage(messageId: string, opts: { cleanup?: boolean } = {}): Promise<Pick<FetchedMessage, 'edit' | 'delete'>> {
+    const cached = this.messageCache.get(messageId);
+    let message: FetchedMessage;
+    let assertCurrent: () => void;
+    if (cached) {
+      message = cached.message;
+      assertCurrent = cached.assertCurrent;
+    } else {
+      const identity = this.captureIdentityGuard();
+      const { channelId, messageId: nativeMessageId } = decodeMessageId(messageId);
+      const channel = await this.fetchChannel(channelId);
+      assertCurrent = () => {
+        identity();
+        this.assertFetchedChannelAdmitted(channel);
       };
+      if (!opts.cleanup) assertCurrent();
+      message = await channel.messages.fetch(nativeMessageId);
+    }
+    if (opts.cleanup) return message;
+    assertCurrent();
+    return {
+      // 调用方 await 返回后仍可能撤权或换身份，复核必须紧邻真正的编辑 I/O。
+      edit: (payload) => { assertCurrent(); return message.edit(payload); },
+      delete: () => message.delete(),
     };
   }
 
-  private async fetchMessage(messageId: string): Promise<{ edit(payload: unknown): Promise<unknown>; delete(): Promise<unknown> }> {
-    const { channelId, messageId: nativeMessageId } = decodeMessageId(messageId);
-    const channel = await this.fetchChannel(channelId);
-    return channel.messages.fetch(nativeMessageId);
-  }
-
-  private async uploadImages(messageId: string, absPaths: string[]): Promise<void> {
+  private async uploadImages(messageId: string, absPaths: string[], assertCurrent?: () => void): Promise<void> {
     const { channelId } = decodeMessageId(messageId);
+    // 流式回复带着发起时的复核函数；单独调用时以本次调用开始时的身份为准。
+    const guard = assertCurrent ?? this.captureIdentityGuard();
     const client = this.gateway.client as unknown as {
       channels?: { fetch(channelId: string): Promise<unknown> };
     } | null;
+    guard();
     const channel = await client?.channels?.fetch(channelId);
     const send = isRecord(channel) ? channel.send : null;
     if (typeof send !== 'function') return;
+    guard();
+    this.assertFetchedChannelAdmitted(channel);
     const files = absPaths.map((absPath) => ({
       attachment: absPath,
       name: path.basename(absPath),
     }));
     for (const batch of batchDiscordUploadFiles(files)) {
+      // 每一批上传前都复核身份与白名单：长图集中途撤销白名单或换了 bot，后面的批次不再发。
+      guard();
+      this.assertFetchedChannelAdmitted(channel);
       await send.call(channel, { files: batch });
     }
   }
@@ -1059,7 +1419,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     const interaction = i as ButtonInteractionLike & {
       followUp?: (payload: { content: string; ephemeral?: boolean }) => Promise<unknown>;
     };
-    const notice = this.opts.expiredCardNotice ?? DEFAULT_EXPIRED_CARD_NOTICE;
+    const configured = this.opts.expiredCardNotice;
+    const notice = (typeof configured === 'function' ? configured() : configured) ?? defaultExpiredCardNotice();
     if (typeof interaction.followUp === 'function') {
       try {
         await interaction.followUp({ content: notice, ephemeral: true });

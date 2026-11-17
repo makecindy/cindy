@@ -8,7 +8,7 @@ const accountAuth = vi.hoisted(() => ({
   peekGrokAccessToken: vi.fn(() => 'token-a'),
   recoverGrokAuthAfterRejection: vi.fn(async () => 'logged_out'),
 }));
-vi.mock('../grok-oauth-login.js', () => accountAuth);
+vi.mock('../grok-oauth-login.desktop.js', () => accountAuth);
 import { createXaiProxyAuthInvalidationObserver, setXaiAuthInvalidatedHandler } from '../xai-auth-invalidation-host.js';
 
 import {

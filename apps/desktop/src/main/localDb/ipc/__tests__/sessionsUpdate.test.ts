@@ -1,3 +1,5 @@
+import { configureUserDataDir } from '../../../userDataPath.js';
+import { configureOwnerContext } from '../../../ownerContext.js';
 import { registerMakerSessionCreateHandler } from '../../../maker-ipc/sessionCreateHandler';
 import { MAKER_INVOKE } from '../../../maker-ipc/channels';
 import { withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
@@ -134,7 +136,7 @@ vi.mock('../../dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() 
 vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),
 }));
-vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
+vi.mock('../../../imageCacheStore.desktop', () => ({ removeSession: vi.fn(async () => undefined) }));
 vi.mock('../../../device-link/sharedTaskRuntime.js', () => ({
   closeSharedTaskForTask: h.closeSharedTask,
   prepareSharedTaskClosureForTask: h.prepareSharedTaskClosure,
@@ -160,11 +162,14 @@ vi.mock('../../../security/trustedAppRenderer.js', () => ({
     !w.isDestroyed() && w.trusted !== false,
 }));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
-vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
+vi.mock('../../../messagePersistBroadcaster.desktop', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../../toolResultCompaction.js', () => ({
   compactSessionToolResultsBestEffort: h.compactSessionToolResultsBestEffort,
 }));
-vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
+vi.mock('../../../sessionIds', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../sessionIds')>(),
+  resolveBusinessSessionId: (id: string) => id,
+}));
 vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
   relocateClaudeTranscriptsForSessionMove: h.relocate,
 }));
@@ -221,7 +226,7 @@ function createDb(): void {
   const sqlite = new Database(':memory:');
   // 与 schema.ts 的 sessions/messages 全列对齐(selectSessionWithCount select 全列)。
   sqlite.exec(`
-    CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, route_key TEXT);
+    CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, route_key TEXT, archived_at INTEGER);
     CREATE TABLE bot_profiles(id TEXT, status TEXT, hidden_at INTEGER);
     CREATE TABLE task_tags (
       id TEXT PRIMARY KEY NOT NULL,
@@ -295,6 +300,12 @@ function createDb(): void {
       list_preview TEXT,
       list_preview_role TEXT,
       list_message_count INTEGER
+    );
+    CREATE TABLE mcp_app_view_states (
+      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      server_id TEXT NOT NULL, server_revision TEXT NOT NULL, plugin_instance TEXT,
+      state_json TEXT NOT NULL, byte_length INTEGER NOT NULL
     );
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
@@ -392,6 +403,11 @@ beforeEach(() => {
   h.withRehydrateCloseSuppressed.mockImplementation(async (_sessionId, task) => task());
   h.getMakerIfReady.mockReturnValue({ isSessionAlive: () => false, closeSession: h.closeSession });
   h.userDataDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-sessions-update-'));
+  configureUserDataDir(h.userDataDir);
+  configureOwnerContext({
+    read: () => ({ dataOwnerId: 'owner-a', generation: 1, boundaryPending: false }),
+    fallbackBaseDir: () => h.userDataDir!,
+  });
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
   setSessionRuntimeCleanup(h.runtimeCleanup);
@@ -424,7 +440,14 @@ describe('local-db:sessions:update handler wiring', () => {
     Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
     h.sqlite!.prepare("UPDATE sessions SET parent_session_id = 'cc-local', source = 'side-chat' WHERE id = 'codex-local'").run();
     h.sqlite!.prepare("UPDATE sessions SET parent_session_id = 'cc-local' WHERE id = 'pi-local'").run();
+    // The real terminal transaction also owns private state; include its schema
+    // instead of masking missing-table failures as worktree errors.
+    for (const id of ['cc-local', 'codex-local', 'pi-local']) {
+      h.sqlite!.prepare("INSERT INTO messages (id,client_id,session_id,role,content,created_at) VALUES (?,?,?,'assistant','{}',1)").run(id, id, id);
+      h.sqlite!.prepare("INSERT INTO mcp_app_view_states VALUES (?,?, 'fixture','revision',NULL,'{}',2)").run(id, id);
+    }
     await update('cc-local', { status: 'deleted' });
+    expect(h.sqlite!.prepare('SELECT session_id FROM mcp_app_view_states').all()).toEqual([{ session_id: 'pi-local' }]);
     expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'deleted' });
     expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('pi-local')).toEqual({ status: 'active' });
     expect(h.runtimeCleanup).toHaveBeenCalledWith('codex-local');
@@ -1025,19 +1048,24 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(persisted).toEqual({ title: 'Release Bot', status: 'active' });
   });
 
-  it('archives, restores and deletes teammate tasks listed with ordinary tasks', async () => {
+  // Group visibility must work through the real IPC guard, not only the worker transaction.
+  it.each([['routine', 'routine:daily'], ['group', 'group:room:thread:root'], ['group', 'group:room:personal-digest']])('archives, restores and deletes listed %s tasks', async (role, routeKey) => {
     // 例行任务 / 渠道专线进入普通任务列表，生命周期与普通任务一致；主聊天仍由伙伴生命周期管理。
+    h.sqlite!.exec(`CREATE TABLE shared_task_events (shared_task_id TEXT, session_id TEXT, revision INTEGER, kind TEXT, terminal INTEGER, snapshot TEXT, recorded_at INTEGER, PRIMARY KEY (shared_task_id, kind, revision))`);
+    Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
     const link = h.sqlite!.prepare('INSERT INTO bot_session_links(session_id, bot_id, role, route_key) VALUES (?, ?, ?, ?)');
     link.run('bot-local', 'bot-1', 'canonical', null);
     await expect(invokeUpdate('bot-local', { status: 'archived' })).rejects.toThrow(/Bot task lifecycle/);
 
     h.sqlite!.prepare('UPDATE bot_session_links SET role = ?, route_key = ? WHERE session_id = ?')
-      .run('routine', 'routine:daily', 'bot-local');
+      .run(role, routeKey, 'bot-local');
     const status = () => (h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('bot-local') as { status: string }).status;
     await invokeUpdate('bot-local', { status: 'archived' });
     expect(status()).toBe('archived');
+    if (role === 'group') h.sqlite!.exec("UPDATE bot_session_links SET archived_at=NULL WHERE session_id='bot-local'");
     await restoreArchivedSessionForSend('bot-local');
     expect(status()).toBe('active');
+    if (role === 'group') expect((h.sqlite!.prepare("SELECT archived_at FROM bot_session_links WHERE session_id='bot-local'").get() as { archived_at: number }).archived_at).toBeGreaterThan(0);
     await invokeUpdate('bot-local', { status: 'deleted' });
     expect(status()).toBe('deleted');
   });

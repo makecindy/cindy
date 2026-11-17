@@ -32,6 +32,7 @@ import {
   type MessageOpResultPayload,
   type TaskAttachment,
 } from '@cindy/slack-hook-protocol';
+import type { StreamingProcessRecord } from '@cindy/im';
 import {
   callWithTelegramRateLimitRetry,
   chunkTelegramSource,
@@ -73,6 +74,8 @@ export interface ClientFinalInput {
   status: 'ok' | 'error' | 'cancelled';
   finalText: string;
   attachments?: readonly TaskAttachment[];
+  /** 这一轮的过程记录; 支持折叠的渠道(飞书)把它收在终稿上方, Telegram 不用。 */
+  process?: StreamingProcessRecord;
 }
 
 /**

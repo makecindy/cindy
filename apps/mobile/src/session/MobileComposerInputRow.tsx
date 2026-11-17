@@ -1,3 +1,4 @@
+import type { ScrollViewInstance, ViewInstance } from 'react-native';
 import { ComposerFrame, nativeComposerFrameAvailable } from './ComposerFrame';
 import {
   Animated,
@@ -16,8 +17,9 @@ import {
 } from 'react-native';
 import { TextInput } from '@/components/AppText';
 import Reanimated, { useAnimatedStyle, useSharedValue, type AnimatedRef, type SharedValue } from 'react-native-reanimated';
-import { GestureDetector } from '@/platform/gestureHandler';
-import type { NativeGesture, PanGesture } from 'react-native-gesture-handler';
+import { GestureDetector, type Gesture } from '@/platform/gestureHandler';
+type NativeGesture = ReturnType<typeof Gesture.Native>;
+type PanGesture = ReturnType<typeof Gesture.Pan>;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Mic } from 'lucide-react-native';
@@ -119,7 +121,7 @@ export interface MobileComposerInputRowProps {
   frameOutside?: boolean;
   /** Scroll attachments/text independently; the toolbar remains outside this viewport. */
   bodyScrollGesture?: NativeGesture;
-  bodyScrollRef?: Ref<ScrollView>;
+  bodyScrollRef?: Ref<ScrollViewInstance>;
   bodyScrollEnabled?: boolean;
   bodyScrollTestID?: string;
   caretHidden?: boolean;
@@ -139,11 +141,13 @@ export interface MobileComposerInputRowProps {
   floatingVoiceButton?: (style: StyleProp<ViewStyle>) => ReactNode;
   floatingVoiceButtonStyle?: StyleProp<ViewStyle>;
   /**
-   * 输入区（inputFrame）的显式高度：拖拽跟手时传 Animated 值、manual 定高时传数值，
+   * 输入区（inputFrame）的显式高度：manual 定高时传数值；拖拽跟手样式走 inputFrameAnimatedStyle，
    * null / undefined 走内容自动增长（现状行为）。
    */
-  inputFrameHeight?: number | Animated.Value | null;
-  inputFrameAnimatedStyle?: ReturnType<typeof useAnimatedStyle>;
+  inputFrameHeight?: number | null;
+  inputFrameAnimatedStyle?: ReturnType<typeof useAnimatedStyle<ViewStyle>>;
+  /** 文字区（inputFrame）的 UI 线程测量句柄：按在卡片上拖动调高时据此区分文字区与留白。 */
+  inputFrameRef?: AnimatedRef<ViewInstance>;
   /**
    * 输入区（inputFrame）的最小高度。给语音听写用：听写期间「点输入区停止听写」的命中层
    * 盖在 inputFrame 上，而单行听写时 inputFrame 只有 28pt，不满足触控目标 44pt；
@@ -160,6 +164,7 @@ export interface MobileComposerInputRowProps {
   maxHeight?: number;
   multiline?: boolean;
   multilineShape?: boolean;
+  onScroll?: TextInputProps['onScroll'];
   onBlur?: TextInputProps['onBlur'];
   onChangeText: (value: string) => void;
   onKeyPress?: TextInputProps['onKeyPress'];
@@ -239,6 +244,7 @@ export function MobileComposerInputRow({
   floatingVoiceButtonStyle,
   inputFrameHeight,
   inputFrameAnimatedStyle,
+  inputFrameRef,
   inputFrameMinHeight,
   inputElement,
   inputOverlay,
@@ -249,6 +255,7 @@ export function MobileComposerInputRow({
   maxHeight = MOBILE_COMPOSER_INPUT_MAX_HEIGHT,
   multiline = true,
   multilineShape,
+  onScroll,
   onBlur,
   onChangeText,
   onKeyPress,
@@ -305,11 +312,11 @@ export function MobileComposerInputRow({
       onPasteImagesLoadFailed?.();
     }
   }, [onPasteImages, onPasteImagesLoading, onPasteImagesLoadFailed]);
-  const bodyScrollNodeRef = useRef<ScrollView | null>(null);
-  const setBodyScrollRef = useCallback((node: ScrollView | null) => {
+  const bodyScrollNodeRef = useRef<ScrollViewInstance | null>(null);
+  const setBodyScrollRef = useCallback((node: ScrollViewInstance | null) => {
     bodyScrollNodeRef.current = node;
     if (typeof bodyScrollRef === 'function') bodyScrollRef(node);
-    else if (bodyScrollRef) (bodyScrollRef as MutableRefObject<ScrollView | null>).current = node;
+    else if (bodyScrollRef) (bodyScrollRef as MutableRefObject<ScrollViewInstance | null>).current = node;
   }, [bodyScrollRef]);
   // 输入区上限已扣除附件高度,正常不会溢出;极端情况(附件多行、屏幕很矮)仍溢出时贴底,
   // 保证正在输入的文字不被裁掉。
@@ -330,6 +337,7 @@ export function MobileComposerInputRow({
       cursorColor={cursorColor}
       editable={editable}
       multiline={multiline}
+      onScroll={onScroll}
       onBlur={onBlur}
       onChangeText={onChangeText}
       onSelectionChange={onSelectionChange}
@@ -369,6 +377,8 @@ export function MobileComposerInputRow({
       >
         {cardLayout ? null : leading}
         <Reanimated.View
+          ref={inputFrameRef}
+          collapsable={false}
           style={[
             styles.inputFrame,
             // 收起单行与 34pt + 并排：输入盒在行内居中。
@@ -522,7 +532,7 @@ export interface ComposerResizeGrabberProps {
   /** 不可见时淡出且不响应触摸，布局位置保持不变（避免出现/消失跳变）。 */
   visible: boolean;
   /** 「聊天记录拖进输入框」在 UI 线程测量顶边位置用（composerPullThrough）。 */
-  measureRef?: AnimatedRef<View>;
+  measureRef?: AnimatedRef<ViewInstance>;
   testID?: string;
 }
 
@@ -545,7 +555,9 @@ function ComposerFoldingSection({ progress, onNaturalHeight, children }: {
     <View style={{ flexShrink: 0 }} onLayout={event => {
       // Never feed an animated/constrained measurement back into its own height.
       // Keep the natural expanded size until the gesture has fully reversed.
-      if ((progress?.value ?? 0) === 0) {
+      // Dragging the collapsed pill open mounts this folded: take the first
+      // (unconstrained inner) measurement so the toolbar can unfold with the finger.
+      if ((progress?.value ?? 0) === 0 || measuredHeight.value === 0) {
         measuredHeight.value = event.nativeEvent.layout.height;
         onNaturalHeight?.(event.nativeEvent.layout.height);
       }
@@ -620,7 +632,7 @@ export function ComposerResizeGrabber({ onAdjust, panHandlers, gesture, visible,
 const VOICE_WAVE_HALF_CYCLE_MS = 550;
 const VOICE_WAVE_STAGGER_MS = 180;
 
-export function VoiceMicWaveCaret({ color, testID, viewRef }: { color: string; testID?: string; viewRef?: Ref<View> }) {
+export function VoiceMicWaveCaret({ color, testID, viewRef }: { color: string; testID?: string; viewRef?: Ref<ViewInstance> }) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
   const bar1 = useRef(new Animated.Value(0)).current;
   const bar2 = useRef(new Animated.Value(0)).current;

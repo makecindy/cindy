@@ -21,7 +21,7 @@ import {
   type GhostSetupInteractionResponseTarget,
   type GhostSetupInteractionSnapshot,
 } from '../ghostSetupInteractionBridge';
-import { classifyGhostVisibility } from '../ghostVisibility';
+import { classifyGhostVisibility } from '../ghostVisibility.desktop';
 
 function required(revision = 0): GhostSetupAssessment {
   return {

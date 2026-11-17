@@ -25,7 +25,7 @@ export function VoiceInputStatusNotice({
       role={tone === 'error' ? 'alert' : 'status'}
       className={cn(
         'inline-flex items-center gap-2 rounded-full border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] px-4 py-[10px]',
-        'text-13 font-medium leading-snug text-[var(--cmd-palette-item-text)] shadow-[var(--shadow-menu)]',
+        'text-13 font-medium leading-snug text-[var(--cmd-palette-item-text)] shadow-[shadow:var(--shadow-menu)]',
         maxWidthClassName,
         className,
       )}

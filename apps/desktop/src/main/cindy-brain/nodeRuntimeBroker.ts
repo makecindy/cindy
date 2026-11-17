@@ -12,8 +12,8 @@ import { bindDeviceAuthorizationTarget, bindPluginAuthorizationTarget } from '..
  * 安全边界：
  * - 只执行已安装目录内、ghost.json 明确声明的单个 JS 入口；无 command / args / shell；
  * - 子进程拥有当前系统用户级本机权限，绝不把它描述成系统沙箱；
- * - 子进程只有 JSON-RPC stdio，不能直接拿到 Cindy IPC。所有 Cindy 能力仍须
- *   Node → main.js → contextBridge → 主机，并再次经过对应 slot 守门；
+ * - 子进程不能直接拿到 Cindy IPC。宿主工具走引导层私有通道进入与逻辑页相同的
+ *   host-tool-request 守门；其它能力仍由 main.js 经 contextBridge 进入对应 slot；
  * - 一段启用的意识最多一个 Node 进程，多会话复用；按需启动、闲置关闭，
  *   停用/更新/卸载/主机退出时由上层 stop；原位更新另用 stopAndWait，等旧进程
  *   真正退出后才可替换其安装目录；
@@ -25,12 +25,9 @@ import { bindDeviceAuthorizationTarget, bindPluginAuthorizationTarget } from '..
  */
 
 import { randomUUID } from 'node:crypto';
-import { EventEmitter } from 'node:events';
-import os from 'node:os';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
-import { utilityProcess } from 'electron';
 
 import type {
   GhostNodeChildToHostMessage,
@@ -164,14 +161,17 @@ export interface GhostNodeRuntimeBrokerDeps {
   readSecret?: (ghostId: string, secretKey: string) => string | null;
   authenticatedFetch?: (ghostId: string, request: Record<string, unknown>, authorization: string,
     assertCurrent: () => void, signal: AbortSignal) => Promise<unknown>;
+  hostToolRequest?: (ghostId: string, payload: unknown, current: () => boolean) => Promise<unknown>;
+  /** Explicit disable/update/uninstall releases Host-owned resources; idle worker exit does not. */
+  onStopped?(ghostId: string): void;
   secretSaved?: (ghostId: string, secretKey: string) => boolean;
   /** 只解析本插件显式引用的 OAuth 槽；不交付 refresh token。 */
   resolveOauthSecret?: (ghostId: string, secretKey: string, accountId?: string) => Promise<
     { ok: true; accessToken: string } | { ok: false; error: string }
   >;
-  spawnProcess?: (entryPath: string, cwd: string, ghostId: string) => NodeWorkerProcess;
+  spawnProcess: (entryPath: string, cwd: string, ghostId: string) => NodeWorkerProcess;
   /** 代启原样 stdio 子进程(childSpawn;缺省用 utilityProcess 适配器)。 */
-  spawnChildProcess?: (
+  spawnChildProcess: (
     entryPath: string,
     cwd: string,
     ghostId: string,
@@ -326,6 +326,8 @@ interface StartingChildProcEntry {
 
 interface WorkerEntry {
   ghost: InstalledGhost;
+  /** The approved install is stable; the manifest is a locale-dependent view. */
+  hostToolIdentity: { dir: string; approvalRevision: string | undefined };
   ownerScopeSnapshot: unknown;
   /** 本进程对应的入口(相对路径;主入口 = manifest.node.entry)。 */
   entryRel: string;
@@ -353,6 +355,8 @@ interface WorkerEntry {
   stdoutBuffer: string;
   nextId: number;
   pending: Map<string, PendingRpc>;
+  /** Autonomous Host calls can wait for native consent without an Agent RPC. */
+  hostToolRequests: number;
   /** 本 worker 名下代启的子进程(childId → 记账;级联生死)。 */
   children: Map<string, ChildProcEntry>;
   idleTimer: NodeJS.Timeout | null;
@@ -465,238 +469,6 @@ function sanitizePathsInHint(hint: string): string {
     .replace(/(?<![:/])\/[^\s/")\]\n:,][^\s")\]\n:,]*(?=[\s")\]\n:,]|$)/g, basename);
 }
 
-type UtilityFork = typeof utilityProcess.fork;
-
-/**
- * 用 Electron 官方 utilityProcess 承载第三方 Node 代码。
- *
- * 正式包关闭 RunAsNode fuse，因此不能把 process.execPath 当 node 二进制 spawn。
- * utilityProcess 是 Electron 保留的 Node service process 通道，不要求放宽 fuse。
- */
-export function createUtilityNodeWorkerProcess(
-  entryPath: string,
-  cwd: string,
-  ghostId: string,
-  fork: UtilityFork = utilityProcess.fork,
-  /** 提供即为"原样 stdio 子进程"模式(childSpawn 代启):透传启动参数,不参与协议。 */
-  childArgs?: string[],
-): NodeWorkerProcess {
-  const isChild = childArgs !== undefined;
-  // 不继承 API key / token 等宿主环境变量。Node 本身仍有用户级本机权限，
-  // 这里只是在“无意泄露宿主秘密”和“系统运行必需变量”之间取最小集合。
-  const inheritedKeys = [
-    'PATH',
-    'SystemRoot',
-    'WINDIR',
-    'TMPDIR',
-    'TEMP',
-    'TMP',
-    'LANG',
-    'LC_ALL',
-    // 用户身份路径变量（是路径不是秘密）：gh / git 等 CLI 依赖它们定位用户级
-    // 配置。gh 会按 GH_CONFIG_DIR → XDG_CONFIG_HOME → 平台默认目录查找；
-    // Windows 上默认目录依赖 APPDATA / 用户目录，缺少这些变量会让 keyring 里明明
-    // 有登录的 gh 仍误报“未登录”。HOME 是 Unix 侧同义变量，一并透传。
-    'HOME',
-    'USERPROFILE',
-    'APPDATA',
-    'LOCALAPPDATA',
-    'HOMEDRIVE',
-    'HOMEPATH',
-    // gh 允许用 GH_CONFIG_DIR 指定自定义配置目录；同属路径类变量，不含秘密。
-    'GH_CONFIG_DIR',
-    // XDG_CONFIG_HOME 也可指定 gh 配置目录，且在 Windows 上同样可能优先于 APPDATA。
-    'XDG_CONFIG_HOME',
-  ] as const;
-  const env: NodeJS.ProcessEnv = {
-    CINDY_GHOST_ID: ghostId,
-    // 不暴露安装目录路径——插件通过 __dirname 定位自身资源即可。
-    // 显式传路径会降低篡改 ghost.json/trust 的门槛(相对路径写入已
-    // 靠 cwd=tmpdir 阻断,但绝对路径仍可达;减少攻击面)。
-  };
-  for (const key of inheritedKeys) {
-    if (process.env[key] !== undefined) env[key] = process.env[key];
-  }
-  const workerEntry = path.join(__dirname, 'nodeRuntimeWorkerProcess.js');
-  const forkArgs = isChild
-    ? [entryPath, GHOST_NODE_CHILD_MODE_FLAG, ...childArgs]
-    : [entryPath];
-  const child = fork(workerEntry, forkArgs, {
-    cwd: os.tmpdir(),
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    serviceName: `cindy-ghost-node:${ghostId}${isChild ? ':child' : ''}`,
-    // 参考 VS Code 的本地扩展模型，为插件开放底层系统能力：
-    // 保留宿主的 macOS TCC 责任归属，实际访问仍由系统权限决定。
-    ...(process.platform === 'darwin' ? { disclaim: false } : {}),
-  });
-  const stdout = child.stdout;
-  const stderr = child.stderr;
-  if (!stdout || !stderr) {
-    child.kill();
-    throw new Error('Node utilityProcess 没有可用的 stdout/stderr');
-  }
-
-  const events = new EventEmitter();
-  const controlListeners = new Set<(message: unknown) => void>();
-  const startupObservationListeners = new Set<
-    (observation: NodeWorkerStartupObservation) => void
-  >();
-  let nativeSpawnObservation: NodeWorkerStartupObservation | null = null;
-  let destroyed = false;
-  let killed = false;
-  let ready = false;
-  let messageCount = 0;
-  let readySeen = false;
-  const readNativePid = (): number | undefined => {
-    try {
-      const value = child.pid;
-      return typeof value === 'number' && Number.isInteger(value) && value > 0
-        ? value
-        : undefined;
-    } catch {
-      return undefined;
-    }
-  };
-  const publishNativeSpawnObservation = (pid = readNativePid()): void => {
-    try {
-      if (nativeSpawnObservation) return;
-      const observation: NodeWorkerStartupObservation = {
-        stage: 'utility-process-spawned',
-        ...(pid !== undefined ? { pid } : {}),
-      };
-      nativeSpawnObservation = observation;
-      for (const listener of startupObservationListeners) {
-        try {
-          listener(observation);
-        } catch {
-          // 诊断 observer 不能中断原有 ready/spawn 传播。
-        }
-      }
-    } catch {
-      // 整条 native-spawn diagnostic 发布链 fail-open。
-    }
-  };
-  const onMessage = (message: unknown) => {
-    messageCount += 1;
-    if (
-      !ready &&
-      message &&
-      typeof message === 'object' &&
-      !Array.isArray(message) &&
-      (message as Record<string, unknown>).type === 'ready'
-    ) {
-      ready = true;
-      readySeen = true;
-      events.emit('spawn');
-      // 子进程原样模式:就绪后一律不再收消息——它没有任何上行控制资格。
-      if (isChild) child.removeListener('message', onMessage);
-      return;
-    }
-    // 普通模式就绪后,parentPort 只承载引导层的子进程控制帧;帧形状由
-    // broker 侧 parseGhostNodeChildToHostMessage 严格把关,不合形静默丢。
-    if (ready && !isChild) {
-      controlListeners.forEach((listener) => listener(message));
-    }
-  };
-  try {
-    child.on('spawn', () => publishNativeSpawnObservation());
-  } catch {
-    // native spawn observer 安装失败不得影响 adapter 构造。
-  }
-  try {
-    const initialPid = readNativePid();
-    if (initialPid !== undefined) publishNativeSpawnObservation(initialPid);
-  } catch {
-    // PID 只用于诊断；getter 异常不得影响 adapter 构造。
-  }
-  child.on('message', onMessage);
-  child.on('exit', (code) => {
-    destroyed = true;
-    killed = true;
-    events.emit('exit', code, null);
-  });
-  child.on('error', (type, location) => {
-    events.emit('error', new Error(`Node utilityProcess ${type} at ${location}`));
-  });
-
-  const adapter = {
-    stdin: {
-      get destroyed() {
-        return destroyed;
-      },
-      write(chunk: string): boolean {
-        if (destroyed) return false;
-        // 原样子进程走 base64 字节口(chunk 可能切坏多字节字符);
-        // 普通 worker 保持 utf8 文本口(逐行 JSON,旧行为零变化)。
-        child.postMessage(isChild ? { type: 'stdin-b64', chunk } : { type: 'stdin', chunk });
-        return true;
-      },
-    },
-    stdout,
-    stderr,
-    readStartupState(): NodeWorkerStartupState {
-      return { messageCount, readySeen, adapterReady: ready };
-    },
-    onStartupObservation(listener: (observation: NodeWorkerStartupObservation) => void): void {
-      if (nativeSpawnObservation) {
-        try {
-          listener(nativeSpawnObservation);
-        } catch {
-          // native spawn 可能早于 broker 订阅；安全回放仍须 fail-open。
-        }
-      }
-      startupObservationListeners.add(listener);
-    },
-    onControl(listener: (message: unknown) => void): void {
-      controlListeners.add(listener);
-    },
-    sendControl(message: unknown): boolean {
-      if (destroyed) return false;
-      child.postMessage(message);
-      return true;
-    },
-    get pid() {
-      return child.pid;
-    },
-    get killed() {
-      return killed;
-    },
-    on(event: 'exit' | 'error', listener: (...args: unknown[]) => void) {
-      events.on(event, listener);
-      return adapter;
-    },
-    once(event: 'spawn' | 'exit' | 'error', listener: (...args: unknown[]) => void) {
-      events.once(event, listener);
-      return adapter;
-    },
-    kill(signal?: NodeJS.Signals): boolean {
-      destroyed = true;
-      killed = true;
-      if (signal === 'SIGKILL' && child.pid !== undefined) {
-        try {
-          process.kill(child.pid, 'SIGKILL');
-          return true;
-        } catch {
-          // 已退出或平台不支持时落回 utilityProcess 自带的终止。
-        }
-      }
-      return child.kill();
-    },
-  };
-  return adapter as NodeWorkerProcess;
-}
-
-const defaultSpawnProcess = createUtilityNodeWorkerProcess;
-
-/** 代启子进程缺省实现:同一 utilityProcess 通道,原样 stdio 模式。 */
-const defaultSpawnChildProcess = (
-  entryPath: string,
-  cwd: string,
-  ghostId: string,
-  args: string[],
-): NodeWorkerProcess =>
-  createUtilityNodeWorkerProcess(entryPath, cwd, ghostId, utilityProcess.fork, args);
 
 function errorResult(
   errorCode: Extract<GhostPipeNodeResult, { ok: false }>['errorCode'],
@@ -1135,6 +907,9 @@ export class GhostNodeRuntimeBroker {
     if (!this.ownerScopeUsable(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.ownerScopeSnapshot)) return;
     const message = parseGhostNodeChildToHostMessage(raw);
     if (!message) return;
+    if (message.type === 'host-tool-request') {
+      void this.handleHostToolRequest(entry, message); return;
+    }
     if (message.type === 'device-authorize' || message.type === 'plugin-authorize') {
       this.authorizePlugin(entry, message);
       return;
@@ -1154,6 +929,28 @@ export class GhostNodeRuntimeBroker {
       child.proc.sendControl?.({ type: 'stdin-end' });
     } else if (message.type === 'child-kill') {
       this.stopChild(entry, child, false);
+    }
+  }
+
+  private async handleHostToolRequest(entry: WorkerEntry, message: Extract<GhostNodeChildToHostMessage, { type: 'host-tool-request' }>) {
+    const id = GhostNodeRuntimeBroker.instanceId(entry.ghost);
+    const current = () => {
+      const ghost = this.deps.getGhost(id);
+      return this.workers.get(GhostNodeRuntimeBroker.keyOf(id, entry.entryRel)) === entry &&
+        this.ownerScopeUsable(id, entry.ownerScopeSnapshot) && ghost?.enabled === true && ghost.dir === entry.hostToolIdentity.dir &&
+        ghost.approval?.state === 'approved' && ghost.approval.revision === entry.hostToolIdentity.approvalRevision;
+    };
+    const denied = { isError: true, content: [{ type: 'text', text: '{"ok":false,"errorCode":"PERMISSION_DENIED"}' }] };
+    this.clearIdleTimer(entry);
+    entry.hostToolRequests += 1;
+    try {
+      const result = current() && this.deps.hostToolRequest ? await this.deps.hostToolRequest(id, message, current) : denied;
+      this.replyToWorker(entry, { type: 'node-host-result', reqId: message.reqId, ok: true, result: current() ? result : denied });
+    } catch {
+      this.replyToWorker(entry, { type: 'node-host-result', reqId: message.reqId, ok: true, result: denied });
+    } finally {
+      entry.hostToolRequests -= 1;
+      this.scheduleIdleStop(entry);
     }
   }
 
@@ -1381,7 +1178,7 @@ export class GhostNodeRuntimeBroker {
 
     let proc: NodeWorkerProcess;
     try {
-      proc = (this.deps.spawnChildProcess ?? defaultSpawnChildProcess)(
+      proc = this.deps.spawnChildProcess(
         entryPath,
         root,
         ghostId,
@@ -1529,6 +1326,7 @@ export class GhostNodeRuntimeBroker {
   stop(ghostId: string): void {
     this.stopGeneration.set(ghostId, (this.stopGeneration.get(ghostId) ?? 0) + 1);
     this.stoppedGhosts.add(ghostId);
+    this.deps.onStopped?.(ghostId);
     for (const starting of [...(this.startingChildren.get(ghostId) ?? [])]) {
       this.stopStartingChild(starting);
     }
@@ -1879,7 +1677,7 @@ export class GhostNodeRuntimeBroker {
     const forkStartedAt = this.diagnosticNow();
     let child: NodeWorkerProcess;
     try {
-      child = (this.deps.spawnProcess ?? defaultSpawnProcess)(entryPath, root, ghost.manifest.id);
+      child = this.deps.spawnProcess(entryPath, root, ghost.manifest.id);
     } catch (error) {
       throw new WorkerStartError(
         error instanceof Error ? error.message : String(error),
@@ -1894,6 +1692,8 @@ export class GhostNodeRuntimeBroker {
     attemptDiagnostic.pid = readChildDiagnosticPid();
     const entry: WorkerEntry = {
       ghost,
+      hostToolIdentity: { dir: ghost.dir,
+        approvalRevision: ghost.approval?.state === 'approved' ? ghost.approval.revision : undefined },
       ownerScopeSnapshot,
       entryRel,
       child,
@@ -1910,6 +1710,7 @@ export class GhostNodeRuntimeBroker {
       stdoutBuffer: '',
       nextId: 1,
       pending: new Map(),
+      hostToolRequests: 0,
       children: new Map(),
       idleTimer: null,
       hardKillTimer: null,
@@ -2612,7 +2413,7 @@ export class GhostNodeRuntimeBroker {
   private scheduleIdleStop(entry: WorkerEntry): void {
     const key = GhostNodeRuntimeBroker.keyOf(GhostNodeRuntimeBroker.instanceId(entry.ghost), entry.entryRel);
     if (this.workers.get(key) !== entry) return;
-    if (entry.ghost.manifest.node?.lifecycle === 'resident' || entry.pending.size > 0) return;
+    if (entry.ghost.manifest.node?.lifecycle === 'resident' || entry.pending.size > 0 || entry.hostToolRequests > 0) return;
     // 有代启子进程在世时不空闲回收——收 worker 会级联杀掉正在干活的代理。
     if (entry.children.size > 0) return;
     this.clearIdleTimer(entry);

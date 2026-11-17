@@ -15,12 +15,18 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { createLogger } from '../logger';
 import { measureTraceOperation, TRACE_OPERATIONS } from '../performance-trace/measure';
+import { createInvokeRegistry } from './invokeRegistryCore.js';
 
 const log = createLogger('device-link-invoke-registry');
 
 type InvokeHandler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 
-const handlers = new Map<string, InvokeHandler>();
+const handlers = createInvokeRegistry();
+function register(channel: string, handler: InvokeHandler): void {
+  handlers.register(channel, args => handler({
+    sender: undefined, frameId: -1, processId: -1,
+  } as unknown as IpcMainInvokeEvent, ...args));
+}
 let installed = false;
 
 /** 启动期至少应捕获到的 handler 数下限——低于此值说明 patch 装晚了,告警便于排查 */
@@ -49,14 +55,14 @@ export function installInvokeCapture(): void {
     const measured: InvokeHandler = TRACE_OPERATIONS.has(channel)
       ? (event, ...args) => measureTraceOperation(channel, () => listener(event, ...args))
       : listener;
-    handlers.set(channel, measured);
+    register(channel, measured);
     return original(channel, measured);
   }) as typeof ipcMain.handle;
 
   // removeHandler 也同步清映射,避免重注册后映射指向旧 handler
   const originalRemove = ipcMain.removeHandler.bind(ipcMain);
   ipcMain.removeHandler = ((channel: string) => {
-    handlers.delete(channel);
+    handlers.remove(channel);
     return originalRemove(channel);
   }) as typeof ipcMain.removeHandler;
 
@@ -73,13 +79,13 @@ export function assertCaptureHealthy(): void {
         'installInvokeCapture ran too late; remote control dispatch is broken for these',
     );
   }
-  if (handlers.size < MIN_EXPECTED_HANDLERS) {
+  if (handlers.size() < MIN_EXPECTED_HANDLERS) {
     log.warn(
-      `invoke capture only saw ${handlers.size} handlers (expected >= ${MIN_EXPECTED_HANDLERS}); ` +
+      `invoke capture only saw ${handlers.size()} handlers (expected >= ${MIN_EXPECTED_HANDLERS}); ` +
         'installInvokeCapture may have run too late — remote control dispatch will be incomplete',
     );
   } else if (missing.length === 0) {
-    log.info(`invoke capture healthy: ${handlers.size} handlers registered`);
+    log.info(`invoke capture healthy: ${handlers.size()} handlers registered`);
   }
 }
 
@@ -88,17 +94,7 @@ export function assertCaptureHealthy(): void {
  * 由调用方(dispatch.ts)转成 invoke-result 的 error 回传控制端。
  */
 export async function dispatchLocalInvoke(channel: string, args: unknown[]): Promise<unknown> {
-  const handler = handlers.get(channel);
-  if (!handler) {
-    throw new Error(`[NOT_FOUND] no local IPC handler for channel '${channel}'`);
-  }
-  const syntheticEvent = {
-    // device-link allowlist 已排除所有依赖 sender / 窗口的 channel,占位即可
-    sender: undefined,
-    frameId: -1,
-    processId: -1,
-  } as unknown as IpcMainInvokeEvent;
-  return await handler(syntheticEvent, ...args);
+  return handlers.dispatch(channel, args);
 }
 
 export const __testing = {
@@ -107,7 +103,7 @@ export const __testing = {
     installed = false;
   },
   register(channel: string, handler: InvokeHandler): void {
-    handlers.set(channel, handler);
+    register(channel, handler);
   },
-  size: () => handlers.size,
+  size: () => handlers.size(),
 };

@@ -2,6 +2,38 @@ import { registerColor } from './color-registry';
 import { filledButtonHover, filledButtonPressed } from './filledButtonStates';
 // BEGIN GENERATED DS-8: defaults
 const GENERATED_DEFAULTS = {
+  "plugin-identity-official-text": {
+    "light": "#2868c8",
+    "dark": "#83b5ff"
+  },
+  "plugin-identity-official-bg": {
+    "light": "rgba(65, 124, 221, 0.11)",
+    "dark": "rgba(65, 124, 221, 0.18)"
+  },
+  "plugin-identity-community-text": {
+    "light": "#8050bb",
+    "dark": "#c4a1ef"
+  },
+  "plugin-identity-community-bg": {
+    "light": "rgba(128, 80, 187, 0.10)",
+    "dark": "rgba(155, 105, 215, 0.16)"
+  },
+  "plugin-identity-team-text": {
+    "light": "#097c78",
+    "dark": "#6dd7cd"
+  },
+  "plugin-identity-team-bg": {
+    "light": "rgba(22, 145, 132, 0.10)",
+    "dark": "rgba(22, 145, 132, 0.16)"
+  },
+  "plugin-identity-custom-text": {
+    "light": "#b36518",
+    "dark": "#eeba70"
+  },
+  "plugin-identity-custom-bg": {
+    "light": "rgba(190, 113, 29, 0.10)",
+    "dark": "rgba(190, 113, 29, 0.16)"
+  },
   "surface": {
     "light": "#f8f8f6",
     "dark": "#1f1f1e"
@@ -40,7 +72,7 @@ const GENERATED_DEFAULTS = {
   },
   "surface-hover-hsl": {
     "light": "0 0% 90%",
-    "dark": "60 2% 17%"
+    "dark": "60 2% 23%"
   },
   "surface-on-card": {
     "light": "#ffffff",
@@ -95,7 +127,7 @@ const GENERATED_DEFAULTS = {
     "dark": "#d4d4d4"
   },
   "text-primary-hsl": {
-    "light": "0 0% 9%",
+    "light": "0 0% 15%",
     "dark": "0 0% 83%"
   },
   "text-secondary": {
@@ -124,7 +156,7 @@ const GENERATED_DEFAULTS = {
   },
   "text-tertiary-hsl": {
     "light": "0 0% 45%",
-    "dark": "0 0% 45%"
+    "dark": "0 0% 64%"
   },
   "text-disabled": {
     "light": "#d4d4d4",
@@ -193,6 +225,10 @@ const GENERATED_DEFAULTS = {
   "process-utility-icon": {
     "light": "#059669",
     "dark": "#34D399"
+  },
+  "remote-agent-net-accent": {
+    "light": "#7C5CFF",
+    "dark": "#A993FF"
   },
   "usage-heatmap-high": {
     "light": "var(--process-agent-task-icon)",
@@ -1079,8 +1115,8 @@ const GENERATED_DEFAULTS = {
     "dark": "var(--text-disabled)"
   },
   "chat-placeholder-text": {
-    "light": "var(--text-tertiary)",
-    "dark": "var(--text-tertiary)"
+    "light": "var(--text-placeholder)",
+    "dark": "var(--text-placeholder)"
   },
   "msg-user-bg": {
     "light": "var(--surface-elevated)",
@@ -2568,9 +2604,9 @@ registerColor('chat-input-bg', GENERATED_DEFAULTS["chat-input-bg"], 'Card — el
 registerColor('chat-input-border', GENERATED_DEFAULTS["chat-input-border"], 'Board — 1px outline');
 registerColor('chat-input-border-focus', GENERATED_DEFAULTS["chat-input-border-focus"], 'Silver — focus hint, still grayscale');
 registerColor('chat-input-placeholder-subtle', {
-  light: 'color-mix(in srgb, var(--chat-input-placeholder) 40%, transparent)',
-  dark: 'color-mix(in srgb, var(--chat-input-placeholder) 40%, transparent)',
-}, 'Chat input placeholder at 40% opacity');
+  light: 'var(--chat-input-placeholder)',
+  dark: 'var(--chat-input-placeholder)',
+}, 'Chat input placeholder — the placeholder tier itself, no extra opacity (2026-11-11 A-06)');
 registerColor('chat-input-text', GENERATED_DEFAULTS["chat-input-text"], 'Pure Black — primary text');
 registerColor('chat-input-placeholder', GENERATED_DEFAULTS["chat-input-placeholder"], 'Placeholder — 收口至 --text-placeholder slot');
 
@@ -2733,7 +2769,7 @@ registerColor('fast-toggle-off', GENERATED_DEFAULTS["fast-toggle-off"], 'Stone �
 registerColor('fast-toggle-track', GENERATED_DEFAULTS["fast-toggle-track"], 'Border Light — OFF switch track');
 
 // Chat placeholder
-registerColor('chat-placeholder-text', GENERATED_DEFAULTS["chat-placeholder-text"], 'Silver');
+registerColor('chat-placeholder-text', GENERATED_DEFAULTS["chat-placeholder-text"], 'Placeholder tier (unused legacy alias, kept for theme compatibility)');
 
 // Message stream (F-MSG-1/2/4)
 registerColor('msg-user-bg', GENERATED_DEFAULTS["msg-user-bg"], 'Card');
@@ -2938,8 +2974,8 @@ registerColor('settings-integration-warning', GENERATED_DEFAULTS["settings-integ
 
 // Remote SSH host status dot — semantic colors (sanctioned exception to the
 // "no hue" rule for this widget specifically: user explicitly asked for
-// 绿/橙/红/灰 status signaling, akin to focus-ring/error/warning豁免 in
-// docs/design-rules/cindy-design-system.md §2). Hues are kept identical across light/dark — the dot is
+// 绿/橙/红/灰 status signaling, akin to focus-ring/error/warning豁免; registered in
+// docs/design-rules/DESIGN.md §2 "Functional identity colors in use"). Hues are kept identical across light/dark — the dot is
 // small enough that saturation issues don't arise; legibility comes from
 // the dot's high-contrast position against surface, not from luminance.
 registerColor('remote-status-ready', GENERATED_DEFAULTS["remote-status-ready"], 'Status — connected / ready (green)');
@@ -3038,9 +3074,8 @@ registerColor('color-error-700', GENERATED_DEFAULTS["color-error-700"], 'Danger 
 registerColor('focus-ring', GENERATED_DEFAULTS["focus-ring"], 'Opaque a11y focus border(设计定稿 2026-07-17 #417CDD,取代 blue-500 #3b82f6)');
 registerColor('focus-ring-soft', GENERATED_DEFAULTS["focus-ring-soft"], '50% alpha focus ring(随 focus-ring #417CDD,定稿 2026-07-17)— 替代 ring-[#xxx]/50 写法');
 registerColor('text-selection-bg', GENERATED_DEFAULTS["text-selection-bg"], '文字选中背景(焦点离开宿主窗口时仍保持清晰可见)');
-// 小胶囊(引擎选择、rail 格)的选中「浮起」阴影 —— 比 shadow-menu 轻一个量级:
-// 26px 高的 chip 套 4px/16px 的菜单阴影会糊成一团灰。Dark 下加深,否则在深底上看不见。
-registerColor('shadow-chip-raised', GENERATED_DEFAULTS["shadow-chip-raised"], '小胶囊选中态的浮起 shadow');
+// Compatibility-only public token: old local themes can reference this ID.
+registerColor('shadow-chip-raised', GENERATED_DEFAULTS["shadow-chip-raised"], '旧本地主题兼容阴影；新 UI 不直接使用');
 registerColor('shadow-menu', GENERATED_DEFAULTS["shadow-menu"], 'Dropdown / context menu / 中型悬浮卡 shadow');
 registerColor('overlay-modal', GENERATED_DEFAULTS["overlay-modal"], '常规模态 backdrop');
 registerColor('overlay-lightbox', GENERATED_DEFAULTS["overlay-lightbox"], '图片/视频/mermaid lightbox 深 backdrop');
@@ -3056,7 +3091,7 @@ registerColor('error-border', GENERATED_DEFAULTS["error-border"], '错误卡片�
 registerColor('error-fg', GENERATED_DEFAULTS["error-fg"], '错误卡片正文/图标');
 registerColor('error-fg-strong', GENERATED_DEFAULTS["error-fg-strong"], '错误卡片强调文字');
 registerColor('warning-bg-soft', GENERATED_DEFAULTS["warning-bg-soft"], 'Warning alpha surface (FeishuConflictDialog 类警告 badge;alpha 随 warning-accent #EA6B17 同步重算 2026-07-17)');
-registerColor('warning-fg', GENERATED_DEFAULTS["warning-fg"], '警示强调文字/图标(设计定稿 2026-07-17 #F3A115;与 Toast amber #F59E0B 解耦——Toast 维持 B 组现状,本 token 走定稿前景)');
+registerColor('warning-fg', GENERATED_DEFAULTS["warning-fg"], '警示强调文字/图标(设计定稿 2026-07-17 #F3A115;Toast warning 图标也走本 token,2026-11-11 维护者裁决 A-15)');
 // 伙伴(Bot)界面的状态语义四件套。
 //
 // 这四个 token 此前被 Bot 各面(设置页错误文案、自动化状态点、健康态勾、
@@ -3252,3 +3287,14 @@ registerColor(
   GENERATED_DEFAULTS["task-tag-white-check"],
   'Task label identity color',
 );
+
+// Append new provenance roles so existing registration order remains stable.
+registerColor('plugin-identity-official-text', GENERATED_DEFAULTS["plugin-identity-official-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-official-bg', GENERATED_DEFAULTS["plugin-identity-official-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-community-text', GENERATED_DEFAULTS["plugin-identity-community-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-community-bg', GENERATED_DEFAULTS["plugin-identity-community-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-team-text', GENERATED_DEFAULTS["plugin-identity-team-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-team-bg', GENERATED_DEFAULTS["plugin-identity-team-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-custom-text', GENERATED_DEFAULTS["plugin-identity-custom-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-custom-bg', GENERATED_DEFAULTS["plugin-identity-custom-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('remote-agent-net-accent', GENERATED_DEFAULTS["remote-agent-net-accent"], '远程连接拓扑：Agent-Net 协议标识(图标与文字); owner-approved 2026-11-13');

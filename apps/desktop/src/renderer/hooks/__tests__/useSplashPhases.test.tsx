@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   checkEnvironment: vi.fn(async () => undefined),
   authInitializing: false,
   coverHeld: false,
+  ownerBoundaryPending: false,
   updateErrorCode: undefined as string | undefined,
   hasPersistedSession: false,
 }));
@@ -48,7 +49,11 @@ vi.mock('@/hooks/useUpdateStatus', () => ({
 }));
 
 vi.mock('@/contexts/AppShellCoverContext', () => ({
-  useAppShellCover: () => ({ coverHeld: mocks.coverHeld, reportLocalDbGate: () => {} }),
+  useAppShellCover: () => ({
+    coverHeld: mocks.coverHeld,
+    startupTarget: mocks.authInitializing || mocks.coverHeld || mocks.ownerBoundaryPending ? 'splash' : 'app',
+    reportLocalDbGate: () => {},
+  }),
 }));
 
 import { useSplash } from '../useSplash';
@@ -61,6 +66,7 @@ describe('useSplash phase 表', () => {
     mocks.totalSteps = undefined;
     mocks.authInitializing = false;
     mocks.coverHeld = false;
+    mocks.ownerBoundaryPending = false;
     mocks.updateErrorCode = undefined;
     mocks.hasPersistedSession = false;
     mocks.checkEnvironment.mockClear();
@@ -139,6 +145,29 @@ describe('useSplash phase 表', () => {
       vi.advanceTimersByTime(500);
     });
     expect(result.current.phase).toBe('splash_done');
+  });
+
+  // unit：真实 hook；新账号边界撤销旧退场，迟到的 transitionEnd 不能结束新的等待。
+  it('cancels an in-flight fade when the target returns to pending and preserves environment errors', () => {
+    mocks.envStatus = 'passed';
+    const hook = renderHook(() => useSplash());
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(hook.result.current.phase).toBe('fading_out');
+    const oldTransitionEnd = hook.result.current.onTransitionEnd;
+    mocks.ownerBoundaryPending = true;
+    hook.rerender();
+    act(() => {
+      oldTransitionEnd({ propertyName: 'opacity' } as React.TransitionEvent);
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(hook.result.current.phase).toBe('splash_passed');
+    mocks.ownerBoundaryPending = false;
+    hook.rerender();
+    expect(hook.result.current.phase).toBe('fading_out');
+    mocks.envStatus = 'failed';
+    mocks.ownerBoundaryPending = true;
+    hook.rerender();
+    expect(hook.result.current.phase).toBe('splash_failed');
   });
 
   it('已有持久会话的返回启动使用 2s 地板，仍等待真实就绪条件', () => {

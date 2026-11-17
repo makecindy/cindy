@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isDesktopInput,
+  runningLiveScreens,
   parseRemoteDesktopRequest,
   REMOTE_DESKTOP_CHANNEL,
   isDesktopPermission,
@@ -350,4 +351,49 @@ describe("remote desktop live screens", () => {
     expect(isLiveScreenOnlyInput(touch as never)).toBe(true);
     expect(isLiveScreenOnlyInput({ kind: "text", text: "a" })).toBe(false);
   });
+});
+
+it("validates attested logical identity separately from physical screen routing", () => {
+  const screen = {
+    plugin: "helper",
+    pluginName: "Helper",
+    id: "phone",
+    name: "Phone",
+    platform: "ios",
+    state: "running",
+    taskIds: [],
+  };
+  expect(
+    runningLiveScreens({
+      screens: [{ ...screen, pluginIdentity: "_ns__acme__helper" }],
+    }),
+  ).toHaveLength(1);
+  for (const pluginIdentity of [null, 1, {}, "bad/source"])
+    expect(
+      runningLiveScreens({ screens: [{ ...screen, pluginIdentity }] }),
+    ).toEqual([]);
+  // Legacy metadata is readable by general viewers, but is not proof for plugin authorization.
+  expect(runningLiveScreens({ screens: [screen] })).toHaveLength(1);
+});
+
+it("preserves the expected source constraint on a device start", () => {
+  const screen = {
+    plugin: "helper",
+    id: "phone",
+    pluginIdentity: "_ns__acme__helper",
+  };
+  expect(
+    parseRemoteDesktopRequest({
+      op: "start",
+      displayId: "live-screen",
+      screen,
+    }),
+  ).toMatchObject({ screen });
+  expect(() =>
+    parseRemoteDesktopRequest({
+      op: "start",
+      displayId: "live-screen",
+      screen: { ...screen, pluginIdentity: 1 },
+    }),
+  ).toThrow("INVALID_REQUEST");
 });

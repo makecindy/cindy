@@ -11,7 +11,7 @@
 import type { ModelSelectorContentBaseProps } from '../components/new-chat/ModelSelector';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   agentDeviceFavoriteSource,
   MODEL_FAVORITES_APPLY,
@@ -450,6 +450,12 @@ describe('插件临时收藏保留执行来源', () => {
     });
     const deviceId = source === 'share' ? 'share:temporary' : 'device-temporary';
     const modelId = namesake ? 'a-model' : 'remote-only';
+    // 自己的另一台电脑上有同名供应商时左栏只列一处：这里是用户把它改成「运行于」那台。
+    if (source === 'device') {
+      const local = catalogs.local[0];
+      catalogs.local[0] = { ...(local as object), runLocation: deviceId };
+      onTestFinished(() => { catalogs.local[0] = local; });
+    }
     pluginLocations.devices = [{ deviceId, name: 'Temporary source' }];
     catalogs.byDevice[deviceId] = [{
       ...(catalogs.local[0] as object), remoteInvocationEnabled: true,
@@ -682,6 +688,19 @@ describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显�
     expect(sourceOf(row)).toBe(label);
     expect(within(row).queryByText(DESCRIPTION)).toBeNull();
   };
+  // ModelSelectorContent 的隐藏量宽副本保留文字，但不再挂来源详情或可操作选项。
+  // 这两条既有 unit 用例覆盖本机、分享与其他电脑目录；可见行的来源判断仍由上面的断言保护。
+  const expectWidthProbe = (...names: string[]) => {
+    const sizer = document.querySelector('[data-width-sizer]') as HTMLElement;
+    expect(sizer).toBeTruthy();
+    for (const name of names) expect(within(sizer).getAllByText(name).length).toBeGreaterThan(0);
+    expect(sourceOf(sizer)).toBeNull();
+    expect(within(sizer).queryAllByRole('option', { hidden: true })).toEqual([]);
+    expect(within(sizer).queryAllByRole('button', { hidden: true })).toEqual([]);
+    expect(within(sizer).queryByText(DESCRIPTION)).toBeNull();
+    expect(sizer.textContent).not.toContain(HOST_DEVICE_NAME);
+    return sizer;
+  };
   const SHARED_LABEL = 'Cindy AI · 来自 Magi 的分享 · 供应商组 · 2 台电脑';
   const REMOTE_LABEL = 'Cindy AI · Studio';
 
@@ -729,31 +748,30 @@ describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显�
     renderPanel({ devices: xdDevices });
     await clickRail('remote:share:magi:xd');
     for (const row of rowsOf(list(), SHARED)) expectSupplier(row);
-    await clickRail('remote:device-c:xd');
-    for (const row of rowsOf(list(), REMOTE)) expectSupplier(row);
+    // 另一台电脑上的同名 Cindy AI 在本机能用时不占左栏(「运行于」那台时见下一条)。
+    expect(document.querySelector('[data-rail-item="remote:device-c:xd"]')).toBeNull();
     await clickRail('provider:xd');
     for (const row of rowsOf(list(), LOCAL)) expectSupplier(row);
   });
 
-  it('定宽测量行与可见行同一判断', async () => {
+  it('定宽测量保留模型与本机供应商文字，省去来源详情与交互节点', async () => {
     renderPanel({ devices: xdDevices });
     await clickRail('favorites');
-    const sizer = document.querySelector('[data-width-sizer]') as HTMLElement;
-    expect(sizer).toBeTruthy();
-    for (const row of rowsOf(sizer, SHARED)) expectSource(row, SHARED_LABEL);
-    for (const row of rowsOf(sizer, REMOTE)) expectSource(row, REMOTE_LABEL);
-    for (const row of rowsOf(sizer, LOCAL)) expectSupplier(row);
-    expect(sizer.textContent).not.toContain(HOST_DEVICE_NAME);
+    const sizer = expectWidthProbe(SHARED, REMOTE, LOCAL);
+    expect(within(sizer).getAllByTitle('Cindy AI').length).toBeGreaterThan(0);
   });
 
-  it('浏览分享或其他电脑的目录时，定宽测量行按外来目录带来源', async () => {
+  it('浏览分享或其他电脑目录时，定宽测量仍保留模型文字且不重复渲染来源详情', async () => {
+    // 本机的 Cindy AI 改成「运行于」device-c，左栏才列出那台的一项。
+    const local = catalogs.local.at(-1) as Record<string, unknown>;
+    catalogs.local[catalogs.local.length - 1] = { ...local, runLocation: 'device-c' };
     renderPanel({ devices: xdDevices });
-    const sizer = () => document.querySelector('[data-width-sizer]') as HTMLElement;
     await clickRail('remote:share:magi:xd');
     for (const row of rowsOf(list(), SHARED)) expectSupplier(row);
-    for (const row of rowsOf(sizer(), SHARED)) expectSource(row, SHARED_LABEL);
+    expectWidthProbe(SHARED);
     await clickRail('remote:device-c:xd');
-    for (const row of rowsOf(sizer(), REMOTE)) expectSource(row, REMOTE_LABEL);
+    for (const row of rowsOf(list(), REMOTE)) expectSupplier(row);
+    expectWidthProbe(REMOTE);
     expect(document.body.textContent).not.toContain(HOST_DEVICE_NAME);
   });
 

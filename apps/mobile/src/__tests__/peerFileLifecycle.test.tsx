@@ -91,7 +91,7 @@ vi.mock("expo-file-system", () => ({
     uri = "/staging";
     exists = true;
     create() {}
-    open() { return { close() {}, writeBytes() {} }; }
+    open() { return { close() {}, writeBytesSync() {} }; }
     delete() { this.exists = false; state.deleted(); }
   },
   Paths: { cache: "/cache", availableDiskSpace: 10 * 1024 ** 3 },

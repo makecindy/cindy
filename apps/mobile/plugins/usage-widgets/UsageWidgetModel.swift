@@ -72,6 +72,29 @@ struct WidgetUsage: Decodable {
   let daily: [WidgetDay]
   /// Busiest models of the window, in color order; absent from older computers.
   var models: [WidgetModel]? = nil
+
+  /// Keep dates paired with their readings; missing dates are not invented zero-use days.
+  var recentDays: [(date: String, tokens: Double)] {
+    Array(zip(days, daily).map { date, day in
+      (date: date, tokens: day.totalTokens.isFinite ? max(0, day.totalTokens) : 0)
+    }.sorted { $0.date < $1.date }.suffix(7))
+  }
+}
+
+/// Compare subscription fractions, never currency balances; retain source order on ties.
+func inlineQuotaSources(_ sources: [WidgetSource]) -> [WidgetSource] {
+  let subscriptions = sources.filter { $0.kind == "subscription" }
+  let comparable = subscriptions.enumerated().filter { $0.element.fill.isFinite && ($0.element.unit == "%" || $0.element.reserve) }
+  let sorted = comparable.sorted {
+    let left = $0.element.reserve ? 0 : $0.element.fill
+    let right = $1.element.reserve ? 0 : $1.element.fill
+    return left == right ? $0.offset < $1.offset : left < right
+  }.map(\.element)
+  return Array((sorted.isEmpty ? (subscriptions.isEmpty ? sources : subscriptions) : sorted).prefix(2))
+}
+
+func lowestQuotaSource(_ sources: [WidgetSource]) -> WidgetSource? {
+  inlineQuotaSources(sources).first
 }
 
 struct WidgetSnapshot: Decodable {

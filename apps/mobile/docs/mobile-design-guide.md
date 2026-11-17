@@ -11,7 +11,7 @@
 承接桌面:**灰度为主、默认零阴影、pill 几何、字重克制**。在此之上叠加移动端约束:
 
 - **iOS 优先**,触控优先,跟随系统 light / dark 自动切换(`useColorScheme`)。
-- **灰度环境**:除已登记、各有限定用途的语义色外(品牌 teal 就绪态、Heart Orange 运行 / thinking 态、自动审批与伙伴未读的信息蓝、额度条、失败状态红和 Beta 渠道红色状态徽标等,见 §2 色表与根规范 `DESIGN.md` §2 / §15.13),界面全是黑白之间的灰阶。不引入未登记的装饰色;新增有色用途先在根规范 `DESIGN.md` §2 / §10 登记。
+- **灰度环境**:除已登记、各有限定用途的语义色外(品牌 teal 就绪态、Heart Orange 运行 / thinking 态、伙伴未读的信息蓝、额度条、失败状态红和 Beta 渠道红色状态徽标等,见 §2 色表与根规范 `DESIGN.md` §2 / §15.13),界面全是黑白之间的灰阶。不引入未登记的装饰色;新增有色用途先在根规范 `DESIGN.md` §2 / §10 登记。
   - 唯一的个性化例外:用户在设置里主动选择的「我的消息气泡颜色」,只染用户自己的消息气泡,默认仍是灰阶;规则见本文 §9「Personal message bubble colors」。
   - 模型选择器的账号额度条沿用桌面语义：剩余 ≥30% 用 `textSecondary`，10% < 剩余 <30% 用 `quotaBarWarn`，剩余 ≤10% 用 `quotaBarCrit`。额度专用语义在根规范 `DESIGN.md` §2 / §10 登记，不借用房主皇冠或任务错误 token。颜色只用于额度条，百分比文字继续保留；iOS / Android 共用真实比例绘制，不设置最小填充长度，0% 留空。
 - **圆角走四档阶梯**(与 `src/theme/tokens.ts` 的 `radius` 一致,守护测试拦截阶梯外值):`micro`(4,缩略图内 chip、勾选指示器等微元素)/ `control`(8,卡片内层控件)/ `container`(12,卡片 / 容器)/ `pill`(9999,交互元素)。**禁止**阶梯外中间值(0 / 3 / 6 / 28 等)与字面量圆角。根规范 `docs/design-rules/DESIGN.md` §5 的圆角清单约束的是桌面 surface;mobile 圆角阶梯以 `tokens.ts` 为准。两端档位差异(如 `micro 4` 不等于桌面只给键帽的 4px)是 `design-governance.md` §10「Mobile 用途差异」的待裁决项,裁决前保持现状。
@@ -47,12 +47,12 @@
 | `ctaText` | `#FFFFFF` | `#121212` | CTA 上的文字 |
 | `homeListFab` | `#0F0F0F` | `#E6E6E6` | 素雅新建对话 FAB:dark 比 cta 略收,避免主入口在深底上过跳 |
 | `statusReady` | `#19D2C1` | `#19D2C1` | 就绪 / 在线点(品牌 teal,**语义不变**) |
-| `statusAccent` | `#EA6B17` | `#EA6B17` | 运行 / thinking + 完全访问权限(Heart Orange,**语义不变**) |
+| `statusAccent` | `#EA6B17` | `#EA6B17` | 运行 / thinking(Heart Orange,**语义不变**) |
 | `quotaBarWarn` | `#F3A115` | `#F3A115` | 账号额度条剩余不足 30%、高于 10% 的填充，其他用途不复用 |
 | `quotaBarCrit` | `#EF4444` | `#EF4444` | 账号额度条剩余不超过 10% 的填充，其他用途不复用 |
 | `betaChannelBadgeBackground` | `#DF0C27` | `#DF0C27` | Beta 渠道开关已打开时,当前版本旁的状态徽标底色 |
 | `betaChannelBadgeForeground` | `#FFFFFF` | `#FFFFFF` | Beta 渠道状态徽标文字,与底色对比度 4.98:1 |
-| `permAutoAccent` | `#417CDD` | `#417CDD` | 自动审批权限模式强调 |
+| `permAutoAccent` | `#417CDD` | `#417CDD` | 历史 token；权限模式改用中性色 |
 | `botUnread` | `#417CDD` | `#417CDD` | **仅限**伙伴列表的未读点(桌面 `--bot-unread-bg` 的移动端镜像,见 `DESIGN.md` Bot Unread Badge) |
 | `errorText` | `#0F0F0F` | `#EDEDED` | 错误说明文字(跟随 textPrimary) |
 | `errorBorder` | `#858581` | `#8A8A8A` | 错误边框(跟随 borderStrong) |
@@ -203,6 +203,7 @@
 - 原地执行的动作行(检查更新、清空日志)传 `chevron={false}`,只有进入子页 / 外链的行画箭头。
 - 例外:列表条目自身的元数据(如词典别名)和录入流程里紧贴控件的步骤状态,可以留在行内。
 - **「+」面板里的表单(开启协同 / 创建 Worker 等 `ContextSheet*`)同一规则**:`ContextSheetGroup` 的 `footer` 承载说明与校验提示(报错传 `footerTone="error"`),`ContextSheetRow` 用 `value` 放右侧取值、不再把说明塞进行内 `detail`;iOS 下拉行自带行名、分段控件选项自明,分组不再加标题(Android 药丸没有行名,保留分组标题);底部主按钮撑满宽度。iOS 上「+」面板的分组标题用 13/18 600 `textTertiary`(系统默认分组标题在新版 iOS 是大号粗体,由 `ComposerSectionSettingsHeader` 统一换掉);面板底与卡片保持系统玻璃样式,不改实色,以免丢掉原生 sheet 的玻璃过渡动画。
+- **开启协同 / 创建 Worker 表单(2026-11-10 用户裁决,与电脑端弹窗同一套内容)**:一张卡片从上到下是角色、交给它的第一件事、一行工具。角色是一排可点的小标签(`ContextSheetChipRow`:iOS 横向滑动,Android 换行),按最近使用排序,末尾加号添加角色;**长按**一个角色经系统确认后移除(措辞与电脑端一致,轻量、不用警告色)。工具行与聊天输入框同序、同形:**左边是只有图标的权限圆钮**(与输入框里的权限圆钮同尺寸、同一套图标与着色,见 §6;点开在旁边列出选项),**右边是模型胶囊**;iOS 上两者与角色标签用同一档底色(`surfaceChip`),标签排、任务文字和工具行左右对齐到系统表单行的文字缩进。点加号后直接聚焦角色名输入。Agent、运行设备等不常改的收在「更多设置」,里面有需要处理的问题时自动展开。角色清单和每个角色记的内容读写任务所在的电脑,手机不存;电脑读不到时只列内置角色,不显示加号、长按无效。实现见 `src/session/ContextSheetCollabView.tsx`、`orcaWorkerRoles.ts`。
 
 ### 主题接入模式(强制)
 
@@ -283,13 +284,16 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
   不叠工作外圈或右侧重复蓝点；有准确未读数量时保留数字。离线头像降透明度；同名伙伴加「· 电脑名」。
   首次读取慢时显示同几何的骨架行。
 - **聊天顶栏 `ChatIdentityHeader`**:私聊与群聊共用。返回 + 32 标记 + 标题 16/22 600 + 副标题 12/18
-  三级色 + 设置;点身份区与设置打开同一份资料 / 设置。私聊副标题保留设备名,离线时前面加「离线 ·」。
-  伙伴 Todo 使用顶栏中的独立待办入口,只在宿主返回该能力链接时显示;复用44px玻璃按钮与原身份布局,
-  不替代设置,不影响群聊,不新增手机例行任务管理。
+  三级色 + 操作入口；私聊副标题保留设备名,离线时前面加「离线 ·」。伙伴在设置前显示四宫格近况入口，
+  复用 44px 按钮、18px 图标与语义颜色；四宫格和身份区打开同一份 `CompanionGlanceSheet`，设置仍打开伙伴资料。
+  电脑默认只显示当前运行的一台，其余在线与离线电脑统一收在「显示更多（数量）」里；可展开与收起，重新打开近况默认收起。
+  近况沿用电脑、近期任务与输出内容：点任务进入所在电脑上的原任务页，点 PR 直接打开对应 PR 链接。
+  群聊的身份与设置行为不变。伙伴待办已移除，不恢复待办或添加通话入口。
 - **卡片外壳**:`surfaceElevated` 底 + 1px `border` + `radius.container` + 内边距 16。眉题 13/18 medium 二级色,
   标题 16/22 medium,状态行 13/18 二级色;只有运行中(`statusAccent` 呼吸)与失败(`statusError`)带颜色。
 - **卡片按钮 `CompanionCardButton`**:高 38(hitSlop 补到 44)、pill、15/20 medium,**文字始终居中**;一行里等宽
   平分,次要在左、主操作在右;次要按钮用 `surfaceChip` 填充不加描边。不要在卡片里写 `textAlign: 'left'` 的按钮。
+- **群内执行与确认（2026-11-09，按 PC 语义适配手机）**：手机群消息作者、执行中伙伴、分工／讨论条目与下一位的名称按用户选择试用 400；字号、行高和状态层级不变，卡片标题和按钮仍为 500。原生分工按钮采用 38pt 可见胶囊、15pt medium 字体，胶囊外保留 44pt 命中区域；次操作用 chip 底色。分工、讨论保留卡片。分工开始后姓名与状态同一行，说明紧随其下，不再给状态另起整行；待开始不拆开姓名与任务说明。讨论每行头像与姓名居中，状态和跳过统一收在行尾，普通行 44pt，不叠加头像顶部偏移或行内外两层留白。下一步／重试的人员与末尾操作放在同一横行并垂直居中：左侧「下一步＋头像＋姓名」，右侧「结束／继续（或重试）」；短名不拆行，长名在可用宽度内单行省略，保留完整无障碍名称。分工的完整步骤说明另放在这行下方，不把操作按钮单独推到下一行，也不使用等宽大按钮。支持远控的电脑为自己发起且可管理的未结束分工提供本机自动交接开关，旧电脑／直连不提供假开关。群停止在过程折叠外。手机暂时隐藏跳到原任务页的「看过程」文字入口，群内过程仍可展开／收起。`InteractionPanel` 的伙伴权限／提问卡采用 PC 的标题层级、带描边的选项组与按内容宽度排列的末尾操作，次要透明描边、主操作在后，长文案可换行；视觉按钮 38、触控补到 44。权限卡标题为请求伙伴，操作种类放次级行；提问优先展示题目标签。手机当前仍为选择后提交，与 PC 的交互差异尚待对齐。其它仍使用 `CompanionCardButton` 的卡片沿用上一条规范。
 - **动效**:新消息与卡片用 `CompanionEntering` / `CompanionFadeIn`(RN `Animated`,原生驱动,只动 opacity /
   transform,系统减弱动效时静止);工作中用 `CompanionPresenceRing` + `ThinkingDots`,不另写循环动画。
 
@@ -315,8 +319,9 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 ## 6. 图标
 
 - 库:**lucide-react-native**(统一,不混用其它图标库)。
-- **图标选择必须与桌面版保持一致**:同一动作 / 语义,手机和桌面用**同一个** lucide 图标。新增图标前先去桌面对应组件确认它用的是哪个(如权限模式用 `Hand`/`CodeXml`/`ClipboardList`/`Sparkles`/`TriangleAlert`,见桌面 `new-chat/PermissionSelector.tsx`),**不要**另选近似图标(如别用 `Shield` 系列代替)。这样跨端心智模型一致。
-  - 已沉淀的对齐映射:权限模式的图标 + 语义色见 `src/session/permissionPresentation.ts`(严格对照桌面 PermissionSelector:`auto`→`permAutoAccent`、`bypassPermissions`→`statusAccent`,其余中性)。
+- **图标选择必须与桌面版保持一致**:同一动作 / 语义,手机和桌面用**同一个** lucide 图标。新增图标前先去桌面对应组件确认它用的是哪个(如权限模式用 `Hand`/`CodeXml`/`ClipboardList`/`Sparkles`/`LockOpen`,见桌面 `new-chat/PermissionSelector.tsx`),**不要**另选近似图标。这样跨端心智模型一致。
+  - 已沉淀的对齐映射:权限模式的图标见 `src/session/permissionPresentation.ts`，严格对照桌面 PermissionSelector；所有档位统一中性色。
+  - 权限选择（2026-11-11）：收起时保留纯图标；列表用简短说明解释哪些操作直接允许、哪些由谁审批。自动审批明确说明由 AI 模型审批、可能需要额外等待，必要时由用户确认。直接选中完全访问后即生效，不追加确认弹窗。
   - **伙伴私聊回复**：消息下方的回复按钮使用 `ChatReplyIcon`，与 Desktop 共用同一款扁圆、下尾的纯气泡路径。复用原「添加到对话」操作，并从伙伴更多菜单移除重复入口；普通任务的「添加到对话」仍用 `MessageSquarePlus`。手机尚未提供的群聊／话题引用回复入口不因此新增。实现见 `src/session/CompanionMessageActions.tsx`。
   - **模型下拉对齐桌面 provider-aware 结构**:同一 model 可挂多家「供应商(来源)」,选行 = 选「来源 + 模型」,选择经 device-link 把 `model + providerId` 路由到被控端。**复用 `@cindy/model-providers` 的 `buildProviderSections` 作分段唯一真相**(`src/session/providerModelSections.ts`),被控端供应商目录经隧道 `maker:provider:list` 取(`src/device-link/useDeviceProviders.ts`);0 供应商 / 旧被控端回退 capabilities 扁平列表。**来源 mark 与桌面同源**:三个内置供应商(Claude / Codex / XD)用官方单色 SVG mark(path 常量在 `src/components/vendorIconPaths.ts`,与桌面 ClaudeMark / CodexMark / XDIncMark 逐字同源),自定义供应商回退首字母 monogram(`MobileProviderMark`)。早期「手机故意不搬品牌 SVG、全用 monogram」的决策已在「模型选择列表与桌面完全对齐」改造(2026-07)中推翻:react-native-svg 本就在依赖里,复制 path 常量零成本,而跨端一眼可辨的来源图标价值更高。唯一保留差异:monogram 容器用 pill 圆角(桌面 4px 方盒)——圆角走 §5 手机圆角阶梯,不引入阶梯外值。
   - **Agent 身份与厂牌分槽**:`MobileAgentMark` / `MobileVendorIcon` 只表示运行时 Agent，使用 Claude Code 像素脸或 Codex CLI `>_` 多瓣花；Anthropic / OpenAI 来源与模型品牌继续由 `MobileProviderMark` / `MobileModelIconMark` 表示。两类 mark 即使名称相近也不得互换。
@@ -386,13 +391,24 @@ ActivityIndicator。未知结果保留原有退出/修改/同 operationId 重试
 不占位，只有真实有限期显示日期。Android 保留现有键盘适配 sheet，仅复用上述身份和操作。
 原生验收由主控统一完成；独立 SwiftUI 设计样张不等于产品 RN 运行证据。
 
+### 远程桌面适配与手势（2026-11-07）
+
+「适配屏幕」与声音、后台运行同级，使用 Fullscreen 图标；选中状态沿用本机按被控设备和显示器保存的分辨率偏好。方向跟随系统，不再提供手动旋转按钮。开启后，旋转、折叠和复古外观切换按实际画面区域调整电脑分辨率；布局稳定 200ms 后才发起调整，请求期间发生变化只采用最新区域。
+
+内屏竖向适配保留顶部返回按钮、底部工具栏及各 16pt 留白；Duo 外屏和展开后的横屏使用完整画面，系统安全区仅用于安排控件。复古外观按显示器玻璃开口适配，不能让旧的电脑长宽比反过来决定开口。
+
+画面可缩到适配大小以下并自由平移。手势过程中不吸附；捏合的全部手指松开后，大小在适配大小的 80%～120% 内时，以 280ms 动画恢复到适配大小并居中。这里的 1:1 指适配大小，不是电脑像素与手机像素一一对应。偏离更远则保留大小与位置。
+
+在适配大小平移后，水平、垂直独立吸附：距离中心不超过对应可用画面尺寸的 20%（每轴最多 96pt）时，松手后对齐该轴；更远仍可停留。新触摸立即中断动画，减少动态效果时直接到达目标。实现与回归见 `src/remote-desktop/RemoteDesktopScreen.tsx`、`packages/maker-shared/src/remote-desktop/viewerRuntime.js` 及 `screen.test.tsx`、`viewer.test.ts`。
+
 ### 折叠态远程桌面默认键盘（2026-11-01）
 
 竖向半折叠时，下半屏默认是跟随 Light/Dark 主题的完整键盘与触控板，替代原来的 Macintosh II 复古外观和工具栏。
-顶行是无键帽的图标条：esc、桌面级快捷键、撤销、重做、fn 和手机输入法入口。桌面级快捷键按被控电脑系统变化，按住图标时显示名称。
+顶行是无键帽的图标条：esc、桌面级快捷键、撤销、重做、fn 和手机输入法入口。图标条高度取一行按键的 0.74 倍，不高于按键行（2026-11-07 用户决定）；触控板固定占下半屏可用高度的 32%（不低于 96pt），其余给按键。桌面级快捷键按被控电脑系统变化，按住图标时显示名称。
 顶行右端是剪贴板和控制面板。触控板按 1.9:1 居中，两侧留白；可见面板之外的掌托区域同样移动指针。
 修饰键点一次作用于下一个键，点两次锁定，再点一次取消；按住则与同时按下的键组合。单独点按不发给电脑。
-按键圆角 8pt，字号用 `body` 与 `micro`。其余外观在「控制」面板切换。
+按键圆角 8pt，字号用 `body` 与 `micro`。
+顶部保留与复古外观相同的 44pt 左右滑动切换栏（2026-11-06 用户决定），从折痕处开始、覆盖折痕下的安全边距，按键紧接在它下面；「控制」面板里也能切换外观。
 
 所有远程键盘共用一套布局和输入逻辑（`RemoteKeySurface`）：
 - 复古外观只保留标准键盘（`classic`）：13 列错列键位、印刷文字键帽、没有图标条，工具栏照常显示。键盘按宽度定成近方形，机身底座按键槽九宫格贴合，手掌区留给控件和工具栏。其余按键从工具栏的键盘按钮进入。

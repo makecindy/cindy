@@ -272,20 +272,28 @@ describe('isWorkLouderSdkTransportDeath', () => {
     expect(
       isWorkLouderSdkTransportDeath('cannot send, no device connected', 'creator-micro-2'),
     ).toBe(true);
-    expect(isWorkLouderSdkTransportDeath('Error sending message: 0xE00002C5', 'codex-micro')).toBe(
-      true,
-    );
+    expect(
+      isWorkLouderSdkTransportDeath('Error sending message: HID unavailable', 'codex-micro'),
+    ).toBe(true);
   });
 
-  it('does not treat HID contention as a dead cable', () => {
-    const contention = [
+  it('does not turn HID denial or contention into liveness probes or dead-cable recovery', () => {
+    // Unit regression: the host's recovery classifiers used to call 0xE00002E2
+    // "contention", so main never paused HID access. The old matrix asserted that
+    // wrong route; a single IOKit NotPermitted report is the minimum failing input.
+    // Standalone vitest run: 0.801s (2026-11-10), tests 5ms.
+    const denied = [
       'Error sending message: Cannot write to hid device: IOHIDDeviceSetReport failed: (0xE00002E2) (iokit/common) not permitted',
-      'Error sending message: device has been closed',
       'Cannot write to hid device: IOHIDDeviceSetReport failed: (0xE00002E2) (iokit/common) not permitted',
       'IOHIDDeviceOpen failed: (0xE00002C1) (iokit/common) not privileged',
     ];
-    for (const detail of contention) {
-      expect(isWorkLouderHidContention(detail)).toBe(true);
+    const contention = [
+      'Error sending message: device has been closed',
+      'IOHIDDeviceOpen: 0xE00002C5',
+    ];
+    for (const detail of [...denied, ...contention]) {
+      expect(isWorkLouderHidContention(detail)).toBe(contention.includes(detail));
+      expect(shouldRequestWorkLouderLivenessProbe(detail, 'codex-micro')).toBe(false);
       expect(isWorkLouderSdkTransportDeath(detail, 'creator-micro-2')).toBe(false);
       expect(isWorkLouderSdkTransportDeath(detail, 'codex-micro')).toBe(false);
     }

@@ -4,7 +4,7 @@
  *
  * 记在任务所在电脑上(发送前的检查在这里跑)，按账号存放，跨重启保留：
  * `userData/owners/<账号>/provider-group-session-prefs.json`，只有任务 id 与打开的时间，不含消息、凭证或用户身份。
- * 超出容量时淘汰最久之前打开的。
+ * 明确关闭配额均衡的任务独立记在 disabledRebalance，优先于旧自动偏好；每类超出容量时淘汰最早记录。
  */
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
@@ -13,6 +13,8 @@ import { createOverrideSettingsFile } from '../maker-host/override-settings-file
 interface SessionPrefsFile {
   /** 任务 id → 打开「以后自动换」的时间(unix ms)。 */
   autoRebalance: Record<string, number>;
+  /** 显式关闭配额均衡的任务；优先于已有的自动换号偏好。 */
+  disabledRebalance: Record<string, number>;
 }
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -25,21 +27,28 @@ function prune(sessions: Record<string, number>): Record<string, number> {
   return Object.fromEntries(entries.slice(0, MAX_PROVIDER_GROUP_SESSION_PREFS));
 }
 
-function normalize(raw: unknown): SessionPrefsFile {
-  const value = (raw as Partial<SessionPrefsFile> | null)?.autoRebalance;
+function normalizeSessions(value: unknown): Record<string, number> {
   const out: Record<string, number> = {};
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     for (const [sessionId, at] of Object.entries(value)) {
       if (SESSION_ID_PATTERN.test(sessionId) && typeof at === 'number' && Number.isFinite(at) && at > 0) out[sessionId] = at;
     }
   }
-  return { autoRebalance: prune(out) };
+  return prune(out);
+}
+
+function normalize(raw: unknown): SessionPrefsFile {
+  const value = raw as Partial<SessionPrefsFile> | null;
+  return {
+    autoRebalance: normalizeSessions(value?.autoRebalance),
+    disabledRebalance: normalizeSessions(value?.disabledRebalance),
+  };
 }
 
 const store = createOverrideSettingsFile<SessionPrefsFile>({
   filePath: () => ownerScopedUserDataPath('provider-group-session-prefs.json'),
   scopeKey: activeOwnerScopeKey,
-  defaults: { autoRebalance: {} },
+  defaults: { autoRebalance: {}, disabledRebalance: {} },
   normalize,
   log: desktopMakerLogger.child('provider-group-session-prefs'),
   label: 'provider-group-session-prefs',
@@ -58,5 +67,23 @@ export function readProviderGroupAutoRebalance(sessionId: string): boolean {
 /** 记下这个任务以后自动换号。 */
 export async function writeProviderGroupAutoRebalance(sessionId: string, now: number = Date.now()): Promise<void> {
   if (!SESSION_ID_PATTERN.test(sessionId)) return;
-  await store.updateAtomic(({ value }) => ({ autoRebalance: prune({ ...value.autoRebalance, [sessionId]: now }) }));
+  await store.updateAtomic(({ value }) => ({ ...value, autoRebalance: prune({ ...value.autoRebalance, [sessionId]: now }) }));
+}
+
+/** 只关闭配额均衡，不改变故障换电脑和用户手动切换。 */
+export function readProviderGroupRebalanceDisabled(sessionId: string): boolean {
+  if (!SESSION_ID_PATTERN.test(sessionId)) return false;
+  store.invalidateIfChanged();
+  return store.read().disabledRebalance[sessionId] !== undefined;
+}
+
+/** 独立存储显式关闭状态；重新开启时恢复该任务原有的自动/询问偏好。 */
+export async function writeProviderGroupRebalanceEnabled(sessionId: string, enabled: boolean, now = Date.now()): Promise<void> {
+  if (!SESSION_ID_PATTERN.test(sessionId)) return;
+  await store.updateAtomic(({ value }) => {
+    const disabledRebalance = { ...value.disabledRebalance };
+    if (enabled) delete disabledRebalance[sessionId];
+    else disabledRebalance[sessionId] = now;
+    return { ...value, disabledRebalance: prune(disabledRebalance) };
+  });
 }

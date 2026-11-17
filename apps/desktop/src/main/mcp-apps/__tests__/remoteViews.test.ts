@@ -343,7 +343,7 @@ describe('Main-bound remote MCP App Views', () => {
 });
 
 // Unit: real remote open must preserve the optional executor SDK. Old hosts omit it.
-it.each([undefined, { source: 'export class App {}' }])('forwards optional executor SDK %j', async sdk => {
+it.each([undefined, { source: 'export class App {}' }, { source: 'sdk', addons: { 'cindy/view-state': { source: 'core', reactSource: 'react' } } }])('forwards optional executor SDK %j', async sdk => {
   const f = fixture();
   f.invoke.mockResolvedValueOnce({ ...document, ...(sdk ? { sdk } : {}) });
   const local = await f.open();
@@ -393,4 +393,12 @@ it('revokes pending remote link authorization on a replacement handshake', async
   await frame({ op: 'open-link', linkId: next.id, url: next.url });
   expect(f.openLink).toHaveBeenCalledExactlyOnceWith(next.url);
   await f.views.releaseCaller('renderer:1');
+});
+
+// Optional malformed addons must not remove the old official SDK.
+it('drops invalid addon metadata independently of the official SDK', async () => {
+  const f = fixture();
+  f.invoke.mockResolvedValueOnce({ ...document, sdk: { source: 'sdk', addons: { 'cindy/view-state': { source: 7 } } } });
+  const local = await f.open();
+  expect(state.mounts.get(local.viewId)!.document.sdk).toEqual({ source: 'sdk' });
 });

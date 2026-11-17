@@ -1,5 +1,5 @@
 import { TAB_LABEL_KEY } from '@/lib/tabLabels';
-import { SELECTABLE_WALLPAPER_IDS } from '../../../shared/appearanceSettings';
+import { APP_ICONS, SELECTABLE_WALLPAPER_IDS } from '../../../shared/appearanceSettings';
 import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes';
 
 /** Search entries owned by the Appearance tab (AppearanceSection + StreamFadeSection). */
@@ -81,6 +81,12 @@ export const appearanceSettings = defineSettings({
       'settings.appearance.wallpaper.visibilityHint',
       'settings.appearance.wallpaper.blurLabel',
       'settings.appearance.wallpaper.blurHint',
+      'settings.appearance.wallpaper.desktopVisibilityLabel',
+      'settings.appearance.wallpaper.desktopVisibilityHint',
+      'settings.appearance.wallpaper.desktopBlurLabel',
+      'settings.appearance.wallpaper.desktopBlurHint',
+      'settings.appearance.wallpaper.desktopBlurSwitchHint',
+
     ],
     options: [
       { value: 'static', labelKey: 'settings.appearance.wallpaper.motionStatic', isVisible: ({ wallpaperMotionAvailable }) => wallpaperMotionAvailable === true },
@@ -100,12 +106,33 @@ export const appearanceSettings = defineSettings({
       { value: 'system', labelKey: 'settings.appearance.theme.system' },
     ],
   },
+  appIcon: {
+    id: 'settings.appearance.appIcon.label',
+    fallbackTargetId: 'settings-search-target-appearance-theme',
+    tab: 'appearance',
+    targetId: 'settings-search-settings-appearance-appIcon-label',
+    titleKey: 'settings.appearance.appIcon.label',
+    sectionKey: 'settings.appearance.themeLabel',
+    descriptionKey: 'settings.appearance.appIcon.description',
+    options: APP_ICONS.map((value) => ({ value, labelKey: `settings.appearance.appIcon.options.${value}` })),
+    // Only macOS can swap the Dock icon at runtime (see main/app-icon.ts).
+    isVisible: ({ platform }) => platform === 'darwin',
+  },
   themeLabel: {
     id: 'settings.appearance.themeLabel',
     fallbackTargetId: 'settings-search-target-appearance-theme',
     tab: 'appearance',
     targetId: 'settings-search-settings-appearance-themeLabel',
     titleKey: 'settings.appearance.themeLabel',
+    sectionKey: 'settings.appearance.themeLabel',
+  },
+  createTheme: {
+    id: 'appearance.createTheme',
+    tab: 'appearance',
+    targetId: 'settings-search-target-appearance-create-theme',
+    fallbackTargetId: 'settings-search-target-appearance-theme',
+    titleKey: 'settings.appearance.createTheme.label',
+    descriptionKey: 'settings.appearance.createTheme.hint',
     sectionKey: 'settings.appearance.themeLabel',
   },
   wallpaperTitle: {

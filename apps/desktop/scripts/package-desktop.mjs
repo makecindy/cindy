@@ -60,6 +60,7 @@ import {
   writePackageVersion,
   runDbValidate,
   verifyPackagedDrizzle,
+  verifyPackagedSkillVersionRecords,
   runSmokeTest,
   fetchExistingManifestIfAvailable,
   findInstallerArtifact,
@@ -625,6 +626,7 @@ async function main() {
         ? path.join(DESKTOP_ROOT, 'out', `${appName}-darwin-${arch}`, `${appName}.app`, 'Contents', 'Resources', 'drizzle')
         : path.join(DESKTOP_ROOT, 'out', `${appName}-${platformKey}`, 'resources', 'drizzle');
     verifyPackagedDrizzle(drizzleOut);
+    verifyPackagedSkillVersionRecords(path.join(path.dirname(drizzleOut), 'system-skills'));
 
     // 读安装包里实际打进去的手册(与 drizzle 同在 Resources 下),写入 build-info。
     const packagedManual = path.join(path.dirname(drizzleOut), 'system-skills', ...PLUGIN_PAGE_MANUAL_SKILL_PATH.split('/'));

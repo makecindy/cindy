@@ -16,9 +16,11 @@ import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/m
 import type { RemoteSessionListItem } from '@/session/sessionList';
 import { groupAutomationListItems } from '@cindy/maker-shared/session-list';
 import { reorderVisibleProjectByDropIndex } from '@/session/homeProjectOrder';
+import { createLowPriorityReadGate } from '@/device-link/lowPriorityReadGate';
 import {
   __testing as prStoreTesting,
   clearHomeSessionPrCache,
+  expireHomeSessionPr,
   homeSessionPrCacheKey,
   hydrateHomeSessionPr,
   latestPrRef,
@@ -26,6 +28,7 @@ import {
   readHomeSessionPr,
   refreshHomeSessionPr,
   subscribeHomeSessionPr,
+  type HomeSessionPrInfo,
 } from '@/session/homeSessionPrStore';
 
 const storage = vi.hoisted(() => new Map<string, string>());
@@ -401,6 +404,98 @@ describe('home PR cache', () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
+  // Unit regression for #10106: after a details-page edit, a menu reopened
+  // 1ms after its last read must replace the old associations. Existing cache
+  // tests only covered timed refreshes, not explicit menu invalidation.
+  it('reloads edited menu associations immediately and rejects pre-edit reads', async () => {
+    vi.useFakeTimers();
+    try {
+      const key = homeSessionPrCacheKey('0', 'd', 's', true);
+      const ref = { id: '1', sessionId: 's', owner: 'a', repo: 'r', prNumber: 7, url: '', firstSeenAt: 1, lastSeenAt: 1 };
+      let refs: HomeSessionPrInfo['ref'][] = [ref];
+      const invoke = vi.fn(async (_device: string, channel: string) => channel.endsWith(':list') ? refs : []);
+      const load = vi.fn((previous: HomeSessionPrInfo | null) => loadHomeSessionPr(invoke as never, 'd', 's', previous, true));
+      refreshHomeSessionPr(key, load, { now: 1_000 });
+      await vi.runAllTimersAsync();
+      expect(readHomeSessionPr(key)?.ref.prNumber).toBe(7);
+
+      refs = [{ ...ref, id: '2', prNumber: 8, pinned: true }];
+      refreshHomeSessionPr(key, load, { now: 1_001 });
+      expect(load).toHaveBeenCalledTimes(1); // Ordinary reopen would keep the old PR.
+      expireHomeSessionPr(key);
+      expect(readHomeSessionPr(key)?.ref.prNumber).toBe(7); // No blank flash while loading.
+      refreshHomeSessionPr(key, load, { now: 1_001 });
+      await vi.runAllTimersAsync();
+      expect(readHomeSessionPr(key)?.ref.prNumber).toBe(8);
+
+      const stale = readHomeSessionPr(key);
+      let finishOld!: (value: HomeSessionPrInfo | null) => void;
+      refreshHomeSessionPr(key, () => new Promise(resolve => { finishOld = resolve; }), { now: 92_000 });
+      refs = [];
+      expireHomeSessionPr(key);
+      refreshHomeSessionPr(key, load, { now: 92_001 });
+      await vi.runAllTimersAsync();
+      expect(readHomeSessionPr(key)).toBeNull();
+      finishOld(stale);
+      await vi.runAllTimersAsync();
+      expect(readHomeSessionPr(key)).toBeNull(); // Removed PR cannot be restored by an old read.
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Unit: review 4546412059 reproduced obsolete ref-list reads dispatching status
+  // RPCs after a menu reopen. Use the production four-slot read gate and store;
+  // three pending list replies must produce status work only for the latest one.
+  it('stops superseded menu loads before they consume status RPC slots', async () => {
+    vi.useFakeTimers();
+    try {
+      const key = homeSessionPrCacheKey('0', 'd', 's', true);
+      const ref = { id: '1', sessionId: 's', owner: 'a', repo: 'r', prNumber: 7, url: '', firstSeenAt: 1, lastSeenAt: 1 };
+      const gate = createLowPriorityReadGate();
+      const replies: ((refs: typeof ref[]) => void)[] = [];
+      const sent: string[] = [];
+      const invoke = vi.fn((_device: string, channel: string, args: unknown[]) => gate.run(JSON.stringify([channel, args]), async () => {
+        sent.push(channel);
+        if (channel.endsWith(':list')) return new Promise<typeof ref[]>(resolve => replies.push(resolve));
+        return [];
+      }));
+      for (let open = 0; open < 3; open++) {
+        if (open) expireHomeSessionPr(key);
+        refreshHomeSessionPr(key, previous => loadHomeSessionPr(invoke as never, 'd', 's', previous, true), { now: open });
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(replies).toHaveLength(3);
+      replies[0]([ref]);
+      replies[1]([ref]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent).toEqual(Array(3).fill('git-context:pr-refs:list'));
+      replies[2]([{ ...ref, id: '2', prNumber: 8 }]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent.filter(channel => channel === 'git-context:pr-status')).toHaveLength(1);
+      expect(readHomeSessionPr(key)?.ref.prNumber).toBe(8);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not continue a cancelled PR status read into the GitLab status RPC', async () => {
+    const ref = { id: '1', sessionId: 's', owner: 'a', repo: 'r', prNumber: 7, url: '', firstSeenAt: 1, lastSeenAt: 1 };
+    let finishGithub!: () => void;
+    const invoke = vi.fn(async (_device: string, channel: string) => {
+      if (channel.endsWith(':list')) return [ref, { ...ref, id: 'mr', provider: 'gitlab', host: 'git.example.com' }];
+      if (channel === 'git-context:pr-status') return new Promise<never[]>(resolve => { finishGithub = () => resolve([]); });
+      return [];
+    });
+    const load = loadHomeSessionPr(invoke as never, 'd', 's', null, true);
+    await Promise.resolve();
+    expect(finishGithub).toBeTypeOf('function');
+    load.cancel();
+    finishGithub();
+    await load;
+    expect(invoke.mock.calls.map(([, channel]) => channel)).toEqual(['git-context:pr-refs:list', 'git-context:pr-status']);
+  });
+
   it('keeps the last known status of the same PR when the status lookup fails', async () => {
     const ref = { id: '1', sessionId: 's', owner: 'a', repo: 'r', prNumber: 7, url: '', firstSeenAt: 1, lastSeenAt: 1 };
     const merged = { owner: 'a', repo: 'r', prNumber: 7, ok: true, status: 'merged' };
@@ -481,6 +576,12 @@ it('loads the bounded PR list for glance and retains each known title through lo
   const result = await loadHomeSessionPr(invoke, 'd', 's', null, true);
   expect([result, ...result!.additional!].map(row => row!.ref.prNumber)).toEqual([4, 3, 2]);
   expect(result!.status).toMatchObject({ title: 'Actual PR 4' });
+  // Unit regression: a newer mention must not evict the explicitly pinned PR
+  // from the task menu's bounded list. The single-PR home row keeps recency.
+  Object.assign(refs[0], { pinned: true });
+  const pinned = await loadHomeSessionPr(invoke, 'd', 's', null, true);
+  expect([pinned, ...pinned!.additional!].map(row => row!.ref.prNumber)).toEqual([1, 4, 3]);
+  expect((await loadHomeSessionPr(invoke, 'd', 's'))!.ref.prNumber).toBe(4);
   invoke.mockImplementation(async (_device: string, channel: string) => { if (channel.endsWith('list')) return refs; throw new Error('offline'); });
-  expect(await loadHomeSessionPr(invoke, 'd', 's', result, true)).toEqual(result);
+  expect(await loadHomeSessionPr(invoke, 'd', 's', pinned, true)).toEqual(pinned);
 });

@@ -15,7 +15,7 @@ vi.mock('../nativeProviderAuthBinding.js', () => ({
 vi.mock('../override-settings-file.js', () => ({ createOverrideSettingsFile: () => ({
   invalidateIfChanged: vi.fn(), read: () => ({}), updateAtomic: async (updater: (state: { value: object }) => object) => h.presentation(updater({ value: {} })),
 }) }));
-vi.mock('../claude-native-cli.js', () => ({
+vi.mock('../claude-native-cli.desktop.js', () => ({
   readClaudeCliLoginStatus: h.readStatus,
 }));
 import {

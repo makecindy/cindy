@@ -1,29 +1,6 @@
-/**
- * main 进程统一的服务端 API 客户端。
- *
- * - 复用 `authManager.getAccessToken()` 自动注入 Bearer Authorization
- * - 可恢复的 401 自动 refresh 一次再重试
- * - `ACCOUNT_UNAVAILABLE` 或刷新后仍被 401 拒绝时执行完整本地退登
- * - `baseUrl` **必传**:老主 server(apiBaseUrl)2026-07-18 退役后没有"默认
- *   业务 server"了,每个调用方显式指向自己的独立服务(device-link relay /
- *   model-access / oauth-broker / github-server / skillhub-server ...)。
- */
-
-import { net } from 'electron';
 import { retryAfterDeadline } from '@cindy/auth-client';
-import * as authManager from './authManager';
-import { getResolvedMainLocale } from './i18n.js';
-
-import { createLogger } from './logger';
-import { requestErrorMessage } from './requestErrorMessage';
-
-const log = createLogger('serverApiClient');
-
-function redactedLogPath(apiPath: string): string {
-  const pathname = apiPath.split(/[?#]/, 1)[0];
-  const segments = pathname.split('/').filter(Boolean).slice(0, 3);
-  return segments.length > 0 ? `/${segments.join('/')}` : '/';
-}
+import { requestErrorMessage } from './requestErrorMessage.js';
+import type { createLogger } from './logger.js';
 
 export class ServerApiError extends Error {
   constructor(
@@ -85,6 +62,22 @@ export interface ApiFetchOptions {
   expectedErrors?: readonly { status: number; code?: string }[];
 }
 
+export interface ServerApiClientPorts {
+  fetch: typeof globalThis.fetch;
+  locale(): string;
+  auth: Pick<typeof import('./authManager.js'), 'getAccessToken' | 'refresh' | 'invalidateSession'>;
+  log: Pick<ReturnType<typeof createLogger>, 'debug' | 'warn' | 'error'>;
+}
+
+/** Common request, refresh, redaction and error contract for both launchers. */
+export function createServerApiClient(ports: ServerApiClientPorts) {
+const { log } = ports;
+function redactedLogPath(apiPath: string): string {
+  const pathname = apiPath.split(/[?#]/, 1)[0];
+  const segments = pathname.split('/').filter(Boolean).slice(0, 3);
+  return segments.length > 0 ? `/${segments.join('/')}` : '/';
+}
+
 interface RawResponse<T> {
   ok: boolean;
   status: number;
@@ -99,13 +92,13 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
   const method = opts.method ?? 'GET';
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'Accept-Language': getResolvedMainLocale(),
+    'Accept-Language': ports.locale(),
     ...(opts.headers ?? {}),
   };
   if (opts.authorization !== undefined) {
     headers['Authorization'] = opts.authorization;
   } else {
-    const token = opts.token !== undefined ? opts.token : authManager.getAccessToken();
+    const token = opts.token !== undefined ? opts.token : ports.auth.getAccessToken();
     if (token) {
       headers['Authorization'] = 'Bearer ' + token;
     }
@@ -117,7 +110,7 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
   const timeoutId = controller && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
     const body = opts.bodyFactory ? opts.bodyFactory() : opts.body;
-    const response = await net.fetch(url, {
+    const response = await ports.fetch(url, {
       method,
       headers,
       cache: opts.cache,
@@ -176,7 +169,7 @@ function waitForRefresh(refresh: Promise<boolean>, signal?: AbortSignal): Promis
  * 高层 API：成功 → 返回 data；失败 → throw ServerApiError。
  * 可恢复的 401 自动 refresh 一次再重试（除非 `skipAutoRefresh`）。
  */
-export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<T> {
+async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<T> {
   let result = await rawFetch<T>(apiPath, opts);
   opts.signal?.throwIfAborted();
   let refreshedAndRetried = false;
@@ -189,7 +182,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
     isRefreshableUnauthorizedCode(firstCode)
   ) {
     opts.signal?.throwIfAborted();
-    const refreshed = await waitForRefresh(authManager.refresh({ serverRejectedToken: true }), opts.signal);
+    const refreshed = await waitForRefresh(ports.auth.refresh({ serverRejectedToken: true }), opts.signal);
     opts.signal?.throwIfAborted();
     if (refreshed) {
       refreshedAndRetried = true;
@@ -210,7 +203,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
       (errCode === 'ACCOUNT_UNAVAILABLE' ||
         (refreshedAndRetried && isRefreshableUnauthorizedCode(errCode)))
     ) {
-      void authManager.invalidateSession(
+      void ports.auth.invalidateSession(
         errCode === 'ACCOUNT_UNAVAILABLE'
           ? 'account-unavailable'
           : 'resource-unauthorized-after-refresh',
@@ -282,4 +275,7 @@ function statusToCode(status: number): string {
   if (status === 429) return 'RATE_LIMITED';
   if (status >= 500) return 'INTERNAL_ERROR';
   return `HTTP_${status}`;
+}
+
+return serverApiFetch;
 }

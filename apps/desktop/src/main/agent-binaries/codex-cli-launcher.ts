@@ -9,14 +9,7 @@ import { createLogger } from '../logger.js';
 const log = createLogger('agent-binaries/codex-cli-launcher');
 const managedMarker = launcher.split('\n')[1];
 
-/** Windows keeps the inherited PATH; only prepend bin for an actual Codex package. */
-export function codexPackagePathPrepends(binaryPath: string | undefined, platform: NodeJS.Platform): string[] {
-  if (platform !== 'win32' || !binaryPath) return [];
-  const paths = path.win32;
-  const binDir = paths.dirname(binaryPath);
-  if (paths.basename(binaryPath) !== 'codex.exe' || paths.basename(binDir) !== 'bin') return [];
-  return fs.existsSync(paths.join(paths.dirname(binDir), 'codex-package.json')) ? [binDir] : [];
-}
+export { codexPackagePathPrepends } from './codexPackagePathPrepends.js';
 
 /**
  * Codex restores the login shell PATH on Unix, then prepends its own codex-path.

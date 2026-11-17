@@ -48,9 +48,21 @@ vi.mock('../../appSessionState.js', () => ({
   }),
   activeOwnerScopeKey: () => `local:${h.dataOwnerId ?? 'none'}:${h.generation}`,
   isAppSessionBoundaryPending: () => false,
+  ownerScopedUserDataPath: (...segments: string[]) => path.join(h.userDataDir, ...segments),
+  dataOwnerStorageKey: (ownerId: string) => ownerId,
+}));
+vi.mock('../../userDataPath.js', () => ({
+  userDataPath: (...segments: string[]) => path.join(h.userDataDir, ...segments),
+}));
+vi.mock('../../ownerContext.js', () => ({
+  configureOwnerContext: () => {},
+  activeDataOwnerId: () => h.dataOwnerId,
+  isOwnerBoundaryPending: () => false,
+  ownerGeneration: () => h.generation,
   // model-disable-store(经 createDesktopProviderService 引入)按 owner 定位 override
   // 文件;指到本用例的临时 userData 即可(store 是惰性读,文件缺席 = 全启用)。
-  ownerScopedUserDataPath: (...segments: string[]) => path.join(h.userDataDir, ...segments),
+  ownerScopedPath: (...segments: string[]) => path.join(h.userDataDir, ...segments),
+  hasCommittedOwner: () => Boolean(h.dataOwnerId),
 }));
 
 // 本机 CLI 登录态:*Unbound 是「CLI 登没登录」,无绑定语义;带绑定的读取叠加 owner 校验,
@@ -67,13 +79,13 @@ vi.mock('../claude-native-connection.js', () => ({
       : null;
   },
 }));
-vi.mock('../claude-native-cli.js', () => ({
+vi.mock('../claude-native-cli.desktop.js', () => ({
   readClaudeCliLoginStatus: async () => {
     h.readClaudeStatus();
     return { loggedIn: h.claudeCredentialPresent };
   },
 }));
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   grokAccountIdentity: () => 'grok@example.test',
   hasGrokOAuthLoginUnbound: () => h.grokCredentialPresent,
   hasGrokOAuthLogin: () => h.grokCredentialPresent && isBoundToCurrentOwner('xai'),

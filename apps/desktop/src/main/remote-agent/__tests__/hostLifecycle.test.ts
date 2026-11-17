@@ -608,3 +608,18 @@ it.each(['authorization', 'owner'])('scopes image recovery to the caller and rej
     expect(imageArtifacts).toHaveBeenCalledTimes(1);
   } finally { host.dispose(); }
 });
+
+// 关了「用本机模型」的电脑看到的是「没有开放供应商」，而不是「和那台电脑断开了 / 不能远程控制」。
+it('tells a computer whose model use was turned off that the provider is not open to it', async () => {
+  const host = createRemoteAgentHost({
+    isAgentAvailable: () => true, startHosted: async (input) => idleHandle(input),
+    isControllerAuthorized: () => false, isControllerModelUseRevoked: (controller) => controller === 'laptop',
+    captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot,
+  });
+  try {
+    await expect(host.handle('laptop', { op: 'images', sessionId: RUN_1, action: 'list' }))
+      .rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+    await expect(host.handle('stranger', { op: 'images', sessionId: RUN_1, action: 'list' }))
+      .rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
+  } finally { host.dispose(); }
+});

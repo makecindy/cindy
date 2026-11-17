@@ -31,6 +31,7 @@ export interface ConnectionPoolDeps {
   knownHostsPath?: string;
   /** Pre-built store; overrides `knownHostsPath` (mainly for tests). */
   hostKeys?: HostKeyStore;
+  formatHostKeyError?: RemoteHostDeps['formatHostKeyError'];
 }
 
 export class ConnectionPool {
@@ -133,7 +134,11 @@ export class ConnectionPool {
   // ── internals ────────────────────────────────────────────────────────────
 
   private register(cfg: HostConfig): RemoteHost {
-    const host = new RemoteHost(cfg, { logger: this.deps.logger, hostKeys: this.hostKeys });
+    const host = new RemoteHost(cfg, {
+      logger: this.deps.logger,
+      hostKeys: this.hostKeys,
+      formatHostKeyError: this.deps.formatHostKeyError,
+    });
     host.onStatus((snap) => this.events.emit('status', snap));
     this.hosts.set(cfg.id, host);
     return host;

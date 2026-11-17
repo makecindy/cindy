@@ -1,33 +1,33 @@
 {
   "cachedHistory": {
     "title": "Computadora no conectada",
-    "hint": "El contenido guardado está disponible. Conecte su computadora para cargar más."
+    "hint": "El contenido guardado está disponible. Conecta tu computadora para cargar más."
   },
   "recovery": {
     "syncing": "Sincronizando…",
     "recovered": "Restaurado",
-    "syncingHint": "Actualización de contenidos desde tu ordenador."
+    "syncingHint": "Actualizando el contenido de tu computadora."
   },
   "syncFailed": "Error de sincronización",
-  "resync": "resincronizar",
-  "resyncing": "Resincronización",
+  "resync": "Resincronizar",
+  "resyncing": "Resincronizando",
   "syncShort": "Sincronizar",
   "deviceUnresponsiveTitle": "Aún no hay respuesta",
   "deviceUnresponsiveHint": "Aún no se ha recibido respuesta. Reintentando automáticamente.",
   "localNetwork": {
-    "title": "Red telefónica no disponible",
-    "hint": "Verifique la red de su teléfono. La reconexión es automática cuando se recupera."
+    "title": "Red del teléfono no disponible",
+    "hint": "Comprueba la red de tu teléfono. Se volverá a conectar automáticamente cuando se recupere."
   },
   "serviceConnection": {
-    "title": "No puedo llegar al servicio",
-    "hint": "Su teléfono no puede acceder al servicio en este momento. Reconectándose automáticamente."
+    "title": "No se puede conectar con el servicio",
+    "hint": "Tu teléfono no puede conectar con el servicio en este momento. Reconectando automáticamente."
   },
-  "connectStep1": "Instale y abra {{appName}} en su computadora",
+  "connectStep1": "Instala y abre {{appName}} en tu computadora",
   "connectStep2": "Inicia sesión con la misma cuenta que tu teléfono",
-  "connectStep3": "En Configuración → Conexión remota, active \"Permitir que dispositivos con la misma cuenta controlen esta computadora\"",
+  "connectStep3": "En Configuración → Conexión remota, activa «Permitir que dispositivos con la misma cuenta controlen esta computadora»",
   "brandEyebrow": "Cindy Móvil",
   "cloudTeaserTitle": "{{appName}} en la nube, próximamente",
-  "cloudTeaserCopy": "Una vez que se inicia, la aplicación móvil funciona por sí sola, no se necesita computadora.",
+  "cloudTeaserCopy": "Cuando se lance, la aplicación móvil funcionará por sí sola, sin necesidad de computadora.",
   "sectionFirstRun": "Empezar",
   "sectionOffline": "Dispositivos conectados",
   "sectionRemoteDisabled": "En tu computadora",
@@ -35,37 +35,37 @@
   "retryAccess": "Reintentar acceso",
   "recheck": "Comprobar de nuevo",
   "deviceRemovedTitle": "Dispositivo eliminado",
-  "deviceRemovedHint": "Cierre sesión y vuelva a iniciar sesión para volver a unirse a la lista de dispositivos.",
+  "deviceRemovedHint": "Cierra sesión y vuelve a iniciarla para volver a unirte a la lista de dispositivos.",
   "authFailedTitle": "El inicio de sesión expiró",
-  "authFailedHint": "Su inicio de sesión ha caducado. Cierra sesión y vuelve a iniciar sesión.",
+  "authFailedHint": "Tu inicio de sesión ha caducado. Cierra sesión y vuelve a iniciarla.",
   "replacedTitle": "Conexión reemplazada",
-  "replacedHint": "La conexión de este dispositivo fue reemplazada en otro lugar. Reconectándonos ahora.",
+  "replacedHint": "La conexión de este dispositivo se reemplazó desde otro lugar. Reconectando…",
   "tooManyConnectionsTitle": "Demasiadas conexiones",
   "tooManyConnectionsHint": "Hay demasiados dispositivos en línea para esta cuenta. Desconecta otro dispositivo y vuelve a intentarlo.",
   "versionMismatchTitle": "La versión no coincide",
-  "versionMismatchHint": "Esta versión de la aplicación es incompatible con el servicio. Actualice a la última versión e inténtelo nuevamente.",
-  "unstableTitle": "La conexión sigue cayendo",
-  "unstableHint": "La conexión es inestable. Verifique su red y espere a que se recupere la conexión.",
+  "versionMismatchHint": "Esta versión de la aplicación es incompatible con el servicio. Actualiza a la última versión y vuelve a intentarlo.",
+  "unstableTitle": "La conexión se interrumpe constantemente",
+  "unstableHint": "La conexión es inestable. Comprueba tu red y espera a que se recupere la conexión.",
   "relay": {
     "label": {
       "online": "Relé conectado",
-      "connecting": "Conexión al relé",
+      "connecting": "Conectando al relé",
       "stopped": "Relé desconectado"
     },
     "hint": {
       "online": "Las tareas remotas se pueden sincronizar.",
       "lastSynced": "Última sincronización {{time}}",
       "connecting": "Las tareas remotas se volverán a suscribir automáticamente cuando la red se recupere.",
-      "stopped": "La conexión se reanudará cuando regrese a la aplicación o inicie sesión nuevamente."
+      "stopped": "La conexión se reanudará cuando vuelvas a la aplicación o inicies sesión de nuevo."
     }
   },
   "agentAuth": {
-    "noKey": "{{agent}} no se puede utilizar porque no hay ninguna clave API configurada en la computadora. Configure uno en {{appName}} en la computadora en Configuración → Proveedores de modelos, luego inténtelo nuevamente.",
-    "noOauth": "{{agent}} no se puede utilizar porque la autorización de la cuenta no está completa en la computadora. Vuelva a conectar la cuenta en {{appName}} en la computadora en Configuración → Proveedores de modelos, luego intente nuevamente.",
-    "noCredentials": "{{agent}} no se puede utilizar porque no se ha iniciado sesión en la computadora. Inicie sesión a través de {{appName}} en la computadora en Configuración → Proveedores de modelos, luego inténtelo nuevamente.",
-    "noEncryption": "{{agent}} no se puede utilizar porque el almacenamiento seguro del sistema en la computadora no está disponible. Verifique el llavero en macOS o el cifrado de cuenta en Windows, luego reinicie {{appName}} en la computadora.",
-    "proxyNotReady": "{{agent}} aún no está listo en la computadora. Vuelva a intentarlo en breve; Si esto continúa, reinicie {{appName}} en la computadora.",
-    "default": "{{agent}} no se puede utilizar porque el inicio de sesión en su computadora no está disponible. Inicie sesión nuevamente a través de {{appName}} en la computadora en Configuración → Proveedores de modelos. ({{reason}})"
+    "noKey": "{{agent}} no se puede usar porque no hay ninguna clave de API configurada en la computadora. Configura una en {{appName}} en la computadora, en Configuración → Proveedores de modelos, y vuelve a intentarlo.",
+    "noOauth": "{{agent}} no se puede usar porque la autorización de la cuenta no está completa en la computadora. Vuelve a conectar la cuenta en {{appName}} en la computadora, en Configuración → Proveedores de modelos, y vuelve a intentarlo.",
+    "noCredentials": "{{agent}} no se puede usar porque no ha iniciado sesión en la computadora. Inicia sesión desde {{appName}} en la computadora, en Configuración → Proveedores de modelos, y vuelve a intentarlo.",
+    "noEncryption": "{{agent}} no se puede usar porque el almacenamiento seguro del sistema en la computadora no está disponible. Comprueba el llavero en macOS o el cifrado de cuenta en Windows y luego reinicia {{appName}} en la computadora.",
+    "proxyNotReady": "{{agent}} aún no está listo en la computadora. Vuelve a intentarlo en breve; si el problema continúa, reinicia {{appName}} en la computadora.",
+    "default": "{{agent}} no se puede usar porque su inicio de sesión en la computadora no está disponible. Vuelve a iniciar sesión desde {{appName}} en la computadora, en Configuración → Proveedores de modelos. ({{reason}})"
   },
   "remoteError": {
     "remoteDisabled": "La computadora remota ha desactivado el control remoto.",
@@ -83,6 +83,6 @@
     "transient": "La red o la computadora remota no está disponible temporalmente. Sincroniza nuevamente más tarde.",
     "callFailed": "La llamada remota no finalizó. Inténtalo de nuevo en un momento.",
     "unclassified": "Esta acción no terminó. Inténtalo de nuevo en un momento.",
-    "notFound": "Ese artículo ya no existe. Vuelva a la lista y actualice antes de volver a intentarlo."
+    "notFound": "Ese elemento ya no existe. Vuelve a la lista y actualízala antes de intentarlo de nuevo."
   }
 }

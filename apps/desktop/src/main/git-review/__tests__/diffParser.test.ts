@@ -22,6 +22,27 @@ describe('git-review diffParser', () => {
     ]);
   });
 
+  it('keeps deleted "-- " and added "++ " lines that look like ---/+++ file headers', () => {
+    // Git prefixes body lines, so deleting the SQL comment "-- old note" emits
+    // "--- old note". Dropping it as a header shifted line numbers and made the
+    // staged patch fail `git apply`.
+    const diff = parseGitDiff(
+      'diff --git a/q.sql b/q.sql\nindex 1111111..2222222 100644\n--- a/q.sql\n+++ b/q.sql\n' +
+        '@@ -1,3 +1,3 @@\n SELECT 1;\n--- old note\n-SELECT 2;\n+++ new note\n+SELECT 3;\n',
+      { source: 'unstaged', pathHint: 'q.sql' },
+    );
+
+    expect(diff).toMatchObject({ additions: 2, deletions: 2 });
+    expect(diff.hunks[0].lines.map((line) => [line.type, line.content, line.oldLineNumber, line.newLineNumber]))
+      .toEqual([
+        ['context', 'SELECT 1;', 1, 1],
+        ['delete', '-- old note', 2, null],
+        ['delete', 'SELECT 2;', 3, null],
+        ['add', '++ new note', null, 2],
+        ['add', 'SELECT 3;', null, 3],
+      ]);
+  });
+
   it('marks no-newline marker on the previous diff line without adding a row', () => {
     const diff = parseGitDiff(
       'diff --git a/a.txt b/a.txt\nindex 1111111..2222222 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n\\ No newline at end of file\n',

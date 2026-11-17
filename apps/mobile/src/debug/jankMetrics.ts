@@ -40,7 +40,8 @@ const TOP_CHANNELS = 6;
 let enabled = false;
 let pushes = new Map<string, ChannelTiming>();
 let invokes = new Map<string, number>();
-type TransferCounters = { sent: number; results: number; payloadBytes: number; notModified: number; gzip: number };
+// `delta` only appears on rows that received one, so other rows keep the log's value budget.
+type TransferCounters = { sent: number; results: number; payloadBytes: number; notModified: number; gzip: number; delta?: number };
 let transfers = new Map<string, TransferCounters>();
 let storeSizeSource: (() => RemoteSessionStoreSizeMetrics) | null = null;
 
@@ -57,6 +58,8 @@ const emptyUiThread = () => ({ pings: 0, maxLagMs: 0, over250: 0 });
 let gunzip = emptyGunzip();
 let loopLag = emptyLoopLag();
 let uiThread = emptyUiThread();
+/** Presence messages applied. Screens refresh on them, so a high count explains repeated reads. */
+let presenceUpdates = 0;
 
 function resetCounters(): void {
   pushes = new Map();
@@ -66,6 +69,7 @@ function resetCounters(): void {
   gunzip = emptyGunzip();
   loopLag = emptyLoopLag();
   uiThread = emptyUiThread();
+  presenceUpdates = 0;
 }
 
 export function setJankMetricsEnabled(next: boolean): void {
@@ -96,7 +100,7 @@ export function recordInvokeSent(channel: string): void {
  * Excludes peer-direct traffic, frame headers and retransmissions; not a wire-byte total.
  */
 export function recordInvokeTransfer(event: { channel: string; phase: 'sent' | 'result' | 'decoded';
-  payloadBytes?: number; notModified?: boolean; gzip?: boolean; inflateMs?: number; parseMs?: number }): void {
+  payloadBytes?: number; notModified?: boolean; gzip?: boolean; delta?: boolean; inflateMs?: number; parseMs?: number }): void {
   if (!enabled) return;
   if (event.phase === 'decoded') {
     const timing = decodes.get(event.channel) ?? { count: 0, inflateMs: 0, parseMs: 0 };
@@ -113,6 +117,7 @@ export function recordInvokeTransfer(event: { channel: string; phase: 'sent' | '
     entry.payloadBytes += event.payloadBytes ?? 0;
     if (event.notModified) entry.notModified++;
     if (event.gzip) entry.gzip++;
+    if (event.delta) entry.delta = (entry.delta ?? 0) + 1;
   }
   transfers.set(event.channel, entry);
 }
@@ -157,6 +162,10 @@ export function recordLoopLag(lagMs: number): void {
   loopLag.maxMs = Math.max(loopLag.maxMs, lagMs);
   if (lagMs > 250) loopLag.over250++;
   if (lagMs > 1000) loopLag.over1000++;
+}
+
+export function recordPresenceUpdate(): void {
+  if (enabled) presenceUpdates++;
 }
 
 export function recordUiThreadLag(lagMs: number): void {
@@ -248,10 +257,12 @@ export function takeSyncWorkMetrics() {
     gunzip: { ...gunzip, onThreadMs: Math.round(gunzip.onThreadMs) },
     loopLag: { ...loopLag, maxMs: Math.round(loopLag.maxMs) },
     uiThread: { ...uiThread, maxLagMs: Math.round(uiThread.maxLagMs) },
+    presenceUpdates,
   };
   decodes = new Map();
   gunzip = emptyGunzip();
   loopLag = emptyLoopLag();
   uiThread = emptyUiThread();
+  presenceUpdates = 0;
   return snapshot;
 }

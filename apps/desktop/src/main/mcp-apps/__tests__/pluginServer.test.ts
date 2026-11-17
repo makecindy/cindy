@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import path from 'node:path';
+import { McpAppsHost } from '../host.js';
+import type { AppConnection, AppServerConfig } from '../connection.js';
 import { RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
 import { pluginAppResult } from '../pluginCards.js';
 import { PluginAppFiles } from '../pluginFiles.js';
@@ -39,7 +42,8 @@ async function fixture() {
   const started = new Promise<void>((resolve) => {
     called = resolve;
   });
-  const events: string[] = [];
+  const events: Array<string | null> = [];
+  const grants: PluginPageCall[] = [];
   const assertCurrent = () => {
     if (!current) throw new Error('MCP_APP_SERVER_CHANGED');
   };
@@ -59,6 +63,7 @@ async function fixture() {
       readHtml: (html) => `<html>${html}</html>`,
       call: async (grant, args) => {
         events.push(grant.sessionId);
+        grants.push(grant);
         called?.();
         if (args.wait)
           await new Promise<void>((resolve) => {
@@ -80,6 +85,7 @@ async function fixture() {
     client,
     grant,
     events,
+    grants,
     started,
     revoke: () => {
       current = false;
@@ -88,6 +94,26 @@ async function fixture() {
   };
 }
 describe('plugin virtual App server', () => {
+  // Unit: real native-action Host -> SDK server -> one-use grant. Existing page
+  // ticket cases do not originate in native composer input; no local path may enter args.
+  it('carries native attachment authority through the original ticket without exposing its path in args', async () => {
+    const { client, grants } = await fixture();
+    const owner = {};
+    const config: AppServerConfig = { id: 'plugin-source', url: '', transport: 'in-process',
+      plugin: { instance: 'demo', revision: 'v1' } as AppServerConfig['plugin'] };
+    const authorizeTool = vi.fn(async () => {});
+    const host = new McpAppsHost({ owner: () => owner, config: () => config,
+      connection: () => ({ tools: async () => (await client.listTools()).tools, getClient: async () => client }) as AppConnection,
+      authorizeTool, readCard: vi.fn(), writeCard: vi.fn(), sendMessage: vi.fn() });
+    const args = { attachment: { name: 'input.pdf', size: 5, mimeType: 'application/pdf' } };
+    const result = await host.callPluginAction('renderer:1', null, { serverId: config.id, id: 'parse', title: 'Parse',
+      attachments: [path.resolve('input.pdf')], assertCurrent() {} }, 'save', args, new AbortController().signal);
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual(args);
+    expect(grants[0]).toMatchObject({ sessionId: null, attachments: [path.resolve('input.pdf')] });
+    expect(authorizeTool).toHaveBeenCalledWith(null, expect.objectContaining({ name: 'save' }), args,
+      expect.any(AbortSignal), expect.objectContaining({ caller: 'renderer:1' }));
+    await host.reset();
+  });
   it('projects shared pages and visibility into standard MCP tools and resource metadata', async () => {
     const { client } = await fixture();
     expect((await client.listTools()).tools.map((tool) => tool._meta?.ui)).toEqual([

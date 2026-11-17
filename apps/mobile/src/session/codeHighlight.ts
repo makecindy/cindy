@@ -161,9 +161,27 @@ function resolveSpec(language: string | undefined): LanguageSpec {
   return LANGUAGES[key] ?? GENERIC_SPEC;
 }
 
-const IDENT_START = /[A-Za-z_$]/;
-const IDENT_BODY = /[A-Za-z0-9_$]/;
-const DIGIT = /[0-9]/;
+// Language specs are module-owned constants: cache only their keyword sets,
+// never message/code contents. Aliases share the same set, with bounded memory.
+const keywordSets = new WeakMap<LanguageSpec, ReadonlySet<string>>();
+function keywordsFor(spec: LanguageSpec): ReadonlySet<string> {
+  let keywords = keywordSets.get(spec);
+  if (!keywords) {
+    keywords = new Set(spec.caseSensitive === false
+      ? spec.keywords.map(word => word.toLowerCase()) : spec.keywords);
+    keywordSets.set(spec, keywords);
+  }
+  return keywords;
+}
+
+// ASCII lexical rules, exactly matching the former regex classes. Native regex
+// calls and per-character comment callbacks are costly in Hermes while opening
+// or scrolling code-heavy messages. Unicode stays in the lossless plain path.
+function isDigit(code: number): boolean { return code >= 48 && code <= 57; }
+function isIdentifierStart(code: number): boolean {
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95 || code === 36;
+}
+const NUMBER_BODY = /[0-9a-fA-FxXoObB_.]/;
 
 /**
  * 着色预算 —— 超出就退回纯文本(整块或剩余部分并成一个 plain token)。
@@ -203,9 +221,7 @@ export function tokenizeCode(source: string, language?: string): CodeToken[] {
   if (source.length > CODE_HIGHLIGHT_LIMITS.maxSource) return plainOnly(source);
 
   const spec = resolveSpec(language);
-  const keywords = new Set(
-    spec.caseSensitive === false ? spec.keywords.map((w) => w.toLowerCase()) : spec.keywords,
-  );
+  const keywords = keywordsFor(spec);
   const out: CodeToken[] = [];
   let plain = '';
 
@@ -224,22 +240,13 @@ export function tokenizeCode(source: string, language?: string): CodeToken[] {
   };
 
   const { family } = spec;
-  const lineComment = family === 'c' ? '//' : family === 'hash' ? '#' : family === 'sql' ? '--' : family === 'generic' ? null : null;
+  const lineComment = family === 'c' ? '//' : family === 'hash' ? '#' : family === 'sql' ? '--' : null;
   // json5 / jsonc 的 family 已经是 'c',由第一个分支覆盖,不单列。
   const blockComment = family === 'c' || family === 'css' || family === 'sql'
     ? (['/*', '*/'] as const)
     : family === 'markup'
       ? (['<!--', '-->'] as const)
       : null;
-
-  // 行注释起始符:generic 家族同时认 `//` 与 `#`,尽量别把注释染成正文。
-  // 与 lineComment / blockComment 一样是循环不变量,必须在循环外算 —— 放进循环
-  // 等于每个字符都新建一个数组。
-  const lineStarts = lineComment
-    ? [lineComment]
-    : family === 'generic'
-      ? ['//', '#']
-      : [];
 
   let i = 0;
   while (i < source.length) {
@@ -250,6 +257,21 @@ export function tokenizeCode(source: string, language?: string): CodeToken[] {
     if (out.length + (plain ? 1 : 0) >= CODE_HIGHLIGHT_LIMITS.maxTokens) {
       plain += source.slice(i);
       break;
+    }
+
+    // Indentation/newlines are always plain. Consume a run at once instead of
+    // testing every space against comment, string, number and identifier rules.
+    const ch = source[i];
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+      let end = i + 1;
+      while (end < source.length) {
+        const next = source[end];
+        if (next !== ' ' && next !== '\t' && next !== '\n' && next !== '\r') break;
+        end += 1;
+      }
+      plain += source.slice(i, end);
+      i = end;
+      continue;
     }
 
     // 前缀判定一律用 source.startsWith(mark, i),不要先 source.slice(i) 再判。
@@ -266,7 +288,8 @@ export function tokenizeCode(source: string, language?: string): CodeToken[] {
       continue;
     }
     // 行注释
-    const hitLine = lineStarts.some((mark) => source.startsWith(mark, i));
+    const hitLine = lineComment ? source.startsWith(lineComment, i)
+      : family === 'generic' && (source.startsWith('//', i) || source[i] === '#');
     if (hitLine) {
       const nl = source.indexOf('\n', i);
       const stop = nl === -1 ? source.length : nl;
@@ -275,7 +298,6 @@ export function tokenizeCode(source: string, language?: string): CodeToken[] {
       continue;
     }
     // 字符串(未闭合时吃到行尾,避免整块串味)
-    const ch = source[i];
     if (ch === '"' || ch === '\'' || ch === '`') {
       let j = i + 1;
       let closed = false;
@@ -294,17 +316,22 @@ export function tokenizeCode(source: string, language?: string): CodeToken[] {
       continue;
     }
     // 数字
-    if (DIGIT.test(ch)) {
+    const code = source.charCodeAt(i);
+    if (isDigit(code)) {
       let j = i;
-      while (j < source.length && /[0-9a-fA-FxXoObB_.]/.test(source[j])) j += 1;
+      while (j < source.length && NUMBER_BODY.test(source[j])) j += 1;
       push(source.slice(i, j), 'number');
       i = j;
       continue;
     }
     // 标识符 → 关键字 / 函数名 / 普通
-    if (IDENT_START.test(ch)) {
+    if (isIdentifierStart(code)) {
       let j = i + 1;
-      while (j < source.length && IDENT_BODY.test(source[j])) j += 1;
+      while (j < source.length) {
+        const next = source.charCodeAt(j);
+        if (!isIdentifierStart(next) && !isDigit(next)) break;
+        j += 1;
+      }
       const word = source.slice(i, j);
       const probe = spec.caseSensitive === false ? word.toLowerCase() : word;
       if (keywords.has(probe)) {

@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../secrets/providerSecretStore', () => ({ readGhostSecret: vi.fn() }));
-vi.mock('../maker-host/outbound-fetch', () => ({ outboundFetch: vi.fn() }));
-vi.mock('../appSessionState', () => ({ activeOwnerScopeKey: () => 'test-owner' }));
+vi.mock('../maker-host/outbound-fetch.desktop', () => ({ outboundFetch: vi.fn() }));
+vi.mock('../appSessionState', () => ({ activeOwnerScopeKey: () => 'test-owner', getActiveAppSession: () => ({ dataOwnerId: 'test-owner' }) }));
 const mocks = vi.hoisted(() => ({
-  handlers: new Map<string, (...args: any[]) => unknown>(),
+  handlers: new Map<string, (...args: unknown[]) => unknown>(),
   guard: vi.fn(),
   start: vi.fn(),
+  connectGithub: vi.fn(),
+  githubStatus: vi.fn(),
+  openExternal: vi.fn(),
   invalidate: vi.fn(),
   send: vi.fn(),
   readToken: vi.fn(),
@@ -17,10 +20,14 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('../deepLink', () => ({ getDeepLinkMainWindow: () => mocks.main }));
 vi.mock('../secondary-windows', () => ({ isSecondaryAppWindow: (win: unknown) => win === mocks.secondary }));
+vi.mock('../scheduler-host/webhook/runtime.js', () => ({ getScheduleWebhookHost: () => ({
+  connectGithub: mocks.connectGithub, githubStatus: mocks.githubStatus,
+}) }));
 vi.mock('electron', () => ({
+  shell: { openExternal: mocks.openExternal },
   app: { getPath: () => '/test/userData', once: (_event: string, dispose: () => void) => mocks.disposers.push(dispose) },
   ipcMain: {
-    handle: (name: string, fn: (...args: any[]) => unknown) => mocks.handlers.set(name, fn),
+    handle: (name: string, fn: (...args: unknown[]) => unknown) => mocks.handlers.set(name, fn),
   },
   BrowserWindow: {
     getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mocks.send } }],
@@ -40,7 +47,7 @@ vi.mock('../git-context/githubSetup', () => ({
 }));
 import { openGithubSignIn, readGithubConnection, registerGithubSetupIpc } from '../git-context/githubSetupIpc';
 import { readGhostSecret } from '../secrets/providerSecretStore';
-import { outboundFetch } from '../maker-host/outbound-fetch';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus';
 
 beforeEach(() => {
@@ -88,6 +95,39 @@ describe('GitHub setup IPC boundary', () => {
     expect(mocks.start).not.toHaveBeenCalled();
     start({});
     expect(mocks.start).toHaveBeenCalledOnce();
+  });
+  it('opens only fixed GitHub authorization and installation paths for trusted callers', async () => {
+    registerGithubSetupIpc(vi.fn());
+    const connect = mocks.handlers.get('git-context:github-app:connect')!;
+    mocks.connectGithub.mockResolvedValue('https://github.com/login/oauth/authorize?state=synthetic');
+    await connect({});
+    expect(mocks.openExternal).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?state=synthetic');
+    mocks.openExternal.mockClear();
+    mocks.connectGithub.mockResolvedValue('https://attacker.test/login/oauth/authorize');
+    await expect(connect({})).rejects.toThrow();
+    expect(mocks.openExternal).not.toHaveBeenCalled();
+    expect(() => connect({}, { url: 'https://github.com' })).toThrow();
+    mocks.guard.mockImplementationOnce(() => { throw new Error('untrusted'); });
+    expect(() => connect({})).toThrow('untrusted');
+  });
+  // Star is a local fixed-target action: arbitrary payloads and untrusted frames cannot write.
+  it('guards the Star endpoints and uses the existing GitHub credential source', async () => {
+    registerGithubSetupIpc(vi.fn());
+    const star = mocks.handlers.get('git-context:github-star:add')!;
+    const check = mocks.handlers.get('git-context:github-star:check')!;
+    expect(() => star({}, { repo: 'other/repo' })).toThrow();
+    mocks.guard.mockImplementationOnce(() => { throw new Error('untrusted'); });
+    expect(() => star({})).toThrow('untrusted');
+    expect(outboundFetch).not.toHaveBeenCalled();
+    mocks.readToken.mockResolvedValue('fake-cli-token');
+    vi.mocked(outboundFetch).mockImplementation(async url => url === 'https://api.github.com/user'
+      ? new Response(JSON.stringify({ login: 'test-user' })) : new Response(null, { status: 204 }));
+    expect(await check({})).toBe(true);
+    expect(await star({})).toBe(true);
+    expect(outboundFetch).toHaveBeenLastCalledWith(
+      'https://api.github.com/user/starred/makecindy/cindy',
+      expect.objectContaining({ method: 'PUT', headers: expect.objectContaining({ Authorization: 'Bearer fake-cli-token' }) }),
+    );
   });
   it('clears both caches before notifying every window', () => {
     const invalidate = vi.fn();

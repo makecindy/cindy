@@ -98,7 +98,7 @@ async function copyRemoteFile(
     );
     if (!match || match[1].length > 1024 * 1024)
       throw new Error("INVALID_INLINE_FILE");
-    target.write(Uint8Array.from(atob(match[1]), (char) => char.charCodeAt(0)));
+    target.writeSync(Uint8Array.from(atob(match[1]), (char) => char.charCodeAt(0)));
     return target;
   }
   if (signal || maxBytes !== undefined || onProgress) return downloadCancellable(url, target, signal ?? new AbortController().signal, maxBytes, onProgress);
@@ -248,7 +248,7 @@ export function createExpoRemoteMediaDiskCacheIO(namespace?: string): RemoteMedi
       // 原子写:先写临时文件,再 overwrite move 顶替正式 index——覆盖写中途
       // App 被杀不会留下截断 JSON(损坏索引会让全部落盘文件变成不可回收孤儿)。
       const tmp = new File(dir, INDEX_TMP_NAME);
-      tmp.write(text);
+      tmp.writeSync(text);
       tmp.moveSync(new File(dir, INDEX_FILE_NAME), { overwrite: true });
     },
     fileExists(name) {

@@ -114,9 +114,9 @@ describe('controlled banner placement', () => {
     );
     expect(todoListSource).toContain('data-plan-pill-anchor="true"');
     expect(todoListSource).toContain('data-plan-flyout-positioner="composer"');
-    expect(overlayMetricsSource).toContain(
-      'const mutationObserver = new MutationObserver(() => syncResizeTargetsAndMeasure(true));',
-    );
+    expect(overlayMetricsSource).toContain('const mutationObserver = new MutationObserver(() => {');
+    // Flyout mutations request a pre-paint resize observation of the overlay.
+    expect(overlayMetricsSource).toContain('ro.unobserve(overlayEl);\n      ro.observe(overlayEl);');
     expect(overlayMetricsSource).toContain(
       'mutationObserver.observe(overlayEl, { childList: true, subtree: true });',
     );

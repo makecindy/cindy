@@ -7,6 +7,8 @@ import type { ResolveRemoteMediaFn } from '@/session/remoteMedia';
 
 // This suite exercises attachments; MCP App's native WebView is covered by mcpAppCard.test.tsx.
 vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
+// Card previews have their own regression suite; do not load Expo's native viewer in this attachment suite.
+vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
 // The shared message renderer also imports the site-video native surface.
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
 vi.mock('expo-modules-core', () => ({

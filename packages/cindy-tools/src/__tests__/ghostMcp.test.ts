@@ -2145,11 +2145,15 @@ describe('connect_account transport', () => {
       expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined }, expect.any(AbortSignal));
       await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'im-telegram' } });
       expect(connectAccount).toHaveBeenLastCalledWith({ kind: 'host', id: 'im-telegram', reauthorize: undefined }, expect.any(AbortSignal));
+      // #9250: the settings adapter existed, but the real MCP whitelist rejected iMessage.
+      expect(tools.tools.find(tool => tool.name === 'connect_account')?.description).toContain('im-imessage');
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'im-imessage' } });
+      expect(connectAccount).toHaveBeenLastCalledWith({ kind: 'host', id: 'im-imessage', reauthorize: undefined }, expect.any(AbortSignal));
       for (const id of ['invented', 'im-unknown']) {
         const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id } });
         expect(rejected.isError).toBe(true);
       }
-      expect(connectAccount).toHaveBeenCalledTimes(2);
+      expect(connectAccount).toHaveBeenCalledTimes(3);
     } finally { await client.close(); await server.close(); }
   });
 

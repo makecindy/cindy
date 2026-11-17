@@ -22,6 +22,7 @@ export const SETUP_MIGRATION_IPC = {
   APPLY: 'setup-migration:apply',
   STATE: 'setup-migration:state',
   DISMISS: 'setup-migration:dismiss',
+  FIRST_RUN_GUIDE: 'setup-migration:first-run-guide',
   PROGRESS: 'setup-migration:progress',
   /** Renderer → Main: this window can answer interface-preference reads for another computer. */
   HOST_READY: 'setup-migration:host-ready',
@@ -294,12 +295,19 @@ export interface SetupMigrationState {
     finishedAt: number;
     checklist: SetupMigrationChecklistItem[];
   } | null;
-  /** A computer worth suggesting on this new computer; null when no suggestion applies. */
-  suggestion: { deviceId: string; name: string } | null;
+}
+
+/** Main's one-time answer after a sign-in (or entering local mode) on this computer. */
+export interface SetupMigrationFirstRunGuide {
+  /** True once per account on this computer: show the get-started guide now. */
+  show: boolean;
+  /** Another computer of this account holds something worth copying here. */
+  migration: boolean;
+  /** Data of an earlier app version was brought over during this sign-in. */
+  legacyMigrated: boolean;
 }
 
 export type SetupMigrationDismissRequest =
-  | { kind: 'suggestion' }
   | { kind: 'checklist-item'; id: string }
   | { kind: 'checklist' };
 
@@ -309,6 +317,11 @@ export interface SetupMigrationApi {
   apply(request: SetupMigrationApplyRequest): Promise<SetupMigrationApplyResponse>;
   state(): Promise<SetupMigrationState>;
   dismiss(request: SetupMigrationDismissRequest): Promise<SetupMigrationState>;
+  /**
+   * Ask after a sign-in or local-mode entry made in this run (not a session restored at
+   * startup). Main answers `show: true` at most once per account on this computer.
+   */
+  firstRunGuide(): Promise<SetupMigrationFirstRunGuide>;
   onProgress(listener: (progress: SetupMigrationProgress) => void): () => void;
   host: {
     ready(): void;

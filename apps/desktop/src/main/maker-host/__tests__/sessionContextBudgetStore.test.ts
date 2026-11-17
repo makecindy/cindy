@@ -5,10 +5,13 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ dir: '' }));
-vi.mock('../../appSessionState.js', async () => {
+vi.mock('../../ownerContext.js', async () => {
   const nodePath = await import('node:path');
   return {
-    ownerScopedUserDataPath: (...parts: string[]): string => nodePath.join(state.dir, ...parts),
+    configureOwnerContext: () => {},
+    ownerScopedPath: (...parts: string[]): string => nodePath.join(state.dir, ...parts),
+    hasCommittedOwner: () => true,
+    ownerGeneration: () => 0,
   };
 });
 

@@ -4,9 +4,18 @@
  * device that never saw a companion seeds it, so neither may rewind a position another advanced.
  */
 
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+const config = vi.hoisted(() => ({ data: {} as Record<string, unknown>, fail: false }));
+vi.mock('../../appSessionState.js', () => ({ ownerScopedUserDataPath: () => '/unused/read-ledger-test' }));
+vi.mock('electron-store', () => ({ default: class {
+  get(key: string, fallback?: unknown) { return config.data[key] ?? fallback; }
+  set(value: Record<string, unknown>) {
+    if (config.fail) throw new Error('write failed');
+    config.data = { ...config.data, ...structuredClone(value) };
+  }
+} }));
 
-import { applyBotReadPositions, normalizeBotReadState, pruneBotReadPositions } from '../botReadStateStore';
+import { applyBotReadPositions, normalizeBotReadState, pruneBotReadPositions, seedBotReadPositions, markBotReadPositions, loadBotReadState, loadAcknowledgedBotReadState, onBotReadStateChanged } from '../botReadStateStore';
 
 it('only moves positions forward and lets a seed fill only a missing position', () => {
   const current = { 'bot-1': 200, 'group:g': 100 };
@@ -31,4 +40,24 @@ it('prunes deleted companions and local groups only when that kind is listed, ne
     next: { 'bot-1': 1, 'group:g': 3, 'group:gone': 4, 'thread:t': 5 }, changed: ['bot-gone'],
   });
   expect(pruneBotReadPositions(current, { groupIds: ['g'] }).changed).toEqual(['group:gone']);
+});
+
+// Actual persisted API with a minimal atomic config get/set fake, not a merge copy.
+// Protects the merge with local read positions: seed != ack, and old ledgers remain readable.
+it('preserves legacy acknowledgements but never promotes new seeds, including after failed writes', () => {
+  config.data = { positions: { legacy: 90 } }; config.fail = false;
+  const changed = vi.fn(); const off = onBotReadStateChanged(changed);
+  try {
+    seedBotReadPositions({ fresh: 200 });
+    expect(loadBotReadState()).toEqual({ legacy: 90, fresh: 200 });
+    expect(loadAcknowledgedBotReadState()).toEqual({ legacy: 90 });
+    // A real read below an automatic seed remains a distinct user intention.
+    markBotReadPositions({ fresh: 150 });
+    expect(loadAcknowledgedBotReadState()).toEqual({ legacy: 90, fresh: 150 });
+    expect(loadBotReadState().fresh).toBe(200); // upstream scalar contract retained
+    changed.mockClear(); config.fail = true;
+    expect(() => markBotReadPositions({ fresh: 300 })).toThrow('write failed');
+    expect(loadAcknowledgedBotReadState().fresh).toBe(150);
+    expect(changed).not.toHaveBeenCalled();
+  } finally { config.fail = false; off(); }
 });

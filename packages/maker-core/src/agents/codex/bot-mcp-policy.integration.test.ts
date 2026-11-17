@@ -36,7 +36,7 @@ it.skipIf(!binaryPath).each([
     if (req.url === '/responses') {
       requests.push(message);
       const item = requests.length === 1
-        ? { type: 'custom_tool_call', id: 'fc', call_id: 'call', name: 'exec', input: 'text(await tools.mcp__cindy_helper__routine_list({}));' }
+        ? { type: 'custom_tool_call', id: 'fc', call_id: 'call', name: 'exec', input: 'text(await tools.mcp__cindy_helper__list_agents({}));' }
         : { type: 'message', role: 'assistant', id: 'msg', content: [{ type: 'output_text', text: 'fixture complete' }] };
       res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
       res.end([
@@ -57,7 +57,7 @@ it.skipIf(!binaryPath).each([
     const result = message.method === 'initialize'
       ? { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'local-fixture', version: '1' } }
       : message.method === 'tools/list'
-        ? { tools: [{ name: req.url === '/helper' ? 'routine_list' : 'external_echo', description: 'Read-only local fixture', inputSchema: { type: 'object', properties: {} } }] }
+        ? { tools: [{ name: req.url === '/helper' ? 'list_agents' : 'external_echo', description: 'Read-only local fixture', inputSchema: { type: 'object', properties: {} } }] }
         : {};
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }));
@@ -122,7 +122,7 @@ it.skipIf(!binaryPath).each([
       expect(requests).toHaveLength(2);
       expect(duringToolError).toBeUndefined();
       expect(duringToolReport?.tools.map(tool => tool.name)).toEqual(external ? ['external_echo'] : []);
-      expect(await handle.readMcpServerTools?.('cindy_helper')).toMatchObject({ state: 'connected', tools: [{ name: 'routine_list' }] });
+      expect(await handle.readMcpServerTools?.('cindy_helper')).toMatchObject({ state: 'connected', tools: [{ name: 'list_agents' }] });
       const report = await handle.readMcpServerTools?.('fixture_external');
       if (external) expect(report).toMatchObject({ state: 'connected', tools: [{ name: 'external_echo' }] });
       else expect(report?.tools).toEqual([]);

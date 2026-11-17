@@ -11,6 +11,7 @@ import type { TFunction } from 'i18next';
 const mocks = vi.hoisted(() => ({
   ensure: vi.fn(),
   getSnapshot: vi.fn(),
+  getError: vi.fn(),
   pendingRefresh: vi.fn(),
   getSessionScheduleBindings: vi.fn(),
   invoke: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock('../schedulesStore', () => ({
   schedulesStore: {
     ensure: mocks.ensure,
     getSnapshot: mocks.getSnapshot,
+    getError: mocks.getError,
     pendingRefresh: mocks.pendingRefresh,
   },
 }));
@@ -34,6 +36,7 @@ import {
   archiveScheduleWarningMany,
   COLD_SCHEDULE_LOAD_WAIT_MS,
   loadActiveBoundScheduleNames,
+  loadConfirmedActiveBoundScheduleNames,
 } from '../archiveScheduleWarning';
 import { __resetBindingMemoForTest } from '../scheduleBindingIndex';
 
@@ -45,6 +48,7 @@ describe('loadActiveBoundScheduleNames', () => {
     __resetBindingMemoForTest();
     mocks.ensure.mockReset();
     mocks.getSnapshot.mockReset();
+    mocks.getError.mockReset().mockReturnValue(null);
     mocks.pendingRefresh.mockReset().mockReturnValue(null);
     mocks.getSessionScheduleBindings.mockReset().mockReturnValue([]);
     mocks.invoke.mockReset().mockResolvedValue([]);
@@ -155,6 +159,40 @@ describe('loadActiveBoundScheduleNames', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Review of PR 9147: silent archive has no confirm dialog, so "could not read" must not look like "no bindings".
+  // Review of PR 9147: a failed refresh leaves the old cache in place with an error recorded.
+  it('严格读取:上次刷新失败后留下的旧缓存不算读到', async () => {
+    mocks.getSnapshot.mockReturnValue([{ id: 'a', name: 'Cached', status: 'active', targetSessionId: 'task' }]);
+    mocks.getError.mockReturnValue('list failed');
+    expect(await loadConfirmedActiveBoundScheduleNames([{ id: 'other' }])).toBeNull();
+    expect((await loadActiveBoundScheduleNames([{ id: 'task' }])).get('task')).toEqual(['Cached']);
+  });
+
+  it('严格读取:读到了才给结果,超时、失败或只有可能过期的缓存时给 null', async () => {
+    mocks.getSnapshot.mockReturnValue([{ id: 'a', name: 'Cached', status: 'active', targetSessionId: 'task' }]);
+    expect((await loadConfirmedActiveBoundScheduleNames([{ id: 'task' }]))?.get('task')).toEqual(['Cached']);
+    expect((await loadConfirmedActiveBoundScheduleNames([{ id: 'other' }]))?.size).toBe(0);
+
+    vi.useFakeTimers();
+    try {
+      mocks.pendingRefresh.mockReturnValue(new Promise(() => {}));
+      const stalled = loadConfirmedActiveBoundScheduleNames([{ id: 'task' }]);
+      await vi.advanceTimersByTimeAsync(COLD_SCHEDULE_LOAD_WAIT_MS);
+      expect(await stalled).toBeNull();
+
+      mocks.pendingRefresh.mockReturnValue(null);
+      mocks.invoke.mockReturnValue(new Promise(() => {}));
+      mocks.getSessionScheduleBindings.mockReturnValue([]);
+      const remote = loadConfirmedActiveBoundScheduleNames([{ id: 'a', deviceLinkDeviceId: 'mac-2' }]);
+      await vi.advanceTimersByTimeAsync(COLD_SCHEDULE_LOAD_WAIT_MS);
+      expect(await remote).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    mocks.invoke.mockReset().mockRejectedValue(new Error('offline'));
+    expect(await loadConfirmedActiveBoundScheduleNames([{ id: 'a', deviceLinkDeviceId: 'mac-2' }])).toBeNull();
   });
 
   it('本机与冷远程设备同时读取,共用一个等待窗口', async () => {

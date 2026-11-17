@@ -1,4 +1,4 @@
-import { DeviceLinkError, PeerRecoveryScheduler } from '@cindy/device-link';
+import { DeviceLinkError, PeerRecoveryScheduler, shortDeviceRef } from '@cindy/device-link';
 
 const PERMANENT_SUBSCRIPTION_REPLAY_CODES: ReadonlySet<string> = new Set([
   'VERSION_MISMATCH',
@@ -79,7 +79,7 @@ export function createSubscriptionReplayScheduler(
     } catch (error) {
       const retry = !options.isPermanentError(error, deviceId);
       options.log.warn(
-        `device-link replay subscriptions failed for ${deviceId.slice(0, 8)}, ` +
+        `device-link replay subscriptions failed for ${shortDeviceRef(deviceId)}, ` +
         `${retry ? 'retrying with backoff' : 'permanent, giving up'}: ${String(error)}`,
       );
       return { retry };

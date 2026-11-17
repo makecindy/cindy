@@ -660,6 +660,41 @@ describe('createResponsesChatHandler', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('answers an unsupported-feature error from another module copy with a terminal 400 (#9344)', async () => {
+    const translate = await import('../translate-request.js');
+    const spy = vi.spyOn(translate, 'translateResponsesRequestWithContext').mockImplementation(() => {
+      // 另一份 @cindy/model-compat 实例抛出的同名错误:instanceof 不成立,name 成立。
+      throw Object.assign(
+        new Error('Responses feature is not supported by the Chat Completions bridge: input[1].content'),
+        { name: 'UnsupportedResponsesFeatureError' },
+      );
+    });
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const warn = vi.fn();
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl, logger: { warn } });
+    const res = new FakeResponse();
+
+    try {
+      await handler.handle({
+        parsedBody: {
+          model: 'custom-model',
+          input: [{ type: 'message', role: 'user', content: 'hello' }],
+        },
+        res: res as never,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(res.status).toBe(400);
+    expect(res.chunks.join('')).toContain('unsupported_feature');
+    expect(res.chunks.join('')).toContain('input[1].content');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('keeps a required tool_choice when another tool survives beside web_search', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));

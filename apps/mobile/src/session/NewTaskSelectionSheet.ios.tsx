@@ -19,6 +19,8 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
   const glassStyle = useNativeGlassButtonStyle({ prominent: true });
   const browsing = p.page === 'directory';
   const unavailable = p.busy || p.loading;
+  const workspaceUnavailable = p.busy || !!p.workspaceLoading;
+  const displayError = p.error || p.actionError;
   const icon = (name: 'laptopcomputer' | 'folder' | 'bubble.left' | 'folder.badge.plus' | 'chevron.right' | 'arrow.up') =>
     <Image systemName={name} size={iconSize.lg} />;
   return (
@@ -28,9 +30,10 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
       onClosed={p.onClosed}
       onBack={browsing ? p.onBack : undefined}
       backLabel={t('shared.back')}
-      title={t(p.page === 'device' ? 'session.new.selectControlledDevice' : browsing ? 'session.new.chooseOtherFolder' : 'session.new.selectWorkspace')}
+      title={p.page === 'workspace' && p.workspaceTitle ? p.workspaceTitle : t(p.page === 'device' ? 'session.new.selectControlledDevice' : browsing ? 'session.new.chooseOtherFolder' : 'session.new.selectWorkspace')}
       testID="newSession.selectionSheet"
       nativeContent
+      preventDismiss={p.busy}
       footer={browsing ? (
         <Button
           onPress={() => { if (p.path && !unavailable && !p.error) p.onChoose(p.path); }}
@@ -47,20 +50,22 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           selected={device.deviceId === p.selectedDeviceId} disabled={p.busy}
           onPress={() => p.onDevice(device.deviceId)} testID="newSession.deviceOption" />)}
       </Section> : p.page === 'workspace' ? <>
+        {p.workspaceLoading ? <Section><ProgressView /></Section> : null}
+        {displayError ? <Section><NativeErrorNotice message={displayError} /></Section> : null}
         <Section>
           <ComposerNativeRow title={t('session.new.workspaceDialogue')} leading={icon('bubble.left')}
-            selected={p.workspaceKind === 'dialogue'} disabled={p.busy}
+            selected={p.workspaceKind === 'dialogue'} disabled={workspaceUnavailable}
             onPress={p.onDialogue} testID="newSession.workspaceDialogueOption" />
         </Section>
         {p.workspaces.length ? <Section>
           {p.workspaces.map(workspace => <ComposerNativeRow key={workspace.workingDir}
             title={workspace.title} subtitle={workspace.workingDir} leading={icon('folder')}
             selected={p.workspaceKind === 'project' && workspacePathsEqual(p.workingDir, workspace.workingDir)}
-            disabled={p.busy} onPress={() => p.onProject(workspace.workingDir)} testID="newSession.workspaceProjectOption" />)}
+            disabled={workspaceUnavailable || workspace.disabled} onPress={() => p.onProject(workspace.workingDir)} testID="newSession.workspaceProjectOption" />)}
         </Section> : null}
         <Section>
           <ComposerNativeRow title={t('session.new.chooseOtherFolder')} leading={icon('folder.badge.plus')}
-            accessory={icon('chevron.right')} disabled={p.busy} onPress={p.onBrowse} testID="newSession.workspaceBrowseOption" />
+            accessory={icon('chevron.right')} disabled={workspaceUnavailable} onPress={p.onBrowse} testID="newSession.workspaceBrowseOption" />
         </Section>
       </> : browsing ? <>
         <Section>
@@ -79,9 +84,9 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
             onIsOnChange={p.onShowHidden} modifiers={[disabled(p.busy), tint(colors.inputCaret)]} testID="newSession.remoteBrowseShowHidden" />
         </Section>
         {p.loading ? <Section><ProgressView /></Section> : null}
-        {p.error ? <Section><NativeErrorNotice message={p.error} /></Section> : null}
+        {displayError ? <Section><NativeErrorNotice message={displayError} /></Section> : null}
         <Section>
-          {!p.loading && !p.error && p.entries.length === 0 ? <Text>{newSessionText('emptyDirectory')}</Text> : null}
+          {!p.loading && !displayError && p.entries.length === 0 ? <Text>{newSessionText('emptyDirectory')}</Text> : null}
           {p.entries.map(entry => <ComposerNativeRow key={entry.path} title={entry.name}
             leading={icon('folder')} accessory={icon('chevron.right')} disabled={unavailable}
             onPress={() => p.onEnter(entry.path)} testID="newSession.remoteBrowseEnterEntry" />)}

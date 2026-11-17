@@ -420,6 +420,7 @@ describe('replyContextOf', () => {
       }),
     });
     expect(replyContextOf(m)).toEqual({
+      sentAt: 1753000000000,
       messageId: '1',
       author: 'Bob',
       text: '昨天的部署日志在这',
@@ -434,6 +435,7 @@ describe('replyContextOf', () => {
       }),
     });
     expect(replyContextOf(m)).toEqual({
+      sentAt: 1753000000000,
       messageId: '1',
       author: 'Cindy',
       text: '已完成',

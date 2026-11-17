@@ -30,7 +30,7 @@ vi.mock('../../../localDb/ipc/sessions.js', () => ({
 vi.mock('../../../git-context/ghCliTokenSource.js', () => ({
   getSharedGhCliTokenSource: () => ({ readToken: h.readGh }),
 }));
-vi.mock('../../../maker-host/outbound-fetch.js', () => ({ outboundFetch: h.fetch }));
+vi.mock('../../../maker-host/outbound-fetch.desktop.js', () => ({ outboundFetch: h.fetch }));
 vi.mock('../../../secrets/providerSecretStore.js', () => ({ readGhostSecret: h.readSecret }));
 
 const request: AuthRecoveryRequest = {

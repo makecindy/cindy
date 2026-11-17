@@ -10,7 +10,7 @@
  *   - Windows：恒定 x = 8（左上角无红绿灯）。
  *   侧栏关闭 / 打开 / peek 临时浮出,按钮簇位置一律不变 —— peek 的 hover
  *   触发钮(折叠按钮)因此有稳定的触发区域。唯一的位移是 mac 进出全屏
- *   （78 ↔ 8）,保留 250ms 过渡与红绿灯出现/消失同步。
+ *   （78 ↔ 8）,保留 base 档(200ms)过渡与红绿灯出现/消失同步。
  *
  * 顺序：折叠按钮在左（紧贴红绿灯,对齐 Codex）,菜单（三横杠）在其右,
  * 再往右是任务浏览历史的「后退 / 前进」（见 SessionHistoryButtons）。
@@ -83,11 +83,12 @@ export function ChromeActions({
   return (
     <div
       className="absolute top-0 z-20 flex h-[46px] items-center gap-1"
+      data-plugin-ui-element="header"
       style={
         {
           left: x,
           // 仅 mac 进出全屏时产生位移(78↔8),与红绿灯让位过渡同步。
-          transition: 'left 250ms cubic-bezier(0.4, 0, 0.2, 1)',
+          transition: 'left var(--motion-base) var(--motion-ease-move)',
           WebkitAppRegion: 'no-drag',
         } as React.CSSProperties
       }

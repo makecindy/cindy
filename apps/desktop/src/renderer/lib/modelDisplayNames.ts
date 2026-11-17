@@ -2,6 +2,7 @@ import { localizedModelDescription } from './modelDescriptions';
 import { isCindyAutoModelId, type CatalogModel } from '@cindy/model-providers';
 import type { ProviderLogoKind } from '@cindy/model-providers/branding';
 import type { TFunction } from 'i18next';
+import { getCrossLocaleString } from '@/i18n/crossLocale';
 
 export interface ModelBrand {
   key: string;
@@ -73,16 +74,22 @@ const familyNames: Array<[RegExp, string, string]> = [
   [/^(?:Hunyuan|Hy)(?=[\d\s-]|$)/i, 'hunyuan', 'Hunyuan'],
 ];
 
-export function localizedModelName(name: string, t: TFunction, locale?: string): string {
+type TranslateWithDefault = (key: string, defaultValue: string) => string;
+
+function localizeModelFamily(name: string, translate: TranslateWithDefault): string {
   for (const [pattern, key, canonical] of familyNames) {
     const prefix = pattern.exec(name)?.[0];
     if (!prefix) continue;
-    const translated = t(`modelNames.families.${key}`, { defaultValue: prefix, ...(locale ? { lng: locale } : {}) });
+    const translated = translate(`modelNames.families.${key}`, prefix);
     if (translated === canonical || translated === prefix || translated.toLowerCase() === prefix.toLowerCase()) return name;
     const suffix = name.slice(prefix.length);
     return translated + (/^\d/.test(suffix) ? ' ' : '') + suffix;
   }
   return name;
+}
+
+export function localizedModelName(name: string, t: TFunction): string {
+  return localizeModelFamily(name, (key, defaultValue) => t(key, { defaultValue }));
 }
 
 export function localizedBrandName(brand: ModelBrand, t: TFunction): string {
@@ -100,11 +107,16 @@ export function matchesModelName(
   const brand = modelBrand(model);
   const haystack = [model.id, name, model.description, brand?.label,
     localizedModelName(name, t), localizedModelDescription(model, t),
-    ...['zh-CN', 'zh-TW', 'en'].flatMap((lng) => [
-      localizedModelName(name, t, lng),
-      brand && Object.hasOwn(brands, brand.key)
-        ? t(`modelNames.manufacturers.${brand.key}`, { lng, defaultValue: brand.label }) : '',
-    ]),
+    ...(['zh-CN', 'zh-TW', 'en'] as const).flatMap((lng) => {
+      // 语言包按需加载：这几种语言的模型名取自跨语言常驻表，不要求它们已加载。
+      const inLocale: TranslateWithDefault = (key, defaultValue) =>
+        getCrossLocaleString(lng, key) ?? defaultValue;
+      return [
+        localizeModelFamily(name, inLocale),
+        brand && Object.hasOwn(brands, brand.key)
+          ? inLocale(`modelNames.manufacturers.${brand.key}`, brand.label) : '',
+      ];
+    }),
   ].join(' ').toLowerCase();
   const compact = haystack.replace(/\s+/g, '');
   return query.trim().toLowerCase().split(/\s+/).every((part) => compact.includes(part));

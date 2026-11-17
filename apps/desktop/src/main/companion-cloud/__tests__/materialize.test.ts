@@ -22,6 +22,26 @@ function cloud(prefs: Array<{ key: string; value: unknown }>, room: unknown[] = 
 const profilePref = { key: 'companion.profile.v1', value: { name: 'Mia', description: 'helper', soul: 'I am Mia', systemPrompt: 'custom', user: 'Owner likes tea' } };
 
 describe('materializeCompanion', () => {
+  // The new local identity lookup is asynchronous: losing the account while it reads must
+  // stop before a backup, profile write or history import (cloud-companions.md §6, unit tier).
+  it('fences a local identity check that finishes after the account changed', async () => {
+    let current = true;
+    const { api } = cloud([{ ...profilePref, value: { ...profilePref.value, templateId: 'cindy' } }]);
+    const local = fakeLocal({
+      findConflictingCindy: async () => { current = false; return null; },
+      backupHome: vi.fn(async () => '/backup'),
+    });
+    local.setProfile({ status: 'active', displayName: 'Old Cindy', description: '' });
+    const { state } = memoryState();
+    await expect(materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM,
+      fence: { assertCurrent: () => { if (!current) throw new Error('OWNER_CHANGED'); } },
+    })).rejects.toThrow('OWNER_CHANGED');
+    expect(local.host.backupHome).not.toHaveBeenCalled();
+    expect(local.host.updateProfile).not.toHaveBeenCalled();
+    expect(local.host.insertHistory).not.toHaveBeenCalled();
+    expect(state.isDemoted(actor.externalId)).toBe(true);
+  });
+
   it('creates a missing companion from its cloud profile, memories and skills', async () => {
     const { api, calls } = cloud([profilePref,
       { key: 'companion.memory.v1:user_tea.md', value: { filename: 'user_tea.md', content: '---\ntitle: Tea\n---\nlikes tea' } },
@@ -357,25 +377,22 @@ describe('materializeCompanion', () => {
     expect(local.rows[0]!.content).toBe('oldest');
   });
 
-  it('brings todos, routines and the workbench along in one batch each; a routine tombstone removes it, a todo one keeps it', async () => {
+  it('brings routines and the workbench along in one batch each, ignoring an older computer\'s todo rows', async () => {
     const todo = { id: 'todo:1', title: 'Compare quotes', history: [] };
     const routine = { id: 'routine-1', input: { name: 'Daily', prompt: 'p', enabled: true, triggers: [] }, originDeviceId: 'laptop' };
     const workbench = { directories: [{ path: '/projects/game', addedAt: 'x', deviceId: 'laptop' }], tasks: {} };
     const { api } = cloud([profilePref, { key: 'companion.todo.v1:todo:1', value: todo }, { key: 'companion.todo.v1:todo:gone', value: null },
       { key: 'companion.routine.v1:routine-1', value: routine }, { key: 'companion.routine.v1:routine-gone', value: null },
       { key: 'companion.workbench.v1', value: workbench }]);
-    const applyTodos = vi.fn(async () => undefined);
     const applyRoutines = vi.fn(async () => undefined);
     const applyWorkbench = vi.fn(async () => undefined);
-    const local = fakeLocal({ applyTodos, applyRoutines, applyWorkbench });
+    const local = fakeLocal({ applyRoutines, applyWorkbench });
     const { state } = memoryState();
     await materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM });
-    // A todo tombstone only means it left the travelling window: this computer keeps its copy.
-    expect(applyTodos).toHaveBeenCalledWith('bot_mia', [todo], [], expect.anything());
     expect(applyRoutines).toHaveBeenCalledWith('bot_mia', [routine], ['routine-gone'], expect.anything());
     expect(applyWorkbench).toHaveBeenCalledWith('bot_mia', workbench, expect.anything(), { replace: false });
-    // Applied keys may be tombstoned later by this computer.
-    expect(state.bot('bot_mia')?.prefs['companion.todo.v1:todo:1']?.local).toBe(true);
+    // Teammates keep no todos: an older computer's rows are left alone.
+    expect(state.bot('bot_mia')?.prefs['companion.todo.v1:todo:1']).toBeUndefined();
   });
 
   it('lets the cloud workbench replace one this computer synced before, a tombstone included; an unsynced one joins', async () => {
@@ -389,6 +406,28 @@ describe('materializeCompanion', () => {
     applyWorkbench.mockClear();
     await materializeCompanion({ api, state: memoryState().state, host: fakeLocal({ applyWorkbench }).host, actor, roomId: async () => ROOM });
     expect(applyWorkbench).not.toHaveBeenCalled();
+  });
+
+  // Teammate V2 (cloud-companions.md §2.1): the project's rules and automations arrive from the new
+  // keys and become values this computer holds (so its later deletions upload as tombstones); a
+  // failure keeps the copy demoted for a retry, like the other parts.
+  it('hands a V2 teammate\'s rules and automations to the project, and stays demoted when they fail', async () => {
+    const automation = { config: { id: 'daily', name: 'Daily', prompt: 'p', cronExpr: '0 9 * * *' }, paused: true, originDeviceId: 'laptop' };
+    const prefs = [profilePref, { key: 'companion.project-rules.v1', value: { content: '# rules' } },
+      { key: 'companion.automation.v1:daily', value: automation }, { key: 'companion.automation.v1:gone', value: null }];
+    const applyProjectRules = vi.fn(async () => undefined);
+    const applyAutomations = vi.fn(async () => undefined);
+    const { state } = memoryState();
+    await materializeCompanion({ api: cloud(prefs).api, state, host: fakeLocal({ applyProjectRules, applyAutomations }).host, actor, roomId: async () => ROOM });
+    expect(applyProjectRules).toHaveBeenCalledWith('bot_mia', '# rules', expect.anything());
+    expect(applyAutomations).toHaveBeenCalledWith('bot_mia', [{ id: 'daily', value: automation }, { id: 'gone', value: null }], expect.anything());
+    expect(state.bot('bot_mia')?.prefs['companion.automation.v1:daily']).toMatchObject({ hash: valueHash(automation), local: true });
+    expect(state.bot('bot_mia')?.prefs['companion.project-rules.v1']).toMatchObject({ hash: valueHash({ content: '# rules' }), local: true });
+    const failing = memoryState();
+    await expect(materializeCompanion({ api: cloud(prefs).api, state: failing.state, actor, roomId: async () => ROOM,
+      host: fakeLocal({ applyProjectRules, applyAutomations: vi.fn(async () => { throw new Error('SCHEDULER_NOT_READY'); }) }).host }))
+      .rejects.toThrow('RESTORE_INCOMPLETE');
+    expect(failing.state.bot('bot_mia')?.demoted).toBe(true);
   });
 
   it('stays demoted and retries when the routines cannot be restored', async () => {

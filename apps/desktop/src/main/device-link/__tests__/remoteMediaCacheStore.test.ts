@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const removeRemote = vi.hoisted(() => vi.fn(async () => {}));
 const owner = vi.hoisted(() => ({ key: 'owner:1' }));
 vi.mock('../../appSessionState', () => ({ activeOwnerScopeKey: () => owner.key }));
-vi.mock('../mediaTransfer', () => ({ removeRemote }));
+vi.mock('../mediaTransfer.desktop', () => ({ removeRemote }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));

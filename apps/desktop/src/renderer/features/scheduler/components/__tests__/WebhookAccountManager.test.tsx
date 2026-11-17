@@ -191,6 +191,12 @@ it('发送方密钥保存后收起配置，再展开不回显已粘贴的值', a
   expect((await screen.findByLabelText(/粘贴 Linear/) as HTMLInputElement).value).toBe('');
 });
 
+it('版本认不出发送方格式时说不支持，不说暂时不可用', async () => {
+  const c = connection(); c.patch({ problem: 'unsupported', hasSecret: false }); c.render();
+  expect(await screen.findByText('当前版本不支持这个发送方的格式。')).toBeTruthy();
+  expect(screen.queryByText('接收地址暂时不可用。')).toBeNull();
+});
+
 it('已释放状态和重新连接入口不藏在配置里，仍须确认后恢复', async () => {
   const c = connection(); c.patch({ problem: 'released', url: null }); c.render();
   const reconnect = await screen.findByRole('button', { name: '重新连接' });

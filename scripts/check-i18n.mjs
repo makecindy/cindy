@@ -15,12 +15,16 @@
  *
  * locale 列表与默认语言从 apps/desktop/src/shared/locale.ts 的 SUPPORTED_LOCALES /
  * DEFAULT_LOCALE 解析,新增语言或改默认语言无需改本脚本。
+ *  - 错误(exit 1):跨语言常驻文案表 crossLocaleStrings.generated.json 与各 locale 不一致
+ *    (由 scripts/i18n-cross-locale.mjs 生成)。
  *
  * 用法:node scripts/check-i18n.mjs(root: pnpm check:i18n)
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { isCrossLocaleStringsFresh } from './i18n-cross-locale.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const localeTsPath = path.join(repoRoot, 'apps', 'desktop', 'src', 'shared', 'locale.ts');
@@ -227,6 +231,14 @@ if (missingTotal > 0 || typeConflicts.length > 0) {
   console.error(
     `\n[check-i18n] 失败:缺失 ${missingTotal} / 类型冲突 ${typeConflicts.length}。` +
       `${locales.length} 种语言的 common.json 必须 key 完全一致(CLAUDE.md 规则 17)。`,
+  );
+  process.exit(1);
+}
+
+if (!isCrossLocaleStringsFresh()) {
+  console.error(
+    '\n[check-i18n] 失败:crossLocaleStrings.generated.json 与 locale 文案不一致,' +
+      '运行 node scripts/i18n-cross-locale.mjs 重新生成。',
   );
   process.exit(1);
 }

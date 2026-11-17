@@ -1,4 +1,4 @@
-import { isBotGroupClientId, isBotGroupRuntimeFailureCode, type BotGroupRuntimeFailureCode } from '../../shared/botGroupChat.js';
+import { isBotGroupClientId, isBotGroupInTaskClientId, isBotGroupRuntimeFailureCode, type BotGroupRuntimeFailureCode } from '../../shared/botGroupChat.js';
 import { isPiImageInputUnsupportedError, isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits.js';
@@ -82,7 +82,9 @@ export async function settleClosedBotGroupTurn(
   activeInputClientId: string | null,
   preserveInput: boolean,
 ): Promise<boolean> {
-  if (preserveInput || !service || !isBotGroupClientId(activeInputClientId)) return false;
+  // A group execution answered inside an ordinary task (the group Cindy's task, a task card's task)
+  // ends with that turn too, so a runtime that closes without a terminal settles it instead of the lease timing out.
+  if (preserveInput || !service || !(isBotGroupClientId(activeInputClientId) || isBotGroupInTaskClientId(activeInputClientId))) return false;
   return service.settleLaneTurn({ sessionId, activeInputClientId, outcome: 'error',
     resultText: '', failureCode: 'RUNTIME_ERROR' });
 }

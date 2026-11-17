@@ -1,3 +1,4 @@
+import type { StandbyUsageTotal } from './providerShareAvailabilityUsage.js';
 /**
  * 供应商分享的用量账本(分享者电脑上)：按(日期、分享、受邀者、Agent、供应商、模型)聚合 token 与轮次。
  *
@@ -341,6 +342,7 @@ function parseDirectCleanupTarget(value: unknown): ProviderShareDirectCleanupTar
 export function createProviderShareUsageStore(filePath: string, options: { now?: () => number } = {}) {
   const now = options.now ?? Date.now;
   let rows: Map<string, ProviderShareUsageRow> | null = null;
+  const standbyTotals = new Map<string, StandbyUsageTotal>();
   const recentUsageIds = new Map<string, number>();
   const directReceiptRoutes = new Map<string, ProviderShareDirectReceiptRoute>();
   const directTaskLocations = new Map<string, ProviderShareDirectTaskLocation>();
@@ -407,6 +409,11 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
       }
       return result;
     };
+    const loadedStandby = readSafetyMap<StandbyUsageTotal>('standbyTotals', raw => {
+      const row = raw as StandbyUsageTotal;
+      return row && /^[a-f0-9]{64}$/.test(row.id) && Number.isSafeInteger(row.sequence) && row.sequence > 0
+        && /^\d{4}-\d{2}-\d{2}$/.test(row.day) && row.totals && COUNTERS.every(key => isCount(row.totals[key])) ? row : null;
+    }, row => row.id);
     const loadedMembers = readSafetyMap('memberGenerations', parseMemberGeneration, memberGenerationKey);
     const loadedUsageIds = readSafetyMap<[string, number]>('recentUsageIds', (raw) => {
       if (!Array.isArray(raw) || raw.length !== 2 || typeof raw[0] !== 'string'
@@ -446,6 +453,7 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
     if (parsed.incompleteThroughDay !== undefined) markIncomplete(parsed.incompleteThroughDay, false);
     else if (parsed.incomplete === true) markIncomplete();
     // All parsing/migration succeeded; publish the complete snapshot together.
+    for (const [key, row] of loadedStandby) standbyTotals.set(key, row);
     for (const [key, member] of loadedMembers) memberGenerations.set(key, member);
     for (const [key, entry] of loadedUsageIds) recentUsageIds.set(key, entry[1]);
     for (const [key, route] of loadedRoutes) {
@@ -461,6 +469,7 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
 
   function prune(map: Map<string, ProviderShareUsageRow>): void {
     const cutoff = localDay(now() - RETAIN_DAYS * 86_400_000);
+    for (const [key, row] of standbyTotals) if (row.day < cutoff) standbyTotals.delete(key);
     for (const [key, row] of map) if (row.day < cutoff) map.delete(key);
     if (map.size <= MAX_ROWS) return;
     const oldest = [...map.entries()].sort((a, b) => a[1].lastAt - b[1].lastAt);
@@ -487,7 +496,7 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
       ? new Map(directTaskLocations).set(directTaskLocationKey(commit.location), commit.location) : directTaskLocations;
     const body = JSON.stringify({ version: FILE_VERSION, rows: [...map.values()], recentUsageIds: [...recentUsageIds],
       directReceiptRoutes: [...receiptRoutes.values()], directCleanupTargets: [...directCleanupTargets.values()],
-      directTaskLocations: [...taskLocations.values()], memberGenerations: [...memberGenerations.values()],
+      standbyTotals: [...standbyTotals.values()], directTaskLocations: [...taskLocations.values()], memberGenerations: [...memberGenerations.values()],
       ...(incompleteThroughDay ? { incomplete: true, incompleteThroughDay } : {}) });
     const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
@@ -851,6 +860,39 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
       });
       await persistNow();
       return recorded;
+    },
+    /** Cumulative cloud counters and their watermarks commit in the same ledger image. */
+    importStandbyTotal(shareId: string, total: StandbyUsageTotal): Promise<void> {
+      return serializeMutation(async () => {
+        const map = load();
+        const cutoff = localDay(now() - RETAIN_DAYS * 86_400_000);
+        if (total.day < cutoff) return;
+        if (!/^[a-f0-9]{64}$/.test(total.id) || !Number.isSafeInteger(total.sequence) || total.sequence < 1
+          || !total.totals || COUNTERS.some(field => !isCount(total.totals[field]))) throw new Error('Invalid standby usage');
+        const old = standbyTotals.get(total.id);
+        if (old && old.sequence >= total.sequence) return;
+        if (old && COUNTERS.some(field => old.totals[field] > total.totals[field])) throw new Error('Standby usage decreased');
+        const identity = { day: total.day, shareId, memberId: total.memberId, kind: total.kind, providerId: total.providerId, model: total.model };
+        const key = keyOf(identity);
+        const previous = map.get(key);
+        const row = structuredClone(previous ?? { ...identity, ...emptyCounters(), lastAt: now() });
+        const delta = Object.fromEntries(COUNTERS.map(field => [field, total.totals[field] - (old?.totals[field] ?? 0)])) as Counters;
+        addCounters(row, delta);
+        if (total.memberKey && MEMBER_KEY.test(total.memberKey)) {
+          row.byMember ??= {};
+          if (row.byMember[total.memberKey]) addCounters(row.byMember[total.memberKey], delta);
+          else if (Object.keys(row.byMember).length < MAX_MEMBERS_PER_ROW) row.byMember[total.memberKey] = { ...delta };
+        }
+        row.lastAt = Math.max(row.lastAt, Date.parse(total.day));
+        map.set(key, row);
+        standbyTotals.set(total.id, structuredClone(total));
+        try { await writeNow(); }
+        catch (error) {
+          if (previous) map.set(key, previous); else map.delete(key);
+          if (old) standbyTotals.set(total.id, old); else standbyTotals.delete(total.id);
+          throw error;
+        }
+      });
     },
     /** Idempotent report from an assigned executor; IDs survive a host restart. */
     recordOnce(usageId: string, shareId: string, memberId: string,

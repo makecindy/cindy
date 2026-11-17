@@ -46,6 +46,7 @@ interface Entry {
   fetchedAt: number;
   refreshKey: string | undefined;
   inflight: boolean;
+  cancelLoad?: () => void;
   /** 本次运行里有一次查询成功返回(含「没有 PR」)。查询失败留下的空值不算,读回仍可补上。 */
   confirmed?: boolean;
   persist?: HomeSessionPrPersistTarget;
@@ -64,6 +65,16 @@ export function homeSessionPrCacheKey(scope: string, deviceId: string, sessionId
 
 export function readHomeSessionPr(key: string): HomeSessionPrInfo | null {
   return entries.get(key)?.value ?? null;
+}
+
+/** Opening the task menu must see association edits made in its details page. */
+export function expireHomeSessionPr(key: string): void {
+  const entry = entries.get(key);
+  if (!entry) return;
+  entry.cancelLoad?.();
+  // Keep known statuses during the refresh, but detach any older in-flight read
+  // so it cannot restore references removed while the menu was hidden.
+  entries.set(key, { ...entry, fetchedAt: Number.NEGATIVE_INFINITY, inflight: false, cancelLoad: undefined });
 }
 
 export function subscribeHomeSessionPr(key: string, listener: () => void): () => void {
@@ -88,7 +99,7 @@ export function subscribeHomeSessionPr(key: string, listener: () => void): () =>
  */
 export function refreshHomeSessionPr(
   key: string,
-  load: (previous: HomeSessionPrInfo | null) => Promise<HomeSessionPrInfo | null>,
+  load: (previous: HomeSessionPrInfo | null) => Promise<HomeSessionPrInfo | null> & { cancel?: () => void },
   options: { now: number; refreshKey?: string; eventful?: boolean; persist?: HomeSessionPrPersistTarget },
 ): number {
   const entry = entries.get(key);
@@ -111,7 +122,9 @@ export function refreshHomeSessionPr(
   entries.delete(key);
   entries.set(key, next);
   trimEntries();
-  void load(next.value)
+  const pending = load(next.value);
+  next.cancelLoad = pending.cancel;
+  void pending
     .then((value) => {
       if (entries.get(key) !== next) return;
       // 读回的上次结果可能在本次查询在途时才种入(冷启动已在线),load 拿到的 previous 里没有它:
@@ -124,6 +137,7 @@ export function refreshHomeSessionPr(
     .catch(() => undefined)
     .finally(() => {
       next.inflight = false;
+      next.cancelLoad = undefined;
       listeners.get(key)?.forEach((listener) => listener());
     });
   return 0;
@@ -143,21 +157,40 @@ function keepKnownStatus(value: HomeSessionPrInfo | null, known: HomeSessionPrIn
   return { ...filled, additional: value.additional.map(fill) };
 }
 
-export async function loadHomeSessionPr(
+export function loadHomeSessionPr(
   invoke: Invoke,
   deviceId: string,
   sessionId: string,
   previous: HomeSessionPrInfo | null = null,
   includeRelated = false,
+): Promise<HomeSessionPrInfo | null> & { cancel: () => void } {
+  const controller = new AbortController();
+  return Object.assign(loadHomeSessionPrData(invoke, deviceId, sessionId, previous, includeRelated, controller.signal), {
+    cancel: () => controller.abort(),
+  });
+}
+
+async function loadHomeSessionPrData(
+  invoke: Invoke,
+  deviceId: string,
+  sessionId: string,
+  previous: HomeSessionPrInfo | null,
+  includeRelated: boolean,
+  signal: AbortSignal,
 ): Promise<HomeSessionPrInfo | null> {
   const refs = await invoke<unknown>(deviceId, 'git-context:pr-refs:list', [sessionId]);
+  if (signal.aborted) return previous;
   const ref = latestPrRef(refs);
   if (!ref) return null;
   // 状态查询失败只是这一轮没拿到,不是「状态未知」:同一 PR 沿用上次已知状态
   // (已合并 / 已关闭不该退回中性图标);换了 PR 才没有可沿用的状态。
   const previousRows = previous ? [previous, ...(previous.additional ?? [])] : [];
   const selected = includeRelated && Array.isArray(refs)
-    ? (refs as SessionPrRef[]).filter(item => latestPrRef([item]) !== null).sort((a, b) => b.lastSeenAt - a.lastSeenAt).slice(0, MAX_STATUS_QUERIES)
+    ? (refs as SessionPrRef[]).filter(item => latestPrRef([item]) !== null)
+      // Match the desktop header: explicit pins and order precede recency.
+      .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)
+        || (b.priority ?? 0) - (a.priority ?? 0) || b.lastSeenAt - a.lastSeenAt)
+      .slice(0, MAX_STATUS_QUERIES)
     : [ref];
   const build = (statuses: unknown): HomeSessionPrInfo => {
     const rows = selected.map(item => {
@@ -169,9 +202,12 @@ export async function loadHomeSessionPr(
   };
   let statuses: unknown;
   try {
-    statuses = await remotePrStatuses(selected.map(prStatusQuery), sessionId, (channel, args) =>
-      invoke(deviceId, channel, args),
-    );
+    statuses = await remotePrStatuses(selected.map(prStatusQuery), sessionId, async (channel, args) => {
+      // An already-sent RPC cannot be recalled, but superseded reads must not
+      // dispatch status calls (including a later GitLab call after GitHub).
+      if (signal.aborted) throw new Error('PR read superseded');
+      return invoke(deviceId, channel, args);
+    });
   } catch {
     return build(null);
   }

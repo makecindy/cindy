@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { normalizeWorkingDir } from '@/features/cc-agent/lib/projectGrouping';
+import { useProjectLabel } from '../hooks/useProjectLabel';
 import type { Schedule, SchedulerRuntimeSnapshot } from '@cindy/maker-scheduler';
 
 import { TaskListCell } from './TaskListCell';
@@ -88,6 +89,7 @@ export function TaskListPane({
 }: Props) {
   const { t } = useTranslation();
   const [collapsed, toggleCollapsed] = useCollapsedProjects();
+  const projectLabel = useProjectLabel();
   const waitingScheduleIds = useMemo(
     () => new Set(runtimeSnapshot?.waitingSchedules.map((waiting) => waiting.scheduleId) ?? []),
     [runtimeSnapshot],
@@ -123,7 +125,7 @@ export function TaskListPane({
             ? t('newChat.folderPicker.dialogue')
             : key === OTHER_GROUP_KEY
               ? t('scheduler.list.section.otherGroup')
-              : lastPathSegment(items[0].workingDir ?? key),
+              : projectLabel(items[0].workingDir ?? key),
         schedules: sortWithinGroup(items),
         hasProjectSchedules: items.some((s) => s.source === 'project'),
       }))
@@ -134,7 +136,7 @@ export function TaskListPane({
         if (b.workingDir === DIALOGUE_GROUP_KEY) return -1;
         return 0;
       });
-  }, [schedules, t]);
+  }, [schedules, t, projectLabel]);
 
   return (
     <aside
@@ -327,6 +329,3 @@ function sortWithinGroup(items: Schedule[]): Schedule[] {
   });
 }
 
-function lastPathSegment(input: string): string {
-  return input.split(/[\\/]/).filter(Boolean).pop() ?? input;
-}

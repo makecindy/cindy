@@ -215,6 +215,7 @@ const r = await cindy.agent.requestSchedule({
 
 - `list({targetKind:'project'|'task'|'bot'})`：返回 `{targets:[{kind,id,label,detail}]}`，只含本机可用目标的名称和目录/说明，不含消息历史。插件可自行搜索和展示列表，最近活动只用于排序。
 - `resolve({target:{kind,id}})`：复核已保存或本次选择的目标，返回最新 `{kind,id,label,detail}`。只查询，不创建任务、不打开 UI、不保存绑定；固定目标失效返回 TARGET_UNAVAILABLE，不自动替换。插件可将 `{kind,id}` 存入自己的配置。project 的 id 是 Cindy 已有项目目录，task/bot 的 id 是任务/伙伴标识。
+- `resolve({session:sessionId})`：按会话查询同样的目标元数据。普通可用任务返回 `kind:'task'`，伙伴主对话返回 `kind:'bot'` 且 `id` 为伙伴 ID；伙伴的其他会话、失效或不可用会话返回 `TARGET_UNAVAILABLE`。`session` 与 `target` 必须二选一，同时传入返回 `INVALID_PARAMS`；只查询，不创建或切换会话。
 - `send({target:{kind,id},requestKey,text,context?,title?,autoTitle?,route?,permissionMode?,delivery?,attachments?})`：直接指定目标，Host 当次复核。project 在目录中新建普通任务，可传统一模型目录的 route 和已授权范围内的 permissionMode；task/bot 沿用接收方模型、权限、目录，不接受 route 或 permissionMode。`delivery` 为 `queue | steer`，缺省 queue；project 不接受 steer。steer 尝试同轮注入，不停止当前轮，空闲或插话暂不可用时入队。返回 `{taskId,accepted:true,delivery:"queue"|"steer"}` 表示实际接受路径，不表示执行完成。筛查拒绝返回 DELIVERY_REJECTED，不入队重试；ACK 未知返回 DELIVERY_UNCERTAIN，不得换键重发。不开放读取任意任务历史或改模。
 - 同一次 send 重试沿用相同 requestKey、target、内容和 delivery（缺省与 queue 等价）；同键参数变化返回 REQUEST_KEY_CONFLICT。Host 在执行前持久保留投递回执，重启后已接受的请求返回原结果，未确定结果的请求返回 DELIVERY_UNCERTAIN，不再次创建或投递。普通投递回执不保存正文或附件字节；显式委派另保存下述有界执行范围。不要通过更换 requestKey 绕过未知结果，应先让用户在 Cindy 检查。
 - `cancel({requestKey})`：使本次请求及迟到的发送失效，仅撤回本插件该请求尚未执行的输入；不会停止接收方其他输入，也不保证撤销已经开始的工作。新操作使用新的 requestKey。
@@ -281,13 +282,36 @@ autoTitle 与 title 互斥，task/bot
 插件直接调用 `cindy.tasks` 时仍需当前插件批准和自有任务归属。Agent 使用公共 Orca 工具创建、调度或管理 Worker 时，按普通任务的账号、权限档、团队成员关系和操作凭证检查；任务创建来源、插件输入标签、插件计划与卸载状态不额外设限。Worker 目录、模型和运行位置沿普通 Orca 规则，目录不是持续的 OS 隔离保证。
 
 `models()` 返回统一目录可选项的完整 route、efforts 和 supportsFastMode。用户明确选择后将 route 原样传给 create，或用 `setModel({taskId, expectedRevision, route})` 修改已有自有任务。运行中按普通任务的安全边界切换，不修改应用默认。两方法使用前检查 capabilities.operations。
+
+**远程模型执行（新增，尚未发布）**：`capabilities().remoteRoutes === true` 时，
+`create` 和 `setModel` 的完整 route 可带 `agentDeviceId`（同账号其他电脑或 `share:<shareId>`）。
+省略表示插件运行电脑；它选择 Agent 执行来源，任务记录、文件、权限和结果仍归插件运行电脑。
+先读取该能力再给统一选择器传 `allowRemote:true`，将返回的整份 route 原样保存与回传。
+旧 Host 缺少标记时只提供本机选项，不得删除 `agentDeviceId` 后重试，也不得回落本机同名供应商。
+这不支持远程 SSH 工作区或控制其他电脑上的任意任务，不增加插件的目录或工具权限。
+
+Host 在创建、改模、发送及执行接受边界按精确来源重新校验授权目录、引擎、模型、强度和 Fast。
+来源不可用或配置不再支持时返回 `ROUTE_UNAVAILABLE`，不自动换来源。
+运行中的改模按普通任务的下一次发送边界生效；`get().resolvedConfig` 与 run 的 `acceptedConfig`
+保留来源，来源变更参与 revision、配置比较及请求幂等。供应商组分配沿用宿主核验过的组绑定，
+任务配置保留所选组，不把组内正常选电脑误认为用户改了来源。
+`send / getRun / listRuns / readMessages / cancel` 沿用相同 taskId / runId，不在执行电脑另建插件任务；
+取消按该输入绑定的执行实例与轮次停止，迟到的旧执行回执不能完成新输入。
+
+```js
+const caps = await cindy.tasks.capabilities();
+const selection = await cindy.pickModel({ allowRemote: caps.remoteRoutes === true });
+if (!selection.ok) return;
+const task = await cindy.tasks.create({ requestKey, title, route: selection.route });
+// 同一 task 的发送、查结果和取消仍走 cindy.tasks，保留 taskId / runId / requestKey。
+```
 当 `capabilities().pluginDefaultModel === true` 时，持续复用任务的插件可在每次新输入前调用
 `setModel({taskId, expectedRevision, route:'plugin-default'})`。Host 当次读取本插件有效的任务模型设置（隐藏卡片时忽略旧值），
 复用 create 的模型解析规则（未指定时跟随系统辅助模型，优先 Pi 引擎与较低推理强度，最后才是当前新任务选择），只同步模型、来源、引擎、强度和 Fast，
 不改权限、目录或其它任务。返回 `{status,task}`；配置相同返回 unchanged，不反复切换。
 后续 send 使用返回 task.revision。须先处理已接受/结果不确定的旧请求，再同步下一次输入，
 不得修改旧请求的回执或为模型变化重发。旧 Host 未声明此能力时保留原任务行为，不传入该 route。
-暂不支持接管任意现有任务、远程/伙伴任务、其它配置修改、队列暂停或事件订阅。
+暂不支持接管任意现有任务、其他电脑上的任务/SSH 工作区/伙伴任务、其它配置修改、队列暂停或事件订阅。
 旧 `agent.errand` 接口不变。
 
 **后台任务（可选，需声明 `hiddenTasks`）**。任务默认可见。只有身份卡写了

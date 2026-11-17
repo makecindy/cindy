@@ -8,7 +8,6 @@
  */
 import {
   boundAgentReferenceText,
-  buildTodoReferenceHref,
   parseTodoReferenceHref,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
@@ -462,13 +461,6 @@ export function restoreComposerSlashRuntimeAliases(
     return { type: 'text', text: wire, slashCommand: wire };
   });
   return changed ? normalizeComposerDocument({ version: 1, nodes }) : document;
-}
-
-/** One of the teammate's todos, quoted from its 近况 sheet (same wire as Desktop's todo chip). */
-export function todoReferenceComposerNode(input: { botId: string; todoId: string; title: string }): ComposerMentionNode {
-  const href = buildTodoReferenceHref(input.botId, input.todoId);
-  const label = input.title.trim() || 'Todo';
-  return { type: 'mention', kind: 'todo', label, raw: `[${label.replace(/([[\]\\])/g, '\\$1')}](${href})`, href };
 }
 
 export function sessionLinkComposerNode(input: {

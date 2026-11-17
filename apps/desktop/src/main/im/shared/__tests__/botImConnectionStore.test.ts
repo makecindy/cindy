@@ -23,6 +23,7 @@ import {
   readBotImConnection,
   removeBotImConnectionRecord,
   secretKeyPrefixFor,
+  setBotImConnectionDiscordChannelAccess,
   setBotImConnectionGroupActivation,
   updateBotImConnectionRecord,
 } from '../botImConnectionStore';
@@ -127,6 +128,51 @@ describe('bot im connection store', () => {
       }),
     );
     expect(readBotImConnection('222222222222')?.groupActivation).toEqual({ '-1': 'always' });
+  });
+
+  it('keeps a Discord channel allowlist only on Discord records, drops junk ids, and treats missing as closed', async () => {
+    const guildId = '200000000000000001';
+    const channelId = '300000000000000001';
+    await addBotImConnectionRecord({ botId: 'bot-a', channel: 'telegram' }, { id: () => '111111111111' });
+    fs.writeFileSync(
+      file(),
+      JSON.stringify({
+        connections: {
+          '333333333333': {
+            botId: 'bot-a', channel: 'discord', createdAt: 5, botContextId: '9',
+            discordChannelAccess: { channels: [{ guildId, channelId, allowMembers: true }, { guildId: 'x', channelId }] },
+          },
+          '444444444444': {
+            botId: 'bot-a', channel: 'telegram', createdAt: 5, botContextId: '9',
+            discordChannelAccess: { channels: [{ guildId, channelId }] },
+          },
+          '555555555555': { botId: 'bot-a', channel: 'discord', createdAt: 5, botContextId: '9' },
+        },
+      }),
+    );
+    expect(readBotImConnection('333333333333')?.discordChannelAccess).toEqual({
+      channels: [{ guildId, channelId, allowMembers: true }],
+    });
+    expect(readBotImConnection('444444444444')?.discordChannelAccess).toBeUndefined();
+    expect(readBotImConnection('555555555555')?.discordChannelAccess).toBeUndefined();
+
+    expect((await setBotImConnectionDiscordChannelAccess('555555555555', { channels: [{ guildId, channelId }] }))?.discordChannelAccess)
+      .toEqual({ channels: [{ guildId, channelId }] });
+    // 服务器级设置随记录保存；关闭的服务器把选择收进 savedChannels，channels 只放生效的。
+    expect(
+      (await setBotImConnectionDiscordChannelAccess('555555555555', {
+        channels: [{ guildId, channelId }],
+        guilds: [{ guildId, enabled: false, mode: 'selected' }, { guildId: '200000000000000002', enabled: true, mode: 'all', allowMembers: true }],
+      }))?.discordChannelAccess,
+    ).toEqual({
+      channels: [],
+      guilds: [
+        { guildId, enabled: false, mode: 'selected', savedChannels: [{ channelId }] },
+        { guildId: '200000000000000002', enabled: true, mode: 'all', allowMembers: true },
+      ],
+    });
+    expect(await setBotImConnectionDiscordChannelAccess('444444444444', { channels: [{ guildId, channelId }] })).toBeNull();
+    expect(await setBotImConnectionDiscordChannelAccess('nope', { channels: [] })).toBeNull();
   });
 
   // 用户明确要求只归档列表、不归档 session。既有存储测试没有行级显示偏好。

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 const f = vi.hoisted(() => ({ fetch: vi.fn(), read: vi.fn(), ingest: vi.fn() }));
 vi.mock('electron', () => ({ net: { fetch: f.fetch } }));
-vi.mock('../../cindy-media/blobStore.js', () => ({ readFile: f.read, supportedMime: () => true }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ readFile: f.read, supportedMime: () => true }));
 vi.mock('../../device-link/remoteMediaPersistentCache.js', () => ({
   captureRemoteMediaCacheValidity: () => () => {},
   remoteMediaCacheGeneration: () => 0,

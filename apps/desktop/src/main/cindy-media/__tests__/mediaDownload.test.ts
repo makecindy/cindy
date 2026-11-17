@@ -5,7 +5,7 @@ import { SsrFBlockedError } from '@cindy/browser-control-runtime/ssrf-runtime';
 import { downloadMediaResult, type MediaDownloadContext } from '../mediaDownload.js';
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), release: vi.fn(async () => {}) }));
-vi.mock('../../maker-host/outbound-fetch.js', () => ({ guardedOutboundFetch: mocks.fetch }));
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ guardedOutboundFetch: mocks.fetch }));
 
 const bytes = Buffer.from('generated-media-fixture');
 function response(body: BodyInit | null = bytes, init?: ResponseInit) {

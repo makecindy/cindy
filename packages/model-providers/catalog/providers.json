@@ -2351,6 +2351,24 @@
       }
     },
     {
+      "id": "hinoki",
+      "name": "Hinoki",
+      "docsUrl": "https://hinoki.security",
+      "models": [{ "id": "hinoki-offensive", "name": "Hinoki Offensive One" }],
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://inference.hinoki.security/v1",
+          "modelsUrl": "https://inference.hinoki.security/v1/models",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://inference.hinoki.security/v1",
+          "modelsUrl": "https://inference.hinoki.security/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
       "id": "ollama-cloud",
       "name": "Ollama Cloud",
       "docsUrl": "https://docs.ollama.com/cloud",
@@ -2369,6 +2387,29 @@
         "pi": {
           "baseUrl": "https://ollama.com/v1",
           "modelsUrl": "https://ollama.com/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
+      "id": "magpie",
+      "name": "Magpie",
+      "docsUrl": "https://usemagpie.ai/docs/integrate",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "http://127.0.0.1:3425",
+          "baseUrlEditable": true,
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "http://127.0.0.1:3425/v1",
+          "baseUrlEditable": true,
+          "wireProtocol": "openai-responses"
+        },
+        "pi": {
+          "baseUrl": "http://127.0.0.1:3425/v1",
+          "baseUrlEditable": true,
           "wireProtocol": "openai-chat"
         }
       }

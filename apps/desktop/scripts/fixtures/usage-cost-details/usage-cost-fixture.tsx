@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { MessageActionBar } from '../../../src/renderer/components/chat/MessageActionBar';
 import type { UsageCostRow } from '@cindy/maker-shared/usage-cost-details';
@@ -55,7 +56,7 @@ mountPage({
     <main className="h-screen bg-content-area p-5 text-foreground">
       <div className="mx-auto max-w-xl pt-16">
         <p className="mb-4 text-14">Mission Bay · 24 秒横屏样片</p>
-        <MessageActionBar
+        <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
           align="left"
           hovered
           copyText="Mission Bay"

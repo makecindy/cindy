@@ -36,7 +36,7 @@ import { handleAssistPluginOauth, type LocalOauthDeps } from '../plugin-oauth/lo
 import { GHOST_HTML_CSP, registerGhostWebContents } from './runtime/electronSandboxAdapter.js';
 import { remoteSettingsBroadcastScript } from './remoteSettingsBroadcast.js';
 import { getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 
 interface SettingsDocument {
   pageId: string;

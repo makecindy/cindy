@@ -102,7 +102,7 @@ import {
 import { useMainListEntries } from '../../hooks/useMainListEntries';
 import { sidebarPriorityContext } from '../../lib/sidebarPriorityContext';
 import { useViewedPriorityHold } from '../../hooks/useViewedPriorityHold';
-import { projectKeyComparisonKey, type BotGroupNode } from '../../lib/projectGrouping';
+import { projectKeyComparisonKey } from '../../lib/projectGrouping';
 import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import { aggregateSessionLamps, type SessionLampAggregate } from '../../lib/sessionLampAggregation';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
@@ -120,6 +120,7 @@ import { MainListScopeHeader } from '../MainListScopeHeader';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
+import { sessionRowKey } from '../sessionRowKey';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
 import type { SessionClickHandler } from '../SessionItem';
@@ -131,7 +132,6 @@ import type {
   AutomationSessionGroup,
 } from '../../lib/automationSidebarGrouping';
 import type { Session } from '@/lib/ccAgent.types';
-import { BotAvatar } from '@/features/bots/BotAvatar';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import { resolveCollapsedProjectAttentionTone } from '../projectCollapsedAttention';
@@ -151,9 +151,6 @@ const MANUAL_PROJECT_SORT_FILTER = 'button, input, textarea, select, a, [data-no
 
 /** 设备段折叠/对话组折叠共用的段 key:本机段 'local',远程段用 deviceId。 */
 const deviceSectionKey = (deviceId: string | null) => deviceId ?? 'local';
-// 单段保留既有伙伴 key;设备分组与对话组同样按段独立记忆,不依赖任务顺序或组名。
-const botGroupKey = (botId: string, sectionKey: string) =>
-  sectionKey === DIALOGUE_GROUP_ALL_KEY ? `bot:${botId}` : `bot:${botId}:${sectionKey}`;
 
 // 优先级排序的「看的时候钉住;只有从完成未读切走才置顶」是模块生命周期内的展示态,
 // 不落盘。放模块级而不是组件 ref:ProjectsSection 重挂(含 React Strict Mode
@@ -200,15 +197,6 @@ export interface ProjectsSectionProps {
   dialogues: Session[];
   /** Full dialogue membership, including pinned rows, for group menu actions. */
   dialogueActionSessions?: readonly Session[];
-  /**
-   * 按伙伴分的组(与项目行并列混排)。
-   *
-   * 伙伴的任务归伙伴,不按工作目录散进项目组 —— 一个伙伴可以在多个项目里干活,
-   * 按目录分只会把它的对话切碎到几个组里。
-   */
-  bots?: BotGroupNode[];
-  /** 点伙伴组头的新建入口:打开这个伙伴。不给则该按钮禁用(不摆一个点了没反应的入口)。 */
-  onOpenBot?: (botId: string) => void;
   /**
    * 未经过用户筛选、但已排除“从侧栏移除”项目的候选集。
    * 用于 SidebarFilterPopover 与来源标签；隐藏项目不能从这些入口泄漏。
@@ -300,8 +288,6 @@ export function ProjectsSection({
   projects,
   dialogues,
   dialogueActionSessions = dialogues,
-  bots = [],
-  onOpenBot,
   allKnownProjects,
   dialogueCount = 0,
   allProjectKeysForOrder,
@@ -526,7 +512,6 @@ export function ProjectsSection({
       { runningSessionIds, attentionSessionIds: notifications, waitingSessionIds: waiting },
       [
         ...projects.flatMap((project) => project.sessions),
-        ...bots.flatMap((bot) => bot.sessions),
         ...dialogues,
         ...unclassified,
       ],
@@ -541,7 +526,6 @@ export function ProjectsSection({
     projects,
     dialogues,
     unclassified,
-    bots,
     remoteActivityRevision,
   ]);
   const hasPairedPriority = suppliedPriorityContext != null && priorityHold != null;
@@ -610,10 +594,9 @@ export function ProjectsSection({
     }
     for (const session of dialogues) considerRemote(session);
     for (const session of unclassified) considerRemote(session);
-    for (const bot of bots) for (const session of bot.sessions) considerRemote(session);
     absorbSessionStarting(settled);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
-  }, [projects, dialogues, unclassified, bots, remoteActivityRevision]);
+  }, [projects, dialogues, unclassified, remoteActivityRevision]);
 
   // E 期「按设备分组」:有可选远程设备（含断线缓存）+ 开关开 → 按设备切段(本机在前,
   // 远程按设备切换栏顺序);其余情况单段直渲。切段后按当前排序重排本段。
@@ -642,7 +625,6 @@ export function ProjectsSection({
   const mixedEntries = useMainListEntries({
     projects,
     dialogues,
-    bots,
     unclassified: mixedUnclassified,
     groupBy: filter.groupBy,
     groupDialogue: filter.groupDialogue,
@@ -805,7 +787,6 @@ export function ProjectsSection({
       entries.flatMap((entry) => {
         if (entry.kind === 'dialogue-group') return [scope];
         if (entry.kind === 'cindy-make-group') return [`${CINDY_MAKE_GROUP_KEY}:${scope}`];
-        if (entry.kind === 'bot-group') return [botGroupKey(entry.bot.botId, scope)];
         return [];
       });
     if (!deviceGroupingActive) {
@@ -992,7 +973,7 @@ export function ProjectsSection({
     if (entry.kind === 'session' || entry.kind === 'automation-group') {
       return (
         <SessionEntryRows
-          key={entry.kind === 'session' ? entry.session.id : `automation-group:${entry.group.id}`}
+          key={entry.kind === 'session' ? sessionRowKey(entry.session) : `automation-group:${entry.group.id}`}
           entries={[entry]}
           activeSessionId={activeSessionId}
           runningSessionIds={runningSessionIds}
@@ -1016,53 +997,6 @@ export function ProjectsSection({
           // 混排下每条散排对话各是一个单条列表,若都补顶线,会与上一行的底线叠成
           // 两根横线(2026-08-12 实机反馈)。底线已覆盖行间分割,这里只关顶线。
           showFirstDivider={false}
-        />
-      );
-    }
-    if (entry.kind === 'bot-group') {
-      const groupKey = botGroupKey(entry.bot.botId, dialogueGroupKey);
-      const isCollapsed = collapsedDialogueGroups.has(groupKey);
-      return (
-        <SessionGroupNode
-          key={groupKey}
-          sessions={entry.bot.sessions}
-          lamp={lampAgg(entry.bot.sessions)}
-          foldExemptSessionIds={lampFoldExemptIds}
-          groupIcon={
-            <BotAvatar
-              bot={{
-                name: entry.bot.displayName,
-                avatar: entry.bot.avatar,
-                avatarColor: entry.bot.avatarColor,
-              }}
-              // xs = 20px,与组头 15px 图标同一档视觉重量(头像是实心块,略小于线条图标会显轻)。
-              size="xs"
-              className="shrink-0"
-            />
-          }
-          groupTitle={entry.bot.displayName}
-          groupRunningMarker="ring"
-          createLabel={t('bots.sidebar.newTaskWith', { name: entry.bot.displayName })}
-          collapsed={isCollapsed}
-          onToggle={() => setDialogueCollapsed([groupKey], !isCollapsed)}
-          onCreateDialogue={() => onOpenBot?.(entry.bot.botId)}
-          isCreateDisabled={!onOpenBot}
-          parentSectionCollapsed={false}
-          disableSessionCollapse={disableSessionCollapse}
-          activeSessionId={activeSessionId}
-          runningSessionIds={runningSessionIds}
-          attachedSessionIds={attachedSessionIds}
-          notifications={notifications}
-          scheduleSessionIndex={scheduleSessionIndex}
-          selectedSessionIds={selectedSessionIds}
-          onSessionClick={onSessionClick}
-          onAction={onAction}
-          onRename={onRename}
-          onTogglePin={onTogglePin}
-          onMoveSession={onMoveSession}
-          projectOptions={projectOptions}
-          onScheduleAction={onScheduleAction}
-          sessionVariant={mainSessionVariant}
         />
       );
     }
@@ -1402,7 +1336,7 @@ export function ProjectsSection({
 /**
  * SessionGroupNode — 一个带标题的会话组行。
  *
- * 「对话」、伙伴与 Cindy Make 复用同一种会话分组。它们是
+ * 「对话」与 Cindy Make 复用同一种会话分组。它们是
  * 同一种东西,只差图标和标题 —— 所以参数化,不复制。默认值就是对话组的原始形态,
  * 既有调用点行为逐字不变。
  * 视觉与交互与 ProjectNode 表头**同款**(2026-08-12 用户裁决:对话组的分组 UI、
@@ -1421,7 +1355,6 @@ export function SessionGroupNode({
   headerMenu,
   onCreateDialogue,
   groupIcon,
-  groupRunningMarker = 'icon',
   groupTitle,
   createLabel,
   isCreateDisabled,
@@ -1455,13 +1388,9 @@ export function SessionGroupNode({
   headerMenu?: ReactNode;
   /**
    * 组头图标与标题。省略 = 「对话」组(本组件的原始形态)。
-   *
-   * 伙伴组与对话组是同一种东西 —— 一个带标题的会话组,只差图标和标题;所以参数化
-   * 而不是复制一份 100 行的组件出来。
+   * Cindy Make 组与对话组只差图标和标题,所以参数化而不是复制一份组件。
    */
   groupIcon?: ReactNode;
-  /** 仅不继承 currentColor 的头像需要运行色描边;线条图标直接变色。 */
-  groupRunningMarker?: 'icon' | 'ring';
   groupTitle?: string;
   /** 新建按钮的 tooltip / aria 文案。省略 = 「新任务」。 */
   createLabel?: string;
@@ -1533,19 +1462,14 @@ export function SessionGroupNode({
         )}
       >
         {/* 与 ProjectNode 一致,仅收起时汇总运行态(动画挂 wrapper)。
-            伙伴头像不继承 currentColor,显式使用静态运行色描边以兼容减弱动效;
-            Cindy Make 等线条图标直接继承运行色,不加描边。 */}
+            Cindy Make 等线条图标直接继承运行色。 */}
         <span
           className={cn(
             'inline-flex shrink-0',
             showRunning
               ? 'text-[var(--status-bar-accent)] session-status-breathing'
               : 'text-[var(--sidebar-list-muted)]',
-            showRunning &&
-              groupRunningMarker === 'ring' &&
-              'rounded-full ring-2 ring-[var(--status-bar-accent)]',
           )}
-          data-running-marker={showRunning ? groupRunningMarker : undefined}
         >
           {groupIcon ?? <MessagesSquare size={15} strokeWidth={1.8} aria-hidden />}
         </span>

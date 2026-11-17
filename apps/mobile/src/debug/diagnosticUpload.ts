@@ -71,7 +71,7 @@ export async function uploadDiagnosticSnapshot(
     if (!(await deps.consent())) return { kind: "consentRequired" };
     const events = restoreDiagnosticEvents(await deps.snapshot());
     if (!events.length) return { kind: "empty" };
-    // Same readable alphabet and XXXX-XXXX format as desktop; rejection sampling avoids bias.
+    // Same readable alphabet and region-prefixed format as desktop; rejection sampling avoids bias.
     const alphabet = "23456789ABCDEFGHJKMNPQRSTVWXYZ";
     const limit = Math.floor(256 / alphabet.length) * alphabet.length;
     let code = "";
@@ -82,7 +82,7 @@ export async function uploadDiagnosticSnapshot(
       }
     }
     if (code.length !== 8) return { kind: "failed" };
-    const uploadCode = `${code.slice(0, 4)}-${code.slice(4)}`;
+    const uploadCode = `${target.region.toUpperCase()}-${code.slice(0, 4)}-${code.slice(4)}`;
     const body = JSON.stringify({
       __topic__: "cindy-client-log",
       __source__: "mobile",

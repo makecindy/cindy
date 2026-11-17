@@ -7,11 +7,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _resetStore, addTab, ensureHydrated, getBucket } from '../../store';
 import { routeSidebarCommand } from '../detachedSidebarRouting';
-import { __resetGlobalTabsForTest, addGlobalPluginTab, getActiveGlobalTabId, setActiveGlobalTabId, subscribeRevealSessionTab } from '../../globalTabs';
+import { __resetGlobalTabsForTest, addGlobalPluginTab, getActiveGlobalTabId, getGlobalTabs, setActiveGlobalTabId, subscribeRevealSessionTab } from '../../globalTabs';
 import { __resetTabGroupsForTest, getGroupActiveTabId, setTabGroup } from '../../tabGroups';
 import { openPluginTaskTab } from '../openPluginTaskTab';
 import { _resetSidebarCommandsForTests, onRequestRightSidebarVisibility } from '../sidebarCommands';
 import { __resetSidebarTabWindowsStateForTest, __setSidebarTabWindowsStateForTest } from '@/lib/sidebarTabWindowState';
+import { openPluginUiView } from '../openPluginUiView';
+import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../../../shared/ghost';
+
+const installed = vi.hoisted(() => ({ ghosts: [] as InstalledGhost[] }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ readInstalledGhostsSnapshot: () => installed.ghosts }));
 
 vi.mock('../detachedSidebarRouting', () => ({ routeSidebarCommand: vi.fn(async () => 'attached') }));
 
@@ -35,6 +40,7 @@ beforeEach(() => {
   __resetSidebarTabWindowsStateForTest();
   _resetStore(); _resetSidebarCommandsForTests();
   rows.clear(); active.clear(); localStorage.clear(); vi.clearAllMocks();
+  installed.ghosts = [];
   vi.mocked(routeSidebarCommand).mockResolvedValue('attached');
   window.electronAPI = { localDb: { rightSidebarTabs: ipc }, platform: 'darwin' } as unknown as Window['electronAPI'];
   onRequestRightSidebarVisibility(visibility);
@@ -45,6 +51,49 @@ const taskTabs = (sessionId: string) =>
   getBucket(sessionId).tabs.filter((tab) => tab.kind === 'plugin-task').map((tab) => tab.state);
 
 describe('openPluginTaskTab', () => {
+  // Named global pages must be created and activated by the actual sidebar host,
+  // not merely persisted by its main-window mirror. Real tab owner/approval; tier: unit.
+  it.each(['attached', 'routed', 'stale-context'] as const)('opens global named pages through the sidebar owner: %s', async route => {
+    const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+      approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3,
+        id: 'sim', name: 'Sim', kind: 'chip', entry: 'main.js', version: '1',
+        mcpApps: { ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+          host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' }] } } } };
+    ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); installed.ghosts = [ghost];
+    const previous = addGlobalPluginTab('previous')!; setActiveGlobalTabId(previous.id);
+    vi.mocked(routeSidebarCommand).mockResolvedValue(route);
+    const opening = openPluginUiView('sim', 'board', null, { selected: 'one' });
+    if (route === 'stale-context') await expect(opening).rejects.toThrow('MCP_APP_HOST_NOT_READY');
+    else await opening;
+    expect(routeSidebarCommand).toHaveBeenCalledWith({ type: 'open-plugin-view', instanceId: 'sim',
+      resourceViewId: 'board', resourceInput: { selected: 'one' } });
+    const target = getGlobalTabs().find(tab => (tab.state as { resourceViewId?: string } | null)?.resourceViewId === 'board');
+    expect(getActiveGlobalTabId()).toBe(route === 'attached' ? target!.id : previous.id);
+    if (route !== 'attached') expect(target).toBeUndefined();
+  });
+  // 同一实例的不同资源有独立身份；重复打开沿原任务桶更新参数，不产生新页。
+  it('opens named task resources through the original owner and updates their input in place', async () => {
+    await openPluginTaskTab('task-1', 'sim', { resourceViewId: 'one', resourceInput: { selected: 'a' } });
+    await openPluginTaskTab('task-1', 'sim', { resourceViewId: 'two' });
+    await openPluginTaskTab('task-1', 'sim', { resourceViewId: 'one', resourceInput: { selected: 'b' } });
+    expect(taskTabs('task-1')).toEqual([
+      { instanceId: 'sim', resourceViewId: 'one', resourceInput: { selected: 'b' } },
+      { instanceId: 'sim', resourceViewId: 'two' },
+    ]);
+    expect(routeSidebarCommand).toHaveBeenLastCalledWith({ type: 'open-plugin-task', sessionId: 'task-1',
+      instanceId: 'sim', resourceViewId: 'one', resourceInput: { selected: 'b' } }, { userInitiated: true });
+  });
+  // #9496 discussion_r4533414901：省略 input 重开应清空旧参数；已有用例只覆盖显式更新。
+  // unit：真实任务桶与持久化回执；最小输入为 { selected: 'a' } 后不传 input。
+  it('clears omitted input when reopening a named task page', async () => {
+    await openPluginTaskTab('task-1', 'sim', { resourceViewId: 'one', resourceInput: { selected: 'a' } });
+    const firstId = getBucket('task-1').tabs[0].id;
+    await openPluginTaskTab('task-1', 'sim', { resourceViewId: 'one' });
+    expect(getBucket('task-1').tabs.map(tab => tab.id)).toEqual([firstId]);
+    const expected = { instanceId: 'sim', resourceViewId: 'one', resourceInput: {} };
+    expect(taskTabs('task-1')).toEqual([expected]);
+    expect(rows.get(firstId)?.state).toEqual(expected);
+  });
   // PR #6939 discussion_r4357791816：先开页、后挂载目标任务时不能丢失选中。
   // unit：无 Shell 订阅，验证真实任务桶与全局/组激活位；保留其他组与弹出窗口选择。
   it.each(['same-group', 'other-group', 'popped-out', 'passive'] as const)(

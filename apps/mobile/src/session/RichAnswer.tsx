@@ -216,7 +216,7 @@ function RichDocumentView({
     if (!node) return null;
     const visual = richVisualStyle(node, palette);
     const textStyle: TextStyle = { ...inherited };
-    const viewStyle: ViewStyle = {};
+    const viewStyle: { -readonly [K in keyof ViewStyle]: ViewStyle[K] } = {};
     for (const [key, value] of Object.entries(visual)) {
       if (
         [

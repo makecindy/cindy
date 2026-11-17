@@ -451,3 +451,8 @@ export function ghostCardLinkOpensDirectly(url: string): boolean {
     return false;
   }
 }
+
+/** Narrow navigation-only card links; never accept arbitrary Cindy commands or URL parameters. */
+export function ghostCardSessionLinkId(url: string): string | null {
+  return typeof url === 'string' ? /^cindy:\/\/session\/([A-Za-z0-9_-]{1,128})$/.exec(url)?.[1] ?? null : null;
+}

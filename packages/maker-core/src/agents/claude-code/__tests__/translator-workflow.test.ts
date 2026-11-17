@@ -25,34 +25,8 @@ function createTurnState(): TurnState {
   };
 }
 
-/**
- * 把一条 SDK system 消息喂给 translator,收集它产生的 AgentEvent。
- * 每个用例用独立 queue / ctx,互不污染。
- */
-async function translateOne(msg: Record<string, unknown>): Promise<AgentEvent[]> {
-  const queue = createAsyncQueue<AgentEvent>();
-  const ctx = {
-    rt: newRuntimeState(),
-    turn: createTurnState(),
-    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
-    getModel: () => 'claude-sonnet-4-5',
-    getEffort: () => 'high',
-    getPermissionMode: () => 'auto',
-    onSessionId: vi.fn(),
-    getSdkSessionId: () => undefined,
-    getLogTitle: () => undefined,
-    tracker: new UsageTracker(),
-  };
-  translateSdkMessage(msg as never, queue, ctx as never);
-  queue.end();
-  const events: AgentEvent[] = [];
-  for await (const event of queue) events.push(event);
-  return events;
-}
-
-async function translateSequence(messages: Record<string, unknown>[]): Promise<AgentEvent[]> {
-  const queue = createAsyncQueue<AgentEvent>();
-  const ctx = {
+function createCtx() {
+  return {
     rt: newRuntimeState(),
     turn: createTurnState(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
@@ -65,15 +39,119 @@ async function translateSequence(messages: Record<string, unknown>[]): Promise<A
     getSubagentTaskUsage: (taskId: string) =>
       taskId.endsWith('remote') ? { totalTokens: 900 } : { totalTokens: 700 },
     tracker: new UsageTracker(),
+    onTurnEnd: vi.fn(),
   };
+}
+
+async function translateOne(msg: Record<string, unknown>): Promise<AgentEvent[]> {
+  return translateSequence([msg]);
+}
+
+async function translateSequence(
+  messages: Record<string, unknown>[],
+  ctx = createCtx(),
+): Promise<AgentEvent[]> {
+  const queue = createAsyncQueue<AgentEvent>();
   for (const message of messages) {
-    translateSdkMessage(message as never, queue, ctx as never);
+    translateSdkMessage(message, queue, ctx);
   }
   queue.end();
   const events: AgentEvent[] = [];
   for await (const event of queue) events.push(event);
   return events;
 }
+
+// Regression (2026-11-10): CLI 2.1.312 emits command_lifecycle outside SDK
+// 0.3.292's SDKMessage union. Existing task_updated tests do not cover these
+// command receipts. Unit tier: exercise the real translator with queued →
+// started → completed (minimal old failure: a queued frame logs an unknown type),
+// preserving text/tools and the result-owned turn boundary in either ordering.
+describe('Claude Code translator — command lifecycle', () => {
+  function lifecycle(state: string): Record<string, unknown> {
+    return { type: 'command_lifecycle', command_uuid: 'command-1', state };
+  }
+
+  it.each(['before', 'after'] as const)(
+    'keeps completed %s result out of the text/tool stream and turn boundary',
+    async (order) => {
+      const ctx = createCtx();
+      const onToolUseStart = vi.fn();
+      const onToolResultDone = vi.fn();
+      const queue = createAsyncQueue<AgentEvent>();
+      const events: AgentEvent[] = [];
+      const collected = (async () => {
+        for await (const event of queue) events.push(event);
+      })();
+      const feed = (message: Record<string, unknown>) =>
+        translateSdkMessage(message, queue, { ...ctx, onToolUseStart, onToolResultDone });
+      const receipt = (state: string) => {
+        const turnBefore = { ...ctx.turn };
+        const usageBefore = ctx.tracker.snapshot();
+        feed(lifecycle(state));
+        expect(ctx.turn).toEqual(turnBefore);
+        expect(ctx.tracker.snapshot()).toEqual(usageBefore);
+      };
+
+      receipt('queued');
+      receipt('started');
+      feed({ type: 'system', subtype: 'init', session_id: 'sdk-session' });
+      expect(ctx.onSessionId).toHaveBeenCalledExactlyOnceWith('sdk-session');
+      feed({
+        type: 'stream_event',
+        event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Reading.' } },
+      });
+      feed({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Read', input: { file_path: 'a.txt' } }] },
+      });
+      feed({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'contents' }] } });
+      if (order === 'before') receipt('completed');
+      expect(ctx.onTurnEnd).not.toHaveBeenCalled();
+      expect(onToolUseStart).toHaveBeenCalledTimes(1);
+      expect(onToolResultDone).toHaveBeenCalledTimes(1);
+      feed({ type: 'result', subtype: 'success', result: 'Reading.', is_error: false,
+        usage: { input_tokens: 10, output_tokens: 2 }, total_cost_usd: 0, stop_reason: 'end_turn' });
+      if (order === 'after') receipt('completed');
+      queue.end();
+      await collected;
+
+      expect(events.map((event) => event.type)).toEqual(['status', 'text', 'tool_use', 'tool_result_full', 'status', 'done']);
+      expect(events[0].data).toMatchObject({ isRunning: true });
+      expect(events[1].data).toEqual({ text: 'Reading.', isFinal: false });
+      expect(events[2].data).toMatchObject({ toolUseId: 'tool-1', toolName: 'Read', input: { file_path: 'a.txt' } });
+      expect(events[3].data).toEqual({ toolUseId: 'tool-1', fullText: 'contents' });
+      expect(events[4].data).toMatchObject({ status: 'Done', isRunning: false });
+      expect(events[5].data).toMatchObject({ result: 'Reading.', usage: { input_tokens: 10, output_tokens: 2 } });
+      expect(ctx.onTurnEnd).toHaveBeenCalledTimes(1);
+      expect(ctx.log.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['cancelled', 'discarded', 'refused', 'future-state', undefined])(
+    'keeps %s receipts diagnostic without inventing a turn failure',
+    async (state) => {
+      const ctx = createCtx();
+      const events = await translateSequence([{ ...lifecycle('queued'), state }], ctx);
+      expect(events).toEqual([]);
+      expect(ctx.onTurnEnd).not.toHaveBeenCalled();
+      expect(ctx.log.warn).toHaveBeenCalledExactlyOnceWith(expect.any(String),
+        expect.objectContaining({ commandUuid: 'command-1', state }));
+    },
+  );
+
+  it('still diagnoses a malformed receipt and a genuinely unknown message type', async () => {
+    const ctx = createCtx();
+    const events = await translateSequence([
+      { type: 'command_lifecycle', state: 'queued' },
+      { type: 'future_sdk_message' },
+    ], ctx);
+    expect(events).toEqual([]);
+    expect(ctx.log.warn).toHaveBeenCalledTimes(2);
+    expect(ctx.log.warn).toHaveBeenLastCalledWith('SDK ▷ unhandled message type',
+      expect.objectContaining({ type: 'future_sdk_message' }));
+    expect(ctx.onTurnEnd).not.toHaveBeenCalled();
+  });
+});
 
 describe('Claude Code translator — workflow / task_updated', () => {
   it.each(['local_agent', 'remote_agent'] as const)(

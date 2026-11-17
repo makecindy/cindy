@@ -15,8 +15,19 @@ import * as fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Unit boundary for the Windows syscall. The real PowerShell/File.Move path is
+// exercised separately by check-windows-codex-auth-move.mjs in Windows CI.
+vi.mock('../maker-host/codex-auth-file-move', () => ({
+  moveCodexAuthFile: async (from: string, to: string) => {
+    if (fs.existsSync(to)) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+    fs.renameSync(from, to);
+  },
+}));
+
 import {
   copyCodexAuthSnapshot,
+  codexAuthLinkAcceptanceFor,
+  codexAuthPathsShareIdentity,
   inspectCodexAuthLink,
   relinkSharedCodexAuth,
   recoverCodexAuth,
@@ -74,6 +85,44 @@ function leftoverSidecars(): string[] {
 }
 
 describe('relinkSharedCodexAuth', () => {
+  // #9316 / unit: a junction aliases a directory entry, unlike a second hardlink.
+  // Exercise each mutating primitive: none may delete/replace the native auth inode.
+  describe.each(['win32', 'darwin'] as const)('directory alias (%s)', (platform) => {
+    it.each(['relink', 'snapshot', 'recover'] as const)(
+      '%s preserves the native entry',
+      async (operation) => {
+        fs.rmdirSync(path.dirname(myAuth));
+        fs.symlinkSync(path.dirname(systemAuth), path.dirname(myAuth), 'junction');
+        fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+        // An unrelated old profile may still hold a hardlink. Same-entry protection
+        // must not depend on nlink === 1 or mistake this path for a removable alias.
+        fs.linkSync(systemAuth, `${systemAuth}.other-profile`);
+        const before = fs.statSync(systemAuth, { bigint: true });
+        if (operation === 'relink') {
+          await expect(relinkSharedCodexAuth(systemAuth, myAuth, platform)).resolves.toMatchObject({
+            kind: 'same-entry',
+          });
+        } else if (operation === 'snapshot') {
+          await expect(copyCodexAuthSnapshot(systemAuth, myAuth, platform)).resolves.toMatchObject({
+            kind: 'copy-unsupported',
+          });
+        } else {
+          await expect(recoverCodexAuth(systemAuth, myAuth, platform)).resolves.toBe(true);
+        }
+        expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+        expect(fs.lstatSync(systemAuth).isSymbolicLink()).toBe(false);
+        expect(fs.statSync(systemAuth, { bigint: true })).toMatchObject({
+          ino: before.ino,
+          nlink: before.nlink,
+        });
+        expect(fs.readdirSync(path.dirname(systemAuth)).sort()).toEqual([
+          'auth.json',
+          'auth.json.other-profile',
+        ]);
+      },
+    );
+  });
+
   it.skipIf(!canLinkFile)('POSIX:myAuth 已存在→原子替换为 symlink', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     fs.writeFileSync(myAuth, MY_CONTENT);
@@ -115,27 +164,45 @@ describe('relinkSharedCodexAuth', () => {
     expect(fs.readFileSync(myAuth, 'utf-8')).toContain('rotated');
   });
 
-  it('Windows 策略保留 hardlink', async () => {
+  // #9277: Codex 0.165+ 拒绝 nlink>1。Windows 也建文件 symlink,系统文件链接数保持 1。
+  it.skipIf(!canLinkFile)('Windows 使用文件 symlink,不建立 hardlink', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
 
     const out = await relinkSharedCodexAuth(systemAuth, myAuth, 'win32');
 
-    expect(out).toMatchObject({ kind: 'linked', linkType: 'hardlink' });
-    expect(fs.lstatSync(myAuth).isSymbolicLink()).toBe(false);
+    expect(out).toMatchObject({ kind: 'linked', linkType: 'symlink' });
+    expect(fs.lstatSync(myAuth).isSymbolicLink()).toBe(true);
     expect(sameInode(systemAuth, myAuth)).toBe(true);
+    expect(fs.statSync(systemAuth).nlink).toBe(1);
   });
 
-  it('Windows 跨分区 hardlink 失败时保留原凭证', async () => {
+  it.skipIf(!canLinkFile)('Windows 存量 hardlink 被替换成 symlink,系统 nlink 回到 1', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.linkSync(systemAuth, myAuth);
+    expect(fs.statSync(systemAuth).nlink).toBe(2);
+
+    const out = await relinkSharedCodexAuth(systemAuth, myAuth, 'win32');
+
+    expect(out).toMatchObject({ kind: 'linked', linkType: 'symlink' });
+    expect(fs.lstatSync(myAuth).isSymbolicLink()).toBe(true);
+    expect(fs.statSync(systemAuth).nlink).toBe(1);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+  });
+
+  it('Windows symlink 被拒绝时不退回 hardlink,原凭证保留', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     fs.writeFileSync(myAuth, MY_CONTENT);
-    vi.spyOn(fs.promises, 'link').mockRejectedValueOnce(
-      Object.assign(new Error('cross-device link'), { code: 'EXDEV' }),
+    const link = vi.spyOn(fs.promises, 'link');
+    vi.spyOn(fs.promises, 'symlink').mockRejectedValueOnce(
+      Object.assign(new Error('operation not permitted'), { code: 'EPERM' }),
     );
 
     const out = await relinkSharedCodexAuth(systemAuth, myAuth, 'win32');
 
     expect(out.kind).toBe('link-unsupported');
+    expect(link).not.toHaveBeenCalled();
     expect(fs.readFileSync(myAuth, 'utf8')).toBe(MY_CONTENT);
+    expect(fs.statSync(systemAuth).nlink).toBe(1);
     expect(leftoverSidecars()).toEqual([]);
   });
 
@@ -174,22 +241,37 @@ describe('relinkSharedCodexAuth', () => {
 
     // 没有任何一次把 auth.json 弄丢。
     expect(outcomes.some((o) => o.kind === 'lost')).toBe(false);
-    // 至少有人成功建立了共享链接。
-    expect(outcomes.some((o) => o.kind === 'linked')).toBe(true);
-    // 终态:myAuth 存在、内容是 systemAuth、与 systemAuth 同 inode、无残留 sidecar。
     expect(fs.existsSync(myAuth)).toBe(true);
-    expect(fs.readFileSync(myAuth, 'utf-8')).toBe(SYSTEM_CONTENT);
-    expect(sameInode(systemAuth, myAuth)).toBe(true);
     expect(leftoverSidecars()).toEqual([]);
+    if (canLinkFile) {
+      // 至少有人成功建立了共享链接。
+      expect(outcomes.some((o) => o.kind === 'linked')).toBe(true);
+      // 终态:myAuth 存在、内容是 systemAuth、与 systemAuth 同 inode。
+      expect(fs.readFileSync(myAuth, 'utf-8')).toBe(SYSTEM_CONTENT);
+      expect(sameInode(systemAuth, myAuth)).toBe(true);
+    } else {
+      // 建不出 symlink:relink 走 link-unsupported,原凭证一字未动(降级路径由
+      // 独立登录负责,不在这条断言里)。
+      expect(outcomes.every((o) => o.kind === 'link-unsupported')).toBe(true);
+      expect(fs.readFileSync(myAuth, 'utf-8')).toBe(MY_CONTENT);
+    }
   });
 
   it('幂等:对已是 symlink 的 myAuth 再 relink 仍 linked、仍共享', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
 
     const first = await relinkSharedCodexAuth(systemAuth, myAuth);
-    expect(first.kind).toBe('linked');
     const second = await relinkSharedCodexAuth(systemAuth, myAuth);
 
+    if (!canLinkFile) {
+      // 建不出 symlink:两次都是 link-unsupported,凭证保持原样。
+      expect(first.kind).toBe('link-unsupported');
+      expect(second.kind).toBe('link-unsupported');
+      expect(fs.existsSync(myAuth)).toBe(false);
+      expect(leftoverSidecars()).toEqual([]);
+      return;
+    }
+    expect(first.kind).toBe('linked');
     expect(second.kind).toBe('linked');
     expect(sameInode(systemAuth, myAuth)).toBe(true);
     expect(leftoverSidecars()).toEqual([]);
@@ -239,14 +321,84 @@ describe('recoverCodexAuth', () => {
     expect(fs.existsSync(myAuth)).toBe(false);
   });
 
-  it('Windows recovery hardlink 失败时不复制 token 副本', async () => {
+  it('Windows symlink 失败时不复制凭证,由调用方独立登录', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
-    vi.spyOn(fs.promises, 'link').mockRejectedValueOnce(
-      Object.assign(new Error('cross-device link'), { code: 'EXDEV' }),
+    const link = vi.spyOn(fs.promises, 'link');
+    vi.spyOn(fs.promises, 'symlink').mockRejectedValueOnce(
+      Object.assign(new Error('operation not permitted'), { code: 'EPERM' }),
     );
 
     await expect(recoverCodexAuth(systemAuth, myAuth, 'win32')).resolves.toBe(false);
+
+    expect(link).not.toHaveBeenCalled();
     expect(fs.existsSync(myAuth)).toBe(false);
+    expect(fs.statSync(systemAuth).nlink).toBe(1);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+  });
+
+  // 测试价值(#9316 review): 重建的前提是目标此刻仍然不存在。本机 Codex 在这段
+  // 空窗里把目标重建出来(新一代凭证)时,拿旧字节覆盖它就等于丢掉刚刷新的
+  // refresh token —— 目标在,就不是「丢了」,不重建也不覆盖。
+  it('目标已被本机 Codex 重建出来时,不拿旧字节覆盖它', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+
+    const ok = await recoverCodexAuth(systemAuth, myAuth, 'win32');
+
+    expect(ok).toBe(false);
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(MY_CONTENT);
+  });
+});
+
+describe('shared credential identity', () => {
+  it.skipIf(!canLinkFile)('身份核对期间系统凭证被原子替换时,共享链接仍认账', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    const originalStat = fs.promises.stat.bind(fs.promises);
+    const oldStat = await originalStat(systemAuth, { bigint: true });
+    // 本机 Codex 原子替换系统凭证 → 新 inode。
+    const replacement = `${systemAuth}.new`;
+    fs.writeFileSync(replacement, SYSTEM_CONTENT);
+    fs.renameSync(replacement, systemAuth);
+    fs.symlinkSync(systemAuth, myAuth);
+    let firstSystemStat = true;
+    vi.spyOn(fs.promises, 'stat').mockImplementation(async (target, opts) => {
+      // 第一次读到替换前的旧代次,之后读到新代次。
+      if (String(target) === systemAuth && firstSystemStat) {
+        firstSystemStat = false;
+        return oldStat as never;
+      }
+      return originalStat(target as never, opts as never);
+    });
+
+    const sharesIdentity = await codexAuthPathsShareIdentity(myAuth, systemAuth);
+
+    expect(sharesIdentity).toBe(true);
+    expect(codexAuthLinkAcceptanceFor('linked', sharesIdentity, 'linux')).toBe('accept-shared');
+  });
+
+  it.skipIf(!canLinkFile)('relink 以 recovered 收口时,本地凭证已经共享了系统凭证', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    const originalRename = fs.promises.rename.bind(fs.promises);
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (String(to) === myAuth && String(from).includes('.linktmp')) {
+        const err = new Error('EBUSY: resource busy') as NodeJS.ErrnoException;
+        err.code = 'EBUSY';
+        throw err;
+      }
+      return originalRename(from as never, to as never);
+    });
+
+    const relink = await relinkSharedCodexAuth(systemAuth, myAuth, 'darwin');
+
+    expect(relink.kind).toBe('recovered');
+    // 重建出来的是指向系统凭证的链接:身份上已经共享。
+    const sharesIdentity = await codexAuthPathsShareIdentity(myAuth, systemAuth);
+    expect(sharesIdentity).toBe(true);
+    // 登录路径按最终身份认账 —— 不因为 relink 的分类不是 linked 就判失败。
+    expect(codexAuthLinkAcceptanceFor(relink.kind, sharesIdentity, 'linux')).toBe('accept-shared');
+    // 身份不成立时,recovered 只能退回独立副本路径(POSIX 直接判失败)。
+    expect(codexAuthLinkAcceptanceFor(relink.kind, false, 'linux')).toBe('reject');
+    expect(codexAuthLinkAcceptanceFor(relink.kind, false, 'win32')).toBe('independent-login');
   });
 });
 
@@ -324,7 +476,7 @@ describe('Windows 死 SID ACL 自愈 (#3469)', () => {
     return { calls: () => targetCalls };
   }
 
-  it('unlink EPERM → icacls 自愈成功 → 重试完成替换 (linked)', async () => {
+  it.skipIf(!canLinkFile)('unlink EPERM → icacls 自愈成功 → 重试完成替换 (linked)', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     fs.writeFileSync(myAuth, MY_CONTENT);
     const { calls } = epermRmOnce(myAuth);
@@ -338,22 +490,25 @@ describe('Windows 死 SID ACL 自愈 (#3469)', () => {
     expect(sameInode(systemAuth, myAuth)).toBe(true);
   });
 
-  it('自愈两步都失败 → 按原路径 swap-failed-intact,myAuth 原样保留', async () => {
-    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
-    fs.writeFileSync(myAuth, MY_CONTENT);
-    epermRmOnce(myAuth);
-    const execFileImpl = vi.fn().mockRejectedValue(new Error('icacls denied'));
+  it.skipIf(!canLinkFile)(
+    '自愈两步都失败 → 按原路径 swap-failed-intact,myAuth 原样保留',
+    async () => {
+      fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+      fs.writeFileSync(myAuth, MY_CONTENT);
+      epermRmOnce(myAuth);
+      const execFileImpl = vi.fn().mockRejectedValue(new Error('icacls denied'));
 
-    const out = await relinkSharedCodexAuth(systemAuth, myAuth, 'win32', execFileImpl as never);
+      const out = await relinkSharedCodexAuth(systemAuth, myAuth, 'win32', execFileImpl as never);
 
-    expect(out.kind).toBe('swap-failed-intact');
-    expect((out.error as NodeJS.ErrnoException).code).toBe('EPERM');
-    // reset 与 grant 两步都试过。
-    expect(execFileImpl).toHaveBeenCalledTimes(2);
-    expect(fs.readFileSync(myAuth, 'utf8')).toBe(MY_CONTENT);
-  });
+      expect(out.kind).toBe('swap-failed-intact');
+      expect((out.error as NodeJS.ErrnoException).code).toBe('EPERM');
+      // reset 与 grant 两步都试过。
+      expect(execFileImpl).toHaveBeenCalledTimes(2);
+      expect(fs.readFileSync(myAuth, 'utf8')).toBe(MY_CONTENT);
+    },
+  );
 
-  it('非 ACL 类失败(EBUSY)不触发自愈,行为与修复前一致', async () => {
+  it.skipIf(!canLinkFile)('非 ACL 类失败(EBUSY)不触发自愈,行为与修复前一致', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     fs.writeFileSync(myAuth, MY_CONTENT);
     const originalRm = fs.promises.rm.bind(fs.promises);

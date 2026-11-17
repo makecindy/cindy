@@ -72,14 +72,13 @@ export function ChatInviteHost({ ready }: { ready: boolean }) {
         if (home >= 0 && home === routes.length - 1) { router.push(route); return; }
         // Keep the mounted home below the joined group for every back action.
         const homeStack = home >= 0 ? routes.slice(0, home + 1) : [{ name: 'devices/index' }];
-        const nextStack = { index: homeStack.length, routes: [
+        const nextStack = { ...appStack, stale: false, index: homeStack.length, routes: [
           ...homeStack, { name: route.pathname.slice(1), params: route.params },
         ] };
-        navigation.resetRoot((nested && state ? {
-          ...state,
-          routes: state.routes.map((entry, index) => index === state.index
-            ? { ...entry, state: nextStack } : entry),
-        } : nextStack) as Parameters<typeof navigation.resetRoot>[0]);
+        // Container actions start at the focused navigator in SDK 58. Target the
+        // app stack explicitly so RESET mints its route keys, including under __root.
+        if (!appStack?.key) { router.push(route); return; }
+        navigation.dispatch({ type: 'RESET', target: appStack.key, payload: nextStack } as Parameters<typeof navigation.dispatch>[0]);
       }}
     />
   );

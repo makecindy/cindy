@@ -21,7 +21,7 @@ import {
   portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
-import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
+import { hasCommittedOwner, ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
 import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 
 const log = desktopMakerLogger.child('compaction-settings-store');
@@ -56,7 +56,7 @@ function normalize(raw: unknown): CompactionSettings {
 const stores = new Map<string, ReturnType<typeof createOverrideSettingsFile<CompactionSettings>>>();
 
 function currentStore() {
-  const ownerRoot = getActiveAppSession().dataOwnerId ? ownerScopedUserDataPath() : null;
+  const ownerRoot = hasCommittedOwner() ? ownerScopedUserDataPath() : null;
   const key = ownerRoot ?? '<no-session>';
   let store = stores.get(key);
   if (!store) {
@@ -171,7 +171,7 @@ function migratePiFromLegacyIfNeeded(ownerRoot: string | null): void {
 }
 
 function currentPiStore() {
-  const ownerRoot = getActiveAppSession().dataOwnerId ? ownerScopedUserDataPath() : null;
+  const ownerRoot = hasCommittedOwner() ? ownerScopedUserDataPath() : null;
   const key = ownerRoot ?? '<no-session>';
   let store = piStores.get(key);
   if (!store) {

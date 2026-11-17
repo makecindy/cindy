@@ -47,6 +47,7 @@ import {
   loadDeviceLinkExistingProjects,
   type ExistingRemoteProject,
 } from './remoteExistingProjects';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 /** 用户最终确认添加的远程项目,带来源 kind —— 调用方据此决定立即建会话(SSH)还是进草稿(device-link)。 */
 export type RemoteProjectTarget =
@@ -179,7 +180,11 @@ export function AddRemoteProjectDialog({
     if (!selectedTarget || selectedTarget.kind !== 'ssh') return null;
     return sshExistingProjects(sessions, selectedTarget.hostId);
   }, [selectedTarget, sessions]);
-  const existingProjects = sshExisting ?? deviceExisting;
+  // A teammate's project on that computer is reached from the teammate, not added as a project.
+  const existingProjects = useMemo(
+    () => (sshExisting ?? deviceExisting).filter((project) => !isTeammateProjectPath(project.path)),
+    [sshExisting, deviceExisting],
+  );
 
   // 打开时拉 SSH ready hosts;重置选中(配置可能在设置里改过,不保留上次状态)。
   useEffect(() => {

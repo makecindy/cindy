@@ -46,10 +46,13 @@ import {
   newClaudeGenerationState,
   noteClaudeParentStreamedOutputIncomplete,
   noteClaudeSubagent,
+  observeClaudeSpeedEvent,
   pauseClaudeGeneration,
   resetClaudeGenerationTiming,
   resumeClaudeGeneration,
+  settleClaudeSpeedRequest,
   type ClaudeGenerationState,
+  type ClaudeSpeedStreamEvent,
 } from './generation-timing.js';
 
 // ── 共享 turn / runtime 状态 ─────────────────────────────────────────────────
@@ -986,6 +989,24 @@ export function translateSdkMessage(
       return;
     }
 
+    case 'command_lifecycle': {
+      // CLI 2.1.312 emits these command receipts although SDK 0.3.292's
+      // SDKMessage union omits them. A command may be folded into another turn;
+      // completed can precede OR follow result, so it must not drive Cindy's
+      // input queue, UI status or onTurnEnd. The existing result path owns that.
+      const commandUuid = msg.command_uuid;
+      const state = msg.state;
+      if (
+        typeof commandUuid === 'string' && commandUuid.length > 0 &&
+        (state === 'queued' || state === 'started' || state === 'completed')
+      ) return;
+      // cancelled/discarded/refused can describe a command that never ran.
+      // Keep them, malformed receipts and future states diagnosable without
+      // treating a command-level receipt as a whole-turn failure or retry signal.
+      ctx.log.warn('SDK ▷ non-success or unknown command lifecycle', { commandUuid, state });
+      return;
+    }
+
     default: {
       // 未识别 type: 走 logger.warn (诊断用), 不再 emit vendor-raw —— renderer
       // default case 直接丢, 走 IPC 也是浪费。Codex translator 同款做法。
@@ -1685,41 +1706,14 @@ function observeClaudeSubagentStream(
 
 // ── stream_event 子分支(content_block_delta / message_delta / message_start) ──
 
-/** Main-thread live tok/s, mirroring pi-token-speed's message_update handlers. */
+/** Main-thread live tok/s: the stream feeds the meter, each request's usage corrects it. */
 function observeClaudeTokenSpeed(
-  event: {
-    type?: string;
-    index?: number;
-    delta?: Record<string, unknown>;
-    content_block?: { type?: string; name?: string };
-  },
+  event: ClaudeSpeedStreamEvent,
   queue: EventQueue,
   ctx: TranslateContext,
 ): void {
-  const speed = ctx.rt.generation.tokenSpeed;
-  const tools = ctx.rt.generation.tokenSpeedToolByIndex;
-  const index = typeof event.index === 'number' ? event.index : 0;
-  switch (event.type) {
-    case 'message_start':
-      tools.clear();
-      return;
-    case 'content_block_start':
-      if (event.content_block?.type === 'tool_use') tools.set(index, event.content_block.name ?? '');
-      speed.start();
-      return;
-    case 'content_block_delta': {
-      const delta = event.delta;
-      const text = delta?.type === 'input_json_delta'
-        ? (tools.has(index) ? delta.partial_json : undefined)
-        : delta?.text ?? delta?.thinking;
-      if (typeof text === 'string' && speed.recordDelta(text)) {
-        queue.push({ type: 'status', data: ccLiveStatus(ctx, 'Generating...', true), source: 'claude-code' });
-      }
-      return;
-    }
-    case 'content_block_stop':
-      if (tools.has(index)) speed.pause();
-      return;
+  if (observeClaudeSpeedEvent(ctx.rt.generation, event)) {
+    queue.push({ type: 'status', data: ccLiveStatus(ctx, 'Generating...', true), source: 'claude-code' });
   }
 }
 
@@ -1856,7 +1850,11 @@ function handleStreamEvent(
     // 第一个事件。在此停表,才能排除工具执行/审批等待,又不把参数生成
     // 区间从 tok/s 分母里抠掉。只有主流自己的 message_delta 才停主时钟:
     // 子代理 delta 到达时父级可能正在并行生成(后台 Agent),不许提前切断。
-    if (!parentToolUseId) pauseClaudeGenerationForCurrentRequestTools(ctx);
+    if (!parentToolUseId) {
+      pauseClaudeGenerationForCurrentRequestTools(ctx);
+      // The response is complete: nothing generates until the next request's first block.
+      ctx.rt.generation.tokenSpeed.pause();
+    }
     const usage = event.usage;
     if (usage) {
       const dIn = usage.input_tokens ?? 0;
@@ -1894,13 +1892,23 @@ function handleStreamEvent(
         complete: hasCompleteUsageSnapshot,
       });
       if (parentToolUseId) noteClaudeSubagent(ctx.rt.generation);
-      else if (ctx.tracker.getTurnUsage().output > previousOutput) {
-        // Upserts retain the largest output count. Input-only, duplicate, and
-        // older usage must not advance the paired denominator on their own.
-        ctx.rt.generation.outputDurationMs = sampleGenerationDuration(
-          ctx.rt.generation.durationMs,
-          ctx.rt.generation.startedAt,
-        );
+      else {
+        if (ctx.tracker.getTurnUsage().output > previousOutput) {
+          // Upserts retain the largest output count. Input-only, duplicate, and
+          // older usage must not advance the paired denominator on their own.
+          ctx.rt.generation.outputDurationMs = sampleGenerationDuration(
+            ctx.rt.generation.durationMs,
+            ctx.rt.generation.startedAt,
+          );
+        }
+        // The request's real output replaces what the stream could only estimate.
+        const calibration = settleClaudeSpeedRequest(ctx.rt.generation, mainTurnOutputTokens(ctx.tracker), usage);
+        if (calibration) {
+          ctx.log.debug('SDK ▷ token speed calibration', {
+            sdkSessionId: ctx.getSdkSessionId(),
+            ...calibration,
+          });
+        }
       }
       // 每次 API 回合的 token 增量打一行 —— 一个 turn 可能多个 message_delta(工具循环),
       // 让人看日志能直观看到 token 是怎么涨上去的, 而不是只在 turn end 看到一个总数。

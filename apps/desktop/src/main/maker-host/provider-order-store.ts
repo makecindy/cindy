@@ -11,7 +11,7 @@ import {
   mergeObservedProviderOrder,
   normalizeProviderOrder,
 } from '../../shared/providerOrder.js';
-import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { createOverrideSettingsFile, portableOverrideSettings } from './override-settings-file.js';
 

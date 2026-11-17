@@ -34,6 +34,9 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 vi.mock('@/lib/sessionAttentionStore', () => ({
   clearSessionAttentionMany: vi.fn(),
 }));
+vi.mock('../../hooks/useProjectLabel', () => ({
+  useProjectLabel: () => (workingDir: string) => workingDir,
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { exists: () => true } }),

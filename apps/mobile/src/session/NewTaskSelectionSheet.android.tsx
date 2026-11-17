@@ -38,6 +38,11 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
   // Keep the presentation kind through the closing animation, when page becomes null.
   if (p.page !== null) nativePresentation.current = p.page === "device";
   const unavailable = p.busy || p.loading;
+  const workspaceUnavailable = p.busy || !!p.workspaceLoading;
+  const displayError = p.error || p.actionError;
+  const [surfaceEpoch, setSurfaceEpoch] = useState(0);
+  // A rejected drag-dismiss must restore the height already collapsed by SheetSurface.
+  const dismiss = () => { if (p.busy) setSurfaceEpoch(value => value + 1); else p.onClose(); };
   const [snap, setSnap] = useState<ContextSheetSnap>("half");
   useEffect(() => setSnap(browsing ? "full" : "half"), [p.page, browsing]);
   const heights = useMemo(
@@ -51,7 +56,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
   const icon = (Icon: typeof Folder) => (
     <Icon size={iconSize.lg} color={colors.textSecondary} />
   );
-  const title = t(
+  const title = p.page === "workspace" && p.workspaceTitle ? p.workspaceTitle : t(
     p.page === "device"
       ? "session.new.selectControlledDevice"
       : browsing
@@ -62,14 +67,15 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
     <SheetModal
       visible={p.page !== null}
       nativePresentation={nativePresentation.current}
-      onBackdropPress={p.onClose}
+      onBackdropPress={() => { if (!p.busy) p.onClose(); }}
       onClosed={p.onClosed}
-      onRequestClose={browsing ? p.onBack : p.onClose}
+      onRequestClose={() => { if (!p.busy) (browsing ? p.onBack : p.onClose)(); }}
     >
       <SheetSurface
+        key={surfaceEpoch}
         title={title}
-        onClose={p.onClose}
-        onBack={browsing ? p.onBack : undefined}
+        onClose={dismiss}
+        onBack={browsing && !p.busy ? p.onBack : undefined}
         heights={heights}
         snap={snap}
         onSnapChange={setSnap}
@@ -102,11 +108,13 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           ))
         ) : p.page === "workspace" ? (
           <>
+            {p.workspaceLoading ? <ActivityIndicator color={colors.textSecondary} /> : null}
+            {displayError ? <ErrorNotice message={displayError} /> : null}
             <NewTaskSelectionRow
               title={t("session.new.workspaceDialogue")}
               leading={icon(MessageCircle)}
               selected={p.workspaceKind === "dialogue"}
-              disabled={p.busy}
+              disabled={workspaceUnavailable}
               onPress={p.onDialogue}
               testID="newSession.workspaceDialogueOption"
             />
@@ -120,7 +128,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
                   p.workspaceKind === "project" &&
                   workspacePathsEqual(p.workingDir, workspace.workingDir)
                 }
-                disabled={p.busy}
+                disabled={workspaceUnavailable || workspace.disabled}
                 onPress={() => p.onProject(workspace.workingDir)}
                 testID="newSession.workspaceProjectOption"
               />
@@ -129,7 +137,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
               title={t("session.new.chooseOtherFolder")}
               leading={icon(FolderPlus)}
               trailing={icon(ChevronRight)}
-              disabled={p.busy}
+              disabled={workspaceUnavailable}
               onPress={p.onBrowse}
               testID="newSession.workspaceBrowseOption"
             />
@@ -210,8 +218,8 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
             {p.loading ? (
               <ActivityIndicator color={colors.textSecondary} />
             ) : null}
-            {p.error ? <ErrorNotice message={p.error} /> : null}
-            {!p.loading && !p.error && !p.entries.length ? (
+            {displayError ? <ErrorNotice message={displayError} /> : null}
+            {!p.loading && !displayError && !p.entries.length ? (
               <Text
                 style={{
                   color: colors.textSecondary,

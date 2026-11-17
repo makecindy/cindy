@@ -33,3 +33,24 @@ p{font-size:14px;line-height:1.8;color:var(--text-secondary);margin:20px 0 0;tex
 <h1>${escapeHtml(status)}</h1><p>${escapeHtml(hint)}</p></section>
 </main></body></html>`;
 }
+
+/**
+ * Away guard cover: as close to a switched-off display as an awake one can get. One
+ * quiet line says what is going on, then fades so the screen is plain black (dark
+ * pixels on OLED panels emit nothing). Functional pixels, independent of the theme.
+ */
+export function awayScreenHtml(status: string, hint: string, fade = true): string {
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;color:#8a8a8a}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;user-select:none;display:grid;place-items:center;padding:40px;cursor:none}
+main{text-align:center;max-width:520px${fade ? ';animation:fade 1200ms ease-in 6s forwards' : ''}}
+h1{font-size:15px;font-weight:500;line-height:1.5;margin:0}
+p{font-size:13px;line-height:1.5;color:#5c5c5c;margin:8px 0 0}
+@keyframes fade{to{opacity:0}}
+${fade ? '@media(prefers-reduced-motion:reduce){main{animation:hide 0s 6s forwards}@keyframes hide{to{opacity:0}}}' : ''}
+</style></head><body><main>
+<h1>${escapeHtml(status)}</h1><p>${escapeHtml(hint)}</p>
+</main></body></html>`;
+}

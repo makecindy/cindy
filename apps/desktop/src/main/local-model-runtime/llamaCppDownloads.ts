@@ -4,7 +4,7 @@ import { mkdir, rename, rm, stat } from 'node:fs/promises';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { validLlamaCppFile, validLlamaCppRepo, type LlamaCppFile } from '../../shared/llamaCpp.js';
 
 const RELEASES = 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10';

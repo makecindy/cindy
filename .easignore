@@ -46,6 +46,20 @@ apps/mobile/docs
 apps/mobile/visual-*.png
 
 packages/*
+!packages/agent-net
+!packages/agent-net/**
+!packages/agent-net-core
+!packages/agent-net-core/**
+!packages/agent-net-native
+!packages/agent-net-native/**
+!packages/agent-net-protocol
+!packages/agent-net-protocol/**
+!packages/agent-net-relay
+!packages/agent-net-relay/**
+!packages/device-link-relay
+!packages/device-link-relay/**
+!packages/device-link-sharing
+!packages/device-link-sharing/**
 !packages/auth-client
 !packages/auth-client/**
 !packages/device-link
@@ -62,6 +76,11 @@ packages/*
 !packages/plugin-protocol/**
 !packages/voice-input-core
 !packages/voice-input-core/**
+
+# Native build sources are required; local compiler output and performance
+# evidence are not inputs to an EAS application build.
+**/target
+packages/agent-net-core/sim/results
 
 tools/*
 !tools/shared

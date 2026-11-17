@@ -18,6 +18,7 @@ import path from 'node:path';
 import { app } from 'electron';
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
 import { RELAY_VERSION } from '@cindy/device-link-relay';
+import type { Bootstrap } from '@cindy/agent-net-relay';
 import { createLogger } from '../logger.js';
 import { ensureRemoteHostReady, getRemoteSshPool } from '../remote-ssh/index.js';
 import type { RelayDeployErrorCode, RelayDeployProgressMessage, RelayDeployStep } from '../../shared/selfHostedRelay.js';
@@ -72,6 +73,13 @@ export interface DeployParams {
   assertCurrent?(): void;
   /** 检查通过、第一次改动服务器之前调用:调用方此时才保存部署记录与主人身份。 */
   onServerChange?(): void;
+  /** Obtained only after the existing owner vault has been committed; contains public material only. */
+  agentNetBootstrap?(): Bootstrap;
+  /** Public account issuer; no access token or account signing key is deployed. */
+  agentNetAuthIssuer?: string;
+  agentNetAuthRegion?: 'cn' | 'global';
+  agentNetAuthPeer?: { issuer: string; region: 'cn' | 'global' };
+  verifyAgentNet?(baseUrl: string): Promise<void>;
 }
 
 /** 只读检查的结论;检查不通过时抛出 RelayDeployError。 */
@@ -107,6 +115,14 @@ export function resolveRelayBundlePath(): string | null {
 /** 这个版本 Cindy 自带的中转版本;没带中转程序时为 null。 */
 export function bundledRelayVersion(): string | null {
   return resolveRelayBundlePath() ? RELAY_VERSION : null;
+}
+
+function agentNetBundlePath(): string | null {
+  const base = app.getAppPath();
+  return [path.join(base, '..', '..', 'packages', 'agent-net-relay', 'dist', 'relay.mjs'),
+    path.join(process.resourcesPath ?? '', 'agent-net', 'relay.mjs')].find((file) => {
+    try { return fs.statSync(file).isFile(); } catch { return false; }
+  }) ?? null;
 }
 
 function parseLines(stdout: string): Map<string, string[]> {
@@ -294,7 +310,8 @@ echo "SHA $(sha256sum ${INSTALL_DIR}/relay.new.mjs | cut -d' ' -f1)"
 
 const CONFIGURE_SCRIPT = `
 set -e
-ADDRESS="$1"; LISTEN="$2"; PUBLIC_URL="$3"; REPLACE="$4"; ACME_DIRECTORY="$5"; MODE="$6"; PORT="$7"; CHALLENGE_PORT="$8"; shift 8
+ADDRESS="$1"; LISTEN="$2"; PUBLIC_URL="$3"; REPLACE="$4"; ACME_DIRECTORY="$5"; MODE="$6"; PORT="$7"; CHALLENGE_PORT="$8"; AGENT_NET="$9"; shift 9
+if [ "$AGENT_NET" = 1 ] && [ "$MODE" = direct ]; then MODE=ingress; LISTEN=127.0.0.1; PORT=47820; fi
 NODE=${INSTALL_DIR}/node/bin/node
 if ! id cindy-relay >/dev/null 2>&1; then
   useradd --system --home-dir ${DATA_DIR} --no-create-home --shell /usr/sbin/nologin cindy-relay 2>/dev/null \\
@@ -311,13 +328,14 @@ fi
 chown -R cindy-relay:cindy-relay ${DATA_DIR}
 rm -f ${DATA_DIR}/status.json
 EXTRA=""
+if [ "$MODE" = ingress ]; then EXTRA=" --tls-at-ingress"; fi
 CAPS=""
 if [ "$MODE" != nginx-existing ]; then
-  EXTRA=" --acme-identifier $ADDRESS --acme-http-port $CHALLENGE_PORT"
+  EXTRA="$EXTRA --acme-identifier $ADDRESS --acme-http-port $CHALLENGE_PORT"
   if [ -n "$ACME_DIRECTORY" ]; then EXTRA="$EXTRA --acme-directory $ACME_DIRECTORY"; fi
 fi
 if [ "$MODE" != direct ]; then EXTRA="$EXTRA --trust-proxy"; fi
-if [ "$MODE" = direct ]; then CAPS=CAP_NET_BIND_SERVICE; fi
+if [ "$MODE" = direct ] || [ "$MODE" = ingress ]; then CAPS=CAP_NET_BIND_SERVICE; fi
 cat > /etc/systemd/system/cindy-relay.service.new <<UNIT
 [Unit]
 Description=Cindy self-hosted relay
@@ -343,7 +361,7 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 UNIT
-if [ "$MODE" = direct ]; then
+if [ "$MODE" = direct ] || [ "$MODE" = ingress ]; then
   mv -f /etc/systemd/system/cindy-relay.service.new /etc/systemd/system/cindy-relay.service
 else
   "$NODE" ${INSTALL_DIR}/relay.mjs nginx --action configure-service >/dev/null
@@ -402,6 +420,73 @@ UNIT
 fi
 `;
 
+const AGENT_NET_UPLOAD_SCRIPT = `
+set -e
+umask 022
+cat > ${INSTALL_DIR}/agent-net.new.mjs
+echo "SHA $(sha256sum ${INSTALL_DIR}/agent-net.new.mjs | cut -d' ' -f1)"
+`;
+const AGENT_NET_CONFIGURE_SCRIPT = `
+set -e
+GATEWAY=""; CAPS=""; AUTH=""
+if [ -n "$3" ]; then AUTH=" --auth-issuer $3 --auth-region $4"; fi
+if [ -n "$5" ]; then AUTH="$AUTH --auth-peer-issuer $5 --auth-peer-region $6"; fi
+if [ "$1" = 1 ]; then
+  GATEWAY=" --legacy-upstream http://127.0.0.1:47820 --tls-material ${DATA_DIR}/tls/material.json --gateway-host $2 --gateway-port 443"
+  CAPS=CAP_NET_BIND_SERVICE
+fi
+umask 077
+cat > ${DATA_DIR}/agent-net-bootstrap.json.new
+chown cindy-relay:cindy-relay ${DATA_DIR}/agent-net-bootstrap.json.new
+mv -f ${DATA_DIR}/agent-net-bootstrap.json.new ${DATA_DIR}/agent-net-bootstrap.json
+mv -f ${INSTALL_DIR}/agent-net.new.mjs ${INSTALL_DIR}/agent-net.mjs
+cat > /etc/systemd/system/cindy-agent-net.service <<UNIT
+[Unit]
+Description=Cindy private Agent-Net
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cindy-relay
+Group=cindy-relay
+ExecStart=${INSTALL_DIR}/node/bin/node ${INSTALL_DIR}/agent-net.mjs serve --data ${DATA_DIR}/agent-net --bootstrap ${DATA_DIR}/agent-net-bootstrap.json --host 127.0.0.1 --port 3348 --udp-host 0.0.0.0 --udp-port 3479$GATEWAY$AUTH
+Restart=always
+RestartSec=5
+AmbientCapabilities=$CAPS
+CapabilityBoundingSet=$CAPS
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=${DATA_DIR}
+UMask=0077
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable cindy-agent-net >/dev/null 2>&1
+systemctl restart cindy-agent-net
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then ufw allow 3479/udp >/dev/null; fi
+if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+  firewall-cmd --permanent --add-port=3479/udp >/dev/null && firewall-cmd --reload >/dev/null
+fi
+# systemctl restart only acknowledges the start job. A bind failure can put the
+# service into its restart loop before the public HTTPS check ever runs.
+for attempt in $(seq 1 15); do
+  if systemctl is-active --quiet cindy-agent-net && ${INSTALL_DIR}/node/bin/node -e '
+    fetch("http://127.0.0.1:3348/api/agent-net/info", { signal: AbortSignal.timeout(1000) })
+      .then(async r => { if (!r.ok) throw new Error(); return r.json(); })
+      .then(info => { if (info.protocolVersion !== 2 || info.mode !== "self-hosted") process.exit(1); })
+      .catch(() => process.exit(1));
+  ' >/dev/null 2>&1; then exit 0; fi
+  sleep 1
+done
+exit 24
+`;
+
 const STATUS_SCRIPT = `
 echo "ACTIVE $(systemctl is-active cindy-relay 2>/dev/null)"
 if [ -f ${DATA_DIR}/status.json ]; then echo "STATUS $(cat ${DATA_DIR}/status.json)"; fi
@@ -425,6 +510,8 @@ if [ -f /etc/cindy-relay/nginx/state.json ]; then
   rm -f /etc/systemd/system/cindy-relay-nginx.timer /etc/systemd/system/cindy-relay-nginx.service
 fi
 systemctl disable --now cindy-relay >/dev/null 2>&1 || true
+systemctl disable --now cindy-agent-net >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/cindy-agent-net.service
 rm -f /etc/systemd/system/cindy-relay.service /etc/systemd/system/cindy-relay.service.new
 systemctl daemon-reload >/dev/null 2>&1 || true
 rm -rf ${INSTALL_DIR}
@@ -622,9 +709,25 @@ async function nginxAction(remote: Remote, action: string, args: string[] = []):
 
 /** 部署或升级:服务器上已有本机主人的中转时保留数据,只换程序与配置。 */
 export async function deployRelayToServer(params: DeployParams): Promise<{ relayVersion: string }> {
+  const authIssuer = params.agentNetAuthIssuer?.replace(/\/+$/, '') ?? '';
+  const peerIssuer = params.agentNetAuthPeer?.issuer?.replace(/\/+$/, '') ?? '', authRegion = params.agentNetAuthRegion ?? 'global';
+  if (!['cn', 'global'].includes(authRegion) || params.agentNetAuthPeer && (!authIssuer || params.agentNetAuthPeer.region === authRegion
+    || !['cn', 'global'].includes(params.agentNetAuthPeer.region))) throw new RelayDeployError('DEPLOY_FAILED', 'Invalid account region');
+  for (const authIssuer of [params.agentNetAuthIssuer, peerIssuer].filter((v): v is string => !!v)) {
+    let url: URL;
+    try { url = new URL(authIssuer); } catch { throw new RelayDeployError('DEPLOY_FAILED', 'Invalid account issuer'); }
+    // This value enters systemd's ExecStart (including its percent specifiers).
+    // Keep one URL argument and reject shell/control/systemd interpolation.
+    if (url.username || url.password || url.search || url.hash || /[\s%"'`\\$]/.test(authIssuer)
+      || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))))
+      throw new RelayDeployError('DEPLOY_FAILED', 'Invalid account issuer');
+  }
   const bundlePath = resolveRelayBundlePath();
   if (!bundlePath) throw new RelayDeployError('BUNDLE_MISSING');
   const bundle = fs.readFileSync(bundlePath);
+  const agentNetPath = params.agentNetBootstrap ? agentNetBundlePath() : null;
+  if (params.agentNetBootstrap && !agentNetPath) throw new RelayDeployError('BUNDLE_MISSING');
+  const agentNetBundle = agentNetPath ? fs.readFileSync(agentNetPath) : null;
 
   params.onStep('check');
   const { remote, arch, ipv6 } = await prepare(params.sshHostId, params.assertCurrent ?? (() => {}));
@@ -670,6 +773,12 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
   );
   if (first(uploaded, 'SHA') !== createHash('sha256').update(bundle).digest('hex')) {
     throw new RelayDeployError('DEPLOY_FAILED', 'upload checksum mismatch');
+  }
+  if (agentNetBundle) {
+    const uploadedV2 = expectOk(await remote.root(AGENT_NET_UPLOAD_SCRIPT, [], {
+      input: agentNetBundle, timeoutMs: 120_000, label: 'relay-deploy-agent-net-upload',
+    }), 'DEPLOY_FAILED');
+    if (first(uploadedV2, 'SHA') !== createHash('sha256').update(agentNetBundle).digest('hex')) throw new RelayDeployError('DEPLOY_FAILED');
   }
 
   params.onStep('configure');
@@ -721,11 +830,21 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
         mode,
         String(port),
         String(challengePort),
+        agentNetBundle ? '1' : '0',
         ...initArgs,
       ],
       { timeoutMs: 180_000, label: 'relay-deploy-configure' },
     );
     const configureLines = expectOk(configured, 'DEPLOY_FAILED');
+    if (agentNetBundle && params.agentNetBootstrap) {
+      params.assertCurrent?.();
+      const bootstrap = params.agentNetBootstrap();
+      if (bootstrap.networkId !== 'private:' + init.relayId || bootstrap.rootPublicKey !== init.ownerPublicKey) throw new RelayDeployError('RELAY_MISMATCH');
+      expectOk(await remote.root(AGENT_NET_CONFIGURE_SCRIPT, [useNginx ? '0' : '1', ipv6 ? '::' : '0.0.0.0', authIssuer,
+        authRegion, peerIssuer, params.agentNetAuthPeer?.region ?? ''], {
+        input: Buffer.from(JSON.stringify(bootstrap)), timeoutMs: 120_000, label: 'relay-deploy-agent-net-configure',
+      }), 'AGENT_NET_START_FAILED');
+    }
     log.info('relay configured on server', {
       initialized: configureLines.has('INITIALIZED'),
       firewall: (configureLines.get('FIREWALL') ?? []).join(',') || 'none',
@@ -740,6 +859,11 @@ export async function deployRelayToServer(params: DeployParams): Promise<{ relay
 
     params.onStep('verify');
     await verifyReachable(params.baseUrl, init.relayId, () => params.onProgress?.('verify-retry'));
+    if (agentNetBundle) {
+      if (!params.verifyAgentNet) throw new RelayDeployError('DEPLOY_FAILED');
+      try { await params.verifyAgentNet(params.baseUrl); }
+      catch { throw new RelayDeployError('AGENT_NET_VERIFY_FAILED'); }
+    }
     if (useNginx) await nginxAction(remote, 'commit');
     return { relayVersion: RELAY_VERSION };
   } catch (error) {

@@ -26,7 +26,7 @@ export function BotGroupSidebarAvatar({
 }) {
   const frameClass = compact ? 'h-9 w-9' : 'h-11 w-11';
   const outline = surface === 'panel' ? 'border-[var(--surface)]'
-    : selected ? 'border-sidebar' : 'border-sidebar group-hover:border-sidebar-item-hover';
+    : selected ? 'border-sidebar-item-active' : 'border-sidebar group-hover:border-sidebar-item-hover';
   const [first, second] = members;
   if (!first) {
     return (

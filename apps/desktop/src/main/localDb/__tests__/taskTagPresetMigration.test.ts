@@ -5,10 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
 import { runMigrations } from '../migrate';
+import { configureMigrationRuntime } from '../migrationRuntime';
 import { readSchemaVersion, runMigrationReplay } from '../migrationRunner';
 import type Database from 'better-sqlite3';
 
-vi.mock('electron', () => ({ app: { isPackaged: true } }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
@@ -21,7 +21,6 @@ vi.mock('../backup', () => ({
 }));
 let db: Database.Database;
 let dir: string;
-const resourcesDescriptor = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
 beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), 'tag-migration-'));
   mkdirSync(path.join(dir, 'drizzle'));
@@ -35,7 +34,7 @@ beforeEach(() => {
       path.join(dir, 'drizzle', file),
     );
   }
-  Object.defineProperty(process, 'resourcesPath', { configurable: true, value: dir });
+  configureMigrationRuntime({ drizzleDir: path.join(dir, 'drizzle'), isPackaged: true });
   db = createBetterSqliteDatabase(':memory:');
   db.exec(
     "CREATE TABLE sessions(id TEXT PRIMARY KEY); CREATE TABLE migration_meta(key TEXT PRIMARY KEY,value TEXT); INSERT INTO migration_meta VALUES('schema_version','109');",
@@ -47,8 +46,6 @@ beforeEach(() => {
 afterEach(() => {
   db.close();
   rmSync(dir, { recursive: true, force: true });
-  if (resourcesDescriptor) Object.defineProperty(process, 'resourcesPath', resourcesDescriptor);
-  else delete (process as any).resourcesPath;
 });
 it('rolls back schema and catalog if first preset initialization fails, then retries', async () => {
   // Fail during preset insertion, after every pending migration has executed.

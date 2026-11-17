@@ -27,7 +27,7 @@ import { useChatSessionFile } from './ChatSessionFileContext';
 import { Collapse } from '@/components/ui/collapse';
 import { Tip } from '@/components/ui/tooltip';
 import { DiffView } from './DiffView';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import {
   formatToolResultCompactionBytes,
   parseToolResultCompactionMarker,
