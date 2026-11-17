@@ -19820,7 +19820,8 @@
         "expired": "Esta tarjeta de regalo ya no se puede canjear porque venció su plazo.",
         "voided": "Esta tarjeta de regalo se ha anulado.",
         "rateLimited": "Demasiados intentos. Inténtalo de nuevo más tarde.",
-        "failed": "No se pudo canjear la tarjeta de regalo. Inténtalo de nuevo más tarde."
+        "failed": "No se pudo canjear la tarjeta de regalo. Inténtalo de nuevo más tarde.",
+        "personalRequired": "Las tarjetas de regalo solo se pueden canjear con una cuenta personal."
       }
     },
     "usage": {

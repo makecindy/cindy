@@ -19820,7 +19820,8 @@
         "expired": "Este cartão de oferta já não pode ser utilizado porque o prazo terminou.",
         "voided": "Este cartão de oferta foi anulado.",
         "rateLimited": "Demasiadas tentativas. Tente novamente mais tarde.",
-        "failed": "Não foi possível utilizar o cartão de oferta. Tente novamente mais tarde."
+        "failed": "Não foi possível utilizar o cartão de oferta. Tente novamente mais tarde.",
+        "personalRequired": "Os cartões de oferta só podem ser utilizados com uma conta pessoal."
       }
     },
     "usage": {

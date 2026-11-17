@@ -19820,7 +19820,8 @@
         "expired": "Cette carte cadeau ne peut plus être utilisée : sa date limite est dépassée.",
         "voided": "Cette carte cadeau a été annulée.",
         "rateLimited": "Trop de tentatives. Réessayez plus tard.",
-        "failed": "Impossible d’utiliser la carte cadeau. Réessayez plus tard."
+        "failed": "Impossible d’utiliser la carte cadeau. Réessayez plus tard.",
+        "personalRequired": "Les cartes cadeaux ne peuvent être utilisées qu’avec un compte personnel."
       }
     },
     "usage": {

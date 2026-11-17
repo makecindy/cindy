@@ -19820,7 +19820,8 @@
         "expired": "Este cartão-presente não pode mais ser resgatado porque o prazo terminou.",
         "voided": "Este cartão-presente foi anulado.",
         "rateLimited": "Muitas tentativas. Tente novamente mais tarde.",
-        "failed": "Não foi possível resgatar o cartão-presente. Tente novamente mais tarde."
+        "failed": "Não foi possível resgatar o cartão-presente. Tente novamente mais tarde.",
+        "personalRequired": "Cartões-presente só podem ser resgatados com uma conta pessoal."
       }
     },
     "usage": {

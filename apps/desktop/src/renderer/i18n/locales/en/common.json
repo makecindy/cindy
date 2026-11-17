@@ -19636,7 +19636,8 @@
         "expired": "This gift card can no longer be redeemed. Its deadline has passed.",
         "voided": "This gift card has been voided.",
         "rateLimited": "Too many attempts. Try again later.",
-        "failed": "Couldn't redeem the gift card. Try again later."
+        "failed": "Couldn't redeem the gift card. Try again later.",
+        "personalRequired": "Gift cards can only be redeemed by personal accounts."
       }
     },
     "usage": {
