@@ -83,6 +83,7 @@ void mountPage({
             running: 0,
             limit: 4,
             plan: 'pro',
+            ...(ctx.case.startsWith('official-plan-name') ? { planTier: 'pro', planDisplayName: 'Ultra' } : {}),
             usage: {
               claude: { ...(ctx.case.startsWith('quota-') ? { fiveHour: { utilization: ctx.case === 'quota-low' ? 92 : ctx.case === 'quota-partial' ? 20 : 100, resetsAt: Date.now() / 1000 + 32 * 60 } } : {}), sevenDay: { utilization: 20, resetsAt: Date.now() / 1000 + (ctx.case === 'reset-urgent' || ctx.case === 'full-panel' ? 5 * 3600 : ctx.case === 'reset-soon' || ctx.case === 'unknown' || ctx.case === 'full-panel-warning' ? 12 * 3600 : 2 * 86400) } },
             },
