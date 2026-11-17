@@ -56,6 +56,10 @@ const createSessionNotification = createGhostProductionCallbacks<{
   ): void;
 }>({ functions: ['notifyGhostSessionEvent'] });
 
+const createSubscriptionGateway = createGhostProductionCallbacks<{ getGhostSubscriptionGateway(): GhostSubscriptionGateway }>({
+  functions: ['getGhostSubscriptionGateway'], initialize: 'let subscriptionGatewaySingleton = null;',
+});
+
 describe('did-session-switched primary session resolution', () => {
   it('allows ordinary sessions and Orca leads, but never workers or background sessions', () => {
     expect(isGhostSessionSwitchEligibleRow({ source: 'desktop', orcaRole: null })).toBe(true);
@@ -323,6 +327,43 @@ describe('indexed task content and state events', () => {
       files: [{ path: '/private/file.txt', name: 'file.txt' }], reasoning: 'private thinking' } } as Message;
   const subscriber = (): InstalledGhost => ({ ...ghost('reader', { topics: ['message', 'task-state'] }),
     approval: { state: 'approved', revision: 'r1' } });
+
+  // Unit / #11057 receipt IO regression: execute the real production assembly,
+  // whose lookup port reads the receipt. Gateway-only fakes omitted the adapter's
+  // duplicate read. A single event must read once per synchronous stage.
+  it.each([
+    ['message', 'did-message-created', false, 1], ['task-state', 'did-task-state-changed', false, 1],
+    ['tool-execution', 'did-tool-execution', false, 2], ['message', 'did-message-created', true, 2],
+    ['task-state', 'did-task-state-changed', true, 2], ['tool-execution', 'did-tool-execution', true, 2],
+  ] as const)('reads the live install once per stage for %s / %s (cold=%s)', async (topic, name, cold, count) => {
+    const g = ghost('reader', { topics: [topic] });
+    let running = !cold;
+    const lookup = vi.fn(() => g), send = vi.fn(() => true);
+    const api = createSubscriptionGateway({ GhostSubscriptionGateway, availableGhosts: () => [g],
+      listGhostNotificationCandidates: async () => [g], findGhostNotificationTarget: lookup,
+      getGhostRuntime: () => ({ stateOf: () => running ? 'running' : 'stopped',
+        spawn: async () => { running = true; return { ok: true }; } }),
+      sendToGhostLogic: send, ghostOwnerScope: undefined, log: {} });
+    api.getGhostSubscriptionGateway().publishIndexed([g], topic, name, { sessionId: 'task' });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(send).toHaveBeenCalledOnce();
+    expect(lookup).toHaveBeenCalledTimes(count);
+  });
+
+  it.each(['disabled', 'revoked'] as const)('rechecks the live install after queueing when %s', async change => {
+    const g = ghost('reader', { topics: ['tool-execution'] });
+    let live = g;
+    const lookup = vi.fn(() => live), send = vi.fn(() => true);
+    const api = createSubscriptionGateway({ GhostSubscriptionGateway, availableGhosts: () => [g],
+      listGhostNotificationCandidates: async () => [g], findGhostNotificationTarget: lookup,
+      getGhostRuntime: () => ({ stateOf: () => 'running' }), sendToGhostLogic: send,
+      ghostOwnerScope: undefined, log: {} });
+    api.getGhostSubscriptionGateway().publishIndexed([g], 'tool-execution', 'did-tool-execution', { sessionId: 'task' });
+    live = change === 'disabled' ? { ...g, enabled: false } : { ...g, approval: { state: 'legacy-unapproved' } };
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(send).not.toHaveBeenCalled();
+    expect(lookup).toHaveBeenCalledTimes(2);
+  });
 
   // Unit / tool observation contract: the existing event index and queue must not
   // inspect payloads at zero subscribers or synchronously deliver tool content.

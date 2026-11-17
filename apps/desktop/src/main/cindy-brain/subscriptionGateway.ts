@@ -151,8 +151,8 @@ export interface GhostSubscriptionGatewayDeps {
   isRunning(ghostId: string): boolean;
   /** 按需拉起电子脑(幂等;失败 reject)。 */
   wake(ghost: InstalledGhost): Promise<void>;
-  /** 管子下行投递(electronSandboxAdapter.sendToGhostLogic;失败抛/返 false)。 */
-  sendToGhost(ghostId: string, payload: GhostPipeEventPush): void;
+  /** 管子下行投递(失败抛/返 false)。Optional install is checked in this synchronous stage; never retain it. */
+  sendToGhost(ghostId: string, payload: GhostPipeEventPush, synchronousInstall?: InstalledGhost): void;
   now(): number;
   /** 钩子熔断回调(通知 renderer + 日志;每意识只触发一次)。 */
   onHookFused?(ghost: InstalledGhost, ownerStamp?: unknown): void;
@@ -329,7 +329,7 @@ export class GhostSubscriptionGateway {
     // 直投条件:在跑 + 缓冲已清 + 无唤醒在途——三者缺一都排队,否则新事件
     // 会插到缓冲里旧事件前面(seq 乱序)。投递失败(刚崩窗口期)同样回落缓冲。
     if (topic !== 'tool-execution' && this.deps.isRunning(ghostId) && e.buffer.length === 0 && !e.waking) {
-      if (this.sendOne(ghostId, e, evt, ownerScope)) return;
+      if (this.sendOne(ghostId, e, evt, ownerScope, ghost)) return;
     }
     this.buffer(ghost, e, evt, ownerScope);
   }
@@ -341,21 +341,27 @@ export class GhostSubscriptionGateway {
     e: SubEntry,
     evt: GhostPipeEventPush,
     ownerScope = e.ownerScope,
+    synchronousInstall?: InstalledGhost,
   ): boolean {
     if (!this.ownerScopeUsable(ownerScope)) {
       this.invalidateOwner(ghostId, e);
       return false;
     }
     const recipient = this.contentRecipients.get(evt);
+    // Immediate sends reuse publishTo's check. flush never supplies that fact:
+    // after any asynchronous boundary the queued recipient must be checked again.
+    const live = synchronousInstall ?? (recipient
+      ? this.deps.findGhostForDelivery ? this.deps.findGhostForDelivery(ghostId) : recipient
+      : undefined);
     if (recipient && 'topic' in evt) {
-      const live = this.deps.findGhostForDelivery ? this.deps.findGhostForDelivery(ghostId) : recipient;
       // A queue belongs to the exact approved install. Drop stale events instead of retrying into an update.
       if (!live?.enabled || ghostInstallApprovalToken(live.approval) !== ghostInstallApprovalToken(recipient.approval)
         || !live.manifest.subscribe?.topics?.includes(evt.topic) || !ghostTaskEventApproved(live, evt.topic)) return true;
     }
     const payload = e.pendingDropped > 0 ? { ...evt, dropped: e.pendingDropped } : evt;
     try {
-      this.deps.sendToGhost(ghostId, payload);
+      if (live) this.deps.sendToGhost(ghostId, payload, live);
+      else this.deps.sendToGhost(ghostId, payload);
       e.pendingDropped = 0;
       return true;
     } catch {

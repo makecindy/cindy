@@ -2951,8 +2951,8 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
         const r = await getGhostRuntime().spawn(ghost);
         if (!r.ok) throw new Error(r.reason);
       },
-      sendToGhost: (ghostId, payload) => {
-        const ghost = findGhostNotificationTarget(ghostId);
+      sendToGhost: (ghostId, payload, synchronousInstall) => {
+        const ghost = synchronousInstall ?? findGhostNotificationTarget(ghostId);
         // 适配:底层返回 false 表示投递失败(网关契约是抛错 → 走缓冲/熔断)。
         if (!ghost?.enabled || ('topic' in payload && !ghost.manifest.subscribe?.topics?.includes(payload.topic))
           || !sendToGhostLogic(installedGhostStoragePart(ghost), payload)) {
