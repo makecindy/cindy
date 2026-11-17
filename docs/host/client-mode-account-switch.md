@@ -7,7 +7,7 @@
 - 第四节“用户已定的产品形态”：用户的原话和安全审查结论；
 - 第五节“第 25 行 25b 的修订”和“乙：客户端模式下窗口切换、添加账号”：设计决定。
 
-本文把这几处，以及当时分散在几轮讨论里的决定，合成一份可以单独读懂的方案。行号按集成分支 `dca9dc24f8`
+本文把这几处，以及当时分散在几轮讨论里的决定，合成一份可以单独读懂的方案。行号按集成分支 `8df7f93695`
 核对；实现时以当时的代码为准。
 
 ## 一、背景：窗口是第二个写方
@@ -67,7 +67,7 @@
 
 - 合同项写进 `HOST_CONTRACT_CHANNELS` 的 Auth 段，形状同现有三项，标 `trustedRenderer: true`。
 - 路由写进 `apps/host/src/service.mjs`，与 `/api/auth/state`、`/api/auth/refresh` 同处（:97、:100）。
-- `/api/auth/*` 本来就不算 owner 请求（`apps/host/src/server.mjs:158`），切换进行中仍能调用。
+- `/api/auth/*` 本来就不算 owner 请求（`apps/host/src/server.mjs:166`），切换进行中仍能调用。
 - 推送沿用现有的 `auth_changed` 事件，例如退出登录收尾时发的那条（`main.ts:1546`）。窗口经 `receiveHostAuthState`（`authManager.ts:485`）换显示。
 - 不走 device-link：这几个通道不在 device-link 白名单里，远程控制端本来就不能换账号。
 
@@ -162,7 +162,7 @@ serve 进程在加载前注入“拒绝提交 owner”：`main.ts:292` 调 `refu
   - 新通道加进 `HOST_CONTRACT_CHANNELS` 的 Auth 段，标 `trustedRenderer: true`。
   - `registerHostDelegatedIpc`（`apps/desktop/src/main/host-delegation.ts:197`）把它们装成代理；`claimProxiedChannels`（`bootstrap-electron.ts:1397`）去掉本地处理器。
   - 请求发到 Host 的本机地址 `/api/...`，带 Bearer 密钥和 `x-cindy-host-instance`。Host 地址只能是本机回环（`resolveHostDelegation`，`host-delegation.ts:38` 起）。
-- Host 侧：`server.mjs` 收 `/api/*` 的 POST，交给 `service.mjs`；`/api/auth/*` 不受 owner 请求闸门挡（`server.mjs:158`）。
+- Host 侧：`server.mjs` 收 `/api/*` 的 POST，交给 `service.mjs`；`/api/auth/*` 不受 owner 请求闸门挡（`server.mjs:166`）。
 - 路由：`/api/auth/accounts/add/begin`、`/api/auth/accounts/add/action`、`/api/auth/accounts/add/cancel`，与 list、sync、switch 同组（第二节）。
 - 不走 device-link。
 
@@ -173,7 +173,7 @@ serve 进程在加载前注入“拒绝提交 owner”：`main.ts:292` 调 `refu
   - **每个 profile 一把，在 Host 的各次运行之间复用**；
   - 比对用 `timingSafeEqual`（`isAuthorized`，:31 起），没有这个头就一律不通过。
 - 交给窗口：窗口启动时从同一个 profile 目录读这个文件（`host-delegation.ts:54` 起），不经命令行、不经环境变量。
-- 实例头：带 `x-cindy-host-instance` 的请求，实例 id 必须等于正在运行的 Host（`server.mjs:134` 起），防止旧窗口打到换过的 Host 上。
+- 实例头：带 `x-cindy-host-instance` 的请求，实例 id 必须等于正在运行的 Host（`server.mjs:143` 起），防止旧窗口打到换过的 Host 上。
 - 够不够：按 S1 的做法，跨进程的东西里没有长期凭据，拿到密钥的同用户进程也拿不到令牌。它最多能发起一次登录事务，但没有用户的验证码或浏览器授权就走不完。按现有模型，够用。
 - 另加两条限制：
   1. 这组接口只接受“Bearer + 实例头”的调用方，拒绝网页端 cookie 会话（`isWebAuthorized` 那一类）。账号增减只给桌面窗口，等同于 `trustedRenderer`。
@@ -202,7 +202,7 @@ serve 进程在加载前注入“拒绝提交 owner”：`main.ts:292` 调 `refu
 | 渲染层到 preload | `ipcRenderer.invoke` 不记参数 | 不变 |
 | 窗口主进程的代理（`registerHostDelegatedIpc`） | 不记参数、不记响应 | 不变 |
 | 窗口的 Host 客户端失败时 `throw new Error(text …)`（`host-delegation.ts:87`），`text` 是 Host 的响应正文 | Host 回什么，窗口就把什么当错误消息 | 由下一行保证 |
-| Host 的错误回包（`server.mjs:400–401`，`clientErrorMessage` 见 `apps/host/src/client-error.mjs:12`） | 异常消息原样回给客户端 | 这组路由自己捕获异常，只回固定错误码 `{ error: CODE }`，不带原始消息；认证客户端抛出的异常也不原样转发 |
+| Host 的错误回包（`server.mjs:408–409`，`clientErrorMessage` 见 `apps/host/src/client-error.mjs:12`） | 异常消息原样回给客户端 | 这组路由自己捕获异常，只回固定错误码 `{ error: CODE }`，不带原始消息；认证客户端抛出的异常也不原样转发 |
 | Host 的 stdout、stderr | 现有续期失败会记 `error.message` | 新代码只记错误码和事务阶段，不记 body，不记认证服务器的响应 |
 | 桌面日志上传 | 按白名单（deny-by-default） | 不变 |
 
