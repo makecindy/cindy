@@ -410,6 +410,18 @@ describe('provider group running count', () => {
 });
 
 describe('provider group picks for this computer’s own tasks', () => {
+  // #11114 review, unit: excluding the last remote must retain its round cursor
+  // position. Earlier exclusion coverage used order, not a prior round pick.
+  // Minimal sequence: A, B, then exclude B; the next executor must be C, not A.
+  it('continues round selection after an excluded remote without resetting to the first member', async () => {
+    const router = harness({}, {}, [], { strategy: 'round', autoSwitch: true, members: [LOCAL, SHARE_A, SHARE_B] });
+    const input = { providerId: 'anthropic', agentKind: 'claude-code' as const, model: MODEL, localTask: true as const };
+    expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { key: LOCAL.key } });
+    expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { key: SHARE_A.key } });
+    expect(await router.pick({ ...input, fresh: true, exclude: new Set([SHARE_A.key]) }))
+      .toMatchObject({ kind: 'member', member: { key: SHARE_B.key } });
+  });
+
   it('reserves the chosen computer until the task starts, so tasks opened together spread out', async () => {
     const bindings: Record<string, ProviderGroupBinding> = {};
     const running: string[] = [];

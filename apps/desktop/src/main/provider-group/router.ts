@@ -356,7 +356,13 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           } finally { clearTimeout(timer); }
         }));
       const now = deps.now();
-      const schedulable: SchedulableMember[] = resolved.map((r) => {
+      const resolvedByKey = new Map(resolved.map((r) => [r.member.key, r]));
+      // Reading fewer members must not remove the last-picked position from the
+      // round-robin order. Unread members occupy their slot but cannot be selected.
+      const schedulable: SchedulableMember[] = config.members.map((member) => {
+        const r = resolvedByKey.get(member.key);
+        if (!r) return { key: member.key, usable: false, paused: member.paused,
+          running: 0, limit: 0, weight: member.weight };
         const quota = providerGroupMemberUsageState(r, input.model, now, input.agentKind);
         const schedule = schedules.get(r.member.key);
         const physicalRunning = memberRunning(input.providerId, r);
