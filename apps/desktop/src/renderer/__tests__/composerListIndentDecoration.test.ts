@@ -459,6 +459,51 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     );
   });
 
+  /**
+   * CSS contract (#11117 review): `.composer-list-quote` removes the list's 1em
+   * base indent from a quote row, `.composer-list-quote-container` does the
+   * same for a quote-only paragraph fallback. A layout branch without the hook
+   * makes the quote jump 1em mid-typing — on the 12th letter of
+   * `> abcdefghijkl`, or when a mention chip enters the quote. jsdom has no
+   * layout, so the hook on the element that renders `>` is the observable
+   * contract; ui:check `companion-composer/quote-comment` measures geometry.
+   */
+  it.each([
+    {
+      name: 'a long letter run',
+      content: [{ type: 'text', text: '> abcdefghijklmn' }],
+      quoteContainer: false,
+    },
+    {
+      name: 'an inline chip (paragraph fallback)',
+      content: [
+        { type: 'text', text: '> 看 ' },
+        { type: 'testAtom' },
+        { type: 'text', text: ' 这段' },
+      ],
+      quoteContainer: true,
+    },
+  ])('keeps the quote layout hook when $name switches the row layout', ({ content, quoteContainer }) => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [Document, Paragraph, Text, HardBreak, TestAtom, ComposerListIndentDecoration],
+      content: { type: 'doc', content: [{ type: 'paragraph', content }] },
+    });
+    const marker = Array.from(editor.view.dom.querySelectorAll('span')).find(
+      (element) => element.textContent?.startsWith('>') && element.childElementCount === 0,
+    );
+    expect(marker?.closest('.composer-list-quote')).not.toBeNull();
+    expect(editor.view.dom.querySelector('p.composer-list-quote-container') !== null).toBe(
+      quoteContainer,
+    );
+  });
+
+  it('keeps the list indent for a fallback paragraph that mixes quotes and list rows', () => {
+    const ed = makeEditor(['> 引用，内容', '1. 列表，内容']);
+    expect(ed.view.dom.querySelector('.composer-list-fallback-container')).not.toBeNull();
+    expect(ed.view.dom.querySelector('.composer-list-quote-container')).toBeNull();
+  });
+
   it('keeps full-width parentheses from changing width across repeated IME composition', () => {
     vi.useFakeTimers();
     editor = new Editor({

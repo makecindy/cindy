@@ -143,8 +143,72 @@ export function listDecorationCompositionScope(state: EditorState): ListComposit
   return resolveCompositionScope(pluginState.decorations, state);
 }
 
+/**
+ * 引用行(`> `)在每一种布局分支里都带 `composer-list-quote`:CSS 据此去掉
+ * 列表的 1em 基础缩进并使用次级文字色。任一分支漏掉,引用在输入途中切换
+ * 布局(正文变成长字母串、插入 mention)时就会横跳 1em。
+ */
 function isQuotePrefix(prefix: string): boolean {
   return prefix.trimStart().startsWith('>');
+}
+
+function classNames(...names: string[]): string {
+  return names.filter(Boolean).join(' ');
+}
+
+/**
+ * 段落级 fallback 布局里的一行带前缀行:前缀占固定槽位;长字母串正文另有
+ * 断字盒子。引用行的正文只给文字片段加改颜色的 inline decoration——fallback
+ * 正文不包 inline-block,与 CjkPunctDecoration 的逐字 span 叠加只会合并属性;
+ * mention 等原子节点不加,避免往 React node view 的外层元素写属性。
+ */
+function addFallbackPrefixedLine(
+  decorations: Decoration[],
+  block: PMNode,
+  contentBase: number,
+  line: { start: number; end: number },
+  prefixLength: number,
+  prefix: string,
+  options: { prefixHasCjkPunctuation: boolean; longRunBody: boolean },
+): void {
+  const from = contentBase + line.start;
+  const to = contentBase + line.end;
+  const prefixTo = from + prefixLength;
+  const quote = isQuotePrefix(prefix);
+  decorations.push(
+    Decoration.inline(from, prefixTo, {
+      class: classNames(
+        'composer-list-fallback-prefix',
+        prefix.includes('\t') ? 'composer-list-tab-indent' : '',
+        options.prefixHasCjkPunctuation ? 'composer-list-cjk-font' : '',
+        quote ? 'composer-list-quote' : '',
+      ),
+      'data-composer-list-prefix-length': String(prefixLength),
+      style: listPrefixIndentStyle(prefix),
+    }),
+  );
+  if (prefixTo >= to) return;
+  if (options.longRunBody) {
+    // LONG_ALPHANUMERIC_BODY_RE excludes atoms, so the body is one text run.
+    decorations.push(
+      Decoration.inline(prefixTo, to, {
+        class: classNames('composer-list-fallback-long-run-body', quote ? 'composer-list-quote' : ''),
+      }),
+    );
+    return;
+  }
+  if (!quote) return;
+  block.nodesBetween(prefixTo - contentBase, to - contentBase, (node, pos) => {
+    if (!node.isText) return false;
+    const segmentFrom = Math.max(contentBase + pos, prefixTo);
+    const segmentTo = Math.min(contentBase + pos + node.nodeSize, to);
+    if (segmentFrom < segmentTo) {
+      decorations.push(
+        Decoration.inline(segmentFrom, segmentTo, { class: 'composer-list-quote' }),
+      );
+    }
+    return false;
+  });
 }
 
 /** 行内一个非文本 inline 节点(mention chip 等)的占位符,与 applyListContinuation 一致。 */
@@ -172,6 +236,9 @@ function listPrefixIndentValues(prefix: string): ListIndentValues {
       ch += TAB_SIZE;
     } else if (char === '、' || char === '\u3000') {
       em += 1;
+    } else if (char === '>') {
+      // 引用标记接近数字宽度;按窄字符估算会让长字母串的正文盖住 `> ` 的空格。
+      ch += 1;
     } else {
       ch += 0.4;
     }
@@ -202,14 +269,14 @@ function addLongRunDecoration(
   markerClass = '',
 ): void {
   const prefixTo = from + prefixLength;
-  const markerClassSuffix = markerClass ? ` ${markerClass}` : '';
+  const quoteClass = isQuotePrefix(prefix) ? 'composer-list-quote' : '';
   decorations.push(
     Decoration.inline(from, prefixTo, {
-      class: `composer-list-long-run-marker${markerClassSuffix}`,
+      class: classNames('composer-list-long-run-marker', markerClass, quoteClass),
       style: listPrefixIndentStyle(prefix),
     }),
     Decoration.inline(prefixTo, to, {
-      class: 'composer-list-long-run-body',
+      class: classNames('composer-list-long-run-body', quoteClass),
       style: listPrefixIndentStyle(prefix),
     }),
   );
@@ -218,8 +285,8 @@ function addLongRunDecoration(
 /**
  * 将列表前缀换算成当前字体下的近似宽度。
  *
- * ChatInput 已启用 tabular-nums,所以数字直接用 1ch;句点、空格、方括号等
- * 窄字符按 0.4ch 估算;中文顿号按全角 1em。这里只生成数字和 CSS 单位,
+ * ChatInput 已启用 tabular-nums,所以数字直接用 1ch;引用标记 `>` 也按 1ch;
+ * 句点、空格、方括号等窄字符按 0.4ch 估算;中文顿号按全角 1em。这里只生成数字和 CSS 单位,
  * 不会透传用户文本。Tab 使用固定 tab stop 估算，不再用 Range 实测后
  * 直接改 decoration DOM：ProseMirror 的 DOMObserver 会尝试恢复这类外部
  * style 变更，在 Chromium 中可能与 plugin view 形成更新循环并卡死 renderer。
@@ -316,18 +383,24 @@ export function buildListIndentDecorations(
         (lines.length > 1 && (overlapsVoiceReplacement || hasCjkPunctuation))
       );
     });
-    const fallbackPrefixes = lineMatches
+    const matchedPrefixes = lineMatches
       .filter(({ match }) => Boolean(match))
-      .map(({ line, match }) => listPrefixIndentValues(line.text.slice(0, match!.prefixLength)));
-    const fallbackStyle = widestListIndentValue(fallbackPrefixes);
+      .map(({ line, match }) => line.text.slice(0, match!.prefixLength));
+    const fallbackStyle = widestListIndentValue(matchedPrefixes.map(listPrefixIndentValues));
 
     if (hasFallbackLine) {
+      // 只有引用行时容器同样不吃 1em 基础缩进,`>` 与非 fallback 布局下位置一致;
+      // 与列表行混排时仍按列表缩进。
+      const quoteOnly = matchedPrefixes.every(isQuotePrefix);
       decorations.push(
         Decoration.node(
           blockPos,
           blockPos + block.nodeSize,
           {
-            class: 'composer-list-fallback-container',
+            class: classNames(
+              'composer-list-fallback-container',
+              quoteOnly ? 'composer-list-quote-container' : '',
+            ),
             style: `--composer-list-fallback-indent:${fallbackStyle};`,
           },
           PARAGRAPH_LAYOUT_SPEC,
@@ -376,26 +449,10 @@ export function buildListIndentDecorations(
         // prefix gets a fixed slot (the widest marker in the paragraph), while
         // atoms and slash pills remain ordinary inline content inside the same
         // line flow. This avoids a width:100% wrapper being split at atom edges.
-        decorations.push(
-          Decoration.inline(from, from + match.prefixLength, {
-            class: [
-              'composer-list-fallback-prefix',
-              hasTabPrefix ? 'composer-list-tab-indent' : '',
-              prefixHasCjkPunctuation ? 'composer-list-cjk-font' : '',
-            ]
-              .filter(Boolean)
-              .join(' '),
-            'data-composer-list-prefix-length': String(match.prefixLength),
-            style: listPrefixIndentStyle(prefix),
-          }),
-        );
-        if (LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix) {
-          decorations.push(
-            Decoration.inline(from + match.prefixLength, to, {
-              class: 'composer-list-fallback-long-run-body',
-            }),
-          );
-        }
+        addFallbackPrefixedLine(decorations, block, contentBase, line, match.prefixLength, prefix, {
+          prefixHasCjkPunctuation,
+          longRunBody: LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix,
+        });
         return;
       }
       if (LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix) {
@@ -437,18 +494,16 @@ export function buildListIndentDecorations(
       // A node decoration stays on the paragraph even when CjkPunctDecoration
       // adds nested inline spans, so punctuation cannot split the list wrapper.
       if (line && match && hasFallbackLine) {
-        decorations.push(
-          Decoration.inline(from, from + match.prefixLength, {
-            class: [
-              'composer-list-fallback-prefix',
-              hasTabPrefix ? 'composer-list-tab-indent' : '',
-              prefixHasCjkPunctuation ? 'composer-list-cjk-font' : '',
-            ]
-              .filter(Boolean)
-              .join(' '),
-            'data-composer-list-prefix-length': String(match.prefixLength),
-            style: listPrefixIndentStyle(prefix),
-          }),
+        // Single-line fallback keeps its existing prefix-only slot for lists;
+        // quote rows additionally get the colour-only body decoration.
+        addFallbackPrefixedLine(
+          decorations,
+          block,
+          contentBase,
+          line,
+          match.prefixLength,
+          prefix,
+          { prefixHasCjkPunctuation, longRunBody: false },
         );
       } else if (
         line &&

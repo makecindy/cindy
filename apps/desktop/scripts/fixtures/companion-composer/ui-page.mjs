@@ -149,7 +149,25 @@ export default {
       assert.ok(Math.abs((await firstGlyphLeft(1)) - quoteLeft) < 1, 'quote and comment are misaligned');
       await ui.capture('quote-comment');
 
+      // #11117 review: a long letter run moves the quote row onto another
+      // layout branch; its `>` must stay on the same left edge.
       await editor.press('Shift+Enter');
+      await editor.pressSequentially('> abcdefghijklmn');
+      const longRunQuoteLeft = await editor.evaluate((root) => {
+        const paragraph = root.querySelectorAll(':scope > p')[1];
+        const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+        let text;
+        while ((text = walker.nextNode()) && !text.textContent.startsWith('>'));
+        const range = document.createRange();
+        range.setStart(text, 0);
+        range.setEnd(text, 1);
+        return range.getBoundingClientRect().left;
+      });
+      assert.ok(Math.abs(longRunQuoteLeft - quoteLeft) < 1, 'long-run quote jumped');
+      await ui.capture('long-run-quote');
+      await editor.press('Shift+Enter');
+      await editor.press('Backspace');
+
       await editor.pressSequentially('- ');
       await page.keyboard.insertText('第一项');
       await editor.press('Shift+Enter');
