@@ -25,7 +25,7 @@ vi.mock('@/hooks/useCodexAuth', () => ({ useCodexAuth: () => ({ state: { kind: '
 import { ErrorBanner } from '../ErrorBanner';
 import { ErrorMessageCard } from '../ErrorMessageCard';
 import { ErrorTailErrorBanner } from '../InterruptedTurnBanner';
-import { remoteErrorMessageForBanner } from '@/lib/makerChatStore';
+import { remoteErrorMessageForBanner, handleStreamEvent, EMPTY_SESSION_STATE } from '@/lib/makerChatStore';
 import { buildErrorDiagnosisPrompt, prefillErrorDiagnosisDraft } from '@/lib/errorDiagnosisPrompt';
 import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
@@ -37,6 +37,31 @@ const raw = JSON.stringify({ error: {
   type: 'invalid_request_error', code: 'unsupported_value', param: 'parallel_tool_calls',
 } });
 afterEach(cleanup);
+
+// #10854, unit: production live reducer + banner/tail/history must retain the
+// actual cause for diagnosis while legacy reason-only errors use neutral copy.
+it.each(['live', 'tail', 'history'] as const)('keeps silent-stop %s copy neutral and preserves cause details', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const message = '检测到空响应，自动续跑已暂停。自动续跑请求未派发。\nsilentStopFailureCause=dispatch-not-accepted';
+  const state = handleStreamEvent({ ...EMPTY_SESSION_STATE, isStreaming: true }, {
+    sessionId: 'silent-copy', type: 'error',
+    data: { message, isTerminal: true, reason: 'silent-stop-exhausted', silentStopFailureCause: 'dispatch-not-accepted' },
+  } as Parameters<typeof handleStreamEvent>[1]);
+  expect(state.error).toBe(message);
+  const diagnose = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={state.error!} errorReason={state.errorReason} onRetry={vi.fn()} onSilentStopContinue={vi.fn()} onDiagnose={diagnose} />
+    : surface === 'tail'
+      ? <ErrorTailErrorBanner errorText={message} errorReason="silent-stop-exhausted" onContinue={vi.fn()} onDismiss={vi.fn()} onDiagnose={diagnose} />
+      : <ErrorMessageCard message={message} reason="silent-stop-exhausted" onDiagnose={diagnose} />}</I18nextProvider>);
+  expect(screen.getByText('An empty response was detected. Automatic continuation is paused.')).toBeTruthy();
+  expect(screen.queryByText(/dispatch-not-accepted/)).toBeNull();
+  fireEvent.click(screen.getByText(en.chat.errorBanner.networkShowRaw));
+  expect(screen.getByText(/silentStopFailureCause=dispatch-not-accepted/)).toBeTruthy();
+  fireEvent.click(screen.getByText(en.chat.errorBanner.diagnose));
+  expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ details: message, reason: 'silent-stop-exhausted' }));
+});
 
 it('keeps the shared Codex account reset guidance instead of replacing it with generic budget text', async () => {
   const i18n = createInstance();
