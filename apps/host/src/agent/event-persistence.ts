@@ -100,10 +100,10 @@ export function createHostEventPersistence(deps: {
         (!deps.getOwner || deps.getOwner() === owner) &&
         finalSnapshot?.isCurrent() !== false;
       if (!isCurrent()) return null;
-      let originalRow: { id: string } | undefined;
+      let originalRow: typeof messages.$inferSelect | undefined;
       if (finalSnapshot) {
         const [original] = await client.drizzle
-          .select({ id: messages.id })
+          .select()
           .from(messages)
           .where(
             and(
@@ -125,14 +125,28 @@ export function createHostEventPersistence(deps: {
         answer,
       );
       // The desktop updateMessageContent (localDb/ipc/messages.ts): a correction of a final answer settles
-      // the original row's PR references even when the row is gone on readback.
+      // the original row's derived state (reconcileAssistantDerivedState) even when the row is gone on
+      // readback: the images of the original content no live message uses any more leave the task, then
+      // its PR references are recomputed.
+      const settleOriginal = async (original: typeof messages.$inferSelect) => {
+        for (const hash of hostChatAttachments.collectCindyMediaHashes(original.content)) {
+          try {
+            await removeSessionAttachmentRefIfUnreferencedByLiveMessage(
+              { sessionId, hash },
+              client.drizzle,
+            );
+          } catch (error) {
+            log.warn("assistant correction media reference reconciliation failed", {
+              sessionId,
+              clientId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        await reconcileCorrectedMessagePrRefs(original, client, isCurrent);
+      };
       if (!row) {
-        if (originalRow)
-          await reconcileCorrectedMessagePrRefs(
-            { id: originalRow.id, sessionId, clientId },
-            client,
-            isCurrent,
-          );
+        if (originalRow) await settleOriginal(originalRow);
         return null;
       }
       await hostChatAttachments.commitMessageMediaRefs(
@@ -150,12 +164,7 @@ export function createHostEventPersistence(deps: {
           },
         });
       }
-      if (originalRow)
-        await reconcileCorrectedMessagePrRefs(
-          { id: originalRow.id, sessionId, clientId },
-          client,
-          isCurrent,
-        );
+      if (originalRow) await settleOriginal(originalRow);
       else if (row.role === "user" || row.role === "assistant")
         await reconcileUpdatedMessagePrRefs(client, sessionId, row.id, isCurrent);
       return message;

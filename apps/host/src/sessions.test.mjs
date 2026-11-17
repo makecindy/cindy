@@ -509,3 +509,42 @@ test('Host reply corrections and retractions recompute task PR references as the
   assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM messages WHERE role='assistant'").get().n, 0);
   assert.deepEqual(numbers(), []);
 });
+
+// Release table 甲 (the PR reference gap's family): the desktop updateMessageContent releases, on a final
+// correction, the images of the original content that no live message uses any more
+// (reconcileAssistantDerivedState → reconcileAssistantMediaRefs). The Host only committed the new content's
+// references, so a picture the correction removed stayed on the task until it was deleted. Same unit tier
+// and entry as above (the event stream); the image is a ledger row only, no blob is read.
+test('a Host reply correction releases the images it no longer shows, as the desktop does', async t => {
+  const db = prRefsDb(t);
+  db.sqlite.exec(`CREATE TABLE "${getTableName(mediaRefs)}" (${Object.values(getTableColumns(mediaRefs))
+    .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+  setCurrentDbClient(db.client, 'isolated');
+  t.after(() => clearCurrentDbClient(db.client));
+  const owner = getCurrentDbClientSnapshot();
+  const publish = () => {};
+  const history = createHostEventPersistence({ getOwner: getCurrentDbClientSnapshot,
+    isCurrent: () => getCurrentDbClientSnapshot() === owner,
+    persistMessage: createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish }),
+    publish, onPersistenceError: error => { throw error; } });
+  history.noteSessionAgentKind('task', 'cc');
+  history.noteTurnStarted('task');
+  const session = { id: 'task', workDir: '/tmp', remoteHostId: null };
+  const emit = (type, data) => history.event(session, { type, data });
+  const kept = 'b'.repeat(64), dropped = 'c'.repeat(64);
+  const attached = () => db.sqlite.prepare("SELECT hash FROM media_refs WHERE ref_kind='session-attachment' AND ref_id='task' ORDER BY hash").all()
+    .map(row => row.hash);
+
+  emit('text', { text: `![a](cindy-media://blobs/${kept}.png) ![b](cindy-media://blobs/${dropped}.png)`, agentMessageId: 'reply-1' });
+  emit('tool_use', { toolUseId: 'read-1', toolName: 'Read', input: { path: 'file.txt' } });
+  emit('tool_result', { toolUseIds: ['read-1'], summary: 'done' });
+  await history.drain();
+  const ref = db.sqlite.prepare("INSERT INTO media_refs(id,hash,ref_kind,ref_id) VALUES (?,?,'session-attachment','task')");
+  for (const hash of [kept, dropped]) if (!attached().includes(hash)) ref.run(`ref-${hash[0]}`, hash);
+  assert.deepEqual(attached(), [kept, dropped]);
+
+  emit('text', { text: `![a](cindy-media://blobs/${kept}.png) only`, isFinal: true, isFullText: true, agentMessageId: 'reply-1' });
+  await history.drain();
+  assert.equal(history.hasFailedWrites(), false);
+  assert.deepEqual(attached(), [kept]);
+});
