@@ -9,7 +9,7 @@
 
 import type { AutoReviewUserIntent, AutoReviewUserReferences } from './shared/auto-review-decision.js';
 import { LIBRARY_READ_ROOT } from './shared/library-native-read.js';
-import { canonicalSkillPath, isSkillDisabled } from './shared/skill-activation.js';
+import { canonicalSkillPath } from './shared/skill-activation.js';
 
 import type {
   AgentEvent,
@@ -3017,8 +3017,18 @@ export abstract class BaseAgent {
   filterActiveSkillCommands(result: ListAgentSkillsResult, remoteHostId?: string, snapshot?: readonly string[], current?: readonly string[]): ListAgentSkillsResult {
     const disabled = remoteHostId ? [] : snapshot ?? current ?? this.deps.getDisabledSkillPaths?.() ?? [];
     if (disabled.length === 0) return result;
-    return { ...result, skills: result.skills.filter((skill) => !skill.path || !(snapshot
-      ? disabled.includes(canonicalSkillPath(skill.path)) : isSkillDisabled(skill.path, disabled))) };
+    // Reuse physical identities only within this read; later reads must see retargeted links.
+    const identities = new Map<string, string>();
+    const identity = (source: string) => {
+      let value = identities.get(source);
+      if (value === undefined) {
+        value = canonicalSkillPath(source);
+        identities.set(source, value);
+      }
+      return value;
+    };
+    const disabledIdentities = new Set(snapshot ?? disabled.map(identity));
+    return { ...result, skills: result.skills.filter((skill) => !skill.path || !disabledIdentities.has(identity(skill.path))) };
   }
 
 

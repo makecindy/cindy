@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { act, useLayoutEffect, useRef } from 'react';
+import { act, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageViewport, type MessageViewportApi } from '../components/chat/MessageViewport';
@@ -18,6 +18,8 @@ let viewportRenders: number;
 // jsdom does not clamp scrollTop like a browser; mocked scrollTop lives here.
 const tops = new WeakMap<HTMLElement, number>();
 let rowMeasurements: number;
+let bodyRenders: Map<string, number>;
+let bodyCreations: Map<string, number>;
 let parentRenders: number;
 let notifyResize: () => void;
 let syncViewport: () => void;
@@ -27,8 +29,13 @@ let setFollowing: (value: boolean) => void;
 const entries = Array.from({ length: 80 }, (_, index) => ({ key: String(index), retain: index === 79 }));
 const rectangle = (top: number, height: number) => ({ top, bottom: top + height, height, width: 800,
   left: 0, right: 800, x: 0, y: top, toJSON() {} }) as DOMRect;
-function Fixture({ disabled = false, restore = false, restoreOffset, onProgrammaticScroll, fade = false }: {
-  disabled?: boolean; restore?: boolean; restoreOffset?: number; onProgrammaticScroll?: () => void; fade?: boolean;
+function RowBody({ rowKey, label }: { rowKey: string; label: string }) {
+  const [clicks, setClicks] = useState(0);
+  bodyRenders.set(rowKey, (bodyRenders.get(rowKey) ?? 0) + 1);
+  return <button onClick={() => setClicks(value => value + 1)}>{label} {rowKey}{clicks ? ` (${clicks})` : ''}</button>;
+}
+function Fixture({ disabled = false, restore = false, restoreOffset, onProgrammaticScroll, fade = false, rows = entries, label = 'Row' }: {
+  disabled?: boolean; restore?: boolean; restoreOffset?: number; onProgrammaticScroll?: () => void; fade?: boolean; rows?: typeof entries; label?: string;
 }) {
   parentRenders++;
   const fadeState = useRef(createWordFadeState());
@@ -42,23 +49,26 @@ function Fixture({ disabled = false, restore = false, restoreOffset, onProgramma
   }, [restoreOffset]);
   setFollowing = value => { followRef.current = value; };
   return <div ref={scrollRef} data-scroll="" onWheel={() => { followRef.current = false; }}>
-    <MessageViewport apiRef={apiRef} options={{ entries, scrollRef, itemsRef, followRef, disabled, onProgrammaticScroll,
+    <MessageViewport apiRef={apiRef} options={{ entries: rows, scrollRef, itemsRef, followRef, disabled, onProgrammaticScroll,
       initialAnchor: restore ? '40' : undefined,
-      initialHeights: restore ? Object.fromEntries(entries.map(entry => [entry.key, 180])) : undefined,
+      initialHeights: restore ? Object.fromEntries(rows.map(entry => [entry.key, 180])) : undefined,
     }}>{viewport => {
       viewportRenders++;
       syncViewport = () => apiRef.current!.syncViewport();
       reconcileViewport = () => apiRef.current!.reconcileViewport();
       getViewportTopRow = () => apiRef.current!.getViewportTopRow();
-      return <div ref={itemsRef}>{entries.map(entry => viewport.shouldMount(entry)
-      ? <div key={entry.key} data-render-item-key={entry.key}><button>Row {entry.key}</button>{fade && <ul><StreamFadeListItem
+      return <div ref={itemsRef}>{rows.map(entry => viewport.shouldMount(entry)
+      ? viewport.renderBody(entry.key, () => {
+        bodyCreations.set(entry.key, (bodyCreations.get(entry.key) ?? 0) + 1);
+        return <div key={entry.key} data-render-item-key={entry.key}><RowBody rowKey={entry.key} label={label} />{fade && <ul><StreamFadeListItem
           wordFadeState={fadeState.current} data-stream-marker
           node={{ type: 'element', tagName: 'li', properties: { dataWfKey: entry.key }, children: [] }}>
           <StreamFadeSpan wordFadeState={fadeState.current} className="stream-word"
             node={{ type: 'element', tagName: 'span', properties: { dataWfKey: entry.key }, children: [] }}>
             Streaming word
           </StreamFadeSpan>
-        </StreamFadeListItem></ul>}</div>
+        </StreamFadeListItem></ul>}</div>;
+      })
       : <div key={entry.key} data-render-item-key={entry.key} data-message-placeholder=""
         style={{ height: viewport.placeholderHeight(entry.key) }} />)}</div>;
     }}</MessageViewport></div>;
@@ -73,7 +83,7 @@ const scroller = () => host.querySelector<HTMLElement>('[data-scroll]')!;
 const row = (key: number) => host.querySelector<HTMLElement>(`[data-render-item-key="${key}"]`)!;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  frames = new Map(); sequence = 0; viewportHeight = 600; headerHeight = 0; scrollWrites = []; rowMeasurements = 0; parentRenders = 0; viewportRenders = 0;
+  frames = new Map(); sequence = 0; viewportHeight = 600; headerHeight = 0; scrollWrites = []; rowMeasurements = 0; bodyRenders = new Map(); bodyCreations = new Map(); parentRenders = 0; viewportRenders = 0;
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++sequence, callback); return sequence; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id); });
   vi.stubGlobal('ResizeObserver', class {
@@ -209,6 +219,30 @@ describe('message viewport content virtualization', () => {
     expect(row(40).hasAttribute('data-message-placeholder')).toBe(true);
     expect(parentRenders).toBe(before);
     expect(rowMeasurements).toBeLessThan(entries.length);
+  });
+  it('reuses mounted bodies on viewport updates while allowing child state and parent content updates', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    await flushFrames();
+    const retainedRenders = bodyRenders.get('79');
+    const initialCreations = bodyCreations.get('40')!;
+    expect(retainedRenders).toBeGreaterThan(0);
+    await act(async () => { scroller().scrollTop = 1800; syncViewport(); });
+    await flushFrames();
+    expect(row(10).querySelector('button')).not.toBeNull();
+    expect(bodyRenders.get('79')).toBe(retainedRenders);
+    expect(row(40).hasAttribute('data-message-placeholder')).toBe(true);
+    await act(async () => { scroller().scrollTop = 7200; syncViewport(); });
+    expect(bodyCreations.get('40')).toBe(initialCreations + 1);
+    await act(async () => { scroller().scrollTop = 1800; syncViewport(); });
+    await act(async () => row(79).querySelector('button')!.click());
+    expect(row(79).textContent).toBe('Row 79 (1)');
+    await act(async () => root.render(<Fixture restore label="Updated" />));
+    expect(row(10).textContent).toBe('Updated 10');
+    expect(row(79).textContent).toBe('Updated 79 (1)');
+    const replacement = entries.map(entry => entry.key === '40' ? { ...entry, key: 'replacement' } : entry);
+    await act(async () => { scroller().scrollTop = 7200; syncViewport(); });
+    await act(async () => root.render(<Fixture restore rows={replacement} />));
+    expect(host.querySelector('[data-render-item-key="replacement"] button')?.textContent).toBe('Row replacement');
   });
   it('reuses the measured interval for small scrolls without reading every row again', async () => {
     await act(async () => root.render(<Fixture restore />));

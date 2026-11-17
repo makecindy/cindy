@@ -1,4 +1,4 @@
-import { useCallback, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react';
+import { useCallback, useImperativeHandle, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import { useMessageViewport } from './useMessageViewport';
 
 export type MessageViewportApi = Pick<ReturnType<typeof useMessageViewport>, 'syncViewport' | 'reconcileViewport' | 'getViewportTopRow'> & {
@@ -12,11 +12,16 @@ export type MessageViewportApi = Pick<ReturnType<typeof useMessageViewport>, 'sy
 export function MessageViewport({ apiRef, options, children }: {
   apiRef: Ref<MessageViewportApi>;
   options: Parameters<typeof useMessageViewport>[0];
-  children: (viewport: ReturnType<typeof useMessageViewport>) => ReactNode;
+  children: (viewport: ReturnType<typeof useMessageViewport> & {
+    renderBody: (key: string, render: () => ReactNode) => ReactNode;
+  }) => ReactNode;
 }) {
   const [connection, setConnection] = useState(0);
   const connected = useRef<{ root: HTMLElement; items: HTMLElement } | null>(null);
   const viewport = useMessageViewport({ ...options, connection });
+  // Keep element identity through viewport-only updates; child state/context still update.
+  // Owner inputs invalidate the cache, and bodies replaced by placeholders are released.
+  const bodies = useMemo(() => new Map<string, ReactNode>(), [children, options]);
   const layout = useRef(viewport.connectViewport);
   layout.current = viewport.connectViewport;
   const connect = useCallback(() => {
@@ -34,5 +39,14 @@ export function MessageViewport({ apiRef, options, children }: {
     getViewportTopRow: viewport.getViewportTopRow,
     connect,
   }), [viewport.syncViewport, viewport.reconcileViewport, viewport.getViewportTopRow, connect]);
-  return children(viewport);
+  const renderedBodies = new Set<string>();
+  const content = children({ ...viewport, renderBody: (key, render) => {
+    renderedBodies.add(key);
+    if (!bodies.has(key)) bodies.set(key, render());
+    return bodies.get(key);
+  } });
+  for (const key of bodies.keys()) {
+    if (!renderedBodies.has(key)) bodies.delete(key);
+  }
+  return content;
 }

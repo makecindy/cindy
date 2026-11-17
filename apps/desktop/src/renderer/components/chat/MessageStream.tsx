@@ -6774,6 +6774,7 @@ export function MessageStream({
                         style={{ height: messageViewport.placeholderHeight(item.key), flexShrink: 0 }} />
                                 );
                     }
+                    return messageViewport.renderBody(item.key, () => {
                     if (item.type === 'fork_origin') {
                       return (
                         <ForkOriginMarker
@@ -7078,6 +7079,7 @@ export function MessageStream({
                         {messageNode}
                       </div>
                     );
+                    });
                   })()}
                           </ImageGalleryContext.Provider>
                         </AttachmentCollectionContext.Provider>
