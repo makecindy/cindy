@@ -66,6 +66,7 @@ import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import { errorReasonI18nKey as resolveErrorReasonI18nKey } from './errorReasonI18n';
+import { isCodexSharedAuthLinkUnavailableError } from '../../../shared/codexAuthReason';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
@@ -280,6 +281,12 @@ export function ErrorBanner({
   const isCodexAppServerForceRetired =
     errorReason === 'app-server-force-retired' ||
     (agentKind === 'codex' && /app-server force-retired:/i.test(error));
+  // #10301: 系统里的 Codex 已经登录,Cindy 自己的 codex-home 却建不出指向那份凭证的链接
+  // (Windows 普通权限下没有 SeCreateSymbolicLink) —— 凭证是「连不上」而不是「没登录」。
+  // 主侧把这个结论留成稳定 reason(auth-adapters / host runtime),这里负责把它翻成用户
+  // 能执行的动作;落到兜底文案时用户只看到「回复未完成」,而重登解决不了链接权限。
+  const isCodexSharedAuthLinkUnavailable =
+    agentKind === 'codex' && isCodexSharedAuthLinkUnavailableError(error);
   // 仅本地 Codex 会话:远端会话 rollout 在远端机器, 本地 fork 剥离做不到, 不给入口。
   const showInvalidEncryptedContentRecovery =
     agentKind === 'codex' &&
@@ -551,6 +558,10 @@ export function ErrorBanner({
     displayError = t('chat.errorBanner.codexAppServerRetired');
   } else if (isCodexThreadStale) {
     displayError = t('chat.errorBanner.codexThreadStale');
+  } else if (isCodexSharedAuthLinkUnavailable) {
+    // 保留 Retry:权限补齐(管理员一次 / 开发者模式)后,下一次 reconcile 就能建出链接,
+    // 重试是这条文案承诺的动作里唯一能立刻生效的那个。
+    displayError = t('chat.errorBanner.codexSharedAuthLinkUnavailable');
   } else if (showInvalidEncryptedContentRecovery) {
     displayError = t('chat.errorBanner.invalidEncryptedContent');
   } else if (isOversizedHistoryError) {
@@ -690,6 +701,7 @@ export function ErrorBanner({
     isPiImageInputUnsupportedError(error) ||
     isCodexAppServerForceRetired ||
     isCodexThreadStale ||
+    isCodexSharedAuthLinkUnavailable ||
     showInvalidEncryptedContentRecovery ||
     isOversizedHistoryError ||
     isCodexRemoteAuthMissing ||

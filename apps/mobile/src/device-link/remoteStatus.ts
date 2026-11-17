@@ -14,7 +14,14 @@ export {
   isPreconditionFailedRemoteError,
 } from '@cindy/maker-shared/device-link-contract';
 
-const AGENT_NOT_AUTHENTICATED_RE = /^(?:\[[A-Z_]+\] )?(claude-code|codex|pi) not authenticated: ?(.*)$/;
+/**
+ * `<agent> not authenticated: <reason>`。
+ *
+ * 宿主 send failure 会在前面加一层自己的错误码(`LAZY_CREATE_FAILED: `),reason 本体不变
+ * —— 不放过这层前缀,已知原因就会被漏成未分类摘要(#10301 的 Windows 共享凭证连不上正是
+ * 走这条路到手机端的)。前缀只认「大写错误码 + 冒号 + 空格」这一种形态,不会吞掉正文。
+ */
+const AGENT_NOT_AUTHENTICATED_RE = /^(?:\[[A-Z_]+\] )?(?:[A-Z][A-Z0-9_]*: )?(claude-code|codex|pi) not authenticated: ?(.*)$/;
 
 const CONNECTION_ISSUE_COPY_KEYS: Record<
   DeviceLinkConnectionIssueKind,
@@ -109,6 +116,9 @@ export function describeAgentAuthError(error: string | null | undefined): string
     no_credentials: 'noCredentials',
     no_encryption: 'noEncryption',
     proxy_not_ready: 'proxyNotReady',
+    // 与 apps/desktop/src/shared/codexAuthReason.ts 同一个字面量:电脑端 Codex 已登录,
+    // 但 Windows 普通权限下建不出指向那份凭证的链接,于是内部 codex-home 连不上它。
+    codex_shared_auth_link_unavailable: 'sharedLinkUnavailable',
   };
   return i18n.t(`deviceLink.agentAuth.${reasonKey[reason] ?? 'default'}`, {
     agent,

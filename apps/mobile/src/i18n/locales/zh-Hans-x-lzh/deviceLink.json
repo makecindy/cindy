@@ -65,6 +65,7 @@
     "noCredentials": "{{agent}} 不可用：电脑端尚未登门。请于电脑端 {{appName}} 之「设置 → 模型供应商」登门后再试。",
     "noEncryption": "{{agent}} 不可用：电脑端系统安全存储空间不可用，读不到已存之密钥。请察系统钥匙串（macOS）或系统账户加密（Windows），然后重启电脑端 {{appName}}。",
     "proxyNotReady": "{{agent}} 暂不可用：电脑端组件未就绪。请稍候再试；若屡见之，请重启电脑端 {{appName}}。",
+    "sharedLinkUnavailable": "{{agent}} 暂不可用：电脑端之 Codex 已登门，而 {{appName}} 不能读其登入（Windows 常权之下，建立不出指向其之链接）。请于电脑端以管理员之身执行 {{appName}} 一次，或开启 Windows 开发人员模式后再试。",
     "default": "{{agent}} 不可用：电脑端登门凭证不可用。请于电脑端 {{appName}} 之「设置 → 模型供应商」重新登门后再试。（{{reason}}）"
   },
   "remoteError": {
