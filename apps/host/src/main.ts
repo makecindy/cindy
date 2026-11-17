@@ -150,7 +150,8 @@ import { createHostSessionUpdate } from './agent/session-update.ts';
 import { createHostSessionMovePorts, createRecentWorkdirsChangedPush } from './agent/session-move.ts';
 import { createHostTouchUserSend } from './agent/touch-user-send.ts';
 import { setLiveCcSessionBridge } from '../../desktop/src/main/maker-host/claude-transcript-relocation.ts';
-import { createHostTaskRestore } from './agent/task-restore.ts';
+import { bindTaskRestoreRetention, createHostTaskRestore } from './agent/task-restore.ts';
+import { bindHostUiText } from './ui-text.ts';
 import { createUserInputEnqueue } from './agent/user-input.ts';
 import { resolveSessionReferencesWithPorts } from '../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
 import { readSwitchOptionsAgentDeviceId, readSwitchOptionsConfirmedContextWindow } from '../../desktop/src/main/maker-ipc/sessionAgentSwitchHandler.ts';
@@ -286,6 +287,9 @@ configureAppDataDir(resolveHostAppDataDir());
 // Release table row 25 (25b, decision (a)): serve never publishes the Skill projection owner; the
 // window, or `cindy-host login` on a Host's own profile, does. Before anything can commit.
 refuseSkillProjectionOwnerCommit();
+// Background copy in the locale before the owner database opens (its startup failure is one), as
+// bootstrap-electron.ts configureUiText.
+bindHostUiText();
 configureWindowsAtomicRename({
   packagedBinary: hostRuntimeLayout().atomicRenameBinary ?? undefined,
   sourceFile: hostRuntimeLayout().atomicRenameSource ?? undefined,
@@ -1062,7 +1066,9 @@ const messageRecovery = createHostMessageRecovery({ getOwner: getCurrentDbClient
 // Shared database writers that change a task's route (restoring an archived task) take the task's send
 // lock through this bridge, as on the desktop (localDb/ipc/registerAll.ts installs the same lock).
 setSessionRouteLockImplementation(withSendToSessionLock);
-// Making an archived task active: sending to it, and the task list's restore (task-restore.ts).
+// Making an archived task active: sending to it, and the task list's restore (task-restore.ts); the
+// restore is recorded for idle archiving, as the desktop's task management records it.
+bindTaskRestoreRetention();
 const taskRestore = createHostTaskRestore({ getOwner: getCurrentDbClientSnapshot,
   publish: event => eventHub.publish(event) });
 

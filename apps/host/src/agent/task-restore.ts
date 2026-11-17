@@ -1,5 +1,6 @@
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
-import { noteSessionsRestoring } from '../../../desktop/src/main/localDb/sessionRestoreRetention.ts';
+import { noteSessionsRestoring, setSessionRestoreObserver } from '../../../desktop/src/main/localDb/sessionRestoreRetention.ts';
+import { recordTaskArchiveRestores } from '../../../desktop/src/main/task-management/restoreObserver.ts';
 import { restoreArchivedTaskForSend } from '../../../desktop/src/main/localDb/archivedTaskRestore.ts';
 
 type Publish = (event: Record<string, unknown>) => void;
@@ -8,8 +9,8 @@ type Publish = (event: Record<string, unknown>) => void;
  * Making an archived task active again, on the Host. The desktop restores through the active branch
  * of `patchSessionMetaInDb` (localDb/ipc/sessions.ts); the Host keeps its three steps that decide
  * the result:
- * 1. `noteSessionsRestoring` (the shared retention observer; the desktop's task management installs
- *    it, the Host installs none);
+ * 1. `noteSessionsRestoring`: the shared retention observer records when the task came back
+ *    (bindTaskRestoreRetention, installed by main.ts as the desktop's task management does);
  * 2. the database transaction `sessions.setStatus` to active, which refuses a deleted task and a
  *    teammate's own lane and detaches a group lane, as on the desktop;
  * 3. the change is published to clients.
@@ -18,6 +19,17 @@ type Publish = (event: Record<string, unknown>) => void;
  * Both Host routes to an active task use it: sending to an archived task (the send transaction's
  * `restoreArchivedSessionForSend`) and the task list's restore (`/sessions/update`).
  */
+/**
+ * The restore observer the desktop's task management installs (task-management/service.ts): before a
+ * task is made active, record when, in the owner's task management file the desktop reads. The Host runs
+ * no idle archiving; the desktop does when it opens this profile itself, and keeps a task restored here
+ * for its retention days instead of archiving it again. Returns the uninstall.
+ */
+export function bindTaskRestoreRetention(): () => void {
+  setSessionRestoreObserver(recordTaskArchiveRestores);
+  return () => setSessionRestoreObserver(null);
+}
+
 export function createHostTaskRestore(deps: { getOwner(): unknown; publish: Publish }) {
   async function restoreTaskToActive(
     sessionId: string,

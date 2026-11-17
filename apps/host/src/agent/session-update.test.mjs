@@ -37,7 +37,9 @@ import { createSessionContextBudget } from '../../../desktop/src/main/maker-host
 import { ownerScopedPath } from '../../../desktop/src/main/ownerContext.ts';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
 import { setModelWithWindowConfirmation } from '../../../desktop/src/renderer/features/cc-agent/lib/modelWindowConfirmation.ts';
-import { createHostTaskRestore } from './task-restore.ts';
+import { bindTaskRestoreRetention, createHostTaskRestore } from './task-restore.ts';
+import { taskManagementStore } from '../../../desktop/src/main/task-management/store.ts';
+import { ARCHIVE_CANDIDATE_SELECT, taskArchiveKeepReason } from '../../../desktop/src/main/task-management/eligibility.ts';
 import { setSessionRouteLockImplementation } from '../../../desktop/src/main/localDb/sessionRouteLock.ts';
 import { withSendToSessionLock, withSessionRestartLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { botProfiles, botSessionLinks } from '../../../desktop/src/main/localDb/schema.ts';
@@ -454,6 +456,39 @@ test('restore: the task list and a send make an archived task active through the
   // An active task is left as it is by a send.
   await f.taskRestore.restoreArchivedSessionForSend('restore-send');
   assert.equal(f.events.length, 2);
+});
+
+/**
+ * The restore is recorded for idle archiving (task-restore.ts bindTaskRestoreRetention).
+ * - Rule: the desktop's task management installs the restore observer (task-management/service.ts):
+ *   a restored task is kept for its retention days ('restored', eligibility.ts) before idle archiving
+ *   may archive it again (release table 甲 22).
+ * - Gap: the Host installed none, so a task restored on the Host carried no restoredAt. The Host runs
+ *   no idle archiving; the desktop does when it opens the same profile itself, and archived the task
+ *   straight away.
+ * - Minimal failing input: an archived, long-unused task restored through the task list or a send.
+ * - Tier: unit, through the Host's restore entries over a migrated profile database, then the
+ *   desktop's own retention decision on the row the desktop's archiving reads.
+ */
+test('restore: both routes record the restore, so later idle archiving keeps the task', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  t.after(bindTaskRestoreRetention());
+  await archivedTask(f, 'restore-kept-list');
+  await archivedTask(f, 'restore-kept-send');
+  await f.update('restore-kept-list', { status: 'active' });
+  await f.taskRestore.restoreArchivedSessionForSend('restore-kept-send');
+  const restoredAt = taskManagementStore.restoredAt();
+  const idle = { ready: true, viewed: new Set(), drafts: new Set(), remoteUnknown: false };
+  for (const id of ['restore-kept-list', 'restore-kept-send']) {
+    assert.ok(restoredAt[id] > Date.now() - 60_000, `${id} has its restore time`);
+    // Unused for a long time: without the record the desktop's archiving would pick it at once.
+    await f.database.drizzle.update(sessions).set({ lastActivityAt: 1, userSendAt: null, updatedAt: 1 })
+      .where(eq(sessions.id, id));
+    const row = await f.database.queryOne(`${ARCHIVE_CANDIDATE_SELECT} WHERE s.id = ?`, [id]);
+    const decide = at => taskArchiveKeepReason(row, { now: Date.now(), days: 7, restoredAt: at, protection: idle, busy: false });
+    assert.equal(decide(restoredAt[id]), 'restored');
+    assert.equal(decide(undefined), null, 'the same row without the record is archived');
+  }
 });
 
 test('restore: a deleted task stays deleted on both routes', { timeout: 30_000 }, async t => {

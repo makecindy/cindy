@@ -1084,6 +1084,8 @@ describe('module-level port setters the Host loads, classified for the Host', ()
     expect(rows.filter(row => !row.oneLine).map(row => row.key)).toEqual([]);
     for (const { key, entry } of rows) {
       expect(['bound', 'pending', 'not-applicable', 'internal'], key).toContain(entry.status);
+      // No entry waits on an id or a row nobody has given it yet.
+      expect(entry.reason ?? '', key).not.toMatch(/\bto be (assigned|decided|added)\b/i);
       if (entry.status === 'bound') {
         // The Host file named must really bind it: a mention in a comment, string, type or import does not count.
         expect(entry.where, key).toMatch(/^apps\/host\//);
