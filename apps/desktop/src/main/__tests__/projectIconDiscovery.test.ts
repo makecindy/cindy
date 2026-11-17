@@ -54,3 +54,23 @@ it('uses artwork from the matching primary package in a workspace of checkouts',
   expect(await discoverProjectIcon(io)).toMatchObject({ source: 'icon.png' });
   expect(fetch).not.toHaveBeenCalled();
 });
+
+
+// Review #11181: README links are URL paths and directory names can contain dots.
+// Unit tier: the production discovery entry must resolve both forms and skip malformed/escaping URLs.
+it.each([
+  ['repos/product.v2', 'repos/product.v2'],
+  ['repos/product%20client/', 'repos/product client'],
+  ['repos/%E4%BA%A7%E5%93%81/', 'repos/产品'],
+])('resolves linked package directory %s', async (href, directory) => {
+  const source = directory + '/icon.png';
+  const files: Record<string, Buffer> = {
+    'README.md': Buffer.from('[Bad](%ZZ/) [Escape](%2e%2e/private/) [Source](' + href + ')'),
+    [directory + '/package.json']: Buffer.from('{"name":"atlas"}'),
+    [source]: png,
+  };
+  const read = vi.fn(async (p: string) => files[p] ?? null);
+  expect(await discoverProjectIcon({ directoryName: 'Atlas', read, fetch: async () => null }))
+    .toMatchObject({ kind: 'local', source });
+  expect(read.mock.calls.some(([p]) => p.includes('..') || p.includes('%'))).toBe(false);
+});

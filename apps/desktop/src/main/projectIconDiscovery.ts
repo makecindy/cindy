@@ -96,19 +96,20 @@ function linkedPackageDirectories(readme: Buffer | null): string[] {
   for (const link of markdown.matchAll(
     /(?<!!)\[[^\]\n]{1,256}\]\((?:<([^>\n]{1,1024})>|([^\s()]{1,1024}))\)/g,
   )) {
-    const target = (link[1] ?? link[2]!).split('#')[0]!;
+    let target: string;
+    try {
+      target = decodeURIComponent((link[1] ?? link[2]!).split('#')[0]!);
+    } catch {
+      continue;
+    }
     if (!target || target.startsWith('/') || target.split('/').includes('..')) continue;
     const relative = localIconPath(target);
     if (!relative) continue;
     const directory = /\/(?:README\.md|package\.json)$/i.test(relative)
       ? path.posix.dirname(relative)
       : relative.replace(/\/$/, '');
-    if (
-      !directory ||
-      directory === '.' ||
-      (directory === relative && path.posix.extname(directory))
-    )
-      continue;
+    // Whether a link names a package is determined by its manifest, not a filename suffix.
+    if (!directory || directory === '.') continue;
     roots.add(directory);
     if (roots.size === 8) break;
   }
