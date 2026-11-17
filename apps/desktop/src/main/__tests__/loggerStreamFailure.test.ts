@@ -186,9 +186,9 @@ it('keeps growing the backoff and reports a persistent failure only once', async
   try {
     const { initLogger, writeCcDebugLine } = await import('../logger.js');
     initLogger({ isDev: false, level: 'trace', logDir: root });
-    const round = (text: string): Promise<void> => {
+    const round = async (text: string): Promise<void> => {
       writeCcDebugLine(text, SESSION);
-      return vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
     };
 
     const line = `${new Date().toISOString()} [debug] [cc] never lands\n`;
