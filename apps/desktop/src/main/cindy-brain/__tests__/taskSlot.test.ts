@@ -6,8 +6,28 @@ import { buildPluginMessage } from '../../../shared/pluginMessage.js';
 import { parseUserContent } from '../../../renderer/lib/imageRef.js';
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 import { createGhostPageBridge } from '../../../shared/ghostPageBridge.js';
+import { ensurePluginTaskApproval } from '../taskCapability.js';
 
 describe('plugin task pipe', () => {
+  // PR #10988: new project-only callers had no route into the existing target consent UI.
+  // The prior grant tests started already approved. One real project request, unit tier.
+  it.each(['allow', 'deny', 'owner-change'] as const)('requests first-use project consent and handles %s', async decision => {
+    const pending = { ...ghost, manifest: { ...ghost.manifest, agent: { tasks: true, targets: true } }, targetCapabilityApproved: undefined } as InstalledGhost;
+    let active = true;
+    const handler = vi.fn(async () => ({ projects: [{ id: 'chat', label: 'Chat' }] }));
+    const confirm = vi.fn(async () => { if (decision === 'owner-change') active = false; return decision !== 'deny'; });
+    const approve = vi.fn(async () => { pending.targetCapabilityApproved = true; return true; });
+    const result = await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'imProjects' }, {
+      getGhost: () => pending, handler, isCurrent: () => active,
+      ensureTargetsAuthorized: () => ensurePluginTaskApproval('p', {
+        getGhost: () => pending, isCurrent: () => active, confirm, approve,
+      }, 'targets'),
+    });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(result).toMatchObject(decision === 'allow' ? { ok: true } : { ok: false, error: { code: 'PERMISSION_DENIED' } });
+    expect(handler).toHaveBeenCalledTimes(decision === 'allow' ? 1 : 0);
+    expect(approve).toHaveBeenCalledTimes(decision === 'allow' ? 1 : 0);
+  });
   // Shared project metadata and directory access must not expand an old tasks-only grant.
   // Existing cases only covered own-task routes. Real page API and pipe; one project request. Unit.
   it('gates shared IM projects on existing target consent and rejects competing overrides', async () => {

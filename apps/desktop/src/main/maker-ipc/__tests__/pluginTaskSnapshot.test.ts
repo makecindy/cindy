@@ -18,6 +18,7 @@ import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCat
 import { setSessionRuntimeHarness } from '../sessionRuntimeHarnessSelection.js';
 import { resolveSessionRuntimeAxes } from '../sessionRuntimeControl.js';
 import { findCatalogModel } from '@cindy/model-providers';
+import { createSessionControlService, type SessionControlServiceDeps } from '../sessionControlService.js';
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 
@@ -136,6 +137,49 @@ it('reads remote output from its own task history and withholds it after plugin 
   expect(read).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: ['own-remote-task'] }));
   revokeOnRead = true;
   await expect(run('p', { kind: 'readMessages', taskId: 'own-remote-task' })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+});
+
+// PR #10988: the old live Agent must not veto a permission supported by the
+// selected Agent. Existing adapters mocked SessionControlService's mixed validation.
+// One Codex -> Claude acceptEdits continuation; real control service, unit tier.
+it('applies project permission only after the selected idle Agent has replaced the old one', async () => {
+  const start = source.indexOf('      setModel: async (');
+  const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:', start)).trim().replace(/,$/, '');
+  let effective = { agentKind: 'codex' as 'codex' | 'claude-code', model: 'old', providerId: 'old', effort: null, fastMode: false };
+  let pending: typeof effective | null = null;
+  let generation = 0;
+  let permission = 'auto';
+  const live = { agentKind: effective.agentKind, isTurnRunning: () => false, getTurnControlSnapshot: () => ({}),
+    capabilities: { permissionModes: [{ id: 'ask' }, { id: 'auto' }], setPermissionModeMidSession: { supported: true } } };
+  const writePermission = vi.fn(async ({ mode, beforeMutation }: { mode: string; beforeMutation?: () => Promise<void> }) => {
+    await beforeMutation?.();
+    if (!live.capabilities.permissionModes.some(item => item.id === mode)) throw Error('Old Agent cannot use this permission');
+    permission = mode;
+  });
+  const control = createSessionControlService({
+    sessionExists: async () => true, getLiveSession: () => live,
+    getSessionActivitySnapshot: async () => ({}),
+    getSessionRuntimeDetails: async () => ({ runtimeGeneration: generation, effectiveProfile: effective,
+      baselineProfile: effective, pendingMutation: pending ? { profile: pending } : null, permissionMode: permission }),
+    setSessionRuntime: async ({ patch, beforeMutation }: Parameters<SessionControlServiceDeps['setSessionRuntime']>[0]) => {
+      await beforeMutation?.();
+      pending = { ...effective, ...patch, agentKind: patch.harness ?? effective.agentKind } as typeof effective;
+      return { ok: true, status: 'deferred', generation: ++generation, effectiveProfile: effective, pendingMutation: { profile: pending } };
+    },
+    setSessionPermissionMode: writePermission,
+  } as unknown as SessionControlServiceDeps);
+  const handoff = vi.fn(async () => {
+    effective = pending!; pending = null;
+    live.agentKind = 'claude-code'; live.capabilities.permissionModes = [{ id: 'ask' }, { id: 'acceptEdits' }];
+  });
+  const apply = compile(`return ({${property}}).setModel;`, {
+    PluginTaskError, sessionControlService: control, agentSwitchDeps: {}, applyPendingAgentSwitchIfIdle: handoff,
+  });
+  await expect(apply('task', { agentKind: 'cc', providerId: 'claude', model: 'model', effort: '', fastMode: false },
+    async () => {}, 'acceptEdits')).resolves.toEqual({ status: 'applied' });
+  expect(handoff).toHaveBeenCalledOnce();
+  expect(permission).toBe('acceptEdits');
+  expect(writePermission).toHaveBeenCalledOnce();
 });
 
 it.each([

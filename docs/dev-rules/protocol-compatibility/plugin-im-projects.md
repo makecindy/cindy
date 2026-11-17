@@ -5,6 +5,7 @@
 `tasks.capabilities().imProjects === true` 后，已批准 `agent.tasks` 与 `agent.targets`
 的插件可调用 `tasks.imProjects()`，获得插件宿主电脑侧栏项目与内置 `chat`。项目 ID 是
 本机登记的目录，名称跟随侧栏；不枚举其他电脑的项目，不接收任意目录。
+首次使用已声明但尚未批准的 targets 时，复用现有 Host 项目访问确认；拒绝、账号变更或确认失败均不授予访问。
 
 - `tasks.create({requestKey,title,imProject})` 按共用 IM 设置创建任务。不能同时指定
   route、permissionMode、callId 或 isolatedWorkspace。创建键按项目选择签名；重试返回原任务，
@@ -13,6 +14,8 @@
   模型、供应商、远程执行来源、推理强度与权限来自官方机器人同一解析器。项目不匹配返回
   `PROJECT_MISMATCH`，由插件按自己的会话规则新建，不能搬动旧任务或混入它的历史。
   当前配置和安装批准在异步读取、模型修改、权限修改及发送时复核。Plan Mode 不被隐式关闭。
+  同时换 Agent 与权限时，先完成普通空闲任务的引擎交接，再由目标 Agent 的权限写入口应用新档位，
+  不让旧 Agent 拒绝只在目标引擎上存在的合法权限；交接未完成不改旧引擎权限。
 - 项目关联保存在已有创建回执 JSON 的可选 `imProject` 字段；派发再次核验项目成员关系与当前
   权限上限。没有该字段的旧任务保持原行为。插件自己的任务配置卡仍启用时，其权限上限照旧生效；
   共用配置的插件可声明已有 `showTaskPreferences:false`，不删除曾保存的偏好。

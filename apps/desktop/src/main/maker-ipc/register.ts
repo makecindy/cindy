@@ -14361,14 +14361,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const selectLocation = location !== selectedLocation || location !== (current.runtime.effectiveProfile.agentDeviceId ?? null);
         const selectHarness = current.runtime.effectiveProfile.agentKind !== targetAgent
           || (pendingAgent !== undefined && pendingAgent !== targetAgent) || selectLocation || !!location;
+        // Project continuation can choose a mode the previous Agent cannot use.
+        // Complete its ordinary idle handoff before applying the new permission.
+        const permissionHandoff = permissionMode !== undefined && current.runtime.effectiveProfile.agentKind !== targetAgent;
         const result = await sessionControlService.setSessionRuntime({ targetSessionId: taskId,
           expectedGeneration: current.runtime.runtimeGeneration,
           beforeMutation: assertUnchanged,
           patch: { ...(selectHarness ? { harness: targetAgent } : {}),
             ...(selectLocation || location ? { agentDeviceId: location } : {}),
             model: route.model, providerId: route.providerId, effort: (route.effort || null) as Effort | null,
-            fastMode: route.fastMode, ...(permissionMode ? { permissionMode } : {}) } });
+            fastMode: route.fastMode, ...(permissionMode && !permissionHandoff ? { permissionMode } : {}) } });
         if (!result.ok) throw new PluginTaskError(result.errorCode, result.message);
+        if (permissionHandoff) {
+          await assertUnchanged();
+          await applyPendingAgentSwitchIfIdle(agentSwitchDeps, taskId, { bootstrapAfterSwitch: true });
+          await assertUnchanged();
+          const changed = await sessionControlService.getSessionRuntime({ targetSessionId: taskId });
+          if (!changed.ok) throw new PluginTaskError('TASK_NOT_FOUND', changed.message);
+          if (changed.runtime.effectiveProfile.agentKind !== targetAgent)
+            throw new PluginTaskError('TASK_BUSY', 'Wait for the selected Agent to become available');
+          const permission = await sessionControlService.setSessionRuntime({ targetSessionId: taskId,
+            expectedGeneration: changed.runtime.runtimeGeneration, beforeMutation: assertUnchanged,
+            patch: { permissionMode } });
+          if (!permission.ok) throw new PluginTaskError(permission.errorCode, permission.message);
+          return { status: permission.status };
+        }
         return { status: result.status };
       },
       assertTeamPlanUnstarted: async taskId => {
