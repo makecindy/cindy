@@ -6,8 +6,8 @@
 - 第四节“用户已定的产品形态”：用户的原话和安全审查结论；
 - 第五节“第 25 行 25b 的修订”和“乙：客户端模式下窗口切换、添加账号”：设计决定。
 
-本文把这几处，以及当时分散在几轮讨论里的决定，合成一份可以单独读懂的方案。行号按集成分支 `da86939fbb`
-核对（代码与 `8df7f93695` 相同）；实现时以当时的代码为准。审核方第二轮审稿（2026-11-17）的补充已并入：3.1、3.3、3.5、S1、S5、第六节、第八节与第九节。
+本文把这几处，以及当时分散在几轮讨论里的决定，合成一份可以单独读懂的方案。行号按集成分支 `185fbef443`
+核对；实现时以当时的代码为准。审核方第二轮审稿（2026-11-17）的补充已并入：3.1、3.3、3.5、S1、S5、第六节、第八节与第九节。
 
 ## 一、背景：窗口是第二个写方
 
@@ -49,7 +49,7 @@
 - 那样窗口会长期是第二个写方，与客户端模式的设计、也与 C 的单写方前提相反。
 - Host 已经有全部零件：
   - 读写同一份账号保管库，用同一把锁 `AUTH_ACCOUNT_VAULT_LOCK_FILE`；
-  - 运行时拆装：`disposeOwnerRuntime` `apps/host/src/main.ts:1911`，`ensureRuntime` :672；
+  - 运行时拆装：`disposeOwnerRuntime` `apps/host/src/main.ts:1913`，`ensureRuntime` :674；
   - 登录提交：`commitLoginSessionAndOwner`，`apps/host/src/agent/skill-projection-owner.ts:112`；
   - 账号边界停止：`runOwnerBoundary`，见第七节。
 
@@ -60,7 +60,7 @@
 | `auth:accounts:list` | `/api/auth/accounts/list` | 只读保管库，返回与 `DesktopAccountSwitcherSnapshot` 同形的 `{ accounts, mutationAllowed }`。当前项按 Host 的账号标，不按窗口本地；闸门关着或切换进行中时 `mutationAllowed` 为 false |
 | `auth:accounts:sync` | `/api/auth/accounts/sync` | passport 续期与成员同步：网络请求在锁外，锁内重读、比对后写（8.4）。这会写凭据，只能由单写方做；主体搬自桌面 `syncSavedAccounts`（`authManager.ts:4074`），成为共用核心 |
 | `auth:accounts:switch` | `/api/auth/accounts/switch` | body `{ accountKey }`。确认在窗口那一侧做（第六节），Host 收到请求就执行第八节的顺序 |
-| `auth:accounts:begin-add` | `/api/auth/accounts/add/begin` | Host 开始一个添加账号的登录事务，返回登录状态（与 `DesktopLoginActionResult` 同形，不含令牌） |
+| `auth:accounts:begin-add` | `/api/auth/accounts/add/begin` | Host 开始一个添加账号的登录事务，返回登录状态（与 `DesktopLoginActionResult` 同形，不含令牌）。闸门关着时拒绝，提示同切换（⑥）；没有当前账号时的登录也一样（3.5） |
 | `auth:dispatch-login-action`（客户端模式下的添加账号） | `/api/auth/accounts/add/action` | body 形如桌面的 `DesktopLoginAction`，由 Host 解释 |
 | `auth:get-login-state`（客户端模式下） | `/api/auth/accounts/add/state` | 读 Host 登录事务的当前状态（`DesktopLoginState`，不含令牌，字段见 S5） |
 | `auth:get-captcha-challenge-url`（客户端模式下） | `/api/auth/accounts/add/captcha-url` | 返回按构建区域拼出的公开人机验证页地址，无副作用、不含凭证（桌面 `bootstrap-electron.ts:6883–6888` 的注释）；验证结果由窗口在 `request-code` 动作里带给 Host（S1） |
@@ -70,14 +70,14 @@
 - 合同项写进 `HOST_CONTRACT_CHANNELS` 的 Auth 段，形状同现有三项，标 `trustedRenderer: true`。
 - 路由写进 `apps/host/src/service.mjs`，与 `/api/auth/state`、`/api/auth/refresh` 同处（:97、:100）。
 - `/api/auth/*` 本来就不算 owner 请求（`apps/host/src/server.mjs:166`），切换进行中仍能调用。
-- 推送沿用现有的 `auth_changed` 事件，例如退出登录收尾时发的那条（`main.ts:1546`）。窗口经 `receiveHostAuthState`（`authManager.ts:485`）换显示。
+- 推送沿用现有的 `auth_changed` 事件，例如退出登录收尾时发的那条（`main.ts:1548`）。窗口经 `receiveHostAuthState`（`authManager.ts:485`）换显示。
 - 不走 device-link：这几个通道不在 device-link 白名单里，远程控制端本来就不能换账号。
 
 ## 三、设计点（审核方已定）
 
 ### 3.1 只给 Host 的账号切换、登录完成用的 owner 提交入口（定 (ii)）
 
-serve 进程在加载前注入“拒绝提交 owner”：`main.ts:292` 调 `refuseSkillProjectionOwnerCommit`，定义在 `skill-projection-owner.ts:30`。只有 `cindy-host login` 放开（`allowSkillProjectionOwnerCommit`，:35）。
+serve 进程在加载前注入“拒绝提交 owner”：`main.ts:293` 调 `refuseSkillProjectionOwnerCommit`，定义在 `skill-projection-owner.ts:30`。只有 `cindy-host login` 放开（`allowSkillProjectionOwnerCommit`，:35）。
 
 serve 要在这几处提交 owner：
 - 账号切换（第八节）；
@@ -113,7 +113,7 @@ serve 要在这几处提交 owner：
 `discoverHostOwner`（`apps/host/src/profile-path.mjs:45`）只看 profile 里 `cindy-*.db` 的个数：
 
 - 一个库：认它的账号；
-- 两个库：不设 `CINDY_HOST_OWNER` 就拒绝启动。用在启动时 `main.ts:2072`，状态命令 `main.ts:201`。
+- 两个库：不设 `CINDY_HOST_OWNER` 就拒绝启动。用在启动时 `main.ts:2074`，状态命令 `main.ts:202`。
 
 运行中切换过一次，profile 里就有两个库，下次重启必然撞上。改成按已提交的会话认 owner，与切换同一单元做。
 **会话与技能投影的 owner 不一致时谁说了算：照桌面，以会话为准。** 桌面冷启动先续期持久化的会话，再把技能投影的 owner 提交成会话的账号：
@@ -142,7 +142,7 @@ Host 照做：
   4. 发 `auth_changed`。
 - **与乙 10 的关系**：乙 10 是“serve 运行中不重新采用会话，`cindy-host login` 之后要重启 serve”（放行表第五节）。窗口里的登录经 Host 自己的事务完成，由 serve 直接采用，不需要重启，所以这条路径不再受乙 10 影响。另起进程的 `cindy-host login` 仍要重启，乙 10 那一行保留，只记“窗口登录已不受影响”。
 - **登录失效后重新登录同一账号**：
-  - 会话失效时 `invalidateHostSession` 已经经 `runOwnerBoundary` 拆掉运行时（`main.ts:557` 起），重新登录时没有在跑的运行时；
+  - 会话失效时 `invalidateHostSession` 已经经 `runOwnerBoundary` 拆掉运行时（`main.ts:559` 起），重新登录时没有在跑的运行时；
   - owner 不变：投影边界已是这个账号的 stable，提交是同 owner 的空操作；
   - 运行时要重建（`ensureRuntime`），因为失效时已经拆掉。
 - **登录完成时的区域规则**：
@@ -277,7 +277,7 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
 
 - **③ A 队列里没发的输入**：留在 A 的库里，回到 A 再发，与桌面换账号相同。
 - **④ 切换失败**：先验 B、不动 A；B 不行就留在 A，并说明原因。
-- **⑥ 闸门关着时**（同一 profile 上有会开库的桌面在运行，`inputQueue.isHeldForDesktop()`，`apps/host/src/agent/input-queue.mjs:629`）：拒绝切换，提示先关那个桌面。
+- **⑥ 闸门关着时**（同一 profile 上有会开库的桌面在运行，`inputQueue.isHeldForDesktop()`，`apps/host/src/agent/input-queue.mjs:629`）：拒绝切换，提示先关那个桌面。添加账号（`add/begin`）和 3.5 里没有当前账号时的登录同样拒绝，给同一句提示。理由与并存规则一致：桌面占用期间，Host 不写两边共用的凭据。
 - **①② 照桌面**：只在有任务在跑时，弹桌面现有的确认框，文案不变。
   - 确认后停掉在跑的任务，并保留中断痕迹：之后有中断横幅，不自动续跑。
   - 没有确认宿主时不切；切换失败留在原账号。
@@ -315,7 +315,7 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
 
 ## 七、复用账号边界：`runOwnerBoundary`
 
-切换就是一次账号边界，经 `apps/host/src/agent/owner-boundary.ts` 的 `runOwnerBoundary(ownerBoundary, …)` 走。`ownerBoundary` 在 `main.ts:1240` 建立。`begin()` 一开始就做三件事：
+切换就是一次账号边界，经 `apps/host/src/agent/owner-boundary.ts` 的 `runOwnerBoundary(ownerBoundary, …)` 走。`ownerBoundary` 在 `main.ts:1242` 建立。`begin()` 一开始就做三件事：
 
 - 输入运行时进入停止态（`beginStop`，`input-queue.mjs:579`）：不再接新输入，此后结束的回合记作中断；
 - 持有共用的回合结束写入压制，直到拆完；
@@ -353,7 +353,7 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
    - afterDispose：
      1. 在 3.1 的入口里调 `commitLoginSessionAndOwner`：锁内写 B 的当前会话记录，再提交 owner；过渡里撤销 A 的技能投影。
      2. 有阻碍就中止，会话记录回滚到 A。
-     3. 然后 `ensureRuntime(B)`。`main.ts:675` 的“运行中不许换 owner”前提是 activeOwner 已被 dispose 清空，所以拆干净后可以调；它会取租约、重做并存扫描、开 B 的库（没有就新建）。
+     3. 然后 `ensureRuntime(B)`。`main.ts:677` 的“运行中不许换 owner”前提是 activeOwner 已被 dispose 清空，所以拆干净后可以调；它会取租约、重做并存扫描、开 B 的库（没有就新建）。
      4. 之后 `startDeviceLink()`，并重新排续期。
 4. **收尾**：成功与失败分开写。两种情况都必须发 `auth_changed`，否则窗口会一直停在“正在切换账号…”。
    - 成功：`commitVolatileAppSession('cloud', B)` → 释放边界 → `eventHub.clear()` → 发 `auth_changed`。窗口经 `receiveHostAuthState` 换到 B，平台客户端重连成 B。
@@ -364,16 +364,21 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
 能提前的只读校验已在第 2 步做完。但预检和实际执行之间有时间差，所以 begin 之后这一支照样保留。
 
 - **第一层：begin 之前失败**。留在 A，什么都没变（④）。
-- **第二层：begin 之后、B 没开成**：例如撤销投影写盘失败、开 B 的库失败。
-  - dispose 照常到达，会话记录已回滚到 A；
-  - 用 A 重开运行时：经 3.1 的入口把 owner 留在 A，然后 `ensureRuntime(A)`；
-  - `commitVolatileAppSession('cloud', A)`，发 `auth_changed`。
+- **第二层：begin 之后、B 没开成**。dispose 照常到达。分两种情况：
+  - **(a) owner 还没提交成 B 就失败**，例如撤销 A 的投影时写盘失败：
+    - `commitLoginSessionAndOwner` 已把会话记录回滚到 A，owner 仍是 A；
+    - 经 3.1 的入口把 owner 留在 A，然后 `ensureRuntime(A)`。
+  - **(b) owner 已经提交成 B，开 B 的库时才失败**，例如库版本比这个 Host 新：
+    - 回滚顺序是**先写会话、后提交 owner**：先在锁内把会话记录写回 A，再经 3.1 的入口把 owner 提交回 A（过渡里撤销 B 的投影），然后 `ensureRuntime(A)`；
+    - 先写会话，是因为重启时以会话为准（3.3）：回滚做到一半崩溃，重启按会话补成 A；
+    - 提交回 A 也失败，就落到第三层：会话已是 A，重启后按 3.3 补成 A。
+  - 两种情况最后都是 `commitVolatileAppSession('cloud', A)`，发 `auth_changed`。
   - 这一支只会在用户已经确认中断之后走到，或者当时本来就没有任务在跑（8.5）。结果是没换成功；刚才在跑的任务显示为中断，可以手动继续；不丢数据。
 - **第三层：B 失败，再用 A 重开也失败**：
   - 会话记录仍是 A，不能停在 B；
-  - 运行时进入与启动失败相同的 error 状态：同 `main.ts:2101–2108`，dispose、`commitVolatileAppSession('signed-out')`、`runtime.state = 'error'`；`runtime.detail` 只放固定错误码（S5）；
+  - 运行时进入与启动失败相同的 error 状态：同 `main.ts:2103–2110`，dispose、`commitVolatileAppSession('signed-out')`、`runtime.state = 'error'`；`runtime.detail` 只放固定错误码（S5）；
   - 发 `auth_changed`，窗口看到错误；
-  - 重启 Host 可以恢复：会话是 A，按 3.3 认 A。
+  - 重启 Host 可以恢复：会话是 A，按 3.3 认 A；如果 owner 停在 B 或 pending，启动时按会话补提交成 A。
 - **失败提示**：
   - 要告诉用户两件事：仍在原账号；刚才在跑的任务已被中断。
   - 现有的 `sidebar.accountSwitcher.switchFailed`（“切换失败，请重新登录该账号”）不含后一句。
@@ -389,8 +394,10 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
 | begin 之后、写 B 的会话之前 | 会话 A，边界 stable(A) | 正常回到 A；被停掉的回合保留中断痕迹，进“继续上次中断的任务”列表 |
 | (i) B 的会话已写、owner 还没提交（或边界停在 pending） | 会话 B，边界 stable(A) 或 pending | 照桌面冷启动：以会话为准，serve 启动时经 3.1 的入口把 owner 补提交成 B（过渡里撤销 A 的投影），再开 B 的库。补不成就进入启动失败的 error 状态（8.2 第三层的形态），会话不改回 A |
 | (ii) owner 已提交、B 的库还没开 | 会话 B，边界 stable(B)，B 的库可能还不存在 | 正常起 B；库不存在就新建，同首次登录 |
+| 第二层 (b) 回滚途中：会话已写回 A、owner 还没提交回 A（或边界停在 pending） | 会话 A，边界 stable(B) 或 pending | 以会话为准：serve 启动时经 3.1 的入口把 owner 补提交成 A（过渡里撤销 B 的投影），再开 A 的库。补不成就进入启动失败的 error 状态，会话仍是 A |
+| 第二层 (b) 回滚途中：会话还没写回 A | 会话 B，边界 stable(B) | 同 (ii)：按会话起 B。如果开 B 的库仍失败，就进入启动失败的 error 状态，窗口看到错误。回滚先写会话，就是为了让这个窗口尽量短 |
 
-(i) 要有测试。
+(i) 和第二层 (b) 的“会话已写回 A、owner 还没提交回 A”要有测试。
 
 ### 8.4 锁与网络请求
 
@@ -399,7 +406,7 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
   2. 在锁外续期、拉成员；
   3. 进锁后经 `replacePassportSessionIfCurrent`（:1573）重读、与这次请求用的令牌比对，一致才写。
 - 切换时续这个账号也一样，写回走 `replaceResourceSessionIfCurrent`（:1410），同样是锁内重读、比对。
-- 锁只在本地读写时持有，桌面每次等锁 5 秒（`waitMs: 5_000`，`authManager.ts:1219`），Host 的退出登录（`main.ts:1517`）与续期（`apps/host/src/auth/refresh.mjs:86`）也是 5 秒。
+- 锁只在本地读写时持有，桌面每次等锁 5 秒（`waitMs: 5_000`，`authManager.ts:1219`），Host 的退出登录（`main.ts:1519`）与续期（`apps/host/src/auth/refresh.mjs:86`）也是 5 秒。
 - Host 的 `sync` 与第 2 步照这个做法：网络请求在锁外，各自用认证客户端现有的请求超时；锁内不做网络请求。退出登录等锁不会被网络请求拖过 5 秒。
 
 ### 8.5 运行中任务的兜底
@@ -420,6 +427,7 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
   - `sessionsStore.reset()`、`clearWorkersCache()`（:344–345）；
   - 把按账号分区的本地存储换到 B（:357 起）。
   - 这与桌面本地切换时渲染层的处理是同一段代码。差别只在：本窗口发起的切换先经 `runDataOwnerBoundary`（:214）设一道提交前的围栏；别的客户端发起、或 Host 自己因失败落回 A 的推送没有这道围栏。
+- 因为没有那道围栏，在 A 账号下发出、B 的推送到达之后才返回的请求，结果必须丢弃，不能写进 B 的界面状态。
 - 列为桌面侧的必做测试，见第九节。
 
 ### 8.7 和已有机制的配合
@@ -469,15 +477,18 @@ Host 返回给窗口的登录状态里有哪些字段（`DesktopLoginState` = `A
   - 先验 B 失败、或任一只读预检不过时，A 不受影响：没有 begin，运行时与会话不变；
   - 先验 B 成功、随后切换失败时，保管库里 B 的令牌仍然可用（第 2 步写回过轮换后的凭据）；
   - 切换成功后，被停掉的回合保留中断痕迹、不自动续跑；
-  - 第二层：begin 之后失败时，会话回滚到 A 并重开，窗口收到 A 的 `auth_changed`；
+  - 第二层 (a)：owner 还没提交成 B 就失败时，会话回滚到 A 并重开，窗口收到 A 的 `auth_changed`；
+  - 第二层 (b)：owner 已提交成 B、开 B 的库失败时，先写回会话 A、再提交 owner 回 A 并重开；在两步之间崩溃时，重启按会话补成 A；
   - 第三层：再用 A 重开也失败时，会话记录仍是 A，运行时为 error，窗口收到 `auth_changed`，重启后回到 A；
   - 崩溃点 (i)：B 的会话已写、owner 未提交时重启，serve 补提交并起 B；
-  - 闸门关着时拒绝；
+  - 闸门关着时拒绝切换；
+  - 闸门关着时拒绝添加账号（`add/begin`）和没有当前账号时的登录，提示与切换相同，且不发任何会签发或轮换令牌的请求、不写保管库与会话；
   - 有任务在跑而请求未确认时，以固定码拒绝；
   - 两个库时重启认对 owner（3.3）。
 - 桌面侧：
   - 窗口直接收到另一个账号的 `auth_changed` 时（不经本窗口的 `runDataOwnerBoundary`），渲染层结束旧账号的会话缓存、清 `sessionsStore` 与 workers 缓存、按账号分区的存储换到 B，界面上不残留 A 的数据；
-  - 窗口主进程按 8.6 列出的按账号状态被清掉。
+  - 窗口主进程按 8.6 列出的按账号状态被清掉；
+  - 在 A 账号下发出、在 B 的推送到达之后才返回的请求，结果被丢弃，不写进 B 的界面状态。Host 推送的切换没有本窗口那道提交前的围栏，差别正在这里（8.6）。
 - 鉴权两条限制：网页端 cookie 会话被拒；同一时刻只有一个登录事务（新的 begin 作废上一个，属于旧事务的 action 以 `AUTH_FLOW_SUPERSEDED` 被拒，S4）。
 
 ## 十、测试期的已知限制与解除条件
