@@ -36,9 +36,13 @@ export type GiftCardCredit = {
   expiresAt: string | null;
 };
 
-/** 服务端明确给出的不可领取原因；网络或服务故障不在此列。 */
+/**
+ * 服务端明确给出的不可领取原因；网络或服务故障不在此列。
+ * PERSONAL_REQUIRED：礼品卡的钱进个人账户，组织身份不能领取，需要切换到个人身份。
+ */
 export type GiftCardFailure =
-  'NOT_FOUND' | 'WRONG_REGION' | 'ALREADY_CLAIMED' | 'EXPIRED' | 'VOIDED' | 'RATE_LIMITED';
+  | 'NOT_FOUND' | 'WRONG_REGION' | 'ALREADY_CLAIMED' | 'EXPIRED' | 'VOIDED' | 'RATE_LIMITED'
+  | 'PERSONAL_REQUIRED';
 
 const CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{16}$/;
 
@@ -88,8 +92,8 @@ export function giftCardCodeFromInput(input: string): string | null {
 }
 
 /**
- * 礼品卡业务码：只表达卡片状态，不含上游消息、兑换码或账号信息，可以交给界面
- * 分支呈现。
+ * 礼品卡业务码：只表达卡片状态或「当前身份不能领取」，不含上游消息、兑换码或账号
+ * 信息，可以交给界面分支呈现。
  */
 export const GIFT_CARD_ERROR_CODES = [
   'GIFT_CARD_NOT_FOUND',
@@ -98,6 +102,7 @@ export const GIFT_CARD_ERROR_CODES = [
   'GIFT_CARD_EXPIRED',
   'GIFT_CARD_VOIDED',
   'RATE_LIMITED',
+  'PERSONAL_ACCOUNT_REQUIRED',
 ] as const;
 
 const FAILURE_BY_CODE: Record<string, GiftCardFailure> = {
@@ -107,11 +112,12 @@ const FAILURE_BY_CODE: Record<string, GiftCardFailure> = {
   GIFT_CARD_EXPIRED: 'EXPIRED',
   GIFT_CARD_VOIDED: 'VOIDED',
   RATE_LIMITED: 'RATE_LIMITED',
+  PERSONAL_ACCOUNT_REQUIRED: 'PERSONAL_REQUIRED',
 };
 
 /**
- * 服务端明确给出的卡片状态返回对应原因；其它失败（网络、5xx、鉴权）返回 null，
- * 由调用方按「暂时无法兑换」处理。
+ * 服务端明确给出的卡片状态、或明确说明当前身份不能领取时返回对应原因；其它失败
+ * （网络、5xx、登录失效）返回 null，由调用方按「暂时无法兑换」处理。
  */
 export function giftCardFailureForError(code: string, status: number): GiftCardFailure | null {
   if (status === 429) return 'RATE_LIMITED';

@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  sheet: null as any, input: null as any, face: null as any, printed: true, realm: 'global' as 'global' | 'cn',
+  sheet: null as any, input: null as any, face: null as any, printed: true, realm: 'global' as 'global' | 'cn', personal: true,
   preview: vi.fn(), redeem: vi.fn(), dismissKeyboard: vi.fn(),
 }));
 vi.mock('react-native', () => ({
@@ -37,7 +37,7 @@ vi.mock('@/gift-card/GiftCardFace', () => ({
   giftCardFaceShowsAmount: () => h.printed,
 }));
 vi.mock('@/gift-card/useGiftCardClient', () => ({
-  useGiftCardClient: () => ({ owner: 'owner', realm: h.realm, current: () => true, preview: h.preview, redeem: h.redeem }),
+  useGiftCardClient: () => ({ owner: 'owner', realm: h.realm, personal: h.personal, current: () => true, preview: h.preview, redeem: h.redeem }),
 }));
 import { GiftCardSheet, type GiftCardSheetProps } from '@/gift-card/GiftCardSheet';
 
@@ -54,7 +54,7 @@ const type = (value: string) => act(async () => h.input.onChangeText(value));
 
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  vi.clearAllMocks(); h.printed = true; h.realm = 'global'; h.face = null; h.input = null;
+  vi.clearAllMocks(); h.printed = true; h.realm = 'global'; h.personal = true; h.face = null; h.input = null;
   host = document.createElement('div'); root = createRoot(host);
   props = { visible: true, onClose: vi.fn(), onBusyChange: vi.fn() };
 });
@@ -119,6 +119,29 @@ it('explains which edition a card belongs to and keeps the input for another try
   expect(node('problem')!.textContent).toBe('giftCard.errors.wrongRegionCn');
   expect(node('input')).not.toBeNull();
   expect(h.redeem).not.toHaveBeenCalled();
+});
+
+// 规则：礼品卡的钱进个人账户，组织身份领不了。此前组织身份输入兑换码后只看到「暂时无法兑换，
+// 请稍后重试」，重试多少次都不会成功。
+it('tells an organization identity that gift cards are for personal accounts, without asking the server', async () => {
+  h.personal = false;
+  await render();
+  // 一打开就能看到。
+  expect(node('problem')!.textContent).toBe('giftCard.errors.personalRequired');
+  await type(CODE); await click('primary');
+  expect(node('problem')!.textContent).toBe('giftCard.errors.personalRequired');
+  expect(h.preview).not.toHaveBeenCalled();
+
+  // 从礼品卡链接进来也一样。
+  props = { ...props, code: CODE }; await render();
+  expect(node('problem')!.textContent).toBe('giftCard.errors.personalRequired');
+  expect(h.preview).not.toHaveBeenCalled();
+
+  // 服务端也会拒绝组织身份（比如身份在途中切换）：同样的提示，而不是「稍后重试」。
+  h.personal = true; h.preview.mockResolvedValue({ ok: false, reason: 'PERSONAL_REQUIRED' });
+  props = { ...props, code: undefined }; await render();
+  await type(CODE); await click('primary');
+  expect(node('problem')!.textContent).toBe('giftCard.errors.personalRequired');
 });
 
 it('names the state of a card that can no longer be redeemed', async () => {
