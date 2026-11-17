@@ -10055,7 +10055,9 @@
         "maximizeAria": "Maximizar barra lateral",
         "restoreAria": "Restaurar barra lateral",
         "closeAria": "Fechar barra lateral",
-        "detachAria": "Abrir a aba atual em uma nova janela"
+        "detachAria": "Abrir a aba atual em uma nova janela",
+        "persistentHint": "Clique para abrir ou fechar; segure por 2 segundos para manter o painel aberto",
+        "persistentHintActive": "Clique para abrir ou fechar; o painel fica aberto — segure por 2 segundos para desativar"
       },
       "contextMenu": {
         "close": "Fechar",

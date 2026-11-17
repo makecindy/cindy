@@ -9982,7 +9982,9 @@
         "maximizeAria": "Seitenleiste maximieren",
         "restoreAria": "Seitenleiste wiederherstellen",
         "closeAria": "Seitenleiste schließen",
-        "detachAria": "Aktuellen Tab in einem neuen Fenster öffnen"
+        "detachAria": "Aktuellen Tab in einem neuen Fenster öffnen",
+        "persistentHint": "Klicken zum Öffnen oder Schließen; 2 Sekunden halten, um das Panel dauerhaft offen zu lassen",
+        "persistentHintActive": "Klicken zum Öffnen oder Schließen; dauerhaft offen — 2 Sekunden halten zum Ausschalten"
       },
       "contextMenu": {
         "close": "Schließen",
