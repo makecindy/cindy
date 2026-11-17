@@ -9465,28 +9465,28 @@
     "preparingSubtitle": "Loading the methods available for this region",
     "unavailable": "Sign-in is temporarily unavailable",
     "hostUnavailable": {
-      "title": "The Host didn't start",
+      "title": "The Cindy background service didn't start",
       "checkAgain": "Check Again",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
-          "body": "This data belongs to a different account than the Host's saved sign-in.",
-          "action": "Run cindy-host login with the original account, then restart the Host."
+          "body": "This data belongs to a different account than the sign-in the background service saved.",
+          "action": "Run cindy-host login with the original account, then restart the background service."
         },
         "HOST_DATABASE_LOCKED": {
           "body": "Another Cindy app is using this data.",
-          "action": "Close it, then restart the Host."
+          "action": "Close it, then restart the background service."
         },
         "HOST_DATABASE_UNAVAILABLE": {
           "body": "This account's data can't be opened.",
-          "action": "If you recently used a newer version of Cindy, first update Cindy on this computer to the latest version, then restart the Host. Otherwise, run cindy-host status to see why."
+          "action": "If you recently used a newer version of Cindy, first update Cindy on this computer to the latest version, then restart the background service. Otherwise, run cindy-host status to see why."
         },
         "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
-          "body": "The Host couldn't reach the sign-in service while starting.",
-          "action": "Check your network, then restart the Host."
+          "body": "The Cindy background service couldn't reach the sign-in service while starting.",
+          "action": "Check your network, then restart the background service."
         },
         "HOST_START_FAILED": {
-          "body": "The Host ran into an error while starting.",
-          "action": "Restart the Host. If it happens again, run cindy-host status to see why."
+          "body": "The Cindy background service ran into an error while starting.",
+          "action": "Restart the background service. If it happens again, run cindy-host status to see why."
         }
       }
     },

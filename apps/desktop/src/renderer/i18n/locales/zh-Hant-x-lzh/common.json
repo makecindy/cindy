@@ -9422,28 +9422,28 @@
     "preparingSubtitle": "將為君載當前區域可用之登入方式",
     "unavailable": "暫不能登入",
     "hostUnavailable": {
-      "title": "Host 沒有啟動",
+      "title": "Cindy 背景服務沒有啟動",
       "checkAgain": "重新檢查",
       "reasons": {
         "HOST_ACCOUNT_MISMATCH": {
-          "body": "這份資料屬於另一個帳號，和 Host 儲存的登入不一致。",
-          "action": "請用原來的帳號執行 cindy-host login，再重新啟動 Host。"
+          "body": "這份資料屬於另一個帳號，和背景服務儲存的登入不一致。",
+          "action": "請用原來的帳號執行 cindy-host login，再重新啟動背景服務。"
         },
         "HOST_DATABASE_LOCKED": {
           "body": "另一個 Cindy 程式正在使用這份資料。",
-          "action": "請先關閉它，再重新啟動 Host。"
+          "action": "請先關閉它，再重新啟動背景服務。"
         },
         "HOST_DATABASE_UNAVAILABLE": {
           "body": "這個帳號的資料打不開。",
-          "action": "如果最近用過較新版本的 Cindy，請先把這台電腦上的 Cindy 更新到最新版本，再重新啟動 Host；否則執行 cindy-host status 查看原因。"
+          "action": "如果最近用過較新版本的 Cindy，請先把這台電腦上的 Cindy 更新到最新版本，再重新啟動背景服務；否則執行 cindy-host status 查看原因。"
         },
         "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
-          "body": "Host 啟動時連不上登入服務。",
-          "action": "請檢查網路，再重新啟動 Host。"
+          "body": "Cindy 背景服務啟動時連不上登入服務。",
+          "action": "請檢查網路，再重新啟動背景服務。"
         },
         "HOST_START_FAILED": {
-          "body": "Host 啟動時出錯。",
-          "action": "請重新啟動 Host。如果還是出錯，執行 cindy-host status 查看原因。"
+          "body": "Cindy 背景服務啟動時出錯。",
+          "action": "請重新啟動背景服務。如果還是出錯，執行 cindy-host status 查看原因。"
         }
       }
     },
