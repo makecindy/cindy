@@ -38,6 +38,25 @@ describe('Discord text-only outbox', () => {
       await restarted.drain(); expect(removeProgress).toHaveBeenCalledOnce();
     } finally { restarted.stop(); }
   });
+  // #10002 /4595193275, unit: real complete -> persisted recovery drain.
+  // Earlier recovery coverage only removed progress successfully. A permanent 403
+  // must not retry that deletion or prevent the next lane's progress cleanup.
+  it.each([400, 403])('finishes rejected progress cleanup and continues other lanes after HTTP %s', async status => {
+    const h = harness(); h.offline(); const first = h.create();
+    await first.complete('first', 'g/10/20', 'first final', '20|7');
+    await first.complete('second', 'g/10/21', 'second final', '21|8'); first.stop();
+    h.removeProgress.mockRejectedValueOnce({ status }); h.online();
+    const recovered = h.create();
+    try {
+      await recovered.drain();
+      expect(h.removeProgress.mock.calls.map(c => c[0])).toEqual(['20|7', '21|8']);
+      expect(h.json.entries.map((e: { state: string; progressMessageId?: string }) => [e.state, e.progressMessageId]))
+        .toEqual([['delivered', undefined], ['delivered', undefined]]);
+      h.advance(3000); await recovered.drain();
+      expect(h.removeProgress).toHaveBeenCalledTimes(2);
+      expect(h.send.mock.calls.map(c => c[0])).toEqual(['first final', 'second final']);
+    } finally { recovered.stop(); }
+  });
   it('delivers an empty terminal as zero segments without sending text', async () => {
     const h = harness(); const outbox = h.create();
     try {

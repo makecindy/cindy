@@ -186,9 +186,15 @@ export class DiscordFinalTextOutbox {
           const failure = discordOperationFailure(error);
           if (failure.errorCode !== 'DISCORD_NOT_FOUND') {
             this.deps.warn('DISCORD_PROGRESS_CLEANUP_FAILED');
-            if (failure.errorCode === 'DISCORD_RATE_LIMITED') this.retryNotBefore = this.now() + Math.max(1, failure.retryAfter ?? 1) * 1000;
-            this.retry.schedule(() => { void this.drain(); }, { minimumDelayMs: (failure.retryAfter ?? 0) * 1000 });
-            return;
+            const status = (error as { status?: number } | null)?.status;
+            const rejected = failure.errorCode === 'DISCORD_PERMISSION_DENIED' ||
+              failure.errorCode === 'DISCORD_LANE_DENIED' || failure.errorCode === 'DISCORD_NOT_OWN_MESSAGE' ||
+              status === 400 || status === 401;
+            if (!rejected) {
+              if (failure.errorCode === 'DISCORD_RATE_LIMITED') this.retryNotBefore = this.now() + Math.max(1, failure.retryAfter ?? 1) * 1000;
+              this.retry.schedule(() => { void this.drain(); }, { minimumDelayMs: (failure.retryAfter ?? 0) * 1000 });
+              return;
+            }
           }
         }
         this.mutate(store, ledger => { delete ledger.entries.find(e => e.key === entry.key)!.progressMessageId; });
