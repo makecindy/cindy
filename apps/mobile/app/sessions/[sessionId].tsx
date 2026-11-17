@@ -36,6 +36,7 @@ import { RecentMessageHistories, MessageHistoryOverlay } from '@/session/RecentM
 import { rememberRecentTask } from '@/session/recentTasks';
 import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 import { floatingTopRow, keyboardControlRegion, sharedStatusRowDrawerTop, sharedStatusRowTrailingReserve, type LayoutRect } from '@/platform/windowGeometry';
+import { sessionNavigationTitleMaxWidth } from '@/platform/chrome/navigationTitleWidth';
 import { useAdaptiveWindow, useAdaptiveWindowDimensions, PaneViewportProvider } from '@/platform/AdaptiveWindowContext';
 import { useSessionHeaderHeight } from '@/session/useSessionHeaderHeight';
 import { useDoubleTap } from '@/session/useDoubleTap';
@@ -10390,6 +10391,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         <SessionHeaderBar
               deviceId={deviceId}
               horizontalSystemHeader={horizontalSystemHeader}
+              statusRowReserve={sharedStatusRowTrailingReserve(adaptiveWindow, nativeHeaderHeight)}
               currentSession={currentSession}
               diffCount={diffCount}
               isDeviceAccessRevoked={isDeviceAccessRevoked}
@@ -11832,6 +11834,7 @@ type SessionHeaderIcon = typeof Folder;
 function SessionHeaderBar({
   deviceId,
   horizontalSystemHeader,
+  statusRowReserve,
   noticeOverride,
   currentSession,
   diffCount,
@@ -11862,6 +11865,8 @@ function SessionHeaderBar({
 }: {
   deviceId: string;
   horizontalSystemHeader: boolean;
+  /** Trailing width the native bar leaves to a shared status row (Duo portrait), see sharedStatusRowTrailingReserve. */
+  statusRowReserve: number;
   noticeOverride?: string;
   currentSession: RemoteSession | null;
   diffCount: number;
@@ -11973,13 +11978,11 @@ function SessionHeaderBar({
   const systemBack = useSystemNavigationBack();
   const headerWindow = useAdaptiveWindow();
   const headerInsets = headerWindow.insets;
-  // Budget the title together with both toolbars; UIKit cannot shrink a
-  // fixed-size React title's contents when the trailing glass capsule grows.
-  const nativeTitleMaxWidth = Math.max(0, Math.min(240,
-    headerWindow.width - headerInsets.left - headerInsets.right
-      - (spacing.lg + spacing.xs) * 2 - navigationChrome.target * ((onOpenSessionList ? 5 : 4) - (workerHeader ? 2 : 0))
-      - (onOpenSessionList ? spacing.sm : 0) - spacing.sm * 2,
-  ));
+  // Budget the title together with both toolbars and, on Duo portrait, the status area.
+  const nativeTitleMaxWidth = sessionNavigationTitleMaxWidth({
+    barWidth: headerWindow.width - headerInsets.left - headerInsets.right,
+    sessionList: !!onOpenSessionList, detailsOnly: workerHeader, statusRowReserve,
+  });
   const sessionListButton = onOpenSessionList ? (
     <HomeHeaderGlassButton accessibilityLabel={t('home.drawer.openA11y')}
       onPress={onOpenSessionList} testID="session.sessionListButton">
