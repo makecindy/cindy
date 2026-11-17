@@ -170,12 +170,15 @@ async function runFollowSave(key: string, groupId: string, rootId: string, save:
   }
 }
 
-export function animateThreadPanelWidth(panel: HTMLElement, from: string, to: string): Animation | null {
+// Keep the flex slot at its final width: sliding must not rewrap both timelines on every frame.
+export function animateThreadPanel(panel: HTMLElement, direction: 'open' | 'close'): Animation | null {
   const style = getComputedStyle(panel);
   const token = style.getPropertyValue('--motion-base').trim();
   const duration = parseFloat(token) * (token.endsWith('ms') ? 1 : 1000);
   if (!panel.animate || !Number.isFinite(duration) || duration <= 0) return null;
-  return panel.animate([{ width: from }, { width: to }], {
+  const from = direction === 'open' ? 'translateX(100%)' : style.transform || 'none';
+  const to = direction === 'open' ? 'translateX(0)' : 'translateX(100%)';
+  return panel.animate([{ transform: from }, { transform: to }], {
     duration, easing: style.getPropertyValue('--motion-ease-move').trim() || 'linear', fill: 'forwards',
   });
 }
@@ -213,7 +216,8 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const panelRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const panel = panelRef.current;
-    (panel?.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)') ?? panel?.querySelector<HTMLButtonElement>('header button'))?.focus();
+    // The entrance is translated outside its clipped slot; focus must not scroll that ancestor.
+    (panel?.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)') ?? panel?.querySelector<HTMLButtonElement>('header button'))?.focus({ preventScroll: true });
   }, []);
   useEffect(() => {
     shareSelectionStore.exitIfNotSession(shareScope);
