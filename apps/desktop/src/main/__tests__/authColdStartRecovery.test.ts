@@ -784,4 +784,20 @@ describe('a login the Host renewed, then used by the desktop', () => {
     expect(h.request).toHaveBeenCalledTimes(1);
     expect([h.saved.session.refreshToken, h.vault.resources[ORIGINAL_KEY].refreshToken]).toEqual(['rotated-4', 'rotated-4']);
   });
+
+  // An account signed in only on the Host (`cindy-host login` writes only v1): the vault has no
+  // account. The cold start's commit may claim an uninitialized vault (canClaimUninitializedVault).
+  it('an account signed in only on the Host is taken over by the desktop cold start, which claims the empty vault', async () => {
+    const server = fakeServer();
+    const h = setup();
+    h.vault.activeAccountKey = null;
+    h.vault.resources = {};
+    h.request.mockImplementation((token: unknown) => server.desktop(String(token)));
+    await hostRenews(h, server, 2);
+    expect(h.saved.session.refreshToken).toBe('rotated-2');
+    expect(h.vault.resources).toEqual({});
+    await expect(h.start()).resolves.toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+    expect(h.vault.activeAccountKey).toBe(ORIGINAL_KEY);
+    expect([h.saved.session.refreshToken, h.vault.resources[ORIGINAL_KEY].refreshToken]).toEqual(['rotated-3', 'rotated-3']);
+  });
 });
