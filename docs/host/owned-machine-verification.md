@@ -110,7 +110,7 @@ Invoke-Checked node @('--version')
 Invoke-Checked pnpm.cmd @('--version')
 ```
 
-Windows 的运行时 zip 缺少编译 better-sqlite3 所需的开发文件。先报告同版本官方头文件与 `win-x64/node.lib` 的下载，再从同一发行版取文件、逐个核验摘要，把头文件和链接库放到 node-gyp 指定的位置。在上述 PowerShell 环境运行：
+Windows 的运行时 zip 缺少编译 better-sqlite3 所需的开发文件。本次自有测试机只按官方 `SHASUMS256.txt` 校验了头文件和 `win-x64/node.lib` 的 SHA256，未验证签名。这两个文件只用于自有测试机的本次构建。先报告附加下载，再从同一官方发行目录取文件、逐个核验摘要，把头文件和链接库放到 node-gyp 指定的位置。在上述 PowerShell 环境运行：
 
 ```powershell
 $headers = "node-v$v-headers.tar.gz"
@@ -150,7 +150,7 @@ try {
 | 根目录 | `pnpm --filter @cindy/host test:lifecycle` | Ubuntu 与 macOS；Windows 按 CI 记录跳过 |
 | 根目录 | `pnpm --filter @cindy/host typecheck` | Host TypeScript |
 
-Windows 可调用 `pnpm.cmd`。真实账号、浏览器及真实模型服务不属于本组门禁。跳过引擎下载后，要特别检查 Host 的 `outbound-path-fact.test.mjs`：它会创建真实的 Agent 依赖图，需要仓库为目标平台准备的 ripgrep。若报告 `Bundled ripgrep not found`，在结果中单列这一项；需要取得额外二进制时，先说明所需平台、产物及来源。
+Windows 可调用 `pnpm.cmd`。真实账号、浏览器及真实模型服务不属于本组门禁。默认安装会尝试准备平台对应的 bundled ripgrep；本流程设置的 `XDT_SKIP_AGENT_BIN_INSTALL=1` 会跳过这一步。`outbound-path-fact.test.mjs` 创建真实的 Agent 依赖图，需要这个可执行文件。如果用例因此报 `Bundled ripgrep not found`，保留命令的实际退出码，在报告中把该项列为缺少测试依赖、未验证，不计为产品失败。准备好同版本的平台产物后再验证该项。
 
 用 `fetch TASK` 取回脚本、stdout/stderr 和 result.json，逐项记录用例数、断言、跳过项和机器实测版本。SSH 中断后先取回结果并核对任务进程。确认完成并保存日志后用 `clean TASK` 清自己的 UUID 目录。
 
