@@ -3500,10 +3500,15 @@ function installApplicationMenu(
   // 会跳过非 Tiptap 的 contenteditable, 保留富文本编辑器自己的 Bold 能力)。
   // 右栏「默认展开」偏好只有长按开关一个入口，鼠标手势键盘给不出来；这里补一个
   // 同语义的菜单项（仅 macOS，该偏好本身只在 mac 生效）。
+  // 勾选态由 renderer 上报（偏好存在 renderer 侧），见下面的 IPC。重建菜单时复用
+  // 最近一次上报值，避免重装菜单把勾选态打回默认。
   const toggleRightSidebarPersistentItem: Electron.MenuItemConstructorOptions[] =
     process.platform === 'darwin'
       ? [
           {
+            id: RIGHT_SIDEBAR_PERSISTENT_MENU_ID,
+            type: 'checkbox',
+            checked: rightSidebarPersistentChecked,
             label: labels.toggleRightSidebarPersistent,
             click: () => dispatchApplicationMenuCommand(mainWindow, 'toggle-right-sidebar-persistent'),
           },
@@ -3675,6 +3680,10 @@ function installApplicationMenu(
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+const RIGHT_SIDEBAR_PERSISTENT_MENU_ID = 'right-sidebar-persistent';
+/** renderer 侧是该偏好的所有者；这里只镜像它上报的勾选态。 */
+let rightSidebarPersistentChecked = true;
+
 let currentApplicationMenuLocale: ApplicationMenuLocale | null = null;
 
 // 快捷键改绑生效: overrides 变化时用当前 locale 全量重建菜单 (与 locale 变更
@@ -3693,6 +3702,16 @@ getAppShortcutStore().subscribe(reinstallApplicationMenuIfPresent);
 subscribeAppShortcutRecording(reinstallApplicationMenuIfPresent);
 
 registerDisplayLanguagePreference();
+
+// 右栏「默认展开」偏好的勾选态镜像：renderer 在状态变化时上报，菜单项据此显示
+// 当前值（键盘与读屏用户靠它判断）。只接受可信应用窗口，忽略非布尔值。
+ipcMain.on('app-menu:right-sidebar-persistent', (event, next: unknown) => {
+  if (typeof next !== 'boolean') return;
+  assertTrustedAppRendererEvent(event);
+  rightSidebarPersistentChecked = next;
+  const item = Menu.getApplicationMenu()?.getMenuItemById(RIGHT_SIDEBAR_PERSISTENT_MENU_ID);
+  if (item) item.checked = next;
+});
 ipcMain.on('app-locale:get-preferred-system-locale-sync', (event) => {
   event.returnValue = getPreferredApplicationLocale();
 });

@@ -157,6 +157,16 @@ export function RightSidebarToggle({
     if (longPressRef.current?.pointerId === event.pointerId) clearLongPress(true);
   };
 
+  /**
+   * 手势被系统取消（滚动容器接管、来电等）不会再有 click 来消费抑制标记；
+   * 若此时留下 `suppressClickRef`，下一次独立点击/键盘激活会被吞掉。
+   */
+  const handlePointerCancel = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (longPressRef.current?.pointerId !== event.pointerId) return;
+    clearLongPress();
+    suppressClickRef.current = false;
+  };
+
   return (
     <Tip text={tipText} side="bottom">
       <button
@@ -178,7 +188,7 @@ export function RightSidebarToggle({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerEnd}
-        onPointerCancel={handlePointerEnd}
+        onPointerCancel={handlePointerCancel}
         aria-label={label}
         aria-expanded={action === 'close' ? undefined : !collapsed}
         // 常驻偏好只有长按入口，读屏要能听到当前值；状态点本身是纯装饰。

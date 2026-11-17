@@ -376,12 +376,13 @@ export function MainLayout() {
   const navigateToSessionRef = useRef<(sessionId: string) => void>(() => undefined);
   const declareRightSidebarSessionId = useCallback(
     (sessionId: string | null, opts: RightSidebarSessionDeclarationOptions = {}) => {
+      // 先比较再写 ref：否则比较恒为真，重复声明与切任务就分不出来了。
+      const sameSession = rightSidebarSessionIdRef.current === sessionId;
       rightSidebarSessionIdRef.current = sessionId;
       detachedHostSessionIdRef.current = nextDetachedHostAfterFocus(
         detachedHostSessionIdRef.current,
         sessionId,
       );
-      const sameSession = rightSidebarSessionIdRef.current === sessionId;
       setRightSidebarSessionId(sessionId);
       setRightSidebarSubagentsAvailable(sessionId ? opts.subagentsAvailable : undefined);
       if (!sessionId || !rsbWindow.loaded || rsbDetached) return;
@@ -1041,7 +1042,8 @@ export function MainLayout() {
     const sessionId = rightSidebarSessionIdRef.current;
     if (sessionId == null) return;
     // 常驻模式下关掉最后一个页签回到空状态,让用户继续从「开始一个面板」添加。
-    if (isMac && defaultRightSidebarOpenRef.current) return;
+    // 副窗不参与该偏好（与 readCollapsedFor / 长按入口同一条件）。
+    if (isMac && !isSecondaryWindow() && defaultRightSidebarOpenRef.current) return;
     rightSidebarRef.current?.requestAnimateNextChange();
     setIsRightSidebarCollapsed(true);
     writeCollapsedFor(sessionId, true);
@@ -1056,6 +1058,12 @@ export function MainLayout() {
       for (const snapshot of handoff.snapshots) importTabSnapshot(snapshot);
     });
   }, []);
+
+  // 菜单项的勾选态跟着偏好走（含长按切换与其它窗口/会话的变化）。
+  useEffect(() => {
+    if (!isMac) return;
+    window.electronAPI?.appShortcuts?.setRightSidebarPersistentMenuState?.(defaultRightSidebarOpen);
+  }, [isMac, defaultRightSidebarOpen]);
 
   const toggleDefaultRightSidebarOpen = useCallback(() => {
     const next = !defaultRightSidebarOpenRef.current;
@@ -2047,7 +2055,7 @@ export function MainLayout() {
                       onToggle={handleToggleRightSidebar}
                       side={rightSidebarSide}
                       onLongPress={isSecondaryWindow() ? undefined : toggleDefaultRightSidebarOpen}
-                      persistent={defaultRightSidebarOpen}
+                      persistent={!isSecondaryWindow() && defaultRightSidebarOpen}
                     />
                   </div>
                 )}

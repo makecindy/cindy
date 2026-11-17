@@ -1346,6 +1346,8 @@ interface ElectronAPI {
     ) => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
     resetAll: () => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
     setRecording: (active: boolean) => void;
+    /** 右栏「默认展开」偏好的勾选态镜像（仅菜单显示）。 */
+    setRightSidebarPersistentMenuState: (active: boolean) => void;
     onChanged: (
       callback: (payload: {
         overrides: import('../shared/appShortcuts').AppShortcutOverrides;

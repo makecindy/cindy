@@ -1461,6 +1461,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 消费 (录制互斥的 main 半边; renderer 半边是 body dataset 旗标)。
     setRecording: (active: boolean): void =>
       ipcRenderer.send('app-shortcuts:set-recording', active),
+    /** 右栏「默认展开」偏好的勾选态镜像，只用于菜单显示，单向不上报回执。 */
+    setRightSidebarPersistentMenuState: (active: boolean): void =>
+      ipcRenderer.send('app-menu:right-sidebar-persistent', active),
     onChanged: fanOutAppShortcutsChanged,
   },
 
