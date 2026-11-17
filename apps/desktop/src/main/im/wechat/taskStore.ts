@@ -71,6 +71,9 @@ export interface WechatOutboxRecord {
   chunkIndex: number;
   text: string;
   mediaJson: string;
+  createdAt: number;
+  receivedAt: number;
+  taskPayloadJson: string;
   attempts: number;
   contextToken: string;
 }
@@ -401,6 +404,9 @@ export class WechatTaskStore {
          o.text,
          o.media_json AS mediaJson,
          o.attempts,
+         o.created_at AS createdAt,
+         i.received_at AS receivedAt,
+         i.payload_json AS taskPayloadJson,
          i.context_nonce AS contextNonce,
          i.context_ciphertext AS contextCiphertext,
          i.context_tag AS contextTag

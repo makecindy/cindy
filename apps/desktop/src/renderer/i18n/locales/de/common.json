@@ -13509,6 +13509,8 @@
         },
         "reply": {
           "unsupportedMedia": "Diese Version kann diese Art von WeChat-Medien noch nicht verarbeiten.",
+          "delayedReply": "Verzögerte Antwort, erstellt am {{createdAt}} auf deine am {{receivedAt}} empfangene Nachricht. Der Inhalt ist möglicherweise veraltet.",
+          "delayedReplyQuestion": "Ursprüngliche Nachricht: {{question}}",
           "stillProcessing": "Wird noch bearbeitet…",
           "ownerOnlyCommands": "Nur der Besitzer kann Bot-Befehle verwenden.",
           "companionManagedCommand": "Öffne dieses Teammitglied in Cindy: Das Modell änderst du in den Einstellungen des Teammitglieds, die Berechtigungen unter dem Eingabefeld der Unterhaltung.",

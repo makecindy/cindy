@@ -1040,3 +1040,110 @@ function restoredConnection(queued: () => number, policyDisabled = false) {
     isCompatibilityDisabled: () => policyDisabled }));
   return { im, transport, db, testHost };
 }
+
+// #10135: unit tier, real SQLite/store/worker and public outbox lifecycle. The
+// prior fake DB cases never exercised aged rows after context recovery. Transport
+// and secrets are synthetic; the historical attempt count is seeded, not traffic.
+it.each(['text', 'notice-unknown', 'media'] as const)('labels recovered old output and preserves fresh long-task results: %s', async mode => {
+  vi.useFakeTimers();
+  const Database = (await import('better-sqlite3')).default;
+  const { readFileSync } = await import('node:fs');
+  const path = await import('node:path');
+  const { tx } = await import('../../../localDb/worker/opHandlers/tx');
+  const { WechatTaskStore } = await import('../taskStore');
+  const sql = new Database(':memory:');
+  sql.pragma('foreign_keys = ON');
+  sql.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY NOT NULL);
+    CREATE TABLE media_blobs(hash TEXT PRIMARY KEY, ext TEXT, mime_type TEXT, bytes INTEGER, is_cache INTEGER, created_at INTEGER, last_access_at INTEGER);
+    CREATE TABLE media_refs(id TEXT PRIMARY KEY, hash TEXT, ref_kind TEXT, ref_id TEXT, origin_session_id TEXT, origin_kind TEXT, origin_id TEXT, label TEXT, created_at INTEGER);
+    INSERT INTO sessions(id) VALUES('old-session'),('fresh-session');`);
+  sql.exec(readFileSync(path.resolve(process.cwd(), 'drizzle/0082_daffy_calypso.sql'), 'utf8').replaceAll('--> statement-breakpoint', ''));
+  const files = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const tempDir = mode === 'media' ? await files.mkdtemp(path.join(tmpdir(), 'wechat-delayed-')) : null;
+  const mediaPath = tempDir ? path.join(tempDir, 'example.txt') : null;
+  if (mediaPath) await files.writeFile(mediaPath, 'synthetic file');
+  const key = Buffer.alloc(32, 3);
+  const oldAt = Date.parse('2026-11-07T15:14:00Z');
+  let now = oldAt + 4 * 24 * 60 * 60 * 1000;
+  const db = fakeDb({
+    query: vi.fn(async (q, params = []) => sql.prepare(q).all(...params)) as DbClient['query'],
+    queryOne: vi.fn(async (q, params = []) => sql.prepare(q).get(...params)) as DbClient['queryOne'],
+    exec: vi.fn(async (q, params = []) => sql.prepare(q).run(...params)) as DbClient['exec'],
+    tx: vi.fn(async (name, args) => tx(sql, { name, args })) as DbClient['tx'],
+  });
+  const store = new WechatTaskStore(db, key);
+  await store.activateBindingEpoch({ bindingEpoch: 'epoch', expectedActiveEpoch: null, now: oldAt });
+  const seed = (id: string, created: number, attempts: number) => {
+    const encrypted = encryptWechatContextToken(id + '-context', key, 'epoch', id);
+    sql.prepare(`INSERT INTO wechat_inbox(id,binding_epoch,platform_message_id,platform_seq,peer_id,received_at,platform_created_at,expires_at,status,session_id,conversation_epoch,payload_json,context_nonce,context_ciphertext,context_tag)
+      VALUES(?, 'epoch', ?,1,'owner',?,?,?,'delivery_pending',?,0,?,?,?,?)`).run(id,id,oldAt,oldAt,oldAt+1800000,id+'-session',JSON.stringify({ text: id+'-question' }),encrypted.nonce,encrypted.ciphertext,encrypted.tag);
+    sql.prepare(`INSERT INTO wechat_outbox(id,binding_epoch,task_id,client_id,kind,chunk_index,text,media_json,status,attempts,next_retry_at,created_at)
+      VALUES(?, 'epoch', ?, ?, 'final',0,?,'[]','pending',?,?,?)`).run(id+'-out',id,id+'-client',id+'-reply',attempts,now,created);
+  };
+  seed('old', oldAt, 9753);
+  // The inbound task is four days old, but its result has only just completed.
+  seed('fresh', now, 0);
+  if (mediaPath) sql.prepare("UPDATE wechat_outbox SET text='', media_json=? WHERE task_id='old'").run(JSON.stringify([{ absPath: mediaPath, clientId: 'old-media-client' }]));
+  const credentials = { bindingEpoch: 'epoch', botToken: 'synthetic-token', ilinkBotId: 'wechat-bot', userId: 'owner', baseUrl: 'https://example.invalid', boundAt: oldAt };
+  const transport = blockingLiveTransport();
+  const sends: Array<Parameters<WechatTransport['sendMessage']>[0]> = [];
+  let noticeAckLost = mode === 'notice-unknown';
+  const order: string[] = [];
+  transport.uploadMedia = vi.fn<WechatTransport['uploadMedia']>(async () => {
+    order.push('upload');
+    return { ref: { kind: 'file' }, fileName: 'example.txt' };
+  });
+  transport.sendMedia = vi.fn(async input => { order.push('media'); return { clientId: input.clientId }; });
+  transport.sendMessage = vi.fn(async input => {
+    sends.push({ ...input });
+    order.push('text');
+    if (input.contextToken === 'new-question-context' && input.clientId !== 'old-client' && noticeAckLost) {
+      noticeAckLost = false;
+      throw new WechatIlinkError('NETWORK_ERROR', 'synthetic unknown notice result', true);
+    }
+    if (input.contextToken === 'old-context') throw new WechatIlinkError('PROTOCOL_ERROR', 'synthetic refusal', true);
+    return { clientId: input.clientId };
+  });
+  const createIM = () => new WechatIM(deps({ host: host({ secretRead: name => name === 'wechat_data_key_v1' ? key.toString('base64') : name === 'wechat_credentials_epoch' ? JSON.stringify(credentials) : null }),
+    getDbClient: () => db, createTransport: () => transport, now: () => now }));
+  let im = createIM();
+  try {
+    await im.init();
+    await vi.waitFor(() => expect(sql.prepare("SELECT status FROM wechat_outbox WHERE task_id='fresh'").pluck().get()).toBe('delivered'), { timeout: 4000 });
+    expect(sql.prepare("SELECT status,attempts FROM wechat_outbox WHERE task_id='old'").get()).toMatchObject({ status: 'pending', attempts: 9756 });
+    expect(sends.filter(s => s.contextToken === 'fresh-context')).toEqual([expect.objectContaining({ text: 'fresh-reply', clientId: 'fresh-client' })]);
+    const originalNotice = sends.find(s => s.contextToken === 'old-context');
+    await im.dispose();
+    im = createIM();
+    await im.init();
+    sends.length = 0;
+    order.length = 0;
+    now += 2000;
+    await store.refreshPendingOutboxContext({ bindingEpoch: 'epoch', peerId: 'owner', contextToken: 'new-question-context', now });
+    await vi.waitFor(() => expect(sql.prepare("SELECT status FROM wechat_outbox WHERE task_id='old'").pluck().get()).toBe('delivered'), { timeout: 4000 });
+    // A separate notice keeps the original payload/client ID unchanged, including
+    // a retry whose upstream result was unknown. The notice has its own stable ID.
+    expect(sends).toHaveLength(mode === 'notice-unknown' ? 3 : mode === 'media' ? 1 : 2);
+    expect(sends[0]?.text).toContain('2026-11-07T15:14:00.000Z');
+    expect(sends[0]?.text).toContain('old-question');
+    expect(sends[0]?.text).toContain('延迟');
+    expect(sends[0]?.clientId).not.toBe('old-client');
+    expect(sends[0]?.clientId).toBe(originalNotice?.clientId);
+    expect(sends[0]?.text).toBe(originalNotice?.text);
+    if (mode === 'media') {
+      expect(order).toEqual(['text', 'upload', 'media']);
+      expect(transport.sendMedia).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'old-media-client', contextToken: 'new-question-context' }), expect.any(AbortSignal));
+    } else {
+      expect(sends.at(-1)).toMatchObject({ text: 'old-reply', contextToken: 'new-question-context', clientId: 'old-client' });
+      if (mode === 'notice-unknown') expect(sends[0]).toEqual(sends[1]);
+    }
+    expect(sql.prepare("SELECT attempts,text FROM wechat_outbox WHERE task_id='old'").get()).toEqual({ attempts: mode === 'notice-unknown' ? 9758 : 9757, text: mode === 'media' ? '' : 'old-reply' });
+  } finally {
+    await im.dispose();
+    store.destroy();
+    sql.close();
+    if (tempDir) await files.rm(tempDir, { recursive: true, force: true });
+    vi.useRealTimers();
+  }
+});

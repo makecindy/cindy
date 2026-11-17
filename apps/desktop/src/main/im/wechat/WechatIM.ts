@@ -62,6 +62,8 @@ import {
 
 const CREDENTIAL_PREFIX = 'wechat_credentials_';
 const DATA_KEY_NAME = 'wechat_data_key_v1';
+// This is an attribution threshold for queued output, not an inbound task TTL.
+const DELAYED_REPLY_NOTICE_AFTER_MS = 30 * 60_000;
 const AUTH_BASE_URL = 'https://ilinkai.weixin.qq.com';
 const EMPTY_POLL_DELAY_MS = 100;
 const IDLE_PUMP_DELAY_MS = 200;
@@ -1651,6 +1653,34 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     this.#assertSendEpochCurrent(bindingEpoch, signal);
     const peerId = await this.#peerIdForTask(bindingEpoch, item.taskId);
     this.#assertSendEpochCurrent(bindingEpoch, signal);
+    const mediaItems = parseOutboxMedia(item.mediaJson);
+    if (
+      (item.text || mediaItems.length > 0) &&
+      this.#now() - item.createdAt >= DELAYED_REPLY_NOTICE_AFTER_MS
+    ) {
+      // Keep the original chunk and its idempotency key intact (including full-
+      // size chunks and media-only output). Retries/restarts reuse a separate,
+      // deterministic notice ID; never deliver stale content if its notice fails.
+      const notice = imText('imBot.text.wechat.reply.delayedReply', {
+        createdAt: new Date(item.createdAt).toISOString(),
+        receivedAt: new Date(item.receivedAt).toISOString(),
+      });
+      // Old/partial payloads can still be attributed by their receive time.
+      let question = '';
+      try {
+        const payload: unknown = JSON.parse(item.taskPayloadJson);
+        if (payload && typeof payload === 'object' && 'text' in payload && typeof payload.text === 'string') {
+          question = Array.from(payload.text.replace(/\s+/g, ' ').trim()).slice(0, 120).join('');
+        }
+      } catch { /* Attribution must not make an old reply undeliverable. */ }
+      await transport.sendMessage({
+        peerId,
+        text: question ? `${notice}\n${imText('imBot.text.wechat.reply.delayedReplyQuestion', { question })}` : notice,
+        contextToken: item.contextToken,
+        clientId: createHash('sha256').update(`wechat-delayed-reply:${item.clientId}`).digest('hex').slice(0, 32),
+      }, signal);
+      this.#assertSendEpochCurrent(bindingEpoch, signal);
+    }
     if (item.text) {
       await transport.sendMessage(
         {
@@ -1662,7 +1692,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         signal,
       );
     }
-    for (const media of parseOutboxMedia(item.mediaJson)) {
+    for (const media of mediaItems) {
       this.#assertSendEpochCurrent(bindingEpoch, signal);
       const local = await readOutboundWechatFile(media.absPath);
       this.#assertSendEpochCurrent(bindingEpoch, signal);

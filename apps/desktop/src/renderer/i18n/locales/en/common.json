@@ -13509,6 +13509,8 @@
         },
         "reply": {
           "unsupportedMedia": "This version can't handle this type of WeChat media yet.",
+          "delayedReply": "Delayed reply prepared at {{createdAt}}, for your message received at {{receivedAt}}. The contents may be out of date.",
+          "delayedReplyQuestion": "Original message: {{question}}",
           "stillProcessing": "Still working on it…",
           "ownerOnlyCommands": "Only the owner can use bot commands.",
           "companionManagedCommand": "Open this teammate in Cindy: change the model in the teammate's settings, and switch permissions below the input box.",

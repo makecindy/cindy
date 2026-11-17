@@ -13455,6 +13455,8 @@
         },
         "reply": {
           "unsupportedMedia": "目前版本暫不支援處理這類微信媒體。",
+          "delayedReply": "這則延遲回覆於 {{createdAt}} 產生，對應 {{receivedAt}} 收到的舊訊息，內容可能已過時。",
+          "delayedReplyQuestion": "原訊息：{{question}}",
           "stillProcessing": "任務仍在處理中…",
           "ownerOnlyCommands": "只有主人可以使用機器人指令。",
           "companionManagedCommand": "請在 Cindy 中開啟這位夥伴：模型在夥伴設定中調整，權限在對話輸入框下方切換。",
