@@ -33454,6 +33454,106 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     }
   });
 
+  // #11032: exercise the actual Agent event queue + timed interrupt, not a helper.
+  // Existing watchdog cases omit native structured gateway status (unit, fake clock).
+  it('retains the latest safe upstream status through watchdog settlement and clears it for the next turn', async () => {
+    vi.useFakeTimers();
+    try {
+      const { handle, handlers, seen } = await startReconnectTurn(new CodexAgent(createDeps()), 'gateway-diagnostics');
+      const reconnect = (turnId: string, attempt: number, status?: number) => handlers.error?.({
+        threadId: 'start-thread-id', turnId, willRetry: true,
+        error: { message: `Reconnecting... ${attempt}/5`,
+          ...(status ? { codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: status } } } : {}),
+          additionalDetails: 'https://private.invalid/?token=secret PRIVATE_RESPONSE EOF',
+        },
+      } as never);
+      reconnect('turn-1', 1, 502);
+      await vi.advanceTimersByTimeAsync(60_000);
+      reconnect('turn-1', 2, 503);
+      reconnect('turn-1', 3); // A status-less progress notice must not erase known facts.
+      await vi.advanceTimersByTimeAsync(60_001);
+      expect(seen).toContainEqual(expect.objectContaining({ type: 'error', data: expect.objectContaining({
+        reason: 'codex_reconnect_stalled', errorStatus: 503, isTerminal: true,
+        message: expect.stringContaining('(HTTP 503)'), idleMs: 120_000,
+      }) }));
+      expect(JSON.stringify(seen)).not.toMatch(/private|secret|PRIVATE_RESPONSE|EOF/);
+      const priorEnd = seen.length;
+      await handle.send({ type: 'user', content: 'next' });
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+      reconnect('turn-1', 4, 504); // A late old turn cannot poison the new turn.
+      reconnect('turn-2', 1);
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      const terminal = seen.slice(priorEnd).find(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'codex_reconnect_stalled');
+      expect(terminal).toBeDefined();
+      expect(terminal!.data).not.toHaveProperty('errorStatus');
+      expect((terminal!.data as { message: string }).message).not.toContain('HTTP');
+      await handle.close();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([false, true])('clears gateway diagnosis on real progress (late success: %s)', async lateSuccess => {
+    vi.useFakeTimers();
+    try {
+      const ack = deferred<unknown>();
+      const { handle, handlers, seen } = await startReconnectTurn(new CodexAgent(createDeps()), 'gateway-recovery', ack.promise);
+      handlers.error?.({ threadId: 'start-thread-id', turnId: 'turn-1', willRetry: true,
+        error: { message: 'Reconnecting... 1/5', codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 502 } } },
+      } as never);
+      handlers.agentMessageDelta?.({ threadId: 'start-thread-id', turnId: 'turn-1', itemId: 'answer', delta: 'Recovered' });
+      handlers.itemCompleted?.({ threadId: 'start-thread-id', turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'answer', text: 'Recovered', phase: 'final_answer' },
+      } as never);
+      emitReconnect(handlers, 1);
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      if (lateSuccess) handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: {
+        id: 'turn-1', status: 'completed', items: [{ type: 'agentMessage', id: 'final', text: 'Recovered', phase: 'final_answer' }],
+      } } as never);
+      ack.resolve({});
+      await vi.advanceTimersByTimeAsync(1);
+      const terminals = seen.filter(e => e.type === 'error' && (e.data as { isTerminal?: boolean }).isTerminal);
+      if (lateSuccess) {
+        expect(terminals).toEqual([]);
+        expect(seen).toContainEqual(expect.objectContaining({ type: 'done', data: expect.objectContaining({ result: 'Recovered' }) }));
+      } else {
+        expect(terminals).toHaveLength(1);
+        expect(terminals[0]!.data).not.toHaveProperty('errorStatus');
+      }
+      await handle.close();
+    } finally { vi.useRealTimers(); }
+  });
+
+  // #11032 review: a failed Stop must not roll a newer native diagnosis back.
+  it.each([
+    { before: undefined, during: 502, expected: 502 },
+    { before: 502, during: 503, expected: 503 },
+    { before: 502, during: undefined, expected: undefined },
+    { before: 502, during: null, expected: 502 },
+  ])('preserves current reconnect facts when Stop fails: %j', async scenario => {
+    vi.useFakeTimers();
+    try {
+      const ack = deferred<unknown>();
+      const { host, handle, handlers, seen } = await startReconnectTurn(new CodexAgent(createDeps()), 'stop-diagnostics', ack.promise);
+      const reconnect = (status?: number) => handlers.error?.({
+        threadId: 'start-thread-id', turnId: 'turn-1', willRetry: true,
+        error: { message: 'Reconnecting... 1/5',
+          ...(status === undefined ? {} : { codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: status } } }),
+        },
+      } as never);
+      reconnect(scenario.before);
+      const stopping = expect(handle.requestGracefulStop?.()).rejects.toThrow('interrupt rejected');
+      // null means no new notification; undefined is a fresh status-less episode.
+      if (scenario.during !== null) reconnect(scenario.during);
+      ack.reject(new Error('interrupt rejected'));
+      await stopping;
+      host.request.mockImplementation(async method => method === Method.TurnInterrupt ? {} : undefined);
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      const terminal = seen.find(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'codex_reconnect_stalled');
+      expect(terminal).toBeDefined();
+      expect((terminal!.data as { errorStatus?: number }).errorStatus).toBe(scenario.expected);
+      await handle.close();
+    } finally { vi.useRealTimers(); }
+  });
+
   // #7055: after WebSocket retries Codex uploads the full history over HTTPS and emits
   // nothing until the upload ends; on a slow link that exceeds the reconnect deadline.
   it('HTTPS 回退开始后不再按重连 deadline 中断正在上传的请求', async () => {
