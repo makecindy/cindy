@@ -260,7 +260,8 @@ export function createBillingHandlers(
         timeoutMs: BILLING_REQUEST_TIMEOUT_MS,
         redactErrorDetails: true,
         allowedRedactedErrorCodes: GIFT_CARD_ERROR_CODES,
-        expectedErrors: [{ status: 404 }, { status: 409 }, { status: 429 }],
+        // 403 只把「需要个人身份」当成预期结果；其它 403 仍按异常记录。
+        expectedErrors: [{ status: 404 }, { status: 409 }, { status: 429 }, { status: 403, code: 'PERSONAL_ACCOUNT_REQUIRED' }],
         baseUrl: getBaseUrl,
       });
     } catch (error) {

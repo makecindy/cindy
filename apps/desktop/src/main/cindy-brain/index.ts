@@ -31,7 +31,7 @@ import { projectPluginWorkdir, resolvePluginWorkdir } from './remotePluginProjec
 import { takePeerAttachment } from '../device-link/peerAttachmentStore.js';
 import { parsePeerAttachmentRef } from '@cindy/device-link';
 import { capturePluginOauthPeer } from '../plugin-oauth/runtime.js';
-import { projectPluginPublishingSource } from './pluginPublishingSource.js';
+import { projectPluginPublishingSource, projectPluginInstallationSource } from './pluginPublishingSource.js';
 import { readMobilePreview } from './mobilePreview.js';
 import { createMailReader, mailReaderRemoteProvider } from './mailReader.js';
 import { resolveForgeInstallTarget, ghostInstallTargetContext } from './ghostInstallTarget.js';
@@ -216,7 +216,7 @@ export async function requestPluginUiApproval(id: string, sender?: WebContents, 
       return accepted;
     } : createWindowGhostInstallConsentPrompt(target!, confirmed => { declined = !confirmed; });
     const accepted = await confirm({
-      trust: ghost.trust?.level, purpose: 'ui-capability', initiator: 'user', origin: 'local-file', facts: {
+      installationSource: ghost.installationSource ?? { kind: 'unknown' }, trust: ghost.trust?.level, purpose: 'ui-capability', initiator: 'user', origin: 'local-file', facts: {
         kind: 'update', ghostId: id, name: ghost.manifest.name, version: ghost.manifest.version,
         previousVersion: ghost.manifest.version, added: ghostPermissionItems(ghost.manifest).filter(item => item.key === 'ui:pages'),
         removed: [], unchangedCount: 0, builtinOauthClientChanged: false,
@@ -807,7 +807,7 @@ import { resolveGhostMediaHandoverTarget } from './ghostMediaHandoverTargetTrack
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { ghostSetupNavigationForAction } from './ghostSetupNavigation.js';
 import { assessPluginSetup, pluginSetupProbes, pluginOauthReauthSuggestion } from './pluginSetupService.js';
-import { isModelAccessReady } from '../model-access/readiness.js';
+import { isModelAccessReady, isModelAccessTransientlyUnavailable } from '../model-access/readiness.js';
 import {
   filterEnabledGatewayMediaModels,
   isMediaModelExecutable,
@@ -2155,6 +2155,7 @@ export function getGhostManager(): GhostManager {
         }
         return {
           publishingSource: projectPluginPublishingSource(record, receipt, lookup),
+          installationSource: projectPluginInstallationSource(record, receipt, lookup),
         };
       },
       prepareListingSources: () => {
@@ -2164,6 +2165,8 @@ export function getGhostManager(): GhostManager {
             project: (record, receipt) => ({
               publishingSource: projectPluginPublishingSource(record, receipt,
                 snapshot.lookup({ ghostId: record.ghostId, namespace: record.namespace })),
+              installationSource: projectPluginInstallationSource(record, receipt,
+                snapshot.lookup({ ghostId: record.ghostId, namespace: record.namespace })),
             }),
             isCurrent: snapshot.isCurrent,
           };
@@ -2171,6 +2174,7 @@ export function getGhostManager(): GhostManager {
           return {
             project: (record, receipt) => ({
               publishingSource: projectPluginPublishingSource(record, receipt, { kind: 'invalid' }),
+              installationSource: projectPluginInstallationSource(record, receipt, { kind: 'invalid' }),
             }),
             // A failed read is not a validated snapshot; let async scans retry.
             isCurrent: () => false,
@@ -6141,6 +6145,8 @@ export function getGhostCindySlot(): GhostCindySlot {
       // model-access 下发值同源，模型别名和 Claude 原生 Web Search 工具定义
       // 留在主机侧，意识只拿规范化结果。
       searchWeb: (params) => getCindyProxySearchService().search(params),
+      isModelAccessReady,
+      isModelAccessTransientlyUnavailable,
       // 快问快答(text.oneshot):走轻量任务模型链(与会话起标题/任务摘要
       // 同一条,用户在设置里配置)。动态 import:utility-model 的传递依赖在
       // 模块顶层读 electron app 路径,静态引入会把这条链拽进所有 import 本
@@ -6187,6 +6193,7 @@ export function getGhostCindySlot(): GhostCindySlot {
           return {
             ok: false,
             reason: 'no_candidate',
+            providerId: r.attempts[0]?.providerId,
             message: '当前没有可用的快速通道模型(用户未配置或凭证不可用),请如实告知用户并优雅降级',
           };
         }
@@ -6656,11 +6663,9 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   const storeId = installedGhostStoragePart(ghost);
   const runtimeManifest = ghost.manifest;
   return assessPluginSetup({
-    translate: t,
     manifest: runtimeManifest,
     probes: getGhostSetupProbes(storeId, runtimeManifest),
     revision: getGhostSetupChangeBus().currentRevision(storeId),
-    clientConfigReady: configId => configId === 'model-provider' && isModelAccessReady(),
     reauthSuggestion: () => getGhostOauthReauthSuggest(runtimeManifest, storeId),
   });
 }

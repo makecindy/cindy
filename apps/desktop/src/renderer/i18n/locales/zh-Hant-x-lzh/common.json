@@ -1321,17 +1321,17 @@
       "install": {
         "title": "須裝「{{plugin}}」法器",
         "body": "此務於他機開 {{device}}。於本機裝「{{plugin}}」法器，即可於右欄觀之、操之。",
-        "action": "往裝"
+        "action": "裝之"
       },
       "enable": {
         "title": "須啟「{{plugin}}」法器",
         "body": "此務於他機開 {{device}}。於本機啟「{{plugin}}」法器，即可於右欄觀之、操之。",
-        "action": "往啟"
+        "action": "啟之"
       },
       "update": {
         "title": "須更「{{plugin}}」法器",
         "body": "此務於他機開 {{device}}。更本機「{{plugin}}」法器至新版，即可於右欄觀之、操之。",
-        "action": "往更"
+        "action": "更之"
       }
     },
     "lockOnExitHintPrivacy": "退出遠端桌面後覆以隱私畫面，AI 可續作；有人觸機即鎖屏。",
@@ -8171,8 +8171,8 @@
         "hostTools_controlDetail": "得循 Cindy 之器改、藏、復及治既有任務與專案，並在本機匯入原生任務檔案。",
         "hostTools_handoff": "任務傳言",
         "hostTools_handoffDetail": "得循 Cindy 之器傳訊息於既有任務。需當前任務之境者，須明指任務。",
-        "hostTools_usage": "查訂閱用量",
-        "hostTools_usageDetail": "可查此機現用 Cindy 帳號所接 Claude、Codex 之帳號標識、方案、限額時段及更新時刻。不得取郵址、憑證、檔案或他機資料，亦不得改帳號",
+        "hostTools_usage": "查用量及供應商組狀態",
+        "hostTools_usageDetail": "可查現用 Cindy 帳號於此機所接 Claude/Codex 之帳號標識、方案、配額時段及更新時間，亦可查此機及同帳號已授權他機所記每日、型號用量、估算費用、供應商組配置與狀態，及可見成員、設備之標識、名稱與頭像。不得取訂閱登入郵址、帳號目錄、內部指紋、憑證或檔案，亦不得改帳號或設定",
         "hostTools_settings": "應用設定",
         "hostTools_settingsDetail": "得循 Cindy 之器閱改應用設定；不返金鑰，祕文仍由主人親填。",
         "hostTools_scheduler": "自動化治辦",
@@ -10840,7 +10840,12 @@
       "summary": "自述",
       "summaryPlaceholder": "如：一嗜作小說之文士，略帶詼諧，好揣摩人物之微心。",
       "avatarSelectionFailed": "不能讀頭像，請擇 5 MB 以內之 PNG、JPEG 或 WebP 圖",
-      "personality": "性情與言談之習"
+      "personality": "性情與言談之習",
+      "sourceLength": "{{length}} / {{limit}} 個 UTF-16 單元（首尾空白不計）。",
+      "sourceExcess": "逾限 {{excess}} 個單元，刪簡後方可存。",
+      "sourceTooLong": "此文過長，修之方可存。",
+      "sourceRecovery": "已存原文不變，完整草稿仍留此頁。複製後，請先貼至安全處，核對全文無缺，再刪減或放棄本次修改。",
+      "sourceCopy": "錄全文"
     },
     "nameLabel": "何以稱之",
     "close": "闔",
@@ -12921,7 +12926,7 @@
           "reasoningDominated": "思已耗此番所出之大半，覆或不全。宜減思之深淺，或先壓縮言談錄，再續。",
           "generic": "模型所出已達長度上限，此輪之覆或不全。可遣新訊以續；若屢見之，請減思之深淺，或先壓縮言談錄。",
           "join": "{{usage}}{{guidance}}",
-          "silentStopExhausted": "模型屢返空應，自動續行已暫止。"
+          "silentStopExhausted": "察得空答，自動續行已暫止。"
         },
         "permission": {
           "autoReviewUnavailable": "自動審批未竟，請確認是否許此操作。",
@@ -13672,12 +13677,6 @@
         "TARGET_UNAVAILABLE": "法器已停用、解除安裝或不可用，請查法器之狀後再試。",
         "ASSESSMENT_FAILED": "暫不能重整配置之狀，請再試。",
         "TIMEOUT": "待設逾時，請再試。"
-      },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AI 模型服務",
-          "description": "用法器所宣之圖或影之能前，須先連可用之模型服務"
-        }
       },
       "form": {
         "placeholder": "請輸入{{label}}",
@@ -14967,6 +14966,7 @@
       "pluginDisabledUnnamed": "自動查驗暫受阻：所需法器未啟，啟之自復。",
       "installPlugin": "裝法器",
       "openPlugin": "觀法器",
+      "enablePlugin": "啟法器",
       "dismissTitle": "闔往昔未成之示"
     },
     "worktreeRestoreBanner": {
@@ -15630,6 +15630,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "已罷對此裝置之控制，訊未遣。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件傳輸未成，訊未遣。請再試。",
       "MCP_APPROVAL_AUTO_BLOCKED": "此番工具呼叫為自動審核所攔，未得君親手拒絕之紀錄。",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "自動審核已攔此番工具呼叫：操作詳情未全。",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "自動審核已攔此番工具呼叫：君之指令已改，或尚未同步。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "自動審核已攔此番工具呼叫：目錄權柄已改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "自動審核已攔此番工具呼叫：委派之授權已改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "自動審核已攔此番工具呼叫：法器或差事之授權已失效。",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "自動審核已攔此番工具呼叫：未有君之指令授權此舉。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "自動審核已攔此番工具呼叫：工作計畫過大，超出所支援之範圍。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "自動審核已攔此番工具呼叫：行事之 Agent 與所登記之工作計畫不符。",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "自動審核已攔此番工具呼叫：差事之工作目錄已改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "自動審核已攔此番工具呼叫：委派差事之範圍缺失或無效。",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "權柄確認逾時，未得有效之確認。僅憑逾時，不能斷君曾否點鈕。",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "此番權柄確認未畢，未得君親手拒絕之紀錄。",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "此模型須機端轉送請求，今遠端連線尚不能轉送。請改用 Cindy AI，或於此機差事中用此模型。",
@@ -18968,7 +18978,7 @@
       "steerFailed": "插話未成：{{message}}",
       "qrExpired": "二維碼已逾時，請重新起始",
       "registrationFailed": "立之未成，請稍後再試",
-      "silentStopExhausted": "模型屢返空答，自動續行已暫止。點「續」以復差事。",
+      "silentStopExhausted": "察得空答，自動續行已暫止。",
       "executionResultUnavailable": "未得行之結果，自動接續已止。可請助手察既有之結果。",
       "outputLimit": "模型已達輸出之限，此答或有不全。可遣新訊以續；若屢至此限，宜減思之深淺，或先壓縮言談錄。",
       "outputLimitReasoning": "思考已耗本次輸出預算之大半，此答或有不全。宜減思之深淺，或先壓縮言談錄，而後續之。",
@@ -19560,7 +19570,8 @@
         "expired": "這張禮品卡已過領取期限。",
         "voided": "這張禮品卡已作廢。",
         "rateLimited": "嘗試次數過多，請稍後再試。",
-        "failed": "暫時無法兌換，請稍後重試。"
+        "failed": "暫時無法兌換，請稍後重試。",
+        "personalRequired": "禮品卡僅限個人使用者領取。"
       }
     },
     "usage": {
@@ -20929,7 +20940,7 @@
     "loadFailed": "應用程式載入未成。請察連線後重載。",
     "updateRequired": "此機尚不支援 MCP Apps，請更新該機之 Cindy 後再試。",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "由 $t(mcpApps.appName)「{{name}}」所遣",
     "serverId": "MCP 伺服器 ID：{{id}}",
     "exitFullscreen": "離全螢幕",
@@ -20943,7 +20954,19 @@
     "pluginCspRejected": "此頁請求未宣告之網域，已拒其載入",
     "filesOnExecutionComputer": "卷之內容請於執行之機覽之",
     "awaitingApproval": "候君確認",
-    "pendingApprovals": "{{count}} 項待確"
+    "pendingApprovals": "{{count}} 項待確",
+    "source": {
+      "official": "Cindy 官方",
+      "organization": "組織 · {{namespace}}",
+      "market": "法器市集",
+      "third-party": "他方來源",
+      "local": "本機裝入",
+      "unknown": "來源未詳"
+    },
+    "customMcp": "自訂 MCP",
+    "sourceLabel": "來源",
+    "signatureLabel": "簽章",
+    "fullscreen": "滿屏"
   },
   "richAnswer": {
     "invalidImageReference": "圖之引用無效，未能示之。",

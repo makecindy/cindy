@@ -8185,8 +8185,8 @@
         "hostTools_controlDetail": "Cindy のタスクツールで既存のタスクやプロジェクトを編集、アーカイブ、復元、操作し、このパソコンにネイティブ形式のタスクファイルをインポートできます。",
         "hostTools_handoff": "タスクへの送信",
         "hostTools_handoffDetail": "Cindy のタスクツールで既存のタスクにメッセージを送信できます。現在のタスク情報が必要な操作では、対象のタスクを明示する必要があります。",
-        "hostTools_usage": "サブスクリプション使用量の読み取り",
-        "hostTools_usageDetail": "このコンピューターで現在の Cindy アカウントに接続された Claude と Codex のアカウント識別子、プラン、使用制限の期間、更新時刻を読み取ります。メールアドレス、認証情報、ファイル、他のコンピューターのデータは読み取れず、アカウントも変更できません。",
+        "hostTools_usage": "使用量とプロバイダーグループの状態を読み取る",
+        "hostTools_usageDetail": "現在の Cindy アカウントに接続された、このコンピューター上の Claude/Codex のアカウント ID、プラン、クォータ期間、更新時刻を読み取ります。このコンピューターと、同じアカウントで許可された他のコンピューターの記録済みの日別・モデル別使用量、推定費用、プロバイダーグループの設定と状態、表示可能なメンバー・デバイスの ID、名前、アバターも読み取ります。サブスクリプションのログインメール、アカウントのディレクトリ、内部フィンガープリント、認証情報、ファイルの読み取りや、アカウント・設定の変更はできません。",
         "hostTools_settings": "アプリ設定",
         "hostTools_settingsDetail": "Cindy の設定ツールでアプリの設定を読み取り、変更できます。秘密情報は返されず、機密情報の入力は本人が行います。",
         "hostTools_scheduler": "自動化の管理",
@@ -10840,7 +10840,12 @@
       "summary": "自己紹介",
       "summaryPlaceholder": "例：連載小説を書くのが大好きな小説家。少しユーモアがあり、登場人物の心の動きを考えるのが好き。",
       "avatarSelectionFailed": "画像を読み込めませんでした。5 MB 以下の PNG、JPEG、WebP 画像を選んでください。",
-      "personality": "性格と話し方"
+      "personality": "性格と話し方",
+      "sourceLength": "{{length}} / {{limit}} UTF-16 コード単位（前後の空白を除く）。",
+      "sourceExcess": "上限を {{excess}} 単位超えています。保存するには文章を短くしてください。",
+      "sourceTooLong": "文章が長すぎるため保存できません。編集して続けてください。",
+      "sourceRecovery": "保存済みの原文は変わらず、下書き全文はこのページに残ります。コピー後、安全な場所に貼り付けて全文が揃っていることを確認してから、短くするか変更を破棄してください。",
+      "sourceCopy": "全文をコピー"
     },
     "nameLabel": "呼び名",
     "close": "閉じる",
@@ -12921,7 +12926,7 @@
           "reasoningDominated": "思考が今回の出力予算の大半を使ったため、返信が不完全な可能性があります。推論強度を下げるか、先に会話履歴を圧縮してから続けてください。",
           "generic": "モデルが出力の長さの上限に達したため、このターンの返信は不完全な可能性があります。新しいメッセージを送ると続行できます。繰り返し発生する場合は、推論強度を下げるか、先に会話履歴を圧縮してください。",
           "join": "{{usage}}{{guidance}}",
-          "silentStopExhausted": "モデルが空の応答を続けて返したため、自動続行を一時停止しました。"
+          "silentStopExhausted": "空の応答を検出したため、自動続行を一時停止しました。"
         },
         "permission": {
           "autoReviewUnavailable": "自動レビューが完了しませんでした。この操作を許可するか確認してください。",
@@ -13672,12 +13677,6 @@
         "TARGET_UNAVAILABLE": "プラグインが無効、アンインストール済み、または利用できません。プラグインの状態を確認してもう一度お試しください。",
         "ASSESSMENT_FAILED": "設定状況を更新できませんでした。もう一度お試しください。",
         "TIMEOUT": "設定がタイムアウトしました。もう一度お試しください。"
-      },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AIモデルサービス",
-          "description": "プラグインが宣言した画像または動画機能を使用する前に、利用可能なモデルサービスへ接続してください。"
-        }
       },
       "form": {
         "placeholder": "{{label}}を入力",
@@ -14976,6 +14975,7 @@
       "pluginDisabledUnnamed": "自動チェックが停止しています：必要なプラグインが有効になっていません。有効にすると自動で再開します。",
       "installPlugin": "プラグインをインストール",
       "openPlugin": "プラグインを開く",
+      "enablePlugin": "プラグインを有効にする",
       "dismissTitle": "過去の失敗通知を閉じる"
     },
     "worktreeRestoreBanner": {
@@ -15639,6 +15639,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。",
       "MCP_APPROVAL_AUTO_BLOCKED": "このツール呼び出しは自動審査でブロックされました。手動で拒否された記録はありません。",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "操作の詳細が不足しているため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "指示が変更されたか、まだ同期されていないため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "ディレクトリの権限が変更されたため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "委任された権限が変更されたため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "プラグインまたはタスクの承認が失効したため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "この操作を許可するユーザーの指示がないため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "作業計画が対応するサイズを超えているため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "実行する Agent が登録済みの作業計画と一致しないため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "タスクの作業ディレクトリが変更されたため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "委任されたタスクの範囲が未指定または無効なため、自動承認がこのツール呼び出しをブロックしました。",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "権限の確認がタイムアウトし、有効な確認結果を受信できませんでした。タイムアウトだけでは、ボタンをクリックしたかどうかは判断できません。",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "権限の確認を完了できませんでした。手動で拒否された記録はありません。",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "このモデルはパソコン側でのリクエスト転送が必要ですが、今のリモート接続では転送できません。Cindy AI に切り替えるか、このパソコン上のタスクで使ってください。",
@@ -18968,7 +18978,7 @@
       "steerFailed": "割り込み送信に失敗：{{message}}",
       "qrExpired": "QR コードが期限切れです。最初からやり直してください",
       "registrationFailed": "作成に失敗しました。後でもう一度お試しください",
-      "silentStopExhausted": "モデルが空の応答を繰り返し返したため、自動再開を一時停止しました。「続行」をクリックしてタスクを再開してください。",
+      "silentStopExhausted": "空の応答を検出したため、自動続行を一時停止しました。",
       "executionResultUnavailable": "実行結果を取得できなかったため、自動継続を停止しました。既存の実行結果を確認するようアシスタントに依頼してください。",
       "outputLimit": "モデルが出力上限に達したため、この応答は不完全な可能性があります。新しいメッセージを送信して続行できます。繰り返す場合は、推論強度を下げるか、先に対話履歴を圧縮してください。",
       "outputLimitReasoning": "推論が今回の出力予算の大部分を消費したため、応答は不完全な可能性があります。推論強度を下げるか、対話履歴を圧縮してから続行してください。",
@@ -19560,7 +19570,8 @@
         "expired": "このギフトカードは受け取り期限を過ぎています。",
         "voided": "このギフトカードは無効になりました。",
         "rateLimited": "試行回数が多すぎます。しばらくしてからもう一度お試しください。",
-        "failed": "ギフトカードを受け取れませんでした。しばらくしてからもう一度お試しください。"
+        "failed": "ギフトカードを受け取れませんでした。しばらくしてからもう一度お試しください。",
+        "personalRequired": "ギフトカードは個人アカウントでのみ受け取れます。"
       }
     },
     "usage": {
@@ -20929,7 +20940,7 @@
     "loadFailed": "アプリを読み込めませんでした。接続を確認して再読み込みしてください。",
     "updateRequired": "このコンピューターはまだ MCP Apps に対応していません。このコンピューターの Cindy を更新してから、もう一度お試しください。",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "$t(mcpApps.appName)「{{name}}」から送信",
     "serverId": "MCP サーバー ID：{{id}}",
     "exitFullscreen": "全画面表示を終了",
@@ -20943,7 +20954,19 @@
     "pluginCspRejected": "ページが未宣言のドメインを要求したため、読み込みを拒否しました。",
     "filesOnExecutionComputer": "ファイルの内容は実行側のコンピューターで確認してください",
     "awaitingApproval": "確認を待っています",
-    "pendingApprovals": "{{count}} 件の確認待ち"
+    "pendingApprovals": "{{count}} 件の確認待ち",
+    "source": {
+      "official": "Cindy 公式",
+      "organization": "組織 · {{namespace}}",
+      "market": "プラグインマーケット",
+      "third-party": "サードパーティの提供元",
+      "local": "ローカルインストール",
+      "unknown": "提供元不明"
+    },
+    "customMcp": "カスタム MCP",
+    "sourceLabel": "提供元",
+    "signatureLabel": "署名",
+    "fullscreen": "全画面"
   },
   "richAnswer": {
     "invalidImageReference": "画像の参照先が無効なため、表示できません。",

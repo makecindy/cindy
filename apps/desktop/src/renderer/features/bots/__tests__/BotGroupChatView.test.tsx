@@ -867,7 +867,7 @@ describe('BotGroupChatView', () => {
       await user.click(trigger);
       const panel = screen.getByRole('complementary');
       if (duration === '200ms') {
-        expect(motion.animate).toHaveBeenCalledWith([{ width: '0px' }, { width: '50%' }], { duration: 200, easing: 'linear', fill: 'forwards' });
+        expect(motion.animate).toHaveBeenCalledWith([{ transform: 'translateX(100%)' }, { transform: 'translateX(0)' }], { duration: 200, easing: 'linear', fill: 'forwards' });
         await act(async () => motion.animations[0]!.finish());
       }
       await user.click(within(panel).getByRole('button', { name: 'bots.close' }));
@@ -876,10 +876,31 @@ describe('BotGroupChatView', () => {
         expect(panel.inert).toBe(true);
         expect(screen.getByRole('complementary')).toBe(panel);
         expect(motion.animate).toHaveBeenCalledTimes(2);
+        expect(motion.animate).toHaveBeenLastCalledWith([{ transform: 'none' }, { transform: 'translateX(100%)' }], expect.anything());
         fireEvent.keyDown(trigger, { key: 'Escape' });
         expect(motion.animate).toHaveBeenCalledTimes(2);
         await act(async () => motion.animations[1]!.finish());
       } else expect(motion.animate).not.toHaveBeenCalled();
+      expect(screen.queryByRole('complementary')).toBeNull();
+    } finally { cleanup(); motion.restore(); }
+  });
+
+  it('closes from the visible position when opening is interrupted, without changing layout width', async () => {
+    const motion = mockThreadMotion('200ms');
+    try {
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+      const user = userEvent.setup();
+      renderView();
+      await user.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+      const panel = screen.getByRole('complementary');
+      // jsdom does not interpolate WAAPI: supply the position of an opening mid-frame.
+      panel.style.transform = 'matrix(1, 0, 0, 1, 120, 0)';
+      await user.click(within(panel).getByRole('button', { name: 'bots.close' }));
+      expect(motion.animations[0]!.cancel).toHaveBeenCalled();
+      expect(motion.animate).toHaveBeenLastCalledWith([
+        { transform: 'matrix(1, 0, 0, 1, 120, 0)' }, { transform: 'translateX(100%)' },
+      ], expect.anything());
+      await act(async () => motion.animations[1]!.finish());
       expect(screen.queryByRole('complementary')).toBeNull();
     } finally { cleanup(); motion.restore(); }
   });
@@ -1072,7 +1093,7 @@ describe('BotGroupChatView', () => {
         fireEvent.click(triggers[0]!);
         const reopened = screen.getByRole('complementary');
         expect(reopened.style.width).toBe('464px');
-        expect(motion.animate).toHaveBeenLastCalledWith([{ width: '0px' }, { width: '464px' }], expect.anything());
+        expect(motion.animate).toHaveBeenLastCalledWith([{ transform: 'translateX(100%)' }, { transform: 'translateX(0)' }], expect.anything());
       } finally { cleanup(); motion.restore(); }
     });
   });

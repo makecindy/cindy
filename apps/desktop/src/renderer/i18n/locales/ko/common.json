@@ -8185,8 +8185,8 @@
         "hostTools_controlDetail": "Cindy의 작업 도구로 기존 작업과 프로젝트를 수정, 보관, 복원하고 제어하며 이 컴퓨터에 기본 형식의 작업 파일을 가져올 수 있습니다.",
         "hostTools_handoff": "작업에 메시지 보내기",
         "hostTools_handoffDetail": "Cindy의 작업 도구로 기존 작업에 메시지를 보낼 수 있습니다. 현재 작업 정보가 필요한 작업은 대상 작업을 명시해야 합니다.",
-        "hostTools_usage": "구독 사용량 읽기",
-        "hostTools_usageDetail": "이 컴퓨터에서 현재 Cindy 계정에 연결된 Claude 및 Codex의 계정 식별자, 요금제, 사용 한도 기간, 업데이트 시간을 읽습니다. 이메일 주소, 인증 정보, 파일 또는 다른 컴퓨터의 데이터는 읽을 수 없으며 계정도 변경할 수 없습니다.",
+        "hostTools_usage": "사용량 및 제공자 그룹 상태 읽기",
+        "hostTools_usageDetail": "현재 Cindy 계정에 연결된 이 컴퓨터의 Claude/Codex 계정 ID, 요금제, 할당량 기간과 업데이트 시간을 읽습니다. 이 컴퓨터와 같은 계정에서 허용된 다른 컴퓨터에 기록된 일별·모델별 사용량, 예상 비용, 제공자 그룹 설정과 상태, 볼 수 있는 구성원·기기의 ID, 이름과 아바타도 읽습니다. 구독 로그인 이메일, 계정 디렉터리, 내부 지문, 인증 정보나 파일은 읽을 수 없으며 계정이나 설정도 변경할 수 없습니다.",
         "hostTools_settings": "앱 설정",
         "hostTools_settingsDetail": "Cindy의 설정 도구로 앱 설정을 읽고 변경할 수 있습니다. 비밀 값은 반환되지 않으며 민감한 정보는 직접 입력해야 합니다.",
         "hostTools_scheduler": "자동화 관리",
@@ -10840,7 +10840,12 @@
       "summary": "자기소개",
       "summaryPlaceholder": "예: 웹소설 쓰기를 사랑하는 소설가. 유머가 있고 등장인물의 속마음을 상상하는 것을 좋아해요.",
       "avatarSelectionFailed": "이미지를 읽지 못했어요. 5 MB 이하의 PNG, JPEG, WebP 이미지를 선택해 주세요.",
-      "personality": "성격과 대화 방식"
+      "personality": "성격과 대화 방식",
+      "sourceLength": "{{length}} / {{limit}} UTF-16 코드 단위(앞뒤 공백 제외).",
+      "sourceExcess": "한도를 {{excess}}단위 초과했습니다. 내용을 줄여야 저장할 수 있습니다.",
+      "sourceTooLong": "내용이 너무 길어 저장할 수 없습니다. 수정 후 계속하세요.",
+      "sourceRecovery": "저장된 원문은 변경되지 않으며 전체 초안은 이 페이지에 남아 있습니다. 복사한 후 안전한 곳에 붙여넣고 전체 내용이 있는지 확인한 다음 줄이거나 변경 사항을 버리세요.",
+      "sourceCopy": "전체 내용 복사"
     },
     "nameLabel": "어떻게 부를까요?",
     "close": "닫기",
@@ -12921,7 +12926,7 @@
           "reasoningDominated": "사고가 이번 출력 예산의 대부분을 사용해 답장이 불완전할 수 있습니다. 추론 강도를 낮추거나 먼저 대화 기록을 압축한 뒤 계속하세요.",
           "generic": "모델이 출력 길이 한도에 도달해 이번 턴의 답장이 불완전할 수 있습니다. 새 메시지를 보내면 이어서 진행할 수 있습니다. 계속 발생하면 추론 강도를 낮추거나 먼저 대화 기록을 압축하세요.",
           "join": "{{usage}} {{guidance}}",
-          "silentStopExhausted": "모델이 빈 응답을 여러 번 연속으로 반환해 자동 이어서 실행을 일시 중지했습니다."
+          "silentStopExhausted": "빈 응답이 감지되어 자동 이어서 실행을 일시 중지했습니다."
         },
         "permission": {
           "autoReviewUnavailable": "자동 리뷰가 끝나지 않았습니다. 이 작업을 허용할지 확인하세요.",
@@ -13672,12 +13677,6 @@
         "TARGET_UNAVAILABLE": "플러그인이 비활성화되었거나 제거되었거나 사용할 수 없습니다. 플러그인 상태를 확인한 후 다시 시도하세요.",
         "ASSESSMENT_FAILED": "설정 상태를 새로 고칠 수 없습니다. 다시 시도하세요.",
         "TIMEOUT": "설정 대기 시간이 초과되었습니다. 다시 시도하세요."
-      },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AI 모델 서비스",
-          "description": "플러그인에서 선언한 이미지 또는 동영상 기능을 사용하기 전에 사용 가능한 모델 서비스에 연결하세요."
-        }
       },
       "form": {
         "placeholder": "{{label}} 입력",
@@ -14976,6 +14975,7 @@
       "pluginDisabledUnnamed": "자동 확인이 차단되었습니다: 필요한 플러그인이 비활성화되어 있습니다. 활성화하면 자동으로 재개됩니다.",
       "installPlugin": "플러그인 설치",
       "openPlugin": "플러그인 열기",
+      "enablePlugin": "플러그인 켜기",
       "dismissTitle": "이전 실패 알림 닫기"
     },
     "worktreeRestoreBanner": {
@@ -15639,6 +15639,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "첨부 파일 전송에 실패했습니다. 메시지가 전송되지 않았습니다. 다시 시도하세요.",
       "MCP_APPROVAL_AUTO_BLOCKED": "자동 승인 검토가 이 도구 호출을 차단했습니다. 직접 거부한 기록은 없습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "작업 세부 정보가 부족하여 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "지시가 변경되었거나 아직 동기화되지 않아 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "디렉터리 권한이 변경되어 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "위임된 권한이 변경되어 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "플러그인 또는 작업의 승인이 만료되어 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "이 동작을 허용하는 사용자 지시가 없어 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "작업 계획이 지원되는 크기를 초과하여 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "실행하는 Agent가 등록된 작업 계획과 일치하지 않아 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "작업의 작업 디렉터리가 변경되어 자동 승인이 이 도구 호출을 차단했습니다.",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "위임된 작업 범위가 없거나 유효하지 않아 자동 승인이 이 도구 호출을 차단했습니다.",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "권한 확인 시간이 초과되어 유효한 확인 결과를 받지 못했습니다. 시간 초과만으로는 버튼을 클릭했는지 알 수 없습니다.",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "권한 확인을 완료하지 못했습니다. 직접 거부한 기록은 없습니다.",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "이 모델은 컴퓨터에서 요청을 전달해야 하는데, 현재 원격 연결은 전달할 수 없습니다. Cindy AI로 바꾸거나 이 컴퓨터의 작업에서 사용하세요.",
@@ -18968,7 +18978,7 @@
       "steerFailed": "끼어들기 실패: {{message}}",
       "qrExpired": "QR 코드가 만료됨. 다시 시작하세요",
       "registrationFailed": "생성 실패. 잠시 후 다시 시도하세요",
-      "silentStopExhausted": "모델이 빈 응답을 반복해서 반환하여 자동 재개가 일시 중지되었습니다. \"계속\"을 클릭하여 작업을 재개하세요.",
+      "silentStopExhausted": "빈 응답이 감지되어 자동 이어서 실행을 일시 중지했습니다.",
       "executionResultUnavailable": "실행 결과를 가져오지 못해 자동 계속 진행을 중단했습니다. 어시스턴트에게 기존 실행 결과를 확인하도록 요청하세요.",
       "outputLimit": "모델이 출력 한도에 도달하여 이번 응답은 불완전할 수 있습니다. 새 메시지를 보내 계속할 수 있습니다. 반복되면 추론 강도를 낮추거나 먼저 대화 기록을 압축하세요.",
       "outputLimitReasoning": "추론이 이번 출력 예산의 대부분을 소비하여 응답은 불완전할 수 있습니다. 추론 강도를 낮추거나 대화 기록을 압축한 후 계속하세요.",
@@ -19560,7 +19570,8 @@
         "expired": "이 기프트 카드는 받기 기한이 지났습니다.",
         "voided": "이 기프트 카드는 무효화되었습니다.",
         "rateLimited": "시도 횟수가 너무 많습니다. 잠시 후 다시 시도하세요.",
-        "failed": "기프트 카드를 받지 못했습니다. 잠시 후 다시 시도하세요."
+        "failed": "기프트 카드를 받지 못했습니다. 잠시 후 다시 시도하세요.",
+        "personalRequired": "기프트 카드는 개인 계정으로만 받을 수 있습니다."
       }
     },
     "usage": {
@@ -20929,7 +20940,7 @@
     "loadFailed": "앱을 불러오지 못했습니다. 연결을 확인한 후 다시 불러오세요.",
     "updateRequired": "이 컴퓨터는 아직 MCP Apps를 지원하지 않습니다. 해당 컴퓨터의 Cindy를 업데이트한 후 다시 시도하세요.",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "$t(mcpApps.appName) “{{name}}”에서 전송",
     "serverId": "MCP 서버 ID: {{id}}",
     "exitFullscreen": "전체 화면 종료",
@@ -20943,7 +20954,19 @@
     "pluginCspRejected": "페이지에서 선언되지 않은 도메인을 요청하여 로드를 차단했습니다.",
     "filesOnExecutionComputer": "파일 내용은 실행 컴퓨터에서 확인하세요",
     "awaitingApproval": "승인을 기다리고 있어요",
-    "pendingApprovals": "승인 대기 {{count}}개"
+    "pendingApprovals": "승인 대기 {{count}}개",
+    "source": {
+      "official": "Cindy 공식",
+      "organization": "조직 · {{namespace}}",
+      "market": "플러그인 마켓",
+      "third-party": "타사 출처",
+      "local": "로컬 설치",
+      "unknown": "알 수 없는 출처"
+    },
+    "customMcp": "사용자 지정 MCP",
+    "sourceLabel": "출처",
+    "signatureLabel": "서명",
+    "fullscreen": "전체 화면"
   },
   "richAnswer": {
     "invalidImageReference": "이미지 참조가 올바르지 않아 표시할 수 없습니다.",

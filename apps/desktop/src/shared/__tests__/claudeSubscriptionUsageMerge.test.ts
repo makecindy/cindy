@@ -16,6 +16,19 @@ const headers: ClaudeSubscriptionUsageSnapshot = {
   sevenDay: { utilization: 77, resetsAt: reset }, rateLimitStatus: 'allowed_warning',
 };
 
+// Unit: endpoint/header quota reads have no plan name. Preserve the official
+// status label on those updates, but never carry it across an account switch.
+it('retains same-account display metadata while replacing quota windows', () => {
+  const previous = { ...endpoint, subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra' };
+  const updated = merge(merge(previous, headers), { ...endpoint, updatedAt: now + 2000 });
+  expect(updated).toMatchObject({ subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra' });
+  for (const source of ['oauth-endpoint', 'unified-headers']) expect(merge(updated, {
+    source, updatedAt: now + 3000, planDisplayName: null,
+  }).planDisplayName).toBeNull();
+  expect(merge(updated, { ...endpoint, updatedAt: now + 3000, accountFingerprint: 'account-b' }))
+    .not.toHaveProperty('planDisplayName');
+});
+
 describe('Claude quota updates preserve valid window severity', () => {
   it('keeps endpoint-only severity through partial headers, then accepts full recovery', () => {
     const updated = merge(endpoint, headers);

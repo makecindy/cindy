@@ -1,6 +1,6 @@
 {
   "sectionTitle": "Cartões-presente",
-  "settingsFooter": "Digite um código de resgate ou cole o link de um cartão-presente para adicioná-lo ao seu saldo promocional.",
+  "settingsFooter": "Digite um código de resgate ou cole o link de um cartão-presente para adicioná-lo ao seu saldo promocional. Cartões-presente só podem ser resgatados com uma conta pessoal.",
   "action": "Resgatar cartão-presente",
   "title": "Resgatar cartão-presente",
   "inputLabel": "Código de resgate",
@@ -35,6 +35,7 @@
     "expired": "Este cartão-presente não pode mais ser resgatado porque o prazo terminou.",
     "voided": "Este cartão-presente foi anulado.",
     "rateLimited": "Muitas tentativas. Tente novamente mais tarde.",
-    "failed": "Não foi possível resgatar o cartão-presente. Tente novamente mais tarde."
+    "failed": "Não foi possível resgatar o cartão-presente. Tente novamente mais tarde.",
+    "personalRequired": "Cartões-presente só podem ser resgatados com uma conta pessoal."
   }
 }
