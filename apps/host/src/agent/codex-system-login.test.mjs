@@ -594,3 +594,40 @@ test('while a desktop uses the profile, a custom provider OAuth sign-in is not r
   await f.config.oauth.readGenericOAuthAccessToken('cprov-released', descriptor);
   assert.deepEqual(f.outbound, ['https://oauth.example.test/token']);
 });
+
+/*
+ * 测试价值
+ * - 生产入口：生产的 createHostProviderConfig 的 recipeSecretIo（main.ts 交给浏览器运行时，browser.ts 的 recipeSecrets
+ *   以 browserRecipeSecretId 的 id 读写它），配方本身是 opencli-vendor 里真实的小宇宙与 Spotify 代码，在 withRecipeHost 里运行。
+ * - 规则：并存方案 A（审核方 2026-11-17 定）。续期会轮换 refresh token 的配方（名单只在 held-credentials.ts 一处：小宇宙），
+ *   闸门关着时读密钥直接带原因失败，挡在它自己发续期请求之前；Spotify 不轮换，照常；放开后两个都照常。
+ * - 现有覆盖缺口：之前闸门不管浏览器配方的密钥。
+ * - 最小失败输入：闸门关着时，小宇宙的令牌已到续期时间，发一次请求。
+ * - tier：unit（真实的临时库与 profile；配方的 fetch 是记录调用的桩，不联网）。
+ */
+test('while a desktop uses the profile, the Xiaoyuzhou recipe reads no secret and sends nothing; Spotify is unaffected', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const f = await productionRuntime(t, 'held-recipe-owner');
+  const { withRecipeHost, readSecretJSON } = await import('../../../../packages/opencli-vendor/cindy/host.ts');
+  const { requestXiaoyuzhouJson } = await import('../../../../packages/opencli-vendor/clis/xiaoyuzhou/auth.js');
+  const io = f.config.recipeSecretIo;
+  // As browser.ts recipeSecrets: the recipe key under its store id.
+  const secrets = { read: key => io.readStrict(`browser-recipe-${key}`), write: (key, value) => io.write(`browser-recipe-${key}`, value) };
+  // A token due for renewal, so the recipe's first request would be its renewal.
+  assert.equal(io.write('browser-recipe-xiaoyuzhou', JSON.stringify({ access_token: 'xyz-access', refresh_token: 'xyz-refresh', expires_at: Date.now() - 1_000 })), true);
+  assert.equal(io.write('browser-recipe-spotify', JSON.stringify({ access_token: 'sp-access', refresh_token: 'sp-refresh', expires_at: Date.now() + 3_600_000 })), true);
+  const sent = [];
+  const fetchImpl = async url => { sent.push(String(url)); return new Response(JSON.stringify({ success: false }), { status: 500 }); };
+  const before = f.snapshot();
+  await assert.rejects(withRecipeHost(secrets, () => requestXiaoyuzhouJson('/v1/profile', {}, fetchImpl)),
+    /^Error: HOST_PROFILE_IN_USE_BY_DESKTOP: this browser recipe sign-in, whose renewal replaces its refresh token, is not used while a Cindy desktop app/);
+  assert.deepEqual(sent, [], 'no renewal and no request left');
+  assert.deepEqual(f.snapshot(), before);
+  assert.equal((await withRecipeHost(secrets, async () => readSecretJSON('spotify'))).access_token, 'sp-access');
+  // Released: the Xiaoyuzhou recipe reads its secret and starts with its renewal; Spotify as before.
+  f.setHeld(false);
+  await assert.rejects(withRecipeHost(secrets, () => requestXiaoyuzhouJson('/v1/profile', {}, fetchImpl)));
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /xiaoyuzhou/i);
+  assert.equal((await withRecipeHost(secrets, async () => readSecretJSON('spotify'))).access_token, 'sp-access');
+});

@@ -33,3 +33,27 @@ export function holdCredentialFetch<F extends (input: any, init?: any) => Promis
       { status: 503, headers: { 'content-type': 'application/json' } });
   }) as F;
 }
+
+/**
+ * Browser recipe credentials that cannot be read while held. The rule for a recipe: list it when its
+ * renewal rotates the refresh token. Such a recipe sends its own renewal and only then writes the
+ * result back, so holding the write alone would leave the server rotated and the stored token dead
+ * for both processes; refusing the read stops it before its first request. Recipes that keep their
+ * refresh token may renew while held (they write back only a new access token, which does not harm
+ * the desktop).
+ * - Xiaoyuzhou: renews with x-jike-refresh-token and saves the new pair (opencli-vendor
+ *   clis/xiaoyuzhou/auth.js 120–145), also after a 401 (188–192). Listed.
+ * - Spotify: keeps `data.refresh_token || refreshToken` (clis/spotify/spotify.js 33–64). Not listed.
+ * The ids are the store ids browser.ts browserRecipeSecretId gives them.
+ */
+export const RECIPE_SECRETS_UNREADABLE_WHILE_HELD: readonly string[] = Object.freeze(['browser-recipe-xiaoyuzhou']);
+
+/** The recipe secret store with RECIPE_SECRETS_UNREADABLE_WHILE_HELD refused while held. */
+export function holdRecipeSecrets<T extends { read(id: string): string | null; readStrict(id: string): string | null }>(
+  io: T, isProfileHeld: () => boolean): T {
+  const refuse = (id: string) => {
+    if (isProfileHeld() && RECIPE_SECRETS_UNREADABLE_WHILE_HELD.includes(id))
+      throw heldCredentialError('this browser recipe sign-in, whose renewal replaces its refresh token, is not used');
+  };
+  return { ...io, read: (id: string) => { refuse(id); return io.read(id); }, readStrict: (id: string) => { refuse(id); return io.readStrict(id); } };
+}

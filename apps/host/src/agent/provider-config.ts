@@ -18,7 +18,7 @@ import { loadCatalogWithSource, storedCustomProviderId, type CatalogSourceConfig
 import { createGenericOAuthService, type GenericOAuthStorage } from '../../../desktop/src/main/maker-host/generic-oauth.js';
 import { createGrokOAuthService } from '../../../desktop/src/main/maker-host/grok-oauth-login.js';
 import { holdGrokLoginWrites } from './xai-held-login.js';
-import { holdCredentialFetch } from './held-credentials.js';
+import { holdCredentialFetch, holdRecipeSecrets } from './held-credentials.js';
 import { hostOutbound, resolveHostOutboundProxy } from '../outbound.mjs';
 import { createClaudeNativeCli } from '../../../desktop/src/main/maker-host/claude-native-cli.js';
 import { readClaudeCliLoginStatusBySpawn } from '@cindy/maker-core/claude-cli-login-status';
@@ -162,7 +162,9 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
     await codexAccounts.close();
   };
   const api = {
-    list, readKey, oauth, grok, builtinStore, recipeSecretIo: oauthStorage, codexAccounts, claudeNative, cancelLogins,
+    list, readKey, oauth, grok, builtinStore,
+    // Browser recipes whose renewal rotates the refresh token are not read while held (held-credentials.ts).
+    recipeSecretIo: holdRecipeSecrets(oauthStorage, () => options.isProfileHeld?.() === true), codexAccounts, claudeNative, cancelLogins,
     async close() {
       closed = true;
       await cancelLogins();
