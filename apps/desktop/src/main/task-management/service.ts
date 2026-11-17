@@ -1,9 +1,8 @@
-import { and, eq, inArray } from 'drizzle-orm';
 import { activeDataOwnerId } from '../ownerContext.js';
 import { getDbClient, getCurrentDbClientSnapshot } from '../localDb/client/current.js';
-import { sessions } from '../localDb/schema.js';
 import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
 import { setSessionRestoreObserver } from '../localDb/sessionRestoreRetention.js';
+import { recordTaskArchiveRestores } from './restoreObserver.js';
 import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import { isProvisionalSession } from '../localDb/provisionalSessions.js';
 import { createLogger } from '../logger.js';
@@ -103,31 +102,8 @@ export function requestTaskArchiveCheck(force = true): void {
   scheduler.request(force);
 }
 
-/** Metadata is persisted before restoring, including manual/remote/Agent restores. */
-setSessionRestoreObserver(async (ids, db) => {
-  const scope = taskManagementScope();
-  const current = getCurrentDbClientSnapshot();
-  if (!current || current.client.drizzle !== db || current.userId !== activeDataOwnerId()) {
-    throw new Error('TASK_ARCHIVE_SCOPE_CHANGED');
-  }
-  for (let offset = 0; offset < ids.length; offset += 128) {
-    const rows = await db
-      .select({ id: sessions.id })
-      .from(sessions)
-      .where(
-        and(
-          inArray(sessions.id, [...ids.slice(offset, offset + 128)]),
-          eq(sessions.status, 'archived'),
-        ),
-      );
-    if (scope !== taskManagementScope()) throw new Error('TASK_ARCHIVE_SCOPE_CHANGED');
-    await taskManagementStore.restored(
-      rows.map((row) => row.id),
-      Date.now(),
-    );
-    if (scope !== taskManagementScope()) throw new Error('TASK_ARCHIVE_SCOPE_CHANGED');
-  }
-});
+/** Metadata is persisted before restoring, including manual/remote/Agent restores (restoreObserver.ts). */
+setSessionRestoreObserver(recordTaskArchiveRestores);
 
 /** UI and Agent settings share persistence, notifications and scheduling. */
 export async function updateTaskArchiveSettings(patch: Partial<TaskArchiveSettings> | null) {
