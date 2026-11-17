@@ -2134,6 +2134,26 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
   const failed = playbackFailed || (!uri && (
     resolveState?.status === 'error' || resolvedUnsupported || (!retryable && !media.previewable)
   ));
+  const protectLocalFile = resolveState?.media?.protectLocalFile;
+  const leaseRefreshUsed = useRef(false);
+  const leaseRetry = useRef({ image, onRetry });
+  leaseRetry.current = { image, onRetry };
+  useEffect(() => {
+    if (!active) { leaseRefreshUsed.current = false; return; }
+    if (!uri || failed || resolveState?.status !== 'ready') return;
+    // Paused players still need their Range URL. Keep the lease through native
+    // -> WebView fallback, but release it when this page stops consuming it.
+    try {
+      return protectLocalFile?.();
+    } catch {
+      // Releasing the last consumer can close a cached stream. On returning to
+      // this page, refresh once; a failed refresh keeps the existing retry UI.
+      if (!leaseRefreshUsed.current) {
+        leaseRefreshUsed.current = true;
+        leaseRetry.current.onRetry(leaseRetry.current.image);
+      } else setWebFailedUri(uri);
+    }
+  }, [active, failed, protectLocalFile, resolveState?.status, uri]);
   const handleNativeError = useCallback(() => {
     if (uri) setNativeFailedUri(uri);
   }, [uri]);
