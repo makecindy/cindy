@@ -2,6 +2,13 @@
 
 > **状态**:实施设计文档(本次交付的权威规格;合并后其中「交互契约」章节升为产品规则)
 > **读取时机**:实现、review 或修改新版模型选择器(新会话/会话内)前
+> **适用路径**：`apps/desktop/src/renderer/components/new-chat/{ModelSelector,ModelPickerAccount,UnifiedModel,unifiedModelSelection,modelPickerPreferences}*`、
+> `apps/desktop/src/renderer/__tests__/{modelSelector,modelPicker,unifiedModel}*`、
+> `apps/mobile/src/session/{UnifiedModelPicker,MobileModelPickerList,ModelPicker,modelPicker}*`、
+> `apps/mobile/src/__tests__/{modelPicker,unifiedMobilePicker,androidModelPickerParity}*`、
+> `packages/model-providers/src/**/unifiedSelection*`、`packages/device-link/src/**/modelFavorites*`、
+> `apps/desktop/src/renderer/state/modelFavorites.ts`、
+> `apps/desktop/scripts/fixtures/{model-selector-performance,model-selector-remote-repro}/**`
 > **来源**:2026-08-12 交互设计稿(Chris 逐轮裁决)+ 三路代码侦察(选择器结构/目录平面/偏好持久化)
 
 ## 0. 一句话

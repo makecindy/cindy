@@ -8,7 +8,11 @@ Desktop 在工作过程分组后追加待发项（`pendingQueueItems.ts`），�
 
 定向界面验证：`pnpm ui:check --page pending-queue --theme all`。真实派发仍由现有输入协调器负责。
 
-> **读取时机**：安装、启动、重启、调试或验证 `apps/desktop` 及其共享 packages 时
+> **读取时机**：安装、启动、重启、调试或验证 `apps/desktop` 及其共享 packages 时，
+> 或修改 Desktop 开发启动脚本与单页 UI 验证工具（`ui:check`）之前
+> **适用路径**：`scripts/restart-desktop-remote.mjs`、`scripts/desktop-dev-runner.mjs`、
+> `scripts/desktop-dev-verdict.mjs`、`scripts/shared/desktop-dev-*.mjs`、
+> `apps/desktop/scripts/ui-page/**`
 
 本文是 Desktop 开发命令及其使用条件的权威说明；可执行脚本以当前 checkout 的根
 `package.json` 与 `apps/desktop/package.json` 为代码事实源。

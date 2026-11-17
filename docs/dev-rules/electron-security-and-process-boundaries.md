@@ -2,7 +2,14 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改 Desktop Renderer、preload、BrowserWindow、WebView、IPC、CSP、
-> 导航、外链、文件／数据库／凭证访问或 Electron 特权能力之前
+> 导航、外链、文件／数据库／凭证访问或 Electron 特权能力之前；新增或修改独立窗口、
+> 辅助窗口或弹出型 `BrowserWindow` 之前（§3.1「独立辅助窗口统一生命周期基线」）
+> **适用路径**：`apps/desktop/src/preload/**`、`apps/desktop/src/main/security/**`、
+> `apps/desktop/src/main/webview-security.ts`、`apps/desktop/src/main/bootstrap-electron.ts`、
+> `apps/desktop/src/main/secondary-windows.ts`、`apps/desktop/src/main/*-window/**`、
+> `apps/desktop/src/main/**/window.ts`、`apps/desktop/src/main/**/ipc.ts`、
+> `apps/desktop/src/main/**/*Ipc.ts`、`apps/desktop/src/main/maker-ipc/{register,channels}.ts`、
+> `apps/desktop/forge.config.ts`、`apps/desktop/src/renderer/index.html`
 
 本规则以 [Electron 官方安全指南](https://www.electronjs.org/docs/latest/tutorial/security)
 为基线，并结合 Cindy 当前 Electron 41 的实际架构补充项目约束。安全优先级高于为了

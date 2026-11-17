@@ -1,5 +1,13 @@
 # Agent 与用户同权：工具能力不以「Agent 不该做」为由少给
 
+> **读取时机**：新增或修改 Agent 管理用户自己的任务、定时任务、项目、伙伴的工具（`cindy_helper` /
+> `cindy_scheduler` 等），或调整工具索引、工具的作用范围说明之前
+> **适用路径**：`packages/lizi-mcps/src/xdt-helper/**`、`packages/lizi-mcps/src/scheduler/**`、
+> `packages/lizi-mcps/src/{lizi_xdtHelper,cindy_scheduler}*`、
+> `packages/lizi-mcps/src/__tests__/{lizi_xdtHelperMcpServer,cindy_schedulerMcpServer,schedulerDevices}.test.ts`、
+> `apps/desktop/src/main/mcp-integrations/{taskDigest,taskDigestHost,sessionHandoffRemote,schedulerDevices}.ts`、
+> `apps/desktop/src/main/maker-ipc/{taskActionAuthorization,taskActionHost,sessionHandoffIpc,sendToSessionExecutionConfig,remoteSessionCreation,botTaskCreation}.ts`
+
 2026-10-14 裁决。用户本人能对自己的任务、定时任务、项目、伙伴做的操作，Agent 也要有对应工具，
 包括操作用户另一台电脑上的数据。
 

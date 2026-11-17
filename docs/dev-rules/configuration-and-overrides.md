@@ -3,6 +3,10 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改 Settings UI、配置文件、本地偏好存储、运行时 profile，或
 > agent／MCP／provider 相关开关之前
+> **适用路径**：`apps/desktop/src/renderer/components/settings/**`、
+> `apps/desktop/src/main/app-settings/**`、
+> `apps/desktop/src/main/**/*{settings-store,SettingsStore,settingsStore}*`、
+> `apps/mobile/src/settings/**`、`apps/mobile/app/settings/**`、`apps/mobile/app/settings.tsx`
 
 本规则适用于所有用户可配置项。Cindy 允许用户高度定制，但**默认配置承载创作者品味，
 是产品体验的一部分**——不是让每个选项都堆进设置页。产品边界见

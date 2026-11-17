@@ -2,6 +2,11 @@
 
 > **读取时机**：要在 Desktop 或 Mobile 上检查界面、截图、做 UI 回归，又不想登录真实
 > 账号或碰真实数据时；新增或修改模拟任务、`--mock` 启动参数时。
+> **适用路径**：`packages/maker-shared/src/uiMock*.ts`、
+> `apps/desktop/src/main/localDb/uiMockSeed.ts`、
+> `apps/desktop/src/main/companion-cloud/uiMock.ts`、
+> `apps/desktop/src/main/maker-ipc/botGroupUiMock.ts`、
+> `apps/mobile/src/debug/visualMock.ts`、`apps/mobile/src/debug/*VisualFixture.ts`
 
 Desktop 与 Mobile 共用一套模拟数据：展示项目、不同状态的回归任务和它们的消息。开发版
 加 `--mock` 启动后直接进入主界面：不登录 Cindy 账号，任务与消息来自模拟数据，不读写正式

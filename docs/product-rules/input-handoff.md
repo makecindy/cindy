@@ -1,5 +1,14 @@
 # 代输入：Agent 把需要主人的输入交给主人
 
+> **读取时机**：新增或修改代输入（`request_input_handoff`、宿主步骤读取与执行、代输入卡、截图扫码、终端 askpass、
+> 单窗口实时画面、设备码识别，或任何经手主人填写值的路径）之前
+> **适用路径**：`apps/desktop/src/main/input-handoff/**`、`apps/desktop/src/renderer/features/input-handoff/**`、
+> `apps/mobile/src/inputHandoff/**`、`apps/mobile/src/__tests__/InputHandoff*`、
+> `packages/device-link/src/**/inputHandoff*`、`packages/maker-shared/src/**/inputHandoff*`、
+> `packages/lizi-mcps/src/xdt-helper/input_handoff.ts`、
+> `apps/desktop/src/main/im/shared/**/inputHandoffChannelNotice*`、
+> `apps/desktop/src/main/plugin-oauth/**/inputHandoffSubmission*`
+
 > 适用：普通任务（Claude Code / Codex / Pi）与伙伴任务。实现入口：
 > `apps/desktop/src/main/input-handoff/`（宿主）、`packages/device-link/src/inputHandoff.ts`
 > （卡片快照与提交协议）、Desktop `renderer/features/input-handoff/`、Mobile `src/inputHandoff/`。
