@@ -125,6 +125,9 @@ function fixture({
           for (const update of durableCards.slice(durableCards.indexOf(stored) + 1)) {
             if (update.callId === card.callId && update.statusOnly) Object.assign(draft, copy(update.statusOnly));
           }
+          // Match MailCardService.restore: terminal/unconfirmed cards are not
+          // restorable active editors, even for their original task.
+          if (!['draft', 'syncing', 'error', 'sending'].includes(draft.state)) return { ok: false };
           return { ok: true, draft };
         }
         if (publish && !(await publish(card))) return { ok: false };
@@ -1969,4 +1972,50 @@ for (const restoring of [false, true]) test(`late task observation cannot roll b
   assert.equal((await f.resolve()).locator.uid, f.current().locator.uid);
   assert.equal((await f.resolve()).fingerprint, f.current().fingerprint);
   assert.equal(f.writes.some(r => r.send), false);
+});
+
+// A real Host refuses to restore sent cards. Duplicate tool sends must still
+// return the durable idempotent receipt without reviving private editor state.
+for (const restart of [false, true]) test(`terminal tool send returns its original receipt without active-card restore: restart=${restart}`, async () => {
+  const f = fixture();
+  await f.present();
+  const sent = await f.tool('send');
+  assert.equal(sent.ok, true);
+  assert.equal(sent.data.sent, true);
+  const cards = copy(f.cards), routes = f.kv(), reads = f.reads.length;
+  if (restart) f.restart();
+  const repeated = await f.tool('send', { sourceCallId: 'later-tool-call' });
+  assert.equal(repeated.ok, true);
+  assert.equal(repeated.data.alreadySent, true);
+  assert.deepEqual(copy(repeated.data.receipt), copy(sent.data.receipt));
+  assert.deepEqual(f.cards, cards);
+  assert.deepEqual(f.kv(), routes);
+  assert.equal(f.reads.length, reads);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+  assert.equal((await f.tool('send', { readOnly: true })).execution, 'not_executed');
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+});
+
+// A pending save may become draft while a second tool waits for its lock.
+// That send must enter the public countdown, not use the terminal shortcut to write.
+test('send waiting for a pending save still receives the full countdown', async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const waiting = new Promise(resolve => { release = resolve; });
+  const f = fixture({ autoSend: false, write: async request => {
+    if (!request.send) { entered(); await waiting; }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved before countdown' });
+  const saving = f.tool('update');
+  await started;
+  const sending = f.tool('send');
+  for (let i = 0; i < 50; i++) await Promise.resolve();
+  release();
+  await saving;
+  await f.waitCountdown();
+  assert.equal(f.writes.filter(r => r.send).length, 0);
+  await f.advance(10000);
+  assert.equal((await sending).ok, true);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
 });

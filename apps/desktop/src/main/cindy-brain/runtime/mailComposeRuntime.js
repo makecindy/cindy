@@ -663,37 +663,43 @@ var cindyMail = (function () {
         delete route.unverifiedAdditions;
       }
     }
+    function mailDraftOutcome(record) {
+      if (!record)
+        return {
+          ok: false,
+          execution: "not_executed",
+          message: "草稿卡片已失效，请重新读取。",
+        };
+      if (record.state === "deleted")
+        return { ok: false, execution: "not_executed", message: "草稿已删除或正在删除，不能保存或发送。" };
+      if (record.state === "sent")
+        return {
+          ok: true,
+          data: {
+            ...record.receipt,
+            receipt: record.receipt,
+            sent: true,
+            alreadySent: true,
+            draftId: record.draftId,
+          },
+        };
+      if (record.state !== "draft")
+        return {
+          ok: false,
+          execution: "unknown",
+          message: "之前操作的结果尚未确认，请先检查邮箱，未再次发送。",
+        };
+    }
     async function runMailDraft(key, send, sourceCallId, autosaveTimer) {
       return withMailCompose(key, async function () {
         const records = await mailRecords();
         var record = records[key];
         const shared = sharedMailBlock(records, key);
         if (shared) record = shared;
-        if (!record)
-          return {
-            ok: false,
-            execution: "not_executed",
-            message: "草稿卡片已失效，请重新读取。",
-          };
-        if (record.state === "deleted" || mailEdits.get(key)?.deleting)
+        if (record && mailEdits.get(key)?.deleting)
           return { ok: false, execution: "not_executed", message: "草稿已删除或正在删除，不能保存或发送。" };
-        if (record.state === "sent")
-          return {
-            ok: true,
-            data: {
-              ...record.receipt,
-              receipt: record.receipt,
-              sent: true,
-              alreadySent: true,
-              draftId: record.draftId,
-            },
-          };
-        if (record.state !== "draft")
-          return {
-            ok: false,
-            execution: "unknown",
-            message: "之前操作的结果尚未确认，请先检查邮箱，未再次发送。",
-          };
+        const outcome = mailDraftOutcome(record);
+        if (outcome) return outcome;
         if (Object.entries(records).some(([id, r]) => id !== key && r.account === record.account &&
             r.draftId === record.draftId && r.unverifiedAdditions))
           return { ok: false, execution: 'unknown', message: '之前操作的结果尚未确认，请先检查邮箱，未再次发送。' };
@@ -1249,8 +1255,26 @@ var cindyMail = (function () {
       if (!["get", "send", "update", "delete"].includes(operation))
         throw new Error("Unsupported draft operation");
       var records = await mailRecords();
-      const candidates = Object.keys(records).filter(id => records[id].account === account && records[id].draftId === draftId);
+      let candidates = Object.keys(records).filter(id => records[id].account === account && records[id].draftId === draftId);
       var key = candidates[0];
+      // Terminal receipts and uncertain outcomes do not restore private edits.
+      // Host restore intentionally excludes sent/deleted/unconfirmed cards;
+      // keep the existing idempotent/unknown branch reachable without a write.
+      if (operation === 'send' && readOnly === false) {
+        const settled = candidates.find(id => ['sent', 'pending', 'deleted'].includes(records[id].state));
+        if (settled) {
+          const outcome = await withMailCompose(settled, async function () {
+            const current = await mailRecords();
+            return mailDraftOutcome(sharedMailBlock(current, settled) || current[settled]);
+          });
+          if (outcome) return outcome;
+          // A save completed while we waited. Continue through the normal owned
+          // draft path so a real send still receives its full undo countdown.
+          records = await mailRecords();
+          candidates = Object.keys(records).filter(id => records[id].account === account && records[id].draftId === draftId);
+          key = candidates[0];
+        }
+      }
       if (candidates.length && sourceCallId) {
         let owned = false, ownershipUnavailable = false;
         for (const id of candidates) {
