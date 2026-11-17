@@ -67,19 +67,27 @@ export function remoteResponsePendingStatus(
 }
 
 /** Transcript order also works when a fast response arrives before the view sees running. */
-export function hasTurnResponse(messages: readonly Message[]): boolean {
+export function hasTurnResponse(messages: readonly Message[], inputClientId?: string): boolean {
+  // A local send can precede its transcript echo. Until that input boundary is
+  // present, activity in the old transcript cannot settle the new preparation.
+  let inputSeen = !inputClientId;
+  let response = false;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if (message.parentToolUseId && isSubagentParentToolUseId(message.parentToolUseId)) continue;
+    if (message.role === 'user' && message.clientId === inputClientId) inputSeen = true;
     // Steers belong to the existing turn, so they must not restart its preparation label.
     if (message.role === 'user' && message.delivery !== 'steer' && !message.isSyntheticTrigger) break;
     // Use transcript boundaries rather than comparing clocks on two computers.
     if (message.systemCardType) continue;
     if (message.role === 'tool_use' || message.role === 'tool_result'
       || message.role === 'thinking'
-      || (message.role === 'assistant' && message.content.trim())) return true;
+      || (message.role === 'assistant' && message.content.trim())) {
+      response = true;
+      if (inputSeen) return true;
+    }
   }
-  return false;
+  return inputSeen && response;
 }
 
 /** Plain composer copy uses the same runtime status as the task status bar.

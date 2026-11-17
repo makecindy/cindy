@@ -11,7 +11,7 @@ import type { AgentInputProjection, AgentInputQueuedMessage } from '../../shared
 import type { Message, Session } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import { findErrorTailMessage } from '@/lib/errorTailMessage';
-import { clearSessionStarting, hasStartingTerminal, markSessionStarting } from '@/lib/sessionStartingStore';
+import { clearSessionStarting, hasStartingTerminal } from '@/lib/sessionStartingStore';
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => []),
@@ -706,16 +706,27 @@ describe('makerChatStore text delta batching', () => {
   });
 
   // #11113 / unit: terminal events can arrive without a running render or text.
-  // Exercise the actual event subscription. Previous coverage missed Pi's status AFTER
-  // silentStop; neither status ordering may settle preparation before a real done/error.
+  // Exercise sendMessage + the actual event subscription. Old coverage only checked
+  // arrival order: a prior turn's late terminal after the new send must not settle it.
   it.each([
-    ['claude-code', 'done'], ['pi', 'done'], ['codex', 'done'], ['pi', 'error'],
-  ])('records a fresh %s %s terminal for remote preparation across view absence', (source, type) => {
-    const event = { type, source, data: type === 'error' ? { message: 'Remote turn failed' } : {} };
+    ['claude-code', 'done', 'sendMessage'], ['pi', 'done', 'sendMessage'],
+    ['codex', 'done', 'sendMessage'], ['pi', 'error', 'sendMessage'],
+    ['pi', 'done', 'steerMessage'],
+  ] as const)('records only the submitted input’s %s %s terminal after %s across view absence', async (source, type, method) => {
+    const terminal = { type, source, data: type === 'error' ? { message: 'Remote turn failed' } : {} };
     const status = { type: 'status', source, data: { isRunning: false, status: 'Done', tokenUsage: 0 } };
     try {
-      onEvent?.({ sessionId: SESSION_ID, event });
-      markSessionStarting(SESSION_ID);
+      onEvent?.({ sessionId: SESSION_ID, event: terminal });
+      await makerChatStore[method](SESSION_ID, 'next input', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR);
+      const clientId = method === 'sendMessage'
+        ? input.enqueue.mock.calls.at(-1)?.[1].clientId
+        : vi.mocked(window.electronAPI.maker.input.steer).mock.calls.at(-1)?.[1].clientId;
+      expect(clientId).toBeTruthy();
+      const event = { ...terminal, agentMeta: { replyToClientId: clientId } };
+      for (const replyToClientId of ['previous-input', undefined]) {
+        onEvent?.({ sessionId: SESSION_ID, event: { ...terminal, agentMeta: { replyToClientId } } });
+        expect(hasStartingTerminal(SESSION_ID)).toBe(false);
+      }
       expect(hasStartingTerminal(SESSION_ID)).toBe(false);
       onEvent?.({ sessionId: SESSION_ID, event: { ...event, turnScope: 'background' } });
       if (type === 'done') onEvent?.({ sessionId: SESSION_ID, event: { ...event, turnContinuationId: 1 } });

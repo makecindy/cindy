@@ -41,7 +41,13 @@ describe('localizeAgentStatus', () => {
       const steer = { clientId: 'steer', role: 'user', delivery: 'steer', content: 'more', createdAt: new Date(1200).toISOString() } as ChatMessage;
       expect(remoteResponsePendingStatus('Thinking...', 'remote', true, [message, steer])).toBe('Thinking...');
       expect(hasTurnResponse([message, steer])).toBe(true);
+      expect(hasTurnResponse([message, steer], 'steer')).toBe(true);
       const nextInput = { ...steer, clientId: 'next', delivery: undefined };
+      // #11113 / unit: send is marked before its user row echoes from main.
+      // Old transcript activity must not absorb the newly submitted input.
+      expect(hasTurnResponse([message], 'next')).toBe(false);
+      expect(hasTurnResponse([message, nextInput], 'next')).toBe(false);
+      expect(hasTurnResponse([message, nextInput, message], 'next')).toBe(true);
       expect(remoteResponsePendingStatus('Thinking...', 'remote', true, [message, nextInput])).toBe('Waiting for remote response');
       expect(hasTurnResponse([message, nextInput])).toBe(false);
       // A previous turn's background child can continue after the new user boundary.

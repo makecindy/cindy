@@ -52,20 +52,29 @@ describe('sessionStartingStore', () => {
   });
 
   // Regression: a fast remote Done can precede the view's running render (or remount).
-  // Only events after the starting mark count; old Done labels do not.
+  // #11113 / unit: receipt ownership must survive remounts but never cross inputs.
   it('retains a received terminal across view lifetimes and forgets it for the next send', () => {
-    noteStartingTerminal('remote');
-    markSessionStarting('remote');
+    noteStartingTerminal('remote', 'first');
+    markSessionStarting('remote', 'first');
     expect(hasStartingTerminal('remote')).toBe(false);
-    noteStartingTerminal('remote');
+    noteStartingTerminal('remote', 'first');
     expect(hasStartingTerminal('remote')).toBe(true);
     markSessionStarting('remote');
+    expect(hasStartingTerminal('remote')).toBe(true);
+    markSessionStarting('remote', 'first');
+    expect(hasStartingTerminal('remote')).toBe(true);
+    markSessionStarting('remote', 'second');
+    expect(hasStartingTerminal('remote')).toBe(false);
+    noteStartingTerminal('remote', 'first');
+    noteStartingTerminal('remote');
+    expect(hasStartingTerminal('remote')).toBe(false);
+    noteStartingTerminal('remote', 'second');
     expect(hasStartingTerminal('remote')).toBe(true);
     absorbSessionStarting(['remote']);
     expect(hasStartingTerminal('remote')).toBe(false);
-    markSessionStarting('remote');
+    markSessionStarting('remote', 'third');
     expect(hasStartingTerminal('remote')).toBe(false);
-    noteStartingTerminal('remote');
+    noteStartingTerminal('remote', 'third');
     vi.advanceTimersByTime(SESSION_STARTING_TTL_MS);
     expect(hasStartingTerminal('remote')).toBe(false);
   });

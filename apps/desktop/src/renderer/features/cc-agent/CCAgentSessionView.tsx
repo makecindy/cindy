@@ -387,7 +387,7 @@ import {
 } from './deferredUiAssignment';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
 import { hasTurnResponse, localizeAgentStatus, remoteResponsePendingStatus, statusAgentLocation } from './lib/localizeAgentStatus';
-import { hasStartingTerminal, useStartingSessionIds } from '@/lib/sessionStartingStore';
+import { getStartingInputClientId, hasStartingTerminal, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { findActiveReconnect } from '@/lib/autoResumePresentation';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
 import { hasInlineOverloadRetry } from './lib/inlineRetryError';
@@ -2527,7 +2527,10 @@ function CCAgentSessionContent({
   const taskLocation = statusAgentLocation(session?.agentDeviceId, pendingAgentDeviceId, false);
   // A pending switch belongs to the next send, never to an already running turn.
   const statusAgentDeviceId = statusAgentLocation(session?.agentDeviceId, pendingAgentDeviceId, agentStatus.isRunning);
-  const receivedRemoteResponse = useMemo(() => hasTurnResponse(messages), [messages]);
+  const startingInputClientId = sessionId ? getStartingInputClientId(sessionId) : undefined;
+  const receivedRemoteResponse = useMemo(
+    () => hasTurnResponse(messages, startingInputClientId), [messages, startingInputClientId],
+  );
   const receivedTerminalStatus = Boolean(sessionId && hasStartingTerminal(sessionId));
   // A retained error belongs to the previous turn until running clears it.
   // Only a newly received terminal event may settle this send's preparation.
