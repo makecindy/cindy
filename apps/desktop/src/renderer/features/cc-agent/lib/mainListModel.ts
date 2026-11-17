@@ -391,6 +391,27 @@ export function partitionAutomationSessions({
 }
 
 /**
+ * 「对话」组菜单(全部归档 / 恢复 / 搜索)的成员:与列表分区同口径,去掉已收进 Cindy Make 组
+ * 和(开启时)「自动化」组的任务,批量操作不会波及另一个组。
+ */
+export function dialogueGroupActionSessions(
+  sessions: readonly Session[],
+  {
+    groupAutomation = false,
+    scheduleSessionIndex,
+  }: {
+    groupAutomation?: boolean;
+    scheduleSessionIndex?: ReadonlyMap<string, AutomationScheduleSessionInfo>;
+  } = {},
+): Session[] {
+  return sessions.filter(
+    (session) =>
+      !isCindyMakeFamilySource(session.source) &&
+      !(groupAutomation && getAutomationSidebarGroupInfo(session, scheduleSessionIndex)),
+  );
+}
+
+/**
  * 伙伴的项目只从伙伴进入(cindy-bots-runtime.md「伙伴的项目在界面上」):没有可见任务时
  * 不作为空项目行出现;伙伴在里面开了任务时照常显示。
  */

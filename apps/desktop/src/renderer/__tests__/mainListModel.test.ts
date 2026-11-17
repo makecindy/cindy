@@ -19,6 +19,7 @@ import type { ProjectNode } from '../features/cc-agent/lib/projectGrouping';
 import {
   advanceViewedPriorityHold,
   buildMainListEntries,
+  dialogueGroupActionSessions,
   getMainListEntrySessions,
   holdViewedPriorityRank,
   sessionPriorityRecencyMs,
@@ -543,6 +544,14 @@ describe('buildMainListEntries — 混排(recency)', () => {
 });
 
 describe('automations sidebar group', () => {
+  it('keeps chat-group bulk actions off tasks moved into the automations group', () => {
+    const digest = session({ title: 'digest', source: 'scheduler', pinnedAt: '2026-11-14T00:00:00Z', updatedAt: '2026-11-14T00:00:00Z' });
+    const chat = session({ title: 'chat', pinnedAt: '2026-11-13T00:00:00Z', updatedAt: '2026-11-13T00:00:00Z' });
+    const titles = (sessions: readonly Session[]) => sessions.map((item) => item.title);
+    expect(titles(dialogueGroupActionSessions([digest, chat], { groupAutomation: true }))).toEqual(['chat']);
+    expect(titles(dialogueGroupActionSessions([digest, chat], { groupAutomation: false }))).toEqual(['digest', 'chat']);
+  });
+
   const teammateDir = '/Users/u/Cindy/owners/acct/bots/bot_1/workspace';
 
   it('collects automation runs out of projects and chats, hiding a teammate project left empty', () => {

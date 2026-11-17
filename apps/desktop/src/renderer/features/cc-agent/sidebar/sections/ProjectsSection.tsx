@@ -92,6 +92,7 @@ import {
 import {
   AUTOMATIONS_GROUP_KEY,
   CINDY_MAKE_GROUP_KEY,
+  dialogueGroupActionSessions,
   getMainListEntrySessions,
   holdViewedPriorityRank,
   onlineDeviceSectionIds,
@@ -1054,11 +1055,13 @@ export function ProjectsSection({
       const canCreateMake = entry.sessions.some((session) => !session.deviceLinkDeviceId);
       const actionSessions = isMake
         ? entry.sessions
-        : dialogueActionSessions.filter(
+        : dialogueGroupActionSessions(dialogueActionSessions, {
+            groupAutomation: filter.groupAutomation,
+            scheduleSessionIndex,
+          }).filter(
             (session) =>
-              !isCindyMakeFamilySource(session.source) &&
-              (dialogueDeviceTarget === undefined ||
-                (session.deviceLinkDeviceId ?? null) === (dialogueDeviceTarget?.deviceId ?? null)),
+              dialogueDeviceTarget === undefined ||
+              (session.deviceLinkDeviceId ?? null) === (dialogueDeviceTarget?.deviceId ?? null),
           );
       return (
         <SessionGroupNode
