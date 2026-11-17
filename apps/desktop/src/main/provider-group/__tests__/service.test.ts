@@ -367,6 +367,10 @@ describe('assignBeforeStart', () => {
     expect(context?.route).toEqual({ agentDeviceId: null, providerId: null });
     expect(h.deps.persistRoute).not.toHaveBeenCalled();
     expect(h.bindings.get('s1')).toMatchObject({ providerId: 'anthropic', memberKey: 'local' });
+    // Reopening the binding must still resolve the local default (#11088).
+    const reopened = await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL });
+    expect(reopened?.member.key).toBe('local');
+    expect(h.deps.markReleased).not.toHaveBeenCalled();
   });
 
   it('leaves tasks that already run elsewhere alone and never moves a started task', async () => {
