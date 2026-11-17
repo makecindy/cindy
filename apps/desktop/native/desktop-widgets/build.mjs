@@ -185,16 +185,42 @@ export function installDesktopWidgetsExtension(appPath, arch = process.arch) {
   const appex = path.join(appPath, 'Contents/PlugIns', `${EXTENSION_NAME}.appex`);
   fs.rmSync(appex, { recursive: true, force: true });
   fs.mkdirSync(path.join(appex, 'Contents/MacOS'), { recursive: true });
-  swiftc(arch, [
-    '-parse-as-library',
-    '-application-extension',
-    ...SHARED_SOURCES.map((file) => path.join(shared, file)),
-    path.join(source, 'MacWidgetSupport.swift'),
-    // Same entry point Xcode links app extensions with (see live-activity/build.mjs).
-    '-Xlinker', '-e', '-Xlinker', '_NSExtensionMain',
-    '-o', path.join(appex, 'Contents/MacOS', EXTENSION_NAME),
-  ]);
   const resources = path.join(appex, 'Contents/Resources');
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-widget-intents-'));
+  try {
+    const sources = [...SHARED_SOURCES.map((file) => path.join(shared, file)), path.join(source, 'MacWidgetSupport.swift')];
+    const toolchain = path.resolve(execFileSync('xcrun', ['--find', 'swiftc'], { encoding: 'utf8' }).trim(), '../../..');
+    const constValues = path.join(work, 'widgets.swiftconstvalues');
+    const protocols = path.join(work, 'protocols.json');
+    // Protocol conformances used by ComputerIntent.swift, including WidgetConfigurationIntent's AppIntent.
+    fs.writeFileSync(protocols, JSON.stringify(['AppIntent', 'AppEntity', 'EntityQuery', 'AppEnum', 'DynamicOptionsProvider']));
+    swiftc(arch, [
+      '-parse-as-library', '-application-extension', '-whole-module-optimization',
+      '-emit-const-values-path', constValues,
+      '-const-gather-protocols-list', protocols,
+      ...sources,
+      '-Xlinker', '-e', '-Xlinker', '_NSExtensionMain',
+      '-o', path.join(appex, 'Contents/MacOS', EXTENSION_NAME),
+    ]);
+    const sourceList = path.join(work, 'sources');
+    const valuesList = path.join(work, 'const-values');
+    fs.writeFileSync(sourceList, sources.join('\n') + '\n');
+    fs.writeFileSync(valuesList, constValues + '\n');
+    fs.mkdirSync(resources, { recursive: true });
+    execFileSync('xcrun', [
+      'appintentsmetadataprocessor', '--module-name', MODULE_NAME,
+      '--output', resources, '--toolchain-dir', toolchain,
+      '--sdk-root', execFileSync('xcrun', ['--sdk', 'macosx', '--show-sdk-path'], { encoding: 'utf8' }).trim(),
+      '--xcode-version', execFileSync('xcodebuild', ['-version'], { encoding: 'utf8' }).trim().split('Build version ')[1],
+      '--platform-family', 'macOS', '--deployment-target', MIN_SYSTEM, '--target-triple', triple(arch),
+      '--source-file-list', sourceList, '--swift-const-vals-list', valuesList,
+    ], { stdio: 'inherit' });
+    if (!fs.existsSync(path.join(resources, 'Metadata.appintents/extract.actionsdata'))) {
+      throw new Error('Desktop widget App Intents metadata was not generated');
+    }
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
   compileAssets(resources);
   for (const font of FONTS) {
     fs.copyFileSync(path.join(desktop, 'native/menubar', font), path.join(resources, font));

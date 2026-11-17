@@ -118,6 +118,7 @@ export async function refreshUsageWidgetStore(
   invoke: Invoke,
   pinned: readonly string[] = [],
   nowMs: () => number = Date.now,
+  isCurrent: () => boolean = () => true,
 ): Promise<UsageWidgetStore> {
   const computers = devices.filter(isWidgetComputer);
   const listed = new Set(computers.map(device => device.deviceId));
@@ -128,6 +129,7 @@ export async function refreshUsageWidgetStore(
   let autoDeviceId = previous?.autoDeviceId && listed.has(previous.autoDeviceId) ? previous.autoDeviceId : null;
   const outcomes = new Map<string, 'answered' | 'too-old' | 'failed'>();
   const ask = async (device: DeviceView) => {
+    if (!isCurrent()) throw new Error('Widget refresh expired');
     let outcome: 'answered' | 'too-old' | 'failed' = 'failed';
     try {
       const result = await invoke<{ ok?: boolean; snapshot?: unknown }>(
@@ -175,4 +177,30 @@ export async function refreshUsageWidgetStore(
     computers: computers.map(device => ({ id: device.deviceId, name: device.selfName || device.name })),
     states,
   };
+}
+
+/** Refresh one account, fencing every request and the final write after waits. */
+export async function refreshUsageWidgets(
+  latest: { readonly current: {
+    readDeviceList: () => Promise<{ devices: DeviceView[] }>;
+    invoke: Invoke;
+    accountGeneration: number;
+    userId: string | null;
+  } },
+  generation: number,
+  active: () => boolean,
+): Promise<boolean> {
+  const isCurrent = () => active() && latest.current.accountGeneration === generation;
+  if (!isCurrent()) return false;
+  const { devices } = await latest.current.readDeviceList();
+  if (!isCurrent()) return false;
+  const accountId = latest.current.userId;
+  if (!accountId) return false;
+  const stored = readUsageWidgetStore();
+  const store = await refreshUsageWidgetStore(
+    stored?.accountId === accountId ? stored : null, devices, latest.current.invoke,
+    readPinnedUsageWidgetDevices(), Date.now, isCurrent,
+  );
+  if (!isCurrent()) return false;
+  return writeUsageWidgetStore({ ...store, accountId });
 }

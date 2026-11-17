@@ -18,6 +18,7 @@ import { createRequire } from 'node:module';
 import { app } from 'electron';
 import type { MobileUsageWidgetSnapshot } from '@cindy/maker-shared/device-link-contract';
 
+import { onAppSessionInvalidated } from '../appSessionState.js';
 import { deviceName } from '../device-link/deviceName.js';
 import { getResolvedMainLocale, rawMainString } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
@@ -61,6 +62,7 @@ export interface DesktopWidgetStore {
 }
 
 export interface DesktopWidgetsDeps {
+  onSessionInvalidated: (listener: () => void) => () => void;
   overview: Pick<QuotaOverviewService, 'subscribe' | 'acquire' | 'latest'>;
   native: NativeDesktopWidgets;
   /** Absolute folder the store is written to. */
@@ -99,6 +101,7 @@ function contentKey(store: DesktopWidgetStore): string {
 
 export class DesktopWidgets {
   private release: (() => void) | null = null;
+  private offSession: (() => void) | null = null;
   private unsubscribe: (() => void) | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private reloadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -111,6 +114,8 @@ export class DesktopWidgets {
 
   start(): void {
     if (this.pollTimer) return;
+    this.offSession = this.deps.onSessionInvalidated(() => this.clear());
+    this.clear();
     this.poll();
     this.pollTimer = setInterval(() => this.poll(), DESKTOP_WIDGETS_POLL_MS);
   }
@@ -119,6 +124,8 @@ export class DesktopWidgets {
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
     this.setHeld(false);
+    this.offSession?.();
+    this.offSession = null;
   }
 
   private poll(): void {
@@ -154,8 +161,20 @@ export class DesktopWidgets {
   }
 
   private publish(build: QuotaOverviewBuild): void {
+    this.publishSnapshot(this.deps.snapshot(build, this.deps.now()));
+  }
+
+  private clear(): void {
+    // Account invalidation must remove the old reading immediately, outside the reload throttle.
+    this.reloadedAtMs = Number.NEGATIVE_INFINITY;
+    this.publishSnapshot(null);
+    // The first reading of the next owner must not wait behind the empty-state reload.
+    this.reloadedAtMs = Number.NEGATIVE_INFINITY;
+  }
+
+  private publishSnapshot(snapshot: MobileUsageWidgetSnapshot | null): void {
     const now = this.deps.now();
-    const store = buildDesktopWidgetStore(this.deps.snapshot(build, now), this.deps.deviceName(), now);
+    const store = buildDesktopWidgetStore(snapshot, this.deps.deviceName(), now);
     const contents = JSON.stringify(store);
     if (contents !== this.written) {
       try {
@@ -228,6 +247,7 @@ export function startDesktopWidgets(overview: QuotaOverviewService): (() => void
   if (!dataPath) return null;
   const widgets = new DesktopWidgets({
     overview,
+    onSessionInvalidated: onAppSessionInvalidated,
     native,
     dataDir: path.join(os.homedir(), dataPath),
     snapshot: (build, nowMs) => {

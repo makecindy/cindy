@@ -20,13 +20,14 @@ Mac 上的「订阅余量」「每日用量」桌面小组件（macOS 14 起，�
 - WidgetKit 给每个组件的刷新次数每天有限（系统不公开具体数）。每次重建都写文件，但只在显示内容变化时刷新，
   且两次刷新至少间隔 10 分钟（窗口内的最后一次变化在窗口结束时补上）；内容不变时每 45 分钟刷新一次，
   让「x 分钟前更新」不跨过组件的一小时过期线。组件自己按 15 分钟的时间线推进倒计时。
-- 退出登录（概览带 `gate`）时写成空状态，组件显示「登录 Cindy 后……」，不保留上一个账号的读数。
+- 启动和会话失效时独立于采集持有情况清空快照并立即刷新；退出登录（概览带 `gate`）时也写成空状态，组件显示「登录 Cindy 后……」，不保留上一个账号的读数。
 - 点组件打开宿主 App（不设 `widgetURL`：本机可能装了多个注册 `cindy://` 的 Cindy）。
 
 ## 构建与验证
 
 - `build.mjs addon <out.node> <arch>`、`build.mjs extension <App.app> <arch>`，由 `forge.config.ts` 的
   prePackage / postPackage 调用；没有 macOS 14 SDK 时整段跳过，`CINDY_DESKTOP_WIDGETS=0` 可主动跳过。
+  编译时导出 Swift 常量，签名前用 `appintentsmetadataprocessor` 把配置 intent／entity 元数据写入扩展的 `Contents/Resources/Metadata.appintents`。
   Intel 与 Apple 芯片都支持。扩展的入口同实时活动一样用 `-e _NSExtensionMain` 链接。
 - 发布签名：`scripts/ci/lib.mjs` 重签 `CindyDesktopWidgets.appex` 时用 `--preserve-metadata=entitlements`
   保留安装时生成的 entitlements；其他扩展仍用各自固定的 entitlements 文件。

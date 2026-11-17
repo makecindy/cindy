@@ -5,11 +5,9 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import {
   clearUsageWidgetState,
   onUsageWidgetBackgroundRefresh,
-  readPinnedUsageWidgetDevices,
   readUsageWidgetStore,
-  refreshUsageWidgetStore,
+  refreshUsageWidgets,
   usageWidgetsSupported,
-  writeUsageWidgetStore,
 } from './usageWidgetSync';
 
 // The computers rebuild their overview every few minutes; the widgets need no more.
@@ -26,6 +24,7 @@ export function UsageWidgetBridge() {
   const { invoke, readDeviceList, status, holdBackgroundConnection } = useDeviceLink();
   const { initialized, isAuthenticated, accountGeneration, user } = useAuth();
   const userId = user?.id ?? null;
+  const refreshId = useRef(0);
   const latest = useRef({ invoke, readDeviceList, accountGeneration, userId, holdBackgroundConnection });
   latest.current = { invoke, readDeviceList, accountGeneration, userId, holdBackgroundConnection };
 
@@ -43,13 +42,15 @@ export function UsageWidgetBridge() {
   useEffect(() => {
     if (Platform.OS === 'web' || !usageWidgetsSupported || !isAuthenticated || status !== 'online') return;
     const generation = accountGeneration;
+    let active = true;
     let pending = false;
     let timer: ReturnType<typeof setInterval> | undefined;
     const refresh = async () => {
       if (pending || AppState.currentState !== 'active') return;
       pending = true;
       try {
-        await refreshWidgets(latest, generation);
+        const id = ++refreshId.current;
+        await refreshUsageWidgets(latest, generation, () => active && id === refreshId.current);
       } catch {
         // Keep the last snapshot; the widgets show how old it is.
       } finally {
@@ -66,6 +67,7 @@ export function UsageWidgetBridge() {
     resume();
     const subscription = AppState.addEventListener('change', resume);
     return () => {
+      active = false;
       clearInterval(timer);
       subscription.remove();
     };
@@ -76,14 +78,17 @@ export function UsageWidgetBridge() {
     if (!usageWidgetsSupported || !isAuthenticated) return;
     const generation = accountGeneration;
     return onUsageWidgetBackgroundRefresh(async () => {
+      const id = ++refreshId.current;
+      let active = true;
       const release = latest.current.holdBackgroundConnection?.() ?? (() => {});
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         return await Promise.race([
-          refreshWidgets(latest, generation),
-          new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), BACKGROUND_BUDGET_MS); }),
+          refreshUsageWidgets(latest, generation, () => active && id === refreshId.current),
+          new Promise<boolean>((resolve) => { timer = setTimeout(() => { active = false; resolve(false); }, BACKGROUND_BUDGET_MS); }),
         ]);
       } finally {
+        active = false;
         clearTimeout(timer);
         release();
       }
@@ -91,27 +96,4 @@ export function UsageWidgetBridge() {
   }, [isAuthenticated, accountGeneration]);
 
   return null;
-}
-
-interface WidgetRefreshContext {
-  invoke: ReturnType<typeof useDeviceLink>['invoke'];
-  readDeviceList: ReturnType<typeof useDeviceLink>['readDeviceList'];
-  accountGeneration: number;
-  userId: string | null;
-}
-
-/**
- * Asks the computers and writes the store; true when it was written. Read through the ref after
- * every wait, so an account switch meanwhile never writes the previous account's readings.
- */
-async function refreshWidgets(latest: { readonly current: WidgetRefreshContext }, generation: number): Promise<boolean> {
-  const { devices } = await latest.current.readDeviceList();
-  const accountId = latest.current.userId;
-  if (!accountId) return false;
-  const stored = readUsageWidgetStore();
-  const store = await refreshUsageWidgetStore(
-    stored?.accountId === accountId ? stored : null, devices, latest.current.invoke, readPinnedUsageWidgetDevices(),
-  );
-  if (latest.current.accountGeneration !== generation) return false;
-  return writeUsageWidgetStore({ ...store, accountId });
 }

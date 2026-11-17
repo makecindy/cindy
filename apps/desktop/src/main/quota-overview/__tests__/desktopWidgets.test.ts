@@ -1,9 +1,11 @@
 // Mac desktop widgets: the app holds the quota overview only while a widget is on the desktop,
 // writes what the extension reads and spends WidgetKit's daily reload budget only on changes
 // (plus an occasional refresh so a current reading never looks stale).
+import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { MobileUsageWidgetSnapshot } from '@cindy/maker-shared/device-link-contract';
 
+vi.mock('../../appSessionState.js', () => ({ onAppSessionInvalidated: vi.fn() }));
 vi.mock('electron', () => ({ app: { isPackaged: true, getAppPath: () => '/app' } }));
 
 import {
@@ -32,9 +34,11 @@ function harness() {
   let next: MobileUsageWidgetSnapshot | null = snapshotWith('50');
   const reloads: number[] = [];
   const files = new Map<string, string>();
-  const release = vi.fn(() => { listener = null; });
+  let invalidate: (() => void) | null = null;
+  const release = vi.fn();
   const acquire = vi.fn(() => release);
   const controller = new DesktopWidgets({
+    onSessionInvalidated: (changed) => { invalidate = changed; return () => { invalidate = null; }; },
     overview: {
       subscribe: (changed) => { listener = changed; return () => { listener = null; }; },
       acquire,
@@ -55,12 +59,13 @@ function harness() {
   });
   return {
     controller, acquire, release, reloads,
+    invalidate: () => invalidate?.(),
     setWidgets: (count: number | null) => { widgets = count; },
     build: (snapshot: MobileUsageWidgetSnapshot | null) => {
       next = snapshot;
       listener?.({ stale: false } as QuotaOverviewBuild);
     },
-    store: () => JSON.parse(files.get('/home/Library/x/usage-widget-snapshot.json') ?? 'null') as DesktopWidgetStore | null,
+    store: () => JSON.parse(files.get(path.join('/home/Library/x', 'usage-widget-snapshot.json')) ?? 'null') as DesktopWidgetStore | null,
   };
 }
 
@@ -90,6 +95,7 @@ it('writes every build, reloads changes at most every few minutes and an unchang
   const h = harness();
   h.setWidgets(1);
   h.controller.start();
+  h.reloads.length = 0;
 
   h.build(snapshotWith('50'));
   expect(h.store()?.states.local?.snapshot.sources[0]?.value).toBe('50');
@@ -114,6 +120,22 @@ it('writes every build, reloads changes at most every few minutes and an unchang
 
   // Signed out: the widget is left with nothing to show rather than the previous account's quota.
   h.build(null);
+  expect(h.store()?.states).toEqual({});
+  h.controller.stop();
+});
+
+// Production entry: DesktopWidgets.start; persisted data must clear on session invalidation
+// even without placed widgets (#11178). Existing coverage only signed out while held.
+// Minimum input: publish, remove last widget, invalidate session. Tier: unit, in-memory.
+// Measured wall time for this file: 1.76 s.
+it('clears the old account after collection stops', () => {
+  const h = harness();
+  h.setWidgets(1);
+  h.controller.start();
+  h.build(snapshotWith('50'));
+  h.setWidgets(0);
+  vi.advanceTimersByTime(DESKTOP_WIDGETS_POLL_MS);
+  h.invalidate();
   expect(h.store()?.states).toEqual({});
   h.controller.stop();
 });
