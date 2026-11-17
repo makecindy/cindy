@@ -1,0 +1,63 @@
+/**
+ * Every module the Host loads that opens network connections itself, and why its traffic to other machines goes
+ * through the Host's outbound proxy resolver or does not need to (release table row 28).
+ *
+ * "Opens network connections itself": a value import of node:http, https, net, tls, http2 or dgram, of undici or
+ * ws (or a require / dynamic import of them), a reference to the global fetch where the file declares no `fetch`
+ * of its own, or `new WebSocket(…)`. `uses` lists exactly what the module does of these.
+ *
+ * Guard: hostDesktopSourceContracts.guard.test.ts ("network modules the Host loads") collects them over the Host's
+ * import graph (the entries of scripts/build.mjs and the acceptance scripts) and fails on a module missing here, an
+ * entry whose module no longer does it, or a different `uses`: a new outbound call that bypasses the resolver
+ * cannot land unnoticed.
+ *
+ * route:
+ * - resolver: its requests to other machines take the resolver's verdict (hostOutbound, resolveHostOutboundProxy,
+ *   or an agent built from them);
+ * - injected: the transport is a port, and the Host passes hostOutbound (where says where);
+ * - loopback: it talks to this machine only (a local server, a local control plane, the Host's own endpoint);
+ * - no-connection: it imports the module for addresses or types and opens nothing;
+ * - same-as-desktop: it goes to other machines without the resolver, as the desktop does too (recorded in the
+ *   release table, row 28).
+ */
+export type HostNetworkRoute = 'resolver' | 'injected' | 'loopback' | 'no-connection' | 'same-as-desktop';
+
+export const HOST_NETWORK_MODULES: Readonly<Record<string, { uses: readonly string[]; route: HostNetworkRoute; reason: string }>> = {
+  'apps/desktop/scripts/mcp-apps-mock.mjs': { uses: ['imports http'], route: 'loopback', reason: 'A mock MCP app server on loopback for an acceptance script' },
+  'apps/desktop/src/main/browser-extension/bridge.ts': { uses: ['imports http'], route: 'loopback', reason: 'The browser extension bridge listens on loopback for the local extension' },
+  'apps/desktop/src/main/browser-extension/native-binding.ts': { uses: ['imports net'], route: 'loopback', reason: 'Connects to 127.0.0.1 only (the native messaging binding)' },
+  'apps/desktop/src/main/cindy-brain/ghostOauthFlow.ts': { uses: ['imports http'], route: 'loopback', reason: 'The plugin OAuth redirect listener on loopback; its token requests use the injected fetch (plugins/authorization.ts passes hostOutbound)' },
+  'apps/desktop/src/main/cindy-brain/networkConnections.ts': { uses: ['imports ws', 'new WebSocket'], route: 'injected', reason: 'Plugin WebSockets take the injected agent: plugins/runtime.ts passes hostOutbound.createOutboundHttpAgent' },
+  'apps/desktop/src/main/host-ipc-proxy.ts': { uses: ['global fetch'], route: 'loopback', reason: 'A client window\'s proxy to the Host\'s loopback endpoint' },
+  'apps/desktop/src/main/input-handoff/askpass/host.ts': { uses: ['imports http'], route: 'loopback', reason: 'The askpass server on loopback' },
+  'apps/desktop/src/main/maker-host/claude-cli-proxy-bridge.ts': { uses: ['imports http', 'imports net'], route: 'resolver', reason: 'The Claude CLI CONNECT bridge on loopback resolves each target with the injected resolver (provider-config.ts passes resolveHostOutboundProxy)' },
+  'apps/desktop/src/main/maker-host/generic-oauth.ts': { uses: ['imports http'], route: 'loopback', reason: 'The OAuth redirect listener on loopback; token requests use the injected fetch (provider-config.ts passes hostOutbound)' },
+  'apps/desktop/src/main/maker-host/grok-oauth-login.ts': { uses: ['imports http'], route: 'loopback', reason: 'The Grok sign-in redirect listener on loopback; token requests use the injected outboundFetch (provider-config.ts passes hostOutbound)' },
+  'apps/desktop/src/main/maker-host/outbound-fetch.ts': { uses: ['global fetch', 'imports undici'], route: 'resolver', reason: 'The outbound transport itself: it goes direct only where the resolver says direct' },
+  'apps/desktop/src/main/mcp-apps/connection.ts': { uses: ['global fetch'], route: 'same-as-desktop', reason: 'A remote (URL) MCP app connects with Node\'s fetch, without the resolver, as in the desktop main process; plugin MCP apps use the plugin transport' },
+  'apps/desktop/src/main/mcp-integrations/browser-backend/external-link-handoff.ts': { uses: ['imports ws', 'new WebSocket'], route: 'loopback', reason: 'The managed browser\'s DevTools endpoint on loopback' },
+  'apps/desktop/src/main/mcp-integrations/browser-backend/proxy-auth.ts': { uses: ['global fetch', 'imports net', 'imports ws', 'new WebSocket'], route: 'loopback', reason: 'The managed browser\'s DevTools endpoint, checked to be loopback' },
+  'apps/desktop/src/main/mcp-integrations/browser-real-profile/launch.ts': { uses: ['imports net'], route: 'loopback', reason: 'Takes a free local port' },
+  'apps/desktop/src/main/mcp-integrations/codexHttpBridge.ts': { uses: ['imports http'], route: 'loopback', reason: 'The Codex task action bridge server on loopback' },
+  'apps/desktop/src/main/reviewer/reviewOwnerLiveness.ts': { uses: ['imports net'], route: 'loopback', reason: 'The reviewer owner liveness socket on loopback' },
+  'apps/host/src/auth/login.mjs': { uses: ['imports http'], route: 'loopback', reason: 'The sign-in callback listener on loopback; auth requests use hostAuthFetch' },
+  'apps/host/src/browser-open.mjs': { uses: ['global fetch'], route: 'loopback', reason: 'The Host\'s own loopback endpoint (pairing)' },
+  'apps/host/src/control.mjs': { uses: ['global fetch'], route: 'loopback', reason: 'The running Host\'s loopback control endpoint' },
+  'apps/host/src/device-link.ts': { uses: ['imports ws', 'new WebSocket'], route: 'resolver', reason: 'The relay WebSocket takes createHostWebSocketAgent (outbound.mjs)' },
+  'apps/host/src/platform/client-bridge.ts': { uses: ['imports ws'], route: 'loopback', reason: 'Accepts the platform client\'s socket on the Host\'s loopback server' },
+  'apps/host/src/plugins/node-worker.ts': { uses: ['imports net'], route: 'no-connection', reason: 'Wraps the inherited control pipe (fd 3)' },
+  'apps/host/src/server.mjs': { uses: ['imports http', 'imports ws'], route: 'loopback', reason: 'The Host\'s own loopback server' },
+  'packages/anthropic-compat-proxy/src/outbound-proxy.ts': { uses: ['imports http', 'imports https'], route: 'resolver', reason: 'The HTTP CONNECT agents for the resolver\'s verdicts' },
+  'packages/anthropic-compat-proxy/src/server.ts': { uses: ['imports http', 'imports https'], route: 'resolver', reason: 'The loopback compat proxy; upstream requests take the injected resolver (claude-proxy-runtime.ts passes resolveHostOutboundProxy)' },
+  'packages/anthropic-compat-proxy/src/socks5.ts': { uses: ['imports http', 'imports https', 'imports net'], route: 'resolver', reason: 'The SOCKS5 agents for the resolver\'s verdicts' },
+  'packages/anthropic-responses-bridge/src/handler.ts': { uses: ['global fetch'], route: 'injected', reason: 'Global fetch only as the default of fetchImpl; anthropicResponsesBridgeHostCore.ts passes outboundFetch (hostOutbound on the Host)' },
+  'packages/browser-control-runtime/src/_generated/extension/src/browser/cdp-proxy-bypass.ts': { uses: ['imports http', 'imports https'], route: 'loopback', reason: 'Agents that keep DevTools traffic to loopback off any proxy' },
+  'packages/browser-control-runtime/src/_generated/extension/src/browser/cdp.helpers.ts': { uses: ['imports ws', 'new WebSocket'], route: 'loopback', reason: 'DevTools WebSockets of the controlled browser on loopback' },
+  'packages/browser-control-runtime/src/_generated/extension/src/browser/navigation-guard.ts': { uses: ['imports net'], route: 'no-connection', reason: 'Parses addresses for navigation checks' },
+  'packages/browser-control-runtime/src/_generated/leaf/src/infra/net/undici-family-policy.ts': { uses: ['imports net'], route: 'no-connection', reason: 'The address family policy of the guarded dispatcher' },
+  'packages/browser-control-runtime/src/_generated/leaf/src/infra/net/undici-runtime.ts': { uses: ['global fetch', 'imports net', 'imports undici'], route: 'loopback', reason: 'The guarded fetch runtime of the browser control client, whose callers target loopback control planes (shim/ssrf-runtime.ts)' },
+  'packages/browser-control-runtime/src/shim/_local/ports.ts': { uses: ['imports net'], route: 'loopback', reason: 'Takes free local ports' },
+  'packages/browser-control-runtime/src/shim/ssrf-runtime.ts': { uses: ['global fetch', 'imports undici'], route: 'loopback', reason: 'The guarded fetch of the control client and DevTools helper, which target loopback control planes' },
+  'packages/responses-anthropic-bridge/src/handler.ts': { uses: ['global fetch'], route: 'injected', reason: 'Global fetch only as the default of fetchImpl; the Host\'s bridges pass outboundFetch' },
+  'packages/responses-chat-bridge/src/handler.ts': { uses: ['global fetch'], route: 'injected', reason: 'Global fetch only as the default of fetchImpl; anthropicCompatProxyHostCore.ts passes outboundFetch (hostOutbound on the Host)' },
+};

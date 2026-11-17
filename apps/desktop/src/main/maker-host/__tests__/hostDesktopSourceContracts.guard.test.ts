@@ -1113,6 +1113,74 @@ describe('Host Chromium proxy helper (row 28, 28c)', () => {
   });
 });
 
+/**
+ * Rule: every module the Host loads that opens network connections itself is classified in
+ * apps/host/src/host-network-modules.ts: whether its traffic to other machines takes the outbound proxy resolver
+ * (release table row 28). Collection over the Host's import graph (as for the setters below): a value import of
+ * node:http, https, net, tls, http2, dgram, undici or ws (import, require or dynamic import), a reference to the
+ * global fetch where the file declares no `fetch` of its own, `new WebSocket(…)`. Failure without it: a new
+ * outbound call that bypasses the resolver (direct in a network that needs a proxy) lands unnoticed.
+ */
+describe('network modules the Host loads, classified for the Host', () => {
+  const NETWORK = new Set(['http', 'https', 'net', 'tls', 'http2', 'dgram', 'undici', 'ws']);
+  const bare = (name: string) => name.replace(/^node:/, '');
+
+  function networkUses(file: string, text: string): string[] {
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    const uses = new Set<string>();
+    let declaresFetch = false;
+    let fetchReference = false;
+    const declares = (n: ts.Node): n is ts.ParameterDeclaration | ts.VariableDeclaration | ts.BindingElement | ts.FunctionDeclaration =>
+      ts.isParameter(n) || ts.isVariableDeclaration(n) || ts.isBindingElement(n) || ts.isFunctionDeclaration(n);
+    const visit = (n: ts.Node): void => {
+      if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier) && NETWORK.has(bare(n.moduleSpecifier.text))) {
+        const clause = n.importClause;
+        const typeOnly = !!clause && (clause.isTypeOnly || (!clause.name && !!clause.namedBindings && ts.isNamedImports(clause.namedBindings)
+          && clause.namedBindings.elements.every(element => element.isTypeOnly)));
+        if (!typeOnly) uses.add(`imports ${bare(n.moduleSpecifier.text)}`);
+      }
+      if (ts.isCallExpression(n) && n.arguments[0] && ts.isStringLiteral(n.arguments[0]) && NETWORK.has(bare(n.arguments[0].text))
+        && ((ts.isIdentifier(n.expression) && n.expression.text === 'require') || n.expression.kind === ts.SyntaxKind.ImportKeyword)) {
+        uses.add(`imports ${bare(n.arguments[0].text)}`);
+      }
+      if (declares(n) && n.name && ts.isIdentifier(n.name) && n.name.text === 'fetch') declaresFetch = true;
+      if (ts.isIdentifier(n) && n.text === 'fetch') {
+        const p = n.parent;
+        const name = (ts.isPropertyAccessExpression(p) && p.name === n)
+          || ((ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p) || ts.isMethodSignature(p) || ts.isPropertySignature(p)
+            || ts.isPropertyDeclaration(p)) && p.name === n)
+          || ts.isTypeQueryNode(p) || ts.isQualifiedName(p) || (declares(p) && p.name === n) || (ts.isBindingElement(p) && p.propertyName === n);
+        if (!name) fetchReference = true;
+      }
+      if (ts.isNewExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'WebSocket') uses.add('new WebSocket');
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    if (fetchReference && !declaresFetch) uses.add('global fetch');
+    return [...uses].sort();
+  }
+
+  it('classifies every network module the Host loads, with exactly what it uses', async () => {
+    const { HOST_NETWORK_MODULES } = await import('../../../../../host/src/host-network-modules.ts');
+    const found = new Map<string, string[]>();
+    for (const file of await hostImportGraph()) {
+      if (/^apps\/host\/scripts\//.test(file)) continue;
+      const uses = networkUses(file, read(path.join(repo, file)));
+      if (uses.length) found.set(file, uses);
+    }
+    const table = new Map(Object.entries(HOST_NETWORK_MODULES).map(([file, row]) => [file, [...row.uses].sort()]));
+    expect([...found.keys()].filter(file => !table.has(file)).sort(), 'network modules missing from apps/host/src/host-network-modules.ts').toEqual([]);
+    expect([...table.keys()].filter(file => !found.has(file)).sort(), 'entries whose module opens no connection any more').toEqual([]);
+    for (const [file, uses] of found) expect(table.get(file), file).toEqual(uses);
+    const keys = Object.keys(HOST_NETWORK_MODULES);
+    expect(keys, 'sorted').toEqual([...keys].sort());
+    for (const [file, row] of Object.entries(HOST_NETWORK_MODULES)) {
+      expect(['resolver', 'injected', 'loopback', 'no-connection', 'same-as-desktop'], file).toContain(row.route);
+      expect(row.reason.length, file).toBeGreaterThan(10);
+    }
+  }, 60_000);
+});
+
 describe('module-level port setters the Host loads, classified for the Host', () => {
   const tableFile = path.join(hostSrc, 'desktop-module-setters.ts');
   const SETTER = /^(set|register|bind|configure|install|init)[A-Z]/;
