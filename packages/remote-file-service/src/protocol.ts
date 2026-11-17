@@ -36,7 +36,7 @@ import type {
 export const FILE_SERVICE_SCHEMA_VERSION = 4;
 
 /** 实现版本;含共享扫描器在内的行为变化需 bump,使已安装的远端自动更新。 */
-export const FILE_SERVICE_BUNDLE_VERSION = '0.2.8';
+export const FILE_SERVICE_BUNDLE_VERSION = '0.2.9';
 
 /* ============================== 帧 ============================== */
 

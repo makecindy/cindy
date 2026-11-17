@@ -31,15 +31,19 @@ it('filters canonical ancestor links while preserving sibling aliases', async ()
   expect((await listDir(root, 'a/to-b', matcher)).map(e => e.name)).toEqual(['also-ok', 'ok']);
 });
 
-it('hides aliases into git metadata and rechecks their target when expanding', async () => {
+// #10882 discussion_r4599574866: realpath preserves on-disk .GIT/.Git casing.
+// The existing lowercase fixture missed aliases bypassing the logical matcher.
+// Unit: real directory/junction inputs through listDir, including doc probes and
+// a retargeted expansion; .github stays visible and unfiltered transfers stay complete.
+it.each(['.git', '.GIT', '.Git'])('hides aliases into %s metadata and rechecks their target when expanding', async (metadata) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'complete-dir-'));
   roots.push(root);
-  for (const name of ['repo/.git/objects', 'repo/.github', 'container', 'normal']) {
+  for (const name of [`repo/${metadata}/objects`, 'repo/.github', 'container', 'normal']) {
     await fs.mkdir(path.join(root, name), { recursive: true });
   }
-  await fs.writeFile(path.join(root, 'repo/.git/objects/note.md'), 'metadata');
+  await fs.writeFile(path.join(root, 'repo', metadata, 'objects/note.md'), 'metadata');
   for (const [name, target] of [
-    ['git-alias', 'repo/.git'], ['container/objects', 'repo/.git/objects'],
+    ['git-alias', `repo/${metadata}`], ['container/objects', `repo/${metadata}/objects`],
     ['github-alias', 'repo/.github'], ['changing', 'normal'],
   ]) await fs.symlink(path.join(root, target), path.join(root, name), 'junction');
   const matcher = await loadIgnoreMatcher(root);
@@ -48,10 +52,10 @@ it('hides aliases into git metadata and rechecks their target when expanding', a
   expect(await listDir(root, 'container', matcher, { docMode: true })).toEqual([]);
   expect((await listDir(root, '', matcher, { docMode: true })).map(e => e.name)).not.toContain('container');
   await fs.unlink(path.join(root, 'changing'));
-  await fs.symlink(path.join(root, 'repo/.git/objects'), path.join(root, 'changing'), 'junction');
+  await fs.symlink(path.join(root, 'repo', metadata, 'objects'), path.join(root, 'changing'), 'junction');
   await expect(listDir(root, 'changing', matcher)).rejects.toThrow(/\.git/);
   // Complete enumeration's existing transfer semantics are not presentation rules.
-  expect((await listDir(root, 'repo/.git/objects')).map(e => e.name)).toEqual(['note.md']);
+  expect((await listDir(root, `repo/${metadata}/objects`)).map(e => e.name)).toEqual(['note.md']);
 });
 
 it('bounds directory entry scans and still returns every link across batches', async () => {

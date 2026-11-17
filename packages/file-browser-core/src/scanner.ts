@@ -34,7 +34,9 @@ function isSameOrInside(parent: string, child: string): boolean {
 }
 
 function isGitMetadata(root: string, target: string): boolean {
-  return path.relative(root, target).split(path.sep).includes('.git');
+  // realpath retains on-disk casing, even on case-insensitive volumes. Match
+  // the presentation ignore rules without treating names like .github as metadata.
+  return path.relative(root, target).split(path.sep).some(segment => segment.toLowerCase() === '.git');
 }
 
 /** Hard cap on file size we'll send to the renderer. Anything larger gets
@@ -348,7 +350,7 @@ export async function listDir(
   const realRoot = await fs.realpath(workdir);
   // Recheck on expansion: an alias can change after the parent was listed.
   // Unfiltered transfer enumeration retains its existing behavior.
-  if (matcher && (isGitMetadata(realRoot, abs) || sub.split('/').includes('.git'))) {
+  if (matcher && (isGitMetadata(realRoot, abs) || sub.split('/').some(segment => segment.toLowerCase() === '.git'))) {
     throw new Error('Directory presentation cannot enter .git metadata');
   }
   let ancestors: Promise<string[]> | undefined;

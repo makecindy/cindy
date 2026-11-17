@@ -191,14 +191,14 @@ describe('RemoteFileBrowserManager', () => {
     await mgr.disposeAll();
   });
 
-  it('upgrades the deployed 0.2.7 daemon and returns naturally ordered entries', async () => {
+  it('upgrades the previous 0.2.8 daemon and returns naturally ordered entries', async () => {
     // #7064 / #10882, unit: a generic stale-version fixture misses a forgotten
-    // bundle bump. The deployed 0.2.7 lacks directory-link and save-target support.
+    // bundle bump. The previous 0.2.8 exposes aliases into case variants of .git.
     await fsWriteFile(path.join(workdir, '3.md'), 'three');
     await fsWriteFile(path.join(workdir, '10.md'), 'ten');
     const { deps, calls } = makeDeps({
       probeResults: [
-        { ...READY_PROBE, bundleVersion: '0.2.7' },
+        { ...READY_PROBE, bundleVersion: '0.2.8' },
         READY_PROBE,
       ],
     });
