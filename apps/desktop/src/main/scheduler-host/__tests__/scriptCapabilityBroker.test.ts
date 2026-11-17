@@ -3,6 +3,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 
 import type { Schedule } from '@cindy/maker-scheduler';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '@cindy/maker-core';
@@ -13,7 +15,13 @@ import type { GhostPipeToolCall, InstalledGhost } from '../../../shared/ghost.js
 import { installedGhostStoragePart, resolveInstalledGhost } from '../../../shared/pluginIdentity.js';
 import { SchedulerScriptCapabilityBroker } from '../script-capability-broker.desktop';
 import { SchedulerScriptCapabilityBroker as SharedBroker } from '../script-capability-broker';
+import { ScriptScheduleRunner } from '../script-runner';
 
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock('node:child_process', async importOriginal => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  spawn: (...args: unknown[]) => spawnMock(...args),
+}));
 const sendToSessionMock = vi.hoisted(() => vi.fn());
 const restoreArchivedSessionForSend = vi.hoisted(() => vi.fn());
 const getSessionRowSnapshotStrict = vi.hoisted(() => vi.fn());
@@ -97,6 +105,7 @@ function schedule(overrides: Partial<Schedule> = {}): Schedule {
 
 describe('SchedulerScriptCapabilityBroker', () => {
   beforeEach(() => {
+    spawnMock.mockReset();
     sendToSessionMock.mockReset();
     restoreArchivedSessionForSend.mockReset();
     getSessionRowSnapshotStrict.mockReset().mockResolvedValue({ status: 'active', source: 'user' });
@@ -148,7 +157,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
     expect(providerReads.shares).toHaveBeenCalledWith({ action: 'owned', range: 'all', includeUsage: false }, expect.any(Function));
     providerReads.remote.mockRejectedValue(new Error('UNSUPPORTED_CAPABILITY'));
     await expect(broker.call({ method: 'usage.get_provider_usage_history', params: { providerId: 'anthropic', device: 'older-computer' } },
-      new Set(['usage.read']), { schedule: schedule() })).rejects.toThrow('UNSUPPORTED_CAPABILITY');
+      new Set(['usage.read']), { schedule: schedule() })).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
     expect(providerReads.shares).toHaveBeenCalledTimes(1);
     expect(providerReads.remote).toHaveBeenCalledWith(expect.any(Function), 'older-computer',
       { action: 'manage-share', command: { action: 'usage-history', providerId: 'anthropic' } });
@@ -229,7 +238,9 @@ describe('SchedulerScriptCapabilityBroker', () => {
     providerReads.usage.mockImplementation(read);
     providerReads.group.mockImplementation(read);
     await expect(new SchedulerScriptCapabilityBroker().call({ method: `usage.${method}`, params: { providerId: 'anthropic' } },
-      new Set(['usage.read']), { schedule: schedule() })).rejects.toThrow('OWNER_SCOPE_CHANGED');
+      new Set(['usage.read']), { schedule: schedule() })).rejects.toMatchObject({
+      code: method === 'get_subscription_usage' ? 'SUBSCRIPTION_USAGE_UNAVAILABLE' : 'PROVIDER_READ_FAILED',
+    });
   });
 
   it('reports unavailable host read ports and discoverable usage grants without loading desktop services', async () => {
@@ -245,6 +256,51 @@ describe('SchedulerScriptCapabilityBroker', () => {
     expect(await broker.call({ method: 'host.capabilities', params: {} }, new Set(['usage.read']), { schedule: schedule() }))
       .toMatchObject({ methods: expect.arrayContaining([{ method: 'usage.get_subscription_usage', capability: 'usage.read',
         params: expect.any(String), description: expect.any(String), available: false }]) });
+  });
+
+  // Unit / #10840 review: the real broker + runner must preserve public errors
+  // in call_result. Earlier tests checked only thrown text, hiding INTERNAL on
+  // old hosts and remote failures. An in-memory child avoids spawning a process.
+  it.each([
+    ['settings.list_provider_share_members', {}, 'shares', { ready: true, shares: [] }, 'UNSUPPORTED_CAPABILITY'],
+    ['settings.list_provider_share_members', {}, 'shares', { ready: false, includeUsage: false }, 'HOST_NOT_READY'],
+    ['settings.get_provider_share_model_access', { providerId: 'anthropic', memberId: 'member', device: 'other' },
+      'remote', new Error('[NOT_FOUND] Missing member'), 'NOT_FOUND'],
+    ['usage.get_provider_usage_history', { providerId: 'anthropic', device: 'other' },
+      'remote', new Error('[DEVICE_LINK_TIMEOUT] Read timed out'), 'DEVICE_LINK_TIMEOUT'],
+    ['usage.get_provider_group', { providerId: 'anthropic' }, 'group', undefined, 'PRECONDITION_FAILED'],
+    ['usage.get_subscription_usage', {}, 'usage', new Error('private account detail'), 'SUBSCRIPTION_USAGE_UNAVAILABLE'],
+    ['settings.list_provider_share_members', {}, 'shares', new Error('private share detail'), 'PROVIDER_SHARE_OPERATION_FAILED'],
+    ['usage.get_provider_group', { providerId: 'anthropic' }, 'group', new Error('private group detail'), 'PROVIDER_READ_FAILED'],
+  ] as const)('returns the original public error %s / %s', async (method, params, port, raw, code) => {
+    if (raw instanceof Error) providerReads[port].mockRejectedValue(raw);
+    else providerReads[port].mockResolvedValue(raw);
+    const child = Object.assign(new EventEmitter(), {
+      pid: undefined, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(),
+    });
+    const response = new Promise<Record<string, unknown>>(resolve => child.stdin.on('data', chunk => {
+      for (const line of String(chunk).trim().split('\n')) {
+        const frame = JSON.parse(line) as Record<string, unknown>;
+        if (frame.type === 'call_result') resolve(frame);
+      }
+    }));
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => child.stdout.write(`${JSON.stringify({ protocol: 'cindy-script/1', type: 'call',
+        id: 'read', method, params })}\n`));
+      return child;
+    });
+    const runner = new ScriptScheduleRunner({ broker: new SchedulerScriptCapabilityBroker(), logger: {} }, {
+      isManagedScheduledTarget: () => false, restoreScheduledTarget: vi.fn(),
+    });
+    const result = runner.fire(schedule({ scriptConfig: { command: 'read', capabilities: ['settings.read', 'usage.read'] } }), {
+      runId: 'read-errors', firedAt: 1, signal: new AbortController().signal,
+    });
+    const frame = await response;
+    child.stdout.write(`${JSON.stringify({ protocol: 'cindy-script/1', type: 'complete', resultText: 'handled' })}\n`);
+    child.emit('close', 0);
+    await result;
+    expect(frame).toMatchObject({ type: 'call_result', id: 'read', ok: false, error: { code } });
+    expect(JSON.stringify(frame)).not.toContain('private');
   });
 
   it.each([

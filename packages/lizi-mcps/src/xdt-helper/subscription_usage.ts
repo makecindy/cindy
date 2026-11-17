@@ -9,6 +9,10 @@ export interface SubscriptionUsageCallbacks {
 
 export const subscriptionUsageInputSchema = z.strictObject({ providerId: z.string().regex(/^[a-z0-9_-]{1,40}$/).optional() });
 
+export function projectSubscriptionUsageError(): { code: string; message: string } {
+  return { code: 'SUBSCRIPTION_USAGE_UNAVAILABLE', message: '订阅用量未能读取；账号或插件授权可能已变化。' };
+}
+
 export function registerSubscriptionUsageTools(registry: XdtHelperToolRegistry, callbacks: SubscriptionUsageCallbacks,
   current: () => LiziMcpSessionContext): void {
   registry.register({ name: 'get_subscription_usage', category: 'usage',
@@ -19,7 +23,10 @@ export function registerSubscriptionUsageTools(registry: XdtHelperToolRegistry, 
       if (context.remoteHostId || (!context.sessionId && !context.hostCaller))
         return errorPayload('CAPABILITY_NOT_AVAILABLE', '此用量接口只支持执行电脑上的本机任务或已获准插件。');
       try { return okPayload(await callbacks.read(context, providerId)); }
-      catch { return errorPayload('SUBSCRIPTION_USAGE_UNAVAILABLE', '订阅用量未能读取；账号或插件授权可能已变化。'); }
+      catch {
+        const failure = projectSubscriptionUsageError();
+        return errorPayload(failure.code, failure.message);
+      }
     },
   });
 }

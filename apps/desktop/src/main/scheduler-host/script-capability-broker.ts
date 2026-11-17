@@ -5,7 +5,8 @@ import { isAbsolute } from 'node:path';
 import type { Schedule, ScriptCapability } from '@cindy/maker-scheduler';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '@cindy/maker-core';
 import { providerReadInputSchema, providerShareMembersInputSchema, providerShareModelAccessInputSchema,
-  subscriptionUsageInputSchema, type ProviderSharingRequest } from '@cindy/mcps';
+  subscriptionUsageInputSchema, projectProviderReadError, projectProviderSharingError,
+  projectSubscriptionUsageError, type ProviderSharingRequest } from '@cindy/mcps';
 
 import type { GhostToolCallResult } from '../../shared/ghost.js';
 import { hasDeliveryNamespace, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
@@ -320,9 +321,14 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         if (request.method === 'usage.get_subscription_usage') {
           const input = subscriptionUsageInputSchema.safeParse(params);
           if (!input.success) fail('INVALID_ARGS', input.error.message);
-          const result = await settings.usage(input.data.providerId);
-          assertCurrent();
-          return result;
+          try {
+            const result = await settings.usage(input.data.providerId);
+            assertCurrent();
+            return result;
+          } catch {
+            const failure = projectSubscriptionUsageError();
+            fail(failure.code, failure.message);
+          }
         }
         if (request.method === 'settings.list_provider_share_members' || request.method === 'settings.get_provider_share_model_access') {
           let input: ProviderSharingRequest;
@@ -339,7 +345,10 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           return runProviderSharingRequest(input, {
             command: settings.shares,
             remote: (deviceId, command, guard) => settings.remote(deviceId, { action: 'manage-share', command }, guard),
-          }, assertCurrent);
+          }, assertCurrent).catch(error => {
+            const failure = projectProviderSharingError(error);
+            fail(failure.code, failure.message);
+          });
         }
         const input = providerReadInputSchema.safeParse(params);
         if (!input.success) fail('INVALID_ARGS', input.error.message);
@@ -350,7 +359,10 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
             return input.action === 'manage-share' ? settings.shares(input.command, guard) : settings.group(input.command);
           },
           remote: settings.remote,
-        }, assertCurrent, true);
+        }, assertCurrent, true).catch(error => {
+          const failure = projectProviderReadError(error);
+          fail(failure.code, failure.message);
+        });
       }
       case 'github.get_pr_status':
       case 'github.get_pr_changes':

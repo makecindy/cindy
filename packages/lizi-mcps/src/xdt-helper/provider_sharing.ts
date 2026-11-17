@@ -18,6 +18,15 @@ const device = z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/).optional();
 export const providerShareMembersInputSchema = z.strictObject({ device, providerId: id.optional() });
 export const providerShareModelAccessInputSchema = z.strictObject({ device, providerId: id, memberId: id });
 
+export function projectProviderSharingError(error: unknown): { code: string; message: string } {
+  const message = error instanceof Error ? error.message : '';
+  const code = /^\[([A-Z_]+)\]/.exec(message)?.[1] ?? message;
+  const publicCodes = new Set(['NOT_FOUND', 'HOST_NOT_READY', 'PERMISSION_DENIED', 'UNSUPPORTED_CAPABILITY',
+    'PRECONDITION_FAILED', 'DEVICE_LINK_NOT_CONNECTED', 'DEVICE_LINK_DEVICE_OFFLINE', 'DEVICE_LINK_TIMEOUT']);
+  return { code: publicCodes.has(code) ? code : 'PROVIDER_SHARE_OPERATION_FAILED',
+    message: '读取或修改未确认完成。请重新读取该电脑的成员状态；写操作可能已生效，不要自动重发。' };
+}
+
 export function registerProviderSharingTools(registry: XdtHelperToolRegistry,
   callbacks: ProviderSharingCallbacks, context: () => LiziMcpSessionContext): void {
   const member = providerShareModelAccessInputSchema.shape;
@@ -28,12 +37,8 @@ export function registerProviderSharingTools(registry: XdtHelperToolRegistry,
     try {
       return okPayload(await callbacks.call({ ...request, callerSessionId: caller.sessionId }));
     } catch (error) {
-      const message = error instanceof Error ? error.message : '';
-      const code = /^\[([A-Z_]+)\]/.exec(message)?.[1] ?? message;
-      const publicCodes = new Set(['NOT_FOUND', 'HOST_NOT_READY', 'PERMISSION_DENIED', 'UNSUPPORTED_CAPABILITY',
-        'PRECONDITION_FAILED', 'DEVICE_LINK_NOT_CONNECTED', 'DEVICE_LINK_DEVICE_OFFLINE', 'DEVICE_LINK_TIMEOUT']);
-      return errorPayload(publicCodes.has(code) ? code : 'PROVIDER_SHARE_OPERATION_FAILED',
-        '读取或修改未确认完成。请重新读取该电脑的成员状态；写操作可能已生效，不要自动重发。');
+      const failure = projectProviderSharingError(error);
+      return errorPayload(failure.code, failure.message);
     }
   };
   registry.register({ name: 'list_provider_share_members', category: 'settings',
