@@ -1396,6 +1396,7 @@ export class InputHandoffSession {
     // Waiting for the desktop may outlast the request (cancelled, timed out, task closed): then nothing is typed.
     if (this.ended) return false;
     let lastText: (ControlBinding & { kind: 'text' }) | undefined;
+    let lastTextWasSplitCode = false;
     let secretEntered = false;
     const initialCheck = await this.sameFields(step);
     if (initialCheck !== true) return initialCheck;
@@ -1429,11 +1430,16 @@ export class InputHandoffSession {
         }
       }
       lastText = binding.segments?.length ? { ...binding.segments[binding.segments.length - 1], kind: 'text' } : binding;
+      lastTextWasSplitCode = !!binding.segments?.length;
       await this.sleep(60);
     }
     // Some code widgets submit on their last character. Never press an old button on the next page.
     if (this.options.fields && !(await this.sameSurface(step))) return true;
     if (await this.sameFields(step) !== true) {
+      // Every value was delivered and the final code cell may have submitted.
+      // Let submit() retire the old plan and settle the next page normally,
+      // including another private field or a signed-in page with a reply box.
+      if (lastTextWasSplitCode) return true;
       // Auto-submit may remove the form after its last value; never click its stale action.
       const next = await this.read();
       return !!next && !actionable(next) && !this.pageUnknown(next);

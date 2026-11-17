@@ -386,13 +386,15 @@ describe('split code submission', () => {
   const plan: HandoffSessionOptions['fields'] = [{ label: 'Code', contentType: 'one-time-code', targets: [
     { label: 'User code 0', length: 1 }, { label: 'User code 2', length: 1 },
   ] }];
-  function setup(changeOrigin = false) {
+  function setup(changeOrigin = false, nextField?: string, advanceAfter = '0.2') {
+    let advanced = false;
     const page = loginPage();
     const original = page.driver.snapshot;
     page.driver.snapshot = async (...args) => {
       const raw = await original(...args);
       if ('error' in raw) return raw;
-      raw.nodes = [raw.nodes[0], node('0.0', 'AXTextField', { title: 'User code 0' }),
+      raw.nodes = advanced ? [raw.nodes[0], node('0.4', 'AXTextField', { title: nextField, secure: nextField === 'Password' }),
+        node('0.5', 'AXButton', { title: 'Continue' })] : [raw.nodes[0], node('0.0', 'AXTextField', { title: 'User code 0' }),
         node('0.2', 'AXTextField', { title: 'User code 2' }), node('0.3', 'AXButton', { title: 'Continue' })];
       return raw;
     };
@@ -400,6 +402,7 @@ describe('split code submission', () => {
     page.driver.act = async (request) => {
       const result = await act(request);
       if (changeOrigin && request.kind === 'text') page.navigate('https://other.example/');
+      if (nextField && request.kind === 'text' && request.ref === advanceAfter) advanced = true;
       return result;
     };
     return { ...page, ...start(page.driver, undefined, plan) };
@@ -415,6 +418,33 @@ describe('split code submission', () => {
     expect(values).toEqual({});
     if (!expected.length) expect(run.acts).toHaveLength(0);
     run.session.cancel();
+  });
+  // Unit/regression #11083: the previous split-code fixture never auto-submitted.
+  // Two filled cells replacing themselves at the same URL/title must finish a
+  // sign-in or show its next private field, without pressing the old action.
+  it.each(['Message', 'Password'])('handles automatic advance to %s after the whole code', async (nextField) => {
+    const run = setup(false, nextField);
+    try {
+      await run.session.start();
+      const step = run.latest();
+      await run.session.submit({ expectedRevision: step.revision, values: { [step.controls[0].id]: 'AB' }, action: { kind: 'submit' } });
+      expect(run.acts.map(({ kind, value }) => ({ kind, value }))).toEqual([
+        { kind: 'text', value: 'A' }, { kind: 'text', value: 'B' },
+      ]);
+      expect(run.latest().failure).toBeUndefined();
+      expect(run.latest().phase).toBe(nextField === 'Message' ? 'finishing' : 'ready');
+      expect(run.latest().controls.filter(control => control.kind === 'text').map(control => control.label)).toEqual(nextField === 'Message' ? [] : ['Password']);
+    } finally { run.session.cancel(); }
+  });
+  it('does not treat a changed form after only the first cell as completed input', async () => {
+    const run = setup(false, 'Password', '0.0');
+    try {
+      await run.session.start();
+      const step = run.latest();
+      await run.session.submit({ expectedRevision: step.revision, values: { [step.controls[0].id]: 'AB' }, action: { kind: 'submit' } });
+      expect(run.acts.map(a => a.value)).toEqual(['A']);
+      expect(run.latest()).toMatchObject({ phase: 'ready', failure: 'action_failed' });
+    } finally { run.session.cancel(); }
   });
   it('stops before the second character when the page changes origin', async () => {
     const run = setup(true);
