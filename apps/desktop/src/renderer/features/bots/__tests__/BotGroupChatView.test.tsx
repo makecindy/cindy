@@ -13,6 +13,7 @@ import { prepareShareMessageClone, queryShareableMessageIds } from '@/lib/shareC
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureDraftDiscardToken, clearDraft, getAllDraftAttachmentUrls, getDraft, getDraftPresence, isDraftDiscardTokenCurrent, saveDraft } from '@/lib/composerDraftStore';
+import { COMPOSER_SEND_SHORTCUT_STORAGE_KEY, _resetComposerSendShortcutPreferenceForTests } from '@/hooks/useComposerSendShortcutPreference';
 import { FeatureSidebarSlotProvider, useFeatureContentHeader } from '../../feature-context';
 import { markBotRead, getBotLastReadAt, botGroupReadKey, resetBotReadStateForTests } from '../botReadState';
 import { botGroupAttachmentScope, botGroupDraftDoc, botGroupThreadDraftKey } from '../botGroupAttachments';
@@ -341,6 +342,7 @@ beforeEach(() => {
   resetCompanionCloudStoreForTests();
   mocks.remoteInvoke.mockReset();
   window.localStorage.clear();
+  _resetComposerSendShortcutPreferenceForTests();
   for (const id of ['g1', 'g2']) clearDraft(botGroupAttachmentScope(id));
   // 话题 reply drafts persist like the group's own; start every test without one.
   for (const root of ['u1', 'b1', 'q1', 'm']) clearDraft(botGroupThreadDraftKey('g1', root));
@@ -1795,6 +1797,51 @@ describe('BotGroupChatView', () => {
       .toEqual(['mimi', 'xiaoman']);
     expect(screen.getAllByTestId('pending-interaction').map((node) => node.textContent))
       .toEqual(['lane-mimi', 'lane-xiaoman']);
+  });
+
+  // #10713 / unit: the real group and topic entry paths must use the saved
+  // preference. Resolver-only coverage cannot detect a textarea bypassing it.
+  it.each(['group', 'thread'] as const)('honors modifier-enter in the %s composer on both platforms', async mode => {
+    window.localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: mode === 'thread' }) });
+    const user = userEvent.setup();
+    renderView();
+    let input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+    if (mode === 'thread') {
+      await user.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+      input = within(await screen.findByRole('complementary')).getByRole('textbox') as HTMLTextAreaElement;
+    }
+    const send = mode === 'thread' ? mocks.reply : mocks.sendBotGroupMessage;
+    for (const platform of ['win32', 'darwin']) {
+      Object.defineProperty(window.electronAPI, 'platform', { configurable: true, value: platform });
+      await user.click(input);
+      await user.type(input, 'first');
+      await user.keyboard('{Enter}second');
+      expect(input.value).toBe('first\nsecond');
+      expect(send).toHaveBeenCalledTimes(platform === 'win32' ? 0 : 1);
+      const modifier = platform === 'darwin' ? { metaKey: true } : { ctrlKey: true };
+      for (const event of [
+        { key: 'Enter', ...modifier, repeat: true },
+        { key: 'Enter', ...modifier, isComposing: true },
+        { key: 'Enter', ...modifier, keyCode: 229 },
+        { key: 'Enter', ...modifier, shiftKey: true },
+        { key: 'Enter', ...modifier, altKey: true },
+      ]) fireEvent.keyDown(input, event);
+      if (platform === 'win32') fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
+      expect(send).toHaveBeenCalledTimes(platform === 'win32' ? 0 : 1);
+      fireEvent.keyDown(input, { key: 'Enter', ...modifier });
+      await waitFor(() => expect(send).toHaveBeenCalledTimes(platform === 'win32' ? 1 : 2));
+      await waitFor(() => expect(input.value).toBe(''));
+    }
+    act(() => {
+      window.localStorage.removeItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY);
+      window.dispatchEvent(new StorageEvent('storage', { key: COMPOSER_SEND_SHORTCUT_STORAGE_KEY, newValue: null }));
+    });
+    await user.type(input, 'default');
+    fireEvent.keyDown(input, { key: 'Enter', repeat: true });
+    expect(send).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(3));
   });
 
   it('sends with Enter, parses mentions, and re-reads after main accepts', async () => {

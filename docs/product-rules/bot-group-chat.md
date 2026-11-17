@@ -444,6 +444,7 @@ Chat Server 声明 `capabilities.groupSingleSpeaker: 1` 时，服务器群按下
   [ThreadPanel.css](../../apps/desktop/src/renderer/features/bots/ThreadPanel.css) 约束；群聊由
   [ChatThreadPanel](../../apps/desktop/src/renderer/features/bots/ChatThreadPanel.tsx) 选择外侧操作栏，私聊沿用默认底部布局
   （回归：[thread-panels](../../apps/desktop/scripts/fixtures/thread-panels/ui-page.mjs)）。
+- Desktop 主群与话题回复共用普通任务的发送快捷键偏好：默认 Enter 发送；选择 Ctrl/Cmd+Enter 后，Enter 换行，平台修饰键加 Enter 发送。Shift+Enter 始终换行，IME 确认与按住发送键的重复事件不发送；@ 候选导航与听写期间的按键优先保留原行为。
 - 视觉遵循 [`DESIGN.md`](../design-rules/DESIGN.md)；Light 与 Dark 同时实现。
 - 成员卡优先使用消息中的点名身份；服务器消息缺少身份时，只对群成员中唯一匹配的名字显示卡片，重名和广播标签不猜测。表情角标换行时，悬停操作栏仍以实际气泡顶边为基准定位。
 
