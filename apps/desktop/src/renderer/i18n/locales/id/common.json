@@ -4435,14 +4435,7 @@
         "installCancel": "Batalkan pemasangan",
         "installFailed": "Gagal memasang Ollama",
         "installPhase": {
-          "resolving": "Mencari rilis resmi…",
-          "downloading": "Mengunduh…",
-          "verifying": "Memverifikasi…",
-          "extracting": "Memasang…",
-          "starting": "Menjalankan…",
-          "success": "Terpasang",
-          "error": "Pemasangan gagal",
-          "cancelled": "Dibatalkan"
+          "error": "Pemasangan gagal"
         },
         "openWebsite": "Buka situs resmi Ollama",
         "recheck": "Sudah terpasang, periksa lagi",
@@ -4477,20 +4470,6 @@
         "retryDownload": "Coba lagi",
         "libraryName": "Nama pustaka Ollama persis",
         "pullingTitle": "Mengunduh {{name}}",
-        "pullIndeterminate": "Menyiapkan",
-        "pullBytes": "{{done}} / {{total}}",
-        "pullSpeed": " · {{speed}}",
-        "pullPhase": {
-          "starting": "Menyiapkan unduhan…",
-          "manifest": "Mengambil manifes…",
-          "downloading": "Mengunduh berkas model",
-          "verifying": "Memverifikasi…",
-          "writing": "Menulis…",
-          "success": "Unduhan selesai",
-          "error": "Unduhan gagal",
-          "paused": "Dijeda",
-          "cancelled": "Dibatalkan"
-        },
         "pauseDownload": "Jeda",
         "resumeDownload": "Lanjutkan unduhan",
         "cancelDownload": "Hapus unduhan yang belum selesai",
@@ -5934,8 +5913,6 @@
           "notChecked": "Belum memeriksa pembaruan",
           "action": "Perbarui",
           "updating": "Memperbarui…",
-          "downloadingPercent": "Mengunduh {{percent}}% ({{downloaded}}/{{total}} MB)…",
-          "downloadingBytes": "Mengunduh, {{downloaded}} MB sejauh ini…",
           "installing": "Unduhan selesai, memasang…",
           "toast": {
             "success": "cua-driver diperbarui ke versi terbaru",
@@ -7055,63 +7032,9 @@
           "restartRequired": "Keluar sepenuhnya lalu buka lagi Codex agar berlaku"
         },
         "commands": {
-          "session": {
-            "selectPrevious": {
-              "name": "Tugas sebelumnya",
-              "description": "Buka tugas di atas tugas saat ini di sidebar"
-            },
-            "selectNext": {
-              "name": "Tugas berikutnya",
-              "description": "Buka tugas di bawah tugas saat ini di sidebar"
-            }
-          },
           "toggleRightSidebar": {
             "name": "Alihkan sidebar kanan",
             "description": "Tampilkan atau sembunyikan sidebar kanan"
-          },
-          "composer": {
-            "toggleFastMode": {
-              "name": "Alihkan mode cepat",
-              "description": "Aktifkan atau nonaktifkan mode cepat di kolom input saat ini"
-            },
-            "submit": {
-              "name": "Kirim pesan",
-              "description": "Kirim pesan di kolom input; jika ada permintaan yang menunggu konfirmasi, setujui permintaan tersebut"
-            },
-            "addPhotos": {
-              "name": "Tambahkan gambar",
-              "description": "Tambahkan gambar ke kolom input"
-            },
-            "increaseReasoningEffort": {
-              "name": "Naikkan tingkat penalaran",
-              "description": "Naikkan tingkat penalaran di kolom input saat ini"
-            },
-            "decreaseReasoningEffort": {
-              "name": "Turunkan tingkat penalaran",
-              "description": "Turunkan tingkat penalaran di kolom input saat ini"
-            },
-            "addFiles": {
-              "name": "Lampirkan berkas dan folder",
-              "description": "Lampirkan berkas dan folder ke kolom input"
-            },
-            "togglePlanMode": {
-              "name": "Alihkan mode rencana",
-              "description": "Aktifkan atau nonaktifkan mode rencana di kolom input saat ini"
-            },
-            "focus": {
-              "name": "Fokuskan kolom input",
-              "description": "Pindahkan kursor ke kolom input"
-            }
-          },
-          "approval": {
-            "approve": {
-              "name": "Setujui permintaan",
-              "description": "Setujui permintaan yang sedang menunggu konfirmasi"
-            },
-            "decline": {
-              "name": "Tolak permintaan",
-              "description": "Tolak permintaan yang sedang menunggu konfirmasi"
-            }
           },
           "forkTask": {
             "name": "Lanjutkan di tugas baru",
@@ -7180,23 +7103,77 @@
             "name": "Kembali",
             "description": "Kembali ke halaman sebelumnya; jika ada permintaan yang menunggu konfirmasi, tolak saja"
           },
-          "conversation": {
-            "scrollUp": {
-              "name": "Gulir ke atas",
-              "description": "Gulir obrolan ke atas"
-            },
-            "scrollDown": {
-              "name": "Gulir ke bawah",
-              "description": "Gulir obrolan ke bawah"
-            },
-            "scrollBottom": {
-              "name": "Lompat ke yang terbaru",
-              "description": "Gulir ke pesan terbaru"
-            }
-          },
           "toggleFullscreen": {
             "name": "Alihkan layar penuh",
             "description": "Masuk atau keluar dari layar penuh"
+          },
+          "session": {
+            "selectPrevious": {
+              "name": "Tugas sebelumnya",
+              "description": "Buka tugas di atas tugas saat ini pada sidebar"
+            },
+            "selectNext": {
+              "name": "Tugas berikutnya",
+              "description": "Buka tugas di bawah tugas saat ini pada sidebar"
+            }
+          },
+          "composer": {
+            "toggleFastMode": {
+              "name": "Alihkan Fast mode",
+              "description": "Aktifkan atau matikan Fast mode di composer saat ini"
+            },
+            "submit": {
+              "name": "Kirim pesan",
+              "description": "Kirim pesan di composer, atau setujui permintaan yang menunggu"
+            },
+            "addPhotos": {
+              "name": "Tambahkan foto",
+              "description": "Tambahkan foto ke composer"
+            },
+            "increaseReasoningEffort": {
+              "name": "Naikkan reasoning effort",
+              "description": "Naikkan reasoning effort untuk composer saat ini"
+            },
+            "decreaseReasoningEffort": {
+              "name": "Turunkan reasoning effort",
+              "description": "Turunkan reasoning effort untuk composer saat ini"
+            },
+            "addFiles": {
+              "name": "Lampirkan file dan folder",
+              "description": "Lampirkan file dan folder ke composer"
+            },
+            "togglePlanMode": {
+              "name": "Alihkan plan mode",
+              "description": "Aktifkan atau matikan plan mode di composer saat ini"
+            },
+            "focus": {
+              "name": "Fokus ke composer",
+              "description": "Pindahkan kursor ke composer"
+            }
+          },
+          "approval": {
+            "approve": {
+              "name": "Setujui permintaan",
+              "description": "Setujui permintaan yang sedang aktif"
+            },
+            "decline": {
+              "name": "Tolak permintaan",
+              "description": "Tolak permintaan yang sedang aktif"
+            }
+          },
+          "conversation": {
+            "scrollUp": {
+              "name": "Gulir ke atas",
+              "description": "Gulir percakapan ke atas"
+            },
+            "scrollDown": {
+              "name": "Gulir ke bawah",
+              "description": "Gulir percakapan ke bawah"
+            },
+            "scrollBottom": {
+              "name": "Lompat ke terbaru",
+              "description": "Gulir ke pesan terbaru"
+            }
           }
         },
         "title": "Work Louder Codex Micro",
@@ -10887,7 +10864,8 @@
       "sectionExpand": "Bentangkan Rekan",
       "showLess": "Ciutkan",
       "sectionCollapse": "Ciutkan Rekan",
-      "noResults": "Tidak ada Rekan atau obrolan grup yang cocok"
+      "noResults": "Tidak ada Rekan atau obrolan grup yang cocok",
+      "showCollapsedTeammateAvatars": "Tampilkan avatar saat diciutkan"
     },
     "cancel": "Batal",
     "save": "Simpan",
@@ -21762,5 +21740,28 @@
     "saveFailed": "Pengaturan tidak tersimpan. Coba lagi.",
     "archivedNotice": "{{count}} tugas menganggur diarsipkan otomatis",
     "undoFailed": "Tidak bisa dibatalkan. Pulihkan tugasnya dari Diarsipkan."
+  },
+  "downloadProgress": {
+    "bytes": "{{done}} / {{total}}",
+    "eta": "Sisa {{time}}",
+    "attempt": "Percobaan ke-{{attempt}}",
+    "phase": {
+      "preparing": "Menyiapkan…",
+      "queued": "Dalam antrean…",
+      "downloading": "Mengunduh…",
+      "retrying": "Mencoba lagi…",
+      "verifying": "Memverifikasi…",
+      "installing": "Memasang…",
+      "paused": "Dijeda",
+      "completed": "Selesai",
+      "failed": "Unduhan gagal",
+      "cancelled": "Dibatalkan"
+    },
+    "retry": {
+      "slow": "Koneksi lambat, menghubungkan ulang…",
+      "network": "Koneksi terputus, mencoba lagi…",
+      "timeout": "Koneksi habis waktu, mencoba lagi…",
+      "server": "Server sibuk, mencoba lagi…"
+    }
   }
 }
