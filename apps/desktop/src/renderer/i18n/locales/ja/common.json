@@ -8375,6 +8375,7 @@
             "contentStyle": "メッセージの間隔と吹き出しを変更する"
           },
           "positions": {
+            "composer_header": "入力欄の上部",
             "composer_toolbar": "入力欄のツールバー",
             "session_header": "タスクのヘッダー",
             "statusbar": "ステータスバー",

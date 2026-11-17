@@ -164,7 +164,8 @@ export function usePluginUiWindowCandidates() {
 }
 export function usePluginUiComposerCandidates() {
   const directory = useContext(DirectoryContext);
-  return { toolbar: !!directory.get('composer.toolbar')?.length, completion: directory.get('composer.completion') ?? NO_ENTRIES };
+  return { header: !!directory.get('composer.header')?.length,
+    toolbar: !!directory.get('composer.toolbar')?.length, completion: directory.get('composer.completion') ?? NO_ENTRIES };
 }
 
 /** One window subscription, compiled only when the original installed projection changes. */
@@ -291,7 +292,7 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
   if (action.presentation === 'popover' && action.view) return <Popover open={open && active} onOpenChange={setOpen}>
     <PopoverTrigger asChild><Button variant="secondary" tone="quiet" size="sm" disabled={state?.disabled}
       title={entry.ghost.manifest.name}>{title}</Button></PopoverTrigger>
-    <PopoverContent align="start" side={action.position === 'composer.toolbar' || action.position === 'statusbar' ? 'top' : 'bottom'}
+    <PopoverContent align="start" side={action.position === 'composer.header' || action.position === 'composer.toolbar' || action.position === 'statusbar' ? 'top' : 'bottom'}
       aria-label={title} className="w-[min(26rem,calc(100vw-2rem))] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-2">
       {open && active && <Suspense fallback={<Spinner size={16} />}><PluginUiView ghost={entry.ghost} viewId={action.view}
         sessionId={sessionId} input={action.arguments} onUnavailable={() => setOpen(false)} /></Suspense>}

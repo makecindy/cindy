@@ -34,7 +34,11 @@ const plugin: InstalledGhost = {
     schemaVersion: 3, id: 'composer-fixture', name: 'Composer fixture', kind: 'chip', entry: 'main.js', version: '1',
     tools: [{ name: 'run', description: 'Run the fixture action' }],
     mcpApps: { ui: { resources: [], tools: { run: { visibility: ['app'] } } }, host: {
-      contributions: Array.from({ length: Number(ctx.data.pluginToolbar) || 0 }, (_, index) => ({
+      contributions: ctx.data.pluginHeader ? [
+        { id: 'refresh', title: 'Refresh', position: 'composer.header', tool: 'run' },
+        { id: 'scope', title: 'Scope', position: 'composer.header', kind: 'select', tool: 'run', options: [{ label: 'All', value: 'all' }] },
+        { id: 'status', title: 'Ready', position: 'composer.header', kind: 'status' },
+      ] : Array.from({ length: Number(ctx.data.pluginToolbar) || 0 }, (_, index) => ({
         id: `action-${index}`, title: String(ctx.data.pluginTitle || `Plugin ${index + 1}`), position: 'composer.toolbar' as const, tool: 'run',
       })),
     } },
@@ -186,7 +190,7 @@ void mountPage({
       onGlobalShortcutTrigger: subscription('voice-shortcut'),
     },
     deviceLink: { onRemotePush: subscription('remote-push') },
-    ghosts: { listSync: () => ({ ghosts: ctx.data.pluginToolbar ? [plugin] : [] }), onChanged: subscription('ghosts') },
+    ghosts: { listSync: () => ({ ghosts: ctx.data.pluginToolbar || ctx.data.pluginHeader ? [plugin] : [] }), onChanged: subscription('ghosts') },
   },
   render: () => {
     (window as unknown as { __composerImageCache: typeof imageCache }).__composerImageCache = imageCache;

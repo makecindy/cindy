@@ -32,7 +32,7 @@
 同实例、视图和任务再次打开会聚焦已有页签；更新输入不重建页面。
 
 原生按钮可额外声明 `presentation:"popover"`，在入口旁打开同一 MCP App 资源；缺省仍打开侧栏页签。
-仅适用于 `composer.toolbar/session.header/statusbar/message.actions/turn.footer` 的页面按钮；
+仅适用于 `composer.header/composer.toolbar/session.header/statusbar/message.actions/turn.footer` 的页面按钮；
 正文位置与更多菜单保持各自承载方式。页面在弹层打开后才加载，关闭、入口离开视口或区域隐藏即释放。
 弹层方式在安装/更新时随声明展示，不需要为入口单独授权。例：
 `{"id":"quick","title":"快捷面板","position":"composer.toolbar","view":"board","presentation":"popover"}`。
@@ -45,7 +45,8 @@
 
 | position | 位置 |
 | --- | --- |
-| `composer.toolbar` | 输入框工具栏 |
+| `composer.header` | 任务输入框卡片正上方，与输入框同宽；无贡献时不占空间 |
+| `composer.toolbar` | 输入框内底部工具栏 |
 | `session.header` | 任务标题栏 |
 | `statusbar` | 输入框下方的任务状态栏，位于目录／对话标识与用量信息之间 |
 | `message.actions` | 消息操作栏 |

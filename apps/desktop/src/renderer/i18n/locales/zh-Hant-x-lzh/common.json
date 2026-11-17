@@ -8345,6 +8345,7 @@
             "contentStyle": "修改訊息間距與氣泡樣式"
           },
           "positions": {
+            "composer_header": "輸入框上方",
             "composer_toolbar": "輸入框工具列",
             "session_header": "任務標題列",
             "statusbar": "狀態列",

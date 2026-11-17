@@ -8490,6 +8490,7 @@
             "contentStyle": "Cambiar el espaciado de los mensajes y las burbujas"
           },
           "positions": {
+            "composer_header": "el área sobre el cuadro de entrada",
             "composer_toolbar": "barra de herramientas de entrada",
             "session_header": "cabecera de la tarea",
             "statusbar": "barra de estado",
