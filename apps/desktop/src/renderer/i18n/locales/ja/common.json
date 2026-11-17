@@ -14970,6 +14970,7 @@
       "pluginDisabledUnnamed": "自動チェックが停止しています：必要なプラグインが有効になっていません。有効にすると自動で再開します。",
       "installPlugin": "プラグインをインストール",
       "openPlugin": "プラグインを開く",
+      "enablePlugin": "プラグインを有効にする",
       "dismissTitle": "過去の失敗通知を閉じる"
     },
     "worktreeRestoreBanner": {

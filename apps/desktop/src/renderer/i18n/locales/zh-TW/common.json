@@ -1320,17 +1320,17 @@
       "install": {
         "title": "需要安裝「{{plugin}}」插件",
         "body": "這個任務在另一台電腦上開著 {{device}}。在這台電腦上安裝「{{plugin}}」插件後，就能在右側欄查看和操作它。",
-        "action": "前往安裝"
+        "action": "安裝"
       },
       "enable": {
         "title": "需要開啟「{{plugin}}」插件",
         "body": "這個任務在另一台電腦上開著 {{device}}。在這台電腦上開啟「{{plugin}}」插件後，就能在右側欄查看和操作它。",
-        "action": "前往開啟"
+        "action": "開啟"
       },
       "update": {
         "title": "需要更新「{{plugin}}」插件",
         "body": "這個任務在另一台電腦上開著 {{device}}。把這台電腦上的「{{plugin}}」插件更新到新版本後，就能在右側欄查看和操作它。",
-        "action": "前往更新"
+        "action": "更新"
       }
     },
     "lockOnExitHintPrivacy": "退出遠端桌面後蓋上隱私畫面，AI 可以繼續工作；有人碰電腦就會鎖定。",
@@ -14969,6 +14969,7 @@
       "pluginDisabledUnnamed": "自動檢查暫時受阻：需要的插件未啟用，啟用後自動恢復。",
       "installPlugin": "安裝插件",
       "openPlugin": "查看插件",
+      "enablePlugin": "啟用插件",
       "dismissTitle": "關閉歷史失敗提示"
     },
     "worktreeRestoreBanner": {

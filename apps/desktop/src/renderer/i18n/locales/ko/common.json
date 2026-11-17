@@ -14970,6 +14970,7 @@
       "pluginDisabledUnnamed": "자동 확인이 차단되었습니다: 필요한 플러그인이 비활성화되어 있습니다. 활성화하면 자동으로 재개됩니다.",
       "installPlugin": "플러그인 설치",
       "openPlugin": "플러그인 열기",
+      "enablePlugin": "플러그인 켜기",
       "dismissTitle": "이전 실패 알림 닫기"
     },
     "worktreeRestoreBanner": {

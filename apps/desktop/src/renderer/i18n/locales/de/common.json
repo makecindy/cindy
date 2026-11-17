@@ -14998,6 +14998,7 @@
       "pluginDisabledUnnamed": "Automatische Prüfungen sind blockiert: Ein benötigtes Plugin ist deaktiviert. Nach dem Aktivieren laufen sie automatisch weiter.",
       "installPlugin": "Plugin installieren",
       "openPlugin": "Plugin öffnen",
+      "enablePlugin": "Plugin aktivieren",
       "dismissTitle": "Hinweis auf früheren Fehler schließen"
     },
     "worktreeRestoreBanner": {

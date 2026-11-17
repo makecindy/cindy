@@ -15035,6 +15035,7 @@
       "pluginDisabledUnnamed": "Automatic checks are blocked: a required plugin is disabled. They resume once it is enabled.",
       "installPlugin": "Install plugin",
       "openPlugin": "Open plugin",
+      "enablePlugin": "Turn on plugin",
       "dismissTitle": "Dismiss past failure notice"
     },
     "worktreeRestoreBanner": {
