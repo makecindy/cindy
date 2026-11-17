@@ -1014,6 +1014,38 @@ describe('translateErrorNotification', () => {
     ]);
   });
 
+  // #11061: real native reconnect errors flatten the denial into additionalDetails.
+  // Unit tier: classification must reach the existing actionable model-selection path.
+  it.each([
+    { message: 'Reconnecting... 1/5', additionalDetails: 'unexpected status 403 Forbidden: user not allowed to access model. This user can only access models=[qwen/synthetic]. Tried to access group/synthetic-model',
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 403 } } },
+    { message: 'unexpected status 403 Forbidden: user not allowed to access model' },
+    { message: 'HTTP 403: {"error":{"code":"user_model_access_denied"}}' },
+    { message: 'Error running remote compact task', additionalDetails: '{"error":{"type":"user_model_access_denied"}}' },
+    { message: '{"code":"user_model_access_denied"}' },
+  ])('classifies an explicit model permission denial: %j', error => {
+    expect(classifyCodexError(error as Parameters<typeof classifyCodexError>[0])).toMatchObject({
+      reason: 'model_unavailable', usageLimit: false, isCapacityError: false,
+      message: expect.stringContaining('[MODEL_SELECTION_UNAVAILABLE]'),
+    });
+  });
+
+  it.each([
+    { message: 'HTTP 403: Forbidden' },
+    { message: 'HTTP 403: {"error":{"code":"model_not_found"}}' },
+    { message: 'HTTP 403: {"error":{"metadata":{"code":"user_model_access_denied"}}}' },
+    { message: 'user not allowed to access model' },
+    { message: 'HTTP 401: user not allowed to access model' },
+    { message: 'HTTP 429: user not allowed to access model' },
+    { message: 'HTTP 503: user not allowed to access model' },
+    { message: 'HTTP 403: authentication_failed user not allowed to access model' },
+    { message: 'Reconnecting... 1/5', additionalDetails: '{"error":{"code":"user_model_access_denied"}}', codexErrorInfo: 'unauthorized' },
+    { message: 'Reconnecting... 1/5', additionalDetails: 'HTTP 403: user not allowed to access model',
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 503 } } },
+  ])('preserves ambiguous, authentication and transient failures: %j', error => {
+    expect(classifyCodexError(error as Parameters<typeof classifyCodexError>[0]).reason).not.toBe('model_unavailable');
+  });
+
   it('does not interpret a generic HTTP 404 or reconnect notice as an unavailable model', () => {
     expect(classifyCodexError({ message: 'unexpected status 404 Not Found' }).reason).toBeUndefined();
     expect(classifyCodexError({ message: 'Reconnecting... 1/5' }).reason).toBeUndefined();

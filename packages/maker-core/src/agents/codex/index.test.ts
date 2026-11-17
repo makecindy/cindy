@@ -27497,7 +27497,10 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.close();
   });
 
-  it('interrupts a retrying turn when Codex reports that its model is unavailable', async () => {
+  it.each([
+    { additionalDetails: "unexpected status 400 Bad Request: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.", status: 400 },
+    { additionalDetails: 'unexpected status 403 Forbidden: user not allowed to access model. This user can only access models=[qwen/synthetic]. Tried to access group/synthetic-model', status: 403 },
+  ])('interrupts a retrying turn on explicit model rejection ($status)', async ({ additionalDetails, status }) => {
     const interruptAck = deferred<Record<string, never>>();
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? interruptAck.promise : undefined);
@@ -27512,8 +27515,8 @@ describe('CodexAgent turn lifecycle', () => {
       const turnId = 'turn-1';
       const error = {
         message: 'Reconnecting... 1/5',
-        additionalDetails: "unexpected status 400 Bad Request: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
-        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 400 } },
+        additionalDetails,
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: status } },
       } as const;
 
       handlers.turnStarted?.({ threadId, turn: { id: turnId } });
@@ -27544,7 +27547,10 @@ describe('CodexAgent turn lifecycle', () => {
     }
   });
 
-  it.each([true, false])('marks partial sampling output failed on model rejection with willRetry=%s', async (willRetry) => {
+  it.each([true, false].flatMap(willRetry => [
+    { willRetry, code: 'model_not_found', status: 400 },
+    { willRetry, code: 'user_model_access_denied', status: 403 },
+  ]))('marks partial sampling output failed on model rejection ($status, retry=$willRetry)', async ({ willRetry, code, status }) => {
     const interruptAck = deferred<Record<string, never>>();
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? interruptAck.promise : undefined);
@@ -27558,8 +27564,8 @@ describe('CodexAgent turn lifecycle', () => {
       const turnId = 'turn-1';
       const error = {
         message: 'Reconnecting... 1/5',
-        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 400 } },
-        additionalDetails: '{"error":{"code":"model_not_found"}}',
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: status } },
+        additionalDetails: JSON.stringify({ error: { code } }),
       };
 
       handlers.turnStarted?.({ threadId, turn: { id: turnId } });
@@ -27588,6 +27594,38 @@ describe('CodexAgent turn lifecycle', () => {
       await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
     } finally {
       await handle.close();
+    }
+  });
+
+  // #11061: new denial classification must retain the shared ACK/cancellation contract.
+  it.each(['success', 'cancel'] as const)('keeps %s authoritative while a denied-model interrupt is pending', async ending => {
+    const interruptAck = deferred<Record<string, never>>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? interruptAck.promise
+      : method === Method.TurnStart ? { turn: { id: 'turn-1' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'denial-settlement', model: 'gpt-6.1-sol', workingDir: '/repo' });
+    const cancellation = new AbortController();
+    const events: AgentEvent[] = [];
+    const pump = (async () => { for await (const event of handle.events()) events.push(event); })();
+    try {
+      await handle.send({ type: 'user', content: 'hello' }, { signal: cancellation.signal });
+      const handlers = host.getThreadHandlers()!;
+      const threadId = 'start-thread-id', turnId = 'turn-1';
+      handlers.turnStarted?.({ threadId, turn: { id: turnId } });
+      handlers.error?.({ threadId, turnId, willRetry: true, error: {
+        message: 'Reconnecting... 1/5', additionalDetails: 'HTTP 403: user not allowed to access model',
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 403 } },
+      } });
+      expect(handle.isTurnRunning?.()).toBe(true);
+      if (ending === 'success') handlers.turnCompleted?.({ threadId, turn: { id: turnId, status: 'completed' } });
+      else cancellation.abort();
+      interruptAck.resolve({});
+      await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
+      expect(events.some(e => e.type === 'error' && (e.data as { reason?: string }).reason === 'model_unavailable')).toBe(false);
+      if (ending === 'success') expect(events.filter(e => e.type === 'done')).toHaveLength(1);
+    } finally {
+      await handle.close();
+      await pump;
     }
   });
 
