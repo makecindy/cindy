@@ -468,7 +468,7 @@ const authRefreshBackoff = new AuthRefreshBackoff();
  * /api/auth/refresh. As the desktop's refresh(): one at a time, a caller during a retry's wait gets
  * false instead of a request, and the server API's 401 after a network failure may bring the retry
  * forward (`serverRejectedToken`, AuthRefreshBackoff). Not refused while a desktop holds the profile
- * (the exception C); only /api/auth/refresh is, by the service gate.
+ * (the exception C); /api/auth/refresh is in the service gate's list of paths allowed then.
  */
 async function refreshAuthSession(options?: { serverRejectedToken?: boolean }): Promise<boolean> {
   if (authClosed) return false;

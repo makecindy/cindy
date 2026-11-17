@@ -110,7 +110,7 @@ function readVault(store) {
   const tombstones = tombstoneRaw ? JSON.parse(tombstoneRaw) : { version: 1, accountKeys: [] };
   if (tombstones?.version !== 1 || !Array.isArray(tombstones.accountKeys)) throw new Error('Saved account logout state is unavailable');
   const stored = raw ? JSON.parse(raw) : null;
-  if (stored !== null && (![1, 2].includes(stored?.version) || !stored.resources || typeof stored.resources !== 'object'
+  if (stored !== null && (![1, AUTH_ACCOUNT_VAULT_VERSION].includes(stored?.version) || !stored.resources || typeof stored.resources !== 'object'
     || !stored.passports || typeof stored.passports !== 'object')) throw new Error('Saved accounts are unavailable');
   const resources = { ...(stored?.resources ?? {}) };
   const loggedOut = [...new Set([...(stored?.loggedOutAccountKeys ?? []), ...tombstones.accountKeys])];

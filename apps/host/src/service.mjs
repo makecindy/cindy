@@ -30,6 +30,10 @@ export const HOST_PATHS_ALLOWED_WHILE_HELD = Object.freeze({
   // Answering the running turn: its permission requests and questions, and its plugin prompts. An
   // install consent is answered only with a refusal (below): accepting installs into the shared profile.
   answer: Object.freeze(['/api/interactions/respond', '/api/ghosts/confirm/resolve', '/api/ghosts/install-consent/resolve']),
+  // Renewing the account session (reviewer, 2026-11-17): the one shared credential the Host writes
+  // while held, because it would sign itself out otherwise (auth/refresh.mjs). A window in client
+  // mode asks the Host to renew through this path; refused, the window takes it as a failed renewal.
+  renew: Object.freeze(['/api/auth/refresh']),
 });
 const ALLOWED_WHILE_HELD = new Set(Object.values(HOST_PATHS_ALLOWED_WHILE_HELD).flat());
 

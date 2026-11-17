@@ -312,6 +312,22 @@ test('the next renewal is armed at the access token\'s exp minus 300 s and goes 
   assert.equal(server.requests.length, 3);
 });
 
+// d (reviewer, 2026-11-17): a token without a numeric exp arms nothing, as on the desktop; the server
+// API's 401 path still renews it.
+test('a token without a numeric exp arms no renewal; the server API\'s 401 still renews', async (t) => {
+  const server = renewalServer();
+  const h = renewalHarness(t, server);
+  h.adopt(fakeJwt({ sub: 'member-a' }));
+  h.schedule();
+  assert.equal(h.timer(), null, 'nothing is armed');
+  t.mock.timers.tick(24 * 3600_000);
+  await h.settle();
+  assert.equal(server.requests.length, 0);
+  assert.equal(await h.refresh({ serverRejectedToken: true }), true, 'the 401 retry renews');
+  assert.equal(server.requests.length, 1);
+  assert.ok(h.timer(), 'the renewed token has an exp and arms the next renewal');
+});
+
 test('a renewal failing for now retries with the desktop\'s backoff; a definitive one ends the session and arms nothing', async (t) => {
   const server = renewalServer();
   const h = renewalHarness(t, server);

@@ -44,11 +44,14 @@ test('while held, reads, stops and answers to the running turn still reach their
 });
 
 // What a running turn needs to end, named here rather than read from the production list: if any of
-// these were refused, the turn could not end and the profile could never be released.
-test('while held, stopping the running turn and answering it are never refused', async () => {
+// these were refused, the turn could not end and the profile could never be released. And the account
+// renewal, the one shared credential written while held.
+test('while held, stopping the running turn, answering it and renewing the account are never refused', async () => {
   const { invoke, calls } = stubbedService(() => HELD);
   for (const path of ['/api/input/stop', '/api/interactions/respond', '/api/ghosts/confirm/resolve',
-    '/api/ghosts/install-consent/resolve']) {
+    '/api/ghosts/install-consent/resolve',
+    // The account renewal (reviewer, 2026-11-17): a client-mode window asks the Host to renew here.
+    '/api/auth/refresh']) {
     const before = calls.length;
     const result = await invoke(path, { sessionId: 'task', requestId: 'request', confirmed: false }, { caller: 'device:test' });
     assert.equal(result.status, 200, path);
@@ -87,7 +90,7 @@ const REFUSED = {
   // Reads that change something: a failed embedded-browser probe recovers the backend (health-service.ts).
   'reads that write': ['/api/browser-backend/get-health'],
   'plugins and accounts': ['/api/ghosts/set-enabled', '/api/agents/logout', '/api/model-visibility/claim',
-    '/api/model-access/retry', '/api/auth/refresh'],
+    '/api/model-access/retry'],
   'a path added later': ['/api/some-later-write'],
 };
 
