@@ -922,15 +922,16 @@ it.each([
 it.each([false, true])('keeps pane geometry separate from App content height (fill=%s)', async fillContainer => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
-  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(700);
-  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800);
+  const paneHeight = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(700);
+  const paneWidth = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800);
   vi.stubGlobal('matchMedia', () => ({ matches: false }));
   vi.stubGlobal('IntersectionObserver', class {
     constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
     observe(element: Element) { state.intersections.set(element, this.callback); }
     disconnect() {}
   });
-  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  let resize = () => {};
+  vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect() {} });
   const container = document.createElement('div'); document.body.appendChild(container);
   const root = createRoot(container);
   try {
@@ -949,5 +950,9 @@ it.each([false, true])('keeps pane geometry separate from App content height (fi
     await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 640 } }));
     expect(viewport.style.height).toBe(fillContainer ? '' : '640px');
     expect(viewport.style.flex).toBe(fillContainer ? '1 1 0%' : '');
+    await act(async () => { paneWidth.mockReturnValue(420); paneHeight.mockReturnValue(480); resize(); });
+    const resized = controller.context.mock.calls.at(-1)![0].containerDimensions;
+    if (fillContainer) expect(resized).toEqual({ width: 420, height: 480 });
+    else { expect(resized.width).toBe(420); expect(resized.height).toBeUndefined(); }
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
