@@ -20,9 +20,17 @@ export interface QuestionCardLook {
   title?: string;
   /** 需要显式提交时的按钮文字，默认「提交答案」。 */
   submitLabel?: string;
-  /** 单题版式：只渲染第一题，正文不加题号，按钮只写选项文字。 */
+  /**
+   * 单题版式：只渲染第一题，正文不加题号，按钮只写选项文字；答完后收成回执——标题写结论，
+   * 正文只留弱化的原问题，不再列选项和提示。正文按 Markdown 输出（带说明的选项名加粗）。
+   */
   single?: boolean;
+  /** 把一行文字写成渠道的弱化样式（如飞书的灰色字），用于选项说明、提示语和回执里的原问题。不传则原样。 */
+  muted?: (line: string) => string;
 }
+
+/** 回执标题里能直接写下的答案长度；更长或多行的答案放进正文，标题只留题目的短标签。 */
+const RECEIPT_TITLE_ANSWER_MAX = 60;
 
 /** 题干已自带「可多选」说明时不再追加（模型常把它写进题干，追加后会重复两遍）。 */
 function withMultiSelectHint(question: QuestionRequest['questions'][number]): string {
@@ -45,6 +53,8 @@ export function createQuestionCard(
   let revision = 0;
   let closed = false;
   let submitted = false;
+  /** Host 收口时的最终答案（在 App 里答的也算）；收口前为 undefined，展示用本卡上的选择。 */
+  let settledAnswers: Record<string, string> | undefined;
   let tail = Promise.resolve();
   const requiresSubmit = request.questions.length > 1
     || request.questions.some(q => q.multiSelect || q.answerConstraints?.required === false);
@@ -55,9 +65,20 @@ export function createQuestionCard(
     return encodeAskOptionAnswers(q.multiSelect === true,
       [...(selections.get(qi) ?? [])].sort((a, b) => a - b).map(oi => q.options![oi].label));
   };
-  const resolvedLine = (qi: number): string[] => answerFor(qi)
-    ? [imText('imBot.text.questions.resolved', { option: formatAskAnswersForDisplay({ value: answerFor(qi) }) })]
+  /** 卡片上展示的答案：收口后以 Host 的最终答案为准（查找顺序同 Host 侧），之前是本卡上的选择。 */
+  const shownAnswer = (qi: number): string => {
+    if (!settledAnswers) return answerFor(qi);
+    const q = request.questions[qi];
+    return settledAnswers[answerKey(q)] ?? settledAnswers[q.question] ?? (q.header ? settledAnswers[q.header] : undefined) ?? '';
+  };
+  const displayAnswer = (qi: number): string => formatAskAnswersForDisplay({ value: shownAnswer(qi) });
+  const resolvedLine = (qi: number): string[] => displayAnswer(qi)
+    ? [imText('imBot.text.questions.resolved', { option: displayAnswer(qi) })]
     : [];
+  const muted = (text: string): string => look.muted
+    ? text.split('\n').map(line => (line.trim() ? look.muted!(line) : line)).join('\n')
+    : text;
+  const hintText = (): string => muted(hint ?? imText('imBot.text.questions.cardHint'));
   const body = () => look.single ? singleBody() : request.questions.map((q, i) => [
     `${i + 1}. ${withMultiSelectHint(q)}`,
     ...(q.options ?? []).map((o, j) => `${i + 1}·${j + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`),
@@ -68,19 +89,48 @@ export function createQuestionCard(
     request.questions.reduce((count, q) => count + (q.options?.length ?? 0), 0) + (requiresSubmit ? 1 : 0)
       > MAX_CARD_BUTTONS;
   // 单题版式：题干单独成段（不以「1.」开头，避免 Markdown 把后面的行并进同一个列表项）；
-  // 选项只有带说明、或按钮放不下时才逐行列出，否则按钮已经写全了选项。
+  // 选项只有带说明、或按钮放不下时才逐行列出，否则按钮已经写全了选项。带说明时选项名加粗、
+  // 说明弱化，一眼分得清哪段是选项、哪段是解释。
   const singleBody = (): string => {
     const q = request.questions[0];
     const options = q.options ?? [];
+    const described = options.some(o => o.description);
     return [
       withMultiSelectHint(q),
-      ...(options.some(o => o.description) || choiceButtonsOmitted()
-        ? ['', ...options.map((o, j) => `${j + 1}. ${o.label}${o.description ? ` — ${o.description}` : ''}`)]
+      ...(described || choiceButtonsOmitted()
+        ? ['', ...options.map((o, j) =>
+          `${j + 1}. ${described ? `**${o.label}**` : o.label}${o.description ? ` ${muted(o.description)}` : ''}`)]
         : []),
-      ...(answerFor(0) ? ['', ...resolvedLine(0)] : []),
+      ...resolvedLine(0).flatMap(line => ['', line]),
     ].join('\n');
   };
+  /**
+   * 单题版式答完（或 Host 收口）后的回执：标题写结论，正文只留弱化的原问题。答完还把题干、全部选项
+   * 和提示留在卡片上，聊天里就堆着一张张过期的表单。还在作答、或被中止时返回 undefined，照常画题目。
+   */
+  const receipt = (): InteractiveCardSpec | undefined => {
+    if (!look.single || !(closed || submitted)) return undefined;
+    const q = request.questions[0];
+    const answer = displayAnswer(0);
+    const question = muted(q.question);
+    const base = { buttonLayout: 'list' as const, buttons: [] };
+    if (!answer) {
+      // 没拿到这道题的答案就收口了（超时、轮次结束）：标题不变，只说明卡片已失效。
+      return settledAnswers
+        ? { ...base, title: look.title ?? '❓', body: `${question}\n\n${imText('imBot.text.questions.expired')}` }
+        : undefined;
+    }
+    const label = q.header?.trim();
+    if (answer.length > RECEIPT_TITLE_ANSWER_MAX || answer.includes('\n')) {
+      return { ...base, title: label ? `✅ ${label}` : '✅', body: `${answer}\n\n${question}` };
+    }
+    return { ...base, body: question, title: label
+      ? imText('imBot.text.questions.resolvedLabeled', { label, option: answer })
+      : imText('imBot.text.questions.resolved', { option: answer }) };
+  };
   const render = (status?: string): InteractiveCardSpec => {
+    const done = receipt();
+    if (done) return done;
     const choices = request.questions.flatMap((q, qi) => (q.options ?? []).map((o, oi) => ({
       id: `${id}:${revision}:${qi}:${oi}`,
       label: `${selections.get(qi)?.has(oi) ? '✓ ' : ''}${look.single ? '' : `${qi + 1}·${oi + 1} `}${o.label}`,
@@ -90,7 +140,7 @@ export function createQuestionCard(
     }] : [];
     return {
       title: look.title ?? '❓',
-      body: `${body()}\n\n${status ?? hint ?? imText('imBot.text.questions.cardHint')}`,
+      body: [body(), status ?? hintText()].filter(Boolean).join('\n\n'),
       // 选项文案常常较长: 一行一个满宽按钮, 不挤在同一行被压缩。
       buttonLayout: 'list',
       buttons: closed || submitted ? [] : [
@@ -110,10 +160,12 @@ export function createQuestionCard(
   const ready = update();
   const completed = controls.settled.then(decision => {
     closed = true;
-    const answers = decision.kind === 'ask_user_question' ? formatAskAnswersForDisplay(decision.answers) : '';
-    return update(answers
-      ? imText('imBot.text.questions.resolved', { option: answers })
-      : imText('imBot.text.questions.expired'));
+    settledAnswers = decision.kind === 'ask_user_question' ? decision.answers : {};
+    const answers = formatAskAnswersForDisplay(settledAnswers);
+    if (!answers) return update(imText('imBot.text.questions.expired'));
+    // 每道题下面已经写着它的最终答案，末尾不再重复一遍「已选」；答案对不上任何一题时才用汇总行兜底。
+    return update(request.questions.some((_, qi) => displayAnswer(qi))
+      ? '' : imText('imBot.text.questions.resolved', { option: answers }));
   }, () => { closed = true; return update(); }).catch(() => undefined);
   return {
     id, ready, completed,
@@ -161,7 +213,7 @@ export function createQuestionCard(
           const warning = look.single || request.questions.length === 1
             ? imText('imBot.text.questions.unansweredSingle')
             : imText('imBot.text.questions.unanswered', { numbers: missing.join(imText('imBot.text.questions.numberSeparator')) });
-          await update(`${warning}\n${hint ?? imText('imBot.text.questions.cardHint')}`);
+          await update(`${warning}\n${hintText()}`);
           return false;
         }
         submitted = true;

@@ -13650,6 +13650,7 @@
         "submitLabel": "Enviar respuestas",
         "multiSelectHint": " (puedes elegir varias)",
         "resolved": "✅ Elegido: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "Esta tarjeta ha caducado",
         "textHint": "Solo puede responder quien hizo la consulta. Escribe {{code}} seguido de tu respuesta. Para varias preguntas: {{code}} 2: respuesta; después {{code}} OK para enviar.",
         "replyHint": "Solo quien hizo la solicitud puede responder. Toca una opción; para varias preguntas o selecciones, envía al terminar.\nEscribe {{code}} seguido de tu respuesta. Para varias preguntas: {{code}} 2: respuesta; después {{code}} OK para enviar.",

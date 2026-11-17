@@ -13481,6 +13481,7 @@
         "submitLabel": "呈答",
         "multiSelectHint": "（可多擇）",
         "resolved": "✅ 已擇：{{option}}",
+        "resolvedLabeled": "✅ {{label}}：{{option}}",
         "expired": "此卡已逾期",
         "textHint": "唯提問者可答。以 {{code}} 接所答；多問用「{{code}} 2：所答」，畢則回 {{code}} OK 呈之。",
         "replyHint": "唯提問者可答。點選所答，多問多擇畢而呈之。\n以 {{code}} 接所答；多問用「{{code}} 2：所答」，畢則回 {{code}} OK 呈之。",

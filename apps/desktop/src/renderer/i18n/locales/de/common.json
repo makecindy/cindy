@@ -13535,6 +13535,7 @@
         "submitLabel": "Antworten senden",
         "multiSelectHint": " (Mehrfachauswahl möglich)",
         "resolved": "✅ Gewählt: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "Diese Karte ist abgelaufen",
         "textHint": "Nur die fragende Person kann antworten. Sende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden.",
         "replyHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden.\nSende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden.",

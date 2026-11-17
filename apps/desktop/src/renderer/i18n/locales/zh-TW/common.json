@@ -13481,6 +13481,7 @@
         "submitLabel": "送出答案",
         "multiSelectHint": "（可複選）",
         "resolved": "✅ 已選：{{option}}",
+        "resolvedLabeled": "✅ {{label}}：{{option}}",
         "expired": "卡片已過期",
         "textHint": "僅提問者可作答。回覆 {{code}} 加答案；多題用「{{code}} 2：答案」，填好後回覆 {{code}} OK 送出。",
         "replyHint": "僅提問者可作答。點選選項；多題或複選選好後送出。\n回覆 {{code}} 加答案；多題用「{{code}} 2：答案」，填好後回覆 {{code}} OK 送出。",

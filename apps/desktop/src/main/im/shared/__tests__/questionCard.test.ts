@@ -164,6 +164,31 @@ describe('submitting before every question is answered', () => {
   });
 });
 
+describe('closing a card with the final answer', () => {
+  // 实踩(2026-11-17, 官方飞书): 答完的卡片上「✅ 已选」写了两遍(题目下面一行, 末尾又汇总一行); 在 App 里
+  // 答了别的选项时, 题目下面还留着卡片上没提交的勾选, 和末尾的最终答案互相矛盾。入口: createQuestionCard
+  // + Host settled; 可观察结果: 收口帧正文里每道题的最终答案只写一次, 且以 Host 的答案为准。既有用例只
+  // 断言收口帧的 closed 与 buttons, 没看正文(unit)。
+  it('writes the final answer once', async () => {
+    const f = fixture([{ id: 'env', question: 'Where?', options: [{ label: 'Staging' }, { label: 'Production' }] }]);
+    await f.card.ready;
+    await f.click(':0:0');
+    f.settle(f.controls.answer.mock.calls[0][0]);
+    await vi.waitFor(() => expect(f.frames.at(-1)!.closed).toBe(true));
+    expect(f.frames.at(-1)!.card.body.split('Selected: Staging')).toHaveLength(2);
+  });
+
+  it('shows the answer given in the App rather than an unsubmitted choice on the card', async () => {
+    const f = fixture([{ id: 'langs', question: 'Languages?', multiSelect: true, options: [{ label: 'English' }, { label: 'Chinese' }] }]);
+    await f.card.ready;
+    await f.click(':0:0');
+    f.settle({ kind: 'ask_user_question', answers: { langs: '["Chinese"]' } });
+    await vi.waitFor(() => expect(f.frames.at(-1)!.closed).toBe(true));
+    expect(f.frames.at(-1)!.card.body).toContain('Selected: Chinese');
+    expect(f.frames.at(-1)!.card.body).not.toContain('Selected: English');
+  });
+});
+
 describe('question card layout', () => {
   // 飞书: 选项多、文案长时同一行挤多个按钮会压缩文字; 问答卡一行一个满宽按钮。
   it('lays choices out as a list', async () => {

@@ -72,8 +72,12 @@ describe('sequential Hook question cards', () => {
       const button = latest(interactionId).buttons.find(b => b.label.endsWith(label))!;
       return handlers.get(interactionId)!(button.id);
     };
-    return { frames, handlers, answer, settle, controls, publisher, cards, latest, click };
+    const closing = (interactionId: string) => frames.find((f): f is Extract<HookMessage, { type: 'interaction.cancel' }> =>
+      f.type === 'interaction.cancel' && f.payload.interactionId === interactionId)?.payload.reason;
+    return { frames, handlers, answer, settle, controls, publisher, cards, latest, click, closing };
   }
+  const grey = (text: string) => `<font color='grey'>${text}</font>`;
+  const receiptTitle = (label: string, option: string) => imText('imBot.text.questions.resolvedLabeled', { label, option });
   const request = { kind: 'ask_user_question' as const, requestId: 'q', questions: [
     { id: 'env', header: '运行环境', question: '发到哪个环境？', options: [{ label: '测试环境', description: '影响最小' }, { label: '正式环境' }] },
     { id: 'lang', header: '语言', question: `需要哪些语言？${multiHint}`, multiSelect: true, options: [{ label: '中文' }, { label: '英语' }] },
@@ -84,8 +88,9 @@ describe('sequential Hook question cards', () => {
     await h.publisher.open(request, h.controls);
     expect(h.cards()).toHaveLength(1);
     const first = h.latest(h.cards()[0]!);
-    expect(first.title).toContain('1/2');
+    expect(first.title).toBe('运行环境 1/2');
     expect(first.body).toContain('发到哪个环境？');
+    expect(first.body).toContain(`1. **测试环境** ${grey('影响最小')}`);
     expect(first.body).not.toContain('需要哪些语言？');
     expect(first.buttons.map(b => b.label)).toEqual(['测试环境', '正式环境']);
 
@@ -93,8 +98,12 @@ describe('sequential Hook question cards', () => {
     expect(await h.click(h.cards()[0]!, '测试环境')).toBe(true);
     await vi.waitFor(() => expect(h.cards()).toHaveLength(2));
     expect(h.answer).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(h.frames.some(f => f.type === 'interaction.cancel'
-      && f.payload.interactionId === h.cards()[0])).toBe(true));
+    await vi.waitFor(() => expect(h.closing(h.cards()[0]!)).toBeDefined());
+    // 实踩(2026-11-17): 答完的卡还留着题干、全部选项、说明和提示, 外加两遍「✅ 已选」, 聊天里堆着一张张
+    // 过期的表单。答完收成回执: 标题写结论, 正文只留弱化的原问题; 收口帧的正文与它一致。
+    const answered = h.latest(h.cards()[0]!);
+    expect(answered).toMatchObject({ title: receiptTitle('运行环境', '测试环境'), body: grey('发到哪个环境？'), buttons: [] });
+    expect(h.closing(h.cards()[0]!)).toBe(answered.body);
     const second = h.latest(h.cards()[1]!);
     expect(second.title).toContain('2/2');
     expect(second.body.split(multiHint)).toHaveLength(2);
@@ -105,6 +114,24 @@ describe('sequential Hook question cards', () => {
     expect(await h.click(h.cards()[1]!, imText('imBot.text.questions.submitLabel'))).toBe(true);
     expect(h.answer).toHaveBeenCalledExactlyOnceWith({ kind: 'ask_user_question',
       answers: { env: '测试环境', lang: JSON.stringify(['中文', '英语']) } });
+    expect(h.latest(h.cards()[1]!).title).toBe(receiptTitle('语言', '中文, 英语'));
+  });
+
+  // 回执的两个边界(同一入口, 结果不同): 答案太长写不进标题时放进正文; 没拿到答案就收口时不再列选项,
+  // 只说明卡片已失效。最小输入: 一道带选项的题 + 一段 60 字以上的文字回答 / 一个空的 Host 收口(unit)。
+  it('keeps a long written answer in the body and marks an unanswered card expired', async () => {
+    const one = { ...request, questions: [request.questions[0]!] };
+    const long = '先发测试环境，确认没有问题以后再灰度到预发布环境，最后由我手动放量到正式环境，过程中任何一步失败都立即回滚并通知我，不要自动重试';
+    const h = harness();
+    await h.publisher.open(one, h.controls);
+    expect(await h.handlers.get(h.cards()[0]!)!('question:reply', long)).toBe(true);
+    expect(h.latest(h.cards()[0]!)).toMatchObject({ title: '✅ 运行环境', body: `${long}\n\n${grey('发到哪个环境？')}` });
+
+    const idle = harness();
+    await idle.publisher.open(one, idle.controls);
+    idle.settle({ kind: 'ask_user_question', answers: {} });
+    await vi.waitFor(() => expect(idle.closing(idle.cards()[0]!)).toBe(
+      `${grey('发到哪个环境？')}\n\n${imText('imBot.text.questions.expired')}`));
   });
 
   // 评审 #11136: 异步多题逐题发时, 本轮一结束(drain)后面的题就再也发不出去(服务端只在轮次运行期间
@@ -148,6 +175,9 @@ describe('sequential Hook question cards', () => {
     // App 先答完(或超时、轮次结束): 当前卡收口, 后面的题不再发, 迟到的点击也不再生效。
     h.settle({ kind: 'ask_user_question', answers: { env: '正式环境', lang: '[]' } });
     await vi.waitFor(() => expect(h.frames.at(-1)?.type).toBe('interaction.cancel'));
+    // 不是在这张卡上答的: 收口帧只带正文, 所以先更新一帧把标题换成 App 里的答案, 再收口。
+    expect(h.frames.at(-2)).toMatchObject({ type: 'interaction.request',
+      payload: { title: receiptTitle('运行环境', '正式环境'), body: grey('发到哪个环境？'), buttons: [] } });
     expect(h.handlers.size).toBe(0);
     expect(h.cards()).toHaveLength(1);
     expect(h.answer).not.toHaveBeenCalled();

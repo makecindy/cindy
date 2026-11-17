@@ -31,14 +31,27 @@ export function createHookQuestionPublisher(deps: {
   ): Promise<void> => {
     const interactionId = randomUUID();
     const code = `Q${randomBytes(8).toString('hex')}`;
+    /** 服务端这张卡上现在的标题。收口帧只带正文，标题要靠 interaction.request 才能换。 */
+    let shownTitle: string | undefined;
     const card = createQuestionCard(request, controls, async (spec, closed) => {
-      const frame = closed ? makeInteractionCancel({ requestId: deps.requestId, interactionId, reason: spec.body })
-        : makeInteractionRequest({ requestId: deps.requestId, interactionId, kind: 'ask_user_question',
-          questionMode: request.delivery === 'async' ? 'async' : 'blocking', questionCode: code,
-          title: spec.title || '❓', body: spec.body,
-          buttons: (spec.buttons ?? []).map(b => ({ id: b.id, label: b.label, style: 'default' as const })),
-        });
-      if (!deps.send(frame)) throw new Error('question connection unavailable');
+      const title = spec.title || '❓';
+      const show = (): boolean => deps.send(makeInteractionRequest({
+        requestId: deps.requestId, interactionId, kind: 'ask_user_question',
+        questionMode: request.delivery === 'async' ? 'async' : 'blocking', questionCode: code,
+        title, body: spec.body,
+        buttons: (spec.buttons ?? []).map(b => ({ id: b.id, label: b.label, style: 'default' as const })),
+      }));
+      if (!closed) {
+        if (!show()) throw new Error('question connection unavailable');
+        shownTitle = title;
+        return;
+      }
+      // 不是在这张卡上答的（App 里答了）时，回执的标题还没发过：先更新一帧把标题换成结论，再收口。
+      // 服务端已先一步关掉这张卡（轮次结束）时这一帧会被它忽略，卡片保持原标题。
+      if (shownTitle !== undefined && title !== shownTitle && !show()) throw new Error('question connection unavailable');
+      if (!deps.send(makeInteractionCancel({ requestId: deps.requestId, interactionId, reason: spec.body }))) {
+        throw new Error('question connection unavailable');
+      }
     }, hint(code), look);
     const off = deps.register(interactionId, (button, text) => button === 'question:reply' && text !== undefined
       ? card.replyText(text) : card.click(button));
@@ -61,11 +74,15 @@ export function createHookQuestionPublisher(deps: {
       : imText('imBot.text.questions.stepHint', { code });
   };
 
+  /** 有短标签时标题就是它（「发布环境 1/2」）；没有时才用「❓」占位，协议要求标题非空。 */
   const stepTitle = (question: Question, index: number, total: number): string => {
     const header = question.header?.trim();
     const progress = total > 1 ? ` ${index + 1}/${total}` : '';
-    return `❓${progress}${header ? ` ${header}` : ''}`;
+    return `${header || '❓'}${progress}`;
   };
+
+  /** 飞书 / Lark 卡片正文的灰色字：选项说明、提示语和答完后回执里的原问题用它弱化。 */
+  const muted = (line: string): string => `<font color='grey'>${line}</font>`;
 
   /**
    * 逐题推进。每道题的卡片拿到的是「这一题」的答题入口：答完只结束这张卡并发下一张；最后一题
@@ -105,7 +122,7 @@ export function createHookQuestionPublisher(deps: {
         settled: Promise.race([stepDone, controls.settled]),
       };
       await openCard({ ...request, questions: [question] }, step, code => stepHint(question, code, last), {
-        single: true, title: stepTitle(question, index, total), submitLabel: nextLabel(last),
+        single: true, title: stepTitle(question, index, total), submitLabel: nextLabel(last), muted,
       });
       deps.log?.info(`hook question ${deps.requestId} step ${index + 1}/${total} shown`);
     };
