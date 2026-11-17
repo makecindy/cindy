@@ -10,6 +10,11 @@ import { createPlatformClientBridge } from './platform/client-bridge.ts';
 import { createHostPlatformRpc } from '@cindy/maker-shared/host-platform-rpc';
 
 import { createHostServer } from './server.mjs';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { createOwnerBoundaryStop, runOwnerBoundary } from './agent/owner-boundary.ts';
+import { markSessionTurnEnded, drainSessionActiveTurnWrites } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 
 const TOKEN = 'test-token-value';
 
@@ -250,6 +255,51 @@ test('expired browser sessions release only their own authenticated controller',
 
 // Account teardown must not close storage underneath another request or accept
 // more private work while two clients are concurrently signing out.
+// 测试价值
+// - 生产入口：server.mjs 的 HTTP 退出登录（POST /logout），配 main.ts 同样的接线：beginOwnerBoundaryStop 是
+//   createOwnerBoundaryStop 的 begin，logout 经 runOwnerBoundary 拆运行时；回合结束写入用真实的 markSessionTurnEnded。
+// - 规则：放行表第五节“甲：账号边界停止提前置位”与 agent/owner-boundary.ts 的不变式：begin 在关平台客户端之前；
+//   begin 之后必须到达 dispose，压制必须释放。
+// - 现有覆盖缺口：取消挂起的登录被拒、或关平台客户端同步抛错时，不调 deps.logout（停止态的输入运行时不会被重建，
+//   之后每次发送都被拒），或连 release 都不调（之后所有回合都不写结束时间）。
+// - 最小失败输入：一次退出登录，前置的一步失败。
+// - tier：unit（真实 HTTP 回环与临时 SQLite，无真实等待）。
+for (const failure of ['cancelPendingAuth rejects', 'platformClient.close throws']) {
+  test(`logout, when ${failure}: the stop begins before the platform client closes, the logout still reaches dispose, and the stop is released`, async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-logout-boundary-'));
+    const sqlite = new Database(path.join(root, 'markers.sqlite'));
+    sqlite.exec('CREATE TABLE sessions(id TEXT PRIMARY KEY, active_turn_started_at INTEGER, last_turn_ended_at INTEGER); INSERT INTO sessions(id) VALUES (\'after\')');
+    setCurrentDbClient({ drizzle: drizzle(sqlite) }, 'logout-boundary-test');
+    t.after(() => { clearCurrentDbClient(); sqlite.close(); fs.rmSync(root, { recursive: true, force: true }); });
+    const order = [];
+    let stopping = false;
+    const boundary = createOwnerBoundaryStop({ beginStop: () => { stopping = true; order.push('begin'); } });
+    const request = await withServer(t, {
+      beginOwnerBoundaryStop: () => boundary.begin(),
+      platformClient: () => ({ close: () => {
+        order.push('close');
+        if (failure === 'platformClient.close throws') throw new Error('platform close failed');
+      } }),
+      cancelPendingAuth: async () => { if (failure === 'cancelPendingAuth rejects') throw new Error('login cancel failed'); },
+      // As main.ts: the logout's own boundary; its dispose replaces the stopped input runtime with a fresh one.
+      logout: async () => {
+        const { errors } = await runOwnerBoundary(boundary, { dispose: async () => { order.push('dispose'); stopping = false; } });
+        if (errors.length) throw errors[0];
+        return { signedOut: true };
+      },
+    });
+    const response = await request('/logout', { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.signedOut, true, 'signed out cleanly');
+    assert.deepEqual(order, ['begin', 'close', 'begin', 'dispose']);
+    assert.equal(stopping, false, 'the stopped input runtime was replaced');
+    // The suppression is released: the next turn's end is written.
+    markSessionTurnEnded('after');
+    await drainSessionActiveTurnWrites('after');
+    assert.equal(typeof sqlite.prepare('SELECT last_turn_ended_at AS endedAt FROM sessions WHERE id = ?').get('after').endedAt, 'number');
+  });
+}
+
 test('logout drains owner requests, revokes streams and serializes concurrent callers', async (t) => {
   let enter;
   let release;

@@ -15,6 +15,18 @@ import { beginSessionTurnEndedSuppression } from '../../../desktop/src/main/loca
  * Begun before anything a running turn depends on is taken apart (requests paused, confirmations and
  * plugins closed, the server revoke at logout); otherwise a turn that fails on that teardown is written as
  * ended, with an error row.
+ *
+ * Invariant: a begin must reach dispose, and its release must run. beginStop cannot be undone; only the
+ * input runtime's dispose replaces it with a fresh one (input-queue.mjs api.dispose). A path that begins
+ * and can fail before dispose either still reaches dispose or rebuilds the input runtime, and releases the
+ * suppression in a finally; otherwise the Host stays signed in with every send refused ("session is
+ * closed") and no turn end written until it restarts. The calls of `begin()`, checked against it:
+ * 1. main.ts logout, through runOwnerBoundary: dispose runs whatever the steps before it do; release in finally.
+ * 2. main.ts invalidateHostSession, through runOwnerBoundary: the same.
+ * 3. main.ts stop (shutdown), through runOwnerBoundary: the same.
+ * 4. server.mjs logout() (the HTTP logout entry, `beginOwnerBoundaryStop`): its own teardown is in a try,
+ *    a failed step does not skip deps.logout() (which is 1), and the release is in the flight's finally.
+ * A new call (the account switch) is added to this list and checked the same way.
  */
 export interface OwnerBoundaryStop {
   /** Enter the stopping state; returns the release of the turn-end suppression (idempotent). */

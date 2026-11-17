@@ -99,13 +99,23 @@ export function createHostServer(input) {
   const logout = () => {
     if (logoutFlight) return logoutFlight;
     // The owner boundary's stop comes first (agent/owner-boundary.ts): a turn that fails on the
-    // teardown below is an interruption, not an ended turn with an error row.
+    // teardown below is an interruption, not an ended turn with an error row. Once begun, the boundary
+    // must reach dispose: whatever fails before it, deps.logout() still runs (its runOwnerBoundary
+    // disposes the stopped input runtime, which rebuilds it) and the stop is released.
     const releaseStop = deps.beginOwnerBoundaryStop?.() ?? (() => {});
-    // Revoke browser streams immediately and drain existing database callers
-    // before the owner runtime closes. Concurrent sign-out clicks share a result.
-    deps.webAuth.clear();
-    deps.platformClient?.()?.close();
-    logoutFlight = cancelPendingAuth().then(() => Promise.all([...ownerRequests])).then(() => deps.logout())
+    let teardown = Promise.resolve();
+    try {
+      // Revoke browser streams immediately and drain existing database callers
+      // before the owner runtime closes. Concurrent sign-out clicks share a result.
+      deps.webAuth.clear();
+      deps.platformClient?.()?.close();
+    } catch (error) {
+      teardown = Promise.reject(error);
+    }
+    // A step that fails before the logout is not the logout's failure: the user still signs out, and the
+    // logout's own result (or error) is what the caller gets.
+    logoutFlight = teardown.then(() => cancelPendingAuth()).catch(() => undefined)
+      .then(() => Promise.all([...ownerRequests])).then(() => deps.logout())
       .finally(() => { releaseStop(); logoutFlight = undefined; });
     return logoutFlight;
   };
