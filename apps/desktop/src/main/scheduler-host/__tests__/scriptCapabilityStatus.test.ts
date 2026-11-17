@@ -15,6 +15,7 @@ describe('resolveScriptCapabilityStatuses', () => {
       { capability: 'sessions.dispatch', state: 'ok' },
       { capability: 'feishu.read', state: 'ok' },
       { capability: 'settings.read', state: 'ok' },
+      { capability: 'usage.read', state: 'ok' },
     ]);
   });
 

@@ -2,7 +2,7 @@ import { findTrustedXdGhostForScript, getGhostCardService, getGhostPipeDispatche
 import { tryGetOrcaCollabService } from '../maker-ipc/register.js';
 import { getSessionRowSnapshotStrict, restoreArchivedSessionForSend } from '../localDb/ipc/sessions';
 import { SchedulerScriptCapabilityBroker as SharedBroker } from './script-capability-broker';
-import { manageAppModels } from '../app-settings/models.js';
+import { readSubscriptionUsage } from '../subscription-accounts/runtime.js';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
 import { executeProviderShareManagementCommand } from '../device-link/providerShareRuntime.js';
 import { createProviderGroupCommandDeps, executeProviderGroupCommand } from '../provider-group/ipc.js';
@@ -22,7 +22,7 @@ export class SchedulerScriptCapabilityBroker extends SharedBroker {
       settings: {
         captureScope: () => captureProviderManagementScope(),
         deviceId: () => getDeviceId(),
-        models: (...args) => manageAppModels(...args),
+        usage: (...args) => readSubscriptionUsage(...args),
         shares: (...args) => executeProviderShareManagementCommand(...args),
         group: command => executeProviderGroupCommand(createProviderGroupCommandDeps(), command),
         remote: (device, request, guard) => invokeProviderManagement(

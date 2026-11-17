@@ -26,7 +26,7 @@ export interface SchedulerScriptRuntime {
   settings?: {
     captureScope(): () => void;
     deviceId(): string;
-    models: typeof import('../app-settings/models.js').manageAppModels;
+    usage: typeof import('../subscription-accounts/runtime.js').readSubscriptionUsage;
     shares: ProviderSharingPorts['command'];
     group(command: ProviderGroupLocalCommand): Promise<unknown>;
     remote: ProviderReadPorts['remote'];
@@ -218,10 +218,9 @@ const SCRIPT_METHOD_CATALOG: ReadonlyArray<{
   { method: 'host.capabilities', capability: null, params: '{}', description: '自省:返回协议版本、本任务已授予的能力、可用方法目录' },
   { method: 'settings.list_provider_share_members', capability: 'settings.read', params: '{providerId?,device?}', description: '读取自己分享的成员；沿原无用量名单入口，不激活页面轮询' },
   { method: 'settings.get_provider_share_model_access', capability: 'settings.read', params: '{providerId,memberId,device?}', description: '读取分享成员的模型范围' },
-  { method: 'settings.get_provider_usage_history', capability: 'settings.read', params: '{providerId,device?}', description: '返回原 usage-history 与 coverageStart；缺失不是零，筛选汇总由脚本完成' },
-  { method: 'settings.get_provider_group', capability: 'settings.read', params: '{providerId,device?}', description: '返回原供应商组状态和已知额度；缺少额度表示未知' },
-  { method: 'settings.list_model_providers', capability: 'settings.read', params: '{providerId?}', description: '读取执行电脑的原供应商目录安全投影' },
-  { method: 'settings.configure_model_provider', capability: 'settings.read', params: '{change:{action:"subscriptionAccounts",providerId,command:{action:"read"}}}', description: '只允许原订阅账号 read；含非凭证身份与目录，不含密钥，不允许相邻写动作' },
+  { method: 'usage.get_subscription_usage', capability: 'usage.read', params: '{providerId?}', description: '只读执行电脑的订阅额度白名单投影；含套餐和额度窗口，不含登录邮箱、目录、账号指纹或凭证' },
+  { method: 'usage.get_provider_usage_history', capability: 'usage.read', params: '{providerId,device?}', description: '读取本机或同账号已授权电脑的原 usage-history 与 coverageStart；缺失不是零，筛选汇总由脚本完成' },
+  { method: 'usage.get_provider_group', capability: 'usage.read', params: '{providerId,device?}', description: '读取本机或同账号已授权电脑的原组状态和已知额度；自动名称沿原投影去订阅身份，缺少额度表示未知' },
   { method: 'jira.get', capability: 'jira.read', params: '{issue_key, fields?, out_file?}', description: '按 key 读单条 Jira issue(out_file = 结果落盘到工作目录的相对路径)' },
   { method: 'jira.search_jql', capability: 'jira.read', params: '{jql, fields?, max_results?≤100, next_page_token?, out_file?}', description: 'JQL 搜索(大结果集用 next_page_token 分页,或 out_file 落盘后自行读回)' },
   { method: 'jira.add_comment', capability: 'jira.comment', params: '{issue_key, body_text | body_adf}', description: '向 Jira issue 添加评论;body_text 纯文本与 body_adf(ADF 文档对象,支持 @mention)恰好二选一' },
@@ -304,36 +303,24 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           methods: SCRIPT_METHOD_CATALOG.map((entry) => ({
             ...entry,
             available: entry.capability === null || (granted.has(entry.capability)
-              && (entry.capability !== 'settings.read' || !!this.runtime.settings)),
+              && ((entry.capability !== 'settings.read' && entry.capability !== 'usage.read') || !!this.runtime.settings)),
           })),
         };
       case 'settings.list_provider_share_members':
       case 'settings.get_provider_share_model_access':
-      case 'settings.get_provider_usage_history':
-      case 'settings.get_provider_group':
-      case 'settings.list_model_providers':
-      case 'settings.configure_model_provider': {
-        requireCapability(granted, 'settings.read');
+      case 'usage.get_subscription_usage':
+      case 'usage.get_provider_usage_history':
+      case 'usage.get_provider_group': {
+        requireCapability(granted, request.method.startsWith('usage.') ? 'usage.read' : 'settings.read');
         rejectHostOwnedParams(params, ['callerSessionId', 'hostCaller', 'owner', 'operation']);
         const settings = this.runtime.settings;
-        if (!settings) fail('UNSUPPORTED_CAPABILITY', 'Settings reads are unavailable on this host');
+        if (!settings) fail('UNSUPPORTED_CAPABILITY', 'Host reads are unavailable on this host');
         const assertCurrent = settings.captureScope();
         const device = params.device === undefined ? 'local' : requireString(params, 'device');
         const target = device === settings.deviceId() ? 'local' : device;
-        if (request.method === 'settings.list_model_providers' || request.method === 'settings.configure_model_provider') {
-          if (target !== 'local') fail('INVALID_ARGS', 'Subscription accounts are read on the execution computer');
-          let result: unknown;
-          if (request.method === 'settings.list_model_providers') {
-            result = await settings.models({ operation: 'list',
-              ...(params.providerId === undefined ? {} : { providerId: requireString(params, 'providerId') }) }, async () => assertCurrent());
-          } else {
-            const change = params.change as Record<string, unknown> | undefined;
-            const command = change?.command as Record<string, unknown> | undefined;
-            if (change?.action !== 'subscriptionAccounts' || command?.action !== 'read')
-              fail('CAPABILITY_DENIED', 'Only subscriptionAccounts/read is allowed');
-            result = await settings.models({ operation: 'provider', change: { action: 'subscriptionAccounts',
-              providerId: requireString(change, 'providerId'), command: { action: 'read' } } }, async () => assertCurrent());
-          }
+        if (request.method === 'usage.get_subscription_usage') {
+          if (target !== 'local') fail('INVALID_ARGS', 'Subscription usage is read on the execution computer');
+          const result = await settings.usage(params.providerId === undefined ? undefined : requireString(params, 'providerId'));
           assertCurrent();
           return result;
         }
@@ -345,14 +332,14 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
             remote: (deviceId, command, guard) => settings.remote(deviceId, { action: 'manage-share', command }, guard),
           }, assertCurrent);
         }
-        return runProviderReadRequest({ action: request.method === 'settings.get_provider_group' ? 'group' : 'usage-history',
+        return runProviderReadRequest({ action: request.method === 'usage.get_provider_group' ? 'group' : 'usage-history',
           providerId: requireString(params, 'providerId'), device: target }, {
           local: (input, guard) => {
             guard();
             return input.action === 'manage-share' ? settings.shares(input.command, guard) : settings.group(input.command);
           },
           remote: settings.remote,
-        }, assertCurrent);
+        }, assertCurrent, true);
       }
       case 'github.get_pr_status':
       case 'github.get_pr_changes':

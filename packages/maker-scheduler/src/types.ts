@@ -5,7 +5,7 @@ export type AgentKind = 'claude-code' | 'codex' | 'pi';
 export type ScheduleStatus = 'active' | 'paused' | 'expired';
 export type ScheduleWorkspaceKind = 'project' | 'dialogue';
 export type ScheduleExecutionMode = 'agent' | 'script';
-export type ScriptCapability = 'github.read' | 'jira.read' | 'jira.comment' | 'sessions.dispatch' | 'feishu.read' | 'settings.read';
+export type ScriptCapability = 'github.read' | 'jira.read' | 'jira.comment' | 'sessions.dispatch' | 'feishu.read' | 'settings.read' | 'usage.read';
 
 /**
  * Host-owned session context key for the scheduler run currently dispatched
@@ -109,6 +109,7 @@ export const SCRIPT_CAPABILITIES: readonly ScriptCapability[] = [
   'sessions.dispatch',
   'feishu.read',
   'settings.read',
+  'usage.read',
 ];
 
 /**
