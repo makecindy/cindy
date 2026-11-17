@@ -254,6 +254,7 @@ export async function resolveAutomaticProjectIcon(input: unknown): Promise<Autom
       let result: Awaited<ReturnType<typeof discoverProjectIcon>> = null;
       try {
         result = await discoverProjectIcon({
+          directoryName: path.posix.basename(directory),
           read,
           fetch,
           ...(!host
