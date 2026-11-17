@@ -9583,6 +9583,9 @@ export function ChatInput({
           )}
         </div>
       )}
+      {pluginUiCandidates.header && !remoteHostId && !deviceLinkDeviceId && (
+        <PluginUiSlot position="composer.header" sessionId={sessionId} />
+      )}
       {/* When the pending-queue panel is visible, the wrapper div owns the
           border + corner radius + focus-within highlight. Both inner halves
           (panel + input card) become borderless sections, so a focus on the
@@ -9598,11 +9601,6 @@ export function ChatInput({
           Hence this extra `relative` layer around the wrapper. It also serves
           as the outside-click boundary for collapsing the expanded queue tail
           (see paletteAnchorRef) — palette clicks are "inside". */}
-      {pluginUiCandidates.header && !remoteHostId && !deviceLinkDeviceId && (
-        <div className="-mb-2 w-full" data-plugin-composer-header>
-          <PluginUiSlot position="composer.header" sessionId={sessionId} />
-        </div>
-      )}
       <div ref={paletteAnchorRef} className="relative w-full">
         <ComposerCard
           ref={mergedCardRef}
