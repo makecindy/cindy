@@ -72,7 +72,8 @@ export function createBridgeTokenReader(options: {
     if (nativeLogin && !held) await options.systemLogin.reconcile();
     options.check();
     const token = await options.readAccessToken(providerId);
-    if (held && nativeLogin && token) options.refusals?.assertUsable('openai', token);
+    // Released, this read forgets what was remembered while held.
+    if (nativeLogin && token) options.refusals?.assertUsable('openai', token);
     // The bridge renews a token that expires within its margin and writes the result back to
     // auth.json (anthropicResponsesBridgeHostCore.ts refreshIfNeeded). Two processes renewing one
     // login rotate each other's refresh token out, so while held the request fails instead, saying why.
@@ -109,6 +110,8 @@ export function createHeldLoginRefusals(isProfileHeld: () => boolean) {
     note(providerId: string, token: string | null, reason: string): void {
       if (token) rejected.set(providerId, { token, reason });
     },
+    /** The first read after the profile is released forgets every remembered rejection. */
+    forgetIfReleased(): void { if (!isProfileHeld()) rejected.clear(); },
     /** Throws the remembered refusal for this token while held; forgets a replaced login. */
     assertUsable(providerId: string, token: string): void {
       if (!isProfileHeld()) { rejected.clear(); return; }
@@ -159,6 +162,7 @@ export function createHostBridgeLoginPorts(options: {
     },
     codexAccountHome: (providerId: string) => {
       const home = options.accounts.codexAccountHome(providerId);
+      refusals.forgetIfReleased();
       if (held()) {
         const token = accountToken(home);
         if (token) {

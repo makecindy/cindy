@@ -319,6 +319,10 @@ for (const [label, providerId, home] of [['the ChatGPT login', 'openai', 'codexH
     f.setHeld(false);
     assert.equal((await f.bridge.getChatgptBridgeAuth(providerId)).accessToken, token);
     assert.equal(f.counts.reconcile > 0, providerId === 'openai');
+    // That read forgot the rejection: a later hold does not refuse the same login for it.
+    f.setHeld(true);
+    assert.equal((await f.bridge.getChatgptBridgeAuth(providerId)).accessToken, token);
+    f.setHeld(false);
     await f.reject(providerId, token);
     if (providerId === 'openai') assert.deepEqual(f.counts.invalidateNative, ['token_revoked']);
     else assert.deepEqual(f.counts.invalidateAccount, [['acct', 'token_revoked', token]]);
