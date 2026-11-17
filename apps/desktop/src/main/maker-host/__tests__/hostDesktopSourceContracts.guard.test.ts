@@ -514,6 +514,17 @@ describe('Host copies of desktop expressions', () => {
     assert.ok(host, 'BRIDGE_REFRESH_MARGIN_SEC is declared in apps/host/src/agent/codex-runtime.ts');
     assert.equal(host, bridge, `桥的续期提前量是 ${bridge} 秒，Host 的 BRIDGE_REFRESH_MARGIN_SEC 是 ${host} 秒：两边要一起改`);
   });
+
+  // 规则：并存方案 A（审核方 2026-11-17）。闸门关着时，Host 的 xAI 登录包装拒绝 Grok 服务会提前续期的令牌
+  // （apps/host/src/agent/xai-held-login.ts 的 GROK_REFRESH_MARGIN_SEC），这个秒数照抄 grok-oauth-login.ts 的 REFRESH_MARGIN_SEC。
+  // 失效后果：服务的提前量改大而 Host 没跟上时，闸门关着时 Host 会放行一个服务随后就续期的令牌，续期结果写回桌面也在用的 safe-storage。
+  it('refuses the xAI tokens the Grok service would renew, with the service\'s own margin', () => {
+    const service = /^const REFRESH_MARGIN_SEC = (\d+);$/m.exec(read(path.join(desktopMain, 'maker-host/grok-oauth-login.ts')))?.[1];
+    const host = /^export const GROK_REFRESH_MARGIN_SEC = (\d+);$/m.exec(read(path.join(hostAgent, 'xai-held-login.ts')))?.[1];
+    assert.ok(service, 'REFRESH_MARGIN_SEC is declared in grok-oauth-login.ts');
+    assert.ok(host, 'GROK_REFRESH_MARGIN_SEC is declared in apps/host/src/agent/xai-held-login.ts');
+    assert.equal(host, service, `Grok 服务的续期提前量是 ${service} 秒，Host 的 GROK_REFRESH_MARGIN_SEC 是 ${host} 秒：两边要一起改`);
+  });
 });
 
 // 以下断言原在桌面普通单测里读 register.ts；第一批桌面准备把被守护的代码原样搬进共用文件
