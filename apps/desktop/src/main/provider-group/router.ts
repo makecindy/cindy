@@ -320,7 +320,12 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       const usable = (r: ResolvedProviderGroupMember) => offers(r)
         && (!input.quotaRebalance || !r.providerContinuity?.stale);
       const paused = pausedFor(input);
-      const resolved = await deps.directory.resolveMembers(input.providerId, config, {
+      // Failed remote members must not start another catalog/usage read during
+      // selection. Keep local metadata for activity labels, and the quota origin
+      // for rebalance comparison; neither becomes eligible through this read.
+      const selectionConfig = input.exclude?.size ? { ...config, members: config.members.filter((member) =>
+        member.kind === 'local' || !input.exclude!.has(member.key) || member.key === input.quotaRebalance) } : config;
+      const resolved = await deps.directory.resolveMembers(input.providerId, selectionConfig, {
         quickMs: PROVIDER_GROUP_PICK_QUICK_MS,
         // 已经有一台能用、未满载、可以分的电脑：不再等慢的那几台。
         enough: (r) => usable(r)

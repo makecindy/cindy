@@ -460,6 +460,18 @@ describe('provider group quick picks with busy usable computers', () => {
     return { router, config, localRunning, readDeviceProviders };
   }
 
+  // #11114 review, unit: pick must not refresh a failed/excluded executor.
+  // Earlier quick-pick cases had no exclusions and allowed slow reads to start.
+  // One excluded stalled remote plus a ready backup must settle without the quick timer.
+  it('selects a ready backup without reading excluded remote members again', async () => {
+    const { router, localRunning, readDeviceProviders } = quickRouter(0, 0);
+    const pick = await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL,
+      localTask: true, fresh: true, exclude: new Set([LOCAL.key, SLOW.key]) });
+    expect(pick).toMatchObject({ kind: 'member', member: { key: FAST.key } });
+    expect(readDeviceProviders).toHaveBeenCalledExactlyOnceWith('fast', undefined);
+    expect(localRunning).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { fastLoad: null, expected: LOCAL.key },
     { fastLoad: 1, expected: FAST.key },
