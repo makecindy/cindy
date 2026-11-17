@@ -13837,12 +13837,6 @@
         "ASSESSMENT_FAILED": "No se pudo actualizar el estado de configuración. Vuelve a intentarlo.",
         "TIMEOUT": "Se agotó el tiempo de configuración. Vuelve a intentarlo."
       },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "Servicio de modelos de IA",
-          "description": "Conecta un servicio de modelos disponible antes de usar las capacidades de imagen o video declaradas por este complemento."
-        }
-      },
       "form": {
         "placeholder": "Ingresa {{label}}",
         "required": "Ingresa {{label}}",
