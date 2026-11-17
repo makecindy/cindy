@@ -68,6 +68,7 @@ import { codexAccountDisplayKey } from './codex-auth-identity.js';
 import { readNativeCodexTokens } from '../subscription-accounts/nativeCli.js';
 import { getCodexHome } from './codex-home-path.js';
 import { projectSubscriptionPoolCatalog as projectSubscriptionPoolCatalogWith, publishSubscriptionPoolProviders as publishSubscriptionPoolProvidersWith } from './subscriptionPoolCatalog.js';
+import { setGuestProviderModelCatalogReader } from './guest-provider-route-store.js';
 import { listReadyProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
 import { speechModels } from '../voice-conversation/models.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
@@ -916,8 +917,13 @@ function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false
     readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog);
 }
 
+function getDesktopProviderModelAccessCatalog(): Catalog {
+  return projectSubscriptionPoolCatalog(getActiveCatalog(), true);
+}
+
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
 export function getDesktopProviderService(options: { allowSideEffects?: boolean } = {}): ProviderService {
+  setGuestProviderModelCatalogReader(getDesktopProviderModelAccessCatalog);
   const authState = getAuthState();
   const ownerId = getActiveAppSession().dataOwnerId;
   if (

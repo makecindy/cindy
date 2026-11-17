@@ -165,7 +165,8 @@ export function usePluginUiWindowCandidates() {
 }
 export function usePluginUiComposerCandidates() {
   const directory = useContext(DirectoryContext);
-  return { toolbar: !!directory.get('composer.toolbar')?.length, completion: directory.get('composer.completion') ?? NO_ENTRIES };
+  return { header: !!directory.get('composer.header')?.length,
+    toolbar: !!directory.get('composer.toolbar')?.length, completion: directory.get('composer.completion') ?? NO_ENTRIES };
 }
 
 /** One window subscription, compiled only when the original installed projection changes. */
@@ -251,7 +252,7 @@ export function PluginUiSessionMenuItems({ sessionId, disabled, className }: { s
       .catch(() => toast.error(t('pluginUi.actionFailed')))} />)}</>;
 }
 
-function EntryControl({ entry, sessionId, clientId, active, appearance }: { entry: PluginUiEntry; sessionId: string | null; clientId?: string; active: boolean; appearance?: 'navigation' | 'rail' | 'titlebar' }) {
+function EntryControl({ entry, sessionId, clientId, active, appearance }: { entry: PluginUiEntry; sessionId: string | null; clientId?: string; active: boolean; appearance?: 'navigation' | 'rail' | 'titlebar' | 'composer-header' }) {
   const { t } = useTranslation();
   const [pending, setPending] = useState(false);
   const [value, setValue] = useState('');
@@ -270,6 +271,10 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
   };
   if (state?.visible === false) return null;
   const title = state?.title ?? action.title;
+  const header = appearance === 'composer-header';
+  const sourceTitle = pluginSourceTooltip(entry.ghost.manifest.name, entry.ghost.installationSource, t);
+  const controlTitle = header ? `${title} · ${sourceTitle}` : sourceTitle;
+  const label = header ? <span className="min-w-0 truncate">{title}</span> : title;
   const Icon = MAIN_VIEW_ICONS[action.icon as keyof typeof MAIN_VIEW_ICONS] ?? Puzzle;
   if (appearance === 'titlebar') {
     const view = action.view && getApprovedGhostHostUi(entry.ghost)?.views?.find(view => view.id === action.view);
@@ -282,35 +287,36 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
   if (appearance === 'rail') return <SidebarIconButton icon={Icon} label={`${title} · ${entry.ghost.manifest.name}`}
     disabled={pending || state?.disabled} onClick={() => void run()} />;
   if (appearance === 'navigation') return <button type="button" disabled={pending || state?.disabled} onClick={() => void run()}
-    aria-label={`${title} · ${entry.ghost.manifest.name}`} title={pluginSourceTooltip(entry.ghost.manifest.name, entry.ghost.installationSource, t)}
+    aria-label={`${title} · ${entry.ghost.manifest.name}`} title={sourceTitle}
     className="flex h-8 w-full items-center gap-2.5 rounded-full px-3 text-sm font-normal text-[var(--sidebar-nav-text)] transition-colors hover:bg-sidebar-item-hover disabled:opacity-40">
     <Icon size={15} strokeWidth={1.8} className="shrink-0" /><span className="truncate">{title}</span>
   </button>;
-  if (action.kind === 'status') return <span className="text-12 text-[var(--text-secondary)]" title={pluginSourceTooltip(entry.ghost.manifest.name, entry.ghost.installationSource, t)}>{title}</span>;
+  if (action.kind === 'status') return <span className={header ? 'max-w-48 shrink-0 truncate text-12 text-[var(--text-secondary)]' : 'text-12 text-[var(--text-secondary)]'} title={controlTitle}>{title}</span>;
   if (action.kind === 'select') return <Select label={title} value={state?.value ?? value} options={action.options ?? []}
     disabled={pending || state?.disabled} onValueChange={next => void run(next)} className="h-7 max-w-48 text-12" />;
   if (action.presentation === 'popover' && action.view) return <Popover open={open && active} onOpenChange={setOpen}>
     <PopoverTrigger asChild><Button variant="secondary" tone="quiet" size="sm" disabled={state?.disabled}
-      title={pluginSourceTooltip(entry.ghost.manifest.name, entry.ghost.installationSource, t)}>{title}</Button></PopoverTrigger>
-    <PopoverContent align="start" side={action.position === 'composer.toolbar' || action.position === 'statusbar' ? 'top' : 'bottom'}
+      className={header ? 'max-w-48' : undefined} title={controlTitle}>{label}</Button></PopoverTrigger>
+    <PopoverContent align="start" side={action.position === 'composer.header' || action.position === 'composer.toolbar' || action.position === 'statusbar' ? 'top' : 'bottom'}
       aria-label={title} className="w-[min(26rem,calc(100vw-2rem))] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-2">
       {open && active && <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" ghost={entry.ghost} viewId={action.view}
         sessionId={sessionId} input={action.arguments} onUnavailable={() => setOpen(false)} /></Suspense>}
     </PopoverContent>
   </Popover>;
-  return <Button variant="secondary" tone="quiet" size="sm" disabled={pending || state?.disabled} title={pluginSourceTooltip(entry.ghost.manifest.name, entry.ghost.installationSource, t)}
-    onClick={() => void run()}>{title}</Button>;
+  return <Button variant="secondary" tone="quiet" size="sm" disabled={pending || state?.disabled} title={controlTitle}
+    className={header ? 'max-w-48' : undefined} onClick={() => void run()}>{label}</Button>;
 }
 
 /** No candidate means no View, effect, IPC, SQL or plugin callback. */
 export function PluginUiSlot({ position, ...target }: Target & { position: GhostHostUiPosition }) {
   const entries = useEntries(position, target);
   if (!entries.length) return null;
-  return <PluginUiSlotControls entries={entries} sessionId={target.sessionId ?? null} clientId={target.clientId} />;
+  return <PluginUiSlotControls entries={entries} sessionId={target.sessionId ?? null} clientId={target.clientId}
+    appearance={position === 'composer.header' ? 'composer-header' : undefined} />;
 }
 
 export function PluginUiSlotControls({ entries, sessionId = null, clientId, appearance }: {
-  entries: readonly PluginUiEntry[]; sessionId?: string | null; clientId?: string; appearance?: 'navigation' | 'rail' | 'titlebar';
+  entries: readonly PluginUiEntry[]; sessionId?: string | null; clientId?: string; appearance?: 'navigation' | 'rail' | 'titlebar' | 'composer-header';
 }) {
   const root = useRef<HTMLSpanElement>(null);
   const [active, setActive] = useState(false);
@@ -319,8 +325,9 @@ export function PluginUiSlotControls({ entries, sessionId = null, clientId, appe
     // Observe the original message row, whose size is independent of a plugin hiding its control.
     if (element) return observeSlotVisibility(element.closest('[data-message-client-id]') ?? element.parentElement ?? element, setActive);
   }, []);
-  return <span ref={root} className={appearance === 'navigation'
+  return <span ref={root} data-plugin-composer-header={appearance === 'composer-header' ? '' : undefined} className={appearance === 'navigation'
     ? 'flex min-w-0 flex-col gap-0.5 [-webkit-app-region:no-drag]'
+    : appearance === 'composer-header' ? '-mb-2 flex h-8 w-full min-w-0 flex-nowrap items-center gap-1 overflow-x-auto [scrollbar-width:none] [-webkit-app-region:no-drag] [&:empty]:hidden'
     : appearance === 'titlebar' ? 'inline-flex min-w-0 max-w-[min(16rem,30vw)] flex-nowrap items-center gap-1 overflow-x-auto [-webkit-app-region:no-drag]'
       : 'inline-flex min-w-0 flex-wrap items-center gap-1 [-webkit-app-region:no-drag]'}>
     {entries.map(entry => <EntryControl key={`${entry.instanceId}:${entry.contribution.id}`} entry={entry}

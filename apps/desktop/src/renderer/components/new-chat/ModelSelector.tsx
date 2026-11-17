@@ -1795,7 +1795,8 @@ function ModelSelectorContentView({
     stayInGroup && boundEntry !== null && (remoteBrowse?.deviceId ?? null) === boundEntry.deviceId;
   /**
    * 同账号借用(供应商「运行于」)：同一个供应商在本机和自己的其他电脑上都能用时只列一处——本机能用且没改选
-   * 就是本机那一项，否则是「运行于」那台电脑那一项。只管本机任务、同账号电脑、不在供应商组里的供应商；
+   * 就是本机那一项，否则是「运行于」那台电脑那一项。以任务所在电脑为准（本机任务是本机，被控电脑上的任务是那台），
+   * 只管同账号电脑、不在供应商组里的供应商；
    * 当前任务此刻正在用的那一项始终保留，免得选中项消失。
    */
   const runLocationFold = useMemo(() => {
@@ -1817,7 +1818,7 @@ function ModelSelectorContentView({
     for (const [id] of duplicateSubscriptionProviders(ungroupedTaskProviders, taskVisible)) {
       if (remoteAgentDeviceId || currentProviderId !== id) hiddenLocal.add(id);
     }
-    if (!remoteAgentDevices || homeDeviceId) return { hiddenRemote, hiddenLocal };
+    if (!remoteAgentDevices) return { hiddenRemote, hiddenLocal };
     for (const device of remoteAgentDevices) {
       if (isProviderShareAgentDeviceId(device.deviceId)) continue;
       for (const provider of remoteDeviceCatalogs.get(device.deviceId)?.providers ?? []) {
@@ -1826,10 +1827,19 @@ function ModelSelectorContentView({
           hiddenRemote.add(remoteProviderEntryKey(device.deviceId, provider.id));
       }
     }
-    for (const provider of localProviders.providers) {
-      if (localProviderGroups[provider.id] || provider.suspended || hiddenLocal.has(provider.id)) continue;
+    // The task computer's own list is the base, whether it is this computer or a controlled one:
+    // another computer's equal source must not appear beside it a second time.
+    const foldBaseProviders = homeDeviceId ? homeDeviceProviders.providers : localProviders.providers;
+    const homeGrouped = (providerId: string) => homeDeviceId
+      ? remoteProviderGroups.groups.has(remoteProviderEntryKey(homeDeviceId, providerId))
+      : !!localProviderGroups[providerId];
+    const homeVisible = (providerId: string, model: { id: string; defaultEnabled?: boolean }, agent: AgentKind) => homeDeviceId
+      ? isDeviceModelVisible(homeDeviceProviders.modelVisibilityOverrides, agent, providerId, model)
+      : isModelEnabled(agent, providerId, model);
+    for (const provider of foldBaseProviders) {
+      if (homeGrouped(provider.id) || provider.suspended || hiddenLocal.has(provider.id)) continue;
       const candidates = remoteAgentDevices.flatMap((device) => {
-        if (isProviderShareAgentDeviceId(device.deviceId)) return [];
+        if (isProviderShareAgentDeviceId(device.deviceId) || device.deviceId === homeDeviceId) return [];
         return (remoteDeviceCatalogs.get(device.deviceId)?.providers ?? []).filter(entry => entry.connected && !entry.suspended
           && entry.remoteInvocationEnabled === true && !(entry as { group?: unknown }).group
           && !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, entry.id))
@@ -1842,7 +1852,7 @@ function ModelSelectorContentView({
       const representative = preferred?.provider ?? provider;
       const visibleAt = (deviceId?: string) => (providerId: string, model: { id: string; defaultEnabled?: boolean }, agent: AgentKind) => deviceId
         ? isDeviceModelVisible(remoteDeviceCatalogs.get(deviceId)?.modelVisibilityOverrides, agent, providerId, model)
-        : isModelEnabled(agent, providerId, model);
+        : homeVisible(providerId, model, agent);
       for (const candidate of candidates) {
         const inUse = candidate.deviceId === remoteAgentDeviceId && candidate.providerId === currentProviderId;
         if (candidate !== preferred && !inUse && subscriptionModelsCoveredBy(candidate.provider, representative, visibleAt(candidate.deviceId), visibleAt(preferred?.deviceId))) hiddenRemote.add(remoteProviderEntryKey(candidate.deviceId, candidate.providerId));
