@@ -16814,6 +16814,7 @@
         "openInFileBrowser": "Open in file browser",
         "showInFolder": "Show In Folder",
         "copyFilePath": "Copy File Path",
+        "copyFolderPath": "Copy Folder Path",
         "deleteFile": "Delete File"
       },
       "searchPanel": {

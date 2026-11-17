@@ -16740,6 +16740,7 @@
         "openInFileBrowser": "ファイルブラウザで開く",
         "showInFolder": "フォルダーで表示",
         "copyFilePath": "ファイルパスをコピー",
+        "copyFolderPath": "フォルダーのパスをコピー",
         "deleteFile": "ファイルを削除"
       },
       "searchPanel": {

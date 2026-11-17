@@ -16740,6 +16740,7 @@
         "openInFileBrowser": "於卷瀏覽器覽之",
         "showInFolder": "於卷匣中示之",
         "copyFilePath": "錄卷路徑",
+        "copyFolderPath": "錄卷匣路徑",
         "deleteFile": "刪卷"
       },
       "searchPanel": {

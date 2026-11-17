@@ -16740,6 +16740,7 @@
         "openInFileBrowser": "파일 브라우저에서 열기",
         "showInFolder": "폴더에서 보기",
         "copyFilePath": "파일 경로 복사",
+        "copyFolderPath": "폴더 경로 복사",
         "deleteFile": "파일 삭제"
       },
       "searchPanel": {

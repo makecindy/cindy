@@ -16814,6 +16814,7 @@
         "openInFileBrowser": "Im Dateimanager öffnen",
         "showInFolder": "Im Ordner anzeigen",
         "copyFilePath": "Dateipfad kopieren",
+        "copyFolderPath": "Ordnerpfad kopieren",
         "deleteFile": "Datei löschen"
       },
       "searchPanel": {

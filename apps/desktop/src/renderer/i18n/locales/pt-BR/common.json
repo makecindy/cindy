@@ -16976,6 +16976,7 @@
         "openInFileBrowser": "Abrir no gerenciador de arquivos",
         "showInFolder": "Mostrar na pasta",
         "copyFilePath": "Copiar caminho do arquivo",
+        "copyFolderPath": "Copiar caminho da pasta",
         "deleteFile": "Excluir arquivo"
       },
       "searchPanel": {
