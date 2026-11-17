@@ -4134,27 +4134,34 @@ function _trimSessionMessages(sessionId: string): void {
   // 正在被看：读者视口必须在窗口尾部（贴底）。但渲染窗口会折叠工具过程、隐藏子代理
   // 内部行 —— 贴底不代表原始前缀已离屏（一轮提问+300 条折叠工具行+回答可以同屏），
   // 所以还必须按「渲染窗口覆盖地板」裁：窗口外的原始行没有 DOM，裁掉才可证不可见；
-  // 上翻阅读中不裁；快照缺 windowFloorClientId（旧快照/窗口未建立）时无法证明前缀
-  // 不可见，同样不裁。
+  // 上翻阅读中不裁；快照缺地板（旧快照/窗口未建立）时无法证明前缀不可见，同样不裁。
   if (_activeViewSessions.has(sessionId)) {
     const scroll = readSessionScroll(sessionId);
-    const floorIdx = scroll?.windowFloorClientId
-      ? messageIndexByClientId(state.messages, scroll.windowFloorClientId)
-      : -1;
-    // 快照缺 windowFloorClientId（旧快照/窗口未建立）时无法证明前缀不可见，不裁。
-    if (floorIdx < 0) return;
+    // 聚合所有挂载视图的地板：同会话双面板（如 Orca worker 面板 + 侧栏）各自记录，
+    // 旧快照/未带 viewId 的写入回退到单槽 windowFloorClientId。
+    const floorIds = scroll?.renderFloorsByView
+      ? Object.values(scroll.renderFloorsByView)
+      : scroll?.windowFloorClientId
+        ? [scroll.windowFloorClientId]
+        : [];
+    const floorIdxs = floorIds
+      .map((id) => messageIndexByClientId(state.messages, id))
+      .filter((idx) => idx >= 0);
+    // 没有任何可解析地板（旧快照/窗口未建立）时无法证明前缀不可见，不裁。
+    if (floorIdxs.length === 0) return;
+    const deepestFloorIdx = Math.min(...floorIdxs);
     // isNearBottom 只在手动滚动时刷新：程序化钉底与窗口推进地板同步都不改它。
     // 读过历史的挂载面板会留下残留 false，再叠加窗口推进同步进来的尾部地板，
     // 豁免就变成永久 —— live push 无界堆积成刻度墙。豁免只保护「真的在看历史」：
-    // 渲染窗口地板距尾超过暖读上限才算深读；地板仍在尾部附近时读者窗口就是
-    // 地板到结尾，裁掉地板之前的行不动它。
+    // 任一视图的渲染窗口地板距尾超过暖读上限才算深读；所有地板都在尾部附近时，
+    // 各视图的读者窗口就是各自地板到结尾，裁掉更老的前缀不动任何视图。
     if (
       scroll?.isNearBottom === false &&
-      state.messages.length - floorIdx > WARM_READING_MAX_MESSAGES
+      state.messages.length - deepestFloorIdx > WARM_READING_MAX_MESSAGES
     ) {
       return;
     }
-    floors.push(floorIdx);
+    floors.push(...floorIdxs);
   }
   // 正在忙：不再整窗豁免，改为以「在途轮起始行」为地板 —— 完成轮照裁，运行轮整体
   // 保留（pending 交互、running 快照、远端乐观气泡都住在当前轮里）。轮起点是最后

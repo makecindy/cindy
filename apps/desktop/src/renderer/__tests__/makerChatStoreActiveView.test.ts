@@ -333,6 +333,34 @@ describe('makerChatStore active view tracking', () => {
     view.leave();
   });
 
+  // 双面板同挂一个会话（如 Orca worker 面板 + 侧栏）：各视图的渲染窗口地板按
+  // viewId 各自记录。读历史的深读视图还在时，即使另一视图已自动跟随回尾部，
+  // 也不能按尾部地板裁掉深读窗口（Codex P2：单槽地板被跟随面覆盖后误裁）。
+  it('keeps a dual-mounted session exempt while one view still reads deep history', async () => {
+    const view = await readingWindow('dual-reading', 1500);
+    saveSessionScroll(view.id, { windowAnchorKey: null, viewportTopKey: 'msg-client-10',
+      messageClientId: 'client-10', offset: 0, isNearBottom: false });
+    // 视图 A（读者）：地板在 client-10，距尾 1490 > 暖读上限；视图 B（跟随）：尾部。
+    updateRenderWindowFloor(view.id, 'client-10', 'view-reader');
+    updateRenderWindowFloor(view.id, 'client-1400', 'view-follower');
+    vi.advanceTimersByTime(31_000);
+    expect(makerChatStore.getSnapshot(view.id).messages).toHaveLength(1500);
+    view.leave();
+  });
+
+  it('trims a dual-mounted session to the oldest of the tail-side view floors', async () => {
+    const view = await readingWindow('dual-tail');
+    saveSessionScroll(view.id, { windowAnchorKey: null, viewportTopKey: 'msg-client-10',
+      messageClientId: 'client-10', offset: 0, isNearBottom: false });
+    updateRenderWindowFloor(view.id, 'client-149', 'view-a');
+    updateRenderWindowFloor(view.id, 'client-155', 'view-b');
+    vi.advanceTimersByTime(31_000);
+    const messages = makerChatStore.getSnapshot(view.id).messages;
+    expect(messages).toHaveLength(201);
+    expect(messages[0]?.clientId).toBe('client-149');
+    view.leave();
+  });
+
   it('bounds a busy session above its in-flight turn floor on the maintenance tick', async () => {
     // 300 行完成轮 + user 触发行 + 100 行运行轮 + 一条插话行（steer，不打断轮）+
     // 100 行运行轮：502 行窗口在 leaveView / 维护拍上都必须收敛到整段在途轮

@@ -37,6 +37,8 @@ export interface SessionScrollSnapshot {
    *  之下;折叠/隐藏让「贴底」不再等价于「前缀离屏」,必须按窗口覆盖裁。
    *  窗口未建立或旧版快照无此字段时缺省,store 侧保守不裁。 */
   windowFloorClientId?: string;
+  /** 每个挂载视图(MessageStream mount)的渲染窗口地板;同会话多面板各自跟踪。 */
+  renderFloorsByView?: Record<string, string>;
   /**
    * render-window-bidirectional: 锚定窗口的向后 item 上界。
    * 仅在 windowAnchorKey !== null 时写入；null 表示旧版快照（无此字段）或默认窗口。
@@ -73,6 +75,7 @@ export function saveSessionScroll(sessionId: string, snapshot: SessionScrollSnap
 export function updateRenderWindowFloor(
   sessionId: string,
   windowFloorClientId: string,
+  viewId?: string,
 ): void {
   const previous = store.get(sessionId);
   const scroll: SessionScrollSnapshot = previous?.scroll ?? {
@@ -83,7 +86,24 @@ export function updateRenderWindowFloor(
     offset: 0,
     isNearBottom: true,
   };
-  store.set(sessionId, { ...previous, scroll: { ...scroll, windowFloorClientId } });
+  // 带 viewId 的写入按视图记录:同会话双面板(如 Orca worker 面板 + 侧栏)各自维护
+  // 地板,裁剪聚合所有视图;单槽 windowFloorClientId 仅作旧快照回退,仍是最后写入者。
+  const renderFloorsByView = viewId
+    ? { ...scroll.renderFloorsByView, [viewId]: windowFloorClientId }
+    : scroll.renderFloorsByView;
+  store.set(sessionId, { ...previous, scroll: { ...scroll, windowFloorClientId, renderFloorsByView } });
+}
+
+/** 挂载视图卸载时移除自己的地板;视图集合空时不影响单槽回退字段。 */
+export function clearRenderWindowFloor(sessionId: string, viewId: string): void {
+  const previous = store.get(sessionId);
+  const scroll = previous?.scroll;
+  if (!scroll?.renderFloorsByView || !(viewId in scroll.renderFloorsByView)) return;
+  const next = { ...scroll };
+  const { [viewId]: _removed, ...rest } = scroll.renderFloorsByView;
+  if (Object.keys(rest).length > 0) next.renderFloorsByView = rest;
+  else delete next.renderFloorsByView;
+  store.set(sessionId, { ...previous, scroll: next });
 }
 
 export function readSessionScroll(sessionId: string): SessionScrollSnapshot | undefined {
