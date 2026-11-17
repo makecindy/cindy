@@ -1558,6 +1558,19 @@ test('each terminal reaches the coordinator once: a done, a stop that only goes 
 // stale-boundary retry starts; before it, a failed stop left the queue retrying every 250 ms forever.
 // Tier: unit, Host queue with the shared coordinator, mocked clock.
 const settle = async (rounds = 50) => { for (let i = 0; i < rounds; i += 1) await new Promise(resolve => setImmediate(resolve)); };
+/**
+ * settle until check() holds, for tests whose setTimeout is mocked (waitFor polls with it). A fixed number
+ * of event-loop rounds is not enough for work outside the loop: a send's working-directory check stats the
+ * profile through the libuv thread pool (dialogueRecoveryWorkspace.ts), which a loaded machine finishes
+ * after any number of rounds. Returns as soon as check() holds; fails after 10 s of real time.
+ */
+const settleUntil = async (check, what) => {
+  const deadline = performance.now() + 10_000;
+  while (!check()) {
+    if (performance.now() > deadline) throw new Error(`condition not reached: ${what}`);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+};
 
 test('the next input is not dispatched before the reply rows settle, even past the stale-boundary confirmation', async t => {
   let releaseWrite;
@@ -1578,6 +1591,7 @@ test('the next input is not dispatched before the reply rows settle, even past t
   assert.equal(h.maker.sessions.size, 1, 'no other runtime is started');
   releaseWrite();
   for (let i = 0; i < 20 && session.sent.length < 2; i += 1) { await settle(); t.mock.timers.tick(250); }
+  await settleUntil(() => session.sent.length >= 2, 'the next input reached the engine');
   assert.deepEqual(session.sent, ['first', 'second']);
   t.mock.timers.reset();
   await h.queue.dispose();
@@ -4808,10 +4822,15 @@ async function resumeHarness(t, overrides = {}) {
     session.emit({ type: 'error', data: INTERRUPTION, ...stamp });
     await settle();
   };
+  // Until the engine has received `count` messages: a message reaches it only after its send's
+  // working-directory check, which a fixed settle() does not wait for (settleUntil).
+  const dispatched = count => settleUntil(() => session.sent.length >= count, `${count} message(s) sent to the engine`);
+  // The resume's backoff on the mocked clock, then the resume's own send.
   const backoff = async (sent) => {
     for (let i = 0; i < 100 && session.sent.length < sent; i += 1) { t.mock.timers.tick(500); await settle(); }
+    await dispatched(sent);
   };
-  return { h, session, response, streamed, errorRows, interrupt, backoff };
+  return { h, session, response, streamed, errorRows, interrupt, backoff, dispatched };
 }
 
 test('auto-resume exit 1: the resumed turn answers the input and ends its stream, with no error row', async t => {
@@ -4864,7 +4883,7 @@ test('auto-resume budget: a person\'s message after a spent budget is resumed ag
   assert.equal(r.response.writableEnded, true, 'the budget is spent');
   const before = r.session.sent.length;
   await r.h.queue.enqueue('r', { clientId: 'b', text: 'try once more' });
-  await settle();
+  await r.dispatched(before + 1);
   assert.equal(r.session.sent.length, before + 1);
   await r.interrupt();
   await r.backoff(before + 2);
@@ -4937,11 +4956,13 @@ test('an auto-resume whose user row fails leaves the task able to resume again',
   } });
   await r.interrupt();
   for (let i = 0; i < 100 && resumeRowAttempts === 0; i += 1) { t.mock.timers.tick(500); await settle(); }
+  // The resume writes its user row after its send's working-directory check (settleUntil).
+  await settleUntil(() => resumeRowAttempts > 0, 'the resume reached its user row');
   assert.equal(resumeRowAttempts, 1, 'the resume reached its user row');
   assert.equal(r.session.sent.length, 1, 'the resume whose row failed was not sent');
   failResumeRow = false;
   await r.h.queue.enqueue('r', { clientId: 'b', text: 'carry on' });
-  await settle();
+  await r.dispatched(2);
   assert.equal(r.session.sent.length, 2);
   await r.interrupt();
   await r.backoff(3);
@@ -4971,6 +4992,7 @@ test('auto-resume exit 3: a new message during the wait cancels the resume and e
   const r = await resumeHarness(t);
   await r.interrupt();
   await r.h.queue.enqueue('r', { clientId: 'b', text: 'never mind, do this instead' });
+  await r.dispatched(2);
   await settle();
   assert.equal(r.response.writableEnded, true);
   assert.ok(r.streamed().some(e => e.type === 'input_receipt' && e.status === 'interrupted'));
@@ -5044,12 +5066,14 @@ test('auto-resume route switch: the second interruption resumes on another provi
     await settle();
   };
   const resumed = async (before, sent) => {
-    for (let i = 0; i < 200; i += 1) {
+    const ready = () => {
       const now = r.h.maker.sessions.get('fb');
-      if (now && (now !== before ? now.sent.length >= 1 : now.sent.length >= sent)) return now;
-      t.mock.timers.tick(500); await settle();
-    }
-    throw new Error('no resume');
+      return Boolean(now && (now !== before ? now.sent.length >= 1 : now.sent.length >= sent));
+    };
+    for (let i = 0; i < 200 && !ready(); i += 1) { t.mock.timers.tick(500); await settle(); }
+    // The resume's send reaches the engine after its working-directory check (settleUntil).
+    await settleUntil(ready, 'the resume reached the engine');
+    return r.h.maker.sessions.get('fb');
   };
   const first = r.h.maker.sessions.get('fb');
   await interrupt(first);
@@ -5193,27 +5217,45 @@ test('runtime cleanup: a task archived with an unsent recovery note does not car
   t.after(bindHostSessionRuntimeHooks(r.selection));
   await r.createTask('noted');
   // The engine refuses the first send, after the recovery recreated the directory and wrote the note.
+  // The test waits for the matching send itself to reach the engine (on a loaded machine it arrives after
+  // waitFor's 200 polls).
   const refused = [];
+  const waiting = [];
+  const arrival = pattern => new Promise(resolve => { waiting.push({ pattern, resolve }); });
+  const arrived = text => {
+    for (const waiter of waiting.splice(0)) {
+      if (waiter.pattern.test(text)) waiter.resolve(); else waiting.push(waiter);
+    }
+  };
   const create = r.h.maker.createSession;
   r.h.maker.createSession = async opts => {
     const session = await create(opts);
     const send = session.send;
     session.send = async (text, sendOpts = {}) => {
-      if (refused.length > 0) return send(text, sendOpts);
-      refused.push(typeof text === 'string' ? text : text.content);
+      const content = typeof text === 'string' ? text : text.content;
+      if (refused.length > 0) {
+        const result = await send(text, sendOpts);
+        arrived(content);
+        return result;
+      }
+      refused.push(content);
+      arrived(content);
       return { accepted: false };
     };
     return session;
   };
+  const refusedSend = arrival(/first$/);
   await r.h.queue.enqueue('noted', { clientId: 'noted-1', text: 'first' });
-  await waitFor(() => refused.length === 1);
+  await refusedSend;
   assert.match(refused[0], /^\[Working directory recovery\]/, 'the refused send carried the note');
   assert.equal(existsSync(gone), true, 'the directory was recreated');
   const update = taskListUpdate(r);
   await update('noted', { status: 'archived' });
   await update('noted', { status: 'active' });
+  const secondSend = arrival(/second$/);
   await r.h.queue.enqueue('noted', { clientId: 'noted-2', text: 'second' });
-  await waitFor(() => (r.h.maker.sessions.get('noted')?.sent ?? []).some(text => /second$/.test(text)));
+  await secondSend;
+  assert.ok(r.h.maker.sessions.get('noted').sent.some(text => /second$/.test(text)), 'the second message reached the engine');
   const sent = r.h.maker.sessions.get('noted').sent;
   assert.ok(sent.every(text => !text.includes('[Working directory recovery]')), `no send after the restore carries the old note: ${JSON.stringify(sent)}`);
 });
