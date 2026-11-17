@@ -1,3 +1,5 @@
+import { bindHostedAttachmentPreservation } from '../../maker-host/attachmentPreservation.js';
+import { remoteAttachmentPreservation, ATTACHMENT_PRESERVATION_PATH } from '../attachmentPreservation.js';
 import type { GeneratedImageUpstream } from '../../cindy-media/generatedImageJournal';
 import { remoteAgentStartupTiming } from '../startupTiming';
 import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
@@ -467,6 +469,7 @@ interface Run {
   closing: boolean;
   handle?: AgentSessionHandle;
   tunnel?: RunTunnel;
+  releaseAttachmentPreservation?: () => void;
   execStartupBatches?: Map<string, ReturnType<typeof createExecServerStartupBatch>>;
   attachmentsDir: string;
   /** 影子工作区根(按 hostSessionId 复用，任务收尾后清理)。 */
@@ -1635,6 +1638,21 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         return;
       }
       run.tunnel = tunnel;
+      if (payload.acceptsAttachmentPreservation && payload.virtualWorkspace && !payload.options.localApplication?.hostToolsOnly) {
+        const assertCurrent = () => {
+          if (run.closing || !deps.isOwnerCurrent(run.owner) || !deps.isControllerAuthorized(run.controller)
+            || !delegatedRunAllowed(run)) throw new Error('Attachment recovery owner changed');
+        };
+        run.releaseAttachmentPreservation = bindHostedAttachmentPreservation(hostSessionId,
+          remoteAttachmentPreservation(async (request, signal) => {
+            assertCurrent();
+            const response = await reverseHttp(run, { method: 'POST', path: ATTACHMENT_PRESERVATION_PATH,
+              headers: [['content-type', 'application/json']], body: Buffer.from(JSON.stringify(request)) }, signal);
+            assertCurrent();
+            if (response.status !== 200 || !response.body) throw new Error('Attachment preservation unavailable');
+            return JSON.parse(response.body.toString('utf8'));
+          }, assertCurrent));
+      }
       // 必须先发布映射，再启动 Agent。Codex startSession 会在 started 之前读取 exec-server 环境。
       if (payload.virtualWorkspace) append(run, { t: 'state', state: {
         workspaceProjection: { shadowDir, mirrorRoot, extraDirs, writableDirs, virtualWorkspace: true, ...(previousMirrorRoots.length ? { previousMirrorRoots } : {}) },
@@ -1802,6 +1820,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     run.guestRoute = undefined;
     run.ownerRoute?.release();
     run.ownerRoute = undefined;
+    run.releaseAttachmentPreservation?.();
+    run.releaseAttachmentPreservation = undefined;
     await run.tunnel?.close().catch(() => undefined);
     run.execStartupBatches?.clear();
     await imagePreparation.get(run);
@@ -2617,6 +2637,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     run.guestRoute = undefined;
     run.ownerRoute?.release();
     run.ownerRoute = undefined;
+    run.releaseAttachmentPreservation?.();
+    run.releaseAttachmentPreservation = undefined;
     await run.tunnel?.close().catch(() => undefined);
     run.execStartupBatches?.clear();
     // Native image materialization must finish before the log becomes unreadable.

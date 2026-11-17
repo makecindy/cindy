@@ -33,6 +33,7 @@ import { createDeviceAgentStarter, liveDirectGuestSession } from '../controller/
 import { credentialGrantFor, forgetCredentialGrants } from '../executor/credentialGrants';
 import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
+import { hostedAttachmentPreservation } from '../../maker-host/attachmentPreservation';
 import { hostedStartOptions } from '../host/service';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service';
 import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch';
@@ -279,6 +280,50 @@ function createHost(
 }
 
 describe('remote agent round trip', () => {
+  // Hosted 413 integration: production open/host/reverse HTTP/projection must
+  // return an attachment readable by the native executor, not a provider file.
+  // Prior tests exercised tools but never a host-initiated preservation batch.
+  it('preserves hosted attachments on the controller and releases the binding on close', async () => {
+    const storage = path.join(root, 'attachments');
+    fs.mkdirSync(storage);
+    const bytes = Buffer.alloc(600_000, 7); // Cross one transport chunk boundary.
+    const host = createHost();
+    let handle: AgentSessionHandle | undefined;
+    let hostedId = '';
+    try {
+      handle = await startRemoteAgentSession('pi', { sessionId: 'attachment-task', workingDir: project, model: 'm', permissionMode: 'bypassPermissions' }, {
+        ...makeDeps(host),
+        attachmentStorageRoots: () => ({ files: storage }),
+        attachmentPreservation: () => async (signal, operation) => {
+          const staged: Array<{ file: string; bytes: Buffer }> = [];
+          const result = await operation(async (content, _mime, index) => {
+            const file = path.join(storage, `${index}.bin`);
+            staged.push({ file, bytes: content });
+            return file;
+          });
+          signal.throwIfAborted();
+          if (result !== null) for (const item of staged) fs.writeFileSync(item.file, item.bytes);
+          return result;
+        },
+      });
+      const input = hostInputs[0];
+      hostedId = input.hostSessionId;
+      const batch = hostedAttachmentPreservation(hostedId);
+      expect(batch).toBeDefined();
+      const reference = await batch!(new AbortController().signal, preserve => preserve(bytes, 'application/octet-stream', 0));
+      expect(reference).not.toBe(path.join(storage, '0.bin'));
+      const response = await fetch(`${input.tunnel.url}/exec/fs.read`, { method: 'POST',
+        headers: { authorization: `Bearer ${input.tunnel.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ path: reference, encoding: 'base64' }) });
+      expect(response.status).toBe(200);
+      const read = await response.json() as { data: string };
+      // Native byte comparison retains the full 600 kB round-trip assertion
+      // without Vitest walking every Buffer index (seconds on CI workers).
+      expect(Buffer.from(read.data, 'base64').equals(bytes)).toBe(true);
+    } finally { await handle?.close(); host.dispose(); }
+    expect(hostedAttachmentPreservation(hostedId)).toBeUndefined();
+  });
+
   // #9263 integration: the real starter, host advertisement, JSON wire and
   // dispatch must preserve guest iMessage permissions through send and steer.
   it('delivers iMessage policy and identity to the remote execution handle', async () => {
