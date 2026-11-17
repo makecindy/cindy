@@ -587,7 +587,11 @@ const ENQUEUE_EVENT_LIMIT_MS = 30_000;
 const setRealTimeout = globalThis.setTimeout;
 const clearRealTimeout = globalThis.clearTimeout;
 async function enqueue(h, id, item) {
-  const reached = () => (h.maker.getSession(id)?.sent.length ?? 0) > 0;
+  return enqueueUntilSent(h, id, item, 1);
+}
+/** enqueue, then wait (as above) until the task's runtime has received `count` messages in all. */
+async function enqueueUntilSent(h, id, item, count) {
+  const reached = () => (h.maker.getSession(id)?.sent.length ?? 0) >= count;
   const settledWithout = projection => Boolean(projection?.error)
     || (projection?.recovery?.clientId ?? projection?.recovery?.item?.clientId) === item?.clientId;
   let offSent = () => {};
@@ -595,13 +599,13 @@ async function enqueue(h, id, item) {
   let limit;
   const started = new Promise((resolve, reject) => {
     const fail = what => reject(new Error(`${what}: ${JSON.stringify(h.queue.projection(id))}`));
-    offSent = h.maker.onSent(sessionId => { if (sessionId === id) resolve(); });
+    offSent = h.maker.onSent(sessionId => { if (sessionId === id && reached()) resolve(); });
     offHub = h.onHubEvent(event => {
       if (event.type === 'input_projection' && event.sessionId === id && !reached() && settledWithout(event.projection)) {
         fail(`the input ${item?.clientId} settled without reaching the engine`);
       }
     });
-    limit = setRealTimeout(() => fail(`no send reached the engine for ${id} and the input did not settle within ${ENQUEUE_EVENT_LIMIT_MS} ms`), ENQUEUE_EVENT_LIMIT_MS);
+    limit = setRealTimeout(() => fail(`message ${count} did not reach the engine for ${id} and the input did not settle within ${ENQUEUE_EVENT_LIMIT_MS} ms`), ENQUEUE_EVENT_LIMIT_MS);
   });
   // Awaited only while the send is still on its way; a rejection before that is reported below instead.
   started.catch(() => {});
@@ -4508,8 +4512,7 @@ test('a send to a task whose ordinary directory was deleted recreates it and car
   assert.match(session.sent[0], /\[Working directory recovery\]\nThe working directory was missing\. Cindy recreated the directory/);
   assert.match(session.sent[0], /first$/);
   session.emit({ type: 'done', data: {} });
-  await h.queue.enqueue('gone-dir', { clientId: 'second', text: 'second' });
-  await waitFor(() => session.sent.length === 2);
+  await enqueueUntilSent(h, 'gone-dir', { clientId: 'second', text: 'second' }, 2);
   assert.equal(session.sent[1], 'second', 'the note is carried once');
 });
 
