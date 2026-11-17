@@ -12,6 +12,8 @@ const metadataOwner = vi.hoisted(() => ({ key: 'directory-owner-a', generation: 
 const dataPath = vi.hoisted(() => ({ available: vi.fn<(deviceId: string) => boolean>(() => false) }));
 // #9537:对端实际 transport URL 的替身(null = 拿不到,handler 退回两条 REST 线路 origin)。
 const peerTransport = vi.hoisted(() => ({ url: null as string | null }));
+// 对端当前的数据面路径(null = 判定不了,'direct' = 可靠帧走直连通道)。
+const peerDataPath = vi.hoisted(() => ({ path: null as 'direct' | 'relay' | null }));
 vi.mock('../appSessionState.js', async importOriginal => ({
   ...await importOriginal<typeof import('../appSessionState.js')>(), activeOwnerScopeKey: () => `${metadataOwner.key}:${metadataOwner.generation}`,
 }));
@@ -97,6 +99,7 @@ vi.mock('../device-link/index', () => ({
   getDeviceLinkStatus: () => 'online',
   getDeviceLinkPeerLinks: () => ({ links: [], relayRttMs: null }),
   deviceLinkPeerTransportUrl: () => peerTransport.url,
+  deviceLinkPeerDataPath: () => peerDataPath.path,
   hasOfflineDirectPath: () => false,
   isDeviceDataPathAvailable: dataPath.available,
   clearDeviceResponsiveness: vi.fn(),
@@ -258,6 +261,7 @@ describe('device-link IPC handlers', () => {
     capabilities.canUseDeviceLink = true;
     metadataOwner.key = 'directory-owner-a';
     peerTransport.url = null;
+    peerDataPath.path = null;
     metadataOwner.generation = 0;
     __resetDeviceListCoalescingForTests(); // /devices 合并窗口:不让上一用例的在途请求漏到下一个
     vi.restoreAllMocks();
@@ -313,6 +317,26 @@ describe('device-link IPC handlers', () => {
       handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a'),
     ).resolves.toEqual({ kind: 'proxy', proxy: 'http://127.0.0.1:7890' });
     expect(probe).toHaveBeenCalledWith(['wss://relay.example.com/api/device-link/ws']);
+  });
+
+  // Codex review P1:对端此刻走直连时,可靠帧走 directChannelForSend,中继那条 WebSocket
+  // 并不承载这次流量(应用/数据库超时就是这么来的)。这时探中继 URL 的代理,报出来的是
+  // 一条「自信的假提示」—— 用户看到「本机可能在走代理」,而卡住的那条路根本没走中转。
+  // 必须不给判定,一次探针都不发。
+  it('#9537 出站路径判定:对端当前走直连 → null,不探中继 URL 的代理', async () => {
+    peerDataPath.path = 'direct';
+    peerTransport.url = 'wss://relay.example.com/api/device-link/ws';
+    const probe = vi.fn(async () => ({
+      source: 'system' as const,
+      kind: 'proxy' as const,
+      proxy: 'http://127.0.0.1:7890',
+      upstream: 'wss://relay.example.com',
+      at: 0,
+    }));
+    await expect(
+      handleGetProxyVerdict(makeDeps({ probeProxyVerdict: probe }), 'peer-a'),
+    ).resolves.toBeNull();
+    expect(probe).not.toHaveBeenCalled();
   });
 
   // 测试价值(#9537 review): 指名了设备、却查不到它实际走的 transport URL(主连接由

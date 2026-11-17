@@ -277,6 +277,19 @@ function hasSeparateCrossAccountConnection(): boolean {
   return !!client && client.crossAccountConnection() !== client;
 }
 
+/**
+ * 某个对端**当前**的数据面路径:'direct' = 直连通道可用,'relay' = 走中转。
+ *
+ * 与 `deviceLinkPeerTransportUrl` 配对使用:可靠帧是先试直连、失败才回落中继
+ * (`client.ts` 的 `sendReliableFrames` → `directChannelForSend`),所以对端此刻走直连时,
+ * 中继那条 WebSocket 并不承载这次流量 —— 拿它的代理判定去解释这次失败是张冠李戴。
+ * client 未就绪时返回 null(不判定)。
+ */
+export function deviceLinkPeerDataPath(deviceId: string): 'direct' | 'relay' | null {
+  if (!client) return null;
+  return client.getPeerPath(deviceId);
+}
+
 /** relay REST base(media presign / devices 等);供 mediaTransfer / ipc 复用。 */
 export function deviceLinkApiBase(): string {
   // 自建中转(docs/self-hosted-relay-plan.md)时指向用户自己的中转,否则走官方清单。

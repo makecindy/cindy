@@ -71,6 +71,7 @@ import {
   getDeviceLinkStatus,
   getDirectDataDeviceIds,
   deviceLinkPeerTransportUrl,
+  deviceLinkPeerDataPath,
   hasOfflineDirectPath,
   isDeviceDataPathAvailable,
   isPeerControlAvailable,
@@ -395,6 +396,11 @@ export async function handleGetProxyVerdict(
   deps: DeviceLinkIpcDeps,
   deviceId?: string,
 ): Promise<DeviceLinkProxyVerdict | null> {
+  // 指名了设备、且它此刻的数据面路径是直连:可靠帧走 directChannelForSend,中继那条
+  // WebSocket 根本不承载这次流量(client.ts 的 sendReliableFrames 先试直连、失败才回落
+  // 中继)。这时探中继 URL 的代理得到的是一条「自信的假提示」—— 用户看到「本机可能在走
+  // 代理」,而卡住的那条路根本没走中转(例如应用/数据库超时)。宁可不报。
+  if (deviceId && deviceLinkPeerDataPath(deviceId) === 'direct') return null;
   const transportUrl = deviceId ? deviceLinkPeerTransportUrl(deviceId) : null;
   // 指名了设备、却查不到它实际走的 transport URL(主连接由 agent-net 承载 / 对端在
   // scoped 路由连接上 / client 未就绪):这条对端根本不走下面那两条 REST base,探它们
