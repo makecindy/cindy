@@ -572,6 +572,10 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const credentials = await createCredentialStore({ userDataDir: dataDir,
     keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined });
   providerConfig = createHostProviderConfig({ profileDir: dataDir, ownerId, credentials,
+    withAvailabilityPolicyMutation: (id, work) => {
+      if (!availabilityPolicy) throw new Error('Provider availability policy is not initialized');
+      return availabilityPolicy.withAvailabilityPolicyMutation(id, work);
+    },
     gatewayConnected: () => Boolean(currentGateway()),
     getCodexBinary: () => harnessBinaryPath('codex'),
     getClaudeBinary: () => harnessBinaryPath('claude-code'),
@@ -1542,6 +1546,10 @@ const serverDeps = {
     defaultModel: process.env.CINDY_HOST_MODEL?.trim(),
   }),
   providers: () => listProviders({ gateway: currentGateway(), ownerId: runtime.owner }),
+  providerInvoke: (channel: string, args: unknown[], caller: string) => {
+    if (!providerConfig) throw new Error('Provider configuration is not initialized');
+    return providerConfig.invoke(channel, args, caller);
+  },
   // The agent's own capability descriptor; no second catalog is invented here.
   // Gateway credential state, reported from the same facts the runtime uses.
   // The renderer asks this synchronously at boot; the desktop proxies it from

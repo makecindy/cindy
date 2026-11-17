@@ -1039,6 +1039,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
             'ghosts:install-consent:dismissed': 'ghosts.onInstallConsentDismissed',
             'maker:auth:state-changed': 'maker.auth.onStateChanged',
             'maker:auth:login-progress': 'maker.auth.onLoginProgress',
+            'maker:provider:changed': 'maker.onProvidersChanged',
             'model-access:status-change': 'modelAccess.onStatusChange',
             'maker:codex-runtime-route-changed': 'maker.onCodexRuntimeRouteChanged',
           }[parsed.channel];

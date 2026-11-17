@@ -1,4 +1,8 @@
-import { setCustomProviderKeyReader, setCustomProviderHeaderReader, setOAuthTokenReader, setProviderOAuthTokenReader, setProviderViewsReader } from '../../../desktop/src/main/maker-host/provider-route.js';
+import { registerProviderHandlers, type ProviderPlatformPorts } from '../../../desktop/src/main/maker-ipc/providerHandlers.js';
+import type { IpcHandler } from '../../../desktop/src/main/maker-ipc/ipcHandlerRegistry.js';
+import { MAKER_INVOKE, MAKER_PUSH } from '../../../desktop/src/main/maker-ipc/channels.js';
+import { fetchProviderModels } from '../../../desktop/src/main/maker-host/provider-model-fetch.js';
+import { beginProviderRouteMutation, setCustomProviderKeyReader, setCustomProviderHeaderReader, setOAuthTokenReader, setProviderOAuthTokenReader, setProviderViewsReader } from '../../../desktop/src/main/maker-host/provider-route.js';
 import { createXaiProviderTokenReader } from '../../../desktop/src/main/maker-host/xaiProviderToken.js';
 import { isXaiSubscriptionProviderId } from '../../../desktop/src/main/maker-host/subscription-account-kind.js';
 import fs from 'node:fs';
@@ -6,15 +10,15 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { createCustomProviderHeaderService } from '../../../desktop/src/main/maker-host/customProviderHeaderService.js';
 import { listCustomProviders, updateCustomProvider } from '../../../desktop/src/main/maker-host/custom-provider-store.js';
-import { UNRECOVERABLE_PROVIDER_CREDENTIAL, parseCustomProviderHeaders } from '../../../desktop/src/main/secrets/providerCredentialState.js';
+import { UNRECOVERABLE_PROVIDER_CREDENTIAL, parseCustomProviderHeaders, type UnrecoverableProviderCredential } from '../../../desktop/src/main/secrets/providerCredentialState.js';
 import { customProviderHeaderStorageKey, customProviderSecretStorageKey, providerOAuthStorageKey, providerSecretStorageKey, isBuiltinApiKeyProviderId, REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY } from '../../../desktop/src/shared/providerSecrets.js';
 import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.js';
 import { dataOwnerStorageKey } from '../../../desktop/src/main/dataOwnerPath.js';
-import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
+import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { createProviderService } from '../../../desktop/src/main/maker-host/provider-service.js';
 import { hasCustomProviderCredential } from '../../../desktop/src/main/maker-host/provider-connection-state.js';
 import { withoutProviderHeaderCredentials } from '../../../desktop/src/main/maker-host/provider-public-view.js';
-import { loadCatalogWithSource, storedCustomProviderId, type CatalogSourceConfig } from '@cindy/model-providers';
+import { loadCatalogWithSource, storedCustomProviderId, isOrganizationManagedProvider, type CatalogSourceConfig } from '@cindy/model-providers';
 import { createGenericOAuthService, type GenericOAuthStorage } from '../../../desktop/src/main/maker-host/generic-oauth.js';
 import { createGrokOAuthService } from '../../../desktop/src/main/maker-host/grok-oauth-login.js';
 import { hostOutbound, resolveHostOutboundProxy } from '../outbound.mjs';
@@ -59,6 +63,7 @@ export function createHostCodexAccounts(
 
 /** Owner-bound configuration and the existing encrypted header migration. */
 export function createHostProviderConfig(options: { profileDir: string; ownerId: string; openExternal(url: string): Promise<void>;
+  withAvailabilityPolicyMutation?: ProviderPlatformPorts['withAvailabilityPolicyMutation'];
   gatewayConnected?(): boolean; getCodexBinary?(): string | null; getClaudeBinary?(): string | null; publish?(channel: string, payload: unknown): void; credentials: {
   decrypt(value: string): string; read(key: string): string | null;
   write(key: string, value: string): void; remove(key: string): void;
@@ -72,12 +77,17 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
       throw new Error('PROVIDER_OWNER_CHANGED');
   };
   const key = (logical: string) => { check(); return prefix + logical; };
-  const readStrict = (logical: string): string | null => {
+  const readCredentialForMutation = (logical: string): string | null | UnrecoverableProviderCredential => {
     let encrypted: string;
     try { encrypted = fs.readFileSync(path.join(options.profileDir, 'safe-storage', `${key(logical)}.enc`), 'utf8'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw new Error('Provider credential is unreadable'); }
     try { return options.credentials.decrypt(encrypted); }
-    catch { throw new Error('Provider credential cannot be decrypted'); }
+    catch { return UNRECOVERABLE_PROVIDER_CREDENTIAL; }
+  };
+  const readStrict = (logical: string): string | null => {
+    const value = readCredentialForMutation(logical);
+    if (typeof value === 'symbol') throw new Error('Provider credential cannot be decrypted');
+    return value;
   };
   const oauthStorage: GenericOAuthStorage = {
     read: id => { check(); try { return readStrict(providerOAuthStorageKey(id)); } catch { return null; } },
@@ -100,16 +110,14 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
     readStatus: readClaudeCliLoginStatusBySpawn,
   });
   const codexAccounts = createHostCodexAccounts(options, { owner, check, closed: () => closed });
-  const headers = createCustomProviderHeaderService({
+  const headerPorts: Parameters<typeof createCustomProviderHeaderService>[0] = {
     getCurrentDbClientUserId: () => { check(); return owner; },
     listCustomProviders: async () => { check(); const rows = await listCustomProviders(); check(); return rows; },
     updateCustomProvider: async (...args) => { check(); const row = await updateCustomProvider(...args); check(); return row; },
     readCustomProviderHeadersForMutation(id, agent) {
-      const file = path.join(options.profileDir, 'safe-storage', `${key(customProviderHeaderStorageKey(id, agent))}.enc`);
-      let encrypted: string;
-      try { encrypted = fs.readFileSync(file, 'utf8'); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw new Error('Provider headers are unreadable'); }
-      try { return parseCustomProviderHeaders(options.credentials.decrypt(encrypted)); }
+      const value = readCredentialForMutation(customProviderHeaderStorageKey(id, agent));
+      if (typeof value !== 'string') return value;
+      try { return parseCustomProviderHeaders(value); }
       catch { return UNRECOVERABLE_PROVIDER_CREDENTIAL; }
     },
     storeCustomProviderHeaders(id, agent, value) {
@@ -118,7 +126,8 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
     removeCustomProviderHeaders(id, agent) {
       options.credentials.remove(key(customProviderHeaderStorageKey(id, agent))); return { success: true };
     },
-  });
+  };
+  const headers = createCustomProviderHeaderService(headerPorts);
   const readKey = (id: string, agent: string) => options.credentials.read(key(customProviderSecretStorageKey(storedCustomProviderId(id), agent)));
   const log = createLogger('host-provider-config');
   let listGeneration = 0;
@@ -149,7 +158,61 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
     grok.resetGrokOAuthMemoryCache();
     await codexAccounts.close();
   };
+  const handlers = new Map<string, IpcHandler>();
+  const unsupported = (): never => { throw new Error('[UNSUPPORTED_CAPABILITY] Host provider operation is not exposed'); };
+  registerProviderHandlers({ handle: (channel, handler) => {
+    if (channel === MAKER_INVOKE.PROVIDER_CUSTOM_CREATE || channel === MAKER_INVOKE.PROVIDER_MODELS_FETCH)
+      handlers.set(channel, handler);
+  } }, {
+    isOrganizationManagedProviderId: id => getActiveCatalog().providers.some(provider =>
+      provider.id === id && isOrganizationManagedProvider(provider)),
+    refreshCatalog: async () => { await list(); },
+    beginRouteMutation: id => beginProviderRouteMutation(id),
+    broadcastChanged: () => { check(); options.publish?.(MAKER_PUSH.PROVIDER_CHANGED, undefined); },
+    listPresets: () => getActiveCatalog().presets ?? [],
+    getModelCatalog: getActiveCatalog,
+    fetchModels: spec => fetchProviderModels(spec, hostOutbound.outboundFetch),
+    assertTrustedSender: caller => { check(); if (typeof caller !== 'string' || !caller) throw new Error('Authenticated provider controller is required'); },
+    currentOwnerSession: () => { check(); return getActiveAppSession(); },
+    readCustomProviderKeyForMutation: (id, agent) => readCredentialForMutation(customProviderSecretStorageKey(id, agent)),
+    storeCustomProviderKey: (id, agent, value) => {
+      options.credentials.write(key(customProviderSecretStorageKey(id, agent)), value); return true;
+    },
+    removeCustomProviderKey: (id, agent) => {
+      options.credentials.remove(key(customProviderSecretStorageKey(id, agent))); return { success: true };
+    },
+    readCustomProviderHeadersForMutation: headerPorts.readCustomProviderHeadersForMutation,
+    storeCustomProviderHeaders: headerPorts.storeCustomProviderHeaders,
+    removeCustomProviderHeaders: headerPorts.removeCustomProviderHeaders,
+    readSavedProviderRoute: (id, agent) => {
+      check();
+      const provider = getActiveCatalog().providers.find(provider => provider.id === id && provider.source === 'user');
+      const route = provider?.routing[agent];
+      return route && !route.disabled ? { baseUrl: route.upstream, modelsUrl: route.modelsUrl ?? null } : null;
+    },
+    withAvailabilityPolicyMutation: (id, work) => {
+      if (!options.withAvailabilityPolicyMutation) return unsupported();
+      return options.withAvailabilityPolicyMutation(id, work);
+    },
+    writeProviderGroup: unsupported, pruneProviderGroupBindings: unsupported,
+    notifyManagedOllamaRemoved: unsupported, stopManagedLlamaCppService: unsupported,
+    listProviders: unsupported, getModelVisibilityOverrides: unsupported,
+    listProviderIds: unsupported, setProviderOrder: unsupported, getProviderOrder: unsupported,
+    testConnection: unsupported, accountUsage: unsupported, refreshBuiltinModels: unsupported,
+    requestModelsAutoRefresh: unsupported, rediscoverModels: unsupported,
+    oauthLogin: unsupported, oauthLogout: unsupported, oauthCancel: unsupported, removeOAuthCredentials: unsupported,
+    scanLocalCli: unsupported, setModelsDisabled: unsupported, setProviderDisabled: unsupported,
+    getLedgerCurrency: unsupported, readModelPriceOverride: unsupported, writeModelPriceOverride: unsupported,
+    clearModelPriceOverride: unsupported, broadcastPricingChanged: unsupported,
+  });
   const api = {
+    async invoke(channel: string, args: unknown[], caller: string) {
+      check();
+      if (!caller) throw new Error('Authenticated provider controller is required');
+      const handler = handlers.get(channel);
+      if (!handler) throw new Error('[UNSUPPORTED_CAPABILITY] Unknown Host provider operation');
+      const result = await handler(caller, ...args); check(); return result;
+    },
     list, readKey, oauth, grok, builtinStore, recipeSecretIo: oauthStorage, codexAccounts, claudeNative, cancelLogins,
     async close() {
       closed = true;

@@ -132,7 +132,7 @@ function createNodePlugins(dependencies) { return [
       // externalized as a Node package subpath containing Vite's query suffix.
       if (args.path.endsWith('?raw') || args.pluginData?.hostRawAsset) return;
       if (isBuiltin(args.path)) return { path: args.path, external: true };
-      if (args.path === 'electron' || args.path.startsWith('electron/')) {
+      if (args.path === 'electron' || args.path.startsWith('electron/') || args.path === 'original-fs') {
         throw new Error(`Node runtime imports Electron: ${path.relative(repo, args.importer)}`);
       }
       const name = packageName(args.path);
