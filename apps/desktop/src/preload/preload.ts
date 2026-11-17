@@ -3266,6 +3266,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         type: 'file' | 'directory';
         size: number;
         mtimeMs: number;
+        /** Directory link's canonical target, relative to the workdir. */
+        symlinkTarget?: string;
       }>
     > => ipcRenderer.invoke('maker:file-browser:list-dir', params),
     /** 项目级文件名扁平列表(ripgrep --files honor .gitignore);供 RSB 快速文件
@@ -3293,6 +3295,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
             size: number;
             mtimeMs: number;
             truncated: boolean;
+            resolvedPath?: string;
           };
         }
       | { ok: false; code: 'BINARY_FILE' | 'READ_FAILED'; message?: string }
@@ -3308,7 +3311,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workdir: string;
       relPath: string;
       content: string;
-    }): Promise<{ ok: true; size: number; mtimeMs: number } | { ok: false; message: string }> =>
+      expectedResolvedPath?: string;
+    }): Promise<{ ok: true; size: number; mtimeMs: number; resolvedPath?: string } | { ok: false; message: string }> =>
       ipcRenderer.invoke('maker:file-browser:write-file', params),
     createFile: (params: {
       remoteHostId?: string | null;

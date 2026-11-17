@@ -2,7 +2,7 @@
 
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { createElement } from 'react';
+import { createElement, createRef } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { EditorView } from '@codemirror/view';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,6 +14,7 @@ import '../../preload/sidebarWindowPreload';
 
 const preloadMocks = vi.hoisted(() => ({
   expose: vi.fn(),
+  writeFile: vi.fn(),
   listeners: new Map<string, Set<(event: unknown, ...payload: unknown[]) => void>>(),
 }));
 vi.mock('electron', () => ({
@@ -47,7 +48,7 @@ vi.mock('@/components/markdown/MarkdownImageLightboxHost', () => ({ MarkdownImag
 vi.mock('@/features/cc-agent/workdir-browse/ImagePreview', () => ({ ImagePreview: ({ src, relPath }: { src: string; relPath: string }) => createElement('img', { src, alt: relPath }) }));
 vi.mock('@/features/cc-agent/workdir-browse/PdfPreview', () => ({ PdfPreview: () => null }));
 vi.mock('@/features/cc-agent/workdir-browse/DrawioPreview', () => ({ DrawioPreview: () => null }));
-vi.mock('@/lib/fileBrowserTransport', () => ({ fileBrowserApiFor: () => ({}) }));
+vi.mock('@/lib/fileBrowserTransport', () => ({ fileBrowserApiFor: () => ({ writeFile: preloadMocks.writeFile }) }));
 
 const sessionId = 'file-body-selection-quote';
 const workdir = resolve(tmpdir(), 'cindy-file-body-selection-quote');
@@ -198,4 +199,31 @@ it('previews SVG by default and retains source edits across preview toggles', ()
   expect(screen.queryByRole('img')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'attachmentPreview.rendered' }));
   expect(screen.getByRole('img')).toBeTruthy();
+});
+
+// #10882 review: core rejects a retargeted save, but the editor must retain
+// the target of its dirty baseline rather than adopt a watcher reload's target.
+// Unit through real FileBodyView/CodeMirror/save handle; no existing quote test
+// covered writes. Minimal input: dirty A draft followed by a B content prop.
+it('keeps a dirty draft bound to its original target when a reload points elsewhere', async () => {
+  const ref = createRef<import('@/features/cc-agent/workdir-browse/FileBodyView').FileBodyHandle>();
+  const props = {
+    workdir, relPath: 'alias/note.txt', ref,
+    content: { kind: 'text' as const, relPath: 'alias/note.txt', content: 'A',
+      size: 1, mtimeMs: 1, truncated: false, resolvedPath: 'a/note.txt' },
+  };
+  const { container, rerender } = render(createElement(FileBodyView, props));
+  const editor = EditorView.findFromDOM(container.querySelector<HTMLElement>('.cm-editor')!)!;
+  act(() => { editor.dispatch({ changes: { from: 1, insert: ' edited' } }); });
+  rerender(createElement(FileBodyView, { ...props,
+    content: { ...props.content, content: 'B', resolvedPath: 'b/note.txt' },
+  }));
+  preloadMocks.writeFile.mockResolvedValueOnce({ ok: false, message: 'FILE_TARGET_CHANGED' });
+  await act(async () => { expect(await ref.current!.save()).toBe(false); });
+  expect(preloadMocks.writeFile).toHaveBeenLastCalledWith(expect.objectContaining({
+    content: 'A edited', expectedResolvedPath: 'a/note.txt',
+  }));
+  expect(editor.state.doc.toString()).toBe('A edited');
+  expect(ref.current!.isDirty()).toBe(true);
+  expect(screen.getByRole('alert').textContent).toContain('ccAgent.workdirBrowse.fileBody.saveFailed');
 });

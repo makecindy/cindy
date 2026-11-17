@@ -179,8 +179,8 @@ export interface FsRpcMethods {
     result: FileStat;
   };
   writeFile: {
-    params: { workdir: string; relPath: string; content: string };
-    result: { size: number; mtimeMs: number };
+    params: { workdir: string; relPath: string; content: string; expectedResolvedPath?: string };
+    result: { size: number; mtimeMs: number; resolvedPath?: string };
   };
   createFile: {
     params: { workdir: string; relPath: string };

@@ -155,6 +155,7 @@ const SEARCH_COLLECT_MAX_MATCHES = 500;
 const SEARCH_COLLECT_TIMEOUT_MS = 20_000;
 
 interface RemoteOpArgs {
+  expectedResolvedPath?: string;
   op: string;
   workdir: string;
   relPath?: string;
@@ -566,6 +567,7 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
           workdir,
           relPath: args.relPath ?? '',
           content: writeContent ?? '',
+          expectedResolvedPath: args.expectedResolvedPath,
         });
         return { ok: true as const, ...r };
       }
@@ -671,7 +673,7 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       return statEntry(workdir, args.relPath ?? '');
     case 'writeFile': {
       try {
-        const r = await writeFile(workdir, args.relPath ?? '', writeContent ?? '');
+        const r = await writeFile(workdir, args.relPath ?? '', writeContent ?? '', args.expectedResolvedPath);
         return { ok: true as const, ...r };
       } catch (err) {
         return bad(String(err));
