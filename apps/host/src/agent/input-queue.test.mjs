@@ -28,6 +28,8 @@ import { createInputQueue, holdTaskForProfile, PROFILE_HOLD_LOCK } from './input
 import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../desktop/src/shared/agentInputQueue.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
+import { SILENT_STOP_DECISION_DELAY_MS } from '../../../desktop/src/main/maker-ipc/silentStopAutoResume.ts';
+import { SILENT_STOP_AUTO_RESUME_SETTINGS_FILE } from '../../../desktop/src/main/maker-host/silentStopAutoResumeSettingsCore.ts';
 import { lockSessionRoute } from './session-route-lock.mjs';
 import { CONTEXT_OVERFLOW_REASON } from '../../../../packages/maker-core/src/agents/shared/context-overflow-error.ts';
 import { RECOVERY_SHUTDOWN_WAIT_MS, contextRecoveryKind, createHostContextRecovery } from './context-recovery.ts';
@@ -199,7 +201,14 @@ function createFakeMaker() {
         async abort() {
           session.aborted += 1;
           session.running = false;
+          session.continuationClaim = null;
         },
+        // As the maker-core Session (session.ts): the Host's claim on a generation for a silent-stop
+        // continuation (released by its settle or a stop), and the continuation's send.
+        continuationClaim: null,
+        claimHostTurnContinuation(generation) { if (generation === session.generation) session.continuationClaim = generation; },
+        settleHostTurnContinuation(generation) { if (session.continuationClaim === generation) session.continuationClaim = null; },
+        sendHostTurnContinuation(text, opts) { return session.send(text, opts); },
         async steer(text, options = {}) {
           await options.beforeProviderStart?.();
           session.steerMessages.push(text);
@@ -2507,7 +2516,7 @@ async function changeRecordFixture(t) {
     const file = path.join(turnChangeSetSessionDirectory(profile, id), 'index.json');
     return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')).entries : [];
   };
-  return { calls, gitSnapshot, readSession, capture, entries, workDir, store };
+  return { calls, gitSnapshot, readSession, capture, entries, workDir, store, profile };
 }
 
 // The Host finalize is the desktop rule from sessionEventPreparation.ts, written in
@@ -2516,7 +2525,7 @@ for (const [label, terminal, state] of [
   ['a completed native turn', { type: 'done', data: { raw: { id: 'turn-1', status: 'completed' } } }, 'complete'],
   ['a native turn that did not complete', { type: 'done', data: { raw: { id: 'turn-2', status: 'interrupted' } } }, 'partial'],
   ['a terminal error', { type: 'error', data: { message: 'provider failed', isTerminal: true } }, 'partial'],
-  ['a silent-stop done', { type: 'done', data: { silentStop: true } }, 'complete'],
+  ['a silent-stop done that does not continue', { type: 'done', data: { silentStop: true } }, 'complete'],
 ]) {
   test(`the change record of ${label} is stored as ${state}`, async t => {
     t = lifoCleanup(t);
@@ -2526,8 +2535,20 @@ for (const [label, terminal, state] of [
     await enqueue(h, id, { clientId: `u-${label.length}`, text: 'edit a.txt' });
     await f.capture(id);
     writeFileSync(path.join(f.workDir, 'a.txt'), 'two\n');
+    // A silent stop is decided later; with the continuation switched off it settles as a done then.
+    const silentStop = terminal.data?.silentStop === true;
+    if (silentStop) {
+      writeFileSync(path.join(f.profile, SILENT_STOP_AUTO_RESUME_SETTINGS_FILE), JSON.stringify({ enabled: false }));
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+    }
     h.maker.getSession(id).emit(terminal);
-    await waitFor(() => !h.queue.projection(id).turnInProgress);
+    if (silentStop) {
+      t.mock.timers.tick(SILENT_STOP_DECISION_DELAY_MS);
+      await settleUntil(() => !h.queue.projection(id).turnInProgress, 'the silent stop settled');
+      t.mock.timers.reset();
+    } else {
+      await waitFor(() => !h.queue.projection(id).turnInProgress);
+    }
     assert.deepEqual((await f.entries(id)).map(entry => [entry.anchorClientId, entry.state]), [[`u-${label.length}`, state]]);
     // A done carrying native turn data also stores the Codex plan through the DB,
     // which this queue fixture does not open; that write is outside this check.
@@ -5538,6 +5559,17 @@ test('profile hold: an interrupted turn waiting for its automatic resume is not 
   await r.h.queue.dispose();
 });
 
+test('profile hold: a silent stop decided while held settles without a continuation', async t => {
+  const r = await silentStopHarness(t);
+  await r.turn('half done');
+  r.h.queue.holdForDesktop(HELD);
+  await r.decide();
+  await settleUntil(() => r.response.writableEnded, 'the stream ends');
+  assert.equal(r.session.sent.length, 1, 'no continuation while held');
+  assert.ok(r.streamed().some(e => e.type === 'input_receipt' && e.status === 'recorded'));
+  assert.equal(r.h.queue.projection('s').turnInProgress, false);
+});
+
 // The Host does not continue after a usage limit yet (coordinator-deps.ts onUsageLimitedTurnError, the
 // third batch). The continuation it will run is the coordinator's continueAfterUsageLimitReset; the
 // hold's two locks keep that from reaching the agent.
@@ -6302,4 +6334,168 @@ test('a dismissal from another task\'s runtime leaves this task\'s card pending 
   f.session.emit({ type: 'interaction_dismissed', data: { requestId: 'question-own', reason: 'question_withdrawn' } });
   await waitFor(() => f.interactions.pending('card-owner').length === 0);
   assert.deepEqual(await answer, { kind: 'ask_user_question', answers: {}, dismissed: true });
+});
+
+/*
+ * The silent-stop continuation (release table row 31, 8g B; agent/silent-stop.ts).
+ * - Production entries and observable results: the Host's input queue, executor and coordinator with the
+ *   auto-resume runtime's silent-stop guard, and /api/chat (chat.mjs). Observed: what the engine receives
+ *   (the hidden 继续), the rows written (its user row, the exhausted marker), the stream's events and end,
+ *   the runtime's continuation claim, and the task list activity writes (touchSessionActivity).
+ * - Rule: the desktop (sessionTurnObserver.ts, sessionEventPreparation.ts, silentStopTurnEnd.ts,
+ *   silentStopSettle.ts, sessionEventTerminal.ts:496): a silent-stop done keeps its turn (the runtime keeps
+ *   the generation) and is decided 1.5 s later: a hidden 继续 continues the same turn on a new generation
+ *   (two per person's message), or the turn settles (queued work, the setting off, a held profile), or it
+ *   pauses with the 继续 banner. The turn's activity end is held until then and written once. Reviewer
+ *   2026-11-18: /api/chat follows the continuation to its end.
+ * - Coverage gap: the Host ended a silent-stop done as a finished turn and never continued it.
+ * - Minimal failing input: one silent-stop done of a person's message.
+ * - Tier: unit (node:test, the queue harness with a fake runtime; mocked setTimeout and Date).
+ */
+const SILENT_STOP_DONE = { type: 'done', data: { silentStop: true } };
+async function silentStopHarness(t, { disabled = false, queue = {} } = {}) {
+  const profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-silent-stop-'));
+  if (disabled) writeFileSync(path.join(profile, SILENT_STOP_AUTO_RESUME_SETTINGS_FILE), JSON.stringify({ enabled: false }));
+  const spy = activitySpy();
+  const hub = createEventHub();
+  const h = createHarness({ hub, userDataDir: () => profile, touchSessionActivity: spy.touchSessionActivity,
+    hasAssistantProgressAfter: async () => true, ...queue });
+  t.after(async () => { t.mock.timers.reset(); await h.queue.dispose(); rmSync(profile, { recursive: true, force: true }); });
+  const writes = [];
+  const response = Object.assign(new EventEmitter(), {
+    writableEnded: false, headersSent: false,
+    writeHead() { this.headersSent = true; },
+    write(chunk) { writes.push(String(chunk)); },
+    end(chunk) { if (chunk) writes.push(String(chunk)); this.writableEnded = true; this.emit('close'); },
+  });
+  const chat = createChatHandler({ events: hub, readSession: async id => ({ id, status: 'active' }),
+    enqueue: (id, input) => h.queue.enqueue(id, input), inputStatus: (id, clientId) => h.queue.inputStatus(id, clientId) });
+  await chat(Readable.from([Buffer.from(JSON.stringify({ sessionId: 's', clientId: 'a', prompt: 'long job' }))]), response);
+  await waitFor(() => h.maker.sessions.get('s')?.sent.length === 1);
+  const session = h.maker.sessions.get('s');
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const streamed = () => writes.filter(w => w.startsWith('data:')).map(w => JSON.parse(w.slice(5)));
+  // As Maker stamps a turn's events: its generation and runtime instance, and the attempt token its send carried.
+  const stamp = () => {
+    const token = session.sendOptions.at(-1)?.turnAttemptToken;
+    return { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId,
+      ...(typeof token === 'number' ? { turnAttemptToken: token } : {}) };
+  };
+  // One engine turn: it starts, writes, goes idle and ends with a silent-stop done unless another done is
+  // given (the translators send the idle status before the done).
+  const turn = async (text, done = SILENT_STOP_DONE) => {
+    session.emit({ type: 'status', data: { isRunning: true }, ...stamp() });
+    session.emit({ type: 'text', data: { text, isFinal: true }, ...stamp() });
+    session.emit({ type: 'status', data: { isRunning: false }, ...stamp() });
+    session.emit({ ...done, ...stamp() });
+    await settle();
+  };
+  const decide = async () => { t.mock.timers.tick(SILENT_STOP_DECISION_DELAY_MS); await settle(); };
+  const sent = count => settleUntil(() => session.sent.length >= count, `${count} message(s) sent to the engine`);
+  const ended = () => settleUntil(() => r.response.writableEnded, 'the stream ends');
+  const r = { h, session, response, streamed, spy, turn, decide, sent, ended,
+    rows: role => h.persisted.filter(row => row.role === role),
+    turnEnds: () => turnEndWrites(spy.calls).map(call => call.atMs) };
+  return r;
+}
+
+test('silent stop: the turn continues on a new generation with a hidden 继续; the stream and the activity time follow it to its end', async t => {
+  const r = await silentStopHarness(t);
+  await r.turn('half done');
+  assert.equal(r.response.writableEnded, false, 'the stream waits for the decision');
+  assert.equal(r.h.queue.projection('s').turnInProgress, true, 'the turn still runs');
+  assert.equal(r.session.continuationClaim, 1, 'the runtime keeps its generation for the continuation');
+  assert.deepEqual(r.turnEnds(), [], 'the end is held');
+  await r.decide();
+  await r.sent(2);
+  assert.equal(r.session.sent[1], '继续');
+  assert.deepEqual(r.rows('user').filter(row => row.content === '继续').map(row => row.agentMeta),
+    [{ delivery: 'turn', autoResume: true }], 'one hidden user row, marked as automatic');
+  t.mock.timers.tick(1_000);
+  const continuationEnd = Date.now();
+  await r.turn('the rest', { type: 'done', data: {} });
+  await r.ended();
+  assert.ok(r.streamed().some(e => e.type === 'text' && e.data?.text === 'the rest'), 'the continuation reaches the stream');
+  await settle();
+  assert.deepEqual(r.turnEnds(), [continuationEnd], 'written once, at the continuation\'s end');
+  assert.equal(r.h.queue.projection('s').turnInProgress, false);
+});
+
+test('silent stop: once the continuations are spent the turn pauses with the 继续 banner, its marker row written once', async t => {
+  const r = await silentStopHarness(t);
+  await r.turn('one');
+  await r.decide();
+  await r.sent(2);
+  t.mock.timers.tick(6_000);
+  await r.turn('two');
+  await r.decide();
+  await r.sent(3);
+  t.mock.timers.tick(6_000);
+  const doneAt = Date.now();
+  await r.turn('three');
+  await r.decide();
+  await r.ended();
+  assert.equal(r.session.sent.length, 3, 'no third continuation for one message');
+  assert.deepEqual(r.rows('error').map(row => [row.content.reason, row.content.silentStopFailureCause]),
+    [['silent-stop-exhausted', 'budget']]);
+  assert.ok(r.streamed().some(e => e.type === 'error' && e.data?.reason === 'silent-stop-exhausted'), 'the banner reaches the clients');
+  await settleUntil(() => !r.h.queue.projection('s').turnInProgress, 'the turn ends');
+  assert.deepEqual(r.turnEnds(), [doneAt], 'written once, at the stopped turn\'s end');
+});
+
+test('silent stop: a message sent within the decision window takes over; the stopped turn ends once, at its done', async t => {
+  const r = await silentStopHarness(t);
+  const doneAt = Date.now();
+  await r.turn('half done');
+  await r.h.queue.enqueue('s', { clientId: 'b', text: 'something else' });
+  await r.decide();
+  await r.sent(2);
+  assert.equal(r.session.sent[1], 'something else', 'the message runs, no continuation');
+  await r.ended();
+  assert.ok(r.streamed().some(e => e.type === 'input_receipt' && e.status === 'recorded'));
+  assert.deepEqual(r.turnEnds(), [doneAt]);
+});
+
+test('silent stop: with the continuation switched off in the profile, the turn ends as a done after the decision', async t => {
+  const r = await silentStopHarness(t, { disabled: true });
+  const doneAt = Date.now();
+  await r.turn('half done');
+  await r.decide();
+  await r.ended();
+  assert.equal(r.session.sent.length, 1, 'no continuation');
+  assert.deepEqual(r.rows('error'), []);
+  assert.deepEqual(r.turnEnds(), [doneAt]);
+  assert.equal(r.session.continuationClaim, null, 'the claim is released');
+});
+
+test('silent stop: a resumed turn that stops silently continues too; the stream of the input it resumed ends with it', async t => {
+  const r = await silentStopHarness(t);
+  r.session.emit({ type: 'text', data: { text: 'half done', isFinal: true }, ...{ sessionTurnGeneration: r.session.generation } });
+  r.session.emit({ type: 'error', data: INTERRUPTION, sessionTurnGeneration: r.session.generation });
+  await settle();
+  for (let i = 0; i < 100 && r.session.sent.length < 2; i += 1) { t.mock.timers.tick(500); await settle(); }
+  await r.sent(2);
+  await r.turn('resumed half');
+  assert.equal(r.response.writableEnded, false);
+  await r.decide();
+  await r.sent(3);
+  assert.equal(r.session.sent[2], '继续');
+  t.mock.timers.tick(1_000);
+  const continuationEnd = Date.now();
+  await r.turn('the rest', { type: 'done', data: {} });
+  await r.ended();
+  assert.deepEqual(r.rows('error'), [], 'no error row: the resume and the continuation answered the input');
+  await settle();
+  assert.deepEqual(r.turnEnds(), [continuationEnd], 'the activity time once, at the continuation\'s end');
+});
+
+test('silent stop: the caller leaving during the decision does not stop the continuation', async t => {
+  const r = await silentStopHarness(t);
+  await r.turn('half done');
+  r.response.emit('close');
+  await r.decide();
+  await r.sent(2);
+  assert.equal(r.session.sent[1], '继续');
+  await r.turn('the rest', { type: 'done', data: {} });
+  await settleUntil(() => !r.h.queue.projection('s').turnInProgress, 'the turn ends');
 });

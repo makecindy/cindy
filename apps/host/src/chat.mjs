@@ -123,8 +123,10 @@ export function createChatHandler(deps) {
           end();
           return;
         }
-        if (event.type === 'input_receipt' && event.inputClientId === clientId
-          && event.status === 'interrupted') {
+        // An interrupted input, or a silent-stop turn that settled without its continuation (recorded,
+        // agent/turn-executor.mjs endSilentStopTurn), ends the stream; so do those of a resume it follows.
+        if (event.type === 'input_receipt' && own
+          && (event.status === 'interrupted' || event.status === 'recorded')) {
           end();
           return;
         }
@@ -133,6 +135,9 @@ export function createChatHandler(deps) {
           && (event.type === 'done' || isTerminalTurnErrorEvent(event))) {
           // The resume answers this input, or gives up with an interrupted receipt (input-queue.mjs).
           if (event.type === 'error' && event.autoResumePending) { followingResume = true; return; }
+          // A silent stop is decided later (agent/silent-stop.ts): the continuation, its banner or the
+          // recorded receipt ends the stream.
+          if (event.type === 'done' && event.silentStopPending) return;
           end();
         }
       });

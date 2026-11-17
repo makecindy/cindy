@@ -15,6 +15,7 @@ import { assertHostTaskExecutionSupported, prepareHostUserMessage } from './send
 import { createHostLearnInvocationCapture } from './learn-capture.ts';
 import { createHostEventPersistence } from './event-persistence.ts';
 import { createHostContextRecovery } from './context-recovery.ts';
+import { createHostSilentStop } from './silent-stop.ts';
 import { createHostWorkingDirectory } from './working-directory.ts';
 import { clearSealedCodexPlanState, readCodexPlanState } from '../../../desktop/src/main/localDb/codexPlanState.ts';
 import { buildCompletedPlanGuardNote, buildPlanReconcileNote } from '../../../desktop/src/main/maker-ipc/planReconcile.ts';
@@ -89,6 +90,38 @@ export function createTurnExecutor(deps) {
   const recovery = deps.getRecoveryRollover ? createHostContextRecovery({ getRollover: deps.getRecoveryRollover,
     isRecoverable: deps.isContextRecoveryOpen, isErrorSuppressed: deps.isSessionErrorSuppressed,
     publish: (id, event, fields) => publishAgentEvent(deps.hub, id, event, fields), log }) : null;
+  // The desktop's silent-stop continuation (silent-stop.ts), with the input coordinator's ports; an
+  // executor without them (a unit fixture) ends a silent-stop done as any done.
+  const silentStop = deps.silentStopCoordinator ? createHostSilentStop({
+    coordinator: deps.silentStopCoordinator,
+    guard: () => deps.getAutoResume?.()?.silentStopAutoResumeGuard ?? null,
+    listActivity: () => deps.productTurn?.listActivity ?? null,
+    isProfileHeld: () => deps.isProfileHeld?.() === true,
+    writeRow: (id, message, options) => behindDurableWrites(id, `silent-stop-row:${id}`, () => deps.persistMessage(id, message, options)),
+    // As the desktop broadcasts the banner (register.ts surfaceSilentStopExhaustedBanner, source as there),
+    // with the turn's input so /api/chat ends on it.
+    publishFailure: (id, turn, data) => publishAgentEvent(deps.hub, id, { type: 'error', data, source: 'claude-code' }, turnStreamFields(turn)),
+    isTurnCurrent: (id, turn) => turns.get(id) === turn,
+    // The listener keeps only the turn's own generation (listen): the continuation's events carry the new one.
+    adoptGeneration: (turn, generation) => {
+      turn.preContinuationGeneration = turn.generation;
+      turn.generation = generation;
+      turn.continuedSilentStopDoneAt = turn.silentStopDoneAt;
+      turn.silentStopDoneAt = undefined;
+      turn.silentStopPending = false;
+    },
+    rollbackGeneration: (turn, generation) => {
+      if (turn.generation !== generation) return;
+      turn.generation = turn.preContinuationGeneration;
+      turn.silentStopDoneAt = turn.continuedSilentStopDoneAt;
+      turn.silentStopPending = true;
+    },
+    finalizeChangeSet: (id, turn) => { if (turn.changeRecordStarted) void finalizeTurnChangeSet(id, null, 'complete'); },
+    endTurn: (id, turn, reason) => endSilentStopTurn(id, turn, reason),
+    log,
+  }) : null;
+  // The fields a turn's events carry for its clients: its input, and the input an automatic resume continues.
+  const turnStreamFields = turn => ({ inputClientId: turn.clientId, ...(turn.resumeOf ? { autoResumeOf: turn.resumeOf } : {}) });
   // The auto-resume bookkeeping steps of the desktop's event preparation (sessionEventAutoResumeSteps.ts),
   // over the auto-resume runtime (auto-resume.ts). The failed-turn assistant pairing map is the
   // desktop's; the Host only keeps it so a new turn drops a stale entry, as there.
@@ -208,7 +241,8 @@ export function createTurnExecutor(deps) {
     // A stop the engine acknowledged without a terminal event: the engines' stop paths end in a
     // done on the desktop, which takes the after-edit savepoint there.
     if (!event && !error && turn.abortRequested && !deps.isStoppingRuntime()) settleGitBaseline(sessionId, turn, 'stopped');
-    turn.endedAt = Date.now();
+    // A silent stop that did not continue ended at its done (silent-stop.ts), as the desktop marks it there.
+    turn.endedAt = turn.silentStopDoneAt ?? Date.now();
     turn.interruptedByShutdown = deps.isStoppingRuntime();
     const history = historyFor(sessionId);
     history.flushAssistantBlock(sessionId);
@@ -268,6 +302,42 @@ export function createTurnExecutor(deps) {
     // runtime's deferred failures and the task's list activity record go.
     deps.productTurn?.closed(sessionId, bindings.get(sessionId).session);
     listActivityInTurn.delete(sessionId);
+    // As the desktop's turn observer teardown: the closed runtime's silent-stop decision goes. Its turn
+    // cannot continue on it and no terminal will come (the runtime already sent its done): it ends here.
+    const bound = bindings.get(sessionId).session;
+    silentStop?.released(sessionId, bound.instanceId);
+    const turn = turns.get(sessionId);
+    if (turn?.silentStopPending && !turn.terminal && turn.session === bound) {
+      turn.silentStopPending = false;
+      void finish(sessionId, turn);
+    }
+  }
+
+  // A silent-stop done closes its segment's rows as the desktop's terminal stage does for it (the reply
+  // block, its seal and the list preview: settleTurnBoundary) and marks the turn's end at the done (the
+  // desktop's markTurnEndedAfterPersistDrain). The Host's turn stays open for the decision (silent-stop.ts):
+  // the coordinator does not get this done (handTerminalToCoordinator), and the next input waits.
+  function settleSilentStopSegment(sessionId, turn, session, history, event) {
+    turn.silentStopPending = true;
+    const doneAt = turn.silentStopDoneAt = Date.now();
+    settleTurnBoundary(sessionId, history, event);
+    void history.drain().then(() => {
+      if (!history.hasFailedWrites() && deps.isCurrent() && turns.get(sessionId) === turn) return deps.markEnded?.(sessionId, doneAt);
+    }).catch(() => {});
+    silentStop.decideLater(session, turn, event);
+  }
+
+  // A silent stop that does not continue ends its turn as a done (silentStopSettle.ts): the turn's finish
+  // hands the coordinator its done and runs the settled-turn hooks. Host-only (/api/chat, chat.mjs): a
+  // stream that followed the silent stop ends with the recorded receipt; an exhausted one already ended on
+  // its banner's error, a stopped one on its interrupted receipt.
+  function endSilentStopTurn(sessionId, turn, reason) {
+    turn.silentStopPending = false;
+    if (turn.resumeOf !== undefined) deps.resumeAnswered?.(sessionId, turn.resumeOf);
+    void finish(sessionId, turn).then(() => {
+      if (reason !== 'skip' || turn.abortRequested || typeof turn.clientId !== 'string' || !deps.isCurrent()) return;
+      deps.hub.publish({ type: 'input_receipt', sessionId, ...turnStreamFields(turn), clientId: turn.clientId, status: 'recorded' });
+    }, () => {});
   }
 
   // The task list activity of the desktop (SessionListActivityTracker, product-turn.ts), at the desktop's
@@ -283,9 +353,13 @@ export function createTurnExecutor(deps) {
   // turn's start and end at the desktop's points: a running status of the foreground turn starts it
   // (sessionEventPreparation.ts); a done, a terminal error or a foreground running=false status ends
   // it, refreshing the background command work (sessionEventDelivery.ts); a task update refreshes
-  // that work. Idle release reads the result (idle-release.ts). A silent-stop done ends the turn
-  // here: the Host has no silent-stop resume yet, so nothing continues it.
+  // that work. Idle release reads the result (idle-release.ts). A silent-stop done whose decision is
+  // pending keeps the logical turn going, as the desktop's preparation notes it; its settle ends it.
   function noteBackgroundActivity(session, event) {
+    if (silentStop?.isScheduled(event)) {
+      noteClaudeSessionTurnState(session.id, true);
+      return;
+    }
     const continuation = isTurnContinuationBoundaryEvent(event);
     if (event.type === 'status' && event.data?.isRunning === true && event.turnScope !== 'background') {
       noteClaudeSessionTurnState(session.id, true);
@@ -394,7 +468,10 @@ export function createTurnExecutor(deps) {
     listActivityInTurn.delete(sessionId);
     const resumeHeld = deps.isAutoResumeHeld?.(sessionId) === true;
     if (event.turnOrigin?.kind !== 'goal') {
-      productTurn.listActivity.end(sessionId, { identity: activityIdentity(session, event), hold: suppressed || recoveryOwns || resumeHeld });
+      // The desktop also holds a silent-stop done's end (sessionEventTerminal.ts): the continuation drops
+      // it, a settle without one commits it (silent-stop.ts).
+      productTurn.listActivity.end(sessionId, { identity: activityIdentity(session, event),
+        hold: suppressed || recoveryOwns || resumeHeld || silentStop?.isScheduled(event) === true });
     }
     const successfulReply = event.type === 'done' && isSuccessfulAssistantReplyDoneData(event.data);
     if (successfulReply && !recoveryOwns && !resumeHeld
@@ -465,6 +542,9 @@ export function createTurnExecutor(deps) {
         if (event.hostProjection) return;
         if (typeof event.sessionTurnGeneration === 'number' && (typeof turn.generation === 'number'
           ? event.sessionTurnGeneration !== turn.generation : event.sessionTurnGeneration === turn.previousGeneration)) return;
+        // A silent-stop done of this turn gets one decision (silent-stop.ts); a second one is dropped, as the
+        // desktop's preparation drops it.
+        if (!turn.terminal && silentStop?.schedule(session, event) === 'duplicate') return;
         noteBackgroundActivity(session, event);
         if (deps.productTurn && event.type === 'status' && event.data && isForegroundRunningStatus(event.data, event)) {
           if (!listActivityInTurn.has(sessionId) || event.sessionTurnGeneration !== undefined) {
@@ -490,9 +570,9 @@ export function createTurnExecutor(deps) {
       if (event.type === 'turn_diff') return;
       if (turn.changeRecordStarted && event.type === 'done' && !isTurnContinuationBoundaryEvent(event)) {
         const rawTurn = event.data?.raw;
-        // Desktop settles a silent-stop done once its guard declines to resume
-        // (settleSilentStopDone); the Host has no auto-resume, so it settles now.
-        if (event.data?.silentStop === true) void finalizeTurnChangeSet(sessionId, null, 'complete');
+        // Desktop settles a silent-stop done once its guard declines to resume (settleSilentStopDone,
+        // silent-stop.ts); an executor without the continuation settles it now.
+        if (event.data?.silentStop === true) { if (!silentStop?.isScheduled(event)) void finalizeTurnChangeSet(sessionId, null, 'complete'); }
         else void finalizeTurnChangeSet(sessionId, typeof rawTurn?.id === 'string' ? rawTurn.id : null,
           rawTurn && rawTurn.status !== 'completed' ? 'partial' : 'complete');
       }
@@ -505,7 +585,10 @@ export function createTurnExecutor(deps) {
       // reports the current key, which resynchronizes the credentials.
       const gatewayKeyRejected = isGatewayProxyTokenRecoveryErrorEventForProvider(getSessionProvider(sessionId), event);
       if (gatewayKeyRejected) deps.reportAgentCindyGatewayKeyRejected?.();
-      const fields = { ...stream, inputClientId: turn.clientId, ...(turn.resumeOf ? { autoResumeOf: turn.resumeOf } : {}) };
+      const fields = { ...stream, ...turnStreamFields(turn) };
+      // Host-only (/api/chat, chat.mjs): a silent-stop done whose decision is pending does not end the
+      // stream; the continuation, the banner or the recorded receipt does.
+      if (silentStop?.isScheduled(event)) fields.silentStopPending = true;
       // A terminal error the coordinator took over for an automatic resume (handed over above): its
       // clients see it with the takeover, as the desktop's window sees the error and the activity row,
       // and a stream that waits for this input follows the resume instead of ending here.
@@ -542,6 +625,13 @@ export function createTurnExecutor(deps) {
         && (event.turnScope === 'background' || isTurnContinuationBoundaryEvent(event))) settleTurnBoundary(sessionId, history, event);
       if ((event.type === 'done' || isTerminalTurnErrorEvent(event))
         && event.turnScope !== 'background' && !isTurnContinuationBoundaryEvent(event)) {
+        if (silentStop?.isScheduled(event)) {
+          if (productOwner) guardProductTurn(sessionId, () => settleProductTurn(session, event, productOwner, claim));
+          settleSilentStopSegment(sessionId, turn, session, history, event);
+          return;
+        }
+        // As the desktop's turn observer: a terminal that is not a silent stop ends a pending decision.
+        silentStop?.supersede(sessionId);
         turn.terminalMeta = { sessionTurnGeneration: event.sessionTurnGeneration,
           sessionInstanceId: event.sessionInstanceId };
         // A resumed turn that ended without another takeover answered the input it continued.
@@ -973,6 +1063,8 @@ export function createTurnExecutor(deps) {
         onVendorTurnReserved: generation => {
           turn.check();
           bindTurnSession(sessionId, deps.getMaker().getSession(sessionId));
+          // As the desktop's provider start (sessionTurnObserver.ts): a newer turn ends a pending silent-stop decision.
+          silentStop?.supersede(sessionId);
           turn.generation = generation;
           turn.sendOpts.onVendorTurnReserved?.(generation);
         },

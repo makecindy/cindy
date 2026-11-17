@@ -234,6 +234,14 @@ export function createInputQueue(deps) {
       productTurn,
       // A terminal ends its activity held while the coordinator's automatic resume owns it (sessionEventTerminal.ts).
       isAutoResumeHeld: id => coordinator.isAutoResumePending(id) || coordinator.isAutoResumeDeferred(id),
+      // The desktop's silent-stop continuation (silent-stop.ts) reads the queue and rebinds the coordinator's
+      // turn to the continuation's generation (silentStopTurnEnd.ts); while the profile is held it sends none.
+      silentStopCoordinator: {
+        hasPendingQueuedWork: id => coordinator.hasPendingQueuedWork(id),
+        noteHostTurnContinuation: (id, generation) => coordinator.noteHostTurnContinuation(id, generation),
+        noteHostTurnContinuationFailed: (id, generation) => coordinator.noteHostTurnContinuationFailed(id, generation),
+      },
+      isProfileHeld: () => profileHold !== null,
       resumeOriginOf: id => resumeOrigins.get(id),
       resumeAnswered: (id, origin) => { if (resumeOrigins.get(id) === origin) resumeOrigins.delete(id); },
       autoResumePendingOf: (id, origin) => {
