@@ -353,7 +353,7 @@ async function loginEnvironment(t, root, profile, port) {
   const store = { read: (key) => records.get(key) ?? null, write: (key, value) => records.set(key, value), remove: (key) => records.delete(key) };
   const { runLoginCommand } = await import('./login-cli.mjs');
   const { CindyAuthClient } = await import('@cindy/auth-client');
-  const login = (deps = {}) => runLoginCommand(['--no-open'], { stdout: () => {}, stderr: () => {}, deps: {
+  const login = (deps = {}, stdout = () => {}) => runLoginCommand(['--no-open'], { stdout, stderr: () => {}, deps: {
     store, readStatus: async () => ({ running: false }), scanDesktops: async () => [],
     // The manifest must be https (endpoints.mjs); the fake server listens on plain loopback HTTP.
     createAuthClient: (options) => new CindyAuthClient({ ...options, fetch: (input, init) => fetch(String(input).replace(/^https:/, 'http:'), init) }),
@@ -424,8 +424,15 @@ test('25b: a running serve admits a first login and the same account, and refuse
   try {
     const { login, records } = await loginEnvironment(t, root, profile, auth.port);
     // Serve running without an account runtime: the first login goes through.
-    await login({ readStatus: async () => ({ running: true, runtime: { state: 'uninitialized', owner: null } }) });
+    const printed = [];
+    await login({ readStatus: async () => ({ running: true, runtime: { state: 'uninitialized', owner: null } }) }, (line) => printed.push(line));
     assert.equal(observer.readSkillProjectionBoundaryStatus('member-a'), 'stable');
+    // serve does not adopt the new session while running: the output says a restart is needed, and how.
+    assert.ok(printed.some((line) => line.includes('takes effect after Cindy Host restarts')
+      && line.includes('systemctl --user restart cindy-host') && line.includes('cindy-host stop')), printed.join('\n'));
+    const quiet = [];
+    await login({}, (line) => quiet.push(line));
+    assert.equal(quiet.some((line) => line.includes('restarts')), false, 'no restart hint when serve is not running');
     // Serve running A: A signs in again.
     await login({ readStatus: async () => ({ running: true, runtime: { state: 'ready', owner: 'member-a' } }) });
     // Serve running A: B is refused after the exchange, its session ended and not saved.
@@ -468,7 +475,7 @@ test('25b: serve logout sweeps the outgoing owner once, skips while a desktop ho
   assert.deepEqual(warnings, ['skipped-profile-held', 'skipped-not-stable']);
 });
 
-test('25b: shared Skill preparation publishes the bundle under the stable owner, and writes nothing when held or without locks', async (t) => {
+test('25b: shared Skill preparation publishes the bundle under the stable owner, writes nothing when held, and without locks writes only the empty ~/.agents/skills root the desktop also creates before taking the lock', async (t) => {
   const { root, appData, commitOwner } = await skillBoundaryProfile(t);
   const { createHostSharedGlobalSkills } = await import('./agent/shared-global-skills.ts');
   const { configureHostOwner } = await import('./agent/claude-auth.mjs');
@@ -492,7 +499,7 @@ test('25b: shared Skill preparation publishes the bundle under the stable owner,
   // No bundle, no manifest, no link is written. The one addition is the empty ~/.agents/skills root:
   // the desktop's prepareSharedGlobalSkillLinks creates it before it asks for the Skill mutation
   // lease (shared-global-skills.ts), so the Host, running that code, does too (reported, not changed).
-  assert.deepEqual(snapshotTree(root).sort(), [...blocked, 'home/.agents:d:', 'home/.agents/skills:d:'].sort(), 'no lock directory: nothing else written');
+  assert.deepEqual(snapshotTree(root).sort(), [...blocked, 'home/.agents:d:', 'home/.agents/skills:d:'].sort(), 'no lock directory: only the empty ~/.agents/skills root, a known behavior shared with the desktop: its prepareSharedGlobalSkillLinks creates this directory before it takes the Skill mutation lock');
   assert.deepEqual(fs.readdirSync(path.join(root, 'home', '.agents', 'skills')), []);
   // With the locks available the bundle this Host carries is published in the shared app-data root.
   fs.rmSync(lockDir);
@@ -548,6 +555,57 @@ test('25b: login re-checks right before committing, protects a running serve, an
     assert.equal(linkExists(links.shared), true);
     assert.equal(records.size, 0);
     assert.equal(auth.hits.filter((hit) => hit === '/api/auth/logout').length, 2);
+  } finally {
+    await auth.close();
+  }
+});
+
+// Review (25b, before the Host commits land): a commit that fails and rolls back must release every
+// lock on its way out: the account vault's cross-process lock (with its heartbeat), the boundary's
+// strict owner lock and the shared-roots lock. A leaked file lock would not keep the process alive,
+// so the case looks for the lock records themselves and then signs in again in the same process.
+// Minimal failure: the failure path keeps the vault lock (the next login waits its 5 s and is refused
+// as busy) or the strict lock's in-process tail (the next commit never starts).
+test('25b: a login whose commit failed releases every lock, and the next login goes straight through', { timeout: 30_000 }, async (t) => {
+  const { root, home, profile, observer, boundary } = await skillBoundaryProfile(t);
+  const auth = await fakeLoginAuth();
+  try {
+    const { login } = await loginEnvironment(t, root, profile, auth.port);
+    // Every login is bounded, so a lock that is never released fails this case fast instead of hanging the run.
+    const bounded = (promise, label) => {
+      let timer;
+      return Promise.race([promise, new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} is still waiting for a lock after 8 s`)), 8_000);
+      })]).finally(() => clearTimeout(timer));
+    };
+    await bounded(login(), 'the first login');
+    const links = await plantOwnerSkillLinks(profile, home, 'member-a');
+    const sharedDir = path.dirname(links.shared);
+    // Track the intervals the failing login starts (the vault lock's heartbeat); each must be cleared.
+    const started = new Set();
+    const { setInterval: realSetInterval, clearInterval: realClearInterval } = globalThis;
+    globalThis.setInterval = (...args) => { const handle = realSetInterval(...args); started.add(handle); return handle; };
+    globalThis.clearInterval = (handle) => { started.delete(handle); return realClearInterval(handle); };
+    fs.chmodSync(sharedDir, 0o000);
+    try {
+      auth.setMember('member-b');
+      await assert.rejects(bounded(login(), 'the failing login'), /cleanup incomplete/);
+    } finally {
+      fs.chmodSync(sharedDir, 0o755);
+      globalThis.setInterval = realSetInterval;
+      globalThis.clearInterval = realClearInterval;
+    }
+    const leftRunning = started.size;
+    for (const handle of started) realClearInterval(handle);
+    assert.equal(leftRunning, 0, 'a lock heartbeat was left running after the failed commit');
+    for (const lock of [path.join(profile, '.cindy-auth-accounts-v1.lock'), boundary.__testing.lockPath(), boundary.__testing.sharedSkillRootsLockPath()]) {
+      assert.equal(linkExists(lock), false, `lock still held after the failed commit: ${path.relative(root, lock)}`);
+    }
+    const retryStarted = Date.now();
+    await bounded(login(), 'the retry');
+    assert.ok(Date.now() - retryStarted < 4_000, `the retry waited ${Date.now() - retryStarted} ms for a lock`);
+    assert.equal(observer.readSkillProjectionBoundaryStatus('member-b'), 'stable');
+    assert.equal(linkExists(links.shared), false);
   } finally {
     await auth.close();
   }

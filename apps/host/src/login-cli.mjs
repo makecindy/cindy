@@ -161,7 +161,11 @@ export async function runLoginCommand(argv, io = {}) {
     method,
   });
   out(`Signed in (${result.realm}). Cindy host will reuse this login on restart.`);
-  if (running.running === true) out('Restart Cindy Host to use this sign-in.');
+  // serve keeps its current session until it restarts (it does not adopt a new one while running).
+  if (running.running === true) {
+    out('This sign-in takes effect after Cindy Host restarts. As a systemd user service (docs/host/systemd.md): '
+      + 'systemctl --user restart cindy-host. Otherwise: cindy-host stop, then start cindy-host again.');
+  }
   if (process.env.CINDY_HOST_DATA_DIR?.trim()) {
     err(`Profile: ${userDataDir}`);
   }
