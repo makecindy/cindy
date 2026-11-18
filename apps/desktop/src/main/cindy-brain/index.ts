@@ -788,7 +788,7 @@ import {
 import { createCustomImageChannel, registerCustomImageChannels } from './customImageChannel.js';
 import { readByokCredential, readByokInferenceBase } from '../model-access/byokCredentials.js';
 import type { AgentKind } from '@cindy/model-providers';
-import { resolveCustomMediaConnection, isCustomVideoProvider, customMediaAgents as declaredCustomMediaAgents, customMediaGuideProtocol, mediaGuideScope, mediaGuideTarget } from './customMediaConnection.js';
+import { resolveCustomMediaConnection, isCustomVideoProvider, customMediaAgents as declaredCustomMediaAgents, customMediaGuideProtocol, mediaGuideScope, mediaGuideTarget, isCustomMediaGuideProvider } from './customMediaConnection.js';
 import { videoConnectionRevision } from '../cindy-media/customVideoProtocol.js';
 import { createXaiVideoProvider } from '../cindy-proxy-media/video/providers/xai.js';
 import * as blobStore from '../cindy-media/blobStore.desktop.js';
@@ -5932,6 +5932,7 @@ configureProviderMediaRuntime({
   guideTarget: target => mediaGuideTarget(getActiveCatalog().providers.find(provider => provider.id === target.providerId), target),
   guideProtocol: target => {
     const provider = getActiveCatalog().providers.find(provider => provider.id === target.providerId);
+    if (provider && isCustomMediaGuideProvider(provider)) return customMediaGuideProtocol(provider, target.modelId, target.agent);
     return customMediaGuideProtocol(provider, target.modelId, target.agent) ??
       (provider?.imageModels?.some(model => model.id === target.modelId)
         ? getImageChannelRegistry().resolve(target.providerId, target.modelId).imageProtocol

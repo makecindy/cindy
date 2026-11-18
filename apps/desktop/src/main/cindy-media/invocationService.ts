@@ -1545,7 +1545,7 @@ async function submitInvocation(
   const videoProtocol = invocation.guide.binding.executor === 'provider-video'
     ? invocation.guide.binding.videoProtocol : undefined;
   if (isClientVideoInvocation(invocation)) {
-    try { validateCustomVideoBody(body, invocation.capability === 'video.image_to_video', videoProtocol); }
+    try { validateCustomVideoBody(body, invocation.capability === 'video.image_to_video', videoProtocol, invocation.modelId); }
     catch (error) { throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message); }
   }
   const requestBody = await prepareRequestBody(validatedBody, invocation.guide);
@@ -1553,7 +1553,7 @@ async function submitInvocation(
   if (isClientVideoInvocation(invocation)) {
     // Managed refs have now become data URLs with their actual stored media MIME.
     const { model: _injectedModel, ...videoBody } = requestBody;
-    try { validateCustomVideoBody(videoBody, invocation.capability === 'video.image_to_video', videoProtocol); }
+    try { validateCustomVideoBody(videoBody, invocation.capability === 'video.image_to_video', videoProtocol, invocation.modelId); }
     catch (error) { throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message); }
   }
   let connection: MediaConnection;

@@ -800,7 +800,7 @@ describe('Cindy Core media invocation state and security boundary', () => {
   // managed executor instead of turning an adapter-input Guide into raw HTTP (unit).
   it('uses a native image Guide override through the existing image adapter', async () => {
     const { model, value } = setupGuideDriven();
-    const native = { ...model, providerId: 'gemini', guideDriven: false };
+    const native = { ...model, providerId: 'gemini', guideDriven: false, imageProtocol: 'gemini' };
     mocks.models.mockResolvedValue([native]);
     mocks.providerModel.mockReturnValue(native);
     mocks.resolvedGuide.mockResolvedValue({ source: 'custom', protocol: 'gemini', value });
@@ -808,6 +808,37 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(prepared).toMatchObject({ ok: true, guide_source: 'custom', guide_revision: value.revision });
     expect(mocks.resolvedGuide).toHaveBeenCalled();
     expect(mocks.httpConnection).not.toHaveBeenCalled();
+    mocks.providerInvoke.mockResolvedValue({ buffer: PNG, mimeType: 'image/png' });
+    const body = { prompt: 'cat', generationConfig: { seed: 7 } };
+    expect(await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body }))
+      .toMatchObject({ ok: true, status: 'complete' });
+    expect(mocks.providerInvoke).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'gemini', nativeParameters: { generationConfig: { seed: 7 } } }));
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+  });
+
+  it('submits expanded 1.5 frame pins through the native SuperGrok connection', async () => {
+    const connection = setupCustomVideo();
+    const model = { id: 'xai/grok-imagine-video-1.5', name: 'Video 1.5', providerId: 'xai', mode: 'video_generation',
+      videoProtocol: 'xai-videos', modalities: { input: ['text', 'image'], output: ['video'] } };
+    mocks.models.mockResolvedValue([model]);
+    mocks.providerModel.mockReturnValue(model);
+    const value = providerServerGuide(model.id, 'xai-videos').guide;
+    value.operations.forEach(operation => { operation.inputSchema = { type: 'object' } as typeof operation.inputSchema; });
+    mocks.resolvedGuide.mockResolvedValue({ source: 'custom', protocol: 'xai-videos', value });
+    mocks.videoConnection.mockReturnValue({ ...connection, baseUrl: 'https://api.x.ai/v1', requestModelId: 'grok-imagine-video-1.5' });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: 'xai', modelId: model.id, capability: 'video.image_to_video' });
+    expect(prepared).toMatchObject({ ok: true, guide_source: 'custom' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ request_id: 'native-frames' }));
+    mocks.readBlob.mockResolvedValue({ buffer: PNG, mimeType: 'image/png' });
+    const frame = { url: `cindy-media://blobs/${'a'.repeat(64)}.png` };
+    expect(await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id),
+      body: { image: frame, last_frame: frame, resolution: '720p' } })).toMatchObject({ ok: true, status: 'pending' });
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = mocks.outboundFetch.mock.calls[0]!;
+    expect(url).toBe('https://api.x.ai/v1/videos/generations');
+    expect(JSON.parse(init.body as string)).toMatchObject({ model: 'grok-imagine-video-1.5',
+      image: { url: expect.stringMatching(/^data:image\/png;base64,/) },
+      last_frame: { url: expect.stringMatching(/^data:image\/png;base64,/) } });
   });
 
   // Unit at production dispatch: a new model must use its Guide's real path,

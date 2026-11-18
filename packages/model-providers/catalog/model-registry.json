@@ -3449,6 +3449,15 @@
       "nativeApi": "xai-videos"
     },
     {
+      "id": "xai/grok-imagine-video-1.5",
+      "name": "Grok Imagine Video 1.5",
+      "modelRef": "xai/grok-imagine-video-1.5",
+      "mode": "video_generation",
+      "status": "active",
+      "routes": [{ "providerId": "xai", "modelId": "xai/grok-imagine-video-1.5", "agents": [] }],
+      "nativeApi": "xai-videos"
+    },
+    {
       "id": "xiaomi/mimo-v2.6-pro",
       "name": "MiMo V2.6 Pro",
       "status": "active",
@@ -9926,6 +9935,16 @@
             "video"
           ]
         }
+      }
+    },
+    {
+      "id": "xai/grok-imagine-video-1.5",
+      "aliases": ["grok-imagine-video-1.5"],
+      "defaults": {
+        "name": "Grok Imagine Video 1.5",
+        "mode": "video_generation",
+        "officialDocs": "https://docs.x.ai/developers/model-capabilities/video/reference-to-video",
+        "modalities": { "input": ["text", "image"], "output": ["video"] }
       }
     },
     {
