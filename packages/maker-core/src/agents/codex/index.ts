@@ -3119,6 +3119,7 @@ assertRouteCurrent();
     let localCompactionProviderId: string | undefined;
     let defaultModelProviderId: string | undefined;
     let codexCustomProviderRoutes: CodexExtraSpawnConfig['codexCustomProviderRoutes'];
+    let resolveCustomProviderModelProviderId: CodexExtraSpawnConfig['resolveCustomProviderModelProviderId'];
     let buildSessionMcpConfig: CodexExtraSpawnConfig['buildSessionMcpConfig'];
     let subagentModelFallback: string | undefined;
     let subagentRoute: CodexExtraSpawnConfig['subagentRoute'];
@@ -3160,6 +3161,7 @@ assertRouteCurrent();
       localCompactionProviderId = undefined;
       defaultModelProviderId = undefined;
       codexCustomProviderRoutes = undefined;
+      resolveCustomProviderModelProviderId = undefined;
       buildSessionMcpConfig = undefined;
       subagentModelFallback = undefined;
       subagentRoute = undefined;
@@ -3254,6 +3256,7 @@ assertRouteCurrent();
           }
           if (codexProxyActive && cfg.codexCustomProviderRoutes?.length) {
             codexCustomProviderRoutes = cfg.codexCustomProviderRoutes;
+            resolveCustomProviderModelProviderId = cfg.resolveCustomProviderModelProviderId;
           }
           this.deps.logger.info('codex MCP bridge ready', {
             providers: this.deps.mcpProviders?.length ?? 0,
@@ -3405,6 +3408,7 @@ assertRouteCurrent();
       cindyRemoteCompactionProviderId,
       localCompactionProviderId,
       codexCustomProviderRoutes,
+      resolveCustomProviderModelProviderId,
       buildSessionMcpConfig,
       subagentModelFallback,
       subagentRoute,
@@ -5482,18 +5486,23 @@ assertRouteCurrent();
       credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
     const customProviderModelProvider = opts.remoteHostId
       ? null
-      : host.getCustomProviderModelProviderId?.(mutableProviderId, mutableCatalogModel);
+      : host.getCustomProviderModelProviderId?.(mutableProviderId, mutableCatalogModel, opts.sessionId);
     const customProviderThreadPolicy = opts.remoteHostId
-      ? { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false }
-      : host.getCustomProviderThreadPolicy?.(mutableProviderId, mutableCatalogModel) ?? {
+      ? { dynamicIdentity: false, disableSubagents: false, disableModelOverrides: false, disableWebSearch: false }
+      : host.getCustomProviderThreadPolicy?.(mutableProviderId, mutableCatalogModel, opts.sessionId) ?? {
           dynamicIdentity: false,
           disableSubagents: false,
           disableModelOverrides: false,
+          disableWebSearch: false,
         };
     if (customProviderThreadPolicy.dynamicIdentity) {
       customProviderThreadConfig = {
-        web_search: 'disabled',
-        'features.standalone_web_search': false,
+        ...(customProviderThreadPolicy.disableWebSearch
+          ? {
+              web_search: 'disabled',
+              'features.standalone_web_search': false,
+            }
+          : {}),
         ...(customProviderThreadPolicy.disableSubagents
           ? {
               'features.multi_agent': false,

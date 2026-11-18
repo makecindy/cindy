@@ -214,6 +214,9 @@ export async function applyRuntimeSetModelChange(
         currentCodexProxyActive: sess.codexProxyActive,
         currentCodexThreadModelProviderId: sess.codexThreadModelProviderId,
         currentCodexCindyRemoteCompactionCompatible: sess.codexCindyRemoteCompactionCompatible,
+        // 身份判定要对照这个任务已经固定的接口。不传 sessionId 时，已钉成 Chat 的旧任务
+        // 会按当前目录默认被看成 Responses，模型切换时被误判成身份失配。
+        sessionId,
         codexAuthInjection: input.codexAuthInjection,
       })
     : false;
