@@ -392,6 +392,9 @@ export function filterSlashCommands(
       // 插件指令同名时 name 带隐藏的 `/slug`,菜单只显示 label:按两者中更好的一个排序,
       // 输入显示名算精确匹配,输入完整限定指令也照常命中。
       const ranks = [rankOf(command.name)];
+      if (command.kind === 'agent-skill' && command.runtimeCommandName) {
+        ranks.push(rankOf(command.runtimeCommandName));
+      }
       if (command.kind === 'desktop' && command.label) ranks.push(rankOf(command.label));
       const matched = ranks.filter((r) => r >= 0);
       const rank = q ? (matched.length > 0 ? Math.min(...matched) : -1) : 0;
