@@ -36,11 +36,12 @@ it.each([
   ['needle', 'ready', true, '<p>no matching tasks</p>'],
   ['needle', 'searching', true, '<p>loading</p>'],
   ['', 'idle', false, '<p>no matching tasks</p>'],
-] as const)('renders query=%s status=%s with pinned=%s', (searchQuery, status, pinned, expected) => {
+].flatMap(row => ['list', 'inbox'].map(mode => [mode, ...row] as const)))('renders mode=%s query=%s status=%s with pinned=%s', (taskListMode, searchQuery, status, pinned, expected) => {
   const bindings = {
     createElement, shouldReplaceListWithSearchResults, searchQuery, indexedSearch: { status },
     sharedRows: [], initialHomeLoading: status === 'searching', taskSuggestionsPending: false,
-    filteredHome: { pinned: pinned ? [{}] : [] }, showRemoteGuide: false,
+    taskListMode, filteredInboxHome: { pinned: (taskListMode === 'inbox' ? pinned : !pinned) ? [{}] : [] },
+    filteredHome: { pinned: (taskListMode === 'list' ? pinned : !pinned) ? [{}] : [] }, showRemoteGuide: false,
     contentFilterCount: 0, taskSuggestionsMode: null, initialHomeError: false,
     emptyStateTitle: 'no matching tasks', emptyStateCopy: 'adjust search',
     spacing: { xxl: 32 }, windowLayout: { emptyMinHeight: 100, emptyPadding: 16 },

@@ -790,9 +790,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         stderrTruncated: false, timedOut: false, aborted: false } as const;
       const insert = (id: string, scheduleId: string, firedAt: number, status: ScheduleRun['status'], extra: Partial<ScheduleRun> = {}) =>
         harness.storage.insertRun({ id, scheduleId, firedAt, status, sessionId: 'recovery-session', ...extra });
-      await insert('execution-a', 'recovery-a', 1, 'failed', { readAt: 2, errorMsg: 'provider mismatch' });
+      await insert('execution-a', 'recovery-a', 1, 'failed', { readAt: 2, errorMsg: 'TASK_ACTION_AUTHORIZATION_EXPIRED' });
       expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'execution-a'))
-        .toMatchObject({ errorMsg: 'provider mismatch' });
+        .toMatchObject({ errorMsg: 'TASK_ACTION_AUTHORIZATION_EXPIRED' });
       await insert('check-b', 'recovery-b', 3, 'failed', { preRunHookResult: hook });
       const before = await harness.storage.listSidebarIndexRuns();
       expect(before.find((r) => r.runId === 'check-b')).toMatchObject({ failureKind: 'rate-limit', failureRecovered: false });
@@ -804,9 +804,15 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(recovered.find((r) => r.runId === 'execution-a')?.failureRecovered).toBe(false);
       await insert('healthy-a', 'recovery-a', 6, 'skipped', { preRunHookResult: { ...hook, status: 'skipped', decision: 'skip', exitCode: 2, checkSucceeded: true } });
       expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'execution-a')).toBeDefined();
+      const previousFailure = { firedAt: 1, errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED', laterRunSucceeded: false };
+      expect(await harness.storage.latestClosureFailure('recovery-a', 'recovery-session')).toEqual(previousFailure);
+      expect(await harness.storage.latestClosureFailure('recovery-a', 'another-session')).toBeUndefined();
       await insert('success-a', 'recovery-a', 7, 'success', { readAt: 8 });
       expect((await harness.storage.listSidebarIndexRuns()).some((r) => r.runId === 'execution-a')).toBe(false);
-      expect((await harness.storage.listRuns('recovery-a', 50)).some((r) => r.id === 'execution-a')).toBe(true);
+      expect((await harness.storage.listRuns('recovery-a', 50)).find((r) => r.id === 'execution-a'))
+        .toMatchObject({ status: 'failed', failureRecovered: true });
+      expect(await harness.storage.latestClosureFailure('recovery-a', 'recovery-session'))
+        .toEqual({ ...previousFailure, laterRunSucceeded: true });
       await insert('new-a', 'recovery-a', 9, 'failed');
       expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'new-a')).toMatchObject({ failureRecovered: false, failureKind: 'execution' });
     } finally { harness.close(); }

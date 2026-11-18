@@ -3,8 +3,9 @@ import path from 'node:path';
 import type { Session } from '@cindy/maker-core';
 import { normalizeWorkingDirForComparison } from '../../shared/workingDir.js';
 import { GHOST_ERRAND_PERMISSION_MODES, type GhostErrandPermissionMode } from '../../shared/ghost.js';
-import type { PluginTaskMessageRelay, PluginTaskPermissionMode, PluginTaskRoute, PluginTaskRun, PluginTaskView, PluginTeamPlan } from '../../shared/pluginTasks.js';
-import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../shared/pluginTasks.js';
+import type { PluginImProjectOverride, PluginTaskMessageRelay, PluginTaskPermissionMode, PluginTaskRoute, PluginTaskRun, PluginTaskView, PluginTeamPlan } from '../../shared/pluginTasks.js';
+import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS, PLUGIN_TASK_RUN_PREVIEW_MAX_CHARS } from '../../shared/pluginTasks.js';
+import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import type { PluginMessageAttachment } from '../../shared/pluginAttachments.js';
 import { withParsedPluginMessageAttachments, type PluginMessageItem } from '../cindy-media/pluginMessageAttachments.js';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
@@ -18,7 +19,8 @@ import {
 export interface PluginTaskReceipt {
   id: string;
   pluginId: string;
-  operation: 'create' | 'send' | 'target';
+  /** imPermission: a user-confirmed looser permission for one plugin and IM project (targetId). */
+  operation: 'create' | 'send' | 'target' | 'imPermission';
   targetId: string;
   requestKey: string;
   fingerprint: string;
@@ -108,6 +110,8 @@ export interface PluginTaskCreateContext {
 }
 export interface PluginTaskProject {
   workingDir?: string;
+  /** Display name (sidebar project name, or the localized chat label); never an identity. */
+  label?: string;
   route: PluginTaskRoute;
   permissionMode: GhostErrandPermissionMode;
   assertCurrent(): void;
@@ -141,8 +145,10 @@ export interface PluginTaskServiceDeps {
     inheritedDefault?: string;
   };
   resolveRoute(pluginId: string, route?: PluginTaskRoute, callId?: string): Promise<PluginTaskRoute>;
-  resolveImProject?(pluginId: string, project: string): Promise<PluginTaskProject>;
-  assertImProjectDispatch?(pluginId: string, project: string, task: PluginTaskView): void;
+  resolveImProjectPermission?(pluginId: string, project: string): Promise<Omit<PluginTaskProject, 'route'>>;
+  resolveImProject?(pluginId: string, project: string, selectedRoute?: PluginTaskRoute): Promise<PluginTaskProject>;
+  /** `granted` is a valid user-confirmed looser permission for this task's conversation, if any. */
+  assertImProjectDispatch?(pluginId: string, project: string, task: PluginTaskView, granted?: GhostErrandPermissionMode): void;
   createSession(
     pluginId: string,
     taskId: string,
@@ -192,6 +198,11 @@ export interface PluginTaskServiceDeps {
   inspect(
     taskId: string,
   ): Promise<{ execution: SessionExecutionIdentity | null; pending: readonly OwnedQueuedInput[] }>;
+  /**
+   * The live execution and its in-flight (unflushed) assistant text block, read together and
+   * synchronously so the text can be attributed to exactly one execution. Raw text, not yet cleaned.
+   */
+  readLivePreview?(taskId: string): { execution: SessionExecutionIdentity | null; text: string | null };
   cancel(
     pluginId: string,
     taskId: string,
@@ -266,22 +277,30 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       ? !view.planModeEnabled && (GHOST_ERRAND_PERMISSION_MODES as readonly unknown[]).includes(view.permissionMode)
       : isPluginTaskPermissionAllowed(view.permissionMode, configuredMode, view.planModeEnabled);
   };
+  const updatingImProjects = new Set<string>();
   const assertDispatch = async (pluginId: string, taskId: string, assertPlanCurrent = capturePlanGuard(taskId)) => {
     const view = await ownTask(pluginId, taskId);
     deps.assertAuthorized(pluginId);
     assertPlanCurrent();
     if (view.status !== 'active') return fail('TASK_BUSY', 'Archived tasks cannot accept input');
+    if (updatingImProjects.has(taskId)) return fail('TASK_BUSY', 'Task settings are updating');
     if (!isTaskPermissionAllowed(pluginId, view))
       return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
     const receipt = await deps.store.get(taskId);
     deps.assertCurrent();
     deps.assertAuthorized(pluginId);
     assertPlanCurrent();
-    const project = receipt && JSON.parse(receipt.payload).imProject;
+    const data = receipt && JSON.parse(receipt.payload);
+    const transition = data?.imProjectTransition;
+    const project = data?.imProject ?? (transition && transition.previousPermission !== view.permissionMode ? transition.project : undefined);
     if (typeof project === 'string') {
       if (!deps.assertImProjectDispatch) return fail('HOST_NOT_READY', 'Shared IM projects are unavailable');
-      deps.assertImProjectDispatch(pluginId, project, view);
+      const granted = await readImPermissionGrant(pluginId, project, data.imPermissionGrant);
+      deps.assertAuthorized(pluginId);
+      assertPlanCurrent();
+      deps.assertImProjectDispatch(pluginId, project, view, granted);
     }
+    if (updatingImProjects.has(taskId)) return fail('TASK_BUSY', 'Task settings are updating');
     return view;
   };
   const save = async (row: PluginTaskReceipt, payload: unknown) => {
@@ -317,7 +336,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
   };
   const newReceipt = (
     pluginId: string,
-    operation: 'create' | 'send',
+    operation: 'create' | 'send' | 'imPermission',
     targetId: string,
     requestKey: string,
     fingerprint: string,
@@ -334,6 +353,39 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     revision: 0,
     createdAt: now(),
   });
+  /**
+   * A looser permission the user confirmed in Cindy's own dialog, for this plugin and project.
+   * Uninstall revokes it; another plugin, project or a malformed receipt never counts.
+   */
+  async function readImPermissionGrant(pluginId: string, project: string, grantId: unknown): Promise<GhostErrandPermissionMode | undefined> {
+    if (typeof grantId !== 'string') return undefined;
+    const row = await deps.store.find(pluginId, 'imPermission', project, grantId);
+    deps.assertCurrent();
+    if (!row || row.pluginId !== pluginId || row.operation !== 'imPermission' || row.targetId !== project) return undefined;
+    try {
+      const data = JSON.parse(row.payload);
+      return data && typeof data === 'object' && data.ownershipRevoked !== true && isPluginTaskPermissionMode(data.permissionMode)
+        ? data.permissionMode : undefined;
+    } catch { return undefined; }
+  }
+  /**
+   * One conversation's model and permission inside a shared IM project. The directory always
+   * follows the project. A permission looser than the project's needs a grant; stricter is free.
+   */
+  const resolveImOverride = async (pluginId: string, imProject: string, project: PluginTaskProject, override?: PluginImProjectOverride) => {
+    const route = project.route;
+    const permissionMode: GhostErrandPermissionMode = override?.permissionMode ?? project.permissionMode;
+    const loosened = !isPluginTaskPermissionAllowed(permissionMode, project.permissionMode);
+    const grant = loosened ? override?.permissionGrant : undefined;
+    const assertPermission = async () => {
+      if (!loosened) return;
+      const granted = await readImPermissionGrant(pluginId, imProject, grant);
+      if (!granted || !isPluginTaskPermissionAllowed(permissionMode, granted))
+        fail('CONFIRMATION_REQUIRED', 'Confirm this looser permission in Cindy first');
+    };
+    await assertPermission();
+    return { route, permissionMode, grant, assertPermission };
+  };
   const reconcile = async (row: PluginTaskReceipt): Promise<PluginTaskRun> => {
     const run = JSON.parse(row.payload) as PluginTaskRun;
     if (terminal(run)) return run;
@@ -381,7 +433,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     },
     create: (
       pluginId: string,
-      request: { requestKey: string; title?: string; autoTitle?: boolean; route?: PluginTaskRoute; permissionMode?: PluginTaskPermissionMode; isolatedWorkspace?: boolean; callId?: string; hidden?: boolean; imProject?: string },
+      request: { requestKey: string; title?: string; autoTitle?: boolean; route?: PluginTaskRoute; permissionMode?: PluginTaskPermissionMode; isolatedWorkspace?: boolean; callId?: string; hidden?: boolean; imProject?: string; imOverride?: PluginImProjectOverride },
       targetContext?: PluginTaskCreateContext,
     ) =>
       completeOperation(() => lifecycle(pluginId, async () => {
@@ -394,10 +446,13 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           return fail('INVALID_REQUEST', 'Unsupported task creation permission');
         if (request.imProject !== undefined && (targetContext || request.route || request.permissionMode || request.callId || request.isolatedWorkspace !== undefined))
           return fail('INVALID_REQUEST', 'Shared project settings cannot be combined with overrides');
+        if (request.imOverride !== undefined && request.imProject === undefined)
+          return fail('INVALID_REQUEST', 'Conversation settings need a shared IM project');
         let project: PluginTaskProject | undefined;
+        let override: Awaited<ReturnType<typeof resolveImOverride>> | undefined;
         const assertRequestedPermission = () => {
           project?.assertCurrent();
-          const permission = project?.permissionMode ?? request.permissionMode;
+          const permission = override?.permissionMode ?? project?.permissionMode ?? request.permissionMode;
           if (permission === undefined) return;
           deps.assertAuthorized(pluginId);
           const configuredMode = deps.readPermissionMode(pluginId);
@@ -424,11 +479,14 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         }
         if (request.imProject !== undefined) {
           if (!deps.resolveImProject) return fail('HOST_NOT_READY', 'Shared IM projects are unavailable');
-          project = await deps.resolveImProject(pluginId, request.imProject);
+          const selectedRoute = request.imOverride?.route && await deps.resolveRoute(pluginId, request.imOverride.route);
+          project = await deps.resolveImProject(pluginId, request.imProject, selectedRoute);
           targetContext = { taskId: id(), workingDir: project.workingDir, assertCurrent: project.assertCurrent };
+          // Omitted: exactly the shared project settings, as before conversation overrides existed.
+          if (request.imOverride !== undefined) override = await resolveImOverride(pluginId, request.imProject, project, request.imOverride);
         }
         assertRequestedPermission();
-        const route = project?.route ?? await deps.resolveRoute(pluginId, request.route, request.callId);
+        const route = override?.route ?? project?.route ?? await deps.resolveRoute(pluginId, request.route, request.callId);
         deps.assertCurrent();
         deps.assertAuthorized(pluginId);
         targetContext?.assertCurrent();
@@ -440,13 +498,15 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           '',
           request.requestKey,
           fingerprint,
-          { route, title, ...(request.autoTitle ? { autoTitle: true } : {}), ...(request.imProject !== undefined ? { imProject: request.imProject } : {}) },
+          { route, title, ...(request.autoTitle ? { autoTitle: true } : {}), ...(request.imProject !== undefined ? { imProject: request.imProject } : {}),
+            ...(override?.grant ? { imPermissionGrant: override.grant } : {}) },
           taskId,
         );
         await exclusive(async () => {
           deps.assertAuthorized(pluginId);
           targetContext?.assertCurrent();
           assertRequestedPermission();
+          await override?.assertPermission();
           if (hidden) assertHiddenTasksAllowed(pluginId);
           await deps.store.insert(receipt);
         });
@@ -459,7 +519,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
             targetContext?.assertCurrent();
             await deps.createSession(pluginId, taskId, title, route, targetContext ? undefined : request.isolatedWorkspace,
               project ? route : request.route, onPersistenceStarted, targetContext ? undefined : request.callId,
-              hidden || undefined, targetContext, project?.permissionMode ?? request.permissionMode);
+              hidden || undefined, targetContext, override?.permissionMode ?? project?.permissionMode ?? request.permissionMode);
           } else if (targetContext) {
             targetContext.assertCurrent();
             await deps.createSession(pluginId, taskId, title, route, undefined, request.route,
@@ -500,53 +560,120 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       return {ok:true};
     }),
     assertDispatch,
-    followImProject: (pluginId: string, request: { taskId: string; expectedRevision: number; imProject: string }) => completeOperation(() => lifecycle(pluginId, async () => {
+    followImProject: (pluginId: string, request: { taskId: string; expectedRevision: number; imProject: string; imOverride?: PluginImProjectOverride }) => completeOperation(() => lifecycle(pluginId, async () => {
       // Same-task continuation only. Changing projects is an explicit new-task boundary.
-      let initial: PluginTaskView | undefined;
-      let project: PluginTaskProject | undefined;
-      const matchesRoute = (task: PluginTaskView) => project && (['agentKind', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId'] as const)
-        .every(key => task.resolvedConfig[key] === project!.route[key]);
-      const assertTask = async () => {
+      // The project's settings, or this conversation's own model/permission on top of them;
+      // filled once resolved, read by the guard at the runtime writer's boundaries.
+      const effective: { route?: PluginTaskRoute; permissionMode?: GhostErrandPermissionMode } = {};
+      const matchesRoute = (task: PluginTaskView) => !!effective.route && (['agentKind', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId'] as const)
+        .every(key => task.resolvedConfig[key] === effective.route![key]);
+      const readIdleTask = async () => {
         const task = await ownTask(pluginId, request.taskId);
         if (task.status !== 'active' || deps.isBusy?.(task.taskId)) return fail('TASK_BUSY', 'Wait for the current task to finish');
+        return task;
+      };
+      const initial = await exclusive(async () => {
+        const task = await readIdleTask();
+        if (task.revision !== request.expectedRevision) return fail('STALE_REVISION', 'Task settings changed');
+        return task;
+      });
+      const assertTask = async () => {
+        const task = await readIdleTask();
         // The shared runtime writer applies the route before the permission and invokes
         // this guard at both boundaries. Admit only that exact intermediate configuration.
-        if (task.revision !== request.expectedRevision && !(initial && matchesRoute(task) &&
+        if (task.revision !== request.expectedRevision && !(matchesRoute(task) &&
           task.workingDir === initial.workingDir && task.workspaceKind === initial.workspaceKind &&
           task.planModeEnabled === initial.planModeEnabled &&
-          (task.permissionMode === initial.permissionMode || task.permissionMode === project!.permissionMode)))
+          (task.permissionMode === initial.permissionMode || task.permissionMode === effective.permissionMode)))
           return fail('STALE_REVISION', 'Task settings changed');
         return task;
       };
-      initial = await exclusive(assertTask);
       if (!deps.resolveImProject) return fail('HOST_NOT_READY', 'Shared IM projects are unavailable');
-      project = await deps.resolveImProject(pluginId, request.imProject);
-      const selected = project;
+      const selectedRoute = request.imOverride?.route && await deps.resolveRoute(pluginId, request.imOverride.route);
+      const selected = await deps.resolveImProject(pluginId, request.imProject, selectedRoute);
+      const override = await resolveImOverride(pluginId, request.imProject, selected, request.imOverride);
+      Object.assign(effective, { route: override.route, permissionMode: override.permissionMode });
       const assertUnchanged = async () => {
         const task = await assertTask();
         selected.assertCurrent();
         if (!selected.matches(task)) return fail('PROJECT_MISMATCH', 'Start a new task in the selected project');
+        await override.assertPermission();
         const ceiling = deps.readPermissionMode(pluginId);
-        if (ceiling !== undefined && !isPluginTaskPermissionAllowed(selected.permissionMode, ceiling))
+        if (ceiling !== undefined && !isPluginTaskPermissionAllowed(override.permissionMode, ceiling))
           return fail('PERMISSION_DENIED', 'Project permission exceeds plugin dispatch policy');
         return task;
       };
       const task = await exclusive(assertUnchanged);
-      const same = (['agentKind', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId'] as const)
-        .every(key => task.resolvedConfig[key] === project.route[key]) && task.permissionMode === project.permissionMode;
-      if (!same && !deps.setModel) return fail('HOST_NOT_READY', 'Task model service is unavailable');
-      const result = same ? { status: 'unchanged' } : await deps.setModel!(task.taskId, project.route,
-        async () => { await exclusive(assertUnchanged); }, task.permissionMode === project.permissionMode ? undefined : project.permissionMode);
-      // The source is durable so dispatch also checks current project membership and permission.
-      await exclusive(async () => {
+      const recordProject = () => exclusive(async () => {
         await ownTask(pluginId, task.taskId);
         selected.assertCurrent();
         const row = (await deps.store.get(task.taskId))!;
         const data = JSON.parse(row.payload);
-        if (data.imProject !== request.imProject) await save(row, { ...data, imProject: request.imProject });
+        const { imPermissionGrant: previousGrant, imProjectTransition, ...rest } = data;
+        const next = { ...rest, imProject: request.imProject, ...(override.grant ? { imPermissionGrant: override.grant } : {}) };
+        if (data.imProject !== next.imProject || previousGrant !== override.grant || imProjectTransition) await save(row, next);
       });
-      return { ...result, task: await exclusive(() => ownTask(pluginId, task.taskId)) };
+      const same = (['agentKind', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId'] as const)
+        .every(key => task.resolvedConfig[key] === override.route[key]) && task.permissionMode === override.permissionMode;
+      if (!same && !deps.setModel) return fail('HOST_NOT_READY', 'Task model service is unavailable');
+      // Dispatch waits for the runtime and project receipt to agree.
+      updatingImProjects.add(task.taskId);
+      let stagedProject = false;
+      try {
+        if (!same && override.grant) await exclusive(async () => {
+          await assertUnchanged();
+          const row = (await deps.store.get(task.taskId))!;
+          const data = JSON.parse(row.payload);
+          // A legacy task still dispatches under its previous policy until its runtime mode changes.
+          // Keep enough data on disk to check the project even if Cindy exits mid-update.
+          if (data.imProject === undefined && data.imProjectTransition === undefined) {
+            await save(row, { ...data, imProjectTransition: { project: request.imProject, previousPermission: task.permissionMode } });
+            stagedProject = true;
+          }
+        });
+        const result = same ? { status: 'unchanged' } : await deps.setModel!(task.taskId, override.route,
+          async () => { await exclusive(assertUnchanged); }, task.permissionMode === override.permissionMode ? undefined : override.permissionMode);
+        // Keep the previous grant when the runtime rejects the update.
+        await recordProject();
+        return { ...result, task: await exclusive(() => ownTask(pluginId, task.taskId)) };
+      } catch (error) {
+        if (stagedProject) await exclusive(async () => {
+          const current = await ownTask(pluginId, task.taskId);
+          if (current.permissionMode !== task.permissionMode) return;
+          const row = (await deps.store.get(task.taskId))!;
+          const { imProjectTransition, ...data } = JSON.parse(row.payload);
+          if (imProjectTransition?.project === request.imProject) await save(row, data);
+        }).catch(() => { /* Preserve the transition if recovery cannot verify the runtime. */ });
+        throw error;
+      } finally {
+        updatingImProjects.delete(task.taskId);
+      }
     })),
+    /** What "follow IM" resolves to for this project right now; a read, never a task change. */
+    imProjectConfig: async (pluginId: string, imProject: string) => {
+      deps.assertCurrent();
+      deps.assertAuthorized(pluginId);
+      if (!deps.resolveImProject) return fail('HOST_NOT_READY', 'Shared IM projects are unavailable');
+      const project = await deps.resolveImProject(pluginId, imProject);
+      project.assertCurrent();
+      return { imProject, label: project.label, route: project.route, permissionMode: project.permissionMode };
+    },
+    /** Host-only permission snapshot for the native confirmation, independent of model availability. */
+    imProjectPermission: async (pluginId: string, imProject: string) => {
+      deps.assertCurrent();
+      deps.assertAuthorized(pluginId);
+      if (!deps.resolveImProjectPermission) return fail('HOST_NOT_READY', 'Shared IM projects are unavailable');
+      const project = await deps.resolveImProjectPermission(pluginId, imProject);
+      project.assertCurrent();
+      return project;
+    },
+    /** Store a looser permission the user just allowed in Cindy's own dialog; returns its opaque id. */
+    recordImPermissionGrant: (pluginId: string, imProject: string, permissionMode: PluginTaskPermissionMode) => exclusive(async () => {
+      deps.assertAuthorized(pluginId);
+      const grantId = id();
+      await deps.store.insert(newReceipt(pluginId, 'imPermission', imProject, grantId, hash([imProject, permissionMode]), { permissionMode }, grantId));
+      return grantId;
+    }),
     setModel: (pluginId: string, request: { taskId: string; expectedRevision: number; route: PluginTaskRoute | 'plugin-default' }) => completeOperation(() => lifecycle(pluginId, async () => {
       deps.assertCurrent();
       deps.assertAuthorized(pluginId);
@@ -744,8 +871,24 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         throw new PluginTaskError(code, code, code === 'TASK_BUSY');
       throw error;
     })),
-    getRun: async (pluginId: string, runId: string) =>
-      reconcile(await exclusive(() => ownRun(pluginId, runId))),
+    getRun: async (pluginId: string, runId: string): Promise<PluginTaskRun> => {
+      const run = await reconcile(await exclusive(() => ownRun(pluginId, runId)));
+      if (run.status !== 'running' || !run.execution || !deps.readLivePreview) return run;
+      // The preview read stays outside the receipt queue (like readMessages); it is synchronous,
+      // so account and approval are rechecked right before it, like listRuns' tail check.
+      deps.assertCurrent();
+      deps.assertAuthorized(pluginId);
+      const live = deps.readLivePreview(run.taskId);
+      // Only this run's own execution: a later input's answer in the same task is not this run's.
+      if (!live.text || !isSameSessionExecution(live.execution, run.execution)) return run;
+      let text = stripInternalWebCitations(live.text);
+      if (text.length > PLUGIN_TASK_RUN_PREVIEW_MAX_CHARS) {
+        const end = PLUGIN_TASK_RUN_PREVIEW_MAX_CHARS;
+        // Do not cut a surrogate pair in half.
+        text = text.slice(0, /[\uD800-\uDBFF]/.test(text[end - 1]!) ? end - 1 : end);
+      }
+      return text ? { ...run, preview: { text } } : run;
+    },
     listRuns: async (pluginId: string, taskId: string, after = '', limit = 50) => {
       const rows = await exclusive(async () => {
         await ownTask(pluginId, taskId);

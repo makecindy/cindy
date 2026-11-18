@@ -3494,8 +3494,8 @@ export function ProviderConnectionDialog({
                 >
                   {t('settings.providers.custom.imageGenerationReload.cancel')}
                 </Button>
-                <Button
-                  variant="secondary"
+                <Button data-settings-search-action="Interrupt running image generation and save this provider"
+                  variant="primary"
                   size="lg"
                   tone="danger-solid"
                   loading={saving}

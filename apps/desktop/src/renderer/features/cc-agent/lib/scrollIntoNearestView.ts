@@ -1,3 +1,5 @@
+import { useEffect, useRef, type RefObject } from 'react';
+
 /**
  * scrollIntoNearestView — 把目标元素滚进 viewport 的统一封装
  * ---------------------------------------------------------------------------
@@ -20,4 +22,25 @@ export function scrollIntoNearestView(el: Element | null | undefined): void {
     block: 'nearest',
     behavior: reduceMotion ? 'auto' : 'smooth',
   });
+}
+
+/**
+ * The open task's row scrolls itself into view when it becomes active, or mounts already active
+ * (a project or section expanding around it). In the inbox a row also remounts when its task moves
+ * to another section (e.g. a reply sends it from Pending to Working); that move must not scroll
+ * the sidebar (2026-11-18 user decision), so in the inbox only becoming active scrolls.
+ */
+export function useScrollActiveRowIntoView(
+  ref: RefObject<Element | null>,
+  isActive: boolean,
+  { navigationOnly, inboxMode }: { navigationOnly: boolean; inboxMode: boolean },
+): void {
+  const mounted = useRef(false);
+  useEffect(() => {
+    const mounting = !mounted.current;
+    mounted.current = true;
+    if (isActive && !navigationOnly && !(mounting && inboxMode)) scrollIntoNearestView(ref.current);
+  // navigationOnly / inboxMode are fixed for a mounted row; only a change of isActive scrolls.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive]);
 }

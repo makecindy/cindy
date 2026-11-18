@@ -183,7 +183,7 @@ export interface MenubarUsageScopeInput {
 
 /** The models with the most tokens in the last 30 days; each day lists theirs, then everything else. */
 export interface MenubarModelSeries {
-  models: { name: string; harness: MenubarHarness }[];
+  models: { name: string; harness: MenubarHarness | 'auxiliary' }[];
   /** Value per day, aligned with `MenubarUsageInput.days`; `models.length + 1` entries, the rest last. */
   daily: number[][];
   /** Tokens per day, same shape as `daily`. */

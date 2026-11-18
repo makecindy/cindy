@@ -114,9 +114,17 @@ export function createHostCodexSystemLogin(options: {
 }) {
   const myAuth = path.join(options.codexHome, 'auth.json');
   let pending: Promise<void> | null = null;
+  /**
+   * The desktop's sharedAuthLinkUnavailable: the system login is signed in but this
+   * runtime could not link to it (Windows without symlink privilege). The desktop
+   * reports it as its own reason, so the Host has to report the same one.
+   */
+  let sharedAuthLinkUnavailable = false;
 
   /** runReconcileWithSystemCodex, steps 2 to 9 (auth-adapters.ts 1172–1353). */
   async function run(systemAuth: string): Promise<void> {
+    // Every pass judges again: only this pass failing to link counts as unreachable.
+    sharedAuthLinkUnavailable = false;
     // Step 2: an explicit disconnect or an invalidation still covering the system login.
     if (restoreInvalidationStateOnStartup(options.codexHome, systemAuth, myAuth).suppressReconcile) return;
     // Step 3.
@@ -163,8 +171,10 @@ export function createHostCodexSystemLogin(options: {
     await fsp.mkdir(options.codexHome, { recursive: true }).catch(() => undefined);
     const { kind, error, linkType } = await relinkSharedCodexAuth(systemAuth, myAuth);
     if (kind === 'linked') log.info('codex auth.json linked with shared OpenAI login', { linkType });
-    else if (kind === 'link-unsupported') log.warn('shared OpenAI auth link unavailable; use independent login', { error: error?.message });
-    else if (kind === 'swap-failed-intact') log.warn('reconcile swap failed, auth.json left intact', { error: error?.message });
+    else if (kind === 'link-unsupported') {
+      log.warn('shared OpenAI auth link unavailable; use independent login', { error: error?.message });
+      sharedAuthLinkUnavailable = true;
+    } else if (kind === 'swap-failed-intact') log.warn('reconcile swap failed, auth.json left intact', { error: error?.message });
     else if (kind === 'recovered') log.warn('reconcile swap failed but auth.json recovered from shared source', { error: error?.message });
     else if (kind === 'lost') log.error('reconcile swap failed and auth.json lost; user must re-login', { error: error?.message });
   }
@@ -205,6 +215,8 @@ export function createHostCodexSystemLogin(options: {
 
   return {
     systemAuthPath: options.systemAuthPath,
+    /** The desktop's sharedAuthLinkUnavailable (auth-adapters.ts). */
+    sharedAuthLinkUnavailable(): boolean { return sharedAuthLinkUnavailable; },
     /** reconcileWithSystemCodex: deduplicated; skipped during a login unless the login runs it. */
     reconcile(opts?: { allowCurrentLogin?: boolean }): Promise<void> {
       const systemAuth = options.systemAuthPath;

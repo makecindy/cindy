@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   scope: 'owner-a',
   v2Directory: vi.fn(), v2Request: vi.fn(),
   readV2Secrets: vi.fn(),
+  noteRemoved: vi.fn(),
 }));
 
 vi.mock('electron', () => ({ net: { fetch: mocks.netFetch } }));
@@ -44,10 +45,12 @@ vi.mock('../selfHostedRelayConfig.js', () => ({ readRelaySecrets: mocks.readV2Se
 vi.mock('../agentNetRuntime.js', () => ({ agentNetClientForRelay: () => ({
   rootPublicKey: 'A'.repeat(43), directory: mocks.v2Directory, request: mocks.v2Request,
 }), currentAgentNetClient: () => mocks.v2Active ? { certificate: { deviceId: 'pc' }, directory: mocks.v2Directory, request: mocks.v2Request } : null,
-agentNetRequiresEncryption: () => mocks.onlyEncrypted, agentNetSelectionKey: () => mocks.selection }));
+agentNetRequiresEncryption: () => mocks.onlyEncrypted, agentNetSelectionKey: () => mocks.selection,
+useDeviceLinkDeviceList: () => {}, agentNetNoteDeviceLinkDevices: () => {}, agentNetDeviceAccepted: () => true,
+agentNetNoteDeviceRemoved: mocks.noteRemoved }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => mocks.scope, isAppSessionBoundaryPending: () => false }));
 
-import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi.desktop';
+import { deviceLinkApiFetch, officialDeviceLinkApiFetch, officialDeviceListFetch } from '../deviceLinkApi.desktop';
 import { PROVIDER_METADATA_TRUST_MS } from '@cindy/device-link';
 import { __resetDeviceDirectoryUnionForTests } from '../agentNetDeviceDirectory';
 import { invalidateProviderDirectoryContinuity } from '../providerMetadataContinuity';
@@ -97,6 +100,18 @@ describe('deviceLinkApiFetch', () => {
     expect(mocks.v2Request).toHaveBeenCalledWith(method, '/devices/peer', body);
     expect(lastRequest()).toEqual({ url: 'http://192.168.1.20:47820/api/device-link/devices/peer', authorization: 'CindyRelay relay-credential' });
     expect(mocks.getAccessToken).not.toHaveBeenCalled();
+  });
+  // Besides revoking an Agent-Net member (tests below), every computer refuses a removed device from the Device Link list, this
+  // one at once; that also covers a device that is not an Agent-Net member here. A refused deletion must not refuse the device.
+  it('reports an official removal to Agent-Net only after the server accepted it', async () => {
+    mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'NOT_FOUND' } }), { status: 404 }));
+    await expect(deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'DELETE' })).rejects.toBeTruthy();
+    expect(mocks.noteRemoved).not.toHaveBeenCalled();
+    mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({ deviceId: 'peer', deleted: true }), { status: 200 }));
+    await deviceLinkApiFetch('/api/device-link/devices/peer', { method: 'DELETE' });
+    expect(mocks.noteRemoved).toHaveBeenCalledWith('peer');
+    expect(lastRequest()).toEqual({ url: 'https://device-link.official.invalid/api/device-link/devices/peer', authorization: 'Bearer account-access-token' });
+    expect(mocks.v2Request).not.toHaveBeenCalled();
   });
   it('cancels a management mutation if the owner changes while the V2 directory is loading', async () => {
     mocks.relay = { baseUrl: 'http://192.168.1.20:47820', credential: 'relay-credential', role: 'owner',
@@ -310,6 +325,23 @@ describe('deviceLinkApiFetch', () => {
       expect(mocks.netFetch).toHaveBeenCalledTimes(1);
     } finally {
       // 账本是模块级共享状态:留给下一个用例就等于替它限流。
+      __resetDirectoryThrottleForTests();
+    }
+  });
+
+  // 2026-11-17 第二次 rebase：Agent-Net 在后台读设备列表（判断哪些设备删掉了）也要进同一本限流账，原来直接发请求，
+  // 别人收到 429 后它照发，它收到 429 也没人记。
+  it('keeps the Agent-Net device-list read inside the shared directory cooldown', async () => {
+    try {
+      mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({ message: 'rate limited' }), {
+        status: 429, headers: { 'Retry-After': '60' },
+      }));
+      await expect(officialDeviceListFetch({ timeoutMs: 10_000 })).rejects.toMatchObject({ statusCode: 429 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+      await expect(officialDeviceListFetch({ timeoutMs: 10_000 })).rejects.toMatchObject({ statusCode: 429 });
+      await expect(remoteLocalAgentModels(() => true)).resolves.toEqual([]);
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+    } finally {
       __resetDirectoryThrottleForTests();
     }
   });

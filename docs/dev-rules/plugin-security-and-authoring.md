@@ -49,6 +49,10 @@ Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 
 跨账号切换和插件撤权后的迟到回包不交付。原有插件未声明该组时行为与批准不变。
 manifest 新增 `usage` 声明走原整体安装确认；已有该组批准调用新增组内读取不补批。
 beta 存量同意范围扩展及维护者确认要求见[平台契约的授权记录](protocol-compatibility/plugin-host-tools-platform.md#usage-组范围扩展的维护确认)。
+
+`get_session_quota` 沿用 `usage` 组的安装批准。目标任务从当前账号任务库解析，
+异机和分享额度沿现有通道判权。额度结果不含任务正文、设备标识或账号标识；
+无法确认归属或授权已经失效时不可用。
 实现与回归见 `subscription-accounts/runtime.ts` 及其测试、`hostToolSlot.test.ts`、
 `ghostInstallConsent.test.ts`；作者用法见随包 `plugin-host-tools.md`「读取订阅用量」。
 
@@ -311,11 +315,15 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   实现与作者契约见 [通用投递目标](plugin-task-api-implementation.md#通用投递目标增量接口尚未发布)。
   同一批准也允许 IM 插件通过 `tasks.imProjects/create/followImProject` 复用侧栏项目与官方机器人
   的模型、来源和权限设置；仅接续插件自己的任务，不能搬动其他项目的任务。
+  同一批准下，插件还可按群聊／私聊覆盖自己任务的模型与权限（`imOverride`）；比项目更宽的权限只在用户于
+  Cindy 自己的确认框里允许后生效，见本文「完全访问须来自用户在插件设置中的选择」一条的 2026-11-18 例外。
+  顶层 `imEntrance` 只是展示声明（「IM 机器人」页列出插件），不新增权限项，不授予任何能力。
   增量字段、旧任务回执兼容与发送时复核见[插件 IM 共用项目与模型](protocol-compatibility/plugin-im-projects.md)。
 - `agent.observe` 是独立能力，不依赖 `agent.tasks`，单列 `agent:observe` 权限并要求 Host receipt 的 `observeCapabilityApproved` 显式批准。
   只读返回已登记本机项目中任务的标题、Agent 类型、归档与状态元数据，并可在主窗口打开其中的任务；不返回消息、计划或文件，也不能发送、修改或停止任务。
   旧 tasks/targets 批准与历史未知字段不授予查看；首次调用复用既有宿主确认。实现见 [只读查看项目任务](plugin-task-api-implementation.md#只读查看项目任务增量接口尚未发布)。
 - `agent.companions` 是独立能力，不依赖 tasks/targets/observe，单列 `agent:companions` 权限并要求 Host receipt 的 `companionsCapabilityApproved` 显式批准。
+  `list` 可返回当前桌面侧栏的布尔未读标记 `unread`。宿主按当前账号读取已提交的伙伴已读位置。订阅只发送原有的刷新通知，不传伙伴 ID、未读值、阅读时间或消息内容。
   只读返回账号下全部伙伴（含主人其他电脑上的伙伴，从其主力电脑读取）的名单、状态、工作阶段（公开类别）、等待主人处理的请求标题、最新一条回复正文（≤8000 字）
   与最近对话（≤50 条主人消息和伙伴回复，同云端镜像的 `mirrorMessageText` 投影，不含工具过程、进度说明、思考与子 Agent 输出；产品决定 2026-11-04），
   并可在主窗口打开伙伴对话或请求所在任务；`interaction` 按对话卡片的内容给出单条请求（工具输入与手机端同样脱敏，代输入的值不出宿主）。回复正文与请求内容不进推送、不写日志。
@@ -329,6 +337,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   直接拒装；已安装快照里不成对的历史值原样保留但不授予。它单列为 `agent:hidden-tasks` 权限，
   更新新增即「权限变多」；运行期由 taskSlot 与任务服务按身份卡双重守门。透明性兜底与多端口径见
   [`plugin-task-api-implementation.md`](plugin-task-api-implementation.md)「后台任务」。
+- `agent.modelPreferences`（模型收藏与最近使用，2026-11 产品决定）是独立能力，不依赖 tasks；新包非布尔拒装，
+  已安装快照里的非 `true` 历史值原样保留但不授予。按 hiddenTasks 的方式单列 `agent:model-preferences` 权限：
+  安装／更新确认接受即整体授予，更新新增即「权限变多」，不另存分项批准、不补批。运行期由
+  `/model-preferences` 端点按已批准、已启用且该版本 manifest 声明现查守门，见下文
+  [模型收藏与最近使用](#模型收藏与最近使用新增接口尚未发布)。
 - **Agent 在途调用不需要重复登记具体操作。** 插件工具是否执行由当前
   `ghost_call` 的 Cindy Agent 授权决定；普通网络和当前工作目录操作使用主机
   下发且仍在途的 `callId`。随包代码与 CLI 继续使用已有 Node 工作进程，顶层
@@ -420,10 +433,19 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 - **插件提供的模型（2026-11-01）**：清单 `models.types` 声明能力，列表经 `PUT /models` 运行时发布，存在插件自己的
   `/kv` 之外，读时重新校验。`route` 模型必须声明 `will-start-task`，节点批准后才显示；选择器只读落盘列表，
   不调用插件，文案全部来自插件。`route` 模型不进执行目录。
+- **原生工具控制节点**：`will-tool-call` / `did-tool-result` 经现有任务插件选择、整体安装批准与
+  `subscribe.hooks` 声明接 Claude SDK hooks 和 Pi cindy-bridge。
+  每个调用／结果有独立 1 秒等待预算，不消费轮前 5 秒；不选时不装钩子或序列化内容。
+  只允许收紧权限，改参后仍走原权限链；原生支持、错误／取消和结果变换差异见随包
+  `plugin-control-points.md`「原生工具生命周期」。Codex 不自动接入：不复制原生内部信任指纹或路径，
+  不改用户信任、不 bypass；Review／访客隔离不变。静默超时沿用引擎默认行为。
+  实时选择、owner 与安装检查复用主干控制节点；在途选择／owner 变化按原生默认处理。
+  不新增选择快照、实例刷新或贡献者终检；按点安装，新点服从原生实例边界。Claude 不改参，Pi 改参仍走原权限。
+  接线与行为回归见 `toolLifecycleControl.ts`、Claude 钩子测试与 Pi 原生集成用例。
 - **任务运行时控制点**：`will-start-turn` 在 App 正常发送入口为 Claude Code／Codex／Pi 新轮开始前选模，
   复用任务原有模型控制服务；`will-model-request` 仅本机 Pi 支持，使用原生虚拟模型与
   `before_provider_request`，分 `select` 和 `payload` 两阶段。后者可变更参数和请求正文，
-  只要求结果仍是合法请求；认证头、连接凭证不进入数据。五个任务运行时控制点只要求整包
+  只要求结果仍是合法请求；认证头、连接凭证不进入数据。任务运行时控制点只要求整包
   安装批准有效、已启用且该版本 manifest 已声明，不维护分项批准、不补批或逐次确认，
   不套用 Agent MCP 权限策略；旧 receipt 中这些节点的分项记录读到即忽略，不迁移或改写原数据。
   安装／更新确认仍展示声明能力，接受即整体授予，拒绝就不安装／更新；用户在任务菜单的
@@ -785,6 +807,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   不新增 manifest 字段、凭证库、授权账本或跨调用批准缓存，手机端建立引用尚未开放。
   来源卸载复用已有 journal：先撤批准并隔离，再清理指向它的账号／已保存凭证引用，最后删除包。
   消费方锁或 vault 失败保留原 journal 与包，重试／既有启动恢复成功前不能重装；同物理键重装不能继承旧复用。
+  桌面确认 OAuth 账号清单无法解密时，在消费方变更锁内将原密文移入同 owner 的主进程隔离键，再继续卸载。
+  隔离记录不参与授权、枚举或自动恢复，随 owner 凭证清理回收。锁内读取成功时只撤销实际命中的复用引用。
   Desktop 和 Node Host 接同一管理器回调；只读 Host 清单没有凭证端口时保留隔离，不提前清掉 journal。
   真正换源时，引用的来源键随既有用户数据归档改指不可运行的 archive 键，详情按既有失效状态展示，
   可停止使用或重新选用；换源失败／重启恢复沿原逆向归档还原。普通同来源更新、凭证轮换继续有效。
@@ -870,6 +894,13 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   选择本次新任务的 ask／auto／bypassPermissions；参数本身不授予权限、不写插件默认设置。
   完全访问须来自用户在插件设置中的选择；旧 `requestWriteAccess` 仍只支持 acceptEdits／auto，
   不增加完全访问确认弹窗，也不因复用该流程降低用户已授权的上限。
+  **例外（维护者裁决，2026-11-18）**：IM 共用项目里的插件任务（带 `imProject`），可以让某个群聊或私聊用比
+  项目更宽的权限（含完全访问），条件是用户在 `confirmImPermission` 弹出的 Cindy 自有确认框里允许
+  （手机页面同样由宿主弹出）。理由：插件 IM 入口按群聊／私聊运行，项目权限是所有官方机器人共用的默认，
+  放宽与否是用户自己的决定。约束：确认框写明插件、群聊或私聊、项目、目标权限与项目当前权限，群聊附成员
+  可控内容的提醒；同一时间只开一个框（作者契约要求只在用户操作时调用，宿主不区分调用来源）；授权绑定
+  插件实例与项目，卸载失效，派发时复核；
+  插件的 Host 任务卡启用时其上限仍然生效。此例外不扩展到 `requestWriteAccess`、普通任务或伙伴投递。
   Main 在创建前及异步准备后复核；省略参数保持旧行为，已有任务／伙伴投递不接受权限覆盖。
   旧 errand 适配器保留历史缺省 `plan` 与原 Agent 行为；历史 plan／acceptEdits 配置保留，但不列入新建接口和设置页的新选项。已有任务不自动改权。
   不把历史 `plan` 值宣称为跨 Agent 的只读保证，也不为它改造各 Agent 的权限引擎。
@@ -1275,6 +1306,7 @@ panel / mainView 同一 Ghost WebView 沙箱（专属分区，仅有下述页面
 `message-circle`、`calendar-days`，缺省回退 `puzzle`。枚举值直接等于图标名，不设别名；
 该字段只控制主视图侧边栏入口，不替代或修改根级 `icon` 品牌图片协议。后续扩展该枚举时也
 必须遵守第 5 节的存量兼容红线，并核对第 7 节的旧客户端降级缺口。
+新的导航符号通过可选 `mainView.preferredIcon` 渐进提供。旧客户端忽略此提示，未知名称回退至 `mainView.icon` 或拼图。
 
 反向同样成立：改校验必须同步手册；改手册宣称的新能力必须真有实现。`forge.test.ts` 的
 关键章节存在性测试只是最低闸，不替代逐条人工核对。
@@ -1407,12 +1439,38 @@ IPC 时追加对应专项规则要求的验证。
 `agent_device_id`：带上后读那台允许远程调用的来源并回显 `agentDeviceId`，不查 `locations`。
 来源级强度不能被跨来源合并。无参 visible 复用当前账号模型选择器的用户开关与目录默认值；
 带参 visible 只用模型目录默认值，不套本机开关。隐藏项保留供显式展开，偏好未就绪不伪造默认。
+每项可选附带与模型选择器同源的展示字段：`description`（`shared/modelDescriptionKey.ts` 的编辑说明，按 Main 当前界面语言取
+`modelDescriptions.*`，不用目录原始 description）、`icon`、`group`、`contextWindow`、`supportsFastMode`（布尔）、
+`supportsUltrafastMode:true`、`effortDisplayNames`、供应商 `logoKind`；只作展示、不作路由或能力判据，旧 Host 缺字段时插件照原样显示。
 使用 ProviderService 的 `allowSideEffects:false` 读取本机清单；带参经 `readDeviceProviderViews`
 跨设备读取。不主动发现或认领凭证，不调用模型。不暴露 ProviderView、auth、账号 identity 或 endpoint；
 响应 no-store、仅 GET。其他参数、重复参数、空或超过 128 字符的 id 返回 400；格式合法但读不到
 （离线、未知、没开远程控制）返回 503 且 `errorCode` 为 `NOT_AVAILABLE`，响应里没有本机条目。
 旧 Host 带任何参数都返回 400。检查插件在装启用与 owner 归属，异步返回前复核。
 旧 Host 404 时插件应明确提示升级。此端点不覆盖远程 SSH 模型，执行前仍需核验真实路由。
+
+### 模型收藏与最近使用（新增接口，尚未发布）
+
+用途：Host 选择器嵌不进去的地方（如 Chrome 侧边栏）由插件自绘与 App 一致的选择器。收藏和最近使用是个人数据，
+只在插件声明 `agent.modelPreferences: true` 且经安装／更新确认后开放（2026-11 产品决定）；未声明或批准无效返回 403
+`PERMISSION_DENIED`，不触达收藏桥。插件同源端点与 `/agent-models` 同一套安装、owner 与启用复核，响应 no-store，
+任何查询参数 400，方法不对 405：
+
+- `GET /model-preferences` → `{ok:true,favorites:[{uid,providerId,modelId,agent,effort?,fast?}],recents:[...]}`，按 App 展示顺序。
+- `POST /model-preferences/favorites`：正文就是 device-link 的 `ModelFavoriteMutation`（add／update／remove），
+  经 `parseModelFavoriteMutation` 校验；不合法或指向非本机来源 400 `INVALID_REQUEST`，App 拒绝（已变化、上限、
+  owner 未就绪）409 `CONFLICT`，什么都不写；成功返回持久化后的收藏。
+- 主窗口答不上（启动、切换账号、无 App renderer）503 `NOT_AVAILABLE`；Node Host 不提供（503）。
+
+边界：只读写**本机**条目，`agent-device-favorite:` 与 `provider-share-favorite:` 前缀的来源一律滤掉且不可写；收藏与
+App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner 围栏的 renderer 收藏桥
+（`maker-ipc/modelFavoritesSync.ts` 的 `readHostModelPreferences`／`applyHostModelFavorite`），App 选择器经原有 store
+订阅即时反映；最近使用由同一请求带 `recents:true` 让 renderer 只读当前 owner 分区（`accessHostRecentModels`），
+不建 Main 副本，插件选模也不写入最近使用。不返回凭证、endpoint 或账号信息。手机与远程控制页面暂不开放此端点
+（`mobilePageService` 的 fetch 白名单未登记），不经 device-link 新增 IPC。旧 Host 404，插件退回只用 `/agent-models`。
+实现见 `cindy-brain/ghostModelPreferences.ts`、`runtime/ghostPageHandler.ts`；回归见
+`electronSandboxAdapter.ownerPartition.test.ts`、`modelFavoritesSync.test.ts`、`recentModels.test.ts` 与 `ghost.tasks.test.ts`；
+作者契约见 `cindy-plugin-creator/references/plugin-agent-models.md` §4.0.3c。
 
 ### 宿主统一模型选择器（新增接口，尚未发布）
 

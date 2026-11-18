@@ -2,6 +2,7 @@
 
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import Sortable from 'sortablejs';
 
 import {
   setDataOwnerGeneration,
@@ -122,6 +123,50 @@ function renderFilter() {
 }
 
 describe('pinned sidebar persistence', () => {
+  // 用户回归：最近活动下拖拽把显示顺序写成手动顺序。现有用例只测切换偏好，
+  // 未覆盖 reorder 入口。两条手动置顶在跨窗口切换时取消拖拽，拒绝反序回调；unit。
+  it('ignores drag reorders in recency mode and keeps manual dragging available', async () => {
+    durablePinnedOrder = ['older', 'newer'];
+    pinnedOrderIsAuthoritative = true;
+    const view = renderFilter();
+    const pendingDrag = view.result.current.setManualPinnedOrder;
+    const scope = document.createElement('div');
+    scope.dataset.sortableScope = 'pinned';
+    const row = scope.appendChild(document.createElement('div'));
+    const onCancel = vi.fn(() => {
+      expect(view.result.current.pinnedSortBy).toBe('manual');
+      void pendingDrag(['newer', 'older'], ['older', 'newer'], ['older', 'newer']);
+    });
+    Sortable.dragged = row;
+    document.addEventListener('pointercancel', onCancel, { once: true });
+    try {
+      act(() => {
+        localStorage.setItem(PINNED_SORT_BY_KEY, 'recency');
+        window.dispatchEvent(new StorageEvent('storage', { key: PINNED_SORT_BY_KEY }));
+      });
+      expect(onCancel).toHaveBeenCalledOnce();
+    } finally {
+      Sortable.dragged = null;
+      document.removeEventListener('pointercancel', onCancel);
+    }
+
+    await act(async () => {
+      await pendingDrag(['newer', 'older'], ['older', 'newer'], ['older', 'newer']);
+    });
+    expect(view.result.current.pinnedSortBy).toBe('recency');
+    expect(view.result.current.manualPinnedOrder).toEqual(['older', 'newer']);
+    expect(durablePinnedOrder).toEqual(['older', 'newer']);
+    expect(mutatePinnedOrder).not.toHaveBeenCalled();
+
+    act(() => view.result.current.setPinnedSortBy('manual'));
+    expect(view.result.current.manualPinnedOrder).toEqual(['older', 'newer']);
+    await act(async () => {
+      await view.result.current.setManualPinnedOrder(['newer', 'older'], ['older', 'newer'], ['older', 'newer']);
+    });
+    expect(view.result.current.manualPinnedOrder).toEqual(['newer', 'older']);
+    expect(durablePinnedOrder).toEqual(['newer', 'older']);
+  });
+
   // 测试价值：置顶排序偏好可保存但不能改掉用户的拖拽顺序。现有用例只覆盖顺序写入。
   // 最小输入：已有两条手动置顶，切到最近活动后重新挂载；并验证另一窗口切回。unit。
   it('remembers display sorting independently of the durable manual pins', () => {

@@ -4,6 +4,7 @@ import { FORWARDED_REQUEST_RECEIPT } from '../../shared/forwardedRequest.js';
 import { teammateRoutineReviewIntent } from '../../shared/botAutonomy.js';
 import type { AutoReviewUserIntent } from '@cindy/maker-core';
 import {
+  AgentStartupStoppedError,
   PI_CACHE_RECOVERY_EXPECTATION,
   MODEL_REQUEST_CONTROL,
   CodexResumePreparationBlockedError,
@@ -139,6 +140,8 @@ type IpcUserMessage =
 
 
 type MakerSendOptions = {
+  /** Main-only observation: preparation may have side effects even if selection later changes. */
+  onRuntimePreparation?: () => void;
   readonly [MODEL_REQUEST_CONTROL]?: import('@cindy/maker-core').ModelRequestControl;
   readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('@cindy/maker-core').SendOptions[typeof PI_CACHE_RECOVERY_EXPECTATION];
   /** Main-only live card guard, never serialized to queue history or provider options. */
@@ -250,6 +253,7 @@ function extractIpcUserMessageText(message: IpcUserMessage): string {
 }
 
 export interface MakerSendTransactionSession {
+  readonly agentDeviceId?: string | null;
   readonly stablePermissionModeState?: Session['stablePermissionModeState'];
   readonly stablePlanModeState?: Session['stablePlanModeState'];
   hostStartupPreferences?: CreateOpts['hostStartupPreferences'];
@@ -260,6 +264,7 @@ export interface MakerSendTransactionSession {
   workDir: string;
   remoteHostId: string | null;
   /** Error sessions stay registered while their underlying handle cleanup is retried. */
+  retryFailedRuntimeCapabilityCapture?(): void;
   getStatus?(): 'active' | 'aborting' | 'closed' | 'error';
   /** Codex host-owned evidence: a provider turn crossed acceptance on this runtime. */
   codexThreadMayHaveRollout?: boolean;
@@ -403,6 +408,8 @@ export interface MakerSendTransactionDeps {
    * startup so an uncertain turn cannot be replayed after a Host restart.
    * Desktop omits this port and retains its existing event-driven lifecycle. */
   beforeProviderStart?: (sessionId: string, sendOpts: unknown) => Promise<void>;
+  /** Validate a consumed quota wait after acceptance/vision and before vendor dispatch. */
+  assertQuotaContinuation?: (sessionId: string, sendOpts: unknown) => Promise<void>;
   onUndispatchedDirectUserTurn?: (sessionId: string) => void;
   ackInterruptedTurnDispatched?: (sessionId: string, endedAt: number) => void | Promise<void>;
   previewUserPrompt?(
@@ -526,6 +533,7 @@ export interface MakerSendTransaction {
    * task row. Returns false when a runtime already exists or startup failed;
    * the next send then follows its normal path.
    */
+  preparePiSkillRuntime(sessionId: string, workingDir: string, preferences: Pick<CreateOpts, 'userPrompt' | 'makerMemoryEnabled'>): Promise<void>;
   prewarmSession(sessionId: string, createOpts: CreateOpts): Promise<boolean>;
   /**
    * Main-side senders that reach an idle live session without this transaction (Orca
@@ -894,6 +902,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const session = await deps.withRehydrateCloseSuppressed(sessionId, async () => {
         await deps.closeSession(sessionId);
         // Rebuild the SDK handle with the repaired cwd and current MCP options.
+        createOpts.preserveStartupStoppedError = true;
         const {
           session: newSess,
           didInjectOrcaInstructions,
@@ -911,7 +920,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         return newSess;
       });
       return { kind: 'session', session };
-    } catch (err) {
+    } catch (startupError) {
+      // Preserve the old error shape for other failures. Only an explicitly
+      // stopped bootstrap proves this input never reached native execution.
+      const err = startupError instanceof AgentStartupStoppedError ? startupError.cause : startupError;
+      if (startupError instanceof AgentStartupStoppedError && err instanceof Error
+        && err.message.startsWith('[SUBSCRIPTION_ACCOUNT_LIMITED]')) {
+        return { kind: 'failure', result: toCompatibleMakerSendResult(
+          createHostSendFailure('REHYDRATE_FAILED', err.message, { startupAdmission: 'subscription-account-limited' }),
+        ) };
+      }
       // Let the input coordinator own verified group quota waits; generic host
       // failure results would erase the structured reset time before it sees it.
       if (err instanceof ProviderGroupUsageLimitError) throw err;
@@ -1011,6 +1029,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     await deps.synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
     await loadExtraDirsIfNeeded(sessionId, createOpts, 'lazy-create');
     try {
+      createOpts.preserveStartupStoppedError = true;
       const {
         session: lazySess,
         didInjectOrcaInstructions,
@@ -1028,7 +1047,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         extraDirsCount: createOpts.extraDirs?.length ?? 0,
       });
       return { kind: 'session', session: lazySess };
-    } catch (err) {
+    } catch (startupError) {
+      // Preserve the old error shape for other failures. Only an explicitly
+      // stopped bootstrap proves this input never reached native execution.
+      const err = startupError instanceof AgentStartupStoppedError ? startupError.cause : startupError;
+      if (startupError instanceof AgentStartupStoppedError && err instanceof Error
+        && err.message.startsWith('[SUBSCRIPTION_ACCOUNT_LIMITED]')) {
+        return { kind: 'failure', result: toCompatibleMakerSendResult(
+          createHostSendFailure('LAZY_CREATE_FAILED', err.message, { startupAdmission: 'subscription-account-limited' }),
+        ) };
+      }
       // Same boundary as rehydrate: preserve the branded error and its reset data.
       if (err instanceof ProviderGroupUsageLimitError) throw err;
       if (isCredentialModeSwitchBusyError(err)) {
@@ -1070,6 +1098,27 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   }
 
   return {
+    async preparePiSkillRuntime(sessionId, workingDir, preferences) {
+      const opts = await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId);
+      if (opts.agentKind !== 'pi' || opts.workingDir !== workingDir) {
+        throwIpcError('PRECONDITION_FAILED', 'Session engine or working directory changed');
+      }
+      const live = deps.getSession(sessionId);
+      if (live && live.getStatus?.() !== 'error') {
+        if (live.agentKind !== 'pi' || live.workDir !== workingDir ||
+            (live.agentDeviceId ?? null) !== (opts.agentDeviceId ?? null)) {
+          throwIpcError('PRECONDITION_FAILED', 'Running session no longer matches the selected project');
+        }
+        live.retryFailedRuntimeCapabilityCapture?.();
+        return;
+      }
+      const co = deps.buildCreateOptsWithStderr({ ...opts, ...preferences, id: sessionId });
+      const result = await lazyCreateSession(sessionId, co);
+      if (result.kind === 'failure') {
+        const outcome = result.result.outcome;
+        throwIpcError('PRECONDITION_FAILED', outcome?.kind === 'host-send' ? outcome.message : 'Pi startup failed');
+      }
+    },
     async prewarmSession(sessionId, createOpts) {
       if (deps.getSession(sessionId)) return false;
       const lazy = await lazyCreateSession(sessionId, createOpts);
@@ -1098,6 +1147,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         requestedSendOpts[AUTO_REVIEW_SOURCE_CONTENT] ?? requestedSendOpts[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message,
         requestedSendOpts.signal);
       if (runtimePreparation) {
+        requestedSendOpts.onRuntimePreparation?.();
         const runtime = await runtimePreparation;
         if (runtime.failure && !requestedSendOpts.signal?.aborted) return runtime.failure;
         Object.assign(requestedSendOpts, runtime.options);
@@ -1120,7 +1170,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       );
       try {
         const promptPreparation = deps.prepareRuntimePrompt?.(sessionId);
-        if (promptPreparation) await promptPreparation;
+        if (promptPreparation) {
+          requestedSendOpts.onRuntimePreparation?.();
+          await promptPreparation;
+        }
       } catch (error) {
         if (!(error instanceof RuntimePluginControlError) || requestedSendOpts.signal?.aborted) throw error;
         return toCompatibleMakerSendResult(createHostSendFailure(error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED',
@@ -1601,6 +1654,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         try {
           const pending = deps.composeRuntimeContext?.(sessionId,
             () => runtimePluginInputText(so[AUTO_REVIEW_SOURCE_CONTENT] ?? so[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message), so.signal);
+          if (pending) so.onRuntimePreparation?.();
           const context = pending ? await pending : undefined;
           if (context) outgoing = appendRuntimePluginContext(outgoing as HandoffWireMessage, context);
         } catch (error) {
@@ -1832,7 +1886,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ), () => sess.send(outgoing as never, {
           ...(retryTranscriptUserEntryId ? { retryTranscriptUserEntryId } : {}),
           ...(beforeProviderStart ? { beforeProviderStart } : {}),
-          ...(assertAppCurrent
+          ...(assertAppCurrent || deps.assertQuotaContinuation
             ? {
                 resolveAutoReviewUserIntent: async () => {
                   const intent = resolveScheduledIntent
@@ -1843,7 +1897,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                   // Session awaits this existing authorization hook after all
                   // preparation (including vision), immediately before dispatch.
                   if (scheduledOrigin) await deps.assertScheduledDispatchRoute?.(sessionId);
-                  await assertAppCurrent();
+                  await assertAppCurrent?.();
+                  await deps.assertQuotaContinuation?.(sessionId, finalFenceSendOpts);
                   return intent;
                 },
               }

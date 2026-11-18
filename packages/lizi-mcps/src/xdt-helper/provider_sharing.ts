@@ -13,11 +13,23 @@ export interface ProviderSharingCallbacks {
   call(input: ProviderSharingRequest & { callerSessionId?: string }): Promise<Record<string, unknown>>;
 }
 
+const id = z.string().trim().min(1).max(128);
+const device = z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/).optional();
+export const providerShareMembersInputSchema = z.strictObject({ device, providerId: id.optional() });
+export const providerShareModelAccessInputSchema = z.strictObject({ device, providerId: id, memberId: id });
+
+export function projectProviderSharingError(error: unknown): { code: string; message: string } {
+  const message = error instanceof Error ? error.message : '';
+  const code = /^\[([A-Z_]+)\]/.exec(message)?.[1] ?? message;
+  const publicCodes = new Set(['NOT_FOUND', 'HOST_NOT_READY', 'PERMISSION_DENIED', 'UNSUPPORTED_CAPABILITY',
+    'PRECONDITION_FAILED', 'DEVICE_LINK_NOT_CONNECTED', 'DEVICE_LINK_DEVICE_OFFLINE', 'DEVICE_LINK_TIMEOUT']);
+  return { code: publicCodes.has(code) ? code : 'PROVIDER_SHARE_OPERATION_FAILED',
+    message: '读取或修改未确认完成。请重新读取该电脑的成员状态；写操作可能已生效，不要自动重发。' };
+}
+
 export function registerProviderSharingTools(registry: XdtHelperToolRegistry,
   callbacks: ProviderSharingCallbacks, context: () => LiziMcpSessionContext): void {
-  const id = z.string().trim().min(1).max(128);
-  const device = z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/).optional();
-  const member = { device, providerId: id, memberId: id };
+  const member = providerShareModelAccessInputSchema.shape;
   const invoke = async (request: ProviderSharingRequest) => {
     const caller = context();
     if ((!caller.sessionId && caller.hostCaller?.kind !== 'plugin') || caller.remoteHostId)
@@ -25,17 +37,13 @@ export function registerProviderSharingTools(registry: XdtHelperToolRegistry,
     try {
       return okPayload(await callbacks.call({ ...request, callerSessionId: caller.sessionId }));
     } catch (error) {
-      const message = error instanceof Error ? error.message : '';
-      const code = /^\[([A-Z_]+)\]/.exec(message)?.[1] ?? message;
-      const publicCodes = new Set(['NOT_FOUND', 'HOST_NOT_READY', 'PERMISSION_DENIED', 'UNSUPPORTED_CAPABILITY',
-        'PRECONDITION_FAILED', 'DEVICE_LINK_NOT_CONNECTED', 'DEVICE_LINK_DEVICE_OFFLINE', 'DEVICE_LINK_TIMEOUT']);
-      return errorPayload(publicCodes.has(code) ? code : 'PROVIDER_SHARE_OPERATION_FAILED',
-        '读取或修改未确认完成。请重新读取该电脑的成员状态；写操作可能已生效，不要自动重发。');
+      const failure = projectProviderSharingError(error);
+      return errorPayload(failure.code, failure.message);
     }
   };
   registry.register({ name: 'list_provider_share_members', category: 'settings',
     description: '只读列出当前账号在本机拥有的供应商分享成员（shareId、providerId、memberId、name、status）。providerId 可筛选；device 可显式选择同账号已授权的另一台电脑。不包括分享给我的供应商，不赋予受邀者管理权。',
-    inputShape: { device, providerId: id.optional() }, handler: input => invoke({ action: 'members', ...input }) });
+    inputShape: providerShareMembersInputSchema.shape, handler: input => invoke({ action: 'members', ...input }) });
   registry.register({ name: 'set_provider_share_member_status', category: 'settings',
     description: '暂停或恢复自己分享的指定成员；先查询精确 memberId。暂停立即打断此人运行中的任务，成功回执不等待全部实例关停完成；恢复只允许后续消息，不自动续跑。默认本机，device 可指定同账号已授权电脑。',
     inputShape: { device, memberId: id, status: z.enum(['pause', 'resume']) }, handler: input => invoke({ action: 'status', ...input }) });

@@ -102,6 +102,7 @@ const desktopE2eInclude = [
   'src/main/maker-host/__tests__/*.e2e.test.ts',
   // The Terra proxy regression starts a real Codex binary when explicitly configured.
   'src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts',
+  'src/main/remote-agent/__tests__/execServerProjection.e2e.test.ts',
   // Guest fork through a provider group with a real Claude Code; skipped without apps/claude-code-bin.
   'src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts',
   'src/main/remote-agent/__tests__/startupProbe.e2e.test.ts',
@@ -164,6 +165,8 @@ const mobileGuardInclude = [
 const desktopGuardInclude = [
   // DESIGN §14.4/§15.7 and live locale motion/accessibility contracts must run on docs/locales-only PRs.
   'src/renderer/__tests__/brandLoadingMarkContract.test.ts',
+  // Actual send closures: Pi startup/retry race and literal-input isolation (#11112).
+  'src/renderer/features/cc-agent/__tests__/sessionSlashDispatch.guard.test.ts',
   // Host and desktop source contracts: lines the Node Host copies or wires as the desktop does.
   'src/main/maker-host/__tests__/hostDesktopSourceContracts.guard.test.ts',
   // Build fuses and Node worker entrypoints are a cross-file packaging contract.

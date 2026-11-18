@@ -165,7 +165,10 @@ export async function listRecentWorkdirs(client: DbClient = getDbClient()) {
   const knownKindsByPath = new Map<string, Set<string>>();
   for (const session of sessionRows) {
     if (!session.workingDir) continue;
-    const identity = recentWorkdirProjectIdentity(session.projectDir ?? session.workingDir, process.platform);
+    const identity = recentWorkdirProjectIdentity(
+      session.projectDir ?? session.workingDir,
+      process.platform,
+    );
     if (!identity) continue;
     const kinds = knownKindsByPath.get(identity) ?? new Set<string>();
     kinds.add(session.agentKind ?? 'cc');
@@ -198,7 +201,11 @@ export async function hasRecentWorkdir(
   const rows = await client.drizzle
     .select({ path: recentWorkdirs.path })
     .from(recentWorkdirs)
-    .where(eq(recentWorkdirs.path, normalized))
+    .where(
+      isCaseInsensitiveWindowsPath(normalized, process.platform)
+        ? sql`lower(${recentWorkdirs.path}) = lower(${normalized})`
+        : eq(recentWorkdirs.path, normalized),
+    )
     .limit(1);
   return rows.length > 0;
 }
@@ -225,4 +232,15 @@ export async function removeRecentWorkdir(
     .where(eq(recentWorkdirs.path, normalized))
     .run()) as { changes?: number } | undefined;
   return { deleted: (result?.changes ?? 0) > 0, normalizedPath: normalized };
+}
+
+/** Registered project paths without filesystem probes or task-history enrichment. */
+export async function listRegisteredProjectPaths(
+  client: DbClient = getDbClient(),
+): Promise<string[]> {
+  const rows = await client.drizzle
+    .select({ path: recentWorkdirs.path })
+    .from(recentWorkdirs)
+    .orderBy(desc(recentWorkdirs.lastUsedAt));
+  return rows.map((row) => row.path);
 }
