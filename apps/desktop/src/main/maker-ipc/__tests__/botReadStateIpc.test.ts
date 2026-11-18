@@ -10,6 +10,7 @@ vi.mock('electron', () => ({ BrowserWindow: { fromWebContents: electron.from } }
 import { markAppContentWindow } from '../../windowFocusClassifier';
 import { isTrustedAppRendererEventForLocation, isTrustedAppRendererWindowForLocation } from '../../security/trustedAppRenderer';
 import { throwIpcError } from '../../utils/ipcValidate';
+import * as atomic from '../../utils/atomicWriteFile';
 import { createBotReadStateIpc, createBotWindowAccess } from '../botReadStateLocalIpc';
 import { createBotReadStateStorage } from '../botReadStateStorage';
 
@@ -61,11 +62,15 @@ it('shares committed positions through real main/secondary IPC entries', async (
     { identity: { kind: 'group', id: 'room' }, ackAt: 100 },
   ]);
   const identity = { kind: 'group', id: 'room' } as const;
-  expect(storage.readPosition(owner, identity)).toBe(100);
+  await expect(storage.readPosition(owner, identity)).resolves.toBe(100);
+  const restartedStorage = createBotReadStateStorage({ currentOwner, boundaryPending: () => false, ownerRoot: roots });
+  const readSync = vi.spyOn(atomic, 'readAtomicFileSync');
+  await expect(restartedStorage.readPosition(owner, identity)).resolves.toBe(100);
+  expect(readSync).not.toHaveBeenCalled();
   const previous = owner;
   owner = { dataOwnerId: 'account-b', generation: 2 };
-  expect(() => storage.readPosition(previous, identity)).toThrow('BOT_READ_OWNER_CHANGED');
-  expect(storage.readPosition(owner, identity)).toBeUndefined();
+  await expect(storage.readPosition(previous, identity)).rejects.toThrow('BOT_READ_OWNER_CHANGED');
+  await expect(storage.readPosition(owner, identity)).resolves.toBeUndefined();
 });
 
 it('rejects a trusted app-content utility before consulting the owner or disk', () => {

@@ -15006,11 +15006,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   let companionDevices: { at: number; value: Promise<Array<{ deviceId: string; name: string; online: boolean; reachable: boolean }> | null> } | null = null;
   const companionHost = createPluginCompanionHost({
-    readPosition: (identity) => {
+    readPosition: async (identity) => {
       const { dataOwnerId, generation } = getActiveAppSession();
       if (!dataOwnerId) return null;
       try {
-        return botReadStateStorage.readPosition({ dataOwnerId, generation }, identity);
+        return await botReadStateStorage.readPosition({ dataOwnerId, generation }, identity);
       } catch {
         return null; // An unavailable position must not invalidate the whole roster.
       }

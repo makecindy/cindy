@@ -54,7 +54,7 @@ const source = (id: string, over: Record<string, unknown> = {}) => ({
 const pending = new Map<string, Array<{ request: unknown }>>();
 const deps = (remote?: PluginCompanionRemoteDeps) => ({
   remote,
-  readPosition: () => undefined,
+  readPosition: async () => undefined,
   pending: (sessionId: string) => pending.get(sessionId) ?? [],
   openSession: vi.fn(),
   flushMessages: vi.fn(async () => {}),
@@ -124,7 +124,7 @@ it('clears and relights the unread mark independently for each companion', async
   const positions = new Map([['ada', 8], ['bo', 8]]);
   const host = createPluginCompanionHost({
     ...deps(),
-    readPosition: identity => identity.kind === 'bot' ? positions.get(identity.id) : undefined,
+    readPosition: async identity => identity.kind === 'bot' ? positions.get(identity.id) : undefined,
   });
   mocks.activities.set('ada', { sessionId: 'ada-main', phase: 'running' });
   mocks.sources = [source('ada', { lastReplyAt: 8 }), source('bo')];
@@ -189,7 +189,7 @@ it('uses this desktop’s read position for a remote companion without re-fetchi
   const remote = laptop(() => ({ version: 1, companions: [farOnLaptop] }));
   const host = createPluginCompanionHost({
     ...deps(remote), now: () => 0,
-    readPosition: identity => positions.get(botReadIdentityKey(identity)),
+    readPosition: async identity => positions.get(botReadIdentityKey(identity)),
   });
   expect((await host.list(() => {}))[2]).toMatchObject({ id: 'far', unread: true });
   positions.set(botReadIdentityKey({ kind: 'remote-bot', deviceId: 'laptop', botId: 'far' }), 6);

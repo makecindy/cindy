@@ -171,7 +171,7 @@ export interface PluginCompanionRemoteDeps {
 
 export interface PluginCompanionHostDeps {
   /** Committed on this desktop; null when the position cannot safely be read. */
-  readPosition(identity: BotReadIdentity): number | undefined | null;
+  readPosition(identity: BotReadIdentity): Promise<number | undefined | null>;
   /** Agent and host-owned requests pending in one task (register.ts getPendingInteractionsForSession). */
   pending(sessionId: string): Array<{ request: unknown }>;
   /** Show a task in the main window without stealing focus; `deviceId` for a companion on another computer. */
@@ -500,7 +500,8 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
         return { deviceId, actors, view, deviceName: device?.name ?? null };
       }));
       guard();
-      const localPositions = local.companions.map(({ id }) => deps.readPosition({ kind: 'bot', id }));
+      const localPositions = await Promise.all(local.companions.map(({ id }) => deps.readPosition({ kind: 'bot', id })));
+      guard();
       const localReadAt = mergeHostReadPositions(new Map(local.companions.flatMap(({ id }, index) => {
         const readAt = localPositions[index];
         return readAt == null ? [] : [[id, readAt] as const];
@@ -512,20 +513,21 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
           ...companion, unread: readAt !== undefined && (companion.lastReplyAt ?? 0) > readAt,
         };
       });
-      const remote = homes.flatMap(({ deviceId, actors, view, deviceName }) => actors.flatMap((actor): PluginCompanion[] => {
-        if (!view.reachable) return [offlineCompanion(actor.id, actor.name, deviceName)];
+      const remote = await Promise.all(homes.flatMap(({ deviceId, actors, view, deviceName }) => actors.map(async (actor) => {
+        if (!view.reachable) return offlineCompanion(actor.id, actor.name, deviceName);
         const companion = view.companions.find(item => item.id === actor.id);
         // Reachable but not listed there: hidden, archived or moving; the sidebar does not show it either.
-        if (!companion) return [];
-        const readAt = deps.readPosition({ kind: 'remote-bot', deviceId, botId: actor.id });
-        return [{
+        if (!companion) return null;
+        const readAt = await deps.readPosition({ kind: 'remote-bot', deviceId, botId: actor.id });
+        return {
           ...companion, name: companion.name || actor.name,
           ...(readAt !== null && companion.lastReplyAt !== null ? {
             unread: readAt !== undefined && companion.lastReplyAt > readAt,
           } : {}),
-        }];
-      }));
-      return [...localCompanions, ...remote];
+        };
+      })));
+      guard();
+      return [...localCompanions, ...remote.filter(companion => companion !== null)];
     },
 
     async avatar(companionId, guard) {
