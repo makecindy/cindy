@@ -74,7 +74,7 @@ function CacheScenario() {
 
 function Fixture() {
   const [attached, setAttached] = useState(false);
-  const [running, setRunning] = useState(false);
+  const [running, setRunning] = useState(typeof ctx.data.followUp === 'string');
   const [modelReady, setModelReady] = useState(!ctx.data.modelLoading);
   const [callOpen, setCallOpen] = useState(false);
   const [sent, setSent] = useState('');
@@ -150,10 +150,11 @@ function Fixture() {
               createOpts: { workingDir: '/fixture' } } as QueuedMessage]} /> : undefined}
           isStreaming={running}
           onStop={() => setRunning(false)}
+          onQueueSteer={typeof ctx.data.followUp === 'string' ? async () => true : undefined}
           onStartVoiceConversation={() => setCallOpen(true)}
           voiceConversationActive={callOpen}
-          onSend={async (text) => {
-            setSent(text);
+          onSend={async (text, _model, _effort, _permission, _files, _mentions, opts) => {
+            setSent(typeof ctx.data.followUp === 'string' ? `${opts?.deliveryMode}:${text}` : text);
             return true;
           }}
         />
@@ -215,6 +216,12 @@ void mountPage({
   },
   render: () => {
     (window as unknown as { __composerImageCache: typeof imageCache }).__composerImageCache = imageCache;
+    // The preference is local state; seed it per variant the way the product stores it.
+    localStorage.removeItem('chat.followUpHint.dismissed');
+    if (ctx.data.followUp === 'steer') localStorage.setItem('chat.followUpBehavior', 'steer');
+    else localStorage.removeItem('chat.followUpBehavior');
+    if (ctx.data.sendKey === 'modifier-enter') localStorage.setItem('chat.sendShortcutPreference', 'modifier-enter');
+    else localStorage.removeItem('chat.sendShortcutPreference');
     (window as unknown as { __pluginActions: string[] }).__pluginActions = pluginActions;
     return <PluginUiProvider>{ctx.case === 'late-attachment' ? <CacheScenario /> : <Fixture />}</PluginUiProvider>;
   },

@@ -20,7 +20,7 @@ import {
   utilityTransportLabel,
 } from '../../shared/utilityModelProfiles.js';
 import { createLogger } from '../logger.js';
-import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { getDesktopSelectableCatalog } from '../maker-host/createDesktopProviderService.js';
 import { getCindyAiProviderName } from '../cindyAiProviderName.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
@@ -147,7 +147,7 @@ function settingsWire(): AuxiliaryModelSettingsState {
   const state = readAuxiliaryModelSettingsState();
   const models = Array.isArray(state.value.models) ? state.value.models : [];
   const settings = { models };
-  const catalog = getActiveCatalog();
+  const catalog = getDesktopSelectableCatalog();
   return {
     models,
     isCustomized: state.isCustomized,
@@ -209,7 +209,7 @@ export function registerAuxiliaryModelSettingsIpc(): void {
       // still validates credentials and fails closed immediately before dispatch.
       const allowedPins = new Set(
         buildTextOneshotPinOptions(
-          getActiveCatalog(),
+          getDesktopSelectableCatalog(),
           readModelDisableOverrides(),
           readProviderOrder(),
           undefined,

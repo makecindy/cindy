@@ -1,3 +1,4 @@
+import type { ComposerSlashCommand } from '@cindy/maker-shared/composer-palette';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import {
   tryMobilePeerFile,
@@ -154,20 +155,7 @@ export const SUBSCRIPTION_USAGE_CHANNELS = {
   xai: "maker:usage:xai-subscription",
 } as const satisfies Record<SubscriptionUsageKind, string>;
 
-export type MobileSlashCommand =
-  | { kind: "agent-builtin"; name: string; description: string }
-  | {
-      kind: "agent-skill";
-      name: string;
-      description?: string;
-      source: "user" | "skill";
-      path?: string;
-      scope?: string;
-      enabled?: boolean;
-    }
-  // desktop 自有命令(被控端 main 的 DesktopCommandRegistry,如 /learn):
-  // 由控制端按名字分流执行,不转发给 agent。
-  | { kind: "desktop"; name: string; description: string };
+export type MobileSlashCommand = ComposerSlashCommand;
 
 export interface MobileAgentCommandListResult {
   success: boolean;
@@ -923,7 +911,7 @@ export interface MobileMakerTransport {
     clearSession(sessionId: string): Promise<InputProjection>;
   };
   fs: {
-    listDir(path: string): Promise<RemoteDirectoryListResult>;
+    listDir(path: string, canonicalDirectory?: boolean): Promise<RemoteDirectoryListResult>;
     statPath(path: string): Promise<RemotePathStatResult>;
     mkdirP(path: string): Promise<{ resolvedPath: string }>;
     readTextFilePreview(path: string, options?: { allowFileTransfer?: boolean; signal?: AbortSignal }): Promise<RemoteTextFilePreviewResult>;
@@ -1030,7 +1018,7 @@ export interface MobileOrcaCreateWorkerResult {
 }
 
 export type SessionMetaPatch = Partial<
-  Pick<RemoteSession, "status" | "title" | "pinnedAt">
+  Pick<RemoteSession, "status" | "title" | "pinnedAt" | "snoozedUntil">
 >;
 
 export const MOBILE_MAKER_CHANNELS = MOBILE_REMOTE_INVOKE_CHANNELS;
@@ -1617,7 +1605,7 @@ export function createMobileMakerTransport({
         call("maker:input:clear-session", [sessionId]),
     },
     fs: {
-      listDir: (path) => call("fs:list-dir", [{ path }]),
+      listDir: (path, canonicalDirectory) => call("fs:list-dir", [canonicalDirectory ? { path, canonicalDirectory } : { path }]),
       statPath: (path) => call("fs:stat-path", [{ path }]),
       mkdirP: (path) => call("fs:mkdir-p", [{ path }]),
       readTextFilePreview: (filePath, options) =>

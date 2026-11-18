@@ -2,6 +2,17 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
+分享组在 `open` 准入时选不出电脑，可在现有错误信封内返回
+`REMOTE_AGENT_GROUP_FULL` 或 `REMOTE_AGENT_GROUP_USAGE_LIMIT`。额度错误复用本地调度器的
+`resets_at: <unix ms>` 文本格式，控制端只在 Agent 未启动的错误边界恢复额度等待。旧端仍可将其展示为启动失败。
+只传组级结论和已知的恢复时间，作用域为本次任务。中继转发原有信封，自建中转无需改动。
+
+桌面端在换来源后续发原消息时，经现有 `maker:input:retry-last-error` 传
+`expectedQueueHeadClientId` 与本次切换回执的 `pendingSwitchRevision`（作为 `expectedSwitchRevision`）。
+任务所在电脑匹配恢复项及实际队首，并在发送锁内重新核对待应用的切换修订号。另一控制端改选后，
+原点选对应的重试不会派发到改选目标。
+远控端仅向声明 `supportsQueueHeadRetry` 的任务电脑发送这个选项。旧端仍可手动重试。
+
 ## 托管请求的附件预算与保存（2026-11-17）
 
 `open.acceptsAttachmentPreservation?: true` 表示任务所在电脑能接收被请求预算移出的附件。
@@ -229,12 +240,15 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
 - **Codex 启动清单批量探测（2026-10-29）**：B 在单条 exec-server 连接启动时，把首个插件清单所在
   目录及其祖先的三种清单检查提前发送（最多 64 层／192 条）。全部仍是旧协议支持的普通
   `fs/getMetadata`，使用独立字符串 ID，保留原 params/sandbox，经 A 的原路径映射和原生执行器；
-  不添加 wire 字段、方法、IPC、权限或能力协商。只有原生 NotFound 可在本次启动复用，已有文件、
-  权限错误、未知目标和不同 sandbox 回落原查询。启动结束或写入／进程启动即停止复用，连接关闭清理；
+  不添加 wire 字段、方法、IPC、权限或能力协商。只有原生 NotFound 可缓存并供本次启动的后续查询复用；
+  已在等待同 URI、同 params/sandbox 查询的原请求直接消费该次原生成功或错误回包，避免重复 RPC。
+  成功元数据与非 NotFound 错误不缓存，后续已有文件／权限错误查询、未知目标和不同 sandbox 仍走原查询。
+  启动结束或写入／进程启动即停止复用，连接关闭清理；
   迟到内部回复仅在本连接消费，不重放写操作、不重置 peer/relay、不影响其它任务。
   新 B 配旧 A 可直接使用；旧 B 保持串行。供应商组与自建中转只转发既有不透明 ws 数据及有界
   poll/push 批次，不解析内部 JSON-RPC ID，因此无需中转、服务端或 Mobile 同步修改，
-  帧大小、鉴权、签名、ACK 和恢复策略不变。回归为 `execServerStartupBatch.test.ts`、
+  帧大小、鉴权、签名、ACK 和恢复策略不变。见[批处理实现](../../../apps/desktop/src/main/remote-agent/host/execServerStartupBatch.ts)，
+  回归为 [execServerStartupBatch.test.ts](../../../apps/desktop/src/main/remote-agent/__tests__/execServerStartupBatch.test.ts)、
   `startupProbe.e2e.test.ts`、`mirror.test.ts`、`groupRelay.test.ts` 与 `hostLifecycle.test.ts`；
   真实跨系统及线上分享运行端尚未验收，性能数据与复跑命令见远程适配文档。
 - **影子目录与配置同步**：`open` 载荷除项目说明文件(含 `.claude/CLAUDE.md`、`.claude/rules`、
@@ -341,8 +355,9 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   发送时才在那台失败、且之后每次发送都重试的意图；本机窗口拿到 `REMOTE_AGENT_DEVICE_UNREACHABLE` /
   `REMOTE_AGENT_MODEL_UNAVAILABLE`，device-link 控制端降级为 `PRECONDITION_FAILED`。Mobile 与桌面同一套
   模型列表：A 自己的供应商之外，另列其他同账号电脑已开放远程调用的供应商(Mobile 直接经 device-link 读那台的
-  `maker:provider:list`，不新增 A 侧 channel)；同一台电脑内换模型不带位置，换到另一台电脑先二次确认、再带
-  `agentDeviceId`(null = A)。共享任务访客不能换电脑。
+  `maker:provider:list`，不新增 A 侧 channel)；同一台电脑内换模型不带位置。按 2026-11-18 用户裁决，
+  桌面与手机点选另一台电脑的模型即带 `agentDeviceId`(null = A)登记切换意图，下一条消息发送时生效。
+  共享任务访客不能换电脑。
   桌面远程控制 A 上的已建任务(2026-10-09)与手机同口径：A 投影的任务带 `agentDeviceId` 字段(含 null)才开放，
   控制端经任务所在的 A 读取第三台电脑的 `maker:provider:list`，A 自己的目录照远程控制列全部供应商，换位置同样
   带 `agentDeviceId`(null = A)，换后档位记在控制端为那台电脑单独记的一份(改回 A 时写 A 的镜像)。

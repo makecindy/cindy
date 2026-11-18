@@ -478,7 +478,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     expect(everyone.routes).toHaveLength(4);
   });
 
-  it('starts a claimed turn after one parallel read round and one lease check', async () => {
+  it('starts a claimed turn after context, scoped failures and the final lease check', async () => {
     service.dispose();
     const botActor = '20000000-0000-4000-8000-000000000001';
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
@@ -487,7 +487,10 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     let queued = true;
     let claimedAt = 0;
     let dispatchedAt = 0;
-    fixture.handle.mockImplementation(route => {
+    const order: string[] = [];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.includes('/execution-failures?')) order.push('failures');
+      if (body?.action === 'heartbeat') order.push('heartbeat');
       if (route === '/actors') return { body: [{ id: botActor, kind: 'bot', externalId: 'local-bot', name: 'Bot' }] };
       if (route === '/executions/claim') {
         if (!queued) return { body: { execution: null } };
@@ -500,12 +503,15 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     service = withChatServer(local as unknown as BotGroupChatService, { onChanged,
       validateProjectDir: async (dir: string) => ({ ok: true as const, dir }),
       ensureLane: async () => ({ ok: true, sessionId: 'lane' }), abortLane: async () => {},
-      dispatch: async () => { dispatchedAt = Date.now(); return { ok: true }; } } as unknown as BotGroupChatServiceDeps);
+      dispatch: async () => { order.push('dispatch'); dispatchedAt = Date.now(); return { ok: true }; } } as unknown as BotGroupChatServiceDeps);
     await vi.advanceTimersByTimeAsync(3000);
-    // Before: snapshot → lease check → history → lease check → dispatch (400ms after the claim).
+    // #11097 / unit: source-scoped failures depend on authorized history. The final
+    // lease check follows that read to catch a stop while it was in flight.
+    // This adds one necessary round (100ms here), not redundant snapshot/list reads.
     console.info(`[group-pickup-latency] ${JSON.stringify({ afterClaimMs: dispatchedAt - claimedAt })}`);
     expect(dispatchedAt).toBeGreaterThan(0);
-    expect(dispatchedAt - claimedAt).toBe(200);
+    expect(dispatchedAt - claimedAt).toBe(300);
+    expect(order).toEqual(['failures', 'heartbeat', 'dispatch']);
   });
 
   it('reads a new room only after the snapshot whose cursor it follows from', async () => {

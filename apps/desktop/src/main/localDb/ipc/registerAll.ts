@@ -97,7 +97,7 @@ export interface RegisterLocalDbIpcOpts {
   /** ensureReady 打开/创建目标库前执行；失败时阻断，避免跳过认领后创建空库。 */
   beforeEnsureReady?: (userId: string) => void | Promise<void>;
   /** Record worktree recycle intent before a terminal session status is persisted. */
-  requestWorktreeRecycle?: (sessionId: string, resources?: readonly string[]) => Promise<void>;
+  requestWorktreeRecycle?: (sessionId: string, resources?: readonly string[], discardChanges?: true) => Promise<void>;
   /** 当前 worktree 绑定（worktreeStore 是 source of truth，DB 只存反范式快照）。 */
   lookupSessionWorktreeBinding?: (sessionId: string) => string | null;
   /** Close a moved local Pi/Codex runtime after revalidating that its turn is idle. */

@@ -165,6 +165,34 @@ describe('an unreadable device-link-settings.json', () => {
   const malformed = '{"remoteControlEnabled":true,"revokedControllers":["dev-revoked"],';
   const file = () => path.join(userDataDir, FILE);
 
+  // Windows regression: the store treated UNKNOWN on open as corrupt JSON.
+  // Existing tests only cover malformed bytes. Inject a filesystem error for the real settings
+  // file and check fail-closed reads, write refusal, and recovery with the original revocations (unit).
+  it.each(['statSync', 'readFileSync'] as const)(
+    'preserves settings when %s fails and reloads after access recovers', async (operation) => {
+      const settings = { remoteControlEnabled: true, revokedControllers: ['dev-revoked'] };
+      externalWrite(settings, 110_000);
+      const filename = file();
+      const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+      const original = fs[operation];
+      const io = vi.spyOn(fs, operation).mockImplementation((...args: unknown[]) => {
+        if (args[0] === filename) throw Object.assign(new Error('UNKNOWN: cannot access settings'), { code: 'UNKNOWN' });
+        return Reflect.apply(original, fs, args);
+      });
+      try {
+        expect(readDeviceLinkSettings().remoteControlEnabled).toBe(false);
+        await expect(writeDeviceLinkSetting('keepAwake', true)).rejects.toThrow(/unreadable/);
+        expect(fs.existsSync(filename)).toBe(true);
+        io.mockRestore();
+        clock.mockReturnValue(2_001);
+        expect(readDeviceLinkSettings()).toMatchObject({ ...settings, keepAwake: false });
+      } finally {
+        io.mockRestore();
+        clock.mockRestore();
+      }
+    },
+  );
+
   it('unset, as on the desktop: is deleted, reads as the defaults, and the next write replaces it', async () => {
     externalWrite({ remoteControlEnabled: true }, 120_000);
     fs.writeFileSync(file(), malformed, 'utf-8');

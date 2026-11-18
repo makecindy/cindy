@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
-import { History, LayoutGrid, Star, Waypoints } from 'lucide-react';
+import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
 import { ModelPoolQuotaDetails, useModelPoolQuota, type ModelPoolQuota } from './ModelPoolQuota';
@@ -205,9 +205,11 @@ export function UnifiedModelRail({
               ) : item.kind === 'provider' ? (
                 <ProviderRailMark providerId={item.providerId} providers={railProviders} />
               ) : item.kind === 'remote-provider' ? (
-                <RemoteSourceMark>
-                  <ProviderRailMark providerId={item.providerId} providers={railProviders} />
-                </RemoteSourceMark>
+                !item.providerId && isProviderShareAgentDeviceId(item.deviceId) ? <Share2 size={16} /> : (
+                  <RemoteSourceMark>
+                    <ProviderRailMark providerId={item.providerId} providers={railProviders} />
+                  </RemoteSourceMark>
+                )
               ) : null}
             </RailButton>
           </div>

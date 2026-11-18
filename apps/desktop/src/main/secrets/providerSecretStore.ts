@@ -29,6 +29,7 @@ import {
   deriveGhostSecretTail,
   GHOST_SECRET_PREFIX,
   GHOST_SECRET_HINT_PREFIX,
+  GHOST_QUARANTINED_OAUTH_PREFIX,
   PROVIDER_SECRET_IDS,
   PI_PROXY_DERIVATION_KEY_STORAGE_KEY,
   MCP_APP_REVISION_KEY_STORAGE_KEY,
@@ -100,6 +101,7 @@ const DYNAMIC_SECRET_PREFIXES = [
   'provider_oauth_',
   GHOST_SECRET_PREFIX,
   GHOST_SECRET_HINT_PREFIX,
+  GHOST_QUARANTINED_OAUTH_PREFIX,
 ] as const;
 
 function isManagedSecretStorageKey(key: string): boolean {
@@ -766,6 +768,25 @@ const ghostSecretStore = createGhostSecretStore({
   },
 }, log);
 export const { migrateInstalledGhostSecretAliases, readGhostSecret, readGhostSecretStrict, ghostSecretSaved, storeGhostSecret, readGhostSecretTailFromIo, readGhostSecretTail, removeGhostSecret, removeGhostSecrets, listGhostAccountReferenceKeys, assertGhostSecretsCanRelocate, migrateGhostSecrets } = ghostSecretStore;
+
+/** Called only under the consumer's OAuth mutation lock during uninstall. */
+export function readGhostOauthManifestForUninstall(instanceKey: string, storageKey: string): string | null {
+  if (!storageKey.endsWith('-accounts')) throw new Error('Expected an OAuth account manifest');
+  const active = resolveOwnerScopedSecretStorageKey(ghostSecretStorageKey(instanceKey, storageKey));
+  if (!active || isAppSessionBoundaryPending()) throw new Error('Plugin OAuth owner unavailable');
+  try {
+    return readGhostSecretStrict(instanceKey, storageKey);
+  } catch (error) {
+    if (!(error instanceof Error) ||
+        error.message !== 'Error while decrypting the ciphertext provided to safeStorage.decryptString.') throw error;
+    const quarantine = resolveOwnerScopedSecretStorageKey(`${GHOST_QUARANTINED_OAUTH_PREFIX}${randomBytes(16).toString('hex')}`);
+    if (!quarantine || isAppSessionBoundaryPending() ||
+        resolveOwnerScopedSecretStorageKey(ghostSecretStorageKey(instanceKey, storageKey)) !== active) throw error;
+    fs.renameSync(path.join(secretDir(), `${active}.enc`), path.join(secretDir(), `${quarantine}.enc`));
+    log.warn('Quarantined an unreadable plugin OAuth manifest during uninstall');
+    return null;
+  }
+}
 
 export const genericOAuthSecretIo = {
   read(providerId: string): string | null {

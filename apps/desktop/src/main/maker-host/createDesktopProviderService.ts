@@ -41,9 +41,9 @@ import {
   readCreatedSubscriptionProvidersIfReadable,
   readMergedProviderAccount,
   restoreAutoMergedLegacyCodexAccounts,
-  restoreUnplacedSubscriptionAccounts,
   resolveSubscriptionPoolProvider,
 } from '../subscription-accounts/placement.js';
+import { setMergedProviderPoolResolver } from './mergedProviderPool.js';
 import {
   BUNDLED_CATALOG,
   compareModelRegistryRevisions,
@@ -112,7 +112,7 @@ import {
   refreshXaiModelsFromHttp,
 } from './model-discovery/xai.js';
 import { createProviderService, type ProviderService } from './provider-service.js';
-import { copyProviderDisableOverrides, readModelDisableOverrides, setProviderDisabled } from './model-disable-store.js';
+import { readModelDisableOverrides, setProviderDisabled } from './model-disable-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { migrateManagedOllamaProvider } from '../local-model-runtime/managedOllamaProvider.js';
@@ -171,7 +171,7 @@ import {
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
-import { broadcastReferenceModelPricing } from '../usage/referenceModelPricing.js';
+import { broadcastReferenceModelPricing, setReferencePricingDisplayProviders } from '../usage/referenceModelPricing.js';
 
 const log = createLogger('provider-service');
 
@@ -660,6 +660,12 @@ export async function refreshDiscoveredCodexModels(
 // the in-memory routing catalog until the next full app restart.
 let customProviderCatalogRefreshGeneration = 0;
 
+let upgradeSplitRepair: (() => Promise<void>) | null = null;
+/** Installed by subscription-accounts/upgradeSplitRepair.desktop.ts (window process only; Host never writes). */
+export function setUpgradeSplitRepair(repair: (() => Promise<void>) | null): void {
+  upgradeSplitRepair = repair;
+}
+
 export async function refreshCustomProvidersIntoCatalog(
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
@@ -729,15 +735,15 @@ export async function refreshCustomProvidersIntoCatalog(
           isCurrent,
         },
       );
-      await restoreUnplacedSubscriptionAccounts({
-        prepare: copyProviderDisableOverrides,
-        disable: providerId => setProviderDisabled(providerId, true),
-        isCurrent,
-      });
     } catch {
       // The merged view stays as it was; the next refresh retries.
       log.warn('restoring pooled subscription accounts did not complete');
     }
+    // Old pooled accounts stay in their built-in provider (2026-11-18, subscription-account-pools.md
+    // 升级不再自动拆分). Where the 0.1.137–0.1.139 split left the built-in provider without a usable
+    // account, the desktop wiring merges the untouched split provider back. Not awaited: a merge
+    // reads account snapshots, which must not hold up provider readiness; it never rejects.
+    if (isCurrent()) void upgradeSplitRepair?.();
     if (!isCurrent()) return;
     publishSubscriptionPoolProviders();
     requestCodexApiModelProbe();
@@ -920,6 +926,16 @@ function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false
 function getDesktopProviderModelAccessCatalog(): Catalog {
   return projectSubscriptionPoolCatalog(getActiveCatalog(), true);
 }
+
+// Reference prices shown beside models follow the same account-aware membership as the lists.
+setReferencePricingDisplayProviders(() => getDesktopProviderModelAccessCatalog().providers);
+
+// A connection merged into an account pool follows the pool's 「允许被远程调用」 (it has no switch on screen).
+setMergedProviderPoolResolver((providerId) => {
+  const merged = readMergedProviderAccount(providerId);
+  const ref = merged ? resolveSubscriptionPoolProvider(providerId) : null;
+  return ref && merged ? accountProviderId(ref.kind, merged) : undefined;
+});
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
 export function getDesktopProviderService(options: { allowSideEffects?: boolean } = {}): ProviderService {

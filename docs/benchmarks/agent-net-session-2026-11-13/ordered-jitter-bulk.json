@@ -1,0 +1,210 @@
+{
+  "generatedAt": "2026-11-14T07:58:09.633Z",
+  "node": "v24.22.1",
+  "platform": "win32-x64",
+  "totalBytes": 8388608,
+  "chunkBytes": 524288,
+  "concurrency": 4,
+  "results": [
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "v1",
+      "run": 1,
+      "direction": "down",
+      "totalBytes": 8388608,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": 0.95,
+      "ms": 8816,
+      "failed": 0,
+      "taps": {
+        "count": 18,
+        "p50": 1992,
+        "p90": 2083,
+        "max": 2102
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "v1",
+      "run": 1,
+      "direction": "up",
+      "totalBytes": 8388608,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": 0.95,
+      "ms": 8792,
+      "failed": 0,
+      "taps": {
+        "count": 18,
+        "p50": 1681,
+        "p90": 2190,
+        "max": 2598
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "v1",
+      "run": 2,
+      "direction": "down",
+      "totalBytes": 8388608,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": 0.95,
+      "ms": 8815,
+      "failed": 0,
+      "taps": {
+        "count": 18,
+        "p50": 1701,
+        "p90": 2060,
+        "max": 2102
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "v1",
+      "run": 2,
+      "direction": "up",
+      "totalBytes": 8388608,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": 0.95,
+      "ms": 8812,
+      "failed": 0,
+      "taps": {
+        "count": 18,
+        "p50": 1720,
+        "p90": 2118,
+        "max": 2604
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "session",
+      "run": 1,
+      "direction": "down",
+      "totalBytes": 8388608,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": 0.84,
+      "ms": 9968,
+      "failed": 0,
+      "taps": {
+        "count": 20,
+        "p50": 179,
+        "p90": 186,
+        "max": 188
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "session",
+      "run": 1,
+      "direction": "up",
+      "totalBytes": 8388608,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": 0.81,
+      "ms": 10321,
+      "failed": 0,
+      "taps": {
+        "count": 21,
+        "p50": 169,
+        "p90": 182,
+        "max": 192
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "session",
+      "run": 2,
+      "direction": "down",
+      "totalBytes": 8388608,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": 0.64,
+      "ms": 13178,
+      "failed": 0,
+      "taps": {
+        "count": 27,
+        "p50": 165,
+        "p90": 181,
+        "max": 191
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "session",
+      "run": 2,
+      "direction": "up",
+      "totalBytes": 8388608,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": 0.62,
+      "ms": 13537,
+      "failed": 0,
+      "taps": {
+        "count": 28,
+        "p50": 170,
+        "p90": 185,
+        "max": 189
+      },
+      "tapsFailed": 0
+    }
+  ]
+}

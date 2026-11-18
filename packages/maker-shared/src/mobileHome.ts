@@ -589,7 +589,8 @@ function matchesSearchQuery(
   return haystack.includes(query);
 }
 
-function compareSessionsByStatusThenActivityDesc(a: MobileHomeSessionLike, b: MobileHomeSessionLike): number {
+/** 首页任务的基础顺序:活跃在前,再按最近活动倒序(自动化组内成员也按此顺序)。 */
+export function compareSessionsByStatusThenActivityDesc(a: MobileHomeSessionLike, b: MobileHomeSessionLike): number {
   const statusDiff = sessionStatusRank(a.status) - sessionStatusRank(b.status);
   if (statusDiff !== 0) return statusDiff;
   return compareSessionListStrings(lastActivityTime(b), lastActivityTime(a));

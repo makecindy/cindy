@@ -16,6 +16,81 @@ import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../shared/projectAutomati
 
 const workingDir = 'C:\\project';
 
+// #11134 / unit: real loader + Scheduler updates + database mapper round trips.
+// Existing coverage never changed a project definition after its first persistent
+// run had bound a task. Cover both writers and an already-saved stale binding;
+// a fresh declaration must clear it durably, without changing explicit heartbeats.
+describe('project automation persistent task binding', () => {
+  it.each(['reconcile', 'upsert', 'stale'] as const)('clears the old binding through %s', async (entry) => {
+    const dir = await fs.mkdtemp(path.join(tmpdir(), 'cindy-project-binding-'));
+    type Row = Parameters<typeof scheduleToCamel>[0];
+    const rows = new Map<string, Row>();
+    const storage = {
+      list: async () => [...rows.values()].map(scheduleToCamel),
+      get: async (id: string) => rows.has(id) ? scheduleToCamel(rows.get(id)!) : null,
+      insert: async (schedule: Schedule) => {
+        rows.set(schedule.id, scheduleCreateToRow(schedule) as Row);
+        return scheduleToCamel(rows.get(schedule.id)!);
+      },
+      update: async (id: string, patch: Partial<Schedule>) => {
+        if (!rows.has(id)) return null;
+        rows.set(id, { ...rows.get(id)!, ...schedulePatchToRow(patch) });
+        return scheduleToCamel(rows.get(id)!);
+      },
+    };
+    const scheduler = new Scheduler({ storage: storage as ScheduleStorage, runner: { fire: vi.fn() } });
+    const newLoader = () => new ProjectAutomationLoader({
+      scheduler,
+      storage: storage as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
+      getDb: () => ({
+        select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+        insert: () => ({ values: () => ({ onConflictDoUpdate: async () => {} }) }),
+      }) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
+      logger: { warn: vi.fn() },
+      getTeammateProjectState: async () => 'active',
+    });
+    try {
+      const loader = newLoader();
+      const persistent = projectConfig({ agentKind: 'codex', model: 'gpt-5.5', persistentSession: true });
+      await loader.upsertSchedule(dir, persistent);
+      const [created] = await storage.list();
+      // The runner writes this after the first persistent run.
+      await scheduler.update(created.id, { targetSessionId: 'old-codex-task' });
+      await storage.update(created.id, { lastFiredAt: 123 });
+      await loader.upsertSchedule(dir, { ...persistent, prompt: 'Updated checks' });
+      expect((await storage.get(created.id))?.targetSessionId).toBe('old-codex-task');
+      const heartbeat = await scheduler.create({ name: 'Heartbeat', prompt: 'Check', kind: 'cron',
+        cronExpr: created.cronExpr, timezone: created.timezone, recurring: true,
+        agentKind: 'codex', useWorktree: false, notify: { desktop: false, feishu: false },
+        persistentSession: false, targetSessionId: 'explicit-task' });
+      await scheduler.update(heartbeat.id, { name: 'Explicit heartbeat' });
+
+      const fresh = projectConfig({ agentKind: 'claude-code', model: 'claude-opus-5-5',
+        providerId: 'anthropic', persistentSession: false });
+      if (entry === 'upsert') await loader.upsertSchedule(dir, fresh);
+      else {
+        if (entry === 'stale') {
+          // Old releases already saved the new definition but retained its binding.
+          await scheduler.update(created.id, __testing.scheduleConfigToUpdateInput(fresh, dir));
+          await scheduler.update(created.id, { targetSessionId: 'old-codex-task' });
+        }
+        await fs.writeFile(path.join(dir, ...PROJECT_AUTOMATION_REL_SEGMENTS),
+          JSON.stringify({ version: 1, schedules: [fresh] }));
+        expect(await loader.reconcile(dir)).toMatchObject({ updated: 1 });
+      }
+      expect(rows.get(created.id)?.targetSessionId).toBeNull();
+      expect(await storage.get(created.id)).toMatchObject({ agentKind: 'claude-code',
+        model: 'claude-opus-5-5', providerId: 'anthropic', persistentSession: false,
+        lastFiredAt: 123, targetSessionId: undefined });
+      expect(await newLoader().reconcile(dir)).toMatchObject({ updated: 0, deleted: 0 });
+      expect((await storage.get(created.id))?.targetSessionId).toBeUndefined();
+      expect((await storage.get(heartbeat.id))?.targetSessionId).toBe('explicit-task');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // #10520 / unit: real loader and Scheduler CRUD, with in-memory disk/storage so
 // an event-loop turn drains all work except the explicitly held model validation.
 // Existing tests only rejected saves; they never interleaved successful creates

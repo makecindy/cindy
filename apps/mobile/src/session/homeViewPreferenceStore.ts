@@ -24,6 +24,8 @@ export interface HomeViewPreferences {
   groupByProject: boolean;
   /** 缺省关:老首页是项目 folder + 对话按时间混排,不是桌面现在的「对话归组」。 */
   groupDialogue: boolean;
+  /** 缺省关,与手机端「对话」同一默认:自动化运行的任务收进「自动化」目录。 */
+  groupAutomation: boolean;
   sortBy: HomeListSortBy;
   statusFilter: HomeStatusFilter;
   /** 缺省按最近活动;手动时项目行按 manualProjectOrder,对话仍跟任务排序。 */
@@ -38,6 +40,7 @@ export interface HomeViewPreferences {
   vendorFilter: HomeVendorFilter;
   lastActivityFilter: HomeLastActivityFilter;
   /** 缺省列表(带预览行):手机首页一直是这个样子。 */
+  taskListMode?: 'tasks' | 'inbox';
   viewMode: HomeListViewMode;
   /** 任务行右侧信息;顺序 = 勾选先后。 */
   taskInfoFields: HomeTaskInfoField[];
@@ -48,6 +51,7 @@ export interface HomeViewPreferences {
 export interface HomeViewPreferencePatch {
   groupByProject?: boolean;
   groupDialogue?: boolean;
+  groupAutomation?: boolean;
   sortBy?: HomeListSortBy;
   statusFilter?: HomeStatusFilter;
   projectOrder?: HomeProjectOrder;
@@ -57,6 +61,7 @@ export interface HomeViewPreferencePatch {
   teammateFilter?: { owner: string; value: HomeTeammateFilter };
   vendorFilter?: HomeVendorFilter;
   lastActivityFilter?: HomeLastActivityFilter;
+  taskListMode?: 'tasks' | 'inbox';
   viewMode?: HomeListViewMode;
   taskInfoFields?: HomeTaskInfoField[];
   selectedDevice?: { deviceId: string; name: string } | null;
@@ -110,10 +115,12 @@ async function writeHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
   };
   assign('groupByProject', patch.groupByProject);
   assign('groupDialogue', patch.groupDialogue);
+  assign('groupAutomation', patch.groupAutomation);
   assign('sortBy', patch.sortBy);
   assign('statusFilter', patch.statusFilter);
   assign('projectOrder', patch.projectOrder);
   assign('manualProjectOrder', patch.manualProjectOrder ? [...patch.manualProjectOrder] : undefined);
+  assign('taskListMode', patch.taskListMode);
   assign('viewMode', patch.viewMode);
   assign('taskInfoFields', patch.taskInfoFields ? [...patch.taskInfoFields] : undefined);
   for (const field of ['projectFilter', 'teammateFilter'] as const) {
@@ -164,6 +171,7 @@ function emptyPreferences(): HomeViewPreferences {
   return {
     groupByProject: true,
     groupDialogue: false,
+    groupAutomation: false,
     selectedDevice: null,
     sortBy: 'recency',
     statusFilter: 'active',
@@ -175,6 +183,7 @@ function emptyPreferences(): HomeViewPreferences {
     projectFilterOwner: '',
     vendorFilter: 'all',
     lastActivityFilter: 'all',
+    taskListMode: 'tasks',
     viewMode: 'list',
     taskInfoFields: [...DEFAULT_HOME_TASK_INFO_FIELDS],
   };
@@ -190,6 +199,7 @@ function normalizeStoredPreferences(value: unknown): HomeViewPreferences {
       ? record.groupByProject
       : true,
     groupDialogue: record.groupDialogue === true,
+    groupAutomation: record.groupAutomation === true,
     selectedDevice: deviceId
       ? { deviceId, name: deviceName || deviceId }
       : null,
@@ -205,6 +215,7 @@ function normalizeStoredPreferences(value: unknown): HomeViewPreferences {
     projectFilterOwner: readString(record.projectFilterOwner) ?? '',
     vendorFilter: normalizeVendorFilter(record.vendorFilter),
     lastActivityFilter: normalizeLastActivityFilter(record.lastActivityFilter),
+    taskListMode: record.taskListMode === 'inbox' ? 'inbox' : 'tasks',
     viewMode: normalizeViewMode(record.viewMode),
     taskInfoFields: normalizeTaskInfoFields(record.taskInfoFields),
   };

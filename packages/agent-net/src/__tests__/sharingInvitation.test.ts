@@ -1,6 +1,12 @@
 /** Unit: explicit V2 invitations pin an external relay/root/resource; the V1
  * configured-server restriction must not be widened. Minimal malformed inputs
  * cover credential URLs, scope confusion and ambiguous handoffs. No I/O. */
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
+import { AgentNetClient, openEncryptedMedia, uploadEncryptedMedia } from '@cindy/agent-net-relay/client';
+import { startAgentNetRelay } from '@cindy/agent-net-relay';
 import { expect, it, vi } from 'vitest';
 import { parseSharedTaskInvitation } from '@cindy/device-link';
 import { encodeAgentNetSharingInvitation, decodeAgentNetSharingInvitation, buildAgentNetSharingInvitation,
@@ -71,10 +77,76 @@ it.each(['shared-task', 'provider-share'] as const)('round-trips a %s web invita
 it('rejects altered receipt shape, mismatched kind and insecure or ambiguous handoffs', () => {
   const link = buildAgentNetSharingInvitation(receipt, 'https://relay.example.test');
   const raw = (value: object) => 'an2.' + toBase64Url(utf8(JSON.stringify(value)));
-  for (const value of [{ ...receipt, v: 3 }, { ...receipt, kind: 'full-device' }, { ...receipt, rootPublicKey: 'bad' },
+  for (const value of [{ ...receipt, v: 4 }, { ...receipt, v: 3, networkId: 'account:user' }, { ...receipt, kind: 'full-device' }, { ...receipt, rootPublicKey: 'bad' },
     { ...receipt, unexpected: 'field' }]) expect(decodeAgentNetSharingInvitation(raw(value))).toBeNull();
   for (const value of [link + ' ' + link, link.replace('https://', 'http://'), link.replace('relay.', 'user:pass@relay.'),
     link.replace('/shared-task/', '/provider-share/'), link + '&unexpected=1']) expect(parseAgentNetSharingInvitation(value)).toBeNull();
   expect(parseAgentNetSharingInvitation(link, 'provider-share')).toBeNull();
   expect(() => buildAgentNetSharingInvitation(receipt, 'http://192.168.10.2')).toThrow('SECURE_SHARING_INVITATION_REQUIRED');
+});
+
+// Integration: exercise real member and guest HTTP proofs on a self-hosted relay with no account service.
+// The existing invitation and transport tests substitute HTTP responses and cannot detect a wire mismatch.
+it('creates, joins and revokes private shares using only the selected relay', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'agent-net-private-share-'));
+  const { bootstrap, identity } = createPrivateNetwork('private sharing');
+  const relay = await startAgentNetRelay({ dataDir: directory, bootstrap });
+  try {
+    const member = new AgentNetClient(relay.url, identity, bootstrap.ownerCertificate, bootstrap.rootPublicKey);
+    const noCard = vi.fn(async (): Promise<never> => { throw new Error('Account service offline'); });
+    const make = (owner: boolean) => {
+      const signerIdentity = generateIdentity(owner ? identity.deviceId : 'external');
+      return new AgentNetSharingClient({ base: relay.url, networkId: bootstrap.networkId, rootPublicKey: bootstrap.rootPublicKey,
+        privateSharing: true, signer: { identity: signerIdentity, sign: async value => signature(signerIdentity.signingPrivateKey, value),
+          random: async () => randomBytes(18).toString('base64url') }, hash: bytes => createHash('sha256').update(bytes).digest(),
+        assertCurrent() {}, getIdentityCard: noCard, memberAuthorization: owner ? (m, p, b) => member.header(m, p, b) : undefined,
+        fetch: (url, options) => {
+          expect(new URL(String(url)).origin).toBe(relay.url);
+          const authorization = new Headers(options?.headers).get('authorization')!;
+          const proof = JSON.parse(Buffer.from(authorization.slice('AgentNetPrivate '.length), 'base64url').toString());
+          expect(Object.keys(proof).sort()).toEqual(['networkId', 'proof', 'signingKey']);
+          return fetch(url, options);
+        } });
+    };
+    const host = make(true), guest = make(false), base = '/api/device-link/shared-tasks';
+    const { sharedTaskId } = await host.request<{ sharedTaskId: string }>(base, { method: 'POST', body: { sessionId: 'session', title: 'Private task' } });
+    const resource = base + '/' + sharedTaskId;
+    const { invitation } = await host.request<{ invitation: string }>(resource + '/invites', { method: 'POST', body: {} });
+    const { memberId } = await guest.request<{ memberId: string }>(base + '/join', { method: 'POST', body: { invitation, displayName: 'Guest' } });
+    await expect(guest.request(resource, { method: 'GET' })).resolves.toBeTruthy();
+    const transportId = 'guest:' + guest.options.signer.identity.signingKey;
+    const transportIdentity = generateIdentity(transportId);
+    const applicant = { identity: transportIdentity, sign: async (value: string) => signature(transportIdentity.signingPrivateKey, value),
+      random: async () => randomBytes(18).toString('base64url') };
+    const pending = await guest.request<{ id: string }>('/api/agent-net/sharing/transport', { method: 'POST', applicant,
+      body: { kind: 'shared-task', resourceId: sharedTaskId, memberId, signingKey: transportIdentity.signingKey, transportKey: transportIdentity.transportKey } });
+    const listing = await member.request<{ delegationRequests: import('@cindy/agent-net-protocol').DelegationRequest[] }>('GET', '/directory');
+    const request = listing.delegationRequests.find(r => r.id === pending.id)!;
+    const grant = await member.acceptDelegationRequest(request, () => undefined);
+    const visiting = new AgentNetClient(relay.url, transportIdentity, bootstrap.ownerCertificate, bootstrap.rootPublicKey, grant);
+    const uplink = await visiting.connect();
+    uplink.close();
+    const plain = randomBytes(8192);
+    const uploaded = await uploadEncryptedMedia(visiting, identity.deviceId, identity.transportKey, plain.length,
+      async (offset, length) => plain.subarray(offset, offset + length));
+    const opened = await openEncryptedMedia(member, uploaded.id, uploaded.headerSha256, undefined, 'application/octet-stream');
+    expect(Buffer.from(await opened.arrayBuffer())).toEqual(plain);
+    await expect(make(false).request(resource, { method: 'GET' })).rejects.toThrow();
+    await host.request(resource + '/members/' + memberId + '/remove', { method: 'POST', body: {} });
+    await expect(guest.request(resource, { method: 'GET' })).rejects.toThrow();
+    await expect(visiting.directory()).rejects.toThrow();
+    const providers = '/api/device-link/provider-shares';
+    const link = await host.request<{ invitation: string; shareId: string }>(providers + '/links', { method: 'POST',
+      body: { providerId: 'local-provider', providerLabel: 'Provider', deviceName: 'Host', identityCard: 'private-device' } });
+    const proposed = await guest.request<{ requestId: string; status: string }>(providers + '/requests', { method: 'POST',
+      body: { invitation: link.invitation, identityCard: 'private-device' } });
+    expect(proposed.status).toBe('pending');
+    await expect(guest.request(providers + '/requests/' + proposed.requestId + '/approve', { method: 'POST', body: {} })).rejects.toThrow();
+    const approved = await host.request<{ shareId: string }>(providers + '/requests/' + proposed.requestId + '/approve', { method: 'POST', body: {} });
+    expect(approved.shareId).toBe(link.shareId);
+    expect(noCard).not.toHaveBeenCalled();
+  } finally {
+    await relay.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });

@@ -146,6 +146,7 @@ export async function classifyVoiceExit(
         // Exact route helper never enters the default auxiliary chain and never
         // falls back to a tool-enabled Agent. Unsupported routes simply continue.
         const answer = await requestExplicitUtilityText(prompt, {
+          source: 'voice-exit', sessionId: input.sessionId,
           ...route,
           maxTokens: 96,
           timeoutMs: TIMEOUT_MS,

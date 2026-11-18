@@ -30,14 +30,16 @@ describe('sidebar window expansion', () => {
     controller.update(native, 0, area);
     expect(win.getBounds().width).toBe(900);
   });
-  it('restores the standalone rectangle after edits while open and isolates windows', () => {
+  // Unit regression: closing used to snap a window dragged while open back to where
+  // it was before opening. Size edits stay temporary; the drag is kept.
+  it('keeps a drag while open but restores the standalone size, per window', () => {
     const a = fixture(); const b = fixture();
     const controller = new SidebarWindowExpansion();
     controller.update(a.native, 400, a.area);
     a.win.setBounds({ x: -1400, y: 90, width: 1200, height: 850 });
     controller.update(b.native, 0, b.area);
     controller.update(a.native, 0, a.area);
-    expect(a.win.getBounds()).toEqual({ x: -1600, y: 40, width: 900, height: 800 });
+    expect(a.win.getBounds()).toEqual({ x: -1400, y: 90, width: 900, height: 800 });
     expect(b.win.setBounds).not.toHaveBeenCalled();
   });
   // Unit regression: #9661 restored standalone geometry but reopening used the
@@ -94,10 +96,14 @@ describe('sidebar window expansion', () => {
     const before = win.getBounds();
     controller.update(native, 400, area);
     expect(saved.getBounds()).toEqual(before);
-    win.setBounds({ x: -1500, y: 90, width: 1500, height: 850 });
+    win.setBounds({ ...win.getBounds(), width: 1500, height: 850 });
     expect(saved.getBounds()).toEqual(before);
+    // Quitting after a drag while open must persist the same rectangle closing returns to.
+    win.setBounds({ ...win.getBounds(), x: -1500, y: 90 });
+    const dragged = { ...before, x: -1500, y: 90 };
+    expect(saved.getBounds()).toEqual(dragged);
     controller.update(native, 0, area);
-    expect(win.getBounds()).toEqual(before);
+    expect(win.getBounds()).toEqual(dragged);
     const edited = { x: -1500, y: 60, width: 1000, height: 850 };
     win.setBounds(edited);
     expect(saved.getBounds()).toEqual(edited);
@@ -164,6 +170,33 @@ describe('sidebar window expansion', () => {
     expect(keeper.isMaximized()).toBe(true);
     expect(keeper.getBounds()).toEqual(before);
   });
+  // Unit regression (review #11077): quitting with a resized/dragged sidebar
+  // open must persist exactly the close target. Existing tests only moved within
+  // the display; y=450 with an 800px baseline exposes the missing clamp.
+  it.each(['darwin', 'win32'] as const)('persists the same bounded target as closing on %s', (platform) => {
+    const { win, native, area } = fixture();
+    const controller = new SidebarWindowExpansion();
+    let currentArea = area;
+    const screenApi = {
+      getPrimaryDisplay: () => ({ bounds: currentArea, workArea: currentArea }),
+      getDisplayMatching: () => ({ bounds: currentArea, workArea: currentArea }),
+    };
+    let keeper!: PersistableWindow;
+    manageWindowStatePreservingNormalBounds(
+      { manage: (view) => { keeper = view; } },
+      controller.persistenceView(native, screenApi), screenApi, platform,
+    );
+    controller.update(native, 400, area, screenApi);
+    win.setBounds({ x: -1600, y: 450, width: 1300, height: 600 });
+    expect(keeper.getBounds()).toEqual({ x: -1600, y: 280, width: 900, height: 800 });
+    // Screen changes are read live by the saved view, not captured at startup.
+    currentArea = { x: 0, y: 0, width: 1280, height: 720 };
+    win.setBounds({ x: 100, y: 50, width: 1100, height: 600 });
+    const stored = keeper.getBounds();
+    expect(stored).toEqual({ x: 100, y: 1, width: 900, height: 719 });
+    controller.update(native, 0, currentArea, screenApi);
+    expect(win.getBounds()).toEqual(stored);
+  });
   it('keeps a removed display off-screen rectangle inside the work area on close', () => {
     const { win, native, area } = fixture();
     const controller = new SidebarWindowExpansion();
@@ -178,7 +211,7 @@ describe('sidebar window expansion', () => {
     expect(restored.x + restored.width).toBeLessThanOrEqual(1280);
     expect(restored.width).toBe(900);
   });
-  it('returns to the original connected display when the window was moved to another one', () => {
+  it('stays on the connected display the window was dragged to', () => {
     const { win, native, area } = fixture();
     const controller = new SidebarWindowExpansion();
     controller.update(native, 400, area);
@@ -187,6 +220,6 @@ describe('sidebar window expansion', () => {
     const screenApi = { getPrimaryDisplay: () => ({ bounds: area, workArea: area }),
       getDisplayMatching: (r: { x: number }) => { const d = r.x < 0 ? area : other; return { bounds: d, workArea: d }; } };
     controller.update(native, 0, other, screenApi);
-    expect(win.getBounds()).toEqual({ x: -1600, y: 40, width: 900, height: 800 });
+    expect(win.getBounds()).toEqual({ x: 300, y: 50, width: 900, height: 800 });
   });
 });

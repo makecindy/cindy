@@ -8,9 +8,48 @@ export default {
   name: 'project-settings',
   entry: './fixture.tsx',
   viewport: { width: 720, height: 800 },
-  real: 'ProjectSettingsDialog and ProjectIcon',
-  notCovered: 'Real persistence, device-link transport and phone native presentation.',
+  real: 'ProjectSettingsDialog, ProjectIcon and DeviceSectionHeader',
+  notCovered: 'Real persistence, device-link transport, full sidebar navigation and phone native presentation.',
   cases: {
+    'create-device': { about: 'Device-row add action appears on hover/focus and opens the creation form', data: { create: true } },
+    'create-legacy': { about: 'Version 6 still requires an existing directory and hides clone fields', data: { create: true, version: 6 } },
+    'create-blank': { about: 'Repository creation is opt-in and returning to blank cannot send a hidden clone URL', data: { create: true } },
+    'create-auto': { about: 'Create by name without choosing a directory', data: { create: true } },
+    'create-repository': {
+      about: 'Paste a GitLab URL as the name and clone into the automatically allocated directory',
+      data: { create: true },
+    },
+    'create-primary': {
+      about:
+        'The first directory becomes primary; removing it promotes the next directory before creation',
+      data: { create: true },
+    },
+    'create-existing': {
+      about: 'Selecting a registered project preserves its saved name, icon and directory grants',
+      data: { create: true, directories: true },
+    },
+    'create-cancel': {
+      about: 'Cancel creation and discard directory drafts without any profile write',
+      data: { create: true },
+    },
+    directories: {
+      about: 'New directory drafts allow writes and persist only on Save',
+      data: { directories: true },
+    },
+    create: {
+      about: 'New project uses the same settings form and does not create a task before saving',
+      data: { create: true },
+    },
+    intro: {
+      about: 'Someone with no project yet meets the introduction before the new-project form',
+      data: { create: true, intro: true },
+      viewport: { width: 1040, height: 760 },
+    },
+    'intro-once': {
+      about: 'Closing the introduction leads on to the form, and later openings go straight to the form',
+      data: { create: true, intro: true },
+      viewport: { width: 1040, height: 760 },
+    },
     header: {
       about: 'Click a task header project icon to edit its owning project, including worktrees',
       data: { header: true },
@@ -52,11 +91,248 @@ export default {
   },
   async ready(page) {
     await page
-      .getByRole('button', { name: /^(更换图标|Change icon|项目设置|Project settings)$/ })
+      .getByRole('button', { name: /^(更换图标|Change icon|项目设置|Project settings|新建项目|New project)$/ })
       .first()
       .waitFor();
   },
   async check(page, ui) {
+    // Real header and dialog, with a local specimen row. Existing dialog cases
+    // cannot verify hover/focus visibility. ProjectsSection unit tests cover
+    // local/remote target routing separately from this browser layout check.
+    if (ui.case === 'intro' || ui.case === 'intro-once') {
+      const intro = page.locator('[data-feature-intro]');
+      const name = page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true });
+      const add = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.newProject'), exact: true });
+      // The device row reveals its add action on hover.
+      const device = page.getByRole('button', { expanded: true });
+      await device.hover();
+      await add.click();
+      await page.getByText(await ui.t('featureIntro.project.lead'), { exact: true }).waitFor();
+      const overflow = await intro.locator('.first-run-cover').evaluate((cover) => cover.scrollHeight - cover.clientHeight);
+      if (overflow > 0) throw new Error(`The introduction must fit without scrolling (${overflow}px over)`);
+      // One dialog at a time: the form waits for the introduction instead of opening under it.
+      if (await name.count()) throw new Error('The form opened together with the introduction');
+      if (ui.case === 'intro') return;
+      await page.getByRole('button', { name: await ui.t('featureIntro.project.start'), exact: true }).click();
+      await intro.waitFor({ state: 'detached' });
+      await name.waitFor();
+      // Shown once: opening the form again on this computer goes straight to it.
+      await page.getByRole('button', { name: await ui.t('projectSettings.cancel'), exact: true }).last().click();
+      await name.waitFor({ state: 'detached' });
+      await device.hover();
+      await add.click();
+      await name.waitFor();
+      if (await intro.count()) throw new Error('The introduction appeared a second time');
+      return;
+    }
+    if (ui.case === 'create-device') {
+      const add = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.newProject'), exact: true });
+      const wrapper = add.locator('..');
+      if (await wrapper.evaluate(el => getComputedStyle(el).opacity) !== '0') throw new Error('Add action should be hidden at rest');
+      await page.getByRole('button', { expanded: true }).hover();
+      if (await wrapper.evaluate(el => getComputedStyle(el).opacity) !== '1') throw new Error('Hover did not reveal add action');
+      await ui.capture('device-hover');
+      await page.mouse.move(350, 300);
+      await add.focus();
+      if (await wrapper.evaluate(el => getComputedStyle(el).opacity) !== '1') throw new Error('Keyboard focus did not reveal add action');
+      await add.click();
+      await page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true }).waitFor();
+      await ui.capture('device-create');
+      return;
+    }
+    if (['create-auto', 'create-repository', 'create-blank'].includes(ui.case)) {
+      const repositoryInput = page.getByRole('textbox', { name: await ui.t('projectSettings.repository'), exact: true });
+      if (await repositoryInput.count()) throw new Error('Repository field appeared before opting in');
+      if (await page.getByRole('group', { name: await ui.t('projectSettings.source'), exact: true }).count()) throw new Error('Unexpected source group');
+      if (await page.getByRole('radio').count() !== 2) throw new Error('Creation must expose only two sources');
+      const repository = ui.case === 'create-repository';
+      if (ui.case === 'create-auto') {
+        const name = page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true });
+        await name.fill('Design/2027');
+        if ((await name.inputValue()) !== 'Design/2027' || await repositoryInput.count()) throw new Error('A project name was interpreted as a GitHub shortcut');
+      }
+      await page
+        .getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true })
+        .fill(repository ? 'https://gitlab.example.com/engineering/platform/client/applications/project-management/demo' : 'Demo');
+      if (repository && !(await repositoryInput.isVisible())) throw new Error('Pasted URL did not reveal repository options');
+      if (ui.case === 'create-blank') {
+        await page.getByRole('radio', { name: await ui.t('projectSettings.source_repository'), exact: true }).click();
+        await repositoryInput.waitFor();
+        await page.getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true }).click();
+        if (await page.evaluate(() => window.projectSettingsWrites.length)) throw new Error('Empty repository mode created a blank project');
+        await repositoryInput.fill('https://github.com/example/Demo');
+        if (await page.getByText(await ui.t('projectSettings.invalidRepository'), { exact: true }).count()) throw new Error('Repository error persisted after editing');
+        await ui.capture('repository-options');
+        await page.getByRole('radio', { name: await ui.t('projectSettings.source_local'), exact: true }).click();
+        if (await repositoryInput.count()) throw new Error('Repository field remained after switching to blank');
+      }
+      if (ui.case === 'create-auto') {
+        await page.evaluate(() => window.projectPickerCancelled = true);
+        await page.getByRole('button', { name: await ui.t('projectSettings.changeMainDirectory'), exact: true }).click();
+        await page.getByText(await ui.t('projectSettings.automaticMain'), { exact: true }).waitFor();
+        await page.evaluate(() => window.projectPickerCancelled = false);
+      }
+      await ui.capture('automatic-location');
+      if (await page.getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true }).count())
+        throw new Error('Automatic location exposed the additional directory picker');
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true })
+        .click();
+      const writes = await page.evaluate(() => window.projectSettingsWrites);
+      if (writes.length !== 1 || writes[0].projectKey !== 'local:' || !writes[0].create)
+        throw new Error('Missing automatic creation');
+      if (repository && writes[0].repositoryUrl !== 'https://gitlab.example.com/engineering/platform/client/applications/project-management/demo')
+        throw new Error('Repository paste was lost');
+      if (!repository && writes[0].repositoryUrl) throw new Error('Blank creation retained a hidden repository URL');
+      const opened = await page.evaluate(() => window.projectCreatedPath);
+      if (opened !== (repository ? '/Projects/demo' : '/Projects/Demo'))
+        throw new Error('Did not use host-assigned directory');
+      return;
+    }
+    if (ui.case === 'create-primary') {
+      // UI regression: choosing a folder with an empty name must visibly fill it;
+      // the existing creation scenario previously checked only the submitted path.
+      const nameInput = page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true });
+      for (const path of ['/Projects/First', '/Projects/Second']) {
+        await page.evaluate((path) => {
+          window.projectPickerPath = path;
+        }, path);
+        await page
+          .getByRole('button', { name: await ui.t(path === '/Projects/First' ? 'projectSettings.changeMainDirectory' : 'projectSettings.addDirectory'), exact: true })
+          .click();
+        if ((await nameInput.inputValue()) !== 'First') throw new Error('Selecting the main folder did not fill its name, or adding another folder changed it');
+      }
+      await ui.capture('folder-name');
+      // Clearing a name returns to automatic naming on the next folder choice.
+      await nameInput.fill(' ');
+      await page.getByText(await ui.t('projectSettings.mainDirectory'), { exact: true }).waitFor();
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.removeDirectory'), exact: true })
+        .first()
+        .click();
+      await page.getByText('/Projects/Second', { exact: true }).waitFor();
+      if ((await nameInput.inputValue()) !== 'Second') throw new Error('Automatically filled name did not follow the promoted main folder');
+      await ui.capture('promoted-primary');
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true })
+        .click();
+      const writes = await page.evaluate(() => window.projectSettingsWrites);
+      if (
+        writes.length !== 1 ||
+        writes[0].projectKey !== 'local:/Projects/Second' ||
+        writes[0].value.directories.length !== 0
+      )
+        throw new Error('First directory was not promoted to primary');
+      return;
+    }
+    if (ui.case === 'create-existing') {
+      await page.evaluate((path) => {
+        window.projectPickerPath = path;
+      }, '/Projects/Cindy');
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.changeMainDirectory'), exact: true })
+        .click();
+      await page.getByText('/Projects/Reference', { exact: true }).waitFor();
+      if (
+        (await page
+          .getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true })
+          .inputValue()) !== 'Cindy'
+      )
+        throw new Error('Existing name was not loaded');
+      await ui.capture('existing-project');
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true })
+        .click();
+      const writes = await page.evaluate(() => window.projectSettingsWrites);
+      if (writes.length !== 1 || Object.keys(writes[0].value).length !== 0)
+        throw new Error('Creation overwrote an existing profile');
+      return;
+    }
+    if (ui.case === 'create-cancel') {
+      await page.evaluate((path) => {
+        window.projectPickerPath = path;
+      }, '/Projects/Example');
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.changeMainDirectory'), exact: true })
+        .click();
+      await page.evaluate(() => {
+        window.projectPickerPath = '/Projects/Reference';
+      });
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
+        .last()
+        .click();
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.cancel'), exact: true })
+        .last()
+        .click();
+      await page
+        .getByRole('button', { name: await ui.t('projectSettings.discard'), exact: true })
+        .click();
+      if (await page.evaluate(() => window.projectSettingsWrites.length))
+        throw new Error('Cancelled creation persisted a draft');
+      return;
+    }
+
+    if (ui.case === 'directories' || ['create', 'create-legacy'].includes(ui.case)) {
+      if (['create', 'create-legacy'].includes(ui.case)) {
+        if (ui.case === 'create-legacy') {
+          if (await page.getByRole('textbox', { name: await ui.t('projectSettings.repository'), exact: true }).count()) throw new Error('Old host exposed cloning');
+          await page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true }).fill('Demo');
+          if (!(await page.getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true }).isDisabled())) throw new Error('Old host accepted automatic allocation');
+        }
+        await page
+          .getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true })
+          .fill('My project');
+        await page.evaluate((path) => {
+          window.projectPickerPath = path;
+        }, '/Projects/Example');
+        await page
+          .getByRole('button', { name: await ui.t(ui.case === 'create-legacy' ? 'projectSettings.chooseExistingFolder' : 'projectSettings.changeMainDirectory'), exact: true })
+          .click();
+        if ((await page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true }).inputValue()) !== 'My project') throw new Error('Choosing a folder replaced the manually entered name');
+        await page.evaluate(() => {
+          window.projectPickerPath = '/Projects/Reference';
+        });
+        await page
+          .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
+          .last()
+          .click();
+      }
+      if (ui.case === 'directories') {
+        await page.evaluate((path) => {
+          window.projectPickerPath = path;
+        }, '/Projects/Output');
+        await page
+          .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
+          .click();
+      }
+      if (await page.evaluate(() => window.projectSettingsWrites.length))
+        throw new Error('Directory draft saved early');
+      await ui.capture('directory-form');
+      await page
+        .getByRole('button', {
+          name: await ui.t(
+            ['create', 'create-legacy'].includes(ui.case) ? 'projectSettings.createAction' : 'projectSettings.save',
+          ),
+          exact: true,
+        })
+        .click();
+      const writes = await page.evaluate(() => window.projectSettingsWrites);
+      const scopes = await page.evaluate(() => window.projectPickerScopes);
+      if (!writes[0]?.projectGrantScope || scopes.some(scope => scope !== writes[0].projectGrantScope))
+        throw new Error('Directory picker and save did not share the same form scope');
+      if (writes.length !== 1 || writes[0].value.directories.at(-1).access !== 'write')
+        throw new Error('Missing project directory save');
+      if (ui.case === 'directories' && writes[0].value.directories[0].access !== 'read')
+        throw new Error('Changed a pre-existing directory permission');
+      if (
+        ['create', 'create-legacy'].includes(ui.case) &&
+        (!writes[0].create || writes[0].projectKey !== 'local:/Projects/Example' || writes[0].value.name !== 'My project')
+      )
+        throw new Error('Wrong creation identity');
+      return;
+    }
     const button = async (key) => {
       if (key.startsWith('colors.') && ui.case !== 'legacy') {
         const trigger = page.getByRole('button', {
@@ -75,7 +351,6 @@ export default {
       });
     };
     const editName = async (value, blur = false) => {
-      await (await button('name')).click();
       const input = page.getByRole('textbox', {
         name: await ui.t('projectSettings.name'),
         exact: true,
@@ -87,8 +362,7 @@ export default {
           .getByRole('heading', { name: await ui.t('projectSettings.title'), exact: true })
           .click();
       else await input.press('Enter');
-      await (await button('name')).waitFor();
-      if ((await (await button('name')).textContent()).trim() !== value)
+      if ((await input.inputValue()) !== value)
         throw new Error('Inline edit did not update the displayed name');
       if (await page.evaluate(() => window.projectSettingsWrites.length))
         throw new Error('Inline rename persisted before Save');
@@ -121,17 +395,17 @@ export default {
       return;
     }
     if (ui.case === 'default') {
-      await (await button('name')).click();
       const input = page.getByRole('textbox', {
         name: await ui.t('projectSettings.name'),
         exact: true,
       });
       const original = await input.inputValue();
       await input.fill('Discard this name');
+      if (await (await button('reset')).count()) throw new Error('Name editing exposed a reset action');
       await input.press('Escape');
-      await (await button('name')).waitFor();
-      if ((await (await button('name')).textContent()).trim() !== original)
-        throw new Error('Escape did not restore the name');
+      await (await button('keepEditing')).click();
+      if (await input.inputValue() !== 'Discard this name') throw new Error('Continuing editing lost the name draft');
+      await input.fill(original);
       if (await (await button('save')).isEnabled())
         throw new Error('Cancelled inline rename left an unsaved change');
     }

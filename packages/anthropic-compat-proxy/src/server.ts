@@ -1348,7 +1348,7 @@ function forward(
               const model = appliedRule.useUpstreamModel
                 ? extractBodyModel(body)
                 : clientModel || extractBodyModel(body);
-              if (model) appliedRule.onRetry?.(threadId, model);
+              if (model) appliedRule.onRetry?.(threadId, model, formatUpstreamBase(actualTarget));
             }
           }
           const retry = (): void => {
