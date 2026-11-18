@@ -83,10 +83,11 @@ function adaptItemId(item: Record<string, unknown>): Record<string, unknown> {
 /**
  * Legacy histories (Pi / chat-completions bridges) minted the tool item `id` from the invocation's
  * `call_...` id (issue #4023, `Invalid 'input[5].id': 'call_00_…'. Expected an ID that begins with 'ctc'`).
- * It is a known, non-opaque shape, so it is rewritten to the target dialect like the other known
- * prefixes instead of being forwarded and rejected. The suffix is kept, so ids stay unique.
+ * Other saved histories contain tool items with message-shaped `msg_...` ids (issue #9645).
+ * These are known, non-opaque shapes, so they are rewritten to the target dialect like the other
+ * known prefixes instead of being forwarded and rejected. The suffix is kept, so ids stay unique.
  */
-const LEGACY_CALL_ITEM_ID_PREFIX = 'call_';
+const LEGACY_TOOL_ITEM_ID_PREFIXES = ['call_', 'msg_'] as const;
 
 /** Repair only known dialect mismatches; opaque provider ids and absent ids stay intact.
  * `call_id` identifies the invocation/result pair and must never be rewritten.
@@ -97,10 +98,11 @@ function normalizeToolItemId(item: Record<string, unknown>): Record<string, unkn
       : item.type === 'function_call' ? ['ctc_', 'fc_']
         : item.type === 'function_call_output' ? ['ctco_', 'fco_'] : null;
   if (!prefixes || typeof item.id !== 'string') return item;
-  const from = item.id.startsWith(prefixes[0]) ? prefixes[0]
-    : item.id.startsWith(LEGACY_CALL_ITEM_ID_PREFIX) ? LEGACY_CALL_ITEM_ID_PREFIX : null;
-  if (from === null) return item;
-  return { ...item, id: prefixes[1] + item.id.slice(from.length) };
+  const id = item.id;
+  const from = id.startsWith(prefixes[0]) ? prefixes[0]
+    : LEGACY_TOOL_ITEM_ID_PREFIXES.find(prefix => id.startsWith(prefix));
+  if (from === undefined) return item;
+  return { ...item, id: prefixes[1] + id.slice(from.length) };
 }
 
 /**

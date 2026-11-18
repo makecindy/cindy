@@ -32,6 +32,31 @@ function execRequest() {
 }
 
 describe("legacy Responses tool item ids", () => {
+  // #9645: replaying a saved tool item with a msg_ id rejects the entire next request.
+  // Existing tests cover fc_/ctc_ and call_, not message-prefixed tool records. This unit test
+  // exercises the public wire repair with one minimal record per supported tool item type.
+  it("repairs message-prefixed tool history while preserving messages, references and call_id pairing", () => {
+    const body = { input: [
+      { type: "custom_tool_call", id: "msg_custom", call_id: "call_custom", name: "exec", input: "msg_literal" },
+      { type: "custom_tool_call_output", id: "msg_result", call_id: "call_custom", output: [{ type: "input_text", text: "msg_literal" }] },
+      { type: "function_call", id: "msg_function", call_id: "call_function", name: "read_file", arguments: "{}" },
+      { type: "function_call_output", id: "msg_function_result", call_id: "call_function", output: "ok" },
+      { type: "message", id: "msg_message", content: "unchanged" },
+      { type: "item_reference", id: "msg_reference" },
+      { type: "compaction", id: "msg_compaction", encrypted_content: "unchanged" },
+    ] };
+    const original = structuredClone(body);
+    const repaired = normalizeResponsesToolItemIds(body);
+    const items = (repaired?.input ?? body.input) as typeof body.input;
+    expect(items).toEqual(original.input.map((item, index) => ({
+      ...item,
+      id: ["ctc_custom", "ctco_result", "fc_function", "fco_function_result"][index] ?? item.id,
+    })));
+    expect(items[1]!.output).toBe(body.input[1]!.output);
+    expect(body).toEqual(original);
+    expect(normalizeResponsesToolItemIds(repaired)).toBeNull();
+  });
+
   it("repairs tool-less compact history without changing invocation ids, payloads or opaque items", () => {
     const body = { model: "gpt-6", input: [
       { type: "custom_tool_call", id: "fc_old", call_id: "fc_invocation", name: "exec", input: "fc_literal" },
