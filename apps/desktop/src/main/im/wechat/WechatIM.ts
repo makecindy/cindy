@@ -49,6 +49,8 @@ import {
   resolvePermissionMode,
 } from '../shared/permissionModeControl';
 import { imText } from '../shared/imText';
+import { getResolvedMainLocale } from '../../i18n.desktop';
+import { modernLocaleOf } from '../../../shared/locale';
 import { localizedReplyWords, matchesReplyWord, type ReplyWords } from '../shared/replyWords';
 import { ui } from './uiText';
 import { countQueuedWechatTasks, WechatTaskStore, type WechatActiveBinding, type WechatTask } from './taskStore';
@@ -1597,6 +1599,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
   ): Promise<void> {
     if (!this.#isSendEpochCurrent(bindingEpoch, signal)) return;
     const store = this.#requireStore();
+    // Bounded to this flush batch; never retain across epochs.
+    const sentNotices = new Set<string>();
     for (const item of await store.listDueOutbox(bindingEpoch, this.#now())) {
       if (!this.#isSendEpochCurrent(bindingEpoch, signal)) return;
       for (let immediateAttempt = 0; immediateAttempt < 3; immediateAttempt += 1) {
@@ -1613,7 +1617,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           return;
         }
         try {
-          await this.#sendOutboxItem(transport, bindingEpoch, item, signal);
+          await this.#sendOutboxItem(transport, bindingEpoch, item, signal, sentNotices);
           await store.markOutboxDelivered(bindingEpoch, item.id, this.#now());
           break;
         } catch (error) {
@@ -1649,6 +1653,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     bindingEpoch: string,
     item: Awaited<ReturnType<WechatTaskStore['listDueOutbox']>>[number],
     signal: AbortSignal,
+    sentNotices: Set<string>,
   ): Promise<void> {
     this.#assertSendEpochCurrent(bindingEpoch, signal);
     const peerId = await this.#peerIdForTask(bindingEpoch, item.taskId);
@@ -1658,15 +1663,25 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       (item.text || mediaItems.length > 0) &&
       this.#now() - item.createdAt >= DELAYED_REPLY_NOTICE_AFTER_MS
     ) {
+      const noticeId = createHash('sha256').update(JSON.stringify([
+        'wechat-delayed-reply', bindingEpoch, item.taskId, item.kind, item.createdAt,
+        item.contextToken, Math.floor(this.#now() / DELAYED_REPLY_NOTICE_AFTER_MS),
+      ])).digest('hex').slice(0, 32);
       // Keep the original chunk and its idempotency key intact (including full-
       // size chunks and media-only output). Retries/restarts reuse a separate,
       // deterministic notice ID within this persisted context and delivery window.
       // A notice can succeed while the body fails: fresh inbound context or a
       // later window must show attribution again instead of deduplicating it away.
-      // Never deliver stale content if its notice fails.
+      // All chunks of one output share the notice. Never send stale content if it fails.
+      const timestamp = new Intl.DateTimeFormat(modernLocaleOf(getResolvedMainLocale()), {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        timeZoneName: 'shortOffset',
+      });
       const notice = imText('imBot.text.wechat.reply.delayedReply', {
-        createdAt: new Date(item.createdAt).toISOString(),
-        receivedAt: new Date(item.receivedAt).toISOString(),
+        createdAt: timestamp.format(item.createdAt),
+        receivedAt: timestamp.format(item.receivedAt),
       });
       // Old/partial payloads can still be attributed by their receive time.
       let question = '';
@@ -1676,16 +1691,18 @@ export class WechatIM extends BaseIM implements RichChannelIM {
           question = Array.from(payload.text.replace(/\s+/g, ' ').trim()).slice(0, 120).join('');
         }
       } catch { /* Attribution must not make an old reply undeliverable. */ }
-      await transport.sendMessage({
-        peerId,
-        text: question ? `${notice}\n${imText('imBot.text.wechat.reply.delayedReplyQuestion', { question })}` : notice,
-        contextToken: item.contextToken,
-        clientId: createHash('sha256').update(JSON.stringify([
-          'wechat-delayed-reply', item.clientId, item.contextRevision,
-          Math.floor(this.#now() / DELAYED_REPLY_NOTICE_AFTER_MS),
-        ])).digest('hex').slice(0, 32),
-      }, signal);
-      this.#assertSendEpochCurrent(bindingEpoch, signal);
+      if (!sentNotices.has(noticeId)) {
+        await transport.sendMessage({
+          peerId,
+          text: question ? `${notice}\n${imText('imBot.text.wechat.reply.delayedReplyQuestion', { question })}` : notice,
+          contextToken: item.contextToken,
+          clientId: noticeId,
+        }, signal);
+        this.#assertSendEpochCurrent(bindingEpoch, signal);
+        // Share one confirmed notice across this reply's chunks. Unknown sends
+        // still retry; later batches/restarts reuse the same receiver dedup key.
+        sentNotices.add(noticeId);
+      }
     }
     if (item.text) {
       await transport.sendMessage(

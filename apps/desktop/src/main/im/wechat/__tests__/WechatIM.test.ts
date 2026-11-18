@@ -1044,8 +1044,11 @@ function restoredConnection(queued: () => number, policyDisabled = false) {
 // #10135: unit tier, real SQLite/store/worker and public outbox lifecycle. The
 // prior fake DB cases never exercised aged rows after context recovery. Transport
 // and secrets are synthetic; the historical attempt count is seeded, not traffic.
-it.each(['text', 'notice-unknown', 'media', 'body-failed', 'body-failed-same-context'] as const)('labels recovered old output and preserves fresh long-task results: %s', async mode => {
+it.each(['text', 'notice-unknown', 'media', 'body-failed', 'body-failed-same-context', 'chunks', 'same-context-refresh', 'localized-time', 'classical-time'] as const)('labels recovered old output and preserves fresh long-task results: %s', async mode => {
   vi.useFakeTimers();
+  const localizedTime = mode === 'localized-time' || mode === 'classical-time';
+  vi.stubEnv('TZ', localizedTime ? 'America/Los_Angeles' : 'Asia/Shanghai');
+  if (mode === 'classical-time') setMainLocale('zh-Hans-x-lzh');
   const Database = (await import('better-sqlite3')).default;
   const { readFileSync } = await import('node:fs');
   const path = await import('node:path');
@@ -1064,7 +1067,7 @@ it.each(['text', 'notice-unknown', 'media', 'body-failed', 'body-failed-same-con
   const mediaPath = tempDir ? path.join(tempDir, 'example.txt') : null;
   if (mediaPath) await files.writeFile(mediaPath, 'synthetic file');
   const key = Buffer.alloc(32, 3);
-  const oldAt = Date.parse('2026-11-07T15:14:00Z');
+  const oldAt = Date.parse(localizedTime ? '2026-11-07T01:14:00Z' : '2026-11-07T15:14:00Z');
   let now = oldAt + 4 * 24 * 60 * 60 * 1000;
   const db = fakeDb({
     query: vi.fn(async (q, params = []) => sql.prepare(q).all(...params)) as DbClient['query'],
@@ -1084,12 +1087,21 @@ it.each(['text', 'notice-unknown', 'media', 'body-failed', 'body-failed-same-con
   seed('old', oldAt, 9753);
   // The inbound task is four days old, but its result has only just completed.
   seed('fresh', now, 0);
+  if (mode === 'chunks') {
+    // commitFinal persists all chunks with one task, kind and creation time.
+    for (let index = 1; index < 3; index += 1) {
+      sql.prepare(`INSERT INTO wechat_outbox(id,binding_epoch,task_id,client_id,kind,chunk_index,text,media_json,status,attempts,next_retry_at,created_at)
+        SELECT ?,binding_epoch,task_id,?,kind,?,?,'[]','pending',attempts,next_retry_at,created_at
+        FROM wechat_outbox WHERE id='old-out'`).run(`old-out-${index}`, `old-client-${index}`, index, `old-reply-${index}`);
+    }
+  }
   if (mediaPath) sql.prepare("UPDATE wechat_outbox SET text='', media_json=? WHERE task_id='old'").run(JSON.stringify([{ absPath: mediaPath, clientId: 'old-media-client' }]));
   const credentials = { bindingEpoch: 'epoch', botToken: 'synthetic-token', ilinkBotId: 'wechat-bot', userId: 'owner', baseUrl: 'https://example.invalid', boundAt: oldAt };
   const transport = blockingLiveTransport();
   const sends: Array<Parameters<WechatTransport['sendMessage']>[0]> = [];
   let noticeAckLost = mode === 'notice-unknown';
-  const bodyFailureCase = mode.startsWith('body-failed');
+  const sameContextRefresh = mode === 'same-context-refresh';
+  const bodyFailureCase = mode.startsWith('body-failed') || sameContextRefresh;
   let oldBodyBlocked = true;
   const receivedIds = new Set<string>();
   const visible: Array<Parameters<WechatTransport['sendMessage']>[0]> = [];
@@ -1131,40 +1143,54 @@ it.each(['text', 'notice-unknown', 'media', 'body-failed', 'body-failed-same-con
     await im.init();
     sends.length = 0;
     order.length = 0;
-    visible.length = 0; // New question's timeline; receiver dedup IDs survive.
-    now += bodyFailureCase ? 4 * 24 * 60 * 60 * 1000 : 2000;
+    if (sameContextRefresh) {
+      // Retain the old task's accepted notice, excluding the separate fresh control.
+      visible.splice(0, visible.length, ...visible.filter(item => item.contextToken === 'old-context'));
+    } else visible.length = 0; // A new question starts a new visible timeline.
+    now += bodyFailureCase && !sameContextRefresh ? 4 * 24 * 60 * 60 * 1000 : 2000;
     oldBodyBlocked = false;
     if (mode !== 'body-failed-same-context') {
-      await store.refreshPendingOutboxContext({ bindingEpoch: 'epoch', peerId: 'owner', contextToken: 'new-question-context', now });
+      await store.refreshPendingOutboxContext({ bindingEpoch: 'epoch', peerId: 'owner', contextToken: sameContextRefresh ? 'old-context' : 'new-question-context', now });
     }
     await vi.waitFor(() => expect(sql.prepare("SELECT status FROM wechat_outbox WHERE task_id='old'").pluck().get()).toBe('delivered'), { timeout: 4000 });
-    // A separate notice keeps the original payload/client ID unchanged, including
-    // a retry whose upstream result was unknown. The notice has its own stable ID.
-    expect(sends).toHaveLength(mode === 'notice-unknown' ? 3 : mode === 'media' ? 1 : 2);
-    expect(sends[0]?.text).toContain('2026-11-07T15:14:00.000Z');
+    if (mode === 'chunks') {
+      await vi.waitFor(() => expect(sql.prepare("SELECT count(*) FROM wechat_outbox WHERE task_id='old' AND status='delivered'").pluck().get()).toBe(3));
+      expect(visible.map(item => item.text)).toEqual([expect.stringContaining('old-question'), 'old-reply', 'old-reply-1', 'old-reply-2']);
+      expect(sends).toHaveLength(4); // One notice request, then the three original chunks.
+      expect(sends.slice(1).map(item => item.clientId)).toEqual(['old-client', 'old-client-1', 'old-client-2']);
+    }
+    // Original payload/client IDs remain unchanged. Notice retries are stable
+    // within one context and delivery window, including unknown send results.
+    expect(sends).toHaveLength(mode === 'notice-unknown' ? 3 : mode === 'media' ? 1 : mode === 'chunks' ? 4 : 2);
+    if (sameContextRefresh) expect(visible).toHaveLength(2); // Same token must not renew the accepted notice.
+    expect(sends[0]?.text).toContain(localizedTime ? '2026/11/06' : '2026/11/07');
+    expect(sends[0]?.text).toContain(localizedTime ? '17:14:00' : '23:14:00');
+    expect(sends[0]?.text).toContain(localizedTime ? 'GMT-8' : 'GMT+8');
     expect(sends[0]?.text).toContain('old-question');
-    expect(sends[0]?.text).toContain('延迟');
+    expect(sends[0]?.text).toContain(mode === 'classical-time' ? '迟至' : '延迟');
     expect(sends[0]?.clientId).not.toBe('old-client');
     expect(sends[0]?.text).toBe(originalNotice?.text);
     if (bodyFailureCase) {
       expect(visible).toHaveLength(2);
       expect(visible[0]?.text).toContain('old-question');
-      expect(visible[0]?.text).toContain('2026-11-07T15:14:00.000Z');
+      expect(visible[0]?.text).toContain('2026/11/07');
+      expect(visible[0]?.text).toContain('23:14:00');
       expect(visible[1]?.text).toBe('old-reply');
     }
     if (mode === 'media') {
       expect(order).toEqual(['text', 'upload', 'media']);
       expect(transport.sendMedia).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'old-media-client', contextToken: 'new-question-context' }), expect.any(AbortSignal));
     } else {
-      expect(sends.at(-1)).toMatchObject({ text: 'old-reply', contextToken: mode === 'body-failed-same-context' ? 'old-context' : 'new-question-context', clientId: 'old-client' });
+      expect(sends.find(item => item.clientId === 'old-client')).toMatchObject({ text: 'old-reply', contextToken: mode === 'body-failed-same-context' || sameContextRefresh ? 'old-context' : 'new-question-context', clientId: 'old-client' });
       if (mode === 'notice-unknown') expect(sends[0]).toEqual(sends[1]);
     }
-    expect(sql.prepare("SELECT attempts,text FROM wechat_outbox WHERE task_id='old'").get()).toEqual({ attempts: mode === 'notice-unknown' ? 9758 : 9757, text: mode === 'media' ? '' : 'old-reply' });
+    expect(sql.prepare("SELECT attempts,text FROM wechat_outbox WHERE id='old-out'").get()).toEqual({ attempts: mode === 'notice-unknown' ? 9758 : 9757, text: mode === 'media' ? '' : 'old-reply' });
   } finally {
     await im.dispose();
     store.destroy();
     sql.close();
     if (tempDir) await files.rm(tempDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
     vi.useRealTimers();
   }
 });
