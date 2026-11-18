@@ -11,14 +11,28 @@ import { record, type AcpRecord, type AcpTransport } from './client.js';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+interface AntigravityConnection {
+  transport: AcpTransport;
+  assertSubscriptionOnly(): Promise<void>;
+  assertGenerationAllowed?(): Promise<void>;
+  isCurrent?(): boolean;
+  sessionScope?: string;
+  useCachedAuthentication?: boolean;
+  mcpServers?: AcpRecord[];
+  dispose?(): void;
+}
 export interface AntigravityHost {
-  connect(cwd: string, opts?: StartSessionOptions): Promise<{ transport: AcpTransport; assertSubscriptionOnly(): Promise<void>; mcpServers?: AcpRecord[]; dispose?(): void }>;
+  connect(cwd: string, opts?: StartSessionOptions): Promise<AntigravityConnection>;
   /** Check the native subscription/credits policy before generation, independently of OAuth. */
-  assertGenerationAllowed(): Promise<void>;
+  assertGenerationAllowed?(): Promise<void>;
   assertSessionAllowed?(): Promise<void>;
   authenticated?(): Promise<void>;
   disconnected?(): void;
   modelsChanged(models: AcpDiscoveredModel[], tier?: { id: string; name: string }): void;
+}
+export function antigravityNativeResumeId(id: string | undefined, scope: string): string | undefined {
+  if (scope) return id?.startsWith(scope) ? id.slice(scope.length) || undefined : undefined;
+  return id?.startsWith('antigravity-profile:') ? undefined : id;
 }
 const no = { supported: false, reason: 'not-implemented' } as const;
 const yes = { supported: true } as const;
@@ -53,15 +67,32 @@ export class AntigravityAgent extends BaseAgent {
   };
   private loginSession?: AcpSubscriptionSession;
   private locallyDisconnected = false;
-  override cancelLogin(): void { void this.loginSession?.close(); }
+  override cancelLogin(): void {
+    this.connectionVersion += 1;
+    if (!this.authState.authenticated) this.cachedProbe = undefined;
+    void this.loginSession?.close().catch(() => {});
+  }
   private authState: AuthState = { authenticated: false, authSource: 'oauth' };
   private cachedProbe?: Promise<void>;
+  private connectionVersion = 0;
+  private retryProbeAt = 0;
   private nativeModels: AcpDiscoveredModel[] = [];
   constructor(deps: AgentDeps, private host: AntigravityHost) { super(deps); }
   override async getAuthState(): Promise<AuthState> { await this.refreshCachedState(); return { ...this.authState }; }
+  /** A profile change discards auth/model state and fences work from the prior connection. */
+  resetConnection(): void {
+    this.cancelLogin();
+    this.loginSession = undefined;
+    this.locallyDisconnected = false;
+    this.cachedProbe = undefined;
+    this.retryProbeAt = 0;
+    this.authState = { authenticated: false, authSource: 'oauth' };
+    this.updateModels([], { allowEmpty: true });
+  }
   /** Discover cached native credentials without creating a login flow. */
   async refreshCachedState(): Promise<void> {
-    if (this.locallyDisconnected) return;
+    if (this.locallyDisconnected || Date.now() < this.retryProbeAt) return;
+    const version = this.connectionVersion;
     if (!this.cachedProbe) this.cachedProbe = (async () => {
       let connection: Awaited<ReturnType<AntigravityHost['connect']>> | undefined;
       let session: AcpSubscriptionSession | undefined;
@@ -69,37 +100,55 @@ export class AntigravityAgent extends BaseAgent {
         await this.host.assertSessionAllowed?.();
         connection = await this.host.connect(globalThis.process.cwd());
         session = new AcpSubscriptionSession({ ...connection, cwd: globalThis.process.cwd(), onUpdate() {}, requestPermission: async () => false });
-        await session.initialize(); await session.open({ cachedAuthentication: true }); await session.discoverModelOptions();
-        if (this.locallyDisconnected || !session.tier) return;
+        await session.initialize(); await session.open({ cachedAuthentication: true });
+        await session.discoverModelOptions().catch(() => {});
+        if (this.locallyDisconnected || version !== this.connectionVersion || connection.isCurrent?.() === false || !session.tier) return;
         this.publishModels(session);
         this.authState = { authenticated: true, authSource: 'oauth', subscriptionTier: { ...session.tier } };
       } catch { /* Discovery failure leaves the regular sign-in entry available. */ }
       finally { try { await session?.close(); } finally { connection?.dispose?.(); } }
-    })().catch(() => {});
+    })().catch(() => {}).finally(() => {
+      if (version === this.connectionVersion && !this.authState.authenticated) {
+        this.cachedProbe = undefined;
+        this.retryProbeAt = Date.now() + 30_000;
+      }
+    });
     await this.cachedProbe;
   }
   override async triggerLogin(): Promise<AuthState> {
+    const version = ++this.connectionVersion;
+    this.cachedProbe = undefined;
     const connection = await this.host.connect(globalThis.process.cwd());
     const session = new AcpSubscriptionSession({ ...connection, cwd: globalThis.process.cwd(), onUpdate() {}, requestPermission: async () => false });
-    this.loginSession = session;
     try {
+      if (version !== this.connectionVersion || connection.isCurrent?.() === false) throw new Error('ANTIGRAVITY_CONNECTION_CHANGED');
+      this.loginSession = session;
       await session.initialize(); await session.authenticate(); await session.open();
-      await session.discoverModelOptions();
+      await session.discoverModelOptions().catch(() => {});
+      if (version !== this.connectionVersion || connection.isCurrent?.() === false) throw new Error('ANTIGRAVITY_CONNECTION_CHANGED');
       await this.host.authenticated?.();
+      if (version !== this.connectionVersion || connection.isCurrent?.() === false) throw new Error('ANTIGRAVITY_CONNECTION_CHANGED');
       this.locallyDisconnected = false;
       this.authState = { authenticated: true, authSource: 'oauth', subscriptionTier: session.tier && { ...session.tier } };
       this.publishModels(session);
       this.cachedProbe = Promise.resolve(); return { ...this.authState };
-    } finally { this.loginSession = undefined; await session.close(); connection.dispose?.(); }
+    } finally {
+      if (this.loginSession === session) this.loginSession = undefined;
+      try { await session.close(); } finally { connection.dispose?.(); }
+    }
   }
   override async logout(): Promise<void> {
     // Do not delete credentials shared with an independent official CLI installation.
+    this.cancelLogin();
+    this.cachedProbe = undefined;
     this.locallyDisconnected = true;
     this.authState = { authenticated: false, authSource: 'oauth' };
-    this.updateModels([]); this.host.disconnected?.();
+    this.updateModels([], { allowEmpty: true }); this.host.disconnected?.();
   }
-  private updateModels(models: AcpDiscoveredModel[]): void {
-    this.nativeModels = models.filter(m => isAntigravitySubscriptionModel(m.id)).map(model => {
+  private updateModels(models: AcpDiscoveredModel[], { allowEmpty = false }: { allowEmpty?: boolean } = {}): void {
+    const admitted = models.filter(m => isAntigravitySubscriptionModel(m.id));
+    if (!allowEmpty && admitted.length === 0 && this.nativeModels.length > 0) return;
+    this.nativeModels = admitted.map(model => {
       const previous = this.nativeModels.find(value => value.id === model.id);
       return { ...previous, ...model, defaultEffort: model.efforts?.length === 0 ? null : model.defaultEffort ?? previous?.defaultEffort ?? null,
         effortDisplayNames: { ...previous?.effortDisplayNames, ...model.effortDisplayNames } };
@@ -124,6 +173,13 @@ export class AntigravityAgent extends BaseAgent {
     await this.host.assertSessionAllowed?.();
     let permission = opts.permissionMode; let plan = opts.planMode === true;
     let connection = await this.host.connect(opts.workingDir, opts);
+    const scope = connection.sessionScope ?? '';
+    // The saved Cindy task stays in place. Only a native ID from the current
+    // Google profile may reach session/load or session/resume.
+    const resumeId = antigravityNativeResumeId(opts.resumeSessionId, scope);
+    const assertCurrent = () => {
+      if (connection.isCurrent?.() === false) throw new Error('ANTIGRAVITY_SESSION_ACCOUNT_CHANGED');
+    };
     const queue = createAsyncQueue<AgentEvent>();
     let resolver: InteractionResolver = async () => ({ kind: 'permission', behavior: 'deny' });
     let usage: UsageSnapshot = { tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 };
@@ -148,7 +204,7 @@ export class AntigravityAgent extends BaseAgent {
       onUpdate(update) {
         const type = update.sessionUpdate;
         if (type === 'config_option_update') {
-          thisAgent.publishModels(session);
+          if (current.isCurrent?.() !== false && !thisAgent.locallyDisconnected) thisAgent.publishModels(session);
         } else if (type === 'usage_update') {
           // ACP used/size describes the active context, never account quota or
           // turn input+output totals. Missing fields remain unknown.
@@ -189,11 +245,13 @@ export class AntigravityAgent extends BaseAgent {
     let session = createSession(connection);
     let id: string;
     try {
-      await session.initialize(); await session.authenticate();
-      id = await session.open({ resumeId: opts.resumeSessionId, mcpServers: connection.mcpServers, mode: nativeMode(permission, plan) });
-      await session.setModel(opts.model);
-      if (opts.effort !== undefined) await session.setEffort(opts.effort);
+      await session.initialize();
+      if (!connection.useCachedAuthentication) await session.authenticate();
+      id = await session.open({ cachedAuthentication: connection.useCachedAuthentication, resumeId, mcpServers: connection.mcpServers, mode: nativeMode(permission, plan) });
+      if (session.currentModel !== opts.model || !session.models.some(model => model.id === opts.model)) await session.setModel(opts.model);
+      if (opts.effort !== undefined && session.currentEffort !== opts.effort) await session.setEffort(opts.effort);
       lastEffort = session.currentEffort;
+      assertCurrent();
       if (this.locallyDisconnected) throw new Error('Google 订阅连接已断开，请先重新连接。');
       this.authState = { authenticated: true, authSource: 'oauth', subscriptionTier: session.tier && { ...session.tier } };
       this.cachedProbe = Promise.resolve();
@@ -203,28 +261,37 @@ export class AntigravityAgent extends BaseAgent {
       usable = false;
       await session.close(); connection.dispose?.();
       if (closed) throw new Error('ANTIGRAVITY_SESSION_CLOSED');
-      const replacement = await this.host.connect(opts.workingDir, { ...opts, permissionMode: next, resumeSessionId: id, planMode: plan });
+      assertCurrent();
+      const replacement = await this.host.connect(opts.workingDir, { ...opts, permissionMode: next, resumeSessionId: scope + id, planMode: plan });
+      if (connection.isCurrent?.() === false || (replacement.sessionScope ?? '') !== scope || replacement.isCurrent?.() === false) {
+        try { await replacement.transport.close(); } finally { replacement.dispose?.(); }
+        throw new Error('ANTIGRAVITY_SESSION_ACCOUNT_CHANGED');
+      }
       const resumed = createSession(replacement);
       // Retain ownership even when startup/cleanup fails, so retry/close must
       // confirm this exact process stopped before another one can be launched.
       connection = replacement; session = resumed;
       try {
-        await resumed.initialize(); await resumed.authenticate();
-        await resumed.open({ resumeId: id, mcpServers: replacement.mcpServers, mode: nativeMode(next, plan) });
-        await resumed.setModel(lastModel);
-        if (lastEffort !== undefined) await resumed.setEffort(lastEffort);
+        await resumed.initialize();
+        if (!replacement.useCachedAuthentication) await resumed.authenticate();
+        await resumed.open({ cachedAuthentication: replacement.useCachedAuthentication, resumeId: id, mcpServers: replacement.mcpServers, mode: nativeMode(next, plan) });
+        if (resumed.currentModel !== lastModel) await resumed.setModel(lastModel);
+        if (lastEffort !== undefined && resumed.currentEffort !== lastEffort) await resumed.setEffort(lastEffort);
+        assertCurrent();
         if (closed) throw new Error('ANTIGRAVITY_SESSION_CLOSED');
       } catch (error) { await resumed.close(); replacement.dispose?.(); throw error; }
       usable = true;
     };
     const change = async (run: () => Promise<void>): Promise<void> => {
       if (active || closed || control) throw new Error('ANTIGRAVITY_SESSION_BUSY');
+      assertCurrent();
       const pending = run(); control = pending;
       try { await pending; } finally { if (control === pending) control = undefined; }
     };
     return {
-      id, agentKind: 'antigravity', get model() { return session.currentModel ?? opts.model; },
+      id: scope + id, agentKind: 'antigravity', get model() { return session.currentModel ?? opts.model; },
       setInteractionResolver(next) { resolver = next; }, events: () => queue,
+      isTurnRunning: () => active,
       getUsageSnapshot: () => ({ ...usage }),
       send: async (message: UserMessage, sendOpts?: SendOptions) => {
         if (this.locallyDisconnected) throw new Error('Google 订阅连接已断开，请先重新连接。');
@@ -241,7 +308,9 @@ export class AntigravityAgent extends BaseAgent {
           // the last confirmed policy before a later user send, without replaying a turn.
           if (!usable) await reconnect(permission);
           if (closed) throw new Error('ANTIGRAVITY_SESSION_CLOSED');
-          await this.host.assertGenerationAllowed();
+          if (connection.assertGenerationAllowed) await connection.assertGenerationAllowed();
+          else if (this.host.assertGenerationAllowed) await this.host.assertGenerationAllowed();
+          else throw new Error('ANTIGRAVITY_GENERATION_POLICY_UNAVAILABLE');
           controller.signal.throwIfAborted();
           if (!session.tier || !/^(Google AI |AI )?(Pro|Ultra)$/i.test(session.tier.name)) throw new Error('ANTIGRAVITY_PERSONAL_PLAN_UNVERIFIED');
           if (!isAntigravitySubscriptionModel(session.currentModel ?? '')) throw new Error('ANTIGRAVITY_SUBSCRIPTION_MODEL_REQUIRED');

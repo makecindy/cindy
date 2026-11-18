@@ -7,7 +7,7 @@ import { AcpSubscriptionSession } from './subscription-session.js';
 import { createConsoleLogger } from '../../interfaces/logger.js';
 import type { AcpRecord, AcpTransport } from './client.js';
 
-function peer(withPartnerModels = false) {
+function peer(withPartnerModels = false, readScope?: () => string) {
   const levels: Record<string, string[]> = {
     'gemini-4-hydrogen': ['low', 'medium', 'high', 'xhigh'],
     'gemini-3.8-flash': ['low', 'medium', 'high'],
@@ -65,11 +65,46 @@ function peer(withPartnerModels = false) {
   const session = new AcpSubscriptionSession({ ...connection, cwd: '/workspace', onUpdate: update => updates.push(update), requestPermission: async () => false });
   const agent = new AntigravityAgent({ binaryPath: '/official/agy', runtimeConfig: {}, logger: createConsoleLogger('test'), auth: {
     getState: async () => ({ authenticated: false }), triggerLogin: async () => ({ authenticated: false }), logout: async () => {}, getAuthEnv: async () => ({}),
-  } }, { connect: async () => connection, modelsChanged() {}, assertGenerationAllowed: async () => {} });
+  } }, { connect: async () => ({ ...connection, sessionScope: readScope?.() }), modelsChanged() {}, assertGenerationAllowed: async () => {} });
   return { session, agent, calls, updates, notify, crash: () => { for (const listener of closeListeners) listener(); }, native: () => ({ model, thought, mode }), failNextThought: () => { failThought = true; } };
 }
 
 describe('Antigravity native controls', () => {
+  // Unit: a task retains its saved native ID after a Google account switch.
+  // Inspect actual ACP requests so an old ID cannot leak to the new account.
+  it.each([
+    ['antigravity-profile:second:', 'antigravity-profile:first:old-native', 'session/new', undefined],
+    ['', 'antigravity-profile:first:old-native', 'session/new', undefined],
+    ['antigravity-profile:second:', 'legacy-native', 'session/new', undefined],
+    ['antigravity-profile:second:', 'antigravity-profile:second:old-native', 'session/load', 'old-native'],
+  ] as const)('opens with scope %s and saved native ID %s', async (scope, resumeSessionId, method, nativeId) => {
+    const h = peer(false, () => scope);
+    await h.session.close();
+    const handle = await h.agent.startSession({ providerId: 'google-antigravity-subscription',
+      workingDir: '/workspace', model: 'gemini-4-hydrogen', resumeSessionId });
+    expect(handle.id).toBe(scope + (nativeId ?? 'controls-native'));
+    const opens = h.calls.filter(call => ['session/new', 'session/load', 'session/resume'].includes(String(call.method)));
+    expect(opens).toHaveLength(1);
+    expect(opens[0].method).toBe(method);
+    expect((opens[0].params as AcpRecord).sessionId).toBe(nativeId);
+    await handle.send({ type: 'user', content: 'send once after switching accounts' });
+    const prompts = h.calls.filter(call => call.method === 'session/prompt');
+    expect(prompts).toHaveLength(1);
+    expect((prompts[0].params as AcpRecord).sessionId).toBe(nativeId ?? 'controls-native');
+    await handle.close();
+  });
+
+  it('does not send an old native ID through a permission reconnect racing an account switch', async () => {
+    let scope = 'antigravity-profile:first:';
+    const h = peer(false, () => scope);
+    await h.session.close();
+    const handle = await h.agent.startSession({ providerId: 'google-antigravity-subscription',
+      workingDir: '/workspace', model: 'gemini-4-hydrogen' });
+    scope = 'antigravity-profile:second:';
+    await expect(handle.setPermissionMode!('auto')).rejects.toThrow('ANTIGRAVITY_SESSION_ACCOUNT_CHANGED');
+    expect(h.calls.some(call => call.method === 'session/load' || call.method === 'session/resume')).toBe(false);
+    await handle.close();
+  });
   // PR #11135: idle transport death must end the production handle's stream,
   // allowing Session's existing stream-end recovery; explicit control reconnects must not.
   it('ends the dead handle stream after an idle ACP exit and permits a fresh handle', async () => {

@@ -5,6 +5,8 @@ import { mountPage, subscription } from '../../ui-page/harness';
 import { ModelConfigFlyout } from '../../../src/renderer/components/new-chat/ModelConfigFlyout';
 import { resolveUnifiedRowConfig } from '../../../src/renderer/components/new-chat/unifiedModelSelection';
 import { GoogleSubscriptionUsageChip } from '../../../src/renderer/components/status/GoogleSubscriptionUsageChip';
+import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
+import type { AntigravityAccountsView } from '../../../src/shared/antigravityAccounts';
 import type { Effort } from '../../../src/renderer/lib/userPreferences.types';
 
 function Controls({ flash, fixed }: { flash: boolean; fixed: boolean }) {
@@ -28,6 +30,26 @@ function Controls({ flash, fixed }: { flash: boolean; fixed: boolean }) {
   </main>;
 }
 mountPage({
-  host: () => ({ maker: { getModelContextLimit: async () => ({ limit: null, isCustomized: false }), onProvidersChanged: subscription('providersChanged') } }),
-  render: context => <Controls flash={context.data.flash === true} fixed={context.data.fixed === true} />,
+  host: ({ data }) => ({
+    maker: { getModelContextLimit: async () => ({ limit: null, isCustomized: false }), onProvidersChanged: subscription('providersChanged') },
+    ...(data.quota && { antigravityAccounts: async (command: unknown, scope: unknown): Promise<AntigravityAccountsView> => {
+      if (JSON.stringify(command) !== '{"action":"usage"}' ||
+        JSON.stringify(scope) !== '{"dataOwnerId":"fixture-owner","ownerGeneration":1}') {
+        throw new Error('Expected the active fixture owner scope');
+      }
+      return {
+        configured: true, connected: true, activeId: 'fixture-google',
+        accounts: [{ id: 'fixture-google', identity: 'fixture@example.test' }],
+        usage: [{
+          limitId: 'gemini', limitName: 'Gemini Models', updatedAt: Date.now(),
+          primary: { usedPercent: 25, windowMinutes: 300, resetsAt: Math.floor(Date.now() / 1000) + 3600 },
+          secondary: { usedPercent: 60, windowMinutes: 10_080, resetsAt: Math.floor(Date.now() / 1000) + 86400 },
+        }],
+      };
+    } }),
+  }),
+  render: context => {
+    if (context.data.quota) setDataOwnerGeneration('fixture-owner', 1);
+    return <Controls flash={context.data.flash === true} fixed={context.data.fixed === true} />;
+  },
 });

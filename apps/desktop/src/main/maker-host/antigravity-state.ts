@@ -1,6 +1,7 @@
 import type { Provider } from '@cindy/model-providers';
 import type { AntigravityHost } from '@cindy/maker-core/agents/antigravity';
-export const ANTIGRAVITY_PROVIDER_ID = 'google-antigravity-subscription';
+import { ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID } from '../../shared/antigravityAccounts.js';
+export const ANTIGRAVITY_PROVIDER_ID = ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID;
 let snapshot: { isCurrent?: () => boolean; connected: boolean; tier?: { id: string; name: string }; models: Parameters<AntigravityHost['modelsChanged']>[0] } | null = null;
 export function setAntigravityState(next: typeof snapshot): void { snapshot = next; }
 export function antigravityConnected(): boolean { return snapshot?.isCurrent?.() !== false && snapshot?.connected === true; }

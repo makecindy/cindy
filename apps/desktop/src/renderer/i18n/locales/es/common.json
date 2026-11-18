@@ -1,4 +1,16 @@
 {
+  "googleSubscription": {
+    "usage": "Uso de Google",
+    "quotaUnavailable": "La cuota de la cuenta no está disponible en este momento",
+    "quotaGuide": "Esta versión de ACP no muestra la cuota ni la hora de restablecimiento. Consúltalas con /usage en la CLI oficial de Antigravity.",
+    "openQuotaGuide": "Cómo consultar la cuota oficial",
+    "moneyUnavailable": "Esta interfaz no informa del saldo de créditos ni de los cargos reales.",
+    "context": "Contexto de la sesión (último informe)",
+    "lastTurnTokens": "Tokens del último turno",
+    "unavailable": "No disponible",
+    "modelControlsThinking": "Este modelo gestiona su propio esfuerzo de razonamiento.",
+    "noFastMode": "Esta fuente no ofrece un selector independiente de modo rápido o estándar."
+  },
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Esta ubicación de ejecución de Pi no admite fragmentos de instrucciones del sistema.",
@@ -4344,6 +4356,21 @@
         "groupMembersTitle": "Computadoras en el grupo",
         "groupMembersFailed": "No se pudo obtener el estado de las computadoras del grupo en este momento.",
         "groupBadge_many": "Grupo de proveedores · {{count}} computadoras"
+      },
+      "antigravity": {
+        "configure": "Conectar manualmente",
+        "setupHint": "Usa Antigravity CLI 1.5.9 verificado para conectar tu suscripción a Google AI. Cindy solo usa la cuota de la suscripción.",
+        "activeAccount": "Cuenta de Google activa",
+        "existing": "Cuenta local predeterminada",
+        "removeAccount": "Eliminar cuenta",
+        "removeDescription": "Cindy eliminará el inicio de sesión y la configuración local de esta cuenta. Tus conversaciones de Cindy se conservarán.",
+        "removeDefaultDescription": "Cindy desconectará esta cuenta. El inicio de sesión de Google en este Mac y tus conversaciones de Cindy se conservarán.",
+        "accountBusy": "Hay una tarea de Google o un cambio de cuenta en curso. Vuelve a intentarlo cuando termine.",
+        "account": "Cuenta de Google {{number}}",
+        "refreshQuota": "Actualizar cuota",
+        "legacyQuota": "Añade una cuenta de Google para ver su cuota en Cindy.",
+        "noQuota": "La cuota de Google no está disponible en este momento.",
+        "failed": "No se pudo completar la operación de la cuenta de Google."
       },
       "genericOAuth": {
         "subtitle": "Cuenta de suscripción",
@@ -10976,6 +11003,18 @@
     "nameLabel": "¿Cómo deberíamos llamarlo?",
     "close": "Cerrar",
     "list": {
+      "folders": {
+        "create": "Nueva carpeta",
+        "rename": "Renombrar carpeta",
+        "dissolve": "Disolver carpeta",
+        "name": "Nombre de la carpeta",
+        "move": "Mover a una carpeta",
+        "unfiled": "Fuera de las carpetas",
+        "up": "Mover arriba",
+        "down": "Mover abajo",
+        "actions": "Acciones de {{name}}",
+        "saveFailed": "No se pudieron guardar las carpetas."
+      },
       "createMenu": "Crear",
       "createTeammate": "Nuevo amigo de equipo",
       "joinWithLink": "Ingresa el enlace de invitación…",
@@ -14150,6 +14189,24 @@
       "listAria": "Modos de permisos",
       "autoFallback": "La revisión automática no está disponible temporalmente. Se cambió a los permisos predeterminados y se te pedirá autorización cuando sea necesario.",
       "modes": {
+        "antigravity": {
+          "ask": {
+            "label": "Permisos predeterminados",
+            "description": "Apruebas las ediciones y los comandos cuando es necesario."
+          },
+          "acceptEdits": {
+            "label": "Aceptar ediciones automáticamente",
+            "description": "Se permite editar archivos directamente. Apruebas el resto de las acciones cuando es necesario."
+          },
+          "auto": {
+            "label": "Revisión automática",
+            "description": "Edita el espacio de trabajo y ejecuta comandos seguros de forma automática. Las acciones de alto riesgo siguen requiriendo aprobación."
+          },
+          "bypassPermissions": {
+            "label": "Acceso completo",
+            "description": "Las acciones habituales se permiten directamente, incluido el acceso a archivos fuera del espacio de trabajo y la ejecución de comandos de red."
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "Permisos predeterminados",

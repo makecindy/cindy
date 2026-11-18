@@ -4258,6 +4258,21 @@
         "groupMembersTitle": "组内电脑",
         "groupMembersFailed": "暂时读不到组内电脑的状态。"
       },
+      "antigravity": {
+        "configure": "手动接入",
+        "setupHint": "请使用经过校验的 Antigravity CLI 1.5.9 连接 Google AI 订阅。Cindy 仅使用订阅额度。",
+        "activeAccount": "当前 Google 账号",
+        "existing": "本机默认账号",
+        "removeAccount": "删除账号",
+        "removeDescription": "将删除此账号在 Cindy 中的本机授权和配置，并保留 Cindy 对话记录。",
+        "removeDefaultDescription": "Cindy 将解除此账号的连接，并保留这台 Mac 上的 Google 登录和 Cindy 对话记录。",
+        "accountBusy": "Google 任务或账号操作正在进行，请结束后再试。",
+        "account": "Google 账号 {{number}}",
+        "refreshQuota": "刷新额度",
+        "legacyQuota": "添加 Google 账号后，即可在 Cindy 中查看该账号的额度。",
+        "noQuota": "暂时无法读取 Google 额度。",
+        "failed": "未能完成 Google 账号操作。"
+      },
       "genericOAuth": {
         "subtitle": "订阅账号",
         "reopenLoginPage": "重新打开登录页",
@@ -10859,6 +10874,18 @@
     "nameLabel": "怎么称呼",
     "close": "关闭",
     "list": {
+      "folders": {
+        "create": "新建文件夹",
+        "rename": "重命名文件夹",
+        "dissolve": "解散文件夹",
+        "name": "文件夹名称",
+        "move": "移到文件夹",
+        "unfiled": "移出文件夹",
+        "up": "上移",
+        "down": "下移",
+        "actions": "{{name}}的操作",
+        "saveFailed": "无法保存文件夹。"
+      },
       "createMenu": "新建",
       "createTeammate": "新建伙伴",
       "joinWithLink": "输入邀请链接…",

@@ -11,6 +11,7 @@ export default {
     flash: { about: 'Flash has exactly three native levels', data: { flash: true } },
     fixed: { about: 'Orchestrator explains fixed reasoning without a fake slider', data: { fixed: true } },
     narrow: { about: 'Controls and usage card at 320px', viewport: { width: 320, height: 680 } },
+    quota: { about: 'Grouped account balances and reset windows at 320px', viewport: { width: 320, height: 680 }, data: { quota: true } },
   },
   async check(page, ui) {
     if (ui.data.fixed) assert.equal(await page.getByRole('slider').count(), 0);
@@ -21,9 +22,16 @@ export default {
     }
     await ui.capture('model-controls');
     await page.getByRole('button', { name: await ui.t('googleSubscription.usage') }).click();
-    await page.getByText(await ui.t('googleSubscription.quotaUnavailable')).waitFor();
     const card = page.getByTestId('quota-hover-card');
-    assert.ok(!(await card.textContent()).match(/\$0|100%|0%|∞/));
+    if (ui.data.quota) {
+      await card.getByText(`Gemini Models · ${await ui.t('quotaCard.fiveHourLabel')}`).waitFor();
+      await card.getByText(`Gemini Models · ${await ui.t('quotaCard.weeklyLabel')}`).waitFor();
+      assert.ok((await card.textContent()).includes('75%'));
+      assert.ok((await card.textContent()).includes('40%'));
+    } else {
+      await page.getByText(await ui.t('googleSubscription.quotaUnavailable')).waitFor();
+      assert.ok(!(await card.textContent()).match(/\$0|100%|0%|∞/));
+    }
     const box = await card.boundingBox();
     assert.ok(box && box.x >= -1 && box.x + box.width <= (await page.evaluate(() => innerWidth)) + 1);
     await ui.capture('usage');

@@ -5212,6 +5212,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onReshareRequested: fanOutProviderShareReshareRequested,
   },
   // 供应商组：这台电脑上某个供应商的组设置(只接受本机应用窗口)。
+  antigravityAccounts: (command: import('../shared/antigravityAccounts').AntigravityAccountCommand, scope: import('../shared/antigravityAccounts').AntigravityOwnerScope): Promise<import('../shared/antigravityAccounts').AntigravityAccountsView> =>
+    ipcRenderer.invoke('maker:antigravity-accounts', command, scope),
   subscriptionAccounts: {
     onChanged: fanOutSubscriptionAccountsChanged,
     command: (command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView> =>
@@ -8564,7 +8566,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:auth:get-state', agentKind),
       triggerLogin: (
         agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
-        options?: { mode?: 'browser' | 'device-code' | 'local'; ownerId?: string },
+        options?: { mode?: 'browser' | 'device-code' | 'local'; ownerId?: string; googleTarget?: import('../shared/antigravityAccounts').AntigravityLoginTarget },
       ): Promise<unknown> => ipcRenderer.invoke('maker:auth:trigger-login', agentKind, options),
       cancelLogin: (
         agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
@@ -8572,7 +8574,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ): Promise<void> => ipcRenderer.invoke('maker:auth:cancel-login', agentKind, options),
       logout: (
         agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
-        ownerScope?: { dataOwnerId: string | null; ownerGeneration: number },
+        ownerScope?: { dataOwnerId: string | null; ownerGeneration: number; accountId?: string },
       ): Promise<void> => ipcRenderer.invoke('maker:auth:logout', agentKind, ownerScope),
       onStateChanged: fanOutMakerAuthStateChanged,
       onLoginProgress: fanOutMakerAuthLoginProgress,

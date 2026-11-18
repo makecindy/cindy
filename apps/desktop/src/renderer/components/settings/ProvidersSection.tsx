@@ -72,6 +72,9 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { useAuth } from '@/contexts/AuthContext';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { ANTIGRAVITY_ACCOUNT_BUSY, ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID, type AntigravityAccountsView, type AntigravityAccountCommand } from '../../../shared/antigravityAccounts';
+import { quotaWindowLabel } from '../status/usageCardModel';
 import { toast } from '@/lib/toast';
 import {
   appendDiscoveredCustomProviderModels,
@@ -1547,25 +1550,171 @@ function XaiHeader({
 
 function AntigravitySubscriptionHeader({ provider, onChanged, children }: { provider: ProviderView; onChanged(): void; children?: ReactNode }) {
   const { t } = useTranslation();
-  const [busy, setBusy] = useState(false);
-  const login = async () => {
-    setBusy(true);
+  const { dataOwnerId } = useAuth();
+  const { confirm } = useConfirmDialog();
+  const [view, setView] = useState<{ owner: ReturnType<typeof getDataOwnerGeneration>; value: AntigravityAccountsView }>();
+  const [failure, setFailure] = useState<'failed' | 'accountBusy'>();
+  const [pending, setPending] = useState<'login' | 'change' | null>(null);
+  const pendingRef = useRef(false);
+  const mounted = useRef(false);
+  const loginOwner = useRef<string>(undefined);
+  const readSequence = useRef(0);
+  const api = window.electronAPI.antigravityAccounts;
+  const { onStateChanged, cancelLogin, triggerLogin, logout } = window.electronAPI.maker.auth;
+  const accounts = view && isDataOwnerGenerationCurrent(view.owner) ? view.value : undefined;
+  const connected = accounts?.connected ?? provider.connected;
+  const active = accounts?.accounts.find(account => account.id === accounts.activeId);
+  const text = (key: string) => t(`settings.providers.antigravity.${key}`);
+  const accountName = (account: AntigravityAccountsView['accounts'][number], index: number) =>
+    account.identity || (account.id === 'default' ? text('existing') : t('settings.providers.antigravity.account', { number: index + 1 }));
+  const read = useCallback(async (action: 'read' | 'usage', cancelled: () => boolean = () => false) => {
+    const owner = getDataOwnerGeneration();
+    const sequence = ++readSequence.current;
+    const current = () => sequence === readSequence.current && !cancelled() && isDataOwnerGenerationCurrent(owner);
+    if (!api || owner.dataOwnerId !== dataOwnerId) return;
     try {
-      const state = await window.electronAPI.maker.auth.triggerLogin('antigravity');
-      if (!state.authenticated) throw new Error('AUTHENTICATION_REQUIRED');
-      onChanged();
-    } catch {
-      toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: 'Antigravity' }));
-    } finally { setBusy(false); }
+      const value = await api({ action }, { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation });
+      if (current()) { setView({ owner, value }); }
+    } catch { if (current()) setFailure('failed'); }
+  }, [api, dataOwnerId]);
+  useEffect(() => {
+    let cancelled = false;
+    if (api) void read(provider.connected ? 'usage' : 'read', () => cancelled);
+    const unsubscribe = onStateChanged?.(state => {
+      if (state.agentKind === 'antigravity' && api) void read(state.authenticated ? 'usage' : 'read', () => cancelled);
+    });
+    return () => { cancelled = true; unsubscribe?.(); };
+  }, [api, onStateChanged, provider.connected, read]);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      readSequence.current += 1;
+      if (loginOwner.current) void cancelLogin('antigravity', { ownerId: loginOwner.current, releaseOwner: true }).catch(() => {});
+    };
+  }, [cancelLogin, dataOwnerId]);
+
+  const run = async (command: AntigravityAccountCommand | 'login' | 'disconnect') => {
+    const owner = getDataOwnerGeneration();
+    if (!api || pendingRef.current || owner.dataOwnerId !== dataOwnerId || !accounts) return;
+    pendingRef.current = true;
+    readSequence.current += 1;
+    const scope = { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation };
+    const current = () => mounted.current && isDataOwnerGenerationCurrent(owner);
+    setPending(command === 'login' ? 'login' : 'change');
+    setFailure(undefined);
+    try {
+      let accountToLogin = command === 'login' ? accounts.activeId : null;
+      if (command === 'disconnect') {
+        if (accounts.activeId) await logout('antigravity', { ...scope, accountId: accounts.activeId });
+      } else if (typeof command === 'object') {
+        if (command.action === 'remove') {
+          const index = accounts.accounts.findIndex(account => account.id === command.id);
+          if (index < 0 || !(await confirm({
+            title: t('subscriptionAccounts.placement.deleteTitle', { name: accountName(accounts.accounts[index], index) }),
+            description: text(command.id === 'default' ? 'removeDefaultDescription' : 'removeDescription'),
+            confirmText: t('subscriptionAccounts.placement.deleteConfirm'),
+            confirmVariant: 'destructive',
+          })) || !current()) return;
+        }
+        const value = await api(command, scope);
+        if (!current()) return;
+        setView({ owner, value });
+        if (command.action === 'add' || (command.action === 'configure' && value.configured)) accountToLogin = value.activeId;
+      }
+      if (!current()) return;
+      if (accountToLogin) {
+        setPending('login');
+        const id = crypto.randomUUID();
+        loginOwner.current = id;
+        const state = await triggerLogin('antigravity', { ownerId: id, googleTarget: { ...scope, accountId: accountToLogin } });
+        if (!state.authenticated && !['login_cancelled', 'auth_mutation_superseded'].includes(state.errorReason ?? '')) {
+          throw new Error('AUTHENTICATION_REQUIRED');
+        }
+        if (current()) void read(state.authenticated ? 'usage' : 'read');
+      } else if (typeof command === 'object' && (command.action === 'select' || command.action === 'remove')) {
+        void read('usage');
+      } else if (current() && (typeof command !== 'object' || command.action !== 'usage')) {
+        await read('read');
+      }
+    } catch (error) {
+      if (current()) {
+        setFailure(error instanceof Error && error.message.includes(ANTIGRAVITY_ACCOUNT_BUSY) ? 'accountBusy' : 'failed');
+        void read('read');
+      }
+    } finally {
+      loginOwner.current = undefined;
+      pendingRef.current = false;
+      if (mounted.current) setPending(null);
+      if (current()) onChanged();
+    }
   };
-  const disconnect = async () => {
-    try { await window.electronAPI.maker.auth.logout('antigravity'); onChanged(); }
-    catch { toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: 'Antigravity' })); }
-  };
+
   return <DetailHeader provider={provider} icon={providerIcon(provider, 18)} title={provider.name}
     subtitle={t('settings.providers.genericOAuth.subtitle')}
-    status={{ kind: provider.connected ? 'connected' : 'neutral' }}
-    primaryAction={{ label: busy ? t('settings.providers.button.cancel') : provider.connected ? t('settings.providers.button.disconnect') : t('settings.providers.button.authorize'), onClick: () => { if (busy) void window.electronAPI.maker.auth.cancelLogin('antigravity'); else if (provider.connected) void disconnect(); else void login(); } }}>
+    status={{ kind: connected ? 'connected' : 'neutral' }}
+    primaryAction={api && (accounts || pending) ? {
+      label: pending === 'login' ? t('settings.providers.button.cancel')
+        : !accounts?.configured ? text('configure')
+          : connected ? t('settings.providers.button.disconnect') : t('settings.providers.button.authorize'),
+      disabled: pending === 'change',
+      onClick: () => {
+        if (pending === 'login') {
+          const id = loginOwner.current;
+          if (id) void cancelLogin('antigravity', { ownerId: id, releaseOwner: true }).catch(() => { setFailure('failed'); });
+        } else void run(!accounts?.configured ? { action: 'configure' } : connected ? 'disconnect' : 'login');
+      },
+    } : undefined}>
+    {api && <section className="flex flex-col gap-3 border-t border-[var(--border-default)] px-4 py-3">
+      {accounts && active ? <>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="min-w-0 grow">
+            <Select data-settings-search-action="Switch the active Google subscription account" label={text('activeAccount')} width="full" size="compact" truncateOptions value={active.id} disabled={pending !== null || !accounts.configured}
+              options={accounts.accounts.map((account, index) => ({ value: account.id, label: accountName(account, index) }))}
+              onValueChange={id => void run({ action: 'select', id })} />
+          </div>
+          <Button data-settings-search-action="Add a Google subscription account" variant="secondary" size="sm" disabled={pending !== null || !accounts.configured} onClick={() => void run({ action: 'add' })}>
+            <Plus size={14} />{t('subscriptionAccounts.add')}
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button data-settings-search-action="Remove a Google subscription account" variant="secondary" size="sm" disabled={pending !== null}>
+                <Trash2 size={14} />{text('removeAccount')}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {accounts.accounts.map((account, index) => (
+                <DropdownMenuItem key={account.id} onSelect={() => void run({ action: 'remove', id: account.id })}>
+                  {accountName(account, index)}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {connected && active.id !== 'default' && <Button data-settings-search-action="Refresh the active Google account quota" variant="secondary" size="sm" disabled={pending !== null}
+            onClick={() => void run({ action: 'usage' })}>{text('refreshQuota')}</Button>}
+        </div>
+        {connected && (accounts.usage?.length ? accounts.usage.map(bucket => (
+          <QuotaHoverCard key={bucket.limitId} variant="embedded" account={{
+            title: bucket.limitName ?? provider.name,
+            updatedAt: bucket.updatedAt,
+            windows: (['primary', 'secondary'] as const).flatMap(key => {
+              const window = bucket[key];
+              return window?.usedPercent === undefined ? [] : [{
+                key, title: quotaWindowLabel(window.windowMinutes, t), showRemaining: true,
+                window: { utilization: window.usedPercent, resetsAt: window.resetsAt },
+              }];
+            }),
+          }} />
+        )) : <p className="text-12 text-[var(--text-secondary)]">
+          {active.id === 'default' ? text('legacyQuota') : text('noQuota')}
+        </p>)}
+      </> : accounts && <p className="text-13 text-[var(--text-secondary)]">{text('setupHint')}</p>}
+      {failure && <div className="flex items-center gap-2">
+        <p role="alert" className="text-13 text-[var(--error-fg)]">{text(failure)}</p>
+        {!accounts && <Button data-settings-search-action="Retry reading Google subscription accounts" variant="secondary" size="sm" onClick={() => { setFailure(undefined); void read('read'); }}>{t('commonUi.retry')}</Button>}
+      </div>}
+    </section>}
     {children}
   </DetailHeader>;
 }
@@ -2744,6 +2893,11 @@ export function ProvidersSection() {
         focusAgent?: AgentKind;
       }
   >(null);
+  const openAntigravity = () => {
+    setWizard(null);
+    setDialog(null);
+    selectProvider(ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID);
+  };
   const [focusedModel, setFocusedModel] = useState<{
     providerId: string;
     modelId: string;
@@ -2825,7 +2979,7 @@ export function ProvidersSection() {
     const rows: ProviderView[] = [];
     for (const p of providers) {
       // Existing shares still need their original, selectively revocable management entry.
-      if (p.removed || (p.subscriptionPoolAlias && !ownedShares.get(null)?.has(p.id))) continue;
+      if ((p.removed && p.id !== 'google-antigravity-subscription') || (p.subscriptionPoolAlias && !ownedShares.get(null)?.has(p.id))) continue;
       if (p.source === 'builtin') {
         // reconnect-required 视同占行:凭证失效 ≠ 用户断开,重连入口必须保留。
         // OpenAI 图像 key 与 ChatGPT OAuth 两套凭证解耦:imageModels 已声明时,
@@ -3872,6 +4026,7 @@ export function ProvidersSection() {
             setWizard(null);
             setDialog({ mode: 'create' });
           }}
+          onOpenAntigravity={openAntigravity}
           onClose={() => setWizard(null)}
           onDone={async (providerId) => {
             // 退出已完成；先卸载本实例，让刷新期间的新入口挂载全新向导。
@@ -3890,7 +4045,10 @@ export function ProvidersSection() {
           onDetected={(detected) => { setDialog(null); setWizard({ detected }); }}
           providers={providers}
           suspended={dialog.mode === 'create' && !!wizard}
-          onSelectProvider={dialog.mode === 'create' ? entry => setWizard({ entry }) : undefined}
+          onSelectProvider={dialog.mode === 'create' ? entry => {
+            if (entry.kind === 'builtin' && entry.providerId === ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID) openAntigravity();
+            else setWizard({ entry });
+          } : undefined}
           initial={dialog.mode === 'edit' ? dialog.config : undefined}
           catalogModels={dialog.mode === 'edit' ? providers.find(p =>
             p.source === 'user' && storedCustomProviderId(p.id) === dialog.config.id)?.models : undefined}

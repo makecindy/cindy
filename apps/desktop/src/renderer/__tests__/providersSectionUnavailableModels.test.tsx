@@ -16,7 +16,7 @@ import { remoteProviderDisableKey } from '@cindy/model-providers';
 import type { CustomProviderConfig, ModelRegistry, ProviderView } from '@cindy/model-providers';
 import { createIpcError } from '../../shared/ipc-errors';
 import { toast } from '@/lib/toast';
-import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { evictDeviceProviders, prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 
 const {
@@ -282,6 +282,48 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  // Renderer unit: delete an unused Google account straight from the menu.
+  it('confirms removal by email and keeps the current Google account selected', async () => {
+    const providerId = 'google-antigravity-subscription';
+    providerSnapshotState.customOverride = {
+      id: providerId, name: 'Google AI · Antigravity', source: 'builtin', agents: ['antigravity'],
+      auth: { method: 'oauth' }, routing: {}, models: { antigravity: [] }, connected: false,
+    };
+    providerSnapshotState.order = [providerId, 'xd', 'anthropic'];
+    const active = { id: 'default' };
+    const spare = { id: 'spare', identity: 'spare@example.test' };
+    let accounts = [active, spare];
+    const api = vi.fn<NonNullable<typeof window.electronAPI.antigravityAccounts>>(async command => {
+      if (command.action === 'remove') accounts = [active];
+      return { configured: true, connected: false, activeId: active.id, accounts };
+    });
+    window.electronAPI.antigravityAccounts = api;
+    window.electronAPI.maker.auth = {
+      onStateChanged: vi.fn(() => () => {}),
+    } as unknown as typeof window.electronAPI.maker.auth;
+    render(<MemoryRouter initialEntries={[`/settings?connect=${providerId}`]}><ProvidersSection /></MemoryRouter>);
+    const open = await screen.findByRole('button', { name: 'settings.providers.antigravity.removeAccount' });
+    const removeSpare = async () => {
+      fireEvent.keyDown(open, { key: 'ArrowDown' });
+      const target = await screen.findByRole('menuitem', { name: spare.identity });
+      await act(async () => fireEvent.click(target));
+    };
+    await removeSpare();
+    await waitFor(() => expect(open.hasAttribute('disabled')).toBe(false));
+    expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({
+      description: 'settings.providers.antigravity.removeDescription',
+      confirmVariant: 'destructive',
+    }));
+    expect(api.mock.calls.some(([command]) => command.action === 'remove')).toBe(false);
+    confirmSpy.mockResolvedValue(true);
+    await removeSpare();
+    await waitFor(() => expect(api).toHaveBeenCalledWith({ action: 'remove', id: spare.id }, {
+      dataOwnerId: 'owner-1', ownerGeneration: getDataOwnerGeneration().generation,
+    }));
+    await waitFor(() => expect(open.hasAttribute('disabled')).toBe(false));
+    expect(screen.getByText('settings.providers.antigravity.existing')).toBeTruthy();
+  });
+
   // Reuse receiver-side disable, retaining the settings row for re-enabling.
   it('disables an extra remote provider and re-enables it from the same action menu after reopening', async () => {
     ownDevicesState.devices = [{ deviceId: 'peer', name: 'Other computer', platform: 'darwin' }];

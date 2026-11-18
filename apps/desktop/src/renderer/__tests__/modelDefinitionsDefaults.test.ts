@@ -48,7 +48,7 @@ function stubCapabilities(byAgent: StubByAgent): void {
     effortLevels: [],
     permissionModes: [],
   }));
-  vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities } } });
+  vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities, listAvailableAgents: async () => ['claude-code', 'codex', 'pi'] } } });
 }
 
 async function loadWith(byAgent: StubByAgent) {

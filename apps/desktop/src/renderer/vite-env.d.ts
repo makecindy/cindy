@@ -4336,6 +4336,7 @@ interface ElectronAPI {
     /** 有人请求把这里分享的供应商经他的供应商组转给别人用(转分享)。 */
     onReshareRequested(cb: () => void): () => void;
   };
+  antigravityAccounts?(command: import('../shared/antigravityAccounts').AntigravityAccountCommand, scope: import('../shared/antigravityAccounts').AntigravityOwnerScope): Promise<import('../shared/antigravityAccounts').AntigravityAccountsView>;
   subscriptionAccounts: {
     onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider; resetAccountId?: string }) => void): () => void;
     command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
@@ -7250,7 +7251,7 @@ interface ElectronAPI {
       getState: (agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity') => Promise<CodexAuthState>;
       triggerLogin: (
         agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
-        options?: { mode?: 'browser' | 'device-code' | 'local'; ownerId?: string },
+        options?: { mode?: 'browser' | 'device-code' | 'local'; ownerId?: string; googleTarget?: import('../shared/antigravityAccounts').AntigravityLoginTarget },
       ) => Promise<CodexAuthState>;
       cancelLogin: (
         agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
@@ -7258,7 +7259,7 @@ interface ElectronAPI {
       ) => Promise<void>;
       logout: (
         agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity',
-        ownerScope?: { dataOwnerId: string | null; ownerGeneration: number },
+        ownerScope?: { dataOwnerId: string | null; ownerGeneration: number; accountId?: string },
       ) => Promise<void>;
       onStateChanged: (
         cb: (s: { agentKind: 'claude-code' | 'codex' | 'pi' | 'antigravity' } & CodexAuthState) => void,

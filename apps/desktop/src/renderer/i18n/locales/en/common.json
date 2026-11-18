@@ -4301,6 +4301,21 @@
         "groupMembersTitle": "Computers in the Group",
         "groupMembersFailed": "Couldn’t get the status of the computers in the group right now."
       },
+      "antigravity": {
+        "configure": "Connect manually",
+        "setupHint": "To connect your Google AI subscription, use a verified Antigravity CLI 1.5.9. Cindy uses subscription quota only.",
+        "activeAccount": "Active Google account",
+        "existing": "Local default account",
+        "removeAccount": "Remove account",
+        "removeDescription": "Cindy will delete this account’s local sign-in and settings. Your Cindy conversations will stay available.",
+        "removeDefaultDescription": "Cindy will disconnect this account. Your Google sign-in on this Mac and your Cindy conversations will stay available.",
+        "accountBusy": "A Google task or account change is still in progress. Try again when it finishes.",
+        "account": "Google account {{number}}",
+        "refreshQuota": "Refresh quota",
+        "legacyQuota": "Add a Google account to view its quota in Cindy.",
+        "noQuota": "Google quota is currently unavailable.",
+        "failed": "Could not complete the Google account operation."
+      },
       "genericOAuth": {
         "subtitle": "Subscription account",
         "reopenLoginPage": "Reopen sign-in page",
@@ -10904,6 +10919,18 @@
     "nameLabel": "What Should We Call Them?",
     "close": "Close",
     "list": {
+      "folders": {
+        "create": "New folder",
+        "rename": "Rename folder",
+        "dissolve": "Dissolve folder",
+        "name": "Folder name",
+        "move": "Move to folder",
+        "unfiled": "Outside folders",
+        "up": "Move up",
+        "down": "Move down",
+        "actions": "Actions for {{name}}",
+        "saveFailed": "Could not save your folders."
+      },
       "createMenu": "Create",
       "createTeammate": "New buddy",
       "joinWithLink": "Enter Invite Link…",

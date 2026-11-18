@@ -11,6 +11,7 @@ import { optionalEnum, requireEnum, requireObject, throwIpcError } from '../util
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
+import type { AntigravityLoginTarget } from '../../shared/antigravityAccounts.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
 const log = createLogger('maker-ipc:authHandlers');
@@ -48,6 +49,7 @@ type RendererSender = AuthLoginController;
 
 type ActiveLoginOperation = {
   mode: AgentLoginMode;
+  googleTarget?: AntigravityLoginTarget;
   promise: Promise<AuthState>;
   settled: Promise<void>;
   requiresDurableDisconnect: boolean;
@@ -134,7 +136,22 @@ export function registerMakerAuthHandlers(
     isCurrent: () => boolean,
   ) => void | Promise<void>,
   readController: (event: unknown) => AuthLoginController | null = rendererSender,
+  googleAuth?: {
+    assertRenderer(event: unknown): void;
+    assertActiveAccount(id: string): void;
+  },
 ): void {
+  const authorizeGoogle = (kind: AgentKind, event: unknown): void => {
+    if (kind === 'antigravity') googleAuth?.assertRenderer(event);
+  };
+  const assertGoogleTarget = (target?: AntigravityLoginTarget): void => {
+    if (!target) return;
+    const owner = getActiveAppSession();
+    if (isAppSessionBoundaryPending() || target.dataOwnerId !== owner.dataOwnerId || target.ownerGeneration !== owner.generation) {
+      throwIpcError('INVALID_PARAMS', 'Provider owner changed');
+    }
+    googleAuth?.assertActiveAccount(target.accountId);
+  };
   const mutationGeneration = new Map<AgentKind, number>();
   const loginRequestGeneration = new Map<AgentKind, number>();
   const loginCancellationGeneration = new Map<AgentKind, number>();
@@ -257,6 +274,7 @@ export function registerMakerAuthHandlers(
     // 此 generation 与 auth mutation 分离，避免排队登录反过来提前作废正在收尾的 logout。
     const loginGeneration = beginLoginRequest(kind);
     const cancellationGeneration = currentLoginCancellation(kind);
+    const owner = activeOwnerScopeKey();
     const invalidatedState = (): AuthState =>
       currentLoginCancellation(kind) !== cancellationGeneration
         ? cancelledAuthState()
@@ -266,9 +284,12 @@ export function registerMakerAuthHandlers(
     // 否则新登录会提前作废旧 generation，导致注销回调被跳过。
     await waitForLatestLogoutFinalization(kind);
     if (!isLoginRequestCurrent(kind, loginGeneration)) return invalidatedState();
+    if (kind === 'antigravity' && (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner)) return invalidatedState();
+    assertGoogleTarget(operation.googleTarget);
     const generation = beginMutation(kind);
     const isCurrent = (): boolean =>
-      isLoginRequestCurrent(kind, loginGeneration) && isMutationCurrent(kind, generation);
+      isLoginRequestCurrent(kind, loginGeneration) && isMutationCurrent(kind, generation)
+      && (kind !== 'antigravity' || (!isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner));
     const progressText = { stdout: '', stderr: '', other: '' };
     let emittedDeviceCode = '';
     const result = await maker.triggerAgentLogin(kind, {
@@ -300,6 +321,9 @@ export function registerMakerAuthHandlers(
         operation.latestDeviceCodeProgress = payload;
         broadcast(MAKER_PUSH.AUTH_LOGIN_PROGRESS, payload);
       },
+    }).catch(error => {
+      if (!isCurrent()) return invalidatedState();
+      throw error;
     });
     // Adapter 已返回 OAuth 成功后，pending login 会被清掉；若 Cancel 落在后续模型刷新/
     // bridge 收口阶段，只有 handler 能再建立 durable disconnect。Adapter 自己返回
@@ -420,7 +444,9 @@ export function registerMakerAuthHandlers(
   }
 
   registry.handle(MAKER_INVOKE.AUTH_GET_STATE, async (_e, agentKind: unknown): Promise<AuthState> => {
-    return maker.getAgentAuthState(requireAgentKind(agentKind));
+    const kind = requireAgentKind(agentKind);
+    authorizeGoogle(kind, _e);
+    return maker.getAgentAuthState(kind);
   });
 
   // presence-only:只回「有没有配 key」,绝不回密钥本体。device-link 控制端(手机 / 远程桌面)
@@ -433,10 +459,13 @@ export function registerMakerAuthHandlers(
     MAKER_INVOKE.AUTH_TRIGGER_LOGIN,
     async (event, agentKind: unknown, rawOptions?: unknown): Promise<AuthState> => {
       const kind = requireAgentKind(agentKind);
-      const { mode, ownerId } = requireLoginOptions(kind, rawOptions);
+      authorizeGoogle(kind, event);
+      const { mode, ownerId, googleTarget } = requireLoginOptions(kind, rawOptions);
+      assertGoogleTarget(googleTarget);
       const sender = readController(event);
       const current = activeLoginOperations.get(kind);
-      if (current?.acceptingOwners && !current.settledFlag && current.mode === mode) {
+      if (current?.acceptingOwners && !current.settledFlag && current.mode === mode && current.googleTarget?.accountId === googleTarget?.accountId
+        && current.googleTarget?.ownerGeneration === googleTarget?.ownerGeneration) {
         registerLoginOwner(kind, current, sender, ownerId);
         // Device URL/code may have been emitted before this BrowserWindow joined the shared
         // operation. Re-broadcast the retained payload so the late caller can render and finish it.
@@ -450,7 +479,7 @@ export function registerMakerAuthHandlers(
       // 会按 generation 得到 superseded/cancelled，新调用方不会复用旧模式结果。
       let settleOperation!: () => void;
       const activeOperation: ActiveLoginOperation = {
-        mode,
+        mode, googleTarget,
         promise: null as unknown as Promise<AuthState>,
         settled: new Promise<void>((resolve) => {
           settleOperation = resolve;
@@ -484,13 +513,15 @@ export function registerMakerAuthHandlers(
     rawOptions?: unknown,
   ): Promise<void> => {
     const kind = requireAgentKind(agentKind);
+    authorizeGoogle(kind, event);
     const { releaseOwner, ownerId } = requireCancelOptions(rawOptions);
     if (releaseOwner) {
-      if (kind !== 'codex') {
-        throwIpcError('INVALID_PARAMS', 'owner release is only supported by codex');
+      if (kind !== 'codex' && kind !== 'antigravity') {
+        throwIpcError('INVALID_PARAMS', 'This agent does not support login owner release');
       }
       const sender = readController(event);
       if (!sender) throwIpcError('INVALID_PARAMS', 'owner release requires an authenticated controller');
+      if (loginOwners.get(ownerId!)?.kind !== kind) return;
       const owner = removeLoginOwner(ownerId!, sender);
       if (!owner) return;
       const operation = owner.operation;
@@ -524,6 +555,11 @@ export function registerMakerAuthHandlers(
       }
     }
     const kind = requireAgentKind(agentKind);
+    authorizeGoogle(kind, _e);
+    if (kind === 'antigravity' && ownerScope && typeof ownerScope === 'object' && 'accountId' in ownerScope) {
+      if (typeof ownerScope.accountId !== 'string' || ownerScope.accountId.length > 36) throwIpcError('INVALID_PARAMS', 'Invalid Google account target');
+      googleAuth?.assertActiveAccount(ownerScope.accountId);
+    }
     const activeOperation = activeLoginOperations.get(kind);
     if (activeOperation) activeOperation.acceptingOwners = false;
     clearOwnersForKind(kind);
@@ -569,17 +605,24 @@ function requireAgentKind(value: unknown): AgentKind {
 function requireLoginOptions(
   agentKind: AgentKind,
   value: unknown,
-): { mode: AgentLoginMode; ownerId?: string } {
+): { mode: AgentLoginMode; ownerId?: string; googleTarget?: AntigravityLoginTarget } {
   const options = value === undefined ? {} : requireObject(value, 'options');
   const mode = optionalEnum(options.mode, AGENT_LOGIN_MODES, 'login mode') ?? 'browser';
   if (agentKind !== 'codex' && mode !== 'browser') {
     throwIpcError('INVALID_PARAMS', 'This login mode is only supported by codex');
   }
   const ownerId = requireLoginOwnerId(options.ownerId);
-  if (agentKind !== 'codex' && ownerId) {
-    throwIpcError('INVALID_PARAMS', 'ownerId is only supported by codex');
+  if (agentKind !== 'codex' && agentKind !== 'antigravity' && ownerId) {
+    throwIpcError('INVALID_PARAMS', 'This agent does not support ownerId');
   }
-  return { mode, ownerId };
+  if (agentKind !== 'antigravity' || options.googleTarget === undefined) return { mode, ownerId };
+  const target = requireObject(options.googleTarget, 'googleTarget');
+  if (typeof target.accountId !== 'string' || target.accountId.length > 36
+    || typeof target.dataOwnerId !== 'string' || typeof target.ownerGeneration !== 'number'
+    || !Number.isSafeInteger(target.ownerGeneration)) throwIpcError('INVALID_PARAMS', 'Invalid Google account target');
+  return { mode, ownerId, googleTarget: {
+    accountId: target.accountId, dataOwnerId: target.dataOwnerId, ownerGeneration: target.ownerGeneration,
+  } };
 }
 
 function requireCancelOptions(

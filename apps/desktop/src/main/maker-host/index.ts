@@ -1,5 +1,6 @@
 import { attachmentPreservation, attachmentStorageRoots } from './oversized-attachment-recovery.js';
 import { buildAntigravityAgent } from './antigravity-host.js';
+import { ANTIGRAVITY_ACCOUNT_BUSY } from '../../shared/antigravityAccounts.js';
 import { createCodexLocalModelSink } from './codexLocalModelSink.js';
 import { createCodexSpawnConfig, createCodexRoutingSignature } from './codexSpawnConfigCore.js';
 import { refreshCodexGatewayRuntime } from './codexGatewayRefresh.js';
@@ -2506,6 +2507,15 @@ export function getMaker(): Maker {
         return { type: 'http', name: server.name, url: server.url, headers };
       });
       return { mcpServers, dispose: () => bridge?.disposeSessionCtx?.() };
+    }, async () => {
+      const maker = _maker;
+      if (!maker) return;
+      const sessions = maker.listActiveSessions().filter(session => session.agentKind === 'antigravity');
+      await Promise.all(sessions.map(session => withRehydrateCloseSuppressed(session.id, () =>
+        maker.closeSessionIfCurrent(session, 'runtime-refresh', { onlyIfIdle: true }))));
+      if (sessions.some(session => maker.getSession(session.id) === session)) {
+        throw new Error(ANTIGRAVITY_ACCOUNT_BUSY);
+      }
     });
     if (antigravityAgent) _mcpProviders.antigravity = piMcpProviders;
     if (antigravityAgent) {

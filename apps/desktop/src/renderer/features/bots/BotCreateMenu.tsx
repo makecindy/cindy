@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Bot, Link2, Plus, Users } from 'lucide-react';
+import { Bot, FolderPlus, Link2, Plus, Users } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BotRosterView } from './BotRosterView';
@@ -9,9 +9,10 @@ import { ChatInviteDialog } from './ChatInviteDialog';
 import { useTranslation } from 'react-i18next';
 
 /** `header`:侧栏伙伴段头里的 20px 图标钮,与置顶 / 全部任务段头动作同尺寸。 */
-export function BotCreateMenu({ variant, label }: {
+export function BotCreateMenu({ variant, label, onCreateFolder }: {
   variant?: 'header';
   label?: string;
+  onCreateFolder?: () => void;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -57,6 +58,12 @@ export function BotCreateMenu({ variant, label }: {
               <Users size={14} className="mr-2" />
               {t('bots.groupChat.create.title')}
             </DropdownMenuItem>
+            {onCreateFolder && (
+              <DropdownMenuItem onSelect={onCreateFolder}>
+                <FolderPlus size={14} className="mr-2" />
+                {t('bots.list.folders.create')}
+              </DropdownMenuItem>
+            )}
             {/* Clicking an invitation opens it directly; this is the fallback when the link
                 arrived as plain text that the sending app did not make clickable. */}
             <DropdownMenuSeparator />

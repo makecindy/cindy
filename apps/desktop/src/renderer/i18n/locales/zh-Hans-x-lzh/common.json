@@ -1,4 +1,16 @@
 {
+  "googleSubscription": {
+    "usage": "Google 用量",
+    "quotaUnavailable": "账号剩余额度暂无法获取",
+    "quotaGuide": "此版本 ACP 未提供账号额度及重置时间，可在官方 Antigravity CLI 输入 /usage 查看。",
+    "openQuotaGuide": "查看官方额度查询方法",
+    "moneyUnavailable": "当前接口未提供 credits 余额及实际费用。",
+    "context": "本会话上下文（最近上报）",
+    "lastTurnTokens": "最近一轮 Tokens",
+    "unavailable": "暂无法获取",
+    "modelControlsThinking": "此模型自行控制推理强度。",
+    "noFastMode": "此来源未提供独立的 Fast / Standard 切换。"
+  },
   "runtimePlugins": {
     "save": "存之",
     "promptUnsupported": "此 Pi 所在之处不支持系统提示词片段。",
@@ -4245,6 +4257,21 @@
         "groupNote": "{{device}} 已将此供方立为供方组。于模型清单中择之以新开差事，{{device}} 将依组策略分差事予下列一机运行；彼机有恙，自换一机续之。{{device}} 在线时，君可自此处之「远程与分享」理此组及分享。",
         "groupMembersTitle": "组内之机",
         "groupMembersFailed": "暂不能读组内诸机之状态。"
+      },
+      "antigravity": {
+        "configure": "手动连接",
+        "setupHint": "请使用经过验证的 Antigravity CLI 1.5.9 连接 Google AI 订阅。Cindy 仅使用订阅额度。",
+        "activeAccount": "目前的 Google 帐号",
+        "existing": "本机默认帐号",
+        "removeAccount": "移除帐号",
+        "removeDescription": "移除此帐号在 Cindy 的本机授权与设定，保留会话记录。",
+        "removeDefaultDescription": "解除 Cindy 与此帐号的连接，保留此 Mac 的 Google 登录与会话记录。",
+        "accountBusy": "Google 任务或帐号操作进行中，请稍后再试。",
+        "account": "Google 帐号 {{number}}",
+        "refreshQuota": "更新额度",
+        "legacyQuota": "新增 Google 帐号后，即可在 Cindy 中查看该帐号的额度。",
+        "noQuota": "暂时无法读取 Google 额度。",
+        "failed": "无法完成 Google 帐号操作。"
       },
       "genericOAuth": {
         "subtitle": "订阅名籍",
@@ -10847,6 +10874,18 @@
     "nameLabel": "何以称之",
     "close": "阖",
     "list": {
+      "folders": {
+        "create": "新建资料夹",
+        "rename": "更改资料夹名称",
+        "dissolve": "解散资料夹",
+        "name": "资料夹名称",
+        "move": "移入资料夹",
+        "unfiled": "移出资料夹",
+        "up": "上移",
+        "down": "下移",
+        "actions": "{{name}}的操作",
+        "saveFailed": "无法储存资料夹。"
+      },
       "createMenu": "增",
       "createTeammate": "增同伴",
       "joinWithLink": "输邀请链接…",
@@ -13981,6 +14020,24 @@
       "listAria": "权柄模式",
       "autoFallback": "自动审批暂不可用，已切换为预设权柄；需时将询问君。",
       "modes": {
+        "antigravity": {
+          "ask": {
+            "label": "预设权柄",
+            "description": "编辑和指令操作按需由你核准。"
+          },
+          "acceptEdits": {
+            "label": "许修改",
+            "description": "可直接编辑文件，其他操作按需由你核准。"
+          },
+          "auto": {
+            "label": "自审",
+            "description": "可自动编辑工作区内的文件及执行安全指令，高风险操作仍需确认。"
+          },
+          "bypassPermissions": {
+            "label": "完全访问",
+            "description": "一般操作直接允许，可访问工作区外的文件及联网执行指令。"
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "预设权柄",

@@ -12,6 +12,7 @@ import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
 import { GoogleSubscriptionUsageChip } from './GoogleSubscriptionUsageChip';
+import { ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID } from '../../../shared/antigravityAccounts';
 /**
  * TodaySpendChip — 右下角用量指示器与所有渠道共用的悬浮卡片入口。
  *
@@ -904,8 +905,11 @@ interface TodaySpendChipProps {
 }
 
 export function TodaySpendChip(props: TodaySpendChipProps) {
-  if (props.vendorKey === 'antigravity' && props.providerId === 'google-antigravity-subscription') {
-    return <GoogleSubscriptionUsageChip context={props.contextUsage} turnTokens={props.turnTokens} />;
+  if (props.vendorKey === 'antigravity' && props.providerId === ANTIGRAVITY_SUBSCRIPTION_PROVIDER_ID) {
+    const location = props.usageAccount ?? TASK_USAGE_ACCOUNT;
+    const readLocalQuota = !props.remoteHostId &&
+      (location.kind === 'local' || (location.kind === 'task' && !props.deviceLinkDeviceId));
+    return <GoogleSubscriptionUsageChip context={props.contextUsage} turnTokens={props.turnTokens} readLocalQuota={readLocalQuota} />;
   }
   return <LegacyTodaySpendChip {...props} />;
 }

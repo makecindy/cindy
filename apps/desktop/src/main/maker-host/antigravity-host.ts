@@ -1,50 +1,221 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { activeOwnerScopeKey, getActiveAppSession } from '../appSessionState.js';
-import { AntigravityAgent, isAntigravitySubscriptionModel } from '@cindy/maker-core/agents/antigravity';
+import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
+import { AntigravityAgent, antigravityNativeResumeId, isAntigravitySubscriptionModel } from '@cindy/maker-core/agents/antigravity';
 import { spawnAcp } from '@cindy/maker-core/agents/antigravity-transport';
 import type { AgentDeps } from '@cindy/maker-core';
 import { antigravitySubscriptionArgs, assertAntigravityGenerationAllowed, assertAntigravitySubscriptionSettings } from './antigravity-policy.js';
-import { setAntigravityState } from './antigravity-state.js';
+import { ANTIGRAVITY_ACCOUNT_BUSY, type AntigravityAccountsView } from '../../shared/antigravityAccounts.js';
+import { readAntigravityToken, createAntigravityUsageReader } from './antigravity-usage.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
+import { antigravityConnected, setAntigravityState } from './antigravity-state.js';
+
+/** Official manifest-verified 1.5.9 darwin-arm64 payload; defaults below are version-bound. */
+export const PINNED_ANTIGRAVITY_SHA256 = 'fad3628ad91fe8613a72f074a1c5fde7cd816517788a5b9be96703f7d256741a';
+
+type FileStat = fs.BigIntStats;
+const MAX_VERIFIED_BINARY_CACHE = 16;
+const verifiedBinaryCache = new Map<string, string>();
+
+function fileVersion(stat: FileStat): string {
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
+}
+
+/** Verify once per unchanged file. Never cache a digest for a replaced or changing file. */
+export function assertVerifiedAntigravityBinary(binaryPath: string): void {
+  const stat = fs.statSync(binaryPath, { bigint: true });
+  if (!stat.isFile()) throw new Error('ANTIGRAVITY_UNVERIFIED_RUNTIME');
+  const version = fileVersion(stat);
+  if (verifiedBinaryCache.get(binaryPath) === version) return;
+  verifiedBinaryCache.delete(binaryPath);
+  const fd = fs.openSync(binaryPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  try {
+    const opened = fs.fstatSync(fd, { bigint: true });
+    if (!opened.isFile() || fileVersion(opened) !== version
+      || createHash('sha256').update(fs.readFileSync(fd)).digest('hex') !== PINNED_ANTIGRAVITY_SHA256
+      || fileVersion(fs.fstatSync(fd, { bigint: true })) !== version
+      || fileVersion(fs.statSync(binaryPath, { bigint: true })) !== version) {
+      throw new Error('ANTIGRAVITY_UNVERIFIED_RUNTIME');
+    }
+  } finally { fs.closeSync(fd); }
+  if (verifiedBinaryCache.size >= MAX_VERIFIED_BINARY_CACHE) {
+    const oldest = verifiedBinaryCache.keys().next().value;
+    if (oldest !== undefined) verifiedBinaryCache.delete(oldest);
+  }
+  verifiedBinaryCache.set(binaryPath, version);
+}
+
+const LEGACY_PROFILE = 'default';
+const PROFILE_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+const MAX_PROFILES = 32;
+type Connection = Record<string, unknown>;
+
+interface AntigravityAccounts {
+  assertOwner(): void;
+  assertActiveAccount(id: string): void;
+  read(): AntigravityAccountsView;
+  configure(binaryPath: string): Promise<AntigravityAccountsView>;
+  add(): Promise<AntigravityAccountsView>;
+  select(id: string): Promise<AntigravityAccountsView>;
+  remove(id: string): Promise<AntigravityAccountsView>;
+  usage(): Promise<AntigravityAccountsView>;
+}
+let currentAccounts: AntigravityAccounts | null = null;
+export function getAntigravityAccounts(): AntigravityAccounts | null {
+  return currentAccounts;
+}
+
+interface Binding {
+  binary: string;
+  id: string;
+  version: number;
+  config: Connection;
+}
 
 /** Local opt-in only. Never alters defaults, another engine or a companion profile. */
-function createAntigravityAgent(userData: string, logger: AgentDeps['logger'], prepareTools?: (opts: import('@cindy/maker-core').StartSessionOptions) => Promise<{ mcpServers: Array<Record<string, unknown>>; dispose(): void }>): AntigravityAgent | null {
+function createAntigravityAgent(
+  userData: string,
+  logger: AgentDeps['logger'],
+  prepareTools?: (opts: import('@cindy/maker-core').StartSessionOptions) => Promise<{ mcpServers: Array<Record<string, unknown>>; dispose(): void }>,
+  closeTaskSessions?: () => Promise<void>,
+): AntigravityAgent | null {
+  currentAccounts = null;
+  setAntigravityState(null);
+  if (process.platform !== 'darwin' || process.arch !== 'arm64') return null;
+
   const owner = getActiveAppSession().dataOwnerId;
   const fence = activeOwnerScopeKey();
-  const assertOwner = () => { if (activeOwnerScopeKey() !== fence) throw new Error('ANTIGRAVITY_OWNER_CHANGED'); };
+  const isOwner = () => owner !== null && !isAppSessionBoundaryPending() && activeOwnerScopeKey() === fence;
+  const assertOwner = () => { if (!isOwner()) throw new Error('ANTIGRAVITY_OWNER_CHANGED'); };
   const ownerKey = createHash('sha256').update(owner ?? 'local').digest('hex').slice(0, 24);
-  const configPath = path.join(userData, 'google-subscription', ownerKey, 'connection.json');
-  setAntigravityState(null);
-  if (!fs.existsSync(configPath)) return null;
-  const config: unknown = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  if (!config || typeof config !== 'object') throw new Error('ANTIGRAVITY_CONFIG_INVALID');
-  const cfg = config as Record<string, unknown>;
-  if (cfg.enabled !== true) return null;
-  if (typeof cfg.binaryPath !== 'string' || !path.isAbsolute(cfg.binaryPath) || !fs.existsSync(cfg.binaryPath)) throw new Error('ANTIGRAVITY_BINARY_UNAVAILABLE');
-  const updateLocalConnection = (patch: Record<string, unknown>) => {
+  const root = path.join(userData, 'google-subscription', ownerKey);
+  const configPath = path.join(root, 'connection.json');
+  const ownerDirectory = (directory: string, create = false): void => {
+    let current = fs.realpathSync(userData);
+    for (const component of path.relative(userData, directory).split(path.sep)) {
+      current = path.join(current, component);
+      try {
+        if (!fs.lstatSync(current).isDirectory()) throw new Error('ANTIGRAVITY_PROFILE_PATH_INVALID');
+      } catch (error) {
+        if (!create || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        fs.mkdirSync(current, { mode: 0o700 });
+      }
+    }
+  };
+  const readConnection = (): Connection => {
     assertOwner();
-    const current = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    try {
+      ownerDirectory(root);
+      const fd = fs.openSync(configPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+      let value: unknown;
+      try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > 64 * 1024) throw new Error('ANTIGRAVITY_CONFIG_INVALID');
+        value = JSON.parse(fs.readFileSync(fd, 'utf8'));
+      } finally { fs.closeSync(fd); }
+      if (typeof value === 'object' && value && !Array.isArray(value)) return value as Connection;
+      throw new Error('ANTIGRAVITY_CONFIG_INVALID');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+      throw error;
+    }
+  };
+  const writeConnection = (next: Connection): void => {
+    assertOwner();
+    ownerDirectory(root, true);
     const temporary = `${configPath}.${randomUUID()}.tmp`;
     try {
-      fs.writeFileSync(temporary, JSON.stringify({ ...current, ...patch }, null, 2), { flag: 'wx', mode: 0o600 });
+      fs.writeFileSync(temporary, JSON.stringify(next, null, 2), { flag: 'wx', mode: 0o600 });
       fs.renameSync(temporary, configPath);
     } finally { fs.rmSync(temporary, { force: true }); }
   };
-  const binary = cfg.binaryPath;
-  // Official manifest-verified 1.5.9 darwin-arm64 payload; defaults below are version-bound.
-  const pinnedSha256 = 'fad3628ad91fe8613a72f074a1c5fde7cd816517788a5b9be96703f7d256741a';
-  const assertBinary = () => {
-    if (createHash('sha256').update(fs.readFileSync(binary)).digest('hex') !== pinnedSha256) throw new Error('ANTIGRAVITY_UNVERIFIED_RUNTIME');
+
+  const profileIds = (config: Connection): string[] => {
+    if (config.profiles === undefined) return typeof config.binaryPath === 'string' ? [LEGACY_PROFILE] : [];
+    if (!Array.isArray(config.profiles) || config.profiles.length > MAX_PROFILES
+      || !config.profiles.every(id => typeof id === 'string' && (id === LEGACY_PROFILE || PROFILE_ID.test(id)))
+      || new Set(config.profiles).size !== config.profiles.length) throw new Error('ANTIGRAVITY_CONFIG_INVALID');
+    return config.profiles;
   };
-  assertBinary();
-  const root = path.join(userData, 'google-subscription', ownerKey);
-  const geminiDir = path.join(root, '.gemini');
-  const settingsPath = path.join(geminiDir, 'antigravity-cli', 'settings.json');
-  fs.mkdirSync(path.dirname(settingsPath), { recursive: true, mode: 0o700 });
-  if (!fs.existsSync(settingsPath)) fs.writeFileSync(settingsPath, JSON.stringify({ useG1Credits: false, modelProvider: '', agentMode: '', toolPermission: 'strict' }), { mode: 0o600, flag: 'wx' });
-  const checkPolicy = async (): Promise<void> => {
-    assertOwner();
+  const activeId = (config: Connection): string | null => {
+    const ids = profileIds(config);
+    if (config.activeProfile === undefined) return ids.includes(LEGACY_PROFILE) ? LEGACY_PROFILE : null;
+    if (config.activeProfile === null && ids.length === 0) return null;
+    if (typeof config.activeProfile !== 'string' || !ids.includes(config.activeProfile)) throw new Error('ANTIGRAVITY_CONFIG_INVALID');
+    return config.activeProfile;
+  };
+  const disconnected = (config: Connection, id: string): boolean => id === LEGACY_PROFILE
+    ? config.authDisconnected === true
+    : Array.isArray(config.disconnectedProfiles) && config.disconnectedProfiles.includes(id);
+  const setDisconnected = (config: Connection, id: string, value: boolean): Connection => {
+    if (id === LEGACY_PROFILE) return { ...config, authDisconnected: value };
+    const ids = Array.isArray(config.disconnectedProfiles) ? config.disconnectedProfiles.filter(profile => profile !== id) : [];
+    if (value) ids.push(id);
+    return { ...config, disconnectedProfiles: ids };
+  };
+  const profileDirectory = (id: string) => path.join(root, 'profiles', id);
+  const geminiHome = (id: string) => path.join(id === LEGACY_PROFILE ? root : profileDirectory(id), '.gemini');
+  const tokenPath = (id: string) => path.join(geminiHome(id), 'antigravity-cli', 'antigravity-oauth-token');
+  const privateTokenPath = (id: string): string | null => {
+    const file = tokenPath(id);
+    try {
+      ownerDirectory(path.dirname(file));
+      return file;
+    } catch { return null; }
+  };
+  const getToken = (id: string) => {
+    const file = privateTokenPath(id);
+    return file ? readAntigravityToken(file) : null;
+  };
+
+  const profileIdentity = (config: Connection, id: string): string | undefined => {
+    const identities = config.profileIdentities;
+    if (!identities || typeof identities !== 'object' || Array.isArray(identities)) return undefined;
+    const saved = (identities as Record<string, unknown>)[id];
+    return typeof saved === 'string' ? saved : undefined;
+  };
+  const identityDigest = (identity: string | undefined) =>
+    identity ? createHash('sha256').update(identity.trim().toLowerCase()).digest('hex') : undefined;
+  const assertProfileIdentity = (config: Connection, id: string) => {
+    const expected = profileIdentity(config, id);
+    if (expected && identityDigest(getToken(id)?.identity) !== expected) {
+      throw new Error('ANTIGRAVITY_ACCOUNT_IDENTITY_CHANGED');
+    }
+  };
+
+  let version = 0;
+  let changingAccount = false;
+  const assertAccountIdle = () => {
+    if (changingAccount) throw new Error(ANTIGRAVITY_ACCOUNT_BUSY);
+  };
+  const transports = new Map<ReturnType<typeof spawnAcp>, string>();
+  const getBinding = (): Binding => {
+    const config = readConnection();
+    const id = activeId(config);
+    if (config.enabled !== true || !id || typeof config.binaryPath !== 'string' || !path.isAbsolute(config.binaryPath)) {
+      throw new Error('ANTIGRAVITY_BINARY_UNAVAILABLE');
+    }
+    return { binary: config.binaryPath, id, version, config };
+  };
+  const isCurrentBinding = (binding: Binding): boolean => {
+    if (!isOwner() || binding.version !== version) return false;
+    try {
+      const current = getBinding();
+      return current.binary === binding.binary && current.id === binding.id;
+    } catch { return false; }
+  };
+  const assertCurrentBinding = (binding: Binding): void => {
+    if (!isCurrentBinding(binding)) throw new Error('ANTIGRAVITY_CONNECTION_CHANGED');
+  };
+  const checkPolicy = (binding: Binding): void => {
+    assertCurrentBinding(binding);
+    const geminiDir = geminiHome(binding.id);
+    const settingsPath = path.join(geminiDir, 'antigravity-cli', 'settings.json');
+    ownerDirectory(path.dirname(settingsPath), true);
+    if (!fs.existsSync(settingsPath)) {
+      fs.writeFileSync(settingsPath, JSON.stringify({ useG1Credits: false, modelProvider: '', agentMode: '', toolPermission: 'strict' }), { mode: 0o600, flag: 'wx' });
+    }
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
     const sharedPath = path.join(geminiDir, 'config', 'config.json');
     let user: Record<string, unknown> = {};
@@ -54,45 +225,278 @@ function createAntigravityAgent(userData: string, logger: AgentDeps['logger'], p
     }
     assertAntigravitySubscriptionSettings(settings, user);
   };
-  setAntigravityState({ isCurrent: () => activeOwnerScopeKey() === fence, connected: false, models: [] });
-  return new AntigravityAgent({
-    binaryPath: binary, logger, runtimeConfig: {},
+  const clearState = () => setAntigravityState({ isCurrent: isOwner, connected: false, models: [] });
+  clearState();
+
+  const agent = new AntigravityAgent({
+    get binaryPath() {
+      const { binary } = getBinding();
+      assertVerifiedAntigravityBinary(binary);
+      return binary;
+    },
+    logger, runtimeConfig: {},
     auth: { getState: async () => ({ authenticated: false }), triggerLogin: async () => ({ authenticated: false }), logout: async () => {}, getAuthEnv: async () => ({}) },
   }, {
     async connect(cwd, opts) {
-      assertBinary();
-      await checkPolicy();
+      assertAccountIdle();
+      const binding = getBinding();
+      const stableSession = opts !== undefined;
+      const sessionScope = binding.id === LEGACY_PROFILE ? '' : `antigravity-profile:${binding.id}:`;
+      assertVerifiedAntigravityBinary(binding.binary);
+      if (stableSession) assertProfileIdentity(binding.config, binding.id);
+      checkPolicy(binding);
       const tools = opts && prepareTools ? await prepareTools(opts) : undefined;
-      // The pinned ACP runtime requires its official worker mode for HTTP MCP.
-      // Native settings and the isolated on-disk settings both keep credits off;
-      // environment filtering prevents API/ADC credentials from reaching either process.
-      return { mcpServers: tools?.mcpServers, dispose: tools?.dispose, transport: spawnAcp(binary, antigravitySubscriptionArgs(geminiDir, opts?.permissionMode, !!tools?.mcpServers.length), cwd), assertSubscriptionOnly: checkPolicy };
+      try {
+        // Preparing the MCP bridge yields. Recheck the owner and profile before spawning.
+        if (tools) {
+          assertAccountIdle();
+          checkPolicy(binding);
+          assertProfileIdentity(readConnection(), binding.id);
+        }
+        assertVerifiedAntigravityBinary(binding.binary);
+        const transport = spawnAcp(binding.binary, antigravitySubscriptionArgs(geminiHome(binding.id), opts?.permissionMode, !!tools?.mcpServers.length),
+          cwd, { profileStorage: binding.id !== LEGACY_PROFILE });
+        const tracked = { ...transport, async close() {
+          await transport.close();
+          transports.delete(tracked);
+        } };
+        transports.set(tracked, binding.id);
+        return {
+          sessionScope, isCurrent: () => isCurrentBinding(binding),
+          useCachedAuthentication: stableSession && !antigravityNativeResumeId(opts.resumeSessionId, sessionScope) && binding.id !== LEGACY_PROFILE,
+          mcpServers: tools?.mcpServers, dispose: tools?.dispose,
+          transport: tracked,
+          assertSubscriptionOnly: async () => checkPolicy(binding),
+          assertGenerationAllowed: async () => {
+            assertCurrentBinding(binding);
+            const current = readConnection();
+            assertProfileIdentity(current, binding.id);
+            assertAntigravityGenerationAllowed({ ...current, authDisconnected: disconnected(current, binding.id) });
+          },
+        };
+      } catch (error) { tools?.dispose(); throw error; }
     },
     async assertSessionAllowed() {
-      await checkPolicy();
-      const current = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
-      if (current.enabled !== true || current.binaryPath !== binary || current.authDisconnected === true) throw new Error('Google 订阅连接已断开或设置已更改，请重新连接。');
+      assertAccountIdle();
+      const binding = getBinding();
+      if (disconnected(binding.config, binding.id)) throw new Error('Google 订阅连接已断开，请先重新连接。');
+      assertProfileIdentity(binding.config, binding.id);
     },
-    async authenticated() { updateLocalConnection({ authDisconnected: false }); },
-    async assertGenerationAllowed() {
-      await checkPolicy();
-      // Re-read disconnection state before every attempted turn. Connecting and
-      // discovering models never grants permission to start generation.
-      const current = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
-      if (current.enabled !== true || current.binaryPath !== binary) throw new Error('ANTIGRAVITY_CONNECTION_CHANGED');
-      assertAntigravityGenerationAllowed(current);
+    async authenticated() {
+      assertAccountIdle();
+      const { config, id } = getBinding();
+      const token = id === LEGACY_PROFILE ? null : getToken(id);
+      if (id !== LEGACY_PROFILE && !token?.accessToken) throw new Error('ANTIGRAVITY_PROFILE_TOKEN_UNAVAILABLE');
+      const expected = profileIdentity(config, id);
+      const actual = identityDigest(token?.identity);
+      if (expected && expected !== actual) throw new Error('ANTIGRAVITY_ACCOUNT_IDENTITY_CHANGED');
+      if (actual && !expected) {
+        const identities = config.profileIdentities && typeof config.profileIdentities === 'object'
+          ? config.profileIdentities
+          : {};
+        writeConnection(setDisconnected({ ...config, profileIdentities: { ...identities, [id]: actual } }, id, false));
+      } else if (disconnected(config, id)) {
+        writeConnection(setDisconnected(config, id, false));
+      }
     },
     disconnected() {
-      assertOwner();
-      updateLocalConnection({ authDisconnected: true });
-      setAntigravityState({ isCurrent: () => activeOwnerScopeKey() === fence, connected: false, models: [] });
+      assertAccountIdle();
+      const { config, id } = getBinding();
+      writeConnection(setDisconnected(config, id, true));
+      clearState();
     },
     modelsChanged(models, tier) {
       assertOwner();
       const admitted = models.filter(m => isAntigravitySubscriptionModel(m.id));
-      setAntigravityState({ isCurrent: () => activeOwnerScopeKey() === fence, connected: true, models: admitted, tier: tier && { ...tier } });
+      setAntigravityState({ isCurrent: isOwner, connected: true, models: admitted, tier: tier && { ...tier } });
     },
   });
+
+  const read = (): AntigravityAccountsView => {
+    const config = readConnection();
+    const active = activeId(config);
+    let configured = false;
+    if (config.enabled === true && active && typeof config.binaryPath === 'string' && path.isAbsolute(config.binaryPath)) {
+      try { assertVerifiedAntigravityBinary(config.binaryPath); configured = true; } catch { /* Offer manual configuration. */ }
+    }
+    return {
+      configured,
+      connected: configured && active !== null && !disconnected(config, active) && antigravityConnected(),
+      activeId: active,
+      accounts: profileIds(config).map(id => {
+        const identity = id === LEGACY_PROFILE ? undefined : getToken(id)?.identity?.trim();
+        const expected = profileIdentity(config, id);
+        return { id, identity: !expected || identityDigest(identity) === expected ? identity : undefined };
+      }),
+    };
+  };
+  const quotaReads = new Set<AbortController>();
+  const changeBinding = (next: Connection) => {
+    writeConnection(next);
+    for (const request of quotaReads) request.abort();
+    version += 1;
+    agent.resetConnection();
+    clearState();
+  };
+  const mutate = async (run: () => Promise<void>) => {
+    assertOwner();
+    assertAccountIdle();
+    changingAccount = true;
+    try { await run(); } finally { changingAccount = false; }
+  };
+  const quiesce = async (id: string | null, active: boolean) => {
+    if (!id) return;
+    // Maker retires task handles with its normal lifecycle so queued messages
+    // and project resources stay attached to the Cindy task.
+    if (active) await closeTaskSessions?.();
+    assertOwner();
+    await Promise.all([...transports].filter(([, profile]) => profile === id).map(([transport]) => transport.close()));
+    assertOwner();
+  };
+  const refreshSelection = async () => {
+    const view = read();
+    if (!view.configured) return view;
+    const selected = getBinding();
+    await agent.getAuthState();
+    assertCurrentBinding(selected);
+    return read();
+  };
+  const emptyProfile = (config: Connection, id: string): boolean => {
+    if (id === LEGACY_PROFILE || !disconnected(config, id) || profileIdentity(config, id)) return false;
+    try {
+      ownerDirectory(path.dirname(tokenPath(id)));
+      fs.lstatSync(tokenPath(id));
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT';
+    }
+  };
+  const removeProfileDirectory = async (id: string, config: Connection, commit: () => void) => {
+    if (id === LEGACY_PROFILE) { commit(); return; }
+    const directory = profileDirectory(id);
+    try { ownerDirectory(directory); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      commit();
+      return;
+    }
+    if (typeof config.binaryPath === 'string') {
+      let binary = config.binaryPath;
+      try { binary = fs.realpathSync(binary); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      const relative = path.relative(fs.realpathSync(directory), binary);
+      if (relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`))) {
+        throw new Error('ANTIGRAVITY_RUNTIME_INSIDE_PROFILE');
+      }
+    }
+    const temporary = `${directory}.removing-${randomUUID()}`;
+    fs.renameSync(directory, temporary);
+    try { commit(); }
+    catch (error) { fs.renameSync(temporary, directory); throw error; }
+    await fs.promises.rm(temporary, { recursive: true });
+  };
+  const readUsage = createAntigravityUsageReader(outboundFetch);
+  currentAccounts = {
+    read, assertOwner,
+    assertActiveAccount(id) {
+      if (getBinding().id !== id) throw new Error('ANTIGRAVITY_CONNECTION_CHANGED');
+    },
+    async configure(binaryPath) {
+      await mutate(async () => {
+        const binary = fs.realpathSync(binaryPath);
+        assertVerifiedAntigravityBinary(binary);
+        const config = readConnection();
+        const previous = activeId(config);
+        if (previous && config.enabled === true && config.binaryPath === binary) return;
+        await quiesce(previous, true);
+        const id = previous ?? randomUUID();
+        const profiles = profileIds(config);
+        changeBinding({
+          ...config, binaryPath: binary, enabled: true, activeProfile: id,
+          // Legacy configurations retain their explicit generation choice.
+          generationMode: config.generationMode ?? (profiles.length === 0 ? 'subscription-only' : undefined),
+          profiles: profiles.includes(id) ? profiles : [...profiles, id],
+          ...(profiles.length === 0 ? { disconnectedProfiles: [id] } : {}),
+        });
+      });
+      return read();
+    },
+    async add() {
+      await mutate(async () => {
+        const { config, id: current } = getBinding();
+        const profiles = profileIds(config);
+        if (emptyProfile(config, current)) return;
+        const available = profiles.find(id => emptyProfile(config, id));
+        if (!available && profiles.length >= MAX_PROFILES) throw new Error('ANTIGRAVITY_ACCOUNT_LIMIT');
+        const id = available ?? randomUUID();
+        await quiesce(current, true);
+        changeBinding(setDisconnected({ ...config, profiles: available ? profiles : [...profiles, id], activeProfile: id }, id, true));
+      });
+      return read();
+    },
+    async select(id) {
+      await mutate(async () => {
+        const { config, id: current } = getBinding();
+        if (!profileIds(config).includes(id)) throw new Error('ANTIGRAVITY_ACCOUNT_UNKNOWN');
+        if (current === id) return;
+        await quiesce(current, true);
+        changeBinding({ ...config, activeProfile: id });
+      });
+      return refreshSelection();
+    },
+    async remove(id) {
+      let wasActive = false;
+      await mutate(async () => {
+        const config = readConnection();
+        const current = activeId(config);
+        const profiles = profileIds(config);
+        if (!profiles.includes(id)) throw new Error('ANTIGRAVITY_ACCOUNT_UNKNOWN');
+        wasActive = id === current;
+        await quiesce(id, wasActive);
+        const remaining = profiles.filter(profile => profile !== id);
+        const fallback = remaining.find(profile => !disconnected(config, profile) &&
+          (profile === LEGACY_PROFILE || !!getToken(profile)?.accessToken)) ?? remaining[0] ?? null;
+        const next = setDisconnected({
+          ...config, profiles: remaining, activeProfile: (wasActive ? fallback : current) ?? undefined,
+        }, id, id === LEGACY_PROFILE);
+        if (next.profileIdentities && typeof next.profileIdentities === 'object' && !Array.isArray(next.profileIdentities)) {
+          const identities = { ...next.profileIdentities } as Record<string, unknown>;
+          delete identities[id];
+          next.profileIdentities = identities;
+        }
+        await removeProfileDirectory(id, config, () => {
+          if (wasActive) changeBinding(next);
+          else writeConnection(next);
+        });
+      });
+      return wasActive ? refreshSelection() : read();
+    },
+    async usage() {
+      if (!activeId(readConnection())) return { ...read(), usage: [] };
+      const binding = getBinding();
+      const { id, config } = binding;
+      // The legacy CLI reads its own OS Keychain entry. Quota requests use only
+      // the CLI-owned file belonging to the selected owner-local profile.
+      const token = privateTokenPath(id);
+      if (!token || id === LEGACY_PROFILE || disconnected(config, id)) return { ...read(), usage: [] };
+      const request = new AbortController();
+      quotaReads.add(request);
+      const release = onAppSessionInvalidated(() => request.abort());
+      try {
+        const usage = await readUsage(token, binding.version, request.signal, () => {
+          assertCurrentBinding(binding);
+          const current = readConnection();
+          if (disconnected(current, id)) throw new Error('ANTIGRAVITY_CONNECTION_CHANGED');
+          assertProfileIdentity(current, id);
+        });
+        return { ...read(), usage };
+      } finally {
+        release();
+        quotaReads.delete(request);
+      }
+    },
+  };
+  return agent;
 }
 
 /** An optional native engine must never prevent existing engines from starting. */

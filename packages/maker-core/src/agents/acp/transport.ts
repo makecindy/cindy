@@ -11,10 +11,15 @@ export function personalSubscriptionEnv(source: NodeJS.ProcessEnv): NodeJS.Proce
   env.AGY_CLI_DISABLE_AUTO_UPDATE = 'true';
   return env;
 }
-export function spawnAcp(binary: string, args: string[], cwd: string): AcpTransport {
-  const process = spawn(binary, args, { cwd, env: personalSubscriptionEnv(globalThis.process.env), stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+export function spawnAcp(binary: string, args: string[], cwd: string, options: { profileStorage?: boolean } = {}): AcpTransport {
+  const env = personalSubscriptionEnv(globalThis.process.env);
+  // The pinned CLI uses its app-data token file on this code path instead of
+  // the shared native credential store. Enable it only for isolated profiles.
+  if (options.profileStorage) env.WSL_DISTRO_NAME = 'Cindy';
+  const process = spawn(binary, args, { cwd, env, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
   const listeners = new Set<(line: string) => void>(); const closed = new Set<() => void>();
   let ended = false; let tail = ''; const decoder = new StringDecoder('utf8');
+  let closing: Promise<void> | undefined;
   const end = () => { if (!ended) { ended = true; for (const l of closed) l(); } };
   process.on('error', end); process.on('exit', end);
   process.stdout.on('data', (chunk: Buffer) => {
@@ -32,11 +37,16 @@ export function spawnAcp(binary: string, args: string[], cwd: string): AcpTransp
     onClose(l) { closed.add(l); if (ended) queueMicrotask(l); return () => { closed.delete(l); }; },
     async close() {
       if ((ended && process.pid === undefined) || process.exitCode !== null || process.signalCode !== null) return;
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => { reject(new Error('ACP_PROCESS_EXIT_UNCONFIRMED')); }, 5000);
-        process.once('exit', () => { clearTimeout(timer); resolve(); });
+      closing ??= new Promise<void>((resolve, reject) => {
+        const onExit = () => { clearTimeout(timer); resolve(); };
+        const timer = setTimeout(() => {
+          process.removeListener('exit', onExit);
+          reject(new Error('ACP_PROCESS_EXIT_UNCONFIRMED'));
+        }, 5000);
+        process.once('exit', onExit);
         process.kill('SIGTERM');
-      });
+      }).finally(() => { closing = undefined; });
+      await closing;
     },
   };
 }

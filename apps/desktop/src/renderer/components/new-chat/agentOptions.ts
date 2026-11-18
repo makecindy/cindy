@@ -13,7 +13,7 @@ import { Sparkles } from 'lucide-react';
  * 不会出现「列表里多了个没图标的引擎」。
  */
 
-import type { ComponentType } from 'react';
+import { createElement, type ComponentType } from 'react';
 
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
@@ -27,11 +27,15 @@ export interface AgentOption {
   Mark: ComponentType<{ size?: number; className?: string }>;
 }
 
+function AntigravityMark(props: { size?: number; className?: string }) {
+  return createElement(Sparkles, props);
+}
+
 const VENDOR_PRESENTATION: Record<SelectableVendor, Omit<AgentOption, 'vendor'>> = {
   cc: { label: 'Claude', Mark: ClaudeMark },
   codex: { label: 'Codex', Mark: CodexMark },
   pi: { label: 'Pi', Mark: PiMark },
-  antigravity: { label: 'Antigravity', Mark: Sparkles },
+  antigravity: { label: 'Antigravity', Mark: AntigravityMark },
 };
 
 export const AGENT_OPTIONS: readonly AgentOption[] = SELECTABLE_VENDORS.map((vendor) => ({

@@ -28,7 +28,7 @@ function stubElectron() {
     effortLevels: [],
     permissionModes: [],
   }));
-  vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
+  vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities, listAvailableAgents: async () => ['claude-code', 'codex'] }, deviceLink: { invoke } } });
 }
 
 describe('modelDefinitions deviceId threading', () => {

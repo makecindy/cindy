@@ -1,4 +1,16 @@
 {
+  "googleSubscription": {
+    "usage": "Google-Nutzung",
+    "quotaUnavailable": "Das Kontingent des Kontos ist derzeit nicht verfügbar",
+    "quotaGuide": "Diese ACP-Version meldet kein Kontingent und keine Rücksetzzeit. Verwende /usage in der offiziellen Antigravity CLI.",
+    "openQuotaGuide": "Offizielle Kontingentabfrage öffnen",
+    "moneyUnavailable": "Diese Schnittstelle meldet weder Guthaben noch tatsächliche Kosten.",
+    "context": "Kontext der Sitzung (zuletzt gemeldet)",
+    "lastTurnTokens": "Tokens der letzten Runde",
+    "unavailable": "Nicht verfügbar",
+    "modelControlsThinking": "Dieses Modell steuert den Denkaufwand selbst.",
+    "noFastMode": "Diese Quelle bietet keinen separaten Wechsel zwischen Schnell und Standard."
+  },
   "runtimePlugins": {
     "save": "Speichern",
     "promptUnsupported": "Dieser Pi-Ausführungsort unterstützt keine Systemanweisungsfragmente.",
@@ -4288,6 +4300,21 @@
         "groupNote": "{{device}} hat diesen Anbieter zu einer Anbietergruppe gemacht. Wenn du damit eine Aufgabe startest, weist {{device}} sie gemäß der Gruppenstrategie einem der unten aufgeführten Computer zu und verschiebt sie auf einen anderen, falls bei diesem Computer ein Problem auftritt. Solange {{device}} online ist, kannst du die Gruppe und ihre Freigaben hier unter „Fernzugriff & Freigabe“ verwalten.",
         "groupMembersTitle": "Computer in der Gruppe",
         "groupMembersFailed": "Der Status der Computer in der Gruppe konnte gerade nicht abgerufen werden."
+      },
+      "antigravity": {
+        "configure": "Manuell verbinden",
+        "setupHint": "Verbinde dein Google-AI-Abo mit einer geprüften Version von Antigravity CLI 1.5.9. Cindy verwendet nur das Kontingent des Abos.",
+        "activeAccount": "Aktives Google-Konto",
+        "existing": "Lokales Standardkonto",
+        "removeAccount": "Konto entfernen",
+        "removeDescription": "Cindy löscht die lokale Anmeldung und die Einstellungen für dieses Konto. Deine Cindy-Unterhaltungen bleiben erhalten.",
+        "removeDefaultDescription": "Cindy trennt dieses Konto. Die Google-Anmeldung auf diesem Mac und deine Cindy-Unterhaltungen bleiben erhalten.",
+        "accountBusy": "Eine Google-Aufgabe oder Kontoänderung läuft noch. Versuche es danach erneut.",
+        "account": "Google-Konto {{number}}",
+        "refreshQuota": "Kontingent aktualisieren",
+        "legacyQuota": "Füge ein Google-Konto hinzu, um sein Kontingent in Cindy zu sehen.",
+        "noQuota": "Das Google-Kontingent ist derzeit nicht verfügbar.",
+        "failed": "Der Vorgang für das Google-Konto konnte nicht abgeschlossen werden."
       },
       "genericOAuth": {
         "subtitle": "Abonnementkonto",
@@ -10892,6 +10919,18 @@
     "nameLabel": "Wie sollen wir den Freund nennen?",
     "close": "Schließen",
     "list": {
+      "folders": {
+        "create": "Neuer Ordner",
+        "rename": "Ordner umbenennen",
+        "dissolve": "Ordner auflösen",
+        "name": "Ordnername",
+        "move": "In Ordner verschieben",
+        "unfiled": "Außerhalb der Ordner",
+        "up": "Nach oben verschieben",
+        "down": "Nach unten verschieben",
+        "actions": "Aktionen für {{name}}",
+        "saveFailed": "Ordner konnten nicht gespeichert werden."
+      },
       "createMenu": "Erstellen",
       "createTeammate": "Neuer Freund",
       "joinWithLink": "Einladungslink eingeben…",
@@ -14035,6 +14074,24 @@
       "listAria": "Berechtigungsmodi",
       "autoFallback": "Die automatische Prüfung ist vorübergehend nicht verfügbar. Auf Standardberechtigungen umgestellt; bei Bedarf wirst du gefragt.",
       "modes": {
+        "antigravity": {
+          "ask": {
+            "label": "Standardberechtigungen",
+            "description": "Du genehmigst Änderungen und Befehle bei Bedarf."
+          },
+          "acceptEdits": {
+            "label": "Änderungen automatisch akzeptieren",
+            "description": "Dateien dürfen direkt bearbeitet werden. Andere Aktionen genehmigst du bei Bedarf."
+          },
+          "auto": {
+            "label": "Automatische Prüfung",
+            "description": "Änderungen im Arbeitsbereich und sichere Befehle werden automatisch ausgeführt. Aktionen mit hohem Risiko benötigen weiterhin deine Freigabe."
+          },
+          "bypassPermissions": {
+            "label": "Vollzugriff",
+            "description": "Gewöhnliche Aktionen sind direkt erlaubt. Dazu gehören der Zugriff auf Dateien außerhalb des Arbeitsbereichs und die Ausführung von Netzwerkbefehlen."
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "Standardberechtigungen",

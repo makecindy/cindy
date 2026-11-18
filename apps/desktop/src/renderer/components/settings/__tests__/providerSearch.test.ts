@@ -31,6 +31,14 @@ describe('provider name search', () => {
     const choices = providerSearchChoices(providers, [], 'en', 'Ollama');
     expect(choices.map(r => r.target)).toEqual([{ kind: 'builtin', providerId: 'anthropic' }, { kind: 'ollama' }, { kind: 'llamacpp' }]);
   });
+  it('finds the native Google setup card after the subscription is removed', () => {
+    const provider = { id: 'google-antigravity-subscription', name: 'Google AI · Antigravity',
+      source: 'builtin', auth: { method: 'oauth' }, removed: true, connected: false } as ProviderView;
+    const choices = providerSearchChoices([provider], [], 'en', 'Ollama');
+    expect(matchProviderChoices(choices, 'Antigravity').map(row => row.target)).toEqual([
+      { kind: 'builtin', providerId: 'google-antigravity-subscription' },
+    ]);
+  });
 });
 
 it('keeps managed llama.cpp separate from the existing-service preset', () => {

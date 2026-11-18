@@ -4258,6 +4258,21 @@
         "groupMembersTitle": "組內電腦",
         "groupMembersFailed": "暫時讀不到組內電腦的狀態。"
       },
+      "antigravity": {
+        "configure": "手動連接",
+        "setupHint": "請使用經過驗證的 Antigravity CLI 1.5.9 連接 Google AI 訂閱。Cindy 僅使用訂閱額度。",
+        "activeAccount": "目前的 Google 帳號",
+        "existing": "本機預設帳號",
+        "removeAccount": "刪除帳號",
+        "removeDescription": "將刪除此帳號在 Cindy 的本機授權和設定，並保留 Cindy 對話記錄。",
+        "removeDefaultDescription": "Cindy 將解除此帳號的連線，並保留這台 Mac 上的 Google 登入和 Cindy 對話記錄。",
+        "accountBusy": "Google 任務或帳號操作正在進行，請稍後再試。",
+        "account": "Google 帳號 {{number}}",
+        "refreshQuota": "重新整理額度",
+        "legacyQuota": "新增 Google 帳號後，即可在 Cindy 中查看該帳號的額度。",
+        "noQuota": "暫時無法讀取 Google 額度。",
+        "failed": "無法完成 Google 帳號操作。"
+      },
       "genericOAuth": {
         "subtitle": "訂閱帳號",
         "reopenLoginPage": "重新開啟登入頁面",
@@ -10859,6 +10874,18 @@
     "nameLabel": "怎麼稱呼",
     "close": "關閉",
     "list": {
+      "folders": {
+        "create": "新增資料夾",
+        "rename": "重新命名資料夾",
+        "dissolve": "解散資料夾",
+        "name": "資料夾名稱",
+        "move": "移至資料夾",
+        "unfiled": "移出資料夾",
+        "up": "上移",
+        "down": "下移",
+        "actions": "{{name}}的操作",
+        "saveFailed": "無法儲存資料夾。"
+      },
       "createMenu": "新增",
       "createTeammate": "新增夥伴",
       "joinWithLink": "輸入邀請連結…",
@@ -13993,6 +14020,24 @@
       "listAria": "權限模式",
       "autoFallback": "自動審核暫時不可用，已切換為預設權限；需要時會詢問你。",
       "modes": {
+        "antigravity": {
+          "ask": {
+            "label": "預設權限",
+            "description": "編輯和指令操作按需由你核准。"
+          },
+          "acceptEdits": {
+            "label": "允許編輯",
+            "description": "可直接編輯檔案，其他操作按需由你核准。"
+          },
+          "auto": {
+            "label": "自動審核",
+            "description": "可自動編輯工作區內的檔案及執行安全指令，高風險操作仍需確認。"
+          },
+          "bypassPermissions": {
+            "label": "完全訪問",
+            "description": "一般操作直接允許，可存取工作區外的檔案及連網執行指令。"
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "預設權限",

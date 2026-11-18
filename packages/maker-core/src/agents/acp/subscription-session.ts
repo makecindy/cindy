@@ -99,7 +99,7 @@ export class AcpSubscriptionSession {
       this.nativeDefaults.set(this.currentModel, thought!.currentValue as Effort);
     }
     if (!picker) return;
-    this.models = selectValues(picker).filter(m => typeof m.value === 'string' && typeof m.name === 'string').map(m => {
+    const discovered = selectValues(picker).filter(m => typeof m.value === 'string' && typeof m.name === 'string').map(m => {
       const id = m.value as string;
       const offered = id === this.currentModel ? selectValues(thought) : [];
       // The compatibility model list contains the server's real effort variants.
@@ -110,6 +110,9 @@ export class AcpSubscriptionSession {
       return { id, name: m.name as string, efforts, defaultEffort: this.nativeDefaults.get(id) ?? null,
         ...(Object.keys(labels).length ? { effortDisplayNames: labels } : {}) };
     });
+    if (discovered.length > 0 || this.models.length === 0) {
+      this.models = discovered;
+    }
   }
   get currentEffort(): Effort | undefined {
     const value = this.configOptions.find(option => option.category === 'thought_level')?.currentValue;
@@ -199,7 +202,10 @@ export class AcpSubscriptionSession {
   async discoverModelOptions(): Promise<void> {
     const model = this.currentModel; const effort = this.currentEffort;
     if (!model || !this.configOptions.some(option => option.category === 'model')) return;
-    const restore = async () => { await this.setModel(model); if (effort !== undefined) await this.setEffort(effort); };
+    const restore = async () => {
+      if (this.currentModel !== model) await this.setModel(model);
+      if (effort !== undefined && this.currentEffort !== effort) await this.setEffort(effort);
+    };
     try {
       for (const candidate of [...this.models]) {
         if (!isAntigravitySubscriptionModel(candidate.id) || candidate.id === model || !candidate.efforts?.length) continue;
