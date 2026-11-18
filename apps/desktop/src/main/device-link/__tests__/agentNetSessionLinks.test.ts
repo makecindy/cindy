@@ -310,7 +310,7 @@ describe('AgentNetSessionLinks', () => {
 
   it('waits for the session of a peer that just connected instead of settling on Device Link, and only within the grace period', async ({ onTestFinished }) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => { vi.useRealTimers(); });
     const connectedAt = new Map<string, number>([['a-host', performance.now()]]);
     const { links, connect } = pair({ connected: false, connectedAt: (id) => connectedAt.get(id) ?? null });
     answerOnSession(links.host);
