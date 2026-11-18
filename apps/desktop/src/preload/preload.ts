@@ -92,6 +92,12 @@ import {
 } from '../shared/projectOrderSettings';
 import type { SessionDragPreviewPalette } from '../shared/sessionDragPreview';
 import {
+  XCODE_BUILD_INVOKE,
+  XCODE_BUILD_PUSH,
+  type XcodeBuildBridge,
+  type XcodeBuildEvent,
+} from '../shared/xcodeBuild';
+import {
   AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL,
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
   AGENT_ISLAND_PREVIEW_SOUND_CHANNEL,
@@ -690,6 +696,7 @@ const fanOutSidebarProjectOrderChanged = createIpcFanOut(SIDEBAR_PROJECT_ORDER_C
 // Workdir File Browser — push events from chokidar (add/change/unlink/...)
 const fanOutFileBrowserEvent = createIpcFanOut('maker:file-browser:event');
 const fanOutFileBrowserTransfer = createIpcFanOut('maker:file-browser:transfer');
+const fanOutXcodeBuildEvent = createIpcFanOut(XCODE_BUILD_PUSH.EVENT);
 // Project-wide text search (rg-backed) — match/end/error stream events keyed by searchId.
 const fanOutSearchEvent = createIpcFanOut('maker:search:event');
 // 系统级通知点击回调：把 sessionId 广播给 renderer 做路由跳转。
@@ -1441,6 +1448,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onData: (cb: IpcCallback) => fanOutTerminalData(cb),
     onExit: (cb: IpcCallback) => fanOutTerminalExit(cb),
   },
+
+  // Local Xcode build runner. Output and lifecycle are owned by this window.
+  xcode: {
+    discover: (request) => ipcRenderer.invoke(XCODE_BUILD_INVOKE.DISCOVER, request),
+    start: (request) => ipcRenderer.invoke(XCODE_BUILD_INVOKE.START, request),
+    stop: (buildId) => ipcRenderer.invoke(XCODE_BUILD_INVOKE.STOP, buildId),
+    flutterAction: (buildId, action) =>
+      ipcRenderer.invoke(XCODE_BUILD_INVOKE.FLUTTER_ACTION, buildId, action),
+    getStatus: (request) => ipcRenderer.invoke(XCODE_BUILD_INVOKE.STATUS, request),
+    onEvent: (callback: (event: XcodeBuildEvent) => void) =>
+      fanOutXcodeBuildEvent((payload) => callback(payload as XcodeBuildEvent)),
+  } satisfies XcodeBuildBridge,
 
   // 应用级快捷键 (shared/appShortcuts registry 的用户 override 通道)。
   // renderer 只拿 overrides + platform, 生效值合并在 renderer 侧用同一份
