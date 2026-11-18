@@ -52,6 +52,7 @@ function isPlainLocalTask(row: ModelGroupSwitchOfferSessionRow): boolean {
 export async function computeModelGroupSwitchOffer(
   deps: ModelGroupSwitchOfferDeps,
   sessionId: string,
+  recovery?: { visited: ReadonlySet<string>; accountUnavailable: boolean; recordUnavailable(candidate: ModelGroupRoute['candidates'][number]): void; current: { agentKind: ModelGroupAgentKind; providerId: string; model: string } },
 ): Promise<ModelGroupSwitchOffer | null> {
   const binding = deps.readBinding(sessionId);
   if (!binding) return null;
@@ -60,8 +61,8 @@ export async function computeModelGroupSwitchOffer(
   if (!isModelGroupAgentKind(row.agentKind) || !row.providerId || !row.model) return null;
   // 任务此刻的运行位置(只给本机任务提议，所以这里总是本机)；记录里的候选键同样带位置。
   const location = row.agentDeviceId || undefined;
-  const current = { agentKind: row.agentKind, providerId: row.providerId, model: row.model, agentDeviceId: location };
-  if (modelGroupCandidateKey(current) !== binding.pickedKey) {
+  const current = recovery?.current ?? { agentKind: row.agentKind, providerId: row.providerId, model: row.model, agentDeviceId: location };
+  if (modelGroupCandidateKey(current) !== binding.pickedKey && !recovery?.visited.has(binding.pickedKey)) {
     // 模型或来源此刻不是记下的这个(用户自己换了，或别处换了)：不提议。记录不删 —— 跨引擎的换模型
     // 可能只是登记了「下一条消息再换」，任务还在旧模型上跑；等真换过去时记录要照样有效。
     return null;
@@ -72,11 +73,18 @@ export async function computeModelGroupSwitchOffer(
   const { route } = target;
   // 同一个供应商连接是同一个账号、同一份配额：一并跳过，连同正在用的这个。
   // 在别的位置运行的来源也跳过：把运行中的任务挪到另一台电脑不是这个提议做的事。
+  const currentKey = modelGroupCandidateKey(current);
+  const accountUnavailable = recovery?.accountUnavailable ?? true;
   const eligible: ModelGroupRoute = {
     ...route,
-    candidates: route.candidates.map((candidate) => (candidate.agentDeviceId !== location || candidate.providerId === current.providerId
-      ? { ...candidate, off: true }
-      : candidate)),
+    candidates: route.candidates.map((candidate) => {
+      const key = modelGroupCandidateKey(candidate);
+      const failed = candidate.agentDeviceId === location && (key === currentKey ||
+        (accountUnavailable && candidate.providerId === current.providerId));
+      if (failed) recovery?.recordUnavailable(candidate);
+      return candidate.agentDeviceId !== location || failed || recovery?.visited.has(key)
+        ? { ...candidate, off: true } : candidate;
+    }),
   };
   if (!eligible.candidates.some((candidate) => !candidate.off)) return null;
   // 跳过的来源(含别的位置上的)已标成停用，不为它们去读别处的目录。

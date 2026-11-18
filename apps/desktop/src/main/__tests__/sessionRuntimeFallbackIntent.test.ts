@@ -31,6 +31,7 @@ function harness() {
   const failed = vi.fn(() => true);
   const readSessionAgentDeviceId = vi.fn<(sessionId: string) => Promise<string | null>>(async () => null);
   const query = { from: () => query, where: () => query, limit: async () => [{ status: 'active' }] };
+  const groupCandidate = vi.fn(async (): Promise<{ candidate: typeof candidate } | null> => null);
   const deps = {
     agentSwitchPending: pending,
     sessionRuntimeGenerationMatches: (_id: string, expected?: number) => expected === undefined || expected === generation,
@@ -39,6 +40,8 @@ function harness() {
     readSessionRuntimeProfiles: async () => ({ effective: current, control: { generation, pending: null } }),
     hasExplicitSessionTaskModel: async () => false,
     readBotFallbackCandidate: readCandidate,
+    readSessionRuntimeFallbackSettings: () => ({ enabled: true }),
+    readModelGroupFallbackCandidate: groupCandidate,
     maker: { getSession: () => current },
     pendingSessionRuntimeFallbackRebuilds: new WeakMap(),
     withSendToSessionLock: withLock,
@@ -66,7 +69,7 @@ function harness() {
     pending.set('session', { sameAgentSelection: true, targetAgentKind: 'codex', model: 'chosen', providerId: 'xd' });
     generation += 1;
   };
-  return { ...runtime, pending, pick, readCandidate, switchAgent, accept, withLock, apply, cancel, clearCredential, pendingCredential, failed, readSessionAgentDeviceId, current, candidate, generation: () => generation };
+  return { ...runtime, pending, pick, groupCandidate, readCandidate, switchAgent, accept, withLock, apply, cancel, clearCredential, pendingCredential, failed, readSessionAgentDeviceId, current, candidate, generation: () => generation };
 }
 
 describe('automatic runtime selection respects the user send boundary', () => {
@@ -79,6 +82,16 @@ describe('automatic runtime selection respects the user send boundary', () => {
     expect(h.readCandidate).toHaveBeenCalledTimes(2);
     expect(h.switchAgent).not.toHaveBeenCalled();
     expect(h.apply).not.toHaveBeenCalled();
+  });
+
+  // Unit: a group supplies the next model to the existing session transaction.
+  it.each([false, true])('uses the session switch for a group candidate (cross-harness=%s)', async crossHarness => {
+    const h = harness();
+    h.readCandidate.mockResolvedValue({ isBot: false, candidate: null });
+    h.groupCandidate.mockResolvedValue({ candidate: crossHarness ? h.candidate : { ...h.current, model: 'second' } });
+    expect(await h.run('session', 1, 1, true)).toMatchObject({ outcome: 'switched' });
+    expect(h.switchAgent).toHaveBeenCalledTimes(crossHarness ? 1 : 0);
+    expect(h.apply).toHaveBeenCalledTimes(crossHarness ? 0 : 1);
   });
 
   it('stops after a committed harness switch whose engine failed to start', async () => {

@@ -60,6 +60,9 @@ export interface SessionRuntimeFallbackPorts<RuntimeSession extends { agentKind:
     candidate: SessionRuntimeProfile | null;
     routeLocked?: boolean;
   }>;
+  readModelGroupFallbackCandidate?(sessionId: string, current: SessionRuntimeProfile, visited: readonly string[], accountUnavailable: boolean, generation: number): Promise<{
+    candidate: SessionRuntimeProfile | null;
+  } | null>;
   readSessionAgentDeviceId(sessionId: string): Promise<string | null | undefined>;
   readSessionRuntimeFallbackSettings(): { enabled: boolean };
   getDesktopProviderService: typeof getProviderServiceType;
@@ -86,7 +89,7 @@ export interface SessionRuntimeFallbackPorts<RuntimeSession extends { agentKind:
  */
 export function createSessionRuntimeFallback<RuntimeSession extends { agentKind: string; remoteHostId?: string | null }>({
   maker, readSessionRuntimeProfiles, canApplyAutomaticRuntimeSelection, readBotFallbackCandidate,
-  readSessionAgentDeviceId, readSessionRuntimeFallbackSettings, getDesktopProviderService,
+  readModelGroupFallbackCandidate, readSessionAgentDeviceId, readSessionRuntimeFallbackSettings, getDesktopProviderService,
   pendingSessionRuntimeFallbackRebuilds, applySessionRuntimeSelection, getPendingCredentialSwitchTarget,
   clearPendingCredentialSwitchForSession, broadcastSessionRuntimeProjection, agentSwitchDeps, performSessionAgentSwitch,
   runtimeSelectionRequiresModelWindowConfirmation, log,
@@ -97,6 +100,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
     attemptToken: number,
     requireRouteChange = false,
     isCurrent: () => boolean = () => true,
+    accountUnavailable = false,
   ): Promise<RuntimeFallbackResult<RuntimeSession>> => {
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
     let runtimeSession: RuntimeSession | null = null;
@@ -120,7 +124,12 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       let currentForFallback = profiles.effective;
       let candidate = botFallback.candidate;
-      if (!botFallback.isBot) {
+      const group = !botFallback.isBot && readSessionRuntimeFallbackSettings().enabled
+        ? await readModelGroupFallbackCandidate?.(sessionId, profiles.effective, profiles.control.visitedRoutes, accountUnavailable, profiles.control.generation)
+        : null;
+      if (!isCurrent()) return { session: null, outcome: 'superseded' };
+      if (group) candidate = group.candidate;
+      if (!botFallback.isBot && !group) {
         if (await readSessionAgentDeviceId(sessionId)) return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
         if (requireRouteChange) return { session: null, outcome: 'exhausted' };
         if (episodeAttempt < 2 || !readSessionRuntimeFallbackSettings().enabled) return { session: null, outcome: 'unchanged' };

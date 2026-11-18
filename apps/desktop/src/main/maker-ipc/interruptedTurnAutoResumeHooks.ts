@@ -10,6 +10,7 @@ import {
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
 import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotCandidateUnavailable, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
+import { isQuotaExhaustedErrorMessage } from '../../shared/providerErrors.js';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
@@ -31,6 +32,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     | 'finalizeSuppressedError' | 'abandonUnconfirmedPersistedResume' | 'surfaceSuppressedErrorForRetry'
   >;
   botFallbackInputs: { has(createOpts: object): boolean };
+  modelGroupInputs?: { has(createOpts: object): boolean };
   workerInputs?: { has(createOpts: object): boolean };
   scheduledQuotaInputs?: { has(createOpts: object): boolean };
   saveTurnStartedAtForDeferred(sessionId: string): void;
@@ -43,6 +45,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     attemptToken: number,
     requireRouteChange: boolean,
     isCurrent: () => boolean,
+    accountUnavailable?: boolean,
   ): Promise<RuntimeFallbackResult<RuntimeSession>>;
   pendingSessionRuntimeFallbackRebuilds: { delete(session: RuntimeSession): unknown };
   providerGroupHeldErrors: { stash(sessionId: string, holdId: number, detail: unknown): void };
@@ -65,7 +68,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
  * surface or flush the held error when no attempt runs. Shared by the desktop and the Node Host.
  */
 export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends object>({
-  inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs, workerInputs,
+  inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs,
   saveTurnStartedAtForDeferred, beginSchedulerAutoResume, getStableSessionForTurnBoundary,
   pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
   providerGroupHeldErrors, providerGroupHeldTerminals, pendingSchedulerAutoResumeRunBySession,
@@ -81,7 +84,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       : signals.reason === 'session_event_loop_crashed'
       ? !!item && workerInputs?.has(item.createOpts) === true && isUnexpectedWorkerStreamEnd(signals)
       : isInterruptedTurnError(signals) ||
-        (!!item && botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals));
+        (!!item && (botFallbackInputs.has(item.createOpts) || modelGroupInputs?.has(item.createOpts) === true) && isBotCandidateUnavailable(signals));
   const hooks: {
     onResumableTurnErrorDiscarded: Hook<'onResumableTurnErrorDiscarded'>;
     onResumableTurnError: Hook<'onResumableTurnError'>;
@@ -113,8 +116,9 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       item: AgentInputQueuedMessage,
     ) => {
       if (!canRecoverTurn(signals, item) || inputCoordinator.isExecutionPaused(sessionId)) return null;
-      const botInput = botFallbackInputs.has(item.createOpts);
-      const requireRouteChange = botInput && isBotCandidateUnavailable(signals);
+      const modelGroupInput = modelGroupInputs?.has(item.createOpts) === true;
+      const configuredInput = modelGroupInput || botFallbackInputs.has(item.createOpts);
+      const requireRouteChange = configuredInput && isBotCandidateUnavailable(signals);
       const reportPreparation = signals.reason === 'orca-report-preparation';
       const localPreparation = signals.reason === 'scheduler-snapshot-preparation';
       const startupAdmission = signals.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON;
@@ -188,6 +192,9 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   decision.attemptToken,
                   requireRouteChange,
                   isCurrent,
+                  ...(modelGroupInput && (signals.errorStatus === 402 || signals.sdkError === 'billing_error' ||
+                    isAccountUsageLimitError(signals) || isQuotaExhaustedErrorMessage(signals.message ?? ''))
+                    ? [true] as const : []),
                 );
               fallbackRebuildSession = fallback.session;
               if (!isCurrent()) return;

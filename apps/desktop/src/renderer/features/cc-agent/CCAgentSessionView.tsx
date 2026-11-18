@@ -95,6 +95,8 @@ import { createRemoteSessionSubscription } from '@/lib/remoteSessionSubscription
 import { Spinner } from '@/components/ui/spinner';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
+import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
+import { isOverloadErrorMessage } from '@/utils/overloadError';
 import { ChatInput, type SessionModelPick } from '@/components/new-chat/ChatInput';
 import { PluginUiSlot, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
 import {
@@ -2662,7 +2664,7 @@ function CCAgentSessionContent({
   const modelGroupSwitchOffer = useModelGroupSwitchOffer(
     sessionId,
     !readOnly && !botChatIdentity && !!error && !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
-      && (!!usageLimitWait || usageLimitRecovery?.isAccountUsageLimit === true),
+      && (!!usageLimitWait || usageLimitRecovery?.isAccountUsageLimit === true || isQuotaExhaustedErrorMessage(error) || isOverloadErrorMessage(error)),
     errorPersistId ?? error,
     // 用户自己换过模型或来源后，旧提议作废，按现在的任务重新问。
     `${session?.agentKind ?? ''}\u0000${session?.providerId ?? ''}\u0000${session?.model ?? ''}`,

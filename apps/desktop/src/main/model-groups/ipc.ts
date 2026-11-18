@@ -96,6 +96,10 @@ const switchOfferDeps = {
   now: Date.now,
 };
 
+export function readModelGroupRecoveryOffer(sessionId: string, recovery: NonNullable<Parameters<typeof computeModelGroupSwitchOffer>[2]>) {
+  return computeModelGroupSwitchOffer(switchOfferDeps, sessionId, recovery);
+}
+
 function sessionIdOf(value: Record<string, unknown>): string {
   const sessionId = value.sessionId;
   if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256) {

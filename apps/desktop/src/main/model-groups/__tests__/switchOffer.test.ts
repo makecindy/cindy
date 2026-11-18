@@ -90,6 +90,21 @@ function deps(overrides: {
 }
 
 describe('computeModelGroupSwitchOffer', () => {
+  // Unit: after the initially bound account fails, a second failure must advance
+  // past both visited routes, even when the session row still holds the baseline.
+  it('advances an automatic recovery past both failed candidates', async () => {
+    const visited = new Set<string>();
+    const recover = (index: number, accountUnavailable: boolean) => computeModelGroupSwitchOffer(deps(), 's1', {
+      current: CANDIDATES[index], accountUnavailable, visited,
+      recordUnavailable: candidate => visited.add(modelGroupCandidateKey(candidate)),
+    });
+    expect(await recover(0, true)).toMatchObject({ providerId: 'anthropic' });
+    expect(await recover(2, false)).toMatchObject({ providerId: 'acct-b' });
+    expect(await recover(3, false)).toBeNull();
+    visited.clear();
+    expect(await recover(0, false)).toMatchObject({ providerId: 'acct-a', model: 'gpt-mini' });
+  });
+
   it.each([
     ['skips the same account and offers the next source, across engines', {}, { providerId: 'anthropic', agentKind: 'cc', crossEngine: true, sourceName: 'Claude' }],
     ['skips a source whose quota is used up', { facts: [FACTS[0], FACTS[1], fact('Claude', used(100)), FACTS[3]] }, { providerId: 'acct-b', crossEngine: false }],
