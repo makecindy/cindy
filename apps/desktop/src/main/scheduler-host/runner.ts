@@ -265,7 +265,7 @@ export interface SchedulerQueueDeps {
       planMode?: boolean;
     }) => void | Promise<void>;
     onAcceptedRollback?: (reason?: 'cancelled-before-dispatch') => void | Promise<void>;
-    onDiscarded?: (error?: string) => void;
+    onDiscarded?: () => void;
   }): Promise<{ clientId: string } | { duplicate: true } | { retry: true }>;
   removeQueuedPrompt(sessionId: string, clientId: string): void;
   releasePrompt?(sessionId: string, clientId: string): void;

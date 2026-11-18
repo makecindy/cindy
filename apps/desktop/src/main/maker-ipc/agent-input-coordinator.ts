@@ -7201,9 +7201,6 @@ export class AgentInputCoordinator {
     message: string,
     outcome: unknown,
   ): boolean {
-    // The snapshot coordinator owns the typed local deadline and already bounds
-    // its retry. Do not stack a second recovery loop after that budget expires.
-    if (outcome instanceof SnapshotOperationDeadlineError) return false;
     // Only the pre-vendor hook boundary is proven safe here. An uncertain send,
     // permission rejection or a user cancellation must not acquire a new retry.
     if (item.origin?.kind !== 'scheduler' || !item.origin.runId
@@ -7213,7 +7210,9 @@ export class AgentInputCoordinator {
     if (isTurnDispatchUnconfirmedError(outcome) || failure?.code === 'PRECONDITION_FAILED'
       || failure?.reason === 'cancelled-before-dispatch'
       || message.startsWith('[SEND_CANCELLED_BEFORE_DISPATCH]')) return false;
-    const signals = message === 'Snapshot operation deadline exceeded'
+    // Only the local typed budget authorizes the backoff retry. Provider text,
+    // even with the same wording, is never proof that dispatch did not happen.
+    const signals = outcome instanceof SnapshotOperationDeadlineError
       ? { reason: 'scheduler-snapshot-preparation' } : undefined;
     if (!this.isResumableTurnErrorCandidate(sessionId, message, signals, item)) return false;
     this.setActiveTurnRecovery(state, item, { allowSchedulerAutoResume: true });

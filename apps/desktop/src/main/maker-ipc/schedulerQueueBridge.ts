@@ -6,7 +6,7 @@ import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordina
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 
 export interface SchedulerQueuedPromptObserver {
-  onDiscarded(error?: string): void;
+  onDiscarded(): void;
   signal?: AbortSignal;
 }
 
@@ -15,20 +15,24 @@ export function schedulerFailureDetail(message: string): string {
   return redactSensitiveText(message)
     .replace(/\r?\n\s*at\s[^\r\n]*/g, '')
     .replace(/(["'])(?:[A-Za-z]:[\\/]|\/|~[\\/])[^\r\n]*?\1/g, '<path>')
-    .replace(/(?:[A-Za-z]:[\\/]|~[\\/]|\/(?:Users|home|tmp|var|private)\/)[^\s"'<>]*/g, '<path>')
+    // A local path starts a token. URLs keep their host and path: `https://`
+    // is not a drive letter and `example.com/Users/` is not a home directory.
+    .replace(/(?<![\w.+~\/-])(?:[A-Za-z]:[\\/]|~[\\/]|\/(?:Users|home|tmp|var|private)\/)[^\s"'<>]*/g, '<path>')
     .replace(/\s+/g, ' ').trim().slice(0, 1024);
 }
 
-/** Both chat Stop and schedule pause/delete fence the same pre-vendor reservation. */
+/**
+ * Both chat Stop and schedule pause/delete fence the same pre-vendor reservation.
+ * A pause/delete therefore ends a stalled snapshot as a cancellation, never as
+ * the local deadline that scheduler auto-resume (#10834) may retry with backoff.
+ */
 export async function prepareQueuedPromptSnapshot(
   snapshots: Pick<GitSnapshotCoordinator, 'onTurnStart'> | null | undefined,
   watchers: Map<string, SchedulerQueuedPromptObserver>,
   sessionId: string, item: AgentInputQueuedMessage, signal?: AbortSignal,
 ): Promise<void> {
   const runSignal = watchers.get(item.clientId)?.signal;
-  await snapshots?.onTurnStart(sessionId, runSignal && signal ? AbortSignal.any([signal, runSignal]) : signal, {
-    retryIntentTimeout: !!signal && !!runSignal && item.origin?.kind === 'scheduler' && !!item.origin.runId && !item.autoResume,
-  });
+  await snapshots?.onTurnStart(sessionId, runSignal && signal ? AbortSignal.any([signal, runSignal]) : signal);
 }
 
 export interface SchedulerQueuedPromptRequest {
@@ -53,7 +57,7 @@ export interface SchedulerQueuedPromptRequest {
   /** 派发已 accept 但最终未成为运行 turn(取消/回滚)时回调。 */
   onAcceptedRollback?: () => void | Promise<void>;
   /** 排队项未派发即被丢弃(用户删除队列行 / stop 清队列 / 会话清理)时回调。 */
-  onDiscarded?: (error?: string) => void;
+  onDiscarded?: () => void;
 }
 
 /**

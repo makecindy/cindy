@@ -59,37 +59,6 @@ afterEach(() => vi.useRealTimers());
 // #7259, unit: Git failures degrade, but unrecorded dispatches cannot be made
 // safe after restart. A stalled intent must reject within the same total budget.
 describe('durable snapshot dispatch intent', () => {
-  // #10802 / unit: a scheduled send may repeat only its positively pre-vendor
-  // intent preparation. Existing budget tests did not cover a bounded recovery.
-  it.each(['recovered', 'exhausted', 'stopped', 'permission'] as const)(
-    'bounds scheduled intent timeout recovery: %s', async (outcome) => {
-      vi.useFakeTimers();
-      const pending = deferred<{ attemptId: string }>();
-      const controller = new AbortController();
-      const recordTurnAttempt = vi.fn().mockImplementationOnce(() =>
-        outcome === 'permission' ? Promise.reject(new Error('permission denied')) : pending.promise);
-      recordTurnAttempt.mockImplementation(() => outcome === 'exhausted'
-        ? new Promise(() => {}) : Promise.resolve({ attemptId: 'recovered' }));
-      const deps = makeDeps({ snapshotTimeoutMs: 50, recordTurnAttempt });
-      const coordinator = new GitSnapshotCoordinator(deps);
-      const result = coordinator.onTurnStart('s1', controller.signal, { retryIntentTimeout: true });
-      const assertion = outcome === 'recovered' ? expect(result).resolves.toBeUndefined()
-        : expect(result).rejects.toThrow(outcome === 'permission' ? 'permission denied'
-          : outcome === 'stopped' ? 'stopped' : 'Snapshot operation deadline exceeded');
-      void assertion.catch(() => {});
-      await vi.advanceTimersByTimeAsync(0);
-      if (outcome === 'stopped') controller.abort(new Error('stopped'));
-      await vi.advanceTimersByTimeAsync(100);
-      await assertion;
-      expect(recordTurnAttempt).toHaveBeenCalledTimes(['stopped', 'permission'].includes(outcome) ? 1 : 2);
-      expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(outcome === 'recovered' ? 1 : 0);
-      pending.resolve({ attemptId: 'late' });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(outcome === 'recovered' ? 1 : 0);
-      coordinator.onSessionClosed('s1');
-    },
-  );
-
   it('rejects a stalled intent and never starts Git after its late resolution', async () => {
     vi.useFakeTimers();
     const pending = deferred<{ attemptId: string; anchor: string }>();

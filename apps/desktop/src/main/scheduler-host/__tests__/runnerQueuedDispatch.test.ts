@@ -336,7 +336,7 @@ interface QueueHarness {
   /** 同上但不吞 AcceptedCallbackDispatchCancelled,供取消语义的回归用例断言。 */
   acceptRaw(permissions?: { permissionMode?: string; planMode?: boolean }): Promise<void>;
   /** 模拟排队项被丢弃(用户删除 / abort 撤项)。 */
-  discard(error?: string): void;
+  discard(): void;
   /** 模拟普通自动续跑最终仍失败。 */
   failAutoResume(error?: string): void;
   startQuotaWait(): void;
@@ -417,8 +417,8 @@ function createQueueHarness(opts: {
       catch (error) { request?.onPreparationFailed?.(error); return; }
       await enqueueCalls.at(-1)?.onAccepted(permissions);
     },
-    discard(error) {
-      enqueueCalls.at(-1)?.onDiscarded?.(error);
+    discard() {
+      enqueueCalls.at(-1)?.onDiscarded?.();
     },
     failAutoResume(error) {
       for (const listener of [...autoResumeFailureListeners]) listener(error);
@@ -536,7 +536,9 @@ beforeEach(() => {
 describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
   // #10802 / unit: before accept there is no Session event listener. The
   // scheduler must settle from the queued failure callback, not its later poll.
-  it.each(['recovered', 'exhausted', 'permission', 'stop', 'clear', 'pause', 'delete', 'unknown-send'] as const)(
+  // Only the real typed snapshot deadline is handed to #10834's backoff recovery;
+  // its resend and exhaustion are covered by the persisted-recovery tests below.
+  it.each(['deadline', 'permission', 'stop', 'clear', 'pause', 'delete', 'unknown-send'] as const)(
     'settles pre-accept snapshot preparation through the real queue: %s', async (outcome) => {
     vi.useFakeTimers();
     const h = createSessionHarness(async () => ({ accepted: true }));
@@ -546,10 +548,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     let accepted: (() => void | Promise<void>) | undefined;
     let releaseIntent!: (value: { attemptId: string }) => void;
     const stalled = new Promise<{ attemptId: string }>(resolve => { releaseIntent = resolve; });
-    const recordTurnAttempt = vi.fn().mockImplementationOnce(() => outcome === 'permission'
+    const recordTurnAttempt = vi.fn(() => outcome === 'permission'
       ? Promise.reject(new Error('permission denied'))
-      : outcome === 'unknown-send' ? Promise.resolve({ attemptId: 'original' }) : stalled)
-      .mockImplementation(() => outcome === 'exhausted' ? stalled : Promise.resolve({ attemptId: 'recovered' }));
+      : outcome === 'unknown-send' ? Promise.resolve({ attemptId: 'original' }) : stalled);
     const snapshots = new GitSnapshotCoordinator({
       snapshotTimeoutMs: 50, recordTurnAttempt, readAutoSnapshotEnabled: () => false,
       detectRepoRoot: vi.fn(), getSessionContext: vi.fn(), resolveAnchor: vi.fn(),
@@ -558,8 +559,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     });
     const vendorSend = vi.fn();
     const persisted = vi.fn();
-    // #10834 also handles preparation recovery. Exhausting the local budget
-    // must settle this run, not start another automatic recovery cycle.
+    // Mirrors the production hook: only the local preparation reason is eligible.
     const takeOver = vi.fn(() => ({ sessionTotal: 1, attempt: 1, maxAttempts: 3 }));
     const coordinator = new AgentInputCoordinator({
       sendToAgent: async (_sid, _message, _opts, sendOpts) => {
@@ -574,7 +574,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       beforeDispatchUserTurn: (sid, item, signal) => prepareQueuedPromptSnapshot(snapshots, watchers, sid, item, signal),
       onAcceptedQueuedMessage: async () => { watchers.delete('snapshot-run-input'); await accepted?.(); },
       onPersistedSendRejected: (sid, message, item, recovering) => queue.onPersistedSendRejected(sid, message, item, recovering),
-      isResumableTurnErrorCandidate: () => outcome === 'exhausted',
+      isResumableTurnErrorCandidate: signals => signals.reason === 'scheduler-snapshot-preparation',
       onResumableTurnError: takeOver,
       onDiscardedQueuedMessage: (_sid, item) => { watchers.get(item.clientId)?.onDiscarded(); watchers.delete(item.clientId); },
       steerToAgent: async () => {}, abortSession: async () => {}, isTurnRunning: () => false,
@@ -608,23 +608,28 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       if (outcome === 'clear') coordinator.clearSession(SESSION_ID);
       if (outcome === 'pause' || outcome === 'delete') ctx.abortController.abort();
       await vi.advanceTimersByTimeAsync(100);
+      expect(recordTurnAttempt).toHaveBeenCalledOnce();
+      if (outcome === 'deadline') {
+        // The same run waits for the backoff resend; nothing reached the vendor.
+        expect(takeOver).toHaveBeenCalledOnce();
+        expect(coordinator.isAutoResumePending(SESSION_ID)).toBe(true);
+        expect(vendorSend).not.toHaveBeenCalled();
+        expect(persisted).toHaveBeenCalledOnce();
+        return;
+      }
       expect(coordinator.isAutoResumePending(SESSION_ID)).toBe(false);
       expect(takeOver).not.toHaveBeenCalled();
-      if (outcome === 'recovered') h.emit({ type: 'done', data: {}, source: 'claude-code' });
       if (outcome === 'unknown-send') h.emit({ type: 'error', data: { message: 'Snapshot operation deadline exceeded' }, source: 'claude-code' });
       // Existing liveness fallback also settles a session cleared by the user.
       await vi.advanceTimersByTimeAsync(QUEUED_DISPATCH_TRACK_POLL_MS);
       const result = await settled;
-      expect(recordTurnAttempt).toHaveBeenCalledTimes(['recovered', 'exhausted'].includes(outcome) ? 2 : 1);
-      expect(vendorSend).toHaveBeenCalledTimes(['recovered', 'unknown-send'].includes(outcome) ? 1 : 0);
-      if (outcome === 'recovered') expect(result.error).toBeUndefined();
-      else expect(result.error).toBeInstanceOf(Error);
-      if (outcome === 'exhausted') expect(result.error.message).toBe('Snapshot operation deadline exceeded');
+      expect(vendorSend).toHaveBeenCalledTimes(outcome === 'unknown-send' ? 1 : 0);
+      expect(result.error).toBeInstanceOf(Error);
       if (outcome === 'permission') expect(result.error.message).toBe('permission denied');
       expect(persisted).toHaveBeenCalledOnce();
       releaseIntent({ attemptId: 'late' });
       await vi.advanceTimersByTimeAsync(0);
-      expect(vendorSend).toHaveBeenCalledTimes(['recovered', 'unknown-send'].includes(outcome) ? 1 : 0);
+      expect(vendorSend).toHaveBeenCalledTimes(outcome === 'unknown-send' ? 1 : 0);
       expect(h.listenerCount()).toBe(0);
     } finally {
       ctx.abortController.abort(); coordinator.clearSession(SESSION_ID); snapshots.onSessionClosed(SESSION_ID);
@@ -644,7 +649,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     const rejected = expect(fire).rejects.toThrow("You've hit your usage limit");
     await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
     await queue.accept();
-    const detail = "You've hit your usage limit. token=synthetic-test-secret path='/home/example/private/data'\n    at internal-frame";
+    const detail = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage, token=synthetic-test-secret path='/home/example/private/data'\n    at internal-frame";
     if (source !== 'callback') {
       h.emit({ type: 'error', source: 'claude-code', data: {
         message: source === 'terminal' ? detail : 'Earlier request failed', isTerminal: true,
@@ -653,7 +658,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     }
     queue.failAutoResume(source === 'terminal' ? undefined : detail);
     await rejected;
-    expect(latestNotifiedRun(notifier).errorMsg).toContain("You've hit your usage limit");
+    expect(latestNotifiedRun(notifier).errorMsg).toContain("You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage,");
     expect(latestNotifiedRun(notifier).errorMsg).not.toMatch(/synthetic-test-secret|example|internal-frame|Earlier request failed/);
     expect(h.listenerCount()).toBe(0);
   });
@@ -669,7 +674,6 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     const listeners = new Set<() => void>();
     const persisted: string[] = [];
     const dispatched: AgentInputQueuedMessage['origin'][] = [];
-    const message = 'Snapshot operation deadline exceeded';
     const recoveryLog = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
     const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => options.enabled !== false,
       log: recoveryLog, random: () => 0.5 });
@@ -696,7 +700,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
         } catch (error) { await accepted.rollback(id, clientId); throw error; }
       },
       beforeDispatchUserTurn: async () => {
-        if (++attempts === 1 || options.replacementFails) throw new Error(message);
+        // Production budgets throw the typed error; plain text never authorizes recovery.
+        if (++attempts === 1 || options.replacementFails) throw new SnapshotOperationDeadlineError();
       },
       onAcceptedQueuedMessage: async (id, item) => { await accepted.run(id, item, bridge.recoverySourceClientId(id, item)); },
       onPersistedSendRejected: (id, error, item, recovering) => bridge.onPersistedSendRejected(id, error, item, recovering),
