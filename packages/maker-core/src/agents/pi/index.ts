@@ -5650,13 +5650,14 @@ export class PiAgent extends BaseAgent {
         // Model refresh writes and rolls back these files in the RPC lane. Read
         // the snapshot there too, so a child never freezes a mixed generation.
         // Launch/refresh below stay outside: they may enqueue their own RPC.
-        const [modelsJson, bridgeSource, runnerSource, cacheRulesJson] = await runExclusivePiRpc(() => {
+        const [modelsJson, bridgeSource, runnerSource, cacheRulesJson, settingsJson] = await runExclusivePiRpc(() => {
           if (closed) throw new Error('PI session is closed');
           return Promise.all([
             fs.readFile(path.join(configHome, 'models.json')),
             fs.readFile(bridgeExtensionPath),
             fs.readFile(subagentRunnerPath),
             fs.readFile(path.join(configHome, 'pi-cache-compatibility.json')),
+            fs.readFile(path.join(configHome, 'settings.json')),
           ]);
         });
         const runId = await resumePiSubagentRun(subagentRunRoot, taskId, message, {
@@ -5671,7 +5672,7 @@ export class PiAgent extends BaseAgent {
             ...reviewPathSnapshot,
           },
           runnerFallbackFile: subagentRunnerPath,
-          runtimeSnapshot: { modelsJson, bridgeSource, runnerSource, cacheRulesJson },
+          runtimeSnapshot: { modelsJson, bridgeSource, runnerSource, cacheRulesJson, settingsJson },
         }, childId);
         if (!runId) throw new Error('No terminal PI Subagent run is available to resume.');
         await requestPiSubagentRefresh();

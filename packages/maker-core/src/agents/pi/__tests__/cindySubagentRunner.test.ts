@@ -973,12 +973,15 @@ describe('Cindy durable PI Subagent runner', () => {
     it('freezes cache route rules into a resumed generation and rejects oversized artifacts', async () => {
       const { fixture, first } = await resumableFixture();
       const sourceFile = path.join(fixture.root, first.runId, 'pi-home', 'pi-cache-compatibility.json');
+      const shellSettings = { shellPath: '/fixture/legacy shell', shellCommandPrefix: ' export PREFIX=legacy\n' };
+      await writeFile(path.join(fixture.root, first.runId, 'pi-home', 'settings.json'), JSON.stringify({ ...shellSettings, extensions: ['must-not-load'] }));
       const rules = JSON.stringify([{ provider: 'fixture', id: 'wire', routeKey: 'a'.repeat(64) }]);
       await writeFile(sourceFile, rules);
       const launchRunner = vi.fn(async () => {});
       const id = await resumePiSubagentRun(fixture.root, first.runId, 'continue', { ...resumeLaunch(fixture), runtimeSnapshot: undefined, launchRunner });
       if (!id) throw new Error('Expected a resumed generation');
       expect(await readFile(path.join(fixture.root, id, 'pi-home', 'pi-cache-compatibility.json'), 'utf8')).toBe(rules);
+      expect(JSON.parse(await readFile(path.join(fixture.root, id, 'pi-home', 'settings.json'), 'utf8'))).toEqual(shellSettings);
       expect(launchRunner).toHaveBeenCalledOnce();
       // This unlaunched queued generation would otherwise block the second attempt.
       await rm(path.join(fixture.root, id), { recursive: true, force: true });
@@ -998,15 +1001,37 @@ describe('Cindy durable PI Subagent runner', () => {
       const currentRules = Buffer.from(rules('https://current.invalid/v1', 'b'));
       const launch = resumeLaunch(fixture);
       const currentModels = Buffer.from('{"providers":{"fixture":{"baseUrl":"https://current.invalid/v1"}}}');
-      const runtimeSnapshot = { ...launch.runtimeSnapshot, modelsJson: currentModels, cacheRulesJson: hasRules ? currentRules : undefined };
+      // Current settings supersede the old generation, including an explicit clear.
+      await writeFile(path.join(fixture.root, first.runId, 'pi-home', 'settings.json'), JSON.stringify({ shellCommandPrefix: 'old-prefix' }));
+      const shellSettings = hasRules ? { shellPath: '/fixture/current shell', shellCommandPrefix: ' export PREFIX=current\n' } : {};
+      const runtimeSnapshot = { ...launch.runtimeSnapshot, modelsJson: currentModels, cacheRulesJson: hasRules ? currentRules : undefined,
+        settingsJson: Buffer.from(JSON.stringify({ ...shellSettings, ...(hasRules ? {} : { shellPath: 7, shellCommandPrefix: '  ' }), extensions: ['must-not-load'], apiKey: 'not-a-real-secret' })) };
+
       const id = await resumePiSubagentRun(fixture.root, first.runId, 'continue', {
         ...launch, runtimeSnapshot, launchRunner: vi.fn(async () => {}),
       });
       if (!id) throw new Error('Expected a resumed generation');
       await expect(readFile(path.join(fixture.root, id, 'pi-home', 'models.json'))).resolves.toEqual(currentModels);
+      expect(JSON.parse(await readFile(path.join(fixture.root, id, 'pi-home', 'settings.json'), 'utf8'))).toEqual(shellSettings);
       const savedRules = readFile(path.join(fixture.root, id, 'pi-home', 'pi-cache-compatibility.json'));
       if (hasRules) await expect(savedRules).resolves.toEqual(currentRules);
       else await expect(savedRules).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    // #9705, integration: real resume staging rejects redirected/oversized shell files.
+    it.skipIf(process.platform === 'win32')('rejects linked and oversized shell settings before launching a resumed child', async () => {
+      const { fixture, first } = await resumableFixture();
+      const sourceFile = path.join(fixture.root, first.runId, 'pi-home', 'settings.json');
+      const outside = path.join(fixture.root, 'outside-settings.json');
+      await writeFile(outside, '{}');
+      await symlink(outside, sourceFile);
+      const launchRunner = vi.fn(async () => {});
+      const launch = { ...resumeLaunch(fixture), runtimeSnapshot: undefined, launchRunner };
+      await expect(resumePiSubagentRun(fixture.root, first.runId, 'continue', launch)).rejects.toThrow('settings escaped');
+      await rm(sourceFile);
+      await writeFile(sourceFile, 'x'.repeat(2 * 1024 * 1024 + 1));
+      await expect(resumePiSubagentRun(fixture.root, first.runId, 'continue', launch)).rejects.toThrow('settings escaped');
+      expect(launchRunner).not.toHaveBeenCalled();
     });
 
     it('refuses when a live instance already holds the claim', async () => {
@@ -1311,6 +1336,7 @@ describe('Cindy durable PI Subagent runner', () => {
     expect(resumed.runtimeOwnerId).toBe('resume-owner');
     await expect(readFile(path.join(fixture.root, resumedRunId!, 'permission.json'), 'utf8'))
       .resolves.toContain('/current-parent');
+    await expect(readFile(path.join(fixture.root, resumedRunId!, 'pi-home', 'settings.json'), 'utf8')).resolves.toBe('{}\n');
     await expect(readFile(path.join(fixture.root, resumedRunId!, 'pi-home', 'models.json')))
       .resolves.toEqual(currentModelsJson);
     await expect(readFile(path.join(fixture.root, resumedRunId!, 'cindy-bridge.ts')))
