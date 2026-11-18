@@ -7,7 +7,7 @@
 
 import { z } from 'zod';
 
-import { memoryScopeArg, storeHolding, withStore, type MemoryScopeName } from './_shared.js';
+import { memoryProjectArg, memoryScopeArg, storeHolding, withStore, type MemoryScopeName } from './_shared.js';
 import type { MemoryMcpDeps } from '../types.js';
 import type { MemoryToolRegistry } from '../cindy_memoryToolRegistry.js';
 
@@ -24,11 +24,12 @@ export function registerMemoryReadTool(registry: MemoryToolRegistry, deps: Memor
         .min(1)
         .describe('memory 分片文件名, e.g. "feedback_response_style.md"'),
       scope: memoryScopeArg,
+      project: memoryProjectArg,
     },
-    handler: async ({ filename, scope }) =>
+    handler: async ({ filename, scope, project }) =>
       withStore(deps, async (_store, ctx) => {
         const target = await storeHolding(ctx, filename, scope as MemoryScopeName | undefined);
         return { ...(await target.store.read(filename)), scope: target.scope };
-      }),
+      }, { project: project as string | undefined }),
   });
 }

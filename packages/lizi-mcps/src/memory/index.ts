@@ -7,6 +7,7 @@
 
 export { registerMemoryReadTool } from './read.js';
 export { registerMemoryListTool } from './list.js';
+export { registerMemoryScopesTool } from './scopes.js';
 export { registerMemoryWriteTool } from './write.js';
 export { registerMemoryDeleteTool } from './delete.js';
 export { registerMemoryConsolidateTool } from './consolidate.js';

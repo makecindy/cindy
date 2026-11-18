@@ -392,6 +392,13 @@ export function getDesktopMcpToolApprovalPolicy(
       return 'prompt-each-time';
     }
   }
+  // 操作另一个项目的记忆 (整理记忆, 记忆工具的 `project` 参数): 作用范围越出当前任务所在的项目,
+  // 与改另一台电脑上的定时任务同口径 —— 不走可信 server 的静默放行, 交给当前任务的权限档
+  // (Full Access 免审批, Auto 审阅, Ask 确认)。当前项目与「关于你」的读写照旧静默。
+  if (serverName === 'cindy_memory' && (toolName === 'call_tool' || !toolName)) {
+    const args = readJsonObject(readJsonObject(toolParams)?.args);
+    if (args && args.project !== undefined && args.project !== null) return 'prompt-each-time';
+  }
   // Telegram 的任意方法直通(call_api)与删消息: 方法名 / 目标由参数决定, 一次放行不能
   // 变成对后续任意方法的授权, 交给会话权限档按次判定(Full Access 免审批, Auto 审阅,
   // Ask 确认)。Codex 省略 toolName 时同样按次, 不借 trusted-server 捷径。

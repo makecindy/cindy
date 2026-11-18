@@ -10,7 +10,7 @@
 
 import { z } from 'zod';
 
-import { shardNameSchema, memoryScopeArg, storeForNew, storeHolding, withStore, type MemoryScopeName } from './_shared.js';
+import { shardNameSchema, memoryProjectArg, memoryScopeArg, storeForNew, storeHolding, withStore, type MemoryScopeName } from './_shared.js';
 import type { MemoryMcpDeps } from '../types.js';
 import type { MemoryToolRegistry } from '../cindy_memoryToolRegistry.js';
 
@@ -36,9 +36,10 @@ export function registerMemoryConsolidateTool(registry: MemoryToolRegistry, deps
         body: z.string().min(1),
       }),
       scope: memoryScopeArg,
+      project: memoryProjectArg,
     },
-    handler: async ({ sources, target, scope }) => {
-      const saved = deps.beginWrite?.(deps.getSessionContext?.());
+    handler: async ({ sources, target, scope, project }) => {
+      const saved = project ? undefined : deps.beginWrite?.(deps.getSessionContext?.());
       let written: { filename: string } | undefined;
       let writtenScope: MemoryScopeName | undefined;
       const result = await withStore(deps, async (_store, ctx) => {
@@ -68,7 +69,7 @@ export function registerMemoryConsolidateTool(registry: MemoryToolRegistry, deps
         }
         if (ctx.scopes.user) writtenScope = dest.scope;
         return { ...merged, scope: dest.scope };
-      });
+      }, { project: project as string | undefined });
       if (!result.isError && written) saved?.({ key: written.filename, title: target.title, action: 'updated',
         ...(writtenScope ? { scope: writtenScope } : {}) });
       return result;

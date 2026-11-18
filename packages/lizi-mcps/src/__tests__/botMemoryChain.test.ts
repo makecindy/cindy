@@ -674,6 +674,79 @@ describe('Cindy 记忆工具:账号级与项目两份之间的路由', () => {
     }
   });
 
+  // 整理记忆 (docs/product-rules/cindy-memory.md §8): 一个任务默认只碰得到自己的项目和「关于你」;
+  // 传 project 才能操作别的项目的记忆, 且只能是账号下确实有记忆的项目。
+  describe('传 project 操作另一个项目的记忆', () => {
+    const OTHER = buildMemoryScopeKey(path.join(path.sep, 'repo', 'other'));
+    const seedOther = async () => {
+      const other = await manager.getStore(OTHER);
+      await other.write(entry('feedback', 'reply-in-chinese', { body: 'other project copy' }) as never);
+      await other.write(entry('project', 'only-here') as never);
+    };
+    const otherFiles = async () => (await (await manager.getStore(OTHER)).list()).map((r) => r.filename);
+
+    it('memory_scopes 列出「关于你」和每个有记忆的项目, 只给位置和条数', async () => {
+      await seedOther();
+      await call('memory_write', entry('feedback', 'repo-style'));
+      expect(data(await call('memory_scopes', {}))).toEqual([
+        { kind: 'user', project: null, count: 0, current: false },
+        { kind: 'project', project: buildMemoryScopeKey(PROJECT_DIR), count: 1, current: true },
+        { kind: 'project', project: OTHER, count: 2, current: false },
+      ]);
+    });
+
+    it('列出、读取、把一条通用偏好并进「关于你」、删除, 都落在指定的那个项目上', async () => {
+      await seedOther();
+      await call('memory_write', entry('feedback', 'repo-style'));
+
+      const listed = data(await call('memory_list', { project: OTHER })) as unknown as Array<{ scope: string; filename: string }>;
+      expect(listed.map((r) => `${r.scope}:${r.filename}`)).toEqual([
+        'project:feedback_reply-in-chinese.md', 'project:project_only-here.md',
+      ]);
+      expect(data(await call('memory_read', { filename: 'project_only-here.md', project: OTHER })))
+        .toMatchObject({ scope: 'project', body: expect.stringContaining('body of only-here') });
+
+      // 提升: 结果写进「关于你」, 来源从那个项目里删掉。
+      expect(data(await call('memory_consolidate', {
+        sources: ['feedback_reply-in-chinese.md'], target: entry('feedback', 'reply-in-chinese'), scope: 'user', project: OTHER,
+      }))).toMatchObject({ scope: 'user', filename: 'feedback_reply-in-chinese.md' });
+      expect(await otherFiles()).toEqual(['project_only-here.md']);
+
+      expect(data(await call('memory_delete', { filename: 'project_only-here.md', project: OTHER })))
+        .toEqual({ deleted: 'project_only-here.md', scope: 'project' });
+      expect(await otherFiles()).toEqual([]);
+      // 当前任务自己的项目没有被碰。
+      expect(await stored()).toEqual({ user: ['feedback_reply-in-chinese.md'], project: ['feedback_repo-style.md'] });
+    });
+
+    it('不是账号下有记忆的项目: 拒绝, 不为任意路径打开存储', async () => {
+      await seedOther();
+      const stray = buildMemoryScopeKey(path.join(path.sep, 'somewhere', 'else'));
+      expect(await call('memory_list', { project: stray })).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+      expect(await call('memory_write', { ...entry('feedback', 'planted'), project: stray }))
+        .toMatchObject({ ok: false, code: 'NOT_FOUND' });
+      expect(existsSync(path.join(root, 'maker-memory', memoryScopeDirName(stray)))).toBe(false);
+      // 伙伴的记忆也不在可选范围里。
+      expect(await call('memory_list', { project: buildBotMemoryScopeKey(BOT_ID) }))
+        .toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    });
+
+    it('伙伴任务: 看不到用户有哪些项目, 也换不到别的项目', async () => {
+      await seedOther();
+      const bot = await connectBotSession({
+        agentKind: 'claude-code', sessionId: 'bot-session', memoryScopeKey: buildBotMemoryScopeKey(BOT_ID),
+      });
+      try {
+        for (const [name, args] of [['memory_scopes', {}], ['memory_list', { project: OTHER }]] as const) {
+          expect(parseEnvelope(await bot.client.callTool({ name: 'call_tool', arguments: { name, args } })), name)
+            .toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+        }
+      } finally {
+        await bot.cleanup();
+      }
+    });
+  });
+
   it('读 / 删不传 scope:两份都找,跟着文件所在的那一份走', async () => {
     await call('memory_write', entry('user', 'nickname'));
     await call('memory_write', entry('feedback', 'repo-style'));

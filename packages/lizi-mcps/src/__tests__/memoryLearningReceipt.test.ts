@@ -50,3 +50,37 @@ it('captures ownership before storage, emits only successful write and consolida
   expect((await registry.call('memory_write', { ...args, mode: 'update' })).isError).toBe(true);
   expect(receipt).not.toHaveBeenCalled();
 });
+
+// 改另一个项目的记忆是整理, 不是这轮对话学到了什么: 不出保存回执 (回执点开只认当前任务的项目)。
+it('emits no receipt when a write targets another project', async () => {
+  const receipt = vi.fn();
+  const beginWrite = vi.fn(() => receipt);
+  const store = {
+    write: async () => ({ ok: true, filename: 'feedback_test.md' }),
+    consolidate: async () => ({ ok: true, filename: 'feedback_test.md', deletedSources: [] }),
+    read: async () => ({}), list: async () => [], resolveFilename: async () => 'feedback_test.md',
+  };
+  const deps = {
+    beginWrite,
+    workdir: '/task',
+    getSessionContext: () => ({ sessionId: 'origin', workingDir: '/task', memoryScopeKey: '/task' }),
+    getManager: () => ({
+      isEnabled: () => true,
+      getStore: async () => store,
+      memoryScopesFor: (scopeKey: string) => ({ user: 'user:account', project: scopeKey }),
+      listScopes: async () => [{ scopeKey: '/other', kind: 'project', count: 1 }],
+    }),
+  } as unknown as MemoryMcpDeps;
+  const registry = new MemoryToolRegistry();
+  registerMemoryWriteTool(registry, deps);
+  registerMemoryConsolidateTool(registry, deps);
+  const args = { type: 'feedback', name: 'test', title: 'Preference', description: 'A stable preference', body: 'Details' };
+
+  expect((await registry.call('memory_write', { ...args, project: '/other' })).isError).not.toBe(true);
+  expect((await registry.call('memory_consolidate', { sources: ['feedback_old.md'], target: args, scope: 'project', project: '/other' })).isError).not.toBe(true);
+  expect(beginWrite).not.toHaveBeenCalled();
+
+  // 当前项目的写入照旧出回执。
+  expect((await registry.call('memory_write', args)).isError).not.toBe(true);
+  expect(receipt).toHaveBeenCalledTimes(1);
+});
