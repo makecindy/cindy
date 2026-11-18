@@ -125,6 +125,32 @@ describe('classifyProviderError', () => {
     }
   });
 
+  // #9470: unit, real classifier. Existing field-pattern coverage missed Google's
+  // quoted Unknown name rejection; raw and JSON-escaped messages reach consumers.
+  it.each([400, 422])('%i recognizes explicit Unknown name payload rejections', (status) => {
+    const message = 'Invalid JSON payload received. Unknown name "anthropic_version": Cannot find field. '
+      + 'Unknown name "messages": Cannot find field. Unknown name "max_tokens": Cannot find field.';
+    for (const bodyText of [message, JSON.stringify({ error: { message } })]) {
+      expect(classifyProviderError({ status, bodyText })).toMatchObject({
+        code: 'WIRE_INCOMPATIBLE', retryable: false,
+      });
+    }
+  });
+
+  it.each([
+    [400, 'Invalid JSON payload received: malformed JSON', 'UNKNOWN'],
+    [422, 'Invalid JSON payload received. Unknown name', 'UNKNOWN'],
+    [400, 'Unknown name "customer"', 'UNKNOWN'],
+    [401, 'Invalid JSON payload received. Unknown name "messages"', 'AUTH_INVALID'],
+    [400, 'Invalid API key. Invalid JSON payload received. Unknown name "messages"', 'AUTH_INVALID'],
+    [400, 'Invalid model name. Invalid JSON payload received. Unknown name "messages"', 'MODEL_NOT_FOUND'],
+    [400, 'insufficient_quota. Invalid JSON payload received. Unknown name "messages"', 'QUOTA_EXCEEDED'],
+    [400, 'prompt is too long. Invalid JSON payload received. Unknown name "messages"', 'CONTEXT_TOO_LONG'],
+    [500, 'Invalid JSON payload received. Unknown name "messages"', 'UPSTREAM_ERROR'],
+  ] as const)('preserves classification for %i / %s', (status, bodyText, code) => {
+    expect(classifyProviderError({ status, bodyText }).code).toBe(code);
+  });
+
   it.each([
     'Invalid Responses API request: input - Invalid input',
     'Rate limit exceeded: too many tokens per minute',
@@ -393,6 +419,20 @@ function fakeResponse(status: number, body = ''): Response {
 }
 
 describe('runProviderProbe（注入 fetch，不联网）', () => {
+  // #9470: production probe result and log must carry the classifier's code.
+  it('reports an Unknown name field rejection as wire incompatible', async () => {
+    const r = await runProviderProbe(
+      { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
+      async () => fakeResponse(400, JSON.stringify({ error: {
+        message: 'Invalid JSON payload received. Unknown name "anthropic_version": Cannot find field.',
+      } })),
+    );
+    expect(r).toMatchObject({ ok: false, code: 'WIRE_INCOMPATIBLE', status: 400 });
+    expect(probeLog.warn.mock.calls[0]?.[1]).toMatchObject({
+      code: 'WIRE_INCOMPATIBLE', model: 'm', status: 400,
+    });
+  });
+
   it('2xx → ok + latency', async () => {
     const r = await runProviderProbe(
       { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
