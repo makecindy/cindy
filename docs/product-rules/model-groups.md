@@ -191,6 +191,11 @@
   共享中的 Lead 传 `model_group_id` 也返回 `MODEL_GROUP_UNAVAILABLE`、不选路；
   不修改模式、不切换任何任务的模型。用户在界面里手动创建 Worker 的面板不提供模式（界面传来的参数不含它）。
 
+实现：`main/maker-ipc/orcaWorkerModelGroup.ts`（冲突与选路）、`orcaWorkerCreationService.ts` 的
+`createModelGroupWorkerInTeam`、`orcaLifecycleService.ts`（落定后提交）、`main/model-groups/runtime.ts`（与界面共用的
+选路实例）、`agentView.ts`；工具 `packages/lizi-mcps/src/xdt-helper/model_groups.ts`、`create_worker.ts`、
+`create_workers.ts`。
+
 ### 6.3 send_to_session 按模式新建任务
 
 用户让伙伴（或普通任务里的 Agent）「用某个模式开个新任务」时，与 §6.2 一样先用 `list_model_groups` 查模式 id，再把它作为
@@ -224,11 +229,6 @@
 实现：`main/maker-ipc/sendToSessionModelGroup.ts`（冲突与选路）、`sendToSessionExecutionConfig.ts` 的 `pinnedProviderId`
 （固定来源与推理强度口径）、`register.ts` 的 `sendToSessionInternal` create 分支（选路与落定后提交）、
 `main/mcp-integrations/mcp-providers.ts`（另一台电脑新建时拒绝）；工具 `packages/lizi-mcps/src/xdt-helper/send_to_session.ts`。
-
-实现：`main/maker-ipc/orcaWorkerModelGroup.ts`（冲突与选路）、`orcaWorkerCreationService.ts` 的
-`createModelGroupWorkerInTeam`、`orcaLifecycleService.ts`（落定后提交）、`main/model-groups/runtime.ts`（与界面共用的
-选路实例）、`agentView.ts`；工具 `packages/lizi-mcps/src/xdt-helper/model_groups.ts`、`create_worker.ts`、
-`create_workers.ts`。
 
 实现：`apps/desktop/src/shared/modelGroups.ts`、`apps/desktop/src/main/model-groups/`、
 `apps/desktop/src/renderer/features/model-groups/`、设置页 `ModelGroupsSection.tsx`、
