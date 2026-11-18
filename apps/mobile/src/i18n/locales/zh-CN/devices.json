@@ -1,4 +1,9 @@
 {
+  "usageOther": "其他",
+  "usageTitle": "用量概览",
+  "usageOnlyDevice": "仅 {{name}}",
+  "usagePlans": "套餐余量",
+  "usageBudget": "本期预算剩余",
   "management": {
     "title": "设备管理",
     "openDevice": "查看 {{name}} 的设备详情",

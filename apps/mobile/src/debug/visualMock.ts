@@ -1,3 +1,4 @@
+import { DEVICE_LINK_USAGE_WIDGET_SNAPSHOT_CHANNEL, type MobileUsageWidgetSnapshotResult } from '@cindy/maker-shared/device-link-contract';
 import { findRemoteHistoryView } from '@/session/remoteHistoryViews';
 import { pluginPreviewFixture } from './pluginPreviewFixture';
 import { groupExecutionVisualFixture } from './groupExecutionVisualFixture';
@@ -41,7 +42,7 @@ import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
 export const VISUAL_MOCK_DEVICE_ID = 'cindy-visual-mock-mac';
-export const VISUAL_MOCK_DEVICE_NAME = 'CINDY Visual Mock Mac';
+export const VISUAL_MOCK_DEVICE_NAME = 'Mac Studio';
 export const VISUAL_MOCK_OFFLINE_DEVICE_ID = 'cindy-visual-mock-offline-mac';
 const VISUAL_MOCK_REALDATA_DEVICE_ID = 'cindy-realdata-mac';
 const VISUAL_MOCK_REALDATA_DEVICE_NAME = 'CINDY Real Data Mac';
@@ -311,6 +312,41 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  if (channel === DEVICE_LINK_USAGE_WIDGET_SNAPSHOT_CHANNEL && _deviceId === VISUAL_MOCK_DEVICE_ID) {
+    const now = new Date();
+    const readings = [
+      { id: 'claude', name: 'Claude Pro', value: '68', fill: 0.68, resetMinutes: 7210, when: '5天' },
+      { id: 'codex', name: 'ChatGPT Plus', value: '42', fill: 0.42, resetMinutes: 2162, when: '1天12时' },
+      { id: 'grok', name: 'SuperGrok', value: '22', fill: 0.22, resetMinutes: 43, when: '42分' },
+      { id: 'cindy', name: 'Cindy AI 余额', value: '¥128.50', fill: 1, resetMinutes: null, when: '' },
+    ] as const;
+    return { ok: true, snapshot: {
+      version: 1, generatedAtMs: now.getTime(), updatedAtMs: now.getTime(), locale: 'zh-CN', moneySymbol: '¥',
+      sources: readings.map(reading => ({
+        id: reading.id, name: reading.name, value: reading.value, fill: reading.fill,
+        monogram: reading.name[0]!, logo: reading.id,
+        kind: reading.id === 'cindy' ? 'balance' : 'subscription',
+        label: null, unit: reading.id === 'cindy' ? null : '%',
+        level: reading.fill <= 0.3 ? 'warn' : 'normal',
+        when: reading.when, resetsAtMs: reading.resetMinutes == null ? null : now.getTime() + reading.resetMinutes * 60_000,
+        reserve: false, emphasized: reading.id === 'claude', unusedAtReset: reading.id === 'grok',
+      })),
+      usage: { scope: 'local',
+        days: Array.from({ length: 30 }, (_, i) => {
+          const date = new Date(now);
+          date.setDate(date.getDate() - 29 + i);
+          return date.toLocaleDateString('sv-SE');
+        }),
+        daily: Array.from({ length: 30 }, (_, i) => ({
+          tokens: [32000 + (i * 19731 % 156000), 21000 + (i * 27651 % 93000), 6000 + (i * 11721 % 38000)],
+          money: [8.12, 5.18, 1.20], paid: 1.20,
+        })),
+      },
+      strings: { today: '今日用量', scopeLocal: '这台电脑', dailyAverage: '日均', resetsIn: '{{duration}}后重置',
+        'durationShort.days': '{{d}}天', 'durationShort.hours': '{{h}}时', 'durationShort.minutes': '{{m}}分',
+        'durationShort.daysHours': '{{d}}天{{h}}时', 'durationShort.hoursMinutes': '{{h}}时{{m}}分' },
+    } } satisfies MobileUsageWidgetSnapshotResult as T;
+  }
   // The extra computers have no recent work; sample tasks belong to their original host.
   if (_deviceId.startsWith('visual-glance-computer-')) {
     if (channel === 'local-db:sessions:list') return [] as T;

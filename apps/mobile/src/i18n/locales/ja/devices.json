@@ -1,4 +1,9 @@
 {
+  "usageOther": "その他",
+  "usageTitle": "利用状況",
+  "usageOnlyDevice": "{{name}} のみ",
+  "usagePlans": "プランの残り利用枠",
+  "usageBudget": "今期の残り予算",
   "management": {
     "title": "デバイス管理",
     "openDevice": "{{name}} のデバイス詳細を表示",

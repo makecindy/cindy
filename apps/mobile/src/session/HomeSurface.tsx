@@ -99,6 +99,7 @@ import {
   StatusDot,
 } from '@/components/MobilePrimitives';
 import { RemoteAccessGuide } from '@/components/RemoteAccessGuide';
+import { DrawerUsage } from '@/widgets/UsageDashboard';
 import { HomeChromeDrawer } from '@/session/HomeChromeDrawer';
 import { TEAMMATE_COLLECTION_ID } from '@/session/useTeammateRoster';
 import { AccountSwitcherSheet } from '@/session/AccountSwitcherSheet';
@@ -3785,6 +3786,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         visible={deviceMenuOpen}
       />}</MountOnFirstOpen>
       <MountOnFirstOpen open={chromeMenuOpen}>{() => <HomeChromeDrawer
+        footer={chromeMenuOpen ? <DrawerUsage
+          onOpen={() => {
+            pendingMenuActionRef.current = null;
+            setChromeMenuOpen(false);
+            guardedPush('/usage');
+          }}
+        /> : null}
         loggingOut={loggingOut}
         onClose={() => {
           pendingMenuActionRef.current = null;

@@ -1,4 +1,9 @@
 {
+  "usageOther": "Sonstige",
+  "usageTitle": "Nutzungsübersicht",
+  "usageOnlyDevice": "Nur {{name}}",
+  "usagePlans": "Verbleibende Kontingente",
+  "usageBudget": "Verbleibendes Periodenbudget",
   "management": {
     "title": "Geräteverwaltung",
     "openDevice": "Details zu {{name}} anzeigen",

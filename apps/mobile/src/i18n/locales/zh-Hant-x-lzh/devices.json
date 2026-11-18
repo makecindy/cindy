@@ -1,4 +1,9 @@
 {
+  "usageOther": "其餘",
+  "usageTitle": "用度總覽",
+  "usageOnlyDevice": "唯 {{name}}",
+  "usagePlans": "諸約餘量",
+  "usageBudget": "本期預算之餘",
   "management": {
     "title": "器物總管",
     "openDevice": "察 {{name}} 之詳情",

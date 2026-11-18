@@ -1,4 +1,9 @@
 {
+  "usageOther": "기타",
+  "usageTitle": "사용량 개요",
+  "usageOnlyDevice": "{{name}}만",
+  "usagePlans": "요금제 잔여 한도",
+  "usageBudget": "이번 기간 남은 예산",
   "management": {
     "title": "기기 관리",
     "openDevice": "{{name}} 기기 상세 정보 보기",

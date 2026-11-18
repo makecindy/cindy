@@ -1,4 +1,9 @@
 {
+  "usageOther": "Outros",
+  "usageTitle": "Resumo de uso",
+  "usageOnlyDevice": "Somente {{name}}",
+  "usagePlans": "Cotas disponíveis",
+  "usageBudget": "Orçamento restante do período",
   "management": {
     "title": "Gerenciamento de dispositivos",
     "openDevice": "Ver detalhes de {{name}}",
