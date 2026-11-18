@@ -1283,7 +1283,11 @@ export function ScheduleFormDialog({
                               onValueChange={value => setField('prChange', value as PrChange)} />}
                           </FormField>
                           <label className="flex items-center gap-2 text-13 text-[var(--text-primary)]">
-                            <Checkbox checked={!form.manual} onChange={() => setField('manual', !form.manual)} />
+                            <Checkbox checked={!form.manual} onChange={event => {
+                              const enabled = event.currentTarget.checked;
+                              setField('manual', !enabled);
+                              if (enabled) setField('recurring', true);
+                            }} />
                             {t('scheduler.prTrigger.timed')}
                           </label>
                           {!form.manual && <ScheduleChip cronExpr={form.cronExpr} intervalMs={form.intervalMs}

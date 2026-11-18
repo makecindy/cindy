@@ -323,6 +323,21 @@ it('saves a single PR with optional timed checks and can remove the rule', async
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ prTrigger: null }), true));
 });
 
+// #11309, unit/jsdom: an event-only PR automation created via the API can have recurring=false.
+// Saving from the real editor must send a valid recurring schedule when timed checks are enabled.
+it('enables recurring timed checks for a saved event-only PR automation', async () => {
+  const prTrigger = { url: 'https://github.com/example/project/pull/23', change: 'merged' as const };
+  const form = mount(schedule({ manual: true, recurring: false, prTrigger }));
+  const timedChecks = screen.getByRole('checkbox', { name: 'scheduler.prTrigger.timed' });
+  expect((timedChecks as HTMLInputElement).checked).toBe(false);
+
+  fireEvent.click(timedChecks);
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: false, recurring: true, prTrigger,
+  }), true));
+});
+
 it('preserves both triggers when editing an existing timed Webhook', async () => {
   const form = mount(schedule({ preRunHook: { command: 'node check.mjs https://github.com/example/project/pull/85' },
     webhookTrigger: { endpointId: 'existing', events: ['issues.opened'], source: { preset: 'github' } } }));
