@@ -154,6 +154,8 @@ test('Node device API isolates relay credentials and rechecks prepared routes', 
  * before touching anything, so ~/.agents/skills, ~/.claude/skills and ~/.cindy are never reached.
  */
 /** Restore owner write and search permission on every directory, then remove the tree. */
+const skipDirectoryChmod = process.platform === 'win32' && 'Windows chmod(0) does not deny directory access';
+
 function removeTemporaryTree(root) {
   const makeWritable = (dir) => {
     try { fs.chmodSync(dir, 0o700); } catch { /* removed or not ours */ }
@@ -407,16 +409,18 @@ test('25b: cindy-host login publishes the owner that serve then reads as stable,
     // A sweep blocker aborts the switch: B is not published, the boundary stays pending, and B's
     // session is rolled back to the previous record. Fixing it and running login again recovers.
     const again = await plantOwnerSkillLinks(profile, home, 'member-b');
-    const sharedDir = path.dirname(again.shared);
-    fs.chmodSync(sharedDir, 0o000);
-    try {
-      auth.setMember('member-c');
-      await assert.rejects(login(), /cleanup incomplete/);
-      assert.equal(boundary.readGhostSkillProjectionBoundaryState()?.phase, 'pending');
-      assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY))?.refreshToken, 'fixture-refresh-member-b');
-    } finally {
-      fs.chmodSync(sharedDir, 0o755);
-    }
+    auth.setMember('member-c');
+    await t.test('a failed sweep rolls back the switch', { skip: skipDirectoryChmod }, async () => {
+      const sharedDir = path.dirname(again.shared);
+      fs.chmodSync(sharedDir, 0o000);
+      try {
+        await assert.rejects(login(), /cleanup incomplete/);
+        assert.equal(boundary.readGhostSkillProjectionBoundaryState()?.phase, 'pending');
+        assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY))?.refreshToken, 'fixture-refresh-member-b');
+      } finally {
+        fs.chmodSync(sharedDir, 0o755);
+      }
+    });
     await login();
     assert.equal(observer.readSkillProjectionBoundaryStatus('member-c'), 'stable');
     assert.equal(linkExists(again.shared), false);
@@ -589,7 +593,7 @@ test('25b: login re-checks right before committing, protects a running serve, an
 // so the case looks for the lock records themselves and then signs in again in the same process.
 // Minimal failure: the failure path keeps the vault lock (the next login waits its 5 s and is refused
 // as busy) or the strict lock's in-process tail (the next commit never starts).
-test('25b: a login whose commit failed releases every lock, and the next login goes straight through', { timeout: 30_000 }, async (t) => {
+test('25b: a login whose commit failed releases every lock, and the next login goes straight through', { timeout: 30_000, skip: skipDirectoryChmod }, async (t) => {
   const { root, home, profile, observer, boundary } = await skillBoundaryProfile(t);
   const auth = await fakeLoginAuth();
   try {

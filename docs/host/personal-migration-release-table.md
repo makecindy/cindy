@@ -541,6 +541,15 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 
 桌面沿用 void 入口。桌面调用的五条凭据路径已逐项对照调用顺序与微任务时点。运行时控制的历史或广播上报抛错时，每次经原来的进程监听记录一条 fatal 日志，代次前进也如此。
 
+### Windows 上未覆盖的测试
+
+自有 Windows x64 机器上的 `chmod(0)` 无法制造 POSIX 的目录访问拒绝。以下两项故障路径由自有 macOS 或 Ubuntu 机器运行 `apps/host/src/boundary.test.mjs` 覆盖。
+
+| Windows 上跳过的故障注入 | 验证的行为 | Windows 保留的覆盖 |
+| --- | --- | --- |
+| `a failed sweep rolls back the switch` 子测试 | 清理旧账号的 Skill 链接受阻时，切换保持 pending，登录凭据回滚 | 同一父用例仍验证登录、切换账号、清理两个位置的旧链接与新 owner 发布。 |
+| `a login whose commit failed releases every lock, and the next login goes straight through` | 登录提交失败后，心跳停止，三把锁都释放，下一次登录能完成 | 该用例依赖 POSIX 目录权限，Windows 未覆盖这条完整故障路径。 |
+
 ## 六、M2 可接（状态已在 Host 上具备，只差通道）
 
 | 通道 | 状态来源 | 具备于 |
