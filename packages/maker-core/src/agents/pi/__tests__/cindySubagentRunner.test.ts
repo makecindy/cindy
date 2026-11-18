@@ -1231,7 +1231,13 @@ describe('Cindy durable PI Subagent runner', () => {
         expect(refusedTheResume, `resume outcomes: ${describeOutcomes()}`).toHaveLength(1);
         // Whoever got through, there is never a second live generation over the
         // same PI child session — that is what a lost claim has to prevent.
-        const runs = await listPiSubagentRuns(fixture.root);
+        // The bounded scanner can omit a snapshot replaced between lstat and
+        // open (queued -> running grows it). Await publication, not a sleep;
+        // exclusion above and the exact generation count below stay strict.
+        const runs = await waitFor(async () => {
+          const current = await listPiSubagentRuns(fixture.root);
+          return startedRunIds.every(id => current.some(run => run.runId === id)) ? current : null;
+        }, undefined, 'the winning resumed generation to become observable');
         const resumedRuns = runs.filter((run) => run.taskId === first.taskId && run.runId !== first.runId);
         expect(resumedRuns).toHaveLength(started.length);
 

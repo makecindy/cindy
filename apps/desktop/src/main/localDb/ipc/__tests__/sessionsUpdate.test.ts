@@ -1388,6 +1388,29 @@ describe('local-db:sessions:update handler wiring', () => {
     );
   });
 
+  // The destructive option is command metadata. Both real IPC handlers must
+  // journal it only after archiving and keep it out of the session projection.
+  it.each([invokeUpdate, invokePatchMeta])('applies discard after archive in %s', async (invoke) => {
+    const statuses: unknown[] = [];
+    h.requestRecycle
+      .mockImplementationOnce(async () => {
+        statuses.push(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local'));
+      })
+      .mockImplementationOnce(async () => {
+        statuses.push(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local'));
+      });
+    await invoke('codex-local', { status: 'archived', pinnedAt: null, discardWorktreeChanges: true });
+
+    expect(statuses).toEqual([{ status: 'active' }, { status: 'archived' }]);
+    expect(h.requestRecycle).toHaveBeenNthCalledWith(2, 'codex-local', expect.any(Array), true);
+    await invoke('codex-local', { status: 'archived', pinnedAt: null, discardWorktreeChanges: true });
+    expect(h.requestRecycle).toHaveBeenCalledTimes(2);
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { status: 'archived', pinnedAt: null, summary: null, snoozedUntil: null, snoozedAt: null },
+    });
+  });
+
   it('cleans runtime state before releasing the local terminal status lock', async () => {
     const order: string[] = [];
     h.prepareSharedTaskClosure.mockImplementationOnce(async () => {

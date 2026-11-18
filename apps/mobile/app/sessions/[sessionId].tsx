@@ -13736,6 +13736,7 @@ function ComposerActivityStatus({
         startedAt={samplerStartedAt}
         history={rateHistory}
         outputTokens={outputTokens}
+        totalOutputTokens={tokenSpeed?.totalOutputTokens}
         generationDurationMs={generationDurationMs}
         generationReliable={generationReliable && !showElapsedOnly}
         label={showUsageMeta ? `${elapsedText} · ${rateText ?? tokenA11yText}` : elapsedText}

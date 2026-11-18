@@ -114,7 +114,6 @@ import {
   CINDY_PI_TEXT_ONLY_READY_PREFIX,
   CINDY_PI_TEXT_ONLY_CLOSED_PREFIX,
   CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX,
-  CINDY_PI_VISION_USAGE_PREFIX,
   projectPiRequestDiagnostics,
   CINDY_BRIDGE_EXTENSION_SOURCE } from './cindy-bridge-source.js';
 import { nativeProviderAdapterAliases } from './native-provider-adapter-source.js';
@@ -141,7 +140,6 @@ import {
   listPiSubagentRunDirectoryIds,
   listPiSubagentRuns,
   scanPiSubagentRuns,
-  readPiSubagentVisionUsage,
   PI_SUBAGENT_ACTIVE_POLL_MS,
   PI_SUBAGENT_IDLE_POLL_MS,
   piSubagentRunRoot,
@@ -4515,18 +4513,6 @@ export class PiAgent extends BaseAgent {
     type PiSubagentStatusSummary = Pick<PiSubagentRunStatus,
       'runId' | 'taskId' | 'state' | 'startedAt' | 'updatedAt' | 'title' | 'description'>;
     const piSubagentStatuses = new Map<string, PiSubagentStatusSummary>();
-    let visionUsage: ReturnType<NonNullable<AgentDeps['createPiVisionUsageRecorder']>> | undefined;
-    let visionDisposalRequested = false;
-    let visionBoundaryDrained = false;
-    let visionUsageDisposed = false;
-    const closeVisionUsageIfStopped = (): void => {
-      if (!visionUsageDisposed && visionDisposalRequested && (piProcessExited || !proc)
-          && (!accountBoundaryTeardown || visionBoundaryDrained)) {
-        visionUsageDisposed = true;
-        visionUsage?.close();
-      }
-    };
-    const observedVisionRequests = new Set<string>();
     const piSubagentFingerprints = new Map<string, string>();
     const piSubagentApprovalRequests = new Set<string>();
     const piSubagentApprovalDeliveries = new Set<string>();
@@ -4623,35 +4609,6 @@ export class PiAgent extends BaseAgent {
       }
       for (const key of piSubagentApprovalDecisions.keys()) {
         if (key.startsWith(prefix)) piSubagentApprovalDecisions.delete(key);
-      }
-    };
-    const visionUsageOffsets = new Map<string, number>();
-    const observePiSubagentVision = async (status: PiSubagentRunStatus): Promise<void> => {
-      // Durable children can finish between polls. Their private spool survives
-      // independently of approvals and assistant/main-model usage.
-      if (visionUsage && status.runtimeOwnerId === subagentRuntimeOwnerId && status.parentSessionId === sid) {
-        const observe = (payload: unknown): void => {
-          if (!payload || typeof payload !== 'object') return;
-          const id = (payload as { requestId?: unknown }).requestId;
-          if (typeof id !== 'string' || observedVisionRequests.has(id)) return;
-          observedVisionRequests.add(id);
-          void visionUsage?.observe(payload).catch(() => {
-            this.deps.logger.warn('pi child vision usage could not be recorded');
-          });
-        };
-        // Accept embedded facts from runners spawned before the spool change.
-        for (const task of status.tasks) {
-          for (const payload of Array.isArray(task.visionUsage) ? task.visionUsage : []) {
-            observe(payload);
-          }
-        }
-        try {
-          const offset = await readPiSubagentVisionUsage(subagentRunRoot, status.runId,
-            visionUsageOffsets.get(status.runId) ?? 0, observe);
-          visionUsageOffsets.set(status.runId, offset);
-        } catch {
-          this.deps.logger.warn('pi child vision usage could not be read');
-        }
       }
     };
     const emitPiSubagentStatus = (status: PiSubagentRunStatus): void => {
@@ -5248,12 +5205,8 @@ export class PiAgent extends BaseAgent {
       let succeeded = false;
       try {
         const seenRunIds = new Set<string>();
-        for await (const status of scanPiSubagentRuns(subagentRunRoot, {
-          latestPerTask: true,
-          onRead: visionUsage ? observePiSubagentVision : undefined,
-        })) {
+        for await (const status of scanPiSubagentRuns(subagentRunRoot, { latestPerTask: true })) {
           if (closed) break;
-          await observePiSubagentVision(status);
           seenRunIds.add(status.runId);
           const previous = piSubagentStatuses.get(status.taskId);
           if (previous && (previous.startedAt > status.startedAt
@@ -5631,7 +5584,6 @@ export class PiAgent extends BaseAgent {
               let readable = 0;
               const activeStatuses: PiSubagentRunStatus[] = [];
               for await (const status of scanPiSubagentRuns(subagentRunRoot)) {
-                await observePiSubagentVision(status);
                 readable++;
                 if (!isPiSubagentTerminal(status.state)) activeStatuses.push(status);
               }
@@ -5762,28 +5714,6 @@ export class PiAgent extends BaseAgent {
           ));
         }
       }
-      // 视觉桥后端 env（层 C）：host 解析后注入，cindy-bridge 的 vision 工具读取。
-      // 键名可能含 API key，须纳入 piSecretEnvNames 剥离面。
-      // 传当前 session model：未命中视觉桥目标模型的 Pi 模型不注入 env、不注册
-      // vision 工具（零干扰，不因别的模型配置了视觉桥而改变本模型工具面）。
-      // sessionId 供 OpenCode Go 后端确定性派生会话头（spawn env 必须稳定）。
-      // 供应商分享受邀者不注入：视觉后端是本机用户自己的其它供应商，且 vision 工具直接读本机文件。
-      let visionBridgeEnv = hostedGuest
-        ? null
-        : this.deps.resolvePiVisionBridgeEnv?.(opts.model, opts.sessionId) ?? null;
-      if (visionBridgeEnv?.CINDY_PI_VISION_BRIDGE) {
-        try {
-          visionBridgeEnv = { ...visionBridgeEnv, CINDY_PI_VISION_BRIDGE: JSON.stringify({
-            ...JSON.parse(visionBridgeEnv.CINDY_PI_VISION_BRIDGE), usageToken: runtimeInstanceId,
-          }) };
-        } catch { /* Legacy invalid env retains its existing fail-closed behavior. */ }
-      }
-      visionUsage = visionBridgeEnv
-        ? this.deps.createPiVisionUsageRecorder?.(visionBridgeEnv, opts.sessionId) : undefined;
-      if (visionUsage) appendProxyDisposer(() => {
-        visionDisposalRequested = true;
-        closeVisionUsageIfStopped();
-      });
       // 这些值必须留在 Pi 父进程，供 models.json 的 $ENV 请求期解析及 bridge
       // client 使用；cindy-bridge 用该**仅含变量名**的清单在 bash spawn 边界剥离
       // 真值，阻止 LLM shell 绕过工具审批直连 localhost proxy/MCP 或盗用 BYOM key。
@@ -5793,7 +5723,6 @@ export class PiAgent extends BaseAgent {
         PI_SESSION_TOKEN_ENV,
         ...(piPackageManagementToken ? [PI_PACKAGE_MANAGEMENT_ENV] : []),
         PI_BASH_PACKAGE_HOME_ENV,
-        ...(visionBridgeEnv ? Object.keys(visionBridgeEnv) : []),
         ...Object.keys(authEnv),
         ...Object.keys(nativeEnv),
         ...Object.keys(mcpEnv),
@@ -5838,8 +5767,6 @@ export class PiAgent extends BaseAgent {
         // 外部 MCP header 真值只经 env 交给 bridge extension；host 生成独立名字，
         // 且这些键已进入 piSecretEnvNames，LLM 可调用的 bash 子进程拿不到。
         ...mcpEnv,
-        // 视觉桥后端 env（层 C）：键含 API key 已纳入 piSecretEnvNames 剥离面。
-        ...(visionBridgeEnv ? visionBridgeEnv : {}),
         // Input handoff askpass, owner's own local tasks only (deterministic per session).
         ...(!remote && !hosted && !reviewMode && opts.sessionId
           ? this.deps.runtimeConfig.taskShellEnv?.({ sessionId: opts.sessionId })
@@ -5988,18 +5915,6 @@ export class PiAgent extends BaseAgent {
             providerRequestObservedAt = undefined;
             providerTurnObservedAt = undefined;
             providerFirstOutputLogged = false;
-          }
-          if (event.type === 'extension_ui_request' && event.method === 'notify' &&
-              typeof event.message === 'string' && event.message.startsWith(CINDY_PI_VISION_USAGE_PREFIX)) {
-            const prefix = `${CINDY_PI_VISION_USAGE_PREFIX}${runtimeInstanceId}:`;
-            if (event.message.startsWith(prefix) && event.message.length <= prefix.length + 4096) {
-              try {
-                void visionUsage?.observe(JSON.parse(event.message.slice(prefix.length))).catch(() => {
-                  this.deps.logger.warn('pi vision usage could not be recorded');
-                });
-              } catch { /* Invalid private frames never enter user messages or logs. */ }
-            }
-            return;
           }
           if (!remote && event.type === 'extension_ui_request' && event.method === 'notify' &&
               typeof event.message === 'string' && event.message.startsWith(CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX)) {
@@ -6294,7 +6209,6 @@ export class PiAgent extends BaseAgent {
           const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx, true);
           const usage = ctx.pendingHostTurnStartToken === null ? piTurnUsageOf(ctx) : undefined;
           piProcessExited = true;
-          closeVisionUsageIfStopped();
           clearPiSubagentRefreshTimer();
           void deferProxyDisposalForDetachedRuns();
           disposePiTranslateContext(ctx);
@@ -7006,12 +6920,10 @@ export class PiAgent extends BaseAgent {
       try {
         await proc.close();
         piProcessExited = true;
-        closeVisionUsageIfStopped();
       } catch (error) {
         if (!remote) configHomeCleanupDeferredToQuarantine = true;
         let confirmStopped!: () => void;
         const whenStopped = new Promise<void>((resolve) => { confirmStopped = resolve; });
-        void whenStopped.then(() => { piProcessExited = true; closeVisionUsageIfStopped(); });
         cleanupPending = new AgentStartupCleanupPendingError(
           `pi startup failed and process cleanup remains unconfirmed: ${error instanceof Error ? error.message : String(error)}`,
           { cause: err, whenStopped },
@@ -8693,12 +8605,6 @@ export class PiAgent extends BaseAgent {
           // leasing it out. Durable files stay on disk (ownership boundary, not
           // a data-removal boundary).
           await stopDetachedSubagentRunsForAccountBoundary();
-          if (visionUsage) {
-            try {
-              for await (const status of scanPiSubagentRuns(subagentRunRoot)) await observePiSubagentVision(status);
-            } catch { /* Preserve teardown if the optional durable usage read fails. */ }
-            finally { visionBoundaryDrained = true; closeVisionUsageIfStopped(); }
-          }
         } else {
           await deferProxyDisposalForDetachedRuns();
         }
@@ -8719,7 +8625,6 @@ export class PiAgent extends BaseAgent {
         // emitting `onExit`: the supervisor must not wait out its hard deadline
         // holding a lease for a process that is already gone.
         piProcessExited = true;
-        closeVisionUsageIfStopped();
         if (!remote) {
           // 会话结束:清理隔离的 configHome 与 runtime 文件(onExit 幂等,二者先到先清)。
           await cleanupConfigHome();

@@ -780,9 +780,6 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       makerMemory,
       reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
       readAuthRealm: () => account.realm,
-      // Vision-bridge notices, which the desktop sends its windows; the client maps them to
-      // MAKER_PUSH.EVENT (device-link.ts) and they are not persisted.
-      publishVisionBridgeNotice: notice => eventHub.publish(notice),
       mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory), pluginGateway.provider]),
       userDataDir: dataDir,
     });
@@ -1631,8 +1628,6 @@ async function disposeOwnerRuntime(): Promise<void> {
     await attempt(() => (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.());
     // Stop watching this profile's Pi packages once Maker no longer runs Pi.
     agentGraph?.piPackages.close();
-    // As the desktop's teardown: the process-wide vision-bridge controller and key reader go.
-    await attempt(() => agentGraph?.visionBridge.close());
     await attempt(() => codexRuntime?.close());
     await attempt(() => claudeProxy?.close());
     await attempt(() => mcpRuntime?.close());
