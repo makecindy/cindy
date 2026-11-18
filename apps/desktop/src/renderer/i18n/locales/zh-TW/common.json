@@ -918,7 +918,7 @@
       "title": "換到 {{label}} 繼續？",
       "fallbackTitle": "用摘要換到 {{label}} 繼續？",
       "fallbackDescription": "無法完整接續原來的對話。使用摘要繼續可能遺漏早期細節和工具結果；取消則留在原電腦傳送。",
-      "description": "為了平均用完各帳號的配額，建議這則訊息換到 {{label}} 傳送（{{quota}}）。換過去會帶上最近幾輪對話和摘要，更早的細節可能記不全。",
+      "description": "為了平均用完各帳號的配額，建議這則訊息換到 {{label}} 傳送（{{quota}}）。換過去會接續對話。較早的部分可能會壓縮，以配合模型的容量。",
       "quota": "還剩 {{left}}%",
       "quotaReset": "還剩 {{left}}%，{{reset}}",
       "confirm": "僅這次換過去",
@@ -14052,7 +14052,7 @@
         "effortEndFast": "更高效",
         "effortEndSmart": "更聰明",
         "railSameEngine": "僅 {{agent}}",
-        "crossEngineWarning": "切換引擎會重建上下文，可能遺失內容",
+        "crossEngineWarning": "下一則訊息將切換引擎並接續對話，較早的部分可能會壓縮",
         "favoritesSyncFailed": "收藏未能同步。請重新開啟重試；被控電腦可能需要更新。",
         "favoritesSyncFailedUnreachable": "收藏暫時沒有同步：那台電腦目前連不上。恢復連線後重新開啟即可。",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14069,12 +14069,8 @@
         "ultrafast": "超快"
       },
       "discoveredCopy": {
-        "title": "改用「{{device}}」上的 {{provider}}？",
-        "description": "{{unavailable}}確認後由「{{device}}」執行，之後隨時可以在這裡換回。",
         "unavailableHere": "這台電腦上的 {{provider}} 現在無法使用。",
-        "unavailableOn": "「{{device}}」上的 {{provider}} 現在無法使用。",
-        "confirm": "改用",
-        "cancel": "保持不變"
+        "unavailableOn": "「{{device}}」上的 {{provider}} 現在無法使用。"
       }
     },
     "permissionSelector": {
@@ -14340,33 +14336,14 @@
       "credentialSwitchApplied": "模型來源切換已生效。",
       "credentialSwitchFailed": "模型來源切換失敗，請重新選擇。",
       "modelSwitchContextGuard": {
-        "title": "這個模型裝不下目前的對話",
         "warnToast": "這段對話已經用了 {{used}}，換過去大約會佔新模型容量（{{total}}）的 {{pct}}%",
-        "overflowDescription": "這段對話已經用了 {{used}}，超過新模型能放下的 {{total}}（約 {{pct}}%）。換過去後，Cindy 會先整理一份摘要再繼續；對話記錄還在，只是不會整段原樣帶給新模型。",
-        "overflowDescriptionRemote": "目前遠端任務的上下文已用 {{used}} / {{total}}（約 {{pct}}%），無法安全切換到這個小視窗模型。請保留目前模型，或新增任務後再選擇。",
-        "confirmSwitch": "切換並繼續",
-        "cancelSwitch": "先不換"
+        "condensedToast": "為了配合新模型，較早的對話會壓縮，完整的對話記錄仍可查看。",
+        "overflowDescriptionRemote": "目前遠端任務的上下文已用 {{used}} / {{total}}（約 {{pct}}%），無法安全切換到這個小視窗模型。請保留目前模型，或新增任務後再選擇。"
       },
       "agentSwitch": {
         "engineNotReady": "引擎已切換，但新引擎啟動失敗；傳送訊息時會自動重試",
         "failed": "引擎切換失敗，未生效",
-        "deferred": "已登記切換：下一則訊息發出時將切換到 {{agent}} · {{model}}",
-        "confirmation": {
-          "title": "切換 Agent？",
-          "description": "新 Agent 引擎會透過交接摘要續接，思考內容等不能保證完美繼承；切回時仍可繼續原引擎會話。切換還會讓 prompt 快取中斷一次，可能造成 Token 消耗的增加。",
-          "confirm": "切換 Agent",
-          "cancel": "保留當前 Agent",
-          "dontShowAgain": "下次不再提醒"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "改回這台電腦執行 Agent？",
-        "titleOther": "改到「{{device}}」上執行 Agent？",
-        "description": "原來那台電腦上的對話記錄帶不過來，會整理成交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
-        "descriptionNativeHistory": "完整對話記錄會複製過去接著用；如果恢復不了，會改用交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
-        "confirm": "換電腦執行",
-        "cancel": "保持不變",
-        "discoveredDescription": "{{reason}}{{description}}"
+        "deferred": "已登記切換：下一則訊息發出時將切換到 {{agent}} · {{model}}"
       }
     },
     "agentSelect": {
@@ -15502,6 +15479,11 @@
         "relocatedTaskComputer": "Agent 已改到任務所在的電腦上執行",
         "relocatedElsewhere": "Agent 已改到另一台電腦上執行",
         "quotaRebalance": "這個帳號的配額更該先用"
+      },
+      "handoffCoverage": {
+        "complete": "已完整接續對話",
+        "condensed": "較早的對話已壓縮",
+        "details": "用於接續對話的交接內容"
       },
       "contextRebuild": {
         "labelOverflow": "已整理上下文並繼續",

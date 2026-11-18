@@ -76,6 +76,7 @@ export function UnifiedModelRow({
   paymentRequiredUnlockLabel,
   onPaymentRequired,
   sourceLabel,
+  sourceNotice,
   measurementOnly = false,
 }: {
   /** Hidden intrinsic-width probe: share row typography, omit interaction and fixed-size artwork. */
@@ -85,6 +86,7 @@ export function UnifiedModelRow({
    * The panel omits it only for this catalog's own Cindy AI (see UnifiedModelPanel aggregateSourceLabel).
    */
   sourceLabel?: string;
+  sourceNotice?: string | undefined;
   entry: UnifiedModelEntry;
   anchor: UnifiedAnchor;
   config: UnifiedRowConfig;
@@ -383,6 +385,11 @@ export function UnifiedModelRow({
           {descriptionLabel}
         </div>
       ) : null}
+      {sourceNotice && !measurementOnly && (
+        <div className="w-0 min-w-full break-words pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]">
+          {sourceNotice}
+        </div>
+      )}
     </div>
   );
 }
