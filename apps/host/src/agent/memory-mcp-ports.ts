@@ -16,6 +16,7 @@ import { isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessio
 import { getPluginHostToolCaller } from '../../../desktop/src/main/mcp-integrations/hostToolCaller.ts';
 import { explicitPorts } from './explicit-ports.ts';
 import { LOGGER } from './runtime.ts';
+import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
 
 export interface HostMemoryMcpPortInput {
   /** host-tools.ts readsAccountHistory: the cindy_helper history decision for this task. */
@@ -84,7 +85,23 @@ export function hostMemoryMcpPorts(manager: MakerMemoryManager, input: HostMemor
     getManager: () => manager,
     // As the desktop binds it (mcp-providers.ts:684). session_search keeps its own checks inside, as
     // the desktop's does.
-    withAccountDataAccess: hostAccountDataAccess,
+    withAccountDataAccess: (sessionId, operation) => hostAccountDataAccess(sessionId, async assertCurrent => {
+      const result = await operation(assertCurrent);
+      // withStore classifies application errors as INTERNAL. Restore the Host's
+      // typed refusal at this boundary without changing the shared memory tools.
+      if (!result || typeof result !== 'object' || !('isError' in result) || result.isError !== true
+        || !('content' in result) || !Array.isArray(result.content)) return result;
+      const block = result.content[0];
+      if (block?.type !== 'text' || typeof block.text !== 'string') return result;
+      try {
+        const body = JSON.parse(block.text);
+        if (body?.code === 'INTERNAL' && typeof body.message === 'string'
+          && body.message.startsWith(`[PRECONDITION_FAILED] ${HOST_PROFILE_IN_USE_BY_DESKTOP}`)) {
+          return { ...result, content: [{ type: 'text', text: JSON.stringify({ ...body, code: 'PRECONDITION_FAILED' }) }] };
+        }
+      } catch { /* Non-memory tool responses keep their original shape. */ }
+      return result;
+    }),
     searchProviders: input.searchProviders,
     // Only teammate learning records use it (botLearningTracker.ts:35-38); the Host refuses teammate
     // tasks (send-preflight.ts:19-22).

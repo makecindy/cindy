@@ -16,6 +16,11 @@ import { createDbClientForHandle } from '../../../desktop/src/main/localDb/clien
 import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { hostRuntimeLayout } from '../runtime-layout.mjs';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
+import { createHostAutoReview } from './auto-review.ts';
+import { hostOutbound } from '../outbound.mjs';
+import { getModelAccessCredentialsStore } from '../../../desktop/src/main/model-access/credentialsStore.ts';
+import { ownerScopedUserDataPath } from '../../../desktop/src/main/appSessionState.ts';
+import { setModelsDisabled } from '../../../desktop/src/main/maker-host/model-disable-store.ts';
 
 const require = createRequire(new URL('../../../desktop/package.json', import.meta.url));
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
@@ -74,7 +79,7 @@ test('memory retained by an old task cannot reopen storage across an account bou
  * model once no auxiliary chain is injected. The owner database is open and current, as in main.ts,
  * with the calling task 'task-memory' in it: every memory call checks its caller against it.
  */
-async function hostMemoryFixture(t, ownerId) {
+async function hostMemoryFixture(t, ownerId, makeReview) {
   // The database lives in the fixture's profile: close it before the profile is removed.
   t = lifoCleanup(t);
   // Real path: a teammate project is recognised from its absolute path, which macOS tmp links hide.
@@ -96,7 +101,7 @@ async function hostMemoryFixture(t, ownerId) {
   t.after(async () => { clearCurrentDbClient(); await database.dispose(); });
   opened.db.exec(`INSERT INTO sessions(id,source,status,created_at,updated_at) VALUES ('task-memory','desktop','active',1,1);`);
 
-  const manager = createHostMemoryManager({ userDataDir: root, ownerId });
+  const manager = createHostMemoryManager({ userDataDir: root, ownerId, review: makeReview?.(root) });
   t.after(() => manager.dispose());
   const oneShots = [];
   attachAgentsToMakerMemory(manager, { 'claude-code': { oneShot: async prompt => { oneShots.push(prompt); return 'merge nothing'; } } });
@@ -115,26 +120,93 @@ async function hostMemoryFixture(t, ownerId) {
     t.after(async () => { await client.close(); await instance.close(); });
     return (name, args = {}) => client.callTool({ name: 'call_tool', arguments: { name, args } });
   };
-  return { root, db: opened.db, drizzle: opened.drizzle, ownerId, oneShots, connect, helperDecisions, hooks };
+  return { root, db: opened.db, drizzle: opened.drizzle, database, ownerId, oneShots, connect, helperDecisions, hooks };
 }
 
 const NOTE = { type: 'project', name: 'release-notes', title: 'Release notes', description: 'Where the release notes live', body: 'docs/release.md' };
 
-// Release table rows 7b and 11: auxiliary model calls on the Host send no paid request. The Host
-// did not report the one-shot route disabled, so runReview fell back to the review agent's default
-// route (maker-core memory/manager.ts) and sent the memory dump to a model.
-// Minimal failing input: one stored memory, then memory_review. Tier: unit (real manager and SQLite
-// in a temp profile, in-process MCP).
-test('memory_review on the Host reports unavailable and sends no model request', async t => {
-  const f = await hostMemoryFixture(t, 'memory-review-owner');
+// §3.2 integration: real MCP, manager, dispatch and temporary SQLite. A stored
+// memory under a chosen auxiliary chain produces the selected request and one
+// receipt. The baseline always refused review; its default fallback must remain unused.
+test('memory_review respects the auxiliary chain, holds and the request owner', async t => {
+  let held = null, defaultDisabled = false;
+  let onRequest = () => {};
+  const requests = [];
+  t.mock.method(hostOutbound, 'outboundUndiciFetch', async (_url, init) => {
+    requests.push(JSON.parse(init.body));
+    onRequest();
+    return Response.json({ choices: [{ message: { content: 'Keep both notes' } }],
+      usage: { prompt_tokens: 9, completion_tokens: 4 } });
+  });
+  const endpoint = 'https://memory-unit.test';
+  const f = await hostMemoryFixture(t, 'memory-review-owner', userDataDir => {
+    getModelAccessCredentialsStore().setServerCredentials(endpoint);
+    return createHostAutoReview({
+      userDataDir,
+      getMaker: () => ({ listAvailableAgents: () => [] }),
+      gateway: { credential: 'fixture-key', endpoint },
+      providerConfig: { publicViews: async () => defaultDisabled
+        ? [{ id: 'xd', connected: true, suspended: true, agents: ['claude-code'], models: {} }] : [] },
+      logger: { debug() {}, info() {}, warn() {} },
+    }).memoryReview(() => held);
+  });
   const workdir = path.join(f.root, 'project');
   fs.mkdirSync(workdir);
   const call = await f.connect(workdir);
   const written = await call('memory_write', NOTE);
   assert.notEqual(written.isError, true, JSON.stringify(written));
-  const review = await call('memory_review');
-  assert.equal(review.isError, true);
-  assert.match(review.content[0].text, /one-shot route for 'claude-code' is disabled/);
+  const settings = ownerScopedUserDataPath('auxiliary-model-settings.json');
+  const chain = models => fs.writeFileSync(settings, JSON.stringify({ models }));
+  const selected = 'litellm-deepseek-v4-flash';
+  const model = 'deepseek/deepseek-v4-flash';
+  const review = () => call('memory_review');
+  const refuse = async pattern => {
+    requests.length = 0;
+    const result = await review();
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, pattern);
+    assert.deepEqual(requests, []);
+  };
+  chain([selected]);
+  await t.test('dispatches the selected auxiliary model', async () => {
+    const result = await review();
+    assert.equal(result.isError, undefined, JSON.stringify(result));
+    assert.deepEqual(requests.map(request => request.model), [model]);
+  });
+  await t.test('skips a disabled auxiliary candidate with zero requests', async () => {
+    setModelsDisabled('xd', [model], true);
+    try { await refuse(/auxiliary model chain produced no text/); }
+    finally { setModelsDisabled('xd', [model], false); }
+  });
+  await t.test('rejects an unavailable auxiliary chain without falling back', async () => {
+    chain(['codex-gpt-5.4-mini']);
+    try { await refuse(/auxiliary model chain produced no text/); }
+    finally { chain([selected]); }
+  });
+  await t.test('returns the Host hold refusal with zero requests', async () => {
+    held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
+    try { await refuse(/"code":"PRECONDITION_FAILED".*desktop window/); }
+    finally { held = null; }
+  });
+  await t.test('records the usage once in the database captured before dispatch', async () => {
+    const incoming = [];
+    const incomingDb = { drizzle: { insert() { incoming.push(true); throw new Error('wrong account'); } } };
+    f.db.exec('DELETE FROM auxiliary_usage_receipts');
+    onRequest = () => setCurrentDbClient(incomingDb, 'next-memory-owner');
+    try { await review(); }
+    finally { setCurrentDbClient(f.database, f.ownerId); onRequest = () => {}; }
+    assert.deepEqual(f.db.prepare('SELECT source, model, input_tokens, output_tokens FROM auxiliary_usage_receipts').all(),
+      [{ source: 'memory-review', model, input_tokens: 9, output_tokens: 4 }]);
+    assert.deepEqual(incoming, []);
+  });
+  await t.test('rejects a disabled default source with zero requests', async () => {
+    defaultDisabled = true;
+    try { await refuse(/one-shot route for 'claude-code' is disabled/); }
+    finally { defaultDisabled = false; }
+    const result = await review();
+    assert.equal(result.isError, undefined, JSON.stringify(result));
+    assert.deepEqual(requests.map(request => request.model), [model]);
+  });
   assert.deepEqual(f.oneShots, []);
 });
 

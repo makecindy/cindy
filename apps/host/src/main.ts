@@ -1034,7 +1034,11 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     const gateway = modelAccess!.gateway;
     // Memory uses the same owner-scoped store Desktop reads, so a task started
     // here sees the same memories as a task started there.
-    makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId });
+    let memoryReview: ReturnType<ReturnType<typeof createHostAgentGraph>['autoReview']['memoryReview']> | undefined;
+    makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId, review: {
+      isOneShotRouteDisabled: agent => memoryReview?.isOneShotRouteDisabled(agent) ?? Promise.resolve(true),
+      reviewOneShot: (...args) => memoryReview?.reviewOneShot(...args) ?? Promise.resolve(null),
+    } });
     // Flip the flag before the agents are built: their runtimeConfig snapshots it
     // at construction, and native-agent syncoff needs the agents that do not exist yet.
     if (makerMemory.isEnabled()) await makerMemory.enable({ skipAgentSync: true });
@@ -1102,6 +1106,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory, { readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '', searchProviders: taskPlugins.searchGhostRuntimeMemories }), pluginGateway.provider]),
       userDataDir: dataDir,
     });
+    memoryReview = agentGraph.autoReview.memoryReview(() =>
+      inputQueue.isHeldForDesktop() ? profileInUseMessage() : null);
     // The desktop's Auto-review authorization context (review-context.ts).
     agentGraph.autoReview.setContextResolver(createHostReviewContextResolver({
       acceptedInput: (id: string) => inputQueue.acceptedInputProvenance(id),

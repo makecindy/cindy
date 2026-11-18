@@ -39,15 +39,16 @@ export function readMemorySettings(ownerRoot) {
 
 /**
  * The port bag is written out in memory-manager-ports.ts, where `explicitPorts` is type-checked.
- * @param {{ userDataDir: string, ownerId: string }} options
+ * @param {Pick<import('./memory-manager-ports.ts').HostMemoryManagerPortInput, 'userDataDir' | 'ownerId' | 'review'>} options
  */
-export function createHostMemoryManager({ userDataDir, ownerId }) {
+export function createHostMemoryManager({ userDataDir, ownerId, review }) {
   const scope = getActiveAppSession();
   if (scope.dataOwnerId !== ownerId || isAppSessionBoundaryPending()) throw new Error('Memory owner is not ready');
   return createMakerMemoryManagerForHost(hostMemoryManagerPorts({
     userDataDir,
     ownerId,
     generation: scope.generation,
+    review,
     readEnabled: (ownerRoot) => readMemorySettings(ownerRoot).maker,
   }));
 }

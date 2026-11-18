@@ -28,9 +28,10 @@ export interface HostMemoryManagerPortInput {
   /** Generation of the app session the manager was created in; a later one reads as no owner. */
   generation: number;
   readEnabled: MakerMemoryHostContext['readEnabled'];
+  review?: Required<Pick<MakerMemoryHostContext, 'isOneShotRouteDisabled' | 'reviewOneShot'>>;
 }
 
-export function hostMemoryManagerPorts({ userDataDir, ownerId, generation, readEnabled }: HostMemoryManagerPortInput): MakerMemoryHostContext {
+export function hostMemoryManagerPorts({ userDataDir, ownerId, generation, readEnabled, review }: HostMemoryManagerPortInput): MakerMemoryHostContext {
   return explicitPorts<MakerMemoryHostContext>({
     userDataDir,
     readSession: () => {
@@ -51,14 +52,9 @@ export function hostMemoryManagerPorts({ userDataDir, ownerId, generation, readE
     // of this owner's teammate projects to the project's own memory folder and every other scope to
     // null (the historical place), so both processes sharing the profile put one scope in one place.
     projectMemoryDir: (scopeKey, ownerRoot) => teammateProjectMemoryStorageDir(scopeKey, ownerRoot),
-    // Auxiliary model calls send no paid request on the Host (release table rows 7b and 11), as
-    // git-snapshot.ts:22-24 does for snapshot labels. Reporting the route as disabled makes
-    // memory_review fail before the manager builds its prompt (maker-core memory/manager.ts:944);
-    // without it the manager falls back to the review agent's default route and sends a request.
-    isOneShotRouteDisabled: async () => true,
-    // Never reached: the disabled route above stops runReview first. The desktop binds the shared
-    // auxiliary model chain here (maker-host/index.ts:1068-1074); that chain sends paid requests.
-    reviewOneShot: undefined,
+    // Before the runtime binds its auxiliary chain, never fall back to a default agent model.
+    isOneShotRouteDisabled: review?.isOneShotRouteDisabled ?? (async () => true),
+    reviewOneShot: review?.reviewOneShot,
     reviewAgentOneShot: undefined,
     reviewAgent: 'claude-code',
   });
