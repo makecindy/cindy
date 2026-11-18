@@ -2296,11 +2296,12 @@ describe("chrome toggle, loading and video pages", () => {
     } finally { await stream.close(); vi.useRealTimers(); }
   });
 
-  it.each([false, true])('ignores late inactive results and refreshes an expired stream (refresh fails: %s)', async (refreshFails) => {
+  it.each(['success', 'stale', 'rejected'] as const)('ignores late inactive results and refreshes an expired stream (%s)', async (refreshResult) => {
     const url = 'xdt-video://cache/late.mp4';
     const video = { key: 'late', title: 'late.mp4', url,
       payload: { kind: 'media', media: { kind: 'video', url, previewable: false } } } as ImageLightboxProps['images'][number];
     let finish!: (media: MobileResolvedRemoteMedia) => void;
+    let reject!: (error: Error) => void;
     let consumers = 0;
     let expired = false;
     const protectLocalFile = vi.fn(() => {
@@ -2310,7 +2311,10 @@ describe("chrome toggle, loading and video pages", () => {
     });
     const resolved: MobileResolvedRemoteMedia = { url: 'http://127.0.0.1:12345/late', previewable: true, mimeType: 'video/mp4',
       ossKey: '', size: 16, expiresAt: '2099-01-01T00:00:00Z', protectLocalFile };
-    const resolver = vi.fn(() => new Promise<MobileResolvedRemoteMedia>(resolve => { finish = resolve; }));
+    const resolver = vi.fn(() => new Promise<MobileResolvedRemoteMedia>((resolve, rejectPromise) => {
+      finish = resolve;
+      reject = rejectPromise;
+    }));
     await act(async () => { mount({ images: [video, { ...video, key: 'next', url: 'https://example.invalid/next.mp4',
       payload: { ...video.payload, media: { kind: 'video', url: 'https://example.invalid/next.mp4', previewable: true } } }],
       initialUrl: url, resolveOpaqueSource: true, onResolveRemoteMedia: resolver }); });
@@ -2327,10 +2331,18 @@ describe("chrome toggle, loading and video pages", () => {
     const freshProtect = vi.fn(() => { consumers++; return () => { consumers--; }; });
     const fresh = { ...resolved, protectLocalFile: freshProtect };
     // A refreshed source can keep its URL; its lease identity still changes.
-    await act(async () => { finish(refreshFails ? resolved : fresh); });
-    if (refreshFails) {
-      // A resolver that returns the same unavailable cache cannot spin forever.
+    await act(async () => {
+      if (refreshResult === 'rejected') reject(new Error('REMOTE_OFFLINE'));
+      else finish(refreshResult === 'stale' ? resolved : fresh);
+    });
+    if (refreshResult !== 'success') {
+      // Both an unavailable cached result and a rejected refresh offer manual
+      // retry immediately, without waiting for the stale players to error.
       expect(isMounted('message.imageLightboxRetryButton')).toBe(true);
+      expect(isMounted('message.imageLightboxVideoPlayer')).toBe(false);
+      expect(isMounted('message.imageLightboxVideoWebPlayer')).toBe(false);
+      expect(resolver).toHaveBeenCalledTimes(2);
+      expect(consumers).toBe(0);
       resolver.mockResolvedValue(fresh);
       await act(async () => press('message.imageLightboxRetryButton'));
     }

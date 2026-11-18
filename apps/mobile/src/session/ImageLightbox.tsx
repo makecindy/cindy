@@ -2131,11 +2131,14 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
     (resolveOpaqueSource || isDesktopLocalMediaUrl(media.url));
   const resolvedUnsupported = resolveState?.status === 'ready' && !resolveState.media.previewable;
   const playbackFailed = !!uri && webFailedUri === uri;
-  const failed = playbackFailed || (!uri && (
+  const leaseRefreshUsed = useRef(false);
+  // A rejected lease refresh preserves the old media in resolveMap, but its
+  // closed Range URL cannot serve as a usable preview while awaiting retry.
+  const leaseRefreshFailed = leaseRefreshUsed.current && resolveState?.status === 'error';
+  const failed = playbackFailed || leaseRefreshFailed || (!uri && (
     resolveState?.status === 'error' || resolvedUnsupported || (!retryable && !media.previewable)
   ));
   const protectLocalFile = resolveState?.media?.protectLocalFile;
-  const leaseRefreshUsed = useRef(false);
   const leaseRetry = useRef({ image, onRetry });
   leaseRetry.current = { image, onRetry };
   useEffect(() => {
