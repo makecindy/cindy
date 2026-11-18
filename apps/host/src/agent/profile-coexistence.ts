@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import {
-  findConcurrentLiveInstancePids,
+  findConcurrentLiveInstancePids, parseRegisteredInstanceCandidate, recordedPidMayStillBeLive,
   type ConcurrentInstanceScanDeps,
 } from '../../../desktop/src/main/concurrentInstanceScan.js';
 import {
@@ -60,13 +60,35 @@ export const nodeProfileScanPorts: ProfileScanPorts = {
   selfPid: () => process.pid,
   isPidAlive: pid => {
     try { process.kill(pid, 0); return true; }
-    catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ESRCH') return false;
+      if (code === 'EPERM') return true;
+      throw error;
+    }
   },
   readProcessIdentities: pids => readProcessIdentities(pids),
 };
 
-const isMissing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === 'ENOENT';
-const RECORD = /^(\d+)\.json(\.bak)?$/;
+interface Registration {
+  fingerprint: string;
+  recordedAtMs?: number;
+  rootDir?: string;
+  client: boolean;
+}
+
+type StartupScanResult = 'clear' | 'desktop' | 'unknown' | 'deadline';
+interface StartupScanClock {
+  now(): number;
+  sleep(ms: number): Promise<void>;
+}
+const startupClock: StartupScanClock = {
+  now: () => performance.now(),
+  sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+};
+const STARTUP_RECHECK_DELAYS_MS = [500, 1_000, 2_000];
+const STARTUP_SCAN_BUDGET_MS = 10_000;
+type ReportRound = (round: number, elapsedMs: number, result: StartupScanResult) => void;
 
 /**
  * One scan of a profile for desktops that open its database. Returns their PIDs (empty: none).
@@ -77,60 +99,106 @@ const RECORD = /^(\d+)\.json(\.bak)?$/;
  * the OS did not give is not kept (it is asked again; meanwhile the PID counts as live, as the scan
  * treats it). Throws when the registry exists but cannot be read, as the desktop's scan does.
  */
-export function createDesktopScanner(profileDir: string, ports: ProfileScanPorts = nodeProfileScanPorts) {
-  const registry = path.join(profileDir, '.dev-instances');
-  const lockPath = path.join(profileDir, 'SingletonLock');
+export function createDesktopScanner(profileDir: string, ports: ProfileScanPorts = nodeProfileScanPorts,
+  clock: StartupScanClock = startupClock) {
   const identities = new Map<string, ProcessIdentitySnapshot>();
 
-  async function readRecords(): Promise<Map<number, string>> {
-    let names: string[];
-    try { names = await ports.readdir(registry); }
-    catch (error) { if (isMissing(error)) return new Map(); throw error; }
-    const records = new Map<number, string>();
-    for (const name of names.sort()) {
-      const match = RECORD.exec(name);
-      if (!match) continue;
-      const pid = Number(match[1]);
-      if (match[2] && records.has(pid)) continue; // `<pid>.json` (sorted first) wins over its backup
-      try { records.set(pid, await ports.readFile(path.join(registry, name))); }
-      catch (error) { if (!isMissing(error)) throw error; }
-    }
-    return records;
-  }
-
-  async function lockFingerprint(): Promise<{ pid: number; fingerprint: string } | null> {
-    try {
-      const target = await ports.readlink(lockPath);
-      const match = /-(\d+)$/.exec(target);
-      if (!match) return null;
-      let mtime: number | undefined;
-      try { mtime = (await ports.lstat(lockPath)).mtimeMs; } catch { /* the scan keeps such a PID live */ }
-      return { pid: Number(match[1]), fingerprint: `lock\u0000${target}\u0000${mtime}` };
-    } catch { return null; }
-  }
-
-  return async function scan(): Promise<number[]> {
-    const records = await readRecords();
-    const fingerprints = new Map<number, string>();
-    for (const [pid, raw] of records) fingerprints.set(pid, `registry\u0000${raw}`);
-    const lock = await lockFingerprint();
-    if (lock && !fingerprints.has(lock.pid)) fingerprints.set(lock.pid, lock.fingerprint);
-    const key = (pid: number) => `${pid}\u0000${fingerprints.get(pid)}`;
-    const ask = [...fingerprints.keys()].filter(pid => pid !== ports.selfPid() && ports.isPidAlive(pid) && !identities.has(key(pid)));
-    if (ask.length) {
-      for (const [pid, identity] of await ports.readProcessIdentities(ask)) if (identity) identities.set(key(pid), identity);
-    }
-    // Forget identities of records that are gone or changed.
-    const current = new Set([...fingerprints.keys()].map(key));
-    for (const known of [...identities.keys()]) if (!current.has(known)) identities.delete(known);
-
+  // Capture only the provenance the shared scanner actually read. Its canonical/backup
+  // handling, profile matching and PID-reuse decisions stay authoritative.
+  async function discover(identityFor: (pid: number, registration?: Registration) => ProcessIdentitySnapshot | null) {
+    const registrations = new Map<number, Registration>();
+    let lock: { pid: number; target: string } | undefined;
     const live = await findConcurrentLiveInstancePids(explicitPorts<ConcurrentInstanceScanDeps>({
-      readdir: ports.readdir, readFile: ports.readFile, readlink: ports.readlink, lstat: ports.lstat,
-      selfPid: ports.selfPid, isPidAlive: ports.isPidAlive,
-      // Synchronous: answered from the identities read above for this very record.
-      readProcessIdentity: pid => (fingerprints.has(pid) ? identities.get(key(pid)) ?? null : null),
+      readdir: ports.readdir, selfPid: ports.selfPid, isPidAlive: ports.isPidAlive,
+      readFile: async file => {
+        const raw = await ports.readFile(file);
+        const name = path.basename(file).replace(/\.bak$/, '');
+        const entry = parseRegisteredInstanceCandidate(raw, name);
+        if (entry) registrations.set(entry.pid, { fingerprint: `registry\u0000${raw}`, client: allowedBesideHost(raw),
+          recordedAtMs: entry.recordedAtMs, rootDir: entry.rootDir });
+        return raw;
+      },
+      readlink: async file => {
+        const target = await ports.readlink(file);
+        const match = /-(\d+)$/.exec(target);
+        if (match) lock = { pid: Number(match[1]), target };
+        return target;
+      },
+      lstat: async file => {
+        // The shared scanner asks for the lock identity only after this stat (also when it fails).
+        let mtimeMs: number | undefined;
+        try { const stat = await ports.lstat(file); mtimeMs = stat.mtimeMs; return stat; }
+        finally {
+          if (lock) registrations.set(lock.pid, { fingerprint: `lock\u0000${lock.target}\u0000${mtimeMs}`,
+            client: false, recordedAtMs: mtimeMs });
+        }
+      },
+      readProcessIdentity: pid => identityFor(pid, registrations.get(pid)),
     }), profileDir);
-    return live.filter(pid => !allowedBesideHost(records.get(pid)));
+    return new Map(live.filter(pid => !registrations.get(pid)?.client).map(pid => [pid, registrations.get(pid)!]));
+  }
+
+  async function scanRound(previous?: Map<number, Registration>) {
+    const candidates = await discover(() => null);
+    const key = (pid: number, entry: Registration) => `${pid}\u0000${entry.fingerprint}`;
+    const query = new Map(candidates);
+    // A vanished registration alone cannot clear a still-live, unidentified PID.
+    for (const [pid, entry] of previous ?? []) if (!query.has(pid) && ports.isPidAlive(pid)) query.set(pid, entry);
+    const keys = new Set([...query].map(([pid, entry]) => key(pid, entry)));
+    for (const cached of identities.keys()) if (previous || !keys.has(cached)) identities.delete(cached);
+    const ask = [...query].filter(([pid, entry]) => !identities.has(key(pid, entry))).map(([pid]) => pid);
+    if (ask.length) {
+      for (const [pid, identity] of await ports.readProcessIdentities(ask)) {
+        if (identity) identities.set(key(pid, query.get(pid)!), identity);
+      }
+    }
+    const identityFor = (pid: number, entry?: Registration) => entry ? identities.get(key(pid, entry)) ?? null : null;
+    // Re-read after the OS query. A replacement record cannot inherit its predecessor's evidence.
+    const blockers = await discover(identityFor);
+    for (const [pid, entry] of previous ?? []) {
+      if (!blockers.has(pid) && ports.isPidAlive(pid) &&
+          recordedPidMayStillBeLive(entry.recordedAtMs, entry.rootDir, identityFor(pid, entry))) blockers.set(pid, entry);
+    }
+    const confirmed = [...blockers].some(([pid, entry]) => identityFor(pid, entry) !== null ||
+      (previous !== undefined && previous.get(pid)?.fingerprint !== entry.fingerprint));
+    return { blockers, confirmed };
+  }
+
+  return async function scan(report?: ReportRound): Promise<number[]> {
+    if (!report) return [...(await scanRound()).blockers.keys()];
+    const start = clock.now();
+    let previous: Map<number, Registration> | undefined;
+    let round = 0;
+    let expired = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<number[]>((resolve, reject) => {
+      timer = setTimeout(() => {
+        expired = true;
+        report(round, Math.round(clock.now() - start), 'deadline');
+        if (previous?.size) resolve([...previous.keys()]);
+        else reject(Object.assign(new Error('profile scan timed out'), { code: 'ETIMEDOUT' }));
+      }, STARTUP_SCAN_BUDGET_MS);
+    });
+    async function check(reportRound: ReportRound): Promise<number[]> {
+      for (round = 1; ; round++) {
+        const { blockers, confirmed } = await scanRound(previous);
+        if (expired) return [];
+        if (clock.now() - start >= STARTUP_SCAN_BUDGET_MS) {
+          reportRound(round, Math.round(clock.now() - start), 'deadline');
+          if (previous?.size) return [...previous.keys()];
+          throw Object.assign(new Error('profile scan timed out'), { code: 'ETIMEDOUT' });
+        }
+        const result = !blockers.size ? 'clear' : confirmed ? 'desktop' : 'unknown';
+        reportRound(round, Math.round(clock.now() - start), result);
+        const delay = STARTUP_RECHECK_DELAYS_MS[round - 1];
+        if (result !== 'unknown' || delay === undefined) return [...blockers.keys()];
+        previous = blockers;
+        await clock.sleep(delay);
+        if (expired) return [];
+      }
+    }
+    try { return await Promise.race([check(report), deadline]); }
+    finally { clearTimeout(timer); }
   };
 }
 

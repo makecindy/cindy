@@ -721,7 +721,13 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   // is restarted (no automatic retry). A scan that cannot read the registry refuses as well.
   const scanProfile = createDesktopScanner(dataDir);
   let desktops: number[];
-  try { desktops = await scanProfile(); }
+  try {
+    desktops = await scanProfile((round, elapsedMs, result) => {
+      if (round > 1 || result === 'unknown' || result === 'deadline') {
+        hostLog.info('startup desktop identity check', { round, elapsedMs, result });
+      }
+    });
+  }
   catch (error) {
     runtimeLease = null; lease.release();
     runtime.state = 'blocked'; runtime.owner = ownerId; runtime.storage = 'unopened';

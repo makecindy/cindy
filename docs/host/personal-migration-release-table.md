@@ -101,6 +101,7 @@
 
 | 项 | 桌面 | Host | 后果 |
 |---|---|---|---|
+| 启动时始终查不清进程身份（甲，并存） | 桌面推迟迁移或清理 | Host 持有租约重读登记和进程身份，最多四轮、总预算十秒。用尽仍不明就释放租约，以原原因码拒绝开库 | 需要手动重启后台服务。此时“桌面版正在使用”的提示可能并不属实。 |
 | 桌面占用期间的回合结算（线 A ②） | 桌面没有 profile 互斥闸门。终态依次通知凭据切换、运行时控制和其他等待的任务 | 评审定 A：保留两种待办。两次干净扫描、运行时重建后，按登记时的账号、任务路线与待办代次复核；任务又在运行则等它结束 | 关闸期间只允许既有回合收尾。同值路线 UPDATE 也计为写入。凭据失败提示沿用桌面：Pi 通过 `maker:session-credential-switch-failed` 报告；非 Pi 的凭据切换作废时用户看不到提示（与桌面相同）；复核或写库出错只记日志并重试 |
 | `local-db:sessions:update` 上的运行时设置（甲 8） | `updateSessionInDb` 对 `effort`、`fastMode`、`permissionMode`、`planModeEnabled` 只写库、不碰运行时（`sessionPatchToRow`） | `/sessions/update` 拒绝这四项（UNSUPPORTED_CAPABILITY，指明专用入口），白名单外字段 INVALID_PARAMS | 没有客户端经这条路发这四项，所以对用户没有可见差别。理由：桌面那条是没人用的第二条实现，Host 不复制它。桌面要不要也改成拒绝，记在第五节“第一阶段剩余桌面事项”，将来单独问用户 |
 | 任务窗口预算的两条写入路径（3b-2） | 本机界面经 `updateSessionInDb`：先广播 `{ contextWindowBudget }`，再写偏好文件；偏好文件写不进时已广播了没保存的值（桌面原有缺陷，见第五节）；任务不存在报 NOT_FOUND | `/sessions/update` 经 `persistSessionFieldsWith`：先写偏好文件、成功才广播；不存在的任务由 Host 先查行补上 NOT_FOUND（`persistSessionFieldsWith` 本身不查行，会照写偏好） | 写失败时 Host 不广播未保存的值，比桌面对。两处差别由桌面 `sessionsUpdate.test.ts` 的对照测试钉住现状 |
@@ -652,3 +653,4 @@ withAccountDataAccess（2026-11-17）：新增第 26 项，减少 0 项。
 | 39 | `agent/turn-executor.mjs` 的 `recordTurnUsage` 与 `agent/usage-recording.ts` 的 `usageTarget`：终态取用量落点的约 20 行（3d，2026-11-18） | `sessionEventTerminal.ts:186–221`：consume 本轮最后一条助手消息、失败轮交接给配对的 done、Claude 续接边界 remember/finish。这几行在桌面上和 flush、盖章交织 | 保留（与桌面同一顺序）；差别：迟到事件（Host 回合结束后、上一代）只用交接的 id、不 consume。测试 `agent/usage-recording.test.mjs` |
 | 40 | `agent/usage-recording.ts` 的 AsyncLocalStorage 路由、owner 比较与 `drain`，以及“在回合中”集合（`noteRunningStatus`、`noteTurnEnded`）（3d，2026-11-18） | 桌面的端口是进程级默认实现，写库取当时的库；“在回合中”是 `sessionTurnActivityTracker.isSessionInTurn` | Host 独有的写入边界：按运行时绑定的 owner 写、上下文外的写入丢弃、关库前等写完；已开始的端口调用里的嵌套写入（消息补丁、定时任务运行的花费）比较该调用取到的 owner，不取上下文，因为任务写队列暂停后的重试（`retryFailedWrites`）在上下文之外重放它们；“在回合中”照桌面重写（前台 running status 开始，最后一个 done、终止性 error、not-running status 结束）。测试同上 |
 | 41 | `agent/usage-push-channels.ts` 的 `PHASE1_UNFORWARDED_USAGE_CHANNELS` 与 `device-link.ts` 的镜像接收方过滤（3d，2026-11-18） | 桌面设备互联转发全部可转发通道 | 平台差别（第二节“用量变化不推给远程设备”）：第一阶段不转发 12 条用量通道，名单外照常；读取与推送那一批落地时删掉。测试同上（名单内不转、名单外照转、可转发的 `usage:` 通道全部归类） |
+| 42 | Host 开库前重查未知的桌面 PID 身份（甲） | 桌面共用扫描和单次 1,500 ms 身份查询；桌面只延后迁移 | Host 持租约同时重读登记和进程身份。仅身份不明时按 0.5、1、2 秒递增等待，最多四轮、十秒。确认桌面存活或重查发现新桌面登记立即拒绝。进程已结束或已证明 PID 复用时沿原路径开库。 |

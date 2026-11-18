@@ -16,7 +16,7 @@ import { isDefinitiveRefreshError } from '../../desktop/src/main/authRefreshErro
 import { HostCrossRegionPersonalAccountError } from './auth/region-policy.ts';
 import { projectAdoptedSession } from './credentials/session.mjs';
 import { OwnerDatabaseError } from '../../desktop/src/main/localDb/startupCore.ts';
-import { createDesktopScanner, HostProfileInUseError } from './agent/profile-coexistence.ts';
+import { createDesktopScanner, HostProfileInUseError, nodeProfileScanPorts } from './agent/profile-coexistence.ts';
 import { spawn } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
 import { classifyHostStartFailure, HostAccountMismatchError, HostSignInRequiredError } from './start-failure.ts';
@@ -60,7 +60,7 @@ function setup(overrides = {}) {
     observeSkillProjectionBoundary: (ownerId) => { steps.push(`boundary:${ownerId}`); return 'stable'; },
     acquireHostRuntimeLease: () => ({ held: true, release() {} }),
     // No desktop on the profile (coexistence plan A); the refusal below scans a real one.
-    createDesktopScanner: () => async () => [], OwnerDatabaseError, HostProfileInUseError,
+    createDesktopScanner: () => async () => [], hostLog: { info() {} }, OwnerDatabaseError, HostProfileInUseError,
     HostAccountMismatchError, HostSignInRequiredError,
     readAdoptedSessionState: async () => ({ authenticated: true, realm: 'global' }),
     openOwnerDatabase: async (args) => { opens.push(args); steps.push('open'); throw new Error('database opened'); },
@@ -220,6 +220,79 @@ test('a desktop that opens the profile refuses the start: lease released, blocke
   const allowed = setup(ports);
   await assert.rejects(allowed.start('account-b'), /database opened/);
   assert.equal(allowed.opens.length, 1);
+});
+
+// A slow OS lookup is distinguishable from a live desktop only at startup. Run the real
+// startup/lease path against changing profile records with an injected OS and clock.
+function uncertainDesktopStart(t, betweenRounds) {
+  const profile = mkdtempSync(path.join(os.tmpdir(), 'host-startup-identity-'));
+  t.after(() => rmSync(profile, { recursive: true, force: true }));
+  const registry = path.join(profile, '.dev-instances');
+  mkdirSync(registry);
+  const alive = new Set([41]);
+  const identities = new Map();
+  const write = pid => writeFileSync(path.join(registry, `${pid}.json`), JSON.stringify({ pid, startedAtMs: 1000, userDataDir: profile }));
+  write(41);
+  const waits = [], queries = [], rounds = [];
+  let elapsed = 0, releases = 0;
+  const clock = { now: () => elapsed, sleep: async ms => {
+    waits.push(ms); elapsed += ms;
+    betweenRounds?.({ alive, identities, write, registry });
+  } };
+  const ports = { ...nodeProfileScanPorts, selfPid: () => 99, isPidAlive: pid => alive.has(pid),
+    readProcessIdentities: async pids => { queries.push([...pids]); return new Map(identities); } };
+  const h = setup({ resolveHostDataDir: () => profile, createDesktopScanner: dir => createDesktopScanner(dir, ports, clock),
+    acquireHostRuntimeLease: () => ({ held: true, release() { releases++; } }),
+    hostLog: { info: (_message, fields) => rounds.push(fields) } });
+  return { h, waits, queries, rounds, releases: () => releases };
+}
+
+test('startup rechecks unknown identity and opens when the process has ended', async t => {
+  const f = uncertainDesktopStart(t, ({ alive }) => alive.delete(41));
+  await assert.rejects(f.h.start('account-b'), /database opened/);
+  assert.equal(f.h.opens.length, 1);
+  assert.deepEqual(f.waits, [500]);
+  assert.equal(f.releases(), 0);
+});
+
+test('startup stops rechecking as soon as a desktop identity is confirmed', async t => {
+  const f = uncertainDesktopStart(t, ({ identities }) => identities.set(41, { startedAtMs: 1000, command: 'Cindy' }));
+  await assert.rejects(f.h.start('account-b'), { code: 'HOST_PROFILE_IN_USE_BY_DESKTOP' });
+  assert.deepEqual(f.queries, [[41], [41]]);
+  assert.deepEqual(f.waits, [500]);
+  assert.deepEqual(f.h.opens, []);
+  assert.equal(f.releases(), 1);
+});
+
+test('startup exhausts four unknown identities and releases the lease', async t => {
+  const f = uncertainDesktopStart(t);
+  await assert.rejects(f.h.start('account-b'), { code: 'HOST_PROFILE_IN_USE_BY_DESKTOP' });
+  assert.deepEqual(f.queries, [[41], [41], [41], [41]]);
+  assert.deepEqual(f.waits, [500, 1000, 2000]);
+  assert.equal(f.releases(), 1);
+  assert.equal(f.h.lease(), null);
+  assert.deepEqual(f.h.opens, []);
+  assert.deepEqual(f.rounds.map(r => r.result), Array(4).fill('unknown'));
+});
+
+test('startup refuses a new desktop registration between identity checks', async t => {
+  const f = uncertainDesktopStart(t, ({ alive, write }) => { alive.delete(41); alive.add(42); write(42); });
+  await assert.rejects(f.h.start('account-b'), { code: 'HOST_PROFILE_IN_USE_BY_DESKTOP' });
+  assert.deepEqual(f.queries, [[41], [42]]);
+  assert.deepEqual(f.waits, [500]);
+  assert.deepEqual(f.h.runtime.coexistence.desktops, [42]);
+  assert.deepEqual(f.h.opens, []);
+});
+
+test('startup keeps a vanished record blocked until the OS proves PID reuse', async t => {
+  let count = 0;
+  const f = uncertainDesktopStart(t, ({ registry, identities }) => {
+    if (++count === 1) rmSync(path.join(registry, '41.json'));
+    else identities.set(41, { startedAtMs: 60_000, command: 'unrelated program' });
+  });
+  await assert.rejects(f.h.start('account-b'), /database opened/);
+  assert.deepEqual(f.waits, [500, 1000]);
+  assert.equal(f.h.opens.length, 1);
 });
 
 /*
