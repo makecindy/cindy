@@ -22,6 +22,7 @@ export interface HostMemoryMcpPortInput {
   readsAccountHistory(sessionId: string | undefined): Promise<boolean>;
   /** This computer's device id for the task links in the results ('' while unknown). */
   deviceId(): string;
+  searchProviders?: MemoryMcpDeps['searchProviders'];
 }
 
 /**
@@ -84,9 +85,7 @@ export function hostMemoryMcpPorts(manager: MakerMemoryManager, input: HostMemor
     // As the desktop binds it (mcp-providers.ts:684). session_search keeps its own checks inside, as
     // the desktop's does.
     withAccountDataAccess: hostAccountDataAccess,
-    // Memories provided by enabled plugins: the Host has no plugin runtime context providers yet
-    // (release table row 33).
-    searchProviders: undefined,
+    searchProviders: input.searchProviders,
     // Only teammate learning records use it (botLearningTracker.ts:35-38); the Host refuses teammate
     // tasks (send-preflight.ts:19-22).
     beginWrite: undefined,

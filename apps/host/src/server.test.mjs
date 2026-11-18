@@ -562,6 +562,30 @@ test('browser pairing gates boot data, cookies and API access', async (t) => {
   assert.equal((await request('/api/sessions/list', { method: 'POST', headers: { cookie } })).status, 401);
 });
 
+// Integration: the task plugin settings endpoint has a trusted-renderer
+// contract. A paired browser has an owner cookie but no desktop capability.
+test('task plugin settings require the pinned desktop client and obey the profile hold', async t => {
+  const calls = [];
+  let held = false;
+  const auth = createWebAuth();
+  const cookie = `cindy_host_web=${auth.exchange(auth.pair())}`;
+  const request = await withServer(t, { webAuth: auth, instanceId: 'live',
+    runtimePluginSettings: (id, settings) => { calls.push([id, settings]); return settings ?? {}; },
+    profileHold: () => held ? 'HOST_PROFILE_IN_USE_BY_DESKTOP: fixture hold' : null,
+  });
+  const invoke = (headers, settings) => request('/api/runtime-plugins',
+    { method: 'POST', headers, body: JSON.stringify({ sessionId: 'task', value: settings }) });
+  const trusted = { authorization: `Bearer ${TOKEN}`, 'x-cindy-host-instance': 'live' };
+  assert.equal((await invoke({ cookie })).status, 403);
+  assert.equal((await invoke({ authorization: trusted.authorization })).status, 403);
+  assert.equal((await invoke(trusted)).status, 200);
+  assert.equal((await invoke(trusted, {})).status, 200);
+  held = true;
+  assert.equal((await invoke(trusted)).status, 409);
+  assert.equal((await invoke(trusted, {})).status, 409);
+  assert.deepEqual(calls, [['task', undefined], ['task', {}]]);
+});
+
 test('expired pairing codes and browser sessions cannot authorize a client', () => {
   let now = 0;
   const auth = createWebAuth({ now: () => now });

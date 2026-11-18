@@ -19,6 +19,7 @@ type LiveSession = {
 
 /** The input queue's deps (input-queue.mjs createInputQueue) the coordinator's ports read. */
 export interface HostCoordinatorQueueDeps {
+  getTaskRuntimePlugins?(): Pick<Deps, 'screenUserMessage' | 'onUserMessageBlocked' | 'onUserMessageRewritten'> | null;
   getMaker(): { getSession(sessionId: string): LiveSession | undefined } | null | undefined;
   readSession(sessionId: string): Promise<{ sdkSessionId?: string | null }>;
   persistMessage?: Deps['createUserMessage'];
@@ -269,6 +270,12 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     },
     getLastAssistantTranscriptUuid: id => executor.autoResumeHistory(id).getLastAssistantTranscriptUuid(id),
 
+    screenUserMessage: deps.getTaskRuntimePlugins
+      ? (id, text, item) => deps.getTaskRuntimePlugins!()?.screenUserMessage?.(id, text, item) ?? Promise.resolve({ action: 'allow' })
+      : undefined,
+    onUserMessageBlocked: (...args) => deps.getTaskRuntimePlugins?.()?.onUserMessageBlocked?.(...args),
+    onUserMessageRewritten: (...args) => deps.getTaskRuntimePlugins?.()?.onUserMessageRewritten?.(...args),
+
     // ── Not bound on the Host, and why ─────────────────────────────────────────────────────────
     // Orca tasks are refused at Host admission: no saved report is restored, so none is revalidated.
     canRestoreOrcaReport: undefined,
@@ -277,10 +284,6 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     onUserAction: undefined,
     // Provider-group tasks are refused at Host admission.
     providerGroupSwitchCandidate: undefined,
-    // Will-user-message hooks of installed plugins (row 33): not run on the Host yet.
-    screenUserMessage: undefined,
-    onUserMessageBlocked: undefined,
-    onUserMessageRewritten: undefined,
     // The desktop's Orca assignment-history gate; Orca tasks are refused at Host admission.
     onUserMessageQueryable: undefined,
     // Orca queue notes; Orca tasks are refused at Host admission.

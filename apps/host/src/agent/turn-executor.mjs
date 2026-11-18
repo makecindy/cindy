@@ -1,3 +1,4 @@
+import { getActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
 import { createMakerSteerTransaction } from '../../../desktop/src/main/maker-ipc/makerSteerTransaction.ts';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
 import { readReplyQuoteNote } from '../../../desktop/src/main/maker-ipc/chatReplyQuoteNote.ts';
@@ -828,6 +829,13 @@ export function createTurnExecutor(deps) {
     // (makerSendTransaction.ts), with the desktop's steps (runtime-selection.ts).
     applyPendingAgentSwitch: deps.applyPendingAgentSwitch,
     prepareUnhealthySession: deps.prepareUnhealthySession,
+    prepareRuntimeTurn(id, message, signal) {
+      const turn = turns.get(id);
+      if (!turn) return;
+      return deps.getTaskRuntimePlugins?.()?.prepareRuntimeTurn(id, message, signal, turn.check);
+    },
+    prepareRuntimePrompt: id => deps.getTaskRuntimePlugins?.()?.prepareTaskPromptForSend(id),
+    composeRuntimeContext: (id, text, signal) => deps.getTaskRuntimePlugins?.()?.composeRuntimeContext(id, text, signal),
     // A server's OS language is not the remote user's interface preference.
     getResolvedMainLocale: deps.getResolvedMainLocale ?? (() => null),
     getMainClassicalStyle: deps.getMainClassicalStyle ?? (() => DEFAULT_CLASSICAL_REPLY_STYLE),
@@ -900,7 +908,10 @@ export function createTurnExecutor(deps) {
         await deps.admitLocalRoute(opts);
         assertAccess?.();
         turn?.check();
-        const session = await deps.getMaker().createSession({ ...opts }, turn?.sendOpts.signal);
+        const taskPlugins = deps.getTaskRuntimePlugins?.();
+        const session = await (taskPlugins
+          ? taskPlugins.createSessionWithRuntimePlugins({ ...opts }, turn?.sendOpts.signal)
+          : deps.getMaker().createSession({ ...opts }, turn?.sendOpts.signal));
         turn?.check();
         await persistStartedSessionProvider(session, opts, assertAccess, runtimeOverride);
         turn?.check();
@@ -949,6 +960,7 @@ export function createTurnExecutor(deps) {
     },
     assertScheduledDispatchRoute: async id => { await readExecutionSession(id); },
     beforeProviderStart: async id => {
+      deps.getTaskRuntimePlugins?.()?.assertTaskPromptCurrent(id);
       const turn = turns.get(id);
       turn.check();
       await turn.sendOpts.beforeProviderStart?.();
@@ -1100,7 +1112,9 @@ export function createTurnExecutor(deps) {
     const turn = { running: true, terminal: false, dbKind: dbKind(createOpts.agentKind),
       createOpts, sendOpts, clientId, previousGeneration: turns.get(sessionId)?.generation };
     turns.set(sessionId, turn);
+    const ownerGeneration = getActiveAppSession().generation;
     turn.check = () => {
+      if (getActiveAppSession().generation !== ownerGeneration) throw new Error('input runtime owner changed');
       deps.assertCurrent();
       sendOpts.signal?.throwIfAborted();
       if (turns.get(sessionId) !== turn) throw new Error('input runtime was replaced');

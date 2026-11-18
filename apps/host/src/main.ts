@@ -148,6 +148,9 @@ import { createInputQueue } from './agent/input-queue.mjs';
 import { createHostSessionActivity } from './agent/session-activity.ts';
 import { readClaudeIdleMinutesFrom } from '../../desktop/src/main/maker-host/claudeIdleReleaseSettingsCore.js';
 import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
+import { createHostRuntimePluginSettings, createHostTaskRuntimePlugins } from './agent/task-runtime-plugins.js';
+import { setGhostToolApprovalResolver } from '../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
+import { warmRuntimePluginSettings } from '../../desktop/src/main/maker-host/runtime-plugin-settings.js';
 import { bindHostSessionRuntimeHooks, createHostRuntimeSelection, hostRuntimeSelectionQueueHooks } from './agent/runtime-selection.ts';
 import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.js';
 import type { ContextRecoveryKind } from './agent/context-recovery.ts';
@@ -624,6 +627,7 @@ function endAuthRefreshes(): void {
 let claudeState: Record<string, unknown> | null = null;
 /** Real maker-core agents registered in this process. */
 let agentGraph: ReturnType<typeof createHostAgentGraph> | null = null;
+let taskRuntimePlugins: ReturnType<typeof createHostTaskRuntimePlugins> | null = null;
 /** The maker's session-closed subscription of the current agent graph (runtime-selection.ts). */
 let offMakerSessionClosed: (() => void) | null = null;
 /** The desktop Git snapshot coordinator for this owner's tasks (agent/git-snapshot.ts). */
@@ -957,6 +961,20 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     },
   });
 
+  const taskPlugins = plugins.taskPlugins;
+  warmRuntimePluginSettings();
+  setGhostToolApprovalResolver(taskPlugins.resolveToolApproval);
+  taskRuntimePlugins = createHostTaskRuntimePlugins({
+    getMaker: () => {
+      if (!agentGraph) throw new Error('Agent runtime is unavailable');
+      return agentGraph.maker;
+    },
+    pluginHost: taskPlugins, selection: runtimeSelection, log: hostLog,
+    publish: event => {
+      if (plugins?.taskPlugins === taskPlugins && toolOwnerCurrent()) eventHub.publish(event);
+    },
+  });
+
   stopPluginAuthorization = initializeHostPluginRemoteAuthorization({ authorization: plugins.authorization,
     root: (...parts) => ownerScopedPath(dataDir, ownerId, ...parts), credentials,
     identity: () => currentDeviceId && remoteIdentityReady && account.authenticated && accountUser?.id === ownerId
@@ -1015,7 +1033,12 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       await claudeProxy.ready();
     }
     agentGraph = createHostAgentGraph({
-      onSessionClose: (id: string) => platformTools?.closeSession(id),
+      onSessionClose: (id, close) => {
+        if (!close.transient && (close.reason === 'requested' || close.reason === 'unexpected'))
+          taskRuntimePlugins?.forgetSession(id);
+        return platformTools?.closeSession(id);
+      },
+      toolLifecycleControl: taskPlugins.ghostToolLifecycleControl,
       codexRuntime,
       claudeProxy,
       providerConfig,
@@ -1049,7 +1072,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       // Vision-bridge notices, which the desktop sends its windows; the client maps them to
       // MAKER_PUSH.EVENT (device-link.ts) and they are not persisted.
       publishVisionBridgeNotice: notice => eventHub.publish(notice),
-      mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory, { readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '' }), pluginGateway.provider]),
+      mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory, { readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '', searchProviders: taskPlugins.searchGhostRuntimeMemories }), pluginGateway.provider]),
       userDataDir: dataDir,
     });
     // The desktop's Auto-review authorization context (review-context.ts).
@@ -1223,6 +1246,7 @@ const contextRecovery = createHostContextRecoveryWiring({
   rehydrateColdPiRuntimeForWindowVerification: sessionId => runtimeSelection.rehydrateColdPiRuntimeForWindowVerification(sessionId),
 });
 const inputQueue = createInputQueue({
+  getTaskRuntimePlugins: () => taskRuntimePlugins,
   getOwner: getCurrentDbClientSnapshot,
   // The turn usage recorders (agent/usage-recording.ts), fed by the turn executor.
   usage: usageRecording,
@@ -1406,7 +1430,22 @@ const sessionMove = createHostSessionMovePorts({
 });
 setLiveCcSessionBridge(sessionMove.liveCcSessionBridge);
 
+const runtimePluginSettings = createHostRuntimePluginSettings({
+  maker: { getSessionMeta: id => {
+    if (!agentGraph) throw new Error('Host runtime not ready');
+    return agentGraph.maker.getSessionMeta(id);
+  } },
+  selection: runtimeSelection,
+  resolveGhostControlPointPlugin: (point, id) => {
+    if (!plugins) throw new Error('Host plugin runtime not ready');
+    return plugins.taskPlugins.resolveGhostControlPointPlugin(point, id);
+  },
+  profileHold: () => inputQueue.isHeldForDesktop() ? profileInUseMessage() : null,
+  holdGeneration: () => inputQueue.profileHoldGeneration(),
+  publish: event => eventHub.publish(event),
+});
 const serverDeps = {
+  runtimePluginSettings,
   ipcRoute,
   // The HTTP logout's first step, before it closes the platform client and drains requests (server.mjs).
   beginOwnerBoundaryStop: () => ownerBoundary.begin(),
@@ -1746,6 +1785,7 @@ const serverDeps = {
     const text = typeof input.text === 'string' ? input.text : '';
     const seed = normalizeAutoTitle(text);
     if (!sessionId || !seed) return { applied: false, done: false };
+    if (plugins?.taskPlugins.hasEnabledUserMessageHookGhost()) return { applied: false, done: false };
     const rows = await getDbClient().drizzle.select({ title: sessionTable.title }).from(sessionTable)
       .where(eq(sessionTable.id, sessionId)).limit(1);
     const current = rows[0]?.title ?? null;
@@ -1998,6 +2038,8 @@ async function disposeOwnerRuntime(): Promise<void> {
     await attempt(() => modelAccess?.close());
     agentGraph?.gatewayRestart.clear();
     await attempt(() => providerConfig?.close());
+    taskRuntimePlugins = null;
+    setGhostToolApprovalResolver(null);
     const stopPlugins = plugins?.close();
     const stopApps = pluginGateway?.close();
     // Attach a rejection handler immediately while other services drain.

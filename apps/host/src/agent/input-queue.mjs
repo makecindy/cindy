@@ -687,12 +687,17 @@ export function createInputQueue(deps) {
    * continuation runs (holdTaskForProfile). A running turn finishes, and a context recovery's replay
    * belongs to it. Repeating it only updates the message.
    */
+  let profileHoldGeneration = 0;
   api.holdForDesktop = message => {
     const first = profileHold === null;
     profileHold = { message };
-    if (first) runtime.holdKnownTasks();
+    if (first) {
+      profileHoldGeneration++;
+      runtime.holdKnownTasks();
+    }
   };
   api.isHeldForDesktop = () => profileHold !== null;
+  api.profileHoldGeneration = () => profileHoldGeneration;
   /**
    * The desktop is gone: open again only once no turn runs (false: still held, ask again later). The
    * desktop may have answered or removed queued inputs meanwhile, so this runtime's queues are not

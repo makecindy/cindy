@@ -59,6 +59,12 @@ import { acceptSessionRuntimeMutation, getSessionRuntimeControlSnapshot } from '
 import { readHostSession } from '../session-reads.ts';
 import { createHostSessionUpdate } from './session-update.ts';
 import { createHostTaskRestore } from './task-restore.ts';
+import { createHostRuntimePluginSettings, createHostTaskRuntimePlugins } from './task-runtime-plugins.ts';
+import { createRuntimePluginHost } from '../../../desktop/src/main/cindy-brain/runtimePluginHostCore.ts';
+import { writeRuntimePluginSettings } from '../../../desktop/src/main/maker-host/runtime-plugin-settings.ts';
+import { installedGhostStoragePart } from '../../../desktop/src/shared/pluginIdentity.ts';
+import { withCrossProcessLock } from '../../../desktop/src/main/device-link/crossProcessLock.ts';
+import { ownerScopedPath } from '../../../desktop/src/main/ownerContext.ts';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
 import { readSessionContextWindowBudget } from '../../../desktop/src/main/maker-host/session-context-budget-store.js';
@@ -5473,6 +5479,269 @@ async function acceptedPiFallback(t, id, queue = {}) {
   return { r, resume: () => resumed(live, 3) };
 }
 
+function attachRuntimeHookFixture(r, hooks, answer, manifest = {}) {
+  const plugin = { manifest: { id: 'router', name: 'Router', version: '1.0.0',
+    subscribe: { hooks }, ...manifest }, enabled: true, dir: path.join(r.db.root, 'router'),
+    approval: { state: 'approved', revision: 'fixture' } };
+  const pluginId = installedGhostStoragePart(plugin);
+  const pluginHost = createRuntimePluginHost({
+    availableGhosts: () => [plugin], listGhostNotificationCandidates: async () => [plugin],
+    findGhostNotificationTarget: key => key === pluginId ? plugin : null,
+    findGhostForInstanceId: () => plugin,
+    getGhostRuntime: () => ({ stateOf: () => 'running' }),
+    broadcastGhostWindowPush() {}, log: { ...quiet, debug() {} },
+    getGhostOwnerPushStamp: () => undefined, isGhostOwnerStampCurrent: () => true,
+    ghostOwnerScope: { capture: () => 'test', isCurrent: () => true, isStable: () => true },
+    modelRouteSources: () => ({ localViews: async () => r.views.current, localAgents: () => ['pi', 'claude-code'] }),
+    sendToGhostLogic(key, event) {
+      queueMicrotask(() => {
+        const verdict = answer(event);
+        if (verdict) pluginHost.getGhostSubscriptionGateway().handleVerdict(key, {
+          type: 'event-verdict', hookId: event.hookId, ...verdict,
+        });
+      });
+      return true;
+    },
+  });
+  const taskPlugins = createHostTaskRuntimePlugins({ getMaker: () => r.h.maker, pluginHost,
+    selection: r.selection, publish: event => r.h.events.push(event), log: quiet });
+  return { taskPlugins, pluginId };
+}
+
+// Integration, 8i §二: execute the normal input transaction with the real installed-plugin gateway,
+// Host route writer, and SQLite. The cold/lazy engine and sandbox delivery are the external fixtures.
+// A hold can arrive after the hot selection is accepted, so a rejected receipt alone is insufficient.
+for (const onFailure of ['allow', 'block']) {
+  test(`plugin route at Pi acknowledgement: ${onFailure} leaves one consistent route across hold and release`, async t => {
+    const id = `plugin-hold-${onFailure}`;
+    let taskPlugins, pluginId;
+    const r = await modelChangeRuntime(t, { agent: 'pi', queue: { getTaskRuntimePlugins: () => taskPlugins } });
+    providePiWindows(r);
+    r.views.current = ['prov-a', 'prov-b'].map(provider => ({ ...switchViews('pi')[0], id: provider }));
+    ({ taskPlugins, pluginId } = attachRuntimeHookFixture(r, ['will-start-turn'], () => ({
+      action: 'route', route: { agentKind: 'pi', providerId: 'prov-b', model: 'big' },
+    })));
+    await r.createTask(id);
+    const first = await r.runTurn(id, 'initial', { contextTokens: 100, contextWindow: 200_000 });
+    await settleUntil(() => !r.h.queue.isTurnRunning(id), 'initial Pi turn ended');
+    await writeRuntimePluginSettings(id, { 'will-start-turn': [{ pluginId, onFailure }] });
+    const changes = () => r.db.db.prepare('SELECT total_changes() AS count').get().count;
+    const closed = [];
+    const closeSessionIfCurrent = r.h.maker.closeSessionIfCurrent.bind(r.h.maker);
+    r.h.maker.closeSessionIfCurrent = async (...args) => {
+      const before = changes();
+      await closeSessionIfCurrent(...args);
+      // Deliver the same production Host session:closed handler inside the audited close.
+      r.selection.onSessionClosed(id, args[0]);
+      closed.push({ instance: args[0], writes: changes() - before });
+    };
+    const setModel = first.setModel.bind(first);
+    first.setModel = async (...args) => {
+      await setModel(...args);
+      r.h.queue.holdForDesktop(HELD);
+    };
+    const eventStart = r.h.events.length;
+    await r.h.queue.enqueue(id, { clientId: 'second', text: 'second' });
+    await settleUntil(() => onFailure === 'allow'
+      ? r.h.maker.getSession(id)?.sent.includes('second')
+      : Boolean(r.h.queue.projection(id).error), 'held input was sent or blocked');
+    assert.equal(closed.length, 1, 'the original instance retired exactly once');
+    assert.equal(closed[0].instance, first);
+    assert.equal(closed[0].writes, 0, 'close did not touch the shared SQLite database');
+    assert.equal(r.row(id).provider_id, 'prov-a');
+    assert.equal(getSessionProvider(id), 'prov-a');
+    assert.deepEqual(first.sent, ['work initial']);
+    const events = r.h.events.slice(eventStart);
+    assert.equal(events.some(event => event.type === 'session_changed' &&
+      (event.patch?.providerId === 'prov-b' || event.patch?.runtimeEffective?.providerId === 'prov-b')), false);
+    assert.equal(events.some(event => event.channel === 'maker:session-credential-switch-applied'), false);
+    const live = r.h.maker.getSession(id);
+    if (onFailure === 'allow') {
+      assert.equal(live.options.providerId, 'prov-a');
+      live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+      await settleUntil(() => !r.h.queue.isTurnRunning(id), 'allowed input settled');
+    } else {
+      assert.equal(live, null);
+      assert.match(JSON.stringify(r.h.queue.projection(id).error), /selected runtime plugin stopped/i);
+    }
+    assert.equal(await r.h.queue.releaseDesktopHold(), true);
+    await writeRuntimePluginSettings(id, {});
+    // The next input uses ordinary cold start, even if the allow case already spawned a replacement.
+    if (r.h.maker.getSession(id)) await r.h.maker.closeSession(id);
+    await enqueue(r.h, id, { clientId: 'after-hold', text: 'after' });
+    assert.equal(r.h.maker.getSession(id).options.providerId, 'prov-a');
+  });
+}
+
+// §3.2, integration. Without a hold, a route returned by an approved plugin
+// must take effect on the normal dispatch. The rejection tests only exercise a late refusal.
+test('a plugin route commits and sends through the selected Pi provider without a hold', async t => {
+  const id = 'plugin-route-unheld';
+  let taskPlugins;
+  const r = await modelChangeRuntime(t, { agent: 'pi', queue: { getTaskRuntimePlugins: () => taskPlugins } });
+  providePiWindows(r);
+  r.views.current = ['prov-a', 'prov-b'].map(provider => ({ ...switchViews('pi')[0], id: provider }));
+  await r.createTask(id);
+  const live = await r.runTurn(id, 'initial', { contextTokens: 100, contextWindow: 200_000 });
+  await settleUntil(() => !r.h.queue.isTurnRunning(id), 'initial Pi turn ended');
+  const { taskPlugins: hooks, pluginId } = attachRuntimeHookFixture(r, ['will-start-turn'], () => ({
+    action: 'route', route: { agentKind: 'pi', providerId: 'prov-b', model: 'big' },
+  }));
+  taskPlugins = hooks;
+  await writeRuntimePluginSettings(id, { 'will-start-turn': [{ pluginId, onFailure: 'block' }] });
+  await enqueueUntilSent(r.h, id, { clientId: 'route', text: 'route' }, 2);
+  assert.equal(r.h.maker.getSession(id), live);
+  assert.equal(live.options.providerId, 'prov-b');
+  assert.equal(getSessionProvider(id), 'prov-b');
+  assert.equal(r.row(id).provider_id, 'prov-b');
+});
+
+// §3.2, integration: an already-held replay, and a hold that arrives while the
+// replay waits for a verdict. The no-plugin/normal replay is covered beside the recovery fixture.
+for (const timing of ['before-replay', 'during-verdict']) {
+  test(`plugin overflow replay: ${timing} follows onFailure=block without changing the stored route`, async t => {
+    const id = `plugin-replay-${timing}`;
+    let taskPlugins;
+    const r = await modelChangeRuntime(t, { agent: 'pi', queue: { getTaskRuntimePlugins: () => taskPlugins } });
+    providePiWindows(r);
+    r.views.current = ['prov-a', 'prov-b'].map(provider => ({ ...switchViews('pi')[0], id: provider }));
+    await r.createTask(id);
+    await enqueue(r.h, id, { clientId: 'original', text: 'work' });
+    const live = r.h.maker.getSession(id);
+    const { taskPlugins: hooks, pluginId } = attachRuntimeHookFixture(r, ['will-start-turn'], () => {
+      if (timing === 'during-verdict') r.h.queue.holdForDesktop(HELD);
+      return { action: 'route', route: { agentKind: 'pi', providerId: 'prov-b', model: 'big' } };
+    });
+    taskPlugins = hooks;
+    await writeRuntimePluginSettings(id, { 'will-start-turn': [{ pluginId, onFailure: 'block' }] });
+    if (timing === 'before-replay') r.h.queue.holdForDesktop(HELD);
+    live.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+    await settleUntil(() => r.db.errorRows(id).length ||
+      (r.h.maker.getSession(id) !== live && r.h.maker.getSession(id)?.sent.length), 'replay recovered or failed');
+    assert.equal(r.h.maker.getSession(id), null);
+    assert.equal(r.db.errorRows(id).length, 1);
+    assert.equal(r.row(id).provider_id, 'prov-a');
+  });
+}
+
+test('task runtime plugins apply the selected prompt and contextual note on a cold queued send', async t => {
+  let taskPlugins;
+  const r = await modelChangeRuntime(t, { queue: { getTaskRuntimePlugins: () => taskPlugins } });
+  const { taskPlugins: hooks, pluginId } = attachRuntimeHookFixture(r, ['will-compose-context'],
+    () => ({ action: 'context', blocks: [{ id: 'note', text: 'Fixture reference text' }] }),
+    { systemPrompt: [{ id: 'prompt', order: 0, text: 'Fixture task prompt' }] });
+  taskPlugins = hooks;
+  const id = 'plugin-prompt-context';
+  await r.createTask(id);
+  await writeRuntimePluginSettings(id, { 'system-prompt': [{ pluginId, onFailure: 'block' }],
+    'will-compose-context': [{ pluginId, onFailure: 'block' }] });
+  const prefs = ownerScopedPath('runtime-plugin-prefs.json');
+  const saved = readFileSync(prefs);
+  await enqueue(r.h, id, { clientId: 'note', text: 'work' });
+  const session = r.h.maker.getSession(id);
+  assert.match(session.options.userPrompt, /Fixture task prompt/);
+  assert.doesNotMatch(session.options.userPrompt, /Fixture reference text/);
+  assert.match(JSON.stringify(session.sent), /Fixture reference text/);
+  assert.deepEqual(readFileSync(prefs), saved, 'applying the stored selection leaves its bytes untouched');
+});
+
+for (const action of ['block', 'rewrite']) {
+  test(`plugin user message: ${action} applies before storage and reaches the client`, async t => {
+    let taskPlugins;
+    const r = await modelChangeRuntime(t, { queue: { getTaskRuntimePlugins: () => taskPlugins } });
+    const id = `plugin-message-${action}`;
+    const { taskPlugins: hooks } = attachRuntimeHookFixture(r, ['will-user-message'],
+      () => action === 'block' ? { action, reason: 'fixture block' } : { action, text: 'approved replacement' });
+    taskPlugins = hooks;
+    await r.createTask(id);
+    await r.h.queue.enqueue(id, { clientId: 'message', text: 'unreviewed input' });
+    await settleUntil(() => (action === 'rewrite' && r.h.maker.getSession(id)?.sent.length) ||
+      r.h.events.some(e => e.channel === 'ghosts:user-message-blocked'), 'plugin decision became visible');
+    const rows = r.userRows(id).map(row => row.content);
+    if (action === 'block') {
+      assert.deepEqual(rows, []);
+      assert.equal(r.h.maker.getSession(id), null);
+    } else {
+      assert.match(rows.join(' '), /approved replacement/);
+      assert.doesNotMatch(rows.join(' '), /unreviewed input/);
+      assert.match(JSON.stringify(r.h.maker.getSession(id).sent), /approved replacement/);
+    }
+    assert.equal(r.h.events.filter(event => event.channel === (action === 'block'
+      ? 'ghosts:user-message-blocked' : 'ghosts:user-message-rewritten')).length, 1);
+  });
+}
+
+// §3.2, integration: checkpoint ②'s real terminal settlement can cross the same hold window.
+// Invalidate its accepted route before opening the gate and verify the next input's actual engine.
+test('deferred Pi settlement clears the rejected route on release after a desktop edit', async t => {
+  const id = 'deferred-pi-held-ack';
+  const r = await modelChangeRuntime(t, { agent: 'pi' });
+  providePiWindows(r);
+  r.views.current = ['prov-a', 'prov-b', 'prov-c'].map(provider => ({ ...switchViews('pi')[0], id: provider }));
+  await r.createTask(id);
+  await enqueue(r.h, id, { clientId: 'first', text: 'work' });
+  const live = r.h.maker.getSession(id);
+  acceptSessionRuntimeMutation({ sessionId: id, source: 'fallback', deferred: true,
+    profile: { agentKind: 'pi', model: 'big', providerId: 'prov-b', effort: null, fastMode: false } });
+  const setModel = live.setModel.bind(live);
+  live.setModel = async (...args) => {
+    await setModel(...args);
+    r.h.queue.holdForDesktop(HELD);
+  };
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  await settleUntil(() => r.h.queue.isHeldForDesktop(), 'hold arrived during Pi acknowledgement');
+  await settle();
+  assert.equal(r.h.maker.getSession(id), live);
+  assert.equal(getSessionProvider(id), 'prov-b');
+  assert.equal(r.row(id).provider_id, 'prov-a');
+  assert.equal(getSessionRuntimeControlSnapshot(id).pending?.profile.providerId, 'prov-b');
+  // The desktop writes the new authoritative route while it owns this profile.
+  r.db.db.prepare('UPDATE sessions SET provider_id = ? WHERE id = ?').run('prov-c', id);
+  assert.equal(await r.h.queue.releaseDesktopHold(), true);
+  assert.equal(getSessionRuntimeControlSnapshot(id).pending, null);
+  assert.equal(r.h.maker.getSession(id), null);
+  assert.equal(getSessionProvider(id), null, 'release clears the old in-memory route before normal sends resume');
+  assert.equal(runtimeCancellations(r, id).surfaced, 1);
+  await enqueue(r.h, id, { clientId: 'next', text: 'next' });
+  assert.equal(r.h.maker.getSession(id).options.providerId, 'prov-c');
+  assert.equal(r.row(id).provider_id, 'prov-c');
+});
+
+// §3.2, integration: settings admission must survive waiting for the real
+// cross-process lock. The desktop settings tests have no Host profile boundary.
+test('plugin settings refused under the write lock preserve the file and emit no patch', async t => {
+  const r = await modelChangeRuntime(t);
+  const id = 'locked-runtime-prefs';
+  await r.createTask(id);
+  const previous = { 'will-start-turn': [{ pluginId: 'fixture', onFailure: 'block' }] };
+  await writeRuntimePluginSettings(id, previous);
+  const prefs = ownerScopedPath('runtime-plugin-prefs.json');
+  const bytes = readFileSync(prefs);
+  const entered = Promise.withResolvers();
+  const events = [];
+  const settings = createHostRuntimePluginSettings({
+    maker: r.h.maker, selection: r.selection, publish: event => events.push(event),
+    profileHold: () => r.h.queue.isHeldForDesktop() ? HELD : null,
+    holdGeneration: r.h.queue.profileHoldGeneration,
+    resolveGhostControlPointPlugin: (_point, pluginId) => { entered.resolve(); return pluginId; },
+  });
+  let result;
+  await withCrossProcessLock(prefs + '.lock', { label: 'fixture-holder', waitMs: 1000 }, async lease => {
+    assert.equal(lease.held, true);
+    result = settings(id, { 'will-start-turn': [{ pluginId: 'fixture', onFailure: 'allow' }] });
+    // Observe rejection even if the lock completes before assert.rejects attaches.
+    void result.catch(() => {});
+    await entered.promise;
+    await settle();
+    r.h.queue.holdForDesktop(HELD);
+    assert.equal(await r.h.queue.releaseDesktopHold(), true, 'even a hold that ends invalidates this admission');
+  });
+  await assert.rejects(result, /HOST_PROFILE_IN_USE_BY_DESKTOP/);
+  assert.deepEqual(readFileSync(prefs), bytes);
+  assert.deepEqual(events, []);
+  assert.deepEqual(await settings(id), previous);
+});
+
 // Rule: the desktop settles an accepted runtime control at the final terminal and reports a
 // runtime-selection-cancelled error if it fails. The ordinary fallback case has an idle engine at
 // selection time. Tier: db, two interrupted turns and a permission acknowledgement overlapping the
@@ -5691,8 +5960,9 @@ for (const held of [true, false]) {
     const first = r.h.maker.getSession(id);
     if (held) r.h.queue.holdForDesktop(HELD);
     first.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
-    await settleUntil(() => held ? r.db.errorRows(id).length > 0
-      : r.h.maker.getSession(id) !== first && r.h.maker.getSession(id)?.sent.length > 0, 'replay reached a terminal failure or the replacement engine');
+    await settleUntil(() => r.db.errorRows(id).length > 0 ||
+      (r.h.maker.getSession(id) !== first && r.h.maker.getSession(id)?.sent.length > 0),
+    'replay reached a terminal failure or the replacement engine');
     assert.equal(sends, 2);
     assert.equal(r.row(id).status, held ? 'archived' : 'active');
     assert.equal(Boolean(r.h.maker.getSession(id)?.sent.length), !held);

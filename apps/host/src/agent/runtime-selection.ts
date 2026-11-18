@@ -87,13 +87,14 @@ import { persistSessionFieldsWith } from '../../../desktop/src/main/localDb/sess
 import { readSessionSource } from '../../../desktop/src/main/localDb/sessionDispatchSnapshot.ts';
 import {
   clearOwnerScopedSessionRuntimeSelection,
+  getSessionRuntimeControlSnapshot,
   recordUserSessionRuntimeMutation,
 } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
 import { createSharedTaskSettingGuard } from '../../../desktop/src/main/maker-ipc/sharedTaskSetting.ts';
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { withRehydrateCloseSuppressed } from '../../../desktop/src/main/maker-host/rehydrateCloseSuppression.ts';
-import { setSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
-import { getActiveAppSession, setAppSessionCommitBoundaryHook } from '../../../desktop/src/main/appSessionState.ts';
+import { clearSessionProvider, getSessionProvider, hasSessionProvider, setSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
+import { getActiveAppSession, isAppSessionBoundaryPending, setAppSessionCommitBoundaryHook } from '../../../desktop/src/main/appSessionState.ts';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import * as broadcastTap from '../../../desktop/src/main/device-link/broadcast-tap.js';
 import type { Logger } from '../../../desktop/src/main/logger.ts';
@@ -107,6 +108,15 @@ import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { createPendingSessionRuntimeControlSettlement } from '../../../desktop/src/main/maker-ipc/pendingSessionRuntimeControlSettlement.ts';
 import { publishAgentEvent } from './turn-executor.mjs';
 import { createHostTurnSettlement } from './turn-settlement.ts';
+import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.js';
+import { getSessionEffort, getSessionFastMode, setSessionEffort as restoreEffort, setSessionFastMode as restoreFastMode } from '../../../desktop/src/main/maker-host/session-effort-store.js';
+import { readRuntimePluginSettings } from '../../../desktop/src/main/maker-host/runtime-plugin-settings.js';
+import { RuntimePluginControlError } from '../../../desktop/src/main/cindy-brain/runtimeControl.js';
+import { closeRejectedRuntimeAndRestoreControlStores } from '../../../desktop/src/main/maker-ipc/runtimeSetModel.js';
+import { createSessionControlRuntimeWriter } from '../../../desktop/src/main/maker-ipc/sessionControlRuntimeWriter.js';
+import { shouldApplyExclusiveProviderRerouteLive } from '../../../desktop/src/main/maker-host/model-route-guard-catalog.js';
+import type { GhostModelRoute } from '../../../desktop/src/shared/ghost.js';
+import type { Effort } from '@cindy/maker-core';
 import { explicitPorts } from './explicit-ports.ts';
 
 /** What the Host's runtime selection reads from the rest of the Host (main.ts binds it). */
@@ -252,9 +262,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   // installs: every task read shows what the task runs on, an accepted runtime override included.
   const sessionRuntimeProjector = createSessionRuntimeProjector(explicitPorts<Parameters<typeof createSessionRuntimeProjector>[0]>({
     projectScheduledPreferences,
-    // The desktop reads the task's runtime plugin selection (runtime-plugin-settings.ts); the Host has
-    // none: it does not run runtime plugins (release table row 33, the plugin batch), so no task has one.
-    runtimePluginsSelected: () => false,
+    runtimePluginsSelected: id => !!readRuntimePluginSettings(id),
   }));
   // The cleanup at a task's archive or delete (register.ts setSessionRuntimeCleanup), which
   // bindHostSessionRuntimeHooks installs: the task's runtime override and axes do not outlive it.
@@ -499,6 +507,78 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     recordSessionContextSnapshot: recordHostContextSnapshot,
   });
   const handleSetModel = createHandleSetModel(ports);
+
+  function captureRouteOwner() {
+    const generation = getActiveAppSession().generation;
+    const db = getCurrentDbClientSnapshot();
+    return () => db === getCurrentDbClientSnapshot() && generation === getActiveAppSession().generation;
+  }
+
+  class HostRouteAdmissionError extends Error {}
+
+  // The plugin route guard checks again after Pi has acknowledged a live change.
+  // A rejected selection at that point has changed the runtime but not the task row.
+  // Restore the snapshot while this selection still holds the task's send lock.
+  async function recoverRejectedRoute<T>(id: string, sameOwner: () => boolean, run: () => Promise<T>): Promise<T> {
+    return withSendToSessionLock(id, async () => {
+      const ownerMaker = maker();
+      const instance = ownerMaker.getSession(id);
+      const hadProvider = hasSessionProvider(id);
+      const provider = getSessionProvider(id);
+      const effort = getSessionEffort(id);
+      const fastMode = getSessionFastMode(id);
+      const pendingCredential = pendingCredentialSwitchService.get(id);
+      const generation = getSessionRuntimeControlSnapshot(id).generation;
+      const originalModel = instance?.model;
+      try {
+        return await run();
+      } catch (error) {
+        if (!(error instanceof HostRouteAdmissionError)) throw error;
+        const ownsInstance = () => !!instance && ownerMaker.getSession(id) === instance;
+        const modelChanged = ownsInstance() && instance?.model !== originalModel;
+        const routeChanged = hadProvider !== hasSessionProvider(id) || provider !== getSessionProvider(id);
+        const axesChanged = effort !== getSessionEffort(id) || fastMode !== getSessionFastMode(id);
+        const credentialCleared = !!pendingCredential && !pendingCredentialSwitchService.has(id);
+        const accountChanged = !sameOwner() || isAppSessionBoundaryPending();
+        if (modelChanged || routeChanged || axesChanged || credentialCleared || accountChanged) {
+          try {
+            await closeRejectedRuntimeAndRestoreControlStores({
+              closeRuntime: async () => {
+                if (instance && ownsInstance()) await withRehydrateCloseSuppressed(id, async () => {
+                  await ownerMaker.closeSessionIfCurrent(instance, 'runtime-refresh');
+                });
+              },
+              restoreControlStores() {
+                // The Host's app-session commit hook clears providers, axes and runtime
+                // control state. Its outgoing runtime disposal clears credential registrations.
+                const live = ownerMaker.getSession(id);
+                if (!sameOwner() || isAppSessionBoundaryPending() || (live && live !== instance) ||
+                    getSessionRuntimeControlSnapshot(id).generation !== generation) return;
+                if (hadProvider) setSessionProvider(id, provider);
+                else clearSessionProvider(id);
+                restoreEffort(id, effort);
+                restoreFastMode(id, fastMode);
+                if (pendingCredential && !pendingCredentialSwitchService.has(id))
+                  pendingCredentialSwitchService.register(id, pendingCredential);
+              },
+              reportCloseError: closeError => deps.log.warn('rejected Host route could not retire its runtime', {
+                sessionId: id, error: closeError instanceof Error ? closeError.message : String(closeError),
+              }),
+              assertRuntimeClosed() {
+                if (ownsInstance()) throw new Error('Rejected runtime is still registered');
+              },
+            });
+          } catch (cleanupError) {
+            // An allow-on-failure plugin must never deliver through a runtime
+            // whose rejected route is still installed.
+            deps.log.error('rejected Host route left its runtime registered', { sessionId: id, error: cleanupError });
+            throw new RuntimePluginControlError('block', '', true, 'rejected-route-still-live');
+          }
+        }
+        throw error;
+      }
+    });
+  }
   const settleRuntimeControl = createPendingSessionRuntimeControlSettlement(explicitPorts<Parameters<typeof createPendingSessionRuntimeControlSettlement>[0]>({
     canSettle: settlement.allowedControl,
     onSettlementWork: settlement.onControlWork,
@@ -637,6 +717,50 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   }));
 
   return {
+    readSessionRuntimeProfiles,
+    assertReviewSettingsUnlocked,
+    async applyPluginRoute(id: string, route: GhostModelRoute, assertVerdict: () => void, assertTurn: () => void) {
+      const sameOwner = captureRouteOwner();
+      const check = () => {
+        try { assertTurn(); }
+        catch (error) { throw new HostRouteAdmissionError('The originating Host turn changed', { cause: error }); }
+        if (!sameOwner() || isAppSessionBoundaryPending() || deps.inputQueue.isHeldForDesktop())
+          throw new HostRouteAdmissionError('The Host cannot persist a route for this turn');
+        assertVerdict();
+      };
+      check();
+      if (route.agentDeviceId) throw new Error('Host does not support remote execution');
+      const generation = getSessionRuntimeControlSnapshot(id).generation;
+      const profiles = await readSessionRuntimeProfiles(id);
+      if (!profiles) throw new Error('Task runtime unavailable');
+      check();
+      const effective = profiles.pendingMutation?.profile ?? profiles.effective;
+      const targetAgent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
+      const selectHarness = targetAgent !== effective.agentKind || !!effective.agentDeviceId;
+      const write = createSessionControlRuntimeWriter(explicitPorts<Parameters<typeof createSessionControlRuntimeWriter>[0]>({
+        agentSwitchPending: pendingSwitches, agentSwitchDeps, assertModelRouteUsable, getDesktopProviderService: providerService,
+        reconcileBotModelRoute: { acceptTaskChoice: async () => {} }, updateScheduledPreference, readSessionRuntimeProfiles,
+        readUsableAgentDeviceProviders, shouldApplyExclusiveProviderRerouteLive,
+        applySessionRuntimeSelection: async (sessionId, model, provider, selection, options) => {
+          const result = await applySessionRuntimeSelection(sessionId, model, provider, selection, { ...options, assertSelectionCurrent: check });
+          if (result.superseded && !sameOwner()) throw new HostRouteAdmissionError('Host account changed during plugin route selection');
+          return result;
+        },
+        runtimeSelectionRequiresModelWindowConfirmation: result =>
+          result.contextWindowConfirmationRequired !== undefined || result.contextTokensForConfirmation !== undefined,
+      }));
+      await recoverRejectedRoute(id, sameOwner, async () => {
+        const result = await write({ targetSessionId: id, expectedGeneration: generation,
+          beforeMutation: async () => check(),
+          patch: { ...(selectHarness ? { harness: targetAgent, agentDeviceId: null } : {}),
+            model: route.model, providerId: route.providerId,
+            ...(route.effort !== undefined ? { effort: route.effort as Effort } : {}),
+            ...(route.fastMode !== undefined ? { fastMode: route.fastMode } : {}),
+          },
+        });
+        if (!result.ok) throw new Error(result.errorCode);
+      });
+    },
     pendingSwitches,
     agentSwitchDeps,
     /** The task read projector and the archive/delete cleanup (bindHostSessionRuntimeHooks installs them, as register.ts). */

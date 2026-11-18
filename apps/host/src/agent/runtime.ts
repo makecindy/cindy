@@ -98,7 +98,7 @@ export interface HostAgentGraphOptions {
   piBinaryPath?: string;
   makerMemory?: MakerMemoryManager;
   mcpProviders?: NonNullable<AgentDeps['mcpProviders']>;
-  onSessionClose?: (id: string) => unknown;
+  onSessionClose?: (id: string, close: { reason: string; transient: boolean }) => unknown;
   isSessionInTurn?: (id: string) => boolean;
   /** The window's MCP duplicate choices for Claude (mcp-duplicate-choices.ts), as the desktop constructor. */
   resolveLocalMcpDuplicateChoices?: AgentDeps['resolveLocalMcpDuplicateChoices'];
@@ -107,6 +107,7 @@ export interface HostAgentGraphOptions {
   ensureProviderCatalog?: () => Promise<unknown>;
   /** The plugin roster section from the Host plugin gateway. */
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
+  toolLifecycleControl?: AgentDeps['toolLifecycleControl'];
   /** Built-in and approved plugin Skills (Desktop listCindyManagedSkills). All three engines get
    * it as on the desktop; Codex only reads it to switch off its own copy when the computer that
    * runs the task supplies managed Skills. Codex's Skill projection itself is release row 25. */
@@ -697,7 +698,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // Plugin tool interception (will-tool-call / did-tool-result; the desktop passes
     // ghostToolLifecycleControl): not connected on the Host yet (release table row 33, 8i, 甲). Unset,
     // the agent adds no tool lifecycle hooks: every tool call goes ahead without asking a plugin.
-    toolLifecycleControl: undefined,
+    toolLifecycleControl: options.toolLifecycleControl,
     // The turn change record the desktop keeps for Claude and Pi (turn-change-set/store.ts).
     turnChangeCapture: { beforeKnownFileWrite: captureKnownFileBefore, noteOpaqueWrite: noteOpaqueTurnChange },
     // As the desktop: the process registry (read by the quit-time Codex reaper and, from M2, the
@@ -884,7 +885,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         registerLocalAgentProcess: ({ pid, kind, role, sessionId }) =>
           registerAgentProcess(pid, kind, role, sessionId),
         // Plugin tool interception: not connected yet (as the Claude bag above; row 33, 8i, 甲).
-        toolLifecycleControl: undefined,
+        toolLifecycleControl: options.toolLifecycleControl,
         getGhostRosterPrompt: options.getGhostRosterPrompt,
         makerMemory: options.makerMemory,
         // As the desktop (pi-host.ts): the cloud-file startup hint and the extension dialog strings.
@@ -954,12 +955,12 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
       onCodexProductPromptDelivery: async ({ sessionId, historyHasProductPrompt }) => {
         await writeCodexHistoryHasProductPrompt(sessionId, historyHasProductPrompt);
       },
-      onClose: async (id, closeOptions) => {
-      await startOptions.onClose(id, closeOptions);
-      options.claudeProxy?.closeSession(id);
-      try { await options.codexRuntime?.closeSession(id); }
-      finally { await options.onSessionClose?.(id); }
-    },
+      onClose: async (id, startOptionsSnapshot, close) => {
+        await startOptions.onClose(id, startOptionsSnapshot);
+        options.claudeProxy?.closeSession(id);
+        try { await options.codexRuntime?.closeSession(id); }
+        finally { await options.onSessionClose?.(id, close); }
+      },
       // The desktop marks Orca MCP hydration and Orca workers and settles a teammate's runtime snapshot
       // here; the Host runs neither (send-preflight).
       onStartSucceeded: undefined,

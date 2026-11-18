@@ -269,7 +269,10 @@ export function createHostServer(input) {
           send(response, routed.status, routed.body);
           return;
         }
-        const result = await service(url.pathname, body, { caller });
+        const trustedNativeClient = isLoopbackRequest(request) && !request.headers.origin
+          && isAuthorized(request.headers.authorization, deps.token)
+          && Boolean(deps.instanceId && request.headers['x-cindy-host-instance'] === deps.instanceId);
+        const result = await service(url.pathname, body, { caller, trustedNativeClient });
         send(response, result.status, result.body);
         return;
       }
