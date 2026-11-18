@@ -103,7 +103,7 @@ export function createRuntimePluginSettingsHandler<Owner, Caller = unknown>({
   resolveGhostControlPointPlugin, writeRuntimePluginSettings, broadcastSessionPatched,
 }: {
   maker: Pick<Maker, 'getSessionMeta'>;
-  assertCaller?(caller: Caller): void;
+  assertCaller(caller: Caller): void;
   captureDataOwnerBroadcastScope(): Owner;
   isDataOwnerBroadcastScopeCurrent(owner: Owner): boolean;
   assertReviewSettingsUnlocked(sessionId: string): Promise<void>;
@@ -112,7 +112,7 @@ export function createRuntimePluginSettingsHandler<Owner, Caller = unknown>({
   broadcastSessionPatched(sessionId: string, patch: { runtimePluginsSelected: boolean }): void;
 }) {
   return async (caller: Caller, sessionId: unknown, value: unknown) => {
-    assertCaller?.(caller);
+    assertCaller(caller);
     const owner = captureDataOwnerBroadcastScope();
     if (typeof sessionId !== 'string' || !sessionId || !await maker.getSessionMeta(sessionId)) {
       throwIpcError('NOT_FOUND', 'Task not found');
