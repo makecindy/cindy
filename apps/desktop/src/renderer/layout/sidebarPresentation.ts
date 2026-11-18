@@ -20,6 +20,8 @@ export function useSidebarPresentation(
   sessionKey = '',
   /** 首次挂载时这次展开由视图强制（首帧程序展示），既不是启动恢复也不是用户开栏。 */
   passiveReveal = false,
+  /** 面板失去就绪时是否把宽度还给窗口；自动收起（最后一个页签关掉等）保留窗口矩形。 */
+  retractOnUnready = true,
 ): SidebarPresentation {
   const [presentation, setPresentation] = useState<SidebarPresentation>({ collapsed, instant: false });
   const expansion = useRef(expansionWidth);
@@ -29,6 +31,8 @@ export function useSidebarPresentation(
   const passive = useRef(passiveReveal);
   passive.current = passiveReveal;
   const previous = useRef<boolean | null>(null);
+  /** 上一次渲染的来源：分离窗口合并回主窗时只有来源会翻。 */
+  const previousUserToggle = useRef(userToggle);
   /** 已经走过一次就绪渲染：之前的 false 是启动前的等待，不是路由离开。 */
   const everReady = useRef(false);
   /** 当前这次展开是否由我们占用了窗口宽度（启动恢复 / 用户开栏）。 */
@@ -44,6 +48,8 @@ export function useSidebarPresentation(
 
   useLayoutEffect(() => {
     const wasCollapsed = previous.current;
+    const turnedUser = userToggle && !previousUserToggle.current;
+    previousUserToggle.current = userToggle;
     previous.current = ready ? collapsed : null;
     if (ready) {
       everReady.current = true;
@@ -52,7 +58,10 @@ export function useSidebarPresentation(
       // 只在空档的第一次记快照：设置页接管会先清 sessionKey，之后的值已不代表原任务。
       beforeGap.current = { ownsWidth: ownsWidth.current, sessionKey: lastReadySession.current };
     }
-    if (ready && wasCollapsed === collapsed) return;
+    // 分离窗口合并回主窗只翻来源：面板本来就开着，而它的宽度在分离时已经交还窗口。
+    // 这一次必须当成真正的用户开栏去拉宽，否则合并回来后侧栏被挤在独立窗口的宽度里。
+    const userReopened = ready && !collapsed && turnedUser && !ownsWidth.current;
+    if (ready && wasCollapsed === collapsed && !userReopened) return;
     const id = ++generation.current;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = null;
@@ -78,12 +87,15 @@ export function useSidebarPresentation(
       || forcedReveal) {
       // 这一帧没有占用窗口宽度（包括程序展示、路由就绪前的等待）：回来时也不再补展开。
       ownsWidth.current = false;
-      if (!ready && wasCollapsed === false && resize) {
+      // 面板自动收起（关掉最后一个页签等）时失去就绪：窗口保持原宽度，只把当前矩形
+      // 登记成新的独立基准，不按「离开就绪区间」把窗口收窄。
+      const autoSettled = !ready && wasCollapsed === false && !retractOnUnready;
+      if (!ready && wasCollapsed === false && resize && retractOnUnready) {
         void resize(0).catch(() => undefined);
       }
       // The window keeps its width, so its live rect becomes the standalone base in main:
       // persistence and the next user open must not use the forgotten expansion.
-      if (restored && collapsed) {
+      if (autoSettled || (restored && collapsed)) {
         void window.electronAPI.windowSidebarSettle?.().catch(() => undefined);
       }
       setPresentation({ collapsed, instant: true,
@@ -121,13 +133,14 @@ export function useSidebarPresentation(
       ownsWidth.current = false;
       setPresentation({ collapsed, instant: false });
     });
-  }, [collapsed, ready, root, sessionKey]);
+  }, [collapsed, ready, root, sessionKey, userToggle, retractOnUnready]);
 
   useLayoutEffect(() => () => {
     generation.current++;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     // StrictMode's second mount must establish a fresh baseline.
     previous.current = null;
+    previousUserToggle.current = userToggle;
     everReady.current = false;
     beforeGap.current = null;
     lastReadySession.current = sessionKey;

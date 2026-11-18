@@ -209,3 +209,47 @@ it('keeps the window width when the first frame reveal is forced by the view', a
   expect(resize).not.toHaveBeenCalled();
   expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
 });
+
+// Bug: 分离窗口合并回主窗时只有来源翻转；面板本来就开着，宽度在分离时已交还窗口。
+// 上一版把这次合并当成被动落回，合并回来的侧栏被挤在独立窗口的宽度里。
+it('expands when a detached sidebar merges back as a user action', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { rerender } = renderHook(
+    ({ ready, collapsed, userToggle }) =>
+      useSidebarPresentation(root, collapsed, ready, () => 400, userToggle, 'task-a', true),
+    { initialProps: { ready: true, collapsed: false, userToggle: false } },
+  );
+  // 首帧由视图强制展示：面板放出来，但不占窗口宽度。
+  await act(async () => undefined);
+  expect(resize).not.toHaveBeenCalled();
+  // 弹出到独立窗口：面板失去就绪，宽度交还窗口。
+  await act(async () => { rerender({ ready: false, collapsed: false, userToggle: false }); });
+  expect(resize).toHaveBeenLastCalledWith(0);
+  resize.mockClear();
+  // 合并回主窗的那一帧：来源还是被动，不能自己拉宽。
+  await act(async () => { rerender({ ready: true, collapsed: false, userToggle: false }); });
+  expect(resize).not.toHaveBeenCalled();
+  // 主窗的合并 effect 随后把来源翻成用户开栏：这一次要真的拉宽。
+  await act(async () => { rerender({ ready: true, collapsed: false, userToggle: true }); });
+  expect(resize).toHaveBeenCalledExactlyOnceWith(400);
+});
+
+// Bug: 关掉全局页签桶的最后一个页签时，全局具名页在同一帧变成不可用。上一版把这帧
+// 读成「离开就绪区间」，调 resize(0) 把窗口收窄；间接收起应保持窗口矩形。
+it('settles without shrinking when the pane is collapsed as readiness disappears', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
+  const settle = vi.fn(async () => undefined);
+  window.electronAPI = { windowSidebarExpansion: resize, windowSidebarSettle: settle } as never;
+  const { rerender } = renderHook(
+    ({ ready, collapsed }) =>
+      useSidebarPresentation(root, collapsed, ready, () => 400, true, '', false, false),
+    { initialProps: { ready: true, collapsed: true } },
+  );
+  await act(async () => { rerender({ ready: true, collapsed: false }); });
+  expect(resize).toHaveBeenCalledExactlyOnceWith(400);
+  resize.mockClear();
+  await act(async () => { rerender({ ready: false, collapsed: true }); });
+  expect(resize).not.toHaveBeenCalled();
+  expect(settle).toHaveBeenCalledOnce();
+});

@@ -152,6 +152,7 @@ import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { canonicalBotSessionId, ensureBotProfilesLoaded, getBotProfiles, useBotProfiles } from '@/features/bots/botStore';
 import { botRouteForOwnedSession, createSessionEntryNavigator, findBotProfileForSession, remoteBotRouteForSession, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
 import { createUserRevealMarker } from '@/layout/userRevealMarker';
+import { rightSidebarExpansionReady } from '@/layout/rightSidebarReadiness';
 import { readRemoteBots } from '@/features/bots/useRemoteBots';
 import { useSessionEntryLocationCommits } from '@/features/bots/useSessionEntryLocationCommits';
 import { islandEntryRouteState, requestIslandEntryAlertDisposal } from '@/features/bots/islandEntryAlert';
@@ -1039,13 +1040,14 @@ export function MainLayout() {
   // sessionId 用 ref 取最新值,避免回调闭包捕获旧 session。
   const handleRightSidebarEmptied = useCallback(() => {
     if (rsbDetached) return;
-    const sessionId = rightSidebarSessionIdRef.current;
-    if (sessionId == null) return;
     rightSidebarRef.current?.requestAnimateNextChange();
     // 关掉最后一个页签只是间接收起(也可能由新任务的空页签桶触发),不改窗口矩形。
     setRightTabsUserToggle(false);
     setIsRightSidebarCollapsed(true);
-    writeCollapsedFor(sessionId, true);
+    // 无任务语境的全局页签桶(如 /plugins)没有存档可写,收起本身照常走:同一帧里
+    // 全局具名页变成不可用会让面板失去就绪,不先收起就会把窗口按「离开就绪区间」收窄。
+    const sessionId = rightSidebarSessionIdRef.current;
+    if (sessionId != null) writeCollapsedFor(sessionId, true);
   }, [rsbDetached]);
 
   // 分离侧栏合并回主窗时，main 先转发不可持久化 session 的 tab 快照，
@@ -2075,12 +2077,19 @@ export function MainLayout() {
             <LayoutRoot
               onInstalledGhostsChange={handleInstalledGhostsChange}
               suppressNonChatPanels={isSettingsRoute}
-              sidebarExpansionReady={
-                rightSidebarPaneAvailable && rsbWindow.loaded && !rsbDetached && rightTabsRestored
-              }
+              sidebarExpansionReady={rightSidebarExpansionReady({
+                windowLoaded: rsbWindow.loaded,
+                detached: rsbDetached,
+                taskSidebarAvailable: rightSidebarAvailable,
+                tabsRestored: rightTabsRestored,
+                globalViewAvailable: globalRightViewAvailable,
+              })}
               rightTabsUserToggle={rightTabsUserToggle}
               rightTabsPassiveReveal={rightTabsPassiveReveal}
               rightTabsSessionKey={rightSidebarSessionId ?? ''}
+              // 关掉最后一个页签这类自动收起不还宽度；路由接管、分离到独立窗口、离开
+              // 聊天视图才把宽度还给窗口（docs/dev-rules/desktop-development.md）。
+              rightTabsRetractOnUnready={isSettingsRoute || rsbDetached || !isRightSidebarCollapsed}
               rightTabsCollapsed={
                 !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
               }
