@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -33,15 +33,7 @@ type Props = Omit<SessionEntryRowsProps, 'entries'> & {
 };
 const SECTIONS: TaskInboxSection[] = ['inbox', 'working', 'snoozed', 'archived'];
 
-/**
- * Open tasks the user completed while an automation stays bound (Done only marks them read).
- * They are sorted by their natural rank instead of the held one, so they leave Pending at once
- * rather than when the user opens another task. Cleared when the open task changes.
- */
-const settledWhileOpen = new Set<string>();
-export function settleInboxTaskWhileOpen(session: Session): void {
-  settledWhileOpen.add(sessionRowKey(session));
-}
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
 export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }: Props) {
   const { t, i18n } = useTranslation();
   const followingSessions = useActiveFollowUpSessions(sessions);
@@ -54,12 +46,34 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表整表远程活动
     [priorityContext, sessions, remoteActivityRevision],
   );
-  // A task completed while open is settled only until another task is opened.
-  const settledFor = useRef(rows.activeSessionId);
-  if (settledFor.current !== rows.activeSessionId) {
-    settledFor.current = rows.activeSessionId;
-    settledWhileOpen.clear();
-  }
+  const [settlement, setSettlement] = useState<{ viewedId?: string; keys: ReadonlySet<string> }>(
+    () => ({ viewedId: rows.activeSessionId, keys: EMPTY_KEYS }),
+  );
+  const settledWhileOpen = settlement.viewedId === rows.activeSessionId ? settlement.keys : EMPTY_KEYS;
+  useEffect(() => {
+    if (settlement.viewedId !== rows.activeSessionId) {
+      setSettlement({ viewedId: rows.activeSessionId, keys: EMPTY_KEYS });
+    }
+  }, [rows.activeSessionId, settlement.viewedId]);
+  const [explicitMoves, setExplicitMoves] = useState<ReadonlySet<string>>(EMPTY_KEYS);
+  const actionInputs = useRef({ sessions, onAction: rows.onAction, viewedId: rows.activeSessionId });
+  actionInputs.current = { sessions, onAction: rows.onAction, viewedId: rows.activeSessionId };
+  const handleAction = useCallback(async (id: string, action: Parameters<Props['onAction']>[1]) => {
+    const input = actionInputs.current;
+    const session = input.sessions.find(session => session.id === id);
+    const result = await input.onAction(id, action);
+    if (action === 'complete' && result === 'marked-read' && session) {
+      const key = sessionRowKey(session);
+      if (actionInputs.current.viewedId === input.viewedId) {
+        setSettlement(previous => ({
+          viewedId: input.viewedId,
+          keys: new Set([...(previous.viewedId === input.viewedId ? previous.keys : EMPTY_KEYS), key]),
+        }));
+      }
+      setExplicitMoves(previous => new Set(previous).add(key));
+    }
+    return result;
+  }, []);
   const [now, setNow] = useState(Date.now);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
     () => new Set(['working', 'snoozed', 'archived']),
@@ -103,23 +117,32 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
     // The open task moves like any other (a reply sends it to Working at once); its row does not
     // scroll the sidebar after it (useScrollActiveRowIntoView).
     return result;
-  }, [sessions, inboxContext, now, followingSessions, isTeammateTask]);
+  }, [sessions, inboxContext, now, followingSessions, isTeammateTask, settledWhileOpen]);
   // While the pointer is over the list (or a row menu / snooze popover it opened is still open),
   // rows keep their arrangement so a one-click Done never lands on a row that just moved.
   const rootRef = useRef<HTMLDivElement>(null);
   const pointerInside = useRef(false);
   const [frozen, setFrozen] = useState<FrozenInboxLayout | null>(null);
   const shown = useMemo(
-    () => (frozen ? freezeInboxLayout(groups, sessionRowKey, frozen) : groups),
-    [groups, frozen],
+    () => (frozen ? freezeInboxLayout(groups, sessionRowKey, frozen, explicitMoves) : groups),
+    [groups, frozen, explicitMoves],
   );
   const shownRef = useRef(shown);
   shownRef.current = shown;
   useEffect(() => {
-    if (!frozen) return;
+    if (!frozen) {
+      if (explicitMoves.size) setExplicitMoves(EMPTY_KEYS);
+      return;
+    }
     const next = snapshotInboxLayout(shown, sessionRowKey);
     if (JSON.stringify([...next]) !== JSON.stringify([...frozen])) setFrozen(next);
-  }, [shown, frozen]);
+    // Consume once it has moved (or disappeared), never turn a past completion
+    // into permission for future background reordering during the same hover.
+    if (explicitMoves.size) {
+      const pending = new Set([...explicitMoves].filter(key => next.get('inbox')?.includes(key)));
+      if (pending.size !== explicitMoves.size) setExplicitMoves(pending);
+    }
+  }, [shown, frozen, explicitMoves]);
   useEffect(() => {
     const root = rootRef.current;
     if (!frozen || !root) return;
@@ -179,6 +202,7 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
                   <div className="min-w-0 flex-1">
                     <SessionEntryRows
                       {...rows}
+                      onAction={handleAction}
                       inboxMode
                       entries={[{ kind: 'session', session }]}
                       showFirstDivider={false}

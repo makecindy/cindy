@@ -130,24 +130,22 @@ describe('sidebar inbox Done with a bound automation', () => {
   function done(names: Map<string, string[]>) {
     const runSessionAction = vi.fn();
     const markSessionsRead = vi.fn(async () => {});
-    const settleInboxTaskWhileOpen = vi.fn();
     const session = { id: 'task', deviceLinkDeviceId: undefined };
     const handler = callback('handleActionClick', {
       window: { electronAPI: { binding: { resolveSession: async () => ({ attached: false }) } } },
       toast: { warning: vi.fn() }, t: (key: string) => key,
       sessionsByIdRef: { current: new Map([['task', session]]) }, attachedSessionIdsRef: { current: new Set() },
       isRemoteSessionWriteBlocked: () => false, archiveBlockedByRunning: () => false,
-      loadActiveBoundScheduleNames: async () => names, markSessionsRead, settleInboxTaskWhileOpen,
+      loadActiveBoundScheduleNames: async () => names, markSessionsRead,
       viewedSessionIdRef: { current: 'task' },
       runSessionAction: async (id: string, action: string) => runSessionAction(id, action),
     });
-    return { run: () => handler('task', 'complete'), runSessionAction, markSessionsRead, settleInboxTaskWhileOpen };
+    return { run: () => handler('task', 'complete'), runSessionAction, markSessionsRead };
   }
   it('marks the task read and keeps it when an active automation is bound', async () => {
     const h = done(new Map([['task', ['Nightly check']]]));
-    await h.run();
+    expect(await h.run()).toBe('marked-read');
     expect(h.markSessionsRead).toHaveBeenCalledWith(['task'], undefined, { announce: false });
-    expect(h.settleInboxTaskWhileOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 'task' }));
     expect(h.runSessionAction).not.toHaveBeenCalled();
   });
   it('archives when no active automation is bound', async () => {

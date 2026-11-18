@@ -10,6 +10,7 @@ export function snapshotInboxLayout<T>(
   return new Map([...groups].map(([section, items]) => [section, items.map(keyOf)]));
 }
 
+const NO_EXPLICIT_MOVES: ReadonlySet<string> = new Set();
 const SETTLED: ReadonlySet<TaskInboxSection> = new Set(['snoozed', 'archived']);
 
 /**
@@ -18,12 +19,14 @@ const SETTLED: ReadonlySet<TaskInboxSection> = new Set(['snoozed', 'archived']);
  * updates in place. Explicit moves into or out of snoozed / archived (Done, snooze, wake,
  * restore — here or on another device) take effect at once: the row leaves its frozen slot, the
  * rows below close the gap, and it is appended to the end of its new section. Other moves and
- * newly arriving tasks wait until the pointer leaves.
+ * newly arriving tasks wait until the pointer leaves. A successful explicit Done on a bound
+ * task also moves inbox → working immediately; its marker is consumed after layout commit.
  */
 export function freezeInboxLayout<T>(
   fresh: ReadonlyMap<TaskInboxSection, readonly T[]>,
   keyOf: (item: T) => string,
   frozen: FrozenInboxLayout,
+  explicitMoves: ReadonlySet<string> = NO_EXPLICIT_MOVES,
 ): Map<TaskInboxSection, T[]> {
   const freshSection = new Map<string, { section: TaskInboxSection; item: T }>();
   for (const [section, items] of fresh) {
@@ -36,7 +39,8 @@ export function freezeInboxLayout<T>(
     for (const key of keys) {
       const current = freshSection.get(key);
       if (!current) continue; // deleted or filtered out
-      if (current.section !== section && (SETTLED.has(current.section) || SETTLED.has(section))) {
+      if (current.section !== section && (SETTLED.has(current.section) || SETTLED.has(section)
+        || (section === 'inbox' && current.section === 'working' && explicitMoves.has(key)))) {
         moved.add(key);
         continue;
       }

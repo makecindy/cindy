@@ -199,7 +199,6 @@ import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
 import { hasSettledOnlineDeviceSection } from './lib/mainListModel';
 import { sidebarPriorityContext } from './lib/sidebarPriorityContext';
-import { settleInboxTaskWhileOpen } from './sidebar/TaskInbox';
 import {
   holdSidebarViewedPriority,
   ProjectsSection,
@@ -3313,10 +3312,9 @@ function ExpandedView({
         ]).then((names) => names.get(sessionId) ?? [], () => []);
         if (boundNames.length > 0) {
           if (await blockedByAttachment()) return;
-          // The open task leaves Pending at once (explicit actions apply immediately).
-          if (session) settleInboxTaskWhileOpen(session);
           await markSessionsRead([sessionId], session?.deviceLinkDeviceId ?? undefined, { announce: false });
-          return;
+          // The inbox owns the reactive placement of this explicit successful action.
+          return 'marked-read' as const;
         }
       }
       // 归档一律不弹确认框:它是可逆的(菜单里就有「恢复」),菜单入口与行内
