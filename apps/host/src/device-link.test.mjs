@@ -23,6 +23,8 @@ import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/c
 import { sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles } from '../../desktop/src/main/localDb/schema.ts';
 import { readHostSessionList, readHostSession } from './session-reads.ts';
 import { publishAgentEvent } from './agent/turn-executor.mjs';
+import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.ts';
+import { PHASE1_UNFORWARDED_USAGE_CHANNELS } from './agent/usage-push-channels.ts';
 import { redactEventForRenderer } from '../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
 
 const waitFor = async condition => {
@@ -154,6 +156,16 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   // Saved error rows must reach the channel desktop and mobile already listen on.
   hub.publish({ type: 'error_persisted', sessionId: 'task', persistId: 'err' });
   await waitFor(() => received.every(frames => frames.some(frame => frame.payload.channel === 'local-db:session:error-persisted')));
+  // Phase 1 (release table row 13, 3d): the usage pushes the desktop's usage cores send on the tap are not
+  // forwarded through the Host's device-link wiring (agent/usage-push-channels.ts); another push on the same
+  // tap still is. A usage frame would arrive before the probe that follows it.
+  const tapScope = broadcastTap.captureDataOwnerBroadcastScope();
+  for (const channel of PHASE1_UNFORWARDED_USAGE_CHANNELS) broadcastTap.tapWindowBroadcast(channel, { sessionId: 'task' }, tapScope.ownerStamp);
+  broadcastTap.tapWindowBroadcast('local-db:session:error-persisted', { sessionId: 'task', persistId: 'tap-probe' }, tapScope.ownerStamp);
+  await waitFor(() => received.every(frames => frames.some(frame => JSON.stringify(frame).includes('tap-probe'))));
+  for (const frames of received) {
+    assert.deepEqual(frames.filter(frame => String(frame.payload?.channel ?? '').startsWith('usage:')).map(frame => frame.payload.channel), []);
+  }
   // An agent event reaches every controller as the Host publishes it for its clients: the desktop's
   // renderer-boundary projection, without the proxy credential or Host lifecycle fields.
   const browserEvent = { type: 'tool_use', sessionTurnGeneration: 3, sessionInstanceId: 'fixture-runtime', turnAttemptToken: 'fixture-attempt',
