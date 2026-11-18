@@ -10988,6 +10988,8 @@
     "autosave": {
       "saving": "Saving…",
       "saved": "Saved",
+      "unconfirmed": "Save not confirmed",
+      "savedModel": "Saved · applies next turn",
       "retry": "Save Again"
     },
     "retry": "Retry",
@@ -11101,7 +11103,7 @@
       "discard": "Discard Changes",
       "continueEditing": "Keep Editing"
     },
-    "profileSaveFailed": "Buddy settings could not be saved. No changes were applied.",
+    "profileSaveFailed": "Buddy settings could not be saved.",
     "profileSaveOffline": "Cannot connect to the buddy’s computer. Reconnect, then save again.",
     "modelLabel": "Model",
     "modelUnavailable": "{{model}} (currently unavailable)",

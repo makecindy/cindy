@@ -10988,6 +10988,8 @@
     "autosave": {
       "saving": "Wird gespeichert…",
       "saved": "Gespeichert",
+      "unconfirmed": "Speichern nicht bestätigt",
+      "savedModel": "Gespeichert · ab nächstem Zug",
       "retry": "Erneut speichern"
     },
     "retry": "Erneut versuchen",
@@ -11101,7 +11103,7 @@
       "discard": "Änderungen verwerfen",
       "continueEditing": "Weiter bearbeiten"
     },
-    "profileSaveFailed": "Die Einstellungen des Freundes konnten nicht gespeichert werden. Es wurden keine Änderungen übernommen.",
+    "profileSaveFailed": "Die Einstellungen des Freundes konnten nicht gespeichert werden.",
     "profileSaveOffline": "Der Computer des Freundes ist nicht erreichbar. Stellen Sie die Verbindung wieder her und speichern Sie erneut.",
     "modelLabel": "Modell",
     "modelUnavailable": "{{model}} (derzeit nicht verfügbar)",

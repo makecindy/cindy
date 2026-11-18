@@ -27,8 +27,13 @@ import { reconcileBotCapabilityList } from '../../../shared/botCapabilitySelecti
 import { extractIpcError } from '../../../shared/ipcError';
 import { readBotProfileSource, BotProfileSourceTooLong } from '../../../shared/botProfileSources';
 
+/** Bounds the UI wait, not the host transaction: a timeout cannot cancel a write. */
+export const BOT_SETTINGS_SAVE_WAIT_MS = 30_000;
+export class BotSettingsSaveUnconfirmed extends Error {}
+
 /** Only recognized causes become localized copy; never display raw host errors. */
 export function botSettingsSaveErrorKey(error: unknown): string | null {
+  if (error instanceof BotSettingsSaveUnconfirmed) return 'bots.autosave.unconfirmed';
   if (error instanceof BotProfileSourceTooLong) return 'bots.profile.sourceTooLong';
   const failure = extractIpcError(error);
   if (!failure) return null;
@@ -273,6 +278,9 @@ export function createBotSettingsAutosave(
   /** 是否有「离散选择」在等 —— 它不允许被后续文本输入推后。 */
   let instantPending = false;
   let inFlight: Promise<void> | null = null;
+  let waitForInFlight: Promise<boolean> | null = null;
+  let trailingAfterTimeout = false;
+  let stopWaiting: (() => void) | null = null;
   let detached = false;
   let lastStatus: BotAutosaveStatus = 'idle';
   // An explicit model choice is an action even when its configured value is unchanged.
@@ -315,16 +323,38 @@ export function createBotSettingsAutosave(
     while (inFlight) {
       // 撞上在途提交:等它结束再重判脏(trailing save),不丢这一批修改。
       // 多个 blur/flush 同时等待时，先醒来的调用可能已开始下一次保存。
-      await inFlight.catch(() => undefined);
+      const pending = inFlight;
+      if (!await waitForInFlight && inFlight === pending) {
+        // Keep one latest intent, not one continuation per blur/retry. The host
+        // may still commit this request, so do not start an overlapping write.
+        trailingAfterTimeout = true;
+        return;
+      }
     }
     if (detached) return;
-    const payload = options.readPayload();
-    if (!isDirty()) {
-      // 无实际变化 —— 不发 IPC。
-      if (lastStatus === 'error') emit('idle');
+    let payload: BotSettingsPayload;
+    try {
+      payload = options.readPayload();
+      if (!isDirty()) {
+        // 无实际变化 —— 不发 IPC。
+        if (lastStatus === 'error') emit('idle');
+        return;
+      }
+    } catch (error) {
+      emit('error', error);
       return;
     }
     emit('saving');
+    let finishWait!: (settled: boolean) => void;
+    const wait = new Promise<boolean>((resolve) => { finishWait = resolve; });
+    const waitTimer = setTimeout(() => {
+      emit('error', new BotSettingsSaveUnconfirmed());
+      finishWait(false);
+    }, BOT_SETTINGS_SAVE_WAIT_MS);
+    stopWaiting = () => {
+      clearTimeout(waitTimer);
+      finishWait(false);
+    };
     // 从这里到 `inFlight = attempt` 之间没有 await,不会有第二个 runNow 插进来
     // 看到 inFlight 为 null 而重复提交同一份 payload。
     const attempt = (async () => {
@@ -336,8 +366,21 @@ export function createBotSettingsAutosave(
       }
     })();
     inFlight = attempt;
-    await attempt;
-    if (inFlight === attempt) inFlight = null;
+    waitForInFlight = wait;
+    void attempt.then(() => {
+      clearTimeout(waitTimer);
+      if (inFlight === attempt) {
+        inFlight = null;
+        waitForInFlight = null;
+        stopWaiting = null;
+      }
+      finishWait(true);
+      if (trailingAfterTimeout) {
+        trailingAfterTimeout = false;
+        if (!detached) void runNow();
+      }
+    });
+    await wait;
   };
 
   const fire = (): void => {
@@ -376,6 +419,7 @@ export function createBotSettingsAutosave(
       const dirty = isDirty();
       // 先断开状态回调:组件正在卸载,任何 setState 都是无主的。
       detached = true;
+      stopWaiting?.();
       if (!dirty) return;
       if (inFlight) {
         // 在途提交发的是更早的快照,不能拿它当「已落库」。等它结束后补发一次,

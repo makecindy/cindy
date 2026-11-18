@@ -11072,6 +11072,8 @@
     "autosave": {
       "saving": "Enregistrement…",
       "saved": "Enregistré",
+      "unconfirmed": "Enregistrement non confirmé",
+      "savedModel": "Enregistré · dès le prochain tour",
       "retry": "Enregistrer à nouveau"
     },
     "retry": "Réessayer",
@@ -11185,7 +11187,7 @@
       "discard": "Abandonner",
       "continueEditing": "Continuer l'édition"
     },
-    "profileSaveFailed": "Impossible d'enregistrer les paramètres de l’ami. Aucune modification n'a été appliquée.",
+    "profileSaveFailed": "Impossible d’enregistrer les paramètres de l’ami.",
     "profileSaveOffline": "Impossible de joindre l’ordinateur de l’ami. Rétablissez la connexion, puis enregistrez à nouveau.",
     "modelLabel": "Modèle",
     "modelUnavailable": "{{model}} (actuellement indisponible)",

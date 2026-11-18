@@ -10943,6 +10943,8 @@
     "autosave": {
       "saving": "方存…",
       "saved": "已存",
+      "unconfirmed": "尚未核實存否",
+      "savedModel": "已存，下輪生效",
       "retry": "再存"
     },
     "retry": "再試",
@@ -11056,7 +11058,7 @@
       "discard": "棄所改",
       "continueEditing": "續修"
     },
-    "profileSaveFailed": "同伴之設未能存，變更未生效。",
+    "profileSaveFailed": "同伴之設未能存。",
     "profileSaveOffline": "同伴所在之電腦未能連通，請復連後再存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（今不可用）",

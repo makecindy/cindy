@@ -347,6 +347,80 @@ describe('createBotSettingsAutosave scheduling', () => {
 });
 
 describe('createBotSettingsAutosave flush & failure', () => {
+  // Unit regression: a host that never answers used to hold both the spinner
+  // and every navigation flush forever. Existing rejection tests always settled.
+  it('ends the UI wait without acknowledging or duplicating an unconfirmed write', async () => {
+    const h = harness();
+    const gate = h.gate();
+    h.autosave.schedule('model');
+    let returned = false;
+    const flushing = h.autosave.flush().then(() => { returned = true; });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.statuses).toEqual(['saving', 'error']);
+    expect(returned).toBe(true);
+    expect(h.autosave.hasPendingModelSelection()).toBe(true);
+    await Promise.all([flushing, h.autosave.retry(), h.autosave.flush()]);
+    expect(h.commits).toHaveLength(1);
+    // Only the real receipt can acknowledge the choice; waiting longer or
+    // pressing retry cannot manufacture success or resend an unknown write.
+    gate.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.statuses.at(-1)).toBe('saved');
+    expect(h.autosave.isDirty()).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([false, true])('coalesces later choices after timeout without stale success (late rejection=%s)', async rejected => {
+    const h = harness();
+    if (rejected) h.failNextCommits(1);
+    const first = h.gate();
+    h.edit({ name: 'First' });
+    void h.autosave.flush();
+    await vi.advanceTimersByTimeAsync(30_000);
+    h.edit({ name: 'Second' });
+    h.autosave.schedule('model');
+    await vi.advanceTimersByTimeAsync(0);
+    h.edit({ name: 'Latest' });
+    h.autosave.schedule('model');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.commits).toHaveLength(1);
+    first.release();
+    const latest = h.gate();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.baseline.name).toBe(rejected ? 'PR steward' : 'First');
+    expect(h.statuses).not.toContain('saved');
+    expect(h.commits.map(row => row.name)).toEqual(['First', 'Latest']);
+    latest.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.baseline.name).toBe('Latest');
+    expect(h.autosave.isDirty()).toBe(false);
+    expect(h.statuses.at(-1)).toBe('saved');
+  });
+
+  it('cleans the wait on unmount while finishing just the latest detached draft', async () => {
+    const h = harness();
+    const gate = h.gate();
+    h.edit({ name: 'First' });
+    const first = h.autosave.flush();
+    h.edit({ name: 'Last before leaving' });
+    h.autosave.flushDetached();
+    await first;
+    expect(vi.getTimerCount()).toBe(0);
+    gate.release();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.baseline.name).toBe('Last before leaving');
+    expect(h.commits).toHaveLength(2);
+    expect(h.statuses).toEqual(['saving']);
+  });
+
+  it('reports snapshot exceptions without leaving an unresolved flush', async () => {
+    const statuses: BotAutosaveStatus[] = [];
+    const save = createBotSettingsAutosave({ readPayload: () => { throw new Error('unavailable'); },
+      readBaseline: () => payload(), commit: vi.fn(), onStatusChange: status => statuses.push(status) });
+    await expect(save.flush()).resolves.toBeUndefined();
+    expect(statuses).toEqual(['error']);
+  });
+
   it('serializes multiple flushes waiting on the same earlier save', async () => {
     const h = harness();
     const firstGate = h.gate();

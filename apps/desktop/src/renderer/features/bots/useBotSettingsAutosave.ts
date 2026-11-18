@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 
 import {
   createBotSettingsAutosave,
@@ -86,6 +87,15 @@ export function useBotSettingsAutosave(
   commitRef.current = commit;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
+  const formOwner = useRef(getDataOwnerGeneration()).current;
+  const intentOwnerRef = useRef(formOwner);
+  // Only an explicit edit/retry can renew intent after a same-owner runtime
+  // refresh. A late receipt or unmount must not renew old work by itself.
+  const captureIntentOwner = useCallback(() => {
+    if (!isDataOwnerIdCurrent(formOwner)) return false;
+    intentOwnerRef.current = getDataOwnerGeneration();
+    return true;
+  }, [formOwner]);
 
   const [status, setStatus] = useState<BotAutosaveStatus>('idle');
   const [errorKey, setErrorKey] = useState<string | null>(null);
@@ -116,7 +126,10 @@ export function useBotSettingsAutosave(
       readBaseline: () => baselineRef.current,
       commit: async (next, modelSelection) => {
         if (!enabledRef.current) return;
+        const owner = intentOwnerRef.current;
+        if (!isDataOwnerGenerationCurrent(owner)) throw new Error('Settings owner changed');
         await commitRef.current(next, modelSelection);
+        if (!isDataOwnerGenerationCurrent(owner)) throw new Error('Settings owner changed');
       },
       onStatusChange: handleStatus,
     });
@@ -140,9 +153,10 @@ export function useBotSettingsAutosave(
     (trigger: BotAutosaveTrigger) => {
       if (!enabledRef.current) return;
       if (trigger === 'text' && composingRef.current) return;
+      if (!captureIntentOwner()) return;
       autosave.schedule(trigger);
     },
-    [autosave],
+    [autosave, captureIntentOwner],
   );
   const composition = useMemo(
     () => ({
@@ -152,10 +166,10 @@ export function useBotSettingsAutosave(
       onCompositionEnd: () => {
         composingRef.current = false;
         committablePayloadRef.current = payloadRef.current;
-        if (enabledRef.current) autosave.schedule('text');
+        if (enabledRef.current && captureIntentOwner()) autosave.schedule('text');
       },
     }),
-    [autosave],
+    [autosave, captureIntentOwner],
   );
 
   const flush = useCallback(() => {
@@ -164,9 +178,9 @@ export function useBotSettingsAutosave(
   }, [autosave]);
 
   const retry = useCallback(() => {
-    if (!enabledRef.current) return Promise.resolve();
+    if (!enabledRef.current || !captureIntentOwner()) return Promise.resolve();
     return autosave.retry();
-  }, [autosave]);
+  }, [autosave, captureIntentOwner]);
 
   const isDirty = useCallback(() => enabledRef.current && autosave.isDirty(), [autosave]);
 

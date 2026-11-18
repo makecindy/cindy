@@ -11072,6 +11072,8 @@
     "autosave": {
       "saving": "Salvando…",
       "saved": "Salvo",
+      "unconfirmed": "Salvamento não confirmado",
+      "savedModel": "Salvo · a partir do próximo turno",
       "retry": "Salvar novamente"
     },
     "retry": "Tentar novamente",
@@ -11185,7 +11187,7 @@
       "discard": "Descartar alterações",
       "continueEditing": "Continuar editando"
     },
-    "profileSaveFailed": "Não foi possível salvar as configurações do amigo. Nenhuma alteração foi aplicada.",
+    "profileSaveFailed": "Não foi possível salvar as configurações do amigo.",
     "profileSaveOffline": "Não foi possível conectar ao computador do amigo. Restabeleça a conexão e salve novamente.",
     "modelLabel": "Modelo",
     "modelUnavailable": "{{model}} (indisponível no momento)",
