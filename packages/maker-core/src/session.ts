@@ -2221,7 +2221,7 @@ export class Session {
   }
 
   /** 手动压缩会话上下文(capability 见 Capabilities.manualCompact)。 */
-  async compactSession(instructions?: string): Promise<ManualCompactResult> {
+  async compactSession(instructions?: string, beforeDispatch?: () => Promise<void>): Promise<ManualCompactResult> {
     this.ensureActive();
     if (this.agentKind === 'codex' && (this.sendReservation !== null || this.hostTurnLeases.size > 0)) {
       throw new Error('Cannot compact while a Codex send is reserved');
@@ -2245,7 +2245,7 @@ export class Session {
       this.abortRecoveryEpoch += 1;
       this.abortRecoveryScheduledFor = null;
     }
-    return this.handle.compactSession(instructions);
+    return this.handle.compactSession(instructions, beforeDispatch);
   }
 
   async getSessionTree(): Promise<SessionTreeSnapshot> {
