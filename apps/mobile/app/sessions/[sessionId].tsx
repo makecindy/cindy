@@ -428,11 +428,8 @@ import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-sha
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import {
-  confirmAgentLocationForPick,
-  confirmMobileSessionAgentSwitch,
-} from '@/session/sessionAgentSwitchConfirmation';
-import {
   effectiveAgentDeviceId,
+  resolveAgentLocationPick,
   intentChangesAgentLocation,
   mobileAgentLabel,
   normalizeSessionAgentSwitchIntent,
@@ -2795,7 +2792,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // Orca 的同引擎模型选择也只登记意图，保留当前执行单元直到下一次发送。
   const orcaModelSelectionUsesIntent = !!currentSession?.orcaRole && sessionAgentSwitchSupported;
   // 远程 Agent:模型列表在被控电脑自己的供应商之外,另列同账号其他电脑上开放了远程调用的供应商
-  // (与桌面同一套,2026-10-07 产品裁决)。选另一台电脑的模型 = 把 Agent 挪过去,先二次确认;
+  // (与桌面同一套,2026-10-07 产品裁决)。选另一台电脑的模型 = 下一条消息把 Agent 挪过去;
   // 同一台电脑内换模型直接切。共享任务访客不能换电脑，SSH 不支持切换;
   // 旧被控端不投影 agentDeviceId 字段、也不认换位置参数,这些情况维持原有调用与展示。
   // Orca Lead / 本机 Worker 要被控电脑声明 supportsOrcaAgentRelocation 才能换电脑(旧版会拒绝)；
@@ -3136,16 +3133,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const composerRuntimeAccessibilityLabel = nextAgentDeviceName && nextAgentDeviceName !== nextAgentDeviceId
     ? [composerRuntimeAccessibilitySummary, nextAgentDeviceName].filter(Boolean).join(', ')
     : composerRuntimeAccessibilitySummary;
-  // 换电脑确认里的被控电脑名;路由参数缺设备名时会以 deviceId 兜底,那不是给人看的名字。
+  // 选择器说明里使用被控电脑的展示名，缺名时不显示设备 ID。
   const controlledComputerName = (() => {
     const name = currentSession?.deviceLinkDeviceName?.trim();
     return name && name !== deviceId ? name : null;
   })();
-  const remoteAgentDeviceName = useCallback(
-    (agentDeviceId: string) =>
-      deviceDisplayName(agentDeviceId, undefined, remoteAgentCatalogs),
-    [remoteAgentCatalogs],
-  );
   const paneLayout = useSessionPaneLayout();
   const horizontalSystemHeader = Platform.OS === 'ios' && adaptiveWindow.barEdge === 'none'
     && !paneLayout.persistent && !shareSelectionActive;
@@ -9234,16 +9226,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ? { effort: next.effort || null, fastMode: next.fastMode }
       : undefined;
     void (async () => {
-      // 这份列表只有被控电脑的目录:Agent 在另一台电脑运行时,选中 = 改回被控电脑运行(先确认)。
-      const location = await confirmAgentLocationForPick({
+      // 这份列表只有被控电脑的目录:Agent 在另一台电脑运行时,选中 = 改回被控电脑运行。
+      const location = resolveAgentLocationPick({
         movable: agentLocationMovable,
         session: currentSession,
-        intent: agentSwitchIntent,
-        sourceAgentKind: sessionAgentKind,
-        targetAgentKind: modelSheetAgentKind,
         catalogDeviceId: null,
-        deviceName: remoteAgentDeviceName,
-        hostName: controlledComputerName,
       });
       if (!location) return;
       if (orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || location.agentDeviceId !== undefined) {
@@ -9292,7 +9279,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     agentLocationMovable,
     agentSwitchIntent,
     canUseRemoteSessionControls,
-    controlledComputerName,
     currentSession,
     maker,
     modelSheetAgentKind,
@@ -9300,7 +9286,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     modelSheetSelection,
     orcaModelSelectionUsesIntent,
     canStageOrcaModelSelection,
-    remoteAgentDeviceName,
     runControlAction,
     sessionAgentKind,
     sessionId,
@@ -9325,25 +9310,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       await loadComposerAgentCapabilities(config.agent, catalogDeviceId));
     if (!targetCapabilities || deviceIdRef.current !== deviceId) return false;
     if (config.fast && (!capability.supportsFastMode || !targetCapabilities.hasFastMode)) return false;
-    // 与任务当前所在电脑不同 = 连 Agent 的运行位置一起换(先确认,下一条消息生效);
+    // 与任务当前所在电脑不同 = 连 Agent 的运行位置一起换(下一条消息生效);
     // 同一台电脑内换模型直接切。
-    const location = await confirmAgentLocationForPick({
+    const location = resolveAgentLocationPick({
       movable: agentLocationMovable,
       session: currentSession,
-      intent: agentSwitchIntent,
-      sourceAgentKind: sessionAgentKind,
-      targetAgentKind: config.agent,
       catalogDeviceId,
-      deviceName: remoteAgentDeviceName,
-      hostName: controlledComputerName,
     });
-    if (!location || deviceIdRef.current !== deviceId) return false;
+    if (!location) return false;
     const relocates = location.agentDeviceId !== undefined;
     if (config.agent !== sessionAgentKind) {
       if (!sessionAgentSwitchSupported) return false;
-      // 换电脑与换引擎是同一份交接风险:换电脑那一步已经确认过,不再叠一层换引擎确认。
-      if (!relocates && agentSwitchIntent?.targetAgentKind !== config.agent && !(await confirmMobileSessionAgentSwitch(config.agent, !!agentSwitchIntent,
-          ))) return false;
       const applied = await writeSessionAgentSwitchIntent({targetAgentKind:config.agent,model:config.modelId,
         providerId:config.providerId,effort:config.effort,fastMode:config.fast,...location});
       if (applied) setModelSheetAgentKind(config.agent);
@@ -9380,7 +9357,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   }, [canUseRemoteSessionControls,currentSession,controlBusy,composerDeviceProviders.providers,maker,
     sessionAgentKind,sessionAgentSwitchSupported,agentSwitchIntent,writeSessionAgentSwitchIntent,
     runControlAction,setComposerModel,sessionId,deviceId,agentLocationMovable,remoteAgentCatalogs,
-    remoteAgentDeviceName,controlledComputerName,orcaModelSelectionUsesIntent,canStageOrcaModelSelection,loadComposerAgentCapabilities]);
+    orcaModelSelectionUsesIntent,canStageOrcaModelSelection,loadComposerAgentCapabilities]);
 
   const selectComposerFlatModel = useCallback((option: MobileModelOption) => {
     setModelSheetOpen(false);
@@ -9395,17 +9372,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ? { effort: next.effort || null, fastMode: next.fastMode }
       : undefined;
     void (async () => {
-      // 扁平目录同样是被控电脑的:Agent 在另一台电脑运行时,换模型 = 改回被控电脑运行(先确认,
-      // 不带来源 = 默认路由)。
-      const location = await confirmAgentLocationForPick({
+      // 扁平目录来自被控电脑，选中后 Agent 改回被控电脑运行，来源走默认路由。
+      const location = resolveAgentLocationPick({
         movable: agentLocationMovable,
         session: currentSession,
-        intent: agentSwitchIntent,
-        sourceAgentKind: sessionAgentKind,
-        targetAgentKind: sessionAgentKind,
         catalogDeviceId: null,
-        deviceName: remoteAgentDeviceName,
-        hostName: controlledComputerName,
       });
       if (!location) return;
       if (location.agentDeviceId !== undefined || orcaModelSelectionUsesIntent) {
@@ -9436,17 +9407,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         },
       );
     })();
-  }, [agentLocationMovable, agentSwitchIntent, canUseRemoteSessionControls, controlledComputerName, currentSession, modelSheetAgentKind, modelSheetCapabilities, modelSheetSelection?.effort, modelSheetSelection?.fastMode, orcaModelSelectionUsesIntent, remoteAgentDeviceName, runControlAction, sessionAgentKind, setComposerModel, writeSessionAgentSwitchIntent, canStageOrcaModelSelection]);
-  const browseComposerModelAgent = useCallback(async (next: MobileSessionAgentKind) => {
+  }, [agentLocationMovable, agentSwitchIntent, canUseRemoteSessionControls, currentSession, modelSheetAgentKind, modelSheetCapabilities, modelSheetSelection?.effort, modelSheetSelection?.fastMode, orcaModelSelectionUsesIntent, runControlAction, sessionAgentKind, setComposerModel, writeSessionAgentSwitchIntent, canStageOrcaModelSelection]);
+  const browseComposerModelAgent = useCallback((next: MobileSessionAgentKind) => {
     if (next === modelSheetAgentKind) return true;
-    if (next !== sessionAgentKind) {
-      if (!sessionAgentSwitchSupported) return false;
-      const confirmed = await confirmMobileSessionAgentSwitch(next, !!agentSwitchIntent);
-      if (!confirmed) return false;
-    }
+    if (next !== sessionAgentKind && !sessionAgentSwitchSupported) return false;
     setModelSheetAgentKind(next);
     return true;
-  }, [agentSwitchIntent, modelSheetAgentKind, sessionAgentKind, sessionAgentSwitchSupported]);
+  }, [modelSheetAgentKind, sessionAgentKind, sessionAgentSwitchSupported]);
   const changeComposerSelectedEffort = useCallback((effort: string) => {
     if (!canConfigureSessionModel) return;
     // 跨引擎、换位置或 Orca 同引擎 intent:改 intent 本身(保留已有位置),
@@ -10893,6 +10860,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   remote: {
                     catalogs: modelSheetRemoteCatalogs,
                     selectedDeviceId: nextAgentDeviceId,
+                    hostDeviceName: controlledComputerName,
                     // 供应商组:组里其他电脑收进组那一项;归组的任务在组那一项里选模型留在此刻运行的那台。
                     hostDeviceId: deviceId,
                     providerGroup: remoteProviderGroup,

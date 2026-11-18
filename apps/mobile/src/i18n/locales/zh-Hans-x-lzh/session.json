@@ -866,7 +866,7 @@
   },
   "providerGroupRebalance": {
     "title": "改至 {{label}} 续之？",
-    "body": "为均耗各名籍之限额，宜将此讯改由 {{label}} 遣出（{{quota}}）。改过去将携近数轮言谈与摘要，更早之细节或记不全。",
+    "body": "为均耗各名籍之限额，宜将此讯改由 {{label}} 遣出（{{quota}}）。改则承其言谈之脉，旧讯或约，原录犹存。",
     "quota": "尚余 {{left}}%",
     "quotaReset": "尚余 {{left}}%，{{reset}}后重置",
     "confirm": "改之",

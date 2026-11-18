@@ -46,34 +46,20 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "La conversación actual no cabe en este modelo",
     "remoteTitle": "Este cambio de modelo remoto no es compatible",
-    "description": "Esta conversación ya usa {{used}}, más de lo que admite el nuevo modelo ({{total}}, aproximadamente {{pct}}%). Si cambias, Cindy hará un breve resumen y continuará. El historial de la conversación se conserva, pero no se pasará todo palabra por palabra.",
     "remoteDescription": "Esta tarea remota ya utiliza {{used}} / {{total}} del contexto del modelo más pequeño (aproximadamente {{pct}}%), por lo que Cindy no puede cambiar de forma segura. Mantén el modelo actual o inicia una nueva tarea antes de elegir este modelo.",
-    "cancel": "Mantener este modelo",
-    "confirm": "Cambiar y continuar"
+    "cancel": "Mantener este modelo"
   },
   "switchOutcome": {
     "applied": "El cambio de proveedor de modelo ya está en vigor.",
     "failed": "Error en el cambio de proveedor de modelo. Elige el modelo de nuevo."
   },
   "agentSwitch": {
-    "browseAccessibility": "Explorar modelos {{agent}}",
-    "confirmTitle": "¿Cambiar a {{agent}}?",
-    "confirmMessage": "Cuando envíes el siguiente mensaje, {{appName}} transferirá esta sesión a {{agent}}. Los dos Agents pueden interpretar el contexto y las herramientas de distinta manera. Confirma el cambio antes de elegir el modelo de destino.",
-    "cancel": "Cancelar",
-    "confirm": "Continuar"
-  },
-  "agentRelocation": {
-    "titleOther": "¿Ejecutar el Agent en “{{device}}”?",
-    "titleHost": "¿Ejecutar el Agent en “{{host}}” nuevamente?",
-    "titleHostUnnamed": "¿Ejecutar nuevamente el Agent en la computadora de la sesión?",
-    "message": "El registro de conversación en la otra computadora no se puede mover, por lo que continúa desde un resumen de transferencia. Es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envías el siguiente mensaje.",
-    "messageNativeHistory": "El registro completo de la conversación se copia y continúa desde donde estaba. Si no se puede restaurar, continúa desde un resumen de transferencia y es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envías el siguiente mensaje.",
-    "confirm": "Cambiar de computadora",
-    "cancel": "Dejar como está"
+    "browseAccessibility": "Explorar modelos {{agent}}"
   },
   "unified": {
+    "remoteCopyUnavailableOn": "«{{device}}» no puede usar {{provider}} en este momento.",
+    "remoteCopyUnavailableOnTaskComputer": "La computadora de la tarea no puede usar {{provider}} en este momento.",
     "accountCount_one": "{{count}} cuenta",
     "accountCount_other": "{{count}} cuentas",
     "accountFallback": "Cuenta {{index}}",
