@@ -485,22 +485,6 @@ export function ProjectSettingsDialog({
                         }}
                         inputClassName="text-15"
                       />
-                      {(!create || !!directory) && name !== defaultName && (
-                        <Button
-                          variant="secondary"
-                          tone="quiet"
-                          size="sm"
-                          className="-ml-3 mt-1"
-                          disabled={busy || !available}
-                          onClick={() => {
-                            nameEdited.current = false;
-                            setName(defaultName);
-                          }}
-                        >
-                          <RotateCcw size={13} />
-                          {label('reset')}
-                        </Button>
-                      )}
                     </div>
                   </div>
                   {!create && (

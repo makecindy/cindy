@@ -137,7 +137,8 @@ export default {
         await page.evaluate(() => window.projectPickerCancelled = false);
       }
       await ui.capture('automatic-location');
-      if (ui.case === 'create-auto') await page.getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true }).click();
+      if (await page.getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true }).count())
+        throw new Error('Automatic location exposed the additional directory picker');
       await page
         .getByRole('button', { name: await ui.t('projectSettings.createAction'), exact: true })
         .click();
@@ -147,7 +148,6 @@ export default {
       if (repository && writes[0].repositoryUrl !== 'https://gitlab.example.com/engineering/platform/client/applications/project-management/demo')
         throw new Error('Repository paste was lost');
       if (!repository && writes[0].repositoryUrl) throw new Error('Blank creation retained a hidden repository URL');
-      if (ui.case === 'create-auto' && writes[0].value.directories?.[0]?.path !== '/Projects/Reference') throw new Error('Adding another directory replaced the automatic primary');
       const opened = await page.evaluate(() => window.projectCreatedPath);
       if (opened !== (repository ? '/Projects/demo' : '/Projects/Demo'))
         throw new Error('Did not use host-assigned directory');
@@ -217,7 +217,7 @@ export default {
         window.projectPickerPath = path;
       }, '/Projects/Example');
       await page
-        .getByRole('button', { name: await ui.t('projectSettings.addDirectory'), exact: true })
+        .getByRole('button', { name: await ui.t('projectSettings.changeMainDirectory'), exact: true })
         .click();
       await page.evaluate(() => {
         window.projectPickerPath = '/Projects/Reference';
@@ -252,7 +252,7 @@ export default {
           window.projectPickerPath = path;
         }, '/Projects/Example');
         await page
-          .getByRole('button', { name: await ui.t(ui.case === 'create-legacy' ? 'projectSettings.addDirectory' : 'projectSettings.changeMainDirectory'), exact: true })
+          .getByRole('button', { name: await ui.t(ui.case === 'create-legacy' ? 'projectSettings.chooseExistingFolder' : 'projectSettings.changeMainDirectory'), exact: true })
           .click();
         if ((await page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true }).inputValue()) !== 'My project') throw new Error('Choosing a folder replaced the manually entered name');
         await page.evaluate(() => {
@@ -365,6 +365,7 @@ export default {
       });
       const original = await input.inputValue();
       await input.fill('Discard this name');
+      if (await (await button('reset')).count()) throw new Error('Name editing exposed a reset action');
       await input.press('Escape');
       await (await button('keepEditing')).click();
       if (await input.inputValue() !== 'Discard this name') throw new Error('Continuing editing lost the name draft');

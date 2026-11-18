@@ -629,21 +629,6 @@ export function ProjectSettingsSheet({
                       { borderColor: colors.border },
                     ]}
                   />
-                  {(!create || !!directory) && name !== defaultName && (
-                    <Pressable
-                      disabled={disabled}
-                      onPress={() => {
-                        nameEdited.current = false;
-                        setName(defaultName);
-                      }}
-                      accessibilityRole="button"
-                      style={[styles.reset, { alignSelf: "flex-start" }]}
-                    >
-                      <Text style={[styles.note, noteColor]}>
-                        {label("reset")}
-                      </Text>
-                    </Pressable>
-                  )}
                 </View>
               </View>
               {!create && (

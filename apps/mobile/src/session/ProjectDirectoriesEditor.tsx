@@ -133,6 +133,7 @@ export function ProjectDirectoriesEditor({
         </View>
       ))}
       {allowAdd &&
+        !automatic &&
         value.length < 10 &&
         (enteringPath ? (
           <View style={styles.group}>
@@ -155,7 +156,7 @@ export function ProjectDirectoriesEditor({
             />
             <MainWindowActionButton
               action={{
-                label: label("addDirectory"),
+                label: label(mainDirectory ? "addDirectory" : "chooseExistingFolder"),
                 disabled: disabled || !path.trim(),
                 tone: "secondary",
                 onPress: () => {
@@ -188,7 +189,7 @@ export function ProjectDirectoriesEditor({
         ) : (
           <MainWindowActionButton
             action={{
-              label: label("addDirectory"),
+              label: label(mainDirectory ? "addDirectory" : "chooseExistingFolder"),
               tone: "secondary",
               disabled,
               onPress: () => {

@@ -124,6 +124,7 @@ export function ProjectDirectoriesEditor({
             </div>
           ))}
           {allowAdd &&
+            !automatic &&
             value.length < 10 &&
             (enteringPath ? (
               <div className="flex flex-col gap-2">
@@ -152,7 +153,7 @@ export function ProjectDirectoriesEditor({
                     {label('cancel')}
                   </Button>
                   <Button disabled={disabled || !path.trim()} onClick={() => add(path)}>
-                    {label('addDirectory')}
+                    {label(mainDirectory ? 'addDirectory' : 'chooseExistingFolder')}
                   </Button>
                 </div>
               </div>
@@ -180,7 +181,7 @@ export function ProjectDirectoriesEditor({
                 }}
               >
                 <FolderPlus size={15} />
-                {label('addDirectory')}
+                {label(mainDirectory ? 'addDirectory' : 'chooseExistingFolder')}
               </Button>
             ))}
           {error && (
