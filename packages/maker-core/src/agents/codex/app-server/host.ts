@@ -1004,16 +1004,18 @@ export class AppServerHost {
       if (previous?.release?.state === 'failed') {
         await this.requestThreadRelease(threadId, previous);
       }
+      if (previous?.release?.state === 'done') claim.previous = undefined;
       if (this.threadResumeOwners.get(threadId) !== claim) throw new Error('Codex thread resume was superseded before dispatch');
       const remaining = opts?.timeoutMs == null ? undefined : opts.timeoutMs - (Date.now() - beganAt);
       if (remaining !== undefined && remaining <= 0) throw new Error('Codex thread cleanup consumed the resume timeout budget');
       claim.phase = 'pending';
+      this.releasedThreadOwners.delete(claim.owner);
       const result = await this.dispatchRequest<R>(method, params, { ...opts, ...(remaining === undefined ? {} : { timeoutMs: remaining }), beforeDispatch: () => {
         opts?.beforeDispatch?.();
         dispatched = true;
       } });
       claim.phase = 'ready'; // Subscription, not the native response, commits a takeover.
-      if (previous?.owner === claim.owner && previous.phase === 'active') {
+      if (previous?.owner === claim.owner && previous.phase === 'active' && this.subscribers.has(threadId)) {
         claim.phase = 'active';
         claim.previous = undefined;
       }
@@ -1024,6 +1026,7 @@ export class AppServerHost {
       if (!dispatched || error instanceof AppServerResponseError) {
         claim.phase = 'rejected';
         this.settleThreadRelease(threadId);
+        this.confirmUnownedThreadOwner(claim.owner);
       } else {
         claim.phase = 'uncertain';
         for (let prior = claim.previous; prior; prior = prior.previous) {
@@ -1120,7 +1123,8 @@ export class AppServerHost {
       }
     }
     await Promise.all(releases);
-    return found;
+    if (!found && this.threadOwnerCleanupProofs.has(owner)) throw new Error('Codex startup task cleanup is awaiting host exit');
+    return found || this.releasedThreadOwners.has(owner);
   }
 
   whenThreadOwnerReleased(owner: object): Promise<void> {
@@ -1137,6 +1141,15 @@ export class AppServerHost {
     this.releasedThreadOwners.add(owner);
     this.threadOwnerCleanupProofs.get(owner)?.resolve();
     this.threadOwnerCleanupProofs.delete(owner);
+  }
+
+  private confirmUnownedThreadOwner(owner: object): void {
+    for (const current of this.threadResumeOwners.values()) {
+      for (let claim: ThreadResumeClaim | undefined = current; claim; claim = claim.previous) {
+        if (claim.owner === owner && claim.phase !== 'rejected') return;
+      }
+    }
+    this.confirmThreadOwnerCleanup(owner);
   }
 
   private requestThreadRelease(threadId: string, claim: ThreadResumeClaim): Promise<void> {
@@ -1257,6 +1270,9 @@ export class AppServerHost {
       this.subscribers.clear();
       for (const current of this.threadResumeOwners.values()) {
         for (let claim: ThreadResumeClaim | undefined = current; claim; claim = claim.previous) {
+          // Keep owner proof across failed shutdown retries and late startup observers.
+          // Only the confirmed client.close above may resolve it.
+          this.whenThreadOwnerReleased(claim.owner);
           if (claim.release?.state === 'waiting') {
             const release = claim.release;
             // Retirement must confirm exit before it can confirm a pending release.

@@ -3692,9 +3692,14 @@ assertRouteCurrent();
         }, startup);
       } catch (error) {
         const retryCleanup = async (): Promise<void> => {
+          if (startup.customContext) {
+            try { await startup.threadCleanup?.(); }
+            catch { /* Strict isolated retirement below must still be retried. */ }
+            await startup.customContext();
+            return;
+          }
           const released = await startup.threadCleanup?.();
-          if (startup.customContext) await startup.customContext();
-          else if (!released) await startup.whenThreadReleased?.();
+          if (!released) await startup.whenThreadReleased?.();
         };
         let resourcesReleased = false;
         let threadCleanupError: unknown;
@@ -3741,7 +3746,7 @@ assertRouteCurrent();
     opts: StartSessionOptions,
     registerFailedCustomContextStartupCleanup: (cleanup: (() => Promise<void>) | null) => void,
     startup: { signal: AbortSignal; threadDispatched: boolean; retriedResume: boolean; cleanup?: () => Promise<void>;
-      threadCleanup?: () => Promise<boolean>; whenThreadReleased?: () => Promise<void> },
+      threadCleanup?: () => Promise<boolean>; whenThreadReleased?: () => Promise<void>; customContext?: () => Promise<void> },
   ): Promise<AgentSessionHandle> {
     // scope 带完整 s:<sessionId> 前缀 → host logger 落盘时提取 business sessionId,
     // 路由到 sessions/<id>/<date>.ndjson (logger.ts extractSessionId / sessionAgentSlot)。
@@ -6791,6 +6796,12 @@ assertRouteCurrent();
           released = true;
         }
         return (await host.releaseUncommittedThreadOwner?.(threadOwner) ?? false) || released;
+      } catch (error) {
+        // An uncertain native writer cannot safely be unloaded by another RPC.
+        // Reuse confirmed retirement only once no other task/lease owns the host.
+        if (!hosted && !opts.remoteHostId && !startup.customContext
+          && await retireCapturedHostAfterThreadCleanupFailure('Codex unpublished task cleanup failed')) return true;
+        throw error;
       } finally {
         if (registeredRootCodexThreadId) unregisterCodexMcpContext(registeredRootCodexThreadId);
         unregisterDescendantCodexMcpContexts();
@@ -7367,7 +7378,7 @@ assertRouteCurrent();
       if (closed || threadId !== checkedThreadId || !isCurrentHost()
         || JSON.stringify(expectedHelperConfig()) !== JSON.stringify(helperConfig)) return;
       if (ready) { helperNeedsRecheck = false; reportedHelperState = undefined; return; }
-      helperNeedsRecheck = state === 'failed' || state === 'pending';
+      helperNeedsRecheck = state === 'failed' || state === 'pending' || state === 'unverified';
       // Optional native servers can still be starting; do not turn async
       // discovery into an outage or restart an in-flight initialization.
       if (state === 'pending') return;

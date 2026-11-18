@@ -67,6 +67,7 @@ function reportFromCodexStatus(server: CodexMcpServerStatus): AgentMcpServerTool
     case 'cancelled':
     case 'disabled': return { state: 'disabled', tools: [] };
   }
+  if (Object.hasOwn(server, 'runtimeStatus') && server.runtimeStatus !== 'connected') return { state: 'pending', tools: [] };
   if (tools.length > 0) return { state: 'connected', tools };
   // Old runtimes have no thread state; an empty map stays ambiguous.
   return { state: server.authStatus === 'notLoggedIn' ? 'needs-auth' : 'no-tools', tools: [] };

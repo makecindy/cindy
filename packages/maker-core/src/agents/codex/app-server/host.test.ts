@@ -223,6 +223,109 @@ describe('AppServerHost isolated account lifecycle', () => {
 });
 
 describe('AppServerHost assistant text delta routing', () => {
+  // Unit: confirmed refusal releases only that attempt, never a live same owner.
+  it.each([false, true])('settles rejected startup proof with same live owner=%s', async sameOwner => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({ createTransport: () => transport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' } });
+    const oldOwner = {};
+    try {
+      await host.request('thread/resume', { threadId: 'rejected-proof' }, { threadOwner: oldOwner });
+      const subscription = host.subscribeThread('rejected-proof', {}, oldOwner);
+      const owner = sameOwner ? oldOwner : {};
+      let confirmed = false;
+      const proof = host.whenThreadOwnerReleased(owner).then(() => { confirmed = true; });
+      const write = transport.writeLine.bind(transport);
+      vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+        const msg = JSON.parse(line);
+        if (msg.method === 'thread/resume') {
+          transport.emit({ id: msg.id, error: { code: -32000, message: 'fixture resume rejected' } }); return;
+        }
+        await write(line);
+      });
+      await expect(host.request('thread/resume', { threadId: 'rejected-proof' }, { threadOwner: owner })).rejects.toThrow('fixture resume rejected');
+      await Promise.resolve();
+      expect(confirmed).toBe(!sameOwner);
+      if (!sameOwner) await expect(host.releaseUncommittedThreadOwner(owner)).resolves.toBe(true);
+      await subscription.release();
+      await proof;
+    } finally { await host.shutdown(); }
+  });
+
+  // Unit: completed old cleanup cannot own a newly resumed, unpublished runtime.
+  it.each([false, true])('unloads a failed replacement after predecessor release (same owner=%s)', async sameOwner => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({ createTransport: () => transport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' } });
+    try {
+      const oldOwner = {};
+      await host.request('thread/resume', { threadId: 'released-predecessor' }, { threadOwner: oldOwner });
+      const subscription = host.subscribeThread('released-predecessor', {}, oldOwner);
+      let markWritten!: () => void;
+      const written = new Promise<void>(resolve => { markWritten = resolve; });
+      const write = transport.writeLine.bind(transport);
+      let heldId: unknown;
+      vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+        const msg = JSON.parse(line);
+        if (msg.method === 'thread/unsubscribe' && heldId === undefined) {
+          heldId = msg.id; transport.lines.push(line); markWritten(); return;
+        }
+        await write(line);
+      });
+      const released = subscription.release();
+      await written;
+      const owner = sameOwner ? oldOwner : {};
+      const replacement = host.request('thread/resume', { threadId: 'released-predecessor' }, { threadOwner: owner });
+      transport.emit({ id: heldId, result: { status: 'unsubscribed' } });
+      await released;
+      await replacement;
+      await expect(host.releaseUncommittedThreadOwner(owner)).resolves.toBe(true);
+      expect(transport.lines.map(line => JSON.parse(line)).filter(msg => msg.method === 'thread/unsubscribe')).toHaveLength(2);
+    } finally { await host.shutdown(); }
+  });
+
+  // Unit: shutdown may clear an unpublished claim before startup registers its
+  // cleanup observer. Real Host/Client must retain proof until transport exit.
+  it('confirms discarded startup owners only after actual shutdown completes', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({ createTransport: () => transport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' } });
+    const owner = {};
+    const lateOwner = {};
+    await host.request('thread/resume', { threadId: 'shutdown-late-observer' }, { threadOwner: lateOwner });
+    let releaseClose!: () => void;
+    const closeGate = new Promise<void>(resolve => { releaseClose = resolve; });
+    const close = transport.close.bind(transport);
+    vi.spyOn(transport, 'close').mockImplementation(async reason => { await closeGate; await close(reason); });
+    const write = transport.writeLine.bind(transport);
+    let markWritten!: () => void;
+    const written = new Promise<void>(resolve => { markWritten = resolve; });
+    vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+      if (JSON.parse(line).method === 'thread/resume') { transport.lines.push(line); markWritten(); return; }
+      await write(line);
+    });
+    const pending = host.request('thread/resume', { threadId: 'shutdown-pending' }, { threadOwner: owner }).catch(error => error);
+    await written;
+    const shutdown = host.shutdown();
+    let released = false;
+    const proof = host.whenThreadOwnerReleased(owner).then(() => { released = true; });
+    try {
+      await Promise.resolve();
+      expect(released).toBe(false);
+      await expect(host.releaseUncommittedThreadOwner(lateOwner)).rejects.toThrow('awaiting host exit');
+      releaseClose();
+      await shutdown;
+      await pending;
+      await expect(host.releaseUncommittedThreadOwner(owner)).resolves.toBe(true);
+      await expect(host.releaseUncommittedThreadOwner(lateOwner)).resolves.toBe(true);
+      await proof;
+      expect(released).toBe(true);
+      // A late observer sees the already-confirmed exit too.
+      await host.whenThreadOwnerReleased(owner);
+      await host.whenThreadOwnerReleased(lateOwner);
+    } finally { releaseClose(); await host.shutdown(); }
+  });
+
   // #11380 R6: native acceptance is not startup commit; deferred cleanup must
   // preserve the original caller's failure contract. Unit, real Host/Client RPC;
   // earlier tests omitted post-resume startup failure and failed deferred cleanup.
@@ -344,8 +447,9 @@ describe('AppServerHost assistant text delta routing', () => {
         return write(line);
       });
       if (phase === 'timeout') vi.useFakeTimers();
+      const replacementOwner = {};
       const replacement = host.request('thread/resume', { threadId: 'uncertain-replacement' }, {
-        threadOwner: {}, timeoutMs: 50,
+        threadOwner: replacementOwner, timeoutMs: 50,
         beforeDispatch: () => { if (phase === 'not-dispatched') throw new Error('fixture dispatch cancelled'); },
       });
       const rejected = expect(replacement).rejects.toThrow(phase === 'timeout' ? /timed out/ : 'fixture dispatch cancelled');
@@ -356,7 +460,11 @@ describe('AppServerHost assistant text delta routing', () => {
         await release;
       }
       await rejected;
-      if (phase !== 'timeout') await subscription.release();
+      if (phase !== 'timeout') {
+        await expect(host.releaseUncommittedThreadOwner(replacementOwner)).resolves.toBe(true);
+        await host.whenThreadOwnerReleased(replacementOwner);
+        await subscription.release();
+      }
       expect(transport.lines.map(line => JSON.parse(line)).filter(msg => msg.method === 'thread/unsubscribe'))
         .toHaveLength(phase === 'timeout' ? 0 : 1);
     } finally { await host.shutdown(); vi.useRealTimers(); }

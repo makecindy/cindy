@@ -15,6 +15,7 @@ describe('Codex thread MCP server tools', () => {
   it.each([
     ['failed', 'failed'], ['starting', 'pending'], ['notStarted', 'pending'],
     ['authenticationRequired', 'needs-auth'], ['cancelled', 'disabled'], ['disabled', 'disabled'],
+    ['future-native-state', 'pending'],
   ])('honors native %s despite tools returned by catalog discovery', async (runtimeStatus, state) => {
     const { invoke } = requestFor({ first: { nextCursor: null, data: [{
       name: 'cindy_helper', runtimeStatus, tools: { list_tools: {}, call_tool: {} },

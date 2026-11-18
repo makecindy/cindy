@@ -36515,6 +36515,13 @@ describe('CodexAgent custom provider context window override', () => {
     expect(failure).not.toBeInstanceOf(AgentStartupStoppedError);
     expect((agent as unknown as { retiringHosts: Map<string, unknown> }).retiringHosts.size).toBe(1);
     MockCodexTransport.closeError = null;
+    if (method === Method.ThreadStart) {
+      // Explicit reopen cleanup must retry retirement even if thread proof is
+      // still pending; waiting for that proof first would deadlock this retry.
+      await failure.retryCleanup();
+      await failure.whenStopped;
+      expect(createdTransports[0]?.closed).toBe(true);
+    }
     await agent.dispose();
     expect(createdTransports[0]?.closed).toBe(true);
     expect((agent as unknown as { retiringHosts: Map<string, unknown> }).retiringHosts.size).toBe(0);
@@ -37430,6 +37437,57 @@ describe('expected helper normal and failure boundaries', () => {
 // client, not just a fresh diagnostic catalog. #10499 had warnings only.
 // Unit tier: one failed native client + next send; no processes or real waits.
 describe('unpublished Codex runtime cleanup', () => {
+  // Unit, real Agent/Host/Client: an unknown native writer needs exit proof,
+  // but cleanup must preserve another task until its own explicit close.
+  it.each([false, true])('retires uncertain startup only after healthy peer=%s is absent', async withPeer => {
+    const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    MockCodexTransport.onCreate = transport => transport.setMockResponse(Method.ThreadResume,
+      { result: { thread: { id }, model: 'gpt-5.4' } });
+    const agent = new CodexAgent(createDeps());
+    const peer = await agent.startSession({ sessionId: 'uncertain-peer', model: 'gpt-5.4', workingDir: '/repo' });
+    if (!withPeer) await peer.close();
+    const transport = createdTransports[0];
+    const host = [...(agent as unknown as { hosts: Map<string, AppServerHost> }).hosts.values()][0]!;
+    const request = host.request.bind(host);
+    vi.spyOn(host, 'request').mockImplementation((method, params, options) => request(method, params,
+      method === Method.ThreadResume ? { ...options, timeoutMs: 10 } : options));
+    const write = transport.writeLine.bind(transport);
+    let written = false;
+    vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+      if (JSON.parse(line).method === Method.ThreadResume) { written = true; transport.lines.push(line); return; }
+      await write(line);
+    });
+    vi.useFakeTimers();
+    try {
+      const startup = agent.startSession({ sessionId: 'uncertain-task', resumeSessionId: id,
+        model: 'gpt-5.4', workingDir: '/repo' }).catch(error => error);
+      await vi.waitFor(() => expect(written).toBe(true));
+      await vi.advanceTimersByTimeAsync(20);
+      const failure = await startup;
+      expect(failure).toBeInstanceOf(withPeer ? AgentStartupCleanupPendingError : AgentStartupResourcesReleasedError);
+      if (withPeer) {
+        expect(transport.closed).toBe(false);
+        const blocked = await agent.startSession({ sessionId: 'uncertain-reopen-attempt', resumeSessionId: id,
+          model: 'gpt-5.4', workingDir: '/repo' }).catch(error => error);
+        // No second native request was written; this attempt's Maker guard can
+        // be released without inventing process-exit proof or freeing the old one.
+        expect(blocked).toBeInstanceOf(AgentStartupResourcesReleasedError);
+        expect(blocked).not.toBeInstanceOf(AgentStartupStoppedError);
+        expect(transport.closed).toBe(false);
+        await peer.send({ type: 'user', content: 'healthy task still works' });
+        await peer.close();
+        await failure.retryCleanup();
+        await failure.whenStopped;
+      }
+      expect(transport.closed).toBe(true);
+      vi.useRealTimers();
+      const reopened = await agent.startSession({ sessionId: 'uncertain-task', resumeSessionId: id,
+        model: 'gpt-5.4', workingDir: '/repo' });
+      expect(reopened.id).toBe(id);
+      await reopened.close();
+    } finally { vi.useRealTimers(); await agent.dispose(); }
+  });
+
   // #11380: real Agent -> Host -> Client, not a synthetic abandoned claim.
   // A location-index failure after native resume must clean only that task;
   // failed cleanup retains Maker's guard until a later explicit startup cleans it.
@@ -37501,6 +37559,19 @@ describe('failed expected helper recovery', () => {
       resumeSessionId: threadId, model: 'gpt-5.4', workingDir: '/repo' });
     return { agent, host, handle };
   }
+  it('rechecks a transient status probe failure on the next send before recovering', async () => {
+    let checks = 0;
+    const { agent, host, handle } = await setup(() => {
+      if (checks++ === 0) throw new Error('fixture transient status failure');
+      return 'failed';
+    });
+    try {
+      await handle.send({ type: 'user', content: 'retry after service returned' });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    } finally { await agent.dispose(); }
+  });
+
   it('cold-resumes the intact thread once before dispatching the pending input', async () => {
     const { agent, host, handle } = await setup('failed');
     await handle.send({ type: 'user', content: 'continue the same task' });
