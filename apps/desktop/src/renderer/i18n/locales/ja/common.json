@@ -5418,8 +5418,19 @@
       "title": "メッセージ入力",
       "sendShortcut": {
         "label": "{{shortcut}}で送信",
-        "hint": "オンにすると{{shortcut}}でメッセージを送信します。オフにするとEnterで送信し、Shift+Enterで改行します。",
-        "ariaLabel": "{{shortcut}}でメッセージを送信"
+        "hint": "Enterで送信、Shift+Enterで改行します。",
+        "ariaLabel": "{{shortcut}}でメッセージを送信",
+        "hintModifierEnter": "{{shortcut}}で送信、Enterで改行します。"
+      },
+      "followUp": {
+        "label": "実行中の送信方法",
+        "hintQueue": "タスクの実行中は、送信ボタンと{{send}}でキューに追加します。",
+        "hintSteer": "タスクの実行中は、送信ボタンと{{send}}で実行中のタスクに割り込みます。",
+        "ariaLabel": "タスク実行中の送信方法",
+        "options": {
+          "queue": "キューに追加",
+          "steer": "割り込み"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -8254,6 +8265,8 @@
         "subscribeMessageDetail": "保存済みのユーザーメッセージと AI の返信を受信します。添付ファイルは別の読み取りと受け渡しで取得します。",
         "subscribeToolExecution": "ツール実行イベント",
         "subscribeToolExecutionDetail": "ツール名、入力、結果、エラーを受信します。実行は変更せず、監視のみ行います。",
+        "subscribeNativeRecovery": "ネイティブ復旧イベント",
+        "subscribeNativeRecoveryDetail": "再試行、コンテキストの圧縮、タスクの停止に関するエンジンの状態を受信します。",
         "subscribeTaskState": "タスク状態のイベント",
         "subscribeTaskStateDetail": "タスクの実行、待機、完了、アーカイブ、非表示の状態変更を受信します。",
         "subscribeActivity": "AI が思考中のタイミングと、あなたの操作を待っているタイミングを把握",
@@ -9819,6 +9832,41 @@
       },
       "providerTooltip": "セッションで現在選択されているプロバイダー。未指定の場合は空欄です。",
       "tokensTooltip": "このセッションが{{range}}に使用したトークンのみを集計します。"
+    },
+    "auxiliary": {
+      "title": "補助モデルの使用量",
+      "label": "補助リクエスト",
+      "purpose": "用途",
+      "requests": "記録済みリクエスト",
+      "description": "合計トークンに含まれます。プロバイダーが返した使用量のみ記録し、未報告の使用量や過去のリクエストは推定しません。",
+      "sources": {
+        "title": "タイトル生成",
+        "task-summary": "タスクの要約",
+        "prompt-prediction": "入力候補",
+        "working-status": "作業状況",
+        "help": "ヘルプ",
+        "bot-creation": "コンパニオン作成",
+        "bot-opening": "コンパニオンの挨拶",
+        "group-planning": "グループの計画",
+        "ambient-reply": "返信の判断",
+        "auto-review": "自動レビュー",
+        "tool-loop-review": "ツールループの確認",
+        "memory-review": "メモリの確認",
+        "git-summary": "変更の要約",
+        "hook-generation": "自動化スクリプト",
+        "automation-verification": "インポートの検証",
+        "plugin-text": "プラグインのテキスト",
+        "voice-dialogue": "音声会話",
+        "voice-exit": "音声終了の判断",
+        "voice-refinement": "音声テキストの推敲",
+        "dictionary-learning": "辞書学習",
+        "embedding-query": "ベクトル検索",
+        "embedding-index": "ベクトル索引",
+        "web-search": "ウェブ検索",
+        "provider-probe": "接続テスト",
+        "vision-bridge": "ビジョンブリッジ",
+        "auxiliary": "その他の補助リクエスト"
+      }
     }
   },
   "usageDashboard": {
@@ -13638,9 +13686,8 @@
     "sendButton": {
       "send": "メッセージを送信",
       "queue": "キューに追加",
-      "queueTooltip": "クリックでキューに追加。{{shortcut}} でタスクを中断せずに割り込み送信",
-      "queueTooltipSendMode": "クリックでキューに追加、{{shortcut}}でこのメッセージを送信",
-      "stop": "生成を停止"
+      "stop": "生成を停止",
+      "steer": "実行中のタスクに割り込む"
     },
     "pluginSetup": {
       "account": {
@@ -14531,6 +14578,13 @@
       "runningWithWorktree_one": "完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningWithWorktree_other": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningWithWorktree_many": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。"
+    },
+    "followUpHint": {
+      "queueDefault": "タスクの実行中に送信したメッセージは、デフォルトでキューに追加されます。",
+      "steerDefault": "タスクの実行中に送信したメッセージは、デフォルトで実行中のタスクに割り込みます。",
+      "switchToSteer": "デフォルトを割り込みにする",
+      "switchToQueue": "デフォルトをキューに追加にする",
+      "dismiss": "ヒントを閉じる"
     }
   },
   "onboarding": {
@@ -19675,7 +19729,8 @@
           "expired": "期限切れ",
           "voided": "無効"
         }
-      }
+      },
+      "viewUsage": "使用量を見る"
     },
     "orders": {
       "title": "注文履歴",

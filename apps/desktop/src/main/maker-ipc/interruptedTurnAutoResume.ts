@@ -148,6 +148,12 @@ export function isAcceptedTurnContinuationOnlyReason(reason: unknown): boolean {
   );
 }
 
+/** A requested close shares the crash reason. Only the unfinished iterator EOF is recoverable here. */
+export function isUnexpectedWorkerStreamEnd(signals: InterruptedTurnErrorSignals): boolean {
+  return signals.reason === 'session_event_loop_crashed'
+    && signals.message === 'Session event loop stopped unexpectedly without a terminal event';
+}
+
 /** The agent serving this route on another computer is gone (remote-agent controller / host). */
 export function isRemoteAgentRouteLostReason(reason: unknown): boolean {
   return reason === 'remote_agent_closed' || reason === 'remote_agent_lost';
@@ -159,7 +165,8 @@ export function isRemoteAgentRouteLostReason(reason: unknown): boolean {
  * already have run there). Only a Bot candidate route is ever granted the latter resume.
  */
 export function isContinuationOnlyAutoResumeReason(reason: unknown): boolean {
-  return isAcceptedTurnContinuationOnlyReason(reason) || isRemoteAgentRouteLostReason(reason);
+  return isAcceptedTurnContinuationOnlyReason(reason) || isRemoteAgentRouteLostReason(reason)
+    || reason === 'session_event_loop_crashed';
 }
 
 /**

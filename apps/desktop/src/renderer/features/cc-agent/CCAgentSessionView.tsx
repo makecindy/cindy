@@ -3955,7 +3955,6 @@ function CCAgentSessionContent({
                 pending.message,
                 pending.files,
                 {
-                  allowDesktopDispatch: pending.deliveryMode !== 'steer',
                   piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
                   workingDirOverride: newDir,
                   builtInSkillIntent: pending.builtInSkillIntent,
@@ -4200,12 +4199,13 @@ function CCAgentSessionContent({
       invalidateHistoryRecoveryNavigation();
       const deliveryMode = opts?.deliveryMode ?? 'queue';
       const originalMessage = message;
+      // Local navigation is a UI action, independent of model-input delivery.
       const navigationRequestVersion =
-        !opts?.literalText && deliveryMode !== 'steer' && matchNavigationCommandName(message)
+        !opts?.literalText && matchNavigationCommandName(message)
           ? ++sessionNavigationVersionRef.current
           : null;
       if (
-        !opts?.literalText && deliveryMode !== 'steer' &&
+        !opts?.literalText &&
         (await tryHandleNavigationCommand(message, {
           navigate,
           t,
@@ -4272,14 +4272,11 @@ function CCAgentSessionContent({
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
       const slashDispatch = opts?.literalText || opts?.builtInSkillIntent
         ? { handled: false, accepted: false, message }
-        : deliveryMode === 'steer'
-          ? await maybeDispatchDesktopSlashCommand(message, files, {
-              allowDesktopDispatch: false,
-              piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
-            })
-          : await maybeDispatchDesktopSlashCommand(message, files, {
-              piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
-            });
+        : await maybeDispatchDesktopSlashCommand(message, files, {
+            // Command ownership is resolved here after loading the catalog;
+            // the composer's delivery preference applies only to model input.
+            piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+          });
       if (slashDispatch.handled) {
         if (slashDispatch.accepted) {
           // Desktop commands can wait in Main long enough for draft hydration to

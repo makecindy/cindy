@@ -31,8 +31,13 @@ export async function readUtilityTextStream(
     body?: { getReader(): ReadableStreamDefaultReader<Uint8Array> } | null;
   },
   onText?: (text: string) => void,
+  onRaw?: (raw: string) => Promise<void>,
 ): Promise<string> {
-  if (!onText || !response.body?.getReader) return response.text();
+  if ((!onText && !onRaw) || !response.body?.getReader) {
+    const raw = await response.text();
+    await onRaw?.(raw);
+    return raw;
+  }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let raw = '';
@@ -52,11 +57,11 @@ export async function readUtilityTextStream(
         } catch {
           return;
         }
-        if (
+        if (onText && (
           event.type === 'error' ||
           event.type === 'response.failed' ||
           event.type === 'response.incomplete'
-        )
+        ))
           throw new Error('utility_stream_failed');
         if (
           event.type === 'response.completed' ||
@@ -69,7 +74,7 @@ export async function readUtilityTextStream(
     const delta = streamTextDelta(line);
     if (delta) {
       text += delta;
-      onText(text);
+      onText?.(text);
     }
   };
   try {
@@ -89,10 +94,14 @@ export async function readUtilityTextStream(
     if (pending) {
       consume(pending);
     }
-    if (sawEvent && !terminal) throw new Error('utility_stream_incomplete');
+    if (onText && sawEvent && !terminal) throw new Error('utility_stream_incomplete');
     return raw;
   } finally {
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
+    try {
+      await onRaw?.(raw);
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
   }
 }

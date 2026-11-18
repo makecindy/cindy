@@ -29,6 +29,7 @@ export interface VisionBridgeController {
     imagePath?: string;
     prompt: string;
     signal?: AbortSignal;
+    sessionId?: string;
   }): Promise<string>;
 }
 

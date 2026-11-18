@@ -965,6 +965,11 @@ export interface AgentDeps {
    * 返回的键应纳入 piSecretEnvNames 剥离面（host 实现应把含 key 的键名一并声明）。
    */
   resolvePiVisionBridgeEnv?: (model: string, sessionId?: string) => Record<string, string> | null;
+  /** Capture the usage owner before Pi dispatches independent vision requests. */
+  createPiVisionUsageRecorder?: (env: Record<string, string>, sessionId?: string) => {
+    observe(payload: unknown): Promise<void>;
+    close(): void;
+  };
 
   /**
    * Host-owned arbitration for capabilities that overlap with harness-native
@@ -1474,6 +1479,7 @@ export interface AgentDeps {
 
   /** Optional native tool hooks; the host owns live task selection and plugin lifecycle. */
   toolLifecycleControl?: import('./shared/tool-lifecycle.js').ToolLifecycleControl;
+  nativeRecoveryObserver?: import('./shared/native-recovery-observer.js').NativeRecoveryObserver;
 
   /** Host bridge for repairing Claude Code subagent usage when provider usage is zero. */
   registerClaudeSubagentTask?: (task: ClaudeSubagentTaskRegistration) => void;
@@ -1619,7 +1625,21 @@ export interface RemoteClaudeRoute {
   env: Record<string, string>;
 }
 
+export interface OneShotUsage {
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
+}
+
 export interface OneShotOptions {
+  /** Accounting attribution only; never sent as prompt content. */
+  source?: string;
+  sessionId?: string;
+  providerId?: string;
+  onUsage?: (usage: OneShotUsage) => void | Promise<void>;
+
   /** 输出 token 上限。默认 100 (起标题用); skillReview 这种大 prompt 应传 4096。 */
   maxTokens?: number;
   /**

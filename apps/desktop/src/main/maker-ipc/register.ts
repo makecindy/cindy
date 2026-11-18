@@ -13620,7 +13620,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     syncLanePermission: async (laneSessionId) => syncBotLanePermission(laneSessionId),
     hasPendingInteraction: (sessionId) => hasPendingAgentInteractionForSession(sessionId),
-    decidePlan: createBotGroupPlanDecider((prompt, opts) => requestUtilityText(maker, prompt, opts)),
+    decidePlan: createBotGroupPlanDecider((prompt, opts) => requestUtilityText(maker, prompt, { ...opts, source: 'group-planning' })),
     workDir: botGroupWorkDir,
     validateProjectDir: async (dir) => {
       try {
@@ -15625,7 +15625,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return queued;
   }
 
+  const workerInputs = new WeakSet<object>();
   const orcaInterAgentDispatcher: OrcaInterAgentDispatcher = createOrcaInterAgentDispatcher({
+    directWorkerRecovery: {
+      getInputAbortSignal: id => inputCoordinator.getInputAbortSignal(id),
+      rememberDirectWorkerInput: (runtime, generation, item, signal) => {
+        if (item.createOpts.orcaRole === 'worker') workerInputs.add(item.createOpts);
+        return inputCoordinator.rememberDirectWorkerInput(runtime, generation, item, signal);
+      },
+    },
     prepareRestoredReportAcceptance: prepareRestoredOrcaReportAcceptance,
     onDirectInputDispatched: sessionId => touchSessionActivityInDb(sessionId),
     readAutoReviewHistory: sessionId => readAutoReviewHistory(sessionId),
@@ -18681,7 +18689,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isAutoResumeAttemptCurrent: (sessionId, attemptToken) => inputCoordinator.isAutoResumeAttemptCurrent(sessionId, attemptToken),
       autoRetryLastError: (sessionId, attemptToken) => inputCoordinator.autoRetryLastError(sessionId, attemptToken),
     },
-    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs, saveTurnStartedAtForDeferred,
+    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,
     beginSchedulerAutoResume,
     getStableSessionForTurnBoundary: (sessionId) => getStableSessionForTurnBoundary(sessionId),
     pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
@@ -18710,6 +18718,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!ownsQuotaRoute()) await reconcileBotModelRoute(sessionId, true);
       const [botInput] = await getDbClient()
         .drizzle.select({
+          orcaRole: sessions.orcaRole,
+          orcaRemoteLead: sessions.orcaRemoteLead,
           source: sessions.source,
           role: botSessionLinks.role,
           workingDir: sessions.workingDir,
@@ -18731,6 +18741,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throwIpcError('PRECONDITION_FAILED', SHADOWED_COMPANION_INPUT_MESSAGE);
       }
       if (args[2] && typeof args[2] === 'object') {
+        if (botInput?.orcaRole === 'worker' || parseOrcaRemoteLead(botInput?.orcaRemoteLead)) workerInputs.add(args[2]);
+        else workerInputs.delete(args[2]);
         const origin = (args[3] as { origin?: AgentInputQueuedMessage['origin'] } | undefined)?.origin;
         if (botInput?.source === 'bot' && botInput.agentDeviceId && !botInput.remoteHostId
           && ['canonical', 'thread'].includes(botInput.role ?? '')

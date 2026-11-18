@@ -737,6 +737,9 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 13. **出错的 Worker 原地恢复，过期的异常终止回报不再唤醒 Lead（状态：不变量，2026-11-11）**<br>
     起因：五个 Worker 同时撞上用量上限，Lead 把它们全部归档重建（丢了上下文，还撞上名字冲突），
     剩下四条「异常终止」回报又逐条唤醒 Lead，各跑一轮只为确认「旧通知，忽略」。宿主做两件事：
+    - Worker 已接受派活、运行时事件流却在终态前意外结束时，宿主按已有的中断续跑预算退避，在同一任务里发“继续”。
+      直投派活按运行时实例、轮次与输入取消信号识别；队列派活沿用已落库的输入。即使未观察到工具结果也只发续跑指令，
+      避免重投可能已执行的派活。用户停止、已有明确错误和重试预算耗尽仍沿用原有处置。
     - **回报里写明可以原地继续**：`bridgeWorkerCompletion` 在异常终止回报正文之后附一段 Host note
       （`buildWorkerFailureRecoveryNote`）：Worker 的对话、工作目录与未提交改动都在，状态为 `error`；
       继续就向同一个 Worker `send_to_worker`，用量上限或模型不可用时先用 `cindy_orca` 的

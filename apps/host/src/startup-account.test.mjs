@@ -7,10 +7,34 @@ import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-ident
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.ts';
 import { resolveRuntimeDeviceId } from '../../desktop/src/main/deviceId.ts';
 import { decodeAccessTokenOrgSlug } from '../../desktop/src/main/authTokenClaims.ts';
+import { retainDbClient, waitForRetainedDbClient } from '../../desktop/src/main/localDb/client/pendingOperations.ts';
 
 // Unit regression: run the real startup/auth functions with in-memory network,
 // credentials and storage. A valid login for B must never open A's database.
 const source = ts.createSourceFile('main.ts', readFileSync(new URL('./main.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+test('owner storage closes only after retained auxiliary usage has settled', async () => {
+  const events = [];
+  const client = { dispose: async () => { events.push('dispose'); } };
+  const h = setup({
+    openOwnerDatabase: async () => ({}),
+    createDbClientForHandle: () => client,
+    OwnerSessionStorage: class {},
+    setCurrentDbClient() {},
+    reconcileDeletedTaskViewState: async () => {},
+    configureProvisionalSessions() { throw new Error('storage ready'); },
+    clearCurrentDbClient: () => events.push('clear'),
+    waitForRetainedDbClient,
+  });
+  await assert.rejects(h.start('account-b'), /storage ready/);
+  const release = retainDbClient(client);
+  const closing = h.close();
+  try {
+    await Promise.resolve();
+    assert.deepEqual(events, ['clear']);
+    events.push('usage-settled');
+  } finally { release(); await closing; }
+  assert.deepEqual(events, ['clear', 'usage-settled', 'dispose']);
+});
 const functions = [];
 function visit(node) {
   if (ts.isFunctionDeclaration(node) && ['ensureRuntime', 'resolveAccountUser'].includes(node.name?.text)) {
@@ -20,10 +44,11 @@ function visit(node) {
 visit(source);
 const compiled = ts.transpileModule(`
 let activeOwner = null, runtimeLease = null, currentSessionToken = null, accountUser = null, currentDeviceId = null, remoteIdentityReady = false;
+let closeStorage = null, sessionStorage = null;
 let account = { authenticated: false, realm: 'global' };
 const runtime = { owner: null };
 ${functions.join('\n')}
-return { start: ensureRuntime, resolve: resolveAccountUser, token: () => currentSessionToken };
+return { start: ensureRuntime, resolve: resolveAccountUser, token: () => currentSessionToken, close: () => closeStorage() };
 `, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 function setup(overrides = {}) {

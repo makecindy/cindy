@@ -50,6 +50,7 @@ export const SETUP_MIGRATION_RENDERER_PREF_KEYS: readonly string[] = [
   'chat.streamFadePreference',
   'chat.messageNavRail.enabled',
   'chat.sendShortcutPreference',
+  'chat.followUpBehavior',
   'chat.linkOpenPreference',
   'chat.webLinkOpenPreference',
   // The window-behavior settings file only caches this for macOS window creation; the

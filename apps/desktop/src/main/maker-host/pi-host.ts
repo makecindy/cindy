@@ -187,6 +187,7 @@ export interface BuildPiAgentOpts {
   logger: AgentDeps['logger'];
   turnChangeCapture?: AgentDeps['turnChangeCapture'];
   toolLifecycleControl?: AgentDeps['toolLifecycleControl'];
+  nativeRecoveryObserver?: AgentDeps['nativeRecoveryObserver'];
   registerLocalAgentProcess?: AgentDeps['registerLocalAgentProcess'];
   capabilityAdditions?: AgentDeps['capabilityAdditions'];
   reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
@@ -204,6 +205,7 @@ export interface BuildPiAgentOpts {
   resolvePiProjectTrustInput?: AgentDeps['resolvePiProjectTrustInput'];
   /** 层 C：视觉桥后端 env（cindy-bridge 的 vision 工具读取）。 */
   resolvePiVisionBridgeEnv?: AgentDeps['resolvePiVisionBridgeEnv'];
+  createPiVisionUsageRecorder?: AgentDeps['createPiVisionUsageRecorder'];
   /** SSH remote pi 会话的 transport 工厂(host 装配;缺省 = 远端 pi 会话被拒)。 */
   getRemotePiTransport?: AgentDeps['getRemotePiTransport'];
   /** SSH remote pi 会话的 agentHome 文件操作原语(host 装配;缺省 = 远端 fs 走本地,错误语义)。 */
@@ -252,6 +254,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     logger: opts.logger,
     turnChangeCapture: opts.turnChangeCapture,
     toolLifecycleControl: opts.toolLifecycleControl,
+    nativeRecoveryObserver: opts.nativeRecoveryObserver,
     registerLocalAgentProcess: opts.registerLocalAgentProcess,
     spawnPiSubagentRunner,
     derivePiProxySessionToken,
@@ -392,6 +395,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     getGhostRosterPrompt: opts.getGhostRosterPrompt,
     resolvePiProjectTrustInput: opts.resolvePiProjectTrustInput,
     resolvePiVisionBridgeEnv: opts.resolvePiVisionBridgeEnv,
+    createPiVisionUsageRecorder: opts.createPiVisionUsageRecorder,
     getRemotePiTransport: opts.getRemotePiTransport,
     getRemotePiFileOps: opts.getRemotePiFileOps,
     getRemoteAgentFileOps: opts.getRemoteAgentFileOps,
