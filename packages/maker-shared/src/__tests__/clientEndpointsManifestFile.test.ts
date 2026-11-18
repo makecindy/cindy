@@ -34,13 +34,13 @@ const MANIFESTS = [
     label: 'cn',
     filePath: path.join(REPO_ROOT, 'config', 'endpoint.json'),
     legacySkillHub: 'https://xd-skillhub.cindy.com.cn',
-    cindySkillHub: 'https://skill-hub.cindy.com.cn',
+    cindySkillHub: 'https://cindy-skill-hub.cindy.com.cn',
   },
   {
     label: 'global',
     filePath: path.join(REPO_ROOT, 'config', 'endpoint.global.json'),
     legacySkillHub: 'https://xd-skillhub.cindy.app',
-    cindySkillHub: 'https://skill-hub.cindy.app',
+    cindySkillHub: 'https://cindy-skill-hub.cindy.app',
   },
 ] as const;
 

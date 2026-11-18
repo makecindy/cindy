@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { toast } from '@/lib/toast';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
@@ -9,9 +10,10 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 export function ProjectAutomationNotifyBridge() {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const { localDbGateStatus } = useAppShellCover();
 
   useEffect(() => {
-    if (isSecondaryWindow() || isSidebarWindow()) return;
+    if (localDbGateStatus !== 'ready' || isSecondaryWindow() || isSidebarWindow()) return;
     let active = true;
     const pendingImports = new Map<string, ProjectAutomationImport>();
     let toastId: string | undefined;
@@ -116,7 +118,7 @@ export function ProjectAutomationNotifyBridge() {
       unsubscribe();
       if (toastId) toast.dismiss(toastId);
     };
-  }, [confirm, t]);
+  }, [confirm, t, localDbGateStatus]);
 
   return null;
 }

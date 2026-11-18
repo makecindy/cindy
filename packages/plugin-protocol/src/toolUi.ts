@@ -1,5 +1,7 @@
 import { isSafeGhostRelativePath } from './internal/ghostPath.js';
 import { validateCspDomains } from './appCsp.js';
+import { parseGhostHostUi, parseStoredGhostHostUi, type GhostHostUi } from './hostUi.js';
+import { GHOST_TOOLS_MAX } from './internal/toolsLimit.js';
 /** First release with plugin pages; authoring floor, never a client install gate. */
 export const PLUGIN_UI_MIN_CINDY_VERSION = '0.1.122-beta';
 export interface GhostUiResource {
@@ -7,12 +9,14 @@ export interface GhostUiResource {
   file: string;
   csp?: { connectDomains?: string[]; resourceDomains?: string[]; frameDomains?: string[]; baseUriDomains?: string[] };
   prefersBorder?: boolean;
+  /** Only the Host button; does not limit App requestDisplayMode. */
+  hostFullscreenButton?: boolean;
   domain?: string;
   permissions?: { camera?: Record<string, never>; microphone?: Record<string, never>; geolocation?: Record<string, never>; clipboardWrite?: Record<string, never> };
 }
 export interface GhostUiTool { resourceUri?: string; visibility?: ('model' | 'app')[]; [key: string]: unknown }
 export interface GhostUiNeeds { resources: GhostUiResource[]; tools: Record<string, GhostUiTool> }
-export interface GhostMcpApps { ui?: GhostUiNeeds; [key: string]: unknown }
+export interface GhostMcpApps { ui?: GhostUiNeeds; host?: GhostHostUi; [key: string]: unknown }
 type UiManifest = { schemaVersion?: unknown; mcpApps?: unknown; tools?: unknown; network?: unknown };
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const safeKey = (key: string) => /^[a-z][a-z0-9_-]{0,63}$/.test(key) && !['__proto__', 'constructor', 'prototype'].includes(key);
@@ -20,18 +24,22 @@ const cspKeys = ['connectDomains', 'resourceDomains', 'frameDomains', 'baseUriDo
 /** Cindy manifest envelope; unknown extensions remain data, never grant authority. */
 export function parseGhostMcpApps(raw: unknown, tools: readonly { name: string }[], hosts: readonly string[], safePath: (value: unknown) => boolean): GhostMcpApps | null {
   if (!object(raw)) return null;
-  if (raw.ui !== undefined && !parseGhostUi(raw.ui, tools, hosts, safePath)) return null;
+  const ui = raw.ui === undefined ? undefined : parseGhostUi(raw.ui, tools, hosts, safePath);
+  if (raw.ui !== undefined && !ui) return null;
+  if (raw.host !== undefined && !parseGhostHostUi(raw.host,
+    new Set(ui?.resources.map(resource => resource.uri) ?? []), new Set(tools.map(tool => tool.name)))) return null;
   return raw as GhostMcpApps;
 }
 export function parseGhostUi(raw: unknown, tools: readonly { name: string }[], hosts: readonly string[], safePath: (value: unknown) => boolean): GhostUiNeeds | null {
-  if (!object(raw) || !Array.isArray(raw.resources) || !object(raw.tools) || !Object.keys(raw.tools).length ||
-      raw.resources.length > 16 || Object.keys(raw.tools).length > 16) return null;
+  if (!object(raw) || !Array.isArray(raw.resources) || !object(raw.tools) || (!raw.resources.length && !Object.keys(raw.tools).length) ||
+      raw.resources.length > 16 || Object.keys(raw.tools).length > GHOST_TOOLS_MAX) return null;
   const uris = new Set<string>();
   for (const resource of raw.resources) {
     if (!object(resource) || typeof resource.uri !== 'string' || !resource.uri.startsWith('ui://') ||
         resource.uri.length <= 5 || /[\s\x00-\x1f\x7f]/.test(resource.uri) || uris.has(resource.uri) ||
         !safePath(resource.file) || typeof resource.file !== 'string' || !/\.html?$/i.test(resource.file) ||
         (resource.prefersBorder !== undefined && typeof resource.prefersBorder !== 'boolean') ||
+        (resource.hostFullscreenButton !== undefined && typeof resource.hostFullscreenButton !== 'boolean') ||
         (resource.domain !== undefined && typeof resource.domain !== 'string')) return null;
     uris.add(resource.uri);
     if (resource.permissions !== undefined && (!object(resource.permissions) ||
@@ -68,6 +76,14 @@ export function getPluginToolUi(manifest: UiManifest): GhostUiNeeds | undefined 
   if (!Array.isArray(tools) || tools.some(tool => !object(tool) || typeof tool.name !== 'string') ||
       !Array.isArray(hosts) || hosts.some(host => typeof host !== 'string')) return;
   return parseGhostUi(manifest.mcpApps.ui, tools, hosts, isSafeGhostRelativePath) ?? undefined;
+}
+export function getPluginHostUi(manifest: UiManifest): GhostHostUi | undefined {
+  if ((manifest.schemaVersion !== undefined && manifest.schemaVersion !== 3) || !object(manifest.mcpApps)) return;
+  const tools = manifest.tools ?? [];
+  if (!Array.isArray(tools) || tools.some(tool => !object(tool) || typeof tool.name !== 'string')) return;
+  return parseStoredGhostHostUi(manifest.mcpApps.host,
+    new Set(getPluginToolUi(manifest)?.resources.map(resource => resource.uri) ?? []),
+    new Set(tools.map(tool => (tool as { name: string }).name))) ?? undefined;
 }
 
 /** Preserve only historical mcpApps data; every other validation rule still applies. */

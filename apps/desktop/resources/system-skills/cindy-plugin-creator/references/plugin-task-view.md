@@ -58,7 +58,9 @@
 
 提供设备画面的插件(模拟器、真机镜像)可以让用户在手机上全屏查看并直接触控。声明
 `"liveScreen": true` 且同时声明 `node` 后,用户从手机打开时,Cindy 主进程经远程桌面
-直接调用 Node 工作进程的以下固定方法(不经过 main.js,也不出现在 Agent 工具里):
+直接调用 Node 工作进程的以下固定方法(不经过 main.js,也不出现在 Agent 工具里)。
+同账号的另一台电脑查看这台电脑上的任务时,提供端走的也是这同一组方法;但电脑上的画面和操作
+由插件自己的任务页完成(见下文 §4.22.2),宿主不替插件画设备:
 
 | 方法 | 参数 | 返回 |
 |---|---|---|
@@ -88,9 +90,56 @@
 - **descriptor**:`buttons` 不超过 16 个,`id` 为 `[a-z0-9-]{1,32}`,`icon` 取
   `home | back | recents | lock | power | volume-up | volume-down | rotate-left | rotate-right |
   menu | play-pause | siri | shake | screenshot`,`label` 按 `_locale` 本地化;按重要性排序,
-  手机工具栏只放前三个,其余在设置面板里。
+  手机工具栏只放前三个,其余在设置面板里;电脑上怎么摆由插件自己的页面决定。
 - 有打开的帧流即算有人在看;插件自己的运行开关关闭时应拒绝 `open` 并结束已有的流。
 - 一台电脑同一时间只有一路远程连接:打开设备画面会替换当前的整屏远程桌面。手机上的
   配对、授权与「仅查看」沿用远程桌面;插件不需要、也拿不到手机或远程桌面的任何凭证。
 - 旧版 Cindy 把 `liveScreen` 当作未知字段保留且不赋予能力,不需要提高 `minCindyVersion`;
   在支持的版本上,插件详情会把它列为一项能力。
+
+### 4.22.2 在另一台电脑上显示设备(taskView.remote)
+
+任务在本账号的另一台电脑上、且那台电脑的同一个插件为这个任务开着设备时,本机可以用插件
+**自己的任务页**显示并操作它:界面、手势、手指提示都是插件的,宿主只提供画面和输入的通道。
+本机没装这个插件(或没开启、版本太旧)时,宿主提示用户去安装 / 开启 / 更新,不替插件画设备。
+
+- **声明**:`"taskView": { "html": "task.html", "remote": true }`,只接受字面量 `true`,且必须
+  同时声明 `liveScreen: true`。不声明时,另一台电脑上的任务不显示这个任务页。旧版 Cindy 把
+  `remote` 当作未知字段保留,不需要提高 `minCindyVersion`。
+- **页面**:地址除 `session=<任务 ID>` 外多带 `device=<那台电脑的设备 ID>` 与
+  `deviceName=<那台电脑的名字>`(仅供显示;请在页面上标明这是哪台电脑上的设备,让用户看得出
+  不是本机)。带 `device` 时
+  任务的 Agent 在另一台电脑上运行。插件可以在同一个页签里列出本机和那台电脑的设备,
+  必须明确标识设备所在电脑,并将管理操作路由到该电脑;本机设备由用户操作。设备出现时宿主
+  自动打开页签一次;逻辑页此时调 `cindy.taskView()` 不会打开远程任务的页面。
+- **通道**:逻辑页调 `cindy.liveScreenView(req)`(等价于
+  `cindy.send({type:'live-screen-view-request', ...req})`,旧版 Cindy 没有这个方法),
+  结果都是 `{ok, ...}`,失败带 `errorCode`:
+
+| `req` | 结果 |
+|-------|------|
+| `{op:'screens', deviceId}` | `{ok, screens:[{id, name, platform, taskIds}]}`:那台电脑上**本插件**正在运行的设备 |
+| `{op:'open', deviceId, id}` | `{ok, view, url}`:`url` 是本机回环地址,带一次性令牌 |
+| `{op:'close', view}` | `{ok}` |
+
+- **来源校验**:本机与提供画面的宿主都从已安装记录取得插件逻辑来源。安装目录键仅用于路由,
+  不代表来源;旧宿主若未提供逻辑身份信息,不会猜测身份并授权插件画面。
+- **访问方式**:`url` 仅交给本插件已声明的 Node worker。它代理画面与输入,并从自己已有的本机
+  服务端口向页面提供同源接口。插件任务页不能直接 fetch 这个地址;不放宽页面 CSP 或分区网络闸。
+- **画面**:Node worker 请求 `GET <url>/stream` 与 §4.22.1 的帧流同一格式(`0x01` avcC、`0x02` 关键帧、`0x03`
+  普通帧),所以解码本机设备的页面可以直接复用。`0x10` JSON 有三种:
+  `{"type":"state","state":"connecting|live|reconnecting|ended","error"?}`、
+  `{"type":"device", id, name, platform, cornerRadius, maxTouches, keyboard, buttons}`(那台电脑的
+  descriptor)、`{"type":"screen","width","height"}`(摆正后的像素尺寸,设备转向时变化)。
+  画面经过重新编码,不是逐像素原图。
+- **输入**:`POST <url>/input`,正文 `{events:[…]}`,最多 64 个、16 KB,事件形状同 §4.22.1 的
+  `touch` / `press` / `text` / `release`,按键为 `{kind:'key', code, down}`(按下与抬起各一个)。
+  这是传输层格式,不同于提供端的完整 `key` 事件。若页面使用 `modifiers`,worker 应先发送修饰键
+  按下、普通键按下/抬起、修饰键逆序抬起;远端由既有输入映射还原为完整事件。
+  `state` 不是 `live` 时返回 `VIEW_NOT_READY`,不排队、不补发。`POST <url>/retry` 是用户在页面上
+  主动要求重连:`error` 为 `connectionBusy`(正被用户的另一台设备查看)时即接管。
+- **生命周期**:同一设备重复 `open` 得到同一个地址;20 秒没有人读 `stream`、插件停用或卸载、
+  换账号、本机锁屏时地址失效,`stream` 以 `state: ended` 结束——页面应重新 `open`。页面不可见时
+  请停止读取,让那台电脑的设备空出来。一台电脑同一时间只有一路远程连接。
+- 插件只能看到、打开那台电脑上**同一来源的同一个插件**的设备,拿不到远程桌面、其它插件的
+  设备或任何凭证;启动、关闭、新建设备仍由设备所在的电脑负责(需要时用 `cindy.deviceSync`)。

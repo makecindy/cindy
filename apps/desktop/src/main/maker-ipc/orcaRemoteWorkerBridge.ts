@@ -1,6 +1,7 @@
-/** Route only the four Worker bridge tools, using persisted links on both computers. */
+/** Route only the four allowlisted Worker bridge tools, using persisted links on both computers. */
 import {
   ORCA_REMOTE_WORKER_BRIDGE_CHANNEL,
+  ORCA_REMOTE_WORKER_BRIDGE_TOOLS,
   parseOrcaRemoteWorkerBridgeRequest,
   isOrcaRemoteWorkerSessionId,
   type InvokeResultPayload,
@@ -23,6 +24,12 @@ export interface OrcaRemoteWorkerBridgeDeps {
     ctx: McpProviderContext,
     tool: string,
     args: Record<string, unknown>,
+    reportClientId?: string,
+    onReportRejected?: () => void,
+  ): Promise<OrcaToolResult>;
+  deliverReport?(
+    proxySessionId: string, inputClientIds: readonly string[],
+    send: (clientId: string, onRejected: () => void) => Promise<OrcaToolResult>,
   ): Promise<OrcaToolResult>;
   remoteInvoke(deviceId: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
   getActiveInputClientIds?(sessionId: string): readonly string[];
@@ -66,6 +73,14 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
       if (!lead) return null;
       if (row.status !== 'active' || lead.releasedAt !== undefined) {
         return toolError('remote worker collaboration has ended', 'NOT_FOUND');
+      }
+      // Only the four allowlisted tools cross devices. Managing reports queued at the Lead is
+      // local-Worker only for now; say so instead of failing protocol validation.
+      if (!(ORCA_REMOTE_WORKER_BRIDGE_TOOLS as readonly string[]).includes(tool)) {
+        return toolError(
+          'This tool is not available to a Worker running on another computer yet.',
+          'REMOTE_WORKER_NOT_SUPPORTED',
+        );
       }
       // Provenance is checked on the execution device before crossing the device boundary.
       if (tool === 'send_to_lead') {
@@ -152,14 +167,14 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
       // The model cannot supply a local context or select an arbitrary Lead. Reuse local
       // schemas, sender labels, dispatch/queue semantics and manual-report settlement.
       const settle =
-        request.tool === 'send_to_lead'
+        request.tool === 'send_to_lead' && !deps.deliverReport
           ? deps.captureReportSettlement?.(worker.sessionId, request.reportedInputClientIds ?? [])
           : undefined;
       if ((await deps.activeTeamId(request.leadSessionId)) !== teamId) {
         throwIpcError('PERMISSION_DENIED', 'worker team has ended');
       }
       assertOwner(owner);
-      const result = await deps.invokeTool(
+      const send = (reportClientId?: string, onReportRejected?: () => void) => deps.invokeTool(
         {
           sessionId: worker.sessionId,
           agentKind: worker.session.agentKind,
@@ -175,7 +190,22 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
         },
         request.tool,
         request.args,
+        reportClientId,
+        onReportRejected,
       );
+      let result: OrcaToolResult;
+      try {
+        result = request.tool === 'send_to_lead' && deps.deliverReport
+          ? await deps.deliverReport(worker.sessionId, request.reportedInputClientIds ?? [], send)
+          : await send();
+      } catch (error) {
+        assertOwner(owner);
+        if (error instanceof Error && error.message.startsWith('[REPORT_DELIVERY_UNCONFIRMED]')) {
+          return toolError('Previous report delivery is unknown and retained. Check the Lead task before sending again; automatic reporting will not replay it.',
+            'REPORT_DELIVERY_UNCONFIRMED');
+        }
+        throw error;
+      }
       assertOwner(owner);
       if (!result.isError) await settle?.();
       return result;

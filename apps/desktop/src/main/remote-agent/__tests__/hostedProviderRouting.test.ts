@@ -68,8 +68,10 @@ beforeEach(() => {
 afterEach(async () => {
   for (const release of releaseGates) release();
   await host?.abortAll();
-  host?.dispose();
-  // dispose 在后台删除工作目录；等它结束，避免与 fixture 清理交错。
+  // `dispose()` 返回 Promise，它会跑完每个 run 的目录清理；不 await 就会与下面的
+  // 目录断言赛跑（Windows 分片负载高时 `vi.waitFor` 的默认 1s 不够）。
+  await host?.dispose();
+  // 目录断言作为收尾后的不变量保留。
   await vi.waitFor(() => {
     for (const dir of shadowRoots) expect(fs.existsSync(dir)).toBe(false);
   });

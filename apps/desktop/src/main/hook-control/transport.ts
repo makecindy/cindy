@@ -29,7 +29,7 @@ import {
   type WelcomePayload,
 } from '@cindy/slack-hook-protocol';
 
-import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.js';
+import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 
 /** transport 对外状态(manager 映射为 HookConnectionStatus)。 */
 export type HookTransportStatus = 'connecting' | 'connected' | 'standby' | 'error' | 'stopped';

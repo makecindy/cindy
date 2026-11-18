@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { runInNewContext } from "node:vm";
-import { act, createElement, type ReactNode, type Ref } from "react";
+import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiagramDocumentPreview } from "@/session/DiagramDocumentPreview";
@@ -15,7 +15,7 @@ const state = vi.hoisted(() => ({
   mode: "light",
   surface: "white",
   readDrawio: vi.fn(),
-  zoom: vi.fn(),
+  zoomable: undefined as boolean | undefined,
   webview: vi.fn(),
 }));
 
@@ -34,21 +34,12 @@ vi.mock("@/theme", () => ({
   useTheme: () => ({ mode: state.mode, colors: { surface: state.surface } }),
 }));
 vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock("lucide-react-native", () => ({ Minus: () => null, Plus: () => null, Scan: () => null }));
-vi.mock("@/session/PreviewChrome", () => ({
-  PreviewToolbar: ({ children }: { children: ReactNode }) => createElement("div", null, children),
-  PreviewIconButton: ({ label, onPress }: { label: string; onPress: () => void }) =>
-    createElement("button", { onClick: onPress }, label),
+vi.mock("@/session/mermaidWebView", () => ({
+  MermaidDiagramWebView: ({ source, zoomable }: { source: string; zoomable?: boolean }) => {
+    state.zoomable = zoomable;
+    return createElement("pre", { "data-testid": "mermaid" }, source);
+  },
 }));
-vi.mock("@/session/mermaidWebView", async () => {
-  const { useImperativeHandle } = await import("react");
-  return {
-    MermaidDiagramWebView: ({ source, ref }: { source: string; ref: Ref<unknown> }) => {
-      useImperativeHandle(ref, () => ({ zoom: state.zoom }));
-      return createElement("pre", { "data-testid": "mermaid" }, source);
-    },
-  };
-});
 vi.mock("react-native-webview", () => ({
   WebView: (props: unknown) => {
     state.webview(props);
@@ -97,7 +88,7 @@ function previewDocument() {
 }
 
 describe("DiagramDocumentPreview", () => {
-  it("renders and updates Mermaid without reading the draw.io script, retaining zoom controls", () => {
+  it("renders and updates Mermaid without reading the draw.io script, zooming by pinch only", () => {
     render("flow.mmd", "graph TD\nA --> B");
     expect(host.querySelector("pre")?.textContent).toBe("graph TD\nA --> B");
     render("flow.mmd", "graph TD\nB --> C");
@@ -107,8 +98,9 @@ describe("DiagramDocumentPreview", () => {
     expect(host.querySelector("pre")?.textContent).toBe("graph TD\nB --> C");
     expect(state.readDrawio).not.toHaveBeenCalled();
     expect(state.webview).not.toHaveBeenCalled();
-    for (const button of host.querySelectorAll("button")) act(() => button.click());
-    expect(state.zoom.mock.calls).toEqual([[0.8], ["fit"], [1.25]]);
+    // 手机缩放靠捏合:图本身可缩放,不再摆放大 / 缩小 / 适应按钮。
+    expect(state.zoomable).toBe(true);
+    expect(host.querySelectorAll("button")).toHaveLength(0);
   });
 
   it("constructs draw.io on a format-only change and updates source and theme", () => {

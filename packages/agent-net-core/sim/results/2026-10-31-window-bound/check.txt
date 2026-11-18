@@ -1,0 +1,3 @@
+    Checking agent-net-core v0.0.0 (<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core)
+    Checking agent-net-sim v0.0.0 (<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core/sim)
+    Finished `sim` profile [optimized] target(s) in 0.33s

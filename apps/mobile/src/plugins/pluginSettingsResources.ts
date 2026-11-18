@@ -84,8 +84,8 @@ export async function preparePluginSettingsResources(
                 .join("/");
               if (mediaType === "text/html")
                 text = prepareSettingsHtml(text, bridge.path);
-              file.write(text);
-            } else file.write(bytes);
+              file.writeSync(text);
+            } else file.writeSync(bytes);
             // Keep Host MIME for validation; the native server takes a bare media type.
             return [declaration.path, file.name, mediaType];
           }),
@@ -94,7 +94,7 @@ export async function preparePluginSettingsResources(
     }
     const script = new File(dir, String(files.length));
     script.create();
-    script.write(bridge.text);
+    script.writeSync(bridge.text);
     files.push([bridge.path, script.name, "application/javascript"]);
     check();
     starting = server.start(

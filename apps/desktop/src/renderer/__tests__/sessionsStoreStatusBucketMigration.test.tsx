@@ -29,7 +29,7 @@ vi.mock('@/lib/sessionService', () => ({
   create: vi.fn(),
 }));
 
-import { useCCSessions } from '@/hooks/useCCSessions';
+import { useCCSessions, useCCSessionsAllStatuses } from '@/hooks/useCCSessions';
 import { emitAutoTitlePreview, emitPatch } from '@/lib/sessionsBus';
 import { sessionsStore } from '@/lib/sessionsStore';
 import type { ListStatusFilter } from '@/lib/sessionService';
@@ -70,6 +70,25 @@ describe('sessionsStore status bucket migration', () => {
   afterEach(() => {
     cleanup();
     sessionsStore.reset();
+  });
+
+  // PR #10685, unit: production all-status hook must preserve an old active task
+  // when the bounded all query is entirely recent archives. Existing migration tests
+  // covered one row per bucket and missed saturation of the actual sidebar source.
+  it('keeps active tasks alongside a saturated archive history and follows status migration', async () => {
+    const old = { ...session('old-active'), pinnedAt: '2026-01-01T00:00:00Z' };
+    const history = Array.from({ length: 1000 }, (_, n) => session(`archive-${n}`, 'archived', '2026-11-18T00:00:00Z'));
+    mocks.list.mockImplementation(async (_limit, filter) => filter === 'active' ? [old] : history);
+    await sessionsStore.ensureByFilter('all'); // Same ceiling as the reported failure.
+    const { result } = renderHook(() => useCCSessionsAllStatuses());
+    await waitFor(() => expect(result.current).toHaveLength(1001));
+    expect(result.current.find(row => row.id === old.id)?.pinnedAt).toBe(old.pinnedAt);
+    expect(requestedFilters().sort()).toEqual(['active', 'all', 'archived']);
+    for (const status of ['archived', 'active'] as const) {
+      act(() => emitPatch(old.id, { status, updatedAt: '2026-11-18T01:00:00Z' }));
+      await waitFor(() => expect(result.current.find(row => row.id === old.id)?.status).toBe(status));
+      expect(result.current.filter(row => row.id === old.id)).toHaveLength(1);
+    }
   });
 
   it('retains a successful unpin patch when an older list response returns', async () => {

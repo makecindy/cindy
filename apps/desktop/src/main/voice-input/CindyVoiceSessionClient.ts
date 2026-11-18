@@ -7,8 +7,8 @@ import {
 
 import * as authManager from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
-import { ServerApiError, serverApiFetch } from '../serverApiClient.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
+import { ServerApiError, serverApiFetch } from '../serverApiClient.desktop.js';
 import { getAppCapabilities, requireAppCapability } from '../appCapabilities.js';
 import { createLogger } from '../logger.js';
 

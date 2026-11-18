@@ -76,7 +76,7 @@ export function useTeammateSearchMatches(
         kind: 'group',
         name: group.name,
         archived: Boolean(group.archived),
-        detail: group.members.map((member) => member.name).join('、'),
+        detail: group.members.map((member) => member.name).join(t('commonUi.listSeparator')),
         route: `/bots/groups/${encodeURIComponent(group.id)}`,
         avatar: group.members[0] ?? null,
       }));

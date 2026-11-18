@@ -32,7 +32,7 @@ vi.mock("react-native", () => ({
     </button>
   ),
   StyleSheet: { create: (value: unknown) => value },
-  useWindowDimensions: () => ({ width: runtime.width }),
+  Dimensions: { get: () => ({ width: runtime.width }), addEventListener: () => ({ remove() {} }) },
 }));
 vi.mock("@/platform/gestureHandler", async () => {
   const { forwardRef, useImperativeHandle } = await import("react");
@@ -111,6 +111,7 @@ vi.mock("lucide-react-native", () =>
       "Archive",
       "ArchiveRestore",
       "Ellipsis",
+      "Clock",
       "Pin",
       "PinOff",
     ].map((name) => [name, () => null]),
@@ -209,7 +210,7 @@ describe("iOS swipe runtime contracts (mocked native boundary)", () => {
       render("b");
       expect(runtime.reset).toHaveBeenCalledOnce();
       expect(runtime.translation.value).toBe(0);
-      expect(controls.registry.onRowClose).toHaveBeenCalledWith("a");
+      expect(controls.registry.onRowClose).toHaveBeenCalledWith(expect.stringMatching(/:a$/));
       drag(value);
       release(direction);
       expect(controls[action]).toHaveBeenCalledExactlyOnceWith(
@@ -272,4 +273,23 @@ describe("iOS swipe runtime contracts (mocked native boundary)", () => {
       1, 0, 1, 0,
     ]);
   });
+});
+
+// Integration: only inbox rows replace More; full-swipe archive remains unchanged.
+it('uses snooze in the inbox secondary slot, while ordinary rows retain More', () => {
+  const onSnooze = vi.fn();
+  const session = { id: 'follow', status: 'active' } as RemoteSession;
+  const draw = (inboxMode: boolean) => act(() => root.render(
+    <SwipeableSessionRow {...controls} onSnooze={onSnooze} inboxMode={inboxMode} session={session} testID="swipe">row</SwipeableSessionRow>,
+  ));
+  draw(true);
+  act(() => (host.querySelector('[data-testid="swipe.optionsAction"]') as HTMLButtonElement).click());
+  expect(onSnooze).toHaveBeenCalledWith(session);
+  expect(controls.onShowOptions).not.toHaveBeenCalled();
+  drag(-260);
+  release('left');
+  expect(controls.onArchive).toHaveBeenCalledWith(session);
+  draw(false);
+  act(() => (host.querySelector('[data-testid="swipe.optionsAction"]') as HTMLButtonElement).click());
+  expect(controls.onShowOptions).toHaveBeenCalledWith(session);
 });

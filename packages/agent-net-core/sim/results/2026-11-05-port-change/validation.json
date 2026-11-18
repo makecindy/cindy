@@ -1,0 +1,461 @@
+[
+  {
+    "step": "build",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "agent-net-sim",
+      "--features",
+      "kcp",
+      "--bin",
+      "compare",
+      "--bin",
+      "share",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 6.63,
+    "output": "build.txt"
+  },
+  {
+    "step": "simulation-lean",
+    "command": [
+      "/tmp/agent-net-port/v3/final/bin/compare.exe"
+    ],
+    "env": {
+      "AGENT_NET_KCP": "none",
+      "AGENT_NET_NO_CPU": "1",
+      "AGENT_NET_POLICY": "lean"
+    },
+    "exit": 0,
+    "seconds": 10.373,
+    "output": "simulation-lean.txt"
+  },
+  {
+    "step": "simulation-auto",
+    "command": [
+      "/tmp/agent-net-port/v3/final/bin/compare.exe"
+    ],
+    "env": {
+      "AGENT_NET_KCP": "none",
+      "AGENT_NET_NO_CPU": "1",
+      "AGENT_NET_POLICY": "auto"
+    },
+    "exit": 0,
+    "seconds": 55.704,
+    "output": "simulation-auto.txt"
+  },
+  {
+    "step": "simulation-fast",
+    "command": [
+      "/tmp/agent-net-port/v3/final/bin/compare.exe"
+    ],
+    "env": {
+      "AGENT_NET_KCP": "none",
+      "AGENT_NET_NO_CPU": "1",
+      "AGENT_NET_POLICY": "fast"
+    },
+    "exit": 0,
+    "seconds": 62.74,
+    "output": "simulation-fast.txt"
+  },
+  {
+    "step": "matrix-fair-timer1ms",
+    "command": [
+      "/tmp/agent-net-port/v3/final/bin/share.exe"
+    ],
+    "env": {
+      "SHARE_MODE": "fair",
+      "SHARE_TIMER_US": "1000"
+    },
+    "exit": 0,
+    "seconds": 83.213,
+    "output": "matrix-fair-timer1ms.txt"
+  },
+  {
+    "step": "matrix-full-timer1ms",
+    "command": [
+      "/tmp/agent-net-port/v3/final/bin/share.exe"
+    ],
+    "env": {
+      "SHARE_MODE": "full",
+      "SHARE_TIMER_US": "1000"
+    },
+    "exit": 0,
+    "seconds": 86.855,
+    "output": "matrix-full-timer1ms.txt"
+  },
+  {
+    "step": "matrix-fair-precise",
+    "command": [
+      "/tmp/agent-net-port/v3/final/bin/share.exe"
+    ],
+    "env": {
+      "SHARE_MODE": "fair",
+      "SHARE_TIMER_US": "1"
+    },
+    "exit": 0,
+    "seconds": 129.936,
+    "output": "matrix-fair-precise.txt"
+  },
+  {
+    "step": "matrix-full-precise",
+    "command": [
+      "/tmp/agent-net-port/v3/final/bin/share.exe"
+    ],
+    "env": {
+      "SHARE_MODE": "full",
+      "SHARE_TIMER_US": "1"
+    },
+    "exit": 0,
+    "seconds": 158.901,
+    "output": "matrix-full-precise.txt"
+  },
+  {
+    "step": "matrix-full-precise-clock-offset",
+    "command": [
+      "/tmp/agent-net-port/v3/final/bin/share.exe"
+    ],
+    "env": {
+      "SHARE_MODE": "full",
+      "SHARE_TIMER_US": "1",
+      "SHARE_CLOCK_OFFSET_US": "1700000000000000"
+    },
+    "exit": 0,
+    "seconds": 160.357,
+    "output": "matrix-full-precise-clock-offset.txt"
+  },
+  {
+    "step": "check",
+    "command": [
+      "cargo",
+      "check",
+      "--profile",
+      "sim",
+      "--workspace",
+      "--all-targets",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 5.255,
+    "output": "validate/check.txt"
+  },
+  {
+    "step": "tests-default",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "--workspace",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 31.188,
+    "output": "validate/tests-default.txt"
+  },
+  {
+    "step": "tests-10000",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "--workspace",
+      "--locked",
+      "--offline"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "10000"
+    },
+    "exit": 0,
+    "seconds": 974.951,
+    "output": "validate/tests-10000.txt"
+  },
+  {
+    "step": "unit-kcp",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--features",
+      "kcp",
+      "--lib",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 1.736,
+    "output": "validate/unit-kcp.txt"
+  },
+  {
+    "step": "fresh-every_seed_delivers_an_intact_ordered_stream",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "reliability",
+      "--locked",
+      "--offline",
+      "every_seed_delivers_an_intact_ordered_stream",
+      "--",
+      "--exact"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "1000",
+      "AGENT_NET_SEED_START": "950000"
+    },
+    "exit": 0,
+    "seconds": 6.722,
+    "output": "validate/fresh-every_seed_delivers_an_intact_ordered_stream.txt"
+  },
+  {
+    "step": "fresh-recovery_policies_keep_streams_intact_and_make_progress",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "reliability",
+      "--locked",
+      "--offline",
+      "recovery_policies_keep_streams_intact_and_make_progress",
+      "--",
+      "--exact"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "1000",
+      "AGENT_NET_SEED_START": "950000"
+    },
+    "exit": 0,
+    "seconds": 22.78,
+    "output": "validate/fresh-recovery_policies_keep_streams_intact_and_make_progress.txt"
+  },
+  {
+    "step": "fresh-encrypted_seeds_deliver_intact_streams",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "secure",
+      "--locked",
+      "--offline",
+      "encrypted_seeds_deliver_intact_streams",
+      "--",
+      "--exact"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "1000",
+      "AGENT_NET_SEED_START": "950000"
+    },
+    "exit": 0,
+    "seconds": 4.395,
+    "output": "validate/fresh-encrypted_seeds_deliver_intact_streams.txt"
+  },
+  {
+    "step": "fresh-random_moves_deliver_intact_streams",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "migration",
+      "--locked",
+      "--offline",
+      "random_moves_deliver_intact_streams",
+      "--",
+      "--exact"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "4000",
+      "AGENT_NET_SEED_START": "950000"
+    },
+    "exit": 0,
+    "seconds": 151.916,
+    "output": "validate/fresh-random_moves_deliver_intact_streams.txt"
+  },
+  {
+    "step": "recheck-random_moves-920000",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "migration",
+      "--locked",
+      "--offline",
+      "random_moves_deliver_intact_streams",
+      "--",
+      "--exact"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "2000",
+      "AGENT_NET_SEED_START": "920000"
+    },
+    "exit": 0,
+    "seconds": 81.224,
+    "output": "validate/recheck-random_moves-920000.txt"
+  },
+  {
+    "step": "recheck-random_moves-940000",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "migration",
+      "--locked",
+      "--offline",
+      "random_moves_deliver_intact_streams",
+      "--",
+      "--exact"
+    ],
+    "env": {
+      "AGENT_NET_SEEDS": "4000",
+      "AGENT_NET_SEED_START": "940000"
+    },
+    "exit": 0,
+    "seconds": 161.772,
+    "output": "validate/recheck-random_moves-940000.txt"
+  },
+  {
+    "step": "time-reliability",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "reliability",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 7.982,
+    "output": "validate/time-reliability.txt"
+  },
+  {
+    "step": "time-sharing",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "sharing",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 3.579,
+    "output": "validate/time-sharing.txt"
+  },
+  {
+    "step": "time-migration",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "migration",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 6.649,
+    "output": "validate/time-migration.txt"
+  },
+  {
+    "step": "time-udp",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "-p",
+      "agent-net-sim",
+      "--test",
+      "udp",
+      "--locked",
+      "--offline"
+    ],
+    "env": {},
+    "exit": 0,
+    "seconds": 1.239,
+    "output": "validate/time-udp.txt"
+  },
+  {
+    "step": "mutants-full",
+    "command": [
+      "py",
+      "-3",
+      "sim/mutants.py"
+    ],
+    "env": {
+      "AGENT_NET_MUTANT_SHARD": "0/4 | 1/4 | 2/4 | 3/4",
+      "PYTHONIOENCODING": "utf-8"
+    },
+    "exit": 1,
+    "seconds": 3324,
+    "output": "mutants-full.txt",
+    "note": "四个分片同时跑的墙钟时间，期间一万种子测试和对比矩阵也在跑。175 个里 174 个抓到；“加密：不查重放窗口”的匹配串没跟着第 6 条改，报 invalid，改了匹配串后单独重跑见 mutants-recheck.txt"
+  },
+  {
+    "step": "mutants-recheck",
+    "command": [
+      "py",
+      "-3",
+      "sim/mutants.py",
+      "不查重放窗口"
+    ],
+    "env": {
+      "PYTHONIOENCODING": "utf-8"
+    },
+    "exit": 0,
+    "seconds": 30,
+    "output": "mutants-recheck.txt",
+    "note": "匹配串改成第 6 条以后的写法，只改了 sim/mutants.py 这一项"
+  }
+]

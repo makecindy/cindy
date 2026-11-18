@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PeerFileTransport } from "@/device-link/peerFileTransport";
+import { installPeerStreamTransport } from "@/device-link/peerFileRegistry";
 
 const state = vi.hoisted(() => ({
   props: {} as any,
@@ -26,6 +27,7 @@ const state = vi.hoisted(() => ({
   holdReceive: false,
   debug: false,
   log: vi.fn(),
+  written: [] as number[],
 }));
 vi.mock("@/debug/mobileDebugLog", () => ({
   mobileDebugEnabled: () => state.debug,
@@ -91,7 +93,7 @@ vi.mock("expo-file-system", () => ({
     uri = "/staging";
     exists = true;
     create() {}
-    open() { return { close() {}, writeBytes() {} }; }
+    open() { return { close() {}, writeBytesSync(bytes: Uint8Array) { state.written.push(bytes.length); } }; }
     delete() { this.exists = false; state.deleted(); }
   },
   Paths: { cache: "/cache", availableDiskSpace: 10 * 1024 ** 3 },
@@ -173,6 +175,7 @@ beforeEach(() => {
   state.commands = [];
   state.holdReceive = false;
   state.debug = false;
+  state.written = [];
   state.log.mockClear();
   state.stats.mockReset().mockReturnValue(JSON.stringify({ path: "relay" }));
   state.deleted.mockClear();
@@ -423,4 +426,36 @@ it.each(["unknown", "timeout", "route-change", "debug-enabled"])("samples paths 
     controller.abort();
     await transfer.catch(() => {});
   }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：PeerFileTransport 的下载入口。电脑在 caps 里声明 streamTransport、这次调用走 Agent-Net 会话时，
+ *   不起 WebRTC（不发 offer、WebView 不收命令），字节经 stream-read 按顺序写进文件，最后一次 0 字节读让电脑关掉源文件。
+ * - Bug／规则依据：docs/dev-rules/protocol-compatibility/agent-net-file-stream.md，手机原来只有 WebRTC。
+ * - 现有覆盖缺口：本文件其余用例都走 WebRTC 运行时。
+ * - 最小失败输入：一个 300 KiB 的文件（一整块加一小块，再加结束读）；去掉会话分支时会去取 ICE、发 offer。
+ * - tier：unit（jsdom，假计时器）。 */
+it("downloads over the Agent-Net session when the computer offers stream transport, without WebRTC", async () => {
+  const off = installPeerStreamTransport((device) => device === "device");
+  const size = 300 * 1024, block = 256 * 1024;
+  state.rpc.mockImplementation(async (_device, _channel, [request]) => {
+    if (request.action === "caps") return { version: 1, streaming: true, idleMs: 300_000, sessionBound: true, streamTransport: true };
+    if (request.action === "stream-open") return { connection: "cccccccc-cccc-cccc-cccc-cccccccccccc" };
+    if (request.action === "open") return { ticket: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", size, mimeType: "video/mp4", version: "a".repeat(64) };
+    if (request.action === "stream-read") {
+      expect(request).toMatchObject({ connection: "cccccccc-cccc-cccc-cccc-cccccccccccc", ticket: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" });
+      const length = request.offset >= size ? 0 : Math.min(request.maxBytes, size - request.offset);
+      return Buffer.alloc(length, request.offset % 251).toString("base64");
+    }
+    return { ok: true };
+  });
+  try {
+    const result = await state.download("device", "cindy-file://unit/video.mp4", undefined, 1);
+    expect(result).toMatchObject({ size, mimeType: "video/mp4" });
+    expect(offers()).toHaveLength(0);
+    expect(state.commands.filter((command) => ["offer", "answer", "receive"].includes(command.action))).toEqual([]);
+    const reads = state.rpc.mock.calls.filter(([, , [r]]) => r.action === "stream-read").map(([, , [r]]) => [r.offset, r.maxBytes]);
+    expect(reads).toEqual([[0, block], [block, size - block], [size, 1]]);
+    expect(state.written).toEqual([block, size - block]);
+  } finally { off(); }
 });

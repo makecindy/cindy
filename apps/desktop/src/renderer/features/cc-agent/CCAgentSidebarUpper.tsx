@@ -1,3 +1,4 @@
+import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { matchesTaskCreators, useTaskCreatorIndex, useTaskCreatorOptions } from '@/features/bots/botFollowScopes';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ErrorNotice } from '@/components/ui/error-notice';
@@ -48,13 +49,14 @@ import { useNavigate, useMatch, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { cn } from '@/lib/utils';
 import { provisionalDraftTaskId, subscribeProvisionalDraftTask } from './provisionalDraftTask';
 import { useProvisionalDraftProjectTaskId } from './hooks/useProvisionalDraftProjectTaskId';
 import { toast } from '@/lib/toast';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
-import { useCCSessions } from '@/hooks/useCCSessions';
+import { useCCSessions, useCCSessionsAllStatuses } from '@/hooks/useCCSessions';
 import { useRecentWorkdirs } from '@/hooks/useRecentWorkdirs';
 import { refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -66,7 +68,7 @@ import {
   matchesKeyboardEvent,
   SWITCH_SESSION_SHORTCUT_IDS,
 } from '../../../shared/appShortcuts';
-import { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../../shared/workLouderCodex';
+import { WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT } from '../../../shared/workLouderCodex';
 import { setSessionOrdinalBadges } from './sidebar/sessionOrdinalBadges';
 import { useOwnTopNavScrollableRows, useSidebarCollapsedState } from '../feature-context';
 import { SidebarRailNavigation, SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
@@ -79,6 +81,7 @@ import { useNavigationAttention } from '@/lib/navigationAttentionStore';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 import { useViewedBotSessionId } from '@/features/bots/useViewedBotSessionId';
+import { useCompanionCloud } from '@/features/bots/companionCloudStore';
 import { sharedTaskErrorKey } from '@/features/device-link/sharedTaskCompatibility';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { stripTrailingPathSeparators } from '../../../shared/pathText';
@@ -183,6 +186,7 @@ import {
   projectKeyComparisonSetHas,
   sidebarSessionsWithHiddenProjectsAsDialogues,
   visibleSidebarProjects,
+  withoutTeammateProjectsElsewhere,
 } from './lib/sidebarProjectVisibility';
 import {
   collectRestorableProjectKeys,
@@ -265,6 +269,7 @@ import {
   activePinnedSidebarEntryIds,
   buildPinnedSidebarRank,
   pinnedProjectEntryId,
+  sortPinnedSidebarEntries,
   pinnedSidebarEntryComparisonKey,
   projectKeyFromPinnedEntryId,
 } from './lib/pinnedSidebarOrder';
@@ -447,9 +452,10 @@ export function CCAgentSidebarUpper() {
   const { hiddenProjectKeys, initialSnapshot: sidebarSettingsSnapshot } = hiddenProjects;
   const creatorOptions = useTaskCreatorOptions();
   const filter = useSidebarFilter(hiddenProjectKeys, sidebarSettingsSnapshot, creatorOptions);
+  const { mode: taskListMode } = useTaskListMode();
   const includeArchived = filter.status;
   const sessionsHook = useCCSessions({ includeArchived });
-  const { sessions: allSessionsForAttentionRaw } = useCCSessions({ includeArchived: 'all' });
+  const allSessionsForAttentionRaw = useCCSessionsAllStatuses();
   const allSessionsForAttention = useMemo(
     () => CINDY_MAKE_ENABLED
       ? allSessionsForAttentionRaw
@@ -460,12 +466,7 @@ export function CCAgentSidebarUpper() {
     remoteProjectsStore.subscribe,
     remoteProjectsStore.getMergedRemoteSessions,
   );
-  const remoteProjectSessions = useMemo(
-    () => CINDY_MAKE_ENABLED
-      ? remoteProjectSessionsRaw
-      : remoteProjectSessionsRaw.filter((session) => !isCindyMakeSource(session.source)),
-    [remoteProjectSessionsRaw],
-  );
+  const remoteProjectSessions = useRemoteProjectSessions();
   const remoteDevices = useRemoteDevices();
   const selectedMachineId = useEffectiveSelectedMachineId();
   const projectAliasMembers = useMemo(
@@ -618,7 +619,8 @@ export function CCAgentSidebarUpper() {
   // 机器切换栏选中某机器后按 selectedMachineId 整体过滤(本机 → 只本地;远程 → 只该机器),
   // rail 与展开态共用同一选择态,保证 rail 折叠后仍尊重选中机器。
   useEffect(() => {
-    if (filter.status === 'active') return;
+    // Only inbox mode needs processed tasks independently of the regular status filter.
+    if (taskListMode !== 'inbox' && filter.status === 'active') return;
     const selectedRemoteIds =
       selectedMachineId === MACHINE_ALL
         ? null
@@ -628,7 +630,7 @@ export function CCAgentSidebarUpper() {
       if (selectedRemoteIds && !selectedRemoteIds.has(device.deviceId)) continue;
       requestRemoteSessionStatus(device.deviceId, 'archived');
     }
-  }, [filter.status, remoteDevices, selectedMachineId]);
+  }, [taskListMode, filter.status, remoteDevices, selectedMachineId]);
   const sessionsWithRemote = useMemo(
     () => selectVisibleSessions(sessionsHook.sessions, remoteProjectSessions, selectedMachineId)
       .filter((session) => CINDY_MAKE_ENABLED || !isCindyMakeSource(session.source))
@@ -670,13 +672,35 @@ export function CCAgentSidebarUpper() {
     // 空可见列表也要上报:换机器、折叠或搜索把可见行清掉时,侧栏映射必须让位,
     // 否则 AG 键还会打开上一份已经看不见的任务。完整活动表仍要带上,最近发送
     // / 优先 / 自定义不能被折叠裁掉。
-    const catalogSessions = sessionsWithRemote.filter((session) => session.status === 'active');
-    const catalogSessionIds = new Set(catalogSessions.map((session) => session.id));
+    // active 表示未归档，不表示正在运行；可见的非 active 任务另作侧栏映射投影。
+    // 键盘目录只按任务 ID 寻址，同 ID 保留首条；本机在前时优先保留本机，避免重复占键。
+    const catalogSessionIds = new Set<string>();
+    const catalogSessions = sessionsWithRemote.filter((session) => {
+      if (session.status !== 'active' || catalogSessionIds.has(session.id)) return false;
+      catalogSessionIds.add(session.id);
+      return true;
+    });
     const visibleProjection = visibleSessionsWithRemote
       .filter((session) => !catalogSessionIds.has(session.id))
-      .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+      .slice(0, WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT);
     const remainingCatalogSlots = Math.max(0, 100 - visibleProjection.length);
-    const tasks = [...visibleProjection, ...catalogSessions.slice(0, remainingCatalogSlots)].map(
+    const remoteCount = catalogSessions.filter((session) => session.deviceLinkDeviceId).length;
+    // 为远程候选预留最多 36 条空间，避免本机任务先占满预算。
+    // 只限制本机条数；本机不足时，远程仍可填满剩余空间。这不是实体灯位配额。
+    const localQuota = remainingCatalogSlots - Math.min(remoteCount, 36);
+    // 置顶、项目分组可能让较旧任务出现在侧栏前 13 行，先计入额度以免截断后任务键错位。
+    const visibleLocal = new Set(
+      catalogSessions.filter(
+        (session) => !session.deviceLinkDeviceId && (sidebarOrder.get(session.id) ?? 13) < 13,
+      ),
+    );
+    let remainingLocalSlots = localQuota - visibleLocal.size;
+    // 仅其余本机候选消耗剩余额度，过滤不改变原有顺序，之后仍按总预算截断。
+    const publishedCatalog = catalogSessions.filter(
+      (session) =>
+        session.deviceLinkDeviceId || visibleLocal.has(session) || remainingLocalSlots-- > 0,
+    );
+    const tasks = [...visibleProjection, ...publishedCatalog.slice(0, remainingCatalogSlots)].map(
       (session) => {
         const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
         const userSendAtMs = session.userSendAt ? Date.parse(session.userSendAt) : Number.NaN;
@@ -747,6 +771,7 @@ export function CCAgentSidebarUpper() {
         visibleNewOrder,
         comparisonKey,
       );
+      filter.setPinnedSortBy('manual');
       void filter.setManualPinnedOrder(order, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist rail pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
@@ -843,6 +868,7 @@ export function CCAgentSidebarUpper() {
               attentionSessionId={activeSessionId ?? filesSessionId ?? viewedBotSessionId}
               notifications={railNotifications}
               manualPinnedOrder={filter.manualPinnedOrder}
+              pinnedSortBy={filter.pinnedSortBy}
               onReorderPinned={handleRailPinnedReorder}
             />
           </div>
@@ -994,6 +1020,50 @@ function ExpandedView({
     };
   }, []);
 
+  // Marks tasks read: clears their attention, dismisses pending alerts and marks unread
+  // automation runs read on the computer that owns them. `announce` shows the read count.
+  const markSessionsRead = useCallback(
+    async (sessionIds: readonly string[], deviceId: string | undefined, { announce }: { announce: boolean }) => {
+      // 远程任务拿不到被控端的 pending-alerts 处置通道，用户显式标已读即按 explicit
+      // 清除（对错误提醒同样生效），并经既有已读回执桥接到所属电脑。
+      clearSessionAttentionMany([...sessionIds], deviceId ? { intent: 'explicit' } : undefined);
+      if (!deviceId) {
+        try {
+          const { processed, failed } =
+            await window.electronAPI.localDb.sessions.dismissPendingAlerts([...sessionIds]);
+          clearSessionAttentionMany(processed, { intent: 'explicit' });
+          if (failed.length > 0) log.warn('some pending alerts were not dismissed', failed);
+        } catch (e) {
+          log.warn('dismiss pending alerts failed', e);
+        }
+        void refreshPendingAlerts();
+      }
+      const unreadRunIds = sessionIds.flatMap(
+        (sessionId) =>
+          (deviceId
+            ? remoteProjectsStore.getSessionScheduleInfo(sessionId)
+            : scheduleSessionIndex.get(sessionId)
+          )?.unreadRunIds ?? [],
+      );
+      if (unreadRunIds.length === 0) return;
+      const { processed, failed, firstError } = await markScheduleRunsReadAndSync(
+        unreadRunIds,
+        deviceId,
+      );
+      if (announce && processed.length > 0) {
+        toast.success(t('ccAgent.layout.markedAsRead', { count: processed.length }));
+      }
+      if (failed.length > 0) {
+        toast.error(
+          t('ccAgent.layout.markAllReadFailed', {
+            error: firstError ?? String(failed.length),
+          }),
+        );
+      }
+    },
+    [scheduleSessionIndex, t],
+  );
+
   const handleAutomationScheduleAction = useCallback(
     async (group: AutomationSessionGroup, action: Exclude<AutomationScheduleAction, 'archive-all'>) => {
       // 远程分组的操作发到任务所属电脑执行；本机分组仍走本机 IPC。
@@ -1004,44 +1074,7 @@ function ExpandedView({
           : localCall();
 
       if (action === 'mark-read') {
-        const sessionIds = group.sessions.map((session) => session.id);
-        // 远程分组拿不到被控端的 pending-alerts 处置通道，用户显式标已读即按 explicit
-        // 清除（对错误提醒同样生效），并经既有已读回执桥接到所属电脑。
-        clearSessionAttentionMany(sessionIds, deviceId ? { intent: 'explicit' } : undefined);
-        if (!deviceId) {
-          try {
-            const { processed, failed } =
-              await window.electronAPI.localDb.sessions.dismissPendingAlerts(sessionIds);
-            clearSessionAttentionMany(processed, { intent: 'explicit' });
-            if (failed.length > 0) log.warn('some pending alerts were not dismissed', failed);
-          } catch (e) {
-            log.warn('dismiss pending alerts failed', e);
-          }
-          void refreshPendingAlerts();
-        }
-        const unreadRunIds = sessionIds.flatMap(
-          (sessionId) =>
-            (deviceId
-              ? remoteProjectsStore.getSessionScheduleInfo(sessionId)
-              : scheduleSessionIndex.get(sessionId)
-            )?.unreadRunIds ?? [],
-        );
-        if (unreadRunIds.length > 0) {
-          const { processed, failed, firstError } = await markScheduleRunsReadAndSync(
-            unreadRunIds,
-            deviceId,
-          );
-          if (processed.length > 0) {
-            toast.success(t('ccAgent.layout.markedAsRead', { count: processed.length }));
-          }
-          if (failed.length > 0) {
-            toast.error(
-              t('ccAgent.layout.markAllReadFailed', {
-                error: firstError ?? String(failed.length),
-              }),
-            );
-          }
-        }
+        await markSessionsRead(group.sessions.map((session) => session.id), deviceId, { announce: true });
         return;
       }
 
@@ -1195,7 +1228,7 @@ function ExpandedView({
         knownSessionIds: group.sessions.map((session) => session.id),
       });
     },
-    [confirmDialog, navigate, requestDeleteSchedule, scheduleSessionIndex, t],
+    [confirmDialog, markSessionsRead, navigate, requestDeleteSchedule, scheduleSessionIndex, t],
   );
 
   const [confirm, setConfirm] = useState<ConfirmState>(CONFIRM_INITIAL);
@@ -1215,7 +1248,11 @@ function ExpandedView({
   const unnamedLabelRef = useRef('');
   unnamedLabelRef.current = t('ccAgent.common.unnamedSession');
   const fireSessionNotification = useCallback(
-    (sessionId: string, kind: 'done' | 'error' | 'needs-reply', options?: { inputHandoff: true; inputHandoffRequestId?: string }) => {
+    (sessionId: string, kind: 'done' | 'error' | 'needs-reply', options?: {
+      inputHandoff?: true;
+      inputHandoffRequestId?: string;
+      alertEventId?: string;
+    }) => {
       const session = findSessionNotificationSession(sessionId, [
         sessionsRef.current,
         allSessionsForNotificationRef.current,
@@ -1271,11 +1308,17 @@ function ExpandedView({
     [fireSessionNotification],
   );
   const handleSessionError = useCallback(
-    (sessionId: string) => fireSessionNotification(sessionId, 'error'),
+    (sessionId: string, alertEventId?: string) => fireSessionNotification(
+      sessionId, 'error', alertEventId ? { alertEventId } : undefined,
+    ),
     [fireSessionNotification],
   );
   const handleSessionNeedsReply = useCallback(
-    (sessionId: string, options?: { inputHandoff: true; inputHandoffRequestId?: string }) => fireSessionNotification(sessionId, 'needs-reply', options),
+    (sessionId: string, options?: {
+      inputHandoff?: true;
+      inputHandoffRequestId?: string;
+      alertEventId?: string;
+    }) => fireSessionNotification(sessionId, 'needs-reply', options),
     [fireSessionNotification],
   );
 
@@ -1594,6 +1637,26 @@ function ExpandedView({
     return sidebarSessions.filter((s) => (cutoff === null || sessionActivityMs(s) >= cutoff)
       && matchesTaskCreators(s, filter.creators, taskCreatorIndex));
   }, [sidebarSessions, filter.lastActivity, filter.creators, taskCreatorIndex]);
+  const statusIndependentSidebarSessions = useMemo(() => {
+    const scoped = selectVisibleSessions(allSessionsForAttention, remoteProjectSessions, selectedMachineId)
+      .filter(session => !isOrcaWorkerSession(session)
+        && session.status !== 'deleted'
+        && (!session.deviceLinkDeviceId || !isSharedTaskPeer(session.deviceLinkDeviceId)));
+    return sidebarSessionsWithHiddenProjectsAsDialogues(scoped, hiddenProjectKeys, localPlatform);
+  }, [allSessionsForAttention, remoteProjectSessions, selectedMachineId, hiddenProjectKeys, localPlatform]);
+  const inboxSourceSessions = useMemo(() => {
+    const cutoff = cutoffForLastActivity(filter.lastActivity);
+    return statusIndependentSidebarSessions.filter(session => (cutoff === null || sessionActivityMs(session) >= cutoff)
+      && matchesTaskCreators(session, filter.creators, taskCreatorIndex));
+  }, [statusIndependentSidebarSessions, filter.lastActivity, filter.creators, taskCreatorIndex]);
+  // The inbox counts a task as a teammate's by the same test as the teammate filter.
+  const isInboxTeammateTask = useCallback(
+    (session: Session) => !matchesTaskCreators(session, 'none', taskCreatorIndex),
+    [taskCreatorIndex],
+  );
+  const inboxGroups = useProjectGroups(inboxSourceSessions, projectAliases.aliases, false,
+    undefined, localPlatform, undefined, projectAliasMembers);
+
   const activityFilteredPersistentLocalProjects = useMemo(
     () =>
       filterPersistentLocalProjectsByLastActivity(
@@ -1604,8 +1667,10 @@ function ExpandedView({
   );
 
   /* ---- Grouping & collapse ---- */
+  const { mode: taskListMode } = useTaskListMode();
+  const pinnedSourceSessions = taskListMode === 'inbox' ? statusIndependentSidebarSessions : sidebarSessions;
   const allGroups = useProjectGroups(
-    sidebarSessions,
+    pinnedSourceSessions,
     projectAliases.aliases,
     false,
     visiblePersistentLocalProjects,
@@ -1617,7 +1682,7 @@ function ExpandedView({
   // keeps pinned conversations inside their project solely for project identity
   // and project-level actions; the normal project tree above remains deduped.
   const allProjectGroups = useProjectGroups(
-    sidebarSessions,
+    pinnedSourceSessions,
     projectAliases.aliases,
     true,
     visiblePersistentLocalProjects,
@@ -1789,18 +1854,22 @@ function ExpandedView({
   }, [projectUniverse.projects.length, gcProjectKeys, filter]);
 
   /* ---- F-PJ-10: 在 render 阶段把 filter.projects 应用到 ProjectNode 列表 ---- */
+  // A teammate handed to another computer: its project here is hidden until it comes back.
+  const teammatesElsewhere = useCompanionCloud().demotedBotIds;
   const visibleProjects = useMemo(() => {
     const notHidden = visibleSidebarProjects(
-      groupsWithPinnedProjects.projects,
+      withoutTeammateProjectsElsewhere(groupsWithPinnedProjects.projects, teammatesElsewhere),
       hiddenProjectKeys,
       localPlatform,
     );
     if (filter.projectsAsSet === null) return notHidden;
     const allowed = filter.projectsAsSet;
+    // A teammate's project is not a project choice; the teammate filter decides its tasks.
     return notHidden.filter((project) =>
-      projectFilterIncludes(allowed, project.projectKey, localPlatform),
+      isTeammateProjectPath(project.workingDir)
+      || projectFilterIncludes(allowed, project.projectKey, localPlatform),
     );
-  }, [groupsWithPinnedProjects.projects, hiddenProjectKeys, filter.projectsAsSet, localPlatform]);
+  }, [groupsWithPinnedProjects.projects, hiddenProjectKeys, filter.projectsAsSet, localPlatform, teammatesElsewhere]);
 
   /* ---- M41: Vendor 过滤 — 应用到 pinned / unclassified / project sessions ---- */
   const vendorPredicate = useMemo(() => {
@@ -2014,7 +2083,6 @@ function ExpandedView({
       },
       [
         ...allProjectGroups.projects.flatMap((project) => project.sessions),
-        ...groups.bots.flatMap((bot) => bot.sessions),
         ...visibleDialogues,
         ...visibleUnclassified,
       ],
@@ -2042,7 +2110,6 @@ function ExpandedView({
     activeSessionId,
     attentionKinds,
     displayRunningSessionIds,
-    groups.bots,
     remoteActivityRevision,
     sidebarNotifications,
     urgentSet,
@@ -2052,10 +2119,10 @@ function ExpandedView({
     visibleUnclassified,
   ]);
   const projectPriorityContext = projectPriorityProjection.context;
-  // 只重排置顶项目的子任务；置顶项自身仍按用户的拖拽顺序排列。
+  // 置顶区的顶层顺序独立；项目子任务继续遵循主列表排序。
   const pinnedSortContext = filter.sortBy === 'priority' ? projectPriorityContext : undefined;
   const sortedPinnedEntries = useMemo(
-    () => visiblePinnedEntries.map((entry) =>
+    () => sortPinnedSidebarEntries(visiblePinnedEntries, filter.pinnedSortBy).map((entry) =>
       entry.kind === 'project'
         ? {
             ...entry,
@@ -2067,7 +2134,7 @@ function ExpandedView({
           }
         : entry,
     ),
-    [visiblePinnedEntries, filter.sortBy, pinnedSortContext],
+    [visiblePinnedEntries, filter.pinnedSortBy, filter.sortBy, pinnedSortContext],
   );
 
   const visibleProjectsWithVendor = useMemo(() => {
@@ -2106,6 +2173,23 @@ function ExpandedView({
     hostProjectSort,
     projectPriorityContext,
   ]);
+
+  const inboxSessions = useMemo(() => {
+    const pinnedRowIds = new Set(visiblePinnedProjects.flatMap(({ displaySessions }) =>
+      displaySessions.map(session => session.id)));
+    const projects = visibleSidebarProjects(
+      withoutTeammateProjectsElsewhere(inboxGroups.projects, teammatesElsewhere),
+      hiddenProjectKeys, localPlatform,
+    ).filter(project =>
+      (filter.projectsAsSet === null || isTeammateProjectPath(project.workingDir)
+        || projectFilterIncludes(filter.projectsAsSet, project.projectKey, localPlatform)));
+    return [
+      ...projects.flatMap(project => project.sessions),
+      ...(filter.projectsAsSet === null || filter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? inboxGroups.dialogues : []),
+      ...(filter.projects === 'all' ? inboxGroups.unclassified : []),
+    ].filter(session => !pinnedRowIds.has(session.id) && (!vendorPredicate || vendorPredicate(session)));
+  }, [inboxGroups, teammatesElsewhere, hiddenProjectKeys, localPlatform, visiblePinnedProjects,
+    filter.projectsAsSet, filter.projects, vendorPredicate]);
 
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
   // 否则侧栏折叠后这些项目及其取消置顶入口都会完全不可达。
@@ -2167,6 +2251,7 @@ function ExpandedView({
         visibleNewOrder,
         comparisonKey,
       );
+      filter.setPinnedSortBy('manual');
       void filter.setManualPinnedOrder(order, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
@@ -2370,8 +2455,8 @@ function ExpandedView({
   // 含远程会话:device-link 远程行也渲染在可选行里,bulk 选择/归档/删除必须能解析到它们
   // (否则选中远程行 → 计数加了但 archive/delete 查 sessionsById 落空、静默忽略)。
   const sessionsById = useMemo(
-    () => new Map([...sessions, ...remoteProjectSessions].map((session) => [session.id, session])),
-    [sessions, remoteProjectSessions],
+    () => new Map([...allSessionsForAttention, ...sessions, ...remoteProjectSessions].map((session) => [session.id, session])),
+    [allSessionsForAttention, sessions, remoteProjectSessions],
   );
   // 与 sessionsRef 同理:行级 handler 只在「点击那一刻」查表,不该因为表换了引用就
   // 重建自身 —— 否则 SessionItem 的 memo 会被整表打穿(SessionItem.tsx 不变量第 3 条)。
@@ -3183,7 +3268,7 @@ function ExpandedView({
   const handleActionClick = useCallback(
     async (
       sessionId: string,
-      action: 'delete' | 'archive' | 'archive-now' | 'unarchive',
+      action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive',
       sharedTaskId?: string,
     ) => {
       const session = sessionsByIdRef.current.get(sessionId);
@@ -3191,7 +3276,7 @@ function ExpandedView({
         toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
         return;
       }
-      const isArchiveLike = action === 'archive' || action === 'archive-now';
+      const isArchiveLike = action === 'archive' || action === 'archive-now' || action === 'complete';
       // 执行中的 session 不允许归档 —— 让用户先停下当前任务
       if (isArchiveLike && archiveBlockedByRunning(sessionId, session?.deviceLinkDeviceId)) return;
       // 被 IM 接管中的 session 不允许归档 —— 接管方还在操控，先收回再归档。
@@ -3218,6 +3303,20 @@ function ExpandedView({
         toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
         return true;
       };
+      // 收件箱「完成」遇到绑着启用中自动化的任务，只把这轮结果标为已读、任务回到进行中，
+      // 不归档：归档会回收 worktree，下一轮又从快照重建，安静的一轮放回已归档再删一次
+      // （2026-11-18 用户决定，task-inbox.md）。读不到绑定时按无绑定处理，照常归档。
+      if (action === 'complete') {
+        const boundNames = await loadActiveBoundScheduleNames([
+          { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId },
+        ]).then((names) => names.get(sessionId) ?? [], () => []);
+        if (boundNames.length > 0) {
+          if (await blockedByAttachment()) return;
+          await markSessionsRead([sessionId], session?.deviceLinkDeviceId ?? undefined, { announce: false });
+          // The inbox owns the reactive placement of this explicit successful action.
+          return 'marked-read' as const;
+        }
+      }
       // 归档一律不弹确认框:它是可逆的(菜单里就有「恢复」),菜单入口与行内
       // 快捷按钮同一口径直接执行 —— 行内那个本身已经是两步确认。
       // 例外:worktree 有未提交改动(归档会顺带回收 worktree)、或任务绑定了
@@ -3229,10 +3328,13 @@ function ExpandedView({
             // 接管拦截先结算:被接管时不该弹任何归档确认。
             if (await blockedByAttachment()) return false;
             // 自动化绑定读本地缓存,放在 worktree 预检之前,不占用预检之后的窗口。
-            const scheduleNames =
-              (await loadActiveBoundScheduleNames([
-                { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId },
-              ])).get(sessionId) ?? [];
+            // 收件箱「完成」单击生效:不再提醒自动化会恢复任务(安静的一轮会放回已处理,
+            // archive-pauses-automations.md);未提交改动的确认照常保留。
+            const scheduleNames = action === 'complete'
+              ? []
+              : (await loadActiveBoundScheduleNames([
+                  { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId },
+                ])).get(sessionId) ?? [];
             // **worktree 预检必须是最后一个前置条件**(codex review):它之后再 await
             // 任何东西(比如原来排在后面的接管查询),都会给「clean 结论」留一段失效
             // 窗口 —— 编辑器或收尾中的 agent 在那段时间写脏工作区,归档就不带警告地
@@ -3301,6 +3403,7 @@ function ExpandedView({
       closeOwnedSharedTask,
       archiveBlockedByRunning,
       confirmDialog,
+      markSessionsRead,
       runSessionAction,
       unarchiveSession,
       t,
@@ -3852,6 +3955,8 @@ function ExpandedView({
                  * 同样不展示，继续使用本地与已缓存内容即可。
                  */}
                 <PinnedSection
+                  sortBy={filter.pinnedSortBy}
+                  onSortByChange={filter.setPinnedSortBy}
                   entries={sortedPinnedEntries}
                   allKnownProjects={visibleProjectUniverse}
                   renderProject={(
@@ -3917,12 +4022,12 @@ function ExpandedView({
                 {/* D 期:主列表 = 混排模型(项目行 + 散排对话 / 对话组,ProjectsSection
                   内部按 mainListModel 统一排序)。按日期分组与固定 Dialogue 段已删除。 */}
                 <ProjectsSection
+                  inboxSessions={inboxSessions}
+                  isInboxTeammateTask={isInboxTeammateTask}
                   unclassified={visibleUnclassified}
                   projects={visibleProjectsWithVendor}
                   dialogues={visibleDialogues}
                   dialogueActionSessions={dialogueActionSessions}
-                  bots={groups.bots}
-                  onOpenBot={(botId) => navigate(`/bots/${botId}`)}
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={allGroups.dialogues.length}
                   allProjectKeysForOrder={gcProjectKeys}
@@ -4062,6 +4167,7 @@ interface CollapsedProps {
   notifications: ReadonlySet<string>;
   /** 与展开态共用的置顶顺序(置顶面板同序)。 */
   manualPinnedOrder: readonly string[];
+  pinnedSortBy: UseSidebarFilterReturn['pinnedSortBy'];
   /** 置顶瓷砖拖拽落定(写回 manualPinnedOrder,与展开态同一持久化语义)。 */
   onReorderPinned: (newOrderIds: string[]) => void;
 }
@@ -4082,6 +4188,7 @@ function CollapsedView({
   attentionSessionId,
   notifications,
   manualPinnedOrder,
+  pinnedSortBy,
   onReorderPinned,
 }: CollapsedProps) {
   const location = useLocation();
@@ -4184,6 +4291,7 @@ function CollapsedView({
         sessions={sessions}
         activeSessionId={activeSessionId}
         manualPinnedOrder={manualPinnedOrder}
+        pinnedSortBy={pinnedSortBy}
         runningSessionIds={railRunningIds}
         notifications={notifications}
         attentionKinds={attentionKinds}
@@ -4259,7 +4367,7 @@ function RailPanelShell({
         'fixed w-[264px] rounded-xl border border-sidebar-border bg-[var(--surface-elevated)] p-1.5',
         // 阴影走主题 token(AGENTS.md #16,与菜单同语言);z 必须低于 DropdownMenu
         // 的 z-50 —— 行内右键/移动菜单要画在面板之上(review P2)。
-        'shadow-[var(--shadow-menu)]',
+        'shadow-[shadow:var(--shadow-menu)]',
         level === 1 ? 'z-[48]' : 'z-[49]',
       )}
       style={{

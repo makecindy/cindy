@@ -1,3 +1,5 @@
+import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
+import { useWindowWidth } from '@/platform/windowDimension';
 /**
  * SwipeableSessionRow —— 首页会话行的 iOS 式滑动操作包装。
  *
@@ -20,8 +22,8 @@
  *  - 全滑判定在 onSwipeableWillOpen(松手后的 JS 回调)同步读 translation,不在
  *    worklet 拖动中触发 —— 手指还按着时行被移除会拆手势树。
  */
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
-import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import { Pressable, StyleSheet, View } from "react-native";
 import {
   ReanimatedSwipeable as Swipeable,
   SwipeDirection,
@@ -40,6 +42,7 @@ import {
   Archive,
   ArchiveRestore,
   Ellipsis,
+  Clock,
   Pin,
   PinOff,
 } from "lucide-react-native";
@@ -59,6 +62,7 @@ import {
   type ThemeColors,
 } from "@/theme";
 import { radius, spacing } from "@/theme/tokens";
+import { usePaneEdgeInset } from './SessionPaneDivider';
 
 /** 圆形按钮直径(静置态是正圆,拖长后变胶囊;78 高的行内上下各留 11)。 */
 const BUTTON_SIZE = 56;
@@ -84,9 +88,13 @@ export interface SessionSwipeControls {
   onMarkRead(session: RemoteSession): void;
   onArchive(session: RemoteSession): void;
   onShowOptions(session: RemoteSession): void;
+  onSnooze?(session: RemoteSession): void;
+  /** Inbox: one-tap Done (archives without the automation reminder). */
+  onComplete?(session: RemoteSession): void;
 }
 
 export interface SwipeableSessionRowProps {
+  inboxMode?: boolean;
   /** 目标会话:id 作互斥 key,pinnedAt 决定右滑按钮图标(Pin/PinOff)与动作方向。 */
   session: RemoteSession;
   registry: SwipeRowRegistry;
@@ -101,6 +109,9 @@ export interface SwipeableSessionRowProps {
   onArchive(session: RemoteSession): void;
   /** 左滑「选项」按钮:先关行,再由页面层弹出操作菜单。 */
   onShowOptions(session: RemoteSession): void;
+  onSnooze?(session: RemoteSession): void;
+  /** Inbox: one-tap Done (archives without the automation reminder). */
+  onComplete?(session: RemoteSession): void;
   testID?: string;
   children: ReactNode;
 }
@@ -110,20 +121,31 @@ function SwipeableSessionRowInner({
   registry,
   onTogglePin,
   onMarkRead,
-  onArchive,
+  onArchive: onArchiveProp,
   onShowOptions,
+  onSnooze,
+  onComplete,
+  inboxMode = false,
   testID,
   children,
 }: SwipeableSessionRowProps) {
   const { t } = useTranslation();
-  const rowKey = session.id;
+  // Inbox: archive becomes a one-tap Done (button and full swipe alike).
+  const completeAction = inboxMode && session.status !== 'archived' && onComplete !== undefined;
+  const onArchive = completeAction && onComplete !== undefined ? onComplete : onArchiveProp;
+  // Project and inbox copies of the same task have independent swipe lifecycles.
+  const instanceId = useId();
+  const rowKey = `${instanceId}:${session.id}`;
   const pinnedAt = session.pinnedAt;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { width: windowWidth } = useWindowDimensions();
+  const windowWidth = useWindowWidth();
   const fullSwipeThreshold = windowWidth * FULL_SWIPE_RATIO;
 
   const methodsRef = useRef<SwipeableMethods | null>(null);
+  // Leave the pane edge's drag band to resizing (see usePaneEdgeInset).
+  const edgeInset = usePaneEdgeInset();
+  const hitSlop = useMemo(() => ({ right: -edgeInset }), [edgeInset]);
   // render*Actions 的回调参数是库内部的 translation SharedValue,渲染期存进 ref,
   // 供松手回调(handleWillOpen)同步读取当前位移做全滑判定。
   const translationRef = useRef<SharedValue<number> | null>(null);
@@ -204,10 +226,15 @@ function SwipeableSessionRowInner({
     onTogglePin(session);
   }, [close, onTogglePin, session]);
 
+  const snoozeAction = inboxMode && !session.pinnedAt && session.status !== 'archived' && !!onSnooze;
+  const secondaryLabel = snoozeAction
+    ? t(taskSnoozeUntil(session) > Date.now() ? 'devices.list.menu.inbox.wake' : 'devices.list.menu.inbox.snooze')
+    : t('session.row.moreOptions');
   const handleOptionsPress = useCallback(() => {
     close();
-    onShowOptions(session);
-  }, [close, onShowOptions, session]);
+    if (snoozeAction) onSnooze?.(session);
+    else onShowOptions(session);
+  }, [close, onShowOptions, onSnooze, snoozeAction, session]);
 
   const handleArchivePress = useCallback(() => {
     onArchive(session);
@@ -252,11 +279,15 @@ function SwipeableSessionRowInner({
       translationRef.current = translation;
       return (
         <RightActionsPanel
-          archiveLabel={statusToggle.label}
+          archiveLabel={completeAction ? t('devices.list.menu.inbox.complete') : statusToggle.label}
+          complete={completeAction}
           archived={statusToggle.action === "restore"}
           fullSwipeThreshold={fullSwipeThreshold}
           onArchive={handleArchivePress}
           onOptions={handleOptionsPress}
+          secondaryLabel={secondaryLabel}
+          snoozeAction={snoozeAction}
+          showSecondary={!inboxMode || session.status !== 'archived'}
           styles={styles}
           testID={testID}
           translation={translation}
@@ -268,6 +299,7 @@ function SwipeableSessionRowInner({
       fullSwipeThreshold,
       handleArchivePress,
       handleOptionsPress,
+      secondaryLabel, snoozeAction, inboxMode, session.status, completeAction, t,
       styles,
       testID,
     ],
@@ -276,6 +308,7 @@ function SwipeableSessionRowInner({
   return (
     <Swipeable
       ref={methodsRef}
+      hitSlop={hitSlop}
       childrenContainerStyle={{ backgroundColor: colors.surface }}
       containerStyle={{ backgroundColor: colors.surface }}
       onSwipeableClose={handleClose}
@@ -418,27 +451,34 @@ function LeftActionsPanel({
 function RightActionsPanel({
   archiveLabel,
   archived,
+  complete = false,
   fullSwipeThreshold,
   onArchive,
   onOptions,
+  secondaryLabel, snoozeAction, showSecondary,
   styles,
   testID,
   translation,
 }: {
   archiveLabel: string;
   archived: boolean;
+  complete?: boolean;
   fullSwipeThreshold: number;
   onArchive(): void;
   onOptions(): void;
+  secondaryLabel: string;
+  snoozeAction: boolean;
+  showSecondary: boolean;
   styles: SwipeStyles;
   testID?: string;
   translation: SharedValue<number>;
 }) {
   const { colors } = useTheme();
+  const SecondaryIcon = snoozeAction ? Clock : Ellipsis;
   // 置顶 / 归档会让行移位:按下即提前挂上列表过渡,松手时直接执行。
   const prepareDisclosure = useDisclosurePrepare();
   const { t } = useTranslation();
-  const StatusIcon = archived ? ArchiveRestore : Archive;
+  const StatusIcon = complete ? Check : archived ? ArchiveRestore : Archive;
   // 挂载时同步落初值,只在真正跨越阈值时启动 timing。若每个面板挂载都执行
   // withTiming(0),大项目从完整首帧切到窗口行时会留下仍在更新已卸载 Fabric tag
   // 的空动画,最终用 Reanimated 警告栈堵住 Android 主线程。
@@ -494,23 +534,23 @@ function RightActionsPanel({
 
   return (
     <View style={styles.rightShell}>
-      <Animated.View style={[styles.optionsButton, optionsStyle]}>
+      {showSecondary && <Animated.View style={[styles.optionsButton, optionsStyle]}>
         <Pressable
-          accessibilityLabel={t("session.row.moreOptions")}
+          accessibilityLabel={secondaryLabel}
           accessibilityRole="button"
           onPress={onOptions}
           style={styles.actionPressable}
           testID={testID ? `${testID}.optionsAction` : undefined}
         >
           <View style={styles.rightIconWrap}>
-            <Ellipsis
+            <SecondaryIcon
               color={colors.swipeActionText}
               size={ICON_SIZE}
               strokeWidth={iconStroke.regular}
             />
           </View>
         </Pressable>
-      </Animated.View>
+      </Animated.View>}
       <Animated.View style={[styles.archiveButton, archiveStyle]}>
         <Pressable
           accessibilityLabel={archiveLabel}

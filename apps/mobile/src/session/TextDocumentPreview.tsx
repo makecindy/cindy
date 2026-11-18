@@ -121,21 +121,25 @@ export function TextDocumentPreview({
       <PreviewToolbar>
         <PreviewIconButton
           icon={Search}
+          systemImage="magnifyingglass"
           label={t("message.attachmentPreview.find")}
           onPress={() => setFind((value) => !value)}
         />
         <PreviewIconButton
           icon={WrapText}
+          systemImage="arrow.turn.down.left"
           label={t("message.attachmentPreview.wrap")}
           onPress={() => setWrap((value) => !value)}
         />
         <PreviewIconButton
           icon={ListOrdered}
+          systemImage="list.number"
           label={t("message.attachmentPreview.lineNumbers")}
           onPress={() => setNumbers((value) => !value)}
         />
         <PreviewIconButton
           icon={Copy}
+          systemImage="doc.on.doc"
           label={t("message.renderer.copyDetailContent")}
           onPress={() => {
             void writeClipboardText(text).catch(() =>
@@ -174,18 +178,21 @@ export function TextDocumentPreview({
           </Text>
           <PreviewIconButton
             icon={ChevronLeft}
+            systemImage="chevron.left"
             label={t("message.attachmentPreview.previous")}
             disabled={!hits.length}
             onPress={() => jump(match - 1)}
           />
           <PreviewIconButton
             icon={ChevronRight}
+            systemImage="chevron.right"
             label={t("message.attachmentPreview.next")}
             disabled={!hits.length}
             onPress={() => jump(match + 1)}
           />
           <PreviewIconButton
             icon={X}
+            systemImage="xmark"
             label={t("message.attachmentPreview.close")}
             onPress={() => {
               setFind(false);

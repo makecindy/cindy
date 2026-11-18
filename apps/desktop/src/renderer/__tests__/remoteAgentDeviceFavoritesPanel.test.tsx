@@ -9,9 +9,9 @@
  *   4. 被控电脑上的任务:收藏读写被控电脑那一份(经设备互联)。
  */
 import type { ModelSelectorContentBaseProps } from '../components/new-chat/ModelSelector';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   agentDeviceFavoriteSource,
   MODEL_FAVORITES_APPLY,
@@ -21,7 +21,7 @@ import {
 } from '@cindy/device-link';
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => null, useOptionalDataOwnerGeneration: () => 0 }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -160,6 +160,7 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
 }));
 
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import { __resetForTest as resetEnginePrefs } from '@/state/modelEnginePrefs';
 import {
@@ -376,6 +377,75 @@ describe('本机任务:收藏另一台电脑上的模型', () => {
   });
 });
 
+/**
+ * 本机这份用不了时，另一台自己的电脑上的同一供应商另列出来，用之前先问一句(2026-11-18 用户裁决)：
+ * 取消 = 什么都不改；分享与只有那台电脑才有的供应商已在设置里列出，照常直接用、不问。
+ * 覆盖缺口：此前本机断开会被静默代用另一台，这里经真实面板点选验证。最小失败输入：本机 a-local
+ * 未连接 + Studio 有同一个 a-local。tier: unit (jsdom)。
+ */
+describe('本机这份用不了：另一台电脑上的同一供应商先问再用', () => {
+  const askDevices = [...devices, { deviceId: 'share:one', name: 'one' }];
+  const copyOf = (local: object) => ({ ...local, connected: true, remoteInvocationEnabled: true });
+  beforeEach(() => {
+    const local = catalogs.local[0] as object;
+    const studio = catalogs.byDevice['device-c'];
+    const shared = catalogs.byDevice['share:one'];
+    catalogs.local[0] = { ...local, connected: false };
+    catalogs.byDevice['device-c'] = [...studio!, copyOf(local)];
+    catalogs.byDevice['share:one'] = [copyOf(local)];
+    onTestFinished(() => {
+      catalogs.local[0] = local;
+      catalogs.byDevice['device-c'] = studio!;
+      if (shared) catalogs.byDevice['share:one'] = shared; else delete catalogs.byDevice['share:one'];
+    });
+  });
+  const renderAsking = () => {
+    const onUnifiedSelect = vi.fn(async (_selection: { agentDevice?: unknown }) => true);
+    render(
+      <ConfirmDialogProvider>
+        <ModelSelectorContent
+          modelId="a-model" effort="high" onModelChange={vi.fn()} onEffortChange={vi.fn()}
+          currentProviderId="a-local" onProviderChange={vi.fn()} vendorKey="cc"
+          onUnifiedSelect={onUnifiedSelect} remoteAgent={{ devices: askDevices, selectedDeviceId: null }}
+        />
+      </ConfirmDialogProvider>,
+    );
+    return onUnifiedSelect;
+  };
+  // The modal is still opening (aria-hidden) when the click resolves; query it directly.
+  const dialog = () => document.querySelector('[role="alertdialog"]') as HTMLElement;
+  const pick = async (rail: string, model: string) => {
+    await act(async () => fireEvent.click(document.querySelector(`[data-rail-item="${rail}"]`)!));
+    await act(async () => fireEvent.click(rowOf(list(), model)));
+  };
+
+  it('取消不换；确认后才在那台电脑运行', async () => {
+    const onUnifiedSelect = renderAsking();
+    await pick('remote:device-c:a-local', 'A Model');
+    expect(within(dialog()).getByText('newChat.modelSelector.discoveredCopy.title')).toBeTruthy();
+    await act(async () => fireEvent.click(within(dialog()).getByText('newChat.modelSelector.discoveredCopy.cancel')));
+    expect(onUnifiedSelect).not.toHaveBeenCalled();
+
+    await pick('remote:device-c:a-local', 'A Model');
+    await waitFor(() => expect(dialog()).not.toBeNull());
+    await act(async () => fireEvent.click(within(dialog()).getByText('newChat.modelSelector.discoveredCopy.confirm')));
+    expect(onUnifiedSelect).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      providerId: 'a-local', modelId: 'a-model', agentDevice: { deviceId: 'device-c', name: 'Studio' },
+    }));
+  });
+
+  it('分享的同一供应商、只有那台电脑才有的供应商：直接用，不问', async () => {
+    const onUnifiedSelect = renderAsking();
+    await pick('remote:share:one:a-local', 'A Model');
+    await pick('remote:device-c:c-open', 'C Model');
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(onUnifiedSelect.mock.calls.map(([selection]) => selection.agentDevice)).toEqual([
+      { deviceId: 'share:one', name: 'one' },
+      { deviceId: 'device-c', name: 'Studio' },
+    ]);
+  });
+});
+
 describe('被控电脑上的任务:收藏读写被控电脑那一份', () => {
   it('浏览第三台电脑时点 ☆ 经设备互联写进被控电脑的收藏,回到被控电脑目录照样列出', async () => {
     renderPanel(
@@ -450,6 +520,12 @@ describe('插件临时收藏保留执行来源', () => {
     });
     const deviceId = source === 'share' ? 'share:temporary' : 'device-temporary';
     const modelId = namesake ? 'a-model' : 'remote-only';
+    // 自己的另一台电脑上有同名供应商时左栏只列一处：这里是用户把它改成「运行于」那台。
+    if (source === 'device') {
+      const local = catalogs.local[0];
+      catalogs.local[0] = { ...(local as object), runLocation: deviceId };
+      onTestFinished(() => { catalogs.local[0] = local; });
+    }
     pluginLocations.devices = [{ deviceId, name: 'Temporary source' }];
     catalogs.byDevice[deviceId] = [{
       ...(catalogs.local[0] as object), remoteInvocationEnabled: true,
@@ -682,6 +758,19 @@ describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显�
     expect(sourceOf(row)).toBe(label);
     expect(within(row).queryByText(DESCRIPTION)).toBeNull();
   };
+  // ModelSelectorContent 的隐藏量宽副本保留文字，但不再挂来源详情或可操作选项。
+  // 这两条既有 unit 用例覆盖本机、分享与其他电脑目录；可见行的来源判断仍由上面的断言保护。
+  const expectWidthProbe = (...names: string[]) => {
+    const sizer = document.querySelector('[data-width-sizer]') as HTMLElement;
+    expect(sizer).toBeTruthy();
+    for (const name of names) expect(within(sizer).getAllByText(name).length).toBeGreaterThan(0);
+    expect(sourceOf(sizer)).toBeNull();
+    expect(within(sizer).queryAllByRole('option', { hidden: true })).toEqual([]);
+    expect(within(sizer).queryAllByRole('button', { hidden: true })).toEqual([]);
+    expect(within(sizer).queryByText(DESCRIPTION)).toBeNull();
+    expect(sizer.textContent).not.toContain(HOST_DEVICE_NAME);
+    return sizer;
+  };
   const SHARED_LABEL = 'Cindy AI · 来自 Magi 的分享 · 供应商组 · 2 台电脑';
   const REMOTE_LABEL = 'Cindy AI · Studio';
 
@@ -729,31 +818,30 @@ describe('Cindy AI(xd)第二行：保留分享与电脑来源，原简介行显�
     renderPanel({ devices: xdDevices });
     await clickRail('remote:share:magi:xd');
     for (const row of rowsOf(list(), SHARED)) expectSupplier(row);
-    await clickRail('remote:device-c:xd');
-    for (const row of rowsOf(list(), REMOTE)) expectSupplier(row);
+    // 同名来源提供本机没有的 GLM 5.2，保留入口，避免去重吞掉模型。
+    expect(document.querySelector('[data-rail-item="remote:device-c:xd"]')).not.toBeNull();
     await clickRail('provider:xd');
     for (const row of rowsOf(list(), LOCAL)) expectSupplier(row);
   });
 
-  it('定宽测量行与可见行同一判断', async () => {
+  it('定宽测量保留模型与本机供应商文字，省去来源详情与交互节点', async () => {
     renderPanel({ devices: xdDevices });
     await clickRail('favorites');
-    const sizer = document.querySelector('[data-width-sizer]') as HTMLElement;
-    expect(sizer).toBeTruthy();
-    for (const row of rowsOf(sizer, SHARED)) expectSource(row, SHARED_LABEL);
-    for (const row of rowsOf(sizer, REMOTE)) expectSource(row, REMOTE_LABEL);
-    for (const row of rowsOf(sizer, LOCAL)) expectSupplier(row);
-    expect(sizer.textContent).not.toContain(HOST_DEVICE_NAME);
+    const sizer = expectWidthProbe(SHARED, REMOTE, LOCAL);
+    expect(within(sizer).getAllByTitle('Cindy AI').length).toBeGreaterThan(0);
   });
 
-  it('浏览分享或其他电脑的目录时，定宽测量行按外来目录带来源', async () => {
+  it('浏览分享或其他电脑目录时，定宽测量仍保留模型文字且不重复渲染来源详情', async () => {
+    // 本机的 Cindy AI 改成「运行于」device-c，左栏才列出那台的一项。
+    const local = catalogs.local.at(-1) as Record<string, unknown>;
+    catalogs.local[catalogs.local.length - 1] = { ...local, runLocation: 'device-c' };
     renderPanel({ devices: xdDevices });
-    const sizer = () => document.querySelector('[data-width-sizer]') as HTMLElement;
     await clickRail('remote:share:magi:xd');
     for (const row of rowsOf(list(), SHARED)) expectSupplier(row);
-    for (const row of rowsOf(sizer(), SHARED)) expectSource(row, SHARED_LABEL);
+    expectWidthProbe(SHARED);
     await clickRail('remote:device-c:xd');
-    for (const row of rowsOf(sizer(), REMOTE)) expectSource(row, REMOTE_LABEL);
+    for (const row of rowsOf(list(), REMOTE)) expectSupplier(row);
+    expectWidthProbe(REMOTE);
     expect(document.body.textContent).not.toContain(HOST_DEVICE_NAME);
   });
 

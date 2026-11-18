@@ -58,11 +58,11 @@ vi.mock('../../logger', async (importOriginal) => ({
   createLogger: () => diagnosticLog,
 }));
 
-vi.mock('../settings-store', () => ({
+vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 // Observe dispatch's teardown calls without loading the unrelated desktop runtime.
-vi.mock('../../remote-desktop', () => ({ remoteDesktop: { stop: vi.fn(), signalingLost: vi.fn() } }));
+vi.mock('../../remote-desktop', () => ({ remoteDesktop: { stop: vi.fn(), signalingLost: vi.fn() }, requestRemoteDesktop: vi.fn() }));
 const sharedTask = vi.hoisted(() => ({ refresh: vi.fn(), capture: vi.fn() }));
 vi.mock('../sharedTaskDispatch.js', async (original) => ({
   ...await original<typeof import('../sharedTaskDispatch.js')>(),
@@ -80,13 +80,14 @@ import {
   flushRemoteInvokeResultOutboxOnReconnect,
   handleControllerOffline,
   setControllersChangedListener,
+  setRemoteInvokeBusyChangedListener,
   setOrdinaryPeerLinkAcceptedListener,
   setDispatchPresenceOfflineCheck,
   setSessionTextSnapshotReader,
   pushSessionActivityToController,
   wireInboundDispatch,
   hasRemoteInvokeWorkForPeer,
-} from '../dispatch';
+} from '../dispatch.desktop';
 import { __testing as invokeRegistry } from '../invoke-registry';
 import * as subscriptions from '../subscriptions';
 import { tapWindowBroadcast, tapRemoteModelCatalogChange } from '../broadcast-tap';
@@ -111,6 +112,7 @@ function mkClient(
     sendLinkAccept: over.sendLinkAccept ?? vi.fn(),
     closeLink: vi.fn(),
     onFrame: vi.fn(),
+    onInboundPeerReleased: vi.fn(() => () => {}),
     sendPush: vi.fn(),
   };
 }
@@ -743,25 +745,24 @@ describe('[5] outbox flush 的 presence 显式离线门禁', () => {
 });
 
 describe('[3] outbox 保留时长按 channel 收窄', () => {
-  it('锁「预算 ×2、封顶 120s」联动:表内 channel 跟随共享表,缺省 30s→60s', () => {
+  it('锁「预算 ×2」联动:表内 channel 跟随共享表,缺省 30s→60s', () => {
     // 联动语义从共享表推导,不再硬编码结果值——此断言曾在 #1418/#1477 并行开发
     // 时写死 60s(当时表里还没有 listing 条目),两 PR 各自 CI 都绿、先后合入后
-    // main 变红。表值本身(12s/60s)在下面单独锁定:它们是产品决策,变更时红在
-    // 这里提醒显式确认;而「×2 封顶」的联动对表变更免疫。
+    // main 变红。表值本身(12s/300s)在下面单独锁定:它们是产品决策,变更时红在
+    // 这里提醒显式确认;而「×2」的联动对表变更免疫。worktree:create 2026-11-16 起
+    // 为 300s(Multibox 同步克隆整个工作区),×2 后仍低于全局上限。
     const listingBudget = INVOKE_TIMEOUT_OVERRIDES_MS['local-db:sessions:list'];
     const worktreeBudget = INVOKE_TIMEOUT_OVERRIDES_MS['worktree:create'];
     expect(listingBudget).toBe(12_000);
-    expect(worktreeBudget).toBe(60_000);
+    expect(worktreeBudget).toBe(300_000);
     expect(__testing.outboxEntryMaxAgeMs('local-db:sessions:list')).toBe(
       Math.min(listingBudget * 2, 120_000),
     );
     expect(__testing.outboxEntryMaxAgeMs(undefined)).toBe(60_000);
-    expect(__testing.outboxEntryMaxAgeMs('worktree:create')).toBe(
-      Math.min(worktreeBudget * 2, 120_000),
-    );
+    expect(__testing.outboxEntryMaxAgeMs('worktree:create')).toBe(worktreeBudget * 2);
   });
 
-  it('离线慢扫描按逐条 TTL 出清:listing(24s 档)先被丢,长任务 channel 保留到 120s', () => {
+  it('离线慢扫描按逐条 TTL 出清:listing(24s 档)先被丢,长任务 channel 保留到自己的 TTL', () => {
     const sendInvokeResult = vi.fn(() => {
       throw notConnected();
     });
@@ -789,12 +790,60 @@ describe('[3] outbox 保留时长按 channel 收窄', () => {
     vi.advanceTimersByTime(61_000);
     expect(__testing.remoteInvokeResultOutboxSize()).toBe(1); // listing 出清,worktree 保留
 
-    vi.advanceTimersByTime(60_000);
-    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0); // 121s:worktree 也到期
+    const worktreeTtl = __testing.outboxEntryMaxAgeMs('worktree:create');
+    vi.advanceTimersByTime(worktreeTtl - 61_000 - 1_000);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1); // TTL 前一刻仍保留
+    vi.advanceTimersByTime(11_000); // 越过 TTL 且至少经过一次完整的 5s 离线扫描
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0); // worktree 也到期
   });
 });
 
 describe('[5] orphan 截止时间按 channel 收窄', () => {
+  // Unit, PR #9153: the orphan result can finish while the actual handler is
+  // still running. Existing deadline tests only checked budgets, not diagnostics.
+  it('records execution completion only when the handler settles after the orphan deadline', async () => {
+    const client = mkClient();
+    const busy = vi.fn();
+    setRemoteInvokeBusyChangedListener(busy);
+    let finish!: (value: unknown) => void;
+    const handler = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    invokeRegistry.register('maker:compact-session', handler);
+    const requestId = 'abcdef12-0000-0000-0000-000000000000';
+    const handling = __testing.handleInvoke(client as never, 'ctrl-a', requestId,
+      { channel: 'maker:compact-session', args: ['s1'] });
+    const executionLogs = () => diagnosticLog.info.mock.calls
+      .filter(([message]) => typeof message === 'string' && message.startsWith('device-link diagnostic '))
+      .map(([message]) => JSON.parse(message.slice('device-link diagnostic '.length)))
+      .filter(record => record.stage === 'execution' && record.request === 'abcdef12');
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(busy).toHaveBeenLastCalledWith(true);
+      const deadline = __testing.remoteInvokeOrphanTimeoutForChannelMs('maker:compact-session');
+      await vi.advanceTimersByTimeAsync(deadline);
+      await handling;
+      expect(client.sendInvokeResult).toHaveBeenCalledOnce();
+      expect(client.sendInvokeResult.mock.calls[0][2]).toMatchObject({ ok: false,
+        error: { code: 'IPC_ERROR', message: expect.stringContaining('[TIMEOUT]') } });
+      expect(busy).toHaveBeenLastCalledWith(false);
+      expect(executionLogs()).toContainEqual(expect.objectContaining({ outcome: 'waiting', activeStage: 'handler' }));
+      expect(executionLogs().some(record => record.outcome === 'settled')).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      finish({});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(executionLogs()).toContainEqual(expect.objectContaining({ outcome: 'settled',
+        executionMs: deadline + 1_000, activeStage: null,
+        stagesMs: expect.objectContaining({ handler: deadline + 1_000 }) }));
+      expect(client.sendInvokeResult).toHaveBeenCalledOnce();
+      expect(busy.mock.calls).toEqual([[true], [false]]);
+    } finally {
+      finish?.({});
+      await vi.advanceTimersByTimeAsync(0);
+      setRemoteInvokeBusyChangedListener(null);
+    }
+  });
+
   it('默认 invoke 保持 60s，只有 compact 使用 22min 长预算', () => {
     const compactBudget = INVOKE_TIMEOUT_OVERRIDES_MS['maker:compact-session'];
     expect(compactBudget).toBe(11 * 60_000);
@@ -1208,5 +1257,65 @@ describe('被控浮窗读取控制端展示名', () => {
     setControllerFallbackDisplayName('ctrl-legacy', 'Legacy Mac');
     setControllerDisplayName('ctrl-legacy', '');
     expect(getControllerDisplayName('ctrl-legacy')).toBeUndefined();
+  });
+});
+
+describe('[7] 账号级状态快照不占满卡住对端的可靠窗口', () => {
+  // Bug(2026-11-10~14 Mac Studio 日志):手机网络一卡,每帧 ~1 KB 的调度运行诊断与
+  // 同账号用量快照逐帧灌进 64 帧可靠窗口,控制端在等的 invoke-result 被拒为
+  // `reliable transport buffer is full`(iPhone 345 次)。状态快照只需最新值:卡住时
+  // 不再入窗,恢复后每个键只发最新一帧;驱动刷新的调度事件仍逐帧即时转发。
+  it('stages runtime-state and usage snapshots latest-wins for the busy peer only', async () => {
+    let phoneDepth = 40;
+    const sent: Array<{ dst: string; channel: string; payload: unknown }> = [];
+    const client = {
+      ...mkClient(),
+      getReliableSendQueueDepth: vi.fn((dst: string) => (dst === 'phone' ? phoneDepth : 0)),
+      sendPush: vi.fn((dst: string, channel: string, payload: unknown) => { sent.push({ dst, channel, payload }); }),
+    };
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('phone', ['sessions'], 'phone');
+    subscriptions.subscribe('desk', ['sessions'], 'desk');
+    const to = (dst: string) => sent.filter((push) => push.dst === dst).map(({ channel, payload }) => ({ channel, payload }));
+
+    for (let i = 0; i < 40; i++) {
+      __testing.forwardPush('maker:schedule:event', { type: 'runtime-state', snapshot: { slotsInUse: i } });
+    }
+    for (let i = 0; i < 13; i++) {
+      __testing.forwardPush('usage:codex-provider-account-changed', { providerId: 'p1', snapshot: { used: i } });
+    }
+    __testing.forwardPush('usage:codex-provider-account-changed', { providerId: 'p2', snapshot: null });
+    __testing.forwardPush('maker:schedule:event', { type: 'fired', scheduleId: 's1', runId: 'r1' });
+
+    const fired = { channel: 'maker:schedule:event', payload: { type: 'fired', scheduleId: 's1', runId: 'r1' } };
+    const latest = [
+      { channel: 'maker:schedule:event', payload: { type: 'runtime-state', snapshot: { slotsInUse: 39 } } },
+      { channel: 'usage:codex-provider-account-changed', payload: { providerId: 'p1', snapshot: { used: 12 } } },
+      { channel: 'usage:codex-provider-account-changed', payload: { providerId: 'p2', snapshot: null } },
+    ];
+    // Refresh-driving schedule events stay immediate and ordered for every peer.
+    expect(to('phone')).toEqual([fired]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    // The healthy peer receives one latest frame per key; the busy peer admits none.
+    expect(to('desk')).toEqual([fired, ...latest]);
+    expect(to('phone')).toEqual([fired]);
+    expect(__testing.latestStatePushStageSize('phone')).toBe(3);
+
+    phoneDepth = 0;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(to('phone')).toEqual([fired, ...latest]);
+    expect(__testing.latestStatePushStageSize('phone')).toBe(0);
+  });
+
+  it('drops staged snapshots once the controller unsubscribes from sessions', async () => {
+    const client = { ...mkClient(), getReliableSendQueueDepth: vi.fn(() => 0) };
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('phone', ['sessions'], 'phone');
+    __testing.forwardPush('usage:claude-account-changed', { daily: 1 });
+    expect(__testing.latestStatePushStageSize('phone')).toBe(1);
+    subscriptions.unsubscribe('phone', ['sessions']);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(client.sendPush).not.toHaveBeenCalled();
+    expect(__testing.latestStatePushStageSize('phone')).toBe(0);
   });
 });

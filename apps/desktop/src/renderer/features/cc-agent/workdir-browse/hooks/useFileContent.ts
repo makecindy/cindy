@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createLogger } from '@/lib/logger';
 import { observeFileTransferProgress } from '@/lib/fileTransferProgress';
 import { fileBrowserApiFor, onFileTreeEventFor } from '@/lib/fileBrowserTransport';
+import { fileTreeEventPaths, onDirectoryAliasChange } from './useFileTree';
 import {
   getCachedFileContent,
   invalidateCachedFile,
@@ -43,6 +44,7 @@ export type FileContent =
       size: number;
       mtimeMs: number;
       truncated: boolean;
+      resolvedPath?: string;
     }
   | { kind: 'binary'; stat: FileStat }
   /** 远程文本文件超出传输上限(device-link 帧限预判):渲染"文件过大"占位卡。 */
@@ -71,6 +73,7 @@ export interface UseFileContentReturn {
     size: number;
     mtimeMs: number;
     truncated: boolean;
+    resolvedPath?: string;
   }) => void;
 }
 
@@ -129,8 +132,11 @@ export function useFileContent(
     relPath: null,
     content: { kind: 'empty' },
   });
+  const stateRef = useRef(state);
+  stateRef.current = state;
   // refresh 计数器:bump 一次触发下面 effect 重跑(包含 IPC 重读)。
   const [refreshTick, setRefreshTick] = useState(0);
+  const readEpoch = useRef(0);
 
   // 内容缓存的作用域键:远程会话必须把传输端点编进 key——不同 SSH 主机 /
   // 被控设备可能暴露相同绝对路径 workdir,仅按 workdir|relPath 会串缓存
@@ -142,6 +148,7 @@ export function useFileContent(
       : workdir;
 
   useEffect(() => {
+    const epoch = ++readEpoch.current;
     if (!workdir || !relPath) {
       setState({ workdir, relPath: null, content: { kind: 'empty' } });
       return;
@@ -156,6 +163,7 @@ export function useFileContent(
     }
 
     let cancelled = false;
+    const stale = () => cancelled || epoch !== readEpoch.current;
     let transferProgress: ReturnType<typeof observeFileTransferProgress> | undefined;
     setState({ workdir, relPath, content: { kind: 'loading' } });
 
@@ -170,7 +178,7 @@ export function useFileContent(
         ): Promise<void> => {
           setState({ workdir, relPath, content: { kind: 'fetching', received: 0, total: size } });
           const progress = observeFileTransferProgress((e) => {
-            if (cancelled) return;
+            if (stale()) return;
             // 打包 / 解包阶段只出现在文件夹下载(relPath 键为远端绝对路径),这里收不到。
             if (e.phase === 'pack' || e.phase === 'extract') return;
             setState({
@@ -190,7 +198,7 @@ export function useFileContent(
               deviceId,
               requestId: progress.requestId,
             });
-            if (cancelled) return;
+            if (stale()) return;
             if (res.ok) {
               setState({
                 workdir,
@@ -212,7 +220,7 @@ export function useFileContent(
         };
 
         const result = await fileBrowserApiFor(deviceId).readFile({ workdir, relPath, remoteHostId });
-        if (cancelled) return;
+        if (stale()) return;
         if (result.ok) {
           if (result.data.truncated && (remoteHostId || deviceId)) {
             // 远程截断文本:自动取回完整文件(本地会话维持原截断视图,不取)。
@@ -223,6 +231,7 @@ export function useFileContent(
               size: result.data.size,
               mtimeMs: result.data.mtimeMs,
               truncated: true,
+              resolvedPath: result.data.resolvedPath,
             });
             return;
           }
@@ -232,6 +241,7 @@ export function useFileContent(
             size: result.data.size,
             mtimeMs: result.data.mtimeMs,
             truncated: result.data.truncated,
+            resolvedPath: result.data.resolvedPath,
           });
           if (remoteHostId || deviceId) {
             // 远程小文件写穿磁盘缓存(fire-and-forget):断线兜底对大小文件
@@ -256,6 +266,7 @@ export function useFileContent(
               size: result.data.size,
               mtimeMs: result.data.mtimeMs,
               truncated: result.data.truncated,
+              resolvedPath: result.data.resolvedPath,
             },
           });
           return;
@@ -272,7 +283,7 @@ export function useFileContent(
           // Need stat for the placeholder card (size + mtime).
           try {
             const stat = await fileBrowserApiFor(deviceId).stat({ workdir, relPath, remoteHostId });
-            if (cancelled) return;
+            if (stale()) return;
             if (remoteHostId || deviceId) {
               // 远程二进制(图片/视频/任意文件):走取回管线,缓存副本可预览
               // (图片/PDF/视频)或占位卡本地打开;失败回落远程占位。
@@ -281,7 +292,7 @@ export function useFileContent(
             }
             setState({ workdir, relPath, content: { kind: 'binary', stat } });
           } catch (err) {
-            if (!cancelled)
+            if (!stale())
               setState({ workdir, relPath, content: { kind: 'error', message: String(err) } });
           }
           return;
@@ -296,7 +307,7 @@ export function useFileContent(
         });
       } catch (err) {
         log.warn('readFile threw', err);
-        if (cancelled) return;
+        if (stale()) return;
         // 远程读失败(断线等):尝试用本地历史缓存副本兜底展示(main 侧按路径
         // 身份前缀捞最近副本;size/mtime 传 0,identity 校验由 stale 分支跳过)。
         if (remoteHostId || deviceId) {
@@ -309,7 +320,7 @@ export function useFileContent(
               remoteHostId,
               deviceId,
             });
-            if (!cancelled && res.ok) {
+            if (!stale() && res.ok) {
               setState({
                 workdir,
                 relPath,
@@ -327,7 +338,7 @@ export function useFileContent(
             // 兜底失败 → 落原错误态
           }
         }
-        if (!cancelled) setState({ workdir, relPath, content: { kind: 'error', message: String(err) } });
+        if (!stale()) setState({ workdir, relPath, content: { kind: 'error', message: String(err) } });
       }
     })();
 
@@ -360,61 +371,77 @@ export function useFileContent(
   //     体验是"agent 改完文件, 预览区无感更新")。
   //   - 原子替换写入在 macOS 上可能表现为 delete + create, 所以 add 也要按
   //     当前文件内容变更处理。
-  //   - 'unlink' 暂不主动改 state — 让用户继续看到旧内容直到他主动切走, 比
-  //     "突然弹错误卡片"更符合 VSCode 行为。
+  //   - 删除/目录变化也失效后代；已显示的正文在重读失败时保留，保存仍校验目标。
   useEffect(() => {
     if (!workdir) return;
     // 三路事件同形:本地 / SSH(main 桥接 daemon 帧)走 fileBrowser.onEvent,
     // device-link 走 onRemotePush 过滤 —— transport 统一,按 workdir 过滤后
     // 逻辑与本地完全一致。
-    const off = onFileTreeEventFor(deviceId, (event) => {
-      if (event.workdir !== workdir) return;
-      const contentMayHaveChanged = event.type === 'add' || event.type === 'change';
-      if (contentMayHaveChanged || event.type === 'unlink') {
-        invalidateCachedFile(contentCacheScope, event.relPath);
-      }
-      if (contentMayHaveChanged && event.relPath === relPathRef.current) {
-        const targetRelPath = event.relPath;
-        void (async () => {
+    let disposed = false;
+    let running = false;
+    let pending = false;
+    const reread = async () => {
+      if (running || disposed) return;
+      running = true;
+      try {
+        while (pending && !disposed) {
+          pending = false;
+          const targetRelPath = relPathRef.current;
+          if (!targetRelPath) break;
+          const epoch = readEpoch.current;
           try {
-            const result = await fileBrowserApiFor(deviceId).readFile({
-              workdir,
-              relPath: targetRelPath,
-              remoteHostId,
-            });
-            // race 守卫:重读期间用户可能切走了(文件或端点), ref 已变就丢弃。
-            if (relPathRef.current !== targetRelPath) return;
-            if (contentCacheScopeRef.current !== contentCacheScope) return;
-            if (!result.ok) {
-              // BINARY_FILE 等罕见状态:就保留当前显示, 不主动降级。
-              return;
+            const result = await fileBrowserApiFor(deviceId).readFile({ workdir, relPath: targetRelPath, remoteHostId });
+            if (disposed || epoch !== readEpoch.current || relPathRef.current !== targetRelPath
+                || contentCacheScopeRef.current !== contentCacheScope) continue;
+            if (!result.ok || (result.data.truncated && (remoteHostId || deviceId))) {
+              // The event may have superseded the initial read/large-file fetch.
+              // Restart an unfinished/placeholder preview, but never replace
+              // an existing text editor with loading/fetching: that unmounts it
+              // and discards its draft. Fetch large content on explicit reopen;
+              // saves still validate the original resolved target.
+              const kind = stateRef.current.content.kind;
+              if (kind === 'loading' || kind === 'fetching'
+                  || (kind !== 'text' && result.ok && result.data.truncated)) {
+                setRefreshTick(t => t + 1);
+              }
+              continue;
             }
-            setCachedFileContent(contentCacheScope, {
-              content: result.data.content,
-              relPath: result.data.relPath,
-              size: result.data.size,
-              mtimeMs: result.data.mtimeMs,
-              truncated: result.data.truncated,
-            });
-            setState({
-              workdir,
-              relPath: targetRelPath,
-              content: {
-                kind: 'text',
-                content: result.data.content,
-                relPath: result.data.relPath,
-                size: result.data.size,
-                mtimeMs: result.data.mtimeMs,
-                truncated: result.data.truncated,
-              },
-            });
+            const data = { ...result.data, kind: 'text' as const };
+            setCachedFileContent(contentCacheScope, data);
+            setState({ workdir, relPath: targetRelPath, content: data });
           } catch (err) {
             log.warn('silent re-read on change failed', err);
+            if (!disposed && epoch === readEpoch.current
+                && (stateRef.current.content.kind === 'loading' || stateRef.current.content.kind === 'fetching')) {
+              setRefreshTick(t => t + 1);
+            }
           }
-        })();
+        }
+      } finally {
+        running = false;
       }
+    };
+    const changed = (event: { workdir: string; relPath: string }) => {
+      if (event.workdir !== workdir) return;
+      const changedPaths = fileTreeEventPaths(workdir, event.relPath, remoteHostId, deviceId);
+      for (const changedPath of changedPaths) {
+        if (changedPath === '') invalidateWorkdirCache(contentCacheScope);
+        else invalidateCachedFile(contentCacheScope, changedPath);
+      }
+      const current = relPathRef.current;
+      if (current && [...changedPaths].some(p => p === '' || current === p || current.startsWith(`${p}/`))) {
+        // Invalidate in-flight reads synchronously; an A response must not
+        // repopulate the cache after the directory has changed to B.
+        readEpoch.current++;
+        pending = true;
+        queueMicrotask(() => { void reread(); });
+      }
+    };
+    const off = onFileTreeEventFor(deviceId, changed);
+    const offAlias = onDirectoryAliasChange(event => {
+      if (event.remoteHostId === remoteHostId && event.deviceId === deviceId) changed(event);
     });
-    return off;
+    return () => { disposed = true; off(); offAlias(); };
   }, [workdir, remoteHostId, deviceId, contentCacheScope]);
 
   // workdir 切换 → 旧 workdir 的 entry 一次性扔掉, 防长期累积。
@@ -434,7 +461,7 @@ export function useFileContent(
   }, [contentCacheScope, relPath]);
 
   const setLocal = useCallback(
-    (data: { content: string; size: number; mtimeMs: number; truncated: boolean }) => {
+    (data: { content: string; size: number; mtimeMs: number; truncated: boolean; resolvedPath?: string }) => {
       if (!relPath) return;
       setCachedFileContent(contentCacheScope, {
         content: data.content,
@@ -442,6 +469,7 @@ export function useFileContent(
         size: data.size,
         mtimeMs: data.mtimeMs,
         truncated: data.truncated,
+        resolvedPath: data.resolvedPath,
       });
       setState({
         workdir,
@@ -453,6 +481,7 @@ export function useFileContent(
           size: data.size,
           mtimeMs: data.mtimeMs,
           truncated: data.truncated,
+          resolvedPath: data.resolvedPath,
         },
       });
     },

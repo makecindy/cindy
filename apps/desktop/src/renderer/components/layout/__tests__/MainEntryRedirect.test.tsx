@@ -46,6 +46,19 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('main entry startup', () => {
+  // Unit regression: Settings exits via `/`. Existing area-switch tests bypass
+  // that redirect, losing the remote partner when there are no local profiles.
+  it.each([
+    '/bots/remote/other-computer/partner',
+    '/cc-agent/task-a?message=one',
+  ])('returns from settings to the current destination %s', async (destination) => {
+    const app = launch(destination);
+    await act(() => app.router.navigate('/settings?tab=providers'));
+    await act(() => app.router.navigate('/settings?tab=general'));
+    await act(() => app.router.navigate('/'));
+    expect(screen.getByTestId('route').textContent).toBe(destination);
+  });
+
   // Unit regression: changing tasks must retain the Tasks startup choice without
   // rewriting it (and synchronously asking Main for its owner) on every route.
   // Existing restoration tests only check the final value, not repeated writes.

@@ -71,7 +71,7 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
         filter({ available: false, deviceId: "win", id: "device:win", label: "Win", state: "offline" }),
       ],
       "All tasks",
-      [{ id: "teammates", title: "Teammates" }],
+      [{ id: "teammates", title: "Buddies" }],
     );
     const sections = buildPullDownMenuSections(actions);
     expect(sections).toHaveLength(1);
@@ -79,7 +79,7 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     expect(android).toEqual(actions);
     expect(android.map((action) => [action.id, action.title, action.state])).toEqual([
       ["all", "All tasks", "off"],
-      ["scope.collection:teammates", "Teammates", undefined],
+      ["scope.collection:teammates", "Buddies", undefined],
       ["device:mac", "My Mac", "on"],
       ["device:win", "Win", "off"],
     ]);
@@ -93,10 +93,11 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     const actions = buildHomeDisplayPullDownActions(displayInput);
     const sections = buildPullDownMenuSections(actions);
     // 三段无标题分组 = iOS UIMenu 的三段分隔;每行是进入子菜单的设置项,标题下显示当前值。
-    expect(sections.map((section) => section.title)).toEqual([undefined, undefined, undefined]);
+    expect(sections.map((section) => section.title)).toEqual([undefined, undefined, undefined, undefined]);
     const rows = sections.flatMap((section) => section.rows);
     expect(rows).toEqual(actions.flatMap((group) => group.subactions ?? []));
     expect(rows.map((action) => [action.id, action.subtitle, !!action.subactions?.length])).toEqual([
+      ["taskListMode", "devices.list.menu.taskListMode.tasks", true],
       ["group", "devices.list.menu.groupProject", true],
       ["sort", "devices.list.menu.sortBy.priority", true],
       ["projectOrder", "devices.list.menu.projectOrder.custom", true],
@@ -125,7 +126,7 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     );
     expect(androidHeader).toContain("actions={homeScopePullDownActions}");
     expect(androidHeader).toContain("onAction={handleHomeScopeAction}");
-    expect(androidHeader).toContain("actions={homeDisplayPullDownActions}");
+    expect(androidHeader).toContain("actions={stableDisplayActions}");
     // 自绘范围面板只在包里没有 MenuView 时兜底;显示菜单兜底用同一份菜单模型的自绘下拉。
     expect(androidHeader).toContain("onPress={nativeHomeMenus ? () => undefined : openDeviceMenu}");
     // Display selection is exercised through the rendered platform component in
@@ -144,7 +145,7 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
 
   it("never offers Teammates as a scope: they are the home's own section", () => {
     const collections = [
-      { id: "teammates", title: "Teammates", resourceKind: "bot", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
+      { id: "teammates", title: "Buddies", resourceKind: "bot", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
       { id: "tools", title: "Tools", resourceKind: "tool", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
     ];
     const offered = homeScopeCollections(collections, "teammates");

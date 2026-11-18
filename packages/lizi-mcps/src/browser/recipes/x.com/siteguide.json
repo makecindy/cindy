@@ -1,13 +1,13 @@
 {
   "site": "x.com",
-  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
+  "auth": "公开单条帖子优先用免登录的 x-tweet；其余命令鉴权以具体命令为准，需要登录时复用当前浏览器会话。",
   "entry": {
     "home": "https://x.com"
   },
   "recipes": [
     "twitter-profile"
   ],
-  "notes": "兼容入口 twitter-profile 现执行内置 twitter/profile，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "notes": "读取公开帖子及配图先用 x-tweet（id 必须为字符串），返回 media 中的原图 URL。图片内容对任务必要时继续下载并用图片工具查看，或打开原图截图；URL 不代表已查看。公开 API 无法读取私密或已删除帖子。兼容入口 twitter-profile 现执行内置 twitter/profile，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
   "upstream": {
     "repository": "https://github.com/jackwener/opencli",
     "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"

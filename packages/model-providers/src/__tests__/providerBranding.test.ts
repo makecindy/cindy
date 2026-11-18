@@ -57,7 +57,8 @@ describe('provider branding', () => {
     ['cindy-local-lmstudio', 'lmstudio'],
     ['llamacpp', 'llamacpp'],
     ['vllm', 'vllm'],
-  ] as const)('maps local runtime %s to %s', (providerId, logoKind) => {
+    ['magpie', 'magpie'],
+  ] as const)('maps provider id %s to %s', (providerId, logoKind) => {
     expect(resolveProviderLogoKind(providerId)).toBe(logoKind);
     expect(hasProviderLogo(providerId)).toBe(true);
   });

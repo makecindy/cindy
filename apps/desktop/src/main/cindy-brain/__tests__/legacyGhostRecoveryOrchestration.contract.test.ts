@@ -1,17 +1,18 @@
 // Guard tier: engineering-conventions section 3.2. Existing cross-file
 // credential, permission, protocol, race, and design contracts are isolated
-// from runtime unit tests. No new input or assertion is introduced here.
+// from runtime unit tests. Owner notifications also execute their real callback
+// to protect initialization before the first message without loading Electron.
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+const source = fs.readFileSync(
+  path.resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+
 describe('legacy Ghost recovery acknowledgement orchestration', () => {
   it('routes startup migration through the stable-owner task instead of timing callbacks', () => {
-    const source = fs.readFileSync(
-      path.resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
-      'utf8',
-    ).replace(/\r\n?/g, '\n');
-
     expect(source).toContain('stableOwnerPostCommitTask = async (reason, scope) => {');
     expect(source).not.toContain("scheduleBuiltinReconcile('startup')");
     expect(source).not.toContain("scheduleBuiltinReconcile('auth-change')");
@@ -46,10 +47,6 @@ describe('legacy Ghost recovery acknowledgement orchestration', () => {
   });
 
   it('keeps both retry-pending and deterministic backfill failures in the durable marker', () => {
-    const source = fs.readFileSync(
-      path.resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
-      'utf8',
-    ).replace(/\r\n?/g, '\n');
     const start = source.indexOf(
       'const backfill = await getGhostManager().backfillRecoveredLegacyGhosts(',
     );
@@ -65,5 +62,35 @@ describe('legacy Ghost recovery acknowledgement orchestration', () => {
     );
     expect(acknowledgementBlock).not.toContain('captureRecoveredLegacyNamespace(');
     expect(acknowledgementBlock).toContain('await acknowledgeRecoveredLegacyGhosts(');
+  });
+
+  // Guard: run the production synchronous owner notification. The cache unit
+  // explicitly warms first; it cannot catch a first message published while
+  // background provisioning still waits. Pending boundaries must not read data.
+  it('warms task preferences before publishing a stable owner without awaiting provisioning', () => {
+    const start = source.indexOf('    onAuthStateChange(() => {');
+    const end = source.indexOf('\n    });', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    let listener!: () => void;
+    let pending = false;
+    const order: string[] = [];
+    const deps = {
+      onAuthStateChange: (callback: () => void) => { listener = callback; },
+      warmRuntimePluginSettings: () => { order.push('warm'); },
+      isAppSessionBoundaryPending: () => pending,
+      connectionTokenProviderSingleton: undefined,
+      invalidateForgePackTicketsForOwner: () => {}, getActiveAppSession: () => ({}),
+      ghostSessionFocusByWebContents: new Map(), getAppCapabilities: () => ({ canUseCindyAccountServices: true }),
+      suspendCindyAccountGhosts: () => {}, manager: { list: () => [] },
+      broadcastGhostsChanged: () => { order.push('publish'); }, broadcastGhostUnreadSnapshot: () => {},
+    };
+    new Function(...Object.keys(deps), source.slice(start, end + '\n    });'.length))(...Object.values(deps));
+    listener();
+    expect(order).toEqual(['warm', 'publish']);
+    order.length = 0;
+    pending = true;
+    listener();
+    expect(order).toEqual(['publish']);
   });
 });

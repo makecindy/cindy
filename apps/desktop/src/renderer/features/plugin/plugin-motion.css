@@ -1,7 +1,5 @@
 .plugin-motion-root {
-  --plugin-card-shadow: var(--shadow-soft-panel);
   --plugin-icon-surface: color-mix(in srgb, var(--surface-elevated) 78%, transparent);
-  --plugin-icon-shadow: 0 1px 2px color-mix(in srgb, var(--text-primary) 12%, transparent);
 }
 
 /* GitHub's package icon is a monochrome mark; invert only the mark in dark themes. */

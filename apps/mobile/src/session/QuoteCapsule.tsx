@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 /**
  * QuoteCapsule — 「N 处引用」胶囊(chat-text-quote,对照桌面 Codex 风格)。
@@ -45,7 +46,7 @@ export function QuoteCapsule({ quotes, variant, onClear, testIDPrefix = 'quoteCa
   const { colors } = useTheme();
   const { t } = useTranslation();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
-  const capsuleRef = useRef<View>(null);
+  const capsuleRef = useRef<ViewInstance>(null);
   // 非空 = 预览浮窗开启(记录胶囊的 window 坐标供浮窗锚定)。
   const [previewAnchor, setPreviewAnchor] = useState<PreviewAnchor | null>(null);
 

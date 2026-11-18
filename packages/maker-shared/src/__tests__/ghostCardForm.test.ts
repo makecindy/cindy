@@ -3,6 +3,7 @@ import { parse, type DefaultTreeAdapterTypes } from 'parse5';
 import { applyMailInlineEdits, hasMailExternalImages, mailInlineDocument, mailInlineRuns, mailTextParagraphs, safeMailDocument } from '../mailTextEdit';
 import {
   ghostCardLinkOpensDirectly,
+  ghostCardSessionLinkId,
   parseGhostCardForm,
   parseGhostCardFormValues,
   readGhostCardForm,
@@ -279,4 +280,14 @@ it('opens only real https GitHub pages without the link confirmation', () => {
     expect(ghostCardLinkOpensDirectly(url)).toBe(true);
   for (const url of ['http://github.com/o', 'https://github.com.evil.io/o', 'https://evil.io/github.com', 'https://user@github.com/o', 'https://github.com:8443/o', 'https://gist.github.com/o', 'not a url'])
     expect(ghostCardLinkOpensDirectly(url)).toBe(false);
+});
+
+
+it('accepts only bounded navigation-only task IDs for card links', () => {
+  expect(ghostCardSessionLinkId('cindy://session/task_42-x')).toBe('task_42-x');
+  for (const value of ['', 'cindy://settings', 'cindy://session/', 'cindy://session/a?device=x',
+    'cindy://session/a#x', 'cindy://session/a/b', 'cindy://session/%2e%2e', 'cindy://session/a\n',
+    'cindy://session/' + 'a'.repeat(129), 'https://example.test']) {
+    expect(ghostCardSessionLinkId(value)).toBeNull();
+  }
 });

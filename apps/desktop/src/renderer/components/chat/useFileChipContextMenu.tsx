@@ -41,7 +41,7 @@ import {
 } from '@/lib/remoteFileOpen';
 import { toWorkdirRel } from '../../../shared/workdirPath';
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
-import { openHtmlFileByPreference } from './useOpenWithMenu';
+import { openHtmlFileByPreference } from './messageLinkActions';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { isSeparateLinkActivation, linkMenuPosition } from './linkInteraction';
 

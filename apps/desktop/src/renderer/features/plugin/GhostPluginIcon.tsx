@@ -1,6 +1,7 @@
 /**
  * Shared Plugin icon renderer for catalog, detail, and composer surfaces.
- * Real package assets win; missing assets and the legacy scaffold use a theme-aware functional symbol.
+ * Real package assets win; missing, failed, and legacy scaffold assets use a theme-aware functional symbol.
+ * Error fallback survives initial effects and resets when the image source changes.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -14,7 +15,7 @@ import {
   Workflow,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useState, type Ref } from 'react';
+import { useState, type Ref } from 'react';
 
 import { cn } from '@/lib/utils';
 import {
@@ -34,11 +35,12 @@ const FALLBACK_ICONS: Record<GhostFallbackIconKind, LucideIcon> = {
   generic: Puzzle,
 };
 
-type GhostPluginIconSize = 'mini' | 'menu' | 'md' | 'detail';
+type GhostPluginIconSize = 'mini' | 'menu' | 'sm' | 'md' | 'detail';
 
 const CONTAINER_CLASSES: Record<GhostPluginIconSize, string> = {
   mini: 'size-full rounded-[5px] border-0 shadow-none',
   menu: 'size-5 rounded-[7px] border-0 shadow-none',
+  sm: 'size-8 rounded-[22%]',
   md: 'size-12 rounded-[22%]',
   detail: 'size-16 rounded-xl',
 };
@@ -46,6 +48,7 @@ const CONTAINER_CLASSES: Record<GhostPluginIconSize, string> = {
 const SVG_ICON_CLASSES: Record<GhostPluginIconSize, string> = {
   mini: 'size-2.5 object-contain',
   menu: 'size-3 object-contain',
+  sm: 'size-5 object-contain',
   md: 'size-8 object-contain',
   detail: 'size-10 object-contain',
 };
@@ -53,6 +56,7 @@ const SVG_ICON_CLASSES: Record<GhostPluginIconSize, string> = {
 const FALLBACK_ICON_CLASSES: Record<GhostPluginIconSize, string> = {
   mini: 'size-3',
   menu: 'size-3',
+  sm: 'size-4',
   md: 'size-5',
   detail: 'size-7',
 };
@@ -78,11 +82,14 @@ export function GhostPluginIcon({
   onIconLoadError?: () => void;
   size?: GhostPluginIconSize;
 }) {
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  useEffect(() => {
-    setFailedSrc(null);
-  }, [iconDataUrl]);
-  const resolvedIconDataUrl = failedSrc !== iconDataUrl ? ghostPluginIconSource(iconDataUrl) : undefined;
+  const [imageState, setImageState] = useState({ source: iconDataUrl, failed: false });
+  // Reset with the source, before committing the image. A passive reset can
+  // otherwise erase an error delivered before the first effect runs.
+  if (imageState.source !== iconDataUrl) {
+    setImageState({ source: iconDataUrl, failed: false });
+  }
+  const failed = imageState.source === iconDataUrl && imageState.failed;
+  const resolvedIconDataUrl = !failed ? ghostPluginIconSource(iconDataUrl) : undefined;
   const svg = resolvedIconDataUrl ? isSvgIconSrc(resolvedIconDataUrl) : false;
   const fallbackKind = ghostFallbackIconKind(iconName, iconId);
   const FallbackIcon = FALLBACK_ICONS[fallbackKind];
@@ -93,8 +100,8 @@ export function GhostPluginIcon({
       className={cn(
         'inline-flex shrink-0 items-center justify-center overflow-hidden border-[0.5px] border-[var(--border-default)]',
         resolvedIconDataUrl
-          ? 'bg-[var(--plugin-icon-surface)] shadow-[var(--plugin-icon-shadow)]'
-          : 'bg-[var(--surface-elevated)] text-[var(--text-secondary)] shadow-none',
+          ? 'bg-[var(--plugin-icon-surface)]'
+          : 'bg-[var(--surface-elevated)] text-[var(--text-secondary)]',
         CONTAINER_CLASSES[size],
       )}
     >
@@ -106,7 +113,7 @@ export function GhostPluginIcon({
           referrerPolicy="no-referrer"
           onLoad={onIconLoad}
           onError={() => {
-            setFailedSrc(resolvedIconDataUrl);
+            setImageState({ source: iconDataUrl, failed: true });
             onIconLoadError?.();
           }}
           className={cn(

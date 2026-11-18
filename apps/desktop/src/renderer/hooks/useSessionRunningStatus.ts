@@ -81,6 +81,51 @@ const QUEUE_DEBOUNCE_MS = 500;
 let pendingReminderOwnerId: string | null = null;
 const notifiedPendingRequests = new Map<string, Set<string>>();
 
+/**
+ * Main drops the whole notification when this field is longer than 256, so the
+ * id itself must stay inside that bound. A needs-reply joins every pending
+ * request key; a handful of long keys already overflows. Fold the tail into a
+ * fixed-width hash instead of letting the payload be rejected.
+ */
+const ALERT_EVENT_ID_MAX_LENGTH = 256;
+
+/** FNV-1a, hex. Stable across reloads and short enough to keep the id bounded. */
+function shortAlertKeyHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
+ * Identity of one needs-reply or error, built from the turn that produced it.
+ * The same turn plus the same pending request (or the same failure) is one
+ * desktop toast; a later turn, or a different request, is a new one.
+ * No turn clock means no identity: the caller still notifies, it just cannot
+ * collapse a repeat. Always at most 256 characters.
+ */
+export function sessionAlertEventId(
+  kind: 'error' | 'needs-reply',
+  turnStartedAt: number | null | undefined,
+  requestKey?: string,
+): string | undefined {
+  if (typeof turnStartedAt !== 'number' || !Number.isFinite(turnStartedAt) || turnStartedAt <= 0) {
+    return undefined;
+  }
+  const turn = `turn:${Math.floor(turnStartedAt)}`;
+  if (kind === 'error') return `${turn}:error`;
+  const key = requestKey && requestKey.length > 0 ? requestKey : 'needs-reply';
+  const raw = `${turn}:${key}`;
+  if (raw.length <= ALERT_EVENT_ID_MAX_LENGTH) return raw;
+  // Keep the turn clock readable and fold only the request tail. Two different
+  // long key lists of the same turn must not collapse into one id.
+  const digest = shortAlertKeyHash(key);
+  const room = ALERT_EVENT_ID_MAX_LENGTH - turn.length - 1 - 1 - digest.length;
+  return `${turn}:${key.slice(0, Math.max(0, room))}#${digest}`;
+}
+
 interface UseSessionRunningStatusOptions {
   /**
    * Fired when a session transitions running → done. Filters out errored
@@ -89,13 +134,13 @@ interface UseSessionRunningStatusOptions {
    * the consumer's. The in-app dot still skips active session via its own
    * branch; the callback fires for any non-error done.
    */
-  onSessionDone?: (sessionId: string) => void;
+  onSessionDone?: (sessionId: string, alertEventId?: string) => void;
   /**
    * Fired when a session transitions running → terminal error. It mirrors
    * onSessionDone's no-active-session-filter policy so the consumer can gate
    * on focus state and notification channel settings.
    */
-  onSessionError?: (sessionId: string) => void;
+  onSessionError?: (sessionId: string, alertEventId?: string) => void;
   /**
    * Fired when a session enters a pending state needing user input
    * (`pendingAskUser` / `pendingPermission` / `pendingPlanReview` /
@@ -103,7 +148,12 @@ interface UseSessionRunningStatusOptions {
    * edge fires for a new request (or new input-handoff step) in the session.
    * Like onSessionDone, no active-session filter; the consumer decides.
    */
-  onSessionNeedsReply?: (sessionId: string, options?: { inputHandoff: true; inputHandoffRequestId?: string }) => void;
+  onSessionNeedsReply?: (
+    sessionId: string,
+    options?:
+      | { inputHandoff: true; inputHandoffRequestId?: string; alertEventId?: string }
+      | { alertEventId: string },
+  ) => void;
 }
 
 /**
@@ -150,6 +200,13 @@ export function useSessionRunningStatus(
 
   /** 本 hook 因 turn 以错误结束而点的红点(新一轮正常结束时据此收掉过期的那颗)。 */
   const liveErrorMarkedRef = useRef(new Set<string>());
+  /**
+   * 这一段「逻辑上在跑」是协调器的恢复尝试，不是新的供应商回合。
+   * 上升沿读 hasSessionRecoveryPending：配额错误之后的续跑不会再来一帧 running。
+   */
+  const recoveryAttemptRunningRef = useRef(new Set<string>());
+  /** 已经用过的失败告警轮次时间。恢复尝试没推进它时，不能再用同一个 turn:…:error。 */
+  const errorAlertTurnRef = useRef(new Map<string, number>());
 
   /**
    * Pending done-notifications waiting for a debounce window to expire.
@@ -171,6 +228,11 @@ export function useSessionRunningStatus(
     // --- 1. Detect new turn starts ---
     for (const sessionId of currentRunningSet) {
       if (!prevRunning.has(sessionId)) {
+        if (makerChatStore.hasSessionRecoveryPending(sessionId)) {
+          recoveryAttemptRunningRef.current.add(sessionId);
+        } else {
+          recoveryAttemptRunningRef.current.delete(sessionId);
+        }
         // 只清「run 已终态」的标记(用户手动起的新对话或下一个 run);run 还在跑时
         // 是 subagent 续 turn / silent-stop 自动续跑,标记必须留着。兜底定时器不在
         // 这里动 —— 统一由本 effect 末尾的对账按当前 running 状态处理。
@@ -209,6 +271,7 @@ export function useSessionRunningStatus(
     for (const sessionId of prevRunning) {
       if (!currentRunningSet.has(sessionId)) {
         // Session transitioned from running -> not running.
+        const recoveryAttempt = recoveryAttemptRunningRef.current.delete(sessionId);
         const info = statusMap.get(sessionId);
         // side-task(mivo 等 skipTurnReset)的结束不是 turn 终态:done/error/角标/
         // 通知全部跳过。transition entry 只存活一个投递窗口(store 调度清除),
@@ -247,7 +310,24 @@ export function useSessionRunningStatus(
           // 的 done 语义。清除只能来自用户处置横幅或 pending-alerts 派生收敛。
           addSessionAttention(sessionId, 'error');
           liveErrorMarkedRef.current.add(sessionId);
-          if (!notificationOwnedByScheduler) onSessionErrorRef.current?.(sessionId);
+          if (!notificationOwnedByScheduler) {
+            const turnAlertId = sessionAlertEventId('error', info?.turnStartedAt);
+            const turnClock = turnAlertId
+              ? Number(/^turn:(\d+):error$/.exec(turnAlertId)?.[1])
+              : undefined;
+            // 配额错误已经用这个轮次时间弹过。恢复尝试失败时 applyInputProjection
+            // 不推进 lastStartedAt，再用 turn:…:error 会被主进程账本当成重复吞掉。
+            // 这次不带轮次标识：没有标识就照常通知，不和上一次配额错误抵销。
+            const repeatedRecoveryFailure = recoveryAttempt
+              && turnClock !== undefined
+              && errorAlertTurnRef.current.get(sessionId) === turnClock;
+            if (turnClock !== undefined && !repeatedRecoveryFailure) {
+              errorAlertTurnRef.current.set(sessionId, turnClock);
+            }
+            const alertEventId = repeatedRecoveryFailure ? undefined : turnAlertId;
+            if (alertEventId) onSessionErrorRef.current?.(sessionId, alertEventId);
+            else onSessionErrorRef.current?.(sessionId);
+          }
           continue;
         }
 
@@ -392,14 +472,24 @@ export function useSessionRunningStatus(
               && !info.hasPendingPermission
               && !info.hasPendingPlanReview
               && !info.hasPendingPluginSetup;
+          const alertEventId = sessionAlertEventId(
+            'needs-reply',
+            info.turnStartedAt,
+            (newKeys ?? keys)?.join(','),
+          );
           if (handoffOnly) {
             const handoffKey = (newKeys ?? keys)?.find((key) => key.startsWith('handoff:'));
             const requestId = handoffKey?.slice('handoff:'.length, handoffKey.lastIndexOf(':'));
             onSessionNeedsReplyRef.current?.(id, {
               inputHandoff: true,
               ...(requestId ? { inputHandoffRequestId: requestId } : {}),
+              ...(alertEventId ? { alertEventId } : {}),
             });
-          } else onSessionNeedsReplyRef.current?.(id);
+          } else if (alertEventId) {
+            onSessionNeedsReplyRef.current?.(id, { alertEventId });
+          } else {
+            onSessionNeedsReplyRef.current?.(id);
+          }
         }
         // Other hook consumers only read running status. They may add the
         // in-app dot, but must not consume the system notification owner's edge.

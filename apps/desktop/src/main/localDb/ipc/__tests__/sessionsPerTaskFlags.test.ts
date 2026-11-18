@@ -50,7 +50,7 @@ vi.mock('../../client/current', () => {
 });
 vi.mock('../../dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../../../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn(async () => undefined) }));
-vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
+vi.mock('../../../imageCacheStore.desktop', () => ({ removeSession: vi.fn(async () => undefined) }));
 vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn(async () => undefined) }));
 vi.mock('../../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
@@ -58,7 +58,7 @@ vi.mock('../../../device-link/broadcast-tap.js', () => ({
 }));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: h.notifyAgentIslandSessionPatch }));
 vi.mock('../sessionCreatedBroadcast', () => ({ emitSessionCreated: h.emitSessionCreated }));
-vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
+vi.mock('../../../messagePersistBroadcaster.desktop', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../../../sessionTaskSummary.js', () => ({ backfillPinnedSessionSummaries: vi.fn() }));
 vi.mock('../../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn(), isTrustedAppRendererWindow: () => true }));
 
@@ -100,7 +100,7 @@ function createDb(): void {
       context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,

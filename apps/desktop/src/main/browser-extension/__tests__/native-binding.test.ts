@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import net from 'node:net';
 
 import { createNativeBinding } from '../native-binding';
+import * as registrationLocks from '../../device-link/crossProcessLock';
 
 const EXT = 'a'.repeat(32);
 const dirs: string[] = [];
@@ -48,6 +49,22 @@ async function fixture() {
 }
 
 describe('native-binding', () => {
+  // Unit regression: an occupied registration lock must not leave the binding "preparing"
+  // forever, otherwise the slot's transient-failure recovery skips it.
+  it('reports a busy registration as unavailable and installs after the lock is released', async () => {
+    const { binaryDir, profile, root } = await fixture();
+    const binding = createNativeBinding({ hostName: 'com.example.browser', binaryDir, root,
+      profiles: [profile], platform: 'darwin', arch: 'arm64' });
+    const lock = vi.spyOn(registrationLocks, 'withSecurityBoundaryLock')
+      .mockImplementationOnce(async (_path, _options, work) => work({ held: false, reason: 'busy' }));
+    try {
+      expect(await binding.install(18819, [EXT])).toMatchObject({ ok: false, reason: 'REGISTRATION_BUSY' });
+      expect(binding.status()).toBe('unavailable');
+      expect(await binding.install(18819, [EXT])).toEqual({ ok: true });
+      expect(binding.status()).toBe('ready');
+    } finally { lock.mockRestore(); await binding.close(); }
+  });
+
   // Contract: distinct installed instances cannot overwrite the same system host
   // registration until the owner confirms. Existing cases covered only one shared instance.
   it('requires explicit takeover and leaves the new registration intact when the old binding closes', async () => {
@@ -380,6 +397,9 @@ describe('native-binding', () => {
       platform: 'darwin',
       arch: 'arm64',
     });
-    expect(await missing.install(18819, [EXT])).toMatchObject({ ok: false, reason: 'ENOENT' });
+    // A missing package cannot heal by rewriting registration files every few seconds.
+    expect(await missing.install(18819, [EXT])).toMatchObject({ ok: false, reason: 'NATIVE_BINARY_MISSING' });
+    expect(missing.status()).toBe('unavailable');
+    await expect(fs.access(path.join(dir, 'native2', 'connections', '18819.json'))).rejects.toThrow();
   });
 });

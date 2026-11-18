@@ -11,7 +11,8 @@ function Fixture({ variant }: { variant: string }) {
     agent: 'codex' as const, wireModelId: modelId, efforts: metadata.efforts ?? [],
     defaultEffort: metadata.defaultEffort ?? null, defaultEffortSource: 'catalog' as const,
     supportsFastMode: true, supportsUltrafastMode: true,
-    contextWindow: metadata.contextWindow ?? 272000, contextWindowVerified: true,
+    contextWindow: variant === 'remote-context' ? 1_000_000 : metadata.contextWindow ?? 272000,
+    contextWindowVerified: true,
   };
   const entry: UnifiedModelEntry = {
     providerId: 'openai', modelId, displayName: metadata.name ?? modelId,
@@ -26,6 +27,7 @@ function Fixture({ variant }: { variant: string }) {
       </div>
       <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-primary)] p-4">
         <ModelConfigFlyout entry={entry}
+          deviceId={variant === 'remote-context' ? 'remote-computer' : undefined}
           config={{engine:'codex', agent:'codex', efforts:capability.efforts, effort, fast,
             fastCapable:true, customized:true, capability, wireModelId:modelId}}
           state="customized" sourceLabel="OpenAI" price={null}
@@ -38,9 +40,13 @@ function Fixture({ variant }: { variant: string }) {
   );
 }
 void mountPage({
-  host: { maker: {
-    getModelContextLimit: async () => ({limit:272000,isCustomized:false}),
+  host: ctx => ({ maker: {
+    getModelContextLimit: async () => ({limit:272000,isCustomized:false,
+      ...(ctx.case === 'remote-context' ? { codexContext: { contextWindow: 272000,
+        usableContextWindow: 258400, autoCompactTokenLimit: 244800,
+        modelMaxContextWindow: null, source: 'config', fallbackModel: false } } : {}),
+    }),
     onProvidersChanged: subscription('providersChanged'),
-  } },
+  } }),
   render: ctx => <Fixture variant={ctx.case}/>,
 });

@@ -37,8 +37,12 @@ vi.mock('@/hooks/useVoiceInputUsageStats', () => ({
 vi.mock('../workletUrl', () => ({ getVoiceInputWorkletUrl: () => '' }));
 // Deliver an already accepted transcript without opening a microphone/ASR session.
 vi.mock('../eventScope', () => ({
-  shouldHandleVoiceInputEvent: () => true,
-  isVoiceInputEventScopeActive: () => false,
+  dispatchVoiceInputEvent: (
+    event: VoiceInputRendererEvent,
+    _getOwnedRunId: unknown,
+    _pendingStart: unknown,
+    handleEvent: (event: VoiceInputRendererEvent) => void,
+  ) => handleEvent(event),
 }));
 
 import { useVoiceInput } from '../useVoiceInput';

@@ -31,11 +31,13 @@ import { clearSessionAttentionMany } from '@/lib/sessionAttentionStore';
 import { useRuns } from '../hooks/useRuns';
 import { useSessionReferences } from '../hooks/useSessionReferences';
 import { cronToConfig, summarizeConfig } from '../lib/cronCodexPreset';
-import { basenameOf, describeDestination, humanizeAgentKind } from '../lib/formatters';
+import { describeDestination, humanizeAgentKind } from '../lib/formatters';
+import { useProjectLabel } from '../hooks/useProjectLabel';
 import { groupRunsForHistory } from '../lib/runHistoryGrouping';
 
 import { RunHistoryCard } from './RunHistoryCard';
 import { WebhookTriggerPanel } from './WebhookTriggerPanel';
+import appI18n from 'i18next';
 
 const PERSISTENT_SESSION_PREVIEW_LIMIT = 3;
 
@@ -51,6 +53,8 @@ interface Props {
    * 此时 detail pane 的 Run Now 按钮也应禁用，防止双发。
    */
   runNowBusy?: boolean;
+  /** The editor owns connection setup while its modal covers this pane. */
+  connectionSetupVisible?: boolean;
 }
 
 export function RunHistoryPane({
@@ -60,8 +64,10 @@ export function RunHistoryPane({
   onEdit,
   onDelete,
   runNowBusy = false,
+  connectionSetupVisible = true,
 }: Props) {
   const { t } = useTranslation();
+  const projectLabel = useProjectLabel();
   // 展示策略（避免切任务闪烁）：
   // - hasLoaded=false（应用启动后第一次都没拉过）→ 整块 run 区域不挂载
   // - hasLoaded=true 但 runsScheduleId !== s.id → 切任务过渡期，runs 还是上一个
@@ -241,7 +247,7 @@ export function RunHistoryPane({
           </h2>
           {s.expireAt != null && (
             <p className="text-xs text-[var(--text-secondary)]">
-              {t('scheduler.deadline.label')} · {new Date(s.expireAt).toLocaleString()} · {Intl.DateTimeFormat().resolvedOptions().timeZone}
+              {t('scheduler.deadline.label')} · {new Date(s.expireAt).toLocaleString(appI18n.language)} · {Intl.DateTimeFormat().resolvedOptions().timeZone}
               {isExpired && s.expireAt <= Date.now() && <> · {t('scheduler.deadline.expired')}</>}
             </p>
           )}
@@ -258,7 +264,7 @@ export function RunHistoryPane({
                 )}
               >
                 {dest.prefix}
-                {basenameOf(dest.workingDir)}
+                {dest.workingDir ? projectLabel(dest.workingDir) : null}
               </button>
             ) : (
               dest.prefix
@@ -308,7 +314,7 @@ export function RunHistoryPane({
 
       {/* 连接引导与执行结果一起滚动，较小窗口仍能看完密钥和测试步骤。 */}
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
-        {s.webhookTrigger && <WebhookTriggerPanel key={s.id} schedule={s} />}
+        {s.webhookTrigger && <WebhookTriggerPanel key={s.id} schedule={s} connectionSetupVisible={connectionSetupVisible} />}
 
         {hasLoaded && (
           <div className="pb-3 pt-5 text-13 font-medium text-[var(--text-primary)]">

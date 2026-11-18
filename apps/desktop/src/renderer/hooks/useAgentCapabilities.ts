@@ -121,6 +121,7 @@ export interface AgentCapabilities {
    * 到达时无法安全关联后续模型写入。
    */
   supportsSessionAgentSwitchCas?: boolean;
+  supportsQueueHeadRetry?: boolean;
   /**
    * 被控端是否支持在开启 Orca Team 时显式设置 Worker 默认权限。
    * device-link 老被控端无此字段 → undefined，控制端必须阻止开启协同并提示升级。
@@ -143,6 +144,11 @@ export interface AgentCapabilities {
    * 老被控端无此字段 → undefined：控制端对这类任务不列其他电脑与分享(v0.1.104–v0.1.110 会拒绝)。
    */
   supportsOrcaAgentRelocation?: boolean;
+  /**
+   * 被控端接受给它上面的运行设备 Worker(Lead 在另一台电脑)换 Agent 所在电脑。
+   * 老被控端无此字段 → undefined：控制端对这类 Worker 不列其他电脑与分享(老端会拒绝)。
+   */
+  supportsOrcaRemoteWorkerAgentRelocation?: boolean;
   /**
    * 手动压缩会话上下文能力(pi 原生 compact)。与 maker-core Capabilities.manualCompact
    * 同形；device-link 老被控端序列化的 capabilities 无此字段 → undefined = 不支持。
@@ -177,9 +183,9 @@ export function canExposeWritableDirsChange(options: {
 /**
  * 手动压缩调用通道判定 —— 上下文环压缩入口与请求分流的唯一判据(#1927 / #1933 review):
  *   - 真实 Claude Code 会话 → `claude-input`(输入协调器 maker:input:compact,SDK 斜杠命令通道);
- *   - 其余 agent 声明 manualCompact.supported(当前仅 pi)→ `compact-session`
+ *   - 其余 agent 声明 manualCompact.supported(Pi / Codex)→ `compact-session`
  *     (capability-aware 通用通道 maker:compact-session,本地 IPC / device-link 隧道均可路由);
- *   - 其余(Codex 等无手动压缩能力)→ null = 无入口。
+ *   - 其余(未声明手动压缩能力)→ null = 无入口。
  * 刻意不按 agentKind 扩排除列表:新 agent 只需在 maker-core 声明能力即可自动接入。
  */
 export type CompactChannel = 'claude-input' | 'compact-session';
@@ -308,11 +314,13 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !value.permissionModes.every(isNamedDescriptor) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitchCas) ||
+    !isOptionalBoolean(value.supportsQueueHeadRetry) ||
     !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode) ||
     !isOptionalBoolean(value.supportsOrcaWorkerUpdate) ||
     !isOptionalBoolean(value.supportsDeferredOrcaUiAssignment) ||
     !isOptionalBoolean(value.supportsOrcaWorkerAgentDevice) ||
     !isOptionalBoolean(value.supportsOrcaAgentRelocation) ||
+    !isOptionalBoolean(value.supportsOrcaRemoteWorkerAgentRelocation) ||
     !isOptionalCapabilityStatus(value.writableDirs) ||
     !isOptionalCapabilityStatus(value.manualCompact)
   ) {
@@ -323,6 +331,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
 
 interface MakerApiShape {
   getCapabilities: (agentKind: AgentKind) => Promise<AgentCapabilities>;
+  listAvailableAgents: () => Promise<readonly AgentKind[]>;
 }
 
 interface DeviceLinkShape {
@@ -404,6 +413,25 @@ function notifyRemoteCapabilities(
   event: DeviceCapabilitiesEvent,
 ): void {
   for (const listener of remoteListeners.get(cacheKey(agentKind, deviceId)) ?? []) listener(event);
+}
+
+/** Capabilities-only consumers also keep a received-share refresh live. */
+export function hasDeviceCapabilitiesInterest(deviceId: string): boolean {
+  return getInterestedDeviceCapabilityTargets(deviceId).length > 0;
+}
+
+/** Capability-only routed consumers must receive a replacement after eviction. */
+export function getInterestedDeviceCapabilityTargets(deviceId: string): string[] {
+  const devices = new Set([...inflight.keys(), ...remoteListeners.keys()]
+    .map(key => key.slice(0, key.lastIndexOf(':'))));
+  return [...devices].filter(key => {
+    const route = parseModelCatalogKey(key);
+    return key === deviceId || route?.taskDeviceId === deviceId || route?.agentDeviceId === deviceId;
+  });
+}
+
+export function getDeviceCapabilitiesGeneration(deviceId: string): number {
+  return deviceGen.get(deviceId) ?? 0;
 }
 
 /** 订阅某被控端某 agent 的能力快照；只通知当前代际成功提交的完整结果。 */
@@ -728,6 +756,10 @@ export function beginLocalCapabilitiesRefresh(): number {
 /**
  * 读取本地 agent 能力快照；核心 agent 失败向上抛，只有明确的 Pi 未注册结果才不阻断 provider 目录。
  *
+ * 只读取 runtime 注册了的 agent（`maker:list-available-agents`）：独立 Host 可以只打包
+ * 部分 agent，未打包的 agent 不在列表里，不能让它的未注册错误把整个目录判为失败。
+ * 列表里的 agent 仍按原样原子失败。
+ *
  * Pi 的 CLI 是 best-effort 下载的目录分发，开发机或网络受限时可能暂时缺失。
  * 明确未注册时不能让 `maker:get-capabilities('pi')` 的单点失败把 Claude/Codex
  * 模型目录整组回滚为空；但临时 IPC、序列化或解析错误必须向上抛，让联合刷新保留
@@ -736,8 +768,10 @@ export function beginLocalCapabilitiesRefresh(): number {
 export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilitiesSnapshot> {
   const api = getMakerApi();
   if (!api) throw new Error('maker IPC not available');
+  const available = new Set(await api.listAvailableAgents());
+  const agents = ALL_AGENT_KINDS.filter((agent) => available.has(agent));
   const results = await Promise.allSettled(
-    ALL_AGENT_KINDS.map(async (agent): Promise<readonly [AgentKind, AgentCapabilities] | null> => {
+    agents.map(async (agent): Promise<readonly [AgentKind, AgentCapabilities] | null> => {
       try {
         return [agent, await api.getCapabilities(agent)] as const;
       } catch (error) {

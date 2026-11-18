@@ -1,4 +1,4 @@
-import { ServerApiError, type ApiFetchOptions } from '../serverApiClient';
+import { ServerApiError, type ApiFetchOptions } from '../serverApiClient.desktop';
 import { skillhubApiFetch } from './hubApi';
 import { mapHubSkillInfoToDesktopInfo, type HubSkillInfoForDesktop } from './infoMapping';
 import { buildSkillhubSyncResponse, type SkillhubBatchDetailResponse, type SkillhubSyncRef } from './syncMapping';

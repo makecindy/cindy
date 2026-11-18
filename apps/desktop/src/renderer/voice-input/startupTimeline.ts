@@ -8,9 +8,11 @@ type StartupStage =
   | 'microphone_requested'
   | 'engine_ready'
   | 'first_pcm'
+  | 'first_nonsilent_pcm'
   | 'first_buffered_audio'
   | 'connection_ready'
   | 'first_transcript'
+  | 'start_cue_released'
   | 'mute_finished';
 
 /** One attempt's local clock, starting at the UI action; never records audio or text. */

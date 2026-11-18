@@ -2,7 +2,14 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改 Desktop Renderer、preload、BrowserWindow、WebView、IPC、CSP、
-> 导航、外链、文件／数据库／凭证访问或 Electron 特权能力之前
+> 导航、外链、文件／数据库／凭证访问或 Electron 特权能力之前；新增或修改独立窗口、
+> 辅助窗口或弹出型 `BrowserWindow` 之前（§3.1「独立辅助窗口统一生命周期基线」）
+> **适用路径**：`apps/desktop/src/preload/**`、`apps/desktop/src/main/security/**`、
+> `apps/desktop/src/main/webview-security.ts`、`apps/desktop/src/main/bootstrap-electron.ts`、
+> `apps/desktop/src/main/secondary-windows.ts`、`apps/desktop/src/main/*-window/**`、
+> `apps/desktop/src/main/**/window.ts`、`apps/desktop/src/main/**/ipc.ts`、
+> `apps/desktop/src/main/**/*Ipc.ts`、`apps/desktop/src/main/maker-ipc/{register,channels}.ts`、
+> `apps/desktop/forge.config.ts`、`apps/desktop/src/renderer/index.html`
 
 本规则以 [Electron 官方安全指南](https://www.electronjs.org/docs/latest/tutorial/security)
 为基线，并结合 Cindy 当前 Electron 41 的实际架构补充项目约束。安全优先级高于为了
@@ -98,7 +105,7 @@ Renderer 可以负责组件渲染、交互状态、表单状态、展示数据�
    再次显示时先展示保留快照并异步刷新。例外：承载实时会话的窗口（远程桌面查看器）
    以 `pauseWhenHidden: false` 让会话跨越最小化、切换 Space 与原生全屏切换，只在用户
    关闭窗口时结束——macOS 会把后两者及完全遮挡都报告成原生 hide；隐藏期间改由被控端
-   暂停视频（见 `protocol-compatibility.md`「远程桌面查看窗口隐藏时暂停视频」）。
+   暂停视频（见 `protocol-compatibility/remote-desktop-pause-video-when-hidden.md`「远程桌面查看窗口隐藏时暂停视频」）。
 4. **隐藏时重置交互态**：必须清除焦点，并重置自绘窗口按钮、hover／pressed、确认框、
    选中项与待执行操作等瞬时状态，确保二次打开不会继承上次关闭时的视觉或交互状态。
 5. **使用真正的轻量入口**：独立窗口不得先进入完整 `App` 再在组件树内分流；使用独立的

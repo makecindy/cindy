@@ -1,3 +1,9 @@
+// Keep authenticated HTTP and cross-process I/O outside this in-memory filesystem fixture.
+// The production policy queue remains active; its real lock ordering is covered by providerHandlers.
+vi.mock('../device-link/crossProcessLock.js', () => ({
+  withCrossProcessLock: async (_file: string, _options: unknown, work: (status: { held: true }) => unknown) => work({ held: true }),
+}));
+vi.mock('../device-link/providerShareAvailabilityTransport.js', () => ({ disableShareAvailability: vi.fn() }));
 /**
  * deviceLinkSettingsStore.test.ts —— 被控开关持久化的读/写健壮性。
  * 覆盖:文件缺失 → 默认;合法 JSON → normalize;**损坏 JSON → unlink + 回落默认(不崩)**;
@@ -62,10 +68,13 @@ const h = vi.hoisted(() => {
 const SETTINGS_PATH = path.join('/tmp/userdata', 'device-link-settings.json');
 
 const DEFAULT_SETTINGS = {
+  agentNetEnabled: false,
+  agentNetOnlyEncrypted: false,
   remoteDesktopEnabled: false,
   remoteControlEnabled: false,
   keepAwake: false,
   revokedControllers: [],
+  modelUseRevokedControllers: [],
   disabledControlDeviceIds: [],
   lastKnownDeviceNames: {},
 };
@@ -73,6 +82,7 @@ const DEFAULT_SETTINGS = {
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/userdata' } }));
 vi.mock('node:fs', () => ({
   default: {
+    mkdirSync: vi.fn(),
     existsSync: h.existsSync,
     readFileSync: h.readFileSync,
     unlinkSync: h.unlinkSync,
@@ -90,7 +100,12 @@ vi.mock('../logger', () => ({
 
 async function load() {
   vi.resetModules(); // 清模块级 cached / writeChain
-  return import('../device-link/settings-store.js');
+  const { configureUserDataDir } = await import('../userDataPath.js');
+  configureUserDataDir('/tmp/userdata');
+  const { commitVolatileAppSession } = await import('../appSessionState.js');
+  commitVolatileAppSession('cloud', 'settings-test-account', true);
+  h.readFileSync.mockClear();
+  return import('../device-link/settings-store.desktop.js');
 }
 
 beforeEach(() => {
@@ -128,10 +143,13 @@ describe('readDeviceLinkSettings', () => {
     );
     const { readDeviceLinkSettings } = await load();
     expect(readDeviceLinkSettings()).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteControlEnabled: true,
       remoteDesktopEnabled: false,
       keepAwake: false,
       revokedControllers: ['dev-1', 'dev-2'],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });

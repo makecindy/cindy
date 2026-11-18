@@ -10,7 +10,10 @@
  * 同时也是 sessions.worktree_path 反范式快照的来源。
  */
 export interface WorktreeMeta {
-  /** Durable intent; DB delegation ownership decides whether to finish or discard it. */
+  /**
+   * Left by a V1 teammate background task that was reopened in a new task and interrupted
+   * before the move finished. Nothing writes it any more; a worktree carrying it is kept, never recycled.
+   */
   pendingSessionTransfer?: { sessionId: string; delegationId: string; requestingBotId: string };
   /** New physical contents at the same path invalidate old recycle requests. */
   generation?: string;
@@ -92,6 +95,8 @@ export interface DetectCwdResp {
    * 旧 Desktop 会省略该字段；控制端必须在创建副作用前把省略视为不支持。
    */
   supportsRecoveryKeyDiscard?: boolean;
+  /** Explicit opt-in for switching the main checkout; old hosts omit this. */
+  supportsCheckout?: boolean;
 }
 
 export interface ListBranchesReq {

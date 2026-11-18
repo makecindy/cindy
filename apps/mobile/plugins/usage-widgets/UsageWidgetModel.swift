@@ -72,6 +72,29 @@ struct WidgetUsage: Decodable {
   let daily: [WidgetDay]
   /// Busiest models of the window, in color order; absent from older computers.
   var models: [WidgetModel]? = nil
+
+  /// Keep dates paired with their readings; missing dates are not invented zero-use days.
+  var recentDays: [(date: String, tokens: Double)] {
+    Array(zip(days, daily).map { date, day in
+      (date: date, tokens: day.totalTokens.isFinite ? max(0, day.totalTokens) : 0)
+    }.sorted { $0.date < $1.date }.suffix(7))
+  }
+}
+
+/// Compare subscription fractions, never currency balances; retain source order on ties.
+func inlineQuotaSources(_ sources: [WidgetSource]) -> [WidgetSource] {
+  let subscriptions = sources.filter { $0.kind == "subscription" }
+  let comparable = subscriptions.enumerated().filter { $0.element.fill.isFinite && ($0.element.unit == "%" || $0.element.reserve) }
+  let sorted = comparable.sorted {
+    let left = $0.element.reserve ? 0 : $0.element.fill
+    let right = $1.element.reserve ? 0 : $1.element.fill
+    return left == right ? $0.offset < $1.offset : left < right
+  }.map(\.element)
+  return Array((sorted.isEmpty ? (subscriptions.isEmpty ? sources : subscriptions) : sorted).prefix(2))
+}
+
+func lowestQuotaSource(_ sources: [WidgetSource]) -> WidgetSource? {
+  inlineQuotaSources(sources).first
 }
 
 struct WidgetSnapshot: Decodable {
@@ -202,11 +225,18 @@ struct WidgetStore: Decodable {
     Bundle.main.object(forInfoDictionaryKey: "CindyAppGroupId") as? String
   }
 
+  #if os(iOS)
   /// Same file name as `CindyUsageWidgetsModule` in the app.
-  static func load() -> WidgetStore? {
-    guard let group, let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group),
-          let data = try? Data(contentsOf: container.appendingPathComponent("usage-widget-snapshot.json"))
+  static var fileURL: URL? {
+    guard let group, let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)
     else { return nil }
+    return container.appendingPathComponent("usage-widget-snapshot.json")
+  }
+  #endif
+
+  /// On the Mac, `fileURL` is where the desktop app writes it (`MacWidgetSupport.swift`).
+  static func load() -> WidgetStore? {
+    guard let url = fileURL, let data = try? Data(contentsOf: url) else { return nil }
     return try? JSONDecoder().decode(WidgetStore.self, from: data)
   }
 
@@ -604,7 +634,7 @@ enum WidgetText {
     ],
   ]
 
-  private static func language(_ locale: Locale) -> String {
+  static func language(_ locale: Locale) -> String {
     let id = locale.identifier
     if id.hasPrefix("zh") { return id.contains("Hant") || id.contains("TW") || id.contains("HK") ? "zh-Hant" : "zh-Hans" }
     if id.hasPrefix("ja") { return "ja" }
@@ -617,7 +647,11 @@ enum WidgetText {
   }
 
   static func text(_ key: String, locale: Locale = Locale(identifier: Locale.preferredLanguages.first ?? "en")) -> String {
-    table[language(locale)]?[key] ?? table["en"]?[key] ?? key
+    #if os(macOS)
+    // The Mac widgets read this computer, not one the phone connects to (`MacWidgetText`).
+    if let mac = MacWidgetText.text(key, language: language(locale)) { return mac }
+    #endif
+    return table[language(locale)]?[key] ?? table["en"]?[key] ?? key
   }
 
   /// Strings normally sent by the computer, for snapshots that lack them and for placeholders.

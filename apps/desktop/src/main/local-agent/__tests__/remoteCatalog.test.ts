@@ -2,11 +2,13 @@
  * Protects the missing remote/share choices, model access and account-switch fence. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({ devices: [] as unknown[], shares: [] as unknown[], invoke: vi.fn(), api: vi.fn() }));
+// This catalog fixture has no signed-in owner or persisted disable preferences.
+vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => ({ disabledModels: {}, disabledProviders: {} }) }));
 vi.mock('../../device-link/index.js', () => ({ deviceLinkApiBase: 'https://example.invalid', remoteBackgroundInvoke: mock.invoke }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: () => mock.shares }));
-vi.mock('../../device-link/settings-store.js', () => ({ readDeviceLinkSettings: () => ({ disabledControlDeviceIds: ['disabled'], lastKnownDeviceNames: {} }) }));
-vi.mock('../../device-link/deviceLinkApi.js', () => ({ deviceLinkApiFetch: mock.api }));
-vi.mock('../../i18n.js', () => ({ t: () => '来自 {{name}} 的分享' }));
+vi.mock('../../device-link/settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ disabledControlDeviceIds: ['disabled'], lastKnownDeviceNames: {} }) }));
+vi.mock('../../device-link/deviceLinkApi.desktop.js', () => ({ deviceLinkApiFetch: mock.api }));
+vi.mock('../../i18n.desktop.js', () => ({ t: () => '来自 {{name}} 的分享' }));
 import { remoteLocalAgentModels } from '../remoteCatalog.js';
 import { LOCAL_AGENT_ROUTE, type LocalAgentModel } from '../catalog.js';
 import { normalizeProviderGroupConfig } from '../../../shared/providerGroup.js';

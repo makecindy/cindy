@@ -165,7 +165,6 @@ export function buildSessionComposerLayout(
   const sendUnavailableReason = normalizeOptionalReason(input.sendUnavailableReason);
   const voiceLabel = composerVoiceStateLabel(input.voiceState, localizer);
   const attachmentDisabledReason = buildAttachmentDisabledReason(input, localizer);
-  const inputDisabledReason = buildComposerInputDisabledReason(input, localizer);
   return {
     attachment: {
       active: input.attachmentPickerOpen || hasAttachments,
@@ -188,8 +187,10 @@ export function buildSessionComposerLayout(
     },
     density: shouldUseCompactComposer(input) ? 'compact' : 'expanded',
     input: {
-      disabled: inputDisabledReason !== null,
-      disabledReason: inputDisabledReason,
+      // Disabling the native editor resigns first responder on iOS. Keep the
+      // draft editable; the send lock and captured-document handoff own sending.
+      disabled: false,
+      disabledReason: null,
       placeholder: buildComposerPlaceholder(input.voiceState, localizer),
     },
     primaryAction: resolveComposerPrimaryAction({
@@ -280,16 +281,6 @@ function buildAttachmentDisabledReason(
   }
   if (input.sending) {
     return presentationText(localizer, 'session.presentation.composer.attachment.sendingReason', '消息正在发送到电脑端，完成后再调整附件。');
-  }
-  return null;
-}
-
-function buildComposerInputDisabledReason(
-  input: SessionComposerLayoutInput,
-  localizer?: PresentationLocalizer,
-): string | null {
-  if (input.sending) {
-    return presentationText(localizer, 'session.presentation.composer.input.sendingReason', '消息正在发送到电脑端。');
   }
   return null;
 }

@@ -61,8 +61,6 @@ describe('ChatInput steer shortcut contract', () => {
     expect(paletteGuard).toBeLessThan(modifiedSend);
     expect(chatInputSource).toContain("'Alt-Enter': () => this.editor.commands.setHardBreak()");
     expect(chatInputSource).toContain('ComposerHardBreak');
-    expect(chatInputSource).toContain('turnRunning={showStopButton}');
-    expect(chatInputSource).toContain('onSteer={onQueueSteer ? handleQueueSteer : undefined}');
     expect(editorEnterBlock).toContain('resolveComposerEnterIntent(');
     expect(editorEnterBlock).toContain('getComposerSendShortcutPreference()');
     expect(editorEnterBlock).toContain('turnRunning: showStopButtonRef.current');

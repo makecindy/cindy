@@ -1,3 +1,5 @@
+import { createXaiRateLimitPublisher } from './usage/xaiRateLimits.js';
+export { USAGE_XAI_RATE_LIMIT_CHANGED, USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED } from './usage/xaiRateLimits.js';
 /**
  * usageBroadcaster — agent 今日累计 (cost / token) 广播,maker-ipc/usage.ts 的数据源。
  *
@@ -31,6 +33,11 @@ import { incrementDailyModelUsage, type DailyModelUsageDelta } from './localDb/d
 import { incrementDailySessionUsage } from './localDb/dailySessionUsage';
 import { getCurrentDbClientUserId, getDbClient } from './localDb/client/current';
 import {
+  readStoredLegacyAccountUsage as readStoredAccountUsage,
+  writeStoredLegacyAccountUsage as writeStoredAccountUsage,
+} from './usage/accountUsageStorage.js';
+import { readLegacyCodexAccountId, readPool } from './subscription-accounts/store.js';
+import {
   mergeClaudeSubscriptionUsageSnapshot,
   type ClaudeSubscriptionUsageSnapshot,
 } from '../shared/claudeSubscriptionUsage';
@@ -61,9 +68,9 @@ export const USAGE_CODEX_ACCOUNT_AUTH_STARTED = 'usage:codex-account-auth-starte
 /** Provider-scoped signal emitted when the current Codex account credentials are safe to reread. */
 export const USAGE_CODEX_ACCOUNT_AUTH_READY = 'usage:codex-account-auth-ready';
 /** IPC channel: main → renderer 推 xAI(SuperGrok bridge)上游限流快照变化。 */
-export const USAGE_XAI_RATE_LIMIT_CHANGED = 'usage:xai-rate-limit-changed';
+
 /** 独立 xAI 账号(providerId ≠ 'xai')的限流头推送:{ providerId, snapshot },与本机 hook 同形。 */
-export const USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED = 'usage:xai-provider-rate-limit-changed';
+
 /** IPC channel: main → renderer 推 Claude 订阅账号余量变化 (端点刷新 / headers 旁路)。 */
 export const USAGE_CLAUDE_SUBSCRIPTION_CHANGED = 'usage:claude-subscription-changed';
 /** IPC channel: main → renderer 推 SuperGrok 账号周用量快照。 */
@@ -369,6 +376,8 @@ export async function readAgentTodayUsage(agentKind: AgentKind): Promise<AgentTo
  * 后两者都是加性字段, 旧消费者(mobile 防御解析)忽略即退化为原行为。
  */
 export interface CodexAccountUsagePayload extends RateLimitSnapshot {
+  /** An exact task-bound account read uses native quota for every supported engine. */
+  nativeAccountPool?: boolean;
   webSnapshot?: RateLimitSnapshot | null;
   appServerBuckets?: Record<string, RateLimitSnapshot> | null;
 }
@@ -550,10 +559,14 @@ function codexUsageStore(providerId = 'openai') {
     codexUsageStores.clear();
     codexUsageStoresOwner = owner;
   }
-  let store = codexUsageStores.get(providerId);
+  // An imported connection changes its storage alias, not its account. Rehydrate once after
+  // registration instead of keeping a pre-merge writer pointed at the old provider key.
+  const storageAccountId = providerId === 'openai' ? 'default' : readLegacyCodexAccountId(providerId) ?? providerId;
+  const cacheKey = `${providerId}:${storageAccountId}`;
+  let store = codexUsageStores.get(cacheKey);
   if (!store) {
     store = createCodexUsageStore(providerId);
-    codexUsageStores.set(providerId, store);
+    codexUsageStores.set(cacheKey, store);
   }
   return store;
 }
@@ -582,7 +595,15 @@ export function readCodexAccountUsageSnapshot(providerId?: string): Promise<Code
 }
 
 function createCodexUsageStore(providerId: string) {
-  const storageKey = providerId === 'openai' ? 'codex' : `codex:${providerId}`;
+  const accountId = providerId === 'openai' ? 'default' : readLegacyCodexAccountId(providerId) ?? providerId;
+  const legacyKey = providerId === 'openai' ? 'codex' : `codex:${providerId}`;
+  const accountPresent = () => {
+    // Unregistered legacy connections keep their own route. Once registered, even an old
+    // native runtime's late event must respect account removal from the pool.
+    if (providerId !== 'openai' && !readLegacyCodexAccountId(providerId)) return true;
+    const pool = readPool('openai');
+    return !pool || pool.accounts.some(account => account.id === accountId);
+  };
   let generation = 0;
   let codexAccountUsageOwner: string | null = null;
   /**
@@ -682,17 +703,13 @@ function createCodexUsageStore(providerId: string) {
       codexAccountUsageLoadPromise = (async () => {
         try {
           if (!codexAccountUsageOwner) return;
-          const row = await getDbClient().queryOne<{ snapshot?: string | null }>(
-            'SELECT snapshot FROM account_usage_snapshots WHERE agent_kind = ?',
-            [storageKey],
-          );
+          const parsed = await readStoredAccountUsage('openai', accountId, [legacyKey]);
           if (startedGeneration !== generation || startedOwner !== currentAccountUsageOwner()) return;
           // 读到库就算 hydrated(无行 = 确认库里本来就没有), 之后允许落库。置位放在
           // JSON.parse 之前: 损坏行解析失败仍应允许被新快照覆盖, 否则一条坏行会永久
           // 堵死写入。
           codexAccountUsageHydrated = true;
-          if (!row?.snapshot) return;
-          const parsed = JSON.parse(row.snapshot);
+          if (!parsed) return;
           if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
             const slots = splitPersistedCodexAccountUsage(parsed as Record<string, unknown>);
             // hydration 不覆盖内存 —— 首次读失败后重试期间, 内存里可能已经装着那段时间
@@ -736,9 +753,8 @@ function createCodexUsageStore(providerId: string) {
     resetCodexAccountUsageCacheIfOwnerChanged();
     const startedGeneration = generation;
     const owner = codexAccountUsageOwner;
-    const db = getDbClient();
     await ensureCodexAccountUsageLoaded();
-    if (startedGeneration !== generation || owner !== currentAccountUsageOwner()) return;
+    if (startedGeneration !== generation || owner !== currentAccountUsageOwner() || !accountPresent()) return;
     // 按来源路由到自己的槽 —— 槽内 merge 保留原有的 windowless / 部分字段兜底
     // 语义, 但两个来源不再互相覆盖窗口(见本节头注释)。
     const incoming = snapshot as RateLimitSnapshot;
@@ -781,14 +797,8 @@ function createCodexUsageStore(providerId: string) {
     }
 
     try {
-      await db.exec(
-        `INSERT INTO account_usage_snapshots (agent_kind, snapshot, updated_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT(agent_kind) DO UPDATE SET
-           snapshot = excluded.snapshot,
-           updated_at = excluded.updated_at`,
-        [storageKey, JSON.stringify(payload), Date.now()],
-      );
+      await writeStoredAccountUsage('openai', accountId, payload,
+        () => startedGeneration === generation && owner === currentAccountUsageOwner() && accountPresent());
     } catch (err) {
       log.warn(
         'recordCodexAccountUsageSnapshot failed:',
@@ -809,10 +819,7 @@ function createCodexUsageStore(providerId: string) {
     broadcastCodexAccountUsage(null, providerId);
 
     try {
-      await getDbClient().exec(
-        'DELETE FROM account_usage_snapshots WHERE agent_kind = ?',
-        [storageKey],
-      );
+      await writeStoredAccountUsage('openai', accountId, null);
     } catch (err) {
       log.warn(
         'clearCodexAccountUsageSnapshot failed:',
@@ -826,7 +833,7 @@ function createCodexUsageStore(providerId: string) {
     const owner = codexAccountUsageOwner;
     const startedGeneration = generation;
     await ensureCodexAccountUsageLoaded();
-    if (owner !== currentAccountUsageOwner() || startedGeneration !== generation) return null;
+    if (owner !== currentAccountUsageOwner() || startedGeneration !== generation || !accountPresent()) return null;
     return buildCodexAccountUsagePayload();
   }
 
@@ -842,37 +849,12 @@ function createCodexUsageStore(providerId: string) {
 export type { XaiRateLimitSnapshot } from '../shared/xaiRateLimit';
 
 /** bridge onRateLimit 回调入口:广播 renderer(renderer 侧 hook 自带模块级缓存,无拉取端点)。 */
-export function recordXaiRateLimitSnapshot(info: Omit<XaiRateLimitSnapshot, 'updatedAt'>, providerId = 'xai'): void {
-  const snapshot: XaiRateLimitSnapshot = { ...info, updatedAt: Date.now() };
+export const { recordXaiRateLimitSnapshot, clearXaiRateLimitSnapshot } = createXaiRateLimitPublisher((channel, payload) => {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (isTrustedAppRendererWindow(win)) {
-      if (providerId === 'xai') win.webContents.send(USAGE_XAI_RATE_LIMIT_CHANGED, snapshot);
-      else win.webContents.send(USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED, { providerId, snapshot });
-    }
+    if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
   }
-  // device-link:tooltip 尽力显示被控端限流头(bridge 每成功请求至多一帧,低频)。
-  // 与 broadcastCodexAccountUsage 同口径按账号分路:独立账号绝不写进内置远程缓存。
-  if (providerId === 'xai') tapWindowBroadcast(USAGE_XAI_RATE_LIMIT_CHANGED, snapshot);
-  else tapWindowBroadcast(USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED, { providerId, snapshot });
-}
-
-/**
- * 清空 xAI 限流快照(广播 null)。xAI 登出 / 重新登录(可能换账号)时调用 ——
- * 快照是账号级的,登出后没有下一个成功响应来覆盖,不清会让旧账号的余量一直挂在 chip 上。
- */
-export function clearXaiRateLimitSnapshot(providerId = 'xai'): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (isTrustedAppRendererWindow(win)) {
-      if (providerId === 'xai') win.webContents.send(USAGE_XAI_RATE_LIMIT_CHANGED, null);
-      else win.webContents.send(USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED, { providerId, snapshot: null });
-    }
-  }
-  // device-link:登出 / 换号清除同步给控制端(远程 tooltip 不得挂旧账号余量);
-  // 独立账号的清除只清它自己的镜像,不得清空仍登录的内置账号。
-  if (providerId === 'xai') tapWindowBroadcast(USAGE_XAI_RATE_LIMIT_CHANGED, null);
-  else tapWindowBroadcast(USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED, { providerId, snapshot: null });
-}
-
+  tapWindowBroadcast(channel, payload);
+});
 
 // ── Claude subscription usage (persisted latest snapshot) ───────────────────
 // 与上面 Codex account usage 段对称:内存缓存 + account_usage_snapshots 落库
@@ -915,16 +897,12 @@ async function ensureClaudeSubscriptionUsageLoaded(): Promise<void> {
     claudeSubscriptionUsageLoadPromise = (async () => {
       try {
         if (!claudeSubscriptionUsageOwner) return;
-        const row = await getDbClient().queryOne<{ snapshot?: string | null }>(
-          'SELECT snapshot FROM account_usage_snapshots WHERE agent_kind = ?',
-          ['claude-code'],
-        );
+        const parsed = await readStoredAccountUsage('anthropic', 'default', ['claude-code']);
         // clear / owner 变化抢先发生 → 本次读结果作废, 不覆盖更新的内存状态。
         if (generation !== claudeSubscriptionUsageGeneration) return;
         // 读到库就算 hydrated(理由同 codex 侧, 含损坏行仍允许被覆盖)。
         claudeSubscriptionUsageHydrated = true;
-        if (!row?.snapshot) return;
-        const parsed = JSON.parse(row.snapshot);
+        if (!parsed) return;
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
           // 理由同 codex 侧: 内存里可能是重试期间收到的更新快照, 库里的行是旧的 ——
           // 以持久化行为底、内存增量在上做一次常规 merge, 而不是直接赋值。
@@ -952,13 +930,14 @@ async function ensureClaudeSubscriptionUsageLoaded(): Promise<void> {
 
 export async function recordClaudeSubscriptionUsageSnapshot(snapshot: unknown): Promise<void> {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return;
+  resetClaudeSubscriptionUsageCacheIfOwnerChanged();
 
   // 世代守卫与 hydration 内部一致: record 是 fire-and-forget, await 期间 clear
   // (登出 / 换号) 或 owner 变化抢先发生时, 本笔必须整体丢弃 —— 否则恢复后的
   // merge / 广播 / 写库会把刚清掉的数据复活。
   const generation = claudeSubscriptionUsageGeneration;
   await ensureClaudeSubscriptionUsageLoaded();
-  if (generation !== claudeSubscriptionUsageGeneration) return;
+  if (generation !== claudeSubscriptionUsageGeneration || !legacyClaudeAccountPresent()) return;
 
   const next = mergeClaudeSubscriptionUsageSnapshot(
     claudeSubscriptionUsageSnapshot,
@@ -974,22 +953,8 @@ export async function recordClaudeSubscriptionUsageSnapshot(snapshot: unknown): 
   }
 
   try {
-    await getDbClient().exec(
-      `INSERT INTO account_usage_snapshots (agent_kind, snapshot, updated_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(agent_kind) DO UPDATE SET
-         snapshot = excluded.snapshot,
-         updated_at = excluded.updated_at`,
-      ['claude-code', JSON.stringify(next), Date.now()],
-    );
-    if (generation !== claudeSubscriptionUsageGeneration) {
-      // clear 在写库 await 期间抢先: 内存已被 clear 正确置 null, 但本 INSERT 可能
-      // 晚于 clear 的 DELETE 落盘 —— 补偿删除, 防止下次冷启动 hydration 读回残留。
-      await getDbClient().exec(
-        'DELETE FROM account_usage_snapshots WHERE agent_kind = ?',
-        ['claude-code'],
-      );
-    }
+    await writeStoredAccountUsage('anthropic', 'default', next,
+      () => generation === claudeSubscriptionUsageGeneration && legacyClaudeAccountPresent());
   } catch (err) {
     log.warn(
       'recordClaudeSubscriptionUsageSnapshot failed:',
@@ -1008,10 +973,7 @@ export async function clearClaudeSubscriptionUsageSnapshot(): Promise<void> {
   broadcastClaudeSubscriptionUsage(null);
 
   try {
-    await getDbClient().exec(
-      'DELETE FROM account_usage_snapshots WHERE agent_kind = ?',
-      ['claude-code'],
-    );
+    await writeStoredAccountUsage('anthropic', 'default', null);
   } catch (err) {
     log.warn(
       'clearClaudeSubscriptionUsageSnapshot failed:',
@@ -1022,7 +984,12 @@ export async function clearClaudeSubscriptionUsageSnapshot(): Promise<void> {
 
 export async function readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubscriptionUsageSnapshot | null> {
   await ensureClaudeSubscriptionUsageLoaded();
-  return claudeSubscriptionUsageSnapshot;
+  return legacyClaudeAccountPresent() ? claudeSubscriptionUsageSnapshot : null;
+}
+
+function legacyClaudeAccountPresent(): boolean {
+  const pool = readPool('anthropic');
+  return !pool || pool.accounts.some(account => account.id === 'default');
 }
 
 // ── xAI / SuperGrok subscription usage (persisted latest snapshot) ──────────

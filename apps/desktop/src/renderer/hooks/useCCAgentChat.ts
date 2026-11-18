@@ -104,6 +104,9 @@ interface UseCCAgentChatReturn {
   steeringQueueClientIds: string[];
   /** Queue was paused by Stop and resumes only after the user clicks Continue. */
   queuePaused: boolean;
+  queueEditLocks: string[];
+  queueInteractionLocks: string[];
+  queueAbortPending: boolean;
   /** F-QUEUE-DEFER: 队列面板是否显示三条以后的尾部，仅影响展示。 */
   queueExpanded: boolean;
   /** F-QUEUE-DEFER: 切换队列面板的展开 / 折叠态，仅影响展示。 */
@@ -135,6 +138,7 @@ interface UseCCAgentChatReturn {
       pastedTextRanges?: PastedTextRange[];
       slashCommandRanges?: SlashCommandRange[];
       replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
+      firstMessageIdentity?: { clientId: string; createdAt: string };
       beforeEnqueue?: () => Promise<boolean>;
       onInputCreated?: (clientId: string) => void;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
@@ -231,6 +235,8 @@ interface UseCCAgentChatReturn {
   respondToPermission: (result: CCAgentPermissionResult) => void;
   /** F7.2: Currently pending ask-user-question */
   pendingAskUser: PendingAskUser | null;
+  pendingAskUserQueue?: PendingAskUser[];
+  selectAskUserQuestion: (requestId: string) => void;
   /** Host-owned plugin setup snapshot. */
   pendingPluginSetup: PendingPluginSetup | null;
   pluginSetupViewerState: PluginSetupViewerState;
@@ -437,6 +443,7 @@ export function useCCAgentChat(
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
         replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
+        firstMessageIdentity?: { clientId: string; createdAt: string };
         beforeEnqueue?: () => Promise<boolean>;
         onInputCreated?: (clientId: string) => void;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
@@ -701,6 +708,10 @@ export function useCCAgentChat(
     [sessionId],
   );
 
+  const selectAskUserQuestion = useCallback((requestId: string) => {
+    if (sessionId) makerChatStore.selectAskUserQuestion(sessionId, requestId);
+  }, [sessionId]);
+
   const setAskUserDraft = useCallback(
     (next: AskUserDraft | null) => {
       if (!sessionId) return;
@@ -865,6 +876,9 @@ export function useCCAgentChat(
     pendingQueue: lightState.pendingQueue,
     steeringQueueClientIds: lightState.steeringQueueClientIds,
     queuePaused: lightState.queuePaused,
+    queueEditLocks: lightState.queueEditLocks,
+    queueInteractionLocks: lightState.queueInteractionLocks,
+    queueAbortPending: lightState.queueAbortPending,
     queueExpanded: lightState.queueExpanded,
     setQueueExpanded,
     resumeQueue,
@@ -919,6 +933,8 @@ export function useCCAgentChat(
     pendingPermission: lightState.pendingPermission,
     respondToPermission,
     pendingAskUser: lightState.pendingAskUser,
+    pendingAskUserQueue: lightState.pendingAskUserQueue,
+    selectAskUserQuestion,
     pendingPluginSetup: lightState.pendingPluginSetup,
     pluginSetupViewerState: lightState.pluginSetupViewerState,
     pluginSetupCommandInFlight: lightState.pluginSetupCommandInFlight,

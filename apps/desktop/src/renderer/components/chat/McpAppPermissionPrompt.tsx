@@ -24,9 +24,10 @@ export function McpAppPermissionPrompt({
     <section
       aria-label={t('mcpApps.awaitingApproval')}
       data-mcp-app-permission
+      data-plugin-ui-keep-visible={floating ? '' : undefined}
       className={
         floating
-          ? 'absolute inset-x-0 bottom-full z-40 mb-2 max-h-[min(420px,60vh)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-[var(--surface-elevated)] p-3 shadow-lg'
+          ? 'absolute inset-x-0 bottom-full z-40 mb-2 max-h-[min(420px,60vh)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-[var(--surface-elevated)] p-3 shadow-[shadow:var(--shadow-menu)]'
           : 'border-t border-border px-3 py-2 text-13 text-[var(--text-secondary)]'
       }
     >

@@ -27,7 +27,6 @@
  */
 
 import { createHmac, randomBytes } from 'node:crypto';
-import { BOT_DENIED_TOOLS_VENDOR_KEY } from '../../shared/botSystemSkills.js';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
@@ -41,13 +40,7 @@ import {
 import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
 import type { Logger as MakerLogger } from '@cindy/maker-core';
-
-import {
-  REMOTE_COLLAB_SERVER_NAMES,
-  startCodexHttpBridge,
-  type CodexHttpBridge,
-  withMcpRouteIdentity,
-} from './codexHttpBridge.js';
+import type { CodexHttpBridge } from './codexHttpBridge.js';
 import {
   CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
   CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
@@ -65,10 +58,13 @@ import { createPluginRegistry } from '../maker-host/plugins/index.js';
 import { isAllowedRemoteMcpUrl, isDesktopLoopbackMcpUrl } from './piMcpTransport.js';
 import { RUNTIME_MCP_NAMES_KEY } from '../maker-host/agentCapabilityCatalog.js';
 import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
+import { REMOTE_COLLAB_SERVER_NAMES } from './codexHttpBridge.js';
+
 
 interface StartedPiBridge {
   bridge: CodexHttpBridge | null;
   serverNames: string[];
+  serverDisplayNames: Record<string, string>;
   remoteServers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers'];
   mcpEnv: Record<string, string>;
   generation: number;
@@ -76,6 +72,11 @@ interface StartedPiBridge {
   retired: boolean;
   shutdownPromise: Promise<void> | null;
 }
+
+/** Shared MCP transport with launcher-owned runtime and credentials. */
+export function createPiEnvironment(ports: { startCodexHttpBridge: ReturnType<typeof import('./codexHttpBridge.js').createCodexHttpBridgeRuntime>['startCodexHttpBridge']; withMcpRouteIdentity: ReturnType<typeof import('./codexHttpBridge.js').createCodexHttpBridgeRuntime>['withMcpRouteIdentity']; }) {
+const { startCodexHttpBridge, withMcpRouteIdentity } = ports;
+
 
 let startPromise: Promise<StartedPiBridge | null> | null = null;
 let activeGeneration: StartedPiBridge | null = null;
@@ -160,7 +161,7 @@ function releaseGeneration(started: StartedPiBridge): void {
  * bridge 单例懒启动并缓存;每次调用按传入 sessionCtx 产出 per-session 的
  * server URL(带/不带 `?session=`)并做对应的身份注册。
  */
-export async function getPiExtraSpawnConfig(
+async function getPiExtraSpawnConfig(
   providers: McpProvider[],
   logger: MakerLogger,
   sessionCtx?: PiExtraSpawnConfigContext,
@@ -173,7 +174,7 @@ export async function getPiExtraSpawnConfig(
   if (started.retired) return getPiExtraSpawnConfig(providers, logger, sessionCtx);
   started.refs += 1;
 
-  const { bridge, serverNames, remoteServers, mcpEnv } = started;
+  const { bridge, serverNames, serverDisplayNames, remoteServers, mcpEnv } = started;
   const sessionId = sessionCtx?.sessionId?.trim();
   let disposed = false;
   const disposeLease = (): void => {
@@ -219,6 +220,7 @@ export async function getPiExtraSpawnConfig(
         server.name === 'cindy_telegram_bot'
         && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'telegram')
       ) return false;
+      if (server.name === 'cindy_imessage' && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'imessage')) return false;
       if (!isBotMcpServerAllowed(sessionCtx?.botMcpPolicy, server.name)) return false;
       if (!collabEnabled && REMOTE_COLLAB_SERVER_NAMES.has(server.name)) return false;
       // Custom HTTP MCPs are `s.remote` and skip the SSH URL rewriter. Desktop
@@ -266,9 +268,6 @@ export async function getPiExtraSpawnConfig(
         && servers.some((server) => server.name === 'cindy_memory' || server.name === 'cindy_helper')
         ? { botMemoryFacade: true }
         : {}),
-      ...(Array.isArray(vendorOptions[BOT_DENIED_TOOLS_VENDOR_KEY])
-        ? { deniedTools: (vendorOptions[BOT_DENIED_TOOLS_VENDOR_KEY] as unknown[]).filter((name): name is string => typeof name === 'string') }
-        : {}),
     };
   };
 
@@ -276,7 +275,11 @@ export async function getPiExtraSpawnConfig(
   // 错误码(如 LEAD_NOT_SUPPORTED)—— 与改动前一致,不打 401。
   if (!sessionId) {
     const servers = capabilityGated([
-      ...(bridge ? serverNames.map((name) => ({ name, url: bridge.url(name) })) : []),
+      ...(bridge ? serverNames.map((name) => ({
+        name,
+        ...(serverDisplayNames[name] ? { displayName: serverDisplayNames[name] } : {}),
+        url: bridge.url(name),
+      })) : []),
       ...cloneRemoteServers(remoteServers),
     ]);
     return {
@@ -318,6 +321,8 @@ export async function getPiExtraSpawnConfig(
     sessionId,
     ...(sessionCtx?.sessionInstanceId ? { sessionInstanceId: sessionCtx.sessionInstanceId } : {}),
     workingDir: sessionCtx?.workingDir ?? '',
+    // SSH 任务不在本机运行；插件工具据此拒绝读取本机图片、借用本机出网。
+    ...(sessionCtx?.remoteHostId ? { remoteHostId: sessionCtx.remoteHostId } : {}),
     // Maker Memory 作用域键 (Cindy Bot 会话恒为 `bot:<botId>`): cindy_memory 的
     // withStore 优先用它定位 store。不透传的话工具侧只剩 workingDir 回落 ——
     // 模型读到的是伙伴记忆索引、写进去的却是项目记忆 (两张皮)。
@@ -355,6 +360,7 @@ export async function getPiExtraSpawnConfig(
     const servers = capabilityGated([
       ...serverNames.map((name) => ({
         name,
+        ...(serverDisplayNames[name] ? { displayName: serverDisplayNames[name] } : {}),
         url: withMcpRouteIdentity(bridge.url(name), {
           sessionId,
           sessionInstanceId: sessionCtx?.sessionInstanceId,
@@ -398,7 +404,7 @@ export async function getPiExtraSpawnConfig(
  * 会话 close 后才关桥。这样撤销/新增工具能作用于新会话，又不会把正在执行的工具
  * 请求从脚下切断。
  */
-export function invalidatePiEnvironment(): void {
+function invalidatePiEnvironment(): void {
   environmentEpoch += 1;
   const current = activeGeneration;
   activeGeneration = null;
@@ -406,7 +412,7 @@ export function invalidatePiEnvironment(): void {
   if (current) retireGeneration(current);
 }
 
-export async function shutdownPiEnvironment(): Promise<void> {
+async function shutdownPiEnvironment(): Promise<void> {
   // 轮 40-w4-t10 MEDIUM:先置关停门闩再收口 —— 关停期间 ensureBridge fail-closed。
   environmentShuttingDown = true;
   environmentEpoch += 1;
@@ -430,7 +436,7 @@ export async function shutdownPiEnvironment(): Promise<void> {
  * @internal 测试钩子:重置模块级单例状态(ensureBridge 的 startPromise /
  * activeGeneration / generations)。仅在测试文件里调用 —— 生产代码不依赖。
  */
-export function resetPiEnvironmentForTest(): void {
+function resetPiEnvironmentForTest(): void {
   startPromise = null;
   activeGeneration = null;
   nextGeneration = 0;
@@ -510,7 +516,7 @@ async function ensureBridge(
 async function doStart(
   providers: McpProvider[],
   logger: MakerLogger,
-): Promise<Pick<StartedPiBridge, 'bridge' | 'serverNames' | 'remoteServers' | 'mcpEnv'> | null> {
+): Promise<Pick<StartedPiBridge, 'bridge' | 'serverNames' | 'serverDisplayNames' | 'remoteServers' | 'mcpEnv'> | null> {
   // factory 阶段没有 per-session 信息,控制类工具通过 getSessionContext 在
   // tool-call 时读当前 session ctx —— 该 ctx 由 bridge 的 `?session=` 路由在
   // runWithLiziMcpSessionContext 里注入(见本文件顶部说明)。
@@ -543,6 +549,7 @@ async function doStart(
   };
 
   const serverFactories: Record<string, () => McpServer> = Object.create(null);
+  const serverDisplayNames: Record<string, string> = Object.create(null);
   const pluginIdByServerName: Record<string, string> = Object.create(null);
   const remoteServers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers'] = [];
   const mcpEnv: Record<string, string> = Object.create(null);
@@ -639,6 +646,7 @@ async function doStart(
       }
       remoteServers.push({
         name: provider.name,
+        ...(provider.displayName ? { displayName: provider.displayName } : {}),
         url: parsedUrl.href,
         remote: {
           headerEnvVars,
@@ -680,6 +688,7 @@ async function doStart(
       }
       return createServer();
     };
+    if (provider.displayName?.trim()) serverDisplayNames[provider.name] = provider.displayName.trim();
     // 首方内置 provider 才带 plugin 策略;自定义 MCP 不继承(pluginIdForKnownProviderName 返 null)。
     const pluginId = pluginIdForKnownProviderName(provider.name);
     if (pluginId) pluginIdByServerName[provider.name] = pluginId;
@@ -713,5 +722,7 @@ async function doStart(
     remoteServers: remoteServers.length,
     ...(bridge ? { port: bridge.port } : {}),
   });
-  return { bridge, serverNames, remoteServers, mcpEnv };
+  return { bridge, serverNames, serverDisplayNames, remoteServers, mcpEnv };
+}
+return { getPiExtraSpawnConfig, invalidatePiEnvironment, shutdownPiEnvironment, resetPiEnvironmentForTest };
 }

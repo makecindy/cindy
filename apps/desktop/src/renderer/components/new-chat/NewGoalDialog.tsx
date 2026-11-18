@@ -36,6 +36,7 @@ interface NewGoalDialogProps {
    * (目标的默认文字来自 composer,创建成功后原文该清掉)。
    */
   onCreated?: () => void;
+  creationProgress?: ReactNode;
   creationRecovery?: ReactNode;
   creationRecoveryBusy?: boolean;
 }
@@ -45,7 +46,7 @@ interface GoalCreationError {
   pickerAuthorization: boolean;
 }
 
-export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initialObjective, onCreated, creationRecovery, creationRecoveryBusy = false }: NewGoalDialogProps): React.ReactElement {
+export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initialObjective, onCreated, creationProgress, creationRecovery, creationRecoveryBusy = false }: NewGoalDialogProps): React.ReactElement {
   const { t } = useTranslation();
   const [objective, setObjective] = useState('');
   const [limits, setLimits] = useState<GoalLimitValues>(DEFAULT_GOAL_LIMITS);
@@ -146,6 +147,7 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
             }}
           />
           <GoalAdvancedLimits value={limits} onChange={setLimits} />
+          {creationProgress}
           {creationRecovery}
           {error && !(error.pickerAuthorization && creationRecovery) && (
             <div className="text-12" style={{ color: 'var(--error-fg)' }}>

@@ -1,3 +1,4 @@
+import { sessionAllowsProjectMove, useSessionProjectMoveSheet } from './SessionProjectMoveSheet';
 import { useEffect, useState } from 'react';
 import { Platform, useWindowDimensions } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -26,7 +27,9 @@ import { useTheme, iconSize } from '@/theme';
 
 type SessionOptionsProps = {
   session?: RemoteSession | null;
+  inboxMode?: boolean;
   onAction(action: SessionSwipeAction): void;
+  onMove?(): void;
   onClose(): void;
   onClosed?(): void;
   pinnedAt: string | null | undefined;
@@ -35,11 +38,18 @@ type SessionOptionsProps = {
 };
 
 export function SessionOptionsPresenter(props: SessionOptionsProps) {
-  return Platform.OS === 'ios' ? (
-    <SessionOptionsExpoSheet {...props} />
-  ) : (
-    <SessionActionSheet {...props} />
-  );
+  const move = useSessionProjectMoveSheet();
+  const onMove = sessionAllowsProjectMove(props.session)
+    ? () => move.open(props.session!, props.onClose) : undefined;
+  const onClosed = () => { props.onClosed?.(); move.parentClosed(); };
+  return <>
+    {Platform.OS === 'ios' ? (
+      <SessionOptionsExpoSheet {...props} onMove={onMove} onClosed={onClosed} />
+    ) : (
+      <SessionActionSheet {...props} onMove={onMove} onClosed={onClosed} />
+    )}
+    {move.sheet}
+  </>;
 }
 
 const SWATCH_CELL = 44;
@@ -125,7 +135,9 @@ export function NativeTagShortcuts({ state }: { state: TaskTagsCompactState }) {
 
 function SessionOptionsExpoSheet({
   session,
+  inboxMode = false,
   onAction,
+  onMove,
   onClose,
   onClosed,
   pinnedAt,
@@ -139,7 +151,7 @@ function SessionOptionsExpoSheet({
   useEffect(() => {
     if (!visible) setTagsExpanded(false);
   }, [visible]);
-  const menu = buildSessionActionMenu(pinnedAt, status);
+  const menu = buildSessionActionMenu(pinnedAt, status, inboxMode ? session ?? undefined : undefined);
   const regular = menu.filter(
     (item) => !item.destructive && item.action !== 'archive' && item.action !== 'restore',
   );
@@ -172,6 +184,8 @@ function SessionOptionsExpoSheet({
               testID={`home.sessionActions.${item.action}`}
             />
           ))}
+          {onMove ? <ComposerNativeRow title={t('session.menu.moveToProject')}
+            onPress={onMove} testID="home.sessionActions.move" /> : null}
         </Section>
       ) : null}
       {visible && session ? (

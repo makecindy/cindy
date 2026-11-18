@@ -19,6 +19,138 @@ const shard = (value: string) =>
   `// ../ai/src/providers/data/new-vendor.json\nvar vendor_default = ${value};\nstartApplication();`;
 
 describe("Pi source import", () => {
+  // #10434, unit: regenerate through the production converter, preserving Pi's
+  // on/off serializer map while removing its implementation-only high UI tier.
+  it('imports the official MiMo V2.6 Chat switch without changing other routes', () => {
+    const mimo = { ...model, id: 'mimo-v2.6-pro', provider: 'xiaomi',
+      baseUrl: 'https://api.xiaomimimo.com/v1', thinkingLevelMap: { ...model.thinkingLevelMap, off: 'off' } };
+    const first = toCindyCatalog({ xiaomi: [mimo] }, 'fixture');
+    expect(first.providers.xiaomi[0]).toMatchObject({ reasoning: true, thinkingToggle: true,
+      efforts: [], defaultEffort: null, execution: { pi: { thinkingLevelMap: mimo.thinkingLevelMap } } });
+    expect(toCindyCatalog({ xiaomi: [mimo] }, 'fixture', { previous: first })).toEqual(first);
+    // A later explicit negative capability must clear the retained switch.
+    expect(toCindyCatalog({ xiaomi: [{ ...mimo, reasoning: false }] }, 'updated', { previous: first })
+      .providers.xiaomi[0]).toMatchObject({ reasoning: false, thinkingToggle: false, efforts: [], defaultEffort: null });
+    for (const changed of [{ ...mimo, baseUrl: 'https://proxy.example/v1' },
+      { ...mimo, id: 'mimo-v2.7-pro' }, { ...mimo, api: 'openai-responses' },
+      { ...mimo, provider: 'another-provider' }]) {
+      expect(toCindyCatalog({ [changed.provider]: [changed] }, 'fixture').providers[changed.provider][0])
+        .toMatchObject({ efforts: ['high'] });
+    }
+  });
+
+  // #10356 review, unit: the pinned Pi tariff's zero cacheRead overwrote our
+  // corrected snapshot on refresh. Existing generic cost tests do not cover
+  // this channel contract. Exercise fresh imports and same-route regeneration.
+  it('keeps the Cerebras cached-input tariff when importing stale Pi data', () => {
+    const stale = { ...model, provider: 'cerebras', id: 'gpt-oss-120b',
+      baseUrl: 'https://api.cerebras.ai/v1', cost: { input: 0.35, output: 0.75, cacheRead: 0, cacheWrite: 0 } };
+    const before = structuredClone(stale);
+    const previous = toCindyCatalog({ cerebras: [{ ...stale, cost: { ...stale.cost, cacheRead: 0.35 } }] }, 'before');
+    for (const options of [{}, { previous }]) {
+      const imported = toCindyCatalog({ cerebras: [stale] }, 'after', options);
+      expect(imported.providers.cerebras).toEqual(previous.providers.cerebras);
+      expect(imported.source).toBe('pi');
+    }
+    expect(stale).toEqual(before);
+  });
+
+  it('does not rewrite other Cerebras routes or a new upstream tariff', () => {
+    const stale = { ...model, provider: 'cerebras', id: 'gpt-oss-120b',
+      baseUrl: 'https://api.cerebras.ai/v1', cost: { input: 0.35, output: 0.75, cacheRead: 0, cacheWrite: 0 } };
+    for (const input of [
+      { ...stale, provider: 'other-provider' },
+      { ...stale, id: 'other-model' },
+      { ...stale, baseUrl: 'https://proxy.example/v1' },
+      { ...stale, api: 'openai-responses' },
+      { ...stale, cost: { ...stale.cost, input: 0 } },
+      { ...stale, cost: { ...stale.cost, output: 0.5 } },
+      { ...stale, cost: { ...stale.cost, cacheRead: 0.1 } },
+      { ...stale, cost: { input: 0.35, output: 0.75 } },
+    ]) {
+      const imported = toCindyCatalog({ [input.provider]: [input] }, 'fixture');
+      expect(imported.providers[input.provider][0].cost).toEqual(input.cost);
+    }
+  });
+
+  // #10269, unit: regeneration must preserve the verified Carbon transport
+  // while reusing Argon's maintained IDE identity, not its unverified capacity.
+  it('supplements Copilot Carbon from the same source Chat adapter only', () => {
+    const argon = { ...model, id: 'gemini-4-argon', provider: 'github-copilot',
+      baseUrl: 'https://api.individual.githubcopilot.com',
+      headers: { 'Editor-Version': 'fixture-editor', Authorization: 'invalid-fixture-secret' },
+      compat: { supportsStore: false, supportsReasoningEffort: false },
+    };
+    const before = structuredClone(argon);
+    const errors: unknown[] = [];
+    // Malformed external JSON bypasses the compile-time PiImportModel contract.
+    const source = JSON.parse(JSON.stringify([null, argon]));
+    const imported = toCindyCatalog({ 'github-copilot': source }, 'fixture', { onError: error => errors.push(error) });
+    expect(errors).toHaveLength(1);
+    const carbon = imported.providers['github-copilot'].find(row => row.id === 'gemini-4-carbon');
+    expect(carbon).toEqual({ id: 'gemini-4-carbon', name: 'Gemini 4 Carbon', upstream: argon.baseUrl,
+      execution: { pi: { api: 'openai-completions', headers: { 'Editor-Version': 'fixture-editor' }, compat: argon.compat } },
+    });
+    expect(argon).toEqual(before);
+    for (const changed of [{ ...argon, baseUrl: 'https://proxy.example' },
+      { ...argon, api: 'anthropic-messages' }, { ...argon, provider: 'another-provider' }]) {
+      expect(toCindyCatalog({ [changed.provider]: [changed] }, 'fixture').providers[changed.provider])
+        .not.toContainEqual(expect.objectContaining({ id: 'gemini-4-carbon' }));
+    }
+    const explicit = { ...argon, id: 'gemini-4-carbon', api: 'openai-responses', headers: {}, compat: {} };
+    const refreshed = toCindyCatalog({ 'github-copilot': [argon, explicit] }, 'fixture', { previous: imported });
+    expect(refreshed.providers['github-copilot'].find(row => row.id === explicit.id)?.execution.pi)
+      .toMatchObject({ api: 'openai-responses', headers: {}, compat: {} });
+  });
+
+  // #9863: the pinned source labels Copilot Astra as Chat; regeneration must retain
+  // its Responses contract. Existing import cases only cover generic conversion.
+  it('corrects only the exact Copilot Astra Chat source during import', () => {
+    const astra = { id: 'gpt-6-astra', provider: 'github-copilot',
+      baseUrl: 'https://api.individual.githubcopilot.com', api: 'openai-completions' };
+    const inputs = [astra,
+      { ...astra, id: 'kimi-k3' },
+      { ...astra, provider: 'another-provider' },
+      { ...astra, baseUrl: 'https://proxy.example/v1' },
+      { ...astra, baseUrl: `${astra.baseUrl}/custom` },
+      { ...astra, api: 'openai-responses' },
+      { ...astra, api: 'anthropic-messages' },
+    ];
+    for (const [index, input] of inputs.entries()) {
+      const before = structuredClone(input);
+      const first = toCindyCatalog({ [input.provider]: [input] }, 'fixture');
+      expect(first.providers[input.provider][0].execution.pi.api).toBe(index === 0 ? 'openai-responses' : input.api);
+      expect(toCindyCatalog({ [input.provider]: [input] }, 'fixture')).toEqual(first);
+      expect(input).toEqual(before);
+    }
+    const previous = toCindyCatalog({ 'github-copilot': [{ ...astra,
+      headers: { 'Copilot-Integration-Id': 'vscode-chat' }, compat: { supportsStore: false },
+    }] }, 'before');
+    const refreshed = toCindyCatalog({ 'github-copilot': [astra] }, 'after', { previous });
+    expect(refreshed.providers['github-copilot']).toEqual(previous.providers['github-copilot']);
+  });
+
+  // #9863 review: changing only api leaves Chat adapter flags and unsupported
+  // reasoning levels. Verify the generated Responses contract, not only its name.
+  it('replaces Copilot Astra Chat adapter metadata when correcting its API', () => {
+    const stale = { id: 'gpt-6-astra', provider: 'github-copilot',
+      baseUrl: 'https://api.individual.githubcopilot.com', api: 'openai-completions', reasoning: true,
+      thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
+      compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false },
+    };
+    const before = structuredClone(stale);
+    const catalog = toCindyCatalog({ 'github-copilot': [stale] }, 'fixture');
+    const corrected = catalog.providers['github-copilot'][0];
+    expect(corrected.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(corrected.execution.pi).toEqual({
+      api: 'openai-responses',
+      thinkingLevelMap: { off: null, minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
+      compat: { supportsOpenAIGrammarTools: true },
+    });
+    expect(toCindyCatalog({ 'github-copilot': [stale] }, 'fixture', { previous: catalog })).toEqual(catalog);
+    expect(stale).toEqual(before);
+  });
+
   it('does not turn the bundled manifest into a provider to refresh', () => {
     const manifest = '// ../ai/src/providers/data/.manifest.json\nvar manifest_default = { "providers": {} };\n';
     const providers = readBundledCatalog(manifest + shard(JSON.stringify({ 'openai-completions': { 'new-model': model } })));

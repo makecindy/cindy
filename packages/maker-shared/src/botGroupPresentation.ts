@@ -7,6 +7,7 @@ import { RichAnswerStream, splitRichAnswer, richMarkdown, richString, richLabel,
 import {
   isBotGroupPlanOpen,
   isBotGroupCapabilityNoticeCode,
+  readBotGroupRuntimeFailureReason,
   type BotGroupDetail,
   type BotGroupErrorCode,
   type BotGroupExecutionFailureView,
@@ -125,6 +126,41 @@ export function mergeBotGroupMessages(
   return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
 }
 
+/** Insert live executions by their original timestamp without reordering persisted messages.
+ * Without a timestamp, use the exact source row when available; older hosts without either precede history.
+ * Never use update/observation time: incremental updates must keep an execution in place.
+ */
+export function interleaveBotGroupWork<M extends { createdAt: number; id?: string; serverMessageId?: string; process?: { executionId: string } }, W extends { startedAt?: number; timelineAt?: number; sourceMessageId?: string; executionId?: string }>(
+  messages: readonly M[], work: readonly W[],
+): Array<{ kind: 'message'; value: M; index: number } | { kind: 'work'; value: W }> {
+  const source = (item: W) => item.sourceMessageId ? messages.find(message =>
+    message.id === item.sourceMessageId || message.serverMessageId === item.sourceMessageId) : undefined;
+  const timestamp = (item: W) => Number.isFinite(item.timelineAt) ? item.timelineAt!
+    : source(item)?.createdAt ?? (Number.isFinite(item.startedAt) ? item.startedAt! : 0);
+  const completed = new Set(messages.flatMap(message => message.process ? [message.process.executionId] : []));
+  const anchored = new Map<M, W[]>();
+  const pending = work.filter(item => !item.executionId || !completed.has(item.executionId))
+    .sort((a, b) => timestamp(a) - timestamp(b)).filter(item => {
+      const request = !Number.isFinite(item.timelineAt) ? source(item) : undefined;
+      if (!request) return true;
+      const list = anchored.get(request) ?? [];
+      list.push(item); anchored.set(request, list);
+      return false;
+    });
+  const result: Array<{ kind: 'message'; value: M; index: number } | { kind: 'work'; value: W }> = [];
+  let index = 0;
+  for (const [messageIndex, message] of messages.entries()) {
+    // Projected failures stay beside their source; their update time is not a history anchor.
+    while (!message.id?.startsWith('execution-failure:') && index < pending.length && timestamp(pending[index]!) < message.createdAt) {
+      result.push({ kind: 'work', value: pending[index++]! });
+    }
+    result.push({ kind: 'message', value: message, index: messageIndex });
+    for (const item of anchored.get(message) ?? []) result.push({ kind: 'work', value: item });
+  }
+  for (; index < pending.length; index++) result.push({ kind: 'work', value: pending[index]! });
+  return result;
+}
+
 /** Bound each HTTP reconciliation request to 100 displayed sources, without truncating loaded history. */
 export function botGroupExecutionFailureBatches(sourceIds: readonly string[]): string[][] {
   const unique = [...new Set(sourceIds)];
@@ -149,6 +185,7 @@ export function projectBotGroupExecutionFailures(
     kind: 'notice', authorKind: 'system', authorBotId: failure.botId, authorName: failure.botName,
     content: '', noticeCode: failure.code === 'RUNTIME_TIMEOUT' ? 'member-timeout' : 'member-failed',
     runtimeFailureCode: failure.code, mentions: { all: false, botIds: [] }, planId: failure.planId,
+    ...(readBotGroupRuntimeFailureReason(failure.code, failure.reason) ? { runtimeFailureReason: failure.reason } : {}),
     threadRootId: source.threadRootId ?? null, files: [], attachments: [], createdAt: failure.updatedAt ?? source.createdAt,
   }))]);
 }
@@ -245,11 +282,15 @@ export function currentBotGroupPlanStep(plan: BotGroupPlanView): BotGroupPlanSte
 export function botGroupPlanStepState(plan: BotGroupPlanView, step: BotGroupPlanStepView) {
   if (plan.kind === 'talk' && step.status === 'running' && plan.status === 'stopped') return 'stopped';
   if (plan.kind === 'talk' && step.status === 'running' && step.executionStatus === 'queued') return 'queued';
+  // A discussion turn that finished without publishing a message answered `NO_REPLY`, so the group
+  // shows nothing for it: it was skipped, not spoken. Only an explicit `null` counts — a host that
+  // does not report the field at all (legacy projection) keeps the plain done state.
+  if (plan.kind === 'talk' && step.status === 'done' && step.resultMessageId === null) return 'skipped';
   return step.status;
 }
 
 export function canSkipBotGroupPlanStep(plan: BotGroupPlanView, step: BotGroupPlanStepView): boolean {
-  if (plan.kind !== 'talk' || plan.canManage !== true || plan.currentStep === null) return false;
+  if (plan.kind !== 'talk' || plan.canManage !== true || step.canStop !== true || plan.currentStep === null) return false;
   if (plan.supportsPendingSkip === true && ['running', 'waiting'].includes(plan.status)
     && step.position > plan.currentStep && step.status === 'pending') return true;
   return plan.status === 'running' && step.position === plan.currentStep

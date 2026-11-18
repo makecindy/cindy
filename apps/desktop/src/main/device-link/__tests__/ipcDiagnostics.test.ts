@@ -37,7 +37,7 @@ describe('device-link IPC diagnostics', () => {
   it('preserves local background admission hints through the diagnostic wrapper', async () => {
     const h = harness();
     await h.observed.invoke('peer', CHANNEL, [], { background: true });
-    expect(h.invoke).toHaveBeenCalledExactlyOnceWith('peer', CHANNEL, [], { background: true });
+    expect(h.invoke).toHaveBeenCalledExactlyOnceWith('peer', CHANNEL, [], { background: true, diagnosticSource: 'renderer' });
     h.diagnostics.flush();
   });
   it('aggregates a failure storm and successes without changing transport calls or errors', async () => {

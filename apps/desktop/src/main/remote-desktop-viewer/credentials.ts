@@ -1,7 +1,7 @@
 import type { RemoteCredentialRequest } from '@cindy/device-link';
 import type { RemoteViewerCredentialState } from '../../shared/remoteDesktopViewer';
 import { RemoteCredentialHost, remoteCredentialHost } from '../remote-desktop/credentialHost';
-import { getResolvedMainLocale } from '../i18n';
+import { getResolvedMainLocale } from '../i18n.desktop';
 import { nativeTheme } from 'electron';
 
 const unavailable: RemoteViewerCredentialState = {

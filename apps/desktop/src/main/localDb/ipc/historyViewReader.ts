@@ -9,6 +9,10 @@ import {
 } from '@cindy/maker-shared/message-window';
 
 export const MAX_HISTORY_SCAN_ROWS = 2000;
+/** Outlined pages hide subagent rows behind cards, so one page may read several
+ *  batches to reach its visible items. Twelve bound it; deeper scans return a
+ *  partial page and nextCursor reads the rest. */
+const MAX_HISTORY_OUTLINE_SCAN_ROWS = 12000;
 const MAX_HISTORY_SCAN_BYTES = 8 * 1024 * 1024;
 const WORK_LINE_SOURCE_BATCH = 24;
 /** Bounds the bodies read for one running preview; a longer duplicate run shows fewer lines. */
@@ -27,6 +31,8 @@ export interface HistoryPageShape {
   fingerprints: string[];
   /** Running top-level leaf work items, key → revision exactly as delivered. */
   running: Map<string, string>;
+  /** Outline suffix appended to every work summary revision of this page, if any. */
+  revisionSuffix?: string;
 }
 
 export interface HistoryPageOptions {
@@ -54,6 +60,8 @@ export interface HistoryViewReaderDependencies<T extends HistoryMessageSource> {
   anchor(sessionId: string, id: string, outline?: boolean): Promise<T>;
   running(sessionId: string): boolean;
   live?(sessionId: string): T[];
+  /** Caller context that changes what `list` does (e.g. import side effects). Read per call. */
+  shareScope?(): string;
 }
 
 function compareRows(a: HistoryMessageSource, b: HistoryMessageSource): number {
@@ -143,19 +151,22 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
   const detailRanges = new Map<string, { rows: T[]; bytes: number }>();
   let detailRevision: string | undefined;
   let detailCacheBytes = 0;
-  return {
-    async page(sessionId: string, before?: string, lazyDetails = false, options: HistoryPageOptions = {}): Promise<HistoryViewPage<T>> {
+  const reader = {
+    async page(
+      sessionId: string, before?: string, lazyDetails = false, options: HistoryPageOptions = {}, knownRevision?: string,
+    ): Promise<HistoryViewPage<T>> {
       const outlined = lazyDetails && !!deps.outline && !!deps.hydrate;
       const batchSize = outlined ? 1000 : 100;
-      const rowBudget = outlined ? 100000 : MAX_HISTORY_SCAN_ROWS;
+      const rowBudget = outlined ? MAX_HISTORY_OUTLINE_SCAN_ROWS : MAX_HISTORY_SCAN_ROWS;
       const read = outlined ? deps.outline! : deps.list;
-      const outlineRevision = outlined ? `${readerEpoch}:${await deps.revision?.() ?? ++readRevision}` : undefined;
+      const outlineRevision = outlined ? `${readerEpoch}:${knownRevision ?? await deps.revision?.() ?? ++readRevision}` : undefined;
       const beforeAnchor = before ? await deps.anchor(sessionId, before, outlined) : undefined;
       let cursor = beforeAnchor?.id.startsWith('history-live:') ? undefined : beforeAnchor?.id;
       const chunks: T[][] = [];
       let raw: T[] = [];
       let exhausted = false;
       let items: HistoryViewItem<T>[] = [];
+      let live: T[] = [];
       let scannedRows = 0;
       let scannedBytes = 0;
       const project = (live: T[]) => {
@@ -186,41 +197,86 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         for (const row of !before ? (deps.live?.(sessionId) ?? []) : []) {
           if (ids.has(row.clientId)) continue;
           bytes += Buffer.byteLength(JSON.stringify(row), 'utf8');
-          if (scannedRows + live.length + 1 > rowBudget || live.length >= MAX_HISTORY_SCAN_ROWS || bytes > MAX_HISTORY_SCAN_BYTES) unavailable();
+          if (live.length >= MAX_HISTORY_SCAN_ROWS || bytes > MAX_HISTORY_SCAN_BYTES) unavailable();
           live.push(row);
         }
         return live;
       };
       // Scan locally until the *visible* page fills. The oldest open group is
       // withheld until a boundary is known, so a long run is not split per DB batch.
+      let cut = false;
+      let boundaryRows = 0;
+      let settled = false;
+      let stale = true;
+      const projectAll = () => {
+        raw = chunks.slice().reverse().flat();
+        live = liveRows(raw);
+        items = project(live);
+        stale = false;
+      };
       for (let scan = 0; ; scan++) {
-        // Never split a work group to satisfy this budget. Oversized history
-        // uses the existing raw window path; one DB batch may transiently exceed it.
-        if (scannedRows >= rowBudget) unavailable();
+        // Stop at a pageable cut and let nextCursor read the rest: a page of
+        // visible items must never cost an unbounded row scan. A group that is
+        // still open (no boundary) needs the raw window path instead.
+        if (scannedRows >= rowBudget) { cut = true; break; }
         const rows = await read(sessionId, { limit: batchSize, ...(cursor ? { before: cursor } : {}) }, scan > 0);
         for (const row of rows) {
           scannedRows++;
           scannedBytes += Buffer.byteLength(JSON.stringify(row), 'utf8');
-          if (scannedRows > rowBudget || scannedBytes > MAX_HISTORY_SCAN_BYTES) unavailable();
+          // A batch is appended whole or not at all, so read the cap before the
+          // append below; one page stops here and the cursor continues.
+          if (scannedRows > rowBudget || scannedBytes > MAX_HISTORY_SCAN_BYTES) { cut = true; break; }
         }
-        if (rows.length === 0) { exhausted = true; break; }
+        if (cut) break;
+        if (rows.length === 0) {
+          // Reaching the start of history moves project()'s cut from the first
+          // boundary to row 0, so the snapshot must be rebuilt even though no row
+          // was appended; otherwise the oldest work group never comes back.
+          exhausted = true;
+          stale = true;
+          break;
+        }
         const next = rows[rows.length - 1].id;
         if (next === cursor) throwIpcError('INTERNAL', 'History cursor did not advance');
         cursor = next;
         chunks.push(rows.slice().reverse());
+        stale = true;
         exhausted = rows.length < batchSize;
-        if (!exhausted && !rows.some(isHistoryPageBoundary)) continue;
-        raw = chunks.slice().reverse().flat();
-        const live = liveRows(raw);
-        items = project(live);
+        const batchBoundaries = rows.reduce((total, row) => total + (isHistoryPageBoundary(row) ? 1 : 0), 0);
+        boundaryRows += batchBoundaries;
+        // Projecting the whole accumulated window after every batch is quadratic,
+        // and a page that needs several batches paid it on the click path.
+        // Outline batches hold 1000 rows, so after the first projection they use
+        // the boundary count (each boundary row starts an item) as a lower bound
+        // and project only at the stop.
+        if (!settled) {
+          if (!exhausted && boundaryRows === 0) continue;
+          projectAll();
+          settled = true;
+        } else if (outlined && !exhausted) {
+          if (boundaryRows < HISTORY_VIEW_PAGE_ITEMS + 1) continue;
+          projectAll();
+          // A cut that lands inside a tool context projects nothing; the page
+          // anchor owns that case, so keep scanning instead of serving a blank.
+          if (items.length === 0) {
+            boundaryRows = 0;
+            continue;
+          }
+          break;
+        } else if (!outlined && !exhausted && batchBoundaries === 0) {
+          continue;
+        } else {
+          projectAll();
+        }
         // Large completed groups can fill the byte-limited page well before
         // twenty items. Continuing to scan then only spends the scan budget.
         if (exhausted || items.length >= HISTORY_VIEW_PAGE_ITEMS
           || Buffer.byteLength(JSON.stringify(items), 'utf8') + 1024 >= HISTORY_VIEW_PAGE_BYTES) break;
       }
-      raw = chunks.slice().reverse().flat();
-      const live = liveRows(raw);
-      items = project(live);
+      // Rows read after the last projection need one more pass; otherwise the
+      // settled snapshot is reused as-is.
+      if (stale) projectAll();
+      if (cut && items.length === 0) unavailable();
       const safeStarts = historyPageSafeStarts([...raw, ...live]);
       if (outlined) {
         // Select by visible objects before reading any hidden payloads. Every
@@ -277,12 +333,17 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       // The cursor can also supply grouping context without appearing in raw.
       const anchors = raw.length ? [raw[0].id, raw[raw.length - 1].id] : [];
       if (beforeAnchor) anchors.push(beforeAnchor.id);
-      await Promise.all(anchors.map((id) => deps.anchor(sessionId, id, outlined)));
+      const uniqueAnchors = [...new Set(anchors)];
+      // Validation needs membership, not the endpoint bodies. Reuse the same
+      // bounded clear/rewind-aware batch validator as detail reads.
+      if (uniqueAnchors.length && deps.validate) await deps.validate(sessionId, uniqueAnchors);
+      else await Promise.all(uniqueAnchors.map((id) => deps.anchor(sessionId, id, outlined)));
       if (fingerprints) {
         options.onShape!({
           keys: selected.map((item) => item.key),
           fingerprints: selected.map((item) => fingerprints.get(item)!),
           running: new Map(selected.filter(isRunningLeafWork).map((item) => [item.key, item.summary.revision])),
+          ...(outlined ? { revisionSuffix: `:${outlineRevision}` } : {}),
         });
       }
       return { version: 1, items: selected, hasMore,
@@ -435,6 +496,37 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
           if (Date.parse(row.createdAt) > Date.parse(last.createdAt)) throwIpcError('NOT_FOUND', 'History range changed');
         }
       }
+    },
+  };
+  // A task switch can request the same closed page from several surfaces at
+  // once. Share only work that is still in flight, keyed by the DB revision
+  // (client epoch + write counters), so no settled page acts as a cache. A
+  // running task keeps independent reads: its live rows change without writes.
+  const pendingPages = new Map<string, Promise<{ page: HistoryViewPage<T>; shape?: HistoryPageShape }>>();
+  return {
+    ...reader,
+    async page(sessionId: string, before?: string, lazyDetails = false, options: HistoryPageOptions = {}): Promise<HistoryViewPage<T>> {
+      const outlined = lazyDetails && !!deps.outline && !!deps.hydrate;
+      if (!outlined || !deps.revision || deps.running(sessionId)) return reader.page(sessionId, before, lazyDetails, options);
+      const scope = deps.shareScope?.() ?? '';
+      const revision = await deps.revision();
+      if (deps.running(sessionId)) return reader.page(sessionId, before, lazyDetails, options, revision);
+      const key = JSON.stringify([scope, sessionId, before ?? null, !!options.workLines, !!options.onShape, revision]);
+      let shared = pendingPages.get(key);
+      if (!shared) {
+        let shape: HistoryPageShape | undefined;
+        const promise = reader.page(sessionId, before, lazyDetails, {
+          workLines: options.workLines,
+          ...(options.onShape ? { onShape: (value: HistoryPageShape) => { shape = value; } } : {}),
+        }, revision).then((page) => ({ page, shape })).finally(() => {
+          if (pendingPages.get(key) === promise) pendingPages.delete(key);
+        });
+        pendingPages.set(key, promise);
+        shared = promise;
+      }
+      const result = await shared;
+      if (result.shape) options.onShape?.(result.shape);
+      return result.page;
     },
   };
 }

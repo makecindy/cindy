@@ -41,13 +41,24 @@ const EMPTY_STATE: RemoteBackgroundState = { active: false, tasks: [] };
  * listRunningClaudeBashTasks 同口径:只认 local_bash,PI 任务另有控制面。
  */
 export function pickRemoteBashTasks(
-  tasks: ReadonlyArray<{ taskId: string; taskType?: string; title?: string; provider?: string }>,
+  tasks: ReadonlyArray<{
+    taskId: string;
+    taskType?: string;
+    title?: string;
+    provider?: string;
+    backgroundCommandKind?: string;
+  }>,
 ): RunningBashTask[] {
   const out = new Map<string, RunningBashTask>();
   for (const task of tasks) {
     if (task.taskType !== 'local_bash' || task.provider === 'pi') continue;
     if (out.has(task.taskId)) continue;
-    out.set(task.taskId, { taskId: task.taskId, ...(task.title ? { title: task.title } : {}) });
+    out.set(task.taskId, {
+      taskId: task.taskId,
+      ...(task.title ? { title: task.title } : {}),
+      // 旧版被控端不带种类,按工作显示。
+      ...(task.backgroundCommandKind === 'service' ? { service: true } : {}),
+    });
   }
   return [...out.values()];
 }
@@ -56,7 +67,12 @@ function sameState(a: RemoteBackgroundState, b: RemoteBackgroundState): boolean 
   return (
     a.active === b.active &&
     a.tasks.length === b.tasks.length &&
-    a.tasks.every((task, i) => task.taskId === b.tasks[i].taskId && task.title === b.tasks[i].title)
+    a.tasks.every(
+      (task, i) =>
+        task.taskId === b.tasks[i].taskId &&
+        task.title === b.tasks[i].title &&
+        task.service === b.tasks[i].service,
+    )
   );
 }
 

@@ -369,8 +369,10 @@ describe('shared session composer action model', () => {
       },
     });
     expect(layout.input).toMatchObject({
-      disabled: true,
-      disabledReason: '消息正在发送到电脑端。',
+      // Sending used to disable UITextView, dismissing the keyboard on every send.
+      // This existing unit case covers the input and duplicate-send lock together.
+      disabled: false,
+      disabledReason: null,
       placeholder: '正在转写语音',
     });
     expect(layout.voice).toMatchObject({

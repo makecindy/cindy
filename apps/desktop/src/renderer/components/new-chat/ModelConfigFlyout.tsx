@@ -22,6 +22,7 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
 
 import { ModelHarnessPicker } from './ModelHarnessPicker';
 import { EffortSlider } from '@/components/ui/effort-slider';
+import { Switch } from '@/components/ui/switch';
 import type { UnifiedEngine, UnifiedRowConfig } from './unifiedModelSelection';
 
 /** 底栏三态(等高,切态不改变浮层高度 —— 规格 §1.3「高度恒定」)。 */
@@ -34,17 +35,22 @@ export interface ModelConfigFlyoutProps {
   state: ModelConfigFlyoutState;
   /** 来源供应商展示名。 */
   sourceLabel: string;
+  /** Catalog source; only a local catalog may read this computer's preferences/native metadata. */
+  deviceId?: string;
   price: ModelPricePresentation | null;
   /** 档位 → 显示文案(按当前选中引擎取,i18n)。 */
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
   /** 刚刚点过 ☆ 的 0.7s 反馈态(规格 §1.5)。 */
   justFavorited?: boolean;
   disabled?: boolean;
+  /** Portaled menus must stay on the configuration flyout's overlay layer. */
+  overlayContentClassName?: string;
   /** Same-engine views show the current harness without offering a cross-engine switch. */
   engineLocked?: boolean;
   onEngineChange: (engine: UnifiedEngine) => void;
   onEffortChange: (effort: Effort) => void;
   onFastChange: (enabled: boolean | 'ultrafast') => void;
+  thinking?: { enabled: boolean; disabled?: boolean; onChange: (enabled: boolean) => void };
   onResetToRecommended: () => void;
   onAddFavorite: () => void;
   onRemoveFavorite: () => void;
@@ -69,22 +75,26 @@ export function ModelConfigFlyout({
   config,
   state,
   sourceLabel,
+  deviceId,
   price,
   effortLabelOf,
   justFavorited = false,
   disabled = false,
+  overlayContentClassName,
   engineLocked = false,
   onEngineChange,
   onEffortChange,
   onFastChange,
+  thinking,
   onResetToRecommended,
   onAddFavorite,
   onRemoveFavorite,
 }: ModelConfigFlyoutProps) {
   const { t } = useTranslation();
   const displayName = localizedModelName(entry.displayName, t);
-  const showSlider = config.efforts.length > 1;
-  const contextLimit = useModelContextLimit({
+  const showThinking = config.agent === 'pi' && config.capability?.thinkingToggle === true;
+  const showSlider = !showThinking && config.efforts.length > 1;
+  const contextLimit = useModelContextLimit(deviceId ? null : {
     providerId: entry.providerId,
     agent: config.engine === 'cc' ? 'claude-code' : config.engine,
     modelId: config.wireModelId ?? entry.modelId,
@@ -161,7 +171,7 @@ export function ModelConfigFlyout({
           <>
             {' · '}
             {t('newChat.modelSelector.meta.context', {
-              value: codexDefaultContext
+              value: codexDefaultContext && !deviceId
                 ? codexContext ? formatContextWindow(codexContext.contextWindow) : t('settings.providers.models.advanced.codexContextUnknown')
                 : formatContextWindow(contextWindow),
             })}
@@ -175,6 +185,17 @@ export function ModelConfigFlyout({
         </p>
       )}
 
+      {showThinking && thinking && (
+        <div className="flex items-center justify-between gap-2 pt-3.5 text-13 text-[var(--text-primary)]">
+          <span>{t('newChat.modelSelector.thinking')}</span>
+          <Switch
+            aria-label={t('newChat.modelSelector.thinking')}
+            checked={thinking.enabled}
+            disabled={disabled || thinking.disabled}
+            onCheckedChange={thinking.onChange}
+          />
+        </div>
+      )}
       {(showSlider || config.fastCapable) && (
         // 设计稿 .fly-ctrl:first-of-type:第一个控件行上距 14px。
         <div className="flex items-center gap-2 pt-3.5">
@@ -204,7 +225,7 @@ export function ModelConfigFlyout({
                   <SpeedIcon mode={config.fast} />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent>
+              <DropdownMenuContent className={overlayContentClassName}>
                 <DropdownMenuRadioGroup
                   value={config.fast === 'ultrafast' ? 'ultrafast' : config.fast ? 'fast' : 'standard'}
                   onValueChange={value => onFastChange(value === 'ultrafast' ? 'ultrafast' : value === 'fast')}

@@ -63,7 +63,6 @@ vi.mock('../features/cc-agent/sidebar/sections/UnclassifiedSection', () => ({
     </>
   ),
 }));
-vi.mock('@/features/bots/BotAvatar', () => ({ BotAvatar: () => <span>Bot avatar</span> }));
 vi.mock('../features/cc-agent/sidebar/SessionItem', () => ({ SessionItem: () => null }));
 vi.mock('../features/cc-agent/sidebar/SessionCard', () => ({ SessionCard: () => null }));
 vi.mock('../features/cc-agent/sidebar/AutomationSessionGroupItem', () => ({
@@ -77,13 +76,15 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     dialogues: [],
     allKnownProjects: [],
     allProjectKeysForOrder: [],
-    bots: [],
     filter: {
       creators: 'all', creatorOptions: [], toggleCreator: vi.fn(), setCreatorsAll: vi.fn(), setCreatorsNone: vi.fn(),
       groupBy: 'project',
       groupDialogue: true,
+      groupAutomation: false,
       groupDevice,
       sortBy: 'recency',
+      pinnedSortBy: 'manual',
+      setPinnedSortBy: vi.fn(),
       projectOrder: 'activity',
       manualProjectOrder: [],
       projects: 'all',
@@ -103,6 +104,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
       setLastActivity: vi.fn(),
       setGroupBy: vi.fn(),
       setGroupDialogue: vi.fn(),
+      setGroupAutomation: vi.fn(),
       setGroupDevice: vi.fn(),
       setSortBy: vi.fn(),
       setProjectOrder: vi.fn(),
@@ -175,7 +177,7 @@ describe('Online device headers without tasks', () => {
   });
 
   it('renders and folds an empty online device, then removes it when offline', () => {
-    const p = { ...props(true), bots: [], allProjectKeysForOrder: [] };
+    const p = { ...props(true), allProjectKeysForOrder: [] };
     const view = render(<ProjectsSection {...p} />);
     const header = screen.getByText('Remote device').closest('button')!;
     expect(header.getAttribute('aria-expanded')).toBe('true');
@@ -195,7 +197,7 @@ describe('Online device headers without tasks', () => {
   });
 
   it('does not show device headers when device grouping is disabled', () => {
-    render(<ProjectsSection {...props(false)} bots={[]} allProjectKeysForOrder={[]} />);
+    render(<ProjectsSection {...props(false)} allProjectKeysForOrder={[]} />);
     expect(screen.queryByText('Remote device')).toBeNull();
   });
 });

@@ -1,3 +1,6 @@
+import { ResolvedProjectIcon } from './ResolvedProjectIcon';
+import { sessionProjectDirectory, sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
+import { SessionSnoozeAction } from './SessionSnoozeAction';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
@@ -7,9 +10,10 @@ import { Button } from '@/components/ui/button';
  * SessionCard — sidebar-card-mode 下的单条会话卡片（SessionItem 的瀑布流形态）
  * ---------------------------------------------------------------------------
  * 设计来源：用户 Claude design 稿（XDT-sidebar-redesign，xdtsb-card 系）。
- * 视觉：白底 Card + 1px Board 圆角 12；标题最多 2 行且保持纯文字，摘要 / 最近消息
- *   随内容最多 1~3 行；SessionStatusIcon（agent 标识 + running 呼吸 + attention
- *   状态点 + 草稿铅笔）、自动化 / 远程 / worktree 标识与时间统一放在底部 metadata 槽。
+ * 视觉：白底 Card + 1px Board 圆角 12；卡片等高：标题 1 行且保持纯文字（悬停跑马灯
+ *   展示全名，同列表行），摘要 / 最近消息固定占 2 行位（不足留空）；SessionStatusIcon
+ *   （agent 标识 + running 呼吸 + attention 状态点 + 草稿铅笔）、自动化 / 远程 / worktree
+ *   标识与时间统一放在底部 metadata 槽。
  *
  * 交互 100% 对齐 SessionItem（props 签名完全一致，sections 内按 cardMode 二选一渲染）：
  *   - 单击导航 / 双击重命名（标题原位变 input）
@@ -33,7 +37,7 @@ import type {
   ReactNode,
   RefObject,
 } from 'react';
-import { Archive, ChevronRight, Crown, EllipsisVertical, Undo } from 'lucide-react';
+import { Archive, Check, ChevronRight, Crown, EllipsisVertical, Undo } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { withSidebarNavigation, type SidebarNavigationProps } from './sidebarNavigation';
 
@@ -63,7 +67,7 @@ import { useTaskInfoWorktree, type SessionWorktreeInfo } from './sessionWorktree
 import type { SessionPrRef } from '@/lib/gitContext.types';
 import { useTaskInfoFields } from '../hooks/useTaskInfoFields';
 import { highlightSegments } from '../lib/highlightSegments';
-import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
+import { useScrollActiveRowIntoView } from '../lib/scrollIntoNearestView';
 import { isAutomationGeneratedSession } from '../lib/scheduledSessionGrouping';
 import {
   canHighlightSessionDisplayTitle,
@@ -93,6 +97,7 @@ import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMar
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 import { useCindyMakeActivity } from './useCindyMakeActivity';
+import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from './listRowStyle';
 import { CINDY_MAKE_SESSION_SOURCE } from '../../../../shared/cindyMakeSession';
 import {
   finishSessionDrag,
@@ -143,6 +148,7 @@ export type SessionCardProps = SessionItemProps & {
 
 export const SessionCard = withSidebarNavigation<SessionCardProps>(function SessionCard({
   navigate,
+  inboxMode = false,
   session,
   isActive,
   isRunning,
@@ -227,8 +233,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const remoteWritesBlocked = isRemoteSessionWriteBlocked(session);
   const isAutomationGenerated = isAutomationGeneratedSession(session);
   const boundSchedules = useSessionBoundSchedules(session.id, session.deviceLinkDeviceId);
-  const showScheduleBindingBadge = boundSchedules.length > 0;
-  const showAutomationTimer = !showScheduleBindingBadge && isAutomationGenerated;
+  // The inbox sorts by what needs the user, so it drops the automation mark and the project
+  // name (the row's project icon already says where it belongs; 2026-11-18 user decision).
+  const showScheduleBindingBadge = !inboxMode && boundSchedules.length > 0;
+  const showAutomationTimer = !inboxMode && !showScheduleBindingBadge && isAutomationGenerated;
   const displayTitle = getSessionDisplayTitle(
     session,
     t(
@@ -281,14 +289,6 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     : null;
   const listPreview = awaitingText ?? preparationText ?? runningDetail ?? bodyPreview;
   const cardPreview = awaitingText ?? preparationText ?? bodyPreview;
-  const usesPinnedCardSummary = variant === 'card' && isPinned && Boolean(session.summary);
-  const cardPreviewLineClamp = usesPinnedCardSummary
-    ? 3
-    : isRunning
-      ? 2
-      : isAutomationGenerated
-        ? 1
-        : 2;
   // 任务信息复选(C / C' 期):卡片右下角信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
   const cardPrRefs = usePrRefsForSession(session.id);
@@ -444,9 +444,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     [displayTitle, isEditing, navigationOnly, remoteWritesBlocked, t],
   );
 
-  useEffect(() => {
-    if (isActive && !navigationOnly) scrollIntoNearestView(cardRef.current);
-  }, [isActive, navigationOnly]);
+  useScrollActiveRowIntoView(cardRef, isActive, { navigationOnly, inboxMode });
 
   // archive 两步确认生命周期（redesign 稿：3s 超时 + 点外面撤回）
   useEffect(() => {
@@ -591,8 +589,13 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   ) : null;
 
   const statusIconNode = (
-    <span className={CARD_TITLE_STATUS_SLOT_CLASS} aria-hidden>
+    <span className={cn(CARD_TITLE_STATUS_SLOT_CLASS, inboxMode && "!w-[18px]")} aria-hidden>
       <SessionStatusIcon
+          identityIcon={inboxMode && sessionTaskProjectIconDirectory(session) ? (
+            <ResolvedProjectIcon directory={sessionTaskProjectIconDirectory(session)!}
+              remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
+              name={sourceLabel} size={18} />
+          ) : undefined}
         session={session}
         isRunning={leftIconRunning}
         isAttached={isAttached}
@@ -719,7 +722,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               // 把下方所有行整体推移,选中/取消时列表跳动(2026-08-12 用户反馈)。
               // inset shadow 画在盒内、不参与布局,行高与未选中时逐像素一致。
               isActive
-                ? 'bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
+                ? cn(SIDEBAR_LIST_ROW_ACTIVE_CLASS, '[--task-tag-ring-bg:hsl(var(--sidebar-item-active))]')
                 : cn(
                     // 标签色球描边不随 hover 换色(同 SessionItem):半透明 hover 底
                     // 用作描边会透出色球本色,描边消失。
@@ -730,7 +733,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             )
           : cn(
               // 卡片:白底 + 描边 + 圆角。多列瀑布由 CardMasonry/DraggableCardColumns
-              // 负责分配列;卡片高度随标题/摘要自然变化。
+              // 负责分配列;卡片等高:标题 1 行 + 正文固定 2 行位 + meta 行。
               'rounded-xl bg-[var(--surface-elevated)] border',
               isActive
                 ? 'border-[var(--sidebar-item-active-border)] !bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground'
@@ -746,7 +749,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       {variant === 'list' ? (
         // ── list 变体:扁平 Telegram 风行 ── 第 1 行标题 + 右上角时间(hover 让位
         // 给 More/Archive 操作钮,逻辑同对话列表);下方最多 2 行预览。无卡片描边底色。
-        <div className="relative px-2.5 py-2">
+        <div className={cn('relative px-2.5 py-2', SIDEBAR_LIST_ROW_HEIGHT_CLASS)}>
           {/* 浅分割线:左右内缩(inset-x-2.5,短于圆角高亮方块、不触其圆角)。每行底部
               一条 → 覆盖"行间分割 + 列表底";首行额外补一条顶线 → 列表顶。本行高亮
               (active/选中/hover)时整条隐藏——不在圆角方块上/下方露出横线。 */}
@@ -832,17 +835,23 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                     />
                   )}
                   {/* Agent 在另一台电脑运行(任务在本机)的标识在 Agent 图标上(信号波纹)。 */}
-                  {sourceLabel ? (
+                  {sourceLabel && !inboxMode ? (
                     <span
                       title={sourceLabel}
+                      data-project-source
                       className={cn(
-                        'min-w-0 truncate text-xs font-normal',
+                        'inline-flex min-w-0 items-center gap-1 text-xs font-normal',
                         isActive
                           ? 'text-sidebar-item-active-foreground/70'
                           : 'text-[var(--cmd-palette-item-meta)]',
                       )}
                     >
-                      {sourceLabel}
+                      {session.workspaceKind !== 'dialogue' && sessionProjectDirectory(session) && (
+                        <ResolvedProjectIcon directory={sessionProjectDirectory(session)!}
+                          remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
+                          name={sourceLabel} size={14} />
+                      )}
+                      <span className="truncate">{sourceLabel}</span>
                     </span>
                   ) : null}
                 </div>
@@ -853,6 +862,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 Agent 身份图标留在标题左侧，状态指示器改由下方右下角承担。 */}
             {!isEditing && (
               <TimeActionsSlot
+                session={session}
+                inboxMode={inboxMode}
                 navigationOnly={navigationOnly}
                 pieces={cardInfoPieces}
                 prRef={cardInfoPrRef}
@@ -870,6 +881,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   setMenuPos({ x: rect.left, y: rect.bottom + 2 });
                 }}
                 onArchiveNow={() => onAction(session.id, 'archive-now')}
+                onComplete={() => {
+                  prefetchRemovalPreflight();
+                  onAction(session.id, 'complete');
+                }}
                 canUnarchive={!remoteWritesBlocked}
                 onUnarchive={handleUnarchiveSelect}
                 yieldToOrdinalBadge={ordinalBadgeLabel != null}
@@ -973,7 +988,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           )}
 
           {/* 卡片标题始终保留原来的流式盒子；编辑时只把原标题隐藏，并以绝对定位的
-            24px 输入框覆盖。这样一行 / 两行标题都维持原高度，也不会凭空多出状态图标。 */}
+            24px 输入框覆盖。这样标题行维持原高度，也不会凭空多出状态图标。 */}
           <div
             data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
             data-no-drag={splitDragHandleActive ? 'true' : undefined}
@@ -981,40 +996,52 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             className={cn(
               'relative flex items-start',
               // 右上操作钮浮在内容上方:浮出时标题行右侧让出操作钮宽度(两枚固定
-              // 24px 图标钮),标题让位、紧跟标题的标签色球不被盖住。让位条件与操作钮
+              // 24px 图标钮),标题让位:跑马灯在让出的宽度内带完全名,紧跟标题的
+              // 标签色球也不被盖住。让位条件与操作钮
               // 显隐同源(卡片 hover / 操作钮自身 focus-within / 菜单);卡片本身获得
               // 焦点时操作钮不显示,也不让位。确认胶囊宽度随语言变化,另由下方同款
               // 隐形占位按实际宽度让位。
               !navigationOnly &&
                 !isEditing &&
                 !archivePending &&
-                hasTitleMarks &&
                 (menuPos !== null
                   ? 'pr-14'
                   : 'group-hover/card:pr-14 peer-focus-within/card-actions:pr-14'),
             )}
           >
+            {/* 标题单行:与列表行同一个跑马灯,平时省略号,悬停卡片且溢出时横向带过全名。 */}
             <div
-              className={cn(
-                'min-w-0 text-12 font-semibold leading-[1.22] tracking-[-0.005em]',
-                '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
-                isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
-                isEditing && 'invisible',
-              )}
+              className={cn('min-w-0', isEditing && 'invisible')}
               style={{ textIndent: 0, paddingLeft: 0 }}
             >
-              {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
-                ? highlightSegments(session.title, matchIndices, {
-                    highlightClassName: cn(
-                      'bg-transparent font-semibold',
-                      isActive
-                        ? 'text-[var(--sidebar-item-active-foreground)]'
-                        : 'text-[var(--msg-assistant-text)]',
-                    ),
-                  })
-                : displayTitle}
+              {/* 编辑时换成同字号的纯文本占位:跑马灯轨道自带 visibility:visible,
+                会穿透外层 invisible,从透明输入框下透出旧标题。 */}
+              {isEditing ? (
+                <span className="block truncate text-12 font-semibold leading-[1.22] tracking-[-0.005em]">
+                  {displayTitle}
+                </span>
+              ) : (
+                <SidebarTitleMarquee
+                  title={displayTitle}
+                  className={cn(
+                    'text-12 font-semibold leading-[1.22] tracking-[-0.005em]',
+                    isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
+                  )}
+                >
+                  {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
+                    ? highlightSegments(session.title, matchIndices, {
+                        highlightClassName: cn(
+                          'bg-transparent font-semibold',
+                          isActive
+                            ? 'text-[var(--sidebar-item-active-foreground)]'
+                            : 'text-[var(--msg-assistant-text)]',
+                        ),
+                      })
+                    : displayTitle}
+                </SidebarTitleMarquee>
+              )}
             </div>
-            {/* 任务标签与「伙伴在跟进」常显、紧跟标题首行；标题两行截断时不被裁掉。 */}
+            {/* 任务标签与「伙伴在跟进」常显、紧跟标题；标题单行截断时不被裁掉。 */}
             {!isEditing && hasTitleMarks ? (
               <span className="flex h-[1.22em] shrink-0 items-center gap-1.5 text-12">
                 <TaskTagDots tags={session.tags} />
@@ -1023,7 +1050,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             ) : null}
             {/* 归档确认胶囊的隐形同款占位:与胶囊同文案同样式,按实际宽度让位。
                 外包零高度容器只取宽度,不撑高单行标题,确认态卡片高度与瀑布流不动。 */}
-            {!isEditing && canQuickArchive && archivePending && hasTitleMarks ? (
+            {!isEditing && canQuickArchive && archivePending ? (
               <span aria-hidden className="h-0 shrink-0 overflow-hidden">
                 <Button
                   variant="secondary"
@@ -1060,24 +1087,21 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           </div>
 
           {/* 预览:等待交互文案优先,否则显示稳定任务总结 / 最近消息。图标全部下沉到底部 meta 行,
-            此处只放正文文字。 */}
-          {cardPreview && (
-            <p
-              data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
-              data-no-drag={splitDragHandleActive ? 'true' : undefined}
-              draggable={splitDragHandleActive}
-              className={cn(
-                'mt-[4px] text-11 leading-[1.4]',
-                '[display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden',
-                isActive
-                  ? 'text-[color-mix(in_srgb,currentColor_80%,transparent)]'
-                  : 'text-[var(--text-secondary)]',
-              )}
-              style={{ WebkitLineClamp: cardPreviewLineClamp }}
-            >
-              {cardPreview}
-            </p>
-          )}
+            此处只放正文文字。固定占 2 行高度(2 × leading 1.4 = 2.8em),不足 2 行或无正文时留空。 */}
+          <p
+            data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
+            data-no-drag={splitDragHandleActive ? 'true' : undefined}
+            draggable={splitDragHandleActive}
+            className={cn(
+              'mt-[4px] h-[2.8em] text-11 leading-[1.4]',
+              '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
+              isActive
+                ? 'text-[color-mix(in_srgb,currentColor_80%,transparent)]'
+                : 'text-[var(--text-secondary)]',
+            )}
+          >
+            {cardPreview}
+          </p>
 
           {/* 底部 meta 行(评审定稿):标题 / 正文之后另起整整一行。
             左侧图标簇——状态/agent 图标(含运行呼吸 + 需关注红点 + 草稿)、定时任务标识、
@@ -1190,6 +1214,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
  *  交互逻辑与对话列表(SessionItem)一致。Agent 身份 / 草稿由左侧 SessionStatusIcon 承担；
  *  list 的右下状态指示器由 SidebarRightStatusIndicator 单独承担。 */
 function TimeActionsSlot({
+  session,
+  inboxMode = false,
   navigationOnly = false,
   pieces,
   prRef,
@@ -1204,10 +1230,13 @@ function TimeActionsSlot({
   menuOpen,
   onOpenMenu,
   onArchiveNow,
+  onComplete,
   onUnarchive,
   yieldToOrdinalBadge = false,
   ordinalBadgeLabel,
 }: {
+  session: Session;
+  inboxMode?: boolean;
   navigationOnly?: boolean;
   pieces: readonly SessionInfoPiece[];
   prRef?: SessionPrRef;
@@ -1222,12 +1251,17 @@ function TimeActionsSlot({
   menuOpen: boolean;
   onOpenMenu: (e: ReactMouseEvent<HTMLButtonElement>) => void;
   onArchiveNow: () => void;
+  /** Inbox: one-click Done (archives; the dirty-worktree confirmation still applies). */
+  onComplete: () => void;
   onUnarchive: () => void;
   /** mod+1..9 序号徽标出现时让位:徽标独占右缘,不与时间/badge 并排。 */
   yieldToOrdinalBadge?: boolean;
   ordinalBadgeLabel?: string | null;
 }) {
   const { t } = useTranslation();
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const actionsOpen = menuOpen || snoozeOpen;
+  const canSnooze = inboxMode && !isArchived && canUnarchive;
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
       <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
@@ -1238,7 +1272,7 @@ function TimeActionsSlot({
             'col-start-1 row-start-1 flex items-center gap-1 transition-opacity duration-[120ms]',
             !navigationOnly && !archivePending &&
               'group-hover/card:opacity-0 group-hover/card:w-0 group-hover/card:overflow-hidden group-focus-within/slot:opacity-0 group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden',
-            (menuOpen || yieldToOrdinalBadge) && 'opacity-0 w-0 overflow-hidden',
+            (actionsOpen || yieldToOrdinalBadge) && 'opacity-0 w-0 overflow-hidden',
             // 确认胶囊覆盖同一槽位时立即隐藏日期，避免 120ms 淡出期间文字叠在一起。
             archivePending && 'invisible opacity-0 w-0 overflow-hidden',
           )}
@@ -1299,10 +1333,10 @@ function TimeActionsSlot({
               aria-hidden
               className={cn(
                 'invisible col-start-1 row-start-1 h-[22px] items-center gap-0.5',
-                menuOpen ? 'flex' : 'hidden group-hover/card:flex group-focus-within/slot:flex',
+                actionsOpen ? 'flex' : 'hidden group-hover/card:flex group-focus-within/slot:flex',
               )}
             >
-              <span className="size-5 shrink-0" />
+              {(!inboxMode || canSnooze) && <span className="size-5 shrink-0" />}
               {(isArchived && canUnarchive) || canQuickArchive ? (
                 <span className="size-5 shrink-0" />
               ) : null}
@@ -1310,19 +1344,29 @@ function TimeActionsSlot({
             <div
               className={cn(
                 'absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-0.5',
-                menuOpen
+                actionsOpen
                   ? 'opacity-100'
                   : 'pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
               )}
             >
-              <CardAction
-                variant="list"
-                isActive={isActive}
-                label={t('ccAgent.sidebar.sessionMenu.moreActions')}
-                onClick={onOpenMenu}
-              >
-                <EllipsisVertical size={14} strokeWidth={2} />
-              </CardAction>
+              {inboxMode ? (
+                canSnooze && (
+                  <SessionSnoozeAction
+                    session={session}
+                    isActive={isActive}
+                    onOpenChange={setSnoozeOpen}
+                  />
+                )
+              ) : (
+                <CardAction
+                  variant="list"
+                  isActive={isActive}
+                  label={t('ccAgent.sidebar.sessionMenu.moreActions')}
+                  onClick={onOpenMenu}
+                >
+                  <EllipsisVertical size={14} strokeWidth={2} />
+                </CardAction>
+              )}
               {isArchived && canUnarchive ? (
                 <CardAction
                   variant="list"
@@ -1331,6 +1375,15 @@ function TimeActionsSlot({
                   onClick={() => onUnarchive()}
                 >
                   <Undo size={14} strokeWidth={2} />
+                </CardAction>
+              ) : canQuickArchive && inboxMode ? (
+                <CardAction
+                  variant="list"
+                  isActive={isActive}
+                  label={t('ccAgent.sidebar.inbox.complete')}
+                  onClick={() => onComplete()}
+                >
+                  <Check size={14} strokeWidth={2} />
                 </CardAction>
               ) : canQuickArchive ? (
                 <CardAction

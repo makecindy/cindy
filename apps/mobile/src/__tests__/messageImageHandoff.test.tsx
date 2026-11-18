@@ -13,7 +13,7 @@ import { spacing } from '@/theme/tokens';
 
 // Run the production components with real React effects; only native image decoding is controlled.
 const source = ts.createSourceFile('renderer.tsx', readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = new Set(['PendingAttachmentImage', 'MediaPreview']);
+const names = new Set(['PendingAttachmentImage', 'MediaPreview', 'rememberAttachmentIntrinsicSize']);
 const pendingSource = ts.createSourceFile('pending.tsx', readFileSync(resolve(process.cwd(), 'src/session/PendingSendBubble.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const hookCode = pendingSource.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'useThumbCellUri')!.getText(pendingSource);
 const componentCode = source.statements.filter((node) => ts.isFunctionDeclaration(node) && names.has(node.name?.text ?? '')).map((node) => node.getText(source)).join('\n') + '\n' + hookCode;
@@ -60,7 +60,7 @@ function fixture() {
     const image = host.querySelector('[data-image]') as HTMLElement;
     return [image.style.width, image.style.height];
   };
-  return { ...components, host, render, layout, handlers, frame, durable, Image };
+  return { ...components, host, render, layout, handlers, frame, durable, Image, cache };
 }
 
 describe('image frame continuity', () => {
@@ -81,6 +81,67 @@ describe('image frame continuity', () => {
     await act(async () => f.handlers.get('file:///thumb.png')!.onError());
     expect(resolver).toHaveBeenCalledTimes(2);
     expect(f.host.querySelector('[data-testid="message.mediaThumbFallback"]')).not.toBeNull();
+  });
+
+  // Reentry replaces route callbacks while the resident image is still mounted.
+  // A ready image must remain displayed; a real decode failure uses the new owner.
+  it('keeps a resolved thumbnail when reentry replaces its resolver, and retries a real failure with the new owner', async () => {
+    const f = fixture();
+    const media = { kind: 'image', url: 'cindy-media://blobs/reentry.png', previewable: false };
+    const first = vi.fn(async () => ({ url: 'file:///first.png', previewable: true }));
+    const second = vi.fn(async () => ({ url: 'file:///refreshed.png', previewable: true }));
+    const show = (resolver: typeof first) => f.render(<f.MediaPreview layout={f.layout} label="image"
+      variant="attachment" media={media} onResolveRemoteMedia={resolver} />);
+    await act(async () => show(first));
+    act(() => f.handlers.get('file:///first.png')!.onLoad({ source: { width: 480, height: 270 } }));
+    const image = f.host.querySelector('[data-image]');
+    const frame = f.frame();
+    await act(async () => show(second));
+    expect(second).not.toHaveBeenCalled();
+    expect(f.host.querySelector('[data-image]')).toBe(image);
+    expect(f.frame()).toEqual(frame);
+    expect(f.host.querySelector('[data-testid="message.mediaThumbLoading"]')).toBeNull();
+    await act(async () => f.handlers.get('file:///first.png')!.onError());
+    expect(second).toHaveBeenCalledExactlyOnceWith({ ...media, thumbnail: true }, expect.objectContaining({ forceRefresh: true }));
+    expect(f.host.querySelector('[data-image]')?.getAttribute('data-image')).toBe('file:///refreshed.png');
+    expect(f.frame()).toEqual(frame);
+  });
+
+  it('resolves a replacement source and ignores a cancelled old request', async () => {
+    const f = fixture();
+    let finishOld!: (value: { url: string; previewable: boolean }) => void;
+    const resolver = vi.fn((media: { url: string }) => media.url.endsWith('/old.png')
+      ? new Promise<{ url: string; previewable: boolean }>(resolve => { finishOld = resolve; })
+      : Promise.resolve({ url: 'file:///new.png', previewable: true }));
+    const show = (url: string) => f.render(<f.MediaPreview layout={f.layout} label="image"
+      variant="attachment" media={{ kind: 'image', url, previewable: false }} onResolveRemoteMedia={resolver} />);
+    await act(async () => show('cindy-media://blobs/old.png'));
+    await act(async () => show('cindy-media://blobs/new.png'));
+    await act(async () => finishOld({ url: 'file:///old.png', previewable: true }));
+    expect(f.host.querySelector('[data-image]')?.getAttribute('data-image')).toBe('file:///new.png');
+    await act(async () => show('cindy-media://blobs/replaced.png'));
+    expect(resolver).toHaveBeenCalledTimes(3);
+    expect(resolver).toHaveBeenLastCalledWith(expect.objectContaining({ url: 'cindy-media://blobs/replaced.png' }), expect.anything());
+  });
+
+  it('preserves recently decoded dimensions when the bounded cache fills and the message mounts again', () => {
+    const f = fixture();
+    const uri = 'https://example.com/recent.png';
+    const show = (url: string) => f.render(<f.MediaPreview key={url} layout={f.layout} label="image"
+      variant="attachment" media={{ kind: 'image', url, previewable: true }} />);
+    for (let i = 0; i < 499; i++) f.cache.set(`older-${i}`, { width: 100, height: 100 });
+    show(uri);
+    act(() => f.handlers.get(uri)!.onLoad({ source: { width: 480, height: 270 } }));
+    const frame = f.frame();
+    // An existing key at capacity must not clear everyone else's measurements.
+    act(() => f.handlers.get(uri)!.onLoad({ source: { width: 480, height: 270 } }));
+    expect(f.cache.size).toBe(500);
+    show('https://example.com/new.png');
+    act(() => f.handlers.get('https://example.com/new.png')!.onLoad({ source: { width: 80, height: 160 } }));
+    expect(f.cache.size).toBe(500);
+    expect(f.cache.has('older-0')).toBe(false);
+    show(uri);
+    expect(f.frame()).toEqual(frame); // Before a second decode or any onLoad.
   });
 
   it('preserves the missing-source explanation from Host', async () => {

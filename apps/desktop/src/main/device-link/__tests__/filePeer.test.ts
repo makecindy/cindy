@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, truncate } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, truncate } from 'node:fs/promises';
 import { promises as fsPromises } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -38,9 +38,9 @@ vi.mock('../../appSessionState', () => ({
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'cache-owner' }),
   activeOwnerScopeKey: () => 'cache-owner:0',
 }));
-vi.mock('../mediaTransfer', () => ({ removeRemote: vi.fn() }));
+vi.mock('../mediaTransfer.desktop', () => ({ removeRemote: vi.fn() }));
 vi.mock('../mediaFetch', () => ({ resolveAuthorizedMedia: mock.resolve }));
-vi.mock('../settings-store', () => ({ readDeviceLinkSettings: () => mock.settings }));
+vi.mock('../settings-store.desktop', () => ({ readDeviceLinkSettings: () => mock.settings }));
 vi.mock('../broadcast-tap', () => ({
   captureDataOwnerBroadcastScope: () => ({}),
   isDataOwnerBroadcastScopeCurrent: () => mock.current,
@@ -79,6 +79,8 @@ vi.mock('../../remote-desktop/captureWindow', () => ({
 import {
   registerFilePeerIpc,
   requestFilePeer,
+  setFilePeerStreamTransport,
+  stopFilePeerStreams,
   stopFilePeers,
   tryPeerInvoke,
   tryPeerFile,
@@ -444,8 +446,8 @@ describe('authorized file peer source', () => {
       await expect(open(connection)).resolves.toMatchObject({ mimeType, size: 5 });
     },
   );
-  const read = (connection: string, ticket: string, offset: number) =>
-    mock.handlers.get('file-peer:host:read')!({}, connection, ticket, offset);
+  const read = (connection: string, ticket: string, offset: number, requestedBytes?: number) =>
+    mock.handlers.get('file-peer:host:read')!({}, connection, ticket, offset, requestedBytes);
   it('keeps negotiated connections until release, isolates transport failure and still expires stalled files', async () => {
     vi.useFakeTimers();
     try {
@@ -688,8 +690,10 @@ describe('authorized file peer source', () => {
       attachments: true,
       largeAttachments: true,
       streamAttachments: true,
+      rangeReads: true,
       idleMs: 300_000,
       sessionBound: true,
+      streamTransport: true,
     });
     const first = await connect();
     expect((await open(first.connection)).size).toBe(limit);
@@ -771,6 +775,118 @@ describe('authorized file peer source', () => {
     expect(Buffer.from(writes[2].body ?? writes[2].request.data, 'base64')).toEqual(
       Buffer.alloc(0.5 * 1024 * 1024, 7),
     );
+  });
+  // 2026-11-17 audit: between two Desktops on Agent-Net the bytes still went over WebRTC (TURN settings from the server)
+  // while the session carried everything else. With both ends advertising streamTransport and a session, setup, open,
+  // blocks, end and attachment writes are invokes on that channel, through the same host handlers and checks.
+  it('carries a download and an upload over the Agent-Net session instead of WebRTC, with the same checks', async () => {
+    const big = Buffer.alloc(700 * 1024, 7);
+    big.write('start', 0);
+    big.write('end', big.length - 3);
+    await writeFile(file, big);
+    mock.resolve.mockResolvedValue({ absPath: file, mimeType: 'application/octet-stream', maxBytes: 4 * 1024 * 1024 });
+    const ticket = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+    const attachmentWrites: Array<{ offset: unknown; bytes: number }> = [];
+    // The host answers as its dispatch does: this module's handler for the controller 'device-ctl'.
+    const hostInvoke = async (channel: string, args: unknown[]): Promise<unknown> => {
+      const request = args[0] as { action: string; request?: { op: string; offset?: unknown; data?: unknown } };
+      if (channel !== 'device-link:file-peer') throw new Error('unexpected channel');
+      if (request.action !== 'attachment') return requestFilePeer('device-ctl', request, hostInvoke);
+      if (request.request!.op === 'begin') return { ok: true, result: { ticket } };
+      if (request.request!.op === 'write') attachmentWrites.push({ offset: request.request!.offset,
+        bytes: Buffer.isBuffer(request.request!.data) ? request.request!.data.length : -1 });
+      return { ok: true, result: {} };
+    };
+    const actions: string[] = [];
+    const invoke = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => {
+      actions.push((args[0] as { action: string }).action);
+      try { return { ok: true, result: await requestFilePeer('device-ctl', args[0], hostInvoke) }; }
+      catch (error) { return { ok: false, error: { code: 'IPC_ERROR', message: String(error) } }; }
+    });
+    setFilePeerStreamTransport(() => true);
+    try {
+      const received = await tryPeerFile('device-host', 'xdt-file://local/?path=/test', invoke);
+      expect(received?.size).toBe(big.length);
+      expect(Buffer.compare(await readFile(received!.path), big)).toBe(0);
+      await received?.dispose();
+      // No capture window, no WebRTC offer/accept/receive, no TURN settings.
+      expect(mock.sent).toEqual([]);
+      expect(mock.iceConfig).not.toHaveBeenCalled();
+      expect(actions.slice(0, 3)).toEqual(['caps', 'stream-open', 'open']);
+      // 256 KiB blocks in order, then the empty read that lets the sender close the source.
+      expect(actions.filter((action) => action === 'stream-read')).toHaveLength(Math.ceil(big.length / (256 * 1024)) + 1);
+      // Upload on the same connection: each block's bytes reach the host's attachment write as raw bytes.
+      const ref = await tryUploadPeerAttachment('device-host', Buffer.alloc(1.5 * 1024 * 1024, 9), 'application/octet-stream', invoke);
+      expect(ref).toContain(ticket);
+      expect(attachmentWrites).toEqual([{ offset: 0, bytes: 1024 * 1024 }, { offset: 1024 * 1024, bytes: 512 * 1024 }]);
+      expect(mock.sent).toEqual([]);
+      // The host's revocation check is the data channel's: a revoked controller gets no more bytes.
+      mock.settings = { remoteControlEnabled: true, revokedControllers: ['device-ctl'] };
+      expect(await tryPeerFile('device-host', 'xdt-file://local/?path=/test', invoke)).toBeNull();
+    } finally {
+      setFilePeerStreamTransport(() => false);
+    }
+  });
+  // 2026-11-17 real-machine retest: a session file connection kept the calls of the transfer that opened it. A read ends its
+  // own calls (fileAccess.ts rejects them FILE_PEER_CANCELLED once it is done), so the next download right after it, reusing
+  // the connection, failed at once, went into the 30 s cooldown and fell back to the cloud relay.
+  it('carries the next download on a reused session connection with that download\'s own calls', async () => {
+    const content = Buffer.alloc(300 * 1024, 5);
+    await writeFile(file, content);
+    mock.resolve.mockResolvedValue({ absPath: file, mimeType: 'application/octet-stream', maxBytes: 4 * 1024 * 1024 });
+    const hostInvoke = async (channel: string, args: unknown[]): Promise<unknown> => {
+      if (channel !== 'device-link:file-peer') throw new Error('unexpected channel');
+      return requestFilePeer('device-ctl', args[0], hostInvoke);
+    };
+    const transfer = () => {
+      let done = false;
+      const actions: string[] = [];
+      const invoke = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => {
+        if (done) throw new Error('FILE_PEER_CANCELLED');
+        actions.push((args[0] as { action: string }).action);
+        try { return { ok: true, result: await requestFilePeer('device-ctl', args[0], hostInvoke) }; }
+        catch (error) { return { ok: false, error: { code: 'IPC_ERROR', message: String(error) } }; }
+      });
+      return { invoke, actions, finish: () => { done = true; } };
+    };
+    setFilePeerStreamTransport(() => true);
+    try {
+      const first = transfer();
+      const a = await tryPeerFile('device-host-reuse', 'xdt-file://local/?path=/test', first.invoke);
+      first.finish();
+      expect(a?.size).toBe(content.length);
+      await a?.dispose();
+      const second = transfer();
+      const b = await tryPeerFile('device-host-reuse', 'xdt-file://local/?path=/test', second.invoke);
+      expect(b?.size).toBe(content.length);
+      expect(Buffer.compare(await readFile(b!.path), content)).toBe(0);
+      await b?.dispose();
+      // The same connection: no new caps or stream-open, and its blocks went on the second download's calls.
+      expect(second.actions[0]).toBe('open');
+      expect(second.actions.filter((action) => action === 'stream-read').length).toBeGreaterThan(1);
+      expect(mock.sent).toEqual([]);
+    } finally {
+      setFilePeerStreamTransport(() => false);
+      stopFilePeers();
+    }
+  });
+  // 2026-11-17 review: a session-bound connection opened on the Agent-Net session has no idle timer on the host. A controller that
+  // restarted or lost the session left it there, and four of them made every later transfer FILE_PEER_BUSY. The session closing
+  // ends that peer's session connections; another peer's stays.
+  it('ends a peer\'s session file connections with its Agent-Net session and frees their slots', async () => {
+    const open = async (peer: string) => (await requestFilePeer(peer, { action: 'stream-open', sessionBound: true },
+      async () => ({ ok: true, result: {} }))) as { connection: string };
+    const kept = await open('device-other');
+    const leaked = [await open('device-gone'), await open('device-gone'), await open('device-gone')];
+    await expect(open('device-gone')).rejects.toThrow('FILE_PEER_BUSY');
+    stopFilePeerStreams('device-gone');
+    await expect(requestFilePeer('device-gone', { action: 'stream-rpc', connection: leaked[0].connection, payload: '{}' },
+      async () => ({ ok: true, result: {} }))).rejects.toThrow('FILE_PEER_CLOSED');
+    const reopened = await open('device-gone');
+    expect(reopened.connection).toMatch(/^[a-f0-9-]{36}$/);
+    await expect(requestFilePeer('device-other', { action: 'stream-rpc', connection: kept.connection, payload: '{}' },
+      async () => ({ ok: true, result: {} }))).rejects.not.toThrow('FILE_PEER_CLOSED');
+    stopFilePeers();
   });
   // #6530 / review r4322213153, unit: open errors do not cover pathless fd failures.
   // Exercise the upload entry with a real source handle failing at stat, hash or transfer read;
@@ -1111,6 +1227,68 @@ describe('authorized file peer source', () => {
     const { connection } = await connect();
     mock.resolve.mockResolvedValueOnce({ absPath: file, maxBytes: 4 });
     await expect(open(connection)).rejects.toThrow('SIZE');
+  });
+  // Unit: seek reads must return only the requested bytes and reject stale metadata.
+  it('serves a version-bound range through the existing file read endpoint', async () => {
+    // Windows can report identical metadata even with bigint timestamps after a
+    // same-length rewrite. Freeze only stat; exercise real descriptor reads.
+    const metadata = await fsPromises.stat(file);
+    const openFile = fsPromises.open.bind(fsPromises);
+    const opened = vi.spyOn(fsPromises, 'open').mockImplementation(async (...args) => {
+      const handle = await openFile(...args);
+      vi.spyOn(handle, 'stat').mockResolvedValue(metadata);
+      return handle;
+    });
+    try {
+      const { connection } = await connect();
+      const initial = await open(connection);
+      await read(connection, initial.ticket, 0); await read(connection, initial.ticket, 5);
+      const request = { action: 'open', connection, url: 'xdt-file://test',
+        range: { start: 1, end: 3, version: initial.version } };
+      const part = await requestFilePeer('device-a', request) as { ticket: string; size: number };
+      expect(part.size).toBe(3);
+      expect(Buffer.from(await read(connection, part.ticket, 0), 'base64').toString()).toBe('ell');
+      expect(await read(connection, part.ticket, 3)).toBe('');
+      await expect(requestFilePeer('device-a', { ...request, range: { ...request.range, end: 5 } })).rejects.toThrow('CHANGED');
+      await writeFile(file, 'world');
+      await expect(requestFilePeer('device-a', request)).rejects.toThrow('CHANGED');
+      const updated = await open(connection);
+      expect(updated.version).not.toBe(initial.version);
+      await writeFile(file, 'hello');
+      await expect(read(connection, updated.ticket, 0)).rejects.toThrow('CHANGED');
+    } finally {
+      opened.mockRestore();
+    }
+  });
+  // Unit: a range on a large file must not scan content to produce its version.
+  // The 64 KiB boundary is shared with inline reads; older coverage used 5 bytes.
+  it.each([65_536, 65_537])('bounds content version reads at the inline limit (%s bytes)', async (size) => {
+    await truncate(file, size);
+    mock.resolve.mockResolvedValue({ absPath: file, maxBytes: size });
+    const openFile = fsPromises.open.bind(fsPromises);
+    const handles: Awaited<ReturnType<typeof fsPromises.open>>[] = [];
+    const opened = vi.spyOn(fsPromises, 'open').mockImplementation(async (...args) => {
+      const handle = await openFile(...args);
+      vi.spyOn(handle, 'read');
+      handles.push(handle);
+      return handle;
+    });
+    try {
+      const { connection } = await connect();
+      const initial = await open(connection);
+      if (size === 65_537) expect(handles[0].read).not.toHaveBeenCalled();
+      else expect(handles[0].read).toHaveBeenCalledOnce();
+      await read(connection, initial.ticket, 0, size);
+      await read(connection, initial.ticket, size);
+      const part = await requestFilePeer('device-a', { action: 'open', connection,
+        url: 'xdt-file://test', range: { start: 1, end: 3, version: initial.version },
+      }) as { ticket: string };
+      if (size === 65_537) expect(handles[1].read).not.toHaveBeenCalled();
+      expect(Buffer.from(await read(connection, part.ticket, 0), 'base64').toString()).toBe('ell');
+      if (size === 65_537) expect(handles[1].read).toHaveBeenCalledWith(expect.any(Buffer), 0, 3, 1);
+    } finally {
+      opened.mockRestore();
+    }
   });
   it('rejects changed files and subsequent reads on the stopped connection', async () => {
     const { connection } = await connect(),

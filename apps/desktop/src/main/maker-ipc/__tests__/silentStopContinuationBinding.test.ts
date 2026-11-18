@@ -41,16 +41,13 @@ function extractBetween(source: string, startMarker: string, endMarker: string):
 
 describe('silent-stop continuation generation binding (wiring contract)', () => {
   it('binds the reserved generation via the extracted helper and rolls back on send failure', () => {
-    const resumeBlock = extractBetween(
+    // The turn-end body is in silentStopTurnEnd.ts; register.ts's handleSilentStopTurnEnd calls it. The body's
+    // binding and rollback steps are guarded in hostDesktopSourceContracts.guard.test.ts.
+    expect(extractBetween(
       registerSource,
       'async function handleSilentStopTurnEnd(',
       'function isFencedStaleProductTerminal(',
-    );
-    // 预约/回滚接线集中到 helper；sendOpts 必须真的并入续跑调用。
-    expect(resumeBlock).toContain('bindSilentStopContinuationGeneration(session.id');
-    expect(resumeBlock).toContain('...binding.sendOpts,');
-    // 未派发(not accepted)与抛出两条失败收口都要回滚绑定。
-    expect(resumeBlock.match(/binding\.rollbackBinding\(\);/g)).toHaveLength(2);
+    )).toContain('await handleSilentStopTurnEndWithPorts(session, doneAt, turnLeaseId, turnOrigin, {');
   });
 });
 

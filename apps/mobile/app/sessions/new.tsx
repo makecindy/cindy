@@ -1,3 +1,9 @@
+import { ProjectPickerIcon } from '@/session/ProjectPickerIcon';
+import { playHaptic } from '@/platform/haptics';
+import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
+import { useComposerDragOpen } from '@/session/useComposerDragOpen';
+import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
+import type { ViewInstance, TextInputInstance, ScrollViewInstance } from 'react-native';
 import { useBotGroupRemoteMedia } from "@/session/useBotGroupRemoteMedia";
 import { ComposerAttachmentPreview } from "@/session/ComposerAttachmentPreview";
 import { PluginUiEnablePrompt } from '@/plugins/PluginUiEnablePrompt';
@@ -96,7 +102,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { Text } from '@/components/AppText';
-import type { TextInput as NativeTextInput } from 'react-native';
+
 import {
   Camera,
   Check,
@@ -156,7 +162,6 @@ import { discardMobileUploadedAttachment } from '@/session/mobileAttachmentUploa
 import { clearNewSessionAttachmentsForDeviceChange, discardNewSessionUploadedAttachments } from '@/session/newSessionAttachmentCleanup';
 import { useAutoResumeNewSessionDraft, useNewSessionDurableEdit } from '@/session/useNewSessionDraftRecovery';
 import { goBackGuarded } from '@/utils/backGuard';
-import { buildMobileImageAttachmentCandidate } from '@/session/mobileImageAttachment';
 import { useMobileLocalAttachments } from '@/session/useMobileLocalAttachments';
 import {
   useIncomingShareBatch,
@@ -205,6 +210,8 @@ import {
   type OrcaWorkerFormValue,
 } from '@/session/orcaTeam';
 import { buildDraftWorkerInitialTask } from '@cindy/maker-shared/orca-team';
+import { ContextSheetMediaAddButton, useContextSheetMediaSelection } from '@/session/ContextSheetMediaSelection';
+import { contextSheetMediaUploadCandidates } from '@/session/contextSheetMediaUpload';
 import { RecentPhotosStrip } from '@/session/ContextSheetMediaViews';
 import { ContextSheetGoalCreateForm } from '@/session/ContextSheetGoalView';
 import type { MobileGoalLimitsInput } from '@cindy/maker-shared/device-link-contract';
@@ -221,7 +228,6 @@ import { buildMediaPayload } from '@/session/messagePayload';
 import type { MobileMessageGalleryImage } from '@/session/messageGallery';
 import {
   prefetchContextSheetMediaAssets,
-  resolveContextSheetMediaAssetForUpload,
   type ContextSheetMediaAsset,
 } from '@/session/useContextSheetMediaAssets';
 import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
@@ -303,7 +309,6 @@ import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
 import { MobileVendorIcon } from '@/components/MobileVendorIcon';
 import { PlanModeChip } from '@/session/PlanModeChip';
 import {
-  ComposerResizeGrabber,
   ComposerToolbarLeftGroup,
   ComposerToolbarSpacer,
   ComposerToolbarVoiceSlot,
@@ -313,13 +318,13 @@ import {
   MOBILE_COMPOSER_INPUT_MAX_HEIGHT,
   MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
   MOBILE_COMPOSER_MIN_TOUCH_TARGET,
-  MobileComposerInputRow,
   VoiceMicWaveCaret,
   resolveMobileComposerVoiceButtonPlacement,
 } from '@/session/MobileComposerInputRow';
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
 import { VoicePillWidthFrame } from '@/session/voicePillWidthMotion';
 import { useMobileVoiceProcessingIndicator } from '@/session/useMobileVoiceProcessingIndicator';
+import { useHandheldVoiceKey } from '@/handheld/handheldMode';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useComposerResize } from '@/session/useComposerResize';
@@ -675,6 +680,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     // Worker 默认跟任务(Lead)的 Agent 所在电脑。
     leadAgentDeviceId: remoteAgentPick?.deviceId ?? null,
     agentLocationSelectable: workerAgentLocationSupported,
+    // 任务还没建：没有可审查、可测试的工作，内置角色不带出自带的首条任务。
+    leadHasWork: false,
   });
   const collabTarget = useMemo(() => ({
     orcaRole: null,
@@ -716,8 +723,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const [goalBusy, setGoalBusy] = useState(false);
   const [goalError, setGoalError] = useState<string | null>(null);
   const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
-  const workspacePickerHostRef = useRef<View>(null);
-  const workspacePickerAnchorRef = useRef<View>(null);
+  const workspacePickerHostRef = useRef<ViewInstance>(null);
+  const workspacePickerAnchorRef = useRef<ViewInstance>(null);
   const [workspacePickerFrame, setWorkspacePickerFrame] = useState<WorkspacePickerFrame | null>(null);
   const measureWorkspacePicker = useCallback(() => {
     if (nativeSelectionSheet || !workspacePickerOpen) return;
@@ -999,9 +1006,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 权限记忆只在偏好加载后恢复一次(之后由用户选择 / 切 agent 驱动),防止重复覆盖。
   const appliedPermissionMemoryRef = useRef(false);
   const userTouchedWorkspaceRef = useRef(false);
-  const firstMessageInputRef = useRef<NativeTextInput>(null);
+  const firstMessageInputRef = useRef<TextInputInstance>(null);
   const composerPillOpen = useComposerPillOpen(composerDock.enabled, () => firstMessageInputRef.current?.focus());
-  const voiceDraftScrollRef = useRef<ScrollView>(null);
+  const voiceDraftScrollRef = useRef<ScrollViewInstance>(null);
   const voiceRecordingActiveRef = useRef(false);
   const voicePermissionRequestInFlightRef = useRef(false);
   const voicePermissionRequestSeqRef = useRef(0);
@@ -1019,8 +1026,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const [firstMessageInputContentHeight, setFirstMessageInputContentHeight] = useState(MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT);
   const [firstMessageInputFocused, setFirstMessageInputFocused] = useState(visualFocusComposer);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
-  const voiceDraftCaretRef = useRef<View>(null);
-  const voiceDraftMeasuredBlockRef = useRef<View>(null);
+  const voiceDraftCaretRef = useRef<ViewInstance>(null);
+  const voiceDraftMeasuredBlockRef = useRef<ViewInstance>(null);
   // 自动默认运行配置(跟随被控电脑新建任务默认 / 区域默认 / 列表最上面)的守卫:用户一旦手动选过模型,就不再自动覆盖;
   // 记录已自动应用过的设备,切设备时(未手动选过)按新设备重算。
   const userTouchedRuntimeRef = useRef(false);
@@ -1281,9 +1288,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     modelSections,
   });
 
-  // 目录就绪后的来源终检(codex review P1):自动默认/恢复在目录加载期信任的来源可能已失效
-  // (provider 被删/断开/模型下架),就绪后必须复核——联合回退整对 (model, providerId)
-  // (其他来源顶替 / 首项 / 留空),不留裸模型回落默认网关(codex review P2)。
+  // 目录就绪后复核草稿：已选来源失效时保留选择，提交要求重选，不能换到同名模型的其他账号。
+  // 未指定来源的默认推荐及 Cindy Auto 的合法来源迁移仍由公共校准逻辑处理。
   // 无变化时返回原引用,不触发额外渲染。
   useEffect(() => {
     if (!deviceProviders.ready) return;
@@ -1615,7 +1621,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const pendingImagePreview = useComposerPendingImagePreview({ attachments, previews: attachmentPreviews, pendingUploads, getUploadedAttachmentId });
   const composerImageCount = attachments.filter((item) => item.category === 'image').length + composerIncomingImageCount;
   const { active: composerImageHoldActive, collapse: collapseComposerImages } = useComposerImageExpansion(composerImageCount, imageSelectionRevision);
-  const composerCardActive = firstMessageInputFocused || composerPillOpen.opening
+  const { composerDragOpen, handleComposerDragOpenChange, handleComposerDragOpenCommit } =
+    useComposerDragOpen(firstMessageInputFocused, () => firstMessageInputRef.current?.focus());
+  const composerCardActive = firstMessageInputFocused || composerPillOpen.opening || composerDragOpen
     || composerImageHoldActive
     || modelSheetOpen
     || permissionSheetOpen
@@ -1638,6 +1646,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const composerChromeHeight = (composerCardActive ? COMPOSER_CARD_CHROME_HEIGHT : COMPOSER_RESIZE_CHROME_HEIGHT)
     + composerAttachmentTrayHeight;
   const composerResize = useComposerResize({
+    bodyDragEnabled: !creating && (!composerCardActive || composerAttachmentTrayHeight === 0),
+    onDragOpenChange: handleComposerDragOpenChange,
+    onDragOpenCommit: handleComposerDragOpenCommit,
     autoMaxContentHeight: Math.max(
       MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
       Math.min(MOBILE_COMPOSER_INPUT_MAX_HEIGHT, composerCardMaxHeight - composerChromeHeight),
@@ -2466,11 +2477,10 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setPermissionSheetOpen(true);
   }, []);
 
-  // 选权限档(独立选择器与模型浮窗共用同一语义):Full access 升级先过确认弹层,
+  // 用户直接选权限档即生效(独立选择器与模型浮窗共用同一语义),
   // 非 plan 档写 per-agent 记忆(内存 + 落盘;对齐桌面 lastByVendor)。
   const selectPermissionMode = useCallback((mode: string) => {
     void (async () => {
-      if (!(await confirmFullAccessChange(draft.permissionMode, mode))) return;
       patchDraft({ permissionMode: mode });
       if (mode === 'plan') return; // 老被控端兼容档,不入记忆
       // 同步进本地 state:本次会话内切走再切回也能拿到最新记忆(落盘不回写 state)。
@@ -3168,6 +3178,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         onStateChanged: (next) => {
           // 旧 controller 的取消可晚于新启动完成,只允许本次启动交接 UI 状态。
           if (voiceStartupSeqRef.current !== startupSeq) return;
+          if (next === 'listening') playHaptic('commit');
           setVoiceState(next);
         },
         onError: (message) => {
@@ -3291,6 +3302,31 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       });
   }, [creating, selectedDeviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 
+  // 掌机模式:长按手柄语音键 = 按住说话,松手停止(文字留在输入框)。首页长按会先打开
+  // 本页,本页聚焦时由分发层补发 start。起录尚未完成就松手的,等进入 listening 再收尾。
+  const handheldStopAfterStartRef = useRef(false);
+  useHandheldVoiceKey({
+    start: () => {
+      handheldStopAfterStartRef.current = false;
+      handleVoiceButtonPressIn();
+      voiceStartedOnPressInRef.current = false;
+    },
+    end: () => {
+      if (voiceRecordingActiveRef.current || voiceState === 'listening') {
+        void finishVoiceRecording();
+        return;
+      }
+      if (voicePermissionRequestInFlightRef.current || voiceStartupInFlightRef.current) {
+        handheldStopAfterStartRef.current = true;
+      }
+    },
+  });
+  useEffect(() => {
+    if (voiceState !== 'listening' || !handheldStopAfterStartRef.current) return;
+    handheldStopAfterStartRef.current = false;
+    void finishVoiceRecording();
+  }, [finishVoiceRecording, voiceState]);
+
   useEffect(() => {
     return () => {
       const controller = voiceControllerSessionRef.current;
@@ -3322,15 +3358,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setVoiceDraftCaretFrame({ left: 0, top: 0 });
   }, [draft.firstMessage.length, voiceIsListening]);
 
-  const renderComposerResizeHandle = () => (
-    <ComposerResizeGrabber
-      onAdjust={composerResize.adjustByLine}
-      panHandlers={composerResize.panHandlers}
-      gesture={composerResize.gesture}
-      testID="newSession.composerResizeGrabber"
-      visible
-    />
-  );
   const renderAttachmentToggleButton = () => (
     <Pressable
       accessibilityLabel={t('session.common.openContextPanel')}
@@ -3378,7 +3405,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       }}
       disabled={!canCreate}
       hitSlop={10}
-      onPress={() => void create()}
+      onPress={() => { playHaptic('commit'); void create(); }}
       style={({ pressed }) => [
         styles.sendButton,
         !canCreate && styles.sendButtonDisabled,
@@ -3751,40 +3778,33 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     }
     return ids;
   }, [pendingUploads]);
-  // 单张点按即同步入队，再关闭面板；不等待鉴权或上传才占用附件槽位。
-  const toggleMediaAssetAttachment = useCallback((asset: ContextSheetMediaAsset) => {
-    if (mediaTapAcceptedRef.current || mediaAssetAttachments[asset.id] || uploadingMediaAssetIds.has(asset.id)) return;
-    if (attachments.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS) {
+  // 点照片是一张、底部「加入对话」是选择圈选中的多张：都同步入队，再关闭面板；
+  // 不等待鉴权或上传才占用附件槽位。
+  const addMediaAssetAttachments = useCallback((assets: readonly ContextSheetMediaAsset[]) => {
+    if (mediaTapAcceptedRef.current) return;
+    const fresh = assets.filter((asset) => !mediaAssetAttachments[asset.id] && !uploadingMediaAssetIds.has(asset.id));
+    if (fresh.length === 0) return;
+    if (attachments.length + getPendingUploadCount() + fresh.length > MOBILE_MAX_ATTACHMENTS) {
       setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS }));
       return;
     }
     mediaTapAcceptedRef.current = true;
     setAttachmentError(null);
-    enqueueUploads([{
-      kind: 'image' as const,
-      uri: asset.uri,
-      name: asset.filename,
-      size: 0,
-      sourceId: asset.id,
-      resolve: async () => {
-        const resolved = await resolveContextSheetMediaAssetForUpload(asset);
-        const candidate = buildMobileImageAttachmentCandidate({
-          fileName: resolved.filename,
-          uri: resolved.uri,
-        }, 0);
-        return {
-          uri: candidate.uri,
-          name: candidate.name,
-          mimeType: candidate.mimeType,
-          width: resolved.width,
-          height: resolved.height,
-          // HEIC 已在 resolve 阶段一次性转码 + 缩边,跳过 preprocess 防二次有损。
-          skipPreprocess: resolved.optimized === true,
-        };
-      },
-    }], { token: auth.getAccessToken() });
+    // 候选带上选中序号:并发上传谁先传完都按选中顺序进托盘。
+    enqueueUploads(contextSheetMediaUploadCandidates(fresh), { token: auth.getAccessToken() });
     setContextSheetOpen(false);
   }, [auth, enqueueUploads, attachments.length, getPendingUploadCount, mediaAssetAttachments, uploadingMediaAssetIds, t]);
+  const toggleMediaAssetAttachment = useCallback(
+    (asset: ContextSheetMediaAsset) => addMediaAssetAttachments([asset]),
+    [addMediaAssetAttachments],
+  );
+  // 选择圈多选的待选集：留在面板里，点底部按钮才一起加入；没提交就关掉面板即放弃。
+  const mediaSelection = useContextSheetMediaSelection({
+    open: contextSheetOpen,
+    getRemainingSlots: () => MOBILE_MAX_ATTACHMENTS - attachments.length - getPendingUploadCount(),
+    onLimitReached: () => setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS })),
+    onChanged: () => setAttachmentError(null),
+  });
   const selectedMediaAssetIds = useMemo(() => {
     const attachmentIds = new Set(attachments.map((item) => item.id));
     return new Set(
@@ -4244,6 +4264,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // 缓存文件永久留在本地)。
       composerAnnotationsRef.current?.forgetAllAttachments();
       handedOff = true;
+      // 首条消息已交接:收起输入框与软键盘(与任务页发送同口径),进入任务页时不带着键盘。
+      setComposerVoiceHoldArmed(false);
+      firstMessageInputRef.current?.blur();
       router.replace({
         pathname: '/sessions/[sessionId]',
         params: { sessionId, deviceId: deviceIdSnapshot, deviceName: selectedDeviceName },
@@ -5254,7 +5277,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   style={({ pressed }) => [styles.selectorRow, pressed && styles.pressed]}
                   testID="newSession.workspaceSelector"
                 >
-                  <WorkspaceIcon color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
+                  {draft.workspaceKind === 'project' && draft.workingDir && selectedDeviceId ? <ProjectPickerIcon deviceId={selectedDeviceId} workingDir={draft.workingDir} title={workspaceLabel} size={iconSize.action} /> : <WorkspaceIcon color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />}
                   <Text style={styles.selectorText} numberOfLines={1}>{workspaceLabel}</Text>
                   <ChevronsUpDown color={colors.borderStrong} size={iconSize.sm} strokeWidth={iconStroke.regular} />
                 </Pressable>
@@ -5487,9 +5510,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   nestedScrollEnabled
                   keyboardShouldPersistTaps="handled"
                   showsVerticalScrollIndicator
-                  ListEmptyComponent={!browseLoading && !browseError ? (
+                  ListEmptyComponent={(!browseLoading && !browseError ? (
                     <Text style={styles.hint}>{newSessionText('emptyDirectory')}</Text>
-                  ) : null}
+                  ) : null) ?? undefined}
                 />
               </View>
             ) : null}
@@ -5586,10 +5609,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   ) : null}
                 </View>
               ) : null}
+              <TaskArchiveUndoSlot active={isShareTargetFocused} />
               <View style={[styles.composerToolbarWrap, composerCardActive && {
                 minHeight: COMPOSER_CARD_CHROME_HEIGHT + MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
               }]}>
-                <MobileComposerInputRow
+                <ResizableComposerInputRow resize={composerResize}
                   accessibilityLabel={t('session.new.firstMessagePlaceholder')}
                   bodyScrollGesture={composerResize.scrollGesture}
                   bodyScrollEnabled={!composerResize.dragging}
@@ -5630,7 +5654,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   onPasteImagesLoadFailed={failPastePlaceholders}
 
                   placeholderTextColor={colors.textPlaceholder}
-                  resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}
+                  grabberTestID="newSession.composerResizeGrabber"
                   scrollEnabled={composerInputScrollEnabled}
 
                   selectionColor={colors.inputCaret}
@@ -5726,7 +5750,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               disabled={creating}
               enabled={contextSheetOpen}
               onToggleAsset={toggleMediaAssetAttachment}
-
+              selection={mediaSelection}
               selectedAssetIds={selectedMediaAssetIds}
               testID="newSession.contextSheetPhotos"
             />
@@ -5741,13 +5765,20 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             label={t('session.collab.draftSubmit')}
             onPress={() => {
               // 与桌面新建任务一样:确认协同草稿即记住这次的 Worker 选择。
-              collabForm.remember(collabForm.form);
+              collabForm.remember(collabForm.submission);
               collabDraftTargetRef.current = collabTargetKey;
-              setCollabDraft(collabForm.form);
+              setCollabDraft(collabForm.submission);
               setContextSheetView('main');
               setContextSheetOpen(false);
             }}
             testID="newSession.collabDraftSubmit"
+          />
+        ) : contextSheetView === 'main' && contextSheetMediaLibraryEnabled && mediaSelection.assets.length > 0 ? (
+          <ContextSheetMediaAddButton
+            disabled={creating}
+            onAddAssets={addMediaAssetAttachments}
+            selection={mediaSelection}
+            testID="newSession.contextSheetAddPhotosButton"
           />
         ) : undefined}
         testID="newSession.contextSheet"
@@ -5765,7 +5796,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               <ContextSheetRow
                 disabled={creating}
                 icon={<Image color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label={t('session.common.photo')}
+                label={t('session.common.photosAndVideos')}
                 onPress={() => void addLocalImageAttachments('library')}
                 dismissBeforePress
                   testID="newSession.contextSheetPhotoRow"
@@ -5850,12 +5881,16 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               executionDevicesError={collabForm.executionDevicesError}
               busy={creating}
               customRoleMode={collabForm.customRoleMode}
+              description={t('session.collab.enableHint')}
               form={collabForm.form}
               notice={orcaCollabEntryHint(collabEntryStatus)}
               onAgentChange={collabForm.changeAgent}
               onChange={collabForm.patch}
-              onCustomRoleModeChange={collabForm.setCustomRoleMode}
               onPermissionChange={(mode) => void collabForm.changePermission(mode)}
+              onRemoveRole={collabForm.removeRole}
+              onSelectRole={collabForm.selectRole}
+              roles={collabForm.roles}
+              rolesEditable={collabForm.rolesEditable}
               onPickModel={collabForm.modelPicker.openPicker}
               onPickDirectory={collabForm.directoryPicker.openPicker}
             />
@@ -6103,7 +6138,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         selectedId={composerPreviewAttachmentId}
         annotation={composerAnnotations.trayAnnotation}
         resolveRemoteMedia={resolveComposerMedia}
-        onSelect={setComposerPreviewAttachmentId}
           onClose={() => setComposerPreviewAttachmentId(null)}
         />
       {composerAnnotations.host}

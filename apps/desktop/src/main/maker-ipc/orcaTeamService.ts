@@ -10,6 +10,7 @@ import type {
 } from './collabSendOutcome.js';
 import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 import { rebuildQueuedOrcaLeadMessage } from './orcaInterAgentDispatcher.js';
+import { isOrcaCollaborationMessage } from './orcaQueueNote.js';
 import {
   createSessionQueueControlService,
   type QueuedSteerFallbackReason,
@@ -70,6 +71,8 @@ export type SendToWorkerResult =
       queuedMessageId?: string;
       /** 请求插话却进了队列时的原因。 */
       steerFallbackReason?: OrcaSteerFallbackReason;
+      /** 这次派发取代的、Lead 还没读到的该 Worker 异常终止回报；已从 Lead 队列撤下。 */
+      supersededFailureNotices?: WithdrawnFailureNotice[];
     }
   | {
       ok: false;
@@ -87,6 +90,8 @@ export type InterruptWorkerResult =
       queuedMessageId: string;
       stopOutcome: WorkerInterruptStopOutcome;
       queuePaused: boolean;
+      /** 同 SendToWorkerResult.supersededFailureNotices。 */
+      supersededFailureNotices?: WithdrawnFailureNotice[];
     }
   | { ok: false; errorCode: SendToWorkerFailureCode; message: string };
 
@@ -152,7 +157,59 @@ export type DispatchWorkerTaskResult =
 
 /** 简单生命周期操作的 domain result，供 IPC 与 MCP adapter 各自翻译。 */
 export type OrcaOkResult =
-  { ok: true; workerId?: string } | { ok: false; errorCode: string; message: string };
+  | { ok: true; workerId?: string; /** 归档时一并撤下的、Lead 还没读到的异常终止回报条数。 */ withdrawnFailureNotices?: number }
+  | { ok: false; errorCode: string; message: string };
+
+/** Worker 异常终止自动回报的固定开头；撤下过期回报时按它识别。 */
+export const ORCA_AUTO_BRIDGE_FAILURE_HEADER = '[Auto-bridged: worker 异常终止]';
+
+/** 回执里带回的异常终止回报正文上限；完整内容仍在 Worker 自己的任务里。 */
+const MAX_WITHDRAWN_FAILURE_NOTICE_TEXT = 1200;
+
+/** Lead 队列里一条因 Lead 已对该 Worker 采取行动而撤下的异常终止回报。 */
+export interface WithdrawnFailureNotice {
+  queuedMessageId: string;
+  text: string;
+}
+
+/**
+ * 附在异常终止回报末尾的宿主说明：Worker 出错后原样保留，可以原地继续或先换模型。
+ * 2026-11-10 现场：五个 Worker 撞上用量上限后被全部归档重建，丢了上下文，还撞上名字冲突。
+ */
+export function buildWorkerFailureRecoveryNote(workerSessionId: string): string {
+  return (
+    '(Host note: this Worker is kept as it is: its conversation, working directory and uncommitted changes ' +
+    `are intact, and its status is now error. To retry or continue, send_to_worker to the same worker (session_id: ${workerSessionId}). ` +
+    'If the cause is a usage limit or an unavailable model, first choose another route for it with set_worker_runtime ' +
+    '(models and sources from list_available_models; not available for a Worker running on another computer), ' +
+    'then send_to_worker: the new route starts with this conversation. ' +
+    'Archiving it and creating a replacement starts over without this context.)'
+  );
+}
+
+const SUBSCRIPTION_ROUTE_FAILURE = /\[(SUBSCRIPTION_ACCOUNT_(?:LIMITED|UNAVAILABLE|LOGIN_REQUIRED|SIGNING_IN))\]/;
+
+/**
+ * send_to_worker could not start the Worker on its current subscription route. The Lead
+ * cannot see account quotas the way the picker shows them, so say what failed and what
+ * continues the same Worker. Everything else keeps the host message as it was.
+ */
+export function workerRouteFailureHint(message: string): string | null {
+  const code = SUBSCRIPTION_ROUTE_FAILURE.exec(message)?.[1];
+  if (!code) return null;
+  const resetAtMs = Number(/resetAtMs=(\d+)/.exec(message)?.[1]);
+  const reason = code === 'SUBSCRIPTION_ACCOUNT_LIMITED'
+    ? `its subscription account is at its usage limit${Number.isFinite(resetAtMs) && resetAtMs > 0 ? ` until ${new Date(resetAtMs).toISOString()}` : ''}`
+    : code === 'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED' || code === 'SUBSCRIPTION_ACCOUNT_SIGNING_IN'
+      ? 'its subscription account needs the user to sign in again'
+      : 'its subscription account is unavailable';
+  return (
+    `The message was not delivered: the Worker's current route cannot start because ${reason}. ` +
+    'Its conversation, working directory and changes are kept. To continue now, choose another route with ' +
+    'set_worker_runtime (list_available_models lists models and sources; the same subscription source can move ' +
+    'it to another of its accounts that has quota), then send_to_worker again; or wait and send then.'
+  );
+}
 
 /** update_worker 的 domain result：worker 展示角色名与 team 内唯一 label。 */
 export type UpdateWorkerResult =
@@ -245,6 +302,14 @@ export type MergeWorkerQueuedMessagesResult =
       messages?: WorkerQueuedMessageSnapshot[];
     };
 
+/** How the Lead took an accepted Worker report; queued reports can still be withdrawn. */
+export interface WorkerReportReceipt {
+  delivered: boolean;
+  queuedMessageId?: string;
+}
+
+export type WorkerReportWithdrawalStanding = 'covered' | 'last' | 'other-assignment' | 'untracked';
+
 /** worker turn 终止后由 register.ts 的事件 adapter 回调 service。 */
 export interface WorkerTerminalTurnParams {
   sessionId: string;
@@ -253,6 +318,7 @@ export interface WorkerTerminalTurnParams {
   /** Provider/session diagnostic used when an error turn has no assistant output. */
   diagnostic?: string;
   capture?: WorkerTerminalTurnCapture;
+  remoteReport?: { proxySessionId: string; inputClientIds: string[]; messageId?: string };
 }
 
 /** INPUT_STOP / ABORT_SESSION 记录的手动中断快照，用来让 terminal handler 静默收尾。 */
@@ -359,11 +425,20 @@ export interface OrcaTeamServiceDeps {
   getWorkerLinkBySessionId(workerSessionId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   getWorkerLinkByWorkerId(workerId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerRecordSnapshot[]>;
-  getLiveSession(sessionId: string): { isTurnRunning(): boolean; getTurnGeneration?(): number } | null;
+  getLiveSession(sessionId: string): {
+    isTurnRunning(): boolean;
+    getTurnGeneration?(): number;
+    hasLiveBackgroundWork?(): Promise<boolean>;
+  } | null;
   resumeWorkerSession(
     worker: OrcaWorkerRecordSnapshot,
     link: OrcaWorkerLinkSnapshot,
   ): Promise<void>;
+  /**
+   * 任务登记了尚未落地的 Agent／模型／来源选择(下一次发送时生效)。此时不按数据库里的旧路线
+   * 唤醒休眠的 Worker：派发会先应用这次选择，再在新路线上启动。
+   */
+  hasPendingAgentSwitch?(sessionId: string): boolean;
   /** 修订 worker 的 role/label；label 唯一性由 store 的唯一索引把关。 */
   updateWorkerIdentity: (input: {
     workerId: string;
@@ -380,7 +455,7 @@ export interface OrcaTeamServiceDeps {
   restoreWorkerDoneIfIdle(workerId: string): Promise<boolean>;
   closeWorkerSession(sessionId: string, beforeClose?: () => Promise<void>): Promise<void>;
   /** 与 Session.send reservation 原子互斥；false 表示 direct send/turn 已先取得会话。 */
-  closeWorkerSessionIfIdle(sessionId: string, sendLockHeld?: boolean): Promise<boolean>;
+  closeWorkerSessionIfIdle(sessionId: string, sendLockHeld?: boolean, options?: { intent: 'explicit-release' }): Promise<boolean>;
   /** pending / dispatch-boundary / recovery 输入任一存在时返回 true。 */
   hasPendingWorkerInput(sessionId: string): Promise<boolean>;
   /** send_to_session 的恢复/直发锁覆盖 bootstrap 到 Session.send reservation 的窗口。 */
@@ -431,7 +506,9 @@ export interface OrcaTeamServiceDeps {
     leadSessionId: string,
     message: string,
     workerId: string,
-  ): Promise<{ accepted: boolean }>;
+    report?: WorkerTerminalTurnParams['remoteReport'],
+    reportClientId?: string,
+  ): Promise<{ accepted: boolean; reportRejected?: true }>;
   /**
    * 读取目标 session 输入队列的当前快照(pendingQueue + steering 中的 clientId)。
    * 实现方(register.ts)须先 ensureQueueRestored 再读,保证崩溃恢复条目可见。
@@ -499,6 +576,11 @@ export interface OrcaTeamService {
     role?: string;
     label?: string;
   }): Promise<UpdateWorkerResult>;
+  /** 外部调用边界：只在 Lead 自己的 Worker 里按 worker_id / session_id 找到目标(换模型等任务级操作用)。 */
+  resolveWorkerSession(params: { callerLeadSessionId: string; workerId: string }): Promise<
+    | { ok: true; workerId: string; sessionId: string }
+    | { ok: false; errorCode: 'WORKER_NOT_FOUND' | 'INTERNAL'; message: string }
+  >;
   /** 外部调用边界：列出目标 worker 输入队列中的排队消息(lead 自己的条目含正文)。 */
   /** workerRef 省略时读取 Lead 自己的输入队列(Worker 回报在 Lead 忙时排在这里)。 */
   listWorkerQueuedMessages(params: {
@@ -538,7 +620,33 @@ export interface OrcaTeamService {
   }): Promise<MoveWorkerQueuedMessageResult>;
   captureWorkerText(sessionId: string, text: string, opts?: { isFinal?: boolean }): void;
   clearAutoBridgeState(sessionId: string): void;
-  captureLocalWorkerReport(sessionId: string): (accepted: boolean) => Promise<void>;
+  /**
+   * The receipt says how an accepted report was taken: delivered to the Lead now (direct send or
+   * same-turn steer) or waiting in the Lead's queue under `queuedMessageId`. It only feeds
+   * `workerReportWithdrawalStanding`.
+   */
+  captureLocalWorkerReport(
+    sessionId: string,
+  ): (accepted: boolean, receipt?: WorkerReportReceipt) => Promise<void>;
+  /**
+   * What withdrawing this queued report would do to the Worker's current assignment. Accepting a
+   * report (even into the queue) settles the duty to report, so nothing is auto-bridged later:
+   * - `covered`: the assignment has another accepted report, queued or already read;
+   * - `last`: it is the assignment's only report — withdrawing it leaves the Lead uninformed;
+   * - `other-assignment`: it belongs to an earlier assignment; the current one still reports;
+   * - `untracked`: no Lead assignment is running (direct user turn, or state lost on restart).
+   */
+  workerReportWithdrawalStanding(
+    sessionId: string,
+    queuedMessageId: string,
+  ): WorkerReportWithdrawalStanding;
+  /** A queued report left the Lead's queue undelivered (withdrawn, merged away, Stop, clear). */
+  forgetWorkerQueuedReports(sessionId: string, queuedMessageIds: readonly string[]): void;
+  /**
+   * A merge kept `queuedMessageId` in place of reports that belonged to the current assignment:
+   * it now carries that assignment's report. No-op without a running assignment.
+   */
+  adoptWorkerQueuedReport(sessionId: string, queuedMessageId: string): void;
   /** Execution-device settlement retains its existing durable done semantics. */
   settleReportedWorker(
     capture: WorkerTerminalTurnCapture,
@@ -557,6 +665,13 @@ export interface OrcaTeamService {
 /** ready/inFlight 与对象身份共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
 interface AutoBridgeState {
   pending: boolean;
+  /** Reports of this assignment that reached the Lead directly or by same-turn steer. */
+  deliveredReports: number;
+  /**
+   * Reports of this assignment accepted into the Lead's queue. An id stays after the Lead
+   * drains it (that is a delivery) and is dropped only when the report is discarded undelivered.
+   */
+  queuedReportIds: Set<string>;
   reportsInFlight: Set<Promise<void>>;
   terminalObserved: boolean;
   productTerminal?: Pick<WorkerTerminalTurnCapture, 'runtime' | 'turnGeneration'>;
@@ -570,6 +685,7 @@ interface AutoBridgeState {
     status: 'done' | 'error';
     finalText: string;
     diagnostic?: string;
+    remoteReport?: WorkerTerminalTurnParams['remoteReport'];
   };
 }
 
@@ -702,6 +818,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   ): AutoBridgeState {
     const state: AutoBridgeState = {
       pending: true,
+      deliveredReports: 0,
+      queuedReportIds: new Set(),
       reportsInFlight: new Set(),
       terminalObserved: false,
       ready: false,
@@ -780,7 +898,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
   async function bridgeWorkerCompletion(
     sessionId: string,
-    turn: { status: 'done' | 'error'; finalText: string; diagnostic?: string },
+    turn: { status: 'done' | 'error'; finalText: string; diagnostic?: string; remoteReport?: WorkerTerminalTurnParams['remoteReport'] },
     state: AutoBridgeState | undefined,
   ): Promise<'accepted' | 'deferred' | 'rejected' | 'skipped'> {
     if (!state) return 'skipped';
@@ -807,13 +925,14 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     }
     const finalText = turn.finalText.trim() || state.capturedText.trim()
       || turn.diagnostic?.trim() || '(no output captured)';
-    const header = turn.status === 'error'
-      ? '[Auto-bridged: worker 异常终止]'
-      : '[Auto-bridged: worker 已完成，系统自动回传结果]';
+    const report = turn.status === 'error'
+      ? `${ORCA_AUTO_BRIDGE_FAILURE_HEADER}\n\n${finalText}\n\n${buildWorkerFailureRecoveryNote(sessionId)}`
+      : `[Auto-bridged: worker 已完成，系统自动回传结果]\n\n${finalText}`;
     let accepted = false;
     try {
       accepted = (await deps.sendAutoBridgeToLead(
-        state.leadSessionId, `${header}\n\n${finalText}`, state.workerId,
+        state.leadSessionId, report, state.workerId,
+        ...(turn.remoteReport ? [turn.remoteReport] as const : []),
       )).accepted;
     } catch (err) {
       deps.log.warn('orca auto-bridge failed', {
@@ -830,6 +949,59 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       state.retryAfterRejectedDelivery = true;
       return 'rejected';
     });
+  }
+
+  /**
+   * 该 Worker 排在 Lead 队列里、Lead 还没读到的异常终止自动回报。只认宿主生成的固定开头，
+   * Worker 自己写的回报（成果、提问）不在此列；正在投递的不动。
+   */
+  async function listQueuedFailureNotices(
+    leadSessionId: string,
+    workerSessionId: string,
+  ): Promise<AgentInputQueuedMessage[]> {
+    const snapshot = await deps.getSessionQueueSnapshot(leadSessionId);
+    const busy = new Set([...snapshot.consumingClientIds, ...snapshot.steeringClientIds]);
+    return snapshot.pendingQueue.filter((item) =>
+      !busy.has(item.clientId)
+      && isOrcaCollaborationMessage(item)
+      && item.origin.senderSessionId === workerSessionId
+      && (item.origin.displayText ?? '').startsWith(ORCA_AUTO_BRIDGE_FAILURE_HEADER));
+  }
+
+  /**
+   * Lead 已经对这个 Worker 采取了行动（归档，或重新派活），它此前那次异常终止的回报就过期了：
+   * 留在队列里只会在之后单独唤醒 Lead 一轮，让它再确认一次「这条已处理」。撤下走 coordinator
+   * 的 remove（与 Stop 清队列同一条结清路径），正文由调用方写进本次操作的回执，Lead 不丢信息。
+   * 读队列或撤下失败只记日志：这是清理，不能让已经成立的归档或派发变成失败。
+   */
+  async function withdrawQueuedFailureNotices(
+    leadSessionId: string,
+    workerSessionId: string,
+    only?: readonly AgentInputQueuedMessage[],
+  ): Promise<WithdrawnFailureNotice[]> {
+    try {
+      const candidates = only ?? await listQueuedFailureNotices(leadSessionId, workerSessionId);
+      const withdrawn: WithdrawnFailureNotice[] = [];
+      for (const item of candidates) {
+        if (!deps.removeQueuedMessage(leadSessionId, item.clientId, item)) continue;
+        withdrawn.push({
+          queuedMessageId: item.clientId,
+          text: ((item.origin?.kind === 'orca' ? item.origin.displayText : undefined) ?? item.text)
+            .slice(0, MAX_WITHDRAWN_FAILURE_NOTICE_TEXT),
+        });
+      }
+      if (withdrawn.length > 0) {
+        deps.log.info('orca withdrew superseded worker failure notices', {
+          leadSessionId, workerSessionId, count: withdrawn.length,
+        });
+      }
+      return withdrawn;
+    } catch (err) {
+      deps.log.warn('orca failed to withdraw superseded worker failure notices', {
+        leadSessionId, workerSessionId, err: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
   }
 
   function captureWorkerTerminalTurn(sessionId: string): WorkerTerminalTurnCapture {
@@ -975,13 +1147,16 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           case 'REHYDRATE_FAILED':
           case 'HOST_NOT_READY':
           case 'SEND_FAILED':
+          case 'PLUGIN_TURN_SKIPPED':
+          case 'PLUGIN_TURN_BLOCKED':
             return 'AGENT_NOT_READY';
         }
       })();
+      const hint = errorCode === 'AGENT_NOT_READY' ? workerRouteFailureHint(outcome.message) : null;
       return {
         ok: false,
         errorCode,
-        message: outcome.message,
+        message: hint ? `${hint}\n${outcome.message}` : outcome.message,
       };
     }
     return {
@@ -1228,7 +1403,12 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           // Runtime liveness is independent from the persisted worker status. After a restart a
           // running/error worker can be dormant too, and must rehydrate through the Worker-specific
           // path so its stored permission mode and Orca vendor options are preserved.
-          if (!wasLiveBeforeDispatch) await deps.resumeWorkerSession(target, link);
+          // A staged route choice is the exception: waking the old route first can fail on it
+          // (e.g. its subscription is at its usage limit) before the choice lands. Delivery
+          // applies the choice, then starts the Worker on the new route with the same identity.
+          if (!wasLiveBeforeDispatch && !deps.hasPendingAgentSwitch?.(target.sessionId)) {
+            await deps.resumeWorkerSession(target, link);
+          }
           await params.assertCurrent?.();
           result = await deps.dispatchWorkerMessage({
             targetSessionId: target.sessionId,
@@ -1363,6 +1543,17 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             : resolved.message,
       };
     }
+    // 派发前记下已有的异常终止回报：只撤这些。派发之后才进队列的属于新一轮，必须照常送达。
+    const staleFailureNotices = resolved.worker.status === 'error'
+      ? await listQueuedFailureNotices(params.callerLeadSessionId, resolved.worker.sessionId).catch(() => [])
+      : [];
+    const supersededNotices = async (): Promise<{ supersededFailureNotices?: WithdrawnFailureNotice[] }> => {
+      if (staleFailureNotices.length === 0) return {};
+      const withdrawn = await withdrawQueuedFailureNotices(
+        params.callerLeadSessionId, resolved.worker.sessionId, staleFailureNotices,
+      );
+      return withdrawn.length > 0 ? { supersededFailureNotices: withdrawn } : {};
+    };
     const execution = await dispatchResolvedWorker({
       resolved,
       message: params.message,
@@ -1391,6 +1582,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         queuePaused:
           execution.stopResult?.queuePaused ??
           deps.getWorkerQueuePaused(resolved.worker.sessionId),
+        ...(await supersededNotices()),
       };
     }
     const dispatchResult = mapNormalDispatchResult(resolved.worker, execution);
@@ -1412,6 +1604,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
               : {}),
           }
         : {}),
+      ...(await supersededNotices()),
     };
   }
 
@@ -1512,9 +1705,18 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       }
       if (params.expectedStatus) {
         await assertAfterIdle();
-        const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker');
+        const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker', false, assertAfterIdle);
         if (!didClose) {
+          // A normal refusal also crosses an asynchronous boundary (including
+          // remote lookup). Do not renew an expired request into a deferred retry.
+          await assertAfterIdle();
           await rollbackDoneAcknowledgement();
+          if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
+            await opts?.assertCurrent?.();
+            const authority = await captureDeferredAuthority(params.callerLeadSessionId, opts);
+            await opts?.assertCurrent?.();
+            deferDoneAcknowledgement(worker.id, authority);
+          }
           return {
             ok: false,
             errorCode: 'WORKER_STATE_CHANGED',
@@ -1564,7 +1766,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     const archive = async (): Promise<OrcaOkResult> => {
     await params.beforeArchive?.();
     if (params.onlyIfIdle) {
-      if ((activeWorkerDispatches.get(worker.id) ?? 0)>0 || await deps.hasPendingWorkerInput(worker.sessionId) || !await closeWorkerSessionIfIdleBestEffort(worker.sessionId,'releaseWorker',true)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has active or queued input'};
+      if ((activeWorkerDispatches.get(worker.id) ?? 0)>0 || await deps.hasPendingWorkerInput(worker.sessionId) || !await closeWorkerSessionIfIdleBestEffort(worker.sessionId,'releaseWorker',true,params.beforeArchive,{ intent: 'explicit-release' })) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has active or queued input'};
       if (await deps.hasPendingWorkerInput(worker.sessionId)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has queued input'};
     }
     await params.beforeArchive?.();
@@ -1580,7 +1782,12 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     await params.beforeArchive?.();
     await deps.updateWorkerStatus(worker.id, 'done');
     deps.broadcastOrcaWorkerChanged(link.leadSessionId);
-    return { ok: true, workerId: worker.id };
+    const withdrawn = await withdrawQueuedFailureNotices(link.leadSessionId, worker.sessionId);
+    return {
+      ok: true,
+      workerId: worker.id,
+      ...(withdrawn.length > 0 ? { withdrawnFailureNotices: withdrawn.length } : {}),
+    };
     };
     // Never wait for a send while holding the Worker transition: send acceptance
     // also needs this transition. Check and reserve synchronously (no await).
@@ -1588,6 +1795,14 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     return params.onlyIfIdle ? deps.withSessionSendLock(worker.sessionId, archive) : archive();
     };
     return params.onlyIfIdle ? withWorkerTransition(params.workerId,perform) : perform();
+  }
+
+  async function resolveWorkerSession(params: { callerLeadSessionId: string; workerId: string }) {
+    const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
+    if (found.ok) return { ok: true as const, workerId: found.worker.id, sessionId: found.worker.sessionId };
+    return found.errorCode === 'NOT_FOUND'
+      ? { ok: false as const, errorCode: 'WORKER_NOT_FOUND' as const, message: `worker ${params.workerId} not found` }
+      : { ok: false as const, errorCode: 'INTERNAL' as const, message: found.message };
   }
 
   async function updateWorker(params: {
@@ -2026,10 +2241,39 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     sessionId: string,
     owner: string,
     sendLockHeld = false,
+    beforeClose?: () => Promise<void>,
+    options?: { intent: 'explicit-release' },
   ): Promise<boolean> {
+    let authorityRejected = false;
+    const assertCloseAuthority = async () => {
+      try { await beforeClose?.(); }
+      catch (err) { authorityRejected = true; throw err; }
+    };
     try {
-      return await (sendLockHeld ? deps.closeWorkerSessionIfIdle(sessionId, true) : deps.closeWorkerSessionIfIdle(sessionId));
+      const runtime = deps.getLiveSession(sessionId);
+      const generation = runtime?.getTurnGeneration?.();
+      // Native work may outlive the foreground turn without appearing in the
+      // task snapshot. A failed probe is caught below and leaves the runtime alive.
+      if (runtime?.hasLiveBackgroundWork) {
+        const busy = await runtime.hasLiveBackgroundWork();
+        const queued = !busy && await deps.hasPendingWorkerInput(sessionId);
+        await assertCloseAuthority();
+        if (busy || queued) return false;
+        if (deps.getLiveSession(sessionId) !== runtime
+          || runtime.getTurnGeneration?.() !== generation) return false;
+      }
+      const didClose = await (options
+        ? deps.closeWorkerSessionIfIdle(sessionId, sendLockHeld, options)
+        : sendLockHeld ? deps.closeWorkerSessionIfIdle(sessionId, true) : deps.closeWorkerSessionIfIdle(sessionId));
+      // A normal refusal can also outlive the caller's authority, even when
+      // the runtime has no native background probe (remote worker shims).
+      await assertCloseAuthority();
+      return didClose;
     } catch (err) {
+      if (authorityRejected) throw err;
+      // A failed provider probe/close is retryable only while the caller's
+      // authority still holds; otherwise it must not acquire a new retry guard.
+      await assertCloseAuthority();
       deps.log.warn(`${owner}: close idle worker session failed`, {
         sessionId,
         err: err instanceof Error ? err.message : String(err),
@@ -2045,6 +2289,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     idleWorker,
     archiveWorker,
     updateWorker,
+    resolveWorkerSession,
     listWorkerQueuedMessages,
     updateWorkerQueuedMessage,
     cancelWorkerQueuedMessage,
@@ -2079,9 +2324,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const settled = new Promise<void>(resolve => { release = resolve; });
       state.reportsInFlight.add(settled);
       let finished = false;
-      return async (accepted) => {
+      return async (accepted, receipt) => {
         if (finished) return;
         finished = true;
+        if (accepted && receipt?.delivered) state.deliveredReports += 1;
+        else if (accepted && receipt?.queuedMessageId) state.queuedReportIds.add(receipt.queuedMessageId);
         try {
           await withWorkerTransition(state.workerId, async () => {
             const provisional = provisionalDispatches.get(sessionId);
@@ -2093,6 +2340,27 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           release();
         }
       };
+    },
+    workerReportWithdrawalStanding(sessionId, queuedMessageId) {
+      const state = autoBridge.get(sessionId);
+      if (!state) return 'untracked';
+      // Same boundary as captureLocalWorkerReport: once the assignment's product turn ended,
+      // a later direct user turn is not that assignment.
+      const runtime = deps.getLiveSession(sessionId);
+      if (state.productTerminal && (
+        state.productTerminal.runtime !== runtime
+        || state.productTerminal.turnGeneration !== runtime?.getTurnGeneration?.()
+      )) return 'untracked';
+      if (!state.queuedReportIds.has(queuedMessageId)) return 'other-assignment';
+      return state.deliveredReports > 0 || state.queuedReportIds.size > 1 ? 'covered' : 'last';
+    },
+    forgetWorkerQueuedReports(sessionId, queuedMessageIds) {
+      const state = autoBridge.get(sessionId);
+      if (!state) return;
+      for (const id of queuedMessageIds) state.queuedReportIds.delete(id);
+    },
+    adoptWorkerQueuedReport(sessionId, queuedMessageId) {
+      autoBridge.get(sessionId)?.queuedReportIds.add(queuedMessageId);
     },
     async settleReportedWorker(capture, commit) {
       const link = await deps.getWorkerLinkBySessionId(capture.sessionId);

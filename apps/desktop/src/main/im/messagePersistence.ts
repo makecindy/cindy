@@ -29,7 +29,7 @@ import {
   patchMessageAgentMeta,
   broadcastMessageAgentMetaUpdate,
 } from '../localDb/ipc/messages';
-import { enqueueDurableWrite } from '../messagePersistBroadcaster';
+import { enqueueDurableWrite } from '../messagePersistBroadcaster.desktop';
 import type { ImMessageSource } from '../../shared/imMessageSource';
 import { createLogger } from '../logger';
 

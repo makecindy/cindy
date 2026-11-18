@@ -54,19 +54,29 @@ export default {
       await percent.waitFor();
       assert.equal(await percent.inputValue(), '30');
       const recommended = page.getByRole('combobox', { name: await ui.t('providerShare.memberBudget.recommended'), exact: true });
+      // Shared Selects (DESIGN §4): pick by the model's visible name, read the trigger text.
+      const names = { 'claude-sonnet': 'Sonnet', 'claude-haiku': 'Haiku', 'claude-fable': 'Fable', 'gpt-sol': 'Sol', 'gpt-terra': 'Terra', 'gpt-astra': 'Astra', 'catalog-new-model-42': 'New model 42' };
+      const pick = async (select, id) => {
+        await select.click();
+        await page.getByRole('option', { name: names[id], exact: true }).click();
+        await page.getByRole('listbox').waitFor({ state: 'detached' });
+      };
+      const shows = async (select, id) => (await select.textContent())?.includes(names[id]);
       const claude = ui.case === 'budget-claude';
       const alternative = claude ? 'claude-haiku' : 'gpt-sol';
-      await recommended.selectOption(alternative);
-      assert.equal(await recommended.inputValue(), alternative);
-      await recommended.selectOption(claude ? 'claude-sonnet' : 'gpt-terra');
+      await pick(recommended, alternative);
+      assert.ok(await shows(recommended, alternative));
+      await pick(recommended, claude ? 'claude-sonnet' : 'gpt-terra');
       const selectedModel = page.getByRole('combobox', { name: await ui.t('providerShare.memberBudget.chooseModels'), exact: true });
-      assert.equal(await selectedModel.inputValue(), claude ? 'claude-fable' : 'gpt-astra');
-      if (claude) assert.equal(await selectedModel.locator('option[value="gpt-astra"]').count(), 0);
-      else assert.equal(await selectedModel.locator('option[value="claude-fable"]').count(), 0);
+      assert.ok(await shows(selectedModel, claude ? 'claude-fable' : 'gpt-astra'));
+      await selectedModel.click();
+      assert.equal(await page.getByRole('option', { name: names[claude ? 'gpt-astra' : 'claude-fable'], exact: true }).count(), 0);
+      await page.keyboard.press('Escape');
+      await page.getByRole('listbox').waitFor({ state: 'detached' });
       if (ui.case === 'budget-new-model') {
-        await selectedModel.selectOption('catalog-new-model-42');
-        await recommended.selectOption('catalog-new-model-42');
-        assert.equal(await selectedModel.inputValue(), 'catalog-new-model-42');
+        await pick(selectedModel, 'catalog-new-model-42');
+        await pick(recommended, 'catalog-new-model-42');
+        assert.ok(await shows(selectedModel, 'catalog-new-model-42'));
       }
       if (ui.case === 'budget-unsupported') {
         assert.equal(await page.getByRole('button', { name: await ui.t('providerShare.memberBudget.addGroup'), exact: true }).isEnabled(), false);

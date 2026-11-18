@@ -20,7 +20,7 @@ vi.mock('../../../authManager.js', () => ({
 }));
 vi.mock('../../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyAccountServices: true }) }));
 vi.mock('../../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://example.test' }));
-vi.mock('../../../maker-host/outbound-fetch.js', () => ({ createOutboundHttpAgent: vi.fn(), outboundFetch: vi.fn() }));
+vi.mock('../../../maker-host/outbound-fetch.desktop.js', () => ({ createOutboundHttpAgent: vi.fn(), outboundFetch: vi.fn() }));
 
 import { getScheduleWebhookHost, scheduleWebhookReceiver, startScheduleWebhooks, stopScheduleWebhooks } from '../runtime';
 

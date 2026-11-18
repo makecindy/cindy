@@ -11,6 +11,13 @@ import path from 'node:path';
 let userDataDir = '';
 
 vi.mock('electron', () => ({ app: { getPath: () => userDataDir } }));
+// Keep policy locking and settings I/O real, but scope all files to this fake owner.
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => 'settings-test-owner',
+  isAppSessionBoundaryPending: () => false,
+  ownerScopedUserDataPath: (...parts: string[]) => path.join(userDataDir, ...parts),
+}));
+vi.mock('../providerShareAvailabilityTransport.js', () => ({ disableShareAvailability: vi.fn() }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
@@ -19,7 +26,7 @@ import {
   readDeviceLinkSettings,
   updateDeviceLinkSetting,
   writeDeviceLinkSetting,
-} from '../settings-store';
+} from '../settings-store.desktop';
 
 const FILE = 'device-link-settings.json';
 
@@ -41,7 +48,12 @@ afterAll(() => {
 
 describe('settings-store 多实例 mtime 失效', () => {
   it('无文件时返回默认值', () => {
-    expect(readDeviceLinkSettings().remoteControlEnabled).toBe(false);
+    // agent-net 产品规则：新安装不自动启用实验连接或限制旧版连接。
+    expect(readDeviceLinkSettings()).toMatchObject({
+      remoteControlEnabled: false,
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
+    });
   });
 
   it('本实例写入后读到新值(常规缓存路径)', async () => {
@@ -54,6 +66,26 @@ describe('settings-store 多实例 mtime 失效', () => {
     const s = readDeviceLinkSettings();
     expect(s.remoteControlEnabled).toBe(false);
     expect(s.revokedControllers).toEqual(['dev-x']);
+    // 升级前的文件缺少 Agent-Net 字段时，同样保留 V1 默认路径。
+    expect(s.agentNetEnabled).toBe(false);
+    expect(s.agentNetOnlyEncrypted).toBe(false);
+  });
+
+  it('升级读取保留用户显式启用的 Agent-Net 设置', () => {
+    externalWrite({ agentNetEnabled: true, agentNetOnlyEncrypted: true }, 3_000);
+    expect(readDeviceLinkSettings()).toMatchObject({ agentNetEnabled: true, agentNetOnlyEncrypted: true });
+  });
+
+  // #10095 discussion_r4546229095：恢复中的记录需经过真实设置存储保留，否则重启后会接受已取消的确认。
+  // 原测试没有待确认记录的写盘/重载；最小输入为 restoring:true 的 pending。tier:unit，复用现有临时目录。
+  it('保留远程切换恢复中的标记，写盘和外部重载都不丢失', async () => {
+    const pending = { switchId: 'switch-recover', controllerId: 'controller', previous: false,
+      deadlineAt: Date.now() + 60_000, pid: 123, restoring: true };
+    await writeDeviceLinkSetting('agentNetPendingSwitch', pending);
+    expect(readDeviceLinkSettings().agentNetPendingSwitch).toEqual(pending);
+    const saved = JSON.parse(fs.readFileSync(path.join(userDataDir, FILE), 'utf8')) as Record<string, unknown>;
+    externalWrite(saved, 3_500);
+    expect(readDeviceLinkSettings().agentNetPendingSwitch).toEqual(pending);
   });
 
   it('外部改动后本实例写入:以盘上最新内容为基线合并,不丢外部字段', async () => {
@@ -121,5 +153,75 @@ describe('settings-store 多实例 mtime 失效', () => {
     const a = readDeviceLinkSettings();
     const b = readDeviceLinkSettings();
     expect(b).toBe(a);
+  });
+});
+
+/**
+ * The process-wide default for unreadable settings files (override-settings-file.ts): the desktop
+ * never sets it and deletes an unreadable file as before; the Host sets it at boot, and then the
+ * file stays, reads as the defaults (everything off) and refuses writes until it changes.
+ */
+describe('an unreadable device-link-settings.json', () => {
+  const malformed = '{"remoteControlEnabled":true,"revokedControllers":["dev-revoked"],';
+  const file = () => path.join(userDataDir, FILE);
+
+  // Windows regression: the store treated UNKNOWN on open as corrupt JSON.
+  // Existing tests only cover malformed bytes. Inject a filesystem error for the real settings
+  // file and check fail-closed reads, write refusal, and recovery with the original revocations (unit).
+  it.each(['statSync', 'readFileSync'] as const)(
+    'preserves settings when %s fails and reloads after access recovers', async (operation) => {
+      const settings = { remoteControlEnabled: true, revokedControllers: ['dev-revoked'] };
+      externalWrite(settings, 110_000);
+      const filename = file();
+      const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+      const original = fs[operation];
+      const io = vi.spyOn(fs, operation).mockImplementation((...args: unknown[]) => {
+        if (args[0] === filename) throw Object.assign(new Error('UNKNOWN: cannot access settings'), { code: 'UNKNOWN' });
+        return Reflect.apply(original, fs, args);
+      });
+      try {
+        expect(readDeviceLinkSettings().remoteControlEnabled).toBe(false);
+        await expect(writeDeviceLinkSetting('keepAwake', true)).rejects.toThrow(/unreadable/);
+        expect(fs.existsSync(filename)).toBe(true);
+        io.mockRestore();
+        clock.mockReturnValue(2_001);
+        expect(readDeviceLinkSettings()).toMatchObject({ ...settings, keepAwake: false });
+      } finally {
+        io.mockRestore();
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it('unset, as on the desktop: is deleted, reads as the defaults, and the next write replaces it', async () => {
+    externalWrite({ remoteControlEnabled: true }, 120_000);
+    fs.writeFileSync(file(), malformed, 'utf-8');
+    const t = new Date(Date.now() + 130_000);
+    fs.utimesSync(file(), t, t);
+    expect(readDeviceLinkSettings()).toMatchObject({ remoteControlEnabled: false, revokedControllers: [] });
+    expect(fs.existsSync(file())).toBe(false);
+    await writeDeviceLinkSetting('remoteControlEnabled', true);
+    expect(readDeviceLinkSettings().remoteControlEnabled).toBe(true);
+  });
+
+  it('set (the Host): is kept, reads as the defaults, refuses writes, and is read again once repaired', async () => {
+    const { setPreserveUnreadableSettingsFilesByDefault } = await import('../../maker-host/override-settings-file.js');
+    setPreserveUnreadableSettingsFilesByDefault(true);
+    try {
+      fs.writeFileSync(file(), malformed, 'utf-8');
+      const t = new Date(Date.now() + 140_000);
+      fs.utimesSync(file(), t, t);
+      expect(readDeviceLinkSettings()).toMatchObject({ remoteControlEnabled: false, revokedControllers: [] });
+      expect(fs.readFileSync(file(), 'utf-8')).toBe(malformed);
+      await expect(writeDeviceLinkSetting('remoteControlEnabled', true)).rejects.toThrow(/unreadable/);
+      await expect(updateDeviceLinkSetting('revokedControllers', (list) => [...list, 'dev-x'])).rejects.toThrow(/unreadable/);
+      expect(fs.readFileSync(file(), 'utf-8')).toBe(malformed);
+      externalWrite({ remoteControlEnabled: true, revokedControllers: ['dev-revoked'] }, 150_000);
+      expect(readDeviceLinkSettings()).toMatchObject({ remoteControlEnabled: true, revokedControllers: ['dev-revoked'] });
+      await writeDeviceLinkSetting('remoteControlEnabled', false);
+      expect(readDeviceLinkSettings()).toMatchObject({ remoteControlEnabled: false, revokedControllers: ['dev-revoked'] });
+    } finally {
+      setPreserveUnreadableSettingsFilesByDefault(false);
+    }
   });
 });

@@ -102,7 +102,7 @@ vi.mock('../logger', () => ({
 }));
 // Route admission is injected into the switch handler; this fixture exercises
 // persistence and projection without loading live provider credentials.
-vi.mock('../maker-host/model-route-guard-live.js', () => ({
+vi.mock('../maker-host/model-route-guard-catalog.js', () => ({
   shouldApplyExclusiveProviderRerouteLive: vi.fn(() => false),
 }));
 // 被 sessions.ts 顶层 import 但与本测试无关的副作用模块,全部 stub 掉避免触碰 electron app 路径。
@@ -150,7 +150,7 @@ import { createSessionSnapshotPatchBuffer } from '../../renderer/features/cc-age
 import {
   backgroundTurnPredatesSessionClear,
   noteSessionClearBoundary,
-} from '../messagePersistBroadcaster.js';
+} from '../messagePersistBroadcaster.desktop.js';
 
 beforeEach(() => {
   vi.clearAllMocks();

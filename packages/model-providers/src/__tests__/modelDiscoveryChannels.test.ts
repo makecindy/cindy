@@ -5,6 +5,70 @@ import { buildUserProvider } from '../user-provider.js';
 import { BUNDLED_CATALOG } from '../catalog.js';
 
 describe('shared provider discovery', () => {
+  it.each([
+    { context_length: '1000000' },
+    { context_window: '1000000' },
+    { max_context_length: '1000000' },
+    { max_input_tokens: '1000000' },
+    { contextWindow: '1000000' },
+    { model_info: { max_input_tokens: '1000000' } },
+    { limit: { context: '1000000' } },
+  ])('normalizes string context limits through discovery, refresh, save and all engines: %j', fields => {
+    const discovered = parseModelsListResponse({ data: [{ id: 'private-model', ...fields }] })!;
+    expect(discovered[0]).toMatchObject({ contextWindow: 1_000_000,
+      discoveredMetadata: { contextWindow: 1_000_000 } });
+    const previous = [{ id: 'private-model', name: 'Private',
+      discoveredMetadata: { contextWindow: 200_000 } }];
+    const refreshed = mergeDiscoveredRuntimeModels(previous, discovered);
+    const sparse = parseModelsListResponse({ data: [{ id: 'private-model' }] })!;
+    const models = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels(refreshed, sparse)));
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const runtime = { baseUrl: 'https://relay.example/v1', models };
+      expect(buildUserProvider({ id: 'relay', name: 'Relay', runtimes: { [agent]: runtime } })
+        .models[agent]?.[0]).toMatchObject({ contextWindow: 1_000_000, contextWindowVerified: true });
+      expect(buildUserProvider({ id: 'relay', name: 'Relay', runtimes: { [agent]: {
+        ...runtime, models: [{ ...models[0], contextWindow: 128_000 }],
+      } } }).models[agent]?.[0]?.contextWindow).toBe(128_000);
+    }
+    expect(previous[0].discoveredMetadata.contextWindow).toBe(200_000);
+  });
+
+  it.each(['', ' ', '1M', '1,000,000', '0', '-1', '0.5', '1000000.5', 'Infinity',
+    'NaN', '0x100000', '1e6', '9007199254740992', true, {}, []])(
+    'does not invent context limits from invalid values: %j', value => {
+      for (const fields of [{ context_length: value }, { contextWindow: value },
+        { model_info: { max_input_tokens: value } }, { limit: { context: value } }]) {
+        const [model] = parseModelsListResponse({ data: [{ id: 'private-model', ...fields }] })!;
+        expect(model.contextWindow).toBeUndefined();
+        expect(model.discoveredMetadata?.contextWindow).toBeUndefined();
+      }
+    });
+
+  it.each(['contextWindowMax', 'max_context_window'])(
+    'normalizes string capacity without inventing a reported working window: %s', key => {
+      const [model] = parseModelsListResponse({ data: [{ id: 'private-model', [key]: '1000000' }] })!;
+      expect(model.discoveredMetadata?.contextWindowMax).toBe(1_000_000);
+      expect(model.discoveredMetadata?.contextWindow).toBeUndefined();
+      expect(model.contextWindow).toBeUndefined();
+    });
+
+  it('keeps output validation unchanged when normalizing nested context strings', () => {
+    const [model] = parseModelsListResponse({ data: [{ id: 'private-model',
+      limit: { context: '1000000', output: '8192' },
+    }] })!;
+    expect(model.contextWindow).toBe(1_000_000);
+    expect(model.discoveredMetadata?.maxOutputTokens).toBeUndefined();
+  });
+
+  it('preserves field precedence and skips invalid context aliases', () => {
+    const models = parseModelsListResponse({ data: [
+      { id: 'first', context_length: '128000', context_window: 1_000_000,
+        contextWindow: 2_000_000, limit: { context: 3_000_000 } },
+      { id: 'second', context_length: 'invalid', context_window: ' 1000000 ' },
+    ] })!;
+    expect(models.map(model => model.contextWindow)).toEqual([128_000, 1_000_000]);
+  });
+
   // #8867: flat-window coverage missed OpenCode's nested limit metadata.
   // Unit: real discovery -> refresh merge -> JSON save -> three runtime catalogs.
   it('retains nested token limits through refresh and save without overriding user budgets', () => {
@@ -40,7 +104,7 @@ describe('shared provider discovery', () => {
     });
 
   it('ignores invalid nested token limits independently and retains unknown-model defaults', () => {
-    for (const value of [undefined, null, '', '1000000', 0, -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    for (const value of [undefined, null, '', '1M', 0, -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
       const [badContext, badOutput] = parseModelsListResponse({ data: [
         { id: 'private-model', limit: { context: value, output: 8192 } },
         { id: 'other-model', limit: { context: 128_000, output: value } },
@@ -54,7 +118,7 @@ describe('shared provider discovery', () => {
       const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
         pi: { baseUrl: 'https://relay.example/v1', models },
       } });
-      expect(provider.models.pi?.[0]?.contextWindow).toBe(200_000);
+      expect(provider.models.pi?.[0]?.contextWindow).toBe(500_000);
       expect(provider.models.pi?.[0]?.contextWindowVerified).not.toBe(true);
     }
   });
@@ -243,15 +307,72 @@ describe('shared provider discovery', () => {
 });
 
 
-it('does not offer thinking when a complete parameter list explicitly excludes it', () => {
+it('does not infer reasoning support from missing parameter names', () => {
   const models = parseModelsListResponse({ data: [
     { id: 'plain-model', supported_parameters: ['tools', 'temperature'], context_length: 32000 },
     { id: 'undocumented-model' },
     { id: 'reasoning-model', supported_parameters: ['tools', 'reasoning_effort'] },
   ] });
-  expect(models?.[0]?.discoveredMetadata?.efforts).toEqual([]);
+  expect(models?.[0]?.discoveredMetadata?.efforts).toBeUndefined();
   expect(models?.[1]?.discoveredMetadata?.efforts).toBeUndefined();
   expect(models?.[2]?.discoveredMetadata?.efforts).toBeUndefined();
+});
+
+// #11018, unit: parse -> refresh -> JSON save -> real three-engine catalog.
+// Previous coverage treated sparse supported_parameters as an explicit denial and
+// never refreshed a persisted empty efforts list against the known model registry.
+describe('sparse reasoning discovery refresh', () => {
+  it.each([
+    { supported_parameters: ['max_tokens', 'tools'] },
+    {},
+  ])('restores known capabilities after an incomplete response: %j', fields => {
+    const id = 'claude-fable-5-2';
+    const existing = [{ id, name: id, discoveredMetadata: { efforts: [], contextWindow: 128000 } }];
+    const discovered = parseModelsListResponse({ data: [{ id, ...fields }] })!;
+    expect(discovered[0].discoveredMetadata?.efforts).toBeUndefined();
+    const models = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels(existing, discovered)));
+    expect(models[0].discoveredMetadata).not.toHaveProperty('efforts');
+    expect(models[0].discoveredMetadata.contextWindow).toBe(128000);
+    expect(existing[0].discoveredMetadata.efforts).toEqual([]);
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const build = (rows: typeof models) => buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models: rows },
+      } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry }).models[agent]![0];
+      const expected = build([{ id, name: id, discoveredMetadata: {} }]);
+      expect(expected.efforts.length).toBeGreaterThan(0);
+      expect(build(models)).toMatchObject({ efforts: expected.efforts, defaultEffort: expected.defaultEffort });
+      for (const override of [{ efforts: ['low' as const], defaultEffort: 'low' as const }, { efforts: [], defaultEffort: null }]) {
+        const manual = mergeDiscoveredRuntimeModels([{ ...existing[0], ...override }], discovered);
+        expect(build(JSON.parse(JSON.stringify(manual)))).toMatchObject(override);
+      }
+    }
+    const unknown = parseModelsListResponse({ data: [{ id: 'private-undocumented', ...fields }] })!;
+    expect(buildUserProvider({ id: 'relay', name: 'Relay', runtimes: { codex: {
+      baseUrl: 'https://relay.example/v1', models: mergeDiscoveredRuntimeModels([], unknown),
+    } } }).models.codex![0]).toMatchObject({ efforts: [], defaultEffort: null, effortsUnknown: true });
+  });
+
+  it.each([
+    { reasoning: false },
+    { model_info: { supports_reasoning: false } },
+    { reasoning: { supportedEfforts: [] } },
+    { reasoning: { supportedEfforts: ['low', 'high'] } },
+  ])('keeps a fresh explicit declaration authoritative: %j', fields => {
+    const id = 'claude-fable-5-2';
+    const discovered = parseModelsListResponse({ data: [{ id, supported_parameters: ['tools'], ...fields }] })!;
+    const expected = 'reasoning' in fields && typeof fields.reasoning === 'object'
+      ? fields.reasoning.supportedEfforts : [];
+    const models = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels([
+      { id, name: id, discoveredMetadata: { efforts: [] } },
+    ], discovered)));
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const model = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models },
+      } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry }).models[agent]![0];
+      expect(model.efforts).toEqual(expected);
+      expect(model.effortsUnknown).not.toBe(true);
+    }
+  });
 });
 
 

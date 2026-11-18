@@ -771,6 +771,8 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     senderId: string,
     text: string,
   ): boolean {
+    // Explicit ordinary-question answers are handled by the shared Host gate, not a pending permission.
+    if (/^\s*\[?Q[0-9a-f]{8}\]?\s+/i.test(text)) return false;
     const pending = this.pendingReplies.get(userId);
     if (!pending) return false;
     const lane = decodeLaneUserId(userId);

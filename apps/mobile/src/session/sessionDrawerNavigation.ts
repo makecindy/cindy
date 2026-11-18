@@ -1,8 +1,14 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
+import type { RemoteSessionListItem } from './sessionList';
+import type { RemoteSession } from './types';
+
 export interface SessionDrawerRouteTarget {
+  taskListEntry?: 'sidebar';
   deviceId: string;
   deviceName: string;
   sessionId: string;
   focusClientId?: string;
+  companionSettings?: 'capabilities';
   resourceCollectionId?: string;
   resourceKind?: string;
   resourceId?: string;
@@ -30,12 +36,33 @@ export function switchDrawerSessionInPlace(
     deviceId: target.deviceId,
     deviceName: target.deviceName,
     sessionId: target.sessionId,
+    ...(target.taskListEntry ? { taskListEntry: target.taskListEntry } : {}),
     ...(target.focusClientId ? { focusClientId: target.focusClientId } : {}),
     ...(target.resourceId ? {
       resourceCollectionId: target.resourceCollectionId,
       resourceKind: target.resourceKind,
       resourceId: target.resourceId,
       resourceHistorySessionId: target.resourceHistorySessionId,
+      ...(target.companionSettings ? { companionSettings: target.companionSettings } : {}),
     } : {}),
   });
+}
+
+/** All task-list presentations resolve canonical hosts and search focus equally.
+ * Lookup is injected so this policy does not own subscriptions or a store. */
+export function taskListSessionTarget(
+  item: RemoteSessionListItem,
+  findDevice: (sessionId: string) => string | null | undefined,
+): SessionDrawerRouteTarget | null {
+  const session = item.session as RemoteSession;
+  const deviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId ?? findDevice(session.id);
+  if (!deviceId) return null;
+  const focusClientId = 'searchFocusClientId' in item
+    ? (item as { searchFocusClientId?: string }).searchFocusClientId : undefined;
+  return {
+    deviceId,
+    deviceName: deviceDisplayName(deviceId, session.deviceLinkDeviceName),
+    sessionId: session.id,
+    ...(focusClientId ? { focusClientId } : {}),
+  };
 }

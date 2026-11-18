@@ -389,6 +389,13 @@ function provider(id: string, model: Partial<CatalogModel> = {}): ProviderView {
 }
 
 describe('saved effort uses the selected provider and Harness catalog copy', () => {
+  // PR #9900, unit: upgrading a saved source adds a display-only alias marker.
+  // Previous dispatch coverage had no aliases; the original source must still resolve.
+  it('preserves an explicitly saved imported connection at dispatch', () => {
+    const imported = { ...provider('custom'), subscriptionPoolAlias: true as const };
+    expect(resolveScheduledModelSelection(selection, [provider('openai'), imported]))
+      .toMatchObject({ providerId: 'custom', model: 'test-model' });
+  });
   // Main now applies new-route admission to both local and remote restores.
   it('rejects a disabled local model during scheduled resolution', () => {
     expect(() => resolveScheduledModelSelection({ ...selection, agentDeviceId: null, effort: 'high' }, [

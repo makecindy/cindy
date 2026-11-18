@@ -1,0 +1,26 @@
+{
+  "check_all_targets": {
+    "exit": 0,
+    "command": "cargo check --profile sim --workspace --all-targets --features agent-net-sim/kcp --locked --offline"
+  },
+  "tests": {
+    "exit": 0,
+    "command": "cargo test --profile sim --workspace --features agent-net-sim/kcp --locked --offline",
+    "core_unit_pass": 3,
+    "sim_unit_pass": 1,
+    "reliability_pass": 38,
+    "ignored_profiling": 1,
+    "reliability_seconds": 24.65,
+    "note": "default 200 seeds, includes strengthened first-flight and outage regressions; execution receipt is in task tool transcript"
+  },
+  "netperf_release_build": {
+    "exit": 0,
+    "command": "cargo build --release -p agent-net-sim --features kcp --bin netperf --locked --offline"
+  },
+  "format": {
+    "exit": 1,
+    "existing_baseline_exit": 1,
+    "existing_baseline_diff_lines": 4689,
+    "note": "preserved pre-existing formatting; no bulk rewrite"
+  }
+}

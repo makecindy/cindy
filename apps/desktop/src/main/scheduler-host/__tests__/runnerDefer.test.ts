@@ -38,7 +38,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
 vi.mock('../workdir-resolver', () => ({ resolveWorkingDir: mocks.resolveWorkingDir }));
 vi.mock('../runners/_shared', () => ({ backfillSessionMeta: mocks.backfillSessionMeta }));
 
-import { MakerScheduleRunner, buildScheduledRunPrompt } from '../runner';
+import { MakerScheduleRunner, buildScheduledRunPrompt } from '../runner.desktop';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch.js';
 
 type SendImpl = (
@@ -137,6 +137,7 @@ function createRunnerHarness(session: Session, options: RunnerHarnessOptions = {
     // heartbeat alive 分支:getSessionMeta 返回有效 meta(非 null → 不归档)
     getSessionMeta: vi.fn(async () => ({ sdkSessionId: 'sdk-1', workDir: 'F:\\X', model: 'gpt-5.4' })),
     isSessionAlive: vi.fn(() => options.sessionAlive ?? true),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({ maker, getDb: () => ({}) as never, notifier, logger,
     findUsageLimitWait: options.findUsageLimitWait });

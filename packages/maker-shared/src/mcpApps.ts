@@ -2,6 +2,54 @@
 export const MCP_APPS_INVOKE = 'maker:mcp-apps:v1';
 export const MCP_APP_CARD = 'mcp-app';
 export const MCP_APP_LINK_GRANT_MS = 30_000;
+/** Public Host-owned display provenance; never a permission or publisher identity. */
+export type PluginInstallationSource = {
+  kind: 'official' | 'organization' | 'market' | 'third-party' | 'local' | 'unknown';
+  namespace?: string;
+};
+export function parsePluginInstallationSource(value: unknown): PluginInstallationSource {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { kind: 'unknown' };
+  const source = value as Record<string, unknown>;
+  if (typeof source.kind !== 'string' || !['official', 'organization', 'market', 'third-party', 'local', 'unknown'].includes(source.kind)) return { kind: 'unknown' };
+  if (source.kind === 'organization') return typeof source.namespace === 'string' && source.namespace !== 'local' && /^[a-z0-9][a-z0-9-]*$/.test(source.namespace)
+    ? { kind: 'organization', namespace: source.namespace } : { kind: 'unknown' };
+  return { kind: source.kind as PluginInstallationSource['kind'] };
+}
+/** Public card provenance contains no organization identifier. This parser is
+ * separate from installation-fact validation, where namespace remains required. */
+export function parseMcpAppSource(value: unknown): Pick<PluginInstallationSource, 'kind'> {
+  if (value && typeof value === 'object' && !Array.isArray(value) &&
+      (value as Record<string, unknown>).kind === 'organization') return { kind: 'organization' };
+  return { kind: parsePluginInstallationSource(value).kind };
+}
+
+/** Accept the early boolean projection and malformed/missing optional names. */
+export function parseMcpAppCustomMcp(value: unknown): true | { name: string } | undefined {
+  if (value === true) return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  const name = (value as Record<string, unknown>).name;
+  return typeof name === 'string' && name.trim() ? { name } : true;
+}
+
+export function isExceptionalPluginSource(source: PluginInstallationSource): boolean {
+  return !['official', 'organization', 'market'].includes(source.kind);
+}
+
+export function pluginSourceWarningKey(value: unknown): string | undefined {
+  const source = parsePluginInstallationSource(value);
+  return isExceptionalPluginSource(source) ? `mcpApps.source.${source.kind}` : undefined;
+}
+
+export function pluginSourceTooltip(name: string, source: unknown, label: (key: string) => string, page?: string): string {
+  const warning = pluginSourceWarningKey(source);
+  return (page ? `${page} — ` : '') + name + (warning ? ` · ${label(warning)}` : '');
+}
+
+/** An entry identity, not an arbitrary resource or a page-supplied permission. */
+export interface PluginUiSource {
+  instanceId: string;
+  viewId: string;
+}
 export interface McpAppLinkAuthorization {
   authorized: true;
   validForMs: number;
@@ -41,9 +89,13 @@ export interface McpAppRecord {
   };
   cancelled?: string;
 }
+export { McpAppSdkCache, mcpAppSdkCacheText } from './mcpAppSdkCache.js';
+
 export interface McpAppDocument {
+  /** Optional hash reference, only in response to advertised SDK bytes. */
+  sdkRef?: string;
   /** Executor-owned SDK bytes for this View; absent on older hosts. Never persisted in cards. */
-  sdk?: { source: string };
+  sdk?: { source: string; addons?: { 'cindy/view-state'?: { source: string; reactSource: string } } };
   viewId: string;
   transport?: undefined;
   html: string;
@@ -59,6 +111,8 @@ export interface McpAppDocument {
 
 /** A same-origin module supplied by the execution computer, not the viewing device. */
 export const HOST_APP_SDK_PATH = '/__cindy/sdk/ext-apps/app.js';
+export const CINDY_VIEW_STATE_SDK_PATH = '/__cindy/sdk/cindy/view-state.js';
+export const CINDY_VIEW_STATE_REACT_SDK_PATH = '/__cindy/sdk/cindy/view-state-react.js';
 /** Desktop UI metadata only; credential-backed App content stays in Main. */
 export interface McpAppSandboxView {
   viewId: string;
@@ -99,23 +153,38 @@ export function mcpAppHistoryText(record: McpAppRecord): string {
 
 /** Public history has no server identity, tool inputs, schema or View-only result. */
 export interface McpAppHistory {
+  plugin?: { name: string; source?: Pick<PluginInstallationSource, 'kind'> };
+  customMcp?: true | { name: string };
   title: string;
   text: string;
+}
+
+function parseHistoryPlugin(value: unknown): McpAppHistory['plugin'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  const plugin = value as Record<string, unknown>;
+  if (typeof plugin.name !== 'string') return;
+  return { name: plugin.name, ...(plugin.source !== undefined ? { source: parseMcpAppSource(plugin.source) } : {}) };
 }
 
 /** Display persisted records and public summaries without minting a View grant. */
 export function parseMcpAppHistory(content: unknown): McpAppHistory | undefined {
   const record = parseMcpAppRecord(content);
-  if (record) return {
-    title: typeof record.tool.title === 'string' ? record.tool.title : record.tool.name,
-    text: mcpAppHistoryText(record),
-  };
+  if (record) {
+    const plugin = parseHistoryPlugin((record.tool._meta as Record<string, unknown> | undefined)?.['cindy/plugin']);
+    const customMcp = parseMcpAppCustomMcp((record.tool._meta as Record<string, unknown> | undefined)?.['cindy/custom-mcp']) ?? true;
+    return { title: plugin?.name ?? (customMcp !== true ? customMcp.name : typeof record.tool.title === 'string' ? record.tool.title : record.tool.name),
+      text: mcpAppHistoryText(record), ...(plugin ? { plugin } : { customMcp }) };
+  }
   if (!content || typeof content !== 'object' || Array.isArray(content)) return;
   const value = (content as { mcpAppHistory?: unknown }).mcpAppHistory;
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
   const summary = value as Record<string, unknown>;
-  if (summary.version === 1 && typeof summary.title === 'string' && typeof summary.text === 'string')
-    return { title: summary.title, text: summary.text };
+  if (summary.version === 1 && typeof summary.title === 'string' && typeof summary.text === 'string') {
+    const plugin = parseHistoryPlugin(summary.plugin);
+    const customMcp = parseMcpAppCustomMcp(summary.customMcp);
+    return { title: summary.title, text: summary.text,
+      ...(plugin ? { plugin } : customMcp ? { customMcp } : {}) };
+  }
 }
 
 /** Only public history may leave Main outside an authorized sandboxed View. */
@@ -129,7 +198,8 @@ export function projectMcpAppContent(content: unknown, marked = false): unknown 
   }
   // Unknown/malformed cards must not fall back to sending the private original.
   const history = parseMcpAppHistory(value);
-  return { mcpAppHistory: { version: 1, title: history?.title ?? '', text: history?.text ?? '' } };
+  return { mcpAppHistory: { version: 1, title: history?.title ?? '', text: history?.text ?? '',
+    ...(history?.plugin ? { plugin: history.plugin } : {}), ...(history?.customMcp ? { customMcp: history.customMcp } : {}) } };
 }
 
 /** Trusted proxy. No privileged host API; relay only the actual inner window. */
@@ -177,7 +247,8 @@ post({jsonrpc:'2.0',method:'ui/notifications/sandbox-proxy-ready',params:{}});
 export function mcpAppSandboxDocument(nativeBridgeKey = '', resourceUrl?: string): string {
   const key = JSON.stringify(nativeBridgeKey).replace(/</g, '\\u003c');
   const resource = JSON.stringify(resourceUrl ?? null).replace(/</g, '\\u003c');
-  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}</style></head><body><script>const bridgeKey=${key};const expectedResourceUrl=${resource};${MCP_APP_SANDBOX_SCRIPT}</script></body></html>`;
+  // The top-level WebView owns the layout viewport; the App iframe cannot set it.
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}</style></head><body><script>const bridgeKey=${key};const expectedResourceUrl=${resource};${MCP_APP_SANDBOX_SCRIPT}</script></body></html>`;
 }
 /** Legacy inline wrapper; served native Views receive CSP headers from their resource server. */
 export function mcpAppNativeResource(html: string, csp: string): string {

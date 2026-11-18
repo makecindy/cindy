@@ -149,8 +149,11 @@ describe('SessionDragReleaseNativeHost', () => {
     expect(forgeSource).toContain(
       "const MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET = 'macos10.15';",
     );
-    expect(forgeSource.replace(/\s+/g, ' ')).toContain(
-      "MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET, [], 'remote desktop input'",
+    // Cross-file package compatibility: a bare version produces an invalid Swift
+    // target and prevents the privacy input helper from building. Verify the target
+    // argument while allowing linker flags (including the owner-verification plist).
+    expect(forgeSource).toMatch(
+      /buildSwiftHelperForForgeArch\(\s*main,\s*dest,\s*arch,\s*MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET,/,
     );
     expect(forgeSource).not.toContain("dest, arch, '10.15', [], 'remote desktop input'");
     expect(swiftTargetTriple('arm64', 'macos10.15')).toBe('arm64-apple-macos10.15');

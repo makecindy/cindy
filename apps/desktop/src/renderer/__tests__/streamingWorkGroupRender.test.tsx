@@ -1,6 +1,7 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createElement, useSyncExternalStore, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,7 +24,7 @@ vi.mock('@/lib/agent-actions/workActivityProjection', async (importOriginal) => 
 });
 
 import { HistoryViewController, projectHistoryView } from '@cindy/maker-shared/message-window';
-import { buildMessageStreamRenderProjection, WorkGroupRenderItemView } from '@/components/chat/MessageStream';
+import { buildMessageStreamRenderProjection, WorkGroupRenderItemView, snapRenderWindowStartIdx, RENDER_WINDOW_INITIAL_ITEMS } from '@/components/chat/MessageStream';
 import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { projectWorkActivities } from '@/lib/agent-actions/workActivityProjection';
 import { createWorkGroupProjection } from '@/components/chat/streamingMessageProjection';
@@ -33,6 +34,7 @@ import type { HistoryChatMessage } from '@/lib/makerChatStore';
 
 type Group = Extract<RenderItem, { type: 'work_group' }>;
 const context: ComponentProps<typeof WorkGroupRenderItemView>['context'] = {
+  pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
   workingDir: '/project',
   isSessionStreaming: true,
   firstUserMessageClientId: 'u1',
@@ -125,6 +127,56 @@ describe('completed work-group rendering during a text stream', () => {
 });
 
 describe('remote running work preview', () => {
+  // Unit regression for #11009's release -> publish -> React #185 stack.
+  // Existing split-range coverage mounts every group. A two-page range with
+  // enough prose/activity splits to exceed the real 80-item window + lookback
+  // unmounts its expansion owner if page one is published before completion.
+  it('keeps a partially read running range stable across the render-window boundary', async () => {
+    const row = (id: number, role: HistoryChatMessage['role'], content: string): HistoryChatMessage => ({
+      id: String(id), clientId: `window-${id}`, role, content,
+      createdAt: new Date(Date.UTC(2026, 9, 30) + id * 1000).toISOString(),
+    });
+    const steps = Array.from({ length: 60 }, (_, i) => row(i * 2 + 2, 'thinking', `step ${i}`));
+    const body = steps.flatMap((step, i) => [step, row(i * 2 + 3, 'assistant', `Progress ${i}`)]);
+    const items = projectHistoryView([row(1, 'user', 'Work'), ...steps], true);
+    const work = items.at(-1);
+    if (work?.type !== 'work') throw new Error('Expected work');
+    let finish!: () => void;
+    const view = new HistoryViewController<HistoryChatMessage>({
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: (ref, cursor) => cursor ? new Promise(resolve => {
+        finish = () => resolve({ version: 1, hasMore: false, nextCursor: null, messages: [] });
+      }) : Promise.resolve({
+        version: 1, hasMore: ref.key === work.key, nextCursor: ref.key === work.key ? 'next' : null,
+        messages: ref.key === work.key ? body : steps.slice(-5),
+      }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    function WindowedStream() {
+      const snapshot = useSyncExternalStore(view.subscribe, view.getSnapshot);
+      const projection = buildMessageStreamRenderProjection({
+        historyView: view, historySnapshot: snapshot, historyLiveMessages: [], isSessionStreaming: true,
+        generatedFilesItemCache: new Map(), buildRaw: () => ({ items: [], singleResultMap: new Map() }),
+      });
+      const start = snapRenderWindowStartIdx(projection.items, Math.max(0, projection.items.length - RENDER_WINDOW_INITIAL_ITEMS));
+      return projection.items.slice(start).map(item => item.type === 'work_group'
+        ? <WorkGroupRenderItemView key={item.key} item={item} context={context} compact={false} />
+        : <div key={item.key}>{item.type === 'message' ? String(item.message.content) : null}</div>);
+    }
+    const mounted = render(<WindowedStream />);
+    try {
+      await waitFor(() => expect(view.getSnapshot().expanded.size).toBe(1));
+      fireEvent.click(mounted.container.querySelector('[data-scroll-disclosure-header]')!);
+      await waitFor(() => expect(finish).toBeTypeOf('function'));
+      expect(screen.queryByText('Progress 58')).toBeNull();
+      await act(async () => { finish(); });
+      await waitFor(() => expect(screen.getByText('Progress 58')).toBeTruthy());
+    } finally {
+      mounted.unmount();
+      view.setActive(false);
+    }
+  });
   // Unit regression for the retain/release history contract introduced by #8066.
   // Existing preview coverage uses ordinary work groups, not the teammate journal.
   // One completed remote work range must release its Host detail interest on both
@@ -203,6 +255,50 @@ describe('remote running work preview', () => {
       render(<RemoteStream />);
       await waitFor(() => expect(screen.getByText('Checking the build')).toBeTruthy());
       expect([...view.getSnapshot().expanded]).toEqual(['preview']);
+    } finally {
+      view.setActive(false);
+    }
+  });
+
+  // Regression (React #185, 2026-11-12): expanding a running group reads its full
+  // range; prose in the middle splits it, and the still-running tail group asks for
+  // the folded preview. Switching the expanded range to that preview removed the
+  // tail group, which released the preview and brought it back, without end.
+  it('keeps an expanded running range when its split tail requests the preview', async () => {
+    const row = (id: number, role: HistoryChatMessage['role'], content: string): HistoryChatMessage => ({
+      id: String(id), clientId: `c${id}`, role, content,
+      createdAt: new Date(Date.UTC(2026, 9, 30) + id * 1000).toISOString(),
+    });
+    const steps = [2, 3, 4, 6, 7, 8].map((id) => row(id, 'thinking', `step ${id}`));
+    const items = projectHistoryView([row(1, 'user', 'Work'), ...steps], true);
+    const work = items.at(-1);
+    if (work?.type !== 'work') throw new Error('Expected a running work summary');
+    work.summary.preview = { ...work.summary, key: 'preview', firstMessageId: '6', lastMessageId: '8' };
+    const view = new HistoryViewController<HistoryChatMessage>({
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: async (ref) => ({ version: 1, hasMore: false, nextCursor: null,
+        messages: ref.key === 'preview' ? steps.slice(3)
+          : [...steps.slice(0, 3), row(5, 'assistant', 'Checking the build'), ...steps.slice(3)] }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    function RemoteStream() {
+      const snapshot = useSyncExternalStore(view.subscribe, view.getSnapshot);
+      const projection = buildMessageStreamRenderProjection({
+        historyView: view, historySnapshot: snapshot, historyLiveMessages: [], isSessionStreaming: true,
+        generatedFilesItemCache: new Map(), buildRaw: () => ({ items: [], singleResultMap: new Map() }),
+      });
+      return projection.items.map((item) => item.type === 'work_group'
+        ? <WorkGroupRenderItemView key={item.key} item={item} context={context} compact={false} />
+        : <div key={item.key}>{item.type === 'message' ? String(item.message.content) : null}</div>);
+    }
+    try {
+      const { container } = render(<RemoteStream />);
+      await waitFor(() => expect([...view.getSnapshot().expanded]).toEqual(['preview']));
+      fireEvent.click(container.querySelector('[data-scroll-disclosure-header]')!);
+      await waitFor(() => expect(screen.getByText('Checking the build')).toBeTruthy());
+      expect([...container.querySelectorAll('[data-render-item-key]')]
+        .map((node) => node.getAttribute('data-render-item-key'))).toEqual(['work-c2', 'work-c6']);
     } finally {
       view.setActive(false);
     }

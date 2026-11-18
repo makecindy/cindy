@@ -1,10 +1,18 @@
 {
+  "agentNet": {
+    "enabled": "Agent-Net aktivieren",
+    "onlyEncrypted": "Nur verschlüsselte Verbindungen",
+    "hint": "Geräte kommunizieren Ende-zu-Ende-verschlüsselt. Für ausschließlich verschlüsselte Verbindungen muss Agent-Net auf beiden Geräten aktiviert sein.",
+    "updateRequired": "Installiere die neueste App, um Agent-Net zu nutzen.",
+    "notConfigured": "Dieses Relay bietet noch kein Agent-Net. Aktualisiere es oder tritt einem V2-Relay bei.",
+    "failed": "Die Agent-Net-Einstellungen konnten nicht geändert werden. Prüfe die Relay-Verbindung und versuche es erneut."
+  },
   "settings": {
     "sectionTitle": "Relay-Dienst",
     "currentLabel": "Relay-Dienst",
     "official": "Offizielles {{appName}}-Relay",
     "switchToOfficial": "Zum offiziellen Relay zurückwechseln",
-    "officialHint": "Deine Geräte verbinden sich über das offizielle {{appName}}-Relay. Um dein eigenes Relay zu nutzen, zeige dessen Beitritts-QR-Code auf dem Computer an, auf dem es läuft, und scanne den Code mit der Kamera deines Handys.",
+    "officialHint": "Deine Geräte verbinden sich über das offizielle {{appName}}-Relay. Nutzt einer deiner Computer ein eigenes Relay, erscheint es hier: Tippe darauf, um beizutreten. Einem Relay, das jemand mit dir teilt, trittst du bei, indem du dessen QR-Code mit der Kamera deines Handys scannst.",
     "selfHostedHint": "Deine Geräte verbinden sich über dein eigenes Relay unter {{address}}. Anmeldung, Modelle, geteilte Aufgaben und andere Dienste nutzen weiterhin {{appName}}.",
     "removedHint": "Dieses Handy wurde aus dem Relay entfernt oder das Relay wurde ausgeschaltet. Wechsle zum offiziellen Relay zurück oder tritt über deinen Computer erneut bei.",
     "credentialMissingHint": "Die Relay-Zugangsdaten sind nicht mehr auf diesem Handy vorhanden. Tritt über deinen Computer erneut bei oder wechsle zum offiziellen Relay zurück.",
@@ -12,7 +20,15 @@
     "confirmBody": "Dieses Handy verlässt „{{name}}“ und nutzt das offizielle {{appName}}-Relay. Um jenes Relay wieder zu nutzen, tritt ihm über deinen Computer erneut bei.",
     "confirmAction": "Zurückwechseln",
     "switchFailed": "Der Wechsel zum offiziellen Relay ist fehlgeschlagen. Versuche es gleich noch einmal.",
-    "pushUnavailable": "Während du dein eigenes Relay nutzt, werden Aufgabenbenachrichtigungen von deinen Computern nicht an dieses Handy gesendet."
+    "pushUnavailable": "Während du dein eigenes Relay nutzt, werden Aufgabenbenachrichtigungen von deinen Computern nicht an dieses Handy gesendet.",
+    "accountManagedOn": "Verwaltet auf „{{device}}“",
+    "accountSwitchTitle": "„{{name}}“ beitreten?",
+    "accountSwitchBody": "Dieses Relay gehört zu deinem Konto. „{{device}}“ gibt dieses Handy automatisch frei, ein Freigabelink ist nicht nötig. Solange du ein eigenes Relay nutzt, erhält dieses Handy keine Aufgabenbenachrichtigungen von deinem Computer.",
+    "accountSwitchAction": "Beitreten",
+    "sharedHint": "Deine Geräte verbinden sich über ein mit dir geteiltes Relay unter {{address}} und erreichen nur deine eigenen Geräte. Anmeldung, Modelle, geteilte Aufgaben und andere Dienste nutzen weiterhin {{appName}}.",
+    "sharedCurrent": "{{name}} (geteilt von {{owner}})",
+    "accountSharedBy": "Geteilt von {{owner}} · beigetreten auf „{{device}}“",
+    "accountSharedOn": "Beigetreten auf „{{device}}“"
   },
   "issue": {
     "removedTitle": "Aus Relay entfernt",
@@ -34,22 +50,28 @@
     "retry": "Erneut versuchen",
     "signedOut": "Melde dich zuerst bei {{appName}} an und tritt dann diesem Relay bei.",
     "signIn": "Anmelden",
-    "invalidLink": "Dieser Beitrittslink ist ungültig oder abgelaufen. Erstelle einen neuen auf deinem Computer.",
-    "cancelled": "Der Beitritt wurde abgebrochen. Erstelle auf deinem Computer einen neuen Beitrittslink, um diesem Relay beizutreten."
+    "invalidLink": "Dieser Freigabelink ist ungültig oder abgelaufen. Erstelle einen neuen auf deinem Computer.",
+    "cancelled": "Der Beitritt wurde abgebrochen. Erstelle auf deinem Computer einen neuen Freigabelink, um diesem Relay beizutreten.",
+    "accountRequesting": "„{{device}}“ wird um Freigabe gebeten…",
+    "accountWaiting": "Beitritt läuft – Warten auf „{{device}}“…",
+    "openOnComputer": "Dieses Relay wurde von einem anderen Konto geteilt. Öffne den Link auf deinem Computer, um beizutreten. Danach siehst du es auf diesem Handy unter Einstellungen → Relay-Dienst und kannst mit einem Tipp beitreten."
   },
   "errors": {
     "unreachable": "Dieses Relay ist nicht erreichbar. Stelle sicher, dass dein Handy und Computer im selben Netzwerk sind oder dass dein Handy diese Adresse öffnen kann.",
-    "insecureUnreachable": "Dieses Relay ist nicht erreichbar. Handys können einem Relay nur über HTTPS beitreten. Richte auf deinem Computer ein Zertifikat für das Relay ein und erstelle dann einen neuen Beitrittslink.",
-    "notRelay": "Diese Adresse ist kein {{appName}}-Relay. Prüfe den Beitrittslink.",
+    "insecureUnreachable": "Dieses Relay ist nicht erreichbar. Handys können einem Relay nur über HTTPS beitreten. Richte auf deinem Computer ein Zertifikat für das Relay ein und erstelle dann einen neuen Freigabelink.",
+    "notRelay": "Diese Adresse ist kein {{appName}}-Relay. Prüfe den Freigabelink.",
     "incompatible": "Dieses Relay funktioniert nicht mit dieser Version von {{appName}}. Aktualisiere sowohl das Relay als auch {{appName}}.",
     "accountMismatch": "Dieses Relay gehört zu einem anderen {{appName}}-Konto.",
-    "codeInvalid": "Dieser Beitrittslink ist abgelaufen. Erstelle einen neuen auf deinem Computer.",
+    "codeInvalid": "Dieser Freigabelink ist abgelaufen. Erstelle einen neuen auf deinem Computer.",
     "rateLimited": "Zu viele Versuche. Versuche es später erneut.",
     "rejected": "Die Beitrittsanfrage wurde auf dem Computer abgelehnt.",
-    "expired": "Die Anfrage ist beim Warten auf Bestätigung abgelaufen. Erstelle einen neuen Beitrittslink auf deinem Computer.",
-    "ownerMismatch": "Das Relay hat ein Zertifikat zurückgegeben, das nicht vom im Beitrittslink angegebenen Eigentümer ausgestellt wurde. Du bist möglicherweise mit einem gefälschten Relay verbunden. Der Beitritt wurde daher gestoppt.",
+    "expired": "Die Anfrage ist beim Warten auf Bestätigung abgelaufen. Erstelle einen neuen Freigabelink auf deinem Computer.",
+    "ownerMismatch": "Das Relay hat ein Zertifikat zurückgegeben, das nicht vom im Freigabelink angegebenen Eigentümer ausgestellt wurde. Du bist möglicherweise mit einem gefälschten Relay verbunden. Der Beitritt wurde daher gestoppt.",
     "failed": "Beitritt zum Relay fehlgeschlagen. Versuche es später erneut.",
-    "saveFailed": "Die Anfrage wurde bestätigt, aber die Relay-Zugangsdaten konnten nicht auf diesem Handy gespeichert werden. Erstelle einen neuen Beitrittslink auf deinem Computer und versuche es erneut.",
-    "credentialUnavailable": "Dieses Handy hat keine verwendbaren Relay-Zugangsdaten. Tritt erneut bei oder wechsle in den Einstellungen zum offiziellen Relay zurück."
+    "saveFailed": "Die Anfrage wurde bestätigt, aber die Relay-Zugangsdaten konnten nicht auf diesem Handy gespeichert werden. Erstelle einen neuen Freigabelink auf deinem Computer und versuche es erneut.",
+    "credentialUnavailable": "Dieses Handy hat keine verwendbaren Relay-Zugangsdaten. Tritt erneut bei oder wechsle in den Einstellungen zum offiziellen Relay zurück.",
+    "ownerUnavailable": "„{{device}}“ hat nicht geantwortet. Prüfe, ob {{appName}} dort geöffnet und online ist, oder lass dir einen Freigabelink schicken.",
+    "relayUnavailable": "„{{device}}“ verwendet dieses Relay nicht mehr.",
+    "accountDirectoryUnavailable": "Der {{appName}}-Kontodienst ist gerade nicht erreichbar, daher lassen sich die Relays deines Kontos nicht laden. Versuche es später erneut oder lass dir einen Freigabelink schicken."
   }
 }

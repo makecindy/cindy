@@ -58,7 +58,7 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
       'utf8',
     );
     expect(entriesHook).toContain('buildMainListEntries({');
-    expect(entriesHook).toContain('projects, dialogues, bots, unclassified');
+    expect(entriesHook).toContain('projects, dialogues, unclassified');
   });
 
   it('drops the removed date-grouped section entirely', () => {
@@ -101,7 +101,7 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
   });
 
   it('loads archived sessions on demand for the selected connected remote devices', () => {
-    expect(sidebarSource).toContain("if (filter.status === 'active') return;");
+    expect(sidebarSource).toContain("if (taskListMode !== 'inbox' && filter.status === 'active') return;");
     expect(sidebarSource).toContain("requestRemoteSessionStatus(device.deviceId, 'archived')");
     expect(sidebarSource).toContain('if (!device.connected) continue;');
     expect(sidebarSource).toContain('selectedRemoteIds && !selectedRemoteIds.has(device.deviceId)');
@@ -187,8 +187,10 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     );
     expect(newMakerDraftRouteSource).toContain('patchCollab({ enabled: false });');
     expect(newMakerDraftRouteSource).toMatch(
-      /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: null,/,
+      /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: defaultDir,\s*explicitNoProject:/,
     );
+    expect(newMakerDraftRouteSource).toContain("workspacePrompt === 'generic'");
+    expect(newMakerDraftRouteSource).toContain("workspacePrompt === 'dialogue'");
     expect(newMakerDraftRouteSource).toContain(
       'state: consumeNewMakerDialogueTargetRequest(location.state)',
     );

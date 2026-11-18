@@ -8,7 +8,7 @@ import {
   type CindyMakePersonalRemoteState,
 } from '../../shared/cindyMakePersonalRemote.js';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { readGhostSecret } from '../secrets/providerSecretStore.js';
 import { readAtomicFileSync, atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 import { throwIpcError } from '../utils/ipcValidate.js';

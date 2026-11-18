@@ -13,6 +13,8 @@
 import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import {
   declaredAutoApproveTools,
+  declaredGhostCindyModelActions,
+  type GhostCindyModelsAction,
   declaredGhostControlPoints,
   GHOST_CONTROL_POINTS,
   type GhostControlPointId,
@@ -64,6 +66,15 @@ export type GhostInstallConsentDecision =
 
 const pendingPromptAborts = new Set<AbortController>();
 
+/** Follow the control-point consent path: unknown declarations never become grants on upgrade. */
+export function confirmedCindyModelActions(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): GhostCindyModelsAction[] {
+  const declared = declaredGhostCindyModelActions(next);
+  if (decision.mode === 'exempt') return declared;
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return declared.filter(action => shown?.some(item => item.key === `cindy:models.${action}`));
+}
 /** Use only after assertGhostInstallConsent binds the confirmed facts to this package/receiver. */
 export function confirmedTaskCapability(
   decision: GhostInstallConsentDecision,
@@ -169,6 +180,10 @@ export async function obtainGhostInstallConsent(
     confirmed = await policy.prompt({
       initiator: policy.initiator,
       origin: policy.origin,
+      installationSource: policy.origin === 'custom-market' ? { kind: 'third-party' }
+        : policy.origin === 'local-file' || policy.origin === 'forge' ? { kind: 'local' }
+        : policy.target?.namespace && policy.target.namespace !== 'local' ? { kind: 'organization', namespace: policy.target.namespace }
+        : { kind: policy.trust === 'cindy-official' ? 'official' : 'market' },
       ...(policy.trust ? { trust: policy.trust } : {}),
       ...(policy.originLabel ? { originLabel: policy.originLabel } : {}),
       ...(policy.target ? { target: { ...policy.target, ...(policy.target.namespace === 'local' && manifest.network?.secrets?.some(secret => secret.source === 'oidc-token') ? { organizationIdentityUnavailable: true as const } : {}) } } : {}),

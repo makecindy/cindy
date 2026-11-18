@@ -28,6 +28,27 @@ describe('window theme mode store', () => {
     expect(__testing.normalize(null)).toEqual({ mode: 'system' });
   });
 
+  // Windows picks `transparent` before the first window exists, from this remembered need.
+  it('keeps the remembered transparent-window need and drops malformed values', () => {
+    expect(__testing.normalize({ mode: 'dark', needsTransparentWindow: true })).toEqual({
+      mode: 'dark',
+      needsTransparentWindow: true,
+    });
+    expect(__testing.normalize({ mode: 'dark', needsTransparentWindow: false })).toEqual({
+      mode: 'dark',
+      needsTransparentWindow: false,
+    });
+    expect(__testing.normalize({ mode: 'dark', needsTransparentWindow: 'yes' })).toEqual({
+      mode: 'dark',
+    });
+    expect(
+      __testing.resolveSnapshotForSystem(
+        { mode: 'system', resolvedIsDark: true, systemIsDark: true, needsTransparentWindow: true },
+        true,
+      ).needsTransparentWindow,
+    ).toBe(true);
+  });
+
   it('runtime-validates the complete vibrancy payload before any theme side effect', () => {
     expect(parseWindowThemeVibrancyPayload({
       familyId: 'eclipse',
@@ -50,6 +71,11 @@ describe('window theme mode store', () => {
       ).toEqual({ familyId: 'cindy', isDark: false, wallpaperCovered });
     }
 
+    for (const desktopBlur of [0, 5, 17, 20, null]) {
+      expect(parseWindowThemeVibrancyPayload({ familyId: 'cindy', isDark: false, desktopBlur }))
+        .toEqual({ familyId: 'cindy', isDark: false, desktopBlur });
+    }
+
     for (const invalid of [
       null,
       [],
@@ -58,6 +84,8 @@ describe('window theme mode store', () => {
       { familyId: 'cindy', isDark: 'false' },
       { familyId: 'cindy', isDark: false, mode: 'auto' },
       { familyId: 'cindy', isDark: false, wallpaperCovered: 'true' },
+      { familyId: 'cindy', isDark: false, desktopBlur: true },
+      ...[-1, 21, 1.5, NaN, Infinity, '5'].map(desktopBlur => ({ familyId: 'cindy', isDark: false, desktopBlur })),
       { familyId: 'cindy', isDark: false, systemModeFollowsSystem: 'yes' },
     ]) {
       expect(parseWindowThemeVibrancyPayload(invalid)).toBeNull();

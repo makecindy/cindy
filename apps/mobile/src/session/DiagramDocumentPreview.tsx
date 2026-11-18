@@ -1,15 +1,10 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
 import { spacing, textStyles, useTheme } from "@/theme";
-import { PreviewIconButton, PreviewToolbar } from "./PreviewChrome";
-import { Minus, Plus, Scan } from "lucide-react-native";
-import {
-  MermaidDiagramWebView,
-  type MermaidDiagramWebViewHandle,
-} from "./mermaidWebView";
+import { MermaidDiagramWebView } from "./mermaidWebView";
 import { MOBILE_DRAWIO_JS } from "./documentPreviewAssets.generated";
 
 /** The same offline draw.io distribution as desktop; document data never becomes script. */
@@ -22,7 +17,6 @@ export function DiagramDocumentPreview({
 }) {
   const { colors, mode } = useTheme();
   const { t } = useTranslation();
-  const diagram = useRef<MermaidDiagramWebViewHandle>(null);
   const [failed, setFailed] = useState(false);
   const drawio = /\.(drawio(?:\.svg)?|dio)$/i.test(name);
   const html = useMemo(() => {
@@ -41,31 +35,14 @@ export function DiagramDocumentPreview({
   if (!drawio)
     return (
       <View style={styles.fill}>
+        {/* 缩放靠捏合(zoomable),手机不放放大 / 缩小 / 适应按钮。 */}
         <MermaidDiagramWebView
-          ref={diagram}
           source={source}
           fill
           bare
           zoomable
           deferSource
         />
-        <PreviewToolbar>
-          <PreviewIconButton
-            icon={Minus}
-            label={t("message.attachmentPreview.zoomOut")}
-            onPress={() => diagram.current?.zoom(0.8)}
-          />
-          <PreviewIconButton
-            icon={Scan}
-            label={t("message.attachmentPreview.fit")}
-            onPress={() => diagram.current?.zoom("fit")}
-          />
-          <PreviewIconButton
-            icon={Plus}
-            label={t("message.attachmentPreview.zoomIn")}
-            onPress={() => diagram.current?.zoom(1.25)}
-          />
-        </PreviewToolbar>
       </View>
     );
   if (failed)

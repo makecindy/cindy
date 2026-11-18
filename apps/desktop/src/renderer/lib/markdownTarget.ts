@@ -239,9 +239,13 @@ export function decideRemoteLit(
   verdict: 'file' | 'directory' | 'nonfile' | 'unknown' | undefined,
   href: string,
   originalHref?: string,
+  resolvedKind?: 'file' | 'directory',
 ): RemoteLitDecision {
   if (verdict === 'file') return { lit: true, kind: 'file' };
   if (verdict === 'directory') return { lit: true, kind: 'directory' };
+  // The owner resolver can know the kind where chatStat cannot inspect a path
+  // outside the workdir. Definitive stat results still take precedence.
+  if (verdict === 'unknown' && resolvedKind) return { lit: true, kind: resolvedKind };
   // unknown(链路断 / stat 异常)只对**形状明确是路径**的引用乐观点亮;歧义形状
   // (裸名 `array.map`、分隔符无扩展 `and/or`)必须等远端明确回 file / directory,否则
   // 链路一抖,普通行内 code 就会被展示成带下划线的可点文件、点了必失败

@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronLeft } from 'lucide-react-native';
@@ -635,7 +636,7 @@ export function MainWindowActionButton({
   numberOfLines?: number;
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
-  buttonRef?: Ref<View>;
+  buttonRef?: Ref<ViewInstance>;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();

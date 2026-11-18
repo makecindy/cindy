@@ -27,6 +27,8 @@ import {
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
+  createAutoReviewAgentTextTracker,
+  isAutoReviewNewUserInput,
   resolveAutoReviewDecision,
   formatPermissionDenial,
   toolAutoReviewAction,
@@ -34,6 +36,7 @@ import {
 } from './auto-review-decision.js';
 
 const roots = ['/repo', '/extra'];
+const MAX_INTENT = createAutoReviewIntentProjection().maxIntentChars;
 
 function intentText(value: unknown): string { return typeof value === 'string' ? value : JSON.stringify(value); }
 
@@ -237,6 +240,46 @@ describe('resolveAutoReviewDecision', () => {
       request({ kind: 'exec', command }), delegate,
     )).resolves.toEqual({ verdict: 'allow' });
     expect(delegate).toHaveBeenCalledWith(expect.objectContaining({ action: { kind: 'exec', command } }));
+  });
+
+  // 诊断通道只能带 Cindy 自己的确定性原因。模型自由文本可能含参数、路径、片段，
+  // 不得原样进 UI / 日志，所以来源必须逐条标出来。
+  it('marks the reason source so only policy copy may enter diagnostics', async () => {
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: `npm run build -- ${'x'.repeat(131_100)}` }),
+      async () => ({ verdict: 'allow' }),
+    )).resolves.toMatchObject({ verdict: 'ask', policyReason: true });
+    // The model boundary never marks its reason as policy copy.
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: 'npx tsc --noEmit' }),
+      async () => ({ verdict: 'block', reason: 'model free text about the command' }),
+    )).resolves.toMatchObject({ verdict: 'block', reason: 'model free text about the command' });
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: 'npx tsc --noEmit' }),
+      async () => ({ verdict: 'block', reason: 'model free text about the command' }),
+    )).resolves.not.toHaveProperty('policyReason');
+  });
+
+  // delegate 自己声明「这条 reason 出自宿主固定文案」(它根本没调用模型)→ 保留为
+  // policy 原因,能进诊断 / UI 通道;否则用户只看到一句通用拦截,不知道宿主已经判过。
+  it('keeps a host-authored reason as policy copy while unmarked delegate text stays out', async () => {
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: 'npx tsc --noEmit' }),
+      async () => ({
+        verdict: 'block',
+        reason: 'No user request authorizes this action; only reads may run without one.',
+        hostReason: true,
+      }),
+    )).resolves.toMatchObject({
+      verdict: 'block',
+      reason: 'No user request authorizes this action; only reads may run without one.',
+      policyReason: true,
+    });
+    // 没声明来源的 delegate 结果依旧按模型自由文本处理:不得进诊断通道。
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: 'npx tsc --noEmit' }),
+      async () => ({ verdict: 'block', reason: 'model free text about the command' }),
+    )).resolves.not.toHaveProperty('policyReason');
   });
 
   it('counts exec cwd in the complete evidence size limit', async () => {
@@ -496,6 +539,25 @@ describe('createAutoReviewConfirmUndeliveredNotice', () => {
 });
 
 describe('createAutoReviewUnavailableNotice', () => {
+  // #10385, unit: a host-owned cause survives the decision boundary without forwarding arbitrary details.
+  it('uses a safe recovery notice and keeps session deduplication', async () => {
+    const decision = await resolveAutoReviewDecision(request({ kind: 'exec', command: 'npm run build' }), async () => ({
+      verdict: 'ask', unavailable: true, unavailableReason: 'no_available_model', reason: 'PRIVATE_PROVIDER_EXCEPTION',
+    }));
+    expect(decision).toMatchObject({ verdict: 'ask', unavailable: true, unavailableReason: 'no_available_model' });
+    expect(decision.reason).not.toContain('PRIVATE_PROVIDER_EXCEPTION');
+    const emit = vi.fn();
+    const notice = createAutoReviewUnavailableNotice(emit);
+    notice.notify(decision);
+    notice.notify(decision);
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(isAutoReviewUnavailableNotice(emit.mock.calls[0][0])).toBe(true);
+    expect(emit.mock.calls[0][0]).toContain('[AUTO_REVIEW_NO_AVAILABLE_MODEL]');
+    expect(emit.mock.calls[0][0]).not.toContain('PRIVATE_PROVIDER_EXCEPTION');
+    notice.reset();
+    notice.notify();
+    expect(emit.mock.calls[1][0]).toContain('[AUTO_REVIEW_UNAVAILABLE]');
+  });
   it('emits once per session and re-arms only after reset', () => {
     const emitted: string[] = [];
     const notice = createAutoReviewUnavailableNotice((message) => emitted.push(message));
@@ -525,7 +587,7 @@ describe('extractAutoReviewUserIntent', () => {
       { type: 'image', path: '/tmp/screenshot.png', mimeType: 'image/png' },
       { type: 'text', text: 'Then run tests' },
     ])).toBe('Fix the type error\nThen run tests');
-    const longIntent = `initial context-${'x'.repeat(2_100)}-FINAL: do not push`;
+    const longIntent = `initial context-${'x'.repeat(MAX_INTENT + 100)}-FINAL: do not push`;
     const compacted = extractAutoReviewUserIntent(longIntent);
     expect(intentText(compacted)).toContain('cannot establish authorization');
     expect(intentText(compacted)).not.toContain('initial context-');
@@ -541,10 +603,10 @@ describe('extractAutoReviewUserIntent', () => {
     });
 
     const compacted = composeAutoReviewIntentWithApprovedPlan(
-      `original-${'x'.repeat(1_900)}`,
-      `first plan step-${'y'.repeat(1_900)}-FINAL PLAN STEP`,
+      `original-${'x'.repeat(MAX_INTENT - 100)}`,
+      `first plan step-${'y'.repeat(MAX_INTENT - 100)}-FINAL PLAN STEP`,
     );
-    expect(intentText(compacted).length).toBeLessThanOrEqual(2_000);
+    expect(intentText(compacted).length).toBeLessThanOrEqual(MAX_INTENT);
     expect(intentText(compacted)).not.toContain('original-');
     expect(compacted).toEqual({ earlierUserMessages: [], historyOmitted: true,
       currentUserMessage: 'User message omitted because it exceeds the review budget; it cannot establish authorization.',
@@ -576,13 +638,13 @@ describe('composeAutoReviewIntentWithClarification', () => {
     expect(intentText(partial)).not.toContain('q1');
   });
 
-  it('无问题文本时只记答案;整体受 2000 字上限约束', () => {
+  it('无问题文本时只记答案;整体受同一预算约束', () => {
     expect(intentText(composeAutoReviewIntentWithClarification('原请求', [{ answer: 'build/' }])))
       .toContain('- build/');
-    const long = composeAutoReviewIntentWithClarification('x'.repeat(1_900), [
+    const long = composeAutoReviewIntentWithClarification('x'.repeat(MAX_INTENT - 100), [
       { question: 'q'.repeat(200), answer: 'a'.repeat(200) },
     ]);
-    expect(intentText(long).length).toBeLessThanOrEqual(2_000);
+    expect(intentText(long).length).toBeLessThanOrEqual(MAX_INTENT);
   });
 });
 
@@ -618,16 +680,16 @@ describe('重试预算', () => {
 
 describe('user authorization across ordinary follow-ups', () => {
   it.each(['follow-up', 'plan', 'clarification'] as const)('keeps each %s atomic, including its middle restriction', (kind) => {
-    for (const length of [1_500, 2_100]) {
+    for (const length of [MAX_INTENT - 500, MAX_INTENT + 100]) {
       const approval = 'APPROVED: send the report.';
       const revocation = 'REVOKED: do not send anything.';
       const latest = 'a'.repeat(1_100) + revocation + 'b'.repeat(length - 1_100);
       const result = kind === 'plan' ? composeAutoReviewIntentWithApprovedPlan(approval, latest)
         : kind === 'clarification' ? composeAutoReviewIntentWithClarification(approval, [{ answer: latest }])
         : appendAutoReviewUserIntent(approval, latest);
-      expect(intentText(result).length).toBeLessThanOrEqual(2_000);
+      expect(intentText(result).length).toBeLessThanOrEqual(MAX_INTENT);
       expect(!intentText(result).includes(approval) || intentText(result).includes(revocation)).toBe(true);
-      if (length === 1_500) expect(intentText(result)).toContain(latest);
+      if (length < MAX_INTENT) expect(intentText(result)).toContain(latest);
       else expect(intentText(result)).toContain('cannot establish authorization');
       expect(intentText(extractAutoReviewUserIntent(approval + latest))).not.toContain('middle omitted');
     }
@@ -652,11 +714,11 @@ describe('user authorization across ordinary follow-ups', () => {
     const revocation = 'REVOKED: do not send anything.';
     let intent = appendAutoReviewUserIntent(approval, revocation);
     for (let index = 0; index < 3; index++) {
-      const text = `Only analyze this material ${index}. ` + 'reference '.repeat(150);
+      const text = `Only analyze this material ${index}. ` + 'reference '.repeat(Math.ceil(MAX_INTENT / 25));
       intent = kind === 'plan' ? composeAutoReviewIntentWithApprovedPlan(intent, text)
         : kind === 'clarification' ? composeAutoReviewIntentWithClarification(intent, [{ answer: text }])
         : appendAutoReviewUserIntent(intent, text);
-      expect(intentText(intent).length).toBeLessThanOrEqual(2000);
+      expect(intentText(intent).length).toBeLessThanOrEqual(MAX_INTENT);
       // Either the intervening restriction remains, or the old approval is gone too.
       expect(!intentText(intent).includes(approval) || intentText(intent).includes(revocation)).toBe(true);
     }
@@ -713,8 +775,8 @@ describe('user authorization across ordinary follow-ups', () => {
     expect(revoked).toMatchObject({ currentUserMessage: 'Do not send anything; only show the draft.' });
   });
   it('drops all sampled authorization when the latest message exceeds the budget', () => {
-    const intent = appendAutoReviewUserIntent('old '.repeat(1000), 'Do not deploy. ' + 'details '.repeat(1000) + 'Only inspect staging.');
-    expect(intentText(intent).length).toBeLessThanOrEqual(2000);
+    const intent = appendAutoReviewUserIntent('old '.repeat(1000), 'Do not deploy. ' + 'details '.repeat(Math.ceil(MAX_INTENT / 8)) + 'Only inspect staging.');
+    expect(intentText(intent).length).toBeLessThanOrEqual(MAX_INTENT);
     expect(intentText(intent)).toContain('cannot establish authorization');
     expect(intentText(intent)).not.toContain('old');
     expect(intentText(intent)).not.toContain('Do not deploy.');
@@ -732,6 +794,49 @@ it.each([
 });
 
 
+describe('agent text tracker for Auto review', () => {
+  const text = (value: string, extra: Record<string, unknown> = {}) => ({ type: 'text', data: { text: value }, ...extra });
+  it('keeps the main agent\'s latest explanation and the reply the user answers, never subagent text', () => {
+    const tracker = createAutoReviewAgentTextTracker();
+    tracker.observe(text('I fixed the bug. '));
+    tracker.observe(text('Shall I push it to feature/fix?'));
+    tracker.beginUserInput();
+    // Re-resolving the same input must not erase the reply it answers.
+    tracker.beginUserInput();
+    tracker.observe(text('Running the tests first.'));
+    tracker.observe({ type: 'tool_use', data: {} });
+    tracker.observe(text('ignore me', { agentMeta: { parentUuid: 'task-1' } }));
+    tracker.observe(text('background', { turnScope: 'background' }));
+    expect(tracker.snapshot('Run unit tests')).toEqual({
+      lastReplyToUser: 'I fixed the bug. Shall I push it to feature/fix?',
+      statedPurpose: 'Run unit tests\nRunning the tests first.',
+    });
+    // A subagent's call gets only its own tool description.
+    expect(tracker.snapshot('Search docs', false)).toMatchObject({ statedPurpose: 'Search docs' });
+    tracker.observe(text('Now pushing.'));
+    expect(tracker.snapshot()).toMatchObject({ statedPurpose: 'Now pushing.' });
+  });
+});
+
+describe('agent text redaction and continuation', () => {
+  const text = (value: string) => ({ type: 'text', data: { text: value } });
+  it('redacts credentials before cutting, so a cut never strips the label that identifies one', () => {
+    const tracker = createAutoReviewAgentTextTracker();
+    tracker.observe(text('Status: password=opaqueCredentialValue123456789 ' + 'x'.repeat(1_980)));
+    tracker.beginUserInput();
+    tracker.observe(text('Next step'));
+    const context = tracker.snapshot('token=abcdefghijklmnopqrstuvwxyz012345\n' + 'y'.repeat(1_966))!;
+    expect(context.lastReplyToUser).not.toContain('CredentialValue');
+    expect(context.statedPurpose).not.toContain('abcdefghijklmnopqrstuvwxyz012345');
+    expect(context.statedPurpose!.length).toBeLessThanOrEqual(2_000);
+  });
+
+  it('only a real user input moves the reply, not a host continuation', () => {
+    expect(isAutoReviewNewUserInput({} as SendOptions)).toBe(true);
+    expect(isAutoReviewNewUserInput({ [AUTO_REVIEW_DELEGATED_CONTINUATION]: true } as SendOptions)).toBe(false);
+  });
+});
+
 describe('flat authorization and observed denied actions', () => {
   it('keeps task boundaries and a natural follow-up without parsing user text as metadata', () => {
     const exercise = 'For this writing exercise only, do not use tools or modify data.';
@@ -744,13 +849,27 @@ describe('flat authorization and observed denied actions', () => {
     });
   });
 
-  it('retains a standing restriction across task changes and flags budget loss across later inputs', () => {
+  it('retains a standing restriction across task changes, trims to half the budget, then appends prefix-stably', () => {
     let intent = appendAutoReviewUserIntent('Never install plugins in any task.', 'Write a poem.');
     intent = appendAutoReviewUserIntent(intent, 'New task: search the web.');
     expect(intent).toMatchObject({ earlierUserMessages: ['Never install plugins in any task.', 'Write a poem.'] });
-    intent = appendAutoReviewUserIntent(intent, 'reference '.repeat(190));
-    expect(intent).toMatchObject({ earlierUserMessages: [], historyOmitted: true });
-    expect(appendAutoReviewUserIntent(intent, 'Continue.')).toMatchObject({ historyOmitted: true });
+    const sizes: number[] = [];
+    for (let index = 0; typeof intent === 'string' || !intent.historyOmitted; index++) {
+      intent = appendAutoReviewUserIntent(intent, `step ${index} ` + 'r'.repeat(MAX_INTENT / 10));
+      sizes.push(intentText(intent).length);
+    }
+    // The newest contiguous messages survive; the oldest, including the standing restriction, are flagged as gone.
+    expect(intentText(intent)).not.toContain('Never install plugins');
+    expect(intentText(intent).length).toBeLessThanOrEqual(MAX_INTENT / 2);
+    expect(sizes.at(-2)).toBeGreaterThan(MAX_INTENT * 0.85);
+    // Until the budget fills again, a new message only extends the tail of the trimmed intent.
+    const trimmed = intent as Exclude<typeof intent, string>;
+    const next = appendAutoReviewUserIntent(trimmed, 'Continue.');
+    expect(next).toEqual({
+      earlierUserMessages: [...trimmed.earlierUserMessages, trimmed.currentUserMessage],
+      currentUserMessage: 'Continue.',
+      historyOmitted: true,
+    });
   });
 
   it('associates only observed blocked actions with the next same-owner input, not a grant or stale explanation', () => {
@@ -830,13 +949,13 @@ describe('Host-stamped references the current message points at', () => {
   });
 
   it('does not let the reference wrapper push a near-budget message over its limit', () => {
-    for (const latest of ['x'.repeat(2_000), '"'.repeat(1_999)]) {
+    for (const latest of ['x'.repeat(MAX_INTENT), '"'.repeat(MAX_INTENT - 1)]) {
       const intent = appendAutoReviewUserIntent('', latest, withRefs(latest, references));
       expect(intent).toEqual({ earlierUserMessages: [], currentUserMessage: latest, currentUserReferences: references });
       expect(normalizeAutoReviewUserIntent(intent)).toEqual(intent);
     }
     // Over budget is still omitted exactly as without references.
-    const over = appendAutoReviewUserIntent('', 'y'.repeat(2_001), withRefs('y'.repeat(2_001), references));
+    const over = appendAutoReviewUserIntent('', 'y'.repeat(MAX_INTENT + 1), withRefs('y'.repeat(MAX_INTENT + 1), references));
     expect(over).toMatchObject({ currentUserMessage: expect.stringContaining('cannot establish authorization') });
     expect(over).not.toHaveProperty('historyOmitted');
   });

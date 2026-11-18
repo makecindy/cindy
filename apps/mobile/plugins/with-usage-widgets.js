@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const plist = require('@expo/plist');
-const { withXcodeProject } = require('@expo/config-plugins');
+const { withInfoPlist, withXcodeProject } = require('@expo/config-plugins');
 
 // iOS home-screen widgets (subscription quota and daily usage). The app writes the snapshot
 // into the App Group expo-sharing already provisions (`group.<bundle id>`); the extension reads it.
@@ -14,6 +14,8 @@ const SOURCES = [
   'UsageWidgetViews.swift',
   'SingleSourceViews.swift',
   'ComputerIntent.swift',
+  'CindyAgentActivityWidget.swift',
+  'CindyAgentActivityAttributes.swift',
 ];
 // The edit sheet's strings ("Data source", "Accounts first", "Hidden accounts") (App Intents metadata reads the Localizable table).
 const LOCALIZATIONS = ['en.lproj', 'zh-Hans.lproj', 'zh-Hant.lproj', 'ja.lproj', 'ko.lproj', 'de.lproj', 'es.lproj', 'fr.lproj', 'pt-BR.lproj', 'pt-PT.lproj'];
@@ -57,7 +59,12 @@ function configureProject(project, config, platformRoot, projectRoot) {
   const directory = path.join(platformRoot, TARGET);
   const assets = path.join(__dirname, 'usage-widgets');
   fs.mkdirSync(directory, { recursive: true });
-  for (const file of SOURCES) fs.copyFileSync(path.join(assets, file), path.join(directory, file));
+  for (const file of SOURCES) {
+    const source = file === 'CindyAgentActivityAttributes.swift'
+      ? path.join(projectRoot, 'modules/cindy-agent-activity/ios', file)
+      : path.join(assets, file);
+    fs.copyFileSync(source, path.join(directory, file));
+  }
   for (const folder of ['Assets.xcassets', ...LOCALIZATIONS]) {
     fs.rmSync(path.join(directory, folder), { recursive: true, force: true });
     copyDirectory(path.join(assets, folder), path.join(directory, folder));
@@ -85,6 +92,11 @@ function configureProject(project, config, platformRoot, projectRoot) {
     }
   }
   const [, nativeTarget] = target;
+  // Prebuild also runs on an existing project: register newly introduced sources there.
+  for (const file of SOURCES) {
+    const sourcePath = `${TARGET}/${file}`;
+    if (!project.hasFile(sourcePath)) project.addSourceFile(sourcePath, { target: target[0] });
+  }
   const configurations = project.pbxXCConfigurationList()[nativeTarget.buildConfigurationList].buildConfigurations;
   for (const item of configurations) {
     const settings = project.pbxXCBuildConfigurationSection()[item.value].buildSettings;
@@ -108,7 +120,25 @@ function configureProject(project, config, platformRoot, projectRoot) {
   return project;
 }
 
+/** Background App Refresh for the widgets (`UsageWidgetBackgroundRefresh.swift` in cindy-usage-widgets). */
+function refreshTaskIdOf(config) {
+  return `${config.ios.bundleIdentifier}.usage-widget-refresh`;
+}
+
+function withWidgetBackgroundRefresh(config) {
+  return withInfoPlist(config, mod => {
+    const id = refreshTaskIdOf(config);
+    const info = mod.modResults;
+    info.UIBackgroundModes = [...new Set([...(info.UIBackgroundModes ?? []), 'fetch'])];
+    info.BGTaskSchedulerPermittedIdentifiers = [...new Set([...(info.BGTaskSchedulerPermittedIdentifiers ?? []), id])];
+    info.CindyUsageWidgetRefreshTaskId = id;
+    return mod;
+  });
+}
+
 module.exports = function withUsageWidgets(config) {
+  config.ios = { ...config.ios, infoPlist: { ...config.ios?.infoPlist, NSSupportsLiveActivities: true } };
+  config = withWidgetBackgroundRefresh(config);
   // EAS needs extension credentials before prebuild creates the native target.
   const experimental = config.extra?.eas?.build?.experimental ?? {};
   config.extra = { ...config.extra, eas: { ...config.extra?.eas, build: {

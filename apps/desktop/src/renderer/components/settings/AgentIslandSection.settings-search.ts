@@ -5,6 +5,11 @@ import { defineSettings, type SettingsSearchContext, type SettingsSearchModule }
 const areIslandControlsVisible = ({ agentIsland }: SettingsSearchContext) =>
   agentIsland?.supported === true && agentIsland.enabled;
 
+/** Character and sounds also serve the Live Activity, so they stay visible with it alone. */
+const areSharedControlsVisible = ({ agentIsland }: SettingsSearchContext) =>
+  agentIsland?.supported === true
+  && (agentIsland.enabled || (agentIsland.liveActivitySupported === true && agentIsland.liveActivity === true));
+
 /** Static search metadata owned by this settings module; no component mounting or IPC. */
 export const agentIslandSettings = defineSettings({
   agentIsland: {
@@ -23,8 +28,20 @@ export const agentIslandSettings = defineSettings({
     titleKey: 'settings.agentIsland.enableLabel',
     sectionKey: 'settings.tabs.agentIsland',
     descriptionKey: 'settings.agentIsland.enableHint',
+    // Former names (Agent Island / 灵动岛), so people who knew them still find the switch.
+    aliases: ['Agent Island', '灵动岛', '靈動島', '刘海', 'notch'],
   },
-  subtleRemindersLabel: {
+  liveActivityLabel: {
+    isVisible: ({ agentIsland }) => agentIsland?.supported === true && agentIsland.liveActivitySupported === true,
+    id: 'settings.agentIsland.liveActivityLabel',
+    fallbackTargetId: 'settings-panel-agent-island',
+    tab: 'agent-island',
+    targetId: 'settings-search-settings-agentIsland-liveActivityLabel',
+    titleKey: 'settings.agentIsland.liveActivityLabel',
+    sectionKey: 'settings.tabs.agentIsland',
+    descriptionKey: 'settings.agentIsland.liveActivityHint',
+  },
+    subtleRemindersLabel: {
     isVisible: areIslandControlsVisible,
     id: 'settings.agentIsland.subtleRemindersLabel',
     fallbackTargetId: 'settings-panel-agent-island',
@@ -45,7 +62,7 @@ export const agentIslandSettings = defineSettings({
     descriptionKey: 'settings.agentIsland.displayHint',
   },
   skinLabel: {
-    isVisible: areIslandControlsVisible,
+    isVisible: areSharedControlsVisible,
     id: 'settings.agentIsland.skinLabel',
     fallbackTargetId: 'settings-panel-agent-island',
     tab: 'agent-island',
@@ -60,7 +77,7 @@ export const agentIslandSettings = defineSettings({
     })),
   },
   soundLabel: {
-    isVisible: areIslandControlsVisible,
+    isVisible: areSharedControlsVisible,
     id: 'settings.agentIsland.soundLabel',
     fallbackTargetId: 'settings-panel-agent-island',
     tab: 'agent-island',

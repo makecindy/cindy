@@ -2,7 +2,8 @@
  * 中转服务入口:一个 HTTP(S) 服务同时承载
  * - `/api/device-link/ws`:设备 WebSocket(握手时校验 `CindyRelay` 凭证);
  * - `/api/device-link/*`:与官方 relay 同形的 REST(设备、媒体);
- * - `/api/device-link/relay/*`:自建中转独有的加入与管理接口、媒体签名地址。
+ * - `/api/device-link/relay/*`:自建中转独有的加入与管理接口、媒体签名地址;
+ * - `/api/device-link/agent-net`:agent-net 数据报转发(实验,`agentNet` 打开时才有,见 `agentNet.ts`)。
  *
  * Cindy 内运行与服务器上独立运行用的都是这一个入口。证书:传入 `tls` 时直接提供 HTTPS;
  * 不传时只提供 HTTP,用于本机自连、测试,以及由前置代理(nginx / frp / Tailscale serve 等)负责 TLS 的场景。
@@ -14,6 +15,7 @@ import { isIP, type AddressInfo, type Socket } from 'node:net';
 import path from 'node:path';
 import { PROTOCOL_VERSION, WS_MAX_PAYLOAD_BYTES } from '@cindy/device-link-protocol';
 import { WebSocketServer } from 'ws';
+import { AGENT_NET_MAX_FRAME_BYTES, AGENT_NET_RELAY_FEATURE, AgentNetHub, DEFAULT_AGENT_NET_LIMITS, type AgentNetLimits } from './agentNet';
 import { parseRelayAuthorization } from './credentials';
 import { RelayError } from './errors';
 import { CLOSE_DEVICE_REMOVED, DEFAULT_HUB_LIMITS, Hub, type HubLimits } from './hub';
@@ -25,6 +27,7 @@ import { RELAY_VERSION } from './version';
 
 const API_PREFIX = '/api/device-link';
 const WS_PATH = `${API_PREFIX}/ws`;
+const AGENT_NET_PATH = `${API_PREFIX}/agent-net`;
 const MAX_JSON_BODY_BYTES = 64 * 1024;
 const MAX_POLL_WAIT_MS = 25_000;
 const POLL_TOKEN_HEADER = 'x-cindy-relay-poll-token';
@@ -44,6 +47,11 @@ export interface RelayServerOptions {
   trustProxyHeaders?: boolean;
   media?: Partial<MediaLimits>;
   hub?: Partial<HubLimits>;
+  /**
+   * 实验:打开 agent-net 数据报转发(`agent-net-relay-v1`),`/relay/info` 的 `features` 里随之声明。
+   * 默认关闭,关闭时这个中转的行为与没有这项功能时完全一样。
+   */
+  agentNet?: boolean | Partial<AgentNetLimits>;
   now?: () => number;
   logger?: RelayLogger;
   /** 媒体过期清理间隔,默认 10 分钟。 */
@@ -129,6 +137,9 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Rel
   );
   await media.init();
   const hub = new Hub(store, store.ownerUserId, now, logger, { ...DEFAULT_HUB_LIMITS, ...options.hub });
+  const agentNet = options.agentNet
+    ? new AgentNetHub(logger, { ...DEFAULT_AGENT_NET_LIMITS, ...(typeof options.agentNet === 'object' ? options.agentNet : {}) })
+    : null;
   const pairing = new Pairing(store, now, (device) => {
     logger.info('device admitted', { platform: device.platform ?? 'unknown' });
     hub.announce(device);
@@ -177,7 +188,7 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Rel
       name: store.relayName,
       protocolVersion: PROTOCOL_VERSION,
       relayVersion: RELAY_VERSION,
-      features: ['pairing-v1', 'device-signatures-v1'],
+      features: ['pairing-v1', 'device-signatures-v1', ...(agentNet ? [AGENT_NET_RELAY_FEATURE] : [])],
       // 仅供展示与主人核对;加入的设备只信任加入链接里的主人公钥。
       ownerPublicKey: store.ownerPublicKey,
     });
@@ -223,6 +234,7 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Rel
     }
     store.remove(deviceId);
     hub.disconnectDevice(target, CLOSE_DEVICE_REMOVED, 'device removed');
+    agentNet?.disconnectDevice(deviceId);
     logger.info('device removed', { bySelf: self.deviceId === deviceId });
     sendJson(res, 200, { deviceId, deleted: true });
   });
@@ -348,6 +360,7 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Rel
   server.headersTimeout = 30_000;
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
+  const agentNetWss = new WebSocketServer({ noServer: true, maxPayload: AGENT_NET_MAX_FRAME_BYTES });
   server.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
     socket.on('error', () => undefined);
     let url: URL;
@@ -359,9 +372,14 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Rel
     }
     const credential = parseRelayAuthorization(req.headers.authorization);
     const device = credential ? store.findByCredential(credential) : undefined;
-    if (url.pathname !== WS_PATH || !device) {
-      const status = url.pathname !== WS_PATH ? '404 Not Found' : '401 Unauthorized';
+    const known = url.pathname === WS_PATH || (agentNet !== null && url.pathname === AGENT_NET_PATH);
+    if (!known || !device) {
+      const status = !known ? '404 Not Found' : '401 Unauthorized';
       socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+      return;
+    }
+    if (url.pathname === AGENT_NET_PATH && agentNet) {
+      agentNetWss.handleUpgrade(req, socket, head, (ws) => agentNet.attach(ws, device));
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => hub.attach(ws, device));
@@ -402,8 +420,12 @@ export async function startRelayServer(options: RelayServerOptions): Promise<Rel
         pairing.wakeAll();
         if (closeOptions?.retire) hub.closeAll(CLOSE_DEVICE_REMOVED, 'relay retired');
         else hub.closeAll(1001, 'relay shutting down');
+        agentNet?.closeAll(closeOptions?.retire ? CLOSE_DEVICE_REMOVED : 1001, 'relay shutting down');
         await new Promise<void>((resolve) => {
           wss.close(() => resolve());
+        });
+        await new Promise<void>((resolve) => {
+          agentNetWss.close(() => resolve());
         });
         await new Promise<void>((resolve) => {
           server.close(() => resolve());

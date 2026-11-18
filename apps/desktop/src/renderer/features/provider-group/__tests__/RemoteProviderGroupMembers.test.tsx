@@ -38,7 +38,8 @@ vi.mock('lucide-react', () => ({
 }));
 
 
-vi.mock('@/components/status/usageCardModel', () => ({
+vi.mock('@/components/status/usageCardModel', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/status/usageCardModel')>()),
   formatQuotaResetAt: () => 'reset',
 }));
 
@@ -122,6 +123,16 @@ afterEach(() => {
 });
 
 describe('RemoteProviderGroupMembers', () => {
+  // Unit regression: the same-account read-only list must retain the owner's
+  // confirmed exhaustion reason without dropping running tasks or requiring expansion.
+  it('shows confirmed quota exhaustion in the collapsed remote row and keeps the running count', async () => {
+    mountWith({ state: 'cooling', usageLimit: { resetAtMs: null } });
+    await screen.findByText('providerGroup.member.status.quotaExhausted');
+    expect(screen.getByText('providerGroup.member.runningCount:{"count":2}')).toBeTruthy();
+    expect(screen.queryByText('providerGroup.member.status.idle')).toBeNull();
+    expect(screen.getByRole('button', { expanded: false })).toBeTruthy();
+  });
+
   it('reads versions from this computer’s device directory when an older group host omits them', async () => {
     const config: ProviderGroupConfig = { ...CONFIG, members: [
       { ...VM, key: 'local:anthropic', kind: 'local', agentDeviceId: null, label: 'Group host' },
@@ -270,13 +281,14 @@ describe('RemoteProviderGroupMembers', () => {
   it('does not present a stale group snapshot as live status', async () => {
     const view: ProviderGroupView = {
       providerId: 'anthropic', config: CONFIG,
-      members: [{ ...VM, label: 'grok-bot-vm', state: 'available', running: 2 }],
+      members: [{ ...VM, label: 'grok-bot-vm', state: 'cooling', running: 2, usageLimit: { resetAtMs: null } }],
       providerContinuity: { stale: true, remainingMs: 1000 },
     };
     mountWith({}, { readView: async () => view });
     await waitFor(() => expect(screen.getByTestId('remote-provider-group-member')
       .getAttribute('data-member-state')).toBe('loading'));
     expect(screen.getByText('providerGroup.member.status.checking')).toBeTruthy();
+    expect(screen.queryByText('providerGroup.member.status.quotaExhausted')).toBeNull();
     expect(screen.queryByText('providerGroup.member.runningCount:{"count":2}')).toBeNull();
   });
 

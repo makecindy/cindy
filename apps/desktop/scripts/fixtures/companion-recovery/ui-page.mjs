@@ -7,7 +7,13 @@ export default {
   name: 'companion-recovery', entry: './fixture.tsx', viewport: { width: 1040, height: 720 },
   real: 'TeammatesSection, search results, RemoteBotSessionView and CloudCompanionOfflineView with synthetic host responses',
   notCovered: 'Full search shell, real accounts, cloud, device connections, persistence, model settings contents, recovery execution and ownership',
-  stubs: { ...sidebar.stubs, 'src/renderer/features/cc-agent/CCAgentSessionView': 'export const CCAgentSessionView=()=>null;', 'src/renderer/features/bots/useRemoteBots': { partial: 'export const useRemoteBots=()=>window.__uiPage.ctx.data.remoteBots;' }, 'src/renderer/features/bots/companionCloudStore': { partial: `import { useSyncExternalStore } from 'react';
+  stubs: { ...sidebar.stubs,
+    'src/renderer/features/device-link/useDeviceLinkDeviceList': `
+      export const useDeviceLinkDeviceList = () => [];
+      export const useDeviceLinkDeviceListRequestState = () => ({ status: 'ready', error: null });`,
+    'src/renderer/features/cc-agent/CCAgentSessionView': 'export const CCAgentSessionView=()=>null;',
+    'src/renderer/features/bots/useRemoteBots': { partial: 'export const useRemoteBots=()=>window.__uiPage.ctx.data.remoteBots;' },
+    'src/renderer/features/bots/companionCloudStore': { partial: `import { useSyncExternalStore } from 'react';
     const subscribe = listener => { window.addEventListener('fixture-cloud-changed', listener); return () => window.removeEventListener('fixture-cloud-changed', listener); };
     export const useCompanionCloud=()=>useSyncExternalStore(subscribe, () => window.__uiPage.ctx.data.cloud);` } },
   cases: { default: { about: 'Demoted self home, read-only history and simulated automatic recovery', data: { profiles: [profile], remoteBots: [], cloud } } },

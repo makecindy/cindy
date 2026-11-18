@@ -201,7 +201,7 @@ export function UserBubblePage() {
             </Picker>
             {custom ? (
               // 尺寸交给原生行决定(含系统行内边距),RN 只填满这一行;maxWidth 取大数撑满行宽。
-              <HStack modifiers={[frame({ maxWidth: 10000, height: HUE_ROW_HEIGHT })]}>
+              <HStack modifiers={[frame({ height: HUE_ROW_HEIGHT }), frame({ maxWidth: 10000 })]}>
                 <RNHostView>
                   <View style={styles.hueRow}>
                     <UserBubbleHueSlider

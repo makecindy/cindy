@@ -5,7 +5,7 @@ import type { FeishuIM } from '@cindy/im';
 
 import { showDesktopSessionEvent } from '../../notificationService';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from '../../device-link';
-import { DesktopNotifier } from '../notifier';
+import { DesktopNotifier } from '../notifier.desktop';
 
 vi.mock('../../notificationService', () => ({
   showDesktopSessionEvent: vi.fn(),
@@ -44,7 +44,7 @@ function createNotifier(opts?: {
   sendFeishuSessionNotification?: (sessionId: string, text: string) => Promise<void>;
   sendMarkdownText?: ReturnType<typeof vi.fn>;
   shouldNotifyDesktop?: () => boolean;
-  isAgentIslandEnabled?: () => boolean;
+  isRunAlertShownElsewhere?: () => boolean;
   publishMarkdown?: ReturnType<typeof vi.fn>;
 }): {
   notifier: DesktopNotifier;
@@ -65,7 +65,7 @@ function createNotifier(opts?: {
     } as unknown as FeishuIM,
     logger: { warn },
     shouldNotifyDesktop: opts?.shouldNotifyDesktop ?? (() => true),
-    isAgentIslandEnabled: opts?.isAgentIslandEnabled ?? (() => false),
+    isRunAlertShownElsewhere: opts?.isRunAlertShownElsewhere ?? (() => false),
     wecomGroupPublisher: { publishMarkdown },
   });
   return { notifier, sendMarkdownText, warn, publishMarkdown };
@@ -119,6 +119,9 @@ describe('DesktopNotifier desktop status mapping', () => {
     },
   );
 
+  // 测试价值：生产入口 ScheduleNotifier.notify 需把已配置的单次 run 通知送入手机出口；
+  // Bug #10944；此前只断言手机发送发生，未验证携带独立 run 身份及 attention 豁免；
+  // 最小失败输入为 run.id=run-1 且桌面全局 toast 关闭；tier=unit；单独运行 2.60s。
   it('does not show a scheduler toast when the shared desktop gate is closed', async () => {
     const { notifier } = createNotifier({ shouldNotifyDesktop: () => false });
 
@@ -132,6 +135,8 @@ describe('DesktopNotifier desktop status mapping', () => {
       kind: 'done',
       // notify() 入口(任何 await 之前)捕获的链路代次,原样透传
       generation: 7,
+      eventId: 'schedule-run:run-1',
+      attentionExempt: true,
     });
   });
 
@@ -144,7 +149,7 @@ describe('DesktopNotifier desktop status mapping', () => {
   });
 
   it('lets Agent Island replace a desktop notification for a session-bound run', async () => {
-    const { notifier } = createNotifier({ isAgentIslandEnabled: () => true });
+    const { notifier } = createNotifier({ isRunAlertShownElsewhere: () => true });
 
     await notifier.notify(schedule, run('failed'));
 
@@ -152,7 +157,7 @@ describe('DesktopNotifier desktop status mapping', () => {
   });
 
   it('keeps a desktop error notification when Agent Island cannot represent the failed run', async () => {
-    const { notifier } = createNotifier({ isAgentIslandEnabled: () => true });
+    const { notifier } = createNotifier({ isRunAlertShownElsewhere: () => true });
 
     await notifier.notify(schedule, { ...run('failed'), sessionId: undefined });
 
@@ -166,7 +171,7 @@ describe('DesktopNotifier desktop status mapping', () => {
   it.each(['success', 'aborted', 'interrupted'] as const)(
     'does not bypass Agent Island for a sessionless %s run',
     async (status) => {
-      const { notifier } = createNotifier({ isAgentIslandEnabled: () => true });
+      const { notifier } = createNotifier({ isRunAlertShownElsewhere: () => true });
 
       await notifier.notify(schedule, { ...run(status), sessionId: undefined });
 

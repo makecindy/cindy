@@ -419,6 +419,12 @@ describe('startRemoteSessionsReconciler', () => {
 });
 
 describe('resolveIneligibleRemoteProjectAction', () => {
+  // App routing, unit: late metadata removes a misclassified computer shard;
+  // the old offline branch retained it indefinitely as a disconnected computer.
+  it('removes cached non-Cindy App shards even while the node is offline', () => {
+    expect(resolveIneligibleRemoteProjectAction({ wasEligible: true, hasCachedShard: true, isSelf: false,
+      online: false, remoteControlEnabled: false, disabledControl: false, app: 'cindy-friend' })).toBe('remove');
+  });
   it('keeps the cached shard when an eligible device goes offline even if the offline row reports remoteControlEnabled=false', () => {
     expect(
       resolveIneligibleRemoteProjectAction({

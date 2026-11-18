@@ -199,7 +199,7 @@ P0 拆成两部分。受邀者身份由 `RemoteAgentHostDeps.controllerTrust` �
 | ID | 工作项 | 说明 |
 |---|---|---|
 | C1-18 | i18n 与术语 | Desktop 五种语言 `common.json`；在 `i18n/glossary.json` 登记「供应商分享」等 `proposed` 条目；跑 `pnpm check:i18n-glossary` |
-| C1-19 | 规则文档同步 | 修订 `docs/dev-rules/protocol-compatibility.md`「远程 Agent」中「只进同账号 allowlist」的表述，补充 providerShare 范围的协议说明 |
+| C1-19 | 规则文档同步 | 修订 `docs/dev-rules/protocol-compatibility/remote-agent.md`「远程 Agent」中「只进同账号 allowlist」的表述，补充 providerShare 范围的协议说明 |
 
 ### 4.3 数据模型（服务端草案）
 

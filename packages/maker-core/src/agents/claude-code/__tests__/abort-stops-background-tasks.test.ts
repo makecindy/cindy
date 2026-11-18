@@ -460,6 +460,42 @@ function wrapInSession(handle: AgentSessionHandle): Session {
   });
 }
 
+// #11042, unit: feed real Claude adapter events through Session. Earlier tests
+// verified Stop/task snapshots, but never attempted automatic idle teardown.
+describe('background work survives automatic idle teardown', () => {
+  it.each(['local_bash', 'local_agent'] as const)('keeps %s alive until its result is delivered', async (taskType) => {
+    const { handle, stream, fakeQuery } = await startSessionWithStream(undefined, { autoCollect: false });
+    const session = wrapInSession(handle);
+    const controller = sdkMock.query.mock.calls.at(-1)?.[0].options.abortController as AbortController;
+    const seen: AgentEvent[] = [];
+    session.onEvent(event => seen.push(event));
+    try {
+      await session.send('run background work');
+      stream.emit(taskStarted('job', taskType));
+      stream.emit(turnResult('started'));
+      await waitFor(() => seen.some(event => event.type === 'done'), 'foreground result');
+      await expect(session.closeIfIdle()).resolves.toBe(false);
+      expect(fakeQuery.close).not.toHaveBeenCalled();
+      expect(controller.signal.aborted).toBe(false);
+      stream.emit(taskNotification('job', 'completed'));
+      await waitFor(() => session.listBackgroundTasks().length === 0, 'background completion');
+      if (taskType === 'local_agent') {
+        await expect(session.closeIfIdle()).resolves.toBe(false);
+        expect(session.countPendingWakeContinuations()).toBeGreaterThan(0);
+      }
+      stream.emit(assistantText('background result delivered'));
+      stream.emit(turnResult('complete'));
+      await waitFor(() => seen.filter(event => event.type === 'done').length === 2, 'result delivered');
+      await expect(session.closeIfIdle()).resolves.toBe(true);
+      expect(controller.signal.aborted).toBe(true);
+      expect(session.getStatus()).toBe('closed');
+    } finally {
+      stream.end();
+      await session.close();
+    }
+  });
+});
+
 afterEach(async () => {
   asyncQueueMock.rejectNextDone = false;
   sdkMock.forkSession.mockReset();
@@ -705,6 +741,8 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     try {
       const { handle, stream, events, fakeQuery } = await startSessionWithStream();
 
+      const cancelled = vi.fn();
+      handle.onTurnContinuationChange?.(cancelled);
       await handle.send({ type: 'user', content: 'spawn background work' });
       stream.emit(taskStarted('task-agent', 'local_agent'));
       await vi.advanceTimersByTimeAsync(0);
@@ -729,12 +767,48 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
           (event) => event.type === 'done' && event.turnContinuationId === undefined,
         )?.data,
       ).toMatchObject({ reason: 'turn_continuation_cancelled' });
+      // #10547: preserve the specific cause across the production callback.
+      expect(cancelled).toHaveBeenCalledWith(continuationId, 'cancelled', 'wake_contract_unfulfilled');
       expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
       expect(handle.isTurnRunning?.()).toBe(false);
       // 对账不是用户 Stop:不得触碰 stopTask / interrupt。
       expect(fakeQuery.stopTask).not.toHaveBeenCalled();
       expect(fakeQuery.interrupt).not.toHaveBeenCalled();
 
+      stream.end();
+      await handle.close().catch(() => undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retains the cancellation cause until the queued parent boundary is acknowledged (#10547)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { handle, stream } = await startSessionWithStream(undefined, { autoCollect: false });
+      const changed = vi.fn();
+      handle.onTurnContinuationChange?.(changed);
+      await handle.send({ type: 'user', content: 'spawn background work' });
+      stream.emit(taskStarted('task-agent', 'local_agent'));
+      stream.emit(turnResult('waiting'));
+      stream.emit(taskNotification('task-agent', 'completed'));
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(WAKE_CONTRACT_GRACE_MS);
+      const id = changed.mock.calls[0]?.[0] as number;
+      expect(id).toBeTypeOf('number');
+      expect(handle.beginTurnContinuationWait?.(id)).toBe('cancelled');
+      expect(handle.getTurnContinuationCancellationReason?.(id)).toBe('wake_contract_unfulfilled');
+      expect(handle.getTurnContinuationCancellationReason?.(id + 1)).toBeUndefined();
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      for (;;) {
+        const item = await iterator.next();
+        if (item.done) throw new Error('missing parent boundary');
+        if (item.value.type === 'done' && item.value.turnContinuationId === id) break;
+      }
+      // Yielding to Session does not release accounting until its next read.
+      expect(handle.getTurnContinuationCancellationReason?.(id)).toBe('wake_contract_unfulfilled');
+      await iterator.next();
+      expect(handle.getTurnContinuationCancellationReason?.(id)).toBeUndefined();
       stream.end();
       await handle.close().catch(() => undefined);
     } finally {
@@ -2275,6 +2349,63 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
 
     stream.emit(taskNotification('bash-1', 'completed'));
     await waitFor(() => (handle.listBackgroundTasks?.() ?? []).length === 0, 'terminal task removed');
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  // 规则:后台命令按启动它的命令写法分成「工作」与「长驻服务」,任务列表只把前者显示为运行中
+  // (docs/dev-rules/maker-core-and-agent-behavior.md「后台命令：工作与服务」)。task_started 只带
+  // 描述不带命令,种类必须从同一 tool_use 的 Bash 输入取,并随事件与快照一起下发。
+  it('labels a background command as work or service from the Bash call that launched it', async () => {
+    const { handle, stream, events } = await startSessionWithStream();
+    const bashToolUse = (taskId: string, command: string): Record<string, unknown> => ({
+      type: 'assistant',
+      parent_tool_use_id: null,
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: `tu-${taskId}`, name: 'Bash', input: { command, run_in_background: true } },
+        ],
+      },
+    });
+
+    await handle.send({ type: 'user', content: 'run the tests and start the preview' });
+    stream.emit(bashToolUse('bash-tests', 'pnpm test:unit:related'));
+    stream.emit(taskStarted('bash-tests', 'local_bash'));
+    stream.emit(bashToolUse('bash-server', 'cd apps/web && pnpm dev'));
+    stream.emit(taskStarted('bash-server', 'local_bash'));
+    // 没见过对应 Bash 调用的后台命令不标种类,下游按「工作」处理。
+    stream.emit(taskStarted('bash-unknown', 'local_bash'));
+    await waitFor(() => taskEvents(events).length >= 3, 'task_started observed');
+
+    const kindByTask = (list: Array<{ taskId: string; backgroundCommandKind?: string }>) =>
+      Object.fromEntries(list.map((task) => [task.taskId, task.backgroundCommandKind]));
+    const expected = { 'bash-tests': 'work', 'bash-server': 'service', 'bash-unknown': undefined };
+    expect(kindByTask(handle.listBackgroundTasks?.() ?? [])).toEqual(expected);
+    expect(
+      kindByTask(taskEvents(events).map((event) => event.data as { taskId: string; backgroundCommandKind?: string })),
+    ).toEqual(expected);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  // 回退提交会关闭旧 Query,CLI 子进程连同它的后台命令一起终止。快照必须立刻反映这一点:宿主据此
+  // 刷新任务列表,否则已不存在的命令会让任务一直显示运行中,直到下一次发送才换 Query 清表。
+  it('rewind commit closes the Query and drops its background commands from the snapshot', async () => {
+    const { handle, stream, events, fakeQueries } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'run the tests in the background' });
+    stream.emit(taskStarted('bash-1', 'local_bash'));
+    await waitFor(() => taskEvents(events).length >= 1, 'task_started observed');
+    stream.emit(turnResult('tests started'));
+    await waitFor(() => handle.isTurnRunning?.() === false, 'turn settled');
+    expect(handle.listBackgroundTasks?.()).toHaveLength(1);
+
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+    expect(fakeQueries[0]?.close).toHaveBeenCalledTimes(1);
+    expect(handle.listBackgroundTasks?.()).toEqual([]);
 
     stream.end();
     await handle.close().catch(() => undefined);

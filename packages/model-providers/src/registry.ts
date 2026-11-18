@@ -95,6 +95,10 @@ export type ModelDiscoveryFailureState = Partial<
 
 /** 供应商 + 连接状态。 */
 export interface ProviderView extends Provider {
+  /** Same-account devices only: complete, host-verified subscription identity set. Display equality, never authorization. */
+  subscriptionAccountKeys?: string[];
+  /** Host observed a transient native-account read failure. Optional on older hosts; no credential data. */
+  subscriptionReadUnavailable?: true;
   /** Host-owned subscription speed policy; absence means an unrelated provider or older host. */
   subscriptionFastPolicy?: { allowFast: boolean; groupAllowsFast: boolean };
   /** 本机是否允许同账号另一台电脑调用该供应商；缺省等同关闭。 */
@@ -103,9 +107,22 @@ export interface ProviderView extends Provider {
   remoteModelIds?: string[];
   /** Definition remains available for adding a removed local connection again. */
   removed?: boolean;
+  /**
+   * A provider merged into another one (its own account belongs elsewhere and none is left): kept
+   * only so saved routes and old tasks resolve; its accounts are managed by that other provider.
+   */
+  subscriptionPoolAlias?: true;
+  /** Current owner-only destination of a merged provider. Older hosts imply only `openai`. */
+  subscriptionPoolTarget?: string;
+  /**
+   * 2026-11-13: this host manages the provider's subscription accounts in its account pool of this
+   * kind (built-in subscriptions with a pool, providers Cindy created, registered legacy Codex
+   * connections). Older hosts omit it; clients then keep their built-in-only behavior.
+   */
+  subscriptionAccountPool?: 'openai' | 'anthropic';
   subscriptionAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };
   /** Public account identity and credential origin, never credential material. */
-  openAiAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };
+  openAiAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean; accountKey?: string };
   connected: boolean;
   /** Ready media execution channels, independent of chat authorization. Absent on older hosts. */
   availableMediaModelIds?: string[];
@@ -168,7 +185,7 @@ export function buildRegistry(
     // 原引用透传零分配 —— PR #744 review)。前缀误命中(如 'a:' 命中 'a:b:model')只
     // 多做一次无害映射,不影响正确性。
     let models = p.models;
-    let mediaOverrides: Pick<Provider, 'imageModels' | 'videoModels' | 'audioModels' | 'embeddingModels'> = {};
+    let mediaOverrides: Pick<Provider, 'imageModels' | 'videoModels' | 'audioModels' | 'embeddingModels' | 'evaluationModels'> = {};
     if (disabledKeys.length > 0 && disabledKeys.some((k) => k.startsWith(`${p.id}:`))) {
       const mapped: Provider['models'] = {};
       for (const agent of Object.keys(p.models) as AgentKind[]) {
@@ -188,6 +205,7 @@ export function buildRegistry(
         ...(p.imageModels ? { imageModels: mapMedia(p.imageModels) } : {}),
         ...(p.videoModels ? { videoModels: mapMedia(p.videoModels) } : {}),
         ...(p.audioModels ? { audioModels: mapMedia(p.audioModels) } : {}),
+        ...(p.evaluationModels ? { evaluationModels: mapMedia(p.evaluationModels) } : {}),
         ...(p.embeddingModels ? { embeddingModels: mapMedia(p.embeddingModels) } : {}),
       };
     }

@@ -1,4 +1,7 @@
+import { createAttachmentPreservationReceiver } from '../attachmentPreservation.js';
+import type { PreserveAttachmentBatch } from '../../maker-host/attachmentPreservation.js';
 import { currentSessionCreationSignal } from '../../localDb/sessionRuntimeCleanup.js';
+import { readRemoteProviderGroupUsageLimit } from '../../provider-group/failurePolicy.js';
 /**
  * 在另一台电脑上启动 Agent、任务留在本机(控制端入口)。
  *
@@ -58,7 +61,7 @@ import {
 } from './proxyHandle';
 import { ExecServerRelay } from './execServerRelay';
 import { createReverseHttpRouter, type LocalMcpTarget } from './router';
-import { RemoteAgentPoller, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
+import { RemoteAgentPoller, RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
 import { isSharedTaskAuthorizationDenied } from './poller';
 
 export interface PreparedRemoteMcp {
@@ -68,6 +71,8 @@ export interface PreparedRemoteMcp {
 }
 
 export interface StartRemoteAgentDeps {
+  attachmentPreservation?(sessionId: string): PreserveAttachmentBatch;
+  attachmentStorageRoots?(sessionId: string): Record<string, string>;
   /** Cancellation for this startup attempt only; never cancels other starts of the task. */
   startupSignal?: AbortSignal;
   /** A direct share must renew the original executor's grant before reopening. */
@@ -440,6 +445,13 @@ async function prepareAndStartRemoteAgentSession(
         }
       : {}),
   });
+  const attachmentRoots = !hostToolsOnly ? deps.attachmentStorageRoots?.(opts.sessionId!) : undefined;
+  const attachments = attachmentRoots && deps.attachmentPreservation
+    ? createAttachmentPreservationReceiver(deps.attachmentPreservation(opts.sessionId!), async file => {
+      const projected = workspace.toAgentPath(file);
+      if (projected === file) throw new Error('Attachment path projection unavailable');
+      return projected;
+    }) : undefined;
   let preparedMcp: PreparedRemoteMcp | undefined;
   let executorDisposal: Promise<void> | undefined;
   const disposePreparation = async (): Promise<void> => {
@@ -447,7 +459,7 @@ async function prepareAndStartRemoteAgentSession(
     preparedMcp = undefined;
     executorDisposal ??= Promise.resolve().then(() => executor.close());
     const results = await Promise.allSettled([
-      executorDisposal, Promise.resolve().then(() => prepared?.dispose()),
+      executorDisposal, Promise.resolve().then(() => prepared?.dispose()), Promise.resolve().then(() => attachments?.dispose()),
     ]);
     const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
     if (failures.length) throw new AggregateError(failures, 'Remote agent preparation cleanup failed');
@@ -470,7 +482,7 @@ async function prepareAndStartRemoteAgentSession(
   } finally {
     signal.removeEventListener('abort', cancelPreparation);
   }
-  const router = createReverseHttpRouter({ executor, mcpTarget: (name) => mcp.servers.get(name), hostToolsOnly });
+  const router = createReverseHttpRouter({ executor, mcpTarget: (name) => mcp.servers.get(name), hostToolsOnly, attachments });
 
   // 连回对方时按最新值打开(换模型、推理强度等在已让出名额时只记在这里)。
   let model = opts.model;
@@ -640,6 +652,10 @@ async function prepareAndStartRemoteAgentSession(
       } else workspace.setAliases(aliases);
       managedAliasFroms = managed;
       workspace.setVirtualRoot(virtualRoot);
+      if (virtualRoot && attachmentRoots) {
+        const native = /^[A-Za-z]:|^\\\\/.test(virtualRoot) ? path.win32 : path.posix;
+        workspace.addAliases(Object.entries(attachmentRoots).map(([name, to]) => ({ from: native.join(virtualRoot, 'additional', 'attachments', name), to })));
+      }
     };
     const client: RemoteAgentRunClient = new RemoteAgentRunClient(deps.newId(), poller, {
       onEvent: (event) => {
@@ -712,7 +728,6 @@ async function prepareAndStartRemoteAgentSession(
           closedEarly = { reason, message: error?.message };
           return;
         }
-        active = null;
         deps.onTaskGrantRenewable?.(false);
         // 对方按闲置收回了它的 Agent 进程(它只收回不忙的任务)：与连接池让出名额一样，本机部分与对话都留着，
         // 要它干活时带原来的会话 id 连回。
@@ -721,23 +736,42 @@ async function prepareAndStartRemoteAgentSession(
         // Such an old host may reconnect after a user disconnect (toggle-off still
         // refuses access). New hosts send controller-disconnected for user actions.
         const restart = reason === 'missing' || reason === 'provider-restarting' || reason === 'aborted';
-        if ((idleReclaimed || restart) && controller) {
+        if (!restart && idleReclaimed && controller?.hasActiveTurn()) {
+          // Reuse the release barrier: even a non-send RPC must wait until the
+          // queued product terminal settles before it reconnects this handle.
+          linkState = 'releasing';
+          let finishRelease!: () => void;
+          const pendingRelease = new Promise<void>(resolve => { finishRelease = resolve; });
+          releasing = pendingRelease;
+          controller.onIdleReclaimed(unfinished => {
+            if (active === client && linkState === 'releasing') {
+              active = null;
+              relay?.reset();
+              linkState = unfinished ? 'closed' : 'released';
+              if (unfinished) controller?.onClosed(reason, error?.message, client.runId);
+            }
+            if (releasing === pendingRelease) releasing = null;
+            finishRelease();
+          });
+          return;
+        }
+        active = null;
+        if ((restart || (idleReclaimed && !controller?.hasActiveTurn())) && controller) {
           relay?.reset();
           linkState = 'released';
           deps.log?.info('remote agent connection released by the other computer', { kind, runId: client.runId, reason });
           if (restart) {
             // A first turn may already have changed local files before its first done.
             // Resume the native conversation, never replay the original request.
-            if (controller.hasActiveTurn()) {
+            controller.onInterrupted(() => {
               hasHistory = true;
               restartResumeRequired = true;
-            }
-            controller.onInterrupted();
+            });
           }
           return;
         }
         linkState = 'closed';
-        if (controller) controller.onClosed(reason, error?.message);
+        if (controller) controller.onClosed(reason, error?.message, client.runId);
         else void disposeLocal();
       },
       // Codex 经执行环境在本机起的进程还在跑(对方看不到)：拉取时告诉对方，免得被当成闲置收回。
@@ -791,6 +825,13 @@ async function prepareAndStartRemoteAgentSession(
           });
         });
       } else client.abandon('start-failed');
+      if (!remoteStarted && (
+        (error instanceof Error && 'code' in error && error.code === 'IPC_ERROR')
+        || (error instanceof RemoteAgentRemoteError && error.phase === 'start' && error.info.name === 'AgentStartupStoppedError')
+      )) {
+        const quota = readRemoteProviderGroupUsageLimit(error);
+        if (quota) throw quota;
+      }
       throw error;
     }
   }
@@ -883,6 +924,7 @@ async function prepareAndStartRemoteAgentSession(
     return {
       sessionId: opts.sessionId!,
       acceptsImageDeliveryReceipts: true,
+      ...(attachments ? { acceptsAttachmentPreservation: true } : {}),
       ...(imageDeliveryEpoch !== undefined ? { imageDeliveryEpoch } : {}),
       virtualWorkspace: true,
       options: encodeStartOptions(startOptions),

@@ -12,7 +12,7 @@
  * 只登记不带 transport 的 `LaneTurnScope`,供伙伴技能等按「这一轮是不是主人触发」授权。
  */
 
-import type { FeishuIM, TelegramIM } from '@cindy/im';
+import type { BlueBubblesIM, FeishuIM, TelegramIM } from '@cindy/im';
 
 /** MCP 侧用到的 TelegramIM 子集(结构类型, 测试可用假对象)。 */
 export type TelegramToolTransport = Pick<
@@ -108,7 +108,18 @@ export function isLaneTurnScopeChannel(channel: string): channel is LaneTurnScop
   return channel === 'wecom' || channel === 'dingtalk' || channel === 'discord' || channel === 'wechat' || channel === 'x';
 }
 
-export type ChannelToolScope = (TelegramToolScope | FeishuToolScope | LaneTurnScope) & {
+export interface IMessageToolScope {
+  channel: 'imessage';
+  im: Pick<BlueBubblesIM, 'sendText' | 'sendFile' | 'readHistory' | 'listChats' | 'health'>;
+  botId: string;
+  laneUserId: string;
+  chatId: string;
+  chatKind: 'direct' | 'group';
+  requesterIsOwner: boolean;
+  companion: true;
+}
+
+export type ChannelToolScope = (TelegramToolScope | FeishuToolScope | IMessageToolScope | LaneTurnScope) & {
   /** Local durable input, stamped by the IM runner after persistence succeeds. */
   inputClientId?: string;
 };
@@ -154,4 +165,35 @@ export function readChannelToolScope(args: {
 /** 测试/进程级 teardown;生产授权仍必须通过租约 release 收口。 */
 export function resetChannelToolScopeForTests(): void {
   activeBySession.clear();
+  replyMediaBySession.clear();
+}
+
+/** Output-only lease: deliberately separate from requester / channel API authority. */
+export type TelegramReplyMediaScope = Pick<TelegramToolScope, 'im' | 'laneUserId'>;
+const replyMediaBySession = new Map<string, {
+  sessionInstanceId: string;
+  scope: TelegramReplyMediaScope;
+  isActive: () => boolean;
+}>();
+
+export function beginTelegramReplyMediaScope(args: {
+  sessionId: string;
+  sessionInstanceId: string;
+  scope: TelegramReplyMediaScope;
+  isActive: () => boolean;
+}): () => void {
+  if (!args.sessionId || !args.sessionInstanceId) throw new Error('reply media scope requires a live session instance');
+  replyMediaBySession.set(args.sessionId, args);
+  return () => {
+    if (replyMediaBySession.get(args.sessionId) === args) replyMediaBySession.delete(args.sessionId);
+  };
+}
+
+export function readTelegramReplyMediaScope(args: {
+  sessionId?: string;
+  sessionInstanceId?: string;
+}): TelegramReplyMediaScope | null {
+  if (!args.sessionId || !args.sessionInstanceId) return null;
+  const entry = replyMediaBySession.get(args.sessionId);
+  return entry && entry.sessionInstanceId === args.sessionInstanceId && entry.isActive() ? entry.scope : null;
 }

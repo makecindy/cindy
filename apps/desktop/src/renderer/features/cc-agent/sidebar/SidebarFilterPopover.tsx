@@ -47,11 +47,13 @@ import {
   Info,
   LayoutList,
   SlidersHorizontal,
+  Timer,
   Wallet,
   Users,
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import { taskCreatorFilterKey } from '@/features/bots/cindyDeviceRoster';
@@ -402,6 +404,7 @@ export function SidebarFilterPopover({
     lastActivity,
     groupBy,
     groupDialogue,
+    groupAutomation,
     groupDevice,
     sortBy,
     projectOrder,
@@ -414,6 +417,7 @@ export function SidebarFilterPopover({
     setLastActivity,
     setGroupBy,
     setGroupDialogue,
+    setGroupAutomation,
     setGroupDevice,
     setSortBy,
     setProjectOrder: setViewerProjectOrder,
@@ -432,6 +436,7 @@ export function SidebarFilterPopover({
     [
       groupBy === 'project' ? t('ccAgent.sidebar.groupSummary.project') : null,
       groupDialogue ? t('ccAgent.sidebar.groupSummary.dialogue') : null,
+      groupAutomation ? t('ccAgent.sidebar.groupSummary.automation') : null,
       hasRemoteDevices && groupDevice ? t('ccAgent.sidebar.groupSummary.device') : null,
     ]
       .filter(Boolean)
@@ -653,6 +658,12 @@ export function SidebarFilterPopover({
                   onToggle={() => setGroupDialogue(!groupDialogue)}
                   Icon={MessageSquare}
                 />
+                <CheckMenuItem
+                  label={t('ccAgent.sidebar.filterGroupBy.automation')}
+                  checked={groupAutomation}
+                  onToggle={() => setGroupAutomation(!groupAutomation)}
+                  Icon={Timer}
+                />
                 {hasRemoteDevices && (
                   <CheckMenuItem
                     label={t('ccAgent.sidebar.filterGroupBy.device')}
@@ -764,6 +775,8 @@ export function SidebarFilterPopover({
                       )}
                     </DropdownMenuItem>
                     {allKnownProjects.map((project) => {
+                      // A teammate's project is chosen through the teammate filter.
+                      if (isTeammateProjectPath(project.workingDir)) return null;
                       const selected =
                         projects === 'all' ||
                         (projectsAsSet != null &&

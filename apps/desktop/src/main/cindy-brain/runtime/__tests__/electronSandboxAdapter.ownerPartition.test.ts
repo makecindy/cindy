@@ -97,7 +97,7 @@ vi.mock('../../../appSessionState', () => ({
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../../../cindy-media/blobStore', () => ({
+vi.mock('../../../cindy-media/blobStore.desktop', () => ({
   readBlob: vi.fn(),
   resolveHashRef: vi.fn(),
 }));
@@ -127,6 +127,7 @@ import {
   revokeLegacyGhostProtocolPartition,
   setGhostAppContextProvider,
   setGhostAgentModelsProvider,
+  setGhostModelPreferencesProvider,
   setGhostModelPickerProvider,
   setGhostKvStore,
   setGhostConnectionsHandler,
@@ -135,6 +136,8 @@ import {
   setGhostMediaModelsProvider,
 } from '../electronSandboxAdapter';
 import { createGhostAgentModelsCache } from '../../ghostAgentModels.js';
+import { createGhostModelPreferencesProvider } from '../../ghostModelPreferences.js';
+import { agentDeviceFavoriteSource, providerShareFavoriteSource } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 
 function ghost(id: string): InstalledGhost {
@@ -1030,4 +1033,97 @@ it('rejects failed in-flight model reads after owner changes', async () => {
   harness.activeOwner = { mode: 'cloud', dataOwnerId: 'owner-b', generation: 2 };
   reject(new Error('old visibility mirror cleared'));
   expect((await pending).status).toBe(403);
+});
+
+describe('model favorites and recents (agent.modelPreferences)', () => {
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：插件同源 GET /model-preferences 与 POST /model-preferences/favorites，经真实
+   *   协议 handler 与生产 provider：未声明插件两个端点都 403 PERMISSION_DENIED 且不触达收藏桥；
+   *   声明的插件只拿到本机条目（其他电脑与分享来源被滤掉），写入经桥往返，不能写非本机来源，
+   *   被 App 拒绝回 409，桥不可用回 503。
+   * - Bug／规则依据：plugin-security-and-authoring.md「模型收藏与最近使用」（2026-11 产品决定）。
+   * - 现有覆盖缺口：新端点，此前无覆盖。
+   * - 最小失败输入：同一收藏表含本机、agent-device-favorite: 与 provider-share-favorite: 三条。
+   * - tier：unit（进程内 fake 桥，真实 handler + provider）。
+   * - 实测耗时：整文件 1.5 s（macOS arm64）。
+   */
+  it('gates both endpoints on the declaration and only exposes this computer\'s entries', async () => {
+    const local = { uid: 'fav-1', providerId: 'openai', modelId: 'gpt', agent: 'codex' as const, effort: 'high' };
+    const remote = { ...local, uid: 'fav-2', providerId: agentDeviceFavoriteSource({ deviceId: 'box', providerId: 'openai' }) };
+    const shared = { ...local, uid: 'fav-3', providerId: providerShareFavoriteSource({ shareId: 's', memberId: 'm', providerId: 'anthropic', owner: { region: 'global' } }) };
+    const { uid: _uid, ...recent } = local;
+    const read = vi.fn(async () => ({ favorites: [local, remote, shared], recents: [recent, { ...recent, providerId: remote.providerId }] }));
+    const apply = vi.fn(async () => [local, remote]);
+    const installs = new Map<string, InstalledGhost>();
+    setGhostModelPreferencesProvider(createGhostModelPreferencesProvider({
+      getGhost: (id) => installs.get(id), ownerKey: () => harness.activeOwner.dataOwnerId ?? '', read, apply,
+    }));
+    const plain = ghost('prefs-plain');
+    const declared = { ...ghost('prefs-declared'), manifest: { ...ghost('prefs-declared').manifest, agent: { modelPreferences: true } } };
+    for (const installed of [plain, declared]) { installs.set(installed.manifest.id, installed); ensureGhostProtocolRegistered(installed); }
+    const handlerFor = (id: string) => harness.sessions.get(approvedPartition(`cindy-ghost-owner:cloud:opaque-owner-a:${id}`))!.protocolHandler!;
+    const call = (id: string, path: string, method = 'GET') =>
+      handlerFor(id)(new Request(`cindy-ghost://${id}/${path}`, { method, ...(method === 'POST' ? { body: 'x' } : {}) }));
+    const body = (value: unknown) => kvEndpoint.readBoundedBodyText.mockResolvedValueOnce(JSON.stringify(value));
+    const add = { kind: 'add', item: { providerId: 'openai', modelId: 'gpt', agent: 'codex' } };
+
+    for (const [path, method] of [['model-preferences', 'GET'], ['model-preferences/favorites', 'POST']] as const) {
+      if (method === 'POST') body(add);
+      const denied = await call('prefs-plain', path, method);
+      expect(denied.status).toBe(403);
+      expect(await denied.json()).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    }
+    expect(read).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+
+    const got = await call('prefs-declared', 'model-preferences');
+    expect(got.status).toBe(200);
+    expect(got.headers.get('cache-control')).toBe('no-store');
+    expect(await got.json()).toEqual({ ok: true, favorites: [local], recents: [recent] });
+    expect((await call('prefs-declared', 'model-preferences?owner=other')).status).toBe(400);
+    expect((await call('prefs-declared', 'model-preferences', 'POST')).status).toBe(405);
+    expect((await call('prefs-declared', 'model-preferences/favorites')).status).toBe(405);
+
+    body(add);
+    const added = await call('prefs-declared', 'model-preferences/favorites', 'POST');
+    expect([added.status, await added.json()]).toEqual([200, { ok: true, favorites: [local] }]);
+    expect(apply).toHaveBeenCalledExactlyOnceWith({ kind: 'add', item: expect.objectContaining(add.item) });
+
+    for (const invalid of [{ kind: 'remove', expected: remote }, { kind: 'add', item: { ...add.item, providerId: shared.providerId } }, { kind: 'rename' }]) {
+      body(invalid);
+      const rejected = await call('prefs-declared', 'model-preferences/favorites', 'POST');
+      expect([rejected.status, (await rejected.json()).errorCode]).toEqual([400, 'INVALID_REQUEST']);
+    }
+    expect(apply).toHaveBeenCalledOnce();
+
+    apply.mockRejectedValueOnce(Object.assign(new Error('changed'), { code: 'PRECONDITION_FAILED' }));
+    body({ kind: 'remove', expected: local });
+    const conflict = await call('prefs-declared', 'model-preferences/favorites', 'POST');
+    expect([conflict.status, (await conflict.json()).errorCode]).toEqual([409, 'CONFLICT']);
+
+    read.mockRejectedValueOnce(new Error('no app window'));
+    const unavailable = await call('prefs-declared', 'model-preferences');
+    expect([unavailable.status, (await unavailable.json()).errorCode]).toEqual([503, 'NOT_AVAILABLE']);
+  });
+
+  // Review 2026-11-17 (Codex P1): an account switch while the write body was still being read
+  // let the old account's page change the new account's favorites, then answered 403.
+  it('does not write favorites when the page went stale while its body was read', async () => {
+    const apply = vi.fn(async () => []);
+    const installed = { ...ghost('prefs-stale'), manifest: { ...ghost('prefs-stale').manifest, agent: { modelPreferences: true } } };
+    setGhostModelPreferencesProvider(createGhostModelPreferencesProvider({
+      getGhost: (id) => (id === installed.manifest.id ? installed : undefined),
+      ownerKey: () => harness.activeOwner.dataOwnerId ?? '', read: vi.fn(), apply,
+    }));
+    ensureGhostProtocolRegistered(installed);
+    let finishBody!: (body: string) => void;
+    kvEndpoint.readBoundedBodyText.mockReturnValueOnce(new Promise<string>((resolve) => { finishBody = resolve; }));
+    const handler = harness.sessions.get(approvedPartition(`cindy-ghost-owner:cloud:opaque-owner-a:${installed.manifest.id}`))!.protocolHandler!;
+    const pending = handler(new Request(`cindy-ghost://${installed.manifest.id}/model-preferences/favorites`, { method: 'POST', body: 'x' }));
+    harness.activeOwner = { mode: 'cloud', dataOwnerId: 'owner-b', generation: 2 };
+    finishBody(JSON.stringify({ kind: 'add', item: { providerId: 'openai', modelId: 'gpt', agent: 'codex' } }));
+    expect((await pending).status).toBe(403);
+    expect(apply).not.toHaveBeenCalled();
+  });
 });

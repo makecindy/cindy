@@ -2,15 +2,6 @@ import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes
 
 /** Search entries owned by WindowBehaviorSection. */
 export const windowBehaviorSettings = defineSettings({
-  devicesKeepAwake: {
-    id: 'settings.devices.keepAwake',
-    fallbackTargetId: 'settings-window-behavior',
-    tab: 'general',
-    targetId: 'settings-search-settings-devices-keepAwake',
-    titleKey: 'settings.devices.keepAwake',
-    sectionKey: 'settings.sections.windowBehavior',
-    descriptionKey: 'settings.devices.keepAwakeHint',
-  },
   loginItemLabel: {
     id: 'settings.windowBehavior.loginItem.label',
     fallbackTargetId: 'settings-window-behavior',

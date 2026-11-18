@@ -57,15 +57,22 @@ struct AccountEntity: AppEntity {
 /// The accounts of the widget's chosen computer, in that computer's order. Hidden ones on the
 /// computer are not sent, so they are not offered either.
 struct AccountQuery: EntityQuery {
+  #if os(iOS)
   @IntentParameterDependency<QuotaWidgetIntent>(\.$computer)
   var config
+  #endif
 
   func entities(for identifiers: [String]) async throws -> [AccountEntity] {
     identifiers.map { AccountEntity(key: AccountKey(encoded: $0)) }
   }
 
   func suggestedEntities() async throws -> [AccountEntity] {
-    let sources = WidgetState.load(computer: config?.computer.id).snapshot?.sources ?? []
+    #if os(iOS)
+    let computer = config?.computer.id
+    #else
+    let computer: String? = nil
+    #endif
+    let sources = WidgetState.load(computer: computer).snapshot?.sources ?? []
     return sources.map { AccountEntity(key: AccountKey(source: $0)) }
   }
 }
@@ -84,10 +91,15 @@ struct SelectComputerIntent: UsageWidgetConfiguration {
   static var title: LocalizedStringResource = "Data source"
   static var description = IntentDescription("Choose which computer this widget shows.")
 
+  #if os(iOS)
   @Parameter(title: "Computer")
   var computer: ComputerEntity?
 
   var computerID: String? { computer?.id }
+  #else
+  /// A Mac widget always shows the Mac it runs on.
+  var computerID: String? { nil }
+  #endif
   var pinnedAccounts: [String]? { nil }
   var hiddenAccounts: [String]? { nil }
 }
@@ -96,6 +108,7 @@ struct SelectComputerIntent: UsageWidgetConfiguration {
 /// accounts hidden; every other account, including ones added later, follows in the computer's
 /// order.
 struct QuotaWidgetIntent: UsageWidgetConfiguration {
+  #if os(iOS)
   static var title: LocalizedStringResource = "Data source"
   static var description = IntentDescription(
     "Choose which computer this widget shows, which accounts come first and which to hide. Other accounts, including ones added later, follow in that computer's order."
@@ -104,19 +117,31 @@ struct QuotaWidgetIntent: UsageWidgetConfiguration {
   @Parameter(title: "Computer")
   var computer: ComputerEntity?
 
+  var computerID: String? { computer?.id }
+  #else
+  static var title: LocalizedStringResource = "Accounts"
+  static var description = IntentDescription(
+    "Choose which accounts come first and which to hide. Other accounts, including ones added later, follow in the menu bar's order."
+  )
+
+  var computerID: String? { nil }
+  #endif
+
   /// Up to what each size shows; a plain number would mean exactly that many, with no way to
   /// remove one or clear the choice.
   @Parameter(title: "Accounts first", size: [
     .systemSmall: IntentCollectionSize(min: 0, max: 4),
     .systemMedium: IntentCollectionSize(min: 0, max: 6),
     .systemLarge: IntentCollectionSize(min: 0, max: 7),
+    .accessoryCircular: IntentCollectionSize(min: 0, max: 2),
+    .accessoryRectangular: IntentCollectionSize(min: 0, max: 4),
+    .accessoryInline: IntentCollectionSize(min: 0, max: 1),
   ])
   var pinned: [AccountEntity]?
 
   @Parameter(title: "Hidden accounts")
   var hidden: [AccountEntity]?
 
-  var computerID: String? { computer?.id }
   var pinnedAccounts: [String]? { pinned?.map(\.id) }
   var hiddenAccounts: [String]? { hidden?.map(\.id) }
 }

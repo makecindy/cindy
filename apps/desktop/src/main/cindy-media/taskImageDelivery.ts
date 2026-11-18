@@ -12,7 +12,7 @@ import { hasRef, removeRefById, withSessionMediaRefLock } from './ledger';
 import {
   captureMediaRefCompensationScope,
   withMediaRefCompensation,
-} from './refCompensationJournal';
+} from './refCompensationJournal.desktop';
 import { sniffMediaMime } from './sniffMediaMime';
 import {
   hasLocalTaskImages,
@@ -20,7 +20,9 @@ import {
   materializeTaskImageMarkdown,
 } from './taskImageMarkdown';
 
-const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+/** 导入本机图片时单个文件的大小上限; 超过的不入库, 调用方据此向用户说明原因。 */
+export const TASK_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+const MAX_IMAGE_BYTES = TASK_IMAGE_MAX_BYTES;
 
 export function claudeScratchpadTempBase(platform: NodeJS.Platform = process.platform): string {
   // Claude uses /tmp on Unix, including macOS where os.tmpdir() differs.

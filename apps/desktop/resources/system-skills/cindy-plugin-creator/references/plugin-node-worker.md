@@ -12,8 +12,14 @@
 Node worker ↔ JSON-RPC stdio ↔ 你的 main.js ↔ Cindy 主机能力
 ```
 
-Node 不能直接拿到 `cindy`、Electron IPC 或 Agent 会话。它向主机发反向 JSON-RPC
-请求时，主机会固定返回 `-32601`；需要 Cindy 能力时，Node 先把数据回给 `main.js`，
+Node 不持有 Electron IPC 或 Agent 会话。宿主提供的 `cindy.host.call` 可通过私有通道调用
+与 Agent 共用的宿主工具，须声明并批准 `agent.hostTools`，详见[宿主工具调用](plugin-host-tools.md)。
+`cindy.fetch` 与 `cindy.network.open/read/send/close` 也经同一私有宿主通道提供网络代发、
+流式读取与 WebSocket；沿用本插件已批准的 `network` 目标及凭证注入，不给 Worker 凭证明文，
+不接受自报 callId 借用任务权限，详见[网络](plugin-network.md)。
+引用已连接 OAuth 账号时只允许宿主代注入，`node.secretBindings` 返回
+`HOST_INJECTION_REQUIRED`，不把原账号的令牌交给 Worker。
+其它反向 JSON-RPC 请求仍返回 `-32601`；需要其它 Cindy 能力时，Node 先把数据回给 `main.js`，
 再由 `main.js` 调 Cindy 通道。插件自主调用继续按 manifest 验权；当前
 Agent tool-call 内的网络与 workdir 操作按 §4.2 复用 Agent 授权。
 
@@ -212,6 +218,9 @@ MCP server 的 sampling / elicitation / roots 等 server→client 反向请求�
 
 ### 4.12.3 打包和生命周期红线
 
+宿主服务依赖使用 `agent.hostTools` 并在调用时解析；能力查询与资源退出规则见
+[宿主服务依赖与生命周期](plugin-host-tools.md#服务依赖与生命周期)。服务不可用不代替安装批准，也不授予管理其他插件的能力。
+
 - 用户不需要安装 Node、npm、CLI 或 MCP。运行时由 Cindy 随包提供；你必须在制作阶段
   把依赖打成单个 worker 文件或连同静态资源放进目录；**禁止**在安装/首次运行时执行
   `npm install`、`npx`、`postinstall` 或从网络下载可执行代码；
@@ -219,7 +228,9 @@ MCP server 的 sampling / elicitation / roots 等 server→client 反向请求�
   最多 2048 个文件、解压后 256MB、.cindy 128MB；超限直接拒绝；
 - `on-demand` 首次 `cindy.node.request` 才启动，缺省空闲 120 秒关闭；停用、更新、
   卸载、退出 Cindy 都立即关闭。`resident` 会随插件启用一直运行，详情页单独显示；
-- 每个插件最多 32 条在途请求；单次 params 256KB、单行 stdout 1MB。单次请求缺省
+  交互页面的状态恢复规则与回收验收见 [§4.23](plugin-interactive-pages.md)；
+- 每个插件最多 32 条在途请求；单次 params 256KB、单行 stdout 1MB。未收齐换行的 stdout 缓冲区超限会
+  杀掉该工作进程，使它的全部在途请求失败。输出前检查完整 JSON 行的字节数，多份响应合并也按总量计。单次请求缺省
   30 秒、上限 120 秒;长任务用 maxTotalMs 开启"有动静就续期",绝对上限 15 分钟
   (见 §4.12.1)。进程崩溃只影响
   自己，所有在途请求收到结构化失败，下次请求可重新启动；
@@ -328,7 +339,7 @@ network setup/readiness，不能拿 CLI 的登录结果冒充宿主凭据配置�
 
 交互页面不依赖 Node，见[交互页面 MCP Apps（§4.23）](plugin-interactive-pages.md)。
 
-### 4.12.6 Node 短期鉴权票据上传（未发布）
+### 4.12.6 Node 短期鉴权票据上传
 
 逻辑页通过真实工具调用的 callId 发起 cancelWithCall:true 的 Node 请求。
 Node 在该 RPC 内捕获 globalThis.__CINDY_NODE__.bindHostServices()；旧 Host 无此入口时
@@ -348,3 +359,6 @@ Host 阻断已知短期令牌的原样输出，不替代插件保密责任。每
 领取、校验和保存授权结果。无真实 tool-call 时不传 callId/cancelWithCall，不调用
 bindAuthorization，不伪造 Host 授权。只将展示授权 URL 短暂传回自己的页面，轮询凭据、
 兑换结果和密钥留在 Node，不进入页面、KV 或模型。
+
+交互页面的宿主标题、来源提示、全屏按钮声明和页签固定尺寸见 [插件界面扩展](plugin-host-ui.md#标题全屏与可用尺寸)。
+页签与全屏的页面需自行滚动，不能依赖宿主自动增高；`hostFullscreenButton: false` 只隐藏宿主按钮，不撤销页面请求全屏的能力。

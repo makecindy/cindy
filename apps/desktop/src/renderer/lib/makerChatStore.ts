@@ -1,17 +1,25 @@
+import { recordGithubStarPromptSend, recordGithubStarPromptCompletion } from './githubStarPrompt';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
+import { applySessionRebalancePreferencePatch } from '@/features/provider-group/sessionRebalanceCache';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
+import { chatRemoteErrorGuidanceKey } from './autoReviewUnavailableGuidance';
 import { sharedTaskRecoveryReason } from '../../shared/sharedTaskRecovery';
 import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
-import { asyncQuestionNeedsSupplement, formatAsyncQuestionSupplement } from '@cindy/maker-shared/interaction';
+import {
+  asyncQuestionNeedsSupplement, asyncQuestionReplyDisplayText, formatAsyncQuestionReplyDisplay,
+  formatAsyncQuestionSupplement, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
+} from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
+import { findErrorTailMessage } from './errorTailMessage';
 import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './pluginSetupCommandError';
 export type { PluginSetupCommandError } from './pluginSetupCommandError';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
 import { normalizeTaskTags } from '@cindy/maker-shared';
-import type { ImMessageSource } from '../../shared/imMessageSource';
+import { createPluginRelayImSource, type ImMessageSource } from '../../shared/imMessageSource';
+import { splitPluginMessage } from '../../shared/pluginMessage';
 import { sharedTaskAuthorMemberId, sharedTaskAuthorName } from '@cindy/maker-shared';
 import { readBotAuthorizationCard } from '../../shared/botAuthorization';
 import { readBotStarterOptions } from '../../shared/botStarterOptions';
@@ -47,6 +55,7 @@ import { parsePluginConnectionInput, type InputHandoffSnapshot } from '@cindy/de
 import { HISTORY_WORK_PATCH_CHANNEL, HistoryViewController, isHistoryViewUnavailable, mapHistoryViewMessages, historyViewLeaves, historyWorkSummaries, historyPrefetchVersion, historySnapshotCovers, historySnapshotForCache, selectHistoryPrefetchSessions, type HistoryViewPage, type HistoryDetailPage, type HistoryWorkPatch } from '@cindy/maker-shared/message-window';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { nextHistoryCacheReceipt, isHistoryCacheReceipt, historyCacheReceiptFollows, mergeHistoryPrefetchRequest, readContinuousHistoryPage, type HistoryCacheReceipt, type HistoryPrefetchRequest } from '@cindy/maker-shared/message-window';
+import { isHistoryDetailTool, hasVisibleHistoryResult, historyViewEndMs } from '@cindy/maker-shared/message-window';
 import { SESSION_SYNC_CHANNEL } from '@cindy/device-link';
 import { isRemoteTextDelta, readRemoteTextSnapshot, reconcileRemoteText, consumeRemoteSessionSync } from '@cindy/maker-shared/message-window';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
@@ -64,6 +73,7 @@ import {
   isGatewayProxyTokenInvalidError,
   redactSensitiveText,
   parseAgentErrorCode,
+  localizeSubscriptionAccountError,
 } from '@cindy/maker-shared/error-redaction';
 import {
   formatRemoteError,
@@ -92,6 +102,7 @@ import { parseToolLoopErrorDetails } from '@cindy/maker-shared/tool-loop-error';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
+import { cancelPendingGhostCardTaskAutoArchive } from '@/cindy-brain/ghostCardTaskArchive';
 import {
   readMessageSourceDevice,
   readMessageSourceGroup,
@@ -138,7 +149,7 @@ import type {
   GhostSetupStepPhase,
 } from '../../shared/ghost';
 import * as messageService from '@/lib/messageService';
-import { parseMcpAppHistory, parseMcpAppRecord } from '@cindy/maker-shared/mcp-apps';
+import { parseMcpAppHistory } from '@cindy/maker-shared/mcp-apps';
 import * as sessionService from '@/lib/sessionService';
 // device-link 透明传输:远程(被控设备)会话的操作/读取走隧道,本地会话零变化。
 import {
@@ -179,7 +190,7 @@ import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
-import { clearSessionStarting, markSessionStarting } from '@/lib/sessionStartingStore';
+import { clearSessionStarting, markSessionStarting, noteStartingTerminal } from '@/lib/sessionStartingStore';
 import { createLogger } from '@/lib/logger';
 import {
   traceRemoteSendAccepted,
@@ -372,22 +383,27 @@ export function remoteErrorI18nKey(msg: string): string | undefined {
   const limitKey = remoteAgentLimitErrorKey(msg);
   if (limitKey) return limitKey;
   const parsed = parseAgentErrorCode(msg);
-  return parsed ? `chat.remoteError.${parsed.code}` : undefined;
+  return parsed ? chatRemoteErrorGuidanceKey(parsed.code, null) : undefined;
 }
 
 export function decodeRemoteErrorMessage(msg: string): string {
+  const subscriptionGuidance = localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language);
+  if (subscriptionGuidance) return subscriptionGuidance;
   const recovery = sharedTaskRecoveryReason(msg);
   if (recovery) return i18n.t(`sharedTaskRecovery.reason.${recovery}`);
   const limitKey = remoteAgentLimitErrorKey(msg);
   if (limitKey) return i18n.t(limitKey);
   const parsed = parseAgentErrorCode(msg);
   return parsed
-    ? i18n.t(`chat.remoteError.${parsed.code}`, { defaultValue: parsed.fallback })
+    ? i18n.t(chatRemoteErrorGuidanceKey(parsed.code, null)!, { defaultValue: parsed.fallback })
     : msg;
 }
 
 /** Keep known codes for the banner's active locale; retain unknown-code fallback behavior. */
 export function remoteErrorMessageForBanner(msg: string): string {
+  // Subscription guidance has its own keys and reset metadata. Keep the raw
+  // error so live/tail banners can translate it after locale changes.
+  if (localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language)) return msg;
   const key = remoteErrorI18nKey(msg);
   return key && i18n.exists(key) ? msg : decodeRemoteErrorMessage(msg);
 }
@@ -398,15 +414,17 @@ export function remoteErrorMessageForBanner(msg: string): string {
  * key('empty-response' / 'turn-failed'), message 仅作非 renderer 消费方(IM/orca)的兜底。
  */
 function liveErrorBannerText(message: string, reason: string | undefined): string {
+  if (reason === 'unexecuted-tool-markup') return i18n.t('logic.errors.unexecutedToolMarkup');
+  // The banner localizes this stable reason. Keep the host's bounded cause in
+  // the raw detail/diagnosis path instead of replacing it with summary copy.
+  if (reason === 'silent-stop-exhausted') return message;
   return reason === 'empty-response'
     ? i18n.t('logic.errors.emptyResponse')
     : reason === 'turn-failed'
       ? i18n.t('logic.errors.turnFailed')
-      : reason === 'silent-stop-exhausted'
-        ? i18n.t('logic.errors.silentStopExhausted')
-        : reason === 'codex-auto-review-unavailable'
-          ? i18n.t('logic.errors.codexAutoReviewUnavailable')
-          : remoteErrorMessageForBanner(message);
+      : reason === 'codex-auto-review-unavailable'
+        ? i18n.t('logic.errors.codexAutoReviewUnavailable')
+        : remoteErrorMessageForBanner(message);
 }
 // 专门给"出现在用户面前的红色 ErrorBanner"打日志,scope 以 `maker/` 开头
 // 是为了让它落在统一 agent 流(agent-*.ndjson,跟 agent runtime 抛出的底层错误同一份,
@@ -444,10 +462,12 @@ import {
 
 // Mirror: also defined in main/agentManager.ts
 export interface AskUserQuestionItem {
+  id?: string;
   question: string;
   header?: string;
   options?: Array<{ label: string; description?: string }>;
   multiSelect?: boolean;
+  answerConstraints?: import('@cindy/maker-shared').AskAnswerConstraints;
 }
 
 export interface ChatMessage {
@@ -461,6 +481,8 @@ export interface ChatMessage {
   replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   botTaskResults?: import('@cindy/maker-shared/botCollaboration').BotCollaborationMeta[];
+  /** Teammate chat, display only: the tasks this reply's turn started or handed work to (BotStartedTasks). */
+  botStartedTasks?: { sessionId: string; title: string | null; created: boolean }[];
   clientId: string;
   /** Server message id when this row came from history; used as a pagination cursor. */
   id?: string;
@@ -567,6 +589,16 @@ export interface ChatMessage {
   /** Provider phase survives live deltas and durable history projection. */
   assistantPhase?: string;
   failedSamplingAttempt?: boolean;
+  /** 采样尚未确认(运行时关闭时遗留的未封口输出):属于工作过程,不是正式回复(#8655 review)。 */
+  samplingAttemptPending?: boolean;
+  /**
+   * 历史恢复时被过滤掉的隐藏 thinking 行(redacted / omitted 占位)留下的活动边界。
+   * 它已不在渲染序列里，但主进程 `canonicalReplyVisibility` 仍把 thinking 行算作
+   * 「后续活动」，所以边界挂在时间线上相邻的可见消息上：`hiddenThinkingBefore` 表示
+   * 本行之前有一段隐藏思考，`hiddenThinkingAfter` 表示本行之后还有(#8655 review)。
+   */
+  hiddenThinkingBefore?: boolean;
+  hiddenThinkingAfter?: boolean;
   /** user 消息投递方式:普通新 turn 或运行中 steer。 */
   delivery?: 'turn' | 'steer';
   /** Hook 来源元数据(IM 平台 + 用户干净原文 + thread 上下文),UserMessage 据此渲染 Cindy 任务卡片。 */
@@ -575,6 +607,7 @@ export interface ChatMessage {
   goalBadge?: { updated: boolean };
   /** F7.2: ask_user message fields */
   askUserStatus?: 'pending' | 'answered' | 'expired';
+  askUserWithdrawalReason?: string;
   askUserRequestId?: string;
   askUserReply?: string | null;
   /** All questions in this AskUserQuestion call */
@@ -768,6 +801,8 @@ export interface AgentTaskUpdate {
   };
   lastToolName?: string;
   taskType?: string;
+  /** 后台命令(local_bash)是会自己结束的工作还是长驻服务;main 按命令写法判断,缺省按 work。 */
+  backgroundCommandKind?: 'work' | 'service';
   workflowName?: string;
   /** `null` is an explicit live-update instruction to clear a stale model badge. */
   model?: string | null;
@@ -796,6 +831,14 @@ export interface AgentStatus {
   contextWindowFromRuntime?: boolean;
   isRunning: boolean;
   startedAt: number | null;
+  /**
+   * Start clock of the turn that is current. Written to that turn's own
+   * `startedAt` every time a turn begins (stream start, continuation, reconnect
+   * recovery) and never copied forward from the previous turn. Unlike
+   * `startedAt`, it stays after the turn stops so a following needs-reply or
+   * error can still name this turn.
+   */
+  lastStartedAt?: number | null;
   /** Turn-cumulative output tokens for live TPS. */
   outputTokens?: number;
   /** Generation-only milliseconds including any open interval at emit time. */
@@ -838,8 +881,10 @@ export interface PendingAppPermission extends PendingPermission {
 /** F7.2: Pending ask-user-question data — holds ALL questions for the wizard. */
 export interface PendingAskUser {
   requestId: string;
+  withdrawalReason?: string;
   questions: AskUserQuestionItem[];
   delivery?: 'async';
+  isBlocking?: boolean;
   persistId?: string;
   resumeOnSubmit?: boolean;
 }
@@ -2523,6 +2568,7 @@ function cancelRemoteOptimisticSendsForRemoteClear(
         queueInteractionLocks: [],
         queueEditLocks: [],
         protectedAskUser: opts.historicalHydration ? state.protectedAskUser : undefined,
+        parkedProtectedAsks: opts.historicalHydration ? state.parkedProtectedAsks : undefined,
       };
     });
   }
@@ -2744,6 +2790,9 @@ export interface SessionChatState {
   pendingAppPermissions?: PendingAppPermission[];
   /** F7.2: Currently pending ask-user-question; null when none. */
   pendingAskUser: PendingAskUser | null;
+  /** All live questions, including the selected one, in arrival order. */
+  pendingAskUserQueue?: PendingAskUser[];
+  askUserDrafts?: Record<string, AskUserDraft>;
   /** Host-owned plugin setup snapshot; updates replace by monotonic revision. */
   pendingPluginSetup: PendingPluginSetup | null;
   /**
@@ -2774,6 +2823,8 @@ export interface SessionChatState {
   askUserDraft: AskUserDraft | null;
   /** Local editing survives provider dismissal; it is not a pending Host interaction. */
   protectedAskUser?: { pending: PendingAskUser; draft: AskUserDraft };
+  /** Withdrawn questions whose unsent supplement was displaced; restored when no other question is shown. */
+  parkedProtectedAsks?: Array<{ pending: PendingAskUser; draft: AskUserDraft }>;
   /** FP-3: Currently pending plan-review; null when none. */
   pendingPlanReview: PendingPlanReview | null;
   /** issue_confirm: 提交 GitHub issue 前的确认卡片; null when none. */
@@ -2994,6 +3045,7 @@ export type SessionChatLightState = Pick<
   | 'historyLoaded'
   | 'pendingPermission'
   | 'pendingAskUser'
+  | 'pendingAskUserQueue'
   | 'pendingPluginSetup'
   | 'pluginSetupViewerState'
   | 'pluginSetupCommandInFlight'
@@ -3011,6 +3063,9 @@ export type SessionChatLightState = Pick<
   | 'pendingQueue'
   | 'steeringQueueClientIds'
   | 'queuePaused'
+  | 'queueEditLocks'
+  | 'queueInteractionLocks'
+  | 'queueAbortPending'
   | 'queueExpanded'
   | 'fastMode'
   | 'planModeEnabled'
@@ -3043,6 +3098,7 @@ function createInitialState(): SessionChatState {
       contextWindow: 0,
       isRunning: false,
       startedAt: null,
+      lastStartedAt: null,
     },
     error: null,
     usageLimitRecovery: null,
@@ -3068,6 +3124,8 @@ function createInitialState(): SessionChatState {
     streamingText: '',
     pendingPermission: null,
     pendingAskUser: null,
+    pendingAskUserQueue: [],
+    askUserDrafts: {},
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
     pluginSetupViewerState: 'expanded',
@@ -3127,6 +3185,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
     contextWindow: 0,
     isRunning: false,
     startedAt: null,
+    lastStartedAt: null,
   },
   error: null,
   usageLimitRecovery: null,
@@ -3155,6 +3214,8 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   sdkSessionId: null,
   pendingPermission: null,
   pendingAskUser: null,
+  pendingAskUserQueue: [],
+  askUserDrafts: {},
   pendingPluginSetup: null,
   pendingPluginSetupQueue: [],
   pluginSetupViewerState: 'expanded',
@@ -3692,6 +3753,7 @@ function _purgeSession(sessionId: string): void {
   clearWakeBridgeReconcileTimer(sessionId);
   cancelIdlePlanDiscovery(sessionId);
   sessions.delete(sessionId);
+  _locallyEngagedSessions.delete(sessionId);
   localSentUserMessageIds.delete(sessionId);
   pendingLocalRetryIntents.delete(sessionId);
   // 状态快照同步失效:该会话若有 running / pending / 待投递 transition 条目,
@@ -3772,6 +3834,7 @@ function _isSessionBusy(sessionId: string, s: SessionChatState): boolean {
     s.pendingPermission ||
     s.pendingAskUser ||
     s.protectedAskUser ||
+    s.parkedProtectedAsks?.length ||
     hasPendingPluginSetupInteraction(s.pendingPluginSetup, s.pendingPluginSetupQueue) ||
     s.pendingPlanReview ||
     s.pendingIssueConfirm ||
@@ -4067,8 +4130,63 @@ function _trimMessagesIfNeeded(): void {
 function _trimSessionMessages(sessionId: string): void {
   const state = sessions.get(sessionId);
   if (!state || state.messages.length <= TRIM_THRESHOLD) return;
-  if (_isSessionBusy(sessionId, state)) return;
-  if (_activeViewSessions.has(sessionId)) return;
+  // 裁剪地板集合:所有约束解析成功才允许裁,start 取 min(len - TRIM_TARGET, 各地板)。
+  const floors: number[] = [];
+  // 正在被看：读者视口必须在窗口尾部（贴底）。但渲染窗口会折叠工具过程、隐藏子代理
+  // 内部行 —— 贴底不代表原始前缀已离屏（一轮提问+300 条折叠工具行+回答可以同屏），
+  // 所以还必须按「渲染窗口覆盖地板」裁：窗口外的原始行没有 DOM，裁掉才可证不可见；
+  // 上翻阅读中不裁；快照缺地板（旧快照/窗口未建立）时无法证明前缀不可见，同样不裁。
+  if (_activeViewSessions.has(sessionId)) {
+    const scroll = readSessionScroll(sessionId);
+    // 聚合所有挂载视图的地板：同会话双面板（如 Orca worker 面板 + 侧栏）各自记录，
+    // 旧快照/未带 viewId 的写入回退到单槽 windowFloorClientId。
+    const floorIds = scroll?.renderFloorsByView
+      ? Object.values(scroll.renderFloorsByView)
+      : scroll?.windowFloorClientId
+        ? [scroll.windowFloorClientId]
+        : [];
+    const floorIdxs = floorIds
+      .map((id) => messageIndexByClientId(state.messages, id))
+      .filter((idx) => idx >= 0);
+    // 没有任何可解析地板（旧快照/窗口未建立）时无法证明前缀不可见，不裁。
+    if (floorIdxs.length === 0) return;
+    const deepestFloorIdx = Math.min(...floorIdxs);
+    // isNearBottom 只在手动滚动时刷新：程序化钉底与窗口推进地板同步都不改它。
+    // 读过历史的挂载面板会留下残留 false，再叠加窗口推进同步进来的尾部地板，
+    // 豁免就变成永久 —— live push 无界堆积成刻度墙。豁免只保护「真的在看历史」：
+    // 任一视图的渲染窗口地板距尾超过暖读上限才算深读；所有地板都在尾部附近时，
+    // 各视图的读者窗口就是各自地板到结尾，裁掉更老的前缀不动任何视图。
+    if (
+      scroll?.isNearBottom === false &&
+      state.messages.length - deepestFloorIdx > WARM_READING_MAX_MESSAGES
+    ) {
+      return;
+    }
+    floors.push(...floorIdxs);
+  }
+  // 正在忙：不再整窗豁免，改为以「在途轮起始行」为地板 —— 完成轮照裁，运行轮整体
+  // 保留（pending 交互、running 快照、远端乐观气泡都住在当前轮里）。轮起点是最后
+  // 一条非插话 user 行（delivery: 'steer' 的插话不打断轮，与 MessageStream 的轮
+  // 边界判定同源）；找不到时无法定位轮边界，维持原豁免。此前 busy + 挂载双豁免
+  // 叠加时窗口只增不减：长协作（Orca worker 连续派活）攒出几千行，切任务迟滞、
+  // 提问导航条堆成刻度墙。
+  if (_isSessionBusy(sessionId, state)) {
+    let turnStart = -1;
+    for (let i = state.messages.length - 1; i >= 0; i -= 1) {
+      const m = state.messages[i];
+      if (m.role === 'user' && m.delivery !== 'steer') {
+        turnStart = i;
+        break;
+      }
+    }
+    if (turnStart < 0) return;
+    floors.push(turnStart);
+  }
+  const start = Math.min(
+    state.messages.length - TRIM_TARGET,
+    ...floors,
+  );
+  if (start <= 0) return;
 
   // 裁剪等于一次代际重置:它砍掉窗口中段。in-flight 的翻页 / 跳转补齐若仍按 pre-trim
   // 游标提交,就会把更老的一页直接接到保留的尾部上 —— 中间被裁掉的区间成了新的空洞,
@@ -4082,7 +4200,14 @@ function _trimSessionMessages(sessionId: string): void {
     if (s.messages.length <= TRIM_THRESHOLD) {
       return s.isLoadingMore ? { ...s, isLoadingMore: false } : s;
     }
-    const retained = s.messages.slice(-TRIM_TARGET);
+    // 各地板与外层守卫同源（setState 同步拿到同一份 state，见上）。任一地板下
+    // 保留行数可以超过 TRIM_TARGET —— 那是还在跑的整轮/仍被渲染窗口覆盖的行，
+    // 砍它才出问题。
+    const windowStart = Math.min(
+      s.messages.length - TRIM_TARGET,
+      ...floors,
+    );
+    const retained = windowStart > 0 ? s.messages.slice(windowStart) : s.messages;
     // 连续尾段被裁短、孤岛已不在保留窗口里:游标清成 null,loadOlderMessages 走
     // beforeTs(messages[0]),从新的窗口下沿接着往更早翻。
     // 保留窗口里还夹着孤岛(最新连续尾段不足 200 行):必须留下「最新连续段最老一行」
@@ -4127,6 +4252,11 @@ const REMOTE_TASK_SELF_HEAL_IDLE_MS = 5 * 60_000;
 
 const _lastViewedAt = new Map<string, number>();
 let _softEvictionTimerHandle: ReturnType<typeof setInterval> | null = null;
+
+// MEM-OPT-3：用户在本窗口亲手碰过的会话（发过消息 / 主动 Stop）。
+// 这类会话即使没挂 view，也留着完整消息 —— 用户还在盯着它的 tool 行，
+// 压掉会直接改变他看到的界面。纯后台会话不在这里。
+const _locallyEngagedSessions = new Set<string>();
 
 // MEM-OPT-2 active-view set: 哪些 session 当前被 mounted view 看着。
 // 软淘汰 / trim 跳过 set 内的 session。Set 取代了原 _activeViewSessionId 单例，
@@ -4359,6 +4489,115 @@ function leaveView(sessionId: string): void {
   _softEvictIdleSessions();
 }
 
+// ---------------------------------------------------------------------------
+// MEM-OPT-3: Cap the messages of sessions this window never opened.
+// ---------------------------------------------------------------------------
+
+/**
+ * 主进程把**每个**会话的消息行都广播给所有窗口（`local-db:messages:created`），
+ * 渲染器对没打开过的会话也会把行 materialize 进 chat state —— 而 tool 行带着完整的
+ * toolInput（Write 可能是一整个文件）。长跑 + 几十个后台任务时，这些从不显示的行会
+ * 把渲染器堆顶到几个 GiB（见 upstream #7569 / #7384）。
+ *
+ * 现有的两道闸都管不到它们：软淘汰（MEM-OPT-2）只回收「用户打开过」的会话，
+ * 逐会话裁剪（MEM-OPT-1）在 turn 结束才跑，而后台会话的 turn 可以很长 ——
+ * 峰值期间行数与字符数都不设上限。
+ *
+ * 打开过的会话走既有口径（分页游标、孤岛、翻页补齐都要保护）；从没打开过的会话没有
+ * 分页状态，它的行随时能从库里取回（打开时由 ensureInitialMessages 负责），所以只保留
+ * 最近的一小段。taskUpdates 等状态不动 —— 侧栏的运行中指示依赖它。
+ */
+const UNOPENED_SESSION_MESSAGE_CAP = 10;
+const UNOPENED_SESSION_CHARACTER_BUDGET = 128 * 1024;
+
+/**
+ * 有别的可见界面正在消费这个会话的行（例如群专线面板的 BotGroupProcessNotes
+ * 直接读某个隐藏 group-lane 会话的 messages）。这样的行不能被后台裁剪丢掉：
+ * 丢掉的是用户正在看的界面内容，而不是「打开时能重读」的历史。
+ */
+const _visibleSurfaceSessions = new Set<string>();
+
+/**
+ * 登记「有可见界面正在消费这个会话的行」。返回一个注销函数，组件卸载时调用。
+ */
+function pinVisibleSurfaceSession(sessionId: string): () => void {
+  _visibleSurfaceSessions.add(sessionId);
+  return () => {
+    _visibleSurfaceSessions.delete(sessionId);
+  };
+}
+
+/** 这个窗口从没打开、也没亲手碰过的会话：纯后台，可以只留一小段。 */
+function _isBackgroundOnlySession(sessionId: string): boolean {
+  if (_activeViewSessions.has(sessionId)) return false;
+  if (_lastViewedAt.has(sessionId)) return false;
+  if (_visibleSurfaceSessions.has(sessionId)) return false;
+  if (_locallyEngagedSessions.has(sessionId)) return false;
+  return true;
+}
+
+/**
+ * 这个会话的行还能不能从别处取回？取不回的行不能丢。
+ *
+ * - 本地会话：行在本地库里，打开会话时能重读 → 可取回；
+ * - 远端会话：行在远端主机上。设备已断开、或远端视图不能再拉详情时取不回来，
+ *   此时裁掉的行就永远丢了（device-link 路径下远端任务可以在首次打开前就断连）。
+ */
+function _rowsAreReloadable(sessionId: string): boolean {
+  const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (!deviceId) return true;
+  if (isRemoteDeviceMarkedDisconnected(deviceId)) return false;
+  const view = getRemoteHistoryView(sessionId);
+  return view ? view.canReloadDetails() : false;
+}
+
+function _capUnopenedSessionMessages(sessionId: string, state: SessionChatState): void {
+  if (!_isBackgroundOnlySession(sessionId)) return;
+  // 历史已经取回过的会话走既有口径。
+  if (state.historyLoaded) return;
+  // 本地乐观行还没落库：库里取不回来，不能丢（与软淘汰同一条口径）。
+  if (state.messages.some((message) => message.isPendingPersist === true)) return;
+  // 正在流式生成的这一行还没落库：文本块落库前库里没有它，丢了用户就看不到
+  // 「正在生成的回复」，而后续增量只会去替换那条已经不存在的行。
+  if (state.streamingClientId !== null) return;
+  // 远端行取不回来（设备断开 / 远端视图不能再拉详情）：不能丢。
+  if (!_rowsAreReloadable(sessionId)) return;
+  let characters = 0;
+  const kept: ChatMessage[] = [];
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const message = state.messages[index];
+    if (!message) continue;
+    const size = _messageCharacters(message);
+    // 单行就超过预算：这一行正是内存大户（tool 行带完整 toolInput，Write 可能是一整个
+    // 文件），而内容随时能从库里取回 —— 跳过它。
+    if (size > UNOPENED_SESSION_CHARACTER_BUDGET) continue;
+    if (characters + size > UNOPENED_SESSION_CHARACTER_BUDGET) break;
+    characters += size;
+    kept.push(message);
+    if (kept.length >= UNOPENED_SESSION_MESSAGE_CAP) break;
+  }
+  if (kept.length >= state.messages.length) return;
+  cancelIdlePlanDiscovery(sessionId);
+  // 与逐会话裁剪（MEM-OPT-1）同一规矩：裁剪等于代际重置，必须 bump epoch
+  // 作废 in-flight 的翻页 / 跳转补齐。
+  bumpMessagesEpoch(sessionId);
+  const retained = kept.reverse();
+  setState(
+    sessionId,
+    (s) => (s === state ? {
+      ...s,
+      messages: retained,
+      hasMoreMessages: true,
+      oldestMessageId: null,
+      isLoadingMore: false,
+      historyWindowIslands: EMPTY_WINDOW_ISLANDS,
+    } : s),
+    // 后台会话的行每来一条就裁一次：通知必须跟着批走，否则退化成逐行 React fan-out
+    // （这正是 #7384 事故现场要防的东西）。
+    { deferNotification: true },
+  );
+}
+
 function _isSoftEvictionCandidate(sessionId: string, state: SessionChatState): boolean {
   return (
     _lastViewedAt.has(sessionId) &&
@@ -4383,6 +4622,8 @@ function _needsRemoteTaskSelfHeal(sessionId: string, state: SessionChatState, no
 // keep the full input (a whole file for Write) in toolInput, plan_review rows
 // keep the plan in planReviewPlan, and new payload fields must not escape.
 const _messageCharacterEstimates = new WeakMap<ChatMessage, number>();
+// Exact immutable DB echoes only; a subsequent live replacement loses this proof.
+const durableToolRows = new WeakSet<ChatMessage>();
 
 // Walk with an explicit stack and a visited set: tool inputs are arbitrary
 // nested objects, so neither a depth cut-off nor recursion is safe here.
@@ -4410,7 +4651,47 @@ function _messageCharacters(message: ChatMessage): number {
   return size;
 }
 
+function isRetirableHistoryTool(name: string): boolean {
+  // Folding is not proof that other consumers no longer need a tool record.
+  // Only known read/search bodies are reclaimable. Commands, edits and unknown
+  // tools retain both call and result for task lists, review and other consumers.
+  return isHistoryDetailTool(name) && ['Read', 'read', 'Grep', 'grep', 'Glob', 'glob'].includes(name);
+}
+
+function retiredDurableToolPairs(messages: ChatMessage[], eligible: (row: ChatMessage, index: number) => boolean) {
+  const candidates = messages.filter((row, index) => eligible(row, index) && durableToolRows.has(row)
+    && !row.isStreaming && !row.isPendingPersist && !row.parentToolUseId && !row.systemCardType);
+  const calls = new Map(candidates.filter(row => row.role === 'tool_use' && row.toolUseId
+    && isRetirableHistoryTool(row.toolName ?? '')).map(row => [row.toolUseId, row]));
+  const retired = new Set<ChatMessage>();
+  for (const row of candidates) {
+    const call = row.toolUseId && calls.get(row.toolUseId);
+    if (row.role !== 'tool_result' || !call || hasVisibleHistoryResult(row.content)) continue;
+    retired.add(call); retired.add(row);
+  }
+  return retired;
+}
+
 function _softEvictIdleSessions(): void {
+  // 从没在这个窗口打开过的会话：先按 MEM-OPT-3 的口径把消息压到一小段，再走既有
+  // 的超预算软淘汰（它只认用户打开过的会话，没打开过的会话原来根本不在候选里，
+  // 于是这些行只进不出）。
+  for (const [sessionId, state] of [...sessions]) {
+    _capUnopenedSessionMessages(sessionId, state);
+  }
+  for (const [sessionId, state] of sessions) {
+    // Legacy raw-only readers require their contiguous window. A history view
+    // refreshes on return; never-opened sessions will read history on first open.
+    const view = getRemoteHistoryView(sessionId);
+    const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+    if (_activeViewSessions.has(sessionId)
+      || (deviceId && isRemoteDeviceMarkedDisconnected(deviceId))
+      || (view ? !view.canReloadDetails() : state.historyLoaded || !!deviceId)) continue;
+    const retired = retiredDurableToolPairs(state.messages, () => true);
+    if (retired.size) setState(sessionId, current => ({ ...current,
+      messages: current.messages.filter(row => !retired.has(row)),
+    }));
+  }
   const now = Date.now();
   let messageCount = 0;
   let characters = 0;
@@ -4473,7 +4754,13 @@ function _softEvictSession(sessionId: string): void {
 
 function _ensureSoftEvictionTimer(): void {
   if (_softEvictionTimerHandle) return;
-  _softEvictionTimerHandle = setInterval(_softEvictIdleSessions, SOFT_EVICTION_CHECK_INTERVAL_MS);
+  // 30s 维护拍：软淘汰之外顺带跑一次窗口裁剪。trim 原本只有 leaveView 一个触发
+  // 点，持续挂载的 view（Orca worker 面板）和常驻 busy 的会话没有离开时机，窗口
+  // 只增不减 —— 在这里补上；贴底/地板规则见 _trimSessionMessages。
+  _softEvictionTimerHandle = setInterval(() => {
+    _trimMessagesIfNeeded();
+    _softEvictIdleSessions();
+  }, SOFT_EVICTION_CHECK_INTERVAL_MS);
 }
 
 function _stopSoftEvictionTimer(): void {
@@ -5039,7 +5326,16 @@ function applyInputProjection(
         projection.error || projection.credentialSwitchWait ? null : s.recoverableError,
       errorRetryText: projection.errorRetryText,
       errorCanContinue: projection.errorCanContinue === true,
-      errorPersistId: projection.error ? s.errorPersistId : null,
+      // Snapshot-only restore does not replay the terminal event that originally
+      // supplied persistId. Prefer the Host identity; an old Host may omit it.
+      // The fallback only belongs to the same error, never a replacement error.
+      errorPersistId: !projection.error
+        ? null
+        : projection.errorPersistId !== undefined
+          ? (typeof projection.errorPersistId === 'string' && projection.errorPersistId.length > 0
+            ? projection.errorPersistId : null)
+          : s.error && liveErrorTextMatchesRow(s.error, projection.error, projectionErrorReason ?? undefined)
+            ? s.errorPersistId : null,
       credentialSwitchWait: projection.credentialSwitchWait ?? null,
       usageLimitWait:
         projection.error && projection.usageLimitWait
@@ -5106,6 +5402,7 @@ function markSessionHasUserMessage(sessionId: string): void {
 function requestInputProjection(
   sessionId: string,
   pinnedDeviceId?: string,
+  hostRecovery?: { isCurrent: () => boolean },
 ): Promise<InputProjectionRequestResult | undefined> {
   if (!sessionId) return Promise.resolve(undefined);
   const origin = pinnedDeviceId ?? getStickySessionDeviceId(sessionId);
@@ -5134,7 +5431,8 @@ function requestInputProjection(
     promise = api.input.getProjection(sessionId).then(
       (projection) => {
         request.settled = true;
-        const current = isCurrentInputProjectionRequest(sessionId, origin, epoch, dataOwner);
+        const current = isCurrentInputProjectionRequest(sessionId, origin, epoch, dataOwner)
+          && (!hostRecovery || hostRecovery.isCurrent());
         if (origin && current) {
           noteRemoteInputProjectionSuccess(
             sessionId,
@@ -5145,6 +5443,24 @@ function requestInputProjection(
           );
         }
         if (current) {
+          // Only an explicit Host recovery may settle a missed terminal event.
+          // Apply this in the same synchronous commit as the guarded projection:
+          // a newer live projection must win over a slow recovery read.
+          if (hostRecovery && projection.turnInProgress === false) {
+            flushPendingTextDelta(sessionId);
+            setState(sessionId, forceFinalizeOnSessionClosed);
+          } else if (hostRecovery && projection.turnInProgress === true) {
+            setState(sessionId, s => ({
+              ...s, isStreaming: true,
+              agentStatus: {
+                ...s.agentStatus,
+                isRunning: true,
+                // 断连期间新起的一轮：这个窗口从没见过它开始，必须铸一个新时钟。
+                // 沿用上一轮的残留会让这一轮的失败看起来是重复告警，主进程按 id 直接吞掉。
+                ...turnClockForRunning(s.agentStatus),
+              },
+            }));
+          }
           applyInputProjection(projection, { supersedeQueries: false });
         }
         return { projection, current };
@@ -5509,6 +5825,9 @@ function normalizeAgentTaskUpdate(
       ? { lastToolName: raw.lastToolName }
       : {}),
     ...(typeof raw.taskType === 'string' && raw.taskType ? { taskType: raw.taskType } : {}),
+    ...(raw.backgroundCommandKind === 'work' || raw.backgroundCommandKind === 'service'
+      ? { backgroundCommandKind: raw.backgroundCommandKind }
+      : {}),
     ...(typeof raw.workflowName === 'string' && raw.workflowName
       ? { workflowName: raw.workflowName }
       : {}),
@@ -6379,7 +6698,7 @@ export function handleStreamEvent(
           agentStatus: {
             ...state.agentStatus,
             isRunning: true,
-            startedAt: state.agentStatus.startedAt ?? Date.now(),
+            ...turnClockForRunning(state.agentStatus),
           },
         };
       }
@@ -6410,12 +6729,13 @@ export function handleStreamEvent(
       // Codex ask_user 同款:code-mode 可能在提问 RPC 未决时就 turn/completed。
       // 卡片必须跨 done 存活,等用户回答后走 detached continuation。
       const keepPlanReviewAcrossDone = state.agentKind === 'codex';
-      const keepAskUserAcrossDone = state.agentKind === 'codex';
+      const keepAskUserAcrossDone = state.agentKind === 'codex' || state.pendingAskUser?.delivery === 'async';
       const cleanedMessages = finalized.messages.map((m) => {
         let next = m;
         if (m.isStreaming) next = { ...next, isStreaming: false };
         if (
           !keepAskUserAcrossDone &&
+          !allPendingQuestions(state).some((q) => q.delivery === 'async' && q.requestId === m.askUserRequestId) &&
           m.role === 'ask_user' &&
           m.askUserStatus === 'pending'
         ) {
@@ -6478,6 +6798,7 @@ export function handleStreamEvent(
         // F-AUQ-DRAFT: pending question gone → in-progress wizard draft is
         // meaningless, drop it so the next question starts clean.
         askUserDraft: keepAskUserAcrossDone ? state.askUserDraft : null,
+        ...(!keepAskUserAcrossDone ? retainAsyncQuestions(state) : {}),
         pendingPlanReview: keepPlanReviewAcrossDone ? state.pendingPlanReview : null,
         pendingIssueConfirm: null,
         pendingRenameSessionsConfirm: null,
@@ -6499,6 +6820,7 @@ export function handleStreamEvent(
           ...state.agentStatus,
           isRunning: false,
           startedAt: null,
+          ...stoppedTurnClock(state.agentStatus),
         },
       };
     }
@@ -6603,7 +6925,7 @@ export function handleStreamEvent(
                 : {
                     ...state.agentStatus,
                     isRunning: true,
-                    startedAt: state.agentStatus.startedAt ?? Date.now(),
+                    ...turnClockForRunning(state.agentStatus),
                   }),
             },
           };
@@ -6626,7 +6948,7 @@ export function handleStreamEvent(
           agentStatus: {
             ...state.agentStatus,
             isRunning: true,
-            startedAt: state.agentStatus.startedAt ?? Date.now(),
+            ...turnClockForRunning(state.agentStatus),
           },
         };
       }
@@ -6700,11 +7022,11 @@ export function handleStreamEvent(
         // the 'done' path to consume — reset it explicitly on error so the
         // accumulated delta text doesn't linger in memory.
         pendingPermission: null,
-        pendingAskUser: null,
+        ...retainAsyncQuestions(state),
         // F-AUQ-MIN-5: same reset as the 'done' path.
-        askUserViewerState: 'expanded',
+        askUserViewerState: state.askUserViewerState,
         // F-AUQ-DRAFT: same reset as the 'done' path.
-        askUserDraft: null,
+        askUserDraft: state.askUserDraft,
         pendingPlanReview: null,
         pendingIssueConfirm: null,
         pendingRenameSessionsConfirm: null,
@@ -6721,6 +7043,7 @@ export function handleStreamEvent(
           ...state.agentStatus,
           isRunning: false,
           startedAt: null,
+          ...stoppedTurnClock(state.agentStatus),
         },
       };
     }
@@ -6766,7 +7089,7 @@ export function handleStreamEvent(
       // switched permissionMode mid-prompt, permission timed out, or session
       // closed). Drop the matching pending prompt so the input is no longer
       // gated and the UI cannot keep showing a stale interaction.
-      const data = event.data as { requestId: string; reason?: string; decision?: unknown };
+      const data = event.data as { requestId: string; reason?: string; decision?: unknown; withdrawalReason?: string };
       // reason==='resolved' 且带 decision:交互被某一端答了(本端乐观清 / 对端经此广播收敛)。
       // 据此把被点中的 ask/plan 卡片翻成「已回答」(与答题端、reload 后一致);其它 reason
       // (timeout / mode_changed / session_closed 等真·放弃)resolved 为 null,仍标 expired。
@@ -6839,7 +7162,7 @@ export function handleStreamEvent(
         };
       }
       if (
-        state.pendingAskUser?.requestId === data.requestId ||
+        allPendingQuestions(state).some((q) => q.requestId === data.requestId) ||
         state.protectedAskUser?.pending.requestId === data.requestId ||
         state.messages.some((m) => m.role === 'ask_user' && m.askUserRequestId === data.requestId)
       ) {
@@ -6848,17 +7171,23 @@ export function handleStreamEvent(
         // 多窗口输家可能已经乐观写成 answered；仍要用赢家决策覆盖，不能只认 pending。
         const answers = resolved?.answers as Record<string, string> | undefined;
         const dismissed = resolved?.dismissed === true;
+        const withdrawalReason = data.reason === 'question_withdrawn' ? data.withdrawalReason : undefined;
         const askUserReply = answers && !dismissed ? formatAskUserReply(answers) : '';
+        const releasesProtectedAsk = data.reason === 'resolved' && !dismissed &&
+          state.protectedAskUser?.pending.requestId === data.requestId;
         return {
           ...state,
-          protectedAskUser: data.reason === 'resolved' && !dismissed && state.protectedAskUser?.pending.requestId === data.requestId
-            ? undefined : state.protectedAskUser,
+          protectedAskUser: releasesProtectedAsk ? undefined : state.protectedAskUser,
           pendingAskUser:
             state.pendingAskUser?.requestId === data.requestId ? null : state.pendingAskUser,
           askUserViewerState:
-            state.pendingAskUser?.requestId === data.requestId ? 'expanded' : state.askUserViewerState,
+            state.pendingAskUser?.requestId === data.requestId || releasesProtectedAsk ? 'expanded' : state.askUserViewerState,
           askUserDraft:
             state.pendingAskUser?.requestId === data.requestId ? null : state.askUserDraft,
+          ...removePendingQuestion(state, data.requestId, data.reason === 'resolved' || data.reason === 'superseded' || data.reason === 'session_closed', withdrawalReason),
+          ...(withdrawalReason && state.protectedAskUser?.pending.requestId === data.requestId ? {
+            protectedAskUser: { ...state.protectedAskUser, pending: { ...state.protectedAskUser.pending, withdrawalReason } },
+          } : {}),
           messages: state.messages.map((m) =>
             m.role === 'ask_user' && m.askUserRequestId === data.requestId
               ? answers && !dismissed
@@ -6869,7 +7198,7 @@ export function handleStreamEvent(
                     askUserAnswers: answers,
                   }
                 : m.askUserStatus === 'pending'
-                  ? { ...m, askUserStatus: 'expired' as const }
+                  ? { ...m, askUserStatus: 'expired' as const, ...(withdrawalReason ? { askUserWithdrawalReason: withdrawalReason } : {}) }
                   : m
               : m,
           ),
@@ -6918,20 +7247,22 @@ export function handleStreamEvent(
         requestId: string;
         questions: AskUserQuestionItem[];
         delivery?: 'async';
+        isBlocking?: boolean;
       };
       // Codex done reconciles pending interactions with fresh IPC objects. Keep
       // the same question's identity: AskUserQuestionPrompt restores selections
       // when questions changes, which would erase locally typed, unsubmitted text.
       // Compare fields rather than JSON object key order; changed questions must
       // still take the normal initialization path.
-      const previousAsk = state.pendingAskUser;
+      const previousAsk = allPendingQuestions(state).find((q) => q.requestId === data.requestId);
       const keepAskProgress = previousAsk?.requestId === data.requestId &&
         previousAsk.questions.length === data.questions.length &&
         previousAsk.questions.every((question, index) => {
           const next = data.questions[index];
-          return question.question === next.question &&
+          return question.id === next.id && question.question === next.question &&
             question.header === next.header &&
             question.multiSelect === next.multiSelect &&
+            JSON.stringify(question.answerConstraints) === JSON.stringify(next.answerConstraints) &&
             (question.options?.length ?? 0) === (next.options?.length ?? 0) &&
             (question.options ?? []).every((option, optionIndex) =>
               option.label === next.options?.[optionIndex]?.label &&
@@ -6985,19 +7316,13 @@ export function handleStreamEvent(
 
       return {
         ...finalized,
-        pendingAskUser: keepAskProgress ? previousAsk : {
+        ...upsertPendingQuestion(state, keepAskProgress ? previousAsk! : {
           requestId: data.requestId,
           questions: data.questions,
           delivery: data.delivery,
+          isBlocking: data.isBlocking,
           persistId: event.persistId,
-        },
-        // F-AUQ-MIN-1: Every new pendingAskUser starts expanded — even if the
-        // previous question in this same session was minimized. Folding never
-        // carries across questions.
-        askUserViewerState: keepAskProgress ? state.askUserViewerState : 'expanded',
-        // Only an unchanged pending request may retain its draft. A new batch
-        // or changed question content starts clean, even with the same requestId.
-        askUserDraft: keepAskProgress ? state.askUserDraft : null,
+        }),
         messages: askMessages,
       };
     }
@@ -7221,6 +7546,8 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingPermission: null,
     pendingAppPermissions: [],
     pendingAskUser: null,
+    pendingAskUserQueue: [],
+    askUserDrafts: {},
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
     pluginSetupViewerState: 'expanded',
@@ -7253,8 +7580,47 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
       ...finalized.agentStatus,
       isRunning: false,
       startedAt: null,
+      ...stoppedTurnClock(finalized.agentStatus),
     },
   };
+}
+
+/**
+ * Start clock for a turn that is only now beginning.
+ * `Date.now()` can land on the previous turn's stamp. Alert ids are built from
+ * this number, so an equal stamp would make the next failure look like one that
+ * was already notified.
+ */
+function freshTurnStartedAt(status: AgentStatus, now = Date.now()): number {
+  return status.lastStartedAt != null && now <= status.lastStartedAt
+    ? status.lastStartedAt + 1
+    : now;
+}
+
+/**
+ * `lastStartedAt` is the start clock of the turn that is current, not of the
+ * turn that happened to run most recently. A turn that is already running keeps
+ * its own clock (a late frame must not mint a second one). A turn that is only
+ * now starting gets a fresh clock: carrying the previous turn's value forward
+ * makes the next failure look like a repeat of the last one, and the desktop
+ * alert ledger then swallows it.
+ */
+function turnClockForRunning(
+  status: AgentStatus,
+  now = Date.now(),
+): { startedAt: number; lastStartedAt: number } {
+  const startedAt = status.startedAt ?? freshTurnStartedAt(status, now);
+  const lastStartedAt = status.startedAt != null
+    ? (status.lastStartedAt ?? status.startedAt)
+    : startedAt;
+  return { startedAt, lastStartedAt };
+}
+
+/** The turn stopped. Keep its start clock so a following alert can still name it. */
+function stoppedTurnClock(
+  status: AgentStatus,
+): { lastStartedAt: number | null | undefined } {
+  return { lastStartedAt: status.startedAt ?? status.lastStartedAt ?? null };
 }
 
 function mergeLiveGenerationStatus(
@@ -7364,7 +7730,19 @@ function handleStatusUpdate(
     // product turn running until its unclaimed terminal tail arrives.
     return state;
   }
-  const startedAt = update.isRunning ? (state.agentStatus.startedAt ?? Date.now()) : null;
+  const startedAt = update.isRunning
+    ? (state.agentStatus.startedAt ?? freshTurnStartedAt(state.agentStatus))
+    : null;
+  // A new product turn (not running → running) gets its own start clock. Keeping
+  // the previous turn's clock here made the next failure share that turn's alert
+  // id, so the desktop ledger treated it as a duplicate and dropped it. Once this
+  // turn is running, later frames reuse the clock already stamped on it; when it
+  // stops, the clock stays so a following needs-reply or error can still name it.
+  const lastStartedAt = update.isRunning
+    ? (state.agentStatus.startedAt != null
+      ? (state.agentStatus.lastStartedAt ?? state.agentStatus.startedAt)
+      : startedAt)
+    : (state.agentStatus.startedAt ?? state.agentStatus.lastStartedAt ?? null);
 
   // skipTurnReset: side-channel running 信号 (mivo MJ 按钮等不走 LLM 的后台任务)。
   // 只翻 isRunning + 接收新的 status 文案("Mivo …"), 不当 turn 起止处理 —
@@ -7382,6 +7760,7 @@ function handleStatusUpdate(
         status: update.status || state.agentStatus.status,
         isRunning: update.isRunning,
         startedAt,
+        lastStartedAt,
         sideTaskRunning: update.isRunning,
       },
       isStreaming: update.isRunning
@@ -7392,9 +7771,9 @@ function handleStatusUpdate(
     };
   }
 
-  // Turn-complete updates (Done + !isRunning) carry authoritative values from
-  // getContextUsage() when contextWindow is known. Interrupted compact can end
-  // with a placeholder 0/0 snapshot; do not let that erase the last real value.
+  // Completion and mid-turn compaction carry authoritative context snapshots.
+  // Startup and generation statuses can keep reporting unknown zero until
+  // message_end; only a confirmed snapshot may clear the last known value.
   const isTurnComplete = !update.isRunning && update.status === 'Done';
   // Detect new turn start: isRunning flips from false → true.
   const isTurnStart = update.isRunning && !state.agentStatus.isRunning;
@@ -7408,11 +7787,14 @@ function handleStatusUpdate(
       : state.agentStatus.tokenUsage;
   const hasContextSnapshot =
     typeof update.contextWindow === 'number' &&
+    Number.isFinite(update.contextWindow) &&
     update.contextWindow > 0 &&
     typeof update.contextTokens === 'number' &&
+    Number.isFinite(update.contextTokens) &&
     update.contextTokens >= 0;
   const ct =
-    (isTurnComplete && hasContextSnapshot) || (update.contextTokens && update.contextTokens > 0)
+    ((isTurnComplete || update.contextSnapshotAuthoritative === true) && hasContextSnapshot)
+      || (update.contextTokens && update.contextTokens > 0)
       ? update.contextTokens
       : state.agentStatus.contextTokens;
   const cw =
@@ -7425,7 +7807,7 @@ function handleStatusUpdate(
       ? update.costUsd
       : state.agentStatus.costUsd;
 
-  // Context values are pushed by agentManager after each turn complete via getContextUsage().
+  // Runtime status carries context usage without waiting for the turn to finish.
 
   return {
     ...state,
@@ -7472,6 +7854,7 @@ function handleStatusUpdate(
       contextWindowFromRuntime: hasContextSnapshot || state.agentStatus.contextWindowFromRuntime,
       isRunning: update.isRunning,
       startedAt,
+      lastStartedAt,
       ...mergeLiveGenerationStatus(isTurnStart, update, state.agentStatus),
     },
     activeTurnRetryText: isTurnComplete ? null : state.activeTurnRetryText,
@@ -8242,6 +8625,9 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         { deferNotification: isLiveStatusRefreshFrame },
       );
       scheduleWakeBridgeReconciliation(sessionId);
+      // Status labels are not turn completion: Claude emits Done before a
+      // silent-stop done, Pi after it. Only the stream done/error below settles
+      // remote preparation, using the same rule for every agent source.
       return;
     }
 
@@ -8476,6 +8862,24 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         event.data as Record<string, unknown> | null,
         event.agentMeta ?? null,
       );
+    }
+
+    if ((isProductTurnDoneEvent(event) || event.type === 'error') && event.turnScope !== 'background') {
+      if ((event.data as { silentStop?: boolean } | null)?.silentStop !== true
+        && (event.type !== 'error' || isTerminalErrorData(event.data))) {
+        noteStartingTerminal(sessionId, event.agentMeta?.replyToClientId);
+      }
+      const state = sessions.get(sessionId);
+      const successful = isProductTurnDoneEvent(event) && event.turnOrigin?.kind === 'user'
+        && event.turnOrigin.surface !== 'im' && state
+        && !state.turnStoppedByUser && !state.lastStopWasSideTask
+        && !state.lastStopWasPrivateReply && !state.lastStopWasGroupLane
+        && !hasGithubStarBlockingWork();
+      // Main stamps the accepted input before releasing the turn/draining the queue.
+      // Never infer ownership from the last bubble: it may be a newer queued/steered input.
+      const completedClientId = successful && typeof event.agentMeta?.replyToClientId === 'string'
+        ? event.agentMeta.replyToClientId : null;
+      recordGithubStarPromptCompletion(sessionId, completedClientId, dataOwnerAtIngress);
     }
 
     // done / error 副作用 (从老 stream listener 搬过来)
@@ -8733,11 +9137,12 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     }
 
     if (request.kind === 'ask_user_question') {
-      const data: CCAgentAskUserQuestionPayload & { delivery?: 'async' } = {
+      const data: CCAgentAskUserQuestionPayload & { delivery?: 'async'; isBlocking?: boolean } = {
         sessionId,
         requestId: request.requestId,
         questions: request.questions as CCAgentAskUserQuestionPayload['questions'],
         ...(request.delivery === 'async' ? { delivery: 'async' as const } : {}),
+        ...(request.isBlocking === false ? { isBlocking: false } : {}),
       };
       setState(sessionId, (s) =>
         handleStreamEvent(s, { sessionId, type: 'ask_user_question', data, persistId }),
@@ -8926,6 +9331,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       reason?: string;
       resolvedAs?: 'allow' | 'deny';
       decision?: unknown;
+      withdrawalReason?: string;
     };
     // reason==='resolved' 时 main 会带上决策内容(ask 的 answers / plan 的 behavior+reason);
     // 透传给 permission_dismissed 处理,让被点中的 ask/plan 卡片翻成「已回答」而非 expired。
@@ -8935,6 +9341,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       reason: dismissPayload.reason ?? 'mode_changed_to_bypassPermissions',
       resolvedAs: dismissPayload.resolvedAs ?? 'deny',
       decision: dismissPayload.decision,
+      withdrawalReason: dismissPayload.withdrawalReason,
     };
     const sessionId = payload.sessionId;
     setState(sessionId, (s) =>
@@ -8970,6 +9377,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     if (isBeforeOrAtRendererClearBoundary(sessionId, message.createdAt)) return;
     const [mapped] = mapServerMessages([message]);
     if (!mapped) return;
+    if (mapped.role === 'tool_use' || mapped.role === 'tool_result') durableToolRows.add(mapped);
     traceRemoteSendEcho(mapped.clientId, mapped.role);
     clearRemoteOptimisticSend(sessionId, mapped.clientId);
     const current = getOrCreateState(sessionId);
@@ -9000,8 +9408,12 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       mapped.role === 'user' && isAwaitingHistoryView(sessionId, mapped.clientId);
     // Stop 会乐观置 Idle，但真正的 interrupt 可能还在 IPC 队列里；此时旧 turn 继续喷出的
     // live tool + DB echo 仍必须走批通知，否则按钮一按下就退化回事故中的逐行 React fan-out。
+    // 后台会话（这个窗口从没打开过）也走批通知：它的行随后还要过一遍 MEM-OPT-3 的裁剪，
+    // 裁剪本身也是一次状态写入 —— 若这里同步通知，裁剪再排一次延迟通知，
+    // 同一批落库广播就会让侧栏刷新两次（两次都在用户看不见的后台会话上）。
     const deferNotification =
-      current.agentStatus.isRunning || current.isStreaming || isLiveToolEcho;
+      current.agentStatus.isRunning || current.isStreaming || isLiveToolEcho
+      || _isBackgroundOnlySession(sessionId);
     setState(
       sessionId,
       (s) => {
@@ -9022,6 +9434,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           // 仅限 tool 行：thinking 的 persisted createdAt 会回填块开始时间，必须让
           // mergeMessages 重排；assistant 等其它角色也保留原有权威时间线语义。
           const hydrated = hydratePersistedMessage(existing, mapped, hydrateOptions);
+          if (hydrated.content === mapped.content && hydrated.toolInput === mapped.toolInput) durableToolRows.add(hydrated);
           if (hydrated === existing) return s;
           const nextMessages = s.messages.slice();
           nextMessages[existingIdx] = hydrated;
@@ -9046,6 +9459,11 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       },
       { deferNotification },
     );
+    // 这个窗口从没打开过的会话：只留最近一小段（MEM-OPT-3）。所有窗口都会收到
+    // 每个会话的消息广播，不压住的话几十个后台任务的 tool 行会把渲染器堆顶到几个 GiB。
+    // 放在合并之后：新行本身也要一起过预算（单行超预算的大 tool 行会被丢掉）。
+    const mergedState = sessions.get(sessionId);
+    if (mergedState) _capUnopenedSessionMessages(sessionId, mergedState);
   }
 
   // 消息本地删除推送:本机多窗口与 device-link 控制端共用同一 reducer。
@@ -9404,6 +9822,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           // 被控端会话元数据 / 设置变更 → 就地镜像到远程项目分片(取代乐观覆盖)。
           const p = push.payload as { sessionId?: string; patch?: Record<string, unknown> } | null;
           if (push.deviceId && p?.sessionId && p.patch) {
+            applySessionRebalancePreferencePatch(p.sessionId, p.patch, push.deviceId);
             const terminal = p.patch.status === 'deleted' || p.patch.status === 'archived';
             if (!terminal && isRemoteTerminalSessionTombstoned(p.sessionId, push.deviceId)) {
               if (p.patch.status === 'active') requestRemoteReseed(push.deviceId);
@@ -9992,6 +10411,94 @@ function subscribe(sessionId: string, cb: () => void): () => void {
   };
 }
 
+function allPendingQuestions(state: SessionChatState): PendingAskUser[] {
+  const queue = state.pendingAskUserQueue ?? [];
+  return state.pendingAskUser && !queue.some((q) => q.requestId === state.pendingAskUser!.requestId)
+    ? [state.pendingAskUser, ...queue] : queue;
+}
+
+function questionSelection(state: SessionChatState, queue: PendingAskUser[], selected: PendingAskUser | null): Partial<SessionChatState> {
+  const drafts = { ...state.askUserDrafts };
+  const draft = state.protectedAskUser?.draft ?? state.askUserDraft;
+  if (draft) drafts[draft.requestId] = draft;
+  const unchanged = selected === state.pendingAskUser;
+  // A withdrawn question is no longer in the queue; switching away must not lose its supplement draft.
+  const displaced = !unchanged && state.protectedAskUser &&
+    !queue.some((q) => q.requestId === state.protectedAskUser!.pending.requestId) ? state.protectedAskUser : undefined;
+  const parked = displaced
+    ? [...(state.parkedProtectedAsks ?? []).filter((p) => p.pending.requestId !== displaced.pending.requestId), displaced]
+    : state.parkedProtectedAsks;
+  return {
+    pendingAskUserQueue: queue, pendingAskUser: selected, askUserDrafts: drafts,
+    askUserDraft: unchanged ? state.askUserDraft : selected ? drafts[selected.requestId] ?? null : null,
+    protectedAskUser: unchanged ? state.protectedAskUser : undefined,
+    parkedProtectedAsks: parked,
+    askUserViewerState: unchanged ? state.askUserViewerState : 'expanded',
+  };
+}
+
+/** Bring back the oldest displaced supplement once nothing else needs the answer card. */
+function restoreParkedQuestion(patch: Partial<SessionChatState>): Partial<SessionChatState> {
+  const [next, ...rest] = patch.parkedProtectedAsks ?? [];
+  if (!next || patch.pendingAskUser || patch.protectedAskUser) return patch;
+  return { ...patch, protectedAskUser: next, parkedProtectedAsks: rest, askUserViewerState: 'expanded' };
+}
+
+function upsertPendingQuestion(state: SessionChatState, question: PendingAskUser): Partial<SessionChatState> {
+  const queue = allPendingQuestions(state);
+  const index = queue.findIndex((q) => q.requestId === question.requestId);
+  const next = index < 0 ? [...queue, question] : queue.map((q, i) => i === index ? question : q);
+  // A blocking question takes focus without destroying optional questions/drafts.
+  const selected = question.delivery !== 'async' || !state.pendingAskUser || state.pendingAskUser.requestId === question.requestId
+    ? question : state.pendingAskUser;
+  const patch = questionSelection(state, next, selected);
+  // Older executors can still expire a request mid-edit; keep that local fallback until submitted.
+  if (state.protectedAskUser && question.delivery === 'async' && !queue.some((q) => q.requestId === state.protectedAskUser!.pending.requestId)) {
+    patch.protectedAskUser = state.protectedAskUser;
+    patch.askUserViewerState = state.askUserViewerState;
+  }
+  if (index >= 0 && queue[index] !== question) {
+    delete patch.askUserDrafts![question.requestId];
+    if (selected === question) { patch.askUserDraft = null; patch.protectedAskUser = undefined; }
+  }
+  return patch;
+}
+
+function removePendingQuestion(
+  state: SessionChatState, requestId: string, releaseDraft: boolean, withdrawalReason?: PendingAskUser['withdrawalReason'],
+): Partial<SessionChatState> {
+  const all = allPendingQuestions(state);
+  const queue = all.filter((q) => q.requestId !== requestId);
+  const selected = state.pendingAskUser && state.pendingAskUser.requestId !== requestId ? state.pendingAskUser : queue[0] ?? null;
+  const patch = questionSelection(state, queue, selected);
+  const draft = patch.askUserDrafts![requestId];
+  const removed = all.find((q) => q.requestId === requestId);
+  delete patch.askUserDrafts![requestId];
+  patch.parkedProtectedAsks = (patch.parkedProtectedAsks ?? []).filter((p) => p.pending.requestId !== requestId);
+  if (state.protectedAskUser?.pending.requestId === requestId) patch.protectedAskUser = releaseDraft ? undefined : state.protectedAskUser;
+  else if (!releaseDraft && removed && draft?.started) {
+    // Withdrawn while another question was shown: keep the unsent supplement for later.
+    patch.parkedProtectedAsks = [...patch.parkedProtectedAsks, {
+      pending: withdrawalReason ? { ...removed, withdrawalReason } : removed, draft,
+    }];
+  }
+  return restoreParkedQuestion(patch);
+}
+
+function retainAsyncQuestions(state: SessionChatState): Partial<SessionChatState> {
+  const queue = allPendingQuestions(state).filter((q) => q.delivery === 'async');
+  return questionSelection(state, queue, queue.find((q) => q.requestId === state.pendingAskUser?.requestId) ?? queue[0] ?? null);
+}
+
+function selectAskUserQuestion(sessionId: string, requestId: string): void {
+  setState(sessionId, (state) => {
+    const queue = allPendingQuestions(state);
+    const selected = queue.find((q) => q.requestId === requestId);
+    if (!selected || state.pendingAskUser?.delivery !== 'async' || selected === state.pendingAskUser) return state;
+    return { ...state, ...questionSelection(state, queue, selected) };
+  });
+}
+
 const resumeQuestionPresentations = new WeakMap<PendingAskUser, PendingAskUser>();
 function visibleAskUser(state: SessionChatState): PendingAskUser | null {
   const pending = state.protectedAskUser?.pending;
@@ -10031,15 +10538,16 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     historyWindowHasIsland: state.historyWindowIslands.length > 0,
     isFirstMessage: state.isFirstMessage,
     historyLoaded: state.historyLoaded,
-    pendingPermission: state.protectedAskUser ? null : state.pendingPermission,
+    pendingPermission: state.pendingPermission,
     pendingAskUser: visibleAskUser(state),
+    pendingAskUserQueue: state.pendingAskUserQueue,
     pendingPluginSetup: state.pendingPluginSetup,
     pluginSetupViewerState: state.pluginSetupViewerState,
     pluginSetupCommandInFlight: state.pluginSetupCommandInFlight,
     pluginSetupCommandError: state.pluginSetupCommandError,
     askUserViewerState: state.askUserViewerState,
     askUserDraft: state.protectedAskUser?.draft ?? state.askUserDraft,
-    pendingPlanReview: state.protectedAskUser ? null : state.pendingPlanReview,
+    pendingPlanReview: state.pendingPlanReview,
     pendingIssueConfirm: state.pendingIssueConfirm,
     pendingInputHandoff: state.pendingInputHandoff,
     pendingRenameSessionsConfirm: state.pendingRenameSessionsConfirm,
@@ -10050,6 +10558,9 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     pendingQueue: state.pendingQueue,
     steeringQueueClientIds: state.steeringQueueClientIds,
     queuePaused: state.queuePaused,
+    queueEditLocks: state.queueEditLocks,
+    queueInteractionLocks: state.queueInteractionLocks,
+    queueAbortPending: state.queueAbortPending,
     queueExpanded: state.queueExpanded,
     fastMode: state.fastMode,
     planModeEnabled: state.planModeEnabled,
@@ -10103,6 +10614,9 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.pendingQueue === b.pendingQueue &&
     a.steeringQueueClientIds === b.steeringQueueClientIds &&
     a.queuePaused === b.queuePaused &&
+    a.queueEditLocks === b.queueEditLocks &&
+    a.queueInteractionLocks === b.queueInteractionLocks &&
+    a.queueAbortPending === b.queueAbortPending &&
     a.queueExpanded === b.queueExpanded &&
     a.fastMode === b.fastMode &&
     a.planModeEnabled === b.planModeEnabled &&
@@ -10179,6 +10693,16 @@ function getPromptRecommendationCompletionStatus(
   };
 }
 
+/** Non-creating read: optional invitations yield to all known work and unresolved errors. */
+function hasGithubStarBlockingWork(): boolean {
+  for (const [sessionId, state] of sessions) {
+    if (_isSessionBusy(sessionId, state) || state.error || state.recoverableError
+      || state.pendingQueue.length > 0 || state.steeringQueueClientIds.length > 0 || state.pendingAppPermissions?.length
+      || state.credentialSwitchWait || state._authRetryInFlight || state.queueAbortPending) return true;
+  }
+  return false;
+}
+
 /**
  * F-SB-7: Subscribe to ALL session state changes. Fires whenever any session's
  * state updates. Used by Sidebar to track running status across sessions.
@@ -10214,6 +10738,12 @@ export interface SessionStatusInfo {
   hasActionableInputHandoff?: boolean;
   /** Stable identities for pending interactions; changes even when pending booleans stay true. */
   pendingRequestKeys?: readonly string[];
+  /**
+   * The turn this snapshot belongs to. Started when the agent begins running and
+   * kept after it stops, so a later needs-reply or error can name that turn.
+   * Absent for a pending card that appeared without a running edge in this window.
+   */
+  turnStartedAt?: number | null;
 }
 
 /**
@@ -10314,6 +10844,9 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
     const hasActionableInputHandoff = !!state.pendingInputHandoff &&
       inputHandoffDialogHasContent(state.pendingInputHandoff, false);
     const requestKeys = pendingRequestKeys(state);
+    // Keep the turn clock after the agent stops. A needs-reply or error that
+    // follows this turn has to name the same turn, not "whatever is running now".
+    const turnStartedAt = state.agentStatus.startedAt ?? state.agentStatus.lastStartedAt ?? null;
 
     // 后台 subagent 折算:主 turn 已结束但 wake 型后台任务(local_agent /
     // local_workflow)还在跑,或正处于「任务终态 → wake turn 启动」的桥接空窗
@@ -10338,6 +10871,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingInputHandoff,
         hasActionableInputHandoff,
         pendingRequestKeys: requestKeys,
+        turnStartedAt,
       });
     } else if (
       hasPendingAskUser ||
@@ -10358,6 +10892,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingInputHandoff,
         hasActionableInputHandoff,
         pendingRequestKeys: requestKeys,
+        turnStartedAt,
       });
     }
   }
@@ -10385,6 +10920,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
       hasActionableInputHandoff: !!state.pendingInputHandoff &&
         inputHandoffDialogHasContent(state.pendingInputHandoff, false),
       pendingRequestKeys: pendingRequestKeys(state),
+      turnStartedAt: state.agentStatus.startedAt ?? state.agentStatus.lastStartedAt ?? null,
     });
   }
 
@@ -10652,7 +11188,10 @@ function syncActiveTurnsFromMain(): void {
               ...s.agentStatus,
               status: s.agentStatus.status || 'Running',
               isRunning: true,
-              startedAt: s.agentStatus.startedAt ?? Date.now(),
+              // Reload recovery of a turn this window never saw start. Stamp a
+              // fresh clock; the previous turn's leftover would make this
+              // recovered turn's failure look like a repeat alert.
+              ...turnClockForRunning(s.agentStatus),
             },
           };
         });
@@ -10772,9 +11311,10 @@ function reconcilePendingInteractions(
       setState(sessionId, (state) => {
         // Missing dismissal pushes must not leave old questions blocking the
         // composer. Only a successful, current Host snapshot can retire them.
+        const survivingQuestions = allPendingQuestions(state).filter((q) => authoritativeQuestionIds.has(q.requestId));
         const nextAskUser = state.pendingAskUser &&
           authoritativeQuestionIds.has(state.pendingAskUser.requestId)
-          ? state.pendingAskUser : null;
+          ? state.pendingAskUser : survivingQuestions[0] ?? null;
         const nextPlanReview = state.pendingPlanReview &&
           authoritativePlanIds.has(state.pendingPlanReview.requestId)
           ? state.pendingPlanReview : null;
@@ -10855,6 +11395,7 @@ function reconcilePendingInteractions(
           !appPermissionsChanged &&
           !queueChanged &&
           !messagesChanged &&
+          survivingQuestions.length === allPendingQuestions(state).length &&
           nextAskUser === state.pendingAskUser &&
           nextPlanReview === state.pendingPlanReview &&
           nextPermission === state.pendingPermission &&
@@ -10869,7 +11410,8 @@ function reconcilePendingInteractions(
           ...state,
           messages: messagesChanged ? messages : state.messages,
           pendingAskUser: nextAskUser,
-          askUserDraft: nextAskUser ? state.askUserDraft : null,
+          pendingAskUserQueue: survivingQuestions,
+          askUserDraft: nextAskUser?.requestId === state.pendingAskUser?.requestId ? state.askUserDraft : (nextAskUser && state.askUserDrafts?.[nextAskUser.requestId]) || null,
           askUserViewerState: nextAskUser ? state.askUserViewerState : 'expanded',
           pendingPlanReview: nextPlanReview,
           planViewerState: nextPlanReview ? state.planViewerState : 'expanded',
@@ -11938,6 +12480,11 @@ function createRemoteHistoryView(sessionId: string) {
   const cached = deviceId ? readRemoteHistoryCache<HistoryChatMessage>(deviceId, sessionId) : Promise.resolve(null);
   let writeCache: ReturnType<typeof remoteHistoryCacheWriter> | undefined;
   let persistTimer: ReturnType<typeof setTimeout> | undefined;
+  // Only exact durable rows present before the latest read can retire. Summary
+  // endpoints/counts alone cannot prove that a newer live body has persisted.
+  const borrowedDetailRows = new WeakSet<ChatMessage>();
+  let latestReadRows = new WeakSet<ChatMessage>();
+  let latestReadEndMs = 0;
   const isCurrent = (): boolean => isDataOwnerGenerationCurrent(owner)
     && remoteProjectsStore.getSessionDeviceId(sessionId) === deviceId
     && remoteHistoryViews.get(sessionId)?.view === view;
@@ -11961,17 +12508,24 @@ function createRemoteHistoryView(sessionId: string) {
     }),
     page: async (before) => {
       const writer = deviceId ? remoteHistoryCacheWriter(deviceId, sessionId) : undefined;
+      const readRows = new WeakSet(sessions.get(sessionId)?.messages ?? []);
       // Remote reads ask for Host-projected running lines; a local view already holds live rows.
       const page = await call<HistoryViewPage<Message>>('local-db:messages:view', [sessionId, { before, lazyDetails: true, ...(deviceId ? { workLines: true } : {}) }]);
       if (page == null) throw new Error('[CHANNEL_NOT_ALLOWED] History view is unavailable');
       writeCache = writer;
+      if (!before) {
+        latestReadRows = readRows;
+        latestReadEndMs = historyViewEndMs(page);
+      }
       return { ...page, items: mapHistoryViewMessages(page.items, mapRows) };
     },
     details: async (ref, after) => {
       const writer = deviceId ? remoteHistoryCacheWriter(deviceId, sessionId) : undefined;
       const page = await call<HistoryDetailPage<Message>>('local-db:messages:work-details', [sessionId, ref, { after }]);
       writeCache = writer;
-      return { ...page, messages: mapRows(page.messages) };
+      const messages = mapRows(page.messages);
+      for (const row of messages) borrowedDetailRows.add(row);
+      return { ...page, messages };
     },
     expanded: async (refs) => {
       // Releasing an old view must still clear its original Host's interest.
@@ -12016,10 +12570,32 @@ function createRemoteHistoryView(sessionId: string) {
         ? state.messages.filter((message) => !message.cacheHydrated
           || historyCacheReceiptFollows(message.cacheReceipt, snapshot.readReceipt, snapshot.stale))
         : state.messages;
-      const messages = confirmRemoteUsers(
+      let messages = confirmRemoteUsers(
         mergeMessages(borrowed, rawMessages, { addOnly: true }),
         new Set(available.filter((message) => message.role === 'user').map((message) => message.clientId)),
       );
+      if (!snapshot.stale && !snapshot.error) {
+        const availableIds = new Set(available.map(row => row.clientId));
+        // A long turn need not finish before its completed tools can retire.
+        // Preserve the recent running tail and any body owned by visible details;
+        // old pairs are independently proven by DB echoes and a later page read.
+        const running = historyWorkSummaries(snapshot.items).some(summary => summary.isStreaming);
+        const retired = retiredDurableToolPairs(messages, (row, index) =>
+          latestReadRows.has(row) && !availableIds.has(row.clientId)
+          && Date.parse(row.createdAt ?? '') <= latestReadEndMs
+          && (!running || index < messages.length - 10));
+        const reclaimableToolIds = new Set(messages.filter(row => row.role === 'tool_use'
+          && row.toolUseId && isRetirableHistoryTool(row.toolName ?? '')).map(row => row.toolUseId));
+        for (const row of messages) {
+          if (borrowedDetailRows.has(row) && !availableIds.has(row.clientId)
+            && (row.role === 'thinking' || ((row.role === 'tool_use' || row.role === 'tool_result')
+              && !!row.toolUseId && reclaimableToolIds.has(row.toolUseId)))
+            && !row.isStreaming && !row.isPendingPersist) retired.add(row);
+        }
+        // History owns these folded bodies and can load them through workDetails.
+        // Leave prose, artifacts, live rows and all runtime/interaction state intact.
+        if (retired.size) messages = messages.filter(row => !retired.has(row));
+      }
       const isLoadingMore = view.isLoadingOlder();
       return state.historyLoaded && state.messages === messages
         && state.hasMoreMessages === snapshot.hasMore
@@ -13230,18 +13806,20 @@ function runRemoteReconcile(sessionId: string, opts?: {
   force?: boolean;
   repair?: boolean;
   preserveClientIds?: ReadonlySet<string>;
+  /** Loopback Host recovery also covers a view whose first read failed. */
+  hostRecovery?: { isCurrent: () => boolean };
 }, noteHydration?: (before: readonly ChatMessage[], after: readonly ChatMessage[]) => void): Promise<boolean> {
   // 挂起交互面板重建**无条件先行**,不受下方 isStreaming 守卫约束:turn 内弹出的
   // permission / ask / plan 正是 isStreaming=true 的常见态(pendingPermission 与
   // isRunning 共存),断连重连 / 聚焦时若被守卫吞掉,交互面板不重建、用户无法回应,
   // 会话会卡死。同时它并入下方同步代的完成语义(finally 处 await):needs-interaction
   // 未读的 passive 远程回执必须等提示真实重建后才放行。
-  const interactionsSync = reconcilePendingInteractions(sessionId);
+  const interactionsSync = reconcilePendingInteractions(sessionId, opts?.hostRecovery?.isCurrent);
   const state = sessions.get(sessionId);
   // A repair without force started while streaming is deliberately additive: it may insert
   // durable rows whose push was lost, but it must never hydrate or replace the
   // live row that the stream is still producing.
-  if (!state || !state.historyLoaded || (state.isStreaming && !opts?.force && !opts?.repair)) {
+  if (!state || (!state.historyLoaded && !opts?.hostRecovery) || (state.isStreaming && !opts?.force && !opts?.repair)) {
     // 消息对账被守卫挡下,但交互重建照跑。为它单独开一代:turn 进行中的
     // needs-interaction 未读,其「内容」就是权限 / ask / plan 提示本身——提示真实
     // 重建(count>0)才算一代完成,挂起的 passive 回执随之放行,不必等 turn 结束。
@@ -13291,6 +13869,10 @@ function runRemoteReconcile(sessionId: string, opts?: {
       let reachedHistoryStart = false;
       for (let page = 0; page < MAX_PAGES; page++) {
         const rows = await listMessagesFor(sessionId, { limit: 50, before });
+        if (opts?.hostRecovery && !opts.hostRecovery.isCurrent()) {
+          windowApplied = false;
+          return;
+        }
         if (rows.length === 0) {
           reachedHistoryStart = true;
           break;
@@ -13331,7 +13913,10 @@ function runRemoteReconcile(sessionId: string, opts?: {
         windowApplied = false;
         return;
       }
-      if (collected.length === 0) return;
+      if (collected.length === 0) {
+        if (opts?.hostRecovery) setState(sessionId, s => ({ ...s, historyLoaded: true }));
+        return;
+      }
       const mapped = mapServerMessages(collected).filter(
         (message) => !opts?.preserveClientIds?.has(message.clientId),
       );
@@ -13395,8 +13980,8 @@ function runRemoteReconcile(sessionId: string, opts?: {
           : mergeAuthoritativeRemoteWindow(mapped, lateArrivals, 'newest-first');
         noteHydration?.(s.messages, messages);
         // 无缺失且无权威字段变化 → 不换引用(视同已应用)。
-        if (messages === s.messages) return s;
-        if (isContiguous) return { ...s, messages };
+        if (messages === s.messages && (s.historyLoaded || !opts?.hostRecovery)) return s;
+        if (isContiguous) return { ...s, messages, historyLoaded: s.historyLoaded || !!opts?.hostRecovery };
         invalidateMessageHistoryWindow(sessionId);
         const oldestRow = oldestMessageRow(collected, 'newest-first');
         // 保留下来的晚到行是否**可证明**与新窗口连续:
@@ -13447,6 +14032,7 @@ function runRemoteReconcile(sessionId: string, opts?: {
         return {
           ...s,
           messages,
+          historyLoaded: s.historyLoaded || !!opts?.hostRecovery,
           oldestMessageId: oldestRow?.id ?? s.oldestMessageId,
           hasMoreMessages: !reachedHistoryStart,
           // 锁归本次重置释放(与 reloadMessages / clear / trim / demote 同规矩):被作废的
@@ -13475,6 +14061,40 @@ function runRemoteReconcile(sessionId: string, opts?: {
     (err) => log.warn('reconcileRemoteMessages failed', { sessionId, err: String(err) }),
   );
   return run.then(() => windowApplied);
+}
+
+/** Repair only loaded/visible/running local slices of an explicit Host client.
+ * Reuse the normal projection, interaction and history reducers. This function
+ * never dispatches a message, clears drafts or touches Device Link sessions.
+ */
+async function reconcileHostConnection(isCurrent: () => boolean): Promise<void> {
+  const owner = getDataOwnerGeneration();
+  const current = () => isCurrent() && isDataOwnerGenerationCurrent(owner);
+  const candidates = [...sessions].filter(([id, state]) =>
+    !isRemoteSessionSticky(id) && (_activeViewSessions.has(id) || state.historyLoaded
+      || state.isStreaming || state.agentStatus.isRunning),
+  ).map(([id]) => id);
+  // Bound parallel reads, and keep the rest of the UI usable during recovery.
+  const failures: unknown[] = [];
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, candidates.length) }, async () => {
+    while (next < candidates.length && current()) {
+      const id = candidates[next++];
+      const sessionCurrent = () => current() && sessions.has(id) && !isRemoteSessionSticky(id);
+      try {
+        const runtimeAtRead = sessions.get(id)?.agentStatus;
+        await requestInputProjection(id, undefined, {
+          isCurrent: () => sessionCurrent() && sessions.get(id)?.agentStatus === runtimeAtRead,
+        });
+        if (!sessionCurrent()) continue;
+        const applied = await runRemoteReconcile(id, {
+          force: true, repair: true, hostRecovery: { isCurrent: sessionCurrent },
+        });
+        if (!applied && sessionCurrent()) throw new Error('Host history changed during recovery');
+      } catch (error) { failures.push(error); }
+    }
+  }));
+  if (current() && failures.length) throw failures[0];
 }
 
 /**
@@ -14495,7 +15115,7 @@ function prewarmSession(
   void prewarmSessionFor(sessionId, createOpts).catch(() => undefined);
 }
 
-function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: boolean): void {
+function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: boolean, clientId: string): void {
   const sendAt = new Date();
   const userSendAtIso = sendAt.toISOString();
   // 真人发送保留旧时间字段的乐观投影；换手时间由 main 的 sessions:patched 下发。
@@ -14506,7 +15126,7 @@ function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: b
       : { userSendAt: userSendAtIso, updatedAt: userSendAtIso },
   );
   // 侧栏优先级在真实 isRunning 之前先把刚发送的任务当成 running,避免先沉底再跳顶。
-  markSessionStarting(sessionId);
+  markSessionStarting(sessionId, clientId);
 }
 
 /**
@@ -14912,7 +15532,12 @@ async function updateQueueItemContent(
       burnFailure: 'abort',
     })) ?? [];
 
-  const textUnchanged = content.text === queued.text;
+  // A supplementary answer keeps two copies: the model's native reply format in `text`, and the
+  // readable "question + answer" in `chatMessage.content` that the edit draft starts from. Saving
+  // that draft untouched must not turn the readable copy into what the model receives.
+  const keepsReplyModelText = isAsyncQuestionReplyClientId(queued.clientId)
+    && content.text === (queued.chatMessage.content ?? queued.text);
+  const textUnchanged = keepsReplyModelText || content.text === queued.text;
   const queuedAgentReferences =
     queued.chatMessage.agentReferences?.length
       ? queued.chatMessage.agentReferences
@@ -14955,6 +15580,7 @@ async function updateQueueItemContent(
       createdAt: queued.chatMessage.createdAt ?? new Date().toISOString(),
     },
   );
+  if (keepsReplyModelText) replacement.text = queued.text;
   const replacementSessionRefs = extractSessionRefs(content.text, queued.sessionRefs);
   if (replacementSessionRefs.length > 0) replacement.sessionRefs = replacementSessionRefs;
   else delete replacement.sessionRefs;
@@ -14970,6 +15596,8 @@ async function updateQueueItemContent(
   } catch (error) {
     if (
       extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' &&
+      // The text-only channel would write the readable copy over the model's copy.
+      !keepsReplyModelText &&
       canFallbackQueueEditToText(queued, replacement, content, files)
     ) {
       try {
@@ -15199,6 +15827,8 @@ function maybeAutoNameUnnamedSession(
  * 不能丢)。
  */
 type SendMessageOpts = {
+  /** Reuse the bubble already displayed during remote creation. */
+  firstMessageIdentity?: { clientId: string; createdAt: string };
   vendorOptions?: Record<string, unknown>;
   /** 本条消息正文前缀含「选中引用」编码块,渲染侧据此启用胶囊化解析。 */
   quotesEncoded?: boolean;
@@ -15310,7 +15940,11 @@ function sendMessage(
   // Allow send if there is text OR files
   if ((!text.trim() && (!files || files.length === 0)) || !workingDir)
     return Promise.resolve(false);
+  // 用户在这个会话里发了消息：它是「用户亲手碰过」的会话，别按后台会话压行（MEM-OPT-3）。
+  _locallyEngagedSessions.add(sessionId);
   if (isRemoteDeletedSessionSendBlocked(sessionId)) return Promise.resolve(false);
+  // 用户在任务里发了消息:已经待生效的合并后自动归档本次不再进行(卡片上的提示随之消失)。
+  cancelPendingGhostCardTaskAutoArchive(sessionId);
   const formDelivery = pendingGhostCardFormDelivery(sessionId);
   if (formDelivery) {
     const beforeEnqueue = opts?.beforeEnqueue;
@@ -15354,10 +15988,12 @@ function sendMessage(
           opts,
           clearGenerationAtStart,
           remoteScopeAtStart,
+          undefined,
+          opts?.firstMessageIdentity,
         );
       }
       if (remoteScopeAtStart) {
-        const identity = {
+        const identity = opts?.firstMessageIdentity ?? {
           clientId: crypto.randomUUID(),
           createdAt: new Date().toISOString(),
         };
@@ -15482,6 +16118,7 @@ async function sendMessageCore(
   ) {
     return false;
   }
+  const starPromptOwner = getDataOwnerGeneration();
   const current = getOrCreateState(sessionId);
   const wasFirst = current.isFirstMessage;
 
@@ -15586,7 +16223,7 @@ async function sendMessageCore(
 
   // Renderer 只做 UI 乐观排序；DB user_send_at 和队列事务都由 main coordinator
   // 在 enqueue intent 内处理。这里不再本地 mutate pendingQueue，也不再触发 drain。
-  touchSessionUserSend(sessionId, workingDir, wasFirst);
+  touchSessionUserSend(sessionId, workingDir, wasFirst, queued.clientId);
 
   // Auto-naming (F-CHAT-2) — only fires for the first message in the session,
   // and that is by definition not busy (queue would have been dispatched on a
@@ -15626,6 +16263,7 @@ async function sendMessageCore(
     // preflight/invoke so a weak link never holds the composer dispatch lock.
     remoteRecord.composerResolvedOptimistically = true;
     void pumpRemoteOptimisticSends(sessionId);
+    if (!opts?.authRetryPersistOnProjectionError) recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
     return true;
   }
 
@@ -15654,6 +16292,7 @@ async function sendMessageCore(
       ) {
         clearSessionStarting(sessionId);
       }
+      if (!opts?.authRetryPersistOnProjectionError) recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
       return true;
     })
     .catch((err) => {
@@ -15919,6 +16558,7 @@ async function steerMessageCore(
   ) {
     return false;
   }
+  const starPromptOwner = getDataOwnerGeneration();
   const queued = buildQueuedMessage(
     sessionId,
     text,
@@ -15982,7 +16622,7 @@ async function steerMessageCore(
   // 插话被受理(远程 outbox 收下 / 主进程受理或物化进队列)才作废关闭错误的待补标意图:之后
   // 落库的错误属于这次插话,不再代关掉的那次错误补标。被拒的插话不作废,否则关掉的错误随后
   // 落库时补标不了。
-  touchSessionUserSend(sessionId, workingDir, false);
+  touchSessionUserSend(sessionId, workingDir, false, queued.clientId);
   // 补起名同样要覆盖 steer:首条是纯附件的会话标题此时是合成占位,而用户完全
   // 可能趁这一轮还在跑就用「插话」写下第一句话。只走普通发送的话,这句话不会
   // 改名,标题会一直停在附件名直到他再排队发一条(PR #510 review P1)。
@@ -16004,6 +16644,7 @@ async function steerMessageCore(
     remoteRecord.composerResolvedOptimistically = true;
     _disposedLiveErrorIntents.delete(sessionId);
     void pumpRemoteOptimisticSends(sessionId);
+    recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
     return true;
   }
 
@@ -16015,6 +16656,7 @@ async function steerMessageCore(
         _disposedLiveErrorIntents.delete(sessionId);
         commitAutoTitle();
         requestInputProjection(sessionId);
+        recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
         return true;
       }
       // steer 失败后拉一次权威 projection:投递结果不确定时 coordinator 会把这条
@@ -16035,6 +16677,7 @@ async function steerMessageCore(
           // (review P1)。是否真该改名仍由 main 权威判定。
           _disposedLiveErrorIntents.delete(sessionId);
           commitAutoTitle();
+          recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
           return true;
         }
       } catch (err) {
@@ -16233,6 +16876,8 @@ function stopSession(
   },
 ): void {
   if (!sessionId) return;
+  // 用户主动 Stop：这个会话是他在盯的，行要留全（MEM-OPT-3 不按后台会话压它）。
+  _locallyEngagedSessions.add(sessionId);
   // Stop/abort 乐观终态：立即清掉该 session 的「正在识别图片中」toast，
   // 否则 duration:0 的 loading toast 会残留到下一次同 session 输出才消失。
   dismissVisionBridgeToast(sessionId);
@@ -16287,11 +16932,7 @@ function stopSession(
       errorRetryText: null,
       pendingPermission: null,
       continuationTurnClientId: null,
-      pendingAskUser: null,
-      // F-AUQ-MIN-5: Stop session — pending question is gone, reset viewer.
-      askUserViewerState: 'expanded',
-      // F-AUQ-DRAFT: Stop wipes the question, draft is no longer meaningful.
-      askUserDraft: null,
+      ...retainAsyncQuestions(s),
       pendingPlanReview: null,
       // 用户主动 Stop:wake 型 running 任务标 stopped、唤醒桥接清零,让 running
       // 快照立即回落。只收 wake 型——后台 bash / codex 任务不因 interrupt 而死,
@@ -16311,6 +16952,7 @@ function stopSession(
         contextWindow: s.agentStatus.contextWindow,
         isRunning: false,
         startedAt: null,
+        ...stoppedTurnClock(s.agentStatus),
       },
     };
   });
@@ -16380,7 +17022,7 @@ function disposeLiveErrorPersist(sessionId: string): void {
     return;
   }
   if (!state?.error) return;
-  const tailRowId = persistedTailRowIdForLiveError(state);
+  const tailRowId = getLiveErrorMessageClientId(state);
   if (tailRowId) markLiveErrorRowDisposed(sessionId, tailRowId);
   _disposedLiveErrorIntents.set(sessionId, {
     text: state.error,
@@ -16403,7 +17045,7 @@ function markLiveErrorRowDisposed(sessionId: string, clientId: string): void {
 }
 
 /**
- * live 横幅没有绑定落库行时，找出它对应的已落库尾部错误行。
+ * 返回 live 横幅拥有的精确落库行；旧 Host 没有绑定时才按尾部与文案安全认领。
  *
  * 错误落库后若用户没在看这个任务(或之后离开过)，live 横幅会交给历史错误卡，绑定一并清掉；
  * main 的输入投影仍带着这次错误，之后任何一次投影(打开任务、队列变化、协同派活等)都会把
@@ -16411,15 +17053,19 @@ function markLiveErrorRowDisposed(sessionId: string, clientId: string): void {
  * 保留绑定：后来的新错误(远程断线期间漏收的新一轮、scheduler 发送前失败直接换掉错误等)
  * 可能不经过新一轮启动就顶替旧错误，保留的绑定会被错用到新错误上，关闭标掉的是旧行。
  *
- * 改在关闭时按当前看到的内容认领：已加载历史的最后一条(与尾部错误卡同一判定)是未处置的
- * error 行，且文案与 live 横幅一致(liveErrorTextMatchesRow)，才认为是同一次错误。对不上
- * (历史未加载、尾部不是 error、文案不同)就什么都不标，不会标到无关行。
+ * 改在显示/关闭时按当前看到的内容认领：共享尾部选择器找到未处置的 error 行
+ * (跳过位置/模型/历史边界卡)，且文案与 live 横幅一致(liveErrorTextMatchesRow)，才认为
+ * 是同一次错误。历史未加载、已有真实进展或文案不同就不认领，不会标到无关行。
  * 关闭的错误可能还没落库：尾部仍是同文案的旧行时，这里会把旧行一起标掉(它不在尾部之后
  * 就不再显示，没有可见影响)，真正那一行由 claimDisposedLiveErrorRow 等它落库后补标。
  */
-function persistedTailRowIdForLiveError(state: SessionChatState): string | null {
-  if (!state.error || !state.historyLoaded) return null;
-  const tail = state.messages[state.messages.length - 1];
+export function getLiveErrorMessageClientId(
+  state: Pick<SessionChatState, 'error' | 'errorPersistId' | 'historyLoaded' | 'messages' | 'disposedErrorPersistId'>,
+): string | null {
+  if (!state.error) return null;
+  if (state.errorPersistId) return state.errorPersistId;
+  if (!state.historyLoaded) return null;
+  const tail = findErrorTailMessage(state.messages, state.disposedErrorPersistId);
   return tail && isUndisposedErrorRowFor(tail, state.error, state.disposedErrorPersistId)
     ? tail.clientId
     : null;
@@ -16572,7 +17218,7 @@ function clearError(sessionId: string): void {
   });
 }
 
-function retryLastError(sessionId: string): Promise<void> {
+function retryLastError(sessionId: string, expected?: { expectedQueueHeadClientId: string; expectedSwitchRevision: number }): Promise<void> {
   if (!sessionId) return Promise.resolve();
   disposeLiveErrorPersist(sessionId);
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
@@ -16617,8 +17263,9 @@ function retryLastError(sessionId: string): Promise<void> {
     markLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
   }
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  const retryOpts = expected ? { ...boundaryOpts, ...expected } : boundaryOpts;
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
-    boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
+    retryOpts ? input.retryLastError(sessionId, retryOpts) : input.retryLastError(sessionId),
   ).then(
     ({ projection }) => {
       // 一次性意图的兜底清理：正常路径下 applyInputProjection 已凭意图认领
@@ -16921,6 +17568,8 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       pendingPermission: null,
       pendingAppPermissions: [],
       pendingAskUser: null,
+      pendingAskUserQueue: [],
+      askUserDrafts: {},
       pendingPluginSetup: null,
       pendingPluginSetupQueue: [],
       pluginSetupViewerState: 'expanded',
@@ -16931,6 +17580,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       // F-AUQ-DRAFT: Clear session also wipes any in-progress draft.
       askUserDraft: null,
       protectedAskUser: undefined,
+      parkedProtectedAsks: undefined,
       pendingPlanReview: null,
       pendingIssueConfirm: null,
       pendingInputHandoff: null,
@@ -16958,6 +17608,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
         contextWindow: 0,
         isRunning: false,
         startedAt: null,
+        lastStartedAt: null,
       },
     };
   });
@@ -17232,6 +17883,7 @@ function answerUserQuestion(
     pendingAskUser: s.pendingAskUser?.requestId === requestId ? null : s.pendingAskUser,
     askUserViewerState: s.pendingAskUser?.requestId === requestId ? 'expanded' : s.askUserViewerState,
     askUserDraft: s.pendingAskUser?.requestId === requestId ? null : s.askUserDraft,
+    ...removePendingQuestion(s, requestId, true),
     messages: s.messages.map((m) =>
       m.askUserRequestId === requestId && m.askUserStatus === 'pending'
         ? { ...m, askUserStatus: 'answered' as const, askUserReply: replySummary, askUserAnswers: submittedAnswers }
@@ -17247,9 +17899,10 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
   const state = getOrCreateState(sessionId);
   const protectedQuestion = state.protectedAskUser;
   if (protectedQuestion?.pending.requestId !== requestId) return;
-  const text = formatAsyncQuestionSupplement(protectedQuestion.pending.questions, answers);
+  const text = formatAsyncQuestionSupplement(protectedQuestion.pending.questions, answers,
+    { late: !state.agentStatus.isRunning || state.turnStoppedByUser });
   const clear = () => setState(sessionId, (s) => s.protectedAskUser?.pending.requestId === requestId
-    ? { ...s, protectedAskUser: undefined } : s);
+    ? { ...s, ...removePendingQuestion(s, requestId, true) } : s);
   const key = `${sessionId}:${requestId}:supplement`;
   if (questionDecisionsInFlight.has(key)) return;
   questionDecisionsInFlight.add(key);
@@ -17277,21 +17930,23 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
     );
     if (!current()) return;
     if (!needsSupplement) {
-      setState(sessionId, (s) => ({ ...s, protectedAskUser: undefined,
-        pendingAskUser: s.pendingAskUser?.requestId === requestId ? null : s.pendingAskUser,
-        askUserDraft: s.askUserDraft?.requestId === requestId ? null : s.askUserDraft,
-      }));
+      setState(sessionId, (s) => ({ ...s, ...removePendingQuestion(s, requestId, true) }));
       return;
     }
     if (!text) { clear(); return; }
     const session = await getSessionFor(sessionId);
     // Exact retries share an ID; an edited answer is a new supplemental input.
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    const answerText = formatAsyncQuestionSupplement(protectedQuestion.pending.questions, answers);
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(answerText));
     const answerId = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
     if (!current()) return;
-    const queued = buildQueuedMessage(sessionId, text, session.model, session.effort,
+    // History and the queue show the question and the answer; only the model's copy
+    // carries the native reply format and the delayed-answer note.
+    const queued = buildQueuedMessage(sessionId,
+      formatAsyncQuestionReplyDisplay(protectedQuestion.pending.questions, answers), session.model, session.effort,
       session.permissionMode, session.workingDir ?? '', undefined, undefined, undefined,
       { clientId: `question-reply:${requestId}:${answerId}`, createdAt: new Date().toISOString() });
+    queued.text = text;
     queued.createOpts = { ...queued.createOpts, planMode: false,
       agentKind: dbAgentKindToMakerKind(session.agentKind, state.agentKind),
       ...(session.sdkSessionId ? { resumeSessionId: session.sdkSessionId } : {}),
@@ -17968,8 +18623,17 @@ function setPluginSetupViewerState(sessionId: string, next: PluginSetupViewerSta
  * after every keystroke / option click, but identical objects are deduped via
  * shallow comparison of (requestId, currentIndex, answers identity).
  */
+const snoozingQuestions = new WeakSet<PendingAskUser>();
+
 function setAskUserDraft(sessionId: string, next: AskUserDraft | null): void {
   if (!sessionId) return;
+  const current = getOrCreateState(sessionId);
+  const question = current.protectedAskUser?.pending ?? current.pendingAskUser;
+  if (next?.started && question?.requestId === next.requestId && question.isBlocking === false && !snoozingQuestions.has(question)) {
+    snoozingQuestions.add(question);
+    void makerApiFor(sessionId).resolveInteraction(next.requestId, { kind: 'ask_user_question', answers: {}, inProgress: true })
+      .catch(() => { snoozingQuestions.delete(question); });
+  }
   setState(sessionId, (s) => {
     const prev = s.protectedAskUser?.draft ?? s.askUserDraft;
     if (prev === next) return s;
@@ -18071,16 +18735,12 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
   // session when the action started.
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
   const triggerApi = remoteDeviceId ? makerApiForDevice(remoteDeviceId) : makerApiFor(sessionId);
-  const originalTail = state.messages[state.messages.length - 1];
   // Freeze the row the user acted on before session lookup / dispatch. A fast
   // continuation failure may append a new error before send resolves; that new
   // error must keep its retry banner.
-  const continuedErrorTailClientId =
-    syntheticTriggerKind(prompt) === 'continue' &&
-    originalTail?.role === 'error' &&
-    !originalTail.errorDismissed
-      ? originalTail.clientId
-      : null;
+  const continuedErrorTailClientId = syntheticTriggerKind(prompt) === 'continue'
+    ? findErrorTailMessage(state.messages, state.disposedErrorPersistId)?.clientId
+    : null;
   // device-link 远程会话:get/enqueue 都走传输层(getSessionFor 远程读被控 row,
   // makerApiFor(...) 远程隧道到被控端 coordinator)。
   return getSessionFor(sessionId)
@@ -18532,6 +19192,7 @@ export const makerChatStore = {
   getPromptRecommendationRunStartedAt,
   /** 输入框推荐后台完成资格的 non-creating 终态快照。 */
   getPromptRecommendationCompletionStatus,
+  hasGithubStarBlockingWork,
   ensureInitialMessages,
   prefetchRemoteHistories,
   reloadMessages,
@@ -18619,6 +19280,8 @@ export const makerChatStore = {
   enterView,
   /** MEM-OPT-2: Mark a session view unmounted. */
   leaveView,
+  /** MEM-OPT-3: 有别的可见界面正在消费这个会话的行时登记它（返回注销函数）。 */
+  pinVisibleSurfaceSession,
   insertSystemCard,
   moveLearnCardToEnd,
   updateLastSystemCardData,
@@ -18642,8 +19305,10 @@ export const makerChatStore = {
   setPluginSetupViewerState,
   /** F-AUQ-DRAFT: persist in-progress wizard state across session switch. */
   setAskUserDraft,
+  selectAskUserQuestion,
   setTitleUpdateCallback,
   syncActiveTurnsFromMain,
+  reconcileHostConnection,
   /**
    * 当前 running 的 claude-code 后台任务 taskId 集合(按 taskId 归一,别名键去重)。
    * 用途:快照对账的候选集捕获 —— 必须在发起 listSessionBackgroundTasks **之前**
@@ -18714,6 +19379,7 @@ export const makerChatStore = {
       toolUseId?: string;
       title?: string;
       provider?: 'pi' | 'claude-code';
+      backgroundCommandKind?: 'work' | 'service';
     }>,
     opts?: {
       staleRunningCandidates?: ReadonlySet<string>;
@@ -18744,6 +19410,7 @@ export const makerChatStore = {
             ...(t.taskType ? { taskType: t.taskType } : {}),
             ...(t.toolUseId ? { parentToolUseId: t.toolUseId } : {}),
             ...(t.title ? { title: t.title } : {}),
+            ...(t.backgroundCommandKind ? { backgroundCommandKind: t.backgroundCommandKind } : {}),
           },
         } as CCAgentStreamEvent);
       }
@@ -18865,6 +19532,11 @@ export const makerChatStore = {
   __activeViewTest: {
     getActiveSessionIds: () => [..._activeViewSessions.keys()],
     getLastViewedAt: (sessionId: string) => _lastViewedAt.get(sessionId),
+    // 单测注入 busy 态（isStreaming）：trim 依赖 _isSessionBusy，生产入口是 IPC 流
+    // 事件链，测试里直接置位避免整条 mock；断言仍是可观察的窗口行数。
+    setStreamingForTest: (sessionId: string, isStreaming: boolean) => {
+      setState(sessionId, (s) => ({ ...s, isStreaming }));
+    },
     setSoftEvictionBudget: (budget: { messages: number; characters: number } | null) => {
       softEvictionBudget = budget ?? SOFT_EVICTION_DEFAULT_BUDGET;
     },
@@ -19231,6 +19903,9 @@ function readInputHandoffEndRecord(m: Message) {
 
 function isSyntheticTriggerRow(m: Message): boolean {
   if (m.role !== 'user') return false;
+  // The question card already shows this answer: the row keeps its place in the timeline
+  // without a bubble, so it is no visible anchor for history paging either.
+  if (isAnsweredAsyncQuestionClientId(m.clientId)) return true;
   const c = m.content;
   if (typeof c === 'string') return c.startsWith(UI_ACTION_TRIGGER_PREFIX);
   if (c && typeof c === 'object') {
@@ -19332,6 +20007,25 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   );
   const filtered = serverMsgs.filter((m) => !isHiddenThinkingRow(m));
   const ordered = filtered.sort(compareMessageTimeline);
+  // 被隐藏的 thinking 行(redacted / omitted 占位)仍是活动边界:主进程
+  // `canonicalReplyVisibility` 把 thinking 行算作「后续活动」,而这里它已经不在渲染
+  // 序列里。把边界挂到时间线上相邻的可见消息,供收尾回复判定使用(#8655 P2)。
+  const hiddenThinkingBefore = new Set<string>();
+  const hiddenThinkingAfter = new Set<string>();
+  {
+    const timeline = [...serverMsgs].sort(compareMessageTimeline);
+    timeline.forEach((row, index) => {
+      if (!isHiddenThinkingRow(row)) return;
+      const next = timeline.slice(index + 1).find((candidate) => !isHiddenThinkingRow(candidate));
+      if (next) {
+        hiddenThinkingBefore.add(next.clientId);
+        return;
+      }
+      const previous = [...timeline.slice(0, index)].reverse()
+        .find((candidate) => !isHiddenThinkingRow(candidate));
+      if (previous) hiddenThinkingAfter.add(previous.clientId);
+    });
+  }
   const legacyUserTurnCosts = projectLegacyUserTurnCosts(ordered);
   const mapped = ordered.map((m) => {
     if (m.role === 'assistant' && m.agentMeta?.voiceCall?.version === 1) return {
@@ -19343,7 +20037,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     if (mcpApp) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'mcp-app' as const,
-      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: (parseMcpAppRecord(m.content)?.tool._meta as Record<string, unknown> | undefined)?.['cindy/plugin'] },
+      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: mcpApp.plugin, customMcp: mcpApp.customMcp },
       mcpAppClientId: m.clientId,
     };
     const persistedCindyCard =
@@ -19443,6 +20137,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         content: displayContent,
         isStreaming: false,
         askUserStatus: resolvedStatus as 'answered' | 'expired',
+        askUserWithdrawalReason: typeof c.withdrawalReason === 'string' ? c.withdrawalReason : undefined,
         askUserRequestId: typeof c.requestId === 'string' ? c.requestId : undefined,
         askUserReply: replySummary,
         askUserQuestions: questions,
@@ -19736,17 +20431,24 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         };
       }
       const parsed = parseUserContent(m.content);
+      // Replies saved before the readable copy existed hold the text sent to the model.
+      if (isAsyncQuestionReplyClientId(m.clientId)) parsed.text = asyncQuestionReplyDisplayText(parsed.text);
       // scheduler / 工具 / Orca 注入的消息带 agentMeta.origin(历史加载与
       // messages:created 直推两条路径都经过这里),投影后透传给 UserMessage 渲染来源标签。
       const automationOrigin = toMessageAutomationOrigin(m.agentMeta?.origin);
       const delivery = m.agentMeta?.delivery;
       const goalObjective = m.agentMeta?.goalObjective;
-      // Both ingress paths share the Desktop card, but local IM must not opt
-      // older Mobile clients into legacy Hook/system-card semantics.
-      const hookSource = m.agentMeta?.imSource ?? m.agentMeta?.hookSource;
       // 发送设备 / 插件来源:宽容读取(平台未知等不完整数据不出标签)。
       const sourceDevice = readMessageSourceDevice(m.agentMeta);
       const sourcePlugin = readMessageSourcePlugin(m.agentMeta);
+      // Both ingress paths share the Desktop card, but local IM must not opt
+      // older Mobile clients into legacy Hook/system-card semantics.
+      // 插件转发的 IM 消息(sourcePlugin.relay)只在这里派生同一张卡片,不落库成 imSource;
+      // 插件来源标签照常显示在卡片上方。
+      const hookSource = m.agentMeta?.imSource ?? m.agentMeta?.hookSource
+        ?? (sourcePlugin?.relay
+          ? createPluginRelayImSource(sourcePlugin.relay, splitPluginMessage(parsed.text, parsed.pastedTextRanges))
+          : undefined);
       return {
         sharedAuthorName: sharedTaskAuthorName(m.agentMeta),
         sharedAuthorMemberId: sharedTaskAuthorMemberId(m.agentMeta),
@@ -19914,6 +20616,14 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       ...(m.role === 'assistant' ? { sourceGroup: readMessageSourceGroup(m.agentMeta) } : {}),
       ...(m.role === 'assistant' && typeof m.agentMeta?.assistantPhase === 'string' ? { assistantPhase: m.agentMeta.assistantPhase } : {}),
       ...(m.role === 'assistant' && m.agentMeta?.failedSamplingAttempt ? { failedSamplingAttempt: true } : {}),
+      // 与主进程 canonicalReplyVisibility 同源的 pending 判据:运行时关闭后遗留的
+      // 未确认输出不能当成正式回复(#8655 review)。
+      // `false` 必须显式映射出来:确认广播只带 `samplingAttemptPending: false`,
+      // 若这里省略,`hydratePersistedMessage` 的 `{ ...existing, ...persisted }`
+      // 会让内存里旧的 `true` 永远残留,已接受的收尾回复一直藏在折叠里。
+      ...(m.role === 'assistant' && typeof m.agentMeta?.samplingAttemptPending !== 'undefined'
+        ? { samplingAttemptPending: m.agentMeta.samplingAttemptPending !== false }
+        : {}),
       ...(m.role === 'assistant' && m.agentMeta?.explicitDelivery === true ? { explicitDelivery: true } : {}),
       ...(botStarterOptions.length ? { botStarterOptions } : {}),
       ...(m.role === 'assistant' ? { botLearning: m.agentMeta?.botLearning } : {}),
@@ -19977,18 +20687,24 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     const remoteContentTruncated = remoteContentTruncatedById.get(cm.clientId) === true;
     const remoteRowsTrimmed = remoteRowsTrimmedById.get(cm.clientId) === true;
     const legacyUserTurnCost = legacyUserTurnCosts.get(cm.clientId);
+    const hiddenBefore = hiddenThinkingBefore.has(cm.clientId);
+    const hiddenAfter = hiddenThinkingAfter.has(cm.clientId);
     if (
       !iso &&
       rowid === undefined &&
       !remoteContentTruncated &&
       !remoteRowsTrimmed &&
       !legacyUserTurnCost &&
-      !serverId
+      !serverId &&
+      !hiddenBefore &&
+      !hiddenAfter
     ) {
       return cm;
     }
     return {
       ...cm,
+      ...(hiddenBefore ? { hiddenThinkingBefore: true } : {}),
+      ...(hiddenAfter ? { hiddenThinkingAfter: true } : {}),
       ...(legacyUserTurnCost ?? {}),
       ...(iso ? { createdAt: iso } : {}),
       ...(typeof serverId === 'string' && serverId.length > 0 ? { id: serverId } : {}),

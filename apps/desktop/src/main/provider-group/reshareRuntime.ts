@@ -20,7 +20,7 @@ import {
 import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged } from '../device-link/providerShareHost.js';
 import { createLogger } from '../logger.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
-import { pruneProviderGroupBindings } from './bindings.js';
+import { pruneProviderGroupBindings } from './bindings.desktop.js';
 import { pruneRemovedShareMembers, recordShareHosts } from './removedShares.js';
 import { createProviderGroupReshare, type ProviderGroupReshare } from './reshare.js';
 import { completeProviderGroupReshareCleanup, listProviderGroupReshareCleanups, listProviderGroups, updateProviderGroup, writeProviderGroup } from './store.js';

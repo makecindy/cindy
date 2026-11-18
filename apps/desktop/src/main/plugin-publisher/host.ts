@@ -77,7 +77,7 @@ async function resolvePublisherIdentity(): Promise<PluginPublisherIdentity | nul
   if (!refreshed || refreshed.membershipId !== identity.membershipId) return null;
   if (refreshed.orgSlug !== null) return refreshed;
   try {
-    const { currentOrganization } = await new PluginMarketApi(undefined, () => app.getVersion()).listAll();
+    const { currentOrganization } = await new PluginMarketApi(undefined, () => app.getVersion()).catalog({ scope: 'public', limit: 1, counts: false });
     if (publisherIdentityContextKey() !== contextKey) return null;
     const current = currentPublisherIdentity();
     if (!current || current.membershipId !== identity.membershipId) return null;

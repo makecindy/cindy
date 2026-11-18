@@ -384,7 +384,7 @@ describe('PlanActionCard 取消(Esc)与 ⏎ 去重', () => {
     expect(onCancel).toHaveBeenCalledWith('pr-2');
   });
 
-  it('编辑反馈时批准行 ⏎ 隐藏; 反馈 ⏎ 仅在有文字时出现且点击即发送', () => {
+  it('编辑反馈时批准行 ⏎ 隐藏; 发送按钮常驻, 仅在有文字时可点击发送', () => {
     const onRespond = vi.fn();
     const { container } = render(
       createElement(PlanActionCard, { requestId: 'pr-4', onRespond, onCancel: vi.fn() }),
@@ -393,15 +393,18 @@ describe('PlanActionCard 取消(Esc)与 ⏎ 去重', () => {
     const enterIcons = () => container.querySelectorAll('svg.lucide-corner-down-left');
     expect(enterIcons()).toHaveLength(1);
 
-    // 进入反馈编辑:批准行 ⏎ 隐藏,空文本时无发送 ⏎ → 0 个
+    // 进入反馈编辑:批准行 ⏎ 隐藏;输入框内的发送按钮已在,但无文字时禁用
     fireEvent.click(screen.getByText('newChat.planReview.feedbackPlaceholder'));
     expect(enterIcons()).toHaveLength(0);
+    const send = screen.getByLabelText('newChat.planReview.submitFeedbackAria') as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
 
-    // 输入文字 → 发送 ⏎ 出现(全程唯一),点击即提交反馈
+    // 输入文字 → 发送按钮可用,点击即提交反馈
     const textarea = screen.getByPlaceholderText('newChat.planReview.feedbackPlaceholder');
     fireEvent.change(textarea, { target: { value: '再加一步测试' } });
-    expect(enterIcons()).toHaveLength(1);
-    fireEvent.click(screen.getByLabelText('newChat.planReview.submitFeedbackAria'));
+    expect(enterIcons()).toHaveLength(0);
+    expect(send.disabled).toBe(false);
+    fireEvent.click(send);
     expect(onRespond).toHaveBeenCalledWith('pr-4', false, '再加一步测试');
   });
 

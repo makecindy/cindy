@@ -1,3 +1,4 @@
+import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { isQuotaExhaustedErrorMessage } from './providerErrors';
 
 /** Public, bounded diagnostics: never forward upstream messages, URLs or identities to a guest. */
@@ -18,6 +19,15 @@ export function sharedTaskRecoveryFor(message: string, agentDeviceId?: string | 
   const detailed = sharedTaskRecoveryReason(message);
   if (detailed) return detailed;
   if (!agentDeviceId?.startsWith('share:')) return undefined;
+  // Presentation aliases only. Keep the probe/replay policy below based on the
+  // original transport code; these aliases must not authorize another call.
+  switch (parseAgentErrorCode(message)?.code) {
+    case 'REMOTE_AGENT_RESUME_UNAVAILABLE': return 'history';
+    case 'REMOTE_AGENT_TIMEOUT': case 'REMOTE_AGENT_UNRESPONSIVE': return 'timeout';
+    case 'REMOTE_AGENT_LINK_BUSY': return 'rate';
+    case 'REMOTE_AGENT_OFFLINE': return 'offline';
+    case 'REMOTE_AGENT_ACCESS_DENIED': return 'denied';
+  }
   // These errors already explain model/member budget actions precisely.
   if (/\[REMOTE_AGENT_(?:GROUP_USAGE_LIMIT|MEMBER_BUDGET_PAUSED)\]/.test(message)) return undefined;
   if (isQuotaExhaustedErrorMessage(message)) return 'budget';
@@ -64,14 +74,21 @@ export function sharedTaskRecoveryError(stage: SharedTaskRecoveryStage, reason: 
     : reason === 'capacity' || reason === 'rate' ? 'REMOTE_AGENT_BUSY'
     : reason === 'unsupported' ? 'REMOTE_AGENT_PEER_TOO_OLD' : 'REMOTE_AGENT_UNAVAILABLE';
   const sourceCode = (source as { code?: unknown } | null)?.code;
-  const diagnostic = typeof sourceCode === 'string' && [
+  const safeSourceCode = typeof sourceCode === 'string' && [
     'TIMEOUT', 'INVOKE_TIMEOUT', 'DEVICE_UNRESPONSIVE', 'DEVICE_OFFLINE',
     'NOT_CONNECTED', 'LINK_NOT_OPEN', 'LINK_CLOSED', 'PEER_RESET',
     'ACCESS_REVOKED', 'PERMISSION_DENIED', 'REMOTE_DISABLED', 'UNAUTHORIZED',
-  ].includes(sourceCode) ? ` [SHARED_TASK_CODE_${sourceCode}]` : '';
-  return Object.assign(new Error(`[${code}] [SHARED_TASK_RECOVERY_${reason}] [SHARED_TASK_STAGE_${stage}]${diagnostic} Shared task recovery failed`), {
-    code,
-  });
+  ].includes(sourceCode) ? sourceCode : undefined;
+  const diagnostic = safeSourceCode ? ` [SHARED_TASK_CODE_${safeSourceCode}]` : '';
+  const error = Object.assign(new Error(`[${code}] [SHARED_TASK_RECOVERY_${reason}] [SHARED_TASK_STAGE_${stage}]${diagnostic} Shared task recovery failed`), { code });
+  if (source !== undefined) {
+    // Retain only bounded local evidence. Keeping the upstream object (even as
+    // Error.cause) would let later logging/serialization expose private details.
+    Object.defineProperty(error, 'cause', { value: Object.freeze({
+      reason: sharedTaskFailureReason(source), ...(safeSourceCode ? { code: safeSourceCode } : {}),
+    }), configurable: true, writable: true });
+  }
+  return error;
 }
 
 /** Only pre-open recovery requests may be retried. Never retry permission, quota, capacity or unknown failures. */
@@ -79,8 +96,23 @@ export function canRetrySharedTaskRecovery(error: unknown): boolean {
   return ['timeout', 'relay'].includes(sharedTaskFailureReason(error));
 }
 
-/** Recovery is bounded to one retry of an idempotent probe, never open/send/allocate. */
+/** Only an unaccepted report's preparation may be repeated. An allocation or
+ * authorization timeout is not proof that the grant write did not happen. */
+export function canRecoverUndeliveredOrcaReport(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  const stage = /\[SHARED_TASK_STAGE_([a-z]+)\]/.exec(message)?.[1];
+  const reason = sharedTaskFailureReason(error);
+  // Executor/capability failures may follow a committed allocation. Recover
+  // those probes in place below, not by replaying the whole startup pipeline.
+  if (stage && stage !== 'owner') return false;
+  return ['offline', 'relay'].includes(reason)
+    || (!!stage && reason === 'timeout');
+}
+
+/** Retry only the same idempotent probe, keeping its grant and cancellation fence.
+ * The immediate retry preserves the fast path; later retries allow a brief reconnect. */
 export async function probeSharedTask<T>(stage: SharedTaskRecoveryStage, probe: () => Promise<T>, assertCurrent: () => void): Promise<T> {
+  const delays = [0, 1_000, 3_000];
   for (let attempt = 0; ; attempt++) {
     assertCurrent();
     try {
@@ -89,7 +121,10 @@ export async function probeSharedTask<T>(stage: SharedTaskRecoveryStage, probe: 
       return value;
     } catch (error) {
       assertCurrent();
-      if (attempt === 0 && canRetrySharedTaskRecovery(error)) continue;
+      if (attempt < delays.length && canRetrySharedTaskRecovery(error)) {
+        if (delays[attempt]) await new Promise<void>(resolve => setTimeout(resolve, delays[attempt]));
+        continue;
+      }
       throw sharedTaskRecoveryError(stage, sharedTaskFailureReason(error), error);
     }
   }

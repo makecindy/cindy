@@ -1,3 +1,4 @@
+import type { BotGroupTextInput } from './botGroupTextInput';
 /**
  * 群聊 @ 点名候选：主群输入框与 Thread 回复框共用的一套状态与候选列表。
  *
@@ -34,6 +35,7 @@ import { cn } from '@/lib/utils';
 import type { BotGroupMemberView } from '../../../shared/botGroupChat';
 import { BotAvatar } from './BotAvatar';
 import {
+  ambiguousBotGroupMentionLabels,
   filterBotGroupMentionCandidates,
   findBotGroupMentionQuery,
   insertBotGroupMention,
@@ -55,26 +57,33 @@ export function useBotGroupMentionPicker({
   members,
   textareaRef,
   allLabels,
+  disabled = false,
   allowMentionAllBots = false,
 }: {
   text: string;
+  /** Read-only composer states close the list and reject pending picks. */
+  disabled?: boolean;
   /** Every text change from typing or picking goes through here. */
   onTextChange: (value: string) => void;
   /** Full roster: active members other than you are offered; everyone but you still resolves. */
   members: readonly BotGroupMemberView[];
-  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  textareaRef: RefObject<BotGroupTextInput | null>;
   /** Labels that mean 「所有人」 when resolving; the first is the one offered. Defaults to the UI label. */
   allLabels?: readonly string[];
   allowMentionAllBots?: boolean;
 }) {
   const { t } = useTranslation();
   const listboxId = useId();
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
   const [caret, setCaret] = useState(0);
   const [focused, setFocused] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const [dismissedStart, setDismissedStart] = useState<number | null>(null);
   const [tracked, setTracked] = useState<BotGroupTrackedMention[]>([]);
   const selectionRef = useRef({ start: 0, end: 0 });
+  const textRef = useRef(text);
+  textRef.current = text;
   const pendingCaretRef = useRef<number | null>(null);
   // @ list: glide highlight on the aria-selected option; arrow keys stay in the textarea.
   const listRef = useMenuPanel<HTMLDivElement>(undefined, {
@@ -93,7 +102,7 @@ export function useBotGroupMentionPicker({
   // You never name yourself: the host drops you from the targets (as on mobile).
   const mentionMembers = useMemo(() => withoutSelf(members), [members]);
   const activeMembers = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
-  const query = focused ? findBotGroupMentionQuery(text, caret) : null;
+  const query = focused && !disabled ? findBotGroupMentionQuery(text, caret) : null;
   const options = useMemo<MentionOption[]>(() => {
     if (!query || activeMembers.length === 0) return [];
     const everyone: MentionOption[] =
@@ -136,7 +145,7 @@ export function useBotGroupMentionPicker({
   };
 
   const choose = (option: MentionOption | undefined) => {
-    if (!option || !query) return;
+    if (disabledRef.current || !option || !query) return;
     const next = insertBotGroupMention(text, { start: query.start, end: caret }, option.label);
     // A pick obeys the field's own maxLength, as typing does (a programmatic value would skip it).
     const limit = textareaRef.current?.maxLength ?? -1;
@@ -144,6 +153,7 @@ export function useBotGroupMentionPicker({
     // Re-picking a namesake can leave the text as is; then no re-render moves the caret.
     if (next.text === text) textareaRef.current?.setSelectionRange(next.caret, next.caret);
     else pendingCaretRef.current = next.caret;
+    textRef.current = next.text;
     onTextChange(next.text);
     selectionRef.current = { start: next.caret, end: next.caret };
     setCaret(next.caret);
@@ -163,14 +173,18 @@ export function useBotGroupMentionPicker({
     textareaRef.current?.focus();
   };
 
-  /** The textarea's new value; the caret is read from the element, which already has it. */
-  const onChange = (value: string) => {
-    const nextCaret = textareaRef.current?.selectionStart ?? value.length;
-    const editStart = Math.min(selectionRef.current.start, nextCaret);
-    const editEnd = selectionRef.current.end;
+  /** Typing reads the updated DOM; programmatic edits supply the previous range. */
+  const onChange = (value: string, edit?: { start: number; end: number; caret: number }) => {
+    const nextCaret = edit?.caret ?? textareaRef.current?.selectionStart ?? value.length;
+    const editStart = edit?.start ?? Math.min(selectionRef.current.start, nextCaret);
+    const editEnd = edit?.end ?? selectionRef.current.end;
+    // Submitted and refined events can arrive before React commits either value.
+    const previousText = textRef.current;
+    textRef.current = value;
+    if (edit) pendingCaretRef.current = nextCaret;
     onTextChange(value);
     setTracked((current) =>
-      retainBotGroupTrackedMentions(text, value, {
+      retainBotGroupTrackedMentions(previousText, value, {
         members: mentionMembers,
         allLabels: resolveLabels, allBotLabels,
         tracked: current,
@@ -186,7 +200,7 @@ export function useBotGroupMentionPicker({
   };
 
   /** Arrow keys, Enter / Tab and Esc while the list is open; true when the key was used. */
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>): boolean => {
     if (!open || !query) return false;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
@@ -288,5 +302,8 @@ export function useBotGroupMentionPicker({
     /** Resolve who the text addresses, using the picks; `roster` defaults to the current members. */
     resolve: (value: string, roster: readonly BotGroupMemberView[] = members) =>
       resolveBotGroupMentions(value, { members: withoutSelf(roster), allLabels: resolveLabels, allBotLabels, tracked }),
+    /** Typed names several members share: they name nobody, so sending asks to pick from the list. */
+    ambiguous: (value: string, roster: readonly BotGroupMemberView[] = members) =>
+      ambiguousBotGroupMentionLabels(value, { members: withoutSelf(roster), allLabels: resolveLabels, allBotLabels, tracked }),
   };
 }

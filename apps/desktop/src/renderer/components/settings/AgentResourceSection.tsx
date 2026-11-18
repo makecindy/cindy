@@ -9,23 +9,17 @@ import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
  * 显示为自定义即可,不做迁移。
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { SettingsTextInput } from './SettingsTextInput';
-import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_DIVIDER_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-} from './settingsRowClasses';
 
 type Wire = AgentResourceSettingsWire;
 type SettingKey = 'maxConcurrentCommands' | 'processPriority' | 'capToolchainThreads';
@@ -36,14 +30,6 @@ const MAX_CONCURRENT_CAP = 64;
 
 /** 档位提示的全部取值(含 activePreset 为 null 时的 custom);顺序即 DOM 叠放顺序。 */
 const PRESET_HINT_KEYS = ['full', 'balanced', 'background', 'custom'] as const;
-
-/** 带分割线的多行卡片:卡片自身不留内边距,由每行 `px-4 py-4` 承担(房规见 SubagentModelSection 卡 2)。 */
-const CARD_CLASS = SETTINGS_CARD_CLASS;
-/** 卡片内一行:左侧标签 + 说明,右侧控件相对整块垂直居中(设置页各 section 通用版式)。 */
-const ROW_CLASS = SETTINGS_ROW_CLASS;
-const ROW_LABEL_CLASS = SETTINGS_ROW_LABEL_CLASS;
-const ROW_HINT_CLASS = SETTINGS_ROW_HINT_CLASS;
-const DIVIDER_CLASS = SETTINGS_ROW_DIVIDER_CLASS;
 
 /** 数字输入复用标准 Input md 档，设置封装保留旧局部主题覆盖，原生步进器不自绘。 */
 
@@ -93,6 +79,7 @@ export function AgentResourceSection() {
   const settingsRevision = useAppSettingsRevision('agent-resources');
   const { t } = useTranslation();
   const [settings, setSettings] = useState<Wire | null>(null);
+  const maxInputId = useId();
   // 预设三键写入的 in-flight 闸:防并发点击交错出"杂交档位"落盘。
   const [applyingPreset, setApplyingPreset] = useState(false);
   // 并发上限输入框的本地草稿:一切编辑中间态(清空、"10"删掉首位剩"0"等)都
@@ -198,145 +185,141 @@ export function AgentResourceSection() {
   if (!settings) return null;
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      {/* min-h 锁住标题行高度:DefaultOverrideControls 未自定义时返回 null,若不预留
-          高度,首次改动让「已自定义」+ 恢复按钮(30px)出现会把整段往下顶,列表抖一下。 */}
-      <div className="flex min-h-[30px] items-center justify-between gap-3">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.agentResource.title')}
-        </h2>
-        <DefaultOverrideControls
-          isCustomized={Boolean(settings.isCustomized)}
-          disabled={applyingPreset}
-          onReset={() => {
-            if (applyingPreset) return;
-            void window.electronAPI.maker
-              .agentResourceSettingsReset()
-              .then((next) => {
-                applyServerState(next);
-                toast.success(t('settings.defaults.restored'));
-              })
-              .catch(() => {
-                toast.error(t('settings.defaults.restoreFailed'));
-              });
-          }}
-        />
-      </div>
-
+    <SettingsSection
+      title={t('settings.agentResource.title')}
+      action={
+        // min-h 锁住标题行高度:DefaultOverrideControls 未自定义时返回 null,若不预留
+        // 高度,首次改动让「已自定义」+ 恢复按钮(30px)出现会把整段往下顶,列表抖一下。
+        <div className="flex min-h-[30px] items-center">
+          <DefaultOverrideControls
+            isCustomized={Boolean(settings.isCustomized)}
+            disabled={applyingPreset}
+            onReset={() => {
+              if (applyingPreset) return;
+              void window.electronAPI.maker
+                .agentResourceSettingsReset()
+                .then((next) => {
+                  applyServerState(next);
+                  toast.success(t('settings.defaults.restored'));
+                })
+                .catch(() => {
+                  toast.error(t('settings.defaults.restoreFailed'));
+                });
+            }}
+          />
+        </div>
+      }
+    >
       <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
         {t('settings.agentResource.description')}
       </p>
 
-      <div className={CARD_CLASS}>
+      <SettingsCard>
         {/* 预设条:三个字段的组合快捷方式;都不匹配 = 自定义,均不高亮。
             这行提示随档位变化,四语长度差异极大(en full 162 字符 vs custom 53),会在不同
             行数间跳变、把下方各行顶动。防抖靠下面的 grid 叠放 —— 四段提示占同一格,容器
             高度恒等于四者中最高的一段,与窗口宽度和语言都无关(固定 min-height 只是下限,
             长文案照样会溢出撑高)。因为与宽度无关,提示就留在左列、不必独占整行,分段控件
             才能像同卡其它行一样相对「标签 + 说明」整块垂直居中。 */}
-        <div className={cn(ROW_CLASS, 'cindy-segmented-row')}>
-          <div className="flex min-w-0 flex-col gap-1">
-            <p id={agentResourceSettings.preset.targetId} className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-              {t(agentResourceSettings.preset.titleKey)}
-            </p>
-            {/* 四段提示全部常挂载、叠在同一个 grid 格里,只有当前档位那段可见(其余
-                visibility:hidden —— 不进无障碍树、不可聚焦,但仍参与撑高)。 */}
-            <div className="grid">
+        <SettingsRow
+          className="cindy-segmented-row"
+          title={<span id={agentResourceSettings.preset.targetId}>{t(agentResourceSettings.preset.titleKey)}</span>}
+          hint={
+            // 四段提示全部常挂载、叠在同一个 grid 格里,只有当前档位那段可见(其余
+            // visibility:hidden —— 不进无障碍树、不可聚焦,但仍参与撑高)。
+            <span className="grid">
               {PRESET_HINT_KEYS.map((key) => {
                 const shown = (activePreset ?? 'custom') === key;
                 return (
-                  <p
+                  <span
                     key={key}
                     data-preset-hint={key}
                     aria-hidden={!shown || undefined}
-                    className={cn(ROW_HINT_CLASS, 'col-start-1 row-start-1', !shown && 'invisible')}
+                    className={cn('col-start-1 row-start-1', !shown && 'invisible')}
                   >
                     {t(`settings.agentResource.presetHints.${key}`)}
-                  </p>
+                  </span>
                 );
               })}
-            </div>
-          </div>
-          <SegmentedControl data-setting-id={agentResourceSettings.preset.id}
-            aria-label={t(agentResourceSettings.preset.titleKey)}
-            value={activePreset}
-            onValueChange={(id) => void applyPreset(id)}
-            options={agentResourceSettings.preset.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
-            disabled={applyingPreset}
-          />
-        </div>
-
-        <div className={DIVIDER_CLASS} />
+            </span>
+          }
+          trailing={
+            <SegmentedControl data-setting-id={agentResourceSettings.preset.id}
+              aria-label={t(agentResourceSettings.preset.titleKey)}
+              value={activePreset}
+              onValueChange={(id) => void applyPreset(id)}
+              options={agentResourceSettings.preset.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
+              disabled={applyingPreset}
+            />
+          }
+        />
 
         {/* 并发命令上限 */}
-        <label className={ROW_CLASS}>
-          <span className="flex min-w-0 flex-col gap-1">
-            <span id={agentResourceSettings.maxConcurrent.targetId} className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+        <SettingsRow
+          title={
+            <label id={agentResourceSettings.maxConcurrent.targetId} htmlFor={maxInputId}>
               {t(agentResourceSettings.maxConcurrent.titleKey)}
-            </span>
-            <span className={ROW_HINT_CLASS}>{t(agentResourceSettings.maxConcurrent.descriptionKey)}</span>
-          </span>
-          <SettingsTextInput data-setting-id={agentResourceSettings.maxConcurrent.id}
-            type="number"
-            min={0}
-            max={MAX_CONCURRENT_CAP}
-            disabled={applyingPreset}
-            value={maxDraft ?? String(settings.maxConcurrentCommands)}
-            onChange={setMaxDraft}
-            onBlur={() => {
-              // 唯一提交点(DESIGN §14.3:Settings 单行编辑器 Enter 不得提交):
-              // 仅 0..64 的整数且与当前值不同才写盘;非法/未变草稿作废,
-              // 回显权威值(clamp 会绕过 main 侧硬拒语义,一律拒绝不改写)
-              const text = (maxDraft ?? '').trim();
-              setMaxDraft(null);
-              if (!/^\d+$/.test(text)) return;
-              const raw = Number(text);
-              if (raw > MAX_CONCURRENT_CAP) return;
-              if (raw === settings.maxConcurrentCommands) return;
-              persist('maxConcurrentCommands', raw);
-            }}
-            size="md"
-            className="w-24 shrink-0"
-          />
-        </label>
-
-        <div className={DIVIDER_CLASS} />
+            </label>
+          }
+          hint={<span id={`${maxInputId}-hint`}>{t(agentResourceSettings.maxConcurrent.descriptionKey)}</span>}
+          trailing={
+            <SettingsTextInput data-setting-id={agentResourceSettings.maxConcurrent.id}
+              id={maxInputId}
+              aria-describedby={`${maxInputId}-hint`}
+              type="number"
+              min={0}
+              max={MAX_CONCURRENT_CAP}
+              disabled={applyingPreset}
+              value={maxDraft ?? String(settings.maxConcurrentCommands)}
+              onChange={setMaxDraft}
+              onBlur={() => {
+                // 唯一提交点(DESIGN §14.3:Settings 单行编辑器 Enter 不得提交):
+                // 仅 0..64 的整数且与当前值不同才写盘;非法/未变草稿作废,
+                // 回显权威值(clamp 会绕过 main 侧硬拒语义,一律拒绝不改写)
+                const text = (maxDraft ?? '').trim();
+                setMaxDraft(null);
+                if (!/^\d+$/.test(text)) return;
+                const raw = Number(text);
+                if (raw > MAX_CONCURRENT_CAP) return;
+                if (raw === settings.maxConcurrentCommands) return;
+                persist('maxConcurrentCommands', raw);
+              }}
+              size="md"
+              className="w-24 shrink-0"
+            />
+          }
+        />
 
         {/* 进程优先级 */}
-        <div className={cn(ROW_CLASS, 'cindy-segmented-row')}>
-          <div className="flex min-w-0 flex-col gap-1">
-            <p id={agentResourceSettings.priority.targetId} className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-              {t(agentResourceSettings.priority.titleKey)}
-            </p>
-            <p className={ROW_HINT_CLASS}>{t(agentResourceSettings.priority.descriptionKey)}</p>
-          </div>
-          <SegmentedControl data-setting-id={agentResourceSettings.priority.id}
-            aria-label={t(agentResourceSettings.priority.titleKey)}
-            value={settings.processPriority}
-            onValueChange={(tier) => persist('processPriority', tier)}
-            options={agentResourceSettings.priority.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
-            disabled={applyingPreset}
-          />
-        </div>
-
-        <div className={DIVIDER_CLASS} />
+        <SettingsRow
+          className="cindy-segmented-row"
+          title={<span id={agentResourceSettings.priority.targetId}>{t(agentResourceSettings.priority.titleKey)}</span>}
+          hint={t(agentResourceSettings.priority.descriptionKey)}
+          trailing={
+            <SegmentedControl data-setting-id={agentResourceSettings.priority.id}
+              aria-label={t(agentResourceSettings.priority.titleKey)}
+              value={settings.processPriority}
+              onValueChange={(tier) => persist('processPriority', tier)}
+              options={agentResourceSettings.priority.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
+              disabled={applyingPreset}
+            />
+          }
+        />
 
         {/* 工具链限核 */}
-        <div className={ROW_CLASS}>
-          <div className="flex min-w-0 flex-col gap-1">
-            <p id={agentResourceSettings.capThreads.targetId} className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-              {t(agentResourceSettings.capThreads.titleKey)}
-            </p>
-            <p className={ROW_HINT_CLASS}>{t(agentResourceSettings.capThreads.descriptionKey)}</p>
-          </div>
-          <Switch data-setting-id={agentResourceSettings.capThreads.id}
-            checked={settings.capToolchainThreads}
-            disabled={applyingPreset}
-            onCheckedChange={(next) => persist('capToolchainThreads', next)}
-            aria-label={t(agentResourceSettings.capThreads.titleKey)}
-          />
-        </div>
-      </div>
-    </div>
+        <SettingsRow
+          title={<span id={agentResourceSettings.capThreads.targetId}>{t(agentResourceSettings.capThreads.titleKey)}</span>}
+          hint={t(agentResourceSettings.capThreads.descriptionKey)}
+          trailing={
+            <Switch data-setting-id={agentResourceSettings.capThreads.id}
+              checked={settings.capToolchainThreads}
+              disabled={applyingPreset}
+              onCheckedChange={(next) => persist('capToolchainThreads', next)}
+              aria-label={t(agentResourceSettings.capThreads.titleKey)}
+            />
+          }
+        />
+      </SettingsCard>
+    </SettingsSection>
   );
 }

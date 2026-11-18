@@ -51,22 +51,22 @@ export function useLocalHtmlAutoReload({
 
     const initialSnapshot = makerChatStore.getSnapshot(sessionId);
     let wasRunning = isTurnRunning(initialSnapshot.agentStatus);
-    let turnStartMessageIndex = wasRunning
+    // History retirement can remove any older row while a turn is running.
+    // Remember prior identities, not array offsets or references to large bodies.
+    let priorMessageIds = new Set(initialSnapshot.messages.slice(0, wasRunning
       ? latestUserMessageIndex(initialSnapshot.messages)
-      : initialSnapshot.messages.length;
+      : initialSnapshot.messages.length).map(message => message.clientId));
     return makerChatStore.subscribe(sessionId, () => {
       const snapshot = makerChatStore.getSnapshot(sessionId);
       const running = isTurnRunning(snapshot.agentStatus);
       if (!wasRunning && running) {
-        turnStartMessageIndex = snapshot.messages.length;
+        priorMessageIds = new Set(snapshot.messages.map(message => message.clientId));
       } else if (wasRunning && !running) {
-        const currentTurnMessages = snapshot.messages.slice(
-          Math.min(turnStartMessageIndex, snapshot.messages.length),
-        );
+        const currentTurnMessages = snapshot.messages.filter(message => !priorMessageIds.has(message.clientId));
         if (wasFileChangedInLastTurn(currentTurnMessages, workdir, absPath)) {
           reloadRef.current();
         }
-        turnStartMessageIndex = snapshot.messages.length;
+        priorMessageIds.clear();
       }
       wasRunning = running;
     });

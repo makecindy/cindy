@@ -1124,24 +1124,28 @@ export function isUsingCachedClientEndpoints(): boolean {
  * 炸出来(随包兜底也必须先经过启动解析;--smoke-test 旁路不消费端点)。
  */
 function runtimeEndpoint(endpoints: ClientEndpointMap, key: ClientEndpointKey, region: ClientEndpointRegion): string {
-  const local = !app.isPackaged && key === 'deviceLinkApiBaseUrl'
-    ? (region === 'cn'
-      ? process.env.XDT_DEVICE_LINK_CN_LOCAL_URL ?? process.env.XDT_DEVICE_LINK_LOCAL_URL
-      : process.env.XDT_DEVICE_LINK_GLOBAL_LOCAL_URL)?.trim()
-    : undefined;
+  // A personal build is not a test-service opt-in. Only explicit development
+  // overrides may replace the shared Webhook endpoint.
+  const local = app.isPackaged ? undefined : key === 'webhookApiBaseUrl'
+    ? (region === 'cn' ? process.env.XDT_WEBHOOK_CN_LOCAL_URL : process.env.XDT_WEBHOOK_GLOBAL_LOCAL_URL)?.trim()
+    : key === 'deviceLinkApiBaseUrl'
+      ? (region === 'cn'
+        ? process.env.XDT_DEVICE_LINK_CN_LOCAL_URL ?? process.env.XDT_DEVICE_LINK_LOCAL_URL
+        : process.env.XDT_DEVICE_LINK_GLOBAL_LOCAL_URL)?.trim()
+      : undefined;
   if (!local) return endpoints[key];
   let url: URL;
   try {
     url = new URL(local);
   } catch {
-    throw new Error('Device-link development override requires a loopback HTTP(S) URL with an explicit port');
+    throw new Error('Development endpoint override requires a loopback HTTP(S) URL with an explicit port');
   }
   if (
     !['http:', 'https:'].includes(url.protocol) ||
     !['127.0.0.1', '[::1]'].includes(url.hostname) ||
     !url.port || url.username || url.password || url.pathname !== '/' || url.search || url.hash
   ) {
-    throw new Error('Device-link development override requires a loopback HTTP(S) URL with an explicit port');
+    throw new Error('Development endpoint override requires a loopback HTTP(S) URL with an explicit port');
   }
   return url.origin;
 }

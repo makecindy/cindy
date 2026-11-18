@@ -76,4 +76,14 @@ describe('create_task_worktree compensation', () => {
     await expect(createTaskWorktreeHost()({ callerSessionId: 's5' })).resolves.toMatchObject({ ok: true, created: false });
     expect(h.recycle).not.toHaveBeenCalled();
   });
+
+  // #9513:the explicit base ref must reach the worktree preparation, not be dropped by the host.
+  it('forwards the explicit base ref to the worktree preparation', async () => {
+    h.rows = [{ workingDir: '/repo', status: 'active', source: null }, { status: 'active', source: null }];
+    await createTaskWorktreeHost()({ callerSessionId: 's6', baseRef: 'release/2.x' });
+    expect(h.prepare).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sessionId: 's6', baseRef: 'release/2.x' }),
+    );
+  });
 });

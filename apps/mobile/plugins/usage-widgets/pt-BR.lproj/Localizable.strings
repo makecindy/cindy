@@ -7,3 +7,13 @@
 "Choose which computer this widget shows, which accounts come first and which to hide. Other accounts, including ones added later, follow in that computer's order." = "Escolha qual computador este widget mostra, quais contas vêm primeiro e quais ocultar. As demais contas, incluindo as adicionadas depois, seguem na ordem desse computador.";
 "Accounts first" = "Contas primeiro";
 "Hidden accounts" = "Contas ocultas";
+"Accounts" = "Contas";
+"Choose which accounts come first and which to hide. Other accounts, including ones added later, follow in the menu bar's order." = "Escolha quais contas vêm primeiro e quais ocultar. As demais, incluindo as adicionadas depois, seguem na ordem da barra de menus.";
+
+"activity.waitingForUpdate" = "Aguardando atualização";
+"activity.lastUpdated" = "Última atualização";
+
+"activity.toReview" = "Para revisar";
+"activity.inProgress" = "Em andamento";
+"activity.pendingCount %lld" = "Requer sua atenção %lld";
+"activity.unreadCount %lld" = "Resultados não lidos %lld";

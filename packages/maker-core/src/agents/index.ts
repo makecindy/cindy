@@ -47,6 +47,16 @@ export {
   type ImageResizerLogger,
 } from './shared/image-resizer.js';
 export {
+  compressImageBuffer,
+  detectSupportedImageMime,
+  imageCompressionCacheKey,
+  type ImageCompressionBudget,
+  type ImageCompressionRequest,
+  type ImageCompressionResult,
+  type ImageCompressionRoute,
+  type SupportedImageMime,
+} from './shared/image-compressor.js';
+export {
   parseReconnectAttemptMessage,
   type ReconnectAttempt,
 } from './shared/network-error.js';
@@ -101,6 +111,7 @@ export { isNetworkishErrorMessage, PI_GATEWAY_DROP_REASON } from './shared/netwo
 export {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
   AUTO_REVIEW_UNAVAILABLE_CODE,
+  AUTO_REVIEW_NO_AVAILABLE_MODEL_CODE,
   AUTO_REVIEW_UNAVAILABLE_METADATA_KEY,
   AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
   AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS,
@@ -111,6 +122,8 @@ export {
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
+  createAutoReviewUnavailableNotice,
+  isAutoReviewNoAvailableModelNotice,
   annotatePermissionRequestForUnavailableReview,
   annotatePermissionRequestForAutoReview,
   AUTO_REVIEW_REASON_METADATA_KEY,
@@ -126,6 +139,8 @@ export {
   isAutoReviewUnavailableNotice,
   isSystemPermissionDenialReason,
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
+  MAX_AUTO_REVIEW_AGENT_CONTEXT_CHARS,
+  type AutoReviewAgentContext,
   type AutoReviewDecision,
   type AutoReviewDelegate,
   type AutoReviewRequest,

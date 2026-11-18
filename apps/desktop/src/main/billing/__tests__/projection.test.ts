@@ -209,6 +209,48 @@ describe('billing response projection', () => {
     });
   });
 
+  // 契约：礼品卡来源越过主进程边界时只保留类型与赠送方；来源只是展示信息，
+  // 认不出或不合规时按没有来源处理，不能让整份余额读取失败。
+  it('keeps a gift card source on a grant and drops sources it cannot vouch for', () => {
+    const grant = (grantId: string, source: unknown) => ({
+      grantId,
+      displayName: null,
+      originalAmount: '1',
+      usedAmount: '0',
+      remainingAmount: '1',
+      expiresAt: '2026-08-01T00:00:00Z',
+      state: 'active',
+      ...(source === undefined ? {} : { source }),
+    });
+    const sources: unknown[] = [
+      { type: 'gift_card', senderName: 'Cindy Team', cardId: 'internal' },
+      undefined,
+      null,
+      { type: 'coupon', senderName: 'Someone' },
+      { type: 'gift_card', senderName: '' },
+      { type: 'gift_card', senderName: 'x'.repeat(81) },
+      { type: 'gift_card' },
+      'gift_card',
+    ];
+    const usage = projectModelAccessCreditUsage({
+      available: String(sources.length),
+      plan: { remaining: '0', used: '0', total: '0' },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: String(sources.length), used: '0', total: String(sources.length) },
+      promotionalGrants: sources.map((source, index) => grant(`grant-${index}`, source)),
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'OBSERVED',
+      ledgerUpdatedAt: null,
+      scale: 9,
+      observedAt: '2026-07-23T12:00:00Z',
+    });
+
+    expect(usage.promotionalGrants[0].source).toEqual({ type: 'gift_card', senderName: 'Cindy Team' });
+    for (const projected of usage.promotionalGrants.slice(1)) {
+      expect(projected).not.toHaveProperty('source');
+    }
+  });
+
   it('rejects inconsistent pool identities and dishonest promotional histories', () => {
     const valid = {
       available: '6',

@@ -13,15 +13,6 @@ const mocks = vi.hoisted(() => ({
   ownerScopeKey: 'owner-a',
 }));
 
-vi.mock('electron', () => ({
-  app: { getPath: () => mocks.userDataRoot },
-  BrowserWindow: {
-    getAllWindows: () => [{
-      isDestroyed: () => false,
-      webContents: { send: mocks.rendererSend },
-    }],
-  },
-}));
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({ query: mocks.query }),
 }));
@@ -35,7 +26,9 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
   tapWindowBroadcast: mocks.send,
 }));
 
+import { configureUserDataDir } from '../../userDataPath';
 import {
+  setTurnChangeSetWindowBroadcast,
   TurnChangeSetActionError,
   applyTurnChangeSetAction,
   beginTurnChangeSet,
@@ -59,6 +52,8 @@ describe('turn change-set sidecar store', () => {
     workdir = path.join(root, 'workspace');
     await fs.mkdir(workdir);
     mocks.userDataRoot = path.join(root, 'user-data');
+    configureUserDataDir(mocks.userDataRoot);
+    setTurnChangeSetWindowBroadcast((payload) => mocks.rendererSend(payload));
     mocks.query.mockReset();
     mocks.send.mockReset();
     mocks.rendererSend.mockReset();
@@ -79,6 +74,7 @@ describe('turn change-set sidecar store', () => {
   });
 
   afterEach(async () => {
+    setTurnChangeSetWindowBroadcast(null);
     clearPendingTurnChangeSets('session-1');
     clearPendingTurnChangeSets('session-2');
     await fs.rm(root, { recursive: true, force: true });
@@ -196,6 +192,38 @@ describe('turn change-set sidecar store', () => {
       incompleteReasons: ['provider-diff-conflict'],
       isReversible: true,
       fileCount: 1,
+    });
+  });
+
+  it('treats a Codex diff dropped at the app-server line limit as too large, not as the previous snapshot', async () => {
+    await beginTurnChangeSet({
+      sessionId: 'session-1',
+      anchorClientId: 'user-1',
+      provider: 'codex',
+      cwd: workdir,
+    });
+    noteTurnDiffEvent('session-1', {
+      type: 'turn_diff',
+      source: 'codex',
+      data: {
+        turnId: 'turn-oversized',
+        cwd: workdir,
+        diff: ['diff --git a/early.ts b/early.ts', '--- a/early.ts', '+++ b/early.ts', '@@ -1 +1 @@', '-old', '+new', ''].join('\n'),
+      },
+    });
+    noteTurnDiffEvent('session-1', {
+      type: 'turn_diff',
+      source: 'codex',
+      data: { turnId: 'turn-oversized', cwd: workdir, diff: '', omitted: 'oversized' },
+    });
+    finalizeTurnChangeSet('session-1', 'turn-oversized', 'complete');
+
+    await vi.waitFor(async () => expect(await listTurnChangeSets('session-1')).toHaveLength(1));
+    const [summary] = await listTurnChangeSets('session-1');
+    expect(summary).toMatchObject({
+      state: 'partial',
+      incompleteReasons: ['diff-too-large'],
+      fileCount: 0,
     });
   });
 

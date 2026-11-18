@@ -40,6 +40,7 @@ import {
 } from '@/hooks/useDeviceProviders';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { AgentKind } from '@/lib/ccAgent.types';
+import { resolveVoiceInputReadinessRecovery } from '@/voice-input/readinessRecovery';
 
 interface DialogCopy {
   title: string;
@@ -54,9 +55,7 @@ type SettingsTab = 'api-keys' | 'connections' | 'providers' | 'about';
 
 type CopyKey =
   | 'no-source'
-  | 'voice-api-key-unauth'
-  | 'voice-direct-api-key-unauth'
-  | 'codex-voice-unauth'
+  | 'cc-binary-missing'
   | 'codex-binary-missing'
   | 'pi-binary-missing';
 
@@ -71,27 +70,13 @@ function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
       cancelText: t('logic.confirm.cancel'),
       settingsTab: 'providers',
     },
-    'voice-api-key-unauth': {
-      title: t('logic.confirm.voiceApiKeyAuthTitle'),
-      description: t('logic.confirm.voiceApiKeyAuthDescription'),
+    // 断网首装后 Claude Code 尚未安装:「关于」页联网检查版本时会触发后台补装。
+    'cc-binary-missing': {
+      title: t('logic.confirm.ccBinaryMissingTitle'),
+      description: t('logic.confirm.ccBinaryMissingDescription'),
       confirmText: t('logic.confirm.goToSettings'),
       cancelText: t('logic.confirm.cancel'),
-      settingsTab: 'providers',
-    },
-    'voice-direct-api-key-unauth': {
-      title: t('logic.confirm.voiceDirectApiKeyAuthTitle'),
-      description: t('logic.confirm.voiceDirectApiKeyAuthDescription'),
-      confirmText: t('logic.confirm.goToSettings'),
-      cancelText: t('logic.confirm.cancel'),
-      // 「工具密钥」页已下架(2026-07-13),直连 key 引导落到模型供应商页。
-      settingsTab: 'providers',
-    },
-    'codex-voice-unauth': {
-      title: t('logic.confirm.codexVoiceAuthTitle'),
-      description: t('logic.confirm.codexVoiceAuthDescription'),
-      confirmText: t('logic.confirm.goToSettings'),
-      cancelText: t('logic.confirm.cancel'),
-      settingsTab: 'providers',
+      settingsTab: 'about',
     },
     'codex-binary-missing': {
       title: t('logic.confirm.codexBinaryMissingTitle'),
@@ -110,20 +95,12 @@ function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
   };
 }
 
-export function pickVoiceInputDialogCopy(
-  copy: Record<CopyKey, DialogCopy>,
-  readiness: { auth: 'api-key' | 'codex'; settingsTab: SettingsTab },
-): DialogCopy {
-  if (readiness.auth === 'codex') return copy['codex-voice-unauth'];
-  if (readiness.settingsTab === 'providers') return copy['voice-api-key-unauth'];
-  return copy['voice-direct-api-key-unauth'];
-}
-
 function pickCopy(
   copy: Record<CopyKey, DialogCopy>,
   vendor: AgentKind,
   readiness: Readiness,
 ): DialogCopy | null {
+  if (readiness === 'binary-missing' && vendor === 'cc') return copy['cc-binary-missing'];
   if (readiness === 'binary-missing' && vendor === 'codex') return copy['codex-binary-missing'];
   if (readiness === 'binary-missing' && vendor === 'pi') return copy['pi-binary-missing'];
   if (readiness !== 'unauthenticated') return null;
@@ -141,7 +118,7 @@ function pickCopy(
  * 自定义供应商),会把「没登 Codex 但配了其他 GPT 来源」的被控端误判成未登录。
  *
  * 三个输入均可为 null(= 对应信息在已确认的旧端兼容路径里不可用):
- *   - binaryReady:codex 的运行时前提,false 优先返回 binary-missing(cc 随包,不参与);
+ *   - binaryReady:运行时前提,false 优先返回 binary-missing(断网首装时 cc 也可能缺失);
  *   - sourceReady:provider 维度来源判定,可用时是唯一真相;
  *   - authReady:老被控端(allowlist 无 maker:provider:list)的回退口径,仅在
  *     sourceReady 不可用时消费,维持旧行为;
@@ -156,9 +133,7 @@ export function deriveRemoteReadiness(
     authReady: boolean | null;
   },
 ): Readiness {
-  if (vendor !== 'cc' && input.binaryReady === false) {
-    return 'binary-missing';
-  }
+  if (input.binaryReady === false) return 'binary-missing';
   if (input.sourceReady !== null) return input.sourceReady ? 'ready' : 'unauthenticated';
   if (input.authReady !== null) return input.authReady ? 'ready' : 'unauthenticated';
   return 'ready';
@@ -216,8 +191,10 @@ interface UseVendorAuthGateReturn {
    *   - unauthenticated → 弹 confirmDialog
    *       - 用户点确认 → navigate 到 /settings?tab=...,返回 { proceed: false }
    *       - 用户点取消 → 直接返回 { proceed: false }
-   *   - codex binary-missing → 复用同一弹窗提示去连接页处理
+   *   - binary-missing → 复用同一弹窗提示去对应设置页处理
    *   - 其他 (ready / loading) → { proceed: true },不拦截
+   *
+   * SSH:传 `remoteHostId` 时 Agent 在远端主机上运行,跳过本机运行时检查,只看来源。
    *
    * 语音输入会走 main 端 getReadiness,由当前 ASR provider 决定是检查
    * Codex 连接还是 API Key。
@@ -229,7 +206,7 @@ interface UseVendorAuthGateReturn {
    */
   checkAndConfirm: (
     vendor: AgentKind,
-    options?: { purpose?: GatePurpose; deviceId?: string; existingSessionRoute?: boolean },
+    options?: { purpose?: GatePurpose; deviceId?: string; existingSessionRoute?: boolean; remoteHostId?: string | null },
   ) => Promise<GateResult>;
 }
 
@@ -245,25 +222,25 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
   const checkAndConfirm = useCallback(
     async (
       vendor: AgentKind,
-      options?: { purpose?: GatePurpose; deviceId?: string; existingSessionRoute?: boolean },
+      options?: { purpose?: GatePurpose; deviceId?: string; existingSessionRoute?: boolean; remoteHostId?: string | null },
     ): Promise<GateResult> => {
       if (options?.purpose === 'voice-input') {
         const cached = window.electronAPI.voiceInput.getReadinessCached();
         const readiness = cached?.ok ? cached : await window.electronAPI.voiceInput.getReadiness();
         if (readiness.ok) return { proceed: true };
 
-        const dialogCopy = pickVoiceInputDialogCopy(copy, readiness);
+        const recovery = resolveVoiceInputReadinessRecovery(readiness, readiness.serviceMode);
         const ok = await confirm({
-          title: dialogCopy.title,
-          description: dialogCopy.description,
-          confirmText: dialogCopy.confirmText,
-          cancelText: dialogCopy.cancelText,
+          title: t('settings.voiceInput.title'),
+          description: t(recovery.messageKey),
+          confirmText: t('logic.confirm.goToSettings'),
+          cancelText: t('logic.confirm.cancel'),
           // 主操作("前往设置")是非破坏性的,默认焦点交给它,
           // 否则 Radix 默认聚焦 Cancel,会让"取消"天然带 focus ring。
           autoFocusConfirm: true,
         });
         if (ok) {
-          navigate(`/settings?tab=${readiness.settingsTab}`);
+          navigate(`/settings?tab=${recovery.settingsTab}`);
         }
         return { proceed: false };
       }
@@ -281,7 +258,8 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         // 模型选择器已读到的来源快照(被控端来源变化推送会令其失效)显示已有可用来源时直接复用:
         // provider:list 经隧道实测 1–5 秒,重拉一遍会整段挡在远程新建任务的第一步。
         // 快照缺失或显示未就绪时仍实时探测,旧快照只能放行、不能误弹「未连接」。
-        // cc 不看 binary 轴,有来源结论即可;codex / pi 仍需 agent:status 查二进制。
+        // cc 有来源快照时跳过 binary 查询以免挡住远程新建,缺失运行时由被控端启动任务报错兜底;
+        // codex / pi 仍需 agent:status 查二进制。
         const cachedProviders = getCachedDeviceProviders(deviceId);
         const cachedSourceReady =
           cachedProviders !== null &&
@@ -339,7 +317,9 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         if (remoteReadiness === 'binary-missing') {
           title = t(vendor === 'pi'
             ? 'logic.confirm.remotePiBinaryMissingTitle'
-            : 'logic.confirm.remoteCodexBinaryMissingTitle');
+            : vendor === 'cc'
+              ? 'logic.confirm.remoteCcBinaryMissingTitle'
+              : 'logic.confirm.remoteCodexBinaryMissingTitle');
           description = t('logic.confirm.remoteAuthDescription', { device });
         } else if (vendor === 'codex') {
           title = t('logic.confirm.remoteCodexNoSourceTitle');
@@ -363,6 +343,8 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       // 已建会话的发送门禁计入 suspended 来源(见 useVendorReadiness 注释);草稿不传。
       const readiness = await target.revalidate({
         includeSuspended: options?.existingSessionRoute === true,
+        // SSH 任务的 Agent 在远端主机上运行,不需要本机运行时。
+        skipBinary: Boolean(options?.remoteHostId),
       });
       const dialogCopy = pickCopy(copy, vendor, readiness);
       if (!dialogCopy) return { proceed: true };

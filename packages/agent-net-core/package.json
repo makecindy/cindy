@@ -1,0 +1,8 @@
+{
+  "name": "@cindy/agent-net-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { "./node": "./wasm/node.mts" },
+  "scripts": { "build": "node build.mjs" }
+}

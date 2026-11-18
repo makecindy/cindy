@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { apiFetchRaw } from '@/api/client';
 import { installPeerUpload, installPeerUploadProbe } from '@/device-link/peerFileRegistry';
-import { OSS_ATTACHMENT_MAX_BYTES, buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
+import { installMobileAgentNetMedia } from '@/device-link/agentNetMediaRegistry';
+import { OSS_ATTACHMENT_MAX_BYTES, buildPeerAttachmentRef, parsePeerAttachmentRef, sharedTaskHostPeer } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 import { sha256MobileAttachmentFile } from '@/session/mobileAttachmentSha256';
 import { uploadMobileAttachmentFromFile } from '@/session/mobileAttachmentUpload';
@@ -20,6 +21,21 @@ const size = OSS_ATTACHMENT_MAX_BYTES + 1;
 const readFileChunk = vi.fn();
 
 describe('mobileAttachmentUpload beyond the OSS limit', () => {
+  // Unit: size preflight must preserve the same encrypted shared destination as
+  // the upload. The backend owns its encryption size limit; no GB bytes are read.
+  it('lets the encrypted shared-task backend enforce its own size bound before any legacy request', async () => {
+    const deviceId = sharedTaskHostPeer('unit-shared-task', 'host'), apiFetch = vi.fn(), cleanup = vi.fn(async () => {});
+    const snapshotFile = vi.fn(async () => ({ uri: 'file:///snapshot', size, cleanup }));
+    const upload = vi.fn(async () => { throw new Error('ENCRYPTED_SIZE_REJECTED'); });
+    const off = installMobileAgentNetMedia({ available: device => device === deviceId, requiresEncryption: () => true, upload });
+    try {
+      await expect(uploadMobileAttachmentFromFile({ name: 'movie.mov', size }, 'file:///source', {
+        deviceId, sharedTaskId: 'unit-shared-task', token: 'unit-unused-token', deps: { apiFetch, snapshotFile, readFileChunk },
+      })).rejects.toThrow('ENCRYPTED_SIZE_REJECTED');
+      expect(snapshotFile).toHaveBeenCalledOnce(); expect(upload).toHaveBeenCalledOnce();
+      expect(cleanup).toHaveBeenCalledOnce(); expect(apiFetch).not.toHaveBeenCalled();
+    } finally { off(); }
+  });
   it('sends over the direct connection without any size cap', async () => {
     const apiFetch = vi.fn();
     const peer = vi.fn(async (_device, _uri, metadata) =>

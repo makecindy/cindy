@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
   dbSeen: [] as unknown[],
 }));
 
-vi.mock('../../cindy-media/blobStore.js', () => ({
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({
   parseBlobUrl: (url: string) => {
     const match = /^cindy-media:\/\/blobs\/([0-9a-f]{64})\.(\w+)$/.exec(url);
     return match ? { hash: match[1], ext: `.${match[2]}` } : null;
@@ -50,7 +50,7 @@ vi.mock('../../cindy-media/ingest.js', () => ({
     return { url: `cindy-media://blobs/${hash}.png`, hash, ext: '.png', refIds };
   }),
 }));
-vi.mock('../../device-link/mediaTransfer.js', () => ({
+vi.mock('../../device-link/mediaTransfer.desktop.js', () => ({
   removeRemote: vi.fn(async (key: string) => { h.removed.push(key); }),
 }));
 vi.mock('../../device-link/remoteAttachment.js', () => ({

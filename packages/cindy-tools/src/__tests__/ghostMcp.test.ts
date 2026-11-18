@@ -1193,6 +1193,16 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
 });
 
 describe("cindy · media MCP 边界", () => {
+  it('binds an original paid invocation during prepare without an extra tool action', async () => {
+    const callMedia = vi.fn(async () => ({ ok: true, status: 'pending', next_action: 'poll' }));
+    const deps = fakeDeps({ callMedia });
+    expect(parsePayload(await handleMedia(deps, { action: 'prepare', source_invocation_id: 'paid-source' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    expect(callMedia).not.toHaveBeenCalled();
+    expect(parsePayload(await handleMedia(deps, { action: 'prepare', provider_id: 'relay', model_id: 'video', capability: 'video.generate', source_invocation_id: 'paid-source' })))
+      .toMatchObject({ ok: true, next_action: 'poll' });
+    expect(callMedia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: 'prepare', providerId: 'relay', modelId: 'video', capability: 'video.generate', sourceInvocationId: 'paid-source' }));
+  });
   it("imports existing screenshots without requiring a model or plugin", async () => {
     const callMedia = vi.fn(async () => ({ ok: true, xdt_image_urls: ['cindy-media://blobs/image.png'] }));
     const deps = fakeDeps({ callMedia });
@@ -1207,6 +1217,8 @@ describe("cindy · media MCP 边界", () => {
       action: "prepare",
       capability: "image.generate",
       provider_id: "openai",
+      source_agent: 'pi',
+      guide_source: 'official',
       model_id: "vendor/image-model",
     });
 
@@ -1214,6 +1226,8 @@ describe("cindy · media MCP 边界", () => {
       action: "prepare",
       capability: "image.generate",
       providerId: "openai",
+      sourceAgent: 'pi',
+      guideSource: 'official',
       modelId: "vendor/image-model",
     });
     expect(parsePayload(result)).toMatchObject({ ok: true, status: "prepared" });
@@ -1284,6 +1298,8 @@ describe("cindy_ghosts · server 构建", () => {
       "ghost_manual",
       "ghost_my_plugins",
       "media",
+      "model_decisions",
+      "model_rerank",
     ]);
     const infoDescription = server._registeredTools.ghost_info?.description ?? "";
     expect(infoDescription).toContain("精准查询单个当前可用插件");
@@ -2145,11 +2161,15 @@ describe('connect_account transport', () => {
       expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined }, expect.any(AbortSignal));
       await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'im-telegram' } });
       expect(connectAccount).toHaveBeenLastCalledWith({ kind: 'host', id: 'im-telegram', reauthorize: undefined }, expect.any(AbortSignal));
+      // #9250: the settings adapter existed, but the real MCP whitelist rejected iMessage.
+      expect(tools.tools.find(tool => tool.name === 'connect_account')?.description).toContain('im-imessage');
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'im-imessage' } });
+      expect(connectAccount).toHaveBeenLastCalledWith({ kind: 'host', id: 'im-imessage', reauthorize: undefined }, expect.any(AbortSignal));
       for (const id of ['invented', 'im-unknown']) {
         const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id } });
         expect(rejected.isError).toBe(true);
       }
-      expect(connectAccount).toHaveBeenCalledTimes(2);
+      expect(connectAccount).toHaveBeenCalledTimes(3);
     } finally { await client.close(); await server.close(); }
   });
 
@@ -2327,4 +2347,23 @@ describe('personal community author MCP transport', () => {
       expect(JSON.stringify(failed)).not.toContain('private-transport-token');
     } finally { await transport.close(); }
   });
+});
+
+// Unit: exercise the real MCP transport so the model_decisions/model_rerank schemas, their mapping onto
+// the shared Host request and the cancellation handle reach the Host; media did not cover this API.
+it('routes model_decisions and model_rerank through MCP and returns their structured answer', async () => {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+  const callEvaluate = vi.fn(async () => ({ ok: true, answers: { q: true }, estimated_cost: null }));
+  const server = createCindyGhostsMcpServer(fakeDeps({ callEvaluate }));
+  const client = new Client({ name: 'evaluation-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair(); await server.connect(st); await client.connect(ct);
+  try {
+    const args = { model_id: 'example-decision', questions: { q: { type: 'noul', instructions: 'Check' } }, state: 'text' };
+    const result = await client.callTool({ name: 'model_decisions', arguments: { action: 'request', ...args } });
+    expect(callEvaluate).toHaveBeenCalledWith({ action: 'decisions', ...args }, expect.any(AbortSignal));
+    expect(result).toMatchObject({ content: [{ type: 'text', text: expect.stringContaining('"q":true') }] });
+    await client.callTool({ name: 'model_rerank', arguments: { action: 'list_models', model_id: 'ignored' } });
+    expect(callEvaluate).toHaveBeenLastCalledWith({ action: 'list_models', api: 'rerank' }, expect.any(AbortSignal));
+  } finally { await client.close(); await server.close(); }
 });

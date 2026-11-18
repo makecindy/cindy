@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   running: new Map<string, { isRunning: boolean }>(),
   starting: new Set<string>(),
   background: new Set<string>(),
+  commandWork: new Set<string>(),
   workers: new Map<string, ReadonlySet<string>>(),
   owner: { dataOwnerId: 'owner-a', generation: 1 },
   isLoading: false,
@@ -56,6 +57,7 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({
 vi.mock('@/lib/sessionStartingStore', () => ({ useStartingSessionIds: () => state.starting }));
 vi.mock('@/lib/sessionBackgroundActivityStore', () => ({
   useBackgroundActivitySessionIds: () => state.background,
+  useBackgroundCommandWorkSessionIds: () => state.commandWork,
 }));
 vi.mock('@/features/cc-agent/hooks/useOrcaLeadWorkerMap', () => ({
   useOrcaLeadWorkerMap: (sessions: { id: string }[]) =>
@@ -109,6 +111,7 @@ afterEach(() => {
   state.running = new Map();
   state.starting = new Set();
   state.background = new Set();
+  state.commandWork = new Set();
   state.workers = new Map();
   state.attention = new Map([
     ['a', 'done'],
@@ -243,12 +246,14 @@ describe('app badge projection lifecycle', () => {
     expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 }));
   });
 
-  it.each(['running', 'starting', 'background'] as const)(
+  // commandWork:回合已结束但后台命令(跑测试、构建)仍在工作,与后台子代理同口径只点亮显示。
+  it.each(['running', 'starting', 'background', 'commandWork'] as const)(
     'promotes %s workers without broadening operation guards',
     (source) => {
       const running = new Set(source === 'running' ? ['worker'] : []);
       state.starting = new Set(source === 'starting' ? ['worker'] : []);
       state.background = new Set(source === 'background' ? ['worker'] : []);
+      state.commandWork = new Set(source === 'commandWork' ? ['worker'] : []);
       state.workers = new Map([['lead', new Set(['worker'])]]);
       const { result } = renderHook(() =>
         useSessionDisplayRunningState(

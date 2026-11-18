@@ -630,6 +630,7 @@ export function SchedulerPage() {
             {selected && (
               <RunHistoryPane
                 schedule={selected}
+                connectionSetupVisible={!formOpen}
                 onRunNow={handleRunNow}
                 onTogglePause={handleTogglePause}
                 onEdit={handleEdit}

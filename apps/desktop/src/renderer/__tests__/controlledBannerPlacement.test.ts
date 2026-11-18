@@ -41,7 +41,10 @@ describe('controlled banner placement', () => {
       '{!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed) ? (',
     );
     expect(sessionViewSource).not.toContain('<BotWorkingStatus');
-    expect(sessionViewSource).toContain('suppressContent={Boolean(pendingPlanReview)}');
+    // Both a pending plan and a text-only tool failure must hide stale Done.
+    expect(sessionViewSource).toContain(
+      "suppressContent={Boolean(pendingPlanReview) || errorReason === 'unexecuted-tool-markup'}",
+    );
     expect(sessionViewSource).toContain(
       'const isHidden = suppressContent || (!showContent && !visible);',
     );
@@ -114,9 +117,9 @@ describe('controlled banner placement', () => {
     );
     expect(todoListSource).toContain('data-plan-pill-anchor="true"');
     expect(todoListSource).toContain('data-plan-flyout-positioner="composer"');
-    expect(overlayMetricsSource).toContain(
-      'const mutationObserver = new MutationObserver(() => syncResizeTargetsAndMeasure(true));',
-    );
+    expect(overlayMetricsSource).toContain('const mutationObserver = new MutationObserver(() => {');
+    // Flyout mutations request a pre-paint resize observation of the overlay.
+    expect(overlayMetricsSource).toContain('ro.unobserve(overlayEl);\n      ro.observe(overlayEl);');
     expect(overlayMetricsSource).toContain(
       'mutationObserver.observe(overlayEl, { childList: true, subtree: true });',
     );

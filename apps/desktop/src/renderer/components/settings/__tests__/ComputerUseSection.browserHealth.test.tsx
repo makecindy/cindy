@@ -532,7 +532,7 @@ describe('ComputerUseSection browser backend health loading', () => {
       installState: 'not-installed',
     };
     // Market ids are opaque: the plugin has to be found by the ghost id it installs as.
-    const snapshot = vi.fn().mockResolvedValue({
+    const lookup = vi.fn().mockResolvedValue({
       items: [
         { pluginId: 'other-id', ghostId: 'other-plugin' },
         { pluginId: 'market-opaque-id', ghostId: 'my-browser' },
@@ -540,7 +540,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     });
     const marketDetail = vi.fn().mockResolvedValue(detail);
     const install = vi.fn().mockResolvedValue({ ghost: { manifest: { name: 'Cindy Chrome' } } });
-    Object.assign(window.electronAPI, { pluginMarket: { snapshot, detail: marketDetail, install } });
+    Object.assign(window.electronAPI, { pluginMarket: { lookup, detail: marketDetail, install } });
     api.getBackendState.mockResolvedValue({ active: 'user-browser' });
     api.getBackendHealth
       .mockResolvedValueOnce({ active: 'user-browser', status: 'error', reason: 'plugin-missing', canRecover: false })
@@ -559,7 +559,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     );
 
     expect(
-      await screen.findByText('settings.computerUse.browserBackend.userBrowserSetup.installExtensionTitle'),
+      await screen.findByText('settings.computerUse.browserBackend.userBrowserSetup.connectExtensionTitle'),
     ).toBeTruthy();
     expect(install).toHaveBeenCalledWith('market-opaque-id', {
       expectedReleaseId: 'release-1',
@@ -596,7 +596,7 @@ describe('ComputerUseSection browser backend health loading', () => {
 
   // The extension step finishes in Settings: the store page opens in the user's browser rather
   // than routing through the plugin page.
-  it('opens the extension store from Settings when only the extension is missing', async () => {
+  it('offers the store as an optional action when the extension is disconnected', async () => {
     const openExtensionStore = vi.fn().mockResolvedValue({ ok: true });
     Object.assign(window.electronAPI.browserBackend, { openExtensionStore });
     api.getBackendState.mockResolvedValue({ active: 'user-browser' });
@@ -610,7 +610,7 @@ describe('ComputerUseSection browser backend health loading', () => {
     render(<ComputerUseSection workingDir="/tmp/project" />);
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'settings.computerUse.browserBackend.userBrowserSetup.installExtension',
+        name: 'settings.computerUse.browserBackend.userBrowserSetup.openExtensionStore',
       }),
     );
 
@@ -618,5 +618,30 @@ describe('ComputerUseSection browser backend health loading', () => {
     expect(api.successToast).toHaveBeenCalledWith(
       'settings.computerUse.browserBackend.userBrowserSetup.storeOpened',
     );
+    expect(screen.getByText('settings.computerUse.browserBackend.userBrowserSetup.connectExtensionTitle')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.browserBackend.userBrowserSetup.installExtensionTitle')).toBeNull();
+  });
+
+  // 2026-11-16: without Chrome / Edge there is nowhere to add the extension, so My browser asks
+  // for Chrome first instead of sending the user to an extension store that cannot open.
+  it('asks for Chrome first when no browser for My browser is installed', async () => {
+    const openExtensionStore = vi.fn().mockResolvedValue({ ok: true });
+    Object.assign(window.electronAPI.browserBackend, { openExtensionStore });
+    api.getBackendState.mockResolvedValue({ active: 'user-browser' });
+    api.getBackendHealth.mockResolvedValue({
+      active: 'user-browser',
+      status: 'error',
+      reason: 'browser-missing',
+      canRecover: false,
+    });
+
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    expect(
+      await screen.findByText('settings.computerUse.browserBackend.userBrowserSetup.installBrowserTitle'),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.computerUse.browser.download' }));
+
+    expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://www.google.com/chrome/');
+    expect(openExtensionStore).not.toHaveBeenCalled();
   });
 });

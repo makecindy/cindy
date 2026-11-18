@@ -476,6 +476,10 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:worker:acknowledge-done',
   'maker:worker:archive',
   'maker:collaboration-settings:get',
+  // 创建 Worker 的角色清单与每个角色记的内容：只存在任务所在的电脑上，手机不留副本。
+  // 旧端拒绝时只列内置角色，不能增删也不记忆。
+  'maker:worker-roles:get',
+  'maker:worker-roles:apply',
   'local-db:orca-workflows:list-workers-by-lead',
   'local-db:orca-workflows:get-by-worker-session',
   'maker:schedule:list',

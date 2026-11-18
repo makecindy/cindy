@@ -114,7 +114,7 @@ export function SetupMigrationWalkthroughBar() {
       <div
         role="status"
         aria-live="polite"
-        className="pointer-events-auto flex w-full max-w-[640px] items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-2.5 text-[var(--text-primary)] shadow-[var(--shadow-menu)]"
+        className="pointer-events-auto flex w-full max-w-[640px] items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-2.5 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]"
       >
         {finished ? (
           <Check size={16} aria-hidden="true" className="shrink-0 text-[var(--status-success)]" />

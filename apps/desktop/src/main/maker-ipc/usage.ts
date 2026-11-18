@@ -33,7 +33,7 @@ import {
 import { createXaiSubscriptionUsageReader } from '../usage/xaiSubscriptionUsageRefresh.js';
 import { createCodexAccountUsageSnapshotReader } from '../usage/codexAccountUsageRefresh.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
-import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
+import { getDisplayReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import {
   CodexWebUsageUnauthorizedError,
   fetchCodexWebUsageSnapshot,
@@ -69,14 +69,20 @@ import {
   recordXaiSubscriptionUsageSnapshot,
 } from '../usageBroadcaster.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
+import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.desktop.js';
 import { desktopCodexAuthAdapter } from '../maker-host/auth-adapters.js';
 import { hasClaudeNativeLogin } from '../maker-host/claude-native-auth.js';
 import { peekClaudeCliLoginStatus } from '../maker-host/claude-native-cli-status.js';
-import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.js';
-import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.desktop.js';
+import { observeSubscriptionAccountUsage, pooledCodexResetTarget, onSubscriptionAccountsChanged } from '../subscription-accounts/runtime.js';
+import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.desktop.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { CodexResetAutoUse, parseCodexResetAutoUse } from '../usage/codexResetAutoUse.js';
+import {
+  detachedDefaultCodexHome,
+  readDefaultCodexHomeIdentity,
+  withDetachedDefaultCodexHome,
+} from '../usage/codexDefaultAccountHome.js';
 import { codexResetAutoUseStore, codexResetAccountKey } from '../usage/codexResetAutoUseStore.js';
 import { observeUsageChanges } from '../usageBroadcaster.js';
 import type { CodexResetAutoUseSettings } from '@cindy/maker-shared/device-link-contract';
@@ -112,7 +118,9 @@ const claudeSubscriptionUsageReader = createClaudeSubscriptionUsageReader({
     // get_usage 是 Experimental:解析不出窗口按形状变化处理,抛错退避并保留已有缓存。
     if (!snapshot) throw new Error('claude get_usage returned unrecognized rate_limits');
     const subscriptionType = usage.subscriptionType ?? peekClaudeCliLoginStatus()?.subscriptionType;
-    return subscriptionType ? { ...snapshot, subscriptionType } : snapshot;
+    const planTier = peekClaudeCliLoginStatus()?.planTier;
+    const planDisplayName = peekClaudeCliLoginStatus()?.planDisplayName ?? null;
+    return { ...snapshot, ...(subscriptionType ? { subscriptionType } : {}), ...(planTier ? { planTier } : {}), planDisplayName };
   },
   recordSnapshot: recordClaudeSubscriptionUsageSnapshot,
   clearSnapshot: clearClaudeSubscriptionUsageSnapshot,
@@ -215,6 +223,10 @@ function normalizeCodexUsageProvider(providerId?: string): string | undefined {
   if (!isOpenAiSubscriptionProviderId(providerId)) throw new Error('Unknown OpenAI account provider');
   return providerId;
 }
+function normalizeCodexResetProvider(providerId?: string): string | undefined {
+  if (providerId && pooledCodexResetTarget(providerId)) return providerId;
+  return normalizeCodexUsageProvider(providerId);
+}
 let codexReadersOwner = '';
 const codexUsageReaders = new Map<string, ReturnType<typeof createCodexAccountUsageSnapshotReader>>();
 export function readCodexAccountUsageSnapshotWithWebRefresh(requestedProviderId?: string, options?: { fresh?: boolean }) {
@@ -277,7 +289,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
   const resetServices = new Map<string, ReturnType<typeof createCodexRateLimitResetService>>();
   let resetServicesOwner = '';
   function getResetService(providerId?: string) {
-    providerId = normalizeCodexUsageProvider(providerId);
+    providerId = normalizeCodexResetProvider(providerId);
     const scope = activeOwnerScopeKey();
     if (scope !== resetServicesOwner) { resetServices.clear(); resetServicesOwner = scope; }
     const key = providerId ?? 'openai';
@@ -286,7 +298,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
     const assertScope = () => {
       if (isAppSessionBoundaryPending() || scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
     };
-  const service = createCodexRateLimitResetService({
+  const nativeTarget: Parameters<typeof withDetachedDefaultCodexHome>[0] = {
     readRateLimits: async () => { assertScope(); const result = await maker.readAgentAccountRateLimits('codex', providerId); assertScope(); return result; },
     consumeResetCredit: async (params) => { assertScope(); const result = await maker.consumeAgentAccountRateLimitResetCredit('codex', params, providerId); assertScope(); return result; },
     readAccountIdentity: async () => {
@@ -301,7 +313,10 @@ export function registerMakerUsageIpc(maker: Maker): void {
       return { email: identity, accountId };
     },
     recordRateLimitSnapshot: (snapshot) => scope === activeOwnerScopeKey() ? recordCodexAccountUsageSnapshot(snapshot, providerId) : Promise.resolve(),
-  });
+  };
+  // The built-in target is the pool's default account; without its own login it reads that account's home.
+  const service = createCodexRateLimitResetService(pooledCodexResetTarget(key)
+    ?? (providerId ? nativeTarget : withDetachedDefaultCodexHome(nativeTarget, assertScope)));
 
     resetServices.set(key, service);
     return service;
@@ -309,7 +324,18 @@ export function registerMakerUsageIpc(maker: Maker): void {
 
   async function accountKeyFor(providerId?: string): Promise<string> {
     const scope = activeOwnerScopeKey();
-    const id = normalizeCodexUsageProvider(providerId);
+    const id = normalizeCodexResetProvider(providerId);
+    const pooled = id && pooledCodexResetTarget(id);
+    if (pooled) {
+      const identity = await pooled.readAccountIdentity();
+      return codexResetAccountKey(identity.email, identity.accountId);
+    }
+    const defaultHome = id ? null : await detachedDefaultCodexHome();
+    if (defaultHome) {
+      const identity = await readDefaultCodexHomeIdentity(defaultHome);
+      if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('Account scope changed');
+      return codexResetAccountKey(identity.email, identity.accountId);
+    }
     const state = await desktopCodexAuthAdapter.getState({ providerId: id });
     const accountId = state.authSource === 'oauth' ? await desktopCodexAuthAdapter.getAccountId(id) : null;
     if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('Account scope changed');
@@ -341,7 +367,11 @@ export function registerMakerUsageIpc(maker: Maker): void {
     },
     consume: (providerId, key, authorized) => getResetService(providerId).consume(key, authorized),
     record: (providerId, snapshot, at) => codexResetAutoUseStore.record(providerId, snapshot.autoUse!.accountKey, at),
-    refreshWeb: async (providerId) => { await readCodexAccountUsageSnapshotWithWebRefresh(providerId, { fresh: true }); },
+    refreshWeb: async (providerId) => {
+      const pooled = pooledCodexResetTarget(providerId);
+      if (pooled) await pooled.refresh();
+      else await readCodexAccountUsageSnapshotWithWebRefresh(providerId, { fresh: true });
+    },
     restored: async (providerId) => {
       for (const listener of resetRestoredListeners) await listener(providerId);
     },
@@ -355,8 +385,11 @@ export function registerMakerUsageIpc(maker: Maker): void {
   const timer = setInterval(checkEnabled, 60_000);
   timer.unref();
   const unobserve = observeUsageChanges(kind => { if (kind === 'codex') checkEnabled(); });
+  const unobservePool = onSubscriptionAccountsChanged((provider, resetAccountId) => {
+    if (provider === 'openai' && resetAccountId) checkEnabled();
+  });
   powerMonitor.on('resume', checkEnabled);
-  app.once('will-quit', () => { clearInterval(timer); unobserve(); powerMonitor.removeListener('resume', checkEnabled); });
+  app.once('will-quit', () => { clearInterval(timer); unobserve(); unobservePool(); powerMonitor.removeListener('resume', checkEnabled); });
   checkEnabled();
 
   setSubscriptionAccountUsageBroadcaster(broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot);
@@ -380,6 +413,12 @@ export function registerMakerUsageIpc(maker: Maker): void {
       const result = await getResetService(providerId).consume(key);
       if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
       if (accountKey !== await accountKeyFor(providerId)) throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
+      if (providerId && (result.outcome === 'reset' || result.outcome === 'alreadyRedeemed')) {
+        await pooledCodexResetTarget(providerId)?.refresh().catch(() => {
+          log.warn('Codex account quota refresh after reset could not complete');
+        });
+      }
+      if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
       return { ...result, providerId: providerId ?? 'openai',
         rateLimits: result.rateLimits ? { ...result.rateLimits, providerId: providerId ?? 'openai',
           autoUse: codexResetAutoUseStore.read(providerId ?? 'openai', accountKey) } : null };
@@ -393,7 +432,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
   readClaudeAccountQuotaClear,
     triggerClaudeAccountUsageRefresh,
     readModelPricing: getGatewayModelPricing,
-    readReferenceModelPricing: getReferenceModelPricing,
+    readReferenceModelPricing: getDisplayReferenceModelPricing,
     readUsageHistory,
     emptyUsageHistory: emptyUsageHistoryPayload,
     readUsageDeviceRows: (request) =>
@@ -430,16 +469,21 @@ export function registerMakerUsageIpc(maker: Maker): void {
 
   // 订阅会话的 CLI 在会话里上报 SDK rate_limit_event → 落库 + 广播(maker-core 只对本机
   // Claude 订阅会话转发)。事件晚于登出 / 断开到达时丢弃,不复活刚清掉的快照。
-  setClaudeRateLimitInfoListener((info) => {
+  setClaudeRateLimitInfoListener((info, account) => {
+    if (account) { observeSubscriptionAccountUsage(account, info); return; }
     if (!hasClaudeNativeLogin()) return;
     const snapshot = parseClaudeSdkRateLimitInfo(info, Date.now());
     if (!snapshot) return;
     const fingerprint = currentClaudeAccountFingerprint();
     const subscriptionType = peekClaudeCliLoginStatus()?.subscriptionType;
+    const planTier = peekClaudeCliLoginStatus()?.planTier;
+    const planDisplayName = peekClaudeCliLoginStatus()?.planDisplayName ?? null;
     void recordClaudeSubscriptionUsageSnapshot({
       ...snapshot,
       ...(fingerprint ? { accountFingerprint: fingerprint } : {}),
       ...(subscriptionType ? { subscriptionType } : {}),
+      ...(planTier ? { planTier } : {}),
+      planDisplayName,
     });
   });
 

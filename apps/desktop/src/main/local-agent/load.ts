@@ -1,6 +1,6 @@
 /** Owner-scoped, in-memory application sessions, consumed by the ordinary group lease reporter. */
 import type { Session } from '@cindy/maker-core';
-import type { ProviderGroupBinding } from '../provider-group/bindings.js';
+import type { ProviderGroupBinding } from '../provider-group/bindings.desktop.js';
 import type { LocalAgentExecutionRoute } from './groupRoute.js';
 
 type LoadSession = Pick<Session, 'isTurnRunning' | 'onEvent' | 'onStatusChange'>;

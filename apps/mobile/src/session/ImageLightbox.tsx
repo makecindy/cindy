@@ -34,12 +34,9 @@ import {
 } from 'react-native';
 import { Text } from '@/components/AppText';
 import { ErrorNotice, ErrorNoticeAction } from '@/components/ErrorNotice';
-import { MessageSquarePlus, Pen, Share as ShareIcon, Undo2,
+import { Download, MessageSquarePlus, Pen, Share as ShareIcon, Undo2,
   Redo2,
   X,
-  Minus,
-  Plus,
-  Maximize,
 } from 'lucide-react-native';
 import Svg, { Path } from 'react-native-svg';
 import { fontWeight, iconSize, iconStroke, lineHeight, motionDuration, radius, typeScale } from '@/theme';
@@ -65,12 +62,14 @@ import {
   PreviewHeader,
   PreviewFooter,
   PreviewIconButton,
-  PreviewCollectionContext,
+  PREVIEW_FOOTER_ROW_HEIGHT,
+  PREVIEW_HEADER_HEIGHT,
 } from "./PreviewChrome";
 import { previewSourceName } from "@cindy/maker-shared/attachment-preview";
 import { useTheme, useThemedStyles, type ThemeColors } from "@/theme";
 import {
   isDesktopLocalMediaUrl,
+  isResolvedRemoteMediaFresh,
   mediaLoadFailureKey,
   type MobileResolvedRemoteMedia,
   type ResolveRemoteMediaFn,
@@ -129,10 +128,11 @@ const LIGHTBOX_SETTLE_SPRING = { damping: 30, stiffness: 260, mass: 1 } as const
 // 缩略图垫底**不**挂在取件态里:它要跨过 loading → ready 的边界继续垫住原图
 // 下载那一段(见 lightboxImageLayers),挂进 loading 分支会在取件完成的瞬间
 // 结构性丢失,把第二段空档裸露成纯黑。垫底地址单独存 previewMap。
-type PageResolveState =
+type PageResolveState = (
   | { status: 'loading'; media?: MobileResolvedRemoteMedia }
   | { status: 'ready'; media: MobileResolvedRemoteMedia }
-  | { status: 'error'; error?: unknown; media?: MobileResolvedRemoteMedia };
+  | { status: 'error'; error?: unknown; media?: MobileResolvedRemoteMedia }
+) & { sourceUnavailable?: boolean };
 
 /** 宿主注入的底部操作(文件浏览器:复制路径/发送到会话);回调收当前活跃页。 */
 export interface ImageLightboxAction {
@@ -247,24 +247,18 @@ export const ImageLightbox = memo(function ImageLightbox({
 }: ImageLightboxProps) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  const { width, height: windowHeight } = useWindowDimensions();
-  const { colors } = useTheme();
+  const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const collection = useContext(PreviewCollectionContext);
-  const height = Math.max(
-    1,
-    windowHeight -
-      insets.top -
-      insets.bottom -
-      64 -
-      (images.length > 1 || (collection?.names.length ?? 0) > 1 ? 112 : 56),
-  );
+  // 图片页铺满整屏,顶栏 / 底栏浮在图上(单击可收起),放大拖动时不被工具栏的位置裁掉。
+  // 只有视频页让出浮动 chrome 的高度,系统播放控件不被底栏压住。
+  const chromeTop = insets.top + PREVIEW_HEADER_HEIGHT;
+  const chromeBottom = insets.bottom + PREVIEW_FOOTER_ROW_HEIGHT;
   const [zoomCommand, setZoomCommand] = useState<{
     id: number;
-    action: "in" | "out" | "fit" | "actual";
+    action: "fit" | "actual";
     imageKey?: string;
   }>({ id: 0, action: "fit" });
-  const requestZoom = (action: "in" | "out" | "fit" | "actual") =>
+  const requestZoom = (action: "fit" | "actual") =>
     setZoomCommand((previous) => ({
       id: previous.id + 1,
       action,
@@ -563,7 +557,8 @@ export const ImageLightbox = memo(function ImageLightbox({
     resolvingImagesRef.current.add(key);
     setResolveMap((prev) => {
       // 显示副本与取件状态分开:刷新失败不撤掉仍可读的原图,也不假装刷新成功。
-      return { ...prev, [key]: { status: 'loading', media: prev[key]?.media } };
+      return { ...prev, [key]: { status: 'loading', media: prev[key]?.media,
+        sourceUnavailable: prev[key]?.sourceUnavailable } };
     });
     void onResolveRemoteMedia(
       { kind: media.kind, url: media.url, previewable: media.previewable },
@@ -573,7 +568,8 @@ export const ImageLightbox = memo(function ImageLightbox({
         setResolveMap((prev) => ({ ...prev, [key]: { status: 'ready', media: resolved } }));
       })
       .catch((error: unknown) => {
-        setResolveMap((prev) => ({ ...prev, [key]: { status: 'error', error, media: prev[key]?.media } }));
+        setResolveMap((prev) => ({ ...prev, [key]: { status: 'error', error, media: prev[key]?.media,
+          sourceUnavailable: prev[key]?.sourceUnavailable } }));
       })
       .finally(() => resolvingImagesRef.current.delete(key));
     // 垫底缩略图:列表里这张图已经解码好了,拿来从打开那一刻接住画面,一直垫到
@@ -604,6 +600,16 @@ export const ImageLightbox = memo(function ImageLightbox({
   const handleRetryPage = useCallback((image: MobileMessageGalleryImage) => {
     resolveImage(image, true, true);
   }, [resolveImage]);
+
+  const handleVideoSourceUnavailable = useCallback((
+    image: MobileMessageGalleryImage, source: MobileResolvedRemoteMedia, error: unknown,
+  ) => {
+    setResolveMap((prev) => {
+      const current = prev[image.url];
+      if (current?.media !== source || current.sourceUnavailable) return prev;
+      return { ...prev, [image.url]: { status: 'error', error, media: source, sourceUnavailable: true } };
+    });
+  }, []);
 
   // 取件成功但原生 Image 加载失败(典型:桌面去重缓存返回了已被删除的悬空 key,
   // presign 下载 404)→ 一次性 forceRefresh 重取自愈,再失败落错误态给重试按钮。
@@ -684,6 +690,12 @@ export const ImageLightbox = memo(function ImageLightbox({
   const chromeShown = chromeToggledVisible || isAnnotating || activeIsVideo;
   const activeUri = activeImage ? displayUriFor(activeImage) : null;
   const activeResolveState = activeImage ? resolveMap[activeImage.url] : undefined;
+  // A playback refresh is separate from the original's export availability.
+  // Leased originals remain held; unleased presigned URLs must still be fresh.
+  const activeVideoSource = activeResolveState?.sourceUnavailable
+    || (activeResolveState && activeResolveState.status !== 'ready' && activeResolveState.media
+      && !activeResolveState.media.protectLocalFile && !isResolvedRemoteMediaFresh(activeResolveState.media))
+    ? null : activeUri;
   // Expo can display library handles, but sharing/annotation need the file or remote
   // original supplied later by the existing upload pipeline. Do not enable dead-end actions.
   const activeActionsReady = !!activeUri && !/^(?:ph|content|assets-library):\/\//.test(activeUri)
@@ -873,11 +885,9 @@ export const ImageLightbox = memo(function ImageLightbox({
         style={styles.root}
         testID="message.imageLightbox"
       >
-        <Animated.View pointerEvents="none" style={[styles.backdrop,
-            { backgroundColor: colors.surface },
-            backdropStyle]} />
+        <Animated.View pointerEvents="none" style={[styles.backdrop, backdropStyle]} />
         <FlatList
-          style={{ marginTop: insets.top + 64, height, flexGrow: 0 }}
+          style={{ height, flexGrow: 0 }}
           data={images}
           decelerationRate="fast"
           getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
@@ -898,12 +908,11 @@ export const ImageLightbox = memo(function ImageLightbox({
               active={index === activeIndex}
               height={height}
               image={item}
-              // Keep native transport controls above the shared viewer toolbar,
-              // including wrapped actions and larger accessibility text.
-              insetBottom={0}
-              // 让出顶部关闭 / 页码一行,系统播放控件不被压住。
-              insetTop={0}
+              // 视频页 chrome 常驻:让出顶栏与底栏,系统播放控件不被压住。
+              insetBottom={chromeBottom}
+              insetTop={chromeTop}
               onRetry={handleRetryPage}
+              onSourceUnavailable={handleVideoSourceUnavailable}
               onToggleChrome={toggleChrome}
               previewUri={previewUriFor(item)}
                 resolveOpaqueSource={resolveOpaqueSource}
@@ -957,115 +966,88 @@ export const ImageLightbox = memo(function ImageLightbox({
           showsHorizontalScrollIndicator={false}
           windowSize={3}
         />
-        <PreviewHeader
-          name={
-            activeImage?.title ||
-            previewSourceName(
-              activeImage?.url ?? "",
-              t(
-                activeIsVideo
-                  ? "message.attachmentPreview.video"
-                  : "message.attachmentPreview.image",
-              ),
-            )
-          }
-          detail={activeImage?.subtitle}
-          onClose={handleRequestClose}
-          closeDisabled={annotationSubmitting}
-          closeTestID="message.imageLightboxCloseButton"
-          actions={[
-            ...(!activeIsVideo
-              ? [
-                  {
-                    key: "actual",
-                    label: t("message.attachmentPreview.actualSize"),
-                    onPress: () => requestZoom("actual"),
-                  },
-                ]
-              : []),
-            ...(shareVisible
-              ? [
-                  {
-                    key: "share",
-                    label: t("message.attachmentPreview.share"),
-                    onPress: handleShare,
-                    disabled: !shareEnabled || sharing,
-                  },
-                ]
-              : []),
-            ...(directSubmitVisible
-              ? [
-                  {
-                    key: "draft",
-                    label:
-                      annotation?.submitLabel ??
-                      t("message.lightbox.sendToChat"),
-                    onPress: handleSubmitAnnotation,
-                    disabled: !directSubmitEnabled || annotationSubmitting,
-                  },
-                ]
-              : []),
-            ...(extraActions ?? []).map((action) => ({
-              key: action.key,
-              label: action.label,
-              onPress: () => {
-                if (activeImage) action.onPress(activeImage);
-              },
-            })),
-          ]}
-        />
+        {/* 单击收起顶栏与底栏(与系统相册一致),再点一下出来;视频与标注时常驻。 */}
+        {chromeShown ? (
+          <PreviewHeader
+            name={
+              activeImage?.title ||
+              previewSourceName(
+                activeImage?.url ?? "",
+                t(
+                  activeIsVideo
+                    ? "message.attachmentPreview.video"
+                    : "message.attachmentPreview.image",
+                ),
+              )
+            }
+            detail={activeImage?.subtitle}
+            onClose={handleRequestClose}
+            closeDisabled={annotationSubmitting}
+            closeTestID="message.imageLightboxCloseButton"
+            actions={[
+              ...(!activeIsVideo
+                ? [
+                    {
+                      key: "actual",
+                      label: t("message.attachmentPreview.actualSize"),
+                      onPress: () => requestZoom("actual"),
+                    },
+                  ]
+                : []),
+              ...(shareVisible
+                ? [
+                    {
+                      key: "share",
+                      label: t("message.attachmentPreview.share"),
+                      onPress: handleShare,
+                      disabled: !shareEnabled || sharing,
+                    },
+                  ]
+                : []),
+              ...(directSubmitVisible
+                ? [
+                    {
+                      key: "draft",
+                      label:
+                        annotation?.submitLabel ??
+                        t("message.lightbox.sendToChat"),
+                      onPress: handleSubmitAnnotation,
+                      disabled: !directSubmitEnabled || annotationSubmitting,
+                    },
+                  ]
+                : []),
+              ...(extraActions ?? []).map((action) => ({
+                key: action.key,
+                label: action.label,
+                onPress: () => {
+                  if (activeImage) action.onPress(activeImage);
+                },
+              })),
+            ]}
+          />
+        ) : null}
         {chromeShown ? (
           <PreviewFooter
-            hideCollection={isAnnotating}
-            collection={
-              !isAnnotating
-                ? {
-                    index: activeIndex,
-                    names: images.map(
-                      (image) =>
-                        image.title ||
-                        previewSourceName(
-                          image.url,
-                          t("message.attachmentPreview.image"),
-                        ),
-                    ),
-                    onSelect: (index) => {
-                      const image = images[index];
-                      if (!image) return;
-                      setActivePage({
-                        key: image.key,
-                        url: image.url,
-                        galleryImageKey: image.payload.galleryImageKey,
-                        galleryImageSlot: image.payload.galleryImageSlot,
-                        index,
-                      });
-                    },
-                  }
-                : undefined
-            }
+            // 原图还在取件或解码:整条工具换成载入胶囊,不摆一排点不动的按钮。
+            loading={activeLoading ? t("message.lightbox.loadingOriginal") : undefined}
+            loadingTestID="message.imageLightboxLoadingBar"
           >
-            {!activeIsVideo && !isAnnotating ? (
-              <>
-                <PreviewIconButton
-                  label={t("message.attachmentPreview.zoomOut")}
-                  icon={Minus}
-              onPress={() => requestZoom("out")}
-                  disabled={annotationSubmitting}
-                />
-                <PreviewIconButton
-                  label={t("message.attachmentPreview.fit")}
-                  icon={Maximize}
-                  onPress={() => requestZoom("fit")}
-                  disabled={annotationSubmitting}
-                />
-                <PreviewIconButton
-                  label={t("message.attachmentPreview.zoomIn")}
-                  icon={Plus}
-                  onPress={() => requestZoom("in")}
-                  disabled={annotationSubmitting} />
-            </>
-                  ) : activeIsVideo ? (
-              <VideoDownloadButton key={activeImage?.key} source={activeUri} mimeType={activeMimeType}
+            {/* 手机缩放靠捏合与双击,不放放大 / 缩小 / 适应按钮;原始尺寸在「更多」里。 */}
+            {activeIsVideo ? (
+              <VideoDownloadButton key={activeImage?.key}
+                source={activeVideoSource}
+                mimeType={activeMimeType}
+                render={({ busy, progress, disabled, download }) => (
+                  <PreviewIconButton
+                    icon={Download}
+                    systemImage="arrow.down.to.line"
+                    label={t("message.richAnswer.downloadVideo")}
+                    title={busy ? progress || t("message.renderer.loading") : t("message.richAnswer.downloadVideo")}
+                    disabled={disabled}
+                    onPress={() => { void download(); }}
+                    testID="message.videoDownload"
+                  />
+                )}
               />
                 ) : null}
                 {isAnnotating ? (
@@ -1074,6 +1056,7 @@ export const ImageLightbox = memo(function ImageLightbox({
                   testID="message.imageLightboxAnnotationCancel"
                   label={t("message.lightbox.cancelAnnotation")}
                   icon={X}
+                  systemImage="xmark"
                   onPress={exitAnnotationMode}
                     disabled={annotationSubmitting}
                 />
@@ -1081,12 +1064,14 @@ export const ImageLightbox = memo(function ImageLightbox({
                   testID="message.imageLightboxAnnotationUndo"
                   label={t("message.lightbox.undoLastStroke")}
                   icon={Undo2}
+                  systemImage="arrow.uturn.backward"
                   onPress={undoLastStroke}
                   disabled={!strokes.length || annotationSubmitting}
                 />
                 <PreviewIconButton
                   label={t("message.attachmentPreview.redo")}
                   icon={Redo2}
+                  systemImage="arrow.uturn.forward"
                     onPress={() => {
                     const last = redoStrokes.at(-1);
                     if (last) {
@@ -1100,6 +1085,7 @@ export const ImageLightbox = memo(function ImageLightbox({
                   testID="message.imageLightboxAnnotationSubmit"
                   label={annotation?.submitLabel ?? t("message.lightbox.done")}
                   icon={MessageSquarePlus}
+                  systemImage="plus.bubble"
                     onPress={handleSubmitAnnotation}
                   disabled={annotationSubmitting}
                 />
@@ -1116,6 +1102,7 @@ export const ImageLightbox = memo(function ImageLightbox({
                     )}
                     hint={annotateBlockedReason}
                     icon={Pen}
+                    systemImage="pencil"
                     onPress={enterAnnotationMode}
                     disabled={!annotateReady || sharing}
                   />
@@ -1125,6 +1112,7 @@ export const ImageLightbox = memo(function ImageLightbox({
                     testID="message.imageLightboxSendToChatButton"
                     label={annotation?.submitLabel ?? t('message.lightbox.sendToChat')}
                     icon={MessageSquarePlus}
+                    systemImage="plus.bubble"
                     onPress={handleSubmitAnnotation}
                     disabled={!directSubmitEnabled || annotationSubmitting} />
                 ) : null}
@@ -1133,20 +1121,13 @@ export const ImageLightbox = memo(function ImageLightbox({
                     testID="message.imageLightboxShareButton"
                     label={t("message.attachmentPreview.share")}
                     icon={ShareIcon}
+                    systemImage="square.and.arrow.up"
                     onPress={handleShare}
                     disabled={!shareEnabled || sharing}
                   />
                 ) : null}
               </>
             )}
-            {activeLoading ? (
-              <ActivityIndicator
-                testID="message.imageLightboxLoadingBar"
-                color={colors.textSecondary}
-                size="small"
-                accessibilityLabel={t("message.lightbox.loadingOriginal")}
-              />
-          ) : null}
         </PreviewFooter>
         ) : null}
       </GestureHandlerRootView>
@@ -1228,7 +1209,7 @@ const LightboxPage = memo(function LightboxPage({
   onZoomChange(zoomed: boolean): void;
   zoomCommand?: {
     id: number;
-    action: "in" | "out" | "fit" | "actual";
+    action: "fit" | "actual";
     imageKey?: string;
   };
   /** 列表缩略图(渐进出图的垫底层);无则退 spinner。见 lightboxImageLayers。 */
@@ -1400,15 +1381,7 @@ const LightboxPage = memo(function LightboxPage({
                 )?.width ?? width,
               ),
           )
-        : zoomCommand.action === "fit"
-          ? 1
-          : Math.max(
-              LIGHTBOX_MIN_SCALE,
-              Math.min(
-                LIGHTBOX_MAX_SCALE,
-                scale.value * (zoomCommand.action === "in" ? 1.25 : 0.8),
-              ),
-            );
+        : 1;
     springToTransform({
       scale: target,
       x: target === 1 ? 0 : translateX.value,
@@ -2149,6 +2122,7 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
   insetBottom,
   insetTop,
   onRetry,
+  onSourceUnavailable,
   onToggleChrome,
   previewUri,
   resolveState,
@@ -2162,6 +2136,7 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
   insetBottom: number;
   insetTop: number;
   onRetry(image: MobileMessageGalleryImage): void;
+  onSourceUnavailable(image: MobileMessageGalleryImage, source: MobileResolvedRemoteMedia, error: unknown): void;
   onToggleChrome(): void;
   previewUri: string | null;
   resolveState: PageResolveState | null;
@@ -2181,9 +2156,36 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
     (resolveOpaqueSource || isDesktopLocalMediaUrl(media.url));
   const resolvedUnsupported = resolveState?.status === 'ready' && !resolveState.media.previewable;
   const playbackFailed = !!uri && webFailedUri === uri;
-  const failed = playbackFailed || (!uri && (
-    resolveState?.status === 'error' || resolvedUnsupported || (!retryable && !media.previewable)
+  // Unlike an image preview, a video's previous Range URL may already be closed
+  // when refresh fails. Keep retry reachable even after paging away and back.
+  const failed = playbackFailed || resolveState?.status === 'error' || (!uri && (
+    resolvedUnsupported || (!retryable && !media.previewable)
   ));
+  const protectLocalFile = resolveState?.media?.protectLocalFile;
+  // A failed refresh does not invalidate an original still held for export.
+  const retainSource = !resolveState?.sourceUnavailable;
+  const leaseRefreshUsed = useRef(false);
+  const leaseRetry = useRef({ image, onRetry, onSourceUnavailable });
+  leaseRetry.current = { image, onRetry, onSourceUnavailable };
+  useEffect(() => {
+    if (!active) { leaseRefreshUsed.current = false; return; }
+    if (!uri || !retainSource) return;
+    // The active page's footer still exports this source after playback fails.
+    // Keep its Range URL alive until paging, close, or source replacement.
+    try {
+      return protectLocalFile?.();
+    } catch (error) {
+      if (resolveState?.media) {
+        leaseRetry.current.onSourceUnavailable(leaseRetry.current.image, resolveState.media, error);
+      }
+      // Releasing the last consumer can close a cached stream. On returning to
+      // this page, refresh once; a failed refresh keeps the existing retry UI.
+      if (!leaseRefreshUsed.current) {
+        leaseRefreshUsed.current = true;
+        leaseRetry.current.onRetry(leaseRetry.current.image);
+      }
+    }
+  }, [active, protectLocalFile, retainSource, uri]);
   const handleNativeError = useCallback(() => {
     if (uri) setNativeFailedUri(uri);
   }, [uri]);

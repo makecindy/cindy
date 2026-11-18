@@ -1,6 +1,13 @@
 import type { InvokePriority } from "./invokePolicy.js";
 import { DeviceLinkError } from "./protocol.js";
 import { parseSharedTaskPeer } from "./sharedTaskPeer.js";
+import { diagnosticChannel, diagnosticRef } from './stallDiagnostics.js';
+
+export interface InvokeDiagnostic {
+  channel: string;
+  request: string;
+  source?: 'renderer' | 'main' | 'mobile' | 'client';
+}
 
 const MAX_ACTIVE = 12;
 const MAX_BACKGROUND_ACTIVE = 4;
@@ -19,6 +26,9 @@ const MAX_BACKGROUND_QUEUED = 96;
 interface Job {
   peerId: string;
   priority: InvokePriority;
+  diagnostic?: InvokeDiagnostic;
+  queuedAt: number;
+  startedAt?: number;
   start(): void;
   cancel(error: DeviceLinkError): void;
 }
@@ -26,19 +36,50 @@ interface PeerQueue {
   active: number;
   background: number;
   jobs: Job[];
+  running: Set<Job>;
 }
 
 /** Local admission only: never retries or cancels an operation already sent. */
 export class InvokeScheduler {
   private readonly peers = new Map<string, PeerQueue>();
 
-  constructor(private readonly isPressured: (peerId: string) => boolean = () => false) {}
+  constructor(private readonly isPressured: (peerId: string) => boolean = () => false,
+    private readonly observe?: (peer: string, reason: 'full' | 'expired' | 'slow', snapshot: Record<string, unknown>) => void,
+    private readonly now: () => number = () => performance.now()) {}
+
+  snapshot(peerId: string): Record<string, unknown> {
+    const peer = this.peers.get(parseSharedTaskPeer(peerId)?.deviceId ?? peerId);
+    const now = this.now();
+    const summarize = (jobs: Iterable<Job>) => {
+      const groups = new Map<string, { channel: string; priority: InvokePriority; count: number; oldestMs: number; request: string; source: string }>();
+      for (const job of jobs) {
+        const channel = diagnosticChannel(job.diagnostic?.channel ?? 'unknown');
+        const key = `${channel}:${job.priority}:${job.diagnostic?.source ?? 'client'}`;
+        const age = Math.round(Math.max(0, now - (job.startedAt ?? job.queuedAt)));
+        const group = groups.get(key) ?? { channel, priority: job.priority, count: 0, oldestMs: -1, request: 'unknown', source: job.diagnostic?.source ?? 'client' };
+        group.count++;
+        if (age > group.oldestMs) { group.oldestMs = age; group.request = diagnosticRef(job.diagnostic?.request); }
+        groups.set(key, group);
+      }
+      const ranked = [...groups.values()].sort((a, b) => b.oldestMs - a.oldestMs || b.count - a.count);
+      return { top: ranked.slice(0, 3), omittedGroups: Math.max(0, ranked.length - 3) };
+    };
+    return { active: peer?.active ?? 0, backgroundActive: peer?.background ?? 0, queued: peer?.jobs.length ?? 0,
+      running: summarize(peer?.running ?? []), waiting: summarize(peer?.jobs ?? []) };
+  }
+
+  private report(peer: string, reason: 'full' | 'expired' | 'slow', diagnostic?: InvokeDiagnostic, waitMs?: number): void {
+    if (!this.observe) return;
+    try { this.observe(peer, reason, { ...this.snapshot(peer), channel: diagnosticChannel(diagnostic?.channel ?? 'unknown'),
+      request: diagnosticRef(diagnostic?.request), source: diagnostic?.source ?? 'client', waitMs }); } catch { /* Diagnostics cannot reject work. */ }
+  }
 
   run<T>(
     peerId: string,
     priority: InvokePriority | boolean,
     waitMs: number,
     run: () => Promise<T>,
+    diagnostic?: InvokeDiagnostic,
   ): Promise<T> {
     // Older callers pass the background flag; keep that contract.
     const resolved: InvokePriority = typeof priority === "boolean"
@@ -50,13 +91,14 @@ export class InvokeScheduler {
     const deviceId = parseSharedTaskPeer(peerId)?.deviceId ?? peerId;
     let peer = this.peers.get(deviceId);
     if (!peer) {
-      peer = { active: 0, background: 0, jobs: [] };
+      peer = { active: 0, background: 0, jobs: [], running: new Set() };
       this.peers.set(deviceId, peer);
     }
     const state = peer;
     if (
       state.jobs.length >= (background ? MAX_BACKGROUND_QUEUED : MAX_QUEUED)
     ) {
+      this.report(peerId, 'full', diagnostic);
       return Promise.reject(
         new DeviceLinkError(
           "BACKPRESSURE",
@@ -69,6 +111,8 @@ export class InvokeScheduler {
       const job: Job = {
         peerId,
         priority: resolved,
+        diagnostic,
+        queuedAt: this.now(),
         cancel: (error) => {
           clearTimeout(timer);
           // The transport may mark its error inFlight later; queued calls were never sent.
@@ -78,6 +122,7 @@ export class InvokeScheduler {
           clearTimeout(timer);
           // A suspended app may resume before its expired timers run. Never send stale work.
           if (Date.now() - queuedAt >= waitMs) {
+            this.report(peerId, 'expired', diagnostic, Math.round(this.now() - job.queuedAt));
             reject(
               new DeviceLinkError(
                 "BACKPRESSURE",
@@ -87,7 +132,10 @@ export class InvokeScheduler {
             return;
           }
           state.active++;
+          job.startedAt = this.now();
+          state.running.add(job);
           if (background) state.background++;
+          if (job.startedAt - job.queuedAt >= 1_000) this.report(peerId, 'slow', diagnostic, Math.round(job.startedAt - job.queuedAt));
           let result: Promise<T>;
           try {
             result = run();
@@ -96,6 +144,7 @@ export class InvokeScheduler {
           }
           void result.then(resolve, reject).finally(() => {
             state.active--;
+            state.running.delete(job);
             if (background) state.background--;
             this.drain(deviceId, state);
           });
@@ -104,6 +153,7 @@ export class InvokeScheduler {
       const timer = setTimeout(() => {
         const index = state.jobs.indexOf(job);
         if (index < 0) return;
+        this.report(peerId, 'expired', diagnostic, Math.round(this.now() - job.queuedAt));
         state.jobs.splice(index, 1);
         job.cancel(
           new DeviceLinkError(

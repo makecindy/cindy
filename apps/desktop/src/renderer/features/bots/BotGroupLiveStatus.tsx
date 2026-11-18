@@ -1,4 +1,5 @@
 import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { useNavigate } from 'react-router-dom';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 /** Group progress stays with the timeline. Each execution opens its original standard
@@ -8,8 +9,6 @@ import { Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { cn } from '@/lib/utils';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
@@ -24,15 +23,21 @@ import { BotGroupPendingInteraction } from './BotGroupPendingInteraction';
 import type { BotGroupRunningStep } from './BotGroupTimelineModel';
 
 export interface BotGroupLiveSpeaker {
+  sourceMessageId?: string;
+  threadRootId?: string | null;
   member: BotGroupMemberView;
   displayName: string;
   sessionId: string | null;
   activity: BotGroupSpeakerActivity;
   target?: BotGroupWorkTarget;
+  timelineAt?: number;
   startedAt?: number;
   stopping?: boolean;
   executionId?: string;
+  isSelfRequested?: boolean;
   executionStatus?: 'queued' | 'running' | 'needs_input' | 'stopping';
+  /** The group's Cindy for the member who asked: where it runs (computer name, empty for this one) and with which model. */
+  executor?: { deviceName: string; here?: boolean; model?: string };
 }
 
 function useSpeakerActivity(speaker: BotGroupLiveSpeaker | undefined) {
@@ -53,7 +58,7 @@ function pendingBot(speaker: BotGroupLiveSpeaker) {
   return { id: member.botId, name: speaker.displayName, avatar: member.avatar, avatarColor: member.avatarColor };
 }
 
-/** Brief initial status; longer work moves to the composer progress area. */
+/** Planning status in the timeline. */
 export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: BotGroupLiveSpeaker; showStatus?: boolean }) {
   const { t } = useTranslation();
   const { member, sessionId, activity: speakerActivity } = speaker;
@@ -69,8 +74,8 @@ export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: 
   }
   return (
     <article data-testid="bot-group-speaking" data-activity={speakerActivity} className="mt-3.5 flex min-w-0 items-start gap-2.5">
-      <div className="flex h-5 w-7 shrink-0 items-center justify-end">
-        <BotAvatar bot={member} size="xs" />
+      <div className="flex h-7 w-7 shrink-0 items-center justify-end">
+        <BotAvatar bot={member} size="sm" />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         {showStatus ? (
@@ -99,18 +104,18 @@ export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: 
             ) : null}
           </p>
         ) : null}
-        {sessionId ? <Button type="button" variant="secondary" tone="quiet" size="sm" compact className="self-start" onClick={() => navigate(standardSessionRoute(sessionId, speaker.target?.deviceId))}>
+        {sessionId && speaker.isSelfRequested !== false ? <Button type="button" variant="secondary" tone="quiet" size="sm" compact className="self-start" onClick={() => navigate(standardSessionRoute(sessionId, speaker.target?.deviceId))}>
           {t('bots.groupChat.progress.viewProcess')}
         </Button> : null}
-        {sessionId && !speaker.target ? <BotGroupPendingInteraction sessionId={sessionId} bot={pendingBot(speaker)} /> : null}
+        {sessionId && !speaker.target && speaker.isSelfRequested !== false ? <BotGroupPendingInteraction sessionId={sessionId} bot={pendingBot(speaker)} /> : null}
       </div>
     </article>
   );
 }
 
-/** Only a speaker's pending confirmation, for steps whose status lives in the progress strip. */
+/** A speaker's pending confirmation beside its timeline execution. */
 export function BotGroupSpeakerInteraction({ speaker }: { speaker: BotGroupLiveSpeaker }) {
-  if (!speaker.sessionId || speaker.target) return null;
+  if (!speaker.sessionId || speaker.target || speaker.isSelfRequested === false) return null;
   return (
     <div className="mt-3 pl-[38px]">
       <BotGroupPendingInteraction sessionId={speaker.sessionId} bot={pendingBot(speaker)} />
@@ -119,8 +124,7 @@ export function BotGroupSpeakerInteraction({ speaker }: { speaker: BotGroupLiveS
 }
 
 /**
- * Fixed above the composer while a plan step runs, or a teammate has been speaking for a few
- * seconds. Remount it (key) when the speaker set changes so 「几秒」 counts from the new turn.
+ * Execution progress at its original position in the message timeline.
  */
 export function BotGroupProgressStrip(props: BotGroupProgressStripProps) {
   const active = props.speakers.filter(speaker => speaker.activity !== 'planning');
@@ -129,19 +133,21 @@ export function BotGroupProgressStrip(props: BotGroupProgressStripProps) {
   // is waiting for its cancel receipt, so the last speaker's state cannot be
   // used as the button's disabled/loading state.
   const hasStoppableExecution = active.some(speaker => !speaker.stopping && speaker.executionStatus !== 'stopping');
-  const stopPending = props.stopping || !hasStoppableExecution;
+  const stopPending = props.stopPending ?? (props.stopping || !hasStoppableExecution);
   if (active.length <= 1) return <BotGroupSingleProgressStrip {...props} />;
   return <>{active.map((speaker, index) => <BotGroupSingleProgressStrip
     key={speaker.executionId ?? `${speaker.member.botId}:${speaker.activity}`}
-    {...props} step={props.step?.step.botId === speaker.member.botId && speaker.activity === 'step' ? props.step : null} speakers={[speaker]} showStop={index === active.length - 1} stopPending={stopPending}
+    {...props} step={props.step?.step.botId === speaker.member.botId && speaker.activity === 'step' ? props.step : null} speakers={[speaker]} showStop={!!props.onStop && index === active.length - 1} stopPending={stopPending}
   />)}</>;
 }
 
 interface BotGroupProgressStripProps {
+  showStop?: boolean;
+  stopPending?: boolean;
   step: (BotGroupRunningStep & { member: BotGroupMemberView | undefined; displayName: string }) | null;
   speakers: readonly BotGroupLiveSpeaker[];
-  onStop: (scope?: 'all') => void;
-  canStopAll?: boolean;
+  onStop?: (scope?: 'all') => void;
+  canStop?: boolean;
   stopping: boolean;
 }
 
@@ -149,9 +155,9 @@ function BotGroupSingleProgressStrip({
   step,
   speakers,
   onStop,
-  canStopAll = false,
+  canStop = true,
   stopping,
-  showStop = true,
+  showStop = !!onStop,
   stopPending,
 }: BotGroupProgressStripProps & { showStop?: boolean; stopPending?: boolean }) {
   const { t } = useTranslation();
@@ -181,14 +187,14 @@ function BotGroupSingleProgressStrip({
   const waiting = live?.phase === 'needs-interaction' || lead?.executionStatus === 'needs_input';
   if (!step && !lead) return null;
   const member = step ? step.member : lead?.member;
-  const name = step ? step.displayName : lead?.displayName ?? '';
+  const name = lead?.displayName ?? step?.displayName ?? '';
   // A queue turn is someone speaking, not a numbered step of work.
   const workStep = step && step.plan.kind !== 'talk' ? step : null;
   // The Session's compact detail may still be the previous turn's silence marker (NO_REPLY);
   // that is not an action anyone should read.
   const rawAction = live?.currentActionSummary?.trim() || live?.compactDetail?.trim() || '';
   const action = queued || isBotGroupNoReplyText(rawAction) ? '' : rawAction;
-  const canView = !!sessionId;
+  const canView = !!sessionId && lead?.isSelfRequested !== false;
   const title = <span className="inline-flex min-w-0 flex-wrap items-baseline gap-x-2">
     <span className="font-medium text-[var(--text-primary)]">{name}</span>
     <span>{isStopping ? t('bots.groupChat.progress.stopping')
@@ -196,15 +202,20 @@ function BotGroupSingleProgressStrip({
       : waiting ? t('bots.groupChat.waitingConfirm', { name: '' })
       : since !== undefined ? t('chat.teammateProcess.elapsed', { duration: formatBotGroupElapsed(Math.max(0, now - since), t) })
       : t('chat.teammateProcess.processing')}</span>
+    {lead?.executor ? <span data-testid="bot-group-executor" className="min-w-0 text-[var(--text-secondary)]">
+      {[lead.executor.here ? t('bots.groupChat.progress.onThisComputer') : lead.executor.deviceName
+        ? t('bots.groupChat.progress.onDevice', { device: lead.executor.deviceName }) : t('bots.groupChat.progress.onOtherComputer'),
+      lead.executor.model].filter(Boolean).join(' · ')}
+    </span> : null}
   </span>;
   return <div data-testid="bot-group-work" className="mt-3 flex min-w-0 items-start gap-2.5">
-    {member ? <div className="flex h-8 w-7 shrink-0 items-center"><BotAvatar bot={member} size="xs" /></div> : null}
+    {member ? <div className="flex h-8 w-7 shrink-0 items-center"><BotAvatar bot={member} size="sm" /></div> : null}
     <div data-testid="bot-group-progress" className="min-w-0 flex-1">
-      <WorkGroupBlock journal isStreaming blockId={`group-process:${lead?.executionId ?? sessionId ?? name}`}
-        journalTitle={title} childItems={[{ kind: 'rendered', key: 'notes', prose: false, renderNode: () => <>
+      <WorkGroupBlock pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} journal isStreaming blockId={`group-process:${lead?.executionId ?? sessionId ?? name}`}
+        journalTitle={title} childItems={[{ kind: 'rendered', key: 'notes', renderNode: () => <>
           {workStep ? <p className="text-13 text-[var(--text-secondary)]">{t('bots.groupChat.progress.step', { step: workStep.index, total: workStep.total })} · {workStep.step.task}</p> : null}
-          {sessionId && processSince !== undefined ? lead?.target ? <BotGroupRemoteProcessNotes sessionId={sessionId} deviceId={lead.target.deviceId} since={processSince} />
-            : <BotGroupProcessNotes sessionId={sessionId} since={processSince} /> : action ? <p className="break-words text-13 text-[var(--text-secondary)]">{action}</p> : null}
+          {sessionId && processSince !== undefined ? lead?.target ? <BotGroupRemoteProcessNotes sessionId={sessionId} executionId={lead?.executionId} deviceId={lead.target.deviceId} since={processSince} />
+            : <BotGroupProcessNotes sessionId={sessionId} executionId={lead?.executionId} since={processSince} /> : action ? <p className="break-words text-13 text-[var(--text-secondary)]">{action}</p> : null}
         </> }]} />
           <span className="flex shrink-0 items-center gap-1">
             {canView ? (
@@ -212,26 +223,7 @@ function BotGroupSingleProgressStrip({
                 {t('bots.groupChat.progress.viewProcess')}
               </Button>
             ) : null}
-            {!showStop ? null : canStopAll ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="secondary" tone="quiet" size="sm" compact loading={buttonPending} className="text-[var(--text-danger)]">
-                    {t('bots.groupChat.progress.stop')}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" side="top" className="min-w-[220px]">
-                  <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStop()}>
-                    {t('bots.groupChat.progress.stopMine')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem className={cn(MENU_ITEM_CLASS, 'h-auto items-start py-2')} onSelect={() => onStop('all')}>
-                    <span className="flex min-w-0 flex-col gap-0.5">
-                      <span className="text-[var(--text-danger)]">{t('bots.groupChat.progress.stopAll')}</span>
-                      <span className="text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">{t('bots.groupChat.progress.stopAllHint')}</span>
-                    </span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
+            {!showStop || !canStop ? null : (
               <Button
                 type="button"
                 variant="secondary"
@@ -239,8 +231,9 @@ function BotGroupSingleProgressStrip({
                 size="sm"
                 compact
                 loading={buttonPending}
-                onClick={() => onStop()}
+                onClick={() => onStop?.()}
                 className="text-[var(--text-danger)]"
+                title={t('bots.groupChat.progress.stop')}
               >
                 {t('bots.groupChat.progress.stop')}
               </Button>

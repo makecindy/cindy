@@ -273,7 +273,7 @@ export function ControlledBanner({
           // select-none:被控提示是状态指示,不应像正文一样可被鼠标框选复制。
           // h-7 与计划胶囊同为 28px；显式去掉纵向 padding，避免撤销按钮把主体撑到 32px。
           'pointer-events-auto flex h-7 min-w-0 max-w-full select-none items-center gap-2 overflow-hidden rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-0',
-          placement === 'floating' && 'shadow-[var(--shadow-menu)]',
+          placement === 'floating' && 'shadow-[shadow:var(--shadow-menu)]',
         )}
       >
         <span

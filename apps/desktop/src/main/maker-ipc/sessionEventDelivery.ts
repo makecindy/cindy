@@ -1,16 +1,13 @@
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
 import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
-import { reserveTurnErrorPersistId } from '../messagePersistBroadcaster.js';
-import { AgentInputCoordinator } from './agent-input-coordinator.js';
+import { reserveTurnErrorPersistId } from '../messagePersistBroadcaster.desktop.js';
+import { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import { MAKER_PUSH } from './channels.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
-import {
-  isContextOverflowErrorData,
-  isOversizedHistoryErrorData,
-  isUnsupportedRequestOptionErrorData,
-} from './contextOverflowRollover.js';
-import { noteClaudeSessionTurnState } from '../maker-host/claude-session-background-activity.js';
+import { holdsContextRecoveryBroadcast } from './contextOverflowRollover.js';
+import { syncBackgroundCommandWork } from '../maker-host/claude-background-command-work-sync.js';
+import { noteBackgroundActivityTurnEnded } from './sessionEventAutoResumeSteps.js';
 import { DeferredCodexRestartService } from './deferredCodexRestart.js';
 import {
   isTerminalTurnErrorEvent,
@@ -26,6 +23,7 @@ export interface DeliverSessionEventDeps {
   readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'captureWorkerTerminalTurn'> | null;
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
+    | 'bindErrorPersistId'
     | 'onExternalTurnSettled'
     | 'isAutoResumePending'
     | 'isAutoResumeDeferred'
@@ -107,16 +105,7 @@ export function deliverSessionEvent(
     session.id,
     event,
   );
-  const suppressOverflowBroadcast =
-    !session.remoteHostId &&
-    event.type === 'error' &&
-    isTerminalTurnErrorEvent(event) &&
-    (isContextOverflowErrorData(event.data) ||
-      isOversizedHistoryErrorData(event.data) ||
-      // 与 sessionEventTerminal 的 overflowClaim 判据保持一致：PI compat 自愈的终态错误
-      // 也要先压住广播并预留 persistId，否则自愈失败时 surfaceOverflowFailure 拿不到
-      // 预留 id（dedup 已被吃掉），错误行不落库、后台任务历史里看不到失败。
-      isUnsupportedRequestOptionErrorData(event.data));
+  const suppressOverflowBroadcast = holdsContextRecoveryBroadcast(session, event);
   // 供应商组正在为这次失败换电脑：error 行先不落库(暂存，换成了就丢掉)，同样不预留 persistId。
   // 协调器在 prepare 阶段同步登记，结算都是异步的，这里与 terminal 阶段看到的是同一次登记。
   const providerGroupHoldId =
@@ -143,6 +132,12 @@ export function deliverSessionEvent(
       eventAgentMeta,
     );
   }
+  if (persistId && event.type === 'error') {
+    const message = (broadcastEvent.data as { message?: unknown } | null)?.message;
+    if (typeof message === 'string') {
+      deps.agentInputCoordinatorHolder?.bindErrorPersistId(session.id, persistId, message);
+    }
+  }
   if (suppressOverflowBroadcast) {
     deps.overflowSuppressedBroadcasts.set(session.id, {
       sessionId: session.id,
@@ -166,7 +161,7 @@ export function deliverSessionEvent(
     deps.notifyGoalIdleAfterTurnSettled(session.id);
     // 后台活动检测:done / 终止型 error = 逻辑 turn 结束,记录结束时刻。
     // 此后若该会话进程仍有 API 流量(后台子 agent),record 路径会点亮横幅。
-    noteClaudeSessionTurnState(session.id, false);
+    noteBackgroundActivityTurnEnded(session);
     // turn 收尾打标(last_turn_ended_at)不在此处:done / terminal error 的本 turn
     // 持久化(assistant flush / orphan tool_result / error 行)在下方 flush 块才
     // 入队,统一在那之后走 markTurnEndedAfterPersistDrain(见该 helper 注释)。
@@ -197,7 +192,9 @@ export function deliverSessionEvent(
           deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id),
       });
     }
-    noteClaudeSessionTurnState(session.id, false);
+    noteBackgroundActivityTurnEnded(session);
+  } else if (event.type === 'agent_task_update') {
+    syncBackgroundCommandWork(session);
   }
   if (event.type === 'done' && !isContinuationBoundary) {
     void deps.gitSnapshotCoordinator?.onTurnEnd(session.id);

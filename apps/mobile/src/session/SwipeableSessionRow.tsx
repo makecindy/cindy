@@ -1,3 +1,5 @@
+import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
+import { useWindowWidth } from '@/platform/windowDimension';
 /**
  * SwipeableSessionRow —— 首页会话行的 iOS 式滑动操作包装。
  *
@@ -20,19 +22,20 @@
  *  - 全滑判定在 onSwipeableWillOpen 同步读取松手位移;不在手指按住时移除行,
  *    避免拆手势树。读取失败时才回退到 Animated listener 的最近值。
  */
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Animated, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Animated, Pressable, StyleSheet, View } from 'react-native';
 import {
   ClassicSwipeable as Swipeable,
   type ClassicSwipeableMethods,
 } from '@/platform/gestureHandler';
-import { Check, Archive, ArchiveRestore, Ellipsis, Pin, PinOff } from 'lucide-react-native';
+import { Check, Archive, ArchiveRestore, Ellipsis, Clock, Pin, PinOff } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { pinToggleAction, statusToggleAction, type SwipeRowRegistry } from '@/session/swipeRowRegistry';
 import type { RemoteSession } from '@/session/types';
 import { useDisclosurePrepare } from '@/session/listDisclosureTransition';
 import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing } from '@/theme/tokens';
+import { usePaneEdgeInset } from './SessionPaneDivider';
 
 /** 圆形按钮直径(静置态是正圆,拖长后变胶囊;78 高的行内上下各留 11)。 */
 const BUTTON_SIZE = 56;
@@ -46,7 +49,7 @@ const FULL_SWIPE_RATIO = 0.55;
 /** 「归档」按钮越过全滑阈值时扩展盖满右侧面板的过渡时长。 */
 const ARM_ANIMATION_MS = 150;
 const ICON_SIZE = iconSize.swipeAction;
-type SwipeTranslation = Animated.AnimatedInterpolation<number>;
+type SwipeTranslation = Parameters<NonNullable<React.ComponentProps<typeof Swipeable>["renderLeftActions"]>>[1];
 type ReadableSwipeTranslation = SwipeTranslation & { __getValue?(): unknown };
 type ClassicSwipeDirection = 'left' | 'right';
 
@@ -61,9 +64,13 @@ export interface SessionSwipeControls {
   onMarkRead(session: RemoteSession): void;
   onArchive(session: RemoteSession): void;
   onShowOptions(session: RemoteSession): void;
+  onSnooze?(session: RemoteSession): void;
+  /** Inbox: one-tap Done (archives without the automation reminder). */
+  onComplete?(session: RemoteSession): void;
 }
 
 export interface SwipeableSessionRowProps {
+  inboxMode?: boolean;
   /** 目标会话:id 作互斥 key,pinnedAt 决定右滑按钮图标(Pin/PinOff)与动作方向。 */
   session: RemoteSession;
   registry: SwipeRowRegistry;
@@ -78,6 +85,9 @@ export interface SwipeableSessionRowProps {
   onArchive(session: RemoteSession): void;
   /** 左滑「选项」按钮:先关行,再由页面层弹出操作菜单。 */
   onShowOptions(session: RemoteSession): void;
+  onSnooze?(session: RemoteSession): void;
+  /** Inbox: one-tap Done (archives without the automation reminder). */
+  onComplete?(session: RemoteSession): void;
   testID?: string;
   children: ReactNode;
 }
@@ -87,20 +97,31 @@ function SwipeableSessionRowInner({
   registry,
   onTogglePin,
   onMarkRead,
-  onArchive,
+  onArchive: onArchiveProp,
   onShowOptions,
+  onSnooze,
+  onComplete,
+  inboxMode = false,
   testID,
   children,
 }: SwipeableSessionRowProps) {
   const { t } = useTranslation();
-  const rowKey = session.id;
+  // Inbox: archive becomes a one-tap Done (button and full swipe alike).
+  const completeAction = inboxMode && session.status !== 'archived' && onComplete !== undefined;
+  const onArchive = completeAction && onComplete !== undefined ? onComplete : onArchiveProp;
+  // The same task may appear in its project and in the fixed inbox at once.
+  const instanceId = useId();
+  const rowKey = `${instanceId}:${session.id}`;
   const pinnedAt = session.pinnedAt;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { width: windowWidth } = useWindowDimensions();
+  const windowWidth = useWindowWidth();
   const fullSwipeThreshold = windowWidth * FULL_SWIPE_RATIO;
 
   const methodsRef = useRef<ClassicSwipeableMethods | null>(null);
+  // Leave the pane edge's drag band to resizing (see usePaneEdgeInset).
+  const edgeInset = usePaneEdgeInset();
+  const hitSlop = useMemo(() => ({ right: -edgeInset }), [edgeInset]);
   // 经典 Swipeable 在调用 WillOpen 前会把松手位移写入 transX 的 JS Animated 图。
   // 保留该节点可同步读取真正的松手位置;listener 最近值只作 RN 内部读值不可用时的兜底。
   const translationRef = useRef<ReadableSwipeTranslation | null>(null);
@@ -209,10 +230,15 @@ function SwipeableSessionRowInner({
     onTogglePin(session);
   }, [close, onTogglePin, session]);
 
+  const snoozeAction = inboxMode && !session.pinnedAt && session.status !== 'archived' && !!onSnooze;
+  const secondaryLabel = snoozeAction
+    ? t(taskSnoozeUntil(session) > Date.now() ? 'devices.list.menu.inbox.wake' : 'devices.list.menu.inbox.snooze')
+    : t('session.row.moreOptions');
   const handleOptionsPress = useCallback(() => {
     close();
-    onShowOptions(session);
-  }, [close, onShowOptions, session]);
+    if (snoozeAction) onSnooze?.(session);
+    else onShowOptions(session);
+  }, [close, onShowOptions, onSnooze, snoozeAction, session]);
 
   const handleArchivePress = useCallback(() => {
     onArchive(session);
@@ -269,10 +295,14 @@ function SwipeableSessionRowInner({
           {actionsMounted ? (
             <RightActionsContent
               armedProgress={armedProgress}
-              archiveLabel={statusToggle.label}
+              archiveLabel={completeAction ? t('devices.list.menu.inbox.complete') : statusToggle.label}
+              complete={completeAction}
               archived={statusToggle.action === 'restore'}
               onArchive={handleArchivePress}
               onOptions={handleOptionsPress}
+          secondaryLabel={secondaryLabel}
+          snoozeAction={snoozeAction}
+          showSecondary={!inboxMode || session.status !== 'archived'}
               onTranslationValue={handleTranslationValue}
               styles={styles}
               testID={testID}
@@ -287,6 +317,7 @@ function SwipeableSessionRowInner({
       armedProgress,
       handleArchivePress,
       handleOptionsPress,
+      secondaryLabel, snoozeAction, inboxMode, session.status, completeAction, t,
       handleTranslationValue,
       actionsMounted,
       statusToggle,
@@ -299,6 +330,7 @@ function SwipeableSessionRowInner({
   return (
     <Swipeable
       ref={methodsRef}
+      hitSlop={hitSlop}
       childrenContainerStyle={{ backgroundColor: colors.surface }}
       containerStyle={{ backgroundColor: colors.surface }}
       onSwipeableClose={handleClose}
@@ -439,8 +471,10 @@ function RightActionsContent({
   armedProgress,
   archiveLabel,
   archived,
+  complete = false,
   onArchive,
   onOptions,
+  secondaryLabel, snoozeAction, showSecondary,
   onTranslationValue,
   styles,
   testID,
@@ -450,8 +484,12 @@ function RightActionsContent({
   armedProgress: Animated.Value;
   archiveLabel: string;
   archived: boolean;
+  complete?: boolean;
   onArchive(): void;
   onOptions(): void;
+  secondaryLabel: string;
+  snoozeAction: boolean;
+  showSecondary: boolean;
   onTranslationValue(value: number): void;
   styles: SwipeStyles;
   testID?: string;
@@ -459,10 +497,11 @@ function RightActionsContent({
   windowWidth: number;
 }) {
   const { colors } = useTheme();
+  const SecondaryIcon = snoozeAction ? Clock : Ellipsis;
   // 置顶 / 归档会让行移位:按下即提前挂上列表过渡,松手时直接执行。
   const prepareDisclosure = useDisclosurePrepare();
   const { t } = useTranslation();
-  const StatusIcon = archived ? ArchiveRestore : Archive;
+  const StatusIcon = complete ? Check : archived ? ArchiveRestore : Archive;
   const revealed = Animated.multiply(translation, -1);
   const optionsOpacity = Animated.multiply(
     revealed.interpolate({
@@ -507,24 +546,24 @@ function RightActionsContent({
   return (
     <>
       <TranslationObserver onValue={onTranslationValue} translation={translation} />
-      <Animated.View
+      {showSecondary && <Animated.View
         style={[
           styles.optionsButton,
           { opacity: optionsOpacity, transform: [{ translateX: negativeOptionsExtension }, { scale: optionsScale }] },
         ]}
       >
         <Pressable
-          accessibilityLabel={t('session.row.moreOptions')}
+          accessibilityLabel={secondaryLabel}
           accessibilityRole="button"
           onPress={onOptions}
           style={styles.actionPressable}
           testID={testID ? `${testID}.optionsAction` : undefined}
         >
           <View style={styles.actionIconWrap}>
-            <Ellipsis color={colors.swipeActionText} size={ICON_SIZE} strokeWidth={iconStroke.regular} />
+            <SecondaryIcon color={colors.swipeActionText} size={ICON_SIZE} strokeWidth={iconStroke.regular} />
           </View>
         </Pressable>
-      </Animated.View>
+      </Animated.View>}
       <Animated.View style={[styles.archiveButton, { opacity: archiveOpacity, transform: [{ scale: archiveScale }] }]}>
         <Animated.View
           pointerEvents="none"

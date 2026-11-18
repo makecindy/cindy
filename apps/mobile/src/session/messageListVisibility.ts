@@ -36,6 +36,11 @@ export class MessageListVisibility {
 }
 
 export const MessageListVisibilityContext = createContext<MessageListVisibility | null>(null);
+/**
+ * Whether the message row is really in view (unlike heavy-content visibility, the focused row does not count unless it
+ * is). null outside a message list, where the content is the screen itself.
+ */
+export const MessageListItemViewableContext = createContext<boolean | null>(null);
 
 export function useMessageListItemVisible(key: string): boolean {
   const store = useContext(MessageListVisibilityContext);

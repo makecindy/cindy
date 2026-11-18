@@ -1,8 +1,12 @@
 import type { AgentKind } from '@cindy/maker-core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { OrcaWorkerProviderRoutingContext } from '../orcaWorkerCreationService';
-import { resolveSendToSessionExecutionConfig } from '../sendToSessionExecutionConfig';
+import {
+  resolveSendToSessionCreateRoute,
+  resolveSendToSessionExecutionConfig,
+  type SendToSessionRoutingSnapshot,
+} from '../sendToSessionExecutionConfig';
 
 const available = (agent: AgentKind) => (
   agent === 'codex'
@@ -445,5 +449,135 @@ describe('resolveSendToSessionExecutionConfig', () => {
       ok: false,
       errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
     });
+  });
+});
+
+// #9195: send_to_session create 的 agent_device_id。生产入口是 register.ts create 分支调用的
+// resolveSendToSessionCreateRoute；它的结果直接决定 openSession 的 agentDeviceId 与模型来源，
+// 失败结果让 create 分支在建任务前返回。
+describe('resolveSendToSessionCreateRoute', () => {
+  const SELF = 'self-device';
+  // 另一台电脑：同一个模型由那台的订阅提供，来源需要显式写入。
+  const deviceSnapshot = (models: string[] = ['claude-fable-5']): SendToSessionRoutingSnapshot => ({
+    availableModels: available('claude-code').filter((model) => models.includes(model.id)),
+    providerRouting: {
+      availability: {
+        'claude-code': [{
+          id: 'device-b-anthropic',
+          name: 'Anthropic (device-b)',
+          models,
+          requiresExplicitRoute: true,
+          effortMetaByModel: Object.fromEntries(models.map((id) => [id, { efforts: ['high'], defaultEffort: 'high' }])),
+        }],
+        codex: [],
+        pi: [],
+      },
+      resolveDefaultProviderIdForModel: () => 'device-b-anthropic',
+    },
+    hasCindyAiApiKey: true,
+  });
+  const routingDeps = (device: () => Promise<SendToSessionRoutingSnapshot> = async () => deviceSnapshot()) => ({
+    isSelfDeviceId: (deviceId: string) => deviceId === SELF,
+    readLocalRouting: vi.fn(async (agentKind: AgentKind): Promise<SendToSessionRoutingSnapshot> => ({
+      availableModels: available(agentKind),
+      providerRouting: providerRouting(),
+      hasCindyAiApiKey: true,
+    })),
+    readDeviceRouting: vi.fn((_deviceId: string, _agentKind: AgentKind) => device()),
+  });
+
+  it('SC1: 指定另一台电脑 → 位置为那台，沿用来源模型 id，来源按那台的供应商解析', async () => {
+    const deps = routingDeps();
+    const result = await resolveSendToSessionCreateRoute({
+      source: fableSource(), sourceAgentDeviceId: null, sourceIsSsh: false, requestedAgentDeviceId: 'device-b',
+    }, deps);
+    expect(result).toEqual({
+      ok: true,
+      agentDeviceId: 'device-b',
+      config: { agentKind: 'claude-code', model: 'claude-fable-5', effort: 'high', fastMode: false, providerId: 'device-b-anthropic' },
+    });
+    expect(deps.readDeviceRouting).toHaveBeenCalledWith('device-b', 'claude-code');
+    expect(deps.readLocalRouting).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: '来源在本机', sourceAgentDeviceId: null },
+    { name: '来源在另一台电脑', sourceAgentDeviceId: 'device-a' },
+  ])('SC2: 不指定位置 → 继承来源位置与配置，不读任何供应商 ($name)', async ({ sourceAgentDeviceId }) => {
+    const deps = routingDeps();
+    const result = await resolveSendToSessionCreateRoute({
+      source: fableSource(), sourceAgentDeviceId, sourceIsSsh: false,
+    }, deps);
+    expect(result).toEqual({ ok: true, agentDeviceId: sourceAgentDeviceId, config: fableSource() });
+    expect(deps.readDeviceRouting).not.toHaveBeenCalled();
+    expect(deps.readLocalRouting).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { requested: null, label: '"local"' },
+    { requested: SELF, label: '本机设备 id' },
+  ])('SC3: $label → 新任务在本机；来源在另一台时按本机供应商重新解析', async ({ requested }) => {
+    const deps = routingDeps();
+    const fromRemote = await resolveSendToSessionCreateRoute({
+      source: { ...fableSource(), providerId: 'device-a-sub' },
+      sourceAgentDeviceId: 'device-a', sourceIsSsh: false, requestedAgentDeviceId: requested,
+    }, deps);
+    expect(fromRemote).toMatchObject({ ok: true, agentDeviceId: null, config: { model: 'claude-fable-5', providerId: null } });
+    expect(deps.readLocalRouting).toHaveBeenCalledWith('claude-code');
+    expect(deps.readDeviceRouting).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: '格式不对',
+      params: { sourceIsSsh: false, requestedAgentDeviceId: 'bad id!' },
+      device: async () => deviceSnapshot(),
+      errorCode: 'INVALID_ARGS',
+    },
+    {
+      name: 'SSH 来源指定位置',
+      params: { sourceIsSsh: true, requestedAgentDeviceId: 'device-b' },
+      device: async () => deviceSnapshot(),
+      errorCode: 'INVALID_ARGS',
+    },
+    {
+      // "local" 到宿主是 null；SSH 来源的 Agent 在 SSH 主机上，显式本机位置同样要拒绝，
+      // 否则位置被当成未变、沿用 SSH 来源的模型与供应商在本机建任务。
+      name: 'SSH 来源显式 "local"',
+      params: { sourceIsSsh: true, requestedAgentDeviceId: null },
+      device: async () => deviceSnapshot(),
+      errorCode: 'INVALID_ARGS',
+    },
+    {
+      name: 'SSH 来源显式本机设备 id',
+      params: { sourceIsSsh: true, requestedAgentDeviceId: SELF },
+      device: async () => deviceSnapshot(),
+      errorCode: 'INVALID_ARGS',
+    },
+    {
+      name: '那台没有来源模型',
+      params: { sourceIsSsh: false, requestedAgentDeviceId: 'device-b' },
+      device: async () => deviceSnapshot(['claude-opus-fast']),
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+    },
+    {
+      name: '那台读不到供应商',
+      params: { sourceIsSsh: false, requestedAgentDeviceId: 'device-b' },
+      device: async (): Promise<SendToSessionRoutingSnapshot> => { throw new Error('device offline'); },
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+    },
+  ])('SC4: $name → $errorCode，不换模型也不建任务', async ({ params, device, errorCode }) => {
+    const result = await resolveSendToSessionCreateRoute({
+      source: fableSource(), sourceAgentDeviceId: null, ...params,
+    }, routingDeps(device));
+    expect(result).toMatchObject({ ok: false, errorCode });
+  });
+
+  it('继承来的位置读不到供应商时保持原有失败方式(抛给 create 分支)，不改成换电脑的失败码', async () => {
+    const deps = routingDeps(async () => { throw new Error('device offline'); });
+    await expect(resolveSendToSessionCreateRoute({
+      source: fableSource(), sourceAgentDeviceId: 'device-a', sourceIsSsh: false,
+      overrides: { effort: 'high' },
+    }, deps)).rejects.toThrow('device offline');
   });
 });
