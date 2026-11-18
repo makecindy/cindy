@@ -80,6 +80,39 @@ describe('host history view', () => {
   // A folded live row hides its id inside the work summary, not in `messages`.
   // Such a page must not be cached either: the run can be cancelled and the
   // projected row lost without any DB write to invalidate the key.
+  // Unit: a run that starts during the read projects the page in streaming mode
+  // and may carry live rows. Neither may be cached: the run can end without a DB
+  // write, so the revision stays put while the page stops being true.
+  it('never caches a page projected while the session was running', async () => {
+    const source = [row(0, 'user'), row(1), { ...row(2, 'tool_result'), toolUseId: 't9', content: 'ok' }];
+    const base = reader(source);
+    const list = vi.fn(base.list);
+    let runningCalls = 0;
+    // The wrapper checks `running` twice before the read; the projection asks
+    // again, so the third call is the one that turns the page into a live view.
+    const running = vi.fn(() => ++runningCalls === 3);
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => 'owner-a:1', anchor: async (_sid, id) => source.find(r => r.id === id)!, running });
+    const first = await api.page('s', undefined, true);
+    expect(first.items.some((item) => item.type === 'work' && item.summary.isStreaming)).toBe(true);
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2); // streaming page not cached
+  });
+  // Unit: live rows come from the run in memory, not the DB. A cancelled run
+  // releases them without a write, so a page holding one must not be cached.
+  it('never caches a page that carries a row owned by the live source', async () => {
+    const source = [row(0, 'user'), row(1, 'assistant')];
+    const base = reader(source);
+    const list = vi.fn(base.list);
+    let live: HistoryMessageSource[] = [{ ...row(2, 'assistant'), id: 'live-1' }];
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => 'owner-a:1', anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
+      live: () => live });
+    await api.page('s', undefined, true);
+    live = [];
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2); // live row not cached
+  });
   it('never caches a page whose work summary keeps a live row id', async () => {
     const liveThinking = { ...row(1, 'thinking'), id: 'history-live:c1' };
     const source: HistoryMessageSource[] = [
