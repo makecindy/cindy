@@ -37425,7 +37425,7 @@ describe('expected helper normal and failure boundaries', () => {
 // Unit tier: one failed native client + next send; no processes or real waits.
 describe('failed expected helper recovery', () => {
   const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
-  async function setup(state: string | (() => string), background: () => Promise<unknown> = async () => ({ data: [], nextCursor: null }), recover = true) {
+  async function setup(state: string | null | (() => string | null), background: () => Promise<unknown> = async () => ({ data: [], nextCursor: null }), recover = true) {
     const agent = new CodexAgent(createDeps());
     let resumes = 0;
     const host = installFakeHost(agent, method => {
@@ -37457,6 +37457,23 @@ describe('failed expected helper recovery', () => {
     expect(sends).toHaveLength(1);
     expect(sends[0][1]).toMatchObject({ threadId, input: [{ type: 'text', text: 'continue the same task' }] });
     expect(host.retire).not.toHaveBeenCalled();
+    expect((await handle.readMcpServerTools?.('cindy_helper'))?.state).toBe('connected');
+    await handle.close();
+    await agent.dispose();
+  });
+  // #11380 review: a null runtime was mistaken for its stale catalog. Unit
+  // tier, real Agent.send: retain rechecks without recovering until failed.
+  it('rechecks a null runtime before recovering a later confirmed failure', async () => {
+    let state: string | null = null;
+    const { agent, host, handle } = await setup(() => state);
+    await handle.send({ type: 'user', content: 'wait for startup' });
+    expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadResume)).toHaveLength(1);
+    expect(host.request.mock.calls.some(([m]) => m === Method.ThreadBackgroundTerminalsList)).toBe(false);
+    host.getThreadHandlers()?.turnCompleted?.({ threadId, turn: { id: 'helper-turn', status: 'completed' } });
+    state = 'failed';
+    await handle.send({ type: 'user', content: 'recover the failed helper' });
+    expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadResume)).toHaveLength(2);
+    expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(2);
     expect((await handle.readMcpServerTools?.('cindy_helper'))?.state).toBe('connected');
     await handle.close();
     await agent.dispose();

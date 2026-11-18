@@ -22,6 +22,17 @@ describe('Codex thread MCP server tools', () => {
     expect(await readCodexThreadMcpServerTools(invoke, 'thread-1', 'cindy_helper')).toEqual({ state, tools: [] });
   });
 
+  // #11380: explicit null after a config change has no exact runtime yet.
+  // Unit tier, production reader; missing-field legacy coverage below does
+  // not cover null with a stale or empty catalog, which must stay unready.
+  it.each([{ list_tools: {}, call_tool: {} }, {}])('keeps explicit null pending regardless of catalog %j', async tools => {
+    const { invoke } = requestFor({ first: { nextCursor: null, data: [{
+      name: 'cindy_helper', runtimeStatus: null, tools,
+    }] } });
+    expect(await readCodexThreadMcpServerTools(invoke, 'thread-1', 'cindy_helper'))
+      .toEqual({ state: 'pending', tools: [] });
+  });
+
   it('reads the caller thread status, not the shared host list', async () => {
     const { request, invoke } = requestFor({ first: { nextCursor: null, data: [
       { name: 'custom_omc', authStatus: 'bearerToken', tools: {

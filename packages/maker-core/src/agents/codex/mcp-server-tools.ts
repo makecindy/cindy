@@ -58,6 +58,9 @@ function reportFromCodexStatus(server: CodexMcpServerStatus): AgentMcpServerTool
   // exact client failed startup. Only the native thread state proves readiness.
   switch (server.runtimeStatus) {
     case 'failed': return { state: 'failed', tools: [] };
+    // Explicit null means the current configuration has no runtime yet;
+    // only an absent field may use the older-runtime catalog fallback.
+    case null:
     case 'notStarted':
     case 'starting': return { state: 'pending', tools: [] };
     case 'authenticationRequired': return { state: 'needs-auth', tools: [] };
