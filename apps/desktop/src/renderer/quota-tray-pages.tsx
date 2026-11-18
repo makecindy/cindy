@@ -57,7 +57,10 @@ export function Chart({ daily, onSelect }: {
 export function Manage({ view }: { view: MenubarView }) {
   const s = view.strings;
   const bridge = window.quotaTray;
-  const toggle = (id: string, visible: boolean) => bridge.updateSettings({
+  // The last visible source cannot be hidden, as in the Swift panel: its switch shakes instead.
+  const [shaking, setShaking] = useState<{ id: string; at: number } | null>(null);
+  const toggle = (id: string, visible: boolean) => !visible && view.manage.filter(row => !row.hidden).length <= 1
+    ? setShaking({ id, at: Date.now() }) : bridge.updateSettings({
     hidden: visible ? view.settings.hidden.filter(item => item !== id) : [...view.settings.hidden, id],
     shown: visible ? [...view.settings.shown, id] : view.settings.shown.filter(item => item !== id),
   });
@@ -75,6 +78,7 @@ export function Manage({ view }: { view: MenubarView }) {
       <div className="manage-source" key={row.id}>
         <Logo svg={row.logoSvg}/><label><strong>{row.title}</strong><small>{row.subtitle}</small>
           <input type="checkbox" checked={!row.hidden} aria-label={text(view, 'showSource', { name: row.title })}
+            key={shaking?.id === row.id ? shaking.at : undefined} data-shake={shaking?.id === row.id}
             onChange={event => toggle(row.id, event.target.checked)}/></label>
         <div className="reorder">
           <button disabled={!index} aria-label={s.moveUp} onClick={() => move(row.id, -1)}><ArrowUp size={14}/></button>
@@ -95,6 +99,12 @@ export function Manage({ view }: { view: MenubarView }) {
   </div>;
 }
 
+/**
+ * The rings draw once the page has all but arrived. Started together with the slide, as the
+ * Swift panel starts them, most of the arc is drawn while the page is still off to the side.
+ */
+const RING_START_MS = 250;
+
 export function Detail({ view, id }: { view: MenubarView; id: string }) {
   const detail = view.details[id];
   if (!detail) return null;
@@ -104,7 +114,7 @@ export function Detail({ view, id }: { view: MenubarView; id: string }) {
       <svg viewBox="0 0 200 200" aria-hidden="true">{detail.rings.map((ring, i) =>
         <g key={i}><circle cx="100" cy="100" r={90 - i * 12} className="ring-track"/>
           <circle cx="100" cy="100" r={90 - i * 12} pathLength="1" strokeDasharray={`${ring.fraction} 1`}
-            transform="rotate(-90 100 100)" style={{ stroke: `var(--${ring.color})` }}/></g>)}</svg>
+            transform="rotate(-90 100 100)" style={{ stroke: `var(--${ring.color})`, animationDelay: (RING_START_MS + i * 60) + 'ms' }}/></g>)}</svg>
       <div><b className="metric" style={{ color: detail.bigColor ? `var(--${detail.bigColor})` : undefined }}>{detail.bigValue}<small>{detail.bigUnit}</small></b><small>{detail.bigCaption}</small></div>
     </div>
     <div className="legend">{detail.legend.map((item, i) => <small key={i}><i style={{ background: `var(--${item.color})` }}/>{item.label}</small>)}</div>

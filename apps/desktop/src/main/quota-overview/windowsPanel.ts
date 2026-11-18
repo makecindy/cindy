@@ -8,6 +8,7 @@ import { isTrustedAppRendererEvent, isTrustedAppRendererWindow } from '../securi
 import { QuotaPanelController } from './panelController.js';
 import { QUOTA_PANEL_DESIGN, quotaPanelWidth } from '../../shared/quotaPanelDesign.js';
 import { sanitizeMenubarSettingsPatch } from '../menubar/settingsStore.js';
+import { placeTrayCard } from './trayCardPlacement.js';
 
 function withoutWindowAnimation(changeVisibility: () => void): void {
   // A Chromium hide fade leaves the reused layer transparent if the next show
@@ -33,7 +34,7 @@ export class WindowsQuotaPanel {
   private readonly panel = new QuotaPanelController({
     publish: view => this.send(view),
     open: () => this.open(this.anchor),
-  }, { openNewTask: () => this.openNewTask(), sharedQuotaWhileHidden: false });
+  }, { openNewTask: () => this.openNewTask(), hoverCard: true });
   private readonly controller = new ResourceUsageWindowController({
     createWindow: () => this.createWindow(),
     isOpenSender: sender => sender === this.owner()?.webContents,
@@ -219,21 +220,14 @@ export class WindowsQuotaPanel {
   }
 
   private position(win: BrowserWindow): void {
-    const anchor = this.anchor;
-    const point = anchor?.width && anchor.height
-      ? { x: Math.round(anchor.x + anchor.width / 2), y: Math.round(anchor.y + anchor.height / 2) }
-      : screen.getCursorScreenPoint();
-    const area = screen.getDisplayNearestPoint(point).workArea;
+    const cursor = screen.getCursorScreenPoint();
+    // Without an icon (the low-quota alert opens the card) the pointer stands in for it.
+    const anchor = this.anchor?.width && this.anchor.height ? this.anchor : { ...cursor, width: 0, height: 0 };
+    const area = screen.getDisplayNearestPoint({ x: anchor.x + anchor.width / 2, y: anchor.y + anchor.height / 2 }).workArea;
     const zoom = win.webContents.getZoomFactor();
     const width = Math.min(Math.ceil(quotaPanelWidth(this.panel.view?.sources.filter(source => source.fill !== null).length ?? 0) * zoom), area.width);
     const height = Math.min(Math.ceil(this.contentHeight * zoom), Math.floor(area.height * QUOTA_PANEL_DESIGN.metrics.heightShare));
-    const clamp = (n: number, start: number, end: number) => Math.max(start, Math.min(n, end));
-    const next = {
-      x: Math.round(clamp(point.x - width / 2, area.x, area.x + area.width - width)),
-      y: clamp(point.y < area.y + area.height / 2 ? point.y + 10 : point.y - height - 10,
-        area.y, area.y + area.height - height),
-      width, height,
-    };
+    const next = placeTrayCard({ anchor, area, width, height });
     const current = win.getBounds();
     if (current.x !== next.x || current.y !== next.y || current.width !== width || current.height !== height) {
       win.setBounds(next);

@@ -3949,7 +3949,11 @@ function ensureWindowsTray(): boolean {
       const win = mainWindowRef;
       if (win && !win.isDestroyed()) dispatchApplicationMenuCommand(win, resolveNewMakerMenuCommand(false));
     });
-    tray.on('click', (_event, bounds) => windowsQuotaPanel?.open(bounds));
+    // 卡片只由悬停触发；左键单击保持原有语义，直接回到主窗口。
+    tray.on('click', () => {
+      windowsQuotaPanel?.dismiss();
+      focusMainWindow();
+    });
     tray.on('right-click', () => {
       windowsQuotaPanel?.dismiss();
       openWindowsTrayMenu();
