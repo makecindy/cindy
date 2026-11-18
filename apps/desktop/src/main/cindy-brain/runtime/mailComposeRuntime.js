@@ -593,15 +593,17 @@ var cindyMail = (function () {
       if (!durable || durable.key !== key || durable.accountId !== record.account ||
           durable.draftId !== record.draftId || durable.state !== 'draft' ||
           !sameFields(durable.baseValues || {}, draftValues(readBack))) return;
-      await mailRecords(records => {
-        const current = records[key];
-        if (mailEdits.get(key) !== edit || edit.readBack !== readBack || edit.error || edit.conflictBase || current?.state !== 'draft' ||
-            current.callId !== record.callId || current.fingerprint !== readBack.fingerprint) return;
-        // Independent Host DB read confirmed this exact mailbox baseline. Keep only an empty recovery-chain marker for later saves;
-        // their Host publication may fail too, including after sandbox restart.
-        current.completedSaveHashes = {};
-        record.completedSaveHashes = {};
-      });
+      try {
+        await mailRecords(records => {
+          const current = records[key];
+          if (mailEdits.get(key) !== edit || edit.readBack !== readBack || edit.error || edit.conflictBase || current?.state !== 'draft' ||
+              current.callId !== record.callId || current.fingerprint !== readBack.fingerprint) return;
+          // Independent Host DB read confirmed this exact mailbox baseline. Keep only an empty recovery-chain marker for later saves;
+          // their Host publication may fail too, including after sandbox restart.
+          current.completedSaveHashes = {};
+          return true;
+        }, compacted => { if (compacted) record.completedSaveHashes = {}; });
+      } catch (_) { /* Keep provenance; cleanup cannot fail a confirmed save. */ }
     }
     async function continueMailTask(message, record, copy, key) {
       var result;
@@ -693,8 +695,8 @@ var cindyMail = (function () {
         if (result?.ok && edit) edit.terminalPublished = record.state;
       } catch (_) { /* Durable routing still rejects further edits and sends. */ }
     }
-    async function publishMailTerminal(record, sourceCallId) {
-      for (const [key, route] of Object.entries(await mailRecords())) {
+    async function publishMailTerminal(record, sourceCallId, routes) {
+      for (const [key, route] of Object.entries(routes)) {
         if (route.account !== record.account || route.draftId !== record.draftId) continue;
         await publishTerminalCard(key, { ...route, state: record.state }, route.callId === record.callId ? sourceCallId : undefined);
       }
@@ -927,16 +929,18 @@ var cindyMail = (function () {
             record.receipt = result.data.receipt;
             delete record.completedSaveHashes;
             delete record.unverifiedAdditions;
+            let terminalRoutes = { [key]: record };
             try {
-              await mailRecords(function (records) {
+              terminalRoutes = await mailRecords(function (records) {
                 storeMailRecord(records, key, record);
                 finalizeMailRoutes(records, record);
+                return records;
               });
             } catch (_) {
               /* A known send is never retried. */
             }
             edit.sent = true;
-            await publishMailTerminal(record, sourceCallId);
+            await publishMailTerminal(record, sourceCallId, terminalRoutes);
             return result;
           }
           if (record.completedSaveHashes) {
@@ -1066,11 +1070,12 @@ var cindyMail = (function () {
           if (!result.ok) edit.error = result;
           if (result.ok) edit.additions = [];
         }
-        await mailRecords(records => {
+        const terminalRoutes = await mailRecords(records => {
           storeMailRecord(records, key, record);
           if (result.ok) finalizeMailRoutes(records, record);
+          return records;
         });
-        if (result.ok) await publishMailTerminal(record, sourceCallId);
+        if (result.ok) await publishMailTerminal(record, sourceCallId, terminalRoutes);
         else await mailStatus(record.callId, result.message || copy.failed,
           "", false, sourceCallId, record.state === "draft" ? "error" : "unconfirmed");
         return result;

@@ -30,6 +30,7 @@ function fixture({
   durablePublish,
   hostRead,
   kvWrite,
+  kvRead,
   initialKv = {},
   draftId = "logical-draft",
 } = {}) {
@@ -106,7 +107,7 @@ function fixture({
         const next = JSON.parse(options.body);
         if (kvWrite) await kvWrite(next);
         kv = next;
-      }
+      } else if (kvRead) await kvRead();
       return { ok: true, json: async () => copy(kv) };
     },
     cindy: {
@@ -2165,4 +2166,59 @@ for (const operation of ['send', 'delete']) for (const lateBinding of [false, tr
   assert.equal(f.writes.length, writes);
   assert.equal(f.cards.slice(cards).some(c => c.draft || c.statusOnly?.pendingSend), false);
   assert.equal(f.cards.findLast(c => c.callId === 'card-call' && c.statusOnly)?.statusOnly.state, state);
+});
+
+// Terminal publication is secondary to an already-confirmed provider receipt.
+// Reading routing again after the successful terminal PUT can fail independently.
+for (const operation of ['send', 'delete']) test(`confirmed ${operation} survives a terminal fan-out KV read failure`, async () => {
+  let terminal = false;
+  const f = fixture({ kvRead: () => { if (terminal) throw new Error('Synthetic secondary KV read failure'); }, kvWrite: next => {
+    if (Object.values(next.mailDraftCards || {}).some(r => ['sent', 'deleted'].includes(r.state))) terminal = true;
+  } });
+  await f.present();
+  const result = await f.tool(operation).catch(() => ({ ok: false, execution: 'threw' }));
+  assert.equal(result.ok, true);
+  assert.equal(result.data[operation === 'send' ? 'sent' : 'deleted'], true);
+  const state = operation === 'send' ? 'sent' : 'deleted';
+  assert.equal(f.cards.at(-1).statusOnly.state, state);
+  assert.equal(Object.values(f.kv().mailDraftCards)[0].state, state);
+  terminal = false; f.restart();
+  assert.equal((await f.tool(operation)).data[operation === 'send' ? 'alreadySent' : 'alreadyDeleted'], true);
+  assert.equal(f.writes.filter(r => r.send).length, operation === 'send' ? 1 : 0);
+  assert.equal(f.deletes.length, operation === 'delete' ? 1 : 0);
+});
+
+// The durable card/base and primary routing save have already succeeded here.
+// A rejected proof-compaction PUT must keep provenance, not fail the operation.
+for (const operation of ['update', 'send']) test(`confirmed recovery ${operation} survives proof-compaction PUT rejection`, async () => {
+  let f, rejectPreview = false, rejectCleanup = false, rejected = 0;
+  f = fixture({ publish: card => !rejectPreview || card.type !== 'mail-draft-update', kvWrite: next => {
+    if (rejectCleanup && Object.values(next.mailDraftCards || {}).some(r => r.state === 'draft' && r.completedSaveHashes && !Object.keys(r.completedSaveHashes).length)) {
+      rejected++; throw new Error('Synthetic secondary cleanup PUT failure');
+    }
+  }, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    if (request.send) assert.ok(Object.keys(Object.values(f.kv().mailDraftCards)[0].completedSaveHashes).length);
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  rejectPreview = true; await f.tool('get'); rejectPreview = false;
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  rejectCleanup = true;
+  const result = await f.tool(operation).catch(() => ({ ok: false, execution: 'threw' }));
+  assert.ok(rejected > 0);
+  if (operation === 'send') assert.equal(result.ok, true);
+  else {
+    assert.equal(result, null);
+    assert.ok(Object.keys(Object.values(f.kv().mailDraftCards)[0].completedSaveHashes).length);
+    assert.equal(f.cards.at(-1).draft.state, 'draft');
+  }
+  assert.equal(f.current().editor.body, 'Replacement C');
+  rejectCleanup = false; f.restart();
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
 });
