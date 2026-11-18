@@ -31,8 +31,10 @@ vi.mock('../botPronounContext', () => ({
   useBotTranslation: () => ({ t: (key: string) => key }),
   BotPronounProvider: ({ children }: { children: ReactNode }) => children,
 }));
+const devices = vi.hoisted(() => ({ rows: null as null | Array<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }> }));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLinkDeviceList: () => devices.rows }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [{ id: 'remote-bot', deviceId: 'other-mac', name: 'Remote' }] }));
-vi.mock('../RemoteTeammateSettings', () => ({ RemoteTeammateSettings: ({ bot, initialPage }: { bot: { deviceId: string }; initialPage?: string }) => <div data-testid="remote-settings" data-initial-page={initialPage}>{bot.deviceId}</div> }));
+vi.mock('../RemoteTeammateSettings', () => ({ RemoteTeammateSettings: ({ bot, initialPage, controlOff }: { bot: { deviceId: string }; initialPage?: string; controlOff?: boolean }) => <div data-control-off={controlOff} data-testid="remote-settings" data-initial-page={initialPage}>{bot.deviceId}</div> }));
 vi.mock('../botStore', () => ({
   useBotProfiles: () => [
     { id: 'bot-1', name: 'Filo', status: 'active', sessions: [], capabilities: {}, skills: [] },
@@ -77,7 +79,7 @@ const cloud = vi.hoisted(() => ({ demotedBotIds: [] as string[], actors: [] as C
 vi.mock('../companionCloudStore', () => ({
   useCompanionCloud: () => ({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', actors: cloud.actors, demotedBotIds: cloud.demotedBotIds }),
 }));
-beforeEach(() => { cloud.demotedBotIds = []; cloud.actors = []; });
+beforeEach(() => { devices.rows = null; cloud.demotedBotIds = []; cloud.actors = []; });
 
 import { BotSettingsDrawer } from '../BotSettingsDrawer';
 import { cloudRemoteBots } from '../companionCloudPresentation';
@@ -364,5 +366,19 @@ it('does not open a stale remote settings route after the cloud home changes', (
     initialEntries: ['/bots/remote/other-mac/remote-bot?settings=1'],
   })} />);
   expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.queryByTestId('simple-bot-settings')).toBeNull();
+});
+
+// #10045 review: real drawer must prefer live presence over a stale cloud snapshot,
+// while preserving the cloud-only read-only projection. Unit tier; remote consumer tested separately.
+it.each([true, false])('uses live home presence (%s) for the cloud-only settings reason', (online) => {
+  cloud.actors = [{ id: 'actor', externalId: 'cloud-bot', name: 'Cloud', avatar: null,
+    homeDeviceId: 'home', homeDevice: { deviceId: 'home', name: 'Home', online: !online, isSelf: false, remoteControlEnabled: false } }];
+  devices.rows = [{ deviceId: 'home', online, remoteControlEnabled: false }];
+  const router = createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], {
+    initialEntries: ['/bots/remote/home/cloud-bot?settings=1'],
+  });
+  render(<RouterProvider router={router} />);
+  expect(screen.getByTestId('remote-settings').getAttribute('data-control-off')).toBe(String(online));
   expect(screen.queryByTestId('simple-bot-settings')).toBeNull();
 });

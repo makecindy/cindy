@@ -9,7 +9,8 @@ import { BotPronounProvider, useBotTranslation } from './botPronounContext';
 import { BotSettings } from './BotsHomeView';
 import { useBotProfiles } from './botStore';
 import { useCompanionCloud } from './companionCloudStore';
-import { cloudRemoteBots } from './companionCloudPresentation';
+import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
+import { cloudCompanionAt, homeControlOff, cloudRemoteBots } from './companionCloudPresentation';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { useRemoteBots } from './useRemoteBots';
 import { RemoteTeammateSettings } from './RemoteTeammateSettings';
@@ -22,6 +23,7 @@ export function BotSettingsDrawer() {
   const [searchParams, setSearchParams] = useSearchParams();
   const bots = useBotProfiles();
   const cloud = useCompanionCloud();
+  const devices = useDeviceLinkDeviceList();
   // Resolve the same rows as the list, including companions whose home was never discovered.
   const remoteBots = cloudRemoteBots(cloud, useRemoteBots());
   const remoteMatch = matchPath('/bots/remote/:deviceId/:botId', location.pathname);
@@ -169,6 +171,7 @@ export function BotSettingsDrawer() {
               <RemoteTeammateSettings
                 key={`${remoteBot.deviceId}:${remoteBot.id}:${open}:${localInitialPage}`}
                 bot={remoteBot}
+                controlOff={homeControlOff(cloudCompanionAt(cloud, remoteBot.deviceId, remoteBot.id) ?? undefined, devices)}
                 initialPage={localInitialPage}
                 beforeCloseRef={beforeCloseRef}
                 onBack={performClose}
