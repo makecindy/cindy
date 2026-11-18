@@ -67,7 +67,7 @@
 | `mobile.device-management` | mobile | 设备管理 | app/devices/manage.tsx / app/devices/manage/[deviceId].tsx |
 | `mobile.devices` | mobile | 主机详情 | app/devices/[deviceId].tsx |
 | `mobile.files` | mobile | 任务文件与预览 | app/files/[sessionId].tsx / app/files/preview/[sessionId].tsx |
-| `mobile.home` | mobile | 主机与资源首页 | app/index.tsx / app/devices/index.tsx |
+| `mobile.home` | mobile | 主机与资源首页；用量概览 | app/index.tsx / app/devices/index.tsx / app/usage.tsx |
 | `mobile.mail` | mobile | 邮件阅读与附件预览 | app/mail-preview.tsx |
 | `mobile.overlay.connection-startup` | mobile | 根布局挂载的启动与连接反馈 | app/_layout.tsx → StartupSplashOverlay / ConnectionNoticeProvider；各页面 ConnectionBanner |
 | `mobile.plugins` | mobile | 插件目录、页面与原生交互 | app/plugins.tsx |
@@ -164,6 +164,7 @@
 | apps/mobile/app/settings/voice-speaker-filter.tsx | VoiceSpeakerFilterRoute | `mobile.settings` |
 | apps/mobile/app/settings.tsx | SettingsScreen | `mobile.settings` |
 | apps/mobile/app/shared-session.tsx | SharedSessionScreen | `mobile.chat.sharing` |
+| apps/mobile/app/usage.tsx | UsageScreen | `mobile.home` |
 
 ### Mobile 布局 / 开发入口排除
 

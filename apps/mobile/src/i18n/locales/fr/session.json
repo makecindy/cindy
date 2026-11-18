@@ -578,6 +578,7 @@
       "taskCost": "Coût de la tâche",
       "actualCost": "Coût réel",
       "estimatedValue": "Valeur estimée",
+      "tokenUnit": "jetons",
       "totalTokens": "Total des jetons",
       "seeDetails": "Voir le détail",
       "valueUnavailable": "Une partie de la valeur de la tâche est indisponible",

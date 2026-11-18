@@ -578,6 +578,7 @@
       "taskCost": "Custo da tarefa",
       "actualCost": "Custo real",
       "estimatedValue": "Valor estimado",
+      "tokenUnit": "tokens",
       "totalTokens": "Total de tokens",
       "seeDetails": "Ver detalhamento",
       "valueUnavailable": "Parte do valor da tarefa está indisponível",

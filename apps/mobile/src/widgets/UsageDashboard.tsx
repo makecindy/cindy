@@ -8,7 +8,7 @@ import { Text } from '@/components/AppText';
 import { useAuth } from '@/auth/AuthContext';
 import { automaticUsageState, readUsageWidgetStore, subscribeUsageWidgetStore } from './usageWidgetSync';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 export function useAutomaticUsage() {
   const { user, isAuthenticated } = useAuth();
@@ -88,7 +88,7 @@ export function DrawerUsage({ onOpen }: { onOpen(): void }) {
   return <Pressable accessibilityRole="button" onPress={onOpen} testID="home.chromeDrawer.usage"
     style={({ pressed }) => [s.drawer, pressed && { backgroundColor: colors.surfaceChip }]}>
     <View style={s.between}><Text style={s.section}>{t('devices.usageTitle')}</Text>
-      <ChevronRight size={16} color={colors.textSecondary} /></View>
+      <ChevronRight size={iconSize.md} color={colors.textSecondary} /></View>
     {snapshot && preview.length > 0 ? <View style={s.compactPlans}>
       <View style={s.between}><Text style={s.meta}>{t('devices.usagePlans')}</Text>
         {accounts.length > preview.length && <Text style={s.meta}>+{accounts.length - preview.length}</Text>}</View>
@@ -96,7 +96,7 @@ export function DrawerUsage({ onOpen }: { onOpen(): void }) {
     </View> : null}
     {day && state?.kind === 'snapshot' ? <View style={preview.length > 0 ? s.usageDivider : undefined}>
       <View style={s.between}>
-        <Text style={s.meta}>{usageDayLabel(state.snapshot, t('session.menu.usage.today'))} · Token</Text>
+        <Text style={s.meta}>{usageDayLabel(state.snapshot, t('session.menu.usage.today'))} · {t('session.menu.usage.tokenUnit')}</Text>
         <TokenScope scope={state.snapshot.usage.scope} name={state.deviceName} />
       </View>
       <View style={s.usageStrip}>
@@ -134,10 +134,10 @@ export function UsageDashboard({ snapshot, name }: { snapshot: Snapshot; name?: 
       <View style={s.between}><Text style={s.section}>{usageDayLabel(snapshot, t('session.menu.usage.today'))}</Text>
         <TokenScope scope={usage.scope} name={name} /></View>
       {day ? <>
-        <View><Text style={s.hero}>{compact(sum(day.tokens), i18n.language)} <Text style={s.meta}>Token</Text></Text>
+        <View><Text style={s.hero}>{compact(sum(day.tokens), i18n.language)} <Text style={s.meta}>{t('session.menu.usage.tokenUnit')}</Text></Text>
           <Text style={s.meta}>{t('session.menu.usage.estimatedValue')} {money(sum(day.money))} · {t('session.menu.usage.actualCost')} {money(day.paid)}</Text></View>
         <View>{strings.dailyAverage && <Text style={[s.meta, { textAlign: 'right', marginBottom: spacing.sm }]}>
-          {strings.dailyAverage} {compact(periodTotal / usage.daily.length, i18n.language)} Token</Text>}
+          {strings.dailyAverage} {compact(periodTotal / usage.daily.length, i18n.language)} {t('session.menu.usage.tokenUnit')}</Text>}
           <HistoryBars snapshot={snapshot} />
           <View style={s.between}><Text style={s.meta}>{usage.days.at(-Math.min(30, usage.days.length))}</Text><Text style={s.meta}>{usage.days.at(-1)}</Text></View></View>
         <View style={s.breakdown}>

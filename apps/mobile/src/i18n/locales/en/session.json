@@ -577,6 +577,7 @@
       "taskCost": "Task cost",
       "actualCost": "Actual cost",
       "estimatedValue": "Estimated value",
+      "tokenUnit": "tokens",
       "totalTokens": "Total tokens",
       "seeDetails": "View breakdown",
       "valueUnavailable": "Some task value is unavailable",

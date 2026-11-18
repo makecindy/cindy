@@ -577,6 +577,7 @@
       "taskCost": "Aufgabenkosten",
       "actualCost": "Tatsächliche Kosten",
       "estimatedValue": "Geschätzter Wert",
+      "tokenUnit": "Token",
       "totalTokens": "Tokens gesamt",
       "seeDetails": "Aufschlüsselung anzeigen",
       "valueUnavailable": "Ein Teil des Aufgabenwerts ist nicht verfügbar",
