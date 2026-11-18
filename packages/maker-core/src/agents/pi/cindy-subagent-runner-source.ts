@@ -925,19 +925,6 @@ function main() {
           send(task, { type: 'extension_ui_response', id: event.id, value: JSON.stringify(receipt || {}) });
           return;
         }
-        if (event.type === 'extension_ui_request' && event.method === 'notify'
-            && typeof event.message === 'string' && event.message.startsWith('cindy:pi-vision-usage:')) {
-          try {
-            const vision = JSON.parse(childEnv.CINDY_PI_VISION_BRIDGE || '{}');
-            const prefix = 'cindy:pi-vision-usage:' + vision.usageToken + ':';
-            if (vision.usageToken && event.message.startsWith(prefix) && event.message.length <= prefix.length + 4096) {
-              const usage = JSON.parse(event.message.slice(prefix.length));
-              // Keep per-request facts out of the bounded task/approval snapshot.
-              fs.appendFileSync(path.join(config.runDir, 'vision-usage.jsonl'), JSON.stringify(usage) + '\n', { encoding: 'utf8', mode: 0o600 });
-            }
-          } catch (_) { /* Private usage never becomes tool output or an approval. */ }
-          return;
-        }
         safeAppendTranscript(state, { type: 'cindy.subagent.child_event', at: Date.now(), childId: task.childId, event: event });
         if (event.type === 'extension_ui_request') {
           const pending = {

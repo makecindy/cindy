@@ -8,6 +8,14 @@ import {
 } from '../index.js';
 
 describe('remote invoke policy boundaries', () => {
+  it.each(['desktop', 'mobile'] as const)('allows a repository clone to finish on %s without replaying project creation', (platform) => {
+    const channel = 'sidebar-settings:set-project-info';
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ create: true, repositoryUrl: 'https://gitlab.com/a/b' }], platform)).toBe(360_000);
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ create: true }], platform)).toBeUndefined();
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ repositoryUrl: 'https://gitlab.com/a/b' }], platform)).toBeUndefined();
+    expect(isPeerResetRetryableReadChannel(channel)).toBe(false);
+    expect(isCompletedInvokeRetryableReadChannel(channel)).toBe(false);
+  });
   it.each(['desktop', 'mobile'] as const)('budgets MCP App loading on %s without replaying any operation', (platform) => {
     const channel = 'maker:mcp-apps:v1';
     expect(resolveRemoteInvokeTimeoutMs(channel, ['task', { op: 'open' }], platform)).toBe(120_000);

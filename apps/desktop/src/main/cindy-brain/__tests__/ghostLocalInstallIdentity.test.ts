@@ -26,6 +26,7 @@ const createCallbacks = createGhostProductionCallbacks<{
   install: (event: unknown, file: string, options: unknown) => Promise<{ ghost: InstalledGhost }>;
 }>({
   functions: ['installAndDock', 'installAndDockLocked'],
+  variables: ['installLocalFile'],
   callbacks: { install: ['ipcMain.handle', 'ghosts:install'] },
 });
 
