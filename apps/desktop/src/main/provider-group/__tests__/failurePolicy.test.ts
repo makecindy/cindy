@@ -163,6 +163,10 @@ describe('decideProviderGroupFailure — any computer would fail the same way (s
     ['HTTP 413', { errorStatus: 413, message: 'too large' }, 'invalid-request'],
     ['Codex bad request', { codexErrorInfo: 'badRequest', message: 'x' }, 'invalid-request'],
     ['content policy', { codexErrorInfo: 'cyberPolicy', message: 'x' }, 'policy'],
+    // Unit, provider-groups §6.1: relocating cannot repair the shared proxy's
+    // explicit scope refusal. Existing stay inputs did not cover this message.
+    ['shared provider scope', { message: 'unexpected status 403 Forbidden: This request is outside the provider shared with you.' }, 'policy'],
+    ['shared scope with SDK auth wrapper', { errorStatus: 403, sdkError: 'authentication_failed', message: 'This request is outside the provider shared with you.' }, 'policy'],
     ['tool loop', { reason: 'tool_use_loop_detected', message: 'loop' }, 'tool-loop'],
     ['permission denied by user', { message: 'Permission denied by user' }, 'user'],
     ['tool execution failed', { reason: 'turn-failed', message: 'Tool execution failed' }, 'local'],
@@ -174,6 +178,13 @@ describe('decideProviderGroupFailure — any computer would fail the same way (s
   it('does not count usage limits wrapped as invalid_request as a request problem', () => {
     expect(decideProviderGroupFailure({ sdkError: 'invalid_request', errorStatus: 429, message: 'rate limited' }, 'run'))
       .toEqual(switchTo('usage-limit'));
+  });
+
+  it('keeps ambiguous upstream 403s eligible for the existing group recovery', () => {
+    for (const phase of PHASES) {
+      expect(decideProviderGroupFailure({ errorStatus: 403, message: 'Forbidden' }, phase)).toEqual(switchTo('failed'));
+      expect(decideProviderGroupFailure({ errorStatus: 403, sdkError: 'authentication_failed' }, phase)).toEqual(switchTo('auth'));
+    }
   });
 });
 

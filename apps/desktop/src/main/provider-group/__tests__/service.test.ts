@@ -1751,6 +1751,21 @@ describe('switching accounts between messages to balance quota', () => {
 });
 
 describe('onTurnError — one decision for every failure (failurePolicy)', () => {
+  // Unit, §6.1: existing stay coverage used invalid_request, which hides this
+  // gap. A terminal shared-provider scope refusal with a healthy spare must
+  // preserve the original error rather than move the task or enqueue a retry.
+  it('returns an explicit shared-provider scope refusal without relocating or continuing', async () => {
+    const h = harness();
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    const signals = { message: 'unexpected status 403 Forbidden: This request is outside the provider shared with you.', errorStatus: 403 };
+    await h.service.onTurnError('s1', signals, 7);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledTimes(1);
+    expect(h.bindings.get('s1')?.memberKey).toBe('local');
+    expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
+  });
+
   it('switches when the agent there ends mid-turn without a terminal event (default: switch), without cooling it', async () => {
     const h = harness();
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });

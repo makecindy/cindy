@@ -42,6 +42,7 @@ import { captureGuestRequestUsage, registerGuestProviderRoute, resetGuestProvide
 import { bindHostedSessionProvider, clearAllSessionProviders, setSessionProvider } from '../session-provider-store';
 import { setCustomProviderKeyReader } from '../provider-route';
 import { createUsagePricingObserver } from '../model-usage-pricing';
+import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
 
 function ctx(url: string, headers: Record<string, string> = {}, method = 'POST') {
   return { reqId: 1, method, url, headers } as never;
@@ -57,6 +58,26 @@ async function statusOf(input: RoutingDecision | null | undefined | Promise<Rout
 }
 
 describe('Codex proxy guard for shared-provider guests', () => {
+  // Unit: follow the real guest guard's HTTP refusal into the common group
+  // policy. Earlier tests asserted only 403, missing the automatic relocation.
+  it('keeps a rejected request outside the shared provider out of group failover', async () => {
+    const guard = createCodexGuestRoutingGuard('shared-a', 'env-key');
+    const decision = await guard({ model: 'other-model' }, ctx('/responses', { 'thread-id': 'guest-thread' }));
+    let status = 0;
+    let body = '';
+    await decision!.localHandler!({ res: {
+      writeHead: (value: number) => { status = value; },
+      end: (value: string) => { body = value; },
+    } } as never);
+    const error = JSON.parse(body).error;
+    expect(status).toBe(403);
+    expect(error.code).toBe('shared_provider_only');
+    expect(body).not.toContain('other-model');
+    expect(body).not.toContain('other-b');
+    expect(decideProviderGroupFailure({ errorStatus: status, message: error.message }, 'run'))
+      .toEqual({ action: 'stay', why: 'policy' });
+  });
+
   // A missing MIME header must not drop the only token source in receipt mode.
   // The actual guest binding/receipt parser must also count a duplicate terminal
   // frame only once, and reject a response belonging to a replaced binding.
