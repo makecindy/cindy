@@ -1981,6 +1981,8 @@ export function getDeviceLinkPeerLinks(): DeviceLinkPeerLinksSnapshot {
       return core ? { ...link, ...core, encrypted } : { ...link, encrypted };
     }),
     relayRttMs: primaryUsesEncryptedTransport ? agentNetRelayRttMs() : client.getRelayRttMs(),
+    // 这台电脑的主连接实际装上的传输(不是偏好);拓扑只在连着中转时写出来。
+    selfEncrypted: primaryUsesEncryptedTransport,
   };
 }
 

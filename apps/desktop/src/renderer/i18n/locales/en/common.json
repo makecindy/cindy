@@ -6799,6 +6799,7 @@
           "latency": "Latency",
           "lastSeen": "Last seen",
           "controlling": "Controlling this computer",
+          "protocol": "Connection",
           "rttNote": "last measured",
           "manage": "Manage device…",
           "linkStatus": "To {{name}}",

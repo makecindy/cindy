@@ -6866,6 +6866,7 @@
           "latency": "Latence",
           "lastSeen": "Dernière connexion",
           "controlling": "Contrôle cet ordinateur",
+          "protocol": "Connexion",
           "rttNote": "dernière mesure",
           "manage": "Gérer l’appareil…",
           "linkStatus": "Vers {{name}}",

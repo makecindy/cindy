@@ -145,6 +145,12 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
 const data = scenario(ctx.case);
 if (ctx.case === 'remote-switch-controller-strict') data.links = data.links.filter((l) => l.encrypted);
 /**
+ * 这台电脑实际用的连接方式(拓扑中间名字下面):打开 Agent-Net 后通常就是 Agent-Net;self-device-link 是开着开关、
+ * 这次却跑在 Device Link 上(例如 Agent-Net 不认这台设备),主连接不是 Agent-Net 时所有对端也都是 Device Link。
+ */
+const selfEncrypted = ctx.case !== 'self-device-link';
+if (!selfEncrypted) for (const l of data.links) l.encrypted = false;
+/**
  * 远程切换连接方式的模拟对端(remote-switch):代替那台电脑回答 `peer-agent-net`,并像真实切换一样
  * 让与它的连接先断开、再以新方式连回来。MacBook Air 是旧版 Cindy(不认识这个请求)，Spare PC 在当前中转上
  * 没有 Agent-Net 身份；Agent-Net 不通的那台(单台场景 Home PC、批量场景 Lab Mac)连回来的仍是 Device Link，
@@ -215,7 +221,7 @@ void mountPage({
         disabledControlDeviceIds: [],
         unresponsiveDeviceIds: [],
       }),
-      getPeerLinks: async () => ({ links: data.links, relayRttMs: data.relayRttMs }),
+      getPeerLinks: async () => ({ links: data.links, relayRttMs: data.relayRttMs, selfEncrypted }),
       onPeerLinksChanged: subscription('peerLinks'),
       onPresenceChanged: subscription('presence'),
       onStatusChanged: subscription('linkStatus'),

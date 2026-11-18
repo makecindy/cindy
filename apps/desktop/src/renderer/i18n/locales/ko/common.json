@@ -6756,6 +6756,7 @@
           "latency": "지연",
           "lastSeen": "마지막 접속",
           "controlling": "이 컴퓨터를 제어 중",
+          "protocol": "연결 방식",
           "rttNote": "최근 측정",
           "manage": "기기 관리…",
           "linkStatus": "「{{name}}」 연결",

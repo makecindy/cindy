@@ -5,7 +5,7 @@
 
 import { relativeTime as relativeTimeOf } from '@/components/settings/deviceLabels';
 
-import type { TopologyFlow, TopologyNode } from './topologyModel';
+import type { TopologyFlow, TopologyModel, TopologyNode } from './topologyModel';
 
 export { platformLabel, relativeTime } from '@/components/settings/deviceLabels';
 
@@ -19,10 +19,22 @@ export function protocolKind(node: TopologyNode): ProtocolKind | null {
   return node.encrypted ? 'agent-net' : 'device-link';
 }
 
+export function protocolName(kind: ProtocolKind, t: T): string {
+  return t(kind === 'agent-net' ? 'settings.remoteControl.v2.protocol.agentNet' : 'settings.remoteControl.v2.protocol.deviceLink');
+}
+
 export function protocolLabel(node: TopologyNode, t: T): string | null {
   const kind = protocolKind(node);
-  if (!kind) return null;
-  return t(kind === 'agent-net' ? 'settings.remoteControl.v2.protocol.agentNet' : 'settings.remoteControl.v2.protocol.deviceLink');
+  return kind ? protocolName(kind, t) : null;
+}
+
+/**
+ * 这台电脑自己用的连接方式(用户要求 2026-11-18):以主进程实际装上的主连接为准，不看开关偏好。
+ * 只在连着中转时写;连接中、已停或主进程没给(旧版 / 链路未起)都不写，免得把还没定下来的写成 Device Link。
+ */
+export function selfProtocolKind(model: Pick<TopologyModel, 'selfEncrypted'>, linkStatus: string): ProtocolKind | null {
+  if (linkStatus !== 'online' || model.selfEncrypted === undefined) return null;
+  return model.selfEncrypted ? 'agent-net' : 'device-link';
 }
 
 /** 一台设备「怎么连」的一句话:直连 / 经「X」中转 / 在线未建链 / 要处理原因 / 离线。 */
