@@ -222,6 +222,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | 组织账号跨区登录时的 5 处版本区域发送（D1–D5，用户 2026-11-17 定为符合预期） | B 区组织账号登进 A 区版本时，以下请求按版本区域发往 A 区服务：D1 公开插件分享（选署名时带 token 与 authRealm，`plugin-market/sharing.ts:41-60`）；D2 本地插件分享（`localSharing.ts:35-56`）；D3 群聊邀请分享（`chatInviteShares.ts:9-40`）；D4 日志上报含崩溃与性能追踪（userId，`log-upload/index.ts:119,151-166`）；D5 TapDB 使用统计（`tapdbClient.ts:75-92,551-557`） | Host 上没有这 5 个模块（导入图核过）。Host 网页端的使用统计是新出现的入口，与 D5 不同：账号 realm 与渲染层区域不一致时不上报（甲-1），不新增跨区上报；已做，见第五节甲 21 |
 | 网关 key 更换时运行中的 Pi 任务（m1-rc4 核对） | Pi 进程的 `CINDY_PI_API_KEY` 是启动时的网关 key；本机代理按会话 token 准入，转发 Pi 持有的 key（同一个路由核心） | 换 key 之后，运行中的 Pi 的下一次网关请求仍带旧 key，网关还认旧 key 时成功，不认时失败；桌面相同。m1-rc4 的修复只覆盖 Claude（代理换成当前 key）；Codex 的本机代理按当前 key 改写网关请求的 authorization（`codex-proxy-host.ts` 的网关路由）；Pi 两边都不换（`claude-proxy-runtime.test.mjs` 按桌面现状断言） |
 | 远程（URL）MCP app 的出站（28c 守护发现，2026-11-18） | `mcp-apps/connection.ts` 连远程 MCP app 用 Node 的全局 fetch，不经出口代理解析；桌面主进程的全局 fetch 同样是 Node 的，同样不走系统代理与 PAC；插件自带的 MCP app 走插件的传输 | 只靠系统代理或 PAC 才能连出去的用户，远程 MCP app 连不上；两边相同。登记在 `apps/host/src/host-network-modules.ts`（same-as-desktop），守护核对该模块的 fetch 使用次数，新增直接调用时会报错 |
+| Agent-Net 的出站（本次主干同步，28c 守护） | 启用 Agent-Net 后，Host 与桌面共用会话 UDP、STUN、UDP 中继和局域网发现，均直接走 UDP。Host 的 HTTP 和 WebSocket 走已有出口代理解析 | 依赖 HTTP 代理的环境要分别验证 UDP 可达性。Host 只运行客户端，Agent-Net 开关默认关闭。分类见 `apps/host/src/host-network-modules.ts` |
 
 ### 已知限制（仅限测试期）
 
