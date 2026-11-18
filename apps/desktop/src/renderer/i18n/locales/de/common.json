@@ -5532,8 +5532,8 @@
       "workerHardLimitHint": "Maximal zulässige Anzahl an Workern. Muss >= dem weichen Limit sein.",
       "idleRelease": "Bei Inaktivität freigeben (Minuten)",
       "idleReleaseHint": "Setze den Wert auf 0, um die automatische Freigabe im Hintergrund zu deaktivieren. Positive Werte geben Worker nach dieser Anzahl inaktiver Minuten frei.",
-      "dispatchClaimVerification": "Ausführungsangaben prüfen",
-      "dispatchClaimVerificationHint": "Prüft, ob der Lead wirklich einen Auftrag abgeschickt hat, bevor er eine Aufgabe als gesendet meldet. Eine unbelegte Angabe wird einmal korrigiert, danach wirst du benachrichtigt."
+      "dispatchClaimVerification": "Übergaben prüfen",
+      "dispatchClaimVerificationHint": "Prüft, ob der Lead wirklich einen Auftrag übergeben hat, bevor er eine Übergabe als erfolgt meldet. Eine unbelegte Angabe wird einmal korrigiert, danach wirst du benachrichtigt."
     },
     "agentResource": {
       "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
@@ -15279,14 +15279,14 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "unverified": "Versand nicht bestätigt",
+        "unverified": "Übergabe nicht bestätigt",
         "notice": {
-          "claim": "Laut Lead wurde versandt",
-          "claimTarget": "Laut Lead wurde an {{target}} versandt",
+          "claim": "Laut Lead wurde übergeben",
+          "claimTarget": "Laut Lead wurde an {{target}} übergeben",
           "noDispatch": "Der Host hat in diesem Turn keine Übergabe angenommen",
-          "notDispatched": "Der Host hat in diesem Turn keinen Versand an {{target}} verzeichnet",
-          "unknownId": "Die zitierte Queue-ID {{id}} gehört zu keinem Versand",
-          "body": "{{claim}}. {{reason}}. Zitat aus der Antwort dieses Turns: „{{quote}}“. Der Lead wurde um erneuten Versand gebeten."
+          "notDispatched": "Der Host hat in diesem Turn keine Übergabe an {{target}} verzeichnet",
+          "unknownId": "Die zitierte Queue-ID {{id}} gehört zu keiner Übergabe",
+          "body": "{{claim}}. {{reason}}. Zitat aus der Antwort dieses Turns: „{{quote}}“. Der Lead wurde um eine erneute Übergabe gebeten."
         }
       },
       "help": {

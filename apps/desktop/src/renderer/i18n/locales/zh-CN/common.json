@@ -15251,13 +15251,13 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "unverified": "派单未经核实",
+        "unverified": "派发未经核实",
         "notice": {
-          "claim": "Lead 称已派单",
+          "claim": "Lead 称已派发",
           "claimTarget": "Lead 称已派给 {{target}}",
-          "noDispatch": "宿主这一轮没有接受任何派单",
+          "noDispatch": "宿主这一轮没有接受任何派发",
           "notDispatched": "宿主这一轮没有派往 {{target}} 的记录",
-          "unknownId": "引用的队列编号 {{id}} 不对应任何派单",
+          "unknownId": "引用的队列编号 {{id}} 不对应任何派发",
           "body": "{{claim}}。{{reason}}。引文取自它这轮回复：「{{quote}}」。已要求 Lead 重派。"
         }
       },
@@ -15518,7 +15518,7 @@
       "orcaFromWorkerBatch": "系统回传的 {{count}} 条 Worker 结果",
       "orcaFromWorkerNamed": "来自 Worker「{{role}}」的消息",
       "orcaFromHost": "来自宿主（Orca host）的消息",
-      "orcaHostNoticeDispatchClaim": "这条声称的派单在宿主记录里查不到，已提醒 Lead 补上队列编号或实派结果。",
+      "orcaHostNoticeDispatchClaim": "这条声称的派发在宿主记录里查不到，已提醒 Lead 补上队列编号或实际派发结果。",
       "hookChannelFrom": "来自 {{channel}}",
       "deviceSentMobileNamed": "从手机「{{name}}」发送",
       "deviceSentMobile": "从手机发送",
