@@ -164,6 +164,12 @@ it.each([false, true])('runs existing RPC and multi-megabyte results through cer
 // rather than a mocked thread, protects the production boundary and shutdown/revocation behavior.
 it('runs encrypted RPC in isolated workers while the host retains its outbound network factory', async () => {
   const f = await network(false, undefined, true); serve(f.host);
+  // MagicLizi's topology needs the authenticated path before any link-open. Existing
+  // RPC assertions only exercised that path after opening the control link. Integration, real worker and relay.
+  const hostSocket = f.sockets.find((socket) => socket.deviceId === 'a-host');
+  if (!(hostSocket instanceof AgentNetWorkerSocket)) throw new Error('Expected the host transport in a worker');
+  await vi.waitFor(() => expect(hostSocket.peerRoutes()).toMatchObject([{ deviceId: 'b-controller', path: 'relay' }]));
+  expect(f.host.getPeerLinkSnapshots()).toEqual([]);
   await f.controller.openLink('a-host', openPayload);
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['worker-business-value'] })).toMatchObject({ ok: true, result: 'worker-business-value' });
   expect(f.sockets.every((socket) => socket instanceof AgentNetWorkerSocket)).toBe(true);
@@ -180,7 +186,11 @@ it('runs encrypted RPC in isolated workers while the host retains its outbound n
   await vi.waitFor(() => expect(f.notifications).toHaveLength(1));
   expect(f.httpCalls).toContain('POST ' + f.a.base + '/api/agent-net/notify');
   expect(f.notifications[0].ciphertext).not.toContain('private-body');
+  const routesChanged = vi.fn();
+  hostSocket.on('peer-routes-changed', routesChanged);
   await f.a.request('DELETE', '/devices/b-controller');
+  await vi.waitFor(() => expect(routesChanged).toHaveBeenCalled());
+  expect(hostSocket.peerRoutes()).toEqual([]);
   await vi.waitFor(() => expect(f.controller.getStatus()).not.toBe('online'));
 });
 
@@ -515,7 +525,7 @@ it('keeps one usable encrypted connection after both endpoints dial at the same 
  * - 生产入口与可观察结果：AgentNetSocket 的 peerRule 与 restrictPeers，真实核心与 V2 中转。规则之外的本账号设备证书有效、
  *   在名册里，也拨不出去、拨不进来；放回规则后它等着的那次拨号马上连上、帧送达；再收紧时这一端马上断开、也不再拨。
  * - Bug／规则依据：Device Link 里删掉的设备要重新登录才能再连；官方 Agent-Net 不看那条删除记录，由 Desktop 与 Host 按设备列表拦
- *   （apps/desktop/src/main/device-link/agentNetMembership.ts，docs/dev-rules/protocol-compatibility/agent-net-device-removal.md）。
+ *   （packages/agent-net/src/membership.ts，docs/dev-rules/protocol-compatibility/agent-net-device-removal.md）。
  * - 现有覆盖缺口：只有中转撤销证书一种拦法，没有「名册里有、本机不认」；核心会记住拒过的握手，放开时不换准入版本就要等它过期。
  * - 最小失败输入：开着就不认对端（拨号被拒、对端拨进来挂着），放开后挂着的拨号连上、推送送达，再收紧时连接断开、拨号被拒。
  * - tier：integration，真实回环 WS 中转，不开 UDP。 */

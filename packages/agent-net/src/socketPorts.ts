@@ -6,7 +6,7 @@ export interface SocketUplink {
   readonly notifications?: boolean;
   readonly delegations?: Delegation[];
   readonly delegationRequests?: DelegationRequest[];
-  /** This session's UDP relay credentials when the relay offered them (Node uplink only); null or absent keeps WebSocket. */
+  /** This session's UDP relay credentials when the relay offered them (over TLS); null or absent keeps WebSocket. */
   readonly udp?: { session: Uint8Array; key: Uint8Array } | null;
   send(deviceId: string, data: Uint8Array): void;
   presence(enabled: boolean, capabilities: readonly string[], metadata?: import('@cindy/agent-net-protocol').DeviceMetadata): void;

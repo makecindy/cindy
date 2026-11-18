@@ -6554,7 +6554,8 @@
           "defaultProjectFullAccessWarning": "El proyecto predeterminado «{{name}}» tiene Acceso completo: una @mention desde cualquier grupo se ejecuta con acceso completo dentro de él.",
           "sharedSettingsPointer": "Los proyectos, modelos y permisos se comparten entre todos los bots oficiales.",
           "sharedSettingsPointerAction": "Abrir ajustes",
-          "workspacesBoundCount_many": "{{count}} proyectos"
+          "workspacesBoundCount_many": "{{count}} proyectos",
+          "workspacesCardDescriptionWithPlugins": "Compartido por todos los bots oficiales y los complementos de mensajería. Los proyectos vienen de la barra lateral: créalos, renómbralos o quítalos allí. Los cambios hechos con /model en un chat también aparecen aquí. Los modelos y permisos cambiados para un solo chat en un complemento no se ven afectados."
         },
         "binding": {
           "copyLink": "Copiar enlace",
@@ -7091,11 +7092,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "Oficial",
-        "personal": "Personal"
+        "personal": "Personal",
+        "plugins": "Complementos"
       },
       "tips": {
         "cindy": "Proporcionado y mantenido por Cindy. No necesitas crear un bot ni proporcionar credenciales: sigue los pasos de conexión para comenzar.",
-        "personal": "Usa tu propia cuenta o bot y administra las credenciales necesarias por tu cuenta. Cada canal mantiene su propia cuenta, permisos y configuración."
+        "personal": "Usa tu propia cuenta o bot y administra las credenciales necesarias por tu cuenta. Cada canal mantiene su propia cuenta, permisos y configuración.",
+        "plugins": "Entradas de mensajería que ofrecen los complementos instalados. El inicio de sesión y la vinculación se hacen en la página del complemento. Los proyectos, modelos y permisos siguen «Proyectos y modelos» de forma predeterminada y se pueden cambiar por chat en el complemento."
       },
       "defaults": {
         "title": "Configuración de nuevas conversaciones",
@@ -7127,6 +7130,10 @@
         },
         "groupPermissionLabel": "Modo de permisos para tareas nuevas en grupos",
         "groupPermissionDescription": "Modo de permisos que se usa para cada tarea creada en un chat grupal: se aplica al abrir un tema con @bot y al usar /new o /ctr; el modo de permisos anterior solo se aplica a los mensajes directos. El valor predeterminado es Aprobación automática. El contexto del grupo puede contener contenido controlado por sus miembros: elegir Acceso total ejecuta acciones sin confirmación en cada paso, así que elígelo solo para grupos de confianza. Los cambios se aplican a las tareas creadas después; cambia una tarea existente con /permission en el grupo."
+      },
+      "plugins": {
+        "rowHint": "El inicio de sesión, la vinculación y la configuración de cada chat están en la página del complemento.",
+        "open": "Abrir complemento"
       }
     },
     "shortcuts": {
@@ -16825,6 +16832,37 @@
         "priority": "Prioridad",
         "activity": "Actividad reciente",
         "created": "Fecha de creación"
+      },
+      "inbox": {
+        "thisEvening": "Esta tarde",
+        "tomorrow": "Mañana",
+        "nextWeek": "La próxima semana",
+        "custom": "Personalizar…",
+        "wakeAt": "Fecha y hora de regreso",
+        "timeZone": "Hora local ({{zone}})",
+        "invalidTime": "Elige una fecha y hora futuras dentro de un año.",
+        "inbox": "Pendientes",
+        "working": "En curso",
+        "snoozed": "Pospuestas",
+        "archived": "Procesadas",
+        "snooze": "Posponer tarea",
+        "complete": "Hecho",
+        "wake": "Mostrar ahora",
+        "restore": "Restaurar tarea",
+        "process": "Marcar como procesada (archivar)",
+        "empty": "La bandeja está vacía",
+        "snoozeFailed": "No se pudo guardar la hora. Comprueba la conexión y actualiza el equipo que aloja esta tarea.",
+        "hours": "En {{count}} horas",
+        "hours_one": "En {{count}} hora",
+        "hours_many": "En {{count}} horas",
+        "hours_other": "En {{count}} horas"
+      },
+      "taskListMode": {
+        "heading": "Modo de tareas",
+        "tasks": "Lista de tareas",
+        "inbox": "Bandeja de entrada",
+        "enterInbox": "Cambiar al modo bandeja de entrada",
+        "leaveInbox": "Cambiar al modo lista de tareas"
       }
     },
     "rename": {
@@ -17119,6 +17157,7 @@
         "menuSave": "Guardar",
         "menuInsertTable": "Insertar tabla",
         "externalChangeBlocked": "El archivo cambió en el disco. El guardado automático está en pausa; guarda manualmente para sobrescribirlo.",
+        "targetChanged": "El archivo ahora apunta a otra ubicación. Tu borrador sigue en el editor. Cópialo antes de volver a abrir el archivo.",
         "tableMenu": {
           "addRowAbove": "Agregar fila arriba",
           "addRowBelow": "Agregar fila abajo",
@@ -21592,6 +21631,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "Cerrar",
+    "taskInbox": {
+      "title": "Conoce la bandeja de entrada",
+      "lead": "Las tareas se ordenan solas en Pendientes, En curso, Pospuestas y Procesadas. El mejor hábito es mantener la bandeja vacía: haz clic en Hecho cuando termines una tarea y pospón lo que pueda esperar.",
+      "pending": {
+        "title": "Pendientes",
+        "body": "Las tareas aparecen aquí cuando tienen un resultado o esperan tu respuesta."
+      },
+      "done": {
+        "title": "Hecho",
+        "body": "¿Listo? Un clic en Hecho la pasa a Procesadas. Vuelve sola si hay novedades."
+      },
+      "snooze": {
+        "title": "Pospuestas",
+        "body": "¿Ahora no puedes? Elige una hora y volverá a Pendientes."
+      },
+      "start": "Empezar",
+      "note": "Vuelve a la lista de tareas cuando quieras con el botón de la parte superior de la barra lateral."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Te damos la bienvenida a Cindy",
@@ -22158,6 +22218,19 @@
       "network": "Conexión perdida, reintentando…",
       "timeout": "Tiempo de conexión agotado, reintentando…",
       "server": "Servidor ocupado, reintentando…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "¿Ampliar los permisos de este chat?",
+    "message": "¿Permitir que «{{name}}» use «{{mode}}» para «{{conversation}}» en el proyecto «{{project}}»?",
+    "detail": "Es más amplio que la configuración del proyecto de mensajería ({{projectMode}}). Si lo permites, este complemento podrá usar este nivel de permiso en este proyecto, solo en sus propias sesiones. Puedes volver a seguir la configuración de mensajería desde el complemento en cualquier momento.",
+    "groupWarning": "Otros miembros también pueden enviar mensajes en este grupo. Cuanto más amplio sea el permiso, menos acciones te pedirán confirmación, así que asegúrate de que confías en todos los miembros del grupo.",
+    "allow": "Permitir",
+    "cancel": "Cancelar",
+    "modes": {
+      "ask": "Permisos predeterminados",
+      "auto": "Revisión automática",
+      "bypassPermissions": "Acceso completo"
     }
   }
 }

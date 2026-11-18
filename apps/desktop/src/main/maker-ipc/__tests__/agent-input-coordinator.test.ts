@@ -5564,7 +5564,20 @@ describe('AgentInputCoordinator send transaction', () => {
       clientId: 'q-head',
     });
 
-    await h.coordinator.retryLastError(sid);
+    // The device picker can still hold the ID of a previously withdrawn head.
+    await h.coordinator.retryLastError(sid, 'previous-head');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).recovery).toMatchObject({ clientId: 'q-head' });
+
+    const send = h.sendToAgent.getMockImplementation()!;
+    h.sendToAgent.mockImplementationOnce(async (...args) => {
+      expect(h.coordinator.takeRetrySwitchRevision(sid, 'previous-head')).toBeUndefined();
+      expect(h.coordinator.takeRetrySwitchRevision(sid, 'q-head')).toBe(2);
+      expect(h.coordinator.takeRetrySwitchRevision(sid, 'q-head')).toBeUndefined();
+      return send(...args);
+    });
+    await h.coordinator.retryLastError(sid, 'q-head', 2);
     await flush();
 
     // 队首消息从未送达 agent,续跑语义不成立 —— 必须原样重发。

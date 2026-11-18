@@ -24,7 +24,7 @@ export const {
   prepareRelayConfig: async () => relayConfig,
 });
 
-// Agent-Net 判断哪些设备在 Device Link 里删掉了时读的列表：官方服务、设备号与平台（agentNetMembership.ts；平台用来知道
+// Agent-Net 判断哪些设备在 Device Link 里删掉了时读的列表：官方服务、设备号与平台（packages/agent-net/src/membership.ts；平台用来知道
 // 有哪些手机，Agent-Net 送不到的经 Device Link 补发推送，notifyFallback.ts）。
 agentNetRuntime.useDeviceLinkDeviceList(async () => {
   const listed = await officialDeviceListFetch<{ devices?: Array<{ deviceId?: unknown; platform?: unknown }> }>({ timeoutMs: 10_000 });

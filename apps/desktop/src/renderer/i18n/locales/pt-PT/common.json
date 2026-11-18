@@ -6554,7 +6554,8 @@
           "defaultProjectFullAccessWarning": "O projeto predefinido «{{name}}» tem Acesso total: uma @mention de qualquer grupo é executada nele com acesso total.",
           "sharedSettingsPointer": "Os projetos, modelos e permissões são partilhados por todos os bots oficiais.",
           "sharedSettingsPointerAction": "Abrir definições",
-          "workspacesBoundCount_many": "{{count}} projetos"
+          "workspacesBoundCount_many": "{{count}} projetos",
+          "workspacesCardDescriptionWithPlugins": "Partilhado por todos os bots oficiais e plugins de mensagens. Os projetos vêm da barra lateral: crie, mude o nome ou remova aí. As alterações feitas com /model numa conversa também aparecem aqui. Os modelos e permissões alterados para uma única conversa num plugin não são afetados."
         },
         "binding": {
           "copyLink": "Copiar ligação",
@@ -7091,11 +7092,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "Oficial",
-        "personal": "Pessoal"
+        "personal": "Pessoal",
+        "plugins": "Plugins"
       },
       "tips": {
         "cindy": "Fornecido e mantido pelo Cindy. Não precisa de criar um bot nem de fornecer credenciais — siga os passos de ligação para começar.",
-        "personal": "Utilize a sua própria conta ou bot e gira as credenciais necessárias. Cada canal mantém a sua própria conta, permissões e definições."
+        "personal": "Utilize a sua própria conta ou bot e gira as credenciais necessárias. Cada canal mantém a sua própria conta, permissões e definições.",
+        "plugins": "Entradas de mensagens disponibilizadas por plugins instalados. O início de sessão e a associação fazem-se na página do plugin. Projetos, modelos e permissões seguem “Projetos e modelos” por predefinição e podem ser alterados por conversa no plugin."
       },
       "defaults": {
         "title": "Configuração de novas conversas",
@@ -7127,6 +7130,10 @@
         },
         "groupPermissionLabel": "Modo de permissões para novas tarefas de grupo",
         "groupPermissionDescription": "Modo de permissões utilizado para todas as tarefas criadas numa conversa de grupo — a abertura de um tópico com @bot, /new e /ctr utilizam-no; o modo de permissões acima aplica-se apenas a mensagens diretas. A predefinição é Aprovação automática. O contexto do grupo pode conter conteúdo controlado pelos membros — escolher Acesso total executa ações sem confirmação a cada passo, pelo que só deve escolhê-lo para grupos em que confia. As alterações aplicam-se às tarefas criadas posteriormente; altere uma tarefa existente com /permission no grupo."
+      },
+      "plugins": {
+        "rowHint": "O início de sessão, a associação e as definições de cada conversa estão na página do plugin.",
+        "open": "Abrir plugin"
       }
     },
     "shortcuts": {
@@ -16825,6 +16832,37 @@
         "priority": "Prioridade",
         "activity": "Atividade recente",
         "created": "Hora de criação"
+      },
+      "inbox": {
+        "thisEvening": "Esta tarde",
+        "tomorrow": "Amanhã",
+        "nextWeek": "Na próxima semana",
+        "custom": "Personalizar…",
+        "wakeAt": "Data e hora de regresso",
+        "timeZone": "Hora local ({{zone}})",
+        "invalidTime": "Escolhe uma data e hora futuras dentro de um ano.",
+        "inbox": "Pendentes",
+        "working": "Em curso",
+        "snoozed": "Adiadas",
+        "archived": "Tratadas",
+        "snooze": "Adiar tarefa",
+        "complete": "Concluído",
+        "wake": "Mostrar agora",
+        "restore": "Restaurar tarefa",
+        "process": "Marcar como tratada (arquivar)",
+        "empty": "A caixa de entrada está vazia",
+        "snoozeFailed": "Não foi possível guardar a hora. Verifique a ligação e atualize o computador onde está a tarefa.",
+        "hours": "Daqui a {{count}} horas",
+        "hours_one": "Daqui a {{count}} hora",
+        "hours_many": "Daqui a {{count}} horas",
+        "hours_other": "Daqui a {{count}} horas"
+      },
+      "taskListMode": {
+        "heading": "Modo de tarefas",
+        "tasks": "Lista de tarefas",
+        "inbox": "Caixa de entrada",
+        "enterInbox": "Mudar para o modo caixa de entrada",
+        "leaveInbox": "Mudar para o modo lista de tarefas"
       }
     },
     "rename": {
@@ -17119,6 +17157,7 @@
         "menuSave": "Guardar",
         "menuInsertTable": "Inserir tabela",
         "externalChangeBlocked": "O ficheiro foi alterado no disco. A gravação automática foi suspensa; guarde manualmente para substituir.",
+        "targetChanged": "O ficheiro aponta agora para outra localização. O rascunho continua no editor. Copie-o antes de voltar a abrir o ficheiro.",
         "tableMenu": {
           "addRowAbove": "Adicionar linha acima",
           "addRowBelow": "Adicionar linha abaixo",
@@ -21592,6 +21631,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "Fechar",
+    "taskInbox": {
+      "title": "Conheça a caixa de entrada",
+      "lead": "As tarefas organizam-se sozinhas em Pendentes, Em curso, Adiadas e Tratadas. O melhor hábito é manter a caixa de entrada vazia: clique em Concluído quando terminar uma tarefa e adie o que pode esperar.",
+      "pending": {
+        "title": "Pendentes",
+        "body": "As tarefas aparecem aqui quando têm um resultado ou aguardam a sua resposta."
+      },
+      "done": {
+        "title": "Concluído",
+        "body": "Resolveu? Um clique em Concluído move-a para Tratadas. Volta sozinha se houver novidades."
+      },
+      "snooze": {
+        "title": "Adiadas",
+        "body": "Sem tempo agora? Escolha uma hora e ela volta para Pendentes."
+      },
+      "start": "Começar",
+      "note": "Volte à lista de tarefas a qualquer momento com o botão no topo da barra lateral."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Bem-vindo ao Cindy",
@@ -22158,6 +22218,19 @@
       "network": "Ligação perdida, a tentar novamente…",
       "timeout": "Tempo de ligação esgotado, a tentar novamente…",
       "server": "Servidor ocupado, a tentar novamente…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "Alargar as permissões desta conversa?",
+    "message": "Permitir que “{{name}}” utilize “{{mode}}” em “{{conversation}}” no projeto “{{project}}”?",
+    "detail": "Isto é mais amplo do que a definição do projeto de mensagens ({{projectMode}}). Se permitir, este plugin poderá utilizar este nível de permissão neste projeto, apenas nas suas próprias sessões. Pode voltar a seguir a definição de mensagens no plugin a qualquer momento.",
+    "groupWarning": "Outros membros também podem enviar mensagens neste grupo. Quanto mais ampla for a permissão, menos ações lhe pedem confirmação; confirme que confia em todos no grupo.",
+    "allow": "Permitir",
+    "cancel": "Cancelar",
+    "modes": {
+      "ask": "Permissões predefinidas",
+      "auto": "Revisão automática",
+      "bypassPermissions": "Acesso total"
     }
   }
 }

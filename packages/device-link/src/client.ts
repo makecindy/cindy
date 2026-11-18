@@ -3511,6 +3511,12 @@ export class DeviceLinkClient {
           p.resolve(env);
           return true;
         }
+        // A result whose request already settled here (usually timed out): the host
+        // finished after this side stopped waiting. Logged so the two sides line up.
+        if (!p && env.kind === 'invoke-result') {
+          this.log.debug(`device-link late invoke-result src=${shortDeviceRef(env.src)}`
+            + ` request=${typeof env.id === 'string' ? env.id.slice(0, 8) : 'none'}`);
+        }
         return this.emitFrame(env);
       }
       case 'relay-error': {

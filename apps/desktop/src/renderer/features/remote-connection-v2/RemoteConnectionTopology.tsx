@@ -438,7 +438,7 @@ export function RemoteConnectionTopology({
         }}
         aria-hidden
       >
-        {t(`settings.remoteControl.v2.group.${group.key}`)}
+        {t(group.key === 'connecting' ? 'settings.devices.linkStatus.connecting' : `settings.remoteControl.v2.group.${group.key}`)}
       </span>,
     );
     for (const row of rows) {
