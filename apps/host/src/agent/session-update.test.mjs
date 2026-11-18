@@ -27,6 +27,7 @@ import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionSt
 import { sessions } from '../../../desktop/src/main/localDb/schema.ts';
 import { setSessionProvider, getSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { createHostSessionUpdate } from './session-update.ts';
+import { createHostService } from '../service.mjs';
 import { lockSessionRoute } from './session-route-lock.mjs';
 import { createHostSessionMovePorts, createRecentWorkdirsChangedPush } from './session-move.ts';
 import { createHostTouchUserSend } from './touch-user-send.ts';
@@ -449,8 +450,8 @@ test('restore: the task list and a send make an archived task active through the
   }
   // One event per route: the task list's carries its whole patch, a send's the new status.
   assert.deepEqual(f.events.map(e => [e.sessionId, e.patch]), [
-    ['restore-list', { status: 'active', title: 'Back' }],
-    ['restore-send', { status: 'active' }],
+    ['restore-list', { status: 'active', title: 'Back', snoozedUntil: null, snoozedAt: null }],
+    ['restore-send', { status: 'active', snoozedUntil: null, snoozedAt: null }],
   ]);
   assert.deepEqual(f.restoreCalls, [['task list', 'restore-list']]);
   // An active task is left as it is by a send.
@@ -922,6 +923,49 @@ test('updatedAt: settings-only patches leave it, a status change moves it', { ti
     else assert.equal(row.updatedAt, 1, name);
     assert.ok(movedEvents(f, id).length > 0, `${name}: still published`);
   }
+});
+
+// §3.2 DB: the upstream Inbox writes through /api/sessions/update in client mode.
+// This entry rejected snoozedUntil. A valid future deadline must save and publish both
+// timestamps without changing the task status or activity. Invalid input must write nothing.
+test('task snooze: the Host update saves, rejects and clears the date like the desktop', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  const id = 'snoozed-task';
+  await f.task(id);
+  await f.database.drizzle.update(sessions).set({ updatedAt: 1 }).where(eq(sessions.id, id));
+  const invoke = createHostService({ updateSession: lockSessionRoute(f.update) });
+  const update = patch => invoke('/api/sessions/update', { sessionId: id, patch });
+  const snoozedUntil = new Date(Date.now() + 3_600_000).toISOString();
+  const { status, body: saved } = await update({ snoozedUntil });
+  assert.equal(status, 200);
+  assert.equal(saved.status, 'active');
+  assert.equal(saved.snoozedUntil, snoozedUntil);
+  const row = await f.row(id);
+  assert.equal(row.updatedAt, 1);
+  assert.equal(row.snoozedUntil, Date.parse(snoozedUntil));
+  assert.equal(row.snoozedAt, Date.parse(saved.snoozedAt));
+  assert.ok(row.snoozedAt > 0);
+  assert.deepEqual(movedEvents(f, id).at(-1).patch, { snoozedUntil, snoozedAt: saved.snoozedAt });
+
+  const pushes = f.events.length;
+  for (const invalid of [123, 'not-a-date', '2000-01-01T00:00:00.000Z', new Date(Date.now() + 367 * 86_400_000).toISOString()]) {
+    await assert.rejects(update({ title: 'Do not apply', snoozedUntil: invalid }), {
+      code: 'INVALID_PARAMS',
+      message: '[INVALID_PARAMS] snoozedUntil must be a future ISO timestamp within one year',
+    });
+  }
+  assert.deepEqual(await f.row(id), row);
+  assert.equal(f.events.length, pushes);
+
+  const { body: cancelled } = await update({ snoozedUntil: null });
+  assert.deepEqual([cancelled.snoozedUntil, cancelled.snoozedAt], [null, null]);
+  assert.deepEqual(movedEvents(f, id).at(-1).patch, { snoozedUntil: null, snoozedAt: null });
+  await update({ snoozedUntil });
+  const { body: archived } = await update({ status: 'archived' });
+  assert.deepEqual([archived.status, archived.snoozedUntil, archived.snoozedAt], ['archived', null, null]);
+  const archivedRow = await f.row(id);
+  assert.deepEqual([archivedRow.snoozedUntil, archivedRow.snoozedAt], [null, null]);
+  assert.deepEqual(movedEvents(f, id).at(-1).patch, { status: 'archived', snoozedUntil: null, snoozedAt: null });
 });
 
 test('send: the project a send was made in becomes recent and is announced; an unchanged stamp or another owner announces nothing', { timeout: 30_000 }, async t => {

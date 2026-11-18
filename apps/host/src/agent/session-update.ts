@@ -22,7 +22,7 @@ import { explicitPorts } from './explicit-ports.ts';
 
 /** The fields this entry writes; anything else is INVALID_PARAMS, naming the fields. */
 const UPDATABLE_FIELDS = new Set(['title', 'status', 'pinnedAt', 'notificationsMuted', 'model', 'providerId', 'contextWindowBudget',
-  'workingDir', 'workspaceKind']);
+  'workingDir', 'workspaceKind', 'snoozedUntil']);
 /**
  * Runtime settings with their own entry, which runs the desktop's handler (runtime-selection.ts). This
  * entry refuses them, as the desktop's updateSessionInDb refuses directory grants (UNSUPPORTED_CAPABILITY
@@ -128,8 +128,13 @@ export function createHostSessionUpdate(deps: {
     }
     // The moved fields through the desktop's mapper (a move to a project or a dialogue drops the explicit
     // project), with a resume id the Claude transcript move persisted.
-    const setObj = sessionPatchToRow({ workingDir: patch.workingDir, workspaceKind: patch.workspaceKind } as
-      Parameters<typeof sessionPatchToRow>[0], { bumpUpdatedAt: false });
+    const setObj = sessionPatchToRow({
+      workingDir: patch.workingDir,
+      workspaceKind: patch.workspaceKind,
+      snoozedUntil: patch.status === 'active' ? undefined : patch.snoozedUntil,
+      // The shared mapper clears both snooze fields on archive. Restore uses the transaction below.
+      status: patch.status === 'archived' ? 'archived' : undefined,
+    } as Parameters<typeof sessionPatchToRow>[0], { bumpUpdatedAt: false });
     await relocateClaudeTranscriptsForMove(explicitPorts<Parameters<typeof relocateClaudeTranscriptsForMove>[0]>({
       sid: sessionId, p: patch, beforeMove,
       moveGuard: undefined, // see the entry below
@@ -137,9 +142,6 @@ export function createHostSessionUpdate(deps: {
     }));
     const update: Record<string, unknown> = { ...(isSettingsOnly ? {} : { updatedAt: Date.now() }), ...setObj };
     if (typeof patch.title === 'string') update.title = patch.title;
-    // Restoring goes through the shared transaction below; archiving still writes the column (release
-    // table: the desktop's archive also checks lanes, recycles the worktree and notifies plugins).
-    if (patch.status === 'archived') update.status = patch.status;
     if (patch.pinnedAt === null) update.pinnedAt = null;
     else if (typeof patch.pinnedAt === 'string') update.pinnedAt = Date.parse(patch.pinnedAt) || null;
     if (typeof patch.notificationsMuted === 'boolean') update.notificationsMuted = patch.notificationsMuted;
@@ -165,7 +167,10 @@ export function createHostSessionUpdate(deps: {
     });
     // As updateSessionInDb's broadcast: the project the mapper dropped goes out with the move.
     const published = setObj.projectDir !== undefined ? { ...patch, projectDir: row.projectDir } : patch;
-    deps.publish({ type: 'session_changed', action: 'update', sessionId, patch: published, status: row.status });
+    const result = sessionToCamel({ ...row, messageCount: 0 });
+    const snooze = patch.snoozedUntil !== undefined || patch.status === 'active' || patch.status === 'archived'
+      ? { snoozedUntil: result.snoozedUntil, snoozedAt: result.snoozedAt } : {};
+    deps.publish({ type: 'session_changed', action: 'update', sessionId, patch: { ...published, ...snooze }, status: row.status });
     if (hasBudget) {
       // A mixed update keeps its other fields when the budget cannot be saved (updateSessionInDb).
       try {
@@ -176,7 +181,7 @@ export function createHostSessionUpdate(deps: {
         });
       }
     }
-    return { ...sessionToCamel({ ...row, messageCount: 0 }), ...(routeChange ? { runtimeSelection } : {}) };
+    return { ...result, ...(routeChange ? { runtimeSelection } : {}) };
   };
   return async (sessionId: string, patch: Record<string, unknown>) => {
     const fields = Object.keys(patch);
@@ -186,6 +191,14 @@ export function createHostSessionUpdate(deps: {
     if (dedicated.length > 0) {
       throwIpcError('UNSUPPORTED_CAPABILITY', dedicated
         .map(key => `${key} must be changed through ${DEDICATED_ENTRIES[key]}`).join('; '));
+    }
+    // The same date validation as desktop updateSessionInDb, before any row or other setting changes.
+    const snoozedUntil = patch.snoozedUntil;
+    if (snoozedUntil !== undefined && snoozedUntil !== null) {
+      const ms = typeof snoozedUntil === 'string' ? Date.parse(snoozedUntil) : NaN;
+      if (!Number.isFinite(ms) || ms <= Date.now() || ms > Date.now() + 366 * 86_400_000) {
+        throwIpcError('INVALID_PARAMS', 'snoozedUntil must be a future ISO timestamp within one year');
+      }
     }
     const dbClient = getDbClient();
     // As updateSessionInDb: a working-directory change runs under the task's route lock and its worktree
