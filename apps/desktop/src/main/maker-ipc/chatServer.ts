@@ -2861,6 +2861,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       displayName: member.displayName, nickname: member.nickname }));
   }
 
+  function replyMention(source: Message, run: Running) {
+    if (!run.mentionable || source.authorId === run.execution.bot_id) return undefined;
+    const sender = run.mentionable.find(member => member.botId === source.authorId);
+    if (!sender) return undefined;
+    const mention = `@${sender.name}`;
+    const { botIds } = resolveBotGroupMentions(mention, { members: run.mentionable, allLabels: [] });
+    return botIds.length === 1 && botIds[0] === sender.botId ? mention : undefined;
+  }
+
   /**
    * A request to the group's Cindy (bot-group-chat.md §9). It runs only on the requester's own
    * computer — the server hands it to no one else — with the requester's own logins, model and
@@ -2930,7 +2939,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       run.mentionable = mentionableTeammates(s, execution.bot_id);
       if (run.mentionable?.length) {
         const peers = run.mentionable.filter(member => member.botId !== execution.bot_id);
-        background.push(GROUP_TEAMMATE_HANDOFF_GUIDANCE, untrustedJsonBlock({ teammates: peers.map(member => ({ name: member.name, description: localBot(member.botId)?.description?.slice(0, 300) })) }));
+        background.push(GROUP_TEAMMATE_HANDOFF_GUIDANCE, untrustedJsonBlock({ replyToMention: replyMention(source, run), teammates: peers.map(member => ({ name: member.name, description: localBot(member.botId)?.description?.slice(0, 300) })) }));
       }
       const words = bodyText(source).trim();
       const message = formatGroupRequest({ words, heading, background,
@@ -3268,7 +3277,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         return { ...promptMessage(m), ...(files.length ? { attachments: files } : {}) };
       };
       const chronological = (messages: Message[]) => [...messages].sort((a, b) => BigInt(a.seq) < BigInt(b.seq) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
-      const request = { currentRequest: source ? { ...focusMessage(source), location: thread ? 'thread' : 'main' } : { id: execution.source_message_id, unavailable: true } };
+      if (!digest && !execution.mask_owner_id) run.mentionable = mentionableTeammates(s, execution.bot_id);
+      const request = { currentRequest: source ? { ...focusMessage(source), replyToMention: replyMention(source, run), location: thread ? 'thread' : 'main' } : { id: execution.source_message_id, unavailable: true } };
       const talk = run.plan?.kind === 'talk' ? run.plan : undefined;
       // Queue answers already have bounded handoffs below. Keep them out of both
       // full and incremental Thread background, including the recovery snapshot.
@@ -3299,7 +3309,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...additions.filter(m => !m.threadRootId),
         ].map(m => [m.id, m])).values()]).map(mainMessage),
       } : fullConversation;
-      if (!digest && !execution.mask_owner_id) run.mentionable = mentionableTeammates(s, execution.bot_id);
       const participants = s.members.filter(m => m.state === 'joined').map(m => {
         const local = m.kind === 'bot' ? localBot(m.id) : undefined;
         return { name: memberName(m, s.members), kind: m.kind, ...(m.id === execution.bot_id ? { you: true } : {}),
@@ -3349,7 +3358,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         ...(run.plan && !talk ? ['Earlier step artifacts, including those produced on another computer, come as attachments. Copy needed files into your working directory before editing.'] : []),
         ...(!run.plan || talk ? ['If you have nothing useful to add, reply with exactly NO_REPLY.'] : []),
         ...(run.mentionable?.length
-          ? ['An @name in your final reply wakes that teammate. When another teammate asked you for work, @ the sender of currentRequest with your result or blocker.', 'Keep your reply concise. Your final response will be posted to the group.']
+          ? ['An @name in your final reply wakes that teammate. When currentRequest.replyToMention is present, use that exact mention to return your result or blocker.', 'Keep your reply concise. Your final response will be posted to the group.']
           : ['Keep your reply concise. Your final response will be posted to the group. Do not call another participant just to reply.']),
       ].join('\n');
       const fullPrompt = buildPrompt(recoveryConversation, textHistory, false);

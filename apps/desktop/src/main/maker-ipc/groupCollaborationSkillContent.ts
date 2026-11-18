@@ -9,10 +9,10 @@ export const GROUP_COLLABORATION_SKILL_DESCRIPTION = '群协作: handling a requ
 
 // Also supplied with the member list, so a harness that loads Skills on demand knows how @ delivery works.
 export const GROUP_TEAMMATE_HANDOFF_GUIDANCE =
-  'Answer whoever asked. For a user, reply in the group. For a teammate, @ that teammate with your result or blocker. '
+  'Answer whoever asked. For a user, reply in the group. Use replyToMention when supplied to return your result or blocker to the requesting teammate. '
   + 'When you need help, use the group introductions to choose whom to @ and say what you need from each. Their replies are results: use them to answer your requester.';
 
-export const GROUP_REQUEST_GUIDANCE = 'Answer whoever asked. If this request lists reachable teammates, use @ to ask them for help or return your result to the teammate who asked.';
+export const GROUP_REQUEST_GUIDANCE = 'Answer whoever asked. Use @ to ask a listed teammate for help. When replyToMention is supplied, copy it exactly to return your result.';
 
 export const GROUP_TEAMMATE_PROJECT_GUIDANCE =
   'Your introduction describes your role. For project context, check your own linked projects with `list_teammate_projects` when available. A link alone does not assign work. '
