@@ -18,6 +18,8 @@ export interface WorkerAttentionRecord {
   leadSessionId: string;
   status: OrcaWorkerStatus;
   focused: boolean;
+  /** 最新回报是 dropped(Lead 已收下、无需回复):映射出的 done 不产生未读标记。 */
+  reportDropped: boolean;
 }
 
 export interface WorkerAttentionUpdates {
@@ -43,7 +45,9 @@ export function computeWorkerAttentionUpdates(
     const prevStatus = prevStatusByWorkerId.get(worker.workerId);
     // `done` persists until the result is viewed and acknowledged, so an initial
     // snapshot can safely restore unread attention after a late mount or reload.
-    const enteredDone = prevStatus !== 'done' && worker.status === 'done';
+    // dropped 回报映射的 done 不是需要用户看的结果,不产生未读标记。
+    const enteredDone =
+      prevStatus !== 'done' && worker.status === 'done' && !worker.reportDropped;
     const isViewed = worker.focused && worker.leadSessionId === activeSessionId;
     if (enteredDone && !isViewed) {
       toMark.push(worker.workerId);
@@ -84,6 +88,7 @@ export function useOrcaWorkerAttentionByLeadIds(
           leadSessionId,
           status: worker.status,
           focused: worker.focused,
+          reportDropped: worker.reportState === 'dropped',
         })),
       );
     const updates = computeWorkerAttentionUpdates(

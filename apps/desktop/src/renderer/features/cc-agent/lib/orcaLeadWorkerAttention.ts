@@ -230,8 +230,19 @@ export function getSessionAttentionKindsWithOrcaLeads(): ReadonlyMap<string, Att
 export function shouldNotifyOrcaWorkerEvent(
   kind: 'done' | 'error' | 'needs-reply',
   worker: { deviceLinkDeviceId?: string | null },
+  latestReportDropped = false,
 ): boolean {
-  return kind !== 'done' && !worker.deviceLinkDeviceId;
+  // dropped = Lead 已收下且无需回复,出错/待确认的后续提醒也不应再打扰。
+  return !latestReportDropped && kind !== 'done' && !worker.deviceLinkDeviceId;
+}
+
+/** Worker 最新回报是否 dropped(按已保留投影判别;查不到该 Worker 时按未 dropped 处理)。 */
+export function isOrcaWorkerLatestReportDropped(workerSessionId: string): boolean {
+  for (const [, snapshot] of listRetainedWorkerProjections()) {
+    const worker = snapshot.workers.find((candidate) => candidate.sessionId === workerSessionId);
+    if (worker) return worker.reportState === 'dropped';
+  }
+  return false;
 }
 
 /** Worker 通知标题:「Lead 标题 · Worker 标题」;找不到 Lead 时退回 Worker 标题。 */

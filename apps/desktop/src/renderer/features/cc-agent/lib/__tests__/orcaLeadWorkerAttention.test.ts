@@ -64,6 +64,7 @@ import {
   deriveOrcaLeadWorkerAttention,
   findOrcaLeadSessionIdForWorker,
   formatOrcaWorkerNotificationTitle,
+  isOrcaWorkerLatestReportDropped,
   getOrcaLeadWorkerAttention,
   getSessionAttentionKindsWithOrcaLeads,
   mergeOrcaLeadAttentionKind,
@@ -86,6 +87,7 @@ function snapshot(...workerSessionIds: string[]): WorkersSnapshot {
       status: 'running',
       focused: false,
       idleSince: null,
+      reportState: null,
     })),
     softLimit: 5,
     hardLimit: 8,
@@ -380,6 +382,20 @@ describe('Worker 通知', () => {
     expect(shouldNotifyOrcaWorkerEvent('error', {})).toBe(true);
     expect(shouldNotifyOrcaWorkerEvent('needs-reply', {})).toBe(true);
     expect(shouldNotifyOrcaWorkerEvent('error', { deviceLinkDeviceId: 'host' })).toBe(false);
+    expect(shouldNotifyOrcaWorkerEvent('error', {}, true)).toBe(false);
+    expect(shouldNotifyOrcaWorkerEvent('needs-reply', {}, true)).toBe(false);
+    expect(shouldNotifyOrcaWorkerEvent('error', {}, false)).toBe(true);
+  });
+
+  it('dropped 回报按已保留投影判别,查不到的 Worker 按 false 处理', () => {
+    const dropped = snapshot('w1');
+    dropped.workers[0].reportState = 'dropped';
+    setProjections([['lead', dropped]]);
+    expect(isOrcaWorkerLatestReportDropped('w1')).toBe(true);
+    const plain = snapshot('w2');
+    setProjections([['lead', plain]]);
+    expect(isOrcaWorkerLatestReportDropped('w2')).toBe(false);
+    expect(isOrcaWorkerLatestReportDropped('ghost')).toBe(false);
   });
 
   it('标题为「Lead 标题 · Worker 标题」,找不到 Lead 时退回 Worker 标题', () => {

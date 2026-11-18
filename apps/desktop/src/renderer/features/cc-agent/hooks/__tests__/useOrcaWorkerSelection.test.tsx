@@ -82,6 +82,7 @@ function makeWorker(
     status,
     focused,
     idleSince: null,
+    reportState: null,
   };
 }
 
