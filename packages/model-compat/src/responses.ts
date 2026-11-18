@@ -67,8 +67,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
     : { body: search.body, aliases: new Map(), renamedWireNames: new Map<string, string>(), renamedKinds: new Map<string, 'function' | 'custom'>() };
   // Native requests retain their declarations, but response restoration and schema lookup still
   // need one collision-safe identity plan, including original kinds and loaded search tools.
-  const repairPlan = policy.namespaceTools !== 'functions'
-    && (policy.repairFunctionArguments || custom.names.size > 0 || custom.repairNames.size > 0)
+  const repairPlan = policy.repairFunctionArguments && policy.namespaceTools !== 'functions'
     ? deriveFunctionCallRepairPlan(body)
     : {
         renamedWireNames: namespace.renamedWireNames,

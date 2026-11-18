@@ -276,6 +276,21 @@ describe('request-owned Responses compatibility', () => {
     }
   });
 
+  // Public native policy regression (unit): no argument repair means no flattening validation.
+  // These distinct native coordinates only collide if the request is unnecessarily lowered.
+  it('preserves native namespace coordinates with custom-only lowering', () => {
+    const tools = [
+      { type: 'custom', name: 'run', description: 'raw' },
+      { type: 'namespace', name: 'a__b', tools: [{ type: 'function', name: 'c' }] },
+      { type: 'namespace', name: 'a', tools: [{ type: 'function', name: 'b__c' }] },
+    ];
+    const prepared = prepareResponsesCompatibility({ tools }, {
+      customTools: 'functions', namespaceTools: 'native', repairFunctionArguments: false,
+    });
+    expect((prepared.body as { tools: unknown[] }).tools.slice(1)).toEqual(tools.slice(1));
+    expect((prepared.body as { tools: { type: string }[] }).tools[0].type).toBe('function');
+  });
+
   it('repairs allocated function arguments in incremental SSE while retaining event identity', () => {
     const parameters = { type: 'object', properties: { line: { type: 'integer' } } };
     const prepared = prepareResponsesCompatibility({ tools: [
