@@ -127,8 +127,11 @@ describe('伙伴行的间距基线', () => {
     // 列表容器:左 12px 与 `.side-list` 一致;不再自带滚动,随任务侧栏一起滚。
     expect(source).toContain('<div className="flex flex-col pt-1 pr-0 pl-3">');
     // 行间距与任务列表一致(2px)。
-    expect(source).toContain('<div className="flex flex-col gap-0.5">\n            {displayedChats.map');
-    expect(code).not.toContain('overflow-y-auto');
+    expect(source).toContain('<div className="flex flex-col gap-0.5">\n            {foldersEnabled && folders.map');
+    expect(source).toContain('{displayedChats.map(renderChatRow)}');
+    // The folder picker scrolls inside its dropdown. The roster itself still
+    // shares the task sidebar's scroll container.
+    expect(code.replace(/<DropdownMenuSubContent\b[^>]*>/g, '')).not.toContain('overflow-y-auto');
   });
 
   it('段头与置顶 / 全部任务段头同款,收起后的头像行与行内正文左缘对齐', () => {
@@ -139,7 +142,7 @@ describe('伙伴行的间距基线', () => {
     // 头像行的挂载、容量与 +N 由 teammatesSection.test.tsx 经过真实组件验证，
     // 换行与对齐由 teammates-section 单页场景验证，不再匹配旧 JSX 字面量。
     // 段头动作是 20px 图标钮,与其它段头动作同尺寸。
-    expect(source).toContain('<BotCreateMenu variant="header" />');
+    expect(source).toContain('<BotCreateMenu variant="header" onCreateFolder=');
     // 加入群聊收进「+」菜单的「输入邀请链接…」(#6013),段头不再有单独的加群按钮。
     expect(source).not.toContain('ChatJoinButton');
   });
