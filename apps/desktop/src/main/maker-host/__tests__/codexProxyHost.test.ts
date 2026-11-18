@@ -3557,6 +3557,7 @@ describe('codex proxy host', () => {
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), // frozen custom-provider effort
           expect.any(Function), expect.any(Function), expect.any(Function),
+          expect.any(Function), // #11278: route-scoped tool audio recovery
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -3567,6 +3568,7 @@ describe('codex proxy host', () => {
           expect.objectContaining({ id: 'responses_item_id_prefix' }),
           expect.objectContaining({ id: 'responses_item_id_length' }),
           expect.objectContaining({ id: 'responses_reasoning_content' }),
+          expect.objectContaining({ id: 'responses_tool_audio', applyOnUnmatchedRetry: false, allowExtraRules: false }),
           // #7906: 只去重工具 ID，不许在同一次透明重试里叠洗其它 strip。
           expect.objectContaining({ id: 'duplicate_responses_tool_call', allowExtraRules: false }),
           expect.objectContaining({ id: 'xai_model_input' }),
@@ -3818,12 +3820,15 @@ describe('codex proxy host', () => {
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-image');
   });
 
-  it.each(['shared', 'custom-context', 'control-plane'] as const)(
-    'repairs legacy IDs after a WebSocket rejection on the %s proxy, preserving sibling connections', async (proxyKind) => {
+  // #9645: extend the real loopback recovery path beyond fc_ to saved msg_ tool IDs.
+  // The upstream rejects the original ID; HTTP replay/compact must repair it without touching peers.
+  it.each((['shared', 'custom-context', 'control-plane'] as const).flatMap(proxyKind =>
+    ['fc', 'msg'].map(prefix => ({ proxyKind, prefix })),
+  ))('repairs $prefix IDs after a WebSocket rejection on the $proxyKind proxy, preserving sibling connections', async ({ proxyKind, prefix }) => {
     const host = await freshCodexProxyHost();
-    const errorMessage = "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'.";
+    const errorMessage = `Invalid 'input[285].id': '${prefix}_legacy'. Expected an ID that begins with 'ctc'.`;
     const legacy = { model: 'gpt-6', input: [
-      { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
+      { type: 'custom_tool_call', id: `${prefix}_legacy`, name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
       { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
     ] };
     const httpBodies: Array<{ input: typeof legacy.input }> = [];
@@ -4214,6 +4219,13 @@ describe('codex proxy host', () => {
   });
 
   it.each([
+    ...['fc', 'fco', 'ctc', 'ctco'].map((prefix): [string, string | null] => [
+      `Invalid 'input[169].id': 'msg_history'. Expected an ID that begins with '${prefix}'.`, 'tool_item_id',
+    ]),
+    [JSON.stringify({ error: { message: 'Invalid "input[169].id": "msg_history". Expected an ID that begins with "ctc".' } }), 'tool_item_id'],
+    ["Invalid 'input[169].call_id': 'msg_history'. Expected an ID that begins with 'ctc'.", null],
+    ["Invalid 'input[169].id': 'msg_history'. Expected an ID that begins with 'msg'.", 'responses_item_id_prefix'],
+    ["Invalid 'input[169].id': 'MSG_history'. Expected an ID that begins with 'ctc'.", null],
     ["Invalid 'input[2].id': 'ctc_old'. Expected an ID that begins with 'fc'.", 'tool_item_id'],
     [JSON.stringify({ error: { message: "Invalid \"input[2].id\": \"fco_old\". Expected an ID that begins with \"ctco\"." } }), 'tool_item_id'],
     ["Invalid 'input[2].call_id': 'fc_old'. Expected an ID that begins with 'ctc'.", null],
@@ -6587,6 +6599,9 @@ describe('codex proxy host', () => {
       input: [
         { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
         { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
+        // #11371 P2: native-custom compact must not expand a valid 64-char msg_ result to 65.
+        { type: 'custom_tool_call', id: `msg_${'x'.repeat(60)}`, name: 'exec', call_id: 'call_large', input: 'text(2)' },
+        { type: 'custom_tool_call_output', id: `msg_${'x'.repeat(60)}`, call_id: 'call_large', output: '2' },
       ],
     };
     let current: unknown = original;
@@ -6595,8 +6610,11 @@ describe('codex proxy host', () => {
     }
     expect(current).toMatchObject({ input: [
       { ...original.input[0], id: 'ctc_legacy' }, original.input[1],
+      { ...original.input[2], id: `ctc_${'x'.repeat(60)}` },
+      { ...original.input[3], id: expect.stringMatching(/^ctco_[a-f0-9]{59}$/) },
     ] });
     expect(original.input[0].id).toBe('fc_legacy');
+    expect(original.input[3].id).toBe(`msg_${'x'.repeat(60)}`);
     expect(config.transformResponse({ reqId: 8001, responseHeaders: { 'content-type': 'application/json' } })).toBeNull();
   });
 
@@ -8805,6 +8823,69 @@ describe('codex proxy host', () => {
   });
 
   // 测试价值
+  // - 生产入口：实际安装的 namespace transformRequest 与 tool-audio recovery rule。
+  // - 回归依据：#9611 合并上游恢复逻辑时必须保留按上游隔离的预洗。
+  // - 缺口：普通 Responses 的恢复测试不经过 namespace allowlist。
+  // - 最小输入：工具 output 音频与用户音频；激活前保留、同上游激活后仅清工具音频。
+  // - tier：unit；真实转换器，代理桩，无网络或媒体文件。
+  it('pre-strips activated tool audio only on the matching namespace upstream', async () => {
+    const host = await freshCodexProxyHost(true);
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'namespace-audio-provider', name: 'Namespace Audio Provider',
+      runtimes: { codex: { baseUrl: 'https://example.com/v1', wireProtocol: 'openai-responses',
+        models: [{ id: 'custom-model', name: 'Custom Model' }] } },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-audio', 'thread-namespace-audio', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-audio', provider.id);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const options = mockState.createAnthropicCompatProxy.mock.calls[0]![0];
+      const audio = { type: 'input_audio', input_audio: { data: 'opaque-audio', format: 'wav' } };
+      const user = { type: 'message', role: 'user', content: [audio] };
+      const run = (upstreamBase: string) => {
+        let body: unknown = { model: 'custom-model', input: [
+          { type: 'function_call_output', call_id: 'call_audio', output: [audio] }, user,
+        ] };
+        for (const transform of options.transformRequest ?? []) {
+          const next = transform(body, { reqId: 9611, method: 'POST',
+            url: `/_cindy/custom-provider/${route.routeId}/responses`,
+            headers: { 'thread-id': 'thread-namespace-audio' }, upstreamBase });
+          if (next !== null && next !== undefined) body = next;
+        }
+        return (body as { input: unknown[] }).input;
+      };
+      const before = run('https://example.com/v1');
+      expect(before).toEqual([{ type: 'function_call_output', call_id: 'call_audio', output: [audio] }, user]);
+      const recovery = options.recoveryRules?.find((rule: { id: string }) => rule.id === 'responses_tool_audio');
+      expect(recovery).toBeDefined();
+      recovery!.onRetry!('thread-namespace-audio', 'custom-model', 'https://example.com/v1');
+      expect(run('https://example.com/v1')).toEqual([
+        { type: 'function_call_output', call_id: 'call_audio', output: [
+          { type: 'input_text', text: '[Audio omitted: this model does not accept audio input.]' },
+        ] }, user,
+      ]);
+      expect(run('https://other.example/v1')).toEqual(before);
+    } finally {
+      host.unregister('session-namespace-audio');
+      clearSessionProvider('session-namespace-audio');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+      mockState.realStripTransforms = false;
+    }
+  });
+
+  // 测试价值
   // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
   //   自定义 Grok Responses 连接走命名空间时，恢复 controller 还没激活，
   //   历史里的 Codex agent_message 在第一次打到上游前就被改成标准 message。
@@ -9237,7 +9318,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(31); // ordinary transforms + dump + frozen custom-provider effort
+    expect(transforms).toHaveLength(32); // ordinary transforms + dump + frozen custom-provider effort + tool audio recovery
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

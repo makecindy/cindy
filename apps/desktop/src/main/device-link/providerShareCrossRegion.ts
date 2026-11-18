@@ -752,7 +752,7 @@ function crossRegionClientStopped(client: DeviceLinkClient | null): boolean {
 }
 
 export async function crossRegionInvoke(peerKey: string, channel: string, args: unknown[], timeoutMs?: number,
-  options?: { preSend?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {
+  options?: { preSend?: () => void; beforeDispatch?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {
   const rt = runtime;
   const peer = parseProviderSharePeer(peerKey);
   const state = peer ? stateForShare(peer.shareId) : null;
@@ -766,14 +766,15 @@ export async function crossRegionInvoke(peerKey: string, channel: string, args: 
     }
   };
   const preSend = () => { assertActive(); options?.preSend?.(); };
-  if (options?.liveProviderMetadata) return crossRegionInvokeLive(peerKey, channel, args, timeoutMs, { preSend });
+  const sendOptions = { preSend, beforeDispatch: options?.beforeDispatch };
+  if (options?.liveProviderMetadata) return crossRegionInvokeLive(peerKey, channel, args, timeoutMs, sendOptions);
   return invokeProviderMetadataContinuity(peerKey, channel, args,
-    () => crossRegionInvokeLive(peerKey, channel, args, timeoutMs, { preSend }),
+    () => crossRegionInvokeLive(peerKey, channel, args, timeoutMs, sendOptions),
     () => { try { preSend(); return true; } catch { return false; } });
 }
 
 async function crossRegionInvokeLive(peerKey: string, channel: string, args: unknown[], timeoutMs?: number,
-  options?: { preSend?: () => void }): Promise<InvokeResultPayload> {
+  options?: { preSend?: () => void; beforeDispatch?: () => void }): Promise<InvokeResultPayload> {
   const rt = runtime;
   const peer = parseProviderSharePeer(peerKey);
   const state = peer ? stateForShare(peer.shareId) : null;
@@ -800,11 +801,11 @@ async function crossRegionInvokeLive(peerKey: string, channel: string, args: unk
     if (!client.isLinkReady(peerKey)) await open();
     let response: InvokeResultPayload;
     try {
-      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend });
+      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend, beforeDispatch: options?.beforeDispatch });
     } catch (error) {
       if (!(error instanceof DeviceLinkError) || error.code !== 'LINK_NOT_OPEN') throw error;
       await open();
-      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend });
+      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend, beforeDispatch: options?.beforeDispatch });
     }
     if (response.ok) noteOnline(true);
     else if (response.error.code === 'DEVICE_OFFLINE') noteOnline(false);

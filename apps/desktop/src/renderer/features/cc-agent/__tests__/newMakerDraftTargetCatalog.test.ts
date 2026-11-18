@@ -50,7 +50,8 @@ function compile<T>(
   cache: Map<string, (...args: unknown[]) => unknown> = factories,
 ): T {
   const keys = Object.keys(bindings);
-  let factory = cache.get(id);
+  const signature = JSON.stringify([id, ...keys]);
+  let factory = cache.get(signature);
   if (!factory) {
     let expression: ts.Node | undefined;
     const visit = (node: ts.Node) => {
@@ -63,7 +64,7 @@ function compile<T>(
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
     }).outputText;
     factory = new Function(...keys, code + ';return callback;') as (...args: unknown[]) => unknown;
-    cache.set(id, factory);
+    cache.set(signature, factory);
   }
   return factory(...Object.values(bindings)) as T;
 }
@@ -1401,13 +1402,40 @@ describe('the remote draft holder follows the displayed model', () => {
     >('pushActiveDraftPref', bindings);
   }
 
+  it.each([
+    { returningToTaskComputer: false, resetToRecommended: undefined, explicit: true },
+    { returningToTaskComputer: true, resetToRecommended: undefined, explicit: true },
+    { returningToTaskComputer: false, resetToRecommended: true, explicit: false },
+  ])('sends the picker intent for the chosen model: %o', ({ returningToTaskComputer, resetToRecommended, explicit }) => {
+    const bindings = {
+      ...pushBindings(),
+      effectiveAgentDeviceId: returningToTaskComputer ? 'other-computer' : undefined,
+    };
+    const select = callback<(selection: unknown) => void>('handleUnifiedDraftSelect', {
+      ...bindings, setDraftFavoriteAnchor: vi.fn(), getDraft: () => ({}), switchVendor: vi.fn(),
+      normalizeDbAgentKind, dbToMakerAgentKind, setDlSel: vi.fn(), patchDraft: vi.fn(),
+      catalogDeviceId: 'target-device', usesDeviceCatalog: true,
+      dlRuntimeTouchedRef: { current: false }, dlExplicitChoiceRef: { current: false },
+      dlSeedKeyRef: { current: null }, dlSeedCapabilitiesRef: { current: null },
+      pushActiveDraftPref: callback('pushActiveDraftPref', bindings),
+    });
+    select({
+      vendor: 'codex', providerId: 'new-source', modelId: 'new-model',
+      fast: false, favoriteUid: null, agentDevice: null, resetToRecommended,
+    });
+    expect(bindings.invoke).toHaveBeenCalledWith('target-device', 'maker:apply-new-maker-draft-pref', [{
+      agent: 'codex', providerId: 'new-source', modelId: 'new-model', active: true, fast: false,
+      markModelChoice: explicit, ...(explicit ? { selectDraftAgent: true } : {}),
+    }]);
+  });
+
   it('writes the displayed model to the controlled draft, not the stale seed model', () => {
     const bindings = pushBindings();
     pushPref(bindings)({ effort: 'low' });
     expect(bindings.invoke).toHaveBeenCalledWith(
       'target-device',
       'maker:apply-new-maker-draft-pref',
-      [expect.objectContaining({ modelId: 'other-model', effort: 'low' })],
+      [expect.objectContaining({ modelId: 'other-model', effort: 'low', markModelChoice: false })],
     );
   });
 

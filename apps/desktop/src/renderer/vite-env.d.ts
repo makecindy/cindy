@@ -179,7 +179,9 @@ interface DeviceLinkPeerLinksSnapshot {
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: import('../shared/deviceLinkIpc').DeviceLinkAgentNetPeerRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';
-  /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
+  /** 经中转的数据走中转的 UDP 端口还是 WebSocket(见 shared/deviceLinkIpc.ts) */
+  relayTransport?: 'udp' | 'websocket';
+  /** 本机到主 relay 的往返，取数据实际走的那条路;离线 / 未测得为 null */
   relayRttMs: number | null;
 }
 
@@ -2747,6 +2749,7 @@ interface ElectronAPI {
   /** 被控端本地 main → 自身 renderer:控制端写穿的草稿「模型 effort/fast」pref(调本地 setter)。 */
   onMakerDraftPrefApply: (
     cb: (payload: {
+      selectDraftAgent?: true;
       appDefaultSelection?: import('../shared/appDefaultModelSelection').AppDefaultModelSelection;
       agent: 'claude-code' | 'codex' | 'pi';
       providerId: string;
@@ -4342,6 +4345,7 @@ interface ElectronAPI {
     account(command: import('@cindy/device-link').SharedTaskAccountCommand): Promise<unknown>;
   };
   providerShare: {
+    exportRoster(providerId: string, owner: import('../shared/dataOwnerPush').DataOwnerPushStamp): Promise<void>;
     command<C extends import('../shared/providerShare').ProviderShareCommand>(
       command: C,
     ): Promise<import('../shared/providerShare').ProviderShareCommandResult[C['action']]>;

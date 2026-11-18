@@ -702,7 +702,7 @@ describe('maker SEND transaction', () => {
       },
     });
     expect(applyPendingAgentSwitch).toHaveBeenCalledWith('session-1',
-      { clientId: 'model-input', ...(scheduled ? { scheduled: true } : {}) });
+      { clientId: 'model-input', nextInputChars: 'continue'.length, ...(scheduled ? { scheduled: true } : {}) });
     expect(onModelDispatched).toHaveBeenCalledExactlyOnceWith('session-1', 'model-input');
   });
 

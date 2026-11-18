@@ -2446,6 +2446,7 @@ function CCAgentSessionContent({
   const canSwitchToClaudeSubscription = useMemo(() => {
     if (
       remoteDeviceId ||
+      session?.deviceLinkDeviceId ||
       agentDeviceId ||
       session?.remoteHostId ||
       session?.agentKind !== 'cc' ||
@@ -2457,7 +2458,7 @@ function CCAgentSessionContent({
       (provider) =>
         provider.id === 'anthropic' && providerOffersModel(provider, session.model, 'claude-code'),
     );
-  }, [localProviders, remoteDeviceId, agentDeviceId, session?.agentKind, session?.model, session?.remoteHostId]);
+  }, [localProviders, remoteDeviceId, agentDeviceId, session?.agentKind, session?.model, session?.remoteHostId, session?.deviceLinkDeviceId]);
   /**
    * 余额不足横幅的「查看余额」出口 —— 只在计费面对当前账号可见时提供（cloud +
    * personal，与设置页「用量和计费」同一判据）。org / local / 未登录账号在 Cindy 里
@@ -3712,7 +3713,7 @@ function CCAgentSessionContent({
     model = session?.model,
     effort = session?.effort,
     permissionMode = session?.permissionMode,
-    pendingPiRoute?: { agentDeviceId?: string | null },
+    pendingPiRoute?: { agentDeviceId?: string | null; nextInputChars: number },
   ) => {
     if (!sessionId || !workingDir || !model || !permissionMode
       || (!pendingPiRoute && dbToMakerAgentKind(session?.agentKind) !== 'pi')) return;
@@ -4024,7 +4025,8 @@ function CCAgentSessionContent({
                     }
                     await preparePiRuntimeForDispatch(newDir, pending.model, pending.effort, pending.permissionMode,
                       pending.deliveryMode !== 'steer' && agentSwitchIntent?.target === 'pi'
-                        ? { agentDeviceId: agentSwitchIntent.agentDeviceId } : undefined);
+                        ? { agentDeviceId: agentSwitchIntent.agentDeviceId, nextInputChars: pending.message.length + 'skill:'.length }
+                        : undefined);
                   },
                 },
               );
@@ -4330,7 +4332,9 @@ function CCAgentSessionContent({
               preparePiRuntime: () => {
                 if (deferPreparation) throw needsActiveSession;
                 return preparePiRuntimeForDispatch(session?.workingDir, model, effort, permissionMode,
-                  pendingRoute?.target === 'pi' ? { agentDeviceId: pendingRoute.agentDeviceId } : undefined);
+                  pendingRoute?.target === 'pi'
+                    ? { agentDeviceId: pendingRoute.agentDeviceId, nextInputChars: message.length + 'skill:'.length }
+                    : undefined);
               },
             });
         if (slashDispatch.handled) {
@@ -4909,11 +4913,6 @@ function CCAgentSessionContent({
       (EFFORT_VALUES as readonly string[]).includes(session.effort)
         ? session.effort
         : null;
-    const fmtTokens = (value: number): string =>
-      value >= 1_000_000
-        ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
-        : `${Math.round(value / 1000)}K`;
-
     const switched = await setModelWithWindowConfirmation({
       invoke: (confirmedContextWindow) =>
         window.electronAPI.maker.setModel(
@@ -4929,17 +4928,7 @@ function CCAgentSessionContent({
               } as { effort: string; fastMode: boolean | 'ultrafast' })
             : undefined,
         ),
-      confirm: ({ contextWindow, contextTokens }) =>
-        confirmDialog({
-          title: t('newChat.chatInput.modelSwitchContextGuard.title'),
-          description: t('newChat.chatInput.modelSwitchContextGuard.overflowDescription', {
-            used: fmtTokens(contextTokens),
-            total: fmtTokens(contextWindow),
-            pct: Math.round((contextTokens / contextWindow) * 100),
-          }),
-          confirmText: t('newChat.chatInput.modelSwitchContextGuard.confirmSwitch'),
-          cancelText: t('newChat.chatInput.modelSwitchContextGuard.cancelSwitch'),
-        }),
+      onWindowRebuild: () => toast.warning(t('newChat.chatInput.modelSwitchContextGuard.condensedToast'), { duration: 4000 }),
     });
     if (!switched) return;
     if (switched === 'applied') {
@@ -4964,7 +4953,6 @@ function CCAgentSessionContent({
     await retryLastError();
   }, [
     canSwitchToClaudeSubscription,
-    confirmDialog,
     fastMode,
     refreshServerSession,
     retryLastError,

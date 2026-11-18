@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker';
 import { RemoteAgentPoller } from '../controller/poller';
-import { remoteAgentLinkError, RemoteAgentRunClient } from '../controller/runClient';
+import { remoteAgentInvoker, remoteAgentLinkError, RemoteAgentRunClient } from '../controller/runClient';
 
 afterEach(() => vi.useRealTimers());
 
@@ -19,6 +19,46 @@ afterEach(() => vi.useRealTimers());
 // chunk-count ceiling. The link below models 16 KiB/s + 1s RTT without waiting;
 // gzip, request parsing and complete payload reconstruction remain real.
 describe('RemoteAgentRunClient slow payload delivery', () => {
+  // Unit: preparation guards did not cover time in Device Link admission. Stop
+  // could overtake that queue and the old send would start afterwards. Exercise
+  // the real run client + production invoker, delaying only the wire boundary.
+  it.each(['stop', 'signal', 'ended'] as const)('never dispatches a queued send after %s', async mode => {
+    const oldId = randomUUID(), stopId = randomUUID(), freshId = randomUUID();
+    let release!: () => void;
+    let queued!: () => void;
+    const admitted = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { queued = resolve; });
+    const delivered: string[] = [];
+    const invoke = remoteAgentInvoker('host', async (_device, _channel, args, options) => {
+      const request = parseRemoteAgentRequest(args[0]);
+      if (request.op === 'call') {
+        if (request.callId === oldId) { queued(); await admitted; }
+        options?.beforeDispatch?.();
+        delivered.push(request.callId);
+        client.onData(Buffer.from(`${JSON.stringify({ t: 'result', callId: request.callId, ok: true, value: null })}\n`), false);
+      }
+      return { ok: true, result: {} };
+    });
+    const client = new RemoteAgentRunClient(randomUUID(), { invoke, unregister() {} } as unknown as RemoteAgentPoller, {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+      onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID);
+    const abort = new AbortController();
+    const old = client.callWithId(oldId, 'send', ['hello'], abort.signal);
+    const rejected = expect(old).rejects.toThrow(mode === 'ended' ? 'ended' : 'cancelled');
+    await waiting;
+    if (mode === 'stop') await client.callWithId(stopId, 'abort', []);
+    else if (mode === 'signal') abort.abort();
+    else client.abandon('ended');
+    release(); await rejected;
+    expect(delivered).toEqual(mode === 'stop' ? [stopId] : []);
+    if (mode !== 'ended') {
+      await client.callWithId(freshId, 'send', ['fresh']);
+      expect(delivered.filter(id => id === freshId)).toHaveLength(1);
+    }
+    client.abandon('fixture-complete');
+  });
+
   it.each(['small', 'inline', 'utf8', 'upload', 'large-compatible'] as const)(
     'starts exactly once with an intact %s payload over the bounded link', async kind => {
       const text = kind === 'small' ? 'hello'

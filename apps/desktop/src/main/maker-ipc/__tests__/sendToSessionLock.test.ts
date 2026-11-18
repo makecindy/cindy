@@ -23,6 +23,63 @@ vi.mock('../../logger.js', () => ({
 const warnMock = h.warn;
 
 describe('sendToSessionLock', () => {
+  // Unit: a cancelled sender queued behind a live lease must settle promptly,
+  // never execute later, and must not release that predecessor or its successor.
+  // Existing throw/watchdog tests only cancel work after it has acquired the lock.
+  it('removes a cancelled waiting send without breaking FIFO', async () => {
+    const reason = 'cancelled';
+    const id = 'cancel-wait';
+    const first = await acquireSendToSessionLock(id);
+    const abort = new AbortController();
+    let cancelledRan = false;
+    let failure: unknown;
+    const cancelled = withSendToSessionLock(id, async () => { cancelledRan = true; }, undefined, abort.signal)
+      .catch(error => { failure = error; });
+    let releaseNext!: () => void;
+    const next = acquireSendToSessionLock(id).then(release => { releaseNext = release; });
+    abort.abort(new Error(reason));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(failure).toBe(abort.signal.reason);
+    await cancelled;
+    expect(cancelledRan).toBe(false);
+    expect(releaseNext).toBeUndefined();
+    first(); await next;
+    let lastRan = false;
+    const last = withSendToSessionLock(id, async () => { lastRan = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lastRan).toBe(false);
+    releaseNext(); await last;
+    expect(cancelledRan).toBe(false);
+    expect(lastRan).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hasSendToSessionLock(id)).toBe(false);
+    expect(warnMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects an already cancelled acquisition without installing a queue entry', async () => {
+    const abort = new AbortController(); abort.abort();
+    await expect(acquireSendToSessionLock('pre-cancelled', undefined, undefined, abort.signal))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(hasSendToSessionLock('pre-cancelled')).toBe(false);
+  });
+
+  it('keeps an acquired operation serialized until its cancellation cleanup actually finishes', async () => {
+    const abort = new AbortController();
+    let finish!: () => void;
+    const cleanup = new Promise<void>(resolve => { finish = resolve; });
+    const held = withSendToSessionLock('cancel-cleanup', () => cleanup, undefined, abort.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    abort.abort();
+    let nextRan = false;
+    const next = withSendToSessionLock('cancel-cleanup', async () => { nextRan = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(nextRan).toBe(false);
+    finish(); await held; await next;
+    expect(nextRan).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hasSendToSessionLock('cancel-cleanup')).toBe(false);
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     warnMock.mockClear();

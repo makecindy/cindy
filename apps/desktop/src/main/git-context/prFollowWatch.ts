@@ -11,6 +11,7 @@ import type { PrStatusResult } from '@cindy/maker-shared';
 import { prStatusKey, sessionPrUrl } from '@cindy/maker-shared';
 import { schedulePrTriggers, type PrChange } from '@cindy/maker-scheduler';
 import type { Schedule, ScheduleRunTrigger } from '@cindy/maker-scheduler';
+import { runTaskActionRequest } from '../maker-ipc/taskActionAuthorization';
 
 import type { PrStatusQuery } from './prStatusService';
 
@@ -190,8 +191,9 @@ export class PrFollowWatch {
       this.pending.delete(schedule.id);
       this.lastTriggered.set(schedule.id, now);
       this.deps.log?.info?.('pr follow watch: status changed, running schedule now', { scheduleId: schedule.id, url });
-      void this.deps
-        .runNow(schedule.id, { kind: 'watch', source: PR_WATCH_SOURCE, detail: url }, schedule)
+      // This run belongs to the configured schedule, even if the observing tool call expired.
+      void runTaskActionRequest(() =>
+        this.deps.runNow(schedule.id, { kind: 'watch', source: PR_WATCH_SOURCE, detail: url }, schedule))
         .then(result => {
           // The next cron tick only checks status. Keep the event after a runner defers its work.
           if (schedule.prTrigger && result?.deferred && isCurrent() && this.generation === generation && !this.pending.has(schedule.id)) {

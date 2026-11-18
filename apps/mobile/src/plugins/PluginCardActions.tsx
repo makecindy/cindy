@@ -428,10 +428,20 @@ function CardControls({
               intent.kind === 'preview' && !dismissedPreviews.current.has(intent.id),
           ));
         }
-      } catch {
+      } catch (error) {
         if (!disposed && current()) {
-          setUnknown(true);
+          // A failed read says nothing about the delivery of a card action. Keep
+          // that separate unknown state intact, and hide stale interaction UI.
           setConfirm(undefined);
+          setPreviewIntent(undefined);
+          if (error instanceof Error && error.message.startsWith('[NOT_FOUND] ')
+            && page.current === lease) {
+            // The host retired this lease. Only the next deliberate click opens
+            // a new one; never replay the action that originally opened it.
+            page.current = undefined;
+            setLease(undefined);
+            return;
+          }
         }
       }
       if (!disposed && current()) timer = setTimeout(() => void poll(), 1000);
