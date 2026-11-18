@@ -42,7 +42,8 @@ vi.mock('@/session/draftModelMemory',()=>({useDraftModelMemoryVersion:()=>0}));
 vi.mock('@/session/sessionModelMirror',()=>({useSessionModelMirrorVersion:()=>0}));
 vi.mock('@/session/modelPickerRows',()=>({budgetRowDisabled:()=>false,presentPickerPrice:()=>null}));
 vi.mock('@/session/unifiedMobileModels',async importOriginal=>({...await importOriginal<any>(),mobileUnifiedEntries:(providers:any[])=>test.entriesFor?test.entriesFor(providers):test.entries}));
-vi.mock('react-i18next',()=>({useTranslation:()=>({t:(key:string)=>key})}));
+vi.mock('react-i18next',()=>({useTranslation:()=>({t:(key:string, options?: { provider?: string; device?: string }) =>
+  key === 'models.unified.remoteCopyUnavailableOn' ? `${options?.provider} on ${options?.device} is unavailable` : key})}));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT=true;
 let root:ReturnType<typeof createRoot>;
 beforeEach(async ()=>{
@@ -729,6 +730,67 @@ it('passes the computer of the picked row with the selection',async()=>{
   const {onSelect}=await mountRemote(null);
   await act(async()=>test.view.onSelect(test.view.groups[1].rows[0]));
   expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({providerId:'account',agent:'codex'}),{deviceId:'device-studio-mac'});
+});
+// Unit, 2026-11-18 decision. An unavailable home provider with an equal remote
+// copy must present the reason and keep the task home until the copy is picked.
+// Existing remote rows use different logins and never exercise this fold.
+it('labels an available copy without automatically selecting it', async () => {
+  const onSelect = vi.fn(async () => true);
+  await mount(onSelect, {
+    providers: [{ ...studioCatalog.providers[0], name: 'Home Provider', connected: false }],
+    unified: {
+      scope: 'user-device', agents: ['codex'], loadCapabilities: async () => ({ hasFastMode: true }), onSelect,
+      remote: { catalogs: [studioCatalog], selectedDeviceId: null, hostDeviceName: 'Home Mac' },
+    },
+  });
+  const remoteRow = test.view.groups.find((group: any) => group.key === remoteId).rows[0];
+  const reason = 'Home Provider on Home Mac is unavailable';
+  expect(test.view.filters.find((filter: any) => filter.id === remoteId)?.sourceUnavailableReason).toBe(reason);
+  expect(remoteRow).toMatchObject({ selected: false, sourceUnavailableReason: reason });
+  expect(onSelect).not.toHaveBeenCalled();
+  await act(async () => test.view.onSelect(remoteRow));
+  expect(onSelect).toHaveBeenCalledOnce();
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'account' }), { deviceId: studioCatalog.deviceId });
+});
+it.each([false, true])('uses the running provider to explain a third computer’s row (connected: %s)', async connected => {
+  const otherDeviceId = 'office';
+  const other = { ...studioCatalog, deviceId: otherDeviceId, name: 'Office PC' };
+  const running = {
+    ...studioCatalog,
+    providers: [{ ...studioCatalog.providers[0], connected,
+      subscriptionAccountKeys: connected ? ['different-login'] : ['studio-login'] }],
+  };
+  await mount(undefined, {
+    providers: connected ? [{ ...studioCatalog.providers[0], name: 'Home Provider', connected: false }] : [],
+    unified: {
+      scope: 'user-device', agents: ['codex'], loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      remote: {
+        catalogs: [running, other], selectedDeviceId: studioCatalog.deviceId, hostDeviceName: 'Home Mac',
+        providerGroup: { bound: null, running: { deviceId: studioCatalog.deviceId, providerId: 'account' } },
+      },
+    },
+  });
+  await act(async () => test.view.onFilter('all'));
+  const remoteRow = test.view.groups.flatMap((group: any) => group.rows)
+    .find((row: any) => row.remoteDevice?.deviceId === otherDeviceId);
+  expect(remoteRow).toBeDefined();
+  expect(remoteRow?.sourceUnavailableReason).toBe(connected ? undefined : 'Studio Provider on Studio Mac is unavailable');
+});
+it('keeps the unavailable-source reason on a pending selection before the move applies', async () => {
+  await mount(undefined, {
+    providers: [{ ...studioCatalog.providers[0], name: 'Home Provider', connected: false }],
+    unified: {
+      scope: 'user-device', agents: ['codex'], loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      remote: {
+        catalogs: [studioCatalog], selectedDeviceId: studioCatalog.deviceId, hostDeviceName: 'Home Mac',
+        providerGroup: { bound: null, running: { deviceId: null, providerId: 'account' } },
+      },
+    },
+  });
+  const remoteRow = test.view.groups.find((group: any) => group.key === remoteId).rows[0];
+  expect(remoteRow).toMatchObject({ selected: true, sourceUnavailableReason: 'Home Provider on Home Mac is unavailable' });
 });
 it('opens on the Agent\'s computer and marks the current model there',async()=>{
   await mountRemote('device-studio-mac');

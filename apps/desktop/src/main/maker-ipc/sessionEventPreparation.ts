@@ -1,3 +1,4 @@
+import { NATIVE_HISTORY_CHECKPOINT } from '../remote-agent/nativeHistoryTransfer.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
@@ -213,6 +214,11 @@ export function prepareSessionEvent(
   const opusPlanErrorData = claudeOpusPlanTerminalErrorData(deps, session, event);
   if (opusPlanErrorData) attributedEvent = { ...attributedEvent, data: opusPlanErrorData };
   const broadcastEvent = deps.redactEventForRenderer(attributedEvent);
+  if (event.type === 'done' && broadcastEvent.data && typeof broadcastEvent.data === 'object'
+    && NATIVE_HISTORY_CHECKPOINT in broadcastEvent.data) {
+    const { [NATIVE_HISTORY_CHECKPOINT]: _checkpoint, ...data } = broadcastEvent.data as Record<string, unknown>;
+    broadcastEvent.data = data;
+  }
   if (handleInteractionDismissedEvent(deps, session, event)) return;
   if (event.type === 'image' && event.source === 'codex') {
     if (!isQuietScheduledOutput(event)) {

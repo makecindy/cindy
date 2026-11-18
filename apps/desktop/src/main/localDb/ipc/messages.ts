@@ -1,3 +1,4 @@
+import { projectHandoffPreview, type HandoffCoverage } from '../../maker-ipc/agentHandoff.js';
 import { commitContextRebuildWithPorts } from '../contextRebuildPersistence.js';
 import { rebroadcastAgentSwitchBoundaryWith } from '../agentSwitchRows.js';
 import { parseAgentMetaRecord, patchMessageAgentMetaWithResultRow, findVisibleToolUseMessageByAliasesRow,
@@ -5,6 +6,7 @@ import { parseAgentMetaRecord, patchMessageAgentMetaWithResultRow, findVisibleTo
 import type { MessageAgentMetaPatchResult, VisibleToolUseMessageLink } from '../messageMutations.js';
 export type { MessageAgentMetaPatchResult, VisibleToolUseMessageLink } from '../messageMutations.js';
 import { writeMessageRow } from '../messageWrite.js';
+import { scheduleNativeHistoryBackupCleanup } from '../../remote-agent/controller/nativeHistoryBackup.js';
 /**
  * chat-data-localization F5：Messages IPC handlers（C7）。
  *
@@ -732,7 +734,8 @@ export function broadcastMessageRow(
 ): void {
   // Main-created rows may bypass the DB mapper. Never broadcast View-only data
   // to top-level renderers or same-account control devices.
-  const content = projectMcpAppHistory(msg.content, msg.agentMeta?.mcpApp === true);
+  const historyContent = projectMcpAppHistory(msg.content, msg.agentMeta?.mcpApp === true);
+  const content = msg.role === 'agent_switch' ? projectHandoffPreview(historyContent) : historyContent;
   const message = content === msg.content ? msg : { ...msg, content };
   broadcastOwnedPayload('local-db:messages:created', { sessionId, message }, ownerScope);
   if (msg.role === 'user' || msg.role === 'assistant') {
@@ -941,6 +944,7 @@ export async function commitMessageDeletion(
   clientIds: string[],
   handoff: string,
   subagentTurnWindow?: SubagentTurnDeletionWindow,
+  handoffCoverage?: HandoffCoverage,
 ): Promise<{
   sessionId: string;
   deletedClientIds: string[];
@@ -956,7 +960,7 @@ export async function commitMessageDeletion(
     contextMarker: {
       id: createId(),
       clientId: `context-rebuild:${createId()}`,
-      content: JSON.stringify({ handoff, consumed: false, reason: 'message-deletion' }),
+      content: JSON.stringify({ handoff, handoffCoverage, consumed: false, reason: 'message-deletion' }),
       createdAt: now,
     },
     updatedAt: now,
@@ -1039,6 +1043,7 @@ export function commitContextRebuild(
       | 'native-session-recovery'
       | 'idle-gap';
     sourceUserClientId: string | null;
+    handoffCoverage?: HandoffCoverage;
     sourceAgentKind?: 'cc' | 'codex' | 'pi';
     sourceModel?: string | null;
     sourceProviderId?: string | null;
@@ -1061,6 +1066,7 @@ export function broadcastMessageDeleted(
   scheduleBotRemoteResourceChangedForSession(payload.sessionId, ownerScope?.ownerScopeKey);
   const ownerStamp = ownerStampForBroadcast(ownerScope);
   if (ownerStamp === null) return;
+  scheduleNativeHistoryBackupCleanup(payload.sessionId);
   if (ownerScope !== undefined && ownerScope !== null) {
     broadcastTap.tapWindowBroadcast('local-db:messages:deleted', payload, ownerStamp);
   } else if (ownerStamp === undefined) {

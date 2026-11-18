@@ -163,6 +163,8 @@ const mobileGuardInclude = [
 // in the explicit guard tier. Keeping an exact allowlist makes it impossible
 // for a new source scan to silently become part of the ordinary unit gate.
 const desktopGuardInclude = [
+  // Actual send closures: Pi startup/retry race and literal-input isolation (#11112).
+  'src/renderer/features/cc-agent/__tests__/sessionSlashDispatch.guard.test.ts',
   // Host and desktop source contracts: lines the Node Host copies or wires as the desktop does.
   'src/main/maker-host/__tests__/hostDesktopSourceContracts.guard.test.ts',
   // Usage cores shared with the Host: desktop code reaches them only through wrappers that bind every port they use.

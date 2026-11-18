@@ -399,6 +399,9 @@ it('negotiates native-history transfer without making mutations retryable on old
   expect(parseRemoteAgentCaps(caps).nativeHistoryTransfer).toBeUndefined();
   expect(parseRemoteAgentCaps({ ...caps, nativeHistoryTransfer: true }).nativeHistoryTransfer).toBe(true);
   expect(parseRemoteAgentCaps({ ...caps, nativeHistoryTransfer: 'yes' }).nativeHistoryTransfer).toBeUndefined();
+  expect(parseRemoteAgentCaps({ ...caps, nativeHistoryTransfer: true }).nativeHistoryBackup).toBeUndefined();
+  expect(parseRemoteAgentCaps({ ...caps, nativeHistoryBackup: true }).nativeHistoryBackup).toBe(true);
+  expect(parseRemoteAgentCaps({ ...caps, nativeHistoryBackup: 'yes' }).nativeHistoryBackup).toBeUndefined();
   const request = { op: 'native-history', sessionId: 'task', command: { action: 'export', kind: 'codex', nativeId: runId } };
   expect(parseRemoteAgentRequest({ ...request, workingDir: '/owner' })).toEqual(request);
   expect(() => parseRemoteAgentRequest({ ...request, sessionId: '../task' })).toThrow('REMOTE_AGENT_INVALID');

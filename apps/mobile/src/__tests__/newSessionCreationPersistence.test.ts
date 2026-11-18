@@ -259,6 +259,23 @@ it.each(['switch-during-cleanup', 'suspend-fails'] as const)('persists the send 
   expect(getNewSessionCreationTask(saved.item.sessionId)?.readyForEdit).toBe('durable');
 });
 
+it('persists a retargeted skill before a host is available and restores its identity on restart', async () => {
+  const h = harness();
+  h.bindings.creatingWorktree = false;
+  h.bindings.worktreeIntent.enabled = false;
+  const selectedSkill = { name: 'foo', invocation: 'skill:foo', context: 'pi-context' };
+  h.bindings.effectiveDraft = newSessionDraft({
+    ...h.bindings.effectiveDraft, agentKind: 'claude-code', firstMessage: '/foo review', selectedSkill,
+  });
+  await h.run();
+  await mobileDurableOutbox.activate('');
+  await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
+  expect(getCurrentMobileOutboxRecords()[0]).toMatchObject({
+    state: 'queued', item: { text: '/foo review' },
+    creation: { draft: { agentKind: 'claude-code', selectedSkill } },
+  });
+});
+
 it('persists the draft and attachments before reserving and dispatching worktree creation', async () => {
   const h = harness();
   h.bindings.registerPendingPrecreatedWorktree.mockImplementation(async () => {

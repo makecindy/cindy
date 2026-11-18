@@ -142,6 +142,10 @@
     "message": "Cindy kann diesen Anhang nicht lesen. Wähle die Originaldatei aus, um diese Nachricht weiter zu senden. Beim Abbrechen bleibt dein Entwurf erhalten.",
     "button": "Originaldatei verwenden"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "Dieses Senden wurde abgebrochen, weil sich die Aufgabe oder das Fenster geändert hat.",
+    "invalid": "Dieses Senden ist für die aktuelle Sitzung nicht mehr gültig."
+  },
   "mailReader": {
     "showExternalImages": "Externe Bilder anzeigen",
     "markReadFailed": "Lesestatus konnte nicht synchronisiert werden. Prüfe die Postfachautorisierung und öffne diese E-Mail erneut.",
@@ -428,7 +432,8 @@
       "loading": "Modellzugriff wird geladen…",
       "loadFailed": "Der Modellzugriff konnte nicht geladen werden. Öffne diese Einstellungen erneut.",
       "saveFailed": "Der Modellzugriff konnte nicht gespeichert werden. Versuche es erneut.",
-      "needsUpdate": "Aktualisiere Cindy auf dem Computer des Anbieters, um den Modellzugriff zu verwalten."
+      "needsUpdate": "Aktualisiere Cindy auf dem Computer des Anbieters, um den Modellzugriff zu verwalten.",
+      "followsPool": "Diese Verbindung wurde in „{{pool}}“ zusammengeführt; die remote nutzbaren Modelle folgen „{{pool}}“. Ändere sie dort. Die Mitgliederlimits unten lassen sich weiterhin hier festlegen."
     },
     "entry": {
       "label": "Remote & Freigabe",
@@ -440,6 +445,8 @@
     },
     "manage": {
       "createLink": "Freigabelink erstellen",
+      "exportRoster": "Mitgliederliste exportieren",
+      "exportRosterFailed": "Die Mitgliederliste konnte nicht gespeichert werden.",
       "loading": "Freigabe wird geladen…",
       "notReady": "Die Freigabe ist derzeit nicht verfügbar. Stelle sicher, dass du angemeldet und online bist. Es wird automatisch erneut versucht.",
       "loadFailed": "Die Freigabedetails konnten nicht geladen werden. Versuche es gleich erneut.",
@@ -928,7 +935,7 @@
       "title": "Auf {{label}} fortsetzen?",
       "fallbackTitle": "Auf {{label}} mit einer Zusammenfassung fortsetzen?",
       "fallbackDescription": "Die ursprüngliche Unterhaltung konnte nicht vollständig wiederhergestellt werden. In einer Zusammenfassung können frühere Details und Toolergebnisse weggelassen werden. Abbrechen, um auf dem ursprünglichen Computer zu senden.",
-      "description": "Um das Kontingent aller Konten gleichmäßig zu nutzen, sende diese Nachricht über {{label}} ({{quota}}). Die letzten Nachrichten und eine Zusammenfassung werden übernommen; ältere Details können verloren gehen.",
+      "description": "Um das Kontingent aller Konten gleichmäßig zu nutzen, sende diese Nachricht über {{label}} ({{quota}}). Der Gesprächsverlauf wird übernommen. Ältere Teile können gekürzt werden, damit sie in das Modell passen.",
       "quota": "{{left}} % übrig",
       "quotaReset": "{{left}} % übrig · {{reset}}",
       "confirm": "Nur dieses Mal wechseln",
@@ -1341,10 +1348,11 @@
         "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Aktiviere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
         "action": "Aktivieren"
       },
-      "update": {
-        "title": "Plugin „{{plugin}}“ aktualisieren",
-        "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Aktualisiere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
-        "action": "Aktualisieren"
+      "unsupported": {
+        "title": "„{{plugin}}“ unterstützt keine Fernansicht",
+        "body": "Das installierte Plugin kann {{device}} auf einem anderen Computer nicht anzeigen. Suche nach einem kompatiblen Update oder nutze das Gerät auf dem Computer, auf dem diese Sitzung läuft.",
+        "action": "Kompatibles Update suchen",
+        "unavailable": "Bei der Quelle dieses Plugins ist kein kompatibles Update verfügbar. Nutze das Gerät auf dem Computer, auf dem diese Sitzung läuft."
       }
     },
     "lockOnExitHintPrivacy": "Zeigt beim Beenden den Sichtschutz, damit die KI weiterarbeiten kann; eine Berührung am Computer sperrt ihn.",
@@ -1896,7 +1904,6 @@
       "memory": "Gedächtnis",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Hilfsmodelle",
-      "visionBridge": "Vision Bridge",
       "compaction": "Kontextkomprimierung",
       "terminalShell": "Standard-Terminal-Shell",
       "composer": "Nachrichteneingabe",
@@ -4338,7 +4345,8 @@
           "description": "Wenn aktiviert, können deine anderen Computer und die Personen, mit denen du teilst, die Modelle dieses Anbieters nutzen. Der Agent läuft auf diesem Computer und nutzt dessen Anmeldung und Kontingent.",
           "descriptionGroup": "Wenn aktiviert, können deine anderen Computer und die Personen, mit denen du teilst, die Modelle dieses Anbieters nutzen. Die Anbietergruppe wählt den Computer aus, auf dem der Agent läuft.",
           "ariaLabel": "Deinen anderen Computern und den Personen, mit denen du teilst, die Nutzung dieses Anbieters erlauben",
-          "writeFailed": "Die Fernzugriffseinstellung konnte nicht gespeichert werden. Bitte versuche es erneut."
+          "writeFailed": "Die Fernzugriffseinstellung konnte nicht gespeichert werden. Bitte versuche es erneut.",
+          "followsPool": "Diese Verbindung wurde in „{{pool}}“ zusammengeführt und folgt dessen „Remote-Nutzung erlauben“. Ändere es dort."
         },
         "ownComputersCanUse": "Für meine anderen Computer verfügbar",
         "moreActionsAria": "Weitere Aktionen",
@@ -5414,37 +5422,6 @@
       "title": "Tipps",
       "description": "Funktionelle Umschalter. Einige erfordern eine neue Sitzung, um wirksam zu werden (siehe Beschreibungen der einzelnen Zellen)."
     },
-    "visionBridge": {
-      "title": "Vision Bridge",
-      "description": "Ermögliche reinen Textmodellen, Bilder zu lesen, indem du sie über ein separates multimodales Modell leitest, das Bilder in Textbeschreibungen umwandelt.",
-      "enableLabel": "Vision Bridge aktivieren",
-      "enableHint": "Wenn deaktiviert, verhalten sich alle Modelle genau wie bisher. Wenn aktiviert, leiten die unten ausgewählten Modelle ihre Bilder über das Vision-Backend. Dabei werden Bilder, die du an diese Modelle sendest, sowie benachbarter Text als Fokushinweis an das von dir gewählte Vision-Backend gesendet.",
-      "enableAria": "Vision Bridge ein-/ausschalten",
-      "toast": {
-        "saved": "Vision Bridge-Einstellungen gespeichert",
-        "saveFailed": "Vision Bridge-Einstellungen konnten nicht gespeichert werden"
-      },
-      "capability": {
-        "vision": "Als bildfähig bekannt",
-        "noVision": "Als reines Textmodell bekannt",
-        "unknown": "Bildverarbeitungsfähigkeit unbekannt"
-      },
-      "targetModels": {
-        "label": "Über Vision Bridge geleitete Modelle",
-        "hint": "Reine Textmodelle (z. B. DeepSeek) sind standardmäßig ausgewählt. Du kannst auch Modelle mit Bildverarbeitung auswählen — etwa um mit einem günstigeren Beschreibungsmodell Token zu sparen.",
-        "empty": "Keine Modelle verfügbar.",
-        "toggleAria": "Vision Bridge für {{model}} ein-/ausschalten"
-      },
-      "backends": {
-        "label": "Vision-Backend-Modelle",
-        "hint": "Wähle bis zu zwei multimodale Modelle, die Bilder in Text umwandeln. Das zweite (Ersatzmodell) ist optional.",
-        "primary": "Primär",
-        "fallback": "Ersatzmodell",
-        "unset": "Keine Auswahl",
-        "noBackup": "Kein Ersatzmodell",
-        "hintSecondary": "Das primäre Backend wird zuerst verwendet. Schlägt es fehl und ist ein Ersatzmodell festgelegt, wird dieses verwendet. Schlagen beide fehl, kann das Bild nicht beschrieben werden und wird durch einen Texthinweis ersetzt."
-      }
-    },
     "terminalShell": {
       "title": "Standard-Terminal-Shell",
       "description": "Verwende diese Shell beim Öffnen eines neuen Terminal-Tabs in der Seitenleiste.",
@@ -6450,18 +6427,13 @@
         "allowInboundAria": "Umschalten, ob {{name}} dieses Gerät steuern darf",
         "peerControlOff": "Die Fernsteuerung ist auf diesem Gerät nicht aktiviert",
         "masterOffHint": "Aktiviere zuerst den Hauptschalter oben",
-        "controllingThisMac": "Mit Cindy verbunden",
-        "useThisDeviceModels": "Modelle hier nutzen",
-        "allowModelUseAria": "{{name}} die Modelle dieses Computers nutzen lassen"
+        "controllingThisMac": "Mit Cindy verbunden"
       },
       "toast": {
         "revoked": "Zugriff für dieses Gerät widerrufen",
         "revokeFailed": "Zugriff konnte nicht widerrufen werden",
         "restored": "Zugriff für dieses Gerät wiederhergestellt",
-        "restoreFailed": "Zugriff konnte nicht wiederhergestellt werden",
-        "modelUseRestored": "Der andere Computer kann die Modelle dieses Computers wieder nutzen",
-        "modelUseRevoked": "Der andere Computer kann die Modelle dieses Computers nicht mehr nutzen",
-        "modelUseFailed": "„Modelle hier nutzen“ konnte nicht gespeichert werden. Bitte versuche es erneut."
+        "restoreFailed": "Zugriff konnte nicht wiederhergestellt werden"
       },
       "sections": {
         "myDevices": "Meine Geräte",
@@ -6827,6 +6799,10 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
+        },
         "onlyEncrypted": "Nur Agent-Net verwenden",
         "onlyEncryptedHint": "Ältere Geräte und Freigaben über die bisherige Verbindung sind dann nicht verfügbar. Standardmäßig deaktiviert.",
         "peerSwitch": {
@@ -6961,11 +6937,6 @@
       "description": "Geräte, die mit demselben Feishu-Konto angemeldet sind, können einander finden. Sobald „Steuerung erlauben“ aktiviert ist, können deine anderen Geräte {{appName}} auf diesem Computer fernsteuern.",
       "allowControl": "Geräten mit demselben Konto die Steuerung dieses Computers erlauben",
       "allowControlHint": "Wenn aktiviert, können andere Geräte mit demselben Konto diesen Computer ohne Freigabe jeder einzelnen Verbindung steuern. Während der Fernsteuerung wird ein sichtbarer Hinweis angezeigt, und du kannst die Verbindung jederzeit trennen.",
-      "ownModelAccess": {
-        "title": "Meine anderen Computer die Modelle dieses Computers nutzen lassen",
-        "hint": "Wenn aktiviert, können deine anderen Computer die Anbieter auf diesem Computer nutzen. Der Agent läuft hier, mit der Anmeldung und dem Kontingent dieses Computers. Es wird nichts mit anderen Personen geteilt.",
-        "writeFailed": "Die Einstellung konnte nicht gespeichert werden. Bitte versuche es erneut."
-      },
       "keepAwake": "Computer wach halten",
       "keepAwakeHint": "Wenn aktiviert, wechselt dieser Computer nicht in den Ruhezustand, sodass Agents im Hintergrund und geplante Aufgaben weiterlaufen (du kannst weiterhin das Display ausschalten oder den Bildschirm sperren).",
       "linkStatus": {
@@ -7879,6 +7850,18 @@
         "overviewTab": "Übersicht",
         "addPlugin": "Plugin hinzufügen",
         "addPluginAria": "Optionen zum Hinzufügen von Plugins",
+        "githubInstall": {
+          "label": "Aus GitHub Release installieren…",
+          "title": "Aus GitHub Release installieren",
+          "description": "Füge die URL eines Repositorys oder eines Release ein. Für private Repositorys ist ein GitHub-Konto mit Zugriff erforderlich.",
+          "url": "GitHub-Adresse",
+          "submit": "Plugin suchen",
+          "loading": "Suche und Download laufen…",
+          "invalid": "Gib eine GitHub-URL für ein Repository oder einen Release-Tag ein.",
+          "not-found": "Diese Version ist nicht verfügbar. Prüfe den Link und deine Zugriffsrechte.",
+          "ambiguous": "Der Link enthält mehrere Plugins. Wähle ein Release mit einem Paket oder installiere die Datei direkt.",
+          "installedAlready": "Dieses Plugin ist bereits installiert. Du kannst es in seinen Einstellungen aktualisieren."
+        },
         "installedSection": "Installiert",
         "installedExpand": "Alle {{count}} installierten Plugins anzeigen",
         "installedCollapse": "Weitere installierte Plugins ausblenden",
@@ -8248,7 +8231,7 @@
         "hostTools_handoff": "Aufgabennachrichten",
         "hostTools_handoffDetail": "Mit Cindys Werkzeugen Nachrichten an vorhandene Aufgaben senden. Vorgänge, die eine aktuelle Aufgabe benötigen, erfordern ein ausdrücklich angegebenes Ziel.",
         "hostTools_usage": "Nutzung und Anbietergruppenstatus lesen",
-        "hostTools_usageDetail": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Anbietergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen.",
+        "hostTools_usageDetail": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Anbietergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen. Liest auch das Kontingent für zugängliche Aufgaben, einschließlich autorisierter Computer im selben Konto und Freigaben, bei denen die Kontingentanzeige erlaubt ist.",
         "hostTools_settings": "App-Einstellungen",
         "hostTools_settingsDetail": "Mit Cindys Werkzeugen die App-Konfiguration lesen und ändern. Geheimnisse werden nicht zurückgegeben; vertrauliche Eingaben machst du selbst.",
         "hostTools_scheduler": "Automatisierungsverwaltung",
@@ -8772,6 +8755,10 @@
       "panelHost": {
         "close": "Panel schließen"
       },
+      "installProgress": {
+        "awaitingConsent": "Warten auf Bestätigung…",
+        "installFailed": "Installation fehlgeschlagen"
+      },
       "updateAll": {
         "title": "Alle aktualisieren · {{count}} Plugins",
         "collapseDiff": "Einklappen",
@@ -8782,6 +8769,7 @@
         "statusDone": "Aktualisiert",
         "statusSkipped": "Übersprungen",
         "statusFailed": "Update fehlgeschlagen",
+        "progressCount": "{{done}} von {{total}} aktualisiert",
         "background": "Im Hintergrund fortsetzen",
         "doneAction": "Fertig",
         "doneToast": "Sammelupdate abgeschlossen: {{done}} aktualisiert, {{rest}} nicht abgeschlossen",
@@ -11032,6 +11020,8 @@
     "autosave": {
       "saving": "Wird gespeichert…",
       "saved": "Gespeichert",
+      "unconfirmed": "Speichern nicht bestätigt",
+      "savedModel": "Gespeichert · ab nächstem Zug",
       "retry": "Erneut speichern"
     },
     "retry": "Erneut versuchen",
@@ -11145,7 +11135,7 @@
       "discard": "Änderungen verwerfen",
       "continueEditing": "Weiter bearbeiten"
     },
-    "profileSaveFailed": "Die Einstellungen des Freundes konnten nicht gespeichert werden. Es wurden keine Änderungen übernommen.",
+    "profileSaveFailed": "Die Einstellungen des Freundes konnten nicht gespeichert werden.",
     "profileSaveOffline": "Der Computer des Freundes ist nicht erreichbar. Stellen Sie die Verbindung wieder her und speichern Sie erneut.",
     "modelLabel": "Modell",
     "modelUnavailable": "{{model}} (derzeit nicht verfügbar)",
@@ -11465,7 +11455,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} kann nicht antworten: Das Gerät des Freundes hat sein Limit für Remote-Sitzungen erreicht.\nBitte den Besitzer des Freundes, ungenutzte Sitzungen zu archivieren, oder den Besitzer des Remote-Computers, das Limit unter „Remote & Freigabe“ zu erhöhen.",
           "REMOTE_TOTAL_LIMIT": "{{name}} kann nicht antworten: Der Remote-Computer hat sein Gesamtlimit für Remote-Sitzungen erreicht.\nBitte den Besitzer dieses Computers, ungenutzte Sitzungen freizugeben oder das Limit unter „Remote & Freigabe“ zu erhöhen.",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}} konnte nicht antworten: Das aktuelle Modell unterstützt keine Bilder.\nWähle ein bildfähiges Modell oder aktiviere und konfiguriere Vision Bridge unter Einstellungen → Personalisierung. Sende deine Nachricht dann erneut.",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}} konnte nicht antworten: Das aktuelle Modell unterstützt keine Bilder.\nWähle ein Modell mit Bildunterstützung.",
           "MODEL_UNAVAILABLE": "{{name}} konnte nicht antworten: Kein Modell verfügbar.\nWähle in den Einstellungen des Freundes ein verbundenes, verfügbares Modell und sende deine Nachricht erneut.",
           "AUTH_REQUIRED": "{{name}} konnte nicht antworten: Die Modellverbindung erfordert eine Authentifizierung.\nVerbinde den Modellanbieter in den Einstellungen erneut und sende deine Nachricht noch einmal.",
           "RATE_LIMITED": "{{name}} konnte nicht antworten: Zu viele Modellanfragen.\nSende deine Nachricht später erneut oder wähle ein anderes verfügbares Modell.",
@@ -14132,7 +14122,7 @@
         "effortEndFast": "Schneller",
         "effortEndSmart": "Intelligenter",
         "railSameEngine": "Nur {{agent}}",
-        "crossEngineWarning": "Beim Engine-Wechsel wird der Kontext neu aufgebaut; Inhalte können verloren gehen",
+        "crossEngineWarning": "Mit der nächsten Nachricht wechselt die Engine und übernimmt den Gesprächsverlauf. Ältere Teile können gekürzt werden.",
         "favoritesSyncFailed": "Favoriten konnten nicht synchronisiert werden. Öffne die Auswahl erneut, um es noch einmal zu versuchen; der entfernte Computer benötigt möglicherweise ein Update.",
         "favoritesSyncFailedUnreachable": "Favoriten sind noch nicht synchronisiert: Der Computer ist nicht erreichbar. Öffne die Auswahl erneut, sobald die Verbindung wiederhergestellt ist.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14148,12 +14138,8 @@
         "ultrafast": "Ultraschnell"
       },
       "discoveredCopy": {
-        "title": "{{provider}} auf „{{device}}“ verwenden?",
-        "description": "{{unavailable}} Wenn du fortfährst, läuft es auf „{{device}}“. Du kannst hier jederzeit zurückwechseln.",
         "unavailableHere": "{{provider}} auf diesem Computer ist gerade nicht verfügbar.",
-        "unavailableOn": "{{provider}} auf „{{device}}“ ist gerade nicht verfügbar.",
-        "confirm": "Verwenden",
-        "cancel": "So beibehalten"
+        "unavailableOn": "{{provider}} auf „{{device}}“ ist gerade nicht verfügbar."
       }
     },
     "permissionSelector": {
@@ -14419,33 +14405,14 @@
       "credentialSwitchApplied": "Der Wechsel des Modellanbieters ist jetzt wirksam.",
       "credentialSwitchFailed": "Wechsel des Modellanbieters fehlgeschlagen. Wähle das Modell erneut.",
       "modelSwitchContextGuard": {
-        "title": "Diese Unterhaltung passt nicht in dieses Modell",
         "warnToast": "Diese Unterhaltung nutzt bereits {{used}} — etwa {{pct}} % der Kapazität von {{total}} des neuen Modells",
-        "overflowDescription": "Diese Unterhaltung nutzt bereits {{used}}, mehr als das neue Modell aufnehmen kann ({{total}}, etwa {{pct}} %). Wenn du wechselst, erstellt Cindy eine kurze Zusammenfassung und fährt fort. Dein Chatverlauf bleibt erhalten, wird aber nicht vollständig wortgetreu übergeben.",
-        "overflowDescriptionRemote": "Diese entfernte Aufgabe nutzt bereits {{used}} / {{total}} des Kontexts des kleineren Modells (etwa {{pct}} %). Deshalb kann Cindy nicht sicher wechseln. Behalte das aktuelle Modell oder starte eine neue Aufgabe, bevor du dieses Modell auswählst.",
-        "confirmSwitch": "Wechseln und fortfahren",
-        "cancelSwitch": "Dieses Modell behalten"
+        "condensedToast": "Ältere Teile des Gesprächs werden für das neue Modell gekürzt. Der vollständige Verlauf bleibt verfügbar.",
+        "overflowDescriptionRemote": "Diese entfernte Aufgabe nutzt bereits {{used}} / {{total}} des Kontexts des kleineren Modells (etwa {{pct}} %). Deshalb kann Cindy nicht sicher wechseln. Behalte das aktuelle Modell oder starte eine neue Aufgabe, bevor du dieses Modell auswählst."
       },
       "agentSwitch": {
         "engineNotReady": "Engine gewechselt, aber die neue Engine konnte nicht starten; beim Senden einer Nachricht wird es erneut versucht",
         "failed": "Engine-Wechsel fehlgeschlagen; nicht angewendet",
-        "deferred": "Wechsel vorgemerkt: Beim Senden deiner nächsten Nachricht wird zu {{agent}} · {{model}} gewechselt",
-        "confirmation": {
-          "title": "Agent wechseln?",
-          "description": "Die neue Agent-Engine setzt die Arbeit anhand einer Übergabezusammenfassung fort. Daher ist nicht garantiert, dass Denkprozesse und andere Inhalte vollständig übernommen werden. Wenn du zurückwechselst, kannst du die Sitzung der ursprünglichen Engine fortsetzen. Der Wechsel unterbricht außerdem einmalig den Prompt-Cache und kann den Tokenverbrauch erhöhen.",
-          "confirm": "Agent wechseln",
-          "cancel": "Aktuellen Agent behalten",
-          "dontShowAgain": "Nicht erneut erinnern"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "Agent wieder auf diesem Computer ausführen?",
-        "titleOther": "Agent auf „{{device}}“ ausführen?",
-        "description": "Der Unterhaltungsverlauf auf dem anderen Computer kann nicht übertragen werden. Die Fortsetzung erfolgt daher anhand einer Übergabezusammenfassung. Denkprozesse und ähnliche Details werden möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
-        "descriptionNativeHistory": "Der vollständige Unterhaltungsverlauf wird mitkopiert und nahtlos fortgesetzt. Kann er nicht wiederhergestellt werden, erfolgt die Fortsetzung anhand einer Übergabezusammenfassung; Denkprozesse und ähnliche Details werden dann möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
-        "confirm": "Computer wechseln",
-        "cancel": "So beibehalten",
-        "discoveredDescription": "{{reason}} {{description}}"
+        "deferred": "Wechsel vorgemerkt: Beim Senden deiner nächsten Nachricht wird zu {{agent}} · {{model}} gewechselt"
       }
     },
     "agentSelect": {
@@ -14926,11 +14893,6 @@
       "unavailable": "Bild nicht verfügbar",
       "loading": "Bild wird geladen…"
     },
-    "visionBridge": {
-      "analyzing": "{{count}} Bild(er) werden analysiert…",
-      "fallback": "Vision Bridge ist auf ein Ersatz-Vision-Backend ausgewichen (primäres Backend nicht verfügbar); die Bilderkennung kann beeinträchtigt sein",
-      "unavailable": "Vision Bridge ist nicht verfügbar; das Bild konnte nicht beschrieben werden und wurde durch einen Texthinweis ersetzt"
-    },
     "newMessageIndicator": {
       "aria": "Nach unten, {{count}} neue Nachrichten ansehen",
       "label_one": "{{count}} neue Nachricht",
@@ -15127,6 +15089,9 @@
       "continueFailed_other": "{{count}} Sitzungen konnten nicht fortgesetzt werden. Öffne sie, um es erneut zu versuchen."
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "Die Berechtigung für diese Aktion ist abgelaufen. Der nächste Lauf ist weiterhin geplant.",
+      "actionExpired": "Die Sitzungsberechtigung für diese Aktion ist abgelaufen. Prüfe den letzten Lauf der Automatisierung.",
+      "actionRecovered": "Die Berechtigung für diese Aktion ist abgelaufen. Dieselbe Automatisierung wurde später erfolgreich ausgeführt.",
       "text": "Ein automatischer Durchlauf ist fehlgeschlagen.",
       "precheck": "Automatische Prüfungen sind vorübergehend blockiert.",
       "rateLimited": "Automatische Prüfungen sind wegen eines Anfragelimits vorübergehend blockiert.",
@@ -15557,6 +15522,11 @@
         "relocatedElsewhere": "Agent läuft jetzt auf einem anderen Computer",
         "quotaRebalance": "sein Kontingent sollte zuerst genutzt werden"
       },
+      "handoffCoverage": {
+        "complete": "Gespräch vollständig übernommen",
+        "condensed": "Ältere Teile gekürzt",
+        "details": "Für die Fortsetzung übernommene Inhalte"
+      },
       "contextRebuild": {
         "labelOverflow": "Kontext neu organisiert, wird fortgesetzt",
         "labelTimeout": "Letzte Runde ohne Antwort; Kontext zum Fortsetzen neu organisiert",
@@ -15835,7 +15805,7 @@
       "REMOTE_AGENT_INVALID": "Bei der Kommunikation mit dem Computer, auf dem der Agent läuft, ist etwas schiefgelaufen. Versuch es erneut. Falls das Problem weiterhin besteht, aktualisiere Cindy auf beiden Computern.",
       "REMOTE_AGENT_RESUME_REJECTED": "Der Computer, auf dem das Modell läuft, kann diese Sitzung nicht fortsetzen. Erstelle über die Sitzungsliste eine neue Sitzung und kopiere die benötigten Inhalte dorthin. Die ursprüngliche Sitzung und die Nachrichten in der Warteschlange bleiben erhalten.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Dieses Modell hat das vom Eigentümer festgelegte Limit für die Modellfreigabe erreicht. Wähle ein anderes verfügbares Modell, um fortzufahren.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Dieser Computer gibt dir keinen Zugriff auf diesen Anbieter oder das gewählte Modell. Ist es dein eigener Computer, aktiviere dort unter Remote-Verbindungen „Meine anderen Computer die Modelle dieses Computers nutzen lassen“. Wurde er mit dir geteilt, bitte den Eigentümer, den Zugriff unter „Remote & Freigabe“ anzupassen. Oder wähle ein anderes Modell.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Dieser Computer gibt dir keinen Zugriff auf diesen Anbieter oder das gewählte Modell. Ist es dein eigener Computer, aktiviere dort beim Anbieter „Remote-Nutzung erlauben“. Wurde er mit dir geteilt, bitte den Eigentümer, den Zugriff unter „Remote & Freigabe“ anzupassen. Oder wähle ein anderes Modell.",
       "REMOTE_AGENT_FORK_FAILED": "Der Computer, auf dem der Agent läuft, konnte von hier aus keine neue Sitzung starten. Versuch es erneut oder wähle eine andere Nachricht.",
       "REMOTE_AGENT_SHARE_PAUSED": "Der Eigentümer hat diese Freigabe für dich pausiert. Diese Modelle können erst wieder genutzt werden, wenn sie fortgesetzt wird. Wechsle zu einem anderen Modell, um fortzufahren.",
       "REMOTE_AGENT_SHARE_REMOVED": "Diese Freigabe ist nicht mehr verfügbar (der Eigentümer hat sie entfernt oder du hast sie verlassen). Wechsle zu einem anderen Modell, um fortzufahren.",
@@ -16545,7 +16515,10 @@
       "confirmArchive": {
         "title": "Sitzung archivieren",
         "description": "Diese Sitzung archivieren? Sie wird aus der Liste entfernt.",
-        "dirtyWorktreeWarning": "Der Worktree dieser Sitzung enthält nicht committete Änderungen. Sie werden vor dem Archivieren als Git-Snapshot gespeichert und können später über die Sitzung wiederhergestellt werden.",
+        "dirtyWorktreeWarning": "Nicht committete Änderungen werden vor dem Archivieren gespeichert. Du kannst sie über die Aufgabe wiederherstellen.",
+        "discardChanges": "Nicht committete Änderungen verwerfen",
+        "discardWarning": "Nicht committete Änderungen und neue Dateien gehen verloren.",
+        "discardAndArchive": "Verwerfen und archivieren",
         "scheduleWarning_one": "Die verknüpfte Automatisierung {{names}} läuft weiter und stellt diese Sitzung wieder her.",
         "scheduleWarning_other": "Die verknüpften Automatisierungen {{names}} laufen weiter und stellen diese Sitzung wieder her.",
         "scheduleWarningMany_one": "{{count}} dieser Sitzungen hat verknüpfte Automatisierungen, die sie bei ihrer Ausführung wiederherstellen.",
@@ -16941,6 +16914,7 @@
         "summaryAria": "Zusammenfassung von PR #{{number}} anzeigen",
         "unresolvedLabel": "Ungelöste Review-Threads",
         "checks": "Prüfungen",
+        "following": "Wird verfolgt",
         "checksTotal": "Insgesamt {{count}}",
         "failed": "Fehlgeschlagen",
         "passed": "Bestanden",
@@ -17208,6 +17182,18 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "Ohne GitHub-App-Benachrichtigungen wird weiterhin regelmäßig geprüft.",
+      "label": "PR",
+      "url": "Pull-Request-URL",
+      "condition": "Auslösen bei",
+      "any": "PR-Aktivität",
+      "merged": "Merge",
+      "review": "Review-Aktivität",
+      "ci": "CI-Statusänderung",
+      "timed": "Zusätzlich regelmäßig prüfen",
+      "invalid": "GitHub-Pull-Request-URL eingeben."
+    },
     "presentation": {
       "status": {
         "active": "Aktiv",
@@ -21487,7 +21473,6 @@
       "sessionRuntimeFallback": "Automatischer Modellwechsel für Aufgaben",
       "subagentModels": "Subagenten",
       "auxiliaryModels": "Hilfsmodelle",
-      "visionBridge": "Vision Bridge",
       "modelVisibility": "Angezeigte und ausgeblendete Modelle",
       "providerOrder": "Reihenfolge der Anbieter",
       "modelCatalogOverrides": "Geänderte Modellparameter",
@@ -21530,6 +21515,24 @@
   },
   "featureIntro": {
     "close": "Schließen",
+    "project": {
+      "title": "So funktionieren Projekte",
+      "lead": "Gib jeder längeren Arbeit ein Projekt. Die Dateien liegen in einem Ordner auf deinem Computer, und Cindy macht jedes Mal beim letzten Stand weiter, ohne neue Erklärung.",
+      "files": {
+        "title": "Deine Ergebnisse",
+        "body": "Cindy arbeitet direkt im Projektordner. Was entsteht, bleibt auf deinem Computer."
+      },
+      "context": {
+        "title": "Nichts neu erklären",
+        "body": "Neue Aufgaben im Projekt sehen diese Dateien sofort und kennen dessen Vorgaben."
+      },
+      "separate": {
+        "title": "Sauber getrennt",
+        "body": "Jedes Projekt bündelt seine Aufgaben, verschiedene Arbeiten vermischen sich nicht."
+      },
+      "start": "Weiter zum neuen Projekt",
+      "note": "Ein Name genügt. Ein vorhandener Ordner oder ein Code-Repository geht auch."
+    },
     "taskInbox": {
       "title": "Der Posteingang",
       "lead": "Aufgaben ordnen sich selbst in Offen, In Arbeit, Zurückgestellt und Erledigt ein. Am besten hältst du den Posteingang leer: Klicke auf Erledigt, wenn eine Aufgabe fertig ist, und stelle zurück, was warten kann.",

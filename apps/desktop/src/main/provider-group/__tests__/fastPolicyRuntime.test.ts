@@ -87,7 +87,7 @@ vi.mock('../../device-link/settings-store.desktop.js', () => ({
   onDeviceLinkSettingChanged: () => () => {},
 }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
-  isRemoteProviderInvocationAllowed: () => true, isRemoteProviderOpenToOwnComputers: () => true, isOwnComputerModelUseEnabled: () => false,
+  isRemoteProviderInvocationAllowed: () => true,
 }));
 vi.mock('../../device-link/providerShareHost.js', () => ({
   getProviderShareHostLoadedSnapshot: ownedShareSnapshot,

@@ -613,10 +613,26 @@ describe('independent V2 relay', () => {
     expect((await f.client.request<{ tenants: unknown[] }>('GET', '/tenants')).tenants).toEqual([
       expect.objectContaining({ networkId, accountName: 'Bob', devices: 2 })]);
     const revived = new AgentNetClient(f.relay.url, guest, request.bootstrap.ownerCertificate, guestRootKey);
+    // #11276: extend the real tenant revocation case with one share per network.
+    // The persisted private book must lose the revoked tenant without affecting the other network.
+    const createPrivateTask = async (client: AgentNetClient) => {
+      const target = API + '/private-sharing/shared-tasks';
+      const body = JSON.stringify({ sessionId: 'tenant-task', title: 'Tenant task' });
+      const response = await fetch(f.relay.url + target, { method: 'POST', headers: {
+        'content-type': 'application/json', 'x-agent-net-authorization': client.header('POST', target, body),
+      }, body });
+      expect(response.status).toBe(200);
+      return (await response.json() as { sharedTaskId: string }).sharedTaskId;
+    };
+    const retainedTask = await createPrivateTask(f.client);
+    await createPrivateTask(revived);
     const uplink = await revived.connect(); f.uplinks.push(uplink);
     const closed = once(uplink, 'close');
     await f.client.request('DELETE', '/tenants/' + encodeURIComponent(networkId));
     expect(await closed).toEqual([4410]);
+    expect(JSON.parse(await readFile(file, 'utf8')).privateSharing).toMatchObject({
+      tasks: [{ sharedTaskId: retainedTask }], bindings: [{ networkId: f.certificate.networkId }],
+    });
     await expect(revived.directory()).rejects.toMatchObject({ code: 'NETWORK_UNKNOWN' });
     expect((await f.client.request<{ tenants: unknown[] }>('GET', '/tenants')).tenants).toEqual([]);
     await expect(f.client.request('DELETE', '/tenants/' + encodeURIComponent(f.certificate.networkId))).rejects.toMatchObject({ code: 'NOT_FOUND' });

@@ -1651,6 +1651,15 @@ describe('context rebuild boundaries', () => {
     ]);
   });
 
+  // Unit, 2026-11-18 decision. The raw persisted metadata is copied field by
+  // field, so a projected-card fixture alone cannot catch a dropped coverage.
+  it('carries coverage from a persisted rebuild to the transcript boundary', () => {
+    const [item] = normalizeRemoteMessages([message({
+      id: 'rebuild', role: 'assistant', content: '', agentMeta: { contextRebuild: { handoffCoverage: 'condensed' } },
+    })]);
+    expect(item.systemCardData).toMatchObject({ handoffCoverage: 'condensed' });
+  });
+
   it.each([null, 'invalid', []])('keeps ordinary assistant text when metadata is invalid: %j', (contextRebuild) => {
     const [item] = normalizeRemoteMessages([message({ id: 'ordinary', role: 'assistant', content: 'Keep this text', agentMeta: { contextRebuild } })]);
     expect(item.body).toBe('Keep this text');

@@ -38,7 +38,6 @@ export const DEVICE_LINK_INVOKE = {
   DISCONNECT_ALL: 'device-link:disconnect-all',
   /** 被控端:撤销某控制端的访问权限(逐设备黑名单,持久化) */
   REVOKE: 'device-link:revoke',
-  SET_MODEL_USE: 'device-link:set-model-use',
   /** 被控端:恢复某控制端的访问权限 */
   RESTORE: 'device-link:restore',
   // —— 控制端:远程会话镜像的本地冷缓存(见 main/device-link/mirrorCacheStore.ts)——
@@ -173,8 +172,6 @@ export interface DeviceLinkState {
   controlledBy: ControlledByDevice[];
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单,被控端 UI 渲染「已撤销」用) */
   revokedControllers: string[];
-  /** 单独关掉「用本机模型」的同账号电脑(仍可远程控制本机，但借不到本机的模型)。 */
-  modelUseRevokedControllers?: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
   /**
@@ -231,6 +228,11 @@ export interface DeviceLinkPeerLinksSnapshot {
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: DeviceLinkAgentNetPeerRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';
-  /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
+  /**
+   * 经中转的数据现在走中转的 UDP 端口还是 WebSocket:Agent-Net 两种都可能(UDP 不通时退回 WebSocket),
+   * Device Link 只有 WebSocket。没有 relayProtocol、或 Agent-Net 主连接还没报上来时不给。
+   */
+  relayTransport?: 'udp' | 'websocket';
+  /** 本机到主 relay 的往返，取数据实际走的那条路:UDP 是登记到确认，WebSocket 是心跳;离线 / 未测得为 null */
   relayRttMs: number | null;
 }

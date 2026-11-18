@@ -1369,7 +1369,7 @@ const ACCOUNT_SWITCH_PROBE_BUDGET_MS = 2_000;
 export async function readSubscriptionSessionAccount(
   provider: SubscriptionProvider,
   keys: { sessionId?: string; nativeSessionId?: string; model?: string; legacyProviderId?: string; routeProviderId?: string },
-  /** ownComputer：远程读取来自自己的其他电脑(不是受邀者)，换号探测也认「让我的其他电脑用本机模型」。 */
+  /** ownComputer：远程读取来自自己的其他电脑(不是受邀者)。 */
   options: { remote?: boolean; ownComputer?: boolean } = {},
 ): Promise<SubscriptionSessionAccountView> {
   // Replacement admission is optional. Share a short budget with the original bound-account
@@ -1427,7 +1427,7 @@ export async function readSubscriptionSessionAccount(
       assertOwner(state);
     }
   };
-  const binding = [
+  const resolveBinding = () => [
     keys.sessionId ? `task:${keys.sessionId}` : '',
     keys.nativeSessionId ? `native:${keys.nativeSessionId}` : '',
   ]
@@ -1436,6 +1436,7 @@ export async function readSubscriptionSessionAccount(
     .find(Boolean) ?? (legacyAccountId ? { accountId: legacyAccountId } : undefined)
     ?? ((requestedRef.providerId !== provider || keys.nativeSessionId) && pinnedOwnAccount(requestedRef)
       ? { accountId: pinnedOwnAccount(requestedRef)! } : undefined);
+  const binding = resolveBinding();
   if (pinnedLegacyAccountId && binding?.accountId !== pinnedLegacyAccountId
     && (!binding || !('via' in binding) || binding.via !== requestedRoute))
     return { providerId: provider, state: 'unavailable' };
@@ -1482,6 +1483,12 @@ export async function readSubscriptionSessionAccount(
   // Quota alone cannot authorize retiring native history. Probe actual replacement admission
   // without reserving or rebinding, within the original query's shared budget.
   const switchAvailable = (blocked || config.paused) && await canReplace(config.id);
+  const latestPool = readPool(provider);
+  if (!latestPool || disconnectedFor(latestPool, provider, config.id)
+    || !latestPool.accounts.some(account => account.id === config.id)
+    || resolveBinding()?.accountId !== config.id
+    || (config.id === 'default' && !defaultAccountBound(provider)))
+    return { providerId: provider, state: 'unavailable' };
   const destination = accountProviderId(provider, config.id);
   return {
     providerId: provider,
@@ -1505,6 +1512,7 @@ export async function readSubscriptionSessionAccount(
             ? 'limited'
             : 'ready',
       ...(info.auth.authenticated ? accountUsage(info.usage) : {}),
+      ...(info.auth.authenticated && info.usageAt !== undefined ? { usageUpdatedAt: info.usageAt } : {}),
       ...(blocked ? { blocked: true as const, switchAvailable } : {}),
       ...((keys.routeProviderId || keys.legacyProviderId) && config.paused ? { switchAvailable } : {}),
       // The task follows its account (subscription-account-pools.md 任务跟着账号走). Tell the local
@@ -2058,7 +2066,7 @@ export async function acquireSubscriptionAccount(
   control = false,
   options: {
     remote?: boolean;
-    /** 远程调用来自自己的其他电脑(不是受邀者)：旧版导入的 Codex 账号也认「让我的其他电脑用本机模型」。 */
+    /** 远程调用来自自己的其他电脑(不是受邀者)。 */
     ownComputer?: boolean;
     accountId?: string;
     resuming?: boolean;

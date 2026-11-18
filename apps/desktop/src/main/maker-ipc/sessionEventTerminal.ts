@@ -59,6 +59,7 @@ import {
   type ProductTurnFailureOwner,
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
+  readonly saveRemoteNativeHistory?: (sessionId: string, data: unknown, anchor: string, persisted: Promise<unknown>) => void;
   readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string, inputClientIds?: string[]) => void;
   readonly onSuccessfulProductTurn?: (
@@ -485,6 +486,9 @@ export function finishSessionTerminalEvent(
     }
     if (!isContinuationBoundary) {
       deps.markTurnEndedAfterPersistDrain(session.id);
+      if (event.type === 'done' && event.source === 'pi' && turnBoundaryAssistantPersistId) {
+        deps.saveRemoteNativeHistory?.(session.id, event.data, turnBoundaryAssistantPersistId, drainPersistQueue());
+      }
       if (
         event.turnScope !== 'background' && event.turnOrigin?.kind !== 'goal'
       ) {

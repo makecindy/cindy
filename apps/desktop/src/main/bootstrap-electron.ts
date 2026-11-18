@@ -7,6 +7,7 @@ import { getClaudeSessionBackgroundActivity } from './maker-host/claude-session-
 import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
+import { scheduleNativeHistoryBackupCleanup } from './remote-agent/controller/nativeHistoryBackup.js';
 import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from './maker-ipc/piUsageReceipts.js';
 import { onUsagePricingChanged } from './usage/pricingChanges.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
@@ -18,6 +19,7 @@ import { registerSetupMigration } from './setup-migration/register';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, stopMenubarService } from './menubar/service.js';
+import { WindowsQuotaPanel } from './quota-overview/windowsPanel.js';
 import { startDesktopWidgets } from './quota-overview/desktopWidgets.js';
 import { refreshQuotaPanelsControlState } from './quota-overview/panelController.js';
 import { getQuotaOverviewService, readUsageWidgetSnapshot } from './quota-overview/service.js';
@@ -744,7 +746,7 @@ import {
 // shadow savepoint 链的启动期对账(孤儿 refs/cindy/savepoints/* 清理)
 import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepointCleanup';
 // session-git-pr-context: 会话分支感知 + PR 关联状态 IPC
-import { registerGitContextIpc, disposeGitContext } from './git-context';
+import { registerGitContextIpc, disposeGitContext, refreshSchedulePr } from './git-context';
 import { registerGitReviewDeviceOp, registerGitReviewIpc } from './git-review';
 import { registerProjectOrderIpc } from './projectOrderStore';
 import { registerSidebarSettingsIpc, loadSidebarSettingsSnapshot, setLocalMainViewHidden } from './sidebarSettingsStore';
@@ -1034,13 +1036,6 @@ import {
   resetSubagentModelSettings,
   writeSubagentModelSettingsPatch,
 } from './maker-host/subagent-model-settings-store.js';
-import {
-  readVisionBridgeSettings,
-  readVisionBridgeSettingsState,
-  resetVisionBridgeSettings,
-  writeVisionBridgeSettings,
-} from './vision-bridge/vision-bridge-settings-store.js';
-import type { VisionBridgeSettings } from '../shared/visionBridgeSettings.js';
 import { readLspModeSettings, writeLspModeEnabled } from './maker-host/lsp-mode-store.js';
 import {
   readChatEmbeddingSettings,
@@ -1718,6 +1713,7 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     await restoreUsageLimitWaits();
     if (getGoalTeardownGeneration() !== goalGenBefore) return;
     const scheduler = await startScheduler({
+      refreshSchedulePr,
       maker,
       getDb: () => getDbClient().drizzle,
       getMainWindow: () => mainWindowRef,
@@ -3106,6 +3102,7 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
     && activeOwnerScopeKey() === scopeKey
     && getActiveAppSession().dataOwnerId === dataOwnerId;
   if (!isCurrent()) return 'deferred';
+  scheduleNativeHistoryBackupCleanup();
   if (getMakerIfReady()) refreshHostToolProviderOwner(getActiveDataOwnerPushStamp());
   const builtinOutcome = await builtinPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
@@ -3826,6 +3823,7 @@ const authCredentialRecovery = createAuthCredentialRecovery({
 });
 
 let windowsTray: Tray | null = null;
+let windowsQuotaPanel: WindowsQuotaPanel | null = null;
 // 当前的托盘菜单。语言切换时置 null,下一次右键按新语言重建。
 let windowsTrayMenu: Menu | null = null;
 // 已弹出的菜单在 native callback 前必须保留,即使语言切换清掉了当前缓存。
@@ -3912,6 +3910,8 @@ function quitFromDesktopTray(): void {
 }
 
 function destroyWindowsTray(): void {
+  windowsQuotaPanel?.dispose();
+  windowsQuotaPanel = null;
   windowsTray?.destroy();
   windowsTray = null;
   windowsTrayMenu = null;
@@ -3950,8 +3950,22 @@ function ensureWindowsTray(): boolean {
     if (icon.isEmpty()) throw new Error(`tray icon is empty: ${iconPath}`);
     tray = new Tray(icon.resize({ width: 16, height: 16 }));
     tray.setToolTip(BRAND_NAME);
-    tray.on('click', () => focusMainWindow());
-    tray.on('right-click', () => openWindowsTrayMenu());
+    const quotaTray = tray;
+    tray.on('mouse-enter', (_event, position) => windowsQuotaPanel?.hover(quotaTray.getBounds(), position));
+    tray.on('mouse-leave', () => windowsQuotaPanel?.cancelPendingHover());
+    windowsQuotaPanel = new WindowsQuotaPanel(() => mainWindowRef, () => {
+      const win = mainWindowRef;
+      if (win && !win.isDestroyed()) dispatchApplicationMenuCommand(win, resolveNewMakerMenuCommand(false));
+    });
+    // 卡片只由悬停触发；左键单击保持原有语义，直接回到主窗口。
+    tray.on('click', () => {
+      windowsQuotaPanel?.dismiss();
+      focusMainWindow();
+    });
+    tray.on('right-click', () => {
+      windowsQuotaPanel?.dismiss();
+      openWindowsTrayMenu();
+    });
     windowsTray = tray;
     windowsTrayMenu = null;
     return true;
@@ -3966,6 +3980,8 @@ function ensureWindowsTray(): boolean {
     windowsTrayLog.error('failed to create Windows tray icon', {
       error: err instanceof Error ? err.message : String(err),
     });
+    windowsQuotaPanel?.dispose();
+    windowsQuotaPanel = null;
     windowsTray = null;
     windowsTrayMenu = null;
     return false;
@@ -4690,6 +4706,7 @@ const createWindow = () => {
       resourceUsagePrewarmTimer = null;
     }
     resourceUsageWindowController.destroyWindow();
+    windowsQuotaPanel?.destroyWindow();
     remoteDesktopViewerWindows.reset();
     rsbWindowController.destroyWindow();
     sidebarTabWindowsController.destroyAllWindows();
@@ -4840,6 +4857,7 @@ const createWindow = () => {
         currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
       );
       resourceUsageWindowController.prewarm();
+      windowsQuotaPanel?.prewarm();
       remoteDesktopViewerWindows.setLocale(
         currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
       );
@@ -5719,24 +5737,6 @@ const registerIpcHandlers = () => {
   };
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async (event) => { assertTrustedAppRendererEvent(event); return restoreSubagentSettings(); });
 
-  // 视觉桥设置 IPC —— store 与 Maker 单例无关, 提前注册（见 vision-bridge-settings-store）。
-  // GET 也是特权配置面读取（providerId/modelId/开关），非可信 sender 同样拒绝（与 SET/RESET 对齐）。
-  ipcMain.handle(MAKER_IPC_INVOKE.VISION_BRIDGE_SETTINGS_GET, async (event) => {
-    assertTrustedAppRendererEvent(event);
-    return visionBridgeSettingsWire();
-  });
-  const updateVisionSettings = async (patch: unknown) => {
-    const parsed = parseVisionBridgeSettingsPatch(patch);
-    writeVisionBridgeSettings(parsed);
-    return visionBridgeSettingsWire();
-  };
-  ipcMain.handle(MAKER_IPC_INVOKE.VISION_BRIDGE_SETTINGS_SET, async (event, patch: unknown) => { assertTrustedAppRendererEvent(event); return updateVisionSettings(patch); });
-  const restoreVisionSettings = async () => {
-    resetVisionBridgeSettings();
-    return visionBridgeSettingsWire();
-  };
-  ipcMain.handle(MAKER_IPC_INVOKE.VISION_BRIDGE_SETTINGS_RESET, async (event) => { assertTrustedAppRendererEvent(event); return restoreVisionSettings(); });
-
   registerRuntimeSettingsSection({
     id: 'subagent-models', title: '子代理模型',
     description: 'Claude Code 子代理模型及来源；Codex 智能调配开关。Codex 忙碌时沿用设置页的延迟生效规则。',
@@ -5746,15 +5746,6 @@ const registerIpcHandlers = () => {
       codexSmartSubagentRouting: settingsSchema.boolean().optional() }),
     read: subagentModelSettingsWire, update: updateSubagentSettings, reset: restoreSubagentSettings,
   });
-  const visionBackendSchema = settingsSchema.strictObject({ providerId: settingsSchema.string().min(1).max(256), modelId: settingsSchema.string().min(1).max(256) }).nullable();
-  registerRuntimeSettingsSection({
-    id: 'vision-bridge', title: '视觉桥', description: '视觉桥总开关、目标模型、主视觉模型与备用模型。', effective: 'next-request',
-    schema: settingsSchema.strictObject({ enabled: settingsSchema.boolean().optional(),
-      targetModels: settingsSchema.array(settingsSchema.string().min(1).max(256)).max(512).optional(),
-      primary: visionBackendSchema.optional(), fallback: visionBackendSchema.optional() }),
-    read: visionBridgeSettingsWire, update: updateVisionSettings, reset: restoreVisionSettings,
-  });
-
   // Claude Code 自动上下文压缩阈值 IPC —— store 跟 Maker 单例无关, 提前注册。
   // buildDesktopClaudeRuntimeConfig.behaviorFlags 是动态 getter, 下个新 session 读到新值。
   ipcMain.handle(MAKER_IPC_INVOKE.SILENT_ENCRYPTED_RETRY_GET, async () => {
@@ -11409,74 +11400,6 @@ function subagentModelSettingsWire() {
     customizedKeys: state.customizedKeys,
     defaults: state.defaults,
   };
-}
-
-function visionBridgeSettingsWire() {
-  const state = readVisionBridgeSettingsState();
-  return {
-    ...state.value,
-    isCustomized: state.isCustomized,
-    customizedKeys: state.customizedKeys,
-    defaults: state.defaults,
-  };
-}
-
-/** 解析视觉桥设置 patch（白名单键，逐字段校验；非法抛 INVALID_PARAMS）。 */
-function parseVisionBridgeSettingsPatch(raw: unknown): Partial<VisionBridgeSettings> {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throwIpcError('INVALID_PARAMS', 'vision bridge settings patch required (object)');
-  }
-  const input = raw as Record<string, unknown>;
-  const patch: Partial<VisionBridgeSettings> = {};
-  if ('enabled' in input) {
-    if (typeof input.enabled !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'vision bridge enabled must be boolean');
-    }
-    patch.enabled = input.enabled;
-  }
-  if ('targetModels' in input) {
-    if (!Array.isArray(input.targetModels)) {
-      throwIpcError('INVALID_PARAMS', 'vision bridge targetModels must be a string array');
-    }
-    // trim 后拒绝空白元素，避免脏值（" deepseek " / "  "）落盘。
-    const trimmed = input.targetModels.map((m) => (typeof m === 'string' ? m.trim() : ''));
-    if (trimmed.some((m) => m.length === 0)) {
-      throwIpcError(
-        'INVALID_PARAMS',
-        'vision bridge targetModels must be a non-blank string array',
-      );
-    }
-    patch.targetModels = trimmed;
-  }
-  for (const key of ['primary', 'fallback'] as const) {
-    if (!(key in input)) continue;
-    const value = input[key];
-    if (value === null) {
-      patch[key] = null;
-      continue;
-    }
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throwIpcError(
-        'INVALID_PARAMS',
-        `vision bridge ${key} must be { providerId, modelId } or null`,
-      );
-    }
-    const ref = value as Record<string, unknown>;
-    if (typeof ref.providerId !== 'string' || typeof ref.modelId !== 'string') {
-      throwIpcError(
-        'INVALID_PARAMS',
-        `vision bridge ${key} must be { providerId, modelId } or null`,
-      );
-    }
-    // trim 后拒绝纯空白，避免脏配置（空白串）落盘。
-    const providerId = ref.providerId.trim();
-    const modelId = ref.modelId.trim();
-    if (providerId.length === 0 || modelId.length === 0) {
-      throwIpcError('INVALID_PARAMS', `vision bridge ${key} providerId/modelId must not be blank`);
-    }
-    patch[key] = { providerId, modelId };
-  }
-  return patch;
 }
 
 function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPatch {

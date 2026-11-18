@@ -117,14 +117,6 @@ describe('Host main.ts wiring', () => {
     assert.ok(main.includes('  reportAgentCindyGatewayKeyRejected: () => modelAccess?.reportCurrentKeyRejected(),\n'));
   });
 
-  // 规则：视觉桥在 Maker 关闭之后才关。失效后果：关闭途中还在跑的任务读图失败。
-  it('closes the vision bridge after the Maker shuts down', () => {
-    const main = read(path.join(hostSrc, 'main.ts'));
-    const shutdown = main.indexOf('?.shutdown?.());');
-    const close = main.indexOf('agentGraph?.visionBridge.close()');
-    assert.ok(shutdown > 0 && close > shutdown, 'visionBridge.close() follows Maker shutdown in the runtime teardown');
-  });
-
   // 规则：XD 快照的写入、未知标记与读取都走本进程共享的 active-catalog（放行表第二节 XD 快照）。
   // 失效后果：子代理准入、Codex 代理与辅助模型候选读到的快照与刷新写入的不是同一份。
   it('sends the catalog writes and the unknown mark to the shared active catalog', () => {
@@ -229,8 +221,8 @@ describe('Host engine assembly (runtime.ts) against the desktop construction sit
   it('formats the Pi startup hint and dialog strings with the desktop lines', () => {
     const runtime = read(path.join(hostAgent, 'runtime.ts'));
     const piHost = read(piHostFile);
-    assert.equal(between(runtime, 'formatPiStartupCloudFileHint: (file) =>', 'resolvePiVisionBridgeEnv:'),
-      between(piHost, 'formatPiStartupCloudFileHint: (file) =>', 'preparePiExtraSpawnConfig:'));
+    assert.equal(between(runtime, 'formatPiStartupCloudFileHint: (file) =>', '\n        }),').trim(),
+      between(piHost, 'formatPiStartupCloudFileHint: (file) =>', '\n    }),').trim());
     assert.ok(runtime.includes('const { t } = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);'));
   });
 
@@ -339,22 +331,6 @@ describe('Host copies of desktop expressions', () => {
     const cut = (text: string, from: string, to: string) => { const start = text.indexOf(from); assert.ok(start >= 0, from); return text.slice(start, text.indexOf(to, start)); };
     assert.equal(shape(cut(host, 'request.kind === \'permission\'', ': request;')),
       shape(cut(desktop, "req.kind === 'permission'", ': req;')).replaceAll('...req,', '...request,').replaceAll('req.', 'request.').replace(' as Record<string, unknown>', ''));
-  });
-
-  // 规则：视觉桥的提示文案与去重时间，是桌面 broadcastVisionBridgeEvent 的同一段。
-  // 失效后果：Host 上的视觉桥提示与桌面不同或重复弹出。
-  it('sends the vision bridge notices with the desktop text and dedup', () => {
-    const desktop = read(desktopIndex);
-    const hostSource = read(path.join(hostAgent, 'vision-bridge.ts'));
-    const body = (source: string) => {
-      const start = source.indexOf("if (reason === 'vision-bridge-recognizing') {");
-      const end = source.indexOf("source: 'vision-bridge',", start);
-      return source.slice(start, end).replace(/\s+/g, '');
-    };
-    assert.ok(body(desktop).length > 200);
-    assert.equal(body(hostSource), body(desktop));
-    assert.ok(hostSource.includes('const VISION_BRIDGE_DEDUP_MS = 2_000;'));
-    assert.ok(desktop.includes('const VISION_BRIDGE_DEDUP_MS = 2_000;'));
   });
 
   // 规则：Host 的 Pi 持久子代理入口与桌面入口逐行相同，只有 ready 帧的发法、断开通道和父进程监视不同。

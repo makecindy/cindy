@@ -37,7 +37,7 @@ export function createSelectSameAgentModel(ports: {
   applySessionRuntimeSelection: ApplySessionRuntimeSelection;
 }): NonNullable<MakerSessionAgentSwitchHandlerDeps['selectSameAgentModel']> {
   const { applySessionRuntimeSelection } = ports;
-  return async (sessionId, intent, applyNow, assertSelectionCurrent, beforeMutation, pendingSelectionAccess) => {
+  return async (sessionId, intent, applyNow, assertSelectionCurrent, beforeMutation, pendingSelectionAccess, nextInputChars) => {
     const result = await applySessionRuntimeSelection(sessionId, intent.model, intent.providerId, {
       effort: (intent.effort ?? null) as SessionRuntimeProfile['effort'],
       fastMode: intent.fastMode ?? false,
@@ -47,7 +47,8 @@ export function createSelectSameAgentModel(ports: {
       ...(intent.confirmedContextWindow ? { confirmedContextWindow: intent.confirmedContextWindow } : {}),
     }, { source: 'user', sessionLockHeld: true, applyingUserSelectionOnSend: applyNow,
       runtimeSource: intent.runtimeSource, configStaged: intent.configStaged === true,
-      assertSelectionCurrent, beforeMutation, pendingSelectionAccess });
+      deviceLinkModelSelectionOrigin: intent.deviceLinkModelSelectionOrigin,
+      nextInputChars, assertSelectionCurrent, beforeMutation, pendingSelectionAccess });
     if (result.contextWindowConfirmationRequired !== undefined) {
       throwIpcError('PRECONDITION_FAILED', 'Model context window changed or was unknown; select the model again to confirm');
     }
