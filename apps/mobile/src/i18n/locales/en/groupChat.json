@@ -127,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}} could not reply: the current model does not support images.",
         "advice": "Choose an image-capable model.",
-        "details": "Choose an image-capable model, or enable and configure Vision Bridge in Settings → Personalization, then send your message again."
+        "details": "Choose an image-capable model."
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}} could not reply: no model is available.",

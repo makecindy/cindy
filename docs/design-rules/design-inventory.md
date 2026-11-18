@@ -11,7 +11,7 @@
 
 可达组件、样式来源与 Token / 裸颜色 / 裸圆角统计不入库：需要时运行 `pnpm design:inventory:report`，输出到 `tmp/design-inventory-report.md`；要看某次提交时的数字，在该提交上重跑。
 
-登记 surface 数：59。平台包含 Desktop 与 Mobile；静态入口发现不表示已迁移或已实机验证。
+登记 surface 数：60。平台包含 Desktop 与 Mobile；静态入口发现不表示已迁移或已实机验证。
 
 | ID | 平台 | 标题 | 生产入口 |
 | --- | --- | --- | --- |
@@ -43,6 +43,7 @@
 | `desktop.skillhub.local` | desktop | SkillHub 本地技能 | hash `/skillhub/local` 及统一详情 `/skillhub/detail`（旧详情链接重定向） |
 | `desktop.skillhub.market` | desktop | SkillHub 市场 | hash `/skillhub/market`（SkillhubMarketListView） |
 | `desktop.window.computer-permission-guide` | desktop | 电脑使用权限引导 | `?view=computer-permission-guide` → ComputerPermissionGuideWindow；backdrop 同文件 |
+| `desktop.window.quota-tray` | desktop | Windows 托盘额度卡片 | `?quotaTray=1` → renderer/quota-tray-entry.tsx（不走 router.tsx） |
 | `desktop.window.recording-preview` | desktop | 录屏独立回放窗口 | `?recordingPreview=1` → renderer/recording-preview-entry.tsx（不走 router.tsx） |
 | `desktop.window.region-screenshot` | desktop | 全局截图浮层 | `?regionScreenshot=1` → renderer/region-screenshot-entry.tsx（不走 router.tsx） |
 | `desktop.window.region-screenshot-editor` | desktop | 截图独立编辑窗口 | `?regionScreenshotEditor=1` → renderer/region-screenshot-entry.tsx（不走 router.tsx） |
@@ -228,6 +229,7 @@ Mobile 已由 DS-7 纳入同一台账（2026-09-10 静态入口发现），保�
 | `desktop.skillhub.local` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | SkillhubDiffPanel 继承 DiffView 排版，文件比较和发布逻辑不变 | 同一 DiffView 的真实 Worker/长行/大字号验证；Skill Hub 真实网络长反馈未联调 |
 | `desktop.skillhub.market` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | SkillhubDiffPanel 复用 DiffView，列表/网络逻辑不变 | 真实 Diff 组件验证不等于市场流程完成；真实远端联调按 DS-10 平台清单继续安排 |
 | `desktop.window.computer-permission-guide` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.window.quota-tray` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `desktop.window.recording-preview` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `desktop.window.region-screenshot` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `desktop.window.region-screenshot-editor` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |

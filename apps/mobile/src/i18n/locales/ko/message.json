@@ -256,6 +256,8 @@
     "notSent": "전송 안 됨",
     "imagesNotUploaded_one": "이미지 {{count}}장을 올리지 못했어요",
     "imagesNotUploaded_other": "이미지 {{count}}장을 올리지 못했어요",
+    "waitingForNamedComputer": "{{name}} 연결 시 자동 전송",
+    "reconnectComputer": "다시 연결",
     "waitingForComputer": "컴퓨터가 연결되면 전송",
     "waitingForNetwork": "네트워크가 돌아오면 전송",
     "queued": "대기 중",

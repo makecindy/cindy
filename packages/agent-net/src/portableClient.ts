@@ -190,11 +190,16 @@ export class PortableAgentNetClient implements SocketClient {
     }
     return result.devices;
   }
-  private async mediaRequest<T>(method: string, resource: string, consume: (response: Response) => Promise<T>, body?: Uint8Array, range?: string, signal?: AbortSignal,
+  private async mediaRequest<T>(method: string, resource: string, consume: (response: Response, onByteProgress?: (bytes: number) => void) => Promise<T>, body?: Uint8Array, range?: string, signal?: AbortSignal,
     extraHeaders: Record<string, string> = {}): Promise<T> {
     const path = this.path(resource), authorization = await this.header(method, path, body);
     this.options.assertCurrent();
-    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60_000);
+    const controller = new AbortController();
+    let timer = setTimeout(() => controller.abort(), 60_000);
+    const onByteProgress = (bytes: number) => {
+      if (controller.signal.aborted || !Number.isFinite(bytes) || bytes <= 0) return;
+      clearTimeout(timer); timer = setTimeout(() => controller.abort(), 60_000);
+    };
     const abort = () => controller.abort();
     if (signal?.aborted) controller.abort(); else signal?.addEventListener('abort', abort, { once: true });
     try {
@@ -203,7 +208,7 @@ export class PortableAgentNetClient implements SocketClient {
         ...(range ? { range } : {}), ...extraHeaders }, ...(body ? { body: new Uint8Array(body) } : {}), redirect: 'error', signal: controller.signal });
       this.options.assertCurrent();
       if (!response.ok) throw new PortableAgentNetClientError(response.status, 'AGENT_NET_MEDIA_REQUEST_FAILED');
-      const result = await consume(response); this.options.assertCurrent(); return result;
+      const result = await consume(response, onByteProgress); this.options.assertCurrent(); return result;
     } finally {
       clearTimeout(timer); signal?.removeEventListener('abort', abort);
       // Release an unread/failed response as well as the request. Keep the
@@ -236,10 +241,15 @@ export class PortableAgentNetClient implements SocketClient {
     return value;
   }
   /** One storage request under the same deadline/cancellation rules as relay media requests. */
-  private async storageRequest<T>(target: DirectMediaRequest, consume: (response: Response) => Promise<T>, body?: Uint8Array, range?: string,
+  private async storageRequest<T>(target: DirectMediaRequest, consume: (response: Response, onByteProgress?: (bytes: number) => void) => Promise<T>, body?: Uint8Array, range?: string,
     signal?: AbortSignal): Promise<T | typeof STORAGE_UNREACHABLE> {
     this.options.assertCurrent();
-    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60_000);
+    const controller = new AbortController();
+    let timer = setTimeout(() => controller.abort(), 60_000);
+    const onByteProgress = (bytes: number) => {
+      if (controller.signal.aborted || !Number.isFinite(bytes) || bytes <= 0) return;
+      clearTimeout(timer); timer = setTimeout(() => controller.abort(), 60_000);
+    };
     const abort = () => controller.abort();
     if (signal?.aborted) controller.abort(); else signal?.addEventListener('abort', abort, { once: true });
     try {
@@ -252,7 +262,7 @@ export class PortableAgentNetClient implements SocketClient {
         this.options.assertCurrent(); return STORAGE_UNREACHABLE;
       }
       this.options.assertCurrent();
-      const result = await consume(response); this.options.assertCurrent(); return result;
+      const result = await consume(response, onByteProgress); this.options.assertCurrent(); return result;
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); controller.abort(); }
   }
   private async putDirectMediaChunk(id: string, offset: number, body: Uint8Array, signal?: AbortSignal): Promise<{ received: number; complete: boolean }> {
@@ -282,12 +292,12 @@ export class PortableAgentNetClient implements SocketClient {
       response => response.json(), body, undefined, signal);
   }
   /** Consume the body within this scope so abort/timeout outlive the headers. */
-  async withMediaResponse<T>(id: string, range: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  async withMediaResponse<T>(id: string, range: string, consume: (response: Response, onByteProgress?: (bytes: number) => void) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const refused = Symbol('refused');
-    const fromStorage = (target: DirectMediaRequest) => this.storageRequest(target, async response => {
+    const fromStorage = (target: DirectMediaRequest) => this.storageRequest(target, async (response, onByteProgress) => {
       if (response.status === 403) { await response.body?.cancel().catch(() => undefined); return refused; }
       if (!response.ok && response.status !== 206) { await response.body?.cancel().catch(() => undefined); throw new PortableAgentNetClientError(response.status, 'MEDIA_STORAGE_READ_FAILED'); }
-      return consume(response);
+      return consume(response, onByteProgress);
     }, undefined, range, signal);
     const cached = this.directReachable() ? this.directReads.get(id) : undefined;
     if (cached && cached.until > Date.now()) {
@@ -297,8 +307,8 @@ export class PortableAgentNetClient implements SocketClient {
       if (result === STORAGE_UNREACHABLE) this.directUnreachable(); else this.directReads.delete(id);
     }
     const direct = this.directReachable();
-    const granted = await this.mediaRequest<{ relayed: T } | { target: DirectMediaRequest }>('GET', '/media/' + encodeURIComponent(id), async response => {
-      if (response.headers.get(MEDIA_TRANSFER_HEADER) !== MEDIA_TRANSFER_DIRECT) return { relayed: await consume(response) as T };
+    const granted = await this.mediaRequest<{ relayed: T } | { target: DirectMediaRequest }>('GET', '/media/' + encodeURIComponent(id), async (response, onByteProgress) => {
+      if (response.headers.get(MEDIA_TRANSFER_HEADER) !== MEDIA_TRANSFER_DIRECT) return { relayed: await consume(response, onByteProgress) as T };
       return { target: this.directRequest(((await response.json()) as { request?: unknown }).request) };
     }, undefined, range, signal, direct ? { [MEDIA_TRANSFER_HEADER]: MEDIA_TRANSFER_DIRECT } : {});
     if ('relayed' in granted) return granted.relayed;

@@ -1,5 +1,10 @@
 import { useTaskListMode } from '@/hooks/useTaskListMode';
-import { matchesTaskCreators, useTaskCreatorIndex, useTaskCreatorOptions } from '@/features/bots/botFollowScopes';
+import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
+import {
+  matchesTaskCreators,
+  useTaskCreatorIndex,
+  useTaskCreatorOptions,
+} from '@/features/bots/botFollowScopes';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ErrorNotice } from '@/components/ui/error-notice';
 /**
@@ -91,6 +96,7 @@ import {
 } from './contexts/SessionAttentionUrgencyContext';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { useConfirmTaskArchive } from './hooks/useConfirmTaskArchive';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -105,6 +111,7 @@ import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { cleanupSessionLayoutPrefs } from '@/lib/sessionLayoutPrefs';
 import {
   countDirtyWorktreesForRemoval,
+  isDirtyWorktree,
   resolveWorktreeRemovalPreflight,
 } from '@/lib/worktreeRemovalWarning';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
@@ -153,6 +160,7 @@ import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
 import { useSidebarFilter, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
 import { useHiddenProjects, type UseHiddenProjectsReturn } from './hooks/useHiddenProjects';
 import {
+  deviceLinkProjectKey,
   buildPersistentLocalProjects,
   filterPersistentLocalProjectsByLastActivity,
   normalizeProjectKey,
@@ -320,7 +328,6 @@ import {
   type DeletedScheduleGeneratedSessionResult,
 } from '@/features/scheduler/hooks/useDeleteScheduleWithSessions';
 import {
-  archiveConfirmDescription,
   archiveScheduleWarningMany,
   loadActiveBoundScheduleNames,
 } from '@/features/scheduler/lib/archiveScheduleWarning';
@@ -771,7 +778,6 @@ export function CCAgentSidebarUpper() {
         visibleNewOrder,
         comparisonKey,
       );
-      filter.setPinnedSortBy('manual');
       void filter.setManualPinnedOrder(order, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist rail pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
@@ -990,6 +996,7 @@ function ExpandedView({
   );
   // 归档和批量菜单共用可等待的确认弹窗；删除保留受控 ConfirmDialog。
   const { confirm: confirmDialog } = useConfirmDialog();
+  const confirmTaskArchive = useConfirmTaskArchive();
   const handleScheduleDeleted = useCallback(
     async ({ disposition, affectedSessionIds }: DeletedScheduleGeneratedSessionResult) => {
       await refreshSessions();
@@ -2251,7 +2258,6 @@ function ExpandedView({
         visibleNewOrder,
         comparisonKey,
       );
-      filter.setPinnedSortBy('manual');
       void filter.setManualPinnedOrder(order, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
@@ -2853,42 +2859,13 @@ function ExpandedView({
     [handleClearSelection, navigate, t],
   );
 
-  const handleCreateProject = useCallback(async () => {
-    const hiddenProjectKeysAtPickerOpen = new Set(hiddenProjectKeys);
-    try {
-      const result = await window.electronAPI.showOpenDirectoryDialog();
-      if (result.canceled || !result.path) return;
-      const localProjectKey = normalizeProjectKey(result.path);
-      if (localProjectKey?.startsWith('local:')) {
-        const restored = await restoreHiddenProjectIfPresent({
-          projectKey: localProjectKey,
-          wasHiddenAtPickerOpen: isProjectHidden(
-            localProjectKey,
-            hiddenProjectKeysAtPickerOpen,
-            localPlatform,
-          ),
-          setProjectHidden,
-          getCurrentProjectKeys: () => restorableProjectKeysRef.current(),
-          ensureProjectIncluded: filter.ensureProjectIncluded,
-          localPlatform,
-        });
-        if (restored) return;
-      }
-      handleClearSelection();
-      patchNewMakerDraft({ workingDir: result.path, remoteHostId: null });
-      navigate('/cc-agent/new', { state: makeNewMakerRouteState('dialogue') });
-    } catch (err) {
-      log.warn('create project directory picker failed', err);
-      toast.error(t('ccAgent.sidebar.createProjectFailed'));
-    }
-  }, [
-    filter.ensureProjectIncluded,
-    handleClearSelection,
-    hiddenProjectKeys,
-    navigate,
-    setProjectHidden,
-    t,
-  ]);
+  const [creatingProject, setCreatingProject] = useState<{
+    target: DialogueDeviceTarget | null;
+  } | null>(null);
+  const handleCreateProject = useCallback(
+    (target: DialogueDeviceTarget | null) => setCreatingProject({ target }),
+    [],
+  );
 
   /**
    * 新建对话。目标设备两种来源:
@@ -3357,18 +3334,10 @@ function ExpandedView({
             // 同样要弹确认框,否则归档会静默回收可能带着未提交改动的 worktree
             // (greptile review)。'unknown' 时不摆 dirty 警告文案 —— 那会谎称有改动,
             // 走的是普通归档确认。
-            if (preflight !== 'clean' || scheduleNames.length > 0) {
-              const confirmed = await confirmDialog({
-                title: t('ccAgent.sidebar.confirmArchive.title'),
-                description: archiveConfirmDescription(t, {
-                  dirtyWorktree: preflight === 'dirty',
-                  scheduleNames,
-                }),
-                confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
-                cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
-              });
-              if (!confirmed || !isCurrent()) return false;
-            }
+            const confirmed = preflight === 'clean' && scheduleNames.length === 0
+              ? true
+              : await confirmTaskArchive(preflight, scheduleNames);
+            if (!confirmed || !isCurrent()) return false;
             // 重定向判定用 viewedSessionId:files 路由下归档「正在浏览的会话」也要
             // 跳离失效的文件视图(codex review;正常路由下两者恒等)。经 ref 读:它随
             // 路由切换而变,留在 deps 里会让本 handler 每次切换都重建、打穿整表 memo。
@@ -3377,7 +3346,7 @@ function ExpandedView({
             if (!(await closeOwnedSharedTask(sharedTaskId))) {
               return false;
             }
-            return true;
+            return confirmed;
           },
         });
         return;
@@ -3387,8 +3356,7 @@ function ExpandedView({
         // 不会变成静默放行。
         // P1 预检:worktree 有未提交更改时确认文案追加警告(查询失败降级为不提示)
         const dirtyWorktree =
-          (await resolveWorktreeRemovalPreflight(sessionId, session?.deviceLinkDeviceId)) ===
-          'dirty';
+          isDirtyWorktree(await resolveWorktreeRemovalPreflight(sessionId, session?.deviceLinkDeviceId));
         // Keep the existing confirm-state shape for the normal delete flow, then attach
         // the shared-task scope in a functional update so cancellation still leaves it open.
         setConfirm({ open: true, sessionId, action, dirtyWorktree });
@@ -3402,7 +3370,7 @@ function ExpandedView({
     [
       closeOwnedSharedTask,
       archiveBlockedByRunning,
-      confirmDialog,
+      confirmTaskArchive,
       markSessionsRead,
       runSessionAction,
       unarchiveSession,
@@ -3734,6 +3702,41 @@ function ExpandedView({
 
   return (
     <>
+      {creatingProject && (
+        <ProjectSettingsDialog
+          create
+          project={{
+            projectKey: 'local:',
+            scope: 'local',
+            workingDir: '',
+            remoteHostId: null,
+            deviceLinkDeviceId: creatingProject.target?.deviceId ?? null,
+            deviceLinkDeviceName: creatingProject.target?.deviceName ?? null,
+            deviceLinkConnectionStatus: null,
+            displayName: '',
+            segments: 1,
+            sessions: [],
+            latestActivityAt: '',
+          }}
+          onClose={() => setCreatingProject(null)}
+          onCreated={(directory) => {
+            filter.ensureProjectIncluded(
+              creatingProject.target
+                ? deviceLinkProjectKey(creatingProject.target.deviceId, directory)
+                : `local:${directory}`,
+            );
+            handleClearSelection();
+            patchNewMakerDraft({
+              workingDir: directory,
+              remoteHostId: null,
+              deviceLinkDeviceId: creatingProject.target?.deviceId ?? null,
+              deviceLinkDeviceName: creatingProject.target?.deviceName ?? null,
+            });
+            navigate('/cc-agent/new', { state: makeNewMakerRouteState('dialogue') });
+          }}
+        />
+      )}
+
       {/* 顶部动作(新建 / 搜索 / 自动任务)已上移到 shell 的 SidebarTopNav 常驻列表;
           这里直接从多选操作条 / 列表内容开始。 */}
       {selectedSessionIds.size > 0 && (

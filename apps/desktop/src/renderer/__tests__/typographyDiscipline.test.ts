@@ -352,7 +352,6 @@ const FIXED_LEADING_DEBT: Exemption[] = [
   fixedLeadingDebt('src/renderer/features/bots/BotAutomationsSettings.tsx', { 'leading-6': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotBasicProfileFields.tsx', { 'leading-6': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotCapabilitySettings.tsx', { 'leading-5': 3 }),
-  fixedLeadingDebt('src/renderer/features/bots/BotDeleteDialog.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotDmThreadPreview.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotDmThreadViews.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotGlancePopover.tsx', { 'leading-4': 1, 'leading-5': 1 }),

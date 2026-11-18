@@ -175,3 +175,21 @@ cindy.onHostMessage(function (msg) {
   改,而不是单纯说不;
 - **权限最重**:声明 hooks 在插件详情里是最重的一条(「可读取、拦截或改写你
   发出的消息」),用户会看得很清楚,只在真需要时申请。
+
+### 原生恢复边界
+
+在 `subscribe.topics` 声明 `native-recovery`，并在 `onHostMessage` 监听 `did-native-recovery`。
+仅本机 Claude Code、Codex、Pi 的普通任务提供此主题。引擎会话启动时按已启用且获整体安装批准的订阅注册。
+事件实时投递给该版本已运行的插件。需要持续接收时，可声明 `launch: "resident"`。
+
+`data` 包含 `{sessionId,engine,nativeEvent,metadata}`。字段按原生事件提供，仅含下表列出的状态。
+
+| 引擎 | `nativeEvent` 与 `metadata` |
+| --- | --- |
+| Claude Code | `PreCompact`、`PostCompact` 带 `trigger`，`Stop` 带 `stop_hook_active`，`StopFailure` 带错误分类 `error`。使用当前 SDK 提供的事件。 |
+| Codex | `contextCompaction`，当前轮的 `turn/completed` 带 `status`，原生 `error` 带 `willRetry`。 |
+| Pi | `auto_retry_start` 可带 `attempt`，`auto_retry_end` 带 `success`，`compaction_start`，`compaction_end` 和 `agent_settled` 带 `aborted`。 |
+
+此主题用于观察。消息、压缩摘要、转录路径、原生错误详情和模型凭据不进入事件。
+主动重试任务或手动压缩可调用 [`control_session`](plugin-queue-control.md)。
+此主题不提供自动重试开关、任意上下文改写、文件检查点或继续执行裁决。

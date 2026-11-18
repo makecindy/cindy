@@ -208,6 +208,7 @@ export function buildQueuedTextMessage(
       agentKind,
       ...(options.planMode !== undefined ? { planMode: options.planMode } : {}),
       workingDir,
+      ...(session.projectDir ? { projectDir: session.projectDir } : {}),
       model: session.model,
       effort,
       permissionMode,

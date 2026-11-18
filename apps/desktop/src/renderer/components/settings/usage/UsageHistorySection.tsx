@@ -35,7 +35,7 @@ import { UsageHeatmap } from '@/components/new-chat/UsageHeatmap';
 import { usageModelKey } from '@/components/new-chat/usagePalette';
 import { UsageStatRow } from './UsageStatRow';
 import { UsageTokenBars } from './UsageTokenBars';
-import { UsageAgentTable, UsageModelTable } from './UsageBreakdownTables';
+import { UsageAgentTable, UsageModelTable, UsageAuxiliaryTable } from './UsageBreakdownTables';
 import { UsageTaskTable, buildUsageTaskRows, usageTaskCoverageStart } from './UsageTaskTable';
 import {
   USAGE_DEVICE_ALL,
@@ -48,6 +48,7 @@ import {
 import {
   buildAgentRows,
   buildModelRows,
+  buildAuxiliaryRows,
   buildSummary,
   chartUsageHistoryPayload,
   filterUsageHistoryPayload,
@@ -159,6 +160,7 @@ export function UsageHistorySection(): React.JSX.Element {
   const chartHistory = useMemo(() => chartUsageHistoryPayload(history), [history]);
   const summary = useMemo(() => buildSummary(filteredHistory), [filteredHistory]);
   const modelRows = useMemo(() => buildModelRows(filteredHistory), [filteredHistory]);
+  const auxiliaryRows = useMemo(() => buildAuxiliaryRows(filteredHistory), [filteredHistory]);
   const agentRows = useMemo(() => buildAgentRows(filteredHistory), [filteredHistory]);
   // 完整历史按 token 排序建立所有模型的配色，不截断前五名，也不随日期筛选重排。
   // 表格与柱图共用此顺序；history.models 的金额排序不适用于这里。
@@ -319,6 +321,13 @@ export function UsageHistorySection(): React.JSX.Element {
               <div className="overflow-x-auto">
                 <UsageModelTable rows={modelRows} rangeLabel={rangeLabel} colorOrder={colorOrder} />
               </div>
+            </Card>
+          )}
+
+          {auxiliaryRows.length > 0 && (
+            <Card title={t('usageHistory.auxiliary.title')} subtitle={rangeLabel}>
+              <p className="mb-3 text-12 text-[var(--text-secondary)]">{t('usageHistory.auxiliary.description')}</p>
+              <div className="overflow-x-auto"><UsageAuxiliaryTable rows={auxiliaryRows} /></div>
             </Card>
           )}
 

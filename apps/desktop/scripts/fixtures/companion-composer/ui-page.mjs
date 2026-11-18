@@ -4,7 +4,7 @@ export default {
   name: 'companion-composer',
   entry: './companion-composer-fixture.tsx',
   viewport: { width: 760, height: 360 },
-  real: 'ChatInput, Tiptap editor, useAttachments, SendButton, VoiceInputButton, tooltips, send dispatch, themes and translations',
+  real: 'ChatInput, Tiptap editor, useAttachments, SendButton, VoiceInputButton, ComposerFollowUpHint, follow-up preference, tooltips, send dispatch, themes and translations',
   notCovered:
     'Microphone/ASR, live companion tasks, real media IO and speech synthesis; host services, delayed image cache, model catalog and dictation hook use scenario data. Windows runtime is not exercised.',
   stubs: {
@@ -46,6 +46,27 @@ export default {
     'voice-speaker-filtered': {
       about: 'Recording explains above the composer that the voiceprint filter ignored someone else',
     },
+    'follow-up-queue': {
+      about: 'Running turn, queue default: the hint states the default; mouse, Enter and Cmd+Enter all queue',
+      data: { followUp: 'queue' },
+    },
+    'follow-up-steer': {
+      about: 'Running turn, steer default: the hint flips; mouse, Enter and Cmd+Enter all steer',
+      data: { followUp: 'steer' },
+    },
+    'follow-up-modifier': {
+      about: 'Cmd/Ctrl+Enter is the send key: it sends the selected mode, Enter and Shift+Enter stay newlines',
+      data: { followUp: 'steer', sendKey: 'modifier-enter' },
+    },
+    'follow-up-voice': {
+      about: 'Long-press the microphone and release on Send: the dictated message follows the steer default like the Send button',
+      data: { followUp: 'steer' },
+    },
+    'follow-up-narrow': {
+      about: 'Hint stays readable and dismissible at narrow width',
+      data: { followUp: 'queue' },
+      viewport: { width: 360, height: 420 },
+    },
     'quote-comment': {
       about:
         'A `> ` quote stays put and left-aligned with the comment typed under it during IME composition; Tab nests a list item',
@@ -86,6 +107,63 @@ export default {
       assert.equal(await editor.textContent(), 'Keep unsaved text');
       await ui.capture('late-image-preserves-text');
       await page.waitForFunction(() => JSON.stringify(window.__composerImageCache.getDraft()?.text).includes('Keep unsaved text'));
+      return;
+    }
+    if (ui.case === 'follow-up-voice') {
+      const editor = page.locator('[contenteditable]');
+      await editor.click();
+      await page.keyboard.type('Typed before dictation');
+      const mic = page.getByRole('button', { name: await ui.t('newChat.chatInput.voiceInput.start'), exact: true });
+      const target = page.getByRole('button', { name: await ui.t('newChat.sendButton.steer'), exact: true });
+      const micBox = await mic.boundingBox();
+      const targetBox = await target.boundingBox();
+      await page.mouse.move(micBox.x + micBox.width / 2, micBox.y + micBox.height / 2);
+      await page.mouse.down();
+      // Past the 450ms long-press threshold the release target is armed.
+      await page.getByText(await ui.t('newChat.chatInput.voiceInput.releaseToStop')).first().waitFor();
+      await page.waitForTimeout(600);
+      await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 8 });
+      await ui.capture('release-on-send');
+      await page.mouse.up();
+      await page.waitForFunction(() => document.querySelector('[data-testid="sent"]')?.textContent === 'steer:Dictated message');
+      return;
+    }
+    if (typeof ui.data.followUp === 'string') {
+      const editor = page.locator('[contenteditable]');
+      const hint = page.locator('[data-composer-follow-up-hint]');
+      const isSteer = ui.data.followUp === 'steer';
+      assert.equal(await hint.count(), 0, 'no hint before there is something to send');
+      await editor.click();
+      await page.keyboard.type('Add a regression test too');
+      await hint.waitFor();
+      assert.ok((await hint.textContent()).length > 20);
+      await ui.capture('hint');
+      // Long single words and wrapped copy must not overflow the card.
+      const box = await hint.boundingBox();
+      assert.ok(box.x >= 0 && box.x + box.width <= ui.viewport.width, 'hint stays inside the viewport');
+      const button = page.getByRole('button', { name: await ui.t('newChat.sendButton.' + (isSteer ? 'steer' : 'queue')), exact: true });
+      await button.hover();
+      await ui.capture('send-tooltip');
+      await button.click();
+      await page.waitForFunction((expected) => document.querySelector('[data-testid="sent"]')?.textContent === expected,
+        (isSteer ? 'steer' : 'queue') + ':Add a regression test too');
+      // The configured send key uses the same selected mode; nothing reverses it.
+      await editor.click();
+      await page.keyboard.type('Second note');
+      await page.keyboard.press('ControlOrMeta+Enter');
+      await page.waitForFunction((expected) => document.querySelector('[data-testid="sent"]')?.textContent === expected,
+        (isSteer ? 'steer' : 'queue') + ':Second note');
+      await editor.click();
+      await page.keyboard.type('Third note');
+      await hint.waitFor();
+      // Switching the default from the hint changes the next send, then dismissing remembers.
+      await hint.getByRole('button').first().click();
+      await ui.capture('hint-switched');
+      await page.getByRole('button', { name: await ui.t('newChat.sendButton.' + (isSteer ? 'queue' : 'steer')), exact: true }).waitFor();
+      await hint.getByRole('button', { name: await ui.t('newChat.followUpHint.dismiss'), exact: true }).click();
+      assert.equal(await hint.count(), 0);
+      assert.equal(await page.evaluate(() => localStorage.getItem('chat.followUpHint.dismissed')), '1');
+      await ui.capture('dismissed');
       return;
     }
     if (ui.data.recommendation) {

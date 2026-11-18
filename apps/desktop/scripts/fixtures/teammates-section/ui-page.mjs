@@ -13,12 +13,12 @@ export default {
   name: 'teammates-section',
   entry: './teammates-fixture.tsx',
   viewport: { width: 800, height: 600 },
-  real: 'TeammatesSection rows, PinnedSection display sorting and menu, current-chat preview, show-all/show-less controls, avatar strip, theme and translations',
+  real: 'TeammatesSection rows, PinnedSection display sorting and menu, single/multi-column SortableJS drag controls, current-chat preview, show-all/show-less controls, avatar strip, theme and translations',
   notCovered: 'Roster loading, cloud/device connections, create/delete menus, message delivery, pinned drag persistence and collapsed RailNav',
   stubs: {
     'src/renderer/features/cc-agent/sidebar/sessionWorktreeInfo': { partial: 'export const useTaskInfoWorktree=()=>null;' },
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth=()=>({dataOwnerId:"ui-fixture"});' },
-    'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{});` },
+    'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{}); export const useBotProfilesLoadState=()=>${data}.loadState||'ready'; export const hasLoadedBotProfiles=()=>!${data}.loadState||${data}.loadState==='ready';` },
     'src/renderer/features/bots/useRemoteBots': { partial: `export const useRemoteBots=()=>${data}.remoteBots;` },
     'src/renderer/features/bots/companionCloudStore': { partial: 'const snapshot={enabled:false,actors:[],demotedBotIds:[]}; export const useCompanionCloud=()=>snapshot;' },
     'src/renderer/features/bots/botGroupStore': { partial: `export const useBotGroupList=()=>({groups:${data}.groups||[],loaded:true});` },
@@ -28,6 +28,15 @@ export default {
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    ...Object.fromEntries(['text', 'list', 'card', 'card-columns'].map(mode => [`pinned-sort-drag-${mode}`, {
+      about: 'Recent-activity pins cannot be reordered; switching back restores the manual order and enables dragging',
+      storage: { 'sidebar.cardMode': mode === 'card-columns' ? 'card' : mode },
+      data: { showPinned: true, profiles: [], remoteBots: [], route: '/bots', sidebarWidth: mode === 'card-columns' ? 440 : mode === 'card' ? 240 : 260 },
+    }])),
+    'startup-read-error': {
+      about: 'A failed roster read offers explicit recovery instead of an empty-roster create invitation; presentation fixture only',
+      data: { profiles: [], remoteBots: [], route: '/bots', loadState: 'error' },
+    },
     'pinned-sort': {
       about: 'Pinned display sorting changes task order and restores the manual order without changing view style',
       data: { showPinned: true, profiles: [], remoteBots: [], route: '/bots' },
@@ -225,6 +234,53 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case.startsWith('pinned-sort-drag-')) {
+      const subject = page.locator('[data-pinned-reorder-count]');
+      if (ui.case === 'pinned-sort-drag-card') assert.equal(await subject.locator('[data-card-id]').count(), 0, 'single-column cards use SortableList');
+      if (ui.case === 'pinned-sort-drag-card-columns') assert.equal(await subject.locator('[data-col]').count(), 3, 'wide cards use three sortable columns');
+      const row = id => subject.locator(`[data-sortable-id="${id}"], [data-card-id="${id}"]`);
+      const order = () => subject.locator('[data-sortable-id], [data-card-id]').evaluateAll(rows => rows
+        .map((row, index) => ({ id: row.getAttribute('data-sortable-id') ?? row.getAttribute('data-card-id'), rank: Number(row.getAttribute('data-sidebar-row-order') ?? index) }))
+        .sort((a, b) => a.rank - b.rank).map(row => row.id));
+      const chooseSort = async key => {
+        await subject.getByRole('button', { name: await ui.t('ccAgent.sidebar.pinned'), exact: true }).hover();
+        await subject.getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+        await page.getByRole('menuitem', { name: await ui.t(key), exact: true }).click();
+      };
+      await chooseSort('ccAgent.sidebar.filterSortBy.activity');
+      await row('pinned-2').dragTo(row('pinned-0'));
+      assert.deepEqual(await order(), ['pinned-2', 'pinned-1', 'pinned-0']);
+      assert.equal(await subject.getAttribute('data-pinned-reorder-count'), '0');
+      await ui.capture('recent-drag-ignored');
+      await chooseSort('ccAgent.sidebar.filterSortBy.manual');
+      assert.deepEqual(await order(), ['pinned-0', 'pinned-1', 'pinned-2']);
+      await row('pinned-0').dragTo(row('pinned-2'));
+      assert.notEqual(await subject.getAttribute('data-pinned-reorder-count'), '0', 'manual mode still permits dragging');
+      assert.notDeepEqual(await order(), ['pinned-0', 'pinned-1', 'pinned-2']);
+      await ui.capture('manual-drag-enabled');
+      return;
+    }
+    if (ui.case === 'startup-read-error') {
+      const alert = page.getByRole('alert');
+      await alert.getByText(await ui.t('bots.rosterLoadFailed'), { exact: true }).waitFor();
+      const retry = alert.getByRole('button', { name: await ui.t('bots.rosterReload'), exact: true });
+      await retry.waitFor({ state: 'visible' });
+      const section = page.locator('[data-sidebar-section="teammates"]');
+      const header = section.getByRole('button', { name: await ui.t('bots.title'), exact: true });
+      const changeView = async (key) => {
+        await header.hover();
+        await section.getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+        await page.getByRole('menuitem', { name: await ui.t(key), exact: true }).click();
+      };
+      await changeView('bots.list.viewIcons');
+      await retry.waitFor({ state: 'visible' });
+      await ui.capture('icons-error');
+      await header.click();
+      await retry.waitFor({ state: 'visible' });
+      await changeView('ccAgent.sidebar.viewStyleListWide');
+      await retry.waitFor({ state: 'visible' });
+      return;
+    }
     if (ui.case === 'pinned-sort') {
       const pinned = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.pinned'), exact: true });
       const section = pinned.locator('xpath=../../..');
