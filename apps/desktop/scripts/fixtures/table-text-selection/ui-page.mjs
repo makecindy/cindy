@@ -10,7 +10,7 @@ const tableText = `名称\t内容\t说明\n项目甲 Alpha\t中文 空格 42\t${
 export default {
   name: 'table-text-selection',
   entry: './fixture.tsx',
-  viewport: { width: 900, height: 800 },
+  viewport: { width: 640, height: 860 },
   real: 'AssistantMessage, MarkdownRenderer, native mouse selection, table TSV range copy, chat clipboard handlers, MessageActionBar and SelectionQuoteButton',
   notCovered: 'Full application and virtualized/offscreen history. Existing table image-copy toolbar cannot rasterize under the isolated host CSP (base-uri/connect-src); it requires full-client acceptance. Clipboard permissions are scoped to this isolated test origin; no clipboard values are mocked.',
   stubs: {
@@ -25,6 +25,11 @@ export default {
     // unlike replacing navigator.clipboard with a value-capturing mock.
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(page.url()).origin });
     const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    const wrappedLines = await page.getByText(longCell, { exact: true }).evaluate(node => {
+      const range = document.createRange(); range.selectNodeContents(node);
+      return new Set([...range.getClientRects()].filter(rect => rect.width).map(rect => rect.top)).size;
+    });
+    assert.ok(wrappedLines > 1, 'The fixture must exercise a cell that really wraps');
     const paste = page.getByRole('textbox', { name: 'Paste target' });
     const point = async (text, end) => page.getByText(text, { exact: true }).evaluate((node, end) => {
       const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT), leaves = [];
