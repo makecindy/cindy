@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 
 const schema = z.intersection(z.object({ owner: z.object({ dataOwnerId: z.string().min(1), generation: z.number().int() }),
   key: z.string().max(250).refine(key => key === 'groups' || key === 'cloud-homes' || key.startsWith('companion:')) }),
@@ -41,8 +42,8 @@ export function accessChatDisplayCache(input: unknown): unknown {
   let retiredBotIds: string[] | null = null;
   if (request.action === 'write' && request.key === 'cloud-homes') {
     // Failed/missing hydration must never erase deletions we have not loaded.
-    if (cloudHomes?.scope !== scope) throw new Error('CACHE_NOT_LOADED');
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_INPUT');
+    if (cloudHomes?.scope !== scope) throwIpcError('PRECONDITION_FAILED', 'Cloud display cache must be loaded before writing');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throwIpcError('INVALID_PARAMS', 'Cloud display cache must be an object');
     const { revivedBotIds, retirementRevision, ...incoming } = value as Record<string, unknown>;
     const retired = new Set([...cloudHomes.retiredBotIds, ...stringIds(incoming.retiredBotIds)]);
     const active = new Set(Array.isArray(incoming.actors) ? incoming.actors.flatMap(actor =>

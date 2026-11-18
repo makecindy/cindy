@@ -18,6 +18,7 @@ vi.mock('../../cindy-media/ledger.js', () => ({ hasRef: async () => false, pinBl
 import { chatSendJournal } from '../chatSendJournal.js';
 import { accessBotGroupOutbox } from '../botGroupOutboxStorage.js';
 import { accessChatDisplayCache } from '../chatDisplayCache.js';
+import { extractIpcError } from '../../../shared/ipcError.js';
 
 beforeEach(() => {
   state.root = mkdtempSync(path.join(tmpdir(), 'cindy-chat-persistence-'));
@@ -129,5 +130,25 @@ it('rejects a stale revival receipt after another window retires a companion aga
   accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: revival });
   accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: { actors: [], retiredBotIds: ['mia'] } });
   accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value: revival });
+  expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner })).toMatchObject({ retiredBotIds: ['mia'] });
+});
+
+// #9760 review F1: rejected writes cross IPC; callers must receive typed errors
+// while failed writes leave the authoritative deletion intact.
+it('encodes unhydrated and invalid cloud cache writes without losing tombstones', () => {
+  const owner = state.owner;
+  const write = (value: unknown) => accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner, value });
+  const errorCode = (value: unknown) => {
+    try { write(value); } catch (error) {
+      // Electron forwards the message without custom Error properties.
+      const forwarded = new Error(`Error invoking remote method: Error: ${(error as Error).message}`);
+      return extractIpcError(forwarded)?.code;
+    }
+    return null;
+  };
+  expect(errorCode({ actors: [] })).toBe('PRECONDITION_FAILED');
+  accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner });
+  write({ actors: [], retiredBotIds: ['mia'] });
+  expect(errorCode([])).toBe('INVALID_PARAMS');
   expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner })).toMatchObject({ retiredBotIds: ['mia'] });
 });
