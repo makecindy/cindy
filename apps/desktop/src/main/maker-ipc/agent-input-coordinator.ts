@@ -7,6 +7,7 @@ import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, combineInputGuar
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON } from './botCandidateRecovery.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
+import { SnapshotOperationDeadlineError } from '../utils/operationBudget.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
 import { MCP_APP_MESSAGE_GUARD, isUnrestorableMcpAppMessage, queuedAppMessageGuard, type McpAppMessageGuard } from '../mcp-apps/message.js';
 import { isOwnerOwnMessage } from '../input-handoff/ownerMessage.js';
@@ -567,6 +568,7 @@ export interface AgentInputCoordinatorDeps {
     sessionId: string,
     item: AgentInputQueuedMessage,
     disposition: 'cancelled' | 'failed',
+    error?: string,
   ) => void;
   /** Called immediately before the durable user-row write begins. */
   onUserMessagePersisting?: (sessionId: string, item: AgentInputQueuedMessage) => void;
@@ -6039,7 +6041,7 @@ export class AgentInputCoordinator {
       latest.activeTurn = null;
       const recovering = !rewound && this.recoverPersistedSchedulerPreparation(sessionId, latest, active, head, errorMessage(err), err);
       this.notifyRejectedUserTurn(sessionId, head);
-      this.notifyUndispatchedUserTurn(sessionId, head, 'failed');
+      this.notifyUndispatchedUserTurn(sessionId, head, 'failed', errorMessage(err));
       if (!rewound) {
         this.persistTerminalSendError(sessionId, errorMessage(err), recovering ? latest.autoResumeAttemptToken ?? undefined : undefined);
         this.notifyPersistedSendRejected(sessionId, errorMessage(err), head, recovering);
@@ -6255,6 +6257,7 @@ export class AgentInputCoordinator {
       sessionId,
       item,
       cancelledByUserBoundary ? 'cancelled' : 'failed',
+      cancelledByUserBoundary ? undefined : message,
     );
     if (
       latest.queueAbortPending &&
@@ -6763,7 +6766,8 @@ export class AgentInputCoordinator {
       const schedulerOrigin = this.setActiveTurnRecovery(state, item, {
         persistedFailure: true,
       }) === 'dropped-scheduler';
-      this.notifyUndispatchedUserTurn(sessionId, item, 'failed');
+      this.notifyUndispatchedUserTurn(sessionId, item, 'failed', message);
+      if (schedulerOrigin) this.notifyPersistedSendRejected(sessionId, message, item);
       log.warn(
         schedulerOrigin
           ? 'session closed before dispatch after persistence; dropped scheduler prompt (no user retry)'
@@ -7358,7 +7362,9 @@ export class AgentInputCoordinator {
     if (isTurnDispatchUnconfirmedError(outcome) || failure?.code === 'PRECONDITION_FAILED'
       || failure?.reason === 'cancelled-before-dispatch'
       || message.startsWith('[SEND_CANCELLED_BEFORE_DISPATCH]')) return false;
-    const signals = message === 'Snapshot operation deadline exceeded'
+    // Only the local typed budget authorizes the backoff retry. Provider text,
+    // even with the same wording, is never proof that dispatch did not happen.
+    const signals = outcome instanceof SnapshotOperationDeadlineError
       ? { reason: 'scheduler-snapshot-preparation' } : undefined;
     if (!this.isResumableTurnErrorCandidate(sessionId, message, signals, item)) return false;
     this.setActiveTurnRecovery(state, item, { allowSchedulerAutoResume: true });
@@ -8046,9 +8052,11 @@ export class AgentInputCoordinator {
     sessionId: string,
     item: AgentInputQueuedMessage,
     disposition: 'cancelled' | 'failed',
+    error?: string,
   ): void {
     try {
-      this.deps.onUndispatchedUserTurn?.(sessionId, item, disposition);
+      if (error === undefined) this.deps.onUndispatchedUserTurn?.(sessionId, item, disposition);
+      else this.deps.onUndispatchedUserTurn?.(sessionId, item, disposition, error);
     } catch (err) {
       log.warn('onUndispatchedUserTurn failed', {
         sessionId,

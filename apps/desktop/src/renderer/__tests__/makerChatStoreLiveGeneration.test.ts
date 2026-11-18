@@ -40,6 +40,31 @@ function applyStatus(
 }
 
 describe('makerChatStore live generation at turn start', () => {
+  // Removal compatibility, unit tier: the real event reducer previously treated
+  // late legacy notices as recoverable errors and could restart an idle turn.
+  // Existing generation tests cover ordinary errors, not this old wire source.
+  it.each([false, true])('ignores a retired host notice while running=%s without swallowing a terminal error', (running) => {
+    const sessionId = `retired-notice-${running}`;
+    try {
+      applyStatus(sessionId, { isRunning: running });
+      const before = makerChatStore.getSnapshot(sessionId);
+      makerChatStore.__applyStreamEventForTest(sessionId, {
+        sessionId, type: 'error', source: 'vision-bridge' as never,
+        data: { message: 'legacy notice', isTerminal: false },
+      });
+      expect(makerChatStore.getSnapshot(sessionId)).toBe(before);
+      makerChatStore.__applyStreamEventForTest(sessionId, {
+        sessionId, type: 'error', source: 'vision-bridge' as never,
+        data: { message: 'real terminal failure', isTerminal: true },
+      });
+      expect(makerChatStore.getSnapshot(sessionId)).toMatchObject({
+        error: 'real terminal failure', agentStatus: { isRunning: false },
+      });
+    } finally {
+      makerChatStore.purgeSession(sessionId);
+    }
+  });
+
   it('keeps live fields when the first running status already carries them', () => {
     const sessionId = `live-gen-keep-${Math.random().toString(36).slice(2, 8)}`;
     try {

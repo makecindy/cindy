@@ -338,8 +338,6 @@ type AuxiliaryModelSettingsPatch =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsPatch;
 type AuxiliaryModelSettingsState =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsState;
-type VisionBridgeSettingsPatch = import('../shared/visionBridgeSettings').VisionBridgeSettingsPatch;
-type VisionBridgeSettingsState = import('../shared/visionBridgeSettings').VisionBridgeSettingsState;
 
 /** Agent 资源占用设置的 IPC wire 形状(main 侧 agentResourceSettingsWire)。 */
 type AgentResourceProcessPriority = 'normal' | 'low' | 'lowest';
@@ -775,7 +773,7 @@ interface CCAgentStreamEvent {
     | 'thinking'
     | 'compact_boundary';
   data: unknown;
-  source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
+  source?: 'claude-code' | 'codex' | 'pi';
   /**
    * agent-meta: SDK 元信息（按 session.agentKind 解析）。当事件来自一条 SDK
    * message（assistant / tool_use / thinking final / done 等）时由 main 透传过来。
@@ -1459,6 +1457,8 @@ interface ElectronAPI {
     githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number) =>
       Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean>;
     onGithubReleaseProgress: (callback: (event: import('../shared/githubPluginRelease').GithubPluginReleaseProgress, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) => () => void;
+    installGithubRelease: (action: 'install' | 'sign-in', url?: string, requestId?: string) =>
+      Promise<import('../shared/githubPluginRelease').GithubPluginReleaseInstallResult | boolean>;
     pickFile: () => Promise<{ canceled: true } | { filePath: string }>;
     /** 只验不装:读出清单、签名信任等级与 icon data URL,供安装编排使用。 */
     inspect: (
@@ -6952,13 +6952,6 @@ interface ElectronAPI {
     auxiliaryModelSettingsSet: (
       patch: AuxiliaryModelSettingsPatch,
     ) => Promise<AuxiliaryModelSettingsState>;
-
-    /** 视觉桥设置（目标模型勾选 + 视觉后端主/备选）。 */
-    visionBridgeSettingsGet: () => Promise<VisionBridgeSettingsState>;
-    visionBridgeSettingsSet: (
-      patch: VisionBridgeSettingsPatch,
-    ) => Promise<VisionBridgeSettingsState>;
-    visionBridgeSettingsReset: () => Promise<VisionBridgeSettingsState>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
     agentResourceSettingsGet: () => Promise<AgentResourceSettingsWire>;

@@ -1577,6 +1577,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean> =>
       ipcRenderer.invoke('ghosts:github-release', action, instanceId, assetId),
     onGithubReleaseProgress: fanOutGithubPluginReleaseProgress,
+    installGithubRelease: (action: 'install' | 'sign-in', url?: string, requestId?: string):
+      Promise<import('../shared/githubPluginRelease').GithubPluginReleaseInstallResult | boolean> =>
+      ipcRenderer.invoke('ghosts:install-github-release', action, url, requestId),
     pickFile: (): Promise<{ canceled: true } | { filePath: string }> =>
       ipcRenderer.invoke('ghosts:pick-file'),
     inspect: (
@@ -8118,19 +8121,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       patch: AuxiliaryModelSettingsPatch,
     ): Promise<AuxiliaryModelSettingsState> =>
       ipcRenderer.invoke('maker:auxiliary-model-settings:set', patch),
-
-    /**
-     * 视觉桥设置（两个清单：目标模型勾选 + 视觉后端主/备选）。
-     * 读写 <userData>/vision-bridge-settings.json（main 为真源）。
-     */
-    visionBridgeSettingsGet: (): Promise<VisionBridgeSettingsState> =>
-      ipcRenderer.invoke('maker:vision-bridge-settings:get'),
-    visionBridgeSettingsSet: (
-      patch: VisionBridgeSettingsPatch,
-    ): Promise<VisionBridgeSettingsState> =>
-      ipcRenderer.invoke('maker:vision-bridge-settings:set', patch),
-    visionBridgeSettingsReset: (): Promise<VisionBridgeSettingsState> =>
-      ipcRenderer.invoke('maker:vision-bridge-settings:reset'),
 
     // Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。
     // 并发上限即刻生效;优先级降档对在跑 agent 进程约 15s 内生效(watcher 轮询);

@@ -1866,7 +1866,6 @@
       "memory": "記憶",
       "subagentModels": "Subagent",
       "auxiliaryModels": "輔佐模型",
-      "visionBridge": "視覺橋",
       "compaction": "上下文縮略",
       "terminalShell": "常例終端 shell",
       "composer": "訊之輸入",
@@ -5442,37 +5441,6 @@
       "title": "妙訣",
       "description": "諸功能之開關，或須新開差事方生效（詳見各 cell 之說明）。"
     },
-    "visionBridge": {
-      "title": "視覺橋",
-      "description": "令純文字模型得以觀圖：以獨立之多模態模型轉圖為文字描述，再付純文字模型。",
-      "enableLabel": "啟視覺橋",
-      "enableHint": "闔則諸模型之行一如往昔。啟則下方所勾之模型，將經視覺後端轉圖為文字描述。啟用後，遣此等模型之圖及同訊之文字提示，將傳予君所擇之視覺後端。",
-      "enableAria": "啟閉視覺橋",
-      "toast": {
-        "saved": "視覺橋之設已存",
-        "saveFailed": "視覺橋之設存之未成"
-      },
-      "capability": {
-        "vision": "已知能視",
-        "noVision": "已知純文",
-        "unknown": "視覺之能未知"
-      },
-      "targetModels": {
-        "label": "經視覺橋之模型",
-        "hint": "純文字模型（如 DeepSeek）常例已勾。亦可勾能視之模型——如特用較廉之描述模型以省 token。",
-        "empty": "暫無可用之模型。",
-        "toggleAria": "切換 {{model}} 之視覺橋"
-      },
-      "backends": {
-        "label": "視覺所倚模型",
-        "hint": "擇至多二個轉圖為文之多模態模型。其二（備用）可選。",
-        "primary": "主用",
-        "fallback": "備用",
-        "unset": "未擇",
-        "noBackup": "無備",
-        "hintSecondary": "先用主後端。主後端未成且設有備用時，切至備用。二者皆未成，則圖無從辨識，將以文字提示代之並告君。"
-      }
-    },
     "chatEmbedding": {
       "cell": {
         "label": "啟言談錄語義索引",
@@ -7843,6 +7811,18 @@
         "overviewTab": "綜覽",
         "addPlugin": "增法器",
         "addPluginAria": "增法器之選",
+        "githubInstall": {
+          "label": "自 GitHub Release 裝入…",
+          "title": "自 GitHub Release 裝入",
+          "description": "貼 GitHub 庫址或指定 Release 之連結。私庫須以有權之 GitHub 帳號登入。",
+          "url": "GitHub 位址",
+          "submit": "尋法器",
+          "loading": "查找並下載中…",
+          "invalid": "請輸入 GitHub 庫址或 Release 標籤連結。",
+          "not-found": "此版不可得，請查連結及私庫權限。",
+          "ambiguous": "此連結含數宗法器。請選擇僅含一包之 Release，或自檔案裝入。",
+          "installedAlready": "此法器已裝。可於其設定中更新。"
+        },
         "installedSection": "已納",
         "installedExpand": "展全部已納法器 {{count}} 件",
         "installedCollapse": "收餘下已納法器",
@@ -11402,7 +11382,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}不能回覆：同伴所在裝置所留之遠端差事數已達上限。\n請同伴之主封存暫不用之差事，或請遠方之機之主於「遠端與分享」中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}不能回覆：遠方之機所留差事總數已達上限。\n請彼機之主釋暫不用之差事，或於「遠端與分享」中提高上限。",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}}不能回覆：當前模型不支圖。\n請易為支圖之模型，或於「規制 → 個性化 → 視覺橋」啟用並設視覺模型，再遣之。",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}}不能作覆：今之模型不支援圖。\n請易以支援圖之模型。",
           "MODEL_UNAVAILABLE": "{{name}}不能回覆：今無可用之模型。\n請於同伴之設中擇已連線之可用模型，再遣之。",
           "AUTH_REQUIRED": "{{name}}不能回覆：模型連線須重新驗證。\n請於規制中重連對應之模型來源，再遣之。",
           "RATE_LIMITED": "{{name}}不能回覆：模型請求過頻。\n請稍後再遣，或擇他可用模型。",
@@ -14874,11 +14854,6 @@
       "title": "圖已佚",
       "unavailable": "圖暫不可見",
       "loading": "方載圖…"
-    },
-    "visionBridge": {
-      "analyzing": "方辨圖…（{{count}} 張）",
-      "fallback": "視覺橋已改用備用視覺後端（主後端不可用），辨圖或受影響",
-      "unavailable": "視覺橋今不可用，圖不能辨，已以文字提示代之"
     },
     "newMessageIndicator": {
       "aria": "歸至底，覽新訊 {{count}} 條",
@@ -21513,7 +21488,6 @@
       "sessionRuntimeFallback": "差事模型自動降級",
       "subagentModels": "Subagent",
       "auxiliaryModels": "輔助模型",
-      "visionBridge": "視覺橋",
       "modelVisibility": "模型顯示與隱藏",
       "providerOrder": "供方順序",
       "modelCatalogOverrides": "模型參數調整",

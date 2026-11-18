@@ -6575,6 +6575,7 @@ describe('AgentInputCoordinator send transaction', () => {
       sid,
       expect.objectContaining(first),
       'failed',
+      'turn/start failed',
     );
     expect(h.persistTerminalSendError).toHaveBeenCalledWith(sid, 'turn/start failed');
 
@@ -6768,6 +6769,7 @@ describe('AgentInputCoordinator send transaction', () => {
       sid,
       expect.objectContaining(first),
       'failed',
+      projection.error,
     );
   });
 
@@ -6803,6 +6805,7 @@ describe('AgentInputCoordinator send transaction', () => {
       sid,
       expect.objectContaining(first),
       'failed',
+      projection.error,
     );
   });
 

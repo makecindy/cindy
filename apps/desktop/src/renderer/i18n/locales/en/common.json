@@ -1896,7 +1896,6 @@
       "memory": "Memory",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Auxiliary models",
-      "visionBridge": "Vision Bridge",
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
       "composer": "Message input",
@@ -5421,37 +5420,6 @@
       "title": "Tips",
       "description": "Functional toggles. Some require a new session to take effect (see each item’s description)."
     },
-    "visionBridge": {
-      "title": "Vision Bridge",
-      "description": "Give text-only models the ability to read images by routing them through a separate multimodal model that converts images to text descriptions.",
-      "enableLabel": "Enable Vision Bridge",
-      "enableHint": "When off, all models behave exactly as before. When on, models you select below route their images through the vision backend. When enabled, images sent to these models and nearby text used as focus hints are sent to the vision backend you choose.",
-      "enableAria": "Toggle Vision Bridge",
-      "toast": {
-        "saved": "Vision Bridge settings saved",
-        "saveFailed": "Failed to save Vision Bridge settings"
-      },
-      "capability": {
-        "vision": "Known vision-capable",
-        "noVision": "Known text-only",
-        "unknown": "Vision capability unknown"
-      },
-      "targetModels": {
-        "label": "Models routed through Vision Bridge",
-        "hint": "Text-only models (e.g. DeepSeek) are checked by default. You can also check vision-capable models — for example to use a cheaper description model to save tokens.",
-        "empty": "No models available.",
-        "toggleAria": "Toggle Vision Bridge for {{model}}"
-      },
-      "backends": {
-        "label": "Vision backend models",
-        "hint": "Pick up to two multimodal models that convert images to text. The second (backup) is optional.",
-        "primary": "Primary",
-        "fallback": "Backup",
-        "unset": "None selected",
-        "noBackup": "No backup",
-        "hintSecondary": "The primary backend is used first. If it fails and a backup is set, the backup is used. If both fail, the image cannot be described and is replaced with a text notice."
-      }
-    },
     "terminalShell": {
       "title": "Default terminal shell",
       "description": "Use this shell when opening a new sidebar terminal tab.",
@@ -7886,6 +7854,18 @@
         "overviewTab": "Overview",
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
+        "githubInstall": {
+          "label": "Install from GitHub Release…",
+          "title": "Install from GitHub Release",
+          "description": "Paste a GitHub repository link or a specific Release link. For a private repository, sign in with an account that has access.",
+          "url": "GitHub address",
+          "submit": "Find plugin",
+          "loading": "Looking up and downloading…",
+          "invalid": "Enter a GitHub repository or Release tag URL.",
+          "not-found": "The tag is unavailable. Check the link and your repository access.",
+          "ambiguous": "This link contains more than one plugin. Use a Release link with one plugin package, or install the file directly.",
+          "installedAlready": "This plugin is already installed. Use its settings to update it."
+        },
         "installedSection": "Installed",
         "installedExpand": "Show all {{count}} installed plugins",
         "installedCollapse": "Hide additional installed plugins",
@@ -11447,7 +11427,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} can’t reply: the buddy’s device has reached its remote session limit.\nAsk the buddy’s owner to archive unused sessions, or ask the remote computer’s owner to raise the limit in Remote & sharing.",
           "REMOTE_TOTAL_LIMIT": "{{name}} can’t reply: the remote computer has reached its total remote session limit.\nAsk that computer’s owner to release unused sessions or raise the limit in Remote & sharing.",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}} could not reply: the current model does not support images.\nChoose an image-capable model, or enable and configure Vision Bridge in Settings → Personalization, then send your message again.",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}} could not reply: the current model does not support images.\nChoose an image-capable model.",
           "MODEL_UNAVAILABLE": "{{name}} could not reply: no model is available.\nChoose a connected, available model in the buddy settings, then send your message again.",
           "AUTH_REQUIRED": "{{name}} could not reply: the model connection needs authentication.\nReconnect the model provider in Settings, then send your message again.",
           "RATE_LIMITED": "{{name}} could not reply: too many model requests.\nSend your message again later, or choose another available model.",
@@ -14944,11 +14924,6 @@
       "title": "Image missing",
       "unavailable": "Image Unavailable",
       "loading": "Loading image…"
-    },
-    "visionBridge": {
-      "analyzing": "Analyzing {{count}} image(s)…",
-      "fallback": "Vision bridge fell back to a backup vision backend (primary unavailable); image recognition may be affected",
-      "unavailable": "Vision bridge is unavailable; the image could not be described and was replaced with a text notice"
     },
     "newMessageIndicator": {
       "aria": "Back to bottom, view {{count}} new messages",
@@ -21466,7 +21441,6 @@
       "sessionRuntimeFallback": "Automatic task model fallback",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Auxiliary Models",
-      "visionBridge": "Vision Bridge",
       "modelVisibility": "Shown and Hidden Models",
       "providerOrder": "Provider Order",
       "modelCatalogOverrides": "Model Parameter Changes",

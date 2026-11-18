@@ -81,7 +81,6 @@ import {
   getCindyGhostsMcpDeps,
   type GhostGrantLiveSessionState,
   type CindyGhostsHostDeps,
-  type ToolResultImageDescription,
 } from './ghost.desktop.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
 import { compressInlineImage } from './inlineImageCompressor.js';
@@ -212,17 +211,6 @@ export interface DesktopMcpProvidersDeps {
   ) => boolean;
   /** Current live session, including sessions whose agent runs over SSH. */
   isCurrentGrokLoginCaller?: (sessionId: string, sessionInstanceId: string) => boolean;
-  /** 把工具结果图片转成文字描述（视觉桥，最佳努力）。缺失 = 不处理。
-   *  返回结构区分「有意跳过」(skipped:true, 视觉桥未开/模型不命中, 不告警)与
-   *  「真正尝试但失败」(skipped:false + null, 计入 attemptedCount 供告警)。 */
-  describeToolResultImage?: (input: {
-    imageUrl: string;
-    sessionId: string | null;
-    sessionInstanceId: string | null;
-    signal?: AbortSignal;
-  }) => Promise<ToolResultImageDescription>;
-  /** 工具结果图片全部描述失败时回调（视觉桥不可用告警）。缺失 = 不告警。 */
-  onToolResultImagesFailed?: (sessionId: string, attemptedCount: number) => void;
 }
 
 /**
@@ -1660,8 +1648,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
           requestHostPermission: deps.requestHostPermission,
           createMediaDownloadContext: deps.createMediaDownloadContext,
-          describeToolResultImage: deps.describeToolResultImage,
-          onToolResultImagesFailed: deps.onToolResultImagesFailed,
         }),
       ),
     }),

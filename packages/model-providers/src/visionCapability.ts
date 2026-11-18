@@ -2,13 +2,13 @@
  * visionCapability —— 模型视觉能力三态判定（纯逻辑，零依赖）。
  *
  * cindy 的模型目录（catalog / model-registry）目前**没有结构化**的「能否看图」元数据
- * （modalities 只在 Pi 自定义 provider 手动标记，内置目录为空）。视觉桥配置需要区分
+ * （modalities 只在 Pi 自定义 provider 手动标记，内置目录为空）。图片输入配置需要区分
  * 「已知有视觉 / 已知无视觉 / 未知」三类模型，本模块维护一份保守名单 + 归一化判定。
  *
- * 分类语义（对齐 docs/vision-bridge-design.md 配置设计）：
+ * 分类语义（供模型图片输入配置使用）：
  *  - vision：已知支持图片输入的多模态模型（claude / gpt / gemini / grok 等）；
  *  - no-vision：已知纯文本模型（deepseek 系列、glm-5.2 等，实测/厂商声明无视觉）；
- *  - unknown：名单外 —— 不确定，按保守处理（视觉桥配置 UI 默认不勾选，允许用户手动勾）。
+ *  - unknown：名单外 —— 不确定，不据此断言有无视觉能力，由模型配置与运行时处理。
  *
  * 归一化：runtime 的 body.model 形态多样 —— `deepseek/deepseek-v4-flash`、裸
  * `deepseek-v4-flash`、带 `[1m]` 后缀、`openai-codex/` / `codex/` 前缀等。判定统一剥掉后缀/前缀再匹配，
@@ -70,8 +70,7 @@ export function normalizeVisionModelId(model: string): string {
  * 家族里放一个视觉变体 —— `deepseek/deepseek-vl2`、`deepseek/deepseek-v4-flash-vision-exp`、
  * `glm-5.2-vision`。这些 id 都以家族前缀开头，只按前缀匹配会被家族的 no-vision 结论吃掉，
  * 判成「不能看图」（2026-09-04 实测四个型号全部误判）。后果不只是设置页标错：
- * `isKnownNoVisionModel` 是视觉桥「未自定义时默认勾选」的依据，误判会让本可以直接吃图的
- * 模型被迫走桥 —— 图片先转成文字描述再喂进去，真实图像信息就丢了。
+ * 误判会让本来支持图片输入的型号被标成纯文本，影响图片输入配置。
  *
  * 判据是厂商命名惯例（`-vl` / `-vision` 后缀专指多模态变体），与本模块「靠 id 判定」的
  * 前提一致；比逐个登记型号更能覆盖以后新出的变体。段边界（`^` / `-` / `/` 起，`-` / `.`
@@ -89,7 +88,7 @@ export function classifyVisionCapability(model: string): VisionCapability {
   return 'unknown';
 }
 
-/** 便捷判断：某模型 id 是否已知无视觉（视觉桥目标清单默认勾选依据）。 */
+/** 便捷判断：某模型 id 是否已知无视觉（供图片输入能力判断使用）。 */
 export function isKnownNoVisionModel(model: string): boolean {
   return classifyVisionCapability(model) === 'no-vision';
 }
