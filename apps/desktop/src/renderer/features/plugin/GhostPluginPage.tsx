@@ -45,6 +45,7 @@ import {
   ChevronDown,
   ChevronRight,
   MessageCircle,
+  RotateCcw,
   ShieldAlert,
   SlidersHorizontal,
 } from 'lucide-react';
@@ -81,6 +82,7 @@ import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { pickAndUpdateGhost } from '@/cindy-brain/installFlow';
 import { importCindyFile } from '@/cindy-brain/importCindyFile';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { Tip } from '@/components/ui/tooltip';
 import { cn, basename } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
@@ -2533,10 +2535,12 @@ export function MarketPluginCard({
               {installRing ? (
                 <PluginInstallRing label={installLabel} progress={installRing} className="col-start-1 row-start-1" />
               ) : null}
-              {onInstall ? <Button className={cn('col-start-1 row-start-1 shrink-0', installRingCovers && 'invisible')} variant="secondary" size="sm" compact
+              {onInstall && installFailed ? (
+                <CardRetryButton size="sm" label={installLabel} disabled={unavailable} onClick={onInstall} />
+              ) : onInstall ? <Button className={cn('col-start-1 row-start-1 shrink-0', installRingCovers && 'invisible')} variant="secondary" size="sm" compact
                 loading={pending && !installRing} disabled={unavailable || installRingCovers} onClick={onInstall}
                 aria-hidden={installRingCovers || undefined}
-                aria-label={installLabel}>{installFailed ? t('commonUi.retry') : t('settings.ghosts.market.install')}</Button> : null}
+                aria-label={installLabel}>{t('settings.ghosts.market.install')}</Button> : null}
             </span>
           ) : null}
         </div>
@@ -2631,6 +2635,16 @@ export function MarketPluginCard({
             >
               {t('settings.ghosts.page.installedSection')}
             </span>
+          ) : onInstall && installFailed ? (
+            <CardRetryButton
+              size="md"
+              label={item.installState === 'conflict' ? t('settings.ghosts.market.replaceAria', { name: item.name }) : installLabel}
+              disabled={unavailable}
+              onClick={(event) => {
+                event.stopPropagation();
+                onInstall();
+              }}
+            />
           ) : onInstall ? (
             <Button
               variant="secondary"
@@ -2653,13 +2667,11 @@ export function MarketPluginCard({
               aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
               className={cn('col-start-1 row-start-1 min-w-[72px] shrink-0', installRingCovers && 'invisible')}
             >
-              {installFailed
-                ? t('commonUi.retry')
-                : t(
-                    item.installState === 'conflict'
-                      ? 'settings.ghosts.market.replace'
-                      : 'settings.ghosts.market.install',
-                  )}
+              {t(
+                item.installState === 'conflict'
+                  ? 'settings.ghosts.market.replace'
+                  : 'settings.ghosts.market.install',
+              )}
             </Button>
           ) : null}
         </span>
@@ -2674,7 +2686,8 @@ export function MarketPluginCard({
  * - 主动作留在右下角胶囊(面板「使用」/ 指令或能力「对话」/ 工具型无按钮);
  * - 无启用开关(收进详情页);滑杆图标 = 管理入口;
  * - 更新 = 文字胶囊「更新到 vX」,无任何小圆点(绿点专职未读语义,PR-B 接入)。
- *   更新进行中胶囊原位换成 DownloadRing 圆环 + 步骤文字;失败时圆环停在原处,胶囊变「重试」。
+ *   更新进行中胶囊原位换成 DownloadRing 圆环 + 步骤文字;失败时圆环停在原处写失败原因,
+ *   旁边换成带提示的重试图标按钮,宽度不超过原胶囊。
  */
 export function GhostPluginCard({
   item,
@@ -2884,7 +2897,9 @@ export function GhostPluginCard({
                 className="col-start-1 row-start-1"
               />
             ) : null}
-            {updateVersion && onUpdate ? (
+            {updateVersion && onUpdate && updateFailed ? (
+              <CardRetryButton size="sm" label={updateLabel} disabled={updateBusy} onClick={stopAnd(onUpdate)} />
+            ) : updateVersion && onUpdate ? (
               <Button
                 variant="secondary"
                 size="sm"
@@ -2892,23 +2907,14 @@ export function GhostPluginCard({
                 loading={updatePending && !updateRing}
                 type="button"
                 onClick={stopAnd(onUpdate)}
-                disabled={updateBusy || (updateRing !== null && !updateFailed)}
+                disabled={updateBusy || updateRing !== null}
                 aria-busy={updatePending || undefined}
-                aria-hidden={updateRing && !updateFailed ? true : undefined}
+                aria-hidden={updateRing ? true : undefined}
                 aria-label={updateLabel}
-                className={cn(
-                  'col-start-1 row-start-1 min-w-[72px]',
-                  updateRing && !updateFailed && 'invisible',
-                )}
+                className={cn('col-start-1 row-start-1 min-w-[72px]', updateRing && 'invisible')}
               >
-                {updateFailed ? (
-                  t('commonUi.retry')
-                ) : (
-                  <>
-                    <ArrowUp size={11} className="text-[var(--text-secondary)]" aria-hidden="true" />
-                    {t('settings.ghosts.page.updateTo', { version: updateVersion })}
-                  </>
-                )}
+                <ArrowUp size={11} className="text-[var(--text-secondary)]" aria-hidden="true" />
+                {t('settings.ghosts.page.updateTo', { version: updateVersion })}
               </Button>
             ) : null}
           </span>
@@ -2927,6 +2933,39 @@ export function GhostPluginCard({
         {primaryControl}
       </span>
     </article>
+  );
+}
+
+/**
+ * Retry beside a failed ring on a plugin card. A square icon button with a tooltip keeps the
+ * failed state no wider than the button it replaced, so the card's title is never squeezed out.
+ */
+function CardRetryButton({
+  size,
+  label,
+  disabled,
+  onClick,
+}: {
+  size: 'sm' | 'md';
+  label: string;
+  disabled?: boolean;
+  onClick: (event: { stopPropagation: () => void }) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Tip text={t('commonUi.retry')}>
+      <Button
+        variant="secondary"
+        size={size}
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        aria-label={label}
+        className={cn('shrink-0 px-0', size === 'sm' ? 'w-7' : 'w-8')}
+      >
+        <RotateCcw size={size === 'sm' ? 13 : 14} aria-hidden="true" />
+      </Button>
+    </Tip>
   );
 }
 

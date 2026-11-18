@@ -456,8 +456,9 @@ describe('GhostPluginCard', () => {
 
     act(() => failPluginInstallProgress(marketPlugin.pluginId));
     expect(screen.getByRole('progressbar').textContent).toBe('settings.ghosts.updateAll.statusFailed');
+    // Retry is a square icon button (tooltip "Retry") so the failed state is no wider than the pill.
     const retry = screen.getByRole('button', { name: 'settings.ghosts.page.updateAria' });
-    expect(retry.textContent).toBe('commonUi.retry');
+    expect(retry.textContent).toBe('');
     fireEvent.click(retry);
     expect(onUpdate).toHaveBeenCalledTimes(1);
     act(() => __resetPluginInstallProgressForTest());

@@ -289,9 +289,10 @@ describe('market action feedback', () => {
     expect(loadDetail).toHaveBeenCalledTimes(1);
     await act(async () => { failInstall(new Error('Installation failed')); });
     expect(ring().textContent).toBe('settings.ghosts.installProgress.installFailed');
-    expect(action.getAttribute('aria-hidden')).toBeNull();
-    expect(action.textContent).toBe('commonUi.retry');
-    expect((action as HTMLButtonElement).disabled).toBe(false);
+    // The install button gives way to a square retry icon button with the same accessible name.
+    const retry = card.getByRole('button', { name: 'settings.ghosts.page.installAria' });
+    expect(retry.textContent).toBe('');
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('shows failed detail in the page and allows a fresh explicit install after returning', async () => {
@@ -311,8 +312,10 @@ describe('market action feedback', () => {
     fireEvent.click(action);
     expect(action.getAttribute('aria-busy')).toBe('true');
     await act(async () => { fail(new Error('Details unavailable')); });
-    expect(action.getAttribute('aria-busy')).not.toBe('true');
-    expect((action as HTMLButtonElement).disabled).toBe(false);
+    // The failed card offers a fresh attempt through its retry button (same accessible name).
+    const retry = screen.getByRole('button', { name: 'settings.ghosts.page.installAria' });
+    expect(retry.getAttribute('aria-busy')).not.toBe('true');
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
   });
 
   it.each(['owner', 'mode'] as const)('retires detail feedback on %s change without clearing a newer install', async change => {
@@ -339,8 +342,9 @@ describe('market action feedback', () => {
     expect(action.getAttribute('aria-busy')).toBe('true');
     expect(install).not.toHaveBeenCalled();
     await act(async () => { failNew(new Error('Details unavailable')); });
-    expect(action.getAttribute('aria-busy')).not.toBe('true');
-    expect((action as HTMLButtonElement).disabled).toBe(false);
+    const retry = screen.getByRole('button', { name: 'settings.ghosts.page.installAria' });
+    expect(retry.getAttribute('aria-busy')).not.toBe('true');
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
   });
 });
 
