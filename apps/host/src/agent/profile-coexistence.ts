@@ -87,7 +87,7 @@ const startupClock: StartupScanClock = {
   sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
 };
 const STARTUP_RECHECK_DELAYS_MS = [500, 1_000, 2_000];
-const STARTUP_SCAN_BUDGET_MS = 10_000;
+const STARTUP_RECHECK_BUDGET_MS = 10_000;
 type ReportRound = (round: number, elapsedMs: number, result: StartupScanResult) => void;
 
 /**
@@ -168,42 +168,27 @@ export function createDesktopScanner(profileDir: string, ports: ProfileScanPorts
   return async function scan(report?: ReportRound): Promise<number[]> {
     if (!report) return [...(await scanRound()).blockers.keys()];
     const start = clock.now();
+    const retryDeadline = start + STARTUP_RECHECK_BUDGET_MS;
     let previous: Map<number, Registration> | undefined;
-    let round = 0;
-    let expired = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const deadline = new Promise<number[]>((resolve, reject) => {
-      timer = setTimeout(() => {
-        expired = true;
-        report(round, Math.round(clock.now() - start), 'deadline');
-        if (previous?.size) resolve([...previous.keys()]);
-        else reject(Object.assign(new Error('profile scan timed out'), { code: 'ETIMEDOUT' }));
-      }, STARTUP_SCAN_BUDGET_MS);
-    });
-    async function check(reportRound: ReportRound): Promise<number[]> {
-      for (round = 1; ; round++) {
-        const { blockers, confirmed } = await scanRound(previous);
-        if (expired) return [];
-        if (clock.now() - start >= STARTUP_SCAN_BUDGET_MS) {
-          reportRound(round, Math.round(clock.now() - start), 'deadline');
-          if (previous?.size) return [...previous.keys()];
-          throw Object.assign(new Error('profile scan timed out'), { code: 'ETIMEDOUT' });
-        }
-        const result = !blockers.size ? 'clear' : confirmed ? 'desktop' : 'unknown';
-        reportRound(round, Math.round(clock.now() - start), result);
-        const delay = STARTUP_RECHECK_DELAYS_MS[round - 1];
-        if (result !== 'unknown' || delay === undefined) return [...blockers.keys()];
-        previous = blockers;
+    for (let round = 1; ; round++) {
+      const { blockers, confirmed } = await scanRound(previous);
+      const result = !blockers.size ? 'clear' : confirmed ? 'desktop' : 'unknown';
+      const now = clock.now();
+      report(round, Math.round(now - start), result);
+      const delay = STARTUP_RECHECK_DELAYS_MS[round - 1];
+      if (result !== 'unknown' || delay === undefined) return [...blockers.keys()];
+
+      // Budget the wait for another observation. A completed scan always decides.
+      if (now + delay <= retryDeadline) {
         await clock.sleep(delay);
-        if (expired) return [];
-        if (clock.now() - start >= STARTUP_SCAN_BUDGET_MS) {
-          reportRound(round, Math.round(clock.now() - start), 'deadline');
-          return [...previous.keys()];
+        if (clock.now() <= retryDeadline) {
+          previous = blockers;
+          continue;
         }
       }
+      report(round, Math.round(clock.now() - start), 'deadline');
+      return [...blockers.keys()];
     }
-    try { return await Promise.race([check(report), deadline]); }
-    finally { clearTimeout(timer); }
   };
 }
 

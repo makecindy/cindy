@@ -235,12 +235,20 @@ function uncertainDesktopStart(t, betweenRounds, duringLookup) {
   write(41);
   const waits = [], queries = [], rounds = [];
   let elapsed = 0, releases = 0;
+  // Advance both clocks so a wall-clock watchdog racing the scan also fires in these tests.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const advance = ms => { elapsed += ms; t.mock.timers.tick(ms); };
+  const fixture = { alive, identities, write, registry, advance };
   const clock = { now: () => elapsed, sleep: async ms => {
-    waits.push(ms); elapsed += ms;
-    betweenRounds?.({ alive, identities, write, registry, advance: ms => { elapsed += ms; } });
+    waits.push(ms); advance(ms);
+    betweenRounds?.(fixture);
   } };
   const ports = { ...nodeProfileScanPorts, selfPid: () => 99, isPidAlive: pid => alive.has(pid),
-    readProcessIdentities: async pids => { queries.push([...pids]); duringLookup?.({ registry }); return new Map(identities); } };
+    readProcessIdentities: async pids => {
+      queries.push([...pids]);
+      duringLookup?.(fixture, queries.length);
+      return new Map(identities);
+    } };
   const h = setup({ resolveHostDataDir: () => profile, createDesktopScanner: dir => createDesktopScanner(dir, ports, clock),
     acquireHostRuntimeLease: () => ({ held: true, release() { releases++; } }),
     hostLog: { info: (_message, fields) => rounds.push(fields) } });
@@ -308,6 +316,50 @@ test('startup refuses without another lookup when a delayed wake exhausts the ti
   await assert.rejects(f.h.start('account-b'), { code: 'HOST_PROFILE_IN_USE_BY_DESKTOP' });
   assert.deepEqual(f.queries, [[41]]);
   assert.deepEqual(f.rounds.map(r => r.result), ['unknown', 'deadline']);
+  assert.equal(f.releases(), 1);
+});
+
+// A suspend or a slow OS lookup can finish after the retry budget. A completed
+// scan still decides whether the real startup path opens storage or releases its lease.
+test('startup opens after a slow first scan finds no desktop', async t => {
+  const f = uncertainDesktopStart(t, undefined, ({ advance, alive }) => {
+    advance(12_000);
+    alive.delete(41);
+  });
+  await assert.rejects(f.h.start('account-b'), /database opened/);
+  assert.equal(f.h.opens.length, 1);
+  assert.deepEqual(f.waits, []);
+});
+
+test('startup reports the live desktop found by a slow first scan', async t => {
+  const f = uncertainDesktopStart(t, undefined, ({ advance, identities }) => {
+    advance(12_000);
+    identities.set(41, { startedAtMs: 1000, command: 'Cindy' });
+  });
+  await assert.rejects(f.h.start('account-b'), { code: 'HOST_PROFILE_IN_USE_BY_DESKTOP' });
+  assert.deepEqual(f.h.runtime.coexistence.desktops, [41]);
+  assert.equal(f.releases(), 1);
+  assert.deepEqual(f.h.opens, []);
+  assert.deepEqual(f.waits, []);
+});
+
+test('startup opens when a slow retry finds the process has ended', async t => {
+  const f = uncertainDesktopStart(t, undefined, ({ advance, alive }, round) => {
+    if (round === 2) {
+      advance(12_000);
+      alive.delete(41);
+    }
+  });
+  await assert.rejects(f.h.start('account-b'), /database opened/);
+  assert.equal(f.h.opens.length, 1);
+  assert.deepEqual(f.waits, [500]);
+});
+
+test('startup refuses an unknown identity before sleeping past the retry budget', async t => {
+  const f = uncertainDesktopStart(t, undefined, ({ advance }) => advance(9_800));
+  await assert.rejects(f.h.start('account-b'), { code: 'HOST_PROFILE_IN_USE_BY_DESKTOP' });
+  assert.deepEqual(f.waits, []);
+  assert.deepEqual(f.h.runtime.coexistence.desktops, [41]);
   assert.equal(f.releases(), 1);
 });
 
