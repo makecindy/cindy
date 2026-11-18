@@ -26,6 +26,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { BotGroupChatView } from '../BotGroupChatView';
+import { _resetComposerSendShortcutPreferenceForTests, COMPOSER_SEND_SHORTCUT_STORAGE_KEY, useComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
 import { BotGroupProcess } from '../BotGroupProcess';
 import { ControlledBanner, __resetControlledBannerForTests } from '../../remote-device/ControlledBanner';
 import type {
@@ -350,6 +351,7 @@ beforeEach(() => {
   resetCompanionCloudStoreForTests();
   mocks.remoteInvoke.mockReset();
   window.localStorage.clear();
+  _resetComposerSendShortcutPreferenceForTests();
   for (const id of ['g1', 'g2']) clearDraft(botGroupAttachmentScope(id));
   // 话题 reply drafts persist like the group's own; start every test without one.
   for (const root of ['u1', 'b1', 'q1', 'm']) clearDraft(botGroupThreadDraftKey('g1', root));
@@ -1816,6 +1818,87 @@ describe('BotGroupChatView', () => {
       .toEqual(['mimi', 'xiaoman']);
     expect(screen.getAllByTestId('pending-interaction').map((node) => node.textContent))
       .toEqual(['lane-mimi', 'lane-xiaoman']);
+  });
+
+  // Issue #11250 / DESIGN §14.3, unit: real page -> composer -> outbox.
+  // Existing tests only used default Enter. Minimal failure: modifier-enter + plain Enter.
+  // The matrix covers platform modifiers, live preference changes and folded input newline.
+  it.each(['win32', 'darwin'])('honors the send preference on %s without changing group delivery', async platform => {
+    Object.defineProperty(window.electronAPI, 'platform', { configurable: true, value: platform });
+    localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+    renderView();
+    const input = await screen.findByRole('textbox');
+    fireEvent.change(input, { target: { value: 'first line' } });
+    for (const modifiers of [{}, { shiftKey: true }, { altKey: true }, { isComposing: true }, { keyCode: 229 }, ...(platform === 'win32' ? [{ metaKey: true }] : [])]) {
+      const event = createEvent.keyDown(input, { key: 'Enter', ...modifiers });
+      fireEvent(input, event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    }
+    const modifier = platform === 'darwin' ? { metaKey: true } : { ctrlKey: true };
+    fireEvent.keyDown(input, { key: 'Enter', ...modifier, repeat: true });
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter', ...modifier });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe('first line');
+  });
+
+  it('applies live send preference changes to an already mounted group composer', async () => {
+    function PreferenceControl() {
+      const { preference, setPreference } = useComposerSendShortcutPreference();
+      return <button onClick={() => setPreference(preference === 'enter' ? 'modifier-enter' : 'enter')}>Toggle send preference</button>;
+    }
+    renderView();
+    render(<PreferenceControl />);
+    const input = await screen.findByRole('textbox');
+    fireEvent.change(input, { target: { value: 'keep this draft' } });
+    fireEvent.click(screen.getByText('Toggle send preference'));
+    const newline = createEvent.keyDown(input, { key: 'Enter' });
+    fireEvent(input, newline);
+    expect(newline.defaultPrevented).toBe(false);
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Toggle send preference'));
+    fireEvent.keyDown(input, { key: 'Enter', repeat: true });
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe('keep this draft');
+  });
+
+  it('uses the configured send shortcut in the topic opened from the group page', async () => {
+    localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({
+      serverBacked: true, messages: [msg({ id: 'u1', content: 'Topic root' })],
+    }) });
+    renderView();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.server.startTopic' }));
+    const panel = await screen.findByRole('complementary');
+    const input = await within(panel).findByRole('textbox');
+    fireEvent.change(input, { target: { value: 'topic draft' } });
+    const newline = createEvent.keyDown(input, { key: 'Enter' });
+    fireEvent(input, newline);
+    expect(newline.defaultPrevented).toBe(false);
+    expect(mocks.reply).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(1));
+    expect(mocks.reply.mock.calls[0][0].text).toBe('topic draft');
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps a newline after a folded paste until the configured send shortcut', async () => {
+    localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
+    renderView();
+    const input = await screen.findByRole('textbox');
+    const text = Array.from({ length: 24 }, (_, i) => `line ${i}`).join('\n');
+    fireEvent.paste(input, { clipboardData: { items: [], getData: () => text } });
+    await waitFor(() => expect(document.querySelector('[data-pasted-text-chip]')).not.toBeNull());
+    const editor = screen.getByRole('textbox');
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    fireEvent.paste(editor, { clipboardData: { items: [], getData: () => 'after newline' } });
+    fireEvent.keyDown(editor, { key: 'Enter', ctrlKey: true });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe(`${text}\nafter newline`);
   });
 
   it('sends with Enter, parses mentions, and re-reads after main accepts', async () => {

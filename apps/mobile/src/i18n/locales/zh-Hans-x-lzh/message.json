@@ -257,6 +257,8 @@
     "notSent": "未遣",
     "imagesNotUploaded_one": "{{count}} 图未能上呈",
     "imagesNotUploaded_other": "{{count}} 图未能上呈",
+    "waitingForNamedComputer": "俟{{name}}连通即发",
+    "reconnectComputer": "重连",
     "waitingForComputer": "候机归来，即遣之",
     "waitingForNetwork": "待网络重通，即遣之",
     "queued": "方候",

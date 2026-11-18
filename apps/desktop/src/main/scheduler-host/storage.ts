@@ -105,6 +105,7 @@ export interface ScheduleSidebarIndexRun {
   status: ScheduleRun['status'];
   readAt?: number;
   firedAt?: number;
+  finishedAt?: number;
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
   errorMsg?: string;
   failureRecovered?: boolean;
@@ -810,6 +811,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       status: scheduleRuns.status,
       readAt: scheduleRuns.readAt,
       firedAt: scheduleRuns.firedAt,
+      finishedAt: scheduleRuns.finishedAt,
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
       errorMsg: scheduleRuns.errorMsg,
@@ -891,6 +893,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       readAt: row.readAt ?? undefined,
       firedAt: row.firedAt ?? undefined,
       ...(row.status === 'failed' || row.status === 'interrupted' ? {
+        finishedAt: row.finishedAt ?? undefined,
         failureRecovered: Boolean(row.failureRecovered),
         failureKind: row.failureKind,
         errorMsg: row.errorMsg ?? undefined,

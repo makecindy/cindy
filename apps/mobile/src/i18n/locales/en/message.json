@@ -257,6 +257,8 @@
     "notSent": "Not sent",
     "imagesNotUploaded_one": "{{count}} image didn't upload",
     "imagesNotUploaded_other": "{{count}} images didn't upload",
+    "waitingForNamedComputer": "Sends automatically when {{name}} connects",
+    "reconnectComputer": "Reconnect",
     "waitingForComputer": "Sends when your computer is back",
     "waitingForNetwork": "Sends when you’re back online",
     "queued": "Queued",
