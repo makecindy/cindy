@@ -917,7 +917,7 @@ function captureModelSelectionOwner() {
   };
 }
 
-async function applyPendingAgentSwitch(sessionId: string, prepare?: Pick<HostModelSelectionApply, 'prepareModelWindowSwitch' | 'signal'>): Promise<void> {
+async function applyPendingAgentSwitch(sessionId: string, prepare?: Pick<HostModelSelectionApply, 'prepareModelWindowSwitch' | 'signal' | 'nextInputChars'>): Promise<void> {
   const intent = pendingAgentSwitches.get(sessionId);
   if (!intent || Boolean(intent.deviceLinkOwner) !== Boolean(prepare)) return;
   const assertCurrent = () => {
@@ -938,7 +938,7 @@ async function applyPendingAgentSwitch(sessionId: string, prepare?: Pick<HostMod
       throwIpcError('PRECONDITION_FAILED', 'the task Harness changed; select the model again');
     }
     await updateSession(sessionId, patch, {
-      assertCurrent, signal: prepare.signal,
+      assertCurrent, signal: prepare.signal, nextInputChars: prepare.nextInputChars,
       prepareModelWindowSwitch: prepare.prepareModelWindowSwitch,
     });
   } else {

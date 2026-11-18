@@ -897,8 +897,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // A model change's window gate (model-window-gate.ts): a route's configured window with the task's
   // window budget, as the desktop's change of model reads it (register.ts resolveWindowForRoute).
   const modelWindow = {
-    resolveRouteWindow: (agentKind: string, modelId: string, providerId: string | null, budget: number | null) =>
-      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), agentKind as AgentKind, providerId, modelId, budget),
+    resolveRouteWindow: (agentKind: string, modelId: string, providerId: string | null, budget: number | null, verification?: 'required') =>
+      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), agentKind as AgentKind, providerId, modelId, budget, verification),
     readSessionBudget: (sessionId: string) => startOptions.readStoredSessionContextWindowBudget(sessionId),
   };
   return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, piPackages,

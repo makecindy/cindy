@@ -15,6 +15,7 @@ export interface HostModelSelectionApply {
   prepareModelWindowSwitch: ModelWindowPreparation;
   assertCurrent(): void;
   signal?: AbortSignal;
+  nextInputChars?: number;
 }
 
 type LiveSession = ModelSwitchLiveRuntime & Parameters<typeof applyLiveSessionSettings>[0];
@@ -30,7 +31,7 @@ export function createHostSessionUpdate(deps: {
   publish(event: Record<string, unknown>): void;
   /** The configured window of a route, with the task's window budget (agent graph). */
   modelWindow?(): {
-    resolveRouteWindow(agentKind: string, modelId: string, providerId: string | null, budget: number | null): number | null;
+    resolveRouteWindow(agentKind: string, modelId: string, providerId: string | null, budget: number | null, verification?: 'required'): number | null;
     readSessionBudget(sessionId: string): Promise<number | null>;
   } | null;
 }) {
@@ -67,7 +68,7 @@ export function createHostSessionUpdate(deps: {
         target,
         ...(window ? {
           resolveRouteWindow: (agentKind: string, modelId: string, providerId: string | null) =>
-            window.resolveRouteWindow(agentKind, modelId, providerId, budget),
+            window.resolveRouteWindow(agentKind, modelId, providerId, budget, apply ? 'required' : undefined),
         } : {}),
       });
       apply?.assertCurrent();
@@ -82,8 +83,7 @@ export function createHostSessionUpdate(deps: {
         if (piNeedsFinalWindow && (!windowInput.piCanVerifyLiveWindow || !live || !deps.closeRejectedPiRuntime)) {
           throwIpcError('PRECONDITION_FAILED', 'Pi final context window could not be verified; runtime selection was not changed');
         }
-        if (needsProtection && (!windowInput.contextTokensKnown || !currentContextWindow ||
-          (!piNeedsFinalWindow && !contextWindow))) {
+        if (needsProtection && (!windowInput.contextTokensKnown || !currentContextWindow || !contextWindow)) {
           throwIpcError('PRECONDITION_FAILED', 'target context window or current usage could not be verified; runtime selection was not changed');
         }
         try {
@@ -106,6 +106,8 @@ export function createHostSessionUpdate(deps: {
           })) {
             const prepared = await apply.prepareModelWindowSwitch(sessionId, {
               contextWindow,
+              verifiedHandoffWindow: contextWindow,
+              nextInputChars: apply.nextInputChars,
               recheckTargetPressure: true,
               confirmedTargetPressure: true,
               replacementRoute: {

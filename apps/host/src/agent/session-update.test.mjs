@@ -26,7 +26,8 @@ import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore
 import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
-import { sessions } from '../../../desktop/src/main/localDb/schema.ts';
+import { sessions, messages } from '../../../desktop/src/main/localDb/schema.ts';
+import { estimateHandoffTokens } from '../../../desktop/src/main/maker-ipc/agentHandoff.ts';
 import { setSessionProvider, getSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { planUserRuntimeModelSwitch } from '../../../desktop/src/shared/runtimeModelSwitchGate.ts';
 import { createHostSessionUpdate } from './session-update.ts';
@@ -66,7 +67,8 @@ async function fixture(t) {
     readSessionForRun: async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)))[0],
     publish: event => events.push(event),
     modelWindow: () => ({
-      resolveRouteWindow: (_agentKind, modelId, _providerId, budget) => {
+      resolveRouteWindow: (_agentKind, modelId, _providerId, budget, verification) => {
+        if (modelId === 'display-only') return verification ? null : 100_000;
         const window = WINDOWS[modelId] ?? null;
         return window !== null && budget ? Math.min(window, budget) : window;
       },
@@ -94,11 +96,13 @@ async function fixture(t) {
   };
   const row = async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)))[0];
   const handoffs = new Map();
+  const history = new Map();
+  const listMessages = id => database.drizzle.select().from(messages).where(eq(messages.sessionId, id));
   const rollover = createContextOverflowRollover({
     getSessionRow: row, getLiveSession: id => live.get(id),
     drainPersistQueue: async () => {},
     closeSession: async id => { live.delete(id); },
-    listMessages: async () => [{ role: 'user', content: 'Preserve the previous request.', clientId: 'source', createdAt: 1 }],
+    listMessages: async id => [{ role: 'user', content: 'Preserve the previous request.', clientId: 'source', createdAt: 1 }, ...(history.get(id) ?? [])],
     findLatestRebuildMeta: async () => null,
     commitRebuild: (id, handoff, meta) => commitContextRebuildWithPorts({
       now: Date.now, createId: randomUUID, tx: (name, args) => database.tx(name, args),
@@ -107,7 +111,7 @@ async function fixture(t) {
     withCloseSuppressed: (_id, run) => run(),
     log: { warn() {}, info() {}, debug() {} },
   });
-  return { update, task, runtime, row, events, budgets, handoffs, live, rollover };
+  return { update, task, runtime, row, events, budgets, handoffs, history, listMessages, live, rollover };
 }
 
 // Each cell: the task's usage and the change it asks for. `refused`: the Host's verdict.
@@ -209,18 +213,22 @@ test('model change: a task that does not exist is "session not found", as before
 // native binding together. Use the existing migrated SQLite fixture and real rollover (DB tier).
 test('owner dispatch rebuilds Claude and hot Pi on the host-verified window and keeps an unverifiable Pi route', { timeout: 30_000 }, async t => {
   const f = await fixture(t);
-  const apply = { prepareModelWindowSwitch: f.rollover.prepareModelWindowSwitch, assertCurrent() {} };
+  const apply = { prepareModelWindowSwitch: f.rollover.prepareModelWindowSwitch, assertCurrent() {}, nextInputChars: 45_000 };
   const cases = [
     { id: 'owner-claude', agentKind: 'claude-code', model: 'small', expectedModel: 'small' },
     // The target catalog is larger than the source. The final native Pi window is smaller.
     { id: 'owner-pi', agentKind: 'pi', model: 'huge', finalPiWindow: 100_000, expectedModel: 'huge' },
     { id: 'owner-pi-unverified', agentKind: 'pi', model: 'small', finalPiWindow: 0, expectedModel: 'big' },
+    { id: 'owner-unverified-catalog', agentKind: 'claude-code', model: 'display-only', expectedModel: 'big' },
   ];
   for (const { id, agentKind, model, finalPiWindow, expectedModel } of cases) {
     await f.task(id, { agentKind, contextTokens: 95_000, sdkSessionId: `native-${id}` });
     f.runtime(id, { agentKind, finalPiWindow, usage: { contextTokens: 95_000, contextWindow: 200_000 } });
+    if (expectedModel !== 'big') {
+      f.history.set(id, [{ role: 'assistant', content: 'Prior output '.repeat(6_000), clientId: 'reply', createdAt: 2 }]);
+    }
     const result = f.update(id, { model }, apply);
-    if (finalPiWindow === 0) {
+    if (expectedModel === 'big') {
       await assert.rejects(result, { code: 'PRECONDITION_FAILED' });
       assert.equal((await f.row(id)).sdkSessionId, `native-${id}`);
       assert.equal(f.handoffs.has(id), false);
@@ -228,9 +236,14 @@ test('owner dispatch rebuilds Claude and hot Pi on the host-verified window and 
       await result;
       assert.equal((await f.row(id)).sdkSessionId, null);
       assert.equal((await f.row(id)).contextTokens, 0);
-      assert.match(f.handoffs.get(id), /Preserve the previous request/);
+      const handoff = f.handoffs.get(id);
+      assert.match(handoff, /Preserve the previous request/);
+      assert.ok(handoff.length > 16_000);
+      assert.ok(estimateHandoffTokens(handoff) <= 20_000);
+      const marker = (await f.listMessages(id)).find(message => message.role === 'context_rebuild');
+      assert.equal(JSON.parse(marker.content).handoffCoverage, 'condensed');
     }
     assert.equal((await f.row(id)).model, expectedModel);
-    assert.equal(f.live.has(id), false);
+    assert.equal(f.live.has(id), id === 'owner-unverified-catalog');
   }
 });

@@ -3,6 +3,7 @@ import { createMakerSteerTransaction } from '../../../desktop/src/main/maker-ipc
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
 import { readReplyQuoteNote } from '../../../desktop/src/main/maker-ipc/chatReplyQuoteNote.ts';
 import { publishUiSessionIntervention } from '../../../desktop/src/main/maker-ipc/uiContinuationSignal.ts';
+import { extractPlainText } from '../../../desktop/src/main/maker-ipc/agentHandoff.ts';
 import { listMessagesForAgentHandoff } from '../../../desktop/src/main/localDb/agentHandoffHistory.ts';
 import { createSessionOptionsReconciler } from '../../../desktop/src/main/maker-ipc/sessionOptionsReconciler.ts';
 import { createMakerSendTransaction, prepareDirectoryGrantsForBootstrap } from '../../../desktop/src/main/maker-ipc/makerSendTransaction.ts';
@@ -534,7 +535,9 @@ export function createTurnExecutor(deps) {
       await sendOpts[MCP_APP_MESSAGE_GUARD]?.();
       check();
       // The send lock is held. Read the committed route and native identity below.
-      await deps.applyPendingAgentSwitch?.(sessionId, sendOpts.signal);
+      const nextInput = typeof message === 'string' ? message : message?.content;
+      const nextInputChars = (typeof nextInput === 'string' ? nextInput : extractPlainText(nextInput)).length;
+      await deps.applyPendingAgentSwitch?.(sessionId, sendOpts.signal, nextInputChars);
       check();
       const stored = await readExecutionSession(sessionId);
       const queuedPlan = createOpts.planMode;

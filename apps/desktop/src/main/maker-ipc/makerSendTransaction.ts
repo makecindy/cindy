@@ -433,7 +433,9 @@ export interface MakerSendTransactionDeps {
    * 保留意图本次不动。undefined = 不启用(测试最小 harness)。`signal` 是这次发送的取消信号：
    * 供应商组在这里等原电脑恢复时，发送被停止就不再等、不再换电脑。
    */
-  applyPendingAgentSwitch?(sessionId: string, options?: { signal?: AbortSignal; scheduled?: boolean; clientId?: string }): Promise<void>;
+  applyPendingAgentSwitch?(sessionId: string, options?: {
+    signal?: AbortSignal; scheduled?: boolean; clientId?: string; nextInputChars?: number;
+  }): Promise<void>;
   onModelDispatched?(sessionId: string, clientId: string): void;
   /**
    * 发送前换窗:必须在 getSession 之前。prepare 会关掉不健康的 live handle,
@@ -1136,12 +1138,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         (sendOrigin as { kind?: unknown }).kind === 'scheduler';
       const rawClientId = requestedSendOpts.persistUserMessage?.clientId;
       const clientId = typeof rawClientId === 'string' ? rawClientId : undefined;
+      const nextInput = typeof message === 'string' ? message
+        : message && typeof message === 'object' && 'content' in message ? message.content : undefined;
+      const nextInputChars = (typeof nextInput === 'string' ? nextInput : extractPlainText(nextInput)).length;
       await deps.applyPendingAgentSwitch?.(
         sessionId,
-        requestedSendOpts.signal || scheduled || clientId ? {
+        requestedSendOpts.signal || scheduled || clientId || nextInputChars > 0 ? {
           ...(requestedSendOpts.signal ? { signal: requestedSendOpts.signal } : {}),
           ...(scheduled ? { scheduled: true } : {}),
           ...(clientId ? { clientId } : {}),
+          ...(nextInputChars > 0 ? { nextInputChars } : {}),
         } : undefined,
       );
       try {

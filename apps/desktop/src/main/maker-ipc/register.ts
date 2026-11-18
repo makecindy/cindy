@@ -11517,7 +11517,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }),
     withCloseSuppressed: withRehydrateCloseSuppressed,
     pendingSwitches: agentSwitchPending,
-    selectSameAgentModel: async (sessionId, intent, applyNow, assertSelectionCurrent, beforeMutation, pendingSelectionAccess) => {
+    selectSameAgentModel: async (sessionId, intent, applyNow, assertSelectionCurrent, beforeMutation, pendingSelectionAccess, nextInputChars) => {
       const result = await applySessionRuntimeSelection(sessionId, intent.model, intent.providerId, {
         effort: (intent.effort ?? null) as SessionRuntimeProfile['effort'],
         fastMode: intent.fastMode ?? false,
@@ -11528,7 +11528,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }, { source: 'user', sessionLockHeld: true, applyingUserSelectionOnSend: applyNow,
         runtimeSource: intent.runtimeSource, configStaged: intent.configStaged === true,
         deviceLinkModelSelectionOrigin: intent.deviceLinkModelSelectionOrigin,
-        assertSelectionCurrent, beforeMutation, pendingSelectionAccess });
+        nextInputChars, assertSelectionCurrent, beforeMutation, pendingSelectionAccess });
       if (result.contextWindowConfirmationRequired !== undefined) {
         throwIpcError('PRECONDITION_FAILED', 'Model context window changed or was unknown; select the model again to confirm');
       }
@@ -18664,7 +18664,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       if (!scheduled) await scheduledModelScope.restore(sessionId);
       const expectedSwitch = agentInputCoordinatorHolder?.takeRetrySwitchRevision(sessionId, options?.clientId);
-      await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, { signal: options?.signal, expectedRevision: expectedSwitch });
+      await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, {
+        signal: options?.signal, expectedRevision: expectedSwitch, nextInputChars: options?.nextInputChars,
+      });
       if (agentSwitchPending.get(sessionId)?.targetAgentDeviceId !== undefined) {
         throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected computer is not ready; retry the send after recovery');
       }
@@ -22604,15 +22606,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const orcaSelectionOnSend = !!runtimeStatus.orcaRole && internalOptions.source === 'user' &&
       internalOptions.applyingUserSelectionOnSend === true;
     const verifyWindowOnSend = orcaSelectionOnSend || ownerWindowRebuild;
-    if ((orcaSelectionOnSend || (ownerWindowRebuild && agentKind !== 'codex')) && runtimeStatus.agentDeviceId) {
+    const recheckExecutor = (orcaSelectionOnSend || (ownerWindowRebuild && agentKind !== 'codex')) && runtimeStatus.agentDeviceId;
+    if (recheckExecutor) {
       // Selection-time metadata may be absent or stale after a queued turn. Read
       // the execution computer again; an acknowledgement is not window metadata.
       const catalog = await readUsableAgentDeviceCatalog(
-        runtimeStatus.agentDeviceId, agentKind, model, targetProviderId,
+        recheckExecutor, agentKind, model, targetProviderId,
       );
       if (supersededByOwnerBoundary()) return { deferred: false, superseded: true };
       assertRuntimeOwnerCurrent();
-      targetContextWindow = resolveDeviceHandoffWindow(catalog, runtimeStatus.agentDeviceId, agentKind, model, targetProviderId) ?? undefined;
+      targetContextWindow = resolveDeviceHandoffWindow(catalog, recheckExecutor, agentKind, model, targetProviderId) ?? undefined;
     }
     let live = maker.getSession(sessionId);
     if (ownerWindowRebuild && agentKind !== 'codex') {
@@ -22637,11 +22640,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if ((live || verifyWindowOnSend) && targetContextWindow && contextOverflowRolloverHolder) {
       const prepared = await contextOverflowRolloverHolder.prepareModelWindowSwitch(sessionId, {
         contextWindow: targetContextWindow,
-        verifiedHandoffWindow: orcaSelectionOnSend && runtimeStatus.agentDeviceId
+        verifiedHandoffWindow: recheckExecutor
           ? targetContextWindow
           : await resolveDesktopHandoffWindow(sessionId, {
               agentKind, model, providerId: targetProviderId, agentDeviceId: runtimeStatus.agentDeviceId,
             }),
+        nextInputChars: internalOptions.nextInputChars,
         recheckTargetPressure: true,
         confirmedTargetPressure: ownerWindowRebuild ||
           (!internalOptions.deviceLinkModelSelectionOrigin && (

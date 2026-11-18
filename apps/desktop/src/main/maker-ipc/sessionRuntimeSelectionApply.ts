@@ -75,6 +75,7 @@ export type InternalRuntimeSelectionOptions = {
   sessionLockHeld?: boolean;
   applyingUserSelectionOnSend?: boolean;
   deviceLinkModelSelectionOrigin?: 'owner' | 'scoped';
+  nextInputChars?: number;
   /** Reassess the current Pi route after its catalog descriptor or budget changed. */
   refreshPiConfiguration?: boolean;
   /** The pending service owns removal and queue release after this apply commits. */
@@ -907,6 +908,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         pid: string | null,
       ): number | null => resolveConfiguredContextWindow(
         getActiveCatalog(), agentKind, pid, routeModelId, sessionContextWindowBudget,
+        ownerWindowRebuild ? 'required' : undefined,
       );
       if (runtimeAgentKind && (runtimeRouteChanged || piConfigurationRefresh || confirmedContextWindow !== undefined)) {
         const resolveRouteWindow = (_agentKind: string, modelId: string, pid: string | null) =>
@@ -973,10 +975,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           !!runtimeStatus.sdkSessionId && modelWindowContextNeedsProtection;
         if (ownerWindowRebuild && runtimeAgentKind !== 'codex' && runtimeStatus.sdkSessionId &&
             modelWindowContextNeedsProtection && (
-              !contextTokensKnown || !verifiedCurrentWindow ||
-              (runtimeAgentKind === 'pi'
-                ? rebuildLiveOrcaWorker || (piPreview?.action !== 'hot' && piPreview?.action !== 'refresh')
-                : !targetContextWindow)
+              !contextTokensKnown || !verifiedCurrentWindow || !targetContextWindow ||
+              (runtimeAgentKind === 'pi' && (rebuildLiveOrcaWorker ||
+                (piPreview?.action !== 'hot' && piPreview?.action !== 'refresh')))
             )) {
           if (rehydratedColdPiRuntime) await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
           throwIpcError('PRECONDITION_FAILED', runtimeAgentKind === 'pi'
@@ -1032,6 +1033,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
               verifiedHandoffWindow: runtimeAgentKind ? resolveConfiguredContextWindow(
                 getActiveCatalog(), runtimeAgentKind, targetRouteProviderId, model, sessionContextWindowBudget, 'required',
               ) : null,
+              nextInputChars: internalOptions.nextInputChars,
               recheckTargetPressure: true,
               confirmedTargetPressure:
                 (internalOptions.source === 'user' && internalOptions.applyingUserSelectionOnSend === true &&
@@ -1423,16 +1425,16 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
             );
           }
           const reportedPiWindow = piSessionAfterRouteChange.getUsageSnapshot?.().contextWindow;
-          if (typeof reportedPiWindow !== 'number' || !Number.isFinite(reportedPiWindow) || reportedPiWindow <= 0) {
+          // Pi's live working budget can still be based on a catalog fallback.
+          const verifiedPiWindow = resolveWindowForRoute('pi', model, targetRouteProviderId);
+          if (typeof reportedPiWindow !== 'number' || !Number.isFinite(reportedPiWindow) || reportedPiWindow <= 0 ||
+              (ownerPiFinalWindow && verifiedPiWindow === null)) {
             await closeRejectedPiRuntime('final context window was not verified');
             throwIpcError(
               localModelWindowSwitchErrorCode('MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN'),
               'Pi did not expose its verified final context window; runtime selection was not accepted',
             );
           }
-          // Pi reports the configured native budget, which may exceed the route
-          // ceiling. Final verification must not undo the history safety cap.
-          const verifiedPiWindow = resolveWindowForRoute('pi', model, targetRouteProviderId);
           const finalPiWindow = verifiedPiWindow === null
             ? reportedPiWindow : Math.min(reportedPiWindow, verifiedPiWindow);
           targetContextWindow = finalPiWindow;
@@ -1459,6 +1461,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
                     getActiveCatalog(), 'pi', targetRouteProviderId, model,
                     Math.min(sessionContextWindowBudget ?? finalPiWindow, finalPiWindow), 'required',
                   ),
+                  nextInputChars: internalOptions.nextInputChars,
                   recheckTargetPressure: true,
                   confirmedTargetPressure:
                     (internalOptions.source === 'user' && internalOptions.applyingUserSelectionOnSend === true &&

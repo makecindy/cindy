@@ -233,6 +233,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     assertSelectionCurrent?: () => void,
     beforeMutation?: () => Promise<void>,
     pendingSelectionAccess?: ReturnType<typeof createSharedTaskPendingSelectionGuard>,
+    nextInputChars?: number,
   ): Promise<{ deferred: boolean; superseded?: boolean }>;
   /** 与 send / SET_MODEL 共用的 session 锁；生产注入，最小测试 harness 可省略。 */
   withSessionLock?<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
@@ -1579,7 +1580,7 @@ export function settleSystemRouteSwitchIntent(input: {
 export function applyPendingAgentSwitchIfIdle(
   deps: MakerSessionAgentSwitchHandlerDeps,
   sessionId: string,
-  opts?: { bootstrapAfterSwitch?: boolean; signal?: AbortSignal; expectedRevision?: number },
+  opts?: { bootstrapAfterSwitch?: boolean; signal?: AbortSignal; expectedRevision?: number; nextInputChars?: number },
 ): Promise<void> {
   if (opts?.expectedRevision !== undefined && (!deps.pendingSwitches?.get(sessionId)
     || deps.pendingSwitches.revision?.(sessionId) !== opts.expectedRevision)) {
@@ -1607,11 +1608,10 @@ export function applyPendingAgentSwitchIfIdle(
         // host registry. Apply only that choice under host authority; retain the
         // captured send fence through preflight and admit before mutation. Keep
         // this admission separate from the guest invoke's settings transaction.
-        const result = await (sharedTask
-          ? runOutsideDeviceLinkInvokeContext(() => deps.selectSameAgentModel!(
-              sessionId, intent, true, undefined, undefined, access,
-            ))
-          : deps.selectSameAgentModel(sessionId, intent, true));
+        const applySelection = () => deps.selectSameAgentModel!(
+          sessionId, intent, true, undefined, undefined, access, opts?.nextInputChars,
+        );
+        const result = await (sharedTask ? runOutsideDeviceLinkInvokeContext(applySelection) : applySelection());
         if (result.deferred || result.superseded) {
           throw new Error('model selection could not be applied before send');
         }

@@ -619,6 +619,7 @@ export function shouldRebuildForModelWindowSwitch(input: {
 interface ModelWindowSwitchTarget {
   contextWindow: number;
   verifiedHandoffWindow?: number | null;
+  nextInputChars?: number;
   recheckTargetPressure?: boolean;
   confirmedTargetPressure?: boolean;
   onConfirmationRequired?: (contextTokens: number) => void;
@@ -1105,6 +1106,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       sessionId,
       targetContextWindow: target.verifiedHandoffWindow == null
         ? null : Math.min(target.contextWindow, target.verifiedHandoffWindow),
+      nextInputChars: target.nextInputChars,
       reason: 'model-window-switch',
       companion: isBotChatContext(sessionRow),
       ...(await companionRecall(sessionId, isBotChatContext(sessionRow))),
