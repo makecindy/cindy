@@ -9,6 +9,14 @@ import type {
   LiziMcpSessionContext,
 } from "../types.js";
 import { errorPayload, okPayload } from "./_payload.js";
+import type { SessionControlDeps, SessionQueueSteerReason } from "./session_control.js";
+
+/**
+ * 请求了 steer 但消息留在目标队列时的原因。消息已经投递(排队),调用方不需要重发。
+ * 前四项沿用 steer_session_queued_message 的 reason;STEER_FAILED = 转插话这一步本身报错
+ * (例如授权校验),消息仍在队列。
+ */
+export type SendToSessionSteerFallbackReason = SessionQueueSteerReason | "STEER_FAILED";
 
 /**
  * Host 注入的 session handoff 回调。把一条控制层消息投递到一个 session:
@@ -125,6 +133,11 @@ export interface SendToSessionDeps {
   sendToSession: SendToSessionCallback;
   /** 缺省 = host 不支持跨电脑投递;deviceId::sessionId 目标返 REMOTE_UNSUPPORTED。 */
   sendToRemoteSession?: SendToRemoteSessionCallback;
+  /**
+   * delivery=steer 时复用 steer_session_queued_message 的宿主实现,把刚排进目标队列的这条消息
+   * 转为插话。缺省 = 宿主不支持,请求 steer 的消息照常排队并返回 STEER_UNSUPPORTED。
+   */
+  steerQueuedMessage?: SessionControlDeps["steerQueuedMessage"];
 }
 
 // 这是 LLM 点进 handoff 类目、看到本工具后的行为说明;选类目阶段的协同规避另见
@@ -136,6 +149,7 @@ const DESCRIPTION = [
   "",
   "把一条控制层 handoff 消息投递到一个 session。两种模式:",
   "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。",
+  "- 【插话 delivery=steer(仅 jump)】目标正在跑 turn、而这条消息需要它在当前 turn 里看到(纠错、改约束、转达用户对它当前工作的答复、它正在等的信息)时传 delivery=steer:插成返回 steered=true(wake_kind=already-active);没插成时消息照常留在队列(wake_kind=queued + queued_message_id)并附 steer_fallback_reason(NO_ACTIVE_TURN / STEER_UNSUPPORTED / INPUT_BOUNDARY_BUSY / STEER_UNCERTAIN / STEER_FAILED),已经投递,不要重发。普通补充、新的独立工作保持默认 queue。目标空闲时与默认相同,直接开始处理。目前只支持本机任务;deviceId::sessionId 目标照常投递并返回 STEER_UNSUPPORTED。新建任务不能传 steer。",
   "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制;新建远程任务则省略 target_session_id 并传 device。",
   "- 不传 target_session_id → create:新建任务并发送首条消息，可用 title 指定简短标题。本机 Agent / model / effort / Fast 缺省继承当前任务；device 指向另一台电脑时采用那台电脑的新任务默认。返回 wake_kind=created、target_session_id、project_path 与实际 working_dir；后续消息用返回的 id。",
   "【项目】本机省略 project_path 时继承来源任务的项目。远程创建不继承来源电脑的路径；省略项目时按目标 working_dir 匹配已有项目，否则创建不绑项目的任务。list_projects(device) 查询目标电脑项目。来源本来不绑项目时：working_dir 在某个已登记且可见的项目里，就归到最近的那个项目（回执 project_note 会说明）；否则新任务也不绑项目。无法可靠确定来源归属时明确失败。也可显式复用 get_current_session_id.project_path；跨项目用 control/list_projects 选择已有项目。传 project_path:null 明确创建不绑项目的任务。临时目录、仓库子目录、worktree 都不会变成新项目。确需新增或恢复项目时，单独调用 create_project。",
@@ -202,6 +216,35 @@ export function projectMembershipNote(input: {
   return {};
 }
 
+type SteerAttempt =
+  | { steered: true; error?: undefined }
+  | { steered: false; reason: SendToSessionSteerFallbackReason; error?: string };
+
+/** 把 send_to_session 刚排进目标队列的消息转为插话;任何失败都折算成 fallback reason。 */
+async function steerJustQueued(
+  deps: SendToSessionDeps,
+  callerSessionId: string | undefined,
+  targetSessionId: string,
+  queuedMessageId: string | undefined,
+): Promise<SteerAttempt> {
+  if (!deps.steerQueuedMessage || !callerSessionId || !queuedMessageId) return { steered: false, reason: "STEER_UNSUPPORTED" };
+  try {
+    const result = await deps.steerQueuedMessage({ callerSessionId, targetSessionId, queuedMessageId });
+    if (result.ok) {
+      return result.delivery === "steered"
+        ? { steered: true }
+        : { steered: false, reason: result.reason ?? "STEER_UNSUPPORTED" };
+    }
+    // 排队后目标这一轮已经结束、队列开始派发这条消息:按顺序作为下一轮输入送达。
+    if (result.errorCode === "QUEUED_MESSAGE_NOT_FOUND" || result.errorCode === "MESSAGE_CONSUMING") {
+      return { steered: false, reason: "NO_ACTIVE_TURN" };
+    }
+    return { steered: false, reason: "STEER_FAILED", error: `${result.errorCode}: ${result.message}` };
+  } catch (error) {
+    return { steered: false, reason: "STEER_FAILED", error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /**
  * 注册 send_to_session 到 XdtHelperToolRegistry(handoff 类目),经 call_tool 调用。
  * 范式对齐 set_current_session_title.ts:host 通过 deps 注入 getSessionContext +
@@ -238,6 +281,12 @@ export function registerSendToSessionTool(
         .min(1)
         .describe(
           "要发送的消息，对方收到的就是这段原文，并附有本任务的 session_id；对方需要背景时可以用 get_chat_history 读本任务的对话。当前输入属于用户请求或其转交时，对方按这段内容处理，不扩大范围或要求重复确认。自主消息、自动化通知和结果回传不代表用户。",
+        ),
+      delivery: z
+        .enum(["queue", "steer"])
+        .optional()
+        .describe(
+          "仅 jump(发给已有任务):queue(默认)= 直发或排队到当前 turn 之后;steer = 目标正在跑 turn 时尝试插进当前 turn,没插成时照常排队并返回 steer_fallback_reason。新建任务传 steer 返回 INVALID_ARGS。",
         ),
       title: z
         .string()
@@ -300,6 +349,7 @@ export function registerSendToSessionTool(
       device,
       provider_device_id,
       message,
+      delivery,
       title,
       use_worktree,
       working_dir,
@@ -310,6 +360,8 @@ export function registerSendToSessionTool(
       fast,
       agent_device_id,
     }) => {
+      if (!target_session_id && delivery === "steer")
+        return errorPayload("INVALID_ARGS", "delivery=steer 只用于发给已有任务(传 target_session_id);新建任务没有正在运行的 turn 可插。");
       if (target_session_id && device !== undefined)
         return errorPayload("INVALID_ARGS", "已有目标请只传 target_session_id；device 仅用于新建任务。");
       if (!target_session_id && provider_device_id !== undefined && agent_device_id !== undefined
@@ -340,6 +392,10 @@ export function registerSendToSessionTool(
           wake_kind: remote.wakeKind,
           target_title: remote.targetTitle,
           target_last_user_send_at: remote.targetLastUserSendAt,
+          // 跨电脑插话暂不支持:消息照常投递,如实说明没有插进当前 turn。
+          ...(delivery === "steer" && remote.wakeKind === "queued"
+            ? { steer_fallback_reason: "STEER_UNSUPPORTED" satisfies SendToSessionSteerFallbackReason }
+            : {}),
         });
       }
       const result = await deps.sendToSession({
@@ -369,18 +425,30 @@ export function registerSendToSessionTool(
         return errorPayload(result.errorCode, result.message, result.recoverySessionId ? { target_session_id: result.recoverySessionId } : {});
       }
 
+      // 请求插话且消息进了队列:复用排队消息转插话。消息已投递,转插话的任何失败都只作为
+      // steer_fallback_reason 报告,不改成错误——否则调用方会重发出一条重复消息。
+      const steer =
+        delivery === "steer" && result.wakeKind === "queued"
+          ? await steerJustQueued(deps, ctx.sessionId, result.targetSessionId, result.queuedMessageId)
+          : null;
+      const steered = steer?.steered === true;
+
       return okPayload({
         target_session_id: result.targetSessionId,
         ...(result.targetDeviceId ? { target_device_id: result.targetDeviceId } : {}),
         agent_kind: result.agentKind,
-        wake_kind: result.wakeKind,
+        // 与 send_to_worker 一致:插话是投给已在线的 session,wake_kind 记为 already-active,另标 steered。
+        wake_kind: steered ? "already-active" : result.wakeKind,
+        ...(steered ? { steered: true } : {}),
+        ...(steer && !steer.steered ? { steer_fallback_reason: steer.reason } : {}),
+        ...(steer?.error ? { steer_error: steer.error } : {}),
         ...(result.responsibilityRecorded === false ? { responsibility_recorded: false, responsibility_note: "Task creation succeeded, but the responsibility record could not be saved. Do not recreate or resend this task; reconcile the responsibility with the host." } : {}),
         ...(result.wakeKind === "created"
           ? { note: createdNote(result.targetSessionId) }
           : {}),
         target_title: result.targetTitle,
         target_last_user_send_at: result.targetLastUserSendAt,
-        ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),
+        ...(result.queuedMessageId && !steered ? { queued_message_id: result.queuedMessageId } : {}),
         worktree_path: result.worktreePath ?? null,
         ...(result.projectDir !== undefined ? { project_path: result.projectDir } : {}),
         ...(result.wakeKind === "created"

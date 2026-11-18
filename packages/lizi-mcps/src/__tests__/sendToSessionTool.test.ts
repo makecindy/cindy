@@ -475,6 +475,72 @@ describe('send_to_session tool', () => {
     });
   });
 
+  // delivery=steer(#4647):主控任务向正在运行的任务转达用户答复时,不该等对方整轮结束。
+  // 工具层复用 steer_session_queued_message 的宿主实现;消息已经排队,转插话的任何失败都只能
+  // 报 steer_fallback_reason,不能变成错误(否则调用方会重发出重复消息)。默认 queue 不触发转插话。
+  it.each([
+    { name: 'steered', steer: { ok: true, queuedMessageId: 'q-1', delivery: 'steered' }, expected: { wake_kind: 'already-active', steered: true }, absent: ['queued_message_id', 'steer_fallback_reason'] },
+    { name: 'stays queued with host reason', steer: { ok: true, queuedMessageId: 'q-1', delivery: 'queued', reason: 'INPUT_BOUNDARY_BUSY' }, expected: { wake_kind: 'queued', queued_message_id: 'q-1', steer_fallback_reason: 'INPUT_BOUNDARY_BUSY' }, absent: ['steered'] },
+    { name: 'turn ended before steer', steer: { ok: false, errorCode: 'QUEUED_MESSAGE_NOT_FOUND', message: 'dispatched' }, expected: { wake_kind: 'queued', steer_fallback_reason: 'NO_ACTIVE_TURN' }, absent: ['steered', 'steer_error'] },
+    { name: 'steer rejected', steer: { ok: false, errorCode: 'NOT_AUTHORIZED', message: 'nope' }, expected: { wake_kind: 'queued', queued_message_id: 'q-1', steer_fallback_reason: 'STEER_FAILED', steer_error: 'NOT_AUTHORIZED: nope' }, absent: ['steered'] },
+    { name: 'steer throws', steer: new Error('authorization expired'), expected: { wake_kind: 'queued', steer_fallback_reason: 'STEER_FAILED', steer_error: 'authorization expired' }, absent: ['steered'] },
+    { name: 'host without steer support', steer: null, expected: { wake_kind: 'queued', queued_message_id: 'q-1', steer_fallback_reason: 'STEER_UNSUPPORTED' }, absent: ['steered'] },
+  ] as const)('delivery=steer 撞忙: $name', async ({ steer, expected, absent }) => {
+    const sendToSession = vi.fn<SendToSessionCallback>(async () => ({
+      ok: true, targetSessionId: UUID, agentKind: 'codex', wakeKind: 'queued', queuedMessageId: 'q-1',
+      targetTitle: 'Busy target', targetLastUserSendAt: null,
+    }));
+    const steerQueuedMessage = vi.fn(async () => {
+      if (steer instanceof Error) throw steer;
+      return steer as never;
+    });
+    const registry = new XdtHelperToolRegistry();
+    registerSendToSessionTool(registry, {
+      getSessionContext: () => ({ sessionId: 'disp-1', agentKind: 'claude-code', workingDir: '/tmp/wd' }),
+      sendToSession,
+      ...(steer === null ? {} : { steerQueuedMessage }),
+    });
+    const res = await registry.call('send_to_session', { target_session_id: UUID, message: '用户答复:改用方案 B', delivery: 'steer' });
+    expect(res.isError).toBeFalsy();
+    const payload = parse(res);
+    expect(payload).toMatchObject({ ok: true, ...expected });
+    for (const key of absent) expect(payload).not.toHaveProperty(key);
+    expect(sendToSession).toHaveBeenCalledOnce();
+    if (steer !== null) {
+      expect(steerQueuedMessage).toHaveBeenCalledWith({ callerSessionId: 'disp-1', targetSessionId: UUID, queuedMessageId: 'q-1' });
+    }
+  });
+
+  it('delivery=steer 只在消息进了队列时转插话; 默认 queue 与空闲目标都不触发, 新建任务拒绝', async () => {
+    const steerQueuedMessage = vi.fn();
+    const sendToSession = vi.fn<SendToSessionCallback>();
+    const registry = new XdtHelperToolRegistry();
+    registerSendToSessionTool(registry, {
+      getSessionContext: () => ({ sessionId: 'disp-1', agentKind: 'claude-code', workingDir: '/tmp/wd' }),
+      sendToSession,
+      steerQueuedMessage,
+    });
+    sendToSession.mockResolvedValue({
+      ok: true, targetSessionId: UUID, agentKind: 'codex', wakeKind: 'queued', queuedMessageId: 'q-1',
+      targetTitle: null, targetLastUserSendAt: null,
+    });
+    for (const args of [{}, { delivery: 'queue' }]) {
+      expect(parse(await registry.call('send_to_session', { target_session_id: UUID, message: 'm', ...args })))
+        .toMatchObject({ ok: true, wake_kind: 'queued', queued_message_id: 'q-1' });
+    }
+    sendToSession.mockResolvedValue({
+      ok: true, targetSessionId: UUID, agentKind: 'codex', wakeKind: 'resumed', targetTitle: null, targetLastUserSendAt: null,
+    });
+    const idle = parse(await registry.call('send_to_session', { target_session_id: UUID, message: 'm', delivery: 'steer' }));
+    expect(idle).toMatchObject({ ok: true, wake_kind: 'resumed' });
+    expect(idle).not.toHaveProperty('steer_fallback_reason');
+    expect(steerQueuedMessage).not.toHaveBeenCalled();
+
+    expect(parse(await registry.call('send_to_session', { message: 'new task', delivery: 'steer' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(sendToSession).toHaveBeenCalledTimes(3);
+  });
+
   it('无 dispatcher sessionId → host 仍被调(dispatcherSessionId=undefined), host 返 LEAD_NOT_SUPPORTED 透传', async () => {
     const { registry, sendToSession } = setup({
       sessionId: undefined,
@@ -607,6 +673,13 @@ describe('send_to_session → 另一台电脑上的任务', () => {
       ok: true, target_session_id: remoteId, target_device_id: 'mbp', agent_kind: 'codex',
       wake_kind: 'queued', target_title: 'remote task', target_last_user_send_at: null,
     });
+  });
+
+  it('delivery=steer 暂不支持跨电脑: 照常投递并如实返回 STEER_UNSUPPORTED', async () => {
+    const s = remoteSetup();
+    const sent = parse(await s.registry.call('send_to_session', { target_session_id: remoteId, message: 'hi', delivery: 'steer' }));
+    expect(s.sendToRemoteSession).toHaveBeenCalledOnce();
+    expect(sent).toMatchObject({ ok: true, wake_kind: 'queued', steer_fallback_reason: 'STEER_UNSUPPORTED' });
   });
 
   it('投递错误如实透传, 区分没有发出与结果未知', async () => {
