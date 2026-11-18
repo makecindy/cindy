@@ -1,5 +1,5 @@
 import {
-  markRemoteDraftEngineManuallySelected, persistedDraftVendor, resetRemoteDraftEngineFollow,
+  markRemoteDraftEngineManuallySelected, persistedDraftVendor, resetRemoteDraftEngineFollow, vendorAfterRemotePreferenceWrite,
 } from '@/features/cc-agent/remoteDraftEngineFollow';
 /**
  * newMakerDraft —— "/cc-agent/new" 草稿状态 + vendor 偏好的 localStorage 持久化。
@@ -1195,7 +1195,7 @@ export function clearDefaultTupleTuningCustomization(args: {
 function patchVendorPrefsInternal(
   vendor: MakerVendor,
   patch: Partial<VendorPrefs>,
-  opts: { markModelChoice: boolean },
+  opts: { markModelChoice: boolean; selectVendor?: boolean },
 ): void {
   rebaseStoredDefaultTuplePreference();
   const marksSelection = opts.markModelChoice && ('model' in patch || 'providerId' in patch);
@@ -1230,6 +1230,7 @@ function patchVendorPrefsInternal(
   }
   currentDraft = {
     ...currentDraft,
+    vendor: opts.selectVendor ? vendorAfterRemotePreferenceWrite(activeDataOwnerId, vendor) : currentDraft.vendor,
     defaultTupleCustomized: currentDraft.defaultTupleCustomized || marksDefaultTuple,
     defaultTupleSelectionCustomized:
       currentDraft.defaultTupleSelectionCustomized || marksSelection,
@@ -1243,8 +1244,12 @@ function patchVendorPrefsInternal(
   emit();
 }
 
-export function patchVendorPrefs(vendor: MakerVendor, patch: Partial<VendorPrefs>): void {
-  patchVendorPrefsInternal(vendor, patch, { markModelChoice: true });
+export function patchVendorPrefs(
+  vendor: MakerVendor,
+  patch: Partial<VendorPrefs>,
+  options?: { selectVendor?: boolean },
+): void {
+  patchVendorPrefsInternal(vendor, patch, { markModelChoice: true, selectVendor: options?.selectVendor });
 }
 
 /**

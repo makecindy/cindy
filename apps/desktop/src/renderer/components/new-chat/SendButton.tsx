@@ -96,9 +96,10 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
       }}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
-          // Holding Enter across a successful send must not start a call when the
-          // now-empty composer changes the focused button back to its idle action.
-          if (companionVoice && event.repeat) {
+          // Holding Enter across a successful send must not fire the action the shared button
+          // turns into (start a call, or Stop a turn the press just started or queued) when
+          // the composer state changes the focused button's action under the key.
+          if (event.repeat) {
             event.preventDefault();
             return;
           }

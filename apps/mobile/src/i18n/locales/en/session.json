@@ -869,7 +869,7 @@
   },
   "providerGroupRebalance": {
     "title": "Continue on {{label}}?",
-    "body": "To use every account’s quota evenly, send this message from {{label}} ({{quota}}). The last few messages and a summary carry over; older details may be lost.",
+    "body": "To use every account’s quota evenly, send this message from {{label}} ({{quota}}). Context from this chat will carry over. Earlier messages may be condensed, and the full chat history will remain available.",
     "quota": "{{left}}% left",
     "quotaReset": "{{left}}% left · resets in {{reset}}",
     "confirm": "Switch",

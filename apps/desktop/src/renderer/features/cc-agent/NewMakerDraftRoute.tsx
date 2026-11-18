@@ -2357,6 +2357,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
        * 既有调用点(handleEffortDidChange / handleFastModeChange)行为不变。
        */
       target?: {
+        explicitModelChoice: boolean;
         agent: MakerAgentKindWire;
         providerId: string | null;
         modelId: string;
@@ -2407,7 +2408,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               : (dlSel?.providerId ?? deviceLinkInitial?.providerId ?? ''),
             modelId: model,
             active: true,
-            markModelChoice: false,
+            ...(target?.explicitModelChoice
+              ? { markModelChoice: true, selectDraftAgent: true }
+              : { markModelChoice: false }),
             ...(activeEffort !== undefined ? { effort: activeEffort } : {}),
             ...(patch.fast !== undefined ? { fast: patch.fast } : {}),
           },
@@ -3662,6 +3665,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             fast: selection.fast,
           },
           {
+            explicitModelChoice: !selection.resetToRecommended,
             agent: dbToMakerAgentKind(normalizeDbAgentKind(selection.vendor)),
             providerId: selection.providerId,
             modelId: selection.modelId,
@@ -3752,6 +3756,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             fast: selection.fast,
           },
           {
+            explicitModelChoice: !selection.resetToRecommended,
             agent: dbToMakerAgentKind(normalizeDbAgentKind(selection.vendor)),
             providerId: selection.providerId,
             modelId: selection.modelId,

@@ -2558,6 +2558,11 @@ html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowCon
   }
 }
 @layer components {
+  .mcp-app-fullscreen [data-exit-fullscreen] {
+    /* The button has a 1px border, so a 2px inset leaves 3px on each edge. */
+    --button-face-outset: -2px;
+  }
+  .mcp-app-fullscreen::backdrop,
   .modal-scrim {
     background-color: var(--overlay-modal);
     backdrop-filter: blur(4px);
@@ -2571,6 +2576,7 @@ html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowCon
   .modal-panel[data-state='closed'] {
     animation: modal-fade-out var(--motion-exit) var(--motion-ease-in) forwards;
   }
+  [data-platform='win32'] .mcp-app-fullscreen::backdrop,
   [data-platform='win32'] .modal-scrim {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;

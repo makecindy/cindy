@@ -156,6 +156,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
       activeOwnerScopeKey: () => 'recovered-scope', getActiveAppSession: () => ({ dataOwnerId: scenario.ownerId }),
       getActiveDataOwnerPushStamp: () => recovered, getMakerIfReady: () => scenario.liveMaker ? {} : null,
       refreshHostToolProviderOwner: hostTools.refreshHostToolProviderOwner,
+      scheduleNativeHistoryBackupCleanup: () => {},
       builtinPostCommitStep: { run: async () => 'deferred' },
     };
     try {

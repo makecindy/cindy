@@ -63,6 +63,8 @@ export class RelayUdpPath {
   /** 发出了、还没确认的登记：计数器 → 发出时刻与带的凭证。确认一个就删掉它和更早的，所以重放的确认找不到登记，不算数。 */
   private readonly pending = new Map<bigint, { at: number; cookie: Uint8Array | null }>();
   private ackedAt = Number.NEGATIVE_INFINITY;
+  /** 最近一次被认下的登记从发出到确认的毫秒数；换会话、换中继地址后清空。 */
+  private rtt: number | null = null;
   /** 上次确认之后发出的第一次登记的时刻；全部确认了就是 null。 */
   private unackedSince: number | null = null;
   private registeredAt = Number.NEGATIVE_INFINITY;
@@ -88,6 +90,12 @@ export class RelayUdpPath {
     return this.server !== null && this.credentials !== null && this.credentials === this.options.credentials()
       && now - this.ackedAt < ACK_FRESH_MS && (this.unackedSince === null || now - this.unackedSince < UNACKED_DOWN_MS);
   }
+
+  /**
+   * 经 UDP 到中继的往返毫秒数：最近一次登记到它的确认（登记本来就定时发，不另发包）。UDP 不通时为 null。
+   * 远程连接页在中转走 UDP 时显示它，而不是 WebSocket 心跳的往返（2026-11-18 用户要求：走 UDP 就显示 UDP 的延迟）。
+   */
+  get rttMs(): number | null { return this.up ? this.rtt : null; }
 
   /** 走 UDP 发出去了返回 true；否则调用方改走 WebSocket。 */
   send(relayId: string, datagram: Uint8Array): boolean {
@@ -136,6 +144,7 @@ export class RelayUdpPath {
       else if (oldest === null || registration.at < oldest) oldest = registration.at;
     }
     this.ackedAt = now;
+    this.rtt = Math.round(now - sent.at);
     this.unackedSince = oldest;
     this.cookie = cookie;
     // 刚通：马上告诉中继收得到，不等下一次定时登记。中继没认定这个地址（刚换了地址、凭证过期）而给了新凭证：马上带上它再登记，
@@ -173,6 +182,7 @@ export class RelayUdpPath {
     this.cookie = null;
     this.pending.clear();
     this.ackedAt = Number.NEGATIVE_INFINITY;
+    this.rtt = null;
     this.unackedSince = null;
     this.registeredAt = Number.NEGATIVE_INFINITY;
   }

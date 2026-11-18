@@ -5,6 +5,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { createHash, verify } from 'node:crypto';
 import WebSocket from 'ws';
@@ -300,11 +301,21 @@ it.skipIf(!library)('runs real DeviceLinkClient requests and a multi-megabyte re
       createWebSocket: (url, headers) => new WebSocket(url, { headers }) as unknown as BinarySocket,
     });
     const live = { socket: null as PortableSocket | null };
+    let holdPoll = false, pollPaused = false, pollEntered!: () => void, releasePoll!: () => void, dialEntered!: () => void;
+    const pollHeld = new Promise<void>(resolve => { pollEntered = resolve; });
+    const resumePoll = new Promise<void>(resolve => { releasePoll = resolve; });
+    const dialStarted = new Promise<void>(resolve => { dialEntered = resolve; });
+    cleanups.push(() => releasePoll());
     const visitor = new DeviceLinkClient({ getWsUrl: () => 'ws://local-node.invalid', getToken: async () => 'native-resource',
       getHello: () => ({ deviceName: guest.deviceId, platform: 'unit', appVersion: 'unit', remoteControlEnabled: false, busy: false }),
       createWebSocket: () => PortableSocket.openWithBindings({ client: guestApi, userId: 'global:external-guest', lanDiscovery: false,
         bindings: { verifyCertificate, verifyDelegation, createTransport: options => NativeTransport.create({
-          command: value => peer.call(value), destroy: () => peer.destroy(),
+          async command<T>(value: Record<string, unknown>): Promise<T> {
+            const result = await peer.call(value);
+            if (value.op === 'poll' && holdPoll) { holdPoll = false; pollPaused = true; pollEntered(); await resumePoll; }
+            if (value.op === 'connect' && pollPaused) dialEntered();
+            return result as T;
+          }, destroy: () => peer.destroy(),
         }, options) } }).then(socket => { live.socket = socket; return socket; }),
       timing: { requestTimeoutMs: 4000 }, logger: { debug() {}, info() {}, warn() {}, error() {} },
     });
@@ -323,8 +334,18 @@ it.skipIf(!library)('runs real DeviceLinkClient requests and a multi-megabyte re
       await hostApi.request('POST', '/grants', { delegation: endorsed, previousSignature: delegation.signature });
       const target = providerShareHostPeer('native-resource', member.deviceId);
       await until(async () => !!live.socket?.scopedPeerTarget(target));
-      await visitor.openLink(target, { controllerName: 'Native visitor', appVersion: 'unit', protocolVersion: 1 });
+      // Integration regression: the real native bridge returns an old poll after
+      // the new executor dial starts. Existing ABI coverage only ran this race
+      // by chance; keep a successful host peer while opening the second route.
+      holdPoll = true; await pollHeld;
+      const opened = visitor.openLink(target, { controllerName: 'Native visitor', appVersion: 'unit', protocolVersion: 1 });
+      const accepted = expect(opened).resolves.toMatchObject({ appVersion: 'unit' });
+      await dialStarted;
+      await nextTurn(); releasePoll();
+      await accepted;
       expect(await visitor.invoke(target, { channel: 'test:echo', args: ['native executor RPC'] })).toMatchObject({ ok: true, result: 'native executor RPC' });
+      expect(await visitor.invoke(resourcePeer, { channel: 'test:echo', args: ['original host still works'] }))
+        .toMatchObject({ ok: true, result: 'original host still works' });
     }
     await expect(visitor.openLink(member.deviceId, { controllerName: 'Forbidden', appVersion: 'unit', protocolVersion: 1 }))
       .rejects.toMatchObject({ code: 'FORBIDDEN' });

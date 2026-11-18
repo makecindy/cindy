@@ -86,7 +86,10 @@ export function ProviderShareManagePage({
   const selfDeviceName = deviceId ? deviceName ?? devices?.find((device) => device.deviceId === deviceId)?.name ?? null
     : devices?.find((device) => device.isSelf)?.name ?? null;
   const [remoteGroup, setRemoteGroup] = useState<ProviderGroupConfig | null>(initialGroup ?? null);
-  const [state, setState] = useState<ProviderShareOwnerState | null>(null);
+  const [rosterRead, setRosterRead] = useState<{
+    state: ProviderShareOwnerState; owner: ReturnType<typeof getDataOwnerGeneration>; deviceId?: string;
+  } | null>(null);
+  const state = rosterRead?.state ?? null;
   const [noteMemberId, setNoteMemberId] = useState<string | null>(null);
   const [modelMemberId, setModelMemberId] = useState<string | null>(null);
   const modelTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -117,7 +120,7 @@ export function ProviderShareManagePage({
     remoteLoading.current = false;
     if (!isDataOwnerGenerationCurrent(owner)) return;
     if (owned.ok) {
-      setState(owned.value);
+      setRosterRead({ state: owned.value, owner, deviceId });
       setLoadFailed(false);
       setLoadErrorKey(null);
       publishProviderShareOwnerState(owned.value, deviceId ? { hostDeviceId: deviceId } : undefined);
@@ -370,6 +373,22 @@ export function ProviderShareManagePage({
         <h2 className={`min-w-0 flex-1 ${SETTINGS_PAGE_TITLE_CLASS}`}>
           {t('providerGroup.page.title', { provider: providerName })}
         </h2>
+        {!deviceId && rosterRead && !rosterRead.deviceId && members.length > 0 && (
+          <Button variant="secondary" size="md" disabled={!ready || loadFailed || busy.has('export-roster')}
+            onClick={() => void withBusy('export-roster', async () => {
+              const { owner } = rosterRead;
+              if (!isDataOwnerGenerationCurrent(owner)) return;
+              try {
+                await window.electronAPI.providerShare.exportRoster(providerId, {
+                  dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation,
+                });
+              } catch {
+                if (isDataOwnerGenerationCurrent(owner)) toast.error(t('providerShare.manage.exportRosterFailed'));
+              }
+            })}>
+            {t('providerShare.manage.exportRoster')}
+          </Button>
+        )}
         <Button variant="cta" size="md" disabled={!canCreateLink} onClick={() => setLinkOpen(true)}>
           {t('providerShare.manage.createLink')}
         </Button>

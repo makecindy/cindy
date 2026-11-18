@@ -445,6 +445,8 @@
     },
     "manage": {
       "createLink": "Freigabelink erstellen",
+      "exportRoster": "Mitgliederliste exportieren",
+      "exportRosterFailed": "Die Mitgliederliste konnte nicht gespeichert werden.",
       "loading": "Freigabe wird geladen…",
       "notReady": "Die Freigabe ist derzeit nicht verfügbar. Stelle sicher, dass du angemeldet und online bist. Es wird automatisch erneut versucht.",
       "loadFailed": "Die Freigabedetails konnten nicht geladen werden. Versuche es gleich erneut.",
@@ -933,7 +935,7 @@
       "title": "Auf {{label}} fortsetzen?",
       "fallbackTitle": "Auf {{label}} mit einer Zusammenfassung fortsetzen?",
       "fallbackDescription": "Die ursprüngliche Unterhaltung konnte nicht vollständig wiederhergestellt werden. In einer Zusammenfassung können frühere Details und Toolergebnisse weggelassen werden. Abbrechen, um auf dem ursprünglichen Computer zu senden.",
-      "description": "Um das Kontingent aller Konten gleichmäßig zu nutzen, sende diese Nachricht über {{label}} ({{quota}}). Die letzten Nachrichten und eine Zusammenfassung werden übernommen; ältere Details können verloren gehen.",
+      "description": "Um das Kontingent aller Konten gleichmäßig zu nutzen, sende diese Nachricht über {{label}} ({{quota}}). Der Gesprächsverlauf wird übernommen. Ältere Teile können gekürzt werden, damit sie in das Modell passen.",
       "quota": "{{left}} % übrig",
       "quotaReset": "{{left}} % übrig · {{reset}}",
       "confirm": "Nur dieses Mal wechseln",
@@ -6797,6 +6799,10 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
+        },
         "onlyEncrypted": "Nur Agent-Net verwenden",
         "onlyEncryptedHint": "Ältere Geräte und Freigaben über die bisherige Verbindung sind dann nicht verfügbar. Standardmäßig deaktiviert.",
         "peerSwitch": {
@@ -10989,6 +10995,8 @@
     "autosave": {
       "saving": "Wird gespeichert…",
       "saved": "Gespeichert",
+      "unconfirmed": "Speichern nicht bestätigt",
+      "savedModel": "Gespeichert · ab nächstem Zug",
       "retry": "Erneut speichern"
     },
     "retry": "Erneut versuchen",
@@ -11102,7 +11110,7 @@
       "discard": "Änderungen verwerfen",
       "continueEditing": "Weiter bearbeiten"
     },
-    "profileSaveFailed": "Die Einstellungen des Freundes konnten nicht gespeichert werden. Es wurden keine Änderungen übernommen.",
+    "profileSaveFailed": "Die Einstellungen des Freundes konnten nicht gespeichert werden.",
     "profileSaveOffline": "Der Computer des Freundes ist nicht erreichbar. Stellen Sie die Verbindung wieder her und speichern Sie erneut.",
     "modelLabel": "Modell",
     "modelUnavailable": "{{model}} (derzeit nicht verfügbar)",
@@ -14089,7 +14097,7 @@
         "effortEndFast": "Schneller",
         "effortEndSmart": "Intelligenter",
         "railSameEngine": "Nur {{agent}}",
-        "crossEngineWarning": "Beim Engine-Wechsel wird der Kontext neu aufgebaut; Inhalte können verloren gehen",
+        "crossEngineWarning": "Mit der nächsten Nachricht wechselt die Engine und übernimmt den Gesprächsverlauf. Ältere Teile können gekürzt werden.",
         "favoritesSyncFailed": "Favoriten konnten nicht synchronisiert werden. Öffne die Auswahl erneut, um es noch einmal zu versuchen; der entfernte Computer benötigt möglicherweise ein Update.",
         "favoritesSyncFailedUnreachable": "Favoriten sind noch nicht synchronisiert: Der Computer ist nicht erreichbar. Öffne die Auswahl erneut, sobald die Verbindung wiederhergestellt ist.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14105,12 +14113,8 @@
         "ultrafast": "Ultraschnell"
       },
       "discoveredCopy": {
-        "title": "{{provider}} auf „{{device}}“ verwenden?",
-        "description": "{{unavailable}} Wenn du fortfährst, läuft es auf „{{device}}“. Du kannst hier jederzeit zurückwechseln.",
         "unavailableHere": "{{provider}} auf diesem Computer ist gerade nicht verfügbar.",
-        "unavailableOn": "{{provider}} auf „{{device}}“ ist gerade nicht verfügbar.",
-        "confirm": "Verwenden",
-        "cancel": "So beibehalten"
+        "unavailableOn": "{{provider}} auf „{{device}}“ ist gerade nicht verfügbar."
       }
     },
     "permissionSelector": {
@@ -14376,33 +14380,14 @@
       "credentialSwitchApplied": "Der Wechsel des Modellanbieters ist jetzt wirksam.",
       "credentialSwitchFailed": "Wechsel des Modellanbieters fehlgeschlagen. Wähle das Modell erneut.",
       "modelSwitchContextGuard": {
-        "title": "Diese Unterhaltung passt nicht in dieses Modell",
         "warnToast": "Diese Unterhaltung nutzt bereits {{used}} — etwa {{pct}} % der Kapazität von {{total}} des neuen Modells",
-        "overflowDescription": "Diese Unterhaltung nutzt bereits {{used}}, mehr als das neue Modell aufnehmen kann ({{total}}, etwa {{pct}} %). Wenn du wechselst, erstellt Cindy eine kurze Zusammenfassung und fährt fort. Dein Chatverlauf bleibt erhalten, wird aber nicht vollständig wortgetreu übergeben.",
-        "overflowDescriptionRemote": "Diese entfernte Aufgabe nutzt bereits {{used}} / {{total}} des Kontexts des kleineren Modells (etwa {{pct}} %). Deshalb kann Cindy nicht sicher wechseln. Behalte das aktuelle Modell oder starte eine neue Aufgabe, bevor du dieses Modell auswählst.",
-        "confirmSwitch": "Wechseln und fortfahren",
-        "cancelSwitch": "Dieses Modell behalten"
+        "condensedToast": "Ältere Teile des Gesprächs werden für das neue Modell gekürzt. Der vollständige Verlauf bleibt verfügbar.",
+        "overflowDescriptionRemote": "Diese entfernte Aufgabe nutzt bereits {{used}} / {{total}} des Kontexts des kleineren Modells (etwa {{pct}} %). Deshalb kann Cindy nicht sicher wechseln. Behalte das aktuelle Modell oder starte eine neue Aufgabe, bevor du dieses Modell auswählst."
       },
       "agentSwitch": {
         "engineNotReady": "Engine gewechselt, aber die neue Engine konnte nicht starten; beim Senden einer Nachricht wird es erneut versucht",
         "failed": "Engine-Wechsel fehlgeschlagen; nicht angewendet",
-        "deferred": "Wechsel vorgemerkt: Beim Senden deiner nächsten Nachricht wird zu {{agent}} · {{model}} gewechselt",
-        "confirmation": {
-          "title": "Agent wechseln?",
-          "description": "Die neue Agent-Engine setzt die Arbeit anhand einer Übergabezusammenfassung fort. Daher ist nicht garantiert, dass Denkprozesse und andere Inhalte vollständig übernommen werden. Wenn du zurückwechselst, kannst du die Sitzung der ursprünglichen Engine fortsetzen. Der Wechsel unterbricht außerdem einmalig den Prompt-Cache und kann den Tokenverbrauch erhöhen.",
-          "confirm": "Agent wechseln",
-          "cancel": "Aktuellen Agent behalten",
-          "dontShowAgain": "Nicht erneut erinnern"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "Agent wieder auf diesem Computer ausführen?",
-        "titleOther": "Agent auf „{{device}}“ ausführen?",
-        "description": "Der Unterhaltungsverlauf auf dem anderen Computer kann nicht übertragen werden. Die Fortsetzung erfolgt daher anhand einer Übergabezusammenfassung. Denkprozesse und ähnliche Details werden möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
-        "descriptionNativeHistory": "Der vollständige Unterhaltungsverlauf wird mitkopiert und nahtlos fortgesetzt. Kann er nicht wiederhergestellt werden, erfolgt die Fortsetzung anhand einer Übergabezusammenfassung; Denkprozesse und ähnliche Details werden dann möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
-        "confirm": "Computer wechseln",
-        "cancel": "So beibehalten",
-        "discoveredDescription": "{{reason}} {{description}}"
+        "deferred": "Wechsel vorgemerkt: Beim Senden deiner nächsten Nachricht wird zu {{agent}} · {{model}} gewechselt"
       }
     },
     "agentSelect": {
@@ -15511,6 +15496,11 @@
         "relocatedTaskComputer": "Agent läuft jetzt auf dem Computer der Aufgabe",
         "relocatedElsewhere": "Agent läuft jetzt auf einem anderen Computer",
         "quotaRebalance": "sein Kontingent sollte zuerst genutzt werden"
+      },
+      "handoffCoverage": {
+        "complete": "Gespräch vollständig übernommen",
+        "condensed": "Ältere Teile gekürzt",
+        "details": "Für die Fortsetzung übernommene Inhalte"
       },
       "contextRebuild": {
         "labelOverflow": "Kontext neu organisiert, wird fortgesetzt",
@@ -16899,6 +16889,7 @@
         "summaryAria": "Zusammenfassung von PR #{{number}} anzeigen",
         "unresolvedLabel": "Ungelöste Review-Threads",
         "checks": "Prüfungen",
+        "following": "Wird verfolgt",
         "checksTotal": "Insgesamt {{count}}",
         "failed": "Fehlgeschlagen",
         "passed": "Bestanden",
@@ -21496,6 +21487,24 @@
   },
   "featureIntro": {
     "close": "Schließen",
+    "project": {
+      "title": "So funktionieren Projekte",
+      "lead": "Gib jeder längeren Arbeit ein Projekt. Die Dateien liegen in einem Ordner auf deinem Computer, und Cindy macht jedes Mal beim letzten Stand weiter, ohne neue Erklärung.",
+      "files": {
+        "title": "Deine Ergebnisse",
+        "body": "Cindy arbeitet direkt im Projektordner. Was entsteht, bleibt auf deinem Computer."
+      },
+      "context": {
+        "title": "Nichts neu erklären",
+        "body": "Neue Aufgaben im Projekt sehen diese Dateien sofort und kennen dessen Vorgaben."
+      },
+      "separate": {
+        "title": "Sauber getrennt",
+        "body": "Jedes Projekt bündelt seine Aufgaben, verschiedene Arbeiten vermischen sich nicht."
+      },
+      "start": "Weiter zum neuen Projekt",
+      "note": "Ein Name genügt. Ein vorhandener Ordner oder ein Code-Repository geht auch."
+    },
     "taskInbox": {
       "title": "Der Posteingang",
       "lead": "Aufgaben ordnen sich selbst in Offen, In Arbeit, Zurückgestellt und Erledigt ein. Am besten hältst du den Posteingang leer: Klicke auf Erledigt, wenn eine Aufgabe fertig ist, und stelle zurück, was warten kann.",

@@ -32,6 +32,52 @@ function execRequest() {
 }
 
 describe("legacy Responses tool item ids", () => {
+  // #9645: saved msg_ tool items must replay without changing history or invocation pairing.
+  // Unit: the public wire normalizer lacked this prefix; ordinary message/reference IDs stay opaque.
+  it("repairs message-prefixed tool history while preserving payloads and call_id pairing", () => {
+    const body = { input: [
+      { type: "custom_tool_call", id: "msg_custom", call_id: "call_custom", name: "exec", input: "msg_literal" },
+      { type: "custom_tool_call_output", id: "msg_result", call_id: "call_custom", output: [{ type: "input_text", text: "msg_literal" }] },
+      { type: "function_call", id: "msg_function", call_id: "call_function", name: "read_file", arguments: "{}" },
+      { type: "function_call_output", id: "msg_function_result", call_id: "call_function", output: "ok" },
+      { type: "message", id: "msg_message", content: "unchanged" },
+      { type: "item_reference", id: "msg_reference" },
+      { type: "compaction", id: "msg_compaction", encrypted_content: "unchanged" },
+    ] };
+    const original = structuredClone(body);
+    const repaired = normalizeResponsesToolItemIds(body)!;
+    const items = repaired.input as typeof body.input;
+    expect(items).toEqual(original.input.map((item, index) => ({
+      ...item,
+      id: ["ctc_custom", "ctco_result", "fc_function", "fco_function_result"][index] ?? item.id,
+    })));
+    expect(items[1]!.output).toBe(body.input[1]!.output);
+    expect(body).toEqual(original);
+    expect(normalizeResponsesToolItemIds(repaired)).toBeNull();
+  });
+
+  // #11371 review: a 64-character msg_ output expands to 65 after ctco_ repair.
+  // Unit: previous short-ID matrices missed the upstream length limit; suffixes must not collide.
+  it.each([63, 64, 80])("keeps rewritten tool IDs within the wire limit (legacy length %s)", (length) => {
+    const types = ["custom_tool_call", "custom_tool_call_output", "function_call", "function_call_output"];
+    const input = types.flatMap(type => ["a", "b"].map(tail => ({
+      type, id: `msg_${"x".repeat(length - 5)}${tail}`, call_id: "call_pair", output: "unchanged",
+    })));
+    const original = structuredClone(input);
+    const body = normalizeResponsesToolItemIds({ input })!;
+    const items = body.input as typeof input;
+    for (const [index, item] of items.entries()) {
+      expect(item.id).toMatch(new RegExp(`^${["ctc_", "ctco_", "fc_", "fco_"][Math.floor(index / 2)]}`));
+      expect(item.id.length).toBeLessThanOrEqual(64);
+      expect(item.call_id).toBe("call_pair");
+      expect(item.output).toBe("unchanged");
+    }
+    expect(new Set(items.map(item => item.id)).size).toBe(items.length);
+    expect(normalizeResponsesToolItemIds({ input })).toEqual(body);
+    expect(normalizeResponsesToolItemIds(body)).toBeNull();
+    expect(input).toEqual(original);
+  });
+
   it("repairs tool-less compact history without changing invocation ids, payloads or opaque items", () => {
     const body = { model: "gpt-6", input: [
       { type: "custom_tool_call", id: "fc_old", call_id: "fc_invocation", name: "exec", input: "fc_literal" },
@@ -93,11 +139,14 @@ describe("Responses custom-tool function adapter", () => {
     vi.useRealTimers();
   });
 
-  it.each([false, true])("keeps response ids consistent across parallel calls and final output (SSE=%s)", async (sse) => {
+  it.each([false, true].flatMap(sse => ["fc", "msg", "call"].flatMap(prefix =>
+    [false, true].map(longIds => ({ sse, prefix, longIds })),
+  )))(
+    "keeps $prefix response ids consistent across parallel calls and final output (SSE=$sse, long=$longIds)", async ({ sse, prefix, longIds }) => {
     const adapter = createResponsesCustomToolFunctionAdapter(["exec"]);
     adapter.adaptRequest(execRequest(), 1);
     const calls = ["a", "b"].map(key => ({
-      type: "function_call", id: `fc_${key}`, call_id: `call_${key}`, name: "exec",
+      type: "function_call", id: `${prefix}_${longIds ? "x".repeat(80) : ""}${key}`, call_id: `call_${key}`, name: "exec",
       arguments: JSON.stringify({ input: `text("你好 ${key}")` }),
     }));
     const unrelated = { type: "function_call", id: "fc_other", call_id: "call_other", name: "read_file", arguments: "{}" };
@@ -130,14 +179,14 @@ describe("Responses custom-tool function adapter", () => {
     const rewritten = sse ? output.split("\n").filter(line => line.startsWith("data: ")).map(line => JSON.parse(line.slice(6))) : [];
     const response = sse ? rewritten.at(-1).response : JSON.parse(output);
     expect(response.output).toEqual([
-      ...calls.map((call, index) => ({ type: "custom_tool_call", id: index ? "ctc_b" : "ctc_a", call_id: call.call_id, name: "exec", input: JSON.parse(call.arguments).input })),
+      ...calls.map((call, index) => ({ type: "custom_tool_call", id: longIds ? expect.stringMatching(/^ctc_[a-f0-9]{60}$/) : index ? "ctc_b" : "ctc_a", call_id: call.call_id, name: "exec", input: JSON.parse(call.arguments).input })),
       unrelated,
     ]);
     if (sse) {
-      expect(rewritten.filter(event => event.type === "response.custom_tool_call_input.done").map(event => event.item_id)).toEqual(["ctc_b", "ctc_a"]);
+      expect(rewritten.filter(event => event.type === "response.custom_tool_call_input.done").map(event => event.item_id)).toEqual([response.output[1].id, response.output[0].id]);
       for (const event of rewritten) {
         if (event.output_index === 0 || event.output_index === 1) {
-          const expected = event.output_index === 0 ? "ctc_a" : "ctc_b";
+          const expected = response.output[event.output_index].id;
           if (event.item) expect(event.item.id).toBe(expected);
           if (event.item_id) expect(event.item_id).toBe(expected);
         }
@@ -147,7 +196,10 @@ describe("Responses custom-tool function adapter", () => {
     const compactBody = { model: "gpt-6", input: response.output };
     expect(normalizeResponsesToolItemIds(compactBody)).toBeNull();
     const adapted = adapter.adaptRequest({ ...execRequest(), input: response.output }, 2) as { input: Array<{ id: string; call_id: string }> };
-    expect(adapted.input.map(item => item.id)).toEqual(["fc_a", "fc_b", "fc_other"]);
+    expect(new Set(response.output.map((item: { id: string }) => item.id)).size).toBe(3);
+    expect(adapted.input.map(item => item.id)).toEqual(
+      response.output.map((item: { id: string }) => item.id.replace(/^ctc_/, "fc_")),
+    );
     expect(adapted.input.map(item => item.call_id)).toEqual(["call_a", "call_b", "call_other"]);
   });
 
