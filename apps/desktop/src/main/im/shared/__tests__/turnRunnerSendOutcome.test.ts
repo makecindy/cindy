@@ -5262,6 +5262,70 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
   describe('session runtime liveness (#9636)', () => {
     const SESSION_ID = 'feishu-session';
 
+    // #11381 diagnostic review: real Maker/Session cleanup must block a second
+    // native startup and report cleanup separately from preparation and send.
+    // Existing fake-Maker cases did not exercise raw handle.close rejection.
+    // Unit: injected transport/storage, synthetic error text, no native process.
+    it.each(['closing-cleanup', 'error-cleanup', 'startup'] as const)(
+      'classifies runtime preparation failure safely (%s)', async (mode) => {
+        let canClose = mode === 'startup';
+        const ended = deferred<void>();
+        const send = vi.fn(async () => undefined);
+        const handle = {
+          id: 'diagnostic-thread', agentKind: 'claude-code', model: 'm', send,
+          close: vi.fn(async () => {
+            if (!canClose) throw new Error('PROMPT_SECRET /private/runtime');
+            ended.resolve();
+          }),
+          isTurnRunning: () => false, setInteractionResolver() {},
+          async *events() { await ended.promise; yield* [] as AgentEvent[]; },
+        } as unknown as AgentSessionHandle;
+        const startSession = vi.fn(async () => handle);
+        const agent = { kind: 'claude-code', capabilities: {}, startSession } as unknown as BaseAgent;
+        const storage = {
+          get: vi.fn(async () => null),
+          create: vi.fn(async meta => ({ ...meta, createdAt: 1, updatedAt: 1 })),
+          update: vi.fn(async () => {}), list: vi.fn(async () => []), delete: vi.fn(async () => {}),
+        } as unknown as SessionStorage;
+        const logger = { ...mocks.logger, trace() {}, fatal() {}, child() { return this; } };
+        const maker = new Maker({ agents: { 'claude-code': agent }, storage, logger });
+        const session = await maker.createSession({ id: SESSION_ID, agentKind: 'claude-code', workingDir: '/repo', model: 'm' });
+        mocks.getMaker.mockReturnValue(maker);
+        const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+          acquirePendingAgentSwitch: vi.fn(async () => () => {}),
+        });
+        localRunner.attachSessionOutput(session, 'ou_user');
+        // Both retained-runtime branches are supported by Maker: teardown has
+        // already started, or an error runtime has not started teardown yet.
+        const statusProbe = mode === 'closing-cleanup' ? null
+          : vi.spyOn(session, 'getStatus').mockReturnValue('error');
+        try {
+          if (mode === 'closing-cleanup') await expect(session.close()).rejects.toThrow('PROMPT_SECRET');
+          if (mode === 'startup') {
+            startSession.mockRejectedValueOnce(Object.assign(new Error('PROMPT_SECRET /private/startup'), { code: 'PRECONDITION_FAILED' }));
+          }
+          await localRunner.runAgentTurn({ botContextId: 'cli_test_bot', userId: 'ou_user',
+            userMessageId: 'diagnostic-failure', text: 'hello', attachments: [] });
+          const code = mode === 'startup' ? 'PRECONDITION_FAILED' : 'SESSION_CLEANUP_PENDING';
+          const source = mode === 'startup' ? 'session.prepare' : 'session-cleanup';
+          expectSafeSendOutcomeLog({ source, reason: code });
+          expect(send).not.toHaveBeenCalled();
+          expect(startSession).toHaveBeenCalledTimes(mode === 'startup' ? 2 : 1);
+          if (mode !== 'startup') expect(maker.getSession(SESSION_ID)).toBe(session);
+          const failure = mocks.logger.error.mock.calls.find(call => call[0] === 'feishu session send failed before dispatch');
+          expect(failure?.[1]).toMatchObject({ source, reason: code, error: { errorCode: code, safeMessage: code } });
+          expect(JSON.stringify(failure)).not.toContain('PROMPT_SECRET');
+          expect(mocks.feishuIm.sendText.mock.calls.map(call => String(call[1]))).toContain(`❌ 启动 Agent 失败：${code}`);
+          expect(JSON.stringify(mocks.feishuIm.sendText.mock.calls)).not.toContain('PROMPT_SECRET');
+        } finally {
+          statusProbe?.mockRestore();
+          canClose = true;
+          await localRunner.disposeAllSessions();
+          await maker.closeSession(SESSION_ID);
+        }
+      },
+    );
+
     function createLivenessSetup(options: { onRebuild?: (previous: Session) => void | Promise<void> } = {}) {
       const previous = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
       const replacement = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
@@ -5478,6 +5542,27 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
         await localRunner.disposeAllSessions();
       }
       expect(replacement.listenerCount()).toBe(0);
+    });
+
+    // #11381/4616692726: project-switch disposal closes a runtime, whereas
+    // dispose-all only drops this channel's observation. A late replacement
+    // must not survive the single-task disposal with its old project config.
+    it('retires the late replacement after single-task disposal during rebuilding', async () => {
+      const { previous, replacement, maker, localRunner, runTurn } = createLivenessSetup({
+        onRebuild: async () => { await localRunner.disposeOneSession(SESSION_ID); },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        await runTurn();
+        expect(previous.session.close).toHaveBeenCalledOnce();
+        expect(maker.closeSessionIfCurrent).toHaveBeenCalledWith(replacement.session);
+        expect(replacement.session.close).toHaveBeenCalledOnce();
+        expect(maker.getSession()).toBeUndefined();
+        expect(replacement.send).not.toHaveBeenCalled();
+        expect(replacement.listenerCount()).toBe(0);
+      } finally {
+        await localRunner.disposeAllSessions();
+      }
     });
 
     it('does not send after an explicit stop during runtime rebuilding', async () => {

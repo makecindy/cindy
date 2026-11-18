@@ -144,6 +144,8 @@ const HOST_SEND_FAILURE_CODE_SET: ReadonlySet<string> = new Set([
   ...SESSION_UNAVAILABLE_CODES,
   // Stable IPC category only; the associated free text is never exposed.
   'PRECONDITION_FAILED',
+  // Maker has not confirmed release of the previous runtime's resources.
+  'SESSION_CLEANUP_PENDING',
 ]);
 
 export function sanitizeSendOutcomeError(err: unknown): SanitizedSendOutcomeError {

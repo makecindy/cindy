@@ -90,6 +90,7 @@ import {
   createSessionUnavailableError,
   isTerminalAgentErrorEvent,
   MAIN_OWNED_SEND_CONTEXT,
+  SessionCreationCleanupPendingError,
   TurnPermissionPolicyUnsupportedError,
 } from '@cindy/maker-core';
 import type {
@@ -371,6 +372,8 @@ type DetachDrainOutcome = 'rewire' | 'cancelled';
 interface SessionState {
   /** Keep the original session configuration even when no persistent takeover exists. */
   preserveSessionConfig: boolean;
+  /** Single-task disposal retires late replacements; channel detach does not. */
+  runtimeDisposalRequested?: boolean;
   /** Maker session (in-process). */
   makerSession: MakerSession;
   /** 渠道 user id of the bot's owner — kept here so listeners can address replies. */
@@ -1601,6 +1604,7 @@ export function createTurnRunner(
     );
     let acceptedAt = 0;
     let turnChangeSetStarted = false;
+    let failureSource = 'session.prepare';
 
     let releaseAgentSwitchLock = (): void => {};
     try {
@@ -1854,6 +1858,7 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'aborted' };
       }
 
+      failureSource = 'session.send';
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
         // IM owns successful replies, including turns in an attached desktop task.
@@ -2103,7 +2108,7 @@ export function createTurnRunner(
         });
         return { kind: 'rejected', reason: turnPolicyFailureReason };
       }
-      const normalized = normalizeSendError(err);
+      const normalized = normalizeSendError(err, failureSource);
       if (normalized.reason === 'SESSION_RUNNING') {
         releaseTurnInteractionRoute(item.turn, 'session_running_race');
         const i = state.queue.indexOf(item.turn);
@@ -2272,6 +2277,7 @@ export function createTurnRunner(
     // Disposal may finish during either await above. Do not install an observer
     // after its owner has cleaned up: it could observe a later wiring of this id.
     if (sessionStates.get(sessionId) !== state) {
+      if (state.runtimeDisposalRequested) await maker.closeSessionIfCurrent(current);
       throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} detached while preparing its runtime`);
     }
     if (current === previous) return;
@@ -3869,7 +3875,7 @@ export function createTurnRunner(
     return `session:${createHash('sha256').update(sessionId).digest('hex').slice(0, 12)}`;
   }
 
-  function normalizeSendError(err: unknown): {
+  function normalizeSendError(err: unknown, source = 'session.prepare'): {
     source: string;
     reason: string;
     error: SanitizedSendOutcomeError;
@@ -3883,7 +3889,7 @@ export function createTurnRunner(
       };
     }
     return {
-      source: 'session.send',
+      source: err instanceof SessionCreationCleanupPendingError ? 'session-cleanup' : source,
       reason: error.safeMessage ?? error.errorName ?? error.errorKind ?? 'unknown',
       error,
     };
@@ -4801,6 +4807,7 @@ export function createTurnRunner(
   async function disposeOneSession(sessionId: string): Promise<void> {
     const state = sessionStates.get(sessionId);
     if (!state) return;
+    state.runtimeDisposalRequested = true;
     sessionStates.delete(sessionId);
     cleanupSessionState(state);
     settleDetachDrain(state, 'cancelled');

@@ -188,7 +188,7 @@ describe('desktop send outcome helper', () => {
   // #9636 / engineering-conventions §3.2: production sanitizer must keep known
   // runtime categories but reject even identifier-shaped secrets. Unit, no I/O.
   it('retains explicit runtime codes without exposing message or arbitrary code text', () => {
-    for (const code of ['SESSION_CLOSED', 'SESSION_CLOSING', 'SESSION_ERROR', 'PRECONDITION_FAILED']) {
+    for (const code of ['SESSION_CLOSED', 'SESSION_CLOSING', 'SESSION_ERROR', 'SESSION_CLEANUP_PENDING', 'PRECONDITION_FAILED']) {
       expect(sanitizeSendOutcomeError(Object.assign(new Error('PROMPT_SECRET /private/file'), { code })))
         .toEqual({ errorName: 'Error', errorCode: code, safeMessage: code });
     }

@@ -180,6 +180,7 @@ export interface MakerDeps {
 
 /** A previous attempt still owns native resources; retry without changing route/history. */
 export class SessionCreationCleanupPendingError extends Error {
+  readonly code = 'SESSION_CLEANUP_PENDING';
   constructor(options?: ErrorOptions) {
     super('Previous session startup cleanup is still pending; retry the task.', options);
     this.name = 'SessionCreationCleanupPendingError';
@@ -739,7 +740,13 @@ export class Maker {
       return this.createSessionWhileRunning(opts, signal);
     }
     if (existing?.getStatus() === 'error') {
-      await existing.close();
+      try {
+        await existing.close();
+      } catch (error) {
+        // This is still the old runtime's teardown, not replacement startup.
+        throw error instanceof SessionCreationCleanupPendingError
+          ? error : new SessionCreationCleanupPendingError({ cause: error });
+      }
       signal?.throwIfAborted();
     }
     const reusable = this.activeSessions.get(opts.id);
