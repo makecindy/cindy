@@ -6447,7 +6447,8 @@
           "defaultProjectTag": "常例",
           "defaultProjectFullAccessWarning": "常例案「{{name}}」之權限為完全存取：任一群中 @ 機器人，皆將以完全存取之權於其中執行，慎之。",
           "sharedSettingsPointer": "案、模型與權限，諸官方機器人共用。",
-          "sharedSettingsPointerAction": "往設之"
+          "sharedSettingsPointerAction": "往設之",
+          "workspacesCardDescriptionWithPlugins": "諸官方機器人與 IM 法器共用此一份。案出於側欄，立案、更名、除案皆於側欄行之；於 IM 中以 /model 更之，此處亦隨之而變。法器中逐群逐私語另設之模型與權柄，不受其擾。"
         },
         "binding": {
           "copyLink": "錄連結",
@@ -6981,11 +6982,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "官設",
-        "personal": "私"
+        "personal": "私",
+        "plugins": "法器"
       },
       "tips": {
         "cindy": "由 Cindy 所供並維護。無須自建機器人或備憑證，依引導連線即可用。",
-        "personal": "用君自家之名籍或機器人，所需憑證由君自供自理；各渠道之名籍、權柄與設定各自儲存。"
+        "personal": "用君自家之名籍或機器人，所需憑證由君自供自理；各渠道之名籍、權柄與設定各自儲存。",
+        "plugins": "已裝法器所供之 IM 入口。登入與綁定於法器頁中為之；案、模型與權柄默隨「案與模型」之設，亦可於法器中逐群逐私語另設。"
       },
       "defaults": {
         "title": "新言談配置",
@@ -7017,6 +7020,10 @@
         },
         "groupPermissionLabel": "群議新差事之權柄檔",
         "groupPermissionDescription": "群組中新開差事時統一所用之權柄檔（@bot 開話題、/new、/ctr 皆屬之），常例為「自審」；上方之權柄檔唯管私聊。群組上下文中有成員可控之內容，設為「完全存取」後將徑行執行、不復逐項確認，請確保群組成員皆可信。變更僅及此後新開之差事，既有差事請於群組中以 /permission 另行切換。"
+      },
+      "plugins": {
+        "rowHint": "登入、綁定與各群各私語之設，皆在法器頁中。",
+        "open": "啟法器"
       }
     },
     "shortcuts": {
@@ -21871,6 +21878,19 @@
       "network": "連線中斷，方再試…",
       "timeout": "連線逾時，方再試…",
       "server": "伺服器繁忙，方再試…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "寬其權柄乎？",
+    "message": "許「{{name}}」使「{{conversation}}」於案「{{project}}」中用「{{mode}}」乎？",
+    "detail": "此較 IM 案之設（{{projectMode}}）為寬。許之，則此法器於此案中可用此檔權柄，唯及法器自家之差事；後可於法器中復隨 IM。",
+    "groupWarning": "群中他人亦可發言。權柄愈寬，需君確認之事愈少，務請確知群中皆可信之人。",
+    "allow": "許",
+    "cancel": "罷",
+    "modes": {
+      "ask": "預設權柄",
+      "auto": "自審",
+      "bypassPermissions": "完全存取"
     }
   }
 }

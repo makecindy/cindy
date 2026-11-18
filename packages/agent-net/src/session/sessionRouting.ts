@@ -18,7 +18,7 @@
  */
 import { isScopedPeer, type DeviceLinkClient, type DeviceLinkPeerRouteStateChanged, type Envelope,
   type InvokePayload, type LinkClosePayload } from '@cindy/device-link';
-import { isSessionUnlinkedPushChannel, type AgentNetSessionLinks } from './agentNetSessionLinks.js';
+import { isSessionUnlinkedPushChannel, type AgentNetSessionLinks } from './sessionLinks.js';
 import {
   PEER_LINK_CONNECTION_METHODS, PEER_LINK_DEVICE_LINK_TRANSPORT_METHODS,
   type PeerLinkConnectionMethod, type PeerLinkDeviceLinkTransportMethod, type PeerLinkMergedMethod, type PeerLinkRoutedMethod, type PeerLinks,

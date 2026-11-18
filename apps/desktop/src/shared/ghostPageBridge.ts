@@ -130,7 +130,7 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     },
   ])),
   tasks: Object.fromEntries(
-    ['capabilities', 'models', 'imProjects', 'followImProject', 'setModel', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'create', 'list', 'get', 'send', 'getRun', 'listRuns', 'cancel', 'readMessages', 'setHidden', 'archive'].map(kind => [
+    ['capabilities', 'models', 'imProjects', 'imProjectConfig', 'confirmImPermission', 'followImProject', 'setModel', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'create', 'list', 'get', 'send', 'getRun', 'listRuns', 'cancel', 'readMessages', 'setHidden', 'archive'].map(kind => [
       kind, async (req: Record<string, unknown> = {}): Promise<unknown> => {
         const result = await ports.send({ ...req, type: 'tasks-request', kind });
         if (result?.ok === true) return result.data;
