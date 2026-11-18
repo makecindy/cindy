@@ -4,6 +4,17 @@ import {
   type DiscoveredModel,
 } from "./modelMetadataLayers.js";
 
+/** The official Copilot account endpoints share one models discovery contract. */
+export function copilotModelsUrl(value: string): URL | undefined {
+  let url: URL;
+  try { url = new URL(value); } catch { return undefined; }
+  if (url.protocol !== 'https:' || url.port || url.username || url.password
+    || !/^api\.(?:(?:individual|business|enterprise)\.)?githubcopilot\.com$/.test(url.hostname)
+    || !/^\/(?:v1\/?|(?:v1\/)?models\/?)?$/.test(url.pathname)) return undefined;
+  url.pathname = '/models';
+  return url;
+}
+
 /** OpenRouter exposes one unpaginated catalog; Anthropic headers select a rewritten CLI view. */
 export function isOpenRouterModelsUrl(value: string): boolean {
   try {
@@ -80,6 +91,7 @@ export function parseModelsListResponse(
     return null;
   })();
   if (!list) return null;
+  const copilot = sourceUrl && copilotModelsUrl(sourceUrl);
   const magpieCatalog = list.some(item => !!item && typeof item === "object" && !!discoveredMagpieSource(item as Record<string, unknown>));
   const out: DiscoveredModel[] = [];
   const seen = new Set<string>();
@@ -203,8 +215,12 @@ export function parseModelsListResponse(
     const openRouterSpeech = sourceUrl !== undefined && isOpenRouterModelsUrl(sourceUrl)
       && Array.isArray(architecture?.output_modalities)
       && architecture.output_modalities.includes('speech');
+    const endpoints = record.supported_endpoints;
+    const copilotApi = copilot && Array.isArray(endpoints)
+      ? (endpoints.includes('/responses') ? 'openai-responses' : null) : undefined;
     const discoveredMetadata = { ...nestedLimits, ...pickModelMetadata(record), ...pickModelMetadata({
-      nativeApi: record.nativeApi !== undefined ? record.nativeApi : record.native_api,
+      nativeApi: record.nativeApi !== undefined ? record.nativeApi
+        : record.native_api !== undefined ? record.native_api : copilotApi,
       ...([rec?.display_name, rec?.name, google?.displayName].some(
         (value) => typeof value === "string" && value.trim().length > 0,
       )
