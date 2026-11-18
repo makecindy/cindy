@@ -74,7 +74,6 @@
     "cancel": "Tetap seperti sekarang"
   },
   "unified": {
-    "accountUnassigned": "Akun belum ditetapkan",
     "accountCount_other": "{{count}} akun",
     "accountFallback": "Akun {{index}}",
     "favoriteConfiguration": "Favoritkan konfigurasi ini",

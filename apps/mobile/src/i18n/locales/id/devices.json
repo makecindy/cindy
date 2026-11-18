@@ -328,6 +328,7 @@
       "renameDevice": "Ganti nama {{label}}",
       "project": "Proyek {{title}}",
       "dialogue": "Obrolan",
+      "automation": "Otomatisasi",
       "openAutomationLatest": "Buka sesi terbaru otomasi {{title}}",
       "automationTask": "Otomasi {{title}}",
       "openConversation": "Buka sesi {{title}}",
@@ -353,7 +354,9 @@
     },
     "menu": {
       "groupDialogue": "Obrolan",
+      "groupAutomation": "Otomatisasi",
       "dialogueFolder": "Obrolan",
+      "automationFolder": "Otomatisasi",
       "search": "Cari",
       "settings": "Pengaturan",
       "remoteSettings": "Pengaturan koneksi jarak jauh",
@@ -423,7 +426,33 @@
       "filterTeammatesHeading": "Rekan",
       "filterAnySource": "Semua",
       "filterHideAllTeammates": "Sembunyikan semua",
-      "filterSelectedTeammates": "{{count}} dipilih"
+      "filterSelectedTeammates": "{{count}} dipilih",
+      "inbox": {
+        "inbox": "Menunggu",
+        "working": "Berjalan",
+        "snoozed": "Ditunda",
+        "archived": "Diarsipkan",
+        "snooze": "Tunda",
+        "complete": "Selesai",
+        "wake": "Kembalikan sekarang",
+        "restore": "Pulihkan tugas",
+        "process": "Tandai selesai (arsipkan)",
+        "empty": "Kotak masuk kosong",
+        "snoozeFailed": "Gagal menyimpan waktu tunda. Periksa koneksi dan pastikan komputer pemilik tugas sudah diperbarui.",
+        "hours": "{{count}} jam lagi",
+        "hours_one": "{{count}} jam lagi",
+        "hours_other": "{{count}} jam lagi",
+        "thisEvening": "Malam ini",
+        "tomorrow": "Besok",
+        "nextWeek": "Minggu depan",
+        "custom": "Kustom…",
+        "invalidTime": "Pilih tanggal dan waktu dalam rentang satu tahun ke depan."
+      },
+      "taskListMode": {
+        "heading": "Mode tugas",
+        "tasks": "Daftar tugas",
+        "inbox": "Kotak masuk"
+      }
     },
     "search": {
       "placeholder": "Cari judul atau konten…",
@@ -738,6 +767,8 @@
     "memoryDeleteFailed": "Gagal menghapus",
     "create": "Rekan baru",
     "createFailed": "Hasil pembuatan belum terkonfirmasi. Coba lagi untuk memeriksa.",
+    "createHostUnsupported": "Komputer ini belum bisa membuat Rekan baru. Perbarui Cindy di komputer itu, atau buat Rekan di sana.",
+    "createNeedsDetails": "Isi nama dan pilih avatar untuk membuat Rekan.",
     "title": "Profil Rekan",
     "profile": "Profil & Kepribadian",
     "memory": "Memori",
@@ -790,9 +821,7 @@
       "wecom": "WeCom",
       "dingtalk": "DingTalk",
       "discord": "Discord"
-    },
-    "createHostUnsupported": "Komputer ini belum bisa membuat Rekan baru. Perbarui Cindy di komputer itu, atau buat Rekan di sana.",
-    "createNeedsDetails": "Isi nama dan pilih avatar untuk membuat Rekan."
+    }
   },
   "companionImport": {
     "title": "Impor Rekan",

@@ -84,6 +84,7 @@
   "taskPermission": "Izin sesi",
   "followDefault": "Ikuti default",
   "taskSettingsHint": "Hanya berlaku untuk sesi yang dibuat Plugin ini setelahnya; sesi yang sudah ada tetap memakai model dan izinnya.",
+  "remoteQuickAnswerHint": "Model ini berjalan di komputer lain. Jawaban cepat hanya bisa dikirim dari komputer tempat Plugin berada, jadi akan memakai model bantu sistem.",
   "permissionHint": "Pilih izin untuk sesi baru buatan Plugin; izin sesi saat ini tidak diwariskan otomatis.",
   "autoPermissionHint": "Peninjauan otomatis membuat Cindy menilai permintaan izin sendiri. Pakai untuk sesi Plugin berikutnya?",
   "settingsReload": "Muat ulang pengaturan untuk memeriksa apakah tindakan tadi sudah tersimpan",
@@ -220,6 +221,8 @@
       "agentTasksDetail": "Bisa mengirim pesan, membaca hasil, dan menghentikan eksekusi Plugin ini. Tugas tetap terlihat olehmu. Memakai konfigurasi AI Plugin dan mungkin menimbulkan biaya model; tidak memberi akses ke tugas lain.",
       "agentHiddenTasks": "Bisa membuat tugas latar belakang yang tidak tampil di daftar tugas",
       "agentHiddenTasksDetail": "Tugas buatan Plugin ini bisa tidak muncul di daftar tugas, pencarian, dan notifikasi. Kamu bisa melihat, membuka, atau menampilkannya ke daftar tugas kapan saja di “Tugas latar belakang” pada detail Plugin; saat Plugin dicopot, tugas tersebut tampil kembali.",
+      "agentModelPreferences": "Membaca dan mengubah koleksi model serta membaca model yang baru saja kamu pakai",
+      "agentModelPreferencesDetail": "Membaca koleksi model dan model yang baru dipakai di komputer ini (termasuk tingkat penalaran dan pengaturan Fast), menambah, mengubah, atau menghapus koleksi; perubahan ikut tampil di pemilih model Cindy. Model yang dipilih di Plugin tidak tercatat sebagai baru dipakai. Tidak mencakup model di komputer lainmu atau model yang dibagikan orang lain, dan tidak menyediakan kredensial apa pun.",
       "agentErrand": "Bisa membuat tugas, menjalankan pekerjaan, dan membaca hasilnya",
       "agentErrandDetail": "Tugas yang dibuat muncul di daftar tugas Cindy, tempat kamu bisa melihat prosesnya dan melanjutkan obrolan.",
       "agentSchedule": "Bisa memintamu membuat otomatisasi",
@@ -372,6 +375,5 @@
     "cancelled": "Kali ini tidak akan diarsipkan otomatis",
     "archived": "Diarsipkan “{{title}}”",
     "undo": "Batalkan"
-  },
-  "remoteQuickAnswerHint": "Model ini berjalan di komputer lain. Jawaban cepat hanya bisa dikirim dari komputer tempat Plugin berada, jadi akan memakai model bantu sistem."
+  }
 }

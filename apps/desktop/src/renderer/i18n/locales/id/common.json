@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Simpan",
     "promptUnsupported": "Lokasi eksekusi Pi saat ini tidak mendukung fragmen system prompt.",
+    "nativeHooksUnsupported": "Hook alat hanya mendukung Claude Code dan Pi yang berjalan lokal.",
     "title": "Plugin tugas",
     "description": "Pilih Plugin untuk tugas ini. Perubahan berlaku mulai pesan berikutnya.",
     "unsupported": "Pemrosesan per permintaan hanya didukung di Pi lokal; mesin tugas ini tidak mendukungnya.",
@@ -1361,7 +1362,7 @@
     "REMOTE_PROVIDER_UPDATING": "Kredensial penyedia sedang diperbarui, coba lagi sebentar lagi",
     "REMOTE_PROVIDER_UNSUPPORTED": "Penyedia ini tidak mendukung tugas jarak jauh SSH; pilih sumber lain",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Tugas jarak jauh tidak bisa memakai langganan Claude; pilih gateway atau model API key",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "Perangkat tujuan tidak merespons. Periksa perangkat jarak jauhnya lalu coba lagi",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "Perangkat tujuan sedang tidak merespons. Jaringan mungkin lambat atau perangkat sedang sibuk. Cindy akan terus memeriksa secara otomatis; coba lagi setelah koneksi pulih",
     "INTERNAL": "Terjadi kesalahan. Coba lagi nanti.",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "Konfigurasi SSH berubah di disk. Muat ulang lalu coba lagi.",
     "SSH_CONFIG_RELOAD_REQUIRED": "Konfigurasi SSH tersimpan, tetapi Cindy gagal menyegarkannya. Muat ulang konfigurasi SSH.",
@@ -4303,7 +4304,6 @@
           "label": "Jalankan di",
           "optionLocal": "Komputer ini",
           "notSignedIn": "Belum masuk",
-          "autoBorrowing": "Komputer ini belum masuk, jadi tugas baru berjalan di {{device}}. Tidak perlu masuk lagi.",
           "local": "Tugas baru berjalan di komputer ini. Kamu juga bisa memilih komputer lain yang sudah masuk.",
           "pinned": "Tugas baru berjalan di {{device}} dengan login komputer itu. Tugas yang sedang berjalan tidak terpengaruh.",
           "inline": "Berjalan di",
@@ -6447,7 +6447,8 @@
           "defaultProjectTag": "Default",
           "defaultProjectFullAccessWarning": "Proyek default “{{name}}” berizin Akses penuh: @mention dari grup mana pun dijalankan dengan akses penuh di dalamnya.",
           "sharedSettingsPointer": "Proyek, model, dan izin dipakai bersama oleh semua bot resmi.",
-          "sharedSettingsPointerAction": "Buka Pengaturan"
+          "sharedSettingsPointerAction": "Buka Pengaturan",
+          "workspacesCardDescriptionWithPlugins": "Bot resmi dan Plugin IM berbagi konfigurasi ini. Proyek berasal dari sidebar; untuk membuat, mengganti nama, atau menghapus, lakukan dari sidebar. Jika diubah lewat /model di IM, perubahan ikut terlihat di sini. Model dan izin yang diatur khusus per grup atau chat pribadi di Plugin tidak terpengaruh."
         },
         "binding": {
           "copyLink": "Salin tautan",
@@ -6756,6 +6757,7 @@
           "latency": "Latensi",
           "lastSeen": "Terakhir online",
           "controlling": "Sedang mengendalikan komputer ini",
+          "protocol": "Metode koneksi",
           "rttNote": "terakhir diukur",
           "manage": "Kelola perangkat…",
           "linkStatus": "Ke “{{name}}”",
@@ -6923,7 +6925,8 @@
         "replaced": "Koneksi digantikan oleh instans lain dari perangkat ini",
         "too-many-connections": "Jumlah koneksi untuk akun ini sudah mencapai batas",
         "version-mismatch": "Versi protokol tidak cocok — perbarui aplikasi",
-        "unstable": "Koneksi terus terputus dan menyambung ulang — periksa jaringan, atau mulai ulang Cindy jika terus terjadi"
+        "unstable": "Koneksi terus terputus dan menyambung ulang — periksa jaringan, atau mulai ulang Cindy jika terus terjadi",
+        "agent-net-relay-down": "Tidak bisa terhubung ke Agent-Net relay, sedang menyambung ulang; komputer yang sudah terhubung langsung tetap bisa dipakai, perangkat lain sementara tidak dapat dihubungi"
       },
       "refresh": "Muat ulang",
       "empty": "Belum ada perangkat lain. Masuk ke {{appName}} dengan akun yang sama di komputer lain, dan perangkat itu akan muncul di sini.",
@@ -6979,11 +6982,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "Resmi",
-        "personal": "Pribadi"
+        "personal": "Pribadi",
+        "plugins": "Plugin"
       },
       "tips": {
         "cindy": "Disediakan dan dipelihara oleh Cindy. Tidak perlu membuat bot atau menyiapkan kredensial sendiri; ikuti langkah penautan lalu langsung pakai.",
-        "personal": "Pakai akun atau botmu sendiri dan kelola sendiri kredensial yang dibutuhkan; akun, izin, dan pengaturan setiap kanal disimpan terpisah."
+        "personal": "Pakai akun atau botmu sendiri dan kelola sendiri kredensial yang dibutuhkan; akun, izin, dan pengaturan setiap kanal disimpan terpisah.",
+        "plugins": "Entri IM yang disediakan Plugin terpasang. Login dan pairing dilakukan di halaman Plugin; proyek, model, dan izin secara default mengikuti pengaturan di Proyek dan model, dan bisa diubah per grup atau chat pribadi masing-masing di dalam Plugin."
       },
       "defaults": {
         "title": "Konfigurasi obrolan baru",
@@ -7015,6 +7020,10 @@
         },
         "groupPermissionLabel": "Mode izin untuk tugas baru di grup",
         "groupPermissionDescription": "Mode izin yang dipakai untuk setiap tugas yang dibuat di obrolan grup — @bot membuka topik, /new, dan /ctr semuanya memakainya; mode izin di atas hanya berlaku untuk pesan langsung. Defaultnya “Peninjauan otomatis”. Konteks grup bisa berisi konten yang dikendalikan anggota — memilih “Akses penuh” akan langsung menjalankan tindakan tanpa konfirmasi langkah demi langkah, jadi pilih hanya untuk grup yang kamu percaya. Perubahan hanya berlaku untuk tugas yang dibuat setelahnya; tugas yang sudah ada dialihkan secara terpisah dengan /permission di grup."
+      },
+      "plugins": {
+        "rowHint": "Login, pairing, dan pengaturan khusus setiap grup serta chat pribadi ada di halaman Plugin.",
+        "open": "Buka Plugin"
       }
     },
     "shortcuts": {
@@ -8213,6 +8222,8 @@
         "hostTools_terminalDetail": "Menjalankan perintah dan terminal interaktif sebagai penggunamu di komputer ini, membaca output, mengirim masukan, dan menghentikan proses Plugin ini. Perintah bisa mengakses berkas dan aplikasimu.",
         "agentHiddenTasks": "Bisa membuat tugas latar belakang yang tidak tampil di daftar tugas",
         "agentHiddenTasksDetail": "Tugas buatan Plugin ini bisa tidak muncul di daftar tugas, pencarian, dan notifikasi. Kamu bisa melihat, membuka, atau menampilkannya ke daftar tugas kapan saja di “Tugas latar belakang” pada detail Plugin; saat Plugin dicopot, tugas tersebut tampil kembali.",
+        "agentModelPreferences": "Membaca dan mengubah koleksi model serta membaca model yang baru saja kamu pakai",
+        "agentModelPreferencesDetail": "Membaca koleksi model dan model yang baru dipakai di komputer ini (termasuk tingkat penalaran dan pengaturan Fast), menambah, mengubah, atau menghapus koleksi; perubahan ikut tampil di pemilih model Cindy. Model yang dipilih di Plugin tidak tercatat sebagai baru dipakai. Tidak mencakup model di komputer lainmu atau model yang dibagikan orang lain, dan tidak menyediakan kredensial apa pun.",
         "agentErrand": "Bisa membuat tugas, menjalankan pekerjaan, dan membaca hasilnya",
         "agentErrandDetail": "Tugas yang dibuat akan muncul di daftar tugas Cindy, tempat kamu bisa melihat prosesnya dan melanjutkan obrolan.",
         "agentSchedule": "Bisa memintamu membuat otomatisasi",
@@ -8241,6 +8252,10 @@
         "subscribeTopics": "Mengamati aktivitas tugasmu (giliran dan peristiwa tugas, tanpa isi pesan)",
         "subscribeMessage": "Peristiwa isi pesan",
         "subscribeMessageDetail": "Menerima pesan pengguna yang tersimpan dan balasan AI; lampiran diambil lewat pembacaan dan penyerahan terpisah.",
+        "subscribeToolExecution": "Proses eksekusi alat",
+        "subscribeToolExecutionDetail": "Menerima nama alat, input, hasil, dan error; hanya mengamati, tidak mengubah eksekusi.",
+        "subscribeNativeRecovery": "Peristiwa pemulihan native",
+        "subscribeNativeRecoveryDetail": "Menerima status Engine untuk retry, kompresi konteks, dan penghentian tugas.",
         "subscribeTaskState": "Peristiwa status tugas",
         "subscribeTaskStateDetail": "Menerima perubahan status berjalan, menunggu, selesai, diarsipkan, dan disembunyikan pada tugas.",
         "subscribeActivity": "Mengamati kapan AI berpikir dan kapan menunggumu",
@@ -8263,6 +8278,10 @@
         "subscribeStartTurnDetail": "Hanya bila kamu memilih Plugin ini untuk sebuah tugas, pesan ini dibaca dan Plugin memilih model yang terhubung, tingkat penalaran, serta Fast. Bila error, ditangani sesuai pengaturan tugas tersebut, dan Plugin tidak bisa menyetujui tindakan untukmu.",
         "subscribeModelRequest": "Bisa memproses setiap permintaan model di tugas terpilih",
         "subscribeModelRequestDetail": "Hanya bila kamu memilih Plugin ini untuk sebuah tugas, isi permintaan yang dikirim ke model dibaca dan diproses, serta model dan parameternya bisa disesuaikan. Saat ini hanya mendukung Pi lokal; bila error, ditangani sesuai pengaturan tugas, dan kredensial koneksi tidak disertakan.",
+        "subscribeToolCall": "Dapat menangani panggilan alat untuk tugas yang dipilih",
+        "subscribeToolCallDetail": "Dapat membaca, mengubah, atau menolak parameter alat; dukungan aktual bergantung pada Engine; tidak dapat menyetujui operasi untukmu.",
+        "subscribeToolResult": "Dapat menangani hasil alat untuk tugas yang dipilih",
+        "subscribeToolResultDetail": "Dapat membaca hasil, menambah konteks atau menulis ulang hasil sesuai kemampuan Engine; tidak dapat membatalkan operasi yang sudah dijalankan.",
         "subscribeStartTask": "Bisa memilih model untuk tugas baru",
         "subscribeStartTaskDetail": "Saat tugas baru memakai model yang disediakannya, ia membaca pesan pertama dan memilih satu dari model yang terhubung. Titik masuk ini hanya berjalan sekali, sebelum pesan pertama dikirim.",
         "card": "Merender kartu pesan",
@@ -11191,6 +11210,7 @@
       "unavailableTitle": "Obrolan grup ini tidak lagi tersedia",
       "unavailableDescription": "Mungkin sudah dihapus. Kembali ke halaman Rekan untuk membuka obrolan grup atau Rekan lain.",
       "sidebar": {
+        "threadReply": "Balasan topik",
         "title": "Obrolan grup",
         "empty": "Belum ada pesan",
         "preview": "{{name}}: {{text}}",
@@ -11523,6 +11543,7 @@
           "sharedReplyFrom": "Membagikan balasan topik dari {{name}}",
           "sharedReply": "Membagikan balasan topik",
           "edited": "Diubah",
+          "replyNotFound": "Balasan ini tidak ditemukan.",
           "sourceUnavailable": "Balasan asli sudah dihapus atau tidak bisa kamu lihat.",
           "viewThread": "Lihat topik",
           "viewInMain": "Lihat di obrolan utama",
@@ -12540,6 +12561,7 @@
       "createOwnApp": "Buat App sendiri ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Ada {{count}} lampiran yang gagal terkirim: {{names}}",
+    "outboundAttachmentOverLimit": "{{name}} (melebihi batas {{limit}} MB)",
     "unnamedAttachment": "Lampiran tanpa nama",
     "text": {
       "discord": {
@@ -13478,9 +13500,17 @@
         "submitLabel": "Kirim jawaban",
         "multiSelectHint": " (bisa pilih lebih dari satu)",
         "resolved": "✅ Dipilih: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "Kartu ini sudah kedaluwarsa",
         "textHint": "Hanya penanya yang bisa menjawab. Balas {{code}} diikuti jawabanmu; untuk beberapa pertanyaan pakai “{{code}} 2: jawaban”, lalu balas {{code}} OK untuk mengirim.",
-        "replyHint": "Hanya penanya yang bisa menjawab. Ketuk pilihan; untuk beberapa pertanyaan atau pilihan ganda, kirim setelah selesai memilih.\nBalas {{code}} diikuti jawabanmu; untuk beberapa pertanyaan pakai “{{code}} 2: jawaban”, lalu balas {{code}} OK untuk mengirim."
+        "replyHint": "Hanya penanya yang bisa menjawab. Ketuk pilihan; untuk beberapa pertanyaan atau pilihan ganda, kirim setelah selesai memilih.\nBalas {{code}} diikuti jawabanmu; untuk beberapa pertanyaan pakai “{{code}} 2: jawaban”, lalu balas {{code}} OK untuk mengirim.",
+        "nextLabel": "Pertanyaan berikutnya",
+        "stepHint": "Hanya pembuat pertanyaan yang bisa menjawab. Klik opsi untuk menjawab, atau balas {{code}} diikuti jawaban teks.",
+        "stepSubmitHint": "Hanya pembuat pertanyaan yang bisa menjawab. Pilih lalu klik \"{{action}}\"; atau balas {{code}} diikuti jawaban teks, lalu balas {{code}} OK.",
+        "stepTextHint": "Hanya pembuat pertanyaan yang bisa menjawab. Balas {{code}} diikuti jawabanmu.",
+        "unanswered": "⚠️ Pertanyaan nomor {{numbers}} belum dijawab; jawab semuanya sebelum mengirim.",
+        "unansweredSingle": "⚠️ Belum ada jawaban; pilih atau isi jawaban dulu.",
+        "numberSeparator": ", "
       }
     }
   },
@@ -13971,6 +14001,14 @@
         "standard": "Standar",
         "fast": "Cepat",
         "ultrafast": "Sangat cepat"
+      },
+      "discoveredCopy": {
+        "title": "Beralih ke {{provider}} di \"{{device}}\"?",
+        "description": "{{unavailable}}Setelah dikonfirmasi, {{provider}} akan dijalankan di \"{{device}}\"; kapan pun bisa diganti kembali dari sini.",
+        "unavailableHere": "{{provider}} di komputer ini sedang tidak tersedia.",
+        "unavailableOn": "{{provider}} di \"{{device}}\" sedang tidak tersedia.",
+        "confirm": "Beralih",
+        "cancel": "Tetap seperti ini"
       }
     },
     "permissionSelector": {
@@ -14261,7 +14299,8 @@
         "description": "Riwayat obrolan di komputer lama tidak bisa dibawa, jadi dilanjutkan lewat ringkasan serah terima. Isi penalaran dan sejenisnya tidak dijamin tersalin sempurna. Berlaku saat pesan berikutnya dikirim.",
         "descriptionNativeHistory": "Riwayat obrolan lengkap disalin dan dilanjutkan; jika tidak bisa dipulihkan, dilanjutkan lewat ringkasan serah terima, dan isi penalaran dan sejenisnya tidak dijamin tersalin sempurna. Berlaku saat pesan berikutnya dikirim.",
         "confirm": "Pindah komputer",
-        "cancel": "Tetap seperti sekarang"
+        "cancel": "Tetap seperti sekarang",
+        "discoveredDescription": "{{reason}}{{description}}"
       }
     },
     "agentSelect": {
@@ -14847,6 +14886,8 @@
       "failed": "Gagal membuat gambar, coba lagi"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "cindy_helper diaktifkan untuk tugas ini tetapi tidak tersedia; hasil tugas mungkin tidak dapat dikirim balik.",
+      "codexHelperUnverified": "Tidak dapat memverifikasi ketersediaan cindy_helper untuk tugas ini; hasil tugas mungkin tidak dapat dikirim balik.",
       "requestFormatError": "Aplikasi mengirim format permintaan yang salah, sehingga balasan ini tidak bisa diselesaikan.",
       "replyFailed": "Balasan belum selesai",
       "retryTitle": "Kirim ulang pesan terakhir",
@@ -15922,6 +15963,7 @@
       "saveFailed": "Gagal menyimpan pilihan jendela konteks"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "Menunggu respons jarak jauh…",
       "readingMemory": "Membaca memori…",
       "savingMemory": "Menyimpan memori…",
       "deletingMemory": "Menghapus memori…",
@@ -15971,7 +16013,8 @@
         "replaced": "Koneksi ini digantikan oleh perangkat lain yang sama, menyambung ulang…",
         "too-many-connections": "Terlalu banyak perangkat online untuk akun ini, server menolak koneksi",
         "version-mismatch": "Versi protokol tidak cocok dengan server, perbarui aplikasi lalu coba lagi",
-        "unstable": "Komputer ini terus terputus dan menyambung lagi, jadi aksi jarak jauh bisa terus timeout; periksa jaringan, atau mulai ulang Cindy lalu coba lagi"
+        "unstable": "Komputer ini terus terputus dan menyambung lagi, jadi aksi jarak jauh bisa terus timeout; periksa jaringan, atau mulai ulang Cindy lalu coba lagi",
+        "agent-net-relay-down": "Komputer ini tidak bisa terhubung ke Agent-Net relay dan sedang menyambung ulang; jika komputer lawan tidak terhubung langsung, operasi jarak jauh akan gagal"
       }
     },
     "common": {
@@ -16192,7 +16235,8 @@
         "project": "Proyek",
         "flat": "Daftar datar",
         "device": "Perangkat",
-        "dialogue": "Obrolan"
+        "dialogue": "Obrolan",
+        "automation": "Otomatisasi"
       },
       "filterGroupByDeviceManualTip": "Pengelompokan per perangkat tidak tersedia saat mengurutkan manual",
       "deviceGroup": {
@@ -16540,6 +16584,7 @@
       "groupSummary": {
         "project": "Proyek",
         "dialogue": "Obrolan",
+        "automation": "Otomatisasi",
         "device": "Perangkat"
       },
       "taskStatusHeading": "Status Sesi",
@@ -16552,6 +16597,36 @@
         "priority": "Prioritas",
         "activity": "Aktivitas terakhir",
         "created": "Waktu dibuat"
+      },
+      "inbox": {
+        "thisEvening": "Malam ini",
+        "tomorrow": "Besok",
+        "nextWeek": "Minggu depan",
+        "custom": "Kustom…",
+        "wakeAt": "Tanggal & waktu pengembalian",
+        "timeZone": "Waktu lokal ({{zone}})",
+        "invalidTime": "Pilih tanggal dan waktu dalam rentang satu tahun ke depan.",
+        "inbox": "Menunggu",
+        "working": "Berjalan",
+        "snoozed": "Ditunda",
+        "archived": "Diarsipkan",
+        "snooze": "Tunda",
+        "complete": "Selesai",
+        "wake": "Kembalikan sekarang",
+        "restore": "Pulihkan tugas",
+        "process": "Tandai selesai (arsipkan)",
+        "empty": "Kotak masuk kosong",
+        "snoozeFailed": "Gagal menyimpan waktu tunda. Periksa koneksi dan pastikan komputer pemilik tugas sudah diperbarui.",
+        "hours": "{{count}} jam lagi",
+        "hours_one": "{{count}} jam lagi",
+        "hours_other": "{{count}} jam lagi"
+      },
+      "taskListMode": {
+        "heading": "Mode tugas",
+        "tasks": "Daftar tugas",
+        "inbox": "Kotak masuk",
+        "enterInbox": "Beralih ke mode kotak masuk",
+        "leaveInbox": "Beralih ke mode daftar tugas"
       }
     },
     "rename": {
@@ -16844,6 +16919,7 @@
         "menuSave": "Simpan",
         "menuInsertTable": "Sisipkan tabel",
         "externalChangeBlocked": "Berkas diubah dari luar, simpan otomatis dijeda. Setelah dikonfirmasi, simpan manual untuk menimpa.",
+        "targetChanged": "Lokasi berkas sudah berubah; draf saat ini tetap tersimpan di editor. Salin draf dulu, lalu buka ulang berkasnya",
         "tableMenu": {
           "addRowAbove": "Tambah baris di atas",
           "addRowBelow": "Tambah baris di bawah",
@@ -17236,7 +17312,9 @@
           "jira_read": "Baca Jira",
           "jira_comment": "Komentari Jira",
           "sessions_dispatch": "Kirim tugas",
-          "feishu_read": "Baca pesan Feishu"
+          "feishu_read": "Baca pesan Feishu",
+          "settings_read": "Membaca anggota yang dibagikan",
+          "usage_read": "Membaca pemakaian dan status grup penyedia"
         },
         "project": "Direktori proyek",
         "capabilitiesLabel": "Kemampuan yang diizinkan",
@@ -17248,7 +17326,9 @@
           "jira_read": "Baca Issue Jira (ambil per key / pencarian JQL)",
           "jira_comment": "Tambahkan komentar ke Issue Jira",
           "sessions_dispatch": "Buat atau bangunkan sesi {{appName}} dan kirim pesan",
-          "feishu_read": "Daftar obrolan yang terakhir aktif; ambil pesan terbaru dari obrolan tertentu (grup atau DM)"
+          "feishu_read": "Daftar obrolan yang terakhir aktif; ambil pesan terbaru dari obrolan tertentu (grup atau DM)",
+          "settings_read": "Membaca anggota yang kamu bagikan beserta cakupan modelnya, termasuk komputer berizin pada akun yang sama; hanya membaca",
+          "usage_read": "Membaca identitas akun Claude/Codex yang terhubung di komputer ini untuk akun Cindy saat ini, paket, jendela kuota, dan waktu pembaruan, serta pemakaian harian/per model yang tercatat di komputer ini atau komputer berizin lain pada akun yang sama, konfigurasi dan status grup penyedia, anggota dan identitas perangkat yang terlihat, nama, serta avatar. Tidak dapat membaca email login langganan, direktori akun, fingerprint internal, kredensial, atau berkas; tidak dapat mengubah akun atau pengaturan"
         },
         "capabilityWarn": {
           "ghostMissing": "Memerlukan Plugin “{{name}}”, tetapi Plugin itu belum terpasang — kemampuan ini akan gagal saat dijalankan",
@@ -21264,6 +21344,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "Tutup",
+    "taskInbox": {
+      "title": "Mengenal kotak masuk",
+      "lead": "Tugas otomatis terbagi ke Menunggu, Berjalan, Ditunda, dan Diarsipkan sesuai statusnya. Kebiasaan terbaik: kosongkan kotak masuk sesering mungkin — selesai klik Selesai, yang tidak mendesak ditunda.",
+      "pending": {
+        "title": "Menunggu",
+        "body": "Tugas yang selesai dengan hasil, atau yang sedang menunggu jawabanmu, muncul di sini."
+      },
+      "done": {
+        "title": "Selesai",
+        "body": "Sudah beres? Klik Selesai sekali dan tugasnya pindah ke Diarsipkan; jika ada perkembangan baru, otomatis kembali."
+      },
+      "snooze": {
+        "title": "Ditunda",
+        "body": "Kalau sekarang sedang sibuk, pilih saja waktunya; nanti otomatis kembali ke Menunggu."
+      },
+      "start": "Mulai",
+      "note": "Kapan pun bisa kembali ke daftar tugas lewat tombol di bagian atas sidebar."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Selamat datang di Cindy",
@@ -21548,6 +21649,7 @@
     "removeTitle": "Keluarkan {{name}}?",
     "removeDescription": "Cindy tidak akan lagi memberi tugas ke akun ini. Login CLI dan riwayat obrolannya tetap ada di komputer ini.",
     "failed": "Akun ini tidak bisa dibaca atau diperbarui. Periksa login CLI dan koneksi, lalu coba lagi.",
+    "unreachable": "Layanan akun sementara tidak dapat dihubungi sehingga status login tidak bisa dipastikan. Periksa jaringan lalu coba lagi.",
     "openDirectory": "Buka folder akun",
     "openDirectoryFailed": "Folder akun tidak bisa dibuka. Mungkin sudah dipindahkan atau dihapus.",
     "loginAgain": "Masuk lagi",
@@ -21827,6 +21929,19 @@
       "network": "Koneksi terputus, mencoba lagi…",
       "timeout": "Koneksi habis waktu, mencoba lagi…",
       "server": "Server sibuk, mencoba lagi…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "Longgarkan izin?",
+    "message": "Izinkan \"{{name}}\" membuat \"{{conversation}}\" memakai \"{{mode}}\" di proyek \"{{project}}\"?",
+    "detail": "Ini lebih longgar daripada pengaturan proyek IM ({{projectMode}}). Setelah diizinkan, Plugin ini dapat memakai tingkat izin ini di proyek ini dan hanya memengaruhi tugasnya sendiri; nanti bisa diubah kembali mengikuti IM dari dalam Plugin.",
+    "groupWarning": "Pesan di grup juga bisa dikirim oleh anggota lain. Semakin longgar izinnya, semakin sedikit operasi yang perlu kamu setujui — pastikan semua anggota grup dapat dipercaya.",
+    "allow": "Izinkan",
+    "cancel": "Batal",
+    "modes": {
+      "ask": "Izin default",
+      "auto": "Persetujuan otomatis",
+      "bypassPermissions": "Akses penuh"
     }
   }
 }
