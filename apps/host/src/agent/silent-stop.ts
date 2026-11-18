@@ -89,7 +89,7 @@ export function createHostSilentStop<Turn>(ports: HostSilentStopPorts<Turn>) {
       noteClaudeSessionTurnState,
       agentInputCoordinatorHolder: {
         onTurnEvent: () => ports.endTurn(sessionId, turn, reason),
-        // The Host's other turn ends (finish) do not call it either.
+        // endTurn wakes the other tasks' credential waiters after this turn's writes settle.
         onExternalTurnSettled: () => {},
       },
       // The turn's finish (endTurn) runs the Host's settled-turn hooks: these happen there.

@@ -274,6 +274,8 @@ export function createInputQueue(deps) {
         if (direct || handedOver) coordinator.wakeSession(id, 'host-turn-settled');
         else coordinator.onTurnEvent(id, type, error, undefined, meta);
         deps.onSessionSettled?.(id);
+        // A stopping owner's turn is interrupted. Its credential waiters must stay queued.
+        if (!closing) coordinator.onExternalTurnSettled(id);
       },
     });
     // The coordinator's ports (coordinator-deps.ts, every optional port written out).

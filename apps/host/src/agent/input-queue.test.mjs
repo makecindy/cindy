@@ -6655,7 +6655,7 @@ test('silent stop: the caller leaving during the decision does not stop the cont
  * - Minimal failing input: A runs, B's start reports A busy, A's turn ends.
  * - Tier: unit (queue harness, fake runtimes; mocked setTimeout so the fallback timer never fires).
  */
-test('credential switch: a task waiting for another task\'s turn sends once that turn ends', async t => {
+async function waitForOtherTasksCredentials(t) {
   const h = createHarness();
   t.after(async () => { t.mock.timers.reset(); await h.queue.dispose(); });
   await enqueue(h, 'blocker', { clientId: 'a1', text: 'long job' });
@@ -6671,8 +6671,34 @@ test('credential switch: a task waiting for another task\'s turn sends once that
   t.mock.timers.enable({ apis: ['setTimeout'] });
   await h.queue.enqueue('waiter', { clientId: 'b1', text: 'needs the switch' });
   await settleUntil(() => h.queue.projection('waiter').credentialSwitchWait?.clientId === 'b1', 'the input waits for the switch');
+  return h;
+}
+
+async function finishCredentialBlocker(h) {
   h.maker.getSession('blocker').emit({ type: 'done', data: {} });
   await settleUntil(() => !h.queue.projection('blocker').turnInProgress, 'the blocking turn ends');
   await settle();
+}
+
+test('credential switch: a task waiting for another task\'s turn sends once that turn ends', async t => {
+  const h = await waitForOtherTasksCredentials(t);
+  await finishCredentialBlocker(h);
   assert.equal(h.maker.getSession('waiter')?.sent.length, 1, 'the waiting input reaches its engine when the blocking turn ends');
 });
+
+// Coexistence and owner-boundary rules: a blocker finishing may drain another task only while
+// dispatch is allowed. The existing same-task hold and shutdown tests have no credential waiter.
+// Tier: unit, through queue admission, both boundary entries and the blocking engine's terminal;
+// one running task and one waiting input, with the credential retry clock frozen.
+for (const [boundary, enter] of [
+  ['profile hold', queue => queue.holdForDesktop(HELD)],
+  ['beginStop', queue => queue.beginStop()],
+]) {
+  test(`credential switch: a blocker ending during ${boundary} leaves the other task queued`, async t => {
+    const h = await waitForOtherTasksCredentials(t);
+    enter(h.queue);
+    await finishCredentialBlocker(h);
+    assert.deepEqual(h.maker.getSession('waiter')?.sent ?? [], []);
+    assert.equal(h.queue.projection('waiter').credentialSwitchWait?.clientId, 'b1');
+  });
+}
