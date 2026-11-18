@@ -1077,6 +1077,62 @@ describe('BlueBubbles local ingress', () => {
     expect(statuses).not.toContain('error');
   });
 
+  // Tier 1, #11402: one dropped POST response used to block all future manual
+  // input in the chat. A failed scan is insufficient; the next full scan releases it.
+  it('recovers manual input after an unknown send without resending or claiming delivery', async () => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    f.send.mockRejectedValueOnce(new Error('response lost'));
+    await expect(f.im.sendText(f.chat.guid, 'outgoing')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    f.message('manual', { isFromMe: true, handle: undefined });
+    await f.webhook('manual');
+    vi.mocked(f.api.history).mockRejectedValueOnce(new Error('history unavailable'));
+    await expect(f.im.reconcile()).rejects.toThrow('history unavailable');
+    expect(f.received).toHaveLength(0);
+    await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(['manual']);
+    expect(f.im.health().uncertainSends).toBe(1);
+
+    await f.im.dispose();
+    f.message('manual-after-restart', { isFromMe: true, handle: undefined });
+    await f.im.init();
+    expect(f.received.map(event => event.messageId)).toEqual(['manual', 'manual-after-restart']);
+    // A late echo can carry the correlation ID in history but omit it on lookup.
+    f.message('late-echo', { isFromMe: true, handle: undefined });
+    const row = await f.api.message('late-echo');
+    vi.mocked(f.api.history).mockResolvedValueOnce([{ ...row, tempGuid: f.send.mock.calls[0]![2] }]);
+    await f.im.reconcile();
+    expect(f.state().inbox['late-echo'].state).toBe('ignored');
+    expect(f.im.health().uncertainSends).toBe(0);
+    expect(f.send).toHaveBeenCalledTimes(1);
+  });
+
+  // Tier 1, #11402: a verified error echo identifies the outgoing GUID before
+  // the POST returns. It must free the waiting human input without reporting success.
+  it.each(['lookup', 'callback'])('releases manual input on a correlated error echo from %s', async source => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    let reject!: (error: Error) => void;
+    f.send.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const sending = f.im.sendText(f.chat.guid, 'outgoing');
+    const tempGuid = f.send.mock.calls[0]![2];
+    f.message('manual', { isFromMe: true, handle: undefined });
+    await f.im.reconcile();
+    expect(f.received).toHaveLength(0);
+    f.message('failed-echo', { isFromMe: true, ...(source === 'lookup' && { tempGuid, error: 1 }) });
+    await fetch(f.url(), { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'new-message', data: { guid: 'failed-echo', ...(source === 'callback' && { tempGuid, error: 1 }) } }) });
+    try {
+      await vi.waitFor(() => expect(f.received.map(event => event.messageId)).toEqual(['manual']));
+    } finally {
+      reject(new Error('send failed'));
+      await expect(sending).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    }
+    expect(f.im.health().uncertainSends).toBe(0);
+  });
+
   // Tier 1, #11402: permission requests and ordinary questions may share a DM.
   // Only a verified owner may consume an owner-scoped answer in that chat.
   it('keeps an owner-scoped reply pending for the verified speaker', async () => {

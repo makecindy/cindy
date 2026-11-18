@@ -8,7 +8,7 @@ export interface BlueBubblesState {
   inbox: Record<string, { receivedAt: number; state: 'pending' | 'dispatching' | 'accepted' | 'ignored';
     echoHint?: { id: string; failed: boolean };
     stop?: { chatId: string; sentAt: number; before: string[] } }>;
-  outbox: Record<string, { chatId: string; state: 'sending' | 'sent' | 'unknown'; messageId?: string }>;
+  outbox: Record<string, { chatId: string; state: 'sending' | 'sent' | 'unknown'; messageId?: string; failed?: true }>;
 }
 export type BlueBubblesReceiptUpdate =
   | { kind: 'inbox'; id: string; value: BlueBubblesState['inbox'][string] }
@@ -31,7 +31,9 @@ export function applyBlueBubblesReceiptUpdate(state: BlueBubblesState, update: B
     state.inbox[update.id] = update.value;
   }
   else if (update.kind === 'outbox' && update.value && typeof update.value.chatId === 'string'
-    && ['sending', 'sent', 'unknown'].includes(update.value.state)) state.outbox[update.id] = update.value;
+    && ['sending', 'sent', 'unknown'].includes(update.value.state)
+    && (update.value.failed === undefined || (update.value.failed === true && update.value.state === 'unknown'
+      && typeof update.value.messageId === 'string' && !!update.value.messageId))) state.outbox[update.id] = update.value;
   else throw new Error('BLUEBUBBLES_INVALID_RECEIPTS');
 }
 export class BlueBubblesReceipts {
@@ -40,6 +42,8 @@ export class BlueBubblesReceipts {
   private readonly arrivalOrder = new Map<string, number>();
   private readonly dispatching = new Set<string>();
   private readonly unsettledSends = new Set<string>();
+  // A missing delivery result stays visible in health after ingress has finished correlating it.
+  private readonly awaitingCorrelation = new Set<string>();
   private readonly outgoingChats = new Map<string, string>();
   private readonly unresolved = new Set<string>();
   private readonly stops = new Map<string, { sentAt: number; before: Set<string> }>();
@@ -61,7 +65,10 @@ export class BlueBubblesReceipts {
     for (const [id, value] of Object.entries(this.state.outbox)) {
       applyBlueBubblesReceiptUpdate(this.state, { kind: 'outbox', id, value });
       if (value.messageId) this.outgoingChats.set(value.messageId, value.chatId);
-      if (value.state !== 'sent') this.unsettledSends.add(id);
+      if (value.state !== 'sent' && !value.failed) {
+        this.unsettledSends.add(id);
+        this.awaitingCorrelation.add(id);
+      }
     }
     for (const [id, value] of Object.entries(this.state.cursors)) applyBlueBubblesReceiptUpdate(this.state, { kind: 'cursor', id, value });
   }
@@ -143,7 +150,13 @@ export class BlueBubblesReceipts {
       this.indexStop(update.value.stop);
     } else if (update.kind === 'outbox') {
       if (update.value.messageId) this.outgoingChats.set(update.value.messageId, update.value.chatId);
-      if (update.value.state !== 'sent') this.unsettledSends.add(update.id); else this.unsettledSends.delete(update.id);
+      if (update.value.state === 'sent' || update.value.failed) {
+        this.unsettledSends.delete(update.id);
+        this.awaitingCorrelation.delete(update.id);
+      } else {
+        this.unsettledSends.add(update.id);
+        this.awaitingCorrelation.add(update.id);
+      }
     }
   }
   setCursor(chat: string, value: number): void { this.update({ kind: 'cursor', id: chat, value }); }
@@ -159,19 +172,38 @@ export class BlueBubblesReceipts {
   isOutgoing(chat: string, guid: string, tempGuid?: string): boolean {
     return this.outgoingChats.get(guid) === chat || (!!tempGuid && this.state.outbox[tempGuid]?.chatId === chat);
   }
-  hasUnconfirmedSend(chat: string): boolean {
-    for (const id of this.unsettledSends) if (this.state.outbox[id]?.chatId === chat) return true;
+  hasPendingCorrelation(chat: string): boolean {
+    for (const id of this.awaitingCorrelation) if (this.state.outbox[id]?.chatId === chat) return true;
     return false;
   }
-  confirmEcho(chat: string, guid: string, tempGuid: string | undefined): boolean {
+  inactiveCorrelationsByChat(active: ReadonlySet<string>): Map<string, string[]> {
+    const byChat = new Map<string, string[]>();
+    for (const id of this.awaitingCorrelation) {
+      if (active.has(id)) continue;
+      const chat = this.state.outbox[id].chatId;
+      const ids = byChat.get(chat);
+      if (ids) ids.push(id);
+      else byChat.set(chat, [id]);
+    }
+    return byChat;
+  }
+  finishHistoryCheck(ids: readonly string[]): void {
+    for (const id of ids) this.awaitingCorrelation.delete(id);
+  }
+  recordEcho(chat: string, guid: string, tempGuid: string | undefined, failed: boolean): boolean {
     if (!tempGuid) return false;
     const prior = this.state.outbox[tempGuid];
-    if (prior?.chatId !== chat || prior.state === 'sent') return false;
-    this.outgoing(tempGuid, { chatId: chat, state: 'sent', messageId: guid });
+    if (prior?.chatId !== chat || prior.failed || (prior.state === 'sent' && !failed)) return false;
+    // Keep the v1 journal readable by older clients. A verified error identifies
+    // the outgoing GUID without claiming successful delivery.
+    this.update({ kind: 'outbox', id: tempGuid, value: failed
+      ? { chatId: chat, state: 'unknown', messageId: guid, failed: true }
+      : { chatId: chat, state: 'sent', messageId: guid } });
     return true;
   }
   outgoing(id: string, value: BlueBubblesState['outbox'][string]): void {
-    if (this.state.outbox[id]?.state === 'sent') return;
+    const prior = this.state.outbox[id];
+    if (prior?.state === 'sent' || prior?.failed) return;
     this.update({ kind: 'outbox', id, value });
   }
   echoHintFor(guid: string) { return this.state.inbox[guid]?.echoHint; }
@@ -181,7 +213,8 @@ export class BlueBubblesReceipts {
     const echoHint = typeof tempGuid === 'string' && Object.hasOwn(this.state.outbox, tempGuid)
       ? { id: tempGuid, failed: error != null && error !== 0 && error !== '0' } : undefined;
     const previous = Object.hasOwn(this.state.inbox, guid) ? this.state.inbox[guid] : undefined;
-    if (previous && (!echoHint || previous.state !== 'pending' || previous.echoHint?.id === echoHint.id)) return false;
+    if (previous && (!echoHint || previous.state !== 'pending' || (previous.echoHint?.id === echoHint.id
+      && (previous.echoHint.failed || !echoHint.failed)))) return false;
     this.update({ kind: 'inbox', id: guid, value: {
       ...(previous ?? { receivedAt: now, state: 'pending' }), ...(echoHint && { echoHint }),
     } });

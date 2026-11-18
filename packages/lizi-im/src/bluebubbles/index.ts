@@ -396,6 +396,8 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     this.assertLive(generation);
     await api.info(); this.assertLive(generation);
     const before = this.now();
+    // All chats share this scan's upper watermark. A later POST must await its own scan.
+    const inactive = receipts.inactiveCorrelationsByChat(this.activeSends);
     for (const chat of config.chatGuids) {
       const after = Math.max(receipts.activatedAtFor(chat), receipts.cursor(chat) - 300_000);
       let previousPage = '';
@@ -408,11 +410,18 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         previousPage = fingerprint;
         for (const message of messages) {
           if (typeof message.guid !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(message.guid)) throw new Error('BLUEBUBBLES_INVALID_MESSAGE');
-          if ((!message.isFromMe || config.selfAccountAddresses?.[chat] || receipts.isOutgoing(chat, message.guid, message.tempGuid)) && message.dateCreated >= receipts.activatedAtFor(chat)) receipts.receive(message.guid, before);
+          if ((!message.isFromMe || config.selfAccountAddresses?.[chat] || receipts.isOutgoing(chat, message.guid, message.tempGuid)) && message.dateCreated >= receipts.activatedAtFor(chat)) {
+            receipts.receive(message.guid, before, message.isFromMe ? message.tempGuid : undefined, message.error);
+          }
         }
         if (messages.length < 100) break;
       }
       receipts.setCursor(chat, before);
+      const checked = inactive.get(chat);
+      if (checked) {
+        receipts.finishHistoryCheck(checked);
+        this.wakeSendWaiters(chat, generation);
+      }
     }
     const prefetched = new Map<string, BlueBubblesMessage | null>();
     // A fixed watermark includes history and live receipts observed so far.
@@ -540,8 +549,9 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           const hint = receipts.echoHintFor(guid);
           const tempGuid = message.tempGuid ?? hint?.id;
           const echo = chat && message.isFromMe && receipts.isOutgoing(chat.guid, message.guid, tempGuid);
-          if (echo && message.guid === guid && !hint?.failed && (!message.error || message.error === '0')) {
-            if (receipts.confirmEcho(chat.guid, guid, tempGuid)) this.wakeSendWaiters(chat.guid, generation);
+          if (echo && message.guid === guid) {
+            const failed = (hint?.id === tempGuid && hint?.failed === true) || (!!message.error && message.error !== '0');
+            if (receipts.recordEcho(chat.guid, guid, tempGuid, failed)) this.wakeSendWaiters(chat.guid, generation);
           }
           const sender = message.handle?.address?.toLowerCase() || selfAddress;
           const participants = chat?.participants ?? (chat && this.chats.get(chat.guid)?.participants);
@@ -555,8 +565,8 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
             receipts.mark(guid, 'ignored'); this.pendingInputs.delete(guid); this.retryAt.delete(guid); continue;
           }
           // A callback may precede the send response and omit tempGuid. It cannot
-          // establish a human sender while an unconfirmed send exists in this chat.
-          if (selfAddress && !echo && chat && receipts.hasUnconfirmedSend(chat.guid) && !message.tempGuid) {
+          // establish a human sender while this chat still awaits correlation.
+          if (selfAddress && !echo && chat && receipts.hasPendingCorrelation(chat.guid) && !message.tempGuid) {
             this.retryAt.delete(guid);
             this.awaitingSend.set(guid, chat.guid);
             continue;
@@ -819,6 +829,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       if (!result || typeof result.guid !== 'string' || !result.guid) throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
       // This captured ledger belongs to the original account even after disconnect.
       receipts.outgoing(id, { chatId, state: 'sent', messageId: result.guid });
+      if (!receipts.confirmedSend(id)) throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
       sent = true;
       this.assertLive(generation);
       this.wakeSendWaiters(chatId, generation);
