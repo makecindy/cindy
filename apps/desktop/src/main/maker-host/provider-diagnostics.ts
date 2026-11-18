@@ -22,6 +22,7 @@ import {
   appendProviderRequestPath,
   providerModelRecord,
   providerPresetModelRecord,
+  providerEndpointBindings,
   providerWireProtocolForApi,
   type PiModelApi,
   type ProviderModelRecord,
@@ -56,15 +57,25 @@ const nativeProbeContext = new AsyncLocalStorage<symbol>();
  * before SDK string conversion, scoped to requests created by this probe. No
  * transport replacement, trust changes, extra requests or raw error retention.
  */
-async function withNativeProbeNetworkErrors<T>(run: () => Promise<T>, record: (code: string) => void): Promise<T> {
+async function withNativeProbeNetworkErrors<T>(baseUrl: string, api: string, run: () => Promise<T>, record: (code: string) => void): Promise<T> {
   const context = Symbol();
   const requests = new WeakSet<object>();
+  const destination = new URL(baseUrl).origin;
+  // Bedrock may select its runtime region from IAM profile/env or a model ARN
+  // rather than the catalog default. Token/metadata/STS hosts are not runtimes.
+  const bedrockRuntime = /^https:\/\/bedrock-runtime(?:-fips)?\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?$/;
   const starts = [channel('undici:request:create'), channel('http.client.request.start')];
   const errors = [channel('undici:request:error'), channel('http.client.request.error')];
   const onStart = (message: unknown) => {
     try {
       const request = (message as { request?: object })?.request;
-      if (request && typeof request === 'object' && nativeProbeContext.getStore() === context) requests.add(request);
+      if (!request || typeof request !== 'object' || nativeProbeContext.getStore() !== context) return;
+      const transport = request as { origin?: string; protocol?: string; getHeader?: (name: string) => unknown };
+      const origin = new URL(transport.origin ?? `${transport.protocol}//${transport.getHeader?.('host')}`).origin;
+      if (providerEndpointBindings(destination, origin) !== null
+        || (api === 'bedrock-converse-stream' && bedrockRuntime.test(destination) && bedrockRuntime.test(origin))) {
+        requests.add(request);
+      }
     } catch { /* diagnostics must not change request creation */ }
   };
   const onError = (message: unknown) => {
@@ -437,7 +448,7 @@ async function runProviderProbeUnlogged(
         headers: spec.apiKey || spec.authMethod === 'none' ? withoutCredentialHeaders(spec.headers) : spec.headers, fetchImpl: diagnosticFetch,
       }, AbortSignal.timeout(PROBE_TIMEOUT_MS));
       const result = await (['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(api)
-        ? withNativeProbeNetworkErrors(run, code => { networkCode = code; }) : run());
+        ? withNativeProbeNetworkErrors(spec.baseUrl, api, run, code => { networkCode = code; }) : run());
       if (result.usage && [result.usage.input, result.usage.output, result.usage.cacheRead, result.usage.cacheWrite].some(n => n > 0)) {
         await record({ inputTokens: result.usage.input, outputTokens: result.usage.output,
           cacheReadTokens: result.usage.cacheRead, cacheCreateTokens: result.usage.cacheWrite },

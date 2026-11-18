@@ -1758,7 +1758,9 @@ describe.each([
     const sdk = vi.spyOn(adapter, 'streamSimple').mockImplementation((_model, _context, options = undefined) => ({
       result: async () => {
         expect(options).not.toHaveProperty('fetch');
-        const request = {};
+        const request = startName.startsWith('undici:')
+          ? { origin: new URL(row.upstream.replace('{location}', 'us-central1')).origin }
+          : { protocol: new URL(row.upstream).protocol, getHeader: () => new URL(row.upstream).host };
         start.publish({ request });
         await Promise.resolve();
         failed.publish({ request, error: Object.assign(new Error('private SDK endpoint'), { code: 'INVALID_PURPOSE' }) });
@@ -1799,7 +1801,7 @@ it('isolates concurrent SDK-owned requests and removes observers after settlemen
   let index = 0;
   const sdk = vi.spyOn(googleAdapter, 'streamSimple').mockImplementation(() => ({
     result: () => {
-      const request = {};
+      const request = { origin: new URL(row.upstream).origin };
       const code = index++ === 0 ? 'INVALID_PURPOSE' : 'ECONNREFUSED';
       start.publish({ request });
       return new Promise(resolve => complete.push(() => {
@@ -1823,4 +1825,50 @@ it('isolates concurrent SDK-owned requests and removes observers after settlemen
     expect(await second).toMatchObject({ ok: false, code: 'UPSTREAM_UNREACHABLE', detail: 'ECONNREFUSED' });
   } finally { sdk.mockRestore(); }
   expect([start.hasSubscribers, failed.hasSubscribers]).toEqual(previous);
+});
+
+// #11007 review: ADC/IAM credential lookup errors belong to auth, not the
+// provider base URL. Simulate the actual SDK conversion after those events.
+describe.each([
+  ['google-vertex', vertexAdapter, 'undici:request:create', 'undici:request:error'],
+  ['bedrock-converse-stream', bedrockAdapter, 'http.client.request.start', 'http.client.request.error'],
+] as const)('credential lookups during %s probes', (api, adapter, startName, errorName) => {
+  it.each(['INVALID_CA', 'ENOTFOUND', 'ETIMEDOUT'])('does not project credential %s onto the provider', async code => {
+    const row = Object.values(PROVIDER_MODEL_CATALOG.providers).flat().find(row => row.execution.pi.api === api)!;
+    const baseUrl = row.upstream.replace('{location}', 'us-central1');
+    const sdk = vi.spyOn(adapter, 'streamSimple').mockImplementation(() => ({
+      result: async () => {
+        const request = api === 'google-vertex'
+          ? { origin: 'https://oauth2.googleapis.com' }
+          : { protocol: 'http:', getHeader: () => '169.254.169.254' };
+        channel(startName).publish({ request });
+        channel(errorName).publish({ request, error: { code } });
+        return { stopReason: 'error', errorMessage: '401 Unauthorized', content: [], model: row.id,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+      },
+    }) as never);
+    try {
+      expect(await runProviderProbe({ agent: 'pi', baseUrl, modelId: row.id,
+        nativeModel: row, api })).toMatchObject({ ok: false, code: 'AUTH_INVALID', status: 401 });
+      expect(sdk).toHaveBeenCalledOnce();
+    } finally { sdk.mockRestore(); }
+  });
+});
+
+it('retains diagnostics for a Bedrock runtime region selected by the SDK', async () => {
+  const row = Object.values(PROVIDER_MODEL_CATALOG.providers).flat().find(row => row.execution.pi.api === 'bedrock-converse-stream')!;
+  const sdk = vi.spyOn(bedrockAdapter, 'streamSimple').mockImplementation(() => ({
+    result: async () => {
+      const request = { protocol: 'https:', getHeader: () => 'bedrock-runtime.eu-west-1.amazonaws.com' };
+      channel('http.client.request.start').publish({ request });
+      channel('http.client.request.error').publish({ request, error: { code: 'INVALID_CA' } });
+      return { stopReason: 'error', errorMessage: 'fetch failed', content: [], model: row.id,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    },
+  }) as never);
+  try {
+    expect(await runProviderProbe({ agent: 'pi', baseUrl: row.upstream, modelId: row.id,
+      nativeModel: row, api: 'bedrock-converse-stream' })).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'INVALID_CA' });
+    expect(sdk).toHaveBeenCalledOnce();
+  } finally { sdk.mockRestore(); }
 });
