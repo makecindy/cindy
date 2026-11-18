@@ -4170,6 +4170,7 @@
         "refreshSpeechAdded": "Modelos actualizados; se añadió 1 modelo de voz sugerido",
         "refreshNoNew": "La lista de modelos está actualizada, nada nuevo",
         "refreshFailed": "No se pudo actualizar la lista de modelos. Vuelve a intentarlo más tarde.",
+        "refreshReconnect": "No se pudo actualizar la lista de modelos. Vuelve a conectar este proveedor e inténtalo de nuevo.",
         "refreshFetchDisabled": "La recuperación remota del catálogo de modelos está deshabilitada: se omitió la actualización",
         "disableModel": "Deshabilitar este modelo",
         "paymentRequired": "De pago",

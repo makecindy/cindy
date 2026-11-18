@@ -4074,6 +4074,7 @@
         "refreshSpeechAdded": "모델을 업데이트하고 추천 음성 모델 1개를 추가했습니다",
         "refreshNoNew": "모델 목록이 최신 상태입니다. 새 항목이 없습니다",
         "refreshFailed": "모델 목록을 새로고침하지 못했습니다. 잠시 후 다시 시도해 주세요",
+        "refreshReconnect": "모델 목록을 새로고침하지 못했습니다. 이 제공자에 다시 연결한 후 다시 시도하세요.",
         "refreshFetchDisabled": "모델 카탈로그 원격 가져오기가 비활성화되어 새로고침을 건너뛰었습니다",
         "disableModel": "이 모델 비활성화",
         "paymentRequired": "유료",
