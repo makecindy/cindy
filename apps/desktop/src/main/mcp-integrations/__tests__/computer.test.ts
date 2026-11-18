@@ -135,7 +135,6 @@ import {
   installComputerDriver,
   listComputerWindowsForAtMention,
   pauseComputerDriverPermissionProbe,
-  pickLatestCuaDriverVersion,
   resetComputerDriverPermissionProbeCacheForTests,
   resetAtMentionWindowCacheForTests,
   resetDesktopInputGuardStateForTests,
@@ -148,7 +147,6 @@ import {
   extractCurlOutputPath,
   installIdleTimeoutForPlatform,
   matchAssetSizeByFilename,
-  pickLatestCuaDriverRelease,
   updateComputerDriver,
 } from '../computer.desktop.js';
 
@@ -4584,27 +4582,26 @@ describe('computer mcp integration', () => {
   });
 });
 
-function currentPlatformReleaseAsset(version: string, size = 21147689) {
-  const name = getCuaDriverReleaseAssetName(version);
-  if (!name) throw new Error(`unsupported test platform: ${process.platform}/${process.arch}`);
-  return { name, size, state: 'uploaded' as const };
+/** 上游「已发布安装版本」清单的响应(文件里只有一个 x.y.z 行)。 */
+function publishedVersionResponse(version: string) {
+  return { ok: true, status: 200, text: async () => `${version}\n` };
 }
 
-/** 标准更新检查 mock:matching-refs 返回 0.7.0,后续请求返回可安装 release。 */
-function mockRefsThenReleaseFetch() {
+/** 平台安装包 HEAD 探测的响应,只关心 content-length 换算出的总字节数。 */
+function assetHeadResponse(size = 21147689) {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: (name: string) => (name === 'content-length' ? String(size) : null) },
+  };
+}
+
+/** 标准更新检查 mock:上游已发布 0.7.0,且该版本的平台包可下载。 */
+function mockPublishedThenAssetFetch() {
   return vi
     .fn()
-    .mockResolvedValueOnce({
-      ok: true,
-      json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.7.0' }],
-    })
-    .mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        tag_name: 'cua-driver-rs-v0.7.0',
-        assets: [currentPlatformReleaseAsset('0.7.0')],
-      }),
-    });
+    .mockResolvedValueOnce(publishedVersionResponse('0.7.0'))
+    .mockResolvedValue(assetHeadResponse());
 }
 
 /**
@@ -4806,42 +4803,12 @@ describe('computer driver update check', () => {
     expect(compareSemver('1.0.0', '0.99.99')).toBeGreaterThan(0);
   });
 
-  it('pickLatestCuaDriverVersion ignores other monorepo components and picks semver max', () => {
-    expect(
-      pickLatestCuaDriverVersion([
-        'agent-v0.8.4',
-        'cua-driver-rs-v0.6.8',
-        'cli-v0.1.12',
-        'cua-driver-rs-v0.7.0',
-        'cua-driver-rs-v0.5.8',
-        'computer-server-v0.3.42',
-      ]),
-    ).toBe('0.7.0');
-    expect(pickLatestCuaDriverVersion(['agent-v0.8.4', 'cli-v0.1.12'])).toBeNull();
-    expect(pickLatestCuaDriverVersion([])).toBeNull();
-  });
-
-  it('reports updateAvailable when upstream has a newer cua-driver tag', async () => {
+  // 2026-11 事故:api.github.com 的未鉴权配额(60/h,按出口 IP 共享)被同网络
+  // 其它工具用光,设置面板只剩「GitHub 已限流」。版本发现因此改为只读上游
+  // 已有的清单文件,不再请求 REST API——本用例锁住「不打 api.github.com」。
+  it('discovers the latest version without touching api.github.com', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    const fetchImpl = vi
-      .fn()
-      // matching-refs:全量 driver tag(乱序也无妨,semver max)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [
-          { ref: 'refs/tags/cua-driver-rs-v0.6.8' },
-          { ref: 'refs/tags/cua-driver-rs-v0.7.0' },
-          { ref: 'refs/tags/cua-driver-rs-v0.5.8' },
-        ],
-      })
-      // release-by-tag:asset 列表
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.7.0',
-          assets: [currentPlatformReleaseAsset('0.7.0')],
-        }),
-      });
+    const fetchImpl = mockPublishedThenAssetFetch();
 
     await expect(checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch)).resolves.toEqual({
       currentVersion: '0.5.8',
@@ -4852,16 +4819,20 @@ describe('computer driver update check', () => {
       checkedAt: expect.any(Number),
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(String(fetchImpl.mock.calls[0][0])).toContain('git/matching-refs/tags/cua-driver-rs-v');
-    expect(String(fetchImpl.mock.calls[1][0])).toContain('releases/tags/cua-driver-rs-v0.7.0');
+    expect(String(fetchImpl.mock.calls[0][0])).toBe(
+      'https://raw.githubusercontent.com/trycua/cua/main/.github/release-state/cua-driver-rs-published-version',
+    );
+    const [assetUrl, assetInit] = fetchImpl.mock.calls[1];
+    expect(String(assetUrl)).toContain('releases/download/cua-driver-rs-v0.7.0/');
+    expect(assetInit).toMatchObject({ method: 'HEAD' });
+    expect(
+      fetchImpl.mock.calls.filter(([url]) => String(url).includes('api.github.com')),
+    ).toEqual([]);
   });
 
-  it('reports no update when local version already matches the latest tag (single request)', async () => {
+  it('reports no update when the installed version already matches the published one (single request)', async () => {
     mockDriverSpawn({ stdout: '0.7.0\n' });
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.7.0' }],
-    });
+    const fetchImpl = vi.fn().mockResolvedValue(publishedVersionResponse('0.7.0'));
 
     await expect(checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch)).resolves.toEqual({
       currentVersion: '0.7.0',
@@ -4871,7 +4842,7 @@ describe('computer driver update check', () => {
       checkStatus: 'success',
       checkedAt: expect.any(Number),
     });
-    // 无更新时不拉 assets,恒定 1 个请求
+    // 无更新时不探安装包,恒定 1 个请求
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -4890,10 +4861,60 @@ describe('computer driver update check', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('silently reports no update when the releases API fails', async () => {
+  it('offers no update while the published version has no downloadable platform asset yet', async () => {
+    // 上游先推进版本号、后传安装包的窗口:404 不算故障,但不能给下不下来的入口。
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(publishedVersionResponse('0.7.0'))
+      .mockResolvedValue({ ok: false, status: 404 });
+
+    await expect(checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch)).resolves.toEqual({
+      currentVersion: '0.5.8',
+      latestVersion: null,
+      updateAvailable: false,
+      updating: false,
+      checkStatus: 'error',
+      checkedAt: expect.any(Number),
+    });
+  });
+
+  // 复审 P2:HEAD 成功但明确是空包(content-length: 0 / 204)时,旧逻辑靠元数据
+  // size > 0 拦住;换成 HEAD 后必须继续拦住,否则会引导用户下空包再装失败。
+  it.each([0, 204])('offers no update when the platform asset is explicitly empty (%s)', async (contentLength) => {
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const emptyAsset =
+      contentLength === 0
+        ? { ok: true, status: 200, headers: { get: (n: string) => (n === 'content-length' ? '0' : null) } }
+        : { ok: true, status: 204, headers: { get: () => null } };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(publishedVersionResponse('0.7.0'))
+      .mockResolvedValue(emptyAsset);
+
+    await expect(checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch)).resolves.toMatchObject({
+      currentVersion: '0.5.8',
+      latestVersion: null,
+      updateAvailable: false,
+    });
+  });
+
+  it('keeps installable releases when the proxy strips the length header', async () => {
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(publishedVersionResponse('0.7.0'))
+      .mockResolvedValue({ ok: true, status: 200, headers: { get: () => null } });
+
+    await expect(checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch)).resolves.toMatchObject({
+      latestVersion: '0.7.0',
+      updateAvailable: true,
+    });
+  });
+
+  it('silently reports no update when the published-version endpoint fails', async () => {
     mockDriverSpawn({ stdout: '0.5.8\n' });
-    // 不带配额信息的 403:可能是仓库/权限问题,不能报成「稍后重试就好」。
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 403 });
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500 });
 
     await expect(checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch)).resolves.toEqual({
       currentVersion: '0.5.8',
@@ -4906,12 +4927,12 @@ describe('computer driver update check', () => {
     });
   });
 
-  it('silently reports no update on malformed API payloads', async () => {
+  it('silently reports no update when the published-version payload is not a stable semver', async () => {
     mockDriverSpawn({ stdout: '0.5.8\n' });
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
-      // matching-refs 返回非数组(异常形态)
-      json: async () => ({ message: 'unexpected object payload' }),
+      status: 200,
+      text: async () => 'cua-driver-rs-v0.7.0\n',
     });
 
     await expect(checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch)).resolves.toEqual({
@@ -4920,17 +4941,18 @@ describe('computer driver update check', () => {
       updateAvailable: false,
       updating: false,
       checkStatus: 'error',
+      checkError: { kind: 'network' },
       checkedAt: expect.any(Number),
     });
   });
 
   it('serves the cached result instantly on subsequent checks (no network wait)', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    const firstFetch = mockRefsThenReleaseFetch();
+    const firstFetch = mockPublishedThenAssetFetch();
     const first = await checkComputerDriverUpdate(firstFetch as unknown as typeof fetch);
 
     // 第二次立即返回缓存;且距上次检查未满节流窗口,不应触发后台刷新
-    // (未鉴权 GitHub API 限额有限,面板频繁开合不能放大请求量)。
+    // (上游清单文件也不该被面板频繁开合放大)。
     const hangingFetch = vi.fn().mockReturnValue(new Promise(() => {}));
     await expect(
       checkComputerDriverUpdate(hangingFetch as unknown as typeof fetch),
@@ -4947,14 +4969,14 @@ describe('computer driver update check', () => {
 
   it('bypasses fresh cached results on manual checks and shares an in-flight request', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    await checkComputerDriverUpdate(mockRefsThenReleaseFetch() as unknown as typeof fetch);
+    await checkComputerDriverUpdate(mockPublishedThenAssetFetch() as unknown as typeof fetch);
     mockDriverSpawn({ stdout: 'cua-driver 0.7.0\n' });
     let finish!: (response: unknown) => void;
     const fetchImpl = vi.fn().mockReturnValue(new Promise((resolve) => { finish = resolve; }));
     const first = checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch, { force: true });
     const second = checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch, { force: true });
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
-    finish({ ok: true, json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.7.0' }] });
+    finish(publishedVersionResponse('0.7.0'));
     const result = await first;
     expect(result).toMatchObject({ currentVersion: '0.7.0', updateAvailable: false, checkStatus: 'success' });
     expect(await second).toEqual(result);
@@ -4963,12 +4985,12 @@ describe('computer driver update check', () => {
 
   it('awaits an expired cache refresh and returns the new result to the same caller', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    const previous = await checkComputerDriverUpdate(mockRefsThenReleaseFetch() as unknown as typeof fetch);
+    const previous = await checkComputerDriverUpdate(mockPublishedThenAssetFetch() as unknown as typeof fetch);
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.setSystemTime(Date.now() + 11 * 60_000);
       mockDriverSpawn({ stdout: 'cua-driver 0.7.0\n' });
-      const result = await checkComputerDriverUpdate(mockRefsThenReleaseFetch() as unknown as typeof fetch);
+      const result = await checkComputerDriverUpdate(mockPublishedThenAssetFetch() as unknown as typeof fetch);
       expect(result).toMatchObject({ currentVersion: '0.7.0', updateAvailable: false, checkStatus: 'success' });
       expect(result.checkedAt).toBeGreaterThan(previous.checkedAt!);
     } finally {
@@ -4978,7 +5000,7 @@ describe('computer driver update check', () => {
 
   it('reports a failed refresh while keeping the previously verified update offer', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    const okFetch = mockRefsThenReleaseFetch();
+    const okFetch = mockPublishedThenAssetFetch();
     await checkComputerDriverUpdate(okFetch as unknown as typeof fetch);
 
     // 越过节流窗口后,后台刷新网络失败(latestVersion 拿不到)不应把已知的
@@ -5004,18 +5026,33 @@ describe('computer driver update check', () => {
     }
   });
 
+  it('keeps the verified offer when the asset probe fails transiently', async () => {
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    await checkComputerDriverUpdate(mockPublishedThenAssetFetch() as unknown as typeof fetch);
+
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const transientFetch = vi
+      .fn()
+      .mockResolvedValueOnce(publishedVersionResponse('0.7.0'))
+      .mockResolvedValue({ ok: false, status: 503 });
+    await expect(
+      checkComputerDriverUpdate(transientFetch as unknown as typeof fetch, { force: true }),
+    ).resolves.toMatchObject({
+      latestVersion: '0.7.0',
+      updateAvailable: true,
+      checkStatus: 'error',
+      checkError: { kind: 'network' },
+    });
+  });
+
   it('marks a GitHub rate-limited refresh as retryable instead of a broken check', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    await checkComputerDriverUpdate(mockRefsThenReleaseFetch() as unknown as typeof fetch);
+    await checkComputerDriverUpdate(mockPublishedThenAssetFetch() as unknown as typeof fetch);
 
-    // 已知有可安装新版后,后台刷新撞上 403 + 配额见底:要保留安装入口,
+    // 已知有可安装新版后,后台刷新撞上 429:要保留安装入口,
     // 同时把原因报成「限流可重试」,而不是笼统的检查失败。
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    const rateLimitedFetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 403,
-      headers: { get: (name: string) => (name === 'x-ratelimit-remaining' ? '0' : null) },
-    });
+    const rateLimitedFetch = vi.fn().mockResolvedValue({ ok: false, status: 429 });
     await expect(
       checkComputerDriverUpdate(rateLimitedFetch as unknown as typeof fetch, { force: true }),
     ).resolves.toMatchObject({
@@ -5026,9 +5063,9 @@ describe('computer driver update check', () => {
     });
   });
 
-  it('does not turn an unverified cached tag into an update after a local downgrade and network failure', async () => {
+  it('does not turn an unverified cached version into an update after a local downgrade and network failure', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.7.0\n' });
-    await expect(checkComputerDriverUpdate(mockRefsThenReleaseFetch() as unknown as typeof fetch))
+    await expect(checkComputerDriverUpdate(mockPublishedThenAssetFetch() as unknown as typeof fetch))
       .resolves.toMatchObject({ latestVersion: '0.7.0', updateAvailable: false });
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
     const failedFetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
@@ -5036,65 +5073,10 @@ describe('computer driver update check', () => {
       .resolves.toMatchObject({ currentVersion: '0.5.8', updateAvailable: false, checkStatus: 'error' });
   });
 
-  it('keeps a newer verified target when its background probe transiently falls back', async () => {
-    mockDriverSpawn({ stdout: 'cua-driver 0.10.0\n' });
-    const initialFetch = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.12.0' }],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.12.0',
-          assets: [currentPlatformReleaseAsset('0.12.0')],
-        }),
-      });
-    await checkComputerDriverUpdate(initialFetch as unknown as typeof fetch);
-
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      vi.setSystemTime(Date.now() + 11 * 60_000);
-      mockDriverSpawn({ stdout: 'cua-driver 0.10.0\n' });
-      const refreshedFetch = vi
-        .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => [
-            { ref: 'refs/tags/cua-driver-rs-v0.12.0' },
-            { ref: 'refs/tags/cua-driver-rs-v0.11.0' },
-          ],
-        })
-        .mockResolvedValueOnce({ ok: false, status: 503 })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            tag_name: 'cua-driver-rs-v0.11.0',
-            assets: [currentPlatformReleaseAsset('0.11.0')],
-          }),
-        });
-
-      await expect(
-        checkComputerDriverUpdate(refreshedFetch as unknown as typeof fetch),
-      ).resolves.toMatchObject({ latestVersion: '0.12.0', updateAvailable: true });
-      await new Promise((resolve) => { setTimeout(resolve, 0); });
-      expect(refreshedFetch).toHaveBeenCalledTimes(3);
-
-      const hangingFetch = vi.fn().mockReturnValue(new Promise(() => {}));
-      await expect(
-        checkComputerDriverUpdate(hangingFetch as unknown as typeof fetch),
-      ).resolves.toMatchObject({ latestVersion: '0.12.0', updateAvailable: true });
-      expect(hangingFetch).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it('updateComputerDriver joins one in-flight install and clears the cached check on success', async () => {
     // 先塞一个"有更新"缓存
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    const fetchImpl = mockRefsThenReleaseFetch();
+    const fetchImpl = mockPublishedThenAssetFetch();
     await checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch);
 
     // installComputerDriver 的 spawn 序列:installer + status(version/daemon[/permissions])
@@ -5127,10 +5109,7 @@ describe('computer driver update check', () => {
 
     // 成功后缓存被清:下一次 check 重新走网络(注入 no-update 响应验证)
     mockDriverSpawn({ stdout: 'cua-driver 0.7.0\n' });
-    const refreshedFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.7.0' }],
-    });
+    const refreshedFetch = vi.fn().mockResolvedValue(publishedVersionResponse('0.7.0'));
     await expect(
       checkComputerDriverUpdate(refreshedFetch as unknown as typeof fetch),
     ).resolves.toEqual({
@@ -5146,7 +5125,7 @@ describe('computer driver update check', () => {
 
   it.each(['0.5.8', '0.7.0'])('rechecks the installed version %s after a nonzero installer exit', async (version) => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    const fetchImpl = mockRefsThenReleaseFetch();
+    const fetchImpl = mockPublishedThenAssetFetch();
     await checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch);
 
     mockDriverSpawn({ exitCode: 1, stderr: 'installer cleanup failed' });
@@ -5158,7 +5137,7 @@ describe('computer driver update check', () => {
 
     // Completion must invalidate the ten-minute cache even if the binary changed.
     mockDriverSpawn({ stdout: `cua-driver ${version}\n` });
-    const refreshedFetch = mockRefsThenReleaseFetch();
+    const refreshedFetch = mockPublishedThenAssetFetch();
     await expect(checkComputerDriverUpdate(refreshedFetch as unknown as typeof fetch))
       .resolves.toMatchObject({
         currentVersion: version,
@@ -5170,7 +5149,7 @@ describe('computer driver update check', () => {
 
   it('invalidates the cached offer when the installer cannot start', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    const fetchImpl = mockRefsThenReleaseFetch();
+    const fetchImpl = mockPublishedThenAssetFetch();
     await checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch);
     mockDriverSpawn({ error: new Error('spawn failed') });
     await expect(updateComputerDriver(undefined, {
@@ -5178,7 +5157,7 @@ describe('computer driver update check', () => {
     })).rejects.toThrow('spawn failed');
 
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    const refreshedFetch = mockRefsThenReleaseFetch();
+    const refreshedFetch = mockPublishedThenAssetFetch();
     await expect(checkComputerDriverUpdate(refreshedFetch as unknown as typeof fetch))
       .resolves.toMatchObject({ currentVersion: '0.5.8', updateAvailable: true, updating: false });
     expect(refreshedFetch).toHaveBeenCalled();
@@ -5186,7 +5165,7 @@ describe('computer driver update check', () => {
 
   it.each(['cached', 'pending', 'absent'])('returns post-install state to late check callers (new check: %s)', async (freshState) => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    const fetchImpl = mockRefsThenReleaseFetch();
+    const fetchImpl = mockPublishedThenAssetFetch();
     await checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch);
 
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -5194,13 +5173,10 @@ describe('computer driver update check', () => {
       vi.setSystemTime(Date.now() + 11 * 60_000);
       mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
       let finishOldCheck!: (response: unknown) => void;
+      // 旧检查的清单请求挂住;之后同一 mock 的调用都当作安装包 HEAD。
       const lateFetch = vi.fn()
         .mockImplementationOnce(() => new Promise((resolve) => { finishOldCheck = resolve; }))
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ tag_name: 'cua-driver-rs-v0.7.0', assets: [currentPlatformReleaseAsset('0.7.0')] }),
-        })
-        .mockImplementation(mockRefsThenReleaseFetch());
+        .mockResolvedValue(assetHeadResponse());
       const oldCheck = checkComputerDriverUpdate(lateFetch as unknown as typeof fetch);
       await vi.waitFor(() => expect(lateFetch).toHaveBeenCalledOnce());
 
@@ -5213,14 +5189,14 @@ describe('computer driver update check', () => {
       let finishFreshCheck!: (response: unknown) => void;
       const freshFetch = vi.fn().mockImplementation(() => new Promise((resolve) => { finishFreshCheck = resolve; }));
       const freshCheck = freshState === 'absent' ? null : checkComputerDriverUpdate(
-        (freshState === 'cached' ? mockRefsThenReleaseFetch() : freshFetch) as unknown as typeof fetch,
+        (freshState === 'cached' ? mockPublishedThenAssetFetch() : freshFetch) as unknown as typeof fetch,
       );
       if (freshState === 'cached') await freshCheck;
       if (freshState === 'pending') await vi.waitFor(() => expect(freshFetch).toHaveBeenCalledOnce());
-      finishOldCheck({ ok: true, json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.7.0' }] });
+      finishOldCheck(publishedVersionResponse('0.7.0'));
       if (freshState === 'pending') {
         await vi.waitFor(() => expect(lateFetch).toHaveBeenCalledTimes(2));
-        finishFreshCheck({ ok: true, json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.7.0' }] });
+        finishFreshCheck(publishedVersionResponse('0.7.0'));
       }
       await expect(oldCheck).resolves.toMatchObject({ currentVersion: '0.7.0', updateAvailable: false });
       if (freshCheck) await expect(freshCheck).resolves.toMatchObject({ currentVersion: '0.7.0', updateAvailable: false });
@@ -5236,7 +5212,7 @@ describe('computer driver update check', () => {
 
   it('reports updating=true while a driver update install is in flight', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    const fetchImpl = mockRefsThenReleaseFetch();
+    const fetchImpl = mockPublishedThenAssetFetch();
     await checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch);
 
     // 安装脚本挂起 → updateComputerDriver 处于 in-flight
@@ -5427,28 +5403,6 @@ describe('driver update download progress helpers', () => {
     expect(matchAssetSizeByFilename(assets, '/tmp/unknown.tar.gz')).toBeNull();
   });
 
-  it('pickLatestCuaDriverRelease returns version and assets of the semver-max driver release', () => {
-    const release = pickLatestCuaDriverRelease([
-      { tag_name: 'agent-v0.8.4', assets: [{ name: 'other', size: 1 }] },
-      {
-        tag_name: 'cua-driver-rs-v0.6.8',
-        assets: [{ name: 'cua-driver-rs-0.6.8-darwin-universal.tar.gz', size: 100 }],
-      },
-      {
-        tag_name: 'cua-driver-rs-v0.7.0',
-        assets: [
-          { name: 'cua-driver-rs-0.7.0-darwin-universal.tar.gz', size: 21147689 },
-          { name: 'bad-entry', size: 'not-a-number' },
-        ],
-      },
-    ]);
-    expect(release?.version).toBe('0.7.0');
-    expect(release?.assets).toEqual([
-      { name: 'cua-driver-rs-0.7.0-darwin-universal.tar.gz', size: 21147689 },
-    ]);
-    expect(pickLatestCuaDriverRelease([{ tag_name: 'cli-v0.1.12' }])).toBeNull();
-  });
-
   it('maps the assets used by the official installer on every supported platform', () => {
     expect(getCuaDriverReleaseAssetName('0.7.0', 'darwin', 'arm64')).toBe(
       'cua-driver-rs-0.7.0-darwin-universal.tar.gz',
@@ -5496,227 +5450,25 @@ describe('driver update download progress helpers', () => {
   });
 });
 
-describe('review follow-ups: releases pagination and Windows idle timeout', () => {
+describe('review follow-ups: published-version discovery and Windows idle timeout', () => {
   beforeEach(() => {
     spawnMock.mockReset();
     resetComputerDriverUpdateStateForTests();
   });
 
-  it('pages matching-refs only when a page is full, stopping at a short page', async () => {
-    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-    const fullPage = Array.from({ length: 100 }, (_, i) => ({
-      ref: `refs/tags/cua-driver-rs-v0.1.${i}`,
-    }));
-    const shortPage = [{ ref: 'refs/tags/cua-driver-rs-v0.7.0' }];
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => fullPage })
-      .mockResolvedValueOnce({ ok: true, json: async () => shortPage })
-      // assets by tag
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.7.0',
-          assets: [currentPlatformReleaseAsset('0.7.0')],
-        }),
-      });
-
-    await expect(
-      checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch),
-    ).resolves.toMatchObject({ latestVersion: '0.7.0', updateAvailable: true });
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-  });
-
-  it('takes semver max across all driver tags regardless of ref ordering', async () => {
-    // matching-refs 按字母序返回,0.10.0 会排在 0.9.0 前 —— 必须数值比较
-    mockDriverSpawn({ stdout: 'cua-driver 0.9.0\n' });
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [
-          { ref: 'refs/tags/cua-driver-rs-v0.10.0' },
-          { ref: 'refs/tags/cua-driver-rs-v0.9.0' },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.10.0',
-          assets: [currentPlatformReleaseAsset('0.10.0')],
-        }),
-      });
-
-    await expect(
-      checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch),
-    ).resolves.toMatchObject({ latestVersion: '0.10.0', updateAvailable: true });
-  });
-
-  it('falls back when the newest tag has no published release', async () => {
+  it('hides the updater when the published version has no downloadable asset', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.10.0\n' });
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [
-          { ref: 'refs/tags/cua-driver-rs-v0.11.0' },
-          { ref: 'refs/tags/cua-driver-rs-v0.12.0' },
-        ],
-      })
-      .mockResolvedValueOnce({ ok: false, status: 404 })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.11.0',
-          assets: [currentPlatformReleaseAsset('0.11.0')],
-        }),
-      });
-
-    await expect(
-      checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch),
-    ).resolves.toMatchObject({ latestVersion: '0.11.0', updateAvailable: true });
-    expect(String(fetchImpl.mock.calls[1][0])).toContain('cua-driver-rs-v0.12.0');
-    expect(String(fetchImpl.mock.calls[2][0])).toContain('cua-driver-rs-v0.11.0');
-  });
-
-  it('keeps probing past five incomplete tags to find an older installable update', async () => {
-    mockDriverSpawn({ stdout: 'cua-driver 0.6.0\n' });
-    const fetchImpl = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: async () => [
-        { ref: 'refs/tags/cua-driver-rs-v0.12.0' },
-        { ref: 'refs/tags/cua-driver-rs-v0.11.0' },
-        { ref: 'refs/tags/cua-driver-rs-v0.10.0' },
-        { ref: 'refs/tags/cua-driver-rs-v0.9.0' },
-        { ref: 'refs/tags/cua-driver-rs-v0.8.0' },
-        { ref: 'refs/tags/cua-driver-rs-v0.7.0' },
-      ],
-    });
-    for (let index = 0; index < 5; index += 1) {
-      fetchImpl.mockResolvedValueOnce({ ok: false, status: 404 });
-    }
-    fetchImpl.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        tag_name: 'cua-driver-rs-v0.7.0',
-        assets: [currentPlatformReleaseAsset('0.7.0')],
-      }),
-    });
-
-    await expect(
-      checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch),
-    ).resolves.toMatchObject({ latestVersion: '0.7.0', updateAvailable: true });
-    expect(fetchImpl).toHaveBeenCalledTimes(7);
-  });
-
-  it('accepts installable releases that upstream marks as GitHub prereleases', async () => {
-    mockDriverSpawn({ stdout: 'cua-driver 0.10.0\n' });
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.11.0' }],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.11.0',
-          prerelease: true,
-          assets: [currentPlatformReleaseAsset('0.11.0')],
-        }),
-      });
-
-    await expect(
-      checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch),
-    ).resolves.toMatchObject({ latestVersion: '0.11.0', updateAvailable: true });
-  });
-
-  it('skips releases without the current-platform installer asset', async () => {
-    mockDriverSpawn({ stdout: 'cua-driver 0.10.0\n' });
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [
-          { ref: 'refs/tags/cua-driver-rs-v0.12.0' },
-          { ref: 'refs/tags/cua-driver-rs-v0.11.0' },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.12.0',
-          assets: [{ name: 'checksums.txt', size: 100 }],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.11.0',
-          assets: [currentPlatformReleaseAsset('0.11.0')],
-        }),
-      });
-
-    await expect(
-      checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch),
-    ).resolves.toMatchObject({ latestVersion: '0.11.0', updateAvailable: true });
-  });
-
-  it('skips starter and zero-byte platform assets until an uploaded archive is available', async () => {
-    mockDriverSpawn({ stdout: 'cua-driver 0.10.0\n' });
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [
-          { ref: 'refs/tags/cua-driver-rs-v0.13.0' },
-          { ref: 'refs/tags/cua-driver-rs-v0.12.0' },
-          { ref: 'refs/tags/cua-driver-rs-v0.11.0' },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.13.0',
-          assets: [{ ...currentPlatformReleaseAsset('0.13.0'), state: 'starter' }],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.12.0',
-          assets: [currentPlatformReleaseAsset('0.12.0', 0)],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.11.0',
-          assets: [currentPlatformReleaseAsset('0.11.0')],
-        }),
-      });
-
-    await expect(
-      checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch),
-    ).resolves.toMatchObject({ latestVersion: '0.11.0', updateAvailable: true });
-  });
-
-  it('hides the updater when no newer tag is installable', async () => {
-    mockDriverSpawn({ stdout: 'cua-driver 0.10.0\n' });
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.12.0' }],
-      })
-      .mockResolvedValueOnce({ ok: false, status: 404 });
+      .mockResolvedValueOnce(publishedVersionResponse('0.12.0'))
+      .mockResolvedValue({ ok: false, status: 404 });
 
     await expect(checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch)).resolves.toEqual({
       currentVersion: '0.10.0',
-      latestVersion: '0.10.0',
+      latestVersion: null,
       updateAvailable: false,
       updating: false,
-      checkStatus: 'success',
+      checkStatus: 'error',
       checkedAt: expect.any(Number),
     });
     const installerCallsBefore = spawnMock.mock.calls.length;
@@ -5726,78 +5478,43 @@ describe('review follow-ups: releases pagination and Windows idle timeout', () =
     expect(spawnMock.mock.calls).toHaveLength(installerCallsBefore);
   });
 
-  it('revalidates on click and falls back when the cached release disappears', async () => {
+  it('revalidates on click and refuses a target that is no longer downloadable', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.10.0\n' });
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.12.0' }],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.12.0',
-          assets: [currentPlatformReleaseAsset('0.12.0')],
-        }),
-      })
+      .mockResolvedValueOnce(publishedVersionResponse('0.12.0'))
+      .mockResolvedValueOnce(assetHeadResponse())
+      // 点更新:预检 HEAD 已经下不动,重读上游清单仍是 0.12.0
       .mockResolvedValueOnce({ ok: false, status: 404 })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [
-          { ref: 'refs/tags/cua-driver-rs-v0.12.0' },
-          { ref: 'refs/tags/cua-driver-rs-v0.11.0' },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.11.0',
-          assets: [currentPlatformReleaseAsset('0.11.0')],
-        }),
-      });
+      .mockResolvedValueOnce(publishedVersionResponse('0.12.0'))
+      .mockResolvedValueOnce({ ok: false, status: 404 });
 
     await checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch);
     mockDriverSpawn({ stdout: 'cua-driver 0.10.0\n' });
-    mockDriverSpawn({ stdout: 'installed\n' });
-    mockDriverSpawn({ stdout: 'cua-driver 0.11.0\n' });
-    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n' });
-    if (process.platform === 'darwin') {
-      mockDriverSpawn({
-        stdout:
-          '{"accessibility":true,"screen_recording":true,"screen_recording_capturable":true,"source":{"attribution":"driver-daemon"}}\n',
-      });
-    }
-
     const installerCallsBefore = spawnMock.mock.calls.length;
-    await updateComputerDriver(undefined, { fetchImpl: fetchImpl as unknown as typeof fetch });
-    const installerCall = spawnMock.mock.calls
-      .slice(installerCallsBefore)
-      .find((call) => String(call[0]).match(/bash|powershell/i));
-    expect(installerCall?.[2]?.env?.CUA_DRIVER_RS_VERSION).toBe('0.11.0');
+    await expect(
+      updateComputerDriver(undefined, { fetchImpl: fetchImpl as unknown as typeof fetch }),
+    ).rejects.toThrow('no verified installable cua-driver update is available');
+    expect(
+      spawnMock.mock.calls.slice(installerCallsBefore).filter((call) => String(call[0]).match(/bash|powershell/i)),
+    ).toEqual([]);
+    // 点击时的预检必须重新 HEAD 目标包,不能只信缓存
+    expect(String(fetchImpl.mock.calls[2][0])).toContain('releases/download/cua-driver-rs-v0.12.0/');
+    expect(fetchImpl.mock.calls[2][1]).toMatchObject({ method: 'HEAD' });
+    // 清单没变时不再重复 HEAD 同一个包(第 4 次是读清单,之后就结束)
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 
   it('throttles panel refreshes after an update preflight performs a fallback check', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.10.0\n' });
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.12.0' }],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.12.0',
-          assets: [currentPlatformReleaseAsset('0.12.0')],
-        }),
-      })
-      // update click:cached target disappeared,then fallback sees no other candidate
+      .mockResolvedValueOnce(publishedVersionResponse('0.12.0'))
+      .mockResolvedValueOnce(assetHeadResponse())
+      // 点更新:预检 HEAD 失败 → 重读上游,仍有版本但没有可下载的包
       .mockResolvedValueOnce({ ok: false, status: 404 })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.12.0' }],
-      });
+      .mockResolvedValueOnce(publishedVersionResponse('0.12.0'))
+      .mockResolvedValueOnce({ ok: false, status: 404 });
 
     await checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch);
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -5823,14 +5540,11 @@ describe('review follow-ups: releases pagination and Windows idle timeout', () =
     }
   });
 
-  it('fails closed when a release probe fails with a server error', async () => {
+  it('fails closed when the asset probe fails with a server error', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.10.0\n' });
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.12.0' }],
-      })
+      .mockResolvedValueOnce(publishedVersionResponse('0.12.0'))
       .mockResolvedValueOnce({ ok: false, status: 503 });
 
     await expect(checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch)).resolves.toEqual({
@@ -5839,66 +5553,10 @@ describe('review follow-ups: releases pagination and Windows idle timeout', () =
       updateAvailable: false,
       updating: false,
       checkStatus: 'error',
+      checkError: { kind: 'network' },
       checkedAt: expect.any(Number),
     });
   });
-
-  it('continues to an older candidate after a transient release probe error', async () => {
-    mockDriverSpawn({ stdout: 'cua-driver 0.10.0\n' });
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [
-          { ref: 'refs/tags/cua-driver-rs-v0.12.0' },
-          { ref: 'refs/tags/cua-driver-rs-v0.11.0' },
-        ],
-      })
-      .mockResolvedValueOnce({ ok: false, status: 503 })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          tag_name: 'cua-driver-rs-v0.11.0',
-          assets: [currentPlatformReleaseAsset('0.11.0')],
-        }),
-      });
-
-    await expect(
-      checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch),
-    ).resolves.toMatchObject({ latestVersion: '0.11.0', updateAvailable: true });
-  });
-
-  it('sends Authorization only when GITHUB_TOKEN/GH_TOKEN is present', async () => {
-    const savedGithub = process.env.GITHUB_TOKEN;
-    const savedGh = process.env.GH_TOKEN;
-    try {
-      delete process.env.GITHUB_TOKEN;
-      delete process.env.GH_TOKEN;
-      mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-      const noAuthFetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.5.8' }],
-      });
-      await checkComputerDriverUpdate(noAuthFetch as unknown as typeof fetch);
-      expect(noAuthFetch.mock.calls[0][1].headers.Authorization).toBeUndefined();
-
-      resetComputerDriverUpdateStateForTests();
-      process.env.GITHUB_TOKEN = 'test-token';
-      mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
-      const authFetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.5.8' }],
-      });
-      await checkComputerDriverUpdate(authFetch as unknown as typeof fetch);
-      expect(authFetch.mock.calls[0][1].headers.Authorization).toBe('Bearer test-token');
-    } finally {
-      if (savedGithub === undefined) delete process.env.GITHUB_TOKEN;
-      else process.env.GITHUB_TOKEN = savedGithub;
-      if (savedGh === undefined) delete process.env.GH_TOKEN;
-      else process.env.GH_TOKEN = savedGh;
-    }
-  });
-
   it('join-only update never starts a fresh install when none is in flight', async () => {
     // resume 竞态防护:checkUpdate 报 updating 后原安装恰好完成,joinOnly
     // 调用只读状态返回,不 spawn 安装脚本。
