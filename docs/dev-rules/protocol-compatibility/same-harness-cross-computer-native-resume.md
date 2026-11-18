@@ -36,7 +36,8 @@ Pi 只改写副本首行的 session ID 与 cwd，使其指向接收端工作目�
 带齐可重放文本，后者表示较早记录有省略或缩短。通过迁移或备份原生接续时均省略该字段。数据库标记的 `content.handoff` 保有
 发送全文，重启后仍按既有消费位恢复 pending。新分隔条在普通列表、推送和镜像缓存中最多带 2,048 字符、JSON 编码 6 KiB 的预览，
 旧端忽略 coverage 字段并照常读 `handoff`／`resumed`。沿用既有消息投影和 Agent send 通道。数据库 schema、环境变量与 Mobile 原生配置均无变化。
-远程 Agent 发送过大的内联载荷时走既有压缩分片上传。代输入 IPC 的 200,000 字符上限只约束代输入请求。
+远程 Agent 发送过大的内联载荷时走既有压缩分片上传。`maker:session:handoff` 的 200,000 字符上限约束跨电脑
+任务转发的请求正文。重放由宿主注入后经远程 Agent 发送通道传输。
 
 回归：`relocateNativeHistory.test.ts`、`nativeHistoryTransfer.test.ts`、`nativeHistoryStorage.test.ts`、
 `sessionAgentSwitchHandler.test.ts`、`agentHandoff.test.ts`、device-link `remoteAgent.test.ts`。
