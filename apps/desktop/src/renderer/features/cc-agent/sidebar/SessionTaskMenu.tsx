@@ -37,6 +37,7 @@ import {
   moveRemoteTaskProject,
   type TaskMoveDestination,
 } from './TaskMoveSubmenu';
+import { SessionSnoozeCustomDialog, SessionSnoozeSubmenu, type SnoozeAction } from './SessionSnoozeAction';
 import { TaskMigrationDialog } from './TaskMigrationDialog';
 import { TaskRuntimePluginsDialog } from './TaskRuntimePluginsDialog';
 import { setSessionNotificationsMuted } from './sessionNotificationMute';
@@ -51,6 +52,7 @@ interface Props {
   session: Session;
   open: boolean;
   writeBlocked: boolean;
+  snoozeAction?: SnoozeAction;
   sideOffset?: number;
   returnFocus: () => void;
   onRename: () => void;
@@ -65,7 +67,8 @@ interface Props {
   exportShare: ReactNode;
 }
 
-type SharingDialog =
+type TaskMenuDialog =
+  | { kind: 'custom-snooze' }
   | { kind: 'manage' }
   | { kind: 'migration'; destination?: TaskMoveDestination }
   | { kind: 'browse-project' }
@@ -74,7 +77,7 @@ type SharingDialog =
 
 /** One menu order for the header, text rows and cards. Keep row-specific action handlers. */
 export function SessionTaskMenu(props: Props) {
-  const [dialog, setDialog] = useState<SharingDialog | null>(null);
+  const [dialog, setDialog] = useState<TaskMenuDialog | null>(null);
   // Do not mount sharing controls for every idle sidebar row.
   if (!props.open && !dialog) return null;
   return <ActiveSessionTaskMenu {...props} dialog={dialog} setDialog={setDialog} />;
@@ -84,6 +87,7 @@ function ActiveSessionTaskMenu({
   session,
   open,
   writeBlocked,
+  snoozeAction,
   sideOffset = 4,
   returnFocus,
   onRename,
@@ -99,8 +103,8 @@ function ActiveSessionTaskMenu({
   dialog,
   setDialog,
 }: Props & {
-  dialog: SharingDialog | null;
-  setDialog: (dialog: SharingDialog | null) => void;
+  dialog: TaskMenuDialog | null;
+  setDialog: (dialog: TaskMenuDialog | null) => void;
 }) {
   const { t } = useTranslation();
   const { dataOwnerId } = useAuth();
@@ -204,7 +208,7 @@ function ActiveSessionTaskMenu({
       });
     else setDialog({ kind: 'manage' });
   };
-  const dismissSharing = () => {
+  const dismissDialog = () => {
     setDialog(null);
     // Restore the row after the confirmation's focus scope has unmounted.
     requestAnimationFrame(returnFocus);
@@ -212,6 +216,7 @@ function ActiveSessionTaskMenu({
   const archived = session.status === 'archived';
   const empty = isEmptyDraftSession(session);
   const ownerActionsBlocked = writeBlocked || guest;
+  const canSnooze = snoozeAction && !archived && !ownerActionsBlocked;
   const showRuntimePlugins = !session.deviceLinkDeviceId && (
     session.runtimePluginsSelected === true || readInstalledGhostsSnapshot().some(ghost =>
       declaredGhostControlPoints(ghost.manifest).some(isRuntimePluginPoint))
@@ -245,6 +250,13 @@ function ActiveSessionTaskMenu({
             {!archived &&
               !empty &&
               item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
+            {canSnooze && (
+              <SessionSnoozeSubmenu
+                session={session}
+                action={snoozeAction}
+                onCustom={() => setDialog({ kind: 'custom-snooze' })}
+              />
+            )}
             {item('rename', onRename, ownerActionsBlocked)}
             {/* 提醒归任务所在的那台设备发，device-link 任务（别人的任务）在这里设不了。 */}
             {!archived && !empty && !session.deviceLinkDeviceId && (
@@ -349,6 +361,9 @@ function ActiveSessionTaskMenu({
           </>
         )}
       </DropdownMenuContent>
+      {canSnooze && dialog?.kind === 'custom-snooze' && (
+        <SessionSnoozeCustomDialog action={snoozeAction} session={session} onDismiss={dismissDialog} />
+      )}
       {dialog?.kind === 'manage' && (
         <SharedTaskButton
           session={session}
@@ -358,19 +373,19 @@ function ActiveSessionTaskMenu({
           }}
         />
       )}
-      {dialog?.kind === 'runtime-plugins' && <TaskRuntimePluginsDialog session={session} onDismiss={dismissSharing} />}
+      {dialog?.kind === 'runtime-plugins' && <TaskRuntimePluginsDialog session={session} onDismiss={dismissDialog} />}
       {dialog?.kind === 'migration' && (
         <TaskMigrationDialog
           session={session}
           destination={dialog.destination}
-          onDismiss={dismissSharing}
+          onDismiss={dismissDialog}
         />
       )}
       {dialog?.kind === 'browse-project' && session.deviceLinkDeviceId && (
         <AddRemoteProjectDialog
           open
           onOpenChange={(open) => {
-            if (!open) dismissSharing();
+            if (!open) dismissDialog();
           }}
           initialDeviceId={session.deviceLinkDeviceId}
           fixedDeviceId={session.deviceLinkDeviceId}
@@ -386,13 +401,14 @@ function ActiveSessionTaskMenu({
       )}
       {dialog &&
         dialog.kind !== 'browse-project' &&
+        dialog.kind !== 'custom-snooze' &&
         dialog.kind !== 'manage' &&
         dialog.kind !== 'migration' &&
         dialog.kind !== 'runtime-plugins' && (
           <SharedTaskExitDialog
             target={dialog}
-            onDismiss={dismissSharing}
-            onComplete={dismissSharing}
+            onDismiss={dismissDialog}
+            onComplete={dismissDialog}
           />
         )}
     </div>

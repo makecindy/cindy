@@ -1,6 +1,6 @@
 import { ResolvedProjectIcon } from './ResolvedProjectIcon';
 import { sessionProjectDirectory, sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
-import { SessionSnoozeAction } from './SessionSnoozeAction';
+import { SessionSnoozeAction, useSessionSnooze, type SnoozeAction } from './SessionSnoozeAction';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
@@ -178,6 +178,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
   const ordinalBadge = useSessionOrdinalBadge(session.id);
   const ordinalBadgeLabel = navigationOnly ? null : ordinalBadge;
+  const snoozeAction = useSessionSnooze(session);
   const canOpenTaskMenu = !navigationOnly || isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
   const islandActivity = useAgentIslandActivity(session.id);
@@ -862,6 +863,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 Agent 身份图标留在标题左侧，状态指示器改由下方右下角承担。 */}
             {!isEditing && (
               <TimeActionsSlot
+                snoozeAction={snoozeAction}
                 session={session}
                 inboxMode={inboxMode}
                 navigationOnly={navigationOnly}
@@ -1186,6 +1188,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             />
           </DropdownMenuTrigger>
           <SessionTaskMenu key={`${session.deviceLinkDeviceId ?? ''}:${session.id}`}
+            snoozeAction={inboxMode && !navigationOnly ? snoozeAction : undefined}
             session={session} open={menuPos !== null} sideOffset={2} writeBlocked={remoteWritesBlocked}
             returnFocus={() => cardRef.current?.focus()}
             onRename={handleRenameSelect} onPin={handlePinSelect}
@@ -1214,6 +1217,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
  *  交互逻辑与对话列表(SessionItem)一致。Agent 身份 / 草稿由左侧 SessionStatusIcon 承担；
  *  list 的右下状态指示器由 SidebarRightStatusIndicator 单独承担。 */
 function TimeActionsSlot({
+  snoozeAction,
   session,
   inboxMode = false,
   navigationOnly = false,
@@ -1238,6 +1242,7 @@ function TimeActionsSlot({
   session: Session;
   inboxMode?: boolean;
   navigationOnly?: boolean;
+  snoozeAction: SnoozeAction;
   pieces: readonly SessionInfoPiece[];
   prRef?: SessionPrRef;
   worktree?: SessionWorktreeInfo;
@@ -1352,6 +1357,7 @@ function TimeActionsSlot({
               {inboxMode ? (
                 canSnooze && (
                   <SessionSnoozeAction
+                    action={snoozeAction}
                     session={session}
                     isActive={isActive}
                     onOpenChange={setSnoozeOpen}
