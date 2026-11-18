@@ -39,6 +39,7 @@ export { deriveRunMode, hasRealBinding, PENDING_SESSION_ID } from '../lib/schedu
 import { normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
 
 function prFields(schedule: Schedule): Partial<ScheduleFormState> {
+  if (schedule.webhookTrigger && schedule.prTrigger === undefined) return {};
   const rules = schedulePrTriggers(schedule);
   if (rules.length !== 1) return schedule.prTrigger === null ? { prEnabled: false } : {};
   return { prEnabled: true, prUrl: rules[0]!.url, prChange: rules[0]!.change };

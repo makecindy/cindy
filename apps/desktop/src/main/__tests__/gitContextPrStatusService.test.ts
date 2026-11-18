@@ -879,6 +879,27 @@ describe('PR follow watch', () => {
     expect(runNow).toHaveBeenCalledWith('merged', expect.objectContaining({ detail: target }), tasks[0]);
   });
 
+  // #11309: a failed timed check can advance lastFiredAt without handling the merge.
+  it('recovers an unseen merge after a failed check, and skips a previously processed merge after restart', async () => {
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+    const task = schedule('merge', url, { createdAt: 1, lastFiredAt: 30, prTrigger: { url, change: 'merged' } });
+    const runNow = vi.fn(async () => null);
+    const hasSuccessfulPrRunSince = vi.fn(async () => false);
+    const watch = new PrFollowWatch({ listActive: async () => [task], inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true, hasSuccessfulPrRunSince, runNow });
+    const merged = { ok: true, status: 'merged', metadata: { merged_at: new Date(20).toISOString() } } as never;
+    watch.observe(Q, { ok: false, reason: 'fetch-failed' } as never);
+    watch.observe(Q, merged);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledTimes(1);
+    expect(hasSuccessfulPrRunSince).toHaveBeenCalledWith('merge', 20);
+    watch.reset();
+    hasSuccessfulPrRunSince.mockResolvedValue(true);
+    watch.observe(Q, merged);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
   it('filters CI, review and recovery wakeups for ordinary tasks with no gate', async () => {
     const url = 'https://github.com/makecindy/cindy/pull/85';
     const tasks = (['ci', 'review', 'merged', 'any'] as const).map(change =>

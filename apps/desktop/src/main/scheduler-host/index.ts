@@ -22,6 +22,8 @@ import { withScheduleLock } from './scheduleLock';
 import { runSchedulerStartup } from './scheduler-startup-lifecycle';
 
 export interface SchedulerHostStartDeps {
+  /** Reconcile a timed PR check through this host’s status observer. */
+  refreshSchedulePr?(url: string): Promise<void>;
   maker: Maker;
   getDb: () => SchedulerDrizzleDb;
   logger: Logger;
@@ -50,7 +52,6 @@ export interface SchedulerHostRuntime<Deps extends SchedulerHostStartDeps> {
   dialogueWorkspaceRoots(): string[];
   onStarted(scheduler: Scheduler, deps: Deps, passive: boolean): void;
   /** Wraps the runner, e.g. to skip a teammate project's automations on a computer it was handed away from. */
-  refreshSchedulePr?(url: string): Promise<void>;
   wrapRunner?(runner: ScheduleRunner): ScheduleRunner;
   captureFireContext?: () => () => void;
   /** Existing teammate projects sync directly; deleted ones cannot be recreated by late writes. */
@@ -103,8 +104,8 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
           // A timed reconciliation samples the same observer as App and foreground updates.
           // Existing all-change checks retain their own polling and review/CI pacing.
           if (ctx.timed && schedule.prTrigger && !(schedule.prTrigger.change === 'any' && schedule.preRunHook)) {
-            if (!runtime.refreshSchedulePr) throw new Error('PR status lookup is unavailable on this host');
-            await runtime.refreshSchedulePr(schedule.prTrigger.url);
+            if (!deps.refreshSchedulePr) throw new Error('PR status lookup is unavailable on this host');
+            await deps.refreshSchedulePr(schedule.prTrigger.url);
             return { sessionId: '', skipped: true };
           }
           // 所有定时任务(Agent / 脚本)的唯一入口：插件前置检查放在检查脚本、建任务之前。

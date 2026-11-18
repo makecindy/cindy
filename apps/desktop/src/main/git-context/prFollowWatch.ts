@@ -23,6 +23,8 @@ const MAX_TRACKED = 500;
 export interface PrFollowWatchDeps {
   /** Active schedules (CRUD view, bot routines excluded). */
   listActive(): Promise<Schedule[]>;
+  /** Completed PR-triggered executions survive restarts and failed timed lookups. */
+  hasSuccessfulPrRunSince?(id: string, since: number): Promise<boolean>;
   /** Runs of this schedule in flight right now. */
   inflight(id: string): number;
   /** False on a passive instance: automatic runs belong to another instance sharing the data. */
@@ -81,7 +83,7 @@ export class PrFollowWatch {
   private readonly signatures = new Map<string, string>();
   private readonly lastTriggered = new Map<string, number>();
   /** Keep one doorbell per schedule, so retrying a busy follower cannot rerun its siblings. */
-  private readonly pending = new Map<string, { url: string; changes: readonly WatchChange[]; isCurrent: () => boolean }>();
+  private readonly pending = new Map<string, { url: string; changes: readonly WatchChange[]; isCurrent: () => boolean; mergedAt?: number }>();
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly now: () => number;
 
@@ -146,14 +148,14 @@ export class PrFollowWatch {
   private retryPending(): void {
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
-    for (const [id, { url, changes, isCurrent }] of Array.from(this.pending)) {
+    for (const [id, { url, changes, isCurrent, mergedAt }] of Array.from(this.pending)) {
       this.pending.delete(id);
-      void this.trigger(url, changes, isCurrent, id).catch(() => undefined);
+      void this.trigger(url, changes, isCurrent, id, mergedAt).catch(() => undefined);
     }
   }
 
-  private defer(id: string, url: string, changes: readonly WatchChange[], isCurrent: () => boolean): void {
-    this.pending.set(id, { url, changes, isCurrent });
+  private defer(id: string, url: string, changes: readonly WatchChange[], isCurrent: () => boolean, mergedAt?: number): void {
+    this.pending.set(id, { url, changes, isCurrent, mergedAt });
     // This only checks local scheduler capacity; it makes no GitHub API requests.
     // A comment must not depend on another status change to be noticed after a busy run.
     if (!this.retryTimer) {
@@ -171,15 +173,18 @@ export class PrFollowWatch {
     for (const schedule of schedules) {
       if (!isCurrent() || this.generation !== generation) return;
       if (schedule.status !== 'active' || (schedule.expireAt !== undefined && schedule.expireAt <= now) || (!schedule.prTrigger && (!schedule.recurring || schedule.manual))) continue;
-      if (mergedAt !== undefined && Math.max(schedule.createdAt, schedule.lastFiredAt ?? 0) >= mergedAt) continue;
+      if (mergedAt !== undefined) {
+        if (schedule.createdAt >= mergedAt || await this.deps.hasSuccessfulPrRunSince?.(schedule.id, mergedAt)) continue;
+        if (!isCurrent() || this.generation !== generation) return;
+      }
       // Explicit App triggers own the event filter and durable queue. Do not run
       // the same task again through the implicit PR-follow wakeup path.
       if (schedule.webhookTrigger?.source?.preset === 'github-app') continue;
-      if (this.deps.inflight(schedule.id) > 0) { this.defer(schedule.id, url, changes, isCurrent); continue; }
+      if (this.deps.inflight(schedule.id) > 0) { this.defer(schedule.id, url, changes, isCurrent, mergedAt); continue; }
       const last = this.lastTriggered.get(schedule.id);
-      if (last !== undefined && now - last < MIN_RETRIGGER_MS) { this.defer(schedule.id, url, changes, isCurrent); continue; }
+      if (last !== undefined && now - last < MIN_RETRIGGER_MS) { this.defer(schedule.id, url, changes, isCurrent, mergedAt); continue; }
       if (!this.deps.hasCapacity()) {
-        this.defer(schedule.id, url, changes, isCurrent);
+        this.defer(schedule.id, url, changes, isCurrent, mergedAt);
         continue;
       }
       this.pending.delete(schedule.id);
