@@ -1,7 +1,15 @@
 # 伙伴群聊
 
 > **状态**：权威产品规则（authoritative）。本文保留早期本地群的分期说明；当前正式群已接入 Chat Server，手机包含直连和经电脑两条路径（第 8、10 节）。代码核对日期：2026-10-26；具体环境发布情况需单独验证。
-> **读取时机**：新增或修改伙伴群聊的数据、发言编排、群专线 Session、分工（负责人、安排、分工 Session、群工作目录）、群聊界面、手机端群聊或相关 IPC／远程资源前。
+> **读取时机**：新增或修改伙伴群聊的数据、发言编排、群专线 Session、分工（负责人、安排、分工 Session、群工作目录）、群聊界面、手机端群聊（`bot-groups` 远程资源、群推送深链）或相关 IPC／远程资源前。
+> **适用路径**：`apps/desktop/src/main/maker-ipc/**/{botGroup,group,chat}*`、`apps/desktop/src/shared/**/botGroup*`、
+> `packages/maker-shared/src/**/{botGroup,chatReadReceipts}*`、`apps/desktop/src/main/localDb/**/botGroup*`、
+> `apps/desktop/src/renderer/features/bots/**/{BotGroup,botGroup,useBotGroup,ChatGroup,ChatInvite,ChatMessage,GroupMask,groupMask,useGroup,useChat}*`、
+> `apps/mobile/src/session/**/{BotGroup,botGroup,useBotGroup}*`、`apps/mobile/src/chat/**`、
+> `apps/mobile/src/__tests__/{BotGroup,botGroup,chatServer}*`、`apps/mobile/app/companions/groups/**`、
+> `apps/mobile/app/group-execution-preview.tsx`、
+> `apps/desktop/src/renderer/features/bots/**/*Thread*`
+
 > 伙伴身份、Profile、主任务与后台任务的通用契约仍以 [`cindy-bots-runtime.md`](cindy-bots-runtime.md) 为准。
 > 当前数据链路与后续优化提案见第 11 节；本地表结构见 [多账号数据库架构](../dev-rules/multi-account-database-architecture.md) 第 11 节，私聊衔接见 [云端伙伴](cloud-companions.md) 第 4.1 节。首批分支实现与后续目标在第 11.0 节分开登记，尚未发布；现行产品规则按该节注明的边界衔接。
 
@@ -320,7 +328,19 @@ Chat Server 声明 `capabilities.groupSingleSpeaker: 1` 时，服务器群按下
   不受普通执行列表最近 100 条限制。推送刷新、分页和 Thread 都包括已加载的旧消息 ID；
   新页与推送并发时，保留较新的状态并为新增源重新读取，防止旧响应恢复过期错误。
   Desktop 主群、Thread 和 Mobile 合并真实消息页后，使用 shared 的同一投影函数把失败提示放在
-  已加载源消息旁；提示不写入分页缓存、不参与模型上下文，不覆盖消息、预览或未读位置。
+  已加载源消息旁；界面提示不写入分页缓存，不覆盖消息、预览或未读位置。
+  普通群与话题的伙伴执行（含 `talk` 讨论队列）在每次输入中另带 `peerExecutionFailures`：只查本轮已授权读取、
+  未删除且属于当前主群／话题的源消息，复用同一分批查询和白名单类别。即使消息正文未变、
+  使用增量上下文，也重新查询；不把旧失败缓存当作当前状态，不额外触发或重跑其他伙伴。
+  快照只证明列出的执行尝试已失败，不代表伙伴全局状态；未列出不等于完成或仍在工作，
+  也可能已重试、取消或超出本轮历史范围。旧服务回退明确为最近执行范围，暂时读取失败明确
+  标记状态不可用，401／403 继续阻止投递。现有执行授权与投递前租约复核保持不变：
+  必须在失败状态读取完成后再复核租约，防止慢查询期间的远端停止被漏掉；普通输入因此
+  比只读消息多一轮状态查询，不把最终租约检查提前来节省这一轮。
+  迁入的可信旧失败通知及本地旧群通知仅以历史失败类别和伙伴名字进入低信任消息数据，
+  不带标记原文、原始错误或新授权；不能据此声称伙伴当前仍失败。私人汇总、AI 代答与分工
+  （`work`）不新增失败状态读取。讨论队列前一位没有结果消息的失败也须交给后续发言者。
+  回归见 `chatServerThreadContext.test.ts` 与 `botGroupChatService.test.ts`。
   已加载旧消息即使不在刷新页内，重试、完成、更换 epoch、删除源消息或撤销历史可见性后也按
   当前状态重新生成提示；旧消息首次发生失败也无需重新翻页。线程根与回复用同一规则，不增加回复条数。
   错误提交沿同一 operationId 和不可变终态重试，不重跑伙伴；主动停止不产生失败提示。

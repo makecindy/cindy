@@ -78,6 +78,15 @@
 全目录解析、已有预设三引擎投影与路由回归属于离线验证，不代表各账号实际可调用。
 Server Registry 与运行时二进制未修改；原生订阅的账号准入仍由原生发现控制。
 
+2026-11-18：GPT-6.2 Sol 于 2026-11-17 发布，Pi 公共目录尚未收录。Registry 登记该型号后，
+它成为 Sol 家族最近的一代；没有对应的 API 记录时，中转上的未来型号会改为继承 Registry 的
+1,050,000 公共容量，而不是 API 记录的 272,000 工作窗口。为保持这条继承约定，只为官方
+`https://api.openai.com/v1` 端点补入一条 `gpt-6.2-sol` 记录：执行参数与工作窗口同 GPT-6.1 Sol
+记录，另写 `contextWindowMax: 1050000`（官方容量），否则已核实的 272,000 会被当作硬上限，用户设置的
+更大任务预算会被夹紧；价格取[官方型号页](https://developers.openai.com/api/docs/models/gpt-6.2-sol)，来源记在
+`supplementalSources`。其它供应商、订阅端点和 GPT-6.2 Astra 未补记录（Astra 的 API 记录本就是
+1,050,000，行为不变）；Pi 上游发布后以上游资料为准。该记录未用 API Key 实测推理。
+
 Copilot 发现使用官方账号主机的 `/models`，不依赖推理使用 Messages、Responses 还是 Chat。
 登录后的地址推导、手动获取和旧连接 `/v1/models` 读取共用
 `maker-host/copilot-account-url.ts`，客户端标识取已有渠道目录；不写回用户连接，不重置登录。

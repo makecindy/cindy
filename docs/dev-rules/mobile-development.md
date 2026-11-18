@@ -1,6 +1,9 @@
 # Mobile 开发、模拟器与验证
 
-> **读取时机**：开发、启动、调试或验证 `apps/mobile` 及其共享能力时
+> **读取时机**：开发、启动、调试或验证 `apps/mobile` 及其共享能力时；修改原生配置、原生依赖、
+> config plugin 或原生模块（`app.json`、`app.config.js`、`eas.json`、`package.json`、
+> `plugins/`、`modules/` 等会进入 runtime fingerprint 的输入）之前，先读「冷更边界」
+> **适用路径**：`apps/mobile/**`
 
 本文是 Mobile 日常开发命令及其使用条件的权威说明；可执行脚本以当前 checkout 的根
 `package.json` 与 `apps/mobile/package.json` 为代码事实源。
@@ -786,6 +789,20 @@ App Group 里存每台电脑最近一次的快照和「自动」所选电脑（�
 这些选择只存在系统的组件配置里，不写 App Group；改尺寸会保留。
 切换或退出账号时清空。组件只读快照，回满倒计时按 `resetsAtMs` 在本机推进。Swift 源码、图标资源与数字字体
 显式进入 fingerprint；旧包没有该原生模块时 JS 侧静默跳过。真机测试包若签名缺少 App Group，组件只会显示空状态。
+
+App 不在前台时，组件靠 iOS 的后台刷新（Background App Refresh）更新：App 退到后台时，只要主屏或锁屏上放了 Cindy 组件，
+就向系统申请一次 `BGAppRefreshTask`（最早 15 分钟后，实际时机和频率由 iOS 按使用习惯决定，用户关掉「后台 App 刷新」就不会运行；
+没放组件时撤回申请）。系统给出时间后，`UsageWidgetBridge` 像通知按钮一样临时保持与电脑的连接（`holdBackgroundConnection`），
+按上面的同一规则取快照、写 App Group，25 秒内做完并告诉系统结果，然后申请下一次。锁屏状态下被拉起时登录树不挂载
+（`lockedLaunchGate.ts`），原生侧直接结束这次任务，不读写、不清理任何数据。每次运行是一次设备列表 REST 读取加一次中继连接，
+频率完全由 iOS 决定，不作保证。实现：`modules/cindy-usage-widgets/ios/UsageWidgetBackgroundRefresh.swift`
+（任务注册与申请，经 `appDelegateSubscribers` 在启动完成前注册）、`with-usage-widgets.js`（`UIBackgroundModes: fetch`、
+`BGTaskSchedulerPermittedIdentifiers`）。Android 组件仍只在 App 打开时更新数据。后台刷新是否运行、多久一次只能在签名安装包的真机上观察；
+模拟器可在 Xcode 调试器里用 `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"<bundle id>.usage-widget-refresh"]` 触发一次。
+
+同一套组件也是 macOS 桌面小组件（Desktop 的 `native/desktop-widgets`）：Mac 端编译 `plugins/usage-widgets` 里除入口与实时活动外的源码，
+平台差异用 `#if os(iOS)` 隔开（锁屏组件、编辑页里的「数据来源电脑」、App Group 读取），Mac 专属部分放在
+`MacWidgetSupport.swift`。改这里的 Swift 时同时保证 macOS 14 能编译（`node apps/desktop/native/desktop-widgets/build.mjs extension <App.app>`）。
 
 锁屏同时支持圆形、矩形与日期旁的单行组件，复用同一份快照、电脑选择和打开 App 的深链。
 锁屏余量沿用安卓紧凑版的选取规则：先放用户固定的账号，其余优先订阅，没有订阅时才用余额类账号。

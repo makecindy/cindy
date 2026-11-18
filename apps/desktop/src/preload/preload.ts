@@ -54,7 +54,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { createChatFolderUpload } from './chatFolderUpload';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
 import { SELF_HOSTED_RELAY_IPC, type SelfHostedRelayApi } from '../shared/selfHostedRelay';
-import { DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
+import { DEVICE_LINK_PUSH, type DeviceLinkPeerLinksSnapshot } from '../shared/deviceLinkIpc';
 import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
 import { PROVIDER_GROUP_IPC, type ProviderGroupCommand } from '../shared/providerGroup';
 import {
@@ -1722,10 +1722,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string,
       callId: string,
     ): Promise<{
-      card: { ghostId: string; html: string; height: number; revision: string; externalLinks: boolean } | null;
+      card: { ghostId: string; html: string; height: number; revision: string; externalLinks: boolean; mailUpload?: boolean } | null;
       unsupported?: true;
       failed?: true;
     }> => ipcRenderer.invoke('ghosts:card:get-remote', deviceId, sessionId, callId),
+    uploadRemoteMailAttachment: (deviceId: string): Promise<{ ok: boolean; attachment: { url: string; name: string } | null }> =>
+      ipcRenderer.invoke('ghosts:card:remote-mail-attachment', deviceId),
     // 会话切换上报(订阅槽① did-session-switched 的数据源):路由 effect 每次
     // 路由变化调,单向 send 零等待;去重/资格门全在 main。
     noteSessionFocused: (sessionId: string | null): void =>
@@ -5236,7 +5238,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       linkStatus: 'stopped' | 'connecting' | 'online';
       directDataDeviceIds?: string[];
       connectionIssue: {
-        kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable';
+        kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable' | 'agent-net-relay-down';
         closeCode?: number;
         detail?: string;
         at: number;
@@ -5257,10 +5259,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }> =>
       ipcRenderer.invoke('device-link:set-device-control-enabled', { deviceId, enabled }),
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照(轮询 + onPeerLinksChanged) */
-    getPeerLinks: (): Promise<{
-      links: Array<{ deviceId: string; path: 'direct' | 'relay'; rttMs: number | null; open: boolean }>;
-      relayRttMs: number | null;
-    }> => ipcRenderer.invoke('device-link:get-peer-links'),
+    getPeerLinks: (): Promise<DeviceLinkPeerLinksSnapshot> => ipcRenderer.invoke('device-link:get-peer-links'),
     /** 对端链路拓扑变化(建链 / 断链 / 直连↔relay),payload 为全量快照 */
     onPeerLinksChanged: fanOutDeviceLinkPeerLinksChanged,
     listDevices: (): Promise<{
@@ -5285,7 +5284,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       }>;
       /** Bounded last-known directory; absence is not an authoritative removal. */
       stale?: boolean;
+      /**
+       * Only one hybrid discovery leg answered; its rows are fresh but its
+       * absence proves nothing, so nothing may be pruned on it.
+       */
+      partial?: boolean;
       displayBudget?: { remainingMs: number };
+      /** Server rate-limit deadline (wall-clock ms) for the next directory read. */
+      retryAtMs?: number;
     }> => ipcRenderer.invoke('device-link:list-devices'),
     renameDevice: (
       deviceId: string,

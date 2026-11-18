@@ -43,7 +43,10 @@ async function registerLegacyCodexConnection(providerId: string | null, assertCu
 }
 
 /** Shared by the owner UI and helper, after their ordinary authorization checks. */
-export async function executeSubscriptionAccountCommand(command: SubscriptionAccountCommand) {
+export async function executeSubscriptionAccountCommand(
+  command: SubscriptionAccountCommand,
+  assertCanMerge?: () => void,
+) {
   const owner = activeOwnerScopeKey();
   const assertCurrent = () => {
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('Subscription accounts changed');
@@ -56,7 +59,7 @@ export async function executeSubscriptionAccountCommand(command: SubscriptionAcc
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
       throw new Error('Subscription accounts changed');
   }
-  let result = await runSubscriptionAccountCommand(command);
+  let result = await runSubscriptionAccountCommand(command, assertCanMerge);
   const kind = result.kind ?? resolveSubscriptionPoolProvider(command.providerId)?.kind;
   if (
     command.action === 'read' &&

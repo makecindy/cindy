@@ -1,5 +1,18 @@
 # Cindy 伙伴运行时
 
+> **读取时机**：修改伙伴（Bot）的身份、伙伴项目、Session 生命周期、模型 fallback、工作目录、Skill / MCP 装配、
+> 伙伴间协作、伙伴设置、伙伴消息、后台任务或伙伴提示词之前
+> **适用路径**：`apps/desktop/src/main/maker-ipc/**/{bot,teammate,sessionTeammate,remoteBot}*`、
+> `apps/desktop/src/main/localDb/**/{bot,teammate,legacyTeammate}*`、`apps/desktop/src/shared/**/bot*`、
+> `packages/maker-shared/src/**/{bot,teammate}*`、`apps/desktop/src/renderer/features/bots/**`、
+> `apps/mobile/src/session/**/{Companion,companion,useCompanion,Teammate,teammate,useTeammate,HomeTeammates,useHostTeammates}*`、
+> `packages/maker-core/src/agents/**/{bot-,teammate-}*`、
+> `packages/lizi-mcps/src/xdt-helper/{bot_,teammate_,create_teammate,list_teammates}*`、
+> `apps/desktop/src/main/maker-host/**/{bot-model-chain,botMcpCatalog,botToolsetAvailability}*`、
+> `apps/desktop/src/main/im/shared/**/{botIm,imBotBinding}*`、
+> `apps/desktop/src/main/scheduler-host/**/{ownTeammateProject,teammateHomeGuard}*`、
+> `apps/desktop/src/main/bot-import/**`
+
 > 本文是伙伴（Bot）身份、任务、模型路由、工作目录、Skill / MCP、伙伴消息与后台任务的产品契约。
 > 修改伙伴运行时、伙伴设置、伙伴消息、后台任务或伙伴提示词前必须先读本文。
 > 2026-11-05 方向：伙伴的工作方式属于伙伴自己的规则，宿主只保证来源、权限、上限、状态与运行位置。
@@ -409,7 +422,9 @@ Cindy 应用，也不取消伙伴已开的独立任务。操作中禁用重复�
 - 新建任务（桌面与手机）、创建 Worker、自动化、技能安装目标、插件目标、附加目录、添加远程项目和「移到项目」都不列伙伴的项目。
 - 侧栏与搜索的「项目」筛选不列它；侧栏里伙伴项目的任务只受「伙伴」筛选控制。
 - 「伙伴」筛选里，一件任务算某个伙伴的：它在这个伙伴的项目里，或是这个伙伴用 `send_to_session` 开的（任务行上挂它的头像，伙伴放下后不再挂）。V1 委派留下的子任务按旧行照常计入（6.1），V1 工作台接手不再计入。
-- 侧栏照旧把伙伴项目作为一个分组显示；Agent 的 `list_projects`、`send_to_session` 不变。
+- 侧栏照旧把伙伴项目作为一个分组显示，但它没有可见任务时不显示空项目行（2026-11-17 主人裁决：伙伴项目只从伙伴进入）；
+  自动化运行的任务（含每晚记忆整理）随侧栏「分组 → 自动化」收进「自动化」组，见
+  [侧栏重设计 §3.1](sidebar-redesign-plan.md#31-分组--独立复选可任意组合)。Agent 的 `list_projects`、`send_to_session` 不变。
 - 伙伴项目里的自动化文件是 Cindy 自己写的，直接同步到调度器，不弹「发现待导入的自动任务」；普通项目的导入确认不变。
 
 识别只看路径：伙伴的项目固定是 `…/owners/<账号>/bots/<伙伴目录>/workspace`，桌面、手机与其它电脑共用
@@ -547,7 +562,8 @@ harness + provider + model + effort + fastMode
 - 同一轮最多按生效候选链各尝试一次；不得循环。用户显式配置的链不得追加目录候选。
 - 确定性账号额度耗尽时同样尝试用户配置的备用链；只有成功切换到另一条路由才续跑，候选耗尽或没有备用时保留错误，不重试耗尽的原路由。同一供应商组内其他电脑的额度独立判断。主聊天与话题中由输入协调器持有的主人输入
   可沿供应商组现有机制故障换机，保留当前伙伴与任务；换机后不因普通模型对齐切回原组入口，显式模型保存仍生效。
-  范围、取消与分享凭证约束见[供应商组 §6.1](provider-groups.md#伙伴主聊天与话题的故障换机)，不新增伙伴的额度定时续跑。
+  范围、取消与分享凭证约束见[供应商组 §6.1](provider-groups.md#伙伴主聊天与话题的故障换机)。绑定主聊天或话题的真实 Schedule run
+  在远程供应商上撞限额时复用[既有额度等待](usage-limit-auto-continue.md)，普通伙伴输入不新增定时续跑。
 - 自动切换复用普通任务的模型／供应商／电脑切换提示，Desktop 与 Mobile 均直接显示在消息流中，不折进伙伴工作过程。
 - 同 harness 可在安全边界切模型；跨 harness 必须走既有 agent-switch / 交接重建事务。
 - 伙伴设置中的显式模型保存立即同步当前主任务的运行选择；空闲时在既有安全边界完成切换，运行中先记录最新选择，在回复、工具与审批结束后的安全边界接替，不要求用户再发一条消息才能登记。连续改选以最后一次为准，选回当前路由应取消不同的待切换路由。

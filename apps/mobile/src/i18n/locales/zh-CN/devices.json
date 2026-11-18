@@ -328,6 +328,7 @@
       "renameDevice": "重命名 {{label}}",
       "project": "项目 {{title}}",
       "dialogue": "对话",
+      "automation": "自动化",
       "openAutomationLatest": "打开自动化 {{title}} 的最新任务",
       "automationTask": "自动化 {{title}}",
       "openConversation": "打开任务 {{title}}",
@@ -353,7 +354,9 @@
     },
     "menu": {
       "groupDialogue": "对话",
+      "groupAutomation": "自动化",
       "dialogueFolder": "对话",
+      "automationFolder": "自动化",
       "search": "搜索",
       "settings": "设置",
       "remoteSettings": "远程连接设置",

@@ -78,6 +78,7 @@ Use when the plugin listens for events, screens automation runs or interacts wit
 
 - [插件提交例行任务事件 routineEvents（兼容保留，已不再触发）](references/plugin-routine-events.md)
 - [插件事件订阅 subscribe（§4.6）](references/plugin-event-subscriptions.md)
+- [插件实时旁听工具执行过程](references/plugin-tool-observation.md)
 - [插件处理 Agent 回复的消息钩子（§4.6.1）](references/plugin-message-hooks.md)
 - [插件控制节点：自动化运行前、新任务选模型时先问插件（§4.6.2）](references/plugin-control-points.md)
 - [给模型选择器提供模型 models（§4.6.3）](references/plugin-models.md)

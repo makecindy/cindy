@@ -74,7 +74,6 @@
     "cancel": "保持不變"
   },
   "unified": {
-    "accountUnassigned": "帳號待分配",
     "accountCount_other": "{{count}} 個帳號",
     "accountFallback": "帳號 {{index}}",
     "favoriteConfiguration": "收藏此設定",

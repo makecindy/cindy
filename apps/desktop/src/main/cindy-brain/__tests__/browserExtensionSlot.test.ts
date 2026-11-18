@@ -252,17 +252,19 @@ describe('browserExtensionSlot · 桥接随花名册启停', () => {
     expect(order.indexOf('close0')).toBeLessThan(order.indexOf('install1'));
   });
 
-  // Native hosts run outside the sandbox and share one registration per account, so a plugin that
-  // is not the official Cindy Chrome must not get one, even under the official name.
+  // Native hosts require the declared Node capability, not an official plugin identity.
   it('声明 node 的普通插件也可安装自己的 native host', async () => {
     const ghosts = [extGhost({ id: 'impostor' })];
-    const { slot, bridges, natives, settle } = await makeSlot({}, ghosts);
+    const { slot, bridges, natives } = await makeSlot({}, ghosts);
     slot.reconcile(ghosts);
-    await settle();
+    // PR #11114 Linux CI: restoring pairings from disk can outlast a fixed 25 ms wait.
+    // The public status request awaits startup, including native host registration.
+    expect(await slot.handleRequest('_root__impostor', { kind: 'status' })).toMatchObject({ ok: true });
     expect(bridges).toHaveLength(1);
     expect(bridges[0].started).toBe(true);
     expect(bridges[0].options.nativeToken).toBe('f'.repeat(64));
     expect(natives).toHaveLength(1);
+    expect(natives[0].install).toHaveBeenCalledExactlyOnceWith(18810, [CHROME_ID]);
   });
 
   it('没有 pageControl 的声明只做通道,不成为 Browser Use 执行端', async () => {

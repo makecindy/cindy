@@ -83,14 +83,18 @@ export function describeCauseForIpc(cause: unknown): string {
  * 兜底脱敏：把 POSIX / Windows / `~` 开头的绝对路径替换为 `<path>`。类别约定文案本身不含
  * 路径，这里只防未来有人把路径拼进 detail。
  */
-export function redactLocalPaths(text: string): string {
+export function redactLocalPathText(text: string): string {
   const singleLine = text.replace(/\s+/g, ' ').trim();
   // `~/…` 先于绝对路径处理，否则 `/Library/…` 会先被吃掉而留下 `~`。路径段含空格时
   // 只能脱敏到第一个空格为止：detail 的来源是类别约定文案与错误码，这里只是兜底。
-  const redacted = singleLine
+  return singleLine
     .replace(/~[\\/][^\s'"`<>|]*/g, '<path>')
     .replace(/(?:[A-Za-z]:)?[\\/](?:[^\s'"`<>|]+[\\/])+[^\s'"`<>|]*/g, '<path>');
-  if (!redacted) return 'no error detail';
+}
+
+/** Cold-start IPC details retain their own budget; other callers bound their output. */
+export function redactLocalPaths(text: string): string {
+  const redacted = redactLocalPathText(text) || 'no error detail';
   return redacted.length > DETAIL_MAX_LENGTH
     ? `${redacted.slice(0, DETAIL_MAX_LENGTH - 1)}…`
     : redacted;

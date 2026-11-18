@@ -68,3 +68,8 @@ export function clearControllerPlatforms(): void {
   platformByDevice.clear();
   appByDevice.clear();
 }
+
+/** 已登记为手机平台的设备（presence 与目录快照见过的）。同样只做体验分流：用于决定补发推送给谁，不做权限判断。 */
+export function knownMobileDeviceIds(): string[] {
+  return [...platformByDevice].filter(([, platform]) => isMobilePlatform(platform)).map(([deviceId]) => deviceId);
+}
