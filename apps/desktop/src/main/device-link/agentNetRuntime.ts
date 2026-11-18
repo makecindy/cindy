@@ -36,6 +36,8 @@ let sessionConfig: SessionConfig | null = null;
  * 每个 Agent-Net 服务上次取到的 UDP 地址（STUN 与经 UDP 的中转）。刚唤醒、刚换网时取中转信息常常失败，原来这条连接就一直没有
  * STUN 和 UDP 中转、只走 443 上的中转，直到下次重建（2026-11-17 审查）；失败时沿用上次的。服务明确说没有 UDP 时清掉。
  */
+const privateSharingRoots = new Map<string, string>();
+export function supportsPrivateAgentNetSharing(base: string, root: string): boolean { return privateSharingRoots.get(base) === root; }
 const lastUdpServer = new Map<string, string>();
 /** 官方 Device Link 设备列表里的一台设备：设备号与它自报的平台。 */
 export interface DeviceLinkListedDevice { deviceId: string; platform?: string | null }
@@ -538,6 +540,11 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
     // UDP may be published on its own host (e.g. NLB beside an HTTPS ALB); relays without one keep the API host.
     const server = response.ok ? agentNetStunServer(api.base, info) : null;
     answered = response.ok;
+    if (relay && answered) {
+      if (Array.isArray((info as { features?: unknown })?.features) && (info as { features: unknown[] }).features.includes('private-sharing-v1'))
+        privateSharingRoots.set(api.base, api.rootPublicKey);
+      else privateSharingRoots.delete(api.base);
+    }
     // The relay forwards datagrams on the same UDP port as its STUN when it hands out UDP credentials;
     // an older relay never does, and the session stays on its WebSocket.
     if (server) { stunServers.push(server); relayUdpServer = server; lastUdpServer.set(api.base, server); }

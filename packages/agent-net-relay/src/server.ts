@@ -20,7 +20,8 @@ import { CLUSTER_PATH, checkClusterOptions, clusterOwner, createClusterRouter, r
 import type { SharingState } from '@cindy/device-link-sharing/repositories';
 import type { DelegationRequest } from '@cindy/agent-net-protocol';
 import { AppError as SharingError } from '@cindy/device-link-sharing/errors';
-import { createAgentNetSharing, type AgentNetSharingOptions } from './sharing.js';
+import { createPrivateSharing } from './privateSharing.js';
+import { createAgentNetSharing, type AgentNetSharingOptions, type SharingHost } from './sharing.js';
 import { DatagramSendQueue } from './datagramQueue.js';
 import { MEDIA_TRANSFER_DIRECT, MEDIA_TRANSFER_HEADER, type DirectMediaRequest } from '@cindy/agent-net-protocol';
 import { createLocalMediaStorage, DIRECT_GRANT_MAX_MS, guardMediaStorage, RelayMediaStorageError, RelayMediaStorageUnavailableError, type RelayMediaStorage } from './mediaStorage.js';
@@ -555,7 +556,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     return Object.values(n.grants).filter(g => g.revokedAt === null && usableDelegation(n, g.delegation)
       && endpointUsable(n, g.delegation, p.deviceId)).map(g => g.delegation);
   }
-  const sharing = options.sharing ? createAgentNetSharing(options.sharing, {
+  const sharingHost: SharingHost = {
     storage: store.sharingStorage(), now,
     requests: () => store.delegationRequests(),
     async saveRequest(request) {
@@ -609,7 +610,13 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       }
       for (const networkId of networkIds) announce(networkId);
     },
-  }) : undefined;
+  };
+  const accountSharing = options.sharing && createAgentNetSharing(options.sharing, sharingHost);
+  const privateSharing = mode === 'self-hosted' && store instanceof Store ? createPrivateSharing(sharingHost, store.sharingStorage('privateSharing')) : undefined;
+  const sharing = !privateSharing ? accountSharing : {
+    authorized: (d: Delegation) => privateSharing.ownsResource(d.kind, d.resourceId) ? !!d.scope && privateSharing.authorized(d) : accountSharing?.authorized(d) ?? true,
+    requestsFor: (network: string, device: string) => [...privateSharing.requestsFor(network, device), ...(accountSharing?.requestsFor(network, device) ?? [])],
+  };
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const method = req.method ?? 'GET';
@@ -636,16 +643,17 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     }
     if (url.pathname === API + '/info' && method === 'GET') return writeJson(res, 200, {
       protocolVersion: AGENT_NET_VERSION, mode, udpPort: advertisedUdpPort,
-      ...(options.stunHost !== undefined && advertisedUdpPort !== null ? { stunHost: options.stunHost } : {}), features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', ...(storage.direct ? ['media-direct-v1'] : []), 'notification-keys-v2', ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : []),
+      ...(options.stunHost !== undefined && advertisedUdpPort !== null ? { stunHost: options.stunHost } : {}), features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', ...(storage.direct ? ['media-direct-v1'] : []), 'notification-keys-v2', ...(privateSharing ? ['private-sharing-v1'] : []), ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : []),
         ...(mode === 'self-hosted' && store.primaryNetworkId() !== undefined ? ['tenants-v1'] : []),
         ...(advertisedUdpPort !== null ? [UDP_RELAY_FEATURE] : [])],
     });
-    if (url.pathname.startsWith(API + '/sharing/')) {
-      if (!sharing) return fail(404, 'SHARING_UNAVAILABLE');
+    if (url.pathname.startsWith(API + '/sharing/') || url.pathname.startsWith(API + '/private-sharing/')) {
+      const authority = url.pathname.startsWith(API + '/private-sharing/') ? privateSharing : accountSharing;
+      if (!authority) return fail(404, 'SHARING_UNAVAILABLE');
       if (!allow('sharing:' + clientAddress(req), 180)) return fail(429, 'TOO_MANY_REQUESTS');
       await synchronize(req, [routingNetwork(req), routingNetwork(req, req.headers['x-agent-net-authorization'])]
         .filter((id): id is string => id !== undefined));
-      return writeJson(res, 200, await sharing.handle(req, await readBody(req, 16_384)));
+      return writeJson(res, 200, await authority.handle(req, await readBody(req, 16_384)));
     }
     if (url.pathname === API + '/enroll' && method === 'POST') {
       if (!options.enroll || mode !== 'official') return fail(404, 'NOT_FOUND');

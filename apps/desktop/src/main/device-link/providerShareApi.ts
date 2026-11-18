@@ -297,6 +297,9 @@ export function sha256Hex(value: string): string {
  * nonce 把名片绑定到这次链接或申请，不能挪作他用。
  */
 export async function fetchIdentityCard(purpose: IdentityCardPurpose, nonce: string): Promise<string> {
+  const route = purpose === 'share-link' ? selectedAgentNetSharingRoute('provider-share')
+    : purpose === 'share-request' ? agentNetSharingAlias('provider-share', 'invitations', nonce) : null;
+  if (route?.v === 3) return 'private-device';
   const scope = captureScope();
   try {
     const value = await serverApiFetch<{ card?: unknown }>('/api/me/identity-card', {

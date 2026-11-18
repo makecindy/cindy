@@ -23,7 +23,7 @@ import { relayDataPath, secureStorageAvailable, readRelayConfig } from './selfHo
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { hostJoinBaseUrl } from './selfHostedRelayAddress.js';
 import { agentNetAllowsLegacy } from './agentNetRuntime.js';
-import { agentNetSelectionKey } from './agentNetRuntime.js';
+import { agentNetSelectionKey, supportsPrivateAgentNetSharing } from './agentNetRuntime.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { createSharedTaskJournal } from '../localDb/sharedTasks.js';
 import { agentNetMediaBinding, agentNetSharingSubject } from '@cindy/agent-net-protocol';
@@ -63,7 +63,7 @@ type ScopedConnectionOptions = Omit<DeviceLinkClientOptions, 'getWsUrl' | 'getTo
 let binding: { client: RoutedDeviceLinkClient; options: ScopedConnectionOptions; session: Session;
   selection: string; pins: Map<string, () => void>; via: Map<string, 'primary' | 'blocked' | { connection: string }>; stop(): void } | null = null;
 const keyOf = (kind: Kind, id: string) => kind + ':' + id;
-const originKey = (route: AgentNetSharingRoute) => JSON.stringify([route.server, route.networkId, route.rootPublicKey]);
+const originKey = (route: AgentNetSharingRoute) => JSON.stringify([route.v, route.server, route.networkId, route.rootPublicKey]);
 const providerListKey = (received: boolean, route?: AgentNetSharingRoute | null) =>
   '/api/device-link/provider-shares' + (received ? '/received' : '') + (route ? originKey(route) : ':legacy');
 /** After a binding stops (and until the next one), its resources stay retired on that routed client. */
@@ -161,7 +161,7 @@ function remember(state: Session, route: AgentNetSharingRoute, newAdmission = fa
   state.guard();
   if (!routeValid(route)) throw new Error('INVALID_AGENT_NET_SHARING_ROUTE');
   const key = keyOf(route.kind, route.resourceId), old = state.vault.routes.find(r => keyOf(r.kind, r.resourceId) === key);
-  if (old && (old.server !== route.server || old.rootPublicKey !== route.rootPublicKey || old.networkId !== route.networkId
+  if (old && (old.v !== route.v || old.server !== route.server || old.rootPublicKey !== route.rootPublicKey || old.networkId !== route.networkId
     || old.hostDeviceId !== route.hostDeviceId || old.region !== route.region || !newAdmission && old.memberId !== route.memberId))
     throw new Error('AGENT_NET_SHARING_ROUTE_CONFLICT');
   if (old) {
@@ -214,16 +214,19 @@ function hostClient(route: AgentNetSharingRoute, outgoing = false): AgentNetClie
     return api.rootPublicKey === route.rootPublicKey ? api : null;
   } catch { return null; }
 }
+function privateSubject(state: Session, route: AgentNetSharingRoute): string {
+  return hostClient(route)?.certificate.subject ?? 'guest:' + business(state, route).options.signer.identity.signingKey;
+}
 function business(state: Session, route: AgentNetSharingRoute): AgentNetSharingClient {
   state.guard();
-  const member = hostClient(route), key = JSON.stringify([route.server, route.networkId, route.rootPublicKey, member?.certificate.signature ?? null]);
+  const member = hostClient(route), key = JSON.stringify([route.v, route.server, route.networkId, route.rootPublicKey, member?.certificate.signature ?? null]);
   const existing = state.clients.get(key); if (existing) return existing;
   // A guest's account proof is separate from every resource's transport key.
   // No official Agent-Net enrollment is needed to join a private invitation.
   const identity = identityFromSeed('cindy-agent-net/sharing-business/2', state.vault.seed, getDeviceId());
   // Persist the identity before its first external use, including an empty book.
   if (!fs.existsSync(state.file)) save(state, state.vault);
-  const api = new AgentNetSharingClient({ base: member?.base ?? route.server, networkId: route.networkId, rootPublicKey: route.rootPublicKey,
+  const api = new AgentNetSharingClient({ privateSharing: route.v === 3, base: member?.base ?? route.server, networkId: route.networkId, rootPublicKey: route.rootPublicKey,
     signer: signer(identity), hash, assertCurrent: state.guard, fetch: outboundFetch, ownerPinnedHttp: !!member,
     memberAuthorization: member ? (method, path, body) => { state.guard(); return member.header(method, path, body); } : undefined,
     async getIdentityCard(nonce) {
@@ -238,7 +241,7 @@ export function agentNetSharingRoute(kind: Kind, resourceId: string): AgentNetSh
   return owner().vault.routes.find(r => r.kind === kind && r.resourceId === resourceId) ?? null;
 }
 function connectionKey(route: AgentNetSharingRoute): string {
-  return route.memberId ? keyOf(route.kind, route.resourceId) : JSON.stringify([route.server, route.networkId, route.rootPublicKey]);
+  return route.memberId ? keyOf(route.kind, route.resourceId) : JSON.stringify([route.v, route.server, route.networkId, route.rootPublicKey]);
 }
 function mediaSlot(route: AgentNetSharingRoute, memberId = route.memberId): string {
   const bytes = createHash('sha256').update(JSON.stringify(['cindy-agent-net/sharing-media-slot/2',
@@ -290,7 +293,7 @@ export function selectedAgentNetSharingRoute(kind: Kind): AgentNetSharingRoute |
       }
     }
   }
-  return { v: 2, kind, resourceId: 'pending-resource', server, networkId: api.certificate.networkId,
+  return { v: relay && api.certificate.networkId.startsWith('private:') && supportsPrivateAgentNetSharing(api.base, api.rootPublicKey) ? 3 : 2, kind, resourceId: 'pending-resource', server, networkId: api.certificate.networkId,
     rootPublicKey: api.rootPublicKey, hostDeviceId: api.identity.deviceId,
     region: getActiveAuthRealm() };
 }
@@ -327,7 +330,7 @@ export function rememberAgentNetSharingService(selected: AgentNetSharingRoute): 
   const state = owner();
   if (!routeValid(selected) || selected.memberId) throw new Error('INVALID_AGENT_NET_SHARING_SERVICE');
   const services = state.vault.services ?? [];
-  if (services.some(r => r.server === selected.server && r.networkId === selected.networkId && r.rootPublicKey === selected.rootPublicKey)) return;
+  if (services.some(r => r.v === selected.v && r.server === selected.server && r.networkId === selected.networkId && r.rootPublicKey === selected.rootPublicKey)) return;
   if (services.length >= 1024) throw new Error('AGENT_NET_SHARING_SERVICE_LIMIT');
   save(state, { ...state.vault, services: [...services, selected] });
 }
@@ -364,7 +367,13 @@ export function requestAgentNetSharing(route: AgentNetSharingRoute, path: string
       observe(value);
     } });
   }
-  return api.request(path, options);
+  return api.request(path, options).then(value => {
+    state.guard();
+    if (route.v === 3 && route.kind === 'shared-task' && value && typeof value === 'object'
+      && 'ownerAccountId' in value && value.ownerAccountId === hostClient(route)?.certificate.subject)
+      return { ...value, ownerAccountId: getCurrentUserId() };
+    return value;
+  });
 }
 export async function grantAgentNetProviderExecutor(input: SharingExecutorInput) {
   const route = agentNetSharingRoute('provider-share', input.shareId); if (!route) return null;
@@ -385,7 +394,7 @@ export async function checkAgentNetProviderExecutor(input: SharingExecutorInput,
   const selected = selectedAgentNetSharingRoute('provider-share');
   const candidates = pinned ? [pinned] : [...(selected ? [selected] : []), ...state.vault.routes,
     ...(state.vault.services ?? [])].map(r => ({ ...r, kind: 'provider-share' as const, memberId: undefined, seed: undefined }));
-  const roots = new Map(candidates.map(r => [JSON.stringify([r.server, r.networkId, r.rootPublicKey]), r]));
+  const roots = new Map(candidates.map(r => [originKey(r), r]));
   let failure: unknown;
   for (const route of roots.values()) {
     const client = hostClient(route); if (!client) continue;
@@ -427,7 +436,7 @@ export function captureAgentNetSharingBoundaryClose(token: string, authBase: str
     const value = hosted?.member ? hosted : committed.get(resourceId); if (!value?.member) return null;
     const { route, member } = value, expires = Date.now() + 3000;
     const guard = () => { if (Date.now() >= expires) throw new Error('AGENT_NET_CLEANUP_EXPIRED'); };
-    const client = new AgentNetSharingClient({ base: member.base, networkId: route.networkId, rootPublicKey: route.rootPublicKey,
+    const client = new AgentNetSharingClient({ privateSharing: route.v === 3, base: member.base, networkId: route.networkId, rootPublicKey: route.rootPublicKey,
       signer: signer(identity), hash, assertCurrent: guard, fetch: outboundFetch, ownerPinnedHttp: true,
       memberAuthorization: (method, path, body) => member.header(method, path, body),
       getIdentityCard: nonce => serverApiFetch<{ card: string; expiresAt: string }>('/api/me/identity-card', {
@@ -450,7 +459,7 @@ export function agentNetSharingInvitationRoute(input: string, kind: Kind): { rou
   const parsed = parseAgentNetSharingInvitation(input, kind); if (!parsed) return null;
   const { invitation, ...receipt } = parsed.receipt, route: AgentNetSharingRoute = { ...receipt, server: parsed.server, guest: true };
   const pinned = agentNetSharingRoute(kind, route.resourceId);
-  if (pinned && (pinned.server !== route.server || pinned.networkId !== route.networkId || pinned.rootPublicKey !== route.rootPublicKey
+  if (pinned && (pinned.v !== route.v || pinned.server !== route.server || pinned.networkId !== route.networkId || pinned.rootPublicKey !== route.rootPublicKey
     || pinned.hostDeviceId !== route.hostDeviceId || pinned.region !== route.region)) throw new Error('AGENT_NET_SHARING_ROUTE_CONFLICT');
   return { route, invitation };
 }
@@ -529,7 +538,7 @@ export async function joinAgentNetSharedTask(input: string, displayName: string)
   const state = owner(), { invitation, ...receipt } = parsed.receipt;
   const route: AgentNetSharingRoute = { ...receipt, server: parsed.server, guest: true };
   const pinned = state.vault.routes.find(r => r.kind === route.kind && r.resourceId === route.resourceId);
-  if (pinned && (pinned.server !== route.server || pinned.networkId !== route.networkId || pinned.rootPublicKey !== route.rootPublicKey
+  if (pinned && (pinned.v !== route.v || pinned.server !== route.server || pinned.networkId !== route.networkId || pinned.rootPublicKey !== route.rootPublicKey
     || pinned.hostDeviceId !== route.hostDeviceId || pinned.region !== route.region)) throw new Error('AGENT_NET_SHARING_ROUTE_CONFLICT');
   const value = await business(state, route).request<Awaited<ReturnType<SharedTaskApi['join']>>>(
     '/api/device-link/shared-tasks/join', { method: 'POST', body: { invitation, displayName } });
@@ -548,13 +557,13 @@ export async function listAgentNetSharedTasks(legacy: () => Promise<unknown>): P
   const known = state.vault.routes.filter(r => r.kind === 'shared-task');
   if (!selected && known.length === 0 && !state.vault.services?.length) return null;
   const services = new Map<string, AgentNetSharingRoute>();
-  for (const route of [...(selected ? [selected] : []), ...known, ...(state.vault.services ?? []).map(r => ({ ...r, kind: 'shared-task' as const }))]) services.set(JSON.stringify([route.server, route.networkId, route.rootPublicKey]), route);
+  for (const route of [...(selected ? [selected] : []), ...known, ...(state.vault.services ?? []).map(r => ({ ...r, kind: 'shared-task' as const }))]) services.set(JSON.stringify([route.v, route.server, route.networkId, route.rootPublicKey]), route);
   const db = getCurrentDbClientSnapshot();
   const journal = db ? await createSharedTaskJournal(db.client).latest() : [];
   state.guard();
   const oldIds = journal.filter(item => !known.some(r => r.resourceId === item.sharedTaskId)).map(item => item.sharedTaskId);
   const sources: Array<{ route?: AgentNetSharingRoute; ids: string[]; work(signal: AbortSignal): Promise<unknown> }> = [...services.values()].map(route => ({
-    route, ids: known.filter(r => r.server === route.server && r.networkId === route.networkId && r.rootPublicKey === route.rootPublicKey).map(r => r.resourceId),
+    route, ids: known.filter(r => originKey(r) === originKey(route)).map(r => r.resourceId),
     work: signal => business(state, route).request('/api/device-link/shared-tasks', { method: 'GET', signal }),
   }));
   if (agentNetAllowsLegacy()) sources.push({ ids: oldIds, work: () => legacy() });
@@ -582,16 +591,18 @@ export async function listAgentNetSharedTasks(legacy: () => Promise<unknown>): P
       const row = item as { sharedTaskId?: unknown; hostDeviceId?: unknown; ownerAccountId?: unknown };
       if (typeof row.sharedTaskId !== 'string' || items.has(row.sharedTaskId)) throw new Error('AGENT_NET_SHARING_ROUTE_CONFLICT');
       items.set(row.sharedTaskId, item);
-      const subject = source.route ? agentNetSharingSubject(getCurrentUserId()!, getActiveAuthRealm(), source.route.region) : getCurrentUserId();
-      if (source.route && row.ownerAccountId === subject && row.hostDeviceId === getDeviceId())
+      const subject = source.route?.v === 3 ? privateSubject(state, source.route) : source.route ? agentNetSharingSubject(getCurrentUserId()!, getActiveAuthRealm(), source.route.region) : getCurrentUserId();
+      if (source.route && row.ownerAccountId === subject && row.hostDeviceId === getDeviceId()) {
+        if (source.route.v === 3 && hostClient(source.route)) items.set(row.sharedTaskId, { ...row, ownerAccountId: getCurrentUserId() });
         remember(state, resourceRoute(source.route, 'shared-task', row.sharedTaskId, row.hostDeviceId));
+      }
       else if (source.route && row.ownerAccountId !== subject && typeof row.hostDeviceId === 'string' && !known.some(r => r.resourceId === row.sharedTaskId && !r.retired)) {
         const route = resourceRoute(source.route, 'shared-task', row.sharedTaskId, row.hostDeviceId);
         rememberAgentNetSharingGuest(route);
         try {
           const detail = await business(state, route).request<{ status: string; guests: { accountId: string; memberId: string }[] }>(
             '/api/device-link/shared-tasks/' + encodeURIComponent(row.sharedTaskId), { method: 'GET', signal: AbortSignal.timeout(3000) });
-          const subject = agentNetSharingSubject(getCurrentUserId()!, getActiveAuthRealm(), route.region);
+          const subject = route.v === 3 ? privateSubject(state, route) : agentNetSharingSubject(getCurrentUserId()!, getActiveAuthRealm(), route.region);
           const member = detail.status === 'active' && detail.guests?.find(g => g.accountId === subject);
           if (member && typeof member.memberId === 'string') rememberAgentNetSharingGuest(route, member.memberId);
         } catch { unavailable.add(row.sharedTaskId); }
@@ -635,10 +646,10 @@ function installRoute(state: Session, route: AgentNetSharingRoute): void {
       let lease: AgentNetSharingTransport | null = null;
       let identity: Identity | null = null;
       if (route.memberId && route.seed) {
-        identity = identityFromSeed(JSON.stringify(['cindy-agent-net/sharing-transport/2', route.rootPublicKey, route.kind, route.resourceId]), route.seed, getDeviceId());
+        identity = identityFromSeed(JSON.stringify(['cindy-agent-net/sharing-transport/2', route.rootPublicKey, route.kind, route.resourceId]), route.seed, route.v === 3 ? 'guest:' + business(state, route).options.signer.identity.signingKey : getDeviceId());
         lease = new AgentNetSharingTransport({ client: business(state, route), applicant: signer(identity), assertCurrent: guard,
           verifyCertificate, verifyDelegation, scope: { ...route, memberId: route.memberId,
-            guestSubject: agentNetSharingSubject(getCurrentUserId()!, getActiveAuthRealm(), route.region) } });
+            guestSubject: route.v === 3 ? 'guest:' + business(state, route).options.signer.identity.signingKey : agentNetSharingSubject(getCurrentUserId()!, getActiveAuthRealm(), route.region) } });
         state.leases.add(lease);
       }
       scoped = new DeviceLinkClient({ ...target.options, scopedPeersOnly: true, frameAuth: undefined, directRuntime: undefined,

@@ -43,7 +43,7 @@ vi.mock('../selfHostedRelayRouting.js', () => ({ activeSelfHostedRelay: () => st
 vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ agentNetEnabled: state.agentNetEnabled }) }));
 // Production accessors refuse a pending account boundary; only the outgoing
 // variants used by the handover close still resolve the old owner's client.
-vi.mock('../agentNetRuntime.js', () => ({ currentAgentNetClient: () => state.pending ? null : state.api, isAgentNetActive: () => true,
+vi.mock('../agentNetRuntime.js', () => ({ supportsPrivateAgentNetSharing: () => false, currentAgentNetClient: () => state.pending ? null : state.api, isAgentNetActive: () => true,
   outgoingAgentNetClient: () => state.api, outgoingAgentNetClientForRelay: () => { throw new Error('AGENT_NET_IDENTITY_MISMATCH'); },
   agentNetAllowsLegacy: () => state.allowLegacy, agentNetOnlyEncryptedByUser: () => state.onlyEncrypted, agentNetSelectionKey: () => 'selected-private', agentNetClientForRelay: () => null,
   openScopedAgentNetAppSocket: vi.fn(), setAgentNetScopedSessionRoute: (route: (peer: string) => unknown) => { state.sessionRoute = route; } }));

@@ -41,7 +41,7 @@ let lifecycle = 0;
 const hash = (text: string) => bytesToHex(sha256(utf8(text)));
 const id = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
 const routeKey = (r: Pick<Route, 'kind' | 'resourceId'>) => r.kind + ':' + r.resourceId;
-const originKey = (r: Pick<Route, 'server' | 'networkId' | 'rootPublicKey'>) => JSON.stringify([r.server, r.networkId, r.rootPublicKey]);
+const originKey = (r: Pick<Route, 'server' | 'networkId' | 'rootPublicKey'> & { v?: 2 | 3 }) => JSON.stringify([r.v ?? 2, r.server, r.networkId, r.rootPublicKey]);
 export function mobileAgentNetSharingEnabled(): boolean {
   const p = getMobileAgentNetPreferences(); return p.ready && p.enabled && MobileAgentNetEngine.available();
 }
@@ -111,14 +111,14 @@ async function stateFor(context: MobileSharingContext): Promise<State> {
   })();
   pending = { key, value }; try { return await value; } finally { if (pending?.value === value) pending = null; }
 }
-async function business(state: State, route: Pick<Route, 'server' | 'networkId' | 'rootPublicKey'>): Promise<AgentNetSharingClient> {
+async function business(state: State, route: Pick<Route, 'server' | 'networkId' | 'rootPublicKey'> & { v?: 2 | 3 }): Promise<AgentNetSharingClient> {
   state.guard(); const key = originKey(route), old = state.business.get(key); if (old) return old.api;
   const signer = await MobileAgentNetEngine.create({ seed: state.seed, context: 'cindy-agent-net/sharing-business/2', deviceId: state.context.deviceId }, state.guard);
   state.guard(); const existing = state.business.get(key); if (existing) { await signer.destroy(); return existing.api; }
   const member = currentMobileAgentNetIdentity();
   const same = member && member.api.base === route.server && member.api.certificate.networkId === route.networkId && member.api.rootPublicKey === route.rootPublicKey;
-  const api = new AgentNetSharingClient({ ...route, base: route.server, signer, hash: sha256, assertCurrent: state.guard,
-    ...(same ? { memberAuthorization: (method: string, path: string, body: string) => member.api.header(method, path, body) } : {}),
+  const api = new AgentNetSharingClient({ privateSharing: route.v === 3, ...route, base: route.server, signer, hash: sha256, assertCurrent: state.guard,
+    ...(same && route.v !== 3 ? { memberAuthorization: (method: string, path: string, body: string) => member.api.header(method, path, body) } : {}),
     getIdentityCard: nonce => state.context.apiFetch<{ card: string; expiresAt: string }>('/api/me/identity-card', {
       method: 'POST', baseUrl: AUTH_API_BASE_URL, body: { audience: 'cindy-agent-net-sharing', purpose: 'network-session', nonce },
       cache: 'no-store', timeoutMs: 12_000, assertCurrent: state.guard,
@@ -160,7 +160,7 @@ export async function requestMobileAgentNetSharedTask(path: string, options: Sha
   const state = await stateFor(context);
   if (path === '/api/device-link/shared-tasks' && options.method === 'GET') {
     await syncOrigins(state);
-    const identity = currentMobileAgentNetIdentity(), origins = new Map<string, SharingOrigin>();
+    const identity = currentMobileAgentNetIdentity(), origins = new Map<string, SharingOrigin & { v?: 2 | 3 }>();
     for (const route of state.book.routes) origins.set(originKey(route), route);
     for (const origin of state.book.origins ?? []) origins.set(originKey(origin), origin);
     if (identity) { const route: SharingOrigin = { server: identity.api.base, networkId: identity.api.certificate.networkId,
@@ -193,16 +193,16 @@ export async function requestMobileAgentNetSharedTask(path: string, options: Sha
       if (!Array.isArray(items) || items.length > 10_000) throw new Error('INVALID_AGENT_NET_SHARED_TASK_LIST');
       for (const item of items) { const row = item as { sharedTaskId?: unknown; hostDeviceId?: unknown; ownerAccountId?: unknown }, rid = row?.sharedTaskId;
         if (!id(rid) || rows.has(rid)) throw new Error('AGENT_NET_SHARING_ROUTE_CONFLICT'); rows.set(rid, item);
-        const subject = source.route ? agentNetSharingSubject(getMobileAuthOwner().accountId, getActiveMobileSessionRealm() === 'cn' ? 'cn' : 'global', source.route.region) : getMobileAuthOwner().accountId;
+        const subject = source.route?.v === 3 ? 'guest:' + (await business(state, source.route)).options.signer.identity.signingKey : source.route ? agentNetSharingSubject(getMobileAuthOwner().accountId, getActiveMobileSessionRealm() === 'cn' ? 'cn' : 'global', source.route.region) : getMobileAuthOwner().accountId;
         if (source.route && row.ownerAccountId !== subject && id(row.hostDeviceId)
           && !state.book.routes.some(r => r.resourceId === rid && !r.retired)) {
           try {
             const detail = await (await business(state, source.route)).request<{ status: string; guests: { accountId: string; memberId: string }[] }>(
               '/api/device-link/shared-tasks/' + encodeURIComponent(rid), { method: 'GET', signal: AbortSignal.timeout(3000) });
-            const subject = agentNetSharingSubject(getMobileAuthOwner().accountId, getActiveMobileSessionRealm() === 'cn' ? 'cn' : 'global', source.route.region);
+            const subject = source.route.v === 3 ? 'guest:' + (await business(state, source.route)).options.signer.identity.signingKey : agentNetSharingSubject(getMobileAuthOwner().accountId, getActiveMobileSessionRealm() === 'cn' ? 'cn' : 'global', source.route.region);
             const member = detail.status === 'active' && detail.guests?.find(g => g.accountId === subject);
             if (!member || !id(member.memberId)) throw new Error('AGENT_NET_SHARING_ADMISSION_REQUIRED');
-            await remember(state, { ...source.route, v: 2, kind: 'shared-task', resourceId: rid, hostDeviceId: row.hostDeviceId,
+            await remember(state, { ...source.route, v: source.route.v ?? 2, kind: 'shared-task', resourceId: rid, hostDeviceId: row.hostDeviceId,
               memberId: member.memberId, seedId: toBase64Url(getRandomBytes(18)) }, toBase64Url(getRandomBytes(32)));
           } catch { unavailable.push(rid); rows.delete(rid); }
         }
@@ -220,7 +220,7 @@ export async function requestMobileAgentNetSharedTask(path: string, options: Sha
 async function syncOrigins(state: State): Promise<void> {
   state.guard(); if (state.originSync) return state.originSync;
   const identity = currentMobileAgentNetIdentity(); if (!identity || identity.api.delegation) return;
-  const origins = new Map<string, SharingOrigin>();
+  const origins = new Map<string, SharingOrigin & { v?: 2 | 3 }>();
   for (const r of [...state.book.routes, ...(state.book.origins ?? [])]) {
     const o: SharingOrigin = { server: r.server, networkId: r.networkId, rootPublicKey: r.rootPublicKey, region: r.region }; origins.set(JSON.stringify(o), o);
   }
@@ -260,11 +260,13 @@ async function prepareLive(state: State, route: Route): Promise<Live> {
   }
   guard(); const seed = await getSecureItem(state.storage + '.' + route.seedId); guard();
   if (!seed) throw new Error('AGENT_NET_SHARING_SEED_UNAVAILABLE');
-  const native = { seed, context: JSON.stringify(['cindy-agent-net/sharing-transport/2', route.rootPublicKey, route.kind, route.resourceId]), deviceId: state.context.deviceId };
+  const api = await business(state, route);
+  const guestId = 'guest:' + api.options.signer.identity.signingKey;
+  const native = { seed, context: JSON.stringify(['cindy-agent-net/sharing-transport/2', route.rootPublicKey, route.kind, route.resourceId]), deviceId: route.v === 3 ? guestId : state.context.deviceId };
   const signer = await MobileAgentNetEngine.create(native, guard);
-  const lease = new AgentNetSharingTransport({ client: await business(state, route), applicant: signer, assertCurrent: guard,
+  const lease = new AgentNetSharingTransport({ client: api, applicant: signer, assertCurrent: guard,
     verifyCertificate: verifyMobileAgentNetCertificate, verifyDelegation: verifyMobileAgentNetDelegation,
-    scope: { ...route, guestSubject: agentNetSharingSubject(getMobileAuthOwner().accountId, getActiveMobileSessionRealm() === 'cn' ? 'cn' : 'global', route.region) } });
+    scope: { ...route, guestSubject: route.v === 3 ? guestId : agentNetSharingSubject(getMobileAuthOwner().accountId, getActiveMobileSessionRealm() === 'cn' ? 'cn' : 'global', route.region) } });
   try {
     const delegation = await lease.acquire(); guard();
     const api = guestApi(route, signer, delegation, guard);

@@ -76,6 +76,16 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
           return status;
         } }) };
   };
+  let resourceRevision: unknown;
+  let privateResources = new Set<string>();
+  function ownsResource(kind: string, id: string) {
+    const revision = host.storage.revision?.();
+    if (!host.storage.revision || resourceRevision !== revision) {
+      privateResources = new Set(host.storage.read().bindings.map(b => b.kind + '/' + b.resourceId));
+      resourceRevision = revision;
+    }
+    return privateResources.has(kind + '/' + id);
+  }
   function authorized(d: Delegation): boolean {
     if (!d.scope) return true; // Original datagram-only owner delegation.
     const revision = host.storage.revision?.();
@@ -106,7 +116,7 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
       && m.guestKey === d.scope!.guestSubject && m.version === d.scope!.memberVersion && m.deviceIds.includes(d.guestDeviceId));
   }
   async function handle(req: IncomingMessage, bytes: Buffer): Promise<unknown> {
-    const path = new URL(req.url ?? '/', 'http://localhost').pathname.slice('/api/agent-net/sharing'.length);
+    const path = new URL(req.url ?? '/', 'http://localhost').pathname.replace(/^\/api\/agent-net\/(?:private-sharing|sharing)/, '');
     const method = req.method ?? 'GET';
     const actor = await options.authenticate(req, bytes, { rootPublicKey: host.rootPublicKey, remember: host.remember });
     if (!actor || typeof actor.accountId !== 'string' || typeof actor.deviceId !== 'string'
@@ -268,5 +278,5 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
       && r.expiresAt > host.now() && check(r, state)
       && (host.grant(r).delegation?.expiresAt ?? 0) < r.expiresAt - 30_000).slice(0, 128);
   }
-  return { handle, authorized, requestsFor };
+  return { handle, authorized, requestsFor, ownsResource };
 }
