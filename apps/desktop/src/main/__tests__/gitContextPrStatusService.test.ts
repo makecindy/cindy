@@ -831,7 +831,7 @@ describe('PR follow watch', () => {
     await look(20);
     expect(runNow).not.toHaveBeenCalled();
     await look(30, 'b2');
-    expect(runNow.mock.calls).toEqual([['follow-85', { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }]]);
+    expect(runNow.mock.calls).toEqual([['follow-85', { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }, expect.objectContaining({ id: 'follow-85' })]]);
     await look(40, 'c3');
     expect(runNow).toHaveBeenCalledTimes(1);
     inflight.mockReturnValue(1);
@@ -856,6 +856,45 @@ describe('PR follow watch', () => {
     expect(runNow).toHaveBeenCalledTimes(1);
     await look(300_000);
     expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the selected merge condition for event-only automations, independent of an incidental hook URL', async () => {
+    const target = 'https://github.com/makecindy/cindy/pull/85';
+    const other = 'https://github.com/makecindy/cindy/pull/8';
+    const tasks = [schedule('merged', other, { manual: true, prTrigger: { url: target, change: 'merged' } }),
+      schedule('disabled', target, { prTrigger: null })];
+    const runNow = vi.fn(async () => null);
+    const watch = new PrFollowWatch({ listActive: async () => tasks, runNow, inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true });
+    expect(followedGithubPrs(tasks)).toEqual([target]);
+    await watch.notify(other);
+    await watch.notify(target);
+    watch.observe(Q, { ok: true, status: 'open' } as never);
+    watch.observe(Q, { ok: true, status: 'closed' } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).not.toHaveBeenCalled();
+    watch.observe(Q, { ok: true, status: 'merged' } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledTimes(1);
+    expect(runNow).toHaveBeenCalledWith('merged', expect.objectContaining({ detail: target }), tasks[0]);
+  });
+
+  it('filters CI, review and recovery wakeups for ordinary tasks with no gate', async () => {
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+    const tasks = (['ci', 'review', 'merged', 'any'] as const).map(change =>
+      schedule(change, url, { manual: true, preRunHook: undefined, prTrigger: { url, change } }));
+    const runNow = vi.fn(async (_id: string) => null);
+    const watch = new PrFollowWatch({ listActive: async () => tasks, runNow, inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true });
+    await watch.notifyChange(url, 'reconcile', () => true);
+    expect(runNow).not.toHaveBeenCalled();
+    const open = { ok: true, status: 'open', checks: { total: 1, pending: 1 } };
+    watch.observe(Q, open as never);
+    watch.observe(Q, { ...open, checks: { total: 1, passed: 1 } } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow.mock.calls.map(([id]) => id)).toEqual(['ci', 'any']);
+    await watch.notifyChange(url, 'review', () => true);
+    expect(runNow.mock.calls.map(([id]) => id)).toEqual(['ci', 'any', 'review']);
   });
 
   // Review (Codex P2 on #9022): a passive instance shares data with another one that owns automatic runs.

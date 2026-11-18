@@ -352,6 +352,8 @@ export interface Schedule {
    * 前置检查脚本。undefined = 未配置，完全走原有流程（零行为变化）。
    * 详见 PreRunHookConfig。
    */
+  /** null disables earlier command-based detection; absence preserves older schedules. */
+  prTrigger?: import('./pr-trigger.js').SchedulePrTrigger | null;
   preRunHook?: PreRunHookConfig;
   /** 外部事件触发条件；undefined = 未开启。详见 ScheduleWebhookTrigger。 */
   webhookTrigger?: ScheduleWebhookTrigger;
@@ -422,7 +424,7 @@ export interface ScheduleRun {
   /** 本轮实际执行过前置检查时的结构化结果。 */
   preRunHookResult?: PreRunHookRunResult;
   /** 本轮由什么触发；缺省为定时或手动。 */
-  triggerSource?: 'webhook';
+  triggerSource?: 'webhook' | 'pr-status' | 'pr-check';
   /** 用户已读时间戳（毫秒）；NULL 表示未读。仅对终态 run 有意义。 */
   readAt?: number;
   /**
@@ -495,6 +497,7 @@ export interface CreateScheduleInput {
    * device-link——无法用“带 key 的 undefined”表达清列,null 是等价通道;
    * create 时 null 与 undefined 同义,引擎归一成 undefined）。
    */
+  prTrigger?: import('./pr-trigger.js').SchedulePrTrigger | null;
   preRunHook?: PreRunHookConfig | null;
   /** Webhook 触发条件；null / 缺省 = 不开启。与定时的一次性任务互斥。 */
   webhookTrigger?: ScheduleWebhookTriggerInput | null;

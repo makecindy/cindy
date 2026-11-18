@@ -17107,6 +17107,18 @@
     "ultra": "極致"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "尚未接通 GitHub App 通知，仍會依排程檢查。",
+      "label": "PR",
+      "url": "PR 連結",
+      "condition": "觸發條件",
+      "any": "PR 有新動態",
+      "merged": "PR 已合併",
+      "review": "審查有新動態",
+      "ci": "CI 狀態變更",
+      "timed": "同時定時檢查",
+      "invalid": "請輸入完整的 GitHub PR 連結。"
+    },
     "presentation": {
       "status": {
         "active": "啟用",

@@ -7361,6 +7361,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       supportsScheduleModelSelection: true,
       supportsScheduleAgentDeviceSelection: true,
       // Older hosts keep only known columns and would report success while dropping the trigger.
+      supportsSchedulePrTrigger: true,
       supportsScheduleWebhookTrigger: true,
       // Remote schedule_create checks workingDir on this computer before insert.
       // Older peers accept maker:schedule:create without that check; callers must

@@ -17181,6 +17181,18 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "Ohne GitHub-App-Benachrichtigungen wird weiterhin regelmäßig geprüft.",
+      "label": "PR",
+      "url": "Pull-Request-URL",
+      "condition": "Auslösen bei",
+      "any": "PR-Aktivität",
+      "merged": "Merge",
+      "review": "Review-Aktivität",
+      "ci": "CI-Statusänderung",
+      "timed": "Zusätzlich regelmäßig prüfen",
+      "invalid": "GitHub-Pull-Request-URL eingeben."
+    },
     "presentation": {
       "status": {
         "active": "Aktiv",

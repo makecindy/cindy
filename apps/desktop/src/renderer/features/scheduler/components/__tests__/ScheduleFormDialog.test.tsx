@@ -303,6 +303,26 @@ it.each(['agent', 'script'] as const)('keeps Webhook and timed triggering separa
   }), true));
 });
 
+// UI regression: choosing an exact PR must round-trip independently of time and Webhook settings.
+it('saves a single PR with optional timed checks and can remove the rule', async () => {
+  const form = mount(schedule({}));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.prTrigger.label' }));
+  const url = 'https://github.com/example/project/pull/23';
+  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.prTrigger.url' }), { target: { value: url } });
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: true, prTrigger: { url, change: 'any' }, webhookTrigger: null,
+  }), true));
+  fireEvent.click(screen.getByText('scheduler.prTrigger.timed'));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: false, prTrigger: { url, change: 'any' },
+  }), true));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.trigger.timed' }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ prTrigger: null }), true));
+});
+
 it('preserves both triggers when editing an existing timed Webhook', async () => {
   const form = mount(schedule({ webhookTrigger: { endpointId: 'existing', events: ['issues.opened'], source: { preset: 'github' } } }));
   await screen.findByRole('button', { name: 'routines.advancedSettings' });

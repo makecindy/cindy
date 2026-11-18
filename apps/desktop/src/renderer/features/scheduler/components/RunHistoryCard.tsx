@@ -267,6 +267,8 @@ export function RunHistoryCard({
           </span>
           <span className="truncate text-14 font-medium text-[var(--msg-assistant-text)]">
             {formatRunTimestamp(run.firedAt, Date.now(), t)}
+            {run.triggerSource === 'pr-status' && <> · {t('scheduler.prTrigger.any')}</>}
+            {run.triggerSource === 'pr-check' && <> · {t('scheduler.editor.trigger.timed')}</>}
           </span>
         </div>
         <StatusChip status={run.status} />

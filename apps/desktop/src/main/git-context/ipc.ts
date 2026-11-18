@@ -149,6 +149,7 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
       mergeable: metadata.mergeable ?? null,
       merge_state: metadata.mergeable_state ?? null,
       updated_at: metadata.updated_at ?? null,
+      merged_at: pr.merged_at ?? null,
       labels: metadata.labels ?? [],
       review_requests: metadata.requested_reviewers ?? [],
     },
@@ -178,14 +179,22 @@ const prFollowWatch = new PrFollowWatch({
   listActive: async () => (await getSchedulerIfInitialized()?.list({ status: 'active' })) ?? [],
   inflight: (id) => getSchedulerIfInitialized()?.getInflightCount(id) ?? 0,
   hasCapacity: () => getSchedulerIfInitialized()?.hasFreeSlot() ?? false,
-  runNow: async (id, trigger) => {
+  runNow: async (id, trigger, expectedSchedule) => {
     const scheduler = getSchedulerIfInitialized();
     if (!scheduler) return null;
-    return scheduler.runNow(id, { trigger });
+    return scheduler.runNow(id, { trigger, expectedSchedule });
   },
   log,
 });
 /** Re-read current facts before running the existing follow-up gate. No new agent task. */
+export async function refreshSchedulePr(url: string): Promise<void> {
+  if (!prStatusService) throw new Error('HOST_NOT_READY');
+  const [, owner, repo, , number] = new URL(url).pathname.split('/');
+  const [result] = await prStatusService.getStatuses([{ owner: owner!, repo: repo!, prNumber: Number(number) }],
+    { waitForFresh: true, refresh: true });
+  if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
+}
+
 export async function githubPrHeads(urls: readonly string[]): Promise<Record<string, string>> {
   if (!prStatusService) throw new Error('HOST_NOT_READY');
   return cachedGithubPrHeads(prStatusService, urls);
@@ -238,6 +247,7 @@ export function registerGitContextIpc(): void {
     staleTtlMs: 0,
     eventCacheTtlMs: query => query.provider !== 'gitlab' && getScheduleWebhookHost()?.githubEventsHealthy(sessionPrUrl(query))
       ? GITHUB_EVENT_CACHE_TTL_MS : undefined,
+    onInvalidated: () => prFollowWatch.reset(),
     onObserved: (query, result) => prFollowWatch.observe(query, result),
   });
   app.on('browser-window-focus', () => {

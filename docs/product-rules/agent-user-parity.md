@@ -356,3 +356,5 @@ OAuth 代码、App 密钥或任务签名密钥。`schedule_get.webhookStatus` �
 项目图标颜色：`update_project_info` 的 icon 接受 `symbol:Rocket:blue` 等白名单颜色，走同一资料保存入口；连接旧主机时检查 v3 能力，默认颜色省略后缀。字母支持 `text:CY:blue` 等相同色板，远端检查 v5，默认仍是 `text:CY`。
 
 项目自动图标：`get_project_icon` 与设置页共用主机发现／缓存入口，支持跨电脑查询来源及候选；`update_project_info` 传 null 恢复自动，传候选 data URI 主动采用头像。共享任务访客不开放该读写能力。
+
+普通自动化和 Agent 的 `schedule_create / schedule_update` 均可配置指定 GitHub PR 的状态、合并、评审、CI 触发条件（`prTrigger`），见 [单条 GitHub PR](schedule-webhook-trigger.md#单条-github-pr)。

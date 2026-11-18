@@ -153,6 +153,10 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
   // A teammate's project automations run only on its main computer (handed away: skipped here).
   captureFireContext: captureScheduledOwnerGuard,
   // Quiet rounds return an archived target to archived (archive-pauses-automations.md).
+  refreshSchedulePr: async url => {
+    const { refreshSchedulePr } = await import('../git-context/ipc.js');
+    await refreshSchedulePr(url);
+  },
   wrapRunner: (runner): ScheduleRunner => withQuietRunArchive(
     withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),
     {

@@ -17107,6 +17107,18 @@
     "ultra": "窮極"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "GitHub App 消息未通，仍依時查驗。",
+      "label": "PR",
+      "url": "PR 之鏈",
+      "condition": "何時行之",
+      "any": "PR 有變",
+      "merged": "已合併",
+      "review": "評議有變",
+      "ci": "CI 有變",
+      "timed": "亦定時查驗",
+      "invalid": "請填 GitHub PR 全鏈。"
+    },
     "presentation": {
       "status": {
         "active": "已啟",
