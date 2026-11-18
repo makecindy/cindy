@@ -21,6 +21,7 @@ import { getDbClient } from '../localDb/client/current.js';
 import { persistableSessionEffort } from '../localDb/mapper.js';
 import { sessions } from '../localDb/schema.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { setSessionProvider } from '../maker-host/session-provider-store.js';
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import type { Logger } from '../logger.js';
 import type { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
@@ -33,6 +34,7 @@ import { resolveSessionRuntimeAxes, sessionRuntimeControlOwnerEpochMatches } fro
 import type { createHandleSetModel } from './sessionRuntimeSelectionApply.js';
 
 export interface PendingCredentialSwitchAssemblyPorts {
+  settlementPermit?: PendingCredentialSwitchDeps['settlementPermit'];
   maker: PendingCredentialSwitchDeps['maker'];
   isSessionInTurn: (sessionId: string) => boolean;
   /** Read at call time: register.ts assigns it after this assembly. */
@@ -59,6 +61,7 @@ export function createPendingCredentialSwitchService(ports: PendingCredentialSwi
 
   const pendingCredentialSwitchService = new PendingCredentialSwitchService({
     maker,
+    settlementPermit: ports.settlementPermit,
     isSessionInTurn,
     isPiOwnerCurrent: sessionRuntimeControlOwnerEpochMatches,
     withPiSessionLock: withSendToSessionLock,
@@ -81,8 +84,13 @@ export function createPendingCredentialSwitchService(ports: PendingCredentialSwi
     // deferred 接受时已按请求值落盘,不纠正则下一次懒 resume 按停用路由重建
     // (PR #744 review 第十、十四轮)。
     persistRoute: async (sessionId, route) => {
-      const ownerEpoch = pendingCredentialSwitchHolder?.get(sessionId)?.ownerEpoch;
+      const target = pendingCredentialSwitchHolder?.get(sessionId);
+      const ownerEpoch = target?.ownerEpoch;
       const assertPendingOwner = () => {
+        if (ports.settlementPermit && (!target || pendingCredentialSwitchHolder?.get(sessionId) !== target ||
+            !ports.settlementPermit.allows(sessionId, target))) {
+          throw new Error('credential settlement deferred');
+        }
         if (ownerEpoch && !sessionRuntimeControlOwnerEpochMatches(ownerEpoch)) {
           throw new Error('pending model switch account changed');
         }
@@ -174,7 +182,14 @@ export function createPendingCredentialSwitchService(ports: PendingCredentialSwi
         if (verifiedWindow) patch.contextWindow = verifiedWindow;
       }
       assertPendingOwner();
-      await pendingDb.drizzle.update(sessions).set(patch).where(eq(sessions.id, sessionId));
+      if (ports.settlementPermit) {
+        // Host owns an in-process SQLite handle. Keep the last permit check, UPDATE
+        // and provider mirror in the same synchronous turn.
+        pendingDb.drizzle.update(sessions).set(patch).where(eq(sessions.id, sessionId)).run();
+        setSessionProvider(sessionId, route.providerId);
+      } else {
+        await pendingDb.drizzle.update(sessions).set(patch).where(eq(sessions.id, sessionId));
+      }
       assertPendingOwner();
       setSessionEffort(sessionId, finalEffort);
       setSessionFastMode(sessionId, finalFastMode);

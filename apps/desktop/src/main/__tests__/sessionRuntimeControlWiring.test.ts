@@ -16,6 +16,9 @@ const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 
   /\r\n?/g,
   '\n',
 );
+const runtimeControlSettlementSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/pendingSessionRuntimeControlSettlement.ts'), 'utf8',
+).replace(/\r\n?/g, '\n');
 const pendingCredentialSwitchAssemblySource = readFileSync(
   resolve(mainRoot, 'maker-ipc/pendingCredentialSwitchAssembly.ts'),
   'utf8',
@@ -1039,9 +1042,9 @@ describe('session runtime control wiring', () => {
 
   it('cancels and publishes a deferred runtime mutation after settlement fails', () => {
     const settlement = handlerBody(
-      registerSource,
+      runtimeControlSettlementSource,
       'const settlePendingSessionRuntimeControl =',
-      'settlePendingSessionRuntimeControlHolder = settlePendingSessionRuntimeControl;',
+      'return settlePendingSessionRuntimeControl;',
     );
     const catchBlock = settlement.slice(settlement.indexOf('} catch (error) {'));
 
@@ -1132,7 +1135,7 @@ describe('session runtime control wiring', () => {
     expect(early).toContain('{ thinking: atomicSelection.thinking }');
     // 发送回放 / deferred 结算另两条重建链也不能丢。
     expect(registerWithRuntimeSelectionSource).toContain('{ thinking: intent.thinking }');
-    expect(registerWithRuntimeSelectionSource).toContain('{ thinking: pending.thinking }');
+    expect(runtimeControlSettlementSource).toContain('{ thinking: pending.thinking }');
     expect(
       registerWithRuntimeSelectionSource.split('{ thinking: atomicSelection.thinking }').length,
     ).toBeGreaterThanOrEqual(3);
@@ -1351,7 +1354,7 @@ describe('session runtime control wiring', () => {
     expect(registerWithRuntimeSelectionSource).toMatch(
       /effectiveProviderId === null\s*\? null\s*: \(normalizeSessionProviderId\(effectiveProviderId\) \?\? currentProviderId\)/,
     );
-    expect(registerWithRuntimeSelectionSource).toContain('effort: pending.profile.effort,');
+    expect(runtimeControlSettlementSource).toContain('effort: pending.profile.effort,');
     expect(registerWithRuntimeSelectionSource).toContain('effort: selected.effort, fastMode: selected.fastMode');
     expect(registerWithRuntimeSelectionSource).toContain('effort: next.effort, fastMode: next.fastMode');
   });
@@ -1760,9 +1763,9 @@ describe('session runtime control wiring', () => {
 
   it('retries deferred selection with the confirmed window instead of dropping it', () => {
     const settle = handlerBody(
-      registerSource,
+      runtimeControlSettlementSource,
       'const settlePendingSessionRuntimeControl =',
-      'settlePendingSessionRuntimeControlHolder = settlePendingSessionRuntimeControl;',
+      'return settlePendingSessionRuntimeControl;',
     );
 
     expect(settle).toContain('if (!pending) return;');
@@ -1789,7 +1792,7 @@ describe('session runtime control wiring', () => {
     );
     expect(setModel).toContain('deferSessionRuntimeAxisMutation({');
     expect(setModel).toContain('pendingPatch: pendingAxisPatch');
-    expect(registerSource).toContain('routeExplicit: isPendingSessionRuntimeRouteExplicit(');
+    expect(runtimeControlSettlementSource).toContain('routeExplicit: isPendingSessionRuntimeRouteExplicit(');
     expect(setModel).toMatch(/const result(?::[^;\n]+)? = routeExplicit\s*\? await applyRuntimeSetModelChange\(/);
     expect(setModel).toContain('acceptSessionRuntimeAxisMutation({');
     expect(setModel).toContain("runtimeAgentKind !== 'pi' &&");
@@ -1803,7 +1806,7 @@ describe('session runtime control wiring', () => {
     const setModel = setModelSource();
     expect(setModel).toContain('buildDeferredRuntimeSelectionProfile({');
     expect(setModel).toContain('atomicSelection,');
-    expect(registerSource).toContain('nextDeferredModelWindowRetry(');
+    expect(runtimeControlSettlementSource).toContain('nextDeferredModelWindowRetry(');
   });
 
   it('rebuilds live Orca Workers for model routes while preserving effort-only hot updates', () => {
