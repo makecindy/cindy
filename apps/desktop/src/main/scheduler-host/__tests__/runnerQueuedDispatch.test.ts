@@ -658,7 +658,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     }
     queue.failAutoResume(source === 'terminal' ? undefined : detail);
     await rejected;
-    expect(latestNotifiedRun(notifier).errorMsg).toContain("You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage,");
+    expect(latestNotifiedRun(notifier).errorMsg).toContain("scheduled task auto-resume failed: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage,");
     expect(latestNotifiedRun(notifier).errorMsg).not.toMatch(/synthetic-test-secret|example|internal-frame|Earlier request failed/);
     expect(h.listenerCount()).toBe(0);
   });
@@ -701,7 +701,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       },
       beforeDispatchUserTurn: async () => {
         // Production budgets throw the typed error; plain text never authorizes recovery.
-        if (++attempts === 1 || options.replacementFails) throw new SnapshotOperationDeadlineError();
+        if (++attempts === 1) throw new SnapshotOperationDeadlineError();
+        if (options.replacementFails) throw new Error('[MODEL_SELECTION_UNAVAILABLE] Replacement unavailable');
       },
       onAcceptedQueuedMessage: async (id, item) => { await accepted.run(id, item, bridge.recoverySourceClientId(id, item)); },
       onPersistedSendRejected: (id, error, item, recovering) => bridge.onPersistedSendRejected(id, error, item, recovering),
@@ -808,7 +809,11 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
         if (action === 'clear') { h.coordinator.clearSession(SESSION_ID); h.book.teardown(SESSION_ID); }
         if (action === 'pause-delete') h.ctx.abortController.abort();
         await vi.advanceTimersByTimeAsync(30_000);
-        await expect(h.fire).rejects.toThrow(action === 'pause-delete' ? /aborted/ : /Snapshot operation deadline exceeded/);
+        const expected = action === 'disabled' ? /^Snapshot operation deadline exceeded$/
+          : action === 'replacement-failed' ? /^scheduled task auto-resume failed: \[MODEL_SELECTION_UNAVAILABLE\] Replacement unavailable$/
+          : action === 'pause-delete' ? /aborted/
+          : /^scheduled task auto-resume failed: Snapshot operation deadline exceeded$/;
+        await expect(h.fire).rejects.toThrow(expected);
         expect(h.dispatched).toEqual([]);
         expect(h.bridge.hasQueuedPrompt(SESSION_ID, 'schedule-hb')).toBe(false);
         expect(h.session.listenerCount()).toBe(0);

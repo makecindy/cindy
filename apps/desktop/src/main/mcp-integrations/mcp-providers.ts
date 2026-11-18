@@ -1,5 +1,6 @@
 import { resolveAutomaticProjectIcon } from '../projectAutomaticIcon.desktop.js';
 import { readSubscriptionUsage } from '../subscription-accounts/runtime.js';
+import { createSessionToolCatalogExecutor } from '../maker-ipc/sessionToolCatalog.js';
 import { parseProjectSymbol, parseProjectLetters } from '@cindy/maker-shared/project-alias-sync';
 import { readProjectInfo } from '../projectInfoCore.js';
 import { updateProjectInfo } from '../localDb/ipc/projectAliases.js';
@@ -21,8 +22,10 @@ import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
 import { importThemePackageFromTask } from '../local-themes/agent.js';
 import { manageAppModels } from '../app-settings/models.js';
+import { runProviderReadRequest } from './providerReadTools.js';
 import { runProviderSharingRequest } from './providerSharingTools.js';
 import { executeProviderShareManagementCommand } from '../device-link/providerShareRuntime.js';
+import { createProviderGroupCommandDeps, executeProviderGroupCommand } from '../provider-group/ipc.js';
 import { invokeProviderManagement } from '../provider-group/managementClient.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { classifyOrigin } from '../input-handoff/originPolicy.js';
@@ -334,6 +337,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         closed,
         terminalError: terminal?.kind === 'error'
           ? {
+            ...(terminal.message ? { message: terminal.message } : {}),
             ...(terminal.sdkError ? { sdkError: terminal.sdkError } : {}),
             ...(terminal.codexErrorInfo ? { codexErrorInfo: terminal.codexErrorInfo } : {}),
             ...(typeof terminal.errorStatus === 'number' ? { errorStatus: terminal.errorStatus } : {}),
@@ -739,6 +743,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 启动早期跑, 那时 registerMakerIpc 还没执行, holder 是 null; 回调真正被调时
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
+      sessionToolCatalog: { call: (context, request) => withAccountDataAccess(context.sessionId, assertCurrent =>
+        createSessionToolCatalogExecutor({
+          getSession: async id => getTaskActionSession(id),
+          pluginCall: getPluginHostToolCaller, getGhost: findGhostForInstanceId,
+        })(request, assertCurrent)) },
       subscriptionUsage: { read: (context, providerId) => withAccountDataAccess(context.sessionId, async assertCurrent => {
         const result = await readSubscriptionUsage(providerId);
         await assertCurrent();
@@ -794,6 +803,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             ...(request.note ? { note: request.note } : {}),
             ...(ready.requester ? { requester: ready.requester } : {}),
             target: request.target,
+            ...(request.fields ? { fields: request.fields } : {}),
             ...(request.completeWhen ? { completeWhen: request.completeWhen } : {}),
             ...(request.timeoutMinutes ? { timeoutMinutes: request.timeoutMinutes } : {}),
           });
@@ -1375,6 +1385,32 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }, signal);
         }),
       },
+      providerReads: {
+        call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async () => {
+          const plugin = !callerSessionId ? getPluginHostToolCaller() : undefined;
+          const owner = activeOwnerScopeKey();
+          const assertCurrent = () => {
+            plugin?.assertCurrent();
+            if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('OWNER_SCOPE_CHANGED');
+          };
+          return runProviderReadRequest({ ...input, device: input.device === getDeviceId() ? 'local' : input.device }, {
+            local: async (request, guard) => {
+              if (request.action === 'manage-share') {
+                guard();
+                return executeProviderShareManagementCommand(request.command);
+              }
+              guard();
+              return executeProviderGroupCommand(createProviderGroupCommandDeps(), request.command);
+            },
+            remote: async (device, request, guard) => {
+              guard();
+              return invokeProviderManagement((target, channel, args, options) =>
+                deps.invokeRemote(target, channel, args, { ...options, preSend: () => { guard(); options?.preSend?.(); } }),
+              device, request);
+            },
+          }, assertCurrent, Boolean(plugin));
+        }),
+      },
       providerSharing: {
         call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async assertAccess => {
           const write = input.action === 'status' || input.action === 'set-models';
@@ -1583,6 +1619,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       endTeam: wrap((s, params) => s.endTeam(params)),
       archiveWorker: wrap((s, params) => s.archiveWorker(params)),
       updateWorker: wrap((s, params) => s.updateWorker(params)),
+      setWorkerRuntime: wrap((s, params) => s.setWorkerRuntime(params)),
       listAvailableModels: wrap((s, params) => s.listAvailableModels(params)),
       getWorkspaceInfo: wrap((s, params) => s.getWorkspaceInfo(params)),
       getWorkerStatus: wrap((s, params) => s.getWorkerStatus(params)),

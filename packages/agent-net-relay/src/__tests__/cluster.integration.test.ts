@@ -30,7 +30,7 @@ import { createServer, request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import WebSocket from 'ws';
-import { SignJWT, createLocalJWKSet } from 'jose';
+import { SignJWT, createLocalJWKSet, decodeJwt } from 'jose';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateKeyPairSync, randomBytes, createHash } from 'node:crypto';
@@ -119,7 +119,19 @@ async function exchange(a: AgentNetUplink, b: AgentNetUplink): Promise<void> {
 }
 
 describe('replicated official relay', () => {
-  it('authenticates fresh membership and grants before delayed notifications, preserves revocation and reports outages as retryable', async () => {
+  // CI #10930: separate iat/exp clock reads could make a five-minute card last 301 seconds.
+  // Date-only control keeps real HTTP/WS timers running and forces that second boundary.
+  it.each([false, true])('authenticates fresh membership and grants before delayed notifications, preserves revocation and reports outages as retryable (cross-second=%s)', async (crossSecond) => {
+    if (crossSecond) {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Math.floor(Date.now() / 1000) * 1000 + 999);
+      const setIssuedAt = SignJWT.prototype.setIssuedAt;
+      vi.spyOn(SignJWT.prototype, 'setIssuedAt').mockImplementationOnce(function (this: SignJWT, input) {
+        const result = setIssuedAt.call(this, input);
+        vi.setSystemTime(Date.now() + 1);
+        return result;
+      });
+    }
     const pair = generateKeyPairSync('rsa', { modulusLength: 2048 }), issuer = 'https://identity.example.test';
     const auth = createAgentNetSharingAuth({ issuer }, createLocalJWKSet({ keys: [{ ...pair.publicKey.export({ format: 'jwk' }), kid: 'cluster', alg: 'RS256' }] }));
     const set = await replicaSet({ sharing: auth });
@@ -130,11 +142,12 @@ describe('replicated official relay', () => {
     const { home, entry } = set.roles();
     await set.enroll(entry, 'owner');
     const identity = set.identities.owner;
+    const issuedAt = Math.floor(Date.now() / 1000);
     const card = await new SignJWT({ typ: 'identity-card', sub: 'owner-account', device: identity.deviceId,
       region: 'global', purpose: 'network-session', nonce: createHash('sha256')
         .update(sharingIdentityPayload(NETWORK, set.rootPublicKey, identity.deviceId, identity.signingKey)).digest('hex') })
       .setProtectedHeader({ alg: 'RS256', kid: 'cluster' }).setIssuer(issuer).setAudience('cindy-agent-net-sharing')
-      .setIssuedAt().setExpirationTime(Math.floor(Date.now() / 1000) + 300).sign(pair.privateKey);
+      .setIssuedAt(issuedAt).setExpirationTime(issuedAt + 300).sign(pair.privateKey);
     const sharingPath = API + '/sharing/provider-shares';
     const sharingCall = () => fetch(home.url + sharingPath, { headers: {
       authorization: 'AgentNetIdentity ' + Buffer.from(JSON.stringify({ networkId: NETWORK, deviceId: identity.deviceId,
@@ -142,7 +155,9 @@ describe('replicated official relay', () => {
       'x-agent-net-authorization': set.client(home, 'owner').header('GET', sharingPath),
     } });
     // Both scoped identity verification and the certified-host proof read a previously cold network.
-    expect((await sharingCall()).status).toBe(200);
+    const claims = decodeJwt(card);
+    expect((await sharingCall()).status, `identity card lifetime=${claims.exp! - claims.iat!}`).toBe(200);
+    expect(claims.exp! - claims.iat!).toBe(300);
     await set.enroll(entry, 'member');
     const owner = set.client(home, 'owner'), member = set.client(entry, 'member');
     const x = await owner.connect(), y = await member.connect(); set.uplinks.push(x, y);

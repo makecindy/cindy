@@ -179,6 +179,10 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
   createId: () => string;
   getSessionMeta: (sessionId: string) => Promise<TSessionMeta | null>;
+  directWorkerRecovery?: {
+    getInputAbortSignal(sessionId: string): AbortSignal;
+    rememberDirectWorkerInput(runtime: object, generation: number, item: AgentInputQueuedMessage, signal: AbortSignal): () => void;
+  };
   getSessionRowSnapshot: (sessionId: string) => Promise<OrcaInterAgentSessionRowSnapshot | null>;
   getLiveSession: (sessionId: string) => PersistedUserMessageSession | null | undefined;
   /** Apply a deferred route while the per-session send lock is held. */
@@ -429,12 +433,26 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         ],
       };
     };
+    let revokeDirectReceipt: (() => void) | undefined;
     let acceptedDidRun = false;
     const runAccepted = async (): Promise<void> => {
       acceptedDidRun = true;
+      const recovery = params.source === 'lead' ? deps.directWorkerRecovery : undefined;
+      const runtime = recovery && deps.getLiveSession(params.targetSessionId);
+      const generation = runtime?.getTurnGeneration?.();
+      const signal = recovery?.getInputAbortSignal(params.targetSessionId);
       await params.onAccepted?.();
+      if (recovery && runtime && generation !== undefined && signal && !signal.aborted) {
+        const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
+        const item = buildQueuedOrcaInterAgentMessage({
+          clientId, agentMessageText: await buildAgentMessageText(), persistedContent,
+          origin: await resolveOrigin(), createOpts, files: imageFiles,
+        });
+        revokeDirectReceipt = recovery.rememberDirectWorkerInput(runtime, generation, item, signal);
+      }
     };
     const rollbackAcceptedForRequeue = async (): Promise<void> => {
+      revokeDirectReceipt?.();
       if (!acceptedDidRun) return;
       await runAcceptedRollback(
         params.onAcceptedRollback,
@@ -445,6 +463,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       acceptedDidRun = false;
     };
     const failureResult = async (dispatchOutcome: CollabDispatchFailureOutcome, reportRejected = false): Promise<DispatchOrcaInterAgentMessageResult> => {
+      revokeDirectReceipt?.();
       if (acceptedDidRun) {
         await runAcceptedRollback(params.onAcceptedRollback, params.targetSessionId, clientId, log);
       }

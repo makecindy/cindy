@@ -4,6 +4,8 @@
 > **读取时机**：新增或修改 `packages/maker-core` 中的 Agent 编排、prompt 组装、
 > tool／MCP 暴露、translator、event loop、model 映射、usage／token 计量，或任何会进入
 > 模型 system 段的提示词之前
+> **适用路径**：`packages/maker-core/**`、`apps/desktop/src/main/maker-host/*prompt*.md`、
+> `apps/desktop/src/main/maker-ipc/botSystemPrompt.ts`、`apps/cindy-headless/profiles/**`
 
 本文治理 Cindy 连接 Claude／Codex 等 Agent 的编排核心 `packages/maker-core`。它是所有
 Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户无感知的情况下影响线上行为与
@@ -26,6 +28,8 @@ Claude Code、Codex、Pi 共用 Maker 的启动失败清理契约：只有明确
 transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCleanupPendingError`，
 保留运行期文件与目录保护，重试确认退出后才释放。旧隔离进程的清理失败不能被新一轮
 “尚未启动”的状态覆盖。此恢复只影响失败任务，不重置设备连接或其他任务，不自动重放消息。
+
+本机 Codex 的任务独占账号／自定义上下文进程在 `thread/resume` 等满 60 秒时记录线程与连接标识，macOS 尽力采样栈符号。只有确认旧进程已退出且仍在启动阶段，才用相同线程再恢复一次；第二次超时或清理失败即结束。共享进程、远端会话和已经发出的 turn 不走这条恢复路径。
 
 回归见 `claude-code/__tests__/startup-cleanup.test.ts`、
 `pi/__tests__/pi-startsession-cleanup.test.ts` 与 `maker.test.ts`。
@@ -738,6 +742,24 @@ Cindy 审核向 Codex／Claude 原生审核看齐：先判动作本身的风险�
 IM 与官方 Hook 确认卡统一显示为「自动审批需要你决定：…」，故障降级仍只显示固定文案。共用规则在
 `agents/shared/continuation-policy.ts`，真实模型配对比较入口为 `scripts/eval-auto-approval.mts`
 的 `--baseline-bundle`（隔离打包的旧审核器）；只审核合成操作，不执行副作用。
+
+审阅证据只算**一份**。MCP 工具调用的证据取原始调用（server、tool name、原始参数、工具标题
+与描述），不得再带确认卡那份渲染副本：codex 会把同一份 `tool_params` 再渲染一份
+`tool_params_display` 发给客户端（codex-rs `build_mcp_tool_approval_display_params` 是同一对象的
+逐字段副本，不是截断版），两份都进证据等于把同一个动作按完整证据预算
+（`MAX_AUTO_REVIEW_ACTION_TEXT_CHARS` = 131,072 字符）数两遍，普通调用会凭空多出一倍。
+证据里不做截断：参数一字不删，审阅模型看到的内容与之前完全一致，变的只是同一份内容不再被计两次。
+另有一个数不要混用：`MAX_AUTO_REVIEW_STATIC_TEXT_CHARS` = 4,096 是同步静态解析自己的上限，
+超过只是转完整模型审阅，不是拦截；完整证据超预算时裁决是 `ask`（交用户确认），不是静默拦截。
+拦截原因分两类：**Cindy 自己的确定性文案**（动作文本超限、证据不足、审阅器故障、授权范围变化、
+宿主固定的授权失效原因、delegate 根本没调用模型时给出的宿主固定判定）在决定里标 `policyReason`，
+可原样进 UI／日志／诊断通道；**模型自由文本**
+不带该标记，可能含参数、路径、片段，一律不得外泄。delegate 若判定出的是宿主自己的文案
+（没有调用模型），要用 `hostReason` 声明来源，由 maker-core 转成 `policyReason`；委托方解析模型
+输出时必须**新建对象**（不展开模型给的 JSON），模型才无法自己带上这个标记。Codex 的 MCP
+拦截通知只带 policy 原因。
+模型看到的拒绝文案由 codex app-server 决定（`user rejected MCP tool call`，客户端改不动），
+所以真实原因必须先在 Cindy 侧保住，别再让界面只显示一句通用文案。
 
 原生审批已接管的本地工具调用不叠加 Cindy 模型复审，以 Handle 的实时
 `getAutoReviewOwner()` 为准；Codex Guardian 故障切换后恢复 Cindy 负责。

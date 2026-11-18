@@ -56,6 +56,21 @@ describe('parseDeviceProviderViews', () => {
 });
 
 describe('readDeviceProviderViews', () => {
+  // #11088: the recovery caller uses this existing production resolver. A null
+  // provider must select only a model route authorized by the target computer.
+  it('resolves an implicit Claude source from the target catalog and rejects an unknown route', async () => {
+    const model = 'claude-opus-5-5';
+    deviceLink.remoteBackgroundInvoke.mockResolvedValue({ ok: true, result: { providers: [
+      provider({ id: 'private-claude', remoteInvocationEnabled: false, models: { 'claude-code': [{ id: model }] } }),
+      provider({ id: 'target-account', remoteInvocationEnabled: true, auth: { method: 'oauth', native: 'claude' },
+        models: { 'claude-code': [{ id: model }] } }),
+    ] } });
+    await expect(readRemoteProviderRoute({ agentDeviceId: 'device-b', agentKind: 'claude-code', providerId: null, model }))
+      .resolves.toMatchObject({ provider: { id: 'target-account' } });
+    await expect(readRemoteProviderRoute({ agentDeviceId: 'device-b', agentKind: 'claude-code', providerId: null, model: 'missing' }))
+      .rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
+  });
+
   it('asks the other computer for its provider list with the controller capabilities', async () => {
     const invoke = vi.fn(async () => ({ ok: true, result: { providers: [provider({ remoteInvocationEnabled: true })] } }));
     expect((await readDeviceProviderViews(invoke, 'device-b')).map((view) => view.id)).toEqual(['spark']);

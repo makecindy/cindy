@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 图片 lightbox 的三个媒体动作(main 侧业务体):
  *   - media:open-with-default-app —— 用系统默认应用打开图片
- *   - media:save-as               —— 另存为(本地图复制;http(s)/data: 先取字节)
+ *   - media:save-as               —— 另存为(本地复制;HTTP/远程流式导出;data: 解码)
  *   - media:cache-for-session     —— "发送到对话":把图片复制成目标会话的一份
  *                                    新 xdt-image:// 缓存,renderer 据此构造附件
  *
@@ -20,6 +20,7 @@ import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 
 import { isDangerousAttachmentName } from '../shared/attachmentSafety';
+import { parseRemoteMediaUrl } from '../shared/remoteMediaUrl';
 
 import { isIpcErrorCode } from '../shared/ipc-errors';
 import { throwIpcError } from './utils/ipcValidate';
@@ -275,6 +276,8 @@ export interface LightboxMediaDeps {
   fetchRemoteImage(url: string): Promise<{ buffer: Buffer; mimeType?: string }>;
   /** 取远程会话媒体字节(cindy-remote-media://,复用协议取件管线)。 */
   fetchRemoteMediaImage(url: string): Promise<{ buffer: Buffer; mimeType: string }>;
+  /** 保存专用流式出口；只在用户选定目标后调用，不复用图片内存读取。 */
+  saveRemoteMedia(source: { kind: 'http' | 'remote-media'; url: string }, destination: string): Promise<void>;
   /** 临时目录(远程图"用默认应用打开"落临时文件)。 */
   getTempDir(): string;
   fileExists(absPath: string): boolean;
@@ -464,40 +467,28 @@ export function createLightboxMediaHandlers(deps: LightboxMediaDeps): LightboxMe
         }
       }
 
-      // remote-media 先取字节:正在 lightbox 显示的图协议缓存大概率命中(快),
-      // 且文件名扩展要从实际 mime 推(remote url 无路径语义)。
-      let remoteBytes: { buffer: Buffer; mimeType?: string } | null = null;
-      let suggested: string;
-      if (source.kind === 'remote-media') {
+      // URL 只用于建议名，不为命名取件。远程路径按来源格式解析，绝不读本机同名文件。
+      let suggested = suggestSaveFileName(source, localAbsPath, deps.now());
+      if (source.kind === 'http' || source.kind === 'remote-media') {
+        suggested = `media-${deps.now()}.bin`;
         try {
-          remoteBytes = await deps.fetchRemoteMediaImage(source.url);
-        } catch (err) {
-          rethrowIfIpcError(err);
-          throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
-        }
-        const mime = sniffImageMime(remoteBytes.buffer) ?? remoteBytes.mimeType ?? 'application/octet-stream';
-        const mediaExt: Record<string, string> = {
-          'video/mp4': '.mp4',
-          'video/quicktime': '.mov',
-          'video/webm': '.webm',
-          'audio/mpeg': '.mp3',
-          'audio/mp4': '.m4a',
-          'audio/wav': '.wav',
-          'audio/ogg': '.ogg',
-          'application/pdf': '.pdf',
-          'model/gltf-binary': '.glb',
-        };
-        suggested = `${mime.startsWith('image/') ? 'image' : 'media'}-${deps.now()}${mediaExt[mime] ?? (mime.startsWith('image/') ? extForMimeType(mime) : '.bin')}`;
-      } else {
-        suggested = suggestSaveFileName(source, localAbsPath, deps.now());
-        if (source.kind === 'http') {
-          try {
-            const base = decodeURIComponent(new URL(source.url).pathname.split('/').pop() ?? '');
-            if (base && !/[\\/\x00-\x1f]/.test(base) && !isDangerousAttachmentName(base))
-              suggested = base;
-          } catch {
-            /* retain the safe fallback */
+          const original = source.kind === 'remote-media'
+            ? parseRemoteMediaUrl(source.url)?.origUrl
+            : source.url;
+          if (original) {
+            const parsed = new URL(original);
+            const originalPath = parsed.searchParams.get('path');
+            const base = originalPath
+              ? originalPath.split(/[\\/]/).pop() ?? ''
+              : decodeURIComponent(parsed.pathname.split('/').pop() ?? '');
+            // Keep suggestions to one safe segment on both desktop platforms.
+            if (base && base !== '.' && base !== '..' && base.length <= 200 &&
+                !/[<>:"|?*\\/\x00-\x1f\x7f]/.test(base) && !/[. ]$/.test(base) &&
+                !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(base) &&
+                !isDangerousAttachmentName(base)) suggested = base;
           }
+        } catch {
+          // Malformed metadata keeps the inert fallback; the original fetch validates the source.
         }
       }
 
@@ -509,11 +500,8 @@ export function createLightboxMediaHandlers(deps: LightboxMediaDeps): LightboxMe
       try {
         if (localAbsPath) {
           await deps.copyFile(localAbsPath, filePath);
-        } else if (remoteBytes) {
-          await deps.writeFile(filePath, remoteBytes.buffer);
-        } else if (source.kind === 'http') {
-          const { buffer } = await deps.fetchRemoteImage(source.url);
-          await deps.writeFile(filePath, buffer);
+        } else if (source.kind === 'http' || source.kind === 'remote-media') {
+          await deps.saveRemoteMedia(source, filePath);
         } else if (source.kind === 'data') {
           await deps.writeFile(filePath, decodeDataImageOrThrow(source.base64));
         }

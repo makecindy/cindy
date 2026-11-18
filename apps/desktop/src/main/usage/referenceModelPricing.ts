@@ -7,7 +7,8 @@
 
 import { BrowserWindow } from 'electron';
 import { notifyUsagePricingChanged } from './pricingChanges.js';
-import type { AgentKind } from '@cindy/model-providers';
+import { createLogger } from '../logger.js';
+import type { AgentKind, Catalog } from '@cindy/model-providers';
 
 import {
   getModelPriceQuote,
@@ -30,6 +31,8 @@ export { readModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 
 export const REFERENCE_MODEL_PRICING_CHANGED_CHANNEL = 'usage:reference-model-pricing-changed';
 
+const log = createLogger('referenceModelPricing');
+
 /**
  * Catalog 刷新只重建非 XD 参考价；registryPricingCatalog 本身也会过滤 XD route。
  *
@@ -37,13 +40,18 @@ export const REFERENCE_MODEL_PRICING_CHANGED_CHANNEL = 'usage:reference-model-pr
  * 与 BYOK 价格不带生效期，照常加入。批量按天取价的调用方传同一份 `overrides` 快照。
  */
 export function getReferenceModelPricing(
-  options: { at?: string | Date; overrides?: ModelPriceOverridesSnapshot } = {},
+  options: {
+    at?: string | Date;
+    overrides?: ModelPriceOverridesSnapshot;
+    /** Providers to quote per model; defaults to the active catalog's. */
+    providers?: Catalog['providers'];
+  } = {},
 ): ModelPricingCatalog {
   const { at } = options;
   const catalog = getActiveCatalog();
   const registry = catalog.modelRegistry;
   const pricing = registryPricingCatalog(registry, at);
-  for (const provider of catalog.providers) {
+  for (const provider of options.providers ?? catalog.providers) {
     // Connection-local prices belong to this account and engine, including OAuth
     // discovery quotes. Publishing only Registry routes dropped them all.
     if (provider.source === 'user' && provider.id !== 'xd') {
@@ -76,14 +84,68 @@ export function getReferenceModelPricing(
   };
 }
 
-export function broadcastReferenceModelPricing(): void {
+let displayProviders: (() => Catalog['providers']) | null = null;
+
+/**
+ * The catalog the model picker and settings list render from. An account provider's own
+ * discovered models are projected onto it after the active catalog, so quoting only the
+ * active catalog leaves exactly those models without a price.
+ */
+export function setReferencePricingDisplayProviders(source: (() => Catalog['providers']) | null): void {
+  displayProviders = source;
+}
+
+/** Current reference prices for every model the renderer can list. */
+export function getDisplayReferenceModelPricing(): ModelPricingCatalog {
+  return getReferenceModelPricing({ providers: displayProviders?.() });
+}
+
+let lastBroadcastTable: string | null = null;
+let followUpScheduled = false;
+
+function publishReferenceModelPricing(pricing: ModelPricingCatalog, table: string): void {
+  lastBroadcastTable = table;
   notifyUsagePricingChanged();
-  const pricing = getReferenceModelPricing();
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
+    if (win.isDestroyed()) continue;
+    try {
       win.webContents.send(REFERENCE_MODEL_PRICING_CHANGED_CHANNEL, pricing);
+    } catch {
+      // Window teardown may race the broadcast; other windows still receive it.
     }
   }
+}
+
+export function broadcastReferenceModelPricing(): void {
+  const pricing = getDisplayReferenceModelPricing();
+  publishReferenceModelPricing(pricing, JSON.stringify(pricing));
+}
+
+/**
+ * 供应商清单变化后跟进一次参考价。
+ *
+ * OAuth 账号供应商的报价按「当时这个账号名下的型号」逐个生成；账号发现在目录加载之后才
+ * 补入新型号，那一刻没有人再广播，界面上这些型号就一直没有价格（独立订阅账号页上新型号
+ * 缺价格档）。同一轮事件循环内的多次变化只重算一次；报价表没变就不广播，也不通知用量重算。
+ */
+export function followReferenceModelPricingAfterProviderChange(): void {
+  if (followUpScheduled) return;
+  followUpScheduled = true;
+  setImmediate(() => {
+    followUpScheduled = false;
+    // Nothing awaits this callback: an escaping error would be an uncaughtException, which
+    // shuts the app down. A missed price update is retried by the next provider change.
+    try {
+      const pricing = getDisplayReferenceModelPricing();
+      const table = JSON.stringify(pricing);
+      if (table === lastBroadcastTable) return;
+      publishReferenceModelPricing(pricing, table);
+    } catch (error) {
+      log.warn('reference price follow-up failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
 }
 
 /** 按显式来源估算 Codex 订阅轮价值，不读取 XD Gateway 报价。 */

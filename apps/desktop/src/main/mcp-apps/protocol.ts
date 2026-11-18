@@ -85,7 +85,7 @@ export function readAppResource(
   result: ReadResourceResult,
   uri: string,
   fallbackMeta?: unknown,
-): { html: string; meta: McpUiResourceMeta } {
+): { html: string; meta: McpUiResourceMeta; hostFullscreenButton: boolean } {
   const item = result.contents.find(
     (content) => content.uri === uri && content.mimeType === RESOURCE_MIME_TYPE,
   );
@@ -101,7 +101,7 @@ export function readAppResource(
   const meta = McpUiResourceMetaSchema.parse(item._meta?.ui ?? fallbackMeta ?? {});
   // Validate before any document is supplied to a renderer.
   appCsp(meta);
-  return { html, meta };
+  return { html, meta, hostFullscreenButton: item._meta?.['cindy/host-fullscreen-button'] !== false };
 }
 
 export function safeAppLink(value: string): string {

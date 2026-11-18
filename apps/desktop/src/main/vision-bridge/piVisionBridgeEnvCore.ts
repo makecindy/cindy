@@ -28,6 +28,7 @@ import {
 export const PI_VISION_BRIDGE_ENV = 'CINDY_PI_VISION_BRIDGE';
 
 export interface PiVisionBackendSpec {
+  providerId?: string;
   baseUrl: string;
   requestPath: string;
   model: string;
@@ -41,6 +42,7 @@ export interface PiVisionBackendSpec {
 }
 
 export interface PiVisionBridgeEnvPayload {
+  usageToken?: string;
   enabled: boolean;
   primary: PiVisionBackendSpec | null;
   fallback: PiVisionBackendSpec | null;
@@ -55,6 +57,7 @@ function resolveSpec(
   try {
     const ep = resolveVisionBackendEndpoint(providerId, modelId, deps);
     return {
+      providerId,
       baseUrl: ep.upstream,
       requestPath: ep.requestPath,
       model: ep.model,

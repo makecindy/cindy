@@ -148,6 +148,17 @@ export function applyListContinuation(view: EditorView): boolean {
     return true;
   }
 
+  // 顶层引用行接续成独立段落:引用与之后的评论各占一段,单行段落的引用缩进
+  // 只是段落属性,输入法组字时无需撤掉,在下方评论里打中文时引用不会左右跳;
+  // 发送文本不变(顶层段落与 hardBreak 都序列化为换行)。待办 / 文本列表
+  // 仍插 hardBreak:顶层段落开头的 `- ` / `1. ` 会被提升为结构化列表。
+  if (QUOTE_RE.test(lineText) && $from.depth === 1 && $from.parent.type.name === 'paragraph') {
+    const tr = state.tr.split($from.pos);
+    tr.insertText(continuation.insert);
+    view.dispatch(tr.scrollIntoView());
+    return true;
+  }
+
   const hardBreak = state.schema.nodes.hardBreak;
   if (!hardBreak) return false;
   const tr = state.tr.replaceSelectionWith(hardBreak.create(), false);

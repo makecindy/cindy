@@ -5,10 +5,12 @@ import type { AutoResumeBookkeeping, SuppressedTurnErrorOwner } from './autoResu
 import {
   isContinuationOnlyAutoResumeReason,
   isInterruptedTurnError,
+  isUnexpectedWorkerStreamEnd,
   type InterruptedTurnAutoResumeGuard,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
-import { isBotCandidateUnavailable, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
+import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotCandidateUnavailable, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
+import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
 
@@ -19,6 +21,7 @@ type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoo
 export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends object> {
   inputCoordinator: {
     isExecutionPaused(sessionId: string): boolean;
+    isAutoResumeAttemptCurrent(sessionId: string, attemptToken: number): boolean;
     autoRetryLastError(sessionId: string, attemptToken: number): Promise<'resumed' | 'superseded' | 'no-progress'>;
   };
   interruptedTurnAutoResumeGuard: Pick<InterruptedTurnAutoResumeGuard, 'onInterruptedTurn' | 'noteResumeSendFailed'>;
@@ -28,6 +31,8 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     | 'finalizeSuppressedError' | 'abandonUnconfirmedPersistedResume' | 'surfaceSuppressedErrorForRetry'
   >;
   botFallbackInputs: { has(createOpts: object): boolean };
+  workerInputs?: { has(createOpts: object): boolean };
+  scheduledQuotaInputs?: { has(createOpts: object): boolean };
   saveTurnStartedAtForDeferred(sessionId: string): void;
   beginSchedulerAutoResume(sessionId: string, runId: string, attemptToken: number, error?: string): void;
   getStableSessionForTurnBoundary(sessionId: string): RuntimeSession | null | undefined;
@@ -60,17 +65,21 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
  * surface or flush the held error when no attempt runs. Shared by the desktop and the Node Host.
  */
 export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends object>({
-  inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs,
+  inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs, workerInputs,
   saveTurnStartedAtForDeferred, beginSchedulerAutoResume, getStableSessionForTurnBoundary,
   pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
   providerGroupHeldErrors, providerGroupHeldTerminals, pendingSchedulerAutoResumeRunBySession,
   notifySchedulerAutoResumeFailed, autoResumeAttemptToken, log,
 }: InterruptedTurnAutoResumeHookPorts<RuntimeSession>) {
   const canRecoverTurn = (signals: InterruptedTurnErrorSignals, item?: AgentInputQueuedMessage | null) =>
-    signals.reason === 'scheduler-snapshot-preparation'
+    item && scheduledQuotaInputs?.has(item.createOpts) && isAccountUsageLimitError(signals)
+      ? false // Same-provider quota waiting owns this run; never enter a cross-route candidate chain.
+      : signals.reason === 'scheduler-snapshot-preparation'
       ? item?.origin?.kind === 'scheduler' && !!item.origin.runId
       : signals.reason === 'orca-report-preparation'
       ? !!item?.orcaReportDelivery && item.origin?.kind === 'orca' && canRecoverUndeliveredOrcaReport(signals.message)
+      : signals.reason === 'session_event_loop_crashed'
+      ? !!item && workerInputs?.has(item.createOpts) === true && isUnexpectedWorkerStreamEnd(signals)
       : isInterruptedTurnError(signals) ||
         (!!item && botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals));
   const hooks: {
@@ -108,6 +117,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       const requireRouteChange = botInput && isBotCandidateUnavailable(signals);
       const reportPreparation = signals.reason === 'orca-report-preparation';
       const localPreparation = signals.reason === 'scheduler-snapshot-preparation';
+      const startupAdmission = signals.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON;
       const sameRouteRetryable = reportPreparation || localPreparation || isInterruptedTurnError(signals);
       const erroredAt = Date.now();
       const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);
@@ -164,9 +174,12 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
         (attempt) => {
           return (async () => {
             let fallbackRebuildSession: RuntimeSession | null = null;
+            const isCurrent = () => attempt.isCurrent() && !inputCoordinator.isExecutionPaused(sessionId)
+              && (!startupAdmission || inputCoordinator.isAutoResumeAttemptCurrent(sessionId, decision.attemptToken) === true);
             try {
               // Report retries must enter the original queue checkpoint before any
               // allocation. Runtime fallback can eagerly bootstrap a different route.
+              if (!isCurrent()) return;
               const fallback: RuntimeFallbackResult<RuntimeSession> = reportPreparation || localPreparation
                 ? { session: null, outcome: 'unchanged' }
                 : await maybeApplySessionRuntimeFallback(
@@ -174,10 +187,10 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   decision.episodeAttempt,
                   decision.attemptToken,
                   requireRouteChange,
-                  () => attempt.isCurrent() && !inputCoordinator.isExecutionPaused(sessionId),
+                  isCurrent,
                 );
               fallbackRebuildSession = fallback.session;
-              if (!attempt.isCurrent()) return;
+              if (!isCurrent()) return;
               if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback, sameRouteRetryable)) {
                 interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
                 autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
@@ -191,7 +204,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
               // pendingResume。
               // A queue-head retry keeps its original input ID and has no
               // replacement turn to release the guard. Retain the attempt budget.
-              if (reportPreparation) interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
+              if (reportPreparation || startupAdmission) interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
               const outcome = await inputCoordinator.autoRetryLastError(
                 sessionId,
                 decision.attemptToken,

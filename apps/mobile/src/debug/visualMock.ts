@@ -132,6 +132,8 @@ let realDataLoadPromise: Promise<VisualRealDataSnapshot | null> | null = null;
 let preparedContextPromise: Promise<DeviceLinkContextValue> | null = null;
 let didWarnRealDataLoad = false;
 const deletedDeviceIds = new Set<string>();
+// Synthetic task edits last only for this mock process; never touch real-data snapshots.
+const taskMetaOverrides = new Map<string, Partial<RemoteSession>>();
 const renamedDevices = new Map<string, string>();
 // 模拟电脑上的协同角色清单：最近使用在前，增删只在本次进程内生效。
 let workerRoles: Array<{ role: string; [key: string]: unknown }> = [
@@ -295,6 +297,7 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
       appVersion: '0.0.0-visual-mock',
       allowlistHash: 'visual-mock',
     }),
+    recoverWaitingPeer: async () => true,
     closeLink: () => undefined,
     invoke: visualMockInvoke,
     subscribe: async () => undefined,
@@ -416,6 +419,7 @@ async function visualMockInvoke<T = unknown>(
         : [],
     } satisfies TaskTagResult as T;
   }
+  if (realData && channel === 'local-db:sessions:patch-meta') throw new Error('UNSUPPORTED_CAPABILITY');
   if (realData) {
     switch (channel) {
       case 'local-db:sessions:list':
@@ -473,6 +477,17 @@ async function visualMockInvoke<T = unknown>(
     case 'maker:predict-prompt':
       return { prompt: (args[0] as { sessionId?: string } | undefined)?.sessionId === 'visual-prompt-recommendation'
         ? '继续跟进 PR #4670' : null } as T;
+    case 'local-db:sessions:patch-meta': {
+      const id = String(args[0]);
+      const original = visualMockSessions('all').find(session => session.id === id);
+      if (!original) throw new Error('NOT_FOUND');
+      const patch = args[1] as Partial<RemoteSession>;
+      const until = patch.status !== undefined ? null : patch.snoozedUntil;
+      const next = { ...taskMetaOverrides.get(id), ...patch,
+        ...(until !== undefined ? { snoozedUntil: until, snoozedAt: until ? new Date().toISOString() : null } : {}) };
+      taskMetaOverrides.set(id, next);
+      return { ...original, ...next } as T;
+    }
     case 'local-db:sessions:list':
       return visualMockSessions((typeof args[0] === 'string' ? args[0] : args[1]) as string | undefined) as T;
     case 'local-db:history:query':
@@ -721,7 +736,7 @@ function realDataProjection(snapshot: VisualRealDataSnapshot, sessionId: string)
 }
 
 function visualMockSessions(statusFilter?: string): RemoteSession[] {
-  const catalog = getUiMockRows().sessions.map(catalogSession);
+  const catalog = getUiMockRows().sessions.map(catalogSession).map(session => ({ ...session, ...taskMetaOverrides.get(session.id) }));
   if (statusFilter === 'archived') return catalog.filter((session) => session.status === 'archived');
   const sessions = [
     { ...catalog.find(session => session.id === 'ui-mock-rich-answer')!, id: 'visual-teammate-process', source: 'bot' as const, title: 'Cindy', companion: { id: 'cindy-default', role: 'canonical' as const } },
