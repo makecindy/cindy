@@ -1,33 +1,46 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { MonitorSmartphone, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { DeviceSectionHeader } from '../../../src/renderer/features/cc-agent/sidebar/DeviceSectionHeader';
 import { SessionProjectSettingsButton } from '../../../src/renderer/features/cc-agent/sidebar/SessionProjectSettingsButton';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
-import { mountPage, subscription } from '../../ui-page/harness';
+import { ctx as page, mountPage, subscription } from '../../ui-page/harness';
 import { ProjectSettingsDialog } from '../../../src/renderer/features/cc-agent/sidebar/ProjectSettingsDialog';
 import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
+import { remoteProjectsStore } from '../../../src/renderer/features/device-link/remoteProjectsStore';
+import { recentWorkdirsStore } from '../../../src/renderer/lib/recentWorkdirsStore';
 // This isolated HTTP fixture lacks secure-context UUID support. Production uses Chromium's crypto.
 if (!crypto.randomUUID) {
   let sequence = 0;
   crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
 }
 setDataOwnerGeneration('fixture', 1);
+// Only the intro case starts as someone who has no project yet and has not seen the introduction.
+if (!page.data.intro) localStorage.setItem('featureIntro.project.seen', '1');
 const writes: unknown[] = [];
 const pickerScopes: unknown[] = [];
 Object.assign(window, { projectSettingsWrites: writes, projectPickerScopes: pickerScopes });
-function DeviceEntry({ enabled, children }: { enabled: boolean; children: ReactNode }) {
+function DeviceEntry({ enabled, children }: { enabled: boolean; children: (close: () => void) => ReactNode }) {
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const { t } = useTranslation();
-  if (!enabled) return children;
+  // The sidebar keeps this computer's project list loaded; the introduction reads it.
+  useEffect(() => {
+    if (page.data.intro) {
+      // This isolated fixture has no remote devices; discovery has completed.
+      const settleDiscovery = remoteProjectsStore.beginInitialDiscovery();
+      settleDiscovery();
+      void recentWorkdirsStore.ensure();
+    }
+  }, []);
+  if (!enabled) return children(() => {});
   return <div className="max-w-80 p-4">
     <DeviceSectionHeader deviceId={null} name={t('ccAgent.sidebar.deviceGroup.local')} onCreateProject={() => setOpen(true)}>
       <button type="button" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)} className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-full px-2 text-xs text-[var(--sidebar-list-muted)]">
         <MonitorSmartphone size={13} /><span>{t('ccAgent.sidebar.deviceGroup.local')}</span><ChevronDown size={12} />
       </button>
     </DeviceSectionHeader>
-    {open && children}
+    {open && children(() => setOpen(false))}
   </div>;
 }
 mountPage({
@@ -47,6 +60,7 @@ mountPage({
       },
     },
     localDb: {
+      recentWorkdirs: { list: async () => [] },
       projectAliases: {
         snapshot: async () => ({
           aliases: [{ projectKey: 'local:/Projects/Cindy', alias: 'Cindy' }],
@@ -93,10 +107,10 @@ mountPage({
         <span>Task in a worktree</span>
       </div>
     ) : (
-      <DeviceEntry enabled={ctx.case === 'create-device'}>
-      <ProjectSettingsDialog
+      <DeviceEntry enabled={ctx.case === 'create-device' || !!ctx.data.intro}>
+      {(close) => <ProjectSettingsDialog
         create={!!ctx.data.create}
-        onClose={() => {}}
+        onClose={close}
         onCreated={(path) => Object.assign(window, { projectCreatedPath: path })}
         project={{
           projectKey: 'local:/Projects/Cindy',
@@ -111,7 +125,7 @@ mountPage({
           sessions: [],
           latestActivityAt: '',
         }}
-      />
+      />}
       </DeviceEntry>
     ),
 });

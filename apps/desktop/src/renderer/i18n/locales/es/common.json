@@ -21692,6 +21692,24 @@
   },
   "featureIntro": {
     "close": "Cerrar",
+    "project": {
+      "title": "Conoce los proyectos",
+      "lead": "Dale un proyecto a cada trabajo continuo. Sus archivos viven en una carpeta de tu equipo y Cindy retoma siempre desde el último resultado, sin volver a explicar el contexto.",
+      "files": {
+        "title": "Resultados tuyos",
+        "body": "Cindy lee y edita en la carpeta del proyecto. Lo que crea se queda en tu equipo."
+      },
+      "context": {
+        "title": "Sin repetir contexto",
+        "body": "Una tarea nueva del proyecto ya ve estos archivos y sigue lo anotado en el proyecto."
+      },
+      "separate": {
+        "title": "Cada cosa en su sitio",
+        "body": "Cada proyecto reúne sus tareas, así los trabajos distintos no se mezclan."
+      },
+      "start": "Continuar al nuevo proyecto",
+      "note": "Solo ponle un nombre. También sirve una carpeta existente o un repositorio de código."
+    },
     "taskInbox": {
       "title": "Conoce la bandeja de entrada",
       "lead": "Las tareas se ordenan solas en Pendientes, En curso, Pospuestas y Procesadas. El mejor hábito es mantener la bandeja vacía: haz clic en Hecho cuando termines una tarea y pospón lo que pueda esperar.",
