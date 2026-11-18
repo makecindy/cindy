@@ -800,7 +800,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   // 与进行中对话页共用上限,发送首条消息时输入框宽度不跳变。
   // minWidth=640:小屏兜一个体面下限(与对话页对称);窄于下限时 hook 自动回落成
   // "填满容器",不溢出。
-  const { containerRef, inputWidth, inputWidthBand } = useProportionalWidth(TASK_MESSAGE_MAX_WIDTH, {
+  const { containerRef, inputWidth, inputWidthBand } = useProportionalWidth(914, {
+    expandTo: TASK_MESSAGE_MAX_WIDTH,
     minWidth: 640,
     responsiveBreakpoints: DRAFT_INPUT_WIDTH_BREAKPOINTS,
   });

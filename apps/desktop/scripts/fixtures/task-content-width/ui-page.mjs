@@ -4,7 +4,7 @@ import composer from '../companion-composer/ui-page.mjs';
 export default {
   name: 'task-content-width', entry: './fixture.tsx', viewport: { width: 1920, height: 1080 },
   real: 'MessageStream, AssistantMessage, MarkdownRenderer, ChatInput, useProportionalWidth, LayoutRoot and its production draggable divider; AppFrame header, fonts and themes',
-  notCovered: 'Full session routing, new-task transition, native window resize, persistence and host IO; reference panel contents, sidebar navigation and model catalog are synthetic. Group and companion bubble widths are unchanged.',
+  notCovered: 'Full session routing, new-task transition, native OS scaling/window resize, persistence and host IO; reference panel contents, sidebar navigation and model catalog are synthetic. Viewports are effective CSS widths at100% page zoom; scaling cases model1920/125% or150% without changing the OS display. Group and companion bubble widths are unchanged.',
   stubs: {
     ...composer.stubs,
     'src/renderer/components/chat/GhostToolCard': 'export const GhostToolCard = () => null; export const MailCardEditor = () => null; export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle";',
@@ -22,6 +22,15 @@ export default {
     'width-panel': { about: 'Reference panel at 50/50 and divider extremes', data: { panel: true } },
     'width-legacy': { about: 'Original 914px width for design comparison', data: { legacy: true } },
     'width-streaming': { about: 'Live Markdown prose retains the completed reply reading width', data: { streaming: true } },
+    'width-notebook': { about: '1440px effective laptop width retains the mature914px column', viewport: { width: 1440, height: 900 } },
+    'width-scale125': { about: '1536px effective width, equivalent to1920px at125% system scale', viewport: { width: 1536, height: 864 } },
+    'width-scale150': { about: '1280px effective width, equivalent to1920px at150% system scale', viewport: { width: 1280, height: 720 } },
+    'text-width-large': { about: 'Plain paragraphs at the same1920px window as the mixed content', data: { textOnly: true } },
+    'text-width-notebook': { about: 'Plain paragraphs retain the914px laptop baseline', data: { textOnly: true }, viewport: { width: 1440, height: 900 } },
+    'text-width-normal': { about: 'Plain paragraphs at1280px effective width', data: { textOnly: true }, viewport: { width: 1280, height: 900 } },
+    'text-width-ultrawide': { about: 'Plain paragraphs remain bounded on an ultrawide pane', data: { textOnly: true }, viewport: { width: 3440, height: 1440 } },
+    'text-width-scale125': { about: 'Plain paragraphs at1536px effective scaled width', data: { textOnly: true }, viewport: { width: 1536, height: 864 } },
+    'text-width-scale150': { about: 'Plain paragraphs at1280px effective scaled width', data: { textOnly: true }, viewport: { width: 1280, height: 720 } },
   },
   async ready(page) {
     await page.locator('.ProseMirror').waitFor();
@@ -37,8 +46,16 @@ export default {
       const stream = document.querySelector('[data-scroll-container]');
       const column = stream.firstElementChild.getBoundingClientRect();
       const composer = document.querySelector('[data-width-composer]').getBoundingClientRect();
-      const prose = document.querySelector('[data-message-client-id="answer"] .msg-markdown > p').getBoundingClientRect();
+      const markdown = document.querySelector('[data-message-client-id="answer"] .msg-markdown');
+      const paragraph = markdown.querySelector(':scope > p');
+      const prose = paragraph.getBoundingClientRect();
+      const lineHeight = parseFloat(getComputedStyle(paragraph).lineHeight);
       return { pane: pane.width, column: column.width, composer: composer.width, prose: prose.width,
+        supportedWideCap: Number(document.querySelector('[data-task-width]').dataset.wideCap),
+        proseLines: Math.round(prose.height / lineHeight),
+        table: markdown.querySelector('table')?.getBoundingClientRect().width,
+        code: markdown.querySelector('pre')?.getBoundingClientRect().width,
+        cssViewport: innerWidth, pageScale: visualViewport?.scale, dpr: devicePixelRatio,
         centerDelta: (composer.left + composer.right - column.left - column.right) / 2,
         overflow: document.documentElement.scrollWidth - innerWidth,
         withinPane: composer.left >= pane.left && composer.right <= pane.right };
@@ -50,11 +67,22 @@ export default {
         return parseFloat(el.style.getPropertyValue('--cindy-message-width')) <= pane.getBoundingClientRect().width;
       });
       const m = await measure();
-      assert.ok(m.withinPane && m.overflow <= 1 && Math.abs(m.centerDelta) <= 5, JSON.stringify(m));
+      // --compare loads the original production hook, with no wide-cap export.
+      // Preserve its known6px one-sided gutter in before evidence; the new
+      // ordinary-task layout must share the composer's exact center axis.
+      const original = m.supportedWideCap === 914;
+      assert.ok(m.withinPane && m.overflow <= 1 && Math.abs(m.centerDelta) <= (original ? 6.1 : 1), JSON.stringify(m));
       assert.ok(Math.abs(m.composer - m.column - 20) <= 1, JSON.stringify(m));
-      if (!ui.data.legacy && m.pane >= 1400) {
-        assert.ok(m.column >= 1199, `Wide work column must use available space: ${JSON.stringify(m)}`);
-        assert.ok(m.prose <= 915, `Prose retains its reading width: ${JSON.stringify(m)}`);
+      assert.ok(Math.abs(m.prose - m.column) <= 1, `Prose and blocks share one content edge: ${JSON.stringify(m)}`);
+      for (const width of [m.table, m.code].filter(value => value !== undefined)) {
+        assert.ok(Math.abs(width - m.column) <= 1, `Wide blocks share the prose column: ${JSON.stringify(m)}`);
+      }
+      assert.equal(m.pageScale, 1, 'Effective widths use100% page zoom');
+      if (!original && !ui.data.legacy && m.pane >= 1600) {
+        assert.ok(Math.abs(m.column - 1120) <= 1, `Pure text and wide blocks use the bounded wide column: ${JSON.stringify(m)}`);
+      }
+      if (m.pane >= 1014 && m.pane <= 1200) {
+        assert.ok(Math.abs(m.column - 914) <= 1, `Laptop reading width remains unchanged: ${JSON.stringify(m)}`);
       }
       console.log('TASK_WIDTH', JSON.stringify({ case: ui.case, theme: ui.theme, ...m }));
     };

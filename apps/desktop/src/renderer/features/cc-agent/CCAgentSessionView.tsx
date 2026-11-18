@@ -1038,7 +1038,10 @@ function CCAgentSessionContent({
     inputHalfWidth,
     isCompact,
     getMessageWidth,
-  } = useProportionalWidth(botChatIdentity ? 914 : TASK_MESSAGE_MAX_WIDTH, { compact: isCompactRail });
+  } = useProportionalWidth(914, {
+    compact: isCompactRail,
+    expandTo: botChatIdentity ? undefined : TASK_MESSAGE_MAX_WIDTH,
+  });
   const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;
   const { sessions: allSessions, refreshSessions, patchLocal: patchLocalSession } = useCCSessions();
   // /ctr 接管态: attached=true 时把 ChatInput 替换为 TakeoverMask, 防止 desktop
