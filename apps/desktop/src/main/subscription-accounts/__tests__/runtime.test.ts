@@ -238,6 +238,7 @@ import {
   pooledCodexResetTarget,
   hasRestoredPooledCodexQuota,
 } from '../runtime.js';
+import { AccountServiceUnreachableError } from '../accountServiceError.js';
 import { createCodexRateLimitResetService } from '../../usage/codexRateLimitReset.js';
 import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../../usage/codexResetAutoUse.js';
 import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, providerGroupUsageSnapshot } from '../../provider-group/usage.js';
@@ -5682,6 +5683,46 @@ describe('shared subscription recovery through controller and account allocation
       resolveProbe?.();
       for (const client of clients) client.abandon('test-finished');
       await host.dispose();
+    }
+  });
+});
+
+// 2026-11-18 user report, unit: the router returned a wrong address for chatgpt.com, so every
+// Codex account read timed out while the login on disk was valid. The account looked signed out,
+// and signing in again failed before the browser opened. Existing login cases use reads that
+// answer or fail without a cause. Minimal input: the native account read rejects as unreachable.
+describe('unreachable account service', () => {
+  const unreachable = () => new AccountServiceUnreachableError('Codex account request failed');
+
+  // The sign-in still has to be confirmed (登录完成须确认, 2026-11-16): an offline confirmation is
+  // not a completed login, but it must say the service was unreachable instead of a generic failure.
+  it('still opens the browser login for a known account and reports an unconfirmed result as unreachable', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+    h.read.mockRejectedValue(unreachable());
+    await expect(runSubscriptionAccountCommand({ action: 'login', providerId: 'openai', accountId: 'second', loginKey: 'offline' }))
+      .rejects.toBeInstanceOf(AccountServiceUnreachableError);
+    expect(h.login).toHaveBeenCalledWith('openai', 'openai/second', expect.any(AbortSignal));
+    expect((await readSubscriptionPool('openai')).accounts.find((entry) => entry.id === 'second')?.status).toBe('unavailable');
+  });
+
+  it('keeps the last identity while unreadable and announces the change both ways', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+    h.read.mockResolvedValue({ authenticated: true, identity: 'kept@example.test' });
+    await refreshSubscriptionPool('openai', true);
+    const events: string[] = [];
+    const off = onSubscriptionAccountsChanged((provider) => events.push(provider));
+    try {
+      h.read.mockRejectedValue(unreachable());
+      expect((await refreshSubscriptionPool('openai', true)).accounts[0])
+        .toMatchObject({ status: 'unavailable', identity: 'kept@example.test' });
+      expect(events).toEqual(['openai']);
+      await refreshSubscriptionPool('openai', true);
+      expect(events).toEqual(['openai']);
+      h.read.mockResolvedValue({ authenticated: true, identity: 'kept@example.test' });
+      expect((await refreshSubscriptionPool('openai', true)).accounts[0].status).toBe('ready');
+      expect(events).toEqual(['openai', 'openai']);
+    } finally {
+      off();
     }
   });
 });

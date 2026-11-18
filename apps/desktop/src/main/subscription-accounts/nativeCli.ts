@@ -14,6 +14,7 @@ import {
 import { parseClaudeOAuthUsageResponse } from '../../shared/claudeSubscriptionUsage.js';
 import { providerGroupCodexUsageFromReads } from '../provider-group/usage.js';
 import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
+import { AccountServiceUnreachableError, isAccountServiceUnreachable } from './accountServiceError.js';
 
 /** Preserve the old adapter's owner/revocation checks; do not adopt ~/.codex on upgrade. */
 export async function readLegacyCodexAccount(): Promise<AuthState> {
@@ -60,6 +61,17 @@ export async function loginLegacyCodexProviderAccount(providerId: string, signal
   } finally {
     signal.removeEventListener('abort', cancel);
   }
+}
+
+// Only used to classify; the CLI's own wording never leaves this module.
+const UNREACHABLE_CLI_ERROR = /time(?:d)?\s*out|timeout|network|connect|dns|unreachable|sending request|tls|certificate|proxy|offline/i;
+
+function codexRequestError(error: unknown): Error {
+  const message = typeof (error as { message?: unknown })?.message === 'string'
+    ? (error as { message: string }).message : '';
+  return UNREACHABLE_CLI_ERROR.test(message)
+    ? new AccountServiceUnreachableError('Codex account request failed')
+    : new Error('Codex account request failed');
 }
 
 function codexProfileEnv(directory: string): Record<string, string> {
@@ -233,7 +245,8 @@ export function codexAccountRpc(
       if (error) reject(error);
       else resolve(result);
     };
-    const timer = setTimeout(() => finish(new Error('Codex account read timed out')), 15_000);
+    // A stalled read is almost always the CLI waiting on its account service (startup refreshes).
+    const timer = setTimeout(() => finish(new AccountServiceUnreachableError('Codex account read timed out')), 15_000);
     const send = (message: unknown) => child.stdin.write(JSON.stringify(message) + '\n');
     const dispatch = async () => {
       try {
@@ -265,7 +278,7 @@ export function codexAccountRpc(
         } catch {
           continue;
         }
-        if (message.error) return finish(new Error('Codex account request failed'));
+        if (message.error) return finish(codexRequestError(message.error));
         if (message.id === 1) {
           send({ method: 'initialized', params: {} });
           // Startup may await configuration/auth refresh. A reset must still use
@@ -329,7 +342,15 @@ export async function loginNativeAccount(
       else resolve();
     });
   });
-  const state = await readNativeAccount(provider, directory);
+  let state: Awaited<ReturnType<typeof readNativeAccount>>;
+  try {
+    state = await readNativeAccount(provider, directory);
+  } catch (error) {
+    // The CLI finished its browser login; only this follow-up read could not reach the service.
+    // The caller confirms the sign-in itself and reports the connection problem if it persists.
+    if (isAccountServiceUnreachable(error)) return;
+    throw error;
+  }
   if (!state.authenticated)
     throw new Error(
       state.errorReason === 'codex_provider_managed_auth'
