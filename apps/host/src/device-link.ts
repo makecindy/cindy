@@ -44,7 +44,7 @@ export interface HostDeviceLinkPorts {
   refreshToken?(): Promise<void>;
   invoke(path: string, body?: any, context?: { caller: string }): Promise<ServiceResult>;
   releaseAuthCaller?(caller: string): void;
-  preparePiSkillRuntime(id: string, workingDir: string): Promise<void>;
+  preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
   subscribe(listener: (event: any) => void): () => void;
   // Cloud revocation is required before narrowing a persisted standby grant.
@@ -110,13 +110,18 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     assertCurrent();
     const caller = getDeviceLinkInvokeContext();
     if (!caller || caller.sharedTask) throw new Error('[PRECONDITION_FAILED] Task owner required');
-    const request = input as { purpose?: string; workingDir?: string } | null;
+    const request = input as { purpose?: string; workingDir?: string; pendingPiRoute?: unknown; model?: unknown } | null;
     if (request?.purpose !== 'pi-skill-dispatch') return { accepted: false };
     if (typeof id !== 'string' || !id || typeof request.workingDir !== 'string' || !request.workingDir)
       throw new Error('[INVALID_PARAMS] Session and working directory required');
-    await deps.preparePiSkillRuntime(id, request.workingDir);
+    const pending = request.pendingPiRoute;
+    if (pending !== undefined && (!pending || typeof pending !== 'object' || Array.isArray(pending)
+      || ('agentDeviceId' in pending && pending.agentDeviceId != null)
+      || typeof request.model !== 'string' || !request.model)) throw new Error('[INVALID_PARAMS] Unsupported Pi route');
+    const route = pending !== undefined ? { model: request.model as string } : undefined;
+    await deps.preparePiSkillRuntime(id, request.workingDir, route);
     assertCurrent();
-    return { accepted: true, piRuntimePrepared: true };
+    return { accepted: true, piRuntimePrepared: true, ...(route ? { pendingRouteApplied: true } : {}) };
   });
   if (deps.mcpApps) registry.register(MCP_APPS_INVOKE, async ([sessionId, input]) => {
     const source = getDeviceLinkInvokeContext();
