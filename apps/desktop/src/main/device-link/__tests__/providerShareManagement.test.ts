@@ -15,6 +15,7 @@ import type { ProviderUsageHistoryView } from '../../../shared/providerShare';
 import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 
 const state = vi.hoisted(() => ({ owner: 'owner-a', boundaryPending: false }));
+const saveDialog = vi.hoisted(() => vi.fn());
 const windowRouting = vi.hoisted(() => ({
   windows: [] as BrowserWindow[], focusMain: vi.fn(), notifications: [] as EventEmitter[],
 }));
@@ -24,7 +25,8 @@ const received = vi.hoisted(() => ({ shares: [] as ProviderShareReceived[], read
 vi.mock('electron', () => ({
   app: { getPath: () => 'test-provider-share-user-data' },
   ipcMain: { handle: vi.fn() },
-  BrowserWindow: { getAllWindows: () => windowRouting.windows },
+  dialog: { showSaveDialog: saveDialog },
+  BrowserWindow: { getAllWindows: () => windowRouting.windows, fromWebContents: () => ({}) },
   Notification: class extends EventEmitter {
     static isSupported() { return true; }
     constructor() { super(); windowRouting.notifications.push(this); }
@@ -146,6 +148,7 @@ import {
   trimProviderUsageHistory,
 } from '../providerShareRuntime';
 import { markAppContentWindow } from '../../windowFocusClassifier';
+import { runDeviceLinkInvokeContext } from '../invoke-context';
 import { startProviderShareHost } from '../providerShareHost';
 import { startProviderShareGuest } from '../providerShareGuest';
 import { setBroadcastTapListener } from '../broadcast-tap';
@@ -225,6 +228,85 @@ beforeEach(() => {
 });
 
 afterEach(() => { setBroadcastTapListener(null); stopProviderShareRuntime(); });
+
+// PR #11287: cover the actual local IPC and the bytes committed after native confirmation.
+describe('local roster export', () => {
+  const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+  const capturedAt = '2026-10-16T08:00:00.000Z';
+  const member = { memberId: 'fixture-member-full-id', displayName: '=guest', status: 'active' };
+  const share = { providerId: 'anthropic', hostDeviceId: 'host-device', shareId: 'share-1', members: [member] };
+  let dir: string;
+  let destination: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-roster-test-'));
+    destination = path.join(dir, 'members.csv');
+    host.complete.mockReturnValue([share, { ...share, providerId: 'other' }, { ...share, hostDeviceId: 'other' }]);
+    memberNotes.read.mockReturnValue({ [member.memberId]: 'A,"B"\nC' });
+    registerProviderShareIpc();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function save(expectedOwner = stamp) {
+    const calls = vi.mocked(ipcMain.handle).mock.calls;
+    const handler = calls.find(([channel]) => channel === PROVIDER_SHARE_IPC.EXPORT_ROSTER)![1];
+    return handler({ sender: {} } as Electron.IpcMainInvokeEvent, 'anthropic', expectedOwner);
+  }
+
+  it('saves exactly the authorized snapshot and its capture time at the chosen location', async () => {
+    vi.setSystemTime(new Date(capturedAt));
+    saveDialog.mockImplementationOnce(async () => {
+      vi.setSystemTime(new Date('2026-10-16T08:01:00Z'));
+      return { canceled: false, filePath: destination };
+    });
+    await save();
+    const expected = '\uFEFFshare_id,member_id,display_name,note,status,captured_at\r\n'
+      + `"share-1","fixture-member-full-id","'=guest","A,""B""\nC","active","${capturedAt}"\r\n`;
+    expect(fs.readFileSync(destination)).toEqual(Buffer.from(expected));
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+  });
+
+  it('leaves the destination alone when the owner cancels', async () => {
+    saveDialog.mockResolvedValueOnce({ canceled: true, filePath: destination });
+    await save();
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it.each(['owner', 'roster'] as const)('preserves an existing file when the %s changes in the dialog', async change => {
+    fs.writeFileSync(destination, 'original');
+    saveDialog.mockImplementationOnce(async () => {
+      if (change === 'owner') state.owner = 'owner-b';
+      else host.complete.mockReturnValue([]);
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toThrow();
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+  });
+
+  it('rejects device-link callers before opening a local dialog', async () => {
+    await expect(runDeviceLinkInvokeContext(
+      { controllerDeviceId: 'other', channel: PROVIDER_SHARE_IPC.EXPORT_ROSTER }, () => save(),
+    )).rejects.toThrow('local only');
+    expect(saveDialog).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stale page before opening the dialog', async () => {
+    await expect(save({ ...stamp, ownerGeneration: 0 })).rejects.toThrow();
+    expect(saveDialog).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed replacement without exposing the selected path or leaving a partial file', async () => {
+    fs.mkdirSync(destination);
+    saveDialog.mockResolvedValueOnce({ canceled: false, filePath: destination });
+    await expect(save()).rejects.toThrow('Could not save the member roster');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fs.statSync(destination).isDirectory()).toBe(true);
+  });
+});
 
 // #10398 review / unit: content deduplication must not strand the one-time access
 // migration. Existing startup tests always had an incomplete snapshot. Exercise

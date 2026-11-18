@@ -440,6 +440,7 @@
     "manage": {
       "createLink": "生分享連結",
       "exportRoster": "匯出名冊",
+      "exportRosterFailed": "名冊未存，請復試。",
       "loading": "方讀分享…",
       "notReady": "分享服務暫不可用。確認已登門且網路無恙後，將自動再試。",
       "loadFailed": "分享資訊未載，請稍後再試。",

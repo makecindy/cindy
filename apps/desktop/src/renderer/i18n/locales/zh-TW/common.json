@@ -440,6 +440,7 @@
     "manage": {
       "createLink": "產生分享連結",
       "exportRoster": "匯出成員名單",
+      "exportRosterFailed": "無法儲存成員名單，請再試一次。",
       "loading": "正在讀取分享…",
       "notReady": "分享服務暫時無法使用。確認已登入且網路正常後會自動重試。",
       "loadFailed": "分享資訊沒有載入，請稍後重試。",

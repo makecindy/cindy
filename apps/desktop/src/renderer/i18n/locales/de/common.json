@@ -441,6 +441,7 @@
     "manage": {
       "createLink": "Freigabelink erstellen",
       "exportRoster": "Mitgliederliste exportieren",
+      "exportRosterFailed": "Die Mitgliederliste konnte nicht gespeichert werden. Bitte erneut versuchen.",
       "loading": "Freigabe wird geladen…",
       "notReady": "Die Freigabe ist derzeit nicht verfügbar. Stelle sicher, dass du angemeldet und online bist. Es wird automatisch erneut versucht.",
       "loadFailed": "Die Freigabedetails konnten nicht geladen werden. Versuche es gleich erneut.",

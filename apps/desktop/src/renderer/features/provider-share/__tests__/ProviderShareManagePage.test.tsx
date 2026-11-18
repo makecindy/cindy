@@ -215,7 +215,7 @@ beforeEach(() => {
   });
   Object.assign(window, {
     electronAPI: {
-      providerShare: { command, onOwnedChanged: () => () => undefined, onReceivedChanged: () => () => undefined },
+      providerShare: { command, exportRoster: vi.fn(), onOwnedChanged: () => () => undefined, onReceivedChanged: () => () => undefined },
       // 页面上方的供应商组一块(由 ProviderGroupSection 自己的测试覆盖)：这里只给一个空组。
       providerGroup: {
         command: async (cmd: {
@@ -312,44 +312,13 @@ function renderPage(
 }
 
 describe('ProviderShareManagePage', () => {
-  it('downloads the managed local provider’s names and private notes without exporting invitation details', async () => {
-    const original = command.getMockImplementation()!;
-    const snapshot = owned();
-    const member = snapshot.shares[0]!.members[0]!;
-    member.displayName = '=guest';
-    member.note = 'A,"B"\nC';
-    snapshot.shares[1]!.members.push({ ...member, memberId: 'other-provider-member' });
-    command.mockImplementation(async (cmd) => cmd.action === 'owned' ? snapshot : original(cmd));
-    let contents: Blob | undefined;
-    const originalUrl = window.URL;
-    class DownloadURL extends originalUrl {
-      static createObjectURL(blob: Blob) { contents = blob; return 'blob:test-roster'; }
-      static revokeObjectURL() {}
-    }
-    vi.stubGlobal('URL', DownloadURL);
-    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    try {
-      const capturedAt = '2026-10-16T08:00:00.000Z';
-      vi.setSystemTime(new Date(capturedAt));
-      renderPage();
-      const exportButton = await screen.findByRole('button', { name: 'providerShare.manage.exportRoster' });
-      vi.setSystemTime(new Date('2026-10-16T08:01:00.000Z'));
-      fireEvent.click(exportButton);
-      expect(click).toHaveBeenCalledOnce();
-      const bytes = await new Promise<Uint8Array>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
-        reader.onerror = reject;
-        reader.readAsArrayBuffer(contents!);
-      });
-      const expected = '\uFEFFshare_id,member_id,display_name,note,status,captured_at\r\n'
-        + `"share-1","mem-1","'=guest","A,""B""\nC","active","${capturedAt}"\r\n`;
-      expect(Array.from(bytes)).toEqual(Array.from(new TextEncoder().encode(expected)));
-    } finally {
-      vi.useRealTimers();
-      click.mockRestore();
-      vi.unstubAllGlobals();
-    }
+  it('requests a local roster save and reports a native save failure', async () => {
+    const save = vi.mocked(window.electronAPI.providerShare.exportRoster);
+    save.mockRejectedValueOnce(new Error('fixture write failure'));
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'providerShare.manage.exportRoster' }));
+    expect(save).toHaveBeenCalledWith('xd', expect.objectContaining({ ownerGeneration: expect.any(Number) }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('providerShare.manage.exportRosterFailed'));
   });
 
   // Verify the person's row opens a grant for that member, rather than editing the provider-wide policy.

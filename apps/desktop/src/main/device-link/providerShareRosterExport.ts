@@ -1,0 +1,89 @@
+import { randomUUID } from 'node:crypto';
+import { renameSync } from 'node:fs';
+import { open, unlink } from 'node:fs/promises';
+import path from 'node:path';
+import { BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron';
+import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
+import { getDeviceId } from '../authManager.js';
+import { captureProviderManagementScope } from '../provider-group/managementScope.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
+import { isIpcError } from '../../shared/ipc-errors.js';
+import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
+import { isProviderGroupProviderId } from '../../shared/providerGroup.js';
+import { getDeviceLinkInvokeContext } from './invoke-context.js';
+import { getProviderShareHostCompleteSnapshot } from './providerShareHost.js';
+import { providerShareMemberNotes } from './providerShareMemberNotes.js';
+
+function cell(value: string): string {
+  const safe = /^(?:'|[\t\r\n]|\s*[=+\-@＝＋－＠])/.test(value) ? "'" + value : value;
+  return '"' + safe.replace(/"/g, '""') + '"';
+}
+
+function readRoster(providerId: string, capturedAt: string): string {
+  const deviceId = getDeviceId();
+  const shares = getProviderShareHostCompleteSnapshot()?.filter(
+    share => share.providerId === providerId && share.hostDeviceId === deviceId && share.members.length > 0,
+  );
+  if (!shares?.length) throwIpcError('PRECONDITION_FAILED', 'The local member roster is unavailable');
+  const notes = providerShareMemberNotes.read();
+  const lines = ['share_id,member_id,display_name,note,status,captured_at'];
+  for (const share of shares) {
+    for (const member of share.members) {
+      lines.push([share.shareId, member.memberId, member.displayName, notes[member.memberId] ?? '', member.status, capturedAt]
+        .map(cell).join(','));
+    }
+  }
+  return '\uFEFF' + lines.join('\r\n') + '\r\n';
+}
+
+export async function exportProviderShareRoster(event: IpcMainInvokeEvent, providerId: unknown, owner: unknown): Promise<void> {
+  if (getDeviceLinkInvokeContext()) throwIpcError('PERMISSION_DENIED', 'Roster export is local only');
+  assertTrustedAppRendererEvent(event);
+  if (!isProviderGroupProviderId(providerId) || !isDataOwnerPushStamp(owner)) {
+    throwIpcError('INVALID_PARAMS', 'Invalid roster export request');
+  }
+  const assertOwner = captureProviderManagementScope();
+  const current = getActiveDataOwnerPushStamp();
+  if (!current.dataOwnerId || current.dataOwnerId !== owner.dataOwnerId || current.ownerGeneration !== owner.ownerGeneration) {
+    throwIpcError('PRECONDITION_FAILED', 'The account changed');
+  }
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) throwIpcError('PERMISSION_DENIED', 'No window for roster export');
+  const capturedAt = new Date().toISOString();
+  const csv = readRoster(providerId, capturedAt);
+  const assertCaller = () => {
+    assertOwner();
+    assertTrustedAppRendererEvent(event);
+  };
+  const assertCurrent = () => {
+    assertCaller();
+    if (readRoster(providerId, capturedAt) !== csv) throwIpcError('PRECONDITION_FAILED', 'The member roster changed');
+  };
+
+  const picked = await dialog.showSaveDialog(win, {
+    defaultPath: 'cindy-member-roster-' + capturedAt.replace(/[:.]/g, '-') + '.csv',
+    filters: [{ name: 'CSV', extensions: ['csv'] }],
+  }).catch(() => throwIpcError('INTERNAL', 'Could not open the save dialog'));
+  if (picked.canceled || !picked.filePath) return;
+  assertCurrent();
+
+  // Only a complete, still-authorized export may replace the user-selected file.
+  const temp = path.join(path.dirname(picked.filePath), '.cindy-roster-' + randomUUID() + '.tmp');
+  const file = await open(temp, 'wx', 0o600).catch(() => throwIpcError('INTERNAL', 'Could not create the roster file'));
+  try {
+    try {
+      assertCaller();
+      await file.writeFile(csv, 'utf8');
+    } finally {
+      await file.close();
+    }
+    assertCurrent();
+    // Keep the final check and publication in the same main-process turn.
+    renameSync(temp, picked.filePath);
+  } catch (error) {
+    await unlink(temp).catch(() => {});
+    if (isIpcError(error)) throw error;
+    throwIpcError('INTERNAL', 'Could not save the member roster');
+  }
+}
