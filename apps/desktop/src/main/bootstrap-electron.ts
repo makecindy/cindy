@@ -18,6 +18,7 @@ import { registerSetupMigration } from './setup-migration/register';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, stopMenubarService } from './menubar/service.js';
+import { WindowsQuotaPanel } from './quota-overview/windowsPanel.js';
 import { startDesktopWidgets } from './quota-overview/desktopWidgets.js';
 import { refreshQuotaPanelsControlState } from './quota-overview/panelController.js';
 import { getQuotaOverviewService, readUsageWidgetSnapshot } from './quota-overview/service.js';
@@ -3814,6 +3815,7 @@ const authCredentialRecovery = createAuthCredentialRecovery({
 });
 
 let windowsTray: Tray | null = null;
+let windowsQuotaPanel: WindowsQuotaPanel | null = null;
 // 当前的托盘菜单。语言切换时置 null,下一次右键按新语言重建。
 let windowsTrayMenu: Menu | null = null;
 // 已弹出的菜单在 native callback 前必须保留,即使语言切换清掉了当前缓存。
@@ -3900,6 +3902,8 @@ function quitFromDesktopTray(): void {
 }
 
 function destroyWindowsTray(): void {
+  windowsQuotaPanel?.dispose();
+  windowsQuotaPanel = null;
   windowsTray?.destroy();
   windowsTray = null;
   windowsTrayMenu = null;
@@ -3938,8 +3942,18 @@ function ensureWindowsTray(): boolean {
     if (icon.isEmpty()) throw new Error(`tray icon is empty: ${iconPath}`);
     tray = new Tray(icon.resize({ width: 16, height: 16 }));
     tray.setToolTip(BRAND_NAME);
-    tray.on('click', () => focusMainWindow());
-    tray.on('right-click', () => openWindowsTrayMenu());
+    const quotaTray = tray;
+    tray.on('mouse-enter', (_event, position) => windowsQuotaPanel?.hover(quotaTray.getBounds(), position));
+    tray.on('mouse-leave', () => windowsQuotaPanel?.cancelPendingHover());
+    windowsQuotaPanel = new WindowsQuotaPanel(() => mainWindowRef, () => {
+      const win = mainWindowRef;
+      if (win && !win.isDestroyed()) dispatchApplicationMenuCommand(win, resolveNewMakerMenuCommand(false));
+    });
+    tray.on('click', (_event, bounds) => windowsQuotaPanel?.open(bounds));
+    tray.on('right-click', () => {
+      windowsQuotaPanel?.dismiss();
+      openWindowsTrayMenu();
+    });
     windowsTray = tray;
     windowsTrayMenu = null;
     return true;
@@ -3954,6 +3968,8 @@ function ensureWindowsTray(): boolean {
     windowsTrayLog.error('failed to create Windows tray icon', {
       error: err instanceof Error ? err.message : String(err),
     });
+    windowsQuotaPanel?.dispose();
+    windowsQuotaPanel = null;
     windowsTray = null;
     windowsTrayMenu = null;
     return false;
@@ -4678,6 +4694,7 @@ const createWindow = () => {
       resourceUsagePrewarmTimer = null;
     }
     resourceUsageWindowController.destroyWindow();
+    windowsQuotaPanel?.destroyWindow();
     remoteDesktopViewerWindows.reset();
     rsbWindowController.destroyWindow();
     sidebarTabWindowsController.destroyAllWindows();
@@ -4828,6 +4845,7 @@ const createWindow = () => {
         currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
       );
       resourceUsageWindowController.prewarm();
+      windowsQuotaPanel?.prewarm();
       remoteDesktopViewerWindows.setLocale(
         currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
       );

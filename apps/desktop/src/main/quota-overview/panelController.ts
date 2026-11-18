@@ -9,6 +9,7 @@
  */
 
 import { app, Notification } from 'electron';
+import { QUOTA_PANEL_DESIGN } from '../../shared/quotaPanelDesign.js';
 
 import type {
   MenubarGate,
@@ -55,6 +56,7 @@ export interface QuotaPanelPresenter {
 }
 
 export interface QuotaPanelDeps {
+  sharedQuotaWhileHidden?: boolean;
   /** Opens a new task in the main window (the app menu's "New Task" command). */
   openNewTask(): void;
   /** Settings written from the panel; a presentation stops when it is switched off. */
@@ -113,7 +115,7 @@ export class QuotaPanelController {
       onAuthStateChange(() => { if (!this.overview.latest()) this.publishUnavailableOverview(); }),
     );
     // Subscribed first, so the first build after acquiring reaches the presentation.
-    this.disposers.push(this.overview.acquire());
+    this.disposers.push(this.overview.acquire({ shared: this.deps.sharedQuotaWhileHidden ?? true }));
     const current = this.overview.latest();
     if (current) this.publish(current);
   }
@@ -180,8 +182,8 @@ export class QuotaPanelController {
   }
 
   private show(view: MenubarView): void {
-    this.lastView = view;
-    this.presenter.publish(view);
+    this.lastView = { ...view, presentation: QUOTA_PANEL_DESIGN };
+    this.presenter.publish(this.lastView);
   }
 
   private publish(build: QuotaOverviewBuild): void {

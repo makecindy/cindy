@@ -22,7 +22,9 @@ const isRegionScreenshotPin = urlParams.get('regionScreenshotPin') === '1';
 
 void i18nReady
   .then(() =>
-    isRecordingPreview
+    urlParams.get('quotaTray') === '1'
+      ? import('./quota-tray-entry')
+      : isRecordingPreview
       ? import('./recording-preview-entry')
       : isRemoteDesktopViewer
       ? import('./remote-desktop-viewer-entry')

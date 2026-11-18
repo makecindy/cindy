@@ -163,6 +163,7 @@ export class QuotaOverviewService {
   private currentSettings: MenubarSettings = readMenubarSettings();
   private started = false;
   private holders = 0;
+  private sharedHolders = 0;
   private leaseUntilMs = 0;
   private leaseTimer: ReturnType<typeof setTimeout> | null = null;
   private interactive = false;
@@ -224,14 +225,16 @@ export class QuotaOverviewService {
   }
 
   /** Keeps collecting until the returned release is called. */
-  acquire(): () => void {
+  acquire({ shared = true }: { shared?: boolean } = {}): () => void {
     this.holders += 1;
+    if (shared) this.sharedHolders += 1;
     this.updateRunning();
     let released = false;
     return () => {
       if (released) return;
       released = true;
       this.holders -= 1;
+      if (shared) this.sharedHolders -= 1;
       this.updateRunning();
     };
   }
@@ -253,6 +256,7 @@ export class QuotaOverviewService {
   /** A panel is on screen: shorter cadences, and opening it refreshes every source. */
   setInteractive(open: boolean): void {
     this.interactive = open;
+    this.updateSharedReader();
     if (open) this.refresh(false);
   }
 
@@ -328,8 +332,15 @@ export class QuotaOverviewService {
 
   private updateRunning(): void {
     const wanted = this.holders > 0 || this.leaseUntilMs > Date.now();
-    if (wanted) this.start();
+    if (wanted) {
+      this.start();
+      this.updateSharedReader();
+    }
     else this.halt();
+  }
+
+  private updateSharedReader(): void {
+    if (this.started) this.sharedReader?.setOpen(this.interactive || this.sharedHolders > 0 || this.leaseUntilMs > Date.now());
   }
 
   private start(): void {
@@ -388,7 +399,6 @@ export class QuotaOverviewService {
       // Same cadence as the user's other computers: both are background device-link reads.
       pollMs: () => (this.interactive ? REMOTE_FRESH_WHILE_OPEN_MS : REMOTE_FRESH_WHILE_CLOSED_MS),
     });
-    this.sharedReader.setOpen(true);
     this.scheduleRebuild(0);
   }
 

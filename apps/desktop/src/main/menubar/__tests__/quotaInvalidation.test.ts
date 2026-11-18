@@ -371,6 +371,26 @@ it('never serves a build read for the previous account', async () => {
   }
 });
 
+// Unit regression: Windows prewarm alone must not poll received shares, while
+// a concurrent widget still needs them after the visible tray closes.
+it('polls shared quota for a visible tray or a widget while the tray stays prewarmed', async () => {
+  mocks.collect.mockResolvedValue(emptyMenubarInputs(Date.now(), 'Fixture'));
+  const releaseTray = overview.acquire({ shared: false });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.sharedRead).not.toHaveBeenCalled();
+  overview.setInteractive(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.sharedRead).toHaveBeenCalledTimes(1);
+  const releaseWidget = overview.acquire();
+  overview.setInteractive(false);
+  expect(mocks.sharedChanged).not.toBeNull();
+  releaseWidget();
+  expect(mocks.sharedChanged).toBeNull();
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  expect(mocks.sharedRead).toHaveBeenCalledTimes(1);
+  releaseTray();
+});
+
 // 2026-11-16 user decision: received shares are a standard overview source, so the panel,
 // phone widgets and model groups read one copy. Real panel -> overview -> reader; the old
 // contract kept them panel-only, which left the widget and model-group routing without them.
