@@ -320,7 +320,12 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       const usable = (r: ResolvedProviderGroupMember) => offers(r)
         && (!input.quotaRebalance || !r.providerContinuity?.stale);
       const paused = pausedFor(input);
-      const resolved = await deps.directory.resolveMembers(input.providerId, config, {
+      // Failed remote members must not start another catalog/usage read during
+      // selection. Keep local metadata for activity labels, and the quota origin
+      // for rebalance comparison; neither becomes eligible through this read.
+      const selectionConfig = input.exclude?.size ? { ...config, members: config.members.filter((member) =>
+        member.kind === 'local' || !input.exclude!.has(member.key) || member.key === input.quotaRebalance) } : config;
+      const resolved = await deps.directory.resolveMembers(input.providerId, selectionConfig, {
         quickMs: PROVIDER_GROUP_PICK_QUICK_MS,
         // 已经有一台能用、未满载、可以分的电脑：不再等慢的那几台。
         enough: (r) => usable(r)
@@ -351,7 +356,13 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           } finally { clearTimeout(timer); }
         }));
       const now = deps.now();
-      const schedulable: SchedulableMember[] = resolved.map((r) => {
+      const resolvedByKey = new Map(resolved.map((r) => [r.member.key, r]));
+      // Reading fewer members must not remove the last-picked position from the
+      // round-robin order. Unread members occupy their slot but cannot be selected.
+      const schedulable: SchedulableMember[] = config.members.map((member) => {
+        const r = resolvedByKey.get(member.key);
+        if (!r) return { key: member.key, usable: false, paused: member.paused,
+          running: 0, limit: 0, weight: member.weight };
         const quota = providerGroupMemberUsageState(r, input.model, now, input.agentKind);
         const schedule = schedules.get(r.member.key);
         const physicalRunning = memberRunning(input.providerId, r);

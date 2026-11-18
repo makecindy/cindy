@@ -79,7 +79,7 @@ describe('useRemoteSessionSync 接线不变式', () => {
 
 describe('CCAgentSessionView 接线不变式', () => {
   it('用 useRemoteSessionSync(替代 mount-once 重 topic effect)+ 渲染连接 banner', () => {
-    expect(sessionViewSrc).toContain('useRemoteSessionSync(sessionId, remoteDeviceId)');
+    expect(sessionViewSrc).toContain('useRemoteSessionSync(confirmedSessionId, remoteDeviceId)');
     expect(sessionViewSrc).toContain('useRemoteSessionConnection(remoteDeviceId)');
     expect(sessionViewSrc).toContain('<RemoteSessionBanner');
     // 旧的 mount-once 重 topic effect 已被 hook 取代(不再就地订阅 session: topic)。

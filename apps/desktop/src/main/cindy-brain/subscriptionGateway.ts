@@ -152,6 +152,7 @@ export interface GhostSubscriptionGatewayDeps {
   findGhostForDelivery?(id: string): InstalledGhost | null;
   /** 意识电子脑是否在跑。 */
   isRunning(ghostId: string): boolean;
+  isRunningInstall?(ghost: InstalledGhost): boolean;
   /** 按需拉起电子脑(幂等;失败 reject)。 */
   wake(ghost: InstalledGhost): Promise<void>;
   /** 管子下行投递(失败抛/返 false)。Optional install is checked in this synchronous stage; never retain it. */
@@ -262,6 +263,14 @@ export class GhostSubscriptionGateway {
 
   /** Indexed content/state subscribers; avoids discovery on every message or state event. */
   publishIndexed(ghosts: InstalledGhost[], topic: GhostSubscribeTopic, name: GhostDidEventName, data: GhostDidEventData): void {
+    if (topic === 'native-recovery') {
+      for (const ghost of ghosts) {
+        if (ghostTaskEventApproved(ghost, topic) && this.deps.isRunningInstall?.(ghost)) {
+          this.dispatchTo(ghost, topic, name, data);
+        }
+      }
+      return;
+    }
     this.publishTo(ghosts, topic, name, data);
   }
 
@@ -327,11 +336,11 @@ export class GhostSubscriptionGateway {
       ts: this.deps.now(),
       data,
     };
-    if (topic === 'message' || topic === 'task-state' || topic === 'tool-execution') this.contentRecipients.set(evt, ghost);
+    if (topic === 'message' || topic === 'task-state' || topic === 'tool-execution' || topic === 'native-recovery') this.contentRecipients.set(evt, ghost);
 
     // 直投条件:在跑 + 缓冲已清 + 无唤醒在途——三者缺一都排队,否则新事件
     // 会插到缓冲里旧事件前面(seq 乱序)。投递失败(刚崩窗口期)同样回落缓冲。
-    if (topic !== 'tool-execution' && this.deps.isRunning(ghostId) && e.buffer.length === 0 && !e.waking) {
+    if (topic !== 'tool-execution' && topic !== 'native-recovery' && this.deps.isRunning(ghostId) && e.buffer.length === 0 && !e.waking) {
       if (this.sendOne(ghostId, e, evt, ownerScope, ghost)) return;
     }
     this.buffer(ghost, e, evt, ownerScope);
@@ -353,9 +362,13 @@ export class GhostSubscriptionGateway {
     const recipient = this.contentRecipients.get(evt);
     // Immediate sends reuse publishTo's check. flush never supplies that fact:
     // after any asynchronous boundary the queued recipient must be checked again.
-    const live = synchronousInstall ?? (recipient
-      ? this.deps.findGhostForDelivery ? this.deps.findGhostForDelivery(ghostId) : recipient
-      : undefined);
+    const nativeRecovery = 'topic' in evt && evt.topic === 'native-recovery';
+    const live = nativeRecovery
+      ? recipient && this.deps.isRunningInstall?.(recipient) ? recipient : undefined
+      : synchronousInstall ?? (recipient
+        ? this.deps.findGhostForDelivery ? this.deps.findGhostForDelivery(ghostId) : recipient
+        : undefined);
+    if (nativeRecovery && !live) return true;
     if (recipient && 'topic' in evt) {
       // A queue belongs to the exact approved install. Drop stale events instead of retrying into an update.
       if (!live?.enabled || ghostInstallApprovalToken(live.approval) !== ghostInstallApprovalToken(recipient.approval)
@@ -383,7 +396,7 @@ export class GhostSubscriptionGateway {
       e.pendingDropped += 1;
     }
     e.buffer.push(evt);
-    this.kickWake(ghost, e, ownerScope, 'topic' in evt && evt.topic === 'tool-execution');
+    this.kickWake(ghost, e, ownerScope, 'topic' in evt && (evt.topic === 'tool-execution' || evt.topic === 'native-recovery'));
   }
 
   /** 事件到达即按需拉起(去重:唤醒在途不重复 spawn),醒后顺序补投。 */
@@ -614,6 +627,7 @@ export class GhostSubscriptionGateway {
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
     const spec = GHOST_CONTROL_POINTS[point];
     const runtimePoint = isRuntimePluginPoint(point);
+    const toolPoint = point === 'will-tool-call' || point === 'did-tool-result';
     // Reuse the fresh exact-instance authorization lookup; per-request runtime
     // control must not rescan unrelated installs. Legacy points keep their path.
     const findTarget = () => runtimePoint && this.deps.findGhostForDelivery
@@ -626,6 +640,7 @@ export class GhostSubscriptionGateway {
       return { action: target.onFailure, ghostId, ghostName, reason: '', failure: true };
     };
     if (!ghost || !ghostControlPointActive(ghost, point)) {
+      if (toolPoint) return { action: 'allow' };
       return failed(target.pluginId, ghost?.manifest.name ?? target.pluginId, ghost ? 'inactive' : 'missing');
     }
     const ghostId = installedGhostStoragePart(ghost);
@@ -646,8 +661,9 @@ export class GhostSubscriptionGateway {
     const verdict = e.pointFused ? null : await this.askControlPoint(ghost, e, point, data,
       Math.min(spec.timeoutMs, timeoutMs ?? spec.timeoutMs), ownerScope);
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
+    if (toolPoint && !currentTarget()) return { action: 'allow' };
     if (verdict === null) return failed(ghostId, ghost.manifest.name, e.pointFused ? 'fused' : 'unanswered');
-    if (runtimePoint && !currentTarget()) return failed(ghostId, ghost.manifest.name, 'changed');
+    if (runtimePoint && !toolPoint && !currentTarget()) return failed(ghostId, ghost.manifest.name, 'changed');
     if (verdict.action === 'route' && verdict.route && (spec.actions as readonly string[]).includes('route')) {
       if (point === 'will-model-request' && 'phase' in data && data.phase !== 'select') {
         return failed(ghostId, ghost.manifest.name, 'route-after-selection');

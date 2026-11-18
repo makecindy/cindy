@@ -1,6 +1,7 @@
 import { createAttachmentPreservationReceiver } from '../attachmentPreservation.js';
 import type { PreserveAttachmentBatch } from '../../maker-host/attachmentPreservation.js';
 import { currentSessionCreationSignal } from '../../localDb/sessionRuntimeCleanup.js';
+import { readRemoteProviderGroupUsageLimit } from '../../provider-group/failurePolicy.js';
 /**
  * 在另一台电脑上启动 Agent、任务留在本机(控制端入口)。
  *
@@ -60,7 +61,7 @@ import {
 } from './proxyHandle';
 import { ExecServerRelay } from './execServerRelay';
 import { createReverseHttpRouter, type LocalMcpTarget } from './router';
-import { RemoteAgentPoller, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
+import { RemoteAgentPoller, RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
 import { isSharedTaskAuthorizationDenied } from './poller';
 
 export interface PreparedRemoteMcp {
@@ -824,6 +825,13 @@ async function prepareAndStartRemoteAgentSession(
           });
         });
       } else client.abandon('start-failed');
+      if (!remoteStarted && (
+        (error instanceof Error && 'code' in error && error.code === 'IPC_ERROR')
+        || (error instanceof RemoteAgentRemoteError && error.phase === 'start' && error.info.name === 'AgentStartupStoppedError')
+      )) {
+        const quota = readRemoteProviderGroupUsageLimit(error);
+        if (quota) throw quota;
+      }
       throw error;
     }
   }

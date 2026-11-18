@@ -25,6 +25,7 @@ export default {
     'card-expanded': { about: '展开某个机器人的卡片: 卡片里不再有项目与模型', viewport: { width: 860, height: 1500 }, storage, data: { kind: 'card-expanded' } },
     narrow: { about: '窄窗口(480px): 名称、路径与选择器换行', viewport: { width: 480, height: 1500 }, storage, data: { kind: 'all-bots' } },
     'model-open': { about: '点开某个项目的模型选择', storage, data: { kind: 'all-bots' } },
+    'plugin-only': { about: '没开官方机器人，只装了声明 imEntrance 的 IM 插件：插件卡片与「项目与模型」都显示', viewport: { width: 860, height: 1300 }, storage, data: { kind: 'plugin-only' } },
   },
   async ready(page) {
     await page.locator('#cindy-im-telegram, #cindy-im-slack').first().waitFor();
@@ -37,6 +38,12 @@ export default {
     }
     // 不论开了几个机器人, 区块整页只有一处。
     assert.equal(await blocks.count(), 1);
+    if (ui.data.kind === 'plugin-only') {
+      assert.ok(await page.getByText('微信群里的 Cindy', { exact: true }).isVisible());
+      assert.ok(await page.getByText(await ui.t('settings.remoteControl.hook.form.workspacesCardDescriptionWithPlugins'), { exact: true }).isVisible());
+      // 只有插件时没有默认项目单选(那是官方机器人的), 项目照常可改。
+      assert.equal(await page.getByRole('radio').count(), 0);
+    }
     const radios = page.getByRole('radio');
     if (ui.data.kind === 'slack-only') assert.equal(await radios.count(), 0);
     if (ui.data.kind === 'all-bots') {

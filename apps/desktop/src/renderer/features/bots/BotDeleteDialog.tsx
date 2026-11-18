@@ -1,13 +1,16 @@
-import { Button } from '@/components/ui/button';
 import { useEffect, useRef, useState } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
-import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 
 import type { BotProfile } from './botStore';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
 
-/** Shared destructive confirmation for the roster and teammate settings. */
+/**
+ * Shared destructive confirmation for the roster and teammate settings.
+ * Built on the shared ConfirmDialog (DESIGN.md §4 Dialog & Modal): no parallel
+ * dialog shell, no top-right × beside Cancel.
+ */
 export function BotDeleteDialog({
   bot,
   onOpenChange,
@@ -53,54 +56,28 @@ export function BotDeleteDialog({
   };
 
   return (
-    <Dialog.Root open onOpenChange={(open) => !busy && onOpenChange(open)}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
-        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-[71] w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 p-5 outline-none">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <Dialog.Title className="text-16 font-medium text-[var(--text-danger)]">
-                {t('bots.lifecycle.deleteTitle')}
-              </Dialog.Title>
-              <Dialog.Description className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                {t('bots.lifecycle.deleteDescription', { name: bot.name })}
-              </Dialog.Description>
-            </div>
-            <Dialog.Close
-              disabled={busy}
-              aria-label={t('bots.close')}
-              className="rounded-lg p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
-            >
-              <X size={16} />
-            </Dialog.Close>
-          </div>
-          {failed ? (
-            <p className="mt-3 text-11 text-[var(--text-danger)]" role="alert">
-              {t('bots.lifecycle.deleteFailed')}
-            </p>
-          ) : null}
-          <div className="mt-5 flex justify-end gap-2">
-            <Dialog.Close
-              disabled={busy}
-              className="h-9 rounded-lg px-3 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
-            >
-              {t('bots.cancel')}
-            </Dialog.Close>
-            <Button
-              variant="cta"
-              size="lg"
-              compact
-              tone="danger-solid"
-              loading={busy}
-              type="button"
-              onClick={() => void deleteBot()}
-              disabled={busy}
-            >
-              {busy ? t('bots.lifecycle.working') : t('bots.lifecycle.delete')}
-            </Button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <ConfirmDialog
+      open
+      // The confirm action closes the AlertDialog right after onConfirm; keep it
+      // open while the deletion runs so a failure can be shown in place.
+      onOpenChange={(open) => {
+        if (!open && inFlight.current) return;
+        onOpenChange(open);
+      }}
+      title={t('bots.lifecycle.deleteTitle')}
+      description={t('bots.lifecycle.deleteDescription', { name: bot.name })}
+      content={
+        failed ? (
+          <p className="text-13 text-[var(--text-danger)]" role="alert">
+            {t('bots.lifecycle.deleteFailed')}
+          </p>
+        ) : undefined
+      }
+      cancelText={t('bots.cancel')}
+      confirmText={t('bots.lifecycle.delete')}
+      confirmVariant="destructive"
+      loading={busy}
+      onConfirm={() => void deleteBot()}
+    />
   );
 }

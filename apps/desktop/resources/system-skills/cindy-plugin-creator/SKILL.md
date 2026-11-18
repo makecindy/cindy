@@ -84,6 +84,8 @@ Use when the plugin listens for events, screens automation runs or interacts wit
 - [给模型选择器提供模型 models（§4.6.3）](references/plugin-models.md)
 - [插件发起 Agent 任务、请求自动化与查看伙伴（§4.11）](references/plugin-agent-tasks.md)
 - [插件调用与 Agent 共用的宿主工具 cindy.host.call](references/plugin-host-tools.md)
+- [插件管理所有来源的输入队列与共享运行控制](references/plugin-queue-control.md)
+- [读取与修改原生工具目录](references/plugin-native-tool-catalog.md)
 - [读取工具历史、自动化 Webhook 与 Node HTTP 示例](references/plugin-history-and-http.md)
 - [插件读取当前任务上下文 sessionContext（§4.13）](references/plugin-session-context.md)
 - [插件创建工作区任务入口 workspace（§4.17）](references/plugin-workspace-sessions.md)

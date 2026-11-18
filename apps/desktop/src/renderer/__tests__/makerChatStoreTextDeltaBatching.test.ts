@@ -556,6 +556,16 @@ describe('makerChatStore text delta batching', () => {
     } finally { unsubscribe(); }
   });
 
+  it('preserves provider guidance when a terminal event has the generic turn-failed reason', () => {
+    const unsubscribe = makerChatStore.subscribeLight(SESSION_ID, vi.fn());
+    try {
+      const message = JSON.stringify({ error: 'future_code', message: 'Choose a smaller file.' });
+      onEvent?.({ sessionId: SESSION_ID, event: { type: 'error', source: 'claude-code',
+        data: { isTerminal: true, message, reason: 'turn-failed' } } });
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).error).toBe(message);
+    } finally { unsubscribe(); }
+  });
+
   // #8147 follow-up: a recreated renderer gets history + projection, not the old
   // terminal event. The exact row ID must reach light subscribers (unit).
   it('restores the active error row ID from a snapshot without replaying its terminal event', () => {
@@ -5030,6 +5040,23 @@ describe('makerChatStore text delta batching', () => {
 
     resolveProbe(projection(SESSION_ID));
     await flushPromises();
+  });
+
+  // Unit: preserve the bubble shown during task creation through the real outbox.
+  it('uses the displayed first message identity in both the timeline and the remote enqueue', async () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const identity = { clientId: 'creation-preview-input', createdAt: '2026-11-18T00:00:00.000Z' };
+    let received: AgentInputQueuedMessage | undefined;
+    deviceLinkInvoke.mockImplementation(async (_device, channel, args) => {
+      if (channel === 'maker:input:enqueue') received = args[1] as AgentInputQueuedMessage;
+      return projection(SESSION_ID);
+    });
+    expect(await makerChatStore.sendMessage(SESSION_ID, 'first message', MODEL, EFFORT, PERMISSION_MODE,
+      WORKING_DIR, undefined, undefined, { firstMessageIdentity: identity })).toBe(true);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.filter(row => row.role === 'user'))
+      .toMatchObject([{ ...identity, content: 'first message' }]);
+    await flushPromises();
+    expect(received).toMatchObject({ clientId: identity.clientId, chatMessage: identity });
   });
 
   it('accepts a second remote send while the first enqueue invoke is still unresolved', async () => {

@@ -17,7 +17,10 @@ import { applyListContinuation } from '@/lib/composerListContinuation';
 
 const BULLET_MARKER_RE = /^([-+*•])([ \t]+)$/;
 const ORDERED_MARKER_RE = /^([1-9]\d{0,8})([.)])([ \t]+)$/;
-const CJK_ORDERED_MARKER_RE = /^([1-9]\d{0,8})(、)$/;
+// The ideographic comma needs no trailing separator, so the ordinal itself is
+// the only thing telling a list marker from an ID in running text. Ordinals
+// stop at 99; longer digit runs stay editable text.
+const CJK_ORDERED_MARKER_RE = /^([1-9]\d{0,1})(、)$/;
 
 type BulletMarker = '-' | '+' | '*' | '•';
 type OrderedMarker = '.' | ')' | '、';
@@ -100,16 +103,8 @@ function plainListParagraphMarker(text: string): PlainListParagraphMarker | null
       attrs: { start: Number(ordered[1]), marker: ordered[2], separator: ordered[3] },
     };
   }
-  const cjkOrdered = text.match(/^([1-9]\d{0,8})(、)([ \t]*)/);
-  if (cjkOrdered) {
-    return {
-      kind: 'ordered',
-      // Keep optional spacing in the item body so direct transactions and
-      // normalized documents serialize CJK markers identically.
-      prefixLength: cjkOrdered[1].length + cjkOrdered[2].length,
-      attrs: { start: Number(cjkOrdered[1]), marker: '、' },
-    };
-  }
+  // Non-Markdown CJK ordinals are never promoted here: paste, IME and
+  // dictation land here with text the user did not type as a list marker.
   return null;
 }
 

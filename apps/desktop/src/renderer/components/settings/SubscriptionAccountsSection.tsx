@@ -36,7 +36,7 @@ import {
   formatCodexPlanLabel,
 } from '@/lib/subscriptionPlanLabel';
 import { toast } from '@/lib/toast';
-import { extractIpcError } from '@/utils/ipcError';
+import { subscriptionAccountErrorKey } from './subscriptionAccountErrors';
 import { cn } from '@/lib/utils';
 import {
   QUOTA_WINDOW_COLUMNS,
@@ -243,17 +243,8 @@ export function SubscriptionAccountsSection({
       await window.electronAPI.subscriptionAccounts.command(command);
       await refresh();
     } catch (error) {
-      const code = extractIpcError(error)?.code;
-      if (code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
-        toast.error(t(
-          code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
-            ? 'subscriptionAccounts.providerManagedAuth'
-            : code === 'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH'
-              ? 'subscriptionAccounts.loginIdentityMismatch'
-              : code === 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN'
-                ? 'subscriptionAccounts.loginIdentityUnknown'
-                : 'subscriptionAccounts.failed',
-        ));
+      const key = subscriptionAccountErrorKey(error);
+      if (key) toast.error(t(key));
       await refresh();
     } finally {
       inFlight.current = false;

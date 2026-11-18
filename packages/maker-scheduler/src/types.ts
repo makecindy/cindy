@@ -389,6 +389,13 @@ export interface ScheduleRunTrigger {
   detail?: string;
 }
 
+/** Safe facts returned to the originating task when its own automation ends. */
+export interface ScheduleClosureFailure {
+  firedAt: number;
+  errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED';
+  laterRunSucceeded: boolean;
+}
+
 export interface ScheduleRun {
   id: string;
   scheduleId: string;
@@ -397,6 +404,8 @@ export interface ScheduleRun {
   finishedAt?: number;
   status: RunStatus;
   errorMsg?: string;
+  /** Read-only history projection. The original terminal status is retained. */
+  failureRecovered?: boolean;
   /** 本次 run 产生的真实 API 账单费用。 */
   costUsd?: number;
   /** 本次 run 的订阅 token 估算价值，不计入真实账单。 */

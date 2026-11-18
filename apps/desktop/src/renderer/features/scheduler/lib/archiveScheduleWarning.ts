@@ -142,9 +142,10 @@ export async function archiveScheduleWarningMany(
 export function archiveConfirmDescription(
   t: TFunction,
   { dirtyWorktree, scheduleNames }: { dirtyWorktree: boolean; scheduleNames: readonly string[] },
+  baseDescription = t('ccAgent.sidebar.confirmArchive.description'),
 ): string {
   return [
-    t('ccAgent.sidebar.confirmArchive.description'),
+    baseDescription,
     dirtyWorktree ? t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning') : '',
     archiveScheduleWarning(t, scheduleNames),
   ]
