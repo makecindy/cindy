@@ -245,6 +245,7 @@ import {
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import {
   applyRemoteAgentPick,
+  resolveNewSessionSkillDraft,
   NEW_SESSION_AGENT_OPTIONS,
   availableNewSessionAgentOptions,
   defaultPermissionModeForNewSessionAgent,
@@ -3716,13 +3717,20 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const selectSlashCommand = useCallback((command: MobileSlashCommand) => {
     const current = firstMessageRef.current;
     pendingGoalSkillRef.current = command.kind === 'agent-skill' ? command.name : null;
-    const next = insertSlashCommand(current, detectComposerTrigger(current), { name: composerSlashInvocationName(command) });
+    const next = insertSlashCommand(current, detectComposerTrigger(current), command);
     if (next === current) return;
-    setFirstMessageDraft(next);
+    patchDraft({
+      firstMessage: next,
+      selectedSkill: command.kind === 'agent-skill' ? {
+        name: command.name, invocation: composerSlashInvocationName(command),
+        context: buildComposerPaletteCacheKey(selectedDeviceId, draft.agentKind,
+          draft.workspaceKind === 'project' ? draft.workingDir.trim() : ''),
+      } : null,
+    });
     const selection = { start: next.length, end: next.length };
     firstMessageSelectionRef.current = selection;
     setFirstMessageSelection(selection);
-  }, [setFirstMessageDraft]);
+  }, [patchDraft, selectedDeviceId, draft.agentKind, draft.workspaceKind, draft.workingDir]);
 
   const selectAtResource = useCallback((item: MobileAtResourceItem) => {
     const current = firstMessageRef.current;
@@ -4034,6 +4042,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       setCreatePhase('preparing');
       // await 之后闭包里的 attachments 是旧值,经 ref 拿含刚落定图片的最新列表。
       const sendAttachments = attachmentsRef.current;
+      effectiveDraft = await resolveNewSessionSkillDraft(effectiveDraft, deviceAtCreate, maker);
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       const validation = validateNewSessionDraft(effectiveDraft, { attachmentCount: sendAttachments.length });
       if (validation) {
         setError(validation);
