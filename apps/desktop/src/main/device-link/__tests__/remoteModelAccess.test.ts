@@ -51,6 +51,25 @@ describe('remote model permissions', () => {
     // Split back into its own provider, its own range applies again.
     expect(store.allows('old-openai', 'model-b')).toBe(true);
   });
+  // PR #11312 review (Codex P1): an unreadable rule on a merged connection must keep denying instead of being
+  // replaced by the pool's range, including after other providers are saved. Minimal input: old rule members=null.
+  it('keeps denying an unreadable merged-connection rule across pool inheritance and later writes', async () => {
+    fs.mkdirSync(path.dirname(filePath()), { recursive: true });
+    fs.writeFileSync(filePath(), JSON.stringify({ providers: { openai: { models: ['model-a'], members: {} }, 'old-openai': { members: null } } }));
+    const store = make();
+    setMergedProviderPoolResolver((id) => (id === 'old-openai' ? 'openai' : undefined));
+    try {
+      expect(store.allows('old-openai', 'model-a')).toBe(false);
+      expect(store.allows('old-openai', 'model-a', 'guest')).toBe(false);
+      expect(store.allowsDelegatedExecution('old-openai', 'model-a', 'guest')).toBe(false);
+      await store.set('anthropic', ['claude'], undefined, () => {});
+      expect(make().allows('old-openai', 'model-a')).toBe(false);
+      expect(store.allows('openai', 'model-a')).toBe(true);
+      // Saving the old connection's own share again replaces the unreadable rule.
+      await store.set('old-openai', ['model-a'], 'guest', () => {});
+      expect(store.allows('old-openai', 'model-a', 'guest')).toBe(true);
+    } finally { setMergedProviderPoolResolver(null); }
+  });
   // Unit regression: a persisted local disable must veto remote grants without rewriting
   // either choice. Existing tests covered remote model subsets, not provider suspension.
   it('preserves an existing disable across reload, denies owner/guest/delegated calls, and recovers on enable', () => {
