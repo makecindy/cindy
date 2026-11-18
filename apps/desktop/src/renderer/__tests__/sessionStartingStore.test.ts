@@ -16,7 +16,9 @@ import {
   absorbSessionStarting,
   clearSessionStarting,
   getStartingSessionIds,
+  hasStartingTerminal,
   markSessionStarting,
+  noteStartingTerminal,
   resetSessionStartingStoreForTests,
   SESSION_STARTING_TTL_MS,
 } from '@/lib/sessionStartingStore';
@@ -47,6 +49,34 @@ describe('sessionStartingStore', () => {
     const first = getStartingSessionIds();
     markSessionStarting('s1');
     expect(getStartingSessionIds()).toBe(first);
+  });
+
+  // Regression: a fast remote Done can precede the view's running render (or remount).
+  // #11113 / unit: receipt ownership must survive remounts but never cross inputs.
+  it('retains a received terminal across view lifetimes and forgets it for the next send', () => {
+    noteStartingTerminal('remote', 'first');
+    markSessionStarting('remote', 'first');
+    expect(hasStartingTerminal('remote')).toBe(false);
+    noteStartingTerminal('remote', 'first');
+    expect(hasStartingTerminal('remote')).toBe(true);
+    markSessionStarting('remote');
+    expect(hasStartingTerminal('remote')).toBe(true);
+    markSessionStarting('remote', 'first');
+    expect(hasStartingTerminal('remote')).toBe(true);
+    markSessionStarting('remote', 'second');
+    expect(hasStartingTerminal('remote')).toBe(false);
+    noteStartingTerminal('remote', 'first');
+    noteStartingTerminal('remote');
+    expect(hasStartingTerminal('remote')).toBe(false);
+    noteStartingTerminal('remote', 'second');
+    expect(hasStartingTerminal('remote')).toBe(true);
+    absorbSessionStarting(['remote']);
+    expect(hasStartingTerminal('remote')).toBe(false);
+    markSessionStarting('remote', 'third');
+    expect(hasStartingTerminal('remote')).toBe(false);
+    noteStartingTerminal('remote', 'third');
+    vi.advanceTimersByTime(SESSION_STARTING_TTL_MS);
+    expect(hasStartingTerminal('remote')).toBe(false);
   });
 
   it('does not absorb unknown ids and can clear a leftover mark', () => {

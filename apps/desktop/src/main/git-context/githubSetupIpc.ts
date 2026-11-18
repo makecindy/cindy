@@ -3,7 +3,7 @@ import { createGithubStar } from './githubStar.js';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { configureManagedGhRoot } from './ghBinary.js';
+import { configureManagedGhRoot, exposeInstalledManagedGh } from './ghBinary.js';
 import { createGithubSetup } from './githubSetup.js';
 import { getSharedGhCliTokenSource } from './ghCliTokenSource.js';
 import { githubConnection } from './githubConnection.js';
@@ -82,6 +82,8 @@ export function onGithubConnectionChanged(listener: () => void): () => void {
 export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
   const root = path.join(app.getPath('userData'), 'managed-tools');
   configureManagedGhRoot(root);
+  // A gh installed by onboarding in an earlier launch; a missing one stays missing.
+  void exposeInstalledManagedGh().catch(() => undefined);
   const changed = () => {
     getSharedGhCliTokenSource().invalidate();
     invalidateStatuses();

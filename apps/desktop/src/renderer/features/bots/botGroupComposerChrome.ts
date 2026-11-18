@@ -1,3 +1,4 @@
+import { botGroupInputElement, type BotGroupTextInput } from './botGroupTextInput';
 /**
  * 群聊输入框的布局与原生 textarea 行为；卡片与内边距由 ComposerCard 统一维护，
  * 与私聊任务输入框共用。主群与 Thread 回复仍共用同一个 BotGroupComposer。
@@ -31,9 +32,9 @@ export const BOT_GROUP_COMPOSER_FOOTER_START = 'flex min-w-0 items-center gap-2'
  * caret. Only while the input has focus is that default suppressed; the click still fires and
  * Tab focus is unchanged (as ChatInput's send button).
  */
-export function keepBotGroupComposerInputFocus(ref: RefObject<HTMLTextAreaElement | null>) {
+export function keepBotGroupComposerInputFocus(ref: RefObject<BotGroupTextInput | null>) {
   return (event: MouseEvent) => {
-    if (ref.current && document.activeElement === ref.current) event.preventDefault();
+    if (ref.current && document.activeElement === botGroupInputElement(ref.current)) event.preventDefault();
   };
 }
 
@@ -49,12 +50,12 @@ export function fitBotGroupComposerInput(element: HTMLTextAreaElement): void {
  * `mounted` re-attaches after the textarea is replaced (e.g. by the share bar and back).
  */
 export function useRefitBotGroupComposerInputOnResize(
-  ref: RefObject<HTMLTextAreaElement | null>,
+  ref: RefObject<BotGroupTextInput | null>,
   mounted = true,
 ): void {
   useEffect(() => {
-    const element = ref.current;
-    if (!mounted || !element || typeof ResizeObserver === 'undefined') return;
+    const element = botGroupInputElement(ref.current);
+    if (!mounted || !(element instanceof HTMLTextAreaElement) || typeof ResizeObserver === 'undefined') return;
     let width = element.clientWidth;
     const observer = new ResizeObserver(() => {
       if (element.clientWidth === width) return;

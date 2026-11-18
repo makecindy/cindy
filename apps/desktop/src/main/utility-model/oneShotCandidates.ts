@@ -1,3 +1,4 @@
+import { createAuxiliaryUsageRecorder } from '../usage/auxiliaryUsage.js';
 // The one-shot requests live in oneShotCandidatesCore.ts (shared with the Node Host). This
 // module builds the single Desktop instance; its ports resolve the Desktop modules when
 // called, never when this module loads.
@@ -43,6 +44,7 @@ const desktopOneShot = createOneShotCandidates({
         throw new Error('The selected subscription account changed providers');
     } };
   },
+  createUsageRecorder: createAuxiliaryUsageRecorder,
   readClaudeApiKey: (...args) => readClaudeApiKey(...args),
   getChatgptBridgeAuth: (...args) => getChatgptBridgeAuth(...args),
   getChatgptBridgeAuthForDispatch: (...args) => getChatgptBridgeAuthForDispatch(...args),

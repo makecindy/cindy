@@ -1,4 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const usageSink = vi.hoisted(() => ({ record: vi.fn(async () => {}), close: vi.fn(), begin: vi.fn() }));
+vi.mock('../../usage/auxiliaryUsage.js', () => ({
+  createAuxiliaryUsageRecorder: (attribution: unknown) => {
+    usageSink.begin(attribution);
+    return Object.assign(usageSink.record, { close: usageSink.close });
+  },
+}));
 const localReady = vi.hoisted(() => vi.fn(async () => {}));
 const acquireAccount = vi.hoisted(() => vi.fn(async (): Promise<import('../../subscription-accounts/runtime.js').SubscriptionAccountLease | null> => null));
 const poolMembership = vi.hoisted(() => ({ provider: 'pool-a' }));
@@ -2856,7 +2863,7 @@ describe('utility one-shot candidates', () => {
   // Unit regression: the public text entry must reserve the selected pool's account,
   // send only that account's credentials, and release it on every completion path.
   // Existing tests cover legacy OAuth only, which cannot represent a created pool.
-  it.each(['success', 'http-error', 'revoked', 'auth-error', 'moved'] as const)(
+  it.each(['success', 'http-error', 'revoked', 'auth-error', 'moved', 'timeout', 'cancel'] as const)(
     'uses and releases the selected subscription pool account: %s', async (outcome) => {
       projectedCatalog.mockReturnValue({ providers: [{
         id: 'pool-a', name: 'My subscription', source: 'builtin', subscriptionPool: 'openai',
@@ -2865,8 +2872,29 @@ describe('utility one-shot candidates', () => {
         models: { codex: [{ id: 'gpt-5.5', name: 'GPT-5.5', contextWindow: 272_000 }] },
       }] } as never);
       const lease = { account: { id: 'pool-account' }, assertDispatchable: vi.fn(),
-        running: vi.fn(), release: vi.fn() };
-      acquireAccount.mockResolvedValue(lease as unknown as import('../../subscription-accounts/runtime.js').SubscriptionAccountLease);
+        observeFailure: vi.fn(), running: vi.fn(), release: vi.fn() };
+      const accountLease = lease as unknown as import('../../subscription-accounts/runtime.js').SubscriptionAccountLease;
+      if (outcome === 'timeout' || outcome === 'cancel') {
+        vi.useFakeTimers();
+        let finish!: (value: typeof accountLease) => void;
+        acquireAccount.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        const controller = new AbortController();
+        const pending = requestUtilityText(makerMock(false), 'garden title', {
+          providerId: 'pool-a', agentKind: 'codex', model: 'gpt-5.5',
+          timeoutMs: 12_000, signal: controller.signal,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        if (outcome === 'cancel') controller.abort();
+        else await vi.advanceTimersByTimeAsync(12_000);
+        await expect(pending).resolves.toMatchObject({ ok: false, reason: 'timeout' });
+        finish(accountLease);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(lease.release).toHaveBeenCalledOnce();
+        expect(lease.running).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+        return;
+      }
+      acquireAccount.mockResolvedValue(accountLease);
       readCodexDispatchAuth.mockImplementation(async (_provider, account) => {
         expect(_provider).toBe('openai');
         expect(account).toBe(lease.account);
@@ -2884,6 +2912,10 @@ describe('utility one-shot candidates', () => {
       expect(result.ok).toBe(outcome === 'success');
       expect(acquireAccount).toHaveBeenCalledWith('pool-a', 'gpt-5.5', [], false, { resuming: false });
       expect(lease.release).toHaveBeenCalledOnce();
+      if (outcome === 'http-error') {
+        expect(lease.observeFailure).toHaveBeenCalledWith({ errorStatus: 503 }, 'gpt-5.5', 'run');
+        expect(lease.observeFailure.mock.invocationCallOrder[0]).toBeLessThan(lease.release.mock.invocationCallOrder[0]!);
+      }
       expect(readCodexCreds).not.toHaveBeenCalled();
       expect(maker.oneShot).not.toHaveBeenCalled();
       if (outcome === 'revoked' || outcome === 'auth-error' || outcome === 'moved') expect(fetchMock).not.toHaveBeenCalled();
@@ -4637,15 +4669,18 @@ describe('utility one-shot candidates', () => {
     it('keeps the output-budget retry on the accepted native step', async () => {
       activeCatalog.mockReturnValue(xdCatalog('codex', [GPT_SOL]) as never);
       readKey.mockReturnValue('xd-key');
-      const truncated = {
-        ok: true,
-        text: async () => 'data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"},"output":[]}}\n',
-      };
+      const truncated = new Response('data: '+JSON.stringify({ type: 'response.incomplete', response: {
+        model: 'first-backend', usage: { input_tokens: 100, output_tokens: 200 },
+        incomplete_details: { reason: 'max_output_tokens' }, output: [],
+      } })+'\n\n', { headers: { 'content-type': 'text/event-stream' } });
       fetchMock
         .mockResolvedValueOnce(truncated as never)
-        .mockResolvedValueOnce(responsesOk('full answer') as never);
+         .mockResolvedValueOnce({ ok: true, text: async () =>
+          'data: {"type":"response.output_text.delta","delta":"full answer"}\n' +
+          'data: {"type":"response.completed","response":{"model":"second-backend","usage":{"input_tokens":110,"output_tokens":20}}}\n' } as never);
 
       const result = await requestExplicitUtilityText('summarize', {
+        source: 'task-summary', sessionId: 'task-1',
         providerId: 'xd',
         agentKind: 'codex',
         model: 'gpt-6.1-sol',
@@ -4655,6 +4690,14 @@ describe('utility one-shot candidates', () => {
 
       expect(result).toMatchObject({ ok: true, text: 'full answer' });
       expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(usageSink.record).toHaveBeenCalledTimes(2);
+      expect(usageSink.record).toHaveBeenNthCalledWith(1, expect.objectContaining({ inputTokens: 100, outputTokens: 200 }),
+        expect.objectContaining({ source: 'task-summary', sessionId: 'task-1', model: 'first-backend', providerId: 'xd' }));
+      expect(usageSink.record).toHaveBeenNthCalledWith(2, expect.objectContaining({ inputTokens: 110, outputTokens: 20 }),
+        expect.objectContaining({ model: 'second-backend' }));
+      expect(usageSink.close).toHaveBeenCalledOnce();
+      expect(bodyOf(0)).not.toHaveProperty('sessionId');
+      expect(bodyOf(0)).not.toHaveProperty('source');
       expect(urlOf(1)).toBe(`${GATEWAY}/v1/responses`);
       expect(bodyOf(1)).toMatchObject({ reasoning: { effort: 'low' } });
       expect(Number(bodyOf(1).max_output_tokens)).toBeGreaterThan(200);

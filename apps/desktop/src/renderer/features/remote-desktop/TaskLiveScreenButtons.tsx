@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties } from 'react';
 import { Smartphone, Tablet, Tv } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -6,11 +6,11 @@ import type { RemoteLiveScreen } from '@cindy/device-link';
 
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
-import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { Tip } from '@/components/ui/tooltip';
-import { pluginSetupRoute } from '@/features/cc-agent/pluginSkillSetup';
+import { usePluginInPlace } from '@/features/plugin/lib/pluginInPlace';
 import { openPluginTaskTab } from '@/features/right-sidebar/lib/openPluginTaskTab';
-import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import type { InstalledGhost } from '../../../shared/ghost';
 import {
@@ -99,21 +99,21 @@ export function taskLiveScreenEntries(
   return [...groups.values()];
 }
 
-/** Where the user makes the plugin usable: its own page here, else its market listing. */
-async function setupRoute(entry: TaskLiveScreenEntry): Promise<string> {
-  const identity = parsePluginStoragePart(entry.pluginIdentity ?? '');
-  if (!identity) return '/plugins';
-  try {
-    return (await pluginSetupRoute(entry.ghost ?? undefined, identity.ghostId, identity)) ?? '/plugins';
-  } catch {
-    return '/plugins';
-  }
-}
+/** Whether this computer can draw another computer's device with this plugin copy. */
+const canShowRemote = (ghost: InstalledGhost) => ghost.enabled && ghost.manifest.taskView?.remote === true;
 
-/** The words for what this computer needs, and the way to the place that provides it. */
-function useEntrySetup() {
+/**
+ * The words for what this computer needs, and the one-click fix: install, turn on
+ * or update the plugin right here (Main asks for permission as usual), then open
+ * the device. Only what cannot be settled here opens the plugin's page.
+ */
+function useEntrySetup(sessionId: string) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { run, isBusy } = usePluginInPlace();
+  // The title-bar entries stay mounted across tasks: a late result belongs to the task it was asked from.
+  const shownSession = useRef(sessionId);
+  shownSession.current = sessionId;
   const copy = useCallback(
     (entry: TaskLiveScreenEntry, part: 'title' | 'body' | 'action') =>
       t(`remoteDesktop.liveScreenPlugin.${entry.need ?? 'install'}.${part}`, {
@@ -122,11 +122,31 @@ function useEntrySetup() {
       }),
     [t],
   );
+  const identityOf = (entry: TaskLiveScreenEntry) => parsePluginStoragePart(entry.pluginIdentity ?? '');
   const setUp = useCallback(
-    (entry: TaskLiveScreenEntry) => void setupRoute(entry).then((route) => navigate(route)),
-    [navigate],
+    (entry: TaskLiveScreenEntry) => {
+      const identity = parsePluginStoragePart(entry.pluginIdentity ?? '');
+      if (!identity) {
+        navigate('/plugins');
+        return;
+      }
+      void run(
+        { ghostId: identity.ghostId, namespace: identity.namespace, update: entry.need === 'update' },
+        {
+          isCurrent: () => shownSession.current === sessionId,
+          onReady: (ghost) => {
+            if (canShowRemote(ghost)) void openPluginTaskTab(sessionId, installedGhostStoragePart(ghost)).catch(() => {});
+          },
+        },
+      );
+    },
+    [navigate, run, sessionId],
   );
-  return { copy, setUp };
+  const busy = (entry: TaskLiveScreenEntry) => {
+    const identity = identityOf(entry);
+    return !!identity && isBusy(identity);
+  };
+  return { copy, setUp, busy };
 }
 
 /** What was already opened or asked for, per task, for as long as this window lives. */
@@ -135,12 +155,43 @@ const HANDLED_TASKS = 200;
 const entryKey = (entry: TaskLiveScreenEntry) => `${entry.plugin}|${entry.need ?? 'ready'}`;
 
 /**
+ * Asks waiting above the task's composer. They stay until the user acts on or
+ * closes them, or the device goes away, instead of passing by at the top of
+ * the window.
+ */
+const shown = new Map<string, Set<string>>();
+const notices = new Map<string, readonly TaskLiveScreenEntry[]>();
+const noticeListeners = new Set<() => void>();
+const NO_NOTICES: readonly TaskLiveScreenEntry[] = [];
+
+function publishNotices(sessionId: string, entries: readonly TaskLiveScreenEntry[]): void {
+  const keys = shown.get(sessionId);
+  const next = keys ? entries.filter((entry) => entry.need && keys.has(entryKey(entry))) : [];
+  const previous = notices.get(sessionId) ?? NO_NOTICES;
+  if (next.length === previous.length && next.every((entry, i) => entry === previous[i])) return;
+  if (next.length) notices.set(sessionId, next);
+  else notices.delete(sessionId);
+  for (const listener of noticeListeners) listener();
+}
+
+function dismissNotice(sessionId: string, entry: TaskLiveScreenEntry): void {
+  shown.get(sessionId)?.delete(entryKey(entry));
+  publishNotices(sessionId, notices.get(sessionId) ?? NO_NOTICES);
+}
+
+function subscribeNotices(listener: () => void): () => void {
+  noticeListeners.add(listener);
+  return () => noticeListeners.delete(listener);
+}
+
+/**
  * A device of this task appeared on its computer. With the plugin usable here,
  * its task page opens in the sidebar, as the plugin does for a task on this
- * computer; without it, a notice says what to install (or turn on, or update)
- * and leads there. Once per appearance: coming back to the task or closing the
- * tab does not repeat it until the device goes away and returns, or until the
- * plugin becomes usable. An unread list says nothing either way.
+ * computer; without it, an ask above the task's composer says what to install
+ * (or turn on, or update) and does it there. Once per appearance: coming back
+ * to the task or closing the tab does not repeat it until the device goes away
+ * and returns, or until the plugin becomes usable. An unread list says nothing
+ * either way.
  */
 export function useAutoOpenTaskLiveScreens(
   sessionId: string | null,
@@ -148,16 +199,22 @@ export function useAutoOpenTaskLiveScreens(
 ): TaskLiveScreenEntry[] {
   const installed = useInstalledGhosts();
   const entries = useMemo(() => taskLiveScreenEntries(screens, installed), [screens, installed]);
-  const { copy, setUp } = useEntrySetup();
   useEffect(() => {
     if (!sessionId || !loaded) return;
     let known = handled.get(sessionId);
     if (!known) {
-      if (handled.size >= HANDLED_TASKS) handled.delete(handled.keys().next().value as string);
+      if (handled.size >= HANDLED_TASKS) {
+        const oldest = handled.keys().next().value as string;
+        handled.delete(oldest);
+        shown.delete(oldest);
+      }
       handled.set(sessionId, (known = new Set()));
     }
+    let asked = shown.get(sessionId);
+    if (!asked) shown.set(sessionId, (asked = new Set()));
     const current = new Set(entries.map(entryKey));
     for (const key of [...known]) if (!current.has(key)) known.delete(key);
+    for (const key of [...asked]) if (!current.has(key)) asked.delete(key);
     for (const entry of entries) {
       const key = entryKey(entry);
       if (known.has(key)) continue;
@@ -166,20 +223,24 @@ export function useAutoOpenTaskLiveScreens(
         void openPluginTaskTab(sessionId, installedGhostStoragePart(entry.ghost), {
           userInitiated: false,
         }).catch(() => {});
-      else
-        toast.info(copy(entry, 'body'), {
-          title: copy(entry, 'title'),
-          duration: 12_000,
-          action: { label: copy(entry, 'action'), emphasis: 'cta', onClick: () => setUp(entry) },
-        });
+      else asked.add(key);
     }
-  }, [sessionId, entries, loaded, copy, setUp]);
+    publishNotices(sessionId, entries);
+  }, [sessionId, entries, loaded]);
+  // Leaving the task takes its asks off screen; coming back shows the ones still open.
+  useEffect(() => {
+    if (!sessionId) return;
+    return () => publishNotices(sessionId, NO_NOTICES);
+  }, [sessionId]);
   return entries;
 }
 
 /** Test seam: forget what was already opened or asked for. */
 export function resetAutoOpenedTaskLiveScreens(): void {
   handled.clear();
+  shown.clear();
+  notices.clear();
+  for (const listener of noticeListeners) listener();
 }
 
 /**
@@ -199,20 +260,13 @@ export function TaskLiveScreenButtons({
   entries: readonly TaskLiveScreenEntry[];
   className?: string;
 }) {
-  const { copy, setUp } = useEntrySetup();
-  const { confirm } = useConfirmDialog();
+  const { copy, setUp } = useEntrySetup(sessionId);
   const open = async (entry: TaskLiveScreenEntry) => {
     if (!entry.need && entry.ghost) {
       await openPluginTaskTab(sessionId, installedGhostStoragePart(entry.ghost)).catch(() => {});
       return;
     }
-    const go = await confirm({
-      title: copy(entry, 'title'),
-      description: copy(entry, 'body'),
-      confirmText: copy(entry, 'action'),
-      autoFocusConfirm: true,
-    });
-    if (go) setUp(entry);
+    setUp(entry);
   };
   return (
     <>
@@ -248,6 +302,51 @@ export function TaskLiveScreenButtons({
           </Tip>
         );
       })}
+    </>
+  );
+}
+
+const DeviceIcon = ({ screen }: { screen: RemoteLiveScreen | undefined }) => {
+  const Icon = screen?.platform === 'ipados' ? Tablet : screen?.platform === 'tvos' ? Tv : Smartphone;
+  return <Icon size={16} />;
+};
+
+/**
+ * Above the task's composer, with the task's other asks: what this computer
+ * still needs to show a device of this task, and the button that does it here.
+ */
+export function TaskLiveScreenNotices({
+  sessionId,
+  className,
+  style,
+}: {
+  sessionId: string;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  const { t } = useTranslation();
+  const entries = useSyncExternalStore(subscribeNotices, () => notices.get(sessionId) ?? NO_NOTICES);
+  const { copy, setUp, busy } = useEntrySetup(sessionId);
+  return (
+    <>
+      {entries.slice(0, TASK_LIVE_SCREEN_LIMIT).map((entry) => (
+        <ErrorNotice
+          key={entryKey(entry)}
+          className={cn('mx-auto', className)}
+          style={style}
+          data-banner-kind="task-live-screen-plugin"
+          icon={<DeviceIcon screen={entry.screens[0]} />}
+          message={copy(entry, 'title')}
+          description={copy(entry, 'body')}
+          actions={
+            <Button size="sm" compact type="button" loading={busy(entry)} onClick={() => setUp(entry)}>
+              {copy(entry, 'action')}
+            </Button>
+          }
+          onDismiss={() => dismissNotice(sessionId, entry)}
+          dismissLabel={t('common.dismiss')}
+        />
+      ))}
     </>
   );
 }

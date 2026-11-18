@@ -91,6 +91,8 @@ export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig,
   identity?: string;
   plan?: string;
   planTier?: string;
+  /** Official CLI display name; presentation only, not an entitlement. */
+  planDisplayName?: string;
   planType?: string;
   /** Advisory ISO date reported by this account's official CLI; older hosts omit it. */
   loginExpiresAt?: string;
@@ -187,6 +189,7 @@ export interface SubscriptionSessionAccount {
   identity?: string;
   plan?: string;
   planTier?: string;
+  planDisplayName?: string;
   planType?: string;
   paused: boolean;
   status: SubscriptionAccountView['status'];
@@ -262,6 +265,7 @@ export function parseSubscriptionSessionAccountView(
       ...(text(account.identity) ? { identity: text(account.identity) } : {}),
       ...(text(account.plan) ? { plan: text(account.plan) } : {}),
       ...(text(account.planTier) ? { planTier: text(account.planTier) } : {}),
+      ...(text(account.planDisplayName) ? { planDisplayName: text(account.planDisplayName) } : {}),
       ...(text(account.planType) ? { planType: text(account.planType) } : {}),
       paused: account.paused === true,
       status: account.status as SubscriptionAccountView['status'],

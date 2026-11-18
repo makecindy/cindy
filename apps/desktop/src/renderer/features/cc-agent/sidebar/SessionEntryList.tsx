@@ -40,6 +40,7 @@ function entryHasAttention(
 
 export interface SessionEntryListProps {
   sessions: readonly Session[];
+  inboxMode?: boolean;
   activeSessionId?: string;
   runningSessionIds: ReadonlySet<string>;
   attachedSessionIds: ReadonlySet<string>;
@@ -47,7 +48,7 @@ export interface SessionEntryListProps {
   scheduleSessionIndex: ReadonlyMap<string, AutomationScheduleSessionInfo>;
   selectedSessionIds?: ReadonlySet<string>;
   onSessionClick: SessionClickHandler;
-  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
+  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive') => void | 'marked-read' | Promise<void | 'marked-read'>;
   onRename: (id: string, title: string) => void;
   onTogglePin: (id: string, currentlyPinned: boolean) => void;
   onMoveSession?: (id: string, target: SessionMoveTarget) => void;
@@ -97,6 +98,7 @@ export interface SessionEntryRowsProps extends Omit<
 
 export function SessionEntryRows({
   entries,
+  inboxMode = false,
   activeSessionId,
   runningSessionIds,
   attachedSessionIds,
@@ -129,6 +131,7 @@ export function SessionEntryRows({
               (selectedSessionIds?.has(nextEntry.session.id) ?? false));
           const commonProps = {
             session: entry.session,
+            inboxMode,
             isActive: entry.session.id === activeSessionId,
             isRunning: runningSessionIds.has(entry.session.id),
             isAttached: attachedSessionIds.has(entry.session.id),
