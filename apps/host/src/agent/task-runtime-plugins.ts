@@ -78,9 +78,9 @@ export function createHostRuntimePluginSettings(deps: {
         throwIpcError('PRECONDITION_FAILED', held ?? 'HOST_PROFILE_IN_USE_BY_DESKTOP: Profile ownership changed');
       if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
     };
-    assertCurrent();
     return createRuntimePluginSettingsHandler({
       maker: deps.maker,
+      assertCaller: assertCurrent,
       captureDataOwnerBroadcastScope: () => owner,
       isDataOwnerBroadcastScopeCurrent: scope => {
         assertCurrent();
