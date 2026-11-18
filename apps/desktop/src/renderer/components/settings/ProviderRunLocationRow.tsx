@@ -11,7 +11,6 @@ import { useProviderBorrow, type BorrowedProviderCatalog } from '@/hooks/useProv
 import { useOwnComputerModelUse } from '@/hooks/useOwnComputerModelUse';
 import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
 import {
-  effectiveRunLocation,
   RUN_LOCATION_LOCAL,
   type RunLocationCandidate,
 } from '@/lib/providerRunLocation';
@@ -41,17 +40,15 @@ function ProviderRunLocationPicker({
   if (candidates.length === 0) return null;
   const localUsable = provider.connected && !provider.suspended;
   const remote = candidates.find((candidate) => candidate.deviceId === location);
-  const hint = !remote
-    ? t('settings.providers.detail.runLocation.local')
-    : standalone
-      ? t('settings.providers.detail.runLocation.autoBorrowing', { device: remote.name })
-      : t('settings.providers.detail.runLocation.pinned', { device: remote.name });
+  // Another computer runs this provider only because the user chose it here; never automatically.
+  const hint = remote
+    ? t('settings.providers.detail.runLocation.pinned', { device: remote.name })
+    : t('settings.providers.detail.runLocation.local');
   const choose = (next: string) => {
     if (next === location) return;
-    // 选回默认位置就删掉覆盖，以后跟着默认走(本机登录后自动回到本机)。
-    const fallback = effectiveRunLocation({ ...provider, runLocation: undefined }, candidates);
+    // 选回这台电脑就删掉覆盖：默认就是这台电脑。
     void window.electronAPI.maker
-      .setProviderRunLocation({ providerId: provider.id, location: next === fallback ? null : next })
+      .setProviderRunLocation({ providerId: provider.id, location: next === RUN_LOCATION_LOCAL ? null : next })
       .catch(() => toast.error(t('settings.providers.detail.runLocation.writeFailed')));
   };
   return (
@@ -71,7 +68,6 @@ function ProviderRunLocationPicker({
             {
               value: RUN_LOCATION_LOCAL,
               label: t('settings.providers.detail.runLocation.optionLocal'),
-              disabled: !localUsable,
               endAdornment: localUsable ? undefined : (
                 <span className="text-12 text-[var(--text-tertiary)]">
                   {t('settings.providers.detail.runLocation.notSignedIn')}

@@ -1,0 +1,5066 @@
+{
+  "generatedAt": "2026-11-16T10:35:37.084Z",
+  "node": "v24.22.1",
+  "platform": "win32-x64",
+  "bulkBytes": 1048576,
+  "results": [
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 2,
+          "p90": 3,
+          "max": 3
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4751,
+        "hostDown": 5883,
+        "controllerUp": 5509,
+        "controllerDown": 4971
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 65
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 4,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "arriveAtHost": {
+          "count": 4,
+          "p50": 1,
+          "p90": 1,
+          "max": 1
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1053396,
+        "hostDown": 4516,
+        "controllerUp": 4210,
+        "controllerDown": 1053594
+      },
+      "bulkWireRatio": 1,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 52
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 4,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "arriveAtHost": {
+          "count": 4,
+          "p50": 1,
+          "p90": 1,
+          "max": 1
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 3703,
+        "hostDown": 1053727,
+        "controllerUp": 1053421,
+        "controllerDown": 3890
+      },
+      "bulkWireRatio": 1,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 1,
+          "p90": 1,
+          "max": 1
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4751,
+        "hostDown": 6174,
+        "controllerUp": 5509,
+        "controllerDown": 4971
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 39
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 4,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "arriveAtHost": {
+          "count": 4,
+          "p50": 1,
+          "p90": 2,
+          "max": 2
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1053396,
+        "hostDown": 4516,
+        "controllerUp": 4210,
+        "controllerDown": 1053594
+      },
+      "bulkWireRatio": 1,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 40
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 4,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "arriveAtHost": {
+          "count": 4,
+          "p50": 1,
+          "p90": 1,
+          "max": 1
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 3703,
+        "hostDown": 1053727,
+        "controllerUp": 1053421,
+        "controllerDown": 3890
+      },
+      "bulkWireRatio": 1,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 4,
+          "p90": 5,
+          "max": 5
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 2,
+          "p90": 4,
+          "max": 4
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 6923,
+        "hostDown": 7832,
+        "controllerUp": 8042,
+        "controllerDown": 6713
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 123
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 4,
+          "p50": 3,
+          "p90": 21,
+          "max": 21
+        },
+        "arriveAtHost": {
+          "count": 4,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1106098,
+        "hostDown": 10591,
+        "controllerUp": 11328,
+        "controllerDown": 1099409
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 105
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 4,
+          "p50": 3,
+          "p90": 3,
+          "max": 3
+        },
+        "arriveAtHost": {
+          "count": 4,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 10835,
+        "hostDown": 1099382,
+        "controllerUp": 1106063,
+        "controllerDown": 10026
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 3,
+          "p90": 4,
+          "max": 4
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 2,
+          "p90": 3,
+          "max": 3
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 6532,
+        "hostDown": 7635,
+        "controllerUp": 7845,
+        "controllerDown": 6322
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 117
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 4,
+          "p50": 3,
+          "p90": 13,
+          "max": 13
+        },
+        "arriveAtHost": {
+          "count": 4,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1106013,
+        "hostDown": 11069,
+        "controllerUp": 11862,
+        "controllerDown": 1099332
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 90
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 4,
+          "p50": 3,
+          "p90": 4,
+          "max": 4
+        },
+        "arriveAtHost": {
+          "count": 4,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 8906,
+        "hostDown": 1099385,
+        "controllerUp": 1106074,
+        "controllerDown": 8321
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 3,
+          "p90": 3,
+          "max": 3
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 2256,
+        "hostDown": 2687,
+        "controllerUp": 2873,
+        "controllerDown": 2150
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 67
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 4,
+          "p50": 3,
+          "p90": 3,
+          "max": 3
+        },
+        "arriveAtHost": {
+          "count": 4,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1101011,
+        "hostDown": 6029,
+        "controllerUp": 6718,
+        "controllerDown": 1094442
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 55
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 4,
+          "p50": 3,
+          "p90": 3,
+          "max": 3
+        },
+        "arriveAtHost": {
+          "count": 4,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 5982,
+        "hostDown": 1096305,
+        "controllerUp": 1102986,
+        "controllerDown": 5437
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 2,
+          "p90": 3,
+          "max": 3
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 2256,
+        "hostDown": 2687,
+        "controllerUp": 2873,
+        "controllerDown": 2150
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 68
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 4,
+          "p50": 3,
+          "p90": 3,
+          "max": 3
+        },
+        "arriveAtHost": {
+          "count": 4,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1101011,
+        "hostDown": 5595,
+        "controllerUp": 6228,
+        "controllerDown": 1094442
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "unshaped",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 61
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 4,
+          "p50": 2,
+          "p90": 2,
+          "max": 2
+        },
+        "arriveAtHost": {
+          "count": 4,
+          "p50": 1,
+          "p90": 1,
+          "max": 1
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4936,
+        "hostDown": 1094775,
+        "controllerUp": 1101392,
+        "controllerDown": 4447
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 84,
+          "p90": 85,
+          "max": 85
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 42,
+          "p90": 42,
+          "max": 42
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4711,
+        "hostDown": 6134,
+        "controllerUp": 5469,
+        "controllerDown": 4931
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 1366
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 84,
+          "p90": 1257,
+          "max": 1257
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 42,
+          "p90": 42,
+          "max": 42
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1054805,
+        "hostDown": 5870,
+        "controllerUp": 5479,
+        "controllerDown": 1055069
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 1366
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 84,
+          "p90": 1257,
+          "max": 1257
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 42,
+          "p90": 1215,
+          "max": 1215
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4916,
+        "hostDown": 1055295,
+        "controllerUp": 1054887,
+        "controllerDown": 5158
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 84,
+          "p90": 84,
+          "max": 84
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 42,
+          "p90": 42,
+          "max": 42
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4711,
+        "hostDown": 6134,
+        "controllerUp": 5469,
+        "controllerDown": 4931
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 1366
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 84,
+          "p90": 1257,
+          "max": 1257
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 42,
+          "p90": 42,
+          "max": 42
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1054805,
+        "hostDown": 5870,
+        "controllerUp": 5479,
+        "controllerDown": 1055069
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 1371
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 84,
+          "p90": 1262,
+          "max": 1262
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 42,
+          "p90": 1221,
+          "max": 1221
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4916,
+        "hostDown": 1055295,
+        "controllerUp": 1054887,
+        "controllerDown": 5158
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 86,
+          "p90": 87,
+          "max": 87
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 43,
+          "p90": 44,
+          "max": 44
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 6523,
+        "hostDown": 8188,
+        "controllerUp": 8209,
+        "controllerDown": 6321
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 1260
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 85,
+          "p90": 1150,
+          "max": 1150
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 42,
+          "p90": 43,
+          "max": 43
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1108899,
+        "hostDown": 38744,
+        "controllerUp": 42378,
+        "controllerDown": 1102041
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 1251
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 85,
+          "p90": 1143,
+          "max": 1143
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 43,
+          "p90": 1100,
+          "max": 1100
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 38496,
+        "hostDown": 1104888,
+        "controllerUp": 1111758,
+        "controllerDown": 34938
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 86,
+          "p90": 87,
+          "max": 87
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 43,
+          "p90": 44,
+          "max": 44
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 6435,
+        "hostDown": 8065,
+        "controllerUp": 8267,
+        "controllerDown": 6233
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 1250
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 85,
+          "p90": 1142,
+          "max": 1142
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 42,
+          "p90": 43,
+          "max": 43
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1108727,
+        "hostDown": 38820,
+        "controllerUp": 42454,
+        "controllerDown": 1101885
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 1251
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 85,
+          "p90": 1143,
+          "max": 1143
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 43,
+          "p90": 1099,
+          "max": 1099
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 38516,
+        "hostDown": 1104851,
+        "controllerUp": 1111688,
+        "controllerDown": 34924
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 84,
+          "p90": 85,
+          "max": 85
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 42,
+          "p90": 43,
+          "max": 43
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 2168,
+        "hostDown": 2554,
+        "controllerUp": 2732,
+        "controllerDown": 2070
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 1235
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 84,
+          "p90": 86,
+          "max": 86
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 42,
+          "p90": 43,
+          "max": 43
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1101879,
+        "hostDown": 27151,
+        "controllerUp": 30504,
+        "controllerDown": 1095227
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 1231
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 84,
+          "p90": 87,
+          "max": 87
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 42,
+          "p90": 46,
+          "max": 46
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 31775,
+        "hostDown": 1095549,
+        "controllerUp": 1102227,
+        "controllerDown": 28369
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 84,
+          "p90": 84,
+          "max": 84
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 42,
+          "p90": 43,
+          "max": 43
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 2168,
+        "hostDown": 2554,
+        "controllerUp": 2732,
+        "controllerDown": 2070
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 1232
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 84,
+          "p90": 86,
+          "max": 86
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 42,
+          "p90": 42,
+          "max": 42
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1101879,
+        "hostDown": 27137,
+        "controllerUp": 30490,
+        "controllerDown": 1095227
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 1224
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 84,
+          "p90": 85,
+          "max": 85
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 42,
+          "p90": 44,
+          "max": 44
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 31775,
+        "hostDown": 1095487,
+        "controllerUp": 1102157,
+        "controllerDown": 28369
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 169,
+          "p90": 179,
+          "max": 179
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 78,
+          "p90": 97,
+          "max": 97
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4781,
+        "hostDown": 6204,
+        "controllerUp": 5539,
+        "controllerDown": 5001
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 1431
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 170,
+          "p90": 1325,
+          "max": 1325
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 70,
+          "p90": 84,
+          "max": 84
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1054854,
+        "hostDown": 5919,
+        "controllerUp": 5528,
+        "controllerDown": 1055118
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 1444
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 178,
+          "p90": 1338,
+          "max": 1338
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 89,
+          "p90": 1256,
+          "max": 1256
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4965,
+        "hostDown": 1055344,
+        "controllerUp": 1054936,
+        "controllerDown": 5207
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 146,
+          "p90": 163,
+          "max": 163
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 67,
+          "p90": 95,
+          "max": 95
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4781,
+        "hostDown": 6204,
+        "controllerUp": 5539,
+        "controllerDown": 5001
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 1448
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 151,
+          "p90": 1328,
+          "max": 1328
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 69,
+          "p90": 85,
+          "max": 85
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1054854,
+        "hostDown": 5919,
+        "controllerUp": 5528,
+        "controllerDown": 1055118
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 1444
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 161,
+          "p90": 1336,
+          "max": 1336
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 100,
+          "p90": 1250,
+          "max": 1250
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4965,
+        "hostDown": 1055124,
+        "controllerUp": 1054733,
+        "controllerDown": 5207
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 152,
+          "p90": 177,
+          "max": 177
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 79,
+          "p90": 92,
+          "max": 92
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 6611,
+        "hostDown": 8091,
+        "controllerUp": 8293,
+        "controllerDown": 6409
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 1805
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 8,
+          "p50": 179,
+          "p90": 1689,
+          "max": 1689
+        },
+        "arriveAtHost": {
+          "count": 8,
+          "p50": 86,
+          "p90": 92,
+          "max": 92
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1109892,
+        "hostDown": 23021,
+        "controllerUp": 24856,
+        "controllerDown": 1103129
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 1605
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 178,
+          "p90": 1496,
+          "max": 1496
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 87,
+          "p90": 1410,
+          "max": 1410
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 23681,
+        "hostDown": 1104442,
+        "controllerUp": 1111272,
+        "controllerDown": 21763
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 152,
+          "p90": 177,
+          "max": 177
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 74,
+          "p90": 92,
+          "max": 92
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 6593,
+        "hostDown": 8258,
+        "controllerUp": 8279,
+        "controllerDown": 6391
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 1483
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 171,
+          "p90": 1375,
+          "max": 1375
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 77,
+          "p90": 85,
+          "max": 85
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1110782,
+        "hostDown": 22574,
+        "controllerUp": 24304,
+        "controllerDown": 1104020
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 1560
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 172,
+          "p90": 1450,
+          "max": 1450
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 85,
+          "p90": 1359,
+          "max": 1359
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 23947,
+        "hostDown": 1105722,
+        "controllerUp": 1112552,
+        "controllerDown": 21997
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 145,
+          "p90": 177,
+          "max": 177
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 73,
+          "p90": 89,
+          "max": 89
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 2198,
+        "hostDown": 2668,
+        "controllerUp": 2846,
+        "controllerDown": 2100
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 1798
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 8,
+          "p50": 140,
+          "p90": 194,
+          "max": 194
+        },
+        "arriveAtHost": {
+          "count": 8,
+          "p50": 77,
+          "p90": 87,
+          "max": 87
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1104512,
+        "hostDown": 15699,
+        "controllerUp": 17591,
+        "controllerDown": 1097855
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 2052
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 8,
+          "p50": 167,
+          "p90": 185,
+          "max": 185
+        },
+        "arriveAtHost": {
+          "count": 8,
+          "p50": 95,
+          "p90": 106,
+          "max": 106
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 18699,
+        "hostDown": 1095957,
+        "controllerUp": 1102668,
+        "controllerDown": 16812
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 154,
+          "p90": 175,
+          "max": 175
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 70,
+          "p90": 89,
+          "max": 89
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 2238,
+        "hostDown": 2624,
+        "controllerUp": 2802,
+        "controllerDown": 2140
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 1442
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 7,
+          "p50": 169,
+          "p90": 213,
+          "max": 213
+        },
+        "arriveAtHost": {
+          "count": 7,
+          "p50": 75,
+          "p90": 92,
+          "max": 92
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1101894,
+        "hostDown": 13493,
+        "controllerUp": 15129,
+        "controllerDown": 1095301
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "fast-jitter",
+        "rateBytesPerSec": 1000000,
+        "oneWayDelayMs": 20,
+        "queueLimitBytes": 262144,
+        "jitterMs": 30
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 1916
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 8,
+          "p50": 164,
+          "p90": 190,
+          "max": 190
+        },
+        "arriveAtHost": {
+          "count": 8,
+          "p50": 81,
+          "p90": 103,
+          "max": 103
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 17175,
+        "hostDown": 1095773,
+        "controllerUp": 1102451,
+        "controllerDown": 15345
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 207,
+          "p90": 207,
+          "max": 207
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 104,
+          "p90": 104,
+          "max": 104
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4711,
+        "hostDown": 6134,
+        "controllerUp": 5469,
+        "controllerDown": 4931
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 5458
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 15,
+          "p50": 1779,
+          "p90": 4821,
+          "max": 5321
+        },
+        "arriveAtHost": {
+          "count": 15,
+          "p50": 104,
+          "p90": 104,
+          "max": 105
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1060700,
+        "hostDown": 11683,
+        "controllerUp": 10935,
+        "controllerDown": 1061239
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 5435
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 15,
+          "p50": 1803,
+          "p90": 4829,
+          "max": 5329
+        },
+        "arriveAtHost": {
+          "count": 15,
+          "p50": 1687,
+          "p90": 4723,
+          "max": 5224
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 7972,
+        "hostDown": 1059547,
+        "controllerUp": 1058871,
+        "controllerDown": 8342
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 207,
+          "p90": 207,
+          "max": 207
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 104,
+          "p90": 104,
+          "max": 104
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4711,
+        "hostDown": 6134,
+        "controllerUp": 5469,
+        "controllerDown": 4931
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 5453
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 15,
+          "p50": 1769,
+          "p90": 4816,
+          "max": 5321
+        },
+        "arriveAtHost": {
+          "count": 15,
+          "p50": 104,
+          "p90": 104,
+          "max": 104
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1060700,
+        "hostDown": 11683,
+        "controllerUp": 10935,
+        "controllerDown": 1061239
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 5436
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 15,
+          "p50": 1770,
+          "p90": 4817,
+          "max": 5332
+        },
+        "arriveAtHost": {
+          "count": 15,
+          "p50": 1653,
+          "p90": 4709,
+          "max": 5223
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 7972,
+        "hostDown": 1059327,
+        "controllerUp": 1058668,
+        "controllerDown": 8342
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 211,
+          "p90": 212,
+          "max": 212
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 105,
+          "p90": 106,
+          "max": 106
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 7924,
+        "hostDown": 15082,
+        "controllerUp": 14618,
+        "controllerDown": 7634
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 4781
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 14,
+          "p50": 1620,
+          "p90": 4140,
+          "max": 4643
+        },
+        "arriveAtHost": {
+          "count": 14,
+          "p50": 104,
+          "p90": 105,
+          "max": 105
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1116201,
+        "hostDown": 56690,
+        "controllerUp": 61222,
+        "controllerDown": 1109117
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 4758
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 14,
+          "p50": 1656,
+          "p90": 4149,
+          "max": 4649
+        },
+        "arriveAtHost": {
+          "count": 14,
+          "p50": 1524,
+          "p90": 4037,
+          "max": 4537
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 48663,
+        "hostDown": 1110050,
+        "controllerUp": 1117006,
+        "controllerDown": 44395
+      },
+      "bulkWireRatio": 1.07,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 212,
+          "p90": 212,
+          "max": 212
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 105,
+          "p90": 106,
+          "max": 106
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 7408,
+        "hostDown": 15301,
+        "controllerUp": 14768,
+        "controllerDown": 7110
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 4758
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 14,
+          "p50": 1632,
+          "p90": 4121,
+          "max": 4622
+        },
+        "arriveAtHost": {
+          "count": 14,
+          "p50": 105,
+          "p90": 105,
+          "max": 106
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1117447,
+        "hostDown": 56795,
+        "controllerUp": 61310,
+        "controllerDown": 1110372
+      },
+      "bulkWireRatio": 1.07,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 4742
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 14,
+          "p50": 1649,
+          "p90": 4139,
+          "max": 4641
+        },
+        "arriveAtHost": {
+          "count": 14,
+          "p50": 1527,
+          "p90": 4024,
+          "max": 4526
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 49419,
+        "hostDown": 1110448,
+        "controllerUp": 1117404,
+        "controllerDown": 45103
+      },
+      "bulkWireRatio": 1.07,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 207,
+          "p90": 207,
+          "max": 207
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 104,
+          "p90": 104,
+          "max": 104
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4798,
+        "hostDown": 4639,
+        "controllerUp": 4708,
+        "controllerDown": 4556
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 4721
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 14,
+          "p50": 220,
+          "p90": 279,
+          "max": 455
+        },
+        "arriveAtHost": {
+          "count": 14,
+          "p50": 103,
+          "p90": 103,
+          "max": 104
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1107091,
+        "hostDown": 37292,
+        "controllerUp": 41581,
+        "controllerDown": 1100184
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 4716
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 14,
+          "p50": 213,
+          "p90": 275,
+          "max": 452
+        },
+        "arriveAtHost": {
+          "count": 14,
+          "p50": 111,
+          "p90": 172,
+          "max": 349
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 41329,
+        "hostDown": 1100409,
+        "controllerUp": 1107357,
+        "controllerDown": 37045
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 207,
+          "p90": 208,
+          "max": 208
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 104,
+          "p90": 104,
+          "max": 104
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4682,
+        "hostDown": 4556,
+        "controllerUp": 4822,
+        "controllerDown": 4555
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 4707
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 14,
+          "p50": 219,
+          "p90": 279,
+          "max": 455
+        },
+        "arriveAtHost": {
+          "count": 14,
+          "p50": 103,
+          "p90": 103,
+          "max": 104
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1106797,
+        "hostDown": 37307,
+        "controllerUp": 41563,
+        "controllerDown": 1099914
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "slow",
+        "rateBytesPerSec": 250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 131072
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 4741
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 14,
+          "p50": 214,
+          "p90": 273,
+          "max": 450
+        },
+        "arriveAtHost": {
+          "count": 14,
+          "p50": 112,
+          "p90": 171,
+          "max": 348
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 41049,
+        "hostDown": 1100285,
+        "controllerUp": 1107183,
+        "controllerDown": 36772
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 421,
+          "p90": 424,
+          "max": 424
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 211,
+          "p90": 214,
+          "max": 214
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4761,
+        "hostDown": 6184,
+        "controllerUp": 5519,
+        "controllerDown": 4981
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 21511
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 47,
+          "p50": 10306,
+          "p90": 19384,
+          "max": 21403
+        },
+        "arriveAtHost": {
+          "count": 47,
+          "p50": 3898,
+          "p90": 13088,
+          "max": 15091
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1085667,
+        "hostDown": 42087,
+        "controllerUp": 39507,
+        "controllerDown": 1087401
+      },
+      "bulkWireRatio": 1.04,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 21398
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 46,
+          "p50": 10626,
+          "p90": 19308,
+          "max": 21294
+        },
+        "arriveAtHost": {
+          "count": 46,
+          "p50": 10415,
+          "p90": 19022,
+          "max": 21033
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 25190,
+        "hostDown": 1080262,
+        "controllerUp": 1078311,
+        "controllerDown": 26374
+      },
+      "bulkWireRatio": 1.03,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 421,
+          "p90": 424,
+          "max": 424
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 211,
+          "p90": 214,
+          "max": 214
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4761,
+        "hostDown": 6184,
+        "controllerUp": 5519,
+        "controllerDown": 4981
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 21516
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 47,
+          "p50": 10259,
+          "p90": 19386,
+          "max": 21408
+        },
+        "arriveAtHost": {
+          "count": 47,
+          "p50": 3894,
+          "p90": 13042,
+          "max": 15044
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1085667,
+        "hostDown": 42087,
+        "controllerUp": 39507,
+        "controllerDown": 1087401
+      },
+      "bulkWireRatio": 1.04,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 21395
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 46,
+          "p50": 10649,
+          "p90": 19303,
+          "max": 21294
+        },
+        "arriveAtHost": {
+          "count": 46,
+          "p50": 10439,
+          "p90": 19021,
+          "max": 21036
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 25190,
+        "hostDown": 1080262,
+        "controllerUp": 1078311,
+        "controllerDown": 26374
+      },
+      "bulkWireRatio": 1.03,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 433,
+          "p90": 442,
+          "max": 442
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 214,
+          "p90": 223,
+          "max": 223
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 7814,
+        "hostDown": 14757,
+        "controllerUp": 14986,
+        "controllerDown": 8399
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 18099
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 40,
+          "p50": 9423,
+          "p90": 16498,
+          "max": 18007
+        },
+        "arriveAtHost": {
+          "count": 40,
+          "p50": 3284,
+          "p90": 10650,
+          "max": 11675
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1169078,
+        "hostDown": 106120,
+        "controllerUp": 113670,
+        "controllerDown": 1140040
+      },
+      "bulkWireRatio": 1.11,
+      "bulkUdpShare": 1,
+      "udpDropped": 16,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 19398
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 43,
+          "p50": 9277,
+          "p90": 17334,
+          "max": 19308
+        },
+        "arriveAtHost": {
+          "count": 43,
+          "p50": 9043,
+          "p90": 17047,
+          "max": 19061
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 95938,
+        "hostDown": 1126223,
+        "controllerUp": 1133393,
+        "controllerDown": 88719
+      },
+      "bulkWireRatio": 1.08,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 433,
+          "p90": 442,
+          "max": 442
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 213,
+          "p90": 223,
+          "max": 223
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 7578,
+        "hostDown": 14694,
+        "controllerUp": 14908,
+        "controllerDown": 7403
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 18189
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 41,
+          "p50": 8656,
+          "p90": 16102,
+          "max": 18095
+        },
+        "arriveAtHost": {
+          "count": 41,
+          "p50": 2390,
+          "p90": 9855,
+          "max": 11782
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1173065,
+        "hostDown": 118669,
+        "controllerUp": 126409,
+        "controllerDown": 1143829
+      },
+      "bulkWireRatio": 1.12,
+      "bulkUdpShare": 1,
+      "udpDropped": 16,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 18723
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 42,
+          "p50": 9095,
+          "p90": 16643,
+          "max": 18615
+        },
+        "arriveAtHost": {
+          "count": 42,
+          "p50": 8857,
+          "p90": 16382,
+          "max": 18372
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 94239,
+        "hostDown": 1125575,
+        "controllerUp": 1132754,
+        "controllerDown": 87060
+      },
+      "bulkWireRatio": 1.08,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 417,
+          "p90": 418,
+          "max": 418
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 208,
+          "p90": 209,
+          "max": 209
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 5042,
+        "hostDown": 4755,
+        "controllerUp": 4996,
+        "controllerDown": 4750
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 19195
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 42,
+          "p50": 455,
+          "p90": 511,
+          "max": 1342
+        },
+        "arriveAtHost": {
+          "count": 42,
+          "p50": 208,
+          "p90": 208,
+          "max": 209
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1146806,
+        "hostDown": 70683,
+        "controllerUp": 78244,
+        "controllerDown": 1117420
+      },
+      "bulkWireRatio": 1.09,
+      "bulkUdpShare": 1,
+      "udpDropped": 16,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 19096
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 42,
+          "p50": 452,
+          "p90": 509,
+          "max": 1341
+        },
+        "arriveAtHost": {
+          "count": 42,
+          "p50": 244,
+          "p90": 301,
+          "max": 1133
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 77586,
+        "hostDown": 1116466,
+        "controllerUp": 1145889,
+        "controllerDown": 69914
+      },
+      "bulkWireRatio": 1.09,
+      "bulkUdpShare": 1,
+      "udpDropped": 16,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 417,
+          "p90": 418,
+          "max": 418
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 208,
+          "p90": 209,
+          "max": 209
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 5122,
+        "hostDown": 4707,
+        "controllerUp": 4948,
+        "controllerDown": 4830
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 18847
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 42,
+          "p50": 455,
+          "p90": 512,
+          "max": 1341
+        },
+        "arriveAtHost": {
+          "count": 42,
+          "p50": 208,
+          "p90": 208,
+          "max": 208
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1146958,
+        "hostDown": 70945,
+        "controllerUp": 78596,
+        "controllerDown": 1117573
+      },
+      "bulkWireRatio": 1.09,
+      "bulkUdpShare": 1,
+      "udpDropped": 16,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "very-slow",
+        "rateBytesPerSec": 64000,
+        "oneWayDelayMs": 100,
+        "queueLimitBytes": 65536
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 18839
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 42,
+          "p50": 454,
+          "p90": 528,
+          "max": 1339
+        },
+        "arriveAtHost": {
+          "count": 42,
+          "p50": 246,
+          "p90": 320,
+          "max": 1131
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 77684,
+        "hostDown": 1116170,
+        "controllerUp": 1145553,
+        "controllerDown": 70021
+      },
+      "bulkWireRatio": 1.09,
+      "bulkUdpShare": 1,
+      "udpDropped": 16,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 34,
+          "p90": 35,
+          "max": 35
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 17,
+          "p90": 18,
+          "max": 18
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4711,
+        "hostDown": 6134,
+        "controllerUp": 5469,
+        "controllerDown": 4931
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 165
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 34,
+          "p90": 65,
+          "max": 65
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 17,
+          "p90": 17,
+          "max": 17
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1053855,
+        "hostDown": 5030,
+        "controllerUp": 4690,
+        "controllerDown": 1054075
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 167
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 34,
+          "p90": 68,
+          "max": 68
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 17,
+          "p90": 51,
+          "max": 51
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4160,
+        "hostDown": 1054239,
+        "controllerUp": 1053899,
+        "controllerDown": 4369
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 34,
+          "p90": 35,
+          "max": 35
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 17,
+          "p90": 17,
+          "max": 17
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4711,
+        "hostDown": 6134,
+        "controllerUp": 5469,
+        "controllerDown": 4931
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 164
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 34,
+          "p90": 63,
+          "max": 63
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 17,
+          "p90": 17,
+          "max": 17
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1053855,
+        "hostDown": 5030,
+        "controllerUp": 4690,
+        "controllerDown": 1054075
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 160
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 34,
+          "p90": 61,
+          "max": 61
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 17,
+          "p90": 44,
+          "max": 44
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4160,
+        "hostDown": 1054239,
+        "controllerUp": 1053899,
+        "controllerDown": 4369
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 36,
+          "p90": 37,
+          "max": 37
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 18,
+          "p90": 19,
+          "max": 19
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 6803,
+        "hostDown": 12128,
+        "controllerUp": 12253,
+        "controllerDown": 6561
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 191
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 35,
+          "p90": 90,
+          "max": 90
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 18,
+          "p90": 18,
+          "max": 18
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1107128,
+        "hostDown": 30921,
+        "controllerUp": 33779,
+        "controllerDown": 1100366
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 196
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 35,
+          "p90": 94,
+          "max": 94
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 18,
+          "p90": 77,
+          "max": 77
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 30441,
+        "hostDown": 1102813,
+        "controllerUp": 1109591,
+        "controllerDown": 27439
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 36,
+          "p90": 36,
+          "max": 36
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 18,
+          "p90": 19,
+          "max": 19
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 6715,
+        "hostDown": 12005,
+        "controllerUp": 12311,
+        "controllerDown": 6473
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 191
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 35,
+          "p90": 83,
+          "max": 83
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 18,
+          "p90": 18,
+          "max": 18
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1108506,
+        "hostDown": 33206,
+        "controllerUp": 36264,
+        "controllerDown": 1101728
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 196
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 35,
+          "p90": 95,
+          "max": 95
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 18,
+          "p90": 78,
+          "max": 78
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 34378,
+        "hostDown": 1102334,
+        "controllerUp": 1109112,
+        "controllerDown": 31168
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 36,
+          "p90": 36,
+          "max": 36
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 18,
+          "p90": 18,
+          "max": 18
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 2744,
+        "hostDown": 2616,
+        "controllerUp": 2802,
+        "controllerDown": 2622
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 159
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 35,
+          "p90": 50,
+          "max": 50
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 18,
+          "p90": 18,
+          "max": 18
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1103842,
+        "hostDown": 23778,
+        "controllerUp": 26701,
+        "controllerDown": 1097202
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 163
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 35,
+          "p90": 39,
+          "max": 39
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 18,
+          "p90": 21,
+          "max": 21
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 26083,
+        "hostDown": 1095493,
+        "controllerUp": 1102143,
+        "controllerDown": 23241
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 36,
+          "p90": 36,
+          "max": 36
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 18,
+          "p90": 18,
+          "max": 18
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 2896,
+        "hostDown": 2664,
+        "controllerUp": 2850,
+        "controllerDown": 2766
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 156
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 35,
+          "p90": 47,
+          "max": 47
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 18,
+          "p90": 18,
+          "max": 18
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1102306,
+        "hostDown": 24553,
+        "controllerUp": 27539,
+        "controllerDown": 1095648
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 157
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 35,
+          "p90": 52,
+          "max": 52
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 18,
+          "p90": 34,
+          "max": 34
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 26741,
+        "hostDown": 1095377,
+        "controllerUp": 1102019,
+        "controllerDown": 23763
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 203,
+          "p90": 204,
+          "max": 204
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 101,
+          "p90": 102,
+          "max": 102
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4701,
+        "hostDown": 6124,
+        "controllerUp": 5459,
+        "controllerDown": 4921
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 453
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 203,
+          "p90": 308,
+          "max": 308
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 102,
+          "p90": 102,
+          "max": 102
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1053850,
+        "hostDown": 5025,
+        "controllerUp": 4685,
+        "controllerDown": 1054070
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "v1",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 455
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 204,
+          "p90": 346,
+          "max": 346
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 102,
+          "p90": 245,
+          "max": 245
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4155,
+        "hostDown": 1054234,
+        "controllerUp": 1053894,
+        "controllerDown": 4364
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 203,
+          "p90": 204,
+          "max": 204
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 102,
+          "p90": 102,
+          "max": 102
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4701,
+        "hostDown": 6124,
+        "controllerUp": 5459,
+        "controllerDown": 4921
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 449
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 204,
+          "p90": 306,
+          "max": 306
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 102,
+          "p90": 102,
+          "max": 102
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1053850,
+        "hostDown": 5025,
+        "controllerUp": 4685,
+        "controllerDown": 1054070
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "v1",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 456
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 204,
+          "p90": 350,
+          "max": 350
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 102,
+          "p90": 248,
+          "max": 248
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4155,
+        "hostDown": 1054234,
+        "controllerUp": 1053894,
+        "controllerDown": 4364
+      },
+      "bulkWireRatio": 1.01,
+      "bulkUdpShare": 0,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 206,
+          "p90": 207,
+          "max": 207
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 103,
+          "p90": 104,
+          "max": 104
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 7492,
+        "hostDown": 9132,
+        "controllerUp": 9255,
+        "controllerDown": 7258
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 617
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 205,
+          "p90": 473,
+          "max": 473
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 103,
+          "p90": 103,
+          "max": 103
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1107141,
+        "hostDown": 35528,
+        "controllerUp": 38890,
+        "controllerDown": 1100379
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 832
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 6,
+          "p50": 204,
+          "p90": 723,
+          "max": 723
+        },
+        "arriveAtHost": {
+          "count": 6,
+          "p50": 103,
+          "p90": 621,
+          "max": 621
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 36707,
+        "hostDown": 1105155,
+        "controllerUp": 1125496,
+        "controllerDown": 33346
+      },
+      "bulkWireRatio": 1.07,
+      "bulkUdpShare": 1,
+      "udpDropped": 10,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 205,
+          "p90": 206,
+          "max": 206
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 103,
+          "p90": 104,
+          "max": 104
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 8040,
+        "hostDown": 15286,
+        "controllerUp": 14777,
+        "controllerDown": 7742
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 616
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 205,
+          "p90": 474,
+          "max": 474
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 103,
+          "p90": 103,
+          "max": 103
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1108457,
+        "hostDown": 35180,
+        "controllerUp": 38494,
+        "controllerDown": 1101695
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 621
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 205,
+          "p90": 512,
+          "max": 512
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 103,
+          "p90": 410,
+          "max": 410
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 34817,
+        "hostDown": 1104183,
+        "controllerUp": 1110968,
+        "controllerDown": 31616
+      },
+      "bulkWireRatio": 1.06,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 205,
+          "p90": 206,
+          "max": 206
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 103,
+          "p90": 103,
+          "max": 103
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 4628,
+        "hostDown": 4580,
+        "controllerUp": 4768,
+        "controllerDown": 4493
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 789
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 6,
+          "p50": 204,
+          "p90": 205,
+          "max": 205
+        },
+        "arriveAtHost": {
+          "count": 6,
+          "p50": 102,
+          "p90": 102,
+          "max": 102
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1177599,
+        "hostDown": 29973,
+        "controllerUp": 33293,
+        "controllerDown": 1098114
+      },
+      "bulkWireRatio": 1.12,
+      "bulkUdpShare": 1,
+      "udpDropped": 54,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "worker-session",
+      "run": 1,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 781
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 6,
+          "p50": 204,
+          "p90": 204,
+          "max": 204
+        },
+        "arriveAtHost": {
+          "count": 6,
+          "p50": 102,
+          "p90": 102,
+          "max": 102
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 37101,
+        "hostDown": 1099345,
+        "controllerUp": 1177685,
+        "controllerDown": 33511
+      },
+      "bulkWireRatio": 1.12,
+      "bulkUdpShare": 1,
+      "udpDropped": 53,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "idle",
+      "bulk": null,
+      "taps": {
+        "roundTrip": {
+          "count": 10,
+          "p50": 205,
+          "p90": 206,
+          "max": 206
+        },
+        "arriveAtHost": {
+          "count": 10,
+          "p50": 103,
+          "p90": 104,
+          "max": 104
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 2118,
+        "hostDown": 2588,
+        "controllerUp": 2766,
+        "controllerDown": 2020
+      },
+      "bulkWireRatio": null,
+      "bulkUdpShare": null,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "down",
+      "bulk": {
+        "ok": true,
+        "ms": 578
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 5,
+          "p50": 203,
+          "p90": 204,
+          "max": 204
+        },
+        "arriveAtHost": {
+          "count": 5,
+          "p50": 102,
+          "p90": 102,
+          "max": 102
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 1103127,
+        "hostDown": 26260,
+        "controllerUp": 29533,
+        "controllerDown": 1096510
+      },
+      "bulkWireRatio": 1.05,
+      "bulkUdpShare": 1,
+      "udpDropped": 0,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "worker-session",
+      "run": 2,
+      "kind": "up",
+      "bulk": {
+        "ok": true,
+        "ms": 759
+      },
+      "taps": {
+        "roundTrip": {
+          "count": 6,
+          "p50": 203,
+          "p90": 204,
+          "max": 204
+        },
+        "arriveAtHost": {
+          "count": 6,
+          "p50": 102,
+          "p90": 103,
+          "max": 103
+        },
+        "failed": []
+      },
+      "wire": {
+        "hostUp": 36799,
+        "hostDown": 1098143,
+        "controllerUp": 1253181,
+        "controllerDown": 33072
+      },
+      "bulkWireRatio": 1.2,
+      "bulkUdpShare": 1,
+      "udpDropped": 110,
+      "deviceLinkHeadRetries": 0,
+      "deviceLinkWarnings": 0
+    }
+  ]
+}

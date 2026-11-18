@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Save",
     "promptUnsupported": "This Pi execution location does not support system prompt fragments.",
+    "nativeHooksUnsupported": "Tool hooks support local Claude Code and Pi only.",
     "title": "Task plugins",
     "description": "Select plugins for this task. Changes apply from your next message.",
     "unsupported": "Per-request processing is supported only for local Pi. This task’s engine does not support it.",
@@ -1378,7 +1379,7 @@
     "REMOTE_PROVIDER_UPDATING": "Provider credentials are being updated — retry in a moment",
     "REMOTE_PROVIDER_UNSUPPORTED": "This provider is not supported in SSH remote sessions — pick another source",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Remote tasks can't use a Claude subscription — pick a gateway or API key model",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "The target device is not responding. Check the remote device and try again.",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "The target device isn't responding right now. The network may be slow or the device busy. Cindy keeps checking automatically; try again once the connection recovers.",
     "INTERNAL": "The action couldn’t be completed.",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "The SSH configuration changed on disk. Reload it and try again.",
     "SSH_CONFIG_RELOAD_REQUIRED": "The SSH config was saved, but Cindy could not refresh it. Reload the SSH configuration.",
@@ -4345,7 +4346,6 @@
           "label": "Run on",
           "optionLocal": "This computer",
           "notSignedIn": "Not signed in",
-          "autoBorrowing": "This computer isn't signed in, so new tasks run on {{device}}. No sign-in needed.",
           "local": "New tasks run on this computer. You can pick another of your signed-in computers instead.",
           "pinned": "New tasks run on {{device}} with its sign-in. Running tasks stay where they are.",
           "inline": "Runs on",
@@ -6966,7 +6966,8 @@
         "replaced": "Connection replaced by another instance of this device",
         "too-many-connections": "Connection limit reached for this account",
         "version-mismatch": "Protocol version mismatch — update the app",
-        "unstable": "Connection keeps dropping and reconnecting — check the network, or restart Cindy if it persists"
+        "unstable": "Connection keeps dropping and reconnecting — check the network, or restart Cindy if it persists",
+        "agent-net-relay-down": "Can't reach the Agent-Net relay, reconnecting. Computers connected directly still work; other devices can't connect for now"
       },
       "refresh": "Refresh",
       "empty": "No other devices yet. Sign in to {{appName}} with the same account on another computer and it will show up here.",
@@ -8286,6 +8287,8 @@
         "subscribeTopics": "Observes your session activity (turn and session events, no message content)",
         "subscribeMessage": "Message content events",
         "subscribeMessageDetail": "Receives saved user messages and AI replies. Attachments use separate reading and handoff.",
+        "subscribeToolExecution": "Tool execution events",
+        "subscribeToolExecutionDetail": "Receives tool names, inputs, results and errors. Observes without changing execution.",
         "subscribeTaskState": "Task state events",
         "subscribeTaskStateDetail": "Receives changes to running, waiting, completion, archive and hidden task states.",
         "subscribeActivity": "Observes when the AI is thinking and when it is waiting on you",
@@ -8308,6 +8311,10 @@
         "subscribeStartTurnDetail": "Only tasks where you select this plugin share the current message with it. It can choose a connected model, effort and Fast. Errors follow that task’s setting; it cannot approve actions for you.",
         "subscribeModelRequest": "Can process each model request in selected tasks",
         "subscribeModelRequestDetail": "Only tasks where you select this plugin share their model requests with it. It can adjust models, parameters and request content. Currently supported only for local Pi; errors follow the task’s setting. Connection credentials are excluded.",
+        "subscribeToolCall": "Can process tool calls in selected tasks",
+        "subscribeToolCallDetail": "Can read, change or reject tool parameters as supported by the engine. Cannot approve operations for you.",
+        "subscribeToolResult": "Can process tool results in selected tasks",
+        "subscribeToolResultDetail": "Can read results and add context or replace results where the engine supports it. Cannot undo completed operations.",
         "subscribeStartTask": "Can choose the model for new tasks",
         "subscribeStartTaskDetail": "When a new task uses a model it provides, it reads the first message and picks one of your connected models. This entry point runs only before the first message.",
         "card": "Renders message cards",
@@ -12588,6 +12595,7 @@
       "createOwnApp": "Create my App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Attachment delivery incomplete: {{count}} not sent ({{names}}).",
+    "outboundAttachmentOverLimit": "{{name}} (over the {{limit}} MB limit)",
     "unnamedAttachment": "Untitled attachment",
     "text": {
       "discord": {
@@ -13534,9 +13542,17 @@
         "submitLabel": "Submit answers",
         "multiSelectHint": " (select all that apply)",
         "resolved": "✅ Selected: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "This card has expired",
         "textHint": "Only the original requester can answer. Reply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all.",
-        "replyHint": "Only the requester can answer. Tap an option; submit after choosing for multiple questions or multiple selections.\nReply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all."
+        "replyHint": "Only the requester can answer. Tap an option; submit after choosing for multiple questions or multiple selections.\nReply with {{code}} followed by your answer. For multiple questions use {{code}} 2: answer, then {{code}} OK to submit all.",
+        "nextLabel": "Next question",
+        "stepHint": "Only the requester can answer. Tap an option to answer, or reply with {{code}} followed by your answer.",
+        "stepSubmitHint": "Only the requester can answer. Choose, then tap “{{action}}”; or reply with {{code}} followed by your answer, then {{code}} OK.",
+        "stepTextHint": "Only the requester can answer. Reply with {{code}} followed by your answer.",
+        "unanswered": "⚠️ Not answered yet: question {{numbers}}. Answer every question, then submit.",
+        "unansweredSingle": "⚠️ No answer yet. Choose an option or type an answer first.",
+        "numberSeparator": ", "
       }
     }
   },
@@ -14028,6 +14044,14 @@
         "standard": "Standard",
         "fast": "Fast",
         "ultrafast": "Ultrafast"
+      },
+      "discoveredCopy": {
+        "title": "Use {{provider}} on “{{device}}”?",
+        "description": "{{unavailable}} If you continue, it runs on “{{device}}”. You can switch back here anytime.",
+        "unavailableHere": "{{provider}} on this computer isn’t available right now.",
+        "unavailableOn": "{{provider}} on “{{device}}” isn’t available right now.",
+        "confirm": "Use it",
+        "cancel": "Keep as is"
       }
     },
     "permissionSelector": {
@@ -14318,7 +14342,8 @@
         "description": "The conversation record on the other computer can’t be moved over, so it continues from a handoff summary. Thinking and similar details may not carry over completely. Takes effect when you send the next message.",
         "descriptionNativeHistory": "The full conversation record is copied over and continues from where it left off. If it can’t be restored, it continues from a handoff summary instead, and thinking and similar details may not carry over completely. Takes effect when you send the next message.",
         "confirm": "Switch computer",
-        "cancel": "Keep as is"
+        "cancel": "Keep as is",
+        "discoveredDescription": "{{reason}} {{description}}"
       }
     },
     "agentSelect": {
@@ -14915,6 +14940,8 @@
       "failed": "Couldn't generate the image — try again"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.",
+      "codexHelperUnverified": "Could not verify cindy_helper for this task. Task result reporting may be unavailable.",
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
       "replyFailed": "Could not complete the reply",
       "retryTitle": "Resend the last message",
@@ -15999,6 +16026,7 @@
       "saveFailed": "Failed to save the context window tier"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "Waiting for the remote response…",
       "readingMemory": "Reading memory…",
       "savingMemory": "Saving memory…",
       "deletingMemory": "Deleting memory…",
@@ -16048,7 +16076,8 @@
         "replaced": "This connection was replaced by another instance of the same device — reconnecting…",
         "too-many-connections": "Too many devices online for this account — the server refused the connection",
         "version-mismatch": "Protocol version doesn't match the server — update the app and retry",
-        "unstable": "This computer keeps losing and re-establishing its connection, so remote actions may keep timing out — check the network, or restart Cindy and retry"
+        "unstable": "This computer keeps losing and re-establishing its connection, so remote actions may keep timing out — check the network, or restart Cindy and retry",
+        "agent-net-relay-down": "This computer can't reach the Agent-Net relay and is reconnecting. Remote actions fail unless the other computer is connected directly"
       }
     },
     "common": {
@@ -16269,7 +16298,8 @@
         "project": "Project",
         "flat": "Flat list",
         "device": "Device",
-        "dialogue": "Chat"
+        "dialogue": "Chat",
+        "automation": "Automation"
       },
       "filterGroupByDeviceManualTip": "Group by device is unavailable while sorting manually",
       "deviceGroup": {
@@ -16617,6 +16647,7 @@
       "groupSummary": {
         "project": "Project",
         "dialogue": "Chat",
+        "automation": "Automation",
         "device": "Device"
       },
       "taskStatusHeading": "Session status",
@@ -17313,7 +17344,9 @@
           "jira_read": "Read Jira",
           "jira_comment": "Comment on Jira",
           "sessions_dispatch": "Dispatch sessions",
-          "feishu_read": "Read Feishu messages"
+          "feishu_read": "Read Feishu messages",
+          "settings_read": "Read share members",
+          "usage_read": "Read usage and provider group status"
         },
         "project": "Project directory",
         "capabilitiesLabel": "Allowed capabilities",
@@ -17325,7 +17358,9 @@
           "jira_read": "Read Jira issues (get by key / JQL search)",
           "jira_comment": "Add comments to Jira issues",
           "sessions_dispatch": "Create or wake {{appName}} sessions and deliver messages",
-          "feishu_read": "List recently-active chats; fetch recent messages from a chat (group or DM)"
+          "feishu_read": "List recently-active chats; fetch recent messages from a chat (group or DM)",
+          "settings_read": "Read your share members and allowed models on this computer or other authorized computers on the same account; no changes",
+          "usage_read": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, provider group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings."
         },
         "capabilityWarn": {
           "ghostMissing": "Requires the “{{name}}” plugin, which is not installed — this capability will fail at run time",

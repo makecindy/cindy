@@ -27,9 +27,11 @@ const COPY = {
 
 function Harness({
   hasSwitchIntent = false,
+  alwaysAsk,
   onBrowse,
 }: {
   hasSwitchIntent?: boolean;
+  alwaysAsk?: boolean;
   onBrowse: () => void;
 }) {
   const { confirm } = useConfirmDialog();
@@ -39,6 +41,7 @@ function Harness({
       onClick={() => {
         void confirmAgentSwitchRisk({
           hasSwitchIntent,
+          ...(alwaysAsk ? { alwaysAsk } : {}),
           confirm,
           copy: COPY,
         }).then((proceed) => {
@@ -110,6 +113,21 @@ describe('Agent switch confirmation', () => {
     });
     await waitFor(() => expect(onBrowse).toHaveBeenCalledTimes(2));
     expect(screen.queryByText(COPY.title)).toBeNull();
+  });
+
+  // Another computer's copy listed because the task computer's own one is unusable: the user chose
+  // to be asked every time (2026-11-18). Minimal failing input: skip override stored + alwaysAsk.
+  it('always asks before using a copy listed because the own one is unusable, even after "don’t remind me"', async () => {
+    localStorage.setItem(STORAGE_KEY, '1');
+    const onBrowse = vi.fn();
+    renderHarness({ hasSwitchIntent: true, alwaysAsk: true, onBrowse });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browse Target Agent' }));
+    await screen.findByText(COPY.title);
+    expect(screen.queryByRole('checkbox', { name: COPY.dontShowAgainLabel })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: COPY.cancelText }));
+    await waitFor(() => expect(screen.queryByText(COPY.title)).toBeNull());
+    expect(onBrowse).not.toHaveBeenCalled();
   });
 });
 

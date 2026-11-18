@@ -797,6 +797,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             ...(request.note ? { note: request.note } : {}),
             ...(ready.requester ? { requester: ready.requester } : {}),
             target: request.target,
+            ...(request.fields ? { fields: request.fields } : {}),
             ...(request.completeWhen ? { completeWhen: request.completeWhen } : {}),
             ...(request.timeoutMinutes ? { timeoutMinutes: request.timeoutMinutes } : {}),
           });
@@ -1612,6 +1613,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       endTeam: wrap((s, params) => s.endTeam(params)),
       archiveWorker: wrap((s, params) => s.archiveWorker(params)),
       updateWorker: wrap((s, params) => s.updateWorker(params)),
+      setWorkerRuntime: wrap((s, params) => s.setWorkerRuntime(params)),
       listAvailableModels: wrap((s, params) => s.listAvailableModels(params)),
       getWorkspaceInfo: wrap((s, params) => s.getWorkspaceInfo(params)),
       getWorkerStatus: wrap((s, params) => s.getWorkerStatus(params)),

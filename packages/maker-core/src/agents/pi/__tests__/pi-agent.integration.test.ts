@@ -445,6 +445,52 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     };
   }
 
+  // Tool lifecycle contract, integration: injected input must execute through
+  // native permissions, then the supported result replacement reaches the model.
+  // Existing model-request tests cannot prove either native tool hook is wired.
+  // Minimal failure: read the original path instead of the transformed path.
+  it.each(['transform', 'deny', 'post-deny', 'prototype-input'] as const)('native plugin tool hooks: %s', { timeout: 20_000 }, async mode => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-tool-lifecycle-'));
+    const fixture = path.join(workingDir, 'actual.txt');
+    writeFileSync(fixture, 'native-tool-result');
+    const credential = path.join(workingDir, '.ssh', 'id_rsa');
+    if (mode === 'prototype-input') {
+      mkdirSync(path.dirname(credential));
+      writeFileSync(credential, 'FAKE_CREDENTIAL_CONTENT_FOR_HOOK_TEST');
+    }
+    const before = seenRequests.length;
+    const calls: Array<{ phase: string; input: unknown; result?: unknown }> = [];
+    const deps = buildDeps();
+    deps.toolLifecycleControl = { enabled: () => true, run: async (_sessionId, event) => {
+      calls.push(event);
+      if (mode === 'prototype-input') return event.phase === 'call'
+        ? { input: JSON.parse('{"__proto__":' + JSON.stringify({ path: credential }) + '}') } : {};
+      return event.phase === 'call' ? mode === 'deny' ? { decision: 'deny', reason: 'plugin-tool-denied' } : { input: { path: fixture } }
+        : mode === 'post-deny' ? { decision: 'deny', reason: 'plugin-stopped-continuation' }
+          : { result: { content: [{ type: 'text', text: 'plugin-tool-result' }] } };
+    } };
+    try {
+      scriptedResponses.push(anthropicToolUseBody('read', { path: path.join(workingDir, 'missing.txt') }), anthropicStreamBody('done'));
+      await runPermissionTurn({ sessionId: 'native-tool-hooks', workingDir,
+        permissionMode: mode === 'prototype-input' ? 'ask' : 'bypassPermissions', resolverBehavior: 'deny', deps });
+      const last = seenRequests.slice(before).at(-1)?.body ?? '';
+      expect(calls[0]).toMatchObject({ phase: 'call', input: { path: path.join(workingDir, 'missing.txt') } });
+      if (mode === 'prototype-input') {
+        expect(JSON.stringify(calls)).not.toContain('FAKE_CREDENTIAL_CONTENT_FOR_HOOK_TEST');
+        expect(last).not.toContain('FAKE_CREDENTIAL_CONTENT_FOR_HOOK_TEST');
+      } else if (mode === 'transform') {
+        expect(calls[1]).toMatchObject({ phase: 'result', input: { path: fixture } });
+        expect(JSON.stringify(calls[1].result)).toContain('native-tool-result');
+        expect(last).toContain('plugin-tool-result');
+      } else if (mode === 'post-deny') {
+        expect(calls).toHaveLength(2);
+        expect(seenRequests.slice(before)).toHaveLength(1);
+      } else {
+        expect(calls).toHaveLength(1);
+        expect(last).toContain('plugin-tool-denied');
+      }
+    } finally { rmSync(workingDir, { recursive: true, force: true }); scriptedResponses.length = 0; }
+  });
   // Runtime control contract, integration: tool continuations must route again;
   // payload changes reach HTTP, and a later unselected send preserves the baseline.
   it('routes and transforms each selected model request across a real tool continuation', { timeout: 30_000 }, async () => {

@@ -235,7 +235,10 @@ export function createMacHandoffDriver(): HandoffDriver {
       return result;
     },
     async act(request) {
-      return (await runHelper({ op: 'act', ...request }, 15_000)) as NativeActResult;
+      // Native Unicode key pairs are paced. Keep the full allowed field length
+      // usable instead of killing a long password partway through typing.
+      const typingMs = request.kind === 'text' ? Math.min(request.value?.length ?? 0, 4096) * 25 : 0;
+      return (await runHelper({ op: 'act', ...request }, 15_000 + typingMs)) as NativeActResult;
     },
     async exposePage(pid, on) {
       const result = (await runHelper({ op: 'exposePage', pid, on }, 3000)) as { changed?: unknown };
@@ -268,7 +271,8 @@ export function createMacHandoffDriver(): HandoffDriver {
       return { editable: result.editable === true, secure: result.secure === true };
     },
     async pointer(request) {
-      return (await runHelper({ op: 'pointer', ...request }, 10_000)) as NativeActResult;
+      const typingMs = request.kind === 'type' ? Math.min(request.value.length, 4096) * 25 : 0;
+      return (await runHelper({ op: 'pointer', ...request }, 10_000 + typingMs)) as NativeActResult;
     },
     async commandLine(pid) {
       try {
