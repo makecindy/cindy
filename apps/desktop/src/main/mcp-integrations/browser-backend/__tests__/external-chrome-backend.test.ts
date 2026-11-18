@@ -1498,6 +1498,46 @@ describe('ExternalChromeBackend proxy lifecycle', () => {
     });
   });
 
+  // #10962: a launch failure must stay operation-local and leave start usable.
+  // The cleanup-failure cases below did not cover a missing executable with no
+  // surviving process. Minimal input: start rejects/returns ENOENT, stop proves
+  // absence, then another start succeeds. Unit tier; no Chrome or sockets.
+  it.each(['throw', 'result'] as const)('allows retry after an ENOENT startup %s', async (failureMode) => {
+    const spawnError = Object.assign(new Error('spawn chrome.exe ENOENT'), { code: 'ENOENT' });
+    let firstRuntime = true;
+    const backend = new ExternalChromeBackend(fakeRuntime(), fakeLogger(), {
+      createRuntime: () => {
+        if (!firstRuntime) return fakeRuntime();
+        firstRuntime = false;
+        return {
+          call: async (request: BrowserControlRequest): Promise<BrowserControlResult> => {
+            if (request.action === 'start') {
+              if (failureMode === 'throw') throw spawnError;
+              return {
+                ok: false,
+                action: 'start',
+                errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+                message: spawnError.message,
+              };
+            }
+            return { ok: true, action: request.action, data: { stopped: true, running: false } };
+          },
+        };
+      },
+      isBrowserGone: async () => true,
+    });
+
+    await expect(backend.call({ action: 'start' })).resolves.toMatchObject({
+      ok: false,
+      action: 'start',
+      errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+      message: expect.stringContaining('ENOENT'),
+    });
+    await expect(backend.call({ action: 'start' })).resolves.toMatchObject({ ok: true });
+    await expect(backend.call({ action: 'tabs' })).resolves.toMatchObject({ ok: true });
+    await backend.dispose();
+  });
+
   it('replaces the proxied runtime with direct config after a failed start whose cleanup stop was unverified', async () => {
     let stopVerifiable = false;
     const proxiedRuntime = {

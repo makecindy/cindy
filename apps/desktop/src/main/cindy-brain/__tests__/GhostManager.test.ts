@@ -35,7 +35,7 @@ import { installedGhostPhysicalRelId, installedGhostStoragePart, pluginInstallSt
 import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess';
 import { writeTestCindyPackage } from './cindyPackageFixture';
 import { PluginMarketLedger } from '../../plugin-market/ledger';
-import { projectPluginPublishingSource } from '../pluginPublishingSource';
+import { projectPluginPublishingSource, projectPluginInstallationSource } from '../pluginPublishingSource';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture';
 import { hasPluginHostToolGroupApproval } from '../taskCapability';
 
@@ -1002,7 +1002,7 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     expect(fs.existsSync(path.join(workDir, 'ghosts-install-state', 'broken.json'))).toBe(false);
   });
 
-  it('随包种子 id 跳过迁移(交给 provisioning 的逐字节对账补批准)', async () => {
+  it('同名种子不阻止旧批准迁移，也不把旧目录摘要当作种子来源', async () => {
     const seededManager = new GhostManager({
       getRootDir: () => rootDir,
       getLocale: () => hostLocale,
@@ -1011,9 +1011,10 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     });
     await writeLegacyInstall('hello', goodManifest());
     const outcome = await seededManager.migrateLegacyApprovalsOnce();
-    expect(outcome).toEqual({ migrated: [], skipped: ['hello'], failed: [], retryPending: [] });
-    // 没有替它写 receipt:provisioning 才是随包插件的批准入口。
-    expect(fs.existsSync(path.join(workDir, 'ghosts-install-state', 'hello.json'))).toBe(false);
+    expect(outcome).toEqual({ migrated: ['hello'], skipped: [], failed: [], retryPending: [] });
+    expect(seededManager.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+    expect(seededManager.readApprovedInstallReceipt('hello')).not.toHaveProperty('namespace');
+    expect(seededManager.approvedInstallEvidence('hello')?.packageSha256).toBeNull();
   });
 
   it('瞬时状态根 IO 不封门:台账停在 in-progress,下次启动自动续跑治愈', async () => {
@@ -1717,7 +1718,9 @@ describe('GhostManager · review 第 6 轮回归(P0/P1 修复钉住)', () => {
     expect(outcome.migrated).toEqual(['hello']);
   });
 
-  it('P0-2:恢复旁路只补给定 id,台账门对其余目录照常生效', async () => {
+  it.each([false, true])('P0-2:恢复旁路只补给定 id（同名种子=%s）,台账门对其余目录照常生效', async bundled => {
+    if (bundled) manager = new GhostManager({ getRootDir: () => rootDir,
+      isTrustedBundledId: id => id === 'recovered' });
     // 台账已落(首轮迁移空跑一个插件)。
     await writeLegacyInstall('first', goodManifest('first'));
     await manager.migrateLegacyApprovalsOnce();
@@ -4532,6 +4535,7 @@ describe('GhostManager · list', () => {
       getGhostSetupManifestTracker: () => ({ seed: vi.fn() }),
       getPluginMarketLedger: () => ledger,
       projectPluginPublishingSource,
+      projectPluginInstallationSource,
     }).getGhostManager();
     const unavailable = () => { throw Object.assign(new Error('ledger locked'), { code: 'EBUSY' }); };
     const snapshot = vi.spyOn(ledger, 'createListingLookup');

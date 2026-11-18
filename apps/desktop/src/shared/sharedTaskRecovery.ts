@@ -19,7 +19,15 @@ export function sharedTaskRecoveryFor(message: string, agentDeviceId?: string | 
   const detailed = sharedTaskRecoveryReason(message);
   if (detailed) return detailed;
   if (!agentDeviceId?.startsWith('share:')) return undefined;
-  if (parseAgentErrorCode(message)?.code === 'REMOTE_AGENT_RESUME_UNAVAILABLE') return 'history';
+  // Presentation aliases only. Keep the probe/replay policy below based on the
+  // original transport code; these aliases must not authorize another call.
+  switch (parseAgentErrorCode(message)?.code) {
+    case 'REMOTE_AGENT_RESUME_UNAVAILABLE': return 'history';
+    case 'REMOTE_AGENT_TIMEOUT': case 'REMOTE_AGENT_UNRESPONSIVE': return 'timeout';
+    case 'REMOTE_AGENT_LINK_BUSY': return 'rate';
+    case 'REMOTE_AGENT_OFFLINE': return 'offline';
+    case 'REMOTE_AGENT_ACCESS_DENIED': return 'denied';
+  }
   // These errors already explain model/member budget actions precisely.
   if (/\[REMOTE_AGENT_(?:GROUP_USAGE_LIMIT|MEMBER_BUDGET_PAUSED)\]/.test(message)) return undefined;
   if (isQuotaExhaustedErrorMessage(message)) return 'budget';
@@ -66,14 +74,21 @@ export function sharedTaskRecoveryError(stage: SharedTaskRecoveryStage, reason: 
     : reason === 'capacity' || reason === 'rate' ? 'REMOTE_AGENT_BUSY'
     : reason === 'unsupported' ? 'REMOTE_AGENT_PEER_TOO_OLD' : 'REMOTE_AGENT_UNAVAILABLE';
   const sourceCode = (source as { code?: unknown } | null)?.code;
-  const diagnostic = typeof sourceCode === 'string' && [
+  const safeSourceCode = typeof sourceCode === 'string' && [
     'TIMEOUT', 'INVOKE_TIMEOUT', 'DEVICE_UNRESPONSIVE', 'DEVICE_OFFLINE',
     'NOT_CONNECTED', 'LINK_NOT_OPEN', 'LINK_CLOSED', 'PEER_RESET',
     'ACCESS_REVOKED', 'PERMISSION_DENIED', 'REMOTE_DISABLED', 'UNAUTHORIZED',
-  ].includes(sourceCode) ? ` [SHARED_TASK_CODE_${sourceCode}]` : '';
-  return Object.assign(new Error(`[${code}] [SHARED_TASK_RECOVERY_${reason}] [SHARED_TASK_STAGE_${stage}]${diagnostic} Shared task recovery failed`), {
-    code,
-  });
+  ].includes(sourceCode) ? sourceCode : undefined;
+  const diagnostic = safeSourceCode ? ` [SHARED_TASK_CODE_${safeSourceCode}]` : '';
+  const error = Object.assign(new Error(`[${code}] [SHARED_TASK_RECOVERY_${reason}] [SHARED_TASK_STAGE_${stage}]${diagnostic} Shared task recovery failed`), { code });
+  if (source !== undefined) {
+    // Retain only bounded local evidence. Keeping the upstream object (even as
+    // Error.cause) would let later logging/serialization expose private details.
+    Object.defineProperty(error, 'cause', { value: Object.freeze({
+      reason: sharedTaskFailureReason(source), ...(safeSourceCode ? { code: safeSourceCode } : {}),
+    }), configurable: true, writable: true });
+  }
+  return error;
 }
 
 /** Only pre-open recovery requests may be retried. Never retry permission, quota, capacity or unknown failures. */

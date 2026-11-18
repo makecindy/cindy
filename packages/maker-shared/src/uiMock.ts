@@ -59,7 +59,7 @@ export type UiMockMessage =
   | { role: 'user'; text: string }
   | { role: 'assistant'; text: string }
   | { role: 'thinking'; text: string }
-  | { role: 'error'; text: string }
+  | { role: 'error'; text: string; reason?: string; silentStopFailureCause?: string }
   | { role: 'tool'; name: string; input: Record<string, unknown>; result: string }
   /** New task "Let a plugin choose": the one-line note under the first message. */
   | { role: 'plugin-route'; note: Record<string, unknown> };
@@ -132,6 +132,55 @@ const RICH_ANSWER = [
 export const UI_MOCK_TASKS: readonly UiMockTask[] = [
   ...UI_MOCK_SHOWCASE_TASKS,
   UI_MOCK_BIDI_TASK,
+  {
+    id: 'ui-mock-silent-stop',
+    title: '空响应续跑暂停',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-6-astra', effort: 'xhigh',
+    status: 'active', source: 'desktop', minutesAgo: 0,
+    messages: [
+      { role: 'user', text: '检查空响应后的暂停提示及诊断详情。' },
+      { role: 'assistant', text: '上一轮已正常完成，以下为不同停止原因的模拟记录。' },
+      ...[
+        ['budget', '本次自动续跑次数已用完。'],
+        ['rate-limit', '距上次自动续跑时间过短，已触发频率保护。'],
+        ['session-breaker', '本任务累计自动续跑次数已达上限。'],
+        ['dispatch-error', '派发自动续跑请求时发生错误。'],
+        ['dispatch-not-accepted', '自动续跑请求未派发。'],
+      ].map(([cause, detail]): UiMockMessage => ({
+        role: 'error', reason: 'silent-stop-exhausted', silentStopFailureCause: cause,
+        text: `检测到空响应，自动续跑已暂停。${detail}\nsilentStopFailureCause=${cause}`,
+      })),
+    ],
+  },
+  {
+    id: 'ui-mock-auto-review-model-unavailable',
+    title: '自动审批模型不可用',
+    project: 'cindy-demo',
+    agentKind: 'pi', model: 'custom-demo', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 0,
+    messages: [
+      { role: 'user', text: '请运行项目构建。' },
+      { role: 'error', text: '[AUTO_REVIEW_NO_AVAILABLE_MODEL] No automatic review model is available.' },
+      { role: 'assistant', text: '审批需要你确认后才能继续。可在设置中连接审批供应商或自定义辅助模型。' },
+      { role: 'error', text: '[AUTO_REVIEW_NO_AVAILABLE_MODEL] No automatic review model is available.' },
+    ],
+  },
+  {
+    id: 'ui-mock-remote-communication',
+    title: '远程通信错误指引',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-6-astra', effort: 'xhigh',
+    status: 'active', source: 'desktop', minutesAgo: 0,
+    messages: [
+      { role: 'user', text: '查看合成的通信错误，检查错误详情与恢复指引。' },
+      { role: 'error', text: '[REMOTE_AGENT_OFFLINE] [DEVICE_OFFLINE] synthetic peer offline' },
+      { role: 'error', text: '[REMOTE_AGENT_ACCESS_DENIED] [ACCESS_REVOKED] synthetic access denied' },
+      { role: 'error', text: '[REMOTE_AGENT_LINK_BUSY] [BACKPRESSURE] synthetic send buffer busy' },
+      { role: 'error', text: '[REMOTE_AGENT_UNRESPONSIVE] [DEVICE_UNRESPONSIVE] synthetic circuit open' },
+      { role: 'error', text: '[REMOTE_AGENT_TIMEOUT] [INVOKE_TIMEOUT] no invoke-result within 30000ms after first socket write\nrequestedTarget=mock-peer; channel=maker:remote-agent' },
+    ],
+  },
   {
     id: 'ui-mock-remote-resume-rejected',
     title: '远程任务无法恢复',
@@ -546,7 +595,11 @@ function taskMessageRows(task: UiMockTask, endsAt: number): UiMockMessageRow[] {
         push('thinking', { kind: 'thinking', text: message.text, durationMs: 1_500, isRedacted: false });
         break;
       case 'error':
-        push('error', { message: message.text });
+        push('error', {
+          message: message.text,
+          ...(message.reason ? { reason: message.reason } : {}),
+          ...(message.silentStopFailureCause ? { silentStopFailureCause: message.silentStopFailureCause } : {}),
+        });
         break;
       case 'tool': {
         const toolUseId = `${UI_MOCK_ID_PREFIX}${task.id}-tool-${index + 1}`;

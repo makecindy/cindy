@@ -82,6 +82,8 @@ import type {
 // 但因为 reasoning text 现在是数组 join 出来的, reasoningTextLen 跟踪 join 后总长。
 
 export interface CodexRuntimeState {
+  /** Live collab identity only; never retain its prompt or agent output bodies. */
+  collabToolItems: Map<string, CollabAgentToolCallItem>;
   /** Text since the last completed tool belongs to the current sampling request. */
   samplingSegments: Map<string, { threadId: string; turnId: string; attempt: number; itemIds: Set<string> }>;
   /** item.id → reasoning 第一次 emit 'start' 的时间 (Date.now ms)。 */
@@ -150,6 +152,7 @@ export interface CodexRuntimeState {
 
 export function newCodexRuntimeState(): CodexRuntimeState {
   return {
+    collabToolItems: new Map(),
     samplingSegments: new Map(),
     reasoningStartedAt: new Map(),
     reasoningTextLen: new Map(),
@@ -429,6 +432,8 @@ interface TranslatorLog {
 export interface CodexTranslateContext {
   rt: CodexRuntimeState;
   log: TranslatorLog;
+  /** Late tool results belong to an ended turn, not the foreground speed clock. */
+  background?: boolean;
   /** Host denial paired by thread, turn and item; never inferred from empty output. */
   approvalDenialReason?: string;
   /** A failed sample cannot remain the adapter's successful final-text fallback. */
@@ -559,12 +564,14 @@ export function translateItemNotification(
     }
     ctx.rt.samplingSegments.delete(key);
   }
-  noteCodexGenerationBoundary(
-    ctx.rt,
-    phase,
-    item as { id?: unknown; type?: unknown },
-    notification as { turnId?: unknown },
-  );
+  if (!ctx.background) {
+    noteCodexGenerationBoundary(
+      ctx.rt,
+      phase,
+      item as { id?: unknown; type?: unknown },
+      notification as { turnId?: unknown },
+    );
+  }
 
   switch (itemType) {
     case 'agentMessage':
@@ -621,6 +628,71 @@ export function translateItemNotification(
   }
 }
 
+const OMITTED_ITEM_RESULT = 'Result omitted: too large to display.';
+
+/**
+ * item/* 通知超过单行上限、正文已被宿主丢弃时的翻译收尾 (见 AppServerHost 的
+ * ITEM_OMITTED_METHOD)。生成计时照常按 started / completed 暂停与恢复。completed 时,
+ * started 已 emit 过 tool_use 的工具要配一个不含正文的 tool_result: 否则 Session 会一直
+ * 把它算作在跑, 优雅停止卡在 waiting-for-safe-point。completion-only 的类型 (fileChange 等)
+ * 从未 emit 过 tool_use, 不凭空补卡。按 item.id 记的翻译状态一并清掉。
+ */
+export function translateOmittedItem(
+  phase: ItemPhase,
+  notification: { threadId: string; turnId: string; item: { id?: string; type?: string; status?: string } },
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): CollabAgentToolCallItem | undefined {
+  const { item } = notification;
+  if (!ctx.background) noteCodexGenerationBoundary(ctx.rt, phase, item, notification);
+  if (phase !== 'completed' || !item.id) return;
+  const id = item.id;
+  // Same acceptance rule as translateItemNotification: a completed tool proves
+  // the earlier sampling output was accepted, even when its body was omitted.
+  let accepted: string[] | undefined;
+  if (item.type && SAMPLING_ACCEPTED_TOOL_TYPES.has(item.type)) {
+    const key = JSON.stringify([notification.threadId, notification.turnId]);
+    const segment = ctx.rt.samplingSegments.get(key);
+    if (segment?.itemIds.size) accepted = [...segment.itemIds];
+    ctx.rt.samplingSegments.delete(key);
+  }
+  for (const byItem of [
+    ctx.rt.itemTextLen,
+    ctx.rt.itemRawText,
+    ctx.rt.itemDeltaText,
+    ctx.rt.itemSnapshotText,
+    ctx.rt.itemMessagePhase,
+    ctx.rt.reasoningStartedAt,
+    ctx.rt.reasoningTextLen,
+    ctx.rt.pendingWebSearchInput,
+    ctx.rt.emittedWebSearchInput,
+  ]) {
+    byItem.delete(id);
+  }
+  const collab = ctx.rt.collabToolItems.get(id);
+  ctx.rt.collabToolItems.delete(id);
+  if (!ctx.rt.emittedToolUse.delete(id)) return;
+  const terminalCollab: CollabAgentToolCallItem | undefined = collab && (item.status === 'completed' || item.status === 'failed')
+    ? { ...collab, status: item.status } : undefined;
+  queue.push({
+    type: 'tool_result_full',
+    data: { toolUseId: id, fullText: OMITTED_ITEM_RESULT, outputOmitted: 'oversized',
+      isError: item.status === 'failed',
+      ...(accepted ? { assistantSamplingAccepted: { agentMessageIds: accepted } } : {}) },
+    source: 'codex',
+  });
+  queue.push({
+    type: 'tool_result',
+    data: { summary: OMITTED_ITEM_RESULT, toolUseIds: [id] },
+    source: 'codex',
+  });
+  if (terminalCollab && isSpawnCollabTool(terminalCollab.tool)) {
+    queue.push({ type: 'agent_task_update', source: 'codex',
+      data: toCodexTaskUpdate(terminalCollab, terminalCollab.status === 'failed' ? 'failed' : 'completed', OMITTED_ITEM_RESULT) });
+  }
+  return terminalCollab;
+}
+
 /**
  * auth 缺失 (401/Unauthorized/Missing bearer) 判定 — daemon 怎么 retry 也不可能
  * 自愈, 必须用户介入。收紧 pattern: 避开非 HTTP-auth 错误误伤 (eg. 工具执行报错
@@ -673,14 +745,21 @@ export const CODEX_MODEL_UNAVAILABLE_REASON = 'model_unavailable';
 export const CODEX_MODEL_UNAVAILABLE_MESSAGE =
   '[MODEL_SELECTION_UNAVAILABLE] The selected model is unavailable for this connection. Choose another available model and retry.';
 
-function hasModelRejection(text: string): boolean {
-  if (/\bThe '[^'\r\n]{1,128}' model is not supported when using Codex with a ChatGPT account\b/i.test(text)) return true;
+function hasModelRejection(text: string, status: number | undefined): boolean {
+  // Native reconnect notifications flatten gateway JSON into this exact phrase.
+  // It is a model denial only with 403, never evidence for a generic auth failure.
+  if (status === 403 && /\buser not allowed to access model\b/i.test(text)) return true;
+  if (status !== 403 && /\bThe '[^'\r\n]{1,128}' model is not supported when using Codex with a ChatGPT account\b/i.test(text)) return true;
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start < 0 || end < start) return false;
   try {
-    const body = JSON.parse(text.slice(start, end + 1)) as { code?: unknown; error?: { code?: unknown } } | null;
-    return body?.error?.code === 'model_not_found' || body?.code === 'model_not_found';
+    const body = JSON.parse(text.slice(start, end + 1)) as {
+      code?: unknown; type?: unknown; error?: { code?: unknown; type?: unknown };
+    } | null;
+    const error = body?.error ?? body;
+    if (error?.code === 'user_model_access_denied' || error?.type === 'user_model_access_denied') return true;
+    return status !== 403 && (body?.error?.code === 'model_not_found' || body?.code === 'model_not_found');
   } catch {
     return false;
   }
@@ -690,7 +769,6 @@ function hasModelRejection(text: string): boolean {
 export function isCodexModelUnavailableError(error: CodexErrorInput | null | undefined): boolean {
   const message = typeof error?.message === 'string' ? error.message.slice(0, 8192) : '';
   const details = typeof error?.additionalDetails === 'string' ? error.additionalDetails.slice(0, 8192) : '';
-  if (!hasModelRejection(message) && !hasModelRejection(details)) return false;
 
   const info = error?.codexErrorInfo;
   const tag = codexErrorInfoTag(info);
@@ -704,7 +782,9 @@ export function isCodexModelUnavailableError(error: CodexErrorInput | null | und
   const textStatus = /\b(?:HTTP(?:\/\d(?:\.\d)?)?(?:\s+status)?|(?:unexpected|last)\s+status(?:\s+code)?)\s*:?\s*(\d{3})\b/i;
   const match = textStatus.exec(message) ?? textStatus.exec(details);
   const status = httpInfo?.httpStatusCode ?? (match ? Number(match[1]) : undefined);
-  return status === undefined || status === 400 || status === 404;
+  if (status !== undefined && status !== 400 && status !== 403 && status !== 404) return false;
+  if (isAuthRelatedErrorMessage(message) || isAuthRelatedErrorMessage(details)) return false;
+  return hasModelRejection(message, status) || hasModelRejection(details, status);
 }
 
 /**
@@ -734,10 +814,25 @@ export function classifyCodexError(error: CodexErrorInput | null | undefined): C
     /\bauthentication_(?:error|failed)\b|\binvalid[\s_-]*api[\s_-]*key\b|\bapi key not valid\b/i.test(
       rawMessage,
     );
-  const message = redactSensitiveText(rawMessage);
+  // Preserve gateway diagnostics from native's typed transport errors. Do not
+  // forward additionalDetails (URLs, response bodies or credentials), or promote
+  // structured auth/quota/capacity signals into new retry/control decisions.
+  const info = error?.codexErrorInfo;
+  const httpInfo = info && typeof info === 'object' &&
+    (errorInfoTag === 'httpConnectionFailed' || errorInfoTag === 'responseStreamConnectionFailed' ||
+      errorInfoTag === 'responseStreamDisconnected' || errorInfoTag === 'responseTooManyFailedAttempts')
+    ? Object.values(info)[0] as { httpStatusCode?: unknown } | undefined : undefined;
+  const gatewayStatus = httpInfo?.httpStatusCode;
+  const upstreamStatus = gatewayStatus === 502 || gatewayStatus === 503 || gatewayStatus === 504
+    ? gatewayStatus : undefined;
+  const safeMessage = redactSensitiveText(rawMessage);
+  // message is also the existing persistence/older-consumer fallback; keep the
+  // bounded status there, without changing reason or terminal/retry semantics.
+  const message = upstreamStatus !== undefined && !new RegExp(`\\b${upstreamStatus}\\b`).test(safeMessage)
+    ? `${safeMessage} (HTTP ${upstreamStatus})` : safeMessage;
   const signals = extractNonSecretErrorSignals(rawMessage);
   const errorStatus =
-    signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
+    signals.errorStatus ?? upstreamStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
   const overload = parseOverloadError(message, signals.errorStatus, errorInfoTag);
   const isCapacityError = overload?.kind === 'capacity';
   // 过载文案常顺带一句 rate limit exceeded（如 Kimi 的 `rate limit exceeded: The
@@ -2141,6 +2236,13 @@ function handleDynamicToolCall(
 // codex 多 agent 协作 (spawn/sendInput/resume/wait/closeAgent)。
 // toolName=collab:${tool}; input 透传 prompt / receivers / model / effort 让 UI 详情面板看到调度参数;
 // completed 时把 agentsStates 压成线程状态摘要,避免子任务卡片展开后直接展示原始 JSON。
+// 只有 spawn 类调用发 agent_task_update(子代理卡 + 持久 Subagent run 的来源);
+// sendInput/resume/wait/close 是对别人子线程的控制,只留普通工具步骤。
+
+/** spawn 类 collab 工具(`spawnAgent` / `spawn` 等)：真正诞生子线程的调用。 */
+function isSpawnCollabTool(tool: string): boolean {
+  return tool.toLowerCase().startsWith('spawn');
+}
 
 function formatCodexAgentStateLabel(state: unknown): string | undefined {
   if (typeof state === 'string') {
@@ -2181,8 +2283,16 @@ function handleCollabAgentToolCall(
   ctx: CodexTranslateContext,
 ): void {
   const toolName = `collab:${item.tool}`;
-  const isSpawn = item.tool.toLowerCase().startsWith('spawn');
+  const isSpawn = isSpawnCollabTool(item.tool);
   const hasSpawnReceiver = !isSpawn || item.receiverThreadIds.length > 0;
+  if (phase !== 'completed' && hasSpawnReceiver) {
+    ctx.rt.collabToolItems.set(item.id, {
+      type: item.type, id: item.id, tool: item.tool, status: item.status,
+      senderThreadId: item.senderThreadId, receiverThreadIds: [...item.receiverThreadIds], agentsStates: {},
+    });
+  } else if (phase === 'completed') {
+    ctx.rt.collabToolItems.delete(item.id);
+  }
   const input: Record<string, unknown> = {
     senderThreadId: item.senderThreadId,
     receiverThreadIds: item.receiverThreadIds,
@@ -2206,6 +2316,7 @@ function handleCollabAgentToolCall(
       data: { toolUseId: item.id, toolName, input },
       source: 'codex',
     });
+    if (!isSpawn) return;
     queue.push({
       type: 'agent_task_update',
       data: toCodexTaskUpdate(item, 'running'),
@@ -2224,6 +2335,7 @@ function handleCollabAgentToolCall(
         source: 'codex',
       });
     }
+    if (!isSpawn) return;
     queue.push({
       type: 'agent_task_update',
       data: toCodexTaskUpdate(item, 'running'),
@@ -2258,6 +2370,11 @@ function handleCollabAgentToolCall(
     data: { summary: isError ? 'failed' : item.status, toolUseIds: [item.id] },
     source: 'codex',
   });
+  // 控制调用(wait / sendInput / resumeAgent / closeAgent)不是子代理的诞生:
+  // 它们只调度别人已有的子线程,没有自己的卡片与持久 Subagent run。发成
+  // agent_task_update 会让每轮等待都长出一张 "Subagent wait" 卡和一条后台任务
+  // 行。控制调用只保留上面的 tool_use / tool_result 边界,按普通工具步骤展示。
+  if (!isSpawn) return;
   queue.push({
     type: 'agent_task_update',
     data: toCodexTaskUpdate(
@@ -2424,7 +2541,7 @@ function toCodexTaskUpdate(
   summary?: string,
   completedOnly = false,
 ): AgentTaskUpdateEventData {
-  const isSpawn = item.tool.toLowerCase().startsWith('spawn');
+  const isSpawn = isSpawnCollabTool(item.tool);
   const subagentObservation = isSpawn
     && item.receiverThreadIds.length > 0
     && (status !== 'completed' || completedOnly)

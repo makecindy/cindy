@@ -146,6 +146,8 @@ describe("model registry data consistency", () => {
     // These existing Server prices also value historical/explicit long-window
     // usage. Their public API bands must not enlarge today's subscription window.
     const subscriptionApiReferences = new Set([
+      "openai/gpt-6.2-sol",
+      "openai/gpt-6.2-astra",
       "openai/gpt-6.1-sol",
       "openai/gpt-6.1-terra",
       "openai/gpt-6-astra",
@@ -172,7 +174,11 @@ describe("model registry data consistency", () => {
                 expect(
                   effectiveWindow(entry, agent),
                   `${entry.id}/${agent}`,
-                ).toBe(entry.id === "openai/gpt-6.1-sol" ? 500_000 : 272_000);
+                ).toBe(
+                  ["openai/gpt-6.2-sol", "openai/gpt-6.1-sol"].includes(entry.id)
+                    ? 500_000
+                    : 272_000,
+                );
               }
               continue;
             }

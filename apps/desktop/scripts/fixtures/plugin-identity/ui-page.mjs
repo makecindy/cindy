@@ -11,15 +11,18 @@ export default {
     preview: { about: 'Chinese recommendations with package icons, alongside the same marketplace cards.' },
     default: { about: 'Five source identities and three recommendations with download counts.' },
     narrow: { about: 'Long names retain identity and download labels at 320px.', viewport: { width: 320, height: 1400 } },
-    'detail-loading': { about: 'Detail reads show a named status in both card styles; install actions keep their labels.' },
-    'detail-loading-narrow': { about: 'Detail feedback remains readable in narrow cards.', viewport: { width: 320, height: 1400 } },
+    'detail-loading': { about: 'The detail page shows catalog identity immediately while the full content is loading.' },
+    'detail-loading-narrow': { about: 'The immediately opened detail remains readable at 320px.', viewport: { width: 320, height: 1400 } },
     'install-loading': { about: 'Explicit installation keeps the install spinner in both card styles.' },
     'market-detail': { about: 'Community detail explains its identity without publishing an author.' },
     'local-detail': { about: 'Installed local detail keeps a distinct source mark.' },
   },
   async check(page, ui) {
     assert.equal(await page.getByText('PRIVATE_AUTHOR', { exact: true }).count(), 0);
-    if (ui.case === 'market-detail') {
+    if (ui.case.startsWith('detail-loading')) {
+      await page.getByRole('heading', { level: 1, name: 'ntfy' }).waitFor();
+      assert.equal(await page.locator('.plugin-detail-primary-action').isDisabled(), true);
+    } else if (ui.case === 'market-detail') {
       await page.getByText(await ui.t('settings.ghosts.market.publisherDescription.community'), { exact: true }).waitFor();
     } else if (ui.case === 'local-detail') {
       await page.getByText(await ui.t('settings.ghosts.market.publisherDescription.local'), { exact: true }).waitFor();

@@ -73,6 +73,22 @@ interface RemotePrecreatedWorktreeLedgerApi {
 
 let ledgerApiOverride: RemotePrecreatedWorktreeLedgerApi | null = null;
 
+/**
+ * 本进程里 maker:create-session 已经发出、却没拿到确认就按失败收场的远程任务。
+ *
+ * 被控端可能在控制端放弃之后才把任务建完(高负载下 Codex 冷启动比等待预算还长)。
+ * 那个任务从没交到用户手里、首条消息也没发出,用户重试又会另建一个；旧做法在下次
+ * 恢复时看到任务存在就当「已认领」销账,空任务从此滞留在侧栏。
+ *
+ * 只记在内存里:成功路径从不登记,所以不会误删用户已经拿到的任务;进程重启后退回
+ * 旧行为(只销账、不删任务)。真正删除前还要确认任务仍然完全没被用过。
+ */
+const abandonedSessionCreates = new Set<string>();
+
+function abandonedSessionCreateKey(deviceId: string, sessionId: string): string {
+  return `${deviceId}\u0000${sessionId}`;
+}
+
 /** 标记旧预创建目录尚未安全回收，调用方据此展示本地化提示并阻止重复创建。 */
 export class RemotePrecreatedWorktreeCleanupPendingError extends Error {
   readonly code = CLEANUP_PENDING_CODE;
@@ -366,7 +382,7 @@ export function parseRemoteDiscardPrecreatedAck(value: unknown): {
   };
 }
 
-function isExplicitRemoteNotFoundError(error: unknown): boolean {
+export function isExplicitRemoteNotFoundError(error: unknown): boolean {
   if (isRecord(error)) {
     const code = error.code;
     if (typeof code === 'string' && code.trim().toUpperCase() === 'NOT_FOUND') {
@@ -384,11 +400,12 @@ function matchingSessionId(value: unknown, expectedId: string): string | null {
   return typeof sessionId === 'string' && sessionId === expectedId ? sessionId : null;
 }
 
+/** Returns the authoritative remote session row, or null when it provably does not exist. */
 async function probeClaimedSession(
   invoke: RemoteWorktreeInvoke,
   sessionId: string,
   isCurrent?: () => boolean,
-): Promise<boolean> {
+): Promise<Record<string, unknown> | null> {
   try {
     assertCurrent(isCurrent);
     const value = await invoke('local-db:sessions:get', [sessionId]);
@@ -398,13 +415,52 @@ async function probeClaimedSession(
         cause: new Error('Invalid remote session ownership response'),
       });
     }
-    return true;
+    return value;
   } catch (error) {
     if (isRemotePrecreatedWorktreeOwnerChangedError(error)) throw error;
     if (isRemotePrecreatedWorktreeCleanupPendingError(error)) throw error;
-    if (isExplicitRemoteNotFoundError(error)) return false;
+    if (isExplicitRemoteNotFoundError(error)) return null;
     throw new RemotePrecreatedWorktreeCleanupPendingError({ cause: error });
   }
+}
+
+/**
+ * 任务仍是被控端刚建好的原样:没有任何消息、没人发过、没在运行、没被置顶。
+ * 字段缺失(旧被控端或异常回包)一律按「用过」处理,宁可留下也不误删。
+ */
+function isUntouchedRemoteSession(session: Record<string, unknown>): boolean {
+  const count = session._count;
+  return session.status === 'active'
+    && isRecord(count)
+    && count.messages === 0
+    && session.userSendAt === null
+    && session.activeTurnStartedAt === null
+    && session.pinnedAt === null;
+}
+
+/**
+ * 账本对应的任务已在被控端存在。若它是本进程放弃过的晚到创建且仍原样未动,先删掉它
+ * (被控端删除流程会一并回收 worktree),再销账;删除失败时退回旧行为只销账,不能因为
+ * 一个空任务挡住用户新建。
+ */
+async function settleClaimedRecord(
+  record: PendingRemotePrecreatedWorktree,
+  session: Record<string, unknown>,
+  invoke: RemoteWorktreeInvoke,
+  isCurrent?: () => boolean,
+): Promise<boolean> {
+  const key = abandonedSessionCreateKey(record.deviceId, record.sessionId);
+  if (abandonedSessionCreates.has(key) && isUntouchedRemoteSession(session)) {
+    try {
+      assertCurrent(isCurrent);
+      await invoke('local-db:sessions:discard-unused', [record.sessionId]);
+    } catch (error) {
+      if (isRemotePrecreatedWorktreeOwnerChangedError(error)) throw error;
+    }
+  }
+  abandonedSessionCreates.delete(key);
+  assertCurrent(isCurrent);
+  return forgetPendingRemotePrecreatedWorktree(record, isCurrent);
 }
 
 async function discardPendingRecord(
@@ -414,10 +470,8 @@ async function discardPendingRecord(
 ): Promise<boolean> {
   assertCurrent(isCurrent);
   try {
-    if (await probeClaimedSession(invoke, record.sessionId, isCurrent)) {
-      assertCurrent(isCurrent);
-      return forgetPendingRemotePrecreatedWorktree(record, isCurrent);
-    }
+    const session = await probeClaimedSession(invoke, record.sessionId, isCurrent);
+    if (session) return settleClaimedRecord(record, session, invoke, isCurrent);
   } catch (error) {
     if (isRemotePrecreatedWorktreeOwnerChangedError(error)) throw error;
     return false;
@@ -437,10 +491,8 @@ async function discardPendingRecord(
     // discard 与 create 共用被控端 session 锁。若拒绝来自一次已成功但丢回包的
     // create，权威 session 行会存在；dirty/keep 等其它拒绝则继续留账。
     try {
-      if (await probeClaimedSession(invoke, record.sessionId, isCurrent)) {
-        assertCurrent(isCurrent);
-        return forgetPendingRemotePrecreatedWorktree(record, isCurrent);
-      }
+      const session = await probeClaimedSession(invoke, record.sessionId, isCurrent);
+      if (session) return await settleClaimedRecord(record, session, invoke, isCurrent);
     } catch (probeError) {
       if (isRemotePrecreatedWorktreeOwnerChangedError(probeError)) throw probeError;
     }
@@ -545,8 +597,12 @@ export async function createRemoteSessionWithPrecreatedWorktree(
     if (isRemotePrecreatedWorktreeCleanupPendingError(err)) throw err;
   }
 
+  // create 没拿到确认:被控端可能仍在建。先登记放弃,下次恢复若看到它晚到且原样未动就回收。
+  const abandonedKey = abandonedSessionCreateKey(input.deviceId, input.sessionId);
+  abandonedSessionCreates.add(abandonedKey);
   try {
     if (await probeClaimedSession(input.invoke, input.sessionId, input.isCurrent)) {
+      abandonedSessionCreates.delete(abandonedKey);
       assertCurrent(input.isCurrent);
       await forgetPendingRemotePrecreatedWorktree(pending, input.isCurrent);
       return input.sessionId;
@@ -561,6 +617,7 @@ export async function createRemoteSessionWithPrecreatedWorktree(
 }
 
 export const __testing = {
+  resetAbandonedSessionCreates: (): void => abandonedSessionCreates.clear(),
   storageKey: STORAGE_KEY,
   storageOwnerKey: STORAGE_OWNER_KEY,
   setLedgerApi: (api: RemotePrecreatedWorktreeLedgerApi | null): void => {

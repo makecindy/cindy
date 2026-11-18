@@ -25,6 +25,7 @@ import { acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch, c
   getSessionRuntimeControlSnapshot, remapSessionRuntimeProvider } from '../../maker-ipc/sessionRuntimeControl';
 afterEach(() => clearSessionRuntimeControlState('sess-new'));
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import * as taskImages from '../../cindy-media/taskImageDelivery';
 import { rewriteTaskImageReferences } from '../../cindy-media/taskImageMarkdown';
 import type { AgentEvent, Effort, InteractionRequest, PermissionMode, PermissionModeState } from '@cindy/maker-core';
@@ -148,6 +149,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     Session: actual.Session,
     hasSessionPermissionUpdates: actual.hasSessionPermissionUpdates,
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
+    isAutoReviewNoAvailableModelNotice: actual.isAutoReviewNoAvailableModelNotice,
     isAutoReviewUnavailableMetadata: actual.isAutoReviewUnavailableMetadata,
     autoReviewReasonFromMetadata: actual.autoReviewReasonFromMetadata,
     AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT: actual.AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
@@ -441,7 +443,7 @@ vi.mock('../../im/shared/sessionProviderLabel.js', () => ({
   resolveSessionErrorContext: vi.fn(async () => ({ providerLabel: 'OpenAI', modelLabel: 'GPT-6 Astra', taskLabel: '测试任务（sess-new）' })),
 }));
 
-import { createMakerHookSessionRunner, extractToolResultMediaUrls } from '../session-runner.js';
+import { createMakerHookSessionRunner, extractToolResultMediaUrls, resolveSharedImProjectConfig } from '../session-runner.js';
 import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
@@ -549,6 +551,22 @@ beforeEach(() => {
 afterEach(() => setMainLocale('en'));
 
 describe('hook task model selection on next send', () => {
+  // Plugin IM must use the canonical row even before an official channel connects.
+  // Existing runner tests only selected adopted channels. Actual shared resolver; unit.
+  it('resolves plugin IM from the shared project row before any official channel adopts it', async () => {
+    h.useActualDefaults = true;
+    h.isSharedPrefsAdopted.mockReturnValue(false);
+    h.getWorkspacePref.mockImplementation((...args: unknown[]) => args[0] === 'shared'
+      ? { workspace: 'chat', agentKind: 'codex', model: 'remote-model', effort: 'high', permissionMode: 'ask' }
+      : { workspace: 'chat', agentKind: 'codex', model: 'wrong-model', effort: 'low', permissionMode: 'bypassPermissions' });
+    h.getWorkspaceProviderSource.mockImplementation((...args: unknown[]) => args[0] === 'shared' ? 'remote-provider' : 'wrong-provider');
+    h.agentDeviceId = 'share:owner';
+    h.readRemoteRoute.mockResolvedValue({ model: catalogModel('remote-model') });
+    const result = await resolveSharedImProjectConfig('chat', log);
+    expect(result).toMatchObject({ agentKind: 'codex', model: 'remote-model', effort: 'high', permissionMode: 'ask',
+      providerId: 'remote-provider', agentDeviceId: 'share:owner' });
+    expect(h.readRemoteRoute).toHaveBeenCalledWith({ agentDeviceId: 'share:owner', agentKind: 'codex', providerId: 'remote-provider', model: 'remote-model' });
+  });
   // PR #7291 unit: automatic selection must use the execution location and still
   // reach the existing stale-source rule; previous coverage used pinned defaults.
   it('creates an automatic remote workspace task and follows its resolved route', async () => {
@@ -4226,6 +4244,59 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
       expect(materialize).toHaveBeenCalledOnce();
       expect(materialize.mock.calls[0][1]).toContain('我先检查。');
     } finally { snapshot.mockRestore(); legacy.mockRestore(); read.mockRestore(); }
+  });
+
+  // 实踩(2026-11-17 官方飞书): 回复里按工作目录写相对路径 `![加载态](evidence/loading-68.png)`, 图片没发出,
+  // 引用原样进了飞书卡片被平台拒绝, 答案没送达。入口: watchContinuation 收口(与 run 共用 collectOutboundForFinalText);
+  // 可观察结果: turn.end 的正文与附件。既有用例只有绝对路径; 相对路径此前不导入(unit, 导入与读盘照旧注入)。
+  it('imports an image referenced relative to the working directory', async () => {
+    const workDir = process.cwd();
+    const relative = 'resources/app-icons/cat.png'; // 仓库里真实存在的图片: 相对路径要落到真文件才算数
+    const absolute = path.resolve(workDir, relative);
+    const url = `cindy-media://blobs/${'c'.repeat(64)}.png`;
+    const materialize = vi.fn(async (_id: string, text: string) => {
+      const replacements = new Map(text.includes(absolute) ? [[absolute, url]] : []);
+      return { text: rewriteTaskImageReferences(text, replacements), replacements, failures: [] };
+    });
+    const snapshot = vi.spyOn(taskImages, 'materializeTaskImageTextResult').mockImplementation(materialize);
+    const read = vi.spyOn(fs, 'readFile').mockImplementation(async () => Buffer.from('cat bytes'));
+    try {
+      fakeMaker.getSession.mockReturnValueOnce({ ...makeManualSession('sess-live'), workDir });
+      const onEnd = vi.fn();
+      createMakerHookSessionRunner({ log }).watchContinuation!(watchReq({ onEnd }).req as never);
+      const emit = h.eventCbs.get('sess-live')!;
+      emit({ type: 'text', data: { text: `结果：![加载态](${relative})`, isFinal: true } });
+      emit({ type: 'done', data: null });
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledOnce());
+      const outcome = onEnd.mock.calls[0]![0];
+      expect(materialize.mock.calls[0]![1]).toContain(absolute);
+      expect(outcome.finalText).toBe('结果：🖼️ _加载态_');
+      expect(outcome.attachments).toHaveLength(1);
+      expect(outcome.attachments[0].dataBase64).toBe(Buffer.from('cat bytes').toString('base64'));
+    } finally { snapshot.mockRestore(); read.mockRestore(); }
+  });
+
+  // 评审 #11136: 回复里引用的本机图片超过导入上限(20 MiB)时不入库, 也走不到压缩, 提示里只有图片名。
+  // 入口: watchContinuation 收口; 可观察结果: 正文末尾的提示写明上限。既有用例只覆盖「文件被删」(unit)。
+  it('says why a local image over the import limit was not sent', async () => {
+    const source = '/private/task/huge.png';
+    const materialize = vi.fn(async (_id: string, text: string) =>
+      ({ text, replacements: new Map<string, string>(), failures: [source] }));
+    const snapshot = vi.spyOn(taskImages, 'materializeTaskImageTextResult').mockImplementation(materialize);
+    const stat = vi.spyOn(fs, 'stat').mockImplementation(async () => ({ size: 21 * 1024 * 1024 }) as never);
+    try {
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const onEnd = vi.fn();
+      createMakerHookSessionRunner({ log }).watchContinuation!(watchReq({ onEnd }).req as never);
+      const emit = h.eventCbs.get('sess-live')!;
+      emit({ type: 'text', data: { text: `结果：![大图](${source})`, isFinal: true } });
+      emit({ type: 'done', data: null });
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledOnce());
+      const outcome = onEnd.mock.calls[0]![0];
+      expect(outcome.attachments ?? []).toEqual([]);
+      expect(outcome.finalText).toMatch(/大图.*20\s?M[Bo]/);
+      expect(outcome.finalText).not.toContain(source);
+    } finally { snapshot.mockRestore(); stat.mockRestore(); }
   });
 
   it.each(['run', 'continuation'].flatMap((entry) =>

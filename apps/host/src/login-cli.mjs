@@ -15,9 +15,11 @@ import { CindyAuthClient } from '@cindy/auth-client';
 
 import { readAuthEndpoints } from './auth/endpoints.mjs';
 import { runHostLogin } from './auth/login.mjs';
+import { restoreDeviceLinkRegistration } from './auth/device-link-registration.mjs';
 import { createCredentialStore } from './credentials/store.mjs';
 import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 import { hostAuthFetch } from './auth-fetch.mjs';
+import { hostRuntimeLayout } from './runtime-layout.mjs';
 
 
 /** Open the system browser without blocking the login flow on its exit. */
@@ -83,6 +85,19 @@ export async function runLoginCommand(argv, io = {}) {
       }
     },
     method,
+    // A Host removed from the account in Device Link registers again only with this fresh sign-in (serve starts from a
+    // refreshed token, which cannot): say hello once with it (auth/device-link-registration.mjs).
+    onSignedIn: async (token) => {
+      if (!endpoints.deviceLinkApiBaseUrl) return;
+      // Started while the browser sign-in was open: a second hello with this device would replace its live connection.
+      if ((await readHostProcessStatus(userDataDir)).running !== false) return;
+      let registration = 'failed';
+      try {
+        registration = await restoreDeviceLinkRegistration({ apiBaseUrl: endpoints.deviceLinkApiBaseUrl, token,
+          version: hostRuntimeLayout().version });
+      } catch { /* The sign-in is saved either way. */ }
+      if (registration !== 'registered') err('This computer could not register with remote connections now; start Cindy Host and try signing in again if it stays unavailable.');
+    },
   });
   out(`Signed in (${result.realm}). Cindy host will reuse this login on restart.`);
   if (process.env.CINDY_HOST_DATA_DIR?.trim()) {

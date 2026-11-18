@@ -175,3 +175,18 @@ export class HomeSyncRound {
     return task;
   }
 }
+
+/** Each status keeps its existing allowance: archive history cannot evict active tasks. */
+export async function readHomeSessionList<T extends { id: string; updatedAt?: string }>(
+  status: 'active' | 'archived' | 'all',
+  read: (status: 'active' | 'archived' | 'all') => Promise<T[]>,
+): Promise<T[]> {
+  if (status !== 'all') return read(status);
+  const byId = new Map<string, T>();
+  // Stay inside the existing per-device worker; do not double its concurrency.
+  for (const filter of ['active', 'archived'] as const) {
+    const rows = await read(filter);
+    for (const row of Array.isArray(rows) ? rows : []) byId.set(row.id, row);
+  }
+  return [...byId.values()].sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+}

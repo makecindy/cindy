@@ -34,12 +34,32 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('remote composer plugins', () => {
-  it('omits directory arguments for a folderless remote draft', async () => {
+  it('sends an empty directory for a folderless remote draft', async () => {
     invoke.mockResolvedValue(catalog('remote'));
     const { result } = renderHook(() => useRemoteComposerGhosts('a', undefined, true, 0));
     await waitFor(() => expect(result.current.ghosts[0]?.manifest.id).toBe('remote'));
     // JSON transport would turn [undefined] into [null], which the host rejects.
-    expect(invoke).toHaveBeenCalledExactlyOnceWith('a', 'ghosts:composer-list', []);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('a', 'ghosts:composer-list', ['', { iconRefs: 1 }]);
+  });
+  it('reports held icons and fills the icons a new host omitted', async () => {
+    const ref = 'a'.repeat(32);
+    const icon = 'data:image/png;base64,AA==';
+    const entry = { manifest: { id: 'art', name: 'art' }, enabled: true, iconRef: ref };
+    invoke
+      .mockResolvedValueOnce([{ ...entry, iconDataUrl: icon }])
+      .mockResolvedValue([entry]);
+    const { result, rerender } = renderHook(
+      ({ dir }) => useRemoteComposerGhosts('icons', dir, false, 0),
+      { initialProps: { dir: '/one' } },
+    );
+    await waitFor(() => expect(result.current.ghosts[0]?.iconDataUrl).toBe(icon));
+    rerender({ dir: '/two' });
+    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    expect(invoke).toHaveBeenLastCalledWith('icons', 'ghosts:composer-list', [
+      '/two',
+      { iconRefs: 1, knownIcons: [ref] },
+    ]);
+    await waitFor(() => expect(result.current.ghosts[0]?.iconDataUrl).toBe(icon));
   });
   it('renders immediately and drops late responses after switching device or directory', async () => {
     const old = deferred();
@@ -65,7 +85,7 @@ describe('remote composer plugins', () => {
     rerender({ device: 'b', dir: '/project' });
     expect(result.current.ghosts).toEqual([]);
     await waitFor(() => expect(result.current.ghosts[0]?.manifest.id).toBe('project'));
-    expect(invoke).toHaveBeenLastCalledWith('b', 'ghosts:composer-list', ['/project']);
+    expect(invoke).toHaveBeenLastCalledWith('b', 'ghosts:composer-list', ['/project', { iconRefs: 1 }]);
   });
 
   it('retries failed/old-host responses, refreshes a minute-old catalog on open/reconnect, and does not fetch on close', async () => {

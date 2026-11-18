@@ -215,7 +215,7 @@ function modelSourceQuota(
     const data = usage.claude;
     const weekly = data && (matchScopedWindowForModel(data.scoped, modelId) ?? data.sevenDay);
     return {
-      plan: formatClaudeSubscriptionPlanLabel(data?.subscriptionType),
+      plan: formatClaudeSubscriptionPlanLabel(data?.subscriptionType, data?.planTier, data?.planDisplayName),
       windows: [
         data?.fiveHour && { window: data.fiveHour, windowMinutes: FIVE_HOUR_WINDOW_MINUTES },
         weekly && { window: weekly, windowMinutes: WEEKLY_WINDOW_MINUTES },
@@ -266,7 +266,7 @@ export function ModelSourceDetails({
         source: codex ? 'codex' : 'claude',
         codex: {
           buckets: poolCodexBuckets(account.usage),
-          planType: account.plan ?? null,
+          planType: account.planType ?? account.plan ?? null,
           web: null,
           nativeAccountPool: true,
         },
@@ -303,16 +303,16 @@ export function ModelSourceDetails({
       .join(' · ');
     const memberPlan =
       codex
-        ? formatCodexPlanLabel(account.plan)
-        : formatClaudeSubscriptionPlanLabel(account.plan);
+        ? formatCodexPlanLabel(account.planType ?? account.plan)
+        : formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName);
     return { percent, title: [name, memberPlan, detail || '—'].filter(Boolean).join(' · ') };
   });
   const quota = modelSourceQuota(usages.get(providerId), modelId, nowMs);
   const { windows } = quota;
   const plan = pickerAccount
     ? codex
-      ? formatCodexPlanLabel(pickerAccount.plan)
-      : formatClaudeSubscriptionPlanLabel(pickerAccount.plan)
+      ? formatCodexPlanLabel(pickerAccount.planType ?? pickerAccount.plan)
+      : formatClaudeSubscriptionPlanLabel(pickerAccount.plan, pickerAccount.planTier, pickerAccount.planDisplayName)
     : quota.plan;
   const parts = windows
     .filter((window) => Number.isFinite(window.usedPercent))
@@ -350,7 +350,7 @@ export function ModelSourceDetails({
   const identity = poolParts?.length
     ? undefined
     : pickerAccount
-      ? (pickerAccount.identity ?? t('subscriptionAccounts.unassigned'))
+      ? pickerAccount.identity
       : accountIdentity;
   const source = [providerAccountLabel(label, identity), plan].filter(Boolean).join(' · ');
   return (

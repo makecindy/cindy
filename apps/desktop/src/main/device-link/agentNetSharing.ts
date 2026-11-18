@@ -17,7 +17,7 @@ import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createOutboundHttpAgent, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { agentNetClientForRelay, currentAgentNetClient, currentAgentNetScopedTarget, isAgentNetActive, openScopedAgentNetAppSocket,
-  outgoingAgentNetClient, outgoingAgentNetClientForRelay } from './agentNetRuntime.js';
+  outgoingAgentNetClient, outgoingAgentNetClientForRelay, setAgentNetScopedSessionRoute } from './agentNetRuntime.js';
 import { currentOfficialAgentNetClient, outgoingOfficialAgentNetClient } from './agentNetOfficial.js';
 import { relayDataPath, secureStorageAvailable, readRelayConfig } from './selfHostedRelayConfig.js';
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
@@ -58,12 +58,33 @@ interface Session {
 }
 let session: Session | null = null;
 type ScopedConnectionOptions = Omit<DeviceLinkClientOptions, 'getWsUrl' | 'getToken'>;
+/** `via`: where each installed resource is registered — the main connection, a resource-only connection (its
+ * `connectionKey`), or blocked (retired, unavailable, or its pin released). Agent-Net sessions follow it. */
 let binding: { client: RoutedDeviceLinkClient; options: ScopedConnectionOptions; session: Session;
-  selection: string; pins: Map<string, () => void>; stop(): void } | null = null;
+  selection: string; pins: Map<string, () => void>; via: Map<string, 'primary' | 'blocked' | { connection: string }>; stop(): void } | null = null;
 const keyOf = (kind: Kind, id: string) => kind + ':' + id;
 const originKey = (route: AgentNetSharingRoute) => JSON.stringify([route.server, route.networkId, route.rootPublicKey]);
 const providerListKey = (received: boolean, route?: AgentNetSharingRoute | null) =>
   '/api/device-link/provider-shares' + (received ? '/received' : '') + (route ? originKey(route) : ':legacy');
+/** After a binding stops (and until the next one), its resources stay retired on that routed client. */
+let retiredVia: { client: RoutedDeviceLinkClient; via: Map<string, 'blocked'> } | null = null;
+/**
+ * The connection a cross-account peer's Agent-Net session may use: the one its scoped Device Link route is registered on
+ * (`installRoute`), so a session carries exactly what the scoped frames would have. Same rule as the routed client's
+ * `acceptsScopedEvent`: a blocked or retired resource (left the share, credentials unavailable) gets none, and one this
+ * computer has not installed yet only the main connection (an executor or owner learns of a share from the guest's first
+ * open and installs it then).
+ */
+function sessionRoute(peer: string): import('@cindy/agent-net').AgentNetAppSocket | 'primary' | null {
+  const task = parseSharedTaskPeer(peer), provider = task ? null : parseProviderSharePeer(peer);
+  if (!task && !provider) return null;
+  const key = task ? keyOf('shared-task', task.sharedTaskId) : keyOf('provider-share', provider!.shareId);
+  const via = binding ? binding.via.get(key) : retiredVia?.via.get(key);
+  if (via === undefined) return 'primary';
+  if (via === 'blocked') return null;
+  return via === 'primary' ? 'primary' : binding!.session.sockets.get(via.connection)?.socket ?? null;
+}
+setAgentNetScopedSessionRoute(sessionRoute);
 /** A listing origin may be any pinned route or a discovery placeholder on that
  * authority: carry only the authority, never another resource's host, member or aliases. */
 const resourceRoute = (origin: AgentNetSharingRoute, kind: Kind, resourceId: string, hostDeviceId: string): AgentNetSharingRoute =>
@@ -159,6 +180,8 @@ function dropConnection(state: Session, key: string): void {
   const scoped = state.connections.get(key), lease = scoped && leaseOf.get(scoped);
   scoped?.stop(); if (lease) { lease.close(); state.leases.delete(lease); }
   binding?.pins.get(key)?.(); binding?.pins.delete(key); state.connections.delete(key); state.sockets.delete(key);
+  // A released pin leaves the resource retired on the routed client until it is installed again; sessions likewise.
+  if (binding?.via.has(key)) binding.via.set(key, 'blocked');
 }
 /** The relay closes a member socket (4410) whenever the admission version moves: a pause, the
  * member's next device or a rotated credential. That client never restarts by itself, so once
@@ -585,10 +608,18 @@ function installRoute(state: Session, route: AgentNetSharingRoute): void {
   const active = currentAgentNetClient(), member = hostClient(route);
   if (route.retired || !route.memberId && !member) {
     target.pins.set(keyOf(route.kind, route.resourceId), target.client.registerScopedConnection(route, 'blocked'));
+    target.via.set(keyOf(route.kind, route.resourceId), 'blocked');
     return; // Pending/unavailable credentials cannot fall through to V1.
   }
   const primary = !!member && active?.rootPublicKey === member.rootPublicKey
     && active.certificate.networkId === member.certificate.networkId;
+  // An own route on another network is gated by this device's Agent-Net switch (the guard below). While the switch is
+  // off its connection could never connect and would only retry; it stays blocked until the switch rebinds the routes.
+  if (!primary && !route.memberId && !readDeviceLinkSettings().agentNetEnabled) {
+    target.pins.set(keyOf(route.kind, route.resourceId), target.client.registerScopedConnection(route, 'blocked'));
+    target.via.set(keyOf(route.kind, route.resourceId), 'blocked');
+    return;
+  }
   let connection: DeviceLinkClient | 'primary' = 'primary';
   if (!primary) {
     const key = connectionKey(route);
@@ -647,6 +678,7 @@ function installRoute(state: Session, route: AgentNetSharingRoute): void {
     connection = scoped;
   }
   target.pins.set(keyOf(route.kind, route.resourceId), target.client.registerScopedConnection(route, connection));
+  target.via.set(keyOf(route.kind, route.resourceId), primary ? 'primary' : { connection: connectionKey(route) });
 }
 export function bindAgentNetSharing(client: RoutedDeviceLinkClient, options: ScopedConnectionOptions): () => void {
   const selection = agentNetSelectionKey();
@@ -654,9 +686,13 @@ export function bindAgentNetSharing(client: RoutedDeviceLinkClient, options: Sco
   binding?.stop();
   const state = owner();
   const unprefer = client.preferPrimaryScopedConnection(isAgentNetActive);
-  const target: NonNullable<typeof binding> = { client, options, session: state, selection, pins: new Map(), stop() {
+  // The routed client keeps a released resource retired until it is registered again; so do its sessions.
+  const via = new Map<string, 'primary' | 'blocked' | { connection: string }>(
+    retiredVia?.client === client ? [...retiredVia.via.keys()].map(key => [key, 'blocked' as const]) : []);
+  const target: NonNullable<typeof binding> = { client, options, session: state, selection, pins: new Map(), via, stop() {
     if (binding !== target) return;
     binding = null; unprefer(); for (const off of target.pins.values()) off();
+    retiredVia = { client, via: new Map([...target.via.keys()].map(key => [key, 'blocked' as const])) };
     retire(state); if (session === state) session = null;
   } };
   binding = target;

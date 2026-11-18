@@ -358,4 +358,5 @@ export {
   selectionAliasTargets, type SelectionAliasGroup, type SelectionAliasPreferences,
 } from './selectionAliasGroups.js';
 
-export { sameSubscriptionAccounts, sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy } from './subscriptionIdentity.js';
+export { sameSubscriptionAccounts, sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy, listedSourceFolds, effectiveRunLocation, RUN_LOCATION_LOCAL } from './subscriptionIdentity.js';
+export type { ListedSourceComputer, ListedSourceRef, ListedSourcesInput, ListedSourceFolds } from './subscriptionIdentity.js';

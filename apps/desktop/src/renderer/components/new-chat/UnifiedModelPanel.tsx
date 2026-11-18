@@ -148,7 +148,7 @@ export interface UnifiedModelPanelProps {
   isVisible: (providerId: string, model: CatalogModel, agent: AgentKind) => boolean;
   /** 整供应商排除(SSH 远程排除 chat-bridged Codex 源等)。 */
   excludeProvider?: (provider: ProviderView, agent: AgentKind) => boolean;
-  /** 只从模型分组里收起、收藏与最近照常解析的供应商(见 buildUnifiedListSections)。 */
+  /** 从来源栏与模型分组里收起、收藏与最近照常解析的供应商(见 buildUnifiedListSections)。 */
   listHiddenProviderIds?: ReadonlySet<string>;
   /** 单模型排除(SSH 远程排除订阅直连前缀等)。 */
   excludeModel?: (model: CatalogModel, provider: ProviderView, agent: AgentKind) => boolean;
@@ -169,6 +169,8 @@ export interface UnifiedModelPanelProps {
   fastMode?: boolean | 'ultrafast';
   /** live 选中行的深度实时值(同上)。 */
   selectedEffort?: Effort;
+  thinkingEnabled?: boolean;
+  onThinkingChangeLive?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
   modelMemory?: ModelMemoryAccessors;
   preferenceStore?: ModelPickerPreferenceStore;
   /** agent 运行时是否具备 Fast 能力(useAgentCapabilities.hasFastMode)。 */
@@ -369,6 +371,7 @@ export interface UnifiedModelPanelProps {
     ready: boolean;
     /** `active` 那台的目录读取失败时,列表区显示的提示(含重试)。 */
     failure?: ReactNode;
+    status?: ReactNode;
     onActivate: (target: { deviceId: string; providerId: string } | null) => void;
   };
   /**
@@ -413,6 +416,8 @@ export function UnifiedModelPanel({
   liveAgentKind,
   fastMode = false,
   selectedEffort,
+  thinkingEnabled = true,
+  onThinkingChangeLive,
   modelMemory,
   preferenceStore,
   agentFastModeCapable,
@@ -448,6 +453,7 @@ export function UnifiedModelPanel({
   remoteSources,
 }: UnifiedModelPanelProps) {
   const { t } = useTranslation();
+  const [thinkingMemoryVersion, refreshThinkingMemory] = useState(0);
   const storedFavorites = useModelFavorites();
   const isSharedProvider = isProviderShareAgentDeviceId(deviceId);
   // 远程 Agent:收藏一律读写任务所在电脑那一份(§1.5),浏览其他电脑的目录时也不读那台自己的收藏;
@@ -597,7 +603,9 @@ export function UnifiedModelPanel({
   const railItems = useMemo<UnifiedRailItem[]>(() => {
     // 远程 Agent:本机格按本机目录派生(此刻 entries 可能是某台电脑的目录),
     // 其后每台电脑一段远程供应商格。
-    const items: UnifiedRailItem[] = !localRailItems ? buildUnifiedRail(entries, undefined, providerOrder) : [
+    const items: UnifiedRailItem[] = !localRailItems ? buildUnifiedRail(
+      entries.filter(entry => !listHiddenProviderIds?.has(entry.providerId)), undefined, providerOrder,
+    ) : [
       ...localRailItems,
       ...(remoteGroups ?? []).flatMap((group) =>
         group.providerIds.map((providerId) => ({
@@ -611,7 +619,7 @@ export function UnifiedModelPanel({
     // 「模型组」紧跟「全部」：它和「全部」一样跨供应商，排在各供应商格之前。
     const all = items.findIndex((item) => item.kind === 'all');
     return [...items.slice(0, all + 1), { kind: 'model-groups' }, ...items.slice(all + 1)];
-  }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView]);
+  }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView, listHiddenProviderIds]);
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
     if (rail.kind === 'all') return;
@@ -716,7 +724,7 @@ export function UnifiedModelPanel({
         entryMatchesModelId(entry, selected.modelId) &&
         (selected.providerId === null || selected.providerId === entry.providerId);
       const personalized = selectionPolicy === 'personalized';
-      const base = resolveUnifiedRowConfig({
+      const resolved = resolveUnifiedRowConfig({
         entry,
         ...(personalized
           ? { engineOverride: entry.aliasEntries ? readEntryPreference(entry, entryModelIds(entry), getEngineOverride) : enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
@@ -749,7 +757,13 @@ export function UnifiedModelPanel({
       // **选中行读 live 值**,不读全局记忆:已建会话的深度 / Fast 由 DB / runtime 权威,
       // 其它对话改同一个模型的全局预设不该改写正在跑的这一条(与旧版 rowEffortOf /
       // fastOnOf 的选中行分支同语义)。
-      if (!isLiveRow(entry, base)) return base;
+      const live = isLiveRow(entry, resolved);
+      const thinkingCustomized = resolved.agent === 'pi' && resolved.capability?.thinkingToggle === true &&
+        (live ? !thinkingEnabled : modelMemory?.getThinking?.(
+          resolved.agent, entry.providerId, resolved.wireModelId ?? entry.modelId,
+        ) === false);
+      const base = thinkingCustomized ? { ...resolved, customized: true } : resolved;
+      if (!live) return base;
       const efforts: readonly string[] = base.efforts;
       const liveEffort =
         selectedEffort && efforts.includes(selectedEffort) ? selectedEffort : base.effort;
@@ -777,6 +791,8 @@ export function UnifiedModelPanel({
       isLiveRow,
       liveEngineAgent,
       memoryVersion,
+      thinkingMemoryVersion,
+      thinkingEnabled,
       modelMemory,
       selected.modelId,
       selected.providerId,
@@ -1097,9 +1113,11 @@ export function UnifiedModelPanel({
     // 要比的实时深度 / Fast —— 与 configOf 里「选中行读 live 值」取的是同一个格子。
     liveEffort: selectedEffort,
     liveFast: fastMode,
+    liveThinking: thinkingEnabled,
     modelMemory,
     onEffortChangeLive,
     onFastModeChangeLive,
+    onThinkingChangeLive,
     onSelect,
     onConfigure,
     onSelectedFavoriteAnchorClear,
@@ -1515,6 +1533,7 @@ export function UnifiedModelPanel({
           {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
           {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
           {favoritesPinned && effectiveRail.kind === 'favorites' && !query.trim() ? favoritesPinned : null}
+          {!remoteListPending && remoteRail !== null ? remoteSources?.status : null}
           {effectiveRail.kind === 'model-groups' ? (
             modelGroupsView ?? null
           ) : remoteListPending ? (
@@ -1785,7 +1804,29 @@ export function UnifiedModelPanel({
                   applyEffort(target.anchor, target.entry, config, effort)
                 }
                 onFastChange={(enabled) => applyFast(target.anchor, target.entry, config, enabled)}
-                onResetToRecommended={() => resetToRecommended(target.anchor, target.entry, config)}
+                // Favorites/recents are configuration copies whose existing
+                // schema does not contain thinking. Do not edit live state or
+                // global model memory while inspecting one of those copies.
+                thinking={target.favorite || target.recent ? undefined : {
+                  enabled: isLiveRow(target.entry, config) ? thinkingEnabled
+                    : modelMemory?.getThinking?.(config.agent, target.entry.providerId,
+                        config.wireModelId ?? target.entry.modelId) ?? true,
+                  disabled: isLiveRow(target.entry, config) ? !onThinkingChangeLive : !modelMemory?.setThinking,
+                  onChange: enabled => {
+                    // Use the panel's write lock and the caller's existing owner-aware
+                    // route. A rejected live write must not prewrite model memory.
+                    void runExternal(async () => {
+                      if (isLiveRow(target.entry, config)) return onThinkingChangeLive?.(enabled);
+                      modelMemory?.setThinking?.(config.agent, target.entry.providerId,
+                        config.wireModelId ?? target.entry.modelId, enabled);
+                      refreshThinkingMemory(value => value + 1);
+                    });
+                  },
+                }}
+                onResetToRecommended={() => {
+                  void Promise.resolve(resetToRecommended(target.anchor, target.entry, config))
+                    .finally(() => refreshThinkingMemory(value => value + 1));
+                }}
                 onAddFavorite={() => addFavorite(target.anchor, config)}
                 onRemoveFavorite={() => removeFavorite(target.anchor, target.entry)}
               />

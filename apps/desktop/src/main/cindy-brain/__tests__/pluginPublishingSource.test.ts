@@ -38,3 +38,23 @@ it('projects local authoring identity without treating it as an enterprise or a 
     .toEqual({ kind: 'local', source: 'manual' });
   expect(projectPluginPublishingSource(local, receipt, { kind: 'absent' }).kind).toBe('unavailable');
 });
+
+// Card/source display is separate from publishing authority. Evidence conflicts
+// must never remove the warning on a local replacement (unit / Host projection).
+it('projects display source from the current receipt and exact installation ledger', async () => {
+  const { projectPluginInstallationSource: project } = await import('../pluginPublishingSource');
+  const installed = { ...record, source: 'market' as const, pluginId: market.pluginId };
+  expect(project(installed, receipt, { kind: 'found', record: market })).toEqual({ kind: 'market' });
+  expect(project(record, receipt, { kind: 'found', record: market })).toEqual({ kind: 'local' });
+  expect(project(installed, { ...receipt, revision: 'old' }, { kind: 'found', record: market })).toEqual({ kind: 'unknown' });
+  expect(project(installed, receipt, { kind: 'invalid' })).toEqual({ kind: 'unknown' });
+  for (const source of ['git-market', 'local-market'] as const) {
+    expect(project(installed, receipt, { kind: 'found', record: { ...market, source, sourceKey: 'local:fixture' } })).toEqual({ kind: 'third-party' });
+  }
+  const org = { ...installed, namespace: 'acme' };
+  const orgReceipt = { ...receipt, namespace: 'acme' };
+  const orgMarket = { ...market, namespace: 'acme', scope: 'organization' as const, organizationId: 'acme-id' };
+  expect(project(org, orgReceipt, { kind: 'found', record: orgMarket })).toEqual({ kind: 'organization', namespace: 'acme' });
+  expect(project(org, { ...orgReceipt, installOrigin: 'manual' }, { kind: 'found', record: orgMarket })).toEqual({ kind: 'local' });
+  expect(project({ ...record, source: 'legacy' }, receipt, { kind: 'absent' })).toEqual({ kind: 'unknown' });
+});

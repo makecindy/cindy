@@ -6,6 +6,7 @@ import type { InteractionRequest, InteractionDecision, AutoReviewDecision } from
 import { messages, sessions } from '../localDb/schema.js';
 import type { CurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { messageToCamel } from '../localDb/mapper.js';
+import { recomputePrRefsForSession } from '../git-context/prRefsStore.js';
 import { createLogger } from '../logger.js';
 import { getDesktopMcpToolApprovalPolicy } from '../maker-host/mcp-tool-approval-policy.js';
 import { pagePermissionGrants, onPagePermissionSessionChanged } from './pagePermissions.js';
@@ -125,6 +126,10 @@ export function createMcpAppsService(ports: McpAppsServicePorts) {
           .returning();
         if (currentOwner() !== owner || !updated[0]) throw new Error('MCP_APP_CARD_UNAVAILABLE');
         ports.publishMessage(owner, sessionId, messageToCamel(updated[0]));
+        await recomputePrRefsForSession(sessionId, {
+          dbClient: owner.client,
+          isCurrent: () => currentOwner() === owner,
+        });
       } else {
         // Only the pending card may be inserted. Completion cannot resurrect a deleted grant.
         if (record.result !== undefined || record.cancelled !== undefined)

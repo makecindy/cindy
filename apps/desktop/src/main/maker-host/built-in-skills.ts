@@ -157,12 +157,21 @@ export async function builtInSkillDescriptorsAsync(
     const snapshot = readBuiltInSkillSnapshot(userDataDir, appDataDir);
     if (!snapshot) return [];
     const entries = new Map<string, fs.BigIntStats>();
-    for (const descriptor of snapshot.descriptors) {
-      // Pin reads to the version selected before yielding, not a moving .active link.
-      const directory = path.join(snapshot.target, descriptor.name);
-      if (!(await fsp.lstat(directory)).isDirectory()) return [];
-      if (await hashDirectory(directory, entries) !== snapshot.manifest.fingerprints[descriptor.name]) return [];
-      if (!(await fsp.lstat(path.join(directory, 'SKILL.md'))).isFile()) return [];
+    // Independent Skills can yield together; keep file hashing within each
+    // directory ordered and cap I/O at four lanes. No verified result is cached.
+    for (let offset = 0; offset < snapshot.descriptors.length; offset += 4) {
+      const verified = await Promise.all(snapshot.descriptors.slice(offset, offset + 4).map(async descriptor => {
+        try {
+          // Pin reads to the version selected before yielding, not a moving .active link.
+          const directory = path.join(snapshot.target, descriptor.name);
+          if (!(await fsp.lstat(directory)).isDirectory()) return false;
+          if (await hashDirectory(directory, entries) !== snapshot.manifest.fingerprints[descriptor.name]) return false;
+          return (await fsp.lstat(path.join(directory, 'SKILL.md'))).isFile();
+        } catch {
+          return false;
+        }
+      }));
+      if (verified.some(valid => !valid)) return [];
     }
     const current = readBuiltInSkillSnapshot(userDataDir, appDataDir);
     if (!current || current.raw !== snapshot.raw || current.target !== snapshot.target
@@ -325,6 +334,22 @@ async function hashDirectory(root: string, observed?: Map<string, fs.BigIntStats
   };
   await visit(root);
   return hash.digest('hex');
+}
+
+/** Finish a verification phase before any recovery/publication can mutate it. */
+async function readSkillFingerprints(
+  descriptors: readonly BuiltInSkillDescriptor[],
+): Promise<Map<string, string | null>> {
+  const fingerprints = new Map<string, string | null>();
+  for (let offset = 0; offset < descriptors.length; offset += 4) {
+    const batch = descriptors.slice(offset, offset + 4);
+    const results = await Promise.all(batch.map(descriptor =>
+      hashDirectory(descriptor.absolutePath).catch(() => null)));
+    for (let index = 0; index < batch.length; index++) {
+      fingerprints.set(batch[index]!.name, results[index]!);
+    }
+  }
+  return fingerprints;
 }
 
 function emptyManifest(): MaterializationManifest {
@@ -1136,14 +1161,9 @@ export async function prepareBuiltInSkills(
         activeBundleTarget(root, committedBundle),
         options.userDataDir,
       ), manifest);
-      committedBundleVerified = true;
-      for (const descriptor of committedDescriptors) {
-        const installed = await hashDirectory(descriptor.absolutePath).catch(() => null);
-        if (installed !== manifest.fingerprints[descriptor.name]) {
-          committedBundleVerified = false;
-          break;
-        }
-      }
+      const committedFingerprints = await readSkillFingerprints(committedDescriptors);
+      committedBundleVerified = committedDescriptors.every(descriptor =>
+        committedFingerprints.get(descriptor.name) === manifest.fingerprints[descriptor.name]);
       if (committedBundleVerified) {
         try {
           changed = await switchActiveBundle(
@@ -1162,13 +1182,9 @@ export async function prepareBuiltInSkills(
       }
       descriptors = stableDescriptors;
     }
-    const installedFingerprints = new Map<string, string | null>();
-    for (const descriptor of descriptors) {
-      installedFingerprints.set(
-        descriptor.name,
-        await hashDirectory(descriptor.absolutePath).catch(() => null),
-      );
-    }
+    // Re-read after pointer recovery: committed bytes and the active projection
+    // are separate facts, even when they normally resolve to the same directory.
+    const installedFingerprints = await readSkillFingerprints(descriptors);
     const existingDescriptors = committedSkillDescriptors(descriptors, manifest);
     projectionSafe = !isEmptyManifest(manifest) && committedBundleVerified && existingDescriptors.every((descriptor) => (
       typeof manifest.fingerprints[descriptor.name] === 'string'
@@ -1216,30 +1232,39 @@ export async function prepareBuiltInSkills(
       fingerprint: string;
       installedFingerprint: string | null;
     }> = [];
-    for (const descriptor of descriptors) {
-      const source = path.join(options.bundledRoot, descriptor.name);
-      try {
-        if (!(await fsp.stat(path.join(source, 'SKILL.md')).catch(() => null))?.isFile()) {
-          throw new Error(`bundled Skill is missing SKILL.md: ${source}`);
+    // Only source reads overlap. Drain every lane and preserve descriptor order
+    // before any materialization or publication, including when a read fails.
+    for (let offset = 0; offset < descriptors.length; offset += 4) {
+      const outcomes = await Promise.all(descriptors.slice(offset, offset + 4).map(async (descriptor): Promise<
+        { plan: (typeof plans)[number] } | { warning: string }
+      > => {
+        const source = path.join(options.bundledRoot, descriptor.name);
+        try {
+          if (!(await fsp.stat(path.join(source, 'SKILL.md')).catch(() => null))?.isFile()) {
+            throw new Error(`bundled Skill is missing SKILL.md: ${source}`);
+          }
+          const fingerprint = await hashDirectory(source);
+          const installedFingerprint = installedFingerprints.get(descriptor.name) ?? null;
+          const recordedFingerprint = manifest.fingerprints[descriptor.name];
+          const sameVersionConflict =
+            manifest.bundleVersion === bundleVersion &&
+            recordedFingerprint !== undefined &&
+            recordedFingerprint !== fingerprint;
+          if (sameVersionConflict) {
+            return { warning:
+              `kept built-in Skill ${descriptor.name} because bundle version ${bundleVersion} was reused for different bytes`,
+            };
+          }
+          return { plan: { descriptor, source, fingerprint, installedFingerprint } };
+        } catch (error) {
+          return { warning:
+            `could not materialize built-in Skill ${descriptor.name}: ${error instanceof Error ? error.message : String(error)}`,
+          };
         }
-        const fingerprint = await hashDirectory(source);
-        const installedFingerprint = installedFingerprints.get(descriptor.name) ?? null;
-        const recordedFingerprint = manifest.fingerprints[descriptor.name];
-        const sameVersionConflict =
-          manifest.bundleVersion === bundleVersion &&
-          recordedFingerprint !== undefined &&
-          recordedFingerprint !== fingerprint;
-        if (sameVersionConflict) {
-          warnings.push(
-            `kept built-in Skill ${descriptor.name} because bundle version ${bundleVersion} was reused for different bytes`,
-          );
-          continue;
-        }
-        plans.push({ descriptor, source, fingerprint, installedFingerprint });
-      } catch (error) {
-        warnings.push(
-          `could not materialize built-in Skill ${descriptor.name}: ${error instanceof Error ? error.message : String(error)}`,
-        );
+      }));
+      for (const outcome of outcomes) {
+        if ('plan' in outcome) plans.push(outcome.plan);
+        else warnings.push(outcome.warning);
       }
     }
 

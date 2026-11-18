@@ -11,7 +11,7 @@ beforeEach(() => setMainLocale('zh-CN'));
 afterEach(() => setMainLocale('en'));
 
 // cardBuilders 工厂只依赖 ui 文案包 + effort 查询函数 — 用 feishu 真实文案包
-// 构造, effort 固定 'high'(本测试不涉及 model picker)。
+// 构造, effort 固定 'high'。
 const cards = createCardBuilders(ui, () => 'high');
 
 const PROJECTS: ControlProject[] = [
@@ -79,6 +79,91 @@ describe('buildProjectPickerCard — 按钮数据不带本机路径', () => {
     );
     for (const project of PROJECTS) {
       expect(JSON.stringify(spec.buttons)).not.toContain(project.workingDir);
+    }
+  });
+});
+
+describe('选项列表卡按列表排布(飞书一行一个满宽按钮, 文字不被压缩)', () => {
+  it('/model、/project、/ctr、/session 及接管会话卡标记 list', () => {
+    const sections = [
+      {
+        provider: { id: 'p1', name: '供应商一' },
+        models: [
+          { id: 'm1', displayName: '模型一号超长名称' },
+          { id: 'm2', displayName: '模型二号超长名称' },
+        ],
+      },
+    ] as unknown as Parameters<typeof cards.buildModelPickerCard>[0]['sections'];
+    const specs = [
+      cards.buildModelPickerCard({
+        sessionId: 's1',
+        agentKind: 'claude' as Parameters<typeof cards.buildModelPickerCard>[0]['agentKind'],
+        sections,
+        currentModelId: 'm1',
+        currentProviderId: 'p1',
+        currentEffort: null,
+      }),
+      cards.buildProjectPickerCard({ botAppId: 'bot1', projects: PROJECTS, currentName: 'proj-a' }),
+      cards.buildControlPickerCard({ botAppId: 'bot1', projects: PROJECTS }),
+      cards.buildControlSessionPickerCard({
+        botAppId: 'bot1',
+        workingDir: PROJECTS[0]!.workingDir,
+        displayName: 'proj-a',
+        sessions: [{ id: 'sess-1', title: '会话一' }] as unknown as Parameters<
+          typeof cards.buildControlSessionPickerCard
+        >[0]['sessions'],
+      }),
+    ];
+    for (const spec of specs) expect(spec.buttonLayout).toBe('list');
+  });
+
+  it('空态卡只剩少量操作按钮, 保持默认横排', () => {
+    expect(cards.buildControlPickerCard({ botAppId: 'bot1', projects: [] }).buttonLayout).toBeUndefined();
+    expect(
+      cards.buildProjectPickerCard({ botAppId: 'bot1', projects: [], currentName: 'x' }).buttonLayout,
+    ).toBeUndefined();
+  });
+});
+
+describe('buildModelPickerCard — 同名模型按供应商区分', () => {
+  // 两家供应商都有一个叫 GPT-5.5 的模型: 只写模型名时,「当前」一行和选中后的回执都看不出是哪一家。
+  const section = (id: string, name: string) => ({
+    provider: { id, name },
+    models: [{ id: 'gpt-5.5', displayName: 'GPT-5.5', efforts: [], defaultEffort: null, contextWindow: 200_000 }],
+  });
+  const build = (currentProviderId: string | null) =>
+    cards.buildModelPickerCard({
+      sessionId: 'sess-1',
+      agentKind: 'codex',
+      sections: [section('openai', 'OpenAI'), section('relay', 'My Relay')] as unknown as Parameters<
+        typeof cards.buildModelPickerCard
+      >[0]['sections'],
+      currentModelId: 'gpt-5.5',
+      currentProviderId,
+      currentEffort: 'high',
+    });
+
+  it('按钮、「当前」一行与选中后的回执都写出供应商', () => {
+    const spec = build('relay');
+    expect(spec.buttons!.map((button) => button.label)).toEqual([
+      'OpenAI / GPT-5.5 · high',
+      'My Relay / GPT-5.5 · high',
+    ]);
+    expect(spec.buttons!.map((button) => button.type)).toEqual(['default', 'primary']);
+    expect(spec.body).toContain(ui.cards.model.currentLine('My Relay / GPT-5.5', 'high', ''));
+    // 回执文案原样取 payload.modelLabel(见 cardActionHandler 的 model:pick)。
+    expect(spec.buttons!.map((button) => button.payload?.modelLabel)).toEqual([
+      'OpenAI / GPT-5.5',
+      'My Relay / GPT-5.5',
+    ]);
+  });
+
+  it('会话没有锁定来源、或锁定的来源不在清单里时,「当前」一行只写模型名', () => {
+    for (const currentProviderId of [null, 'gone']) {
+      const spec = build(currentProviderId);
+      expect(spec.body).toContain(ui.cards.model.currentLine('GPT-5.5', 'high', ''));
+      expect(spec.body).not.toContain(' / GPT-5.5');
+      expect(spec.buttons!.every((button) => button.type === 'default')).toBe(true);
     }
   });
 });

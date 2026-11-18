@@ -35,6 +35,7 @@ import {
 import { parseSnapshotCommit } from '../git-snapshot/snapshotTrailers';
 import { gitExec } from '../worktree/gitExec';
 import * as gitExecModule from '../worktree/gitExec';
+import { gitPathOutput } from '../worktree/gitPathOutput';
 
 const REAL_GIT_TEST_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 20_000;
 const SESSION = 'shadow-sess-1';
@@ -198,6 +199,34 @@ afterAll(async () => {
 });
 
 describe('createShadowSavepoint', () => {
+  it('batches marker paths in a linked worktree with special characters and preserves its state', async () => {
+    await commitSeed();
+    const linked = path.join(repoPath, "linked 空格 & apostrophe's");
+    await gitExec(['worktree', 'add', '--detach', linked, 'HEAD'], repoPath);
+    await fs.writeFile(path.join(linked, 'untracked.txt'), 'keep this file\n');
+    const state = () => Promise.all([
+      gitExec(['rev-parse', 'HEAD'], linked),
+      gitExec(['status', '--porcelain=v1', '-z'], linked),
+      gitExec(['diff', '--cached'], linked),
+    ]);
+    const before = await state();
+    const execSpy = vi.spyOn(gitExecModule, 'gitExec');
+    const baseline = await createShadowSavepoint(linked, {
+      sessionId: SESSION, label: 'baseline', meta: { kind: 'turn-start' },
+    });
+    expect(baseline.commit).toBeTruthy();
+    expect(execSpy.mock.calls.filter(([args]) => args.includes('--git-path'))).toHaveLength(1);
+    expect(await state()).toEqual(before);
+    const markerPath = path.resolve(linked, gitPathOutput(
+      (await gitExec(['rev-parse', '--git-path', 'rebase-merge'], linked)).stdout,
+    ));
+    await fs.mkdir(markerPath);
+    await expect(createShadowSavepoint(linked, {
+      sessionId: SESSION, label: 'blocked', meta: { kind: 'turn-start' },
+    })).rejects.toMatchObject({ state: { reason: 'rebase', marker: 'rebase-merge', markerPath } });
+    expect(await readSavepointTip(linked, SESSION)).toBe(baseline.commit);
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
   it('terminates a real Git child on cancellation instead of abandoning the promise', async () => {
     const budget = new OperationBudget(10_000);
     let spawned!: (pid: number) => void;

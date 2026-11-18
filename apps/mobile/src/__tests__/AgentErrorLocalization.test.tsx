@@ -44,6 +44,26 @@ const clickText = (text: string) => {
   expect(button).toBeTruthy(); button!.click();
 };
 
+// #10854, unit: live and persisted mobile errors share the known-reason copy;
+// the host cause stays available to diagnosis instead of becoming a false claim.
+it.each(['live', 'tail'] as const)('keeps silent-stop %s copy neutral and preserves diagnosis', async surface => {
+  await i18n.changeLanguage('en');
+  const message = '检测到空响应，自动续跑已暂停。自动续跑请求未派发。\nsilentStopFailureCause=dispatch-not-accepted';
+  const reason = 'silent-stop-exhausted';
+  const errorRow = { ...row(message), content: JSON.stringify({ message, reason, silentStopFailureCause: 'dispatch-not-accepted' }) };
+  const state = resolveSessionTailBanner({ messages: [errorRow], session: null, projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false, continuationInFlight: false, sessionMetadataSyncedForConnection: true, interruptAcked: false, hiddenErrorClientIds: new Set() });
+  const diagnose = vi.fn();
+  await act(async () => root.render(surface === 'live'
+    ? <InlineQueueSection projection={{ error: message, errorReason: reason } as InputProjection} onRetryError={vi.fn()} onContinueAfterError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} onDiagnose={diagnose} />
+    : <SessionTailBanner state={state!} onContinue={vi.fn()} onDismiss={vi.fn()} onDiagnose={diagnose} />));
+  expect(host.textContent).toContain('An empty response was detected. Automatic continuation is paused.');
+  expect(host.textContent).not.toContain('dispatch-not-accepted');
+  await act(async () => clickText(i18n.t('session.tail.showErrorDetails')));
+  expect(host.textContent).toContain('silentStopFailureCause=dispatch-not-accepted');
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="agentError.diagnose"]')!.click());
+  expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ details: message, reason }));
+});
+
 // 诊断入口只在展开详情后出现；预填给新任务的提示带出错任务链接，且与详情同样脱敏。
 it('offers diagnosis after expanding details with a redacted prompt for the failed session', async () => {
   await i18n.changeLanguage('en');
@@ -138,6 +158,40 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
 
 
 describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
+  // #7356 follow-up, component: the runtime cause must reach live, tail and
+  // history summaries in the active locale, without exposing reviewer text.
+  it.each([
+    ['User instructions changed; retry against the latest authorization.', 'INSTRUCTIONS_CHANGED'],
+    ['Plugin or task Auto authorization is no longer active.', 'AUTHORIZATION_INACTIVE'],
+    ['Command review needs concrete command text.', 'MISSING_EVIDENCE'],
+    ['Reviewer text api_key=private-test-value', null],
+  ])('preserves the fixed MCP cause across error surfaces: %s', async (cause, suffix) => {
+    await i18n.changeLanguage(locale);
+    const error = `[MCP_APPROVAL_AUTO_BLOCKED] Automatic approval review blocked this tool call. No user rejection was received. ${cause}`;
+    const key = `session.remoteError.MCP_APPROVAL_AUTO_BLOCKED${suffix ? `_${suffix}` : ''}`;
+    const localized = i18n.getResource(locale, 'common', key);
+    expect(localized).toBeTypeOf('string');
+    expect(unclassifiedAgentErrorI18nKey(error)).toBe(key);
+    const [historical] = normalizeRemoteMessages([row(error)]);
+    expect(historical.body).toBe(localized);
+    expect(historical.errorSummaryKey).toBe(key);
+    expect(historical.rawError).toBe(error);
+    const state = resolveSessionTailBanner({ messages: [row(error)], session: null,
+      projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false,
+      continuationInFlight: false, sessionMetadataSyncedForConnection: true,
+      interruptAcked: false, hiddenErrorClientIds: new Set() });
+    const retry = vi.fn();
+    for (const surface of ['live', 'tail']) {
+      await act(async () => root.render(surface === 'live'
+        ? <InlineQueueSection projection={{ error, errorRetryText: 'original' } as InputProjection}
+            onRetryError={retry} onClearError={vi.fn()} onResume={vi.fn()} />
+        : <SessionTailBanner state={state!} onContinue={retry} onDismiss={vi.fn()} />));
+      expect(host.textContent).toContain(localized);
+      expect(host.textContent).not.toContain('private-test-value');
+      expect(host.textContent).not.toContain('No user rejection was received.');
+    }
+    expect(retry).not.toHaveBeenCalled();
+  });
   // #10187, unit: existing code-only cases missed the guest resume refusal.
   // Exercise the real history, tail and live queue surfaces; no queue mutation.
   it('explains guest resume rejection without offering the same failed send', async () => {
@@ -229,7 +283,7 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
     expect(unclassifiedAgentErrorI18nKey('[CUSTOM_ERROR] private diagnostic')).toBe('session.tail.replyFailed');
   });
 
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
+  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
     'preserves %s guidance across history, live and tail, including language changes', async code => {
       await i18n.changeLanguage(locale);
       const message = `Error invoking remote method 'maker:send': Error: [${code}] upstream diagnostic; api_key=private-test-value`;

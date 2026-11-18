@@ -92,6 +92,48 @@ function setup(mode: 'cloud' | 'local' | 'signed-out', passive = false) {
 }
 
 describe('authentication does not wait for optional plugin provisioning', () => {
+  it('commits cloud login without requiring local asset adoption', async () => {
+    // Unit, #10357 rollback: a failed asset handoff used to reject an already
+    // committed login and skip native provider binding. Existing startup cases
+    // do not execute the cloud-owner commit with an unavailable asset source.
+    let authenticated = false;
+    let claimed = false;
+    let visible = false;
+    const rollback = vi.fn();
+    const deps = {
+      isPassiveSharedUserDataInstance: () => false,
+      withGhostSkillProjectionOwnerCommit: async (hooks: {
+        prepareCommit(): Promise<void>; commit(): Promise<unknown>;
+      }) => {
+        await hooks.prepareCommit();
+        const result = await hooks.commit();
+        visible = authenticated;
+        return result;
+      },
+      reserveCloudOwnerData: () => ({
+        finalize: () => { claimed = authenticated; return claimed; }, rollback,
+      }),
+      adoptLocalProfileAssets: vi.fn(async () => { throw new Error('asset copy unavailable'); }),
+      app: { getPath: () => 'test-only-user-data' },
+      BRAND_IDENTITY: { dbFilePrefix: 'cindy', executableName: 'cindy' },
+      hasExclusiveSharedLegacyUserDataAccess: () => false,
+      acquireWindowsPackagedInstanceBarrier: vi.fn(),
+      requestStableOwnerPostCommit: vi.fn(),
+    };
+    const compiled = transpileModule(
+      `${productionFunction('withCloudOwnerCommit')}\nreturn withCloudOwnerCommit;`,
+      { compilerOptions: { target: ScriptTarget.ES2022 } },
+    ).outputText;
+    const commit = new Function(...Object.keys(deps), compiled)(...Object.values(deps));
+    await commit({ previousOwnerId: 'local-v1', nextOwnerId: 'first-cloud',
+      prepareTransition: async () => {}, commit: () => { authenticated = true; } });
+    expect({ authenticated, claimed, visible }).toEqual({ authenticated: true, claimed: true, visible: true });
+    expect(rollback).not.toHaveBeenCalled();
+    expect(deps.adoptLocalProfileAssets).not.toHaveBeenCalled();
+    expect(deps.acquireWindowsPackagedInstanceBarrier).not.toHaveBeenCalled();
+    expect(deps.requestStableOwnerPostCommit).toHaveBeenCalledWith('owner-commit');
+  });
+
   // Unit, #9801: the real stable-owner callback must recover the public provider
   // factory after a same-owner generation bump. Existing startup tests did not
   // call Host tools; one live provider previously remained HOST_NOT_READY.

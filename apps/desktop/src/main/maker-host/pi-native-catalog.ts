@@ -493,7 +493,15 @@ export function buildPiNativeProvidersFromConfigs(
           ...(m.supportsImageInput !== undefined
             ? { input: (m.supportsImageInput ? ['text', 'image'] : ['text']) as Array<'text' | 'image'> }
             : bundledModel?.input ? { input: [...bundledModel.input] } : {}),
-          ...(m.reasoning !== undefined || m.reasoningEfforts !== undefined
+          ...(resolved?.thinkingToggle && resolved.efforts.length === 0 && bundledModel?.reasoning
+            ? {
+                // A switch has no UI intensity ladder. Preserve Pi's native
+                // enabled level and off mapping instead of disabling reasoning.
+                reasoning: true,
+                ...(bundledModel.thinkingLevelMap
+                  ? { thinkingLevelMap: { ...bundledModel.thinkingLevelMap } } : {}),
+              }
+            : m.reasoning !== undefined || m.reasoningEfforts !== undefined
             ? {
                 reasoning: m.reasoning ?? (m.reasoningEfforts?.length ?? 0) > 0,
                 ...(m.reasoningEfforts !== undefined
@@ -543,6 +551,12 @@ export function buildPiNativeProvidersFromConfigs(
         if (modelApi === 'openai-completions' && !explicitRoute?.requestPath && !rt.requestPath &&
           isOfficialGoogleChatEndpoint(modelBaseUrl ?? rt.baseUrl)) {
           spec.compat = { ...spec.compat, supportsStore: false };
+        }
+        // A user-confirmed connection/model capability is more precise than an
+        // endpoint heuristic (#11023). Never infer a gateway's downstream API
+        // from its name or a Gemini model ID; absent overrides retain Pi defaults.
+        if (modelApi === 'openai-completions' && resolved?.supportsStore !== undefined) {
+          spec.compat = { ...spec.compat, supportsStore: resolved.supportsStore };
         }
         return managedOllama && shouldApplyQwen38Overlay(m.id)
           ? applyQwen38NativeOverlay(spec)

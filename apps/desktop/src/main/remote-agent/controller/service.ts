@@ -9,6 +9,7 @@ import { lookupShareAvailability, allocateShareAvailability, reportShareAvailabi
  *  - 项目说明快照与记忆索引快照(记忆在本机，对方不读它自己的记忆库)；
  *  - 插件花名册快照(插件工具在本机，对方不看它自己装了什么)。
  */
+import type { PreserveAttachmentBatch } from '../../maker-host/attachmentPreservation.js';
 import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -54,13 +55,15 @@ import {
 } from './projectFiles';
 import type { LocalMcpTarget } from './router';
 import { RemoteAgentPoller, RemoteAgentRunClient, RemoteAgentRemoteError, remoteAgentInvoker } from './runClient';
-import { decideProviderGroupFailure } from '../../provider-group/failurePolicy.js';
+import { decideProviderGroupFailure, ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy.js';
 import { registerPendingRemoteStart, startRemoteAgentSession, type PreparedRemoteMcp } from './startRemote';
 import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, sharedTaskLeaseDeadline,
   trackLiveSharedTaskTarget, rememberSharedTaskAuthorization, forgetSharedTaskAuthorization,
   captureSharedTaskAuthorizationCheck } from './providerShareTaskLocation.js';
 
 export interface DeviceAgentServiceDeps {
+  attachmentPreservation?(sessionId: string): PreserveAttachmentBatch;
+  attachmentStorageRoots?(sessionId: string): Record<string, string>;
   readImageDeliveryEpoch?(sessionId: string): Promise<number>;
   remoteInvoke(deviceId: string, channel: string, args: unknown[]): Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>;
   /** Re-open the authenticated share link after a successful lease renewal. */
@@ -485,6 +488,8 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       reconnectAuthorization: (isCurrent, options) => reconnectAuthorization?.(isCurrent, options) ?? Promise.resolve(),
       onTaskGrantRenewable: (renewable) => { grantRenewable = renewable; },
       readImageDeliveryEpoch: deps.readImageDeliveryEpoch,
+      attachmentPreservation: deps.attachmentPreservation,
+      attachmentStorageRoots: deps.attachmentStorageRoots,
       invoke: poller.invoke,
       poller,
       pool: poolFor(target),
@@ -1032,7 +1037,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       // M proved that it never started a process or has stopped it, and
       // startRemote has finished G's local cleanup. Preserve that evidence as
       // a local class so Maker releases this attempt's guards before reopening.
-      if (confirmedStoppedStartup(error)) {
+      if (confirmedStoppedStartup(error) || error instanceof ProviderGroupUsageLimitError) {
         throw new AgentStartupStoppedError(error);
       }
       throw error;

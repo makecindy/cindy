@@ -38,12 +38,16 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => children,
   DropdownMenuContent: () => null,
   DropdownMenuItem: () => null,
+  DropdownMenuLabel: () => null,
+  DropdownMenuSeparator: () => null,
 }));
 
 const session = (id: string, deviceLinkDeviceId: string | null = null) =>
   ({ id, deviceLinkDeviceId }) as Session;
 const entry = (s: Session): PinnedSidebarEntry => ({ kind: 'session', id: s.id, session: s });
 const props = (entries: PinnedSidebarEntry[], running: string[] = []): PinnedSectionProps => ({
+  sortBy: 'manual',
+  onSortByChange: vi.fn(),
   entries,
   allKnownProjects: [],
   renderProject: () => null,

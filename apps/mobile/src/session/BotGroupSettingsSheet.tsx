@@ -68,7 +68,8 @@ export function BotGroupSettingsSheet(props: SettingsProps) {
 /** Direct server groups use the same account connection for chat and settings. */
 function DirectGroupSettings(props: SettingsProps) {
   const management = useBotGroupSettingsManagement(props.group, props.visible);
-  const group = management.group ?? props.group;
+  // Settings reads contain metadata only; execution activity stays with the live chat subscription.
+  const group = management.group ? { ...management.group, round: props.group.round } : props.group;
   const lookup = useBotGroupIdentities('');
   // Settings writes refresh the chat like lifecycle actions do.
   const refreshing = { ...management, act: async (...args: Parameters<typeof management.act>) => {

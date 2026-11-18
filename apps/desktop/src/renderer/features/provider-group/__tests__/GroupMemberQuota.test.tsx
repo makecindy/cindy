@@ -102,7 +102,7 @@ beforeEach(() => {
   mocks.getState.mockReset().mockResolvedValue({ linkStatus: 'online' });
   mocks.poolChanged.clear();
   mocks.remotePush.clear();
-  mocks.poolCommand.mockReset().mockResolvedValue({ providerId: 'anthropic', configured: false, strategy: 'least', accounts: [poolAccount('default', { identity: 'me@example.com' })] });
+  mocks.poolCommand.mockReset().mockRejectedValue(new Error('unsupported'));
   mocks.remoteInvoke.mockReset().mockRejectedValue(new Error('unsupported'));
   vi.stubGlobal('electronAPI', { subscriptionAccounts: {
     command: mocks.poolCommand,
@@ -845,7 +845,7 @@ describe('GroupMemberQuota', () => {
     expect(screen.queryByText('providerGroup.member.quota.loading')).toBeNull();
   });
 
-  it('lists every account on this computer, keeping the live card on the default account', async () => {
+  it('lists each account with its own quota instead of borrowing the provider card', async () => {
     mocks.poolCommand.mockResolvedValue(pool([
       poolAccount('default', { identity: 'first@example.com', usage: claudeUsage(90) }),
       poolAccount('work', { identity: 'second@example.com', usage: claudeUsage(25) }),
@@ -854,8 +854,8 @@ describe('GroupMemberQuota', () => {
     expect(mocks.poolCommand).toHaveBeenCalledWith({ action: 'read', providerId: 'anthropic' });
     const rows = screen.getAllByTestId('provider-group-member-account');
     expect(rows.map(row => row.querySelector('[title]')?.textContent)).toEqual(['first@example.com', 'second@example.com']);
-    // 默认账号沿用原卡，新增账号用自己的额度，互不借用。
-    expect(rows[0].querySelector('[data-testid="quota-card"]')?.textContent).toBe('This computer’s Claude');
+    // Unit regression: the CLI-origin row must use its 90% snapshot too.
+    expect(rows.map(row => row.querySelector('[data-testid="quota-card"]')?.getAttribute('data-usage'))).toEqual(['[90]', '[25]']);
     expect(rows[1].querySelector('[data-testid="quota-card"]')?.textContent).not.toBe('This computer’s Claude');
   });
 
@@ -902,11 +902,12 @@ describe('GroupMemberQuota', () => {
     expect(screen.getByTestId('quota-card').textContent).toBe('Mini’s Claude');
   });
 
-  it('adds no account name when the default account is the only one', async () => {
+  it('hides the name but retains its own quota when only the CLI-origin account remains', async () => {
+    mocks.poolCommand.mockResolvedValue(pool([poolAccount('default', { identity: 'me@example.com', usage: claudeUsage(44) })]));
     await show({ kind: 'local', providerId: 'anthropic' });
     expect(mocks.poolCommand).toHaveBeenCalled();
-    expect(screen.queryByTestId('provider-group-member-account')).toBeNull();
-    expect(screen.getByTestId('quota-card').textContent).toBe('This computer’s Claude');
+    expect(screen.queryByText('me@example.com')).toBeNull();
+    expect(screen.getByTestId('quota-card').getAttribute('data-usage')).toBe('[44]');
   });
 
   // r4523414503: account enumeration must survive expired logins; the old quota
@@ -967,9 +968,9 @@ describe('GroupMemberQuota', () => {
     mocks.poolCommand.mockResolvedValue(pool([poolAccount('default', { paused: true })]));
     await show({ kind: 'local', providerId: 'anthropic' });
     expect(screen.queryByTestId('quota-card')).toBeNull();
-    mocks.poolCommand.mockResolvedValue(pool([poolAccount('default')]));
+    mocks.poolCommand.mockResolvedValue(pool([poolAccount('default', { usage: claudeUsage(44) })]));
     await act(async () => mocks.poolChanged.forEach(listener => listener({ providerId: 'anthropic' })));
-    expect(screen.getByTestId('quota-card').textContent).toBe('This computer’s Claude');
+    expect(screen.getByTestId('quota-card').getAttribute('data-usage')).toBe('[44]');
   });
 
   it('rereads the accounts when they change on this computer', async () => {

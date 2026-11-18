@@ -55,6 +55,7 @@ export type XdtHelperToolCategory =
   | 'terminal'
   | 'files'
   | 'storage'
+  | 'usage'
   | 'discovery';
 
 export type XdtHelperToolContentBlock =

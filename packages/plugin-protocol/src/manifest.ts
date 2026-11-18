@@ -189,6 +189,8 @@ export interface GhostMainViewDecl {
   title?: string;
   /** 侧边栏使用的 Cindy 系统线性图标；缺省为 puzzle。 */
   icon?: GhostMainViewIcon;
+  /** Optional navigation symbol. Readers that do not know the name use icon. */
+  preferredIcon?: string;
   /** 主视图界面入口（安装目录内安全相对路径）。 */
   html: string;
   /** 左侧导航入口点击后的默认打开方式;缺省 page。 */
@@ -245,7 +247,7 @@ export interface GhostCardNeeds {
  * 声明 `agent` 默认只允许消费宿主在真实用户点击插件卡片时签发的
  * 一次性通行票；可选加档由 Desktop 如实展示，并由 Host 在运行时守门。
  */
-export const GHOST_HOST_TOOL_GROUPS = ['history', 'control', 'handoff', 'settings', 'scheduler', 'terminal', 'files', 'storage', 'browser', 'computer', 'ssh', 'docs', 'discovery'] as const;
+export const GHOST_HOST_TOOL_GROUPS = ['history', 'control', 'handoff', 'settings', 'scheduler', 'terminal', 'files', 'storage', 'browser', 'computer', 'ssh', 'docs', 'discovery', 'usage'] as const;
 export type GhostHostToolGroup = (typeof GHOST_HOST_TOOL_GROUPS)[number];
 
 /** Unknown groups survive normalization but never become runtime authority. */
@@ -271,6 +273,8 @@ export interface GhostAgentNeeds {
   observe?: boolean;
   /** 只读查看伙伴(含主人其他电脑上的)名单、实时状态、待处理请求摘要与最新回复,并在主窗口打开;需独立批准。 */
   companions?: boolean;
+  /** 读取并修改本机模型收藏、只读最近使用的模型;不依赖 tasks,安装/更新确认中单列。 */
+  modelPreferences?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -439,7 +443,7 @@ export interface GhostCindyNeeds {
  * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
  * 两项分别展示权限并记录显式批准；旧元数据主题的批准语义保持。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'message', 'task-state'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'message', 'task-state', 'tool-execution', 'native-recovery'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
 
 /**
@@ -454,7 +458,7 @@ export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
  * 在场,冷启动延迟不可接受),校验强制。
  */
 export const GHOST_SUBSCRIBE_HOOKS = ['will-user-message', 'will-assistant-message'] as const;
-export type GhostSubscribeHook = (typeof GHOST_SUBSCRIBE_HOOKS)[number] | 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory';
+export type GhostSubscribeHook = (typeof GHOST_SUBSCRIBE_HOOKS)[number] | 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory' | 'will-tool-call' | 'did-tool-result';
 
 /**
  * 订阅槽详单(与 slots 含 'subscribe' 成对;有槽无详单允许装入但零事件——
@@ -1031,6 +1035,13 @@ export interface GhostManifest {
   settingsHeight?: number;
   /** 本插件是否使用宿主默认配置卡；缺省/true 启用，false 隐藏且不读取该插件的卡片配置。 */
   showTaskPreferences?: boolean;
+  /**
+   * 本插件是一个 IM 入口，使用 IM 共用的项目与模型（需同时声明 agent.tasks 与 agent.targets）。
+   * 只影响宿主展示：「IM 机器人」设置页列出它并显示「项目与模型」；不授予任何能力。
+   */
+  imEntrance?: boolean;
+  /** Optional GitHub.com owner/repository for local plugin updates. */
+  githubRelease?: unknown;
   /** 仅 schemaVersion 2 存在的兼容声明。 */
   slots?: LegacyGhostSlot[];
   /**
@@ -1284,6 +1295,8 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'settingsHtml',
   'settingsHeight',
   'showTaskPreferences',
+  'imEntrance',
+  'githubRelease',
   'slots',
   'card',
   'mail',
@@ -1357,6 +1370,15 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   iosSimulator: 'ios-simulator',
   liveScreen: 'live-screen',
 };
+
+/** Select only a supported GitHub.com repository; stored historical declarations remain opaque. */
+export function getGhostGithubReleaseRepository(manifest: { githubRelease?: unknown; settingsHtml?: unknown }): string | undefined {
+  const { githubRelease, settingsHtml } = manifest;
+  if (typeof settingsHtml !== 'string' || typeof githubRelease !== 'string' ||
+      !/^[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9_.-]{1,100}$/i.test(githubRelease) ||
+      /\/(?:\.|\.\.)$/.test(githubRelease)) return;
+  return githubRelease.toLowerCase();
+}
 
 type PreparedGhostManifest = {
   raw: Record<string, unknown>;
@@ -1798,7 +1820,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       }
     }
     mainView = {
-      ...unknownDeclarationFields(raw.mainView, ['html', 'title', 'icon', 'open', 'side', 'multiple']),
+      ...unknownDeclarationFields(raw.mainView, ['html', 'title', 'icon', 'preferredIcon', 'open', 'side', 'multiple']),
+      ...(typeof raw.mainView.preferredIcon === 'string' ? { preferredIcon: raw.mainView.preferredIcon } : {}),
       ...(raw.mainView.title !== undefined ? { title: raw.mainView.title } : {}),
       ...(raw.mainView.icon !== undefined ? { icon: raw.mainView.icon as GhostMainViewIcon } : {}),
       ...(raw.mainView.open !== undefined
@@ -1857,6 +1880,17 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
   }
   if (raw.showTaskPreferences !== undefined && typeof raw.showTaskPreferences !== 'boolean') {
     return { ok: false, reason: 'showTaskPreferences 必须是布尔值' };
+  }
+  // Older manifests could use this formerly unknown name. Preserve their snapshot.
+  if (raw.githubRelease !== undefined && !preserveHistoricalParameterSize && !getGhostGithubReleaseRepository(raw)) {
+    return { ok: false, reason: 'githubRelease requires settingsHtml and a GitHub owner/repository' };
+  }
+  if (raw.imEntrance !== undefined && !preserveHistoricalParameterSize) {
+    if (typeof raw.imEntrance !== 'boolean') return { ok: false, reason: 'imEntrance 必须是布尔值' };
+    const imAgent = raw.agent as Record<string, unknown> | undefined;
+    if (raw.imEntrance && (imAgent?.tasks !== true || imAgent?.targets !== true)) {
+      return { ok: false, reason: 'imEntrance: true 需要同时声明 agent.tasks 与 agent.targets' };
+    }
   }
   if (raw.settingsHeight !== undefined) {
     if (raw.settingsHtml === undefined) {
@@ -3230,15 +3264,16 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       return { ok: false, reason: 'agent.observe must be boolean' };
     }
     if (agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions'])).length === 0) {
+    if (agentRaw.modelPreferences !== undefined && typeof agentRaw.modelPreferences !== 'boolean') return { ok: false, reason: 'agent.modelPreferences must be boolean' };
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && agentRaw.modelPreferences !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true 六项加档;仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true / modelPreferences: true 七项加档;仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions']),
+      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -3248,6 +3283,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
       ...(agentRaw.observe === true ? { observe: true } : {}),
       ...(agentRaw.companions === true ? { companions: true } : {}),
+      ...(agentRaw.modelPreferences === true ? { modelPreferences: true } : {}),
     };
   }
 
@@ -4043,6 +4079,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(raw.showTaskPreferences !== undefined
         ? { showTaskPreferences: raw.showTaskPreferences as boolean }
         : {}),
+      ...(raw.githubRelease !== undefined ? { githubRelease: raw.githubRelease } : {}),
+      ...(raw.imEntrance !== undefined ? { imEntrance: raw.imEntrance as boolean } : {}),
       ...(prepared.schemaVersion === 2 ? { slots } : {}),
       ...(card !== undefined
         || prepared.v3BaseCard

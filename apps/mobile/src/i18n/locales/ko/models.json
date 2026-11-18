@@ -74,7 +74,6 @@
     "cancel": "그대로 두기"
   },
   "unified": {
-    "accountUnassigned": "계정 미배정",
     "accountCount_other": "계정 {{count}}개",
     "accountFallback": "계정 {{index}}",
     "favoriteConfiguration": "이 설정을 즐겨찾기에 추가",

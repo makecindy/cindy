@@ -49,7 +49,7 @@ vi.mock('node:worker_threads', () => ({
       let stdout = '';
       child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
       child.once('error', (error: Error) => this.emit('error', error));
-      child.once('close', () => { this.emit('message', { stdout }); this.emit('exit', 0); });
+      child.once('close', () => { this.emit('message', { status: parseClaudeCliLoginStatus(stdout) }); this.emit('exit', 0); });
     }
   },
 }));
@@ -62,6 +62,7 @@ import {
   readClaudeCliPlanUsage,
   readClaudeCliLoginStatus,
   refreshClaudeCliLoginStatus,
+  onClaudeCliLoginStatusChange,
   resetClaudeNativeCliForTest,
   runClaudeCliLogin,
 } from '../claude-native-cli.desktop.js';
@@ -116,6 +117,11 @@ beforeEach(() => {
 });
 
 describe('parseClaudeCliLoginStatus', () => {
+  // Unit: official auth status already exposes the tier, but our parser discarded it.
+  it.each(['max_5x', 'max_20x', 'future_tier'])('preserves the upstream tier %s without guessing a product name', planTier => {
+    expect(parseClaudeCliLoginStatus(JSON.stringify({ ...JSON.parse(SUBSCRIPTION), planTier })))
+      .toMatchObject({ subscriptionType: 'max', planTier });
+  });
   // Login expiry is advisory metadata from the official CLI, never an auth verdict.
   it.each(['2026-12-01T12:00:00.000Z', '2020-01-01T00:00:00.000Z'])('preserves a valid login deadline without signing the account out (%s)', (loginExpiresAt) => {
     expect(parseClaudeCliLoginStatus(JSON.stringify({ ...JSON.parse(SUBSCRIPTION), loginExpiresAt })))
@@ -211,6 +217,19 @@ describe('claudeCliNetworkEnv', () => {
 });
 
 describe('登录态读取', () => {
+  // Standard: a display-name-only refresh must update the cached card and notify
+  // observers even when the CLI's legacy subscription classification is unchanged.
+  it('publishes an official display-name change from the worker result', async () => {
+    const listener = vi.fn();
+    onClaudeCliLoginStatusChange(listener);
+    h.spawn.mockImplementationOnce(() => fakeChild({ stdout: SUBSCRIPTION }));
+    await refreshClaudeCliLoginStatus();
+    h.spawn.mockImplementationOnce(() => fakeChild({ stdout: JSON.stringify({ ...JSON.parse(SUBSCRIPTION), planDisplayName: 'Ultra' }) }));
+    await refreshClaudeCliLoginStatus({ requireFresh: true });
+    expect(peekClaudeCliLoginStatus()).toMatchObject({ subscriptionType: 'max', planDisplayName: 'Ultra' });
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ planDisplayName: 'Ultra' }));
+  });
   // Standard: identity verification must not accept stale default metadata, and
   // a forced post-login read must run after any earlier in-flight profile read.
   it('requires a fresh default identity while ordinary display retains its fallback', async () => {

@@ -48,6 +48,7 @@ beforeEach(() => {
       if (body.expectedRevision !== snapshot.room.revision) throw Object.assign(new Error('REVISION_CONFLICT'), { status: 409 });
       if (body.name !== undefined) snapshot.room.name = body.name;
       if (body.description !== undefined) snapshot.room.description = body.description;
+      if (body.allowMemberInvites !== undefined) snapshot.room.allow_member_invites = body.allowMemberInvites;
       snapshot.room.revision++;
       return { revision: snapshot.room.revision };
     }
@@ -66,14 +67,14 @@ it('reads and saves cloud settings and offers offline companions without any hos
   expect(result.group).toMatchObject({ description: 'Original', singleSpeaker: true });
   expect(result.group?.members.find(member => member.actorId === id(3))?.homeDeviceId).toBe('pc');
   expect(candidates.rows.map(row => row.id)).toEqual([id(4)]);
-  await act(async () => { await result.act('update', { name: 'Renamed', description: 'Shared background', replyMode: 'mentioned', organizerBotId: id(3) }); });
-  expect(writes()[0]).toEqual([`/conversations/${id(1)}`, 'PATCH', { operationId: 'operation-1', expectedRevision: 4, name: 'Renamed', description: 'Shared background', responseMode: 'mentioned', organizerId: id(3) }, id(2)]);
-  expect(result.group).toMatchObject({ name: 'Renamed', description: 'Shared background', revision: 5 });
+  await act(async () => { await result.act('update', { name: 'Renamed', description: 'Shared background', replyMode: 'mentioned', organizerBotId: id(3), allowMemberInvites: true }); });
+  expect(writes()[0]).toEqual([`/conversations/${id(1)}`, 'PATCH', { operationId: 'operation-1', expectedRevision: 4, name: 'Renamed', description: 'Shared background', responseMode: 'mentioned', organizerId: id(3), allowMemberInvites: true }, id(2)]);
+  expect(result.group).toMatchObject({ name: 'Renamed', description: 'Shared background', revision: 5, allowMemberInvites: true });
   await act(async () => { await result.act('add-member', { botId: id(4) }); await result.act('set-member-role', { actorId: id(3), role: 'admin' }); await result.act('remove-member', { actorId: id(3) }); });
   expect(writes().slice(1).map(call => call[2])).toEqual([
     { operationId: 'operation-2', actorId: id(4), action: 'invite' },
     { operationId: 'operation-3', actorId: id(3), action: 'role', role: 'admin' },
-    { operationId: 'operation-4', actorId: id(3), action: 'remove' },
+    { operationId: 'operation-4', actorId: id(3), action: 'leave' },
   ]);
 });
 
@@ -112,6 +113,24 @@ it('lets an ordinary member save notifications without a manager or online compu
   source = { ...source, notificationMode: 'none' };
   await render();
   expect(result.group?.notificationMode).toBe('none');
+});
+
+// Unit regression: ordinary members can withdraw only their own companion. Prior coverage
+// exercised manager removal, not the actor identity/body required by the existing leave API.
+it('withdraws an owned companion as that actor without granting removal of other companions', async () => {
+  snapshot.members[0].role = 'member';
+  snapshot.members.push({ ...snapshot.members[1], id: id(8), ownerActorId: id(9) });
+  await render();
+  await act(async () => { await result.act('remove-member', { actorId: id(3) }); });
+  expect(writes()).toEqual([[`/conversations/${id(1)}/members`, 'POST',
+    { operationId: 'operation-1', actorId: id(3), action: 'leave' }, id(3)]]);
+  await act(async () => { await expect(result.act('remove-member', { actorId: id(8) })).rejects.toThrow('PERMISSION_DENIED'); });
+  expect(writes()).toHaveLength(1);
+  // Ownership revoked since the earlier snapshot must not be reused after refresh.
+  snapshot.members[1].ownerActorId = id(9);
+  await act(async () => { await result.refresh(); });
+  await act(async () => { await expect(result.act('remove-member', { actorId: id(3) })).rejects.toThrow('PERMISSION_DENIED'); });
+  expect(writes()).toHaveLength(1);
 });
 
 it('selects only an owned manager, never a foreign owner', async () => {
@@ -230,6 +249,23 @@ it('reuses an invitation receipt after a lost share response and clears it after
   request.mockResolvedValueOnce({ ...invite, token: 'B'.repeat(43) });
   await act(async () => { await result.invite(); });
   expect(writes().at(-1)?.[2].operationId).not.toBe(first[2].operationId);
+});
+
+// Unit: member invitation rights do not make the group's settings editable.
+it.each([false, true])('creates a friend link as a member only when enabled (%s)', async enabled => {
+  snapshot.members.forEach(member => { member.role = 'member'; });
+  snapshot.room.allow_member_invites = enabled;
+  await render();
+  expect(result.editable).toBe(false);
+  expect(result.group?.canInvite).toBe(enabled);
+  if (!enabled) {
+    await act(async () => { await expect(result.invite()).rejects.toThrow('PERMISSION_DENIED'); });
+    expect(writes()).toHaveLength(0);
+    return;
+  }
+  request.mockResolvedValueOnce({ token: 'A'.repeat(43), expiresAt: null, reusable: true });
+  await act(async () => { await expect(result.invite()).resolves.toMatchObject({ link: `${shareBase}/chat-invite/${shareId}` }); });
+  expect(writes().at(-1)).toEqual([`/conversations/${id(1)}/invite-links`, 'POST', expect.any(Object), id(2)]);
 });
 
 it.each(['account', 'group', 'manager'] as const)('does not reuse an uncertain invitation across a changed %s', async scope => {

@@ -8,7 +8,11 @@ Desktop 在工作过程分组后追加待发项（`pendingQueueItems.ts`），�
 
 定向界面验证：`pnpm ui:check --page pending-queue --theme all`。真实派发仍由现有输入协调器负责。
 
-> **读取时机**：安装、启动、重启、调试或验证 `apps/desktop` 及其共享 packages 时
+> **读取时机**：安装、启动、重启、调试或验证 `apps/desktop` 及其共享 packages 时，
+> 或修改 Desktop 开发启动脚本与单页 UI 验证工具（`ui:check`）之前
+> **适用路径**：`scripts/restart-desktop-remote.mjs`、`scripts/desktop-dev-runner.mjs`、
+> `scripts/desktop-dev-verdict.mjs`、`scripts/shared/desktop-dev-*.mjs`、
+> `apps/desktop/scripts/ui-page/**`
 
 本文是 Desktop 开发命令及其使用条件的权威说明；可执行脚本以当前 checkout 的根
 `package.json` 与 `apps/desktop/package.json` 为代码事实源。
@@ -555,8 +559,10 @@ node apps/desktop/scripts/check-windows-remote-desktop-runtime.mjs
 展开后以内容区像素宽度为基准：聊天区与其它停靠面板保持宽度，最右侧栏使用 CSS
 剩余空间吸收窗口伸缩；达到最小尺寸后仍遵守原有空间约束。实时缩放不在每个 resize
 事件里重写 React 状态或偏好。主动拖中间分隔线前以实测宽度校准份额账本，提交后
-重新建立聊天区宽度基准。收起时窗口整体回到展开前的位置和大小（扩展后主动拖宽、
-原生移动或缩放都只算临时空间分配，不保留）；关闭、移位或重新展开时解除／重建临时基准。
+重新建立聊天区宽度基准。收起时还原展开前的大小，位置按打开期间的原生窗口位移平移；
+拖到另一块屏幕后留在该屏幕。分隔线调整与展开期间的窗口缩放仍只算临时空间分配，
+不覆盖还原大小；关闭或重新展开时解除／重建临时基准。关闭与退出保存共用包含屏幕
+边界修正的目标矩形，细则及实现／回归链接见「侧边栏与主窗口几何」。
 
 用户主动调整侧栏后，把实际像素宽度写入布局树 pane 的可选 `preferredWidth`，通过
 既有 LayoutStore 保存到 `layout.v1.json`；下次展开及重启后优先恢复该宽度。
@@ -614,15 +620,43 @@ allowlist；SSH、远程任务及手机不会误触本机重启提示。此功�
 
 ## 侧边栏与主窗口几何
 
-主窗口的位置和大小以没有右侧边栏时的矩形为准。打开侧边栏前保存该矩形，
-打开期间分隔线只调整两侧空间分配，原生窗口移动和缩放也不覆盖这份基准；
-关闭侧边栏或离开对应页面后恢复打开前的矩形。最大化／全屏时不强制修改窗口边界。
-窗口状态持久化同样读取这份基准，重启后若侧边栏仍打开，则从基准重新展开，
+主窗口的独立大小以没有右侧边栏时的矩形为准。打开侧边栏前保存该矩形，
+打开期间分隔线与原生窗口缩放只调整临时空间分配，不覆盖还原大小；
+关闭侧边栏或离开对应页面后还原打开前的大小，位置按打开期间的窗口位移平移。
+拖到另一块屏幕后留在该屏幕；从左／上边缘缩放造成的左上角位移也按同样规则保留。
+最大化／全屏时不强制修改窗口边界。
+关闭与侧边栏开着时的退出保存共用同一个目标矩形（打开前大小 + 打开期间位移），
+包括同一套屏幕边界修正。重启后若侧边栏仍打开，则从保存的独立矩形重新展开，
 不能再次从已保存的主窗口宽度中扣除侧边栏。旧版本保存的矩形作为首次升级后的基准。
 同一原生窗口再次打开侧边栏时，恢复上次展开的总宽度，并应用布局中已保存的侧栏宽度；
 不能把拖动分隔线后的侧栏宽度当成新增窗口宽度，否则聊天区域会被重置。展开宽度在
 窗口生命周期内独立记忆，关闭状态的调整只更新独立主窗口基准；重新打开仍受当前屏幕边界限制。
 Windows 的贴边／贴满判断仍读真实窗口（程序自己的展开不算贴满），贴满照常记为最大化。
-若打开期间显示器被拔掉或分辨率变小，收起时旧矩形改放回当前工作区内。
-实现见 `main/sidebarWindowExpansion.ts`、`renderer/layout/sidebarPresentation.ts`；
-回归见 `sidebarWindowExpansion.test.ts` 和 `sidebarPresentation.test.tsx`。
+若目标矩形超出其匹配显示器的工作区（包括打开期间显示器被拔掉或分辨率变小），
+且打开前的矩形原本完整位于工作区内，关闭和退出保存均将目标放回该工作区内；
+打开前已经超界的矩形保留原有语义。
+实现见 [sidebarWindowExpansion.ts](../../apps/desktop/src/main/sidebarWindowExpansion.ts)
+与 [sidebarPresentation.ts](../../apps/desktop/src/renderer/layout/sidebarPresentation.ts)；
+回归见 [sidebarWindowExpansion.test.ts](../../apps/desktop/src/main/__tests__/sidebarWindowExpansion.test.ts)
+（拖动、跨屏、越界以及退出保存与关闭一致性）和
+[sidebarPresentation.test.tsx](../../apps/desktop/src/renderer/layout/__tests__/sidebarPresentation.test.tsx)。
+
+## Codex Micro Guard 遗留全局环境恢复
+
+旧版保护通过当前用户的 `launchctl NODE_OPTIONS` 预加载钩子，可能影响企业微信等
+沙盒 Node 应用（#5985）。功能已暂停；恢复仅剥离 Cindy 已知目录格式的预加载参数，
+保留其他 Node 参数，不重新启用保护。
+
+正常恢复沿用跨实例文件锁并清理旧标记。若创建锁之前遇到 `ENOSPC`、`EDQUOT` 或
+`EROFS`，仍通过 launchctl 尝试清理并回读验证全局变量，不依赖分配磁盘空间。
+此应急分支不读取旧快照、不处理文件，仍报告 `recovery-required`；磁盘恢复后使用
+设置中的「恢复环境」完成普通清理。只有旧钩子的值会被 unset；没有磁盘快照时无法恢复
+原先显式设置的空字符串。权限错误、不安全路径和锁竞争不走应急分支。
+
+清理全局环境不能改变已运行应用的环境：须完全退出旧版 Cindy，并重新打开受影响应用。
+不会强制终止应用、删除诊断报告或更改沙盒权限。不要在故障机器上先删除 hook 文件，
+已继承预加载的进程仍可能引用它。现场应记录客户端版本与清理是否成功；本地故障注入
+测试不能替代企业微信现场验证，也不能据此断言每次报告风暴都是磁盘满导致的清理失败。
+
+回归入口：`codexMicroGuardCore.test.ts`、`CodexMicroGuardService.test.ts`；测试通过替身
+模拟 launchctl 和存储故障，不修改测试机的真实全局环境。
