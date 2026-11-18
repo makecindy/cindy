@@ -181,3 +181,17 @@ it('current-call durable read preserves the in-flight tool authorization', async
   expect((await f.service.restore('gmail', { callId: 'reopened', sourceCallId: 'reopened' }, () => true)).ok).toBe(true);
   expect(f.cards.inFlightCallInfoOf('reopened')).toBeNull();
 });
+
+// Sibling status updates keep their original registered call ownership. A tool
+// in another task cannot reopen that call with its own source authorization.
+it('terminal status can close original task cards without cross-task reopening', async () => {
+  const f = fixture();
+  f.register('a', 'gmail', 'task-a'); f.register('b', 'gmail', 'task-b');
+  await f.publish('a'); await f.publish('b', snapshot({ key: '22345678-1234-1234-1234-123456789abc' }));
+  expect((await f.service.handle('gmail', { callId: 'a', sourceCallId: 'b', statusOnly: { state: 'sent', status: 'Sent' } }, () => true)).ok).toBe(false);
+  expect((await f.service.handle('gmail', { callId: 'a', statusOnly: { state: 'sent', status: 'Sent' } }, () => true)).ok).toBe(true);
+  expect(readMailCard(f.rows.get('a')!.html)?.state).toBe('sent');
+  expect(f.rows.get('a')!.html).not.toContain('data-ghost-change');
+  expect(readMailCard(f.rows.get('b')!.html)?.state).toBe('draft');
+  expect(f.cards.inFlightCallInfoOf('b')).not.toBeNull();
+});

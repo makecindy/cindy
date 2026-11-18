@@ -2098,3 +2098,71 @@ test('conflict update racing a sibling send cannot authorize an ordinary update'
   assert.equal(f.writes.length, 2);
   assert.equal(f.writes.filter(r => r.send).length, 1);
 });
+
+// Both stale snapshots can agree after an explicit mailbox rollback. Agreement
+// cannot erase the only proof that an executed save had different content.
+for (const operation of ['get', 'send']) test(`pre-save durable card and rolled-back mailbox stay locked: ${operation}`, async () => {
+  let f, drop = false;
+  f = fixture({ durablePublish: card => !drop || card.type !== 'mail-draft-update', write: request => {
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present(); drop = true;
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update');
+  f.externalEdit({ body: 'Original' });
+  drop = false; f.restart();
+  const result = await f.tool(operation);
+  if (operation === 'get') assert.ok(result.data.conflicts?.includes('body'));
+  else assert.equal(result.ok, false);
+  await f.advance(2000);
+  assert.equal(f.writes.length, 1);
+  assert.ok(Object.keys((await f.resolve()).completedSaveHashes).length);
+  assert.equal(f.current().editor.body, 'Original');
+});
+
+// A shared terminal receipt must end every preserved editor, not just block
+// its eventual provider write while accepting more impossible-to-save typing.
+for (const operation of ['send', 'delete']) for (const lateBinding of [false, true]) test(`terminal ${operation} disables all retained task editors and cancels their countdowns: lateBinding=${lateBinding}`, async () => {
+  let f, expired = lateBinding;
+  f = fixture({ autoSend: false, allowCardRead: false, publish: card => !(expired && card.callId === 'card-call' && ['sent', 'deleted'].includes(card.statusOnly?.state)), write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  const a = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.tool('get');
+  const b = f.cards.at(-1).draft.key;
+  await f.tool('get', { sourceCallId: 'card-call' });
+  const aSending = f.tool('send', { sourceCallId: 'card-call' });
+  await f.waitCountdown();
+  if (operation === 'send') {
+    const bSending = f.tool('send');
+    for (let i = 0; i < 500 && !f.cards.some(c => c.callId === 'agent-call' && c.statusOnly?.pendingSend); i++) await Promise.resolve();
+    assert.ok(f.cards.some(c => c.callId === 'agent-call' && c.statusOnly?.pendingSend));
+    await f.card('now', f.values(), { callId: 'agent-call', actionId: `mail:now:${b}` });
+    assert.equal((await bSending).ok, true);
+    assert.equal((await aSending).data.alreadySent, true);
+  } else {
+    assert.equal((await f.tool('delete')).data.deleted, true);
+    assert.equal((await aSending).execution, 'not_executed');
+  }
+  const state = operation === 'send' ? 'sent' : 'deleted';
+  for (const route of Object.values(f.kv().mailDraftCards)) assert.equal(route.state, state);
+  if (!lateBinding) {
+    assert.equal(f.cards.findLast(c => c.callId === 'card-call' && c.statusOnly)?.statusOnly.state, state);
+    assert.equal(f.cards.findLast(c => c.callId === 'card-call' && c.statusOnly)?.statusOnly.pendingSend, undefined);
+  }
+  expired = false;
+  if (lateBinding) f.restart();
+  const cards = f.cards.length, writes = f.writes.length;
+  await f.card('change', { ...f.values(), body: 'Too late' }, { actionId: `mail:change:${a}` });
+  await f.advance(10000);
+  assert.equal(f.writes.length, writes);
+  assert.equal(f.cards.slice(cards).some(c => c.draft || c.statusOnly?.pendingSend), false);
+  assert.equal(f.cards.findLast(c => c.callId === 'card-call' && c.statusOnly)?.statusOnly.state, state);
+});

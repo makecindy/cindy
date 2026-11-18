@@ -319,14 +319,13 @@ var cindyMail = (function () {
           const proof = record.completedSaveHashes[name];
           if (!originals[name] || !proof ||
               (originals[name] !== proof.base && originals[name] !== proof.previous)) continue;
-          if (hashes[name] === proof.attempt) {
-            base[name] = remote[name];
-            // A pre-save durable editor is not evidence of later user input.
-            // Without a newer Host baseline or field observation, keep it locked.
-            if (restoring && originals[name] !== proof.attempt && locals[name] !== proof.attempt &&
-                (!proof.host || locals[name] === proof.host)) changed.push(name);
-          } else if (originals[name] !== proof.attempt && comparable(name, local[name]) !== comparable(name, remote[name]))
-            changed.push(name); // Includes an explicit remote rollback to the pre-save value.
+          if (hashes[name] === proof.attempt) base[name] = remote[name];
+          // Agreement between a pre-save Host row and a rolled-back mailbox
+          // cannot erase proof of the completed attempt either.
+          const staleHost = restoring && originals[name] !== proof.attempt && locals[name] !== proof.attempt &&
+            (!proof.host || locals[name] === proof.host);
+          if (staleHost || (hashes[name] !== proof.attempt && originals[name] !== proof.attempt &&
+              comparable(name, local[name]) !== comparable(name, remote[name]))) changed.push(name);
         }
       }
       const merged = mergeFields(original ? base : undefined, local, remote);
@@ -549,7 +548,7 @@ var cindyMail = (function () {
         // recovery proof has been released. Keep publication and cleanup ordered.
         const currentBase = activeEdit?.error?.stale && !activeEdit.conflictBase ? undefined : activeEdit?.conflictBase || originalValues;
         const sameBase = draft.baseValues && currentBase ? sameFields(draft.baseValues, currentBase) : draft.baseValues === currentBase;
-        if (renderOnly && (mailEdits.get(key) !== activeEdit || (activeEdit && (activeEdit.readBack !== readBack || !sameBase)))) return undefined;
+        if (renderOnly && (activeEdit?.sent || activeEdit?.deleting || mailEdits.get(key) !== activeEdit || (activeEdit && (activeEdit.readBack !== readBack || !sameBase)))) return undefined;
         const result = await cindy.send({ type: "mail-draft-update", callId: message.callId,
           ...(message.sourceCallId && message.sourceCallId !== message.callId ? { sourceCallId: message.sourceCallId } : {}), draft });
         await releaseSaveProof(key, proofRecord, activeEdit, result?.ok && draft.state === 'draft', readBack, draft.baseValues, message.sourceCallId);
@@ -662,11 +661,42 @@ var cindyMail = (function () {
       return own && Object.entries(records).find(([id, r]) => id !== key &&
         r.account === own.account && r.draftId === own.draftId && r.state !== 'draft')?.[1];
     }
-    function releaseTerminalProof(records, record) {
-      for (const route of Object.values(records)) {
+    function finalizeMailRoutes(records, record) {
+      for (const [key, route] of Object.entries(records)) {
         if (route.account !== record.account || route.draftId !== record.draftId) continue;
+        route.state = record.state;
+        if (record.state === 'sent') route.receipt = record.receipt;
         delete route.completedSaveHashes;
         delete route.unverifiedAdditions;
+        cancelMailSend(key, mailDraftOutcome(record));
+        const edit = mailEdits.get(key);
+        if (edit) {
+          clearTimeout(edit.timer);
+          edit.timer = undefined;
+          edit.sent = record.state === 'sent';
+          edit.sending = false;
+          edit.deleting = record.state === 'deleted';
+          edit.additions = [];
+          edit.terminalPublished = undefined;
+        }
+      }
+    }
+    async function publishTerminalCard(key, record, sourceCallId) {
+      if (mailEdits.get(key)?.terminalPublished === record.state) return;
+      const copy = await mailCopy();
+      try {
+        // The original call binding remains authoritative. A sibling task must
+        // not reopen it with its own source; expired calls refresh on their next click.
+        const result = await navigator.locks.request('mail-card:' + key, () => mailStatus(record.callId,
+          record.state === 'sent' ? copy.sent : copy.deleted, '', false, sourceCallId, record.state));
+        const edit = mailEdits.get(key);
+        if (result?.ok && edit) edit.terminalPublished = record.state;
+      } catch (_) { /* Durable routing still rejects further edits and sends. */ }
+    }
+    async function publishMailTerminal(record, sourceCallId) {
+      for (const [key, route] of Object.entries(await mailRecords())) {
+        if (route.account !== record.account || route.draftId !== record.draftId) continue;
+        await publishTerminalCard(key, { ...route, state: record.state }, route.callId === record.callId ? sourceCallId : undefined);
       }
     }
     function mailDraftOutcome(record) {
@@ -900,20 +930,13 @@ var cindyMail = (function () {
             try {
               await mailRecords(function (records) {
                 storeMailRecord(records, key, record);
-                releaseTerminalProof(records, record);
+                finalizeMailRoutes(records, record);
               });
             } catch (_) {
               /* A known send is never retried. */
             }
             edit.sent = true;
-            if (sourceCallId)
-              await mailStatus(
-                record.callId,
-                (await mailCopy()).sent,
-                "",
-                false,
-                sourceCallId, "sent",
-              );
+            await publishMailTerminal(record, sourceCallId);
             return result;
           }
           if (record.completedSaveHashes) {
@@ -1045,10 +1068,11 @@ var cindyMail = (function () {
         }
         await mailRecords(records => {
           storeMailRecord(records, key, record);
-          if (result.ok) releaseTerminalProof(records, record);
+          if (result.ok) finalizeMailRoutes(records, record);
         });
-        await mailStatus(record.callId, result.ok ? copy.deleted : result.message || copy.failed,
-          "", false, sourceCallId, result.ok ? "deleted" : record.state === "draft" ? "error" : "unconfirmed");
+        if (result.ok) await publishMailTerminal(record, sourceCallId);
+        else await mailStatus(record.callId, result.message || copy.failed,
+          "", false, sourceCallId, record.state === "draft" ? "error" : "unconfirmed");
         return result;
       });
     }
@@ -1137,7 +1161,11 @@ var cindyMail = (function () {
         await restoreMailDraft(key, message.callId);
         edit = mailEdits.get(key);
       }
-      if (edit?.deleting && match[1] !== "delete") return;
+      if (edit?.deleting && match[1] !== "delete") {
+        const record = (await mailRecords())[key];
+        if (record?.state === 'deleted') await publishTerminalCard(key, record);
+        return;
+      }
       if (
         ["change", "send", "attach", "image"].includes(match[1]) &&
         edit &&
@@ -1209,13 +1237,16 @@ var cindyMail = (function () {
       }
       var record = (await mailRecords())[key];
       if (!record || record.callId !== message.callId) return;
-      if (match[1] === "delete") { await deleteMailDraft(key); return; }
-      if (record.state === "deleted") return;
       var copy = await mailCopy();
       if (match[1] === "continue" && record.state === "sent") {
         await continueMailTask(message, record, copy, key);
         return;
       }
+      if (['sent', 'deleted'].includes(record.state)) {
+        await publishTerminalCard(key, record);
+        return;
+      }
+      if (match[1] === "delete") { await deleteMailDraft(key); return; }
       if (!edit) {
         await mailStatus(record.callId, copy.missing);
         return;
