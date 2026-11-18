@@ -169,6 +169,28 @@ describe('request-owned Responses compatibility', () => {
     }
   });
 
+  // Raw native repair must resolve original kinds from functions-group bare declarations too.
+  it.each(['application/json', 'text/event-stream'])('repairs native grouped-kind collision selectors (%s)', async contentType => {
+    for (const lowerNamespaces of [false, true]) {
+      for (const allowed of [false, true]) {
+        const adapter = createCodexResponsesCompatibilityAdapter();
+        const selector = { type: 'function', name: 'workspace__read' };
+        adapter.adaptRequest({ tools: [
+          { type: 'namespace', name: 'functions', tools: [{ type: 'custom', name: 'workspace__read' }] },
+          { type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type: 'integer' } } } }] },
+        ], tool_choice: allowed ? { type: 'allowed_tools', tools: [selector] } : selector }, 10096, undefined, lowerNamespaces);
+        const output = { status: 'completed', output: [{ type: 'function_call', ...(lowerNamespaces ? { name: 'workspace__read_2' } : { namespace: 'workspace', name: 'read' }), call_id: 'child', arguments: '{"line":12.0}' }] };
+        const sse = contentType === 'text/event-stream';
+        const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
+        const transform = adapter.createResponseTransform(10096, { contentType, contentEncoding: '' });
+        expect(transform).not.toBeNull();
+        const text = await responseText(transform!, wire);
+        const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
+        expect((sse ? parsed.response : parsed).output[0]).toMatchObject({ type: 'function_call', namespace: 'workspace', name: 'read', arguments: '{"line":12}' });
+      }
+    }
+  });
+
   it.each(['application/json', 'text/event-stream'])('restores default functions custom calls as bare tools (%s)', async contentType => {
     const adapter = createCodexResponsesCompatibilityAdapter();
     adapter.adaptRequest({ tools: [

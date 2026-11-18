@@ -2051,7 +2051,38 @@
 +export type * from "./types/provider";
 --- a/src/responses/namespace-tool-compat.ts
 +++ b/src/responses/namespace-tool-compat.ts
-@@ -102,10 +102,62 @@
+@@ -72,6 +72,30 @@
+   return { namespace: tool.name, children };
+ }
+
++/** Bare custom declarations, including the reserved group, after canonical top-level precedence. */
++export function collectBareCustomToolNames(body: unknown): Set<string> {
++  const names = new Set<string>();
++  const groups = collectResponsesToolGroups(body);
++  const topLevelNames = new Set<string>();
++  for (const group of groups) {
++    for (const tool of group) {
++      if (isPlainObject(tool) && tool.type !== "namespace" && typeof tool.name === "string") topLevelNames.add(tool.name);
++    }
++  }
++  for (const group of groups) {
++    for (const tool of group) {
++      if (!isPlainObject(tool)) continue;
++      if (tool.type === "custom" && typeof tool.name === "string") names.add(tool.name);
++      if (tool.type !== "namespace" || tool.name !== BUILTIN_FUNCTIONS_NAMESPACE || !Array.isArray(tool.tools)) continue;
++      for (const child of tool.tools) {
++        if (isPlainObject(child) && child.type === "custom" && typeof child.name === "string"
++          && !topLevelNames.has(child.name)) names.add(child.name);
++      }
++    }
++  }
++  return names;
++}
++
+ /**
+  * Wire identity of a lowered tool. A `functions` child and an identical top-level declaration share
+  * one identity because they denote the same logical tool: `buildTools` flattens the reserved group
+@@ -102,10 +126,62 @@
    bareWireNames: Set<string>;
    identities: Map<string, string>;
    selectors: Map<string, string | null>;
@@ -2114,7 +2145,7 @@
 
  function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
    const aliases = new Map<string, RoutedNamespaceToolIdentity>();
-@@ -113,6 +165,8 @@
+@@ -113,6 +189,8 @@
    const identities = new Map<string, string>();
    const selectors = new Map<string, string | null>();
    const wireOwners = new Map<string, string>();
@@ -2123,7 +2154,7 @@
 
    for (const group of groups) {
      for (const tool of group) {
-@@ -124,9 +178,23 @@
+@@ -124,9 +202,23 @@
          bareWireNames.add(tool.name);
          addSelector(selectors, tool.name, tool.name);
        }
@@ -2150,7 +2181,7 @@
    for (const group of groups) {
      for (const tool of group) {
        const parsed = parseNamespaceGroup(tool);
-@@ -134,29 +202,62 @@
+@@ -134,29 +226,62 @@
        for (const child of parsed.children) {
          const childName = child.name as string;
          const identity = loweredIdentity(parsed.namespace, childName);
@@ -2232,7 +2263,7 @@
  }
 
  /**
-@@ -344,11 +445,24 @@
+@@ -344,12 +469,26 @@
  export function rewriteRoutedNamespaceToolsForUpstream(
    body: unknown,
    convertedCustomToolNames?: ReadonlySet<string>,
@@ -2256,9 +2287,11 @@
 +    return { body, aliases: new Map(), renamedWireNames: new Map(), renamedKinds: new Map() };
 +  }
    const groups = collectResponsesToolGroups(body);
++  const originalBareCustomNames = bareCustomNames ?? collectBareCustomToolNames(body);
    const plan = buildRewritePlan(groups);
 
-@@ -368,8 +482,71 @@
+   // Deliberately not gated on the plan being non-empty: a turn whose catalog is absent can still
+@@ -368,8 +507,69 @@
      if (inputChanged) input = rewrittenInput;
    }
 
@@ -2288,9 +2321,7 @@
 +    const allocated = plan.renamedWireNames.get(original.name);
 +    if (!allocated) return lowered;
 +    const childKind = renamedKinds.get(original.name);
-+    const bareCustom = bareCustomNames?.has(original.name)
-+      ?? groups.some(group => group.some(tool => isPlainObject(tool)
-+        && tool.type === "custom" && tool.name === original.name));
++    const bareCustom = originalBareCustomNames.has(original.name);
 +    const bareKind = bareCustom ? "custom" : "function";
 +    return original.type === childKind && childKind !== bareKind
 +      ? { ...lowered, name: allocated } : lowered;
@@ -2332,7 +2363,7 @@
    const ambiguousDotted = collectAmbiguousDottedAliases(groups);
    // Authorize canonical identities first, then add only unambiguous spellings.
    // Selection cannot hide a collision elsewhere in the original declaration set.
-@@ -379,11 +556,6 @@
+@@ -379,11 +579,6 @@
        && !ambiguousDotted.has(dotted) && !plan.bareWireNames.has(dotted)
        && !aliases.has(dotted)) aliases.set(dotted, identity);
    }
@@ -2344,7 +2375,7 @@
    return {
      body: {
        ...body,
-@@ -392,6 +564,8 @@
+@@ -392,6 +587,8 @@
        ...(toolChoice !== body.tool_choice ? { tool_choice: toolChoice } : {}),
      },
      aliases,
@@ -2426,7 +2457,7 @@
 
  export interface FunctionCallRepairSchema {
    name: string;
-@@ -48,50 +47,113 @@
+@@ -48,50 +47,116 @@
  }
 
  /** Caller supplies currentTurnWireToolCatalogBody BEFORE provider schema lowering. */
@@ -2439,8 +2470,10 @@
 +}
 +
 +/** Native repair has no lowered live request; retain loaded tool-search schemas and selectors. */
-+export function deriveFunctionCallRepairPlan(body: unknown): FunctionCallRepairPlan {
-+  if (!isObject(body)) return { renamedWireNames: new Map() };
++export function deriveFunctionCallRepairPlan(body: unknown): FunctionCallRepairPlan & {
++  renamedKinds: Map<string, "function" | "custom">;
++} {
++  if (!isObject(body)) return { renamedWireNames: new Map(), renamedKinds: new Map() };
 +  const groups: unknown[][] = Array.isArray(body.tools) ? [body.tools] : [];
 +  if (Array.isArray(body.input)) {
 +    for (const entry of body.input) {
@@ -2451,6 +2484,7 @@
 +  const derived = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] });
 +  return {
 +    renamedWireNames: derived.renamedWireNames,
++    renamedKinds: derived.renamedKinds,
 +    loweredToolChoice: isObject(derived.body) ? derived.body.tool_choice : undefined,
 +  };
 +}
@@ -2564,7 +2598,7 @@
      }
    }
    for (const [key, entry] of occupied) {
-@@ -108,13 +170,22 @@
+@@ -108,13 +173,22 @@
    return schemas;
  }
 
@@ -2589,7 +2623,7 @@
    if (!schema) return item;
    // An explicit namespace is an identity coordinate, not another spelling to guess at.
    if ("namespace" in item && (schema.namespace !== namespace || schema.name !== item.name)) return item;
-@@ -139,35 +210,40 @@
+@@ -139,35 +213,40 @@
  export function repairFunctionCalls(
    value: unknown,
    schemas: FunctionCallRepairSchemas,

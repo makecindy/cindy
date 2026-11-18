@@ -72,6 +72,30 @@ function parseNamespaceGroup(tool: unknown): NamespaceGroup | undefined {
   return { namespace: tool.name, children };
 }
 
+/** Bare custom declarations, including the reserved group, after canonical top-level precedence. */
+export function collectBareCustomToolNames(body: unknown): Set<string> {
+  const names = new Set<string>();
+  const groups = collectResponsesToolGroups(body);
+  const topLevelNames = new Set<string>();
+  for (const group of groups) {
+    for (const tool of group) {
+      if (isPlainObject(tool) && tool.type !== "namespace" && typeof tool.name === "string") topLevelNames.add(tool.name);
+    }
+  }
+  for (const group of groups) {
+    for (const tool of group) {
+      if (!isPlainObject(tool)) continue;
+      if (tool.type === "custom" && typeof tool.name === "string") names.add(tool.name);
+      if (tool.type !== "namespace" || tool.name !== BUILTIN_FUNCTIONS_NAMESPACE || !Array.isArray(tool.tools)) continue;
+      for (const child of tool.tools) {
+        if (isPlainObject(child) && child.type === "custom" && typeof child.name === "string"
+          && !topLevelNames.has(child.name)) names.add(child.name);
+      }
+    }
+  }
+  return names;
+}
+
 /**
  * Wire identity of a lowered tool. A `functions` child and an identical top-level declaration share
  * one identity because they denote the same logical tool: `buildTools` flattens the reserved group
@@ -464,6 +488,7 @@ export function rewriteRoutedNamespaceToolsForUpstream(
     return { body, aliases: new Map(), renamedWireNames: new Map(), renamedKinds: new Map() };
   }
   const groups = collectResponsesToolGroups(body);
+  const originalBareCustomNames = bareCustomNames ?? collectBareCustomToolNames(body);
   const plan = buildRewritePlan(groups);
 
   // Deliberately not gated on the plan being non-empty: a turn whose catalog is absent can still
@@ -506,9 +531,7 @@ export function rewriteRoutedNamespaceToolsForUpstream(
     const allocated = plan.renamedWireNames.get(original.name);
     if (!allocated) return lowered;
     const childKind = renamedKinds.get(original.name);
-    const bareCustom = bareCustomNames?.has(original.name)
-      ?? groups.some(group => group.some(tool => isPlainObject(tool)
-        && tool.type === "custom" && tool.name === original.name));
+    const bareCustom = originalBareCustomNames.has(original.name);
     const bareKind = bareCustom ? "custom" : "function";
     return original.type === childKind && childKind !== bareKind
       ? { ...lowered, name: allocated } : lowered;

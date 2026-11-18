@@ -7,7 +7,7 @@ import { collectSelfNamedNamespaceScrubAuthorization, createSelfNamedToolCallNam
 import { Transform, type TransformCallback } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import { rewriteRoutedCustomToolsForUpstream, restoreRoutedCustomCallsInJson } from './upstream/responses/custom-tool-compat';
-import { rewriteRoutedNamespaceToolsForUpstream, restoreRoutedNamespaceCallsInJson } from './upstream/responses/namespace-tool-compat';
+import { rewriteRoutedNamespaceToolsForUpstream, restoreRoutedNamespaceCallsInJson, collectBareCustomToolNames } from './upstream/responses/namespace-tool-compat';
 import { collectResponsesToolGroups } from './upstream/responses/tool-groups';
 import { rewriteRoutedToolSearchForUpstream, restoreRoutedToolSearchCallsInJson } from './upstream/responses/tool-search-compat';
 import { collectFunctionCallRepairSchemas, deriveFunctionCallRepairPlan, repairFunctionCallsInJson } from './upstream/responses/function-call-compat';
@@ -40,46 +40,6 @@ function collectNamespaceCustomToolNames(body: unknown): Set<string> {
   return names;
 }
 
-/** Bare custom declarations keep their own restore path even when a displaced child used the name. */
-function collectBareCustomToolNames(body: unknown): Set<string> {
-  const names = new Set<string>();
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return names;
-  const groups: unknown[] = [(body as { tools?: unknown }).tools];
-  const input = (body as { input?: unknown }).input;
-  if (Array.isArray(input)) {
-    for (const item of input) {
-      if (!item || typeof item !== 'object') continue;
-      const { type, tools } = item as { type?: unknown; tools?: unknown };
-      // Replay history never participates in namespace allocation, so it must not decide who owns a
-      // bare name either; only live `additional_tools` joins the live catalog.
-      if (type === 'additional_tools') groups.push(tools);
-    }
-  }
-  const topLevelNames = new Set<string>();
-  for (const group of groups) {
-    if (!Array.isArray(group)) continue;
-    for (const tool of group) {
-      if (tool && typeof tool === 'object' && tool.type !== 'namespace' && typeof tool.name === 'string') topLevelNames.add(tool.name);
-    }
-  }
-  for (const group of groups) {
-    if (!Array.isArray(group)) continue;
-    for (const tool of group) {
-      if (!tool || typeof tool !== 'object') continue;
-      const { type, name } = tool as { type?: unknown; name?: unknown };
-      if (type === 'custom' && typeof name === 'string') names.add(name);
-      if (type === 'namespace' && name === 'functions') {
-        const children = (tool as { tools?: unknown }).tools;
-        if (!Array.isArray(children)) continue;
-        for (const child of children) {
-          if (child && typeof child === 'object' && child.type === 'custom' && typeof child.name === 'string' && !topLevelNames.has(child.name)) names.add(child.name);
-        }
-      }
-    }
-  }
-  return names;
-}
-
 /** Selected from the actual route; native OpenAI and non-Responses traffic do not enter this adapter. */
 export interface ResponsesCompatibilityPolicy {
   customTools?: 'native' | 'functions' | 'preserve-apply-patch';
@@ -105,24 +65,22 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
     ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames, collectNamespaceCustomToolNames(body),
         body && typeof body === 'object' ? (body as { tool_choice?: unknown }).tool_choice : undefined)
     : { body: search.body, aliases: new Map(), renamedWireNames: new Map<string, string>(), renamedKinds: new Map<string, 'function' | 'custom'>() };
-  // A namespace child that a bare declaration displaced keeps its record in `custom.names`: after
-  // namespace restoration the item carries `{namespace, name}` and resolves to that same preferred
-  // wire name. What must not happen is the bare declaration itself claiming it, or an ordinary
-  // function child coming back as a custom-tool call — the recorded kind decides which applies.
-  const displacedKinds = namespace.renamedKinds;
-  const displacement = displacedKinds.size > 0
-    ? { bareCustomNames, displacedKinds }
-    : undefined;
-  // Native requests retain their declarations, but schema indexing still needs a collision-safe
-  // identity plan. Share that plan with JSON/SSE lookup instead of discarding its allocated names.
-  const repairPlan = policy.repairFunctionArguments && policy.namespaceTools !== 'functions'
+  // Native requests retain their declarations, but response restoration and schema lookup still
+  // need one collision-safe identity plan, including original kinds and loaded search tools.
+  const repairPlan = policy.namespaceTools !== 'functions'
+    && (policy.repairFunctionArguments || custom.names.size > 0 || custom.repairNames.size > 0)
     ? deriveFunctionCallRepairPlan(body)
     : {
         renamedWireNames: namespace.renamedWireNames,
+        renamedKinds: namespace.renamedKinds,
         loweredToolChoice: namespace.body && typeof namespace.body === 'object'
           ? (namespace.body as { tool_choice?: unknown }).tool_choice
           : undefined,
       };
+  const displacedKinds = repairPlan.renamedKinds;
+  const displacement = displacedKinds.size > 0
+    ? { bareCustomNames, displacedKinds }
+    : undefined;
   const schemas = policy.repairFunctionArguments
     ? collectFunctionCallRepairSchemas(body, repairPlan)
     : new Map();

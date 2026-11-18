@@ -55,8 +55,10 @@ export interface FunctionCallRepairPlan {
 }
 
 /** Native repair has no lowered live request; retain loaded tool-search schemas and selectors. */
-export function deriveFunctionCallRepairPlan(body: unknown): FunctionCallRepairPlan {
-  if (!isObject(body)) return { renamedWireNames: new Map() };
+export function deriveFunctionCallRepairPlan(body: unknown): FunctionCallRepairPlan & {
+  renamedKinds: Map<string, "function" | "custom">;
+} {
+  if (!isObject(body)) return { renamedWireNames: new Map(), renamedKinds: new Map() };
   const groups: unknown[][] = Array.isArray(body.tools) ? [body.tools] : [];
   if (Array.isArray(body.input)) {
     for (const entry of body.input) {
@@ -67,6 +69,7 @@ export function deriveFunctionCallRepairPlan(body: unknown): FunctionCallRepairP
   const derived = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] });
   return {
     renamedWireNames: derived.renamedWireNames,
+    renamedKinds: derived.renamedKinds,
     loweredToolChoice: isObject(derived.body) ? derived.body.tool_choice : undefined,
   };
 }
