@@ -21,6 +21,7 @@ export default {
     'width-collapsed': { about: 'Large desktop, sidebar collapsed', data: { collapsed: true } },
     'width-panel': { about: 'Reference panel at 50/50 and divider extremes', data: { panel: true } },
     'width-legacy': { about: 'Original 914px width for design comparison', data: { legacy: true } },
+    'width-streaming': { about: 'Live Markdown prose retains the completed reply reading width', data: { streaming: true } },
   },
   async ready(page) {
     await page.locator('.ProseMirror').waitFor();
