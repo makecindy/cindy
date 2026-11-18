@@ -162,6 +162,7 @@ export interface HostRuntimeSelectionDeps {
     isTurnRunning(sessionId: string): boolean;
     canSettleTurnControls(): boolean;
     isHeldForDesktop(): boolean;
+    profileRouteStartupSignal(): AbortSignal;
     retryTurnSettlement(sessionId: string): void;
     wakeSession: AgentInputCoordinator['wakeSession'];
     refreshQueuedRoute: AgentInputCoordinator['refreshQueuedRoute'];
@@ -185,6 +186,7 @@ export interface HostRuntimeSelectionDeps {
 export const HOST_RUNTIME_SELECTION_QUEUE_MEMBERS = [
   'contextRecoveryRollover', 'sessionDbAgentKind', 'isTurnRunning', 'wakeSession', 'refreshQueuedRoute',
   'cancelUsageLimitWait', 'discardWorkingDirectoryRecovery', 'startPorts', 'recordRuntimeControlError', 'canSettleTurnControls', 'retryTurnSettlement', 'isHeldForDesktop',
+  'profileRouteStartupSignal',
 ] as const satisfies readonly (keyof HostRuntimeSelectionDeps['inputQueue'])[];
 type UnlistedQueueMembers = Exclude<keyof HostRuntimeSelectionDeps['inputQueue'], typeof HOST_RUNTIME_SELECTION_QUEUE_MEMBERS[number]>;
 const everyQueueMemberListed: [UnlistedQueueMembers] extends [never] ? true : never = true;
@@ -207,7 +209,7 @@ export interface HostRuntimeStartPorts {
   readSessionExtraDirsFromDb(sessionId: string): Promise<string[]>;
   readSessionWritableDirsFromDb(sessionId: string): Promise<string[]>;
   ensureRemoteReadyForSessionStart(params: { createOpts?: unknown }): Promise<unknown>;
-  bootstrapSession(opts: object, assertAccess?: () => void, nativeHistoryResume?: boolean): Promise<{ session: Session }>;
+  bootstrapSession(opts: object, assertAccess?: () => void, nativeHistoryResume?: boolean, routeStartupSignal?: AbortSignal): Promise<{ session: Session }>;
   broadcastSessionCreated(sessionId: string): void;
 }
 
@@ -347,7 +349,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   const isSessionInTurn = (sessionId: string) => maker().getSession(sessionId)?.isTurnRunning?.() === true;
   // register.ts's binding (createColdPiRehydrationBinding), with the Host's runtime start functions
   // (the ones its send transaction uses) in place of the desktop's.
-  const bindColdPiRehydration = (onRehydrated?: (session: Session) => void) => createColdPiRehydrationBinding(explicitPorts<Parameters<typeof createColdPiRehydrationBinding>[0]>({
+  const bindColdPiRehydration = (onRehydrated?: (session: Session) => void, assertAccess?: () => void, signal?: AbortSignal) => createColdPiRehydrationBinding(explicitPorts<Parameters<typeof createColdPiRehydrationBinding>[0]>({
     maker: { getSession: sessionId => maker().getSession(sessionId) },
     buildCreateOptsWithStderr: opts => deps.inputQueue.startPorts().buildCreateOptsWithStderr(opts),
     checkWorkDirExists: (sessionId, workingDir, agentKind, remoteHostId) =>
@@ -356,7 +358,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
       deps.inputQueue.startPorts().synthesizeOrcaVendorOptionsFromDb(sessionId, opts),
     readSessionExtraDirsFromDb: sessionId => deps.inputQueue.startPorts().readSessionExtraDirsFromDb(sessionId),
     bootstrapSession: opts => {
-      const work = deps.inputQueue.startPorts().bootstrapSession(opts);
+      const work = deps.inputQueue.startPorts().bootstrapSession(opts, assertAccess, false, signal);
       return onRehydrated ? work.then(result => {
         onRehydrated(result.session);
         return result;
@@ -552,7 +554,8 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
       // already belong to another owner. There is nothing from this call to undo.
       assertTurnAdmission();
       const ownerMaker = maker();
-      let instance = ownerMaker.getSession(id);
+      const initialInstance = ownerMaker.getSession(id);
+      let instance = initialInstance;
       const hadProvider = hasSessionProvider(id);
       const provider = getSessionProvider(id);
       const effort = getSessionEffort(id);
@@ -577,7 +580,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
         const axesChanged = effort !== getSessionEffort(id) || fastMode !== getSessionFastMode(id);
         const credentialCleared = !!pendingCredential && !pendingCredentialSwitchService.has(id);
         const accountChanged = !sameOwner() || isAppSessionBoundaryPending();
-        if (modelChanged || routeChanged || axesChanged || credentialCleared || accountChanged) {
+        if (modelChanged || instance !== initialInstance || routeChanged || axesChanged || credentialCleared || accountChanged) {
           try {
             await closeRejectedRuntimeAndRestoreControlStores({
               closeRuntime: async () => {
@@ -618,6 +621,62 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
       }
     });
   }
+  async function applyPendingPick(
+    sessionId: string,
+    options: HostPendingSwitchOptions | undefined,
+    assertAdmission?: () => void,
+    expectedRevision?: number,
+  ) {
+    const sameOwner = captureRouteOwner();
+    const routeSignal = deps.inputQueue.profileRouteStartupSignal();
+    let rejected: HostRouteAdmissionError | undefined;
+    const check = () => {
+      if (rejected) throw rejected;
+      try {
+        routeSignal.throwIfAborted();
+        assertAdmission?.();
+        if (!sameOwner() || isAppSessionBoundaryPending()) {
+          throwIpcError('PRECONDITION_FAILED', 'Host account changed; runtime selection was not changed');
+        }
+      }
+      catch (error) {
+        rejected = new HostRouteAdmissionError(error instanceof Error ? error.message : String(error), { cause: error });
+        throw rejected;
+      }
+    };
+    const selectionDeps: MakerSessionAgentSwitchHandlerDeps = {
+      ...agentSwitchDeps,
+      selectSameAgentModel: createSelectSameAgentModel({
+        applySessionRuntimeSelection: (id, model, provider, selection, selectionOptions) =>
+          recoverRejectedRoute(id, sameOwner, check, bindRehydrated => {
+            const select = createHandleSetModel(() => ({
+              ...ports(), rehydrateColdPiRuntimeForWindowVerification: bindColdPiRehydration(bindRehydrated, check, routeSignal),
+            }));
+            return select(id, model, provider, undefined, selection, {
+              ...selectionOptions,
+              assertSelectionCurrent: () => { check(); selectionOptions?.assertSelectionCurrent?.(); },
+              beforeMutation: async () => { await selectionOptions?.beforeMutation?.(); check(); },
+            });
+          }),
+      }),
+      closeSession: (...args) => { check(); return agentSwitchDeps.closeSession(...args); },
+      applyAgentSwitchToDb: (...args) => { check(); return agentSwitchDeps.applyAgentSwitchToDb(...args); },
+    };
+    try {
+      await applyPendingAgentSwitchIfIdle(selectionDeps, sessionId, {
+        signal: options?.signal, nextInputChars: options?.nextInputChars, expectedRevision,
+      });
+    } catch (error) {
+      if (!(error instanceof RuntimePluginControlError)) {
+        if (rejected) throw rejected.cause;
+        routeSignal.throwIfAborted();
+      }
+      throw error;
+    }
+    // The shared cross-engine path can retain a failed pick and return normally.
+    if (rejected) throw rejected.cause;
+  }
+
   const settleRuntimeControl = createPendingSessionRuntimeControlSettlement(explicitPorts<Parameters<typeof createPendingSessionRuntimeControlSettlement>[0]>({
     canSettle: settlement.allowedControl,
     onSettlementWork: settlement.onControlWork,
@@ -856,7 +915,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     /**
      * The send transaction's landing of a picked model or engine, with the steps of the desktop's
      * transaction binding (register.ts, createMakerSendTransaction's applyPendingAgentSwitch) in its
-     * order: the landing (called as the desktop calls it, without the send's signal), then, for a send
+     * order: the landing (with the send's signal and next input size), then, for a send
      * that is not scheduled, the recovery of a renamed model, then the replay of a window budget rebuild
      * still owed (under the send lock the transaction holds). The desktop's other steps are not on the
      * Host yet (release table: the scheduled model scope, the Orca pending check, the provider group
@@ -865,46 +924,31 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     async applyPendingAgentSwitch(sessionId: string, options?: HostPendingSwitchOptions) {
       // A context recovery can replay its interrupted input while a desktop owns the profile.
       // Leave independent user selections and model-renaming writes for the next normal send.
+      const intent = pendingSwitches.get(sessionId);
       const assertPreparation = options?.assertPreparationCurrent;
       if (options && assertPreparation) {
-        const intent = pendingSwitches.get(sessionId);
         assertPreparation();
         if (!intent || intent.targetAgentKind !== 'pi' || intent.model !== options.expectedPiModel || intent.targetAgentDeviceId) {
-          throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected Pi route changed; retry the send');
+          throwIpcError('PRECONDITION_FAILED', 'The selected Pi route is not ready');
         }
-        const sameOwner = captureRouteOwner();
-        const check = () => {
-          try { assertPreparation(); }
-          catch (error) { throw new HostRouteAdmissionError(error instanceof Error ? error.message : String(error), { cause: error }); }
-        };
-        const selectionDeps: MakerSessionAgentSwitchHandlerDeps = {
-          ...agentSwitchDeps,
-          selectSameAgentModel: createSelectSameAgentModel({
-            applySessionRuntimeSelection: (id, model, provider, selection, selectionOptions) =>
-              recoverRejectedRoute(id, sameOwner, check, bindRehydrated => {
-                const select = createHandleSetModel(() => ({
-                  ...ports(), rehydrateColdPiRuntimeForWindowVerification: bindColdPiRehydration(bindRehydrated),
-                }));
-                return select(id, model, provider, undefined, selection, {
-                  ...selectionOptions,
-                  assertSelectionCurrent: () => { check(); selectionOptions?.assertSelectionCurrent?.(); },
-                });
-              }),
-          }),
-          applyAgentSwitchToDb: (...args) => { check(); return agentSwitchDeps.applyAgentSwitchToDb(...args); },
-        };
-        await applyPendingAgentSwitchIfIdle(selectionDeps, sessionId, {
-          expectedRevision: pendingSwitches.revision?.(sessionId), nextInputChars: options.nextInputChars,
-        });
+        const originalRuntime = maker().getSession(sessionId);
+        await applyPendingPick(sessionId, options, assertPreparation, pendingSwitches.revision?.(sessionId));
         assertPreparation();
         if (pendingSwitches.get(sessionId)) {
-          throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected Pi route is not ready');
+          throwIpcError('PRECONDITION_FAILED', 'The selected Pi route is not ready');
+        }
+        // The shared switch normally retires the old engine. A non-owner pick
+        // can take a local landing path, so confirm the old runtime is gone.
+        const live = maker().getSession(sessionId);
+        if (intent.deviceLinkModelSelectionOrigin !== 'owner' && live && live === originalRuntime && live.agentKind !== 'pi') {
+          await maker().closeSessionIfCurrent(live, 'runtime-refresh');
+          assertPreparation();
         }
         return;
       }
-      if (!deps.inputQueue.isHeldForDesktop()) await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, {
-        signal: options?.signal, nextInputChars: options?.nextInputChars,
-      });
+      if (intent && !deps.inputQueue.isHeldForDesktop()) {
+        await applyPendingPick(sessionId, options);
+      }
       if (!deps.inputQueue.isHeldForDesktop() && !options?.scheduled) await recoverRenamedSessionModelOnSend(sessionId);
       await contextWindowBudgetReconcile.replayPendingSessionContextWindowBudgetUnderLock(sessionId);
     },

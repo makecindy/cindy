@@ -730,6 +730,19 @@ export function createTurnExecutor(deps) {
     return row;
   }
 
+  async function assertPiSkillPreparationReady(id, dir, assertCurrent, maySwitchHarness = false) {
+    assertCurrent();
+    const row = await deps.readSession(id);
+    assertCurrent();
+    if (row.source === 'review' || row.workingDir !== dir || row.remoteHostId || row.agentDeviceId || row.orcaRole ||
+        (!maySwitchHarness && makerKind(row.agentKind) !== 'pi') ||
+        turns.get(id)?.running || deps.getMaker()?.getSession(id)?.isTurnRunning?.()) {
+      throwIpcError('PRECONDITION_FAILED', maySwitchHarness ? 'The selected Pi route is not ready' : 'Pi session is unavailable');
+    }
+    assertHostTaskExecutionSupported(row);
+    deps.assertProviderExecutionSupported?.(id, row.providerId);
+  }
+
   // As the desktop's bootstrapSession (register.ts) once the runtime has started: the task row takes the
   // start's provider (a route the start admission rerouted or pinned included), and a failed write
   // refuses the start. A start on an accepted runtime override keeps the saved provider baseline, as the
@@ -878,7 +891,7 @@ export function createTurnExecutor(deps) {
     // from a committed engine switch (agentSwitchDepsCore.ts createSwitchedSessionBootstrap): the owner
     // check before the start, and a parked native session that must resume or fail (the switch then
     // handles the failure; no fresh start here).
-    bootstrapSession: async (opts, assertAccess, nativeHistoryResume = false) => {
+    bootstrapSession: async (opts, assertAccess, nativeHistoryResume = false, routeStartupSignal) => {
       const previous = turns.get(opts.id);
       const turn = previous?.running ? previous : undefined;
       turn?.check();
@@ -912,10 +925,13 @@ export function createTurnExecutor(deps) {
         await deps.admitLocalRoute(opts);
         assertAccess?.();
         turn?.check();
+        const turnSignal = turn?.sendOpts.signal;
+        const signal = routeStartupSignal && turnSignal ? AbortSignal.any([routeStartupSignal, turnSignal])
+          : routeStartupSignal ?? turnSignal;
         const taskPlugins = deps.getTaskRuntimePlugins?.();
         const session = await (taskPlugins
-          ? taskPlugins.createSessionWithRuntimePlugins({ ...opts }, turn?.sendOpts.signal)
-          : deps.getMaker().createSession({ ...opts }, turn?.sendOpts.signal));
+          ? taskPlugins.createSessionWithRuntimePlugins({ ...opts }, signal)
+          : deps.getMaker().createSession({ ...opts }, signal));
         deps.assertCurrent();
         turn?.check();
         await persistStartedSessionProvider(session, opts, assertAccess, runtimeOverride);
@@ -1330,11 +1346,10 @@ export function createTurnExecutor(deps) {
     steer,
     readExecutionSession,
     readAutoReviewHistory,
+    assertPiSkillPreparationReady,
     async preparePiSkillRuntime(id, dir, assertStartupCurrent) {
-      const row = await readExecutionSession(id);
+      await assertPiSkillPreparationReady(id, dir, assertStartupCurrent);
       assertStartupCurrent();
-      if (row.source === 'review' || makerKind(row.agentKind) !== 'pi' || row.workingDir !== dir)
-        throw new Error('[PRECONDITION_FAILED] Pi session is unavailable');
       const maker = deps.getMaker();
       const initial = maker.getSession(id);
       try {

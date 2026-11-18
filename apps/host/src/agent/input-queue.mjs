@@ -17,6 +17,7 @@ import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/mak
 import { createLogger } from '../../../desktop/src/main/logger.ts';
 import { isSessionErrorSuppressed } from '../../../desktop/src/main/maker-ipc/sessionErrorSuppression.ts';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
+import { createIpcError } from '../../../desktop/src/shared/ipc-errors.ts';
 
 const settlementLog = createLogger('host-turn-settlement');
 const attachmentLog = createLogger('host-attachments');
@@ -112,6 +113,10 @@ export function createInputQueue(deps) {
   let runtime = createRuntime();
 
   function createRuntime() {
+    // A blocked route probe must hit Maker's native metadata fence even if its
+    // adapter is still starting. This signal never aborts an admitted turn.
+    const routeStartup = new AbortController();
+    if (profileHold) routeStartup.abort(createIpcError('PRECONDITION_FAILED', profileHold.message));
     const states = new Map();
     const schedulePreparations = new Map();
     const scheduleDiscardWatchers = new Map();
@@ -470,6 +475,7 @@ export function createInputQueue(deps) {
       /** A context recovery's replay was accepted (the recovery factory's onRebuilt). */
       noteContextRecoveryRebuilt: id => executor.noteRecoveryRebuilt(id),
       wakeSession: (id, reason) => coordinator.wakeSession(id, reason),
+      profileRouteStartupSignal: () => routeStartup.signal,
       capturePiSkillPreparation(id) {
         refuseWhileHeld();
         assertCurrent();
@@ -490,7 +496,8 @@ export function createInputQueue(deps) {
         };
         check();
         if (options.applyPendingOwnerSelection) {
-          // This explicitly selected Skill send is already under the task's route lock.
+          // A bad task must be rejected before the pending selection can write.
+          await executor.assertPiSkillPreparationReady(id, dir, check, true);
           await deps.applyPendingAgentSwitch?.(id, {
             nextInputChars: options.nextInputChars,
             expectedPiModel: options.expectedPiModel,
@@ -644,6 +651,7 @@ export function createInputQueue(deps) {
       startIdleRelease: () => { if (!closing) idleRelease?.start(); },
       /** Hold every task this runtime knows (the profile hold started; later tasks are held as they are read). */
       holdKnownTasks() {
+        routeStartup.abort(createIpcError('PRECONDITION_FAILED', profileHold.message));
         for (const id of states.keys()) holdTaskForProfile(coordinator, id);
         deps.holdTurnSettlements?.(states.keys());
       },
@@ -657,9 +665,12 @@ export function createInputQueue(deps) {
       /**
        * The owner boundary began (agent/owner-boundary.ts): the runtime is stopping before dispose()
        * runs. No new input is accepted, and a turn that ends from now on is an interruption (the
-       * executor writes no turn end for it). Only `closing` is set; dispose() still stops and drains.
+       * executor writes no turn end for it). Cancel only prospective route starts here.
        */
-      beginStop() { closing = true; },
+      beginStop() {
+        closing = true;
+        routeStartup.abort(createIpcError('PRECONDITION_FAILED', 'Host account changed; runtime selection was not changed'));
+      },
       settleAndWake, retryTurnSettlement,
       canSettleTurnControls: () => !ownerStopping && !closing && profileHold === null,
       async dispose() {

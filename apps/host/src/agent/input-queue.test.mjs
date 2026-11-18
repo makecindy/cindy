@@ -82,6 +82,8 @@ import { sendToSessionLocks, withSendToSessionLock } from '../../../desktop/src/
 import { AgentStartupStoppedError, Maker } from '@cindy/maker-core';
 import { createHostSessionMovePorts } from './session-move.ts';
 import { createEventHub } from '../events.mjs';
+import { createHostService } from '../service.mjs';
+import { estimateHandoffTokens } from '../../../desktop/src/main/maker-ipc/agentHandoff.ts';
 import { createChatHandler } from '../chat.mjs';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
@@ -3276,7 +3278,7 @@ test('context usage: a Done status arriving after the turn ended still writes th
 
 // A model picked in the client lands at the next send (checkpoint 3): runtime-selection.ts wired as
 // main.ts wires it (the send transaction's applyPendingAgentSwitch, the owner runtime's rollover).
-const SWITCH_WINDOWS = { big: 200_000, small: 100_000, 'xai/big': 200_000 };
+const SWITCH_WINDOWS = { big: 200_000, small: 100_000, 'big-alternate': 300_000, 'xai/big': 200_000 };
 const switchModel = id => ({ id, efforts: [], defaultEffort: null, supportsFastMode: false });
 const switchViews = agent => [{ id: 'prov-a', connected: true, agents: [agent], source: 'user',
   routing: { [agent]: {} }, models: { [agent]: ['big', 'small'].map(switchModel) } }];
@@ -3298,7 +3300,8 @@ async function modelChangeRuntime(t, { agent = 'claude-code', queue = {} } = {})
       const stored = row(id);
       // As the Host reads a task for a run: its stored engine (main.ts readSessionForRun).
       return { id, status: stored.status, agentKind: stored.agent_kind === 'cc' ? 'claude-code' : stored.agent_kind, model: stored.model, workingDir: db.root,
-        providerId: stored.provider_id, permissionMode: 'ask', planModeEnabled: false, sdkSessionId: stored.sdk_session_id };
+        providerId: stored.provider_id, permissionMode: 'ask', planModeEnabled: false, sdkSessionId: stored.sdk_session_id,
+        source: stored.source, remoteHostId: stored.remote_host_id, agentDeviceId: stored.agent_device_id, orcaRole: stored.orca_role };
     },
     // The runtime selection's queue hooks, as main.ts passes them (runtime-selection.ts), each send's
     // landing recorded by task.
@@ -3354,8 +3357,197 @@ async function modelChangeRuntime(t, { agent = 'claude-code', queue = {} } = {})
   // The provider lists a model under a new id whose unified key is the saved one (uniqueRenamedSessionModelId).
   const rename = (from, to) => { views.current = SWITCH_VIEWS.map(view => ({ ...view,
     models: { [agent]: view.models[agent].map(entry => (entry.id === from ? switchModel(to) : entry)) } })); };
-  return { db, h, selection, row, createTask, runTurn, rebuilds, userRows, withdraw, restoreModels, rename, landings, views, budgets };
+  const invoke = createHostService({ setSessionModel: (...args) => selection.setModel(...args) });
+  const selectFromPhone = (id, model, providerId) => runDeviceLinkInvokeContext({
+    controllerDeviceId: 'owner-phone', controllerPlatform: 'ios', channel: 'maker:set-model',
+  }, () => invoke('/api/sessions/set-model', { sessionId: id, model, providerId }));
+  return { db, h, handoffs, selection, row, createTask, runTurn, rebuilds, userRows, withdraw, restoreModels, rename, landings, views, budgets, selectFromPhone };
 }
+
+// #11352, DB tier. The phone's trusted selection origin must survive until the next
+// send or Pi prewarm. An unverified window may neither move the row nor dispatch.
+test('owner dispatch rebuilds Claude and hot Pi on the host-verified window and keeps an unverifiable Pi route', async t => {
+  for (const [agent, target, finalWindow, rebuild] of [
+    ['claude-code', 'small', undefined, true],
+    ['pi', 'big-alternate', 100_000, true],
+    ['pi', 'small', 0, false],
+    ['claude-code', 'display-only', undefined, false],
+  ]) {
+    await t.test(`${agent} to ${target} (native window ${finalWindow})`, async t => {
+      const r = await modelChangeRuntime(t, { agent });
+      const id = 'owner-window';
+      const handoffs = [];
+      const setHandoff = r.handoffs.set;
+      r.handoffs.set = (sessionId, handoff, generation) => {
+        handoffs.push(handoff);
+        setHandoff(sessionId, handoff, generation);
+      };
+      if (!r.views.current[0].models[agent].some(model => model.id === target)) r.views.current[0].models[agent].push(switchModel(target));
+      await r.createTask(id);
+      const initial = await r.runTurn(id, 'owner-initial', { contextTokens: 95_000, contextWindow: 200_000 });
+      let liveWindow = 200_000;
+      initial.getUsageSnapshot = () => ({ contextTokens: 95_000, contextWindow: liveWindow });
+      if (agent === 'pi') {
+        initial.previewModelSwitch = async () => ({ action: 'hot', windowVerified: false });
+        const setModel = initial.setModel.bind(initial);
+        initial.setModel = async (...args) => { await setModel(...args); liveWindow = finalWindow; };
+      }
+      await r.db.persistMessage(id, { role: 'assistant', clientId: 'window-history',
+        content: 'Prior output '.repeat(9_000) });
+      assert.equal((await r.selectFromPhone(id, target)).body.pendingUntilSend, true);
+      const intent = r.selection.pendingSwitches.get(id);
+      assert.equal(intent.deviceLinkModelSelectionOrigin, 'owner');
+      const next = 'next '.repeat(9_000);
+      await r.h.queue.enqueue(id, { clientId: 'owner-next', text: next });
+      await waitFor(() => r.h.queue.projection(id).error
+        || r.h.maker.getSession(id)?.sent.some(text => typeof text === 'string' && text.endsWith(next)));
+      const saved = r.row(id);
+      if (rebuild) {
+        assert.equal(saved.model, target);
+        assert.equal(saved.sdk_session_id, null);
+        assert.equal(saved.context_tokens, 0);
+        assert.deepEqual(r.rebuilds(id).map(marker => marker.handoffCoverage), ['condensed']);
+        assert.notEqual(r.h.maker.getSession(id), initial);
+        assert.equal(handoffs.length, 1);
+        const [handoff] = handoffs;
+        assert.match(handoff, /owner-initial/);
+        assert.ok(r.h.maker.getSession(id).sent[0].includes(handoff));
+        assert.ok(handoff.length > 16_000, 'use the verified window instead of the unknown-window text limit');
+        assert.ok(estimateHandoffTokens(handoff) <= 20_000, 'leave room for the next input');
+      } else {
+        assert.equal(saved.model, 'big');
+        assert.equal(saved.sdk_session_id, 'native-owner-initial');
+        assert.equal(saved.context_tokens, 95_000);
+        assert.deepEqual(r.rebuilds(id), []);
+        assert.deepEqual(handoffs, []);
+        assert.match(JSON.stringify(r.h.queue.projection(id).error), /window/i);
+        assert.equal(initial.sent.length, 1);
+      }
+    });
+  }
+});
+
+test('remote Pi skill preparation refuses an owner route with an unverified window', async t => {
+  const r = await modelChangeRuntime(t, { agent: 'pi' });
+  const id = 'owner-prewarm-window';
+  await r.createTask(id);
+  const runtime = await r.runTurn(id, 'pi-prewarm-native', { contextTokens: 95_000, contextWindow: 200_000 });
+  runtime.getUsageSnapshot = () => ({ contextTokens: 95_000, contextWindow: 200_000 });
+  runtime.previewModelSwitch = async () => ({ action: 'hot', windowVerified: false });
+  r.views.current[0].models.pi.push(switchModel('display-only'));
+  assert.equal((await r.selectFromPhone(id, 'display-only')).body.pendingUntilSend, true);
+  await assert.rejects(r.h.queue.preparePiSkillRuntime(id, r.db.root, {
+    applyPendingOwnerSelection: true, expectedPiModel: 'display-only',
+  }), { code: 'PRECONDITION_FAILED' });
+  assert.equal(r.row(id).model, 'big');
+  assert.equal(r.row(id).sdk_session_id, 'native-pi-prewarm-native');
+  assert.equal(runtime.model, 'big');
+  assert.equal(runtime.sent.length, 1);
+  assert.deepEqual(r.rebuilds(id), []);
+});
+
+// #11352, DB tier. With a pending Pi pick, reject before applying the intent
+// even when the stored task or the live runtime cannot be used for the prewarm.
+test('remote Pi skill preparation refuses ineligible tasks before applying the pick', async t => {
+  for (const condition of ['review', 'workdir', 'remote host', 'agent device', 'Orca', 'busy', 'wrong model', 'wrong harness']) {
+    await t.test(condition, async t => {
+      const r = await modelChangeRuntime(t, { agent: 'pi' });
+      const id = 'prewarm-admission';
+      await r.createTask(id);
+      await r.selectFromPhone(id, 'small');
+      const assignments = {
+        review: ["source = ?", 'review'],
+        'remote host': ["remote_host_id = ?", 'remote'],
+        'agent device': ["agent_device_id = ?", 'device'],
+        Orca: ["orca_role = ?", 'lead'],
+      };
+      if (assignments[condition]) {
+        const [assignment, value] = assignments[condition];
+        r.db.db.prepare(`UPDATE sessions SET ${assignment} WHERE id = ?`).run(value, id);
+      }
+      if (condition === 'wrong harness') r.selection.pendingSwitches.set(id, { targetAgentKind: 'claude-code', model: 'small' });
+      if (condition === 'busy') {
+        const live = await r.h.maker.createSession({ id, agentKind: 'pi', model: 'big', workingDir: r.db.root });
+        live.running = true;
+      }
+      const snapshot = r.row(id);
+      await assert.rejects(r.h.queue.preparePiSkillRuntime(id, condition === 'workdir' ? '/different/project' : r.db.root, {
+        applyPendingOwnerSelection: true, expectedPiModel: condition === 'wrong model' ? 'big' : 'small',
+      }), { code: 'PRECONDITION_FAILED' });
+      assert.equal(r.row(id).model, snapshot.model);
+      assert.equal(r.row(id).provider_id, snapshot.provider_id);
+      assert.equal(r.row(id).sdk_session_id, snapshot.sdk_session_id);
+      assert.equal(r.selection.projectIntent(id)?.model, 'small');
+    });
+  }
+});
+
+// #11352, DB tier. A locally staged Harness choice remains valid when the owner
+// subsequently requests Pi preparation from another device.
+test('remote Pi skill preparation lands a locally staged Pi switch and retires the old engine', async t => {
+  const r = await modelChangeRuntime(t);
+  const id = 'local-pi-switch';
+  r.views.current = [{ ...switchViews('claude-code')[0], agents: ['claude-code', 'pi'],
+    routing: { 'claude-code': {}, pi: {} }, models: { 'claude-code': [switchModel('big')], pi: [switchModel('small')] } }];
+  await r.createTask(id);
+  const original = await r.runTurn(id, 'legacy-prewarm-native');
+  const switchResult = await r.selection.switchAgent({ sessionId: id, targetAgentKind: 'pi', model: 'small', providerId: 'prov-a' });
+  assert.equal(switchResult.deferred, true);
+  assert.equal(r.selection.pendingSwitches.get(id).deviceLinkModelSelectionOrigin, undefined);
+  await r.h.queue.preparePiSkillRuntime(id, r.db.root, {
+    applyPendingOwnerSelection: true, expectedPiModel: 'small',
+  });
+  assert.equal(r.row(id).model, 'small');
+  assert.equal(r.row(id).agent_kind, 'pi');
+  assert.equal(r.row(id).sdk_session_id, null);
+  assert.notEqual(r.h.maker.getSession(id), original);
+  assert.equal(r.h.maker.getSession(id).agentKind, 'pi');
+  assert.deepEqual(r.h.maker.getSession(id).sent, []);
+  assert.equal(r.selection.projectIntent(id), null);
+});
+
+// #11352, DB tier. A regular send can be waiting for a cold Pi runtime when
+// desktop occupation is detected. SQLite triggers catch writes of unchanged values too.
+test('a desktop hold during cold Pi window verification refuses the send before route or history writes', async t => {
+  const r = await modelChangeRuntime(t, { agent: 'pi' });
+  const id = 'cold-pi-hold';
+  await r.createTask(id);
+  r.views.current.push({ ...switchViews('pi')[0], id: 'prov-b' });
+  await r.runTurn(id, 'before-hold', { contextTokens: 95_000, contextWindow: 200_000 });
+  await r.h.maker.closeSession(id);
+  await r.selectFromPhone(id, 'small', 'prov-b');
+  const before = r.row(id);
+  r.db.db.exec(`CREATE TABLE route_writes(fields TEXT);
+    CREATE TRIGGER record_route_update AFTER UPDATE OF model, provider_id, sdk_session_id ON sessions
+    WHEN NEW.id = 'cold-pi-hold' BEGIN INSERT INTO route_writes VALUES ('update'); END;`);
+  let started, release;
+  const entered = new Promise(resolve => { started = resolve; });
+  const paused = new Promise(resolve => { release = resolve; });
+  const create = r.h.maker.createSession.bind(r.h.maker);
+  r.h.maker.createSession = async (opts, signal) => {
+    started();
+    await paused;
+    // Match Maker's storage fence after the adapter returns a changed native id.
+    signal?.throwIfAborted();
+    r.db.db.prepare('UPDATE sessions SET sdk_session_id = ? WHERE id = ?').run('late-native-id', id);
+    const live = await create(opts);
+    live.getUsageSnapshot = () => ({ contextTokens: 95_000, contextWindow: 200_000 });
+    live.previewModelSwitch = async () => ({ action: 'hot', windowVerified: true });
+    return live;
+  };
+  await r.h.queue.enqueue(id, { clientId: 'during-hold', text: 'next' });
+  await entered;
+  r.h.queue.holdForDesktop('fixture desktop holds the profile');
+  release();
+  await waitFor(() => r.h.queue.projection(id).error || r.h.maker.getSession(id)?.sent.length);
+  assert.deepEqual(r.db.db.prepare('SELECT * FROM route_writes').all(), []);
+  const after = r.row(id);
+  assert.deepEqual([after.model, after.provider_id, after.sdk_session_id], [before.model, before.provider_id, before.sdk_session_id]);
+  assert.deepEqual(r.rebuilds(id), []);
+  assert.equal(r.selection.projectIntent(id)?.model, 'small');
+  assert.match(JSON.stringify(r.h.queue.projection(id).error), /fixture desktop holds the profile/);
+  assert.equal(r.h.maker.getSession(id), null);
+});
 
 // Rule (the desktop's send-time landing, sessionRuntimeSelectionApply.ts: a user's pick applied on send
 // has confirmedTargetPressure, so prepareModelWindowSwitch rebuilds without asking): a task with real
