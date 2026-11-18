@@ -877,6 +877,10 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     },
   });
   plugins = await createHostPluginRuntime({ profileDir: dataDir, ownerId, manager: pluginManager, credentials,
+    modelRouteSources: () => ({
+      localViews: () => providerConfig?.publicViews(Boolean(currentGateway()?.credential)) ?? Promise.resolve([]),
+      localAgents: () => agentGraph?.maker.listAvailableAgents() ?? [],
+    }),
     // Coexistence plan A: plugin OAuth renews and writes nothing while held (plugins/authorization.ts).
     isProfileHeld: () => inputQueue.isHeldForDesktop(),
     hostToolRequest: hostTools.request, onPluginStopped: hostTools.stopPlugin,

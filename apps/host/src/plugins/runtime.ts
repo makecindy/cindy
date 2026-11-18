@@ -39,7 +39,7 @@ import { spawnResidentGhost } from '../../../desktop/src/main/cindy-brain/reside
 import { setPluginEnabled } from '../../../desktop/src/main/cindy-brain/pluginEnableService.js';
 import { ghostInstallApprovalToken, type InstalledGhost, type GhostAppContextResult } from '../../../desktop/src/shared/ghost.js';
 import { installedGhostStoragePart, findInstalledGhostByInstanceId } from '../../../desktop/src/shared/pluginIdentity.js';
-import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, type ActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
+import { activeOwnerScopeKey, getActiveAppSession, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, type ActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
 import {
   availableGhostsIn,
   findGhostForInstanceIdIn,
@@ -64,7 +64,10 @@ import { hostOutbound } from '../outbound.mjs';
 import { prepareHostPluginAssets } from './assets.mjs';
 import type { GhostNodeRuntimeBrokerDeps } from '../../../desktop/src/main/cindy-brain/nodeRuntimeBroker.js';
 
+import { createRuntimePluginHost, type RuntimePluginHostPorts } from '../../../desktop/src/main/cindy-brain/runtimePluginHostCore.js';
+
 interface PluginRuntimeOptions {
+  modelRouteSources: RuntimePluginHostPorts['modelRouteSources'];
   /** Coexistence plan A: whether a Cindy desktop app running on its own uses this profile (plugin OAuth). */
   isProfileHeld?(): boolean;
   profileDir: string;
@@ -302,6 +305,12 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       if (result) return track(result);
       const request = payload as { type?: string; kind?: string } | null;
       if (request?.type === 'browser-extension-request') return track(browserExtensions.handleRequest(id, payload));
+      if (request?.type === 'event-verdict') {
+        // The sandbox supplies the installation id. The shared gateway ignores stale or
+        // mismatched replies and returns no information about pending requests to the page.
+        taskPlugins.getGhostSubscriptionGateway().handleVerdict(id, payload);
+        return Promise.resolve({ ok: true });
+      }
       if (request?.type === 'card-update') { cards.handleCardUpdate(id, payload); return Promise.resolve({ ok: true }); }
       if (request?.type === 'host-request' && request.kind === 'app-context') return Promise.resolve(options.appContext());
       if (request?.type === 'notify') return Promise.resolve(notify.handleNotify(id, payload));
@@ -360,6 +369,37 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       if (state !== 'running' && state !== 'starting') disposeRuntimeHostServices(id);
       dispatcher?.onRuntimeState(id, state); options.publish('ghosts:runtime-changed', { states: runtime.listStates() });
     } });
+  const withSuspension = (ghost: InstalledGhost) =>
+    suspended.has(installedGhostStoragePart(ghost)) ? { ...ghost, enabled: false } : ghost;
+  const stampCurrent: RuntimePluginHostPorts['isGhostOwnerStampCurrent'] = stamp => {
+    if (!current() || !stamp) return false;
+    const active = getActiveDataOwnerPushStamp();
+    return stamp.dataOwnerId === active.dataOwnerId && stamp.ownerGeneration === active.ownerGeneration;
+  };
+  const taskPlugins = createRuntimePluginHost({
+    getGhostRuntime: () => runtime,
+    availableGhosts: () => current() ? identityLookup.availableGhosts().map(withSuspension) : [],
+    listGhostNotificationCandidates: () => listAvailableGhostsFrom(() => listInstalledGhostsForOwner(listingScope,
+      () => ({ listAsync: () => options.manager.listNotificationCandidatesAsync() }))).then(items => items.map(withSuspension)),
+    findGhostNotificationTarget: id => {
+      if (!current()) return null;
+      const ghost = options.manager.findInstalledInstance(id);
+      return ghost && identityLookup.isGhostAvailableForActiveSession(id) ? withSuspension(ghost) : null;
+    },
+    findGhostForInstanceId: (id, namespace) => {
+      const ghost = current() ? findGhostForInstanceIdIn(identityLookup, id, namespace) : null;
+      return ghost ? withSuspension(ghost) : null;
+    },
+    sendToGhostLogic: sandbox.acceptGatewayDelivery,
+    ghostOwnerScope: { ...listingScope, onInvalidated: id => runtime.stop(id) },
+    getGhostOwnerPushStamp: getActiveDataOwnerPushStamp,
+    isGhostOwnerStampCurrent: stampCurrent,
+    broadcastGhostWindowPush: (channel, payload, stamp) => {
+      if (current() && (!stamp || stampCurrent(stamp))) options.publish(channel, payload);
+    },
+    modelRouteSources: options.modelRouteSources,
+    log,
+  });
   const dispatcher = new GhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),
     spawn: ghost => runtime.spawnForTool(ghost), sendToGhost: sandbox.deliver, ownerScope, log });
   async function reconcileInstalled() {
@@ -369,7 +409,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     for (const [id, previous] of known) {
       if (previous === revision(getGhost(id))) continue;
       authorization.changes.emit(id, { source: 'manifest' });
-      runtime.stop(id); await node.stopAndWait(id); await library.disposeGhost(id); known.delete(id);
+      taskPlugins.dropGhost(id); runtime.stop(id); await node.stopAndWait(id); await library.disposeGhost(id); known.delete(id);
       assertCurrent();
     }
     await sandbox.revokeStale();
@@ -396,6 +436,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
         // Requests from old pages lose authority immediately, even if writing the
         // disabled receipt fails. Re-enabling is an explicit new transaction.
         suspended.add(key);
+        taskPlugins.dropGhost(key);
         network.disposeGhost(key);
         browserExtensions.reconcile(options.manager.list().map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
         runtime.stop(key);
@@ -436,7 +477,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   }
   return {
     list: () => options.manager.listAsync(), reconcile, cards, library, fsSlot, storage, network, secret, node, authorization,
-    browserExtensions,
+    browserExtensions, taskPlugins,
     manager: options.manager, getGhost, current, assertCurrent, dispatcher, handoff, files,
     /** Built-in and approved plugin Skills, as Desktop's listCindyManagedSkills. */
     listManagedSkills: () => managedSkills.listCindyManagedSkills(),

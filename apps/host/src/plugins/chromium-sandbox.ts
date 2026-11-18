@@ -187,6 +187,16 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
   };
   return {
     adapter,
+    /** A gateway request has one delivery attempt. Once submitted, only the plugin's
+     * verdict or the gateway deadline can settle it, even if its page then closes. */
+    acceptGatewayDelivery(id: string, message: unknown): true {
+      const target = logic.get(id);
+      if (!target || target.partition.id !== id || !target.partition.current() || target.page.isClosed()) {
+        throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+      }
+      void target.bridge.evaluate((bridge, payload) => bridge.deliver(payload), message).catch(() => {});
+      return true;
+    },
     async deliver(id: string, message: unknown, options: { failOnUncertain?: boolean } = {}): Promise<boolean> {
       const target = logic.get(id);
       if (!target?.partition.current() || target.page.isClosed()) return false;
