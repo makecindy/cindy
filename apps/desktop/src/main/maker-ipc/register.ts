@@ -17666,6 +17666,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     replaceQueuedMessage: (sessionId, clientId, next, expected) =>
       (!expected || inputCoordinator.hasQueuedItemWhere(sessionId, item => item === expected))
       && inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),
+    updateQueuedMessageText: (sessionId, expected, text, finalize) => {
+      if (!inputCoordinator.hasQueuedItemWhere(sessionId, item => item === expected)
+        || inputCoordinator.getQueueInspection(sessionId).some(entry => entry.queuedMessageId === expected.clientId && entry.consuming)) return false;
+      inputCoordinator.updateText(sessionId, expected.clientId, text, undefined, undefined, false, finalize);
+      return true;
+    },
     removeQueuedMessage: (sessionId, clientId, expected) => {
       if (!inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId && (!expected || item === expected))) {
         return false;

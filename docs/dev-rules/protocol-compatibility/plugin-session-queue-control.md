@@ -2,7 +2,8 @@
 
 插件通过既有 hostTools/control 网关，以宿主 AsyncLocalStorage 核验的插件身份进入
 原 sessionControlService 和队列事务；不自报任务 id，不新增权限组、receipt 或通道。
-任务调用的原所有权规则保持，插件可管理本机所有来源的未消费条目。
+任务调用的原所有权规则保持。插件可查看、撤回、排序或插话本机所有来源的未消费条目。
+插件编辑沿用任务界面允许的条目及宿主文字编辑事务，不可编辑的条目返回 `UNSUPPORTED_CAPABILITY`。
 编辑保留编号、附件和生命周期，实际来源标为编辑插件，不携带原正文的用户授权。
 `list_session_queue.queue[].source` 增量支持 `plugin`，`source_label` 为实例 id；旧字段原义不变。
 

@@ -161,7 +161,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '【队列所有权】只能修改或撤回当前调用 session 自己通过 send_to_session 投递、且尚未进入 consuming 的消息；Orca、scheduler、用户或其它 session 的消息都会 fail-closed 拒绝。Orca worker 队列控制与这里复用同一底层生命周期实现。steer_session_queued_message / move_session_queued_message 把排队消息转为插话或调整顺序,可操作范围另含自己任务队列里由其它任务 / 协同成员发来的机器消息;没插成时消息留在队列并返回 reason。',
       '【插话】steer_session 只对正在运行且支持 same-turn steer 的 session 生效，在 provider 的下一个输入间隙注入当前 turn；若 turn 已结束会明确失败，不会退化成下一 turn。',
       '【停止】stop_session_turn 是请求式优雅停止：当前并行工具全部收尾后才发送 provider 软中断；不关闭 transport、不重建 session、不硬杀进程，超时未确认会返回 unconfirmed。',
-      '【插件】已安装启用且声明 control 的插件用真实插件身份管理所有来源的待发消息，不借用任务身份；consuming 和已消费项仍不可修改或撤回。执行暂停不打断在途模型或工具；送达未知的消息不会自动重放，显式恢复／重试沿用用户入口，调用前须核实投递状态。',
+      '【插件】已安装启用且声明 control 的插件用真实插件身份查看、撤回、调序或插话所有来源的待发消息，编辑范围与任务界面一致；consuming 和已消费项仍不可修改或撤回。执行暂停不打断在途模型或工具；送达未知的消息不会自动重放，显式恢复／重试沿用用户入口，调用前须核实投递状态。',
       '【探针】get_session_runtime 返回统一 phase、记录状态、标题工作流语义、turn generation、开始时间、最后活动时间、当前动作摘要和停止状态；动作摘要有界且不包含提示词正文、工具参数或凭证。',
     ].join(' '),
   },

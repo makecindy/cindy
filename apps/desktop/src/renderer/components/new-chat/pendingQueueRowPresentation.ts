@@ -5,6 +5,7 @@ import { isOrcaAutoBridgeBatch } from '@/lib/messageAutomationOrigin';
 import { queueItemVisibleSource, queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { UI_ACTION_TRIGGER_PREFIX, type QueuedMessage } from '@/lib/makerChatStore';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
+import { canEditQueuedMessage } from '../../../shared/agentInputQueue';
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
@@ -119,7 +120,7 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
             return source.replaceRanges ? source.text : null;
           })()
         : null,
-    canEdit: !isPendingEnqueue && !isMachineGenerated && !isSyntheticTrigger && !isAnswered,
+    canEdit: canEditQueuedMessage(entry),
     // 协同或其他任务消息可以转为插话:插话不改正文与来源,主进程在接受后结清协同回报。
     // An answer already shown on its question card has no row, so no shortcut may act on it either.
     canSteer: !isPendingEnqueue && (isOrca || isSession || !isMachineGenerated) && !isSyntheticTrigger && !isAnswered,

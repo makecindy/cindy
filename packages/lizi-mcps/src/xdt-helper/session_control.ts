@@ -12,6 +12,7 @@ export type SessionQueueControlErrorCode =
   | 'QUEUED_MESSAGE_NOT_FOUND'
   | 'MESSAGE_CONSUMING'
   | 'NOT_AUTHORIZED'
+  | 'UNSUPPORTED_CAPABILITY'
   | 'INVALID_ARGS';
 
 /** 排队消息转插话未成功、消息仍留在队列时的原因。 */
@@ -183,7 +184,7 @@ export function registerUpdateSessionQueuedMessageTool(
     category: 'control',
     description:
       '修改你通过 send_to_session 投递、且目标 session 尚未消费的一条排队消息。' +
-      '任务只能修改自己投递的消息；声明 control 的插件可修改所有来源的待发消息。正在投递的消息不可修改。',
+      '任务只能修改自己投递的消息；声明 control 的插件仅可编辑任务界面允许编辑的待发消息，其余类型返回 UNSUPPORTED_CAPABILITY。正在投递的消息不可修改。',
     inputShape: {
       session_id: z.string().min(1).describe('目标 session id。'),
       queued_message_id: z.string().min(1).describe('来自 send_to_session 或 list_session_queue 的消息 id。'),

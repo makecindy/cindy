@@ -22,7 +22,8 @@ const edited = await cindy.host.call('cindy_helper', 'update_session_queued_mess
 });
 ```
 
-插件可编辑、撤回、排序或转插话**所有来源**的待发消息，包括主人、其它任务、协同、自动化和其它插件。
+插件可查看、撤回、排序或转插话**所有来源**的待发消息。编辑与任务界面的编辑能力范围一致：
+Orca 协同、其他任务或伙伴投递、自动化、Hook、插件消息和界面禁止编辑的其他条目返回 `UNSUPPORTED_CAPABILITY`。
 普通 Agent 的原有消息所有权规则保持不变。参数不接受调用方任务或插件 id，不能自报身份。
 
 | 工具 | 参数（除 `session_id`、`queued_message_id`） | 结果 |

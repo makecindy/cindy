@@ -17,6 +17,7 @@ import type {
 } from './sessionRuntimeControl.js';
 
 import {
+  canEditQueuedMessage,
   updateQueuedMessageText,
   type AgentInputQueuedMessage,
 } from '../../shared/agentInputQueue.js';
@@ -37,6 +38,7 @@ export type SessionQueuedMessageControlResult =
       | 'MESSAGE_CONSUMING'
       | 'NOT_AUTHORIZED'
       | 'INVALID_ARGS'
+      | 'UNSUPPORTED_CAPABILITY'
     >;
 
 export type SessionSteerResult =
@@ -146,6 +148,8 @@ export interface SessionControlServiceDeps {
     consumingClientIds: string[];
   }>;
   replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage, expected?: AgentInputQueuedMessage): boolean;
+  updateQueuedMessageText?(sessionId: string, expected: AgentInputQueuedMessage, text: string,
+    finalize: (updated: AgentInputQueuedMessage) => AgentInputQueuedMessage): boolean;
   removeQueuedMessage(sessionId: string, clientId: string, expected?: AgentInputQueuedMessage): boolean;
   steerStoredQueuedMessage(sessionId: string, clientId: string): Promise<QueuedSteerOutcome>;
   moveQueuedMessage(sessionId: string, clientId: string, position: number): number | null | 'locked';
@@ -208,25 +212,36 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
       const plugin = params.callerSessionId ? undefined : deps.getPluginCaller?.();
-      const captured = params.callerSessionId ? await deps.captureRequest?.(params.callerSessionId, params.message,
-        { sessionId: params.targetSessionId }) : undefined;
-      return queueControl.update({
+      const update = {
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
         message: params.message,
-        authorize: (item) => plugin ? { ok: true } : authorizeSessionQueueItem(item, params.callerSessionId),
         beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent, plugin ? async () => plugin.assertCurrent() : undefined),
+      };
+      if (plugin) {
+        const edit = deps.updateQueuedMessageText;
+        if (!edit) return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Queued message text editing is unavailable' };
+        return queueControl.update({
+          ...update,
+          authorize: (item) => canEditQueuedMessage(item)
+            ? { ok: true }
+            : { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'This queued message is not editable in the task interface' },
+          updateText: (expected) => edit(params.targetSessionId, expected, params.message, (updated) => {
+            revokeTrustedDesktopQueuedOrigin(updated);
+            updated.sourcePlugin = plugin.source;
+            updated.autoReviewUserText = { kind: 'agent-request' };
+            bindTaskActionInput(params.targetSessionId, updated);
+            return updated;
+          }),
+        });
+      }
+      const captured = params.callerSessionId ? await deps.captureRequest?.(params.callerSessionId, params.message,
+        { sessionId: params.targetSessionId }) : undefined;
+      return queueControl.update({
+        ...update,
+        authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
         rebuild: (item, message) => {
-          const next = plugin ? updateQueuedMessageText(item, message)
-            : rebuildSessionQueueItem(item, message, captured?.autoReviewUserText);
-          if (plugin) {
-            revokeTrustedDesktopQueuedOrigin(next);
-            next.sourcePlugin = plugin.source;
-            next.autoReviewUserText = { kind: 'agent-request' };
-            if (next.origin?.kind === 'session' || next.origin?.kind === 'orca')
-              next.origin = { ...next.origin, displayText: message };
-            if (item.origin?.kind === 'session' && !item.files?.length) next.persistedContent = message;
-          }
+          const next = rebuildSessionQueueItem(item, message, captured?.autoReviewUserText);
           bindTaskActionInput(params.targetSessionId, next);
           return next;
         },

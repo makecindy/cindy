@@ -155,6 +155,8 @@ function setup(opts?: {
     ) => opts?.steerAccepted ?? true),
     getQueueSnapshot: vi.fn(async (): Promise<{ pendingQueue: AgentInputQueuedMessage[]; consumingClientIds: string[] }> => ({ pendingQueue: [queueItem], consumingClientIds: [] })),
     replaceQueuedMessage: vi.fn((_sessionId: string, _clientId: string, _next: AgentInputQueuedMessage, _expected?: AgentInputQueuedMessage) => true),
+    updateQueuedMessageText: vi.fn((_sessionId: string, _expected: AgentInputQueuedMessage, _text: string,
+      _finalize: (updated: AgentInputQueuedMessage) => AgentInputQueuedMessage) => true),
     removeQueuedMessage: vi.fn(() => true),
     steerStoredQueuedMessage: vi.fn(async () => ({ kind: 'steered' as const })),
     moveQueuedMessage: vi.fn(() => 0),
@@ -208,23 +210,37 @@ describe('session control domain service', () => {
       .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Native compact is unavailable' });
   });
 
-  // Unit / all-message queue contract: drive the real queue owner through its public service.
-  // Existing cases only granted a task its own handoffs, never a plugin editing a user row.
+  // UI parity: machine-generated rows are not editable, even with plugin control.
   it.each([
-    undefined,
     { kind: 'session' as const, senderSessionId: 'other', displayText: 'before' },
+    { kind: 'orca' as const, senderLabel: 'worker', displayText: 'before' },
     { kind: 'scheduler' as const, scheduleId: 'schedule', scheduleName: 'automation', runId: 'run' },
-  ])('allows a plugin edit without borrowing the original sender authority (%j)', async origin => {
-    const original = item(origin);
+  ])('rejects plugin edits of UI-ineligible rows (%j)', async origin => {
+    const { deps, service } = setup({ queueItem: item(origin) });
+    deps.getPluginCaller.mockReturnValue({ source: { pluginId: 'editor' }, assertCurrent: () => {} });
+    const params = { targetSessionId: 'target', queuedMessageId: 'queued-1', message: 'edited' };
+    expect(await service.updateQueuedMessage(params)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(deps.replaceQueuedMessage).not.toHaveBeenCalled();
+    expect(deps.updateQueuedMessageText).not.toHaveBeenCalled();
+    expect(await service.moveQueuedMessage({ ...params, position: 0 })).toMatchObject({ ok: true });
+    expect(await service.steerQueuedMessage(params)).toMatchObject({ ok: true });
+    expect(await service.cancelQueuedMessage(params)).toMatchObject({ ok: true });
+  });
+
+  it('uses the native text edit and replaces the original authorization with plugin attribution', async () => {
+    const original = item();
     original.autoReviewUserText = 'original owner request';
     const { deps, service } = setup({ queueItem: original });
     deps.getPluginCaller.mockReturnValue({ source: { pluginId: 'editor' }, assertCurrent: () => {} });
     expect(await service.updateQueuedMessage({ targetSessionId: 'target', queuedMessageId: 'queued-1', message: 'edited' }))
       .toMatchObject({ ok: true });
-    const edited = deps.replaceQueuedMessage.mock.calls[0]?.[2];
-    expect(edited).toMatchObject({ clientId: 'queued-1', text: 'edited', sourcePlugin: { pluginId: 'editor' },
-      autoReviewUserText: { kind: 'agent-request' } });
-    expect(edited?.origin).toEqual(origin?.kind === 'session' ? { ...origin, displayText: 'edited' } : origin);
+    expect(deps.replaceQueuedMessage).not.toHaveBeenCalled();
+    const [session, expected, text, finalize] = deps.updateQueuedMessageText.mock.calls[0]!;
+    expect([session, expected, text]).toEqual(['target', original, 'edited']);
+    expect(finalize({ ...original, text })).toMatchObject({
+      sourcePlugin: { pluginId: 'editor' },
+      autoReviewUserText: { kind: 'agent-request' },
+    });
   });
 
   it.each(['cancelQueuedMessage', 'steerQueuedMessage', 'moveQueuedMessage'] as const)(
