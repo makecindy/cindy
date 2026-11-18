@@ -60,7 +60,7 @@ export interface SessionRuntimeFallbackPorts<RuntimeSession extends { agentKind:
     candidate: SessionRuntimeProfile | null;
     routeLocked?: boolean;
   }>;
-  readModelGroupFallbackCandidate?(sessionId: string, current: SessionRuntimeProfile, visited: readonly string[], accountUnavailable: boolean, generation: number): Promise<{
+  readModelGroupFallbackCandidate?(sessionId: string, current: SessionRuntimeProfile, visited: readonly string[], recovery: { accountUnavailable: boolean; hasImages: boolean }, generation: number): Promise<{
     candidate: SessionRuntimeProfile | null;
     bindCommittedRoute?(profile: SessionRuntimeProfile): void;
   } | null>;
@@ -101,7 +101,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
     attemptToken: number,
     requireRouteChange = false,
     isCurrent: () => boolean = () => true,
-    accountUnavailable = false,
+    groupRecovery?: { accountUnavailable: boolean; hasImages: boolean },
   ): Promise<RuntimeFallbackResult<RuntimeSession>> => {
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
     let runtimeSession: RuntimeSession | null = null;
@@ -125,8 +125,8 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       let currentForFallback = profiles.effective;
       let candidate = botFallback.candidate;
-      const group = !botFallback.isBot && readSessionRuntimeFallbackSettings().enabled
-        ? await readModelGroupFallbackCandidate?.(sessionId, profiles.effective, profiles.control.visitedRoutes, accountUnavailable, profiles.control.generation)
+      const group = groupRecovery && !botFallback.isBot && readSessionRuntimeFallbackSettings().enabled
+        ? await readModelGroupFallbackCandidate?.(sessionId, profiles.effective, profiles.control.visitedRoutes, groupRecovery, profiles.control.generation)
         : null;
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       if (group) candidate = group.candidate;
@@ -199,12 +199,12 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
         failed: SessionRuntimeProfile,
       ): Promise<boolean> => {
         if (!await recordFailedCandidate(failed) || !isCurrent()) return false;
-        if (group) {
+        if (group && groupRecovery) {
           const latest = await readSessionRuntimeProfiles(sessionId);
           if (!latest || latest.control.pending || latest.control.generation !== profiles.control.generation ||
               !canApplyAutomaticRuntimeSelection(sessionId, latest.control.generation)) return false;
           const next = await readModelGroupFallbackCandidate?.(sessionId, currentForFallback,
-            latest.control.visitedRoutes, accountUnavailable, latest.control.generation);
+            latest.control.visitedRoutes, groupRecovery, latest.control.generation);
           candidate = next?.candidate ?? null;
           return candidate !== null;
         }

@@ -52,7 +52,7 @@ function isPlainLocalTask(row: ModelGroupSwitchOfferSessionRow): boolean {
 export async function computeModelGroupSwitchOffer(
   deps: ModelGroupSwitchOfferDeps,
   sessionId: string,
-  recovery?: { visited: ReadonlySet<string>; accountUnavailable: boolean; recordUnavailable(candidate: ModelGroupRoute['candidates'][number]): void; current: { agentKind: ModelGroupAgentKind; providerId: string; model: string } },
+  recovery?: { visited: ReadonlySet<string>; accountUnavailable: boolean; hasImages?: boolean; recordUnavailable(candidate: ModelGroupRoute['candidates'][number]): void; current: { agentKind: ModelGroupAgentKind; providerId: string; model: string } },
 ): Promise<ModelGroupSwitchOffer | null> {
   const binding = deps.readBinding(sessionId);
   if (!binding) return null;
@@ -90,7 +90,9 @@ export async function computeModelGroupSwitchOffer(
   // 跳过的来源(含别的位置上的)已标成停用，不为它们去读别处的目录。
   const facts = await deps.candidateFacts(eligible);
   // 「轮流」从正在用的这个往后数；不读也不改新任务用的轮流位置。
-  const picked = pickModelGroupCandidate(eligible, facts, { now, lastPickedKey: binding.pickedKey });
+  const picked = pickModelGroupCandidate(eligible, facts, { now, lastPickedKey: binding.pickedKey,
+    needsImage: recovery?.hasImages === true && route.exceptions?.some(item => item.when.type === 'image'),
+  });
   if (picked.index === null) return null;
   const entry = picked.trace[picked.index];
   // 能用的都撞了上限时 pick 仍会选最早恢复的那个(带 limitedUntilMs)；换过去一样要等，不提议。

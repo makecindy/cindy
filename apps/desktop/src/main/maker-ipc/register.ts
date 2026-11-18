@@ -17619,13 +17619,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readSessionRuntimeProfiles: (sessionId) => readSessionRuntimeProfiles(sessionId),
     canApplyAutomaticRuntimeSelection: (sessionId, generation) => canApplyAutomaticRuntimeSelection(sessionId, generation),
     readBotFallbackCandidate: (sessionId, current) => readBotFallbackCandidate(sessionId, current),
-    readModelGroupFallbackCandidate: async (sessionId, current, visited, accountUnavailable, generation) => {
+    readModelGroupFallbackCandidate: async (sessionId, current, visited, recovery, generation) => {
       const row = await getSessionRowSnapshot(sessionId);
       const binding = row && activeModelGroupBinding(sessionId, row);
       if (!binding || !current.providerId || current.agentDeviceId) return null;
       const excluded = new Set(visited.map(key => key.replace(/^claude-code\u0000/, 'cc\u0000')));
 
-      const offer = await readModelGroupRecoveryOffer(sessionId, { visited: excluded, accountUnavailable,
+      const offer = await readModelGroupRecoveryOffer(sessionId, { visited: excluded, ...recovery,
         recordUnavailable: (candidate) => recordFailedSessionRuntimeFallbackCandidate(sessionId, generation, {
           ...current, agentKind: dbToMakerAgentKind(candidate.agentKind), providerId: candidate.providerId, model: candidate.model,
         }),
@@ -18875,7 +18875,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           && ((origin?.kind === 'scheduler' && origin.runId) || ownsQuotaRoute())) {
           scheduledQuotaInputs.add(args[2]);
         } else scheduledQuotaInputs.delete(args[2]);
-        const groupFallback = botInput?.source === 'desktop' && !botInput.remoteHostId && !botInput.agentDeviceId &&
+        const groupFallback = origin?.kind !== 'scheduler' && !ownsQuotaRoute() && botInput?.source === 'desktop' && !botInput.remoteHostId && !botInput.agentDeviceId &&
           !botInput.orcaRole && readSessionRuntimeFallbackSettings().enabled && !!activeModelGroupBinding(sessionId, botInput) && !isSessionSharedTaskActive(sessionId);
         if (groupFallback) modelGroupInputs.add(args[2]);
         else modelGroupInputs.delete(args[2]);

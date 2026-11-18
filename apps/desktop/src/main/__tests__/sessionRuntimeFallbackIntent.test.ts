@@ -84,12 +84,19 @@ describe('automatic runtime selection respects the user send boundary', () => {
     expect(h.apply).not.toHaveBeenCalled();
   });
 
+  it('keeps a non-group input on the ordinary recovery path even in a bound task', async () => {
+    const h = harness();
+    h.readCandidate.mockResolvedValue({ isBot: false, candidate: null });
+    expect(await h.run('session', 1, 1)).toMatchObject({ outcome: 'unchanged' });
+    expect(h.groupCandidate).not.toHaveBeenCalled();
+  });
+
   // Unit: a group supplies the next model to the existing session transaction.
   it.each([false, true])('uses the session switch for a group candidate (cross-harness=%s)', async crossHarness => {
     const h = harness();
     h.readCandidate.mockResolvedValue({ isBot: false, candidate: null });
     h.groupCandidate.mockResolvedValue({ candidate: crossHarness ? h.candidate : { ...h.current, model: 'second' } });
-    expect(await h.run('session', 1, 1, true)).toMatchObject({ outcome: 'switched' });
+    expect(await h.run('session', 1, 1, true, undefined, { accountUnavailable: false, hasImages: false })).toMatchObject({ outcome: 'switched' });
     expect(h.switchAgent).toHaveBeenCalledTimes(crossHarness ? 1 : 0);
     expect(h.apply).toHaveBeenCalledTimes(crossHarness ? 0 : 1);
   });
@@ -103,7 +110,7 @@ describe('automatic runtime selection respects the user send boundary', () => {
     h.groupCandidate.mockResolvedValueOnce({ candidate: h.candidate, bindCommittedRoute })
       .mockResolvedValueOnce({ candidate: third, bindCommittedRoute });
     h.switchAgent.mockResolvedValueOnce({ switched: false, engineReady: false });
-    expect(await h.run('session', 1, 1, true)).toMatchObject({ outcome: 'switched' });
+    expect(await h.run('session', 1, 1, true, undefined, { accountUnavailable: false, hasImages: false })).toMatchObject({ outcome: 'switched' });
     expect(h.failed).toHaveBeenCalledWith('session', 0, h.candidate);
     expect(bindCommittedRoute.mock.calls).toEqual([[third]]);
   });

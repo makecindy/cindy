@@ -50,7 +50,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     attemptToken: number,
     requireRouteChange: boolean,
     isCurrent: () => boolean,
-    accountUnavailable?: boolean,
+    groupRecovery?: { accountUnavailable: boolean; hasImages: boolean },
   ): Promise<RuntimeFallbackResult<RuntimeSession>>;
   pendingSessionRuntimeFallbackRebuilds: { delete(session: RuntimeSession): unknown };
   providerGroupHeldErrors: { stash(sessionId: string, holdId: number, detail: unknown): void };
@@ -197,9 +197,11 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   decision.attemptToken,
                   requireRouteChange,
                   isCurrent,
-                  ...(modelGroupInput && (signals.errorStatus === 402 || signals.sdkError === 'billing_error' ||
-                    isProviderBalanceError(signals.message ?? ''))
-                    ? [true] as const : []),
+                  ...(modelGroupInput ? [{
+                    accountUnavailable: signals.errorStatus === 402 || signals.sdkError === 'billing_error' ||
+                      isProviderBalanceError(signals.message ?? ''),
+                    hasImages: item.files?.some(file => file.category === 'image') === true,
+                  }] as const : []),
                 );
               fallbackRebuildSession = fallback.session;
               if (!isCurrent()) return;

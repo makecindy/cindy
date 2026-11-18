@@ -90,6 +90,17 @@ function deps(overrides: {
 }
 
 describe('computeModelGroupSwitchOffer', () => {
+  it('replays an image turn on the next vision candidate when the route has an image exception', async () => {
+    const d = deps({
+      config: { routes: [{ ...route('order'), exceptions: [{ when: { type: 'image' }, use: 'vision' }] }] },
+      facts: FACTS.map((fact, index) => ({ ...fact, acceptsImage: index === 0 || index === 3 })),
+    });
+    const offer = await computeModelGroupSwitchOffer(d, 's1', {
+      current: CANDIDATES[0], visited: new Set(), accountUnavailable: false, hasImages: true, recordUnavailable: vi.fn(),
+    });
+    expect(offer).toMatchObject({ providerId: 'acct-b', model: 'gpt' });
+  });
+
   // Unit: after the initially bound account fails, a second failure must advance
   // past both visited routes, even when the session row still holds the baseline.
   it('advances an automatic recovery past both failed candidates', async () => {
