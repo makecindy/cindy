@@ -87,7 +87,13 @@ function normalizeType(value: unknown, out: Schema, preserveNullType: boolean): 
 
 function sanitizeEnum(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const values = [...new Set(value.filter((item): item is string => typeof item === "string"))];
+  // Gemini rejects empty enum values outright (400 INVALID_ARGUMENT: "enum[0]:
+  // cannot be empty"), so a "" sentinel for "unset" must never reach the wire.
+  // Dropping it is forced by Gemini's validation, not a semantic choice: the
+  // application contract still distinguishes "" from omission (some schemas
+  // use "" as an explicit-unset value), so this
+  // transformation must only ever be applied to Gemini-bound schemas.
+  const values = [...new Set(value.filter((item): item is string => typeof item === "string" && item.length > 0))];
   return values.length > 0 ? values : undefined;
 }
 
@@ -194,6 +200,12 @@ function sanitizeSchema(
   const properties = sanitizeProperties(node.properties, defs, depth, refDepth, state);
   if (properties) out.properties = properties;
 
+  // A required property keeps its required entry even when its enum was
+  // dropped above (e.g. enum [""]): Gemini rejects "" unconditionally, so no
+  // valid enum exists to keep, but the property is still required — only the
+  // value constraint is gone, and "" stays expressible to the tool's own
+  // validation. Dropping required here would let the model omit the property
+  // entirely, which is a wider loss than the unconstrained value.
   if (properties && Array.isArray(node.required)) {
     const required = [...new Set(node.required.filter((item): item is string => (
       typeof item === "string" && Object.hasOwn(properties, item)
@@ -215,6 +227,13 @@ function sanitizeSchema(
   return out;
 }
 
+/**
+ * Restrict a tool-parameter schema to the subset Google's function-schema API
+ * accepts. Gemini-only: the ""-dropping and keyword-stripping below encode
+ * Gemini's validation rules and must never be applied to another provider's
+ * schemas, where "" may be a meaningful value. Other providers have their own
+ * adapters; do not reuse this helper as a general JSON-Schema cleaner.
+ */
 export function sanitizeGeminiToolParameters(parameters: unknown): Record<string, unknown> {
   try {
     const defs = new Map<string, unknown>();
