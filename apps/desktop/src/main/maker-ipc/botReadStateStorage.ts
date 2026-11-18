@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import {
   botReadIdentityKey,
+  effectiveBotReadAt,
   type BotReadIdentity,
   type BotReadOwner,
   type BotReadPosition,
@@ -51,8 +52,8 @@ export interface BotReadStateStorageDependencies {
   currentOwner: () => { dataOwnerId: string | null; generation: number };
   boundaryPending: () => boolean;
   ownerRoot: () => string;
-  /** The adapter delivers invalidations only to this owner's trusted complete app windows. */
-  publish?: (event: BotReadStateChanged) => void;
+  /** The identity stays in Main; windows get only the versioned invalidation. */
+  publish?: (event: BotReadStateChanged, identity: BotReadIdentity) => void;
 }
 
 /**
@@ -136,7 +137,7 @@ export function createBotReadStateStorage(deps: BotReadStateStorageDependencies)
     partition.records.set(name, next);
     partition.names?.add(name);
     partition.revision += 1;
-    try { deps.publish?.({ owner: { ...owner }, instanceId, revision: partition.revision }); }
+    try { deps.publish?.({ owner: { ...owner }, instanceId, revision: partition.revision }, incoming.identity); }
     catch { /* Notification loss must not turn a durable commit into a reported save failure. */ }
     return next;
   }
@@ -191,6 +192,11 @@ export function createBotReadStateStorage(deps: BotReadStateStorageDependencies)
   }
 
   return {
+    /** Main-only read of the same committed position the windows use. */
+    readPosition(owner: BotReadOwner, identity: BotReadIdentity): number | undefined {
+      const position = read(partitionFor(owner), digest(identity));
+      return position ? effectiveBotReadAt(position) : undefined;
+    },
     /** Queue before parsing/capturing any owner path; queued old-account commands still fail closed. */
     access(input: unknown): Promise<BotReadStateResult> {
       const operation = chain.then(() => run(input));

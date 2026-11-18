@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { botReadIdentityKey } from '../../../shared/botReadStateStorage.js';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -10,7 +11,10 @@ const mocks = vi.hoisted(() => ({
   rows: [] as Array<{ id?: string; role: string; createdAt: number; text: string | null }>,
   clearedAt: null as number | null,
 }));
-vi.mock('../../localDb/ipc/bots.js', () => ({ listBotRemoteResourceSources: async () => mocks.sources }));
+vi.mock('../../localDb/ipc/bots.js', () => ({
+  listBotRemoteResourceSources: async () => mocks.sources,
+  mergeHostReadPositions: (positions: Map<string, number>) => positions,
+}));
 vi.mock('../../localDb/ipc/botRemoteResourceProjection.js', () => ({
   visibleBotRemoteResourceSources: (sources: Array<{ hiddenAt: number | null }>) => sources.filter(source => source.hiddenAt === null),
 }));
@@ -50,6 +54,7 @@ const source = (id: string, over: Record<string, unknown> = {}) => ({
 const pending = new Map<string, Array<{ request: unknown }>>();
 const deps = (remote?: PluginCompanionRemoteDeps) => ({
   remote,
+  readPosition: () => undefined,
   pending: (sessionId: string) => pending.get(sessionId) ?? [],
   openSession: vi.fn(),
   flushMessages: vi.fn(async () => {}),
@@ -114,6 +119,32 @@ it('opens a listed request or the companion conversation, and nothing it cannot 
   expect(d.openSession).toHaveBeenCalledTimes(2);
 });
 
+// unit: list reflects read acknowledgements even while status, phase and latest reply are unchanged.
+it('clears and relights the unread mark independently for each companion', async () => {
+  const positions = new Map([['ada', 8], ['bo', 8]]);
+  const host = createPluginCompanionHost({
+    ...deps(),
+    readPosition: identity => identity.kind === 'bot' ? positions.get(identity.id) : undefined,
+  });
+  mocks.activities.set('ada', { sessionId: 'ada-main', phase: 'running' });
+  mocks.sources = [source('ada', { lastReplyAt: 8 }), source('bo')];
+  const list = () => host.list(() => {});
+  expect((await list())[0]).toMatchObject({ status: 'running', unread: false });
+
+  mocks.activities.set('ada', { sessionId: 'ada-main', phase: 'completed' });
+  mocks.sources[0]!.lastReplyAt = 9;
+  const [completed] = await list();
+  expect(completed).toMatchObject({ unread: true });
+  positions.set('ada', 9);
+  const [read, other] = await list();
+  expect(read).toEqual({ ...completed, unread: false });
+  expect(other).toMatchObject({ id: 'bo', unread: true });
+
+  mocks.sources[0]!.lastReplyAt = 10;
+  expect((await list())[0]).toMatchObject({ unread: true });
+  expect((await host.serveRemote({ version: 1, kind: 'list' }) as { companions: unknown[] }).companions[0]).not.toHaveProperty('unread');
+});
+
 it('reads the newest visible reply after the conversation was cleared, capped in length', async () => {
   const d = deps();
   const host = createPluginCompanionHost(d);
@@ -150,6 +181,22 @@ const laptop = (handler: (channel: string, request: Record<string, unknown>) => 
   invoke: vi.fn(async (_deviceId: string, channel: string, args: unknown[]) => handler(channel, args[0] as Record<string, unknown>)),
 });
 
+it('uses this desktop’s read position for a remote companion without re-fetching its home', async () => {
+  const positions = new Map([
+    [botReadIdentityKey({ kind: 'remote-bot', deviceId: 'elsewhere', botId: 'far' }), 6],
+    [botReadIdentityKey({ kind: 'remote-bot', deviceId: 'laptop', botId: 'far' }), 5],
+  ]);
+  const remote = laptop(() => ({ version: 1, companions: [farOnLaptop] }));
+  const host = createPluginCompanionHost({
+    ...deps(remote), now: () => 0,
+    readPosition: identity => positions.get(botReadIdentityKey(identity)),
+  });
+  expect((await host.list(() => {}))[2]).toMatchObject({ id: 'far', unread: true });
+  positions.set(botReadIdentityKey({ kind: 'remote-bot', deviceId: 'laptop', botId: 'far' }), 6);
+  expect((await host.list(() => {}))[2]).toMatchObject({ id: 'far', unread: false });
+  expect(remote.invoke).toHaveBeenCalledTimes(1);
+});
+
 it('shows a companion running on another computer as that computer reports it', async () => {
   const remote = laptop((_channel, request) => request.kind === 'reply'
     ? { version: 1, reply: { text: 'Shipped.', createdAt: 9, truncated: false } }
@@ -158,7 +205,7 @@ it('shows a companion running on another computer as that computer reports it', 
   let clock = 0;
   const host = createPluginCompanionHost({ ...d, now: () => clock });
   const [, , far] = await host.list(() => {});
-  expect(far).toEqual({ ...farOnLaptop, home: { isSelf: false, online: true, deviceName: 'Laptop' } });
+  expect(far).toEqual({ ...farOnLaptop, unread: false, home: { isSelf: false, online: true, deviceName: 'Laptop' } });
   await host.list(() => {});
   expect(remote.invoke).toHaveBeenCalledTimes(1);
   clock = 10_000;
@@ -186,7 +233,7 @@ it('falls back to the teammate list for an older home and to offline when it can
   const host = createPluginCompanionHost(d);
   expect((await host.list(() => {}))[2]).toEqual({
     id: 'far', name: 'Far', description: 'fox', home: { isSelf: false, online: true, deviceName: 'Laptop' }, status: 'running',
-    activity: { phase: 'running', workingPhase: 'testing', summary: null, startedAt: 2, lastActivityAt: 4 }, interactions: [], lastReplyAt: 6,
+    activity: { phase: 'running', workingPhase: 'testing', summary: null, startedAt: 2, lastActivityAt: 4 }, interactions: [], unread: false, lastReplyAt: 6,
   });
   expect(await host.reply('far', () => {})).toBeNull();
   await host.open('far', undefined, () => {});
