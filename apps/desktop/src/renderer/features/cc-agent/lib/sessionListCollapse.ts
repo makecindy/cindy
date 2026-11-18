@@ -1,6 +1,6 @@
 import {
   SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT,
-  SESSION_LIST_COLLAPSE_RECENT_WINDOW_MS,
+  getSessionListCollapseView,
   type SessionListCollapseView,
   type SessionListCollapseViewInput,
 } from '@cindy/maker-shared/session-list-collapse';
@@ -17,34 +17,35 @@ export {
 
 /** The opt-in replaces the task count floor with a shorter activity window. */
 export function getSidebarSessionCollapseView<T>({
-  entries,
-  showAll,
-  disableCollapse,
-  isFiltering,
-  isActiveEntry,
-  hasAttentionEntry,
-  nowMs = Date.now(),
-  getActivityMs,
   idleCollapseEnabled = false,
-  recentWindowMs = idleCollapseEnabled
-    ? SIDEBAR_INACTIVE_COLLAPSE_MS
-    : SESSION_LIST_COLLAPSE_RECENT_WINDOW_MS,
-  minVisibleCount = SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT,
   isContainerEntry,
+  nowMs = Date.now(),
+  ...input
 }: SessionListCollapseViewInput<T> & {
   idleCollapseEnabled?: boolean;
   isContainerEntry?: (entry: T) => boolean;
 }): SessionListCollapseView<T> {
+  if (!idleCollapseEnabled) return getSessionListCollapseView({ ...input, nowMs });
+
+  const {
+    entries,
+    showAll,
+    disableCollapse,
+    isFiltering,
+    isActiveEntry,
+    hasAttentionEntry,
+    getActivityMs,
+    recentWindowMs = SIDEBAR_INACTIVE_COLLAPSE_MS,
+    minVisibleCount = SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT,
+  } = input;
   let containerCount = 0;
   const visibleHeadCount = Math.max(0, Math.round(minVisibleCount));
   const visibleEntries = showAll || disableCollapse || isFiltering
     ? entries
-    : entries.filter((entry, index) => {
+    : entries.filter((entry) => {
         const container = isContainerEntry?.(entry) ?? false;
         // Container headers keep their own limit so an all-idle group can be reopened.
-        const withinHead = container
-          ? containerCount++ < visibleHeadCount
-          : !idleCollapseEnabled && index < visibleHeadCount;
+        const withinHead = container && containerCount++ < visibleHeadCount;
         return withinHead || isActiveEntry(entry) || hasAttentionEntry(entry) ||
           (!container && getActivityMs != null && getActivityMs(entry) >= nowMs - recentWindowMs);
       });

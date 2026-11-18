@@ -52,10 +52,10 @@ function projectProps(id: string): ProjectNodeProps {
     project: { projectKey: `local:/${id}`, workingDir: `/${id}`, displayName: id, scope: 'local',
       sessions: [task(`${id}-old`)], latestActivityAt: '', segments: 1 } as ProjectNodeProps['project'],
     statusFilter: 'active', isCollapsed: false, parentSectionCollapsed: false,
-    disableSessionCollapse: false, isProjectPinned: false, onToggle: vi.fn(),
-    onToggleProjectPin: noop, onRenameProject: async () => {}, onRemoveFromSidebar: noop,
+    disableSessionCollapse: false, onToggle: vi.fn(),
+    onSettings: noop, onRenameProject: async () => {},
     onCreateInProject: noop, onOpenConversationSearch: noop, onOpenInExplorer: noop,
-    onImportFromTools: noop, onBrowseFiles: noop, onArchiveAll: noop };
+    onBrowseFiles: noop, onArchiveAll: noop };
 }
 beforeEach(() => {
   localStorage.setItem(SIDEBAR_IDLE_COLLAPSE_KEY, 'true');

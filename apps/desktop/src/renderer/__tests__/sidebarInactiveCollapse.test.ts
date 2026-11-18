@@ -43,6 +43,14 @@ describe('desktop sidebar idle folding (#11233)', () => {
     expect(view([...floor, recent, old], { idleCollapseEnabled: true }).visibleEntries).toEqual([]);
   });
 
+  // #11252: the 24h/floor test has no current task in the folded region.
+  // Seven old tasks with the seventh active must expose the sixth too (unit).
+  it('unfolds the entire legacy list when the current task would be folded', () => {
+    const entries = ['a', 'b', 'c', 'd', 'e', 'hidden', 'active'].map((id) => ({ id, activity: 0 }));
+    expect(view(entries)).toMatchObject({ visibleEntries: entries, hiddenCount: 0, isOverflowing: false });
+    expect(view(entries, { idleCollapseEnabled: true }).visibleEntries).toEqual(entries.slice(-1));
+  });
+
   it('keeps the current and attention rows without expanding unrelated old tasks', () => {
     const entries = ['old', 'active', 'attention'].map((id) => ({ id, activity: 0 }));
     expect(view(entries, { idleCollapseEnabled: true }).visibleEntries.map((entry) => entry.id)).toEqual(['active', 'attention']);

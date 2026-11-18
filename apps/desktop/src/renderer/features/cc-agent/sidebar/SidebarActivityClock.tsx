@@ -52,6 +52,7 @@ export function SidebarActivityClock({ enabled, interactionRoot, children }: {
     const isVisible = () => !hostHidden && document.visibilityState !== 'hidden';
     const refresh = (focused = document.activeElement) => {
       if (!isVisible() || pointerInside ||
+          root?.querySelector('[data-sidebar-activity-overlay]') ||
           (root?.contains(focused) && focused?.matches(':focus-visible'))) return;
       setNow(Date.now());
     };
