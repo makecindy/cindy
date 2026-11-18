@@ -23,6 +23,8 @@ export const QUOTA_PANEL_DESIGN = {
     liquid: ['#26221c75', '#f2efe9b8'],
     fill: ['#26221c6b', '#f2efe9cc'],
     onInk: ['#ffffff', '#0e0e0d'],
+    /** Windows only: the opaque tone under the tint, standing in for the macOS blur material. */
+    panelBase: ['#d6d4d1', '#262523'],
     panelTint: ['#f8f7f380', '#1a19188a'],
     panelGlow: ['#ea6b1717', '#ea6b171f'],
     panelGlow2: ['#ffffff8c', '#fff4e40a'],

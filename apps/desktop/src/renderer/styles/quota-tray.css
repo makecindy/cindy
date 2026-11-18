@@ -19,7 +19,7 @@ body { margin: 0; }
   border-radius: var(--panel-radius); overflow: hidden;
   background: radial-gradient(ellipse at top left, var(--panelGlow), transparent 60%),
     linear-gradient(125deg, transparent, var(--panelGlow2)),
-    linear-gradient(var(--panelTint), var(--panelTint)), light-dark(#d6d4d1, #262523);
+    linear-gradient(var(--panelTint), var(--panelTint)), var(--panelBase);
 }
 header, footer { flex: none; display: flex; align-items: center; gap: 8px; }
 header { padding: 12px 12px 4px 18px; min-height: 44px; }
@@ -35,7 +35,7 @@ small { color: var(--ink3); font-size: 11px; }
 h1 { font-size: 21px; line-height: 1.2; margin: 0; letter-spacing: -.035em; }
 h2 { font-size: 13px; margin: 14px 0 8px; }
 button, select { font: inherit; color: inherit; }
-button { background: transparent; border: 0; border-radius: 6px; cursor: pointer; padding: 0; min-height: 28px; }
+button { background: transparent; border: 0; border-radius: 8px; cursor: pointer; padding: 0; min-height: 28px; }
 button:hover { background: var(--ink5); }
 button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--codex); outline-offset: 2px; }
 button:disabled { opacity: .3; cursor: default; }
@@ -57,7 +57,7 @@ button:disabled { opacity: .3; cursor: default; }
 .metric small { font-family: inherit; font-size: 60%; }
 .tube { position: relative; overflow: hidden; margin: 8px auto; height: var(--tube-height); width: 40px; background: linear-gradient(var(--wellTop), var(--wellBottom)); box-shadow: inset 0 1px 3px var(--wellShade); border-radius: 12px; }
 .tube[data-best=true] { outline: 1px solid var(--ink2); }
-.well { position: absolute; inset: 3px; overflow: hidden; border-radius: 9px; }
+.well { position: absolute; inset: 3px; overflow: hidden; border-radius: 8px; }
 .tube i { position: absolute; inset: auto 0 0; }
 .tube svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; fill: var(--liquid); }
 .tube[data-level=error] svg { fill: var(--error); }
@@ -72,11 +72,11 @@ button:disabled { opacity: .3; cursor: default; }
 .tabs button { font-size: 12px; font-weight: 500; color: var(--ink3); position: relative; white-space: nowrap; }
 .tabs small { margin-left: 4px; font-size: inherit; }
 .tabs button[aria-pressed=true] { color: var(--ink); }
-.tabs button[aria-pressed=true]::after { content: ''; position: absolute; width: 12px; height: 1.5px; border-radius: 1px; background: var(--ink2); bottom: 0; left: 0; }
+.tabs button[aria-pressed=true]::after { content: ''; position: absolute; width: 12px; height: 1.5px; border-radius: 9999px; background: var(--ink2); bottom: 0; left: 0; }
 .rows { padding: 0 10px; }
 .task-summary { padding: 0 20px; }
 .task-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 8px 10px; }
-.task-icon { position: relative; display: grid; place-items: center; background: var(--tile); border-radius: 9px; width: 28px; height: 28px; flex: none; }
+.task-icon { position: relative; display: grid; place-items: center; background: var(--tile); border-radius: 8px; width: 28px; height: 28px; flex: none; }
 .task-content { flex: 1; min-width: 0; }
 .task-title { display: flex; align-items: baseline; gap: 8px; }
 .task-title strong, .task-preview { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; display: block; }
@@ -100,7 +100,7 @@ button:disabled { opacity: .3; cursor: default; }
 .expand { display: inline-flex; align-items: center; color: var(--ink2); font-size: 12px; white-space: nowrap; }
 footer { justify-content: space-between; padding: 8px 10px 12px 12px; }
 footer[hidden] { display: none; }
-.primary { padding: 4px 12px; border-radius: 18px; font-weight: 600; background: var(--cta); color: var(--onInk); }
+.primary { padding: 4px 12px; border-radius: 9999px; font-weight: 600; background: var(--cta); color: var(--onInk); }
 .primary:hover { background: var(--ink); }
 .open-app { display: flex; align-items: center; gap: 8px; height: 30px; }
 .open-app > svg { width: 7px; height: 11px; fill: var(--brand); }
@@ -122,12 +122,12 @@ kbd { font: inherit; opacity: .45; }
 .setting { display: flex; justify-content: space-between; align-items: center; padding: 9px 10px; gap: 10px; }
 .setting > span { min-width: 0; overflow-wrap: anywhere; }
 input { accent-color: var(--codex); }
-input[role=switch] { appearance: none; width: 28px; height: 17px; border-radius: 9px; background: var(--ink4); position: relative; flex: none; cursor: pointer; }
+input[role=switch] { appearance: none; width: 28px; height: 17px; border-radius: 9999px; background: var(--ink4); position: relative; flex: none; cursor: pointer; }
 input[role=switch]::before { content: ''; position: absolute; width: 13px; height: 13px; left: 2px; top: 2px; background: white; border-radius: 50%; }
 input[role=switch]:checked { background: var(--codex); }
 input[role=switch]:checked::before { left: 13px; }
 .scope { flex-wrap: wrap; }
-select { max-width: 100%; background: var(--tile); padding: 5px; border: 1px solid var(--ink4); border-radius: 6px; }
+select { max-width: 100%; background: var(--tile); padding: 5px; border: 1px solid var(--ink4); border-radius: 8px; }
 .manage-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--ink3); font-size: 12px; }
 .detail { text-align: center; }
 .detail > .logo { width: 24px; height: 24px; }
@@ -195,7 +195,7 @@ select { max-width: 100%; background: var(--tile); padding: 5px; border: 1px sol
   input[role=switch], input[role=switch]::before { transition: background-color 200ms ease-out, left 200ms ease-out; }
   /* A running task's icon sends out a slow ring. */
   .panel[data-visible=true] .task-icon[data-running=true]::after {
-    content: ''; position: absolute; inset: -3px; border: 1px solid var(--ink3); border-radius: 11px;
+    content: ''; position: absolute; inset: -3px; border: 1px solid var(--ink3); border-radius: 12px;
     animation: quota-pulse 2200ms ease-out infinite;
   }
 }
