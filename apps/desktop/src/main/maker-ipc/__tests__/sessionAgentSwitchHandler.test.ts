@@ -1216,6 +1216,21 @@ describe('performSessionAgentSwitch', () => {
 });
 
 describe('deferred switch (turn running)', () => {
+  // Unit: two successful switch receipts for one task must not grant the first
+  // controller permission to apply the second controller's selection at send.
+  it('refuses to apply a newer intent using an older switch receipt', async () => {
+    const pendingSwitches = createPendingAgentSwitchRegistry();
+    const { deps } = makeDeps({ pendingSwitches });
+    const first = await performSessionAgentSwitch(deps, validParams);
+    const second = await performSessionAgentSwitch(deps, { ...validParams, effort: 'high' });
+    expect(first.pendingSwitchRevision).toBe(1);
+    expect(second.pendingSwitchRevision).toBe(2);
+    expect(() => applyPendingAgentSwitchIfIdle(deps, 's1', { expectedRevision: first.pendingSwitchRevision }))
+      .toThrow('HARNESS_SWITCH_NOT_READY');
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(pendingSwitches.get('s1')?.effort).toBe('high');
+  });
+
   function makeDepsWithPending(overrides: Partial<MakerSessionAgentSwitchHandlerDeps> = {}) {
     const base = makeDeps(overrides);
     const store = new Map<string, PendingAgentSwitchIntent>();

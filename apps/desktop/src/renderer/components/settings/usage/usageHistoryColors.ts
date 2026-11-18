@@ -32,6 +32,7 @@ export function usageHistoryAgentColor(agentKind: UsageAgentKind): string {
     pi: MODEL_COLORS[0],
     antigravity: 'var(--text-primary)',
     media: 'var(--text-secondary)',
+    auxiliary: 'var(--text-tertiary)',
   };
   return colors[agentKind];
 }

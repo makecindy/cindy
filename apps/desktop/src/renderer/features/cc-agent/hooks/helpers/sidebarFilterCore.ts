@@ -35,6 +35,7 @@ export type FilterCreators = 'all' | 'none' | string[];
 export const VENDOR_KEY = 'cc-agent.sidebar.filter.vendor';
 export const GROUP_BY_KEY = 'cc-agent.sidebar.filter.groupBy';
 export const GROUP_DIALOGUE_KEY = 'cc-agent.sidebar.filter.groupDialogue';
+export const GROUP_AUTOMATION_KEY = 'cc-agent.sidebar.filter.groupAutomation';
 export const GROUP_DEVICE_KEY = 'cc-agent.sidebar.filter.groupDevice';
 export const DEVICE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.deviceGroupCollapsed';
 export const DIALOGUE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.dialogueGroupCollapsed';
@@ -395,6 +396,33 @@ export function persistGroupDialogue(groupDialogue: boolean): void {
     storage.setItem(GROUP_DIALOGUE_KEY, String(groupDialogue));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist groupDialogue:', err);
+  }
+}
+
+/* ============================== groupAutomation load/persist ============================== */
+
+/**
+ * 「自动化归为一组」开关:true = 自动化运行出来的任务(含项目里的)收进「自动化」组;
+ * false = 留在各自项目 / 散排。默认开,与「对话」同一默认、新老用户一致(2026-11-17 用户裁决)。
+ */
+export function loadGroupAutomation(): boolean {
+  const storage = safeStorage();
+  if (!storage) return true;
+  try {
+    return storage.getItem(GROUP_AUTOMATION_KEY) !== 'false';
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read groupAutomation:', err);
+    return true;
+  }
+}
+
+export function persistGroupAutomation(groupAutomation: boolean): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(GROUP_AUTOMATION_KEY, String(groupAutomation));
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist groupAutomation:', err);
   }
 }
 

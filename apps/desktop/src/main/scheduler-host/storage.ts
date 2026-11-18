@@ -105,6 +105,7 @@ export interface ScheduleSidebarIndexRun {
   status: ScheduleRun['status'];
   readAt?: number;
   firedAt?: number;
+  finishedAt?: number;
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
   errorMsg?: string;
   failureRecovered?: boolean;
@@ -506,6 +507,19 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return scheduleToCamel(updated);
   }
 
+  async latestClosureFailure(scheduleId: string, sessionId: string) {
+    const [row] = await this.getDb().select({
+      firedAt: scheduleRuns.firedAt, recovered: failureRecoveredSql('schedule_runs'),
+    }).from(scheduleRuns).where(and(
+      eq(scheduleRuns.scheduleId, scheduleId), eq(scheduleRuns.sessionId, sessionId),
+      eq(scheduleRuns.status, 'failed'),
+      inArray(scheduleRuns.errorMsg, ['TASK_ACTION_AUTHORIZATION_EXPIRED', 'scheduled task auto-resume failed: TASK_ACTION_AUTHORIZATION_EXPIRED']),
+      sql`${failureKindSql('schedule_runs')} = 'execution'`,
+    )).orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id)).limit(1);
+    return row && { firedAt: row.firedAt, errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED' as const,
+      laterRunSucceeded: Boolean(row.recovered) };
+  }
+
   async delete(id: string): Promise<void> {
     const db = this.getDb();
     // schedule_runs.schedule_id ON DELETE CASCADE，相关 run 由 SQLite 自动清
@@ -667,13 +681,15 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       .where(eq(schedules.id, scheduleId))
       .limit(1);
     const rows = await db
-      .select()
+      .select({ run: scheduleRuns, recovered: failureRecoveredSql('schedule_runs') })
       .from(scheduleRuns)
       .where(eq(scheduleRuns.scheduleId, scheduleId))
       // 最近的一次在前，便于 UI 抽屉直接展示
       .orderBy(desc(scheduleRuns.firedAt))
       .limit(cap);
-    const runs = await this.hydrateRunCostsFromMessages(db, rows.map(scheduleRunToCamel));
+    const runs = await this.hydrateRunCostsFromMessages(db, rows.map(({ run, recovered }) => ({
+      ...scheduleRunToCamel(run), ...(recovered ? { failureRecovered: true } : {}),
+    })));
     if (!scheduleRow) return runs;
 
     const linkedSessionIds = new Set(
@@ -810,6 +826,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       status: scheduleRuns.status,
       readAt: scheduleRuns.readAt,
       firedAt: scheduleRuns.firedAt,
+      finishedAt: scheduleRuns.finishedAt,
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
       errorMsg: scheduleRuns.errorMsg,
@@ -891,6 +908,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       readAt: row.readAt ?? undefined,
       firedAt: row.firedAt ?? undefined,
       ...(row.status === 'failed' || row.status === 'interrupted' ? {
+        finishedAt: row.finishedAt ?? undefined,
         failureRecovered: Boolean(row.failureRecovered),
         failureKind: row.failureKind,
         errorMsg: row.errorMsg ?? undefined,

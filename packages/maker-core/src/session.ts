@@ -45,7 +45,6 @@ import type {
   SessionTreeSnapshot,
 } from './types/capabilities.js';
 import { NotSupportedError } from './types/capabilities.js';
-import type { VisionBridgeHook } from './types/vision-bridge.js';
 import type {
   AgentEvent,
   AskUserQuestionItem,
@@ -84,7 +83,6 @@ import {
   TurnDispatchRejectedError,
   TurnDispatchUnconfirmedError,
 } from './agents/base-agent.js';
-import { formatManagedImageReferences } from './agents/shared/managed-image-reference.js';
 import type { Logger } from './interfaces/logger.js';
 
 export type SessionStatus = 'active' | 'aborting' | 'closed' | 'error';
@@ -190,6 +188,7 @@ export type SessionStartupPreferences = Readonly<Pick<StartSessionOptions,
   'userPrompt' | 'makerMemoryEnabled' | 'displayReasoning'>>;
 
 export interface SessionOptions {
+  beforeTurn?: (session: Session) => Promise<void>;
   hostStartupPreferences?: SessionStartupPreferences;
   id: string;
   /** 与 Agent MCP context 同源的本次内存实例代号；省略时由 Session 自铸。 */
@@ -226,12 +225,6 @@ export interface SessionOptions {
    * 缺省 = 永不抑制,与旧行为一致。
    */
   isHostShuttingDown?: () => boolean;
-  /**
-   * 可选：视觉桥钩子（层 B）。host 注入后，session.send 在组装 UserMessage、交给
-   * handle 前调用一次，把用户贴图替换为视觉描述。host 不注入 = 完全跳过，字节级零干扰
-   * （见 docs/vision-bridge-design.md 层 B）。
-   */
-  visionBridge?: VisionBridgeHook;
   /**
    * 可选：工具循环疑似命中时的辅助模型复核入口（host 注入）。缺省 = 疑似即中断，
    * 与未接入复核前一致。
@@ -315,29 +308,6 @@ function redactNestedStrings(value: unknown, onChange: () => void): unknown {
     copy[key] = redactNestedStrings(child, onChange);
   }
   return copy;
-}
-
-/**
- * Vision bridging replaces image blocks before the provider adapter sees them.
- * Preserve the Host-managed attachment identities as ordinary per-turn text,
- * without exposing them to the external vision backend or changing image bytes.
- */
-function appendManagedImageReferences(
-  source: UserMessage,
-  bridged: UserMessage,
-): UserMessage {
-  const references = formatManagedImageReferences(source.content);
-  if (!references) return bridged;
-  if (typeof bridged.content === 'string') {
-    return {
-      ...bridged,
-      content: bridged.content ? `${bridged.content}\n${references}` : references,
-    };
-  }
-  return {
-    ...bridged,
-    content: [...bridged.content, { type: 'text', text: references }],
-  };
 }
 
 export interface SessionSendOptions extends SendOptions {
@@ -490,8 +460,6 @@ export class Session {
 
   private readonly handle: AgentSessionHandle;
   private readonly logger: Logger;
-  /** 视觉桥钩子（层 B）。缺省 = 未启用，send 完全跳过。 */
-  private readonly visionBridge: VisionBridgeHook | undefined;
   private readonly toolLoopReviewer: ToolLoopReviewer | undefined;
   private toolLoopUserIntent: AutoReviewUserIntent | undefined;
   private permissionModeStateValue: PermissionModeState;
@@ -655,7 +623,10 @@ export class Session {
   private turnControlState: TurnControlState | null = null;
   private readonly asyncUserQuestions: AsyncUserQuestions;
 
+  private readonly beforeTurn?: (session: Session) => Promise<void>;
+
   constructor(opts: SessionOptions) {
+    this.beforeTurn = opts.beforeTurn;
     this.hostStartupPreferences = opts.hostStartupPreferences
       ? Object.freeze({ ...opts.hostStartupPreferences }) : undefined;
     this.id = opts.id;
@@ -675,7 +646,6 @@ export class Session {
       opts.turnStallMs ?? parseTurnStallMs(process.env.XDT_SESSION_TURN_STALL_MS);
     this.eventStreamHoldMs = opts.eventStreamHoldMs ?? EVENT_STREAM_HOLD_MS;
     this.isHostShuttingDown = opts.isHostShuttingDown ?? (() => false);
-    this.visionBridge = opts.visionBridge;
     this.toolLoopReviewer = opts.toolLoopReviewer;
     this.asyncUserQuestions = new AsyncUserQuestions({
       isActive: (generation) => this.status === 'active' && !this.terminationStarted
@@ -971,7 +941,7 @@ export class Session {
         return { accepted: false, reason: 'cancelled-before-dispatch' };
       }
     }
-    let msg: UserMessage = typeof message === 'string'
+    const msg: UserMessage = typeof message === 'string'
       ? { type: 'user', content: message }
       : message;
     this.logger.debug('send', summarizeUserMessage(msg));
@@ -996,9 +966,8 @@ export class Session {
     if (this.isTurnRunning()) {
       throw this.createSessionRunningError();
     }
-    // 并发 send 守卫：已有一个 pre-dispatch reservation 在飞（视觉桥 await 阶段，
-    // handle 尚未 send → isTurnRunning 仍 false）时，拒绝新 send。否则并发 send 会覆盖
-    // this.sendReservation，让先进入视觉桥的 turn 白调外部视觉后端后才发现被取消。
+    // 并发 send 守卫：前置授权／准备期间 handle 尚未 send，isTurnRunning 仍可能为 false。
+    // 拒绝新 send，防止覆盖已有 reservation，让先进入准备的 turn 失去自己的取消边界。
     if (this.sendReservation !== null) {
       throw this.createSessionRunningError();
     }
@@ -1051,6 +1020,7 @@ export class Session {
       const cancelledBeforePreparation = finishCancelledBeforeDispatch();
       if (cancelledBeforePreparation !== null) return cancelledBeforePreparation;
       if (afterTurnReserved) await afterTurnReserved();
+      await this.beforeTurn?.(this);
       const cancelledAfterReservation = finishCancelledBeforeDispatch();
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);
@@ -1078,27 +1048,7 @@ export class Session {
       this.ensureActive();
       const cancelledAfterAcceptance = finishCancelledBeforeDispatch();
       if (cancelledAfterAcceptance !== null) return cancelledAfterAcceptance;
-      // 层 B：用户贴图主动调视觉（视觉桥钩子）。此时 turn guard 已通过、reservation 已
-      // 建立——并发 send 已被 isTurnRunning 挡住，不会在 guard 前浪费视觉调用；取消时
-      // reservation.abortController.signal 可中止视觉请求。钩子失败/未生效 → 原样透传。
       const autoReviewSourceContent = handleOpts[AUTO_REVIEW_SOURCE_CONTENT] ?? msg.content;
-      if (this.visionBridge) {
-        // 传入 reservation abort signal：用户 Stop / 外部取消时中止视觉请求，避免浪费
-        // 外部视觉调用（多图最坏 图片数×timeout 才返回）。
-        msg = await this.bridgedVisionMessage(msg, reservation.abortController.signal);
-        // 视觉调用期间可能被外部取消，恢复后必须复查，避免越过取消边界发消息。
-        const cancelledAfterVision = finishCancelledBeforeDispatch();
-        if (cancelledAfterVision !== null) {
-          // 视觉桥对取消静默（不 warn 不 note），此处补一条低噪声 debug 让排障能区分
-          //「用户取消/拆离」与「配置没开/模型不命中」——取消类场景唯一留痕点。
-          this.logger.debug('vision bridge cancelled before dispatch', {
-            sessionId: this.id,
-            reason: 'cancelled-before-dispatch',
-            model: this.handle.model,
-          });
-          return cancelledAfterVision;
-        }
-      }
       if (resolveAutoReviewUserIntent) {
         const intent = await resolveAutoReviewUserIntent();
         if (intent !== undefined) handleOpts[AUTO_REVIEW_USER_INTENT] = intent;
@@ -1307,38 +1257,11 @@ export class Session {
     }
   }
 
-  /**
-   * 层 B：若配置了视觉桥，把消息里的图片转成文字描述（send 与 steer 共用）。
-   * 钩子失败/未生效 → 原样透传（零干扰）。signal 可中止视觉请求（steer 通常无 signal）。
-   */
-  private async bridgedVisionMessage(msg: UserMessage, signal?: AbortSignal): Promise<UserMessage> {
-    if (!this.visionBridge) return msg;
-    try {
-      const bridged = await this.visionBridge(msg, {
-        model: this.handle.model,
-        signal,
-        sessionId: this.id,
-      });
-      if (bridged.applied) return appendManagedImageReferences(msg, bridged.message);
-      if (bridged.note) {
-        // 无论 applied 与否，note（fallback 生效 / 视觉桥不可用）都上报，避免静默。
-        this.logger.info('vision bridge note', { sessionId: this.id, note: bridged.note });
-      }
-    } catch (err) {
-      // 防御性兜底：视觉桥抛错绝不阻塞本轮，按未启用处理（host 实现应自吞，这里兜底）。
-      this.logger.warn('vision bridge threw, falling back to passthrough', {
-        sessionId: this.id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-    return msg;
-  }
-
   async steer(
     message: UserMessage | string,
     opts?: SendOptions & Pick<SessionSendOptions, 'beforeProviderStart'>,
   ): Promise<void> {
-    let msg: UserMessage = typeof message === 'string'
+    const msg: UserMessage = typeof message === 'string'
       ? { type: 'user', content: message }
       : message;
     const pendingQuestions = this.asyncUserQuestions.snapshot();
@@ -1350,15 +1273,12 @@ export class Session {
     if (!this.handle.isTurnRunning?.()) {
       throw new Error(`Session ${this.id} has no active turn to steer`);
     }
-    // 记录发起时的 turn generation：异步视觉转换期间原 turn 可能结束、同 Session
+    // 记录发起时的 turn generation：异步准备期间原 turn 可能结束、同 Session
     // 又启动新 turn。单看 isTurnRunning 会因新 turn 而通过，把迟到 steer 投给错误
-    // 的 turn（跨 turn 串线）。记录发起时代号，转换后必须「同一 generation 且仍
+    // 的 turn（跨 turn 串线）。记录发起时代号，等待后必须「同一 generation 且仍
     // 在跑」才投递。
     const steerTurnGeneration = this.getTurnGeneration();
     const autoReviewSourceContent = opts?.[AUTO_REVIEW_SOURCE_CONTENT] ?? msg.content;
-    // 层 B：steer 追加图片同样走视觉桥（与 send 一致），否则纯文本模型收到的
-    // 原始 image block 会被后端忽略或拒绝（Greptile P1）。
-    msg = await this.bridgedVisionMessage(msg, opts?.signal);
     const { beforeProviderStart, ...handleOpts } = opts ?? {};
     // Host grants must survive all asynchronous preparation, including steer.
     // Keep the private authorization hook out of provider options.
@@ -1366,8 +1286,8 @@ export class Session {
       await beforeProviderStart();
       this.ensureActive();
     }
-    // 异步视觉转换期间 turn 可能已完成/被中止（视觉后端慢、用户已切任务等）：
-    // 转换结果此时已无人接收，必须先复查原 turn 生命周期再调用 handle.steer，
+    // 异步授权期间 turn 可能已完成/被中止：
+    // 必须先复查原 turn 生命周期再调用 handle.steer，
     // 否则底层以「No active turn to steer」拒绝或 Pi 把迟到消息交给已结束的 turn。
     if (this.getTurnGeneration() !== steerTurnGeneration || !this.handle.isTurnRunning?.()) {
       throw new Error(`Session ${this.id} has no active turn to steer`);
@@ -1765,17 +1685,33 @@ export class Session {
 
   /**
    * Close only when no send reservation, agent turn, or host-initiated exclusive
-   * RPC operation (manual compact / rewind / model switch) is active. The check
+   * RPC operation (manual compact / rewind / model switch), tracked background
+   * task or wake continuation is active. Provider-only asynchronous probes must
+   * run in the caller before this final synchronous check. The check
    * and close reservation are synchronous, so a concurrent send either wins
    * first and keeps the session open, or observes closePromise and is rejected.
    */
   closeIfIdle(): Promise<boolean> {
+    if (!this.isIdleForRuntimeRecycling()) return Promise.resolve(false);
+    return this.close().then(() => true);
+  }
+
+  /** Shared synchronous predicate for automatic idle and resource-drift teardown. */
+  private isIdleForRuntimeRecycling(): boolean {
     if (this.status !== 'active' || this.closePromise || this.isTurnRunning() || this.hasUnsettledTurn()
       || this.retirementContinuationGeneration === this.turnGeneration
       || this.hasPendingHostOperation()) {
-      return Promise.resolve(false);
+      return false;
     }
-    return this.close().then(() => true);
+    try {
+      if (this.listBackgroundTasks().length > 0 || this.countPendingWakeContinuations() > 0) {
+        return false;
+      }
+    } catch {
+      // A missing snapshot cannot establish that destructive teardown is safe.
+      return false;
+    }
+    return true;
   }
 
   private async performClose(teardown: AgentSessionTeardownOptions): Promise<void> {
@@ -1852,8 +1788,8 @@ export class Session {
     // 拆除开始即作废进行中的工具循环复核,迟到结论不得再中断。
     this.turnControlState?.toolLoopMonitor?.dispose();
     // 与 performClose() 对齐：进入拆离立即 abort 未完成的 pre-dispatch reservation
-    // （vision bridge 等前置 hook 的 fetch），而不是等 handle.detach()/视觉通道超时——
-    // 否则 handle.detach() 慢/挂起时，in-flight 视觉请求会继续拖住退出链。
+    // （前置准备与授权等待），而不是等 handle.detach() 完成——
+    // 否则 handle.detach() 慢/挂起时，在途准备会继续拖住退出链。
     this.cancelSendReservation(this.sendReservation);
     let detachSucceeded = false;
     try {
@@ -1925,6 +1861,12 @@ export class Session {
   async readMcpServerTools(serverName: string): Promise<AgentMcpServerToolsReport | null> {
     this.ensureActive();
     return await this.handle.readMcpServerTools?.(serverName) ?? null;
+  }
+
+  async callNativeToolCatalog(method: string, args: unknown[]): Promise<unknown> {
+    this.ensureActive();
+    if (!this.handle.callNativeToolCatalog) throw new Error('UNSUPPORTED_CAPABILITY');
+    return this.handle.callNativeToolCatalog(method, args);
   }
 
   /**
@@ -2279,7 +2221,7 @@ export class Session {
   }
 
   /** 手动压缩会话上下文(capability 见 Capabilities.manualCompact)。 */
-  async compactSession(instructions?: string): Promise<ManualCompactResult> {
+  async compactSession(instructions?: string, beforeDispatch?: () => Promise<void>): Promise<ManualCompactResult> {
     this.ensureActive();
     if (this.agentKind === 'codex' && (this.sendReservation !== null || this.hostTurnLeases.size > 0)) {
       throw new Error('Cannot compact while a Codex send is reserved');
@@ -2303,7 +2245,7 @@ export class Session {
       this.abortRecoveryEpoch += 1;
       this.abortRecoveryScheduledFor = null;
     }
-    return this.handle.compactSession(instructions);
+    return this.handle.compactSession(instructions, beforeDispatch);
   }
 
   async getSessionTree(): Promise<SessionTreeSnapshot> {
@@ -2365,7 +2307,7 @@ export class Session {
    * 不写 DB —— 持久化由调用方 (main IPC 协调 local-db:sessions:update) 负责,
    * 跟 setModel/setEffort 双 IPC 协调先例一致。
    */
-  async setExtraDirs(dirs: string[], libraryRoot?: string | null): Promise<void> {
+  async setExtraDirs(dirs: string[], libraryRoot?: string | null, remote?: { hostId: string; directories: string[] }): Promise<void> {
     this.ensureActive();
     if (!this.capabilities.extraDirs.supported) {
       throw new NotSupportedError('extraDirs', this.capabilities.extraDirs);
@@ -2373,13 +2315,13 @@ export class Session {
     if (!this.handle.setExtraDirs) {
       throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setExtraDirs(dirs, libraryRoot);
+    await this.handle.setExtraDirs(dirs, libraryRoot, remote);
   }
 
   /**
    * 运行时覆盖附加可读写目录。不写 DB；持久化由 host 与 setExtraDirs 相同地协调。
    */
-  async setWritableDirs(dirs: string[]): Promise<void> {
+  async setWritableDirs(dirs: string[], remote?: { hostId: string; directories: string[] }): Promise<void> {
     this.ensureActive();
     const capability = this.capabilities.writableDirs;
     if (!capability?.supported) {
@@ -2391,7 +2333,7 @@ export class Session {
     if (!this.handle.setWritableDirs) {
       throw new NotSupportedError('writableDirs', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setWritableDirs(dirs);
+    await this.handle.setWritableDirs(dirs, remote);
   }
 
   // ── Rewind (Stage 2 C2) ────────────────────────────────────────────────────
@@ -2419,16 +2361,12 @@ export class Session {
    * 认识的刷新原因 —— 直接 Session.close 绕过 Maker 的 closeReasons 登记,IM
    * runner 会按 unexpected 清掉排队中的回合、丢失已接受的派发。空闲口径与
    * closeIfIdle 一致:turn 运行中、结束未收口的 turn、换代续接、手动压缩 /
-   * rewind 等宿主排他操作进行中绝不回收。回收后由既有 lazy bootstrap 在下次
+   * rewind 等宿主排他操作、后台任务及待续报 continuation 存续时绝不回收。
+   * 回收后由既有 lazy bootstrap 在下次
    * 发送时重扫项目资源、重算 argv。
    */
   hasRecyclableProjectResourceDrift(): boolean {
-    if (this.status !== 'active' || this.closePromise) return false;
-    if (this.isTurnRunning() || this.hasUnsettledTurn()
-      || this.retirementContinuationGeneration === this.turnGeneration
-      || this.hasPendingHostOperation()) {
-      return false;
-    }
+    if (!this.isIdleForRuntimeRecycling()) return false;
     return this.handle.hasProjectResourceDrift?.() === true;
   }
 

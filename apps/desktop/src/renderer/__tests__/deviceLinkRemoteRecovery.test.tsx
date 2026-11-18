@@ -98,6 +98,8 @@ beforeEach(() => {
       'onStatusChanged',
       'onAccessRevoked',
       'onControlTargetChanged',
+      'onPeerLinkReset',
+      'onPeerLinkReopened',
       'onDeviceDirectoryInvalidated',
     ].map((name) => [
       name,
@@ -478,6 +480,141 @@ describe('multi-device recovery lifecycle', () => {
     act(() => visibility('visible'));
     await settle();
     expect(indexReads()).toBe(1);
+  });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：真实 useDeviceLinkRemoteProjects + remoteProjectsStore + refreshRemoteDeviceSessions；
+ *   断言设备分片回到 connected（即任务横幅不再显示「远程设备已离线」、历史视图恢复读取）。
+ * - Bug 依据：2026-11-17 电脑合盖睡眠一夜后唤醒，Mac Studio 链路 1–3 秒可达，界面却 40+ 分钟显示离线：
+ *   唤醒时目录读取失败退回过期快照（数据通道尚未就绪 → online:false），设备被移出合格集；所有恢复途径
+ *   只看合格集，设备一直在线不再来上线通知，周期对账又受「5 分钟内有键鼠操作」限制 → 永久卡住。
+ * - 规则：remote-and-mobile-adaptation「设备列表读取失败后的未知不等于离线」「真实恢复不能被旧退避挡住」；
+ *   故障半径三问 —— 恢复只作用于该设备，健康设备请求数不变。
+ * - 现有覆盖缺口：已有用例只覆盖过期目录缺席设备、订阅繁忙补订，未覆盖过期目录把在线设备报成离线、
+ *   设备被移出合格集后的恢复，以及无用户操作时的首拉补齐。
+ * - 最小失败输入：connecting → 20s 宽限 → 过期目录 {slow online:false} → online → 数据通道上线。
+ * - tier：unit（jsdom，假定时器）。
+ */
+describe('wake-from-sleep recovery', () => {
+  const listDevices = () => window.electronAPI.deviceLink.listDevices as ReturnType<typeof vi.fn>;
+  const healthyCalls = () => ({
+    subscribe: subscribe.mock.calls.filter(([peer]) => peer === 'healthy').length,
+    list: invoke.mock.calls.filter(([peer, channel]) => peer === 'healthy' && channel === 'local-db:sessions:list').length,
+  });
+  const connected = () => remoteProjectsStore.getDeviceIds();
+  const advance = async (ms: number) => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  };
+
+  it('a stale directory reporting a reachable device offline does not strand it after wake', async () => {
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    expect(connected()).toEqual(expect.arrayContaining(['slow', 'healthy']));
+
+    // Sleep: the relay drops, then the connecting grace expires.
+    act(() => listeners.onStatusChanged({ status: 'connecting' }));
+    await advance(20_000);
+    expect(connected()).toEqual([]);
+
+    // Wake: the directory request fails and Main answers with its bounded last-known
+    // snapshot, where slow's data path is not ready yet.
+    listDevices().mockResolvedValueOnce({
+      devices: [{ ...peers[0], online: false }, peers[1]],
+      stale: true,
+    });
+    act(() => listeners.onStatusChanged({ status: 'online' }));
+    await settle();
+    act(() => listeners.onStatusChanged({
+      status: 'online', directDataDeviceIds: ['slow'], dataPathChangedDeviceId: 'slow',
+    }));
+    await advance(30_000);
+
+    expect(connected()).toEqual(expect.arrayContaining(['slow', 'healthy']));
+  });
+
+  it('a reachable device dropped by an offline report recovers through a retried directory read', async () => {
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const before = healthyCalls();
+
+    // The primary relay connection reports slow offline although its route still works.
+    act(() => listeners.onPresenceChanged({
+      deviceId: 'slow', deviceName: 'slow', online: false, remoteControlEnabled: false,
+    }));
+    await settle();
+    expect(connected()).not.toContain('slow');
+
+    // The link to slow is re-established; the first directory read fails at once,
+    // a later one returns a fresh answer.
+    listDevices().mockClear();
+    listDevices()
+      .mockRejectedValueOnce(new Error('[DEVICE_LINK_NOT_CONNECTED] directory unavailable'))
+      .mockResolvedValue({ devices: peers });
+    act(() => listeners.onPeerLinkReopened({ deviceId: 'slow' }));
+    await advance(10_000);
+
+    expect(connected()).toContain('slow');
+    // Recovery is bounded: no tight loop, and it stops once the answer is fresh.
+    const reads = listDevices().mock.calls.length;
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(reads).toBeLessThanOrEqual(3);
+    await advance(120_000);
+    expect(listDevices().mock.calls.length).toBe(reads);
+    // The healthy peer is untouched by slow's recovery.
+    expect(healthyCalls().subscribe).toBe(before.subscribe);
+  });
+
+  // PR #11051 review: two dropped devices whose links come back seconds apart must
+  // share the directory read already in flight; Main only coalesces calls within 300ms.
+  it('recoveries of several dropped devices share one in-flight directory read', async () => {
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    for (const deviceId of ['slow', 'healthy']) {
+      act(() => listeners.onPresenceChanged({ deviceId, deviceName: deviceId, online: false, remoteControlEnabled: false }));
+    }
+    await settle();
+    expect(connected()).toEqual([]);
+
+    const directory = deferred<{ devices: typeof peers }>();
+    listDevices().mockClear();
+    listDevices().mockReturnValue(directory.promise);
+    act(() => listeners.onPeerLinkReopened({ deviceId: 'slow' }));
+    await advance(2_000);
+    act(() => listeners.onPeerLinkReopened({ deviceId: 'healthy' }));
+    await advance(2_000);
+    expect(listDevices()).toHaveBeenCalledTimes(1);
+
+    directory.resolve({ devices: peers });
+    await settle();
+    expect(connected()).toEqual(expect.arrayContaining(['slow', 'healthy']));
+  });
+
+  it('a failed bootstrap is completed without user activity, with bounded retries', async () => {
+    let slowAvailable = false;
+    invoke.mockImplementation(async (peer, channel) => {
+      if (peer === 'slow' && channel === 'local-db:sessions:list' && !slowAvailable) {
+        throw new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] not yet');
+      }
+      return channel === 'maker:schedule:list-sidebar-index-runs' ? { runs: [] } : [];
+    });
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    expect(connected()).toEqual(['healthy']);
+    const slowLists = () =>
+      invoke.mock.calls.filter(([peer, channel]) => peer === 'slow' && channel === 'local-db:sessions:list').length;
+
+    // Nobody touches the computer for longer than the periodic reconcile's idle gate.
+    await advance(6 * 60_000);
+    // Failure backoff caps attempts well below one per tick (36 ticks in 6 minutes).
+    expect(slowLists()).toBeLessThanOrEqual(10);
+
+    slowAvailable = true;
+    await advance(130_000);
+    expect(connected()).toEqual(expect.arrayContaining(['slow', 'healthy']));
   });
 });
 

@@ -43,6 +43,8 @@ const {
     disabledProviders: {} as Record<string, true>,
     mediaReady: false,
     customOverride: null as ProviderView | null,
+    /** The run location the user chose for Anthropic on this computer's provider page. */
+    anthropicRunLocation: undefined as string | undefined,
     loading: false,
     error: null as { reason: 'storage-quota' } | null,
   },
@@ -102,6 +104,7 @@ vi.mock('@/hooks/useProviders', () => ({
           ],
         },
         connected: false,
+        ...(providerSnapshotState.anthropicRunLocation ? { runLocation: providerSnapshotState.anthropicRunLocation } : {}),
       } satisfies ProviderView,
       {
         id: 'xd',
@@ -249,6 +252,7 @@ beforeEach(() => {
   providerSnapshotState.disabledProviders = {};
   providerSnapshotState.mediaReady = false;
   providerSnapshotState.customOverride = null;
+  providerSnapshotState.anthropicRunLocation = undefined;
   providerSnapshotState.loading = false;
   providerSnapshotState.error = null;
   providerSnapshotState.order = ['anthropic', 'xd', 'custom'];
@@ -895,11 +899,13 @@ describe('ProvidersSection — 双栏管理', () => {
   // - Bug／规则依据：PR #9740(0.1.133)把另一台电脑的供应商合进本机条目后，模型区仍读本机空目录、
   //   刷新走本机 CLI 必然失败；provider-sharing.md「同账号借用与运行于」要求整页按能用显示。
   // - 现有覆盖缺口：本文件只覆盖本机目录；借用状态此前没有任何设置页用例。
-  // - 最小失败输入：本机 Anthropic 未连接 + 一台在线电脑提供已连接、开放远程调用的 Anthropic。
+  // - 最小失败输入：本机 Anthropic 未连接 + 一台在线电脑提供已连接、开放远程调用的 Anthropic，
+  //   用户把「运行于」改成那台(2026-11-18 起不再自动换过去，见 provider-sharing.md)。
   // - tier：unit(jsdom，内存 fake)。
   // 失败分支：真实目录预取吞掉请求异常时仍提示失败，模型区卸载后提示中的重试仍指向原电脑。
   it.each(['success', 'prefetch-error'])(
     '本机没登录、借用另一台电脑时，模型清单与刷新都按那台电脑（%s）', async (outcome) => {
+    providerSnapshotState.anthropicRunLocation = 'starforce';
     ownDevicesState.devices = [{ deviceId: 'starforce', name: 'Starforce', platform: 'darwin' }];
     ownDevicesState.catalogs = new Map([['starforce', {
       providers: [{

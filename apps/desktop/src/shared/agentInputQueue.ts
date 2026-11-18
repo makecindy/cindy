@@ -16,6 +16,7 @@ import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
 import type { MessageSourceDevice, MessageSourceGroupRequest, MessageSourceGroupThread, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
+import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
 import {
   formatAnnotationRegion,
@@ -725,6 +726,18 @@ export function projectionRetryText(
   // attachment-only turns (empty text) and hid Retry whenever later rows were
   // queued behind the failed accepted turn.
   return queuedMessageRetryToken(recovery.item);
+}
+
+/** Whether the pending row exposes text editing in the queue UI. */
+export function canEditQueuedMessage(
+  entry: Pick<AgentInputQueuedMessage, 'origin' | 'sourcePlugin' | 'text' | 'clientId'> & { isPendingEnqueue?: boolean },
+): boolean {
+  const origin = entry.origin?.kind;
+  return !entry.isPendingEnqueue
+    && origin !== 'orca' && origin !== 'scheduler' && origin !== 'session'
+    && !entry.sourcePlugin?.pluginId
+    && !entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX)
+    && !isAnsweredAsyncQuestionClientId(entry.clientId);
 }
 
 export function updateQueuedMessageText(

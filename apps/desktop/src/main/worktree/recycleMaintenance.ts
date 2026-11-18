@@ -348,14 +348,15 @@ export async function releaseObsoleteRecoverySnapshots(
       await setImmediate();
       if (!canContinue()) return 0;
     }
-    if (!record.snapshot?.ref.startsWith(SNAPSHOT_REF_PREFIX)) continue;
-    let copy = copies.get(record.snapshot.ref);
+    const snapshot = record.snapshot ?? record.discardedSnapshot;
+    if (!snapshot?.ref.startsWith(SNAPSHOT_REF_PREFIX)) continue;
+    let copy = copies.get(snapshot.ref);
     if (!copy) {
-      copy = { baseRepo: record.meta.baseRepo, commit: record.snapshot.commit,
+      copy = { baseRepo: record.meta.baseRepo, commit: snapshot.commit,
         restored: false, removed: true, owners: new Set() };
-      copies.set(record.snapshot.ref, copy);
+      copies.set(snapshot.ref, copy);
     }
-    copy.restored ||= record.phase === 'restored';
+    copy.restored ||= record.phase === 'restored' || Boolean(record.discardedSnapshot);
     copy.removed &&= record.phase === 'removed';
     copy.owners.add(record.meta.sessionId);
   }

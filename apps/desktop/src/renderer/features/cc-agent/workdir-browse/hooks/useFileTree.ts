@@ -67,6 +67,8 @@ export interface DirEntry {
   type: 'file' | 'directory';
   size: number;
   mtimeMs: number;
+  /** Optional on older hosts; always relative to the workdir, never an absolute path. */
+  symlinkTarget?: string;
 }
 
 interface UseFileTreeOptions {
@@ -158,7 +160,7 @@ const EVENT_COALESCE_MS = 50;
 const RESTORE_CONCURRENCY = 8;
 
 /**
- * 结构等价判定 —— name/type/relPath 完全相同(顺序也相同, listDir 是稳定排序),
+ * 结构等价判定 —— name/type/relPath/symlinkTarget 完全相同(含顺序),
  * 只有 mtime/size 变化时返回 true。
  *
  * 用途:setEntries 前的去重。chokidar/parcel 对我们自己 writeFile 的原子 rename
@@ -181,6 +183,7 @@ function entriesStructurallyEqual(
     if (x.relPath !== y.relPath) return false;
     if (x.name !== y.name) return false;
     if (x.type !== y.type) return false;
+    if (x.symlinkTarget !== y.symlinkTarget) return false;
   }
   return true;
 }
@@ -231,8 +234,8 @@ interface FileTreeStore {
   tokens: Map<string, number>;
   /** Single-flight directory requests plus one dirty bit for a trailing scan. */
   inFlight: Map<string, DirectoryRefresh>;
-  /** Parent directories observed by the IPC listener in the current turn. */
-  pendingEventParents: Set<string>;
+  /** Changed logical paths observed during the current coalescing window. */
+  pendingEventPaths: Set<string>;
   eventFlushTimer: ReturnType<typeof setTimeout> | null;
   /** chokidar listener 取消函数。首个挂载时挂、refCount 归 0 时调。 */
   watcherOff: (() => void) | null;
@@ -261,6 +264,44 @@ interface DirectoryRefresh {
 
 /** 全局 stores 表。key 由 storeKey() 算,同 (workdir, options) 共享同一份。 */
 const stores = new Map<string, FileTreeStore>();
+
+type AliasChange = { workdir: string; remoteHostId: string | null; deviceId: string | null; relPath: string };
+const aliasChangeListeners = new Set<(change: AliasChange) => void>();
+/** Directory refresh can discover a retarget even when the watcher missed it. */
+export function onDirectoryAliasChange(listener: (change: AliasChange) => void): () => void {
+  aliasChangeListeners.add(listener);
+  return () => { aliasChangeListeners.delete(listener); };
+}
+
+
+/** Share the currently browsed aliases with content-cache invalidation. The
+ * existing stores own their lifetime and endpoint scope; no disk scan or
+ * separate long-lived alias registry is needed. */
+export function fileTreeEventPaths(
+  workdir: string,
+  relPath: string,
+  remoteHostId: string | null,
+  deviceId: string | null,
+): Set<string> {
+  const paths = new Set([relPath]);
+  for (const store of stores.values()) {
+    if (store.workdir !== workdir || store.remoteHostId !== remoteHostId || store.deviceId !== deviceId) continue;
+    for (const entries of store.snapshot.entries.values()) {
+      for (const entry of entries) {
+        const alias = directoryAliasEventPath(entry, relPath);
+        if (alias !== null) paths.add(alias);
+      }
+    }
+  }
+  return paths;
+}
+
+function directoryAliasEventPath(entry: DirEntry, eventRelPath: string): string | null {
+  if (entry.type !== 'directory' || entry.symlinkTarget === undefined) return null;
+  if (eventRelPath === entry.symlinkTarget || entry.symlinkTarget.startsWith(`${eventRelPath}/`)) return entry.relPath;
+  const prefix = entry.symlinkTarget === '' ? '' : `${entry.symlinkTarget}/`;
+  return eventRelPath.startsWith(prefix) ? `${entry.relPath}/${eventRelPath.slice(prefix.length)}` : null;
+}
 
 function storeKey(opts: Required<UseFileTreeOptions>): string {
   const remote = opts.remoteHostId ? `::remote=${opts.remoteHostId}` : '';
@@ -492,7 +533,7 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
     persistedExpanded,
     tokens: new Map(),
     inFlight: new Map(),
-    pendingEventParents: new Set(),
+    pendingEventPaths: new Set(),
     eventFlushTimer: null,
     watcherOff: null,
     refCount: 0,
@@ -553,9 +594,24 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
       return;
     }
     const nextEntries = new Map(store.snapshot.entries);
+    const retargeted = (prevList ?? []).filter(old => old.symlinkTarget !==
+      list.find(entry => entry.relPath === old.relPath)?.symlinkTarget);
+    const reload: string[] = [];
+    for (const key of nextEntries.keys()) {
+      if (retargeted.some(entry => key === entry.relPath || key.startsWith(`${entry.relPath}/`))) {
+        nextEntries.delete(key);
+        store.tokens.set(key, (store.tokens.get(key) ?? 0) + 1);
+        if (store.snapshot.expanded.has(key)) reload.push(key);
+      }
+    }
     nextEntries.set(relPath, list);
     store.snapshot = { ...store.snapshot, entries: nextEntries };
     emit(store);
+    for (const entry of retargeted) {
+      for (const listener of aliasChangeListeners) listener({ workdir: store.workdir,
+        remoteHostId: store.remoteHostId, deviceId: store.deviceId, relPath: entry.relPath });
+    }
+    for (const key of reload) void fetchDir(store, key);
     // 过渡期(seed)借来的展开态在新树里可能已不可达,root 数据落地即剪。
     if (relPath === ROOT_KEY) {
       pruneExpandedForCurrentTree(store, wasSeeded ? { keep: store.persistedExpanded } : undefined);
@@ -663,14 +719,34 @@ function addDocModeAncestors(
  * directory can disappear when its last visible descendant is removed.
  */
 function queueEventRefresh(store: FileTreeStore, eventRelPath: string): void {
-  store.pendingEventParents.add(parentPath(eventRelPath));
+  store.pendingEventPaths.add(eventRelPath);
   if (store.eventFlushTimer) return;
   store.eventFlushTimer = setTimeout(() => {
     store.eventFlushTimer = null;
-    const parents = [...store.pendingEventParents];
-    store.pendingEventParents.clear();
+    const events = [...store.pendingEventPaths];
+    store.pendingEventPaths.clear();
     if (store.refCount === 0) return;
-
+    const parents = new Set(events.map(parentPath));
+    // Watchers report real target paths rather than every directory alias. Map
+    // only aliases already present in this lazy tree; never scan/follow the disk
+    // to discover aliases or refresh unrelated cached directories.
+    for (const entries of store.snapshot.entries.values()) {
+      for (const entry of entries) {
+        if (entry.type !== 'directory' || entry.symlinkTarget === undefined) continue;
+        const target = entry.symlinkTarget;
+        for (const eventRelPath of events) {
+          const alias = directoryAliasEventPath(entry, eventRelPath);
+          if (alias !== null) parents.add(parentPath(alias));
+          // A removed target/ancestor hides the link; a retargeted link also needs
+          // its cached children refreshed even when its logical name stays put.
+          if (eventRelPath === target || target.startsWith(`${eventRelPath}/`)
+              || eventRelPath === entry.relPath) {
+            parents.add(parentPath(entry.relPath));
+            parents.add(entry.relPath);
+          }
+        }
+      }
+    }
     const targets = new Set<string>();
     for (const parent of parents) {
       if (store.docMode) {
@@ -789,7 +865,7 @@ function disposeStore(store: FileTreeStore): void {
   store.restoreQueue = null;
   if (store.eventFlushTimer) clearTimeout(store.eventFlushTimer);
   store.eventFlushTimer = null;
-  store.pendingEventParents.clear();
+  store.pendingEventPaths.clear();
   store.inFlight.clear();
   if (store.watcherOff) {
     store.watcherOff();

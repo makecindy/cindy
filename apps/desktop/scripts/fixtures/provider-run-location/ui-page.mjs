@@ -21,9 +21,9 @@ export default {
     'recovery-pinned': { about: 'Use production login controls through simulated host pinned; no real credentials' },
 
     default: { about: 'This computer is signed in; Automatic keeps tasks here' },
-    borrowing: { about: 'This computer is not signed in; new tasks run on MBP-M5 and the page reads as usable' },
+    borrowing: { about: 'This computer is not signed in; the local sign-in stays visible and nothing moves to MBP-M5 on its own' },
     pinned: { about: 'Signed in here, but the user chose to run this provider on MBP-M5' },
-    'never-signed-in': { about: 'Anthropic was never signed in here; it is still listed and runs on MBP-M5' },
+    'never-signed-in': { about: 'Anthropic was never signed in here; it is still listed, stays on this computer, and MBP-M5 is offered as a choice' },
     'single-computer': { about: 'No other computer offers the provider: the row is hidden' },
     'local-management': { about: 'Five saved local accounts retain management and inline recovery while using remote models' },
     'google-accounts': { about: 'Remove a spare Google account by email while keeping the local default selected' },
@@ -73,16 +73,18 @@ export default {
         window.dispatchEvent(new Event('repro-provider-change'));
         window.__uiPage.emit('subscriptionAccountsChanged', { providerId: 'openai' });
       });
-      assert.match(await row.textContent() ?? '', /MBP-M5/);
+      // 2026-11-18: a disconnect never moves new tasks to another computer on its own.
+      assert.doesNotMatch(await row.textContent() ?? '', /MBP-M5/);
       assert.equal(await page.getByTestId('provider-detail-actions').getByRole('button').count(), 1);
       // The simulated host retains the same saved account throughout recovery.
       const saved = await page.evaluate(() => window.electronAPI.subscriptionAccounts.command({ action: 'read', providerId: 'openai' }));
       assert.deepEqual(saved.accounts.map(a => a.id), ['default']);
-      await ui.capture('02-local-disconnected-remote-available');
+      await ui.capture('02-local-disconnected-stays-here');
       await row.getByRole('combobox').click();
       const local = page.getByRole('option', { name: new RegExp(await ui.t('settings.providers.detail.runLocation.optionLocal')) });
-      assert.equal(await local.getAttribute('aria-disabled'), 'true');
-      await ui.capture('03-local-disabled');
+      // Choosing this computer means "do not use another computer", so it stays selectable.
+      assert.notEqual(await local.getAttribute('aria-disabled'), 'true');
+      await ui.capture('03-local-selectable');
       await page.keyboard.press('Escape');
       const actions = page.getByTestId('provider-detail-actions');
       await actions.getByRole('button', { name: await ui.t('subscriptionAccounts.login'), exact: true }).waitFor();
@@ -131,8 +133,12 @@ export default {
       // Review #9740: a built-in provider only another computer offers must not vanish from the list.
       await page.getByRole('button', { name: /^Anthropic/ }).first().click();
       await row.waitFor();
-      assert.match(await row.textContent() ?? '', /MBP-M5/);
+      // Still listed, but new tasks stay here until the user chooses MBP-M5 (2026-11-18).
+      assert.doesNotMatch(await row.textContent() ?? '', /MBP-M5/);
+      await row.getByRole('combobox').click();
+      await page.getByRole('option', { name: 'MBP-M5' }).waitFor();
       await ui.capture('row');
+      await page.keyboard.press('Escape');
       return;
     }
     if (ui.case === 'single-computer') {

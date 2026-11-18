@@ -221,8 +221,10 @@ describe('PI durable subagent run store', () => {
     await writeStatus(root, older);
     await writeStatus(root, newer);
     const discovered = [];
-    for await (const run of scanPiSubagentRuns(root, { latestPerTask: true })) discovered.push(run);
+    const observed: string[] = [];
+    for await (const run of scanPiSubagentRuns(root, { latestPerTask: true, onRead: run => { observed.push(run.runId); } })) discovered.push(run);
     expect(discovered.map((run) => run.runId)).toEqual([newer.runId]);
+    expect(observed.sort()).toEqual([older.runId, newer.runId].sort());
   });
 
   it('streams historical status files lazily and closes the directory after early cancellation', async () => {

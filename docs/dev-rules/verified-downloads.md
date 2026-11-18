@@ -76,8 +76,18 @@ Agent runtime、Cindy Make 工具、GitHub CLI、Ollama runtime、llama.cpp runt
   安装目标选择、电脑控制驱动更新、Pi 内核与本地数据库异常页的更新准备使用 `DownloadMeter`。
   启动页（§16 品牌画布）与壁纸缩略图（`wallpaper.md` 2026-10-19 裁决：不显示百分比、不另起一行）
   保留自有进度条，但状态文字、重试原因与读屏文本取自同一份 `DownloadProgress`。
-  尚未覆盖：插件市场安装没有进度通道（需新增 IPC 与手机端回执，另行设计）；SkillHub 详情页的
-  「更新到新版本」仍只显示按钮运行态。
+  插件市场的手动安装与更新 2026-11-18 起用 `DownloadRing`，覆盖已装插件卡片与详情页的更新、「全部更新」、
+  市场卡片（推荐与列表）和市场详情页的首装／更新／替换；首装完成写「已安装」，更新与替换写「已更新」。Main 在
+  `PluginMarketService.install` 中为本次安装建 reporter（`plugin-market/installProgress.ts`），下载前
+  按 release 的 `sizeBytes` 定总量，等待权限确认时附 `awaitingConsent`，落位前切 `installing`，结束时
+  `completed`／`failed`／`cancelled`（确认框里取消不算失败）；只经 `plugin-market:install-progress`
+  推给发起安装的窗口，不登记 device-link；每条推送附安装开始时的数据归属戳
+  （`getActiveDataOwnerPushStamp`），切换账号或模式后渲染端丢弃旧身份的推送与进度。Renderer 的窗口级状态在
+  `features/plugin/lib/pluginInstallProgress.ts`，只显示本窗口发起的安装；成功由发起方标记，不依赖推送与
+  IPC 返回值的先后。市场卡片与市场详情页由本机插件页显式开启（`showInstallProgress`），远程设备页复用同一
+  组件但不读本机进度。后台更新、默认安装、电脑控制等其它入口发起的安装不显示。
+  尚未覆盖：远程设备与手机端的插件管理回执只有「进行中」，加进度属跨端协议改动，另行设计；SkillHub 详情页
+  的「更新到新版本」仍只显示按钮运行态。
 - 重试次数：插件市场与 SkillHub 的包从 Cindy 服务器下载，2026-11-17 起 `maxAttempts` 由 1 改为 3
   （退避约 1 秒、2 秒，4xx 含签名过期不重试，无扇出；插件仍受原 `totalMs` 总时限约束）。SkillHub
   使用 `resume: false`，每次重试从头下载，龟速换连接不适用。

@@ -110,6 +110,19 @@ function createTestServer(name: string): McpServer {
     }),
   );
   server.tool(
+    'current_remote_host',
+    'Return the SSH host of the active Session, or local.',
+    {},
+    async () => ({
+      content: [
+        {
+          type: 'text' as const,
+          text: getLiziMcpSessionContext()?.remoteHostId ?? 'local',
+        },
+      ],
+    }),
+  );
+  server.tool(
     'current_memory_scope',
     'Return the active Maker Memory scope key.',
     {},
@@ -404,6 +417,47 @@ describe('piEnvironment per-session identity', () => {
     });
     expect(await readRpcText(scopeResp)).toMatchObject({
       result: { content: [{ type: 'text', text: 'bot:bot-release-helper' }] },
+    });
+    config!.disposeSessionCtx!();
+  });
+
+  /**
+   * Ghost reads ctx.remoteHostId to refuse a remote task local image reads and
+   * local network egress. A Pi task running over SSH must reach tools as remote.
+   */
+  it.each([
+    ['ssh-host-1', 'ssh-host-1'],
+    [null, 'local'],
+  ] as const)('keeps the SSH host %s in the tool-side session ctx', async (remoteHostId, expected) => {
+    const config = await getPiExtraSpawnConfig([makeProvider('custom_probe')], noopLogger(), {
+      sessionId: `pi-remote-host-${expected}`,
+      workingDir: '/home/dev/project',
+      remoteHostId,
+      vendorOptions: {},
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
+    });
+    const server = config!.mcpBridge!.servers[0]!;
+    const headers = {
+      authorization: `Bearer ${config!.mcpBridge!.token}`,
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+    const initResp = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(1) });
+    const mcpSessionId = initResp.headers.get('mcp-session-id');
+    await initResp.text();
+    const hostResp = await fetch(server.url, {
+      method: 'POST',
+      headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'current_remote_host', arguments: {} },
+      }),
+    });
+    expect(await readRpcText(hostResp)).toMatchObject({
+      result: { content: [{ type: 'text', text: expected }] },
     });
     config!.disposeSessionCtx!();
   });

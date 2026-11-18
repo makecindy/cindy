@@ -510,6 +510,8 @@ let profiles: BotProfile[] = [];
 const listeners = new Set<() => void>();
 let hydrated = false;
 let profileListLoaded = false;
+/** Read outcome is separate from the last successful (possibly empty) snapshot. */
+let profileLoadState: 'pending' | 'ready' | 'error' = 'pending';
 let profileOwner = getDataOwnerGeneration();
 let hydrationGeneration = 0;
 const hydrationPromises = new Set<Promise<void>>();
@@ -523,6 +525,7 @@ function ensureProfileOwner(): void {
   profileOwner = getDataOwnerGeneration();
   profiles = [];
   profileListLoaded = false;
+  profileLoadState = 'pending';
   unreadCounts = {};
   globalModelChainCache = null;
   globalModelChainCustomized = null;
@@ -763,6 +766,8 @@ async function hydrateFromDatabase(): Promise<void> {
   const owner = getDataOwnerGeneration();
   const generation = ++hydrationGeneration;
   const isCurrent = () => isDataOwnerGenerationCurrent(owner) && generation === hydrationGeneration;
+  profileLoadState = 'pending';
+  emit();
   try {
     if (typeof api.getModelChainSettings === 'function') {
       try {
@@ -789,6 +794,7 @@ async function hydrateFromDatabase(): Promise<void> {
     const dbProfiles = rows.map(normalizeDbProfile).filter((item): item is BotProfile => !!item);
     profiles = dbProfiles;
     profileListLoaded = true;
+    profileLoadState = 'ready';
     projectGlobalModelChain();
     applyUnreadCounts(rows);
     // Discovery is not an acknowledgement; absent/hidden rows never delete shared reads.
@@ -798,7 +804,12 @@ async function hydrateFromDatabase(): Promise<void> {
     // DB readiness can race the first renderer render during account/bootstrap.
     // The Bots layout explicitly calls refreshBotProfiles when entered, so do
     // not keep polling a signed-out renderer in the background.
-    if (isCurrent()) { hydrated = false; profileListLoaded = true; emit(); }
+    if (isCurrent()) {
+      hydrated = false;
+      profileLoadState = 'error';
+      // Keep the last successful snapshot; a failed first read proves no emptiness.
+      emit();
+    }
   }
 }
 
@@ -869,6 +880,15 @@ export async function runBotLifecycleAction(
     }
   }
   return result;
+}
+
+/** Subscribe independently: a failed read need not replace the profile array. */
+export function useBotProfilesLoadState(): typeof profileLoadState {
+  const snapshot = () => {
+    ensureProfileOwner();
+    return profileLoadState;
+  };
+  return useSyncExternalStore(subscribeBotProfiles, snapshot, snapshot);
 }
 
 export function hasLoadedBotProfiles(): boolean {

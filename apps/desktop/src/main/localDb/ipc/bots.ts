@@ -1762,7 +1762,7 @@ function hostReadPosition(botId: string): number {
 }
 
 /** Positions advanced on the phone or another Mac live only in the host ledger. */
-function mergeHostReadPositions(fromRenderer: Map<string, number>): Map<string, number> {
+export function mergeHostReadPositions(fromRenderer: Map<string, number>): Map<string, number> {
   let host: Record<string, number> = {};
   let acknowledged: Record<string, number> = {};
   try {

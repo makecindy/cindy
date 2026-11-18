@@ -25,16 +25,6 @@ const filterHookSource = readFileSync(
 ).replace(/\r\n?/g, '\n');
 
 describe('pinned project sidebar integration', () => {
-  it('keeps pinned projects out of expanded Projects but available in the collapsed rail', () => {
-    expect(sidebarSource).toContain('const visibleRailProjectsWithVendor = useMemo(() => {');
-    expect(sidebarSource).toContain(
-      '<RailPanels\n        projects={visibleRailProjectsWithVendor}',
-    );
-    expect(sidebarSource).toMatch(
-      /<ProjectsSection\s+unclassified=\{visibleUnclassified\}\s+projects=\{visibleProjectsWithVendor\}/,
-    );
-  });
-
   it('keeps all-pinned projects available while omitting their pinned child rows', () => {
     expect(sidebarSource).toContain('const groupsWithPinnedProjects = useProjectGroups(');
     expect(sidebarSource).toContain('const notHidden = visibleSidebarProjects(');

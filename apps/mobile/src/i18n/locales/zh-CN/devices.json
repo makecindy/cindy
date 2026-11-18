@@ -328,6 +328,7 @@
       "renameDevice": "重命名 {{label}}",
       "project": "项目 {{title}}",
       "dialogue": "对话",
+      "automation": "自动化",
       "openAutomationLatest": "打开自动化 {{title}} 的最新任务",
       "automationTask": "自动化 {{title}}",
       "openConversation": "打开任务 {{title}}",
@@ -353,7 +354,9 @@
     },
     "menu": {
       "groupDialogue": "对话",
+      "groupAutomation": "自动化",
       "dialogueFolder": "对话",
+      "automationFolder": "自动化",
       "search": "搜索",
       "settings": "设置",
       "remoteSettings": "远程连接设置",
@@ -423,7 +426,33 @@
       "filterTeammatesHeading": "伙伴",
       "filterAnySource": "全部",
       "filterHideAllTeammates": "都不显示",
-      "filterSelectedTeammates": "已选 {{count}} 位"
+      "filterSelectedTeammates": "已选 {{count}} 位",
+      "inbox": {
+        "inbox": "待处理",
+        "working": "进行中",
+        "snoozed": "稍后处理",
+        "archived": "已处理",
+        "snooze": "稍后处理",
+        "complete": "完成",
+        "wake": "立即取回",
+        "restore": "恢复任务",
+        "process": "标记已处理（归档）",
+        "empty": "收件箱已清空",
+        "snoozeFailed": "未能保存稍后处理时间，请检查连接并确认任务所属电脑已更新。",
+        "hours": "{{count}} 小时后",
+        "hours_one": "{{count}} 小时后",
+        "hours_other": "{{count}} 小时后",
+        "thisEvening": "今晚",
+        "tomorrow": "明天",
+        "nextWeek": "下周",
+        "custom": "自定义…",
+        "invalidTime": "请选择未来一年内的日期和时间。"
+      },
+      "taskListMode": {
+        "heading": "任务模式",
+        "tasks": "任务列表",
+        "inbox": "收件箱"
+      }
     },
     "search": {
       "placeholder": "搜索标题或内容…",

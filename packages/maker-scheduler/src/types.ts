@@ -5,7 +5,7 @@ export type AgentKind = 'claude-code' | 'codex' | 'pi' | 'antigravity';
 export type ScheduleStatus = 'active' | 'paused' | 'expired';
 export type ScheduleWorkspaceKind = 'project' | 'dialogue';
 export type ScheduleExecutionMode = 'agent' | 'script';
-export type ScriptCapability = 'github.read' | 'jira.read' | 'jira.comment' | 'sessions.dispatch' | 'feishu.read';
+export type ScriptCapability = 'github.read' | 'jira.read' | 'jira.comment' | 'sessions.dispatch' | 'feishu.read' | 'settings.read' | 'usage.read';
 
 /**
  * Host-owned session context key for the scheduler run currently dispatched
@@ -108,6 +108,8 @@ export const SCRIPT_CAPABILITIES: readonly ScriptCapability[] = [
   'jira.comment',
   'sessions.dispatch',
   'feishu.read',
+  'settings.read',
+  'usage.read',
 ];
 
 /**
@@ -387,6 +389,13 @@ export interface ScheduleRunTrigger {
   detail?: string;
 }
 
+/** Safe facts returned to the originating task when its own automation ends. */
+export interface ScheduleClosureFailure {
+  firedAt: number;
+  errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED';
+  laterRunSucceeded: boolean;
+}
+
 export interface ScheduleRun {
   id: string;
   scheduleId: string;
@@ -395,6 +404,8 @@ export interface ScheduleRun {
   finishedAt?: number;
   status: RunStatus;
   errorMsg?: string;
+  /** Read-only history projection. The original terminal status is retained. */
+  failureRecovered?: boolean;
   /** 本次 run 产生的真实 API 账单费用。 */
   costUsd?: number;
   /** 本次 run 的订阅 token 估算价值，不计入真实账单。 */

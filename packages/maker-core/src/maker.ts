@@ -92,6 +92,8 @@ export interface SessionStartFailureContext {
 }
 
 export interface SessionLifecycleHooks {
+  /** Host-owned per-turn settings, refreshed only after a turn has reserved the session. */
+  beforeTurn?: (session: Session) => Promise<void>;
   /**
    * Agent 启动前补齐 start options。该步骤属于正确启动的前置条件，失败会阻断创建。
    * 允许直接修改 options；Maker 会把同一个对象传给 agent 和成功钩子。
@@ -142,6 +144,12 @@ export interface SessionLifecycleHooks {
 }
 
 export interface MakerDeps {
+  /** Capture the request owner before dispatch and retain it through final usage delivery. */
+  createOneShotUsageRecorder?: (agentKind: AgentKind, opts?: OneShotOptions) => {
+    onUsage: NonNullable<OneShotOptions['onUsage']>;
+    close(): void;
+  };
+
   agents: Partial<Record<AgentKind, BaseAgent>>;
   /**
    * 可选：在同账号另一台电脑上启动 Agent(CreateSessionOptions.agentDeviceId)。返回的句柄由
@@ -163,12 +171,6 @@ export interface MakerDeps {
    * (即跟改造前行为一致, native auto-memory 走自家)。
    */
   makerMemory?: MakerMemoryManager;
-  /**
-   * 可选: 视觉桥钩子（层 B）的全局默认。host 创建 Maker 时注入一次，所有
-   * createSession 自动带上；单个 createSession 的 visionBridge 优先。缺省不注入 =
-   * 零干扰（见 docs/vision-bridge-design.md 层 B）。
-   */
-  visionBridge?: import('./types/vision-bridge.js').VisionBridgeHook;
   /**
    * 可选: Pi / Codex 工具循环疑似命中时的辅助模型复核入口。Claude Code 在 agent 内
    * 检测,由 AgentDeps.toolLoopReviewer 注入同一实现。缺省放行疑似,保留最终上限。
@@ -192,11 +194,6 @@ export interface CreateSessionOptions extends StartSessionOptions {
   agentKind: AgentKind;
   /** 可选：UI 显示用 */
   title?: string;
-  /**
-   * 可选：视觉桥钩子（层 B）。host 注入后，session.send 在把用户贴图交给 agent 前
-   * 用视觉模型转成文字描述（见 docs/vision-bridge-design.md 层 B）。缺省不注入 = 零干扰。
-   */
-  visionBridge?: import('./types/vision-bridge.js').VisionBridgeHook;
   /** 可选：父会话 id，用于 fork / orchestration 等会话关系。 */
   parentSessionId?: string;
   /**
@@ -568,16 +565,15 @@ export class Maker {
   private readonly pendingLifecycleCloses = new Set<Promise<void>>();
   /** Maker Memory 顶层单例 (可选). undefined 时 maker memory 功能整体禁用. */
   public readonly makerMemory: MakerMemoryManager | undefined;
-  /** 视觉桥钩子（层 B）全局默认（可选）。见 MakerDeps.visionBridge。 */
-  protected readonly visionBridge: import('./types/vision-bridge.js').VisionBridgeHook | undefined;
   private readonly toolLoopReviewer: import('./agents/shared/tool-loop-review.js').ToolLoopReviewer | undefined;
   private readonly startDeviceAgentSession: MakerDeps['startDeviceAgentSession'];
+  private readonly createOneShotUsageRecorder: MakerDeps['createOneShotUsageRecorder'];
 
   constructor(deps: MakerDeps) {
     this.agents = deps.agents;
+    this.createOneShotUsageRecorder = deps.createOneShotUsageRecorder;
     this.storage = deps.storage;
     this.startDeviceAgentSession = deps.startDeviceAgentSession;
-    this.visionBridge = deps.visionBridge;
     this.toolLoopReviewer = deps.toolLoopReviewer;
     // 不 child 自己名字 — host 传进来的 logger 通常已经命名(如 'maker'),
     // 再 child 'maker' 会变成 'maker/maker'。host 自己决定 root scope 名字。
@@ -1215,6 +1211,7 @@ export class Maker {
       workDir: startOpts.workingDir,
       handle,
       hostStartupPreferences: opts.hostStartupPreferences,
+      beforeTurn: this.lifecycleHooks.beforeTurn,
       capabilities: capabilitiesForSession(
         meta.agentKind,
         agent?.capabilities ?? applicationHandleCapabilities(handle),
@@ -1229,8 +1226,6 @@ export class Maker {
       remoteHostId: meta.remoteHostId ?? null,
       // 取实际决定启动分支的 startOpts：任务记录事后读回的旧值不能把本机启动的会话标成远端。
       agentDeviceId: startOpts.agentDeviceId || null,
-      // 层 B：视觉桥钩子（per-session 优先，否则全局默认；缺省不传 = 零干扰）。
-      visionBridge: startOpts.visionBridge ?? this.visionBridge,
       toolLoopReviewer: this.toolLoopReviewer,
       // 整机拆除期间抑制空闲会话的进程死亡终态错误(#8831 退出期守卫)。
       isHostShuttingDown: () => this.shutdownStarted,
@@ -1873,7 +1868,21 @@ export class Maker {
    * 决定 swallow (起标题) 还是上报 (skillReview)。
    */
   async oneShot(agentKind: AgentKind, prompt: string, opts?: OneShotOptions): Promise<string> {
-    return this.requireAgent(agentKind).oneShot(prompt, opts);
+    const recorder = this.createOneShotUsageRecorder?.(agentKind, opts);
+    try {
+      return await this.requireAgent(agentKind).oneShot(prompt, {
+        ...opts,
+        onUsage: async usage => {
+          // Accounting must not turn a paid response into a request failure/retry.
+          try { await recorder?.onUsage(usage); }
+          catch { this.logger.warn('oneShot usage could not be recorded'); }
+          try { await opts?.onUsage?.(usage); }
+          catch { this.logger.warn('oneShot usage observer failed'); }
+        },
+      });
+    } finally {
+      recorder?.close();
+    }
   }
 
   /**

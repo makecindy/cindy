@@ -163,8 +163,11 @@ describe('supplier import enables engines that use an offered API', () => {
   it.each(options.presets!)('$id enables engines on an offered API and leaves local conversion off', preset => {
     const provider = auditProvider(preset);
     let checked = 0;
+    // Registry-classified media, live and research models keep their preset slot but are
+    // not conversational, so the engine default below does not apply to them.
+    let nonChat = 0;
     for (const agent of agents) for (const model of provider.models[agent] ?? []) {
-      if (model.mode && !['chat', 'responses'].includes(model.mode)) continue;
+      if (model.mode && !['chat', 'responses'].includes(model.mode)) { nonChat++; continue; }
       checked++;
       const message = `${preset.id}/${agent}/${model.id}`;
       // Without a declared API, a fixed-protocol engine sends its own format to the configured endpoint.
@@ -173,7 +176,7 @@ describe('supplier import enables engines that use an offered API', () => {
         (wire === 'openai-chat' ? 'openai-completions' : wire) ?? (agent === 'pi' ? undefined : harnessApi[agent]);
       expect(model.defaultEnabled, message).toBe(usesOfferedApi(agent, api));
     }
-    expect(checked).toBe(agents.reduce((total, agent) => total + (preset.runtimes[agent]?.models.length ?? 0), 0));
+    expect(checked + nonChat).toBe(agents.reduce((total, agent) => total + (preset.runtimes[agent]?.models.length ?? 0), 0));
   });
 
   // Each supplier case above verifies that every input model was actually audited.

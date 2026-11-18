@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const knobs = vi.hoisted(() => ({
   compactResponse: null as null | { success: boolean; data?: unknown; error?: string },
+  waitForThinking: undefined as (() => Promise<void>) | undefined,
   lastCompactCommand: null as null | Record<string, unknown>,
 }));
 
@@ -39,6 +40,7 @@ vi.mock('../rpc-client.js', () => ({
       if (cmd.type === 'get_state') {
         return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200000 } } };
       }
+      if (cmd.type === 'set_thinking_level') await knobs.waitForThinking?.();
       if (cmd.type === 'compact') {
         knobs.lastCompactCommand = cmd as Record<string, unknown>;
         return knobs.compactResponse ?? { success: true, data: {} };
@@ -67,6 +69,7 @@ describe('PiAgent.compactSession (mocked pi process)', () => {
 
   beforeEach(() => {
     knobs.compactResponse = null;
+    knobs.waitForThinking = undefined;
     knobs.lastCompactCommand = null;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-compact-unit-home-'));
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-compact-unit-cwd-'));
@@ -135,10 +138,43 @@ describe('PiAgent.compactSession (mocked pi process)', () => {
     await handle.close();
   });
 
+  // Unit / control_session delivery: a native thinking update can hold the
+  // same RPC lane. The existing compact tests send on an idle lane.
+  it('rechecks delivery after waiting for a Pi RPC and never compacts after revocation', async () => {
+    const handle = await start();
+    let releaseThinking!: () => void;
+    const thinkingReply = new Promise<void>(resolve => { releaseThinking = resolve; });
+    knobs.waitForThinking = () => thinkingReply;
+    const change = handle.setThinkingEnabled!(false);
+    let authorized = true;
+    const beforeDelivery = vi.fn(async () => {
+      if (!authorized) throw new Error('PERMISSION_DENIED');
+    });
+    const compact = handle.compactSession!(undefined, beforeDelivery);
+    const rejected = expect(compact).rejects.toThrow('PERMISSION_DENIED');
+    await Promise.resolve();
+    expect(knobs.lastCompactCommand).toBeNull();
+    authorized = false;
+    releaseThinking();
+    try {
+      await change;
+      await rejected;
+      expect(beforeDelivery).toHaveBeenCalledOnce();
+      expect(knobs.lastCompactCommand).toBeNull();
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('throws on a genuine compact failure', async () => {
     const handle = await start();
     knobs.compactResponse = { success: false, error: 'gateway 500' };
     await expect(handle.compactSession?.()).rejects.toThrow(/gateway 500/);
+    await expect(handle.compactSession?.(undefined, async () => {})).rejects.toMatchObject({
+      code: 'COMPACT_FAILED',
+      message: 'Pi native context compaction failed',
+      cause: expect.objectContaining({ message: 'pi compact failed: gateway 500' }),
+    });
     await handle.close();
   });
 });

@@ -12,3 +12,7 @@ set_target_properties(cindy_agent_net_native PROPERTIES
 add_library(cindy_agent_net_bridge SHARED src/main/cpp/bridge.cpp)
 target_include_directories(cindy_agent_net_bridge PRIVATE "${CINDY_AGENT_NET_NATIVE_DIR}/include")
 target_link_libraries(cindy_agent_net_bridge cindy_agent_net_native)
+# NDK r27 defaults to 4 KiB ELF load alignment. Google Play requires 16 KiB.
+target_link_options(cindy_agent_net_bridge PRIVATE
+  "-Wl,-z,max-page-size=16384"
+  "-Wl,-z,common-page-size=16384")

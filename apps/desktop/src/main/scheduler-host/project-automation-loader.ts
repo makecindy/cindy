@@ -612,7 +612,11 @@ function scheduleConfigToUpdateInput(
   config: ProjectScheduleConfig,
   workingDir: string,
 ): ProjectUpdateScheduleInput {
-  return scheduleConfigToCreateInput(config, workingDir);
+  const input = scheduleConfigToCreateInput(config, workingDir);
+  // Project declarations cannot explicitly bind an existing task. Turning off
+  // persistence must clear the runner's saved binding; keeping it enabled must
+  // leave that binding intact so subsequent runs reuse the same task.
+  return input.persistentSession ? input : { ...input, targetSessionId: undefined };
 }
 
 export function schedulesDiffer(
@@ -642,6 +646,7 @@ export function schedulesDiffer(
     !sameWorkingDir(schedule.workingDir, workingDir) ||
     schedule.useWorktree !== expected.useWorktree ||
     schedule.persistentSession !== expected.persistentSession ||
+    (!expected.persistentSession && !!schedule.targetSessionId) ||
     schedule.silentWhenIdle !== expected.silentWhenIdle ||
     (schedule.preRunHook?.command ?? '') !== (expected.preRunHook?.command ?? '') ||
     (schedule.preRunHook?.timeoutMs ?? undefined) !== (expected.preRunHook?.timeoutMs ?? undefined) ||

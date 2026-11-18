@@ -21,6 +21,8 @@ import {
 } from '../topologyModel';
 import { SPECK_H, SPECK_W, groupLines, layoutTopology, samplePath, speckKeyframes } from '../topologyGeometry';
 import { SPACING, SPEED, streamFor } from '../TopologyFlow';
+import { remoteSwitchAvailability } from '../agentNetRemoteSwitch';
+import { pathLabel } from '../topologyPresentation';
 import { appendPresenceEvent } from '../useRecentPresence';
 import {
   _resetRemoteConnectionV2ForTests,
@@ -120,6 +122,37 @@ describe('buildTopology:状态五档', () => {
     });
     expect(model.byId.get('phone')?.status).toBe('unlinked');
     expect(model.byId.get('pc')?.attention).toBe('unresponsive');
+  });
+
+  // 2026-11-18 MagicLizi: the previous cases always needed an open control link for a path.
+  // Unit regression via buildTopology: one online peer, a confirmed Agent-Net path, no business link.
+  it('shows the Agent-Net path before opening a control link or refreshing the directory', () => {
+    const input = { ...base, devices: [device({ deviceId: 'pc' })], links: [] };
+    const connecting = buildTopology({ ...input, agentNetRoutes: [{ deviceId: 'pc', path: 'connecting', rttMs: null }] });
+    expect(connecting.groups[0]?.key).toBe('connecting');
+    expect(pathLabel(connecting.nodes[0], 'Cindy', (key) => key)).toBe('settings.devices.linkStatus.connecting');
+
+    const relay = buildTopology({
+      ...input,
+      devices: [device({ deviceId: 'pc', online: false })],
+      agentNetRoutes: [{ deviceId: 'pc', path: 'relay', rttMs: 25 }],
+    });
+    expect(relay.nodes[0]).toMatchObject({ status: 'relay', path: 'relay', rttMs: 25, encrypted: true, flow: null });
+    expect(remoteSwitchAvailability(relay.nodes[0])).toEqual({ visible: false });
+    const direct = buildTopology({ ...input, agentNetRoutes: [{ deviceId: 'pc', path: 'direct', rttMs: 9 }] });
+    expect(direct.nodes[0]).toMatchObject({ status: 'direct', path: 'direct', rttMs: 9 });
+    expect(buildTopology(input).nodes[0]).toMatchObject({ status: 'unlinked', path: null, rttMs: null });
+  });
+
+  it('keeps the actual Device Link route while it carries an open control link', () => {
+    const model = buildTopology({
+      ...base,
+      devices: [device({ deviceId: 'pc' })],
+      links: [{ ...link('pc', 'relay', 25, true, 2), encrypted: false }],
+      agentNetRoutes: [{ deviceId: 'pc', path: 'direct', rttMs: 9 }],
+    });
+    expect(model.nodes[0]).toMatchObject({ status: 'relay', rttMs: 25, encrypted: false, flow: 'out' });
+    expect(remoteSwitchAvailability(model.nodes[0])).toEqual({ visible: true, block: null });
   });
 
   // 用户反馈(2026-11-06):按延迟排,延迟一刷新图块就换位置。组内只按名字排(数字按数值)。
