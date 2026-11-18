@@ -1362,7 +1362,7 @@
       "unsupported": {
         "title": "Le plugin « {{plugin}} » ne prend pas en charge l’affichage à distance",
         "body": "Le plugin installé ne peut pas afficher {{device}} depuis un autre ordinateur. Recherchez une mise à jour compatible ou utilisez l’appareil sur l’ordinateur qui exécute cette session.",
-        "action": "Rechercher une mise à jour compatible",
+        "action": "Vérifier les mises à jour",
         "unavailable": "Aucune mise à jour compatible n’est disponible depuis la source de ce plugin. Utilisez l’appareil sur l’ordinateur qui exécute cette session."
       }
     },
