@@ -35,6 +35,7 @@ export interface ActivityRecoveryState {
   lastRefreshAt?: number;
   wasStale?: boolean;
   contentKey?: string;
+  expiryDeadline?: number;
 }
 export interface AgentActivityNative extends AgentActivitySink {
   configureAccount?(accountScope: string | null): Promise<void>;
@@ -139,7 +140,10 @@ export function startActivityPushSync(options: {
       clearTimeout(expiry.timer);
       expiry = undefined;
     }
+    if (!expired) recovery.expiryDeadline = undefined;
     if (!expired || expiry) return;
+    // Disposing a syncer cancels its timer, not this activity's recovery window.
+    const deadline = recovery.expiryDeadline ??= Date.now() + EXPIRED_GRACE_MS;
     const timer = setTimeout(() => {
       expiry = undefined;
       void (async () => {
@@ -147,15 +151,19 @@ export function startActivityPushSync(options: {
           assertCurrent();
           const latest = await native.getPushRegistration!();
           assertCurrent();
-          if (latest.accountScope !== options.accountScope || latest.isStale !== true ||
+          if (latest.accountScope !== options.accountScope ||
               latest.activityId !== activityId) return;
+          if (latest.isStale !== true) {
+            recovery.expiryDeadline = undefined;
+            return;
+          }
           native.setState(null);
           mobileDebugLog("info", "lifecycle", "activity-expired");
         } catch {
           /* disposed, previous account or native module unavailable */
         }
       })();
-    }, EXPIRED_GRACE_MS);
+    }, Math.max(0, deadline - Date.now()));
     expiry = { activityId, timer };
   };
   const assertCurrent = () => {
@@ -191,6 +199,7 @@ export function startActivityPushSync(options: {
         const identity = JSON.stringify([captured, owner.generation, options.accountScope,
           registration.activityId, registration.updateToken]);
         if (recovery.identity !== identity) {
+          watchExpiry(registration.activityId, false);
           recovery.identity = identity;
           recovery.lastRefreshAt = -Infinity;
           recovery.wasStale = false;

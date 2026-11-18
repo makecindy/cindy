@@ -351,7 +351,7 @@ it('preserves the recovery budget across syncers and sends an explicit bounded r
 // Screen until the system limit (offline phone, or a service with no source).
 // Existing cases only cover the recovery request, not its outcome. Drive the
 // real syncer: recovery inside the window keeps the activity, none ends it.
-it("ends an activity that is still expired after its recovery window", async () => {
+it.each([true, false])("ends an activity still expired after its recovery window (recovery event=%s)", async (event) => {
   vi.useFakeTimers();
   const live = { ...registration(), activityId: "live", updateToken: "update" };
   fixture.native.getPushRegistration.mockResolvedValue({ ...live, isStale: true, staleAt: 200 });
@@ -359,7 +359,7 @@ it("ends an activity that is still expired after its recovery window", async () 
   try {
     await sync.sync();
     fixture.native.getPushRegistration.mockResolvedValue({ ...live, isStale: false, staleAt: 1200 });
-    await sync.sync();
+    if (event) await sync.sync();
     await vi.advanceTimersByTimeAsync(20_000);
     expect(fixture.native.setState).not.toHaveBeenCalled();
     fixture.native.getPushRegistration.mockResolvedValue({ ...live, isStale: true, staleAt: 1200 });
@@ -367,6 +367,63 @@ it("ends an activity that is still expired after its recovery window", async () 
     await vi.advanceTimersByTimeAsync(19_000);
     expect(fixture.native.setState).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
+    expect(fixture.native.setState).toHaveBeenCalledExactlyOnceWith(null);
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
+
+// Unit, discussion_r4615525500: the real syncer must end the same stale
+// activity at its original deadline after disposal/recreation. Existing tests
+// only waited within one syncer. Reconnect before and after the 20s deadline;
+// fake timers keep this regression in the fast unit tier.
+it.each([10_000, 25_000])("preserves the expiry deadline across a reconnect after %sms", async (elapsed) => {
+  vi.useFakeTimers();
+  const opts = { ...options(), recovery: {} };
+  fixture.native.getPushRegistration.mockResolvedValue({
+    ...registration(), activityId: "live", updateToken: "update", isStale: true,
+  });
+  let sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    await vi.advanceTimersByTimeAsync(5_000);
+    sync.dispose();
+    await vi.advanceTimersByTimeAsync(elapsed - 5_000);
+    sync = startActivityPushSync(opts);
+    await sync.sync();
+    if (elapsed < 20_000) {
+      await vi.advanceTimersByTimeAsync(20_000 - elapsed - 1);
+      expect(fixture.native.setState).not.toHaveBeenCalled();
+    }
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.native.setState).toHaveBeenCalledExactlyOnceWith(null);
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
+
+// The saved deadline belongs to one stale episode of one registration, not to
+// recovered content or a rotated token. Exercise both reset boundaries through
+// the same production entry so an old deadline cannot end a new recovery early.
+it.each(["recovered", "rotated"])("starts a new expiry window after %s registration", async (change) => {
+  vi.useFakeTimers();
+  const opts = { ...options(), recovery: {} };
+  const live = { ...registration(), activityId: "live", updateToken: "update", isStale: true };
+  fixture.native.getPushRegistration.mockResolvedValue(live);
+  let sync = startActivityPushSync(opts);
+  try {
+    await sync.sync();
+    await vi.advanceTimersByTimeAsync(10_000);
+    fixture.native.getPushRegistration.mockResolvedValue({ ...live,
+      ...(change === "recovered" ? { isStale: false } : { updateToken: "rotated" }),
+    });
+    await sync.sync();
+    if (change === "recovered") {
+      fixture.native.getPushRegistration.mockResolvedValue(live);
+      await sync.sync();
+    }
+    sync.dispose();
+    sync = startActivityPushSync(opts);
+    await sync.sync();
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(fixture.native.setState).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(fixture.native.setState).toHaveBeenCalledExactlyOnceWith(null);
   } finally { sync.dispose(); vi.useRealTimers(); }
 });
