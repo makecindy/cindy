@@ -391,6 +391,7 @@ jobs:
           run_install: false
 
       - name: Setup Node.js
+        id: setup-node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -398,7 +399,19 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        id: install
+        env:
+          PNPM_STORE_CACHE_HIT: ${{ steps.setup-node.outputs.cache-hit }}
+        run: ./scripts/ci-windows-install.ps1 -ReportPath (Join-Path $env:RUNNER_TEMP 'pnpm-install.json')
+
+      - name: Upload slow or failed pnpm install diagnostics
+        if: ${{ !cancelled() && steps.install.outputs.report == 'true' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pnpm-install-windows-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pnpm-install.json
+          retention-days: 7
 
       # 缓存 bundled ripgrep：各分片都要装，GitHub Releases 偶发 504 时会整批变红。
       # 命中后 install:ripgrep 按 .version 标记直接跳过下载。
