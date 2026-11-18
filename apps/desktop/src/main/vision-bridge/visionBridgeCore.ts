@@ -124,6 +124,7 @@ export function createVisionBridge(deps: VisionBridgeDeps, settingsSource: Visio
     imagePath?: string;
     prompt: string;
     signal?: AbortSignal;
+    sessionId?: string;
   }) => Promise<string>;
   dispose: () => void;
 } {
@@ -274,6 +275,7 @@ export function createVisionBridge(deps: VisionBridgeDeps, settingsSource: Visio
     prompt: string,
     signal?: AbortSignal,
     runtimeModel?: string,
+    sessionId?: string,
   ): Promise<{ text: string; usedFallback: boolean }> {
     if (disposed) {
       throw new VisionBackendError('unavailable', 'vision bridge disposed');
@@ -303,7 +305,7 @@ export function createVisionBridge(deps: VisionBridgeDeps, settingsSource: Visio
         const text = await describeImageWithProvider(
           primary.providerId,
           primary.modelId,
-          { ...input, prompt, signal },
+          { ...input, prompt, signal, sessionId },
           deps,
         );
         // dispose 后不回填已清空的 cache（旧实例生命周期硬封口）。
@@ -349,7 +351,7 @@ export function createVisionBridge(deps: VisionBridgeDeps, settingsSource: Visio
           const text = await describeImageWithProvider(
             fallback.providerId,
             fallback.modelId,
-            { ...input, prompt, signal },
+            { ...input, prompt, signal, sessionId },
             deps,
           );
           if (!disposed) cacheSet(fallbackCk, text);
@@ -441,7 +443,7 @@ export function createVisionBridge(deps: VisionBridgeDeps, settingsSource: Visio
         if (current >= blocks.length) return;
         const block = blocks[current];
         try {
-          const r = await describeWithFallback({ imagePath: block.path }, focusHint, ctx.signal, ctx.model);
+          const r = await describeWithFallback({ imagePath: block.path }, focusHint, ctx.signal, ctx.model, ctx.sessionId);
           if (r.usedFallback) usedFallback = true;
           descriptions.push({ idx: block.idx, text: r.text });
           anySucceeded = true;
@@ -519,11 +521,14 @@ export function createVisionBridge(deps: VisionBridgeDeps, settingsSource: Visio
       imagePath?: string;
       prompt: string;
       signal?: AbortSignal;
+      sessionId?: string;
     }): Promise<string> =>
       describeWithFallback(
         { imageUrl: input.imageUrl, imagePath: input.imagePath },
         input.prompt,
         input.signal,
+        undefined,
+        input.sessionId,
       ).then((r) => r.text),
     dispose: () => {
       // 硬封口：跑着的 in-flight 请求 resolve 后不再回填 cache（disposed 检查在 cacheSet 前）。

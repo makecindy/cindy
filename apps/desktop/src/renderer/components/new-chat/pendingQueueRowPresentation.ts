@@ -130,22 +130,6 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
 }
 
 /**
- * 空输入框里按 Cmd/Ctrl+Enter 时可直接插话的队列条目:仅当队列恰好一条且该行此刻
- * 能插话(与行内 ⬆️ 同一判据)时返回其 clientId。多条时无法判断用户指哪条，返回 null,
- * 仍需把焦点放到具体行上再按快捷键。
- */
-export function resolveSoleSteerableQueuedMessage(
-  queue: readonly QueuedMessage[],
-  state: { editingClientId: string | null; steeringClientIds: readonly string[] },
-): string | null {
-  if (queue.length !== 1 || state.editingClientId !== null) return null;
-  const [entry] = queue;
-  if (!entry || !getPendingQueueRowPresentation(entry).canSteer) return null;
-  if (state.steeringClientIds.includes(entry.clientId)) return null;
-  return entry.clientId;
-}
-
-/**
  * Keep an untouched encoded quote body byte-for-byte stable. The queue editor
  * shows the markerless projection, so submitting that projection as a rewrite
  * would otherwise discard the private markers even when the user changed

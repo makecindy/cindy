@@ -5461,8 +5461,19 @@
       "title": "Nachrichteneingabe",
       "sendShortcut": {
         "label": "Mit {{shortcut}} senden",
-        "hint": "Wenn aktiviert, sendet {{shortcut}} Nachrichten. Wenn deaktiviert, sendet die Eingabetaste Nachrichten und Umschalt+Eingabetaste fügt eine neue Zeile ein.",
-        "ariaLabel": "Mit {{shortcut}} Nachrichten senden"
+        "hint": "Enter sendet. Shift+Enter fügt einen Zeilenumbruch ein.",
+        "ariaLabel": "Mit {{shortcut}} Nachrichten senden",
+        "hintModifierEnter": "{{shortcut}} sendet. Enter fügt einen Zeilenumbruch ein."
+      },
+      "followUp": {
+        "label": "Senden während der Ausführung",
+        "hintQueue": "Während die Aufgabe läuft, reihen der Senden-Button und {{send}} die Nachricht ein.",
+        "hintSteer": "Während die Aufgabe läuft, steuern der Senden-Button und {{send}} die laufende Aufgabe.",
+        "ariaLabel": "Senden, während die Aufgabe läuft",
+        "options": {
+          "queue": "Einreihen",
+          "steer": "Steuern"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -8297,6 +8308,8 @@
         "subscribeMessageDetail": "Empfängt gespeicherte Nutzernachrichten und KI-Antworten. Anhänge werden separat gelesen und übergeben.",
         "subscribeToolExecution": "Ereignisse zur Werkzeugausführung",
         "subscribeToolExecutionDetail": "Empfängt Werkzeugnamen, Eingaben, Ergebnisse und Fehler. Beobachtet, ohne die Ausführung zu ändern.",
+        "subscribeNativeRecovery": "Native Wiederherstellungsereignisse",
+        "subscribeNativeRecoveryDetail": "Empfängt den Status der Engine bei Wiederholungsversuchen, Kontextkomprimierung und Aufgabenstopps.",
         "subscribeTaskState": "Ereignisse zum Aufgabenstatus",
         "subscribeTaskStateDetail": "Empfängt Änderungen bei Ausführung, Warten, Abschluss, Archivierung und ausgeblendeten Aufgaben.",
         "subscribeActivity": "Erkennt, wann die KI nachdenkt und wann sie auf dich wartet",
@@ -8512,6 +8525,24 @@
         "openInSidebar": "In der Seitenleiste öffnen",
         "panelPageHosted": "Öffnet sich über die Plugin-Seite · schließt sich beim Verlassen",
         "panelNone": "Dieses Plugin hat kein Panel",
+        "githubRelease": {
+          "title": "Plugin-Updates",
+          "installed": "Installiert {{version}}",
+          "upstream": "Verfügbar {{version}}",
+          "prerelease": "Vorabversion",
+          "check": "Nach Updates suchen",
+          "update": "Herunterladen und installieren",
+          "connect": "Bei GitHub anmelden",
+          "checking": "Suche nach Updates…",
+          "updating": "Wird heruntergeladen und installiert…",
+          "available": "Ein Update ist verfügbar.",
+          "current": "Die installierte Version ist aktuell.",
+          "updated": "Plugin aktualisiert.",
+          "empty": "Keine installierbare Version verfügbar.",
+          "sign-in": "Melde dich bei GitHub an, um nach Updates zu suchen.",
+          "forbidden": "Diese GitHub-Anmeldung hat keinen Lesezugriff auf das private Repository.",
+          "unavailable": "Das Update konnte nicht geprüft oder installiert werden. Versuche es erneut."
+        },
         "customSlotTitle": "Bereich für benutzerdefinierte Plugin-Einstellungen",
         "dangerTitle": "Plugin deinstallieren",
         "infoContents": "Enthält",
@@ -9862,6 +9893,41 @@
       },
       "providerTooltip": "Der aktuell für die Sitzung ausgewählte Anbieter; leer, wenn keiner angeheftet ist.",
       "tokensTooltip": "Zählt nur die Tokens, die diese Sitzung in {{range}} verwendet hat."
+    },
+    "auxiliary": {
+      "title": "Hilfsmodellnutzung",
+      "label": "Hilfsanfrage",
+      "purpose": "Zweck",
+      "requests": "Erfasste Anfragen",
+      "description": "In den Gesamttokens enthalten. Nur vom Anbieter gemeldete Nutzung wird erfasst; fehlende Nutzung und frühere Anfragen werden nicht geschätzt.",
+      "sources": {
+        "title": "Titelgenerierung",
+        "task-summary": "Aufgabenzusammenfassungen",
+        "prompt-prediction": "Eingabevorschläge",
+        "working-status": "Arbeitsstatus",
+        "help": "Hilfe",
+        "bot-creation": "Begleiter erstellen",
+        "bot-opening": "Begrüßungen der Begleiter",
+        "group-planning": "Gruppenplanung",
+        "ambient-reply": "Antwortentscheidungen",
+        "auto-review": "Automatische Prüfung",
+        "tool-loop-review": "Prüfung von Werkzeugschleifen",
+        "memory-review": "Speicherprüfung",
+        "git-summary": "Änderungszusammenfassungen",
+        "hook-generation": "Automatisierungsskripte",
+        "automation-verification": "Importprüfung",
+        "plugin-text": "Plugin-Text",
+        "voice-dialogue": "Sprachgespräche",
+        "voice-exit": "Entscheidungen zum Gesprächsende",
+        "voice-refinement": "Überarbeitung von Sprachtext",
+        "dictionary-learning": "Wörterbuchlernen",
+        "embedding-query": "Vektorsuche",
+        "embedding-index": "Vektorindexierung",
+        "web-search": "Websuche",
+        "provider-probe": "Verbindungstests",
+        "vision-bridge": "Vision Bridge",
+        "auxiliary": "Weitere Hilfsanfragen"
+      }
     }
   },
   "usageDashboard": {
@@ -10803,6 +10869,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "Freunde konnten nicht geladen werden",
+    "rosterReload": "Freunde neu laden",
     "avatarStatus": {
       "awaiting": "Benötigt deine Bestätigung",
       "error": "Erfordert Aufmerksamkeit",
@@ -13692,9 +13760,8 @@
     "sendButton": {
       "send": "Nachricht senden",
       "queue": "Nachricht einreihen",
-      "queueTooltip": "Klicken zum Einreihen; drücke {{shortcut}}, um zu steuern, ohne die Aufgabe zu unterbrechen",
-      "queueTooltipSendMode": "Klicken zum Einreihen; drücke {{shortcut}}, um diese Nachricht zu senden",
-      "stop": "Generierung stoppen"
+      "stop": "Generierung stoppen",
+      "steer": "Laufende Aufgabe steuern"
     },
     "pluginSetup": {
       "account": {
@@ -14591,6 +14658,13 @@
       "runningWithWorktree_one": "Vor dem Branchwechsel muss sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören.",
       "runningWithWorktree_other": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören.",
       "runningWithWorktree_many": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören."
+    },
+    "followUpHint": {
+      "queueDefault": "Nachrichten, die während der Ausführung gesendet werden, werden eingereiht.",
+      "steerDefault": "Nachrichten, die während der Ausführung gesendet werden, steuern die laufende Aufgabe.",
+      "switchToSteer": "Standardmäßig steuern",
+      "switchToQueue": "Standardmäßig einreihen",
+      "dismiss": "Hinweis schließen"
     }
   },
   "onboarding": {
@@ -19752,7 +19826,8 @@
           "expired": "Abgelaufen",
           "voided": "Annulliert"
         }
-      }
+      },
+      "viewUsage": "Nutzung anzeigen"
     },
     "orders": {
       "title": "Bestellverlauf",
@@ -21923,6 +21998,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "Dieses Repository auf diesen Computer herunterladen?",
+    "credentialNotice": "Für private Repositorys kann Cindy das auf diesem Computer angemeldete Konto verwenden.",
+    "saveTo": "Speicherort",
+    "confirmImport": "Import bestätigen",
+    "confirmSshTitle": "Diesem Projekt Zugriff auf die folgenden SSH-Verzeichnisse erlauben?",
+    "sshHost": "SSH-Host",
+    "readWriteAccess": "Lesen und schreiben",
+    "readAccess": "Nur lesen",
+    "confirmAccess": "Zugriff erlauben",
     "autoLoading": "Projektsymbol wird gesucht…",
     "autoNone": "Initialen aus dem Projektnamen werden verwendet.",
     "autoSource": "Quelle",
@@ -21962,7 +22046,42 @@
     "discard": "Verwerfen",
     "colors": {
       "default": "Standard (dem Design folgen)"
-    }
+    },
+    "directories": "Projektverzeichnisse",
+    "directoriesHint": "Gilt ab dem nächsten Durchlauf für alle Aufgaben dieses Projekts. Bestehende aufgabenspezifische Verzeichnisse bleiben erhalten.",
+    "removeDirectory": "Verzeichnis entfernen",
+    "directoryPath": "Vollständiger Verzeichnispfad",
+    "addDirectory": "Verzeichnis hinzufügen",
+    "browseDirectory": "Verzeichnisse durchsuchen",
+    "mainDirectory": "Hauptverzeichnis",
+    "createTitle": "Neues Projekt",
+    "createAction": "Projekt erstellen",
+    "repository": "Repository-URL",
+    "repositoryHint": "Unterstützt GitHub, GitLab und andere Git-Repositories über HTTPS oder SSH.",
+    "autoDirectory": "Ohne Verzeichnisauswahl wird {{path}} verwendet. Bei Namenskonflikten wird eine Nummer ergänzt.",
+    "cloning": "Repository wird geklont…",
+    "invalidRepository": "Eine gültige GitHub-, GitLab- oder Git-Repository-URL eingeben.",
+    "createFailed": "Projekt konnte nicht erstellt werden. Schreibzugriff, Repository-URL und Git-Zugriff auf diesem Computer prüfen. Das Klon-Ziel muss leer sein.",
+    "createNamePlaceholder": "Projektname",
+    "createNameHint": "Gib deinem Projekt einen Namen, um loszulegen.",
+    "createFromRepository": "Aus einem Code-Repository erstellen",
+    "createBlank": "Zu einem leeren Projekt wechseln",
+    "source_blank": "Leeres Projekt",
+    "source_existing": "Vorhandenen Ordner öffnen",
+    "source_repository": "Code-Repository importieren",
+    "sourceHint_blank": "Name eingeben. Der Projektordner wird automatisch erstellt.",
+    "sourceHint_existing": "Einen vorhandenen Projektordner auf diesem Computer wählen.",
+    "sourceHint_repository": "Repository-Link einfügen und auf diesen Computer herunterladen.",
+    "source": "Projektquelle",
+    "sourceShort_blank": "Neu",
+    "sourceShort_existing": "Ordner",
+    "sourceShort_repository": "Repository",
+    "automaticMain": "Hauptordner · Automatisch",
+    "source_local": "Lokaler Ordner",
+    "sourceShort_local": "Lokaler Ordner",
+    "sourceHint_local": "Einen Namen zum Erstellen eingeben oder einen vorhandenen Ordner wählen.",
+    "chooseExistingFolder": "Vorhandenen Ordner wählen",
+    "changeMainDirectory": "Ändern"
   },
   "taskManagement": {
     "scope": "Nur für dieses Konto auf diesem Computer.",

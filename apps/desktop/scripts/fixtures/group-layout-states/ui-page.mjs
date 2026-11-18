@@ -62,6 +62,25 @@ export default {
         el.style.maxWidth = '100%';
         el.style.flex = 'none';
       }, width);
+      // The standalone reply composer has no timeline. Check its real input and
+      // controls at both narrow widths instead of querying a nonexistent main.
+      if (ui.case === 'reply-composer') {
+        const input = subject.locator('textarea');
+        await input.fill(`Reply at ${width}px`);
+        assert.equal(await input.inputValue(), `Reply at ${width}px`);
+        const geometry = await subject.evaluate(el => {
+          const limit = el.getBoundingClientRect();
+          return { overflow: el.scrollWidth - el.clientWidth,
+            outside: [...el.querySelectorAll('textarea, button')].filter(node => {
+              const r = node.getBoundingClientRect();
+              return r.width > 0 && r.height > 0 && (r.left < limit.left - 1 || r.right > limit.right + 1);
+            }).length };
+        });
+        assert.ok(geometry.overflow <= 1 && geometry.outside === 0,
+          `Reply input and controls must fit ${width}px: ${JSON.stringify(geometry)}`);
+        await ui.capture(`narrow-${width}-reply`);
+        continue;
+      }
       await page.waitForFunction(() => {
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]');
         const main = timeline.closest('main');

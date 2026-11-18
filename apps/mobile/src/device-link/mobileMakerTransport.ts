@@ -923,7 +923,7 @@ export interface MobileMakerTransport {
     clearSession(sessionId: string): Promise<InputProjection>;
   };
   fs: {
-    listDir(path: string): Promise<RemoteDirectoryListResult>;
+    listDir(path: string, canonicalDirectory?: boolean): Promise<RemoteDirectoryListResult>;
     statPath(path: string): Promise<RemotePathStatResult>;
     mkdirP(path: string): Promise<{ resolvedPath: string }>;
     readTextFilePreview(path: string, options?: { allowFileTransfer?: boolean; signal?: AbortSignal }): Promise<RemoteTextFilePreviewResult>;
@@ -1617,7 +1617,7 @@ export function createMobileMakerTransport({
         call("maker:input:clear-session", [sessionId]),
     },
     fs: {
-      listDir: (path) => call("fs:list-dir", [{ path }]),
+      listDir: (path, canonicalDirectory) => call("fs:list-dir", [canonicalDirectory ? { path, canonicalDirectory } : { path }]),
       statPath: (path) => call("fs:stat-path", [{ path }]),
       mkdirP: (path) => call("fs:mkdir-p", [{ path }]),
       readTextFilePreview: (filePath, options) =>

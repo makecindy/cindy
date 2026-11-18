@@ -43,6 +43,15 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'request_remote_control',
 ]);
 
+/** Project access writes must never inherit the trusted helper server's silent approval. */
+export function isProjectAccessAction(tool: string | undefined, args: unknown): boolean {
+  if (tool === 'create_project') return true;
+  if (tool !== 'update_project_info') return false;
+  const input = args as { field?: unknown; value?: unknown } | null;
+  if (!input || input.field !== 'profile') return false;
+  return !!input.value && typeof input.value === 'object' && 'directories' in input.value;
+}
+
 export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'start_team',
   'create_worker',
@@ -141,11 +150,24 @@ export function createTaskActionAuthorizer(deps: {
   return async (call) => {
     const protectedAction =
       call.server === 'cindy_helper'
-        ? TASK_ACTION_TOOLS.has(call.tool) || HELPER_AUTOMATION_ACTION_TOOLS.has(call.tool)
-        : call.server === 'cindy_scheduler' ? SCHEDULER_TASK_ACTION_TOOLS.has(call.tool)
-        : call.server === 'cindy_orca' && ORCA_TASK_ACTION_TOOLS.has(call.tool);
-    if (!protectedAction || (call.tool === 'manage_session_prs' && (call.args as Record<string, unknown>)?.action === 'list') ||
-        (call.tool === 'manage_media_guide' && ['get', 'validate'].includes(String(((call.args as Record<string, unknown>)?.change as Record<string, unknown>)?.action)))) return { ok: true };
+        ? TASK_ACTION_TOOLS.has(call.tool) ||
+          isProjectAccessAction(call.tool, call.args) ||
+          HELPER_AUTOMATION_ACTION_TOOLS.has(call.tool)
+        : call.server === 'cindy_scheduler'
+          ? SCHEDULER_TASK_ACTION_TOOLS.has(call.tool)
+          : call.server === 'cindy_orca' && ORCA_TASK_ACTION_TOOLS.has(call.tool);
+    if (
+      !protectedAction ||
+      (call.tool === 'manage_session_prs' &&
+        (call.args as Record<string, unknown>)?.action === 'list') ||
+      (call.tool === 'manage_media_guide' &&
+        ['get', 'validate'].includes(
+          String(
+            ((call.args as Record<string, unknown>)?.change as Record<string, unknown>)?.action,
+          ),
+        ))
+    )
+      return { ok: true };
     const scope = await deps.capture(call);
     if (!scope) return { ok: true }; // ordinary user-delegated Agent task, unchanged
     if (!call.sessionId) return denied();

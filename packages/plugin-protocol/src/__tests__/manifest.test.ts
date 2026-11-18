@@ -21,6 +21,7 @@ import {
   supportsCindyVersion,
   validateGhostManifest,
   validateStoredGhostManifest,
+  getGhostGithubReleaseRepository,
 } from '../manifest.js';
 
 const validManifest = {
@@ -58,6 +59,19 @@ it.each([2, 3])('preserves preferred navigation icons and ignores malformed hint
 });
 
 describe('Ghost manifest contract', () => {
+  // Unit: the declared source survives parsing, and a URL-like path cannot become a release endpoint.
+  it('validates new release declarations without breaking existing manifests', () => {
+    const base = { ...validManifest, settingsHtml: 'settings.html' };
+    expect(validateGhostManifest({ ...base, githubRelease: 'Example/Plugin' }))
+      .toMatchObject({ ok: true, manifest: { githubRelease: 'Example/Plugin' } });
+    expect(validateGhostManifest({ ...base, githubRelease: 'example/..' })).toMatchObject({ ok: false });
+    expect(validateGhostManifest({ ...validManifest, githubRelease: 'example/plugin' })).toMatchObject({ ok: false });
+    const historical = { rollback: true };
+    expect(validateStoredGhostManifest({ ...base, githubRelease: historical }))
+      .toMatchObject({ ok: true, manifest: { githubRelease: historical } });
+    expect(getGhostGithubReleaseRepository({ ...base, githubRelease: historical })).toBeUndefined();
+  });
+
   // 第23项：沿用已批准的 network.hosts 字段，以精确 origin 开放端口、内网和 WS。
   // 旧域名语义不变；最小失败输入为 http://127.0.0.1:8080，tier=unit。
   it('validates exact network origins without accepting paths, credentials or wildcard origins', () => {

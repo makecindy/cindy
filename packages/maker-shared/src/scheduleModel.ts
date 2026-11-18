@@ -607,6 +607,7 @@ export type ScheduleFailureKind = 'precheck' | 'rate-limit' | 'execution';
 export interface FailedScheduleRunSnapshot {
   runId: string;
   firedAt: number;
+  finishedAt?: number;
   scheduleId?: string;
   failureKind?: ScheduleFailureKind;
   /** Optional on older hosts; error content is only disclosed on demand. */
@@ -693,9 +694,13 @@ export function compareFailedScheduleRuns(a: FailedScheduleRunSnapshot, b: Faile
 }
 export function shouldShowFailedScheduleNotice(state: {
   latestFailedRun?: FailedScheduleRunSnapshot | null;
+  userSendAt?: RemoteTimestamp;
   readOnly: boolean; tailError: boolean; interrupted: boolean; continuationPending: boolean;
   error: boolean; credentialWait: boolean; streaming: boolean; running: boolean;
 }): boolean {
-  return !!state.latestFailedRun && !state.readOnly && !state.tailError && !state.interrupted
+  const run = state.latestFailedRun;
+  if (run?.finishedAt && toMillis(state.userSendAt) > run.finishedAt
+    && /^scheduled task auto-resume failed(?::|$)/.test(run.errorMsg ?? '')) return false;
+  return !!run && !state.readOnly && !state.tailError && !state.interrupted
     && !state.continuationPending && !state.error && !state.credentialWait && !state.streaming && !state.running;
 }
