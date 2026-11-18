@@ -1,11 +1,12 @@
 /**
  * Window-level controller for the "update all plugins" batch flow.
  *
- * The controller owns only batch progress and serial execution. Main validates
+ * The controller owns only batch progress and grouped review of verified permission changes. Main validates
  * every downloaded package against its market manifest before atomic placement.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
+import { UpdateAllConsent } from './updateAllConsent';
 import { i18n } from '@/i18n';
 import { toast } from '@/lib/toast';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
@@ -136,10 +137,12 @@ export function startUpdateAllBatch(marketUpdates: readonly PluginMarketItem[]):
   void runQueue(generation);
 }
 
-/** 串行执行，每个 install() 自己在 Main 中下载、校验并提交同一真实包。 */
+/** 逐项下载；Main 挂起等待确认的更新集中审阅，每项仍提交原事务。 */
 async function runQueue(generation: number): Promise<void> {
   if (state.running || !isGenerationCurrent(generation)) return;
   emit({ ...state, running: true });
+  const consent = new UpdateAllConsent();
+  const installs: Promise<void>[] = [];
   try {
     for (;;) {
       if (generation !== batchGeneration) return;
@@ -149,68 +152,77 @@ async function runQueue(generation: number): Promise<void> {
       }
       const next = state.rows?.find((row) => row.status === 'pending');
       if (!next) break;
-      patchRow(generation, next.pluginId, { status: 'installing' });
-      beginPluginInstallProgress(next.pluginId);
-      try {
-        const detail = await window.electronAPI.pluginMarket.detail(next.pluginId);
-        if (generation !== batchGeneration) return;
-        if (!batchOwnerCurrent()) {
-          voidStaleBatch();
-          return;
-        }
-        if (detail.installState === 'installed') {
-          patchRow(generation, next.pluginId, { status: 'done' });
-          continue;
-        }
-        if (detail.installState !== 'update-available') {
-          patchRow(generation, next.pluginId, { status: 'skipped' });
-          continue;
-        }
-        const installed = findInstalledGhostForMarketItem(
-          readInstalledGhostsSnapshot(),
-          detail,
-        );
-        if (!installed) {
-          patchRow(generation, next.pluginId, { status: 'skipped' });
-          continue;
-        }
-        patchRow(generation, next.pluginId, {
-          fromVersion: installed.manifest.version,
-          toVersion: detail.version,
-        });
-        await window.electronAPI.pluginMarket.install(next.pluginId, {
-          expectedReleaseId: detail.releaseId,
-          expectedManifest: detail.manifest,
-          expectedInstalledApproval: ghostInstallApprovalToken(installed.approval),
-          allowSourceReplacement: false,
-        });
-        if (generation !== batchGeneration) return;
-        if (!batchOwnerCurrent()) {
-          voidStaleBatch();
-          return;
-        }
-        patchRow(generation, next.pluginId, { status: 'done' });
-        succeedPluginInstallProgress(next.pluginId);
-      } catch (error) {
-        if (generation !== batchGeneration) return;
-        if (!batchOwnerCurrent()) {
-          voidStaleBatch();
-          return;
-        }
-        // 新版本权限变多时 Main 会逐个弹确认；用户取消只跳过这一个插件。
-        if (extractIpcError(error)?.code === 'MUTATION_CANCELLED') {
-          patchRow(generation, next.pluginId, { status: 'skipped' });
-          continue;
-        }
-        const errorText = i18n.t(pluginMarketErrorKey(error));
-        failPluginInstallProgress(next.pluginId, errorText);
-        patchRow(generation, next.pluginId, { status: 'failed', errorText });
-      } finally {
-        endPluginInstallProgress(next.pluginId);
-      }
+      const row = consent.track(token => installRow(generation, next, token));
+      installs.push(row.done);
+      await row.ready;
     }
   } finally {
+    await consent.finish(() => isGenerationCurrent(generation));
+    await Promise.all(installs);
     await settleBatchTail(generation);
+  }
+}
+
+async function installRow(generation: number, next: UpdateAllRow, batchRowId: string): Promise<void> {
+  patchRow(generation, next.pluginId, { status: 'installing' });
+  beginPluginInstallProgress(next.pluginId);
+  try {
+    const detail = await window.electronAPI.pluginMarket.detail(next.pluginId);
+    if (generation !== batchGeneration) return;
+    if (!batchOwnerCurrent()) {
+      voidStaleBatch();
+      return;
+    }
+    if (detail.installState === 'installed') {
+      patchRow(generation, next.pluginId, { status: 'done' });
+      return;
+    }
+    if (detail.installState !== 'update-available') {
+      patchRow(generation, next.pluginId, { status: 'skipped' });
+      return;
+    }
+    const installed = findInstalledGhostForMarketItem(
+      readInstalledGhostsSnapshot(),
+      detail,
+    );
+    if (!installed) {
+      patchRow(generation, next.pluginId, { status: 'skipped' });
+      return;
+    }
+    patchRow(generation, next.pluginId, {
+      fromVersion: installed.manifest.version,
+      toVersion: detail.version,
+    });
+    await window.electronAPI.pluginMarket.install(next.pluginId, {
+      expectedReleaseId: detail.releaseId,
+      expectedManifest: detail.manifest,
+      expectedInstalledApproval: ghostInstallApprovalToken(installed.approval),
+      allowSourceReplacement: false,
+      batchRowId,
+    });
+    if (generation !== batchGeneration) return;
+    if (!batchOwnerCurrent()) {
+      voidStaleBatch();
+      return;
+    }
+    patchRow(generation, next.pluginId, { status: 'done' });
+    succeedPluginInstallProgress(next.pluginId);
+  } catch (error) {
+    if (generation !== batchGeneration) return;
+    if (!batchOwnerCurrent()) {
+      voidStaleBatch();
+      return;
+    }
+    // 取消或未选择的插件按跳过结算。
+    if (extractIpcError(error)?.code === 'MUTATION_CANCELLED') {
+      patchRow(generation, next.pluginId, { status: 'skipped' });
+      return;
+    }
+    const errorText = i18n.t(pluginMarketErrorKey(error));
+    failPluginInstallProgress(next.pluginId, errorText);
+    patchRow(generation, next.pluginId, { status: 'failed', errorText });
+  } finally {
+    endPluginInstallProgress(next.pluginId);
   }
 }
 

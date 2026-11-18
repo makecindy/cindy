@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
+import { collectUpdateConsent } from '@/features/plugin/lib/updateAllConsent';
 import { permissionItemIcon } from '@/features/plugin/lib/permissionItemIcon';
 import { permissionItemDetail } from '../../shared/ghostPermissionDetail';
 import { cn } from '@/lib/utils';
@@ -165,6 +166,25 @@ export function GhostInstallConsentContent({ facts, capabilityOnly = false, repl
   );
 }
 
+function ConsentDetails({ request }: { request: GhostInstallConsentRequest }) {
+  const { t } = useTranslation();
+  const { facts } = request;
+  const capabilityOnly = request.purpose === 'task-capability' || request.purpose === 'ui-capability';
+  const replacement = request.purpose === 'share-replace' && facts.kind === 'update';
+  return (<>
+    {pluginSourceWarningKey(request.installationSource) && (facts.kind === 'install' ? facts.permissions : facts.added).some(item => item.key === 'ui:pages') &&
+      <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">{t(pluginSourceWarningKey(request.installationSource)!)}</p>}
+    {request.target && <div className="mb-3 space-y-2 text-13 leading-5 text-[var(--confirm-desc)]">
+      <p>{t('settings.ghosts.installConsent.targetIdentity', { name: request.target.namespace === 'local' ? t('settings.ghosts.installConsent.localTarget') : request.target.namespace || t('settings.ghosts.installConsent.personalTarget') })}</p>
+      {request.target.organizationIdentityUnavailable && <p>{t('settings.ghosts.installConsent.localOidcUnavailable')}</p>}
+      {request.target.sourceChanged && !replacement && <p>{t('settings.ghosts.installConsent.sourceChanged')}</p>}
+      {request.target.otherCopies > 0 && <p>{t('settings.ghosts.installConsent.otherCopies', { count: request.target.otherCopies })}</p>}
+    </div>}
+    <GhostInstallConsentContent facts={facts} capabilityOnly={capabilityOnly}
+      replacement={replacement} sourceChanged={request.target?.sourceChanged} />
+  </>);
+}
+
 function isConsentRequest(payload: unknown): payload is GhostInstallConsentRequest {
   if (!payload || typeof payload !== 'object') return false;
   const request = payload as Partial<GhostInstallConsentRequest>;
@@ -211,6 +231,36 @@ export function GhostInstallConsentHost() {
           try {
             // 账号已切换的旧请求不渲染任何插件事实，直接按取消回给 Main。
             if (ownerStamp !== undefined && !isDataOwnerPushStampCurrent(ownerStamp)) return;
+            const batch = collectUpdateConsent(request, abort.signal, async (requests, signal) => {
+              const selected = new Set<string>();
+              const accepted = await confirm({
+                title: t('settings.ghosts.updateAll.permissionChanged'),
+                description: t('settings.ghosts.updateAll.chooseUpdates'),
+                confirmText: t('settings.ghosts.installConsent.confirmUpdate'),
+                maxWidth: 560,
+                contentSelectable: true,
+                content: requests.map(item => (
+                  <section key={item.requestId} className="space-y-2 border-b border-[var(--border-default)] py-3">
+                    <label className="flex items-center gap-2 font-medium">
+                      <input type="checkbox" onChange={event => {
+                        if (event.target.checked) selected.add(item.requestId);
+                        else selected.delete(item.requestId);
+                      }} />
+                      {item.facts.name}
+                    </label>
+                    {item.facts.kind === 'update' && <p className="text-12">{t('settings.ghosts.installConsent.updateMeta', {
+                      from: item.facts.previousVersion, to: item.facts.version, source: ghostInstallConsentSourceLabel(t, item),
+                    })}</p>}
+                    <ConsentDetails request={item} />
+                  </section>
+                )),
+              }, signal);
+              return accepted ? selected : new Set<string>();
+            });
+            if (batch) {
+              confirmed = await batch;
+              return;
+            }
             const { facts } = request;
             const capabilityOnly = request.purpose === 'task-capability' || request.purpose === 'ui-capability';
             const replacement = request.purpose === 'share-replace' && facts.kind === 'update';
@@ -233,18 +283,7 @@ export function GhostInstallConsentHost() {
                         to: facts.version,
                         source,
                       }),
-                content: <>
-                  {pluginSourceWarningKey(request.installationSource) && (facts.kind === 'install' ? facts.permissions : facts.added).some(item => item.key === 'ui:pages') &&
-                    <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">{t(pluginSourceWarningKey(request.installationSource)!)}</p>}
-                  {request.target && <div className="mb-3 space-y-2 text-13 leading-5 text-[var(--confirm-desc)]">
-                    <p>{t('settings.ghosts.installConsent.targetIdentity', { name: request.target.namespace === 'local' ? t('settings.ghosts.installConsent.localTarget') : request.target.namespace || t('settings.ghosts.installConsent.personalTarget') })}</p>
-                    {request.target.organizationIdentityUnavailable && <p>{t('settings.ghosts.installConsent.localOidcUnavailable')}</p>}
-                    {request.target.sourceChanged && !replacement && <p>{t('settings.ghosts.installConsent.sourceChanged')}</p>}
-                    {request.target.otherCopies > 0 && <p>{t('settings.ghosts.installConsent.otherCopies', { count: request.target.otherCopies })}</p>}
-                  </div>}
-                  <GhostInstallConsentContent facts={facts} capabilityOnly={capabilityOnly}
-                    replacement={replacement} sourceChanged={request.target?.sourceChanged} />
-                </>,
+                content: <ConsentDetails request={request} />,
                 maxWidth: 460,
                 contentSelectable: true,
                 describeContent: true,

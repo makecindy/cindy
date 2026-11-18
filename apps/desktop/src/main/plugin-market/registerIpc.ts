@@ -262,6 +262,7 @@ export function registerPluginMarketIpc(): void {
               expectedReleaseId?: unknown;
               expectedInstalledApproval?: unknown;
               expectedManifest?: unknown;
+              batchRowId?: unknown;
               allowSourceReplacement?: unknown;
             })
           : null;
@@ -284,6 +285,9 @@ export function registerPluginMarketIpc(): void {
       if (typeof allowSourceReplacement !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'allowSourceReplacement must be a boolean');
       }
+      const batchRowId = typeof obj?.batchRowId === 'string' && expectedInstalledApproval && !allowSourceReplacement
+        ? obj.batchRowId : undefined;
+      const prompt = createWindowGhostInstallConsentPrompt(event.sender);
       const owner = getActiveAppSession();
       // Every push carries the owner that started this install; after an account or mode switch
       // the renderer drops it instead of drawing it on the new owner's plugin.
@@ -305,7 +309,7 @@ export function registerPluginMarketIpc(): void {
           // 首装与扩权更新的确认框投给发起安装的这个窗口。
           {
             consent: {
-              prompt: createWindowGhostInstallConsentPrompt(event.sender),
+              prompt: request => prompt(batchRowId ? { ...request, batchRowId } : request),
               initiator: 'user',
             },
             onProgress: (progress) => {

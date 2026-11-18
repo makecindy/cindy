@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { HOST_UI_POSITIONS, type GhostHostUi, type GhostHostUiSetting } from '@cindy/plugin-protocol';
 
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent';
 import { GhostInstallConsentContent, GhostInstallConsentHost } from '../GhostInstallConsentHost';
+import { UpdateAllConsent } from '../../features/plugin/lib/updateAllConsent';
 import { GhostConfirmDialogHost } from '../GhostConfirmDialogHost';
 import { ghostPermissionProjectionKey, ghostHostUiPermissionItems, type GhostManifest } from '../../../shared/ghost';
 
@@ -84,6 +85,33 @@ describe('GhostInstallConsentHost', () => {
   afterEach(() => {
     cleanup();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  it.each(['confirm', 'dismiss'] as const)('groups real update prompts and answers each request separately on %s', async action => {
+    render(<GhostInstallConsentHost />);
+    const batch = new UpdateAllConsent();
+    for (const name of ['One', 'Two']) {
+      const row = batch.track(async batchRowId => {
+        push?.({ requestId: name, batchRowId, initiator: 'user', origin: 'market',
+          facts: { kind: 'update', ghostId: name, name, version: '2', previousVersion: '1',
+            added: [HOST], removed: [], unchangedCount: 0, builtinOauthClientChanged: false } });
+      });
+      await row.ready;
+    }
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    mocks.confirm.mockImplementationOnce(async ({ content }) => {
+      render(<>{content}</>);
+      const first = screen.getByRole('checkbox', { name: 'One' }) as HTMLInputElement;
+      expect(first.checked).toBe(false);
+      fireEvent.click(first);
+      if (action === 'dismiss') dismiss?.({ requestId: 'Two' });
+      return true;
+    });
+    await batch.finish(() => true);
+    expect(mocks.confirm).toHaveBeenCalledOnce();
+    await waitFor(() => expect(resolveInstallConsent).toHaveBeenCalledTimes(2));
+    expect(resolveInstallConsent).toHaveBeenCalledWith('One', action === 'confirm');
+    expect(resolveInstallConsent).toHaveBeenCalledWith('Two', false);
   });
 
   // Node Host can retract a dialog when its controller disconnects or plugin

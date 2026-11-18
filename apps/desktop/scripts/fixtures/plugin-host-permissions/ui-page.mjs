@@ -7,8 +7,19 @@ export default {
   stubs: {
     'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ mode: "cloud", dataOwnerId: "fixture", dataOwnerGeneration: 1 }); export const useOptionalAuthUser = () => null; export const useOptionalAuthDeviceId = () => "fixture"; export const useOptionalDataOwnerGeneration = () => ({ dataOwnerId: "fixture", generation: 1 });',
   },
-  cases: { default: { about: 'Installation confirmation — synthetic plugin permissions' }, details: { about: 'Plugin permission details — synthetic plugin permissions' } },
+  cases: { batch: { about: 'Review two permission-expanding updates together' }, default: { about: 'Installation confirmation — synthetic plugin permissions' }, details: { about: 'Plugin permission details — synthetic plugin permissions' } },
   async check(page, ui) {
+    if (ui.case === 'batch') {
+      await ui.emit('hostConsent', { batch: true });
+      const dialog = page.getByRole('alertdialog');
+      const first = dialog.getByRole('checkbox', { name: 'Task Board' });
+      await first.waitFor();
+      assert.equal(await first.isChecked(), false);
+      await first.check();
+      assert.equal(await dialog.getByRole('checkbox', { name: 'Notes' }).isChecked(), false);
+      await ui.capture('batch-permissions');
+      return;
+    }
     if (ui.case === 'default') {
       await ui.emit('hostConsent', {});
     } else {

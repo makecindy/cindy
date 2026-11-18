@@ -141,6 +141,8 @@ export type PluginMarketLocalIconResult =
   | (PluginMarketLocalIconRequest & { status: 'missing' | 'retryable' });
 
 export interface PluginMarketInstallOptions {
+  /** Window-local routing for batch update consent; conveys no approval. */
+  batchRowId?: string;
   /** 用户点击时看到的目标 release；Main 会在下载前重新核对。 */
   expectedReleaseId: string;
   /** 自定义来源详情读取时的完整清单；Main 会在打包前重新核对。 */

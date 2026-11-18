@@ -154,6 +154,7 @@ describe('updateAllController', () => {
           expectedManifest: manifest(),
           expectedInstalledApproval: DEFAULT_APPROVAL_TOKEN,
           allowSourceReplacement: false,
+          batchRowId: expect.any(String),
         },
       ],
       [
@@ -163,6 +164,7 @@ describe('updateAllController', () => {
           expectedManifest: manifest({ id: 'ghost-b', version: '2.1.0' }),
           expectedInstalledApproval: DEFAULT_APPROVAL_TOKEN,
           allowSourceReplacement: false,
+          batchRowId: expect.any(String),
         },
       ],
     ]);
@@ -359,6 +361,7 @@ describe('updateAllController', () => {
         expectedManifest: manifest({ version: '9.1.0' }),
         expectedInstalledApproval: 'approved:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
         allowSourceReplacement: false,
+        batchRowId: expect.any(String),
       },
     ]);
   });
