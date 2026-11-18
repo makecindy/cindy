@@ -10826,6 +10826,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "未能读取同伴名册",
+    "rosterReload": "重读同伴名册",
     "avatarStatus": {
       "awaiting": "待君确认",
       "error": "须留意",

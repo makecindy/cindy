@@ -10951,6 +10951,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "Impossible de charger les amis",
+    "rosterReload": "Recharger les amis",
     "avatarStatus": {
       "awaiting": "Attend votre confirmation",
       "error": "Requiert votre attention",

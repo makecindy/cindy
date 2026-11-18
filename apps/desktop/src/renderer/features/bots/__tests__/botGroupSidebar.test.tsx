@@ -61,6 +61,8 @@ vi.mock('react-router-dom', async importOriginal => ({
 }));
 vi.mock('../botStore', () => ({
   useBotProfiles: () => mocks.profiles,
+  hasLoadedBotProfiles: () => true,
+  useBotProfilesLoadState: () => 'ready',
   useBotUnreadCounts: () => ({}),
   refreshBotProfiles: vi.fn(),
   setBotHidden: vi.fn(),
