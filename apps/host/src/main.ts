@@ -413,6 +413,7 @@ function startProfileCoexistence(dataDir: string, scan: () => Promise<number[]>)
       if (state.state === 'desktop-running') {
         if (!inputQueue.isHeldForDesktop()) hostLog.warn('a desktop opened this profile; new sends are held', { pids: state.desktops });
         inputQueue.holdForDesktop(message);
+        plugins?.pauseForDesktop(message);
         runtime.coexistence = { ...state };
         return;
       }
@@ -421,6 +422,12 @@ function startProfileCoexistence(dataDir: string, scan: () => Promise<number[]>)
       void inputQueue.releaseDesktopHold().then((released: boolean) => {
         if (released && coexistenceMonitor === monitor && monitor.state().state === 'clear' && !inputQueue.isHeldForDesktop()) {
           runtime.coexistence = { state: 'clear', desktops: [] };
+          const heldPlugins = plugins;
+          if (heldPlugins) void heldPlugins.resumeAfterDesktop().then(() => {
+            if (plugins === heldPlugins && !heldPlugins.pluginPauseFailure()) return pluginGateway?.refresh();
+          }).catch((error: unknown) => hostLog.warn('resuming plugins after profile hold failed', {
+            error: error instanceof Error ? error.message : String(error),
+          }));
           // A Pi receipt retry held while the desktop used the profile runs now (agent/usage-recording.ts).
           usageRecording.onProfileReleased();
           hostLog.info('the desktop left this profile; sends are accepted again');
@@ -886,6 +893,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     },
     onChanged: ghosts => {
       if (activeOwnerScopeKey() !== pluginOwner || isAppSessionBoundaryPending()) return;
+      if (inputQueue.isHeldForDesktop() || plugins?.pluginPauseFailure()) return;
       eventHub.publish({ type: 'plugin_push', channel: 'ghosts:changed', payload: { ghosts } });
       void plugins?.reconcile().then(() => pluginGateway?.refresh())
         .catch(error => console.warn('[host] plugin reconciliation failed:', error.message));
@@ -946,8 +954,9 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       } else eventHub.publish({ type: 'plugin_push', channel, payload });
     },
   });
+  if (inputQueue.isHeldForDesktop()) plugins.pauseForDesktop(profileInUseMessage());
 
-  if (pluginManager.hasPendingMutationRecovery()) await pluginManager.retryInterruptedMutationsAfterDbReady();
+  if (!plugins.pluginPauseFailure() && pluginManager.hasPendingMutationRecovery()) await pluginManager.retryInterruptedMutationsAfterDbReady();
 
   pluginGateway = createHostPluginGateway({ runtime: plugins, profileDir: dataDir, ownerId,
     version: layout.version, credentials, fileConfirmation,

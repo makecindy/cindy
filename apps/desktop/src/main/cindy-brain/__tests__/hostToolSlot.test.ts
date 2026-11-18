@@ -276,6 +276,7 @@ describe('plugin Host tool entry', () => {
       GhostRuntime, sandbox: { adapter: deps.electronSandboxAdapter }, log: deps.log,
       network: { disposeGhost: noop }, fsSlot: { disposePlugin: noop },
       options: { publish: noop, onPluginStopped: disposePluginHostTools }, dispatcher: { onRuntimeState: noop },
+      profileHoldMessage: () => null, desktopPause: null, closed: false, publish: noop,
     }).runtime;
     const ghost = fixture().ghost;
     try {

@@ -115,8 +115,8 @@ export function createHostPluginGateway(options: GatewayOptions) {
   };
   registry.setPluginPageToolRunner(async (grant, args, signal) => {
     const assertCurrent = async () => {
-      signal.throwIfAborted(); runtime.assertCurrent(); await grant.assertCurrent();
-      runtime.assertCurrent(); signal.throwIfAborted();
+      signal.throwIfAborted(); runtime.assertPluginAvailable(); await grant.assertCurrent();
+      runtime.assertPluginAvailable(); signal.throwIfAborted();
     };
     await assertCurrent();
     const session = grant.sessionId === null ? undefined : await options.restoreSession(grant.sessionId, assertCurrent);
@@ -137,7 +137,11 @@ export function createHostPluginGateway(options: GatewayOptions) {
     isEnabled: runtime.current,
     toClaudeSdkConfig: context => {
       runtime.assertCurrent();
-      return { type: 'sdk', name: 'cindy', instance: createCindyGhostsMcpServer(gateway.getCindyGhostsMcpDeps(context, hostDeps)) };
+      const deps = gateway.getCindyGhostsMcpDeps(context, hostDeps);
+      return { type: 'sdk', name: 'cindy', instance: createCindyGhostsMcpServer({
+        ...deps,
+        callGhostTool: async input => runtime.pluginPauseFailure() ?? deps.callGhostTool(input),
+      }) };
     },
   };
   return {

@@ -225,6 +225,7 @@ test('while a desktop uses the profile, plugin OAuth renews and writes nothing',
 // restored, while task-bound calls must retain their original source context.
 test('page tools accept a null task without changing task-bound context', async () => {
   let runPageTool;
+  let held = false;
   const contexts = [], restored = [];
   const session = { id: 'task', instanceId: 'instance', agentKind: 'codex', workDir: '/workspace' };
   const boundaries = {
@@ -251,7 +252,14 @@ test('page tools accept a null task without changing task-bound context', async 
   new Function('require', 'module', 'exports', built.outputFiles[0].text)(
     name => name.startsWith('node:') ? localRequire(name) : boundaries, gatewayModule, gatewayModule.exports);
   gatewayModule.exports.createHostPluginGateway({
-    runtime: { current: () => true, assertCurrent() {}, authorization: { i18n: {} } },
+    runtime: {
+      current: () => true,
+      assertCurrent() {},
+      assertPluginAvailable() {
+        if (held) throw Object.assign(new Error('profile held'), { code: 'PRECONDITION_FAILED' });
+      },
+      authorization: { i18n: {} },
+    },
     profileDir: '/unused', ownerId: 'owner', version: 'test', credentials: {}, cards: {},
     restoreSession: async id => { assert.equal(id, session.id); restored.push(id); return session; },
   });
@@ -263,6 +271,11 @@ test('page tools accept a null task without changing task-bound context', async 
   assert.deepEqual(restored, [session.id]);
   assert.deepEqual(contexts, [undefined, { sessionId: session.id, sessionInstanceId: session.instanceId,
     agentKind: session.agentKind, workingDir: session.workDir }]);
+  held = true;
+  await assert.rejects(runPageTool({ sessionId: session.id, instance: 'plugin', tool: 'read', assertCurrent: async () => {} },
+    {}, new AbortController().signal), { code: 'PRECONDITION_FAILED' });
+  assert.deepEqual(restored, [session.id], 'held page tools must stop before task restore');
+  assert.equal(contexts.length, 2);
 });
 
 function tempProfile(t) {
