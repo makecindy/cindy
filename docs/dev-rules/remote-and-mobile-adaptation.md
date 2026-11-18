@@ -473,7 +473,7 @@ Device Link 上有活着的链路时照旧走 Device Link，那上面已确认�
   失败加倍到 30 秒，连接活过 30 秒才重新从 1 秒算；换网时每条中转连接只 ping 一次，15 秒（和 Device Link 的换网探测同一预算）没回才换，探测期间照常收发；
   不动 Device Link 连接；③ `packages/agent-net/src/__tests__/portableSocket.test.ts`「dials a device of the account again when its connection drops」、
   `workerSocket.test.ts`「replaces a relay connection that does not answer right after a network change」。
-回归：`packages/device-link/src/__tests__/routedClient.test.ts`「reports a device online when either connection does」（含两条连接先后掉线），
+回归：`packages/device-link/src/__tests__/routedClient.test.ts`「marks a legacy-only phone offline when its connection drops」（兼容连接掉线时，已由该连接报告在线的设备会显示离线，主连接的设备正常），
 `apps/desktop/src/main/device-link/__tests__/notifyFallback.test.ts`，`agentNetSessionLinks.test.ts`「reports a new stream per session and keeps
 the session generation for its offline event」与「hands the control direction back to Device Link once a re-open lands there」，
 `packages/device-link/src/__tests__/client.test.ts`「Agent-Net 下层可靠：等入站链路确认时对端仍在送数据就再等，安静后复位这个对端」。

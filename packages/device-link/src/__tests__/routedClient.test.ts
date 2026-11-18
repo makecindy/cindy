@@ -255,7 +255,7 @@ describe('RoutedDeviceLinkClient', () => {
   });
   // 2026-11-17 audit: presence arriving on the compatibility socket never reached the host, so phones without the newer
   // transport and older Desktops no longer updated online/allow-control live while it was on.
-  it('reports a device online when either connection does, and only the main connection while the compatibility one is off', async () => {
+  it('marks a legacy-only phone offline when its connection drops and leaves primary presence alone', async () => {
     const sockets: FakeWs[] = [];
     const options = (url: string): DeviceLinkClientOptions => ({
       getWsUrl: () => url, getToken: async () => 'unit-test-token',
@@ -277,20 +277,11 @@ describe('RoutedDeviceLinkClient', () => {
         remoteControlEnabled: true } });
     // A phone only the compatibility socket knows.
     presence(legacy, 'phone', true);
-    // A Desktop with the newer transport off: offline on the main connection, online on the compatibility one, both ways round.
-    presence(primary, 'desktop', false); presence(legacy, 'desktop', true); presence(primary, 'desktop', false);
-    // A Desktop on both: the main connection decides; the compatibility socket's own view changes nothing.
-    presence(primary, 'both', true, true); presence(legacy, 'both', false); presence(primary, 'both', true, false);
-    presence(legacy, 'phone', false);
-    expect(seen).toEqual(['phone:true:false', 'desktop:false:false', 'desktop:true:false', 'both:true:true', 'both:true:false', 'phone:false:false']);
-    // 2026-11-17 review: a connection that drops no longer speaks for its devices. The main connection drops: 'both' is shown as
-    // the compatibility socket last saw it, whose later updates now pass instead of hiding behind the stale main-connection view.
-    // Then the compatibility socket drops: what only it showed online goes offline.
-    seen.length = 0;
-    primary.close(1006); await vi.advanceTimersByTimeAsync(1);
-    presence(legacy, 'both', true, true);
+    presence(primary, 'desktop', true, true);
+    presence(legacy, 'desktop', false);
+    expect(seen).toEqual(['phone:true:false', 'desktop:true:true']);
     legacy.close(1006); await vi.advanceTimersByTimeAsync(1);
-    expect(seen).toEqual(['both:false:false', 'both:true:true', 'desktop:false:false', 'both:false:false']);
+    expect(seen).toEqual(['phone:true:false', 'desktop:true:true', 'phone:false:false']);
     client.stop();
     // Compatibility connection not running (the newer transport off): exactly the main connection's presence.
     compatibility = false; sockets.length = 0; seen.length = 0;

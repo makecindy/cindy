@@ -6,9 +6,8 @@
  * 事件从两条连接汇总;官方线路下专用连接不启动,全部调用落回基类,行为不变。
  *
  * 已验证的 V2 分享按资源安装独立连接,优先于兼容线路,撤下后也不回落。
- * 各条连接的故障互不牵连:状态与连接问题只反映主连接;presence 在兼容连接运行时合并两条连接
- * (任一条报在线即在线,见 onPresenceChanged);host 要看承载某个 peer 的连接时用 `connectionFor` /
- * `crossAccountConnection`。
+ * 各条连接的故障互不牵连:状态与连接问题只反映主连接;同账号 presence 取承载该设备的连接。
+ * host 要看承载某个 peer 的连接时用 `connectionFor` / `crossAccountConnection`。
  */
 import {
   DeviceLinkClient,
@@ -345,9 +344,11 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     });
     connection.onStatusChange((status) => {
       if (status !== 'online') {
+        const lost = connection === this ? [] : [...cache.values()];
         cache.clear();
-        // host 在主连接断开时清空自己的在线视图;重连后承载连接上仍有效的快照要重新交一次。
+        // The host clears its online view when the primary disconnects. Replay any still-valid legacy snapshots on reconnect.
         if (connection === this) for (const subscriber of this.presenceSubscribers) subscriber.delivered.clear();
+        if (this.started) for (const snap of lost) this.routePresence(snap.deviceId, snap);
         return;
       }
       for (const peer of this.presencePeers()) this.routePresence(peer);
@@ -361,12 +362,14 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
   }
 
   /** 把承载该 peer 的连接上的最新快照交给 host;承载连接还没有快照时不猜测。 */
-  private routePresence(peer: string): void {
+  private routePresence(peer: string, lost?: PresenceSnapshot): void {
     const carrier = this.connectionFor(peer);
-    const snap = this.presenceByConnection.get(carrier)?.get(peer);
-    if (!snap) return;
+    const current = this.presenceByConnection.get(carrier)?.get(peer);
+    const offline = lost?.online ? { ...lost, online: false, busy: false, remoteControlEnabled: false } : undefined;
     for (const subscriber of this.presenceSubscribers) {
-      if (subscriber.delivered.get(peer) === snap) continue;
+      const delivered = subscriber.delivered.get(peer);
+      const snap = current ?? (delivered === lost ? offline : undefined);
+      if (!snap || delivered === snap) continue;
       subscriber.delivered.set(peer, snap);
       try {
         subscriber.cb(snap);
@@ -413,58 +416,6 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
       }
       cb(frame);
     }));
-  }
-
-  /**
-   * While the compatibility connection runs, presence of this account's devices comes from both connections: a device counts
-   * as online when either reports it so. Older peers and phones without the newer transport appear only there, and a device
-   * whose newer transport is off or still starting is online there first. Each update from the connection that decides is
-   * passed on (control and busy changes still arrive); an update from the other one only when it changes which decides.
-   * Without the compatibility connection every update is the main connection's, passed on as before.
-   *
-   * When a connection leaves online, what it said no longer counts (2026-11-17 review: a stale "online" from a dropped
-   * connection kept deciding and hid every later update from the other one). Devices it decided are shown from the other
-   * connection's last word; a device only the compatibility connection knew is shown offline, since nothing else would say
-   * so. A device only the main connection knew gets nothing, as before: the main connection's own status covers it.
-   * Stopping the client emits nothing.
-   */
-  override onPresenceChanged(cb: (snap: PresenceSnapshot) => void): () => void {
-    type Entry = { primary?: PresenceSnapshot; legacy?: PresenceSnapshot; shown?: 'primary' | 'legacy' };
-    const seen = new Map<string, Entry>();
-    const decide = (entry: Entry) => (entry.primary?.online !== true && this.legacyRunning && entry.legacy?.online === true ? 'legacy'
-      : entry.primary ? 'primary' : 'legacy');
-    const update = (source: 'primary' | 'legacy', snap: PresenceSnapshot) => {
-      if (isScopedPeer(snap.deviceId)) { if (source === 'primary') cb(snap); return; }
-      const entry = seen.get(snap.deviceId) ?? {};
-      entry[source] = snap;
-      seen.set(snap.deviceId, entry);
-      const decides = decide(entry);
-      if (decides !== source && entry.shown === decides) return;
-      entry.shown = decides;
-      cb(decides === 'primary' ? entry.primary! : entry.legacy!);
-    };
-    const forget = (source: 'primary' | 'legacy') => {
-      for (const [deviceId, entry] of [...seen]) {
-        const lost = entry[source];
-        if (!lost) continue;
-        delete entry[source];
-        const other = source === 'primary' ? entry.legacy : entry.primary;
-        if (!other) {
-          seen.delete(deviceId);
-          if (this.started && source === 'legacy' && entry.shown === 'legacy' && lost.online)
-            cb({ ...lost, online: false, busy: false, remoteControlEnabled: false });
-          continue;
-        }
-        if (entry.shown !== source) continue;
-        entry.shown = decide(entry);
-        if (this.started) cb(entry.shown === 'primary' ? entry.primary! : entry.legacy!);
-      }
-    };
-    const offPrimary = super.onPresenceChanged((snap) => update('primary', snap));
-    const offLegacy = this.legacy?.onPresenceChanged((snap) => { if (this.legacyRunning) update('legacy', snap); });
-    const offPrimaryStatus = super.onStatusChange((status) => { if (status !== 'online') forget('primary'); });
-    const offLegacyStatus = this.legacy?.onStatusChange((status) => { if (status !== 'online') forget('legacy'); });
-    return () => { offPrimary(); offLegacy?.(); offPrimaryStatus(); offLegacyStatus?.(); };
   }
 
   override onPeerStreamAccepted(cb: (peer: string, streamId: string) => void): () => void {
