@@ -70,6 +70,7 @@ interface CreateSessionOpts {
 
 interface FakeTool {
   handler: (args: Record<string, unknown>) => Promise<unknown>;
+  inputSchema?: Record<string, unknown>;
 }
 
 interface FakeMcpServer {
@@ -322,6 +323,25 @@ describe('orca_worker_bridge MCP helpers', () => {
     });
     const listed = /^Tools: ([^.]+)\./m.exec(prompt)?.[1]?.split(', ');
     expect(listed).toEqual(WORKER_BRIDGE_TOOLS);
+  });
+
+  // 可选的结构化回报等于没有：字段存在但没人填（#9818 上线后 184 次调用 0 次使用）。
+  // 约柬放在 schema 必填上，模型侧无法省略；处理器只对旧 schema 留一行日志兜底。
+  it('marks the structured report as required in the tool schema', () => {
+    const { maker } = makeProvider();
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => maker as unknown as Maker, logger: makeLogger(),
+      persistUserMessage: async () => undefined, wireSession: () => undefined,
+    });
+    const server = getServer(provider, { agentKind: 'codex', workingDir: '/worker' });
+
+    const schema = server._registeredTools.send_to_lead.inputSchema as {
+      safeParse: (value: unknown) => { success: boolean };
+    };
+    expect(schema.safeParse({ worker_id: 'worker-1', message: 'done' }).success).toBe(false);
+    expect(schema.safeParse({
+      worker_id: 'worker-1', message: 'done', report: { state: 'ready' },
+    }).success).toBe(true);
   });
 
   // Live cross-device probe: an authenticated Worker with no local role could see
@@ -601,6 +621,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       ...base,
       finishReport,
       captureLocalWorkerReport,
+      provider: workerProvider,
       seedExistingLeadResult: async () => {
         await server._registeredTools.read_lead.handler({ worker_id: 'worker-1' });
         lead.emit({ type: 'done', data: { result: 'Existing lead result' } } as AgentEvent);
@@ -679,6 +700,56 @@ describe('orca_worker_bridge MCP helpers', () => {
       true,
       { delivered: true, report },
     );
+  });
+
+  // 桌面实际走的是宿主派发这条路径：回执漏掉 report，captureLocalWorkerReport 就会把它
+  // 当成旧自由文本回报，latestReport 与结论状态映射全部丢失（Greptile P1）。
+  // 生产入口：send_to_lead handler + dispatchInterAgentMessage；unit tier。
+  it('keeps the structured report in the receipt on the host dispatch path', async () => {
+    const lead = makeSession('lead-1');
+    const dispatch = vi.fn(async (params: { onAccepted?: () => void | Promise<void> }) => {
+      await params.onAccepted?.();
+      return { ok: true as const, mode: 'dispatched' as const, clientId: 'msg-legacy-1' };
+    });
+    const h = makeWorkerBridgeLeadHarness(lead, dispatch);
+    const report = { state: 'ready' as const, summary: '已修好登录超时' };
+
+    const json = parseToolJson(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '已修好登录超时',
+      report,
+    }));
+
+    expect(json).toMatchObject({ ok: true });
+    expect(h.finishReport).toHaveBeenCalledExactlyOnceWith(true, { delivered: true, report });
+  });
+
+  // 旧设备的 schema 里没有 report，模型无从填写；桥接端核实身份后按旧契约放行，
+  // 但只要没带那个标记，缺 report 仍然拒绝（Greptile P1）。
+  // 生产入口：provider.invokeTool（Host 侧桥接入口）；unit tier。
+  it('lets only the attested legacy remote path skip the required report', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const ctx = {
+      agentKind: 'claude-code' as const,
+      workingDir: '/repo',
+      mcpCallerAttested: true,
+      mcpCallerKind: 'root',
+      vendorOptions: {
+        orcaRole: 'worker' as const,
+        orcaWorkerId: 'worker-1',
+        orcaWorkerSessionId: 'worker-session-1',
+      },
+    };
+    const args = { worker_id: 'worker-1', message: '旧端回报' };
+
+    await expect(h.provider.invokeTool(ctx as never, 'send_to_lead', args)).rejects.toThrow(/report/);
+
+    const json = parseToolJson(
+      await h.provider.invokeTool(ctx as never, 'send_to_lead', args, { allowLegacyReport: true }),
+    );
+    expect(json).toMatchObject({ ok: true });
+    expect(h.finishReport).toHaveBeenCalledWith(true, { delivered: true });
   });
 
   it('refuses a blocked report without one concrete question', async () => {
@@ -802,7 +873,66 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(lead.sent).toHaveLength(1);
   });
 
-  it.each(['dispatched', 'queued', 'steered'] as const)('settles host-owned %s reports without waiting for lead completion', async mode => {    const lead = makeSession('lead-1');
+  // Unit regression: a completed Lead can have no runtime. Its remote bootstrap
+  // failing must not prevent the host from retaining the Worker's report.
+  it('hands a report to the host without starting the missing Lead runtime', async () => {
+    const dispatch = vi.fn<NonNullable<OrcaBridgeMcpDeps['dispatchInterAgentMessage']>>(async () => ({
+      ok: true, mode: 'queued', clientId: 'report-1',
+    }));
+    const h = makeWorkerBridgeLeadHarness(makeSession('lead-1'), dispatch);
+    delete h.activeSessions['lead-1'];
+    const start = vi.spyOn(h.maker, 'createSession').mockRejectedValue(new Error(
+      '[REMOTE_AGENT_UNAVAILABLE] [SHARED_TASK_RECOVERY_unknown] [SHARED_TASK_STAGE_allocation]',
+    ));
+    const result = await h.server._registeredTools.send_to_lead.handler({ worker_id: 'worker-1', message: 'Review complete' });
+    expect(parseToolJson(result)).toMatchObject({ ok: true, queued: true, lead_session_id: 'lead-1' });
+    expect(start).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ rawContent: 'Review complete', targetSessionId: 'lead-1' }));
+    expect(h.finishReport).toHaveBeenCalledExactlyOnceWith(true, {
+      delivered: false, queuedMessageId: 'report-1',
+    });
+  });
+
+  it.each([false, true])('captures the host-owned Lead reply before the first read, cold=%s', async cold => {
+    const lead = makeSession('lead-1');
+    const dispatch = vi.fn<NonNullable<OrcaBridgeMcpDeps['dispatchInterAgentMessage']>>(async params => {
+      h.activeSessions['lead-1'] = lead;
+      await params.onAccepted?.();
+      lead.emit({ type: 'text', data: { text: 'Lead reply', isFinal: true } } as AgentEvent);
+      lead.emit({ type: 'done', data: {} } as AgentEvent);
+      return { ok: true, mode: 'dispatched', clientId: 'report-client' };
+    });
+    const h = makeWorkerBridgeLeadHarness(lead, dispatch);
+    if (cold) delete h.activeSessions['lead-1'];
+    await h.server._registeredTools.send_to_lead.handler({ worker_id: 'worker-1', message: 'Review complete' });
+    expect(parseToolJson(await h.server._registeredTools.read_lead.handler({ worker_id: 'worker-1' })))
+      .toMatchObject({ status: 'done', result: 'Lead reply' });
+  });
+
+  it.each(['failed', 'thrown', 'queued', 'new-result'] as const)('rolls back only the cancelled host acceptance: %s', async mode => {
+    const lead = makeSession('lead-1');
+    let consume: (() => Promise<void>) | undefined;
+    const dispatch = vi.fn<NonNullable<OrcaBridgeMcpDeps['dispatchInterAgentMessage']>>(async params => {
+      consume = async () => {
+        await params.onAccepted?.();
+        if (mode === 'new-result') lead.emit({ type: 'done', data: { result: 'New result' } } as AgentEvent);
+        await params.onAcceptedRollback?.();
+      };
+      if (mode === 'queued') return { ok: true, mode: 'queued', clientId: 'report-client' };
+      await consume();
+      if (mode === 'thrown') throw new Error('cancelled');
+      return { ok: false };
+    });
+    const h = makeWorkerBridgeLeadHarness(lead, dispatch);
+    await h.seedExistingLeadResult();
+    await h.server._registeredTools.send_to_lead.handler({ worker_id: 'worker-1', message: 'Review complete' });
+    if (mode === 'queued') await consume?.();
+    expect(parseToolJson(await h.server._registeredTools.read_lead.handler({ worker_id: 'worker-1' })))
+      .toMatchObject({ status: 'done', result: mode === 'new-result' ? 'New result' : 'Existing lead result' });
+  });
+
+  it.each(['dispatched', 'queued', 'steered'] as const)('settles host-owned %s reports without waiting for lead completion', async mode => {
+    const lead = makeSession('lead-1');
     lead.turnRunning = true;
     let accepted: (() => void | Promise<void>) | undefined;
     const dispatch = vi.fn<NonNullable<OrcaBridgeMcpDeps['dispatchInterAgentMessage']>>(async params => {

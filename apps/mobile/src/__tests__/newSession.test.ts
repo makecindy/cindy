@@ -78,6 +78,44 @@ beforeAll(async () => {
   await i18n.changeLanguage('zh-CN');
 });
 
+// Unit regression: catalog refresh/submit used to replace a chosen account when
+// its offer disappeared. Default-selection tests do not protect an existing draft.
+describe('new task draft retains its selected provider', () => {
+  const model = { id: 'gpt-6-sol', name: 'GPT', contextWindow: 100_000, efforts: [], defaultEffort: null };
+  const openai: ProviderModelRow['provider'] = { id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'],
+    source: 'builtin', auth: { method: 'oauth' }, models: { codex: [model] },
+    routing: { codex: { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } },
+  };
+  const rows: ProviderModelRow[] = [{ provider: openai,
+    model: { ...model, displayName: 'GPT', contextWindow: 100_000 } }];
+  const fresh = { providers: [openai] } as DeviceProvidersPayload;
+  const draft = newSessionDraft({ agentKind: 'codex', model: model.id, providerId: 'xd' });
+  const guard = { rows, providers: fresh.providers, catalogKnown: true, genAt: 0 };
+
+  it('keeps the draft identity when only another account offers the same model', () => {
+    expect(reconcileNewSessionCatalogDraft(draft, rows, fresh)).toBe(draft);
+    expect(draft.providerId).toBe('xd');
+  });
+
+  it.each(['submit', 'after-auth'] as const)('%s refuses the unavailable selected account', entry => {
+    const run = () => entry === 'submit'
+      ? reconcileNewSessionSubmitDraft(draft, guard, () => false, key => key)
+      : revalidateNewSessionDraftAfterAuth(draft, fresh, () => false, key => key);
+    expect(run).toThrow('session.common.modelUnavailableReselect');
+    expect(draft.providerId).toBe('xd');
+  });
+
+  it('retains an explicit choice while the catalog is unknown', () => {
+    expect(reconcileNewSessionSubmitDraft(draft, { ...guard, catalogKnown: false }, () => false, key => key))
+      .toMatchObject({ model: model.id, providerId: 'xd' });
+  });
+
+  it('still resolves an intentionally default-source draft', () => {
+    expect(reconcileNewSessionSubmitDraft({ ...draft, providerId: null }, guard, () => false, key => key))
+      .toMatchObject({ model: model.id, providerId: 'openai' });
+  });
+});
+
 function modelRow(
   id: string,
   efforts: readonly string[] = [],
@@ -572,9 +610,9 @@ describe('isNewSessionRuntimePending', () => {
     const draft = newSessionDraft({ agentKind: 'codex', model: 'delisted-model', providerId: 'gone' });
     expect(() => reconcileNewSessionSubmitDraft(draft, {
       rows: [], providers: [], catalogKnown: true, genAt: 0,
-    }, () => false, key => key)).toThrow('delisted-model');
+    }, () => false, key => key)).toThrow('session.common.modelUnavailableReselect');
     expect(() => revalidateNewSessionDraftAfterAuth(draft, { providers: [] }, () => false, key => key))
-      .toThrow('delisted-model');
+      .toThrow('session.common.modelUnavailableReselect');
   });
 });
 

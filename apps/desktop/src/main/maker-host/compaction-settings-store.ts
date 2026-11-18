@@ -1,9 +1,10 @@
 /**
- * compaction-settings-store —— Claude Code 与 Pi 的自动上下文压缩阈值。
+ * compaction-settings-store —— 原生压缩设置，按 owner 隔离。
  *
  * 文件:
  *   <userData>/compaction-settings.json       { "claudeCodeAutoCompactPct": 90 }
  *   <userData>/pi-compaction-settings.json    { "piAutoCompactPct": 90 }
+ *   <userData>/codex-compaction-settings.json { "serverEnabled": false }
  *
  * 两个 agent 使用独立 override 文件，恢复其中一个默认值不会覆盖另一个设置；Codex
  * 不读这两份设置。
@@ -211,8 +212,35 @@ export const __testing = {
   resetStores(): void {
     stores.clear();
     piStores.clear();
+    codexStores.clear();
   },
 };
 
 /** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
 export const compactionPortableSettings = portableOverrideSettings(() => currentStore());
+/** null preserves native recovery; an explicit true also opts a saved local thread back in. */
+interface CodexCompactionSettings { serverEnabled: boolean | null }
+const codexStores = new Map<string, ReturnType<typeof createOverrideSettingsFile<CodexCompactionSettings>>>();
+function codexStore() {
+  const root = ownerScopedUserDataPath();
+  let store = codexStores.get(root);
+  if (!store) {
+    store = createOverrideSettingsFile<CodexCompactionSettings>({
+      filePath: () => path.join(root, 'codex-compaction-settings.json'),
+      defaults: { serverEnabled: null },
+      normalize: raw => {
+        const value = (raw as Partial<CodexCompactionSettings> | null)?.serverEnabled;
+        return { serverEnabled: typeof value === 'boolean' ? value : null };
+      },
+      log,
+      label: 'codex-compaction',
+    });
+    codexStores.set(root, store);
+  }
+  return store;
+}
+export function readCodexCompactionState() { return codexStore().readState(); }
+export function writeCodexServerCompaction(value: boolean | null): void {
+  if (value === null) codexStore().reset();
+  else codexStore().writePatch({ serverEnabled: value });
+}

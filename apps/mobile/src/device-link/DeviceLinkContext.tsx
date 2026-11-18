@@ -27,6 +27,9 @@ import {
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   FILE_BROWSER_EVENT_CHANNEL,
@@ -202,7 +205,7 @@ import {
 import type { InputProjection, PendingInteraction, RemoteMessage } from '@/session/types';
 import { prepareVisualMockDeviceLinkContext } from '@/debug/visualMock';
 import { meterDeviceLinkInvokes, recordDeviceLinkPush } from '@/debug/deviceLinkTraffic';
-import { decodeGzipBase64TextBounded } from '@/utils/gzipBase64';
+import { decodeDeflateRawBase64TextBounded, decodeGzipBase64TextBounded } from '@/utils/gzipBase64';
 import { gunzipBase64OffThread } from '@/utils/gunzipOffThread';
 import { createLowPriorityReadGate, isLowPriorityRead, type LowPriorityReadGate } from './lowPriorityReadGate';
 import { invokeMetricLabel, jankMetricsEnabled, recordInvokeSent, recordInvokeTransfer, recordPresenceUpdate, recordPushHandled } from '@/debug/jankMetrics';
@@ -268,7 +271,7 @@ export interface DeviceLinkContextValue {
     deviceId: string,
     channel: string,
     args?: unknown[],
-    opts?: { preSend?: () => void; background?: boolean },
+    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
   ): Promise<T>;
   // `owner` is a stable id for the mounted consumer (e.g. `session:<id>`, `device:<id>`),
   // so repeated subscribes from resync/retry are idempotent and a topic is only released
@@ -309,6 +312,13 @@ const CONTROLLER_CAPABILITIES = [
   // (见 remoteSessionStore 的 MAKER_EVENT_BATCH_CHANNEL 分支)。
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+  // 工具行只从 messages:created 建;tool_result 事件不读正文,tool_use 事件只当边界
+  // (update_plan 例外,被控端照发 input)。见 remoteSessionStore.applyMakerEvent。
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
+  // 重连后 rebuildSessionSnapshot 重读打开中的任务页;被控端因此把重连前已读且折叠的任务
+  // 保持折叠到重读完成,离线积压不留历史详情。
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
 ];
 
 // 任意目标端真实应答的独立时序证据。它不等同于 presence verdict,也不参与 IPC/DB
@@ -1189,6 +1199,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         capabilities: [SHARED_TASK_CAPABILITY],
         deviceName: mobileDeviceName(),
         platform: Platform.OS,
+        app: 'cindy',
         appVersion: Constants.expoConfig?.version ?? '0.0.0',
         remoteControlEnabled: false,
         busy: false,
@@ -1198,7 +1209,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       logger: mobileDeviceLinkLogger,
       // 弱网减流量：声明可解 gzip，大结果压缩、内容未变的结果只回标记（被控端支持时）。
       // 大结果在后台 runtime 解压，不占 JS 线程；不可用时内部回落 pako。
-      transferCodec: { gunzipBase64: decodeGzipBase64TextBounded, gunzipBase64Async: gunzipBase64OffThread },
+      // inflateRawBase64 让建链时声明 push-deflate：推送按序在 JS 线程同步解开（单条推送有界）。
+      transferCodec: {
+        gunzipBase64: decodeGzipBase64TextBounded,
+        gunzipBase64Async: gunzipBase64OffThread,
+        inflateRawBase64: decodeDeflateRawBase64TextBounded,
+      },
       invokeMetrics: { enabled: jankMetricsEnabled, record: recordInvokeTransfer, label: invokeMetricLabel },
       // Mobile 具备按 deviceId 独立 openLink/订阅/快照恢复能力。可靠 ACK
       // 耗尽时只复位该 peer，共享 WSS 和其它远端继续工作；恢复仍只使用所有
@@ -1356,18 +1372,25 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       ...unresponsiveDevicesStore.getSnapshot(),
       ...catalogRefresh.deviceIds(),
     ])].filter((deviceId) => client.connectionFor(deviceId) === connection);
-    const invalidateConnectionPeers = (connection: DeviceLinkClient) => {
-      for (const deviceId of connectionPeerIds(connection)) {
-        if (connection.hasOfflineDirectPath(deviceId)) continue;
-        catalogRefresh.cancel(deviceId);
-        invalidatePeerLinkState(deviceId, openLinkInFlightRef.current,
-          remoteSubscribedTopicsRef.current, noteSessionLiveStreamsInterrupted);
-        peerRecoverySchedulerRef.current?.cancel(deviceId);
-      }
+    // This phone lost its route to a peer; that is not a verdict about the peer.
+    const invalidatePeerWithoutRoute = (deviceId: string) => {
+      catalogRefresh.cancel(deviceId);
+      invalidatePeerLinkState(deviceId, openLinkInFlightRef.current,
+        remoteSubscribedTopicsRef.current, noteSessionLiveStreamsInterrupted);
+      peerRecoverySchedulerRef.current?.cancel(deviceId);
+    };
+    const pauseRecoveryWithoutRoute = (connection: DeviceLinkClient) => {
       if (!client.hasOnlineConnection()
         && !connectionPeerIds(connection).some(deviceId => connection.hasOfflineDirectPath(deviceId))) {
         peerRecoverySchedulerRef.current?.pause();
       }
+    };
+    const invalidateConnectionPeers = (connection: DeviceLinkClient) => {
+      for (const deviceId of connectionPeerIds(connection)) {
+        if (connection.hasOfflineDirectPath(deviceId)) continue;
+        invalidatePeerWithoutRoute(deviceId);
+      }
+      pauseRecoveryWithoutRoute(connection);
     };
     // 走自建中转时共享任务看专用的官方连接;还没连上是「暂时不可用」,不是版本问题。
     const syncSharedTaskAvailable = () => {
@@ -1599,7 +1622,21 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const offPresence = client.onPresenceChanged((snap) => applyPresence(snap, 'ws'));
     const offPeerPath = client.onPeerPathChanged(({ deviceId, path }) => {
       setPresenceVersion(version => version + 1);
-      if (path !== 'relay' || (!retainedOfflinePeers.has(deviceId) && canUsePeerData(client, deviceId))) return;
+      if (path !== 'relay') return;
+      if (!retainedOfflinePeers.has(deviceId)) {
+        if (canUsePeerData(client, deviceId)) return;
+        // The relay never reported this computer offline: the phone's own relay
+        // connection is down and its direct path just ended too. Handle it like
+        // every other peer of a disconnected relay (requests fail as transient
+        // NOT_CONNECTED and resume on reconnect) instead of declaring the
+        // computer offline, which would fail requests as DEVICE_OFFLINE, show it
+        // as offline and schedule its cached tasks for cleanup.
+        invalidatePeerWithoutRoute(deviceId);
+        pauseRecoveryWithoutRoute(client.connectionFor(deviceId));
+        return;
+      }
+      // The relay's offline verdict was on hold while the direct path carried
+      // data; with the path gone that verdict applies.
       applyPresence({ deviceId, online: false, remoteControlEnabled: true,
         deviceName: '', platform: '', appVersion: '', busy: false, lastSeenAt: Date.now() }, 'synthetic');
       catalogRefresh.cancel(deviceId);
@@ -1812,7 +1849,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       isBackground: () => AppState.currentState === 'background',
       releaseTopics: releaseHeavyTopics,
       pendingTransitions: () => [...backgroundTransitions.current],
-      stop: () => client.stop(),
+      // 同一 client 的结果缓存跨后台保留；通知动作的 hold / reconnect 逻辑沿用主干。
+      stop: () => client.stop({ retainResultCache: true }),
       isHeld: () => backgroundHoldsRef.current > 0,
       // A tapped notification action is an explicit request too: it may leave the cooldown.
       connect: (reason) => client.connectAllNow(reason === 'hold' ? 'notification-action' : 'appstate-active', {
@@ -1838,7 +1876,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // 回前台立刻重连:绕开断线后遗留的指数退避计时器(可能 park 到 30s),
         // 让"打开 App → 打开会话"路径快速恢复在线,而不是干等退避。
         // overrideCongestionCooldown:用户显式回前台是拥塞冷却的合法豁免——
-        // 冷却默认只拦请求路径的 un-park(waitUntilOnline),不拦真人操作。
+        // waitUntilOnline 始终保留退避；这里由真人回前台的生命周期入口主动恢复。
         backgroundConnection.active();
         // A short background stay can preserve a socket whose route changed.
         // Replace a known old path; otherwise probe without the hint cooldown.
@@ -2024,7 +2062,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     deviceId: string,
     channel: string,
     args: unknown[] = [],
-    opts?: { preSend?: () => void; background?: boolean },
+    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
   ) => {
     const preSend = () => {
       if (presenceAvailableByDeviceRef.current.get(deviceId) === false) {
@@ -2057,7 +2095,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             return withAccessRevokedHandling(deviceId, async () => unwrapInvoke<T>(result, channel));
           }
         }
-        return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background });
+        return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background, noResultCache: opts?.noResultCache });
       },
     );
     const result = isLowPriorityRead(channel)
@@ -2547,8 +2585,8 @@ function canUsePeerData(client: DeviceLinkClient, deviceId: string): boolean {
   return connection.getStatus() === 'online' || connection.hasOfflineDirectPath(deviceId);
 }
 
-// 发请求前确保连接就绪:online 直接放行;否则促成立即重连并有界等待上线,
-// 超时抛 NOT_CONNECTED(transient)交由上层重试 —— 把"等整个退避 gap"压成"等一次重连"。
+// 发请求前确保连接就绪:online 直接放行;否则在自己的预算内共享既有退避与握手。
+// 超时抛 NOT_CONNECTED(transient)交由上层重试，不提前建连或重置共享连接的退避。
 function ensureOnlineForRequest(client: DeviceLinkClient, deviceId?: string): Promise<void> {
   const connection = deviceId ? client.connectionFor(deviceId) : client;
   if (connection.getStatus() === 'online' || (deviceId && connection.hasOfflineDirectPath(deviceId))) return Promise.resolve();
@@ -2614,6 +2652,7 @@ async function sendOpenLink(
 interface SendInvokeOptions {
   preSend?: () => void;
   background?: boolean;
+  noResultCache?: boolean;
   /** 同一轮明确 fan-out 共享;普通独立请求省略。 */
   responsivenessCohort?: number;
   /** 仅主动的代表性 half-open 探测允许领取 probe 席位。 */
@@ -2664,7 +2703,7 @@ async function sendInvoke<T>(
       // 长通道(media / 文件搜索 / schedule 就绪窗口等)按 invokeTimeouts 解析
       // 规则保留更长窗口,避免 mobile 收紧的默认 15s 误伤合法慢操作。
       resolveMobileInvokeTimeoutMs(channel, args),
-      { background: opts?.background, preSend: () => {
+      { background: opts?.background, noResultCache: opts?.noResultCache, preSend: () => {
         try {
           opts?.preSend?.();
         } catch (err) {

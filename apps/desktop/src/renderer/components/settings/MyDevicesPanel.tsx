@@ -41,7 +41,7 @@ import {
   inboundToggleState,
   resolveActiveConnectionIssue,
 } from './myDevicesModel';
-import { platformLabel, relativeTime } from './deviceLabels';
+import { appLabel, deviceLabel, platformLabel, relativeTime } from './deviceLabels';
 import appI18n from 'i18next';
 
 function hardwareLabel(deviceInfo: DeviceLinkDeviceInfo | null | undefined): string | null {
@@ -72,7 +72,7 @@ function deviceSubtitle(
 ): string {
   const parts = [
     platformLabel(device.platform),
-    device.appVersion?.trim() ? `Cindy ${device.appVersion.trim()}` : null,
+    device.appVersion?.trim() ? `${appLabel(device.app, t)} ${device.appVersion.trim()}` : null,
     hardwareLabel(device.deviceInfo),
     memoryLabel(device.deviceInfo?.memoryGb),
     opts.statusOverride ?? deviceStatusLabel(device, t),
@@ -437,6 +437,7 @@ export function MyDevicesPanel({
           </li>
         ) : (
           others.map((d) => {
+            const displayName = deviceLabel({ ...d, name: deviceDisplayName(d.deviceId, d.name, s.devices ?? []) }, t);
             const peerRevoked = revokedByPeer.has(d.deviceId);
             const control = controlToggleState(d);
             const inbound = inboundToggleState(s.enabled, revokedControllers.has(d.deviceId));
@@ -498,7 +499,7 @@ export function MyDevicesPanel({
                       </div>
                     ) : (
                       <span className="truncate text-13 font-medium text-[var(--text-primary)]">
-                        {deviceDisplayName(d.deviceId, d.name, s.devices ?? [])}
+                        {displayName}
                       </span>
                     )}
                     <span className="break-words text-11 text-[var(--text-tertiary)]">
@@ -507,7 +508,7 @@ export function MyDevicesPanel({
                   </div>
                   {editingId !== d.deviceId && (
                     <div className="flex shrink-0 items-center gap-1">
-                      {canBeControlledPlatform(d.platform) && !peerRevoked && (
+                      {canBeControlledPlatform(d.platform, d.app) && !peerRevoked && (
                         <button data-settings-search-action="Open a remote desktop session for this device" type="button" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-full text-[var(--text-primary)] hover:bg-[var(--surface-chip)] disabled:opacity-40"
                           disabled={!d.online || !d.remoteControlEnabled || !d.controlEnabled}
                           title={t('remoteDesktop.title')} aria-label={t('remoteDesktop.title')}
@@ -542,7 +543,7 @@ export function MyDevicesPanel({
                 {/* 两个方向各一行。手机等「不可被控」的设备、以及对方已拒绝本机的设备,都不展示「我可以」行
                     (前者永远控不了;后者避免让用户看到一个控不了的选中态而纠结)。 */}
                 <div className="mt-3 grid grid-cols-[max-content_minmax(0,1fr)] items-start gap-x-4 gap-y-2 border-t border-[var(--border-default)] pt-3">
-                  {canBeControlledPlatform(d.platform) && !peerRevoked && (
+                  {canBeControlledPlatform(d.platform, d.app) && !peerRevoked && (
                     <AccessRow label={t('settings.remoteControl.myDevices.iCan')} reason={controlReason}>
                       <AccessPill
                         label={t('settings.remoteControl.myDevices.controlIt')}
@@ -585,7 +586,6 @@ export function MyDevicesPanel({
         onOpenChange={(open) => {
           if (!open && !deletePending.current) setDeleteTarget(null);
         }}
-        presentation="standard"
         title={t('settings.devices.deleteTitle', { name: deleteTarget?.name ?? '' })}
         description={t('settings.devices.deleteMessage')}
         confirmText={t('settings.devices.delete')}

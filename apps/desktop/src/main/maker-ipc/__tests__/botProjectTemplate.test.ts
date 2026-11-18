@@ -17,10 +17,19 @@ describe('applyTeammateTemplate', () => {
     const read = (relative: string) => fs.readFile(path.join(dir, relative), 'utf8');
     // An upgraded teammate already has its own rules: they stay, untracked.
     await fs.writeFile(path.join(dir, 'AGENTS.md'), 'my own rules\n');
+    await fs.writeFile(path.join(dir, 'AGENTS.override.md'), 'my override rules\n');
+    await fs.writeFile(path.join(dir, 'CLAUDE.md'), 'my Claude rules\n');
     await expect(applyTeammateTemplate(dir, 'Mimi')).resolves.toBe(true);
-    await expect(read('AGENTS.md')).resolves.toBe('my own rules\n');
+    const routed = await read('AGENTS.md');
+    expect(routed).toMatch(/^my own rules\n/);
+    expect(routed).toContain('<!-- project-memory -->');
+    expect(await read('AGENTS.override.md')).toMatch(/^my override rules\n/);
+    expect(await read('CLAUDE.md')).toMatch(/^my Claude rules\n/);
+    expect(await read('CLAUDE.md')).toContain('<!-- project-memory -->');
+    expect((await read('.cindy/memory/README.md')).length).toBeGreaterThan(0);
     await expect(read('.agents/skills/hand-off/SKILL.md')).resolves.toContain('name: hand-off');
     await expect(applyTeammateTemplate(dir, 'Mimi')).resolves.toBe(false);
+    await expect(read('AGENTS.md')).resolves.toBe(routed);
 
     // The owner reshapes the skill; a later template version updates nothing it changed.
     await fs.writeFile(path.join(dir, '.agents/skills/hand-off/SKILL.md'), 'reshaped\n');

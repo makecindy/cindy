@@ -7,7 +7,7 @@ import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
-import { botProcessItems, botTurnContinuations, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
+import { botProcessItems, botTurnContinuations, botUnreadBoundaryItemKey, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
@@ -140,6 +140,7 @@ import { basename, cn } from '@/lib/utils';
 import {
   readSessionScroll,
   saveSessionScroll,
+  updateRenderWindowFloor,
   type SessionScrollSnapshot,
 } from '@/lib/sessionScrollStore';
 import {
@@ -148,6 +149,7 @@ import {
   SHARE_SESSION_ATTR,
 } from '@/lib/shareConversationImage';
 import { ShareMessageCheckbox } from './ShareMessageCheckbox';
+import { CHAT_MESSAGE_LOCATE_TRANSITION_CLASS, CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS } from './chatChrome';
 import {
   isShareableMessage,
   isShareableToolMedia,
@@ -1114,6 +1116,20 @@ export function collectDeleteAnchorClientIds(items: readonly RenderItem[]): stri
     }
   }
   return ids;
+}
+
+/**
+ * 渲染窗口覆盖的最老原始消息 —— 窗口首 item 起第一个有源行的 item 的首个源行。
+ * 首 item 可能是无源行的横幅(fork_origin 等)，向后走到第一个有源行为止。
+ * 纯数据派生，不做 DOM 量测：store 的活动视图裁剪地板用它，自动跟随的
+ * 窗口推进同步也用它（滚动事件拿不到程序化 pinToBottom）。
+ */
+export function renderWindowFloorClientId(items: readonly RenderItem[]): string | undefined {
+  for (let index = 0; index < items.length; index += 1) {
+    const anchors = collectDeleteAnchorClientIds([items[index]]);
+    if (anchors.length > 0) return anchors[0];
+  }
+  return undefined;
 }
 
 function queryMessageElement(root: ParentNode, clientId: string): HTMLElement | null {
@@ -2766,12 +2782,14 @@ function ShareableToolMedia({
   items,
   sessionId,
   selectionActive,
+  replyColumnSpacer,
 }: {
   shareId: string;
   renderItemKey?: string;
   items: ToolMediaItem[];
   sessionId?: string;
   selectionActive: boolean;
+  replyColumnSpacer?: ReactNode;
 }) {
   const shareable = Boolean(sessionId) && isShareableToolMedia(items);
   return (
@@ -2783,7 +2801,11 @@ function ShareableToolMedia({
       className={cn('flex flex-col gap-2', shareable && 'relative')}
     >
       {shareable && selectionActive ? <ShareMessageCheckbox clientId={shareId} /> : null}
-      <ToolMediaList items={items} sessionId={sessionId} />
+      {replyColumnSpacer ? withAssistantAvatar(replyColumnSpacer, (
+        <div className="flex flex-col gap-2">
+          <ToolMediaList items={items} sessionId={sessionId} />
+        </div>
+      )) : <ToolMediaList items={items} sessionId={sessionId} />}
     </div>
   );
 }
@@ -2884,12 +2906,14 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   context,
   compact,
   companionAvatar,
+  startsUnread = false,
 }: {
   item: Extract<RenderItem, { type: 'work_group' }>;
   context: WorkGroupRenderContext;
   compact: boolean;
   /** 伙伴聊天：同一轮开头显示头像，后续行仅保留正文列缩进。 */
   companionAvatar?: ReactNode;
+  startsUnread?: boolean;
 }) {
   // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
   // 具体折叠 / 直接详情逻辑全部复用 WorkGroupBlock。
@@ -2956,6 +2980,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
       className="scroll-mt-20"
       data-message-client-ids={collectWorkGroupClientIds(item.children).join(' ')}
     >
+      {startsUnread ? <BotMessageTimelineHeader startsUnread /> : null}
       {companionAvatar ? withAssistantAvatar(companionAvatar, block) : block}
     </div>
   );
@@ -3508,6 +3533,23 @@ export function MessageStream({
     anchoredForwardItems,
   ]);
 
+  // Resolve the owner inside the stable render window, not the viewport-mounted
+  // subset. A cropped process falls back to its reply instead of losing NEW;
+  // scrolling within the same window must not move the boundary.
+  const botUnreadBoundaryKey = useMemo(
+    () => botUnreadBoundaryItemKey(visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys),
+    [visibleRenderItems, botUnreadBoundaryClientId, botContinuationKeys],
+  );
+
+  // 渲染窗口推进时同步裁剪地板 —— 新消息到达 / 窗口扩张都会改 visibleRenderItems。
+  // 自动跟随(pinToBottom)的程序化滚动不走滚动保存分支，只靠 saveSessionScroll
+  // 会让一直跟随的挂载面板没有地板快照，维护拍永远裁不动(Greptile P1)。
+  // 只 merge 地板字段，不碰阅读位置，上翻读者不受影响。
+  useEffect(() => {
+    if (!sessionId) return;
+    const floor = renderWindowFloorClientId(visibleRenderItems);
+    if (floor) updateRenderWindowFloor(sessionId, floor);
+  }, [sessionId, visibleRenderItems]);
   const visibleMetadataItems = visibleMetadataProjection(visibleRenderItems);
 
   // 镜像 ref：unmount cleanup / ResizeObserver / 落定回调里读最新值（闭包会 stale）。
@@ -4424,6 +4466,8 @@ export function MessageStream({
         }
         itemHeights = { width: items.getBoundingClientRect().width, byKey };
       }
+      // 渲染窗口覆盖地板:窗口首 item 覆盖的最老原始行(纯数据,无量测)。
+      const windowFloorClientId = renderWindowFloorClientId(visible);
       saveSessionScroll(sessionId, {
         windowAnchorKey: firstVisibleItemKeyRef.current,
         viewportTopKey: measured.viewportTopKey,
@@ -4438,6 +4482,7 @@ export function MessageStream({
         messageOffset: measured.messageOffset,
         itemHeights,
         isNearBottom: isNearBottomRef.current,
+        windowFloorClientId,
         anchoredForwardCount:
           firstVisibleItemKeyRef.current !== null ? anchoredForwardItemsRef.current : undefined,
       });
@@ -6595,14 +6640,16 @@ export function MessageStream({
                           data-render-item-key={item.key}
                           data-inline-plan-key={item.key}
                         >
-                          <InlinePlanCard
-                            todos={item.todos}
-                            animated={
-                              isSessionStreaming &&
-                              latestInlinePlanBelongsToActiveTurn &&
-                              item.key === latestInlinePlanKey
-                            }
-                          />
+                          {withAssistantAvatar(botReplyColumnSpacer, (
+                            <InlinePlanCard
+                              todos={item.todos}
+                              animated={
+                                isSessionStreaming &&
+                                latestInlinePlanBelongsToActiveTurn &&
+                                item.key === latestInlinePlanKey
+                              }
+                            />
+                          ))}
                         </div>
                       );
                     }
@@ -6659,10 +6706,10 @@ export function MessageStream({
                     }
 
                     if (item.type === 'agent_task') {
-                      return (
+                      const card = (
                         <AgentTaskCard
                           key={item.key}
-                          renderItemKey={item.key}
+                          renderItemKey={botReplyColumnSpacer ? undefined : item.key}
                           toolCall={item.toolCall}
                           update={item.update}
                           result={item.result}
@@ -6677,6 +6724,9 @@ export function MessageStream({
                           }
                         />
                       );
+                      return botReplyColumnSpacer
+                        ? withAssistantAvatar(botReplyColumnSpacer, card, item.key)
+                        : card;
                     }
 
                     if (item.type === 'work_group') {
@@ -6685,6 +6735,7 @@ export function MessageStream({
                           key={item.key}
                           item={item}
                           context={workGroupRenderContext}
+                          startsUnread={botUnreadBoundaryKey === item.key}
                           // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
                           // 组头按内容宽；最终答复后保留折叠过程，按需展开。
                           compact={false}
@@ -6753,6 +6804,7 @@ export function MessageStream({
                           items={item.items}
                           sessionId={sessionId}
                           selectionActive={shareSelectionActive}
+                          replyColumnSpacer={botReplyColumnSpacer}
                         />
                       );
                     }
@@ -6820,7 +6872,7 @@ export function MessageStream({
                     );
                     const highlightClass =
                       highlightMessageClientId === msg.clientId
-                        ? 'rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]'
+                        ? CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS
                         : undefined;
                     const shareAttributes = shareable
                       ? {
@@ -6834,13 +6886,13 @@ export function MessageStream({
                         msg.systemCardType === 'voice-call'
                           ? undefined
                           : botMessageTimeGroups.get(msg.clientId);
-                      const startsUnread = botUnreadBoundaryClientId === msg.clientId;
+                      const startsUnread = botUnreadBoundaryKey === item.key;
                       return (
                         <div
                           key={item.key}
                           data-render-item-key={item.key}
                           data-message-client-id={msg.clientId}
-                          className={cn('scroll-mt-20 rounded-xl transition-[background-color,box-shadow]', highlightClass)}
+                          className={cn('scroll-mt-20 rounded-xl', CHAT_MESSAGE_LOCATE_TRANSITION_CLASS, highlightClass)}
                         >
                           {startsUnread || groupTimestamp !== undefined ? (
                             <BotMessageTimelineHeader startsUnread={startsUnread} groupTimestamp={groupTimestamp} />
@@ -6849,7 +6901,9 @@ export function MessageStream({
                             {shareable && shareSelectionActive ? (
                               <ShareMessageCheckbox clientId={msg.clientId} />
                             ) : null}
-                            {messageNode}
+                            {msg.role === 'assistant' && msg.systemCardType === 'mcp-app'
+                              ? withAssistantAvatar(botReplyColumnSpacer, messageNode)
+                              : messageNode}
                           </div>
                         </div>
                       );
@@ -6862,7 +6916,7 @@ export function MessageStream({
                         data-message-client-id={msg.clientId}
                         {...shareAttributes}
                         className={cn(
-                          'scroll-mt-20 rounded-xl transition-[background-color,box-shadow]',
+                          'scroll-mt-20 rounded-xl', CHAT_MESSAGE_LOCATE_TRANSITION_CLASS,
                           shareable && 'relative',
                           highlightClass,
                         )}

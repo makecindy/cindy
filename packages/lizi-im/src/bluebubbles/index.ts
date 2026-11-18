@@ -567,7 +567,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         }
         // Both the first observation and the verified send time must follow this request.
         // Deferred retries and delayed historical delivery are never confirmation answers.
-        if (!stop && pending && receipts.receivedAfter(guid, pending.createdAt)
+        if (!stop && pending && !/^\s*\[?Q[0-9a-f]{8}\]?\s+/i.test(event.text) && receipts.receivedAfter(guid, pending.createdAt)
           && (this.eventSentAt.get(event) ?? 0) > pending.createdAt) {
           receipts.mark(guid, 'dispatching');
           if (pending.accept(event.text)) {

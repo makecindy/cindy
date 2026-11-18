@@ -104,6 +104,7 @@ function pipeline() {
     isAppSessionBoundaryPending: () => false,
     activeOwnerScopeKey: () => scope,
     getActiveAppSession: () => ({ dataOwnerId: owner }),
+    getMakerIfReady: () => null,
     runStableOwnerPostCommitTask: builtin,
     syncDefaultMarketPlugins: syncMarket,
     refreshForegroundMarketPlugins: foreground,

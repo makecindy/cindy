@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isCindyApp } from '@cindy/maker-shared/device-list';
 
 export const REMOTE_CONTROL_CONSENT_CHANNEL = 'device-link:remote-control-consent';
 const TTL = 45_000;
@@ -6,6 +7,8 @@ export type ConsentResult = 'enabled' | 'declined' | 'expired' | 'unavailable' |
 interface Deps {
   scope(): unknown;
   eligible(peer: string): boolean;
+  /** UX routing only: these dialogs are implemented by Cindy, not other Apps. */
+  app?(peer: string): string | undefined;
   enabled(): boolean;
   send(peer: string, frame: unknown): void;
   prompt(peer: string, purpose: string, signal: AbortSignal): Promise<boolean>;
@@ -34,7 +37,7 @@ export class RemoteControlConsent {
   constructor(private readonly deps: Deps) {}
 
   request(peer: string, purpose: string): Promise<ConsentResult> {
-    if (!this.deps.eligible(peer)) return Promise.resolve('unavailable');
+    if (!isCindyApp(this.deps.app?.(peer)) || !this.deps.eligible(peer)) return Promise.resolve('unavailable');
     if (!purpose.trim() || purpose.length > 500) return Promise.resolve('failed');
     if ([...this.outgoing.values()].some(p => p.peer === peer)) return Promise.resolve('busy');
     const id = randomUUID();
@@ -52,7 +55,7 @@ export class RemoteControlConsent {
   }
 
   async receive(peer: string, raw: unknown): Promise<void> {
-    if (!this.deps.eligible(peer) || !raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+    if (!isCindyApp(this.deps.app?.(peer)) || !this.deps.eligible(peer) || !raw || typeof raw !== 'object' || Array.isArray(raw)) return;
     const frame = raw as Record<string, unknown>;
     if (frame.version !== 1 || typeof frame.id !== 'string' || !/^[a-f0-9-]{36}$/.test(frame.id)) return;
     const id = frame.id;

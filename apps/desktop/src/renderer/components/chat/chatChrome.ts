@@ -16,6 +16,16 @@ export const CHAT_FOCUS_CLASS =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
 export const CHAT_COLOR_TRANSITION_CLASS =
   'transition-colors duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] motion-reduce:transition-none';
+/**
+ * Temporary locator after jumping to a message (search result, notification).
+ * A neutral ink tint marks the whole message; gold `search-match` stays for
+ * matched text only. The same-tint spread extends the fill 8px past the
+ * content edge without moving layout.
+ */
+export const CHAT_MESSAGE_LOCATE_TRANSITION_CLASS =
+  'transition-[background-color,box-shadow] duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] motion-reduce:transition-none';
+export const CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS =
+  'bg-[var(--surface-hover)] shadow-[0_0_0_8px_var(--surface-hover)]';
 export const CHAT_CHEVRON_TRANSITION_CLASS =
   'transition-transform duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] motion-reduce:transition-none';
 

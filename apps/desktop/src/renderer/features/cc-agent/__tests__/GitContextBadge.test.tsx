@@ -381,7 +381,7 @@ describe('GitContextBadge', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('点击PR、评论或检查区域固定浮窗，再点收起；只有浮窗内链接跳转', () => {
+  it('点击PR、评论或检查区域固定浮窗，固定后再点标识或点浮窗内链接打开PR', () => {
     const {
       triggers: [trigger],
       openExternal,
@@ -403,7 +403,9 @@ describe('GitContextBadge', () => {
       expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://github.com/octo/repo/pull/7');
       openExternal.mockClear();
       fireEvent.click(trigger);
+      expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://github.com/octo/repo/pull/7');
       expect(screen.queryByRole('dialog')).toBeNull();
+      openExternal.mockClear();
     }
   });
 
@@ -450,7 +452,7 @@ describe('GitContextBadge', () => {
     matches.mockRestore();
   });
 
-  it('触屏和笔点击打开浮窗，不触发悬停或直接跳转', () => {
+  it('触屏和笔首次点击只打开浮窗，再点标识打开PR', () => {
     const {
       triggers: [trigger],
       openExternal,
@@ -465,7 +467,9 @@ describe('GitContextBadge', () => {
       expect(screen.getByRole('dialog')).toBeTruthy();
       expect(openExternal).not.toHaveBeenCalled();
       fireEvent.click(trigger);
+      expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://github.com/octo/repo/pull/7');
       expect(screen.queryByRole('dialog')).toBeNull();
+      openExternal.mockClear();
       fireEvent.blur(trigger);
       pointer(trigger, 'out', type);
     }
