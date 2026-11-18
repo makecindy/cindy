@@ -16,7 +16,11 @@ Mobile 对所有预创建恢复记录（含未收到创建回包的 `reserved`�
 
 `maker:create-session` 的控制端等待预算为 2 分钟（Desktop 与 Mobile 共用协议契约表）。主机
 `agent.startSession` 在高负载下实测超过 40 秒（Codex 冷启动），原先 30 秒会让控制端先放弃，
-主机照常建完任务，留下一个首条消息没发出的空任务。旧控制端仍按 30 秒，旧主机按新预算多保留回包。
+主机照常建完任务，留下一个首条消息没发出的空任务。旧控制端仍按 30 秒等待；回包 outbox
+按主机自身版本的预算计算保留时长（预算 × 2，从回包入队时起算）：旧主机仍保留 60 秒，
+新主机按新预算保留 240 秒。控制端升级不会改变旧主机的保留时长。
+实现见 `apps/desktop/src/main/device-link/dispatch.ts` 的 `outboxEntryMaxAgeMs` /
+`remoteInvokeClientBudgetMs` 与 `packages/device-link/src/allowlist.ts` 的共享预算表。
 
 Desktop 控制端在本进程内记录「已发出创建但未得到确认」的任务 ID（只在内存，不进回收账本）。
 下次恢复时若该任务已在主机出现，且仍完全没被使用（状态 active、没有消息、没有发送记录、
