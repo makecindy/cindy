@@ -136,6 +136,26 @@ describe('send failure error primacy', () => {
     expect((scope as Error).cause).toBe(wrapped);
   });
 
+  // #10906 review P2:标记必须锚在**整条消息**上 —— 路径里带 token 的真实故障不能被当成中止。
+  // 最小失败输入:ENOENT 的路径段就叫 `UPLOAD_CANCELLED`,再套上传输失败包装层。
+  it('keeps a wrapped read failure primary when its path contains a cancellation token', async () => {
+    const scope = scopeError();
+    const missing = Object.assign(new Error("ENOENT: no such file or directory, open '/tmp/UPLOAD_CANCELLED/report.pdf'"), {
+      code: 'ENOENT', syscall: 'open', path: '/tmp/UPLOAD_CANCELLED/report.pdf',
+    });
+    const wrapped = Object.assign(
+      new Error('[DEVICE_LINK_MEDIA_TRANSFER_FAILED] ' + missing.message),
+      { code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', cause: missing },
+    );
+    const result = withSourceFileAccessRecovery({
+      selectFile: async () => null,
+      assertCurrent: () => { throw scope; },
+    }, async () => { throw wrapped; });
+    await expect(result).rejects.toBe(wrapped);
+    // 主错误仍是真实读取故障,不能被作用域的 PERMISSION_DENIED 顶替。
+    expect((wrapped as Error).cause).toBe(missing);
+  });
+
   // 反过来:信号没中止时,cause 上的中止不是本作用域拆坏的证据(可能是远端自己的中止),
   // 包装后的传输失败必须保持主错误,否则又重新顶替真实故障。
   it('keeps a wrapped abort primary when this scope was not aborted', async () => {

@@ -58,13 +58,26 @@ function attachDiagnosticCause(error: unknown, cause: unknown): void {
 
 /**
  * 传输链路明确抛出的中止标记(`mediaTransfer` / `filePeer` / `fileAccess` 抛的就是这两个
- * token;被 IpcError 包装成 `DEVICE_LINK_MEDIA_TRANSFER_FAILED` 后也原样带在文案里)。
+ * token,整条消息只有 token 本身)。
  *
- * 只认标记本身,**不认消息里的 "cancel" 子串**:附件路径自己就可能含这个词 ——
- * `/tmp/cancel/report.pdf` 读取失败时,ENOENT 文案带着整条路径,按子串判就会把真实的
- * 「文件不存在」误判成中止症状,又让它被权限错误顶替一次(#10906 review)。
+ * **只认整条消息就是标记**,不做子串匹配:附件路径自己就可能含这个词 ——
+ * `/tmp/UPLOAD_CANCELLED/report.pdf` 读取失败时,ENOENT 文案带着整条路径,按子串判就会把
+ * 真实的「文件不存在」误判成中止症状,又让它被权限错误顶替一次(#10906 review P2)。
+ * 包装层(`[DEVICE_LINK_MEDIA_TRANSFER_FAILED] <inner>`)先剥前缀再比,内层整条是标记才算。
  */
-const CANCELLED_MARKER = /\b(?:UPLOAD_CANCELLED|FILE_PEER_CANCELLED)\b/;
+const CANCELLED_SENTINELS = new Set(['UPLOAD_CANCELLED', 'FILE_PEER_CANCELLED']);
+
+/** 剥掉 IPC 包装层的 `[CODE] ` 前缀,拿到内层原文;没有前缀就原样返回。 */
+function unwrapIpcMessage(message: string): string {
+  const match = /^\[[A-Z0-9_]+\]\s+([\s\S]*)$/.exec(message);
+  return (match ? match[1] : message).trim();
+}
+
+/** 这条消息本身是不是「传输链路明确报告中止」——整条消息必须就是标记。 */
+function isCancellationSentinel(message: unknown): boolean {
+  if (typeof message !== 'string') return false;
+  return CANCELLED_SENTINELS.has(unwrapIpcMessage(message));
+}
 
 /**
  * 这个错误是不是「作用域作废掐断在途传输」的症状,而非失败根因。
@@ -84,10 +97,10 @@ function isScopeTeardownSymptom(error: unknown, signal?: AbortSignal): boolean {
   return chainHasAbortMarker(candidate.cause, 0);
 }
 
-/** 错误自身就是中止:标准 AbortError,或传输链路的显式中止标记。 */
+/** 错误自身就是中止:标准 AbortError,或传输链路的显式中止标记(整条消息即标记)。 */
 function isAbortMarker(error: { name?: unknown; code?: unknown; message?: unknown }): boolean {
   if (error.name === 'AbortError' || error.code === 'ABORT_ERR') return true;
-  return typeof error.message === 'string' && CANCELLED_MARKER.test(error.message);
+  return isCancellationSentinel(error.message);
 }
 
 /** cause 链上(有深度上限,防环)是否带着中止标记。 */
