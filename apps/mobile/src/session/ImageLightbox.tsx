@@ -1013,7 +1013,9 @@ export const ImageLightbox = memo(function ImageLightbox({
           >
             {/* 手机缩放靠捏合与双击,不放放大 / 缩小 / 适应按钮;原始尺寸在「更多」里。 */}
             {activeIsVideo ? (
-              <VideoDownloadButton key={activeImage?.key} source={activeUri} mimeType={activeMimeType}
+              <VideoDownloadButton key={activeImage?.key}
+                source={activeResolveState && activeResolveState.status !== 'ready' ? null : activeUri}
+                mimeType={activeMimeType}
                 render={({ busy, progress, disabled, download }) => (
                   <PreviewIconButton
                     icon={Download}
@@ -2131,21 +2133,20 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
     (resolveOpaqueSource || isDesktopLocalMediaUrl(media.url));
   const resolvedUnsupported = resolveState?.status === 'ready' && !resolveState.media.previewable;
   const playbackFailed = !!uri && webFailedUri === uri;
-  const leaseRefreshUsed = useRef(false);
-  // A rejected lease refresh preserves the old media in resolveMap, but its
-  // closed Range URL cannot serve as a usable preview while awaiting retry.
-  const leaseRefreshFailed = leaseRefreshUsed.current && resolveState?.status === 'error';
-  const failed = playbackFailed || leaseRefreshFailed || (!uri && (
-    resolveState?.status === 'error' || resolvedUnsupported || (!retryable && !media.previewable)
+  // Unlike an image preview, a video's previous Range URL may already be closed
+  // when refresh fails. Keep retry reachable even after paging away and back.
+  const failed = playbackFailed || resolveState?.status === 'error' || (!uri && (
+    resolvedUnsupported || (!retryable && !media.previewable)
   ));
   const protectLocalFile = resolveState?.media?.protectLocalFile;
+  const leaseRefreshUsed = useRef(false);
   const leaseRetry = useRef({ image, onRetry });
   leaseRetry.current = { image, onRetry };
   useEffect(() => {
     if (!active) { leaseRefreshUsed.current = false; return; }
-    if (!uri || failed || resolveState?.status !== 'ready') return;
-    // Paused players still need their Range URL. Keep the lease through native
-    // -> WebView fallback, but release it when this page stops consuming it.
+    if (!uri || resolveState?.status !== 'ready') return;
+    // The active page's footer still exports this source after playback fails.
+    // Keep its Range URL alive until paging, close, or source replacement.
     try {
       return protectLocalFile?.();
     } catch {
@@ -2156,7 +2157,7 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
         leaseRetry.current.onRetry(leaseRetry.current.image);
       } else setWebFailedUri(uri);
     }
-  }, [active, failed, protectLocalFile, resolveState?.status, uri]);
+  }, [active, protectLocalFile, resolveState?.status, uri]);
   const handleNativeError = useCallback(() => {
     if (uri) setNativeFailedUri(uri);
   }, [uri]);

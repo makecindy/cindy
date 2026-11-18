@@ -2240,7 +2240,9 @@ describe("chrome toggle, loading and video pages", () => {
     runtime.nodes.delete("message.imageLightboxVideoPlayer");
     act(() => web.onStatusChange({ type: "xdt-media-player/status", state: "error", error: "decode" }));
     expect(runtime.nodes.has("message.imageLightboxRetryButton")).toBe(true);
-    expect(consumers).toBe(0);
+    // Playback failure must not invalidate the footer's export source.
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(resolved.url);
+    expect(consumers).toBe(1);
     await act(async () => press("message.imageLightboxRetryButton"));
     expect(resolver).toHaveBeenLastCalledWith(
       expect.objectContaining({ url }),
@@ -2276,6 +2278,12 @@ describe("chrome toggle, loading and video pages", () => {
         payload: { ...video.payload, media: { kind: 'image', url: 'https://example.invalid/next.png', previewable: true } } }],
         initialUrl: url, onResolveRemoteMedia: async () => resolved }); });
       await act(async () => { await vi.advanceTimersByTimeAsync(308_000); });
+      expect(stream.isOpen()).toBe(true);
+      act(() => runtime.nodes.get('message.imageLightboxVideoPlayer').onError('decode'));
+      act(() => runtime.nodes.get('message.imageLightboxVideoWebPlayer').onStatusChange({ state: 'error' }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(308_000); });
+      expect(isMounted('message.imageLightboxRetryButton')).toBe(true);
+      expect(runtime.nodes.get('message.videoDownload').source).toBe(stream.url);
       expect(stream.isOpen()).toBe(true);
       // Keep the first page mounted but inactive, as a virtualized list can.
       act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 400 } } }));
@@ -2343,10 +2351,22 @@ describe("chrome toggle, loading and video pages", () => {
       expect(isMounted('message.imageLightboxVideoWebPlayer')).toBe(false);
       expect(resolver).toHaveBeenCalledTimes(2);
       expect(consumers).toBe(0);
+      if (refreshResult === 'rejected') {
+        act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 400 } } }));
+        act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 0 } } }));
+        await act(async () => { reject(new Error('REMOTE_OFFLINE')); });
+        expect(isMounted('message.imageLightboxRetryButton')).toBe(true);
+        expect(isMounted('message.imageLightboxVideoPlayer')).toBe(false);
+        expect(isMounted('message.imageLightboxVideoWebPlayer')).toBe(false);
+        expect(resolver).toHaveBeenCalledTimes(3);
+        expect(consumers).toBe(0);
+        expect(runtime.nodes.get('message.videoDownload').source).toBe(null);
+      }
       resolver.mockResolvedValue(fresh);
       await act(async () => press('message.imageLightboxRetryButton'));
     }
     expect(runtime.nodes.get('message.imageLightboxVideoPlayer').url).toBe(resolved.url);
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(resolved.url);
     expect(consumers).toBe(1);
     act(() => root.unmount());
     root = createRoot(document.createElement('div'));
