@@ -1,13 +1,15 @@
+import { usageHistorySettings } from './UsageHistorySection.settings-search';
+import { useSettingDefinition } from '../useSettingDefinition';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/contexts/AuthContext';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 
-type View = Awaited<ReturnType<Window['electronAPI']['companyTokenView']>>;
-function useCompanyTokenView() {
+export type CompanyTokenView = Awaited<ReturnType<Window['electronAPI']['companyTokenView']>>;
+export function useCompanyTokenView() {
   const { user, mode, isAuthenticated, dataOwnerGeneration } = useAuth();
-  const [view, setView] = useState<View>(null);
+  const [view, setView] = useState<CompanyTokenView>(null);
   const org = isAuthenticated && mode === 'cloud' && user?.membershipKind === 'org' && user.orgId;
   useEffect(() => {
     setView(null);
@@ -33,8 +35,8 @@ function useCompanyTokenView() {
   return org && view?.generation === dataOwnerGeneration ? view : null;
 }
 
-export function CompanyTokenSettings() {
-  const view = useCompanyTokenView();
+export function CompanyTokenSettings({ view }: { view: CompanyTokenView }) {
+  const setting = useSettingDefinition(usageHistorySettings.companyTokens);
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   if (!view) return null;
@@ -50,15 +52,16 @@ export function CompanyTokenSettings() {
     }
   };
   return (
-    <div className="mb-5 flex items-center justify-between gap-4 border-b border-[var(--border-default)] pb-4">
+    <div {...setting.anchorProps} className="mb-5 flex items-center justify-between gap-4 border-b border-[var(--border-default)] pb-4">
       <div>
-        <div className="text-14 font-medium">{t('companyTokens.title')}</div>
+        <div className="text-14 font-medium">{setting.title}</div>
         <div className="mt-1 text-12 text-[var(--text-secondary)]">
           {t(view.participating ? 'companyTokens.notice' : 'companyTokens.off')}
         </div>
       </div>
       <Switch
-        aria-label={t('companyTokens.title')}
+        {...setting.controlProps}
+        aria-label={setting.title}
         checked={view.participating}
         disabled={busy}
         onCheckedChange={() => void toggle()}

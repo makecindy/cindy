@@ -1,4 +1,5 @@
 {
+  "companyTokens": {"title": "Uso de tokens de la empresa", "notice": "Solo se comparten con tu empresa los nombres de los modelos y el número de tokens.", "syncFailed": "No se ha podido sincronizar la preferencia con tu empresa.", "off": "Desactivado. Este dispositivo ha dejado de enviar datos de uso."},
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Esta ubicación de ejecución de Pi no admite fragmentos de instrucciones del sistema.",

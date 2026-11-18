@@ -1,4 +1,5 @@
 {
+  "companyTokens": {"title": "Token-Nutzung im Unternehmen", "notice": "Nur Modellnamen und Token-Zahlen werden an dein Unternehmen übermittelt.", "syncFailed": "Die Einstellung konnte nicht mit deinem Unternehmen synchronisiert werden.", "off": "Aus. Dieses Gerät meldet keine Nutzung mehr."},
   "runtimePlugins": {
     "save": "Speichern",
     "promptUnsupported": "Dieser Pi-Ausführungsort unterstützt keine Systemanweisungsfragmente.",

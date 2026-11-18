@@ -3,6 +3,8 @@ import type { ImBotIdentity } from './imBotVisibility';
 
 export interface SettingsSearchContext extends ImBotIdentity {
   platform: string;
+  /** Undefined until the current company policy exposes the employee switch. */
+  companyTokenParticipation?: boolean;
   /** Stored language choice, including system; matches LanguageSection mounting. */
   locale?: string;
   supportsBetaUpdateChannel?: boolean;

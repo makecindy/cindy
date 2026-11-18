@@ -1,6 +1,12 @@
+import { useCompanyTokenView } from '../../../src/renderer/components/settings/usage/CompanyTokenReporting';
 import { UsageHistorySection } from '../../../src/renderer/components/settings/usage/UsageHistorySection';
 import { SettingsSidebarNav } from '../../../src/renderer/components/settings/SettingsSidebarNav';
 import { mountPage } from '../../ui-page/harness';
+
+function UsagePage() {
+  const view = useCompanyTokenView();
+  return <UsageHistorySection companyTokenView={view} />;
+}
 
 void mountPage({
   host: () => {
@@ -16,7 +22,7 @@ void mountPage({
         <SettingsSidebarNav activeTab="usage" tabIds={['general', 'appearance', 'providers', 'billing', 'usage',
           'personalization', 'shortcuts', 'remote-control', 'ghosts', 'help', 'about']} onSelectTab={() => {}} />
       </aside>
-      <main className="min-w-0 flex-1 overflow-y-auto p-7"><UsageHistorySection /></main>
+      <main className="min-w-0 flex-1 overflow-y-auto p-7"><UsagePage /></main>
     </div>
   ),
 });

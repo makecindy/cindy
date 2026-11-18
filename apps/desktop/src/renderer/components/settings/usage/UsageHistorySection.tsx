@@ -1,4 +1,4 @@
-import { CompanyTokenSettings } from './CompanyTokenReporting';
+import { CompanyTokenSettings, type CompanyTokenView } from './CompanyTokenReporting';
 import { usageHistorySettings } from './UsageHistorySection.settings-search';
 import { ErrorNotice } from '@/components/ui/error-notice';
 /**
@@ -89,7 +89,7 @@ function Card({
   );
 }
 
-export function UsageHistorySection(): React.JSX.Element {
+export function UsageHistorySection({ companyTokenView = null }: { companyTokenView?: CompanyTokenView }): React.JSX.Element {
   const { t, i18n } = useTranslation();
   const { user } = useAuth();
   // 设备选择与记住的设备目录都属于某个账号:切换账号后不得带着旧账号的设备名或 deviceId。
@@ -194,7 +194,7 @@ export function UsageHistorySection(): React.JSX.Element {
         />
       </div>
 
-      <CompanyTokenSettings />
+      <CompanyTokenSettings view={companyTokenView} />
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <span className="text-13 font-medium text-[var(--text-secondary)]">
