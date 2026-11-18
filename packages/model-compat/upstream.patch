@@ -2426,7 +2426,7 @@
 
  export interface FunctionCallRepairSchema {
    name: string;
-@@ -48,50 +47,101 @@
+@@ -48,50 +47,113 @@
  }
 
  /** Caller supplies currentTurnWireToolCatalogBody BEFORE provider schema lowering. */
@@ -2477,6 +2477,14 @@
 +      if (!isObject(entry) || !Array.isArray(entry.tools)) continue;
 +      if (entry.type === "tool_search_output") replayedGroups.push(entry.tools);
 +      else if (entry.type === "additional_tools") liveGroups.push(entry.tools);
++    }
++  }
++  // Namespace lowering keeps live top-level declarations over reserved-group duplicates.
++  // Use that same canonical catalog for schemas, without masking two top-level conflicts.
++  const canonicalBareNames = new Set<string>();
++  for (const group of liveGroups) {
++    for (const tool of group) {
++      if (isObject(tool) && tool.type !== "namespace" && typeof tool.name === "string") canonicalBareNames.add(tool.name);
 +    }
 +  }
 +  // The forwarded request owns both the wire names and the lowered selector. Rebuilding them from
@@ -2543,7 +2551,11 @@
        if (tool.type === "namespace") {
          if (typeof tool.name !== "string" || !tool.name || !Array.isArray(tool.tools)) continue;
 -        for (const child of tool.tools) register(child, namespaceOf(tool.name));
-+        for (const child of tool.tools) register(child, namespaceOf(tool.name), live);
++        for (const child of tool.tools) {
++          if (tool.name === "functions" && isObject(child) && typeof child.name === "string"
++            && canonicalBareNames.has(child.name)) continue;
++          register(child, namespaceOf(tool.name), live);
++        }
        } else if (tool.type === "function" && isObject(tool.function)) {
 -        register({ ...tool.function, type: "function" });
 -      } else register(tool);
@@ -2552,7 +2564,7 @@
      }
    }
    for (const [key, entry] of occupied) {
-@@ -108,13 +158,22 @@
+@@ -108,13 +170,22 @@
    return schemas;
  }
 
@@ -2577,7 +2589,7 @@
    if (!schema) return item;
    // An explicit namespace is an identity coordinate, not another spelling to guess at.
    if ("namespace" in item && (schema.namespace !== namespace || schema.name !== item.name)) return item;
-@@ -139,35 +198,40 @@
+@@ -139,35 +210,40 @@
  export function repairFunctionCalls(
    value: unknown,
    schemas: FunctionCallRepairSchemas,

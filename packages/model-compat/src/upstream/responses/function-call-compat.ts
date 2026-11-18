@@ -87,6 +87,14 @@ export function collectFunctionCallRepairSchemas(
       else if (entry.type === "additional_tools") liveGroups.push(entry.tools);
     }
   }
+  // Namespace lowering keeps live top-level declarations over reserved-group duplicates.
+  // Use that same canonical catalog for schemas, without masking two top-level conflicts.
+  const canonicalBareNames = new Set<string>();
+  for (const group of liveGroups) {
+    for (const tool of group) {
+      if (isObject(tool) && tool.type !== "namespace" && typeof tool.name === "string") canonicalBareNames.add(tool.name);
+    }
+  }
   // The forwarded request owns both the wire names and the lowered selector. Rebuilding them from
   // a combined catalog would let replayed history change either, which the request itself never
   // did; only a caller without a plan falls back to the local view.
@@ -138,7 +146,11 @@ export function collectFunctionCallRepairSchemas(
       if (!isObject(tool)) continue;
       if (tool.type === "namespace") {
         if (typeof tool.name !== "string" || !tool.name || !Array.isArray(tool.tools)) continue;
-        for (const child of tool.tools) register(child, namespaceOf(tool.name), live);
+        for (const child of tool.tools) {
+          if (tool.name === "functions" && isObject(child) && typeof child.name === "string"
+            && canonicalBareNames.has(child.name)) continue;
+          register(child, namespaceOf(tool.name), live);
+        }
       } else if (tool.type === "function" && isObject(tool.function)) {
         register({ ...tool.function, type: "function" }, undefined, live);
       } else register(tool, undefined, live);

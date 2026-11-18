@@ -131,6 +131,44 @@ describe('request-owned Responses compatibility', () => {
     }
   });
 
+  // Canonical bare schema must match the declaration actually forwarded, not a grouped duplicate.
+  // #11199 review: kind restoration tests had empty schemas and missed Codex's integer rejection.
+  it.each(['application/json', 'text/event-stream'])('repairs the canonical bare schema over grouped duplicates (%s)', async contentType => {
+    for (const duplicateKind of ['function', 'custom']) {
+      for (const lowerNamespaces of [false, true]) {
+        for (const reverse of [false, true]) {
+          const tools = [
+            { type: 'function', name: 'workspace__read', parameters: { type: 'object', properties: { line: { type: 'integer' } } } },
+            { type: 'namespace', name: 'functions', tools: [{ type: duplicateKind, name: 'workspace__read', parameters: { type: 'object', properties: { line: { type: 'number' } } } }] },
+            { type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type: 'number' } } } }] },
+          ];
+          if (reverse) tools.reverse();
+          const adapter = createCodexResponsesCompatibilityAdapter();
+          adapter.adaptRequest({ tools }, 10094, undefined, lowerNamespaces);
+          const bare = { type: 'function_call', namespace: 'functions', name: 'workspace__read', call_id: 'bare', arguments: '{"line":12.0}' };
+          const child = { type: 'function_call', ...(lowerNamespaces ? { name: 'workspace__read_2' } : { namespace: 'workspace', name: 'read' }), call_id: 'child', arguments: '{"line":12.0}' };
+          const output = { status: 'completed', output: [bare, child] };
+          const sse = contentType === 'text/event-stream';
+          const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
+          const transform = adapter.createResponseTransform(10094, { contentType, contentEncoding: '' });
+          expect(transform).not.toBeNull();
+          const text = await responseText(transform!, wire);
+          const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
+          expect((sse ? parsed.response : parsed).output).toMatchObject([
+            { type: 'function_call', name: 'workspace__read', arguments: '{"line":12}' },
+            { type: 'function_call', namespace: 'workspace', name: 'read', arguments: '{"line":12.0}' },
+          ]);
+          // Two canonical top-level schemas that disagree remain ambiguous; never pick one.
+          const conflict = createCodexResponsesCompatibilityAdapter();
+          conflict.adaptRequest({ tools: [...tools, { type: 'function', name: 'workspace__read', parameters: { type: 'object', properties: { line: { type: 'number' } } } }] }, 10095, undefined, lowerNamespaces);
+          const unchanged = await responseText(conflict.createResponseTransform(10095, { contentType, contentEncoding: '' })!, wire);
+          const conflictingResult = JSON.parse(sse ? unchanged.trim().slice(6) : unchanged);
+          expect((sse ? conflictingResult.response : conflictingResult).output[0].arguments).toBe('{"line":12.0}');
+        }
+      }
+    }
+  });
+
   it.each(['application/json', 'text/event-stream'])('restores default functions custom calls as bare tools (%s)', async contentType => {
     const adapter = createCodexResponsesCompatibilityAdapter();
     adapter.adaptRequest({ tools: [
