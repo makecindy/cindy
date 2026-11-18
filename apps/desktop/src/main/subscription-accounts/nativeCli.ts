@@ -138,12 +138,18 @@ export async function readNativeAccountUsage(provider: SubscriptionProvider, dir
 function codexCredits(raw: unknown) {
   const credits = (raw as { rateLimits?: { credits?: unknown } } | null)?.rateLimits?.credits;
   if (!credits || typeof credits !== 'object') return null;
-  const { hasCredits, unlimited, balance } = credits as Record<string, unknown>;
+  const { hasCredits, unlimited, balance, spendControlReached } = credits as Record<string, unknown>;
   return typeof hasCredits === 'boolean'
     ? {
         hasCredits,
         unlimited: unlimited === true,
-        balance: typeof balance === 'string' ? balance.slice(0, 64) : null,
+        balance:
+          typeof balance === 'string'
+            ? balance.slice(0, 64)
+            : typeof balance === 'number' && Number.isFinite(balance)
+              ? String(balance)
+              : null,
+        ...(spendControlReached === true ? { spendControlReached: true } : {}),
       }
     : null;
 }
