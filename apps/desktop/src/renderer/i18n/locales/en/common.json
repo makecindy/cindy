@@ -1341,10 +1341,11 @@
         "body": "This task has {{device}} open on another computer. Enable the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
         "action": "Turn on"
       },
-      "update": {
-        "title": "Update the “{{plugin}}” plugin",
-        "body": "This task has {{device}} open on another computer. Update the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
-        "action": "Update"
+      "unsupported": {
+        "title": "“{{plugin}}” does not support remote viewing",
+        "body": "The installed plugin cannot show {{device}} from another computer. Check for a compatible update, or use the device on the computer running this task.",
+        "action": "Check for compatible update",
+        "unavailable": "No compatible update is available from this plugin’s source. Use the device on the computer running this task."
       }
     },
     "lockOnExitHintPrivacy": "Shows the privacy screen when you exit, so AI can keep working; touching the computer locks it.",

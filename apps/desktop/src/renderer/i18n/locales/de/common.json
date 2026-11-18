@@ -1341,10 +1341,11 @@
         "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Aktiviere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
         "action": "Aktivieren"
       },
-      "update": {
-        "title": "Plugin „{{plugin}}“ aktualisieren",
-        "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Aktualisiere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
-        "action": "Aktualisieren"
+      "unsupported": {
+        "title": "„{{plugin}}“ unterstützt keine Fernansicht",
+        "body": "Das installierte Plugin kann {{device}} auf einem anderen Computer nicht anzeigen. Suche nach einem kompatiblen Update oder nutze das Gerät auf dem Computer, auf dem diese Sitzung läuft.",
+        "action": "Kompatibles Update suchen",
+        "unavailable": "Bei der Quelle dieses Plugins ist kein kompatibles Update verfügbar. Nutze das Gerät auf dem Computer, auf dem diese Sitzung läuft."
       }
     },
     "lockOnExitHintPrivacy": "Zeigt beim Beenden den Sichtschutz, damit die KI weiterarbeiten kann; eine Berührung am Computer sperrt ihn.",
