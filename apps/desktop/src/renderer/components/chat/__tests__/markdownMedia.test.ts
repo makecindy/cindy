@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildRemoteMediaUrl } from '../../../../shared/remoteMediaUrl';
-import { isManagedMarkdownVideoUrl, markdownMediaFilename } from '../markdownMedia';
+import {
+  isManagedMarkdownMediaUrl,
+  isManagedMarkdownVideoUrl,
+  markdownMediaFilename,
+} from '../markdownMedia';
 
 describe('managed Markdown media', () => {
   it.each([
@@ -38,5 +42,12 @@ describe('managed Markdown media', () => {
     expect(markdownMediaFilename(url)).toBe(
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mp4',
     );
+  });
+
+  it('recognizes host-managed images without trusting local paths', () => {
+    expect(isManagedMarkdownMediaUrl('cindy-media://blobs/image.png')).toBe(true);
+    expect(isManagedMarkdownMediaUrl('xdt-image://local/image.png')).toBe(true);
+    expect(isManagedMarkdownMediaUrl('/tmp/private.png')).toBe(false);
+    expect(isManagedMarkdownMediaUrl('https://example.com/image.png')).toBe(false);
   });
 });

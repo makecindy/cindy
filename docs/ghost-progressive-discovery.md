@@ -1,8 +1,12 @@
 # 插件渐进式发现与花名册注入（Ghost Progressive Discovery）
 
-> **适用**：修改插件发现链（花名册注入、`ghost_list` / `ghost_info` / `ghost_call`）、
-> 插件运行期可见性门禁、FORGE_GUIDE 作者契约前先读本文。插件基座红线、沙箱与
-> 权限规则的正本仍是 `docs/dev-rules/plugin-security-and-authoring.md`，本文不替代它。
+> **读取时机**：修改插件发现链（花名册注入、`ghost_list` / `ghost_info` / `ghost_call`）、
+> 插件运行期可见性门禁、FORGE_GUIDE 作者契约之前
+> **适用路径**：`apps/desktop/src/main/mcp-integrations/**/ghost*`、
+> `apps/desktop/src/main/cindy-brain/**/{ghostVisibility,ghostManual,forgeGuide}*`、
+> `apps/desktop/src/main/plugin-market/**/agentTools*`、`packages/cindy-tools/src/ghost/**`
+> **关系**：插件基座红线、沙箱与权限规则的正本仍是
+> `docs/dev-rules/plugin-security-and-authoring.md`，本文不替代它。
 
 ## 1. 目标
 

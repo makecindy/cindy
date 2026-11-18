@@ -359,3 +359,6 @@ Host 阻断已知短期令牌的原样输出，不替代插件保密责任。每
 领取、校验和保存授权结果。无真实 tool-call 时不传 callId/cancelWithCall，不调用
 bindAuthorization，不伪造 Host 授权。只将展示授权 URL 短暂传回自己的页面，轮询凭据、
 兑换结果和密钥留在 Node，不进入页面、KV 或模型。
+
+交互页面的宿主标题、来源提示、全屏按钮声明和页签固定尺寸见 [插件界面扩展](plugin-host-ui.md#标题全屏与可用尺寸)。
+页签与全屏的页面需自行滚动，不能依赖宿主自动增高；`hostFullscreenButton: false` 只隐藏宿主按钮，不撤销页面请求全屏的能力。

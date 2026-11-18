@@ -1,4 +1,5 @@
-import { SHARED_TASK_CAPABILITY, type DeviceLinkClient } from '@cindy/device-link';
+import { SHARED_TASK_CAPABILITY } from '@cindy/device-link';
+import type { PeerLinks } from '@cindy/agent-net';
 import type { DelegationRequest } from '@cindy/agent-net-protocol';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import {
@@ -36,7 +37,7 @@ let generation = 0;
 
 /** Binds verified authority to one relay owner, account, region and profile database. */
 export function startSharedTaskRuntime(options: {
-  client: DeviceLinkClient;
+  client: PeerLinks;
   revoke(sharedTaskId: string, memberId?: string): void;
   changed(sharedTaskId: string): void;
 }): void {

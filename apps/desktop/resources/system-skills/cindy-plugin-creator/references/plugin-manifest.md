@@ -60,6 +60,7 @@
   // 用户拖过 / 弹过后以用户的放置为准。可选 "multiple": true 允许同一视图同时开在多处。
   "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时仍必填,用于长期管理/替换/清除;调用前缺失时主机也会在统一 Setup 卡内联收单,见 §4.7)
   "showTaskPreferences": true,     // 可选:是否显示宿主「模型与任务」卡,缺省/true 显示,false 隐藏;见 §4.8
+  "imEntrance": true,              // 可选:IM 入口插件(需同时声明 agent.tasks 与 agent.targets)。只影响展示:「设置 → IM 机器人」列出本插件,并在没开官方机器人时也显示「项目与模型」;不新增权限。见 plugin-agent-tasks.md「IM 共用项目与模型」
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
 }
 ```
@@ -73,7 +74,7 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 
 `mcpApps.ui` 声明页面资源与工具可见性，完整写法见[§4.23](plugin-interactive-pages.md)。
 
-`agent.hostTools: string[]` 声明插件直接调用的宿主工具组：`history`、`control`、`handoff`、`settings`、`scheduler`、`terminal`、`files`、`storage`、`browser`、`computer`、`ssh`、`docs`、`discovery`、`usage`（只读本机订阅用量）。安装/更新确认整体授予该版本的全部已知声明能力，不另存分项批准；未知组保留但当前宿主不支持。UI 与 Node 均使用 `cindy.host.call`，详见[宿主工具调用](plugin-host-tools.md)。
+`agent.hostTools: string[]` 声明插件直接调用的宿主工具组：`history`、`control`、`handoff`、`settings`、`scheduler`、`terminal`、`files`、`storage`、`browser`、`computer`、`ssh`、`docs`、`discovery`、`usage`（只读本机订阅配额，以及本机/同账号已授权电脑的已记录用量、供应商组状态和可见成员信息）。安装/更新确认整体授予该版本的全部已知声明能力，不另存分项批准；未知组保留但当前宿主不支持。UI 与 Node 均使用 `cindy.host.call`，详见[宿主工具调用](plugin-host-tools.md)。
 
 可选 `mcpApps.host` 声明具名视图、原生位置、命令、补全与附件处理提供者、普通设置字段和宿主能力，见[插件界面扩展](plugin-host-ui.md)。
 已安装版本批准有效且插件已启用时，宿主支持的声明直接生效；未知扩展保留为数据，不另存 Host UI 分项批准。
@@ -256,6 +257,9 @@ Host 能力字段。v2 的 `slots` 只用于存量包兼容，新插件不得再
 向项目、已有任务或伙伴投递内容时另声明 `"agent": { "tasks": true, "targets": true }`（§4.11.3）。
 `targets` 是独立权限，安装/更新确认单列，需 Host 显式批准；旧 tasks 批准不授予目标访问。
 新包的 targets 必须是布尔值，targets:true 缺 tasks:true 时拒装。
+要读取并修改用户的**模型收藏**、读取**最近使用的模型**（例如在自己的页面里画一份与 Cindy
+一致的模型选择器），另写 `"agent": { "modelPreferences": true }`（§4.0.3c）。它不依赖 tasks，
+安装/更新确认与详情页单列一行权限，更新新增即「权限变多」；必须是布尔值，否则拒装。
 
 **node 工作进程详单**(声明 node 时必写,详见 §4.12):
 

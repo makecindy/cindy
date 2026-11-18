@@ -2,6 +2,15 @@
 
 > 权威审查规则。新增或修改任何直接、间接的服务器请求、订阅、推送、同步、轮询或重试时适用，
 > 包括 Desktop Renderer／Main、Mobile、共享 package 和插件宿主调用方，不只检查网络实现目录。
+>
+> **读取时机**：新增或修改直接／间接的服务器请求、订阅、推送、同步、轮询或重试（包括界面调用方）之前；
+> 下列路径只是通道实现所在，调用方在其它目录时同样适用
+> **适用路径**：`packages/{device-link,device-link-relay,heartbeat-client}/**`、
+> `apps/desktop/src/main/device-link/**`、`apps/mobile/src/device-link/**`、
+> `apps/desktop/src/main/maker-ipc/**/{chatServer,chatWorkPolling}*`、
+> `apps/desktop/src/main/companion-cloud/**`、
+> `apps/desktop/src/main/{heartbeatService,clientEndpointsService}.ts`、
+> `apps/desktop/src/main/serverApiClient*`、`apps/mobile/src/chat/chatServer*`、`config/endpoint*`
 
 重点判断**现有通道是否被安全、可靠、合理地使用**。接口用途正确、单次请求合法，
 不代表调用方式正确；一次小改动也可能通过重复触发、扇出或重试挤占共享连接。

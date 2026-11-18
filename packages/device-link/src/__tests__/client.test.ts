@@ -121,6 +121,7 @@ function makeHarness(opts?: {
   timing?: ConstructorParameters<typeof DeviceLinkClient>[0]['timing'];
   logger?: ConstructorParameters<typeof DeviceLinkClient>[0]['logger'];
   peerFailurePolicy?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerFailurePolicy'];
+  reliablePeerTransport?: ConstructorParameters<typeof DeviceLinkClient>[0]['reliablePeerTransport'];
   peerResetReadRetry?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerResetReadRetry'];
   invokeMetrics?: ConstructorParameters<typeof DeviceLinkClient>[0]['invokeMetrics'];
   frameAuth?: ConstructorParameters<typeof DeviceLinkClient>[0]['frameAuth'];
@@ -144,6 +145,7 @@ function makeHarness(opts?: {
       return ws;
     },
     peerFailurePolicy: opts?.peerFailurePolicy,
+    reliablePeerTransport: opts?.reliablePeerTransport,
     peerResetReadRetry: opts?.peerResetReadRetry,
     invokeMetrics: opts?.invokeMetrics,
     frameAuth: opts?.frameAuth,
@@ -2898,6 +2900,144 @@ describe('DeviceLinkClient', () => {
       await expect(healthy).resolves.toEqual({ ok: true, result: 'healthy' });
       expect(h.sockets).toHaveLength(1);
     } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：Desktop 控制端经 Agent-Net(`reliablePeerTransport`)的 openLink/invoke；共享 socket 不被拆，
+  //   仍在送数据的对端不复位、请求在原链路完成，安静的对端只复位它自己。
+  // - Bug／规则依据：docs/benchmarks/agent-net-session-2026-11-13(确认排在对端 1 MiB 结果后面 30 秒超时，拆掉整个
+  //   Agent-Net 节点后 3 分钟不恢复)；remote-and-mobile-adaptation.md「故障半径三问」。
+  // - 现有覆盖缺口：上一条只覆盖 Mobile isolate-peer；Desktop 默认策略在这里会整连接重连。
+  // - 最小失败输入：两个出站对端都不确认，其中一个在请求首发后仍有帧送达。
+  // - tier：unit，内存 socket，5 ms 重试节拍。
+  it('Agent-Net 下层可靠：仍在送数据的对端继续等确认，安静的对端只复位自己，不拆共享连接', async () => {
+    const h = makeHarness({
+      reliablePeerTransport: () => true,
+      timing: {
+        pingIntervalMs: 60_000,
+        requestTimeoutMs: 60_000,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    const resets: string[] = [];
+    h.client.onPeerTransportReset((change) => resets.push(change.deviceId));
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const establishOutbound = async (deviceId: string, remoteStreamId: string): Promise<void> => {
+      const opening = h.client.openLink(deviceId, { controllerName: 'Desktop', protocolVersion: 1, appVersion: '1' }, 1_000);
+      const openFrame = h.current().sent.filter((env) => env.kind === 'link-open' && env.dst === deviceId).at(-1)!;
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-accept',
+        id: openFrame.id,
+        src: deviceId,
+        payload: {
+          appVersion: 'desktop',
+          allowlistHash: 'hash',
+          capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+          transportStreamId: remoteStreamId,
+          transportBaseSeq: 1,
+        },
+      });
+      await opening;
+    };
+    await establishOutbound('peer-busy', 'busy-stream');
+    await establishOutbound('peer-silent', 'silent-stream');
+    const socket = h.current();
+    const socketCount = h.sockets.length;
+
+    const busyRequest = h.client.invoke('peer-busy', { channel: 'local-db:sessions:list', args: [10] }, 60_000);
+    void busyRequest.catch(() => {});
+    const silentRequest = h.client.invoke('peer-silent', { channel: 'local-db:sessions:list', args: [10] }, 60_000);
+    void silentRequest.catch(() => {});
+    const busyFrame = socket.sent.filter((env) => env.kind === 'invoke' && env.dst === 'peer-busy').at(-1)!;
+    const busyMeta = parseTransportPayload(busyFrame.payload)!.meta;
+
+    // peer-busy 一直在送它自己的流量(真实场景是 1 MiB 结果的分片)，确认排在后面。
+    const keepDelivering = setInterval(() => socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'peer-busy',
+      payload: { channel: 'maker:event', payload: { sessionId: 'unit' } },
+    }), 2);
+    try {
+      await vi.waitFor(() => expect(resets).toEqual(['peer-silent']));
+      await tick(40); // 再过几轮重试节拍，确认 peer-busy 不会随后被复位。
+    } finally {
+      clearInterval(keepDelivering);
+    }
+    expect(resets).toEqual(['peer-silent']);
+    expect(socket.terminated).toBe(false);
+    expect(socket.closed).toBeNull();
+    expect(h.sockets).toHaveLength(socketCount);
+    expect(h.client.isLinkReady('peer-busy')).toBe(true);
+    expect(h.client.isLinkReady('peer-silent')).toBe(false);
+
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'peer-busy',
+      payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: busyMeta.streamId, ackSeq: busyMeta.seq } },
+    });
+    socket.push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: busyFrame.id, src: 'peer-busy', payload: { ok: true, result: ['late'] } });
+    await expect(busyRequest).resolves.toMatchObject({ ok: true, result: ['late'] });
+    h.client.stop();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：被控端经 Agent-Net(`reliablePeerTransport`)接受一次新的入站 link-open，等控制端确认；对端仍在送数据时
+  //   继续等，安静下来后这个对端被复位(onPeerTransportReset)，不会一直停在等确认。
+  // - Bug／规则依据：2026-11-17 review——确认计时器到时、对端仍在送达就直接返回，没有别的计时器，之后发给它的结果只排队。
+  // - 现有覆盖缺口：上一条只覆盖重试计时器(它是周期的)；确认计时器只有一个。
+  // - 最小失败输入：已发出未确认的结果 + 新 link-open 不确认 + 对端先持续送帧再安静。
+  // - tier：unit，假计时器(含 performance)，无真实等待。
+  it('Agent-Net 下层可靠：等入站链路确认时对端仍在送数据就再等，安静后复位这个对端', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
+    const h = makeHarness({
+      reliablePeerTransport: () => true,
+      timing: { pingIntervalMs: 600_000, requestTimeoutMs: 600_000, transportRetryIntervalMs: 200, transportMaxRetryAttempts: 2,
+        handshakeTimeoutMs: 1_000 },
+    });
+    try {
+      const resets: string[] = [];
+      h.client.onPeerTransportReset((change) => resets.push(change.deviceId));
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const capabilities = [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT, DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+        DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE];
+      const openInbound = (id: string, streamId: string) => {
+        const off = h.client.onFrame((env) => {
+          if (env.kind === 'link-open' && env.id === id) h.client.sendLinkAccept('dev-b', id, { appVersion: '1', allowlistHash: 'hash' });
+        });
+        h.current().push({ v: PROTOCOL_VERSION, kind: 'link-open', id, src: 'dev-b', payload: {
+          controllerName: 'Remote', protocolVersion: 1, appVersion: '1', capabilities, transportStreamId: streamId, transportBaseSeq: 1 } });
+        off();
+        return h.current().sent.filter((env) => env.kind === 'link-accept' && env.id === id).at(-1)!.payload as LinkAcceptPayload;
+      };
+      const accepted = openInbound('first-open', 'first-stream');
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: accepted.transportStreamId!, ackSeq: (accepted.transportBaseSeq ?? 1) - 1, linkRequestId: 'first-open' } } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.client.isLinkReady('dev-b')).toBe(true);
+      h.client.sendInvokeResult('dev-b', 'unacked-result', { ok: true, result: 'pending' });
+      openInbound('second-open', 'second-stream');
+      // 对端一直在送(真实场景：确认排在它自己的大结果后面)，过了好几轮确认超时也不复位。
+      for (let second = 0; second < 30; second += 1) {
+        h.current().push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b', payload: { channel: 'maker:event', payload: { second } } });
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      expect(resets).toEqual([]);
+      // 安静下来：下一轮确认超时就复位这个对端。
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(resets).toEqual(['dev-b']);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
   });
 
   it.each([16, 300 * 1024])('≥2 控制端共享同一被控端:停止 ACK 的 %i 字节响应只复位该 peer,邻居零感知', async (bytes) => {
@@ -11944,6 +12084,44 @@ class MemoryDirectRuntime {
 }
 
 describe('automatic LAN connection through platform bridges', () => {
+  // PR #11084 / MagicLizi: urgent Mobile network changes were mistaken for
+  // peer timeout probes. Existing tests exercised relay probing and negotiator
+  // reset separately. Unit: reach 40s direct backoff through the real client,
+  // then observe runtime attempts 5s after each public recovery entry.
+  it.each(['network', 'urgent-network', 'peer-timeout'] as const)(
+    'keeps direct recovery scoped for %s', async hint => {
+      vi.useFakeTimers();
+      vi.spyOn(Math, 'random').mockReturnValue(0.999999);
+      const relay = new MemoryRelay();
+      const create = vi.fn(() => { throw new Error('unavailable RTC'); });
+      const timing = { pingIntervalMs: 1000, pongMissLimit: 1000 };
+      const controller = makeRelayClient(relay, 'a-controller', timing,
+        { directRuntime: { create }, isPeerBusy: () => true });
+      const host = makeRelayClient(relay, 'z-host', timing, { directRuntime: { create } });
+      const sockets = vi.spyOn(relay, 'makeWebSocket');
+      const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+      host.onFrame(env => {
+        if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      });
+      try {
+        controller.start(); host.start(); await pump();
+        const opening = controller.openLink('z-host', { controllerName: 'Controller', protocolVersion: 1, appVersion: '1' });
+        await pump(); await opening;
+        await vi.advanceTimersByTimeAsync(35_000);
+        expect(create).toHaveBeenCalledTimes(4);
+        const socketCount = sockets.mock.calls.length;
+        if (hint === 'peer-timeout') expect(controller.confirmRelayForPeerTimeout()).toBe(false);
+        else controller.notifyNetworkChanged({ urgent: hint === 'urgent-network' });
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(create).toHaveBeenCalledTimes(hint === 'peer-timeout' ? 4 : 5);
+        expect(sockets).toHaveBeenCalledTimes(socketCount);
+        expect(controller.isLinkReady('z-host')).toBe(true);
+      } finally {
+        controller.stop(); host.stop(); vi.restoreAllMocks(); vi.useRealTimers();
+      }
+    },
+  );
+
   // Unit, capacity recovery contract: a new peer keeps executing on relay while
   // full, then upgrades without reopening its control link or the relay socket.
   // The old tests cover failed RTC sessions, not a rejected capacity admission.

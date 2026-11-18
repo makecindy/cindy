@@ -1,6 +1,6 @@
 import { createServer as createHttpServer, STATUS_CODES, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
-import { createSocket, type RemoteInfo } from 'node:dgram';
+import { createSocket, type RemoteInfo, type Socket as UdpSocket } from 'node:dgram';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isIP, type AddressInfo } from 'node:net';
 import path from 'node:path';
@@ -24,6 +24,10 @@ import { createAgentNetSharing, type AgentNetSharingOptions } from './sharing.js
 import { DatagramSendQueue } from './datagramQueue.js';
 import { MEDIA_TRANSFER_DIRECT, MEDIA_TRANSFER_HEADER, type DirectMediaRequest } from '@cindy/agent-net-protocol';
 import { createLocalMediaStorage, DIRECT_GRANT_MAX_MS, guardMediaStorage, RelayMediaStorageError, RelayMediaStorageUnavailableError, type RelayMediaStorage } from './mediaStorage.js';
+import { UDP_RELAY_FEATURE, UDP_RELAY_HEADER, UDP_RELAY_KEY_BYTES, UDP_RELAY_MAX_FORWARD_BYTES, UDP_RELAY_MIN_FORWARD_BYTES, UDP_RELAY_REGISTER,
+  UDP_RELAY_SESSION_BYTES, UDP_RELAY_VERSION, UdpReplayWindow, encodeUdpDown, encodeUdpRegisterAck, isUdpRelayPacket, readUdpRelaySession,
+  sameUdpRelayCookie, udpRelayAddressCookie, udpRelayPeerHash, verifyUdpRegister, verifyUdpUp } from './udpRelay.js';
+import type { TLSSocket } from 'node:tls';
 import { agentNetInvitationAsset } from '@cindy/device-link-sharing/pages';
 
 export class AgentNetError extends Error {
@@ -77,7 +81,53 @@ interface Principal { networkId: string; deviceId: string; certificate?: DeviceC
 interface Session { principal: Principal; ws: WebSocket; lastPong: number; remoteControlEnabled: boolean; capabilities: string[];
   metadata?: DeviceMetadata; metadataWritten?: boolean;
   /** Datagrams forwarded to this device; a queue that stops moving drops new ones (see datagramQueue.ts). */
-  datagrams: DatagramSendQueue; }
+  datagrams: DatagramSendQueue;
+  /** 8-byte digest of the device id; UDP packets name peers by it (udpRelay.ts). */
+  hash: Buffer;
+  /** UDP work this device can still cause (see UDP_BUDGET_PER_SECOND): its UDP packets we check and the datagrams we send over UDP for it. */
+  udpBudget: { tokens: number; at: number };
+  /**
+   * UDP relay credentials, only for a client that asked for them over an encrypted connection. `address` is the last
+   * registration that proved its source address (echoed the address cookie); `receiving` is what that registration said
+   * about the device getting our UDP packets. `uplinks` drops replayed uplink packets.
+   */
+  udp?: { session: Buffer; key: Buffer; counter: bigint; registeredAt: number; receiving: boolean; address?: { address: string; port: number };
+    uplinks: UdpReplayWindow }; }
+/**
+ * An idle device re-registers every 15s (every few seconds while sending); after this without one, deliveries to it
+ * go back to its WebSocket. Covers the case where its UDP stopped reaching us, so it cannot say `receiving: false`.
+ */
+const UDP_REGISTRATION_TTL_MS = 30_000;
+/** Address cookies change every minute; the current and the previous minute's are accepted. */
+const UDP_COOKIE_EPOCH_MS = 60_000;
+/**
+ * Per device: UDP packets the relay checks plus datagrams it sends over UDP on the device's behalf, refilled at this rate
+ * up to UDP_BUDGET_BURST. 25,000 a second is about 260 Mbit/s of full-size relayed packets; above it the rest of a batch
+ * takes the WebSocket (and uplink packets are dropped like any UDP loss). 2026-11-17 review: without it one device
+ * sending 64 KiB frames of tiny datagrams kept the relay's event loop busy with one MAC and one send per datagram.
+ */
+const UDP_BUDGET_PER_SECOND = 25_000;
+const UDP_BUDGET_BURST = 5_000;
+/** At most this many datagrams of one WebSocket frame go out over UDP; the rest of the frame takes the WebSocket. */
+const MAX_UDP_DATAGRAMS_PER_FRAME = 128;
+/** The UDP socket's own queue (bytes not yet handed to the OS) beyond which new deliveries take the WebSocket. */
+const UDP_SEND_QUEUE_LIMIT_BYTES = 4 * 1024 * 1024;
+function isLoopbackAddress(address: string | undefined): boolean {
+  return !!address && (address === '::1' || address.startsWith('127.') || address.startsWith('::ffff:127.'));
+}
+/**
+ * UDP credentials are a reusable secret, so they are only handed out where the WebSocket that carries them is encrypted
+ * or never leaves this machine. A proxy's X-Forwarded-Proto decides when present (the Desktop gateway and the deployed
+ * nginx both set it); a client faking it only exposes its own key. 2026-11-17 review: owner-pinned private relays may be
+ * plain http, and the key then travelled in clear.
+ */
+function confidentialUpgrade(req: IncomingMessage): boolean {
+  const forwarded = req.headers['x-forwarded-proto'];
+  const proto = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim().toLowerCase();
+  if (proto) return proto === 'https' || proto === 'wss';
+  if ((req.socket as TLSSocket).encrypted) return true;
+  return isLoopbackAddress(req.socket.remoteAddress);
+}
 const silent: RelayLogger = { info() {}, warn() {}, error() {} };
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
@@ -180,6 +230,16 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   }
   if (mode === 'self-hosted' && store.networks().length === 0) throw new Error('SELF_HOSTED_BOOTSTRAP_REQUIRED');
   const sessions = new Map<string, Session>();
+  /** UDP session number (hex) → session; entries for replaced or closed sessions are removed on close or on lookup. */
+  const udpSessions = new Map<string, Session>();
+  /**
+   * Per network: device digest (hex) → device id, for devices connected right now. Entries leave with the device's last
+   * session: guest ids are one per share (`guest:` + delegation id), so keeping them would grow without bound.
+   */
+  const peerHashes = new Map<string, Map<string, string>>();
+  /** Signs address cookies (udpRelay.ts); only this relay process knows it, so a device cannot make one for an address it does not hold. */
+  const cookieSecret = randomBytes(32);
+  let udpSocket: UdpSocket | null = null;
   let advertisedUdpPort: number | null = null;
   let closing = false;
   let binaryBodies = 0;
@@ -207,6 +267,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     for (const key of keys) done.add(key);
     synchronized.set(req, done);
   }
+  /** Read-only view for checks that run on every forwarded datagram (`active`, `permitted`); see `Store.peekNetwork`. */
+  const peekNetwork = (id: string) => (store.peekNetwork(id) ?? fail(401, 'NETWORK_UNKNOWN')) as NetworkRecord;
   const memberRecord = (n: NetworkRecord, id: string) => own(n.devices, id) ?? fail(401, 'DEVICE_UNKNOWN');
   // Cluster: one owner replica per network. A draining replica no longer owns anything.
   const router = cluster ? createClusterRouter(cluster) : undefined;
@@ -319,7 +381,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   }
   function active(principal: Principal): boolean {
     try {
-      const n = network(principal.networkId);
+      const n = peekNetwork(principal.networkId);
       if (principal.delegation) {
         const d = principal.delegation;
         const host = memberRecord(n, d.hostDeviceId);
@@ -385,7 +447,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     if (present) announce(networkId);
   }
   function permitted(sender: Principal, targetId: string): boolean {
-    const n = network(sender.networkId);
+    const n = peekNetwork(sender.networkId);
     const member = own(n.devices, targetId);
     if (member) {
       const d = sender.delegation && own(n.grants, sender.delegation.id)?.delegation;
@@ -397,6 +459,94 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     const grant = own(n.grants, targetId.slice(6));
     return !!grant && grant.revokedAt === null && usableDelegation(n, grant.delegation)
       && endpointUsable(n, grant.delegation, sender.deviceId);
+  }
+  /** Take `count` from the device's UDP budget; false when it is spent (see UDP_BUDGET_PER_SECOND). */
+  function spendUdpBudget(session: Session, count: number): boolean {
+    const budget = session.udpBudget, at = performance.now();
+    budget.tokens = Math.min(UDP_BUDGET_BURST, budget.tokens + (at - budget.at) * UDP_BUDGET_PER_SECOND / 1000);
+    budget.at = at;
+    if (budget.tokens < count) return false;
+    budget.tokens -= count;
+    return true;
+  }
+  /**
+   * Hand datagrams from `source` to `target`: over UDP when the target proved its address, says it receives our UDP and
+   * registered recently; otherwise, and for whatever UDP does not take, over its WebSocket. UDP only carries core-sized
+   * datagrams (UDP_RELAY_MIN/MAX_FORWARD_BYTES), at most MAX_UDP_DATAGRAMS_PER_FRAME per batch, within the source's budget
+   * and while the UDP socket keeps up; the WebSocket path is unchanged: a queue that stops moving drops like UDP (datagramQueue.ts).
+   * `charged`: the batch is one UDP uplink packet whose budget was already taken.
+   */
+  function forwardDatagrams(source: Session, target: Session, datagrams: readonly Uint8Array[], charged = false): void {
+    const udp = target.udp;
+    let rest = datagrams;
+    if (udpSocket && udp?.address && udp.receiving && now() - udp.registeredAt < UDP_REGISTRATION_TTL_MS
+      && udpSocket.getSendQueueSize() < UDP_SEND_QUEUE_LIMIT_BYTES) {
+      const viaWebSocket: Uint8Array[] = [];
+      let sent = 0;
+      for (const datagram of datagrams) {
+        if (datagram.length < UDP_RELAY_MIN_FORWARD_BYTES || datagram.length > UDP_RELAY_MAX_FORWARD_BYTES
+          || sent >= MAX_UDP_DATAGRAMS_PER_FRAME || !(charged || spendUdpBudget(source, 1))) { viaWebSocket.push(datagram); continue; }
+        udpSocket.send(encodeUdpDown(udp.key, source.hash, datagram), udp.address.port, udp.address.address);
+        sent++;
+      }
+      if (viaWebSocket.length === 0) return;
+      rest = viaWebSocket;
+    }
+    if (target.ws.readyState !== WebSocket.OPEN || target.ws.bufferedAmount > 1024 * 1024) return;
+    try { target.datagrams.sendDatagram(encodeDatagrams(source.principal.deviceId, rest)); }
+    catch { /* The rewritten source may be longer: drop oversized batches like UDP. */ }
+  }
+  function addressCookie(session: Buffer, remote: RemoteInfo, epoch: number): Buffer {
+    return udpRelayAddressCookie(cookieSecret, session, remote.address, remote.port, epoch);
+  }
+  /**
+   * Registration and uplink packets on the shared UDP port. Anything that fails authentication is dropped silently.
+   * Each packet that gets as far as the MAC check costs its session's UDP budget, so one device cannot keep the relay busy.
+   */
+  function receiveUdpRelay(packet: Buffer, remote: RemoteInfo): void {
+    const id = readUdpRelaySession(packet);
+    if (!id) return;
+    const hex = id.toString('hex');
+    const session = udpSessions.get(hex);
+    if (!session?.udp) return;
+    const { principal } = session;
+    if (sessions.get(key(principal.networkId, principal.deviceId)) !== session || !active(principal)) { udpSessions.delete(hex); return; }
+    if (!spendUdpBudget(session, 1)) return;
+    if (packet[0] === UDP_RELAY_REGISTER) {
+      const registration = verifyUdpRegister(packet, session.udp.key);
+      // Increasing counters only: a replayed registration cannot move this session's address.
+      if (registration === null || registration.counter <= session.udp.counter) return;
+      session.udp.counter = registration.counter;
+      const at = now(), epoch = Math.floor(at / UDP_COOKIE_EPOCH_MS);
+      // Only an address that echoed the cookie we sent to it may receive this session's datagrams. A registration with a
+      // forged source address never sees that address's cookie, so it cannot point the session at someone else
+      // (2026-11-17 review: one such registration used to redirect a session's traffic to any IP). An unproven one may
+      // still turn UDP delivery off, which only moves the session back to its own WebSocket.
+      const proven = [epoch, epoch - 1].some((e) => sameUdpRelayCookie(addressCookie(session.udp!.session, remote, e), registration.cookie));
+      if (proven) {
+        session.udp.address = { address: remote.address, port: remote.port };
+        session.udp.receiving = registration.receiving;
+        session.udp.registeredAt = at;
+      } else if (!registration.receiving) session.udp.receiving = false;
+      // The ack is shorter than the registration: answering an unproven address amplifies nothing.
+      udpSocket?.send(encodeUdpRegisterAck(session.udp, registration.counter, proven, addressCookie(session.udp.session, remote, epoch)),
+        remote.port, remote.address);
+      return;
+    }
+    const up = verifyUdpUp(packet, session.udp.key);
+    // Each uplink counter is taken once: a captured packet replayed later is not forwarded again.
+    if (!up || !session.udp.uplinks.accept(up.counter)) return;
+    const targetId = peerHashes.get(principal.networkId)?.get(up.dstHash.toString('hex'));
+    if (!targetId || targetId === principal.deviceId) return;
+    if (!permitted(principal, targetId)) {
+      // Same as the WebSocket path: a guest writing outside its scope loses its session; a member's in-flight packets
+      // for a just-revoked peer are only dropped.
+      if (principal.delegation) session.ws.close(1008, 'scope violation');
+      return;
+    }
+    const target = sessions.get(key(principal.networkId, targetId));
+    if (!target || !active(target.principal)) return;
+    forwardDatagrams(session, target, [up.datagram], true);
   }
   function delegatedPeers(p: Principal): Delegation[] {
     const n = network(p.networkId);
@@ -487,7 +637,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     if (url.pathname === API + '/info' && method === 'GET') return writeJson(res, 200, {
       protocolVersion: AGENT_NET_VERSION, mode, udpPort: advertisedUdpPort,
       ...(options.stunHost !== undefined && advertisedUdpPort !== null ? { stunHost: options.stunHost } : {}), features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', ...(storage.direct ? ['media-direct-v1'] : []), 'notification-keys-v2', ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : []),
-        ...(mode === 'self-hosted' && store.primaryNetworkId() !== undefined ? ['tenants-v1'] : [])],
+        ...(mode === 'self-hosted' && store.primaryNetworkId() !== undefined ? ['tenants-v1'] : []),
+        ...(advertisedUdpPort !== null ? [UDP_RELAY_FEATURE] : [])],
     });
     if (url.pathname.startsWith(API + '/sharing/')) {
       if (!sharing) return fail(404, 'SHARING_UNAVAILABLE');
@@ -1006,19 +1157,32 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       wss.handleUpgrade(req, socket, head, (ws) => {
         if (closing || draining || !owns(principal.networkId) || !active(principal)) { ws.close(1012, 'network moved'); return; }
         const id = key(principal.networkId, principal.deviceId);
-        sessions.get(id)?.ws.close(4409, 'replaced');
+        const replaced = sessions.get(id);
+        if (replaced?.udp && udpSessions.get(replaced.udp.session.toString('hex')) === replaced) udpSessions.delete(replaced.udp.session.toString('hex'));
+        replaced?.ws.close(4409, 'replaced');
+        // Only clients that ask for this packet format, over an encrypted or local connection, get UDP credentials: one that
+        // cannot use them (older Desktop, Mobile) never registers, so it gets no key and the relay keeps no UDP state for it.
+        const wantsUdp = udpSocket !== null && req.headers[UDP_RELAY_HEADER] === UDP_RELAY_VERSION && confidentialUpgrade(req);
         const session: Session = { principal, ws, lastPong: now(), remoteControlEnabled: false, capabilities: [],
           datagrams: new DatagramSendQueue(ws, {
             stalled: (waitedMs, bufferedBytes) => logger.warn({ waitedMs: Math.round(waitedMs), bufferedBytes },
               'agent-net session send queue has not moved; dropping datagrams to it until it does'),
             moving: (dropped, droppedBytes, bufferedBytes) => logger.info({ dropped, droppedBytes, bufferedBytes },
               'agent-net session send queue moving again'),
-          }, options.datagramQueueDelayMs) };
+          }, options.datagramQueueDelayMs),
+          hash: udpRelayPeerHash(principal.deviceId), udpBudget: { tokens: UDP_BUDGET_BURST, at: performance.now() },
+          ...(wantsUdp ? { udp: { session: randomBytes(UDP_RELAY_SESSION_BYTES), key: randomBytes(UDP_RELAY_KEY_BYTES), counter: 0n, registeredAt: 0,
+            receiving: false, uplinks: new UdpReplayWindow() } } : {}) };
         sessions.set(id, session);
+        if (session.udp) udpSessions.set(session.udp.session.toString('hex'), session);
+        let hashes = peerHashes.get(principal.networkId);
+        if (!hashes) peerHashes.set(principal.networkId, hashes = new Map());
+        hashes.set(session.hash.toString('hex'), principal.deviceId);
         ws.on('error', () => undefined);
         ws.on('pong', () => { session.lastPong = now(); });
         ws.send(JSON.stringify({ type: 'hello', protocolVersion: 2, notifications: !!options.notify, networkId: principal.networkId, deviceId: principal.deviceId, devices: roster(principal), delegations: delegatedPeers(principal),
-          delegationRequests: principal.delegation ? [] : sharing?.requestsFor(principal.networkId, principal.deviceId) ?? [] }));
+          delegationRequests: principal.delegation ? [] : sharing?.requestsFor(principal.networkId, principal.deviceId) ?? [],
+          ...(session.udp ? { udp: { session: session.udp.session.toString('base64url'), key: session.udp.key.toString('base64url') } } : {}) }));
         ws.on('message', (raw: RawData, binary: boolean) => {
           if (sessions.get(id) !== session || !active(principal)) { ws.close(expiredCredential(principal) ? 4408 : 4410, 'access unavailable'); return; }
           const bytes = Buffer.isBuffer(raw) ? raw : Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
@@ -1059,6 +1223,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
           }
           const frame = decodeDatagrams(bytes);
           if (!frame) { ws.close(1008, 'invalid datagram frame'); return; }
+          // No device has a reason to relay to itself; it would only turn its own WebSocket upload into UDP fan-out.
+          if (frame.deviceId === principal.deviceId) return;
           if (!permitted(principal, frame.deviceId)) {
             // A member can still have in-flight packets for a just-revoked peer. Drop that destination,
             // not its shared session and the unrelated healthy connections carried by it.
@@ -1066,19 +1232,24 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
             return;
           }
           const target = sessions.get(key(principal.networkId, frame.deviceId));
-          if (!target || !active(target.principal) || target.ws.readyState !== WebSocket.OPEN || target.ws.bufferedAmount > 1024 * 1024) return;
-          try {
-            const encoded = encodeDatagrams(principal.deviceId, frame.datagrams);
-            target.datagrams.sendDatagram(encoded);
-          } catch { /* The rewritten source may be longer: drop oversized batches like UDP. */ }
+          if (!target || !active(target.principal)) return;
+          forwardDatagrams(session, target, frame.datagrams);
         });
         ws.on('close', () => {
+          if (session.udp && udpSessions.get(session.udp.session.toString('hex')) === session) udpSessions.delete(session.udp.session.toString('hex'));
           if (sessions.get(id) === session) {
             sessions.delete(id); announce(principal.networkId);
             if (!principal.delegation) void store.transaction(state => {
               const device = state.networks[principal.networkId]?.devices[principal.deviceId];
               if (device && device.revokedAt === null) device.lastSeenAt = now();
             }).catch(() => undefined);
+          }
+          // The device's digest leaves with its last session (also when revocation removed it from `sessions` first);
+          // a session that replaced this one keeps it.
+          if (!sessions.has(id)) {
+            const hashes = peerHashes.get(principal.networkId);
+            if (hashes?.get(session.hash.toString('hex')) === principal.deviceId) hashes.delete(session.hash.toString('hex'));
+            if (hashes?.size === 0) peerHashes.delete(principal.networkId);
           }
         });
         announce(principal.networkId);
@@ -1093,6 +1264,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   const udp = options.udpPort === undefined ? null : createSocket(isIP(udpHost) === 6 ? 'udp6' : 'udp4');
   if (udp) {
     udp.on('message', (packet, remote: RemoteInfo) => {
+      if (isUdpRelayPacket(packet)) { receiveUdpRelay(packet, remote); return; }
       if (packet.length < 20 || packet.length > 512 || packet.readUInt16BE(0) !== 1 || packet.readUInt16BE(2) !== packet.length - 20
         || packet.readUInt32BE(4) !== 0x2112a442 || !allow('udp:' + remote.address, 600)) return;
       const addressBytes = remote.family === 'IPv6' ? ipv6Bytes(remote.address) : Buffer.from(remote.address.split('.').map(Number));
@@ -1111,7 +1283,10 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       await new Promise<void>((resolve, reject) => { udp.once('error', reject); udp.bind(options.udpPort, udpHost, () => { udp.off('error', reject); resolve(); }); });
     } catch (error) { server.closeAllConnections(); server.close(); udp.close(); throw error; }
     udp.on('error', (error) => logger.warn({ name: error.name }, 'agent-net UDP error'));
+    // Relayed traffic bursts at line rate; the OS defaults (64–208 KiB) would drop most of a burst. Best effort.
+    try { udp.setRecvBufferSize(4 * 1024 * 1024); udp.setSendBufferSize(4 * 1024 * 1024); } catch { /* keep OS defaults */ }
     advertisedUdpPort = (udp.address() as AddressInfo).port;
+    udpSocket = udp;
   }
   let sweeping = false;
   const expiredEntries = (n: NetworkRecord, at: number) => {

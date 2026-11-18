@@ -15,12 +15,19 @@ import {
 } from '@cindy/device-link';
 import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { DeviceLinkProvider, useDeviceLink, type DeviceLinkContextValue } from '../device-link/DeviceLinkContext';
-import { waitForMobileAgentNetPreferences } from '../device-link/agentNetPreferences';
+import { setMobileAgentNetPreferences, waitForMobileAgentNetPreferences } from '../device-link/agentNetPreferences';
 // Platform process lifecycle is covered in fileWebViewTermination.test.tsx.
 const directTransport = vi.hoisted(() => ({ enabled: false, owner: '' }));
 vi.mock('../device-link/DirectLinkTransport', () => ({ DirectLinkTransport: (props: typeof directTransport) => {
   Object.assign(directTransport, props); return null;
 } }));
+const peerSession = vi.hoisted(() => ({ current: null as null | {
+  closedReason: null; open: ReturnType<typeof vi.fn>; request: ReturnType<typeof vi.fn>;
+} }));
+vi.mock('../device-link/agentNetRuntime', async original => ({
+  ...await original<typeof import('../device-link/agentNetRuntime')>(),
+  mobileAgentNetSession: (peer: string) => peer === 'host' ? peerSession.current : null,
+}));
 // The existing V1 provider path has no Agent-Net binary or OS notification bridge.
 vi.mock('../../modules/cindy-agent-net/src', () => ({ agentNetNative: null }));
 vi.mock('@/notifications/nativeNotifications', () => ({ default: {} }));
@@ -107,6 +114,12 @@ const transport = vi.hoisted(() => {
     notifyNetworkChanged = vi.fn();
     getStatus = () => this.status;
     getConnectionIssue = () => null;
+    getConnectionEpoch = () => 1;
+    needsLinkRecovery = (_deviceId: string) => false;
+    getReliableSendQueueDepth = () => 0;
+    onPeerRouteStateChanged = () => () => {};
+    onPeerStreamAccepted = () => () => {};
+    onInboundPeerReleased = () => () => {};
     hasOnlineConnection = () => this.status === 'online' || this.separate?.status === 'online';
     separate: Client | null = null;
     scopedPeers = new Set<string>();
@@ -115,7 +128,6 @@ const transport = vi.hoisted(() => {
     serverCapabilities: string[] = [];
     hasServerCapability = (capability: string) => this.serverCapabilities.includes(capability);
     isOutboundExplicitlyClosed = vi.fn((_deviceId: string) => false);
-    needsLinkRecovery = (_deviceId: string) => false;
     closeLink = vi.fn();
     // No background recovery owner; each test explicitly starts the fresh read.
     hasPendingRequestsTo = vi.fn((_deviceId: string) => false);
@@ -1593,6 +1605,35 @@ describe('Provider network recovery priority', () => {
     else expect(client.notifyNetworkChanged).not.toHaveBeenCalled();
     expect(client.stop).not.toHaveBeenCalled();
   });
+});
+
+// Production Provider, real session router and a fake peer. A background stay
+// longer than the grace period used to disable session routing until remount.
+// Unit tier. Existing Provider lifecycle cases exercise the legacy route only.
+it('uses the new session after a background suspension with Agent-Net enabled', async () => {
+  vi.useFakeTimers();
+  try {
+    await act(async () => { await setMobileAgentNetPreferences({ enabled: true }); });
+    const client = transport.clients.at(-1)!;
+    client.openLink.mockResolvedValue(accepted(supported));
+    await act(async () => {
+      networkEvents.state = 'background';
+      networkEvents.app('background');
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    expect(client.stop).toHaveBeenCalled();
+    const session = { closedReason: null, open: vi.fn(async () => accepted(supported)),
+      request: vi.fn(async () => ({ ok: true, result: { ok: true, result: 'after foreground' } })) };
+    peerSession.current = session;
+    await act(async () => { networkEvents.state = 'active'; networkEvents.app('active'); });
+    await expect((await readHistory()).result).resolves.toBe('after foreground');
+    expect(session.request).toHaveBeenCalled();
+    expect(client.invoke).not.toHaveBeenCalled();
+  } finally {
+    peerSession.current = null;
+    await act(async () => { await setMobileAgentNetPreferences({ enabled: false }); });
+    vi.useRealTimers();
+  }
 });
 
 describe('Provider history handshake lifetime', () => {

@@ -185,3 +185,12 @@ export function sessionTaskProjectDirectory(session: {
 }): string | null {
   return session.taskProjectDir ?? session.companion?.taskProjectDir ?? sessionProjectDirectory(session);
 }
+
+/** Inbox identity follows the visible project, not a worktree or dialogue's execution cwd. */
+export function sessionTaskProjectIconDirectory(session: Parameters<typeof sessionTaskProjectDirectory>[0] & {
+  workspaceKind?: string | null;
+}): string | null {
+  if (session.workspaceKind === 'dialogue' && !session.taskProjectDir && !session.companion?.taskProjectDir) return null;
+  const directory = sessionTaskProjectDirectory(session)?.trim();
+  return directory ? collapseWorktreeDirForGrouping(directory) : null;
+}
