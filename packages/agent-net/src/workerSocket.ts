@@ -92,8 +92,8 @@ interface PeerStatus {
 }
 
 function peerRoute(status: PeerStatus | undefined): 'direct' | 'relay' | 'connecting' | null {
-  if (!status?.available) return null;
-  return status.path ?? (status.dialing ? 'connecting' : null);
+  if (status?.available && status.path) return status.path;
+  return status?.dialing ? 'connecting' : null;
 }
 
 function peerRoutesChanged(previous: ReadonlyMap<string, PeerStatus>, next: ReadonlyMap<string, PeerStatus>): boolean {
