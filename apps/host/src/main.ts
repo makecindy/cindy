@@ -6,6 +6,7 @@ import { resolveAutomaticProjectIcon } from '../../desktop/src/main/projectAutom
 import { readProjectIconImage, readProjectInfo, updateProjectInfo } from '../../desktop/src/main/projectInfoCore.js';
 import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
 import { clientMigrationContract } from './client-migration-contract.mjs';
+import { runLegacyPluginMigrationPreflight } from './plugins/legacy-approvals.js';
 import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
 import { createHostPlatformTools } from './platform/tools.js';
 import { createHostCodexRuntime, createHostSubscriptionFastPolicies } from './agent/codex-runtime.js';
@@ -201,6 +202,7 @@ function parsePermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 const command = process.argv[2];
+const usage = 'cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|migration-preflight <profile-directory>|remote [status|enable|disable|revoke <device-id>]|stop]';
 
 /** The status command's boundary category: the running Host's, else a lock-free read of the profile. */
 function readStatusSkillProjectionBoundary(processStatus: { running: boolean | null; runtime?: { skillProjectionBoundary?: string } }) {
@@ -225,7 +227,7 @@ const proxyWarmup = command === undefined || command === 'serve' || command === 
     console.warn('[host] system proxy warmup failed:', error instanceof Error ? error.name : 'UnknownError');
   }) : undefined;
 if (command === '--help' || command === '-h') {
-  console.log('Usage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|remote [status|enable|disable|revoke <device-id>]|stop]');
+  console.log(`Usage: ${usage}`);
 } else if (command === 'open') {
   try {
     await openHostBrowser(resolveHostDataDir());
@@ -254,6 +256,11 @@ if (command === '--help' || command === '-h') {
       if ('region' in state && state.region) console.log(`region: ${state.region}`);
       if (state.baseUrl) console.log(`address: ${state.baseUrl}`);
       if ('outboundProxy' in state && state.outboundProxy) console.log(`outbound proxy: ${describeOutboundProxyLine(state.outboundProxy)}`);
+      if ('legacyPluginApprovals' in state) {
+        const report = state.legacyPluginApprovals;
+        console.log(`legacy plugins missing approval receipts: ${report ? report.count : 'unchecked'}`);
+        for (const id of report?.installIds ?? []) console.log(`  ${id}`);
+      }
       if (state.error) console.error(state.error);
       // Row 25 (25b): an install signed in before the login published the projection owner.
       if (state.authenticated && (state.skillProjectionBoundary === 'missing-or-invalid' || state.skillProjectionBoundary === 'other-owner')) {
@@ -263,6 +270,13 @@ if (command === '--help' || command === '-h') {
     }
   } catch (error) {
     console.error(`cindy-host status failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
+} else if (command === 'migration-preflight') {
+  try {
+    process.exitCode = await runLegacyPluginMigrationPreflight(process.argv.slice(3));
+  } catch (error) {
+    console.error(`cindy-host migration-preflight failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   }
 } else if (command === 'stop') {
@@ -292,7 +306,7 @@ if (command === '--help' || command === '-h') {
   }
 } else if (command !== undefined && command !== 'serve') {
   console.error(
-    `unknown command: ${command}\nusage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|remote [status|enable|disable|revoke <device-id>]|stop]`,
+    `unknown command: ${command}\nusage: ${usage}`,
   );
   process.exitCode = 2;
 } else {
@@ -1446,6 +1460,7 @@ const runtimePluginSettings = createHostRuntimePluginSettings({
 });
 const serverDeps = {
   runtimePluginSettings,
+  legacyPluginApprovals: () => plugins?.legacyPluginApprovals() ?? null,
   ipcRoute,
   // The HTTP logout's first step, before it closes the platform client and drains requests (server.mjs).
   beginOwnerBoundaryStop: () => ownerBoundary.begin(),

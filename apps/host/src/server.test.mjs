@@ -10,6 +10,7 @@ import { createPlatformClientBridge } from './platform/client-bridge.ts';
 import { createHostPlatformRpc } from '@cindy/maker-shared/host-platform-rpc';
 
 import { createHostServer } from './server.mjs';
+import { publishHostEndpoint, readHostProcessStatus } from './control.mjs';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { createOwnerBoundaryStop, runOwnerBoundary } from './agent/owner-boundary.ts';
@@ -106,6 +107,31 @@ test('health is public while task data requires the profile bearer', async (t) =
   assert.equal(allowed.status, 200);
   assert.deepEqual(allowed.body.sessions.map((s) => s.id), ['s1']);
   assert.equal((await request('/sessions', { headers: { authorization: 'Bearer wrong' } })).status, 401);
+});
+
+// §3.2 integration, release table §5: the CLI reads the startup census through
+// the real Host endpoint. Pairing a browser must not disclose the install IDs.
+test('Host status carries the legacy plugin census without exposing it to paired browsers', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-status-legacy-'));
+  const webAuth = createWebAuth();
+  const cookie = `cindy_host_web=${webAuth.exchange(webAuth.pair())}`;
+  const report = { count: 1, installIds: ['legacy-fixture'] };
+  const instanceId = 'status-fixture';
+  const server = createHostServer({ token: TOKEN, instanceId, webAuth,
+    probe: () => ({ status: 'ok', clientProtocol: 1, pid: process.pid, instanceId }),
+    legacyPluginApprovals: () => report });
+  let removeEndpoint;
+  t.after(() => { removeEndpoint?.(); server.close(); fs.rmSync(profile, { recursive: true, force: true }); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  fs.writeFileSync(path.join(profile, 'host-api-token'), TOKEN);
+  removeEndpoint = publishHostEndpoint(profile, baseUrl, instanceId);
+  assert.deepEqual((await readHostProcessStatus(profile)).legacyPluginApprovals, report);
+  for (const headers of [{}, { cookie }, { authorization: `Bearer ${TOKEN}`, origin: baseUrl }]) {
+    const response = await fetch(`${baseUrl}/health`, { headers });
+    assert.equal(response.status, 200);
+    assert.equal(Object.hasOwn(await response.json(), 'legacyPluginApprovals'), false);
+  }
 });
 
 test('model-access retry performs synchronization and Codex route reads the actual runtime', async t => {

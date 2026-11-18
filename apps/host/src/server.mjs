@@ -349,7 +349,15 @@ export function createHostServer(input) {
       }
 
       if (request.method === 'GET' && url.pathname === '/health') {
-        send(response, 200, isWebAuthorized(request, deps) ? await deps.probe() : { status: 'ok', service: 'cindy-host' });
+        if (!isWebAuthorized(request, deps)) {
+          send(response, 200, { status: 'ok', service: 'cindy-host' });
+          return;
+        }
+        const health = await deps.probe();
+        // Plugin identities are local diagnostics. Browser pairing does not grant this read.
+        const legacyPluginApprovals = request.headers.origin === undefined && isAuthorized(request.headers.authorization, deps.token)
+          ? deps.legacyPluginApprovals?.() : undefined;
+        send(response, 200, legacyPluginApprovals === undefined ? health : { ...health, legacyPluginApprovals });
         return;
       }
 

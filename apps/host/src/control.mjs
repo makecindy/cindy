@@ -61,6 +61,7 @@ export async function readHostProcessStatus(profile) {
       ...(typeof health.region === 'string' ? { region: health.region } : {}),
       // How the running Host finds its outbound proxy (row 28; never an address or a setting).
       ...(health.outboundProxy && typeof health.outboundProxy === 'object' ? { outboundProxy: health.outboundProxy } : {}),
+      ...(health.legacyPluginApprovals === undefined ? {} : { legacyPluginApprovals: health.legacyPluginApprovals }),
       ...(health.clientProtocol === undefined ? {} : { clientProtocol: health.clientProtocol }) };
   } catch (error) {
     // An unresponsive service is not proof that its process has exited.

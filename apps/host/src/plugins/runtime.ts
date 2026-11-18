@@ -49,7 +49,7 @@ import {
 } from '../../../desktop/src/main/cindy-brain/ghostAvailability.js';
 import { createManagedSkills } from '../../../desktop/src/main/maker-host/managedSkillsCore.js';
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.js';
-import { createLogger } from '../../../desktop/src/main/logger.js';
+import { createLogger, type Logger } from '../../../desktop/src/main/logger.js';
 import { hostBlobStore, hostMediaIngest } from '../media-store.js';
 import * as ledger from '../../../desktop/src/main/cindy-media/ledger.js';
 import { createHeadlessPluginSandbox } from './chromium-sandbox.js';
@@ -65,6 +65,7 @@ import { prepareHostPluginAssets } from './assets.mjs';
 import type { GhostNodeRuntimeBrokerDeps } from '../../../desktop/src/main/cindy-brain/nodeRuntimeBroker.js';
 
 import { createRuntimePluginHost, type RuntimePluginHostPorts } from '../../../desktop/src/main/cindy-brain/runtimePluginHostCore.js';
+import { summarizeLegacyPluginApprovals, type LegacyPluginApprovals } from './legacy-approvals.js';
 
 interface PluginRuntimeOptions {
   modelRouteSources: RuntimePluginHostPorts['modelRouteSources'];
@@ -84,6 +85,7 @@ interface PluginRuntimeOptions {
   publish(channel: string, payload: unknown): void;
   hostToolRequest?: GhostNodeRuntimeBrokerDeps['hostToolRequest'];
   onPluginStopped?(id: string): void;
+  log?: Logger;
   /** Built/release paths only, never plugin-provided. */
   assets?: Awaited<ReturnType<typeof prepareHostPluginAssets>>;
 }
@@ -94,7 +96,7 @@ interface PluginRuntimeOptions {
 export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const assets = options.assets ?? await prepareHostPluginAssets();
   const owner = activeOwnerScopeKey();
-  const log = createLogger('host-plugins');
+  const log = options.log ?? createLogger('host-plugins');
   const root = (...parts: string[]) => ownerScopedPath(options.profileDir, options.ownerId, ...parts);
   const mutation = new GhostMutationCoordinator();
   const handoff = new GhostHandoffStore({ root: () => root('ghost-handoff') });
@@ -105,6 +107,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   let closed = false;
   let closing: Promise<void> | undefined;
   let reconciliation: Promise<void> = Promise.resolve();
+  let legacyApprovals: LegacyPluginApprovals | null = null;
   let enableChanges: Promise<unknown> = Promise.resolve();
   const current = () => !closed && !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner;
   const assertCurrent = () => { if (!current()) throw new Error('PLUGIN_OWNER_CHANGED'); };
@@ -405,6 +408,9 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   async function reconcileInstalled() {
     assertCurrent();
     const ghosts = await options.manager.listAsync(); assertCurrent();
+    const approvals = summarizeLegacyPluginApprovals(ghosts);
+    if (legacyApprovals === null) log.info('legacy plugin approval census: %j', approvals);
+    legacyApprovals = approvals;
     browserExtensions.reconcile(ghosts.map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
     for (const [id, previous] of known) {
       if (previous === revision(getGhost(id))) continue;
@@ -478,6 +484,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   return {
     list: () => options.manager.listAsync(), reconcile, cards, library, fsSlot, storage, network, secret, node, authorization,
     browserExtensions, taskPlugins,
+    legacyPluginApprovals: () => current() ? legacyApprovals : null,
     manager: options.manager, getGhost, current, assertCurrent, dispatcher, handoff, files,
     /** Built-in and approved plugin Skills, as Desktop's listCindyManagedSkills. */
     listManagedSkills: () => managedSkills.listCindyManagedSkills(),

@@ -27,6 +27,7 @@ import { configureHostOwner } from '../agent/claude-auth.mjs';
 import { createSnapshotProcess } from '../snapshot-process.mjs';
 import { createHostGhostManager } from '../plugins-installed.ts';
 import { createHostPluginRuntime } from './runtime.ts';
+import { runLegacyPluginMigrationPreflight } from './legacy-approvals.ts';
 import { createHostPluginIdentity } from './identity.ts';
 import { configureGhostSnapshotProcess } from '../../../desktop/src/main/cindy-brain/ghostSnapshotCapability.ts';
 import { prepareBuiltInSkills } from '../../../desktop/src/main/maker-host/built-in-skills.ts';
@@ -107,12 +108,13 @@ async function installAll(manager, profile, owner, plugins = PLUGINS) {
   return parts;
 }
 
-async function hostRuntime(t, { profile, owner, manager }, user = null) {
+async function hostRuntime(t, { profile, owner, manager }, user = null, log) {
   const secrets = new Map();
   const runtime = await createHostPluginRuntime({ profileDir: profile, ownerId: owner, manager,
     credentials: { read: key => secrets.get(key) ?? null, write: (key, value) => { secrets.set(key, value); }, remove: key => { secrets.delete(key); } },
     getLoginEmail: () => user?.email ?? null, getUser: () => user,
     modelRouteSources: () => ({ localViews: async () => [], localAgents: () => [] }),
+    log,
     appContext: () => ({ ok: false, error: 'unavailable' }), getSession: () => undefined,
     requestFileConfirmation: async () => false, publish() {},
     // No plugin process is started here; the worker assets are never read.
@@ -121,6 +123,79 @@ async function hostRuntime(t, { profile, owner, manager }, user = null) {
   t.after(() => runtime.close());
   return runtime;
 }
+
+async function writeLegacyPlugin(dir, id) {
+  const manifest = JSON.stringify({ id, schemaVersion: 3, minCindyVersion: '0.1.61', kind: 'chip',
+    name: 'Legacy fixture', version: '1.0.0', entry: 'main.js' });
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, 'ghost.json'), manifest);
+  await fs.writeFile(path.join(dir, 'main.js'), '// fixture');
+  return manifest;
+}
+
+async function preflight(profile) {
+  const stdout = [];
+  const stderr = [];
+  const exitCode = await runLegacyPluginMigrationPreflight([profile], { log: value => stdout.push(value), error: value => stderr.push(value) });
+  return { exitCode, report: JSON.parse(stdout[0]), stderr };
+}
+
+// §3.2 integration, migration release table §5: use the real startup plugin
+// reconciliation and offline preflight on one unapproved bare install. A migrated
+// copy alone cannot prove either the block or the safe discovery of an old profile.
+test('legacy plugin startup reports missing approvals and preflight only passes after desktop backfill', async t => {
+  t = lifoCleanup(t);
+  const env = await profileFor(t, 'local', null);
+  const { profile, owner, manager } = env;
+  const id = 'legacy-fixture';
+  const dir = ownerScopedPath(profile, owner, 'cindy-brain', id);
+  const receipt = ownerScopedPath(profile, owner, 'ghost-install-state', `${id}.json`);
+  const manifest = await writeLegacyPlugin(dir, id);
+  const report = { count: 1, installIds: [id] };
+  const preflightReport = { ...report, allowed: false, installIds: [path.relative(profile, dir).split(path.sep).join('/')] };
+  const refused = await preflight(profile);
+  assert.equal(refused.exitCode, 1);
+  assert.deepEqual(refused.report, preflightReport);
+  assert.match(refused.stderr.join('\n'), /Cindy Desktop v0\.1\.48 or later/);
+
+  const logs = [];
+  const runtime = await hostRuntime(t, env, null, { info: (...args) => logs.push(args), trace() {}, debug() {}, warn() {}, error() {}, fatal() {} });
+  const censusLogs = () => logs.filter(([message]) => message === 'legacy plugin approval census: %j');
+  assert.equal(runtime.legacyPluginApprovals(), null);
+  await runtime.reconcile();
+  assert.deepEqual(runtime.legacyPluginApprovals(), report);
+  assert.deepEqual(censusLogs(), [['legacy plugin approval census: %j', report]]);
+  assert.equal((await runtime.list()).find(ghost => ghost.manifest.id === id)?.approval.state, 'legacy-unapproved');
+  await assert.rejects(fs.stat(receipt), { code: 'ENOENT' });
+  assert.equal(await fs.readFile(path.join(dir, 'ghost.json'), 'utf8'), manifest);
+  assert.equal(await fs.readFile(path.join(dir, 'main.js'), 'utf8'), '// fixture');
+
+  assert.deepEqual((await manager.migrateLegacyApprovalsOnce()).migrated, [id]);
+  const approved = await fs.readFile(receipt);
+  assert.deepEqual(await preflight(profile), { exitCode: 0, report: { allowed: true, count: 0, installIds: [] }, stderr: [] });
+  await runtime.reconcile();
+  assert.deepEqual(runtime.legacyPluginApprovals(), { count: 0, installIds: [] });
+  assert.equal(censusLogs().length, 1);
+  assert.deepEqual(await fs.readFile(receipt), approved);
+  assert.equal((await runtime.list()).find(ghost => ghost.manifest.id === id)?.enabled, true);
+});
+
+// §3.2 integration: an active-owner-only or cindy-brain-only scan can incorrectly
+// clear the profile gate. Include the older flat and inactive owner layouts.
+test('legacy plugin preflight includes unclaimed and dormant owner roots and rejects an incomplete census', async t => {
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-host-legacy-preflight-'));
+  t.after(() => fs.rm(profile, { recursive: true, force: true }));
+  const dormant = ownerScopedPath(profile, 'dormant-owner', 'brain', 'dormant-fixture');
+  await writeLegacyPlugin(dormant, 'dormant-fixture');
+  await writeLegacyPlugin(path.join(profile, 'brain', 'shared-fixture'), 'shared-fixture');
+  const refused = await preflight(profile);
+  assert.equal(refused.exitCode, 1);
+  assert.deepEqual(refused.report, { allowed: false, count: 2,
+    installIds: ['brain/shared-fixture', path.relative(profile, dormant).split(path.sep).join('/')] });
+  const unknownRoot = ownerScopedPath(profile, 'unreadable-owner');
+  await fs.writeFile(unknownRoot, 'not a directory');
+  await assert.rejects(preflight(profile), /owner projection namespace is not a regular directory/);
+});
 
 /** The identity as it was before 3c: the runtime's own lookup (manager.findInstalledInstance, then the list). */
 function previousIdentity({ profile, owner, manager }, user = null) {
