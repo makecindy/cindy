@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   completePendingStatus: vi.fn(),
   rollbackPendingStatus: vi.fn(),
   isPendingStatusCurrent: vi.fn(),
-  clearComposerDraft: vi.fn(),
+  cleanupStagedChatAttachments: vi.fn(),
   cleanupSessionLayoutPrefs: vi.fn(),
   cleanupSessionImages: vi.fn(),
   toastError: vi.fn(),
@@ -68,10 +68,6 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   },
 }));
 
-vi.mock('@/lib/composerDraftStore', () => ({
-  discardDraft: mocks.clearComposerDraft,
-}));
-
 vi.mock('@/lib/sessionLayoutPrefs', () => ({
   cleanupSessionLayoutPrefs: mocks.cleanupSessionLayoutPrefs,
 }));
@@ -107,6 +103,7 @@ vi.mock('@/lib/logger', () => ({
 import { useSessionLifecycleActions } from '../useSessionLifecycleActions';
 import { isSessionRemovalRouteCurrent } from '../../lib/sessionRemovalNavigation';
 import { clearRemoteSessionActivity, applyRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
+import { discardDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -140,9 +137,56 @@ beforeEach(() => {
   mocks.rollbackStatusTransition.mockReturnValue(true);
   mocks.refreshSessions.mockResolvedValue([]);
   mocks.cleanupSessionImages.mockResolvedValue(undefined);
+  mocks.cleanupStagedChatAttachments.mockResolvedValue(undefined);
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { cleanupSessionImages: mocks.cleanupSessionImages },
+    value: {
+      cleanupSessionImages: mocks.cleanupSessionImages,
+      cleanupStagedChatAttachments: mocks.cleanupStagedChatAttachments,
+    },
+  });
+  discardDraft('session-1');
+  mocks.cleanupStagedChatAttachments.mockClear();
+});
+
+describe('unsent composer draft across archive / restore / delete', () => {
+  // Regression: archive used to call discardDraft like delete, so archive →
+  // restore silently lost the unsent text and deleted the staged attachment
+  // copy, although archive is reversible and asks nothing about the draft.
+  // Real composerDraftStore; unit tier. Failing input before the fix: one
+  // saved draft with a staged `.bin` attachment, then archive.
+  const stagedPath = 'C:/cache/chat-attachments/report.bin';
+  const saveUnsentDraft = () =>
+    saveDraft('session-1', {
+      text: plainTextToTiptapDoc('long unsent message'),
+      attachments: [{
+        id: 'att-1', name: 'report.pdf', path: stagedPath, ext: 'pdf', size: 10,
+        category: 'pdf', mimeType: 'application/pdf',
+      }],
+    });
+
+  it('keeps text and staged attachment through archive and restore', async () => {
+    saveUnsentDraft();
+    const { result } = renderHook(() => useSessionLifecycleActions());
+    await act(async () => {
+      await result.current.runSessionAction('session-1', 'archive', { activeSessionId: 'session-1' });
+      await result.current.unarchiveSession('session-1');
+    });
+
+    expect(getDraft('session-1')?.text).toEqual(plainTextToTiptapDoc('long unsent message'));
+    expect(getDraft('session-1')?.attachments.map((file) => file.path)).toEqual([stagedPath]);
+    expect(mocks.cleanupStagedChatAttachments).not.toHaveBeenCalled();
+  });
+
+  it('still discards the draft and its staged copy on delete', async () => {
+    saveUnsentDraft();
+    const { result } = renderHook(() => useSessionLifecycleActions());
+    await act(async () => {
+      await result.current.runSessionAction('session-1', 'delete', { activeSessionId: null });
+    });
+
+    expect(getDraft('session-1')).toBeUndefined();
+    expect(mocks.cleanupStagedChatAttachments).toHaveBeenCalledWith([stagedPath]);
   });
 });
 

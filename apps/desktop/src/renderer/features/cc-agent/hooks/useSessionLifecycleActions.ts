@@ -289,11 +289,10 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // MEM-1: Free all in-memory state (messages, base64 images, listeners)
       // for the deleted/archived session now that the server update succeeded.
       makerChatStore.purgeSession(sessionId);
-      // composer-draft-per-session: drop any leftover composer draft (text /
-      // attachments) for this session — without this the draft Map would
-      // hold an orphan entry forever.
-      discardComposerDraft(sessionId);
       if (action === 'delete') {
+        // 未发送草稿(正文 + 附件暂存副本)只随删除丢弃。归档可恢复且不弹草稿确认，
+        // 草稿必须留在 composerDraftStore：恢复或直接打开归档任务时输入框照常回填。
+        discardComposerDraft(sessionId);
         void window.electronAPI.cleanupSessionImages(sessionId).catch((err: unknown) => {
           log.warn('[session delete] cleanup images failed', err);
         });
