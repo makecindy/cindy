@@ -11,6 +11,7 @@ import { SILENT_STOP_DECISION_DELAY_MS, type SilentStopAutoResumeGuard } from '.
 import type { SessionListActivityTracker } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
 import { noteClaudeSessionTurnState } from '../../../desktop/src/main/maker-host/claude-session-background-activity.ts';
 import { explicitPorts } from './explicit-ports.ts';
+import type { HostUsageRecording } from './usage-recording.ts';
 
 export interface HostSilentStopPorts<Turn> {
   /** The task's input coordinator (input-queue.mjs); read when the decision runs. */
@@ -43,6 +44,8 @@ export interface HostSilentStopPorts<Turn> {
   finalizeChangeSet(sessionId: string, turn: Turn): void;
   /** The turn ends without a continuation (turn-executor.mjs finish, which hands the coordinator its done). */
   endTurn(sessionId: string, turn: Turn, reason: SilentStopSettleReason): void;
+  /** The usage records' product-turn trackers (usage-recording.ts), when the Host records usage. */
+  usageTrackers(): Pick<HostUsageRecording, 'productTurnWallClockTracker' | 'productTurnUsageTargetTracker'> | null;
   log: SilentStopTurnEndPorts['log'];
 }
 
@@ -81,9 +84,9 @@ export function createHostSilentStop<Turn>(ports: HostSilentStopPorts<Turn>) {
       },
       finalizeTurnChangeSet: async () => { ports.finalizeChangeSet(sessionId, turn); },
       sessionListActivityTracker: { commit: id => ports.listActivity()?.commit(id) },
-      // The product turn's wall clock and usage target arrive with the Host's usage records (release table row 13).
-      productTurnWallClockTracker: { clear: () => {} },
-      productTurnUsageTargetTracker: { clear: () => {} },
+      // The product turn's wall clock and usage target of the Host's usage records (usage-recording.ts).
+      productTurnWallClockTracker: { clear: id => ports.usageTrackers()?.productTurnWallClockTracker.clear(id) },
+      productTurnUsageTargetTracker: { clear: id => ports.usageTrackers()?.productTurnUsageTargetTracker.clear(id) },
       // The turn's finish below (endTurn).
       sessionTurnActivityTracker: { scheduleIdleAfterTerminalBroadcast: () => {} },
       noteClaudeSessionTurnState,
@@ -126,8 +129,10 @@ export function createHostSilentStop<Turn>(ports: HostSilentStopPorts<Turn>) {
       sessionListActivityTracker: {
         captureContinuation: id => ports.listActivity()?.captureContinuation(id) ?? (() => {}),
       },
-      // The product turn's wall clock arrives with the Host's usage records (release table row 13).
-      productTurnWallClockTracker: { preserveForContinuation: () => {} },
+      // The product turn's wall clock of the Host's usage records (usage-recording.ts).
+      productTurnWallClockTracker: {
+        preserveForContinuation: id => ports.usageTrackers()?.productTurnWallClockTracker.preserveForContinuation(id),
+      },
       // The IM runtime-recovery notice: the Host has no IM channels.
       advanceRuntimeRecoveryNotice: () => {},
       createDbMessage: ports.writeRow,

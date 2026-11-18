@@ -250,6 +250,8 @@ export function createInputQueue(deps) {
       });
     }
     const executor = createTurnExecutor({ ...deps,
+      // The owner this runtime's turns started under (assertCurrent): usage is written to that account only.
+      runtimeOwner: () => owner ?? null,
       getAutoResume: () => autoResume,
       productTurn,
       // A terminal ends its activity held while the coordinator's automatic resume owns it (sessionEventTerminal.ts).

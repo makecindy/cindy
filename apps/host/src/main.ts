@@ -91,6 +91,7 @@ import { createHostIpcBindings } from './ipc-bindings/index.js';
 import { projectHostAuthState } from './auth-state.js';
 import { createHostModelAccess } from './agent/model-access.js';
 import { createHostUsagePricing } from './agent/usage-pricing.ts';
+import { createHostUsageRecording } from './agent/usage-recording.ts';
 import { MODEL_ACCESS_STATUS_CHANNEL } from '../../desktop/src/shared/modelAccess.js';
 import { createProviderCatalog } from './agent/providers.mjs';
 import { closeClaudeCliProxyBridge } from '../../desktop/src/main/maker-host/claude-cli-proxy-bridge.js';
@@ -397,6 +398,8 @@ function startProfileCoexistence(dataDir: string, scan: () => Promise<number[]>)
       void inputQueue.releaseDesktopHold().then((released: boolean) => {
         if (released && coexistenceMonitor === monitor && monitor.state().state === 'clear' && !inputQueue.isHeldForDesktop()) {
           runtime.coexistence = { state: 'clear', desktops: [] };
+          // A Pi receipt retry held while the desktop used the profile runs now (agent/usage-recording.ts).
+          usageRecording.onProfileReleased();
           hostLog.info('the desktop left this profile; sends are accepted again');
         }
       }, (error: unknown) => hostLog.warn('releasing the profile hold failed', {
@@ -636,6 +639,17 @@ const usagePricing = createHostUsagePricing({
   profileDir,
   modelAccessApiBaseUrl: () => readAuthEndpoints((account.realm ?? resolveHostRegion()) as 'cn' | 'global').modelAccessApiBaseUrl,
 });
+/**
+ * The desktop's turn usage recorders over this process's owner database (release table row 13, 3d;
+ * agent/usage-recording.ts). Reads only in-memory credentials: the gateway key and the Codex proxy mode.
+ */
+const usageRecording = createHostUsageRecording({
+  pricing: usagePricing,
+  isOpenAiSubscriptionProviderId: id => providerConfig?.codexAccounts.isOpenAiSubscriptionProviderId(id) ?? false,
+  readGatewayKey: () => currentGateway()?.credential ?? null,
+  codexProxyAuthInjection: () => codexRuntime?.proxy.getCodexProxyAuthInjection() ?? 'env-key',
+  isProfileHeld: () => inputQueue.isHeldForDesktop(),
+});
 const listProviders = createProviderCatalog({
   readProviders: connected => providerConfig?.publicViews(connected) ?? Promise.resolve([]),
   // Keep each engine's model list in step with the account's models (the desktop refreshes on catalog change).
@@ -782,7 +796,10 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   void reconcileGeneratedImageRecovery().catch(() => hostLog.warn('native image cleanup reconciliation deferred'));
   // As the desktop once the account DB is ready (bootstrap-electron.ts): the account currency and the
   // last price snapshot come back from disk before the first /models round.
-  void usagePricing.prewarmModelPricing().catch(error =>
+  // Usage recording resumes for this owner database; then, as the desktop (bootstrap-electron.ts :10384),
+  // pending Pi receipts are priced once the prices are back.
+  usageRecording.open();
+  void usagePricing.prewarmModelPricing().then(() => usageRecording.retryPending()).catch(error =>
     hostLog.warn('model pricing prewarm failed', { error: error instanceof Error ? error.message : String(error) }));
   runtime.owner = ownerId;
   runtime.storage = 'ready';
@@ -1196,6 +1213,8 @@ const contextRecovery = createHostContextRecoveryWiring({
 });
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
+  // The turn usage recorders (agent/usage-recording.ts), fed by the turn executor.
+  usage: usageRecording,
   // The task list's activity time when a person's turn is dispatched or steered (register.ts
   // touchSessionActivityInDb, the same write: agent/session-activity.ts).
   touchSessionActivity: createHostSessionActivity({ getOwner: getCurrentDbClientSnapshot, publish: event => eventHub.publish(event) }),
@@ -1993,6 +2012,9 @@ async function disposeOwnerRuntime(): Promise<void> {
     await attempt(() => drainedPlugins);
     await attempt(() => drainedApps);
     pluginManager?.disposeNotificationIndex();
+    // The usage writes started for this owner finish in its database, and no new one starts
+    // (agent/usage-recording.ts drain; the desktop flushes the Pi writes there, bootstrap-electron.ts :2639).
+    await attempt(() => usageRecording.drain());
     await attempt(() => closeStorage?.());
   } finally {
     platformTools = null;

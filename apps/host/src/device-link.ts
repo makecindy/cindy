@@ -16,6 +16,7 @@ import * as botBoundary from '../../desktop/src/main/device-link/remoteBotSessio
 import * as sharedTasks from '../../desktop/src/main/device-link/sharedTaskDispatch.js';
 import { admitSharedTaskFsWatchTopics } from '../../desktop/src/main/device-link/sharedTaskFileAccess.js';
 import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.js';
+import { withoutPhaseOneUsagePushes } from './agent/usage-push-channels.js';
 import { TASK_TAG_CHANNEL } from '../../desktop/src/main/localDb/ipc/taskTagService.js';
 import { readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch } from '../../desktop/src/main/localDb/ipc/botRemoteSessionAccess.js';
 import { createInteractionProjection, projectInteractionDismissedForRemote } from '../../desktop/src/main/cindy-brain/interactionProjection.js';
@@ -243,7 +244,10 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     refreshSharedTaskPeer: sharedTasks.refreshSharedTaskPeer,
     releaseSharedTaskWatchesOnWorkdirChange: sharedTasks.releaseSharedTaskWatchesOnWorkdirChange,
     admitSharedTaskFsWatchTopics,
-    setBroadcastTapListener: broadcastTap.setBroadcastTapListener, broadcastTap,
+    // Phase 1: the usage pushes are not forwarded to remote devices (agent/usage-push-channels.ts).
+    setBroadcastTapListener: (listener: Parameters<typeof broadcastTap.setBroadcastTapListener>[0]) =>
+      broadcastTap.setBroadcastTapListener(withoutPhaseOneUsagePushes(listener)),
+    broadcastTap,
     // A remote plugin authorization writes the plugin's sign-in on this computer: refused while a
     // desktop uses this profile, as the service refuses other writes (the dispatcher handles this
     // channel itself, PLUGIN_OAUTH_CHANNEL, so the service gate does not see it).
