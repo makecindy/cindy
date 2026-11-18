@@ -4164,6 +4164,59 @@ describe('OrcaTeamService', () => {
 
 /**
  * 测试价值
+ * - 生产入口与可观察结果：OrcaTeamService.captureLocalWorkerReport 的直连轮（无 autoBridge
+ *   条目）回调；worker 行的 latest_report 与六态映射。
+ * - Bug 依据：Greptile 2026-11-18 复审发现——直连轮的空回调让 send_to_lead 的结构化结论
+ *   （waiting/failed/dropped）不落库，terminal 统一写 done，面板丢掉 Worker 自己报的结论。
+ * - 现有覆盖缺口：此前所有回报用例都从 Lead 派活轮出发，没有任何直连轮回报落库用例。
+ * - 最小失败输入：不 setPending 直接把 send_to_lead 回执喂给 captureLocalWorkerReport。
+ * - tier：unit（内存 fake 的行状态与 spy）。
+ */
+describe('OrcaTeamService direct-turn report outcomes', () => {
+  it('persists a direct-turn report without settling Lead obligations', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: true,
+      report: { state: 'failed', summary: '直连轮失败', question: '选 A 还是 B' },
+    });
+    expect(deps.setWorkerLatestReport).toHaveBeenCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'failed' }),
+    );
+    expect(deps.updateWorkerStatus).toHaveBeenCalledWith(
+      'worker-1',
+      'error',
+      expect.objectContaining({ state: 'failed' }),
+    );
+    expect(getWorker().status).toBe('error');
+    // 直连轮没有 Lead 派活，不存在可结算的欠回报。
+    expect(service.hasPendingWorkerReports('lead-1')).toBe(false);
+  });
+
+  it('drops a late direct-turn report once a new Lead assignment owns the session', async () => {
+    const { deps, service } = createDeps();
+    const deliver = service.captureLocalWorkerReport('worker-session-1');
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '新活',
+    });
+    await deliver(true, { delivered: true, report: { state: 'dropped', summary: '直连结论' } });
+    // 回调执行时新派活已认领该会话：本轮归属检查放弃写入，不干扰新派活的状态机。
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'dropped' }),
+    );
+    expect(deps.updateWorkerStatus).not.toHaveBeenCalledWith(
+      'worker-1',
+      'done',
+      expect.objectContaining({ state: 'dropped' }),
+    );
+  });
+});
+
+/**
+ * 测试价值
  * - 生产入口与可观察结果：OrcaTeamService.archiveWorker / sendToWorker；Lead 队列里该 Worker 的
  *   异常终止回报是否被撤下，回执是否带回正文。
  * - Bug 依据：2026-11-10 协同任务里，五个撞上用量上限的 Worker 已被处理，剩余四条异常终止回报仍

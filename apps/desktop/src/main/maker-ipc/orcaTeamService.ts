@@ -809,36 +809,46 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
  * waiting 不进入完成待确认；dropped 无人工动作；blocked 等人回答但仍属正常终态；
  * ready 跟随轮次真实终态；failed 才是执行异常。
  */
-  async function applyWorkerReportState(
-    state: AutoBridgeState,
+  // 六态映射核心：只依赖 worker 行标识，Lead 派活轮与直连轮都能走。
+  async function applyReportOutcome(
+    workerId: string,
+    leadSessionId: string,
     report: OrcaStructuredWorkerReport,
     turnStatus: 'done' | 'error',
   ): Promise<void> {
     // progress 只描述进度，不是本轮结论：它不能占用映射名额，否则晚到的 waiting /
     // blocked / dropped 会因 reportApplied 被跳过，永久停在 done 且面板不更新。
     if (report.state === 'progress') return;
-    await deps.setWorkerLatestReport(state.workerId, report);
-    state.reportApplied = true;
+    await deps.setWorkerLatestReport(workerId, report);
     switch (report.state) {
       case 'waiting':
-        await deps.markWorkerIdle(state.workerId);
+        await deps.markWorkerIdle(workerId);
         break;
       case 'dropped':
-        await deps.updateWorkerStatus(state.workerId, 'done', report);
+        await deps.updateWorkerStatus(workerId, 'done', report);
         break;
       case 'blocked':
         // 一轮干净结束、只是在等人回答：不是执行异常。
-        await deps.updateWorkerStatus(state.workerId, 'done', report);
+        await deps.updateWorkerStatus(workerId, 'done', report);
         break;
       case 'failed':
-        await deps.updateWorkerStatus(state.workerId, 'error', report);
+        await deps.updateWorkerStatus(workerId, 'error', report);
         break;
       case 'ready':
       default:
-        await deps.updateWorkerStatus(state.workerId, turnStatus, report);
+        await deps.updateWorkerStatus(workerId, turnStatus, report);
         break;
     }
-    deps.broadcastOrcaWorkerChanged(state.leadSessionId);
+    deps.broadcastOrcaWorkerChanged(leadSessionId);
+  }
+
+  async function applyWorkerReportState(
+    state: AutoBridgeState,
+    report: OrcaStructuredWorkerReport,
+    turnStatus: 'done' | 'error',
+  ): Promise<void> {
+    await applyReportOutcome(state.workerId, state.leadSessionId, report, turnStatus);
+    state.reportApplied = true;
   }
 
   async function withWorkerTransition<T>(
@@ -2441,7 +2451,20 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const state = autoBridge.get(sessionId);
       // Direct user turns have no Lead obligation. In particular, a late callback must
       // not look up and settle a new assignment that did not exist at capture time.
-      if (!state) return async () => {};
+      if (!state) {
+        // 直连轮也有结构化结论：保存并映射自己的结论，但不结算 Lead 的欠回报；
+        // 回调执行时若已有新派活认领该会话，本轮归属检查照旧放弃写入。
+        return async (accepted, receipt) => {
+          const report = accepted ? receipt?.report : undefined;
+          if (!report || report.state === 'progress') return;
+          const link = await deps.getWorkerLinkBySessionId(sessionId);
+          if (!link) return;
+          await withWorkerTransition(link.workerId, async () => {
+            if (autoBridge.get(sessionId)) return;
+            await applyReportOutcome(link.workerId, link.leadSessionId, report, 'done');
+          });
+        };
+      }
       const runtime = deps.getLiveSession(sessionId);
       const generation = runtime?.getTurnGeneration?.();
       if (state.productTerminal && (
