@@ -119,7 +119,10 @@ Chat Completions 网关在 Gemini 工具 ID 中携带签名时，切到受限后
 下游的 64 字符限制。仅在目标模型配置显式声明 `compat.maxToolCallIdLength: 64` 时，
 bridge 才在 `openai-completions` 请求投影中缩短超长 ID，调用与结果使用同一映射，
 并避开已有短 ID；不写回会话历史。这是 Cindy bridge 消费的兼容选项，经过原生
-`models.json` 的模型 `compat` 传递，不作为 HTTP 请求字段发送；只给已确认允许重写
+`models.json` 的模型 `compat` 传递，不作为 HTTP 请求字段发送；生产投影为官方
+OpenAI Chat 端点默认声明此约束。自定义网关通过持久 `perAgent.pi.maxToolCallIdLength`
+覆盖声明（见 [配置规则](configuration-and-overrides.md#pi-chat-工具-id-上限)），不编辑临时
+`models.json`。只给已确认允许重写
 ID 且要求 64 字符上限的目标线路配置，不给依赖签名 ID 的 Gemini 线路配置。
 未声明该选项的线路保留原 ID，包括 `production-flash`、`gemini` 等部署别名；
 不依据用户可自定义的模型名推断能力。自定义 GPT 网关也须显式声明，不能自动猜测。

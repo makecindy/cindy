@@ -204,6 +204,25 @@ Pi 使用逐模型 reserveTokens，Claude Code 同步原生环境与 host 判断
 实现为 `localCatalogOverrides.ts` 与 `pi-native-catalog.ts`，持久化、投影和真实 Pi 回归分别见
 `model-catalog-override-store.test.ts`、`piNativeProviders.test.ts`、`piGoogleChat.e2e.test.ts`。
 
+### Pi Chat 工具 ID 上限
+
+官方 OpenAI Chat 端点 `https://api.openai.com/v1` 在生产启动投影中默认声明 64 字符
+工具 ID 上限。仅按实际端点和 `openai-completions` API 判定，不按模型名、显示名或
+保存的预设推断；Responses 保留原生处理，未知网关不自动继承此声明。
+
+已确认受同样限制、且允许改写工具 ID 的自定义网关，可使用上述同一持久覆盖文件：
+
+```json
+{"version":1,"patches":{"connection-id:production-chat":{"perAgent":{"pi":{"maxToolCallIdLength":64}}}}}
+```
+
+仅接受 `64` 或 `null`，仅允许 `perAgent.pi`，且只对 Chat API 生效。`null` 明确关闭
+缩短，删除字段恢复端点默认。不要给依赖签名 ID 的 Gemini 线路配置 `64`。
+字段随连接和模型身份保存，刷新目录并重启 Pi 后生效；不修改临时 `models.json`，
+不自动改写用户配置。更换上游时应重新核对或删除这项覆盖。配置合并、owner 隔离和
+旧客户端未知条目的处理与上节一致。真实生产配置到 HTTP 的覆盖见
+`piGoogleChat.e2e.test.ts`，别名和未知线路保护见 `pi-agent.integration.test.ts`。
+
 ### 请求体积控制
 
 `XDT_REQUEST_SIZE_CONTROL_DISABLE` 是 Desktop／Node Host 宿主进程的隐藏环境开关，不新增
