@@ -1474,7 +1474,7 @@ export interface AgentDeps {
 
   /** Optional native tool hooks; the host owns live task selection and plugin lifecycle. */
   toolLifecycleControl?: import('./shared/tool-lifecycle.js').ToolLifecycleControl;
-  claudeRecoveryObserver?: import('./claude-code/native-recovery-hooks.js').ClaudeRecoveryObserver;
+  nativeRecoveryObserver?: import('./shared/native-recovery-observer.js').NativeRecoveryObserver;
 
   /** Host bridge for repairing Claude Code subagent usage when provider usage is zero. */
   registerClaudeSubagentTask?: (task: ClaudeSubagentTaskRegistration) => void;

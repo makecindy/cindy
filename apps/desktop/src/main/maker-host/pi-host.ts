@@ -187,6 +187,7 @@ export interface BuildPiAgentOpts {
   logger: AgentDeps['logger'];
   turnChangeCapture?: AgentDeps['turnChangeCapture'];
   toolLifecycleControl?: AgentDeps['toolLifecycleControl'];
+  nativeRecoveryObserver?: AgentDeps['nativeRecoveryObserver'];
   registerLocalAgentProcess?: AgentDeps['registerLocalAgentProcess'];
   capabilityAdditions?: AgentDeps['capabilityAdditions'];
   reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
@@ -252,6 +253,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     logger: opts.logger,
     turnChangeCapture: opts.turnChangeCapture,
     toolLifecycleControl: opts.toolLifecycleControl,
+    nativeRecoveryObserver: opts.nativeRecoveryObserver,
     registerLocalAgentProcess: opts.registerLocalAgentProcess,
     spawnPiSubagentRunner,
     derivePiProxySessionToken,

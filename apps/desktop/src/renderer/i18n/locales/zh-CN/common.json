@@ -8247,6 +8247,8 @@
         "subscribeMessageDetail": "接收已保存的用户消息和 AI 回复；附件通过单独的读取与交接获取。",
         "subscribeToolExecution": "工具执行过程",
         "subscribeToolExecutionDetail": "接收工具名称、输入、结果与错误；只旁听，不改变执行。",
+        "subscribeNativeRecovery": "原生恢复事件",
+        "subscribeNativeRecoveryDetail": "接收重试、上下文压缩与任务停止的引擎状态。",
         "subscribeTaskState": "任务状态事件",
         "subscribeTaskStateDetail": "接收任务的运行、等待、完成、归档与隐藏状态变化。",
         "subscribeActivity": "旁听 AI 何时在思考、何时在等你",

@@ -2291,7 +2291,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         )
       : mergeClaudeHookSets(
           !hosted?.guest && !opts.remoteHostId ? claudeToolLifecycleHooks(this.deps.toolLifecycleControl, opts.sessionId) : undefined,
-          !hosted?.guest && !opts.remoteHostId ? claudeNativeRecoveryHooks(this.deps.claudeRecoveryObserver, opts.sessionId) : undefined,
+          !opts.deviceHosted && !opts.remoteHostId ? claudeNativeRecoveryHooks(this.deps.nativeRecoveryObserver, opts.sessionId) : undefined,
           buildClaudeLocalToolGuardHooks(
             capabilityRouting,
             () => activeCapabilitySelectionText,

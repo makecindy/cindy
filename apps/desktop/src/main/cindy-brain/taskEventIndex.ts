@@ -2,7 +2,7 @@ import { encodeCursor } from '@cindy/mcps/history-cursor';
 import type { DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import {
   declaredGhostTaskEventTopics, ghostTaskEventApproved,
-  type GhostTaskEventTopic, type GhostTaskEventData, type InstalledGhost,
+  type GhostTaskEventTopic, type GhostTaskEventData, type GhostNativeRecoveryData, type InstalledGhost,
 } from '../../shared/ghost.js';
 import type { TaskChangeEvent } from '../localDb/taskEvents.js';
 import { tryGetDbClient } from '../localDb/client/current.js';
@@ -25,6 +25,16 @@ export class GhostTaskEventIndex {
     if (!ghosts?.length || !this.owner || owner.dataOwnerId !== this.owner.dataOwnerId
       || owner.ownerGeneration !== this.owner.ownerGeneration || !isToolExecutionEvent(event.type)) return;
     gateway().publishIndexed(ghosts, 'tool-execution', 'did-tool-execution', projectToolExecutionEvent(sessionId, event));
+  }
+
+  wantsNativeRecovery(): boolean { return this.topics.has('native-recovery'); }
+
+  publishNativeRecovery(data: GhostNativeRecoveryData, owner: DataOwnerPushStamp,
+    gateway: () => GhostSubscriptionGateway): void {
+    const ghosts = this.topics.get('native-recovery');
+    if (!ghosts?.length || !this.owner || owner.dataOwnerId !== this.owner.dataOwnerId
+      || owner.ownerGeneration !== this.owner.ownerGeneration) return;
+    gateway().publishIndexed(ghosts, 'native-recovery', 'did-native-recovery', data);
   }
 
   subscribedKinds(): TaskChangeEvent['kind'][] {

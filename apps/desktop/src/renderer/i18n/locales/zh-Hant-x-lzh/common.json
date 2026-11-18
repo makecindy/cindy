@@ -8233,6 +8233,8 @@
         "subscribeMessageDetail": "收已存之君訊與 AI 之答；附件另循讀取與交接之途。",
         "subscribeToolExecution": "工具行事",
         "subscribeToolExecutionDetail": "收工具之名、輸入、結果與過誤；惟觀之，不改其行。",
+        "subscribeNativeRecovery": "原生復行之事",
+        "subscribeNativeRecoveryDetail": "收重試、壓縮上下文及任務止息之狀態。",
         "subscribeTaskState": "差事狀態",
         "subscribeTaskStateDetail": "收差事運行、候答、完畢、歸檔及隱顯之變。",
         "subscribeActivity": "旁聽 AI 何時思之、何時候君",

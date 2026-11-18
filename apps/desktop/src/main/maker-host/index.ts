@@ -107,7 +107,7 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import { makerStartupGate } from './startup-gate.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.desktop.js';
 import { resolveGhostFsSessionSnapshot } from '../maker-ipc/ghostFsSessionSnapshot.js';
-import { ghostToolLifecycleControl } from '../cindy-brain/index.js';
+import { ghostNativeRecoveryObserver, ghostToolLifecycleControl } from '../cindy-brain/index.js';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 import { getActiveInteractionRoute, requestHostInteraction } from '../maker-ipc/interactionRouter.js';
 import { setAgentAppUpdateSessionHost } from '../agent-app-update/index.js';
@@ -1482,6 +1482,7 @@ export function getMaker(): Maker {
     const claudeAgent = new ClaudeCodeAgent({
       resolveLocalMcpDuplicateChoices,
       toolLifecycleControl: ghostToolLifecycleControl,
+      nativeRecoveryObserver: ghostNativeRecoveryObserver,
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       getManagedSkills: listCindyManagedSkills,
@@ -2247,6 +2248,7 @@ export function getMaker(): Maker {
     const pendingPiPackageRuntimeSnapshots: PiPackageRuntimeInvalidationSnapshot[] = [];
     const buildPiAgentForDesktop = () => buildPiAgent({
       toolLifecycleControl: ghostToolLifecycleControl,
+      nativeRecoveryObserver: ghostNativeRecoveryObserver,
       logger: desktopMakerLogger,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,

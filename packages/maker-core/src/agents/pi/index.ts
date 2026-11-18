@@ -2727,6 +2727,9 @@ export class PiAgent extends BaseAgent {
     // 受邀者(另一个账号)：本机用户的 Pi 包、扩展、托管技能、全局说明与技能偏好都不进入会话，
     // 受邀者带来的项目扩展也不在本机执行；说明文件只取会话目录内的(见 device-hosted-guest.ts)。
     const hostedGuest = hosted?.guest === true;
+    const nativeRecovery = !reviewMode && !remote && !opts.deviceHosted && opts.sessionId
+      ? this.deps.nativeRecoveryObserver?.(opts.sessionId)
+      : undefined;
     const guestRoot = hosted && hostedGuest ? deviceHostedGuestSessionRoot(hosted, opts.workingDir) : undefined;
     // 受邀者的 Pi 会话文件放在受邀者目录里(分享删除时整体清理)，不与本机用户的会话混放；
     // 恢复只能打开那里的会话文件，不能凭路径打开本机的其它文件。
@@ -5888,6 +5891,23 @@ export class PiAgent extends BaseAgent {
           // Retry exhaustion already settled the old run. Its optional native
           // tail must not clear a new prompt's permission policy before start.
           if (ctx.turnSettled && (event.type === 'agent_settled' || event.type === 'auto_retry_end')) return;
+          if (nativeRecovery) {
+            switch (event.type) {
+              case 'auto_retry_start':
+                nativeRecovery.publish('pi', event.type, typeof event.attempt === 'number' ? { attempt: event.attempt } : {});
+                break;
+              case 'auto_retry_end':
+                nativeRecovery.publish('pi', event.type, { success: event.success === true });
+                break;
+              case 'compaction_start':
+                nativeRecovery.publish('pi', event.type, {});
+                break;
+              case 'compaction_end':
+              case 'agent_settled':
+                nativeRecovery.publish('pi', event.type, { aborted: event.aborted === true });
+                break;
+            }
+          }
           const cacheInput = cacheInputTracker.observe(event);
           if (cacheInput) pendingCacheCompatibility = { key: cacheInput.key, value: readCacheCompatibility() };
           if (event.type === 'extension_ui_request' && event.method === 'input' && event.title === 'cindy:cache-input') {
