@@ -56,7 +56,7 @@ import { provisionalDraftTaskId, subscribeProvisionalDraftTask } from './provisi
 import { useProvisionalDraftProjectTaskId } from './hooks/useProvisionalDraftProjectTaskId';
 import { toast } from '@/lib/toast';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
-import { useCCSessions } from '@/hooks/useCCSessions';
+import { useCCSessions, useCCSessionsAllStatuses } from '@/hooks/useCCSessions';
 import { useRecentWorkdirs } from '@/hooks/useRecentWorkdirs';
 import { refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -455,7 +455,7 @@ export function CCAgentSidebarUpper() {
   const { mode: taskListMode } = useTaskListMode();
   const includeArchived = filter.status;
   const sessionsHook = useCCSessions({ includeArchived });
-  const { sessions: allSessionsForAttentionRaw } = useCCSessions({ includeArchived: 'all' });
+  const allSessionsForAttentionRaw = useCCSessionsAllStatuses();
   const allSessionsForAttention = useMemo(
     () => CINDY_MAKE_ENABLED
       ? allSessionsForAttentionRaw

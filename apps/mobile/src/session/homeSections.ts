@@ -15,7 +15,7 @@ import {
 import { LIVE_TASK_PRIORITY } from '@cindy/maker-shared/live-task-priority';
 import {
   activityMsFromIso,
-  collectHomePriorityContext,
+  collectInboxHomePriorityContext,
   EMPTY_HOME_PRIORITY_CONTEXT,
   naturalPriorityRankForId,
   sessionPriorityRank,
@@ -577,16 +577,12 @@ export function buildInboxHomeSections(
   const groups = new Map<string, HomeRow[]>(['inbox', 'working', 'snoozed', 'archived'].map(key => [key, []]));
   // Every listed task (including folded automation runs and tasks outside the regular list's
   // scope) contributes its own unread / waiting signals.
-  const members = original.flatMap(section => section.data)
-    .flatMap(row => row.kind === 'session' ? [row.item, ...row.item.automationGroup?.items ?? []] : []);
-  const memberContext = collectHomePriorityContext(members, priorityContext.runningSessionIds, {
-    heldPriorityRanks: new Map(), recentlyViewedAtMs: new Map(),
+  const items = original.flatMap(section => section.data)
+    .flatMap(row => row.kind === 'session' ? [row.item] : []);
+  const ctx = collectInboxHomePriorityContext(items, priorityContext.runningSessionIds, {
+    heldPriorityRanks: new Map(priorityContext.heldPriorityRanks),
+    recentlyViewedAtMs: new Map(priorityContext.recentlyViewedAtMs),
   });
-  const ctx: HomeListPriorityContext = {
-    ...priorityContext,
-    unreadSessionIds: new Set([...priorityContext.unreadSessionIds, ...memberContext.unreadSessionIds]),
-    waitingSessionIds: new Set([...priorityContext.waitingSessionIds, ...memberContext.waitingSessionIds]),
-  };
   for (const section of original) {
     if (section.key === 'pinned') continue;
     for (const row of section.data) {

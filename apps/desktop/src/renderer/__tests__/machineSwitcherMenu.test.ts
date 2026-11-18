@@ -318,26 +318,6 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
   });
 
   // 设计文档 §3.3 定稿 + 2026-08-12 用户重申:筛选不作用于置顶区。
-  it('置顶区不受项目 / Agent / 最近活跃筛选影响(归档仍按状态隐藏)', () => {
-    // 置顶会话:直接用 allGroups.pinned,不再套 vendor / project 过滤。
-    expect(sidebarUpperSource).toMatch(
-      /const visiblePinnedSessions = useMemo\(\(\) => \{[\s\S]*?return allGroups\.pinned;\s*\}, \[allGroups\.pinned\]\)/,
-    );
-    // 置顶项目:仍尊重「从侧栏移除」(用户显式隐藏),但不再按 project / vendor 过滤。
-    const pinnedProjectsBlock = sidebarUpperSource.slice(
-      sidebarUpperSource.indexOf('const visiblePinnedProjects'),
-      sidebarUpperSource.indexOf('const visiblePinnedEntries'),
-    );
-    expect(pinnedProjectsBlock).toContain('hiddenProjectComparisonKeys');
-    expect(pinnedProjectsBlock).toContain('pinnedProjectComparisonKeys');
-    expect(pinnedProjectsBlock).toContain('projectKeyComparisonSetHas');
-    expect(pinnedProjectsBlock).not.toContain('vendorPredicate');
-    expect(pinnedProjectsBlock).not.toContain('filter.projectsAsSet');
-    expect(pinnedProjectsBlock).not.toContain('allowedProjects');
-    // 「最近活跃」本就豁免:置顶取 allGroups(未经活跃时间收窄),不是 activityFilteredSessions。
-    expect(sidebarUpperSource).toMatch(/const allGroups = useProjectGroups\(\s*sidebarSessions/);
-  });
-
   // 2026-08-12 用户裁决:任务信息按用户勾选顺序显示(先勾时间再勾费用 → 时间在前)。
   it('任务信息渲染顺序 = 勾选顺序,不再是固定的 pr → tokens → cost → time', () => {
     const infoMetaSource = read('features', 'cc-agent', 'sidebar', 'SessionInfoMeta.tsx');

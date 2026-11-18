@@ -213,6 +213,7 @@ import {
   advanceCurrentViewedPriorityHold,
   advanceViewedPriorityHold,
   collectHomePriorityContext,
+  collectInboxHomePriorityContext,
   holdViewedPriorityRank,
   homeViewedPriorityHold,
   type HomeListSortBy,
@@ -2335,13 +2336,14 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     }
     return ids;
   }, [homeSessions, homeStatusVersion, liveActivityIndex, scheduleIndex]);
-  const homePriorityItems = useMemo(
-    () => [...home.pinned, ...home.chats, ...home.projects.flatMap((project) => project.sessions)],
-    [home],
-  );
+  const homePriorityItems = useMemo(() => {
+    const source = taskListMode === 'inbox' ? inboxHome : home;
+    return [...source.pinned, ...source.chats, ...source.projects.flatMap(project => project.sessions)];
+  }, [home, inboxHome, taskListMode]);
   const priorityContext = useMemo(
-    () => collectHomePriorityContext(homePriorityItems, runningSessionIds, homeViewedPriorityHold),
-    [homePriorityItems, priorityHoldEpoch, runningSessionIds],
+    () => (taskListMode === 'inbox' ? collectInboxHomePriorityContext : collectHomePriorityContext)(
+      homePriorityItems, runningSessionIds, homeViewedPriorityHold),
+    [homePriorityItems, priorityHoldEpoch, runningSessionIds, taskListMode],
   );
   const priorityContextRef = useRef(priorityContext);
   priorityContextRef.current = priorityContext;

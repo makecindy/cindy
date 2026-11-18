@@ -14,6 +14,7 @@ import {
 } from '@/session/homeSections';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
 import type { RemoteSessionListItem } from '@/session/sessionList';
+import { collectHomePriorityContext, collectInboxHomePriorityContext } from '@/session/homeListPriority';
 import { groupAutomationListItems } from '@cindy/maker-shared/session-list';
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
@@ -489,6 +490,7 @@ it('builds inbox sections and recomputes snooze expiry without losing collapsed 
   const idle = listItem('idle', new Date(now).toISOString());
   const running = listItem('run', new Date(now).toISOString());
   const waiting = listItem('wait', new Date(now).toISOString());
+  waiting.pendingInteractionCount = 1;
   const later = listItem('later', new Date(now).toISOString());
   later.session.snoozedUntil = new Date(now + 3600000).toISOString();
   const done = listItem('done', new Date(now).toISOString());
@@ -525,7 +527,7 @@ it('leaves idle teammate tasks out of the inbox until they need the user or run'
     .find(s => s.key === key)!.data.flatMap(row => row.kind === 'session' ? [row.item.session.id] : []);
   expect(ids('inbox-inbox')).toEqual(['mine']);
   expect(ids('inbox-working')).toEqual([]);
-  signals.waitingSessionIds.add('routine');
+  routine.pendingInteractionCount = 1;
   signals.runningSessionIds.add('opened');
   expect(ids('inbox-inbox').sort()).toEqual(['mine', 'routine']);
   expect(ids('inbox-working')).toEqual(['opened']);
@@ -539,9 +541,9 @@ it('puts a quiet followed task in working and returns it to inbox for results, w
   const signals = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
   const workingCount = () => buildInboxHomeSections(home, new Set(), signals, Date.now()).find(s => s.key === 'inbox-working')?.count;
   expect(workingCount()).toBe(1);
-  signals.waitingSessionIds.add('followed');
+  item.pendingInteractionCount = 1;
   expect(workingCount()).toBe(0);
-  signals.waitingSessionIds.clear();
+  item.pendingInteractionCount = 0;
   // A finished round with a result for the user goes back to inbox even while followed.
   item.scheduleInfo.unreadRunIds = ['run-1'];
   item.scheduleInfo.unreadCount = 1;
@@ -568,4 +570,48 @@ it('moves a task that finished while open to inbox right away, keeping held unre
   const idle = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
   expect(section({ ...idle, runningSessionIds: new Set(['open']), heldPriorityRanks: new Map([['open', 2]]) })).toBe('inbox-working');
   expect(section({ ...idle, heldPriorityRanks: new Map([['open', 2]]) })).toBe('inbox-inbox');
+});
+
+// PR #10685, unit: production collector and inbox builder must unpack automation
+// members before deciding each run's section. Earlier tests never mixed a waiting
+// old run with an idle/running/followed representative, so group signals leaked.
+it.each(['chat', 'project'] as const)('keeps each %s automation run independent of aggregate signals', source => {
+  const now = Date.parse('2026-11-18T09:00:00Z');
+  const make = (id: string, at: string) => ({
+    ...listItem(id, at),
+    session: { id, source: 'scheduler', status: 'active', updatedAt: at,
+      taskTeammate: { id: 'mate', name: 'Mate' } },
+    scheduleInfo: { scheduleId: 's', scheduleName: 'Routine', running: false,
+      latestRunAt: 0, unreadCount: 0, unreadRunIds: [] },
+  }) as unknown as RemoteSessionListItem;
+  for (const mode of ['idle', 'running', 'followed', 'unread'] as const) {
+    const latest = make('latest', '2026-11-18T08:00:00Z');
+    const older = make('older', '2026-11-18T07:00:00Z');
+    older.pendingInteractionCount = mode === 'unread' ? 0 : 1;
+    if (mode === 'unread') {
+      older.scheduleInfo!.unreadRunIds = ['old-run'];
+      older.scheduleInfo!.unreadCount = 1;
+    }
+    if (mode === 'followed' || mode === 'unread') {
+      latest.scheduleInfo!.hasActiveFollowUp = true;
+      delete (latest.session as { taskTeammate?: unknown }).taskTeammate;
+    }
+    const grouped = groupAutomationListItems([latest, older], now, true, () => 'mac');
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0].session.id).toBe('latest');
+    const home = source === 'chat' ? presentation({ chats: grouped })
+      : presentation({ projects: [projectGroup('p', latest.lastActivityAt, grouped)] });
+    const running = new Set(mode === 'running' ? ['latest'] : []);
+    const hold = { heldPriorityRanks: new Map<string, number>(), recentlyViewedAtMs: new Map<string, number>() };
+    // Pass the ordinary list's aggregate context too: inbox must not trust its sets.
+    const aggregate = collectHomePriorityContext(grouped, running, hold);
+    const own = collectInboxHomePriorityContext(grouped, running, hold);
+    expect(own.waitingSessionIds.has('latest')).toBe(false);
+    expect(own.unreadSessionIds.has('latest')).toBe(false);
+    const sections = buildInboxHomeSections(home, new Set(), aggregate, now);
+    const ids = (key: string) => sections.find(section => section.key === key)!.data
+      .flatMap(row => row.kind === 'session' ? [row.item.session.id] : []);
+    expect(ids('inbox-inbox')).toEqual(mode === 'unread' ? [] : ['older']);
+    expect(ids('inbox-working')).toEqual(mode === 'idle' ? [] : ['latest']);
+  }
 });
