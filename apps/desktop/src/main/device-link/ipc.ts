@@ -1142,9 +1142,11 @@ export async function handleProviderShareInvoke(
   const callArgs = Array.isArray(args) ? args : [];
   let result: InvokeResultPayload;
   try {
-    result = isCrossRegionProviderShareTarget(target)
-      ? await crossRegionInvoke(target, channel, callArgs)
-      : await (deps.invokeProviderShareHost ?? deps.invoke)(target, channel, callArgs);
+    result = deps.invokeProviderShareHost
+      ? await deps.invokeProviderShareHost(target, channel, callArgs)
+      : isCrossRegionProviderShareTarget(target)
+        ? await crossRegionInvoke(target, channel, callArgs)
+        : await deps.invoke(target, channel, callArgs);
   } catch (err) {
     logProviderShareReadFailure(
       agentDeviceId,
