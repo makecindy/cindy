@@ -8456,7 +8456,7 @@
         "panelPageHosted": "自法器页启之 · 离法器页即自阖",
         "panelNone": "此法器无面板",
         "githubRelease": {
-          "title": "插件更新",
+          "title": "法器更新",
           "installed": "当前版本 {{version}}",
           "upstream": "上游版本 {{version}}",
           "prerelease": "预发布",
@@ -8467,7 +8467,7 @@
           "updating": "正在下载并安装…",
           "available": "有新版本可用。",
           "current": "当前版本已是最新。",
-          "updated": "插件已更新。",
+          "updated": "法器已更新。",
           "empty": "暂无可安装的版本。",
           "sign-in": "请登录 GitHub 后检查更新。",
           "forbidden": "当前 GitHub 登录无权读取此私有仓库。",
