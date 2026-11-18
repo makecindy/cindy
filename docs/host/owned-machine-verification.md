@@ -9,6 +9,24 @@ Ubuntu x64、Windows x64、macOS arm64 分别验证同一份待发布源码。�
 3. 用 `sync` 建立独立任务，核对 manifest。仓库文件多时，可先在仓库外把**已审核的传输清单**做成 tar.gz，分成小于 50 MiB 的分片再同步。归档前逐文件检查敏感文件排除项、符号链接、LFS 指针与总容量；随包附上原提交、逐文件 SHA256、排除清单及检查脚本。远端按片名顺序二进制拼接，解压到任务的 `src`，逐文件核对。三台机器应具有相同的源码摘要。源码有变化就新建任务。
 4. 各步骤通过 `prepare-run TASK SCRIPT` 后执行回执里的 SSH 命令。长步骤按实际耗时拆分，超过原生时限的单项可用 `run-long`。下面的命令都从远端任务的 `src` 执行，环境变量要在每次运行时重新加载。
 
+## 先清点二进制，再准备依赖
+
+每台机器、每份快照都要在下载前向负责人报清单。每行记录工具、平台、版本、是否已经在本次任务内可用、用途、获取来源、归档字节数和校验依据。可以用 HTTP HEAD 读取归档大小；registry 返回分块响应时用带 `Range: bytes=0-0` 的 HEAD 查看 `Content-Range` 分母。已有归档记录实际大小与哈希。需要获取的项等本轮确认后再取；发现新下载就停止并补报。
+
+| 项目 | 清点和准备方法 |
+| --- | --- |
+| Node、Corepack、pnpm | 核对 `.nvmrc` 和 `packageManager`，优先复用已按官方 SHASUMS256 校验的同平台归档。Windows 另列同版本 headers 和 node.lib。 |
+| npm 依赖中的原生程序 | 从本次 lockfile 导出 registry 包名、版本、完整性摘要、tarball 来源和字节数。包含 esbuild、sharp、node-pty、各平台 Claude Agent SDK 等。注明已缓存的包与新环境可能获取的上限，better-sqlite3 使用任务内 Node 的头文件编译。 |
+| Electron | 区分 npm 的 JS 包和对应平台的 Electron 运行时。源码空 profile 验收只需 JS 包。需要真实运行时的用例要单列平台、版本、来源、大小和校验值；获准后在任务内预置并核对 `dist` 中的应用和 `path.txt`。 |
+| Chromium | 记录 Playwright 的浏览器 revision。需要真实浏览器时，确认归档后设置任务专用的 `PLAYWRIGHT_BROWSERS_PATH`；只运行 Host 源码健康探针时不取浏览器。 |
+| Claude Code、Codex、Pi、ripgrep | 区分打包用的独立可执行文件、npm 包附带的程序和测试夹具。逐项记录已提供、需获取或本轮不用。常规无账号 Host 验证设置 `XDT_SKIP_AGENT_BIN_INSTALL=1`，涉及真实引擎、独立 rg 或真实账号的结果单列。 |
+
+Electron 42.11.12 的历史验收曾触发其 npm 包自带的 `install.js`。自有 macOS 任务目录出现完整的 Electron 分发包，自有 Windows 任务目录出现未完成的下载文件。两处均已清理。修复前，执行真实子 Host 的 startup-account、IPC 或 lifecycle 等路径可能在启动或刷新空会话时解析 Electron 包入口。入口发现 `path.txt` 缺失，或指向的 dist 程序缺失，就同步启动下载器。源码 Host 从 `a6cb62e1af` 起直接检查包旁的 `path.txt` 与实际文件，原生凭据操作延迟到真正加解密时解析可执行文件。
+
+锁定版本的 `ELECTRON_SKIP_BINARY_DOWNLOAD=1` 会让仓库根 postinstall 跳过补装；Electron 42.11.12 的入口及其 `install.js` 本身都不读取它。`ELECTRON_OVERRIDE_DIST_PATH` 让 npm 包入口直接返回该目录下的路径，可供已有分发包的验收使用。验证“没有 Electron 也能启动”时清除此变量，并在测试前后检查 `path.txt`、dist 和子进程记录，避免路径覆盖掩盖回归。`electron_config_cache` 只控制下载缓存位置；`ELECTRON_MIRROR` / `npm_config_electron_mirror` 控制下载来源；`ELECTRON_GET_USE_PROXY` 让该版下载依赖启用环境代理。这些变量均不保证禁止下载。使用替换过的镜像时还要检查优先级更高的 npm 配置和包配置。
+
+曾验收的 Chrome for Testing 153.0.8010.12 归档没有可供比对的官方 checksum。报告记录了归档、解压程序和候选包内程序的 SHA256，用于这一次临时验收和核对打包前后文件一致。
+
 ## Ubuntu 和 macOS
 
 下面的 Bash 命令使用系统已有的 curl、tar、编译器和 Python。任务目录内的 Node 发行包自带头文件，可供 better-sqlite3 本机编译。
@@ -40,24 +58,23 @@ base="https://nodejs.org/dist/v$version"
   tar -xf "$archive"
 )
 export PATH="$task/tools/bin:$task/tools/$dist/bin:$PATH"
-export HOME="$task/home" USERPROFILE="$task/home" TMPDIR="$task/tmp"
+export HOME="$task/home" USERPROFILE="$task/home"
 export XDG_CACHE_HOME="$HOME/.cache" XDG_CONFIG_HOME="$HOME/.config"
 export XDG_DATA_HOME="$HOME/.local/share" XDG_STATE_HOME="$HOME/.local/state"
 export COREPACK_HOME="$task/corepack" COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 export npm_config_cache="$HOME/.npm" npm_config_nodedir="$task/tools/$dist"
 export npm_config_build_from_source=better-sqlite3 SHARP_IGNORE_GLOBAL_LIBVIPS=1
 export ELECTRON_SKIP_BINARY_DOWNLOAD=1 XDT_SKIP_AGENT_BIN_INSTALL=1
-export LANG=en_US.UTF-8
 git config --global user.name 'Fixture Tester'
 git config --global user.email fixture@example.invalid
 corepack enable --install-directory "$task/tools/bin" pnpm
 node --version
 pnpm --version
-pnpm install --frozen-lockfile --store-dir "$task/pnpm-store"
+pnpm install --frozen-lockfile --os="$(node -p process.platform)" --cpu="$(node -p process.arch)" --libc=current --store-dir "$task/pnpm-store"
 (cd apps/host && node -e "const db=new (require('better-sqlite3'))(':memory:'); console.log(db.prepare('select sqlite_version() v').get()); db.close()")
 ```
 
-`pnpm --version` 应与根 package.json 的 `packageManager` 一致。测试时保留上述环境，特别是解析过真实路径的 TMPDIR、临时 HOME、测试 Git 身份及英文语言。
+`pnpm --version` 应与根 package.json 的 `packageManager` 一致。仓库为了制作跨平台产物配置了多个架构。上述安装参数将可选依赖限定到本机平台；保留下载明细，并核对每个实际获取的包来自获准的 registry、与冻结锁文件的 integrity 相符。测试继续使用临时 HOME 和测试 Git 身份。
 
 ## Windows
 
@@ -93,7 +110,6 @@ $env:PATH = "$tools/bin;$node;$env:PATH"
 $env:USERPROFILE = $env:HOME = "$task/home"
 $env:APPDATA = "$task/home/AppData/Roaming"
 $env:LOCALAPPDATA = "$task/home/AppData/Local"
-$env:TEMP = $env:TMP = "$task/tmp"
 New-Item -ItemType Directory -Force $env:APPDATA,$env:LOCALAPPDATA | Out-Null
 $env:COREPACK_HOME = "$task/corepack"
 $env:COREPACK_ENABLE_DOWNLOAD_PROMPT = '0'
@@ -130,7 +146,7 @@ Invoke-Checked tar.exe @('-xf',"$tools/$headers",'-C',$tools)
 $env:npm_config_nodedir = "$tools/node-v$v"
 New-Item -ItemType Directory -Force "$env:npm_config_nodedir/Release" | Out-Null
 Copy-Item "$tools/node.lib" "$env:npm_config_nodedir/Release/node.lib"
-Invoke-Checked pnpm.cmd @('install','--frozen-lockfile','--store-dir',"$task/pnpm-store")
+Invoke-Checked pnpm.cmd @('install','--frozen-lockfile','--os=win32','--cpu=x64','--libc=current','--store-dir',"$task/pnpm-store")
 Push-Location apps/host
 try {
   Invoke-Checked node @('-e',"const db=new (require('better-sqlite3'))(':memory:'); console.log(db.prepare('select sqlite_version() v').get()); db.close()")
@@ -138,6 +154,36 @@ try {
 ```
 
 ## Host 门禁与回执
+
+每条命令的回执写明机器类型、命令、Node 版本、结果、开跑负载、日志、TMPDIR 是否显式设为真实路径及实际语言环境。新写或修改的测试至少有一轮使用默认临时目录与语言。Unix 在测试子 shell 中执行 `unset TMPDIR`，保留登录环境原有的 LANG 和 LC_*。Windows 在测试进程中清除 TMPDIR，保留原有的 TEMP、TMP 和系统区域设置。两种模式都继续隔离 HOME、应用数据与缓存。若另测显式临时目录，将 TMPDIR 指向已创建目录的 realpath，分开记录两轮结果。
+
+在每条被测命令前，从同一进程环境运行以下命令，保存临时目录的原始路径、真实路径、语言变量和 Node 实际采用的区域。Windows 另记录 `Get-Culture` 和 `Get-UICulture`。环境变量未设置时照实记录。
+
+```sh
+node -e "const os=require('node:os'),fs=require('node:fs'),p=os.tmpdir(),e=process.env; console.log({tmpdir:e.TMPDIR,osTmp:p,realTmp:fs.realpathSync(p),lang:e.LANG,lcAll:e.LC_ALL,lcCtype:e.LC_CTYPE,lcMessages:e.LC_MESSAGES,locale:Intl.DateTimeFormat().resolvedOptions().locale})"
+```
+
+依赖准备结束后，在测试进程及其子进程中默认关闭对外访问，保留回环 HTTP 给 Host、桌面代理和测试服务使用。沿用 startup-account 测试里的做法，将 HTTP/HTTPS 代理指向回环上确认没有服务监听的端口，同时设置大小写两套变量。用本次测试进程的网络隔离限制连接目的地，并验证回环可用、对外连接被拒；记录沙箱是否限制了 PID 查询。无法验证隔离生效时先报告，再决定如何执行。代理只约束识别这些变量的客户端，不能当作系统防火墙；发现清单外的下载尝试就立即停下，保留请求、子进程与缓存记录，报告给负责人。保持任务专用 HOME、数据目录和工具缓存，避免命中个人安装或账号。
+
+```bash
+export HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9
+export NO_PROXY=127.0.0.1,localhost,::1
+export http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY" no_proxy="$NO_PROXY"
+export NODE_USE_ENV_PROXY=1 ELECTRON_GET_USE_PROXY=1
+export ELECTRON_MIRROR="$HTTP_PROXY/" npm_config_electron_mirror="$HTTP_PROXY/"
+```
+
+```powershell
+$env:HTTP_PROXY = 'http://127.0.0.1:9'
+$env:HTTPS_PROXY = $env:HTTP_PROXY
+$env:NO_PROXY = '127.0.0.1,localhost,::1'
+$env:NODE_USE_ENV_PROXY = '1'
+$env:ELECTRON_GET_USE_PROXY = '1'
+$env:ELECTRON_MIRROR = "$($env:HTTP_PROXY)/"
+$env:npm_config_electron_mirror = $env:ELECTRON_MIRROR
+```
+
+Windows 进程环境变量名不区分大小写。平台截图、浏览器或真实引擎等有外部依赖的用例，应先在准备阶段取得获准的产物，进入测试阶段后继续使用断网设置。
 
 按表逐项运行并单独保存退出码。三台机器均跑类型检查。
 
@@ -192,13 +238,13 @@ pnpm exec vitest run src/main/local-themes/__tests__/omarchy.test.ts
 pnpm exec vitest run src/main/maker-host/__tests__/pi-package-store-security.test.ts
 ```
 
-Claude 和 Codex 的 hosted e2e 会启动真实引擎并连接测试夹具。在仓库根确认这版 macOS arm64 对应的 `apps/claude-code-bin`、`apps/codex-package-bin` 和 `apps/ripgrep-bin` 产物已经准备好；缺少时测试会跳过。按前述步骤隔离 HOME，使用测试自建的网关。先在基准提交和发布候选上各独立跑三次 Codex resume，再在候选上分别跑两份完整文件。下面的命令都从 `apps/desktop` 运行：
+Claude 和 Codex 的 hosted e2e 会启动真实引擎并连接测试夹具。在仓库根确认这版 macOS arm64 对应的 `apps/claude-code-bin`、`apps/codex-package-bin` 和 `apps/ripgrep-bin` 产物已经准备好；缺少时测试会跳过。按前述步骤隔离 HOME，使用测试自建的网关。先在基准提交和发布候选上各独立跑三次 Codex resume，再在候选上分别跑两份完整文件。下面的命令都从 `apps/desktop` 运行，日志写到之前定义的 `$task`：
 
 ```bash
 codex_test=src/main/remote-agent/__tests__/codexHosted.e2e.test.ts
 for attempt in 1 2 3; do
   rc=0
-  pnpm exec vitest run "$codex_test" -t 'releases an idle task under slot pressure and resumes the same Codex thread' > "$TMPDIR/codex-resume-$attempt.log" 2>&1 || rc=$?
+  pnpm exec vitest run "$codex_test" -t 'releases an idle task under slot pressure and resumes the same Codex thread' > "$task/codex-resume-$attempt.log" 2>&1 || rc=$?
   echo "Codex resume $attempt exit=$rc"
 done
 pnpm exec vitest run "$codex_test"
