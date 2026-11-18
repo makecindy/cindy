@@ -235,6 +235,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const revisionRef = useRef(initial?.revision);
   const historyEpochRef = useRef(0);
   const latestReadRef = useRef(0);
+  const [hasRead, setHasRead] = useState(false);
   const [root, setRoot] = useState<BotGroupMessageView | null>(initial?.root ?? null);
   const [executionFailures, setExecutionFailures] = useState<BotGroupExecutionFailureView[]>(initial?.executionFailures ?? []);
   const [replies, setReplies] = useState<BotGroupMessageView[]>(initial?.replies ?? []);
@@ -278,6 +279,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
 
   const clearHistory = useCallback((wholeRoom = true) => {
     historyEpochRef.current++;
+    setHasRead(false);
     queuedSourcesRef.current.clear();
     changedRepliesRef.current.clear();
     for (const key of windows().keys())
@@ -342,6 +344,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       }
       if (!stalePage) setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
       setError('');
+      setHasRead(true);
       const floor = result.replies.reduce((min, reply) => Math.min(min, reply.sequence), Number.POSITIVE_INFINITY);
       // A latest page that neither overlaps nor directly adjoins the shown replies may leave a gap:
       // start over from it, as on first load, so 「查看更早」 reads on from right below it.
@@ -512,20 +515,27 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       ? previous.map((send) => (send.clientId === clientId ? { ...send, messageId: outcome.messageId } : send))
       : previous.filter((send) => send.clientId !== clientId));
   }, []);
-  // A share opened this thread: find its reply, reading back a few pages if needed.
+  // A share or sidebar preview opened this thread: find its reply, reading back a few pages if needed.
   const focusSearch = useRef<{ nonce: number; pages: number } | null>(null);
   useEffect(() => {
-    if (!focus || !replies.length) return;
+    if (!focus || !root) return;
     if (focusSearch.current?.nonce !== focus.nonce) focusSearch.current = { nonce: focus.nonce, pages: 0 };
     const search = focusSearch.current;
     if (search.pages < 0) return;
     // Loaded targets are revealed by the DOM window, even when they are currently unmounted.
-    if (root?.id === focus.messageId || replies.some(reply => reply.id === focus.messageId)) return;
-    if (!hasMore || search.pages >= FOCUS_PAGE_LIMIT) { search.pages = -1; return; }
+    if (root.id === focus.messageId || replies.some(reply => reply.id === focus.messageId)) return;
+    // Cached replies can be located while refresh waits or fails. Only a successful
+    // read can justify paging further or reporting that the reply is unavailable.
+    if (error || !hasRead) return;
+    if (!hasMore || search.pages >= FOCUS_PAGE_LIMIT) {
+      search.pages = -1;
+      toast.info(t(key('thread.replyNotFound')));
+      return;
+    }
     // A push refresh may overtake this page; then its replies trigger the next attempt, and
     // only a page that was merged counts against the limit.
     void readRef.current(replies[0]?.sequence, false, () => { search.pages += 1; });
-  }, [focus, replies, hasMore, root]);
+  }, [focus, replies, hasMore, root, error, hasRead, t]);
   const onLocated = useCallback((messageId: string, target: HTMLElement) => {
     stickToBottomRef.current = false;
     flashThreadTarget(target);
@@ -750,7 +760,10 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         </div>
         {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"
           getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 400} /> : <>
-          {error && <p role="alert" className="px-4 pt-3 text-13 text-[var(--error-fg)]">{error}</p>}
+          {error && <div role="alert" className="flex items-center gap-2 px-4 pt-3 text-13 text-[var(--error-fg)]">
+            <span className="min-w-0 flex-1">{error}</span>
+            <Button variant="secondary" size="sm" compact onClick={() => refreshRef.current()}>{t('commonUi.retry')}</Button>
+          </div>}
           {/* Kept apart from read errors: a thread refresh must not hide the retry. */}
           {unposted.size > 0 && <div role="alert" className="mb-2 px-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-13 text-[var(--error-fg)]">
             <span className="min-w-0">{t(key('thread.alsoSendFailed'), { count: unposted.size })}</span>
