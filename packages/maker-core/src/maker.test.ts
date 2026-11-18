@@ -2434,7 +2434,10 @@ describe('Maker Pi runtime skill status', () => {
         generation: 1,
         status: 'loaded',
         source: 'pi:get_commands',
-        commands: [],
+        commands: [{
+          name: 'skill:poteto-mode', source: 'skill',
+          sourceInfo: { path: '/pstack/skills/poteto-mode/SKILL.md', scope: 'user', origin: 'package' },
+        }],
         managedPackageSkills: [
           {
             sourcePath: managedPath,
@@ -2502,6 +2505,9 @@ describe('Maker Pi runtime skill status', () => {
         name: 'unproven-at-launch',
         runtimeStatus: 'unknown',
         origin: 'package',
+      }),
+      expect.objectContaining({
+        name: 'poteto-mode', runtimeCommandName: 'skill:poteto-mode', runtimeStatus: 'loaded',
       }),
     ]);
     expect(active.skills.some((skill) => skill.name === 'installed-after-start')).toBe(false);
