@@ -1,3 +1,4 @@
+import { bumpSkillFactsGeneration } from '../skillFactsGeneration';
 import { inspectSkillListGrants } from './customizationScanHost';
 import { createRemoteSkillsHost } from './remoteManagementHost';
 import { remoteResourceRegistry } from '../device-link/remoteResourceRegistry';
@@ -580,7 +581,9 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
       if (grant.builtIn || isBuiltInSkillPath(params.filePath)) {
         return { success: false, error: 'Cindy built-in Skills are read-only' };
       }
-      return writeSkillFile(params);
+      const result = await writeSkillFile(params);
+      if (result.success) bumpSkillFactsGeneration();
+      return result;
     },
   );
   // validate-frontmatter: 解析+校验 .md frontmatter,返回 issues 列表。

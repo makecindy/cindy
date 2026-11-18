@@ -1777,19 +1777,32 @@ export class Maker {
   ): Promise<ListAgentSkillsResult> {
     const cached = this.agentSkillScanCache.get(key);
     if (cached && cached.generation === this.agentSkillScanGeneration) return cached.load;
-    const entry = {
+    const entry: { generation: number; load: Promise<ListAgentSkillsResult> } = {
       generation: this.agentSkillScanGeneration,
-      // A failed scan must not be cached; the next open retries.
-      load: scan().catch((error: unknown) => {
-        this.agentSkillScanCache.delete(key);
-        throw error;
-      }),
+      // A rejected or partially failed scan (errors) must not be cached; the next open retries.
+      load: scan()
+        .then((result) => {
+          if (result.errors && result.errors.length > 0) this.dropAgentSkillScanEntry(key, entry);
+          return result;
+        })
+        .catch((error: unknown) => {
+          this.dropAgentSkillScanEntry(key, entry);
+          throw error;
+        }),
     };
     this.agentSkillScanCache.set(key, entry);
     if (this.agentSkillScanCache.size > 8) {
       this.agentSkillScanCache.delete(this.agentSkillScanCache.keys().next().value as string);
     }
     return entry.load;
+  }
+
+  /** Drop `key` only while it still maps to `entry`'s very own request; a newer flight must survive. */
+  private dropAgentSkillScanEntry(
+    key: string,
+    entry: { generation: number; load: Promise<ListAgentSkillsResult> },
+  ): void {
+    if (this.agentSkillScanCache.get(key) === entry) this.agentSkillScanCache.delete(key);
   }
 
   /**

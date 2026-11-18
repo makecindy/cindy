@@ -431,6 +431,46 @@ describe('Maker agent skill scan facts cache', () => {
       expect(scan).toHaveBeenCalledTimes(2);
     } finally { await maker.shutdown(); }
   });
+
+  it('does not cache a scan that reports errors', async () => {
+    let calls = 0;
+    const scan = vi.fn(async () => {
+      calls += 1;
+      return calls === 1
+        ? { skills: [], errors: [{ message: 'unreadable dir' }] }
+        : { skills: [] };
+    });
+    const agent = createAgent(async () => undefined);
+    agent.listAgentSkills = scan;
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger: createLogger() });
+    try {
+      await maker.listAgentSkills('codex', { workingDir: '/repo' });
+      await maker.listAgentSkills('codex', { workingDir: '/repo' });
+      expect(scan).toHaveBeenCalledTimes(2);
+    } finally { await maker.shutdown(); }
+  });
+
+  it('a failed stale flight does not evict the newer cache entry', async () => {
+    let releaseOld!: () => void;
+    let calls = 0;
+    const scan = vi.fn(() => {
+      calls += 1;
+      if (calls === 1) return new Promise((_resolve, reject) => { releaseOld = () => reject(new Error('stale scan failed')); });
+      return Promise.resolve({ skills: [] });
+    });
+    const agent = createAgent(async () => undefined);
+    agent.listAgentSkills = scan as unknown as typeof agent.listAgentSkills;
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger: createLogger() });
+    try {
+      const stale = maker.listAgentSkills('codex', { workingDir: '/repo' });
+      maker.invalidateAgentSkillFacts();
+      await maker.listAgentSkills('codex', { workingDir: '/repo' });
+      releaseOld();
+      await expect(stale).rejects.toThrow('stale scan failed');
+      await maker.listAgentSkills('codex', { workingDir: '/repo' });
+      expect(scan).toHaveBeenCalledTimes(2);
+    } finally { await maker.shutdown(); }
+  });
 });
 
 describe('application-owned session lifecycle', () => {
