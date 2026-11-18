@@ -31,6 +31,7 @@ function fixture({
   hostRead,
   kvWrite,
   kvRead,
+  digest,
   initialKv = {},
   draftId = "logical-draft",
 } = {}) {
@@ -72,7 +73,7 @@ function fixture({
   };
   const context = createContext({
     DOMParser,
-    crypto: webcrypto,
+    crypto: { randomUUID: () => webcrypto.randomUUID(), subtle: { digest: (...args) => digest ? digest(...args) : webcrypto.subtle.digest(...args) } },
     TextEncoder,
     Date: class extends Date { static now() { return clock; } },
     setTimeout(fn, delay) {
@@ -1568,7 +1569,7 @@ test('unknown writes allow inspecting the mailbox without unlocking or repeating
   assert.equal(f.cards.length, unknownCardCount);
   f.restart();
   assert.equal((await f.tool('get')).ok, true);
-  assert.equal(f.cards.at(-1).draft.state, 'unconfirmed');
+  assert.equal(f.cards.at(-1).draft?.state || f.cards.at(-1).statusOnly?.state, 'unconfirmed');
   assert.equal((await f.tool('send')).execution, 'unknown');
   assert.equal(f.writes.length, 1);
 });
@@ -2221,4 +2222,114 @@ for (const operation of ['update', 'send']) test(`confirmed recovery ${operation
   rejectCleanup = false; f.restart();
   assert.equal((await f.tool('send')).ok, true);
   assert.equal(f.writes.filter(r => r.send).length, 1);
+});
+
+// Publication order must not advertise an old locator as the newest observation.
+// This checks the SDK routing contract, not an inevitable failure of QQ's
+// Message-ID fallback (that adapter can recover an old UID independently).
+test('a retained writer adopts the newest known locator before pending publication', async () => {
+  let f;
+  const seen = [];
+  f = fixture({ allowCardRead: false, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    seen.push({ uid: request.record.locator.uid, latest: f.current().locator.uid });
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.tool('get');
+  const b = f.cards.at(-1).draft.key;
+  await f.tool('get', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), body: 'Task A latest' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), subject: 'Task B edit' }, { callId: 'agent-call', actionId: `mail:change:${b}` });
+  seen.length = 0;
+  await f.tool('update');
+  assert.ok(seen.length);
+  assert.equal(seen[0].uid, seen[0].latest);
+});
+
+// WebCrypto is async: input can change after the two read-backs have finished.
+test('recovery preserves typing while field digests are in flight', async () => {
+  let f, armed = false, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const waiting = new Promise(resolve => { release = resolve; });
+  f = fixture({ digest: async (...args) => {
+    if (armed) { armed = false; entered(); await waiting; }
+    return webcrypto.subtle.digest(...args);
+  }, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Later C' });
+  armed = true;
+  const reading = f.tool('get');
+  await started;
+  await f.card('change', { ...f.values(), body: 'Newest D' });
+  release();
+  assert.equal((await reading).data.cardEdits.body, 'Newest D');
+  assert.equal(f.cards.at(-1).draft.fields.find(field => field.name === 'body').value, 'Newest D');
+  await f.advance(2000);
+  assert.equal(f.current().editor.body, 'Newest D');
+});
+
+// Unknown is shared by all routes but never shares their private field values.
+for (const operation of ['update', 'send', 'delete']) for (const fanoutFailure of operation === 'send' ? [false, true] : [false]) test(`unknown ${operation} disables retained editors but still permits mailbox inspection: fanoutFailure=${fanoutFailure}`, async () => {
+  let f, unknown = false, reopened = false;
+  f = fixture({ allowCardRead: false, publish: card => !(fanoutFailure && !reopened && card.callId === 'agent-call' && card.statusOnly?.state === 'unconfirmed'), kvWrite: next => {
+    if (fanoutFailure && unknown && Object.values(next.mailDraftCards || {}).every(r => r.state === 'pending')) throw new Error('Synthetic unknown fan-out persistence failure');
+  }, remove: () => ({ ok: false, execution: 'unknown', message: 'Uncertain delete' }), write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    if (unknown) return { ok: false, execution: 'unknown', message: 'Uncertain write' };
+  } });
+  await f.present();
+  const a = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.tool('get'); const b = f.cards.at(-1).draft.key;
+  await f.tool('get', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), body: 'Private A' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), body: 'Private B' }, { callId: 'agent-call', actionId: `mail:change:${b}` });
+  const privateB = copy(f.cards.findLast(c => c.callId === 'agent-call' && c.draft).draft.fields);
+  if (operation === 'update') await f.card('change', { ...f.values(), body: 'Uncertain A' }, { actionId: `mail:change:${a}` });
+  unknown = true;
+  assert.equal((await f.tool(operation, { sourceCallId: 'card-call' })).execution, 'unknown');
+  if (!fanoutFailure) {
+    for (const route of Object.values(f.kv().mailDraftCards)) assert.equal(route.state, 'pending');
+    assert.equal(f.cards.findLast(c => c.callId === 'agent-call' && c.statusOnly)?.statusOnly.state, 'unconfirmed');
+  } else {
+    assert.equal(f.kv().mailDraftCards[a].state, 'pending');
+    assert.equal(f.kv().mailDraftCards[b].state, 'draft');
+  }
+  const routes = f.kv(), writes = f.writes.length, deletes = f.deletes.length, cards = f.cards.length;
+  const read = await f.tool('get');
+  assert.equal(read.ok, true); assert.equal(read.data.cardEdits, undefined);
+  await f.card('change', { ...f.values(), body: 'Too late' }, { callId: 'agent-call', actionId: `mail:change:${b}` });
+  await f.advance(10000);
+  assert.equal(f.cards.slice(cards).some(c => c.draft), false);
+  assert.deepEqual(f.cards.findLast(c => c.callId === 'agent-call' && c.draft).draft.fields, privateB);
+  assert.deepEqual(f.kv(), routes);
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  if (fanoutFailure) {
+    reopened = true; const start = f.cards.length;
+    await f.card('change', { ...f.values(), body: 'Too late after restart' }, { callId: 'agent-call', actionId: `mail:change:${b}` });
+    assert.equal(f.cards.slice(start).some(c => c.draft), false);
+    assert.equal(f.cards.at(-1).statusOnly.state, 'unconfirmed');
+  }
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal((await f.tool('delete')).execution, 'unknown');
+  assert.equal(f.writes.length, writes); assert.equal(f.deletes.length, deletes);
 });

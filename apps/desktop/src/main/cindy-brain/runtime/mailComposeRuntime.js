@@ -404,8 +404,8 @@ var cindyMail = (function () {
     async function restoreMailDraft(key, callId, sourceCallId) {
       return navigator.locks.request('mail-restore:' + key, () => withMailCompose(key, async function () {
         if (mailEdits.has(key)) return true;
-        const record = (await mailRecords())[key];
-        if (!record || record.callId !== callId || record.state !== 'draft' || record.unverifiedAdditions) return false;
+        const records = await mailRecords(), record = records[key];
+        if (!record || record.callId !== callId || record.state !== 'draft' || record.unverifiedAdditions || uncertainMailRoute(records, key)) return false;
         const saved = await readMailCard(callId, sourceCallId);
         const card = saved?.ok && saved.draft;
         if (!card || card.key !== key || card.accountId !== record.account || card.draftId !== record.draftId) return false;
@@ -548,7 +548,7 @@ var cindyMail = (function () {
         // recovery proof has been released. Keep publication and cleanup ordered.
         const currentBase = activeEdit?.error?.stale && !activeEdit.conflictBase ? undefined : activeEdit?.conflictBase || originalValues;
         const sameBase = draft.baseValues && currentBase ? sameFields(draft.baseValues, currentBase) : draft.baseValues === currentBase;
-        if (renderOnly && (activeEdit?.sent || activeEdit?.deleting || mailEdits.get(key) !== activeEdit || (activeEdit && (activeEdit.readBack !== readBack || !sameBase)))) return undefined;
+        if (renderOnly && (activeEdit?.sent || activeEdit?.deleting || activeEdit?.uncertain || mailEdits.get(key) !== activeEdit || (activeEdit && (activeEdit.readBack !== readBack || !sameBase)))) return undefined;
         const result = await cindy.send({ type: "mail-draft-update", callId: message.callId,
           ...(message.sourceCallId && message.sourceCallId !== message.callId ? { sourceCallId: message.sourceCallId } : {}), draft });
         await releaseSaveProof(key, proofRecord, activeEdit, result?.ok && draft.state === 'draft', readBack, draft.baseValues, message.sourceCallId);
@@ -663,6 +663,11 @@ var cindyMail = (function () {
       return own && Object.entries(records).find(([id, r]) => id !== key &&
         r.account === own.account && r.draftId === own.draftId && r.state !== 'draft')?.[1];
     }
+    function uncertainMailRoute(records, key) {
+      const own = records[key];
+      return own && Object.entries(records).find(([id, r]) => r.account === own.account && r.draftId === own.draftId &&
+        r.state === 'pending' && (!mailEdits.get(id) || mailEdits.get(id).uncertain))?.[1];
+    }
     function finalizeMailRoutes(records, record) {
       for (const [key, route] of Object.entries(records)) {
         if (route.account !== record.account || route.draftId !== record.draftId) continue;
@@ -679,26 +684,42 @@ var cindyMail = (function () {
           edit.sending = false;
           edit.deleting = record.state === 'deleted';
           edit.additions = [];
-          edit.terminalPublished = undefined;
+          edit.outcomePublished = undefined;
         }
       }
     }
-    async function publishTerminalCard(key, record, sourceCallId) {
-      if (mailEdits.get(key)?.terminalPublished === record.state) return;
+    function markMailUncertain(records, record, result) {
+      for (const [key, route] of Object.entries(records)) {
+        if (route.account !== record.account || route.draftId !== record.draftId) continue;
+        route.state = 'pending';
+        cancelMailSend(key, result);
+        const edit = mailEdits.get(key);
+        if (!edit) continue;
+        clearTimeout(edit.timer);
+        edit.timer = undefined;
+        edit.uncertain = true;
+        edit.sending = false;
+        edit.error = result;
+        edit.outcomePublished = undefined;
+      }
+    }
+    async function publishMailOutcomeCard(key, record, sourceCallId, message) {
+      const state = record.state === 'pending' ? 'unconfirmed' : record.state;
+      if (mailEdits.get(key)?.outcomePublished === state) return;
       const copy = await mailCopy();
       try {
         // The original call binding remains authoritative. A sibling task must
         // not reopen it with its own source; expired calls refresh on their next click.
         const result = await navigator.locks.request('mail-card:' + key, () => mailStatus(record.callId,
-          record.state === 'sent' ? copy.sent : copy.deleted, '', false, sourceCallId, record.state));
+          state === 'unconfirmed' ? message || copy.failed : state === 'sent' ? copy.sent : copy.deleted, '', false, sourceCallId, state));
         const edit = mailEdits.get(key);
-        if (result?.ok && edit) edit.terminalPublished = record.state;
+        if (result?.ok && edit) edit.outcomePublished = state;
       } catch (_) { /* Durable routing still rejects further edits and sends. */ }
     }
-    async function publishMailTerminal(record, sourceCallId, routes) {
+    async function publishMailOutcome(record, sourceCallId, routes, message) {
       for (const [key, route] of Object.entries(routes)) {
         if (route.account !== record.account || route.draftId !== record.draftId) continue;
-        await publishTerminalCard(key, { ...route, state: record.state }, route.callId === record.callId ? sourceCallId : undefined);
+        await publishMailOutcomeCard(key, { ...route, state: record.state }, route.callId === record.callId ? sourceCallId : undefined, message);
       }
     }
     function mailDraftOutcome(record) {
@@ -787,6 +808,8 @@ var cindyMail = (function () {
           record.state = "pending";
           await mailRecords(function (records) {
             if (!sending && edit.additions?.length) record.unverifiedAdditions = true;
+            const latest = Object.values(records).findLast(r => r.account === record.account && r.draftId === record.draftId);
+            record.locator = latest?.locator || record.locator;
             storeMailRecord(records, key, record);
           });
           if (sending) {
@@ -913,6 +936,18 @@ var cindyMail = (function () {
                 storeMailRecord(records, key, record);
               });
             }
+            if (record.state === 'pending') {
+              let uncertainRoutes = records;
+              try {
+                uncertainRoutes = await mailRecords(current => {
+                  storeMailRecord(current, key, record);
+                  markMailUncertain(current, record, result);
+                  return current;
+                });
+              } catch (_) { markMailUncertain(uncertainRoutes, record, result); }
+              await publishMailOutcome(record, sourceCallId, uncertainRoutes, result.message);
+              return result;
+            }
             await showMailDraft(
               { callId: record.callId, sourceCallId: sourceCallId },
               selected,
@@ -940,7 +975,7 @@ var cindyMail = (function () {
               /* A known send is never retried. */
             }
             edit.sent = true;
-            await publishMailTerminal(record, sourceCallId, terminalRoutes);
+            await publishMailOutcome(record, sourceCallId, terminalRoutes);
             return result;
           }
           if (record.completedSaveHashes) {
@@ -1073,9 +1108,10 @@ var cindyMail = (function () {
         const terminalRoutes = await mailRecords(records => {
           storeMailRecord(records, key, record);
           if (result.ok) finalizeMailRoutes(records, record);
+          else if (record.state === 'pending') markMailUncertain(records, record, result);
           return records;
         });
-        if (result.ok) await publishMailTerminal(record, sourceCallId, terminalRoutes);
+        if (result.ok || record.state === 'pending') await publishMailOutcome(record, sourceCallId, terminalRoutes, result.message);
         else await mailStatus(record.callId, result.message || copy.failed,
           "", false, sourceCallId, record.state === "draft" ? "error" : "unconfirmed");
         return result;
@@ -1166,9 +1202,14 @@ var cindyMail = (function () {
         await restoreMailDraft(key, message.callId);
         edit = mailEdits.get(key);
       }
+      if (edit?.uncertain) {
+        const record = (await mailRecords())[key];
+        if (record?.callId === message.callId) await publishMailOutcomeCard(key, record);
+        return;
+      }
       if (edit?.deleting && match[1] !== "delete") {
         const record = (await mailRecords())[key];
-        if (record?.state === 'deleted') await publishTerminalCard(key, record);
+        if (['deleted', 'pending'].includes(record?.state)) await publishMailOutcomeCard(key, record);
         return;
       }
       if (
@@ -1240,15 +1281,20 @@ var cindyMail = (function () {
         });
         if (!accepted || edit.sent || edit.sending || edit.deleting) return;
       }
-      var record = (await mailRecords())[key];
+      const currentRoutes = await mailRecords();
+      var record = currentRoutes[key];
       if (!record || record.callId !== message.callId) return;
+      if (uncertainMailRoute(currentRoutes, key)) {
+        await publishMailOutcomeCard(key, { ...record, state: 'pending' });
+        return;
+      }
       var copy = await mailCopy();
       if (match[1] === "continue" && record.state === "sent") {
         await continueMailTask(message, record, copy, key);
         return;
       }
-      if (['sent', 'deleted'].includes(record.state)) {
-        await publishTerminalCard(key, record);
+      if (['sent', 'deleted'].includes(record.state) || (record.state === 'pending' && (!edit || edit.uncertain))) {
+        await publishMailOutcomeCard(key, record);
         return;
       }
       if (match[1] === "delete") { await deleteMailDraft(key); return; }
@@ -1332,6 +1378,19 @@ var cindyMail = (function () {
           key = candidates[0];
         }
       }
+      if (operation === 'get' && candidates.some(id => records[id].state === 'pending')) {
+        const inspected = await withMailCompose(key, async function () {
+          const current = await mailRecords();
+          const pending = Object.values(current).find(r => r.account === account && r.draftId === draftId && r.state === 'pending');
+          if (!pending) return undefined;
+          return await readMailDraft(pending, sourceCallId) ||
+            { ok: false, execution: 'not_executed', message: (await mailCopy()).unavailable };
+        });
+        if (inspected) return inspected;
+        records = await mailRecords();
+        candidates = Object.keys(records).filter(id => records[id].account === account && records[id].draftId === draftId);
+        key = candidates[0];
+      }
       if (candidates.length && sourceCallId) {
         let owned = false, ownershipUnavailable = false;
         for (const id of candidates) {
@@ -1366,15 +1425,8 @@ var cindyMail = (function () {
         return { ok: false, execution: "unknown", message: "之前操作的结果尚未确认，请先检查邮箱，未再次发送。" };
       if (operation === "get" && (records[key].state === "pending" || lostAdditions)) {
         const latest = await readMailDraft(records[key], sourceCallId);
-        // The Host card is the only remaining copy of unsaved fields after a
-        // lost upload. Inspection must not supersede it with mailbox content.
-        if (!lostAdditions && latest?.ok && latest.data?.readBack?.status === "read_back" && sourceCallId && readOnly === false) {
-          const selected = await adapter.selectAccount(account);
-          if (selected.ok) latest.data.draftCard = await showMailDraft(
-            { callId: sourceCallId }, selected, latest.data.readBack,
-            (await mailCopy()).failed, key, undefined, true, true,
-          );
-        }
+        // Inspection never replaces the only Host copy of private fields,
+        // whether locked by a lost upload or an uncertain mailbox operation.
         return latest || { ok: false, execution: "not_executed", message: "无法读取当前草稿，请稍后再试。" };
       }
       if (readOnly !== false) {
@@ -1447,7 +1499,13 @@ var cindyMail = (function () {
           const remote = draftValues(readBack);
           // If the mailbox confirms the exact attempted save, later typing is
           // relative to that save rather than an overlapping remote edit.
-          const merged = await completedSaveMerge(record, draftValues(edit.readBack), edit.fields, remote);
+          let merged, recoveredError, revision;
+          do {
+            revision = edit.revision;
+            merged = await completedSaveMerge(record, draftValues(edit.readBack), edit.fields, remote);
+            recoveredError = await conflictError(merged.conflicts);
+          } while (mailEdits.get(key) === edit && edit.revision !== revision);
+          if (mailEdits.get(key) !== edit) return { ok: false, execution: 'not_executed', message: (await mailCopy()).missing };
           const base = merged.base;
           edit.fields = merged.fields;
           edit.readBack = readBack;
@@ -1455,7 +1513,7 @@ var cindyMail = (function () {
           edit.savedRevision = !edit.additions?.length && sameFields(merged.fields, remote) ? edit.revision : edit.revision - 1;
           edit.conflictBase = merged.conflicts.length ? base : undefined;
           edit.inputFields = { ...edit.fields };
-          edit.error = await conflictError(merged.conflicts);
+          edit.error = recoveredError;
           // Keep provenance until a verified save. Its paired original digest
           // prevents a stale attempt from overriding a newer Host card base.
           record.fingerprint = readBack.fingerprint;
