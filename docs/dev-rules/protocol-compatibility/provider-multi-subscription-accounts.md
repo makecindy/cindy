@@ -1,5 +1,39 @@
 # 供应商内多订阅账号（2026-11-07 起；账号池与旧 Codex 连接归并已随 v0.1.135 正式版发布）
 
+## Claude 官方套餐显示名（2026-11-17）
+
+Claude 登录、额度及账号视图可选追加 `planDisplayName`；匿名用量投影的 `plan` 对象可选追加
+`displayName`。原 `subscriptionType`、`plan`、`planTier`、`type` 与 `tier` 保持机器代码及原语义。
+显示名由执行电脑同账号的官方 CLI 状态提供，只用于文案，不影响认证、权限、调度或用量计算。
+持久额度恢复仍先校验当前账号身份；显示名变更随既有快照更新传播，不增加客户端轮询或远程请求。
+
+旧客户端忽略可选字段；新客户端连接旧执行端或 CLI 没有显示名时，沿用既有套餐／Max 倍率显示。
+沿用现有账号与用量 channel、参数、授权和 JSON 回包，没有新增 relay 帧，官方及自建中转继续透明
+传输，不需要服务端升级。回归覆盖 native CLI 状态、账号缓存、匿名投影、remote parser、菜单栏和手机
+读取；未以真实双设备互通作为验收。完整修复需要执行电脑与查看端都升级。
+
+## 匿名新分配摘要（2026-11-16）
+
+现有 owner-only `maker:subscription-pool:quota` 的默认回包对已配置池可选追加 `schedulingVersion: 1`。
+组主只在收到这一明确能力声明后，才按需发送 `[providerId, model, {scheduling: 1, ownComputer: boolean}]`。
+回包为 `{providerId, model, scheduling}`；`scheduling` 为 null 或版本 1 的匿名对象：`accounts`（当前配额候选带中
+可新分配的不同账号数）、`running`（池策略下一账号负载）、`totalRunning`（含预约的池内总负载）、`full`、
+`urgency` 和 `fiveHourTight`。不含账号 ID、身份、目录、原生会话 ID 或真实账号指纹。
+
+请求只接受合法供应商 ID 形状和有界模型字符串，再由执行端解析实际账号归属；命名订阅池也适用。
+共享任务访客和供应商分享 peer 不可读取；`ownComputer: true` 只能在已验证同账号上下文中生效，false 保持更严格的
+新任务远程准入。异步返回前复核 owner、账号与授权；控制端按连接及供应商身份代次丢弃过期回包。
+摘要不修改账号绑定、轮询游标或执行预约；实际启动仍在原入口重新校验并原子预约。
+
+旧控制端忽略新增能力字段。新控制端面对旧执行端不额外探测调度；能力未知、旧形状、版本未知、数值无效或
+providerId/model 不匹配时只沿用原物理成员调度，不推定新增容量。只在实际 pick 时读摘要，按成员、模型、远程授权
+范围合并在途请求，单次等待最多 1.5 秒；无新增轮询。只读的额度预览保留原语义，不按账号并发隐藏额度。
+
+沿用原 invoke channel、参数数组与 JSON 回包，不新增 relay 帧或顶层字段。已核对自建 relay `src/hub.ts` 的
+`route` 原样转发 payload/auth；此次不要求中转升级。共享客户端、自建中转与签名互通均须验证；不据此宣称真实
+账号或已部署官方服务已验收。产品范围及随机权重池／外部分享成员的降级见
+[账号池规则](../../product-rules/subscription-account-pools.md#合池后的组调度2026-11-16)。
+
 ## 同一供应商内的重复登录（2026-11-16）
 
 执行电脑按已验证的 OpenAI 账号及工作区身份，把同供应商内多个登录目录返回为一个账号；任务专属 `read` 保留
@@ -124,7 +158,8 @@ Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号�
 `maker:subscription-pool:quota`（只读、无账号身份的池配额）。管理请求只接受内置供应商及
 不含路径的账号 id，宿主按当前 owner 推导目录；共享任务访客不能使用。
 该只读通道可选追加第二个参数 `model`（非空字符串，最多 512 字符），查询多账号池是否仍有该模型的明确可用容量，
-返回 `{providerId, model, available: boolean | null}`，不带账号身份或目录。缺省参数仍返回原 `{providerId, pooled, usage}`。
+返回 `{providerId, model, available: boolean | null}`，不带账号身份或目录。缺省参数保留 `{providerId, pooled, usage}`，
+已配置池可选追加上文的 `schedulingVersion: 1` 能力声明。
 新组主只接受 providerId/model 精确匹配的布尔回执；旧宿主忽略新参数并回原聚合形状时保留冷却，不能据此清除模型错误冷却。
 查询沿用同账号 owner 校验和在途 owner 栅栏，不增加 channel、allowlist、协议帧或服务端字段。
 官方与自建中转均通过原 invoke 参数透传，无需中转升级；验证覆盖 owner IPC、新旧端回包及共享客户端／自建中转测试与签名互通。

@@ -12,7 +12,7 @@ import {
   decideResumeOffset,
   type MetaJson,
 } from './resume';
-import { createStreamingHasher } from './integrity';
+import { computeHash, createStreamingHasher } from './integrity';
 import { ProgressTracker } from './progress';
 import { replaceFile } from '../utils/replaceFile';
 
@@ -21,7 +21,24 @@ export interface TransportContext {
   logger: Logger;
   signal?: AbortSignal;
   resumedFromBytes: number;
+  /**
+   * Set by the scheduler when a failed attempt keeps its written bytes for the next one.
+   * Enables low-speed reconnects; without it a slow transfer continues as before.
+   */
+  reconnectKeepsBytes?: boolean;
+  /** Bytes this attempt wrote and left for the next attempt to resume (0 if discarded). */
+  keptBytes?: number;
+  /** Low-speed reconnects already made for this download. */
+  slowReconnects?: number;
 }
+
+const DEFAULT_LOW_SPEED_WINDOW_MS = 30_000;
+const DEFAULT_LOW_SPEED_BYTES_PER_SECOND = 4096;
+/**
+ * A slow cut only probes for a better route. If three fresh connections are just as slow the
+ * link itself is slow: keep the trickle going instead of re-hashing the prefix every 30s.
+ */
+export const MAX_SLOW_RECONNECTS = 3;
 export interface TransportResult {
   size: number;
   sha256: string;
@@ -59,7 +76,7 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
   const send = opts.request ?? defaultRequest;
   if (!send) throw new DownloadError('INVALID_ARG', 'Download transport is not configured');
   const controller = new AbortController();
-  let timedOut = false;
+  let timedOut: 'connect' | 'idle' | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let response: Response | undefined;
   let release: (() => Promise<void>) | undefined;
@@ -69,18 +86,28 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
   let loaded = 0;
   let complete = false;
   let discard = opts.resume === false;
+  let serverResumes = false;
+  ctx.keptBytes = 0;
   const abort = () => controller.abort();
   const checkAbort = () => {
     if (controller.signal.aborted)
-      throw new DownloadError(
-        timedOut ? 'TIMEOUT' : 'ABORTED',
-        timedOut ? 'Download timed out' : 'Download aborted',
-      );
+      throw timedOut
+        ? new DownloadError('TIMEOUT', 'Download timed out', undefined, undefined, timedOut)
+        : new DownloadError('ABORTED', 'Download aborted');
   };
-  const armTimer = (ms: number) => {
+  const publish = async () => {
+    if (opts.existingTarget === 'error') {
+      // Atomic no-clobber publication, even if another process created the target meanwhile.
+      await fs.promises.link(partPath(opts.targetPath), opts.targetPath);
+      deletePart(opts.targetPath);
+    } else {
+      await replaceFile(partPath(opts.targetPath), opts.targetPath);
+    }
+  };
+  const armTimer = (ms: number, reason: 'connect' | 'idle') => {
     clearTimeout(timer);
     timer = setTimeout(() => {
-      timedOut = true;
+      timedOut = reason;
       controller.abort();
     }, ms);
   };
@@ -108,6 +135,25 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
       opts.resume === false
         ? null
         : decideResumeOffset(opts.targetPath, opts.url, opts.expectedSize, opts.sha256);
+    if (offset !== null && opts.expectedSize !== undefined && offset === opts.expectedSize) {
+      // A pause or quit can land between the last byte and publication. Verify the complete
+      // part locally instead of downloading a multi-gigabyte file again.
+      try {
+        opts.onVerifying?.();
+      } catch {
+        /* observer only */
+      }
+      const local = await computeHash(partPath(opts.targetPath), controller.signal);
+      checkAbort();
+      if (local === opts.sha256) {
+        await publish();
+        complete = true;
+        deleteMeta(opts.targetPath);
+        ctx.resumedFromBytes = offset;
+        return { size: offset, sha256: local };
+      }
+      offset = null;
+    }
     if (
       offset !== null &&
       (offset >= (opts.expectedSize ?? Infinity) || offset > (opts.maxBytes ?? Infinity))
@@ -131,7 +177,7 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
     let url = opts.url;
     for (let hops = 0; ; hops++) {
       assertDownloadUrl(url, opts);
-      armTimer(opts.timeout?.connectMs ?? 10_000);
+      armTimer(opts.timeout?.connectMs ?? 10_000, 'connect');
       const sent = await network(
         send(url, {
           method: 'GET',
@@ -169,8 +215,12 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
       }
       throw new DownloadError('HTTP_4XX', `HTTP ${response.status}`, undefined, response.status);
     }
+    // Reconnecting only helps when the next attempt can continue from the written bytes.
+    serverResumes =
+      response.status === 206 || /\bbytes\b/i.test(response.headers.get('accept-ranges') ?? '');
     if (offset !== null && response.status === 200) {
       // Server ignored Range (or If-Range changed): use this full response fresh.
+      serverResumes = false;
       offset = null;
       loaded = 0;
       ctx.resumedFromBytes = 0;
@@ -233,7 +283,17 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
         updatedAt: new Date().toISOString(),
       };
     let lastMetaWriteAt = 0;
-    armTimer(opts.timeout?.idleMs ?? 30_000);
+    const reconnectWhenSlow =
+      ctx.reconnectKeepsBytes === true &&
+      serverResumes &&
+      meta !== undefined &&
+      (ctx.slowReconnects ?? 0) < MAX_SLOW_RECONNECTS;
+    const lowSpeedWindowMs = opts.timeout?.lowSpeedWindowMs ?? DEFAULT_LOW_SPEED_WINDOW_MS;
+    const lowSpeedBytesPerSecond =
+      opts.timeout?.lowSpeedBytesPerSecond ?? DEFAULT_LOW_SPEED_BYTES_PER_SECOND;
+    let speedWindowStartedAt = Date.now();
+    let speedWindowStartBytes = loaded;
+    armTimer(opts.timeout?.idleMs ?? 30_000, 'idle');
     while (true) {
       checkAbort();
       const { done, value } = await network(reader.read());
@@ -246,7 +306,7 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
       ) {
         throw new DownloadError('SIZE', 'Download exceeds allowed size');
       }
-      armTimer(opts.timeout?.idleMs ?? 30_000);
+      armTimer(opts.timeout?.idleMs ?? 30_000, 'idle');
       await file.writeFile(value);
       await hasher.update(Buffer.from(value));
       loaded += value.byteLength;
@@ -263,10 +323,29 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
         }
         lastMetaWriteAt = Date.now();
       }
+      // A trickle keeps resetting the idle deadline and can look frozen for many minutes.
+      // Reconnect only after the bytes are on disk, so the next attempt resumes from here.
+      // Never on the final bytes: an offset equal to the size cannot be resumed and restarts.
+      const windowElapsedMs = Date.now() - speedWindowStartedAt;
+      if (
+        reconnectWhenSlow &&
+        windowElapsedMs >= lowSpeedWindowMs &&
+        loaded < (opts.expectedSize ?? total ?? Infinity)
+      ) {
+        if ((loaded - speedWindowStartBytes) * 1000 < lowSpeedBytesPerSecond * windowElapsedMs) {
+          ctx.slowReconnects = (ctx.slowReconnects ?? 0) + 1;
+          throw new DownloadError('TIMEOUT', 'Download too slow', undefined, undefined, 'slow');
+        }
+        speedWindowStartedAt = Date.now();
+        speedWindowStartBytes = loaded;
+      }
     }
     clearTimeout(timer);
     if (loaded !== (opts.expectedSize ?? total ?? loaded))
       throw new DownloadError('SIZE', 'Download size mismatch');
+    // Report the final bytes before verifying, so observers never see "downloading" again
+    // after "verifying".
+    tracker.flush();
     try {
       opts.onVerifying?.();
     } catch {
@@ -277,16 +356,9 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
     await file.close();
     file = undefined;
     checkAbort();
-    if (opts.existingTarget === 'error') {
-      // Atomic no-clobber publication, even if another process created the target meanwhile.
-      await fs.promises.link(partPath(opts.targetPath), opts.targetPath);
-      deletePart(opts.targetPath);
-    } else {
-      await replaceFile(partPath(opts.targetPath), opts.targetPath);
-    }
+    await publish();
     complete = true;
     deleteMeta(opts.targetPath);
-    tracker.flush();
     return { size: loaded, sha256 };
   } catch (error) {
     checkAbort();
@@ -296,6 +368,8 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
         : new DownloadError(
             (error as NodeJS.ErrnoException).code === 'EEXIST' ? 'EXISTS' : 'DISK',
             'Download file operation failed',
+            // Keeps the errno (e.g. ENOSPC) for callers; file-system errors carry local paths only.
+            error as Error,
           );
     if (['SIZE', 'CHECKSUM', 'URL_POLICY'].includes(failure.code)) discard = true;
     throw failure;
@@ -319,6 +393,7 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
             downloadedBytes: loaded,
             updatedAt: new Date().toISOString(),
           });
+          if (serverResumes) ctx.keptBytes = loaded - meta.downloadedBytes;
         } catch {
           /* A failed checkpoint only disables resume. */
         }

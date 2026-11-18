@@ -131,6 +131,7 @@ import {
   resetGroupContextCursorsSafely,
 } from './groupWindow.js';
 import { createHookDispatcher } from './dispatcher.js';
+import { hookModelProviderName } from './modelProviderName.js';
 import { createMakerHookSessionRunner } from './session-runner.js';
 import { resolveHookInteraction } from './interactions.js';
 import { listRecentHookSessions } from './recentSessions.js';
@@ -404,6 +405,7 @@ function persistUnsolicitedServerPrefs(channel: HookPrefsChannel, prefs: HookWor
 }
 
 function channelLiveBindingKey(channel: HookPrefsChannel): string | null {
+  if (!hookControlAvailable()) return null;
   const snap = ensureInstances().manager.snapshot();
   if (channel === 'slack') {
     if (snap.serverMultiTeam) {
@@ -514,6 +516,19 @@ function forgetReleasedProjectSettings(names: readonly string[]): void {
   }
 }
 
+/** Same local project catalogue for approved plugin IM entrances; no credentials or remote paths. */
+export async function readPluginImProjectCatalog() {
+  const { store: current } = ensureInstances();
+  await projectWorkspaceSync.run();
+  if (store !== current) throw new Error('IM project owner changed');
+  return { workspaces: { ...current.get().workspaces },
+    isCurrent: () => store === current,
+    currentWorkspaces: () => current.get().workspaces };
+}
+export function currentPluginImProjectWorkspaces(): Readonly<Record<string, string>> {
+  return store?.get().workspaces ?? {};
+}
+
 /** 官方 IM 机器人可选的项目跟随侧栏项目(见 projectWorkspaces.ts)。 */
 const projectWorkspaceSync = createProjectWorkspaceSync({
   getStore: () => store,
@@ -533,6 +548,10 @@ const projectWorkspaceSync = createProjectWorkspaceSync({
     applyRetiredProjectNames();
     // 名称清单变了要让服务端知道: 在线时重发 hello(它以最新一帧为准); 不在线时
     // 下次建连的 hello 自带新清单, 不需要为此重建连接。
+    if (!hookControlAvailable()) {
+      if (changed) broadcastStatus({ ...disabledHookView(), workspaces: store.get().workspaces });
+      return;
+    }
     if (mappingChanged) manager.refreshHello();
     if (changed) broadcastStatus(manager.snapshot());
   },
@@ -571,6 +590,10 @@ function throwHookPrefsError(err: unknown): never {
     );
   }
   throw err;
+}
+
+function providerNameField(name: string | undefined): { provider?: string } {
+  return name === undefined ? {} : { provider: name };
 }
 
 function ensureInstances(): { store: SlackHookStore; manager: HookControlManager } {
@@ -809,6 +832,8 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
               // 分组随行: 折扣版(gpt-budget)与官方版 displayName 故意同名,
               // Slack 卡与 Tina 下拉都靠 group 加区分后缀
               ...(m.group !== undefined ? { group: m.group } : {}),
+              // 供应商名随行: 不同供应商会提供同名模型, 飞书选择卡把它写在模型名前面
+              ...providerNameField(hookModelProviderName(providers, agentKind, m.id)),
             })),
             permissionModes: getMaker()
               .getCapabilities(agentKind)
@@ -943,8 +968,11 @@ export function readXCompanionSummary(): { available: boolean; visible: boolean;
 
 /** 注册 IPC 并按配置 + 登录态拉起连接。bootstrap 里调用一次。 */
 export function registerHookControlIpc(): void {
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.GET, () => {
-    if (!hookControlAvailable()) return { hook: disabledHookView() };
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.GET, async () => {
+    if (!hookControlAvailable()) {
+      const { workspaces } = await readPluginImProjectCatalog();
+      return { hook: { ...disabledHookView(), workspaces } };
+    }
     const hook = ensureInstances().manager.snapshot();
     // 打开设置页时顺手与侧栏项目对齐; 有变化经状态广播推给页面。
     projectWorkspaceSync.schedule();
@@ -952,7 +980,7 @@ export function registerHookControlIpc(): void {
   });
   disposeProjectCatalogListener?.();
   disposeProjectCatalogListener = onProjectCatalogChanged(() => {
-    if (store && hookControlAvailable()) projectWorkspaceSync.schedule();
+    if (store) projectWorkspaceSync.schedule();
   });
 
   // 开关即绑定(设置页 toggle 直接调, 无确认弹窗): 开 = 连接 + 置自动绑定意图
@@ -1093,13 +1121,13 @@ export function registerHookControlIpc(): void {
 
   // 添加项目: 登记进侧栏的项目列表, 再按项目列表整理一次机器人可选的项目。
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.ADD_PROJECT, async (_e, payload) => {
-    requireHookControl();
-    const { manager: m } = ensureInstances();
+    const { manager: m, store: current } = ensureInstances();
     const directory = requireString(requireObject(payload).directory, 'directory');
     const registered = await registerImProjectDirectory(directory);
     if (!registered.ok) throwIpcError('INVALID_PARAMS', registered.message);
     await projectWorkspaceSync.run();
-    return { hook: m.snapshot() };
+    if (store !== current) throwIpcError('PERMISSION_DENIED', 'IM project owner changed');
+    return { hook: hookControlAvailable() ? m.snapshot() : { ...disabledHookView(), workspaces: current.get().workspaces } };
   });
 
   registerTrustedHookControlHandler(
@@ -1211,7 +1239,7 @@ export function registerHookControlIpc(): void {
   const writeSharedProjectPref = (payload: unknown): void => {
     const parsed = parseWorkspacePrefsWrite(payload);
     try {
-      adoptReadyChannels();
+      if (hookControlAvailable()) adoptReadyChannels();
       setSharedProjectPref(parsed.workspace, parsed.patch);
     } catch (err) {
       log.warn(
@@ -1220,14 +1248,15 @@ export function registerHookControlIpc(): void {
       throwIpcError('INTERNAL', 'failed to persist workspace prefs');
     }
     broadcastSharedPrefs();
-    syncSharedProjectPrefs();
+    if (hookControlAvailable()) syncSharedProjectPrefs();
   };
 
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SHARED_PREFS_GET, async () => {
-    requireHookControl();
-    ensureInstances();
     try {
-      if (adoptReadyChannels().length > 0) syncSharedProjectPrefs();
+      if (hookControlAvailable()) {
+        ensureInstances();
+        if (adoptReadyChannels().length > 0) syncSharedProjectPrefs();
+      }
       return { prefs: { prefs: listSharedProjectPrefs() } satisfies SharedProjectPrefsView };
     } catch (err) {
       log.warn(`shared project prefs read failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1236,8 +1265,7 @@ export function registerHookControlIpc(): void {
   });
 
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SHARED_PREFS_SET, async (_e, payload) => {
-    requireHookControl();
-    ensureInstances();
+    if (hookControlAvailable()) ensureInstances();
     writeSharedProjectPref(payload);
     return { prefs: { prefs: listSharedProjectPrefs() } satisfies SharedProjectPrefsView };
   });

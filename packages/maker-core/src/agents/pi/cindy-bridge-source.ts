@@ -1,6 +1,8 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
+import { PI_NATIVE_TOOL_CATALOG_SOURCE } from './native-tool-catalog-source.js';
 import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
+import { assertToolLifecycleBudget } from '../shared/tool-lifecycle.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *
@@ -192,6 +194,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_TASK_SYSTEM_PROMPT_FILE',
   'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
+  'CINDY_PI_TOOL_LIFECYCLE',
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,
   MANAGED_RG_PATH_ENV,
@@ -4732,6 +4735,8 @@ ${PI_CACHE_RECOVERY_SOURCE}
 
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 
+${PI_NATIVE_TOOL_CATALOG_SOURCE}
+
 // ─── 设备托管：执行器操作 ───────────────────────────────────────────
 async function cindyHostedCall(op: string, body: unknown, signal?: AbortSignal): Promise<any> {
   if (!CINDY_HOSTED) throw new Error('Cindy hosted executor is not configured.');
@@ -4950,29 +4955,33 @@ export default async function cindyBridge(piApi: any) {
     handler: async (args: string, ctx: any) => {
       const nonce = args.trim();
       if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) return;
-      let code: 'INVALID_PAYLOAD' | 'APPLY_FAILED' | undefined;
+      let code: 'INVALID_PAYLOAD' | 'APPLY_FAILED' | 'UNSUPPORTED_CAPABILITY' | undefined;
       let mutationStarted = false;
       let runtimeSettings;
       try {
         const raw = await ctx.ui.input('cindy:provider-refresh', JSON.stringify({ nonce }));
         let inspect = false;
-        try { const request = JSON.parse(raw); inspect = request?.nonce === nonce && request?.operation === 'inspect'; }
+        let toolRequest;
+        try { const request = JSON.parse(raw); inspect = request?.nonce === nonce && request?.operation === 'inspect';
+          if (request?.nonce === nonce && request?.operation === 'tool-catalog') toolRequest = request.toolRequest; }
         catch { /* The normal snapshot parser rejects invalid JSON. */ }
-        const snapshot = inspect ? undefined : parseCindyProviderRefreshSnapshot(raw, nonce);
-        if (!inspect && !snapshot) {
+        const snapshot = inspect || toolRequest ? undefined : parseCindyProviderRefreshSnapshot(raw, nonce);
+        if (toolRequest && typeof toolRequest.method === 'string' && Array.isArray(toolRequest.args)) {
+          runtimeSettings = await callCindyNativeToolCatalog(pi, toolRequest.method, toolRequest.args);
+        } else if (!inspect && !snapshot) {
           code = 'INVALID_PAYLOAD';
         } else if (snapshot) {
           mutationStarted = true;
           await nativeProviderAdapters.refresh(snapshot, ctx, SECRET_ENV_NAMES);
         }
-        if (!code) {
+        if (!code && !toolRequest) {
           // getSettings returns a copy. Never reach into Pi's private session or
           // pretend a settings.json rewrite changed the live SettingsManager.
           const settings = typeof pi.getSettings === 'function' ? pi.getSettings() : initialNativeSettings;
           runtimeSettings = { version: piCodingAgent.VERSION, compaction: settings.compaction ?? {} };
         }
-      } catch {
-        code = mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
+      } catch (error) {
+        code = error?.message === 'UNSUPPORTED_CAPABILITY' ? 'UNSUPPORTED_CAPABILITY' : mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
       }
       // RPC prompt swallows extension command exceptions. The host must see an
       // explicit, nonce-bound receipt before accepting a refreshed catalog.
@@ -5334,6 +5343,41 @@ export default async function cindyBridge(piApi: any) {
   // 设备托管：文件、命令与搜索工具改用任务所在电脑上的执行器(替换上面的本机注册)。
   registerCindyHostedTools(pi, bashTool, applyCindyBashTimeoutParams);
 
+  // Native plugin hooks run before Cindy permissions, so transformed parameters
+  // enter the same permission/capture path. With no selected plugin no RPC runs.
+  const toolLifecyclePoints = (process.env.CINDY_PI_TOOL_LIFECYCLE ?? '').split(',');
+  const assertToolHookBudget = ${assertToolLifecycleBudget.toString()};
+  const pluginToolLifecycle = async (event: any, ctx: any, phase: 'call' | 'result') => {
+    const data = { phase, toolName: event.toolName, toolCallId: event.toolCallId,
+      input: event.input ?? {}, ...(phase === 'result' ? { result: { content: event.content, details: event.details, isError: event.isError }, isError: event.isError } : {}) };
+    assertToolHookBudget(data);
+    const serialized = JSON.stringify(data);
+    const frameBudget = ${MAX_JSONL_BUFFER_CHARS - 4096};
+    if (serialized.length > frameBudget / 2 && JSON.stringify(serialized).length > frameBudget) throw new Error('Tool hook exceeds the transport frame budget');
+    const raw = await ctx.ui.input('cindy:tool-lifecycle', serialized, { timeout: 2_000 });
+    const result = typeof raw === 'string' ? JSON.parse(raw) : null;
+    if (!result || result.error) throw new Error('Tool hook failed');
+    return result;
+  };
+  if ((toolLifecyclePoints.includes('call') || toolLifecyclePoints.includes('result')) && !guestToolGate && !currentPermissionState().reviewOnly) {
+    const pluginToolCall = async (event: any, ctx: any) => {
+      const result = await pluginToolLifecycle(event, ctx, 'call');
+      if (result.decision === 'deny') return { block: true, reason: result.reason ?? 'Plugin denied tool call' };
+      if (result.input) {
+        for (const key of Object.keys(event.input)) delete event.input[key];
+        Object.defineProperties(event.input, Object.getOwnPropertyDescriptors(result.input));
+      }
+    };
+    if (toolLifecyclePoints.includes('call')) pi.on('tool_call', pluginToolCall);
+    if (toolLifecyclePoints.includes('result')) pi.on('tool_result', async (event: any, ctx: any) => {
+      const result = await pluginToolLifecycle(event, ctx, 'result');
+      if (result.decision === 'deny') {
+        ctx.abort();
+        throw new Error(result.reason ?? 'Plugin blocked tool result');
+      }
+      return result.result;
+    });
+  }
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
     if (guestToolGate && guestToolGate.blocks(event.toolName)) {

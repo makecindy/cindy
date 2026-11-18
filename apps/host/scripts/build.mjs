@@ -234,6 +234,14 @@ try {
     ['apps/desktop/src/main/cindy-brain/ghostSnapshotWorkerProcess.ts', 'snapshot-worker.cjs'],
     ['apps/host/src/agent/pi-subagent-runner-process.cts', 'pi-subagent-runner.cjs'],
   ]) await build({ ...common, entryPoints: [entry], outfile: path.join(bin, name), format: name.endsWith('.mjs') ? 'esm' : 'cjs' });
+  // Agent-Net node (docs/agent-net-session-plan.md 阶段 5): the same worker bundle the Desktop ships
+  // (packages/agent-net/build.mjs) beside the core, which its own build verifies against the checked-in prebuilt.
+  execFileSync(process.execPath, [path.join(repo, 'packages/agent-net-core/build.mjs')], { cwd: path.join(repo, 'packages/agent-net-core'), stdio: 'inherit' });
+  await build({ absWorkingDir: path.join(repo, 'packages/agent-net'), entryPoints: ['src/worker.ts'], outfile: path.join(bin, 'agent-net-worker.mjs'),
+    bundle: true, platform: 'node', target: 'node22', format: 'esm', external: ['bufferutil', 'utf-8-validate'], legalComments: 'none', logLevel: 'warning',
+    banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" } });
+  await fs.mkdir(path.join(resources, 'agent-net'), { recursive: true });
+  await fs.copyFile(path.join(repo, 'packages/agent-net-core/dist/core.wasm'), path.join(resources, 'agent-net', 'core.wasm'));
   await build({ absWorkingDir: repo, entryPoints: ['apps/web/shim.js'], outfile: path.join(resources, 'web/shim.js'),
     bundle: true, platform: 'browser', format: 'iife', target: 'es2022', nodePaths: [path.join(host, 'node_modules')] });
   await build({ absWorkingDir: repo, entryPoints: ['apps/desktop/src/shared/ghostPageBridge.ts'],

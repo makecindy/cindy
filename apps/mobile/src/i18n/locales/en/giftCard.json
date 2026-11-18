@@ -1,0 +1,40 @@
+{
+  "sectionTitle": "Gift cards",
+  "settingsFooter": "Enter a redeem code or paste a gift card link to add the card to your promotional balance. Gift cards can only be redeemed by personal accounts.",
+  "action": "Redeem Gift Card",
+  "title": "Redeem gift card",
+  "inputLabel": "Redeem code",
+  "inputHint": "Enter the 16-character code, or paste a gift card link.",
+  "continue": "Continue",
+  "confirmTitle": "Redeem this gift card?",
+  "confirmAction": "Redeem",
+  "close": "Close",
+  "from": "From {{sender}}",
+  "cardLabel": "Cindy gift card, {{amount}}",
+  "fields": {
+    "validity": "Valid for",
+    "validityValue_one": "{{count}} day after redeeming",
+    "validityValue_other": "{{count}} days after redeeming",
+    "claimBy": "Redeem by",
+    "destination": "Added to",
+    "destinationValue": "Promotional Balance"
+  },
+  "doneTitle": "{{amount}} added",
+  "doneDescription": "Added to your Promotional Balance. Valid until {{date}}.",
+  "doneDescriptionNoDate": "Added to your Promotional Balance.",
+  "pendingTitle": "Gift card redeemed",
+  "pendingDescription": "{{amount}} is being added and will appear in your Promotional Balance shortly. You do not need to redeem it again.",
+  "alreadyYours": "You already redeemed this gift card.",
+  "done": "Done",
+  "errors": {
+    "notFound": "This code is not valid. Check it and try again.",
+    "wrongRegionCn": "This gift card is for the China mainland edition of Cindy and cannot be redeemed with this account.",
+    "wrongRegionGlobal": "This gift card is for the international edition of Cindy and cannot be redeemed with this account.",
+    "alreadyClaimed": "This gift card has already been redeemed.",
+    "expired": "This gift card can no longer be redeemed. Its deadline has passed.",
+    "voided": "This gift card has been voided.",
+    "rateLimited": "Too many attempts. Try again later.",
+    "failed": "Couldn't redeem the gift card. Try again later.",
+    "personalRequired": "Gift cards can only be redeemed by personal accounts."
+  }
+}

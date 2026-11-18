@@ -51,6 +51,7 @@ export async function readLegacySubscriptionQuota(
     return usage ? { ...usage, providerId: provider,
       subscriptionType: pool.claudeUsage?.subscriptionType,
       planTier: pool.claudeUsage?.planTier,
+      planDisplayName: pool.claudeUsage?.planDisplayName,
     } : null;
   }
   const usage = pool.codexUsage;

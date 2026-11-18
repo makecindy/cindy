@@ -1,6 +1,6 @@
 import { usePreviewFocusReturn } from './PreviewChrome';
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
-import { openHtmlFileByPreference } from './useOpenWithMenu';
+import { openHtmlFileByPreference } from './messageLinkActions';
 import { DocSearchBar } from '@/features/cc-agent/workdir-browse/DocSearchBar';
 import {
   AttachmentCollectionPreview,

@@ -5,7 +5,7 @@
 
 import { relativeTime as relativeTimeOf } from '@/components/settings/deviceLabels';
 
-import type { TopologyFlow, TopologyNode } from './topologyModel';
+import type { TopologyFlow, TopologyModel, TopologyNode } from './topologyModel';
 
 export { platformLabel, relativeTime } from '@/components/settings/deviceLabels';
 
@@ -20,9 +20,16 @@ export function protocolKind(node: TopologyNode): ProtocolKind | null {
 }
 
 export function protocolLabel(node: TopologyNode, t: T): string | null {
-  const kind = protocolKind(node);
+  return protocolKindLabel(protocolKind(node), t);
+}
+
+export function protocolKindLabel(kind: ProtocolKind | null | undefined, t: T): string | null {
   if (!kind) return null;
   return t(kind === 'agent-net' ? 'settings.remoteControl.v2.protocol.agentNet' : 'settings.remoteControl.v2.protocol.deviceLink');
+}
+
+export function selfProtocolKind(model: Pick<TopologyModel, 'relay'>, linkStatus: string): ProtocolKind | null {
+  return linkStatus === 'online' ? model.relay.protocol ?? null : null;
 }
 
 /** 一台设备「怎么连」的一句话:直连 / 经「X」中转 / 在线未建链 / 要处理原因 / 离线。 */

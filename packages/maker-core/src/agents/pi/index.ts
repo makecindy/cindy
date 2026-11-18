@@ -1,3 +1,4 @@
+import { piToolMarkupProjection } from './tool-markup-projection.js';
 import { estimatePiContext, type PiPromptSource } from './context-estimate.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
@@ -4261,6 +4262,7 @@ export class PiAgent extends BaseAgent {
       };
     }
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger, { model: initialWireModel });
+    piToolMarkupProjection(ctx).attachTerminalQueue(queue);
     ctx.getPriceVariant = opts.getPriceVariant;
     ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
     ctx.workingContextWindow = startupWorkingContextWindow;
@@ -4291,7 +4293,8 @@ export class PiAgent extends BaseAgent {
     let retainedLiveGatewayModel = initialProvider === PI_PROVIDER_ID ? selectedRuntimeModel : undefined;
     const providerRefreshStages = new Map<string, {
       nonce: string;
-      operation: 'inspect' | 'refresh';
+      operation: 'inspect' | 'refresh' | 'tool-catalog';
+      toolRequest?: { method: string; args: unknown[] };
       env: Record<string, string>;
       aliases: ReturnType<typeof nativeProviderAdapterAliases>;
       acknowledge: (ok: boolean, code?: string, settings?: unknown) => void;
@@ -5095,7 +5098,7 @@ export class PiAgent extends BaseAgent {
             return 'allow';
           }
           if (reviewPermissionMode === 'auto' && decision.verdict === 'block') return piPermissionDenial('auto-review-deny', decision.reason);
-          if (decision.unavailable) autoReviewUnavailableNotice.notify();
+          if (decision.unavailable) autoReviewUnavailableNotice.notify(decision);
           return requestUserDecision({
             forcePrompt: true,
             ...(decision.unavailable ? { unavailableHandoff: true } : { autoReviewReason: decision.reason }),
@@ -5786,6 +5789,8 @@ export class PiAgent extends BaseAgent {
         ...(hosted ? { [DEVICE_HOSTED_PI_ENV]: deviceHostedPiEnvValue(hosted) } : {}),
         ...(fastModels.length > 0 ? { CINDY_PI_FAST_MODELS: JSON.stringify(fastModels) } : {}),
         CINDY_PI_TURN_TOOL_POLICY: remote ? '' : runtimeInstanceId,
+        CINDY_PI_TOOL_LIFECYCLE: !remote && !hosted && !reviewMode && opts.sessionId
+          ? (['call', 'result'] as const).filter(phase => this.deps.toolLifecycleControl?.enabled(opts.sessionId!, phase)).join(',') : '',
         ...(allowPiPackageManagement ? { [PI_PACKAGE_MANAGEMENT_ENV]: piPackageManagementToken } : {}),
         // 轮 40-w4-t12 HIGH-1:review-only 启动标记 —— 独立于权限文件(文件损坏/
         // 缺失时 bridge 仍保留 reviewOnly 语义, 不降级成普通 ask;见
@@ -5970,7 +5975,8 @@ export class PiAgent extends BaseAgent {
               if (event.title === 'cindy:provider-refresh') {
                 proc.send(valid
                   ? { type: 'extension_ui_response', id: requestId,
-                    value: JSON.stringify({ nonce: stage!.nonce, operation: stage!.operation, env: stage!.env, aliases: stage!.aliases }) }
+                    value: JSON.stringify({ nonce: stage!.nonce, operation: stage!.operation, env: stage!.env, aliases: stage!.aliases,
+                      ...(stage!.toolRequest ? { toolRequest: stage!.toolRequest } : {}) }) }
                   : { type: 'extension_ui_response', id: requestId, cancelled: true });
               } else {
                 if (valid) stage!.acknowledge(payload.ok === true, typeof payload.code === 'string' ? payload.code : undefined, payload.runtimeSettings);
@@ -5984,6 +5990,12 @@ export class PiAgent extends BaseAgent {
               currentModelIds: [mutableModel, mutableWireModel],
               readNativeFast: (provider, model) => !requestPrefsClosed && nativeFastEnabled &&
                 fastModels.some(candidate => candidate.provider === provider && candidate.id === model),
+              controlToolLifecycle: async input => {
+                if (remote || hosted || reviewMode || closed || accountBoundaryTeardown || !opts.sessionId) throw new Error('Tool hook control unavailable');
+                const result = await this.deps.toolLifecycleControl?.run(opts.sessionId, { ...input, engine: 'pi' });
+                if (closed || accountBoundaryTeardown) throw new Error('Tool hook control expired');
+                return result ?? {};
+              },
               controlModelRequest: async input => {
                 const control = activeModelRequestControl;
                 if (!control || closed || accountBoundaryTeardown) throw new Error('Model request control is unavailable');
@@ -6012,7 +6024,7 @@ export class PiAgent extends BaseAgent {
               writableRoots: [logicalWorkingDir, ...mutableWritableDirs],
               reviewAutoAction,
               recordUserClarification: (question, answer) => setAutoReviewIntent(composeAutoReviewIntentWithClarification(currentAutoReviewIntent, [{ question, answer }])),
-              notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
+              notifyAutoReviewUnavailable: (decision) => autoReviewUnavailableNotice.notify(decision),
               notifyAutoReviewConfirmUndelivered: () => autoReviewConfirmUndeliveredNotice.notify(),
               registeredMcpServerNames,
               registerPendingPrompt,
@@ -6997,21 +7009,23 @@ export class PiAgent extends BaseAgent {
     };
     let liveRuntimeSettings: PiNativeRuntimeSettings | undefined;
     const queryNativeRuntime = async (
-      operation: 'inspect' | 'refresh',
+      operation: 'inspect' | 'refresh' | 'tool-catalog',
       env: Record<string, string> = {},
       aliases: ReturnType<typeof nativeProviderAdapterAliases> = [],
-    ): Promise<{ ok: boolean; code?: string }> => {
+      toolRequest?: { method: string; args: unknown[] },
+    ): Promise<{ ok: boolean; code?: string; toolCatalog?: unknown }> => {
       // Unknown extension commands become model prompts. Check ownership first.
       const commands = await proc.request({ type: 'get_commands' });
       const entries = (commands.data as { commands?: Array<{ name?: unknown; source?: unknown }> } | undefined)?.commands;
       if (!commands.success || !entries?.some((entry) =>
         entry.name === 'cindy-native-provider-refresh' && entry.source === 'extension')) {
+        if (operation === 'tool-catalog') throw new Error('UNSUPPORTED_CAPABILITY');
         throw new Error('Cindy native provider refresh extension is unavailable; reopen this task with the current Cindy version.');
       }
       const nonce = randomBytes(24).toString('base64url');
       let timer: ReturnType<typeof setTimeout> | undefined;
       const ack = new Promise<{ ok: boolean; code?: string; settings?: unknown }>((resolve) => {
-        providerRefreshStages.set(nonce, { nonce, operation, env, aliases,
+        providerRefreshStages.set(nonce, { nonce, operation, env, aliases, toolRequest,
           acknowledge: (ok, code, settings) => resolve({ ok, code, settings }) });
         timer = setTimeout(() => resolve({ ok: false, code: 'ACK_TIMEOUT' }), 10_000);
       });
@@ -7020,6 +7034,7 @@ export class PiAgent extends BaseAgent {
         if (!response.success) return { ok: false, code: 'COMMAND_FAILED' };
         const receipt = await ack;
         if (!receipt.ok) return receipt;
+        if (operation === 'tool-catalog') return { ok: true, toolCatalog: receipt.settings };
         const settings = parsePiNativeRuntimeSettings(receipt.settings);
         if (!settings) return { ok: false, code: 'INVALID_SETTINGS' };
         liveRuntimeSettings = settings;
@@ -7895,7 +7910,7 @@ export class PiAgent extends BaseAgent {
     const handle: AgentSessionHandle = {
       reviewAutoPermissionAction: async (action) => {
         const decision = await reviewAutoAction(action);
-        if (decision.unavailable) autoReviewUnavailableNotice.notify();
+        if (decision.unavailable) autoReviewUnavailableNotice.notify(decision);
         return decision;
       },
       // getter 而非固定值:setModel / commitRewindFiles 会更新闭包里的 mutableModel /
@@ -7911,6 +7926,12 @@ export class PiAgent extends BaseAgent {
       },
       getRuntimeCapabilities() {
         return runtimeCapabilityManifest;
+      },
+      async callNativeToolCatalog(method: string, args: unknown[]) {
+        if (remote || hostedGuest || reviewMode) throw new Error('UNSUPPORTED_CAPABILITY');
+        const receipt = await queryNativeRuntime('tool-catalog', {}, [], { method, args });
+        if (!receipt.ok) throw new Error(receipt.code ?? 'NATIVE_TOOL_CATALOG_FAILED');
+        return receipt.toolCatalog;
       },
       disabledSkillPaths: disabledSkillSnapshot,
       hasProjectResourceDrift() {
@@ -9306,6 +9327,7 @@ export class PiAgent extends BaseAgent {
       permissionMode: 'ask' | 'auto' | 'bypassPermissions';
       currentModelIds: readonly string[];
       readNativeFast?: (provider: string, model: string) => boolean;
+      controlToolLifecycle?: (input: Omit<import('../shared/tool-lifecycle.js').ToolLifecycleEvent, 'engine'>) => Promise<import('../shared/tool-lifecycle.js').ToolLifecycleVerdict>;
       controlModelRequest?: (input: { phase: 'select' | 'payload'; provider: string; model: string;
         request?: Record<string, unknown>; failure?: 'request-too-large' }) => Promise<unknown>;
       workspaceRoots: string[];
@@ -9314,7 +9336,7 @@ export class PiAgent extends BaseAgent {
       reviewAutoAction: (action: ReviewableAction, hostAutoApprove?: boolean, hostShortcutOnly?: boolean) => Promise<AutoReviewDecision>;
       recordUserClarification: (question: string, answer: string) => void;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
-      notifyAutoReviewUnavailable: () => void;
+      notifyAutoReviewUnavailable: (decision: AutoReviewDecision) => void;
       /** 故障确认没送到 / 被系统收口时纠正「用户拒绝」归因。 */
       notifyAutoReviewConfirmUndelivered: () => void;
       /** 本会话实际注册过的桥接 MCP server 名;MCP 归属判定只认这批(防冒名顶替)。 */
@@ -9380,6 +9402,23 @@ export class PiAgent extends BaseAgent {
       return;
     }
 
+    if (method === 'input' && event.title === 'cindy:tool-lifecycle') {
+      const context = getPermissionCtx();
+      void (async () => {
+        try {
+          if (context.isPermissionContextClosed() || context.isAccountBoundaryTornDown() || !context.controlToolLifecycle) throw new Error('Tool hook unavailable');
+          const input = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '');
+          if (!['call', 'result'].includes(input?.phase) || typeof input.toolName !== 'string' || typeof input.toolCallId !== 'string'
+            || !input.input || typeof input.input !== 'object' || Array.isArray(input.input)) throw new Error('Invalid tool hook');
+          const result = await context.controlToolLifecycle(input);
+          if (context.isPermissionContextClosed() || context.isAccountBoundaryTornDown()) throw new Error('Tool hook expired');
+          proc.send({ type: 'extension_ui_response', id, value: JSON.stringify(result) });
+        } catch {
+          proc.send({ type: 'extension_ui_response', id, value: JSON.stringify({ error: 'Tool hook failed' }) });
+        }
+      })();
+      return;
+    }
     // Internal, read-only query over the existing stdio/SSH RPC response channel.
     if (method === 'input' && event.title === 'cindy:model-request-control') {
       const context = getPermissionCtx();
@@ -9574,7 +9613,7 @@ export class PiAgent extends BaseAgent {
             deny();
             return;
           }
-          if (autoDecision?.unavailable) context.notifyAutoReviewUnavailable();
+          if (autoDecision?.unavailable) context.notifyAutoReviewUnavailable(autoDecision);
           const approved = getPermissionCtx().permissionMode === 'bypassPermissions'
             || (!forcePrompt && autoDecision?.verdict === 'allow' && getPermissionCtx().permissionMode === 'auto')
             || await new Promise<boolean>((resolve) => {
@@ -10090,7 +10129,7 @@ export class PiAgent extends BaseAgent {
           if (decision.verdict === 'ask' || (permissionMode !== 'auto' && decision.verdict !== 'allow')) {
             // 审阅器故障降级来的 ask 提示一次:用户需要知道自己为何突然开始被问,
             // 否则 Auto 档看起来像坏了。模型判定的 ask 不提示(那是正常工作)。
-            if (decision.unavailable) notifyAutoReviewUnavailable();
+            if (decision.unavailable) notifyAutoReviewUnavailable(decision);
             sendPermissionResolution(await requestUserConfirmation({
               forcePrompt: true,
               unavailableHandoff: decision.unavailable === true,

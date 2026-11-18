@@ -18,11 +18,11 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import { mkdtempSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
@@ -1269,6 +1269,42 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     }]);
     // 字符串解析也是一种归一化动作, 必须回显: 用户与模型据此分得清是链路丢参还是服务端行为。
     expect(latestToolResultContent(requests.at(-1)!)).toContain('parsed the JSON string in args');
+  });
+
+  // Integration: public native MCP registration must connect the existing HTTP
+  // fixture and withdrawal must remove it from the native active declarations.
+  it('registers and removes an HTTP server through the native tool catalog', { timeout: 30_000 }, async () => {
+    // A native user package keeps Pi's normal built-in extension discovery on.
+    // The default isolated fixture uses --no-extensions and has no MCP consumer;
+    // registration alone does not promise an asynchronous connection.
+    const packageRoot = path.join(agentHome, 'catalog-user-package');
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'catalog-fixture', version: '1.0.0', pi: { extensions: ['index.mjs'] } }));
+    writeFileSync(path.join(packageRoot, 'index.mjs'), 'export default function () {}');
+    const diagnostics: Array<{ message: string; ctx?: Record<string, unknown> }> = [];
+    const handle = await new PiAgent({ ...buildDeps('local', recordingLogger(diagnostics)), resolvePiNativePackagePaths: async () => [packageRoot] }).startSession({ sessionId: 'native-mcp-catalog', workingDir: agentHome,
+      model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+    try {
+      // Enter a normal turn so Pi has fired session_start for its MCP consumer.
+      const initialized = (async () => { for await (const event of handle.events()) {
+        if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+        if (event.type === 'done') return;
+      } })();
+      await handle.send({ type: 'user', content: 'initialize the native MCP catalog' });
+      await initialized;
+      expect(await handle.callNativeToolCatalog!('registerMcpServer', ['catalog_native', {
+        url: mcpUrl, headers: { Authorization: `Bearer ${MCP_TOKEN}` }, exposure: 'direct',
+      }])).toBeNull();
+      await vi.waitFor(async () => {
+        const tools = await handle.callNativeToolCatalog!('getAllTools', []) as Array<{ name: string; parameters?: unknown }>;
+        expect(tools.find(tool => tool.name === 'mcp__catalog_native__echo')?.parameters,
+          JSON.stringify({ tools: tools.map(tool => tool.name), diagnostics }))
+          .toMatchObject({ properties: { text: { type: 'string' } } });
+      }, { timeout: 5000 });
+      expect(await handle.callNativeToolCatalog!('getActiveTools', [])).toContain('mcp__catalog_native__echo');
+      expect(await handle.callNativeToolCatalog!('unregisterMcpServer', ['catalog_native'])).toBeNull();
+      expect(await handle.callNativeToolCatalog!('getActiveTools', [])).not.toContain('mcp__catalog_native__echo');
+    } finally { await handle.close(); }
   });
 
   // Integration: the real Pi binary must traverse both discovery layers with

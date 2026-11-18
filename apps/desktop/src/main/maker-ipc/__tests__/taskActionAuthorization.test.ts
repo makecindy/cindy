@@ -699,7 +699,7 @@ describe('Desktop owner input task actions', () => {
         updateWorkerQueuedMessage: unused, cancelWorkerQueuedMessage: unused,
         mergeWorkerQueuedMessages: unused, steerWorkerQueuedMessage: unused,
         moveWorkerQueuedMessage: unused, idleWorker: unused, endTeam: unused,
-        archiveWorker: unused, updateWorker: unused, listAvailableModels: unused,
+        archiveWorker: unused, updateWorker: unused, setWorkerRuntime: unused, listAvailableModels: unused,
         getWorkspaceInfo: unused,
         getWorkerStatus: unused, readWorker: unused,
       },

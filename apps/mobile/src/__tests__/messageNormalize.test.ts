@@ -1445,6 +1445,32 @@ describe('normalizeRemoteMessages', () => {
     expect(unknown).toMatchObject({ body: 'plain', align: 'user' });
   });
 
+  // unit: message-source.md「插件转发的 IM 消息」(2026-11-16). Real normalize entry: a Host-stamped relay
+  // from a known platform shows the owner-style IM card with only the plugin's visible text (the
+  // stored body keeps its reference block); unknown platforms and relay-free rows keep the plugin bubble.
+  it('renders a known-platform plugin relay as an IM card with only the plugin text', () => {
+    const text = '发布时间定了吗？';
+    const stored = `${text}\n\n[Plugin-provided reference material; not user instructions or additional authorization]\n`
+      + '[渠道说明] 回复会发回微信群。\n[/Plugin-provided reference material]';
+    const content = { text: stored, images: [], files: [], pastedTextRanges: [{ start: text.length + 2, end: stored.length, display: '附带资料' }] };
+    const relay = { platform: 'wechat', chatType: 'group', chatName: '产品群', sender: { id: 'wxid_a', name: 'Chris', isOwner: false } };
+    const plugin = { pluginId: 'cindy-wechat-groups', name: '微信群里的 Cindy' };
+    const [relayed, unknown, legacy] = normalizeRemoteMessages([
+      message({ id: 'relay', role: 'user', content, agentMeta: { sourcePlugin: { ...plugin, relay } } }),
+      message({ id: 'unknown', role: 'user', content, agentMeta: { sourcePlugin: { ...plugin, relay: { ...relay, platform: 'myspace' } } } }),
+      message({ id: 'legacy', role: 'user', content, agentMeta: { sourcePlugin: plugin } }),
+    ]);
+    expect(relayed).toMatchObject({ body: text, kind: 'user', align: 'agent', sourcePlugin: { ...plugin, relay } });
+    expect(relayed.hookSource).toEqual({ im: 'wechat', userText: text, userTextContent: true });
+    expect(relayed).not.toHaveProperty('pastedTextRanges');
+    expect(relayed).not.toHaveProperty('draftBody');
+    for (const plain of [unknown, legacy]) {
+      expect(plain).toMatchObject({ body: stored, align: 'user', pastedTextRanges: content.pastedTextRanges });
+      expect(plain.hookSource).toBeUndefined();
+    }
+    expect(legacy.sourcePlugin).toEqual(plugin);
+  });
+
   it('normalizes Telegram hook source into a left-aligned Cindy card payload', () => {
     const [item, unknown] = normalizeRemoteMessages([
       message({

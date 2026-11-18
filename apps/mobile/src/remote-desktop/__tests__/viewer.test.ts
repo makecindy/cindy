@@ -1163,6 +1163,33 @@ describe("remote desktop viewport", () => {
       { kind: "key", code: "Enter", down: false },
     ]);
   });
+  it.each([
+    "中".repeat(4095) + "😀tail",
+    "中文Ab😀".repeat(819) + "\n",
+  ])("commits long IME text without splitting a surrogate pair", (text) => {
+    const v = viewer();
+    v.send({ type: "init", epoch: "unicode", width: 1280, height: 800 });
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "keyboard", enabled: true });
+    v.keyboardInput("compositionstart");
+    v.elements["keyboard-input"].value = "​" + text;
+    v.keyboardInput("input", { isComposing: true });
+    expect(v.messages.flatMap((m) => m.events ?? []).filter((e) => e.kind === "text")).toEqual([]);
+    v.keyboardInput("compositionend");
+    v.keyboardInput("input", { isComposing: false });
+    v.flush();
+    const chunks = v.messages
+      .flatMap((m) => m.events ?? [])
+      .filter((e) => e.kind === "text")
+      .map((e) => e.text!);
+    expect(chunks).toHaveLength(2);
+    expect(chunks.join("")).toBe(text);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(4096);
+      // A lone surrogate at either end means a character was cut in half.
+      expect(chunk).not.toMatch(/^[\udc00-\udfff]|[\ud800-\udbff]$/);
+    }
+  });
   it("forwards hardware keys after the mobile keyboard input loses focus", () => {
     const v = viewer();
     v.send({ type: "init", epoch: "typing", width: 1920, height: 1080 });

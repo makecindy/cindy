@@ -930,10 +930,28 @@ export function groupAutomationListItems(
 }
 
 /**
- * 单条列表项的自动化组键(不含 scopeKey 前缀):`schedule:<id>`,或无 run 记录的 legacy 会话
- * 兜底 `fallback:...`。导出给「自动化任务作用域」页用同一算法反查某任务的全部运行。
+ * 旧伙伴例行任务专线(`source='bot'`、`companion.role='routine'`)按例行规则归组,与桌面
+ * getAutomationSidebarGroupInfo 同口径;旧主机不带 routineId 时返回 null,维持逐条显示。
+ */
+function teammateRoutineGroupKey(session: RemoteSessionListItem['session']): string | null {
+  const like = session as {
+    source?: unknown;
+    orcaRole?: unknown;
+    companion?: { id?: string | null; role?: unknown; routineId?: string | null } | null;
+  };
+  if (like.source !== 'bot' || like.orcaRole === 'worker') return null;
+  const companion = like.companion;
+  if (companion?.role !== 'routine' || !companion.id || !companion.routineId) return null;
+  return `routine:${companion.id}:${companion.routineId}`;
+}
+
+/**
+ * 单条列表项的自动化组键(不含 scopeKey 前缀):`schedule:<id>`、旧伙伴例行任务 `routine:<伙伴>:<规则>`,
+ * 或无 run 记录的 legacy 会话兜底 `fallback:...`。导出给「自动化任务作用域」页用同一算法反查某任务的全部运行。
  */
 export function automationGroupKey(item: RemoteSessionListItem): string | null {
+  const routineKey = teammateRoutineGroupKey(item.session);
+  if (routineKey) return routineKey;
   if (!isAutomationGeneratedSession(item.session)) return null;
   const scheduleInfo = item.scheduleInfo;
   if (scheduleInfo?.scheduleId) return `schedule:${scheduleInfo.scheduleId}`;

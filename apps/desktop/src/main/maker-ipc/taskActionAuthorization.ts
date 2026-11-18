@@ -13,11 +13,14 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'steer_session',
   'stop_session_turn',
   'set_session_runtime',
+  'set_session_tool_catalog',
   'set_app_default_model',
   'update_app_settings',
   'import_theme_package',
   'set_model_configuration',
   'configure_model_provider',
+  'set_provider_share_member_status',
+  'set_provider_share_model_access',
   'configure_model_connection',
   'manage_media_guide',
   'reset_app_settings',
@@ -54,6 +57,7 @@ export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'idle_worker',
   'end_team',
   'archive_worker',
+  'set_worker_runtime',
 ]);
 
 export interface TaskActionScope {

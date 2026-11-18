@@ -5,6 +5,7 @@ mod engine;
 mod media;
 mod media_http;
 mod notification;
+mod udp_paths;
 
 use std::{ffi::{c_char, CString}, panic::{AssertUnwindSafe, catch_unwind}};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -38,7 +39,7 @@ pub fn create(options: &Value) -> Result<NativeEngine, &'static str> {
         || !device_id.bytes().all(|b| b.is_ascii_alphanumeric() || b"._:@/-".contains(&b))
     { return Err("INVALID_DEVICE_ID"); }
     let crypto = NativeCrypto::from_seed(context, seed, options["legacySigning"] == true)?;
-    NativeEngine::new(crypto, device_id.to_owned(), options["udp"].as_bool().unwrap_or(true))
+    NativeEngine::new(crypto, device_id.to_owned(), options["udp"].as_bool().unwrap_or(true), options["enhancedTransport"].as_bool().unwrap_or(false))
 }
 
 /// SAFETY: input must address length readable bytes. Handle calls are serialized

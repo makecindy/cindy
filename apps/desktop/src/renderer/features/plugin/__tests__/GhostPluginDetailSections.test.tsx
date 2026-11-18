@@ -13,6 +13,11 @@ import type { PreparedPluginContribution } from '../../../../shared/pluginContri
 
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
+// This section fixture has no auth/device-link host. Source discovery has dedicated hook coverage.
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: () => ({ leadAgentDeviceId: null, devices: undefined }),
+}));
+
 vi.mock('@/hooks/useModelPricing', () => ({
   useGatewayModelPricing: () => null,
   useReferenceModelPricing: () => null,

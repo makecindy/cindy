@@ -1,5 +1,5 @@
 import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
-import { sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy } from '@cindy/model-providers';
+import { listedSourceFolds } from '@cindy/model-providers';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { SpeedIcon } from './SpeedIcon';
@@ -14,6 +14,7 @@ import {
   useState,
   useMemo,
   useEffect,
+  useLayoutEffect,
   useRef,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
@@ -65,6 +66,7 @@ import {
   withMenuLabels,
 } from '@/components/ui/menu-row';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { discoveredCopyReason } from './agentSwitchConfirmation';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { CindyMark } from '@/components/icons/CindyMark';
@@ -104,7 +106,6 @@ import {
   useDeviceProviders,
 } from '@/hooks/useDeviceProviders';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
-import { effectiveRunLocation, RUN_LOCATION_LOCAL } from '@/lib/providerRunLocation';
 import { modelCatalogKey, type ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
@@ -234,6 +235,8 @@ export interface ModelMemoryAccessors {
   setFast: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean | 'ultrafast') => void;
   getThinking?: (agent: AgentKind, providerId: string, modelId: string) => boolean | undefined;
   setThinking?: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean) => void;
+  /** Delete the override; older remote mirrors fall back to setting the default. */
+  clearThinking?: (agent: AgentKind, providerId: string, modelId: string) => void;
   /**
    * 「恢复推荐 / 回落默认」用的**删除**入口(2026-08-17 review H3)。
    *
@@ -663,7 +666,23 @@ export function resolveModelSelectorAgentIdentity(
 }
 
 /** 远程 Agent 草稿里一次行选中的落点电脑;null = Agent 在本机。 */
-export type UnifiedSelectionAgentDevice = { deviceId: string; name: string } | null;
+export type UnifiedSelectionAgentDevice = {
+  deviceId: string;
+  name: string;
+  /**
+   * Another computer's copy of a provider this computer has but cannot use right now. The app never
+   * moves work there by itself: the user is asked first (2026-11-18 user decision). Drafts and other
+   * direct selections are asked here in the picker; a running task's relocation is asked by the
+   * caller in its one relocation dialog. Shares, provider groups and providers only another
+   * computer has are listed in Settings like local ones and never carry this flag.
+   */
+  askBeforeUse?: {
+    /** The unusable provider's name on the task's computer. */
+    providerName: string;
+    /** The task's computer when it is not this one (a controlled computer); null = this computer. */
+    homeName: string | null;
+  };
+} | null;
 
 /** 「配置模型」打开设置 → 模型供应商时直接选中的一项;不传 = 只打开供应商页。 */
 export interface ProvidersNavigationTarget {
@@ -734,8 +753,7 @@ export interface RemoteAgentSelectorOptions {
 export type ModelSelectorLocalOnlyReason =
   | 'subagent-in-parent-task'
   | 'vision-bridge-local-proxy'
-  | 'one-shot-local-request'
-  | 'plugin-task-local-route';
+  | 'one-shot-local-request';
 
 /**
  * 每个入口都必须声明模型来源，漏传不能再静默变成只有本机。
@@ -825,7 +843,7 @@ export interface ModelSelectorBaseProps {
   /** 语义同 onEffortChange(含返回值口径)。 */
   onFastModeChange?: (enabled: boolean | 'ultrafast') => void | boolean | Promise<void | boolean>;
   thinkingEnabled?: boolean;
-  onThinkingChange?: (enabled: boolean) => void | Promise<void>;
+  onThinkingChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
   /** 非选中模型行的 effort/fast 全局预设读写器(按本机 / 被控设备隔离)。 */
   modelMemory?: ModelMemoryAccessors;
   /** When provided, only models with this vendorKey are shown in the dropdown. */
@@ -1009,7 +1027,7 @@ export interface ModelSelectorContentBaseProps {
   /** 语义同 onEffortChange(含返回值口径)。 */
   onFastModeChange?: (enabled: boolean | 'ultrafast') => void | boolean | Promise<void | boolean>;
   thinkingEnabled?: boolean;
-  onThinkingChange?: (enabled: boolean) => void | Promise<void>;
+  onThinkingChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
   modelMemory?: ModelMemoryAccessors;
   /** Request-owned preferences; edits never reach the user's saved defaults. */
   preferenceStore?: ModelPickerPreferenceStore;
@@ -1792,52 +1810,56 @@ function ModelSelectorContentView({
   const browsingBoundGroupEntry =
     stayInGroup && boundEntry !== null && (remoteBrowse?.deviceId ?? null) === boundEntry.deviceId;
   /**
-   * 同账号借用(供应商「运行于」)：同一个供应商在本机和自己的其他电脑上都能用时只列一处——本机能用且没改选
-   * 就是本机那一项，否则是「运行于」那台电脑那一项。只管本机任务、同账号电脑、不在供应商组里的供应商；
-   * 当前任务此刻正在用的那一项始终保留，免得选中项消失。
+   * 同一个来源只列一次：与设置页、手机选择器用同一条规则（listedSourceFolds）。以任务所在电脑为基准
+   * （本机任务是本机，被控电脑上的任务是那台）；其他电脑上的同一来源收进基准那一项，或按「运行于」
+   * 列在那台电脑；供应商组、不同账号、模型更多的来源各自保留；当前任务正在用的那一项始终保留。
    */
   const runLocationFold = useMemo(() => {
     const hiddenRemote = new Set<string>();
     const hiddenLocal = new Set<string>();
-    if (!homeDeviceId) for (const [id] of duplicateSubscriptionProviders(localProviders.providers.filter(provider => !localProviderGroups[provider.id]), unifiedIsVisible)) {
-      if (remoteAgentDeviceId || currentProviderId !== id) hiddenLocal.add(id);
-    }
-    if (!remoteAgentDevices || homeDeviceId) return { hiddenRemote, hiddenLocal };
-    for (const device of remoteAgentDevices) {
-      if (isProviderShareAgentDeviceId(device.deviceId)) continue;
-      for (const provider of remoteDeviceCatalogs.get(device.deviceId)?.providers ?? []) {
+    // Never use the viewer's catalog or provider groups for a task on another computer.
+    // Without location choices ChatInput supplies only deviceId, not remoteAgent.
+    const taskDeviceId = homeDeviceId ?? (!remoteAgent ? deviceId : undefined);
+    const taskProviders = taskDeviceId ? (homeDeviceId ? homeDeviceProviders : remoteProviders).providers : localProviders.providers;
+    const others = (remoteAgentDevices ?? []).flatMap((device) => {
+      if (isProviderShareAgentDeviceId(device.deviceId) || device.deviceId === taskDeviceId) return [];
+      const providers = remoteAgentProviders(remoteDeviceCatalogs.get(device.deviceId)?.providers ?? []);
+      for (const provider of providers) {
         if (remoteDisable.isDisabled(device.deviceId, provider.id)
           && !(remoteAgentDeviceId === device.deviceId && currentProviderId === provider.id))
           hiddenRemote.add(remoteProviderEntryKey(device.deviceId, provider.id));
       }
-    }
-    for (const provider of localProviders.providers) {
-      if (localProviderGroups[provider.id] || provider.suspended || hiddenLocal.has(provider.id)) continue;
-      const candidates = remoteAgentDevices.flatMap((device) => {
-        if (isProviderShareAgentDeviceId(device.deviceId)) return [];
-        return (remoteDeviceCatalogs.get(device.deviceId)?.providers ?? []).filter(entry => entry.connected && !entry.suspended
-          && entry.remoteInvocationEnabled === true && !(entry as { group?: unknown }).group
-          && !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, entry.id))
-          && !remoteDisable.isDisabled(device.deviceId, entry.id) && sameRunLocationProvider(provider, entry))
-          .map(offered => ({ deviceId: device.deviceId, name: device.name, providerId: offered.id, provider: offered }));
+      return [{ deviceId: device.deviceId, providers: providers.filter(provider =>
+        !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id))
+        && !hiddenRemote.has(remoteProviderEntryKey(device.deviceId, provider.id))) }];
+    });
+    const folds = listedSourceFolds({
+      base: taskProviders,
+      baseExempt: (providerId) => taskDeviceId
+        ? remoteProviderGroups.groups.has(remoteProviderEntryKey(taskDeviceId, providerId))
+        : !!localProviderGroups[providerId],
+      others,
+      current: currentProviderId ? { deviceId: remoteAgentDeviceId, providerId: currentProviderId } : null,
+      honorRunLocation: true,
+    });
+    for (const id of folds.hiddenBase) hiddenLocal.add(id);
+    for (const [otherDeviceId, ids] of folds.hiddenOther)
+      for (const id of ids) hiddenRemote.add(remoteProviderEntryKey(otherDeviceId, id));
+    // Entry key → names for the question asked before using that copy.
+    const askBeforeUse = new Map<string, NonNullable<NonNullable<UnifiedSelectionAgentDevice>['askBeforeUse']>>();
+    const homeName = taskDeviceId ? deviceDisplayName(taskDeviceId, remoteAgent?.homeDeviceName) : null;
+    for (const [key, baseProviderId] of folds.askBeforeUse) {
+      const split = key.indexOf('\n');
+      const baseProvider = taskProviders.find((provider) => provider.id === baseProviderId);
+      askBeforeUse.set(remoteProviderEntryKey(key.slice(0, split), key.slice(split + 1)), {
+        providerName: baseProvider ? providerDisplayName(baseProvider, t) : baseProviderId,
+        homeName,
       });
-      if (candidates.length === 0) continue;
-      const location = effectiveRunLocation(provider as typeof provider & { runLocation?: string }, candidates);
-      const preferred = candidates.find(candidate => candidate.deviceId === location);
-      const representative = preferred?.provider ?? provider;
-      const visibleAt = (deviceId?: string) => (providerId: string, model: { id: string; defaultEnabled?: boolean }, agent: AgentKind) => deviceId
-        ? isDeviceModelVisible(remoteDeviceCatalogs.get(deviceId)?.modelVisibilityOverrides, agent, providerId, model)
-        : isModelEnabled(agent, providerId, model);
-      for (const candidate of candidates) {
-        const inUse = candidate.deviceId === remoteAgentDeviceId && candidate.providerId === currentProviderId;
-        if (candidate !== preferred && !inUse && subscriptionModelsCoveredBy(candidate.provider, representative, visibleAt(candidate.deviceId), visibleAt(preferred?.deviceId))) hiddenRemote.add(remoteProviderEntryKey(candidate.deviceId, candidate.providerId));
-      }
-      const localInUse = !remoteAgentDeviceId && provider.id === currentProviderId;
-      if (location !== RUN_LOCATION_LOCAL && !localInUse && subscriptionModelsCoveredBy(provider, representative, visibleAt(), visibleAt(preferred?.deviceId))) hiddenLocal.add(provider.id);
     }
-    return { hiddenRemote, hiddenLocal };
-  }, [remoteAgentDevices, homeDeviceId, localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
-    remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, unifiedIsVisible]);
+    return { hiddenRemote, hiddenLocal, askBeforeUse };
+  }, [remoteAgent, deviceId, remoteProviders.providers, remoteAgentDevices, homeDeviceId, homeDeviceProviders.providers,
+    localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
+    remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups, t]);
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     return remoteAgentDevices.flatMap((device) => {
@@ -3547,8 +3569,35 @@ function ModelSelectorContentView({
             remoteBrowse.deviceId,
         }
       : null;
+    // 本机这份用不了时另列出来的别处同一供应商：带上标记，用之前先问用户。
+    const askBeforeUseDevice = (device: UnifiedSelectionAgentDevice, providerId: string): UnifiedSelectionAgentDevice => {
+      const ask = device ? runLocationFold.askBeforeUse.get(remoteProviderEntryKey(device.deviceId, providerId)) : undefined;
+      return device && ask ? { ...device, askBeforeUse: ask } : device;
+    };
     // 选中直通带上这一行属于哪台电脑(仅远程 Agent 入口);落点不同由调用方连运行位置一起换。
-    const withAgentDevice = remoteAgent ? { agentDevice: remoteBrowseDevice } : {};
+    const withAgentDeviceFor = (providerId: string) =>
+      remoteAgent ? { agentDevice: askBeforeUseDevice(remoteBrowseDevice, providerId) } : {};
+    // 直通的选中要用别处那份时先问一句；不答或取消 = 不换，什么都不改。没有确认框可用时也不换。
+    const selectUnified = async (selection: Parameters<NonNullable<typeof onUnifiedSelect>>[0]) => {
+      const ask = selection.agentDevice?.askBeforeUse;
+      if (ask && selection.agentDevice) {
+        const device = selection.agentDevice.name;
+        const accepted = await confirmDialog?.confirm({
+          title: t('newChat.modelSelector.discoveredCopy.title', { device, provider: ask.providerName }),
+          description: t('newChat.modelSelector.discoveredCopy.description', {
+            unavailable: discoveredCopyReason(t, ask),
+            device,
+          }),
+          confirmText: t('newChat.modelSelector.discoveredCopy.confirm'),
+          cancelText: t('newChat.modelSelector.discoveredCopy.cancel'),
+        });
+        if (!accepted) return false;
+        // Answered: the caller only needs where to run.
+        const { askBeforeUse: _asked, ...agentDevice } = selection.agentDevice;
+        return onUnifiedSelect!({ ...selection, agentDevice });
+      }
+      return onUnifiedSelect!(selection);
+    };
     // 浏览的不是草稿当前落点的目录时,没有任何一行是「正在用的那一行」;归组的任务在组那一项里显示为正在用的。
     const panelSelection = browsingSelectedCatalog
       ? { providerId: activeSourceId, modelId }
@@ -3579,7 +3628,7 @@ function ModelSelectorContentView({
         relocate!(
           browsingBoundGroupEntry && row.providerId === boundEntry!.providerId && currentProviderId
             ? { ...row, providerId: currentProviderId, agentDevice: currentAgentDevice }
-            : { ...row, agentDevice: remoteBrowseDevice },
+            : { ...row, agentDevice: askBeforeUseDevice(remoteBrowseDevice, row.providerId) },
         ),
       ).then((applied) => {
         if (applied && dismiss) {
@@ -3600,10 +3649,10 @@ function ModelSelectorContentView({
       NonNullable<UnifiedModelPanelProps['remoteSources']>['onSelectDeviceFavorite']
     > = ({ deviceId: targetDeviceId, providerId, modelId: id, effort: rowEffort, config: rowConfig }) => {
       const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
-      const agentDevice = {
+      const agentDevice = askBeforeUseDevice({
         deviceId: targetDeviceId,
         name: deviceDisplayName(targetDeviceId, undefined, remoteAgentDevices ?? []),
-      };
+      }, providerId);
       const dismissIfApplied = (applied: boolean) => {
         if (applied) {
           closeOptionsPanel();
@@ -3613,7 +3662,7 @@ function ModelSelectorContentView({
       };
       if (onUnifiedSelect) {
         return runLiveWrite(() =>
-          onUnifiedSelect({
+          selectUnified({
             providerId,
             modelId: id,
             ...(rowEffortValue ? { effort: rowEffortValue } : {}),
@@ -3771,8 +3820,8 @@ function ModelSelectorContentView({
             providerUsage={providerUsageScope}
             providerGroupUsage={providerGroupUsage}
             providers={providers}
-            // 「运行于」另一台的本机供应商只从模型分组收起；本机收藏仍按完整目录解析。
-            {...(!deviceId && runLocationFold.hiddenLocal.size > 0
+            // 等价来源从来源栏与模型分组收起；收藏和最近仍按完整目录解析。
+            {...((!remoteAgent || !deviceId || (homeDeviceId && !remoteBrowse)) && runLocationFold.hiddenLocal.size > 0
               ? { listHiddenProviderIds: runLocationFold.hiddenLocal }
               : {})}
             providerOrder={deviceId ? undefined : localProviders.providerOrder}
@@ -3884,7 +3933,7 @@ function ModelSelectorContentView({
               // 链路重解析一次(见 onUnifiedSelect 的说明)。
               if (onUnifiedSelect) {
                 return runLiveWrite(() =>
-                  onUnifiedSelect({
+                  selectUnified({
                     providerId,
                     modelId: id,
                     ...(rowEffortValue ? { effort: rowEffortValue } : {}),
@@ -3894,7 +3943,7 @@ function ModelSelectorContentView({
                     ...(rowConfig.resetToRecommended
                       ? { resetToRecommended: true as const }
                       : {}),
-                    ...withAgentDevice,
+                    ...withAgentDeviceFor(providerId),
                   }),
                 ).then((applied) => {
                   if (applied) {
@@ -3932,7 +3981,7 @@ function ModelSelectorContentView({
             onConfigure={(providerId, id, rowEffort, rowConfig) => {
               const nextEffort = rowEffort === '' ? undefined : rowEffort;
               if (onUnifiedSelect) {
-                return onUnifiedSelect({
+                return selectUnified({
                   providerId,
                   modelId: id,
                   ...(nextEffort ? { effort: nextEffort } : {}),
@@ -3940,7 +3989,7 @@ function ModelSelectorContentView({
                   fast: rowConfig.fast,
                   favoriteUid: rowConfig.favoriteUid,
                   ...(rowConfig.resetToRecommended ? { resetToRecommended: true as const } : {}),
-                  ...withAgentDevice,
+                  ...withAgentDeviceFor(providerId),
                 });
               }
               if (relocate) {
@@ -3980,7 +4029,7 @@ function ModelSelectorContentView({
                   engine: rowConfig.engine,
                   fast: rowConfig.fast,
                   favoriteUid: null,
-                  ...withAgentDevice,
+                  ...withAgentDeviceFor(providerId),
                 });
               }
               // 浏览别的电脑的目录时没有「正在用的那一行」,也就没有锚点可清。
@@ -3995,6 +4044,8 @@ function ModelSelectorContentView({
                 }
               : {})}
             {...(onFastModeChange ? { onFastModeChangeLive: onFastModeChange } : {})}
+            thinkingEnabled={thinkingEnabled}
+            {...(onThinkingChange ? { onThinkingChangeLive: onThinkingChange } : {})}
             panelElement={paneElement}
             {...(overlayContentClassName !== undefined
               ? { overlayClassName: overlayContentClassName }
@@ -4220,6 +4271,68 @@ function ModelSelectorContentView({
   );
 
   return pane;
+}
+
+// 收起尾部后一次撑回去至少需要多宽的位移：门槛内不重渲，也不来回抖。
+const TAIL_RETRY_WIDTH_DELTA = 16;
+
+/**
+ * composer pill 尾部（引擎小标 + 思考档 + Fast）是否让位给模型名。
+ *
+ * 工具行真挤时，名字和尾部会一起被压扁：模型名只剩「GPT-…」，档名被挤成半截「超.」。
+ * 名字比装饰重要，所以**名字一被截断就整组收起尾部**，把空间全给名字。
+ * 收起后 pill 贴着名字变窄，名字本身不再被截断（无法自证空间回来了），所以只在
+ * composer 宽度一次变 ≥16px 或内容变化（换模型 / 换档 / 换引擎 / 开关 Fast）时重试；
+ * 实测截断与否在 layout / 尺寸回调里完成，不靠逐像素重渲，试回后若仍放不下会在同一次
+ * 绘制前再次收起。
+ */
+function useTailCollapse(
+  enabled: boolean,
+  composerRef: { readonly current: HTMLElement | null } | undefined,
+  labelRef: { current: HTMLElement | null },
+  resetKey: string,
+): boolean {
+  const [collapsed, setCollapsedState] = useState(false);
+  // 同值也 setState 会让父层多渲一帧，这里用 ref 挡掉。
+  const collapsedRef = useRef(false);
+  const setCollapsed = useCallback((next: boolean) => {
+    if (collapsedRef.current === next) return;
+    collapsedRef.current = next;
+    setCollapsedState(next);
+  }, []);
+  // 内容变了（换模型 / 换档 / 换引擎 / 开关 Fast）先给尾部一次机会，再由实测决定。
+  useEffect(() => {
+    if (enabled) setCollapsed(false);
+  }, [enabled, resetKey, setCollapsed]);
+  // 无依赖数组：每次渲染后实测一次截断（只读两个盒子尺寸），截断即让位。
+  useLayoutEffect(() => {
+    if (!enabled || collapsed) return;
+    const label = labelRef.current;
+    if (label && label.scrollWidth > label.clientWidth + 1) setCollapsed(true);
+  });
+  // 拖动分屏 / 侧栏时 composer 变窄不会让 ChatInput 重渲（它按宽度档位收敛），
+  // 名字被截断这件事只能在这里发现；收起后再按 ≥16px 位移决定要不要试回去。
+  useEffect(() => {
+    const composer = composerRef?.current;
+    if (!enabled || !composer || typeof ResizeObserver === 'undefined') return;
+    let width = composer.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const label = labelRef.current;
+      if (!label) return;
+      const nextWidth = composer.clientWidth;
+      const widened = nextWidth - width >= TAIL_RETRY_WIDTH_DELTA;
+      width = nextWidth;
+      if (collapsedRef.current) {
+        // 变窄没有帮助；只有变宽才值得再试一次（试回后放不下会在绘制前再次收起）。
+        if (widened) setCollapsed(false);
+      } else if (label.scrollWidth > label.clientWidth + 1) {
+        setCollapsed(true);
+      }
+    });
+    observer.observe(composer);
+    return () => observer.disconnect();
+  }, [composerRef, enabled, labelRef, setCollapsed]);
+  return enabled && collapsed;
 }
 
 export function ModelSelector({
@@ -4804,6 +4917,15 @@ export function ModelSelector({
   const engineMarkOption = engineMarkVendor ? agentOptionOf(engineMarkVendor) : null;
   // 引擎小标 + 深度在窄工具条下保留；极窄时让位给模型名。
   const showTriggerTail = engineMarkOption ? !isUltraCompactToolbar : !isCompactToolbar;
+  // 工具行真挤时，尾部整组让位给模型名（只看 composer 里的 trigger，不影响表单入口）。
+  const pillLabelRef = useRef<HTMLSpanElement | null>(null);
+  const collapseTriggerTail = useTailCollapse(
+    showTriggerTail && !isFieldTrigger && !isSettingsTrigger,
+    composerRef,
+    pillLabelRef,
+    `${dense}|${compactToolbar}|${ultraCompactToolbar}|${engineMarkVendor ?? ''}|${modelId}|${effort ?? ''}|${triggerFastOn}`,
+  );
+  const showTriggerTailContent = showTriggerTail && !collapseTriggerTail;
   const engineMarkNode = engineMarkOption ? (
     // aria-hidden:引擎名已经在 button 的 aria-label / title 里(displayIdentityLabel 仍带
     // agentIdentityLabel),这里再念一遍是重复。data 属性供接线测试定位。
@@ -4902,14 +5024,14 @@ export function ModelSelector({
       {activePluginModel ? (
         <>
           <PluginModelIcon model={activePluginModel} size={14} />
-          <span className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13')}>
+          <span ref={pillLabelRef} className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13')}>
             {activePluginModel.name}
           </span>
         </>
       ) : activeModelGroupRow ? (
         <>
           <ModelGroupIcon size={14} />
-          <span className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13')}>
+          <span ref={pillLabelRef} className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13')}>
             {activeModelGroupRow.name}
           </span>
         </>
@@ -4956,6 +5078,7 @@ export function ModelSelector({
           />
           {agentIdentityPrefix}
           <span
+            ref={pillLabelRef}
             className={cn(
               'min-w-0 font-normal text-[var(--text-primary)]',
               isSettingsTrigger
@@ -4972,7 +5095,7 @@ export function ModelSelector({
           </span>
           {/* 来源断开是**来源**的事,引擎身份位照常保留(规格 §1.2:引擎可见性靠一致的
               结构位,不靠出错才显示)。 */}
-          {showTriggerTail && engineMarkNode}
+          {showTriggerTailContent && engineMarkNode}
           {selectedSourceUnavailable ? <CircleAlert size={dense ? 11 : 12} className="ml-0.5 shrink-0 text-[var(--error-fg)]" aria-hidden /> : <Unplug
             size={dense ? 11 : 12}
             className="ml-0.5 shrink-0 text-[var(--error-fg)]"
@@ -5035,6 +5158,7 @@ export function ModelSelector({
           ) : null}
           {agentIdentityPrefix}
           <span
+            ref={pillLabelRef}
             className={cn(
               'min-w-0 font-normal',
               isSettingsTrigger
@@ -5057,8 +5181,8 @@ export function ModelSelector({
           {/* 引擎小标 + 深度 = pill 的收尾身份组(新形态,见 engineMarkVendor)。
               旧形态没有 mark,深度前保留「·」分隔;有 mark 时图标本身就是分隔,再加点
               会读成「模型 · 引擎 · 深度」三段。 */}
-          {showTriggerTail && engineMarkNode}
-          {effortLabel && showTriggerTail && (
+          {showTriggerTailContent && engineMarkNode}
+          {effortLabel && showTriggerTailContent && (
             <>
               {/* 固定表单入口尾部没有引擎 mark 作视觉分隔时,
                   深度前补「·」—— 否则「名字 深度」贴着读会粘成一个词。 */}
@@ -5082,8 +5206,8 @@ export function ModelSelector({
               )}
               <span
                 title={fullEffortLabel ?? undefined}
-                // 紧凑工具条的固定宽度可能把尾部档名挤到不足一行；允许它收缩并显示省略号，
-                // 同时保留 title / aria-label 中的完整档名，避免固定宽度下发生硬裁切。
+                // 尾部一旦显示就是给人看的身份组：名字被截断时整组让位（见 useTailCollapse），
+                // 所以不再让档名自己缩成半个字；完整档名仍留在 title / aria-label 里。
                 className={cn(
                   'min-w-0 font-normal',
                   isCreateAgentVariant
@@ -5091,10 +5215,6 @@ export function ModelSelector({
                     : 'text-[var(--text-primary)]',
                   isSettingsTrigger
                     ? 'max-w-[40%] shrink-0 whitespace-normal [overflow-wrap:anywhere]'
-                    : engineMarkOption
-                    ? isCompactToolbar
-                      ? 'min-w-0 shrink truncate'
-                      : 'shrink-0 whitespace-nowrap'
                     : isCreateAgentVariant
                       ? 'truncate'
                       : isFieldTrigger
@@ -5107,7 +5227,7 @@ export function ModelSelector({
               </span>
             </>
           )}
-          {triggerFastOn && showTriggerTail && (
+          {triggerFastOn && showTriggerTailContent && (
             <SpeedIcon
               mode={triggerFastOn}
               size={isCreateAgentVariant ? 11 : dense ? 12 : 13}

@@ -1183,6 +1183,26 @@
       "note": "计费点数用「点数」。清理前中文「额度」同时对应 Balance / Credits / Quota 三个英文概念，是计费面板里最容易误导用户的一处：同一个 billing 页面里「点数」和「额度」并存，而「额度」在别处又指配额。裁决把三者拆开——Credits =「点数」、Quota =「配额」、Balance =「余额」，「额度」整体退出。「额度」的禁用按英文源拆成三条条件禁用,分别挂在 credits / quota / balance 下。不能无条件禁:同一个「额度」在不同 key 里分别对应 Credits / Quota / Balance,目标译法不唯一,无条件禁只会让自动替换随机挑一个——xAI 的 subscription quota 就是这样被改成「订阅点数」的。第三方原生 credits 与 reset credits 属不同概念，走 alsoAllowed。whenEn 写单数 Credit:匹配本来就带可选复数 s,单数能同时覆盖 Credit / Credits,写成复数反而漏掉全部单数用法(Promotional Credit Details、credit snapshot 等 8 个 key 原先完全不受约束)。(2026-07-30 更新:Desktop billing 界面弃用「点数」概念(PR #1053),计费文案与金额直接挂钩——新增计费文案一律用金额/余额(Balance=余额)措辞,en 源不再引入 Credit/Credits 用词,因此本条的 Credits→点数 映射不再适用于计费界面;裁决继续约束的只剩 alsoAllowed 覆盖的第三方原生 credits(Codex / ChatGPT 订阅余量)与 reset credits 语境。后续给计费界面添加文案时不要恢复「点数」。)"
     },
     {
+      "id": "custom-mcp",
+      "status": "proposed",
+      "en": "Custom MCP",
+      "translations": {
+        "zh-CN": "自定义 MCP",
+        "zh-TW": "自訂 MCP",
+        "ja": "カスタム MCP",
+        "ko": "사용자 지정 MCP",
+        "fr": "MCP personnalisé",
+        "es": "MCP personalizado",
+        "de": "Benutzerdefiniertes MCP",
+        "pt-PT": "MCP personalizado",
+        "pt-BR": "MCP personalizado",
+        "zh-Hant-x-lzh": "自訂 MCP",
+        "zh-Hans-x-lzh": "自定 MCP"
+      },
+      "checkCase": false,
+      "note": "插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。"
+    },
+    {
       "id": "database-cleanup",
       "status": "proposed",
       "en": "Database cleanup",
@@ -2585,6 +2605,66 @@
       "note": "插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于插件随包的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。"
     },
     {
+      "id": "plugin-source-local",
+      "status": "proposed",
+      "en": "Locally installed",
+      "translations": {
+        "zh-CN": "本地安装",
+        "zh-TW": "本機安裝",
+        "ja": "ローカルインストール",
+        "ko": "로컬 설치",
+        "fr": "Installation locale",
+        "es": "Instalación local",
+        "de": "Lokal installiert",
+        "pt-PT": "Instalação local",
+        "pt-BR": "Instalação local",
+        "zh-Hant-x-lzh": "本機裝入",
+        "zh-Hans-x-lzh": "本机装入"
+      },
+      "checkCase": false,
+      "note": "插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。"
+    },
+    {
+      "id": "plugin-source-third-party",
+      "status": "proposed",
+      "en": "Third-party source",
+      "translations": {
+        "zh-CN": "第三方来源",
+        "zh-TW": "第三方來源",
+        "ja": "サードパーティの提供元",
+        "ko": "타사 출처",
+        "fr": "Source tierce",
+        "es": "Fuente de terceros",
+        "de": "Drittanbieterquelle",
+        "pt-PT": "Origem de terceiros",
+        "pt-BR": "Origem de terceiros",
+        "zh-Hant-x-lzh": "他方來源",
+        "zh-Hans-x-lzh": "他方来源"
+      },
+      "checkCase": false,
+      "note": "插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。"
+    },
+    {
+      "id": "plugin-source-unknown",
+      "status": "proposed",
+      "en": "Unknown source",
+      "translations": {
+        "zh-CN": "来源未知",
+        "zh-TW": "來源未知",
+        "ja": "提供元不明",
+        "ko": "알 수 없는 출처",
+        "fr": "Source inconnue",
+        "es": "Fuente desconocida",
+        "de": "Unbekannte Quelle",
+        "pt-PT": "Origem desconhecida",
+        "pt-BR": "Origem desconhecida",
+        "zh-Hant-x-lzh": "來源未詳",
+        "zh-Hans-x-lzh": "来源未详"
+      },
+      "checkCase": false,
+      "note": "插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。"
+    },
+    {
       "id": "pricing-component-audio",
       "status": "proposed",
       "en": "Audio",
@@ -3347,6 +3427,12 @@
       },
       "checkCase": false,
       "alsoAllowed": {
+        "fr": [
+          {
+            "text": "En cours d'exécution",
+            "when": "标题或状态标签使用大写首字母；句中仍使用小写首字母。"
+          }
+        ],
         "zh-CN": [
           {
             "text": "正在运行",
@@ -3858,6 +3944,25 @@
           }
         ]
       }
+    },
+    {
+      "id": "task-header",
+      "status": "proposed",
+      "en": "Header",
+      "translations": {
+        "zh-CN": "顶栏",
+        "zh-TW": "頂列",
+        "zh-Hans-x-lzh": "顶列",
+        "zh-Hant-x-lzh": "頂列",
+        "ja": "上部",
+        "ko": "상단",
+        "de": "Kopfzeile",
+        "es": "encabezado",
+        "fr": "en-tête",
+        "pt-BR": "cabeçalho",
+        "pt-PT": "cabeçalho"
+      },
+      "note": "任务 PR/MR 关联展示的顶栏。沿用 ccAgent.gitContext.pr.manage.pin/hint 的既有译法；区别于系统窗口标题栏。"
     },
     {
       "id": "task-tag",

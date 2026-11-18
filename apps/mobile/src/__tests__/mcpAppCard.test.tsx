@@ -719,3 +719,20 @@ it('restores a warm SDK on the phone without forwarding its cache hash into page
   expect(input.context).not.toHaveProperty('sdkCacheHashes');
   expect(state.prepare.mock.calls.at(-1)![0].sdk).toEqual(sdk);
 });
+
+// R3 / unit: real mobile presenter must prefer the saved config name; public
+// organization metadata deliberately has no namespace and must not gain a warning.
+it('shows the custom service snapshot and namespace-free organization history', async () => {
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="custom" title="Tool title" customMcp={{ name: 'Team reports' }} />));
+  expect(container.textContent).toContain('Team reports');
+  expect(container.textContent).toContain('mcpApps.customMcp');
+  expect(container.textContent).not.toContain('Tool title');
+  for (const customMcp of [true, {}, { name: 42 }]) {
+    await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="custom" title="Tool title" customMcp={customMcp} />));
+    expect(container.textContent).toContain('Tool title');
+    expect(container.textContent).toContain('mcpApps.customMcp');
+  }
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="org" title="Planner" plugin={{ name: 'Planner', source: { kind: 'organization' } }} />));
+  expect(container.textContent).toContain('Planner');
+  expect(container.textContent).not.toContain('mcpApps.source.');
+});

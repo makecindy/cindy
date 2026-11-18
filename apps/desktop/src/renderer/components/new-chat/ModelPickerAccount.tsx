@@ -26,6 +26,7 @@ export interface ModelPickerAccountInfo {
   identity?: string;
   plan?: string | null;
   planTier?: string;
+  planDisplayName?: string;
   planType?: string;
   usage: SubscriptionAccountUsage | null;
 }
@@ -157,6 +158,7 @@ function ScopedModelPickerAccount({
                           identity: account.identity?.trim() || undefined,
                           plan: account.plan,
                           planTier: account.planTier,
+                          planDisplayName: account.planDisplayName,
                           planType: account.planType,
                           usage: account.usage ?? null,
                         }
@@ -167,6 +169,7 @@ function ScopedModelPickerAccount({
                             identity: member.identity?.trim() || undefined,
                             plan: member.plan,
                             planTier: member.planTier,
+                            planDisplayName: member.planDisplayName,
                             planType: member.planType,
                             usage: member.usage ?? null,
                           })),
@@ -245,13 +248,17 @@ export function useModelPickerAccount(providerId: string, deviceId?: string | nu
     providerId,
     target === undefined ? preview.deviceId : target,
   );
-  const display = preview.enabled ? sessionAccountDisplay(session, t) : null;
+  // A task that has not run yet gets its account when the next message is sent, not here:
+  // show the same pool preview as a new task instead of an "unassigned" status.
+  const display =
+    preview.enabled && session?.state !== 'unassigned' ? sessionAccountDisplay(session, t) : null;
   if (display) {
     return {
       kind: session?.providerId ?? preview.accounts[providerId]?.kind,
       ...(display.identity ? { identity: display.identity } : {}),
       plan: display.plan,
       planTier: display.planTier,
+      planDisplayName: display.planDisplayName,
       planType: display.planType,
       usage: session?.state === 'bound' ? session.account.usage ?? null : display.usage,
     };

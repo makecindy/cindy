@@ -13,7 +13,7 @@ export default {
   real: 'LocalSkillhubStoreSync, projectGrouping, SkillHub store, SkillhubHomeContent, local skill cards and InstallTargetPicker',
   notCovered: 'Real filesystem discovery, account services, market requests and Skill mutations; scanner deduplication has separate unit coverage',
   stubs: {
-    'src/renderer/contexts/AuthContext': `export const useAuth=()=>({dataOwnerId:'fixture',mode:'local',user:null,isAuthenticated:false});export const useOptionalAuthDeviceId=()=>null;export const useOptionalAuthUser=()=>null;`,
+    'src/renderer/contexts/AuthContext': `export const useAuth=()=>({dataOwnerId:'fixture',mode:'local',user:null,isAuthenticated:false});export const useOptionalAuthDeviceId=()=>null;export const useOptionalAuthUser=()=>null;export const useOptionalDataOwnerGeneration=()=>0;`,
     'src/renderer/hooks/useCCSessions': `export const useCCSessions=()=>({sessions:window.__uiPage.ctx.data.sessions,isLoading:false});`,
     'src/renderer/features/cc-agent/useRegisterCCAgentSidebar': `export const useRegisterCCAgentSidebar=()=>{};`,
     'src/renderer/features/skillhub/hooks/useMarketList': `export const MARKET_PAGE_SIZE=24;export const deriveLocalInstall=()=>undefined;export const useCategoryList=()=>({categories:[]});const noop=()=>{};export const useMarketList=()=>({items:[],loading:false,loadingMore:false,hasMore:false,resolvedScope:'market',resolvedMine:false,setSearchQuery:noop,setSortBy:noop,setCatalogScope:noop,setCategoryFilter:noop,setVisibility:noop,loadMore:noop,reload:noop});`,
