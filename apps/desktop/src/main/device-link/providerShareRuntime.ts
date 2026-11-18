@@ -981,13 +981,19 @@ async function createLink(
   if (!provider || !provider.connected || provider.agents.length === 0) throwIpcError('PRECONDITION_FAILED', 'Provider is not available');
   if (!getDeviceId()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Device is not registered');
   assertCurrent();
-  const created = await providerShareApi.createLink({
-    providerId,
-    // 名称可能自动带上登录身份(如「OpenAI · 邮箱」)，分享出去前去掉。
-    providerLabel: scrubProviderShareLabel(provider.name, [provider.subscriptionAccount?.identity, provider.openAiAccount?.identity], provider.id),
-    // 电脑名不给受邀者(provider-sharing.md §6)：字段必填(旧版受邀者按必填解析)，填固定占位。
-    deviceName: PROVIDER_SHARE_NEUTRAL_DEVICE_NAME,
-  }, assertCurrent);
+  let created: Awaited<ReturnType<typeof providerShareApi.createLink>>;
+  try {
+    created = await providerShareApi.createLink({
+      providerId,
+      // 名称可能自动带上登录身份(如「OpenAI · 邮箱」)，分享出去前去掉。
+      providerLabel: scrubProviderShareLabel(provider.name, [provider.subscriptionAccount?.identity, provider.openAiAccount?.identity], provider.id),
+      // 电脑名不给受邀者(provider-sharing.md §6)：字段必填(旧版受邀者按必填解析)，填固定占位。
+      deviceName: PROVIDER_SHARE_NEUTRAL_DEVICE_NAME,
+    }, assertCurrent);
+  } catch (error) {
+    assertCurrent();
+    throw error;
+  }
   assertCurrent();
   if (requireLinkId && !created.linkId) {
     throwIpcError('UNSUPPORTED_CAPABILITY', 'Remote share links require an update to the provider share server');
