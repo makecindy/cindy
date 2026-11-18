@@ -1,3 +1,4 @@
+import type { AttachedFile } from '@/lib/fileTypes';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -159,6 +160,7 @@ async function submit(options: {
   catalogHostDeviceId?: string;
   authCatalogKey?: string;
   message?: string;
+  files?: AttachedFile[];
   builtInSkillIntent?: BuiltInSkillDraftIntent;
   skills?: AgentSkillCommand[];
   worktreeSkills?: AgentSkillCommand[];
@@ -379,7 +381,7 @@ async function submit(options: {
       previewRemoteCreation(...args);
       options.onPreview?.(args[0], args[1], { ...args[2], createdAt: args[0].nowIso });
     },
-    commitRemoteSessionHandoff: () => {}, rememberRecoverableHandoff: () => {},
+    commitRemoteSessionHandoff: () => {}, rememberRecoverableHandoff: vi.fn(),
     deliverRecoverableHandoff: (_id: string, deliver: () => Promise<boolean>) => deliver(),
     getBranchName: (name: string) => `cindy/${name}`,
     sessionService: { touchUserSend: async () => {}, get: async () => ({ status: 'active' }), update: async () => {} },
@@ -398,7 +400,7 @@ async function submit(options: {
     emitAutoTitlePreviewCleared: noop, restoreRemoteOptimisticDraft: vi.fn(),
     normalizeAutoTitle: () => options.titlePreview ?? null,
     isLocalGoalWorktreeCleanupPendingError: () => false,
-    plainTextToTiptapDoc, excludeCommentScreenshots: () => [],
+    plainTextToTiptapDoc, excludeCommentScreenshots: (files: AttachedFile[] = []) => files,
     log: { warn: (...args: unknown[]) => errors.push(args), error: (...args: unknown[]) => errors.push(args) },
     toast: { error: toastError, warning: toastWarning },
   };
@@ -444,7 +446,7 @@ async function submit(options: {
       catch (error) { errors.push(error); }
     } else {
       await callback(options.message ?? 'hello', selectedModel, options.submittedEffort ?? selection.effort ?? '',
-        'default', [], [], { providerId: selectedProviderId, slashCommandRanges: options.slashCommandRanges });
+        'default', options.files ?? [], [], { providerId: selectedProviderId, slashCommandRanges: options.slashCommandRanges });
     }
     if (started) await finished;
     if (hasWorktree && createSession.mock.calls.length) await worktreeFinished;
@@ -490,19 +492,23 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(createRemote).toHaveBeenCalledTimes(1);
     expect(result.sendMessage).toHaveBeenCalledTimes(1);
     expect(result.sendMessage.mock.calls[0][0]).toBe('remote-created');
+    expect(result.environment.rememberRecoverableHandoff).toHaveBeenCalledWith('remote-created', 'message', 'hello', undefined);
   });
 
   it('returns a rejected first message to editing without sending it or opening another task', async () => {
     const navigate = vi.fn();
-    const result = await submit({ deviceId: 'host', navigate,
+    const file: AttachedFile = { id: 'notes', name: 'notes.txt', path: '/notes.txt', ext: 'txt',
+      size: 4, category: 'text', mimeType: 'text/plain' };
+    const result = await submit({ deviceId: 'host', navigate, files: [file],
       createRemote: async () => { throw new Error('[INVALID_ARGS]'); },
     });
     expect(navigate).toHaveBeenCalledTimes(1);
     expect(result.sendMessage).not.toHaveBeenCalled();
     const [failure] = result.environment.remoteProjectsStore.setCreationPreview.mock.calls.at(-1)!;
     await failure.editAfterFailure();
+    expect(result.environment.rememberRecoverableHandoff).not.toHaveBeenCalled();
     expect(result.environment.restoreRemoteOptimisticDraft).toHaveBeenCalledWith('remote-create-draft-remote-created',
-      expect.objectContaining({ text: plainTextToTiptapDoc('hello') }));
+      expect.objectContaining({ text: plainTextToTiptapDoc('hello'), attachments: [file] }));
     expect(navigate).toHaveBeenLastCalledWith('/cc-agent/new',
       { replace: true, state: { remoteCreationRecoveryId: 'remote-created' } });
   });

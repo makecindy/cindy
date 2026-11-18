@@ -4753,7 +4753,6 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               pastedTextRanges: opts?.pastedTextRanges, slashCommandRanges: opts?.slashCommandRanges }, files);
             remoteOptimisticTitleSessionId = presetSessionId;
             markedStartingSessionId = presetSessionId;
-            rememberRecoverableHandoff(presetSessionId, 'message', message, currentBuiltInSkillIntent());
             // Copy the attachments while the host creates the task. Keep draft URLs valid until
             // the copy settles, including when creation fails before the copy completes.
             let recoveredFiles = files;
@@ -4795,7 +4794,6 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   writableDirs: targetDraft.writableDirs, vendor: targetDraft.vendor, collab: targetDraft.collab,
                 });
                 remoteProjectsStore.clearCreationPreview(presetSessionId);
-                void deliverRecoverableHandoff(presetSessionId, () => true);
                 navigate('/cc-agent/new', { replace: true, state: { remoteCreationRecoveryId: presetSessionId } });
               };
               remoteProjectsStore.setCreationPreview({ ...preview, editAfterFailure });
@@ -5003,6 +5001,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               logTag: 'draft send',
               markFirstSend: remoteDirectSend,
             });
+            // Before confirmation the editable message and attachments live together in the preview.
+            // A persisted handoff only has a recovery destination once the host task exists.
+            rememberRecoverableHandoff(remoteSessionId, 'message', message, currentBuiltInSkillIntent());
             markedStartingSessionId = remoteSessionId;
             failedPreview = () => {
               if (!isCurrentDataOwner()) return;

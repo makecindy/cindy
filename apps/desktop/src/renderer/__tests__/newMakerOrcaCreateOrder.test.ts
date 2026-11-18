@@ -328,10 +328,9 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     };
 
     it('副本在草稿路由登记 pending 的同一刻落下,不等会话视图消费', () => {
-      // 两条 device-link 分支都要落,且必须排在各自的 setPending / setPendingGoal 之后、
-      // navigate 之前 —— 登记完就有副本,后面无论多久没被消费都捞得回来。
+      // 消息在对端确认创建后登记；目标在目标交接时登记。
       const sendRemember = source.indexOf(
-        "rememberRecoverableHandoff(presetSessionId, 'message', message, currentBuiltInSkillIntent())",
+        "rememberRecoverableHandoff(remoteSessionId, 'message', message, currentBuiltInSkillIntent())",
       );
       const goalRemember = source.indexOf(
         "rememberRecoverableHandoff(remoteSessionId, 'goal', objective)",
@@ -342,18 +341,15 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       // await 之前 —— 提交点之后每多一次 await,「对端会话已建好、正文却还没有第二份」
       // 的窗口就长一分(codex P2 第五轮)。
       const sendCommit = source.lastIndexOf("logTag: 'draft send',", sendRemember);
-      const rehome = source.indexOf('rehomeDraftAttachments(files, presetSessionId', sendCommit);
+      const rehome = source.indexOf('await attachmentCopy', sendCommit);
       expect(sendCommit).toBeGreaterThan(-1);
       expect(sendCommit).toBeLessThan(sendRemember);
       expect(sendRemember).toBeLessThan(rehome);
       expect(source.lastIndexOf('setPendingGoal(remoteSessionId, {', goalRemember)).toBeGreaterThan(
         -1,
       );
-      expect(sendRemember).toBeLessThan(
-        source.indexOf('navigate(`/cc-agent/${presetSessionId}`', sendRemember),
-      );
       // 只落一次,别两处都落。
-      expect(source.match(/rememberRecoverableHandoff\(presetSessionId, 'message'/g)).toHaveLength(
+      expect(source.match(/rememberRecoverableHandoff\(remoteSessionId, 'message'/g)).toHaveLength(
         1,
       );
       // 会话视图不再自己落副本(落在那里要等 historyLoaded,等于没落)。
