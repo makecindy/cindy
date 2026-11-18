@@ -540,8 +540,10 @@ describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
     expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(true);
     host.hostInteraction(s, request);
     expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(true);
+    remoteProjectsStore.clear();
     await flush();
     expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(false);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
     expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe(request.requestId);
     expect(getIssueConfirmDraft(s, request.requestId)).toEqual(edited);
     makerChatStore.respondToIssueConfirm(s, {

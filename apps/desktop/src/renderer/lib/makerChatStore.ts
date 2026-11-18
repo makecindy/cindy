@@ -17823,10 +17823,12 @@ function submitQuestionDecision(
   const epoch = _messagesEpoch.get(sessionId) ?? 0;
   const authority = _inputProjectionAuthorityEpoch.get(sessionId) ?? 0;
   const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
-  const isCurrent = () => isDataOwnerGenerationCurrent(owner) &&
+  const isSameSession = () => isDataOwnerGenerationCurrent(owner) &&
     (_messagesEpoch.get(sessionId) ?? 0) === epoch &&
-    (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) === authority &&
-    remoteProjectsStore.getSessionDeviceId(sessionId) === origin;
+    (targetDevice
+      ? getStickySessionDeviceId(sessionId) === targetDevice && !isRemoteTerminalSessionTombstoned(sessionId, targetDevice)
+      : remoteProjectsStore.getSessionDeviceId(sessionId) === origin);
+  const isCurrent = () => isSameSession() && (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) === authority;
   bumpInteractionReconcileEpoch(sessionId);
   void (async () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -17872,7 +17874,8 @@ function submitQuestionDecision(
     } finally {
       if (timer) clearTimeout(timer);
       questionDecisionsInFlight.delete(key);
-      if (isCurrent()) onSettled?.();
+      // A relay reset invalidates old receipts, but the same pending card must become retryable.
+      if (isSameSession()) onSettled?.();
     }
   })();
 }

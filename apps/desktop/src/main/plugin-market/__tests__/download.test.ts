@@ -11,6 +11,13 @@ const host = vi.hoisted(() => ({ packaged: false, endpoint: 'http://127.0.0.1:43
 vi.mock('electron', () => ({ app: { get isPackaged() { return host.packaged; } } }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => host.endpoint }));
 vi.mock('../../downloader/http', () => ({ requestResponse: fetchMock }));
+// Exercise the real retry controller and attempt limits without waiting for network backoff.
+vi.mock('../../downloader/retry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../downloader/retry')>();
+  const withRetry: typeof actual.withRetry = (operation, options) =>
+    actual.withRetry(operation, { ...options, config: { ...options.config, baseDelayMs: 0 } });
+  return { ...actual, withRetry };
+});
 
 import { downloadVerifiedPlugin } from '../download';
 
@@ -22,8 +29,8 @@ async function settle(result: Promise<unknown>, maxMs: number): Promise<void> {
     () => (done = true),
     () => (done = true),
   );
-  for (let elapsed = 0; elapsed < maxMs && !done; elapsed += 500) {
-    await vi.advanceTimersByTimeAsync(500);
+  for (let elapsed = 0; elapsed < maxMs && !done; elapsed += 2_500) {
+    await vi.advanceTimersByTimeAsync(2_500);
     await new Promise((resolve) => realSetTimeout(resolve, 1));
   }
   await result;
