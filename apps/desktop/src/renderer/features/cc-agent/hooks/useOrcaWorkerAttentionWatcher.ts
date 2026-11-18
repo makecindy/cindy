@@ -24,6 +24,7 @@ export interface WorkerAttentionRecord {
 
 export interface WorkerAttentionUpdates {
   toMark: string[];
+  toClear: string[];
   toPrune: string[];
   nextStatusByWorkerId: Map<string, OrcaWorkerStatus>;
 }
@@ -36,6 +37,7 @@ export function computeWorkerAttentionUpdates(
   const currentWorkerIds = new Set<string>();
   const nextStatusByWorkerId = new Map<string, OrcaWorkerStatus>();
   const toMark: string[] = [];
+  const toClear: string[] = [];
   const toPrune: string[] = [];
 
   for (const worker of currentWorkers) {
@@ -45,9 +47,13 @@ export function computeWorkerAttentionUpdates(
     const prevStatus = prevStatusByWorkerId.get(worker.workerId);
     // `done` persists until the result is viewed and acknowledged, so an initial
     // snapshot can safely restore unread attention after a late mount or reload.
-    // dropped 回报映射的 done 不是需要用户看的结果,不产生未读标记。
-    const enteredDone =
-      prevStatus !== 'done' && worker.status === 'done' && !worker.reportDropped;
+    // dropped 回报(Lead 已收下、无需回复)到达即撤销未读标记:先到的 done 标记也要清,
+    // 不依赖回报与投影的到达顺序。
+    if (worker.reportDropped) {
+      toClear.push(worker.workerId);
+      continue;
+    }
+    const enteredDone = prevStatus !== 'done' && worker.status === 'done';
     const isViewed = worker.focused && worker.leadSessionId === activeSessionId;
     if (enteredDone && !isViewed) {
       toMark.push(worker.workerId);
@@ -58,7 +64,7 @@ export function computeWorkerAttentionUpdates(
     if (!currentWorkerIds.has(workerId)) toPrune.push(workerId);
   }
 
-  return { toMark, toPrune, nextStatusByWorkerId };
+  return { toMark, toClear, toPrune, nextStatusByWorkerId };
 }
 
 export function useOrcaWorkerAttentionByLeadIds(
@@ -97,7 +103,7 @@ export function useOrcaWorkerAttentionByLeadIds(
       activeSessionId,
     );
     for (const workerId of updates.toMark) markWorkerAttention(workerId);
-    clearWorkerAttentionMany(updates.toPrune);
+    clearWorkerAttentionMany([...updates.toClear, ...updates.toPrune]);
     prevStatusByWorkerIdRef.current = updates.nextStatusByWorkerId;
   }, [activeSessionId, leadSessionKey, projectionVersion]);
 }

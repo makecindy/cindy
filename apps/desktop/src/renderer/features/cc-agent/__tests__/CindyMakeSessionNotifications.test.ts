@@ -13,7 +13,6 @@ import { BOT_GROUP_LANE_SESSION, findSessionNotificationSession, isBackgroundTas
 import { isReviewSessionSource } from '../../../../shared/sessionSource';
 import {
   formatOrcaWorkerNotificationTitle,
-  isOrcaWorkerLatestReportDropped,
   shouldNotifyOrcaWorkerEvent,
 } from '../lib/orcaLeadWorkerAttention';
 
@@ -136,7 +135,6 @@ function dispatcher(local: NotificationSession[], remote: NotificationSession[] 
     botOwnedSessionNotificationTitle: botTitle,
     BOT_GROUP_LANE_SESSION,
     shouldNotifyOrcaWorkerEvent,
-    isOrcaWorkerLatestReportDropped: () => false,
     formatOrcaWorkerNotificationTitle,
     findOrcaLeadSessionIdForWorker: leadOfWorker,
     t: () => 'Unnamed task',
