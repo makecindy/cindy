@@ -114,6 +114,32 @@ describe('SectionCollapse unmount after animation', () => {
     expect(queryByText('visible')).toBeNull();
   });
 
+  // 「外观 → 动效」倍率会缩放 --motion-base(2 倍 = 400ms):卸载与 showAll 复位都要等实际动画
+  // 结束,写死 200ms 时内容会在收起动画进行到一半时突然消失(PR #11255 评审)。
+  it('waits for the scaled --motion-base before unmounting and resetting showAll', () => {
+    document.documentElement.style.setProperty('--motion-base', '400ms');
+    try {
+      const { rerender, queryByText } = render(
+        <SectionCollapse collapsed={false}>visible</SectionCollapse>,
+      );
+      const list = renderShowAll();
+      rerender(<SectionCollapse collapsed>visible</SectionCollapse>);
+      list.rerender({ sectionCollapsed: true });
+      act(() => {
+        vi.advanceTimersByTime(399);
+      });
+      expect(queryByText('visible')).not.toBeNull();
+      expect(list.result.current.showAll).toBe(true);
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(queryByText('visible')).toBeNull();
+      expect(list.result.current.showAll).toBe(false);
+    } finally {
+      document.documentElement.style.removeProperty('--motion-base');
+    }
+  });
+
   it('remounts immediately when re-expanded before the animation ends', () => {
     const { rerender, queryByText } = render(
       <SectionCollapse collapsed={false}>visible</SectionCollapse>,

@@ -656,13 +656,13 @@ export function findInlineSizeViolations(text: string): Hit[] {
   return hits;
 }
 
-/** 规则 9:白名单内的静态内联字号(冒号形式与 `.fontSize =` 成员赋值)。
+/** 规则 9:白名单内的静态内联字号(冒号形式,含带引号的键 `'fontSize': 13`,与 `.fontSize =` 成员赋值)。
  *  JSX 属性 / 变量声明形式、var(...)、函数调用、em/rem/% 与算式派生值不判;
  *  白名单外的值留给规则 3b,不双计。 */
 export function findInlineLiteralSizes(text: string): Hit[] {
   const hits: Hit[] = [];
-  for (const m of text.matchAll(/(\.)?\bfontSize\b\s*(:|=(?!=))\s*/g)) {
-    if (m[2] === '=' && !m[1]) continue;
+  for (const m of text.matchAll(/(\.)?(['"]?)\bfontSize\b\2\s*(:|=(?!=))\s*/g)) {
+    if (m[3] === '=' && (!m[1] || m[2])) continue;
     const rest = text.slice((m.index ?? 0) + m[0].length);
     const first = rest[0];
     let value: string;
@@ -1174,6 +1174,9 @@ describe('typography discipline (DESIGN.md §3, #1505)', () => {
         'fontSize …14',
       ]);
       expect(findInlineLiteralSizes('fontSize: active ? 13 : 12,')).toHaveLength(2);
+      // 带引号的键同样是合法对象属性写法,不得绕过(PR #11255 评审)
+      expect(matches(findInlineLiteralSizes("style={{ 'fontSize': 13 }}"))).toEqual(['fontSize …13']);
+      expect(matches(findInlineLiteralSizes('style={{ "fontSize": "13px" }}'))).toEqual(['fontSize …13']);
       expect(matches(findStringWeightViolations('font-weight:700;color:red'))).toEqual([
         'font-weight:700',
       ]);
