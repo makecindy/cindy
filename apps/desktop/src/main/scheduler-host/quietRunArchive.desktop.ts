@@ -34,11 +34,24 @@ export async function archiveQuietScheduledTarget(sessionId: string, sinceMs: nu
   if (isSchedulerTargetSessionBusy(sessionId) || hasPendingSchedulerTargetInput(sessionId)) return;
   await withSessionRouteLock(sessionId, async () => {
     const db = getDbClient();
-    const row = await db.queryOne<ArchiveCandidateRow>(`${ARCHIVE_CANDIDATE_SELECT} WHERE s.id = ?`, [sessionId]);
+    const row = await db.queryOne<ArchiveCandidateRow & { snoozedAt: number | null }>(
+      `${ARCHIVE_CANDIDATE_SELECT.replace('SELECT s.id,', 'SELECT s.snoozed_at AS snoozedAt, s.id,')} WHERE s.id = ?`,
+      [sessionId],
+    );
     // Running is judged from the live runtime above: right after a round the persisted
     // turn-end time may still be landing, so the stored turn columns would read as running.
-    if (!row || row.status !== 'active' || row.pinnedAt != null || row.queued) return;
+    if (!row || row.status !== 'active' || row.pinnedAt != null || row.queued
+      || (row.snoozedAt ?? 0) >= sinceMs) return;
     if (await db.queryOne(OWNER_MESSAGE_SINCE_SQL, [sessionId, sinceMs])) return;
-    await patchSessionMetaInDb(sessionId, { status: 'archived' }, { routeLockHeld: true });
+    const superseded = new Error('Quiet round no longer owns the idle task');
+    const beforeWrite = () => {
+      if ((getSessionLastUserActionAt(sessionId) ?? 0) >= sinceMs
+        || isSchedulerTargetSessionBusy(sessionId) || hasPendingSchedulerTargetInput(sessionId)) throw superseded;
+    };
+    try {
+      await patchSessionMetaInDb(sessionId, { status: 'archived' }, { routeLockHeld: true, beforeWrite });
+    } catch (error) {
+      if (error !== superseded) throw error;
+    }
   });
 }

@@ -76,5 +76,7 @@ it('recognizes PR follow-ups only from a pre-run check naming a PR or MR', () =>
   expect(scheduleFollowsPr(hook('node gate.mjs https://gitlab.example.com/g/r/-/merge_requests/3'))).toBe(true);
   expect(scheduleFollowsPr(hook('node check-3.mjs'))).toBe(false);
   expect(scheduleFollowsPr(hook('node gate.mjs https://github.com/o/r/issues/12'))).toBe(false);
+  expect(scheduleFollowsPr(hook('http://'.repeat(10000)))).toBe(false);
+  expect(scheduleFollowsPr(hook('prefixhttps://github.com/o/r/pull/12'))).toBe(false);
   expect(scheduleFollowsPr({})).toBe(false);
 });

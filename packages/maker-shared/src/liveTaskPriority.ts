@@ -76,7 +76,10 @@ export function taskInboxSection(
  */
 export function scheduleFollowsPr(schedule: { preRunHook?: { command?: string } | null }): boolean {
   const command = schedule.preRunHook?.command ?? '';
-  return /https?:\/\/[^\s'"]+\/(?:pull|-\/merge_requests)\/[1-9]\d*(?![0-9])/i.test(command);
+  // Tokenize once, then anchor each candidate: repeated URL prefixes cannot make
+  // the matcher rescan the remaining command quadratically (CodeQL #517).
+  return command.split(/[\s'"]/).some(token =>
+    /^https?:\/\/[^\s'"]+\/(?:pull|-\/merge_requests)\/[1-9]\d*/i.test(token));
 }
 
 /**

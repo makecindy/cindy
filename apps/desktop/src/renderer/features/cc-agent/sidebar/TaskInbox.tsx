@@ -98,6 +98,11 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
   const shownRef = useRef(shown);
   shownRef.current = shown;
   useEffect(() => {
+    if (!frozen) return;
+    const next = snapshotInboxLayout(shown, sessionRowKey);
+    if (JSON.stringify([...next]) !== JSON.stringify([...frozen])) setFrozen(next);
+  }, [shown, frozen]);
+  useEffect(() => {
     const root = rootRef.current;
     if (!frozen || !root) return;
     const release = () => {

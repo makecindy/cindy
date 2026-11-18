@@ -1635,17 +1635,18 @@ function ExpandedView({
     return sidebarSessions.filter((s) => (cutoff === null || sessionActivityMs(s) >= cutoff)
       && matchesTaskCreators(s, filter.creators, taskCreatorIndex));
   }, [sidebarSessions, filter.lastActivity, filter.creators, taskCreatorIndex]);
-  const inboxSourceSessions = useMemo(() => {
+  const statusIndependentSidebarSessions = useMemo(() => {
     const scoped = selectVisibleSessions(allSessionsForAttention, remoteProjectSessions, selectedMachineId)
       .filter(session => !isOrcaWorkerSession(session)
         && session.status !== 'deleted'
         && (!session.deviceLinkDeviceId || !isSharedTaskPeer(session.deviceLinkDeviceId)));
-    const visible = sidebarSessionsWithHiddenProjectsAsDialogues(scoped, hiddenProjectKeys, localPlatform);
+    return sidebarSessionsWithHiddenProjectsAsDialogues(scoped, hiddenProjectKeys, localPlatform);
+  }, [allSessionsForAttention, remoteProjectSessions, selectedMachineId, hiddenProjectKeys, localPlatform]);
+  const inboxSourceSessions = useMemo(() => {
     const cutoff = cutoffForLastActivity(filter.lastActivity);
-    return visible.filter(session => (cutoff === null || sessionActivityMs(session) >= cutoff)
+    return statusIndependentSidebarSessions.filter(session => (cutoff === null || sessionActivityMs(session) >= cutoff)
       && matchesTaskCreators(session, filter.creators, taskCreatorIndex));
-  }, [allSessionsForAttention, remoteProjectSessions, selectedMachineId, hiddenProjectKeys,
-    localPlatform, filter.lastActivity, filter.creators, taskCreatorIndex]);
+  }, [statusIndependentSidebarSessions, filter.lastActivity, filter.creators, taskCreatorIndex]);
   // The inbox counts a task as a teammate's by the same test as the teammate filter.
   const isInboxTeammateTask = useCallback(
     (session: Session) => !matchesTaskCreators(session, 'none', taskCreatorIndex),
@@ -1664,8 +1665,9 @@ function ExpandedView({
   );
 
   /* ---- Grouping & collapse ---- */
+  const pinnedSourceSessions = taskListMode === 'inbox' ? statusIndependentSidebarSessions : sidebarSessions;
   const allGroups = useProjectGroups(
-    sidebarSessions,
+    pinnedSourceSessions,
     projectAliases.aliases,
     false,
     visiblePersistentLocalProjects,
@@ -1677,7 +1679,7 @@ function ExpandedView({
   // keeps pinned conversations inside their project solely for project identity
   // and project-level actions; the normal project tree above remains deduped.
   const allProjectGroups = useProjectGroups(
-    sidebarSessions,
+    pinnedSourceSessions,
     projectAliases.aliases,
     true,
     visiblePersistentLocalProjects,
@@ -2170,19 +2172,20 @@ function ExpandedView({
   ]);
 
   const inboxSessions = useMemo(() => {
+    const pinnedRowIds = new Set(visiblePinnedProjects.flatMap(({ displaySessions }) =>
+      displaySessions.map(session => session.id)));
     const projects = visibleSidebarProjects(
       withoutTeammateProjectsElsewhere(inboxGroups.projects, teammatesElsewhere),
       hiddenProjectKeys, localPlatform,
     ).filter(project =>
-      !projectKeyComparisonSetHas(pinnedProjectComparisonKeys, project.projectKey, localPlatform)
-      && (filter.projectsAsSet === null || isTeammateProjectPath(project.workingDir)
+      (filter.projectsAsSet === null || isTeammateProjectPath(project.workingDir)
         || projectFilterIncludes(filter.projectsAsSet, project.projectKey, localPlatform)));
     return [
       ...projects.flatMap(project => project.sessions),
       ...(filter.projectsAsSet === null || filter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? inboxGroups.dialogues : []),
       ...(filter.projects === 'all' ? inboxGroups.unclassified : []),
-    ].filter(session => !vendorPredicate || vendorPredicate(session));
-  }, [inboxGroups, teammatesElsewhere, hiddenProjectKeys, localPlatform, pinnedProjectComparisonKeys,
+    ].filter(session => !pinnedRowIds.has(session.id) && (!vendorPredicate || vendorPredicate(session)));
+  }, [inboxGroups, teammatesElsewhere, hiddenProjectKeys, localPlatform, visiblePinnedProjects,
     filter.projectsAsSet, filter.projects, vendorPredicate]);
 
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
@@ -2449,8 +2452,8 @@ function ExpandedView({
   // 含远程会话:device-link 远程行也渲染在可选行里,bulk 选择/归档/删除必须能解析到它们
   // (否则选中远程行 → 计数加了但 archive/delete 查 sessionsById 落空、静默忽略)。
   const sessionsById = useMemo(
-    () => new Map([...sessions, ...remoteProjectSessions].map((session) => [session.id, session])),
-    [sessions, remoteProjectSessions],
+    () => new Map([...allSessionsForAttention, ...sessions, ...remoteProjectSessions].map((session) => [session.id, session])),
+    [allSessionsForAttention, sessions, remoteProjectSessions],
   );
   // 与 sessionsRef 同理:行级 handler 只在「点击那一刻」查表,不该因为表换了引用就
   // 重建自身 —— 否则 SessionItem 的 memo 会被整表打穿(SessionItem.tsx 不变量第 3 条)。

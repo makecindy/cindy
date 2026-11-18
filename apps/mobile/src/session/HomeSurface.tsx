@@ -2430,7 +2430,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, [inboxHome, ownedSharedTasks, homeSessions, searchQuery, contentFilters, filterTick]);
   const sortedHomeSections = useMemo(
     () => {
-      const regular = buildHomeSections(filteredHome, groupByProject, pinnedCollapsed, {
+      const regular = buildHomeSections(taskListMode === 'inbox' ? filteredInboxHome : filteredHome, groupByProject, pinnedCollapsed, {
         automationTitle: t('devices.list.menu.automationFolder'),
         dialogueTitle: t('devices.list.menu.dialogueFolder'),
         groupAutomation,
@@ -3434,7 +3434,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           if (section.key !== 'pinned' || !section.title) return null;
           return (
             <Pressable
-              accessibilityLabel={t('devices.list.a11y.pinnedConversations', { count: filteredHome.pinned.length })}
+              accessibilityLabel={t('devices.list.a11y.pinnedConversations', { count: (taskListMode === 'inbox' ? filteredInboxHome : filteredHome).pinned.length })}
               accessibilityRole="button"
               accessibilityState={{ expanded: !pinnedCollapsed }}
               onPress={togglePinned}
@@ -3449,7 +3449,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
               )}
               <Pin color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
               <Text style={styles.projectTitle} numberOfLines={1}>{section.title}</Text>
-              <Text style={styles.projectCount} numberOfLines={1}>{filteredHome.pinned.length}</Text>
+              <Text style={styles.projectCount} numberOfLines={1}>{(taskListMode === 'inbox' ? filteredInboxHome : filteredHome).pinned.length}</Text>
             </Pressable>
           );
         }}
@@ -3468,7 +3468,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
                 padding: windowLayout.emptyPadding,
               }}
             />
-          ) : !shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) && filteredHome.pinned.length > 0 ? (
+          ) : !shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) && (taskListMode === 'inbox' ? filteredInboxHome : filteredHome).pinned.length > 0 ? (
             // 仅剩置顶且被收起时 item 数为 0,但用户并非"无对话",不显示空状态插画。
             // 搜索列表的空态只认搜索结果,不能被普通列表里的置顶任务遮掉。
             null
