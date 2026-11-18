@@ -9,6 +9,7 @@ import { BotPronounProvider, useBotTranslation } from './botPronounContext';
 import { BotSettings } from './BotsHomeView';
 import { useBotProfiles } from './botStore';
 import { useCompanionCloud } from './companionCloudStore';
+import { cloudRemoteBots } from './companionCloudPresentation';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { useRemoteBots } from './useRemoteBots';
 import { RemoteTeammateSettings } from './RemoteTeammateSettings';
@@ -20,7 +21,9 @@ export function BotSettingsDrawer() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const bots = useBotProfiles();
-  const remoteBots = useRemoteBots();
+  const cloud = useCompanionCloud();
+  // Resolve the same rows as the list, including companions whose home was never discovered.
+  const remoteBots = cloudRemoteBots(cloud, useRemoteBots());
   const remoteMatch = matchPath('/bots/remote/:deviceId/:botId', location.pathname);
   const remoteBot = remoteBots.find(
     (item) =>
@@ -34,7 +37,6 @@ export function BotSettingsDrawer() {
       ? null
       : (matchPath('/bots/:botId/*', location.pathname) ??
         matchPath('/bots/:botId', location.pathname));
-  const cloud = useCompanionCloud();
   const settingsBotId = groupMatch ? searchParams.get('settingsBot') : null;
   const localBot = remoteMatch
     ? null

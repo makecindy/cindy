@@ -73,13 +73,15 @@ vi.mock('../BotsHomeView', async () => {
   };
 });
 
-const cloud = vi.hoisted(() => ({ demotedBotIds: [] as string[] }));
+const cloud = vi.hoisted(() => ({ demotedBotIds: [] as string[], actors: [] as CompanionCloudActor[] }));
 vi.mock('../companionCloudStore', () => ({
-  useCompanionCloud: () => ({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', actors: [], demotedBotIds: cloud.demotedBotIds }),
+  useCompanionCloud: () => ({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', actors: cloud.actors, demotedBotIds: cloud.demotedBotIds }),
 }));
-beforeEach(() => { cloud.demotedBotIds = []; });
+beforeEach(() => { cloud.demotedBotIds = []; cloud.actors = []; });
 
 import { BotSettingsDrawer } from '../BotSettingsDrawer';
+import { cloudRemoteBots } from '../companionCloudPresentation';
+import type { CompanionCloudActor } from '../../../../shared/companionCloud';
 
 function LocationProbe() {
   const location = useLocation();
@@ -330,4 +332,37 @@ it('routes a local voice deep link to the voice settings page', async () => {
   });
   render(<RouterProvider router={router} />);
   expect(screen.getByTestId('simple-bot-settings').getAttribute('data-initial-page')).toBe('voice');
+});
+
+// #10045 unit regression: the existing drawer cases only use a physically discovered remote
+// row. A cloud actor with no roster row must still open the production route's dialog;
+// a stale row on another computer must not override the cloud's current home.
+it('opens cloud-only settings and closes back to the same chat without exposing local edits', async () => {
+  cloud.demotedBotIds = ['bot-1'];
+  cloud.actors = [{ id: 'actor-1', externalId: 'bot-1', name: 'Cloud teammate', avatar: null,
+    homeDeviceId: 'offline-mac', homeDevice: { deviceId: 'offline-mac', name: 'Offline Mac', online: false, isSelf: false } }];
+  const rows = cloudRemoteBots({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', ...cloud }, []);
+  expect(rows).toMatchObject([{ id: 'bot-1', deviceId: 'offline-mac', online: false }]);
+  const router = createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], {
+    initialEntries: ['/bots/remote/offline-mac/bot-1?settings=1&settingsPage=memory&keep=1'],
+  });
+  render(<RouterProvider router={router} />);
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  expect(screen.getByTestId('remote-settings').textContent).toBe('offline-mac');
+  expect(screen.getByTestId('remote-settings').getAttribute('data-initial-page')).toBe('memory');
+  expect(screen.queryByTestId('simple-bot-settings')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(router.state.location.pathname).toBe('/bots/remote/offline-mac/bot-1');
+  expect(router.state.location.search).toBe('?keep=1');
+});
+
+it('does not open a stale remote settings route after the cloud home changes', () => {
+  cloud.actors = [{ id: 'actor-remote', externalId: 'remote-bot', name: 'Remote', avatar: null,
+    homeDeviceId: 'new-mac' }];
+  render(<RouterProvider router={createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], {
+    initialEntries: ['/bots/remote/other-mac/remote-bot?settings=1'],
+  })} />);
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.queryByTestId('simple-bot-settings')).toBeNull();
 });
