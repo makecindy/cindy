@@ -1855,11 +1855,15 @@ describe.each([
   });
 });
 
-it('retains diagnostics for a Bedrock runtime region selected by the SDK', async () => {
+it.each([
+  'bedrock-runtime.eu-west-1.amazonaws.com',
+  'bedrock-runtime.us-east-1.api.aws',
+  'bedrock-runtime.cn-north-1.api.amazonwebservices.com.cn',
+])('retains diagnostics for a Bedrock runtime selected by the SDK: %s', async host => {
   const row = Object.values(PROVIDER_MODEL_CATALOG.providers).flat().find(row => row.execution.pi.api === 'bedrock-converse-stream')!;
   const sdk = vi.spyOn(bedrockAdapter, 'streamSimple').mockImplementation(() => ({
     result: async () => {
-      const request = { protocol: 'https:', getHeader: () => 'bedrock-runtime.eu-west-1.amazonaws.com' };
+      const request = { protocol: 'https:', getHeader: () => host };
       channel('http.client.request.start').publish({ request });
       channel('http.client.request.error').publish({ request, error: { code: 'INVALID_CA' } });
       return { stopReason: 'error', errorMessage: 'fetch failed', content: [], model: row.id,
@@ -1871,4 +1875,27 @@ it('retains diagnostics for a Bedrock runtime region selected by the SDK', async
       nativeModel: row, api: 'bedrock-converse-stream' })).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'INVALID_CA' });
     expect(sdk).toHaveBeenCalledOnce();
   } finally { sdk.mockRestore(); }
+});
+
+it('retains the cause of a default Bedrock HTTP/2 stream TLS failure', async () => {
+  const row = Object.values(PROVIDER_MODEL_CATALOG.providers).flat().find(row => row.execution.pi.api === 'bedrock-converse-stream')!;
+  const created = channel('http2.client.stream.created'), failed = channel('http2.client.stream.error');
+  const previous = [created.hasSubscribers, failed.hasSubscribers];
+  const sdk = vi.spyOn(bedrockAdapter, 'streamSimple').mockImplementation(() => ({
+    result: async () => {
+      const stream = {};
+      created.publish({ stream,
+        headers: { ':scheme': 'https', ':authority': new URL(row.upstream).host } });
+      failed.publish({ stream,
+        error: Object.assign(new Error('stream cancelled', { cause: { code: 'INVALID_CA' } }), { code: 'ERR_HTTP2_STREAM_CANCEL' }) });
+      return { stopReason: 'error', errorMessage: 'fetch failed', content: [], model: row.id,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    },
+  }) as never);
+  try {
+    expect(await runProviderProbe({ agent: 'pi', baseUrl: row.upstream, modelId: row.id,
+      nativeModel: row, api: 'bedrock-converse-stream' })).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'INVALID_CA' });
+    expect(sdk).toHaveBeenCalledOnce();
+  } finally { sdk.mockRestore(); }
+  expect([created.hasSubscribers, failed.hasSubscribers]).toEqual(previous);
 });

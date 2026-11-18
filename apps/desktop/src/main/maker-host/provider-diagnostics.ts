@@ -52,6 +52,14 @@ import type { ProviderConnectionTestInput, ProviderConnectionTestResult } from '
 import { probeProviderProtocols } from './provider-protocol-probe.js';
 
 const nativeProbeContext = new AsyncLocalStorage<symbol>();
+// DNS suffixes from the bundled AWS SDK partition endpoint rules, including
+// dualstack. Only the Bedrock runtime service host qualifies, never STS/metadata.
+const bedrockRuntimeDnsSuffixes = new Set([
+  'amazonaws.com', 'api.aws', 'amazonaws.com.cn', 'api.amazonwebservices.com.cn',
+  'amazonaws.eu', 'api.amazonwebservices.eu', 'c2s.ic.gov', 'api.aws.ic.gov',
+  'sc2s.sgov.gov', 'api.aws.scloud', 'cloud.adc-e.uk', 'api.cloud-aws.adc-e.uk',
+  'csp.hci.ic.gov', 'api.aws.hci.ic.gov',
+]);
 
 /** SDK-owned transports cannot inject fetch. Observe their existing Node errors
  * before SDK string conversion, scoped to requests created by this probe. No
@@ -63,17 +71,22 @@ async function withNativeProbeNetworkErrors<T>(baseUrl: string, api: string, run
   const destination = new URL(baseUrl).origin;
   // Bedrock may select its runtime region from IAM profile/env or a model ARN
   // rather than the catalog default. Token/metadata/STS hosts are not runtimes.
-  const bedrockRuntime = /^https:\/\/bedrock-runtime(?:-fips)?\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?$/;
-  const starts = [channel('undici:request:create'), channel('http.client.request.start')];
-  const errors = [channel('undici:request:error'), channel('http.client.request.error')];
+  const bedrockRuntime = (origin: string) => bedrockRuntimeDnsSuffixes.has(
+    /^https:\/\/bedrock-runtime(?:-fips)?\.[a-z0-9-]+\.([a-z0-9.-]+)$/.exec(origin)?.[1] ?? '');
+  const starts = [channel('undici:request:create'), channel('http.client.request.start'), channel('http2.client.stream.created')];
+  const errors = [channel('undici:request:error'), channel('http.client.request.error'), channel('http2.client.stream.error')];
   const onStart = (message: unknown) => {
     try {
-      const request = (message as { request?: object })?.request;
+      const { request: httpRequest, stream, headers } = message as {
+        request?: object; stream?: object; headers?: Record<string, string>;
+      };
+      const request = httpRequest ?? stream;
       if (!request || typeof request !== 'object' || nativeProbeContext.getStore() !== context) return;
       const transport = request as { origin?: string; protocol?: string; getHeader?: (name: string) => unknown };
-      const origin = new URL(transport.origin ?? `${transport.protocol}//${transport.getHeader?.('host')}`).origin;
+      const origin = new URL(stream ? `${headers?.[':scheme']}://${headers?.[':authority']}`
+        : transport.origin ?? `${transport.protocol}//${transport.getHeader?.('host')}`).origin;
       if (providerEndpointBindings(destination, origin) !== null
-        || (api === 'bedrock-converse-stream' && bedrockRuntime.test(destination) && bedrockRuntime.test(origin))) {
+        || (api === 'bedrock-converse-stream' && bedrockRuntime(destination) && bedrockRuntime(origin))) {
         requests.add(request);
       }
     } catch { /* diagnostics must not change request creation */ }
@@ -81,7 +94,8 @@ async function withNativeProbeNetworkErrors<T>(baseUrl: string, api: string, run
   const onError = (message: unknown) => {
     // diagnostics_channel subscribers must never throw into the SDK/Node caller.
     try {
-      const { request, error } = message as { request?: object; error?: unknown };
+      const { request: httpRequest, stream, error } = message as { request?: object; stream?: object; error?: unknown };
+      const request = httpRequest ?? stream;
       if (!request || !requests.has(request)) return;
       const code = providerNetworkErrorCode(error);
       if (classifyProviderError({ networkErrorCode: code }).code !== 'UNKNOWN') record(code);
