@@ -404,6 +404,35 @@ describe('Bot entry after deletion', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  it('retains the creation draft after a loaded empty roster refresh fails', () => {
+    const view = render(<BotsHomeView />);
+    const name = screen.getByRole('textbox');
+    fireEvent.change(name, { target: { value: 'My draft buddy' } });
+    mocks.profileLoadError = true;
+    view.rerender(<BotsHomeView />);
+    expect(screen.getByRole('textbox')).toBe(name);
+    expect(screen.getByRole('textbox')).toHaveProperty('value', 'My draft buddy');
+    mocks.profileLoadError = false;
+    view.rerender(<BotsHomeView />);
+    expect(screen.getByRole('textbox')).toBe(name);
+    expect(screen.getByRole('textbox')).toHaveProperty('value', 'My draft buddy');
+  });
+
+  it('prioritizes initial roster recovery before provider onboarding', () => {
+    mocks.onboarding = true;
+    mocks.profilesLoaded = false;
+    mocks.profileLoadError = true;
+    const view = render(<BotsHomeView />);
+    expect(screen.getByRole('alert').textContent).toContain('bots.rosterLoadFailed');
+    expect(screen.queryByTestId('connect-provider-card')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.rosterReload' }));
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledOnce();
+    mocks.profileLoadError = false;
+    mocks.profilesLoaded = true;
+    view.rerender(<BotsHomeView />);
+    expect(screen.getByTestId('connect-provider-card')).toBeTruthy();
+  });
+
   it('only shows creation once the loaded roster is empty', () => {
     mocks.params = { botId: 'deleted' };
     render(<BotsHomeView />);

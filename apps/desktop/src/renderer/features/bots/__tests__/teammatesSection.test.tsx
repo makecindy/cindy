@@ -1192,10 +1192,12 @@ describe('cloud companions in the roster', () => {
 // #9978 / unit: mount the production sidebar with its real store. Existing row
 // fixtures replaced the store and could not distinguish a failed read from empty.
 describe('startup roster read failures', () => {
-  it('keeps failed startup distinct from empty and recovers through the visible retry', async () => {
+  it.each(['list', 'icons', 'collapsed'] as const)('keeps failed startup distinct from empty and recovers through the visible retry (%s)', async mode => {
     mocks.realStore = true;
+    writeTeammatesViewMode('fixture-owner', mode === 'icons' ? 'icons' : 'list');
+    writeTeammatesSectionCollapsed('fixture-owner', mode === 'collapsed');
     const store = await vi.importActual<typeof import('../botStore')>('../botStore');
-    setDataOwnerGeneration('startup-failed');
+    setDataOwnerGeneration(`startup-failed-${mode}`);
     const list = vi.fn().mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] DbClient not ready'))
       .mockResolvedValue([bot({ id: 'existing', name: 'Existing buddy' })]);
     window.electronAPI.localDb!.bots = { list } as never;
@@ -1203,8 +1205,11 @@ describe('startup roster read failures', () => {
     const view = await renderSidebar();
     expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'bots.rosterReload' }));
-    await waitFor(() => expect(view.container.textContent).toContain('Existing buddy'));
+    await waitFor(() => expect(store.getBotProfiles().map(row => row.id)).toEqual(['existing']));
     expect(screen.queryByRole('alert')).toBeNull();
+    if (mode === 'collapsed') fireEvent.click(screen.getByRole('button', { name: 'bots.title' }));
+    if (mode === 'icons') expect(screen.getByRole('button', { name: 'Existing buddy' })).toBeTruthy();
+    else expect(view.container.textContent).toContain('Existing buddy');
     expect(list).toHaveBeenCalledTimes(2);
   });
 

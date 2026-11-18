@@ -1059,6 +1059,12 @@ export function BotsHomeView() {
     modelUnavailable,
   ]);
 
+  // Only an unknown roster needs full-page recovery; a refresh must not discard
+  // an already-open creation draft. Reading the roster also precedes onboarding.
+  if (!profilesLoaded && !selectedBot && !entryTarget && profileLoadState === 'error') {
+    return <main className="flex h-full items-center justify-center px-6" role="main"><BotRosterLoadError /></main>;
+  }
+
   if (needsProviderConnection && !settingsOpen) {
     return (
       <main className="flex h-full items-center justify-center px-6" role="main">
@@ -1067,9 +1073,6 @@ export function BotsHomeView() {
     );
   }
 
-  if (!selectedBot && !entryTarget && profileLoadState === 'error') {
-    return <main className="flex h-full items-center justify-center px-6" role="main"><BotRosterLoadError /></main>;
-  }
   if (!selectedBot && (!profilesLoaded || entryTarget)) return <main className="flex h-full items-center justify-center"><Spinner size={20} /></main>;
   if (!selectedBot) return <BotRosterView inline />;
 

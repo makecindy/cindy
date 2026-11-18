@@ -674,13 +674,16 @@ export function TeammatesSection() {
         </div>
       ) : null}
 
+      {profileLoadState === 'error' ? (
+        <div className="pt-1 pr-0 pl-3"><BotRosterLoadError /></div>
+      ) : null}
+
       <SectionCollapse collapsed={showIconStrip || (collapsed && attentionChats.length === 0)}>
       <div className="flex flex-col pt-1 pr-0 pl-3">
 
       {archiveError && <p role="alert" className="mb-2 px-2.5 text-12 text-[var(--error-fg)]">{archiveError}</p>}
 
       <div>
-        {profileLoadState === 'error' ? <BotRosterLoadError /> : null}
         {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 && remoteBots.length === 0 && visibleGroups.length === 0 ? (
           profilesLoaded && profileLoadState === 'ready' ? (
             <div className="px-3 py-3">

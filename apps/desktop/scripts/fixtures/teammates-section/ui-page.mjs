@@ -232,7 +232,22 @@ export default {
     if (ui.case === 'startup-read-error') {
       const alert = page.getByRole('alert');
       await alert.getByText(await ui.t('bots.rosterLoadFailed'), { exact: true }).waitFor();
-      assert.equal(await alert.getByRole('button', { name: await ui.t('bots.rosterReload'), exact: true }).count(), 1);
+      const retry = alert.getByRole('button', { name: await ui.t('bots.rosterReload'), exact: true });
+      await retry.waitFor({ state: 'visible' });
+      const section = page.locator('[data-sidebar-section="teammates"]');
+      const header = section.getByRole('button', { name: await ui.t('bots.title'), exact: true });
+      const changeView = async (key) => {
+        await header.hover();
+        await section.getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+        await page.getByRole('menuitem', { name: await ui.t(key), exact: true }).click();
+      };
+      await changeView('bots.list.viewIcons');
+      await retry.waitFor({ state: 'visible' });
+      await ui.capture('icons-error');
+      await header.click();
+      await retry.waitFor({ state: 'visible' });
+      await changeView('ccAgent.sidebar.viewStyleListWide');
+      await retry.waitFor({ state: 'visible' });
       return;
     }
     if (ui.case === 'pinned-sort') {
