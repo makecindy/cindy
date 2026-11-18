@@ -83,7 +83,7 @@ after(() => usage.close());
 
 let taskSeq = 0;
 /** A task in both owner databases, a fake runtime for it and a Host turn executor wired as main.ts does. */
-function harness({ agentKind = 'claude-code', provider = 'fixture-api' } = {}) {
+function harness({ agentKind = 'claude-code', provider = 'fixture-api', failFirstAssistantRow = false } = {}) {
   const id = `task-${++taskSeq}`;
   for (const owner of [ownerA, ownerB]) {
     owner.sqlite.prepare(`INSERT INTO sessions(id,source,status,created_at,updated_at,model) VALUES (?, 'desktop', 'active', 1, 1, 'claude-sonnet-4-6')`).run(id);
@@ -98,7 +98,14 @@ function harness({ agentKind = 'claude-code', provider = 'fixture-api' } = {}) {
     holdEventStream() {}, async abort() {},
   };
   const emit = event => { for (const listener of [...listeners]) listener({ sessionTurnGeneration: generation, ...event }); };
-  const persistMessage = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish() {} });
+  const store = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish() {} });
+  // A failing reply write pauses the task's write queue (messagePersistBroadcaster.ts failedWrites).
+  let failAssistant = failFirstAssistantRow;
+  const persistMessage = async (sid, input, options) => {
+    if (failAssistant && input.role === 'assistant') { failAssistant = false; throw new Error('disk full'); }
+    return store(sid, input, options);
+  };
+  const persistenceErrors = [];
   let runtimeOwner = null;
   const maker = { getSession: sid => (sid === id ? session : null), async closeSession() {} };
   const executor = createTurnExecutor({
@@ -107,12 +114,12 @@ function harness({ agentKind = 'claude-code', provider = 'fixture-api' } = {}) {
     isCurrent: () => runtimeOwner !== null && runtimeOwner === getCurrentDbClientSnapshot(),
     isStoppingRuntime: () => false, hub: { publish() {} }, persistMessage,
     getOwner: getCurrentDbClientSnapshot,
-    onPersistenceError: error => { throw error; }, onTerminal() {}, markStarted: async () => {}, markEnded: async () => {},
+    onPersistenceError: (_id, error) => { persistenceErrors.push(error); }, onTerminal() {}, markStarted: async () => {}, markEnded: async () => {},
     usage, runtimeOwner: () => runtimeOwner,
   });
   const base = { a: globalTotals(ownerA), b: globalTotals(ownerB) };
   return {
-    id, session, emit, executor,
+    id, session, emit, executor, persistenceErrors,
     /** What this test added to an owner's daily tables, and the task's row. */
     added(owner = ownerA) {
       const now = globalTotals(owner); const was = owner === ownerA ? base.a : base.b;
@@ -192,6 +199,22 @@ test('usage-recording: a Pi turn records its request receipt once', async () => 
   await h.settled();
   assert.equal(receiptRows(ownerA, h.id).length, 1);
   assert.deepEqual(h.added().model, { input: 100, output: 20 });
+});
+
+// Case 1b: the turn cost write waits behind a reply write that failed (the task's queue paused); the queue's
+// retry replays it outside any recording context, and it still lands once on the reply.
+test('usage-recording: a turn cost queued behind a failed write lands once when the writes are retried', async () => {
+  const h = harness({ failFirstAssistantRow: true });
+  await h.begin();
+  h.reply('paused');
+  h.emit(claudeDone(2));
+  await h.settled();
+  assert.ok(h.persistenceErrors.length > 0, 'the reply write failed');
+  assert.deepEqual(Object.values(turnCostOf(ownerA, h.id)), []);
+  await h.executor.retryPersistence(h.id);
+  await h.settled();
+  assert.deepEqual(Object.values(turnCostOf(ownerA, h.id)), [2]);
+  assert.equal(h.added().task.amount, 2);
 });
 
 // Case 2: an automatic resume continues the runtime; Claude's cumulative model usage is recorded as deltas.

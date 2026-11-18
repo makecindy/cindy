@@ -56,7 +56,11 @@ const log = createLogger('host-usage-recording');
  *   port call is tracked, and `drain()`, which the Host's owner teardown awaits before closing the
  *   owner database (main.ts disposeOwnerRuntime), first stops new recordings and port calls, then
  *   waits for the tracked ones and the Pi receipt writes. The Host installs the next owner database
- *   only after closing this one, so a tracked write cannot reach another account's database.
+ *   only after closing this one, so a tracked write cannot reach another account's database. A recording
+ *   still waiting for prices or the turn's model when the teardown begins is refused its later write
+ *   ports, so that turn may be recorded only in part (its tokens without its money; release table §二).
+ * - A write inside a started port call (a message patch, a scheduled run's cost) checks the owner that
+ *   call captured, not the store: a paused task write queue replays it later outside any context.
  * - Pi receipts. Their writes use the database captured when the session's first receipt was recorded
  *   (piUsageReceiptsCore.ts); pending ones live in that account's own database (pi_usage_receipts,
  *   priced = 0), so a retry only ever prices that account's rows. While a desktop uses the profile
@@ -94,18 +98,28 @@ export function createHostUsageRecording(options: HostUsageRecordingOptions) {
   const tracked = new Set<Promise<unknown>>();
   let retryDeferred = false;
 
-  /**
-   * Whether a write port may run now: inside a task context and for the current owner; a new call also
-   * only before drain. `nested` is a write inside a port call already started (and tracked), which drain
-   * lets finish.
-   */
-  function writeAllowed(port: string, nested = false): RecordingContext | null {
+  /** Whether a write port may run now: inside a task context, for the current owner, before drain. */
+  function writeAllowed(port: string): RecordingContext | null {
     const current = context.getStore();
     if (!current) {
       log.warn('usage write outside a task context dropped', { port });
       return null;
     }
-    return (nested || accepting) && current.owner === getOwner() ? current : null;
+    if (!accepting) {
+      log.info('usage write dropped: the owner teardown began', { port });
+      return null;
+    }
+    return ownerHolds(current, port) ? current : null;
+  }
+  /**
+   * A write inside a port call already started (a message patch, a scheduled run's cost), for the owner
+   * that call captured. It may run later outside any context: a paused task write queue replays it
+   * (retryFailedWrites), so it compares the captured owner, not the store; drain lets a started call finish.
+   */
+  function ownerHolds(current: RecordingContext, port: string): boolean {
+    if (current.owner === getOwner()) return true;
+    log.info('usage write dropped: the account changed', { port });
+    return false;
   }
   function track<T>(promise: Promise<T>): Promise<T> {
     tracked.add(promise);
@@ -117,9 +131,9 @@ export function createHostUsageRecording(options: HostUsageRecordingOptions) {
 
   /** The desktop's turn cost deps (turnCostBroadcasterCore.ts defaultDeps) for the task in context. */
   const turnCostDeps = (current: RecordingContext): TurnCostDeps => ({
-    patchAgentMeta: (sessionId, clientId, patch) => (writeAllowed('patchAgentMeta', true)
+    patchAgentMeta: (sessionId, clientId, patch) => (ownerHolds(current, 'patchAgentMeta')
       ? patchMessageAgentMetaWithResultRow(current.owner.client, sessionId, clientId, patch) : Promise.resolve(null)),
-    applyScheduleRunCostChange: (previous, next) => (writeAllowed('applyScheduleRunCostChange', true)
+    applyScheduleRunCostChange: (previous, next) => (ownerHolds(current, 'applyScheduleRunCostChange')
       ? applyScheduleRunCostMetaChange(previous, next) : Promise.resolve()),
     readPriorUserRoundCost: (sessionId, clientId) => readPriorUserRoundCost(sessionId, clientId, current.owner.client),
     enqueue: (label, fn) => current.history.enqueueDurableWrite(label, fn),
@@ -149,7 +163,7 @@ export function createHostUsageRecording(options: HostUsageRecordingOptions) {
     recordSchedulerTurnCost: messageWrite('recordSchedulerTurnCost', (args: Parameters<typeof recordSchedulerTurnCost>[0], current) =>
       recordSchedulerTurnCost(args, {
         recordOnMessage: messageArgs => recordTurnCostOnMessage(messageArgs, turnCostDeps(current)),
-        recordDirect: direct => (writeAllowed('recordScheduleRunCostDirect', true) ? recordScheduleRunCostDirect(direct) : Promise.resolve(null)),
+        recordDirect: direct => (ownerHolds(current, 'recordScheduleRunCostDirect') ? recordScheduleRunCostDirect(direct) : Promise.resolve(null)),
       }), null),
     recordTurnUsageOnMessage: messageWrite('recordTurnUsageOnMessage', (args: Parameters<typeof recordTurnUsageOnMessage>[0], current) =>
       recordTurnUsageOnMessage(args, turnCostDeps(current)), false),
