@@ -35,6 +35,7 @@ const OTHER_MEANINGS: ReadonlyArray<{ meaning: string; entries: Readonly<Record<
         'newChat.addRemoteProject.emptyPiSshFiltered',
         'newChat.addRemoteProject.hint',
         'newChat.addRemoteProject.host',
+        'projectSettings.sshHost',
         'settings.remote.add.agentProxyUrlHint',
         'settings.remote.button.autoConnectTip',
         'settings.remote.button.manageKeysTip',
@@ -60,10 +61,12 @@ const OTHER_MEANINGS: ReadonlyArray<{ meaning: string; entries: Readonly<Record<
       ],
       'es': [
         'newChat.addRemoteProject.host',
+        'projectSettings.sshHost',
         'settings.remote.detail.agentProxyWaiting',
       ],
       'pt-BR': [
         'newChat.addRemoteProject.host',
+        'projectSettings.sshHost',
         'settings.remote.detail.agentProxyWaiting',
       ],
     },
