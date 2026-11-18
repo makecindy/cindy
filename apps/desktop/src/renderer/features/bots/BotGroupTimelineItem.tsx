@@ -1,4 +1,8 @@
 import { BotGroupProcess } from './BotGroupProcess';
+import { FileText } from 'lucide-react';
+import { InlineReferenceChip } from '@/components/chat/InlineReferenceChip';
+import { ToolPayloadLightbox } from '@/components/chat/ToolPayloadLightbox';
+import { countPasteLines, isLongPasteText } from '@/components/new-chat/longPasteText';
 /**
  * 群聊时间线的一行（主时间线与话题面板共用），与伙伴私聊同一套气泡：
  *
@@ -180,6 +184,9 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
   mentions: BotGroupMention;
   serverBacked: boolean;
 }) {
+  const { t } = useTranslation();
+  const [textPreview, setTextPreview] = useState(false);
+  const folded = authorKind !== 'bot' && isLongPasteText(content);
   const sender = useMemo(() => onRichSend ? { send: onRichSend } : null, [onRichSend]);
   const ref = useRef<HTMLDivElement>(null);
   const rangesRef = useRef<Range[]>([]);
@@ -254,9 +261,12 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
     <div ref={ref} className="relative min-w-0 break-words" onPointerMove={onPointerMove}
       onPointerLeave={() => { if (ref.current) ref.current.style.cursor = ''; scheduleClose(); }}>
       <SessionQuickSendProvider value={authorKind === 'bot' ? sender : null}>
-        <MarkdownRenderer workingDir="" content={content} allowPrivilegedLinks={false}
-          renderRichAnswers={authorKind === 'bot'} streamFadeKey={messageKey} />
+        {folded ? <InlineReferenceChip icon={<FileText aria-hidden />} label={t('newChat.pastedText.chipLabel', { lines: countPasteLines(content) })}
+          onClick={() => setTextPreview(true)} /> : <MarkdownRenderer workingDir="" content={content} allowPrivilegedLinks={false}
+          renderRichAnswers={authorKind === 'bot'} streamFadeKey={messageKey} />}
       </SessionQuickSendProvider>
+      {textPreview && <ToolPayloadLightbox payload={{ kind: 'text', title: t('newChat.pastedText.previewTitle'), text: content }}
+        onClose={() => setTextPreview(false)} />}
       {readTail && tailRow ? <ReadTailRow /> : null}
       <BotGroupMentionCard member={card?.member ?? null} anchor={card?.anchor ?? null}
         onPointerEnter={keepOpen} onPointerLeave={scheduleClose} />

@@ -1,5 +1,6 @@
 /**
- * 群聊输入框：纯文本，Enter 发送、Shift+Enter 换行，IME 组合中不发送
+ * 群聊输入框：长粘贴复用伙伴对话的文本标签；发送正文仍为纯文本。
+ * Enter 发送、Shift+Enter 换行，IME 组合中不发送
  * （DESIGN.md §14.3）。输入 `@` 弹出点名候选（useBotGroupMentionPicker，主群与话题回复同一套）。
  *
  * 发送时以正文重新解析点名（见 botGroupMentions.ts），clientId 作为幂等键：同一段
@@ -31,6 +32,8 @@
  * 解析出的点名目标都不变时，重发沿用同一个 clientId、烧录附件和点名。
  */
 import {
+  lazy,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -118,6 +121,10 @@ import { useBotGroupVoiceInput } from './useBotGroupVoiceInput';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
 import { isVoiceInputShortcutMatch } from '@/voice-input/shortcut';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
+import type { BotGroupTextInput } from './botGroupTextInput';
+import { isLongPasteText } from '@/components/new-chat/longPasteText';
+
+const BotGroupTextEditor = lazy(() => import('./BotGroupTextEditor').then(module => ({ default: module.BotGroupTextEditor })));
 
 /** 话题 replies also accept the Chat Server's own 「everyone」 spellings. */
 const THREAD_ALL_ALIASES = ['所有人', 'all', 'everyone'] as const;
@@ -246,6 +253,8 @@ export function BotGroupComposer({
   const threadAttempt = useBotGroupThreadReplyAttempt(thread ? draftKey : null);
   const groupMask = useGroupMask(groupId);
   const [text, setText] = useState(() => threadAttempt?.sending ? '' : botGroupDraftText(getDraft(draftKey)?.text));
+  const [richText, setRichText] = useState(() => isLongPasteText(text));
+  const [initialPaste, setInitialPaste] = useState<{ before: string; text: string; selected: string; after: string } | null>(null);
   const [error, setError] = useState('');
   const [stopping, setStopping] = useState(false);
   /** Thread send in flight; group sends are owned by the outbox. */
@@ -262,7 +271,7 @@ export function BotGroupComposer({
         ? { clientId: savedEdit.clientId, signature: savedEdit.signature, editSource: savedEdit.source,
             enqueueOperationId: savedEdit.enqueueOperationId } : null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = useRef<BotGroupTextInput | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const allLabel = t('bots.groupChat.mention.all');
   const threadAllLabels = useMemo(() => [allLabel, ...THREAD_ALL_ALIASES], [allLabel]);
@@ -376,7 +385,7 @@ export function BotGroupComposer({
   // Auto-grow; the CSS max height caps it and turns on scrolling. A width change (window
   // resize, the 话题 panel opening) rewraps the text, so the height is fitted again then.
   useLayoutEffect(() => {
-    if (textareaRef.current) fitBotGroupComposerInput(textareaRef.current);
+    if (textareaRef.current instanceof HTMLTextAreaElement) fitBotGroupComposerInput(textareaRef.current);
   }, [text, voice.displayText]);
   useRefitBotGroupComposerInputOnResize(textareaRef);
 
@@ -605,13 +614,13 @@ export function BotGroupComposer({
   };
 
   /** Files copied in a file manager attach by path; a screenshot or copied image attaches as an image. */
-  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+  const handlePaste = (event: ClipboardEvent<HTMLElement>) => {
     if (disabled || sendingRef.current) return;
     const items = event.clipboardData?.items;
-    if (!items || items.length === 0) return;
+
     const filesWithPath: File[] = [];
     let handled = false;
-    for (const item of Array.from(items)) {
+    for (const item of Array.from(items ?? [])) {
       if (item.kind !== 'file') continue;
       const file = item.getAsFile();
       if (!file) continue;
@@ -627,7 +636,20 @@ export function BotGroupComposer({
     }
     if (filesWithPath.length > 0) void attachmentState.addFiles(filesWithPath);
     // The file is an attachment, not text; text in the same paste is dropped, as in a task.
-    if (handled) event.preventDefault();
+    if (handled) { event.preventDefault(); return; }
+    if (sending || voice.isBusy) return;
+    const pasted = event.clipboardData.getData('text/plain');
+    if (!richText && isLongPasteText(pasted)) {
+      event.preventDefault();
+      const start = textareaRef.current?.selectionStart ?? text.length;
+      const end = textareaRef.current?.selectionEnd ?? start;
+      const next = text.slice(0, start) + pasted + text.slice(end);
+      if (thread && next.length > BOT_GROUP_MESSAGE_MAX_CHARS) return;
+      setInitialPaste({ before: text.slice(0, start), text: pasted, selected: text.slice(start, end), after: text.slice(end) });
+      setRichText(true);
+      mention.onChange(next, { start, end, caret: start + pasted.length });
+      groupMask?.participate();
+    }
   };
 
   const stop = async () => {
@@ -678,6 +700,43 @@ export function BotGroupComposer({
             : t('bots.groupChat.composer.placeholder');
 
   const noop = () => undefined;
+
+  const handleInputKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (isComposingKey(event)) return;
+    // The native shortcut owns its gesture, even when configured as Enter.
+    if (isVoiceInputShortcutMatch(event.nativeEvent, getVoiceInputSettings().shortcut)) {
+      event.preventDefault();
+      return;
+    }
+    if (voice.isBusy) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        void voice.cancel();
+      } else if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        if (voice.isListening) void voice.stop();
+      }
+      return;
+    }
+    if (mention.onKeyDown(event)) return;
+    // Esc takes the quote off before anything else it would close; the text stays.
+    if (event.key === 'Escape' && quote && onQuoteChange) {
+      event.preventDefault();
+      onQuoteChange(null);
+      return;
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void send();
+      return;
+    }
+    // Backspace at the very start of an empty input takes the 「分工」 tag off.
+    if (event.key === 'Backspace' && division && !text) {
+      event.preventDefault();
+      setDivision(false);
+    }
+  };
 
   return (
     <div className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}>
@@ -745,8 +804,17 @@ export function BotGroupComposer({
               onUpdate={sending ? noop : attachmentState.updateFile}
             />
           ) : null}
-          <textarea
-            ref={textareaRef}
+          {richText ? <Suspense fallback={<Spinner size={16} />}><BotGroupTextEditor value={voice.displayText} initialPaste={initialPaste} inputRef={textareaRef}
+            disabled={disabled || sending || voice.isBusy}
+            label={thread ? t('bots.groupChat.server.replyPlaceholder') : t('bots.groupChat.composer.label')}
+            placeholder={placeholder} maxLength={thread ? BOT_GROUP_MESSAGE_MAX_CHARS : undefined}
+            onChange={(value, edit) => { mention.onChange(value, edit); groupMask?.participate(); }}
+            onKeyDown={handleInputKeyDown} onPaste={handlePaste}
+            onFocus={mention.textareaProps.onFocus} onBlur={mention.textareaProps.onBlur} onSelect={mention.textareaProps.onSelect}
+            ariaProps={{ 'aria-autocomplete': mention.textareaProps['aria-autocomplete'],
+              'aria-controls': mention.textareaProps['aria-controls'], 'aria-activedescendant': mention.textareaProps['aria-activedescendant'] }}
+          /></Suspense> : <textarea
+            ref={element => { textareaRef.current = element; }}
             value={voice.displayText}
             rows={1}
             disabled={disabled}
@@ -758,44 +826,9 @@ export function BotGroupComposer({
             placeholder={placeholder}
             onChange={(event) => { mention.onChange(event.target.value); groupMask?.participate(); }}
             onPaste={handlePaste}
-            onKeyDown={(event) => {
-              if (isComposingKey(event)) return;
-              // The native shortcut owns its gesture, even when configured as Enter.
-              if (isVoiceInputShortcutMatch(event.nativeEvent, getVoiceInputSettings().shortcut)) {
-                event.preventDefault();
-                return;
-              }
-              if (voice.isBusy) {
-                if (event.key === 'Escape') {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  void voice.cancel();
-                } else if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  if (voice.isListening) void voice.stop();
-                }
-                return;
-              }
-              if (mention.onKeyDown(event)) return;
-              // Esc takes the quote off before anything else it would close; the text stays.
-              if (event.key === 'Escape' && quote && onQuoteChange) {
-                event.preventDefault();
-                onQuoteChange(null);
-                return;
-              }
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                void send();
-                return;
-              }
-              // Backspace at the very start of an empty input takes the 「分工」 tag off.
-              if (event.key === 'Backspace' && division && !text) {
-                event.preventDefault();
-                setDivision(false);
-              }
-            }}
+            onKeyDown={handleInputKeyDown}
             className={BOT_GROUP_COMPOSER_INPUT}
-          />
+          />}
           <div className={BOT_GROUP_COMPOSER_FOOTER}>
             <div className={BOT_GROUP_COMPOSER_FOOTER_START}>
               <input

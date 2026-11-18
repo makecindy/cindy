@@ -148,6 +148,9 @@ vi.mock('../useBotGroupVoiceInput', () => {
 beforeAll(() => {
   // jsdom has no layout; scrolling is a no-op here.
   Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 0 });
+  // ProseMirror's selection scroll consults Range geometry; real layout is covered by group-paste's UI cases.
+  Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+  Range.prototype.getBoundingClientRect = () => new DOMRect();
 });
 
 // Unit / PR #9249 r4500563150: real group input handlers and resize observer.
@@ -1815,6 +1818,64 @@ describe('BotGroupChatView', () => {
     expect(typeof input0.clientId).toBe('string');
     expect(input.value).toBe('');
     await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
+  });
+
+  // Regression (WeChat report 2026-11-18): the group textarea bypassed the long-paste
+  // pipeline used by private chats. Real group entry -> visible chip -> unchanged send.
+  // Existing send/attachment tests never pasted text. Minimal failure: 24 lines; unit tier.
+  it('folds a long paste and sends every line through the real group outbox', async () => {
+    renderView();
+    const input = await screen.findByRole('textbox');
+    const text = Array.from({ length: 24 }, (_, i) => `log ${i}`).join('\n');
+    fireEvent.paste(input, { clipboardData: { items: [], getData: (type: string) => type === 'text/plain' ? text : '' } });
+    await waitFor(() => expect(document.querySelector('[data-pasted-text-chip]')).not.toBeNull());
+    expect(screen.getByRole('textbox').textContent).not.toContain('log 23');
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe(text);
+  });
+
+  it('keeps short pasted text in the native group input', async () => {
+    renderView();
+    const input = await screen.findByRole('textbox');
+    const event = createEvent.paste(input, { clipboardData: { items: [], getData: () => 'short text' } });
+    fireEvent(input, event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.querySelector('[data-pasted-text-chip]')).toBeNull();
+  });
+
+  it('opens the full text from a long human message without folding bot answers', async () => {
+    const text = Array.from({ length: 24 }, (_, i) => `line ${i}`).join('\n');
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+      msg({ id: 'long-human', authorKind: 'user', authorBotId: null, content: text }),
+      msg({ id: 'long-bot', sequence: 2, authorKind: 'bot', authorBotId: 'mimi', content: text }),
+    ] }) });
+    renderView();
+    const chip = await screen.findByText('newChat.pastedText.chipLabel');
+    fireEvent.click(chip);
+    const preview = await screen.findByRole('textbox', { name: 'newChat.pastedText.previewTitle' });
+    expect((preview as HTMLTextAreaElement).value).toBe(text);
+    expect((preview as HTMLTextAreaElement).readOnly).toBe(true);
+    expect(document.querySelector('[data-bot-group-message-id="long-bot"]')?.textContent).toContain('line 23');
+  });
+
+  it('keeps surrounding text and restores the complete folded draft', async () => {
+    const view = renderView();
+    const input = await screen.findByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'before  after' } });
+    input.setSelectionRange(7, 7);
+    const text = 'x'.repeat(4000);
+    fireEvent.paste(input, { clipboardData: { items: [], getData: () => text } });
+    await waitFor(() => expect(document.querySelector('[data-pasted-text-chip]')).not.toBeNull());
+    expect(screen.getByRole('textbox').textContent).toContain('before ');
+    expect(screen.getByRole('textbox').textContent).toContain(' after');
+    view.unmount();
+    expect(JSON.stringify(getDraft(botGroupAttachmentScope('g1'))?.text)).toContain(`before ${text} after`);
+    renderView();
+    const restored = await screen.findByRole('textbox');
+    fireEvent.keyDown(restored, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe(`before ${text} after`);
   });
 
   it('opens the @ picker with Everyone first and inserts the chosen teammate', async () => {
