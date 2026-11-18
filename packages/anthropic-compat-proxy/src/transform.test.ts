@@ -11,6 +11,8 @@ import {
   createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
+  createResponsesToolAudioRecoveryRule,
+  stripResponsesToolAudioFromBody,
   createImageGenerationIdRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
@@ -1062,6 +1064,55 @@ describe('Responses raw reasoning recovery', () => {
     expect(transform(body, { ...ctx, headers: { 'thread-id': 'thread-b' } })).toBeNull();
     expect(transform({ ...body, model: 'deepseek/deepseek-v4.1-flash' }, ctx)).toBeNull();
     expect(transform(body, ctx)).toBeNull();
+  });
+});
+
+// Test value (#11278): the shared production strip must replace protocol audio,
+// not similarly shaped user/tool data. Existing reasoning tests do not cover
+// tool-output content arrays. Minimal input is one output audio block; unit tier.
+describe('Responses tool audio recovery', () => {
+  it.each(['custom_tool_call_output', 'function_call_output'])('preserves all but %s audio and is idempotent', type => {
+    const audio = { type: 'input_audio', audio_url: 'data:audio/mpeg;base64,SUQz' };
+    const opaque = JSON.stringify(audio);
+    const input = [
+      { type, id: 'output-id', call_id: 'call-a', output: [
+        { type: 'input_text', text: 'Audio generated' }, audio,
+        { type: 'input_image', image_url: 'https://example.invalid/image.png' },
+        { type: 'input_file', file_data: 'file-data' },
+      ] },
+      { type, call_id: 'call-b', output: [audio] },
+      { type, call_id: 'call-c', output: opaque },
+      { type: 'function_call', name: 'test', call_id: 'call-d', arguments: opaque },
+      { role: 'user', content: [audio, { type: 'input_text', text: 'Continue' }] },
+      { type: 'reasoning', encrypted_content: 'valid-reasoning', summary: [] },
+    ];
+    const body = buf({ model: 'gpt-6.2-sol', input, metadata: { example: audio } });
+    const original = Buffer.from(body);
+    const rewritten = stripResponsesToolAudioFromBody(body)!;
+    const parsed = JSON.parse(rewritten.toString());
+    const notice = { type: 'input_text', text: '[Audio omitted: this model does not accept audio input.]' };
+    expect(parsed.input).toEqual([
+      { ...input[0], output: [input[0]!.output![0], notice, input[0]!.output![2], input[0]!.output![3]] },
+      { ...input[1], output: [notice] }, ...input.slice(2),
+    ]);
+    expect(parsed.metadata).toEqual({ example: audio });
+    expect(body).toEqual(original);
+    expect(stripResponsesToolAudioFromBody(rewritten)).toBeNull();
+  });
+
+  it('matches only the observed rejection and leaves non-tool or malformed content alone', () => {
+    const rule = createResponsesToolAudioRecoveryRule();
+    expect(rule.matches(JSON.stringify({ error: { type: 'invalid_request_error', param: 'input', message: 'Audio input is not available.' } }))).toBe(true);
+    for (const error of ['Invalid audio format.', 'Audio output is not available.', 'invalid_encrypted_content', 'rate limit exceeded']) {
+      expect(rule.matches(error)).toBe(false);
+    }
+    expect(rule.applyOnUnmatchedRetry).toBe(false);
+    expect(rule.allowExtraRules).toBe(false);
+    for (const body of [Buffer.from('invalid'), buf(null), buf({ input: 'text' }),
+      buf({ input: [{ type: 'message', role: 'user', content: [{ type: 'input_audio' }] }] }),
+      buf({ input: [{ type: 'custom_tool_call_output', output: 'input_audio' }] })]) {
+      expect(rule.strip(body)).toBeNull();
+    }
   });
 });
 
