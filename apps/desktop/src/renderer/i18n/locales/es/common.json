@@ -11344,6 +11344,7 @@
       "unavailableTitle": "Este chat grupal ya no está disponible",
       "unavailableDescription": "Es posible que haya sido eliminado. Vuelve a Amigos de equipo para abrir otro chat grupal o amigo de equipo.",
       "sidebar": {
+        "threadReply": "Respuesta del hilo",
         "title": "Chats grupales",
         "empty": "Aún no hay mensajes",
         "preview": "{{name}}: {{text}}",
@@ -11680,6 +11681,7 @@
           "sharedReplyFrom": "Compartió una respuesta de {{name}} desde un hilo",
           "sharedReply": "Compartió una respuesta de un hilo",
           "edited": "Editado",
+          "replyNotFound": "No se ha encontrado esta respuesta.",
           "sourceUnavailable": "La respuesta original se eliminó o no está disponible para ti.",
           "viewThread": "Ver hilo",
           "viewInMain": "Ver en el chat principal",

@@ -236,6 +236,7 @@ Claude Code、Codex、Pi 都复用同一个检索入口；多插件仅调用任�
 在 `subscribe.hooks` 声明 `will-tool-call` / `did-tool-result`，再由主人在现有「任务插件」中选择。
 只依赖整包安装批准、启用状态和声明，不追加节点批准。选择变更复用引擎的运行时刷新：在途轮不被打断，
 结束后回收旧实例，下次发送使用新选择。插件停用、更新、卸载或账号变化后，旧回包不能生效。
+这类选择、安装或账号失效在调用前和结果后都按原生默认放行（no-op），不触发该插件的 `onFailure:block`。
 仅支持本机执行的任务；SSH、远程供应商、共享访客与 Review 不装这些钩子。
 没有选择时不装插件工具钩子、不复制工具参数或结果、不启动 RPC 或每工具计时器。
 
@@ -266,6 +267,12 @@ if (msg.type === 'event' && msg.name === 'will-tool-call') {
 | 调用前 | 原生 PreToolUse：deny、ask、additionalContext；不支持改参，不接管 SDK 的钩子执行顺序 | 不接入：见下方原生信任边界 | cindy-bridge 的 tool_call：改参、block；仍走原有权限门 |
 | 结果后 | PostToolUse 可替换结果、补上下文；PostToolUseFailure 只补上下文／停止，不能替换结果 | 不接入 | tool_result 可返回 `{content?,details?,isError?}`；停止使用原生 `ctx.abort()`，不会撤销工具 |
 | 结果格式 | `tool.result` 为原生 updatedToolOutput | 不接入 | `tool.result` 为原生 tool_result 返回对象 |
+
+Claude 的结果替换必须符合该工具的原生输出结构。Bash 使用含 `stdout`、`stderr`、`interrupted`、
+`isImage` 的对象；用纯字符串替换会被原生忽略并保留原结果。可保留原结构，只修改需要的字段：
+`tool: { result: { ...msg.data.result, stdout: "替换后的输出" } }`。
+MCP 输出按原生语义透传；Cindy 不把字符串自动转成 Bash 结果，也不校正工具的输出 schema。
+参见 [Claude PostToolUse 原生结果契约](https://code.claude.com/docs/en/hooks#posttooluse-decision-control)。
 
 不支持的动作按任务所选 `onFailure: allow / block` 处理。单次事件／裁决 JSON 最多 1 MiB，
 原生传输帧上限仍适用，不发送截断后冒充完整的数据。每工具等待独立，不消费轮前 5 秒预算。

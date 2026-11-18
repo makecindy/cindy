@@ -11257,6 +11257,7 @@
       "unavailableTitle": "Dieser Gruppenchat ist nicht mehr verfügbar",
       "unavailableDescription": "Er wurde möglicherweise gelöscht. Geh zurück zu den Freunden, um einen anderen Gruppenchat oder einen Freund zu öffnen.",
       "sidebar": {
+        "threadReply": "Antwort im Thread",
         "title": "Gruppenchats",
         "empty": "Noch keine Nachrichten",
         "preview": "{{name}}: {{text}}",
@@ -11589,6 +11590,7 @@
           "sharedReplyFrom": "Thread-Antwort von {{name}} geteilt",
           "sharedReply": "Thread-Antwort geteilt",
           "edited": "Bearbeitet",
+          "replyNotFound": "Diese Antwort wurde nicht gefunden.",
           "sourceUnavailable": "Die ursprüngliche Antwort wurde gelöscht oder ist für dich nicht verfügbar.",
           "viewThread": "Thread ansehen",
           "viewInMain": "Im Hauptchat ansehen",

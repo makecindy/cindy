@@ -11344,6 +11344,7 @@
       "unavailableTitle": "Cette conversation de groupe n'est plus disponible",
       "unavailableDescription": "Elle a peut-être été supprimée. Revenez à Amis pour ouvrir une autre conversation de groupe ou un autre ami.",
       "sidebar": {
+        "threadReply": "Réponse dans le fil",
         "title": "Conversations de groupe",
         "empty": "Aucun message",
         "preview": "{{name}} : {{text}}",
@@ -11680,6 +11681,7 @@
           "sharedReplyFrom": "A partagé une réponse de fil de {{name}}",
           "sharedReply": "A partagé une réponse de fil",
           "edited": "Modifié",
+          "replyNotFound": "Cette réponse est introuvable.",
           "sourceUnavailable": "La réponse d'origine a été supprimée ou ne vous est pas accessible.",
           "viewThread": "Voir le fil",
           "viewInMain": "Voir dans la conversation principale",

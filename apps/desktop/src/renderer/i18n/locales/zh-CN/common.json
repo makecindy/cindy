@@ -11212,6 +11212,7 @@
       "unavailableTitle": "这个群聊已不可用",
       "unavailableDescription": "它可能已被删除。返回伙伴页可以打开其他群聊和伙伴。",
       "sidebar": {
+        "threadReply": "话题回复",
         "title": "群聊",
         "empty": "还没有消息",
         "preview": "{{name}}：{{text}}",
@@ -11544,6 +11545,7 @@
           "sharedReplyFrom": "贴回了 {{name}} 的话题回复",
           "sharedReply": "贴回了一条话题回复",
           "edited": "已编辑",
+          "replyNotFound": "未找到这条回复。",
           "sourceUnavailable": "原回复已删除，或你无权查看。",
           "viewThread": "查看话题",
           "viewInMain": "在群聊中查看",
