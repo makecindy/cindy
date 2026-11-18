@@ -36386,6 +36386,53 @@ describe('CodexAgent custom provider context window override', () => {
     await agent.dispose();
   });
 
+  it.each(['recovered', 'second timeout', 'exit unconfirmed'])('bounds local resume recovery: %s', async outcome => {
+    const stallTwice = outcome === 'second timeout';
+    const exitUnconfirmed = outcome === 'exit unconfirmed';
+    const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const resumes: unknown[] = [];
+    let previous: InstanceType<typeof MockCodexTransport> | undefined;
+    MockCodexTransport.onCreate = transport => {
+      if (previous) expect(previous.closed).toBe(true);
+      previous = transport;
+      const write = transport.writeLine.bind(transport);
+      vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+        const request = JSON.parse(line);
+        if (request.method === Method.ThreadResume) {
+          resumes.push(request.params.threadId);
+          if (resumes.length === 1 || stallTwice) return;
+          transport.setMockResponse(Method.ThreadResume, {
+            result: { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' },
+          });
+        }
+        await write(line);
+      });
+    };
+    const agent = new CodexAgent(createDeps({}, { isolateCodexAccountSessions: true }));
+    vi.useFakeTimers();
+    try {
+      const start = agent.startSession({
+        sessionId: 'local-resume-retry', model: 'gpt-5.4', workingDir: '/repo', resumeSessionId: threadId,
+      });
+      if (exitUnconfirmed) MockCodexTransport.closeError = new Error('exit unconfirmed');
+      const result = outcome === 'recovered' ? start.then(h => h.close())
+        : expect(start).rejects.toThrow(exitUnconfirmed ? 'exit unconfirmed' : 'thread/resume timed out');
+      await vi.waitFor(() => expect(resumes).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(60_000);
+      if (!exitUnconfirmed) await vi.waitFor(() => expect(resumes).toHaveLength(2));
+      if (stallTwice) await vi.advanceTimersByTimeAsync(60_000);
+      await result;
+      expect(resumes).toEqual(exitUnconfirmed ? [threadId] : [threadId, threadId]);
+      expect(createdTransports).toHaveLength(resumes.length);
+      expect(createdTransports.flatMap(t => t.lines.map(line => JSON.parse(line).method)))
+        .not.toContain(Method.TurnStart);
+    } finally {
+      MockCodexTransport.closeError = null;
+      vi.useRealTimers();
+      await agent.dispose();
+    }
+  });
+
   it.each(['account', 'custom-context'])('reports confirmed %s host exit after initialize fails', async (kind) => {
     MockCodexTransport.onCreate = (transport) => {
       transport.setMockResponse(Method.Initialize, {

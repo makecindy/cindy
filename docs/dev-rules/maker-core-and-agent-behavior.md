@@ -29,6 +29,8 @@ transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCle
 保留运行期文件与目录保护，重试确认退出后才释放。旧隔离进程的清理失败不能被新一轮
 “尚未启动”的状态覆盖。此恢复只影响失败任务，不重置设备连接或其他任务，不自动重放消息。
 
+本机 Codex 的任务独占账号／自定义上下文进程在 `thread/resume` 等满 60 秒时记录线程与连接标识，macOS 尽力采样栈符号。只有确认旧进程已退出且仍在启动阶段，才用相同线程再恢复一次；第二次超时或清理失败即结束。共享进程、远端会话和已经发出的 turn 不走这条恢复路径。
+
 回归见 `claude-code/__tests__/startup-cleanup.test.ts`、
 `pi/__tests__/pi-startsession-cleanup.test.ts` 与 `maker.test.ts`。
 

@@ -170,7 +170,7 @@ import {
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
-import { broadcastReferenceModelPricing } from '../usage/referenceModelPricing.js';
+import { broadcastReferenceModelPricing, setReferencePricingDisplayProviders } from '../usage/referenceModelPricing.js';
 
 const log = createLogger('provider-service');
 
@@ -925,6 +925,9 @@ function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false
 function getDesktopProviderModelAccessCatalog(): Catalog {
   return projectSubscriptionPoolCatalog(getActiveCatalog(), true);
 }
+
+// Reference prices shown beside models follow the same account-aware membership as the lists.
+setReferencePricingDisplayProviders(() => getDesktopProviderModelAccessCatalog().providers);
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
 export function getDesktopProviderService(options: { allowSideEffects?: boolean } = {}): ProviderService {

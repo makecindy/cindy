@@ -1458,6 +1458,20 @@ describe('local-db:sessions:update handler wiring', () => {
     }
   });
 
+  // #11185, DB tier: remote cleanup must preserve a task pinned after the
+  // controller's probe, with no runtime/recycle side effects on rejection.
+  it('rejects guarded remote cleanup before stopping or recycling a used task', async () => {
+    Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
+    h.sqlite!.prepare("UPDATE sessions SET pinned_at = 1 WHERE id = 'codex-local'").run();
+    const handler = h.handlers.get('local-db:sessions:discard-unused')!;
+    await expect(handler({}, 'codex-local')).rejects.toThrow('PRECONDITION_FAILED');
+    expect(h.sqlite!.prepare("SELECT status FROM sessions WHERE id = 'codex-local'").get())
+      .toEqual({ status: 'active' });
+    expect(h.requestRecycle).not.toHaveBeenCalled();
+    expect(h.runtimeCleanup).not.toHaveBeenCalled();
+    expect(h.closeSharedTask).not.toHaveBeenCalled();
+  });
+
   it.each(['active', 'archived'] as const)('remote patch-meta cannot change a deleted task to %s', async (status) => {
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
     await expect(invokePatchMeta('codex-local', { status })).rejects.toThrow('已删除的任务不能恢复或归档');

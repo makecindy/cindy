@@ -1258,6 +1258,10 @@ function sessionsSetTerminalStatus(readyDb, args) {
       || !readyDb.prepare(IDLE_ARCHIVE_GUARD_SQL).get(sessionId, payload.idleArchiveCutoff))) {
       throw Object.assign(new Error('Task is no longer idle'), { code: 'PRECONDITION_FAILED' });
     }
+    if (payload.unusedOnly !== undefined && (payload.unusedOnly !== true || status !== 'deleted'
+      || !readyDb.prepare("SELECT id FROM sessions WHERE id = ? AND status = 'active' AND user_send_at IS NULL AND active_turn_started_at IS NULL AND pinned_at IS NULL AND NOT EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)").get(sessionId))) {
+      throw Object.assign(new Error('Task is no longer unused'), { code: 'PRECONDITION_FAILED' });
+    }
     const existing = readyDb.prepare('SELECT id, status, source FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });

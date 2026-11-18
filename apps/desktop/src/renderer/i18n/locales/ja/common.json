@@ -6756,6 +6756,7 @@
           "latency": "遅延",
           "lastSeen": "最終オンライン",
           "controlling": "このコンピューターを操作中",
+          "protocol": "接続方式",
           "rttNote": "直近の計測",
           "manage": "デバイスを管理…",
           "linkStatus": "「{{name}}」との接続",

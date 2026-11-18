@@ -6756,6 +6756,7 @@
           "latency": "延迟",
           "lastSeen": "最后在线",
           "controlling": "正在控制这台电脑",
+          "protocol": "连接方式",
           "rttNote": "最近测得",
           "manage": "管理设备…",
           "linkStatus": "与「{{name}}」",
