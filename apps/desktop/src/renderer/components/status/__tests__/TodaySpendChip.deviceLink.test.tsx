@@ -707,8 +707,9 @@ describe('existing UI with remote account data', () => {
 describe('TodaySpendChip on a subscription account pool', () => {
   // #10111 (unit): old null-route tasks already have a real second-account binding.
   // Existing cases always name the provider, bypassing both null-route gates.
-  it('shows the bound second account for a legacy null-route Codex OAuth task', async () => {
-    mocks.codexAuthInjection = 'oauth-bearer';
+  it.each(['oauth-bearer', null, 'env-key', 'provider-oauth'])(
+    'shows the bound second account independently of the default host (%s)', async injection => {
+    mocks.codexAuthInjection = injection;
     const sessionAccount = vi.fn().mockResolvedValue({
       providerId: 'openai', state: 'bound', account: {
         isDefault: false, number: 2, identity: 'second@example.test', paused: false, status: 'ready',
@@ -739,11 +740,9 @@ describe('TodaySpendChip on a subscription account pool', () => {
     expect(screen.getByTestId('quota-hover-card').textContent).toContain('second@example.test');
   });
 
-  // PR #9918 review (unit): a ChatGPT bridge consumes the pinned account's
-  // model bucket. A depleted generic bucket must not replace that model's 70%.
   it.each([
-    { name: 'gateway', providerId: null, injection: 'env-key', model: 'gpt-6.1-sol', remoteHostId: undefined },
-    { name: 'provider OAuth', providerId: null, injection: 'provider-oauth', model: 'gpt-6.1-sol', remoteHostId: undefined },
+    { name: 'explicit gateway', providerId: 'xd', injection: 'env-key', model: 'gpt-6.1-sol', remoteHostId: undefined },
+    { name: 'provider OAuth source', providerId: 'custom-oauth', injection: 'provider-oauth', model: 'gpt-6.1-sol', remoteHostId: undefined },
     { name: 'gateway model', providerId: null, injection: 'oauth-bearer', model: 'codex/gpt-5.5', remoteHostId: undefined },
     { name: 'custom', providerId: 'custom', injection: 'oauth-bearer', model: 'gpt-6.1-sol', remoteHostId: undefined },
     { name: 'SSH', providerId: null, injection: 'oauth-bearer', model: 'gpt-6.1-sol', remoteHostId: 'ssh' },
@@ -769,6 +768,25 @@ describe('TodaySpendChip on a subscription account pool', () => {
     expect(container.textContent).not.toContain('private@example.test');
   });
 
+  it.each(['legacy', 'unassigned', 'unavailable'] as const)(
+    'does not classify an unknown null-route binding as OAuth (%s)', async state => {
+      mocks.codexAuthInjection = 'env-key';
+      Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+        openExternal: mocks.openExternal,
+        subscriptionAccounts: { sessionAccount: async () => ({ providerId: 'openai', state }),
+          onChanged: () => () => {} },
+      } });
+      const { container } = render(<SessionSubscriptionAccountProvider providerId="openai" routeProviderId={null}
+        deviceId={null} sessionId={'unknown-' + state} nativeSessionId="native-unknown">
+        <TodaySpendChip vendorKey="codex" providerId={null} modelId="gpt-6.1-sol" />
+      </SessionSubscriptionAccountProvider>);
+      await act(async () => {});
+      expect(container.textContent).not.toContain('5h');
+      expect(mocks.localCodexReadKinds.some(kind => kind === 'codex')).toBe(false);
+    });
+
+  // PR #9918 review (unit): a ChatGPT bridge consumes the pinned account's
+  // model bucket. A depleted generic bucket must not replace that model's 70%.
   it.each([true, false])('uses the bridge model native bucket (generic bucket present: %s)', async (generic) => {
     mocks.localProviders = [{ id: 'openai', auth: { native: 'codex' } }];
     const bucket = (usedPercent: number, limitId: string, limitName: string | null) => ({
