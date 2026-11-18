@@ -39,7 +39,7 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
   // actual session options consumed by all three adapters (bot-group-chat §7.5).
   it.each(['codex', 'pi', 'claude-code'] as const)('keeps teammate skills and memory in a group project on %s', async agentKind => {
     seed('group', 'group:g1:access:owner:1', { projectMode: true, memory: true });
-    const opts = { id: 'lane', agentKind, workingDir: '/projects/group', model: 'm' } as MakerSessionCreateOpts;
+    const opts = { id: 'lane', agentKind, workingDir: path.resolve('/projects/group'), model: 'm' } as MakerSessionCreateOpts;
     const skill = { name: 'review', description: 'Review rules', path: '/bots/bot/workspace/skills/review' };
     await hydrateBotProfileRuntime(opts, {
       readProfileFolder: async () => ({ homeDir: '/bots/bot', systemPromptOverride: '' }),
@@ -50,7 +50,7 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(opts.makerMemoryEnabled).toBe(true);
     // Native project memory still resolves from the unchanged group working directory.
     expect(opts.makerMemoryScopeKey ?? await resolveMemoryScopeKey(opts.workingDir)).toBe(path.resolve('/projects/group'));
-    expect(prompt(opts)).toContain(path.join('/bots/bot/workspace', '.cindy', 'memory'));
+    expect(prompt(opts)).toContain(JSON.stringify(path.resolve('/bots/bot/workspace', '.cindy', 'memory')));
   });
 
   // Integration: rehydrate the same owner group twice with same-named memory records.
