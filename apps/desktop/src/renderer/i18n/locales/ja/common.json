@@ -16829,6 +16829,7 @@
         "summaryAria": "PR #{{number}} の概要を表示",
         "unresolvedLabel": "未解決のレビューコメント",
         "checks": "チェック",
+        "following": "フォロー中",
         "checksTotal": "全 {{count}} 件",
         "failed": "失敗",
         "passed": "成功",

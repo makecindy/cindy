@@ -16903,6 +16903,7 @@
         "summaryAria": "View PR #{{number}} Summary",
         "unresolvedLabel": "Unresolved Review Threads",
         "checks": "Checks",
+        "following": "Following",
         "checksTotal": "{{count}} total",
         "failed": "Failed",
         "passed": "Passed",
