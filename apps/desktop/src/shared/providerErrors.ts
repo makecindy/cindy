@@ -78,12 +78,30 @@ const UNREACHABLE_CODES = new Set([
 /** 超时类错误码（AbortSignal.timeout 抛 TimeoutError / AbortError）。 */
 const TIMEOUT_CODES = new Set(['ETIMEDOUT', 'ABORT_ERR', 'TimeoutError', 'AbortError']);
 
-/** Certificate verification failures only: protocol/cipher errors are not CA failures. */
+/** Node TLS certificate validation codes (https://nodejs.org/api/tls.html).
+ * Exclude protocol/cipher errors and OUT_OF_MEM, which is a resource failure. */
 const CERTIFICATE_CODES = new Set([
   'CERT_HAS_EXPIRED',
   'CERT_NOT_YET_VALID',
   'CERT_REJECTED',
   'CERT_REVOKED',
+  'CERT_CHAIN_TOO_LONG',
+  'CERT_SIGNATURE_FAILURE',
+  'CRL_HAS_EXPIRED',
+  'CRL_NOT_YET_VALID',
+  'CRL_SIGNATURE_FAILURE',
+  'ERROR_IN_CERT_NOT_AFTER_FIELD',
+  'ERROR_IN_CERT_NOT_BEFORE_FIELD',
+  'ERROR_IN_CRL_LAST_UPDATE_FIELD',
+  'ERROR_IN_CRL_NEXT_UPDATE_FIELD',
+  'HOSTNAME_MISMATCH',
+  'INVALID_CA',
+  'INVALID_PURPOSE',
+  'PATH_LENGTH_EXCEEDED',
+  'UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY',
+  'UNABLE_TO_DECRYPT_CERT_SIGNATURE',
+  'UNABLE_TO_DECRYPT_CRL_SIGNATURE',
+  'UNABLE_TO_GET_CRL',
   'CERT_UNTRUSTED',
   'DEPTH_ZERO_SELF_SIGNED_CERT',
   'ERR_TLS_CERT_ALTNAME_INVALID',

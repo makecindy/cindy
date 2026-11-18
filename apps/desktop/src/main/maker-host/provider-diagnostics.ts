@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { channel } from 'node:diagnostics_channel';
 import { withAuxiliaryUsage } from '../usage/auxiliaryUsage.js';
 import { parseAuxiliaryResponse, type AuxiliaryUsageRecorder } from '../../shared/auxiliaryUsage.js';
 /**
@@ -47,6 +49,41 @@ import { getProviderRouteCredentialRevision, isProviderRouteMutationInProgress, 
 
 import type { ProviderConnectionTestInput, ProviderConnectionTestResult } from '../../shared/providerConnectionTest.js';
 import { probeProviderProtocols } from './provider-protocol-probe.js';
+
+const nativeProbeContext = new AsyncLocalStorage<symbol>();
+
+/** SDK-owned transports cannot inject fetch. Observe their existing Node errors
+ * before SDK string conversion, scoped to requests created by this probe. No
+ * transport replacement, trust changes, extra requests or raw error retention.
+ */
+async function withNativeProbeNetworkErrors<T>(run: () => Promise<T>, record: (code: string) => void): Promise<T> {
+  const context = Symbol();
+  const requests = new WeakSet<object>();
+  const starts = [channel('undici:request:create'), channel('http.client.request.start')];
+  const errors = [channel('undici:request:error'), channel('http.client.request.error')];
+  const onStart = (message: unknown) => {
+    try {
+      const request = (message as { request?: object })?.request;
+      if (request && typeof request === 'object' && nativeProbeContext.getStore() === context) requests.add(request);
+    } catch { /* diagnostics must not change request creation */ }
+  };
+  const onError = (message: unknown) => {
+    // diagnostics_channel subscribers must never throw into the SDK/Node caller.
+    try {
+      const { request, error } = message as { request?: object; error?: unknown };
+      if (!request || !requests.has(request)) return;
+      const code = providerNetworkErrorCode(error);
+      if (classifyProviderError({ networkErrorCode: code }).code !== 'UNKNOWN') record(code);
+    } catch { /* diagnostics must not change the request result */ }
+  };
+  for (const event of starts) event.subscribe(onStart);
+  for (const event of errors) event.subscribe(onError);
+  try { return await nativeProbeContext.run(context, run); }
+  finally {
+    for (const event of starts) event.unsubscribe(onStart);
+    for (const event of errors) event.unsubscribe(onError);
+  }
+}
 
 const log = createMakerLogger('provider-probe');
 
@@ -392,13 +429,15 @@ async function runProviderProbeUnlogged(
       }
     };
     try {
-      const result = await probePiProvider({ row: model, providerId: spec.catalogPresetId ?? 'custom-probe',
+      const run = () => probePiProvider({ row: model, providerId: spec.catalogPresetId ?? 'custom-probe',
         upstream: spec.baseUrl, apiKey: spec.authMethod === 'none' ? '' : spec.apiKey
           ?? new Headers(spec.headers).get('authorization')?.replace(/^Bearer /i, '')
           ?? new Headers(spec.headers).get('x-goog-api-key')
           ?? new Headers(spec.headers).get('x-api-key') ?? '',
         headers: spec.apiKey || spec.authMethod === 'none' ? withoutCredentialHeaders(spec.headers) : spec.headers, fetchImpl: diagnosticFetch,
       }, AbortSignal.timeout(PROBE_TIMEOUT_MS));
+      const result = await (['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(api)
+        ? withNativeProbeNetworkErrors(run, code => { networkCode = code; }) : run());
       if (result.usage && [result.usage.input, result.usage.output, result.usage.cacheRead, result.usage.cacheWrite].some(n => n > 0)) {
         await record({ inputTokens: result.usage.input, outputTokens: result.usage.output,
           cacheReadTokens: result.usage.cacheRead, cacheCreateTokens: result.usage.cacheWrite },

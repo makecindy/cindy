@@ -10,6 +10,22 @@
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { channel } from 'node:diagnostics_channel';
+import * as googleAdapter from '@earendil-works/pi-ai/api/google-generative-ai';
+import * as vertexAdapter from '@earendil-works/pi-ai/api/google-vertex';
+import * as bedrockAdapter from '@earendil-works/pi-ai/api/bedrock-converse-stream';
+
+// Retain real adapters for existing native SDK regressions; expose configurable
+// wrappers only for the transport-conversion boundary fixtures below.
+vi.mock('@earendil-works/pi-ai/api/google-generative-ai', async importOriginal => ({
+  ...await importOriginal<typeof import('@earendil-works/pi-ai/api/google-generative-ai')>(),
+}));
+vi.mock('@earendil-works/pi-ai/api/google-vertex', async importOriginal => ({
+  ...await importOriginal<typeof import('@earendil-works/pi-ai/api/google-vertex')>(),
+}));
+vi.mock('@earendil-works/pi-ai/api/bedrock-converse-stream', async importOriginal => ({
+  ...await importOriginal<typeof import('@earendil-works/pi-ai/api/bedrock-converse-stream')>(),
+}));
 
 const probeLog = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
 const usageLog = vi.hoisted(() => ({
@@ -1686,7 +1702,12 @@ describe('provider certificate diagnostics (#11007)', () => {
     'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
     'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'CERT_HAS_EXPIRED',
     'CERT_NOT_YET_VALID', 'CERT_REVOKED', 'CERT_UNTRUSTED', 'CERT_REJECTED',
-    'ERR_TLS_CERT_ALTNAME_INVALID',
+    'ERR_TLS_CERT_ALTNAME_INVALID', 'INVALID_PURPOSE', 'INVALID_CA', 'PATH_LENGTH_EXCEEDED', 'CERT_CHAIN_TOO_LONG',
+    'UNABLE_TO_GET_CRL', 'UNABLE_TO_DECRYPT_CERT_SIGNATURE', 'UNABLE_TO_DECRYPT_CRL_SIGNATURE',
+    'UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY', 'CERT_SIGNATURE_FAILURE', 'CRL_SIGNATURE_FAILURE',
+    'CRL_NOT_YET_VALID', 'CRL_HAS_EXPIRED', 'ERROR_IN_CERT_NOT_BEFORE_FIELD',
+    'ERROR_IN_CERT_NOT_AFTER_FIELD', 'ERROR_IN_CRL_LAST_UPDATE_FIELD', 'ERROR_IN_CRL_NEXT_UPDATE_FIELD',
+    'HOSTNAME_MISMATCH',
   ])('%s is a non-retryable certificate failure', networkErrorCode => {
     expect(classifyProviderError({ networkErrorCode })).toEqual({
       code: 'CERT_ERROR', retryable: false, detail: networkErrorCode,
@@ -1696,7 +1717,7 @@ describe('provider certificate diagnostics (#11007)', () => {
   it.each([
     ['ERR_SSL_WRONG_VERSION_NUMBER', 'UNKNOWN'], ['ERR_TLS_INVALID_PROTOCOL_VERSION', 'UNKNOWN'],
     ['ECONNREFUSED', 'UPSTREAM_UNREACHABLE'], ['ENOTFOUND', 'UPSTREAM_UNREACHABLE'],
-    ['ETIMEDOUT', 'TIMEOUT'],
+    ['ETIMEDOUT', 'TIMEOUT'], ['OUT_OF_MEM', 'UNKNOWN'],
   ])('preserves non-certificate failure %s', async (networkErrorCode, code) => {
     const error = new TypeError('fetch failed', { cause: new AggregateError([
       Object.assign(new Error('private message'), { code: networkErrorCode }),
@@ -1716,4 +1737,90 @@ describe('provider certificate diagnostics (#11007)', () => {
     aborted.name = 'AbortError';
     expect(await runProviderProbe(spec, async () => { throw aborted; })).toMatchObject({ ok: false, code: 'TIMEOUT' });
   });
+});
+
+// #11007 review / unit: these SDKs reject injected fetch. Model their actual
+// Node transport diagnostics before the SDK discards cause; no sockets or cloud
+// credentials. Existing Copilot tests only cover the injected-fetch adapter.
+describe.each([
+  ['google', 'google-generative-ai', googleAdapter, 'undici:request:create', 'undici:request:error'],
+  ['google-vertex', 'google-vertex', vertexAdapter, 'undici:request:create', 'undici:request:error'],
+  ['amazon-bedrock', 'bedrock-converse-stream', bedrockAdapter, 'http.client.request.start', 'http.client.request.error'],
+] as const)('SDK-owned transport certificate diagnostics: %s', (preset, api, adapter, startName, errorName) => {
+  it.each(['saved', 'adhoc'] as const)('preserves the %s probe code before SDK error conversion', async kind => {
+    const row = Object.values(PROVIDER_MODEL_CATALOG.providers).flat().find(row => row.execution.pi.api === api)!;
+    const fetcher = vi.fn<typeof fetch>(async () => { throw new Error('SDK must own its transport'); });
+    const start = channel(startName), failed = channel(errorName);
+    const previous = [start.hasSubscribers, failed.hasSubscribers];
+    const observed = new Set<unknown>();
+    const listener = (message: unknown) => { observed.add(message); };
+    failed.subscribe(listener);
+    const sdk = vi.spyOn(adapter, 'streamSimple').mockImplementation((_model, _context, options = undefined) => ({
+      result: async () => {
+        expect(options).not.toHaveProperty('fetch');
+        const request = {};
+        start.publish({ request });
+        await Promise.resolve();
+        failed.publish({ request, error: Object.assign(new Error('private SDK endpoint'), { code: 'INVALID_PURPOSE' }) });
+        return { stopReason: 'error', errorMessage: 'fetch failed', content: [], model: row.id,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+      },
+    }) as never);
+    setCustomProviders([buildUserProvider({ id: 'native-owned', name: 'Native', auth: { method: 'apiKey' },
+      runtimes: { pi: { baseUrl: row.upstream, catalogPresetId: preset,
+        models: [{ id: row.id, name: row.name, piApi: api }] } },
+    })]);
+    setDiagnosticsKeyReader(() => 'fixture-key');
+    try {
+      const result = await testProviderConnection(kind === 'saved'
+        ? { kind, providerId: 'native-owned', agent: 'pi' }
+        : { kind, spec: { agent: 'pi', baseUrl: row.upstream, modelId: row.id, api,
+          catalogPresetId: preset, apiKey: 'fixture-key' } }, fetcher);
+      expect(result).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'INVALID_PURPOSE' });
+      expect(JSON.stringify(result)).not.toContain('private SDK endpoint');
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(sdk).toHaveBeenCalledOnce();
+      // Capture must leave pre-existing diagnostics subscribers operational.
+      const late = { request: {}, error: Object.assign(new Error('late'), { code: 'INVALID_CA' }) };
+      failed.publish(late);
+      expect(observed.has(late)).toBe(true);
+    } finally { sdk.mockRestore(); failed.unsubscribe(listener); }
+    expect([start.hasSubscribers, failed.hasSubscribers]).toEqual(previous);
+  });
+});
+
+// #11007: async request errors may arrive outside the creating async context.
+// Two simultaneous native probes must not borrow each other's safe error code.
+it('isolates concurrent SDK-owned requests and removes observers after settlement', async () => {
+  const row = PROVIDER_MODEL_CATALOG.providers.google[0];
+  const start = channel('undici:request:create'), failed = channel('undici:request:error');
+  const previous = [start.hasSubscribers, failed.hasSubscribers];
+  const complete: Array<() => void> = [];
+  let index = 0;
+  const sdk = vi.spyOn(googleAdapter, 'streamSimple').mockImplementation(() => ({
+    result: () => {
+      const request = {};
+      const code = index++ === 0 ? 'INVALID_PURPOSE' : 'ECONNREFUSED';
+      start.publish({ request });
+      return new Promise(resolve => complete.push(() => {
+        failed.publish({ request, error: Object.assign(new Error('private'), { code }) });
+        resolve({ stopReason: 'error', errorMessage: 'fetch failed', content: [], model: row.id,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
+      }));
+    },
+  }) as never);
+  try {
+    const spec = { agent: 'pi' as const, baseUrl: row.upstream, modelId: row.id,
+      api: 'google-generative-ai' as const, apiKey: 'fixture' };
+    const first = runProviderProbe(spec), second = runProviderProbe(spec);
+    expect(complete).toHaveLength(2);
+    // An unrelated request must not enter either probe, even while both await.
+    const unrelated = {};
+    start.publish({ request: unrelated });
+    failed.publish({ request: unrelated, error: { code: 'CERT_HAS_EXPIRED' } });
+    complete[0](); complete[1]();
+    expect(await first).toMatchObject({ ok: false, code: 'CERT_ERROR', detail: 'INVALID_PURPOSE' });
+    expect(await second).toMatchObject({ ok: false, code: 'UPSTREAM_UNREACHABLE', detail: 'ECONNREFUSED' });
+  } finally { sdk.mockRestore(); }
+  expect([start.hasSubscribers, failed.hasSubscribers]).toEqual(previous);
 });
