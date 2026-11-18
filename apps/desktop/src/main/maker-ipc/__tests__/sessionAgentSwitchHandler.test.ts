@@ -17,7 +17,11 @@ import { MAKER_INVOKE } from '../channels';
 import { remoteAgentLinkError } from '../../remote-agent/controller/runClient';
 import { IpcHarness } from './helpers/ipcHarness';
 import { getDeviceLinkInvokeContext, runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
-import { applyScheduledModelSelection, type ScheduledModelSelection } from '../scheduledModelSelection';
+import {
+  applyScheduledModelSelection,
+  reconcileScheduledModelRouteBeforeBaseline,
+  type ScheduledModelSelection,
+} from '../scheduledModelSelection';
 import { authorizeSharedTaskOperation } from '@cindy/device-link';
 import type { SharedTaskPeerCapture } from '../../device-link/sharedTaskDispatch';
 import { createSharedTaskSettingGuard } from '../sharedTaskSetting';
@@ -1738,6 +1742,37 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
 
 describe('settleSystemRouteSwitchIntent', () => {
   const intent = { targetAgentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' };
+
+  // #9642 / PR #11375 P1, unit: exercise the real pending apply's fail-continue
+  // branch. A throwing apply stub misses a model disabled after registration.
+  it('reports a swallowed cross-engine apply failure during scheduled baseline preparation', async () => {
+    const pending = createPendingAgentSwitchRegistry();
+    const assertModelRouteUsable = vi.fn(async () => undefined);
+    const { deps } = makeDeps({ pendingSwitches: pending, assertModelRouteUsable });
+    await performSessionAgentSwitch(deps, validParams);
+    const staged = pending.get('s1');
+    expect(staged).toBeDefined();
+    assertModelRouteUsable.mockRejectedValueOnce(new Error('target model disabled'));
+    await expect(reconcileScheduledModelRouteBeforeBaseline({
+      reconcile: async () => {},
+      hasPendingRoute: () => !!pending.get('s1'),
+      hasPendingSwitch: () => !!pending.get('s1'),
+      isIdle: () => true,
+      applyPendingSwitch: async () => {
+        const stagedIntent = pending.get('s1');
+        await applyPendingAgentSwitchIfIdle(deps, 's1', { bootstrapAfterSwitch: true });
+        return settleSystemRouteSwitchIntent({
+          stagedIntent, remainingIntent: pending.get('s1'), sessionIdle: true,
+        });
+      },
+    })).rejects.toMatchObject({ code: 'HARNESS_SWITCH_NOT_READY' });
+    expect(pending.get('s1')).toBe(staged);
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      'agent-switch: pending apply failed; intent retained for next send',
+      expect.objectContaining({ err: 'target model disabled' }),
+    );
+  });
 
   it('reports applied once the intent is gone', () => {
     expect(

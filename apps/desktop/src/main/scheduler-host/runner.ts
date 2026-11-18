@@ -2806,16 +2806,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
         if (schedule.targetSessionId && this.deps.prepareModelPreferences) {
           const override = hasScheduledModelOverride(schedule);
           await this.deps.prepareModelPreferences(sessionId, override);
-          if (!override) {
-            // The previous automation can have left its native route in place
-            // while this item waited. Use the restored owner route at dispatch.
-            const meta = await this.deps.maker.getSessionMeta(sessionId);
-            routingBaseline = {
-              ...routingBaseline, model: meta?.model, agentKind: meta?.agentKind,
-              effort: meta?.effort, fastMode: meta?.fastMode,
-              providerId: getSessionProvider(sessionId) ?? null,
-            };
-          }
+          // Preparation may settle a newer owner choice even when this run
+          // overrides only effort/Fast. Refresh inherited axes at dispatch;
+          // explicit schedule axes and resolved-selection fences still win.
+          const meta = await this.deps.maker.getSessionMeta(sessionId);
+          routingBaseline = {
+            ...routingBaseline, model: meta?.model, agentKind: meta?.agentKind,
+            effort: meta?.effort, fastMode: schedule.fastMode ?? meta?.fastMode,
+            providerId: getSessionProvider(sessionId) ?? null,
+          };
         }
         const preparingLive = this.deps.maker.getSession(sessionId);
         if ((preparingLive?.agentKind ?? routingBaseline.agentKind ?? schedule.agentKind) !== 'pi') return;

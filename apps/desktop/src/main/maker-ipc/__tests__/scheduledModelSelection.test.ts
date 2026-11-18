@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
-import { applyScheduledModelSelection, assertScheduledHarnessSupported, createScheduledModelScope, createScheduledModelSelectionResolver, reconcileScheduledModelRouteBeforeBaseline, resolveScheduledModelSelection, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../scheduledModelSelection';
+import {
+  applyScheduledModelSelection,
+  assertScheduledHarnessSupported,
+  createScheduledModelScope,
+  createScheduledModelSelectionResolver,
+  reconcileScheduledModelRouteBeforeBaseline,
+  resolveScheduledModelSelection,
+  type ScheduledModelSelection,
+  ScheduledModelSelectionBusyError,
+} from '../scheduledModelSelection';
 
 const selection: ScheduledModelSelection = {
   agentKind: 'pi', model: 'test-model', providerId: 'custom', effort: null, fastMode: false,
@@ -140,6 +149,7 @@ describe('one-run automation model preferences', () => {
       await switching;
       await h.deps.apply('task', switched);
       pending = false;
+      return 'applied' as const;
     });
     const scope = createScheduledModelScope({ ...h.deps,
       prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
@@ -163,7 +173,7 @@ describe('one-run automation model preferences', () => {
     { idle: true, pendingSwitch: false, label: 'pending runtime mutation' },
   ])('defers $label without capturing the old baseline', async ({ idle, pendingSwitch }) => {
     const h = scopeFixture();
-    const applyPendingSwitch = vi.fn(async () => {});
+    const applyPendingSwitch = vi.fn(async () => 'staged' as const);
     const scope = createScheduledModelScope({ ...h.deps,
       prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
         reconcile: async () => {}, hasPendingRoute: () => true,
@@ -178,7 +188,7 @@ describe('one-run automation model preferences', () => {
     const h = scopeFixture();
     const switched = { ...h.original, model: 'reconciled-model', providerId: 'reconciled-source' };
     let pending = true;
-    const applyPendingSwitch = vi.fn(async () => {});
+    const applyPendingSwitch = vi.fn(async () => 'applied' as const);
     const scope = createScheduledModelScope({ ...h.deps,
       prepareBaseline: () => reconcileScheduledModelRouteBeforeBaseline({
         reconcile: async () => { await h.deps.apply('task', switched); pending = false; },

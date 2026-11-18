@@ -36,7 +36,10 @@ import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker
 import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 import type { FireContext, Logger, Notifier, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import type { ProviderView } from '@cindy/model-providers';
-import { ScheduledModelSelectionBusyError, resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
+import {
+  resolveScheduledModelSelection,
+  ScheduledModelSelectionBusyError,
+} from '../../maker-ipc/scheduledModelSelection';
 import { createScheduledSessionBootstrap } from '../../maker-ipc/scheduledSessionBootstrap';
 import {
   setCodexAppliedCustomProviderRoutes,
@@ -1046,6 +1049,44 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     h.emit({ type: 'done', data: {}, source: 'claude-code' });
     await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
     expect(opts.prepareModelPreferences).toHaveBeenCalledTimes(1);
+  });
+
+  // #9642 / PR #11375 P1, unit: effort/Fast-only overrides still inherit the
+  // owner's route after preparation lands a pending choice, not its queue snapshot.
+  it.each([
+    { effort: 'high' as const },
+    { fastMode: false },
+  ])('refreshes inherited queued axes after settling the owner route: %j', async (override) => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    h.setModel.mockImplementation(async (model: string) => { Object.assign(h.session, { model }); });
+    Object.assign(h.session, { agentKind: 'pi', model: 'queued-old-model' });
+    mocks.getSessionProvider.mockReturnValue('queued-old-source');
+    const queue = createQueueHarness({ busy: true });
+    const opts = {
+      metaModel: 'queued-old-model',
+      metaFastMode: false,
+      availableModels: [{ id: 'owner-new-model', efforts: ['low', 'high'], defaultEffort: 'low' }],
+      prepareModelPreferences: vi.fn(async (_id: string, hasOverride: boolean) => {
+        expect(hasOverride).toBe(true);
+        opts.metaModel = 'owner-new-model';
+        opts.metaFastMode = true;
+        Object.assign(h.session, { model: 'owner-new-model' });
+        mocks.getSessionProvider.mockReturnValue('owner-new-source');
+      }),
+    };
+    const { runner } = createRunnerHarness(h.session, queue.deps, opts);
+    const schedule = heartbeatSchedule({ agentKind: 'pi', ...override });
+    const fire = runner.fire(schedule, createFireContext());
+    const outcome = fire.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {}, source: 'pi' });
+    await expect(outcome).resolves.toMatchObject({ sessionId: SESSION_ID });
+    expect(h.setModel).toHaveBeenLastCalledWith('owner-new-model', { providerId: 'owner-new-source' });
+    expect(mocks.setSessionFastMode).toHaveBeenLastCalledWith(SESSION_ID, override.fastMode ?? true);
+    if (override.effort) expect(h.setEffort).toHaveBeenLastCalledWith(override.effort);
+    expect(opts.prepareModelPreferences).toHaveBeenCalledOnce();
   });
 
   // #9642 / unit: queued preparation precedes the send transaction's route apply.

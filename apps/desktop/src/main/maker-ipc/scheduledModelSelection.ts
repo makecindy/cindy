@@ -153,14 +153,16 @@ export async function reconcileScheduledModelRouteBeforeBaseline(deps: {
   hasPendingRoute: () => boolean;
   hasPendingSwitch: () => boolean;
   isIdle: () => boolean;
-  applyPendingSwitch: () => Promise<void>;
+  applyPendingSwitch: () => Promise<'applied' | 'staged' | 'failed'>;
 }): Promise<void> {
   await deps.reconcile();
   if (!deps.hasPendingRoute()) return;
   if (!deps.isIdle()) {
     throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the saved companion route');
   }
-  if (deps.hasPendingSwitch()) await deps.applyPendingSwitch();
+  if (deps.hasPendingSwitch() && await deps.applyPendingSwitch() === 'failed') {
+    throwIpcError('HARNESS_SWITCH_NOT_READY', 'Saved companion route could not be applied');
+  }
   if (deps.hasPendingRoute()) {
     throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the saved companion route');
   }

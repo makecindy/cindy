@@ -280,7 +280,16 @@ import {
   readInputDeliveryClientIds,
 } from '@cindy/device-link';
 import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
-import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, reconcileScheduledModelRouteBeforeBaseline, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
+import {
+  applyScheduledModelSelection,
+  createScheduledModelScope,
+  createScheduledModelSelectionResolver,
+  reconcileScheduledModelRouteBeforeBaseline,
+  type ScheduledModelSelection,
+  ScheduledModelSelectionBusyError,
+  type ScheduledModelSelectionLease,
+  writeScheduledModelBaselineIfProfileCurrent,
+} from './scheduledModelSelection';
 import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecovery';
 import { createTurnModelAttribution } from './turnModelAttribution.js';
@@ -11827,7 +11836,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       hasPendingRoute: () => !!agentSwitchPending.get(sessionId) || !!getPendingSessionRuntimeMutation(sessionId),
       hasPendingSwitch: () => !!agentSwitchPending.get(sessionId),
       isIdle: () => isSessionIdleForRouteApply(sessionId),
-      applyPendingSwitch: () => applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, { bootstrapAfterSwitch: true }),
+      applyPendingSwitch: async () => {
+        const stagedIntent = agentSwitchPending.get(sessionId);
+        await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, { bootstrapAfterSwitch: true });
+        return settleSystemRouteSwitchIntent({
+          stagedIntent,
+          remainingIntent: agentSwitchPending.get(sessionId),
+          sessionIdle: isSessionIdleForRouteApply(sessionId),
+        });
+      },
     }),
     read: async (sessionId) => {
       const [row] = await getDbClient().drizzle.select({
