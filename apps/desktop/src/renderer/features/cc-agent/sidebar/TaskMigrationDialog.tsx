@@ -76,7 +76,7 @@ export function TaskMigrationDialog({
   const owner = useRef(getDataOwnerGeneration()).current;
   const live = useRef(true);
   const current = () => live.current && isDataOwnerGenerationCurrent(owner);
-  const request = (command: TaskMigrationRequest) =>
+  const request = <Request extends TaskMigrationRequest>(command: Request) =>
     window.electronAPI.deviceLink.taskMigration(session.deviceLinkDeviceId ?? null, command);
   const errorCode = (e: unknown) =>
     /\bMIGRATION_[A-Z_]+\b/.exec(e instanceof Error ? e.message : String(e))?.[0] ??
@@ -191,7 +191,10 @@ export function TaskMigrationDialog({
       disposed = true;
     };
   }, [target, self]);
-  const act = async (command: TaskMigrationRequest, dismissOnSuccess = false) => {
+  const act = async (
+    command: Exclude<TaskMigrationRequest, { action: 'move-project' }>,
+    dismissOnSuccess = false,
+  ) => {
     if (pending.current || !current()) return;
     pending.current = true;
     mutationEpoch.current++;
