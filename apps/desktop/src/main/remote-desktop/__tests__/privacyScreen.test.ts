@@ -2,6 +2,10 @@ import { EventEmitter } from 'node:events';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ windows: [] as any[], displays: [] as any[], confirm: vi.fn() }));
+const excludeMask = vi.hoisted(() => vi.fn((_handle: Buffer) => true));
+vi.mock('../../windowsTaskbarNative', () => ({
+  loadWindowsTaskbarNative: async () => ({ excludePrivacyMaskFromCapture: excludeMask }),
+}));
 const away = vi.hoisted(() => ({
   ended: (_locked: boolean) => {},
   quit: () => {},
@@ -41,7 +45,7 @@ vi.mock('electron', () => ({
   dialog: { showMessageBox: state.confirm },
   BrowserWindow: class extends EventEmitter {
     static getFocusedWindow() { return null; }
-    getNativeWindowHandle() { return Buffer.alloc(8); }
+    getNativeWindowHandle() { return Buffer.from([this.id]); }
     id = state.windows.length + 1;
     destroyed = false;
     options: any;
@@ -136,6 +140,25 @@ it('relayouts the non-captured display and releases its listeners on stop', asyn
   expect(second.getBounds()).toEqual(lockingBounds);
   h.masks.stop();
   expect(screen.listenerCount('display-metrics-changed')).toBe(0);
+});
+
+// Unit: a second monitor rejecting capture exclusion must not acknowledge an
+// active privacy screen or leave the first mask and its input hook installed.
+it('rejects Windows privacy activation when one monitor cannot exclude its mask', async () => {
+  vi.stubGlobal('process', Object.create(process, { platform: { value: 'win32' } }));
+  try {
+    state.displays.push({ id: 2, bounds: { x: 1440, y: 0, width: 900, height: 1200 } });
+    excludeMask.mockImplementation(handle => handle[0] === 1);
+    const h = fixture();
+    await expect(h.masks.set(true, () => true)).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+    expect(excludeMask).toHaveBeenCalledWith(Buffer.from([2]));
+    expect(state.windows.every(window => window.destroyed)).toBe(true);
+    expect(h.monitor.stop).toHaveBeenCalled();
+    expect(h.masks.active).toBe(false);
+  } finally {
+    excludeMask.mockImplementation(() => true);
+    vi.unstubAllGlobals();
+  }
 });
 
 function fixture(heldInput?: () => void) {

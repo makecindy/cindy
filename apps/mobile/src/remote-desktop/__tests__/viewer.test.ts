@@ -1232,9 +1232,9 @@ describe("remote desktop viewport", () => {
       expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([]);
     },
   );
-  // Unit: the user's fit size is a recoverable resting point, not a lower
-  // zoom/pan boundary. Existing pinch tests only exercised zooming above fit.
-  it.each([false, true])("keeps a smaller, moved picture and correct touch coordinates (native=%s)", (native) => {
+  // Unit: shrinking below fit in touch mode keeps a stable origin for taps,
+  // including taps over a native video surface.
+  it.each([false, true])("keeps a smaller touch-mode picture centered and correct touch coordinates (native=%s)", (native) => {
     const v = viewer(false, true, native);
     v.send({ type: "init", epoch: "free", width: 1920, height: 1080 });
     v.send({ type: "control", enabled: true });
@@ -1256,8 +1256,8 @@ describe("remote desktop viewport", () => {
     v.pointer("pointerup", 1, 260, 270);
     for (let i = 0; i < 20; i++) v.frame(20);
     const r = v.elements.image.style;
-    expect(parseFloat(r.left)).toBeCloseTo(160);
-    expect(parseFloat(r.top)).toBeCloseTo(213.75);
+    expect(parseFloat(r.left)).toBeCloseTo(100);
+    expect(parseFloat(r.top)).toBeCloseTo(243.75);
     expect(parseFloat(r.width)).toBeCloseTo(200);
     // Manual camera gestures must not ask automatic resolution fitting to undo them.
     expect(measurements()).toBe(before);
@@ -1270,19 +1270,45 @@ describe("remote desktop viewport", () => {
       kind: "button", button: 0, down: true, x: 0.25, y: 0.75,
     });
     // The fingers can start in the newly exposed space beside the picture.
-    // Keep their actual anchor instead of jumping to the nearest picture edge.
+    // While still below fit the resized picture stays centered.
     v.pointer("pointerdown", 1, 60, 300);
     v.pointer("pointerdown", 2, 140, 300);
     v.pointer("pointermove", 1, 50, 300);
     v.pointer("pointermove", 2, 150, 300);
     v.frame(); v.frame(40);
     expect(parseFloat(r.width)).toBeCloseTo(250);
-    expect(parseFloat(r.left)).toBeCloseTo(175);
+    expect(parseFloat(r.left)).toBeCloseTo(75);
     v.pointer("pointerup", 1, 50, 300);
     v.pointer("pointerup", 2, 150, 300);
     v.send({ type: "fit" });
     expect(r.width).toBe("400px");
     expect(r.left).toBe("0px");
+  });
+  // Unit: a phone touch drag at fit used to leave the picture off-center.
+  // The same drag must still reach another part of a magnified desktop.
+  it("pans in touch mode only after enlarging the desktop", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mode", mode: "touch" });
+    const left = () => parseFloat(v.elements.image.style.left);
+    function drag() {
+      const before = left();
+      v.pointer("pointerdown", 1, 200, 300);
+      v.pointer("pointermove", 1, 240, 300);
+      const travel = left() - before;
+      v.pointer("pointerup", 1, 240, 300);
+      return travel;
+    }
+    expect(drag()).toBe(0);
+    v.pointer("pointerdown", 1, 150, 300);
+    v.pointer("pointerdown", 2, 250, 300);
+    v.pointer("pointermove", 1, 100, 300);
+    v.pointer("pointermove", 2, 300, 300);
+    v.frame(); v.frame(40);
+    v.pointer("pointerup", 1, 100, 300);
+    v.pointer("pointerup", 2, 300, 300);
+    expect(parseFloat(v.elements.image.style.width)).toBeCloseTo(800);
+    expect(drag()).toBeCloseTo(40);
   });
   // Unit: real pointer gestures must recover center from a visible offset,
   // not only the previous 8pt zone, while preserving deliberate distant pans.

@@ -311,6 +311,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           ) / 2,
           Math.max(0, (viewportHeight() - height) / 2),
         ));
+  const touchAtFit = () => !config.desktop && mode === "touch" && zoom <= 1;
   const layout = () => {
     const r =
       config.desktop && desktopScale !== null
@@ -333,10 +334,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
             config.desktop ? fillHeight && !viewerSized : false,
             config.desktop ? 1 : 0.1,
           );
+    const centered = touchAtFit();
     return {
       ...r,
-      x: viewportLeft() + viewportWidth() / 2 - fx * r.width,
-      y: viewportHeight() / 2 + verticalOffset(r.height) - fy * r.height,
+      x: viewportLeft() + viewportWidth() / 2 - (centered ? 0.5 : fx) * r.width,
+      y: viewportHeight() / 2 + verticalOffset(r.height) - (centered ? 0.5 : fy) * r.height,
     };
   };
   // 0 at fit, 1 at the pinch limit for the current viewport and display.
@@ -1336,6 +1338,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     queue({ kind: "button", button, down: false, x: cx, y: cy });
   }
   function pan(dx, dy) {
+    if (touchAtFit()) return;
     manualViewMoved = true;
     cursorNeedsEntry = true;
     stopPanAnimation();
