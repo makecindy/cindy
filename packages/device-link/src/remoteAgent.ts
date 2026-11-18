@@ -152,6 +152,8 @@ export const REMOTE_AGENT_MAX_PUSH_CHARS = 3 * 1024 * 1024;
 
 export type RemoteAgentRequest =
   | { op: 'caps' }
+  | { op: 'company-reporting-challenge'; runId: string }
+  | { op: 'company-reporting-grant'; runId: string; grant: string }
   /** Same-account native history transfer. The host validates commands before accessing storage. */
   | { op: 'native-history'; sessionId: string; command: unknown }
   /** G→O: durable task location only; every use still needs a fresh allocation. */
@@ -295,6 +297,7 @@ export interface RemoteAgentForkResult {
 }
 
 export interface RemoteAgentCaps {
+  companyTokenReporting?: true;
   /** Preserves external-application tools and runtime storage across every relay. */
   localApplication?: boolean;
   nativeHistoryTransfer?: boolean;
@@ -537,6 +540,11 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         || (v.generation !== undefined && (typeof v.generation !== 'string' || !ID.test(v.generation)))) invalid();
       return { op: 'direct-switch', sessionId: v.sessionId,
         ...(typeof v.generation === 'string' ? { generation: v.generation } : {}) };
+    case 'company-reporting-challenge':
+      return { op: v.op, runId: id(v.runId) };
+    case 'company-reporting-grant':
+      if (typeof v.grant !== 'string' || !v.grant.length || v.grant.length > 8192) invalid();
+      return { op: v.op, runId: id(v.runId), grant: v.grant };
     case 'direct-usage': {
       if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)
         || typeof v.generation !== 'string' || !ID.test(v.generation)
@@ -827,6 +835,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
       })
     : [];
   const caps = {
+    ...(v.companyTokenReporting === true ? { companyTokenReporting: true as const } : {}),
     version: count(v.version, 1_000),
     agents,
     maxRuns: count(v.maxRuns, 1_000),

@@ -2332,6 +2332,9 @@ interface ElectronAPI {
   // ── Auth (delegated to main process authManager) ──
   /** 首启亮色门会话线索:主进程是否持有存量会话(sendSync,首帧前判定用)。 */
   authHasPersistedSessionHintSync: () => boolean;
+  companyTokenView: () => Promise<{ participating: boolean; generation: number; needsNotice: boolean } | null>;
+  companyTokenNotice: (generation: number) => Promise<void>;
+  companyTokenParticipation: (participating: boolean, generation: number) => Promise<void>;
   authInitialize: () => Promise<{
     user: AuthUser | null;
     mode: 'signed-out' | 'local' | 'cloud';

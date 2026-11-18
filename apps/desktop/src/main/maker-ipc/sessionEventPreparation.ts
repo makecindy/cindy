@@ -1,3 +1,4 @@
+import { beginCompanyTurn } from '../usage/companyTokenFacts.js';
 import { parseOutputLimitDetails } from '@cindy/maker-shared';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
@@ -411,7 +412,9 @@ export function prepareSessionEvent(
       }
       if ((event.source === 'pi' || event.source === 'codex' || event.source === 'claude-code')
         && (!wasInTurn || !deps.turnUsageContextBySession.has(session.id))) {
-        deps.turnUsageContextBySession.set(session.id, captureTurnUsageContext(session.id));
+        const context = captureTurnUsageContext(session.id);
+        if (!session.remoteHostId && !session.agentDeviceId) beginCompanyTurn(context, context.providerId, event.source);
+        deps.turnUsageContextBySession.set(session.id, context);
       }
     } else if (endsForegroundTurnByStatus(data, isContinuationBoundary, event)) {
       shouldMarkTurnStatusIdleAfterBroadcast = true;

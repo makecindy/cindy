@@ -1,3 +1,4 @@
+import { CompanyTokenNotice } from './components/settings/usage/CompanyTokenReporting';
 import { HostConnectionNotice } from '@/components/HostConnectionNotice';
 import { AppPreferenceControl } from './components/AppPreferenceControl';
 import { AppWindowSync } from './components/layout/AppWindowSync';
@@ -489,6 +490,7 @@ export function App() {
               <EnvCheckProvider>
                 <AuthProvider>
                   <HostConnectionNotice />
+                  <CompanyTokenNotice />
                   <PluginReviewUpdatesProvider>
                   <AppShellCoverProvider>
                     <WorktreeProvider>

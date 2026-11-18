@@ -1,3 +1,4 @@
+import { createCompanyTokenReporting } from './usage/companyTokenReporting.desktop.js';
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
 import { createPersonalBuildMonitor, personalMonitorEnvironment } from './personalBuildMonitor.js';
@@ -6834,6 +6835,21 @@ const registerIpcHandlers = () => {
 
   // ── Auth IPC handlers (delegated to authManager) ──
 
+  const companyReporting = !hostClientMode ? createCompanyTokenReporting() : null;
+  app.once('will-quit', () => companyReporting?.dispose());
+  ipcMain.handle('auth:company-token-view', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return companyReporting?.view() ?? null;
+  });
+  ipcMain.handle('auth:company-token-notice', (event, generation: number) => {
+    assertTrustedAppRendererEvent(event);
+    companyReporting?.noted(generation);
+  });
+  ipcMain.handle('auth:company-token-participation', async (event, participating: boolean, generation: number) => {
+    assertTrustedAppRendererEvent(event);
+    if (!companyReporting) throw new Error('Company statistics unavailable');
+    await companyReporting.set(participating, generation);
+  });
   ipcMain.handle('auth:initialize', async () => {
     try {
       let pendingCompletion: Promise<authManager.AuthState> | null = null;
@@ -6849,6 +6865,7 @@ const registerIpcHandlers = () => {
       // 以后台完成的那次登录为准。
       const markAuthMilestone = (s: authManager.AuthState) => {
         if (s.isAuthenticated) markStartupMilestone('auth-initialized');
+        if (s.canEnterApp || !pendingCompletion) companyReporting?.refresh();
       };
       markAuthMilestone(state);
       void (pendingCompletion as Promise<authManager.AuthState> | null)?.then(markAuthMilestone, () => undefined);
