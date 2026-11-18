@@ -5829,6 +5829,11 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const modelOnly = data?.modelOnly === true;
   const label = modelOnly ? `${data?.fromModel ?? ''} → ${toModel}` : (formatAgentSwitchLocationLabel(data, (key, options) => t(key, options))
     ?? t('message.renderer.agentSwitchLabel', { from, to }));
+  const modelLabel = modelOnly ? '' : toModel;
+  const historyLabel = !coverageKey && (resumed || data?.nativeHistory === 'fallback')
+    ? t(data?.nativeHistory === 'fallback' ? 'message.renderer.sessionFallbackPill' : 'message.renderer.sessionResumedPill')
+    : '';
+  const accessibilityLabel = [label, modelLabel, historyLabel].filter(Boolean).join(' · ');
 
   return (
     <View style={styles.agentSwitchWrap} testID="message.systemCard.agent-switch">
@@ -5838,23 +5843,26 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
           onPress={handoff ? () => setExpanded((v) => !v) : undefined}
           disabled={!handoff}
           accessibilityRole={handoff ? 'button' : undefined}
-          accessibilityLabel={handoff ? t('message.renderer.agentSwitchViewHandoff', { label }) : label}
-          style={styles.agentSwitchPill}
+          accessibilityLabel={handoff ? t('message.renderer.agentSwitchViewHandoff', { label: accessibilityLabel }) : accessibilityLabel}
+          accessibilityState={handoff ? { expanded } : undefined}
+          style={[styles.agentSwitchPill, handoff ? styles.agentSwitchPillInteractive : undefined]}
         >
           <ArrowLeftRight color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-          <Text style={styles.agentSwitchPillText} numberOfLines={1}>{label}</Text>
-          {toModel && !modelOnly ? (
-            <>
-              <Text style={styles.agentSwitchDot}>·</Text>
-              <Text style={styles.agentSwitchModel} numberOfLines={1}>{toModel}</Text>
-            </>
-          ) : null}
-          {!coverageKey && (resumed || data?.nativeHistory === 'fallback') ? (
-            <>
-              <Text style={styles.agentSwitchDot}>·</Text>
-              <Text style={styles.agentSwitchPillText} numberOfLines={1}>{t(data?.nativeHistory === 'fallback' ? 'message.renderer.sessionFallbackPill' : 'message.renderer.sessionResumedPill')}</Text>
-            </>
-          ) : null}
+          <Text style={styles.agentSwitchPillText}>
+            {label}
+            {modelLabel ? (
+              <>
+                <Text style={styles.agentSwitchDot}>{' · '}</Text>
+                <Text style={styles.agentSwitchModel}>{modelLabel}</Text>
+              </>
+            ) : null}
+            {historyLabel ? (
+              <>
+                <Text style={styles.agentSwitchDot}>{' · '}</Text>
+                {historyLabel}
+              </>
+            ) : null}
+          </Text>
           {handoff ? (
             expanded
               ? (
@@ -9547,8 +9555,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
+  agentSwitchPillInteractive: {
+    minHeight: 44,
+  },
   agentSwitchPillText: {
     color: colors.textSecondary,
+    flexShrink: 1,
     fontSize: typeScale.micro,
     lineHeight: lineHeight.micro,
     fontWeight: fontWeight.medium,
@@ -9556,15 +9568,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // 分隔点:纯语义三级色,不再叠透明度「做淡」(§3 硬规则 1)。
   agentSwitchDot: {
     color: colors.textTertiary,
-    fontSize: typeScale.micro,
-    lineHeight: lineHeight.micro,
   },
   agentSwitchModel: {
-    color: colors.textSecondary,
-    flexShrink: 1,
     fontFamily: monoFont,
-    fontSize: typeScale.micro,
-    lineHeight: lineHeight.micro,
+    fontWeight: fontWeight.regular,
   },
   agentSwitchCoverage: {
     color: colors.textSecondary,
