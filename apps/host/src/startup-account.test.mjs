@@ -29,6 +29,7 @@ import { createSourceElectronTree } from './test-support/source-electron-tree.mj
 import { lifoCleanup } from './test-support/cleanup.mjs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Unit regression: run the real startup/auth functions with in-memory network,
 // credentials and storage. A valid login for B must never open A's database.
@@ -642,7 +643,7 @@ test('a refresh after a failed start keeps the start-failure reason (no saved se
   writeFileSync(path.join(bin, 'secret-tool'), `#!${['', 'bin', 'sh'].join('/')}\necho cindy-host-start-reason-test-secret\n`, { mode: 0o755 });
   const lease = acquireHostRuntimeLease(profile, 'owner-locked');
   assert.equal(lease.held, true);
-  const hostDir = path.resolve(new URL('..', import.meta.url).pathname);
+  const hostDir = fileURLToPath(new URL('..', import.meta.url));
   const child = spawn(process.execPath, ['--import', 'tsx', '--import', './src/loaders/register-raw.mjs', 'src/main.ts', 'serve'], {
     cwd: hostDir, stdio: ['ignore', 'ignore', 'pipe'],
     env: isolatedServeEnv(root, bin, { CINDY_HOST_DATA_DIR: profile, CINDY_HOST_APP_DATA_DIR: path.join(root, 'app-data'),

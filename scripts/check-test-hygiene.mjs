@@ -1323,7 +1323,22 @@ function terminatesByName(text) {
   return NAME_KILL_COMMANDS.some(pattern => pattern.test(text));
 }
 
-function hostProcessCleanupViolations() {
+// A file URL's pathname still contains percent escapes and may start with /C:/.
+// HTTP routing uses pathname directly, so match only URL constructions rooted in a file.
+function readsFileUrlPathname(ts, node) {
+  if (!ts.isPropertyAccessExpression(node) || node.name.text !== 'pathname') return false;
+  let url = node.expression;
+  while (ts.isParenthesizedExpression(url)) url = url.expression;
+  if (ts.isCallExpression(url) && url.expression.getText() === 'pathToFileURL') return true;
+  if (!ts.isNewExpression(url) || url.expression.getText() !== 'URL') return false;
+  const [value, base] = url.arguments ?? [];
+  if (!value) return false;
+  if (ts.isStringLiteralLike(value) && /^[a-z][a-z0-9+.-]*:/i.test(value.text)) return /^file:/i.test(value.text);
+  return value.getText() === 'import.meta.url' || base?.getText() === 'import.meta.url'
+    || (base && ts.isStringLiteralLike(base) && /^file:/i.test(base.text));
+}
+
+function hostTestAndScriptViolations() {
   const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--',
     'apps/host/'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }).split('\0');
   const violations = [];
@@ -1334,8 +1349,8 @@ function hostProcessCleanupViolations() {
     const fullPath = path.join(ROOT, file);
     if (!existsSync(fullPath)) continue;
     const source = readFileSync(fullPath, 'utf8');
-    if (!/\b(?:pkill|killall|pgrep|pidof|taskkill(?:\.exe)?|Stop-Process|Get-Process)\b/i.test(source)) continue;
-    const hit = index => violations.push(file + ':' + (1 + lineOf(source, index)));
+    if (!/\b(?:pathname|pkill|killall|pgrep|pidof|taskkill(?:\.exe)?|Stop-Process|Get-Process)\b/i.test(source)) continue;
+    const hit = (index, message = '只能结束本次启动并记录了 PID 的进程') => violations.push(file + ':' + (1 + lineOf(source, index)) + ' — ' + message);
     if (!/\.[cm]?[jt]sx?$/.test(file)) {
       for (const match of source.matchAll(/^.*$/gm)) {
         if (!/^\s*#/.test(match[0]) && terminatesByName(match[0])) hit(match.index);
@@ -1345,6 +1360,7 @@ function hostProcessCleanupViolations() {
     const ts = typescript ??= requireDesktop('typescript');
     const ast = parseTestSource(ts, source);
     const visit = node => {
+      if (readsFileUrlPathname(ts, node)) hit(node.getStart(ast), '文件 URL 转为本地路径请使用 fileURLToPath');
       if (ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
         // Reading a generated command, checking a command name in a fake, and
         // naming a test do not execute commands against the machine.
@@ -1483,9 +1499,9 @@ export async function main(args = process.argv.slice(2)) {
       return 1;
     }
   }
-  const unsafeCleanup = hostProcessCleanupViolations();
-  if (unsafeCleanup.length) {
-    for (const location of unsafeCleanup) console.error('[test-hygiene] ' + location + ' — 只能结束本次启动并记录了 PID 的进程');
+  const hostViolations = hostTestAndScriptViolations();
+  if (hostViolations.length) {
+    for (const violation of hostViolations) console.error('[test-hygiene] ' + violation);
     return 1;
   }
   const counts = await scanRepository();

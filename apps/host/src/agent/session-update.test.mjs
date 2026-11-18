@@ -738,6 +738,8 @@ test('thinking: a change applies to the runtime, and a Review task is refused be
 // - Tier: unit, through the real entry over a migrated profile database, the real registry file and the
 //   real transcript copy in an isolated Claude config directory; the runtime is a fixture.
 const moveDir = (f, name) => { const dir = path.join(f.root, name); mkdirSync(dir, { recursive: true }); return dir; };
+// Host rows and events use forward slashes even when the caller supplies a native Windows path.
+const storedDir = dir => dir.split(path.sep).join('/');
 const movedEvents = (f, id) => f.events.filter(event => event.type === 'session_changed' && event.sessionId === id);
 const recentPushes = f => f.events.filter(event => event.type === 'plugin_push' && event.channel === 'local-db:recent-workdirs:changed');
 
@@ -749,17 +751,17 @@ test('move: an idle Codex task moves to a project; its runtime is closed, and th
   await f.database.drizzle.update(sessions).set({ projectDir: from }).where(eq(sessions.id, 'move-codex'));
   f.runtime('move-codex', { agentKind: 'codex' });
   const moved = await f.update('move-codex', { workingDir: `${to}/`, workspaceKind: 'project' });
-  assert.equal(moved.workingDir, to);
+  assert.equal(moved.workingDir, storedDir(to));
   const row = await f.row('move-codex');
-  assert.deepEqual([row.workingDir, row.workspaceKind, row.projectDir], [to, 'project', null]);
+  assert.deepEqual([row.workingDir, row.workspaceKind, row.projectDir], [storedDir(to), 'project', null]);
   assert.deepEqual(f.closedByExecutor, ['move-codex'], 'the idle runtime is closed before the new directory is written');
   assert.equal(f.liveSession('move-codex'), undefined);
-  assert.deepEqual(movedEvents(f, 'move-codex').at(-1).patch, { workingDir: to, workspaceKind: 'project', projectDir: null });
+  assert.deepEqual(movedEvents(f, 'move-codex').at(-1).patch, { workingDir: storedDir(to), workspaceKind: 'project', projectDir: null });
   // Protocol: the desktop's own push (sessions.ts broadcastRecentWorkdirsChanged sends this channel with
   // { path }); its renderer listens on it (preload localDb.recentWorkdirs.onChanged), reached here through
   // the web shim and the client-mode window. Another channel or payload and the recent list goes stale.
-  assert.deepEqual(recentPushes(f), [{ type: 'plugin_push', channel: 'local-db:recent-workdirs:changed', payload: { path: to } }]);
-  assert.ok((await listRecentWorkdirs()).some(entry => entry.path === to));
+  assert.deepEqual(recentPushes(f), [{ type: 'plugin_push', channel: 'local-db:recent-workdirs:changed', payload: { path: storedDir(to) } }]);
+  assert.ok((await listRecentWorkdirs()).some(entry => entry.path === storedDir(to)));
 });
 
 test('move: a Claude task\'s transcripts follow it, and the resume id the move persisted is in the row and the published patch', { timeout: 30_000 }, async t => {
@@ -782,9 +784,9 @@ test('move: a Claude task\'s transcripts follow it, and the resume id the move p
   writeFileSync(path.join(source, `${liveId}.jsonl`), '{"type":"user"}\n');
   await f.update('move-claude', { workingDir: `${to}/`, workspaceKind: 'project' });
   const row = await f.row('move-claude');
-  assert.deepEqual([row.workingDir, row.sdkSessionId], [to, liveId]);
+  assert.deepEqual([row.workingDir, row.sdkSessionId], [storedDir(to), liveId]);
   assert.deepEqual(movedEvents(f, 'move-claude').at(-1).patch,
-    { workingDir: to, workspaceKind: 'project', sdkSessionId: liveId, projectDir: null });
+    { workingDir: storedDir(to), workspaceKind: 'project', sdkSessionId: liveId, projectDir: null });
   assert.equal(f.liveSession('move-claude'), undefined, 'the Claude runtime in the old directory is closed');
   const copies = readdirSync(path.join(claudeConfig, 'projects'))
     .filter(key => key !== 'old-key' && existsSync(path.join(claudeConfig, 'projects', key, `${liveId}.jsonl`)));
@@ -799,7 +801,7 @@ test('move: inside the task lock the move re-enters it; another holder of the lo
   await f.task('move-locked', { agentKind: 'codex', workDir: moveDir(f, 'locked-from') });
   // As main.ts: the entry runs in the task's send lock, and the move takes the route lock again.
   await lockSessionRoute(f.update)('move-locked', { workingDir: to, workspaceKind: 'project' });
-  assert.equal((await f.row('move-locked')).workingDir, to);
+  assert.equal((await f.row('move-locked')).workingDir, storedDir(to));
 
   // The move holds the lock while it closes the runtime; another holder (a send) waits behind it.
   f.runtime('move-locked', { agentKind: 'codex' });
@@ -816,7 +818,7 @@ test('move: inside the task lock the move re-enters it; another holder of the lo
   assert.equal(ran, false, 'waits while the move holds the task lock');
   open();
   await moving;
-  assert.equal(await other, back, 'runs after the move and reads the moved directory');
+  assert.equal(await other, storedDir(back), 'runs after the move and reads the moved directory');
 });
 
 // The desktop's registry: `{ worktrees: { <task>: { path } } }` in the profile root (worktreeStore.ts).
@@ -847,7 +849,7 @@ test('move: the worktree registry decides ownership; no registry is no binding, 
     const patch = { workingDir: elsewhere, workspaceKind: 'project' };
     if (outcome === 'moved') {
       await f.update(id, patch);
-      assert.equal((await f.row(id)).workingDir, elsewhere, name);
+      assert.equal((await f.row(id)).workingDir, storedDir(elsewhere), name);
     } else if (outcome === 'blocked') {
       await unchanged(id, patch, error => error.code === 'PRECONDITION_FAILED'
         && error.message.includes('A worktree session cannot be moved outside its worktree'));
@@ -935,8 +937,8 @@ test('send: the project a send was made in becomes recent and is announced; an u
     broadcastRecentWorkdirsChanged: createRecentWorkdirsChangedPush(event => f.events.push(event)) });
   reads = 0;
   await touch('sent', 5_000);
-  assert.ok((await listRecentWorkdirs()).some(entry => entry.path === project));
-  assert.deepEqual(recentPushes(f), [{ type: 'plugin_push', channel: 'local-db:recent-workdirs:changed', payload: { path: project } }]);
+  assert.ok((await listRecentWorkdirs()).some(entry => entry.path === storedDir(project)));
+  assert.deepEqual(recentPushes(f), [{ type: 'plugin_push', channel: 'local-db:recent-workdirs:changed', payload: { path: storedDir(project) } }]);
   assert.equal(movedEvents(f, 'sent').at(-1).patch.userSendAt, new Date(5_000).toISOString());
   const events = f.events.length;
   reads = 0;

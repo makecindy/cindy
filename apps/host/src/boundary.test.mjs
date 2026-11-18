@@ -301,7 +301,7 @@ function snapshotTree(dir) {
       const full = path.join(current, entry.name);
       const stat = fs.lstatSync(full);
       // Directory mtimes move when a lock record is published and removed; a file keeps its mtime.
-      out.push(`${path.relative(dir, full)}:${entry.isSymbolicLink() ? 'l' : entry.isDirectory() ? 'd' : 'f'}:${stat.isFile() ? `${stat.size}:${stat.mtimeMs}` : ''}`);
+      out.push(`${path.relative(dir, full).split(path.sep).join('/')}:${entry.isSymbolicLink() ? 'l' : entry.isDirectory() ? 'd' : 'f'}:${stat.isFile() ? `${stat.size}:${stat.mtimeMs}` : ''}`);
       if (entry.isDirectory()) walk(full);
     }
   };
