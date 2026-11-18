@@ -2,6 +2,7 @@ const standby = vi.hoisted(() => ({ publish: vi.fn(), refresh: vi.fn(), flush: v
 vi.mock('../providerShareAvailability.js', () => ({ publishShareAvailability: standby.publish, refreshStandbyGuests: standby.refresh }));
 vi.mock('../providerShareAvailabilityUsage.js', () => ({ flushStandbyUsage: standby.flush, importStandbyUsage: standby.usage }));
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -14,6 +15,13 @@ import type { ProviderShareManagementCommand } from '../../../shared/providerMan
 import type { ProviderUsageHistoryView } from '../../../shared/providerShare';
 import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 
+const fileRename = vi.hoisted(() => vi.fn<typeof import('node:fs/promises').rename>());
+vi.mock('node:fs/promises', async importOriginal => ({
+  ...await importOriginal<typeof import('node:fs/promises')>(),
+  rename: fileRename,
+}));
+const nativeReplace = vi.hoisted(() => vi.fn<(source: string, destination: string) => Promise<void>>());
+vi.mock('../../windowsAtomicRename.js', () => ({ atomicReplaceWindowsDirectoryEntry: nativeReplace }));
 const state = vi.hoisted(() => ({ owner: 'owner-a', boundaryPending: false }));
 const saveDialog = vi.hoisted(() => vi.fn());
 const windowRouting = vi.hoisted(() => ({
@@ -185,6 +193,7 @@ function saveMemberNote(entry: 'local' | 'same-account'): Promise<unknown> {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  fileRename.mockImplementation(fsp.rename);
   windowRouting.windows = [];
   windowRouting.notifications = [];
   windowRouting.focusMain.mockReturnValue(true);
@@ -242,10 +251,12 @@ describe('local roster export', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-roster-test-'));
     destination = path.join(dir, 'members.csv');
     host.complete.mockReturnValue([share, { ...share, providerId: 'other' }, { ...share, hostDeviceId: 'other' }]);
-    memberNotes.readStrict.mockReturnValue({ [member.memberId]: 'A,"B"\nC' });
+    memberNotes.readStrict.mockResolvedValue({ [member.memberId]: 'A,"B"\nC' });
+    nativeReplace.mockRejectedValue(new Error('synthetic native replacement failure'));
     registerProviderShareIpc();
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -256,7 +267,19 @@ describe('local roster export', () => {
     return handler({ sender: {} } as Electron.IpcMainInvokeEvent, providerId, expectedOwner);
   }
 
-  it('saves exactly the authorized snapshot and its capture time at the chosen location', async () => {
+  it.each(['new', 'existing', 'EPERM', 'EEXIST'])('saves the authorized snapshot at the chosen location (%s)', async mode => {
+    if (mode !== 'new') fs.writeFileSync(destination, 'original');
+    if (mode === 'EPERM' || mode === 'EEXIST') {
+      vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+      fileRename.mockImplementation(async (source, target) => {
+        if (target === destination) throw Object.assign(new Error('cannot overwrite'), { code: mode });
+        return fsp.rename(source, target);
+      });
+      nativeReplace.mockImplementationOnce(async (source, target) => {
+        await fsp.copyFile(source, target);
+        await fsp.unlink(source);
+      });
+    }
     vi.setSystemTime(new Date(capturedAt));
     saveDialog.mockImplementationOnce(async () => {
       vi.setSystemTime(new Date('2026-10-16T08:01:00Z'));
@@ -266,6 +289,7 @@ describe('local roster export', () => {
     const expected = '\uFEFFshare_id,member_id,display_name,note,status,captured_at\r\n'
       + `"share-1","fixture-member-full-id","'=guest","A,""B""\nC","active","${capturedAt}"\r\n`;
     expect(fs.readFileSync(destination)).toEqual(Buffer.from(expected));
+    if (mode === 'EPERM' || mode === 'EEXIST') expect(nativeReplace).toHaveBeenCalledOnce();
     expect(fs.readdirSync(dir)).toEqual(['members.csv']);
   });
 
@@ -307,6 +331,18 @@ describe('local roster export', () => {
     await expect(save()).rejects.toThrow();
     expect(fs.readFileSync(destination, 'utf8')).toBe('original');
     expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+  });
+
+  it.each(['owner', 'roster'] as const)('rejects a late note read after the %s changes', async change => {
+    let finish!: (notes: Record<string, string>) => void;
+    memberNotes.readStrict.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const pending = save();
+    if (change === 'owner') state.owner = 'owner-b';
+    else host.complete.mockReturnValue([]);
+    finish({ [member.memberId]: 'Team A' });
+    await expect(pending).rejects.toThrow();
+    expect(saveDialog).not.toHaveBeenCalled();
+    expect(fs.readdirSync(dir)).toEqual([]);
   });
 
   it('rejects device-link callers before opening a local dialog', async () => {

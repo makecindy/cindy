@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { open, rename, unlink } from 'node:fs/promises';
+import { open, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron';
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
 import { getDeviceId } from '../authManager.js';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { replaceFile } from '../utils/replaceFile.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
@@ -18,13 +19,15 @@ function cell(value: string): string {
   return '"' + safe.replace(/"/g, '""') + '"';
 }
 
-function readRoster(providerId: string, capturedAt: string): string {
+async function readRoster(providerId: string, capturedAt: string, assertCaller: () => void): Promise<string> {
+  assertCaller();
+  const notes = await providerShareMemberNotes.readStrict();
+  assertCaller();
   const deviceId = getDeviceId();
   const shares = getProviderShareHostCompleteSnapshot()?.filter(
     share => share.providerId === providerId && share.hostDeviceId === deviceId && share.members.length > 0,
   );
   if (!shares?.length) throwIpcError('PRECONDITION_FAILED', 'The local member roster is unavailable');
-  const notes = providerShareMemberNotes.readStrict();
   const lines = ['share_id,member_id,display_name,note,status,captured_at'];
   for (const share of shares) {
     for (const member of share.members) {
@@ -49,23 +52,24 @@ export async function exportProviderShareRoster(event: IpcMainInvokeEvent, rawPr
   }
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win) throwIpcError('PERMISSION_DENIED', 'No window for roster export');
-  const capturedAt = new Date().toISOString();
-  const csv = readRoster(providerId, capturedAt);
   const assertCaller = () => {
     assertOwner();
     assertTrustedAppRendererEvent(event);
   };
-  const assertCurrent = () => {
-    assertCaller();
-    if (readRoster(providerId, capturedAt) !== csv) throwIpcError('PRECONDITION_FAILED', 'The member roster changed');
+  const capturedAt = new Date().toISOString();
+  const csv = await readRoster(providerId, capturedAt, assertCaller);
+  const assertCurrent = async () => {
+    if (await readRoster(providerId, capturedAt, assertCaller) !== csv) throwIpcError('PRECONDITION_FAILED', 'The member roster changed');
   };
 
+  assertCaller();
   const picked = await dialog.showSaveDialog(win, {
     defaultPath: 'cindy-member-roster-' + capturedAt.replace(/[:.]/g, '-') + '.csv',
     filters: [{ name: 'CSV', extensions: ['csv'] }],
   }).catch(() => throwIpcError('INTERNAL', 'Could not open the save dialog'));
   if (picked.canceled || !picked.filePath) return;
-  assertCurrent();
+  await assertCurrent();
+  assertCaller();
 
   // Only a complete, still-authorized export may replace the user-selected file.
   const temp = path.join(path.dirname(picked.filePath), '.cindy-roster-' + randomUUID() + '.tmp');
@@ -77,9 +81,10 @@ export async function exportProviderShareRoster(event: IpcMainInvokeEvent, rawPr
     } finally {
       await file.close();
     }
-    assertCurrent();
+    await assertCurrent();
+    assertCaller();
     // Admit publication under the current owner before handing it to the filesystem.
-    await rename(temp, picked.filePath);
+    await replaceFile(temp, picked.filePath);
   } catch (error) {
     await unlink(temp).catch(() => {});
     if (isIpcError(error)) throw error;
