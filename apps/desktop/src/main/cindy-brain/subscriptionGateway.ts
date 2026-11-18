@@ -614,6 +614,7 @@ export class GhostSubscriptionGateway {
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
     const spec = GHOST_CONTROL_POINTS[point];
     const runtimePoint = isRuntimePluginPoint(point);
+    const toolPoint = point === 'will-tool-call' || point === 'did-tool-result';
     // Reuse the fresh exact-instance authorization lookup; per-request runtime
     // control must not rescan unrelated installs. Legacy points keep their path.
     const findTarget = () => runtimePoint && this.deps.findGhostForDelivery
@@ -626,6 +627,7 @@ export class GhostSubscriptionGateway {
       return { action: target.onFailure, ghostId, ghostName, reason: '', failure: true };
     };
     if (!ghost || !ghostControlPointActive(ghost, point)) {
+      if (toolPoint) return { action: 'allow' };
       return failed(target.pluginId, ghost?.manifest.name ?? target.pluginId, ghost ? 'inactive' : 'missing');
     }
     const ghostId = installedGhostStoragePart(ghost);
@@ -646,8 +648,9 @@ export class GhostSubscriptionGateway {
     const verdict = e.pointFused ? null : await this.askControlPoint(ghost, e, point, data,
       Math.min(spec.timeoutMs, timeoutMs ?? spec.timeoutMs), ownerScope);
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
+    if (toolPoint && !currentTarget()) return { action: 'allow' };
     if (verdict === null) return failed(ghostId, ghost.manifest.name, e.pointFused ? 'fused' : 'unanswered');
-    if (runtimePoint && !currentTarget()) return failed(ghostId, ghost.manifest.name, 'changed');
+    if (runtimePoint && !toolPoint && !currentTarget()) return failed(ghostId, ghost.manifest.name, 'changed');
     if (verdict.action === 'route' && verdict.route && (spec.actions as readonly string[]).includes('route')) {
       if (point === 'will-model-request' && 'phase' in data && data.phase !== 'select') {
         return failed(ghostId, ghost.manifest.name, 'route-after-selection');

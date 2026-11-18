@@ -1,5 +1,6 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
+import { PI_NATIVE_TOOL_CATALOG_SOURCE } from './native-tool-catalog-source.js';
 import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
 import { assertToolLifecycleBudget } from '../shared/tool-lifecycle.js';
 /**
@@ -4540,6 +4541,8 @@ ${PI_CACHE_RECOVERY_SOURCE}
 
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 
+${PI_NATIVE_TOOL_CATALOG_SOURCE}
+
 // ─── 设备托管：执行器操作 ───────────────────────────────────────────
 async function cindyHostedCall(op: string, body: unknown, signal?: AbortSignal): Promise<any> {
   if (!CINDY_HOSTED) throw new Error('Cindy hosted executor is not configured.');
@@ -4758,29 +4761,33 @@ export default async function cindyBridge(piApi: any) {
     handler: async (args: string, ctx: any) => {
       const nonce = args.trim();
       if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) return;
-      let code: 'INVALID_PAYLOAD' | 'APPLY_FAILED' | undefined;
+      let code: 'INVALID_PAYLOAD' | 'APPLY_FAILED' | 'UNSUPPORTED_CAPABILITY' | undefined;
       let mutationStarted = false;
       let runtimeSettings;
       try {
         const raw = await ctx.ui.input('cindy:provider-refresh', JSON.stringify({ nonce }));
         let inspect = false;
-        try { const request = JSON.parse(raw); inspect = request?.nonce === nonce && request?.operation === 'inspect'; }
+        let toolRequest;
+        try { const request = JSON.parse(raw); inspect = request?.nonce === nonce && request?.operation === 'inspect';
+          if (request?.nonce === nonce && request?.operation === 'tool-catalog') toolRequest = request.toolRequest; }
         catch { /* The normal snapshot parser rejects invalid JSON. */ }
-        const snapshot = inspect ? undefined : parseCindyProviderRefreshSnapshot(raw, nonce);
-        if (!inspect && !snapshot) {
+        const snapshot = inspect || toolRequest ? undefined : parseCindyProviderRefreshSnapshot(raw, nonce);
+        if (toolRequest && typeof toolRequest.method === 'string' && Array.isArray(toolRequest.args)) {
+          runtimeSettings = await callCindyNativeToolCatalog(pi, toolRequest.method, toolRequest.args);
+        } else if (!inspect && !snapshot) {
           code = 'INVALID_PAYLOAD';
         } else if (snapshot) {
           mutationStarted = true;
           await nativeProviderAdapters.refresh(snapshot, ctx, SECRET_ENV_NAMES);
         }
-        if (!code) {
+        if (!code && !toolRequest) {
           // getSettings returns a copy. Never reach into Pi's private session or
           // pretend a settings.json rewrite changed the live SettingsManager.
           const settings = typeof pi.getSettings === 'function' ? pi.getSettings() : initialNativeSettings;
           runtimeSettings = { version: piCodingAgent.VERSION, compaction: settings.compaction ?? {} };
         }
-      } catch {
-        code = mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
+      } catch (error) {
+        code = error?.message === 'UNSUPPORTED_CAPABILITY' ? 'UNSUPPORTED_CAPABILITY' : mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
       }
       // RPC prompt swallows extension command exceptions. The host must see an
       // explicit, nonce-bound receipt before accepting a refreshed catalog.

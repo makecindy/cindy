@@ -10,6 +10,16 @@ export function installPeerReset(value: (device: string) => void) {
   return () => { if (reset === value) reset = null; };
 }
 export function resetMobilePeer(device: string) { reset?.(device); }
+/**
+ * Whether file bytes to this computer may go on its Agent-Net session instead of WebRTC (DeviceLinkContext: a same-account
+ * computer whose calls go on the session right now). The computer must also offer `streamTransport` in its `caps`.
+ */
+let streamTransport: ((device: string) => boolean) | null = null;
+export function installPeerStreamTransport(value: (device: string) => boolean) {
+  streamTransport = value;
+  return () => { if (streamTransport === value) streamTransport = null; };
+}
+export function peerStreamTransport(device: string): boolean { return streamTransport?.(device) === true; }
 export function installPeerUpload(value: PeerUpload) {
   upload = value;
   return () => { if (upload === value) upload = null; };

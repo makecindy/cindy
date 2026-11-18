@@ -17,9 +17,9 @@
  *   还没读到过列表时按退避重试；有被拦的设备在线时（可能刚重新登录、登记还没生效）按退避确认，最慢回到定期的间隔。
  *   连接不在（Agent-Net 关着、换了账号）时一次也不读（`active`）。
  * 只用于官方 Agent-Net 网络；自建中转删设备时直接在 Agent-Net 上撤销（可以重新配对加回来），不走这里。
- * 不依赖 Electron：Node Host 与 Desktop 共用。
+ * 不依赖 Electron 与 Node：Desktop、Node Host 与手机共用。
  */
-import type { PeerRule } from '@cindy/agent-net';
+import type { PeerRule } from './socketPorts.js';
 
 export interface AgentNetMembershipPorts {
   /** 本账号 Device Link 设备列表里的设备号（官方服务）；现在读不到时回 null 或抛错。 */

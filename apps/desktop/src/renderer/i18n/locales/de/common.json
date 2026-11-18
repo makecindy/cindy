@@ -6490,7 +6490,8 @@
           "defaultProjectTag": "Standard",
           "defaultProjectFullAccessWarning": "Das Standardprojekt „{{name}}“ hat Vollzugriff: Eine @Erwähnung aus jeder beliebigen Gruppe wird darin mit vollem Zugriff ausgeführt.",
           "sharedSettingsPointer": "Projekte, Modelle und Berechtigungen gelten für alle offiziellen Bots gemeinsam.",
-          "sharedSettingsPointerAction": "Einstellungen öffnen"
+          "sharedSettingsPointerAction": "Einstellungen öffnen",
+          "workspacesCardDescriptionWithPlugins": "Gilt für alle offiziellen Bots und IM-Plugins gemeinsam. Die Projekte stammen aus der Seitenleiste – dort erstellst, benennst oder entfernst du sie. Änderungen über /model in einem Chat erscheinen auch hier. Modelle und Berechtigungen, die in einem Plugin für einen einzelnen Chat geändert wurden, bleiben davon unberührt."
         },
         "binding": {
           "copyLink": "Link kopieren",
@@ -7024,11 +7025,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "Offiziell",
-        "personal": "Persönlich"
+        "personal": "Persönlich",
+        "plugins": "Plugins"
       },
       "tips": {
         "cindy": "Von Cindy bereitgestellt und gepflegt. Du musst keinen Bot erstellen oder Zugangsdaten angeben – folge den Verbindungsschritten, um loszulegen.",
-        "personal": "Verwende dein eigenes Konto oder deinen eigenen Bot und verwalte die erforderlichen Zugangsdaten selbst. Jeder Kanal hat sein eigenes Konto, eigene Berechtigungen und Einstellungen."
+        "personal": "Verwende dein eigenes Konto oder deinen eigenen Bot und verwalte die erforderlichen Zugangsdaten selbst. Jeder Kanal hat sein eigenes Konto, eigene Berechtigungen und Einstellungen.",
+        "plugins": "IM-Zugänge, die von installierten Plugins bereitgestellt werden. Anmeldung und Verknüpfung erfolgen auf der Seite des Plugins. Projekte, Modelle und Berechtigungen folgen standardmäßig „Projekte und Modelle“ und lassen sich im Plugin pro Chat ändern."
       },
       "defaults": {
         "title": "Konfiguration für neue Unterhaltungen",
@@ -7060,6 +7063,10 @@
         },
         "groupPermissionLabel": "Berechtigungsmodus für neue Gruppenaufgaben",
         "groupPermissionDescription": "Berechtigungsmodus für jede Aufgabe, die in einem Gruppenchat erstellt wird – ob über @bot beim Öffnen eines Themas, /new oder /ctr. Der obige Berechtigungsmodus gilt nur für Direktnachrichten. Standardmäßig ist die automatische Genehmigung aktiv. Der Gruppenkontext kann von Mitgliedern kontrollierte Inhalte enthalten. Mit „Vollzugriff“ werden Aktionen ohne Bestätigung der einzelnen Schritte ausgeführt. Wähle diesen Modus daher nur für Gruppen, denen du vertraust. Änderungen gelten für danach erstellte Aufgaben. Den Modus einer bestehenden Aufgabe änderst du mit /permission in der Gruppe."
+      },
+      "plugins": {
+        "rowHint": "Anmeldung, Verknüpfung und Einstellungen pro Chat findest du auf der Seite des Plugins.",
+        "open": "Plugin öffnen"
       }
     },
     "shortcuts": {
@@ -11246,6 +11253,7 @@
       "unavailableTitle": "Dieser Gruppenchat ist nicht mehr verfügbar",
       "unavailableDescription": "Er wurde möglicherweise gelöscht. Geh zurück zu den Freunden, um einen anderen Gruppenchat oder einen Freund zu öffnen.",
       "sidebar": {
+        "threadReply": "Antwort im Thread",
         "title": "Gruppenchats",
         "empty": "Noch keine Nachrichten",
         "preview": "{{name}}: {{text}}",
@@ -11578,6 +11586,7 @@
           "sharedReplyFrom": "Thread-Antwort von {{name}} geteilt",
           "sharedReply": "Thread-Antwort geteilt",
           "edited": "Bearbeitet",
+          "replyNotFound": "Diese Antwort wurde nicht gefunden.",
           "sourceUnavailable": "Die ursprüngliche Antwort wurde gelöscht oder ist für dich nicht verfügbar.",
           "viewThread": "Thread ansehen",
           "viewInMain": "Im Hauptchat ansehen",
@@ -21950,6 +21959,19 @@
       "network": "Verbindung unterbrochen, neuer Versuch…",
       "timeout": "Zeitüberschreitung, neuer Versuch…",
       "server": "Server ausgelastet, neuer Versuch…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "Berechtigungen für diesen Chat erweitern?",
+    "message": "Darf „{{name}}“ für „{{conversation}}“ im Projekt „{{project}}“ „{{mode}}“ verwenden?",
+    "detail": "Das geht über die IM-Projekteinstellung ({{projectMode}}) hinaus. Wenn du es erlaubst, darf dieses Plugin in diesem Projekt diese Berechtigungsstufe verwenden – nur für seine eigenen Sitzungen. Du kannst im Plugin jederzeit wieder zur IM-Einstellung zurückkehren.",
+    "groupWarning": "In dieser Gruppe können auch andere Mitglieder Nachrichten senden. Je weiter die Berechtigung, desto seltener wirst du um Bestätigung gebeten – vertraue also allen in der Gruppe.",
+    "allow": "Erlauben",
+    "cancel": "Abbrechen",
+    "modes": {
+      "ask": "Standardberechtigungen",
+      "auto": "Automatische Prüfung",
+      "bypassPermissions": "Vollzugriff"
     }
   }
 }

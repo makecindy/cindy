@@ -131,7 +131,7 @@ import type { app } from 'electron';
 import type { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import type { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { ORCA_REMOTE_WORKER_OPEN_CHANNEL, REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
-import { SESSION_INVOKE_REPLAY, type PeerInvokePayload, type PeerLinks } from './peerLinks.js';
+import { SESSION_INVOKE_REPLAY, type PeerInvokePayload, type PeerLinks } from '@cindy/agent-net';
 import { isDeferredHistoryPush, deferredToolBoundary, buildHistoryWorkPatch, thinkingDeltaUpdatesWorkLine } from './historyViewPush';
 import { clearHistoryViewDeltas, withoutHistoryViewDeltaToken } from './historyViewDelta';
 import { HISTORY_WORK_PATCH_CHANNEL } from '@cindy/maker-shared/message-window';
@@ -1405,7 +1405,7 @@ const remoteInvokeInstance = `${Date.now().toString(36)}${Math.random().toString
 let remoteInvokeClearGeneration = 0;
 /**
  * 这台对这个控制端的请求去重记忆是哪一份：进程重启、整体清空（登出、关远程控制）、对它的清空（永久关链、撤权）都会变。Agent-Net
- * 会话的链路回复带上它（agentNetSessionLinks.ts），控制端断线后用原请求号再发之前比一下：变了就说明这里已经不记得那次请求，
+ * 会话的链路回复带上它（packages/agent-net/src/session/sessionLinks.ts），控制端断线后用原请求号再发之前比一下：变了就说明这里已经不记得那次请求，
  * 再发可能重复执行，不再发（和原来一样报「可能已执行」）。Device Link 的链路回复不带。
  */
 function remoteInvokeEpoch(deviceId: string): string {
@@ -3590,16 +3590,23 @@ async function handleInvoke(
   inFlightRemoteInvokeBytes += invokeBytes;
   if (listingKey) remoteListingFlights.set(listingKey, inFlightEntry);
   let result: InvokeResultPayload;
+  // Slow results are the ones most likely to outlive the controller's wait; record
+  // how each one left this host so a controller timeout can be matched to it.
+  let slowResultLabel: string | undefined;
   try {
     result = normalizeInvokeResultForWire(await resultPromise);
     const executionWaitMs = Math.round(performance.now() - handlerStartedAt);
     // debug only: 300ms already shows up as a visible send delay over the relay.
     if (executionWaitMs >= 300 + intendedHoldMs) {
-      log.debug(`remote invoke slow execution request=${shortId(requestId)} from=${shortId(src)}`
-        + ` channel=${payload && REMOTE_INVOKE_ALLOWLIST.has(payload.channel) ? payload.channel : 'unknown'}`
+      slowResultLabel = `request=${shortId(requestId)} from=${shortId(src)}`
+        + ` channel=${payload && REMOTE_INVOKE_ALLOWLIST.has(payload.channel) ? payload.channel : 'unknown'}`;
+      log.debug(`remote invoke slow execution ${slowResultLabel}`
         + ` executionWaitMs=${executionWaitMs} ok=${result.ok} stagesMs=${JSON.stringify(timing.stages)}`);
     }
-    if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
+    if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) {
+      if (slowResultLabel) log.debug(`remote invoke slow result dropped ${slowResultLabel} reason=link-reset`);
+      return;
+    }
   } finally {
     if (inFlightRemoteInvokeResults.get(cacheKey) === inFlightEntry) {
       inFlightRemoteInvokeResults.delete(cacheKey);
@@ -3611,7 +3618,7 @@ async function handleInvoke(
   }
   // Fresh execution already includes the DB checks in runInvoke, within its
   // orphan deadline and busy lease. Only replayed replies need a new async check.
-  if (!sendInvokeResultSafe(
+  const accepted = sendInvokeResultSafe(
     client,
     src,
     requestId,
@@ -3619,7 +3626,9 @@ async function handleInvoke(
     payload?.channel,
     payload?.args,
     fingerprint,
-  )) {
+  );
+  if (slowResultLabel) log.debug(`remote invoke slow result handed off ${slowResultLabel} accepted=${accepted}`);
+  if (!accepted) {
     throw new DeviceLinkError('BACKPRESSURE', 'invoke-result could not be queued');
   }
 }
