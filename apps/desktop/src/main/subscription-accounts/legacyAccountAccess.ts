@@ -1,6 +1,6 @@
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides, setProviderDisabled } from '../maker-host/model-disable-store.js';
-import { isRemoteProviderInvocationAllowed, remoteAccessProviderId } from '../maker-host/remote-provider-access-store.js';
+import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { remoteModelAccess } from '../device-link/remoteModelAccess.js';
 
 export function setLegacyCodexAccountPaused(providerId: string, paused: boolean): void {
@@ -14,9 +14,9 @@ export function legacyCodexAccountCanRun(
   /** ownComputer：远程调用来自自己的其他电脑(不是受邀者)；两者都只看「允许被远程调用」。 */
   options: { remote: boolean; ownComputer?: boolean; newRoute: boolean; modelSwitch?: boolean },
 ): boolean {
-  // A merged connection has no switch or model list of its own on screen; it follows its pool.
+  // A merged connection has no switch or model list of its own on screen; both stores read its pool.
   if (options.remote && (!isRemoteProviderInvocationAllowed(providerId)
-    || !remoteModelAccess.allows(remoteAccessProviderId(providerId), model ?? ''))) return false;
+    || !remoteModelAccess.allows(providerId, model ?? ''))) return false;
   if (!options.newRoute && !options.modelSwitch) return true;
   const access = readModelDisableOverrides();
   if (options.newRoute && isProviderDisabled(access, providerId)) return false;

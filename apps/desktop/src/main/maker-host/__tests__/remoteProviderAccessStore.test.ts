@@ -22,6 +22,7 @@ vi.mock('../logger-adapter.js', () => ({
 }));
 
 const store = await import('../remote-provider-access-store.js');
+const { setMergedProviderPoolResolver } = await import('../mergedProviderPool.js');
 const prefsFile = () => path.join(tmpDir, 'remote-provider-access-prefs.json');
 
 beforeEach(() => {
@@ -52,12 +53,12 @@ describe('remote provider access', () => {
   it('reads only the provider switch, and lets a merged connection follow its pool', async () => {
     fs.writeFileSync(prefsFile(), JSON.stringify({ allowedProviders: { 'old-openai': true }, ownComputerModelUse: true }));
     expect(store.isRemoteProviderInvocationAllowed('anthropic')).toBe(false);
-    store.setMergedProviderPoolResolver((id) => (id === 'old-openai' ? 'openai' : undefined));
+    setMergedProviderPoolResolver((id) => (id === 'old-openai' ? 'openai' : undefined));
     try {
       expect(store.isRemoteProviderInvocationAllowed('old-openai')).toBe(false);
       await store.setRemoteProviderInvocationEnabled('openai', true);
       expect(store.isRemoteProviderInvocationAllowed('old-openai')).toBe(true);
       expect(store.isRemoteProviderInvocationAllowed('openai')).toBe(true);
-    } finally { store.setMergedProviderPoolResolver(null); }
+    } finally { setMergedProviderPoolResolver(null); }
   });
 });

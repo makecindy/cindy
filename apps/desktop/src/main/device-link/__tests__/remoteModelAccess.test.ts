@@ -10,6 +10,7 @@ import { setProviderDisabled } from '../../maker-host/model-disable-store';
 vi.mock('../providerShareAvailabilityPolicy.js', () => ({ withAvailabilityPolicyMutation: (_id: string, work: () => Promise<unknown>) => work() }));
 import * as locks from '../crossProcessLock';
 import { createRemoteModelAccessStore } from '../remoteModelAccess';
+import { setMergedProviderPoolResolver } from '../../maker-host/mergedProviderPool';
 import { isRemoteModelSelection } from '../../../shared/remoteModelAccess';
 
 /* 测试价值：用户要求本机与远程权限独立、按人限制。新生产存储的持久化、交集、空授权、损坏与切号
@@ -22,6 +23,25 @@ beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-remote-mo
 afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('remote model permissions', () => {
+  // PR #11312 review (Greptile P1): an old connection merged into an account pool is hidden with its own
+  // remote model range. A remote task still on the old id must use the pool's range, including share
+  // members' limits, neither blocked nor widened by the hidden one. Minimal input: pool allows A, old allows B.
+  it('reads a merged connection through its pool, including member limits', async () => {
+    const store = make();
+    const ok = () => {};
+    await store.set('openai', ['model-a'], undefined, ok);
+    await store.set('openai', ['model-a'], 'guest', ok);
+    await store.set('old-openai', ['model-b'], undefined, ok);
+    setMergedProviderPoolResolver((id) => (id === 'old-openai' ? 'openai' : undefined));
+    try {
+      expect(store.allows('old-openai', 'model-a')).toBe(true);
+      expect(store.allows('old-openai', 'model-b')).toBe(false);
+      expect(store.allows('old-openai', 'model-a', 'guest')).toBe(true);
+      expect(store.read('old-openai').models).toEqual(['model-a']);
+    } finally { setMergedProviderPoolResolver(null); }
+    // Split back into its own provider, its own range applies again.
+    expect(store.allows('old-openai', 'model-b')).toBe(true);
+  });
   // Unit regression: a persisted local disable must veto remote grants without rewriting
   // either choice. Existing tests covered remote model subsets, not provider suspension.
   it('preserves an existing disable across reload, denies owner/guest/delegated calls, and recovers on enable', () => {

@@ -14,6 +14,7 @@ import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvai
 import { ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { remoteAccessProviderId } from './mergedProviderPool.js';
 
 interface RemoteProviderAccessPrefs {
   allowedProviders: Record<string, true>;
@@ -81,24 +82,6 @@ const store = createOverrideSettingsFile<RemoteProviderAccessPrefs>({
   label: 'remote-provider-access',
   maxBytes: 256 * 1024,
 });
-
-/**
- * The provider whose switch decides remote use: a connection merged into an account pool is hidden
- * behind that pool (no switch of its own is shown), so it follows the pool's switch.
- */
-export function remoteAccessProviderId(providerId: string): string {
-  try {
-    return mergedProviderPool?.(providerId) ?? providerId;
-  } catch {
-    return providerId;
-  }
-}
-
-/** Wired at startup by the provider service, which owns account placement (keeps this store dependency-free). */
-let mergedProviderPool: ((providerId: string) => string | undefined) | null = null;
-export function setMergedProviderPoolResolver(resolver: ((providerId: string) => string | undefined) | null): void {
-  mergedProviderPool = resolver;
-}
 
 /** 「允许被远程调用」：自己的其他电脑、分享出去的人与供应商组共用这一个开关。 */
 export function isRemoteProviderInvocationAllowed(providerId: string): boolean {

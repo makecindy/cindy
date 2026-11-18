@@ -103,7 +103,6 @@ vi.mock('../../maker-host/model-disable-store.js', () => ({
 }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: (id: string) => h.remoteAllowed.has(id),
-  remoteAccessProviderId: (id: string) => id,
 }));
 vi.mock('../../device-link/remoteModelAccess.js', () => ({
   remoteModelAccess: { allows: (_id: string, model: string) => !!model && (h.remoteModels === null || h.remoteModels.includes(model)) },

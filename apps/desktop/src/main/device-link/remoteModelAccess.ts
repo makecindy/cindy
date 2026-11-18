@@ -1,6 +1,7 @@
 import { withAvailabilityPolicyMutation } from './providerShareAvailabilityPolicy.js';
 import fs from 'node:fs';
 import { isProviderRouteSuspended } from '../maker-host/model-route-availability.js';
+import { remoteAccessProviderId } from '../maker-host/mergedProviderPool.js';
 import { isProviderShareMemberBudget, type ProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
@@ -47,7 +48,9 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
     store.invalidateIfChanged();
     const providers = store.read().providers;
     if (providers === null) throwIpcError('PRECONDITION_FAILED', 'Remote model permissions could not be read');
-    const rule = Object.hasOwn(providers, providerId) ? providers[providerId] : undefined;
+    // A connection merged into an account pool uses the pool's range, including share members' limits.
+    const ruleId = remoteAccessProviderId(providerId);
+    const rule = Object.hasOwn(providers, ruleId) ? providers[ruleId] : undefined;
     const providerModels = rule?.models ?? null;
     const models = memberId ? (rule && Object.hasOwn(rule.members, memberId) ? rule.members[memberId] : null) : providerModels;
     if (memberId && rule?.budgets === null) throwIpcError('PRECONDITION_FAILED', 'Member budget settings could not be read');

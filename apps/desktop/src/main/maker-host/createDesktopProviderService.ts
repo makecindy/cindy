@@ -43,7 +43,7 @@ import {
   restoreAutoMergedLegacyCodexAccounts,
   resolveSubscriptionPoolProvider,
 } from '../subscription-accounts/placement.js';
-import { setMergedProviderPoolResolver } from './remote-provider-access-store.js';
+import { setMergedProviderPoolResolver } from './mergedProviderPool.js';
 import {
   BUNDLED_CATALOG,
   compareModelRegistryRevisions,
