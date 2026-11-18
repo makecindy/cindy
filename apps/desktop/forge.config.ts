@@ -2130,6 +2130,12 @@ const config: ForgeConfig = {
         );
         if (desktopBlurBuild.error || desktopBlurBuild.status !== 0)
           throw new Error('Native desktop blur build failed');
+        const loginItemBuild = spawnSync(process.execPath, [
+          path.join(__dirname, 'native/login-item/build.mjs'),
+          path.join(__dirname, 'resources/tools/login-item/cindy-login-item.node'), arch,
+        ], { stdio: 'inherit' });
+        if (loginItemBuild.error || loginItemBuild.status !== 0)
+          throw new Error('Native login item build failed');
         const trackpadBuild = spawnSync(
           process.execPath,
           [
@@ -2365,6 +2371,11 @@ const config: ForgeConfig = {
         {
           // 资源用量独立窗不加载主应用的通用 bridge 与模块级同步初始化。
           entry: 'src/preload/resourceUsagePreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload/quotaTrayPreload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
         },

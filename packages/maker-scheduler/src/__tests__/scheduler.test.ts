@@ -20,6 +20,7 @@ class InMemoryStorage implements ScheduleStorage {
   schedules = new Map<string, Schedule>();
   runs = new Map<string, ScheduleRun>();
   claimInterruptedRun?: ScheduleStorage['claimInterruptedRun'];
+  latestClosureFailure?: ScheduleStorage['latestClosureFailure'];
 
   async list(filter?: ListFilter): Promise<Schedule[]> {
     const all = [...this.schedules.values()];
@@ -2798,6 +2799,7 @@ describe('Scheduler', () => {
     const local = makeHarness({
       runnerImpl: (_s, ctx) =>
         new Promise<{ sessionId: string }>((resolve) => {
+          ctx.onTurnActive?.('sess-caller');
           resolveRunner = resolve;
           ctx.signal.addEventListener('abort', () => signalAborted.push(true));
         }),
@@ -2810,7 +2812,10 @@ describe('Scheduler', () => {
     const callerRunId = local.fireCalls[0].ctx.runId;
 
     // 豁免 caller run:delete 立即返回(不 abort 它、不等它 settle)
-    await local.scheduler.delete(sch.id, { exemptRunId: callerRunId });
+    const receipt = { errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED' as const, firedAt: 1, laterRunSucceeded: false };
+    local.storage.latestClosureFailure = async (scheduleId, sessionId) =>
+      scheduleId === sch.id && sessionId === 'sess-caller' ? receipt : undefined;
+    expect(await local.scheduler.delete(sch.id, { exemptRunId: callerRunId })).toEqual(receipt);
     expect(signalAborted).toHaveLength(0);
     expect(await local.storage.get(sch.id)).toBeNull();
     // caller run 仍在 in-flight(fireOne 还没走完 finally)

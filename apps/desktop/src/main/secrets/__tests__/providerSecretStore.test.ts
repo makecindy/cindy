@@ -53,6 +53,7 @@ import {
   readCustomProviderHeadersForMutation,
   readCustomProviderKeyForMutation,
   readGhostSecretStrict,
+  readGhostOauthManifestForUninstall,
   readGhostSecretTailFromIo,
   migrateGhostSecrets,
   listGhostAccountReferenceKeys,
@@ -122,6 +123,43 @@ it('enumerates only current-owner account reference names without opening record
     expect(listGhostAccountReferenceKeys([])).toEqual([]); expect(list).toHaveBeenCalledOnce();
   } finally {
     restoreList?.(); read.mockRestore(); decrypt.mockRestore();
+    Object.assign(sessionState, previousSession); Object.assign(electronState, previousElectron);
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+// Unit coverage for uninstall recovery: an unreadable OAuth manifest must
+// stay unreachable even if decryption later works, while temporary failure
+// and unrelated credentials must leave their original active files intact.
+it('quarantines only the unreadable OAuth manifest during uninstall', () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-unreadable-oauth-'));
+  const previousSession = { ...sessionState }, previousElectron = { ...electronState };
+  const key = 'oauth-accounts';
+  const ownerPrefix = 'owner_uninstall-owner_';
+  const encrypted = Buffer.from('fake-encrypted-manifest').toString('base64');
+  try {
+    Object.assign(sessionState, { mode: 'cloud', dataOwnerId: 'uninstall-owner' });
+    Object.assign(electronState, { userData, encryptionAvailable: false });
+    const dir = path.join(userData, 'safe-storage');
+    fs.mkdirSync(dir);
+    const active = `${ownerPrefix}${ghostSecretStorageKey('consumer', key)}.enc`;
+    const other = `${ownerPrefix}${ghostSecretStorageKey('other', key)}.enc`;
+    for (const file of [active, other]) fs.writeFileSync(path.join(dir, file), encrypted);
+    expect(() => readGhostOauthManifestForUninstall('consumer', key)).toThrow('safeStorage is unavailable');
+    expect(fs.readdirSync(dir).sort()).toEqual([active, other].sort());
+    electronState.encryptionAvailable = true;
+    electronState.decryptString = () => { throw new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString.'); };
+    expect(() => readGhostSecretStrict('consumer', key)).toThrow();
+    expect(readGhostOauthManifestForUninstall('consumer', key)).toBeNull();
+    const quarantined = fs.readdirSync(dir).find(file => file !== other);
+    expect(quarantined).toMatch(/^owner_uninstall-owner_ghost_quarantined_oauth_[a-f0-9]+\.enc$/);
+    expect(fs.readFileSync(path.join(dir, quarantined!), 'utf8')).toBe(encrypted);
+    expect(isRendererAccessibleSafeStorageKey(quarantined!.slice(ownerPrefix.length, -4))).toBe(false);
+    expect(listGhostAccountReferenceKeys(['consumer'])).toEqual([{ instanceKey: 'consumer', keys: [] }]);
+    electronState.decryptString = () => 'recovered';
+    expect(readGhostSecretStrict('consumer', key)).toBeNull();
+    expect(readGhostSecretStrict('other', key)).toBe('recovered');
+  } finally {
     Object.assign(sessionState, previousSession); Object.assign(electronState, previousElectron);
     fs.rmSync(userData, { recursive: true, force: true });
   }

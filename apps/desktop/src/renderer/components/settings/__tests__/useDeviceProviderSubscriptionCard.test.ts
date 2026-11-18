@@ -1425,7 +1425,9 @@ describe('useDeviceProviderSubscriptionCard', () => {
     await act(async () => {});
     expect(remaining(result.current.first)).toEqual([['secondary', 42]]);
     expect(remaining(result.current.other)).toEqual([['secondary', 61]]);
-    expect(result.current.named).toBeNull();
+    expect(result.current.named?.windows).toEqual([]);
+    expect(result.current.named?.updatedAt).toBeUndefined();
+    expect(result.current.named?.refreshFailure).toBeDefined();
     expect(invoke).toHaveBeenCalledWith('mini', 'maker:usage:codex-rate-limits', [named.id]);
     invoke.mockResolvedValue(liveQuota(18, named.id));
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });

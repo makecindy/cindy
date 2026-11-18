@@ -482,6 +482,34 @@ function loadReviewSearchHelpers(
   return context as ReviewSearchHelpers;
 }
 
+// #9705, unit: execute the generated settings snapshot and bash factory call.
+// Existing timeout/environment tests never supplied native shell settings.
+it.each([
+  [{ shellPath: '/fixture/custom shell', shellCommandPrefix: ' export PROBE=ok\n' }, '/fixture/custom shell', ' export PROBE=ok\n'],
+  [{ shellPath: '  ', shellCommandPrefix: 12 }, undefined, undefined],
+  [{}, undefined, undefined],
+  [null, undefined, undefined],
+])('passes native shell configuration to the replacement bash factory: %j', (settings, shellPath, commandPrefix) => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const snapshotStart = source.indexOf('const initialNativeSettings =');
+  const snapshotEnd = source.indexOf("pi.registerCommand('cindy-native-provider-refresh'", snapshotStart);
+  const bashStart = source.indexOf('const bashTool = createBashTool(process.cwd(), {');
+  const bashEnd = source.indexOf('var bashParameters = bashTool.parameters;', bashStart);
+  const factory = vi.fn(() => ({}));
+  const getSettings = vi.fn(() => { throw new Error('Action methods cannot be called during extension loading'); });
+  runInNewContext(source.slice(snapshotStart, snapshotEnd) + source.slice(bashStart, bashEnd), {
+    pi: { getSettings }, process: { env: { PI_CODING_AGENT_DIR: '/fixture' }, cwd: () => '/work' },
+    path: { join: () => '/fixture/settings.json' }, readFileSync: () => JSON.stringify(settings),
+    createBashTool: factory, bashPackageHome: '/isolated',
+    isolatedBashEnvironment: (env: unknown) => env,
+  });
+  expect(getSettings).not.toHaveBeenCalled();
+  expect(factory).toHaveBeenCalledWith('/work', expect.objectContaining({ exposeSessionEnvironment: false }));
+  const options = (factory.mock.calls as unknown as Array<[string, Record<string, unknown>]>)[0][1];
+  expect(options.shellPath).toBe(shellPath);
+  expect(options.commandPrefix).toBe(commandPrefix);
+});
+
 function loadBashTimeoutHelpers(): {
   resolveCindyBashTimeout: (params: unknown) => number;
   applyCindyBashTimeoutParams: (params: unknown) => Record<string, unknown>;
@@ -1576,78 +1604,6 @@ describe('cindy-bridge extension source', () => {
     },
   );
 
-  it('keeps Pi vision bridge tool security invariants (registration, size, magic-byte, redirect, redaction)', () => {
-    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-    // 工具只在已启用且可解析 primary 后端时注册（fallback-only 不注册）。
-    expect(source).toContain('piVisionCfg.enabled && piVisionCfg.primary');
-    // 图片大小上限（stat 前置 + read 后 TOCTOU 复查）与魔数校验，防止任意本地文件外传。
-    expect(source).toContain('MAX_IMAGE_BYTES');
-    expect(source).toContain('statSync(imagePath)');
-    expect(source).toContain('sniffImageMime');
-    // 请求禁止跟随重定向（凭证/图片不流向非预期端点）。
-    expect(source).toContain("redirect: 'error'");
-    // 路由指定额外头必须合并进请求（anthropic-version / x-api-key / 自定义 provider 头），
-    // 缺失会被后端拒（对齐 host 侧 vision-channel 的 headers 合并）。
-    expect(source).toContain('...spec.headers');
-    // anthropic-messages 视觉请求必须带有界 max_tokens（/v1/messages 缺省会 400）。
-    // #4580：1024 会被 thinking 块吃光。预算对齐 host 侧 VISION_ANTHROPIC_MAX_TOKENS=4096。
-    expect(source).toContain('const VISION_ANTHROPIC_MAX_TOKENS = 4096');
-    expect(source).toContain('max_tokens: VISION_ANTHROPIC_MAX_TOKENS');
-    // fallback 去重必须比较 headers——同 (url/model/auth) 但路由头不同（如不同
-    // anthropic-beta）的 fallback 是独立后端，不得误判为重复跳过（P2）。
-    expect(source).toContain('JSON.stringify(cfg.fallback.headers');
-    // 本地图片转 data URL 进请求体，路径字符串不外发。
-    expect(source).toContain('image_url:');
-    expect(source).toContain("'data:'");
-    // 错误脱敏：模型侧只看到泛化文案，不含本地路径 / key / URL。
-    expect(source).toContain("'vision: vision backend request failed'");
-    expect(source).toContain("'vision: wire protocol is not configured'");
-    expect(source).toContain("'vision HTTP '");
-    expect(source).toContain("'vision: unable to read the image file'");
-    // host 可关联日志：fallback 行为有结构化 stderr 输出（脱敏，仅 backendRole/model）。
-    expect(source).toContain('vision bridge pi primary backend failed');
-    expect(source).toContain('vision bridge pi used fallback backend');
-    expect(source).toContain('vision bridge pi fallback backend failed');
-  });
-
-  // 测试价值
-  // - 生产入口与可观察结果：桥源码里的 anthropicVisionText。Pi 视觉桥只采用 text 块。
-  // - Bug／规则依据：#4580。思考块被拼进描述，或只有思考时被当成转图成功。
-  // - 现有覆盖缺口：原断言只锁了 max_tokens: 1024，没有跑过响应解析。
-  // - 最小失败输入：thinking 块带 text 字段排在 text 块前；或 content 里只有 thinking。
-  // - tier：unit。截取桥里的真实函数执行，不发网络请求。
-  it('skips Anthropic thinking blocks and leaves a thinking-only vision reply empty (#4580)', () => {
-    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-    const start = source.indexOf('function anthropicVisionText');
-    const end = source.indexOf('async function callPiVision', start);
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    const extract = runInNewContext(
-      ts.transpile(source.slice(start, end) + '\nanthropicVisionText;', {
-        target: ts.ScriptTarget.ES2022,
-      }),
-    ) as (blocks: unknown) => string;
-    expect(
-      extract([
-        { type: 'thinking', thinking: 'hidden', text: 'should not leak' },
-        { type: 'redacted_thinking', data: 'opaque', text: 'also hidden' },
-        { type: 'text', text: 'a red button' },
-      ]),
-    ).toBe('a red button');
-    expect(extract([{ type: 'text', text: 'a blue ' }, { type: 'text', text: 'sky' }])).toBe(
-      'a blue sky',
-    );
-    expect(extract([{ type: 'thinking', thinking: 'only thoughts', text: 'not a description' }]).trim()).toBe(
-      '',
-    );
-    // 空串不是成功：callPiVision 仍在 trim 后抛 vision empty description。
-    const callSite = source.slice(source.indexOf("wire === 'anthropic-messages'", end));
-    expect(callSite).toContain('content = anthropicVisionText(blocks)');
-    expect(callSite.indexOf('content = anthropicVisionText(blocks)')).toBeLessThan(
-      callSite.indexOf("throw new Error('vision empty description')"),
-    );
-  });
-
   it('captures known writes before execution and marks opaque tools only after a result', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("pi.on('tool_call'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('FILE_WRITE_BUILTINS.has(event.toolName)');
@@ -1660,7 +1616,7 @@ describe('cindy-bridge extension source', () => {
   it('routes PowerShell results through the same opaque turn-change capture as bash', () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
     const handlerStart = source.indexOf("pi.on('tool_result'");
-    const handlerEnd = source.indexOf('// ── 视觉桥工具', handlerStart);
+    const handlerEnd = source.indexOf('// ── MCP 桥', handlerStart);
     expect(handlerStart).toBeGreaterThanOrEqual(0);
     expect(handlerEnd).toBeGreaterThan(handlerStart);
     const handler = source.slice(handlerStart, handlerEnd);

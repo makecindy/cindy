@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { startHostProjectOrderLoad } from '@/session/remoteProjectOrder';
+import { fetchHostProjectOrder, resetRemoteProjectOrderPushFence, startHostProjectOrderLoad } from '@/session/remoteProjectOrder';
 import {
   mergeVisibleReorder,
   moveVisibleProjectOrder,
@@ -154,4 +154,23 @@ describe('host project order refresh completion', () => {
     expect(attempt).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
+});
+
+// Unit regression: Home and the drawer used to issue the same sidebar read while
+// reconnecting. An old completion must not release the new connection's read.
+it('joins pending order reads only until device or account evidence changes', async () => {
+  const replies: (() => void)[] = [];
+  const invoke = vi.fn(() => new Promise<unknown>(resolve => replies.push(() => resolve({}))));
+  const read = (owner: number) => fetchHostProjectOrder(invoke, 'pc', owner, 1);
+  const first = read(1);
+  expect(read(1)).toBe(first);
+  const nextOwner = read(2);
+  resetRemoteProjectOrderPushFence('pc');
+  const current = read(2);
+  expect(invoke).toHaveBeenCalledTimes(3);
+  replies[0]!(); replies[1]!();
+  await Promise.all([first, nextOwner]);
+  expect(read(2)).toBe(current);
+  replies[2]!();
+  await current;
 });
