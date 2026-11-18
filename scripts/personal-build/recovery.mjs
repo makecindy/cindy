@@ -48,7 +48,7 @@ export class RecoveryJournal {
       ? evidence?.manualRequested && evidence?.smokeVerified && evidence?.profileVerified
       : evidence?.compatible && evidence?.idle), 'Candidate must be prepared with verified shutdown and activation evidence');
     assert(candidate.directory !== s.good.directory, 'Candidate must use a separate directory');
-    const next = { ...s, phase: 'trial', rollbackPolicy: manual ? 'manual' : 'automatic', selected: candidate, generation: this.nonce(), startedAt: this.now(), readyAt: null };
+    const next = { ...s, databaseUpgrade: null, phase: 'trial', rollbackPolicy: manual ? 'manual' : 'automatic', selected: candidate, generation: this.nonce(), startedAt: this.now(), readyAt: null };
     // One durable pointer/journal commit: interruption selects recovery, never an unrecorded candidate.
     durableWrite(this.file, next); return next;
   }
@@ -59,6 +59,13 @@ export class RecoveryJournal {
     durableWrite(path.join(path.dirname(this.file), 'known-good.json'),
       { ...state.good, rollbackSafe: false, manualCandidate: candidate.id });
     return state;
+  }
+  markDatabaseUpgrade(backupDirectory) {
+    const s = this.read();
+    assert(s.phase === 'trial' && s.rollbackPolicy === 'manual', 'Database upgrades need a manual trial');
+    s.databaseUpgrade = { candidateId: s.selected.id, backupDirectory, at: this.now() };
+    durableWrite(this.file, s);
+    return s;
   }
   observe({ generation, id, healthy, processAlive }, probationMs) {
     const s = this.read();
@@ -86,6 +93,7 @@ export class RecoveryJournal {
     // Missing readiness/heartbeat (or an interrupted supervisor) is never this evidence.
     const s = this.read();
     assert(s.phase === 'trial' && s.readyAt === null, 'Candidate may already have run');
+    if (s.databaseUpgrade) return this.reject(`Database upgrade already attempted; ${reason}`);
     const next = { ...s, phase: 'recovering', failed: s.selected, selected: s.good,
       generation: this.nonce(), recoveryReason: 'candidate-not-launched',
       launchFailure: { id: s.selected.id, reason, at: this.now(), retryable: true } };
@@ -104,6 +112,25 @@ export class RecoveryJournal {
     s.phase = healthy ? 'stable' : 'blocked'; s.generation = null;
     if (!healthy) s.error = 'Recovery version could not start; automatic retries stopped';
     durableWrite(this.file, s); return s;
+  }
+  reconcileRunning(release, evidence) {
+    const s = this.read();
+    assert(s.phase === 'blocked' && s.failed?.directory === release.directory,
+      'Only the explicitly repaired failed checkout can be reconciled');
+    assert(evidence?.releaseId === release.id && evidence?.databaseCompatible === true &&
+      evidence?.sharedPreflight === true && evidence?.healthy === true &&
+      Number.isSafeInteger(evidence.pid) && evidence.pid > 0 &&
+      evidence.observedMs >= evidence.requiredMs && evidence.requiredMs >= 120000,
+      'Reconciliation requires current database, startup and continuous health evidence');
+    const good = {...release, verified:true};
+    const next = {...s, phase:'stable', selected:good, good, previous:s.good,
+      generation:null, recoveryCompletedAt:this.now(), recoveryEvidence:evidence};
+    delete next.error;
+    // Journal is authoritative. If interrupted before the rescue receipt, the old
+    // rollbackSafe:false receipt still prevents an unsafe old-code fallback.
+    durableWrite(this.file, next);
+    durableWrite(path.join(path.dirname(this.file), 'known-good.json'), good);
+    return next;
   }
 }
 

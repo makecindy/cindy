@@ -648,13 +648,15 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (this.closed || !deviceId) { channel.close(); return; }
     const previous = this.peers.get(deviceId);
     const preferredOutbound = this.deviceId < deviceId;
-    // A peer dials only while it holds no connection to us. Once ours has outlived the window in which two
-    // simultaneous dials can still be settling, its end is gone (restarted or rebuilt node): take the new
-    // connection now instead of refusing it until ours times out, which left both sides waiting ~30s.
-    const peerRedialed = !!previous && !outbound && performance.now() - previous.since >= REDIAL_TAKEOVER_MS;
-    // Concurrent dials must agree on the same physical connection, rather than each closing the other's winner.
-    if (previous && !peerRedialed && (previous.outbound === preferredOutbound || outbound !== preferredOutbound)) { channel.close({ drain: false }); return; }
-    const peer: Peer = { deviceId, key: channel.remoteId, channel, outbound, since: performance.now() };
+    // While opposite-direction dials are settling, both peers must choose the same channel.
+    // A later inbound redial indicates the remote no longer holds its end of the previous channel.
+    const now = performance.now();
+    const peerRedialed = previous && !outbound && now - previous.since >= REDIAL_TAKEOVER_MS;
+    if (previous && previous.outbound !== outbound && outbound !== preferredOutbound && !peerRedialed) {
+      channel.close({ drain: false });
+      return;
+    }
+    const peer: Peer = { deviceId, key: channel.remoteId, channel, outbound, since: now };
     this.peers.set(deviceId, peer); previous?.channel.close();
     const frames = new Frames();
     channel.onData((bytes) => {

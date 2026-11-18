@@ -95,8 +95,10 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
   本人分享出去的供应商在设置页另列于「我分享的供应商」，那是管理分享的入口、不计入普通列表；选择器里它仍按同一
   来源只列一项，不因分享而多出一个入口。选择器按「运行于」决定代表项（用户明确改选的优先，其次是当前任务正在用的那一项），设置页始终
   显示本机那一行；当前任务正在用的那一项始终保留——只有任务正停在非「运行于」那台时会暂时与代表项同时出现。
-  本机新任务草稿选着的供应商「运行于」另一台时，草稿直接落到那台（与在面板里点那台的同一行相同，
-  `NewMakerDraftRoute.tsx`），输入框下方写明 Agent 在哪台运行。分享来的供应商按各自规则，不参与收起。
+  本机新任务草稿选着的供应商被用户改成「运行于」另一台时，草稿直接落到那台（与在面板里点那台的同一行相同，
+  `NewMakerDraftRoute.tsx`），输入框下方写明 Agent 在哪台运行。本机这一份暂时用不了时不代用别的电脑
+  （2026-11-18）：本机那一项照旧是代表项，另一台电脑上的同一供应商另列一项，选它先确认，取消什么都不改，
+  详见 [provider-sharing.md](provider-sharing.md) 的「同账号借用与「运行于」」。分享来的供应商按各自规则，不参与收起。
   设置页已连接但暂无可选模型的来源，选择器本来就列不出，这一差异保留。实现见 `subscriptionIdentity.ts` 的
   `listedSourceFolds`、`ModelSelector.tsx` 的 `runLocationFold`、`ProvidersSection.tsx` 与
   `UnifiedModelPickerSheet.tsx`；同一份数据下设置页与选择器列出相同来源由 ui:check 页面

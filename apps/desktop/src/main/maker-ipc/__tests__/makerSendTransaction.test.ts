@@ -2,6 +2,7 @@ import { withSharedSessionResumeRecovery, type SharedSessionResumeRecoveryDeps }
 import { createAgentHandoffPendingRegistry } from '../agentHandoff.js';
 import { ROUTINE_TRIGGER_DATA_LEAD } from '../../../shared/botAutonomy.js';
 import {
+  AgentStartupStoppedError,
   CodexResumePreparationBlockedError,
   PI_CACHE_RECOVERY_EXPECTATION,
   MODEL_REQUEST_CONTROL,
@@ -601,6 +602,31 @@ describe('MCP App message authorization', () => {
 });
 
 describe('maker SEND transaction', () => {
+  // #10559: a quota-looking message alone cannot authorize transparent replay.
+  // Unit: the real bootstrap boundary must retain proof that startup stopped.
+  it.each(['stopped-quota', 'opaque-quota', 'stopped-other'] as const)(
+    'preserves the startup admission proof for %s', async mode => {
+      const quota = new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset\nresetAtMs=9000000');
+      const cause = mode === 'stopped-other' ? new Error('permission denied') : quota;
+      const error = mode === 'opaque-quota' ? cause : new AgentStartupStoppedError(cause);
+      const { deps, session } = createDeps({ getSession: () => undefined,
+        bootstrapSession: vi.fn(async opts => {
+          expect(opts.preserveStartupStoppedError).toBe(true);
+          throw error;
+        }),
+      });
+      const result = await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'original', {
+        id: 'session-1', agentKind: 'claude-code', workingDir: 'C:\\repo', model: 'claude-opus-5-5',
+      });
+      expect(result).toMatchObject({ accepted: false, outcome: {
+        kind: 'host-send', code: 'LAZY_CREATE_FAILED', message: cause.message,
+      } });
+      if (mode === 'stopped-quota') expect(result.outcome).toHaveProperty('startupAdmission', 'subscription-account-limited');
+      else expect(result.outcome).not.toHaveProperty('startupAdmission');
+      expect(session.send).not.toHaveBeenCalled();
+      expect(deps.createDbMessage).not.toHaveBeenCalled();
+    },
+  );
   it.each([false, true])('records the actual model only at dispatch (scheduled=%s)', async (scheduled) => {
     const applyPendingAgentSwitch = vi.fn(async () => {});
     const onModelDispatched = vi.fn();
@@ -2523,7 +2549,7 @@ describe('maker SEND transaction', () => {
     });
 
     expect(failedSession.send).not.toHaveBeenCalled();
-    expect(deps.bootstrapSession).toHaveBeenCalledWith(createOpts);
+    expect(deps.bootstrapSession).toHaveBeenCalledWith({ ...createOpts, preserveStartupStoppedError: true });
     expect(recoveredSession.send).toHaveBeenCalled();
   });
 
@@ -2733,8 +2759,10 @@ describe('maker SEND transaction', () => {
     });
 
     expect(deps.checkWorkDirExists).toHaveBeenCalledWith('lazy-session', 'D:\\lazy', 'claude-code', undefined);
-    expect(deps.synthesizeOrcaVendorOptionsFromDb).toHaveBeenCalledWith('lazy-session', createOpts);
-    expect(deps.bootstrapSession).toHaveBeenCalledWith(createOpts);
+    expect(deps.synthesizeOrcaVendorOptionsFromDb).toHaveBeenCalledWith('lazy-session', { ...createOpts, preserveStartupStoppedError: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith({ ...createOpts, preserveStartupStoppedError: true });
+    expect(vi.mocked(deps.bootstrapSession).mock.calls[0]![0])
+      .toBe(vi.mocked(deps.synthesizeOrcaVendorOptionsFromDb).mock.calls[0]![1]);
     expect(deps.markOrcaRoleIfNeeded).toHaveBeenCalledWith('lazy-session', undefined);
     expect(deps.broadcastSessionCreated).toHaveBeenCalledWith('lazy-session');
     expect(lazySession.send).toHaveBeenCalled();

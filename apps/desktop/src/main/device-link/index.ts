@@ -1498,6 +1498,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   startBusyReporting();
 
   client.onPeerStreamAccepted((peer, streamId) => {
+    // Shared routes can reconnect independently of the primary relay. Notify
+    // views before replay can deliver a tokenless legacy completion snapshot.
+    if (parseSharedTaskPeer(peer)?.role === 'host') {
+      broadcast(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
+    }
     // 本端主动建链后，出站 accept 在已验证握手完成、恢复业务帧投递之前通知。
     // 对端 relay 闪断重连会清掉它那边本机的活跃订阅注册(deactivateAllControllers),
     // 而本机 relay/presence/熔断可能全程无感知(传输层 link 经 replay 透明恢复),

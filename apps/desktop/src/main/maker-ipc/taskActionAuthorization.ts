@@ -56,6 +56,7 @@ export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'idle_worker',
   'end_team',
   'archive_worker',
+  'set_worker_runtime',
 ]);
 
 export interface TaskActionScope {

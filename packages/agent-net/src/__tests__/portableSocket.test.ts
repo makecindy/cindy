@@ -18,9 +18,10 @@ import type { PeerChannel, RosterEntry, TransportOptions } from '../types.js';
 // A simultaneous dial can replace an admitted channel while its first link-open
 // is still in flight. Exercise real frame admission, routing and reply handling;
 // an already-established-channel test cannot expose this controlled ordering.
-it.each(['before', 'in-flight', 'revoked', 'rotated', 'stale-presence', 'replacement-closed'] as const)(
+it.each(['before', 'in-flight', 'revoked', 'rotated', 'stale-presence', 'replacement-closed', 'guest-restart', 'preferred-inbound-restart'] as const)(
   'handles %s frames during simultaneous-dial channel replacement', async mode => {
-    const local = generateIdentity('a-host'), remote = generateIdentity('b-controller');
+    const sameDirection = mode === 'guest-restart' || mode === 'preferred-inbound-restart';
+    const local = generateIdentity(mode === 'preferred-inbound-restart' ? 'z-host' : 'a-host'), remote = generateIdentity('b-controller');
     const { root, bootstrap } = createPrivateNetwork('Channel handover', local);
     const member = (identity: typeof remote): DeviceView => ({
       certificate: issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity, role: 'member' }),
@@ -69,9 +70,10 @@ it.each(['before', 'in-flight', 'revoked', 'rotated', 'stale-presence', 'replace
       } }));
       // The preferred outgoing handshake is already in progress when the
       // incoming nonpreferred connection is admitted first.
-      const preferredDial = socket.dial(remote.deviceId);
+      const preferredDial = sameDirection ? undefined : socket.dial(remote.deviceId);
       transport.onIncoming(old.channel);
       if (mode === 'before') old.deliver(request);
+      if (sameDirection) transport.onIncoming(preferred.channel);
       await preferredDial;
       received.length = 0;
       if (mode === 'revoked') { uplink.devices = []; uplink.emit('directory'); }
@@ -79,7 +81,15 @@ it.each(['before', 'in-flight', 'revoked', 'rotated', 'stale-presence', 'replace
       if (mode === 'replacement-closed') preferred.finish();
       if (mode === 'stale-presence') old.deliver({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { online: true } });
       else if (mode !== 'before') old.deliver(request);
-      if (mode === 'before') expect(old.sent).toContainEqual(expect.objectContaining({ kind: 'link-accept', id: request.id }));
+      if (sameDirection) {
+        // A late old close cannot delete the replacement; new RPCs and the
+        // already-written old request both get replies on the selected channel.
+        old.finish();
+        preferred.deliver({ ...request, id: 'restarted-open' });
+        expect(preferred.sent).toContainEqual(expect.objectContaining({ kind: 'link-accept', id: 'restarted-open' }));
+        expect(preferred.sent).toContainEqual(expect.objectContaining({ kind: 'link-accept', id: request.id }));
+      }
+      else if (mode === 'before') expect(old.sent).toContainEqual(expect.objectContaining({ kind: 'link-accept', id: request.id }));
       else if (mode === 'in-flight') expect(preferred.sent).toContainEqual(expect.objectContaining({ kind: 'link-accept', id: request.id }));
       else {
         expect(received).not.toContain(mode === 'stale-presence' ? 'presence-changed' : 'link-open');

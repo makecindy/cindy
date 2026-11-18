@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Enregistrer",
     "promptUnsupported": "Cet emplacement d’exécution de Pi ne prend pas en charge les fragments d’instructions système.",
+    "nativeHooksUnsupported": "Les hooks d’outils prennent uniquement en charge Claude Code et Pi en local.",
     "title": "Plugins de la tâche",
     "description": "Choisissez les plugins de cette tâche. Les changements prennent effet au prochain message.",
     "unsupported": "Le traitement de chaque requête est disponible uniquement avec Pi en local. Le moteur de cette tâche ne le prend pas en charge.",
@@ -1396,7 +1397,7 @@
     "REMOTE_PROVIDER_UPDATING": "Les identifiants du fournisseur sont en cours de mise à jour. Réessayez dans un instant",
     "REMOTE_PROVIDER_UNSUPPORTED": "Ce fournisseur n'est pas pris en charge dans les sessions SSH distantes. Choisissez une autre source",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Les tâches distantes ne peuvent pas utiliser un abonnement Claude. Choisissez un modèle via passerelle ou clé API",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "L'appareil cible ne répond pas. Vérifiez l'appareil distant et réessayez.",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "L'appareil cible ne répond pas pour le moment. Le réseau est peut-être lent ou l'appareil occupé. Cindy vérifie la connexion automatiquement ; réessayez une fois qu'elle est rétablie.",
     "INTERNAL": "Échec de l'opération. Réessayez plus tard.",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "La configuration SSH a été modifiée sur le disque. Rechargez-la et réessayez.",
     "SSH_CONFIG_RELOAD_REQUIRED": "La configuration SSH a été enregistrée, mais Cindy n'a pas pu l'actualiser. Rechargez la configuration SSH.",
@@ -4401,7 +4402,6 @@
           "label": "Exécuter sur",
           "optionLocal": "Cet ordinateur",
           "notSignedIn": "Non connecté",
-          "autoBorrowing": "Cet ordinateur n’est pas connecté : les nouvelles tâches s’exécutent sur {{device}}. Aucune connexion nécessaire.",
           "local": "Les nouvelles tâches s’exécutent sur cet ordinateur. Vous pouvez choisir un autre de vos ordinateurs connectés.",
           "pinned": "Les nouvelles tâches s’exécutent sur {{device}} avec sa connexion. Les tâches en cours restent où elles sont.",
           "inline": "S’exécute sur",
@@ -8359,6 +8359,8 @@
         "subscribeTopics": "Observe l'activité de vos sessions (événements de tour et de session, sans le contenu des messages)",
         "subscribeMessage": "Événements de contenu des messages",
         "subscribeMessageDetail": "Reçoit les messages enregistrés et les réponses de l’IA. Les pièces jointes passent par une lecture et un transfert distincts.",
+        "subscribeToolExecution": "Événements d’exécution des outils",
+        "subscribeToolExecutionDetail": "Reçoit les noms, entrées, résultats et erreurs des outils. Observe sans modifier l’exécution.",
         "subscribeTaskState": "Événements d’état des tâches",
         "subscribeTaskStateDetail": "Reçoit les changements d’exécution, d’attente, de fin, d’archivage et de masquage des tâches.",
         "subscribeActivity": "Observe quand l'IA réfléchit et quand elle attend votre intervention",
@@ -8381,6 +8383,10 @@
         "subscribeStartTurnDetail": "Seules les tâches où vous sélectionnez ce plugin lui transmettent le message actuel. Il peut choisir un modèle connecté, l’effort de raisonnement et Fast. Les erreurs suivent le réglage de la tâche ; il ne peut pas approuver d’actions à votre place.",
         "subscribeModelRequest": "Peut traiter chaque requête au modèle dans les tâches sélectionnées",
         "subscribeModelRequestDetail": "Seules les tâches où vous sélectionnez ce plugin lui transmettent leurs requêtes au modèle. Il peut ajuster les modèles, les paramètres et le contenu des requêtes. Seul Pi local est actuellement pris en charge ; les erreurs suivent le réglage de la tâche. Les identifiants de connexion sont exclus.",
+        "subscribeToolCall": "Peut traiter les appels d’outils des tâches sélectionnées",
+        "subscribeToolCallDetail": "Peut lire, modifier ou refuser les paramètres selon les capacités du moteur. Ne peut pas approuver des opérations à votre place.",
+        "subscribeToolResult": "Peut traiter les résultats d’outils des tâches sélectionnées",
+        "subscribeToolResultDetail": "Peut lire les résultats et ajouter du contexte ou les remplacer si le moteur le permet. N’annule pas les opérations déjà effectuées.",
         "subscribeStartTask": "Peut choisir le modèle des nouvelles tâches",
         "subscribeStartTaskDetail": "Lorsqu’une nouvelle tâche utilise un modèle qu’il propose, il lit le premier message et choisit l’un de vos modèles connectés. Ce point intervient uniquement avant le premier message.",
         "card": "Affiche des cartes de message",
@@ -12689,6 +12695,7 @@
       "createOwnApp": "Créer mon application ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Envoi des pièces jointes incomplet : {{count}} non envoyée(s) ({{names}}).",
+    "outboundAttachmentOverLimit": "{{name}} (dépasse la limite de {{limit}} Mo)",
     "unnamedAttachment": "Pièce jointe sans titre",
     "text": {
       "discord": {
@@ -13650,9 +13657,17 @@
         "submitLabel": "Envoyer les réponses",
         "multiSelectHint": " (plusieurs choix possibles)",
         "resolved": "✅ Choix : {{option}}",
+        "resolvedLabeled": "✅ {{label}} : {{option}}",
         "expired": "Cette carte a expiré",
         "textHint": "Seule la personne ayant posé la question peut répondre. Écrivez {{code}} puis votre réponse. Pour plusieurs questions : {{code}} 2: réponse, puis {{code}} OK pour envoyer.",
-        "replyHint": "Seule la personne à l’origine de la demande peut répondre. Touchez une option ; pour plusieurs questions ou choix, envoyez après sélection.\nÉcrivez {{code}} puis votre réponse. Pour plusieurs questions : {{code}} 2: réponse, puis {{code}} OK pour envoyer."
+        "replyHint": "Seule la personne à l’origine de la demande peut répondre. Touchez une option ; pour plusieurs questions ou choix, envoyez après sélection.\nÉcrivez {{code}} puis votre réponse. Pour plusieurs questions : {{code}} 2: réponse, puis {{code}} OK pour envoyer.",
+        "nextLabel": "Question suivante",
+        "stepHint": "Seule la personne à l’origine de la demande peut répondre. Touchez une option ou écrivez {{code}} puis votre réponse.",
+        "stepSubmitHint": "Seule la personne à l’origine de la demande peut répondre. Choisissez puis touchez « {{action}} » ; ou écrivez {{code}} puis votre réponse, puis {{code}} OK.",
+        "stepTextHint": "Seule la personne à l’origine de la demande peut répondre. Écrivez {{code}} puis votre réponse.",
+        "unanswered": "⚠️ Pas encore de réponse : question {{numbers}}. Répondez à toutes les questions, puis envoyez.",
+        "unansweredSingle": "⚠️ Pas encore de réponse. Choisissez d’abord une option ou saisissez une réponse.",
+        "numberSeparator": ", "
       }
     }
   },
@@ -14144,6 +14159,14 @@
         "standard": "Standard",
         "fast": "Rapide",
         "ultrafast": "Ultra-rapide"
+      },
+      "discoveredCopy": {
+        "title": "Utiliser {{provider}} sur « {{device}} » ?",
+        "description": "{{unavailable}} Si vous continuez, il s’exécute sur « {{device}} ». Vous pouvez revenir ici à tout moment.",
+        "unavailableHere": "{{provider}} sur cet ordinateur est indisponible pour le moment.",
+        "unavailableOn": "{{provider}} sur « {{device}} » est indisponible pour le moment.",
+        "confirm": "Utiliser",
+        "cancel": "Ne rien changer"
       }
     },
     "permissionSelector": {
@@ -14435,7 +14458,8 @@
         "description": "L'historique de la conversation sur l'autre ordinateur ne peut pas être transféré : elle reprend donc à partir d'un résumé de transfert. La réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
         "descriptionNativeHistory": "L'historique complet de la conversation est copié et elle reprend là où elle en était. S'il ne peut pas être restauré, elle reprend à partir d'un résumé de transfert, et la réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
         "confirm": "Changer d'ordinateur",
-        "cancel": "Ne rien changer"
+        "cancel": "Ne rien changer",
+        "discoveredDescription": "{{reason}} {{description}}"
       }
     },
     "agentSelect": {
@@ -15012,6 +15036,8 @@
       "subtitle_many": "{{count}} messages sélectionnés"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "cindy_helper est activé, mais indisponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis.",
+      "codexHelperUnverified": "Impossible de vérifier si cindy_helper est disponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis.",
       "requestFormatError": "L'application a envoyé une requête non valide : cette réponse n'a donc pas pu aboutir.",
       "replyFailed": "Impossible de terminer la réponse",
       "retryTitle": "Renvoyer le dernier message",
@@ -16151,6 +16177,7 @@
       "saveFailed": "Échec de l'enregistrement du palier de fenêtre de contexte"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "En attente de la réponse distante…",
       "readingMemory": "Lecture de la mémoire…",
       "savingMemory": "Enregistrement de la mémoire…",
       "deletingMemory": "Suppression de la mémoire…",
@@ -16427,7 +16454,8 @@
         "project": "Projet",
         "flat": "Liste simple",
         "device": "Appareil",
-        "dialogue": "Conversation"
+        "dialogue": "Conversation",
+        "automation": "Automatisation"
       },
       "filterGroupByDeviceManualTip": "Le regroupement par appareil n'est pas disponible en tri manuel",
       "deviceGroup": {
@@ -16781,6 +16809,7 @@
       "groupSummary": {
         "project": "Projet",
         "dialogue": "Conversation",
+        "automation": "Automatisation",
         "device": "Appareil"
       },
       "taskStatusHeading": "Statut des sessions",

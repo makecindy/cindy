@@ -1303,6 +1303,12 @@ export class DeviceLinkClient {
    * Repeated hints coalesce without postponing detection indefinitely. Foreground
    * and explicit network transitions bypass the successful-probe cooldown. */
   notifyNetworkChanged(options?: { urgent?: boolean }): void {
+    if (!this.stopped) this.directNegotiator?.networkChanged();
+    this.probeRelayAfterHint(options);
+  }
+
+  /** Relay reachability is independent of the source and urgency of a hint. */
+  private probeRelayAfterHint(options?: { urgent?: boolean }): void {
     if (this.stopped || this.networkProbeTimer) return;
     this.networkChangeHintedAt = this.monotonicNow();
     if (this.networkChangeTimer) {
@@ -1355,7 +1361,8 @@ export class DeviceLinkClient {
   confirmRelayForPeerTimeout(): boolean {
     if (this.status !== 'online') return false;
     if (this.monotonicNow() - this.lastInboundAt <= this.timing.pingIntervalMs) return true;
-    this.notifyNetworkChanged({ urgent: true });
+    // A single peer timeout is not evidence that local network paths changed.
+    this.probeRelayAfterHint({ urgent: true });
     return false;
   }
 

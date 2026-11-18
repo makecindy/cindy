@@ -460,6 +460,42 @@ function wrapInSession(handle: AgentSessionHandle): Session {
   });
 }
 
+// #11042, unit: feed real Claude adapter events through Session. Earlier tests
+// verified Stop/task snapshots, but never attempted automatic idle teardown.
+describe('background work survives automatic idle teardown', () => {
+  it.each(['local_bash', 'local_agent'] as const)('keeps %s alive until its result is delivered', async (taskType) => {
+    const { handle, stream, fakeQuery } = await startSessionWithStream(undefined, { autoCollect: false });
+    const session = wrapInSession(handle);
+    const controller = sdkMock.query.mock.calls.at(-1)?.[0].options.abortController as AbortController;
+    const seen: AgentEvent[] = [];
+    session.onEvent(event => seen.push(event));
+    try {
+      await session.send('run background work');
+      stream.emit(taskStarted('job', taskType));
+      stream.emit(turnResult('started'));
+      await waitFor(() => seen.some(event => event.type === 'done'), 'foreground result');
+      await expect(session.closeIfIdle()).resolves.toBe(false);
+      expect(fakeQuery.close).not.toHaveBeenCalled();
+      expect(controller.signal.aborted).toBe(false);
+      stream.emit(taskNotification('job', 'completed'));
+      await waitFor(() => session.listBackgroundTasks().length === 0, 'background completion');
+      if (taskType === 'local_agent') {
+        await expect(session.closeIfIdle()).resolves.toBe(false);
+        expect(session.countPendingWakeContinuations()).toBeGreaterThan(0);
+      }
+      stream.emit(assistantText('background result delivered'));
+      stream.emit(turnResult('complete'));
+      await waitFor(() => seen.filter(event => event.type === 'done').length === 2, 'result delivered');
+      await expect(session.closeIfIdle()).resolves.toBe(true);
+      expect(controller.signal.aborted).toBe(true);
+      expect(session.getStatus()).toBe('closed');
+    } finally {
+      stream.end();
+      await session.close();
+    }
+  });
+});
+
 afterEach(async () => {
   asyncQueueMock.rejectNextDone = false;
   sdkMock.forkSession.mockReset();
