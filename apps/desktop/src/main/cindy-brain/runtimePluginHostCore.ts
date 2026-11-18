@@ -35,6 +35,7 @@ type DeliveryPorts = {
   sendToGhostLogic(id: string, event: Parameters<GhostSubscriptionGatewayDeps['sendToGhost']>[1]): boolean;
   broadcastGhostWindowPush(channel: string, payload: unknown, owner?: DataOwnerPushStamp): void;
   ghostOwnerScope?: GhostOwnerScope;
+  hookDeliveryPauseSignal?: GhostSubscriptionGatewayDeps['hookDeliveryPauseSignal'];
   log: Pick<Logger, 'warn' | 'info'>;
 };
 
@@ -75,6 +76,7 @@ export function createSubscriptionGatewayReader(ports: DeliveryPorts) {
           );
         },
         ownerScope: ghostOwnerScope,
+        hookDeliveryPauseSignal: ports.hookDeliveryPauseSignal,
         log,
       });
     }
