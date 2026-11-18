@@ -524,6 +524,7 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 
 | 提交 | 改了什么 | 影响谁 | 依据 |
 |---|---|---|---|
+| feat(desktop): accept a Host pause signal in the plugin gateway | 2026-11-19：共用网关在读取熔断位前检查可选的 Host 静默信号。仍在等待裁决的钩子按已有失败方向收口，旁听停投，静默不计入熔断 | 仅传信号的 Host。内嵌桌面沿用原投递、截止和熔断顺序 | 插件基座，走白名单确认。见下节及 `subscriptionGatewayPause.test.ts` |
 | feat(desktop): delegate runtime plugin settings and notifications in client mode | 在 `hostChannelContract.ts` 追加可信窗口的 `maker:runtime-plugins`，在 `bootstrap-electron.ts` 转发拦截、改写、熔断三条既有推送 | 只影响客户端模式；上下游沿用原 Renderer 校验，内嵌和网页入口照旧 | 新窗口连接就绪的旧 Host 时新路由返回 `404 not_found`，旧窗口访问新 Host 沿用原调用和事件处理。没有新 Device Link 或 relay 字段 |
 | fix(desktop): require caller admission for plugin settings | 设置共用工厂要求调用方传准入检查，并在读取任务和 owner 之前同步调用 | 桌面继续传原可信窗口检查，Host 使用当前请求的占用与 owner 复核 | 调用次数及位置保持原桌面处理方式 |
 | feat(desktop): allow rechecking a runtime plugin settings write under lock | 在设置文件锁内、计算补丁前可做一次同步复核；抛错沿用原有释锁和拒绝路径 | Host 可挡住等待锁期间失效的准入。桌面内嵌调用沿用原来的两个参数和写入顺序 | `runtimeControl.test.ts` 用真实锁核对两种调用、原文件字节和随后的一次正常写入 |
@@ -571,6 +572,8 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 | `maker-ipc/register.ts` 的任务提示组装、回合准备、运行时插件设置、用户消息拦截和通知 | `maker-ipc/runtimePluginTaskBindings.ts` | 保留原写入主体、桌面窗口校验和 Agent Island 回滚。回合准备仍使用原拒发回执和 Promise 顺序 |
 
 ### 改到主干已有代码的地方（发准备 PR 时搬进正文）
+
+**插件网关的 Host 静默信号（2026-11-19）**：主干已有的 `subscriptionGateway.ts` 会把明确投递失败记入熔断。原生工具钩子熔断后后续调用会直接放行（主干的原生工具生命周期与失效处理 `7fd9033a4d`、`4cebb221ac`）。Host 因桌面占用有意关页时，仍按任务的失败策略处理控制节点，消息钩子沿用既有放行。静默不计失败，已有熔断保留。桌面装配不传信号，投递、超时、错误路径和等待顺序保持原样。这一提交属于插件基座，走白名单确认。
 
 **Host PR 正文（2026-11-19）**：主干 `c9e1fcd68e` 在 Host 上用固定 Claude 默认路线做记忆自审，未读用户的辅助模型设置和停用开关。Host 接桌面已有辅助模型链及两层停用判断；占用时不派发，已有请求的收据仍记到发起账号。桌面包装保留原默认端口和执行顺序。
 
