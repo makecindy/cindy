@@ -4,7 +4,7 @@ import { isDeliveryProseText } from '@cindy/maker-shared/message-render';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import {
   HISTORY_VIEW_PAGE_BYTES, HISTORY_VIEW_PAGE_ITEMS, HISTORY_DETAIL_PAGE_BYTES,
-  HISTORY_WORK_LINE_LIMIT, completesHistoryTurn, projectHistoryView, projectHistoryWorkLines, historySubagentScopes, mapHistoryViewMessages, historyViewLeaves, historyWorkSummaries,
+  HISTORY_WORK_LINE_LIMIT, completesHistoryTurn, projectHistoryView, projectHistoryWorkLines, historySubagentScopes, mapHistoryViewMessages, historyWorkSummaries,
   type HistoryMessageSource, type HistoryWorkLine, type HistoryViewItem, type HistoryViewPage, type HistoryDetailPage, type HistoryWorkReference,
 } from '@cindy/maker-shared/message-window';
 
@@ -48,6 +48,19 @@ function isRunningLeafWork<T extends HistoryMessageSource>(item: HistoryViewItem
 
 function fingerprint(value: unknown): string {
   return createHash('sha1').update(JSON.stringify(value)).digest('base64');
+}
+
+/** True when any row or folded live ID in the page tree is a volatile projection. */
+function hasVolatileItem<T extends HistoryMessageSource>(
+  items: readonly HistoryViewItem<T>[],
+  isVolatile: (id: string) => boolean,
+): boolean {
+  return items.some((item) => item.type === 'messages'
+    ? item.messages.some((message) => isVolatile(message.id))
+      || item.deferred?.liveMessageIds?.some((id) => isVolatile(id)) === true
+    : item.summary.liveMessageIds?.some((id) => isVolatile(id)) === true
+      || item.summary.preview?.liveMessageIds?.some((id) => isVolatile(id)) === true
+      || (item.children ? hasVolatileItem(item.children, isVolatile) : false));
 }
 export interface HistoryViewReaderDependencies<T extends HistoryMessageSource> {
   list(sessionId: string, opts: ReadOptions, skipImport: boolean): Promise<T[]>;
@@ -558,9 +571,11 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
           ...(options.onShape ? { onShape: (value: HistoryPageShape) => { shape = value; } } : {}),
         }, revision).then(async (page) => {
           const isVolatile = deps.isVolatileItemId;
-          const volatile = isVolatile != null
-            && historyViewLeaves(page.items).some((leaf) => leaf.type === 'messages'
-              && leaf.messages.some((message) => isVolatile?.(message.id) === true));
+          // A live-projected row is volatile wherever it hides: as an unfolded row
+          // in `messages`, or as a folded ID kept in a work summary (`liveMessageIds`).
+          // Nested work groups keep their own summary, so scan the tree instead of
+          // the leaf-only summaries (`historyWorkSummaries` drops those parents).
+          const volatile = isVolatile != null && hasVolatileItem(page.items, isVolatile);
           if (!volatile && await deps.revision!() === revision) {
             const bytes = Buffer.byteLength(JSON.stringify(page), 'utf8');
             if (bytes <= SETTLED_PAGE_MAX_BYTES) {

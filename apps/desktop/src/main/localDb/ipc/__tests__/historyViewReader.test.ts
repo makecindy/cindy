@@ -77,6 +77,26 @@ describe('host history view', () => {
     await Promise.all([local, api.page('s', undefined, true)]);
     expect(list).toHaveBeenCalledTimes(3);
   });
+  // A folded live row hides its id inside the work summary, not in `messages`.
+  // Such a page must not be cached either: the run can be cancelled and the
+  // projected row lost without any DB write to invalidate the key.
+  it('never caches a page whose work summary keeps a live row id', async () => {
+    const liveThinking = { ...row(1, 'thinking'), id: 'history-live:c1' };
+    const source: HistoryMessageSource[] = [
+      row(0, 'user'), liveThinking, { ...row(2, 'tool_result'), toolUseId: 't9', content: 'ok' },
+    ];
+    const base = reader(source);
+    const list = vi.fn(base.list);
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => 'owner-a:1', anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
+      isVolatileItemId: id => id.startsWith('history-live:') });
+    const page = await api.page('s', undefined, true);
+    const work = page.items.find((item) => item.type === 'work');
+    if (!work || work.type !== 'work') throw new Error('missing work');
+    expect(work.summary.liveMessageIds).toEqual(['history-live:c1']);
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2); // folded live row: never cached
+  });
   // Settling guards (review round 1): a page is only kept when it is still a
   // settled read — live-projected rows must not come back after their run was
   // cancelled, a mid-read DB write invalidates the key anyway, and a page older
