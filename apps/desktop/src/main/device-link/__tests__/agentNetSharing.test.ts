@@ -10,10 +10,11 @@ import { randomBytes } from 'node:crypto';
 import { generateIdentity, createPrivateNetwork, verifyRequestProof } from '@cindy/agent-net-relay';
 import { AgentNetClient } from '@cindy/agent-net-relay/client';
 import { buildAgentNetSharingInvitation, parseAgentNetSharingInvitation } from '@cindy/agent-net';
-import { RoutedDeviceLinkClient, providerShareHostPeer, sharedTaskHostPeer } from '@cindy/device-link';
+import { RoutedDeviceLinkClient, providerShareHostPeer, sharedTaskGuestPeer, sharedTaskHostPeer } from '@cindy/device-link';
 const state = vi.hoisted(() => ({ key: 'owner-a', pending: false, api: null as any,
   relay: null as any, config: null as any, allowLegacy: false,
   files: new Map<string, string>(), writes: [] as string[], http: vi.fn(), card: vi.fn(), agentNetEnabled: true, onlyEncrypted: false,
+  sessionRoute: null as null | ((peer: string) => unknown),
 }));
 vi.mock('node:fs', () => ({ default: {
   existsSync: (file: string) => state.files.has(file), statSync: (file: string) => ({ size: state.files.get(file)?.length ?? 0 }),
@@ -45,10 +46,10 @@ vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => (
 vi.mock('../agentNetRuntime.js', () => ({ currentAgentNetClient: () => state.pending ? null : state.api, isAgentNetActive: () => true,
   outgoingAgentNetClient: () => state.api, outgoingAgentNetClientForRelay: () => { throw new Error('AGENT_NET_IDENTITY_MISMATCH'); },
   agentNetAllowsLegacy: () => state.allowLegacy, agentNetOnlyEncryptedByUser: () => state.onlyEncrypted, agentNetSelectionKey: () => 'selected-private', agentNetClientForRelay: () => null,
-  openScopedAgentNetAppSocket: vi.fn() }));
+  openScopedAgentNetAppSocket: vi.fn(), setAgentNetScopedSessionRoute: (route: (peer: string) => unknown) => { state.sessionRoute = route; } }));
 import { selectedAgentNetSharingRoute, rememberAgentNetSharingService, requestAgentNetSharing,
   joinAgentNetSharedTask, agentNetSharingRoute, stopAgentNetSharing, captureAgentNetSharingBoundaryClose, bindAgentNetSharing,
-  rememberAgentNetSharingHost } from '../agentNetSharing.js';
+  rememberAgentNetSharingHost, retireAgentNetSharingGuest } from '../agentNetSharing.js';
 import { resolveAgentNetProviderShareLink, providerShareApi, providerShareLinkFor, providerShareHiddenByEncryptedOnly } from '../providerShareApi.js';
 beforeEach(() => {
   state.key = 'owner-a'; state.pending = false; state.files.clear(); state.writes = [];
@@ -296,6 +297,35 @@ it('pins an explicit guest invitation and rejects a conflicting root before any 
   const conflict = buildAgentNetSharingInvitation({ ...receipt, rootPublicKey: bootstrap.rootPublicKey }, 'https://friend.example.test');
   await expect(joinAgentNetSharedTask(conflict, 'Guest')).rejects.toThrow('ROUTE_CONFLICT');
   expect(state.http).toHaveBeenCalledOnce();
+});
+// Rule (2026-11-16, cross-account on the Agent-Net session layer): a session is used only where the routed client
+// accepts that resource's scoped frames (`acceptsScopedEvent`). A guest who left keeps a retired pin and must get no
+// session either; a resource this computer never installed is accepted on the main connection only, as Device Link does.
+// Real Main vault, routed client and pins; unit.
+it('lets a cross-account session through only where the routed client accepts that resource', async () => {
+  const receipt = { v: 2 as const, kind: 'shared-task' as const, resourceId: 'left-task', invitation: randomBytes(32).toString('base64url'),
+    networkId: 'private:remote', rootPublicKey: state.api.rootPublicKey, hostDeviceId: 'remote-host', region: 'global' as const };
+  state.http.mockResolvedValue(Response.json({ sharedTaskId: receipt.resourceId, memberId: 'guest-member', status: 'joined', created: true }));
+  await joinAgentNetSharedTask(buildAgentNetSharingInvitation(receipt, 'https://friend.example.test'), 'Guest');
+  const options = { getWsUrl: () => 'wss://unavailable.example.test', getToken: async () => null,
+    getHello: () => ({ deviceName: 'Guest', platform: 'test', appVersion: '1', remoteControlEnabled: false, busy: false }),
+    createWebSocket: () => { throw new Error('PRIMARY_MUST_NOT_BE_REQUIRED'); } };
+  const primary = new RoutedDeviceLinkClient(options), stop = bindAgentNetSharing(primary, options);
+  const host = sharedTaskHostPeer(receipt.resourceId, receipt.hostDeviceId);
+  // This computer's own task on its main network, and one whose network it cannot reach (registered blocked).
+  const selected = selectedAgentNetSharingRoute('shared-task')!;
+  rememberAgentNetSharingHost('shared-task', 'own-task', selected);
+  rememberAgentNetSharingHost('shared-task', 'unreachable-task', { ...selected, networkId: 'private:other-relay' });
+  const visitor = (task: string) => sharedTaskGuestPeer(task, 'guest-member', 'guest-device');
+  expect(state.sessionRoute!(visitor('own-task'))).toBe('primary');
+  expect(state.sessionRoute!(visitor('unreachable-task'))).toBeNull();
+  expect(state.sessionRoute!(visitor('never-installed'))).toBe('primary');
+  retireAgentNetSharingGuest('shared-task', receipt.resourceId);
+  expect(primary.connectionFor(host)).not.toBe(primary);
+  expect(state.sessionRoute!(host)).toBeNull();
+  // Stopping leaves those pins retired on the routed client: no session until they are registered again.
+  stop();
+  expect(state.sessionRoute!(visitor('own-task'))).toBeNull();
 });
 it('discards a late join after an account boundary without writing into the next owner vault', async () => {
   const receipt = { v: 2 as const, kind: 'shared-task' as const, resourceId: 'late-task', invitation: randomBytes(32).toString('base64url'),

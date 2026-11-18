@@ -37,7 +37,15 @@ import { TopologyFlowLayer, type FlowLine } from './TopologyFlow';
 import { groupLines, layoutTopology, OFFLINE_FOLD_ID, type Point, type TopologyLayout } from './topologyGeometry';
 import type { TopologyModel, TopologyNode, TopologyStatus } from './topologyModel';
 import { ProtocolMark } from './ProtocolMark';
-import { formatRtt, protocolKind, protocolLabel, rowSubtitle, type ProtocolKind } from './topologyPresentation';
+import {
+  formatRtt,
+  protocolKind,
+  protocolKindLabel,
+  protocolLabel,
+  rowSubtitle,
+  selfProtocolKind,
+  type ProtocolKind,
+} from './topologyPresentation';
 
 import './remote-connection-v2.css';
 
@@ -281,6 +289,9 @@ export function RemoteConnectionTopology({
   const layout = layoutTopology(model.groups, width, model.dense);
   const { m, hub } = layout;
   const selfName = model.self?.name ?? t('settings.remoteControl.v2.node.thisComputer');
+  const selfProtocol = selfProtocolKind(model, linkStatus);
+  const selfProtocolLabel = protocolKindLabel(selfProtocol, t);
+  const selfDescription = selfProtocolLabel ? `${selfName} · ${selfProtocolLabel}` : selfName;
   // 悬停优先于打开的浮层:鼠标移到别的设备上时跟着它走。
   const focusId = hoverId ?? openId;
   const setCardOpen = (id: string) => (open: boolean) => setOpenId((cur) => (open ? id : cur === id ? null : cur));
@@ -330,6 +341,9 @@ export function RemoteConnectionTopology({
       if (model.relay.flow) {
         flowing.push({ id: `${group.id}:relay`, shape: toRelay.shape, flow: model.relay.flow });
       }
+      const relayProtocol = protocolKindLabel(model.relay.protocol, t);
+      const relayRtt = model.relay.rttMs === null ? null : formatRtt(model.relay.rttMs, t);
+      const relayDetail = [relayProtocol, relayRtt].filter(Boolean).join(' · ');
       const size = m.relayR * 2;
       // 中转站的名字和它的往返写在小圆点旁边:贴着圆点朝中间那一侧排开(扇出的线都在另一侧),
       // 中间来的那段线从下面上来就放上面,反之放下面,不和线打架。
@@ -340,7 +354,7 @@ export function RemoteConnectionTopology({
           <span
             className="rcv2-relay flex h-full w-full items-center justify-center rounded-full border"
             role="img"
-            aria-label={model.relay.name}
+            aria-label={[model.relay.name, relayDetail].filter(Boolean).join(' · ')}
           >
             <Radio size={14} strokeWidth={1.75} aria-hidden />
           </span>
@@ -359,14 +373,14 @@ export function RemoteConnectionTopology({
           aria-hidden
         >
           <span>{model.relay.name}</span>
-          {model.relay.rttMs !== null ? (
+          {relayDetail ? (
             <span
               className={cn(
                 'tabular-nums',
                 emphasis !== 'rest' && emphasis !== 'dim' && 'text-[var(--text-secondary)]',
               )}
             >
-              {formatRtt(model.relay.rttMs, t)}
+              {relayDetail}
             </span>
           ) : null}
         </div>,
@@ -535,7 +549,7 @@ export function RemoteConnectionTopology({
             type="button"
             className="rcv2-hub flex items-center justify-center rounded-full border"
             style={placed(hub.x, hub.y, HUB, HUB, animate)}
-            aria-label={selfName}
+            aria-label={selfDescription}
           >
             <PlatformGlyph platform={model.self?.platform ?? null} isMobile={false} size={22} />
           </button>
@@ -558,6 +572,22 @@ export function RemoteConnectionTopology({
           {selfName}
         </span>
       </div>
+      {/* 这台电脑自己用的连接方式，与其它设备名字下面同一个图标 + 名称(用户要求 2026-11-18) */}
+      {selfProtocol && selfProtocolLabel ? (
+        <div
+          className="pointer-events-none flex items-center justify-center"
+          style={placed(hub.x, hub.y + m.ring + 14 + 18, 180, 16, animate)}
+          aria-hidden
+        >
+          <span className="flex max-w-full rounded bg-[var(--settings-theme-card-bg)] px-1.5">
+            <ProtocolMark
+              kind={selfProtocol}
+              label={selfProtocolLabel}
+              className="text-12 leading-[1.3] text-[var(--text-tertiary)]"
+            />
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }

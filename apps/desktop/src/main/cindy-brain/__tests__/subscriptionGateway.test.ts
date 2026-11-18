@@ -56,6 +56,10 @@ const createSessionNotification = createGhostProductionCallbacks<{
   ): void;
 }>({ functions: ['notifyGhostSessionEvent'] });
 
+const createSubscriptionGateway = createGhostProductionCallbacks<{ getGhostSubscriptionGateway(): GhostSubscriptionGateway }>({
+  functions: ['getGhostSubscriptionGateway'], initialize: 'let subscriptionGatewaySingleton = null;',
+});
+
 describe('did-session-switched primary session resolution', () => {
   it('allows ordinary sessions and Orca leads, but never workers or background sessions', () => {
     expect(isGhostSessionSwitchEligibleRow({ source: 'desktop', orcaRole: null })).toBe(true);
@@ -323,6 +327,129 @@ describe('indexed task content and state events', () => {
       files: [{ path: '/private/file.txt', name: 'file.txt' }], reasoning: 'private thinking' } } as Message;
   const subscriber = (): InstalledGhost => ({ ...ghost('reader', { topics: ['message', 'task-state'] }),
     approval: { state: 'approved', revision: 'r1' } });
+
+  // Unit / #11057 receipt IO regression: execute the real production assembly,
+  // whose lookup port reads the receipt. Gateway-only fakes omitted the adapter's
+  // duplicate read. A single event must read once per synchronous stage.
+  it.each([
+    ['message', 'did-message-created', false, 1], ['task-state', 'did-task-state-changed', false, 1],
+    ['tool-execution', 'did-tool-execution', false, 2], ['message', 'did-message-created', true, 2],
+    ['task-state', 'did-task-state-changed', true, 2], ['tool-execution', 'did-tool-execution', true, 2],
+  ] as const)('reads the live install once per stage for %s / %s (cold=%s)', async (topic, name, cold, count) => {
+    const g = ghost('reader', { topics: [topic] });
+    let running = !cold;
+    const lookup = vi.fn(() => g), send = vi.fn(() => true);
+    const api = createSubscriptionGateway({ GhostSubscriptionGateway, availableGhosts: () => [g],
+      listGhostNotificationCandidates: async () => [g], findGhostNotificationTarget: lookup,
+      getGhostRuntime: () => ({ stateOf: () => running ? 'running' : 'stopped',
+        spawn: async () => { running = true; return { ok: true }; } }),
+      sendToGhostLogic: send, ghostOwnerScope: undefined, log: {} });
+    api.getGhostSubscriptionGateway().publishIndexed([g], topic, name, { sessionId: 'task' });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(send).toHaveBeenCalledOnce();
+    expect(lookup).toHaveBeenCalledTimes(count);
+  });
+
+  it.each(['disabled', 'revoked'] as const)('rechecks the live install after queueing when %s', async change => {
+    const g = ghost('reader', { topics: ['tool-execution'] });
+    let live = g;
+    const lookup = vi.fn(() => live), send = vi.fn(() => true);
+    const api = createSubscriptionGateway({ GhostSubscriptionGateway, availableGhosts: () => [g],
+      listGhostNotificationCandidates: async () => [g], findGhostNotificationTarget: lookup,
+      getGhostRuntime: () => ({ stateOf: () => 'running' }), sendToGhostLogic: send,
+      ghostOwnerScope: undefined, log: {} });
+    api.getGhostSubscriptionGateway().publishIndexed([g], 'tool-execution', 'did-tool-execution', { sessionId: 'task' });
+    live = change === 'disabled' ? { ...g, enabled: false } : { ...g, approval: { state: 'legacy-unapproved' } };
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(send).not.toHaveBeenCalled();
+    expect(lookup).toHaveBeenCalledTimes(2);
+  });
+
+  // Unit / tool observation contract: the existing event index and queue must not
+  // inspect payloads at zero subscribers or synchronously deliver tool content.
+  it('does no tool payload work at zero subscribers, then delivers asynchronously in order', async () => {
+    const index = new GhostTaskEventIndex();
+    const read = vi.fn(() => ({ toolUseId: 'call', toolName: 'Read', input: { path: 'notes.txt' } }));
+    const event = { type: 'tool_use', get data() { return read(); }, source: 'pi' };
+    const gateway = vi.fn();
+    index.replace([], owner);
+    index.publishTool('task', event, owner, gateway);
+    expect(read).not.toHaveBeenCalled(); expect(gateway).not.toHaveBeenCalled();
+    const g = ghost('reader', { topics: ['tool-execution'] });
+    const { gw, sent, running, deps } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    index.replace([g], owner);
+    index.publishTool('task', event, owner, () => gw);
+    index.publishTool('task', { type: 'tool_result', data: { toolUseIds: ['call'], content: 'done' } }, owner, () => gw);
+    expect(sent).toHaveLength(0);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent.map(item => (item.payload as any).data.eventType)).toEqual(['tool_use', 'tool_result']);
+    expect(sent[0]!.payload).toMatchObject({ topic: 'tool-execution', name: 'did-tool-execution', seq: 1,
+      data: { sessionId: 'task', source: 'pi', payload: { toolUseId: 'call' } } });
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  it('bounds tool payloads and drops stale-install content before asynchronous delivery', async () => {
+    const g = ghost('reader', { topics: ['tool-execution'] });
+    let live = g;
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => live });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    index.publishTool('task', { type: 'tool_result_full', data: { toolUseId: 'call', content: 'x'.repeat(1_000_000) } }, owner, () => gw);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(Buffer.byteLength(JSON.stringify(sent[0]!.payload))).toBeLessThan(65536);
+    expect(sent[0]!.payload).toMatchObject({ data: { truncated: true } });
+    sent.length = 0;
+    index.publishTool('task', { type: 'tool_result', data: { content: 'old install' } }, owner, () => gw);
+    live = { ...g, approval: { state: 'approved', revision: 'r2' } };
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent).toHaveLength(0);
+  });
+
+  it('uses the same 100-event queue and dropped count for a hot tool observer', async () => {
+    const g = ghost('reader', { topics: ['tool-execution'] });
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    for (let n = 0; n < 103; n++) index.publishTool('task', { type: 'tool_use', data: { toolUseId: `${n}` } }, owner, () => gw);
+    expect(sent).toHaveLength(0);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent).toHaveLength(100);
+    expect(sent[0]!.payload).toMatchObject({ seq: 4, dropped: 3 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Unit / #11057: production projection previously leaked structured Basic
+  // credentials and native Base64 media. A single real indexed tool event is enough.
+  it('masks structured credential fields while retaining ordinary tool input', async () => {
+    const g = ghost('reader', { topics: ['tool-execution'] });
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g }); running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    index.publishTool('task', { type: 'tool_use', data: { input: {
+      headers: { Authorization: 'Basic c3ludGhldGljOnRlc3Q=', Cookie: 'unit_cookie=private' },
+      apiKey: 'unit_api_secret', nested: { password: 'unit_password' }, timeout: 30,
+    } } }, owner, () => gw);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const body = JSON.stringify(sent[0]!.payload);
+    for (const secret of ['c3ludGhldGljOnRlc3Q=', 'unit_cookie=private', 'unit_api_secret', 'unit_password']) expect(body).not.toContain(secret);
+    expect(sent[0]!.payload).toMatchObject({ data: { payload: { input: { headers: { Authorization: '[REDACTED]' }, timeout: 30 } } } });
+  });
+
+  it('omits native and embedded media bytes without losing ordinary result text', async () => {
+    const g = ghost('reader', { topics: ['tool-execution'] });
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g }); running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    index.publishTool('task', { type: 'tool_result_full', data: { fullText: 'preview ready',
+      processMedia: [{ kind: 'image', mimeType: 'image/png', data: 'bmF0aXZlLW1lZGlh' }],
+      content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aW5saW5lLW1lZGlh' } },
+        { type: 'resource', resource: { mimeType: 'image/png', blob: 'cmVzb3VyY2UtbWVkaWE=' } }, { type: 'text', text: 'kept' }],
+      thumbnail: 'data:image/png;base64,dXJpLW1lZGlh',
+    } }, owner, () => gw);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const body = JSON.stringify(sent[0]!.payload);
+    for (const media of ['bmF0aXZlLW1lZGlh', 'aW5saW5lLW1lZGlh', 'cmVzb3VyY2UtbWVkaWE=', 'dXJpLW1lZGlh']) expect(body).not.toContain(media);
+    expect(sent[0]!.payload).toMatchObject({ data: { truncated: true, payload: { fullText: 'preview ready', content: [null, { resource: null }, { type: 'text', text: 'kept' }] } } });
+  });
 
   // Unit, #9801 scope reduction: lifecycle events reuse immediate delivery and
   // the existing cold queue; they add no timer and must not fold a finished turn.
@@ -1942,6 +2069,22 @@ describe('GhostTurnOriginTracker', () => {
 // plugin; a plugin can only tighten; an unavailable or silent plugin follows the task's onFailure.
 // Message-hook cases above do not cover per-task targeting or `skip`. Unit tier, fake timers.
 describe('control points', () => {
+  // Native wire contract, unit/fake timers: production pipe verdict parsing must
+  // retain tool effects but never accept a plugin-manufactured permission allow.
+  // Controller tests inject parsed answers and cannot cover this boundary.
+  it.each([false, true])('parses a native tool verdict (invalid approval: %s)', async invalid => {
+    const provider = ghost('native', { hooks: ['will-tool-call'] });
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [provider] });
+    running.add('native');
+    const pending = gw.screenControlPoint('will-tool-call', { sessionId: 'task', engine: 'codex', phase: 'call',
+      toolName: 'Bash', toolCallId: 'call', input: { command: 'original' } }, { pluginId: 'native', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    const hookId = (sent[0].payload as { hookId: string }).hookId;
+    gw.handleVerdict('native', { type: 'event-verdict', hookId, action: 'tool',
+      tool: invalid ? { decision: 'allow' } : { input: { command: 'changed' } } });
+    expect(await pending).toMatchObject(invalid ? { action: 'block', failure: true }
+      : { action: 'tool', tool: { input: { command: 'changed' } } });
+  });
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -1959,7 +2102,7 @@ describe('control points', () => {
   // #9803 regression, unit/fake timers: a selected, declared provider with a
   // valid installation must receive the request without a per-point receipt list.
   // Existing transport tests only supplied approvedControlPoints fixtures.
-  it.each(['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory'] as const)
+  it.each(['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory', 'will-tool-call', 'did-tool-result'] as const)
     ('executes selected %s using whole-install approval', async runtimePoint => {
       const provider = ghost('runtime', { hooks: [runtimePoint] });
       const { gw, sent, running } = makeGateway({ listGhosts: () => [provider] });
@@ -1976,7 +2119,7 @@ describe('control points', () => {
 
   // Runtime latency contract, unit/fake timers: silence reaches the selected
   // failure policy at each new point's own deadline, not the legacy 8s limit.
-  it.each([['will-start-turn', 1000], ['will-compose-context', 2000], ['will-search-memory', 1500], ['will-model-request', 1000]] as const)
+  it.each([['will-start-turn', 1000], ['will-compose-context', 2000], ['will-search-memory', 1500], ['will-model-request', 1000], ['will-tool-call', 1000], ['did-tool-result', 1000]] as const)
     ('bounds unanswered %s at %dms', async (runtimePoint, timeoutMs) => {
       const provider = { ...ghost('runtime', { hooks: [runtimePoint] }), approvedControlPoints: [runtimePoint] };
       const { gw, running, sent } = makeGateway({ listGhosts: () => [provider] });
@@ -1993,6 +2136,21 @@ describe('control points', () => {
       expect(await pending).toEqual({ action: 'allow' });
       expect(settled).toBe(true);
     });
+
+  // Tool hook silence keeps the native default even when malformed answers
+  // would use the task's block-on-failure policy. Fake timers, no real waits.
+  it.each(['will-tool-call', 'did-tool-result'] as const)('keeps the native default after %s deadlines and the existing fuse', async runtimePoint => {
+    const provider = ghost('runtime', { hooks: [runtimePoint] });
+    const { gw, running, sent } = makeGateway({ listGhosts: () => [provider] });
+    running.add('runtime');
+    for (let i = 0; i < 4; i++) {
+      const pending = gw.screenControlPoint(runtimePoint, { engine: 'pi', phase: 'call', sessionId: 'task', toolName: 'read', toolCallId: 'call', input: {} },
+        { pluginId: 'runtime', onFailure: 'block' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await pending).toEqual({ action: 'allow' });
+    }
+    expect(sent).toHaveLength(3);
+  });
 
   it('asks only the chosen plugin and returns its skip', async () => {
     const { gw, sent, running } = makeGateway({ listGhosts: () => [approved('p1'), approved('p2')] });

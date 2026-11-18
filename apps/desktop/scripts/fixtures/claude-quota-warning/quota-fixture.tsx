@@ -6,6 +6,7 @@ void mountPage({
     maker: { usage: {
       getClaudeSubscription: async () => ({
         source: 'oauth-endpoint', updatedAt: Date.now(),
+        ...(ctx.data.planDisplayName ? { subscriptionType: 'pro', planTier: 'pro', planDisplayName: ctx.data.planDisplayName } : {}),
         fiveHour: { utilization: 25, resetsAt: Date.now() / 1000 + 5 * 3600, severity: 'normal' },
         sevenDay: { utilization: ctx.data.totalUsed, resetsAt: Date.now() / 1000 + 2 * 86400 },
         scoped: [{ modelDisplayName: 'Fable', utilization: 10, resetsAt: Date.now() / 1000 + 2 * 86400, severity: 'normal' }],

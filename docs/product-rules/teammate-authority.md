@@ -1,5 +1,12 @@
 # 伙伴的来源与操作权限
 
+> **读取时机**：修改伙伴调用任务写工具的权限、转达主人原话的来源记录，或伙伴提示词里对应的说法之前
+> **适用路径**：`apps/desktop/src/main/maker-ipc/**/{taskAction,forwardedRequest,messageSourceNote,agent-input-coordinator}*`、
+> `apps/desktop/src/main/mcp-integrations/**/sessionHandoffRemote*`、
+> `apps/desktop/src/shared/**/forwardedRequest*`、`packages/maker-shared/src/**/forwardedRequestDisplay*`、
+> `apps/desktop/src/main/maker-ipc/**/{botSystemPrompt,teammateGuide}*`、
+> `packages/maker-core/src/agents/codex/teammate-runtime-instructions*`
+
 2026-11-08 用户裁决：**伙伴不加专属权限。** 判断原则是「AI 能不能开一个任务去和别的任务说话」——
 能（`send_to_session` 可以新开完全访问任务），那么只加在伙伴身上的权限门都是掩耳盗铃。
 伙伴和普通任务走同一套权限：当前任务的权限档（Ask / Auto / 完全访问 / Plan）加上通用的 IM 机器人与共享访客边界。

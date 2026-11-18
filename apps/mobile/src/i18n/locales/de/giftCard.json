@@ -1,0 +1,40 @@
+{
+  "sectionTitle": "Geschenkkarten",
+  "settingsFooter": "Gib einen Einlösecode ein oder füge den Link einer Geschenkkarte ein, um sie deinem Aktionsguthaben gutzuschreiben. Geschenkkarten können nur mit einem persönlichen Konto eingelöst werden.",
+  "action": "Geschenkkarte einlösen",
+  "title": "Geschenkkarte einlösen",
+  "inputLabel": "Einlösecode",
+  "inputHint": "Gib den 16-stelligen Code ein oder füge den Link einer Geschenkkarte ein.",
+  "continue": "Weiter",
+  "confirmTitle": "Diese Geschenkkarte einlösen?",
+  "confirmAction": "Einlösen",
+  "close": "Schließen",
+  "from": "Von {{sender}}",
+  "cardLabel": "Cindy-Geschenkkarte über {{amount}}",
+  "fields": {
+    "validity": "Gültigkeit",
+    "validityValue_one": "{{count}} Tag nach dem Einlösen",
+    "validityValue_other": "{{count}} Tage nach dem Einlösen",
+    "claimBy": "Einlösen bis",
+    "destination": "Gutgeschrieben auf",
+    "destinationValue": "Aktionsguthaben"
+  },
+  "doneTitle": "{{amount}} gutgeschrieben",
+  "doneDescription": "Deinem Aktionsguthaben gutgeschrieben. Gültig bis {{date}}.",
+  "doneDescriptionNoDate": "Deinem Aktionsguthaben gutgeschrieben.",
+  "pendingTitle": "Geschenkkarte eingelöst",
+  "pendingDescription": "{{amount}} werden gerade gutgeschrieben und erscheinen in Kürze in deinem Aktionsguthaben. Du musst die Karte nicht erneut einlösen.",
+  "alreadyYours": "Du hast diese Geschenkkarte bereits eingelöst.",
+  "done": "Fertig",
+  "errors": {
+    "notFound": "Dieser Code ist ungültig. Prüfe ihn und versuche es erneut.",
+    "wrongRegionCn": "Diese Geschenkkarte gilt für die Festlandchina-Edition von Cindy und kann mit diesem Konto nicht eingelöst werden.",
+    "wrongRegionGlobal": "Diese Geschenkkarte gilt für die internationale Edition von Cindy und kann mit diesem Konto nicht eingelöst werden.",
+    "alreadyClaimed": "Diese Geschenkkarte wurde bereits eingelöst.",
+    "expired": "Diese Geschenkkarte kann nicht mehr eingelöst werden. Die Frist ist abgelaufen.",
+    "voided": "Diese Geschenkkarte wurde für ungültig erklärt.",
+    "rateLimited": "Zu viele Versuche. Versuche es später erneut.",
+    "failed": "Die Geschenkkarte konnte nicht eingelöst werden. Versuche es später erneut.",
+    "personalRequired": "Geschenkkarten können nur mit einem persönlichen Konto eingelöst werden."
+  }
+}

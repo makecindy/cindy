@@ -3,12 +3,12 @@
  * ---------------------------------------------------------------------------
  * In-process MCP server (`cindy_orca`) 暴露多 worker 协同(Orca team)控制工具。
  *
- * 暴露 18 个 team 工具(直接 server.tool() 注册到顶层,不走 list_tools/call_tool 入口):
+ * 暴露 19 个 team 工具(直接 server.tool() 注册到顶层,不走 list_tools/call_tool 入口):
  *   start_team / create_worker / create_workers / send_to_worker / interrupt_worker /
  *   get_worker_queue_status / update_queued_message / cancel_queued_message /
  *   merge_queued_messages / steer_queued_message / move_queued_message /
  *   list_workers / switch_focus / idle_worker / end_team / archive_worker /
- *   update_worker / list_available_models
+ *   update_worker / set_worker_runtime / list_available_models
  *
  * 为什么直接注册而非走入口:协同工具藏在 list_tools/call_tool 后面时, 模型在用户
  * 说"开协同 / 派 worker"时往往发现不了 start_team, 反而误抓直接可见的
@@ -39,7 +39,7 @@ import {
   type XdtHelperToolCategory,
   type XdtHelperToolHandler,
 } from '../lizi_xdtHelperToolRegistry.js';
-// 18 个 team 工具的注册函数留在 xdt-helper/ 目录(register 是 registry-agnostic,
+// 19 个 team 工具的注册函数留在 xdt-helper/ 目录(register 是 registry-agnostic,
 // 物理搬迁收益低)。本 server 通过 DirectToolSink 把它们直接注册到 McpServer。
 import {
   registerStartTeamTool,
@@ -58,8 +58,10 @@ import {
   registerEndTeamTool,
   registerArchiveWorkerTool,
   registerUpdateWorkerTool,
+  registerSetWorkerRuntimeTool,
   registerListAvailableModelsTool,
   type ListAvailableModelsDeps,
+  type SetWorkerRuntimeDeps,
   type OrcaMessageDelivery,
   type QueuedMessageControlErrorCode,
   type QueuedMessageSteerReason,
@@ -75,7 +77,7 @@ import { errorPayload, okPayload } from '../xdt-helper/_payload.js';
 // ── Host deps ──────────────────────────────────────────────────────────────
 
 /**
- * 协同(team)控制类工具的 host 回调集合。注入即注册 cindy_orca 的 18 个 team 工具
+ * 协同(team)控制类工具的 host 回调集合。注入即注册 cindy_orca 的 19 个 team 工具
  * (per-session 闭包绑定 ctx)。
  *
  * 回调返 Result 而非抛 Promise<T>: 让 host 能用 `HOST_NOT_READY` errorCode 表达
@@ -282,6 +284,8 @@ export interface OrcaMcpDeps {
       'WORKER_NOT_FOUND' | 'INVALID_PARAMS' | 'DUPLICATE_LABEL' | 'WORKER_STATE_CHANGED'
     >
   >;
+  /** 给已开始的 Worker 换引擎 / 模型 / 来源 / 推理强度 / Fast(下一次派活时生效)。 */
+  setWorkerRuntime: SetWorkerRuntimeDeps['setWorkerRuntime'];
   /** 列出 agent 可用 model 清单。 */
   listAvailableModels: ListAvailableModelsDeps['listAvailableModels'];
   /** 只读诊断：列出当前 Orca workflow 与 worker sessions。 */
@@ -524,7 +528,7 @@ export function createOrcaMcpServer(
     version: '1.0.0',
   });
 
-  // 18 个 team 工具经 DirectToolSink 直接注册到顶层。handler 闭包绑定 ctx
+  // 19 个 team 工具经 DirectToolSink 直接注册到顶层。handler 闭包绑定 ctx
   // (sessionId / vendorOptions), 调用时把请求路由回 host。
   const sink = new DirectToolSink(server, deps.authorizeCall, () => resolveLiziMcpSessionContext(ctx).sessionId);
   const getSessionContext = () => resolveLiziMcpSessionContext(ctx);
@@ -601,6 +605,10 @@ export function createOrcaMcpServer(
   registerUpdateWorkerTool(sink, {
     getSessionContext,
     updateWorker: deps.updateWorker,
+  });
+  registerSetWorkerRuntimeTool(sink, {
+    getSessionContext,
+    setWorkerRuntime: deps.setWorkerRuntime,
   });
   registerListAvailableModelsTool(sink, {
     getSessionContext,

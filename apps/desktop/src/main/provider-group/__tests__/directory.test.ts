@@ -139,6 +139,35 @@ describe('listCandidates', () => {
     expect((await directory.listCandidates('openai', null)).map((c) => c.providerId)).toEqual([accounts[0].id]);
   });
 
+  // 2026-11-17 field report, unit: a computer whose quick directory read was interrupted (fenced at
+  // the 2s snapshot fallback while its 3–7s read was in flight) was left out of the add-computer list
+  // on every attempt, with no trace. Real directory; one computer per row. Review findings: only an
+  // interrupted read is asked again, never a refusal, and never over a link the user just closed.
+  it.each([
+    ['asks an interrupted read again live', new Error('Metadata scope changed'), true, ['mini'], [false, true]],
+    ['treats a refusal as final', new Error('[REMOTE_AGENT_PROVIDER_NOT_ALLOWED] not offered'), true, [], [false]],
+    ['does not reopen a link closed meanwhile', new Error('Metadata scope changed'), false, [], [false]],
+  ] as const)('%s before leaving a computer out of the add-computer list', async (_name, quickError, linkStaysOpen, listed, expectedReads) => {
+    const reads: boolean[] = [];
+    let closeEpoch = 0;
+    const failed = vi.fn();
+    const directory = createProviderGroupDirectory(deps({
+      listDevices: async () => [device('mini')],
+      listReceivedShares: () => [],
+      readDeviceProviders: async (_id, options) => {
+        reads.push(options?.live === true);
+        if (options?.live) return [view('anthropic-1a2b3c4d', 'Claude')];
+        if (!linkStaysOpen) closeEpoch += 1;
+        throw quickError;
+      },
+      captureLinkCloseEpoch: () => { const seen = closeEpoch; return () => closeEpoch === seen; },
+      onCandidateReadFailed: failed,
+    }));
+    expect((await directory.listCandidates('anthropic', null)).map((c) => c.agentDeviceId)).toEqual(listed);
+    expect(reads).toEqual(expectedReads);
+    expect(failed).toHaveBeenCalledTimes(listed.length ? 0 : 1);
+  });
+
   it('lists same-account computers and received shares offering the same provider', async () => {
     const directory = createProviderGroupDirectory(deps());
     const candidates = await directory.listCandidates('anthropic', null);

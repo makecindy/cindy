@@ -270,7 +270,7 @@ describe('useCCAgentChat hidden chat snapshot freeze', () => {
     expect(panelSource).toContain('viewVisible={viewVisible}');
     expect(panelSource).toContain('chatRealtime={chatRealtime}');
     expect(sessionViewSource).toContain(
-      'useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime })',
+      'useCCAgentChat(confirmedSessionId, handleTitleUpdate, { chatRealtime })',
     );
     expect(sessionViewSource).toContain('key={sessionId}');
     expect(messageStreamSource).toContain('if (isNearBottomRef.current) {');

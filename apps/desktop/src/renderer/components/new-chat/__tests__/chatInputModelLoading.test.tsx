@@ -1161,24 +1161,24 @@ describe.each([
 });
 
 it.each([
-  ['/help me', 'queue'],
+  ['/help me', 'steer'],
   ['/Users/me/project has a typo in this directory name', 'steer'],
   ['/compact now', 'steer'],
-])('under the steer default %s is delivered as %s', async (text, expected) => {
+].flatMap(([text]) => [false, true].map((rosterReady) => ({ text, rosterReady }))))('forwards $text to the send-time resolver regardless of palette readiness=$rosterReady', async ({ text, rosterReady }) => {
   localStorage.clear();
   _resetComposerFollowUpPreferenceForTests();
   localStorage.setItem(COMPOSER_FOLLOW_UP_STORAGE_KEY, 'steer');
-  roster.commands = [
+  roster.commands = rosterReady ? [
     { kind: 'desktop', name: 'help', description: '' },
     { kind: 'agent-builtin', name: 'compact', description: '' },
-  ];
+  ] : null;
   try {
     const onSend = vi.fn().mockResolvedValue(true);
     render(<ChatInput {...companionProps()} sessionId="follow-up-slash" isStreaming onSend={onSend} onQueueSteer={vi.fn()} />);
     await act(async () => { h.editor!.commands.setContent(`<p>${text}</p>`); });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.steer' })); });
     await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
-    expect(onSend.mock.calls[0][6].deliveryMode).toBe(expected);
+    expect(onSend.mock.calls[0][6].deliveryMode).toBe('steer');
   } finally {
     roster.commands = null;
   }

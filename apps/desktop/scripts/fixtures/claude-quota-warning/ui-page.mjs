@@ -14,6 +14,8 @@ export default {
     'src/renderer/hooks/useSessionUsageMoney': `const money = { amount: 8.15, currency: 'USD', approximate: true, kind: 'value-estimate' }; export const useSessionUsageMoney = () => ({ actualMoney: null, estimatedValueMoney: money, totalMoney: money });`,
   },
   cases: {
+    'official-plan-name': { about: 'Official Ultra display name wins over the native pro machine code', data: { totalUsed: 76, planDisplayName: 'Ultra' } },
+    'official-plan-name-narrow': { about: 'Official Ultra display name at 320-pixel content width', viewport: { width: 320, height: 400 }, data: { totalUsed: 76, planDisplayName: 'Ultra' } },
     default: { about: 'Hidden total week is shown in yellow, with neutral task value', data: { totalUsed: 76 } },
     normal: { about: 'Healthy total week stays compact', data: { totalUsed: 20 } },
     critical: { about: 'Only the depleted total-week percentage turns red', data: { totalUsed: 95 } },
@@ -31,10 +33,16 @@ export default {
     const total = await ui.t('todaySpend.claude.totalWeeklyLabel');
     assert.equal((await trigger.textContent()).includes(total), ui.case !== 'normal');
     assert.equal(await trigger.locator('[class*="error-fg"]').count(), ui.case === 'rejected' ? 1 : 0);
-    if (ui.case === 'rejected') {
+    if (ui.case === 'rejected' || ui.case.startsWith('official-plan-name')) {
       await ui.capture('chip');
       await trigger.hover();
       await page.getByTestId('quota-hover-card').waitFor();
+      if (ui.case.startsWith('official-plan-name')) {
+        const card = page.getByTestId('quota-hover-card');
+        await card.getByText('Ultra', { exact: true }).waitFor();
+        assert.equal(await card.getByText('Pro', { exact: true }).count(), 0);
+        await ui.capture('official-plan-name');
+      }
     }
   },
 };

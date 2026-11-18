@@ -26,7 +26,7 @@ import {
 } from '../../device-link/broadcast-tap.js';
 import { setRemoteAgentHandler } from '../../device-link/dispatch.desktop.js';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../../device-link/index.js';
-import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
+import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, providerShareGuestDenial, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
 import { applyProviderShareDelegation, clearProviderShareDelegations, delegatedProviderShareGuestAccess, delegatedProviderShareLeases, delegatedProviderShareModelAllowed, delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed, delegatedProviderShareTaskAccess, invalidateProviderShareDelegation, revokeDelegatedProviderShareGuest } from '../../device-link/providerShareDelegatedAccess.js';
 import { checkProviderShareDelegation, clearProviderShareDelegationChecks, grantProviderShareDelegation as requestDelegationGrant, providerShareOwnerKey, providerShareDelegationRetryAt, revokeProviderShareDelegation as requestDelegationRevoke } from '../../device-link/providerShareApi.js';
 import { startProviderShareDelegationRechecks } from '../../device-link/providerShareDelegationChecks.js';
@@ -41,6 +41,7 @@ import { groupFastPolicyStore } from '../../provider-group/fastPolicyStore.js';
 import { captureProviderManagementScope } from '../../provider-group/managementScope.js';
 import { createSubscriptionFastPolicy } from '../../maker-host/subscription-fast-policy.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL, parseSubscriptionSessionAccountView } from '../../../shared/subscriptionAccounts.js';
+import { canSwitchHostedSubscriptionAccount } from '../../subscription-accounts/runtime.js';
 import { hostSessionIdFor } from './sessionIdentity.js';
 import { getSessionProvider } from '../../maker-host/session-provider-store.js';
 import { remoteAgentPollerFor } from '../controller/service';
@@ -361,23 +362,35 @@ export function installRemoteAgentHost(options: {
     const access = ownedProviderShareGuestAccess(controller);
     const settings = readDeviceLinkSettings();
     const ownerDeviceId = getSelfDeviceId();
-    if (peer?.role !== 'guest' || !access || !ownerDeviceId || !getProviderShareHostLoadedSnapshot()
+    const snapshot = getProviderShareHostLoadedSnapshot();
+    if (!ownerDeviceId || !snapshot) throw sharedTaskRecoveryError('owner', 'authorization');
+    if (!access) {
+      // Null also covers an unready snapshot or cleanup fence. Keep the local
+      // verdict private and publish only an existing, bounded recovery reason.
+      const denial = providerShareGuestDenial(controller);
+      const refused = denial !== null && [
+        'not-guest-peer', 'self-device', 'share-unknown', 'share-on-other-device',
+        'member-not-active', 'remote-control-off', 'provider-not-remote',
+      ].includes(denial);
+      throw sharedTaskRecoveryError('owner', refused ? 'denied' : 'authorization');
+    }
+    if (peer?.role !== 'guest'
       || access.shareId !== peer.shareId || access.memberId !== peer.memberId
       || !settings.remoteControlEnabled || settings.revokedControllers.includes(peer.deviceId)
       || !isRemoteProviderInvocationAllowed(access.providerId)) {
-      throw new Error('[REMOTE_AGENT_UNAVAILABLE] Provider share access is unavailable');
+      throw sharedTaskRecoveryError('owner', 'denied');
     }
     const identity = { ownerScope: providerShareOwnerKey(), ownerDeviceId,
       shareId: peer.shareId, memberId: peer.memberId, guestDeviceId: peer.deviceId, sessionId };
-    const joinedAt = getProviderShareHostLoadedSnapshot()?.find((share) => share.shareId === peer.shareId)
+    const joinedAt = snapshot.find((share) => share.shareId === peer.shareId)
       ?.members.find((member) => member.memberId === peer.memberId)?.joinedAt;
     if (!joinedAt || !usage.memberGenerationReady(identity, joinedAt)) {
-      throw new Error('[REMOTE_AGENT_UNAVAILABLE] Provider share membership cleanup is pending');
+      throw sharedTaskRecoveryError('owner', 'authorization');
     }
     const location = usage.findDirectTaskLocation(identity);
     if (location && (location.providerId !== access.providerId
       || usage.pendingDirectCleanupFor(identity.ownerScope, location))) {
-      throw new Error('[REMOTE_AGENT_UNAVAILABLE] Provider share task is unavailable');
+      throw sharedTaskRecoveryError('owner', 'history');
     }
     return { identity, location, access, joinedAt };
   };
@@ -1095,6 +1108,11 @@ export function installRemoteAgentHost(options: {
     recordOwnerUsage: (controller, sample) => recordDeviceUsage(controller, sample, 'device'),
     // 供应商组(本机是组所在电脑)：受邀者的任务按组分给组内电脑，本机中转(provider-groups.md §4)。
     groupRelay,
+    canSwitchLocalAccount: async ({ providerId, hostSessionId, model }) => {
+      if (readProviderGroup(providerId)?.autoSwitch === false) return false;
+      return await canSwitchHostedSubscriptionAccount(providerId, hostSessionId, model)
+        && readProviderGroup(providerId)?.autoSwitch !== false;
+    },
     groupContinuity: hasProviderGroupContinuityHandler,
     directGuestExecution: {
       acceptDelegated: acceptShareAvailability,

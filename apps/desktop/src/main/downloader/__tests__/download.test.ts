@@ -104,6 +104,10 @@ describe('shared verified downloads', () => {
   ] as const)(
     'interrupts stalled %s hashing (timeout=%s) and releases the slot',
     async (mode, timeout) => {
+      // #11092 CI, unit: a real 50ms deadline could expire during mkdir, before
+      // the hash stream exists, leaving `reading` pending forever. Exercise the
+      // production download cancellation only after the stalled read has started.
+      vi.useFakeTimers();
       const opts = options();
       if (mode === 'resume') partial(opts);
       else fs.writeFileSync(opts.targetPath, 'abcdef');
@@ -138,7 +142,8 @@ describe('shared verified downloads', () => {
       const next = options('next');
       fetchMock.mockResolvedValueOnce(new Response('next'));
       const queued = download(next);
-      if (!timeout) controller.abort();
+      if (timeout) await vi.advanceTimersByTimeAsync(50);
+      else controller.abort();
       await rejected;
       expect(stalled.destroyed).toBe(true);
       await expect(queued).resolves.toMatchObject({ size: 4 });

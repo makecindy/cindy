@@ -8,7 +8,8 @@
  *   - child.on('close')（输出已排空）或我们调 close() → 触发 onClose, 之后 writeLine 都 reject
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { promisify } from 'node:util';
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface, type Interface } from 'node:readline';
 import type {
   CloseHandler,
@@ -209,6 +210,20 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
   };
 
   return {
+    async sampleResumeStack() {
+      if (process.platform !== 'darwin' || !child.pid || exited || closed) return [];
+      // Keep only symbols. The full report includes local paths and binary images.
+      const { stdout } = await promisify(execFile)('/usr/bin/sample',
+        [String(child.pid), '1', '20', '-file', '/dev/stdout'],
+        { timeout: 3_000, killSignal: 'SIGKILL', maxBuffer: 2 * 1024 * 1024 });
+      const graph = stdout.split('Call graph:')[1]?.split('Total number in stack')[0] ?? '';
+      const frames = new Set<string>();
+      for (const line of graph.split('\n')) {
+        const symbol = line.match(/^\s*[+!:|\s]*\d+\s+(.+?)\s+\(in [^)]+\)/)?.[1];
+        if (symbol && symbol !== '???') frames.add(symbol.slice(0, 160));
+      }
+      return [...frames].slice(0, 96);
+    },
     nativeSqliteInitializationFailed: () => nativeSqliteInitializationFailed,
     writeLine(line: string): Promise<void> {
       if (closed || exited || !child.stdin.writable) {

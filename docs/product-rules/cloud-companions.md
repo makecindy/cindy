@@ -1,5 +1,14 @@
 # 云端伙伴：同一个伙伴、主力电脑与切换
 
+> **读取时机**：修改伙伴的跨电脑身份、主力电脑（登记、接管、交出、降级）、云端对话层与资料上传、切换电脑继续，
+> 或 Chat Server 的伙伴 actor／1:1 房间合同之前
+> **适用路径**：`apps/desktop/src/main/companion-cloud/**`、`packages/device-link/src/**/companionCloud*`、
+> `apps/desktop/src/shared/**/companionCloud*`、`apps/desktop/src/main/maker-ipc/**/{botCanonical,chatServer}*`、
+> `apps/desktop/src/main/scheduler-host/**/teammateHomeGuard*`、
+> `apps/desktop/src/renderer/features/bots/**/{CloudCompanion,CompanionShadow,CompanionCindyConflict,CompanionProfileRepair,BotHomeComputer,companionCloud,CindyMerge,cindyDeviceRoster,useCompanionArrivalNotice}*`、
+> `apps/mobile/src/chat/**/{cloudCompanion,useCloudCompanion,cloudConversationCache}*`、
+> `apps/mobile/src/session/CloudCompanionScreen.tsx`、`apps/mobile/app/companions/cloud/**`
+
 > 修改伙伴的跨电脑身份、主力电脑、云端对话、切换电脑继续或相关 Chat Server 合同前必须先读本文。
 > 伙伴运行时其余规则见 [cindy-bots-runtime.md](cindy-bots-runtime.md)，群聊见 [bot-group-chat.md](bot-group-chat.md)。
 

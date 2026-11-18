@@ -1,6 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import { validateGhostManifest as validateProtocolManifest, type GhostHostUi } from '@cindy/plugin-protocol';
 
+// 测试价值：validateGhostManifest 的主视图图标提示须在安装解析后保留，
+// 依据 plugin-security-and-authoring §6 的双解析器契约；既有 icon 用例未覆盖 preferredIcon。
+// 最小输入：mainView.preferredIcon='future-icon'；非字符串应忽略而保留兼容 icon。
+// tier=unit，纯内存解析，无新增资源。单文件实测耗时 1.01s。
+it.each([2, 3])('preserves preferred navigation icons and ignores malformed hints in schema v%s', schemaVersion => {
+  const base = {
+    schemaVersion, minCindyVersion: '0.1.61', id: 'icon-hint', name: 'Icon hint',
+    version: '1.0.0', entry: 'index.js',
+    ...(schemaVersion === 2 ? { slots: ['main-view'] } : {}),
+  };
+  for (const preferredIcon of ['podcast', 'future-icon', undefined, 42, null, {}]) {
+    const mainView = { html: 'view.html', icon: 'globe', preferredIcon };
+    const result = validateGhostManifest({ ...base, mainView });
+    expect(result).toMatchObject({ ok: true, manifest: { mainView: { html: 'view.html', icon: 'globe' } } });
+    if (!result.ok) throw new Error(result.reason);
+    if (typeof preferredIcon === 'string') {
+      expect(result.manifest.mainView?.preferredIcon).toBe(preferredIcon);
+    } else {
+      expect(result.manifest.mainView).not.toHaveProperty('preferredIcon');
+    }
+  }
+});
+
 // Host groups are separate install permissions; unknown groups never become permissions.
 it('validates and projects each host tool group independently in both manifest readers', () => {
   const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'host-tools', name: 'Host tools', version: '1.0.0', entry: 'main.js' };
@@ -2353,6 +2376,20 @@ describe('ghost · subscribe 订阅详单校验(卡槽①,2026-07-12)', () => {
     slots: ['panel', 'subscribe'],
     subscribe,
     ...extra,
+  });
+
+  // Unit / installation disclosure: the new content topic needs its own visible
+  // capability row; the legacy turn-only manifest must retain its original row.
+  it('discloses tool execution content separately while retaining legacy topic permissions', () => {
+    const result = validateGhostManifest(withSub({ topics: ['turn', 'tool-execution'] }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(ghostPermissionItems(result.manifest)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'subscribe:topics', labelKey: 'subscribeTopics' }),
+      expect.objectContaining({ key: 'subscribe:topics:tool-execution', labelKey: 'subscribeToolExecution', detailKey: 'subscribeToolExecutionDetail' }),
+    ]));
+    const old = validateGhostManifest(withSub({ topics: ['turn'] }));
+    expect(old.ok && ghostPermissionItems(old.manifest).some(item => item.key === 'subscribe:topics:tool-execution')).toBe(false);
   });
 
   it('topics 合法值放行并归一化进清单', () => {

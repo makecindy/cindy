@@ -3,6 +3,12 @@
 > 权威入口：先读本页，再按问题打开专题。Server 为独立仓库，文档不代表已部署。
 > 心动部署的 AI Gateway（模型路由与计费服务端）源码在内部仓库 `xindong/ai-gateway` 与
 > `xindong/litellm`（2026-10-28 确认）；排查网关行为先查这两处。
+> **读取时机**：首次理解模型配置架构，新增模型／供应商，更新模型窗口／价格／推理档位／默认值／本地推荐，
+> 或排查目录下发与显示错误之前
+> **适用路径**：`packages/model-providers/**`、`tools/model-catalog/**`、
+> `apps/desktop/src/main/maker-host/**/model-catalog-override-store*`、
+> `apps/desktop/src/main/maker-host/{active-catalog,subscriptionPoolCatalog,provider-model-auto-refresh}.ts`、
+> `apps/desktop/src/main/maker-host/model-discovery/**`
 
 ## 本地模型说明的客户端译文
 
@@ -266,7 +272,7 @@ xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受�
 来源内的默认推荐可由服务端按区域下发的 `newSessionDefault` 指定；公共 Registry 的
 同名字段不进入活动目录。未标记时取排序第一的默认可见模型，即账号返回的第一个可见模型。
 
-未手动选择模型时，客户端出厂来源顺序为 Codex 订阅 GPT-6.1 Sol（Codex）、
+未手动选择模型时，客户端出厂来源顺序为 Codex 订阅 GPT-6.2 Sol（Codex）、
 Claude 订阅 Opus 5.5（Claude Code）、服务端指定的 Cindy Auto（Pi），最后保留 xAI 回退。
 订阅按认证身份识别独立账号，始终保留实际账号 ID。Cindy Auto 由服务端决定：在 Cindy AI 与
 企业号池供应商（`source: organization`）中跟随被标为 Pi 新任务默认的 Auto 系列模型

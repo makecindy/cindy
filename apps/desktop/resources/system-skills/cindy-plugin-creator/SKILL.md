@@ -14,7 +14,7 @@ Build a Cindy plugin from the user's request, or update an existing plugin. This
 1. Read [host version and source verification](references/plugin-source-verification.md). Identify the Cindy computer that will execute the plugin, obtain its version through available read-only host information, and resolve that release's tag or the build's source commit in the official repository. Inspect the relevant public API and its host implementation at that exact commit before relying on a capability. Do not substitute latest main or an unrelated local checkout. If the version or source cannot be verified, follow the reference's fallback and state the limitation.
 2. Read the [authoring overview](references/plugin-overview.md), [design alignment](references/plugin-design.md), [structure](references/plugin-structure.md), and [manifest and capabilities](references/plugin-manifest.md). For an existing plugin, inspect its ghost.json and source first. Ask only about decisions the request leaves open; use option cards when available. Summarize the intended behavior, UI, permissions and acceptance criteria before implementation, following the design reference.
 3. Before writing code, read the [sandbox boundaries](references/plugin-sandbox.md) and [packaging workflow](references/plugin-packaging.md). Read the capability references below as needed; do not load the whole manual at once.
-4. For a new plugin, prefer ghost_forge_scaffold with the appropriate plain, agent-action, node-json-rpc or node-mcp template, then edit the generated files. The scaffold does not create an icon: follow [icon sources and user choice (§7.1)](references/plugin-packaging.md) to use a supplied image or generate one with the user's consent; never create a placeholder image. For an existing plugin, preserve its identity, data and compatible behavior. Use schemaVersion: 3 for new manifests and declare the first stable Cindy version actually required.
+4. For a new plugin, prefer ghost_forge_scaffold with the appropriate plain, agent-action, node-json-rpc or node-mcp template, then edit the generated files. The scaffold does not create an icon: follow [icon sources and user choice (§7.1)](references/plugin-packaging.md) to use a supplied image or generate one with the user's consent; never create a placeholder image. For an existing plugin, preserve its identity, data and compatible behavior. Use schemaVersion: 3 for new manifests and set minCindyVersion as described in the manifest reference.
 5. Implement and validate the requested behavior, including Light and Dark modes for any UI. Separate current Agent tool-call operations from autonomous plugin capabilities, as described in the manifest and Agent-call references. Use [tool discovery](references/plugin-tool-discovery.md) and [manuals](references/plugin-manual.md) for authoring the plugin's own discovery and workflow documentation.
 6. Call ghost_forge_pack to validate and produce the .cindy artifact. Report what was tested and what remains unverified. Packaging does not install or publish: use ghost_forge_install only when installation is requested. For publication, follow [public marketplace publication and attribution (§7.3–7.4)](references/plugin-packaging.md) or [publication to the current organization (§7.2)](references/plugin-packaging.md) for the user's chosen destination, and read [publishing signatures and review (§8)](references/plugin-publishing.md) as applicable. Read the releaseNotes contract in [manifest (§2)](references/plugin-manifest.md) before submitting a version.
 
@@ -56,7 +56,7 @@ Use when implementing plugin code, calling host APIs or declaring access to reso
 
 Use for the UI surfaces and interactions the plugin actually exposes; mobile pages are optional.
 
-- [插件界面扩展：具名 MCP Apps 页面、原生入口、上下文与宿主操作（未发布）](references/plugin-host-ui.md)
+- [插件界面扩展：具名 MCP Apps 页面、原生入口、上下文与宿主操作](references/plugin-host-ui.md)
 
 - [插件交互页面：生成首屏、SDK 交互与完整示例（§4.23）](references/plugin-interactive-pages.md)
 - [插件面板与主题适配（§5）](references/plugin-panels.md)
@@ -78,11 +78,13 @@ Use when the plugin listens for events, screens automation runs or interacts wit
 
 - [插件提交例行任务事件 routineEvents（兼容保留，已不再触发）](references/plugin-routine-events.md)
 - [插件事件订阅 subscribe（§4.6）](references/plugin-event-subscriptions.md)
+- [插件实时旁听工具执行过程](references/plugin-tool-observation.md)
 - [插件处理 Agent 回复的消息钩子（§4.6.1）](references/plugin-message-hooks.md)
 - [插件控制节点：自动化运行前、新任务选模型时先问插件（§4.6.2）](references/plugin-control-points.md)
 - [给模型选择器提供模型 models（§4.6.3）](references/plugin-models.md)
 - [插件发起 Agent 任务、请求自动化与查看伙伴（§4.11）](references/plugin-agent-tasks.md)
 - [插件调用与 Agent 共用的宿主工具 cindy.host.call](references/plugin-host-tools.md)
+- [读取工具历史、自动化 Webhook 与 Node HTTP 示例](references/plugin-history-and-http.md)
 - [插件读取当前任务上下文 sessionContext（§4.13）](references/plugin-session-context.md)
 - [插件创建工作区任务入口 workspace（§4.17）](references/plugin-workspace-sessions.md)
 

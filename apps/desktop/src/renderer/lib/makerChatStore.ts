@@ -4,6 +4,7 @@ import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-for
 import { applySessionRebalancePreferencePatch } from '@/features/provider-group/sessionRebalanceCache';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
+import { chatRemoteErrorGuidanceKey } from './autoReviewUnavailableGuidance';
 import { sharedTaskRecoveryReason } from '../../shared/sharedTaskRecovery';
 import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import {
@@ -11,6 +12,7 @@ import {
   formatAsyncQuestionSupplement, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
 } from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
+import { findErrorTailMessage } from './errorTailMessage';
 import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './pluginSetupCommandError';
 export type { PluginSetupCommandError } from './pluginSetupCommandError';
@@ -147,7 +149,7 @@ import type {
   GhostSetupStepPhase,
 } from '../../shared/ghost';
 import * as messageService from '@/lib/messageService';
-import { parseMcpAppHistory, parseMcpAppRecord } from '@cindy/maker-shared/mcp-apps';
+import { parseMcpAppHistory } from '@cindy/maker-shared/mcp-apps';
 import * as sessionService from '@/lib/sessionService';
 // device-link 透明传输:远程(被控设备)会话的操作/读取走隧道,本地会话零变化。
 import {
@@ -188,7 +190,7 @@ import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
-import { clearSessionStarting, markSessionStarting } from '@/lib/sessionStartingStore';
+import { clearSessionStarting, markSessionStarting, noteStartingTerminal } from '@/lib/sessionStartingStore';
 import { createLogger } from '@/lib/logger';
 import {
   traceRemoteSendAccepted,
@@ -381,7 +383,7 @@ export function remoteErrorI18nKey(msg: string): string | undefined {
   const limitKey = remoteAgentLimitErrorKey(msg);
   if (limitKey) return limitKey;
   const parsed = parseAgentErrorCode(msg);
-  return parsed ? `chat.remoteError.${parsed.code}` : undefined;
+  return parsed ? chatRemoteErrorGuidanceKey(parsed.code, null) : undefined;
 }
 
 export function decodeRemoteErrorMessage(msg: string): string {
@@ -393,7 +395,7 @@ export function decodeRemoteErrorMessage(msg: string): string {
   if (limitKey) return i18n.t(limitKey);
   const parsed = parseAgentErrorCode(msg);
   return parsed
-    ? i18n.t(`chat.remoteError.${parsed.code}`, { defaultValue: parsed.fallback })
+    ? i18n.t(chatRemoteErrorGuidanceKey(parsed.code, null)!, { defaultValue: parsed.fallback })
     : msg;
 }
 
@@ -412,15 +414,17 @@ export function remoteErrorMessageForBanner(msg: string): string {
  * key('empty-response' / 'turn-failed'), message 仅作非 renderer 消费方(IM/orca)的兜底。
  */
 function liveErrorBannerText(message: string, reason: string | undefined): string {
+  if (reason === 'unexecuted-tool-markup') return i18n.t('logic.errors.unexecutedToolMarkup');
+  // The banner localizes this stable reason. Keep the host's bounded cause in
+  // the raw detail/diagnosis path instead of replacing it with summary copy.
+  if (reason === 'silent-stop-exhausted') return message;
   return reason === 'empty-response'
     ? i18n.t('logic.errors.emptyResponse')
     : reason === 'turn-failed'
       ? i18n.t('logic.errors.turnFailed')
-      : reason === 'silent-stop-exhausted'
-        ? i18n.t('logic.errors.silentStopExhausted')
-        : reason === 'codex-auto-review-unavailable'
-          ? i18n.t('logic.errors.codexAutoReviewUnavailable')
-          : remoteErrorMessageForBanner(message);
+      : reason === 'codex-auto-review-unavailable'
+        ? i18n.t('logic.errors.codexAutoReviewUnavailable')
+        : remoteErrorMessageForBanner(message);
 }
 // 专门给"出现在用户面前的红色 ErrorBanner"打日志,scope 以 `maker/` 开头
 // 是为了让它落在统一 agent 流(agent-*.ndjson,跟 agent runtime 抛出的底层错误同一份,
@@ -4131,16 +4135,34 @@ function _trimSessionMessages(sessionId: string): void {
   // 正在被看：读者视口必须在窗口尾部（贴底）。但渲染窗口会折叠工具过程、隐藏子代理
   // 内部行 —— 贴底不代表原始前缀已离屏（一轮提问+300 条折叠工具行+回答可以同屏），
   // 所以还必须按「渲染窗口覆盖地板」裁：窗口外的原始行没有 DOM，裁掉才可证不可见；
-  // 上翻阅读中不裁；快照缺 windowFloorClientId（旧快照/窗口未建立）时无法证明前缀
-  // 不可见，同样不裁。
+  // 上翻阅读中不裁；快照缺地板（旧快照/窗口未建立）时无法证明前缀不可见，同样不裁。
   if (_activeViewSessions.has(sessionId)) {
     const scroll = readSessionScroll(sessionId);
-    if (scroll?.isNearBottom === false) return;
-    const floorIdx = scroll?.windowFloorClientId
-      ? messageIndexByClientId(state.messages, scroll.windowFloorClientId)
-      : -1;
-    if (floorIdx < 0) return;
-    floors.push(floorIdx);
+    // 聚合所有挂载视图的地板：同会话双面板（如 Orca worker 面板 + 侧栏）各自记录，
+    // 旧快照/未带 viewId 的写入回退到单槽 windowFloorClientId。
+    const floorIds = scroll?.renderFloorsByView
+      ? Object.values(scroll.renderFloorsByView)
+      : scroll?.windowFloorClientId
+        ? [scroll.windowFloorClientId]
+        : [];
+    const floorIdxs = floorIds
+      .map((id) => messageIndexByClientId(state.messages, id))
+      .filter((idx) => idx >= 0);
+    // 没有任何可解析地板（旧快照/窗口未建立）时无法证明前缀不可见，不裁。
+    if (floorIdxs.length === 0) return;
+    const deepestFloorIdx = Math.min(...floorIdxs);
+    // isNearBottom 只在手动滚动时刷新：程序化钉底与窗口推进地板同步都不改它。
+    // 读过历史的挂载面板会留下残留 false，再叠加窗口推进同步进来的尾部地板，
+    // 豁免就变成永久 —— live push 无界堆积成刻度墙。豁免只保护「真的在看历史」：
+    // 任一视图的渲染窗口地板距尾超过暖读上限才算深读；所有地板都在尾部附近时，
+    // 各视图的读者窗口就是各自地板到结尾，裁掉更老的前缀不动任何视图。
+    if (
+      scroll?.isNearBottom === false &&
+      state.messages.length - deepestFloorIdx > WARM_READING_MAX_MESSAGES
+    ) {
+      return;
+    }
+    floors.push(...floorIdxs);
   }
   // 正在忙：不再整窗豁免，改为以「在途轮起始行」为地板 —— 完成轮照裁，运行轮整体
   // 保留（pending 交互、running 快照、远端乐观气泡都住在当前轮里）。轮起点是最后
@@ -8603,6 +8625,9 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         { deferNotification: isLiveStatusRefreshFrame },
       );
       scheduleWakeBridgeReconciliation(sessionId);
+      // Status labels are not turn completion: Claude emits Done before a
+      // silent-stop done, Pi after it. Only the stream done/error below settles
+      // remote preparation, using the same rule for every agent source.
       return;
     }
 
@@ -8840,6 +8865,10 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     }
 
     if ((isProductTurnDoneEvent(event) || event.type === 'error') && event.turnScope !== 'background') {
+      if ((event.data as { silentStop?: boolean } | null)?.silentStop !== true
+        && (event.type !== 'error' || isTerminalErrorData(event.data))) {
+        noteStartingTerminal(sessionId, event.agentMeta?.replyToClientId);
+      }
       const state = sessions.get(sessionId);
       const successful = isProductTurnDoneEvent(event) && event.turnOrigin?.kind === 'user'
         && event.turnOrigin.surface !== 'im' && state
@@ -15086,7 +15115,7 @@ function prewarmSession(
   void prewarmSessionFor(sessionId, createOpts).catch(() => undefined);
 }
 
-function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: boolean): void {
+function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: boolean, clientId: string): void {
   const sendAt = new Date();
   const userSendAtIso = sendAt.toISOString();
   // 真人发送保留旧时间字段的乐观投影；换手时间由 main 的 sessions:patched 下发。
@@ -15097,7 +15126,7 @@ function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: b
       : { userSendAt: userSendAtIso, updatedAt: userSendAtIso },
   );
   // 侧栏优先级在真实 isRunning 之前先把刚发送的任务当成 running,避免先沉底再跳顶。
-  markSessionStarting(sessionId);
+  markSessionStarting(sessionId, clientId);
 }
 
 /**
@@ -15798,6 +15827,8 @@ function maybeAutoNameUnnamedSession(
  * 不能丢)。
  */
 type SendMessageOpts = {
+  /** Reuse the bubble already displayed during remote creation. */
+  firstMessageIdentity?: { clientId: string; createdAt: string };
   vendorOptions?: Record<string, unknown>;
   /** 本条消息正文前缀含「选中引用」编码块,渲染侧据此启用胶囊化解析。 */
   quotesEncoded?: boolean;
@@ -15957,10 +15988,12 @@ function sendMessage(
           opts,
           clearGenerationAtStart,
           remoteScopeAtStart,
+          undefined,
+          opts?.firstMessageIdentity,
         );
       }
       if (remoteScopeAtStart) {
-        const identity = {
+        const identity = opts?.firstMessageIdentity ?? {
           clientId: crypto.randomUUID(),
           createdAt: new Date().toISOString(),
         };
@@ -16190,7 +16223,7 @@ async function sendMessageCore(
 
   // Renderer 只做 UI 乐观排序；DB user_send_at 和队列事务都由 main coordinator
   // 在 enqueue intent 内处理。这里不再本地 mutate pendingQueue，也不再触发 drain。
-  touchSessionUserSend(sessionId, workingDir, wasFirst);
+  touchSessionUserSend(sessionId, workingDir, wasFirst, queued.clientId);
 
   // Auto-naming (F-CHAT-2) — only fires for the first message in the session,
   // and that is by definition not busy (queue would have been dispatched on a
@@ -16589,7 +16622,7 @@ async function steerMessageCore(
   // 插话被受理(远程 outbox 收下 / 主进程受理或物化进队列)才作废关闭错误的待补标意图:之后
   // 落库的错误属于这次插话,不再代关掉的那次错误补标。被拒的插话不作废,否则关掉的错误随后
   // 落库时补标不了。
-  touchSessionUserSend(sessionId, workingDir, false);
+  touchSessionUserSend(sessionId, workingDir, false, queued.clientId);
   // 补起名同样要覆盖 steer:首条是纯附件的会话标题此时是合成占位,而用户完全
   // 可能趁这一轮还在跑就用「插话」写下第一句话。只走普通发送的话,这句话不会
   // 改名,标题会一直停在附件名直到他再排队发一条(PR #510 review P1)。
@@ -16622,22 +16655,7 @@ async function steerMessageCore(
       if (ok) {
         _disposedLiveErrorIntents.delete(sessionId);
         commitAutoTitle();
-        // Main answers a steer with no live turn by dispatching the text as a normal
-        // turn: it is back in pendingQueue, not injected. A composer steer that landed
-        // never sits in pendingQueue (direct steers are only a marker), so use the
-        // projection we already refresh to say it did not steer. Accepted stays true
-        // and a failed refresh stays silent.
-        void requestInputProjection(sessionId)
-          .then((result) => {
-            if (
-              result?.current &&
-              result.projection.pendingQueue.some((item) => item.clientId === queued.clientId) &&
-              !result.projection.steeringQueueClientIds?.includes(queued.clientId)
-            ) {
-              toast.warning(i18n.t('newChat.chatInput.steerFellBackToQueue'));
-            }
-          })
-          .catch(() => {});
+        requestInputProjection(sessionId);
         recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
         return true;
       }
@@ -17004,7 +17022,7 @@ function disposeLiveErrorPersist(sessionId: string): void {
     return;
   }
   if (!state?.error) return;
-  const tailRowId = persistedTailRowIdForLiveError(state);
+  const tailRowId = getLiveErrorMessageClientId(state);
   if (tailRowId) markLiveErrorRowDisposed(sessionId, tailRowId);
   _disposedLiveErrorIntents.set(sessionId, {
     text: state.error,
@@ -17027,7 +17045,7 @@ function markLiveErrorRowDisposed(sessionId: string, clientId: string): void {
 }
 
 /**
- * live 横幅没有绑定落库行时，找出它对应的已落库尾部错误行。
+ * 返回 live 横幅拥有的精确落库行；旧 Host 没有绑定时才按尾部与文案安全认领。
  *
  * 错误落库后若用户没在看这个任务(或之后离开过)，live 横幅会交给历史错误卡，绑定一并清掉；
  * main 的输入投影仍带着这次错误，之后任何一次投影(打开任务、队列变化、协同派活等)都会把
@@ -17035,15 +17053,19 @@ function markLiveErrorRowDisposed(sessionId: string, clientId: string): void {
  * 保留绑定：后来的新错误(远程断线期间漏收的新一轮、scheduler 发送前失败直接换掉错误等)
  * 可能不经过新一轮启动就顶替旧错误，保留的绑定会被错用到新错误上，关闭标掉的是旧行。
  *
- * 改在关闭时按当前看到的内容认领：已加载历史的最后一条(与尾部错误卡同一判定)是未处置的
- * error 行，且文案与 live 横幅一致(liveErrorTextMatchesRow)，才认为是同一次错误。对不上
- * (历史未加载、尾部不是 error、文案不同)就什么都不标，不会标到无关行。
+ * 改在显示/关闭时按当前看到的内容认领：共享尾部选择器找到未处置的 error 行
+ * (跳过位置/模型/历史边界卡)，且文案与 live 横幅一致(liveErrorTextMatchesRow)，才认为
+ * 是同一次错误。历史未加载、已有真实进展或文案不同就不认领，不会标到无关行。
  * 关闭的错误可能还没落库：尾部仍是同文案的旧行时，这里会把旧行一起标掉(它不在尾部之后
  * 就不再显示，没有可见影响)，真正那一行由 claimDisposedLiveErrorRow 等它落库后补标。
  */
-function persistedTailRowIdForLiveError(state: SessionChatState): string | null {
-  if (!state.error || !state.historyLoaded) return null;
-  const tail = state.messages[state.messages.length - 1];
+export function getLiveErrorMessageClientId(
+  state: Pick<SessionChatState, 'error' | 'errorPersistId' | 'historyLoaded' | 'messages' | 'disposedErrorPersistId'>,
+): string | null {
+  if (!state.error) return null;
+  if (state.errorPersistId) return state.errorPersistId;
+  if (!state.historyLoaded) return null;
+  const tail = findErrorTailMessage(state.messages, state.disposedErrorPersistId);
   return tail && isUndisposedErrorRowFor(tail, state.error, state.disposedErrorPersistId)
     ? tail.clientId
     : null;
@@ -18712,16 +18734,12 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
   // session when the action started.
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
   const triggerApi = remoteDeviceId ? makerApiForDevice(remoteDeviceId) : makerApiFor(sessionId);
-  const originalTail = state.messages[state.messages.length - 1];
   // Freeze the row the user acted on before session lookup / dispatch. A fast
   // continuation failure may append a new error before send resolves; that new
   // error must keep its retry banner.
-  const continuedErrorTailClientId =
-    syntheticTriggerKind(prompt) === 'continue' &&
-    originalTail?.role === 'error' &&
-    !originalTail.errorDismissed
-      ? originalTail.clientId
-      : null;
+  const continuedErrorTailClientId = syntheticTriggerKind(prompt) === 'continue'
+    ? findErrorTailMessage(state.messages, state.disposedErrorPersistId)?.clientId
+    : null;
   // device-link 远程会话:get/enqueue 都走传输层(getSessionFor 远程读被控 row,
   // makerApiFor(...) 远程隧道到被控端 coordinator)。
   return getSessionFor(sessionId)
@@ -20018,7 +20036,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     if (mcpApp) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'mcp-app' as const,
-      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: (parseMcpAppRecord(m.content)?.tool._meta as Record<string, unknown> | undefined)?.['cindy/plugin'] },
+      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: mcpApp.plugin, customMcp: mcpApp.customMcp },
       mcpAppClientId: m.clientId,
     };
     const persistedCindyCard =

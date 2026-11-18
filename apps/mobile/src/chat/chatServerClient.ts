@@ -485,8 +485,18 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
         && !mayStopWork(members, selfId, execution.bot_id, execution.requester_id)) }, supportsAttachments: true };
 }
 
+type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberInvites?: number; groupNotificationSettings?: number } };
+/** What every screen of one signed-in account may share: who it is on the Chat Server and the
+ * read in flight for it. `request` must be fenced to the account, never to one screen, so a
+ * screen that closes cannot fail the read another screen is waiting on. */
+export interface ChatAccountIdentity {
+  request?: ChatRequest;
+  known?: { id: string; at: number; capabilities: ChatMe['capabilities'] };
+  reading?: Promise<{ id: string; capabilities: ChatMe['capabilities'] }>;
+}
+
 export function createChatServerClient(request: ChatRequest, personalList = createConversationListState(),
-  openHistory?: (human: string) => Promise<ChatHistory>, inviteShares?: ChatInviteShares) {
+  openHistory?: (human: string) => Promise<ChatHistory>, inviteShares?: ChatInviteShares, account: ChatAccountIdentity = {}) {
   const threadFailures = new Map<string, { attempts: number; at: number }>();
   const retryDelays = [30_000, 60_000, 120_000, 240_000, 480_000];
   let historyCache: Promise<ChatHistory> | undefined;
@@ -569,25 +579,48 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   let supportsNotificationSettings = false;
   let supportsMentionAudiences = false;
   let supportsMemberInvites = false;
-  let lastIdentity: { id: string; at: number } | undefined;
-  let readingIdentity: Promise<string> | undefined;
-  async function identity() {
-    if (openHistory && lastIdentity && Date.now() - lastIdentity.at < 60_000) return lastIdentity.id;
-    return readingIdentity ??= (async () => {
-      const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberInvites?: number; groupNotificationSettings?: number } }>('/me');
-      if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
-      supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
-      supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
-      singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
-      personalMask = me.capabilities?.personalMask === 1;
-      supportsMemberAvatar = me.capabilities?.groupMemberAvatar === 1;
-      supportsNotificationSettings = me.capabilities?.groupNotificationSettings === 1;
-      supportsMentionAudiences = me.capabilities?.groupMentionAudiences === 1;
-      supportsMemberInvites = me.capabilities?.groupMemberInvites === 1;
-      const id = chatId(me.actor.id); lastIdentity = { id, at: Date.now() };
-      return id;
-    })().finally(() => { readingIdentity = undefined; });
+  function adopt(capabilities: ChatMe['capabilities']) {
+    supportsDissolve = capabilities?.groupLifecycleVersion === 1;
+    supportsListRemoval = capabilities?.conversationListStateVersion === 1;
+    singleSpeaker = capabilities?.groupSingleSpeaker === 1;
+    personalMask = capabilities?.personalMask === 1;
+    supportsMemberAvatar = capabilities?.groupMemberAvatar === 1;
+    supportsNotificationSettings = capabilities?.groupNotificationSettings === 1;
+    supportsMentionAudiences = capabilities?.groupMentionAudiences === 1;
+    supportsMemberInvites = capabilities?.groupMemberInvites === 1;
   }
+  // A screen opened after another already knows what the account's server supports.
+  if (account.known) adopt(account.known.capabilities);
+  async function identity() {
+    if (openHistory && account.known && Date.now() - account.known.at < 60_000) { adopt(account.known.capabilities); return account.known.id; }
+    const reading = account.reading ??= (async () => {
+      const me = await (account.request ?? request)<ChatMe>('/me');
+      if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
+      const id = chatId(me.actor.id);
+      account.known = { id, at: Date.now(), capabilities: me.capabilities };
+      return { id, capabilities: me.capabilities };
+    })().finally(() => { if (account.reading === reading) account.reading = undefined; });
+    const me = await reading;
+    adopt(me.capabilities);
+    return me.id;
+  }
+  /** Bounded parallel single-message reads; a failure belongs to its own ID. */
+  async function lookup(room: string, ids: readonly string[]): Promise<Map<string, { message: ChatMessage } | { error: unknown }>> {
+    const stored = await cache();
+    if (stored) return stored.lookup<ChatMessage>(room, ids);
+    const found = new Map<string, { message: ChatMessage } | { error: unknown }>();
+    const wanted = [...new Set(ids)];
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(4, wanted.length) }, async () => {
+      while (next < wanted.length) {
+        const id = wanted[next++]!;
+        try { found.set(id, { message: await request<ChatMessage>(`/conversations/${room}/messages/${chatId(id)}`) }); }
+        catch (error) { found.set(id, { error }); }
+      }
+    }));
+    return found;
+  }
+  const denied = (error: unknown) => [403, 404, 410].includes((error as { status?: number })?.status ?? 0);
   return {
     async previewInvite(link: string, signal?: AbortSignal): Promise<MobileChatInvitePreview> {
       return invitationPreview(await request<MobileChatInvitePreview>('/invite-links/preview', 'POST', { token: invitationToken(link) }, undefined, signal));
@@ -602,7 +635,17 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     },
     invalidateHistory(room: string, metadata = false) {
       if (metadata) for (const key of threadFailures.keys()) if (key.startsWith(`${room}:`)) threadFailures.delete(key);
-      void historyCache?.then(value => value.invalidate(room, metadata)).catch(() => undefined); },
+      // Open the account's history if this screen has not used it yet: the next read must see this.
+      void cache()?.then(value => value.invalidate(room, metadata)).catch(() => undefined); },
+    /** The account's own read position, from its POST receipt or its `read.changed` event. Merging
+     * it locally keeps reading a room from costing a snapshot download; anything else refreshes. */
+    async acceptRead(room: string, value: unknown, threadRootId?: string | null, receipt = false): Promise<boolean> {
+      const stored = await cache();
+      const read = receipt && value && typeof value === 'object' && !Array.isArray(value) ? { ...value, threadRootId: threadRootId ?? null } : value;
+      const applied = !!stored && await stored.readState(room, read, receipt).catch(() => false);
+      if (!applied) stored?.invalidate(room, true);
+      return applied;
+    },
     async refreshHistory(room: string, metadata = false) { const value = await cache(); value?.invalidate(room, metadata); await value?.snapshot(room); },
     personalList,
     async mask(roomId: string, action?: ChatMaskAction, operationId?: string): Promise<ChatMaskState | null> {
@@ -830,13 +873,24 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       if (!Array.isArray(members)) throw new Error('INVALID_CHAT_MEMBERS');
       return members;
     },
-    async load(roomId: string, oldest?: string, threadRootId?: string, attempt = 0): Promise<ChatPage> {
+    /** `shown` is the page this screen read moments ago. While the room's change cursor and
+     * history generation have not moved, nothing in the room changed (messages, executions and
+     * plans all advance that cursor), so only the personal metadata in the snapshot is replaced. */
+    async load(roomId: string, oldest?: string, threadRootId?: string, attempt = 0, shown?: ChatPage): Promise<ChatPage> {
       const room = chatId(roomId);
       const threadQuery = threadRootId ? `&threadRootId=${chatId(threadRootId)}` : '';
       const stored = await cache();
       const snapshot = stored ? await stored.snapshot<ChatSnapshot>(room) : await request<ChatSnapshot>(`/conversations/${room}/snapshot`);
       if (snapshot.room.id !== room || !Array.isArray(snapshot.members)) throw new Error('INVALID_CHAT_SNAPSHOT');
       chatCursor(snapshot.cursor);
+      if (shown && snapshot.cacheGeneration !== undefined && shown.historyRevision === snapshot.cacheGeneration
+        && shown.snapshot.room.id === room && shown.snapshot.cursor === snapshot.cursor && shown.threadRootId === threadRootId) {
+        return { ...shown, snapshot };
+      }
+      // Read after the snapshot's cursor, so a later change is still announced after it. It
+      // does not depend on the message page; let both travel together.
+      const executionsRead = request<ChatExecution[]>(`/conversations/${room}/executions`);
+      executionsRead.catch(() => undefined); // Reported below; an earlier failure must not leave it unhandled.
       // Snapshot includes Thread replies; the message endpoint selects the main timeline.
       let batch = await messagePage(room, `limit=100${threadQuery}`);
       const messages = [...batch];
@@ -860,24 +914,23 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           if (!chatRejection(error, 404, 'MESSAGE_NOT_FOUND')) throw error;
         }
       }
-      // Use the same execution snapshot for running status and stop controls.
-      const executions = await request<ChatExecution[]>(`/conversations/${room}/executions`);
+      // Use the same execution snapshot for running status and stop controls. Failure notices
+      // and plan cards only need the page's message IDs; none of the three waits for another.
+      const [executions, executionFailures, plans] = await Promise.all([executionsRead, failures(room, messages),
+        snapshot.room.kind === 'group' && !threadRootId ? readPlans(room, messages) : undefined]);
       const sourceMessages = new Map<string, ChatMessage | undefined>([...snapshot.messages, ...messages].map(message => [message.id, message]));
-      for (const execution of Array.isArray(executions) ? executions : []) {
-        if (execution.plan_id || !['queued', 'running', 'needs_input', 'stopping'].includes(execution.status)) continue;
-        let source = sourceMessages.get(execution.source_message_id);
-        if (!sourceMessages.has(execution.source_message_id)) {
-          try { source = await this.message(room, execution.source_message_id); }
-          catch (error) {
-            // Source-level denial leaves this execution unresolved, not the readable room.
-            if (![403, 404, 410].includes((error as { status?: number })?.status ?? 0)) throw error;
-          }
-          sourceMessages.set(execution.source_message_id, source);
-        }
+      const live = (Array.isArray(executions) ? executions : [])
+        .filter(execution => !execution.plan_id && ['queued', 'running', 'needs_input', 'stopping'].includes(execution.status));
+      const unknown = [...new Set(live.map(execution => execution.source_message_id).filter(id => !sourceMessages.has(id)))];
+      if (unknown.length) for (const [id, result] of await lookup(room, unknown.map(chatId))) {
+        // Source-level denial leaves this execution unresolved, not the readable room.
+        if ('error' in result && !denied(result.error)) throw result.error;
+        sourceMessages.set(id, 'message' in result ? result.message : undefined);
+      }
+      for (const execution of live) {
+        const source = sourceMessages.get(execution.source_message_id);
         if (source) execution.threadRootId = source.threadRootId ?? null;
       }
-      const executionFailures = await failures(room, messages);
-      const plans = snapshot.room.kind === 'group' && !threadRootId ? await readPlans(room, messages) : undefined;
       const projection = await stored?.projection<ChatMessage>(room, []);
       if (projection && snapshot.cacheGeneration !== projection.generation) {
         if (attempt >= 2) throw new Error('CHAT_HISTORY_CHANGED');
@@ -1035,31 +1088,37 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const work: Array<() => Promise<void>> = [];
       let threadRetryAt: number | undefined;
       const schedule = (at: number) => { if (Number.isFinite(at)) threadRetryAt = Math.min(threadRetryAt ?? at, at); };
-      const read = (id: string, task: () => Promise<void>) => {
+      const due = (id: string) => {
+        const failed = threadFailures.get(`${room}:${id}`);
+        if (failed && failed.at > Date.now()) { schedule(failed.at); return false; }
+        return true;
+      };
+      const settle = (id: string, ok: boolean) => {
         const key = `${room}:${id}`, failed = threadFailures.get(key);
-        if (failed && failed.at > Date.now()) { schedule(failed.at); return; }
+        if (ok) { threadFailures.delete(key); return; }
+        const attempts = (failed?.attempts ?? 0) + 1;
+        const at = attempts <= retryDelays.length ? Date.now() + retryDelays[attempts - 1]! : Infinity;
+        threadFailures.set(key, { attempts, at }); schedule(at);
+      };
+      const read = (id: string, task: () => Promise<void>) => {
+        if (!due(id)) return;
         work.push(async () => {
-          try { await task(); threadFailures.delete(key); }
-          catch {
-            const attempts = (failed?.attempts ?? 0) + 1;
-            const at = attempts <= retryDelays.length ? Date.now() + retryDelays[attempts - 1]! : Infinity;
-            threadFailures.set(key, { attempts, at }); schedule(at);
-          }
+          try { await task(); settle(id, true); }
+          catch { settle(id, false); }
         });
+      };
+      // Sources and roots are single-message reads of one room: fetch them as one batch
+      // (one local commit) instead of one queued read and one commit per message.
+      const singles = new Map<string, Array<{ key: string; put(value: ChatMessage | null): void }>>();
+      const single = (key: string, id: string, put: (value: ChatMessage | null) => void) => {
+        if (!due(key)) return;
+        try { chatId(id); } catch { settle(key, false); return; }
+        singles.set(id, [...(singles.get(id) ?? []), { key, put }]);
       };
       for (const sourceId of new Set(page.messages.flatMap(message => readBotGroupThreadShareCard(message)?.messageId ?? []))) {
         if (known.has(sourceId)) { threadSources[sourceId] = known.get(sourceId)!; continue; }
-        read(`source:${sourceId}`, async () => {
-          try {
-            const stored = await cache();
-            threadSources[sourceId] = stored ? await stored.message<ChatMessage>(room, chatId(sourceId))
-              : await request<ChatMessage>(`/conversations/${room}/messages/${chatId(sourceId)}`);
-          } catch (error) {
-            // Source-level denial hides this reference, never the entire room.
-            if ([403, 404, 410].includes((error as { status?: number })?.status ?? 0)) threadSources[sourceId] = null;
-            else throw error;
-          }
-        });
+        // Source-level denial hides this reference, never the entire room.
+        single(`source:${sourceId}`, sourceId, value => { threadSources[sourceId] = value; });
       }
       // A recent reply does not prove that its root is in the current window.
       // Resolve roots independently; a transient failure stays loading, never deleted.
@@ -1069,22 +1128,26 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       }));
       for (const rootId of rootIds) {
         if (known.has(rootId)) continue;
-        read(`root:${rootId}`, async () => {
-          try {
-            const stored = await cache();
-            threadRoots[rootId] = stored ? await stored.message<ChatMessage>(room, chatId(rootId))
-              : await request<ChatMessage>(`/conversations/${room}/messages/${chatId(rootId)}`);
-          } catch (error) {
-            if ([403, 404, 410].includes((error as { status?: number })?.status ?? 0)) threadRoots[rootId] = null;
-            else throw error;
+        single(`root:${rootId}`, rootId, value => { threadRoots[rootId] = value; });
+      }
+      if (singles.size) {
+        // A failed batch (for example the room itself became unreadable, which the page read
+        // reports) leaves every reference loading and due for its own retry.
+        const results = await lookup(room, [...singles.keys()])
+          .catch(() => new Map<string, { message: ChatMessage } | { error: unknown }>());
+        for (const [id, readers] of singles) {
+          const result = results.get(id);
+          for (const reader of readers) {
+            if (result && 'message' in result) { reader.put(result.message); settle(reader.key, true); }
+            else if (result && denied(result.error)) { reader.put(null); settle(reader.key, true); }
+            else settle(reader.key, false);
           }
-        });
+        }
       }
       let index = 0;
       const drain = () => Promise.all(Array.from({ length: Math.min(4, work.length) }, async () => {
         while (index < work.length) await work[index++]!();
       }));
-      await drain();
       const previewRoots = new Map([...page.messages, ...[...rootIds].flatMap(id => threadRoots[id] ?? known.get(id) ?? [])]
         .map(message => [message.id, message]));
       if (!page.threadRootId) for (const root of previewRoots.values()) {

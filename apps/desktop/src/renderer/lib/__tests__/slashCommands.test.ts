@@ -15,7 +15,6 @@ import {
   nextAvailableSlashCommandIndex,
   pluginSkillSetupName,
   rebaseInlineRangesAfterSlashCommandRewrite,
-  startsWithDesktopSlashCommand,
   reconcilePiRuntimeCommandForDispatch,
   reconcilePiRuntimeCommandForDispatchWithRetry,
   rewriteAgentSkillInvocationForDispatch,
@@ -762,29 +761,5 @@ describe('plugin Skill setup rows', () => {
 
   it('does not mark an ordinary desktop command of the same shape', () => {
     expect(pluginSkillSetupName({ kind: 'desktop', name: 'pr', description: 'x' })).toBeUndefined();
-  });
-});
-
-describe('startsWithDesktopSlashCommand', () => {
-  const roster = [
-    { kind: 'desktop', name: 'help', description: '' },
-    { kind: 'agent-builtin', name: 'compact', description: '' },
-    { kind: 'agent-skill', name: 'git', description: '' },
-  ] as unknown as Parameters<typeof startsWithDesktopSlashCommand>[1];
-
-  it.each([
-    ['/help', true],
-    ['/HELP me', true],
-    ['/compact now', false],
-    ['/git status', false],
-    ['/Users/me/project has a typo in this directory name', false],
-    ['  /help', false],
-    ['look at /help', false],
-  ])('%s -> %s', (message, expected) => {
-    expect(startsWithDesktopSlashCommand(message, roster)).toBe(expected);
-  });
-
-  it('is false before the roster is loaded', () => {
-    expect(startsWithDesktopSlashCommand('/help', null)).toBe(false);
   });
 });

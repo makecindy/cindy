@@ -29,6 +29,7 @@ open 结果沿用现有 invokeTransfer gzip 协商，自建中转继续透明转
 `mcpApps.ui.resources` 并复用标准 AppBridge。`open-resource` 仅本机支持真正的无任务来源；
 原远程操作继续要求真实任务，不扩大 device-link allowlist、relay 或 Mobile 原生能力。
 Host UI 以整版安装/更新批准有效、已启用及当前 manifest 声明为准，不另存分项批准。
+本机位置增量 `composer.header` 复用原生控件与弹层入口；旧端保留该声明但不挂载，既有位置与批准记录不变，无跨端协议变化。
 旧 receipt 的 `approvedHostUi` 字段读到即忽略，不迁移、不删数据；旧页面批准与原工具审批保持不变。
 原生入口、具名页面工具及无任务全局工具不套用 Agent MCP 策略或调用时确认，仍校验归属、版本、声明与来源 ticket。
 原生控件订阅/状态沿现有管子与本机用途受限 IPC，消息正文不新增落库前查询。
@@ -180,3 +181,29 @@ Desktop Main 和 Mobile JS 复用同一个引用缓存实现；Mobile 用已有�
 依赖宿主 SDK import 的页面会 404 并最终 MCP_APP_INITIALIZATION_TIMEOUT。这是原有冷开限制；
 本次只修复已有匹配字节的暖开，尚未对该补丁重做远程实机验收。是否声明查看端内置 SDK 的
 哈希属于后续设计事项，本次不实现。
+
+## 卡片来源、宿主按钮与固定尺寸（2026-11-16）
+
+公开 `mcpAppHistory` version 1 增加可选 `plugin: {name,source?}` 与 `customMcp: {name}`。
+source 是宿主记录的生成时快照，只包含 `{kind: "official"|"organization"|"market"|"third-party"|"local"|"unknown"}`；
+同账号与共享访客历史均不发送 namespace，公开 organization 无 namespace 仍按市场来源显示。
+Host 侧 installationSource 的 namespace 校验、插件详情与安装确认保持不变。
+自定义 MCP 的 name 由执行 Host 从用户配置的 CustomMcpConfig.name 写入私有工具 `_meta["cindy/custom-mcp"]`，
+覆盖服务自报的同名字段；公开投影只保留 name，不含服务 ID、slug、地址、端口、请求头或凭证。
+旧端 title 同时得到「服务名 · 自定义 MCP」；名称为生成时快照，改名不改旧卡片，不在渲染时回查配置。
+兼容早期 `customMcp: true` 和缺失/非法 name：回退原工具标题/工具名，不能因此丢掉整张卡。
+新查看端遇到未知 source kind 按 unknown 提示，旧卡片缺 source 不加来源标签。
+旧端继续读 title/text，title 保留插件名与例外来源文字；没有向公开历史加入私有参数、服务器身份或凭据。
+已安装插件投影和安装确认增加可选 `installationSource`，旧 `trust.level` 与 `consent.trust` 值域、权限和批准语义均不变。
+旧手机允许未知可选字段，仍按原 trust 四值校验。新手机连接旧 Host 时缺来源的确认显示来源未知，不猜市场身份。
+
+资源可选 `hostFullscreenButton` 映射为 `_meta["cindy/host-fullscreen-button"]`；默认 true，false 只控制宿主按钮。
+旧 manifest 解析器保留未知资源字段，因此不会拒装；若作者必须隐藏旧宿主按钮，需按实际发布版本设置 minCindyVersion。
+新 Host 在既有 `ui/notifications/host-context-changed` 中发布可选 `cindy/host-controls: {fullscreenButton:boolean}`，
+取当前资源设置、Host 与 App 显示模式能力交集。新查看端仅在明确 true 时显示按钮；旧 Host 缺字段时隐藏，旧查看端忽略。
+本机和远控 Desktop 沿原沙箱消息观察通道接收，不新增 channel、操作或 relay 字段，按钮走原 displayMode 校验。
+手机始终只提供 inline，忽略按钮字段。
+
+页签及全屏使用标准 containerDimensions 的 `{width,height}` 分支；对话保持 `{width,maxHeight}`，
+尺寸变化沿原 context 操作发送，隐藏/零尺寸不发送。无存储迁移，不重新批准插件。
+Mobile 仅 JS/TS 展示与文案修改，无原生依赖、配置或接口变化，可随热更新交付；最终指纹仍以 CI 同环境比较为准。

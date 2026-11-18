@@ -441,6 +441,20 @@ describe("subscription quota for every subscription family", () => {
     expect(result).toMatchObject({ source: "claude", windows: [], plan: null });
   });
 
+  // Unit: a remote host's display name must survive the mobile projection, even when its plan code is pro.
+  it("uses the execution host's official Claude plan display name", async () => {
+    const r = reader();
+    r.getSubscriptionUsage.mockResolvedValue({
+      ...claudeSnapshot(), subscriptionType: "pro", planTier: "pro", planDisplayName: "Ultra",
+    });
+    const result = await readSessionMenuAccountUsage(
+      { ...session, agentKind: "cc", providerId: "anthropic", model: "claude-opus-5-5" },
+      r,
+    );
+    expect(result.plan).toBe("Ultra");
+    expect(result.windows.map(window => window.remainingPercent)).toEqual([70, 45, 8]);
+  });
+
   it("reads an independent subscription account by its own id", async () => {
     const r = reader();
     const provider = { id: "grok-second", auth: { method: "oauth" as const, native: "xai" as const } };

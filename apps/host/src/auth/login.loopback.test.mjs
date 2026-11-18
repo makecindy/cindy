@@ -28,6 +28,7 @@ test('completes the loopback login against a stub provider and stores the sessio
   let openedUrl = '';
   const written = new Map();
   const exchanged = [];
+  const signedIn = [];
   try {
     const result = await runHostLogin({
       client: {
@@ -41,7 +42,7 @@ test('completes the loopback login against a stub provider and stores the sessio
         },
         exchangeAuthorizationCode: async (code, verifier) => {
           exchanged.push({ code, verifier });
-          return { status: 'ok', refreshToken: 'fixture-refresh-value' };
+          return { status: 'ok', refreshToken: 'fixture-refresh-value', accessToken: 'fixture-fresh-access' };
         },
       },
       store: { write: (key, value) => written.set(key, value) },
@@ -51,9 +52,12 @@ test('completes the loopback login against a stub provider and stores the sessio
         // Follow the provider redirect into the host's own callback listener.
         await fetch(url, { redirect: 'follow' });
       },
+      // A removed Host registers again only with this sign-in's own token (auth/device-link-registration.mjs).
+      onSignedIn: async (token) => { signedIn.push({ token, saved: written.size }); },
     });
 
     assert.deepEqual(result, { authenticated: true, realm: 'global', method: 'google' });
+    assert.deepEqual(signedIn, [{ token: 'fixture-fresh-access', saved: 1 }]);
     assert.equal(exchanged.length, 1);
     assert.equal(exchanged[0].code, 'stub-authorization-code');
     assert.ok(exchanged[0].verifier.length >= 43, 'PKCE verifier is sent with the exchange');

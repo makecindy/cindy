@@ -45,12 +45,14 @@ import {
   ComposerOrderedList,
   handleStructuredListBackspace,
   handleComposerListEnter,
+  handleComposerListTab,
   hasTrailingPlainListParagraph,
   isTopLevelBlockSelection,
   isTrailingEmptyTopLevelParagraph,
   promoteTrailingPlainListParagraph,
 } from './ComposerListNodes';
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
+import { ComposerLineEdgeKeymap } from './ComposerLineEdgeKeymap';
 import { useVoiceProcessingIndicator } from '../../voice-input/useVoiceProcessingIndicator';
 import { EmptyDocSelectionGuard } from './EmptyDocSelectionGuard';
 import { restoreComposerDocument } from './restoreComposerDocument';
@@ -164,6 +166,7 @@ import { captureComposerSendSnapshot, isComposerSendSnapshotCurrent } from './co
 import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
 
 import {
+  discoveredCopyReason,
   confirmAgentSwitchRisk,
   isAgentSwitchEchoConfigConsistent,
   isAgentSwitchResponseFresh,
@@ -292,7 +295,6 @@ import {
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
   pluginSkillSetupName,
   rewriteBuiltInSkillDraftForSend,
-  startsWithDesktopSlashCommand,
   leadingSlashInvocation,
   rebaseInlineRangesAfterSlashCommandRewrite,
   type PluginSkillSetupPaletteEntry,
@@ -2523,6 +2525,11 @@ export function ChatInput({
       WindowsSelectionReplacement.configure({
         enabled: window.electronAPI.platform === 'win32',
       }),
+      // macOS Ctrl+A / Ctrl+E 按"当前行"(hardBreak 分行)移到行首 / 行尾,
+      // 而不是 Tiptap 默认的整段开头 / 结尾。
+      ComposerLineEdgeKeymap.configure({
+        enabled: window.electronAPI.platform === 'darwin',
+      }),
       // 空输入框全选 / 全选后删空都会在行首留一块幽灵高亮(空 paragraph 被整体框进
       // AllSelection,删空后 Chromium 的 DOM selection 也不跟着折叠)。见模块头注释。
       EmptyDocSelectionGuard,
@@ -2852,6 +2859,14 @@ export function ChatInput({
         // but we expose a ref-based escape hatch via `panelBridgeRef`.
         const bridge = panelBridgeRef.current;
         if (bridge?.captureKey(event)) {
+          event.preventDefault();
+          return true;
+        }
+
+        // Tab / Shift+Tab — 光标在结构化列表里时调整列表层级(大纲式编辑)。
+        // 放在 captureKey 之后(palette 打开时 Tab 归 palette),推荐提示词与
+        // cycle-permission-mode 之前:在列表里 Shift+Tab 不会误切权限模式。
+        if (handleComposerListTab(view, event)) {
           event.preventDefault();
           return true;
         }
@@ -6561,15 +6576,7 @@ export function ChatInput({
             filesToSend,
             mentionsToSend,
             {
-              // Steer skips Desktop command dispatch, so a steer *default* never
-              // swallows a known Desktop command; paths and Skills retain their
-              // selected delivery.
-              deliveryMode:
-                deliveryMode === 'steer' &&
-                getComposerFollowUpBehavior() === 'steer' &&
-                startsWithDesktopSlashCommand(routedText, slashCommandsReady ? mergedCommands : null)
-                  ? 'queue'
-                  : deliveryMode,
+              deliveryMode,
               providerId: sendProviderId,
               ...(canAttemptBaselineRecovery ? { baselineRecovery: true } : {}),
               ...(builtInSkillIntent
@@ -7966,11 +7973,22 @@ export function ChatInput({
   // 标题写那台电脑的名字(「这台电脑」在控制端看来是本机,会读错)。
   const relocationSourceAgent = sessionEngineFilter?.currentAgent;
   const confirmAgentRelocation = useCallback(
-    (target: UnifiedSelectionAgentDevice, targetAgent: string) =>
-      confirmAgentSwitchRisk({
+    (target: UnifiedSelectionAgentDevice, targetAgent: string) => {
+      const description = t(relocationDescriptionKey({
+        fromAgent: relocationSourceAgent,
+        toAgent: targetAgent,
+        fromAgentDeviceId: agentDeviceId,
+        toAgentDeviceId: target?.deviceId,
+      }));
+      // 另一台电脑上那份只是因为任务所在电脑的这一份用不了才列出来：每次都问(不受「不再提示」影响)，
+      // 同一个框里说明原因。不答或取消 = 不换；正在进行的回复和这一份的恢复都不受影响(2026-11-18)。
+      const ask = target?.askBeforeUse;
+      const reason = ask ? discoveredCopyReason(t, ask) : null;
+      return confirmAgentSwitchRisk({
         hasSwitchIntent:
           (target?.deviceId ?? null) === agentDeviceId ||
           (intentAgentDeviceId !== undefined && intentAgentDeviceId === (target?.deviceId ?? null)),
+        alwaysAsk: !!ask,
         confirm: confirmDialog,
         copy: {
           title: target
@@ -7980,17 +7998,15 @@ export function ChatInput({
                   device: deviceDisplayName(deviceLinkDeviceId, deviceLinkDeviceName),
                 })
               : t('newChat.chatInput.agentRelocation.titleLocal'),
-          description: t(relocationDescriptionKey({
-            fromAgent: relocationSourceAgent,
-            toAgent: targetAgent,
-            fromAgentDeviceId: agentDeviceId,
-            toAgentDeviceId: target?.deviceId,
-          })),
+          description: reason
+            ? t('newChat.chatInput.agentRelocation.discoveredDescription', { reason, description })
+            : description,
           confirmText: t('newChat.chatInput.agentRelocation.confirm'),
           cancelText: t('newChat.chatInput.agentRelocation.cancel'),
           dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
         },
-      }),
+      });
+    },
     [agentDeviceId, intentAgentDeviceId, deviceLinkDeviceId, deviceLinkDeviceName, relocationSourceAgent, confirmDialog, t],
   );
   const sessionRemoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(() => {
@@ -9606,6 +9622,9 @@ export function ChatInput({
             />
           )}
         </div>
+      )}
+      {pluginUiCandidates.header && !remoteHostId && !deviceLinkDeviceId && (
+        <PluginUiSlot position="composer.header" sessionId={sessionId} />
       )}
       {/* When the pending-queue panel is visible, the wrapper div owns the
           border + corner radius + focus-within highlight. Both inner halves
