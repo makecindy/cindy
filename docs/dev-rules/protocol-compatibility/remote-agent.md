@@ -8,7 +8,9 @@
 只传组级结论和已知的恢复时间，作用域为本次任务。中继转发原有信封，自建中转无需改动。
 
 桌面端在换来源后续发原消息时，经现有 `maker:input:retry-last-error` 传
-`expectedQueueHeadClientId`。任务所在电脑只重试与当前恢复项和实际队首都匹配的消息。
+`expectedQueueHeadClientId` 与本次切换回执的 `pendingSwitchRevision`（作为 `expectedSwitchRevision`）。
+任务所在电脑匹配恢复项及实际队首，并在发送锁内重新核对待应用的切换修订号。另一控制端改选后，
+原确认不会派发到改选目标。
 远控端仅向声明 `supportsQueueHeadRetry` 的任务电脑发送这个选项。旧端仍可手动重试。
 
 ## 托管请求的附件预算与保存（2026-11-17）

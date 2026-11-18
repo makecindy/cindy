@@ -7469,6 +7469,7 @@ export function ChatInput({
          */
         agentDeviceId?: string | null;
         thinking?: boolean;
+        onSwitchStaged?: (revision: number) => void;
       },
     ): Promise<boolean> => {
       // ★ 返回值 = **本端请求的完整配置真的落到会话上了没有**(2026-08-17 review 确立
@@ -7675,6 +7676,7 @@ export function ChatInput({
         // 调用方的清理若按成功走,清掉的是**用户最新那次选择**对应的配置。
         if (ackAction === 'discard') return false;
         if (ackAction === 'apply-intent') {
+          if (result.pendingSwitchRevision !== undefined) overrides?.onSwitchStaged?.(result.pendingSwitchRevision);
           // 意图已登记:乐观呈现目标引擎/模型/档位(独立 intent 覆盖
           // model/effort/provider/fast 显示,不改真实 reducer agentKind)。真切换
           // 在下一条消息发送时刻执行;turn 运行中额外提示旧 turn 不受影响。
@@ -8046,15 +8048,17 @@ export function ChatInput({
         const retryLabel = retryClientId === undefined ? undefined : selection.agentDevice?.name ?? selection.modelId;
         if (!(await confirmAgentRelocation(selection.agentDevice, selection.agent, retryLabel))
           || currentSessionIdRef.current !== sessionId) return false;
+        let expectedSwitchRevision: number | undefined;
         const selected = await performAgentSwitchRef.current(selection.agent, selection.modelId, selection.providerId, {
           ...(selection.effort ? { effort: selection.effort } : {}),
           fastMode: selection.fast,
           agentDeviceId: selection.agentDevice?.deviceId ?? null,
+          onSwitchStaged: (revision) => { expectedSwitchRevision = revision; },
         });
         const latest = makerChatStore.getSnapshot(sessionId).inputRecovery;
-        if (selected && retryClientId !== undefined && currentSessionIdRef.current === sessionId
+        if (selected && retryClientId !== undefined && expectedSwitchRevision !== undefined && currentSessionIdRef.current === sessionId
           && latest?.kind === 'queue-head' && latest.clientId === retryClientId) {
-          await makerChatStore.retryLastError(sessionId, retryClientId);
+          await makerChatStore.retryLastError(sessionId, { expectedQueueHeadClientId: retryClientId, expectedSwitchRevision });
         }
         return selected;
       },
