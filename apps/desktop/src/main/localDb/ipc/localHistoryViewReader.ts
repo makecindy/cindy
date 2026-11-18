@@ -7,11 +7,15 @@
  * external history import before a page (`importBeforeList`) and the task image restoration
  * (`restoreTaskImages`). The last two pull Electron in on the desktop; absent, nothing is imported
  * and rows are returned as read.
+ *
+ * `readPriorUserRoundCost` (moved from messages.ts unchanged, 2026-11-18) lives here too: the cost
+ * already recorded in the visible user round, which turn cost recording adds to the final message.
  */
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cost-details';
 import { historyOutlineContent, historyOutlineContentStamp, withHistoryArtifacts } from './historyViewOutline';
 import { getDbClient, getCurrentDbClientSnapshot } from '../client/current';
+import type { DbClient } from '../client/DbClient';
 import { messages, sessions } from '../schema';
 import { messageRowid } from '../retriedUserTurnSupersede.js';
 import { messageToCamel } from '../mapper';
@@ -507,6 +511,131 @@ export async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Me
 
 export function isAutoResumeUserMessage(agentMeta: string | null): boolean {
   return parseAgentMetaRecord(agentMeta)?.autoResume === true;
+}
+
+/**
+ * Sums prior assistant cost segments back to the latest real user message.
+ *
+ * An agent can emit several SDK `done` segments while completing one visible
+ * user request (for example, background audit progress followed by a final
+ * summary). Those segments must stay separate for billing and analytics, but
+ * the final message needs their user-round total. This reads only the current
+ * round, honours /clear + rewind visibility, and deliberately skips synthetic
+ * `autoResume` user rows so an automatic "continue" cannot split a round.
+ */
+export async function readPriorUserRoundCost(
+  sessionId: string,
+  assistantClientId: string,
+  client: DbClient = getDbClient(),
+): Promise<PriorUserRoundCost> {
+  const db = client.drizzle;
+  const [target] = await db
+    .select({ createdAt: messages.createdAt, rowid: messageRowid })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.clientId, assistantClientId),
+        eq(messages.role, 'assistant'),
+        isNull(messages.rewindAt),
+      ),
+    )
+    .limit(1);
+  if (!target) return { money: null, costUsd: 0, hasEstimatedValue: false };
+
+  const [session] = await db
+    .select({ clearedAt: sessions.clearedAt })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  const visibleAfterClear =
+    session?.clearedAt == null ? [] : [gt(messages.createdAt, session.clearedAt)];
+  const beforeTarget = or(
+    lt(messages.createdAt, target.createdAt),
+    and(eq(messages.createdAt, target.createdAt), lt(messageRowid, target.rowid)),
+  );
+
+  const userRows = await db
+    .select({ createdAt: messages.createdAt, rowid: messageRowid, agentMeta: messages.agentMeta })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.role, 'user'),
+        isNull(messages.rewindAt),
+        beforeTarget,
+        ...visibleAfterClear,
+      ),
+    )
+    .orderBy(desc(messages.createdAt), desc(messageRowid));
+  const realUserRows = userRows.filter((row) => !isAutoResumeUserMessage(row.agentMeta));
+  const boundary = realUserRows[0];
+  if (!boundary) return { money: null, costUsd: 0, hasEstimatedValue: false };
+  // 运行中插话（delivery: 'steer'）与界面一样归在同一轮，不算新的用户请求。
+  const isFirstUserRound =
+    realUserRows.filter((row) => parseAgentMetaRecord(row.agentMeta)?.delivery !== 'steer')
+      .length === 1;
+
+  const afterBoundary = or(
+    gt(messages.createdAt, boundary.createdAt),
+    and(eq(messages.createdAt, boundary.createdAt), gt(messageRowid, boundary.rowid)),
+  );
+  const assistantRows = await db
+    .select({ agentMeta: messages.agentMeta })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.role, 'assistant'),
+        isNull(messages.rewindAt),
+        afterBoundary,
+        beforeTarget,
+        ...visibleAfterClear,
+      ),
+    );
+
+  const values: RegionalMoney[] = [];
+  const additionalCosts: RegionalMoney[] = [];
+  const mediaCosts = parseAgentMetaRecord(boundary.agentMeta)?.mediaCosts;
+  if (Array.isArray(mediaCosts)) {
+    for (const value of mediaCosts) {
+      const cost = normalizeRegionalMoney(value);
+      if (cost?.kind === 'actual-cost' && cost.amount > 0) {
+        values.push(cost);
+        additionalCosts.push(cost);
+      }
+    }
+  }
+  const estimatedCurrencies = new Set<RegionalMoney['currency']>();
+  for (const row of assistantRows) {
+    const meta = parseAgentMetaRecord(row.agentMeta);
+    const structured = normalizeRegionalMoney(meta?.turnCost);
+    const legacy =
+      typeof meta?.turnCostUsd === 'number' &&
+      Number.isFinite(meta.turnCostUsd) &&
+      meta.turnCostUsd > 0
+        ? legacyUsdMoney(meta.turnCostUsd)
+        : undefined;
+    const rawSegment = structured ?? legacy;
+    const isEstimate = rawSegment?.kind === 'value-estimate' || meta?.turnCostIsEstimate === true;
+    const segment = rawSegment && isEstimate ? asValueEstimateMoney(rawSegment) : rawSegment;
+    for (const estimate of supplementalConversationEstimates(meta)) {
+      values.push(estimate);
+      estimatedCurrencies.add(estimate.currency);
+    }
+    if (!segment || segment.amount <= 0) continue;
+    values.push(segment);
+    if (isEstimate) estimatedCurrencies.add(segment.currency);
+  }
+  const money = addCompatibleRegionalMoney(values);
+  const hasEstimatedValue = money !== null && estimatedCurrencies.has(money.currency);
+  return {
+    money,
+    costUsd: money?.currency === 'USD' ? money.amount : 0,
+    hasEstimatedValue,
+    ...(additionalCosts.length ? { additionalCosts } : {}),
+    ...(isFirstUserRound ? { isFirstUserRound } : {}),
+  };
 }
 
 function oldestHistoryMessage(history: Message[]): Message {
