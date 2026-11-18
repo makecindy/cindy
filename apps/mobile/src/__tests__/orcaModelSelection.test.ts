@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { confirmAgentLocationForPick } from '@/session/sessionAgentSwitchConfirmation';
+import { resolveAgentLocationPick } from '@/session/sessionAgentSwitch';
 import { shouldBlockLegacyRemoteModelWindowSwitch } from '@cindy/maker-shared/agent-capabilities';
 
 vi.mock('react-native', () => ({ Alert: { alert: vi.fn() } }));
@@ -45,7 +45,7 @@ function setup(orcaRole: 'lead' | 'worker' | null, supported = true, agentDevice
     sessionAgentSwitchSupported: supported, sessionAgentKind: windowState.agent ?? 'codex', modelSheetAgentKind: windowState.agent ?? 'codex',
     canUseRemoteSessionControls: true, canConfigureSessionModel: true, controlBusy: false,
     sessionId: 's1', deviceId: 'host', deviceIdRef: { current: 'host' },
-    agentLocationMovable: false, controlledComputerName: 'Host', remoteAgentDeviceName: vi.fn(),
+    agentLocationMovable: false,
     agentSwitchIntent: { targetAgentKind: 'codex', ...selection },
     modelSheetSelection: selection, modelSheetCapabilities: { supportsModelWindowSwitchGuard: windowState.hostGuard !== false },
     sessionMirrorAccessors: {}, composerDeviceProviders: { providers: [] },
@@ -55,12 +55,11 @@ function setup(orcaRole: 'lead' | 'worker' | null, supported = true, agentDevice
     maker: { getCapabilities: vi.fn(), setEffort: vi.fn(), setFastMode: vi.fn() },
     executionMakerForDevice: vi.fn((_id: string) => ({ getCapabilities: remoteCapabilities })),
     isProviderShareAgentDeviceId: (id: unknown) => typeof id === 'string' && id.startsWith('share:'),
-    // relocateTo:模拟用户已在换电脑确认框里点了确认。
-    confirmAgentLocationForPick: windowState.relocateTo !== undefined
-      ? vi.fn(async () => ({ agentDeviceId: windowState.relocateTo }))
-      : confirmAgentLocationForPick,
+    // 隔离换机的结果，验证三条选择路径都跳过原地缩窗保护。
+    resolveAgentLocationPick: windowState.relocateTo !== undefined
+      ? vi.fn(() => ({ agentDeviceId: windowState.relocateTo }))
+      : resolveAgentLocationPick,
     intentChangesAgentLocation: () => false,
-    confirmMobileSessionAgentSwitch: vi.fn(async () => true),
     shouldBlockLegacyRemoteModelWindowSwitch, showRemoteModelWindowUnsupported: vi.fn(),
     writeSessionAgentSwitchIntent: write, setComposerModel: setModel, runControlAction,
     setModelSheetOpen: vi.fn(), setModelSheetAgentKind: vi.fn(),

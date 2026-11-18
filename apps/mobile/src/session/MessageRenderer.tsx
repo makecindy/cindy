@@ -373,7 +373,7 @@ import type {
   MobileMediaPlayerKind,
   MobileMediaPlayerStatus,
 } from '@/session/mediaPlayerWebViewHtml';
-import { formatAgentSwitchLocationLabel, formatMobileSystemCard } from '@/session/systemCard';
+import { formatAgentSwitchLocationLabel, formatMobileSystemCard, handoffCoverageKey } from '@/session/systemCard';
 import { MobileBoundaryNotice } from '@/session/MobileBoundaryNotice';
 import {
   getMobileAutoResumePresentation,
@@ -5812,7 +5812,7 @@ function isEnglishSourceHandoff(handoff: string): boolean {
 
 // session-agent-switch 边界卡 —— 1:1 对齐桌面 SystemCard.tsx 的 AgentSwitchCard:
 // 「分隔线 + 居中药丸」语言(⇄ + 已从 X 切换到 Y + · 目标模型 + 可选 · 已续接原会话),
-// 而非通用盒子卡片。药丸可点展开交接摘要面板(切换时发给新引擎的上下文全文,数据来自
+// 而非通用盒子卡片。药丸可点展开交接内容(切换时发给新引擎的上下文,数据来自
 // desktop 落库 agent_switch 行 content.handoff)。全灰度、走主题 token,无 chromatic 色。
 function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const styles = useThemedStyles(makeStyles);
@@ -5823,6 +5823,7 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const to = agentSwitchEngineLabel(data?.toAgentKind);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
+  const coverageKey = handoffCoverageKey(data);
   const resumed = data?.resumed === true;
   // 远程 Agent 换了电脑:药丸说位置(「Agent 改到 X 运行」),否则仍是「已从 X 切换到 Y」。
   const modelOnly = data?.modelOnly === true;
@@ -5848,7 +5849,7 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
               <Text style={styles.agentSwitchModel} numberOfLines={1}>{toModel}</Text>
             </>
           ) : null}
-          {resumed || data?.nativeHistory === 'fallback' ? (
+          {!coverageKey && (resumed || data?.nativeHistory === 'fallback') ? (
             <>
               <Text style={styles.agentSwitchDot}>·</Text>
               <Text style={styles.agentSwitchPillText} numberOfLines={1}>{t(data?.nativeHistory === 'fallback' ? 'message.renderer.sessionFallbackPill' : 'message.renderer.sessionResumedPill')}</Text>
@@ -5865,11 +5866,12 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
         </Pressable>
         <View style={styles.agentSwitchDivider} />
       </View>
+      {coverageKey ? <Text style={styles.agentSwitchCoverage}>{t(coverageKey)}</Text> : null}
       {expanded && handoff ? (
         <View style={styles.agentSwitchHandoffPanel}>
           <Text style={styles.agentSwitchHandoffTitle}>
             {t(
-              isEnglishSourceHandoff(handoff)
+              coverageKey ? 'message.renderer.handoffContentTitle' : isEnglishSourceHandoff(handoff)
                 ? 'message.renderer.handoffContentDescEnglishSource'
                 : 'message.renderer.handoffContentDesc',
             )}
@@ -9563,6 +9565,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontFamily: monoFont,
     fontSize: typeScale.micro,
     lineHeight: lineHeight.micro,
+  },
+  agentSwitchCoverage: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    textAlign: 'center',
   },
   agentSwitchHandoffPanel: {
     backgroundColor: colors.surface,
