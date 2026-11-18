@@ -8882,6 +8882,36 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
     } finally { h.client.stop(); vi.useRealTimers(); }
   });
 
+  // Unit, shared-link fault radius: a parked peer's retained result is not
+  // current relay demand. Otherwise one sleeping controller pins every other
+  // controller to the congestion budget forever after the first 1013.
+  it('restores normal throughput while a disconnected peer retains its result for later recovery', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: {
+      pingIntervalMs: 3_600_000, congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50); h.current().ack();
+      const a = establishInboundReliableLink(h, 'stream-a', 1, 'a');
+      await vi.advanceTimersByTimeAsync(0); await a;
+      const socket = h.current();
+      h.client.sendInvokeResult('a', 'retained-result', { ok: true, result: 'keep' });
+      socket.push({ v: 1, kind: 'link-close', src: 'a', payload: { reason: 'transport-timeout' } });
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      const b = establishInboundReliableLink(h, 'stream-b', 1, 'b');
+      await vi.advanceTimersByTimeAsync(0); await b;
+      socket.sent.length = 0;
+      for (let i = 0; i < 24; i++) h.client.sendInvokeResult('b', `normal-${i}`, { ok: true, result: i });
+      expect(socket.sent.filter(env => env.dst === 'b' && parseTransportPayload(env.payload))).toHaveLength(16);
+      const resumed = establishInboundReliableLink(h, 'stream-a', 1, 'a');
+      await vi.advanceTimersByTimeAsync(0); await resumed;
+      expect(socket.sent.filter(env => env.dst === 'a' && env.id === 'retained-result')).toHaveLength(1);
+      expect(h.client.getStatus()).toBe('online');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('excludes idle and inbound-closed peers while admitting a new active target', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: {

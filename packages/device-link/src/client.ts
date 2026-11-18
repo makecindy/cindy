@@ -6871,7 +6871,8 @@ export class DeviceLinkClient {
       const quietRemainingMs = lastBlockedAt === null ? 0
         : normalizeCongestionStableResetMs(this.timing.congestionStableResetMs) - (this.monotonicNow() - lastBlockedAt);
       const relayPending = [...this.peerTransport.values()].some(peer =>
-        [...peer.pending.values()].some(pending => pending.path !== 'direct'));
+        this.isPeerSendReady(peer)
+        && [...peer.pending.values()].some(pending => pending.path !== 'direct'));
       if (relayPending || (this.ws?.bufferedAmount ?? 0) > SOCKET_DATA_LOW_WATER_BYTES) {
         this.armCongestionStableReset();
         return;
