@@ -3567,6 +3567,10 @@ export class AgentInputCoordinator {
       return this.preserveRestoredQueueProvenance(item, { ...this.withoutHold(item), held: true });
     });
     this.emit(sessionId);
+    // 停点后移会放开原来被挡住的条目: 空闲会话必须当场重试派发,
+    // 否则它们要等到下一次发送 / 恢复才动。新停点在队首时闸门会照常挡住。
+    this.scheduleDrain(sessionId, 'hold-moved');
+    this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'hold-moved');
     return this.getProjection(sessionId);
   }
 
