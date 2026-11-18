@@ -165,18 +165,40 @@ async function residualFilesCovered(
 }
 
 /** Written before the terminal status mutation, so a crash cannot lose the cleanup intent. */
-export async function requestWorktreeRecycle(sessionId: string, resourcePaths: readonly string[] = []): Promise<void> {
+export async function requestWorktreeRecycle(
+  sessionId: string,
+  resourcePaths: readonly string[] = [],
+  disposition: 'recycle' | 'keep' = 'recycle',
+): Promise<void> {
   const own = store.get(sessionId);
+  if (!own && !resourcePaths.length) return;
   const paths = new Set(await Promise.all(resourcePaths.map(physicalWorktreeKey)));
-  const candidates = own ? [own] : store.getAll();
+  const keep = disposition === 'keep';
+  const candidates = own && (!keep || !paths.size) ? [own] : store.getAll();
   for (const meta of candidates) {
-    if (meta.ephemeral || (!own && !paths.has(await physicalWorktreeKey(meta.path)))) continue;
+    if (meta.ephemeral && !keep) continue;
+    if (meta.sessionId !== sessionId && !paths.has(await physicalWorktreeKey(meta.path))) continue;
     await withWorktreeResourceLock(meta.path, async () => {
-      if (worktreeGeneration(store.get(meta.sessionId) ?? meta) !== worktreeGeneration(meta) || await hasOtherGeneration(meta)) return;
+      const generation = worktreeGeneration(meta);
+      if (worktreeGeneration(store.get(meta.sessionId) ?? meta) !== generation || await hasOtherGeneration(meta)) {
+        if (keep) throw new Error('Worktree registration changed while preserving files');
+        return;
+      }
       const previous = await readRecycleRecord(meta.path);
-      if (previous?.generation === worktreeGeneration(meta) && previous.phase !== 'restored') return;
-      const record = await newRecycleRecord(meta);
-      record.directoryIdentity = (await directoryIdentity(meta.path)) ?? undefined;
+      const current = previous?.generation === generation && previous.phase !== 'restored' ? previous : null;
+      if (current && !keep) return;
+      if (keep && current && ['removing', 'restoring'].includes(current.phase))
+        throw new Error('Worktree files are being moved');
+      if (current?.phase === 'removed') return;
+      const record = current ?? await newRecycleRecord(meta);
+      if (!current) record.directoryIdentity = (await directoryIdentity(meta.path)) ?? undefined;
+      if (keep) {
+        // Persist the same keep decision as the worktree controls before changing task status.
+        record.retryPolicy = { state: 'kept', failures: 0, failedWorkMs: 0 };
+        record.reason = 'user-kept';
+        record.attempts = 0;
+        record.nextAttemptAt = 0;
+      }
       await writeRecycleRecord(record);
     });
   }

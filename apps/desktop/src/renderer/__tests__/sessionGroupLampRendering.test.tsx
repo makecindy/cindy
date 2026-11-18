@@ -75,9 +75,9 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     notifications: new Set(), scheduleSessionIndex: new Map(),
     remoteDeviceIndex: new Map([['remote', { name: 'Remote device', online: true }]]),
     onSessionClick: vi.fn(), onAction: vi.fn(), onRename: vi.fn(), onTogglePin: vi.fn(), onScheduleAction: vi.fn(),
-    onToggleProject: vi.fn(), onToggleProjectPin: vi.fn(), onRenameProject: vi.fn(), onRemoveFromSidebar: vi.fn(),
+    onToggleProject: vi.fn(), onSettings: vi.fn(), onRenameProject: vi.fn(),
     onCollapseAll: vi.fn(), onExpandAll: vi.fn(), onCreateInProject: vi.fn(), onOpenConversationSearch: vi.fn(),
-    onOpenInExplorer: vi.fn(), onImportFromTools: vi.fn(), onBrowseFiles: vi.fn(),
+    onOpenInExplorer: vi.fn(), onBrowseFiles: vi.fn(),
     onArchiveAll: vi.fn(), onCreateDialogue: vi.fn(),
     onSearchDialogues: vi.fn(), onArchiveAllDialogues: vi.fn(),
   };

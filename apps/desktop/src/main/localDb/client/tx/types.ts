@@ -1,3 +1,4 @@
+import type { ProjectArchiveGuard } from '../../projectArchiveGuard.js';
 import type { PluginUsageTransaction, PluginUsageHandle } from '../../../../shared/pluginUsage.js';
 import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
 import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
@@ -363,12 +364,14 @@ export interface SessionsRenameTitleResult {
 }
 
 export interface SessionsSetStatusArgs {
+  projectGuard?: ProjectArchiveGuard;
   sessionIds: string[];
   status: 'active' | 'archived';
   closeSharedTasks?: boolean;
 }
 
 export interface SessionsSetTerminalStatusArgs {
+  projectGuard?: ProjectArchiveGuard;
   sessionId: string;
   status: 'archived' | 'deleted';
   /** Internal automatic housekeeping only; never accepted as renderer metadata. */

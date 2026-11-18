@@ -1,3 +1,6 @@
+import type { ProjectArchiveGuard } from '../projectArchiveGuard.js';
+import { PROJECT_ARCHIVE_CHANNEL } from '../../../shared/projectArchive.js';
+import { runProjectArchive } from '../projectArchive.js';
 import { getSessionRowSnapshot, getSessionRowSnapshotStrict, type SessionRowSnapshot } from '../sessionDispatchSnapshot.js';
 import { commitProvisionalSession as commitSessionDraft, discardProvisionalSessionRow as discardSessionDraft } from '../sessionDraftLifecycle.js';
 import { createUserSession, withWorktreeMutation } from './createUserSession.js';
@@ -192,13 +195,14 @@ function compactTerminalSessionToolResults(
   });
 }
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
-type SessionWorktreeRecycle = (sessionId: string, resources?: readonly string[]) => Promise<void>;
+export type SessionWorktreeRecycle = (sessionId: string, resources?: readonly string[], disposition?: 'recycle' | 'keep') => Promise<void>;
 export interface SessionRecycleScope {
   ownerScope: OwnerScope;
   mediaDb: DbClient['drizzle'];
 }
 
 export interface RegisterSessionIpcOpts {
+  isBusyForProjectArchive?: (sessionId: string) => boolean;
   /** Use the same live catalog as runtime usage, without writing during reads. */
   resolveContextWindow?: (session: ContextWindowSession) => number | null;
   /** Close a local Pi/Codex runtime only if its current turn is idle. */
@@ -264,16 +268,16 @@ async function withStatusWriteLock<T>(
   task: () => Promise<T>,
   alreadyLocked = false,
   beforeWrite?: () => void,
-  requireNoWorktree = false,
+  worktreePolicy: 'recycle' | 'requireNone' | 'keep' = 'recycle',
 ): Promise<T> {
   const write = async () => {
     const resources = status === undefined ? [] : await readSessionWorktreeResources(db, sessionId);
-    if (requireNoWorktree && resources.length > 0) throwIpcError('PRECONDITION_FAILED', 'Task has a worktree');
+    if (worktreePolicy === 'requireNone' && resources.length > 0) throwIpcError('PRECONDITION_FAILED', 'Task has a worktree');
     const physicalResources = await Promise.all(resources.map(physicalWorktreeKey));
     const mutate = async () => {
       beforeWrite?.();
       if (status === 'archived' || status === 'deleted')
-        await requestWorktreeRecycle(sessionId, resources);
+        await requestWorktreeRecycle(sessionId, resources, worktreePolicy === 'keep' ? 'keep' : 'recycle');
       beforeWrite?.();
       const result = await task();
       for (const resource of physicalResources) notifyWorktreeRecycleOpportunity(resource);
@@ -320,10 +324,11 @@ async function finalizeSharedTaskClosure(
 async function requestWorktreeRecycle(
   sessionId: string,
   resources: readonly string[] = [],
+  disposition: 'recycle' | 'keep' = 'recycle',
 ): Promise<void> {
   const recycle = sessionWorktreeRecycle;
   if (!recycle) throw new Error('worktree recycle implementation is not wired');
-  await recycle(sessionId, resources);
+  await recycle(sessionId, resources, disposition);
 }
 
 /** Persist a terminal cleanup intent using references from the same DB snapshot. */
@@ -395,10 +400,11 @@ async function setTerminalSessionStatus(
   sessionId: string,
   status: 'archived' | 'deleted',
   idleArchiveCutoff?: number,
+  projectGuard?: ProjectArchiveGuard,
 ): Promise<SessionsSetTerminalStatusResult['deletedSideChats']> {
   try {
     const result = await dbClient.tx('sessions.setTerminalStatus', { sessionId, status,
-      ...(idleArchiveCutoff !== undefined ? { idleArchiveCutoff } : {}) });
+      ...(projectGuard && { projectGuard }), ...(idleArchiveCutoff !== undefined ? { idleArchiveCutoff } : {}) });
     return result.deletedSideChats;
   } catch (error) {
     const code = (error as { code?: string }).code;
@@ -1622,6 +1628,18 @@ export function registerSessionIpc(
     return updated;
   });
 
+  ipcMain.handle(PROJECT_ARCHIVE_CHANNEL, async (event, input: unknown) => {
+    const viaDeviceLink = isDeviceLinkInvoke();
+    if (!viaDeviceLink) assertTrustedAppRendererEvent(event);
+    return runProjectArchive(input, viaDeviceLink, {
+      busy: id => opts.isBusyForProjectArchive?.(id) ?? true,
+      withLock: withSessionRouteLock,
+      write: async (id, status, beforeWrite, projectGuard, preserveFiles) => {
+        await patchSessionMetaInDb(id, { status }, { routeLockHeld: true, beforeWrite, projectGuard, preserveFiles });
+      },
+    });
+  });
+
   // fork-session: 已迁到 maker-ipc/fork.ts (Stage 2 C2), IPC channel 改名 maker:fork。
   // 业务函数 forkSessionAtMessage 仍在 apps/desktop/src/main/maker-orchestration/fork.ts, 内部 SDK 调用
   // 走 maker-core 的 Maker.forkSdkSession (Codex 自动抛 NotSupportedError)。
@@ -2159,7 +2177,7 @@ export async function patchSessionMetaInDb(
     title?: string;
     pinnedAt?: string | null;
   },
-  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number } = {},
+  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; projectGuard?: ProjectArchiveGuard; preserveFiles?: boolean } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
   for (const k of Object.keys(patch)) {
@@ -2200,7 +2218,7 @@ export async function patchSessionMetaInDb(
         const { status: _status, ...nonTerminalPatch } = setObj;
         await writeSessionPatch(db, sessionId, nonTerminalPatch, undefined);
         options.beforeWrite?.();
-        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted', options.idleArchiveCutoff);
+        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted', options.idleArchiveCutoff, options.projectGuard);
       } else {
         const prepared = await prepareSharedTaskClosure(sessionId, dbClient);
         try {
@@ -2225,7 +2243,7 @@ export async function patchSessionMetaInDb(
       const { status: _status, ...nonStatusPatch } = setObj;
       await writeSessionPatch(db, sessionId, nonStatusPatch, undefined, assertRestoreCurrent);
       assertRestoreCurrent();
-      await dbClient.tx('sessions.setStatus', { sessionIds: [sessionId], status: 'active' });
+      await dbClient.tx('sessions.setStatus', { sessionIds: [sessionId], status: 'active', ...(options.projectGuard && { projectGuard: options.projectGuard }) });
     } else {
       // All asynchronous preparation has finished. Once this write is issued,
       // cancellation does not roll back a committed lifecycle transition.
@@ -2247,7 +2265,7 @@ export async function patchSessionMetaInDb(
       await closeSharedTaskForTask(sessionId, dbClient);
     }
     return sessionToCamel(row);
-  }, options.routeLockHeld, options.beforeWrite, options.idleArchiveCutoff !== undefined);
+  }, options.routeLockHeld, options.beforeWrite, options.idleArchiveCutoff !== undefined ? 'requireNone' : options.preserveFiles ? 'keep' : 'recycle');
   if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
     clearSessionAttention(sessionId, 'explicit');
   }
@@ -2266,7 +2284,7 @@ export async function patchSessionMetaInDb(
     });
   }
   cleanupSessionTerminalArtifacts(sessionId, patch.status);
-  scheduleWorktreeRecycleForStatusChange(sessionId, patch.status, { ownerScope, mediaDb: db });
+  if (!options.preserveFiles) scheduleWorktreeRecycleForStatusChange(sessionId, patch.status, { ownerScope, mediaDb: db });
   notifyGhostSessionStatusChange(sessionId, patch.status, updated.workingDir);
   // 远程 / MCP 改动绕过 renderer 乐观更新,故主动广播 sessions:patched:
   //   - sessionsStore.onPatched → patchLocal,即时反映到 sidebar(删/归档移出 active 桶、改名/置顶刷新);

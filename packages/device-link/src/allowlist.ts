@@ -382,6 +382,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 窄口径元数据写:仅 status / title / pinnedAt(归档/删除/恢复/重命名/置顶)。专用
   // handler、白名单字段、不是裸 update(update 写任意字段、不放行)。支撑远程删/归档/改名/置顶对等。
   'local-db:sessions:patch-meta',
+  'local-db:sessions:project-archive',
   // 只读:「疑似中断」(startedAt > endedAt)的 active 会话 id(错误红点数据源)。
   // 与 sessions:list 同安全级。
   'local-db:sessions:interrupted-pending',

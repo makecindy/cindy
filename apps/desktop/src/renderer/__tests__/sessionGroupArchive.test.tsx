@@ -520,18 +520,60 @@ describe('session group bulk lifecycle', () => {
     },
   );
 
+  // Unit: a remote project and a local task share an ID. Confirming (or cancelling)
+  // the remote preview must never send a local status write or archive a newly added ID.
+  it.each([false, true])('honours remote project confirmation (%s) on the selected device', async confirmed => {
+    const view = mount([session('same')]);
+    const project = { scope: 'remote', projectKey: 'device:studio:/repo', workingDir: '/repo',
+      displayName: 'Demo', deviceLinkDeviceId: 'studio', deviceLinkDeviceName: 'Studio',
+      remoteMachineIdentity: { kind: 'device-link', label: 'Studio', displayLabel: 'Studio' },
+    } as ProjectNode;
+    const apply = vi.fn();
+    const invoke = vi.fn(async (device, channel, [request]) => {
+      expect(device).toBe('studio');
+      if (channel === 'maker:schedule:list') return [];
+      expect(channel).toBe('local-db:sessions:project-archive');
+      expect(request.directory).toBe('/repo');
+      if (request.operation === 'preview') return [
+        { id: 'same', blocked: null, hasWorktree: false },
+        { id: 'protected', blocked: 'running', hasWorktree: false },
+      ];
+      apply(request.sessionId);
+      return 'updated';
+    });
+    vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+    view.options.confirmDialog.mockResolvedValue(confirmed);
+    await act(async () => { await view.result.current({ kind: 'project', project }); });
+    expect(view.options.confirmDialog).toHaveBeenCalledOnce();
+    expect(view.options.confirmDialog.mock.calls[0][0].title).toContain('Demo (Studio)');
+    expect(view.options.confirmDialog.mock.calls[0][0].description).toContain('descriptionWithSkip');
+    expect(apply.mock.calls).toEqual(confirmed ? [['same']] : []);
+    expect(sessionService.setStatus).not.toHaveBeenCalled();
+    expect(view.options.patchLocal).not.toHaveBeenCalled();
+  });
+
   it('retains project scope and project wording through the shared lifecycle', async () => {
     const projectTask = session('project', { workspaceKind: 'project', workingDir: '/repo' });
     const view = mount([projectTask, session('dialogue')]);
     const project = {
+      scope: 'local', displayName: 'repo', workingDir: '/repo', remoteHostId: null,
       projectKey: projectIdentityKeyForSession(projectTask),
       sessions: [projectTask],
     } as ProjectNode;
-    worktreeRemovalPreview.mockResolvedValue({ hasWorktree: true, dirty: true });
+    const apply = vi.fn();
+    Object.assign(window.electronAPI, { localDb: { sessions: { projectArchive: async (request: { operation: string; sessionId?: string }) => {
+      if (request.operation === 'preview') return [
+        { id: 'project', hasWorktree: true, blocked: null }, { id: 'beyond-sidebar', hasWorktree: false, blocked: null },
+      ];
+      apply(request.sessionId);
+      return 'updated';
+    } } } });
+    worktreeRemovalPreview.mockImplementation(async (id) => ({ hasWorktree: id === 'project', dirty: id === 'project' }));
     await act(async () => {
       await view.result.current({ kind: 'project', project });
     });
-    expect(view.writes.get('project')?.status).toBe('archived');
+    expect(apply.mock.calls).toEqual([['project'], ['beyond-sidebar']]);
+    expect(view.options.patchLocal).toHaveBeenCalledWith('project', { status: 'archived' });
     expect(view.writes.get('dialogue')?.status).toBe('active');
     expect(view.options.confirmDialog.mock.calls[0][0].description).toContain(
       'ccAgent.sidebar.archiveAll.description',
@@ -539,6 +581,6 @@ describe('session group bulk lifecycle', () => {
     expect(view.options.confirmDialog.mock.calls[0][0].description).toContain(
       'ccAgent.sidebar.bulkSelection.confirmArchive.dirtyWorktreeWarning:{"count":1}',
     );
-    expect(worktreeRemovalPreview).toHaveBeenCalledExactlyOnceWith('project');
+    expect(worktreeRemovalPreview).toHaveBeenCalledWith('project');
   });
 });

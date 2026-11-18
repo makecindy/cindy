@@ -1,4 +1,4 @@
-import { SessionProjectSettingsButton } from './sidebar/SessionProjectSettingsButton';
+import { SessionProjectMenuButton } from './sidebar/SessionProjectMenuButton';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
@@ -607,7 +607,7 @@ export function SessionContentHeader({
           <MessagesSquare size={16} strokeWidth={1.75} />
         </span>
       ) : !sharedGuest && sessionProjectDirectory(session) ? (
-        <SessionProjectSettingsButton
+        <SessionProjectMenuButton
           key={`${session.deviceLinkDeviceId ?? ''}:${session.remoteHostId ?? ''}:${sessionProjectDirectory(session)}`}
           session={session} disabled={remoteWritesBlocked}
         />

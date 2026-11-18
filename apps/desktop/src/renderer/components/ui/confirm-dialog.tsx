@@ -51,6 +51,8 @@ export interface ConfirmDialogProps {
    * 业务复选框(confirmWithCheckbox)按调用方语义决定初始状态。
    */
   checkboxDefaultChecked?: boolean;
+  checkedDescription?: string;
+  checkedConfirmText?: string;
   /**
    * Radix AlertDialog 默认会自动聚焦 Cancel 按钮(为破坏性操作做的安全默认)。
    * 在"主按钮非破坏性、Cancel 仅是放弃"的场景(如"前往设置 / 取消"),
@@ -101,7 +103,9 @@ export function ConfirmDialog({
   open,
   onOpenChange,
   title,
-  description,
+  description: defaultDescription,
+  checkedDescription,
+  checkedConfirmText,
   textClassName,
   descriptionClassName,
   content,
@@ -129,10 +133,11 @@ export function ConfirmDialog({
   const { t } = useTranslation();
   // describeContent 用:让 aria-describedby 覆盖整个「description + content」滚动区。
   const bodyId = useId();
-  const resolvedConfirmText = confirmText ?? t('commonUi.confirmDialog.confirm');
   const resolvedCancelText = cancelText ?? t('commonUi.confirmDialog.cancel');
   // 每次打开复位到初始勾选态,避免上一轮的勾选残留到下一次弹窗。
   const [dontShowAgain, setDontShowAgain] = useState(checkboxDefaultChecked);
+  const description = dontShowAgain ? checkedDescription ?? defaultDescription : defaultDescription;
+  const resolvedConfirmText = (dontShowAgain ? checkedConfirmText : undefined) ?? confirmText ?? t('commonUi.confirmDialog.confirm');
   useEffect(() => {
     if (open) setDontShowAgain(checkboxDefaultChecked);
   }, [open, checkboxDefaultChecked]);

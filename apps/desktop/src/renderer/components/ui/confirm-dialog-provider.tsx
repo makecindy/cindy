@@ -79,6 +79,8 @@ export interface ConfirmWithCheckboxOptions extends Omit<ConfirmOptions, 'dontSh
   checkboxLabel: string;
   /** 复选框初始勾选态,缺省 false;每次弹出都复位到该值。 */
   checkboxDefaultChecked?: boolean;
+  checkedDescription?: string;
+  checkedConfirmText?: string;
 }
 
 interface ConfirmDialogContextValue {
@@ -92,6 +94,8 @@ interface ConfirmDialogContextValue {
 interface QueueItem {
   options: ConfirmOptions & {
     tertiaryText?: string;
+    checkedDescription?: string;
+    checkedConfirmText?: string;
     checkboxLabel?: string;
     checkboxDefaultChecked?: boolean;
   };
@@ -300,6 +304,8 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
               ? currentItem.options.dontShowAgainLabel ?? t('commonUi.confirmDialog.dontShowAgain')
               : currentItem.options.checkboxLabel
           }
+          checkedDescription={currentItem.options.checkedDescription}
+          checkedConfirmText={currentItem.options.checkedConfirmText}
           checkboxDefaultChecked={currentItem.options.checkboxDefaultChecked}
           onConfirm={handleConfirm}
           onTertiary={handleTertiary}

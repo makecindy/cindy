@@ -1674,6 +1674,11 @@ function startDeviceLink(): void {
     refreshToken: async () => { await refreshAuthSession(); },
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
     invoke: service, subscribe: eventHub.subscribe,
+    isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
+      || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
+    onProjectTaskStatus: (sessionId, status) => {
+      eventHub.publish({ type: 'session_changed', sessionId, status, patch: { status } });
+    },
     createRuntimeSession: async input => {
       const scope = activeOwnerScopeKey();
       const opts = readHostCreateSessionOpts(input, ensureDialogueWorkspaceDir);

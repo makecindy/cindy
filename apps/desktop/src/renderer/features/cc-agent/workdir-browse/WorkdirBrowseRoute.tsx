@@ -61,10 +61,8 @@ import {
 import { isOrcaLeadSession, isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import { OrcaSplitView } from '../OrcaSplitView';
 import { useFileContent } from './hooks/useFileContent';
-import {
-  getSessionDeviceId,
-  remoteProjectsStore,
-} from '@/features/device-link/remoteProjectsStore';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { resolveDocModeFilesSession } from './lib/docModeSwitchProjects';
 import { useChatRailResize } from './hooks/useChatRailResize';
 import { useChatRailCollapsed } from './hooks/useChatRailCollapsed';
 import { FileBodyView, type FileBodyHandle } from './FileBodyView';
@@ -82,14 +80,16 @@ const log = createLogger('cc-agent.workdir-browse.route');
 
 export function WorkdirBrowseRoute() {
   const { sessionId } = useParams<{ sessionId: string }>();
+  const [searchParams] = useSearchParams();
+  const requestedDeviceId = searchParams.get('device');
   return (
     <CindyMakeSessionGate sessionId={sessionId}>
-      <WorkdirBrowseContent />
+      <WorkdirBrowseContent key={requestedDeviceId} requestedDeviceId={requestedDeviceId} />
     </CindyMakeSessionGate>
   );
 }
 
-function WorkdirBrowseContent() {
+function WorkdirBrowseContent({ requestedDeviceId }: { requestedDeviceId: string | null }) {
   const { t } = useTranslation();
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -111,20 +111,11 @@ function WorkdirBrowseContent() {
     remoteProjectsStore.getVisibleMergedRemoteSessions,
   );
   const currentSession = useMemo(
-    () =>
-      sessionId
-        ? sessionsHook.sessions.find((s) => s.id === sessionId) ??
-          remoteMirrorSessions.find((s) => s.id === sessionId) ??
-          null
-        : null,
-    [sessionId, sessionsHook.sessions, remoteMirrorSessions],
+    () => resolveDocModeFilesSession(sessionsHook.sessions, sessionId, remoteMirrorSessions, requestedDeviceId),
+    [sessionsHook.sessions, sessionId, remoteMirrorSessions, requestedDeviceId],
   );
   const workdir = currentSession?.workingDir ?? '';
-  // 会话归属三路(见 FileBrowserBody 同款注释):device-link 会话 deviceId 优先,
-  // 其自带的 remoteHostId 是被控端的 SSH host,由被控端 device-op 二跳处理。
-  const deviceId = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
-    sessionId ? getSessionDeviceId(sessionId) ?? null : null,
-  );
+  const deviceId = currentSession?.deviceLinkDeviceId ?? requestedDeviceId;
   const remoteHostId = deviceId ? null : currentSession?.remoteHostId ?? null;
   const browsableWorkdir = workdir;
 
@@ -135,7 +126,7 @@ function WorkdirBrowseContent() {
   // handleBrowseFiles 直接拿 activeSessionId 跳到 /cc-agent/files/<workerId>, 此时
   // tab 不高亮 + chat 区落到 fallback CCAgentSessionView 看起来"什么都没选中"。
   useEffect(() => {
-    if (!currentSession || !isOrcaWorkerSession(currentSession)) return;
+    if (deviceId || !currentSession || !isOrcaWorkerSession(currentSession)) return;
     let cancelled = false;
     void window.electronAPI.localDb.orcaWorkflows
       .getByWorkerSession(currentSession.id)
@@ -149,7 +140,7 @@ function WorkdirBrowseContent() {
       })
       .catch(() => undefined);
     return () => { cancelled = true; };
-  }, [currentSession, navigate, searchParams]);
+  }, [currentSession, deviceId, navigate, searchParams]);
 
   // SessionTabsBar 的 tab 列表 = 当前 workdir 下所有 active 普通会话,按 sidebar
   // projects 内组内排序对齐
@@ -608,23 +599,14 @@ function WorkdirBrowseContent() {
           {/* 当 active session 是 Orca Lead 时, 用 doc 专用 OrcaSplitView toggle 展示
               Lead/Worker。用户从 × 关协同后,disableOrca 会把 lead.orcaRole 清掉,
               activeSession 自然 fallback 到下面的单 CCAgentSessionView,不需要跳路由。 */}
-          {(() => {
-            // 用未过滤的 sessionsHook.sessions 查 active —— sortedWorkdirSessions
-            // 已剔除 Worker / 非 active, 但 active session 自身可能是 archived
-            // (用户直接通过 URL 进来),Lead 判断不该依赖那层过滤。
-            const activeSession = sessionId
-              ? sessionsHook.sessions.find((s) => s.id === sessionId) ?? null
-              : null;
-            if (activeSession && isOrcaLeadSession(activeSession)) {
-              return (
-                <OrcaSplitView
-                  leadSessionId={activeSession.id}
-                  reportAgentIslandVisibility={!railCollapse.collapsed}
-                />
-              );
-            }
-            return <CCAgentSessionView viewVisible={!railCollapse.collapsed} />;
-          })()}
+          {currentSession && !deviceId && isOrcaLeadSession(currentSession) ? (
+            <OrcaSplitView
+              leadSessionId={currentSession.id}
+              reportAgentIslandVisibility={!railCollapse.collapsed}
+            />
+          ) : (
+            <CCAgentSessionView viewVisible={!railCollapse.collapsed} />
+          )}
         </div>
       </div>
     </div>
