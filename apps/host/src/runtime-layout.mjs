@@ -17,6 +17,7 @@ export function hostReleaseRegion() {
 
 // Electron's npm entry can synchronously run its installer. Read the installed
 // package's marker directly so source commands never start a download.
+// 源码方式不读 ELECTRON_OVERRIDE_DIST_PATH。
 export function resolveSourceElectronBinary() {
   try {
     const manifest = createRequire(new URL('../../desktop/package.json', import.meta.url)).resolve('electron/package.json');
