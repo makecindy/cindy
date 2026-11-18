@@ -249,7 +249,11 @@ export function createInputQueue(deps) {
         deps.hub?.publish({ type: 'input_receipt', sessionId: id, inputClientId: origin, clientId: origin, status: 'interrupted' });
       });
     }
-    const executor = createTurnExecutor({ ...deps,
+    const applyPendingAgentSwitchAtDispatch = (id, signal, nextInputChars, assertPreparationCurrent) => deps.applyPendingAgentSwitch?.(id, {
+      signal, nextInputChars, assertPreparationCurrent,
+      prepareModelWindowSwitch: (taskId, target) => rollover?.prepareModelWindowSwitch(taskId, target) ?? 'unknown-context',
+    });
+    const executor = createTurnExecutor({ ...deps, storedSessionOptions,
       // The owner this runtime's turns started under (assertCurrent): usage is written to that account only.
       runtimeOwner: () => owner ?? null,
       getAutoResume: () => autoResume,
@@ -470,6 +474,29 @@ export function createInputQueue(deps) {
       /** A context recovery's replay was accepted (the recovery factory's onRebuilt). */
       noteContextRecoveryRebuilt: id => executor.noteRecoveryRebuilt(id),
       wakeSession: (id, reason) => coordinator.wakeSession(id, reason),
+      capturePiSkillPreparation(id) {
+        const state = stateFor(id);
+        const admission = state.admission;
+        return () => {
+          assertCurrent();
+          if (closing || state.closed || state.admission !== admission) throw new Error('input cancelled before acceptance');
+        };
+      },
+      preparePiSkillRuntime: (id, dir, options = {}) => command(id, async (state, admission) => {
+        const check = () => {
+          options.assertPreparationCurrent?.();
+          assertCurrent();
+          if (state.closed || state.admission !== admission) throw new Error('input cancelled before acceptance');
+        };
+        check();
+        if (options.applyPendingOwnerSelection) {
+          // This explicitly selected Skill send is already under the task's route lock.
+          await applyPendingAgentSwitchAtDispatch(id, undefined, options.nextInputChars, check);
+          check();
+        }
+        await executor.preparePiSkillRuntime(id, dir, check);
+        check();
+      }),
       restoreSession: (id, check) => command(id, async () => {
         await check(); assertCurrent();
         const session = await executor.restoreSession(id, storedSessionOptions(await deps.readSession(id)), check);

@@ -9,11 +9,12 @@ import type {
   PluginCompanion, PluginCompanionAnswer, PluginCompanionHistory, PluginCompanionInteraction, PluginCompanionInteractionDetail, PluginCompanionInteractionKind,
   PluginCompanionMessage, PluginCompanionReply,
 } from '../../shared/pluginCompanions.js';
+import type { BotReadIdentity } from '../../shared/botReadStateStorage.js';
 import { OWNER_ONLY_HOST_CONFIRMATION_TOOL_NAMES } from '../agent-app-update/constants.js';
 import { isSingleBotAvatarGrapheme } from '../../shared/botAvatarValue.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
-import { listBotRemoteResourceSources, type BotRemoteResourceSource } from '../localDb/ipc/bots.js';
+import { listBotRemoteResourceSources, mergeHostReadPositions, type BotRemoteResourceSource } from '../localDb/ipc/bots.js';
 import { visibleBotRemoteResourceSources } from '../localDb/ipc/botRemoteResourceProjection.js';
 import { rosterBotActivityCandidates } from '../localDb/ipc/botRemoteResourceProvider.js';
 import { companionHomes } from '../companion-cloud/homes.js';
@@ -169,6 +170,8 @@ export interface PluginCompanionRemoteDeps {
 }
 
 export interface PluginCompanionHostDeps {
+  /** Committed on this desktop; null when the position cannot safely be read. */
+  readPosition(identity: BotReadIdentity): Promise<number | undefined | null>;
   /** Agent and host-owned requests pending in one task (register.ts getPendingInteractionsForSession). */
   pending(sessionId: string): Array<{ request: unknown }>;
   /** Show a task in the main window without stealing focus; `deviceId` for a companion on another computer. */
@@ -490,22 +493,41 @@ export function createPluginCompanionHost(deps: PluginCompanionHostDeps) {
     async list(guard) {
       const local = await localView(guard);
       const byHome = remoteActors(new Set(local.companions.map(companion => companion.id)));
-      if (byHome.size === 0) return local.companions;
-      const devices = await homeDevices(guard);
+      const devices = byHome.size ? await homeDevices(guard) : null;
       const homes = await Promise.all([...byHome].map(async ([deviceId, actors]) => {
-        const device = devices.get(deviceId);
+        const device = devices?.get(deviceId);
         const view = device?.online && device.reachable ? await readHome(deviceId, device.name) : unreachableHome();
-        return { actors, view, deviceName: device?.name ?? null };
+        return { deviceId, actors, view, deviceName: device?.name ?? null };
       }));
       guard();
-      const remote = homes.flatMap(({ actors, view, deviceName }) => actors.flatMap((actor): PluginCompanion[] => {
-        if (!view.reachable) return [offlineCompanion(actor.id, actor.name, deviceName)];
+      const localPositions = await Promise.all(local.companions.map(({ id }) => deps.readPosition({ kind: 'bot', id })));
+      guard();
+      const localReadAt = mergeHostReadPositions(new Map(local.companions.flatMap(({ id }, index) => {
+        const readAt = localPositions[index];
+        return readAt == null ? [] : [[id, readAt] as const];
+      })));
+      const localCompanions = local.companions.map((companion, index) => {
+        const readAt = localReadAt.get(companion.id);
+        // The same visible reply filters serve lastReplyAt and the sidebar's unread count.
+        return localPositions[index] === null ? companion : {
+          ...companion, unread: readAt !== undefined && (companion.lastReplyAt ?? 0) > readAt,
+        };
+      });
+      const remote = await Promise.all(homes.flatMap(({ deviceId, actors, view, deviceName }) => actors.map(async (actor) => {
+        if (!view.reachable) return offlineCompanion(actor.id, actor.name, deviceName);
         const companion = view.companions.find(item => item.id === actor.id);
         // Reachable but not listed there: hidden, archived or moving; the sidebar does not show it either.
-        if (!companion) return [];
-        return [{ ...companion, name: companion.name || actor.name }];
-      }));
-      return [...local.companions, ...remote];
+        if (!companion) return null;
+        const readAt = await deps.readPosition({ kind: 'remote-bot', deviceId, botId: actor.id });
+        return {
+          ...companion, name: companion.name || actor.name,
+          ...(readAt !== null && companion.lastReplyAt !== null ? {
+            unread: readAt !== undefined && companion.lastReplyAt > readAt,
+          } : {}),
+        };
+      })));
+      guard();
+      return [...localCompanions, ...remote.filter(companion => companion !== null)];
     },
 
     async avatar(companionId, guard) {

@@ -284,6 +284,8 @@ export function RailNav({
           白名单,click 与拖拽由 fallbackTolerance(4px)区分。 */}
       <SortableList
         items={pinnedSessions}
+        sortScope="pinned"
+        disabled={pinnedSortBy !== 'manual'}
         getId={(s) => s.id}
         onReorder={onReorderPinned}
         reducedMotion={reducedMotion}

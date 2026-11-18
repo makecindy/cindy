@@ -239,6 +239,7 @@ import {
   filterSlashCommands,
   insertAtResource,
   insertSlashCommand,
+  composerSlashInvocationName,
   mergeSlashCommands,
 } from '@/session/composerPalette';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
@@ -3717,11 +3718,18 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     pendingGoalSkillRef.current = command.kind === 'agent-skill' ? command.name : null;
     const next = insertSlashCommand(current, detectComposerTrigger(current), command);
     if (next === current) return;
-    setFirstMessageDraft(next);
+    patchDraft({
+      firstMessage: next,
+      selectedSkill: command.kind === 'agent-skill' ? {
+        name: command.name, invocation: composerSlashInvocationName(command),
+        context: buildComposerPaletteCacheKey(selectedDeviceId, draft.agentKind,
+          draft.workspaceKind === 'project' ? draft.workingDir.trim() : ''),
+      } : null,
+    });
     const selection = { start: next.length, end: next.length };
     firstMessageSelectionRef.current = selection;
     setFirstMessageSelection(selection);
-  }, [setFirstMessageDraft]);
+  }, [patchDraft, selectedDeviceId, draft.agentKind, draft.workspaceKind, draft.workingDir]);
 
   const selectAtResource = useCallback((item: MobileAtResourceItem) => {
     const current = firstMessageRef.current;
@@ -4852,7 +4860,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         ...effectiveDraft,
       };
       const createOpts = {
-        ...buildRemoteCreateSessionOptions(finalDraft),
+        ...buildRemoteCreateSessionOptions(finalDraft, precreatedWorktree?.originalWorkingDir),
         // 与 worktree:create 共用预生成 id，确保被控端能把 managed path
         // 绑定到这一个 Goal session，而不是另起一条 base-repo 会话。
         id: sessionId,
@@ -4918,6 +4926,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
           ...finalDraft,
           firstMessage: input.objective,
         });
+        if (precreatedWorktree) session.projectDir = precreatedWorktree.originalWorkingDir;
       }
       if (isDefaultDraftSessionTitle(session.title)) {
         const titled = sessionFromCreateResult(result, {

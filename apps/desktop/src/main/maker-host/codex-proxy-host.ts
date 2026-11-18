@@ -50,6 +50,9 @@ import {
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
+  createResponsesToolAudioRecoveryRule,
+  stripResponsesToolAudioFromBody,
+  createThreadStripController,
   createImageGenerationIdRecoveryRule,
   createResponsesItemIdPrefixRecoveryRule,
   createResponsesItemIdLengthRecoveryRule,
@@ -78,7 +81,6 @@ import {
   type RoutingTransform,
   type RecoveryRule,
 } from '@cindy/anthropic-compat-proxy';
-import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
   chainResponseTransforms,
   createResponsesNullArrayRepairTransform,
@@ -289,6 +291,8 @@ const reviewerModelBySession = new Map<string, string>();
 const httpRecoveryReasonByThread = new Map<string, string>();
 /** WS 已确认、尚未在落回的 HTTP 请求上激活对应 strip 的 recovery 原因（一次性消费）。 */
 const pendingHttpRecoveryStripByThread = new Map<string, string>();
+// Kept inside this host instance: another Host/proxy must not inherit its marker.
+let responsesToolAudioStripController = createThreadStripController();
 
 const CODEX_AUTO_REVIEW_MODEL = 'codex-auto-review';
 const CODEX_GUARDIAN_SUBAGENT = 'guardian';
@@ -332,6 +336,9 @@ const responsesItemIdLengthRecoveryRule = createResponsesItemIdLengthRecoveryRul
 const responsesReasoningContentRecoveryRule = createResponsesReasoningContentRecoveryRule({
   onRetry: (threadId, model) => responsesReasoningContentStripController.markActive(threadId, model),
 });
+const responsesToolAudioRecoveryRule = createResponsesToolAudioRecoveryRule({
+  onRetry: (threadId, model, upstreamBase) => responsesToolAudioStripController.markActive(threadId, model, upstreamBase),
+});
 const duplicateResponsesToolCallRecoveryRule: RecoveryRule = {
   id: 'duplicate_responses_tool_call',
   enabled: () => true,
@@ -355,6 +362,7 @@ const CODEX_BODY_RECOVERY_RULES = [
   responsesItemIdPrefixRecoveryRule,
   responsesItemIdLengthRecoveryRule,
   responsesReasoningContentRecoveryRule,
+  responsesToolAudioRecoveryRule,
   duplicateResponsesToolCallRecoveryRule,
   xaiModelInputRecoveryRule,
   vllmResponsesCompatibilityRule,
@@ -365,12 +373,12 @@ const CODEX_BODY_RECOVERY_RULES = [
 function isRepairableToolItemIdError(errorText: string): boolean {
   // Codex additionalDetails may contain an escaped JSON error inside another error envelope.
   const text = errorText.replace(/\\+(?=["'])/g, '');
-  const match = /Invalid\s+["']input\[\d+\]\.id["']:\s*["'](fc|fco|ctc|ctco|call)_[^"']+["']\.?\s+Expected an ID that begins with ["'](fc|fco|ctc|ctco)_?["']/i.exec(text);
+  const match = /Invalid\s+["']input\[\d+\]\.id["']:\s*["'](fc|fco|ctc|ctco|call|msg)_[^"']+["']\.?\s+Expected an ID that begins with ["'](fc|fco|ctc|ctco)_?["']/i.exec(text);
   if (!match) return false;
-  // Legacy `call_…` item ids (issue #4023) are rewritten to whichever tool dialect the target
+  // Legacy `call_…` / `msg_…` item ids (#4023 / #9645) are rewritten to whichever tool dialect the target
   // asks for, so any of the four expected prefixes is repairable. Case-sensitive like the
-  // normalizer's `startsWith('call_')`: an upper-case prefix would not be rewritten on retry.
-  if (match[1] === 'call') return true;
+  // normalizer's prefix checks: an upper-case prefix would not be rewritten on retry.
+  if (match[1] === 'call' || match[1] === 'msg') return true;
   return ({ fc: 'ctc', fco: 'ctco', ctc: 'fc', ctco: 'fco' } as Record<string, string>)[match[1]!]
     === match[2]!;
 } function armCodexHttpRecovery(args: {
@@ -464,7 +472,7 @@ function createArmedHttpRecoveryStripTransform(useUpstreamModel = false): Reques
     if (Boolean(rule?.useUpstreamModel) !== useUpstreamModel) return null;
     pendingHttpRecoveryStripByThread.delete(threadId);
     if (!rule?.enabled() || !rule.onRetry) return null;
-    rule.onRetry(threadId, body.model);
+    rule.onRetry(threadId, body.model, ctx.upstreamBase);
     log.info('codex HTTP recovery strip activated from websocket error', { threadId, reason, model: body.model });
     return null;
   };
@@ -3352,7 +3360,7 @@ function createTransformRequestChain(
   frozenAuthInjection?: CodexProxyAuthInjection,
   execAdapter = createCodexResponsesCompatibilityAdapter(),
   pricing: XaiRequestPricing = new Map(),
-  /** 供应商分享受邀者的 proxy：不走视觉桥(视觉后端是本机用户自己的其它供应商)。 */
+  /** 是否是供应商分享受邀者的 proxy，沿用分享来源隔离与请求转换规则。 */
   guest = false,
 ): RequestTransform[] {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
@@ -3451,15 +3459,17 @@ function createTransformRequestChain(
     providerRequestTransform,
     createArmedHttpRecoveryStripTransform(true),
     createActiveStripTransform({
+      controller: responsesToolAudioStripController,
+      enabled: () => true,
+      strip: stripResponsesToolAudioFromBody,
+      scopeByUpstream: true,
+    }),
+    createActiveStripTransform({
       controller: responsesReasoningContentStripController,
       enabled: () => true,
       strip: stripResponsesReasoningContentFromBody,
     }),
-    // 视觉桥透明替换（层 A，Responses 格式）：controller 未注入时短路透传，零干扰；
-    // 注入后把纯文本模型请求 input[] 里的 input_image 转成文字描述。放在 strip 之前与
-    // Anthropic 链一致，避免未来 strip 扩展覆盖 Responses input_image 时吃掉图。
-    ...(guest ? [] : [buildVisionBridgeProxyTransform(log)]),
-    // Run after every provider dialect rewrite: xAI can also turn custom calls into functions.
+
     // This covers native-custom routes and tool-less /responses/compact without changing call_id.
     normalizeResponsesToolItemIds,
     createActiveStripTransform({
@@ -4177,6 +4187,7 @@ function clearSessionThreads(sessionId: string): string[] {
       pendingHttpRecoveryStripByThread.delete(threadId);
       responsesReasoningContentStripController.clear(threadId);
       responsesToolCallHistoryStripController.clear(threadId);
+      responsesToolAudioStripController.clear(threadId);
     }
   }
   return threadIds;
@@ -4210,6 +4221,7 @@ function clearSessionThreads(sessionId: string): string[] {
   reviewerModelBySession.clear();
   httpRecoveryReasonByThread.clear();
   pendingHttpRecoveryStripByThread.clear();
+  responsesToolAudioStripController = createThreadStripController();
 
   if (_startPromise) {
     await _startPromise.catch(() => undefined);

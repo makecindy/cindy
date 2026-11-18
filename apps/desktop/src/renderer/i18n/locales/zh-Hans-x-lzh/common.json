@@ -142,6 +142,10 @@
     "message": "Cindy 不能读此附件。请择原始文件，确认后续遣此讯；罢则草稿仍留。",
     "button": "用原始文件"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "任务或窗口既迁，此传遂止。",
+    "invalid": "此传于当下任务，已属无效。"
+  },
   "mailReader": {
     "showExternalImages": "显外部之图",
     "markReadFailed": "未能同步已读之状，请察信箱授权而后重启。",
@@ -428,7 +432,8 @@
       "loading": "方读模型范围…",
       "loadFailed": "不能读模型范围，请重启此设置。",
       "saveFailed": "不能存模型范围，请再试。",
-      "needsUpdate": "请先更新供方所在之机的 Cindy，而后设模型范围。"
+      "needsUpdate": "请先更新供方所在之机的 Cindy，而后设模型范围。",
+      "followsPool": "此连接已并入「{{pool}}」，远程可用之模随「{{pool}}」，请于彼处改之。下列各成员之模型限制仍可于此设之。"
     },
     "entry": {
       "label": "远程与分享",
@@ -439,6 +444,8 @@
     },
     "manage": {
       "createLink": "生分享链接",
+      "exportRoster": "导出名册",
+      "exportRosterFailed": "名册未存",
       "loading": "方读分享…",
       "notReady": "分享服务暂不可用。确认已登门且网络无恙后，将自动再试。",
       "loadFailed": "分享信息未载，请稍后再试。",
@@ -918,7 +925,7 @@
       "title": "易至 {{label}} 续行乎？",
       "fallbackTitle": "以摘要易至 {{label}} 续行乎？",
       "fallbackDescription": "原言谈不能全然接续。以摘要续行，或遗早先细节与工具结果；罢则留原机遣之。",
-      "description": "为均用各名籍之限额，宜将此讯易至 {{label}} 遣之（{{quota}}）。易后携近数轮言谈与摘要，更早之细节或记不全。",
+      "description": "为均用各名籍之限额，宜将此讯易至 {{label}} 遣之（{{quota}}）。易后可续言谈。较早之言或经压缩，以合模型之容量。",
       "quota": "尚余 {{left}}%",
       "quotaReset": "尚余 {{left}}%，{{reset}}",
       "confirm": "惟此次换之",
@@ -1328,10 +1335,11 @@
         "body": "此务于他机开 {{device}}。于本机启「{{plugin}}」法器，即可于右栏观之、操之。",
         "action": "启之"
       },
-      "update": {
-        "title": "须更「{{plugin}}」法器",
-        "body": "此务于他机开 {{device}}。更本机「{{plugin}}」法器至新版，即可于右栏观之、操之。",
-        "action": "更之"
+      "unsupported": {
+        "title": "「{{plugin}}」尚不能远览",
+        "body": "此机所装法器尚不能显示远方之机的 {{device}}。可查相容新版，或往行此差事之机使用装置。",
+        "action": "查相容新版",
+        "unavailable": "此法器来源尚无可供远览之新版，可往行此差事之机使用装置"
       }
     },
     "lockOnExitHintPrivacy": "退出远程桌面后覆以隐私画面，AI 可续作；有人触机即锁屏。",
@@ -1866,7 +1874,6 @@
       "memory": "记忆",
       "subagentModels": "Subagent",
       "auxiliaryModels": "辅佐模型",
-      "visionBridge": "视觉桥",
       "compaction": "上下文缩略",
       "terminalShell": "常例终端 shell",
       "composer": "讯之输入",
@@ -4295,7 +4302,8 @@
           "description": "启之，则君之他机与君所分享之人，可用此供方之模型；Agent 行于此机，用此机之登门与限额。",
           "descriptionGroup": "启之，则君之他机与君所分享之人，可用此供方之模型，由供方组择一机行 Agent。",
           "ariaLabel": "许君之他机与君所分享之人调用此供方",
-          "writeFailed": "远程调用之设未能存，请再试"
+          "writeFailed": "远程调用之设未能存，请再试",
+          "followsPool": "此连接已并入「{{pool}}」，随其「许远程调用」，请于「{{pool}}」中改之。"
         },
         "ownComputersCanUse": "吾之他机可用",
         "moreActionsAria": "余者",
@@ -5435,37 +5443,6 @@
       "title": "妙诀",
       "description": "诸功能之开关，或须新开差事方生效（详见各 cell 之说明）。"
     },
-    "visionBridge": {
-      "title": "视觉桥",
-      "description": "令纯文字模型得以观图：以独立之多模态模型转图为文字描述，再付纯文字模型。",
-      "enableLabel": "启视觉桥",
-      "enableHint": "阖则诸模型之行一如往昔。启则下方所勾之模型，将经视觉后端转图为文字描述。启用后，遣此等模型之图及同讯之文字提示，将传予君所择之视觉后端。",
-      "enableAria": "启闭视觉桥",
-      "toast": {
-        "saved": "视觉桥之设已存",
-        "saveFailed": "视觉桥之设存之未成"
-      },
-      "capability": {
-        "vision": "已知能视",
-        "noVision": "已知纯文",
-        "unknown": "视觉之能未知"
-      },
-      "targetModels": {
-        "label": "经视觉桥之模型",
-        "hint": "纯文字模型（如 DeepSeek）常例已勾。亦可勾能视之模型——如特用较廉之描述模型以省 token。",
-        "empty": "暂无可用之模型。",
-        "toggleAria": "切换 {{model}} 之视觉桥"
-      },
-      "backends": {
-        "label": "视觉所倚模型",
-        "hint": "择至多二个转图为文之多模态模型。其二（备用）可选。",
-        "primary": "主用",
-        "fallback": "备用",
-        "unset": "未择",
-        "noBackup": "无备",
-        "hintSecondary": "先用主后端。主后端未成且设有备用时，切至备用。二者皆未成，则图无从辨识，将以文字提示代之并告君。"
-      }
-    },
     "chatEmbedding": {
       "cell": {
         "label": "启言谈录语义索引",
@@ -6407,18 +6384,13 @@
         "allowInboundAria": "切换是否许 {{name}} 控此机",
         "peerControlOff": "对方未许远程操控",
         "masterOffHint": "须先开上方总开关",
-        "controllingThisMac": "已连 Cindy",
-        "useThisDeviceModels": "用此机之模型",
-        "allowModelUseAria": "许 {{name}} 用此机之模型"
+        "controllingThisMac": "已连 Cindy"
       },
       "toast": {
         "revoked": "已撤此设备之访问权",
         "revokeFailed": "撤销未成",
         "restored": "已复此设备之访问权",
-        "restoreFailed": "恢复未成",
-        "modelUseRestored": "彼机复得用此机之模型",
-        "modelUseRevoked": "彼机不复得用此机之模型",
-        "modelUseFailed": "「用此机之模」未能存，请再试。"
+        "restoreFailed": "恢复未成"
       },
       "sections": {
         "myDevices": "我之设备",
@@ -6784,6 +6756,10 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
+        },
         "onlyEncrypted": "唯用 Agent-Net",
         "onlyEncryptedHint": "启之则旧版设备及仍循旧路之分享不可用。常例为阖。",
         "peerSwitch": {
@@ -6918,11 +6894,6 @@
       "description": "以同一飞书名籍登录之设备可互相发现；开「许控此机」后，君之他设备可远程连接此机之 {{appName}}。",
       "allowControl": "许同名籍设备控此机",
       "allowControlHint": "打开之后，以同一名籍登录之他设备无须逐次确认即可控此机；此机将显远程操控之示，可随时断开。慎之。",
-      "ownModelAccess": {
-        "title": "许吾他机用此机之模",
-        "hint": "开之，吾之他机可用此机之供方；Agent 运于此机，用此机之登录与配额。不与他人共之。",
-        "writeFailed": "设未能存，请再试"
-      },
       "keepAwake": "令机常醒",
       "keepAwakeHint": "打开后此机不入休眠，后台之 Agent 与定时差事可持续运行(仍可关显示器 / 锁屏)。",
       "linkStatus": {
@@ -7836,6 +7807,18 @@
         "overviewTab": "综览",
         "addPlugin": "增法器",
         "addPluginAria": "增法器之选",
+        "githubInstall": {
+          "label": "自 GitHub Release 装入…",
+          "title": "自 GitHub Release 装入",
+          "description": "贴 GitHub 库址或指定 Release 之链接。私库须以有权之 GitHub 账号登录。",
+          "url": "GitHub 地址",
+          "submit": "寻法器",
+          "loading": "查找并下载中…",
+          "invalid": "请输入 GitHub 库址或 Release 标签链接。",
+          "not-found": "此版不可得，请查链接及私库权限。",
+          "ambiguous": "此链接含数宗法器。请选择仅含一包之 Release，或自文件装入。",
+          "installedAlready": "此法器已装。可于其设置中更新。"
+        },
         "installedSection": "已纳",
         "installedExpand": "展全部已纳法器 {{count}} 件",
         "installedCollapse": "收余下已纳法器",
@@ -8191,7 +8174,7 @@
         "hostTools_handoff": "任务传言",
         "hostTools_handoffDetail": "得循 Cindy 之器传消息于既有任务。需当前任务之境者，须明指任务。",
         "hostTools_usage": "查用量及供应商组状态",
-        "hostTools_usageDetail": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、供应商组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置",
+        "hostTools_usageDetail": "可查现用 Cindy 账号于此机所接 Claude/Codex 之账号标识、方案、配额时段及更新时间，亦可查此机及同账号已授权他机所记每日、型号用量、估算费用、供应商组配置与状态，及可见成员、设备之标识、名称与头像。不得取订阅登录邮址、账号目录、内部指纹、凭证或档案，亦不得改账号或设置。亦可查有权访问之任务额度，含同账号已授权他机及准予阅额度之分享供应商。",
         "hostTools_settings": "应用设置",
         "hostTools_settingsDetail": "得循 Cindy 之器阅改应用设置；不返密钥，秘文仍由主人亲填。",
         "hostTools_scheduler": "自动化治办",
@@ -8715,6 +8698,10 @@
       "panelHost": {
         "close": "阖面板"
       },
+      "installProgress": {
+        "awaitingConsent": "候确认…",
+        "installFailed": "装之未成"
+      },
       "updateAll": {
         "title": "尽更新 · 法器 {{count}} 件",
         "collapseDiff": "收",
@@ -8725,6 +8712,7 @@
         "statusDone": "已更新",
         "statusSkipped": "已略",
         "statusFailed": "更新未成",
+        "progressCount": "已更新 {{done}} / {{total}}",
         "background": "背后续行",
         "doneAction": "毕",
         "doneToast": "批量更新毕：已更新 {{done}} 件，未竟 {{rest}} 件",
@@ -10987,6 +10975,8 @@
     "autosave": {
       "saving": "方存…",
       "saved": "已存",
+      "unconfirmed": "尚未核实存否",
+      "savedModel": "已存，下轮生效",
       "retry": "再存"
     },
     "retry": "再试",
@@ -11100,7 +11090,7 @@
       "discard": "弃所改",
       "continueEditing": "续修"
     },
-    "profileSaveFailed": "同伴之设未能存，变更未生效。",
+    "profileSaveFailed": "同伴之设未能存。",
     "profileSaveOffline": "同伴所在之电脑未能连通，请复连后再存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（今不可用）",
@@ -11420,7 +11410,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}不能回复：同伴所在设备所留之远程差事数已达上限。\n请同伴之主封存暂不用之差事，或请远方之机之主于「远程与分享」中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}不能回复：远方之机所留差事总数已达上限。\n请彼机之主释暂不用之差事，或于「远程与分享」中提高上限。",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}}不能回复：当前模型不支图。\n请易为支图之模型，或于「规制 → 个性化 → 视觉桥」启用并设视觉模型，再遣之。",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}}不能作覆：今之模型不支持图。\n请易以支持图之模型。",
           "MODEL_UNAVAILABLE": "{{name}}不能回复：今无可用之模型。\n请于同伴之设中择已连接之可用模型，再遣之。",
           "AUTH_REQUIRED": "{{name}}不能回复：模型连接须重新验证。\n请于规制中重连对应之模型来源，再遣之。",
           "RATE_LIMITED": "{{name}}不能回复：模型请求过频。\n请稍后再遣，或择他可用模型。",
@@ -14077,7 +14067,7 @@
         "effortEndFast": "更疾",
         "effortEndSmart": "更慧",
         "railSameEngine": "仅 {{agent}}",
-        "crossEngineWarning": "切换引擎将重建上下文，或失内容",
+        "crossEngineWarning": "下一讯将易引擎而续言谈，较早之言或经压缩",
         "favoritesSyncFailed": "珍藏未能同步。请重开再试；被控之机或须更新。",
         "favoritesSyncFailedUnreachable": "珍藏暂未同步：彼机今连不上。连接复后重开即可。",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14094,12 +14084,8 @@
         "ultrafast": "极疾"
       },
       "discoveredCopy": {
-        "title": "改用「{{device}}」之 {{provider}} 乎？",
-        "description": "{{unavailable}}允之，则由「{{device}}」运行，后可随时于此复归。",
         "unavailableHere": "此机之 {{provider}} 今不可用。",
-        "unavailableOn": "「{{device}}」之 {{provider}} 今不可用。",
-        "confirm": "改用",
-        "cancel": "一仍其旧"
+        "unavailableOn": "「{{device}}」之 {{provider}} 今不可用。"
       }
     },
     "permissionSelector": {
@@ -14365,33 +14351,14 @@
       "credentialSwitchApplied": "模型所出已易，即行生效。",
       "credentialSwitchFailed": "模型来源切换未成，请重择。",
       "modelSwitchContextGuard": {
-        "title": "此模型容不下今之言谈",
         "warnToast": "此段言谈已用 {{used}}，换过去约占新模型容量（{{total}}）之 {{pct}}%",
-        "overflowDescription": "此段言谈已用 {{used}}，逾新模型所能容之 {{total}}（约 {{pct}}%）。换过去后，Cindy 将先撰摘要再续；言谈录仍在，唯不整段原样交予新模型。",
-        "overflowDescriptionRemote": "今远程差事之上下文已用 {{used}} / {{total}}（约 {{pct}}%），不能安然切换至此小窗口模型。请留今之模型，或新开差事后再择。",
-        "confirmSwitch": "切换而续",
-        "cancelSwitch": "暂不换"
+        "condensedToast": "为合新模型之容量，较早之言将压缩，言谈全录仍可阅。",
+        "overflowDescriptionRemote": "今远程差事之上下文已用 {{used}} / {{total}}（约 {{pct}}%），不能安然切换至此小窗口模型。请留今之模型，或新开差事后再择。"
       },
       "agentSwitch": {
         "engineNotReady": "引擎已切换，然新引擎启动未成；遣讯时将自再试",
         "failed": "引擎切换未成，未生效",
-        "deferred": "已登记切换：下则讯遣出时，将切换至 {{agent}} · {{model}}",
-        "confirmation": {
-          "title": "易 Agent 乎？",
-          "description": "新 Agent 引擎将经交接摘要续接，思考内容等不保其完美承续；切回时仍可续原引擎之会话。切换亦将令 prompt 缓存中断一次，或增 Token 之耗。",
-          "confirm": "易 Agent",
-          "cancel": "留今之 Agent",
-          "dontShowAgain": "后不复提醒"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "改回此机运行 Agent？",
-        "titleOther": "改于「{{device}}」运行 Agent？",
-        "description": "原机之言谈录不能携来，将撰为交接摘要以续，思考内容等不保其完美承续。下则讯遣出时生效。",
-        "descriptionNativeHistory": "全本言谈录将抄录而往以续；若不能复原，则改撰交接摘要以续，思考内容等不保其完美承续。下则讯遣出时生效。",
-        "confirm": "换机运行",
-        "cancel": "一仍其旧",
-        "discoveredDescription": "{{reason}}{{description}}"
+        "deferred": "已登记切换：下则讯遣出时，将切换至 {{agent}} · {{model}}"
       }
     },
     "agentSelect": {
@@ -14893,11 +14860,6 @@
       "unavailable": "图暂不可见",
       "loading": "方载图…"
     },
-    "visionBridge": {
-      "analyzing": "方辨图…（{{count}} 张）",
-      "fallback": "视觉桥已改用备用视觉后端（主后端不可用），辨图或受影响",
-      "unavailable": "视觉桥今不可用，图不能辨，已以文字提示代之"
-    },
     "newMessageIndicator": {
       "aria": "归至底，览新讯 {{count}} 条",
       "label_one": "新讯 {{count}} 条",
@@ -15090,6 +15052,9 @@
       "continueFailed_other": "有 {{count}} 件差事未能续，可开差事再试。"
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
+      "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
+      "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
       "text": "前有自运未成。",
       "precheck": "自动查验暂受阻。",
       "rateLimited": "自动查验暂受阻：请求限流。",
@@ -15520,6 +15485,11 @@
         "relocatedElsewhere": "Agent 已移至他机运行",
         "quotaRebalance": "此名籍之限额宜先用"
       },
+      "handoffCoverage": {
+        "complete": "言谈已全续",
+        "condensed": "较早之言已压缩",
+        "details": "续接言谈所用之内容"
+      },
       "contextRebuild": {
         "labelOverflow": "已理上下文而续",
         "labelTimeout": "上轮无应，已理而续",
@@ -15798,7 +15768,7 @@
       "REMOTE_AGENT_INVALID": "与行 Agent 之机通信有谬。请再试；若屡现，请将两机之 Cindy 皆更新至最新版。",
       "REMOTE_AGENT_RESUME_REJECTED": "运行模型之电脑无法续此差事。请由差事列表新建差事，复制所需内容以续。原差事及待发之讯皆保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达分享者所设之模型占比上限。请择他可用之模型续之。",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼机未向君开放此供方或所择模型。若为君之他机，于彼机「远程连接」中开「许吾他机用此机之模」；若为他人所分享，请令机主于「远程与分享」中调其开放之范围。亦可易一模型。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼机未向君开放此供方或所择模型。若为君之他机，于彼机为此供方开「许远程调用」；若为他人所分享，请令机主于「远程与分享」中调其开放之范围。亦可易一模型。",
       "REMOTE_AGENT_FORK_FAILED": "行 Agent 之机未能自此开新差事。请再试，或易一讯再试。",
       "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对君之分享，未复之前不可用此诸模型。可易他模型续之。",
       "REMOTE_AGENT_SHARE_REMOVED": "此分享已不可用（对方已删分享，或君已退出）。可易他模型续之。",
@@ -16471,7 +16441,10 @@
       "confirmArchive": {
         "title": "封存差事",
         "description": "确欲封存此差事乎？封存后将自录中除去。",
-        "dirtyWorktreeWarning": "此差事之 worktree 有未提交之改动；封存前将自存为 git 快照，日后可于差事内一键复原。",
+        "dirtyWorktreeWarning": "未提交之改动，归档前先存之，日后可于任务中复原。",
+        "discardChanges": "弃未提交之改动",
+        "discardWarning": "未提交之改动及新档，将不可复原。",
+        "discardAndArchive": "弃而归档",
         "scheduleWarning_one": "所关联之自运{{names}}仍将运行，并复此差事。",
         "scheduleWarning_other": "所关联之自运{{names}}仍将运行，并复此差事。",
         "scheduleWarningMany_one": "其中 {{count}} 个差事关联自运，后续运行时将复此诸差事。",
@@ -16867,6 +16840,7 @@
         "summaryAria": "览 PR #{{number}} 摘要",
         "unresolvedLabel": "未决之 review 评论",
         "checks": "查验",
+        "following": "正随之",
         "checksTotal": "凡 {{count}} 项",
         "failed": "未成",
         "passed": "已过",
@@ -17134,6 +17108,18 @@
     "ultra": "穷极"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "GitHub App 消息未通，仍依时查验。",
+      "label": "PR",
+      "url": "PR 之链",
+      "condition": "何时行之",
+      "any": "PR 有变",
+      "merged": "已合并",
+      "review": "评议有变",
+      "ci": "CI 有变",
+      "timed": "亦定时查验",
+      "invalid": "请填 GitHub PR 全链。"
+    },
     "presentation": {
       "status": {
         "active": "已启",
@@ -21534,7 +21520,6 @@
       "sessionRuntimeFallback": "差事模型自动降级",
       "subagentModels": "Subagent",
       "auxiliaryModels": "辅助模型",
-      "visionBridge": "视觉桥",
       "modelVisibility": "模型显示与隐藏",
       "providerOrder": "供方顺序",
       "modelCatalogOverrides": "模型参数调整",
@@ -21577,6 +21562,24 @@
   },
   "featureIntro": {
     "close": "闭",
+    "project": {
+      "title": "识案",
+      "lead": "久为之事，宜付一案。卷帙皆存此机一卷匣，Cindy 每承前功续之，无须再述原委。",
+      "files": {
+        "title": "所成皆君之卷",
+        "body": "Cindy 径于案之卷匣读写，所成皆存此机，随时可取。"
+      },
+      "context": {
+        "title": "无须再述",
+        "body": "于案中新开差事，Cindy 即见诸卷，亦循此案所记之约。"
+      },
+      "separate": {
+        "title": "诸事各归其案",
+        "body": "各案差事自成一列，异事不相扰，久别复来仍可续之。"
+      },
+      "start": "续立新案",
+      "note": "命名即可立案；既有卷匣或代码仓库亦可径用。"
+    },
     "taskInbox": {
       "title": "识收件箱",
       "lead": "任务依其状自分为待处理、进行中、待后处理、已处理。善用之道，在常清其箱：事毕者点「毕」，未及者待后处理。",

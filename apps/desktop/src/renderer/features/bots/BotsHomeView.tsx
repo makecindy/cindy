@@ -8,13 +8,13 @@ import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { MainViewHistoryContext } from '@/contexts/MainViewHistoryContext';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 import { BotPortraitPicker } from './BotPortraitPicker';
 import { botSettingsIcons } from './botSettingsIcons';
 import {
   ArrowLeft,
   Bot,
   Camera,
-  Check,
   ChevronRight,
   FolderOpen,
 } from 'lucide-react';
@@ -69,6 +69,7 @@ import {
   type BotSettingsPayload,
 } from './botSettingsAutosave';
 import { useBotSettingsAutosave } from './useBotSettingsAutosave';
+import { BotSettingsSaveStatus } from './BotSettingsSaveStatus';
 import { BotProjectsSettings } from './BotProjectsSettings';
 import { BotAutomationsSettings } from './BotAutomationsSettings';
 import { BotProjectRepositorySettings } from './BotProjectRepositorySettings';
@@ -187,6 +188,7 @@ export function BotSettings({
   const botIdentityRef = useRef(bot.id);
   const reconciledBotRef = useRef(bot);
   const savingProfileRef = useRef(false);
+  const saveOwner = useRef(getDataOwnerGeneration()).current;
   const savedSettingsRef = useRef(
     normalizeBotSettingsPayload(
       {
@@ -204,18 +206,23 @@ export function BotSettings({
   );
   const commitProfile = useCallback(
     async (payload: BotSettingsPayload, modelSelection = false) => {
+      // A detached trailing save still belongs to the account that opened this
+      // page. Never let a late completion dispatch it into the next account.
+      if (!isDataOwnerIdCurrent(saveOwner)) throw new Error('Settings owner changed');
+      const operationOwner = getDataOwnerGeneration();
       savingProfileRef.current = true;
       try {
         await target.profile.update(bot.id, {
           ...botSettingsChanges(savedSettingsRef.current, payload, true, modelSelection),
           ...(modelSelection ? { acceptModelSelection: true } : {}),
         });
+        if (!isDataOwnerGenerationCurrent(operationOwner)) throw new Error('Settings owner changed');
         savedSettingsRef.current = payload;
       } finally {
         savingProfileRef.current = false;
       }
     },
-    [bot.id, target],
+    [bot.id, target, saveOwner],
   );
 
   const autosave = useBotSettingsAutosave({
@@ -494,32 +501,7 @@ export function BotSettings({
             <p className="text-11 text-[var(--text-danger)]" role="alert">
               {t('bots.guided.duplicateName')}
             </p>
-          ) : autosave.status === 'saving' ? (
-            <span
-              role="status"
-              className="inline-flex items-center gap-1 text-11 text-[var(--text-tertiary)]"
-            >
-              <Spinner size={12} /> {t('bots.autosave.saving')}
-            </span>
-          ) : autosave.status === 'saved' ? (
-            <span
-              role="status"
-              className="inline-flex animate-fade-in items-center gap-1 text-11 text-[var(--text-tertiary)]"
-            >
-              <Check size={12} /> {t('bots.autosave.saved')}
-            </span>
-          ) : autosave.status === 'error' ? (
-            <p className="flex items-center gap-2 text-11 text-[var(--text-danger)]" role="alert">
-              {t(autosave.errorKey ?? 'bots.profileSaveFailed')}
-              {!sourceTooLong && <button
-                type="button"
-                onClick={() => void autosave.retry()}
-                className="font-medium text-[var(--text-primary)]"
-              >
-                {t('bots.autosave.retry')}
-              </button>}
-            </p>
-          ) : null}
+          ) : <BotSettingsSaveStatus autosave={autosave} modelPage={page === 'model'} sourceTooLong={sourceTooLong} />}
         </div>
         {page === 'home' ? (
           <>

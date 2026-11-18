@@ -77,7 +77,7 @@
 | A | Orca | <code>^(maker:(orca&#124;worker&#124;team&#124;mark-orca&#124;sync-worker)&#124;local-db:orca)</code> | — |
 | A | 伙伴与 IM | <code>^(maker:(bot&#124;companion&#124;im-)&#124;local-db:bots&#124;binding:&#124;botImConnection&#124;telegramBot&#124;wechatBot&#124;feishuBot&#124;discordBot&#124;dingtalkBot&#124;wecomBot&#124;wecomGroupNotification&#124;desktop:cc-prefs&#124;companion-import)</code> | <code>^(im&#124;bot-import)&#92;b</code> |
 | A | 账号与凭据 | <code>^(auth:&#124;safe-storage&#124;builtin-api-key&#124;plugin-oauth&#124;maker:(api-key&#124;claude-oauth&#124;xai-oauth&#124;auth:&#124;subscription))</code> | — |
-| A | 供应商与模型 | <code>^(maker:(provider&#124;model&#124;usage&#124;local-model&#124;llamacpp&#124;sync-provider&#124;auxiliary-model&#124;subagent-model&#124;vision-bridge&#124;claude-session-route)&#124;provider-group&#124;provider-share&#124;model-favorites&#124;model-access)</code> | — |
+| A | 供应商与模型 | <code>^(maker:(provider&#124;model&#124;usage&#124;local-model&#124;llamacpp&#124;sync-provider&#124;auxiliary-model&#124;subagent-model&#124;claude-session-route)&#124;provider-group&#124;provider-share&#124;model-favorites&#124;model-access)</code> | — |
 | A | 插件、技能与 MCP | <code>^(ghosts:&#124;ghost-pipe&#124;forge-oidc&#124;maker:(plugins&#124;plugin-setup&#124;mcp&#124;runtime-plugins&#124;pi-packages)&#124;plugin-market&#124;plugin-publisher&#124;plugin-contributions&#124;skillhub)</code> | — |
 | A | 设备互联与远程执行 | <code>^(device-link&#124;direct-link&#124;file-peer&#124;shared-task&#124;self-hosted-relay&#124;local-agent&#124;maker:(remote-resources&#124;shared-task&#124;remote-ssh&#124;provider-share))</code> | — |
 | A | git 与工作树 | <code>^(git-context&#124;git-review&#124;worktree&#124;remote-precreated-worktree&#124;maker:git-safety)</code> | — |
@@ -236,7 +236,7 @@
 | 113 | `maker:subagent-model-settings:get` | invoke | 1 | A | 供应商与模型 | bootstrap-electron |
 | 114 | `maker:sync-provider-model-memory` | event | 1 | A | 供应商与模型 | maker-ipc |
 | 115 | `maker:usage:history` | invoke | 1 | A | 供应商与模型 | maker-ipc |
-| 116 | `maker:vision-bridge-settings:get` | invoke | 1 | A | 供应商与模型 | bootstrap-electron |
+| 116 | `maker:vision-bridge-settings:get` | invoke | 1 | unregistered | 不在静态清单里 | - |
 | 117 | `plugin-market:consume-removal-notice` | invoke | 1 | A | 插件、技能与 MCP | plugin-market |
 | 118 | `plugin-market:lookup` | invoke | 1 | A | 插件、技能与 MCP | plugin-market |
 | 119 | `process-monitor:unsubscribe` | invoke | 1 | A | 未登记前缀，处理函数没有用到窗口 API | process-monitor |
@@ -746,9 +746,6 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:subagent-model-settings:get` | invoke | A（供应商与模型） | 1 | `bootstrap-electron.ts` |
 | `maker:subagent-model-settings:reset` | invoke | A（供应商与模型） | 0 | `bootstrap-electron.ts` |
 | `maker:subagent-model-settings:set` | invoke | A（供应商与模型） | 0 | `bootstrap-electron.ts` |
-| `maker:vision-bridge-settings:get` | invoke | A（供应商与模型） | 1 | `bootstrap-electron.ts` |
-| `maker:vision-bridge-settings:reset` | invoke | A（供应商与模型） | 0 | `bootstrap-electron.ts` |
-| `maker:vision-bridge-settings:set` | invoke | A（供应商与模型） | 0 | `bootstrap-electron.ts` |
 | `maker:xai-oauth:cancel` | invoke | A（账号与凭据） | 0 | `bootstrap-electron.ts` |
 | `maker:xai-oauth:login` | invoke | A（账号与凭据） | 0 | `bootstrap-electron.ts` |
 | `maker:xai-oauth:logout` | invoke | A（账号与凭据） | 0 | `bootstrap-electron.ts` |
@@ -951,7 +948,6 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `device-link:set-device-control-enabled` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:set-enabled` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:set-keep-awake` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
-| `device-link:set-model-use` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:topic-subscribe` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:topic-unsubscribe` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `direct-link:host:event` | invoke | A（设备互联与远程执行） | 0 | `device-link/directLink.ts` |
@@ -1557,8 +1553,6 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:orca:remote-worker:models` | invoke | A（Orca） | 0 | `maker-ipc/orcaRemoteWorkerHost.ts` |
 | `maker:orca:remote-worker:open` | invoke | A（Orca） | 0 | `maker-ipc/orcaRemoteWorkerHost.ts` |
 | `maker:orca:remote-worker:release` | invoke | A（Orca） | 0 | `maker-ipc/orcaRemoteWorkerHost.ts` |
-| `maker:own-computer-model-use:get` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/providerHandlers.ts` |
-| `maker:own-computer-model-use:set` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/providerHandlers.ts` |
 | `maker:persist-turn-error-deferred` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
 | `maker:pi-packages:list` | invoke | A（插件、技能与 MCP） | 1 | `maker-ipc/register.ts` |
 | `maker:pi-packages:mutate` | invoke | A（插件、技能与 MCP） | 0 | `maker-ipc/register.ts` |

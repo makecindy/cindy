@@ -17,6 +17,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Readable } from 'node:stream';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { normalizeMarkdownImageSrc } from '../../renderer/lib/localPathResolver';
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/never-used-here' },
@@ -62,6 +63,18 @@ describe('localFileProtocol — sensitive-directory confinement', () => {
     vi.clearAllMocks();
     statMock.mockResolvedValue({ isFile: () => true, size: 10 });
   });
+
+  // #11261, unit: real renderer URL conversion -> registered protocol handler.
+  // Slash-form Windows shares used to reach the filesystem; no real SMB is contacted.
+  it.each(['file:////nas/share/a.png', 'file:///\\nas/share/a.png'])(
+    'rejects rendered Windows shared image %s before any filesystem access', async (src) => {
+      const url = normalizeMarkdownImageSrc(src, 'C:\\proj', true);
+      const res = await getHandler()(new Request(url!));
+      expect(res.status).toBe(403);
+      expect(realpathMock).not.toHaveBeenCalled();
+      expect(statMock).not.toHaveBeenCalled();
+    },
+  );
 
   it('rejects a symlink that resolves into ~/.ssh with 403', async () => {
     const sshTarget = path.join(os.homedir(), '.ssh', 'id_rsa.png');

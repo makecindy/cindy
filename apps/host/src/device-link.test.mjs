@@ -12,7 +12,7 @@ import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHA
   PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
 import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
-import { readDeviceLinkInvokeSourceDevice } from '../../desktop/src/main/device-link/invoke-context.ts';
+import { readDeviceLinkInvokeSourceDevice, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.ts';
 import { createHostDeviceLink, HOST_DISPATCH_PORTS_WHILE_HELD } from './device-link.ts';
 import { createHostService } from './service.mjs';
 import { createHostServer } from './server.mjs';
@@ -63,6 +63,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   let held = null;
   let created = 0, appCalls = 0, oauthCalls = 0;
   const oauthCancelled = [];
+  const modelChoices = [];
   t.after(async () => {
     clients.forEach(client => client.stop());
     await host?.stop();
@@ -108,6 +109,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     } }),
     listSessions: options => readHostSessionList(db.drizzle, options),
     getSession: id => readHostSession(db.drizzle, id),
+    setSessionModel: async (id, model) => {
+      modelChoices.push({ id, model, origin: readDeviceLinkModelSelectionOrigin() });
+      return { deferred: true };
+    },
     input: { enqueue: async (sessionId, item) => {
       writes++; source = readDeviceLinkInvokeSourceDevice();
       await hold;
@@ -119,6 +124,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   host = createHostDeviceLink({ profileDir: profile, version: 'test', getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
+    preparePiSkillRuntime: async (id, dir, route) => {
+      assert.equal(id, 'task'); assert.equal(dir, '/project');
+      if (route) assert.deepEqual(route, { model: 'pi-test', nextInputChars: 45_000 });
+    },
+    createRuntimeSession: async () => { throw new Error('Not part of this transport test'); },
     createRuntimeSession: async () => { created++; throw new Error('Not part of this transport test'); },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
     profileHold: () => held,
@@ -144,6 +154,33 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     return client;
   }
   for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
+  // 2026-11-18: exercise the real Host registry over the existing integration relay.
+  // A positive controller window on either picker channel or Skill preparation must fail before applying it.
+  const numericSelections = [
+    { channel: 'maker:set-model', args: ['task', 'small', null, null, { effort: null, fastMode: false, confirmedContextWindow: 100 }] },
+    { channel: 'maker:switch-session-agent', args: ['task', 'claude-code', 'small', null, null, false, { confirmedContextWindow: 100 }] },
+    { channel: 'maker:session:prewarm', args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: {}, confirmedContextWindow: 100 }] },
+  ];
+  for (const selection of numericSelections) {
+    const rejected = await clients[0].invoke('host', selection);
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error.message, /PRECONDITION_FAILED/);
+  }
+  assert.deepEqual(modelChoices, []);
+  const stage = await clients[0].invoke('host', { channel: 'maker:set-model', args: ['task', 'small'] });
+  assert.deepEqual(stage.result, { deferred: true });
+  assert.deepEqual(modelChoices, [{ id: 'task', model: 'small', origin: 'owner' }]);
+
+  const prepared = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project' }] });
+  assert.deepEqual(prepared.result, { accepted: true, piRuntimePrepared: true }, JSON.stringify(prepared));
+  const switched = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: { nextInputChars: 45_000 } }] });
+  assert.deepEqual(switched.result, { accepted: true, piRuntimePrepared: true, pendingRouteApplied: true });
+  const unsupported = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: { agentDeviceId: 'other' } }] });
+  assert.equal(unsupported.ok, false);
+
   // A phone asks the v1 channel, as the desktop answers it: flat USD fields, CNY quotes left out.
   const v1 = await clients[0].invoke('host', { channel: 'maker:usage:model-pricing', args: [] });
   assert.deepEqual(v1.result, { 'usd-model': { inputUsdPerMtok: 3, outputUsdPerMtok: 15 } }, JSON.stringify(v1));

@@ -106,6 +106,8 @@ vi.mock('../maker-host/index.js', () => ({
 }));
 
 const inferProviderIdForModelMock = vi.fn();
+// Fork route/history tests use isolated storage and no live provider directory.
+vi.mock('../maker-host/model-context-settings.js', () => ({ resolveDesktopHandoffWindow: async () => null }));
 vi.mock('../maker-host/provider-route.js', () => ({
   inferProviderIdForModel: inferProviderIdForModelMock,
 }));

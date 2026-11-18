@@ -162,6 +162,7 @@ import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.js';
 import type { ContextRecoveryKind } from './agent/context-recovery.ts';
 import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
+import { listPiRuntimePaletteCommands, mergePiPackageCommands, shouldListPiPackageCommands } from '../../desktop/src/shared/piPackages.js';
 import { createHostSessionUpdate } from './agent/session-update.ts';
 import { createHostSessionMovePorts, createRecentWorkdirsChangedPush } from './agent/session-move.ts';
 import { createHostTouchUserSend } from './agent/touch-user-send.ts';
@@ -1094,9 +1095,6 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
       readAuthRealm: () => account.realm,
       sharedGlobalSkills,
-      // Vision-bridge notices, which the desktop sends its windows; the client maps them to
-      // MAKER_PUSH.EVENT (device-link.ts) and they are not persisted.
-      publishVisionBridgeNotice: notice => eventHub.publish(notice),
       mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory, { readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '', searchProviders: taskPlugins.searchGhostRuntimeMemories, profileHold: memoryProfileHold }), pluginGateway.provider]),
       userDataDir: dataDir,
     });
@@ -1182,7 +1180,7 @@ const readSessionForRun = async (sessionId: string) => {
   if (!row || row.status !== 'active') throw new Error('session is not active');
   const [botLink] = await db.drizzle.select({ botId: botSessionLinks.botId })
     .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
-  const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
+  const agentKind: 'claude-code' | 'codex' | 'pi' = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
   return {
     id: row.id,
     status: row.status, source: row.source, botId: botLink?.botId ?? null,
@@ -1745,9 +1743,7 @@ const serverDeps = {
     move: sessionMove.move,
   })),
   /**
-   * Cross-engine switch: record the intent and let the next enqueue apply it.
-   * Mirrors the desktop contract (`deferred: true`) so the renderer can show
-   * the target engine optimistically without reporting "未生效".
+   * Register a switch under the route lock for enqueue or the dispatch boundary.
    */
   /**
    * A model change a client asks for: the desktop's set-model (runtime-selection.ts). A user's pick is
@@ -1944,12 +1940,20 @@ const serverDeps = {
     projection: (sessionId: string) => inputQueue.getProjection(sessionId),
   },
   interactions,
-  agentCommands: async (input: { agentKind?: string }) => {
+  agentCommands: async (input: { agentKind?: string; sessionId?: string }) => {
     const rawKind = String(input.agentKind ?? '');
     const kind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
     const agent = agentGraph?.instances?.[kind];
     if (!agent) return { success: false, error: `Agent '${kind}' is not registered` };
-    return { success: true, commands: agent.listAgentCommands() };
+    const builtins = agent.listAgentCommands();
+    if (kind !== 'pi' || !input.sessionId) return { success: true, commands: builtins };
+    const meta = await sessionStorage?.get(input.sessionId);
+    if (!meta) throw new Error('session not found');
+    if (!shouldListPiPackageCommands(kind, true, meta)) return { success: true, commands: builtins };
+    const manifest = agentGraph?.maker.getSessionRuntimeCapabilities(input.sessionId);
+    const extra = manifest?.status === 'loaded'
+      ? listPiRuntimePaletteCommands(manifest.commands, manifest.authorizedSlashCommandNames ?? manifest.managedPackageCommandNames) : [];
+    return { success: true, commands: mergePiPackageCommands(kind, builtins, extra), runtimeStatus: manifest?.status ?? 'pending' };
   },
   agentSkills: createHostAgentSkillList({
     maker: () => agentGraph?.maker ?? null,
@@ -2080,8 +2084,6 @@ async function disposeOwnerRuntime(): Promise<void> {
     await attempt(() => (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.());
     // Stop watching this profile's Pi packages once Maker no longer runs Pi.
     agentGraph?.piPackages.close();
-    // As the desktop's teardown: the process-wide vision-bridge controller and key reader go.
-    await attempt(() => agentGraph?.visionBridge.close());
     await attempt(() => codexRuntime?.close());
     await attempt(() => claudeProxy?.close());
     await attempt(() => mcpRuntime?.close());

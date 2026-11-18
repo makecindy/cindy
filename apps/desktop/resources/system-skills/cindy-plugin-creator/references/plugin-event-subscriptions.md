@@ -191,4 +191,5 @@ cindy.onHostMessage(function (msg) {
 | Pi | `auto_retry_start` 可带 `attempt`，`auto_retry_end` 带 `success`，`compaction_start`，`compaction_end` 和 `agent_settled` 带 `aborted`。 |
 
 此主题用于观察。消息、压缩摘要、转录路径、原生错误详情和模型凭据不进入事件。
-当前主题不提供重试开关、任意上下文改写、文件检查点或继续执行裁决。
+主动重试任务或手动压缩可调用 [`control_session`](plugin-queue-control.md)。
+此主题不提供自动重试开关、任意上下文改写、文件检查点或继续执行裁决。

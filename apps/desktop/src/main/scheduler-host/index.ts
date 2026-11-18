@@ -22,6 +22,8 @@ import { withScheduleLock } from './scheduleLock';
 import { runSchedulerStartup } from './scheduler-startup-lifecycle';
 
 export interface SchedulerHostStartDeps {
+  /** Reconcile a timed PR check through this host’s status observer. */
+  refreshSchedulePr?(url: string): Promise<void>;
   maker: Maker;
   getDb: () => SchedulerDrizzleDb;
   logger: Logger;
@@ -99,6 +101,13 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
       fire: (schedule, ctx) =>
         withScheduleLock(schedule.id, ctx.signal, async () => {
           ctx.assertFireContext?.();
+          // A timed reconciliation samples the same observer as App and foreground updates.
+          // Existing all-change checks retain their own polling and review/CI pacing.
+          if (ctx.timed && schedule.prTrigger && !(schedule.prTrigger.change === 'any' && schedule.preRunHook)) {
+            if (!deps.refreshSchedulePr) throw new Error('PR status lookup is unavailable on this host');
+            await deps.refreshSchedulePr(schedule.prTrigger.url);
+            return { sessionId: '', skipped: true };
+          }
           // 所有定时任务(Agent / 脚本)的唯一入口：插件前置检查放在检查脚本、建任务之前。
           const stopped = deps.screenControlPoint
             ? await screenScheduleRun(deps.screenControlPoint, schedule, ctx, (errorMsg) => notifyPluginStop(schedule, ctx, errorMsg))

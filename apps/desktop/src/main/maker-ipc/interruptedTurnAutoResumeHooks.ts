@@ -34,7 +34,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
   workerInputs?: { has(createOpts: object): boolean };
   scheduledQuotaInputs?: { has(createOpts: object): boolean };
   saveTurnStartedAtForDeferred(sessionId: string): void;
-  beginSchedulerAutoResume(sessionId: string, runId: string, attemptToken: number): void;
+  beginSchedulerAutoResume(sessionId: string, runId: string, attemptToken: number, error?: string): void;
   getStableSessionForTurnBoundary(sessionId: string): RuntimeSession | null | undefined;
   pendingContinuationOnlyAutoResumeRebuilds: { set(session: RuntimeSession, attemptToken: number): unknown };
   maybeApplySessionRuntimeFallback(
@@ -157,7 +157,7 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
           ? item.origin.runId
           : null;
       if (schedulerRunId) {
-        beginSchedulerAutoResume(sessionId, schedulerRunId, decision.attemptToken);
+        beginSchedulerAutoResume(sessionId, schedulerRunId, decision.attemptToken, signals.message);
       }
       if (isContinuationOnlyAutoResumeReason(signals.reason)) {
         const runtimeSession = getStableSessionForTurnBoundary(sessionId);

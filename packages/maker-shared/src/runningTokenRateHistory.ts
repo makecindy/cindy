@@ -186,6 +186,8 @@ export interface TokenSpeedSnapshot {
   streaming: boolean;
   /** Highest measured recent speed in this product turn; old hosts omit it. */
   peak?: number;
+  /** Display-only cumulative output when some reported tokens had no matching model time. */
+  totalOutputTokens?: number;
 }
 
 export function readTokenSpeedSnapshot(value: unknown): TokenSpeedSnapshot | undefined {
@@ -196,6 +198,8 @@ export function readTokenSpeedSnapshot(value: unknown): TokenSpeedSnapshot | und
     !finite(speed.elapsedMs) || typeof speed.streaming !== 'boolean') return undefined;
   return { rate: speed.rate, average: speed.average, tokens: speed.tokens,
     elapsedMs: speed.elapsedMs, streaming: speed.streaming,
+    ...(finite(speed.totalOutputTokens) && speed.totalOutputTokens >= speed.tokens
+      ? { totalOutputTokens: speed.totalOutputTokens } : {}),
     ...(finite(speed.peak) ? { peak: speed.peak } : {}) };
 }
 

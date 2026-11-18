@@ -138,7 +138,7 @@ describe('settings definition and navigation', () => {
   });
 
   // 生产入口：useSettingsSectionTarget；规则：隐藏控件不能接收搜索定位/高亮。
-  // 视觉桥关闭后明细仍挂载但 hidden；旧逻辑只按 id 存在选择目标，旧用例只覆盖未挂载→挂载。
+  // 设置分区关闭后明细仍挂载但 hidden；旧逻辑只按 id 存在选择目标，旧用例只覆盖未挂载→挂载。
   // 最小失败输入：exact 已挂载但 hidden，fallback 可见；tier：unit（真实 hook + fake timers/DOM）。
   it('uses the visible fallback while the exact target is hidden and follows it when revealed', async () => {
     const view = render(<Page ready hidden />);

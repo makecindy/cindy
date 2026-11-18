@@ -54,6 +54,7 @@ function harness(bot = true) {
   return { item, ...runtime.callbacks, resume, fallback, finalize, guard, groupMayHandle, liveSession, rebuildLeases,
     paused: deps.inputCoordinator.isExecutionPaused, startupCurrent: deps.inputCoordinator.isAutoResumeAttemptCurrent,
     releaseGuard: deps.interruptedTurnAutoResumeGuard.noteResumeSendFailed,
+    beginSchedulerAutoResume: deps.beginSchedulerAutoResume,
     run: () => scheduled!(), cancel: () => { current = false; } };
 }
 
@@ -96,6 +97,16 @@ describe('Bot candidate recovery', () => {
     expect(h.resume).not.toHaveBeenCalled();
     expect(h.releaseGuard).not.toHaveBeenCalled();
     expect(h.finalize).not.toHaveBeenCalled();
+  });
+
+  // #10802 / unit: the real recovery hook must carry its original cause with
+  // the scheduler lease, even if the retry later fails before a vendor event.
+  it('retains the original cause when claiming recovery for a scheduled run', () => {
+    const h = harness();
+    const message = "You've hit your session limit";
+    const item = { ...h.item, origin: { kind: 'scheduler', scheduleId: 'schedule', runId: 'run' } };
+    expect(h.onResumableTurnError('s', { message }, item)).not.toBeNull();
+    expect(h.beginSchedulerAutoResume).toHaveBeenCalledExactlyOnceWith('s', 'run', 1, message);
   });
 
   // #10119 review: use the production enrichment before the production recovery callbacks.

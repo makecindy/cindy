@@ -3,6 +3,7 @@ import { createMakerSteerTransaction } from '../../../desktop/src/main/maker-ipc
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
 import { readReplyQuoteNote } from '../../../desktop/src/main/maker-ipc/chatReplyQuoteNote.ts';
 import { publishUiSessionIntervention } from '../../../desktop/src/main/maker-ipc/uiContinuationSignal.ts';
+import { extractPlainText } from '../../../desktop/src/main/maker-ipc/agentHandoff.ts';
 import { listMessagesForAgentHandoff } from '../../../desktop/src/main/localDb/agentHandoffHistory.ts';
 import { createSessionOptionsReconciler } from '../../../desktop/src/main/maker-ipc/sessionOptionsReconciler.ts';
 import { createMakerSendTransaction, prepareDirectoryGrantsForBootstrap } from '../../../desktop/src/main/maker-ipc/makerSendTransaction.ts';
@@ -178,12 +179,12 @@ export function createTurnExecutor(deps) {
     }
   }
 
-  function startGitBaseline(sessionId, signal) {
+  function startGitBaseline(sessionId, signal, prepareSnapshot) {
     const turn = turns.get(sessionId);
     const snapshot = deps.getGitSnapshot?.();
     if (!turn || !snapshot) return;
     turn.gitBaseline = { aborted: false, ended: false };
-    return snapshot.onTurnStart(sessionId, signal);
+    return prepareSnapshot ? prepareSnapshot(snapshot) : snapshot.onTurnStart(sessionId, signal);
   }
 
   // The desktop's list preview refresh after a done (sessionTaskSummary.ts refreshSessionListPreview, called
@@ -878,7 +879,8 @@ export function createTurnExecutor(deps) {
     // check before the start, and a parked native session that must resume or fail (the switch then
     // handles the failure; no fresh start here).
     bootstrapSession: async (opts, assertAccess, nativeHistoryResume = false) => {
-      const turn = turns.get(opts.id);
+      const previous = turns.get(opts.id);
+      const turn = previous?.running ? previous : undefined;
       turn?.check();
       assertAccess?.();
       if (nativeHistoryResume) opts.vendorOptions = { ...opts.vendorOptions, _cindyRequireNativeResume: true };
@@ -892,6 +894,8 @@ export function createTurnExecutor(deps) {
           readPersistedWritableDirs: deps.readSessionWritableDirs ?? (async () => []),
           persistExistingSession: async () => { throw new Error('Host must not rewrite directory grants at startup'); },
         });
+        deps.assertCurrent();
+        assertAccess?.();
         turn?.check();
         // The resume id is known before the start admission reads it: a verified resume of the task's
         // stored route keeps that route (register.ts admitLocalRoute). The admission may reroute
@@ -912,13 +916,15 @@ export function createTurnExecutor(deps) {
         const session = await (taskPlugins
           ? taskPlugins.createSessionWithRuntimePlugins({ ...opts }, turn?.sendOpts.signal)
           : deps.getMaker().createSession({ ...opts }, turn?.sendOpts.signal));
+        deps.assertCurrent();
         turn?.check();
         await persistStartedSessionProvider(session, opts, assertAccess, runtimeOverride);
         turn?.check();
         rememberLiveSessionSettings(session, opts);
         setSessionProvider(opts.id, opts.providerId ?? null);
         wireNotes.reset(opts.id);
-        bindTurnSession(opts.id, session);
+        if (turn) bindTurnSession(opts.id, session);
+        else listen(opts.id, session);
         return { session, didInjectOrcaInstructions: false, didInjectProjectContext: false };
       })();
       if (turn) turn.preparing = preparing;
@@ -951,6 +957,7 @@ export function createTurnExecutor(deps) {
       const turn = turns.get(id);
       // The shared reconciler refreshes execution settings before bootstrap;
       // recovery also needs the current task directory and native identity.
+      if (!turn?.running || !turn.createOpts) return deps.storedSessionOptions(stored);
       return { ...turn.createOpts, workingDir: stored.workingDir,
         resumeSessionId: turn.createOpts.agentKind === makerKind(stored.agentKind) ? stored.sdkSessionId || undefined : undefined };
     },
@@ -1161,6 +1168,12 @@ export function createTurnExecutor(deps) {
     const check = turn.check;
     turn.preparing = (async () => {
       await sendOpts[MCP_APP_MESSAGE_GUARD]?.();
+      check();
+      // The send lock is held. Read the committed route and native identity below.
+      const nextInput = typeof message === 'string' ? message : message?.content;
+      const nextInputChars = (typeof nextInput === 'string' ? nextInput : extractPlainText(nextInput)).length;
+      await deps.applyPendingAgentSwitch?.(sessionId, sendOpts.signal, nextInputChars);
+      check();
       const stored = await readExecutionSession(sessionId);
       const queuedPlan = createOpts.planMode;
       await reconcileCreateOptsWithDb(sessionId, createOpts);
@@ -1276,7 +1289,7 @@ export function createTurnExecutor(deps) {
     closeRuntime: id => closeRuntime(id),
     /** The runtime the Host binds for a task (the product-turn failure gate's current-owner check). */
     boundSession: id => bindings.get(id)?.session,
-    async beforeDispatchUserTurn(id, item, signal) {
+    async beforeDispatchUserTurn(id, item, signal, prepareSnapshot) {
       const turn = turns.get(id);
       const live = deps.getMaker()?.getSession(id);
       if (live) {
@@ -1284,7 +1297,7 @@ export function createTurnExecutor(deps) {
         turn.changeRecordStarted = true;
       }
       turn.check();
-      await startGitBaseline(id, signal);
+      await startGitBaseline(id, signal, prepareSnapshot);
     },
     onUndispatchedUserTurn(id) {
       const turn = turns.get(id);
@@ -1322,6 +1335,14 @@ export function createTurnExecutor(deps) {
     steer,
     readExecutionSession,
     readAutoReviewHistory,
+    async preparePiSkillRuntime(id, dir, assertStartupCurrent) {
+      const row = await readExecutionSession(id);
+      assertStartupCurrent();
+      if (row.source === 'review' || makerKind(row.agentKind) !== 'pi' || row.workingDir !== dir)
+        throw new Error('[PRECONDITION_FAILED] Pi session is unavailable');
+      await transaction.preparePiSkillRuntime(id, dir, {}, assertStartupCurrent);
+      deps.assertCurrent();
+    },
     async restoreSession(id, options, assertCurrent) {
       deps.assertCurrent(); await assertCurrent();
       await readExecutionSession(id);

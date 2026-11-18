@@ -54,6 +54,7 @@ export interface HostRecoveryPorts {
   readSessionExtraDirsFromDb: ReplayContextRecoveryPorts['readSessionExtraDirsFromDb'];
   readSessionWritableDirsFromDb: ReplayContextRecoveryPorts['readSessionWritableDirsFromDb'];
   resolveVerifiedWindow?: ContextOverflowRolloverDeps['resolveVerifiedWindow'];
+  resolveHandoffWindow?: ContextOverflowRolloverDeps['resolveHandoffWindow'];
   /** A cold Pi runtime resumed only to read its window and usage (runtime-selection.ts, the desktop's binding). */
   rehydrateColdPiRuntimeForWindowVerification?: ContextOverflowRolloverDeps['rehydrateColdPiRuntimeForWindowVerification'];
   /** The native thread locator and classifier used before sending to a task with a saved history error. */
@@ -126,7 +127,9 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
     }, threadId),
     getAutoCompactThresholdPct: () => DEFAULT_MODEL_COMPACTION_PCT,
     resolveVerifiedWindow: host.resolveVerifiedWindow,
+    ...(host.resolveHandoffWindow ? { resolveHandoffWindow: host.resolveHandoffWindow } : {}),
     listMessages: sessionId => listMessagesForAgentHandoff(sessionId, 400) as ReturnType<ContextOverflowRolloverDeps['listMessages']>,
+    listReplayMessages: sessionId => listMessagesForAgentHandoff(sessionId, null, undefined, 'replay'),
     findLatestUser: sessionId => findLatestUserMessageForRebuild(sessionId) as ReturnType<NonNullable<ContextOverflowRolloverDeps['findLatestUser']>>,
     findLatestRebuildMeta: findLatestContextRebuildMeta,
     getLiveSession: sessionId => host.getMaker().getSession(sessionId),

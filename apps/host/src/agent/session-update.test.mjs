@@ -17,6 +17,9 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import os from 'node:os';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { createContextOverflowRollover } from '../../../desktop/src/main/maker-ipc/contextOverflowRollover.ts';
+import { commitContextRebuildWithPorts } from '../../../desktop/src/main/localDb/contextRebuildPersistence.ts';
 import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import { hostRuntimeLayout } from '../runtime-layout.mjs';
@@ -24,7 +27,8 @@ import { openOwnerDatabase } from '../../../desktop/src/main/localDb/startupCore
 import { createDbClientForHandle } from '../../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionStorageAdapter.ts';
-import { sessions } from '../../../desktop/src/main/localDb/schema.ts';
+import { sessions, messages } from '../../../desktop/src/main/localDb/schema.ts';
+import { estimateHandoffTokens } from '../../../desktop/src/main/maker-ipc/agentHandoff.ts';
 import { setSessionProvider, getSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { createHostSessionUpdate } from './session-update.ts';
 import { createHostService } from '../service.mjs';
@@ -140,11 +144,15 @@ async function fixture(t) {
     setSessionProvider(id, 'prov-a');
     t.after(() => clearSessionProvider(id));
   };
-  const runtime = (id, { model = 'big', inTurn = false, usage, agentKind = 'claude-code' } = {}) => {
+  const runtime = (id, { model = 'big', inTurn = false, usage, agentKind = 'claude-code', finalPiWindow } = {}) => {
     const session = { id, agentKind, model, setModelCalls: [],
       isTurnRunning: () => inTurn,
       getUsageSnapshot: () => usage,
-      async setModel(next, options) { session.setModelCalls.push([next, options]); session.model = next; },
+      ...(agentKind === 'pi' ? { previewModelSwitch: async () => ({ action: 'hot', windowVerified: false }) } : {}),
+      async setModel(next, options) {
+        session.setModelCalls.push([next, options]); session.model = next;
+        if (finalPiWindow !== undefined) usage = { ...usage, contextWindow: finalPiWindow };
+      },
       async setEffort() {} };
     live.set(id, session);
     return session;

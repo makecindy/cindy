@@ -146,7 +146,7 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
     }
     if (!opts.remoteHostId && opts.workingDir) {
       const result = await prepareSharedProjectSkillLinks({ workingDir: opts.workingDir });
-      for (const warning of result.warnings) {
+      for (const warning of result.warningsToReport) {
         ports.logger.warn('shared project skill link warning', { workingDir: opts.workingDir, warning });
       }
     }
@@ -167,7 +167,7 @@ export function createHostStartOptions(ports: HostStartOptionsPorts) {
     if (context.agentKind === 'codex' && !context.remoteHostId) await ports.beforeLocalCodexSessionStart?.();
     if (context.remoteHostId || !context.workingDir) return;
     const result = await prepareSharedProjectSkillLinks({ workingDir: context.workingDir });
-    for (const warning of result.warnings) {
+    for (const warning of result.warningsToReport) {
       ports.logger.warn('shared project skill link warning', { workingDir: context.workingDir, warning });
     }
     if (context.agentKind === 'codex' && result.changed) await ports.reloadCodexSkills?.(context.workingDir);

@@ -93,6 +93,27 @@ it('requires usage permission and suppresses a quota result after plugin revocat
   expect(JSON.stringify(late)).not.toContain('only-owner-account');
 });
 
+// Unit / #11274: existing usage-only approval admits the new method without history.
+it('admits session quota under the existing usage group only', async () => {
+  const f = fixture();
+  f.ghost.manifest.agent!.hostTools = ['history'];
+  const readSession = vi.fn(async () => ({ status: 'unavailable' }));
+  const ports: PluginHostToolPorts = { ...f.ports, createRuntime: (_server, caller) => {
+    const server = createXdtHelperMcpServer({
+      subscriptionUsage: { read: vi.fn(), readSession }, authorizeCall: authorizePluginHostToolCall,
+    }, { agentKind: 'codex', workingDir: '', hostCaller: caller });
+    return { ...server.hostTools, close: () => server.close() };
+  } };
+  const request = () => handlePluginHostToolRequest('dashboard', {
+    type: 'host-tool-request', server: 'cindy_helper', tool: 'get_session_quota', args: { sessionId: 'target' },
+  }, () => true, ports);
+  expect(code(await request())).toBe('PERMISSION_DENIED');
+  expect(readSession).not.toHaveBeenCalled();
+  f.ghost.manifest.agent!.hostTools = ['usage'];
+  expect((await request()).isError).not.toBe(true);
+  expect(readSession).toHaveBeenCalledOnce();
+});
+
 // Unit / #10794 P1: raw provider reads must use the declared usage group. The
 // existing quota test covers only get_subscription_usage, not these registry
 // entries. One approved plugin declaring settings is the minimal failing input.
