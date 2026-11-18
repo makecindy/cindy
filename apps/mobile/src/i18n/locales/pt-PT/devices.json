@@ -1,4 +1,9 @@
 {
+  "widgetGuideAction": "Adicionar widget",
+  "widgetGuidePicker": "Editar → Adicionar widget",
+  "widgetGuideIOS": "Mantenha premida uma área vazia do ecrã principal e toque em {{picker}}.\n\nProcure Cindy, escolha «Quota das subscrições» ou «Utilização diária» e toque em «Adicionar widget».",
+  "widgetGuideAndroid": "Mantenha premida uma área vazia do ecrã principal e toque em «Widgets».\n\nProcure Cindy e arraste «Quota das subscrições» ou «Utilização diária» para o ecrã principal.",
+  "widgetGuideDismiss": "Entendido",
   "usageOther": "Outros",
   "usageTitle": "Resumo de utilização",
   "usageOnlyDevice": "Apenas {{name}}",

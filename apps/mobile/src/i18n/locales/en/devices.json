@@ -1,4 +1,9 @@
 {
+  "widgetGuideAction": "Add widget",
+  "widgetGuidePicker": "Edit → Add Widget",
+  "widgetGuideIOS": "Touch and hold an empty area on the Home Screen, then tap {{picker}}.\n\nSearch for Cindy, choose Subscription quota or Daily usage, then tap Add Widget.",
+  "widgetGuideAndroid": "Touch and hold an empty area on your home screen, then tap Widgets.\n\nFind Cindy and drag Subscription quota or Daily usage onto your home screen.",
+  "widgetGuideDismiss": "Got it",
   "usageOther": "Other",
   "usageTitle": "Usage overview",
   "usageOnlyDevice": "{{name}} only",

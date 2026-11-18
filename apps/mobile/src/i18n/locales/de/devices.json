@@ -1,4 +1,9 @@
 {
+  "widgetGuideAction": "Widget hinzufügen",
+  "widgetGuidePicker": "Bearbeiten → Widget hinzufügen",
+  "widgetGuideIOS": "Halte eine freie Stelle auf dem Home-Bildschirm gedrückt und tippe auf {{picker}}.\n\nSuche nach Cindy, wähle „Abo-Kontingent“ oder „Tägliche Nutzung“ und tippe auf „Widget hinzufügen“.",
+  "widgetGuideAndroid": "Halte eine freie Stelle auf dem Startbildschirm gedrückt und tippe auf „Widgets“.\n\nSuche Cindy und ziehe „Abo-Kontingent“ oder „Tägliche Nutzung“ auf den Startbildschirm.",
+  "widgetGuideDismiss": "Verstanden",
   "usageOther": "Sonstige",
   "usageTitle": "Nutzungsübersicht",
   "usageOnlyDevice": "Nur {{name}}",

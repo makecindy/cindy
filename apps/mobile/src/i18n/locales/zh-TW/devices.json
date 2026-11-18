@@ -1,4 +1,9 @@
 {
+  "widgetGuideAction": "加入小工具",
+  "widgetGuidePicker": "「編輯」→「加入小工具」",
+  "widgetGuideIOS": "按住主畫面空白處，點{{picker}}。\n\n搜尋 Cindy，選擇「訂閱餘量」或「每日用量」，點「加入小工具」。",
+  "widgetGuideAndroid": "按住主畫面空白處，開啟「小工具」。\n\n找到 Cindy，將「訂閱餘量」或「每日用量」拖曳到主畫面。",
+  "widgetGuideDismiss": "知道了",
   "usageOther": "其他",
   "usageTitle": "用量概覽",
   "usageOnlyDevice": "僅 {{name}}",

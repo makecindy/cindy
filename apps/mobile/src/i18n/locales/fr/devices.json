@@ -1,4 +1,9 @@
 {
+  "widgetGuideAction": "Ajouter un widget",
+  "widgetGuidePicker": "Modifier → Ajouter un widget",
+  "widgetGuideIOS": "Appuyez longuement sur une zone vide de l’écran d’accueil, puis touchez {{picker}}.\n\nRecherchez Cindy, choisissez « Quota des abonnements » ou « Usage quotidien », puis touchez « Ajouter le widget ».",
+  "widgetGuideAndroid": "Appuyez longuement sur une zone vide de l’écran d’accueil, puis touchez « Widgets ».\n\nTrouvez Cindy et faites glisser « Quota des abonnements » ou « Usage quotidien » sur l’écran d’accueil.",
+  "widgetGuideDismiss": "Compris",
   "usageOther": "Autres",
   "usageTitle": "Aperçu de l’utilisation",
   "usageOnlyDevice": "{{name}} uniquement",

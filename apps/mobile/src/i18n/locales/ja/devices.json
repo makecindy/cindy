@@ -1,4 +1,9 @@
 {
+  "widgetGuideAction": "ウィジェットを追加",
+  "widgetGuidePicker": "「編集」→「ウィジェットを追加」",
+  "widgetGuideIOS": "ホーム画面の空いている場所を長押しし、{{picker}}をタップします。\n\nCindy を検索し、「サブスクの残り」または「毎日の使用量」を選んで「ウィジェットを追加」をタップします。",
+  "widgetGuideAndroid": "ホーム画面の空いている場所を長押しし、「ウィジェット」をタップします。\n\nCindy の「サブスクの残り」または「毎日の使用量」をホーム画面にドラッグします。",
+  "widgetGuideDismiss": "閉じる",
   "usageOther": "その他",
   "usageTitle": "利用状況",
   "usageOnlyDevice": "{{name}} のみ",

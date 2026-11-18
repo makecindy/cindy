@@ -1,4 +1,9 @@
 {
+  "widgetGuideAction": "Adicionar widget",
+  "widgetGuidePicker": "Editar → Adicionar Widget",
+  "widgetGuideIOS": "Mantenha pressionada uma área vazia da Tela de Início e toque em {{picker}}.\n\nBusque Cindy, escolha “Cota das assinaturas” ou “Uso diário” e toque em “Adicionar Widget”.",
+  "widgetGuideAndroid": "Mantenha pressionada uma área vazia da tela inicial e toque em “Widgets”.\n\nEncontre Cindy e arraste “Cota das assinaturas” ou “Uso diário” para a tela inicial.",
+  "widgetGuideDismiss": "Entendi",
   "usageOther": "Outros",
   "usageTitle": "Resumo de uso",
   "usageOnlyDevice": "Somente {{name}}",

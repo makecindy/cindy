@@ -1,8 +1,9 @@
 import { useRouter } from 'expo-router';
-import { ScrollView } from 'react-native';
+import { Alert, Platform, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { UsageDashboard, useAutomaticUsage } from '@/widgets/UsageDashboard';
+import { usageWidgetsSupported } from '@/widgets/usageWidgetSync';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { SimpleStackHeader, simpleScrollInsetProps, simpleScrollScreenSafeAreaEdges } from '@/platform/chrome';
 import { useTheme } from '@/theme';
@@ -15,9 +16,20 @@ export default function UsageScreen() {
   const router = useRouter();
   const state = useAutomaticUsage();
   const title = t('devices.usageTitle');
+  const iosVersion = Platform.OS === 'ios' ? Number.parseInt(String(Platform.Version), 10) : 0;
+  const canShowWidgetGuide = usageWidgetsSupported && (iosVersion >= 17 || Platform.OS === 'android');
+  function showWidgetGuide() {
+    const instructions = Platform.OS === 'ios'
+      ? t('devices.widgetGuideIOS', { picker: iosVersion >= 18 ? t('devices.widgetGuidePicker') : '+' })
+      : t('devices.widgetGuideAndroid');
+    Alert.alert(t('devices.widgetGuideAction'), instructions, [{ text: t('devices.widgetGuideDismiss') }]);
+  }
   return (
     <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={{ flex: 1, backgroundColor: colors.surface }}>
-      <SimpleStackHeader scrollEdge title={title} onBack={() => goBackGuarded(router)} />
+      <SimpleStackHeader scrollEdge title={title} onBack={() => goBackGuarded(router)}
+        action={canShowWidgetGuide ? {
+          label: t('devices.widgetGuideAction'), onPress: showWidgetGuide, testID: 'usage.widgetGuide',
+        } : undefined} />
       <ScrollView {...simpleScrollInsetProps} contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg }}>
         {state?.kind === 'snapshot'
           ? <UsageDashboard snapshot={state.snapshot} name={state.deviceName} />
