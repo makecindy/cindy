@@ -570,7 +570,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
         } catch (error) { await accepted.rollback(id, clientId); throw error; }
       },
       beforeDispatchUserTurn: async () => {
-        if (++attempts === 1 || options.replacementFails) throw new Error(message);
+        if (++attempts === 1) throw new Error(message);
+        if (options.replacementFails) throw new Error('[MODEL_SELECTION_UNAVAILABLE] Replacement unavailable');
       },
       onAcceptedQueuedMessage: async (id, item) => { await accepted.run(id, item, bridge.recoverySourceClientId(id, item)); },
       onPersistedSendRejected: (id, error, item, recovering) => bridge.onPersistedSendRejected(id, error, item, recovering),
@@ -677,7 +678,11 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
         if (action === 'clear') { h.coordinator.clearSession(SESSION_ID); h.book.teardown(SESSION_ID); }
         if (action === 'pause-delete') h.ctx.abortController.abort();
         await vi.advanceTimersByTimeAsync(30_000);
-        await expect(h.fire).rejects.toThrow(action === 'pause-delete' ? /aborted/ : /Snapshot operation deadline exceeded/);
+        const expected = action === 'disabled' ? /^Snapshot operation deadline exceeded$/
+          : action === 'replacement-failed' ? /^scheduled task auto-resume failed: \[MODEL_SELECTION_UNAVAILABLE\] Replacement unavailable$/
+          : action === 'pause-delete' ? /aborted/
+          : /^scheduled task auto-resume failed: Snapshot operation deadline exceeded$/;
+        await expect(h.fire).rejects.toThrow(expected);
         expect(h.dispatched).toEqual([]);
         expect(h.bridge.hasQueuedPrompt(SESSION_ID, 'schedule-hb')).toBe(false);
         expect(h.session.listenerCount()).toBe(0);
@@ -1791,6 +1796,75 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // #10658: exercise fire -> accepted queue -> production waiter and its failure
+  // notification. Existing recovery tests checked only the generic prefix.
+  it.each([false, true])('retains provider failure details with auto-resume pending=%s', async (pending) => {
+    const detail = 'API Error: Request rejected (429) · [1308][已达到 5 小时的使用上限。您的限额将在 2026-11-06 18:54:03 重置。]';
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, autoResumePending: () => pending });
+    const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
+    const fire = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    harness.emit({ type: 'error', source: 'claude-code', data: { message: detail, isTerminal: true } });
+    await Promise.resolve();
+    if (pending) queue.failAutoResume();
+
+    const expected = pending ? `scheduled task auto-resume failed: ${detail}` : detail;
+    await expect(fire).rejects.toThrow(expected);
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg: expected });
+    expect(harness.listenerCount()).toBe(0);
+  });
+
+  it.each([false, true])('retains the latest owned error across Session replacement (new error=%s)', async (newError) => {
+    const original = createSessionHarness(async () => ({ accepted: true }));
+    const replacement = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, autoResumePending: () => true });
+    const { runner, notifier, replaceLiveSession } = createRunnerHarness(original.session, queue.deps);
+    const fire = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    original.emit({ type: 'error', source: 'claude-code', data: { message: 'original 429', isTerminal: true } });
+    await Promise.resolve();
+    original.emitStatus('closed');
+    replaceLiveSession(replacement.session);
+    if (newError) {
+      replacement.emit({ type: 'error', source: 'claude-code', data: { message: 'retry overloaded 503', isTerminal: true } });
+      await Promise.resolve();
+    }
+    // Detached instances and other turns must not replace this run's detail.
+    original.emit({ type: 'error', source: 'claude-code', data: { message: 'stale instance', isTerminal: true } });
+    for (const turnOrigin of [undefined, { kind: 'user' } as const, { ...SCHEDULER_TURN_ORIGIN, runId: 'other-run' }]) {
+      replacement.emit({ type: 'error', source: 'claude-code', turnOrigin, data: { message: 'unrelated error', isTerminal: true } });
+    }
+    queue.failAutoResume();
+    const expected = `scheduled task auto-resume failed: ${newError ? 'retry overloaded 503' : 'original 429'}`;
+    await expect(fire).rejects.toThrow(expected);
+    expect(latestNotifiedRun(notifier).errorMsg).toBe(expected);
+    expect(replacement.listenerCount()).toBe(0);
+  });
+
+  it('does not reuse a previous run error when recovery fails before any owned error', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, autoResumePending: () => true });
+    const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
+    const first = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    harness.emit({ type: 'error', source: 'claude-code', data: { message: 'previous run 429', isTerminal: true } });
+    await Promise.resolve();
+    queue.failAutoResume();
+    await expect(first).rejects.toThrow('scheduled task auto-resume failed');
+
+    const second = runner.fire(heartbeatSchedule(), { ...createFireContext(), runId: 'run-q2' });
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(2));
+    await queue.accept();
+    harness.emit({ type: 'error', source: 'claude-code', data: { message: 'previous run 429', isTerminal: true } });
+    queue.failAutoResume();
+    await expect(second).rejects.toThrow(/^scheduled task auto-resume failed$/);
+    expect(latestNotifiedRun(notifier).errorMsg).toBe('scheduled task auto-resume failed');
   });
 
   it('fails the same run when a claimed auto-resume cannot be dispatched', async () => {

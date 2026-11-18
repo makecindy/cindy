@@ -26,6 +26,11 @@ export interface ConfirmAgentSwitchRiskParams {
    * 必须再问。判据只认 runtime,不认意图目标,详见 ChatInput 的调用点。
    */
   hasSwitchIntent: boolean;
+  /**
+   * Ask every time, even when the user chose not to be reminded: the target is another computer's
+   * copy listed only because the task computer's own copy is unusable (2026-11-18 user decision).
+   */
+  alwaysAsk?: boolean;
   confirm: (options: ConfirmOptions) => Promise<boolean>;
   copy: AgentSwitchConfirmationCopy;
 }
@@ -38,10 +43,11 @@ export interface ConfirmAgentSwitchRiskParams {
  */
 export async function confirmAgentSwitchRisk({
   hasSwitchIntent,
+  alwaysAsk = false,
   confirm,
   copy,
 }: ConfirmAgentSwitchRiskParams): Promise<boolean> {
-  if (hasSwitchIntent) return true;
+  if (hasSwitchIntent && !alwaysAsk) return true;
 
   return confirm({
     title: copy.title,
@@ -50,9 +56,24 @@ export async function confirmAgentSwitchRisk({
     textClassName: 'select-none',
     confirmText: copy.confirmText,
     cancelText: copy.cancelText,
-    dontShowAgainKey: AGENT_SWITCH_CONFIRMATION_OVERRIDE_KEY,
-    dontShowAgainLabel: copy.dontShowAgainLabel,
+    ...(alwaysAsk ? {} : {
+      dontShowAgainKey: AGENT_SWITCH_CONFIRMATION_OVERRIDE_KEY,
+      dontShowAgainLabel: copy.dontShowAgainLabel,
+    }),
   });
+}
+
+/**
+ * Why another computer's copy is offered: the task computer's own copy is unusable right now.
+ * Shared by the picker's question and a running task's relocation dialog.
+ */
+export function discoveredCopyReason(
+  t: (key: string, options?: Record<string, string>) => string,
+  ask: { providerName: string; homeName: string | null },
+): string {
+  return ask.homeName
+    ? t('newChat.modelSelector.discoveredCopy.unavailableOn', { device: ask.homeName, provider: ask.providerName })
+    : t('newChat.modelSelector.discoveredCopy.unavailableHere', { provider: ask.providerName });
 }
 
 /**

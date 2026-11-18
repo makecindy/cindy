@@ -372,5 +372,9 @@ export function formatPreRunHookFailure(result: PreRunHookResult): string {
   }
   if (result.status === 'timed_out') return result.error ?? 'pre-run hook timed out';
   if (result.error) return `pre-run hook failed: ${result.error}`;
-  return `pre-run hook failed with exit code ${result.exitCode ?? 'unknown'}`;
+  // The script's own first stderr line is usually the actual cause ("gh not found",
+  // "not authenticated"); a bare exit code leaves the user nothing to act on.
+  // Bounded like script-mode failures, which already carry their stderr tail.
+  const reason = firstLine(result.stderr.trim());
+  return `pre-run hook failed with exit code ${result.exitCode ?? 'unknown'}${reason ? `: ${reason}` : ''}`;
 }

@@ -1937,26 +1937,25 @@ describe('FORGE_GUIDE', () => {
     );
     expect(manualSection).toContain('Manual-only');
     expect(manualSection).toContain('不需要声明虚假工具');
-    expect(manualSection).toContain('首个支持 Manual-only 发现与读取的 Cindy 正式版本');
+    expect(manualSection).toContain('Manual-only 发现与读取时，按 §2 的规则填写 `minCindyVersion`');
     expect(FORGE_GUIDE).not.toContain('cindy_ios_simulator');
   });
 
-  it('manual 发布契约按顺序锁定 Cindy 版本门槛与旧客户端回退', () => {
+  it('manual 版本契约使用开发测试版本并保留旧客户端回退', () => {
     expect(FORGE_GUIDE).toContain(
       'Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` 追加筛选或确认弹窗',
     );
+    expect(FORGE_GUIDE).toContain('用到新能力时，填开发测试所用的 Cindy 版本');
 
     const manualSection = FORGE_GUIDE.slice(
       FORGE_GUIDE.indexOf('## 3.6 manual:按需披露复杂工作流与分层资料'),
       FORGE_GUIDE.indexOf('## 4. main.js 电子脑'),
     );
     const orderedRequirements = [
-      'Cindy 先发布',
-      '确认首个支持它的**正式版本号**',
-      '`minCindyVersion` 设为不低于\n该正式版本',
-      '把存量\n`skill.items` 改成 Manual 的版本也必须设置上述 `minCindyVersion`',
-      '服务端还要保留上一份带 Skill 的历史 release',
-      '旧客户端能通过历史版本回退',
+      '按 §2 的规则填写 `minCindyVersion`',
+      '把存量 `skill.items` 改成 Manual 时',
+      '服务端仍要保留上一份带 Skill 的历史 release',
+      '旧客户端\n能通过历史版本回退',
     ];
     let previousIndex = -1;
     for (const requirement of orderedRequirements) {

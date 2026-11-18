@@ -500,6 +500,10 @@ export class AppServerClient {
     return response;
   }
 
+  async sampleResumeStack(): Promise<string[]> {
+    return await this.transport?.sampleResumeStack?.() ?? [];
+  }
+
   /** Only local transports can prove this pre-protocol failure and process exit. */
   nativeSqliteInitializationFailed(): boolean {
     return !this.initialized && this.transport?.nativeSqliteInitializationFailed?.() === true;

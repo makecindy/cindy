@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { PiKernelInstallRequest, PiKernelState } from '../../../shared/piKernel';
 import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { DownloadMeter } from '@/components/ui/download-meter';
 import { HARNESS_MENU_ITEM_CLASS, HarnessMenuFootnote, HarnessVersionMenuItem, HarnessVersionMenuRow } from './HarnessVersionMenuRow';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
@@ -92,6 +93,11 @@ export function PiKernelVersionRow() {
       }}>{k('releaseNotes')}</DropdownMenuItem>
       {state?.upstream.checkedAt && <HarnessMenuFootnote>{t('settings.about.piKernel.checkedAt', { time: new Date(state.upstream.checkedAt).toLocaleString(i18n.language) })}</HarnessMenuFootnote>}
     </HarnessVersionMenuRow>
+    {state?.operation?.phase === 'download' && state.operation.download && (
+      <div className="px-4 pb-3" data-testid="pi-kernel-download">
+        <DownloadMeter label={t('settings.about.piVersionLabel')} progress={state.operation.download} />
+      </div>
+    )}
     <ConfirmDialog open={!!target} onOpenChange={open => { if (!open) setTarget(null); }}
       title={t(`settings.about.piKernel.${target?.source === 'official' ? 'restoreTitle' : 'updateTitle'}`, { version: target?.version })}
       description={k(target?.source === 'official' ? 'restoreDescription' : 'updateDescription')}

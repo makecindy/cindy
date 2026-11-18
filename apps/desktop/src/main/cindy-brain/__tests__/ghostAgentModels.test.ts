@@ -4,6 +4,7 @@ import {
   createGhostAgentModelsCache,
   GHOST_AGENT_MODELS_CACHE_MAX_CATALOGS,
   projectGhostAgentModels,
+  withGhostModelDescriptions,
 } from '../ghostAgentModels.js';
 
 const provider = (id: string, efforts: string[]) =>
@@ -51,6 +52,7 @@ describe('plugin model projection', () => {
           providerName: 'a',
           efforts: ['low', 'high'],
           defaultEffort: 'low',
+          supportsFastMode: false,
         },
         {
           visible: true,
@@ -61,8 +63,43 @@ describe('plugin model projection', () => {
           providerName: 'b',
           efforts: ['medium'],
           defaultEffort: 'medium',
+          supportsFastMode: false,
         },
       ],
+    });
+  });
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：插件 GET /agent-models 的投影带上与 App 模型选择器同源的展示数据
+   *   （图标、分组、上下文窗口、Fast、档位显示名、供应商标、本地化说明），缺的字段不输出。
+   * - Bug／规则依据：plugin-security-and-authoring.md「只读 Agent 模型目录」2026-11 可选展示字段。
+   * - 现有覆盖缺口：既有用例只钉住原字段集合，没有新增字段的来源与缺省行为。
+   * - 最小失败输入：一个带 icon/group/contextWindow/Fast/档位显示名的目录行和一个全缺省的目录行。
+   * - tier：unit。
+   * - 实测耗时：1.2 s（与 ghost.tasks.test.ts 同跑，macOS arm64）。
+   */
+  it('adds optional picker display data from the catalog and omits what is missing', () => {
+    const rich = provider('rich', ['high']);
+    (rich as { logoKind?: string }).logoKind = 'openai';
+    Object.assign(rich.models.codex![0]!, {
+      icon: 'codex', group: 'gpt', contextWindow: 272_000, supportsFastMode: true, supportsUltrafastMode: true,
+      effortDisplayNames: { high: 'Deep' }, description: 'raw catalog text is not the picker copy',
+    });
+    const plain = provider('plain', []);
+    const projected = withGhostModelDescriptions(
+      projectGhostAgentModels([rich, plain], ['codex']),
+      (model) => model.group === 'gpt' ? `blurb:${model.id}` : undefined,
+    );
+    if (!projected.ok) throw new Error('projection failed');
+    expect(projected.models[0]).toEqual({
+      visible: true, id: 'model', name: 'Model', agent: 'codex', providerId: 'rich', providerName: 'rich',
+      efforts: ['high'], defaultEffort: 'high', icon: 'codex', group: 'gpt', contextWindow: 272_000,
+      supportsFastMode: true, supportsUltrafastMode: true, effortDisplayNames: { high: 'Deep' }, logoKind: 'openai',
+      description: 'blurb:model',
+    });
+    expect(projected.models[1]).toEqual({
+      visible: true, id: 'model', name: 'Model', agent: 'codex', providerId: 'plain', providerName: 'plain',
+      efforts: [], defaultEffort: null, supportsFastMode: false,
     });
   });
   it('excludes disconnected, suspended, disabled, retired, paid-locked and non-chat routes', () => {
@@ -94,6 +131,7 @@ describe('plugin model projection', () => {
           providerName: 'a',
           efforts: [],
           defaultEffort: null,
+          supportsFastMode: false,
         },
       ],
     });
@@ -128,6 +166,7 @@ describe('plugin model projection', () => {
           providerName: 'anthropic',
           efforts: ['high'],
           defaultEffort: 'high',
+          supportsFastMode: false,
         },
         {
           visible: true,
@@ -138,6 +177,7 @@ describe('plugin model projection', () => {
           providerName: 'anthropic-api',
           efforts: ['high'],
           defaultEffort: 'high',
+          supportsFastMode: false,
         },
       ],
     });

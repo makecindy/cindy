@@ -186,6 +186,11 @@ function outcome(f: ReturnType<typeof fixture>, state: AuthState) {
 
 const desktopRead = async (f: ReturnType<typeof fixture>) => { f.enter(); return outcome(f, await new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' })); };
 const hostRead = async (f: ReturnType<typeof fixture>) => { f.enter(); return outcome(f, await createHostAuth(f.codexHome, f.systemAuth).getState({ credentialMode: 'oauth-bearer' })); };
+// The no-argument entry: what BaseAgent.getAuthState() and an implicit session's startup check
+// actually call. Both sides must diagnose an unreachable shared login the same way here, not only
+// under an explicit oauth-bearer mode (codex-code-review P1 on #11115).
+const desktopReadDefault = async (f: ReturnType<typeof fixture>) => { f.enter(); return outcome(f, await new DesktopCodexAuthAdapter().getState()); };
+const hostReadDefault = async (f: ReturnType<typeof fixture>) => { f.enter(); return outcome(f, await createHostAuth(f.codexHome, f.systemAuth).getState()); };
 
 /** Build the scenario once per side, run each side's own steps, compare after every step. */
 async function both(spec: Spec, steps: Array<{
@@ -262,6 +267,34 @@ describe('the Host reconciles with the system Codex login as the installed deskt
   it('no system login: nothing is linked', async () => {
     const [open] = await both({ system: 'missing', local: 'missing', binding: 'none' });
     expect(open!.desktop).toMatchObject({ state: { authenticated: false }, link: 'missing' });
+  });
+
+  // The default entry, not the oauth-bearer one: an implicit session's startup check calls
+  // getState() with no arguments, and it is where the Host used to answer "no gateway key" for a
+  // user who never had one. The link failure is injected (EPERM from symlink, as
+  // codexAuthInvalidation.test.ts:3316 does) rather than provoked with a read-only home: Windows
+  // ignores a POSIX directory mode for symlink creation and a privileged runner bypasses it, so
+  // chmod would let reconciliation succeed on exactly the workers this contract must hold on.
+  it('a signed-in system login that cannot be linked reports the same reason on the default entry', async () => {
+    const spec = { local: 'missing', binding: 'none' } as const;
+    const d = fixture(spec);
+    const hst = fixture(spec);
+    const symlink = vi.spyOn(fs.promises, 'symlink').mockRejectedValue(
+      Object.assign(new Error('denied'), { code: 'EPERM' }),
+    );
+    try {
+      const desktop = await desktopReadDefault(d);
+      const host = await hostReadDefault(hst);
+      expect(symlink).toHaveBeenCalled();
+      expect(host).toEqual(desktop);
+      expect(desktop.state).toMatchObject({ authenticated: false, errorReason: 'codex_shared_auth_link_unavailable' });
+      expect(desktop.link).toBe('missing');
+      expect(desktop.binding).toMatchObject({ bound: false });
+      expect(desktop.systemUntouched).toBe(true);
+      expect(host.systemUntouched).toBe(true);
+    } finally {
+      symlink.mockRestore();
+    }
   });
 
   it('a healthy hardlink is migrated without copying the system login', async () => {

@@ -1,5 +1,17 @@
 # Browser Use：三种浏览器后端的共同规则
 
+> **读取时机**：新增或修改 Browser Use（专用浏览器、侧边栏、「我的浏览器」）的工具层、配方目录、
+> 外链处理或任一浏览器后端之前
+> **适用路径**：`packages/lizi-mcps/src/browser/**`、`packages/browser-control-runtime/**`、
+> `packages/opencli-vendor/**`、`apps/desktop/src/main/browser-recipes/**`、
+> `apps/desktop/src/main/mcp-integrations/**/browser*`、
+> `apps/desktop/src/main/mcp-integrations/browser-*/**`、
+> `apps/desktop/src/main/{rsb-browser-bridge,browser-extension}/**`、
+> `apps/desktop/src/main/browser-backend-settings-store*`、
+> `apps/desktop/src/main/cindy-brain/browserExtensionSlot.ts`、
+> `apps/desktop/src/shared/{browserBackend,rsbBrowserBridge}.ts`、
+> `apps/desktop/src/renderer/features/right-sidebar/plugins/web-browser/**`
+
 Browser Use 有三种执行端，由用户在 Browser Use 设置里选：专用浏览器（独立实例，`external`）、
 侧边栏（`rsb-webview`）和「我的浏览器」（经官方 Cindy Chrome 扩展控制用户自己的 Chrome，
 `user-browser`，契约见[插件安全与编写](plugin-security-and-authoring.md)）。本文只放三端共同

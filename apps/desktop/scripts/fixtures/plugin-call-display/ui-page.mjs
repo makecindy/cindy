@@ -18,69 +18,92 @@ export default {
   cases: {
     default: {
       about:
-        'Autonomous plugin call never relabels user text; real result settles while assistant continues',
+        'Ordinary GitHub calls get a signature annotation and stop at their actual result',
     },
     explicit: {
       about:
-        'Explicit plugin selection remains selected during execution, later turns and history reload',
+        'Explicit directive activity follows actual calls, not whole-turn activity',
     },
     mention: {
-      about: 'Historical mention remains a quiet pill rather than upgrading to execution status',
+      about: 'Historical mention upgrades only when the owning turn actually calls a plugin',
     },
+    multi: { about: 'Original multiple-name row and artwork; finish only when every call has returned' },
+    'explicit-multi': { about: 'Explicit A plus actual A/B calls: retain the directive and wait for both results' },
+    'mention-multi': { about: 'Mention A plus actual A/B calls: show both names and wait for both results' },
+    selection: { about: 'Uncalled explicit selection stays static and never claims execution' },
+    interrupted: { about: 'Interrupted calls stop without a completion tick, including after history reload' },
   },
   async check(page, ui) {
-    // Real renderer regression: one user message + one ghost_call used to add
-    // a whole-turn running label. Exercise result arrival, next turn and reload.
+    // Exercise actual MessageStream/UserMessage composition, beyond the pure
+    // projection/component unit cases: result -> next ordinary turn -> remount.
     const user = page.locator('[data-message-client-id="ask"]');
     await user.waitFor();
-    const selected = await ui.t('chat.ghostSummon.status.selected');
+    const icon = user.locator('img').first();
+    await icon.waitFor();
+    await icon.evaluate(image => image.decode());
+    assert.equal(await icon.evaluate(image => image.naturalWidth > 0), true);
     const calling = await ui.t('chat.ghostSummon.status.running');
-    const assertSelection = async () => {
+    const called = await ui.t('chat.ghostSummon.status.called');
+    if (ui.case === 'selection') {
+      const selected = await ui.t('chat.ghostSummon.status.selected');
+      assert.equal(await user.getByText(selected, { exact: true }).count(), 1);
       assert.equal(await user.getByText(calling, { exact: true }).count(), 0);
-      if (ui.case === 'explicit') {
-        assert.equal(await user.getByText(selected, { exact: true }).count(), 1);
-      } else if (ui.case === 'default') {
-        assert.equal(await user.getByText('XD Feishu', { exact: true }).count(), 0);
-      } else {
-        assert.equal(
-          await user
-            .getByText(await ui.t('chat.ghostSummon.mention', { names: 'XD Feishu' }), {
-              exact: true,
-            })
-            .count(),
-          1,
-        );
-      }
-    };
-    await assertSelection();
-    await page
-      .getByRole('img', { name: await ui.t('chat.agentActionRow.status.running'), exact: true })
-      .first()
-      .waitFor();
+      assert.equal(await user.getByText(called, { exact: true }).count(), 0);
+      await page.getByTestId('finish-turn').click();
+      await user.getByText(selected, { exact: true }).waitFor();
+      assert.equal(await user.locator('.lucide-check').count(), 0);
+      await ui.capture('selected-without-call');
+      return;
+    }
+    if (ui.case === 'interrupted') {
+      await user.getByText(calling, { exact: true }).waitFor();
+      await page.getByTestId('finish-turn').click();
+      await user.getByText(called, { exact: true }).waitFor();
+      assert.equal(await user.locator('.lucide-check').count(), 0);
+      await page.getByTestId('remount').click();
+      await user.getByText(called, { exact: true }).waitFor();
+      assert.equal(await user.locator('.lucide-check').count(), 0);
+      assert.equal(await user.getByText(calling, { exact: true }).count(), 0);
+      await ui.capture('interrupted-without-completion-tick');
+      return;
+    }
+    const multi = ['multi', 'explicit-multi', 'mention-multi'].includes(ui.case);
+    const names = multi ? 'XD Feishu、GitHub' : ui.case === 'default' ? 'GitHub' : 'XD Feishu';
+    assert.equal(await user.getByText(names, { exact: true }).count(), 1);
+    assert.equal(await user.locator('.summon-seal-arc').count(), 2);
+    assert.equal(await user.getByText(calling, { exact: true }).count(), 1);
+    const spin = user.locator('.summon-seal-spin');
+    await page.evaluate(() => document.documentElement.setAttribute('data-app-hidden', 'true'));
+    assert.equal(await spin.evaluate(el => getComputedStyle(el).animationPlayState), 'paused');
+    await page.evaluate(() => document.documentElement.removeAttribute('data-app-hidden'));
     await ui.capture('plugin-running');
     await page.getByTestId('finish-call').click();
     await page.getByText('方案已读取，继续整理实现。', { exact: true }).waitFor();
-    await assertSelection();
-    await page.locator('[data-scroll-disclosure-header][aria-expanded="false"]').first().click();
-    await page
-      .getByRole('img', { name: await ui.t('chat.agentActionRow.status.done'), exact: true })
-      .first()
-      .waitFor();
-    assert.equal(
-      await page
-        .getByRole('img', { name: await ui.t('chat.agentActionRow.status.running'), exact: true })
-        .count(),
-      0,
-    );
-    await ui.capture('result-returned-assistant-running');
-    await page.getByTestId('next-turn').click();
+    if (multi) {
+      assert.equal(await user.getByText(calling, { exact: true }).count(), 1);
+      assert.equal(await user.getByText(names, { exact: true }).count(), 1);
+      assert.equal(await user.locator('.lucide-check').count(), 0);
+      await ui.capture('one-plugin-returned-other-running');
+      await page.getByTestId('next-turn').click();
+    }
+    await user.getByText(called, { exact: true }).waitFor();
+    assert.equal(await user.getByText(calling, { exact: true }).count(), 0);
+    await user.locator('.lucide-check').waitFor();
+    await ui.capture('results-returned-assistant-still-working');
+    await page.getByTestId('finish-turn').click();
+    await user.getByText(called, { exact: true }).waitFor();
+    await ui.capture('turn-finished');
+    await page.getByTestId('plain-turn').click();
     const next = page.locator('[data-message-client-id="next"]');
     await next.waitFor();
-    assert.equal(await next.getByText('XD Feishu', { exact: true }).count(), 0);
-    await assertSelection();
+    assert.equal(await next.locator('.summon-seal-arc').count(), 0);
+    assert.equal(await user.getByText(called, { exact: true }).count(), 1);
     await page.getByTestId('remount').click();
     await next.waitFor();
-    await assertSelection();
+    assert.equal(await next.locator('.summon-seal-arc').count(), 0);
+    assert.equal(await user.getByText(calling, { exact: true }).count(), 0);
+    assert.equal(await user.locator('.lucide-check').count(), 1);
+    assert.equal(await user.locator('.summon-seal-halo').count(), 0);
     await ui.capture('next-turn-history-reloaded');
   },
 };

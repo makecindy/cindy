@@ -3293,6 +3293,45 @@ it.each(['field', 'model'] as const)('inherits a text-only default when the user
   expect(result.providers[0]!.models[0]!.input).toEqual(['text']);
 });
 
+// #11023, unit: an unknown Chat gateway must retain an explicit per-connection
+// capability through catalog refresh and launch. Existing Google-only tests do
+// not exercise local overrides; false is the minimal previously dropped value.
+it.each([false, true, undefined])('projects a scoped Pi Chat store override %s without changing routes', supportsStore => {
+  const cfg = { id: 'store-fixture', name: 'Gateway', runtimes: { pi: {
+    baseUrl: 'https://gateway.example/v1', wireProtocol: 'openai-chat' as const,
+    models: [{ id: 'gemini-4-hydrogen', name: 'Gemini' }, { id: 'other', name: 'Other' },
+      { id: 'responses', name: 'Responses', api: 'openai-responses' as const }],
+  } } };
+  setActiveCatalog(BUNDLED_CATALOG);
+  setCustomProviderConfigs([cfg]);
+  const patches = supportsStore === undefined ? {} : Object.fromEntries(
+    ['gemini-4-hydrogen', 'responses'].map(id => [`store-fixture:${id}`, { perAgent: { pi: { supportsStore } } }]),
+  );
+  const parsed = sanitizeModelCatalogOverrides({ patches });
+  expect(parsed.invalid).toEqual([]);
+  setLocalCatalogOverrides(parsed.overrides);
+  try {
+    const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(result.providers[0].baseUrl).toBe(cfg.runtimes.pi.baseUrl);
+    expect(result.providers[0].api).toBe('openai-completions');
+    expect(result.providers[0].models[0].compat).toEqual({ supportsDeveloperRole: false,
+      ...(supportsStore !== undefined ? { supportsStore } : {}) });
+    expect(result.providers[0].models[1].compat).toEqual({ supportsDeveloperRole: false });
+    expect(result.providers[0].models[2].compat).toBeUndefined();
+    // Removing the local setting restores the original native behavior.
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    const reset = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(reset.providers[0].models[0].compat).toEqual({ supportsDeveloperRole: false });
+  } finally { setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES); setCustomProviders([]); }
+});
+
+it.each([{ base: { supportsStore: false } }, { perAgent: { codex: { supportsStore: false } } },
+  { perAgent: { pi: { supportsStore: 'false' } } }])('rejects store overrides outside the Pi capability contract: %j', patch => {
+  const parsed = sanitizeModelCatalogOverrides({ patches: { 'custom%3Astore-fixture:model': patch } });
+  expect(parsed.invalid).toEqual(['patches:custom%3Astore-fixture:model']);
+  expect(parsed.overrides.patches).toEqual({});
+});
+
 it.each([true, false])('keeps local image override %s above the custom connection form', (supportsImageInput) => {
   const cfg = { id: 'xai', name: 'My gateway', runtimes: { pi: {
     baseUrl: 'https://user.example/v1', wireProtocol: 'openai-chat' as const,

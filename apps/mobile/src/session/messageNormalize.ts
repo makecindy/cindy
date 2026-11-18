@@ -308,7 +308,7 @@ export function normalizeRemoteMessages(
       if (app) {
         result.push({ key: messageNormalizeKey(message), source: message, kind: 'system', role: message.role,
           label: 'system:mcp-app', body: '', systemCardType: 'mcp-app',
-          systemCardData: { title: app.title, fallbackText: app.text }, align: 'agent', createdAt: message.createdAt });
+          systemCardData: { title: app.title, fallbackText: app.text, plugin: app.plugin, customMcp: app.customMcp }, align: 'agent', createdAt: message.createdAt });
         continue;
       }
       const authorization = readRecord(message.agentMeta?.botAuthorization);

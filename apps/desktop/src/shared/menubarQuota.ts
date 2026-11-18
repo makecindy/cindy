@@ -174,7 +174,7 @@ export interface MenubarUsageScopeData {
     money: [number, number, number];
     /** Actually paid (API) part of `money`, summed across harnesses. */
     paid: number;
-    tokens: [number, number, number];
+    tokens: [number, number, number, ...number[]];
   }[];
   /** Model totals for the last 7, 30 and 90 days. */
   models: { '7': MenubarModelUsage[]; '30': MenubarModelUsage[]; '90': MenubarModelUsage[] };

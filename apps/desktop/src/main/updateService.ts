@@ -49,6 +49,8 @@ import { isRunningUnderArm64Translation } from './arm64Translation';
 import type { Manifest } from './manifestService';
 import { download, DownloadError } from './downloader/index';
 import { ProgressNormalizer } from './updateProgressNormalizer';
+import { createDownloadProgressReporter } from './downloader/progressReporter';
+import type { DownloadProgress } from '../shared/downloadProgress';
 import { compareAppUpdateVersions } from './updateVersionPolicy';
 import { CURRENT_APP_ID } from '../shared/brandRegion';
 import { syncWindowsVersionAfterUpdate, windowsInstallKey } from './windowsInstallationVersion';
@@ -569,6 +571,8 @@ function broadcastUpdateProgress(payload: {
   speed?: string;
   failed?: boolean;
   error?: string;
+  /** Standard display progress (phase, retry reason, speed, time left); additive. */
+  download?: DownloadProgress;
 }): void {
   // Diagnostic: 排查 splash 100% 卡死时使用——webContents.send (fan-out) 与 ipcMain.handle
   // invoke reply 在 Electron 内部走不同通道，到渲染端不保证 FIFO。这条日志记录每次
@@ -1298,6 +1302,28 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   let lastReceived = 0;
   let lastTotal = typeof asset.size === 'number' ? asset.size : 0;
   let lastSpeed: string | undefined;
+  let lastBar = 0;
+  let lastPushedPhase: DownloadProgress['phase'] = 'downloading';
+  // Standard display progress for the splash / fatal-screen status line. Byte updates ride
+  // on the normalizer below, which only speaks when the bar rises a whole percent; every
+  // phase change (retrying, verifying, and back to downloading) is pushed at once instead,
+  // so "Retrying…" never lingers after bytes flow again.
+  const reporter = createDownloadProgressReporter({
+    initialPhase: 'downloading',
+    total: lastTotal > 0 ? lastTotal : null,
+    emit: (download) => {
+      // 'completed' rides on the explicit 100% broadcast after the download resolves.
+      if (download.phase === lastPushedPhase || download.phase === 'completed') return;
+      lastPushedPhase = download.phase;
+      broadcastUpdateProgress({
+        progress: lastBar,
+        received: lastReceived,
+        total: lastTotal,
+        speed: download.phase === 'downloading' ? lastSpeed : undefined,
+        download,
+      });
+    },
+  });
 
   // 显式广播一次 0%:ProgressNormalizer 只在进度上升时才 emit,首个 ≥1% 事件
   // 在大补丁/慢速网络下可能要等数秒,这期间 splash 不知道热更下载已经开始
@@ -1325,11 +1351,13 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
           progress,
         });
       }
+      lastBar = progress;
       broadcastUpdateProgress({
         progress,
         received: lastReceived,
         total: lastTotal,
         speed: lastSpeed,
+        download: reporter.snapshot(),
       });
     },
   });
@@ -1344,6 +1372,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
         lastReceived = e.loaded;
         if (e.total !== null) lastTotal = e.total;
         lastSpeed = e.speedBps > 0 ? `${formatBytes(e.speedBps)}/s` : undefined;
+        reporter.callbacks.onProgress(e);
         normalizer.handle(e);
       },
       onRetry: (e) => {
@@ -1351,7 +1380,9 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
           'downloader retry attempt %d in %dms (%s)',
           e.attempt, e.delayMs, e.cause.message,
         );
+        reporter.callbacks.onRetry(e);
       },
+      onVerifying: reporter.callbacks.onVerifying,
       onResume: (e) => {
         log.info(
           'downloader resume from %d / %s bytes',
@@ -1369,10 +1400,12 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     // Success path. Force the bar to 100 (in case the last raw event was
     // throttled away just before the rename).
     normalizer.flush();
+    reporter.setPhase('completed');
     broadcastUpdateProgress({
       progress: 100,
       received: result.size,
       total: result.size,
+      download: reporter.snapshot(),
     });
 
     // wasReady 路径下,SHA 已经过了,这时候才真正安全地把旧 a.zip 清掉。

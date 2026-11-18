@@ -852,3 +852,44 @@ describe('queued cold start keeps the persisted Plan', () => {
     expect(co).toMatchObject({ permissionMode: 'auto', planMode: planModeEnabled });
   });
 });
+
+// #10692, guard-tier wiring: the real shared send preparation must pass the same
+// read-only canonical history resolver as startup and retain the durable rebuild.
+// Runtime tests cover allocation; this protects ordinary/retry/lazy Host consumers
+// from silently omitting the injected resolver in register.ts's large closure.
+describe('unbound Codex pre-send history wiring', () => {
+  it('resolves history through the host and completes the original recovery before cancelling the usage wait', async () => {
+    const start = registerSource.indexOf('export async function prepareUnhealthySessionForSend(');
+    const end = registerSource.indexOf('let runtimePluginBudgetClearer:', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const body = ts.transpileModule(registerSource.slice(start, end).replace('export ', ''), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    const order: string[] = [];
+    const assertCurrent = vi.fn();
+    const history = vi.fn(async () => ({ historyHome: 'original-home' }));
+    const rebuild = vi.fn(async (_id: string, check: () => void) => { check(); order.push('durable-handoff'); });
+    const cancelUsageLimitWait = vi.fn(() => { order.push('cancel-wait'); });
+    const failover = vi.fn();
+    const prepare = vi.fn(async (id: string, deps: {
+      resolveCodexHistoryHome(thread: string): Promise<string | undefined>;
+      rebuild(id: string, check: () => void): Promise<void>;
+    }) => {
+      expect(await deps.resolveCodexHistoryHome('legacy-thread')).toBe('original-home');
+      await deps.rebuild(id, assertCurrent);
+      return true;
+    });
+    const ports = { subscriptionAccountRecoveryDeps: { rebuild },
+      readCodexThreadStorageReadOnly: history,
+      prepareSubscriptionAccountForSend: prepare, prepareSubscriptionAccountFailover: failover,
+      agentInputCoordinatorHolder: { cancelUsageLimitWait }, contextOverflowRolloverHolder: undefined };
+    const run = new Function(...Object.keys(ports), `${body}; return prepareUnhealthySessionForSend;`)(...Object.values(ports));
+    expect(await run('old-task')).toBe(true);
+    expect(history).toHaveBeenCalledExactlyOnceWith('legacy-thread');
+    expect(rebuild).toHaveBeenCalledExactlyOnceWith('old-task', assertCurrent);
+    expect(cancelUsageLimitWait).toHaveBeenCalledExactlyOnceWith('old-task');
+    expect(order).toEqual(['durable-handoff', 'cancel-wait']);
+    expect(failover).not.toHaveBeenCalled();
+  });
+});

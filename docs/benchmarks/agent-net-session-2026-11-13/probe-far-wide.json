@@ -1,0 +1,1099 @@
+{
+  "generatedAt": "2026-11-14T01:39:19.510Z",
+  "node": "v24.22.1",
+  "platform": "win32-x64",
+  "bulkBytes": 1048576,
+  "results": [
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "udp-relay",
+      "rep": 1,
+      "summary": {
+        "kind": "deviceLink",
+        "direction": "down",
+        "ok": true,
+        "ms": 1742,
+        "throughputKiBps": 588,
+        "linkUtilization": 0.1,
+        "wireRatio": 1.05,
+        "peakSocketBufferedKiB": 898,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 1,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 16
+        },
+        "medianRttMs": 208.1,
+        "maxRttMs": 237.047,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      "samples": [
+        {
+          "t": 105,
+          "wire": 57,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 208.1,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 243,
+          "wire": 135,
+          "socketBuffered": 919910,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 208.1,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 343,
+          "wire": 23063,
+          "socketBuffered": 2689,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 208.1,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 448,
+          "wire": 23063,
+          "socketBuffered": 2689,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 208.1,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 548,
+          "wire": 60321,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 213.027,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 649,
+          "wire": 60321,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 213.027,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 749,
+          "wire": 159198,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 213.027,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 849,
+          "wire": 159198,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 213.027,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 949,
+          "wire": 258153,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 204.595,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 1049,
+          "wire": 381391,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 204.595,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 1149,
+          "wire": 478913,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 205.227,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 1275,
+          "wire": 663848,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 203.219,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 1375,
+          "wire": 831587,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 236.788,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 1475,
+          "wire": 868957,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 237.047,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 1575,
+          "wire": 1002226,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 237.047,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 1675,
+          "wire": 1100208,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 237.047,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 1742,
+          "wire": 1100364,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 202.333,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        }
+      ]
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "udp-relay",
+      "rep": 1,
+      "summary": {
+        "kind": "raw",
+        "direction": "down",
+        "ok": true,
+        "ms": 785,
+        "throughputKiBps": 1304,
+        "linkUtilization": 0.21,
+        "wireRatio": 1.05,
+        "peakSocketBufferedKiB": 0,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 0,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {},
+        "medianRttMs": 203.119,
+        "maxRttMs": 203.256,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      "samples": [
+        {
+          "t": 99,
+          "wire": 151898,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 203.256,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 199,
+          "wire": 318126,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 203.256,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 299,
+          "wire": 484354,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 203.256,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 399,
+          "wire": 650660,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 202.675,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 500,
+          "wire": 815455,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 202.675,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 600,
+          "wire": 981683,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 202.675,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 699,
+          "wire": 1097004,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 202.675,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 785,
+          "wire": 1097038,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 203.119,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        }
+      ]
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "udp-relay",
+      "rep": 2,
+      "summary": {
+        "kind": "raw",
+        "direction": "down",
+        "ok": true,
+        "ms": 724,
+        "throughputKiBps": 1414,
+        "linkUtilization": 0.23,
+        "wireRatio": 1.05,
+        "peakSocketBufferedKiB": 0,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 0,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {},
+        "medianRttMs": 205.824,
+        "maxRttMs": 205.824,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      "samples": [
+        {
+          "t": 99,
+          "wire": 150561,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 205.824,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 199,
+          "wire": 318222,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 205.824,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 299,
+          "wire": 520275,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 205.824,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 399,
+          "wire": 729493,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 205.824,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 500,
+          "wire": 878525,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 205.824,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 600,
+          "wire": 1072136,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 202.881,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 699,
+          "wire": 1097178,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 202.881,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 724,
+          "wire": 1097178,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 202.881,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        }
+      ]
+    },
+    {
+      "profile": {
+        "name": "far",
+        "rateBytesPerSec": 6250000,
+        "oneWayDelayMs": 50,
+        "queueLimitBytes": 640000
+      },
+      "mode": "udp-relay",
+      "rep": 2,
+      "summary": {
+        "kind": "deviceLink",
+        "direction": "down",
+        "ok": true,
+        "ms": 814,
+        "throughputKiBps": 1258,
+        "linkUtilization": 0.21,
+        "wireRatio": 1.05,
+        "peakSocketBufferedKiB": 0,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 1,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 8
+        },
+        "medianRttMs": 209.351,
+        "maxRttMs": 210.245,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      "samples": [
+        {
+          "t": 100,
+          "wire": 96,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 209.351,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 200,
+          "wire": 53195,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051152,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 209.351,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 299,
+          "wire": 259547,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051152,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 209.351,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 400,
+          "wire": 467332,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051152,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 209.351,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 500,
+          "wire": 675195,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051152,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 203.364,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 599,
+          "wire": 886002,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051152,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 205.966,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 700,
+          "wire": 1095298,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051152,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 204.967,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 800,
+          "wire": 1104620,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051152,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 205.185,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 814,
+          "wire": 1104698,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051152,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 210.245,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        }
+      ]
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "udp-relay",
+      "rep": 1,
+      "summary": {
+        "kind": "deviceLink",
+        "direction": "down",
+        "ok": true,
+        "ms": 516,
+        "throughputKiBps": 1984,
+        "linkUtilization": 0.16,
+        "wireRatio": 1.05,
+        "peakSocketBufferedKiB": 1027,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 1,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 6
+        },
+        "medianRttMs": 40.053,
+        "maxRttMs": 41.097,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      "samples": [
+        {
+          "t": 104,
+          "wire": 57,
+          "socketBuffered": 1051253,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 37.836,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 204,
+          "wire": 107680,
+          "socketBuffered": 2689,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 37.836,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 304,
+          "wire": 415849,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 41.097,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 404,
+          "wire": 761350,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 39.064,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 505,
+          "wire": 1100446,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 40.053,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 516,
+          "wire": 1100446,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051044,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 40.053,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        }
+      ]
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "udp-relay",
+      "rep": 1,
+      "summary": {
+        "kind": "raw",
+        "direction": "down",
+        "ok": true,
+        "ms": 290,
+        "throughputKiBps": 3531,
+        "linkUtilization": 0.29,
+        "wireRatio": 1.05,
+        "peakSocketBufferedKiB": 0,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 0,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {},
+        "medianRttMs": 41.794,
+        "maxRttMs": 41.794,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      "samples": [
+        {
+          "t": 101,
+          "wire": 386910,
+          "socketBuffered": 92,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 41.794,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 202,
+          "wire": 816810,
+          "socketBuffered": 92,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 41.794,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 290,
+          "wire": 1096926,
+          "socketBuffered": 92,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 41.794,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        }
+      ]
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "udp-relay",
+      "rep": 2,
+      "summary": {
+        "kind": "raw",
+        "direction": "down",
+        "ok": true,
+        "ms": 380,
+        "throughputKiBps": 2695,
+        "linkUtilization": 0.22,
+        "wireRatio": 1.06,
+        "peakSocketBufferedKiB": 0,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 0,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {},
+        "medianRttMs": 38.81,
+        "maxRttMs": 38.901,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      "samples": [
+        {
+          "t": 126,
+          "wire": 229372,
+          "socketBuffered": 92,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 38.901,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 227,
+          "wire": 586297,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 38.81,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 329,
+          "wire": 1046290,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 38.81,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 380,
+          "wire": 1114322,
+          "socketBuffered": 0,
+          "dlPending": 0,
+          "dlPendingBytes": 0,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {},
+          "rttMs": 38.81,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        }
+      ]
+    },
+    {
+      "profile": {
+        "name": "wide",
+        "rateBytesPerSec": 12500000,
+        "oneWayDelayMs": 8,
+        "queueLimitBytes": 512000
+      },
+      "mode": "udp-relay",
+      "rep": 2,
+      "summary": {
+        "kind": "deviceLink",
+        "direction": "down",
+        "ok": true,
+        "ms": 369,
+        "throughputKiBps": 2775,
+        "linkUtilization": 0.23,
+        "wireRatio": 1.06,
+        "peakSocketBufferedKiB": 1027,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 1,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 4
+        },
+        "medianRttMs": 55.537,
+        "maxRttMs": 57.479,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      "samples": [
+        {
+          "t": 100,
+          "wire": 166,
+          "socketBuffered": 1051337,
+          "dlPending": 1,
+          "dlPendingBytes": 1051152,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 57.479,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 200,
+          "wire": 430214,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051152,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 42.131,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 305,
+          "wire": 913357,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051152,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 43.835,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        },
+        {
+          "t": 369,
+          "wire": 1113264,
+          "socketBuffered": 0,
+          "dlPending": 1,
+          "dlPendingBytes": 1051152,
+          "dlLocalPressure": false,
+          "dlBlockedBy": {
+            "none": 1
+          },
+          "rttMs": 55.537,
+          "bandwidthBps": null,
+          "retransmitted": null,
+          "packetsSent": null
+        }
+      ]
+    }
+  ]
+}

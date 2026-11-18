@@ -105,6 +105,7 @@ export interface ScheduleSidebarIndexRun {
   status: ScheduleRun['status'];
   readAt?: number;
   firedAt?: number;
+  finishedAt?: number;
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
   errorMsg?: string;
   failureRecovered?: boolean;
@@ -628,11 +629,28 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
   /** Same failure stays quiet until the existing recovery contract observes success. */
   async hasUnrecoveredMatchingFailure(run: ScheduleRun): Promise<boolean> {
     if (!run.errorMsg) return false;
+    let errorMatch = sql`${scheduleRuns.errorMsg} = ${run.errorMsg}`;
+    // #10547: claim IDs vary each turn. Keep them in history, but match only
+    // the fixed cancellation reason when deciding whether to notify again.
+    const cancellation = /^Scheduled turn continuation was cancelled \(reason: (all_wake_tasks_stopped|bridge_aborted|graceful_stop|user_stop|wake_contract_unfulfilled|unknown), continuationId: ([1-9][0-9]*|unknown)\)$/.exec(run.errorMsg);
+    if (cancellation && (cancellation[2] === 'unknown' || Number.isSafeInteger(Number(cancellation[2])))) {
+      const prefix = `Scheduled turn continuation was cancelled (reason: ${cancellation[1]}, continuationId: `;
+      const storedId = sql`substr(${scheduleRuns.errorMsg}, ${prefix.length + 1}, length(${scheduleRuns.errorMsg}) - ${prefix.length + 1})`;
+      // Validate stored rows too: do not merge unrelated or malformed errors.
+      // Filtering stays in SQLite and retains the existing LIMIT 1 bound.
+      errorMatch = sql`substr(${scheduleRuns.errorMsg}, 1, ${prefix.length}) = ${prefix}
+        AND substr(${scheduleRuns.errorMsg}, -1) = ')'
+        AND (${storedId} = 'unknown' OR (
+          ${storedId} NOT GLOB '*[^0-9]*'
+          AND substr(${storedId}, 1, 1) BETWEEN '1' AND '9'
+          AND CAST(${storedId} AS INTEGER) BETWEEN 1 AND ${Number.MAX_SAFE_INTEGER}
+        ))`;
+    }
     const rows = await this.getDb().select({ id: scheduleRuns.id }).from(scheduleRuns).where(sql`
       ${scheduleRuns.scheduleId} = ${run.scheduleId}
       AND ${scheduleRuns.id} != ${run.id}
       AND ${scheduleRuns.status} IN ('failed', 'interrupted')
-      AND ${scheduleRuns.errorMsg} = ${run.errorMsg}
+      AND (${errorMatch})
       AND COALESCE(CASE WHEN json_valid(${scheduleRuns.preRunHookResult})
         THEN json_extract(${scheduleRuns.preRunHookResult}, '$.stderr') END, '') = ${run.preRunHookResult?.stderr ?? ''}
       AND ${scheduleRuns.firedAt} <= ${run.firedAt}
@@ -793,6 +811,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       status: scheduleRuns.status,
       readAt: scheduleRuns.readAt,
       firedAt: scheduleRuns.firedAt,
+      finishedAt: scheduleRuns.finishedAt,
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
       errorMsg: scheduleRuns.errorMsg,
@@ -874,6 +893,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       readAt: row.readAt ?? undefined,
       firedAt: row.firedAt ?? undefined,
       ...(row.status === 'failed' || row.status === 'interrupted' ? {
+        finishedAt: row.finishedAt ?? undefined,
         failureRecovered: Boolean(row.failureRecovered),
         failureKind: row.failureKind,
         errorMsg: row.errorMsg ?? undefined,

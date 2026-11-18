@@ -25,6 +25,8 @@
 import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import { claudeProfileSessionStore } from './profile-session-store.js';
+import { claudeToolLifecycleHooks } from './tool-lifecycle-hooks.js';
+import { claudeNativeRecoveryHooks } from './native-recovery-hooks.js';
 import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
@@ -48,6 +50,7 @@ import type {
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
 import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
+import { callClaudeToolCatalog } from './native-tool-catalog.js';
 import {
   reportSubagentModelDiagnostics,
   resolveSubagentModelDefault,
@@ -78,6 +81,7 @@ import {
   type RefreshLocalModelsOptions,
   type SendOptions,
   type TurnPermissionPolicy,
+  type TurnContinuationCancellationReason,
   isolatedBotProfile,
 } from '../base-agent.js';
 import { preparePinnedClaudeSkillInvocation } from './pinned-skill-invocation.js';
@@ -1335,6 +1339,16 @@ export class ClaudeCodeAgent extends BaseAgent {
         { signal: timeoutController.signal },
       );
 
+      try {
+      await opts?.onUsage?.({
+        model: resp.model ?? model,
+        inputTokens: resp.usage?.input_tokens,
+        outputTokens: resp.usage?.output_tokens,
+        cacheReadTokens: resp.usage?.cache_read_input_tokens ?? undefined,
+        cacheCreateTokens: resp.usage?.cache_creation_input_tokens ?? undefined,
+      });
+      } catch { log.warn('oneShot usage observer failed'); }
+
       const text = resp.content
         .filter((b): b is Anthropic.TextBlock => b.type === 'text')
         .map((b) => b.text)
@@ -2286,6 +2300,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           nativeCliAuth ? workspaceSettingsConfigChangeHooks : undefined,
         )
       : mergeClaudeHookSets(
+          !hosted?.guest && !opts.remoteHostId ? claudeToolLifecycleHooks(this.deps.toolLifecycleControl, opts.sessionId) : undefined,
+          !opts.deviceHosted && !opts.remoteHostId ? claudeNativeRecoveryHooks(this.deps.nativeRecoveryObserver, opts.sessionId) : undefined,
           buildClaudeLocalToolGuardHooks(
             capabilityRouting,
             () => activeCapabilitySelectionText,
@@ -4981,6 +4997,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       id: number;
       tasks: Map<string, ContinuationTaskState>;
       state: 'awaiting' | 'active' | 'cancelled';
+      cancellationReason?: TurnContinuationCancellationReason;
       /** Number of claim-bearing done events not yet processed by Session. */
       pendingBoundaryEvents: number;
       /** A later natural/synthetic done has closed the product turn. */
@@ -5022,17 +5039,16 @@ export class ClaudeCodeAgent extends BaseAgent {
       wakeContractReconcileTimer = null;
     };
     const continuationClaims = new Map<number, ContinuationClaim>();
-    const continuationListeners = new Set<(
-      continuationId: number,
-      state: 'awaiting' | 'active' | 'cancelled',
-    ) => void>();
+    const continuationListeners = new Set<Parameters<NonNullable<AgentSessionHandle['onTurnContinuationChange']>>[0]>();
     const emitContinuationState = (
       continuationId: number,
       state: 'awaiting' | 'active' | 'cancelled',
+      reason?: TurnContinuationCancellationReason,
     ): void => {
       for (const listener of [...continuationListeners]) {
         try {
-          listener(continuationId, state);
+          if (reason === undefined) listener(continuationId, state);
+          else listener(continuationId, state, reason);
         } catch (e) {
           log.warn('turn continuation listener threw', { error: String(e) });
         }
@@ -5063,16 +5079,17 @@ export class ClaudeCodeAgent extends BaseAgent {
         terminalBackgroundTaskIds.add(taskId);
       }
     };
-    const cancelActiveContinuation = (reason: string): ContinuationClaim | null => {
+    const cancelActiveContinuation = (reason: TurnContinuationCancellationReason): ContinuationClaim | null => {
       queuedAsyncAnswer = false;
       const claim = activeContinuationClaim();
       if (!claim || claim.state !== 'awaiting') return null;
       claim.state = 'cancelled';
+      claim.cancellationReason = reason;
       claim.settled = true;
       activeContinuationId = null;
       clearWakeContractReconciliation();
       log.info('turn continuation cancelled', { reason, continuationId: claim.id });
-      emitContinuationState(claim.id, 'cancelled');
+      emitContinuationState(claim.id, 'cancelled', reason);
       releaseSettledContinuationClaim(claim);
       return claim;
     };
@@ -5219,7 +5236,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         states.length > 0 &&
         states.every((state) => state === 'stopped')
       ) {
-        return cancelActiveContinuation('all wake tasks stopped');
+        return cancelActiveContinuation('all_wake_tasks_stopped');
       }
       return null;
     };
@@ -7592,10 +7609,15 @@ export class ClaudeCodeAgent extends BaseAgent {
         return continuationClaims.get(continuationId)?.state ?? null;
       },
 
+      getTurnContinuationCancellationReason(continuationId: number) {
+        return continuationClaims.get(continuationId)?.cancellationReason;
+      },
+
       onTurnContinuationChange(
         listener: (
           continuationId: number,
           state: 'awaiting' | 'active' | 'cancelled',
+          reason?: TurnContinuationCancellationReason,
         ) => void,
       ) {
         continuationListeners.add(listener);
@@ -7703,6 +7725,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         }).mcpServerStatus;
         if (typeof readStatus !== 'function') return null;
         return claudeMcpServerToolsReport(await readStatus.call(q), serverName);
+      },
+
+      async callNativeToolCatalog(method: string, args: unknown[]) {
+        if (opts.remoteHostId || hosted?.guest || reviewMode) throw new Error('UNSUPPORTED_CAPABILITY');
+        return callClaudeToolCatalog(q, method, args);
       },
 
       setInteractionResolver(resolver: InteractionResolver) {

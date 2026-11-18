@@ -965,6 +965,11 @@ export interface AgentDeps {
    * 返回的键应纳入 piSecretEnvNames 剥离面（host 实现应把含 key 的键名一并声明）。
    */
   resolvePiVisionBridgeEnv?: (model: string, sessionId?: string) => Record<string, string> | null;
+  /** Capture the usage owner before Pi dispatches independent vision requests. */
+  createPiVisionUsageRecorder?: (env: Record<string, string>, sessionId?: string) => {
+    observe(payload: unknown): Promise<void>;
+    close(): void;
+  };
 
   /**
    * Host-owned arbitration for capabilities that overlap with harness-native
@@ -1472,6 +1477,10 @@ export interface AgentDeps {
    */
   claudeHooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
 
+  /** Optional native tool hooks; the host owns live task selection and plugin lifecycle. */
+  toolLifecycleControl?: import('./shared/tool-lifecycle.js').ToolLifecycleControl;
+  nativeRecoveryObserver?: import('./shared/native-recovery-observer.js').NativeRecoveryObserver;
+
   /** Host bridge for repairing Claude Code subagent usage when provider usage is zero. */
   registerClaudeSubagentTask?: (task: ClaudeSubagentTaskRegistration) => void;
   getClaudeSubagentTaskUsage?: (taskId: string) => ClaudeSubagentTaskUsage | undefined;
@@ -1616,7 +1625,21 @@ export interface RemoteClaudeRoute {
   env: Record<string, string>;
 }
 
+export interface OneShotUsage {
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
+}
+
 export interface OneShotOptions {
+  /** Accounting attribution only; never sent as prompt content. */
+  source?: string;
+  sessionId?: string;
+  providerId?: string;
+  onUsage?: (usage: OneShotUsage) => void | Promise<void>;
+
   /** 输出 token 上限。默认 100 (起标题用); skillReview 这种大 prompt 应传 4096。 */
   maxTokens?: number;
   /**
@@ -2418,6 +2441,30 @@ export interface BackgroundTaskSnapshot {
  */
 export type TurnContinuationState = 'awaiting' | 'active' | 'cancelled';
 
+/** Fixed diagnostic codes only; never carry SDK errors, prompts or task output. */
+export type TurnContinuationCancellationReason =
+  | 'all_wake_tasks_stopped'
+  | 'bridge_aborted'
+  | 'graceful_stop'
+  | 'user_stop'
+  | 'wake_contract_unfulfilled';
+
+/** Runtime projection for adapters/consumers whose TypeScript contract may be older. */
+export function safeTurnContinuationCancellationReason(
+  reason: unknown,
+): TurnContinuationCancellationReason | undefined {
+  switch (reason) {
+    case 'all_wake_tasks_stopped':
+    case 'bridge_aborted':
+    case 'graceful_stop':
+    case 'user_stop':
+    case 'wake_contract_unfulfilled':
+      return reason;
+    default:
+      return undefined;
+  }
+}
+
 /**
  * Why a session handle is being torn down.
  *
@@ -2489,7 +2536,7 @@ export type AgentMcpServerToolsState =
 export interface AgentMcpServerToolsReport {
   state: AgentMcpServerToolsState;
   /** Raw MCP tool names as the server declared them, not harness-qualified names. */
-  tools: Array<{ name: string; description?: string }>;
+  tools: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
 }
 
 export interface AgentSessionHandle {
@@ -2502,6 +2549,8 @@ export interface AgentSessionHandle {
    * the engine has no per-session MCP status entry.
    */
   readMcpServerTools?(serverName: string): Promise<AgentMcpServerToolsReport | null>;
+  /** On-demand public harness tool-catalog calls; unsupported methods must fail explicitly. */
+  callNativeToolCatalog?(method: string, args: unknown[]): Promise<unknown>;
   /** Native session identity safe for resume; may retain an unaccepted fork's source. */
   readonly id: string;
   /** Transient native request identity; hosts must not persist it as a resume id. */
@@ -2631,8 +2680,11 @@ export interface AgentSessionHandle {
    * wake task does not necessarily produce another provider `done`.
    */
   onTurnContinuationChange?(
-    listener: (continuationId: number, state: TurnContinuationState) => void,
+    listener: (continuationId: number, state: TurnContinuationState, reason?: TurnContinuationCancellationReason) => void,
   ): () => void;
+
+  /** Cause of a retained cancelled claim, including one whose done is still queued. */
+  getTurnContinuationCancellationReason?(continuationId: number): TurnContinuationCancellationReason | undefined;
 
   /** 关闭会话，清理子进程 */
   close(opts?: AgentSessionTeardownOptions): Promise<void>;
