@@ -4,6 +4,7 @@ import {
   buildQueuePanelSummary,
   buildQueueRowPresentation,
   buildQueuedTextMessage,
+  buildQueuedMessageForEngine,
   createQueueEditTextState,
   isOrcaQueueItem,
   normalizeInputProjection,
@@ -58,6 +59,29 @@ describe('inputProjection', () => {
     const queued = buildQueuedTextMessage(session({ agentKind: 'pi' }), serialized.text, new Date(), 'q-pi', serialized);
     expect(queued.text).toBe('/skill:poteto-mode review');
     expect(JSON.parse(queued.persistedContent).slashCommandRanges).toEqual([{ start: 0, end: '/skill:poteto-mode'.length }]);
+  });
+
+  it('delivers a confirmed Pi skill to the pending target engine with rebased ranges', async () => {
+    const maker = { listAgentSkills: vi.fn().mockResolvedValue({ success: true, skills: [
+      { kind: 'agent-skill', name: 'foo', runtimeCommandName: 'toolkit:foo' },
+    ] }) };
+    const switched = session({ agentKind: 'pi', agentSwitchIntent: {
+      targetAgentKind: 'claude-code', model: 'm', providerId: null,
+    } });
+    const text = '/skill:foo body';
+    const plain = await buildQueuedMessageForEngine(maker, switched, text);
+    expect(plain.text).toBe(text);
+    expect(maker.listAgentSkills).not.toHaveBeenCalled();
+    const queued = await buildQueuedMessageForEngine(maker, switched, text, undefined, 'same-id', {
+      slashCommandRanges: [{ start: 0, end: 10 }],
+      pastedTextRanges: [{ start: 11, end: 15, display: 'body' }],
+    });
+    expect(queued.text).toBe('/toolkit:foo body');
+    expect(maker.listAgentSkills).toHaveBeenCalledWith('claude-code', { workingDir: '/repo' });
+    expect(JSON.parse(queued.persistedContent)).toMatchObject({
+      text: queued.text, slashCommandRanges: [{ start: 0, end: 12 }],
+      pastedTextRanges: [{ start: 13, end: 17, display: 'body' }],
+    });
   });
 
   it.each([CONTINUE_AFTER_ERROR_PROMPT, CONTINUE_AFTER_APP_EXIT_PROMPT])('folds interrupted work using the actual queued continuation envelope: %s', (prompt) => {

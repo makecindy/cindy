@@ -245,7 +245,6 @@ import {
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import {
   applyRemoteAgentPick,
-  resolveNewSessionSkillDraft,
   NEW_SESSION_AGENT_OPTIONS,
   availableNewSessionAgentOptions,
   defaultPermissionModeForNewSessionAgent,
@@ -4042,8 +4041,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       setCreatePhase('preparing');
       // await 之后闭包里的 attachments 是旧值,经 ref 拿含刚落定图片的最新列表。
       const sendAttachments = attachmentsRef.current;
-      effectiveDraft = await resolveNewSessionSkillDraft(effectiveDraft, deviceAtCreate, maker);
-      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       const validation = validateNewSessionDraft(effectiveDraft, { attachmentCount: sendAttachments.length });
       if (validation) {
         setError(validation);

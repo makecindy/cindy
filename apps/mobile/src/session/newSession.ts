@@ -74,7 +74,19 @@ export interface NewSessionDraft {
   agentDeviceId?: string | null;
 }
 
-/** Resolve a menu choice against the final engine before outbox persistence. */
+export async function lookupMobileSkillInvocation(
+  maker: Pick<MobileMakerTransport, 'listAgentSkills'>,
+  agentKind: NewSessionAgentKind,
+  workingDir: string,
+  name: string,
+): Promise<string> {
+  const result = await maker.listAgentSkills(agentKind, { ...(workingDir ? { workingDir } : {}) });
+  if (!result.success) throw new Error(result.error || 'Skill list unavailable');
+  const match = result.skills?.find(item => item.kind === 'agent-skill' && item.name === name && item.enabled !== false);
+  return match ? composerSlashInvocationName(match) : name;
+}
+
+/** Resolve a menu choice against the final engine when preparing delivery. */
 export async function resolveNewSessionSkillDraft(
   draft: NewSessionDraft,
   deviceId: string,
@@ -91,10 +103,7 @@ export async function resolveNewSessionSkillDraft(
     // The controlled computer's catalog describes only its own engine.
     invocation = skill.name;
     if (!draft.agentDeviceId) {
-      const result = await maker.listAgentSkills(draft.agentKind, { ...(workingDir ? { workingDir } : {}) });
-      if (!result.success) throw new Error(result.error || 'Skill list unavailable');
-      const match = result.skills?.find(item => item.kind === 'agent-skill' && item.name === skill.name && item.enabled !== false);
-      if (match) invocation = composerSlashInvocationName(match);
+      invocation = await lookupMobileSkillInvocation(maker, draft.agentKind, workingDir, skill.name);
     }
   }
   return {

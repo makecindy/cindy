@@ -1,3 +1,6 @@
+import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { agentKindForSession, leadingSlashInvocation, slashCommandDisplayLabel } from './composerPalette';
+import { lookupMobileSkillInvocation } from './newSession';
 import { parseOutputLimitDetails } from '@cindy/maker-shared';
 import { readChatReplyQuote, type ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import {
@@ -135,6 +138,39 @@ function readCredentialSwitchWait(
   if (blockedBySessionIds.length === 0) return null;
   const clientId = readString(record.clientId) ?? undefined;
   return { ...(clientId ? { clientId } : {}), blockedBySessionIds };
+}
+
+/** Resolve confirmed composer atoms at delivery; plain typed slash text stays literal. */
+export async function buildQueuedMessageForEngine(
+  maker: Pick<MobileMakerTransport, 'listAgentSkills'>,
+  ...args: Parameters<typeof buildQueuedTextMessage>
+): Promise<QueuedRemoteMessage> {
+  const [session, text, now, clientId, options] = args;
+  const ranges = options?.slashCommandRanges;
+  const token = ranges?.length ? leadingSlashInvocation(text) : undefined;
+  if (!token || !ranges?.some(range => range.start === token.start && range.end === token.end)) {
+    return buildQueuedTextMessage(...args);
+  }
+  const shortName = slashCommandDisplayLabel('/' + token.name).slice(1);
+  const kind = session.agentSwitchIntent?.targetAgentKind ?? agentKindForSession(session);
+  const sourceKind = token.name.startsWith('skill:') ? 'pi' : 'claude-code';
+  if (shortName === token.name || kind === sourceKind) return buildQueuedTextMessage(...args);
+  const intent = session.agentSwitchIntent;
+  const agentDeviceId = intent?.agentDeviceId === undefined ? session.agentDeviceId : intent.agentDeviceId;
+  const name = agentDeviceId || session.remoteHostId ? shortName
+    : await lookupMobileSkillInvocation(maker, kind, session.workingDir ?? '', shortName);
+  const delta = name.length - token.name.length;
+  const boundary = token.end;
+  function rebase<T extends { start: number; end: number }>(range: T): T {
+    return { ...range, start: range.start >= boundary ? range.start + delta : range.start,
+      end: range.end >= boundary ? range.end + delta : range.end };
+  }
+  return buildQueuedTextMessage(session, text.slice(0, token.start) + '/' + name + text.slice(token.end), now, clientId, {
+    ...options,
+    slashCommandRanges: ranges.map(rebase),
+    pastedTextRanges: options?.pastedTextRanges?.map(rebase),
+    agentReferences: options?.agentReferences?.map(rebase),
+  });
 }
 
 export function buildQueuedTextMessage(
