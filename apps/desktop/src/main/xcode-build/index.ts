@@ -492,8 +492,9 @@ export class XcodeBuildManager {
   async start(request: XcodeBuildStartRequest & { ownerId: number }): Promise<XcodeBuildState> {
     const normalizedWorkdir = path.resolve(request.workdir);
     // 第一次 start 在扫描目录、解析容器时还没写入 records，只查运行记录挡不住第二次点击：
-    // 两个构建会同时跑同一条 scheme。用「正在启动」占位把同一窗口、同一工作目录串起来。
-    const startKey = `${request.ownerId}\u0000${normalizedWorkdir}`;
+    // 两个构建会同时跑同一条 scheme。占位按「工作目录 + 目标」而不是窗口划分，否则同一份
+    // checkout 开在两个窗口里时，各自都能起一个构建抢同一个产物。
+    const startKey = `${normalizedWorkdir}\u0000${request.destinationId}`;
     if (this.pendingStarts.has(startKey)) {
       throwIpcError('PRECONDITION_FAILED', 'an Xcode build is already starting');
     }
@@ -509,6 +510,16 @@ export class XcodeBuildManager {
     request: XcodeBuildStartRequest & { ownerId: number },
     normalizedWorkdir: string,
   ): Promise<XcodeBuildState> {
+    const otherOwnerBuild = [...this.records.values()].find(
+      (record) =>
+        record.ownerId !== request.ownerId &&
+        record.state.workdir === normalizedWorkdir &&
+        record.destinationId === request.destinationId &&
+        record.state.status === 'running',
+    );
+    if (otherOwnerBuild) {
+      throwIpcError('PRECONDITION_FAILED', 'another window is already building this target');
+    }
     const active = [...this.records.values()].find(
       (record) =>
         record.ownerId === request.ownerId &&
@@ -573,7 +584,7 @@ export class XcodeBuildManager {
       record,
       `Building ${request.scheme} for ${request.destinationName} in Debug…\n`,
     );
-    void this.runBuild(record, request, absoluteContainer);
+    void this.runBuild(record, request, absoluteContainer, container.name);
     return state;
   }
 
@@ -614,9 +625,6 @@ export class XcodeBuildManager {
       if (record.state.phase === 'launched') void this.terminateLaunchedApp(record).catch(() => undefined);
       this.appendOutput(record, 'Owner window closed; build cancelled.\n');
       this.finish(record, null, 'cancelled');
-    }
-    for (const key of [...this.pendingStarts]) {
-      if (key.startsWith(`${ownerId}\u0000`)) this.pendingStarts.delete(key);
     }
   }
 
@@ -746,6 +754,7 @@ export class XcodeBuildManager {
     record: BuildRecord,
     request: XcodeBuildStartRequest,
     absoluteContainer: string,
+    defaultSchemeName: string,
   ): Promise<void> {
     const containerArg = request.containerKind === 'workspace' ? '-workspace' : '-project';
     const destination = `id=${record.destinationId}`;
@@ -771,7 +780,7 @@ export class XcodeBuildManager {
       record.bundleId = settings.bundleId;
       if (settings.flutterRoot) {
         const appRoot = await resolveFlutterAppRoot(absoluteContainer, record.state.workdir, this.deps);
-        await this.runFlutter(record, request, settings.flutterRoot, appRoot);
+        await this.runFlutter(record, request, settings.flutterRoot, appRoot, defaultSchemeName);
         return;
       }
 
@@ -881,6 +890,7 @@ export class XcodeBuildManager {
     request: XcodeBuildStartRequest,
     flutterRoot: string,
     appRoot: string,
+    defaultSchemeName: string,
   ): Promise<void> {
     record.state = { ...record.state, supportsHotReload: true };
     this.options.emit(record.ownerId, { type: 'state', state: { ...record.state } });
@@ -888,6 +898,10 @@ export class XcodeBuildManager {
       record,
       `Running flutter run --debug on ${request.destinationName}…\n`,
     );
+    // 非默认 scheme 就是 Flutter 的 flavor(如 staging / production):漏传会跑成默认配置。
+    // 默认 scheme 与容器同名(Runner / Recipes…),那种情况传 --flavor 反而会被 Flutter 拒。
+    const flavor =
+      request.scheme.toLowerCase() === defaultSchemeName.toLowerCase() ? null : request.scheme;
     const child = this.deps.spawn(path.join(flutterRoot, 'bin', 'flutter'), [
       'run',
       '--debug',
@@ -895,6 +909,7 @@ export class XcodeBuildManager {
       record.destinationId,
       '--device-timeout',
       '30',
+      ...(flavor ? ['--flavor', flavor] : []),
     ], {
       // flutter run 必须站在 pubspec.yaml 所在目录：嵌套工程（apps/mobile/ios/Runner.xcworkspace）
       // 从会话根目录跑会找不到 pubspec。
@@ -1067,6 +1082,11 @@ export function registerXcodeBuildIpc(options: {
     watchOwnerLifetime(event);
     const parsed = parseStartRequest(request);
     await options.assertSessionWorkdir(parsed.sessionId, parsed.workdir);
+    // 校验工作目录要等一次主进程读库:这期间窗口可能已经关了,再 start 就是一个
+    // 没有主人、也停不掉的构建(releaseOwner 在还没记录时就跑过了)。
+    if (event.sender.isDestroyed()) {
+      throwIpcError('PRECONDITION_FAILED', 'owner window closed');
+    }
     return manager.start({ ...parsed, ownerId: requesterId });
   });
   ipcMain.handle(XCODE_BUILD_INVOKE.STOP, async (event, buildId: unknown) => {

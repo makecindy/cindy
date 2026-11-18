@@ -539,6 +539,101 @@ Available destinations for the "Recipes" scheme:
     expect(child.kill).toHaveBeenCalledWith('SIGINT');
     expect(manager.status(WORKDIR, 7).state).toMatchObject({ status: 'cancelled' });
   });
+
+  it('forwards a non-default scheme to flutter run as a flavor', async () => {
+    const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
+      if (args.includes('-showBuildSettings')) {
+        return { stdout: buildSettings('com.example.recipes', BUILD_DIR, '/flutter'), stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const child = new EventEmitter() as EventEmitter & {
+      stdin: { writable: boolean; write: ReturnType<typeof vi.fn> };
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdin = { writable: true, write: vi.fn() };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn(() => true);
+    const spawn = vi.fn(() => child);
+    const manager = new XcodeBuildManager({
+      dependencies: managerDependencies({
+        execFile,
+        spawn: spawn as unknown as XcodeBuildDependencies['spawn'],
+        stat: pubspecStat(WORKDIR),
+      }),
+      emit: vi.fn(),
+    });
+
+    await manager.start({
+      sessionId: 'session-1',
+      ownerId: 7,
+      workdir: WORKDIR,
+      containerPath: 'ios/Recipes.xcworkspace',
+      containerKind: 'workspace',
+      scheme: 'staging',
+      destinationId: 'DEVICE-1',
+      destinationPlatform: 'iOS',
+      destinationName: 'Simon’s iPhone',
+      destinationOsVersion: null,
+    });
+
+    // scheme 与容器名不同 = Flutter flavor；漏传会静默跑成默认配置。
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+    expect(spawn).toHaveBeenCalledWith(
+      FLUTTER_BIN,
+      ['run', '--debug', '-d', 'DEVICE-1', '--device-timeout', '30', '--flavor', 'staging'],
+      expect.any(Object),
+    );
+  });
+
+  it('refuses a second window building the same target', async () => {
+    const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
+      if (args.includes('-showBuildSettings')) {
+        return { stdout: buildSettings('com.example.recipes', BUILD_DIR, '/flutter'), stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const child = new EventEmitter() as EventEmitter & {
+      stdin: { writable: boolean; write: ReturnType<typeof vi.fn> };
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdin = { writable: true, write: vi.fn() };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn(() => true);
+    const manager = new XcodeBuildManager({
+      dependencies: managerDependencies({
+        execFile,
+        spawn: vi.fn(() => child) as unknown as XcodeBuildDependencies['spawn'],
+        stat: pubspecStat(WORKDIR),
+      }),
+      emit: vi.fn(),
+    });
+    const request = {
+      sessionId: 'session-1',
+      ownerId: 7,
+      workdir: WORKDIR,
+      containerPath: 'ios/Recipes.xcworkspace',
+      containerKind: 'workspace' as const,
+      scheme: 'Recipes',
+      destinationId: 'DEVICE-1',
+      destinationPlatform: 'iOS',
+      destinationName: 'Simon’s iPhone',
+      destinationOsVersion: null,
+    };
+    await manager.start(request);
+
+    // 同一份 checkout + 同一个目标，第二个窗口不能再起一条；records 按 owner 存，
+    // 只查自己名下的记录会漏掉这种跨窗口冲突。
+    await expect(manager.start({ ...request, ownerId: 8 })).rejects.toThrow(
+      /another window is already building/,
+    );
+  });
 });
 
 /**
