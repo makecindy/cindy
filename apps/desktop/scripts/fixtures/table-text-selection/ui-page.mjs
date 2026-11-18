@@ -100,7 +100,11 @@ export default {
 
     if (page.context().browser()) {
       await tableMessage.hover();
-      await tableMessage.getByRole('button', { name: await ui.t('chat.messageActionBar.copy'), exact: true }).click();
+      const copyButton = tableMessage.getByRole('button', { name: await ui.t('chat.messageActionBar.copy'), exact: true });
+      await copyButton.click();
+      // The async handler is complete only once its success icon is visible.
+      // Moving focus to the paste target sooner can race the browser write.
+      await copyButton.locator('svg.lucide-check').waitFor();
       assert.equal(await pasteClipboard(), content, 'Complete-message copy must actually paste the complete Markdown');
       if (process.platform === 'darwin') {
         assert.equal(execFileSync('pbpaste', { encoding: 'utf8' }), content, 'OS clipboard must contain the complete message');
