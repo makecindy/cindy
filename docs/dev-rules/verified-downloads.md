@@ -81,7 +81,8 @@ Agent runtime、Cindy Make 工具、GitHub CLI、Ollama runtime、llama.cpp runt
   `PluginMarketService.install` 中为本次安装建 reporter（`plugin-market/installProgress.ts`），下载前
   按 release 的 `sizeBytes` 定总量，等待权限确认时附 `awaitingConsent`，落位前切 `installing`，结束时
   `completed`／`failed`／`cancelled`（确认框里取消不算失败）；只经 `plugin-market:install-progress`
-  推给发起安装的窗口，不登记 device-link。Renderer 的窗口级状态在
+  推给发起安装的窗口，不登记 device-link；每条推送附安装开始时的数据归属戳
+  （`getActiveDataOwnerPushStamp`），切换账号或模式后渲染端丢弃旧身份的推送与进度。Renderer 的窗口级状态在
   `features/plugin/lib/pluginInstallProgress.ts`，只显示本窗口发起的安装；成功由发起方标记，不依赖推送与
   IPC 返回值的先后。市场卡片与市场详情页由本机插件页显式开启（`showInstallProgress`），远程设备页复用同一
   组件但不读本机进度。后台更新、默认安装、电脑控制等其它入口发起的安装不显示。

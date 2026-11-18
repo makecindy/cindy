@@ -19,8 +19,8 @@ export default {
       assert.equal(await rings.count(), 10);
       // No figures beside the ring: the percentage lives only in the accessible value.
       assert.equal(await page.getByText(/\d+%/).count(), 0);
-      // The failed installed card and the failed market card keep their reason and offer a square
-      // retry icon button, so the failed state is no wider than the button it replaced.
+      // The failed installed card and the failed market card keep the short word (the reason is on
+      // hover) and offer a square retry icon button, so they are no wider than the button replaced.
       await page.getByText(await ui.t('settings.ghosts.updateAll.statusFailed'), { exact: true }).waitFor();
       await page.getByText(await ui.t('settings.ghosts.installProgress.installFailed'), { exact: true }).waitFor();
       assert.equal(await page.locator('button:has(svg.lucide-rotate-ccw)').count(), 2);
@@ -31,7 +31,8 @@ export default {
       await page.getByText(await ui.t('downloadProgress.retry.slow'), { exact: true }).waitFor();
       assert.equal(await page.locator('.plugin-detail-primary-action').count(), 0);
     } else {
-      await page.getByText(await ui.t('settings.ghosts.installProgress.installFailed'), { exact: true }).waitFor();
+      // The detail page has room for the reason itself.
+      await page.getByText('Download timed out', { exact: true }).waitFor();
       assert.equal(await page.getByRole('button', { name: await ui.t('commonUi.retry') }).count(), 1);
     }
   },

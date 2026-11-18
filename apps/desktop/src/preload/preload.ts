@@ -1872,10 +1872,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onUpdateConsentHoldsChanged: fanOutPluginUpdateConsentHoldsChanged,
     /** Display-only progress of installs and updates started from this window. */
     onInstallProgress: (
-      callback: (progress: import('../shared/pluginMarket').PluginMarketInstallProgress) => void,
+      callback: (
+        progress: import('../shared/pluginMarket').PluginMarketInstallProgress,
+        ownerStamp?: unknown,
+      ) => void,
     ): (() => void) =>
-      fanOutPluginInstallProgress((data) =>
-        callback(data as import('../shared/pluginMarket').PluginMarketInstallProgress),
+      fanOutPluginInstallProgress((data, ownerStamp) =>
+        callback(data as import('../shared/pluginMarket').PluginMarketInstallProgress, ownerStamp),
       ),
     listSources: (): Promise<import('../shared/pluginMarket').MarketSourceSummary[]> =>
       ipcRenderer.invoke('plugin-market:list-sources'),

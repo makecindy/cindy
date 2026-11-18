@@ -202,11 +202,9 @@ async function runQueue(generation: number): Promise<void> {
           patchRow(generation, next.pluginId, { status: 'skipped' });
           continue;
         }
-        failPluginInstallProgress(next.pluginId);
-        patchRow(generation, next.pluginId, {
-          status: 'failed',
-          errorText: i18n.t(pluginMarketErrorKey(error)),
-        });
+        const errorText = i18n.t(pluginMarketErrorKey(error));
+        failPluginInstallProgress(next.pluginId, errorText);
+        patchRow(generation, next.pluginId, { status: 'failed', errorText });
       } finally {
         endPluginInstallProgress(next.pluginId);
       }

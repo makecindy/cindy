@@ -158,6 +158,7 @@ import { PluginInstallRing } from './PluginInstallRing';
 import {
   beginPluginInstallProgress,
   clearFailedPluginInstallProgress,
+  dropStalePluginInstallProgress,
   endPluginInstallProgress,
   failPluginInstallProgress,
   succeedPluginInstallProgress,
@@ -749,6 +750,9 @@ function LocalGhostPluginPage({
     setMarketDetail(null);
     marketBusyLockRef.current = null;
     setMarketBusy(null);
+    // The page stays mounted across account and mode switches: rings started by the previous
+    // owner go now. A running batch of the current owner is untouched.
+    dropStalePluginInstallProgress();
     marketDetailRequestRef.current += 1;
     // The retained bucket may have missed installation changes off-route.
     // Show it immediately, but revalidate once through the existing reader.
@@ -1192,7 +1196,7 @@ function LocalGhostPluginPage({
         if (isMarketBusyLeaseActive(marketBusyLease)) {
           // 用户在确认框里取消不是失败,不留失败标记。
           if (extractIpcError(error)?.code !== 'MUTATION_CANCELLED') {
-            failPluginInstallProgress(marketItem.pluginId);
+            failPluginInstallProgress(marketItem.pluginId, t(pluginMarketErrorKey(error)));
           }
           await showPluginMarketActionError(error);
         }
@@ -1705,7 +1709,7 @@ function LocalGhostPluginPage({
         if (isMarketBusyLeaseActive(marketBusyLease)) {
           // 用户在确认框里取消不是失败,不留失败标记。
           if (extractIpcError(error)?.code !== 'MUTATION_CANCELLED') {
-            failPluginInstallProgress(marketDetail.pluginId);
+            failPluginInstallProgress(marketDetail.pluginId, t(pluginMarketErrorKey(error)));
           }
           await showPluginMarketActionError(error);
         }
@@ -1766,8 +1770,9 @@ function LocalGhostPluginPage({
         detail = await window.electronAPI.pluginMarket.detail(pluginId);
       } catch (error) {
         if (isMarketBusyLeaseActive(marketBusyLease)) {
-          failPluginInstallProgress(pluginId);
-          toast.error(t(pluginMarketErrorKey(error)));
+          const reason = t(pluginMarketErrorKey(error));
+          failPluginInstallProgress(pluginId, reason);
+          toast.error(reason);
         }
         endPluginInstallProgress(pluginId);
         releaseMarketBusy(marketBusyLease);

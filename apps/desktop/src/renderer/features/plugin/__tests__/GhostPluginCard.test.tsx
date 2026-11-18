@@ -454,8 +454,12 @@ describe('GhostPluginCard', () => {
     expect(screen.getByRole('progressbar').textContent).toBe('downloadProgress.phase.preparing');
     expect(screen.queryByRole('button', { name: 'settings.ghosts.page.updateAria' })).toBeNull();
 
-    act(() => failPluginInstallProgress(marketPlugin.pluginId));
-    expect(screen.getByRole('progressbar').textContent).toBe('settings.ghosts.updateAll.statusFailed');
+    act(() => failPluginInstallProgress(marketPlugin.pluginId, 'Download timed out'));
+    // The card keeps the short word; the reason stays on hover and for screen readers.
+    const ring = screen.getByRole('progressbar');
+    expect(ring.textContent).toBe('settings.ghosts.updateAll.statusFailed');
+    expect(ring.querySelector('[title]')?.getAttribute('title')).toBe('Download timed out');
+    expect(ring.getAttribute('aria-valuetext')).toContain('Download timed out');
     // Retry is a square icon button (tooltip "Retry") so the failed state is no wider than the pill.
     const retry = screen.getByRole('button', { name: 'settings.ghosts.page.updateAria' });
     expect(retry.textContent).toBe('');

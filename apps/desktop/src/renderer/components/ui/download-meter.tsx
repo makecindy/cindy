@@ -172,6 +172,11 @@ export interface DownloadRingProps {
   status?: string;
   /** Say why a retry is happening instead of the short "Retrying…"; for surfaces with room. */
   explainRetry?: boolean;
+  /**
+   * More about the state than the words beside the ring have room for, such as why it failed.
+   * Shown on hover and read by screen readers.
+   */
+  note?: string;
   /** Text size and color of the words, when the surface needs a different tier. */
   className?: string;
 }
@@ -188,6 +193,7 @@ export function DownloadRing({
   size = 20,
   status,
   explainRetry = false,
+  note,
   className,
 }: DownloadRingProps) {
   const { t } = useTranslation();
@@ -213,7 +219,7 @@ export function DownloadRing({
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={percent ?? undefined}
-      aria-valuetext={[words, ...(status ? [] : [text.status]), ...text.detail]
+      aria-valuetext={[words, ...(status ? [] : [text.status]), ...text.detail, ...(note ? [note] : [])]
         .filter((part, index, parts) => part && parts.indexOf(part) === index)
         .join(' · ')}
       className={cn(
@@ -262,7 +268,9 @@ export function DownloadRing({
           ) : null}
         </svg>
       )}
-      <span className="min-w-0 truncate">{words}</span>
+      <span className="min-w-0 truncate" title={note && note !== words ? note : words}>
+        {words}
+      </span>
     </span>
   );
 }

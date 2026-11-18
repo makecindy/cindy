@@ -34,7 +34,8 @@ function seed(pluginId: string, intent: PluginInstallIntent, step: Step) {
   beginPluginInstallProgress(pluginId, intent);
   if (step === 'failed') {
     push({ pluginId, download: download('downloading', 0.61) });
-    failPluginInstallProgress(pluginId);
+    // The runner records the translated reason its failure toast showed.
+    failPluginInstallProgress(pluginId, 'Download timed out');
     return;
   }
   push({ pluginId, download: step.download, ...(step.consent ? { awaitingConsent: true as const } : {}) });

@@ -221,12 +221,13 @@ describe('MarketPluginDetailView', () => {
   //   完成写「已安装」，失败写「安装失败」并给出「重试」；远程设备页不显示本机进度。
   // - Bug／规则依据：verified-downloads.md「下载进度与界面」插件市场首装此前只有按钮转圈。
   // - 现有覆盖缺口：页面导航用例只走完整流程，不覆盖远程页不接本机进度这一分支。
-  // - 最小失败输入：首装进行中、完成、失败三种状态 × showInstallProgress 开 / 关。
+  // - 最小失败输入：首装进行中、完成、失败（带原因，PR #11305 评审：单项失败原因不能只留在提示里）
+  //   三种状态 × showInstallProgress 开 / 关。
   // - tier：unit（jsdom，直接驱动窗口级进度）。
   it.each([
     { name: 'shows a first install in progress', showInstallProgress: true, step: 'running', ring: 'downloadProgress.phase.preparing', button: null },
     { name: 'says Installed when a first install lands', showInstallProgress: true, step: 'done', ring: 'settings.ghosts.market.installed', button: null },
-    { name: 'keeps the reason and offers a retry when it fails', showInstallProgress: true, step: 'failed', ring: 'settings.ghosts.installProgress.installFailed', button: 'commonUi.retry' },
+    { name: 'keeps the reason and offers a retry when it fails', showInstallProgress: true, step: 'failed', ring: 'Download timed out', button: 'commonUi.retry' },
     { name: 'leaves a remote computer\'s view untouched', showInstallProgress: false, step: 'running', ring: null, button: 'settings.ghosts.market.install' },
   ] as const)('$name', ({ showInstallProgress, step, ring, button }) => {
     (window as unknown as { electronAPI: unknown }).electronAPI = {
@@ -235,7 +236,8 @@ describe('MarketPluginDetailView', () => {
     act(() => {
       beginPluginInstallProgress(detail.pluginId, 'install');
       if (step === 'done') succeedPluginInstallProgress(detail.pluginId);
-      if (step === 'failed') failPluginInstallProgress(detail.pluginId);
+      // The same translated words the failure toast showed; the detail page has room to keep them.
+      if (step === 'failed') failPluginInstallProgress(detail.pluginId, 'Download timed out');
     });
     try {
       render(
