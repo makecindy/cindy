@@ -1,6 +1,7 @@
 // The desktop's sessionPiTurnUsage: its core (sessionPiTurnUsageCore.ts, shared with the Node Host), with the desktop
 // functions it imported before bound to its ports (turnUsagePorts.ts), each resolved when called.
-// Bound before the core's code runs; this module's imports are the ones sessionPiTurnUsage.ts had.
+// The core calls no port while its module loads (export * evaluates it before the binding below runs);
+// each port is resolved when it is called. This module's imports are the ones sessionPiTurnUsage.ts had.
 import './turnUsageContext.js';
 import '../maker-host/subscription-account-auth.js';
 import './piUsageReceipts.js';
