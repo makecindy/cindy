@@ -445,6 +445,7 @@ import {
   createSessionControlService,
   sessionQueueOriginForDispatcher,
 } from './sessionControlService.js';
+import { runSessionExecutionAction } from './sessionExecutionActions.js';
 import {
   createQueueReorderAdapter,
   type SessionQueueMoveResult,
@@ -2719,6 +2720,7 @@ type SendToSessionResult = SendToSessionInternalResult;
 
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
 interface OrcaCollabService {
+  controlSession: ReturnType<typeof createSessionControlService>['controlSession'];
   listSessionQueue: (
     sessionId: string,
   ) => Promise<
@@ -2732,7 +2734,7 @@ interface OrcaCollabService {
     | { ok: false; errorCode: 'HOST_NOT_READY' | 'INTERNAL'; message: string }
   >;
   updateSessionQueuedMessage: (params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
     message: string;
@@ -2746,13 +2748,14 @@ interface OrcaCollabService {
           | 'MESSAGE_CONSUMING'
           | 'NOT_AUTHORIZED'
           | 'INVALID_ARGS'
+          | 'UNSUPPORTED_CAPABILITY'
           | 'HOST_NOT_READY'
           | 'INTERNAL';
         message: string;
       }
   >;
   cancelSessionQueuedMessage: (params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
   }) => Promise<
@@ -2765,20 +2768,21 @@ interface OrcaCollabService {
           | 'MESSAGE_CONSUMING'
           | 'NOT_AUTHORIZED'
           | 'INVALID_ARGS'
+          | 'UNSUPPORTED_CAPABILITY'
           | 'HOST_NOT_READY'
           | 'INTERNAL';
         message: string;
       }
   >;
   steerSessionQueuedMessage: (params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
   }) => Promise<
     SessionQueueSteerResult | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
   >;
   moveSessionQueuedMessage: (params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
     position: number;
@@ -17561,6 +17565,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   const sessionControlService = createSessionControlService({
+    runSessionAction: params => runSessionExecutionAction(params, {
+      coordinator: inputCoordinator, persist: awaitAgentInputQueueSnapshotPersistence,
+      interactions: {
+        pending: pendingInteractionResolvers,
+        resolve: (requestId, decision) => { resolvePendingInteraction(requestId, decision, true); },
+        resumeTimeout: requestId => {
+          const entry = pendingInteractionResolvers.get(requestId);
+          if (entry) schedulePendingPermissionTimeout(requestId, entry);
+        },
+      },
+      compact: async (id, instructions, beforeMutation, beforeDelivery) => {
+        const createOpts = await readSharedTaskTaskCreateOpts(id);
+        await beforeMutation();
+        if (createOpts.agentKind !== 'claude-code') return compactSessionFromHost(id, instructions, beforeMutation);
+        if (instructions !== undefined) throwIpcError('UNSUPPORTED_CAPABILITY', 'Claude compact control does not accept custom instructions');
+        return inputCoordinator.compact(id, createOpts, { beforeMutation: beforeDelivery });
+      },
+    }),
+    getPluginCaller: () => {
+      const plugin = getPluginHostToolCaller();
+      const source = hostPluginInputSource();
+      return plugin && source ? { source, assertCurrent: () => plugin.assertCurrent() } : undefined;
+    },
     sessionExists: async (sessionId) => (await maker.getSessionMeta(sessionId)) !== null,
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? null,
     getSessionActivitySnapshot: readCanonicalSessionActivity,
@@ -17770,6 +17797,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     replaceQueuedMessage: (sessionId, clientId, next, expected) =>
       (!expected || inputCoordinator.hasQueuedItemWhere(sessionId, item => item === expected))
       && inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),
+    updateQueuedMessageText: (sessionId, expected, text, finalize) => {
+      if (!inputCoordinator.hasQueuedItemWhere(sessionId, item => item === expected)
+        || inputCoordinator.getQueueInspection(sessionId).some(entry => entry.queuedMessageId === expected.clientId && entry.consuming)) return false;
+      inputCoordinator.updateText(sessionId, expected.clientId, text, undefined, undefined, false, finalize);
+      return true;
+    },
     removeQueuedMessage: (sessionId, clientId, expected) => {
       if (!inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId && (!expected || item === expected))) {
         return false;
@@ -17828,6 +17861,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
     updateSessionQueuedMessage: (params) => sessionControlService.updateQueuedMessage(params),
+    controlSession: (params) => sessionControlService.controlSession(params),
     cancelSessionQueuedMessage: (params) => sessionControlService.cancelQueuedMessage(params),
     steerSessionQueuedMessage: (params) => sessionControlService.steerQueuedMessage(params),
     moveSessionQueuedMessage: (params) => sessionControlService.moveQueuedMessage(params),
@@ -23265,19 +23299,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (instructions !== undefined && typeof instructions !== 'string') {
         throwIpcError('INVALID_PARAMS', 'instructions must be a string when provided');
       }
-      return withSendToSessionLock(sessionId, async () => {
-        try {
-          const sess = await getOrResumeSessionForHistory(sessionId, 'compact');
-          if (!sess?.capabilities.manualCompact?.supported) {
-            throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
-          }
-          return await sess.compactSession(instructions);
-        } finally {
-          await getOrResumeSessionForHistory.release(sessionId);
-        }
-      });
+      return compactSessionFromHost(sessionId, instructions);
     },
   );
+
+  async function compactSessionFromHost(sessionId: string, instructions?: string, beforeMutation?: () => Promise<void>) {
+    return withSendToSessionLock(sessionId, async () => {
+      try {
+        const sess = await getOrResumeSessionForHistory(sessionId, 'compact');
+        if (!sess?.capabilities.manualCompact?.supported) {
+          throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
+        }
+        await beforeMutation?.();
+        return await sess.compactSession(instructions);
+      } finally {
+        await getOrResumeSessionForHistory.release(sessionId);
+      }
+    });
+  }
 
   // History actions restore the persisted native session, without a model turn.
   // bootstrap's strict resume also prevents fresh-history/provider failover.
