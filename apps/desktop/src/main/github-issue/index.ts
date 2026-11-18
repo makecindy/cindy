@@ -81,7 +81,7 @@ export async function submitGithubIssueForSession(
         resolveGithubIssueSubmissionChoices(githubUserSubmitterDeps, workdir),
       postIssue: (submissionIdentity, bodyFactory) => {
         if (submissionIdentity.kind === 'github-user') {
-          return postGithubIssueAsUser(githubUserSubmitterDeps, submissionIdentity, bodyFactory());
+          return postGithubIssueAsUser(githubUserSubmitterDeps, submissionIdentity, bodyFactory(), req.workingDir);
         }
         return serverApiFetch<{ githubIssue: { number: number; url: string } }>(
           '/api/github/issues',

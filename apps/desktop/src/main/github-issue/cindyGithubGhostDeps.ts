@@ -10,6 +10,10 @@
  */
 
 import { getGhostManager, getGhostPipeDispatcher } from '../cindy-brain';
+import { canUseGithubHostCredentials } from '../cindy-brain/GhostManager.js';
+import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
+import { ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost.js';
+import { findInstalledGhostByInstanceId, installedGhostStoragePart, resolveInstalledGhost } from '../../shared/pluginIdentity.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { createLogger } from '../logger.js';
 import { ghostSecretSaved } from '../secrets/providerSecretStore';
@@ -36,15 +40,49 @@ export function getSharedGithubUserSubmitterDeps(): GithubUserIssueSubmitterDeps
   return sharedDeps;
 }
 
+/** Resolve one installation, never combine a root credential with an organization instance. */
+function githubInstance(workdir?: string | null, instanceId?: string): InstalledGhost | null {
+  const manager = getGhostManager();
+  let ghost: InstalledGhost | undefined;
+  if (instanceId !== undefined) {
+    // A pinned read/write rechecks only that install. An unavailable registry may scan once,
+    // but must never fall through to a same-name replacement.
+    ghost = manager.findInstalledInstance(instanceId) ??
+      findInstalledGhostByInstanceId(manager.list(), instanceId);
+  } else {
+    const resolved = resolveInstalledGhost(manager.list(), CINDY_GITHUB_GHOST_ID);
+    if (resolved.status !== 'unique') return null;
+    ghost = resolved.ghost;
+  }
+  if (!ghost || ghost.manifest.id !== CINDY_GITHUB_GHOST_ID) return null;
+  // Pending legacy installations keep their original PAT path. They cannot use host credentials.
+  const legacy = ghost.namespace === undefined && ghost.namespaceState === 'pending';
+  if ((!legacy && ghost.namespace !== null) || !ghost.enabled || ghost.approval?.state !== 'approved') {
+    return null;
+  }
+  const key = installedGhostStoragePart(ghost);
+  if (isGhostDisabledForWorkdir(key, workdir) ||
+      (key !== CINDY_GITHUB_GHOST_ID && isGhostDisabledForWorkdir(CINDY_GITHUB_GHOST_ID, workdir))) {
+    return null;
+  }
+  return ghost;
+}
+
 export function buildGithubUserSubmitterDeps(): GithubUserIssueSubmitterDeps {
   return {
-    isGithubGhostEnabled: () =>
-      getGhostManager()
-        .list()
-        .some((ghost) => ghost.manifest.id === CINDY_GITHUB_GHOST_ID && ghost.enabled),
-    isGithubCredentialSaved: () => ghostSecretSaved(CINDY_GITHUB_GHOST_ID, CINDY_GITHUB_SECRET_KEY),
-    isGithubGhostDisabledForWorkdir: (workdir) =>
-      isGhostDisabledForWorkdir(CINDY_GITHUB_GHOST_ID, workdir),
+    resolveInstanceId: async (workdir, instanceId) => {
+      const ghost = githubInstance(workdir, instanceId);
+      if (!ghost) return null;
+      const key = installedGhostStoragePart(ghost);
+      const approval = ghostInstallApprovalToken(ghost.approval);
+      if (ghostSecretSaved(key, CINDY_GITHUB_SECRET_KEY)) return key;
+      if (!canUseGithubHostCredentials(ghost) ||
+          !await getSharedGhCliTokenSource().probeAvailability()) return null;
+      // Login probing yields. Do not dispatch if the install or its directory policy changed meanwhile.
+      const current = githubInstance(workdir, key);
+      return current && installedGhostStoragePart(current) === key && current.dir === ghost.dir &&
+        ghostInstallApprovalToken(current.approval) === approval ? key : null;
+    },
     callGhostTool: (request) => getGhostPipeDispatcher().callGhostTool(request),
     logger: log,
   };

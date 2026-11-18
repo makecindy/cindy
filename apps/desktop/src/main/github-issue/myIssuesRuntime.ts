@@ -32,7 +32,6 @@ import { getSharedGithubUserSubmitterDeps } from './cindyGithubGhostDeps.js';
 import { parseIssuePage } from './githubIssuePayload.js';
 import {
   callCindyGithubOperation,
-  isCindyGithubGhostUsable,
   type GithubUserIssueSubmitterDeps,
 } from './githubUserIssueSubmitter.js';
 import {
@@ -146,22 +145,18 @@ function mapPlatformFailure(err: unknown): MyIssuesDegradedReason {
  * 区分:凭据过期 / 被撤销 / 通道超时 / GitHub 限流时,用户直接在 GitHub 提的那些 issue
  * 静静消失,页面一个字都不说,而缩水的结果还照样覆盖了完整快照。
  *
- * 判据是「**有没有通道配过**」,不是「哪一步报了错」——
- * `isCindyGithubGhostUsable` 含 `isGithubCredentialSaved()`,所以它为真就意味着用户确实
- * 存过 GitHub 凭据;「装了插件但从未授权」根本进不到这个分支(那时它为假)。同理 gh 那路
- * 以「有没有 token」判配没配。任一通道配过却一个身份都没拿到,就是配了用不上。
- *
- * (曾经错在这里:以为插件那步含糊、怕对「装了没授权」的用户误报,于是让它静默落到
- * 「没配」。但那种用户压根到不了这一步 —— 前提判错,结论也就跟着错。)
+ * 判据为同一批准实例上的 PAT 存在或已声明且可用的 Host 登录；装了插件但
+ * 从未授权的用户不进入此分支。gh CLI 的独立兜底仍以 token 是否存在判定。
  */
 async function resolveGithubEnhancement(): Promise<GithubEnhancementViewer | null> {
   const ghostDeps = getSharedGithubUserSubmitterDeps();
   // workdir 传 null:/issues 是全局页面,没有会话工作目录上下文。
-  const ghostConfigured = isCindyGithubGhostUsable(ghostDeps, null);
+  const instanceId = await ghostDeps.resolveInstanceId(null);
+  const ghostConfigured = instanceId !== null;
   if (ghostConfigured) {
-    const login = await readGhostViewerLogin(ghostDeps);
+    const login = await readGhostViewerLogin(ghostDeps, instanceId!);
     // 插件问不出身份时不直接判死:gh CLI 可能有权限,下面照常再试一次。
-    if (login) return { source: 'ghost', login };
+    if (login) return { source: 'ghost', login, instanceId: instanceId! };
   }
 
   const token = await getSharedGhCliTokenSource().readToken();
@@ -182,10 +177,12 @@ async function resolveGithubEnhancement(): Promise<GithubEnhancementViewer | nul
 
 async function readGhostViewerLogin(
   deps: GithubUserIssueSubmitterDeps,
+  instanceId: string,
 ): Promise<string | null> {
   try {
     const operation = await callCindyGithubOperation(deps, 'get_current_user', {}, {
       timeoutMs: GHOST_IDENTITY_TIMEOUT_MS,
+      instanceId,
     });
     if (!operation.ok) {
       log.debug('ghost viewer lookup unavailable', { message: operation.message });
@@ -232,7 +229,7 @@ async function searchAuthoredIssues(
       getSharedGithubUserSubmitterDeps(),
       'search_issues_and_prs',
       params,
-      { timeoutMs: GHOST_SEARCH_TIMEOUT_MS },
+      { timeoutMs: GHOST_SEARCH_TIMEOUT_MS, instanceId: viewer.instanceId },
     );
     if (!operation.ok) throw new Error(operation.message);
     return parseIssuePage(operation.data);
