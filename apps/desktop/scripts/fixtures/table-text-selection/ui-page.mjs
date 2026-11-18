@@ -11,7 +11,7 @@ export default {
   entry: './fixture.tsx',
   viewport: { width: 720, height: 520 },
   real: 'MarkdownRenderer, native mouse selection, assistant/chat clipboard handlers, MessageActionBar and SelectionQuoteButton',
-  notCovered: 'Full application, platform-specific native window menus and mobile native text views.',
+  notCovered: 'Full application, platform-specific native window menus and mobile native text views. Range copy uses OS paste; whole-message writes are captured at navigator.clipboard because hidden windows cannot obtain clipboard-write permission.',
   cases: { default: { about: 'Copy and quote text across every table cell and both surrounding paragraphs', data: { content } } },
   async check(page, ui) {
     const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
@@ -66,10 +66,11 @@ export default {
     for (const text of ['Before the table', 'Alpha', 'Final', 'After the table']) assert.ok(draft.includes(text));
 
     // Whole-message Copy writes Markdown directly, independent of native ranges.
+    await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async text => { document.documentElement.dataset.copiedMessage = text; } },
+    }));
     await page.getByRole('button', { name: await ui.t('chat.messageActionBar.copy'), exact: true }).click();
-    await paste.fill('');
-    await paste.focus();
-    await page.keyboard.press(`${modifier}+v`);
-    assert.equal(await paste.inputValue(), content);
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.copiedMessage), content);
   },
 };
