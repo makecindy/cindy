@@ -8710,6 +8710,10 @@
       "panelHost": {
         "close": "パネルを閉じる"
       },
+      "installProgress": {
+        "awaitingConsent": "確認待ち…",
+        "installFailed": "インストールに失敗"
+      },
       "updateAll": {
         "title": "すべて更新 · {{count}} 件",
         "collapseDiff": "折りたたむ",
@@ -8720,6 +8724,7 @@
         "statusDone": "更新済み",
         "statusSkipped": "スキップ済み",
         "statusFailed": "更新に失敗",
+        "progressCount": "{{total}} 件中 {{done}} 件を更新済み",
         "background": "バックグラウンドで続行",
         "doneAction": "完了",
         "doneToast": "一括更新が完了:{{done}} 件更新、{{rest}} 件未完了",

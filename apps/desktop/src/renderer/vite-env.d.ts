@@ -1821,6 +1821,13 @@ interface ElectronAPI {
     >;
     onRemovalNoticeAvailable: (callback: () => void) => () => void;
     onUpdateConsentHoldsChanged: (callback: () => void) => () => void;
+    /** `ownerStamp` names the data owner that started the install (shared/dataOwnerPush.ts). */
+    onInstallProgress: (
+      callback: (
+        progress: import('../shared/pluginMarket').PluginMarketInstallProgress,
+        ownerStamp?: unknown,
+      ) => void,
+    ) => () => void;
     listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
     pickLocalSource: (
       defaultPath?: string,

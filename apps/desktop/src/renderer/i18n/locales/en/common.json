@@ -8753,6 +8753,10 @@
       "panelHost": {
         "close": "Close panel"
       },
+      "installProgress": {
+        "awaitingConsent": "Waiting for confirmation…",
+        "installFailed": "Install failed"
+      },
       "updateAll": {
         "title": "Update all · {{count}} plugins",
         "collapseDiff": "Collapse",
@@ -8763,6 +8767,7 @@
         "statusDone": "Updated",
         "statusSkipped": "Skipped",
         "statusFailed": "Update failed",
+        "progressCount": "{{done}} of {{total}} updated",
         "background": "Continue in background",
         "doneAction": "Done",
         "doneToast": "Batch update finished: {{done}} updated, {{rest}} not completed",

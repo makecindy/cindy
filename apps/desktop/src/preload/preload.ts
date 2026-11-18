@@ -673,6 +673,7 @@ const fanOutPluginRemovalNoticeAvailable = createIpcFanOut(
 const fanOutPluginUpdateConsentHoldsChanged = createIpcFanOut(
   'plugin-market:update-consent-holds-changed',
 );
+const fanOutPluginInstallProgress = createIpcFanOut('plugin-market:install-progress');
 // #37: release 端检测到 schema drift 时一次性 toast 提示开发者切回 dev 自动修复
 const fanOutSchemaDriftWarning = createIpcFanOut('local-db:schema-drift-warning');
 const fanOutProjectAliasesChanged = createIpcFanOut('local-db:project-aliases:changed');
@@ -1872,6 +1873,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     > => ipcRenderer.invoke('plugin-market:consume-removal-notice'),
     onRemovalNoticeAvailable: fanOutPluginRemovalNoticeAvailable,
     onUpdateConsentHoldsChanged: fanOutPluginUpdateConsentHoldsChanged,
+    /** Display-only progress of installs and updates started from this window. */
+    onInstallProgress: (
+      callback: (
+        progress: import('../shared/pluginMarket').PluginMarketInstallProgress,
+        ownerStamp?: unknown,
+      ) => void,
+    ): (() => void) =>
+      fanOutPluginInstallProgress((data, ownerStamp) =>
+        callback(data as import('../shared/pluginMarket').PluginMarketInstallProgress, ownerStamp),
+      ),
     listSources: (): Promise<import('../shared/pluginMarket').MarketSourceSummary[]> =>
       ipcRenderer.invoke('plugin-market:list-sources'),
     pickLocalSource: (

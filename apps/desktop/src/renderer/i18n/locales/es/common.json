@@ -8825,6 +8825,10 @@
       "panelHost": {
         "close": "Cerrar panel"
       },
+      "installProgress": {
+        "awaitingConsent": "Esperando confirmación…",
+        "installFailed": "Error al instalar"
+      },
       "updateAll": {
         "title": "Actualizar todos · {{count}} complementos",
         "collapseDiff": "Contraer",
@@ -8835,6 +8839,7 @@
         "statusDone": "Actualizado",
         "statusSkipped": "Saltado",
         "statusFailed": "Error al actualizar",
+        "progressCount": "{{done}} de {{total}} actualizados",
         "background": "Continuar en segundo plano",
         "doneAction": "Listo",
         "doneToast": "Actualización por lotes finalizada: {{done}} actualizados, {{rest}} sin completar",
