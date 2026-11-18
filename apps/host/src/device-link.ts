@@ -72,16 +72,15 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   const registry = createInvokeRegistry();
   const pending = new Set<Promise<unknown>>();
   const appCallers = new Set<string>();
-  function releaseApps(deviceId?: string) {
-    const ids = deviceId ? [deviceId] : [...appCallers];
-    return Promise.all(ids.map(async id => {
+  function releaseApps(ids: Iterable<string> = appCallers) {
+    return Promise.all([...ids].map(async id => {
       appCallers.delete(id);
       deps.releaseAuthCaller?.(`device:${id}`);
       await deps.mcpApps?.releaseCaller(`device:${id}`);
     }));
   }
-  function releaseAppsInBackground(deviceId?: string) {
-    const work = releaseApps(deviceId).catch(() => { log.warn('MCP App controller cleanup failed'); });
+  function releaseAppsInBackground(ids?: Iterable<string>) {
+    const work = releaseApps(ids).catch(() => { log.warn('MCP App controller cleanup failed'); });
     pending.add(work); void work.finally(() => pending.delete(work));
   }
   let closed = false;
@@ -248,12 +247,12 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   const unbind = dispatch.wireInboundDispatch(client);
   const offStatus = client.onStatusChange(status => {
     if (status !== 'online') {
-      releaseAppsInBackground();
       // Like the Desktop: while Agent-Net is on, controllers carried by another connection (phones and older Desktops on the
       // Device Link relay, cross-account peers on their own) are outside the main connection's fault; 2026-11-17 review: an
       // Agent-Net drop logged every phone out of this Host. Off, every controller as before.
-      dispatch.deactivateAllControllers('relay-disconnected', 'all',
-        agentNet?.active() ? (id) => client.connectionFor(id) !== client : undefined);
+      const keepController = agentNet?.active() ? (id: string) => client.connectionFor(id) !== client : undefined;
+      releaseAppsInBackground(keepController ? [...appCallers].filter(id => !keepController(id)) : undefined);
+      dispatch.deactivateAllControllers('relay-disconnected', 'all', keepController);
       clearControllerPlatforms();
     } else {
       dispatch.flushMakerEventBatchesOnReconnect();
@@ -288,7 +287,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       if (value.deviceName) dispatch.setControllerDisplayName(value.deviceId, value.deviceName);
     } else {
       setControllerPlatform(value.deviceId, null);
-      releaseAppsInBackground(value.deviceId);
+      releaseAppsInBackground([value.deviceId]);
       dispatch.handleControllerOffline(value.deviceId);
     }
   });
@@ -334,7 +333,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     access.syncRemoteControlAccessGeneration();
     for (const id of value.revokedControllers) {
       dispatch.purgeRevokedController(id);
-      if (appCallers.has(id)) releaseAppsInBackground(id);
+      if (appCallers.has(id)) releaseAppsInBackground([id]);
     }
     if (!value.remoteControlEnabled || !deps.canRegister()) {
       dispatch.dropAllControllers(client, 'toggle-off'); client.stop();

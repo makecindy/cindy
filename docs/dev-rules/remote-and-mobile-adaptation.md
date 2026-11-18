@@ -465,7 +465,8 @@ Device Link 上有活着的链路时照旧走 Device Link，那上面已确认�
 - **第四轮（2026-11-18 桌面与 Host 收尾）**：会话请求与建链的诊断日志；拓扑页随 Agent-Net 路径（`onAgentNetPathChange`）
   与中转连接变化马上刷新，中转往返时间取中转连接的 ping（`AgentNetWorkerSocket.relayRttMs`）；Node Host 的名册缓存（`directoryCacheFile`，
   与 Desktop 共用 `agentNetDirectoryCache.ts`）；Host 兼容连接的连接问题（`RoutedDeviceLinkClient.onLegacyConnectionIssue`）：401 刷新令牌、
-  状态里显示 `agentNet.compatibilityIssue`；跨账号断线续传（会话断时有请求在等就请业务重开，故障半径同上一轮：只等请求自己的时限、
+  状态里显示 `agentNet.compatibilityIssue`。Host 主线路断开时，MCP 应用视图和 OAuth 调用者也按线路归属清理，保留兼容线路上的调用者；
+  关闭远程控制仍清理两条线路。见 `apps/host/src/device-link.test.mjs` 的双线路回归。跨账号断线续传（会话断时有请求在等就请业务重开，故障半径同上一轮：只等请求自己的时限、
   对方去重记忆变了就不再发、走原有重开循环）。回归：`agentNetNode.test.ts`「starts from the device list it saved last time」、
   `routedClient.test.ts`「reports a problem of the compatibility connection on its own」、`agentNetSessionLinks.test.ts`「sends a guest write again
   on the re-dialed share connection」与「fails calls in flight」里的日志断言、`workerSocket.test.ts` 的中转往返。
