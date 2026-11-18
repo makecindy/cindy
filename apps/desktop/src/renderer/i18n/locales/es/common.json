@@ -17052,6 +17052,7 @@
         "summaryAria": "Ver resumen del PR #{{number}}",
         "unresolvedLabel": "Hilos de revisión sin resolver",
         "checks": "Verificaciones",
+        "following": "En seguimiento",
         "checksTotal": "{{count}} en total",
         "failed": "Con errores",
         "passed": "Con éxito",

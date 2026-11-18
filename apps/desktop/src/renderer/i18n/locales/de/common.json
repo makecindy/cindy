@@ -16889,6 +16889,7 @@
         "summaryAria": "Zusammenfassung von PR #{{number}} anzeigen",
         "unresolvedLabel": "Ungelöste Review-Threads",
         "checks": "Prüfungen",
+        "following": "Wird verfolgt",
         "checksTotal": "Insgesamt {{count}}",
         "failed": "Fehlgeschlagen",
         "passed": "Bestanden",

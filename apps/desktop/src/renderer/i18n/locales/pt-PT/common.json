@@ -17052,6 +17052,7 @@
         "summaryAria": "Ver resumo do PR #{{number}}",
         "unresolvedLabel": "Discussões de revisão por resolver",
         "checks": "Verificações",
+        "following": "A acompanhar",
         "checksTotal": "{{count}} no total",
         "failed": "Falhas",
         "passed": "Aprovadas",

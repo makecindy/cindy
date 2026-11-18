@@ -16815,6 +16815,7 @@
         "summaryAria": "覽 PR #{{number}} 摘要",
         "unresolvedLabel": "未決之 review 評論",
         "checks": "查驗",
+        "following": "正隨之",
         "checksTotal": "凡 {{count}} 項",
         "failed": "未成",
         "passed": "已過",

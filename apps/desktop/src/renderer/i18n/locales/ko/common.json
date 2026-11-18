@@ -16815,6 +16815,7 @@
         "summaryAria": "PR #{{number}} 요약 보기",
         "unresolvedLabel": "미해결 리뷰 코멘트",
         "checks": "검사",
+        "following": "팔로우 중",
         "checksTotal": "총 {{count}}개",
         "failed": "실패",
         "passed": "통과",
