@@ -513,6 +513,28 @@ export function startCompanionCloud(input: {
     publish(); mirrors.kick(botId); uploads.kick(botId);
     return { ok: true } as const;
   }
+  let actorRosterFlight: Promise<CompanionRuntimeActor[]> | undefined;
+  let queuedActorRoster: Promise<CompanionRuntimeActor[]> | undefined;
+  function readMaterializeActors(): Promise<CompanionRuntimeActor[]> {
+    if (queuedActorRoster) return queuedActorRoster;
+    // Join callers until this read starts. A home confirmed during an in-flight
+    // read needs its successor, never that older snapshot. Only one read runs.
+    const read: Promise<CompanionRuntimeActor[]> = (actorRosterFlight ?? Promise.resolve()).then(() => {
+      if (queuedActorRoster === read) queuedActorRoster = undefined;
+      fence.assertCurrent();
+      return input.api<CompanionRuntimeActor[]>('/actors');
+    });
+    queuedActorRoster = read;
+    actorRosterFlight = read;
+    const clear = () => {
+      if (actorRosterFlight === read) actorRosterFlight = undefined;
+      if (queuedActorRoster === read) queuedActorRoster = undefined;
+    };
+    // A failed read also rejects its queued batch; retry stays with the caller.
+    void read.then(clear, clear);
+    return read;
+  }
+
   function materialize(actor: CompanionRuntimeActor, correction?: ProfileCorrection): Promise<CompanionMaterializeResult> {
     const materializer = input.host.materializer;
     if (!materializer) return Promise.reject(new Error('MATERIALIZE_UNAVAILABLE'));
@@ -524,7 +546,7 @@ export function startCompanionCloud(input: {
       // Home CAS confirms ownership, but does not refresh the cached avatar. Read the
       // current actor before restoring; once materialized, reconcile will not replay it.
       fence.assertCurrent();
-      const actors = await input.api<CompanionRuntimeActor[]>('/actors');
+      const actors = await readMaterializeActors();
       fence.assertCurrent();
       const current = actorOf(botId);
       const fresh = actors.find(value => value.id === actorId && value.externalId === botId && value.kind === 'bot' && !value.disabled);

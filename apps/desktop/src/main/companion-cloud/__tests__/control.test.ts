@@ -597,6 +597,90 @@ describe('take over', () => {
     expect(t.state.isDemoted('bot_mia')).toBe(true);
   });
 
+  // #11348 review discussion_r4613614544, unit: N simultaneous arrivals must not
+  // download N copies of the account roster. Real runtime/restore calls verify every
+  // local avatar and demotion; deferred transport exposes overlap without real waits.
+  it('coalesces authoritative rosters for a batch of arrivals', async () => {
+    let release!: (actors: CompanionRuntimeActor[]) => void;
+    const response = new Promise<CompanionRuntimeActor[]>(resolve => { release = resolve; });
+    const readActors = vi.fn(() => response);
+    const t = setup({ home: 'desk', readActors });
+    for (let index = 2; index <= 4; index++) t.actors.push({ ...t.actors[0]!, id: `actor-${index}`, externalId: `bot_${index}` });
+    const avatars = ['🦊', '🐢', '🐳', '🐼'];
+    const cloud = t.actors.map((actor, index) => ({ ...actor, avatar: avatars[index]! }));
+    vi.mocked(t.local.host.readProfile).mockResolvedValue(null);
+    vi.mocked(t.local.host.createProfile).mockResolvedValue(undefined);
+    try {
+      await t.runtime.reconcile([]);
+      await vi.waitFor(() => expect(readActors).toHaveBeenCalledTimes(1));
+      release(cloud);
+      await vi.waitFor(() => expect(t.local.host.createProfile).toHaveBeenCalledTimes(4));
+      await vi.waitFor(() => expect(t.actors.every(actor => !t.state.isDemoted(actor.externalId))).toBe(true));
+      for (const actor of cloud) expect(t.local.host.createProfile).toHaveBeenCalledWith(
+        expect.objectContaining({ id: actor.externalId, avatar: actor.avatar }), expect.anything());
+      await t.runtime.reconcile(t.actors.map(actor => ({ id: actor.externalId, status: 'active' })));
+      expect(readActors).toHaveBeenCalledTimes(1);
+    } finally { release(cloud); }
+  });
+
+  it('waits for a post-confirmation roster when another takeover starts during a read', async () => {
+    let release!: (actors: CompanionRuntimeActor[]) => void;
+    const response = new Promise<CompanionRuntimeActor[]>(resolve => { release = resolve; });
+    const readActors = vi.fn((): Promise<CompanionRuntimeActor[]> => readActors.mock.calls.length === 1 ? response
+      : Promise.resolve(t.actors.map(actor => ({ ...actor, avatar: '🦊' }))));
+    const t = setup({ home: 'laptop', readActors });
+    t.actors.push({ ...t.actors[0]!, id: 'actor-2', externalId: 'bot_second' });
+    vi.mocked(t.local.host.readProfile).mockResolvedValue(null);
+    vi.mocked(t.local.host.createProfile).mockResolvedValue(undefined);
+    const first = t.runtime.takeOver('bot_mia');
+    await vi.waitFor(() => expect(readActors).toHaveBeenCalledTimes(1));
+    // This response was captured before the second home's CAS completed.
+    const early = t.actors.map(actor => ({ ...actor, avatar: '🐢' }));
+    const second = t.runtime.takeOver('bot_second');
+    try {
+      await vi.waitFor(() => expect(t.state.isDemoted('bot_second')).toBe(true));
+      expect(readActors).toHaveBeenCalledTimes(1);
+      release(early);
+      expect(await first).toEqual({ ok: true });
+      expect(await second).toEqual({ ok: true });
+      expect(readActors).toHaveBeenCalledTimes(2);
+      expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ id: 'bot_second', avatar: '🦊' }), expect.anything());
+      expect(t.state.isDemoted('bot_second')).toBe(false);
+    } finally { release(early); }
+  });
+
+  it.each(['failure', 'account', 'disposed'] as const)('stops a queued roster after %s and releases the batch', async scenario => {
+    let release!: (actors: CompanionRuntimeActor[]) => void;
+    let reject!: (error: Error) => void;
+    let current = true;
+    const response = new Promise<CompanionRuntimeActor[]>((resolve, fail) => { release = resolve; reject = fail; });
+    const readActors = vi.fn((): Promise<CompanionRuntimeActor[]> => readActors.mock.calls.length === 1 ? response
+      : Promise.resolve(t.actors.map(actor => ({ ...actor, avatar: '🦊' }))));
+    const t = setup({ home: 'laptop', readActors, current: () => current });
+    t.actors.push({ ...t.actors[0]!, id: 'actor-2', externalId: 'bot_second' });
+    vi.mocked(t.local.host.readProfile).mockResolvedValue(null);
+    vi.mocked(t.local.host.createProfile).mockResolvedValue(undefined);
+    const first = t.runtime.takeOver('bot_mia');
+    await vi.waitFor(() => expect(readActors).toHaveBeenCalledTimes(1));
+    const second = t.runtime.takeOver('bot_second');
+    try {
+      await vi.waitFor(() => expect(t.state.isDemoted('bot_second')).toBe(true));
+      if (scenario === 'account') current = false;
+      if (scenario === 'disposed') t.runtime.dispose();
+      if (scenario === 'failure') reject(new Error('REQUEST_TIMEOUT'));
+      else release(t.actors.map(actor => ({ ...actor })));
+      expect((await first).ok).toBe(false);
+      expect((await second).ok).toBe(false);
+      expect(readActors).toHaveBeenCalledTimes(1);
+      expect(t.local.host.createProfile).not.toHaveBeenCalled();
+      expect(t.actors.every(actor => t.state.isDemoted(actor.externalId))).toBe(true);
+      if (scenario === 'failure') {
+        expect(await t.runtime.takeOver('bot_second')).toEqual({ ok: true });
+        expect(t.state.isDemoted('bot_second')).toBe(false);
+      }
+    } finally { release(t.actors.map(actor => ({ ...actor }))); }
+  });
+
   it('resolves an uncached actor through the explicit refresh channel before taking over', async () => {
     let restore = () => {};
     const foreground = vi.fn(async () => { restore(); });
