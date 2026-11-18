@@ -36,6 +36,11 @@ export interface SessionHandoffSendParams {
   sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
   inheritTargetPlanMode?: true;
   resumeWithStoredPermissionMode: true;
+  /**
+   * 宿主盖章:这条投递的跨设备任务动作收据已在本机校验通过。见
+   * `crashRestoreQueueRelease.ts`。只在本文件校验成功后置位,绝不从 wire 读入。
+   */
+  externalAuthorizedDelivery?: boolean;
 }
 
 export type SessionHandoffSendResult =
@@ -142,6 +147,13 @@ export function createSessionHandoffHandler(deps: {
         ...(senderSessionTitle ? { senderSessionTitle } : {}),
       } as NonNullable<AgentInputQueuedMessage['origin']> }),
       resumeWithStoredPermissionMode: true,
+      // 收据守卫在上面已经真校验过一次(失败即 return,不发送),所以到这里的投递
+      // 都是接收方可验的已授权跨设备投递。伙伴经 send_to_session 互发消息时 origin
+      // 里没有 senderBotId(发送方在另一台电脑上,本机读不到它的伙伴绑定),少了这个
+      // 盖章,崩溃恢复暂停的伙伴目标就永远不会被解挂,只会继续堆积(#7512 review P1)。
+      // 盖章只给任务对任务的投递:插件派活按 `crashRestoreQueueRelease.ts` 的口径
+      // 一律属于自动来源,不代表用户表态,不放行恢复出来的草稿。
+      externalAuthorizedDelivery: !plugin,
     });
     if (!result.ok) {
       await taskActionDeliveryGuard.onSettled().catch(() => undefined);

@@ -13,12 +13,21 @@
  *
  * 两条盖章都只由宿主产生,模型、插件、渲染层与远端都无法自报:
  *
- * - `externalAuthorizedDelivery`:投递点宿主盖章。当前只有伙伴房间投递
- *   (`deliverToCanonical`:主人从另一台设备在伙伴的房间里说话,clientId 由
- *   `directRoomClientId` 生成)。
+ * - `externalAuthorizedDelivery`:投递点宿主盖章。两个产生点:
+ *   1. 伙伴房间投递(`deliverToCanonical`:主人从另一台设备在伙伴的房间里说话,
+ *      clientId 由 `directRoomClientId` 生成);
+ *   2. 跨设备任务动作投递(`sessionHandoffIpc`):收据(`taskActionReceipt`)已在本机
+ *      通过 `taskActionDeliveryGuard` 校验后才盖章。收据由控制端电脑的宿主生成,
+ *      校验包含控制端设备身份、发送方身份、目标任务与正文,失败即不投递,所以这个
+ *      盖章是接收方可验的事实,不是 wire 上自报字段(#7512 review P1)。插件派活
+ *      (`sender.kind === 'plugin'`)不属于这一类,按下面的口径不放行。
  * - `origin.senderBotId`:伙伴发来的消息。发送方身份由宿主按发送方 session 的
  *   伙伴绑定从库里读出来(`readSenderIdentity` → `bot_session_links`),不是
  *   wire 字段。
+ *
+ * 跨设备投递这一条尤其要自己盖:`origin.senderBotId` 走的是本机库里的伙伴绑定,
+ * 而跨设备发送方在**另一台**电脑上,本机读不到它的绑定,只靠 `senderBotId` 的话
+ * 伙伴互发消息永远解不开崩溃恢复出来的暂停队列,消息只会一直堆着。
  *
  * 自动来源(定时任务 / Orca 派活 / 插件派活)不带这两种盖章,一律不放行:
  * 自动来源不代表用户表态,不得借此把用户恢复出来的草稿自动发出去。
