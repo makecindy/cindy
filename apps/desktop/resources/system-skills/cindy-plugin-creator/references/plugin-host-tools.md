@@ -46,7 +46,7 @@
 | `control` | `cindy_helper` | 任务运行与管理 |
 | `handoff` | `cindy_helper` | 工具目录中归属此组的协作能力 |
 | `settings` | `cindy_helper` | 应用设置与运行配置 |
-| `usage` | `cindy_helper` | 本机订阅配额、已记录用量与供应商组状态；后两者可指定同账号已授权电脑，只读 |
+| `usage` | `cindy_helper` | 本机订阅配额、任务额度、已记录用量与供应商组状态，只读；任务额度可包含已授权的同账号电脑与分享供应商 |
 | `scheduler` | `cindy_scheduler` | 定时任务管理 |
 | `terminal` | `cindy_helper` | 宿主管理的命令、交互终端与后台作业 |
 | `files` | `cindy_helper` | 授权目录的文件操作与监听；调用 `file_request` |
@@ -189,6 +189,19 @@ await cindy.host.call('cindy_helper', 'get_provider_group', {
 memberId/displayName/avatarUrl 和批准状态。分享来的电脑仍沿原匿名与额度可见性边界；缺 quota 是未知，不是零。
 两个读取的 device 默认本机，异机只经既有同账号授权管理通道，旧端不支持就明确报错，不退回本机数据。
 不新增页面轮询、跨电脑额度协议或宿主聚合；额度分配、暂停/恢复策略、看板与提醒属于插件，不能保证严格零超用。
+
+### 读取任务额度
+
+声明 `agent.hostTools: ["usage"]` 后可调用 `cindy.host.call('cindy_helper', 'get_session_quota', { sessionId })`。
+宿主仅在当前 Cindy 账号的任务库中定位该 ID，根据实际执行路线查找额度。调用无需 `history`。
+本机和同账号电脑返回可确认归属的订阅账号额度；分享来源沿用「允许查看剩余额度」。
+现有分享数据无法确认多账号或供应商组具体归属时，返回 `{ok:true,status:'unavailable'}`。
+任务不存在、无可用额度或读不到执行端时也返回该状态，插件应清除上一次读数。
+
+可用读数包含 `status`（`available`、`stale` 或 `unlimited`）、`source`（`local`、`device`、`shared`），
+以及已知的 `windows`、`balance` 和 `updatedAt`。时间是 Unix 毫秒。窗口包含类型、已用百分比、时长、
+重置和更新时间。余额包含剩余值、总额、单位及重置时间。缺失值按未知处理。
+结果不含任务内容、设备或账号标识；旧宿主若未提供工具，应按不支持处理。
 
 ## 定时任务与应用设置
 

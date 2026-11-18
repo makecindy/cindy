@@ -6,13 +6,13 @@ import { z } from 'zod';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 import { getActiveAppSession, LOCAL_DATA_OWNER_ID } from '../appSessionState.js';
 import { isUiMockDataEnabled } from '../localDb/uiMockSeed.js';
-import type { BotGroupDetail, ChatServerApi } from '../../shared/botGroupChat.js';
+import type { BotGroupDetail, BotGroupMessageView, ChatServerApi } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from './botGroupChatService.js';
 
 const groupId = 'ui-mock-group-alert';
 const planId = 'ui-mock-group-alert-plan';
 const input = z.object({ status: z.enum(['waiting', 'stopped']), newFailure: z.boolean().default(false),
-  pending: z.boolean().default(false) });
+  pending: z.boolean().default(false), composer: z.boolean().default(false) });
 type Input = z.infer<typeof input>;
 const at = Date.parse('2026-10-03T00:00:00Z');
 
@@ -52,22 +52,52 @@ function detail(data: Input): BotGroupDetail {
 /** Replaces only synthetic service inputs; routes, rendering and roster reduction stay real. */
 export function withBotGroupUiMock(service: BotGroupChatService, deps: BotGroupChatServiceDeps): BotGroupChatService {
   const changed = () => deps.onChanged?.({ groupId, change: 'plan' }, deps.captureOwnerScope?.());
+  // Synthetic transport state only; never runs a companion or contacts the server.
+  const sent = new Map<string, BotGroupMessageView>();
+  const project = (data: Input): BotGroupDetail => ({ ...detail(data), messages: [
+    ...detail(data).messages, ...[...sent.values()].filter(message => !message.threadRootId),
+  ] });
+  const accept = (request: { clientId: string; text: string; rootId?: string }) => {
+    const previous = sent.get(request.clientId);
+    if (previous) return { ok: true as const, messageId: previous.id };
+    const message: BotGroupMessageView = { id: request.clientId, sequence: sent.size + 2,
+      kind: 'message', authorKind: 'user', authorBotId: null, authorName: 'UI tester', isSelf: true,
+      content: request.text, mentions: { all: false, botIds: [] }, noticeCode: null, planId: null,
+      files: [], attachments: [], createdAt: Date.now(), threadRootId: request.rootId ?? null };
+    sent.set(request.clientId, message);
+    if (request.rootId) {
+      const root = [...sent.values()].find(value => value.id === request.rootId);
+      if (root) root.replyCount = (root.replyCount ?? 0) + 1;
+    }
+    deps.onChanged?.({ groupId, change: 'messages' }, deps.captureOwnerScope?.());
+    return { ok: true as const, messageId: message.id };
+  };
   return {
     ...service,
+    sendMessage: async (request, origin) => {
+      const value = z.object({ groupId: z.literal(groupId), clientId: z.string().uuid(), text: z.string() }).safeParse(request);
+      return value.success && read()?.data.composer ? accept(value.data) : service.sendMessage(request, origin);
+    },
     get chatServer(): ChatServerApi | undefined {
       const chat = service.chatServer;
       return chat && { ...chat, manage: async request => {
         if (request.groupId === groupId && read() && request.action.type === 'read') return { ok: true as const };
         return chat.manage(request);
-      } };
+      }, thread: async request => {
+        if (request.groupId !== groupId || !read()?.data.composer) return chat.thread(request);
+        const root = [...sent.values()].find(message => message.id === request.rootId);
+        if (!root) return { ok: false as const, errorCode: 'NOT_FOUND' as const, error: 'Synthetic root not found' };
+        return { ok: true as const, root, replies: [...sent.values()].filter(message => message.threadRootId === root.id), hasMore: false };
+      }, reply: async request => request.groupId === groupId && read()?.data.composer
+        ? accept(request) : chat.reply(request) };
     },
     listGroups: async () => {
       const fixture = read();
-      return fixture ? { ok: true, groups: [detail(fixture.data)] } : service.listGroups();
+      return fixture ? { ok: true, groups: [project(fixture.data)] } : service.listGroups();
     },
     getGroup: async (id, options) => {
       const fixture = id === groupId ? read() : undefined;
-      return fixture ? { ok: true, group: detail(fixture.data) } : service.getGroup(id, options);
+      return fixture ? { ok: true, group: project(fixture.data) } : service.getGroup(id, options);
     },
     dismissPlan: async request => {
       const fixture = read();

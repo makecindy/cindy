@@ -595,7 +595,7 @@ export async function sendProviderShareRequest(link: string | ProviderShareInvit
     const api = v2?.api ?? providerShareApi;
     preview = await api.preview(invitation).catch(() => null);
     if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
-    const card = await fetchIdentityCard('share-request', sha256Hex(invitation));
+    const card = v2?.identityCard ?? await fetchIdentityCard('share-request', sha256Hex(invitation));
     if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
     state = await api.sendRequest(invitation, card);
   }

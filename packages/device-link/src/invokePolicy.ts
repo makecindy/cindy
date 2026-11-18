@@ -24,6 +24,7 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   // Next-prompt suggestion after a turn completes: a model request the host answers in
   // ~2 s. Nobody waits on it, so it must not hold a foreground slot while the user sends.
   'maker:predict-prompt',
+  'sidebar-settings:get-project-order',
   // 打字时的 Agent 预热是尽力而为的提示，排在用户正在等待的请求之后。
   'maker:session:prewarm',
 ]);
@@ -164,6 +165,7 @@ export const MCP_APP_OPEN_TIMEOUT_MS = 120_000;
  * so a host never gives up before the controller stops waiting.
  */
 export const ACTION_INVOKE_TIMEOUTS_MS: readonly number[] = [
+  6 * 60_000, // Project cloning (five-minute Git budget plus profile persistence).
   BOT_GROUP_SEND_TIMEOUT_MS,
   MCP_APP_OPEN_TIMEOUT_MS,
   TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
@@ -175,6 +177,8 @@ export function resolveRemoteInvokeTimeoutMs(
   args?: unknown[],
   platform: 'desktop' | 'mobile' = 'desktop',
 ): number | undefined {
+  const projectRequest = args?.[0] as { create?: unknown; repositoryUrl?: unknown } | undefined;
+  if (channel === 'sidebar-settings:set-project-info' && projectRequest?.create === true && projectRequest.repositoryUrl) return 6 * 60_000;
   const appRequest = args?.[1] as { op?: unknown } | undefined;
   if (channel === 'maker:mcp-apps:v1' && appRequest?.op === 'open') return MCP_APP_OPEN_TIMEOUT_MS;
   // A file connection's RPC on the invoke channel waits as long as it did on the data channel (up to 1 hour for a
