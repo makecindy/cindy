@@ -31,6 +31,16 @@ transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCle
 
 本机 Codex 的任务独占账号／自定义上下文进程在 `thread/resume` 等满 60 秒时记录线程与连接标识，macOS 尽力采样栈符号。只有确认旧进程已退出且仍在启动阶段，才用相同线程再恢复一次；第二次超时或清理失败即结束。共享进程、远端会话和已经发出的 turn 不走这条恢复路径。
 
+Codex 的 MCP 目录探测可能拿到新工具，但原线程的客户端仍启动失败；读取工具时优先采用原生
+`runtimeStatus`，不以目录非空代替线程就绪。明确配置且启用的 `cindy_helper` 失败后，在下次普通发送
+之前复查；仅原线程明确 `failed`、没有原生子 Agent／终端／待续接工作时，释放该线程并冷恢复同一份
+完整历史，重用当前任务的 MCP 发现身份和配置。并发恢复合并，每个 handle 最多尝试两次，间隔至少
+30 秒；不后台轮询、不重放输入或工具，不重启共享 app-server／设备连接。健康任务不增加发送前查询。
+仍在异步启动、鉴权失败、明确停用、Review 或旧运行时无明确状态时不触发恢复。停止、关闭、账号退役
+或配置变化使在途恢复失效；取消后的迟到回包不得重新订阅，也不得释放新 handle 已接管的线程。
+原生冷恢复会重建失败任务内的 MCP 连接，其他任务的连接保持；后台工作未结束或状态不明时保留原线程。
+回归见 `agents/codex/helper-readiness.native.test.ts`、`index.test.ts` 与 `mcp-server-tools.test.ts`。
+
 回归见 `claude-code/__tests__/startup-cleanup.test.ts`、
 `pi/__tests__/pi-startsession-cleanup.test.ts` 与 `maker.test.ts`。
 

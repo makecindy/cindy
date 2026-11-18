@@ -10,6 +10,18 @@ function requestFor(pages: Record<string, Page>) {
 }
 
 describe('Codex thread MCP server tools', () => {
+  // Supplier helper outage 2026-11-18: a fresh catalog is not an exact ready
+  // thread client. Unit tier; prior tests only covered runtimes without state.
+  it.each([
+    ['failed', 'failed'], ['starting', 'pending'], ['notStarted', 'pending'],
+    ['authenticationRequired', 'needs-auth'], ['cancelled', 'disabled'], ['disabled', 'disabled'],
+  ])('honors native %s despite tools returned by catalog discovery', async (runtimeStatus, state) => {
+    const { invoke } = requestFor({ first: { nextCursor: null, data: [{
+      name: 'cindy_helper', runtimeStatus, tools: { list_tools: {}, call_tool: {} },
+    }] } });
+    expect(await readCodexThreadMcpServerTools(invoke, 'thread-1', 'cindy_helper')).toEqual({ state, tools: [] });
+  });
+
   it('reads the caller thread status, not the shared host list', async () => {
     const { request, invoke } = requestFor({ first: { nextCursor: null, data: [
       { name: 'custom_omc', authStatus: 'bearerToken', tools: {

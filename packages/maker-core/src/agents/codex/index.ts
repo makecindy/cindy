@@ -7270,28 +7270,45 @@ assertRouteCurrent();
     // Configuration proves intent, not that this native thread completed MCP
     // startup. Observe only explicitly provisioned helpers, after capability
     // isolation/disabled overrides; never probe the shared host catalog.
-    const reportExpectedHelperAvailability = async (): Promise<void> => {
+    let helperNeedsRecheck = false;
+    let helperRecoveryAttempts = 0;
+    let helperRecoveryNotBefore = 0;
+    let helperRecoveryAbort: AbortController | undefined;
+    let helperRecoveryPending: Promise<void> | null = null;
+    const expectedHelperConfig = (): Record<string, unknown> | null => {
       const config = currentThreadWorkspaceConfig().config;
-      if (reviewMode || config?.['mcp_servers.cindy_helper.enabled'] === false
+      if (!config || reviewMode || config['mcp_servers.cindy_helper.enabled'] === false
         || !['url', 'command'].some(key => {
           const value = config?.[`mcp_servers.cindy_helper.${key}`];
           return typeof value === 'string' && value.trim().length > 0;
-        })) return;
+        })) return null;
+      return Object.fromEntries(Object.entries(config).filter(([key]) => key.startsWith('mcp_servers.cindy_helper.')));
+    };
+    const reportExpectedHelperAvailability = async (): Promise<void> => {
+      const helperConfig = expectedHelperConfig();
+      if (!helperConfig) { helperNeedsRecheck = false; return; }
       const checkedThreadId = threadId;
       let state: string;
+      let ready = false;
       try {
         const report = await readCodexThreadMcpServerTools(
           (method, params, requestOpts) => host.request(method, params, requestOpts),
           checkedThreadId, 'cindy_helper',
         );
-        if (['list_tools', 'call_tool'].every(name => report.tools.some(tool => tool.name === name))) return;
+        ready = report.state === 'connected' && ['list_tools', 'call_tool'].every(name => report.tools.some(tool => tool.name === name));
         state = report.state;
       } catch {
         // A failed probe is not proof of missing tools. Keep that distinction,
         // and never expose transport errors containing endpoints/credentials.
         state = 'unverified';
       }
-      if (closed || threadId !== checkedThreadId || !isCurrentHost()) return;
+      if (closed || threadId !== checkedThreadId || !isCurrentHost()
+        || JSON.stringify(expectedHelperConfig()) !== JSON.stringify(helperConfig)) return;
+      if (ready) { helperNeedsRecheck = false; return; }
+      helperNeedsRecheck = state === 'failed' || state === 'pending';
+      // Optional native servers can still be starting; do not turn async
+      // discovery into an outage or restart an in-flight initialization.
+      if (state === 'pending') return;
       const message = state === 'unverified'
         ? 'Could not verify cindy_helper for this task. Task result reporting may be unavailable.'
         : 'cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.';
@@ -8011,6 +8028,9 @@ assertRouteCurrent();
                 ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
               }, options),
               onLateResolve: async () => {
+                // A new handle may already own this thread after cancellation.
+                // A late recovery must not unsubscribe that replacement.
+                if (host.hasThreadSubscription(threadId)) return;
                 await runThreadCleanupOrRetire({
                   cleanupThreadId: threadId, reason: 'late context settings refresh',
                   cleanup: () => host.unsubscribeThread(threadId), retireHostOnFailure: false,
@@ -8038,6 +8058,61 @@ assertRouteCurrent();
         lastNativeContextWindow = null;
         usageTracker.setContextWindow(0);
       })();
+    };
+
+    // Native reload is process-wide. Recover only a positively failed helper,
+    // at the next ordinary send boundary, using the existing single-thread cold
+    // resume. No user/tool input has been dispatched here, so none is replayed.
+    const ensureExpectedHelperForNextTurn = (signal?: AbortSignal): Promise<void> | null => {
+      if (helperRecoveryPending) return helperRecoveryPending;
+      if (!helperNeedsRecheck || !threadMayHaveRollout || helperRecoveryAttempts >= 2
+        || Date.now() < helperRecoveryNotBefore || !expectedHelperConfig()) return null;
+      const pending = (async () => {
+        const abort = new AbortController();
+        helperRecoveryAbort = abort;
+        const recoverySignal = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
+        const recoveringThread = threadId;
+        const helperConfig = JSON.stringify(expectedHelperConfig());
+        const assertRecoveryCurrent = () => {
+          recoverySignal.throwIfAborted();
+          assertCurrentHost('helper recovery');
+          nativeSubscriptionAccount?.assertCurrent();
+          if (closed || threadId !== recoveringThread || JSON.stringify(expectedHelperConfig()) !== helperConfig) {
+            throw new Error('Codex helper recovery cancelled because the task configuration changed');
+          }
+        };
+        try {
+          assertRecoveryCurrent();
+          let report;
+          try {
+            report = await readCodexThreadMcpServerTools(
+              (method, params, requestOpts) => host.request(method, params, requestOpts), threadId, 'cindy_helper',
+            );
+          } catch { assertRecoveryCurrent(); return; }
+          assertRecoveryCurrent();
+          if (report.state === 'connected') { helperNeedsRecheck = false; return; }
+          if (report.state !== 'failed') return;
+          // Unloading a thread also stops native children/terminals. Leave those
+          // intact, and unknown background state is busy, just as idle cleanup.
+          if (await handle.hasLiveBackgroundWork!().catch(() => true)) return;
+          assertRecoveryCurrent();
+          helperRecoveryAttempts++;
+          helperRecoveryNotBefore = Date.now() + 30_000 * helperRecoveryAttempts;
+          log.info('recovering failed Codex task helper', { threadId, attempt: helperRecoveryAttempts });
+          await withMcpDiscoveryContext(async () => {
+            assertRecoveryCurrent();
+            await ensureContextLimitForNextTurn(recoverySignal, true, false);
+          });
+          assertRecoveryCurrent();
+          await reportExpectedHelperAvailability();
+        } finally {
+          if (helperRecoveryAbort === abort) helperRecoveryAbort = undefined;
+        }
+      })();
+      helperRecoveryPending = pending;
+      const clearPending = () => { if (helperRecoveryPending === pending) helperRecoveryPending = null; };
+      void pending.then(clearPending, clearPending);
+      return pending;
     };
 
     // The host-level MCP probe can be green while a loaded thread still has an
@@ -13696,6 +13771,7 @@ assertRouteCurrent();
     ): Promise<void> {
       if (closed) return;
       closed = true;
+      helperRecoveryAbort?.abort();
       finishManualCompact(new Error('Codex session closed during compaction'));
       cancelInteractionContinuation('session_closed', true);
       translatorRt.samplingSegments.clear();
@@ -13887,6 +13963,8 @@ assertRouteCurrent();
           if (profileRefresh) await profileRefresh;
           const environmentRepair = repairHostedEnvironmentIfDisconnected();
           if (environmentRepair) await environmentRepair;
+          const helperRecovery = isContinuation ? null : ensureExpectedHelperForNextTurn(sendOpts?.signal);
+          if (helperRecovery) await helperRecovery;
           turnWorkspaceConfig = currentTurnWorkspaceConfig();
           // A stale-daemon retry must hydrate the exact thread-level profile
           // that matches this turn, not mutable settings changed while the
@@ -14835,6 +14913,7 @@ assertRouteCurrent();
       },
 
       async abort() {
+        helperRecoveryAbort?.abort();
         if (manualCompact) {
           manualCompact.cancelled = true;
           if (manualCompact.turnId) {

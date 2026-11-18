@@ -54,8 +54,17 @@ function reportFromCodexStatus(server: CodexMcpServerStatus): AgentMcpServerTool
     return { name, ...(typeof description === 'string' && description ? { description } : {}),
       ...(inputSchema && typeof inputSchema === 'object' && !Array.isArray(inputSchema) ? { inputSchema: inputSchema as Record<string, unknown> } : {}) };
   });
+  // A catalog probe may successfully discover tools even though this thread's
+  // exact client failed startup. Only the native thread state proves readiness.
+  switch (server.runtimeStatus) {
+    case 'failed': return { state: 'failed', tools: [] };
+    case 'notStarted':
+    case 'starting': return { state: 'pending', tools: [] };
+    case 'authenticationRequired': return { state: 'needs-auth', tools: [] };
+    case 'cancelled':
+    case 'disabled': return { state: 'disabled', tools: [] };
+  }
   if (tools.length > 0) return { state: 'connected', tools };
-  // Codex lists configured servers even when their startup failed and reports
-  // no per-server startup state, so an empty tool map stays ambiguous.
+  // Old runtimes have no thread state; an empty map stays ambiguous.
   return { state: server.authStatus === 'notLoggedIn' ? 'needs-auth' : 'no-tools', tools: [] };
 }

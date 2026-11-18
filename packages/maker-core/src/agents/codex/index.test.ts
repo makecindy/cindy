@@ -37409,6 +37409,133 @@ describe('expected helper normal and failure boundaries', () => {
 });
 
 
+// Supplier triage 2026-11-18. Production Agent.send must restore its exact MCP
+// client, not just a fresh diagnostic catalog. #10499 had warnings only.
+// Unit tier: one failed native client + next send; no processes or real waits.
+describe('failed expected helper recovery', () => {
+  const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  async function setup(state: string, background: () => Promise<unknown> = async () => ({ data: [], nextCursor: null }), recover = true) {
+    const agent = new CodexAgent(createDeps());
+    let resumes = 0;
+    const host = installFakeHost(agent, method => {
+      if (method === Method.ThreadResume) {
+        resumes++;
+        return { thread: { id: threadId }, model: 'gpt-5.4' };
+      }
+      if (method === Method.ThreadBackgroundTerminalsList) return background();
+      if (method === Method.McpServerStatusList) return { data: [{ name: 'cindy_helper', runtimeStatus: resumes > 1 && recover ? 'connected' : state,
+        tools: { list_tools: {}, call_tool: {} } }], nextCursor: null };
+      if (method === Method.TurnStart) return { turn: { id: 'helper-turn' } };
+      return undefined;
+    }, { buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_helper.command': 'fixture-helper' }) });
+    const handle = await agent.startSession({ sessionId: 'helper-recovery', sessionInstanceId: 'helper-instance',
+      resumeSessionId: threadId, model: 'gpt-5.4', workingDir: '/repo' });
+    return { agent, host, handle };
+  }
+  it('cold-resumes the intact thread once before dispatching the pending input', async () => {
+    const { agent, host, handle } = await setup('failed');
+    await handle.send({ type: 'user', content: 'continue the same task' });
+    expect(handle.id).toBe(threadId);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
+    const sends = host.request.mock.calls.filter(([method]) => method === Method.TurnStart);
+    expect(sends).toHaveLength(1);
+    expect(sends[0][1]).toMatchObject({ threadId, input: [{ type: 'text', text: 'continue the same task' }] });
+    expect(host.retire).not.toHaveBeenCalled();
+    expect((await handle.readMcpServerTools?.('cindy_helper'))?.state).toBe('connected');
+    await handle.close();
+    await agent.dispose();
+  });
+  it.each(['connected', 'starting', 'authenticationRequired', 'disabled', 'cancelled', 'unknown'])(
+    'does not cold-resume a %s client', async state => {
+      const { agent, host, handle } = await setup(state);
+      await handle.send({ type: 'user', content: 'continue' });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+      expect(host.request.mock.calls.some(([method]) => method === Method.ThreadBackgroundTerminalsList)).toBe(false);
+      await handle.close();
+      await agent.dispose();
+    });
+  it.each(['busy', 'unknown'] as const)('keeps %s native background work alive', async state => {
+    const { agent, host, handle } = await setup('failed', async () => state === 'busy' ? { data: [{}] } : {});
+    await handle.send({ type: 'user', content: 'continue' });
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    expect(host.unsubscribeThread).not.toHaveBeenCalled();
+    await handle.close();
+    await agent.dispose();
+  });
+  it.each(['abort', 'close', 'account-retired', 'config-revoked'] as const)('does not recover after %s during its background-work check', async action => {
+    let resolve!: (value: unknown) => void;
+    const background = new Promise<unknown>(r => { resolve = r; });
+    const { agent, host, handle } = await setup('failed', () => background);
+    const send = handle.send({ type: 'user', content: 'do not dispatch', }, { throwOnStartFailure: true });
+    const rejected = expect(send).rejects.toThrow();
+    await waitForExpectation(() => expect(host.request.mock.calls.some(([m]) => m === Method.ThreadBackgroundTerminalsList)).toBe(true));
+    if (action === 'account-retired') host.getThreadHandlers()?.hostForcedRetire?.({ reason: 'account switched' });
+    else if (action === 'config-revoked') host.getSessionMcpConfig.mockReturnValue({ 'mcp_servers.cindy_helper.enabled': false });
+    else await handle[action]();
+    resolve({ data: [] });
+    await rejected;
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    expect(host.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(false);
+    await handle.close();
+    await agent.dispose();
+  });
+  it('coalesces simultaneous recovery requests for the same handle', async () => {
+    let resolve!: (value: unknown) => void;
+    const background = new Promise<unknown>(r => { resolve = r; });
+    const { agent, host, handle } = await setup('failed', () => background);
+    const first = handle.send({ type: 'user', content: 'first input' });
+    await waitForExpectation(() => expect(host.request.mock.calls.some(([m]) => m === Method.ThreadBackgroundTerminalsList)).toBe(true));
+    const second = handle.send({ type: 'user', content: 'second input' });
+    resolve({ data: [] });
+    await Promise.all([first, second]);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
+    await handle.close();
+    await agent.dispose();
+  });
+  it('backs off repeated failures and stops after two recovery attempts', async () => {
+    let now = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const { agent, host, handle } = await setup('failed', undefined, false);
+    const send = async () => {
+      await handle.send({ type: 'user', content: 'one new input' });
+      host.getThreadHandlers()?.turnCompleted?.({ threadId, turn: { id: 'helper-turn', status: 'completed' } });
+    };
+    await send();
+    await send();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
+    now += 30_000;
+    await send();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(3);
+    now += 60_000;
+    await send();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(3);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(4);
+    await handle.close();
+    await agent.dispose();
+  });
+  it('does not reattach or unsubscribe a newer owner after a cancelled resume returns late', async () => {
+    const { agent, host, handle } = await setup('failed');
+    let resolve!: (value: unknown) => void;
+    const resumed = new Promise<unknown>(r => { resolve = r; });
+    const request = host.request.getMockImplementation()!;
+    host.request.mockImplementation((method, params) => method === Method.ThreadResume ? resumed : request(method, params));
+    const send = handle.send({ type: 'user', content: 'unaccepted input' }, { throwOnStartFailure: true });
+    const rejected = expect(send).rejects.toThrow();
+    await waitForExpectation(() => expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadResume)).toHaveLength(2));
+    await handle.abort();
+    await rejected;
+    host.hasThreadSubscription.mockReturnValue(true); // A newer handle now owns this native thread.
+    const ownershipChecks = host.hasThreadSubscription.mock.calls.length;
+    resolve({ thread: { id: threadId }, model: 'gpt-5.4' });
+    await waitForExpectation(() => expect(host.hasThreadSubscription).toHaveBeenCalledTimes(ownershipChecks + 1));
+    expect(host.subscribeThread).toHaveBeenCalledTimes(1);
+    expect(host.unsubscribeThread).not.toHaveBeenCalled();
+    expect(host.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(false);
+    await handle.close();
+    await agent.dispose();
+  });
+});
+
 describe('expected helper runtime lifecycle', () => {
   // #10499 review: scheduler recovery and helper diagnostics share a cold resume.
   // Unit tier, real Agent lifecycle; no timers/processes. One durable warning per
