@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { createRemoteSessionSubscription } from '@/lib/remoteSessionSubscription';
+import { createRemoteSessionSubscription, hasAcknowledgedRemoteSessionSubscription } from '@/lib/remoteSessionSubscription';
 
 const statusListeners = new Set<(p: { status: 'stopped' | 'connecting' | 'online' }) => void>();
 const controlListeners = new Set<(p: { deviceId: string; enabled: boolean }) => void>();
@@ -12,6 +12,19 @@ Object.assign(window, { electronAPI: { deviceLink: { subscribe, unsubscribe,
 } } });
 afterEach(() => { subscribe.mockReset().mockResolvedValue({ ok: true }); unsubscribe.mockClear(); });
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
+
+// Unit: an optimistic first send can reuse the visible task's topic while held.
+// Losing the connection invalidates the ACK even when the same task stays open.
+it('reuses the creation-time subscription for first send until the link is stopped', async () => {
+  const lease = createRemoteSessionSubscription('mac', 'creating');
+  try {
+    await lease.subscribe();
+    expect(await hasAcknowledgedRemoteSessionSubscription('mac', 'creating')).toBe(true);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    for (const listener of statusListeners) listener({ status: 'stopped' });
+    expect(await hasAcknowledgedRemoteSessionSubscription('mac', 'creating')).toBe(false);
+  } finally { lease.release(); }
+});
 
 it('keeps a session stream until every history and live-view owner releases it', async () => {
   const first = createRemoteSessionSubscription('mac', 'shared');

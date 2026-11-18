@@ -7,6 +7,7 @@ import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { cn } from '@/lib/utils';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip } from '@/components/ui/tooltip';
 
 // 长按钮文案在面板内换行、按钮纵向长高,不冲出弹窗也不截断(DESIGN.md §4)。
@@ -51,8 +52,6 @@ export interface ConfirmDialogProps {
    * 业务复选框(confirmWithCheckbox)按调用方语义决定初始状态。
    */
   checkboxDefaultChecked?: boolean;
-  checkedDescription?: string;
-  checkedConfirmText?: string;
   /**
    * Radix AlertDialog 默认会自动聚焦 Cancel 按钮(为破坏性操作做的安全默认)。
    * 在"主按钮非破坏性、Cancel 仅是放弃"的场景(如"前往设置 / 取消"),
@@ -73,6 +72,7 @@ export interface ConfirmDialogProps {
   zIndex?: number;
   /** Destructive actions use the semantic destructive theme tokens. */
   confirmVariant?: 'default' | 'destructive';
+  checkedOverrides?: { description: string; confirmText: string; confirmVariant?: 'destructive' };
   /**
    * 主按钮文字前的小图标(如 Full access 确认的警示三角)。跟随按钮文字颜色,
    * 不引入新的语义色;loading 时与文字一起被 spinner 顶掉。
@@ -104,8 +104,6 @@ export function ConfirmDialog({
   onOpenChange,
   title,
   description: defaultDescription,
-  checkedDescription,
-  checkedConfirmText,
   textClassName,
   descriptionClassName,
   content,
@@ -121,7 +119,8 @@ export function ConfirmDialog({
   confirmDisabled = false,
   requireTypedConfirmation,
   contentSelectable = false,
-  confirmVariant = 'default',
+  confirmVariant: defaultConfirmVariant = 'default',
+  checkedOverrides,
   confirmIcon,
   describeContent = false,
   loading = false,
@@ -136,8 +135,10 @@ export function ConfirmDialog({
   const resolvedCancelText = cancelText ?? t('commonUi.confirmDialog.cancel');
   // 每次打开复位到初始勾选态,避免上一轮的勾选残留到下一次弹窗。
   const [dontShowAgain, setDontShowAgain] = useState(checkboxDefaultChecked);
-  const description = dontShowAgain ? checkedDescription ?? defaultDescription : defaultDescription;
-  const resolvedConfirmText = (dontShowAgain ? checkedConfirmText : undefined) ?? confirmText ?? t('commonUi.confirmDialog.confirm');
+  const overrides = dontShowAgain ? checkedOverrides : undefined;
+  const description = overrides?.description ?? defaultDescription;
+  const confirmVariant = overrides?.confirmVariant ?? defaultConfirmVariant;
+  const resolvedConfirmText = overrides?.confirmText ?? confirmText ?? t('commonUi.confirmDialog.confirm');
   useEffect(() => {
     if (open) setDontShowAgain(checkboxDefaultChecked);
   }, [open, checkboxDefaultChecked]);
@@ -278,6 +279,7 @@ export function ConfirmDialog({
               >
                 {description && (
                   <AlertDialog.Description
+                    aria-live={checkedOverrides ? 'polite' : undefined}
                     className={cn('text-base text-[var(--confirm-desc)]', textClassName, descriptionClassName)}
                   >
                     {description}
@@ -293,11 +295,9 @@ export function ConfirmDialog({
                   'text-[var(--confirm-desc)]',
                 )}
               >
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={dontShowAgain}
                   onChange={(e) => setDontShowAgain(e.target.checked)}
-                  className="size-3.5 cursor-pointer accent-[var(--confirm-btn-primary-bg)]"
                 />
                 {dontShowAgainLabel}
               </label>

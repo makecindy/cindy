@@ -266,7 +266,7 @@ function createDb(): void {
       context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
@@ -478,7 +478,7 @@ it('archives only still-eligible project members from a complete project preview
   await expect(apply('racing')).rejects.toThrow(/Project task changed/);
   expect(await apply('cc-local')).toBe('updated');
   expect(await apply('cc-local')).toBe('changed');
-  expect(h.requestRecycle).toHaveBeenCalledWith('cc-local', expect.any(Array), 'recycle');
+  expect(h.requestRecycle).toHaveBeenCalledWith('cc-local', expect.any(Array));
   expect(h.sqlite!.prepare("SELECT id FROM sessions WHERE status='archived'").all()).toEqual([{ id: 'cc-local' }]);
   insert.run('keep-files');
   const removal = { ...scope, action: 'archiveOnRemoval', operation: 'apply', sessionId: 'keep-files' };
@@ -957,7 +957,7 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'active' });
     expect(h.routeLock).toHaveBeenCalledTimes(routeLockHeld ? 0 : 1);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
-      sessionId: 'codex-local', patch: { status: 'active' },
+      sessionId: 'codex-local', patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
     }));
   });
 
@@ -1224,7 +1224,7 @@ describe('local-db:sessions:update handler wiring', () => {
       'local-db:sessions:patched',
       expect.objectContaining({
         sessionId: 'cc-local',
-        patch: { status: 'deleted' },
+        patch: { status: 'deleted', snoozedUntil: null, snoozedAt: null },
       }),
     );
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
@@ -1412,7 +1412,7 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(persisted.status).toBe('active');
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'active' },
+      patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
     });
     expect(h.compactSessionToolResultsBestEffort).not.toHaveBeenCalled();
   });
@@ -1430,11 +1430,34 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(persisted.pinnedAt).toBeNull();
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'archived', pinnedAt: null, summary: null },
+      patch: { status: 'archived', pinnedAt: null, summary: null, snoozedUntil: null, snoozedAt: null },
     });
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'codex-local' }),
     );
+  });
+
+  // The destructive option is command metadata. Both real IPC handlers must
+  // journal it only after archiving and keep it out of the session projection.
+  it.each([invokeUpdate, invokePatchMeta])('applies discard after archive in %s', async (invoke) => {
+    const statuses: unknown[] = [];
+    h.requestRecycle
+      .mockImplementationOnce(async () => {
+        statuses.push(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local'));
+      })
+      .mockImplementationOnce(async () => {
+        statuses.push(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local'));
+      });
+    await invoke('codex-local', { status: 'archived', pinnedAt: null, discardWorktreeChanges: true });
+
+    expect(statuses).toEqual([{ status: 'active' }, { status: 'archived' }]);
+    expect(h.requestRecycle).toHaveBeenNthCalledWith(2, 'codex-local', expect.any(Array), true);
+    await invoke('codex-local', { status: 'archived', pinnedAt: null, discardWorktreeChanges: true });
+    expect(h.requestRecycle).toHaveBeenCalledTimes(2);
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { status: 'archived', pinnedAt: null, summary: null, snoozedUntil: null, snoozedAt: null },
+    });
   });
 
   it('cleans runtime state before releasing the local terminal status lock', async () => {
@@ -1505,6 +1528,20 @@ describe('local-db:sessions:update handler wiring', () => {
     } finally {
       receiptQuery.mockRestore();
     }
+  });
+
+  // #11185, DB tier: remote cleanup must preserve a task pinned after the
+  // controller's probe, with no runtime/recycle side effects on rejection.
+  it('rejects guarded remote cleanup before stopping or recycling a used task', async () => {
+    Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
+    h.sqlite!.prepare("UPDATE sessions SET pinned_at = 1 WHERE id = 'codex-local'").run();
+    const handler = h.handlers.get('local-db:sessions:discard-unused')!;
+    await expect(handler({}, 'codex-local')).rejects.toThrow('PRECONDITION_FAILED');
+    expect(h.sqlite!.prepare("SELECT status FROM sessions WHERE id = 'codex-local'").get())
+      .toEqual({ status: 'active' });
+    expect(h.requestRecycle).not.toHaveBeenCalled();
+    expect(h.runtimeCleanup).not.toHaveBeenCalled();
+    expect(h.closeSharedTask).not.toHaveBeenCalled();
   });
 
   it.each(['active', 'archived'] as const)('remote patch-meta cannot change a deleted task to %s', async (status) => {
@@ -1600,7 +1637,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'deleted' },
+      patch: { status: 'deleted', snoozedUntil: null, snoozedAt: null },
     });
     // 不再出现携带请求值的回滚广播
     const statusPatches = h.tapWindowBroadcast.mock.calls
@@ -2301,4 +2338,27 @@ describe('terminal intent during session creation', () => {
     expect(failure).toBeUndefined();
   });
 
+});
+
+// DB tier: exercise both production write channels and their authoritative persisted/broadcast pair.
+describe('task snooze persistence', () => {
+  it.each([invokeUpdate, invokePatchMeta])('saves deferral without activity or lifecycle effects', async (invoke) => {
+    const snoozedUntil = new Date(Date.now() + 3600000).toISOString();
+    const updated = await invoke('codex-local', { snoozedUntil });
+    expect(updated).toMatchObject({ snoozedUntil, snoozedAt: expect.any(String), status: 'active', updatedAt: new Date(1).toISOString() });
+    expect(h.sqlite!.prepare('SELECT snoozed_until AS until, snoozed_at AS at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ until: Date.parse(snoozedUntil), at: expect.any(Number) });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
+      sessionId: 'codex-local', patch: expect.objectContaining({ snoozedUntil, snoozedAt: expect.any(String) }),
+    }));
+    expect(h.runtimeCleanup).not.toHaveBeenCalled();
+    await expect(invoke('codex-local', { snoozedUntil: null })).resolves.toMatchObject({ snoozedUntil: null, snoozedAt: null });
+    await invoke('codex-local', { snoozedUntil });
+    await invoke('codex-local', { status: 'archived' });
+    await expect(invoke('codex-local', { status: 'active' })).resolves.toMatchObject({ status: 'active', snoozedUntil: null, snoozedAt: null });
+  });
+  it.each(['not-a-date', '2000-01-01T00:00:00.000Z', 123])('rejects invalid deferral %s without writing', async snoozedUntil => {
+    await expect(invokePatchMeta('codex-local', { snoozedUntil })).rejects.toThrow();
+    expect(h.sqlite!.prepare('SELECT snoozed_until AS until FROM sessions WHERE id = ?').get('codex-local')).toEqual({ until: null });
+  });
 });

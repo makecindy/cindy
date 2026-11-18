@@ -29,6 +29,7 @@ import { ConversationSearchProvider } from '@/features/cc-agent/sidebar/conversa
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 import { SidebarTopNav } from './SidebarTopNav';
+import { TaskListModeToggle } from './TaskListModeToggle';
 import { PluginUiSidebarSections, type PluginUiEntry } from '@/cindy-brain/PluginUiContributions';
 import { UpdateBanner } from './UpdateBanner';
 import { DatabaseSizeWarningBanner } from './DatabaseSizeWarningBanner';
@@ -238,6 +239,15 @@ export function Sidebar({
               } as React.CSSProperties
             }
           />
+          {/* 任务列表视图在本行最右端放收件箱开关（与前进 / 后退同一排）。rail 态放不下，隐藏。 */}
+          {shouldMountFeatureContent && ownsTopNavScrollableRows && !isRail && (
+            <div
+              className="ml-auto flex h-full shrink-0 items-center pr-2"
+              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            >
+              <TaskListModeToggle />
+            </div>
+          )}
         </div>
 
         {/* ConversationSearchProvider:在顶部导航行(SidebarTopNav 的「搜索」行)与功能槽

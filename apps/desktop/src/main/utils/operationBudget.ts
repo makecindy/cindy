@@ -19,6 +19,14 @@ export function assertGitDirectoryReady(dir: string): void {
   }
 }
 
+/** Typed locally: error text from a provider must never authorize a retry. */
+export class SnapshotOperationDeadlineError extends Error {
+  constructor() {
+    super('Snapshot operation deadline exceeded');
+    this.name = 'SnapshotOperationDeadlineError';
+  }
+}
+
 export class OperationBudget {
   readonly controller = new AbortController();
   readonly signal = this.controller.signal;
@@ -35,7 +43,7 @@ export class OperationBudget {
 
   check(): void {
     if (!this.signal.aborted && performance.now() >= this.deadlineAtMs) {
-      this.cancel(new Error('Snapshot operation deadline exceeded'));
+      this.cancel(new SnapshotOperationDeadlineError());
     }
     this.signal.throwIfAborted();
   }
@@ -55,7 +63,7 @@ export class OperationBudget {
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort();
     const timer = setTimeout(
-      () => this.cancel(new Error('Snapshot operation deadline exceeded')),
+      () => this.cancel(new SnapshotOperationDeadlineError()),
       this.timeoutMs,
     );
     try {

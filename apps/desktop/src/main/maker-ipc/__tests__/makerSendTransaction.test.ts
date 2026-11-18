@@ -52,6 +52,7 @@ import { createRuntimeContextProviders } from '../../cindy-brain/runtimeContext.
 import { createTaskRuntimePlugins } from '../runtimePlugins.js';
 import * as mcpApps from '../../mcp-apps/runtime.js';
 import { createWireNoteMemory } from '../wireNoteMemory';
+import { createScheduledQuotaDispatchGuard, isQuotaScheduleCurrent } from '../automaticContinueEligibility';
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
@@ -85,12 +86,32 @@ describe('local application task takeover', () => {
       expect(typeof readText).toBe('function');
       const value = providers.compose(id, readText); pending.push(value); return value;
     };
-    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Unchanged plugin-free input');
+    const prepared = vi.fn();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Unchanged plugin-free input', undefined,
+      { onRuntimePreparation: prepared });
+    expect(prepared).not.toHaveBeenCalled();
     expect(pending).toEqual([undefined, undefined]);
     expect(readRoute).not.toHaveBeenCalled();
     expect(screen).not.toHaveBeenCalled();
     expect(session.send).toHaveBeenCalledOnce();
     expect(vi.mocked(session.send).mock.calls[0][1]?.[MODEL_REQUEST_CONTROL]).toBeUndefined();
+  });
+
+  // Welcome replay safety, unit: an awaited preparation remains observable even
+  // when its selection is removed in flight; the callback never reaches the provider.
+  it.each(['turn', 'prompt', 'context'] as const)('records %s preparation before awaiting it', async point => {
+    const { deps, session } = createDeps();
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    const observed = vi.fn(() => { finish(); });
+    if (point === 'turn') deps.prepareRuntimeTurn = () => pending.then(() => ({ options: {} }));
+    if (point === 'prompt') deps.prepareRuntimePrompt = () => pending;
+    if (point === 'context') deps.composeRuntimeContext = () => pending.then(() => 'Reference only');
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Welcome', undefined,
+      { toolsDisabled: true, onRuntimePreparation: observed });
+    expect(observed).toHaveBeenCalledOnce();
+    expect(session.send).toHaveBeenCalledOnce();
+    expect(vi.mocked(session.send).mock.calls[0][1]).not.toHaveProperty('onRuntimePreparation');
   });
 
   // Runtime context, unit: reference material reaches the normal message body,
@@ -455,6 +476,43 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
 // Production entry: sendToAgentAccepted; minimal input: one turn with an async
 // startup write that completes, rejects, or is invalidated. Unit: injected I/O.
 describe('launcher pre-provider persistence', () => {
+  // Unit: real send transaction + quota guard. A restored run has no live runner
+  // to stop it when its schedule is revoked during remote preparation.
+  it.each(['active', 'unbound', 'rebound', 'paused', 'deleted', 'takeover'] as const)('checks restored quota ownership after preparation: %s', async phase => {
+    const origin = { kind: 'scheduler', scheduleId: 'daily', scheduleName: 'Daily', runId: 'old-run' } as const;
+    let current = true;
+    let status = 'active';
+    let targetSessionId: string | null = 'session-1';
+    const succeeds = phase === 'active' || phase === 'unbound';
+    const { deps, session } = createDeps({
+      assertQuotaContinuation: createScheduledQuotaDispatchGuard({
+        origin: () => current ? origin : undefined,
+        isScheduleActive: async (_scheduleId, sessionId) => {
+          if (phase === 'takeover') current = false;
+          return isQuotaScheduleCurrent({ status, targetSessionId }, sessionId);
+        },
+        reject: () => { throw new Error('quota continuation cancelled'); },
+      }),
+    });
+    const dispatched = vi.fn();
+    vi.mocked(session.send).mockImplementation(async (_message, opts) => {
+      await opts?.beforeProviderStart?.();
+      await opts?.onAccepted?.();
+      // Match Session.send: acceptance and vision can yield after startup.
+      await Promise.resolve();
+      status = ['takeover', 'rebound', 'unbound'].includes(phase) ? 'active' : phase;
+      targetSessionId = phase === 'rebound' ? 'another-task' : phase === 'unbound' ? null : 'session-1';
+      await opts?.resolveAutoReviewUserIntent?.();
+      dispatched();
+      return { accepted: true };
+    });
+    const sending = createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Continue', undefined, {
+      persistUserMessage: { clientId: 'quota-retry', content: 'Continue' },
+    });
+    if (succeeds) await sending;
+    else await expect(sending).rejects.toThrow('quota continuation cancelled');
+    expect(dispatched).toHaveBeenCalledTimes(succeeds ? 1 : 0);
+  });
   it.each(['ready', 'write-failed', 'cancelled', 'app-revoked'] as const)(
     'waits for the launcher fence and prevents dispatch when %s', async (phase) => {
       const controller = new AbortController();

@@ -112,7 +112,7 @@ export interface ProjectNodeProps {
   onSettings: (project: ProjectNodeData) => void;
   onRenameProject: (project: ProjectNodeData, alias: string) => Promise<void>;
   onSessionClick: SessionClickHandler;
-  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
+  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive') => void;
   onRename: (id: string, title: string) => void;
   onTogglePin: (id: string, currentlyPinned: boolean) => void;
   onMoveSession?: (id: string, target: SessionMoveTarget) => void;

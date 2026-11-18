@@ -1689,7 +1689,8 @@ describe('CodexAgent oneShot Goal ownership', () => {
     MockCodexTransport.onCreate = transport => {
       transport.setMockResponse(Method.TurnStart, { result: { turn: { id: 'one-shot-turn' } } });
     };
-    const pending = agent.oneShot(prompt, { timeoutMs: 2_000 });
+    const onUsage = vi.fn();
+    const pending = agent.oneShot(prompt, { timeoutMs: 2_000, onUsage });
     void pending.catch(() => undefined);
     try {
       await vi.waitFor(() => expect(createdTransports[0]?.lines.some(line =>
@@ -1704,7 +1705,13 @@ describe('CodexAgent oneShot Goal ownership', () => {
       transport.emitMockLine({ method: 'item/completed', params: {
         threadId, turnId: 'one-shot-turn', item: { type: 'agentMessage', id: 'answer', text: 'Bounded result' },
       } });
+      transport.emitMockLine({ method: 'thread/tokenUsage/updated', params: { threadId, turnId: 'one-shot-turn',
+        tokenUsage: { total: { inputTokens: 100, cachedInputTokens: 20, outputTokens: 5, reasoningOutputTokens: 0, totalTokens: 105 },
+          last: { inputTokens: 100, cachedInputTokens: 20, outputTokens: 5, reasoningOutputTokens: 0, totalTokens: 105 } } } });
+      transport.emitMockLine({ method: 'turn/completed', params: { threadId, turn: { id: 'one-shot-turn', status: 'completed', items: [] } } });
       await expect(pending).resolves.toBe('Bounded result');
+      expect(onUsage).toHaveBeenCalledOnce();
+      expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 80, cacheReadTokens: 20, outputTokens: 5 }));
       expect(transport.lines.map(line => JSON.parse(line)).filter(message =>
         message.method === Method.ThreadUnsubscribe)).toEqual([
         expect.objectContaining({ params: { threadId } }),
@@ -20712,12 +20719,19 @@ describe('CodexAgent MCP thread context hooks', () => {
       });
       const tool = { id: 'background-tool', type: 'mcpToolCall', server: 'test', tool: 'wait', arguments: {} };
       handlers.itemStarted!({ threadId: 'start-thread-id', turnId: 'turn-2', item: tool });
-      now = 15_000;
+      now = 13_100; // Usage landed inside the 500ms refresh window; the tool may now stay silent.
       usage('turn-2', 2_000_000, 2_001_230);
-      expect(handle.getUsageSnapshot().tokenSpeed).toBeUndefined();
-      expect(handle.getUsageSnapshot().generationReliable).toBe(false);
+      expect(handle.getUsageSnapshot()).toMatchObject({
+        outputTokens: 1_200, generationDurationMs: 12_000, generationReliable: true,
+        tokenSpeed: { tokens: 1_200, totalOutputTokens: 2_001_200, average: 100, streaming: false },
+      });
+      await waitForExpectation(() => expect(events).toContainEqual(expect.objectContaining({
+        type: 'status', data: expect.objectContaining({
+          tokenSpeed: expect.objectContaining({ totalOutputTokens: 2_001_200, average: 100, streaming: false }),
+        }),
+      })));
       handlers.itemCompleted!({ threadId: 'start-thread-id', turnId: 'turn-2', item: tool });
-      now = 25_000;
+      now = 23_100;
       usage('turn-2', 377, 2_001_617);
       // The unpaired 2M tokens stay out. Nothing in this turn has streamed, so no speed is
       // measured yet and each response still counts over the model time it took.
@@ -20729,7 +20743,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-2', status: 'completed' } });
       await handle.send({ type: 'user', content: 'new user turn' });
       handlers.turnStarted!({ threadId: 'start-thread-id', turn: { id: 'turn-3' } });
-      now = 35_000;
+      now = 33_100;
       usage('turn-3', 377, 2_002_004);
       expect(handle.getUsageSnapshot().tokenSpeed).toMatchObject({ tokens: 377, elapsedMs: 10_000, average: 37.7 });
     } finally {
@@ -36386,6 +36400,53 @@ describe('CodexAgent custom provider context window override', () => {
     await agent.dispose();
   });
 
+  it.each(['recovered', 'second timeout', 'exit unconfirmed'])('bounds local resume recovery: %s', async outcome => {
+    const stallTwice = outcome === 'second timeout';
+    const exitUnconfirmed = outcome === 'exit unconfirmed';
+    const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const resumes: unknown[] = [];
+    let previous: InstanceType<typeof MockCodexTransport> | undefined;
+    MockCodexTransport.onCreate = transport => {
+      if (previous) expect(previous.closed).toBe(true);
+      previous = transport;
+      const write = transport.writeLine.bind(transport);
+      vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+        const request = JSON.parse(line);
+        if (request.method === Method.ThreadResume) {
+          resumes.push(request.params.threadId);
+          if (resumes.length === 1 || stallTwice) return;
+          transport.setMockResponse(Method.ThreadResume, {
+            result: { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' },
+          });
+        }
+        await write(line);
+      });
+    };
+    const agent = new CodexAgent(createDeps({}, { isolateCodexAccountSessions: true }));
+    vi.useFakeTimers();
+    try {
+      const start = agent.startSession({
+        sessionId: 'local-resume-retry', model: 'gpt-5.4', workingDir: '/repo', resumeSessionId: threadId,
+      });
+      if (exitUnconfirmed) MockCodexTransport.closeError = new Error('exit unconfirmed');
+      const result = outcome === 'recovered' ? start.then(h => h.close())
+        : expect(start).rejects.toThrow(exitUnconfirmed ? 'exit unconfirmed' : 'thread/resume timed out');
+      await vi.waitFor(() => expect(resumes).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(60_000);
+      if (!exitUnconfirmed) await vi.waitFor(() => expect(resumes).toHaveLength(2));
+      if (stallTwice) await vi.advanceTimersByTimeAsync(60_000);
+      await result;
+      expect(resumes).toEqual(exitUnconfirmed ? [threadId] : [threadId, threadId]);
+      expect(createdTransports).toHaveLength(resumes.length);
+      expect(createdTransports.flatMap(t => t.lines.map(line => JSON.parse(line).method)))
+        .not.toContain(Method.TurnStart);
+    } finally {
+      MockCodexTransport.closeError = null;
+      vi.useRealTimers();
+      await agent.dispose();
+    }
+  });
+
   it.each(['account', 'custom-context'])('reports confirmed %s host exit after initialize fails', async (kind) => {
     MockCodexTransport.onCreate = (transport) => {
       transport.setMockResponse(Method.Initialize, {
@@ -37063,6 +37124,18 @@ describe('Codex native manual compaction', () => {
     await handle.send({ type: 'user', content: 'continue' });
     expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(1);
     await handle.close();
+  });
+
+  // Unit / engine capability: the native manual compact RPC has no
+  // instructions field. The existing empty-history test only covers no-op.
+  it('reports Codex compact instructions as unsupported before sending a native request', async () => {
+    const { handle, host } = await setup();
+    try {
+      await expect(handle.compactSession!('Keep decisions')).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+      expect(host.request.mock.calls.some(([method]) => method === Method.ThreadCompactStart)).toBe(false);
+    } finally {
+      await handle.close();
+    }
   });
 
   it('reports an empty native compact as a no-op, not success', async () => {

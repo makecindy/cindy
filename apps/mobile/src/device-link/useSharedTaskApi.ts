@@ -3,7 +3,7 @@ import { createSharedTaskApi, SharedTaskScopeChangedError } from '@cindy/device-
 import { useAuth } from '@/auth/AuthContext';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
-import { joinMobileAgentNetSharedTask, requestMobileAgentNetSharedTask } from './agentNetSharing';
+import { isMobileAgentNetPrivateOwnedTask, joinMobileAgentNetSharedTask, requestMobileAgentNetSharedTask } from './agentNetSharing';
 
 export function useSharedTaskApi() {
   const { apiFetch, accountGeneration, deviceId } = useAuth();
@@ -28,7 +28,7 @@ export function useSharedTaskApi() {
       return deviceId ? await requestMobileAgentNetSharedTask(path, options, context, legacy) ?? legacy() : legacy();
     },
     });
-    return { ...api, async join(invitation: string, displayName: string) {
+    return { ...api, isPrivateOwner: isMobileAgentNetPrivateOwnedTask, async join(invitation: string, displayName: string) {
       return await joinMobileAgentNetSharedTask(invitation, displayName, context) ?? api.join(invitation, displayName);
     } };
   }, [apiFetch, accountGeneration, deviceId]);

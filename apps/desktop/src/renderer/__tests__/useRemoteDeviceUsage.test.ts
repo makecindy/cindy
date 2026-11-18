@@ -19,6 +19,8 @@ import { createRemoteDeviceUsageMirror } from '../hooks/remoteDeviceUsageMirror'
 import {
   selectRemoteCodexAccountUsage,
   useRemoteCodexAccountUsage,
+  useRemoteCodexRefreshState,
+  requestRemoteCodexLiveRefresh,
   useRemoteCodexRateLimits,
   requestRemoteCodexRateLimitsRefresh,
   useRemoteClaudeAccountUsage,
@@ -104,6 +106,121 @@ afterEach(() => {
   cleanup();
   vi.clearAllTimers();
   vi.useRealTimers();
+});
+
+// PR #11105 r4609961173, unit: a mounted task must not repeatedly invoke the
+// write-through native quota RPC. Existing polling tests cover Settings only.
+// Advance three minutes with a passive task, then attach/remove Settings and
+// explicitly refresh: shared values must update without a task-owned timer.
+it('shares native quota without polling from passive task consumers', async () => {
+  const response = (usedPercent: number) => ({ providerId: 'openai', account: { planType: 'pro' },
+    rateLimits: { secondary: { usedPercent, windowMinutes: 10080 } } });
+  mocks.invoke.mockResolvedValue(response(4));
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+  const task = renderHook(() => useRemoteCodexAccountUsage('mini', 'openai', { live: true, poll: false }));
+  expect(mocks.invoke).not.toHaveBeenCalled();
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  await flushMicrotasks();
+  await act(async () => { await vi.advanceTimersByTimeAsync(180_000); });
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+  expect(task.result.current?.secondary?.usedPercent).toBe(4);
+  mocks.invoke.mockResolvedValue(response(22));
+  const settings = renderHook(() => useRemoteCodexAccountUsage('mini', 'openai', { live: true }));
+  await flushMicrotasks();
+  expect(task.result.current?.secondary?.usedPercent).toBe(22);
+  mocks.invoke.mockResolvedValue(response(30));
+  await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+  expect(mocks.invoke).toHaveBeenCalledTimes(3);
+  expect(task.result.current?.secondary?.usedPercent).toBe(30);
+  settings.unmount();
+  await act(async () => { await vi.advanceTimersByTimeAsync(180_000); });
+  expect(mocks.invoke).toHaveBeenCalledTimes(3);
+  mocks.invoke.mockResolvedValue(response(42));
+  act(() => requestRemoteCodexLiveRefresh('mini', 'openai'));
+  await flushMicrotasks();
+  expect(mocks.invoke).toHaveBeenCalledTimes(4);
+  expect(task.result.current?.secondary?.usedPercent).toBe(42);
+});
+
+// Issue #11093, unit: real shared reader, with two visible consumers and an old
+// fallback. Existing mirror tests did not cover opening a mounted native reader,
+// its failure indicator, or value/time consistency after recovery.
+it('calibrates shared remote quota on opening and keeps retained observation times honest', async () => {
+  const oldTime = Date.now() - 86_400_000;
+  const old = { secondary: { usedPercent: 4, windowMinutes: 10080 }, updatedAt: oldTime };
+  mocks.invoke.mockImplementation(async (_device, channel) => {
+    if (channel === 'maker:usage:codex-rate-limits') throw new Error('offline');
+    return old;
+  });
+  const first = renderHook(() => ({
+    quota: useRemoteCodexAccountUsage('mini', 'openai', { live: true }),
+    state: useRemoteCodexRefreshState('mini', 'openai'),
+  }));
+  const second = renderHook(() => useRemoteCodexAccountUsage('mini', 'openai', { live: true }));
+  await flushMicrotasks();
+  expect(mocks.invoke).toHaveBeenCalledTimes(2); // one native read + one fallback, shared
+  expect(first.result.current.quota?.updatedAt).toBe(oldTime);
+  expect(first.result.current.state.failed).toBe(true);
+  expect(second.result.current).toBe(first.result.current.quota);
+  await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+  mocks.invoke.mockResolvedValue({ account: { planType: 'pro' }, providerId: 'openai',
+    rateLimits: { secondary: { usedPercent: 22, windowMinutes: 10080 } } });
+  act(() => { requestRemoteCodexLiveRefresh('mini', 'openai'); requestRemoteCodexLiveRefresh('mini', 'openai'); });
+  await flushMicrotasks();
+  expect(mocks.invoke).toHaveBeenCalledTimes(3);
+  const selected = selectRemoteCodexAccountUsage(first.result.current.quota, 'app-server');
+  expect(selected?.secondary?.usedPercent).toBe(22);
+  expect(selected?.updatedAt).toBe(Date.now());
+  expect(first.result.current.state).toEqual({ failed: false, refreshing: false });
+  expect(second.result.current).toBe(first.result.current.quota);
+});
+
+it('backs off failed remote quota reads and recovers only the visible target', async () => {
+  mocks.invoke.mockRejectedValue(new Error('offline'));
+  const first = renderHook(() => ({ quota: useRemoteCodexAccountUsage('mini', 'openai', { live: true }),
+    state: useRemoteCodexRefreshState('mini', 'openai') }));
+  await flushMicrotasks();
+  expect(first.result.current.state.failed).toBe(true);
+  await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+  expect(mocks.invoke).toHaveBeenCalledTimes(4); // next attempt at 60s; then a 120s backoff
+  act(() => mocks.reopenedListeners.forEach(cb => cb({ deviceId: 'other' })));
+  expect(mocks.invoke).toHaveBeenCalledTimes(4);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  act(() => mocks.reopenedListeners.forEach(cb => cb({ deviceId: 'mini' })));
+  expect(mocks.invoke).toHaveBeenCalledTimes(4);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  mocks.invoke.mockResolvedValue(null);
+  act(() => mocks.reopenedListeners.forEach(cb => cb({ deviceId: 'mini' })));
+  await flushMicrotasks();
+  expect(first.result.current).toEqual({ quota: null, state: { failed: false, refreshing: false } });
+});
+
+// PR #11105 r4599742041, unit: the existing hidden-reconnect case did not cover
+// hiding AFTER recovery queued behind a slow native read. No hidden RPC should
+// start; restoring visibility consumes the queued recovery and updates the quota.
+it.each([true, false])('defers queued quota recovery until visible with polling=%s', async poll => {
+  let finish!: (value: unknown) => void;
+  mocks.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const view = renderHook(() => useRemoteCodexAccountUsage('mini', 'openai', { live: true, poll }));
+  act(() => mocks.reopenedListeners.forEach(cb => cb({ deviceId: 'mini' })));
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+  const response = (usedPercent: number) => ({ account: { planType: 'pro' }, providerId: 'openai',
+    rateLimits: { secondary: { usedPercent, windowMinutes: 10080 } } });
+  mocks.invoke.mockResolvedValue(response(22));
+  act(() => finish(response(4)));
+  await flushMicrotasks();
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+  expect(view.result.current?.secondary?.usedPercent).toBe(4);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  await flushMicrotasks();
+  expect(mocks.invoke).toHaveBeenCalledTimes(2);
+  expect(view.result.current?.secondary?.usedPercent).toBe(22);
 });
 
 // Unit r4389934308: a live card's owned recovery queue must be discarded by

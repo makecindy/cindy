@@ -2216,6 +2216,18 @@ describe('moving a task into a group on this computer from the model list (2026-
 // as group suppliers. Previously only a group binding could enter this path.
 describe('supplier process restart', () => {
   const signals = { reason: 'remote_agent_restarted' };
+  // Unit regression: onTurnError used to hand back after restart probes even
+  // when an authorized group target remained. Existing restart cases had no binding.
+  it.each(['offline', 'unavailable'] as const)('relocates a bound task after its restarted executor remains %s', async outcome => {
+    const h = harness({ members: [MINI, STUDIO], row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    h.bindings.set('task', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    h.probe.mockResolvedValue(outcome);
+    await h.service.onTurnError('task', signals, 1);
+    expect(h.row.agentDeviceId).toBe(STUDIO.agentDeviceId);
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+    expect(h.probe).toHaveBeenCalledTimes(outcome === 'offline' ? PROVIDER_GROUP_RECONNECT_MAX_ATTEMPTS + 1 : 1);
+  });
   it('continues on the original computer without a group binding or relocation', async () => {
     const h = harness({ row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
     expect(h.service.mayHandleTurnError('task', signals)).toBe(true);
@@ -2227,8 +2239,64 @@ describe('supplier process restart', () => {
     expect(h.deps.fallback).not.toHaveBeenCalled();
   });
 
+  it.each(['stop', 'close', 'disabled'] as const)('does not relocate a bound restarted task after %s', async outcome => {
+    const h = harness({ members: [MINI, STUDIO], autoSwitch: outcome !== 'disabled',
+      row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    h.bindings.set('task', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    h.probe.mockImplementation(async () => {
+      if (outcome === 'stop') h.service.noteUserAction('task');
+      if (outcome === 'close') h.deps.leaseRecovery.mockReturnValue(null);
+      return 'unavailable';
+    });
+    await h.service.onTurnError('task', signals, 1);
+    expect(h.row.agentDeviceId).toBe(MINI.agentDeviceId);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledTimes(outcome === 'disabled' ? 1 : 0);
+  });
+
+  // Closing clears the restart candidate but deliberately retains its recovery
+  // lease. Cover the async selection/handoff gap, absent from probe-only cases.
+  it.each(['selection', 'handoff', 'own-close'] as const)('preserves the restart close fence during %s', async phase => {
+    const h = harness({ members: [MINI, STUDIO], row: { agentDeviceId: MINI.agentDeviceId, providerId: MINI.providerId } });
+    h.bindings.set('task', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    h.probe.mockResolvedValue('unavailable');
+    if (phase === 'selection') h.deps.isFailoverEligible.mockImplementation(async (_id, context) => {
+      if (context.kind === 'failure') h.deps.leaseRecovery.mockReturnValue(null);
+      return true;
+    });
+    const switchAgentLocation = vi.fn<ProviderGroupServiceDeps['switchAgentLocation']>(async (_id, route, options) => {
+      if (phase === 'handoff') h.deps.leaseRecovery.mockReturnValue(null);
+      if (!options?.isCurrent?.()) throw new Error('provider group: superseded by user action');
+      options.onRelocationMutationStart?.();
+      h.deps.leaseRecovery.mockReturnValue(null);
+      expect(options.isCurrent()).toBe(true);
+      h.row.agentDeviceId = route.agentDeviceId;
+      h.row.providerId = route.providerId;
+    });
+    const service = createProviderGroupService({ ...h.deps, switchAgentLocation });
+    await service.onTurnError('task', signals, 1);
+    expect(h.row.agentDeviceId).toBe(phase === 'own-close' ? STUDIO.agentDeviceId : MINI.agentDeviceId);
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(phase === 'own-close' ? 1 : 0);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+  });
+
   // Unit: the persisted share:<id> route identifies O; only a live direct
   // handle can probe its pinned M. Expiry during the probe must cancel recovery.
+  it('does not arm a guest switch token when closed while requesting it', async () => {
+    const route = 'share:restart-close';
+    const h = harness({ row: { agentDeviceId: route, providerId: 'shared-provider' } });
+    const guestSwitch = createProviderGroupGuestSwitch();
+    const direct = { ownerRoute: route, probeReconnect: async () => 'unavailable' as const,
+      requestSwitch: async () => { h.deps.leaseRecovery.mockReturnValue(null); return 'late-token'; } };
+    const service = createProviderGroupService({ ...h.deps, guestSwitch, directGuestSession: () => direct });
+    await service.onTurnError('task', signals, 1);
+    expect(guestSwitch.takeForOpen('task')).toBeUndefined();
+    expect(guestSwitch.hasOffer('task')).toBe(false);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+  });
+
   it.each(['returns', 'expires'] as const)('probes the direct executor instead of its share owner: %s', async outcome => {
     const SHARE_ROUTE = 'share:direct-restart';
     let live = true;

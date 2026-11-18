@@ -149,6 +149,7 @@ export interface HomeDisplayMenuState {
   teammateFilter?: HomeTeammateFilter;
   vendorFilter: HomeVendorFilter;
   lastActivityFilter: HomeLastActivityFilter;
+  taskListMode?: 'tasks' | 'inbox';
   viewMode: HomeListViewMode;
   taskInfoFields: readonly HomeTaskInfoField[];
   showCollapsedTeammateAvatars?: boolean;
@@ -316,6 +317,10 @@ export function buildHomeDisplayPullDownActions(input: {
   );
 
   return [
+    section("mode", [submenu("taskListMode", t(`${MENU}.taskListMode.heading`),
+      t(`${MENU}.taskListMode.${state.taskListMode ?? 'tasks'}`), "tray",
+      (['tasks', 'inbox'] as const).map(mode => checkable(`taskListMode.${mode}`,
+        t(`${MENU}.taskListMode.${mode}`), (state.taskListMode ?? 'tasks') === mode)))]),
     section("organize", organize),
     section("narrow", [
       {
@@ -382,6 +387,8 @@ export function homeDisplayActionPatch(
       return HOME_LAST_ACTIVITY_FILTERS.includes(value as HomeLastActivityFilter)
         ? { lastActivityFilter: value as HomeLastActivityFilter }
         : null;
+    case "taskListMode":
+      return value === 'tasks' || value === 'inbox' ? { taskListMode: value } : null;
     case "view":
       return VIEW_OPTIONS.includes(value as HomeListViewMode) ? { viewMode: value as HomeListViewMode } : null;
     case "taskInfo":

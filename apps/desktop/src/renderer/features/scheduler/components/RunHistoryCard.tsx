@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils';
 import * as sessionService from '@/lib/sessionService';
 import { toast } from '@/lib/toast';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { isScheduleActionExpired, scheduleFailureDetails } from '@cindy/maker-shared/schedule-model';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import type { AgentKind, RunStatus, ScheduleRun } from '@cindy/maker-scheduler';
 import type { SessionReference } from '../../../../shared/sessionReference';
@@ -148,8 +149,11 @@ export function RunHistoryCard({
   sessionReference,
 }: Props) {
   const { t, i18n } = useTranslation();
-  const errorCode = run.errorMsg ? parseAgentErrorCode(run.errorMsg)?.code : undefined;
-  const errorKey = errorCode ? `chat.remoteError.${errorCode}` : undefined;
+  const errorDetail = run.errorMsg?.replace(/^scheduled task auto-resume failed: /, '');
+  const errorCode = errorDetail ? parseAgentErrorCode(errorDetail)?.code : undefined;
+  const errorKey = isScheduleActionExpired(run.errorMsg)
+    ? `chat.unreadFailedScheduleBanner.${run.failureRecovered ? 'actionRecovered' : 'actionExpired'}`
+    : errorCode ? `chat.remoteError.${errorCode}` : undefined;
   const navigate = useNavigate();
   const isLegacySessionRun = run.id.startsWith(LEGACY_SESSION_RUN_ID_PREFIX);
   const showError =
@@ -368,7 +372,7 @@ export function RunHistoryCard({
             prefillErrorDiagnosisDraft(buildErrorDiagnosisPrompt(t,
               run.sessionId ? buildSessionDeepLink(run.sessionId) : null, {
                 message: errorKey && i18n.exists(errorKey) ? t(errorKey) : t('chat.unreadFailedScheduleBanner.text'),
-                details: `scheduleId: ${run.scheduleId}\nrunId: ${run.id}\nfiredAt: ${new Date(run.firedAt).toISOString()}\n${run.errorMsg}`,
+                details: scheduleFailureDetails({ ...run, runId: run.id }),
               }));
             navigate('/cc-agent/new');
           }}

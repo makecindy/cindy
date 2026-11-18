@@ -376,6 +376,7 @@ export interface SessionsSetTerminalStatusArgs {
   status: 'archived' | 'deleted';
   /** Internal automatic housekeeping only; never accepted as renderer metadata. */
   idleArchiveCutoff?: number;
+  unusedOnly?: boolean;
 }
 
 export interface SessionsSetTerminalStatusResult extends Omit<SessionsSetStatusResultItem, 'status'> {

@@ -318,13 +318,15 @@ export function useSessionGroupArchive({
           checkboxLabel: t('ccAgent.sidebar.projectAction.archiveOnRemove', {
             count: candidates.length,
           }),
-          checkedDescription: [
+          checkedOverrides: {
+            description: [
             t('ccAgent.sidebar.projectAction.removedArchived', { count: candidates.length }),
             skippedTasks,
             keepFiles,
             scheduleWarning,
           ].filter(Boolean).join(' '),
-          checkedConfirmText: t('ccAgent.sidebar.projectAction.removeAndArchive'),
+            confirmText: t('ccAgent.sidebar.projectAction.removeAndArchive'),
+          },
         });
         if (!choice.ok || !isDataOwnerGenerationCurrent(owner)) return;
         if (!choice.checked) {

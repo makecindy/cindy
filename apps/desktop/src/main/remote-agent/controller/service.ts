@@ -55,7 +55,7 @@ import {
 } from './projectFiles';
 import type { LocalMcpTarget } from './router';
 import { RemoteAgentPoller, RemoteAgentRunClient, RemoteAgentRemoteError, remoteAgentInvoker } from './runClient';
-import { decideProviderGroupFailure } from '../../provider-group/failurePolicy.js';
+import { decideProviderGroupFailure, ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy.js';
 import { registerPendingRemoteStart, startRemoteAgentSession, type PreparedRemoteMcp } from './startRemote';
 import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, sharedTaskLeaseDeadline,
   trackLiveSharedTaskTarget, rememberSharedTaskAuthorization, forgetSharedTaskAuthorization,
@@ -1037,7 +1037,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       // M proved that it never started a process or has stopped it, and
       // startRemote has finished G's local cleanup. Preserve that evidence as
       // a local class so Maker releases this attempt's guards before reopening.
-      if (confirmedStoppedStartup(error)) {
+      if (confirmedStoppedStartup(error) || error instanceof ProviderGroupUsageLimitError) {
         throw new AgentStartupStoppedError(error);
       }
       throw error;

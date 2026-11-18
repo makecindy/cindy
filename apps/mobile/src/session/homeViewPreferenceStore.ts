@@ -40,6 +40,7 @@ export interface HomeViewPreferences {
   vendorFilter: HomeVendorFilter;
   lastActivityFilter: HomeLastActivityFilter;
   /** 缺省列表(带预览行):手机首页一直是这个样子。 */
+  taskListMode?: 'tasks' | 'inbox';
   viewMode: HomeListViewMode;
   /** 任务行右侧信息;顺序 = 勾选先后。 */
   taskInfoFields: HomeTaskInfoField[];
@@ -60,6 +61,7 @@ export interface HomeViewPreferencePatch {
   teammateFilter?: { owner: string; value: HomeTeammateFilter };
   vendorFilter?: HomeVendorFilter;
   lastActivityFilter?: HomeLastActivityFilter;
+  taskListMode?: 'tasks' | 'inbox';
   viewMode?: HomeListViewMode;
   taskInfoFields?: HomeTaskInfoField[];
   selectedDevice?: { deviceId: string; name: string } | null;
@@ -118,6 +120,7 @@ async function writeHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
   assign('statusFilter', patch.statusFilter);
   assign('projectOrder', patch.projectOrder);
   assign('manualProjectOrder', patch.manualProjectOrder ? [...patch.manualProjectOrder] : undefined);
+  assign('taskListMode', patch.taskListMode);
   assign('viewMode', patch.viewMode);
   assign('taskInfoFields', patch.taskInfoFields ? [...patch.taskInfoFields] : undefined);
   for (const field of ['projectFilter', 'teammateFilter'] as const) {
@@ -180,6 +183,7 @@ function emptyPreferences(): HomeViewPreferences {
     projectFilterOwner: '',
     vendorFilter: 'all',
     lastActivityFilter: 'all',
+    taskListMode: 'tasks',
     viewMode: 'list',
     taskInfoFields: [...DEFAULT_HOME_TASK_INFO_FIELDS],
   };
@@ -211,6 +215,7 @@ function normalizeStoredPreferences(value: unknown): HomeViewPreferences {
     projectFilterOwner: readString(record.projectFilterOwner) ?? '',
     vendorFilter: normalizeVendorFilter(record.vendorFilter),
     lastActivityFilter: normalizeLastActivityFilter(record.lastActivityFilter),
+    taskListMode: record.taskListMode === 'inbox' ? 'inbox' : 'tasks',
     viewMode: normalizeViewMode(record.viewMode),
     taskInfoFields: normalizeTaskInfoFields(record.taskInfoFields),
   };

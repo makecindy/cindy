@@ -168,37 +168,65 @@ async function residualFilesCovered(
 export async function requestWorktreeRecycle(
   sessionId: string,
   resourcePaths: readonly string[] = [],
-  disposition: 'recycle' | 'keep' = 'recycle',
+  disposition?: true | 'keep',
 ): Promise<void> {
   const own = store.get(sessionId);
   if (!own && !resourcePaths.length) return;
   const paths = new Set(await Promise.all(resourcePaths.map(physicalWorktreeKey)));
+  const discardChanges = disposition === true;
+  if (discardChanges && (!own || !paths.has(await physicalWorktreeKey(own.path)))) return;
   const keep = disposition === 'keep';
   const candidates = own && (!keep || !paths.size) ? [own] : store.getAll();
   for (const meta of candidates) {
     if (meta.ephemeral && !keep) continue;
     if (meta.sessionId !== sessionId && !paths.has(await physicalWorktreeKey(meta.path))) continue;
     await withWorktreeResourceLock(meta.path, async () => {
-      const generation = worktreeGeneration(meta);
-      if (worktreeGeneration(store.get(meta.sessionId) ?? meta) !== generation || await hasOtherGeneration(meta)) {
-        if (keep) throw new Error('Worktree registration changed while preserving files');
-        return;
-      }
+      const registered = store.get(meta.sessionId);
+      if (keep && (!registered || registered.pendingSessionTransfer || worktreeGeneration(registered) !== worktreeGeneration(meta) || await hasOtherGeneration(meta)))
+        throw new Error('Worktree registration changed while preserving files');
+      if (discardChanges && (!registered || registered.pendingSessionTransfer)) return;
+      if (worktreeGeneration(registered ?? meta) !== worktreeGeneration(meta) || await hasOtherGeneration(meta)) return;
       const previous = await readRecycleRecord(meta.path);
-      const current = previous?.generation === generation && previous.phase !== 'restored' ? previous : null;
-      if (current && !keep) return;
-      if (keep && current && ['removing', 'restoring'].includes(current.phase))
-        throw new Error('Worktree files are being moved');
-      if (current?.phase === 'removed') return;
-      const record = current ?? await newRecycleRecord(meta);
-      if (!current) record.directoryIdentity = (await directoryIdentity(meta.path)) ?? undefined;
       if (keep) {
-        // Persist the same keep decision as the worktree controls before changing task status.
+        const current = previous?.generation === worktreeGeneration(meta) && previous.phase !== 'restored' ? previous : null;
+        if (current && ['removing', 'restoring'].includes(current.phase)) throw new Error('Worktree files are being moved');
+        if (current?.phase === 'removed') return;
+        const record = current ?? await newRecycleRecord(meta);
+        if (!current) record.directoryIdentity = (await directoryIdentity(meta.path)) ?? undefined;
+        delete record.discardRecovery;
         record.retryPolicy = { state: 'kept', failures: 0, failedWorkMs: 0 };
         record.reason = 'user-kept';
         record.attempts = 0;
         record.nextAttemptAt = 0;
+        await writeRecycleRecord(record);
+        return;
       }
+      if (previous?.generation === worktreeGeneration(meta) && previous.phase !== 'restored') {
+        if (discardChanges && (previous.phase === 'pending' || previous.phase === 'snapshotted')) {
+          // Freeze the discard decision to the contents at archive time. If a borrower
+          // or an editor changes them before removal, the later contents stay recoverable.
+          if (meta.quarantinePath || !previous.directoryIdentity
+            || await directoryIdentity(meta.path) !== previous.directoryIdentity) return;
+          await assertManagedResourcePath(meta, store.getAllPaths());
+          await assertWorktreeGitIdentity(meta);
+          const superseded = previous.snapshot;
+          previous.snapshot = await captureWorktreeContent(
+            meta.path, `refs/cindy/worktree-recovery/${previous.id}/${randomUUID()}`, { includeUntracked: true },
+          );
+          previous.archive = undefined;
+          previous.phase = 'snapshotted';
+          previous.discardRecovery = true;
+          await writeRecycleRecord(previous);
+          if (superseded) await releaseSnapshotRef(meta.baseRepo, superseded);
+        } else if (!discardChanges && own && previous.discardRecovery) {
+          delete previous.discardRecovery;
+          await writeRecycleRecord(previous);
+        }
+        return;
+      }
+      if (discardChanges) return;
+      const record = await newRecycleRecord(meta);
+      record.directoryIdentity = (await directoryIdentity(meta.path)) ?? undefined;
       await writeRecycleRecord(record);
     });
   }
@@ -251,9 +279,7 @@ async function recycleManagedWorktreeInSlot(meta: WorktreeMeta, options: Managed
       const identity = await directoryIdentity(meta.path);
       if (identity === null) {
         // Nothing left to delete, so other references cannot keep this request waiting.
-        record.phase = 'removed';
-        record.reason = undefined;
-        await writeRecycleRecord(record);
+        await finishRemoval(record, record.phase === 'removing');
         await gitExec(['worktree', 'prune'], meta.baseRepo).catch(() => undefined);
         await options.onRemoved?.();
         if (await canRemove()) await unregisterResource(meta);
@@ -285,6 +311,7 @@ async function recycleManagedWorktreeInSlot(meta: WorktreeMeta, options: Managed
         let superseded: WorktreeRecycleRecord['snapshot'];
         if (!record.snapshot || !(await worktreeContentMatches(meta.path, record.snapshot))) {
           superseded = record.snapshot;
+          delete record.discardRecovery;
           record.snapshot = await captureWorktreeContent(
             meta.path, `refs/cindy/worktree-recovery/${record.id}/${randomUUID()}`, { includeUntracked: true },
           );
@@ -344,9 +371,7 @@ async function recycleManagedWorktreeInSlot(meta: WorktreeMeta, options: Managed
       }
       if (await directoryIdentity(meta.path) !== null) return defer('directory-still-present');
       await gitExec(['worktree', 'prune'], meta.baseRepo);
-      record.phase = 'removed';
-      record.reason = undefined;
-      await writeRecycleRecord(record);
+      await finishRemoval(record, true);
       await options.onRemoved?.();
       await unregisterResource(meta);
       return true;
@@ -354,6 +379,19 @@ async function recycleManagedWorktreeInSlot(meta: WorktreeMeta, options: Managed
       return defer(recycleFailureReason(error));
     }
   }));
+}
+
+async function finishRemoval(record: WorktreeRecycleRecord, removedByCindy: boolean): Promise<void> {
+  if (removedByCindy && record.discardRecovery && record.snapshot) {
+    const { ref, commit } = record.snapshot;
+    record.discardedSnapshot = { ref, commit };
+    delete record.snapshot;
+  }
+  delete record.discardRecovery;
+  record.phase = 'removed';
+  record.reason = undefined;
+  await writeRecycleRecord(record);
+  if (record.discardedSnapshot) await releaseSnapshotRef(record.meta.baseRepo, record.discardedSnapshot);
 }
 
 async function unregisterResource(meta: WorktreeMeta): Promise<void> {

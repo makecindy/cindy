@@ -37,13 +37,11 @@ import { InteractionPromptSlot } from '@/components/interaction-portal';
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { useConfirmTaskArchive } from '../hooks/useConfirmTaskArchive';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
-import { fetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
-import {
-  archiveScheduleWarning,
-  loadActiveBoundScheduleNames,
-} from '@/features/scheduler/lib/archiveScheduleWarning';
+import { resolveWorktreeRemovalPreflight } from '@/lib/worktreeRemovalWarning';
+import { loadActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
 import * as sessionService from '@/lib/sessionService';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
@@ -98,7 +96,8 @@ function WorkdirBrowseContent({ requestedDeviceId }: { requestedDeviceId: string
   // Resolve workdir from session list (already cached in this feature's
   // shared sessions hook — no extra IPC).
   const sessionsHook = useCCSessions({ includeArchived: 'all' });
-  const { confirm: confirmDialog, confirmThree } = useConfirmDialog();
+  const { confirmThree } = useConfirmDialog();
+  const confirmTaskArchive = useConfirmTaskArchive();
   // 当前 active 文件对应的 FileBodyView 命令式句柄。关 tab 前用它探测
   // dirty / 触发 save。非 active tab 不挂载 FileBodyView,因此天然只能拿到
   // 当前文件的状态 —— 这正是我们要拦截的范围(只有正在编辑的文件可能丢内容)。
@@ -355,28 +354,25 @@ function WorkdirBrowseContent({ requestedDeviceId }: { requestedDeviceId: string
         (await loadActiveBoundScheduleNames([
           { id: closingId, deviceLinkDeviceId: closing?.deviceLinkDeviceId },
         ])).get(closingId) ?? [];
-      const dirtyWorktree = await fetchDirtyWorktreeForRemoval(
-        closingId,
-        closing?.deviceLinkDeviceId,
+      const preflight = await resolveWorktreeRemovalPreflight(closingId, closing?.deviceLinkDeviceId);
+      const confirmed = await confirmTaskArchive(
+        preflight,
+        scheduleNames,
+        {
+          title: closingTitle,
+          description: t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }),
+        },
       );
-      const ok = await confirmDialog({
-        title: t('ccAgent.workdirBrowse.archiveSession.title'),
-        description: [
-          t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }),
-          dirtyWorktree ? t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning') : '',
-          archiveScheduleWarning(t, scheduleNames),
-        ]
-          .filter(Boolean)
-          .join(' '),
-        confirmText: t('ccAgent.workdirBrowse.archiveSession.confirm'),
-        cancelText: t('ccAgent.workdirBrowse.archiveSession.cancel'),
-      });
-      if (!ok) return;
+      if (!confirmed) return;
 
       makerChatStore.closeSessionQuery(closingId);
 
       try {
-        await sessionService.setStatus(closingId, 'archived');
+        if (confirmed === 'discard') {
+          await sessionService.setStatus(closingId, 'archived', undefined, true);
+        } else {
+          await sessionService.setStatus(closingId, 'archived');
+        }
       } catch (err) {
         log.error('archive session in doc mode failed', err);
         toast.error(t('ccAgent.workdirBrowse.archiveSession.failed'));
@@ -400,7 +396,7 @@ function WorkdirBrowseContent({ requestedDeviceId }: { requestedDeviceId: string
         }
       }
     },
-    [confirmDialog, navigate, searchParams, sessionId, sessionsHook, workdir, t],
+    [confirmTaskArchive, navigate, searchParams, sessionId, sessionsHook, t],
   );
 
   // 双击 SessionTabsBar 上的 tab 改 title。乐观先 patchLocal(列表顺序不变),
