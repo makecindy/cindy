@@ -1284,6 +1284,39 @@ describe("remote desktop viewport", () => {
     expect(r.width).toBe("400px");
     expect(r.left).toBe("0px");
   });
+  // Unit: an off-center pinch crosses fit without lifting either finger.
+  // Compare actual rendered positions on both sides, including the return trip.
+  it("keeps the touch picture continuous across fit during an off-center pinch", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mode", mode: "touch" });
+    const move = (center: number, span: number) => {
+      v.pointer("pointermove", 1, center - span / 2, 260);
+      v.pointer("pointermove", 2, center + span / 2, 260);
+      v.frame(); v.frame(40);
+    };
+    v.pointer("pointerdown", 1, 100, 260);
+    v.pointer("pointerdown", 2, 300, 260);
+    move(200, 100);
+    v.pointer("pointerup", 1, 150, 260);
+    v.pointer("pointerup", 2, 250, 260);
+    v.frame(400);
+
+    v.pointer("pointerdown", 1, 60, 260);
+    v.pointer("pointerdown", 2, 140, 260);
+    const style = v.elements.image.style;
+    move(100, 158.4);
+    expect(parseFloat(style.width)).toBeCloseTo(396);
+    expect(parseFloat(style.left)).toBeCloseTo(2);
+    move(100, 161.6);
+    expect(parseFloat(style.width)).toBeCloseTo(404);
+    expect(Math.abs(parseFloat(style.left))).toBeLessThan(4);
+    move(120, 208);
+    move(125, 161.6);
+    expect(Math.abs(parseFloat(style.left))).toBeLessThan(4);
+    move(125, 158.4);
+    expect(parseFloat(style.left)).toBeCloseTo(2);
+  });
   // Unit: a phone touch drag at fit used to leave the picture off-center.
   // The same drag must still reach another part of a magnified desktop.
   it("pans in touch mode only after enlarging the desktop", () => {

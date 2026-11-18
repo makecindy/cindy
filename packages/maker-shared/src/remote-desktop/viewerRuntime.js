@@ -1410,6 +1410,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           (Math.min(maxZoom, multi.zoom) * next.d) / Math.max(1, multi.d),
         ),
       );
+      if (touchAtFit() && requestedZoom > 1) {
+        // The centered picture has moved under the fingers since the pinch
+        // started. Anchor further enlargement to the picture at fit.
+        zoom = 1;
+        multi.anchor = point(next, false);
+      }
       zoom = requestedZoom;
       const r = layout();
       fx =
@@ -1418,6 +1424,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       fy =
         multi.anchor.y +
         (viewportHeight() / 2 + verticalOffset(r.height) - next.y) / r.height;
+      if (!config.desktop && mode === "touch" && zoom > 1) {
+        // Bring any pan back continuously over the same near-fit range used
+        // on release. A pinch starting inside that range starts at full weight.
+        const range = multi.zoom > 1 ? Math.min(0.2, multi.zoom - 1) : 0.2;
+        const weight = Math.min(1, (zoom - 1) / range);
+        fx = 0.5 + (fx - 0.5) * weight;
+        fy = 0.5 + (fy - 0.5) * weight;
+      }
       const moved = layout(),
         b = panBounds(moved);
       place(
