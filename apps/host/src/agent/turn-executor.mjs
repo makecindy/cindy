@@ -532,6 +532,10 @@ export function createTurnExecutor(deps) {
     const check = turn.check;
     turn.preparing = (async () => {
       await sendOpts[MCP_APP_MESSAGE_GUARD]?.();
+      check();
+      // The send lock is held. Read the committed route and native identity below.
+      await deps.applyPendingAgentSwitch?.(sessionId, sendOpts.signal);
+      check();
       const stored = await readExecutionSession(sessionId);
       const queuedPlan = createOpts.planMode;
       await reconcileCreateOptsWithDb(sessionId, createOpts);

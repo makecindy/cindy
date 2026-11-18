@@ -616,6 +616,19 @@ export function shouldRebuildForModelWindowSwitch(input: {
   );
 }
 
+interface ModelWindowSwitchTarget {
+  contextWindow: number;
+  verifiedHandoffWindow?: number | null;
+  recheckTargetPressure?: boolean;
+  confirmedTargetPressure?: boolean;
+  onConfirmationRequired?: (contextTokens: number) => void;
+  assertCanCommit?: () => void;
+  beforeClose?: () => void;
+  /** A host can commit the new route and retire the old native ID atomically. */
+  replacementRoute?: NativeSessionRecoveryTarget;
+  signal?: AbortSignal;
+}
+
 export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps): {
   claim(sessionId: string, turnIdentity?: RecoveryTurnIdentity, recoverable?: boolean): OverflowClaimResult;
   cancelRecovery(sessionId: string): void;
@@ -636,15 +649,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   ): Promise<void>;
   prepareModelWindowSwitch(
     sessionId: string,
-    target: {
-      contextWindow: number;
-      verifiedHandoffWindow?: number | null;
-      recheckTargetPressure?: boolean;
-      confirmedTargetPressure?: boolean;
-      onConfirmationRequired?: (contextTokens: number) => void;
-      assertCanCommit?: () => void;
-      beforeClose?: () => void;
-    },
+    target: ModelWindowSwitchTarget,
   ): Promise<ModelWindowSwitchPreparationResult>;
 } {
   const inFlight = new Map<string, AbortController | undefined>();
@@ -966,16 +971,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
 
   const runPrepareModelWindowSwitch = async (
     sessionId: string,
-    target: {
-      contextWindow: number;
-      verifiedHandoffWindow?: number | null;
-      recheckTargetPressure?: boolean;
-      confirmedTargetPressure?: boolean;
-      onConfirmationRequired?: (contextTokens: number) => void;
-      assertCanCommit?: () => void;
-      beforeClose?: () => void;
-    },
+    target: ModelWindowSwitchTarget,
   ): Promise<ModelWindowSwitchPreparationResult> => {
+    target.signal?.throwIfAborted();
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     if (!sessionRow || sessionRow.status === 'deleted' || !sessionRow.sdkSessionId) {
@@ -1096,6 +1094,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       null;
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
     target.assertCanCommit?.();
+    target.signal?.throwIfAborted();
     target.beforeClose?.();
     if (live) await deps.closeSession(sessionId);
     target.assertCanCommit?.();
@@ -1111,6 +1110,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       ...(await companionRecall(sessionId, isBotChatContext(sessionRow))),
     });
     target.assertCanCommit?.();
+    target.signal?.throwIfAborted();
     await deps.commitRebuild(sessionId, handoff, {
       reason: 'model-window-switch',
       handoffCoverage,
@@ -1119,7 +1119,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       sourceModel: sessionRow.model ?? null,
       sourceProviderId: sessionRow.providerId ?? null,
       expectedClearedAt: sessionRow.clearedAt,
-    });
+      ...(target.replacementRoute ? {
+        replacementRoute: { ...target.replacementRoute, expectedSdkSessionId: sessionRow.sdkSessionId },
+      } : {}),
+    }, ...(target.signal ? [target.signal] : []));
     deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
     deps.onRebuilt?.(sessionId);
     deps.log.info('model window shrink rebuilt native context before runtime switch', {

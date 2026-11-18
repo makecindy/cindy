@@ -2446,6 +2446,7 @@ function CCAgentSessionContent({
   const canSwitchToClaudeSubscription = useMemo(() => {
     if (
       remoteDeviceId ||
+      session?.deviceLinkDeviceId ||
       agentDeviceId ||
       session?.remoteHostId ||
       session?.agentKind !== 'cc' ||
@@ -2457,7 +2458,7 @@ function CCAgentSessionContent({
       (provider) =>
         provider.id === 'anthropic' && providerOffersModel(provider, session.model, 'claude-code'),
     );
-  }, [localProviders, remoteDeviceId, agentDeviceId, session?.agentKind, session?.model, session?.remoteHostId]);
+  }, [localProviders, remoteDeviceId, agentDeviceId, session?.agentKind, session?.model, session?.remoteHostId, session?.deviceLinkDeviceId]);
   /**
    * 余额不足横幅的「查看余额」出口 —— 只在计费面对当前账号可见时提供（cloud +
    * personal，与设置页「用量和计费」同一判据）。org / local / 未登录账号在 Cindy 里

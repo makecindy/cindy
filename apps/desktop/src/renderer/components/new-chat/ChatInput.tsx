@@ -13,7 +13,8 @@ import {
   type RefObject,
   type ReactNode,
 } from 'react';
-import { isSharedTaskPeer } from '@cindy/device-link';
+import { isScopedPeer, isSharedTaskPeer } from '@cindy/device-link';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useNavigate } from 'react-router-dom';
 import { buildLocalSkillPathRoute } from '@/features/skillhub/lib/localRoutes';
 import { Folder, MessageSquarePlus, Mic, TriangleAlert, X } from 'lucide-react';
@@ -2052,6 +2053,10 @@ export function ChatInput({
     deviceLinkDeviceId ? 'codex' : null,
     deviceLinkDeviceId ?? undefined,
   );
+  const hostSupportsRemoteModelWindowRebuild = !!deviceLinkDeviceId && !isScopedPeer(deviceLinkDeviceId) &&
+    !remoteHostId && !isProviderShareAgentDeviceId(agentDeviceId) && !(agentDeviceId && runtimeAgentKind === 'pi') &&
+    (runtimeAgentKind === 'pi' ? piCaps : hostCcCaps)
+      .capabilities?.supportsRemoteModelWindowRebuild === true;
   const ccSupportsSessionAgentSwitch =
     hostCcCaps.capabilities?.supportsSessionAgentSwitch === true &&
     hostCcCaps.capabilities.supportsSessionAgentSwitchCas === true;
@@ -7249,7 +7254,8 @@ export function ChatInput({
         !stagingSameAgentSelection &&
         remoteDeviceId &&
         runtimeAgentKind === 'pi' &&
-        remotePiWindowGuardSupported
+        remotePiWindowGuardSupported &&
+        !hostSupportsRemoteModelWindowRebuild
       ) {
         return true;
       }
@@ -7343,6 +7349,11 @@ export function ChatInput({
         (remoteHostId || remoteDeviceId) &&
         (verdict.level === 'danger' || verdict.level === 'overflow')
       ) {
+        if (!requireDestructiveConfirmation && hostSupportsRemoteModelWindowRebuild &&
+            remoteDeviceId === deviceLinkDeviceId) {
+          toast.warning(t('newChat.chatInput.modelSwitchContextGuard.condensedToast'), { duration: 4000 });
+          return true;
+        }
         toast.error(
           t('newChat.chatInput.modelSwitchContextGuard.overflowDescriptionRemote', vars),
           { duration: 5000 },
@@ -7374,6 +7385,7 @@ export function ChatInput({
       runtimeAgentKind,
       deviceLinkDeviceId,
       piCaps.capabilities,
+      hostSupportsRemoteModelWindowRebuild,
     ],
   );
 
@@ -7498,12 +7510,13 @@ export function ChatInput({
             ? requestedAgentDeviceId
             : undefined;
         };
-        // Same-Agent Orca picks stage instead of calling SET_MODEL. Keep its window
-        // preflight before registration, including same-id provider changes. Effort/
-        // Fast edits of an already selected route reuse its window acknowledgement.
+        // Orca and capable owner-controlled hosts stage same-Harness picks. Keep
+        // the window hint before registration, including same-id provider changes.
+        // Effort/Fast edits of an already selected route do not need another hint.
         // Moving the Agent to another computer starts a fresh session with a handoff,
         // so the current window does not carry over and needs no preflight.
-        if (sessionOrcaRole && resolveRelocateTo() === undefined && targetAgentKind === runtimeAgentKind &&
+        if ((sessionOrcaRole || hostSupportsRemoteModelWindowRebuild) && resolveRelocateTo() === undefined &&
+            targetAgentKind === runtimeAgentKind &&
             !overrides?.axesOnly &&
             (targetAgentKind !== currentModelAgentKind || newModelId !== activeModel ||
               providerId !== effectiveSourceId || makerChatStore.getAgentSwitchIntent(sourceSessionId))) {
@@ -7824,6 +7837,7 @@ export function ChatInput({
       activeModel,
       effectiveSourceId,
       confirmModelSwitchContextGuard,
+      hostSupportsRemoteModelWindowRebuild,
       activeEffort,
       resolveModelEfforts,
       getRememberedEffort,

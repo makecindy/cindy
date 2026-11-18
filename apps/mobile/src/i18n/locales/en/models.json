@@ -46,6 +46,7 @@
     }
   },
   "contextWindowSwitch": {
+    "condensedToast": "Earlier parts of the conversation will be condensed for the new model. Your full conversation history stays available.",
     "remoteTitle": "This remote task can't switch models safely",
     "remoteDescription": "This remote task already uses {{used}} / {{total}} of the smaller model's context (about {{pct}}%), so Cindy cannot switch safely. Keep the current model or start a new task before choosing this model.",
     "cancel": "Keep this model"

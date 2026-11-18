@@ -423,6 +423,8 @@ export interface PendingAgentSwitchIntent {
   cindyAutoRelocation?: { fromProviderId: string; targetProviderId: string };
   /** SET_MODEL intent: apply the route without a cross-engine handoff. */
   sameAgentSelection?: boolean;
+  /** Set by the host at selection time. Never projected or accepted from IPC. */
+  deviceLinkModelSelectionOrigin?: 'owner' | 'scoped';
   targetAgentKind: AgentKind;
   model: string;
   providerId: string | null | undefined;

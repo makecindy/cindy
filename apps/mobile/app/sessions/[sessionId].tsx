@@ -2789,6 +2789,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const composerSwitchesAgent = composerDisplayAgentKind !== sessionAgentKind;
   const sessionAgentSwitchSupported = !!currentSession
     && supportsMobileSessionAgentSwitch(currentSession, capabilities);
+  const hostSupportsRemoteModelWindowRebuild = !!deviceId && !isScopedPeer(deviceId) &&
+    !currentSession?.remoteHostId && !isProviderShareAgentDeviceId(currentSession?.agentDeviceId) &&
+    !(currentSession?.agentDeviceId && sessionAgentKind === 'pi') &&
+    capabilities?.supportsRemoteModelWindowRebuild === true;
+
+  const modelSelectionUsesWindowIntent = hostSupportsRemoteModelWindowRebuild && sessionAgentSwitchSupported;
   // Orca 的同引擎模型选择也只登记意图，保留当前执行单元直到下一次发送。
   const orcaModelSelectionUsesIntent = !!currentSession?.orcaRole && sessionAgentSwitchSupported;
   // 远程 Agent:模型列表在被控电脑自己的供应商之外,另列同账号其他电脑上开放了远程调用的供应商
@@ -9133,25 +9139,25 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ]);
   }, [currentSession?.contextTokens, t]);
 
-  // Staging cannot rely on SET_MODEL reporting a window error: the actual switch
-  // runs on a later send. Reject a known pressured shrink before writing intent,
-  // and retain the legacy-host guard for unknown windows and Pi.
-  const canStageOrcaModelSelection = useCallback((
+  const canStageModelWindowSelection = useCallback((
     targetAgentKind: MobileSessionAgentKind,
     targetContextWindow: number | undefined,
     hostGuardSupported: boolean,
     relocates: boolean,
   ): boolean => {
-    // 换电脑是在新位置重建会话再交接，旧窗口带不过去，不做原地缩窗检查(与桌面同一口径)。
-    if (relocates || !orcaModelSelectionUsesIntent || targetAgentKind !== sessionAgentKind) return true;
+    if (relocates || targetAgentKind !== sessionAgentKind) return true;
     const contextTokens = currentSession?.contextTokens;
     const currentContextWindow = currentSession?.contextWindow;
-    const pressuredShrink =
+    const pressuredShrink = targetAgentKind !== 'codex' &&
       typeof contextTokens === 'number' && Number.isFinite(contextTokens) &&
       typeof targetContextWindow === 'number' && Number.isFinite(targetContextWindow) &&
       targetContextWindow > 0 && contextTokens / targetContextWindow >= 0.9 &&
       !(typeof currentContextWindow === 'number' && Number.isFinite(currentContextWindow) &&
         currentContextWindow > 0 && targetContextWindow >= currentContextWindow);
+    if (pressuredShrink && hostSupportsRemoteModelWindowRebuild) {
+      showTransientNotice(t('models.contextWindowSwitch.condensedToast'));
+      return true;
+    }
     if (pressuredShrink || shouldBlockLegacyRemoteModelWindowSwitch({
       hostGuardSupported, agentKind: targetAgentKind, contextTokens,
       currentContextWindow, targetContextWindow,
@@ -9160,8 +9166,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       return false;
     }
     return true;
-  }, [orcaModelSelectionUsesIntent, sessionAgentKind, currentSession?.contextTokens,
-    currentSession?.contextWindow, showRemoteModelWindowUnsupported]);
+  }, [sessionAgentKind, currentSession?.contextTokens, currentSession?.contextWindow,
+    hostSupportsRemoteModelWindowRebuild, showRemoteModelWindowUnsupported, showTransientNotice, t]);
 
   const setComposerModel = useCallback(async (args: {
     model: string;
@@ -9170,16 +9176,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     selection?: { effort: string | null; fastMode: boolean | 'ultrafast' };
   }): Promise<boolean> => {
     if (!canConfigureSessionModel) return false;
-    if (shouldBlockLegacyRemoteModelWindowSwitch({
-      hostGuardSupported: modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
-      agentKind: sessionAgentKind,
-      contextTokens: currentSession?.contextTokens,
-      currentContextWindow: currentSession?.contextWindow,
-      targetContextWindow: args.targetContextWindow,
-    })) {
-      showRemoteModelWindowUnsupported(args.targetContextWindow);
-      return false;
-    }
+    if (!canStageModelWindowSelection(sessionAgentKind, args.targetContextWindow,
+      modelSheetCapabilities?.supportsModelWindowSwitchGuard === true, false)) return false;
     try {
       await maker.setModel(sessionId, args.model, args.providerId, args.selection);
       return true;
@@ -9199,8 +9197,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
   }, [
     canConfigureSessionModel,
-    currentSession?.contextTokens,
-    currentSession?.contextWindow,
+    canStageModelWindowSelection,
     maker,
     modelSheetCapabilities?.supportsModelWindowSwitchGuard,
     sessionAgentKind,
@@ -9233,8 +9230,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         catalogDeviceId: null,
       });
       if (!location) return;
-      if (orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || location.agentDeviceId !== undefined) {
-        if (!canStageOrcaModelSelection(modelSheetAgentKind, row.model.contextWindow,
+      if (modelSelectionUsesWindowIntent || orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || location.agentDeviceId !== undefined) {
+        if (!canStageModelWindowSelection(modelSheetAgentKind, row.model.contextWindow,
           modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
           location.agentDeviceId !== undefined)) return;
         await writeSessionAgentSwitchIntent({
@@ -9284,8 +9281,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     modelSheetAgentKind,
     modelSheetCapabilities,
     modelSheetSelection,
+    modelSelectionUsesWindowIntent,
     orcaModelSelectionUsesIntent,
-    canStageOrcaModelSelection,
+    canStageModelWindowSelection,
     runControlAction,
     sessionAgentKind,
     sessionId,
@@ -9326,9 +9324,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (applied) setModelSheetAgentKind(config.agent);
       return applied;
     }
-    if (relocates || orcaModelSelectionUsesIntent) {
+    if (relocates || modelSelectionUsesWindowIntent || orcaModelSelectionUsesIntent) {
       // 同引擎换电脑或 Orca 换模型均走下一条消息生效的切换意图。
-      if (!canStageOrcaModelSelection(config.agent, capability.contextWindow,
+      if (!canStageModelWindowSelection(config.agent, capability.contextWindow,
         targetCapabilities.supportsModelWindowSwitchGuard === true, relocates)) return false;
       const applied = await writeSessionAgentSwitchIntent({
         targetAgentKind: config.agent,
@@ -9357,7 +9355,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   }, [canUseRemoteSessionControls,currentSession,controlBusy,composerDeviceProviders.providers,maker,
     sessionAgentKind,sessionAgentSwitchSupported,agentSwitchIntent,writeSessionAgentSwitchIntent,
     runControlAction,setComposerModel,sessionId,deviceId,agentLocationMovable,remoteAgentCatalogs,
-    orcaModelSelectionUsesIntent,canStageOrcaModelSelection,loadComposerAgentCapabilities]);
+    modelSelectionUsesWindowIntent,
+    orcaModelSelectionUsesIntent,canStageModelWindowSelection,loadComposerAgentCapabilities]);
 
   const selectComposerFlatModel = useCallback((option: MobileModelOption) => {
     setModelSheetOpen(false);
@@ -9379,8 +9378,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         catalogDeviceId: null,
       });
       if (!location) return;
-      if (location.agentDeviceId !== undefined || orcaModelSelectionUsesIntent) {
-        if (!canStageOrcaModelSelection(sessionAgentKind, option.contextWindow,
+      if (location.agentDeviceId !== undefined || modelSelectionUsesWindowIntent || orcaModelSelectionUsesIntent) {
+        if (!canStageModelWindowSelection(sessionAgentKind, option.contextWindow,
           modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
           location.agentDeviceId !== undefined)) return;
         await writeSessionAgentSwitchIntent({
@@ -9407,7 +9406,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         },
       );
     })();
-  }, [agentLocationMovable, agentSwitchIntent, canUseRemoteSessionControls, currentSession, modelSheetAgentKind, modelSheetCapabilities, modelSheetSelection?.effort, modelSheetSelection?.fastMode, orcaModelSelectionUsesIntent, runControlAction, sessionAgentKind, setComposerModel, writeSessionAgentSwitchIntent, canStageOrcaModelSelection]);
+  }, [agentLocationMovable, agentSwitchIntent, canUseRemoteSessionControls, currentSession, modelSheetAgentKind, modelSheetCapabilities, modelSheetSelection?.effort, modelSheetSelection?.fastMode, modelSelectionUsesWindowIntent, orcaModelSelectionUsesIntent, runControlAction, sessionAgentKind, setComposerModel, writeSessionAgentSwitchIntent, canStageModelWindowSelection]);
   const browseComposerModelAgent = useCallback((next: MobileSessionAgentKind) => {
     if (next === modelSheetAgentKind) return true;
     if (next !== sessionAgentKind && !sessionAgentSwitchSupported) return false;
@@ -9419,7 +9418,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 跨引擎、换位置或 Orca 同引擎 intent:改 intent 本身(保留已有位置),
     // 否则 setEffort 的值会在发送时被 intent 里的旧值盖回。
     if (
-      (orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || intentChangesAgentLocation(agentSwitchIntent))
+      (modelSelectionUsesWindowIntent || orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || intentChangesAgentLocation(agentSwitchIntent))
       && agentSwitchIntent?.targetAgentKind === modelSheetAgentKind
     ) {
       void writeSessionAgentSwitchIntent({ ...agentSwitchIntent, effort });
@@ -9428,11 +9427,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (modelSheetAgentKind === sessionAgentKind) {
       void runControlAction(() => maker.setEffort(sessionId, effort), { effort });
     }
-  }, [agentSwitchIntent, canConfigureSessionModel, maker, modelSheetAgentKind, orcaModelSelectionUsesIntent, runControlAction, sessionAgentKind, sessionId, writeSessionAgentSwitchIntent]);
+  }, [agentSwitchIntent, canConfigureSessionModel, maker, modelSheetAgentKind, modelSelectionUsesWindowIntent, orcaModelSelectionUsesIntent, runControlAction, sessionAgentKind, sessionId, writeSessionAgentSwitchIntent]);
   const changeComposerSelectedFastMode = useCallback((enabled: boolean) => {
     if (!canConfigureSessionModel) return;
     if (
-      (orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || intentChangesAgentLocation(agentSwitchIntent))
+      (modelSelectionUsesWindowIntent || orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || intentChangesAgentLocation(agentSwitchIntent))
       && agentSwitchIntent?.targetAgentKind === modelSheetAgentKind
     ) {
       void writeSessionAgentSwitchIntent({ ...agentSwitchIntent, fastMode: enabled });
@@ -9441,7 +9440,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (modelSheetAgentKind === sessionAgentKind) {
       void runControlAction(() => maker.setFastMode(sessionId, enabled), { fastMode: enabled });
     }
-  }, [agentSwitchIntent, canConfigureSessionModel, maker, modelSheetAgentKind, orcaModelSelectionUsesIntent, runControlAction, sessionAgentKind, sessionId, writeSessionAgentSwitchIntent]);
+  }, [agentSwitchIntent, canConfigureSessionModel, maker, modelSheetAgentKind, modelSelectionUsesWindowIntent, orcaModelSelectionUsesIntent, runControlAction, sessionAgentKind, sessionId, writeSessionAgentSwitchIntent]);
   const toggleComposerModelPicker = useCallback(() => {
     if (!canConfigureSessionModel) {
       setModelSheetOpen(false);

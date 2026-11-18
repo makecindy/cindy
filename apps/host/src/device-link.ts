@@ -3,7 +3,7 @@
 import os from 'node:os';
 import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } from '../../desktop/src/main/plugin-oauth/runtime.js';
 import WebSocket from 'ws';
-import { DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload } from '@cindy/device-link';
+import { CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload } from '@cindy/device-link';
 import { createAgentNetNode, type AgentNetNodePorts } from '../../desktop/src/main/device-link/agentNetNode.js';
 import { AgentNetSessionLinks, agentNetSessionLane, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { HOST_CONTRACT_CHANNELS } from '@cindy/maker-shared/host-channel-contract';
@@ -28,9 +28,10 @@ import { createHostWebSocketAgent } from './outbound.mjs';
 import { createDnsFallbackLookup } from '../../desktop/src/main/device-link/dnsFallbackLookup.js';
 import { createLogger } from '../../desktop/src/main/logger.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../desktop/src/main/appSessionState.js';
-import { MAKER_PUSH } from '../../desktop/src/main/maker-ipc/channels.js';
+import { MAKER_INVOKE, MAKER_PUSH } from '../../desktop/src/main/maker-ipc/channels.js';
 import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.js';
-import { getDeviceLinkInvokeContext } from '../../desktop/src/main/device-link/invoke-context.js';
+import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.js';
+import { normalizeDeviceLinkSetModelWireArgs } from '../../desktop/src/main/maker-ipc/setModelWireArgs.js';
 
 type ServiceResult = { status: number; body: any };
 /** How long a connection waits for this Host's stored Agent-Net identity (the signed transport statement) at most. */
@@ -104,6 +105,44 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       return contract.map ? contract.map(result) : result;
     });
   }
+  registry.register(MAKER_INVOKE.SET_MODEL, async ([sessionId, model, wireProviderId, revision, wireSelection]) => {
+    const { providerId, selection } = normalizeDeviceLinkSetModelWireArgs(true,
+      deviceLinkInvokeControllerSupports(CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1),
+      wireProviderId, revision, wireSelection);
+    if (selection && typeof selection === 'object' && 'confirmedContextWindow' in selection) {
+      throw new Error('[PRECONDITION_FAILED] remote model-window confirmation is unsupported');
+    }
+    if (readDeviceLinkModelSelectionOrigin() !== 'owner') {
+      throw new Error('[PRECONDITION_FAILED] remote model selection requires an owner controller');
+    }
+    if (typeof model !== 'string' || (providerId !== undefined && providerId !== null && typeof providerId !== 'string')) {
+      throw new Error('[INVALID_PARAMS] invalid model or provider');
+    }
+    const axes = selection as { effort?: string; fastMode?: boolean | 'ultrafast' } | undefined;
+    const result = await call('/api/sessions/update', {
+      sessionId,
+      patch: { model, ...(providerId !== undefined ? { providerId } : {}),
+        ...(axes?.effort ? { effort: axes.effort } : {}),
+        ...(axes?.fastMode !== undefined ? { fastMode: axes.fastMode } : {}) },
+    });
+    if (result && typeof result === 'object') dispatch.markRemoteSettingPersistedInsideHandler(result);
+    return result;
+  });
+  registry.register(MAKER_INVOKE.SWITCH_SESSION_AGENT, ([sessionId, targetAgentKind, model, providerId, effort, fastMode, options]) => {
+    if (options && typeof options === 'object') {
+      if ('confirmedContextWindow' in options) {
+        throw new Error('[PRECONDITION_FAILED] remote model-window confirmation is unsupported');
+      }
+      if ('agentDeviceId' in options) throw new Error('[UNSUPPORTED_CAPABILITY] Host does not yet support remote execution');
+    }
+    if (typeof model !== 'string' || !model.trim() ||
+        (providerId !== null && providerId !== undefined && typeof providerId !== 'string')) {
+      throw new Error('[INVALID_PARAMS] invalid model or provider');
+    }
+    return call('/api/sessions/switch-agent', { sessionId, targetAgentKind, model, providerId, effort, fastMode });
+  });
+  registry.register(MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT, ([sessionId]) =>
+    call('/api/sessions/agent-switch-intent', { sessionId }));
   registry.register('maker:create-session', ([input]) => deps.createRuntimeSession(input));
   if (deps.mcpApps) registry.register(MCP_APPS_INVOKE, async ([sessionId, input]) => {
     const source = getDeviceLinkInvokeContext();

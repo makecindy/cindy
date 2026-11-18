@@ -162,6 +162,10 @@ export function createInputQueue(deps) {
     const executor = createTurnExecutor({ ...deps,
       assertCurrent, isCurrent,
       getRecoveryRollover: deps.createContextRecoveryRollover ? () => rollover : deps.getRecoveryRollover,
+      applyPendingAgentSwitch: (id, signal) => deps.applyPendingAgentSwitch?.(id, {
+        signal,
+        prepareModelWindowSwitch: (taskId, target) => rollover?.prepareModelWindowSwitch(taskId, target) ?? 'unknown-context',
+      }),
       prepareUserMessage: attachments?.prepareUserMessage,
       isClearBoundaryCurrent: (id, boundary, generation) => coordinator.getClearBoundaryMs(id) === boundary
         && (generation === undefined || coordinator.isGenerationCurrent(id, generation)),

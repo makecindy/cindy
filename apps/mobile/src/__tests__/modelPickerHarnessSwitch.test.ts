@@ -9,7 +9,7 @@ import { resolveAgentLocationPick } from '@/session/sessionAgentSwitch';
 
 const source = ts.createSourceFile('screen.tsx', readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const callbacks = new Map<string, string>();
-const callbackNames = ['loadComposerAgentCapabilities', 'canStageOrcaModelSelection', 'selectUnifiedComposerModel'];
+const callbackNames = ['loadComposerAgentCapabilities', 'canStageModelWindowSelection', 'selectUnifiedComposerModel'];
 function visit(node: ts.Node) {
   if (ts.isVariableDeclaration(node) && callbackNames.includes(node.name.getText(source))) {
     callbacks.set(node.name.getText(source), (node.initializer as ts.CallExpression).arguments[0].getText(source));
@@ -35,7 +35,7 @@ function harness(
   const executionMakerForDevice = vi.fn((_deviceId: string) => ({ getCapabilities: getRemoteCapabilities }));
   const env = {
     // These fixtures exercise ordinary tasks; Orca admission has its own suite.
-    orcaModelSelectionUsesIntent:false,orcaRemoteAgentDeviceId:null,executionMakerForDevice,
+    hostSupportsRemoteModelWindowRebuild:false, modelSelectionUsesWindowIntent:false, orcaModelSelectionUsesIntent:false,orcaRemoteAgentDeviceId:null,executionMakerForDevice,
     isProviderShareAgentDeviceId:(id:unknown)=>typeof id === 'string' && id.startsWith('share:'),
     agentLocationMovable:true,
     remoteAgentCatalogs:[{ deviceId:'device-studio-mac', name:'工作室 Mac', status:'ready', providers:studioProviders }],

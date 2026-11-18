@@ -21,13 +21,14 @@ visit(source);
 
 function setup(options: { agent?: string; role?: string; used?: number; current?: number;
   target?: number; remote?: boolean; hostGuard?: boolean; displayedAgent?: string;
-  agentLocationAware?: boolean } = {}) {
+  agentLocationAware?: boolean; ownerRebuild?: boolean } = {}) {
   const agent = options.agent ?? 'codex';
   const switchSessionAgent = vi.fn(async () => ({ deferred: true, switched: false }));
   const release = vi.fn();
   const finish = vi.fn();
   const context = { contextTokens: options.used ?? 240000, contextWindow: options.current ?? 1000000, isRunning: false };
   const bindings = {
+    hostSupportsRemoteModelWindowRebuild: options.ownerRebuild === true,
     sessionId: 's1', sessionOrcaRole: options.role ?? 'worker', settingsLocked: false,
     runtimeAgentKind: agent, currentModelAgentKind: options.displayedAgent ?? agent,
     activeModel: 'old-model', effectiveSourceId: 'old-provider', activeEffort: 'high',
@@ -108,6 +109,18 @@ describe('Orca same-Agent window preflight', () => {
       expect(h.switchSessionAgent).not.toHaveBeenCalled();
       expect(h.bindings.toast.error).toHaveBeenCalledOnce();
     }
+  });
+
+  // 2026-11-18: the same pressured picker input that the old-host cases block
+  // should stage and show a notice on a capable owner host. Guard tier executes
+  // the actual renderer callback and checks the outgoing invoke has no numeric receipt.
+  it('stages a pressured owner choice without confirmation numbers', async () => {
+    const h = setup({ remote: true, agent: 'claude-code', ownerRebuild: true, used: 240000 });
+    expect(await h.pick('claude-code', 'small', 'provider')).toBe(true);
+    expect(h.switchSessionAgent).toHaveBeenCalledWith('s1', 'claude-code', 'small', 'provider', 'high', false,
+      undefined, undefined);
+    expect(h.bindings.toast.warning).toHaveBeenCalledOnce();
+    expect(h.bindings.toast.error).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('lets Codex stage a pressured switch without a handoff confirmation (remote=%s)', async remote => {

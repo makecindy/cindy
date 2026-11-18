@@ -160,7 +160,7 @@ describe('session Agent switch UI wiring', () => {
       source.indexOf('const toggleComposerModelPicker'),
     );
     expect(toggles.match(
-      /\(orcaModelSelectionUsesIntent \|\| modelSheetAgentKind !== sessionAgentKind \|\| intentChangesAgentLocation\(agentSwitchIntent\)\)/g,
+      /\(modelSelectionUsesWindowIntent \|\| orcaModelSelectionUsesIntent \|\| modelSheetAgentKind !== sessionAgentKind \|\| intentChangesAgentLocation\(agentSwitchIntent\)\)/g,
     )).toHaveLength(2);
 
     // 模型药丸按 Agent 所在电脑的目录显示,带远程标记;读屏标签读出那台电脑。
@@ -206,22 +206,15 @@ describe('session Agent switch UI wiring', () => {
       source.indexOf('const writeSessionAgentSwitchIntent'),
     );
 
-    const legacyGuard = helper.indexOf('shouldBlockLegacyRemoteModelWindowSwitch({');
+    const legacyGuard = alertHelper.indexOf('shouldBlockLegacyRemoteModelWindowSwitch({');
+    const admission = helper.indexOf('!canStageModelWindowSelection(');
     const setModel = helper.indexOf(
       'await maker.setModel(sessionId, args.model, args.providerId, args.selection)',
     );
     expect(legacyGuard).toBeGreaterThan(-1);
-    expect(legacyGuard).toBeLessThan(setModel);
-    expect(helper.slice(legacyGuard, setModel)).toContain('return false;');
-    expect(helper).toContain(
-      'hostGuardSupported: modelSheetCapabilities?.supportsModelWindowSwitchGuard === true',
-    );
-    expect(helper).toContain('agentKind: sessionAgentKind');
-    expect(helper).not.toContain('isSsh');
-    expect(helper).toContain('contextTokens: currentSession?.contextTokens');
-    expect(helper).toContain('currentContextWindow: currentSession?.contextWindow');
-    expect(helper).toContain('targetContextWindow: args.targetContextWindow');
-    expect(helper).toContain('showRemoteModelWindowUnsupported(args.targetContextWindow);');
+    expect(admission).toBeGreaterThan(-1);
+    expect(admission).toBeLessThan(setModel);
+    expect(helper.slice(admission, setModel)).toContain('return false;');
     expect(rowSelector).toContain(
       'modelSheetCapabilities?.supportsModelWindowSwitchGuard === true',
     );

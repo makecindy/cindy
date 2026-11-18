@@ -46,6 +46,7 @@
     }
   },
   "contextWindowSwitch": {
+    "condensedToast": "為合新模型之容量，較早之言將壓縮，言談全錄仍可閱。",
     "remoteTitle": "今遠端差事不能安然易模型",
     "remoteDescription": "今遠端差事之上下文已用 {{used}} / {{total}}（約 {{pct}}%），不能安然易至此小窗之模型。請守今模型，或新開差事後再擇。",
     "cancel": "守今模型"

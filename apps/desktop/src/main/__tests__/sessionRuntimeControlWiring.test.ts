@@ -1537,7 +1537,7 @@ describe('session runtime control wiring', () => {
     expect(gate).toBeGreaterThan(-1);
     expect(setModel).toContain("modelSwitchPlan.outcome === 'reject'");
     expect(setModel.replace(/\s+/g, ' ')).toContain(
-      'isRemote: !!runtimeStatus.remoteHostId || (!internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke())',
+      "isRemote: !!runtimeStatus.remoteHostId || modelSelectionOrigin === 'scoped' || (!internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke())",
     );
     expect(remotePressureRejection).toBeGreaterThan(gate);
     expect(remotePressureRejection).toBeLessThan(apply);

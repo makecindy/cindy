@@ -46,6 +46,7 @@
     }
   },
   "contextWindowSwitch": {
+    "condensedToast": "Las partes anteriores de la conversación se condensarán para ajustarse al nuevo modelo. El historial completo seguirá disponible.",
     "remoteTitle": "Este cambio de modelo remoto no es compatible",
     "remoteDescription": "Esta tarea remota ya utiliza {{used}} / {{total}} del contexto del modelo más pequeño (aproximadamente {{pct}}%), por lo que Cindy no puede cambiar de forma segura. Mantén el modelo actual o inicia una nueva tarea antes de elegir este modelo.",
     "cancel": "Mantener este modelo"
