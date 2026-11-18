@@ -714,7 +714,7 @@ export function buildSessionScheduleIndex(
         unreadRunIds.push(run.id);
       }
       const candidate = activeFailures.has(run.id) ? {
-        runId: run.id, firedAt, scheduleId: run.scheduleId,
+        runId: run.id, firedAt, finishedAt: toMillis(run.finishedAt) || undefined, scheduleId: run.scheduleId,
         failureKind: classifyScheduleFailure(run),
         errorMsg: run.status === 'failed' ? run.errorMsg : undefined,
         missingPlugin: run.status === 'failed' ? scheduleRunMissingPlugin(run) : undefined,
