@@ -1,6 +1,5 @@
 import { createRequire } from 'node:module';
 import { setMaxListeners } from 'node:events';
-import { randomUUID } from 'node:crypto';
 import { GhostManager } from '../../../desktop/src/main/cindy-brain/GhostManager.js';
 import { GhostBrowserExtensionSlot } from '../../../desktop/src/main/cindy-brain/browserExtensionSlot.js';
 import { hostRuntimeLayout } from '../runtime-layout.mjs';
@@ -39,7 +38,7 @@ import { GhostMutationCoordinator } from '../../../desktop/src/main/cindy-brain/
 import { GhostHandoffStore } from '../../../desktop/src/main/cindy-brain/handoffStore.js';
 import { spawnResidentGhost } from '../../../desktop/src/main/cindy-brain/residentGhost.js';
 import { setPluginEnabled } from '../../../desktop/src/main/cindy-brain/pluginEnableService.js';
-import { ghostInstallApprovalToken, type InstalledGhost, type GhostAppContextResult, type GhostPipeFetchResult } from '../../../desktop/src/shared/ghost.js';
+import { ghostInstallApprovalToken, type InstalledGhost, type GhostAppContextResult } from '../../../desktop/src/shared/ghost.js';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { installedGhostStoragePart, findInstalledGhostByInstanceId } from '../../../desktop/src/shared/pluginIdentity.js';
 import { activeOwnerScopeKey, getActiveAppSession, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, type ActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
@@ -113,12 +112,11 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     return controller;
   };
   let delivery = newDeliveryController();
-  let desktopPause: { message: string; cleanup: Promise<void> } | null = null;
-  const activeExternalWrites = new Map<string, number>();
-  const interruptedWrites = new WeakMap<AbortSignal, Set<string>>();
+  type CleanupJob = { id: string; kind: 'node' | 'library'; run(): Promise<void> };
+  let desktopPause: { message: string; cleanup: Promise<CleanupJob[]>; resuming: boolean } | null = null;
   const unknownDelivery = {
     ok: false as const, errorCode: 'PLUGIN_DELIVERY_UNKNOWN',
-    message: 'The request may have reached its recipient before the plugin was paused.',
+    message: 'This tool call was running when the plugin paused and may have taken effect. Check the outcome before retrying.',
   };
   let closed = false;
   let closing: Promise<void> | undefined;
@@ -152,7 +150,8 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     const ghost = getGhost(id);
     const signal = delivery.signal;
     return () => {
-      assertPluginAvailable();
+      const held = profileHoldMessage();
+      if (held) throwIpcError('PRECONDITION_FAILED', held);
       if (signal.aborted || !ghost || !isCurrent(ghost)) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
     };
   };
@@ -309,28 +308,6 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     // outside this boundary and keeps its original lifetime.
     if (!desktopPause || closed) options.onPluginStopped?.(id);
   };
-  async function pluginFetch(id: string, payload: unknown, sendRequest: () => Promise<GhostPipeFetchResult>): Promise<GhostPipeFetchResult> {
-    const refusal = pluginPauseFailure();
-    if (refusal) return refusal;
-    const signal = delivery.signal;
-    const input = payload as { callId?: unknown; method?: string } | null;
-    const writes = typeof input?.method === 'string' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(input.method.toUpperCase());
-    const callId = writes && typeof input?.callId === 'string' && dispatcher.getPendingCallSignal(id, input.callId)
-      ? input.callId : undefined;
-    if (callId) activeExternalWrites.set(callId, (activeExternalWrites.get(callId) ?? 0) + 1);
-    try {
-      const result = await sendRequest();
-      // Do not let an interruption of a mutating external request look like a
-      // normal timeout. The remote side might already have accepted it.
-      return signal.aborted && writes && !result.ok ? unknownDelivery : result;
-    } finally {
-      if (callId) {
-        const remaining = (activeExternalWrites.get(callId) ?? 1) - 1;
-        if (remaining) activeExternalWrites.set(callId, remaining);
-        else activeExternalWrites.delete(callId);
-      }
-    }
-  }
   const hostToolRequest = options.hostToolRequest;
   const requestHostTool: PluginRuntimeOptions['hostToolRequest'] = hostToolRequest && ((id, payload, isPageCurrent) => {
     const refusal = pluginPauseFailure();
@@ -348,10 +325,10 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     },
     getCallSignal: (id, callId) => dispatcher.getPendingCallSignal(id, callId),
     getCallSessionId: (id, callId) => dispatcher.getPendingCallSessionId(id, callId),
-    authenticatedFetch: (id, request, authorization, check, signal) =>
-      pluginFetch(id, request, () => network.handleAuthenticatedNodeFetch(id, request, authorization, check, signal)),
-    networkRequest: async (id, request) => request.op === 'fetch' ? pluginFetch(id, request, () => network.handleFetchRequest(id, request))
-      : pluginPauseFailure() ?? network.handleNetworkRequest(id, request),
+    authenticatedFetch: async (id, request, authorization, check, signal) =>
+      pluginPauseFailure() ?? network.handleAuthenticatedNodeFetch(id, request, authorization, check, signal),
+    networkRequest: async (id, request) => pluginPauseFailure() ?? (request.op === 'fetch'
+      ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request)),
     sendToGhost: (id, payload) => { void sandbox.deliver(id, payload); }, log,
   });
   const download = new PluginDownloadSlot({ getGhost, root: id => root('plugin-downloads', id), scope: () => owner,
@@ -359,7 +336,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const notify = new GhostNotifySlot({ getGhost, broadcast: payload => publish('ghosts:notify', payload), log });
   const pipe = createGhostExecutionPipe({ dispatcher: () => dispatcher,
     hostTools: requestHostTool,
-    fetch: (id, payload) => pluginFetch(id, payload, () => network.handleFetchRequest(id, payload)), files: (id, payload, check) => fsSlot.handleFsRequest(id, payload, check),
+    fetch: (id, payload) => network.handleFetchRequest(id, payload), files: (id, payload, check) => fsSlot.handleFsRequest(id, payload, check),
     network: (id, payload) => network.handleNetworkRequest(id, payload),
     library: (id, payload) => library.handleLibraryRequest(id, payload),
     download: (id, payload, check) => download.handle(id, payload, check),
@@ -480,11 +457,10 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       const refusal = pluginPauseFailure();
       if (refusal) return refusal;
       const signal = delivery.signal;
-      const callId = request.callId || randomUUID();
-      const result = await super.callGhostTool({ ...request, callId });
-      // The page is closed on pause. Preserve the uncertain outcome even if
-      // the plugin cannot relay its outbound request's result back to the tool.
-      return !result.ok && current() && interruptedWrites.get(signal)?.has(callId) ? unknownDelivery : result;
+      const result = await super.callGhostTool(request);
+      // A stopped tool may already have made changes the host cannot observe.
+      // Calls refused at admission and tools that returned a result keep theirs.
+      return !result.ok && signal.aborted && current() ? unknownDelivery : result;
     }
   }
   const dispatcher = new HostGhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),
@@ -521,38 +497,75 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     reconciliation = next.catch(() => {});
     return next;
   }
+  async function cleanPausedPlugins(jobs: CleanupJob[]): Promise<CleanupJob[]> {
+    const results = await Promise.all(jobs.map(async job => {
+      try {
+        await job.run();
+        return null;
+      } catch (error) {
+        log.warn('paused plugin cleanup failed', {
+          id: job.id, kind: job.kind, error: error instanceof Error ? error.message : String(error),
+        });
+        return job;
+      }
+    }));
+    return results.filter(job => job !== null);
+  }
   function pauseForDesktop(message: string): void {
-    if (!current() || desktopPause) return;
+    if (closed || desktopPause) return;
     const ids = new Set([...known.keys(), ...Object.keys(runtime.listStates())]);
-    const pause = { message, cleanup: Promise.resolve() };
+    const pause = { message, cleanup: Promise.resolve<CleanupJob[]>([]), resuming: false };
     desktopPause = pause;
-    if (activeExternalWrites.size) interruptedWrites.set(delivery.signal, new Set(activeExternalWrites.keys()));
     // Mark this generation before any synchronous stop callback can report
     // delivery failure. Aborting removes the gateway's pending verdicts.
     delivery.abort();
     for (const id of ids) runtime.stop(id);
-    const workers = [...ids].map(id => node.stopAndWait(id));
+    // The Node stop starts synchronously. Library teardown aborts open staging
+    // uploads and leaves committed receipts queryable by stagingId.
+    pause.cleanup = cleanPausedPlugins([
+      ...[...ids].map(id => ({ id, kind: 'node' as const, run: () => node.stopAndWait(id) })),
+      ...[...ids].map(id => ({ id, kind: 'library' as const, run: () => library.disposeGhost(id) })),
+    ]);
     download.abortAll();
-    // The Library teardown aborts open staging uploads. A staged commit
-    // already accepted keeps its receipt and can be queried by stagingId.
-    const libraryWork = [...ids].map(id => library.disposeGhost(id));
-    pause.cleanup = Promise.allSettled([...workers, ...libraryWork]).then(results => {
-      const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
-      if (errors.length) throw new AggregateError(errors, 'Paused plugin cleanup failed');
-    });
     track(pause.cleanup);
   }
-  async function resumeAfterDesktop(): Promise<void> {
+  async function resumeAfterDesktop(): Promise<boolean> {
     const pause = desktopPause;
-    if (!pause || !current() || options.isProfileHeld?.()) return;
-    await pause.cleanup;
-    if (desktopPause !== pause || !current() || options.isProfileHeld?.()) return;
-    delivery = newDeliveryController();
-    desktopPause = null;
-    if (options.manager.hasPendingMutationRecovery()) await options.manager.retryInterruptedMutationsAfterDbReady();
-    // Only the ordinary resident launch policy runs, leaving installations,
-    // browser partitions, and the subscription gateway's fuses in place.
-    await reconcile();
+    const canResume = () => current() && !options.isProfileHeld?.();
+    if (!pause || pause.resuming || !canResume()) return false;
+    pause.resuming = true;
+    try {
+      const failed = await pause.cleanup;
+      if (!canResume()) return false;
+      if (failed.length) {
+        // Retry only what failed. A Node stop timeout isn't proof of exit.
+        pause.cleanup = track(cleanPausedPlugins(failed));
+        if ((await pause.cleanup).length || !canResume()) return false;
+      }
+      delivery = newDeliveryController();
+      const resumedSignal = delivery.signal;
+      desktopPause = null;
+      try {
+        if (options.manager.hasPendingMutationRecovery()) await options.manager.retryInterruptedMutationsAfterDbReady();
+        // Preserve the browser partition and the gateway fuses. The usual
+        // resident policy starts residents; on-demand plugins wait for a call.
+        await reconcile();
+        const ghosts = await options.manager.listAsync();
+        if (resumedSignal.aborted) return false;
+        if (!canResume()) {
+          pauseForDesktop(pause.message);
+          return false;
+        }
+        publish('ghosts:changed', { ghosts });
+        publish('ghosts:runtime-changed', { states: runtime.listStates() });
+        return true;
+      } catch (error) {
+        if (!resumedSignal.aborted) pauseForDesktop(pause.message);
+        throw error;
+      }
+    } finally {
+      pause.resuming = false;
+    }
   }
   async function setEnabled(id: string, enabled: boolean, approval?: string) {
     assertPluginAvailable();

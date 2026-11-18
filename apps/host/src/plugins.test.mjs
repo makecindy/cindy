@@ -223,9 +223,10 @@ test('while a desktop uses the profile, plugin OAuth renews and writes nothing',
 // Rebase #9496 onto #9621: execute the real gateway's registered page-tool
 // callback with process/database boundaries injected. A null task must not be
 // restored, while task-bound calls must retain their original source context.
-test('page tools accept a null task without changing task-bound context', async () => {
+test('page tools accept a null task without changing task-bound context', async t => {
   let runPageTool;
   let held = false;
+  let completeTool = async () => ({ ok: true, result: { content: [{ type: 'text', text: 'delivered' }] } });
   const contexts = [], restored = [];
   const session = { id: 'task', instanceId: 'instance', agentKind: 'codex', workDir: '/workspace' };
   const boundaries = {
@@ -242,7 +243,7 @@ test('page tools accept a null task without changing task-bound context', async 
     createImageCacheStore: () => ({}), hostChatAttachments: {},
     createGhostGateway: () => ({ setPageControlGhostProvider() {}, getCindyGhostsMcpDeps(context) {
       contexts.push(context);
-      return { callGhostTool: async () => ({ ok: true, result: { content: [{ type: 'text', text: 'delivered' }] } }) };
+      return { callGhostTool: (...args) => completeTool(...args) };
     } }),
     pluginAppResult: value => value,
   };
@@ -276,6 +277,19 @@ test('page tools accept a null task without changing task-bound context', async 
     {}, new AbortController().signal), { code: 'PRECONDITION_FAILED' });
   assert.deepEqual(restored, [session.id], 'held page tools must stop before task restore');
   assert.equal(contexts.length, 2);
+
+  await t.test('page tools preserve an uncertain outcome when a hold interrupts dispatch', async () => {
+    held = false;
+    const interrupted = { ok: false, errorCode: 'PLUGIN_DELIVERY_UNKNOWN', message: 'synthetic pause interruption' };
+    completeTool = async () => {
+      held = true; // admitted above, as in a desktop hold during dispatch
+      return interrupted;
+    };
+    const result = await runPageTool({ sessionId: null, instance: 'plugin', tool: 'read', assertCurrent: async () => {} },
+      {}, new AbortController().signal);
+    assert.equal(result.isError, true);
+    assert.deepEqual(JSON.parse(result.content[0].text), interrupted);
+  });
 });
 
 function tempProfile(t) {

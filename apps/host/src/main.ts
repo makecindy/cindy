@@ -34,7 +34,7 @@ import { createHostDeviceLink } from './device-link.js';
 import { createHostService } from './service.mjs';
 import { createHostRuntimeSession, type HostRuntimeSessionCreatePorts } from './agent/create-runtime-session.js';
 import {
-  createCoexistenceMonitor, createDesktopScanner, HOST_PROFILE_IN_USE_BY_DESKTOP, HostProfileInUseError,
+  createHostProfileCoexistenceMonitor, createDesktopScanner, HOST_PROFILE_IN_USE_BY_DESKTOP, HostProfileInUseError,
   type CoexistenceMonitor, type CoexistenceState,
 } from './agent/profile-coexistence.js';
 import { createHostProviderExecutionCheck } from './agent/send-preflight.js';
@@ -405,36 +405,20 @@ let coexistenceMonitor: CoexistenceMonitor | null = null;
  */
 function startProfileCoexistence(dataDir: string, scan: () => Promise<number[]>): void {
   coexistenceMonitor?.stop();
-  const message = profileInUseMessage();
-  const monitor = createCoexistenceMonitor({
+  const monitor = createHostProfileCoexistenceMonitor({
     scan, registryDir: path.join(dataDir, '.dev-instances'), log: hostLog,
-    onScan: state => {
-      if (coexistenceMonitor !== monitor) return;
-      if (state.state === 'desktop-running') {
-        if (!inputQueue.isHeldForDesktop()) hostLog.warn('a desktop opened this profile; new sends are held', { pids: state.desktops });
-        inputQueue.holdForDesktop(message);
-        plugins?.pauseForDesktop(message);
-        runtime.coexistence = { ...state };
-        return;
-      }
-      if (!inputQueue.isHeldForDesktop()) { runtime.coexistence = { ...state }; return; }
-      runtime.coexistence = { state: 'waiting-for-turns', desktops: [] };
-      void inputQueue.releaseDesktopHold().then((released: boolean) => {
-        if (released && coexistenceMonitor === monitor && monitor.state().state === 'clear' && !inputQueue.isHeldForDesktop()) {
-          runtime.coexistence = { state: 'clear', desktops: [] };
-          const heldPlugins = plugins;
-          if (heldPlugins) void heldPlugins.resumeAfterDesktop().then(() => {
-            if (plugins === heldPlugins && !heldPlugins.pluginPauseFailure()) return pluginGateway?.refresh();
-          }).catch((error: unknown) => hostLog.warn('resuming plugins after profile hold failed', {
-            error: error instanceof Error ? error.message : String(error),
-          }));
-          // A Pi receipt retry held while the desktop used the profile runs now (agent/usage-recording.ts).
-          usageRecording.onProfileReleased();
-          hostLog.info('the desktop left this profile; sends are accepted again');
-        }
-      }, (error: unknown) => hostLog.warn('releasing the profile hold failed', {
-        error: error instanceof Error ? error.message : String(error),
-      }));
+    message: profileInUseMessage(), isCurrent: () => coexistenceMonitor === monitor,
+    input: {
+      isHeldForDesktop: () => inputQueue.isHeldForDesktop(),
+      holdForDesktop: message => inputQueue.holdForDesktop(message),
+      releaseDesktopHold: () => inputQueue.releaseDesktopHold(),
+    },
+    getPlugins: () => plugins, refreshPlugins: () => pluginGateway?.refresh(),
+    setState: state => { runtime.coexistence = state; },
+    onInputReleased() {
+      // A Pi receipt retry held while the desktop used the profile runs now (agent/usage-recording.ts).
+      usageRecording.onProfileReleased();
+      hostLog.info('the desktop left this profile; sends are accepted again');
     },
   });
   coexistenceMonitor = monitor;

@@ -197,7 +197,9 @@ export function createHeadlessPluginSandbox(ports: HeadlessPluginSandboxPorts) {
       };
       return {
         async load() {
-          const stopped = new Promise<void>(resolve => { stopLoading = resolve; });
+          const stopped = new Promise<never>((_resolve, reject) => {
+            stopLoading = () => reject(new Error('PLUGIN_RUNTIME_STOPPED'));
+          });
           // A context can close during newPage() before the page handle arrives.
           // Stop releases the startup waiter immediately. loadPage still checks
           // destroyed before using or retaining any late-arriving page.

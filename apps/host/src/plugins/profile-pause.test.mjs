@@ -7,18 +7,21 @@ import path from 'node:path';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 
-import { commitVolatileAppSession, LOCAL_DATA_OWNER_ID } from '../../../desktop/src/main/appSessionState.ts';
+import { beginAppSessionBoundary, commitVolatileAppSession, LOCAL_DATA_OWNER_ID } from '../../../desktop/src/main/appSessionState.ts';
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.ts';
 import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { configureGhostSnapshotProcess } from '../../../desktop/src/main/cindy-brain/ghostSnapshotCapability.ts';
+import { GhostRuntime } from '../../../desktop/src/main/cindy-brain/runtime/GhostRuntime.ts';
 import { installedGhostStoragePart } from '../../../desktop/src/shared/pluginIdentity.ts';
 import { configureHostOwner } from '../agent/claude-auth.mjs';
+import { createHostProfileCoexistenceMonitor } from '../agent/profile-coexistence.ts';
 import { hostOutbound } from '../outbound.mjs';
 import { createHostGhostManager } from '../plugins-installed.ts';
 import { createSnapshotProcess } from '../snapshot-process.mjs';
 import { lifoCleanup } from '../test-support/cleanup.mjs';
 import { chromiumUnavailable, testChromiumExecutable } from '../test-support/hook-plugin-fixture.mjs';
 import { prepareHostPluginAssets } from './assets.mjs';
+import { createHeadlessPluginSandbox } from './chromium-sandbox.ts';
 import { createHostPluginRuntime } from './runtime.ts';
 
 const require = createRequire(new URL('../../../desktop/package.json', import.meta.url));
@@ -45,7 +48,10 @@ const logic = `
     if (message.type !== 'tool-call') return;
     let result;
     if (message.args.request) result = await cindy.send({ ...message.args.request, callId: message.callId });
-    else if (message.args.node) result = await cindy.node.request({ method: 'echo' });
+    else if (message.args.node) result = await cindy.node.request({
+      method: message.args.node === 'pending' ? 'pending' : 'echo',
+      params: message.args.marker,
+    });
     else result = true;
     if (message.args.loseReceipt) {
       localStorage.setItem('staged', JSON.stringify(result));
@@ -57,6 +63,10 @@ const logic = `
 const nodeWorker = String.raw`
   require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
     const request = JSON.parse(line);
+    if (request.method === 'pending') {
+      require('node:fs').writeFileSync(request.params, 'started');
+      return;
+    }
     if (request.id !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: process.pid }) + '\n');
   });
 `;
@@ -117,7 +127,7 @@ async function fixture(t, { executable, resident = true, node = false } = {}) {
     hold: () => runtime.pauseForDesktop(holdMessage) };
 }
 
-function installBrowserSubstitute(t) {
+function installBrowserSubstitute(t, { beforePage, beforeToolAnswer } = {}) {
   const pages = [];
   let contextCount = 0;
   let closeObserver;
@@ -130,6 +140,7 @@ function installBrowserSubstitute(t) {
         return {
           once() {}, on() {}, route() {}, routeWebSocket() {}, async close() {}, browser: () => browser,
           async newPage() {
+            await beforePage?.();
             let closed = false;
             let binding, loadUrl;
             const frame = { url: () => loadUrl };
@@ -145,6 +156,7 @@ function installBrowserSubstitute(t) {
                   if (envelope.type === 'tool-call') {
                     const request = envelope.args.request;
                     const result = request ? await page.send('send', { ...request, callId: envelope.callId }) : true;
+                    await beforeToolAnswer?.(result);
                     await page.send('send', { type: 'tool-result', callId: envelope.callId, ok: true, result });
                   }
                   return true;
@@ -249,6 +261,164 @@ function interruptibleUpload(t) {
 }
 
 const externalUpload = { request: { type: 'fetch-request', url: 'https://example.invalid/upload', method: 'POST', body: 'synthetic' } };
+
+// Same monitor as main.ts. Supply scan results and the completion of the input
+// rebuild, while the installed plugin, its cleanup and both gates stay real.
+function profileMonitor(t, f) {
+  let desktops = [];
+  let inputHeld = false;
+  let rebuilt = 0;
+  let refreshed = 0;
+  const attempts = [];
+  const plugins = {
+    pauseForDesktop: f.runtime.pauseForDesktop,
+    pluginPauseFailure: f.runtime.pluginPauseFailure,
+    resumeAfterDesktop() {
+      assert.equal(inputHeld, false);
+      const attempt = f.runtime.resumeAfterDesktop();
+      attempts.push(attempt);
+      return attempt;
+    },
+  };
+  const monitor = createHostProfileCoexistenceMonitor({
+    scan: async () => desktops, registryDir: f.root('fixture-registry'), message: holdMessage,
+    isCurrent: () => true, setState() {}, log: { warn() {} },
+    getPlugins: () => plugins, refreshPlugins: async () => { refreshed++; },
+    onInputReleased: () => { rebuilt++; },
+    input: {
+      isHeldForDesktop: () => inputHeld,
+      holdForDesktop() { inputHeld = true; },
+      async releaseDesktopHold() { inputHeld = false; return true; },
+    },
+  });
+  t.after(() => monitor.stop());
+  return {
+    async scan(pids) {
+      desktops = pids;
+      const count = attempts.length;
+      await monitor.scanNow();
+      return await Promise.all(attempts.slice(count));
+    },
+    rebuilt: () => rebuilt, refreshed: () => refreshed,
+  };
+}
+
+test('Host retries a failed pause cleanup and publishes one current list and state', async t => {
+  installBrowserSubstitute(t);
+  const f = await fixture(t, { resident: false });
+  await f.runtime.reconcile();
+  await f.call();
+  const dispose = f.runtime.library.disposeGhost.bind(f.runtime.library);
+  let calls = 0;
+  t.mock.method(f.runtime.library, 'disposeGhost', async id => {
+    if (++calls === 1) throw new Error('temporary fixture cleanup failure');
+    await dispose(id);
+  });
+  const monitor = profileMonitor(t, f);
+  await monitor.scan([42]);
+  assert.deepEqual(await f.call(), held);
+  f.pushes.length = 0;
+  assert.deepEqual(await monitor.scan([]), []);
+  assert.deepEqual(await monitor.scan([]), [true]);
+  assert.equal(calls, 2);
+  assert.deepEqual(await monitor.scan([]), []);
+  assert.equal(monitor.rebuilt(), 1);
+  assert.equal(monitor.refreshed(), 1);
+  const events = f.pushes.filter(event => ['ghosts:changed', 'ghosts:runtime-changed'].includes(event.channel));
+  assert.deepEqual(events.map(event => event.channel), ['ghosts:changed', 'ghosts:runtime-changed']);
+  assert.equal(installedGhostStoragePart(events[0].payload.ghosts[0]), f.id);
+  assert.deepEqual(events[1].payload, f.runtime.runtimeStates());
+  assert.deepEqual(await f.call(), { ok: true, result: true });
+});
+
+test('Host resumes on a later clear scan when the owner was briefly unavailable', async t => {
+  installBrowserSubstitute(t);
+  const f = await fixture(t, { resident: false });
+  await f.runtime.reconcile();
+  const monitor = profileMonitor(t, f);
+  await monitor.scan([42]);
+  await monitor.scan([]);
+  const release = beginAppSessionBoundary();
+  try {
+    assert.deepEqual(await monitor.scan([]), [false]);
+    assert.deepEqual(f.runtime.pluginPauseFailure(), held);
+  } finally {
+    release();
+  }
+  assert.deepEqual(await monitor.scan([]), [true]);
+  assert.equal(monitor.rebuilt(), 1);
+  assert.equal(monitor.refreshed(), 1);
+  assert.deepEqual(await f.call(), { ok: true, result: true });
+});
+
+test('a completed external write is still uncertain when pause interrupts its tool result', async t => {
+  let observed;
+  const replied = new Promise(resolve => { observed = resolve; });
+  installBrowserSubstitute(t, { beforeToolAnswer: async result => {
+    observed(result);
+    await new Promise(() => {}); // the plugin did not deliver its tool result
+  } });
+  const send = t.mock.fn(async () => new Response('accepted'));
+  t.mock.method(hostOutbound, 'guardedOutboundFetch', send);
+  t.mock.method(hostOutbound, 'outboundFetch', send);
+  const f = await fixture(t);
+  const pending = f.call(externalUpload);
+  assert.equal((await replied).ok, true);
+  f.hold();
+  assert.equal((await pending).errorCode, 'PLUGIN_DELIVERY_UNKNOWN');
+  assert.equal(send.mock.callCount(), 1);
+});
+
+test('a plugin request keeps its unavailable-page error when the owner changes outside a hold', async t => {
+  const f = await fixture(t, { resident: false });
+  let release;
+  t.mock.method(hostOutbound, 'outboundFetch', async () => {
+    release = beginAppSessionBoundary();
+    return new Response('outgoing owner');
+  });
+  try {
+    const result = await f.runtime.network.handleFetchRequest(f.id, { url: 'https://example.invalid/read' });
+    assert.equal(result.ok, false);
+    assert.match(result.message, /PLUGIN_PAGE_UNAVAILABLE/);
+  } finally {
+    release?.();
+  }
+});
+
+test('stopping a still-loading logic page rejects its startup waiter', async t => {
+  let entered;
+  const pageStarting = new Promise(resolve => { entered = resolve; });
+  installBrowserSubstitute(t, { beforePage: async () => {
+    entered();
+    await new Promise(() => {});
+  } });
+  const f = await fixture(t, { resident: false });
+  const sandbox = createHeadlessPluginSandbox({
+    ownerKey: () => 'fixture', isCurrent: () => true, bridgeSource: '',
+    send: async () => ({ ok: true }), pageHandler: () => () => new Response(),
+  });
+  t.after(() => sandbox.close());
+  const runtime = new GhostRuntime({ adapter: sandbox.adapter, onStateChanged() {} });
+  const loading = runtime.spawn(f.runtime.getGhost(f.id));
+  await pageStarting;
+  runtime.stop(f.id);
+  assert.equal((await loading).ok, false);
+  assert.equal(runtime.stateOf(f.id), 'off');
+});
+
+test('pause reports an in-flight Node tool as uncertain without an external fetch', realPage, async t => {
+  const f = await fixture(t, { executable: executablePath, node: true });
+  await f.runtime.reconcile();
+  const marker = f.root('node-tool-started');
+  const pending = f.call({ node: 'pending', marker });
+  for (;;) {
+    t.signal.throwIfAborted();
+    try { await fs.access(marker); break; }
+    catch { await new Promise(resolve => setTimeout(resolve, 10)); }
+  }
+  f.hold();
+  assert.equal((await pending).errorCode, 'PLUGIN_DELIVERY_UNKNOWN');
+});
 
 test('Host reports an interrupted external write as uncertain and never resends it', { timeout: 5_000 }, async t => {
   installBrowserSubstitute(t);
@@ -367,7 +537,7 @@ test('an interrupted external upload is not resent and committed staging remains
   const interrupted = await upload;
   assert.equal(interrupted.ok, false, JSON.stringify(interrupted));
   assert.equal(interrupted.errorCode, 'PLUGIN_DELIVERY_UNKNOWN');
-  assert.equal((await lost).ok, false);
+  assert.equal((await lost).errorCode, 'PLUGIN_DELIVERY_UNKNOWN');
   await f.runtime.resumeAfterDesktop();
   const listing = (await staging('list', {})).result;
   assert.equal(listing.ok, true, JSON.stringify(listing));

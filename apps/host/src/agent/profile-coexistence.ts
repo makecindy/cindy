@@ -318,3 +318,68 @@ export function createCoexistenceMonitor(options: CoexistenceMonitorOptions): Co
   };
 }
 
+interface ProfilePluginRuntime {
+  pauseForDesktop(message: string): void;
+  pluginPauseFailure(): unknown;
+  resumeAfterDesktop(): Promise<boolean>;
+}
+
+interface HostProfileCoexistenceOptions extends Omit<CoexistenceMonitorOptions, 'onScan'> {
+  message: string;
+  isCurrent(): boolean;
+  input: {
+    isHeldForDesktop(): boolean;
+    holdForDesktop(message: string): void;
+    releaseDesktopHold(): Promise<boolean>;
+  };
+  getPlugins(): ProfilePluginRuntime | null;
+  refreshPlugins(): Promise<void> | undefined;
+  setState(state: { state: CoexistenceState['state'] | 'waiting-for-turns'; desktops: number[] }): void;
+  onInputReleased(): void;
+}
+
+/** The input and plugin gates share the actual monitor's scan and rebuild boundaries. */
+export function createHostProfileCoexistenceMonitor(options: HostProfileCoexistenceOptions): CoexistenceMonitor {
+  const { input, log, isCurrent, getPlugins, setState } = options;
+  let releasingInput = false;
+  function resumePlugins() {
+    const plugins = getPlugins();
+    if (!plugins?.pluginPauseFailure()) return;
+    void plugins.resumeAfterDesktop().then(resumed => {
+      if (resumed && isCurrent() && getPlugins() === plugins && !plugins.pluginPauseFailure()) return options.refreshPlugins();
+    }).catch((error: unknown) => log.warn('resuming plugins after profile hold failed', {
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
+  const monitor = createCoexistenceMonitor({
+    ...options,
+    onScan: state => {
+      if (!isCurrent()) return;
+      if (state.state === 'desktop-running') {
+        if (!input.isHeldForDesktop()) log.warn('a desktop opened this profile; new sends are held', { pids: state.desktops });
+        input.holdForDesktop(options.message);
+        getPlugins()?.pauseForDesktop(options.message);
+        setState({ ...state });
+        return;
+      }
+      if (!input.isHeldForDesktop()) {
+        setState({ ...state });
+        resumePlugins();
+        return;
+      }
+      setState({ state: 'waiting-for-turns', desktops: [] });
+      if (releasingInput) return;
+      releasingInput = true;
+      void input.releaseDesktopHold().then(released => {
+        if (!released || !isCurrent() || monitor.state().state !== 'clear' || input.isHeldForDesktop()) return;
+        setState({ state: 'clear', desktops: [] });
+        resumePlugins();
+        options.onInputReleased();
+      }, (error: unknown) => log.warn('releasing the profile hold failed', {
+        error: error instanceof Error ? error.message : String(error),
+      })).finally(() => { releasingInput = false; });
+    },
+  });
+  return monitor;
+}
+
