@@ -76,7 +76,8 @@ export class AgentNetSharingClient {
       ? JSON.stringify(['private-sharing/1', this.options.networkId, this.options.rootPublicKey, path]) : path, toBase64Url(this.options.hash(utf8(body))), proof));
     this.current(options.isCurrent);
     const authorization = (this.options.privateSharing ? 'AgentNetPrivate ' : 'AgentNetIdentity ') + toBase64Url(utf8(JSON.stringify({ networkId: this.options.networkId,
-      deviceId: signer.identity.deviceId, signingKey: signer.identity.signingKey, card, proof: { ...proof, signature } })));
+      ...(this.options.privateSharing ? {} : { deviceId: signer.identity.deviceId, card }),
+      signingKey: signer.identity.signingKey, proof: { ...proof, signature } })));
     const member = await this.options.memberAuthorization?.(options.method, path, body); this.current(options.isCurrent);
     let applicant: string | undefined;
     if (options.applicant) {

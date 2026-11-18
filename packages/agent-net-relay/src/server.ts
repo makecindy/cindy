@@ -561,12 +561,13 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     requests: () => store.delegationRequests(),
     async saveRequest(request) {
       await store.transaction(state => {
+        const current = own(state.networks, request.networkId) ?? fail(401, 'NETWORK_UNKNOWN');
         const requests = (state.delegationRequests ?? []).filter(r => r.expiresAt > now()
           && !(r.networkId === request.networkId && r.kind === request.kind && r.resourceId === request.resourceId && r.guestDeviceId === request.guestDeviceId));
         if (requests.filter(r => r.networkId === request.networkId).length >= 4096) return fail(429, 'DELEGATION_REQUEST_LIMIT');
         if (requests.some(r => r.networkId === request.networkId && r.hostDeviceId === request.hostDeviceId
           && r.guestTransportKey === request.guestTransportKey)) return fail(409, 'RESOURCE_TRANSPORT_KEY_REUSED');
-        if (Object.values(state.networks[request.networkId].devices).some(d => d.revokedAt === null
+        if (Object.values(current.devices).some(d => d.revokedAt === null
           && d.certificate.transportKey === request.guestTransportKey)) return fail(409, 'MEMBER_TRANSPORT_KEY_REUSED');
         requests.push(request); state.delegationRequests = requests;
       });
@@ -861,6 +862,27 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       const media = await store.transaction((state) => {
         const removed = own(state.networks, target);
         if (!removed?.tenant) return fail(404, 'NOT_FOUND');
+        // Re-admitting a tenant must not restore its old shares or invitations.
+        for (const book of [state.sharing, state.privateSharing]) {
+          if (!book) continue;
+          const bindings = book.bindings.filter(binding => binding.networkId === target);
+          if (!bindings.length) continue;
+          const tasks = new Set(bindings.filter(binding => binding.kind === 'shared-task').map(binding => binding.resourceId));
+          const shares = new Set(bindings.filter(binding => binding.kind === 'provider-share').map(binding => binding.resourceId));
+          const removedGuests = new Set([
+            ...book.shares.filter(share => shares.has(share.shareId)).flatMap(share => share.members.map(member => member.guestKey)),
+            ...book.requests.filter(request => shares.has(request.shareId)).map(request => request.guestKey),
+          ]);
+          book.tasks = book.tasks.filter(task => !tasks.has(task.sharedTaskId));
+          book.invitations = book.invitations.filter(invitation => !tasks.has(invitation.sharedTaskId));
+          book.shares = book.shares.filter(share => !shares.has(share.shareId));
+          book.links = book.links.filter(link => !shares.has(link.shareId));
+          book.requests = book.requests.filter(request => !shares.has(request.shareId));
+          book.bindings = book.bindings.filter(binding => binding.networkId !== target);
+          const retainedGuests = new Set([...book.shares.flatMap(share => share.members.map(member => member.guestKey)),
+            ...book.requests.map(request => request.guestKey)]);
+          book.credentials = book.credentials.filter(credential => !removedGuests.has(credential.guestKey) || retainedGuests.has(credential.guestKey));
+        }
         delete state.networks[target];
         if (state.delegationRequests) state.delegationRequests = state.delegationRequests.filter(r => r.networkId !== target);
         for (const [id, r] of Object.entries(state.tenantRequests ?? {})) if (r.request.bootstrap.networkId === target) delete state.tenantRequests![id];

@@ -56,7 +56,16 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
   let authority: ReturnType<SharingStorage['read']> | undefined;
   const admissions = new Map<string, boolean>();
   const services = (scope: string, networkId?: string) => {
-    const repo = createSharingRepositories(host.storage, networkId);
+    const expectedRoot = networkId === undefined ? undefined : host.rootPublicKey(networkId);
+    const storage: SharingStorage = networkId === undefined ? host.storage : {
+      read: () => host.storage.read(),
+      transaction: work => host.storage.transaction(draft => {
+        // A write waiting in the queue can outlive the authenticated network.
+        if (host.rootPublicKey(networkId) !== expectedRoot) throw permissionDenied('Network identity changed');
+        return work(draft);
+      }),
+    };
+    const repo = createSharingRepositories(storage, networkId);
     const state = host.storage.read();
     const bindings = new Map(state.bindings.filter(b => b.kind === 'provider-share' && b.networkId === scope)
       .map(b => [b.resourceId, b]));

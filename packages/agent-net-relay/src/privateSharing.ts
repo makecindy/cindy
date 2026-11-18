@@ -1,4 +1,4 @@
-﻿import { ID_PATTERN, KEY_PATTERN } from '@cindy/agent-net-protocol';
+import { ID_PATTERN, KEY_PATTERN } from '@cindy/agent-net-protocol';
 import { AppError } from '@cindy/device-link-sharing/errors';
 import type { SharingStorage } from '@cindy/device-link-sharing/repositories';
 import type { IncomingMessage } from 'node:http';

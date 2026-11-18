@@ -98,7 +98,7 @@ import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { tapWindowBroadcast } from './broadcast-tap.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { broadcast as broadcastLocal } from './index.js';
-import { fetchIdentityCard, providerShareApi, providerShareLinkFor, providerShareOwnerKey, sha256Hex } from './providerShareApi.js';
+import { providerShareApi, providerShareLinkFor, providerShareOwnerKey } from './providerShareApi.js';
 import { configureProviderShareApprovalWindows } from './providerShareApprovalWindows.js';
 import {
   findReceivedShare,
@@ -979,9 +979,7 @@ async function createLink(
   assertCurrent();
   const provider = providers.find((item) => item.id === providerId);
   if (!provider || !provider.connected || provider.agents.length === 0) throwIpcError('PRECONDITION_FAILED', 'Provider is not available');
-  const hostDeviceId = getDeviceId();
-  if (!hostDeviceId) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Device is not registered');
-  const identityCard = await fetchIdentityCard('share-link', sha256Hex(`${hostDeviceId}:${providerId}`));
+  if (!getDeviceId()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Device is not registered');
   assertCurrent();
   const created = await providerShareApi.createLink({
     providerId,
@@ -989,8 +987,7 @@ async function createLink(
     providerLabel: scrubProviderShareLabel(provider.name, [provider.subscriptionAccount?.identity, provider.openAiAccount?.identity], provider.id),
     // 电脑名不给受邀者(provider-sharing.md §6)：字段必填(旧版受邀者按必填解析)，填固定占位。
     deviceName: PROVIDER_SHARE_NEUTRAL_DEVICE_NAME,
-    identityCard,
-  });
+  }, assertCurrent);
   assertCurrent();
   if (requireLinkId && !created.linkId) {
     throwIpcError('UNSUPPORTED_CAPABILITY', 'Remote share links require an update to the provider share server');

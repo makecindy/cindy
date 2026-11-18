@@ -100,7 +100,13 @@ it('creates, joins and revokes private shares using only the selected relay', as
         privateSharing: true, signer: { identity: signerIdentity, sign: async value => signature(signerIdentity.signingPrivateKey, value),
           random: async () => randomBytes(18).toString('base64url') }, hash: bytes => createHash('sha256').update(bytes).digest(),
         assertCurrent() {}, getIdentityCard: noCard, memberAuthorization: owner ? (m, p, b) => member.header(m, p, b) : undefined,
-        fetch: (url, options) => { expect(new URL(String(url)).origin).toBe(relay.url); return fetch(url, options); } });
+        fetch: (url, options) => {
+          expect(new URL(String(url)).origin).toBe(relay.url);
+          const authorization = new Headers(options?.headers).get('authorization')!;
+          const proof = JSON.parse(Buffer.from(authorization.slice('AgentNetPrivate '.length), 'base64url').toString());
+          expect(Object.keys(proof).sort()).toEqual(['networkId', 'proof', 'signingKey']);
+          return fetch(url, options);
+        } });
     };
     const host = make(true), guest = make(false), base = '/api/device-link/shared-tasks';
     const { sharedTaskId } = await host.request<{ sharedTaskId: string }>(base, { method: 'POST', body: { sessionId: 'session', title: 'Private task' } });
