@@ -278,7 +278,9 @@ export function createBotSettingsAutosave(
   /** 是否有「离散选择」在等 —— 它不允许被后续文本输入推后。 */
   let instantPending = false;
   let inFlight: Promise<void> | null = null;
+  let inFlightPayload: BotSettingsPayload | null = null;
   let waitForInFlight: Promise<boolean> | null = null;
+  let limitWaitUntil: ((deadline: number) => void) | null = null;
   let trailingAfterTimeout = false;
   let stopWaiting: (() => void) | null = null;
   let detached = false;
@@ -301,9 +303,14 @@ export function createBotSettingsAutosave(
     instantPending = false;
   };
 
-  const isDirty = (): boolean =>
-    modelSelectionRevision !== savedModelSelectionRevision ||
-    !botSettingsPayloadEqual(options.readPayload(), options.readBaseline());
+  const isDirty = (): boolean => {
+    const current = options.readPayload();
+    return modelSelectionRevision !== savedModelSelectionRevision ||
+      !botSettingsPayloadEqual(current, options.readBaseline()) ||
+      // Returning to the old baseline is still an unsaved intent while a
+      // different snapshot can reach the host. Keep navigation and detach aware.
+      (inFlightPayload !== null && !botSettingsPayloadEqual(current, inFlightPayload));
+  };
 
   const commit = async (payload: BotSettingsPayload): Promise<void> => {
     // Validate only the fields that the patch sends. Imported long originals may
@@ -319,11 +326,13 @@ export function createBotSettingsAutosave(
   };
 
   const runNow = async (): Promise<void> => {
+    const deadline = Date.now() + BOT_SETTINGS_SAVE_WAIT_MS;
     clearTimer();
     while (inFlight) {
       // 撞上在途提交:等它结束再重判脏(trailing save),不丢这一批修改。
       // 多个 blur/flush 同时等待时，先醒来的调用可能已开始下一次保存。
       const pending = inFlight;
+      limitWaitUntil?.(deadline);
       if (!await waitForInFlight && inFlight === pending) {
         // Keep one latest intent, not one continuation per blur/retry. The host
         // may still commit this request, so do not start an overlapping write.
@@ -345,18 +354,33 @@ export function createBotSettingsAutosave(
       return;
     }
     emit('saving');
-    let finishWait!: (settled: boolean) => void;
-    const wait = new Promise<boolean>((resolve) => { finishWait = resolve; });
-    const waitTimer = setTimeout(() => {
-      emit('error', new BotSettingsSaveUnconfirmed());
-      finishWait(false);
-    }, BOT_SETTINGS_SAVE_WAIT_MS);
-    stopWaiting = () => {
+    let resolveWait!: (settled: boolean) => void;
+    const wait = new Promise<boolean>((resolve) => { resolveWait = resolve; });
+    let waiting = true;
+    let waitTimer: ReturnType<typeof setTimeout> | undefined;
+    let waitDeadline = Infinity;
+    const finishWait = (settled: boolean): void => {
+      if (!waiting) return;
+      waiting = false;
       clearTimeout(waitTimer);
-      finishWait(false);
+      resolveWait(settled);
     };
+    limitWaitUntil = (nextDeadline) => {
+      if (!waiting || nextDeadline >= waitDeadline) return;
+      waitDeadline = nextDeadline;
+      clearTimeout(waitTimer);
+      waitTimer = setTimeout(() => {
+        emit('error', new BotSettingsSaveUnconfirmed());
+        finishWait(false);
+      }, Math.max(0, waitDeadline - Date.now()));
+    };
+    // A flush shares one budget across serial writes. Other callers may shorten
+    // the active wait to their deadline, but cannot extend an earlier caller's.
+    limitWaitUntil(deadline);
+    stopWaiting = () => finishWait(false);
     // 从这里到 `inFlight = attempt` 之间没有 await,不会有第二个 runNow 插进来
     // 看到 inFlight 为 null 而重复提交同一份 payload。
+    inFlightPayload = payload;
     const attempt = (async () => {
       try {
         await commit(payload);
@@ -371,7 +395,9 @@ export function createBotSettingsAutosave(
       clearTimeout(waitTimer);
       if (inFlight === attempt) {
         inFlight = null;
+        inFlightPayload = null;
         waitForInFlight = null;
+        limitWaitUntil = null;
         stopWaiting = null;
       }
       finishWait(true);

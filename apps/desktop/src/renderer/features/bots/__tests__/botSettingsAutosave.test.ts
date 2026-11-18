@@ -347,6 +347,62 @@ describe('createBotSettingsAutosave scheduling', () => {
 });
 
 describe('createBotSettingsAutosave flush & failure', () => {
+  // PR #11347 review regression (unit): the public scheduler must retain a
+  // reverted draft while a different snapshot may still reach persistence.
+  // Previous detached coverage changed to a third value, never the old baseline.
+  it.each([false, true])('keeps a reverted draft pending until the older write settles (rejected=%s)', async rejected => {
+    const h = harness();
+    if (rejected) h.failNextCommits(1);
+    const original = h.baseline.name;
+    const gate = h.gate();
+    h.edit({ name: 'Temporary edit' });
+    const first = h.autosave.flush();
+    h.edit({ name: original });
+    const leaving = h.autosave.flush();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.all([first, leaving]);
+    expect(h.autosave.isDirty()).toBe(true);
+    h.autosave.flushDetached();
+    const statuses = [...h.statuses];
+    gate.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.baseline.name).toBe(original);
+    expect(h.commits.map(row => row.name)).toEqual(rejected ? ['Temporary edit'] : ['Temporary edit', original]);
+    expect(h.autosave.isDirty()).toBe(false);
+    expect(h.statuses).toEqual(statuses);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // PR #11347 review regression (unit): one public flush must share its 30s
+  // budget across serial requests. Existing timeout coverage used one request.
+  it('bounds concurrent navigation flushes across an earlier save and a trailing save', async () => {
+    const h = harness();
+    const firstGate = h.gate();
+    h.edit({ name: 'First edit' });
+    const first = h.autosave.flush();
+    await vi.advanceTimersByTimeAsync(1000);
+    h.edit({ name: 'Latest edit' });
+    let returned = 0;
+    const second = h.autosave.flush().then(() => { returned += 1; });
+    const third = h.autosave.flush().then(() => { returned += 1; });
+    await vi.advanceTimersByTimeAsync(28_000);
+    firstGate.release();
+    const trailingGate = h.gate();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.commits.map(row => row.name)).toEqual(['First edit', 'Latest edit']);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(returned).toBe(2);
+    expect(h.statuses.at(-1)).toBe('error');
+    expect(h.autosave.isDirty()).toBe(true);
+    trailingGate.release();
+    await Promise.all([first, second, third]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.baseline.name).toBe('Latest edit');
+    expect(h.autosave.isDirty()).toBe(false);
+    expect(h.statuses.at(-1)).toBe('saved');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   // Unit regression: a host that never answers used to hold both the spinner
   // and every navigation flush forever. Existing rejection tests always settled.
   it('ends the UI wait without acknowledging or duplicating an unconfirmed write', async () => {

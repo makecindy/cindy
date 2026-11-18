@@ -443,6 +443,43 @@ describe('Bot entry after deletion', () => {
 });
 
 describe('Bot settings profile consolidation', () => {
+  // PR #11347 unit regression: exercise real canLeave, autosave and patch
+  // generation. Existing picker tests used explicit model revisions, so never
+  // covered an ordinary field reverted to baseline while its old write hung.
+  it('keeps a reverted profile on screen after timeout and persists it after forced unmount', async () => {
+    vi.useFakeTimers();
+    let savedName = bot().name;
+    let finish!: () => void;
+    mocks.updateBotProfile.mockImplementation(async (_id, patch) => {
+      if (mocks.updateBotProfile.mock.calls.length === 1) {
+        await new Promise<void>(resolve => { finish = resolve; });
+      }
+      if (typeof patch.name === 'string') savedName = patch.name;
+      return { ...bot({ name: savedName }), currentVersion: 2 };
+    });
+    const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
+    const view = render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />,
+      { wrapper: ConfirmDialogProvider });
+    const name = screen.getByLabelText('bots.nameLabel');
+    fireEvent.change(name, { target: { value: 'Temporary edit' } });
+    fireEvent.blur(name);
+    await act(async () => {});
+    fireEvent.change(name, { target: { value: bot().name } });
+    let allowed: boolean | undefined;
+    await act(async () => { void beforeCloseRef.current!().then(value => { allowed = value; }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(allowed).toBe(false);
+    expect(screen.getByRole('alert').textContent).toContain('bots.autosave.unconfirmed');
+    expect(name).toHaveProperty('value', bot().name);
+    view.unmount();
+    await act(async () => { finish(); });
+    expect(mocks.updateBotProfile.mock.calls.map(([, patch]) => patch.name)).toEqual(['Temporary edit', bot().name]);
+    expect(savedName).toBe(bot().name);
+    renderSettings({ name: savedName });
+    expect(screen.getByLabelText('bots.nameLabel')).toHaveProperty('value', bot().name);
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+  });
+
   // Unit regression: the real picker + autosave hook previously waited forever
   // on an unanswered host. Rejection-only tests missed unknown write outcomes,
   // later selections, navigation, and reopening the confirmed persisted route.
