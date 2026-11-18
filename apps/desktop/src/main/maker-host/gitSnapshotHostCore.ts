@@ -186,6 +186,7 @@ export function createGitSnapshotCoordinatorWithRouteGuard(
       operationCheckpoint();
       const operation = currentOperationBudget();
       return maker.oneShot(agentKind, prompt, {
+        source: 'git-summary',
         maxTokens: ONESHOT_MAX_TOKENS,
         timeoutMs: operation ? Math.max(1, Math.min(1_000, operation.deadlineAtMs - performance.now())) : ONESHOT_TIMEOUT_MS,
         ...(operation ? { signal: operation.signal } : {}),

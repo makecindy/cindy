@@ -1341,10 +1341,11 @@
         "body": "This task has {{device}} open on another computer. Enable the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
         "action": "Turn on"
       },
-      "update": {
-        "title": "Update the “{{plugin}}” plugin",
-        "body": "This task has {{device}} open on another computer. Update the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
-        "action": "Update"
+      "unsupported": {
+        "title": "“{{plugin}}” does not support remote viewing",
+        "body": "The installed plugin cannot show {{device}} from another computer. Check for a compatible update, or use the device on the computer running this task.",
+        "action": "Check for compatible update",
+        "unavailable": "No compatible update is available from this plugin’s source. Use the device on the computer running this task."
       }
     },
     "lockOnExitHintPrivacy": "Shows the privacy screen when you exit, so AI can keep working; touching the computer locks it.",
@@ -1896,7 +1897,6 @@
       "memory": "Memory",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Auxiliary models",
-      "visionBridge": "Vision Bridge",
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
       "composer": "Message input",
@@ -5414,37 +5414,6 @@
       "title": "Tips",
       "description": "Functional toggles. Some require a new session to take effect (see each item’s description)."
     },
-    "visionBridge": {
-      "title": "Vision Bridge",
-      "description": "Give text-only models the ability to read images by routing them through a separate multimodal model that converts images to text descriptions.",
-      "enableLabel": "Enable Vision Bridge",
-      "enableHint": "When off, all models behave exactly as before. When on, models you select below route their images through the vision backend. When enabled, images sent to these models and nearby text used as focus hints are sent to the vision backend you choose.",
-      "enableAria": "Toggle Vision Bridge",
-      "toast": {
-        "saved": "Vision Bridge settings saved",
-        "saveFailed": "Failed to save Vision Bridge settings"
-      },
-      "capability": {
-        "vision": "Known vision-capable",
-        "noVision": "Known text-only",
-        "unknown": "Vision capability unknown"
-      },
-      "targetModels": {
-        "label": "Models routed through Vision Bridge",
-        "hint": "Text-only models (e.g. DeepSeek) are checked by default. You can also check vision-capable models — for example to use a cheaper description model to save tokens.",
-        "empty": "No models available.",
-        "toggleAria": "Toggle Vision Bridge for {{model}}"
-      },
-      "backends": {
-        "label": "Vision backend models",
-        "hint": "Pick up to two multimodal models that convert images to text. The second (backup) is optional.",
-        "primary": "Primary",
-        "fallback": "Backup",
-        "unset": "None selected",
-        "noBackup": "No backup",
-        "hintSecondary": "The primary backend is used first. If it fails and a backup is set, the backup is used. If both fail, the image cannot be described and is replaced with a text notice."
-      }
-    },
     "terminalShell": {
       "title": "Default terminal shell",
       "description": "Use this shell when opening a new sidebar terminal tab.",
@@ -5461,8 +5430,19 @@
       "title": "Message input",
       "sendShortcut": {
         "label": "Use {{shortcut}} to send",
-        "hint": "When enabled, {{shortcut}} sends messages. When disabled, Enter sends messages and Shift+Enter inserts a new line.",
-        "ariaLabel": "Use {{shortcut}} to send messages"
+        "hint": "Enter sends. Shift+Enter inserts a new line.",
+        "ariaLabel": "Use {{shortcut}} to send messages",
+        "hintModifierEnter": "{{shortcut}} sends. Enter inserts a new line."
+      },
+      "followUp": {
+        "label": "While a task is running",
+        "hintQueue": "While a task runs, the Send button and {{send}} queue the message.",
+        "hintSteer": "While a task runs, the Send button and {{send}} steer the running task.",
+        "ariaLabel": "Message delivery while a task is running",
+        "options": {
+          "queue": "Queue",
+          "steer": "Steer"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -7868,6 +7848,18 @@
         "overviewTab": "Overview",
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
+        "githubInstall": {
+          "label": "Install from GitHub Release…",
+          "title": "Install from GitHub Release",
+          "description": "Paste a GitHub repository link or a specific Release link. For a private repository, sign in with an account that has access.",
+          "url": "GitHub address",
+          "submit": "Find plugin",
+          "loading": "Looking up and downloading…",
+          "invalid": "Enter a GitHub repository or Release tag URL.",
+          "not-found": "The tag is unavailable. Check the link and your repository access.",
+          "ambiguous": "This link contains more than one plugin. Use a Release link with one plugin package, or install the file directly.",
+          "installedAlready": "This plugin is already installed. Use its settings to update it."
+        },
         "installedSection": "Installed",
         "installedExpand": "Show all {{count}} installed plugins",
         "installedCollapse": "Hide additional installed plugins",
@@ -8237,7 +8229,7 @@
         "hostTools_handoff": "Task Messaging",
         "hostTools_handoffDetail": "Use Cindy’s task tools to send messages to existing tasks. Operations needing a current task require an explicit task target.",
         "hostTools_usage": "Read usage and provider group status",
-        "hostTools_usageDetail": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, provider group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings.",
+        "hostTools_usageDetail": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, provider group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings. Read quota for a task you can access, including on an authorized computer on your account or through a share that allows quota viewing.",
         "hostTools_settings": "App Settings",
         "hostTools_settingsDetail": "Use Cindy’s settings tools to read and change app configuration. Secrets are not returned, and private input remains yours to provide.",
         "hostTools_scheduler": "Automation Management",
@@ -8297,6 +8289,8 @@
         "subscribeMessageDetail": "Receives saved user messages and AI replies. Attachments use separate reading and handoff.",
         "subscribeToolExecution": "Tool execution events",
         "subscribeToolExecutionDetail": "Receives tool names, inputs, results and errors. Observes without changing execution.",
+        "subscribeNativeRecovery": "Native recovery events",
+        "subscribeNativeRecoveryDetail": "Receives engine status for retries, context compaction, and task stops.",
         "subscribeTaskState": "Task state events",
         "subscribeTaskStateDetail": "Receives changes to running, waiting, completion, archive and hidden task states.",
         "subscribeActivity": "Observes when the AI is thinking and when it is waiting on you",
@@ -8512,6 +8506,24 @@
         "openInSidebar": "Open in the sidebar",
         "panelPageHosted": "Opens from the Plugin page · closes when you leave",
         "panelNone": "This plugin has no panel",
+        "githubRelease": {
+          "title": "Plugin updates",
+          "installed": "Installed {{version}}",
+          "upstream": "Upstream {{version}}",
+          "prerelease": "Pre-release",
+          "check": "Check for updates",
+          "update": "Download and install",
+          "connect": "Sign in to GitHub",
+          "checking": "Checking for updates…",
+          "updating": "Downloading and installing…",
+          "available": "An update is available.",
+          "current": "The installed version is up to date.",
+          "updated": "Plugin updated.",
+          "empty": "No installable release is available.",
+          "sign-in": "Sign in to GitHub to check for updates.",
+          "forbidden": "This GitHub sign-in cannot read the private repository.",
+          "unavailable": "Couldn't check or install the update. Try again."
+        },
         "customSlotTitle": "Plugin custom settings area",
         "dangerTitle": "Uninstall plugin",
         "infoContents": "Contains",
@@ -9862,6 +9874,41 @@
       },
       "providerTooltip": "The provider currently selected for the session; blank when none is pinned.",
       "tokensTooltip": "Counts only the tokens this session used in {{range}}."
+    },
+    "auxiliary": {
+      "title": "Auxiliary usage",
+      "label": "Auxiliary",
+      "purpose": "Purpose",
+      "requests": "Recorded requests",
+      "description": "Included in total tokens. Only usage returned by the provider is recorded; unreported usage and past requests are not estimated.",
+      "sources": {
+        "title": "Title generation",
+        "task-summary": "Task summaries",
+        "prompt-prediction": "Input suggestions",
+        "working-status": "Working status",
+        "help": "Help",
+        "bot-creation": "Companion creation",
+        "bot-opening": "Companion greetings",
+        "group-planning": "Group planning",
+        "ambient-reply": "Reply decisions",
+        "auto-review": "Auto-review",
+        "tool-loop-review": "Tool loop review",
+        "memory-review": "Memory review",
+        "git-summary": "Change summaries",
+        "hook-generation": "Automation scripts",
+        "automation-verification": "Import verification",
+        "plugin-text": "Plugin text",
+        "voice-dialogue": "Voice conversations",
+        "voice-exit": "Voice exit decisions",
+        "voice-refinement": "Voice refinement",
+        "dictionary-learning": "Dictionary learning",
+        "embedding-query": "Vector search",
+        "embedding-index": "Vector indexing",
+        "web-search": "Web search",
+        "provider-probe": "Connection tests",
+        "vision-bridge": "Vision Bridge",
+        "auxiliary": "Other auxiliary requests"
+      }
     }
   },
   "usageDashboard": {
@@ -10803,6 +10850,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "Could not load buddies",
+    "rosterReload": "Reload buddies",
     "avatarStatus": {
       "awaiting": "Needs your confirmation",
       "error": "Needs attention",
@@ -11372,7 +11421,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} can’t reply: the buddy’s device has reached its remote session limit.\nAsk the buddy’s owner to archive unused sessions, or ask the remote computer’s owner to raise the limit in Remote & sharing.",
           "REMOTE_TOTAL_LIMIT": "{{name}} can’t reply: the remote computer has reached its total remote session limit.\nAsk that computer’s owner to release unused sessions or raise the limit in Remote & sharing.",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}} could not reply: the current model does not support images.\nChoose an image-capable model, or enable and configure Vision Bridge in Settings → Personalization, then send your message again.",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}} could not reply: the current model does not support images.\nChoose an image-capable model.",
           "MODEL_UNAVAILABLE": "{{name}} could not reply: no model is available.\nChoose a connected, available model in the buddy settings, then send your message again.",
           "AUTH_REQUIRED": "{{name}} could not reply: the model connection needs authentication.\nReconnect the model provider in Settings, then send your message again.",
           "RATE_LIMITED": "{{name}} could not reply: too many model requests.\nSend your message again later, or choose another available model.",
@@ -13692,9 +13741,8 @@
     "sendButton": {
       "send": "Send message",
       "queue": "Queue message",
-      "queueTooltip": "Click to queue; press {{shortcut}} to steer without interrupting the task",
-      "queueTooltipSendMode": "Click to queue; press {{shortcut}} to send this message",
-      "stop": "Stop generating"
+      "stop": "Stop generating",
+      "steer": "Steer running task"
     },
     "pluginSetup": {
       "account": {
@@ -14591,6 +14639,13 @@
       "runningWithWorktree_one": "Wait for it to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
       "runningWithWorktree_other": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
       "runningWithWorktree_many": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other."
+    },
+    "followUpHint": {
+      "queueDefault": "Messages sent while a task is running are queued.",
+      "steerDefault": "Messages sent while a task is running steer the current task.",
+      "switchToSteer": "Steer by default",
+      "switchToQueue": "Queue by default",
+      "dismiss": "Dismiss tip"
     }
   },
   "onboarding": {
@@ -14863,11 +14918,6 @@
       "title": "Image missing",
       "unavailable": "Image Unavailable",
       "loading": "Loading image…"
-    },
-    "visionBridge": {
-      "analyzing": "Analyzing {{count}} image(s)…",
-      "fallback": "Vision bridge fell back to a backup vision backend (primary unavailable); image recognition may be affected",
-      "unavailable": "Vision bridge is unavailable; the image could not be described and was replaced with a text notice"
     },
     "newMessageIndicator": {
       "aria": "Back to bottom, view {{count}} new messages",
@@ -16446,7 +16496,10 @@
       "confirmArchive": {
         "title": "Archive session",
         "description": "Archive this session? It will be removed from the list.",
-        "dirtyWorktreeWarning": "This session's worktree has uncommitted changes; they will be saved as a git snapshot before archiving and can be restored from the session later.",
+        "dirtyWorktreeWarning": "Uncommitted changes will be saved before archiving. You can restore them from the task.",
+        "discardChanges": "Discard uncommitted changes",
+        "discardWarning": "Uncommitted changes and new files will be lost.",
+        "discardAndArchive": "Discard and archive",
         "scheduleWarning_one": "The linked automation {{names}} will keep running and restore this session.",
         "scheduleWarning_other": "The linked automations {{names}} will keep running and restore this session.",
         "scheduleWarningMany_one": "{{count}} of these sessions has linked automations that will restore it when they run.",
@@ -16992,6 +17045,7 @@
         "menuSave": "Save",
         "menuInsertTable": "Insert table",
         "externalChangeBlocked": "The file changed on disk. Autosave paused; save manually to overwrite.",
+        "targetChanged": "The file now points to a different location. Your draft is still in the editor. Copy it before reopening the file.",
         "tableMenu": {
           "addRowAbove": "Add row above",
           "addRowBelow": "Add row below",
@@ -19751,7 +19805,8 @@
           "expired": "Expired",
           "voided": "Voided"
         }
-      }
+      },
+      "viewUsage": "View usage"
     },
     "orders": {
       "title": "Order history",
@@ -21383,7 +21438,6 @@
       "sessionRuntimeFallback": "Automatic task model fallback",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Auxiliary Models",
-      "visionBridge": "Vision Bridge",
       "modelVisibility": "Shown and Hidden Models",
       "providerOrder": "Provider Order",
       "modelCatalogOverrides": "Model Parameter Changes",
@@ -21922,6 +21976,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "Download this repository to this computer?",
+    "credentialNotice": "For a private repository, Cindy may use the account signed in on this computer.",
+    "saveTo": "Save to",
+    "confirmImport": "Confirm import",
+    "confirmSshTitle": "Allow this project to access these SSH directories?",
+    "sshHost": "SSH host",
+    "readWriteAccess": "Read and write",
+    "readAccess": "Read only",
+    "confirmAccess": "Allow access",
     "autoLoading": "Finding project icon…",
     "autoNone": "Using initials from the project name.",
     "autoSource": "Source",
@@ -21961,7 +22024,42 @@
     "discard": "Discard",
     "colors": {
       "default": "Default (follow theme)"
-    }
+    },
+    "directories": "Project directories",
+    "directoriesHint": "Applies to all tasks in this project from their next turn. Existing task-specific directories are kept.",
+    "removeDirectory": "Remove directory",
+    "directoryPath": "Full directory path",
+    "addDirectory": "Add directory",
+    "browseDirectory": "Browse directories",
+    "mainDirectory": "Main directory",
+    "createTitle": "New project",
+    "createAction": "Create project",
+    "repository": "Repository URL",
+    "repositoryHint": "Supports GitHub, GitLab and other Git repositories via HTTPS or SSH.",
+    "autoDirectory": "Without a selected directory, create in {{path}}. Name conflicts get a number.",
+    "cloning": "Cloning repository…",
+    "invalidRepository": "Enter a valid GitHub, GitLab or Git repository URL.",
+    "createFailed": "Could not create the project. Check directory write access, the repository URL and Git access on this computer. A clone destination must be empty.",
+    "createNamePlaceholder": "Project name",
+    "createNameHint": "Give your project a name to get started.",
+    "createFromRepository": "Create from a code repository",
+    "createBlank": "Switch to a blank project",
+    "source_blank": "New blank project",
+    "source_existing": "Open existing folder",
+    "source_repository": "Import code repository",
+    "sourceHint_blank": "Enter a name. The project folder is created automatically.",
+    "sourceHint_existing": "Choose an existing project folder on this computer.",
+    "sourceHint_repository": "Paste a repository link to download it to this computer.",
+    "source": "Project source",
+    "sourceShort_blank": "Blank",
+    "sourceShort_existing": "Folder",
+    "sourceShort_repository": "Repository",
+    "automaticMain": "Primary · Automatic",
+    "source_local": "Local folder",
+    "sourceShort_local": "Local folder",
+    "sourceHint_local": "Enter a name to create a folder, or choose an existing one.",
+    "chooseExistingFolder": "Choose existing folder",
+    "changeMainDirectory": "Change"
   },
   "taskManagement": {
     "scope": "Applies to this account on this computer only.",

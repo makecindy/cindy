@@ -1427,7 +1427,7 @@ export async function readSubscriptionSessionAccount(
       assertOwner(state);
     }
   };
-  const binding = [
+  const resolveBinding = () => [
     keys.sessionId ? `task:${keys.sessionId}` : '',
     keys.nativeSessionId ? `native:${keys.nativeSessionId}` : '',
   ]
@@ -1436,6 +1436,7 @@ export async function readSubscriptionSessionAccount(
     .find(Boolean) ?? (legacyAccountId ? { accountId: legacyAccountId } : undefined)
     ?? ((requestedRef.providerId !== provider || keys.nativeSessionId) && pinnedOwnAccount(requestedRef)
       ? { accountId: pinnedOwnAccount(requestedRef)! } : undefined);
+  const binding = resolveBinding();
   if (pinnedLegacyAccountId && binding?.accountId !== pinnedLegacyAccountId
     && (!binding || !('via' in binding) || binding.via !== requestedRoute))
     return { providerId: provider, state: 'unavailable' };
@@ -1482,6 +1483,12 @@ export async function readSubscriptionSessionAccount(
   // Quota alone cannot authorize retiring native history. Probe actual replacement admission
   // without reserving or rebinding, within the original query's shared budget.
   const switchAvailable = (blocked || config.paused) && await canReplace(config.id);
+  const latestPool = readPool(provider);
+  if (!latestPool || disconnectedFor(latestPool, provider, config.id)
+    || !latestPool.accounts.some(account => account.id === config.id)
+    || resolveBinding()?.accountId !== config.id
+    || (config.id === 'default' && !defaultAccountBound(provider)))
+    return { providerId: provider, state: 'unavailable' };
   const destination = accountProviderId(provider, config.id);
   return {
     providerId: provider,
@@ -1505,6 +1512,7 @@ export async function readSubscriptionSessionAccount(
             ? 'limited'
             : 'ready',
       ...(info.auth.authenticated ? accountUsage(info.usage) : {}),
+      ...(info.auth.authenticated && info.usageAt !== undefined ? { usageUpdatedAt: info.usageAt } : {}),
       ...(blocked ? { blocked: true as const, switchAvailable } : {}),
       ...((keys.routeProviderId || keys.legacyProviderId) && config.paused ? { switchAvailable } : {}),
       // The task follows its account (subscription-account-pools.md 任务跟着账号走). Tell the local

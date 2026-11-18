@@ -167,6 +167,7 @@ import {
   type PluginPresentationOrigin,
 } from './lib/pluginMarketPresentation';
 import { AddMarketplaceDialog } from './AddMarketplaceDialog';
+import { InstallGithubReleaseDialog } from './InstallGithubReleaseDialog';
 import {
   pluginMarketErrorKey,
   pluginMarketOrganizationAccessErrorKey,
@@ -886,6 +887,7 @@ function LocalGhostPluginPage({
     [marketSnapshot?.customSourceNames],
   );
   const [addMarketplaceOpen, setAddMarketplaceOpen] = useState(false);
+  const [githubInstallOwner, setGithubInstallOwner] = useState<string | null>(null);
   const allInstalledItems = useMemo<PresentedGhostPluginItem[]>(
     () =>
       ghosts
@@ -2106,6 +2108,7 @@ function LocalGhostPluginPage({
           </Button>
           <GhostPluginActions
             onInstall={() => void handleInstall()}
+            onInstallGithubRelease={() => setGithubInstallOwner(contributionOwner)}
             onCreateWithCindy={handleCreateWithCindy}
             onAddMarketplace={() => setAddMarketplaceOpen(true)}
           />
@@ -2343,6 +2346,18 @@ function LocalGhostPluginPage({
         </main>
         {panelAside}
       </div>
+      {githubInstallOwner === contributionOwner && (
+        <InstallGithubReleaseDialog
+          key={contributionOwner}
+          onClose={() => setGithubInstallOwner(null)}
+          onInstalled={(id) => {
+            if (contributionOwnerRef.current !== contributionOwner) return;
+            setOpenPanelId(null);
+            setSelectedId(id);
+            setGithubInstallOwner(null);
+          }}
+        />
+      )}
       <AddMarketplaceDialog
         open={addMarketplaceOpen}
         onOpenChange={setAddMarketplaceOpen}

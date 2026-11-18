@@ -206,6 +206,7 @@ export async function update(
     clearedAt?: string | null;
     pinnedAt?: string | null;
     status?: SessionStatus;
+    discardWorktreeChanges?: true;
     orcaRole?: OrcaRole | null;
     /** 附加只读引用目录覆盖列表 (绝对路径); main 端会在 mapper 里 JSON.stringify 后写库。 */
     extraDirs?: string[];
@@ -299,8 +300,9 @@ export async function setStatus(
   sessionId: string,
   status: SessionStatus,
   target?: SessionStatusWriteTarget,
+  discardWorktreeChanges?: true,
 ): Promise<Session> {
-  const patch = status === 'archived' ? { status, pinnedAt: null } : { status };
+  const patch = status === 'archived' ? { status, pinnedAt: null, ...(discardWorktreeChanges && { discardWorktreeChanges }) } : { status };
   const resolvedTarget = target ?? (await resolveStatusWriteTarget(sessionId));
   if (resolvedTarget.kind === 'local') return update(sessionId, patch);
   return wrap(

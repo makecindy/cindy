@@ -116,6 +116,7 @@ export function RemoteConnectionV2Section({
       buildTopology({
         devices: s.devices ?? [],
         links: peerLinks.links,
+        agentNetRoutes: peerLinks.agentNetRoutes,
         relayRttMs: peerLinks.relayRttMs,
         relayProtocol: peerLinks.relayProtocol,
         relayName,

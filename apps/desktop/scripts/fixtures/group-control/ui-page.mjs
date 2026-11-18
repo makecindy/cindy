@@ -718,7 +718,7 @@ export default {
       assert.equal(await replyMode.innerText(), await ui.t('bots.groupChat.settings.replyModeAll'));
       // Reply mode and the 分工 settings stay; one teammate at a time leaves no speaking mode (bot-group-chat.md §4.0).
       assert.equal(await drawer.getByText(await ui.t('bots.groupChat.settings.speakingMode'), { exact: true }).count(), 0, 'speakingMode');
-      for (const key of ['bots.groupChat.organizer', 'bots.groupChat.settings.projectDir', 'bots.groupChat.plan.autoContinue'])
+      for (const key of ['bots.groupChat.organizer', 'bots.groupChat.server.settings.projectFolder', 'bots.groupChat.plan.autoContinue'])
         assert.ok(await drawer.getByText(await ui.t(key), { exact: true }).count() > 0, key);
       await ui.capture('manage');
       return;

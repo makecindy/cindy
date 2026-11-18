@@ -59,6 +59,28 @@ describe('createPeerLinksPushScheduler', () => {
     expect(broadcast).toHaveBeenCalledTimes(2);
   });
 
+  // MagicLizi was already reachable without a control link. Unit: an empty links list
+  // with a changing transport route must produce the same pushes as a business link.
+  it('publishes transport changes before a control link is opened', () => {
+    let current = snap([]);
+    const broadcast = vi.fn();
+    const scheduler = createPeerLinksPushScheduler({ snapshot: () => current, broadcast });
+    const publish = (agentNetRoutes: DeviceLinkPeerLinksSnapshot['agentNetRoutes']) => {
+      current = { ...current, agentNetRoutes };
+      scheduler.schedule();
+      vi.advanceTimersByTime(250);
+    };
+
+    publish([{ deviceId: 'a', path: 'connecting', rttMs: null }]);
+    publish([{ deviceId: 'a', path: 'relay', rttMs: 20 }]);
+    publish([{ deviceId: 'a', path: 'relay', rttMs: 25 }]);
+    publish([{ deviceId: 'a', path: 'direct', rttMs: 3 }]);
+    publish([]);
+
+    expect(broadcast.mock.calls.map(([snapshot]) => snapshot.agentNetRoutes[0]?.path ?? null))
+      .toEqual(['connecting', 'relay', 'direct', null]);
+  });
+
   it('dispose 取消待发广播并忘记上次结构,下一段链路从头比较', () => {
     const current = snap([{ deviceId: 'a', path: 'relay', rttMs: null, open: true }]);
     const broadcast = vi.fn();

@@ -194,12 +194,12 @@ describe('archive uses current state after asynchronous checks', () => {
   // Regression: remote preflight used to block the optimistic row update.
   // Unit: a deferred preflight must hide the row before any write/navigation,
   // then cancellation/failure restores it; a newer intent prevents a late write.
-  it.each(['confirm', 'cancel', 'fail', 'superseded', 'running'] as const)(
+  it.each(['confirm', 'discard', 'cancel', 'fail', 'superseded', 'running'] as const)(
     'updates the remote list during preflight and handles %s', async (outcome) => {
       mocks.resolveStatusWriteTarget.mockResolvedValue({ kind: 'device-link', deviceId: 'device-1' });
-      let resolve!: (confirmed: boolean) => void;
+      let resolve!: (confirmed: boolean | 'discard') => void;
       let reject!: (error: Error) => void;
-      const preparation = new Promise<boolean>((done, fail) => { resolve = done; reject = fail; });
+      const preparation = new Promise<boolean | 'discard'>((done, fail) => { resolve = done; reject = fail; });
       const { result } = renderHook(() => useSessionLifecycleActions());
       let action!: Promise<unknown>;
       await act(async () => {
@@ -215,11 +215,14 @@ describe('archive uses current state after asynchronous checks', () => {
         if (outcome === 'superseded') mocks.isPendingStatusCurrent.mockReturnValue(false);
         if (outcome === 'running') mocks.getRunningSnapshot.mockReturnValue(new Map([['session-1', { isRunning: true }]]));
         if (outcome === 'fail') reject(new Error('preflight failed'));
-        else resolve(outcome !== 'cancel');
+        else resolve(outcome === 'discard' ? 'discard' : outcome !== 'cancel');
         await action;
       });
-      if (outcome === 'confirm') {
-        expect(mocks.setStatus).toHaveBeenCalledOnce();
+      if (outcome === 'confirm' || outcome === 'discard') {
+        expect(mocks.setStatus).toHaveBeenCalledExactlyOnceWith(
+          'session-1', 'archived', { kind: 'device-link', deviceId: 'device-1' },
+          ...(outcome === 'discard' ? [true] : []),
+        );
         expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new', {
           state: { workspacePrompt: 'generic' },
         });

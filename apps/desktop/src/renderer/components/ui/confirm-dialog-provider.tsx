@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 
 import { useTranslation } from 'react-i18next';
 
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { ConfirmDialog, type ConfirmDialogProps } from '@/components/ui/confirm-dialog';
 
 export interface ConfirmOptions {
   title: string;
@@ -79,6 +79,7 @@ export interface ConfirmWithCheckboxOptions extends Omit<ConfirmOptions, 'dontSh
   checkboxLabel: string;
   /** 复选框初始勾选态,缺省 false;每次弹出都复位到该值。 */
   checkboxDefaultChecked?: boolean;
+  checkedOverrides?: ConfirmDialogProps['checkedOverrides'];
 }
 
 interface ConfirmDialogContextValue {
@@ -94,6 +95,7 @@ interface QueueItem {
     tertiaryText?: string;
     checkboxLabel?: string;
     checkboxDefaultChecked?: boolean;
+    checkedOverrides?: ConfirmDialogProps['checkedOverrides'];
   };
   resolve: (value: ConfirmThreeResult, dontShowAgain?: boolean) => void;
 }
@@ -301,6 +303,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
               : currentItem.options.checkboxLabel
           }
           checkboxDefaultChecked={currentItem.options.checkboxDefaultChecked}
+          checkedOverrides={currentItem.options.checkedOverrides}
           onConfirm={handleConfirm}
           onTertiary={handleTertiary}
         />

@@ -1,11 +1,17 @@
-import { sessionAllowsProjectMove, useSessionProjectMoveSheet } from './SessionProjectMoveSheet';
-import { SessionPrLinks } from './SessionPrLinks';
-import { SessionMenuPrLinks } from './SessionMenuPrLinks';
-import { CodexResetAutoUseControl } from './CodexResetAutoUseControl';
-import { TaskTagLabels, TaskTagsPanel } from './TaskTags';
-import { TaskTagsSheet, useTaskTagsSheet } from './TaskTagsSheet';
-import type { OpenAiAccountProvider } from './sessionControls';
-import { formatQuotaResetCountdown } from './sessionUsagePresentation';
+import { useRemoteProjectAliases } from './remoteProjectAliases';
+import { ProjectSettingsSheet } from "./ProjectSettingsSheet";
+import { sessionProjectDirectory } from "@cindy/maker-shared/worktree-paths";
+import {
+  sessionAllowsProjectMove,
+  useSessionProjectMoveSheet,
+} from "./SessionProjectMoveSheet";
+import { SessionPrLinks } from "./SessionPrLinks";
+import { SessionMenuPrLinks } from "./SessionMenuPrLinks";
+import { CodexResetAutoUseControl } from "./CodexResetAutoUseControl";
+import { TaskTagLabels, TaskTagsPanel } from "./TaskTags";
+import { TaskTagsSheet, useTaskTagsSheet } from "./TaskTagsSheet";
+import type { OpenAiAccountProvider } from "./sessionControls";
+import { formatQuotaResetCountdown } from "./sessionUsagePresentation";
 /**
  * SessionMenuSheet —— 会话右上角「…」菜单浮窗(取代旧三 tab 的会话设置面板)。
  *
@@ -240,12 +246,18 @@ export function SessionMenuSheet({
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
   const projectMove = useSessionProjectMoveSheet();
+  const pendingProjectSettings = useRef(false);
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
   const pendingArchiveRef = useRef<(() => void) | null>(null);
   const handleClosed = useCallback(() => {
     const archive = pendingArchiveRef.current;
     pendingArchiveRef.current = null;
     onClosed?.();
     projectMove.parentClosed();
+    if (pendingProjectSettings.current) {
+      pendingProjectSettings.current = false;
+      setProjectSettingsOpen(true);
+    }
     archive?.();
   }, [onClosed, projectMove.parentClosed]);
   const menuUsage = useSessionMenuUsage(
@@ -607,8 +619,21 @@ export function SessionMenuSheet({
   const workspace = buildSessionInfoWorkspace(session);
   const sharedGuest = isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   // 协同 Worker 任务:只保留与 Worker 相关的入口(见 SessionMenuWorkerActions)。
-  const workerMode = !messageOnly && session.orcaRole === 'worker';
-  const showExtraDirs = !sharedGuest && !workerMode && sessionInfoShowsExtraDirs(session);
+  const workerMode = !messageOnly && session.orcaRole === "worker";
+  const projectDirectory =
+    session.workspaceKind === "project"
+      ? sessionProjectDirectory(session)
+      : null;
+  const projectInfo = useRemoteProjectAliases().get(tagDeviceId ?? "");
+  const projectSettingsAvailable =
+    (projectInfo?.settingsVersion ?? 0) >= 6 &&
+    !!projectDirectory &&
+    !!tagDeviceId &&
+    !sharedGuest &&
+    !workerMode &&
+    !messageOnly;
+  const showExtraDirs =
+    !sharedGuest && !workerMode && sessionInfoShowsExtraDirs(session);
 
   // 协同 Worker 的生命周期只能经所属 Lead 的协同面板(归档 Worker / 结束协同)走 Orca 服务;
   // 通用归档 / 删除会绕过团队状态与焦点收尾。桌面同样不给 Worker 这两个入口。
@@ -968,7 +993,20 @@ export function SessionMenuSheet({
         </View>
       ) : null}
 
-      {showExtraDirs ? (
+      {projectSettingsAvailable && (
+        <View style={styles.infoSection}>
+          <MenuPillButton
+            label={t("settings.projectInfo.title")}
+            onPress={() => {
+              pendingProjectSettings.current = true;
+              onClose();
+            }}
+            testID="session.projectSettings"
+          />
+        </View>
+      )}
+      {showExtraDirs &&
+      (!projectSettingsAvailable || currentExtraDirs.length > 0) ? (
         <View style={styles.infoSection} testID="session.extraDirsSection">
           <Text style={styles.infoSectionTitle}>{t('session.menu.extraDirsSection')}</Text>
           {currentExtraDirs.length === 0 ? (
@@ -993,16 +1031,25 @@ export function SessionMenuSheet({
           {extraDirsNotice ? (
             <Text style={styles.infoCaption} testID="session.extraDirsDraftStatus">{extraDirsNotice}</Text>
           ) : null}
-          <View style={styles.infoActionRow}>
-            <MenuPillButton
-              disabled={busy || !!extraDirBrowser?.loading}
-              label={extraDirBrowser?.open ? t('session.menu.collapseRemoteDir') : t('session.menu.browseRemoteDir')}
-              onPress={onToggleExtraDirBrowser}
-              testID="session.extraDirsBrowseToggle"
-            />
-          </View>
-          {extraDirBrowser?.open ? (
-            <View style={styles.browsePanel} testID="session.extraDirsBrowsePanel">
+          {!projectSettingsAvailable && (
+            <View style={styles.infoActionRow}>
+              <MenuPillButton
+                disabled={busy || !!extraDirBrowser?.loading}
+                label={
+                  extraDirBrowser?.open
+                    ? t("session.menu.collapseRemoteDir")
+                    : t("session.menu.browseRemoteDir")
+                }
+                onPress={onToggleExtraDirBrowser}
+                testID="session.extraDirsBrowseToggle"
+              />
+            </View>
+          )}
+          {extraDirBrowser?.open && !projectSettingsAvailable ? (
+            <View
+              style={styles.browsePanel}
+              testID="session.extraDirsBrowsePanel"
+            >
               <Text
                 numberOfLines={2}
                 selectable
@@ -1085,6 +1132,25 @@ export function SessionMenuSheet({
     />
   ) : undefined;
 
+  const projectEditor =
+    projectSettingsOpen &&
+    projectSettingsAvailable &&
+    projectDirectory &&
+    tagDeviceId ? (
+      <ProjectSettingsSheet
+        key={`${tagDeviceId}:${session.id}`}
+        deviceId={tagDeviceId}
+        projectKey={
+          session.remoteHostId
+            ? `remote:${encodeURIComponent(session.remoteHostId)}:${projectDirectory}`
+            : `local:${projectDirectory}`
+        }
+        title={projectDirectory.split(/[\\/]/).pop() ?? projectDirectory}
+        directory={projectDirectory}
+        visible
+        onClose={() => setProjectSettingsOpen(false)}
+      />
+    ) : null;
   const tagEditor = tagsSheet.mounted ? (
     <TaskTagsSheet
       session={session}
@@ -1113,6 +1179,7 @@ export function SessionMenuSheet({
       </SessionDetailsNative>
         {tagEditor}
         {projectMove.sheet}
+        {projectEditor}
       </>
     );
   }
@@ -1172,6 +1239,7 @@ export function SessionMenuSheet({
     </SheetModal>
       {tagEditor}
       {projectMove.sheet}
+      {projectEditor}
     </>
   );
 }

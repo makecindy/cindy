@@ -62,8 +62,11 @@ function setStatusInOrder(
   sessionId: string,
   status: SessionStatus,
   target: Awaited<ReturnType<typeof sessionService.resolveStatusWriteTarget>>,
+  discardWorktreeChanges?: true,
 ): Promise<Session> {
-  const write = () => sessionService.setStatus(sessionId, status, target);
+  const write = () => discardWorktreeChanges
+    ? sessionService.setStatus(sessionId, status, target, true)
+    : sessionService.setStatus(sessionId, status, target);
   if (target.kind !== 'device-link') return write();
   const previous = remoteStatusWrites.get(sessionId);
   const next = previous ? previous.then(write, write) : write();
@@ -77,7 +80,7 @@ function setStatusInOrder(
 
 export interface RunSessionActionOptions {
   /** 归档预检与确认。远程任务先乐观换桶，未获确认不写入、不清理或跳离详情。 */
-  prepareArchive?: (isCurrent: () => boolean) => Promise<boolean>;
+  prepareArchive?: (isCurrent: () => boolean) => Promise<boolean | 'discard'>;
   /** 当前活跃会话 id —— 决定 archive / delete 后是否需要跳走。 */
   activeSessionId: string | null | undefined;
   /**
@@ -156,6 +159,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // remoteProjectsStore 的状态迁移叠加层乐观换桶,写库成功即落被控端返回的行,不等
       // sessions:patched 回流。
       let remoteStatus: RemotePendingStatusToken | null = null;
+      let discardWorktreeChanges: true | undefined;
 
       if (action === 'archive' && prepareArchive) {
         if (isDeviceLinkSession) {
@@ -169,6 +173,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
             if (remoteStatus) remoteProjectsStore.rollbackPendingStatus(remoteStatus);
             return;
           }
+          if (confirmed === 'discard') discardWorktreeChanges = true;
           // 恢复、删除或设备移除已经取代了本次意图时，迟到预检不能再发归档。
           if (remoteStatus && !remoteProjectsStore.isPendingStatusCurrent(remoteStatus)) return;
         } catch (err) {
@@ -248,7 +253,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       try {
         // setStatus 按来源路由(远程走隧道 set-status,本机走原 update);archive 时
         // handler 内部一并 unpin —— 归档列表里不该再保留 pin 标记。
-        persisted = await setStatusInOrder(sessionId, targetStatus, statusWriteTarget);
+        persisted = await setStatusInOrder(sessionId, targetStatus, statusWriteTarget, discardWorktreeChanges);
         statusWriteFinishedAt = performance.now();
         if (statusTransition) {
           sessionsStore.completeStatusTransition(statusTransition, persisted);

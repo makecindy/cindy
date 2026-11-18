@@ -155,7 +155,7 @@ async function autoArchiveLeftTask(
       const preflight = await resolveWorktreeRemovalPreflight(sessionId);
       // 检查期间用户又回到这个任务:不在眼前收走它。输入框里还有没发的草稿时也留着(草稿说明用户还没收尾,不静默把它收出列表;归档本身会保留草稿)。
       if (!checkEligibility() || !isCurrent() || isSessionRemovalRouteCurrent(sessionId)) return false;
-      if (preflight === 'dirty') {
+      if (preflight === 'dirty' || preflight === 'dirty-discardable') {
         toast.info(t('chat.ghostCall.taskAutoArchiveBlockedDirty', { title: session.title }), { duration: 8000 });
         return false;
       }
