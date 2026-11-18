@@ -878,6 +878,9 @@ describe('local-db:sessions:update handler wiring', () => {
       expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalled();
     });
 
+    // The call starts asynchronous removal; wait for its result before checking disk state.
+    await h.stopAndRemovePiSubagentRuns.mock.results[0]!.value;
+
     // Cleanup reported success, so nothing will look at this task again: the
     // root has to be genuinely gone, with no orphan inside it.
     expect(existsSync(spawnedRunDir)).toBe(false);
