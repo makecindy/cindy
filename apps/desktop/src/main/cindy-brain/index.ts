@@ -4,6 +4,8 @@ import { createRuntimePluginControl } from './runtimeControl.js';
 import { createRuntimeContextProviders } from './runtimeContext.js';
 import { createStaticPromptProvider } from './staticPrompt.js';
 import { readRuntimePluginSettings, warmRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
+import type { AgentDeps } from '@cindy/maker-core';
+import { createPluginToolLifecycle } from './toolLifecycleControl.js';
 import { createGhostExecutionPipe } from './executionPipe.js';
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
 import { ownsPersonalBuildMonitor } from '../personalBuildMonitor.js';
@@ -2952,12 +2954,14 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
       listGhostsAsync: listGhostNotificationCandidates,
       findGhostForDelivery: findGhostNotificationTarget,
       isRunning: (id) => getGhostRuntime().stateOf(id) === 'running',
+      isRunningInstall: (ghost) => runtimeSingleton?.isRunningInstall(ghost) === true
+        && (getAppCapabilities().canUseCindyAccountServices || !ghostRequiresCindyAccount(ghost.manifest)),
       wake: async (ghost) => {
         const r = await getGhostRuntime().spawn(ghost);
         if (!r.ok) throw new Error(r.reason);
       },
-      sendToGhost: (ghostId, payload) => {
-        const ghost = findGhostNotificationTarget(ghostId);
+      sendToGhost: (ghostId, payload, synchronousInstall) => {
+        const ghost = synchronousInstall ?? findGhostNotificationTarget(ghostId);
         // 适配:底层返回 false 表示投递失败(网关契约是抛错 → 走缓冲/熔断)。
         if (!ghost?.enabled || ('topic' in payload && !ghost.manifest.subscribe?.topics?.includes(payload.topic))
           || !sendToGhostLogic(installedGhostStoragePart(ghost), payload)) {
@@ -3159,6 +3163,12 @@ export function createGhostSessionTap(sessionId: string): {
   return {
     handleEvent(ev) {
       if (disposed) return;
+      // Tool observers cover all tasks, independently of the legacy primary-task metadata filter.
+      if (taskEventIndex.wantsToolEvent(ev.type)) {
+        const owner = getGhostOwnerPushStamp();
+        try { if (owner) taskEventIndex.publishTool(sessionId, ev, owner, getGhostSubscriptionGateway); }
+        catch { log.warn('tool observation projection failed'); }
+      }
       // 记来源要在过滤**之前**:自动化轮次的事件正是"当前轮次不是用户发起"的唯一线索。
       origin.noteEvent(ev);
       if (ev.turnOrigin?.kind && ev.turnOrigin.kind !== 'user') return;
@@ -3293,6 +3303,19 @@ export function getGhostRuntimePluginControl(): ReturnType<typeof createRuntimeP
   });
 }
 let ghostRuntimeControl: ReturnType<typeof createRuntimePluginControl> | undefined;
+export const ghostToolLifecycleControl = createPluginToolLifecycle({ readSettings: readRuntimePluginSettings, control: getGhostRuntimePluginControl });
+export const ghostNativeRecoveryObserver: NonNullable<AgentDeps['nativeRecoveryObserver']> = sessionId => {
+  if (!taskEventIndex.wantsNativeRecovery()) return undefined;
+  const owner = getGhostOwnerPushStamp();
+  if (!owner) return undefined;
+  return {
+    publish(engine, nativeEvent, metadata) {
+      if (!taskEventIndex.wantsNativeRecovery() || !isGhostOwnerStampCurrent(owner) || isAppSessionBoundaryPending()) return;
+      try { taskEventIndex.publishNativeRecovery({ sessionId, engine, nativeEvent, metadata }, owner, getGhostSubscriptionGateway); }
+      catch { log.warn('native recovery event delivery failed'); }
+    },
+  };
+};
 let ghostRuntimeContexts: ReturnType<typeof createRuntimeContextProviders> | undefined;
 function runtimeContextProviders() {
   return ghostRuntimeContexts ??= createRuntimeContextProviders(getGhostRuntimePluginControl());
@@ -3311,13 +3334,13 @@ export function searchGhostRuntimeMemories(query: string,
 }
 
 export function screenGhostControlPoint(
-  point: 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory',
+  point: 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory' | 'will-tool-call' | 'did-tool-result',
   data: GhostControlPointData,
   target: { pluginId: string; onFailure: GhostControlPointFailureAction },
   timeoutMs?: number,
 ): Promise<GhostRuntimeControlPointResult>;
 export function screenGhostControlPoint(
-  point: Exclude<GhostControlPointId, 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory'>,
+  point: Exclude<GhostControlPointId, 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory' | 'will-tool-call' | 'did-tool-result'>,
   data: GhostControlPointData,
   target: { pluginId: string; onFailure: GhostControlPointFailureAction },
 ): Promise<GhostControlPointResult>;
@@ -6171,6 +6194,7 @@ export function getGhostCindySlot(): GhostCindySlot {
           return { ok: false, reason: 'failed', message: 'ACCOUNT_CHANGED' };
         }
         const r = await requestUtilityText(getMaker(), prompt, {
+          source: 'plugin-text',
           maxTokens,
           timeoutMs: remainingMs,
           // 用户选的模型 / 身份卡声明走显式供应商路径(钉死,不回落);
@@ -10448,6 +10472,39 @@ export function registerGhostIpc(): void {
     } catch (err) {
       log.warn('ghosts:card:get-remote failed', { error: err instanceof Error ? err.message : String(err) });
       return { card: null, failed: true };
+    }
+  });
+
+  // Attachment for a mail card of a task on another computer: chosen and uploaded here; only the
+  // transfer reference and file name go to that computer, as with a phone upload.
+  ipcMain.handle('ghosts:card:remote-mail-attachment', async (event, deviceId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      const [{ uploadRemoteMailAttachment }, { uploadLocalFile, mimeOf }, { withAgentNetMediaTarget }, { readDeviceLinkSettings }] = await Promise.all([
+        import('./remoteMailAttachment.js'), import('../device-link/mediaTransfer.desktop.js'),
+        import('../device-link/agentNetMediaRouting.js'),
+        import('../device-link/settings-store.desktop.js'),
+      ]);
+      if (typeof deviceId !== 'string' || !/^[a-f0-9]{64}$/.test(deviceId)) throw new Error('INVALID_DEVICE_ID');
+      const target = deviceId;
+      const assertTarget = () => {
+        if (readDeviceLinkSettings().disabledControlDeviceIds.includes(target)) throw new Error('DEVICE_LINK_CONTROL_DISABLED');
+      };
+      assertTarget();
+      const { attachment } = await withAgentNetMediaTarget(target, () => uploadRemoteMailAttachment({
+        pick: async () => {
+          const result = await dialog.showOpenDialog({ properties: ['openFile'] });
+          return result.canceled ? null : result.filePaths[0] ?? null;
+        },
+        upload: (file, options) => { assertTarget(); return uploadLocalFile(file, { ...options, assertCurrent: assertTarget }); },
+        mimeOf,
+      }));
+      return { ok: true, attachment };
+    } catch (err) {
+      // Transfer errors can quote the chosen file's path; keep only known codes in the log.
+      const code = err instanceof Error && /^[A-Z][A-Z0-9_]{2,63}$/.test(err.message) ? err.message : 'UPLOAD_FAILED';
+      log.warn('ghosts:card:remote-mail-attachment failed', { error: code });
+      return { ok: false, attachment: null };
     }
   });
 

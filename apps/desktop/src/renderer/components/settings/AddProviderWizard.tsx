@@ -36,6 +36,7 @@ import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization'
 import { presetConnectionRuntime } from '../../../shared/presetConnectionRuntime';
 import { presetCandidateRoute, presetModelCandidate, presetRouteHasInterfaceProfiles, presetSupplementalModels } from '../../../shared/providerModelCandidates';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
+import { subscriptionAccountErrorKey } from './subscriptionAccountErrors';
 import {
   isLocalRuntimeBetaProviderId,
   LOCAL_ADVANCED_PRESET_IDS,
@@ -786,15 +787,13 @@ export function AddProviderWizard({
       // Open the provider the account ended up in.
       onDone(builtin ? providerId : view.providerId || providerId);
     } catch (error) {
-      const code = extractIpcError(error)?.code;
-      if (localLoginRef.current === login && code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
+      const key = subscriptionAccountErrorKey(error);
+      if (localLoginRef.current === login && key)
         toast.error(t(
-          code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
-            ? 'subscriptionAccounts.providerManagedAuth'
-            // An older Cindy rejects a placement it does not know instead of joining the built-in provider.
-            : code === 'INVALID_PARAMS' && !builtinChoice(choice, providerId)
-              ? 'subscriptionAccounts.placement.needsUpdate'
-              : 'subscriptionAccounts.failed',
+          // An older Cindy rejects a placement it does not know instead of joining the built-in provider.
+          extractIpcError(error)?.code === 'INVALID_PARAMS' && !builtinChoice(choice, providerId)
+            ? 'subscriptionAccounts.placement.needsUpdate'
+            : key,
         ));
     } finally {
       if (localLoginRef.current === login) {

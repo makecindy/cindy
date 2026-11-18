@@ -17,6 +17,8 @@
 | `will-model-request` | App 正常发起的本机 Pi 轮次内，每次模型请求，包含工具结果后的继续请求 | allow / route（select 阶段）/ transform（payload 阶段）/ skip / block | 每次请求的 select＋payload 合计 1 秒 |
 | `will-compose-context` | App 内正常发起的新一轮装配消息时，为选了该插件的任务补参考资料 | allow / context / skip / block | 2 秒 |
 | `will-search-memory` | 所选任务调用已有 `cindy_memory.memory_search` 时 | allow / memories | 1.5 秒，失败保留 Cindy 结果 |
+| `will-tool-call` | 所选本机任务的原生工具调用前 | allow / block / tool | 每次调用独立 1 秒，所选插件共享 |
+| `did-tool-result` | 原生工具结果进入后续处理前；这是同步控制节点，不是 topic | allow / block / tool | 每个结果独立 1 秒，所选插件共享 |
 | `system-prompt` | 装配所选任务的系统提示词；由清单 `systemPrompt` 静态提供，不发送询问 | 无运行期裁决 | 不启动插件 |
 
 运行时用 `host-request` 查当前 Cindy 实际提供哪些节点,别靠版本号猜:
@@ -24,7 +26,7 @@
 ```js
 const r = await cindy.request({ kind: 'control-points' });
 // r.points = [{ id, actions, timeoutMs, declared, active }]
-// 任务运行时五点：active 表示整包安装批准有效、已启用且 manifest 已声明。
+// 任务运行时节点：active 表示整包安装批准有效、已启用且 manifest 已声明。
 // 旧的自动化／例行任务／新任务节点仍沿用原节点批准记录。
 // 旧版 Cindy 不认识该请求会报错 —— 当作"没有控制节点",保留其它功能。
 ```
@@ -39,7 +41,7 @@ const r = await cindy.request({ kind: 'control-points' });
 
 - 控制节点**不要求** `launch: "resident"`:不在跑时主机会按需拉起,唤醒耗时计入同一时限。
 - 每个节点在安装／更新确认里单列展示能力；接受即安装／更新整包，拒绝就不安装／更新。
-  任务运行时五点不另存分项批准、不在首次或逐次调用时请求确认；任务里的勾选只是选择提供者。
+  任务运行时节点不另存分项批准、不在首次或逐次调用时请求确认；任务里的勾选只是选择提供者。
   `will-schedule-run`、`will-routine-run`、`will-start-task` 保留原节点批准规则。
 - 当前 Cindy 不认识的节点名可以保留，但不执行；旧三个节点继续沿用原有升级批准语义。
 
@@ -228,6 +230,69 @@ Cindy 原有结果与插件结果各保留自身排序，交替合并
 可用；不开启记忆时保持原行为。提供者超时、停用、出错或给了非法数据时忽略其结果，Cindy
 原有检索仍正常返回；这个节点只有“照常检索”的出错策略。源任务／账号失效后丢弃迟到结果。
 Claude Code、Codex、Pi 都复用同一个检索入口；多插件仅调用任务实际选择的提供者。
+
+### 原生工具生命周期
+
+在 `subscribe.hooks` 声明 `will-tool-call` / `did-tool-result`，再由主人在现有「任务插件」中选择。
+只依赖整包安装批准、启用状态和声明，不追加节点批准。选择变更复用引擎的运行时刷新：在途轮不被打断，
+结束后回收旧实例，下次发送使用新选择。插件停用、更新、卸载或账号变化后，旧回包不能生效。
+这类选择、安装或账号失效在调用前和结果后都按原生默认放行（no-op），不触发该插件的 `onFailure:block`。
+仅支持本机执行的任务；SSH、远程供应商、共享访客与 Review 不装这些钩子。
+没有选择时不装插件工具钩子、不复制工具参数或结果、不启动 RPC 或每工具计时器。
+
+数据为 `{sessionId,engine,phase,toolName,toolCallId,input,result?,isError?}`，`engine` 是
+`claude-code / pi`，`phase` 是 `call / result`；协议保留 `codex` 枚举，但此通道不为 Codex 装配钩子。
+名称与数据按引擎原生语义保留，Pi MCP 使用原生网关工具名和输入。
+失败且未执行的工具不保证有结果节点。
+
+```js
+if (msg.type === 'event' && msg.name === 'will-tool-call') {
+  if (msg.data.engine === 'pi') {
+    cindy.send({ type: 'event-verdict', hookId: msg.hookId, action: 'tool',
+      tool: { input: { ...msg.data.input, /* Pi 原生工具参数 */ } } });
+  } else {
+    cindy.send({ type: 'event-verdict', hookId: msg.hookId, action: 'allow' });
+  }
+}
+```
+
+`allow` 只是不反对，不授予权限。`block` 拒绝调用或停止原生后续处理；结果节点发生前的副作用不回滚。
+`tool` 的字段为 `{decision?:'deny'|'ask',reason?,input?,result?,additionalContext?}`；不能返回
+`decision:'allow'`。`input` 仅 Pi 调用前支持，Claude 不支持改参；`result` 只用于结果后。
+多个插件沿既有控制节点串行处理，后一个收到前一个改过的输入／结果，补充上下文按顺序连接；
+拒绝短路。Pi 实际执行与权限审核使用同一份变换后的参数。
+
+| 能力 | Claude Code / SDK | Codex 0.167.2 | Pi 1.5.2 |
+| --- | --- | --- | --- |
+| 调用前 | 原生 PreToolUse：deny、ask、additionalContext；不支持改参，不接管 SDK 的钩子执行顺序 | 不接入：见下方原生信任边界 | cindy-bridge 的 tool_call：改参、block；仍走原有权限门 |
+| 结果后 | PostToolUse 可替换结果、补上下文；PostToolUseFailure 只补上下文／停止，不能替换结果 | 不接入 | tool_result 可返回 `{content?,details?,isError?}`；停止使用原生 `ctx.abort()`，不会撤销工具 |
+| 结果格式 | `tool.result` 为原生 updatedToolOutput | 不接入 | `tool.result` 为原生 tool_result 返回对象 |
+
+Claude 的结果替换必须符合该工具的原生输出结构。Bash 使用含 `stdout`、`stderr`、`interrupted`、
+`isImage` 的对象；用纯字符串替换会被原生忽略并保留原结果。可保留原结构，只修改需要的字段：
+`tool: { result: { ...msg.data.result, stdout: "替换后的输出" } }`。
+MCP 输出按原生语义透传；Cindy 不把字符串自动转成 Bash 结果，也不校正工具的输出 schema。
+参见 [Claude PostToolUse 原生结果契约](https://code.claude.com/docs/en/hooks#posttooluse-decision-control)。
+
+不支持的动作按任务所选 `onFailure: allow / block` 处理。单次事件／裁决 JSON 最多 1 MiB，
+原生传输帧上限仍适用，不发送截断后冒充完整的数据。每工具等待独立，不消费轮前 5 秒预算。
+静默超时或既有熔断后沿用引擎默认行为，不制造拒绝；正常送达的插件失败／不支持动作按任务策略处理。
+超时不会取消已经执行的工具。大结果在序列化前检查预算；不发送截断后冒充完整的数据。
+
+Codex 原生具备 PreToolUse／PostToolUse，且 `hooks/list` 可读取原生信任信息；但本通道不复制其内部
+指纹算法、合成配置路径，也不建立额外线程来生成信任。因此不自动装配 Codex 插件工具钩子；
+不会改用户 config、信任记录或启用全局 trust bypass，不能把原生能力表等同于本通道已支持。
+Review 的 hooks 禁用与共享访客隔离保留。Pi 仅在既有 cindy-bridge 上接线，不装配插件包内的 Pi 原生扩展，
+用户自行安装的原生扩展保持原顺序与能力。
+原生实例启动时只为当时选中的点安装钩子；未选中的点不注册、不序列化、不发 IPC。
+已装的点每次触发都实时读取当前选择与账号；在途选择或账号变化时，旧答复按原生默认处理，不额外拒绝。
+各插件答复的安装校验沿用主干 apply 前后检查，不另做整段处理结束后的贡献者终检。
+新加入此前未注册的点需要下个原生实例，保存设置不额外重建运行实例；已有点的新选择按下次触发读取。
+这不承诺下一条消息会重新装配钩子，也不提供通用热更新机制。
+
+这些节点不是全局 `aroundExecute`。插件自己提供的工具可在自己的 Node / JS handler 中包装执行、
+计时和可安全重试的业务调用；通用取消沿用 `ghost_call` / Node 通道。不要重放任意 Bash、Edit 或网络写入，
+也不要把超时解释成原操作未执行。只读审计优先使用现有任务事件／历史，不用同步钩子拖住每个工具。
 
 ### 静态系统提示词片段
 

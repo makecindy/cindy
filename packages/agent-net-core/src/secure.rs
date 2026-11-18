@@ -12,8 +12,8 @@
 //! **握手准入。** 请求末尾的 mac1 证明发起方知道响应方的公钥，mac2 证明它收得到发往来源地址的包；响应方忙时先回 cookie，
 //! 发起方带着它马上重发。在 DH 之前挡掉伪造请求，见 `admission` 模块。
 //!
-//! 附带数据加密前是 `[发送方的连接号 4][长度 2][数据][填充]`。请求填满到 `max_packet_size`，回复填到和请求一样长。
-//! 握手因此顺便确认了这条路径两个方向都能过满长度的包。
+//! 附带数据加密前是 `[发送方的连接号 4][长度 2][数据][填充]`。请求填满到这一端发包的上限（`Config::send_limit`），
+//! 回复填到和请求一样长、也不超过回复方自己的发包上限。握手因此顺便确认了这条路径两个方向都能过这么长的包。
 //!
 //! **连接号。** 每一端自己选一个号（`Config::connection_id`），握手时告诉对端，之后对端发来的每个数据包都带着它。
 //! 一个端口上有多条连接时，调用方用 [`destination_id`] 取出连接号找连接，不按来源地址找：NAT 换了端口、
@@ -157,9 +157,9 @@ pub fn destination_id(packet: &[u8]) -> Option<u32> {
     }
 }
 
-/// 握手附带数据的上限：请求和回复都要放进一个包。`max_packet_size` 太小放不下握手时是 0。
+/// 握手附带数据的上限：请求和回复都要放进这一端发的一个包（[`Config::send_limit`]）。太小放不下握手时是 0。
 pub fn max_handshake_payload(config: &Config) -> usize {
-    config.max_packet_size.saturating_sub(INITIATION_OVERHEAD)
+    config.send_limit().saturating_sub(INITIATION_OVERHEAD)
 }
 
 fn read_id(bytes: &[u8], at: usize) -> Option<u32> {
@@ -443,7 +443,7 @@ struct Accepted {
 /// 写回复并导出密钥。回复和请求一样长，不会更大。
 fn respond<C: Crypto>(crypto: &C, config: &Config, incoming: Incoming<C>, payload: &[u8], now_us: u64) -> Result<(Phase<C>, Accepted), HandshakeError> {
     let Incoming { mut handshake, payload: remote_payload, initiation, remote_id } = incoming;
-    let total = config.max_packet_size.min(initiation.len());
+    let total = config.send_limit().min(initiation.len());
     if total < RESPONSE_OVERHEAD || payload.len() > total - RESPONSE_OVERHEAD {
         return Err(HandshakeError::PayloadTooLarge);
     }
@@ -858,12 +858,12 @@ impl<C: Crypto> SecureConnection<C> {
         payload: &[u8],
         now_us: u64,
     ) -> Result<Self, HandshakeError> {
-        if config.max_packet_size < INITIATION_OVERHEAD || payload.len() > max_handshake_payload(&config) {
+        if config.send_limit() < INITIATION_OVERHEAD || payload.len() > max_handshake_payload(&config) {
             return Err(HandshakeError::PayloadTooLarge);
         }
         let mut handshake = Handshake::initiator(&crypto, prologue, remote_static);
         let mut message = vec![INITIATION];
-        handshake.write_first(&crypto, &padded(config.connection_id, payload, config.max_packet_size - 1 - FIRST_MESSAGE_FIXED_LEN - MACS_LEN), &mut message)?;
+        handshake.write_first(&crypto, &padded(config.connection_id, payload, config.send_limit() - 1 - FIRST_MESSAGE_FIXED_LEN - MACS_LEN), &mut message)?;
         let mac1 = admission::mac(&crypto, &admission::mac1_key(&crypto, remote_static), &message);
         message.extend_from_slice(&mac1);
         message.extend_from_slice(&[0; MAC_LEN]);
@@ -1051,6 +1051,10 @@ impl<C: Crypto> SecureConnection<C> {
 
     pub fn finish_stream(&mut self, stream: u32) -> bool {
         self.connection.finish_stream(stream)
+    }
+
+    pub fn stream_buffered(&self, stream: u32) -> usize {
+        self.connection.stream_buffered(stream)
     }
 
     pub fn poll_event(&mut self) -> Option<StreamEvent> {
@@ -1464,10 +1468,10 @@ impl<C: Crypto> SecureConnection<C> {
 
     /// 路径验证包的明文：先回对端的验证，再在没验证过的新路径上发验证。返回明文长度、包号和发往的路径。
     fn write_probe(&mut self, now_us: u64, out: &mut [u8]) -> Option<(usize, u64, u64)> {
-        let (frame, path, value, size) = match self.paths.next_response(self.config.max_packet_size) {
+        let (frame, path, value, size) = match self.paths.next_response(self.config.send_limit()) {
             Some((path, value, size)) => (wire::PathFrame::Response, path, value, size),
             None => {
-                let (path, value, size, same_route) = self.paths.next_challenge(now_us, self.config.max_packet_size)?;
+                let (path, value, size, same_route) = self.paths.next_challenge(now_us, self.config.send_limit())?;
                 (wire::PathFrame::Challenge { same_route }, path, value, size)
             }
         };
@@ -1536,6 +1540,11 @@ impl<C: Crypto> SecureConnection<C> {
             self.stats.silence_pings += 1;
             self.ping();
         }
+    }
+
+    /// 见 [`Connection::needs_fine_timer`]。握手阶段只有几个包，不用。
+    pub fn needs_fine_timer(&self, granularity_us: u64) -> bool {
+        matches!(self.phase, Phase::Established { confirmed: true, .. }) && self.connection.needs_fine_timer(granularity_us)
     }
 
     /// 下一次需要调用 `tick` 和 `poll_transmit` 的时间。

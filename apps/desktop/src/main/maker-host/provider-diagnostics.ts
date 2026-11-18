@@ -1,3 +1,5 @@
+import { withAuxiliaryUsage } from '../usage/auxiliaryUsage.js';
+import { parseAuxiliaryResponse, type AuxiliaryUsageRecorder } from '../../shared/auxiliaryUsage.js';
 /**
  * provider-diagnostics —— 供应商「测试连接」探测（设置页 / 自定义供应商表单消费）。
  *
@@ -40,7 +42,7 @@ import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { createMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.desktop.js';
-import { hostCredentialEndpointAllowed, invocationModelRecord, probePiProvider, requiresNativeProviderAuth } from './pi-provider-transport.js';
+import { hostCredentialEndpointAllowed, invocationModelRecord, probePiProvider, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { getProviderRouteCredentialRevision, isProviderRouteMutationInProgress, buildRouteDecision, providerRoutingForModel } from './provider-route.js';
 
 import type { ProviderConnectionTestInput, ProviderConnectionTestResult } from '../../shared/providerConnectionTest.js';
@@ -55,6 +57,8 @@ const MAX_ERROR_BODY_BYTES = 16 * 1024;
 
 /** 一次探测的完整参数（adhoc 直填；saved 由 resolve 得到）。 */
 export interface ProviderProbeSpec {
+  /** Main-resolved saved instance, independent of its catalog preset. */
+  providerId?: string;
   agent: AgentKind;
   baseUrl: string;
   modelId: string;
@@ -208,16 +212,27 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Read the first non-empty SSE data frame so 200-streamed provider errors do not pass the probe. */
-async function readFirstSsePayload(res: Response): Promise<string | null> {
+/** Keep the first payload for protocol validation, while draining later usage frames. */
+async function readFirstSsePayload(
+  res: Response,
+  observe?: (raw: string) => Promise<void>,
+): Promise<string | null> {
   if (!res.body) return null;
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let firstPayload: string | null = null;
+  const observed: string[] = [];
+  let observedChars = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (value) buffer += decoder.decode(value, { stream: !done });
+      if (value) {
+        const chunk = decoder.decode(value, { stream: !done });
+        observed.push(chunk);
+        observedChars += chunk.length;
+        buffer += chunk;
+      }
       let start = 0;
       let newline: number;
       while ((newline = buffer.indexOf('\n', start)) >= 0) {
@@ -225,22 +240,38 @@ async function readFirstSsePayload(res: Response): Promise<string | null> {
         start = newline + 1;
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
-        if (payload) return payload;
+        if (payload && firstPayload === null) {
+          firstPayload = payload;
+          if (payload !== '[DONE]') {
+            try {
+              const event: unknown = JSON.parse(payload);
+              if (isPlainObject(event) && isPlainObject(event.error)) return firstPayload;
+            } catch {
+              return firstPayload;
+            }
+          }
+        }
+        if (payload === '[DONE]') return firstPayload;
       }
       if (start > 0) buffer = buffer.slice(start);
-      if (buffer.length > MAX_ERROR_BODY_BYTES) return null;
+      if (observedChars > MAX_ERROR_BODY_BYTES) return firstPayload;
       if (done) {
         buffer += decoder.decode();
         const line = buffer.replace(/\r$/, '');
-        if (!line.startsWith('data:')) return null;
-        return line.slice(5).trim() || null;
+        if (!line.startsWith('data:')) return firstPayload;
+        return firstPayload ?? (line.slice(5).trim() || null);
       }
     }
   } finally {
     try {
-      await reader.cancel();
-    } catch {
-      /* no-op */
+      await observe?.(observed.join(''));
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        /* no-op */
+      }
+      reader.releaseLock();
     }
   }
 }
@@ -309,7 +340,9 @@ export async function runProviderProbe(
 ): Promise<ProviderTestResult> {
   const start = Date.now();
   try {
-    return logProbeFailure(spec, await runProviderProbeUnlogged(spec, fetchImpl));
+    return await withAuxiliaryUsage({ source: 'provider-probe', providerId: spec.providerId,
+      model: spec.modelId, transport: spec.wireProtocol }, async record =>
+      logProbeFailure(spec, await runProviderProbeUnlogged(spec, fetchImpl, record)));
   } catch (err) {
     // 拿到响应头后读首帧时连接中断(readFirstSsePayload 抛错)、请求装配抛错等异常路径
     // 同样要留痕,否则仍是「未知错误、日志无迹」;异常本身原样抛给 IPC,不改变错误语义。
@@ -323,11 +356,16 @@ export async function runProviderProbe(
 async function runProviderProbeUnlogged(
   spec: ProviderProbeSpec,
   fetchImpl: typeof fetch,
+  record: AuxiliaryUsageRecorder,
 ): Promise<ProviderTestResult> {
   if (spec.authMethod === 'none' && !isLoopbackProviderUrl(spec.baseUrl)) {
     throw new TypeError('no-auth provider probes require a loopback URL');
   }
   const start = Date.now();
+  const observe = async (raw: string) => {
+    const observed = parseAuxiliaryResponse(raw, spec.wireProtocol ?? (spec.agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses'));
+    if (observed.tokens) await record(observed.tokens, observed.model ? { model: observed.model } : {});
+  };
   const presetRow = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, spec.api, spec.baseUrl);
   const row = spec.nativeModel
     ?? providerModelRecord(spec.modelId, spec.baseUrl, spec.api ?? spec.wireProtocol)
@@ -361,6 +399,11 @@ async function runProviderProbeUnlogged(
           ?? new Headers(spec.headers).get('x-api-key') ?? '',
         headers: spec.apiKey || spec.authMethod === 'none' ? withoutCredentialHeaders(spec.headers) : spec.headers, fetchImpl: diagnosticFetch,
       }, AbortSignal.timeout(PROBE_TIMEOUT_MS));
+      if (result.usage && [result.usage.input, result.usage.output, result.usage.cacheRead, result.usage.cacheWrite].some(n => n > 0)) {
+        await record({ inputTokens: result.usage.input, outputTokens: result.usage.output,
+          cacheReadTokens: result.usage.cacheRead, cacheCreateTokens: result.usage.cacheWrite },
+          result.model ? { model: result.model } : {});
+      }
       if (result.stopReason !== 'error' && result.stopReason !== 'aborted') return { ok: true, latencyMs: Date.now() - start };
       const detail = result.errorMessage ?? 'Native provider probe failed';
       const statusMatch = detail.match(/(?:status|code)["\s:]+(4\d\d|5\d\d)\b|^(4\d\d|5\d\d)(?:\s|:)/);
@@ -402,7 +445,7 @@ async function runProviderProbeUnlogged(
           detail: `expected text/event-stream, got ${contentType || 'no content-type'}`,
         };
       }
-      const firstPayload = await readFirstSsePayload(res);
+      const firstPayload = await readFirstSsePayload(res, observe);
       if (!firstPayload) {
         return {
           ok: false,
@@ -431,17 +474,16 @@ async function runProviderProbeUnlogged(
       }
       return { ok: true, latencyMs };
     }
-    // Non-streaming probes do not need the response body; cancel it to release the connection.
-    try {
-      await res.body?.cancel();
-    } catch {
-      /* no-op */
-    }
+    // Observe this existing response within the original request timeout; never issue a
+    // second generation solely to recover metering.
+    try { await observe(await readBoundedResponseText(res, MAX_ERROR_BODY_BYTES)); }
+    catch { /* Connection classification remains independent of optional metering. */ }
     return { ok: true, latencyMs };
   }
   let bodyText = '';
   try {
     bodyText = (await res.text()).slice(0, MAX_ERROR_BODY_BYTES);
+    await observe(bodyText);
   } catch {
     /* 读体失败按空体分类 */
   }
@@ -525,6 +567,7 @@ export async function resolveSavedProbeSpec(providerId: string, agent: AgentKind
       throw new Error('provider_oauth_login_changed');
     }
     return {
+      providerId,
       agent,
       baseUrl: buildRouteDecision(modelRouting, null, agent, null, oauthToken)?.upstreamOverride ?? baseUrl,
       modelId: model.id,
@@ -541,6 +584,7 @@ export async function resolveSavedProbeSpec(providerId: string, agent: AgentKind
   }
   if (routing.authStrategy === 'none') {
     return {
+      providerId,
       agent,
       baseUrl,
       modelId: model.id,
@@ -554,6 +598,7 @@ export async function resolveSavedProbeSpec(providerId: string, agent: AgentKind
   }
   const apiKey = keyReader(providerId, agent);
   return {
+    providerId,
     agent,
     baseUrl,
     modelId: model.id,

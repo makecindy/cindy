@@ -2,8 +2,9 @@
 //! - 生产入口与可观察结果：`agent_net_core::Connection` 的多路流公开接口，断言每条流读到的字节完整、有序、不串流，
 //!   一条流卡住不影响别的流，优先级、流量额度和流的生命周期符合约定，坏包不能撑大内存。
 //! - Bug／规则依据：`docs/agent-net-plan.md` 第 2 步通过标准。流头写错或额度算错时不会报错，只会把数据交给错的流，
-//!   或者让流永远卡住。
-//! - 现有覆盖缺口：`reliability.rs` 只用默认流，碰不到流头、调度、额度和流的结束。
+//!   或者让流永远卡住。2026-11-17 起另有一端窗口 8192、一端是窗口 128 的旧版的互通用例（`sim/results/2026-11-17-window-interop`）：
+//!   越过旧版窗口的分片被丢掉、旧版发送端等额度，都只会变慢、不会报错。
+//! - 现有覆盖缺口：`reliability.rs` 只用默认流，碰不到流头、调度、额度和流的结束；别的用例两端配置都一样。
 //! - 最小失败输入：每条失败都打印种子，用 `AGENT_NET_REPLAY=<种子>` 重放；固定场景的输入写在各用例里。
 //! - tier：Rust integration，虚拟时间，无真实网络；独立通过 Cargo 运行，未接入 pnpm unit runner。
 //!   用 `--profile sim` 打开溢出检查，默认 200 个种子；`AGENT_NET_SEEDS=10000` 跑扩展矩阵。
@@ -37,15 +38,20 @@ struct Pair {
 
 impl Pair {
     fn new(config: &Config, to_b: LinkProfile, to_a: LinkProfile, seed: u64) -> Self {
+        Self::with_configs(config, config, to_b, to_a, seed)
+    }
+
+    /// 两端配置不同：一端升级了、另一端还是旧版。
+    fn with_configs(a: &Config, b: &Config, to_b: LinkProfile, to_a: LinkProfile, seed: u64) -> Self {
         Self {
-            a: Connection::new(config.clone(), 0),
-            b: Connection::new(config.clone(), 0),
+            a: Connection::new(a.clone(), 0),
+            b: Connection::new(b.clone(), 0),
             to_b: Link::new(to_b, seed ^ 0xA5A5),
             to_a: Link::new(to_a, seed ^ 0x5A5A),
             packets: BinaryHeap::new(),
             order: 0,
             now: 0,
-            buffer: vec![0; config.max_packet_size],
+            buffer: vec![0; a.max_packet_size.max(b.max_packet_size)],
             wire_bytes: 0,
             largest_burst: 0,
         }
@@ -368,6 +374,37 @@ fn interactive_messages_stay_fast_beside_a_full_file() {
     }
 }
 
+/// 不打乱先后的抖动线路（Wi-Fi 聚合、经 TCP 中转、VPN）上交互消息和文件一起发时，低排队模式的窗口只按最小往返算，
+/// 确认晚回来，窗口先卡住速度，带宽估计一轮轮往下掉（2026-11-15 真实网络对比：会话层回传每秒 3–7 MB，线路能跑 14 MB）。
+/// 窗口要另加确认一直成批到达多出来的量，加速探测连着成功时要一次比一次加得多（VPN 一行：改之前文件 26 Mbit/s）；排起来的队连着两轮发得比送到的快很多时要认作自己的、
+/// 把带宽估计降下来，不能当成路径变慢去抬高基准，否则窗口越撑越大，消息排到队尾（抖动 30 毫秒一行：改之前 p99 1.23 秒）。
+/// 上一个用例守着另一头：令牌桶开头放行的那一阵、浅队列上的随机抖动不能拿来放大窗口。
+#[test]
+fn files_keep_their_speed_beside_messages_on_ordered_jitter() {
+    let ordered = |bits_per_second, delay_us, jitter_us, loss, queue_us| LinkProfile { bits_per_second, delay_us, jitter_us, jitter_fifo: true, loss, queue_us, ..LinkProfile::default() };
+    let rows = [
+        // 2026-11-16：改之前 p99 18 毫秒、文件 26.2 Mbit/s；窗口补上确认一直成批到达的量以后 41.6 Mbit/s，
+        // 加速探测连着成功时一次比一次加得多以后 48.7 Mbit/s，p99 都是 18 毫秒。
+        ("VPN", ordered(120_000_000, 8_500, 10_000, 0.0, 50_000), 25_000, 45_000_000),
+        // 改之前 p99 1232 毫秒、6.7 Mbit/s，之后 669 毫秒、7.4 Mbit/s。
+        ("每秒 1 MB 抖动 30 毫秒", ordered(8_000_000, 40_000, 30_000, 0.0, 262_000), 900_000, 7_000_000),
+        // 改之前 p99 110 毫秒、16.0 Mbit/s，之后 111 毫秒、16.3 Mbit/s：这里只守着不变差。
+        ("4G", ordered(20_000_000, 35_000, 20_000, 0.015, 200_000), 150_000, 15_000_000),
+    ];
+    for (name, link, p99_limit, rate_floor) in rows {
+        let (mut delays, mut rate) = (Vec::new(), 0);
+        for seed in 1..=4 {
+            let (run, run_rate) = messages_beside_a_file(&link, seed);
+            delays.extend(run);
+            rate += run_rate / 4;
+        }
+        delays.sort_unstable();
+        let p99 = delays[delays.len() * 99 / 100];
+        assert!(p99 <= p99_limit, "{name}: p99 {p99}");
+        assert!(rate >= rate_floor, "{name}: 文件只有 {rate} bit/s");
+    }
+}
+
 /// 额度跟不上时，流会被自己的窗口卡住：高带宽路径上新开的流不能比默认流慢。
 #[test]
 fn credit_keeps_up_with_fast_paths() {
@@ -387,6 +424,118 @@ fn credit_keeps_up_with_fast_paths() {
     };
     let (default_stream, opened) = (rate(false), rate(true));
     assert!(opened * 10 >= default_stream * 9, "默认流 {default_stream}，新开的流 {opened}");
+}
+
+/// 旧版：窗口和每条流的初始额度都是 `Config::default()` 的 128 个分片。
+fn legacy_config() -> Config {
+    Config::default()
+}
+
+/// 新版 Node 驱动的配置（`wasm/src/lib.rs` 的 `init`）：窗口放大到 8192 个分片，发包短一些。
+fn upgraded_config() -> Config {
+    upgraded(Config::default())
+}
+
+fn upgraded(base: Config) -> Config {
+    Config { send_window: 8192, recv_window: 8192, send_buffer_bytes: 24 << 20, send_packet_size: 1317, ..base }
+}
+
+/// a 在 `streams` 条新开的流上各发 `total` 字节给 b，b 一到就读。返回 (b 读完的时刻, a 重传的分片数)。
+fn one_way(a: &Config, b: &Config, link: &LinkProfile, streams: usize, total: usize, seed: u64) -> (u64, u64) {
+    let mut pair = Pair::with_configs(a, b, link.clone(), link.clone(), seed);
+    let ids: Vec<u32> = (0..streams).map(|_| pair.a.open_stream(Priority::Normal).unwrap()).collect();
+    let chunk = [8u8; 65_536];
+    let (mut written, mut read) = (vec![0; streams], 0);
+    while read < total * streams && pair.now < 60_000_000 {
+        for (index, &id) in ids.iter().enumerate() {
+            while written[index] < total {
+                let accepted = pair.a.send_stream(pair.now, id, &chunk[..chunk.len().min(total - written[index])]);
+                if accepted == 0 {
+                    break;
+                }
+                written[index] += accepted;
+            }
+            read += drain(&mut pair.b, pair.now, id);
+        }
+        while pair.b.poll_event().is_some() {}
+        pair.advance();
+    }
+    assert_eq!(read, total * streams, "seed {seed}: stalled at {}us", pair.now);
+    (pair.now, pair.a.stats().retransmitted_segments)
+}
+
+/// 新版发给旧版：旧版接收端只收 `rcv_next` 之后 128 个分片以内的，越过的丢掉、也不确认，只能等重传。
+/// 新版发送端要和两端都是旧版时一样守着这个窗口，互通不能比两端都是旧版差（新版发包短 6%，窗口卡住时按字节算就慢这么多）。
+/// 2026-11-17 复核发现：只有默认流按对端确认里的窗口限着，别的流的额度从自己的 8192 起算，在途分片和拥塞窗口的上限也按自己的 8192；
+/// 8 MiB、100 Mbit/s、往返 20 毫秒、1% 丢包，重传从 2 个涨到 8312 个，慢 61%。
+#[test]
+fn upgraded_senders_stay_inside_a_legacy_window() {
+    let total = 8 << 20;
+    let lossy = LinkProfile { loss: 0.01, queue_us: 50_000, ..path(100_000_000, 10_000) };
+    for seed in 1..=2 {
+        let (legacy_us, legacy_resent) = one_way(&legacy_config(), &legacy_config(), &lossy, 1, total, seed);
+        let (mixed_us, mixed_resent) = one_way(&upgraded_config(), &legacy_config(), &lossy, 1, total, seed);
+        assert!(mixed_resent <= legacy_resent * 4 + 32, "seed {seed}: 旧版两端重传 {legacy_resent} 个，新版发给旧版 {mixed_resent} 个");
+        // 拥塞控制按自己的大窗口判断（不看对端只有 128）时，校验包和启动都按错的窗口走，慢 52%。
+        assert!(mixed_us * 10 <= legacy_us * 12, "seed {seed}: 旧版两端 {legacy_us}us，新版发给旧版 {mixed_us}us");
+    }
+    // 两条流一起发、不发校验包：每条流的额度各自都在旧版的窗口里，合起来却会越过它，要按连接的序号守住。
+    // 只按流的额度和在途分片数限的话，重传是旧版两端的 4–7 倍。
+    let lean = Config::for_policy(RecoveryPolicy::Lean);
+    for seed in 1..=2 {
+        let (_, legacy_resent) = one_way(&lean, &lean, &lossy, 2, total / 2, seed);
+        let (_, mixed_resent) = one_way(&upgraded(lean.clone()), &lean, &lossy, 2, total / 2, seed);
+        assert!(mixed_resent <= legacy_resent * 2 + 32, "seed {seed}: 旧版两端重传 {legacy_resent} 个，新版发给旧版 {mixed_resent} 个");
+    }
+    // 没读的流只卡住自己：旧版接收端给每条流 128 个分片的额度，新版发送端开流时也按 128 记，不按自己的 8192。
+    // 按 8192 记的话，没读的流把旧版的未读上限（4 个窗口）占满，读着的流也收不到了。
+    let (legacy, upgraded) = (legacy_config(), upgraded_config());
+    let mut pair = Pair::with_configs(&upgraded, &legacy, path(40_000_000, 10_000), path(40_000_000, 10_000), 1);
+    let (moving, stuck) = (pair.a.open_stream(Priority::Normal).unwrap(), pair.a.open_stream(Priority::Normal).unwrap());
+    let (total, mut stuck_written, mut moving_written, mut moving_read) = (2_000_000usize, 0, 0, 0);
+    let chunk = [5u8; 4096];
+    while pair.now < 20_000_000 && moving_read < total {
+        moving_written += pair.a.send_stream(pair.now, moving, &chunk[..chunk.len().min(total - moving_written)]);
+        stuck_written += pair.a.send_stream(pair.now, stuck, &chunk[..chunk.len().min(total - stuck_written)]);
+        moving_read += drain(&mut pair.b, pair.now, moving);
+        let bound = legacy.recv_window as usize * legacy.max_packet_size;
+        assert!(pair.b.buffered_bytes() <= bound * 2, "没读的流超出了旧版给的额度：{}", pair.b.buffered_bytes());
+        pair.advance();
+    }
+    assert_eq!(moving_read, total, "读着的流被没读的流卡住，at {}us", pair.now);
+}
+
+/// 旧版发给新版：旧版发送端开流时按 128 个分片的额度记，用完就等新的额度。新版接收端收到新流就把额度放到自己的窗口，
+/// 不能等应用读走八分之一个窗口（1024 个分片）才给：那样旧版发送端要等 250 毫秒的探测，千兆局域网上 8 MiB 慢一倍多。
+#[test]
+fn legacy_senders_get_credit_from_upgraded_receivers_at_once() {
+    let lan = LinkProfile { queue_us: 5_000, ..path(1_000_000_000, 1_000) };
+    let total = 8 << 20;
+    let (legacy_us, _) = one_way(&legacy_config(), &legacy_config(), &lan, 1, total, 1);
+    let (mixed_us, _) = one_way(&legacy_config(), &upgraded_config(), &lan, 1, total, 1);
+    assert!(mixed_us * 10 <= legacy_us * 11, "旧版两端 {legacy_us}us，旧版发给新版 {mixed_us}us");
+}
+
+/// 两端都升级：开头按 128 个分片发，对端在确认里说出大窗口后放开，长往返上不再卡在 128 个分片；
+/// 新流一开就有整个窗口的额度，应用晚一点读，发送端也不停在 128 个分片上等它。
+#[test]
+fn upgraded_peers_use_their_large_windows() {
+    let far = path(50_000_000, 40_000);
+    let total = 8 << 20;
+    let (legacy_us, _) = one_way(&legacy_config(), &legacy_config(), &far, 1, total, 1);
+    let (upgraded_us, _) = one_way(&upgraded_config(), &upgraded_config(), &far, 1, total, 1);
+    assert!(upgraded_us * 2 <= legacy_us, "旧版两端 {legacy_us}us，新版两端 {upgraded_us}us");
+
+    let config = upgraded_config();
+    let mut pair = Pair::new(&config, path(100_000_000, 10_000), path(100_000_000, 10_000), 1);
+    let stream = pair.a.open_stream(Priority::Normal).unwrap();
+    let chunk = [3u8; 65_536];
+    while pair.now < 200_000 {
+        while pair.a.send_stream(pair.now, stream, &chunk) == chunk.len() {}
+        pair.advance();
+    }
+    let segment = config.send_limit();
+    assert!(pair.b.buffered_bytes() > 512 * segment, "应用还没读时只收到了 {} 字节", pair.b.buffered_bytes());
 }
 
 /// 只有交互流在发时没有谁要让路，不能压低队列：把终端输出这样的突发放在交互流上，不能因此变慢。

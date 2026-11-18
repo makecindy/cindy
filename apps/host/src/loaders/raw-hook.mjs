@@ -40,7 +40,10 @@ export async function resolve(specifier, context, nextResolve) {
 }
 
 export async function load(url, context, nextLoad) {
-  if (!url.startsWith('cindy-raw:')) {
+  // tsx resolves a `?raw` import itself (this hook's resolve then sees the bare path) and puts the query back on the
+  // file URL it loads, e.g. Desktop's `page.html?raw` in cindy-brain/forge.ts; load that as raw text too.
+  const raw = url.startsWith('cindy-raw:') ? url.slice('cindy-raw:'.length) : /^file:[^?#]*\?raw$/.test(url) ? url.slice(0, -'?raw'.length) : null;
+  if (!raw) {
     if (url.includes('/apps/desktop/') && /\.tsx?(?:\?|$)/.test(url)) {
       const filename = fileURLToPath(url);
       const source = await readFile(filename, 'utf8');
@@ -49,7 +52,7 @@ export async function load(url, context, nextLoad) {
     }
     return nextLoad(url, context);
   }
-  const filesystemPath = fileURLToPath(url.slice('cindy-raw:'.length));
+  const filesystemPath = fileURLToPath(raw);
   const text = await readFile(filesystemPath, 'utf8');
   return {
     format: 'module',

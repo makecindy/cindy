@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Speichern",
     "promptUnsupported": "Dieser Pi-Ausführungsort unterstützt keine Systemanweisungsfragmente.",
+    "nativeHooksUnsupported": "Werkzeug-Hooks unterstützen nur lokales Claude Code und Pi.",
     "title": "Aufgaben-Plugins",
     "description": "Plugins für diese Aufgabe auswählen. Änderungen gelten ab der nächsten Nachricht.",
     "unsupported": "Die Verarbeitung jeder Anfrage wird nur mit lokalem Pi unterstützt. Die Engine dieser Aufgabe unterstützt sie nicht.",
@@ -1378,7 +1379,7 @@
     "REMOTE_PROVIDER_UPDATING": "Die Zugangsdaten des Anbieters werden aktualisiert – versuch es gleich erneut",
     "REMOTE_PROVIDER_UNSUPPORTED": "Dieser Anbieter wird in SSH-Remote-Sitzungen nicht unterstützt – wähle eine andere Quelle",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Remote-Aufgaben können kein Claude-Abonnement nutzen – wähle ein Gateway- oder API-Schlüssel-Modell",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "Das Zielgerät antwortet nicht. Überprüfe das entfernte Gerät und versuch es erneut.",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "Das Zielgerät antwortet gerade nicht. Das Netzwerk ist möglicherweise langsam oder das Gerät ausgelastet. Cindy prüft die Verbindung automatisch; versuch es erneut, sobald sie wieder steht.",
     "INTERNAL": "Vorgang fehlgeschlagen. Versuch es später erneut.",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "Die SSH-Konfiguration auf dem Datenträger wurde geändert. Lade sie neu und versuch es erneut.",
     "SSH_CONFIG_RELOAD_REQUIRED": "Die SSH-Konfiguration wurde gespeichert, aber Cindy konnte sie nicht aktualisieren. Lade die SSH-Konfiguration neu.",
@@ -4346,7 +4347,6 @@
           "label": "Ausführen auf",
           "optionLocal": "Dieser Computer",
           "notSignedIn": "Nicht angemeldet",
-          "autoBorrowing": "Dieser Computer ist nicht angemeldet, daher laufen neue Aufgaben auf {{device}}. Keine Anmeldung nötig.",
           "local": "Neue Aufgaben laufen auf diesem Computer. Du kannst stattdessen einen deiner anderen angemeldeten Computer wählen.",
           "pinned": "Neue Aufgaben laufen auf {{device}} mit dessen Anmeldung. Laufende Aufgaben bleiben, wo sie sind.",
           "inline": "Läuft auf",
@@ -5462,8 +5462,19 @@
       "title": "Nachrichteneingabe",
       "sendShortcut": {
         "label": "Mit {{shortcut}} senden",
-        "hint": "Wenn aktiviert, sendet {{shortcut}} Nachrichten. Wenn deaktiviert, sendet die Eingabetaste Nachrichten und Umschalt+Eingabetaste fügt eine neue Zeile ein.",
-        "ariaLabel": "Mit {{shortcut}} Nachrichten senden"
+        "hint": "Enter sendet. Shift+Enter fügt einen Zeilenumbruch ein.",
+        "ariaLabel": "Mit {{shortcut}} Nachrichten senden",
+        "hintModifierEnter": "{{shortcut}} sendet. Enter fügt einen Zeilenumbruch ein."
+      },
+      "followUp": {
+        "label": "Senden während der Ausführung",
+        "hintQueue": "Während die Aufgabe läuft, reihen der Senden-Button und {{send}} die Nachricht ein.",
+        "hintSteer": "Während die Aufgabe läuft, steuern der Senden-Button und {{send}} die laufende Aufgabe.",
+        "ariaLabel": "Senden, während die Aufgabe läuft",
+        "options": {
+          "queue": "Einreihen",
+          "steer": "Steuern"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -6491,7 +6502,8 @@
           "defaultProjectTag": "Standard",
           "defaultProjectFullAccessWarning": "Das Standardprojekt „{{name}}“ hat Vollzugriff: Eine @Erwähnung aus jeder beliebigen Gruppe wird darin mit vollem Zugriff ausgeführt.",
           "sharedSettingsPointer": "Projekte, Modelle und Berechtigungen gelten für alle offiziellen Bots gemeinsam.",
-          "sharedSettingsPointerAction": "Einstellungen öffnen"
+          "sharedSettingsPointerAction": "Einstellungen öffnen",
+          "workspacesCardDescriptionWithPlugins": "Gilt für alle offiziellen Bots und IM-Plugins gemeinsam. Die Projekte stammen aus der Seitenleiste – dort erstellst, benennst oder entfernst du sie. Änderungen über /model in einem Chat erscheinen auch hier. Modelle und Berechtigungen, die in einem Plugin für einen einzelnen Chat geändert wurden, bleiben davon unberührt."
         },
         "binding": {
           "copyLink": "Link kopieren",
@@ -6800,6 +6812,7 @@
           "latency": "Latenz",
           "lastSeen": "Zuletzt gesehen",
           "controlling": "Steuert diesen Computer",
+          "protocol": "Verbindung",
           "rttNote": "zuletzt gemessen",
           "manage": "Gerät verwalten…",
           "linkStatus": "Zu {{name}}",
@@ -6967,7 +6980,8 @@
         "replaced": "Verbindung durch eine andere Instanz dieses Geräts ersetzt",
         "too-many-connections": "Verbindungslimit für dieses Konto erreicht",
         "version-mismatch": "Protokollversion stimmt nicht überein — bitte App aktualisieren",
-        "unstable": "Verbindung bricht ständig ab und wird wiederhergestellt — prüfe das Netzwerk oder starte Cindy neu, falls das Problem weiterhin besteht"
+        "unstable": "Verbindung bricht ständig ab und wird wiederhergestellt — prüfe das Netzwerk oder starte Cindy neu, falls das Problem weiterhin besteht",
+        "agent-net-relay-down": "Agent-Net-Relay nicht erreichbar, Verbindung wird wiederhergestellt. Direkt verbundene Computer funktionieren weiter; andere Geräte können sich vorerst nicht verbinden"
       },
       "refresh": "Aktualisieren",
       "empty": "Noch keine weiteren Geräte. Melde dich auf einem anderen Computer mit demselben Konto bei {{appName}} an, damit er hier angezeigt wird.",
@@ -7023,11 +7037,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "Offiziell",
-        "personal": "Persönlich"
+        "personal": "Persönlich",
+        "plugins": "Plugins"
       },
       "tips": {
         "cindy": "Von Cindy bereitgestellt und gepflegt. Du musst keinen Bot erstellen oder Zugangsdaten angeben – folge den Verbindungsschritten, um loszulegen.",
-        "personal": "Verwende dein eigenes Konto oder deinen eigenen Bot und verwalte die erforderlichen Zugangsdaten selbst. Jeder Kanal hat sein eigenes Konto, eigene Berechtigungen und Einstellungen."
+        "personal": "Verwende dein eigenes Konto oder deinen eigenen Bot und verwalte die erforderlichen Zugangsdaten selbst. Jeder Kanal hat sein eigenes Konto, eigene Berechtigungen und Einstellungen.",
+        "plugins": "IM-Zugänge, die von installierten Plugins bereitgestellt werden. Anmeldung und Verknüpfung erfolgen auf der Seite des Plugins. Projekte, Modelle und Berechtigungen folgen standardmäßig „Projekte und Modelle“ und lassen sich im Plugin pro Chat ändern."
       },
       "defaults": {
         "title": "Konfiguration für neue Unterhaltungen",
@@ -7059,6 +7075,10 @@
         },
         "groupPermissionLabel": "Berechtigungsmodus für neue Gruppenaufgaben",
         "groupPermissionDescription": "Berechtigungsmodus für jede Aufgabe, die in einem Gruppenchat erstellt wird – ob über @bot beim Öffnen eines Themas, /new oder /ctr. Der obige Berechtigungsmodus gilt nur für Direktnachrichten. Standardmäßig ist die automatische Genehmigung aktiv. Der Gruppenkontext kann von Mitgliedern kontrollierte Inhalte enthalten. Mit „Vollzugriff“ werden Aktionen ohne Bestätigung der einzelnen Schritte ausgeführt. Wähle diesen Modus daher nur für Gruppen, denen du vertraust. Änderungen gelten für danach erstellte Aufgaben. Den Modus einer bestehenden Aufgabe änderst du mit /permission in der Gruppe."
+      },
+      "plugins": {
+        "rowHint": "Anmeldung, Verknüpfung und Einstellungen pro Chat findest du auf der Seite des Plugins.",
+        "open": "Plugin öffnen"
       }
     },
     "shortcuts": {
@@ -8287,6 +8307,10 @@
         "subscribeTopics": "Beobachtet deine Sitzungsaktivität (Runden- und Sitzungsereignisse, keine Nachrichteninhalte)",
         "subscribeMessage": "Ereignisse mit Nachrichteninhalt",
         "subscribeMessageDetail": "Empfängt gespeicherte Nutzernachrichten und KI-Antworten. Anhänge werden separat gelesen und übergeben.",
+        "subscribeToolExecution": "Ereignisse zur Werkzeugausführung",
+        "subscribeToolExecutionDetail": "Empfängt Werkzeugnamen, Eingaben, Ergebnisse und Fehler. Beobachtet, ohne die Ausführung zu ändern.",
+        "subscribeNativeRecovery": "Native Wiederherstellungsereignisse",
+        "subscribeNativeRecoveryDetail": "Empfängt den Status der Engine bei Wiederholungsversuchen, Kontextkomprimierung und Aufgabenstopps.",
         "subscribeTaskState": "Ereignisse zum Aufgabenstatus",
         "subscribeTaskStateDetail": "Empfängt Änderungen bei Ausführung, Warten, Abschluss, Archivierung und ausgeblendeten Aufgaben.",
         "subscribeActivity": "Erkennt, wann die KI nachdenkt und wann sie auf dich wartet",
@@ -8309,6 +8333,10 @@
         "subscribeStartTurnDetail": "Nur Aufgaben, in denen du dieses Plugin auswählst, geben die aktuelle Nachricht an das Plugin weiter. Es kann ein verbundenes Modell, Denkintensität und Fast wählen. Fehler folgen der Aufgabeneinstellung; es kann keine Aktionen für dich genehmigen.",
         "subscribeModelRequest": "Kann jede Modellanfrage in ausgewählten Aufgaben verarbeiten",
         "subscribeModelRequestDetail": "Nur Aufgaben, in denen du dieses Plugin auswählst, geben ihre Modellanfragen an das Plugin weiter. Es kann Modelle, Parameter und Inhalte anpassen. Derzeit nur mit lokalem Pi unterstützt; Fehler folgen der Aufgabeneinstellung. Verbindungsdaten werden nicht weitergegeben.",
+        "subscribeToolCall": "Kann Werkzeugaufrufe in ausgewählten Aufgaben verarbeiten",
+        "subscribeToolCallDetail": "Kann Parameter lesen, ändern oder ablehnen, soweit die Engine dies unterstützt. Kann keine Vorgänge für dich genehmigen.",
+        "subscribeToolResult": "Kann Werkzeugergebnisse in ausgewählten Aufgaben verarbeiten",
+        "subscribeToolResultDetail": "Kann Ergebnisse lesen und je nach Engine Kontext hinzufügen oder Ergebnisse ersetzen. Bereits ausgeführte Vorgänge werden nicht rückgängig gemacht.",
         "subscribeStartTask": "Kann das Modell für neue Aufgaben wählen",
         "subscribeStartTaskDetail": "Wenn eine neue Aufgabe ein Modell dieses Plugins nutzt, liest es die erste Nachricht und wählt eines deiner verbundenen Modelle. Dieser Einstieg wird nur einmal vor der ersten Nachricht ausgeführt.",
         "card": "Stellt Nachrichtenkarten dar",
@@ -9848,6 +9876,41 @@
       },
       "providerTooltip": "Der aktuell für die Sitzung ausgewählte Anbieter; leer, wenn keiner angeheftet ist.",
       "tokensTooltip": "Zählt nur die Tokens, die diese Sitzung in {{range}} verwendet hat."
+    },
+    "auxiliary": {
+      "title": "Hilfsmodellnutzung",
+      "label": "Hilfsanfrage",
+      "purpose": "Zweck",
+      "requests": "Erfasste Anfragen",
+      "description": "In den Gesamttokens enthalten. Nur vom Anbieter gemeldete Nutzung wird erfasst; fehlende Nutzung und frühere Anfragen werden nicht geschätzt.",
+      "sources": {
+        "title": "Titelgenerierung",
+        "task-summary": "Aufgabenzusammenfassungen",
+        "prompt-prediction": "Eingabevorschläge",
+        "working-status": "Arbeitsstatus",
+        "help": "Hilfe",
+        "bot-creation": "Begleiter erstellen",
+        "bot-opening": "Begrüßungen der Begleiter",
+        "group-planning": "Gruppenplanung",
+        "ambient-reply": "Antwortentscheidungen",
+        "auto-review": "Automatische Prüfung",
+        "tool-loop-review": "Prüfung von Werkzeugschleifen",
+        "memory-review": "Speicherprüfung",
+        "git-summary": "Änderungszusammenfassungen",
+        "hook-generation": "Automatisierungsskripte",
+        "automation-verification": "Importprüfung",
+        "plugin-text": "Plugin-Text",
+        "voice-dialogue": "Sprachgespräche",
+        "voice-exit": "Entscheidungen zum Gesprächsende",
+        "voice-refinement": "Überarbeitung von Sprachtext",
+        "dictionary-learning": "Wörterbuchlernen",
+        "embedding-query": "Vektorsuche",
+        "embedding-index": "Vektorindexierung",
+        "web-search": "Websuche",
+        "provider-probe": "Verbindungstests",
+        "vision-bridge": "Vision Bridge",
+        "auxiliary": "Weitere Hilfsanfragen"
+      }
     }
   },
   "usageDashboard": {
@@ -11239,6 +11302,7 @@
       "unavailableTitle": "Dieser Gruppenchat ist nicht mehr verfügbar",
       "unavailableDescription": "Er wurde möglicherweise gelöscht. Geh zurück zu den Freunden, um einen anderen Gruppenchat oder einen Freund zu öffnen.",
       "sidebar": {
+        "threadReply": "Antwort im Thread",
         "title": "Gruppenchats",
         "empty": "Noch keine Nachrichten",
         "preview": "{{name}}: {{text}}",
@@ -11571,6 +11635,7 @@
           "sharedReplyFrom": "Thread-Antwort von {{name}} geteilt",
           "sharedReply": "Thread-Antwort geteilt",
           "edited": "Bearbeitet",
+          "replyNotFound": "Diese Antwort wurde nicht gefunden.",
           "sourceUnavailable": "Die ursprüngliche Antwort wurde gelöscht oder ist für dich nicht verfügbar.",
           "viewThread": "Thread ansehen",
           "viewInMain": "Im Hauptchat ansehen",
@@ -12589,6 +12654,7 @@
       "createOwnApp": "Meine App erstellen ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Anhänge nicht vollständig zugestellt: {{count}} nicht gesendet ({{names}}).",
+    "outboundAttachmentOverLimit": "{{name}} (über dem Limit von {{limit}} MB)",
     "unnamedAttachment": "Unbenannter Anhang",
     "text": {
       "discord": {
@@ -13535,9 +13601,17 @@
         "submitLabel": "Antworten senden",
         "multiSelectHint": " (Mehrfachauswahl möglich)",
         "resolved": "✅ Gewählt: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "Diese Karte ist abgelaufen",
         "textHint": "Nur die fragende Person kann antworten. Sende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden.",
-        "replyHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden.\nSende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden."
+        "replyHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option; bei mehreren Fragen oder Mehrfachauswahl anschließend absenden.\nSende {{code}} gefolgt von deiner Antwort. Bei mehreren Fragen: {{code}} 2: Antwort, danach {{code}} OK zum Absenden.",
+        "nextLabel": "Nächste Frage",
+        "stepHint": "Nur die anfragende Person kann antworten. Tippe auf eine Option oder sende {{code}} gefolgt von deiner Antwort.",
+        "stepSubmitHint": "Nur die anfragende Person kann antworten. Wähle aus und tippe dann auf „{{action}}“ – oder sende {{code}} gefolgt von deiner Antwort und danach {{code}} OK.",
+        "stepTextHint": "Nur die anfragende Person kann antworten. Sende {{code}} gefolgt von deiner Antwort.",
+        "unanswered": "⚠️ Noch nicht beantwortet: Frage {{numbers}}. Beantworte alle Fragen und sende dann ab.",
+        "unansweredSingle": "⚠️ Noch keine Antwort. Wähle zuerst eine Option oder gib eine Antwort ein.",
+        "numberSeparator": ", "
       }
     }
   },
@@ -13667,9 +13741,8 @@
     "sendButton": {
       "send": "Nachricht senden",
       "queue": "Nachricht einreihen",
-      "queueTooltip": "Klicken zum Einreihen; drücke {{shortcut}}, um zu steuern, ohne die Aufgabe zu unterbrechen",
-      "queueTooltipSendMode": "Klicken zum Einreihen; drücke {{shortcut}}, um diese Nachricht zu senden",
-      "stop": "Generierung stoppen"
+      "stop": "Generierung stoppen",
+      "steer": "Laufende Aufgabe steuern"
     },
     "pluginSetup": {
       "account": {
@@ -14029,6 +14102,14 @@
         "standard": "Standard",
         "fast": "Schnell",
         "ultrafast": "Ultraschnell"
+      },
+      "discoveredCopy": {
+        "title": "{{provider}} auf „{{device}}“ verwenden?",
+        "description": "{{unavailable}} Wenn du fortfährst, läuft es auf „{{device}}“. Du kannst hier jederzeit zurückwechseln.",
+        "unavailableHere": "{{provider}} auf diesem Computer ist gerade nicht verfügbar.",
+        "unavailableOn": "{{provider}} auf „{{device}}“ ist gerade nicht verfügbar.",
+        "confirm": "Verwenden",
+        "cancel": "So beibehalten"
       }
     },
     "permissionSelector": {
@@ -14319,7 +14400,8 @@
         "description": "Der Unterhaltungsverlauf auf dem anderen Computer kann nicht übertragen werden. Die Fortsetzung erfolgt daher anhand einer Übergabezusammenfassung. Denkprozesse und ähnliche Details werden möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
         "descriptionNativeHistory": "Der vollständige Unterhaltungsverlauf wird mitkopiert und nahtlos fortgesetzt. Kann er nicht wiederhergestellt werden, erfolgt die Fortsetzung anhand einer Übergabezusammenfassung; Denkprozesse und ähnliche Details werden dann möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
         "confirm": "Computer wechseln",
-        "cancel": "So beibehalten"
+        "cancel": "So beibehalten",
+        "discoveredDescription": "{{reason}} {{description}}"
       }
     },
     "agentSelect": {
@@ -14557,6 +14639,13 @@
       "runningWithWorktree_one": "Vor dem Branchwechsel muss sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören.",
       "runningWithWorktree_other": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören.",
       "runningWithWorktree_many": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören."
+    },
+    "followUpHint": {
+      "queueDefault": "Nachrichten, die während der Ausführung gesendet werden, werden eingereiht.",
+      "steerDefault": "Nachrichten, die während der Ausführung gesendet werden, steuern die laufende Aufgabe.",
+      "switchToSteer": "Standardmäßig steuern",
+      "switchToQueue": "Standardmäßig einreihen",
+      "dismiss": "Hinweis schließen"
     }
   },
   "onboarding": {
@@ -14879,6 +14968,8 @@
       "failed": "Bild konnte nicht generiert werden – versuch es erneut"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "cindy_helper ist für diese Aufgabe aktiviert, aber nicht verfügbar. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden.",
+      "codexHelperUnverified": "Es konnte nicht geprüft werden, ob cindy_helper für diese Aufgabe verfügbar ist. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden.",
       "requestFormatError": "Die App hat eine ungültige Anfrage gesendet. Daher konnte diese Antwort nicht abgeschlossen werden.",
       "replyFailed": "Antwort konnte nicht abgeschlossen werden",
       "retryTitle": "Letzte Nachricht erneut senden",
@@ -16000,6 +16091,7 @@
       "saveFailed": "Die Kontextfensterstufe konnte nicht gespeichert werden"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "Warten auf die Antwort des entfernten Geräts…",
       "readingMemory": "Erinnerungen werden gelesen…",
       "savingMemory": "Erinnerungen werden gespeichert…",
       "deletingMemory": "Erinnerungen werden gelöscht…",
@@ -16049,7 +16141,8 @@
         "replaced": "Diese Verbindung wurde durch eine andere Instanz desselben Geräts ersetzt — Verbindung wird wiederhergestellt…",
         "too-many-connections": "Zu viele Geräte für dieses Konto online — der Server hat die Verbindung abgelehnt",
         "version-mismatch": "Die Protokollversion stimmt nicht mit dem Server überein — aktualisiere die App und versuch es erneut",
-        "unstable": "Dieser Computer verliert ständig die Verbindung und stellt sie wieder her. Remoteaktionen können deshalb wiederholt das Zeitlimit überschreiten — prüfe das Netzwerk oder starte Cindy neu und versuch es erneut"
+        "unstable": "Dieser Computer verliert ständig die Verbindung und stellt sie wieder her. Remoteaktionen können deshalb wiederholt das Zeitlimit überschreiten — prüfe das Netzwerk oder starte Cindy neu und versuch es erneut",
+        "agent-net-relay-down": "Dieser Computer erreicht das Agent-Net-Relay nicht und verbindet sich neu. Remoteaktionen schlagen fehl, wenn der andere Computer nicht direkt verbunden ist"
       }
     },
     "common": {
@@ -16270,7 +16363,8 @@
         "project": "Projekt",
         "flat": "Flache Liste",
         "device": "Gerät",
-        "dialogue": "Chat"
+        "dialogue": "Chat",
+        "automation": "Automatisierung"
       },
       "filterGroupByDeviceManualTip": "Bei manueller Sortierung ist die Gruppierung nach Gerät nicht verfügbar",
       "deviceGroup": {
@@ -16618,6 +16712,7 @@
       "groupSummary": {
         "project": "Projekt",
         "dialogue": "Chat",
+        "automation": "Automatisierung",
         "device": "Gerät"
       },
       "taskStatusHeading": "Sitzungsstatus",
@@ -16630,6 +16725,36 @@
         "priority": "Priorität",
         "activity": "Letzte Aktivität",
         "created": "Erstellungszeit"
+      },
+      "inbox": {
+        "thisEvening": "Heute Abend",
+        "tomorrow": "Morgen",
+        "nextWeek": "Nächste Woche",
+        "custom": "Benutzerdefiniert…",
+        "wakeAt": "Datum und Uhrzeit der Wiedervorlage",
+        "timeZone": "Ortszeit ({{zone}})",
+        "invalidTime": "Wähle einen zukünftigen Zeitpunkt innerhalb eines Jahres.",
+        "inbox": "Offen",
+        "working": "In Arbeit",
+        "snoozed": "Zurückgestellt",
+        "archived": "Erledigt",
+        "snooze": "Aufgabe zurückstellen",
+        "complete": "Erledigt",
+        "wake": "Jetzt zurückholen",
+        "restore": "Aufgabe wiederherstellen",
+        "process": "Als erledigt markieren (archivieren)",
+        "empty": "Der Posteingang ist leer",
+        "snoozeFailed": "Die Zeit konnte nicht gespeichert werden. Prüfe die Verbindung und aktualisiere den Computer mit dieser Aufgabe.",
+        "hours": "In {{count}} Stunden",
+        "hours_one": "In {{count}} Stunde",
+        "hours_other": "In {{count}} Stunden"
+      },
+      "taskListMode": {
+        "heading": "Aufgabenmodus",
+        "tasks": "Aufgabenliste",
+        "inbox": "Posteingang",
+        "enterInbox": "Zum Posteingangsmodus wechseln",
+        "leaveInbox": "Zum Aufgabenlistenmodus wechseln"
       }
     },
     "rename": {
@@ -16922,6 +17047,7 @@
         "menuSave": "Speichern",
         "menuInsertTable": "Tabelle einfügen",
         "externalChangeBlocked": "Die Datei wurde auf dem Datenträger geändert. Automatisches Speichern pausiert; speichere manuell, um sie zu überschreiben.",
+        "targetChanged": "Die Datei verweist jetzt auf einen anderen Speicherort. Dein Entwurf ist noch im Editor. Kopiere ihn, bevor du die Datei erneut öffnest.",
         "tableMenu": {
           "addRowAbove": "Zeile darüber einfügen",
           "addRowBelow": "Zeile darunter einfügen",
@@ -17314,7 +17440,9 @@
           "jira_read": "Jira lesen",
           "jira_comment": "In Jira kommentieren",
           "sessions_dispatch": "Sitzungen zuweisen",
-          "feishu_read": "Feishu-Nachrichten lesen"
+          "feishu_read": "Feishu-Nachrichten lesen",
+          "settings_read": "Freigabemitglieder lesen",
+          "usage_read": "Nutzung und Anbietergruppenstatus lesen"
         },
         "project": "Projektverzeichnis",
         "capabilitiesLabel": "Erlaubte Funktionen",
@@ -17326,7 +17454,9 @@
           "jira_read": "Jira-Vorgänge lesen (per Schlüssel / JQL-Suche)",
           "jira_comment": "Kommentare zu Jira-Vorgängen hinzufügen",
           "sessions_dispatch": "{{appName}}-Sitzungen erstellen oder aktivieren und Nachrichten zustellen",
-          "feishu_read": "Zuletzt aktive Chats auflisten; aktuelle Nachrichten aus einem Chat abrufen (Gruppe oder Direktnachricht)"
+          "feishu_read": "Zuletzt aktive Chats auflisten; aktuelle Nachrichten aus einem Chat abrufen (Gruppe oder Direktnachricht)",
+          "settings_read": "Liest Mitglieder deiner Freigaben und deren erlaubte Modelle auf diesem Computer oder anderen autorisierten Computern desselben Kontos; keine Änderungen",
+          "usage_read": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Anbietergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen."
         },
         "capabilityWarn": {
           "ghostMissing": "Erfordert das Plugin „{{name}}“, das nicht installiert ist — diese Funktion wird zur Laufzeit fehlschlagen",
@@ -19677,7 +19807,8 @@
           "expired": "Abgelaufen",
           "voided": "Annulliert"
         }
-      }
+      },
+      "viewUsage": "Nutzung anzeigen"
     },
     "orders": {
       "title": "Bestellverlauf",
@@ -21350,6 +21481,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "Schließen",
+    "taskInbox": {
+      "title": "Der Posteingang",
+      "lead": "Aufgaben ordnen sich selbst in Offen, In Arbeit, Zurückgestellt und Erledigt ein. Am besten hältst du den Posteingang leer: Klicke auf Erledigt, wenn eine Aufgabe fertig ist, und stelle zurück, was warten kann.",
+      "pending": {
+        "title": "Offen",
+        "body": "Aufgaben erscheinen hier, sobald sie ein Ergebnis haben oder auf deine Antwort warten."
+      },
+      "done": {
+        "title": "Erledigt",
+        "body": "Erledigt? Ein Klick auf Erledigt verschiebt die Aufgabe. Gibt es Neues, kommt sie von selbst zurück."
+      },
+      "snooze": {
+        "title": "Zurückgestellt",
+        "body": "Gerade keine Zeit? Wähle eine Zeit, dann kommt die Aufgabe zurück nach Offen."
+      },
+      "start": "Los geht’s",
+      "note": "Mit der Schaltfläche oben in der Seitenleiste wechselst du jederzeit zurück zur Aufgabenliste."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Willkommen bei Cindy",
@@ -21634,6 +21786,7 @@
     "removeTitle": "{{name}} entfernen?",
     "removeDescription": "Cindy weist diesem Konto keine Aufgaben mehr zu. Die CLI-Anmeldung und der Gesprächsverlauf bleiben auf diesem Computer erhalten.",
     "failed": "Das Konto konnte nicht gelesen oder aktualisiert werden. Prüfe die CLI-Anmeldung und die Netzwerkverbindung und versuche es erneut.",
+    "unreachable": "Der Kontodienst ist nicht erreichbar, daher lässt sich die Anmeldung nicht bestätigen. Prüfe die Netzwerkverbindung und versuche es erneut.",
     "openDirectory": "Kontoordner öffnen",
     "openDirectoryFailed": "Der Kontoordner konnte nicht geöffnet werden. Er wurde möglicherweise verschoben oder gelöscht.",
     "loginAgain": "Erneut anmelden",
@@ -21914,6 +22067,19 @@
       "network": "Verbindung unterbrochen, neuer Versuch…",
       "timeout": "Zeitüberschreitung, neuer Versuch…",
       "server": "Server ausgelastet, neuer Versuch…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "Berechtigungen für diesen Chat erweitern?",
+    "message": "Darf „{{name}}“ für „{{conversation}}“ im Projekt „{{project}}“ „{{mode}}“ verwenden?",
+    "detail": "Das geht über die IM-Projekteinstellung ({{projectMode}}) hinaus. Wenn du es erlaubst, darf dieses Plugin in diesem Projekt diese Berechtigungsstufe verwenden – nur für seine eigenen Sitzungen. Du kannst im Plugin jederzeit wieder zur IM-Einstellung zurückkehren.",
+    "groupWarning": "In dieser Gruppe können auch andere Mitglieder Nachrichten senden. Je weiter die Berechtigung, desto seltener wirst du um Bestätigung gebeten – vertraue also allen in der Gruppe.",
+    "allow": "Erlauben",
+    "cancel": "Abbrechen",
+    "modes": {
+      "ask": "Standardberechtigungen",
+      "auto": "Automatische Prüfung",
+      "bypassPermissions": "Vollzugriff"
     }
   }
 }

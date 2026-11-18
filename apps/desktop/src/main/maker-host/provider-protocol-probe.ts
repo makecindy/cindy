@@ -1,3 +1,5 @@
+import { createAuxiliaryUsageRecorder } from '../usage/auxiliaryUsage.js';
+import { createAuxiliaryUsageAccumulator, type AuxiliaryTokens } from '../../shared/auxiliaryUsage.js';
 import {
   appendProviderRequestPath, isLoopbackProviderUrl, providerProtocolCandidates,
   providerModelRecord, providerPresetModelRecord,
@@ -8,7 +10,7 @@ import { classifyProviderError, providerNetworkErrorCode } from '../../shared/pr
 import { invocationModelRecord, probePiProvider, readBoundedResponseText } from './pi-provider-transport.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 
-type ProbeSpec = ProviderConnectionProbeSpec & { nativeModel?: ProviderModelRecord };
+type ProbeSpec = ProviderConnectionProbeSpec & { nativeModel?: ProviderModelRecord; providerId?: string };
 
 const API: Record<ProviderProtocolCandidate['wireProtocol'], PiModelApi> = {
   'openai-chat': 'openai-completions', 'openai-responses': 'openai-responses',
@@ -39,7 +41,7 @@ function failure(status: number | undefined, bodyText: string, accepted: boolean
 }
 
 /** Observe protocol termination as well as SDK parsing: empty or truncated streams cannot pass. */
-function observeSse(wire: ProviderProtocolCandidate['wireProtocol']) {
+function observeSse(wire: ProviderProtocolCandidate['wireProtocol'], observe: (body: unknown) => void) {
   let buffer = '';
   let bytes = 0;
   const decoder = new TextDecoder();
@@ -48,6 +50,7 @@ function observeSse(wire: ProviderProtocolCandidate['wireProtocol']) {
     const data = text.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
     if (!data || data === '[DONE]') return;
     const value = JSON.parse(data);
+    observe(value);
     if (value.error) { state.error = JSON.stringify(value.error); return; }
     if (wire === 'openai-chat') {
       for (const choice of value.choices ?? []) {
@@ -94,10 +97,22 @@ async function attempt(
   spec: ProbeSpec, candidate: ProviderProtocolCandidate,
   fetchImpl: typeof fetch, signal: AbortSignal,
 ): Promise<ProviderConnectionTestResult> {
+  const record = createAuxiliaryUsageRecorder({ source: 'provider-probe', providerId: spec.providerId,
+    model: spec.modelId, transport: candidate.wireProtocol });
+  let observed: AuxiliaryTokens | null = null;
+  let servedModel: string | undefined;
+  const accumulator = createAuxiliaryUsageAccumulator(candidate.wireProtocol);
+  const observe = (body: unknown) => {
+    accumulator.observe(body);
+    const snapshot = accumulator.snapshot();
+    observed = snapshot.tokens;
+    servedModel = snapshot.model ?? servedModel;
+  };
+
   let accepted = false;
   let rejected: ProviderConnectionTestResult | undefined;
   let networkCode: string | undefined;
-  const observer = observeSse(candidate.wireProtocol);
+  const observer = observeSse(candidate.wireProtocol, observe);
   const guardedFetch: typeof fetch = async (input, init) => {
     const target = new URL(input instanceof Request ? input.url : String(input));
     if (target.origin !== new URL(candidate.baseUrl).origin) throw new Error('probe destination changed');
@@ -124,6 +139,7 @@ async function attempt(
     }
     if (!response.ok) {
       const text = await readBoundedResponseText(response);
+      try { observe(JSON.parse(text)); } catch { /* non-JSON rejection */ }
       rejected = failure(response.status, text, accepted);
       return new Response(text, { status: response.status, headers: response.headers });
     }
@@ -166,6 +182,11 @@ async function attempt(
     } else {
       const result = await probePiProvider({ row, providerId: spec.catalogPresetId ?? 'custom-probe', upstream: candidate.baseUrl,
         apiKey: key, headers, fetchImpl: guardedFetch }, signal, 256);
+      servedModel ??= result.model;
+      if (!observed && result.usage && [result.usage.input, result.usage.output, result.usage.cacheRead, result.usage.cacheWrite].some(n => n > 0)) {
+        observed = { inputTokens: result.usage.input, outputTokens: result.usage.output,
+          cacheReadTokens: result.usage.cacheRead, cacheCreateTokens: result.usage.cacheWrite };
+      }
       nativeOk = result.stopReason === 'stop' || result.stopReason === 'length';
       nativeGenerated = result.content.some(block => (block.type === 'text' && Boolean(block.text))
         || (block.type === 'thinking' && Boolean(block.thinking)));
@@ -186,6 +207,9 @@ async function attempt(
     if (rejected) return rejected;
     const cls = classifyProviderError({ networkErrorCode: signal.aborted ? 'TimeoutError' : networkCode ?? 'UNKNOWN' });
     return { ok: false, code: cls.code, detail: cls.detail, latencyMs: 0, decision: cls.code === 'CERT_ERROR' ? 'blocked' : 'inconclusive' };
+  } finally {
+    try { if (observed) await record(observed, servedModel ? { model: servedModel } : {}); }
+    finally { record.close(); }
   }
 }
 
