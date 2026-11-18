@@ -1,6 +1,7 @@
 /** Development-only experiment; never selected by a production message renderer. */
 import { Redirect, Stack, useLocalSearchParams } from 'expo-router';
 import { useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Platform, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
@@ -20,6 +21,7 @@ export default function TableSelectionPreview() {
 }
 
 function Experiment() {
+  const { t } = useTranslation();
   const { menu } = useLocalSearchParams<{ menu?: string }>();
   // Android's installed WebView custom ActionMode may replace system Copy.
   // Verify real Copy first; the quote URL tests that callback separately.
@@ -29,6 +31,7 @@ function Experiment() {
   const [selected, setSelected] = useState('');
   const [scroll, setScroll] = useState('');
   const [quote, setQuote] = useState('');
+  const [sideChat, setSideChat] = useState('');
   const [pasted, setPasted] = useState('');
   const html = useMemo(() => {
     settled.current = false;
@@ -39,7 +42,10 @@ function Experiment() {
     });
   }, [colors]);
   const source = useMemo(() => ({ html, baseUrl: 'about:blank' }), [html]);
-  const menuItems = useMemo(() => [{ key: 'xdtQuote', label: selectionQuoteMenuLabel() }], []);
+  const menuItems = useMemo(() => [
+    { key: 'table-preview:v2:quote', label: selectionQuoteMenuLabel() },
+    { key: 'table-preview:v2:side-chat', label: t('session.sideChat.title') },
+  ], [t]);
   const textStyle = { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption };
   return <SafeAreaView style={[styles.fill, { backgroundColor: colors.surface }]}>
     <Stack.Screen options={{ headerShown: false }} />
@@ -59,8 +65,10 @@ function Experiment() {
         menuItems={quoteMenu ? menuItems : undefined}
         onCustomMenuSelection={event => {
           const { key, selectedText } = event.nativeEvent;
-          if (key === 'xdtQuote' && typeof selectedText === 'string' && selectedText.length <= 4096) {
-            commitSelectionMenuAction('quote', selectedText, { commitQuote: setQuote });
+          const action = key === 'table-preview:v2:quote' ? 'quote'
+            : key === 'table-preview:v2:side-chat' ? 'side-chat' : null;
+          if (action && typeof selectedText === 'string' && selectedText.length <= 4096) {
+            commitSelectionMenuAction(action, selectedText, { commitQuote: setQuote, askInSideChat: setSideChat });
           }
         }}
         onMessage={event => {
@@ -79,6 +87,7 @@ function Experiment() {
       />
     </View>
     <Text style={textStyle} testID="table-selection.quote">引用：{JSON.stringify(quote)}</Text>
+    <Text style={textStyle} testID="table-selection.side-chat">侧聊：{JSON.stringify(sideChat)}</Text>
     <TextInput accessibilityLabel="系统粘贴回执" testID="table-selection.paste" multiline
       value={pasted} onChangeText={setPasted} placeholder="在这里使用系统粘贴菜单"
       placeholderTextColor={colors.textPlaceholder}
