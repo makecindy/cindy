@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect, vi } from 'vitest';
@@ -31,11 +32,15 @@ function render(membershipKind: string, sources: Source[]) {
 }
 
 // The widget uses the same source kind for a period budget and a personal wallet.
-// Exercise the rendered labels and hierarchy so budget never defaults to balance.
+// Exercise UsageDashboard/UsageQuotaColumns output (unit): one subscription with
+// value 68 and unit % must display 68%, and an org wallet must display a budget.
+// SSR splits the value/unit across nested Text elements, so parse its text rather
+// than stripping tags with a regex (CodeQL #522). DOMParser keeps scripts inert.
+// Standalone Vitest wall time: 1.91s (2026-11-19); five existing cases, no new test.
 describe('usage overview for different account types', () => {
   it('shows a plan without inventing an account balance', () => {
     const html = render('personal', [subscription]);
-    expect(html.replace(/<[^>]+>/g, '')).toContain('68%');
+    expect(new DOMParser().parseFromString(html, 'text/html').body.textContent).toContain('68%');
     expect(html).not.toMatch(/balance|usageBudget/i);
   });
   it('shows a real zero wallet after usage', () => {
