@@ -844,13 +844,17 @@ describe('newSessionCreation pipeline', () => {
     expect(authCalls).toBe(2);
     // 乐观行回写修正版(不修则 UI 显示 provider-a)
     const row = remoteSessionStore.getSessions().find((s) => s.id === 's21');
+    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: '/repo/.cindy-worktrees/auto-one', projectDir: '/repo',
+    }));
+    expect(row?.projectDir).toBe('/repo');
     expect(row?.providerId).toBe('provider-b');
     expect(row?.model).toBe('model-b');
     // 排队 lazy-create 材料与乐观行同源
     expect(maker.input.enqueue).toHaveBeenCalledWith(
       's21',
       expect.objectContaining({
-        createOpts: expect.objectContaining({ providerId: 'provider-b', model: 'model-b' }),
+        createOpts: expect.objectContaining({ projectDir: '/repo', providerId: 'provider-b', model: 'model-b' }),
       }),
       expect.anything(),
     );

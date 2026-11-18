@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   compareFailedScheduleRuns,
   scheduleFailureMessageKey,
+  scheduleFailureDetails,
   type FailedScheduleRunSnapshot,
 } from '@cindy/maker-shared/schedule-model';
 import { useEffect, useState } from 'react';
@@ -74,7 +75,7 @@ export function FailedScheduleNotice({
       {run.errorMsg ? <AgentErrorDetails message={run.errorMsg}
         onDiagnose={onDiagnose ? () => onDiagnose({
           message,
-          details: run.errorMsg!,
+          details: scheduleFailureDetails(run),
         }) : undefined} /> : null}
     </ErrorNotice>
   );

@@ -5344,8 +5344,17 @@ export class PiAgent extends BaseAgent {
       if (typeof data.estimatedTokensAfter === 'number') result.estimatedTokensAfter = data.estimatedTokensAfter;
       return result;
     };
-    const runPiCompact = (instructions?: string): Promise<ManualCompactResult> =>
-      runExclusivePiRpc(() => requestPiCompact(instructions));
+    const runPiCompact = (instructions?: string, beforeDispatch?: () => Promise<void>): Promise<ManualCompactResult> =>
+      runExclusivePiRpc(async () => {
+        if (!beforeDispatch) return requestPiCompact(instructions);
+        // A host-tool grant can expire while this operation waits in the native RPC lane.
+        await beforeDispatch();
+        try {
+          return await requestPiCompact(instructions);
+        } catch (cause) {
+          throw Object.assign(new Error('Pi native context compaction failed', { cause }), { code: 'COMPACT_FAILED' });
+        }
+      });
     let sessionTransport: PiTransport | undefined;
     let localProcessSpawned = false;
     let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
@@ -5650,13 +5659,14 @@ export class PiAgent extends BaseAgent {
         // Model refresh writes and rolls back these files in the RPC lane. Read
         // the snapshot there too, so a child never freezes a mixed generation.
         // Launch/refresh below stay outside: they may enqueue their own RPC.
-        const [modelsJson, bridgeSource, runnerSource, cacheRulesJson] = await runExclusivePiRpc(() => {
+        const [modelsJson, bridgeSource, runnerSource, cacheRulesJson, settingsJson] = await runExclusivePiRpc(() => {
           if (closed) throw new Error('PI session is closed');
           return Promise.all([
             fs.readFile(path.join(configHome, 'models.json')),
             fs.readFile(bridgeExtensionPath),
             fs.readFile(subagentRunnerPath),
             fs.readFile(path.join(configHome, 'pi-cache-compatibility.json')),
+            fs.readFile(path.join(configHome, 'settings.json')),
           ]);
         });
         const runId = await resumePiSubagentRun(subagentRunRoot, taskId, message, {
@@ -5671,7 +5681,7 @@ export class PiAgent extends BaseAgent {
             ...reviewPathSnapshot,
           },
           runnerFallbackFile: subagentRunnerPath,
-          runtimeSnapshot: { modelsJson, bridgeSource, runnerSource, cacheRulesJson },
+          runtimeSnapshot: { modelsJson, bridgeSource, runnerSource, cacheRulesJson, settingsJson },
         }, childId);
         if (!runId) throw new Error('No terminal PI Subagent run is available to resume.');
         await requestPiSubagentRefresh();
@@ -7933,6 +7943,15 @@ export class PiAgent extends BaseAgent {
       get model() {
         return mutableModel;
       },
+      retryFailedRuntimeCapabilityCapture: () => {
+        const manifest = runtimeCapabilityManifest;
+        if (closed || runtimeCapabilityRefreshPromise || !manifest
+          || (manifest.status !== 'failed' && manifest.status !== 'unknown')
+          || manifest.error?.code === 'unsupported') return;
+        void scheduleRuntimeCapabilityRefresh('ready').catch(() => {
+          this.deps.logger.warn('pi runtime capability refresh failed after Skill retry');
+        });
+      },
       getRuntimeCapabilities() {
         return runtimeCapabilityManifest;
       },
@@ -8834,9 +8853,9 @@ export class PiAgent extends BaseAgent {
         return path;
       },
 
-      async compactSession(instructions?: string): Promise<ManualCompactResult> {
+      async compactSession(instructions?: string, beforeDispatch?: () => Promise<void>): Promise<ManualCompactResult> {
         // Manual compact shares the session RPC chain with prompts and model controls.
-        return runPiCompact(instructions);
+        return runPiCompact(instructions, beforeDispatch);
       },
 
       async previewRewindFiles(): Promise<RewindFilesResult> {

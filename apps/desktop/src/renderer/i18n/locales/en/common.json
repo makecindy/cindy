@@ -142,6 +142,10 @@
     "message": "Cindy cannot read this attachment. Select the original file to continue sending this message. Cancelling keeps your draft.",
     "button": "Use Original File"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "This send was cancelled because the task or window changed.",
+    "invalid": "This send is no longer valid for the current task."
+  },
   "mailReader": {
     "showExternalImages": "Show External Images",
     "markReadFailed": "Could not sync read status. Check mailbox authorization and reopen this email.",
@@ -428,7 +432,8 @@
       "loading": "Loading model access…",
       "loadFailed": "Could not load model access. Reopen these settings.",
       "saveFailed": "Could not save model access. Try again.",
-      "needsUpdate": "Update Cindy on the provider’s computer to manage model access."
+      "needsUpdate": "Update Cindy on the provider’s computer to manage model access.",
+      "followsPool": "This connection was merged into “{{pool}}”, so its remote models follow “{{pool}}”. Change them there. Member limits below can still be set here."
     },
     "entry": {
       "label": "Remote & Sharing",
@@ -4338,7 +4343,8 @@
           "description": "When on, your other computers and the people you share with can use this provider’s models. The Agent runs on this computer, using this computer’s sign-in and quota.",
           "descriptionGroup": "When on, your other computers and the people you share with can use this provider’s models. The provider group picks the computer that runs the Agent.",
           "ariaLabel": "Allow your other computers and the people you share with to use this provider",
-          "writeFailed": "Couldn’t save the remote access setting. Try again."
+          "writeFailed": "Couldn’t save the remote access setting. Try again.",
+          "followsPool": "This connection was merged into “{{pool}}” and follows its “Allow remote use”. Change it there."
         },
         "ownComputersCanUse": "Available to my other computers",
         "moreActionsAria": "More Actions",
@@ -6419,18 +6425,13 @@
         "allowInboundAria": "Toggle whether {{name}} can control this device",
         "peerControlOff": "Remote control not enabled on that device",
         "masterOffHint": "Turn on the master switch above first",
-        "controllingThisMac": "Connected to Cindy",
-        "useThisDeviceModels": "Use this device's models",
-        "allowModelUseAria": "Let {{name}} use this computer's models"
+        "controllingThisMac": "Connected to Cindy"
       },
       "toast": {
         "revoked": "Access revoked for this device",
         "revokeFailed": "Failed to revoke access",
         "restored": "Access restored for this device",
-        "restoreFailed": "Failed to restore access",
-        "modelUseRestored": "That computer can use this computer's models again",
-        "modelUseRevoked": "That computer can no longer use this computer's models",
-        "modelUseFailed": "Couldn't save “Use this device's models”. Try again."
+        "restoreFailed": "Failed to restore access"
       },
       "sections": {
         "myDevices": "My devices",
@@ -6930,11 +6931,6 @@
       "description": "Devices signed in with the same Feishu account can discover each other. Once \"Allow control\" is on, your other devices can remotely control {{appName}} on this machine.",
       "allowControl": "Allow same-account devices to control this machine",
       "allowControlHint": "When enabled, other devices signed in with the same account can control this machine without per-connection approval. A visible indicator is shown while being controlled, and you can disconnect at any time.",
-      "ownModelAccess": {
-        "title": "Let my other computers use this computer’s models",
-        "hint": "When on, your other computers can use the providers on this computer. The Agent runs here, using this computer’s sign-in and quota. Nothing is shared with other people.",
-        "writeFailed": "Couldn't save this setting. Try again."
-      },
       "keepAwake": "Keep computer awake",
       "keepAwakeHint": "When enabled, this machine won't go to sleep, so background agents and scheduled tasks keep running (you can still turn off the display or lock the screen).",
       "linkStatus": {
@@ -15120,6 +15116,9 @@
       "continueFailed_other": "{{count}} sessions couldn't resume. Open them to try again."
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "Authorization expired for this action. The next run is still scheduled.",
+      "actionExpired": "Task authorization expired for this action. Check the latest automation run.",
+      "actionRecovered": "Authorization expired for this action. A later run of the same automation succeeded.",
       "text": "An automatic run failed.",
       "precheck": "Automatic checks are temporarily blocked.",
       "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
@@ -15828,7 +15827,7 @@
       "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
       "REMOTE_AGENT_RESUME_REJECTED": "The computer running the model cannot resume this session. Create a new session from the session list and copy over the content you need to continue. The original session and queued messages are kept.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "This model has reached the model share limit set by its owner. Choose another available model to continue.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t opened this provider or the selected model to you. If it’s your own computer, switch on “Let my other computers use this computer’s models” in its Remote Connection settings; if someone shared it with you, ask them to adjust access in Remote & Sharing. Or pick another model.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t opened this provider or the selected model to you. If it’s your own computer, switch on “Allow remote use” for this provider there; if someone shared it with you, ask them to adjust access in Remote & Sharing. Or pick another model.",
       "REMOTE_AGENT_FORK_FAILED": "The computer running the Agent couldn’t start a new session from here. Try again, or try a different message.",
       "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
       "REMOTE_AGENT_SHARE_REMOVED": "This share is no longer available (the owner removed it or you left). Switch to another model to continue.",
@@ -17167,6 +17166,18 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "Scheduled checks will continue while GitHub App notifications are unavailable.",
+      "label": "PR",
+      "url": "Pull request URL",
+      "condition": "Run when",
+      "any": "PR activity",
+      "merged": "Merged",
+      "review": "Review activity",
+      "ci": "CI status changes",
+      "timed": "Also check on a schedule",
+      "invalid": "Enter a GitHub pull request URL."
+    },
     "presentation": {
       "status": {
         "active": "Active",

@@ -1,7 +1,7 @@
 import { useCallback, useContext, useEffect, useMemo, useRef } from 'react';
 import type { StyleProp, TextStyle } from 'react-native';
 import { Text } from '@/components/AppText';
-import { canOpenChatPathChip, resolveChatAbsPath, toWorkdirRel, type ChatPathCandidate } from '@/session/chatPathCandidate';
+import { canOpenChatPathChip, isUncPathOutsideWorkdir, resolveChatAbsPath, toWorkdirRel, type ChatPathCandidate } from '@/session/chatPathCandidate';
 import { ChatFilePathContext, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { useRowStateHook, type RowStateHook } from '@/session/listRowState';
 import { peekRemotePathVerdict, peekRemotePathVerdictForRender, remotePathVerdictKey, subscribeRemotePathVerdictChange, verifyRemotePathCached, type RemotePathVerdict } from '@/session/remotePathVerdict';
@@ -92,6 +92,8 @@ export function ChatPathChipSpan({
     if (peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath)) return;
     // 流式中不发验证:半截路径会产生大量无意义 stat(与桌面 isStreaming gate 同理)。
     if (streaming) return;
+    // workdir 外的 UNC 不自动验证(见 isUncPathOutsideWorkdir);显式链接仍可点,点击时才 stat。
+    if (isUncPathOutsideWorkdir(ctx.workdir, target.absPath)) return;
     let cancelled = false;
     void verifyRemotePathCached(ctx.deviceId, ctx.workdir, target.absPath, ctx.statPath).then(() => {
       // 不看返回值:结论已落缓存,统一重新派生。
