@@ -9948,6 +9948,41 @@
       },
       "providerTooltip": "Le fournisseur actuellement sélectionné pour la session ; vide si aucun n'est épinglé.",
       "tokensTooltip": "Ne compte que les jetons utilisés par cette session sur {{range}}."
+    },
+    "auxiliary": {
+      "title": "Utilisation auxiliaire",
+      "label": "Auxiliaire",
+      "purpose": "Usage",
+      "requests": "Requêtes enregistrées",
+      "description": "Inclus dans le total des tokens. Seule l’utilisation renvoyée par le fournisseur est enregistrée ; les données absentes et les requêtes passées ne sont pas estimées.",
+      "sources": {
+        "title": "Génération de titres",
+        "task-summary": "Résumés des tâches",
+        "prompt-prediction": "Suggestions de saisie",
+        "working-status": "État du travail",
+        "help": "Aide",
+        "bot-creation": "Création de compagnons",
+        "bot-opening": "Salutations des compagnons",
+        "group-planning": "Planification du groupe",
+        "ambient-reply": "Décisions de réponse",
+        "auto-review": "Revue automatique",
+        "tool-loop-review": "Revue des boucles d’outils",
+        "memory-review": "Revue de la mémoire",
+        "git-summary": "Résumés des modifications",
+        "hook-generation": "Scripts d’automatisation",
+        "automation-verification": "Vérification des imports",
+        "plugin-text": "Texte des extensions",
+        "voice-dialogue": "Conversations vocales",
+        "voice-exit": "Décisions de fin d’appel",
+        "voice-refinement": "Amélioration du texte vocal",
+        "dictionary-learning": "Apprentissage du dictionnaire",
+        "embedding-query": "Recherche vectorielle",
+        "embedding-index": "Indexation vectorielle",
+        "web-search": "Recherche web",
+        "provider-probe": "Tests de connexion",
+        "vision-bridge": "Vision Bridge",
+        "auxiliary": "Autres requêtes auxiliaires"
+      }
     }
   },
   "usageDashboard": {
@@ -19956,7 +19991,8 @@
           "expired": "Expiré",
           "voided": "Annulé"
         }
-      }
+      },
+      "viewUsage": "Voir la consommation"
     },
     "orders": {
       "title": "Historique des commandes",

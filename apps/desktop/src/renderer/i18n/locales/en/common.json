@@ -9875,6 +9875,41 @@
       },
       "providerTooltip": "The provider currently selected for the session; blank when none is pinned.",
       "tokensTooltip": "Counts only the tokens this session used in {{range}}."
+    },
+    "auxiliary": {
+      "title": "Auxiliary usage",
+      "label": "Auxiliary",
+      "purpose": "Purpose",
+      "requests": "Recorded requests",
+      "description": "Included in total tokens. Only usage returned by the provider is recorded; unreported usage and past requests are not estimated.",
+      "sources": {
+        "title": "Title generation",
+        "task-summary": "Task summaries",
+        "prompt-prediction": "Input suggestions",
+        "working-status": "Working status",
+        "help": "Help",
+        "bot-creation": "Companion creation",
+        "bot-opening": "Companion greetings",
+        "group-planning": "Group planning",
+        "ambient-reply": "Reply decisions",
+        "auto-review": "Auto-review",
+        "tool-loop-review": "Tool loop review",
+        "memory-review": "Memory review",
+        "git-summary": "Change summaries",
+        "hook-generation": "Automation scripts",
+        "automation-verification": "Import verification",
+        "plugin-text": "Plugin text",
+        "voice-dialogue": "Voice conversations",
+        "voice-exit": "Voice exit decisions",
+        "voice-refinement": "Voice refinement",
+        "dictionary-learning": "Dictionary learning",
+        "embedding-query": "Vector search",
+        "embedding-index": "Vector indexing",
+        "web-search": "Web search",
+        "provider-probe": "Connection tests",
+        "vision-bridge": "Vision Bridge",
+        "auxiliary": "Other auxiliary requests"
+      }
     }
   },
   "usageDashboard": {
@@ -19771,7 +19806,8 @@
           "expired": "Expired",
           "voided": "Voided"
         }
-      }
+      },
+      "viewUsage": "View usage"
     },
     "orders": {
       "title": "Order history",

@@ -34,7 +34,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { onPatch as onSessionPatch } from '@/lib/sessionsBus';
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
   model: string;
   money: RegionalMoney;
   estimatedMoney: RegionalMoney | null;
@@ -46,8 +46,11 @@ export interface UsageHistoryModel {
 
 /** 每日 × 模型明细 — 右栏堆叠柱状图分段。 */
 export interface UsageHistoryModelDay {
+  source?: string;
+  providerId?: string;
+  requestCount?: number;
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
   model: string;
   money: RegionalMoney;
   apiMoney: RegionalMoney;
@@ -104,7 +107,7 @@ export interface UsageHistoryPayload {
   /** true = main 正在从其它电脑读取。 */
   devicesSyncing?: boolean;
   /** 每日 × 任务 token(「最耗 token 的任务」按范围统计)。taskKey = `${deviceId}:${sessionId}`。 */
-  taskDaily?: Array<{ day: string; taskKey: string; tokens: number }>;
+  taskDaily?: Array<{ day: string; taskKey: string; tokens: number; auxiliaryTokens?: number }>;
   /** taskDaily 涉及任务的元数据;deviceId 为 'local' 表示本机任务。 */
   tasks?: UsageHistoryTask[];
 }
@@ -156,6 +159,9 @@ interface StoredUsageHistoryDay {
 }
 
 interface StoredUsageHistoryModelDay {
+  source?: unknown;
+  providerId?: unknown;
+  requestCount?: unknown;
   day?: unknown;
   agentKind?: unknown;
   model?: unknown;
@@ -204,7 +210,7 @@ function finiteNumber(value: unknown, fallback = 0): number {
 }
 
 function isAgentKind(value: unknown): value is UsageHistoryModel['agentKind'] {
-  return value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'media';
+  return value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'media' || value === 'auxiliary';
 }
 
 function parseDevices(value: unknown): UsageHistoryDevice[] | undefined {
@@ -286,6 +292,9 @@ function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
       .map((row: StoredUsageHistoryModelDay): UsageHistoryModelDay => ({
         day: row.day as string,
         agentKind: row.agentKind as UsageHistoryModelDay['agentKind'],
+        ...(typeof row.source === 'string' ? { source: row.source.slice(0, 256) } : {}),
+        ...(typeof row.providerId === 'string' ? { providerId: row.providerId.slice(0, 256) } : {}),
+        ...(typeof row.requestCount === 'number' ? { requestCount: finiteNumber(row.requestCount) } : {}),
         model: row.model as string,
         money:
           normalizeRegionalMoney(row.money) ??

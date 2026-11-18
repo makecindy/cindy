@@ -1,3 +1,5 @@
+import { createPiVisionUsageRecorder } from '../vision-bridge/piVisionUsage.js';
+import { createOneShotUsageRecorder } from '../usage/auxiliaryUsage.js';
 import { attachmentPreservation, attachmentStorageRoots } from './oversized-attachment-recovery.js';
 import { createCodexLocalModelSink } from './codexLocalModelSink.js';
 import { createCodexSpawnConfig, createCodexRoutingSignature } from './codexSpawnConfigCore.js';
@@ -495,11 +497,11 @@ export const reviewAutoPermissionAction: AutoReviewDelegate = createAutoPermissi
   logger: desktopMakerLogger,
   managesRetries: true,
   resolveRequestTimeoutMs: () => AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
-  requestText: (_request, prompt, { signal }) => requestAutoReviewText(prompt, signal),
+  requestText: (request, prompt, { signal }) => requestAutoReviewText(prompt, signal, request.sessionId),
 });
 /** 工具循环疑似命中时走共享辅助模型链复核;Claude Code 与 Pi/Codex 共用。 */
 const reviewToolLoop = createToolLoopReviewer({
-  requestText: (prompt, opts) => requestUtilityText(getMaker(), prompt, opts),
+  requestText: (prompt, opts) => requestUtilityText(getMaker(), prompt, { ...opts, source: 'tool-loop-review' }),
 });
 
 reviewAutoPermissionAction.prepareRequest = async request => {
@@ -2311,6 +2313,7 @@ export function getMaker(): Maker {
       },
       getGhostRosterPrompt,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
+      createPiVisionUsageRecorder,
       resolvePiVisionBridgeEnv: (model, sessionId) =>
         buildPiVisionBridgeEnv(
           {
@@ -2620,6 +2623,7 @@ export function getMaker(): Maker {
     });
 
     _maker = new Maker({
+      createOneShotUsageRecorder,
       agents: makerAgents,
       storage: desktopSessionStorage,
       logger: desktopMakerLogger,

@@ -9948,6 +9948,41 @@
       },
       "providerTooltip": "El proveedor seleccionado actualmente para la sesión; en blanco si no hay ninguno fijado.",
       "tokensTooltip": "Cuenta solo los tokens que esta sesión usó en {{range}}."
+    },
+    "auxiliary": {
+      "title": "Uso auxiliar",
+      "label": "Auxiliar",
+      "purpose": "Finalidad",
+      "requests": "Solicitudes registradas",
+      "description": "Incluido en el total de tokens. Solo se registra el uso devuelto por el proveedor; no se estima el uso no informado ni las solicitudes anteriores.",
+      "sources": {
+        "title": "Generación de títulos",
+        "task-summary": "Resúmenes de tareas",
+        "prompt-prediction": "Sugerencias de entrada",
+        "working-status": "Estado del trabajo",
+        "help": "Ayuda",
+        "bot-creation": "Creación de compañeros",
+        "bot-opening": "Saludos de compañeros",
+        "group-planning": "Planificación del grupo",
+        "ambient-reply": "Decisiones de respuesta",
+        "auto-review": "Revisión automática",
+        "tool-loop-review": "Revisión de bucles de herramientas",
+        "memory-review": "Revisión de memoria",
+        "git-summary": "Resúmenes de cambios",
+        "hook-generation": "Scripts de automatización",
+        "automation-verification": "Verificación de importación",
+        "plugin-text": "Texto de complementos",
+        "voice-dialogue": "Conversaciones de voz",
+        "voice-exit": "Decisiones de salida de voz",
+        "voice-refinement": "Mejora de texto de voz",
+        "dictionary-learning": "Aprendizaje del diccionario",
+        "embedding-query": "Búsqueda vectorial",
+        "embedding-index": "Indexación vectorial",
+        "web-search": "Búsqueda web",
+        "provider-probe": "Pruebas de conexión",
+        "vision-bridge": "Puente de visión",
+        "auxiliary": "Otras solicitudes auxiliares"
+      }
     }
   },
   "usageDashboard": {
@@ -19956,7 +19991,8 @@
           "expired": "Caducado",
           "voided": "Anulado"
         }
-      }
+      },
+      "viewUsage": "Ver uso"
     },
     "orders": {
       "title": "Historial de pedidos",

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { UsageHistoryPayload } from '@/hooks/useUsageHistory';
 import {
   buildAgentRows,
+  buildAuxiliaryRows,
   buildModelRows,
   buildSummary,
   cacheHitRate,
@@ -346,3 +347,22 @@ describe('filterUsageHistoryPayload', () => {
   });
 });
 
+
+it('shows auxiliary purposes in the selected range with their share of all tokens', () => {
+  const day = (date: string, source: string, tokens: number, requests: number) => ({
+    day: date, source, requestCount: requests, agentKind: 'auxiliary' as const, model: 'same-model',
+    providerId: 'provider', tokens, money: zeroMoney, apiMoney: zeroMoney, subscriptionEstimateMoney: zeroMoney,
+  });
+  const history = payload({ modelDaily: [day('2026-08-22', 'title', 10, 1),
+    day('2026-08-22', 'title', 20, 2), day('2026-08-21', 'voice-refinement', 70, 1),
+    { ...day('2026-08-22', 'unused', 70, 1), agentKind: 'codex' }],
+    models: [model({ agentKind: 'auxiliary', model: 'same-model', inputTokens: 100 }),
+      model({ agentKind: 'codex', model: 'same-model', inputTokens: 70 })] });
+  const today = filterUsageHistoryPayload(history, 'today');
+  expect(buildAuxiliaryRows(today)).toEqual([{ source: 'title', tokens: 30, requests: 3, share: 0.3,
+    models: ['same-model · provider'] }]);
+  const agents = buildAgentRows(history);
+  expect(agents.map(row => row.agentKind)).toEqual(['codex']);
+  expect(agents[0].share).toBe(1);
+  expect(buildModelRows(history).find(row => row.agentKind === 'auxiliary')?.tokens).toBe(100);
+});

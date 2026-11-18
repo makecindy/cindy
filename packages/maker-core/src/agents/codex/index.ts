@@ -3504,6 +3504,9 @@ assertRouteCurrent();
     }
     let releaseHost: (() => void) | undefined;
     let subscription: ThreadSubscription | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    let observedUsage: Parameters<NonNullable<OneShotOptions['onUsage']>>[0] | undefined;
     try {
       const leased = await this.acquireHostOperation(() => this.getUtilityHost());
       releaseHost = leased.release;
@@ -3533,7 +3536,7 @@ assertRouteCurrent();
         ? startResp.model
         : opts?.model;
 
-      // 等首条 agentMessage.completed 文本; 出 error 通知用 sentinel object 区分超时/正常
+      // Keep the final text but settle on turn completion so later usage is not lost.
       type OneShotResult = { kind: 'text'; text: string } | { kind: 'empty' } | { kind: 'error'; message: string };
       let resolve: (r: OneShotResult) => void = () => {};
       const result = new Promise<OneShotResult>((res) => {
@@ -3541,6 +3544,7 @@ assertRouteCurrent();
       });
       let currentTurnId: string | null = null;
       let resolved = false;
+      let responseText: string | undefined;
 
       subscription = host.subscribeThread(threadId, {
         turnStarted: (params) => {
@@ -3550,14 +3554,23 @@ assertRouteCurrent();
           if (resolved) return;
           const item = params.item as { type?: string; text?: string };
           if (item.type === 'agentMessage' && typeof item.text === 'string') {
-            resolved = true;
-            resolve({ kind: 'text', text: item.text.trim() });
+            responseText = item.text.trim();
           }
+        },
+        tokenUsageUpdated: params => {
+          const usage = params.tokenUsage?.total;
+          if (!usage) return;
+          observedUsage = {
+            model: dispatchModel,
+            inputTokens: Math.max(0, usage.inputTokens - usage.cachedInputTokens),
+            outputTokens: usage.outputTokens,
+            cacheReadTokens: usage.cachedInputTokens,
+          };
         },
         turnCompleted: () => {
           if (!resolved) {
             resolved = true;
-            resolve({ kind: 'empty' });
+            resolve(responseText === undefined ? { kind: 'empty' } : { kind: 'text', text: responseText });
           }
         },
         error: (params) => {
@@ -3601,16 +3614,15 @@ assertRouteCurrent();
 
       // 自家超时 sentinel (kind 'timeout'), 走外部 signal 也走同一通道
       const timeoutP = new Promise<OneShotResult>((res) => {
-        const t = setTimeout(() => res({ kind: 'error', message: '__TIMEOUT__' }), timeoutMs);
-        opts?.signal?.addEventListener('abort', () => {
-          clearTimeout(t);
-          res({ kind: 'error', message: '__ABORTED__' });
-        });
+        timer = setTimeout(() => res({ kind: 'error', message: '__TIMEOUT__' }), timeoutMs);
+        onAbort = () => res({ kind: 'error', message: '__ABORTED__' });
+        opts?.signal?.addEventListener('abort', onAbort, { once: true });
+        if (opts?.signal?.aborted) onAbort();
       });
       const r = await Promise.race([result, timeoutP]);
 
-      // 如果 turn 没结束就拿到结果, 主动 interrupt 避免 server 继续算
-      if (r.kind === 'text' && currentTurnId) {
+      // On failure/timeout, stop the temporary turn instead of leaving it generating.
+      if (r.kind === 'error' && currentTurnId) {
         host.request(Method.TurnInterrupt, { threadId, turnId: currentTurnId }).catch(() => undefined);
       }
 
@@ -3641,8 +3653,16 @@ assertRouteCurrent();
       // 网络/host 启动等未分类失败统一归 'network' (跟 claude 端 mapAnthropicError 一致)
       throw new OneShotError('network', err instanceof Error ? err.message : String(err));
     } finally {
-      try { await subscription?.release(); } catch { /* no-op */ }
-      releaseHost?.();
+      if (timer) clearTimeout(timer);
+      if (onAbort) opts?.signal?.removeEventListener('abort', onAbort);
+      try {
+        // Even a failed unsubscribe must not discard already observed token facts.
+        try { await subscription?.release(); } catch { /* best effort cleanup */ }
+        try { if (observedUsage) await opts?.onUsage?.(observedUsage); }
+        catch { log.warn('oneShot usage observer failed'); }
+      } finally {
+        releaseHost?.();
+      }
     }
   }
 
