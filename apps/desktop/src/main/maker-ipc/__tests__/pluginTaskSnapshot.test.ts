@@ -84,13 +84,11 @@ it.each(['other-computer', 'share:provider'])('uses the %s catalog in the produc
     agents: ['codex'], routing: { codex: {} }, models: { codex: [{ id: 'model', efforts: ['high'] }] } }]);
   const local = vi.fn(() => { throw Error('Local catalog must not be used'); });
   let pending: Record<string, unknown> | undefined;
-  const stage = vi.fn(async (_deps: unknown, selection: {
-    targetAgentKind: string; model: string; providerId: string; effort: string; fastMode: boolean; agentDeviceId: string;
-  }) => {
+  const stage = vi.fn<typeof sessionAgentSwitch.performSessionAgentSwitch>(async (_deps, selection) => {
     pending = { runtimeSource: 'agent', targetAgentKind: selection.targetAgentKind, model: selection.model,
       providerId: selection.providerId, effort: selection.effort, fastMode: selection.fastMode,
       targetAgentDeviceId: selection.agentDeviceId };
-    return { deferred: true };
+    return { switched: false, agentKind: 'codex', model: 'old', engineReady: false, deferred: true };
   });
   const ports = {
     agentSwitchPending: { revision: () => 0, get: () => pending },
