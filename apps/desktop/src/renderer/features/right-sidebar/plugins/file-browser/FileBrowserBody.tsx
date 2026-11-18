@@ -589,7 +589,7 @@ function FileBrowserBodyWithWorkdir({
     setDirectory(path);
     setExternalFile(null);
     if (state.selectedFilePath) ctx.patchState({ selectedFilePath: null });
-    if (path) void tree.expandToPath(path, 'directory');
+    void tree.expandToPath(path, 'directory', !!activeRelPath);
   }, [activeRelPath, confirmSwitchAway, ctx, directory, state.selectedFilePath, tree.expandToPath]);
 
   const openFile = useCallback((relPath: string) => {

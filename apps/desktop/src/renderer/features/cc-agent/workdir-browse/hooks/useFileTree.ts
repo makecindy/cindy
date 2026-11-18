@@ -151,7 +151,7 @@ export interface UseFileTreeReturn {
    *
    * Root 文件(relPath 不含 '/')直接 no-op return —— 它已经在根级,无需展开。
    */
-  expandToPath: (relPath: string, kind?: 'file' | 'directory') => Promise<void>;
+  expandToPath: (relPath: string, kind?: 'file' | 'directory', refreshTarget?: boolean) => Promise<void>;
 }
 
 const ROOT_KEY = '';
@@ -942,8 +942,11 @@ async function refresh(store: FileTreeStore): Promise<void> {
   await Promise.all([...targets].map((p) => fetchDir(store, p)));
 }
 
-async function expandToPath(store: FileTreeStore, relPath: string, kind: 'file' | 'directory' = 'file'): Promise<void> {
-  if (!relPath) return;
+async function expandToPath(store: FileTreeStore, relPath: string, kind: 'file' | 'directory' = 'file', refreshTarget = false): Promise<void> {
+  if (!relPath) {
+    if (refreshTarget && kind === 'directory') await fetchDir(store, ROOT_KEY);
+    return;
+  }
   const parts = relPath.split('/');
   const depth = kind === 'directory' ? parts.length : parts.length - 1;
   if (!depth) return;
@@ -958,7 +961,7 @@ async function expandToPath(store: FileTreeStore, relPath: string, kind: 'file' 
   store.snapshot = { ...store.snapshot, expanded: nextExpanded };
   emit(store);
   // 未 cache 的祖先并行 fetch
-  const toFetch = ancestors.filter((a) => !store.snapshot.entries.has(a));
+  const toFetch = ancestors.filter((a) => !store.snapshot.entries.has(a) || (refreshTarget && a === relPath));
   await Promise.all(toFetch.map((a) => fetchDir(store, a)));
 }
 
@@ -1062,7 +1065,7 @@ export function useFileTree({
   const collapseAllCb = useCallback(() => collapseAll(store), [store]);
   const refreshCb = useCallback(() => refresh(store), [store]);
   const expandToPathCb = useCallback(
-    (relPath: string, kind?: 'file' | 'directory') => expandToPath(store, relPath, kind),
+    (relPath: string, kind?: 'file' | 'directory', refreshTarget?: boolean) => expandToPath(store, relPath, kind, refreshTarget),
     [store],
   );
 
