@@ -216,6 +216,10 @@ export class NativeTransport implements Transport {
   private async poll(): Promise<void> {
     await this.synchronizeAdmission();
     await this.synchronizeRelayUdp();
+    // Native commands can complete while this poll is awaiting bridge I/O or
+    // initializing/flushing another channel. Its snapshot cannot establish that
+    // a dial registered after it started has disappeared.
+    const waitingAtPoll = [...this.waiting];
     const result = await this.call<Poll>({ op: 'poll' });
     for (const packet of result.packets) {
       const deviceId = this.deviceForLink.get(packet.link);
@@ -256,7 +260,7 @@ export class NativeTransport implements Transport {
       }
     }
     for (const [id, channel] of this.channels) if (!alive.has(id)) channel.close({ drain: false });
-    for (const [id, waiting] of this.waiting) if (!alive.has(id) || now() >= waiting.deadline) {
+    for (const [id, waiting] of waitingAtPoll) if (this.waiting.get(id) === waiting && (!alive.has(id) || now() >= waiting.deadline)) {
       this.waiting.delete(id); waiting.reject(new Error('NATIVE_CONNECT_TIMEOUT'));
       void this.call({ op: 'close', id }).catch(() => undefined);
     }
