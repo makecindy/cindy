@@ -10995,6 +10995,8 @@
     "autosave": {
       "saving": "Saving…",
       "saved": "Saved",
+      "unconfirmed": "Save not confirmed",
+      "savedModel": "Saved · applies next turn",
       "retry": "Save Again"
     },
     "retry": "Retry",
@@ -11108,7 +11110,7 @@
       "discard": "Discard Changes",
       "continueEditing": "Keep Editing"
     },
-    "profileSaveFailed": "Buddy settings could not be saved. No changes were applied.",
+    "profileSaveFailed": "Buddy settings could not be saved.",
     "profileSaveOffline": "Cannot connect to the buddy’s computer. Reconnect, then save again.",
     "modelLabel": "Model",
     "modelUnavailable": "{{model}} (currently unavailable)",
@@ -21495,6 +21497,24 @@
   },
   "featureIntro": {
     "close": "Close",
+    "project": {
+      "title": "Meet Projects",
+      "lead": "Give ongoing work a project. Its files live in a folder on your computer, and Cindy picks up where the last task left off, so you never re-explain the background.",
+      "files": {
+        "title": "Results stay yours",
+        "body": "Cindy reads and edits right in the project folder. What it makes stays on your computer."
+      },
+      "context": {
+        "title": "No re-explaining",
+        "body": "New tasks in the project already see these files and follow what the project has noted."
+      },
+      "separate": {
+        "title": "Work stays separate",
+        "body": "Each project keeps its own tasks together, so different work never mixes."
+      },
+      "start": "Continue to new project",
+      "note": "Next, just give it a name. An existing folder or a code repository works too."
+    },
     "taskInbox": {
       "title": "Meet the Inbox",
       "lead": "Tasks sort themselves into Pending, Working, Snoozed and Processed. The best habit is to keep your inbox clear: click Done when a task is handled, and snooze what can wait.",

@@ -56,6 +56,7 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { ProjectIcon, useAutomaticProjectIcon } from './ProjectIcon';
+import { ProjectIntro, useProjectIntro } from './ProjectIntro';
 export function projectHostKey(project: ProjectNode): string {
   if (!project.deviceLinkDeviceId) return project.projectKey;
   const hosts = new Set(project.sessions.map((session) => session.remoteHostId ?? null));
@@ -87,6 +88,7 @@ export function ProjectSettingsDialog({
 }) {
   const { t } = useTranslation();
   const label = (key: string) => t(`projectSettings.${key}`);
+  const [intro, closeIntro] = useProjectIntro(create);
   const colorLabel = (color: ProjectIconColor) =>
     color === 'default' ? label('colors.default') : t(`taskTags.${color}`);
   const chooseColor = (color: ProjectIconColor) => {
@@ -384,6 +386,8 @@ export function ProjectSettingsDialog({
   const symbols = PROJECT_SYMBOLS.filter((item) =>
     `${item.name} ${item.keywords}`.toLowerCase().includes(query.toLowerCase().trim()),
   );
+  // The first new project on this computer starts with the introduction; the form follows it.
+  if (intro) return <ProjectIntro open onClose={closeIntro} />;
   return (
     <>
       <Dialog.Root

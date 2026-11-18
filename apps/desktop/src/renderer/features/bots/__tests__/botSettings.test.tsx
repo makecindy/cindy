@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotCapabilities, BotModelRoute, BotProfile } from '../botStore';
 import { MainViewHistoryContext, type MainViewHistory } from '@/contexts/MainViewHistoryContext';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { CustomMcpListContext, CustomMcpListResult } from '../../../../shared/customMcp';
 import { beginProvidersRefresh, commitProvidersSnapshot } from '@/lib/providersSnapshotStore';
 
@@ -442,6 +443,151 @@ describe('Bot entry after deletion', () => {
 });
 
 describe('Bot settings profile consolidation', () => {
+  // PR #11347 review regression (unit/jsdom): the real settings header must
+  // describe the completed commit, not the page entered during its 1.8s hold.
+  // Existing model receipt cases only saved a model on the model page.
+  // Minimal input: save a name, then immediately open the model page.
+  it('does not turn a profile save into a model receipt when switching pages', async () => {
+    vi.useFakeTimers();
+    renderSettings();
+    const name = screen.getByLabelText('bots.nameLabel');
+    fireEvent.change(name, { target: { value: 'Updated name' } });
+    await act(async () => { fireEvent.blur(name); });
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.saved');
+    await act(async () => { fireEvent.click(screen.getByText('bots.settingsTabs.model')); });
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.saved');
+    expect(screen.getByRole('status').textContent).not.toContain('bots.autosave.savedModel');
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+  });
+
+  // PR #11347 unit regression: exercise real canLeave, autosave and patch
+  // generation. Existing picker tests used explicit model revisions, so never
+  // covered an ordinary field reverted to baseline while its old write hung.
+  it('keeps a reverted profile on screen after timeout and persists it after forced unmount', async () => {
+    vi.useFakeTimers();
+    let savedName = bot().name;
+    let finish!: () => void;
+    mocks.updateBotProfile.mockImplementation(async (_id, patch) => {
+      if (mocks.updateBotProfile.mock.calls.length === 1) {
+        await new Promise<void>(resolve => { finish = resolve; });
+      }
+      if (typeof patch.name === 'string') savedName = patch.name;
+      return { ...bot({ name: savedName }), currentVersion: 2 };
+    });
+    const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
+    const view = render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />,
+      { wrapper: ConfirmDialogProvider });
+    const name = screen.getByLabelText('bots.nameLabel');
+    fireEvent.change(name, { target: { value: 'Temporary edit' } });
+    fireEvent.blur(name);
+    await act(async () => {});
+    fireEvent.change(name, { target: { value: bot().name } });
+    let allowed: boolean | undefined;
+    await act(async () => { void beforeCloseRef.current!().then(value => { allowed = value; }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(allowed).toBe(false);
+    expect(screen.getByRole('alert').textContent).toContain('bots.autosave.unconfirmed');
+    expect(name).toHaveProperty('value', bot().name);
+    view.unmount();
+    await act(async () => { finish(); });
+    expect(mocks.updateBotProfile.mock.calls.map(([, patch]) => patch.name)).toEqual(['Temporary edit', bot().name]);
+    expect(savedName).toBe(bot().name);
+    renderSettings({ name: savedName });
+    expect(screen.getByLabelText('bots.nameLabel')).toHaveProperty('value', bot().name);
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+  });
+
+  // Unit regression: the real picker + autosave hook previously waited forever
+  // on an unanswered host. Rejection-only tests missed unknown write outcomes,
+  // later selections, navigation, and reopening the confirmed persisted route.
+  it('keeps the latest model after a timed-out save and confirms only the persisted selection', async () => {
+    vi.useFakeTimers();
+    let saved = capabilities({ modelChainOverride: capabilities().modelChain });
+    const receipts: Array<() => void> = [];
+    mocks.updateBotProfile.mockImplementation(async (_id, input) => {
+      await new Promise<void>(resolve => { receipts.push(resolve); });
+      saved = normalizeBotProfileModelChain({ ...saved, ...input.capabilities as object }) as unknown as BotCapabilities;
+      return { ...bot({ capabilities: saved }), currentVersion: 2 };
+    });
+    const view = renderSettings({ capabilities: saved });
+    fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('remote-model-selector'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.saving');
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(screen.getByRole('alert').textContent).toContain('bots.autosave.unconfirmed');
+    expect(saved.agentDeviceId).not.toBe('share:one');
+    // A newer local route remains editable; retry joins the unknown write.
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { fireEvent.click(screen.getByText('bots.autosave.retry')); });
+    // Returning must finish its wait and stay on the dirty page, rather than
+    // navigating while the host may still be writing the previous choice.
+    await act(async () => { fireEvent.click(screen.getByLabelText('bots.settingsBack')); });
+    expect(screen.getByTestId('bot-primary-model-controls')).toBeTruthy();
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    await act(async () => { receipts[0]!(); });
+    expect(screen.queryByText('bots.autosave.savedModel')).toBeNull();
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+    expect(saved.agentDeviceId).toBe('share:one');
+    expect(mocks.updateBotProfile.mock.lastCall![1].capabilities).toMatchObject({ agentDeviceId: null });
+    await act(async () => { receipts[1]!(); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.savedModel');
+    expect(saved.agentDeviceId ?? null).toBeNull();
+    view.unmount();
+    renderSettings({ capabilities: saved });
+    fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+    expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model').textContent).toBe('custom-model');
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it.each(['buddy', 'account', 'same-owner refresh'] as const)('fences a detached trailing model choice across a %s switch', async scope => {
+    vi.useFakeTimers();
+    const owner = getDataOwnerGeneration();
+    let finish!: () => void;
+    mocks.updateBotProfile.mockImplementationOnce(async (_id, patch) => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      return { id: 'bot-1', currentVersion: 2, ...patch };
+    });
+    const view = renderSettings();
+    fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('remote-model-selector'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+    view.unmount();
+    if (scope === 'account') setDataOwnerGeneration('different-owner');
+    if (scope === 'same-owner refresh') setDataOwnerGeneration(owner.dataOwnerId);
+    try {
+      renderSettings({ id: 'other-bot' });
+      await act(async () => { finish(); await vi.advanceTimersByTimeAsync(30_000); });
+      expect(mocks.updateBotProfile).toHaveBeenCalledTimes(scope === 'buddy' ? 2 : 1);
+      expect(mocks.updateBotProfile.mock.calls.every(([id]) => id === 'bot-1')).toBe(true);
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.queryByText('bots.autosave.savedModel')).toBeNull();
+    } finally {
+      setDataOwnerGeneration(owner.dataOwnerId, owner.generation);
+    }
+  });
+
+  it('accepts a fresh edit after a same-owner runtime refresh', async () => {
+    vi.useFakeTimers();
+    const owner = getDataOwnerGeneration();
+    renderSettings();
+    try {
+      setDataOwnerGeneration(owner.dataOwnerId);
+      fireEvent.click(screen.getByText('bots.settingsTabs.model'));
+      fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.getByRole('status').textContent).toContain('bots.autosave.savedModel');
+    } finally {
+      setDataOwnerGeneration(owner.dataOwnerId, owner.generation);
+    }
+  });
+
   it.each(['failed', 'welcome'] as const)('keeps model settings accessible while invitation is %s', async (stage) => {
     renderSettings({ invitation: { stage }, canonicalSessionId: undefined });
     expect(screen.getByLabelText('bots.nameLabel')).toHaveProperty('readOnly', true);

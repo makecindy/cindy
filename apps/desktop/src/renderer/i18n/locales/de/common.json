@@ -10995,6 +10995,8 @@
     "autosave": {
       "saving": "Wird gespeichert…",
       "saved": "Gespeichert",
+      "unconfirmed": "Speichern nicht bestätigt",
+      "savedModel": "Gespeichert · ab nächstem Zug",
       "retry": "Erneut speichern"
     },
     "retry": "Erneut versuchen",
@@ -11108,7 +11110,7 @@
       "discard": "Änderungen verwerfen",
       "continueEditing": "Weiter bearbeiten"
     },
-    "profileSaveFailed": "Die Einstellungen des Freundes konnten nicht gespeichert werden. Es wurden keine Änderungen übernommen.",
+    "profileSaveFailed": "Die Einstellungen des Freundes konnten nicht gespeichert werden.",
     "profileSaveOffline": "Der Computer des Freundes ist nicht erreichbar. Stellen Sie die Verbindung wieder her und speichern Sie erneut.",
     "modelLabel": "Modell",
     "modelUnavailable": "{{model}} (derzeit nicht verfügbar)",
@@ -21495,6 +21497,24 @@
   },
   "featureIntro": {
     "close": "Schließen",
+    "project": {
+      "title": "So funktionieren Projekte",
+      "lead": "Gib jeder längeren Arbeit ein Projekt. Die Dateien liegen in einem Ordner auf deinem Computer, und Cindy macht jedes Mal beim letzten Stand weiter, ohne neue Erklärung.",
+      "files": {
+        "title": "Deine Ergebnisse",
+        "body": "Cindy arbeitet direkt im Projektordner. Was entsteht, bleibt auf deinem Computer."
+      },
+      "context": {
+        "title": "Nichts neu erklären",
+        "body": "Neue Aufgaben im Projekt sehen diese Dateien sofort und kennen dessen Vorgaben."
+      },
+      "separate": {
+        "title": "Sauber getrennt",
+        "body": "Jedes Projekt bündelt seine Aufgaben, verschiedene Arbeiten vermischen sich nicht."
+      },
+      "start": "Weiter zum neuen Projekt",
+      "note": "Ein Name genügt. Ein vorhandener Ordner oder ein Code-Repository geht auch."
+    },
     "taskInbox": {
       "title": "Der Posteingang",
       "lead": "Aufgaben ordnen sich selbst in Offen, In Arbeit, Zurückgestellt und Erledigt ein. Am besten hältst du den Posteingang leer: Klicke auf Erledigt, wenn eine Aufgabe fertig ist, und stelle zurück, was warten kann.",

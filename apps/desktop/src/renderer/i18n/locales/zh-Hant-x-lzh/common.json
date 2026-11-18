@@ -10950,6 +10950,8 @@
     "autosave": {
       "saving": "方存…",
       "saved": "已存",
+      "unconfirmed": "尚未核實存否",
+      "savedModel": "已存，下輪生效",
       "retry": "再存"
     },
     "retry": "再試",
@@ -11063,7 +11065,7 @@
       "discard": "棄所改",
       "continueEditing": "續修"
     },
-    "profileSaveFailed": "同伴之設未能存，變更未生效。",
+    "profileSaveFailed": "同伴之設未能存。",
     "profileSaveOffline": "同伴所在之電腦未能連通，請復連後再存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（今不可用）",
@@ -21542,6 +21544,24 @@
   },
   "featureIntro": {
     "close": "閉",
+    "project": {
+      "title": "識案",
+      "lead": "久為之事，宜付一案。卷帙皆存此機一卷匣，Cindy 每承前功續之，無須再述原委。",
+      "files": {
+        "title": "所成皆君之卷",
+        "body": "Cindy 徑於案之卷匣讀寫，所成皆存此機，隨時可取。"
+      },
+      "context": {
+        "title": "無須再述",
+        "body": "於案中新開差事，Cindy 即見諸卷，亦循此案所記之約。"
+      },
+      "separate": {
+        "title": "諸事各歸其案",
+        "body": "各案差事自成一列，異事不相擾，久別復來仍可續之。"
+      },
+      "start": "續立新案",
+      "note": "命名即可立案；既有卷匣或程式碼儲存庫亦可徑用。"
+    },
     "taskInbox": {
       "title": "識收件匣",
       "lead": "任務依其狀自分為待處理、進行中、待後處理、已處理。善用之道，在常清其匣：事畢者點「畢」，未及者待後處理。",
