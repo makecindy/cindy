@@ -4845,11 +4845,6 @@ function CCAgentSessionContent({
       (EFFORT_VALUES as readonly string[]).includes(session.effort)
         ? session.effort
         : null;
-    const fmtTokens = (value: number): string =>
-      value >= 1_000_000
-        ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
-        : `${Math.round(value / 1000)}K`;
-
     const switched = await setModelWithWindowConfirmation({
       invoke: (confirmedContextWindow) =>
         window.electronAPI.maker.setModel(
@@ -4865,17 +4860,7 @@ function CCAgentSessionContent({
               } as { effort: string; fastMode: boolean | 'ultrafast' })
             : undefined,
         ),
-      confirm: ({ contextWindow, contextTokens }) =>
-        confirmDialog({
-          title: t('newChat.chatInput.modelSwitchContextGuard.title'),
-          description: t('newChat.chatInput.modelSwitchContextGuard.overflowDescription', {
-            used: fmtTokens(contextTokens),
-            total: fmtTokens(contextWindow),
-            pct: Math.round((contextTokens / contextWindow) * 100),
-          }),
-          confirmText: t('newChat.chatInput.modelSwitchContextGuard.confirmSwitch'),
-          cancelText: t('newChat.chatInput.modelSwitchContextGuard.cancelSwitch'),
-        }),
+      onWindowRebuild: () => toast.warning(t('newChat.chatInput.modelSwitchContextGuard.condensedToast'), { duration: 4000 }),
     });
     if (!switched) return;
     if (switched === 'applied') {
@@ -4900,7 +4885,6 @@ function CCAgentSessionContent({
     await retryLastError();
   }, [
     canSwitchToClaudeSubscription,
-    confirmDialog,
     fastMode,
     refreshServerSession,
     retryLastError,
