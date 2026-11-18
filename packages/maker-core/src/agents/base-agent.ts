@@ -1477,6 +1477,9 @@ export interface AgentDeps {
    */
   claudeHooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
 
+  /** Optional native tool hooks; the host owns live task selection and plugin lifecycle. */
+  toolLifecycleControl?: import('./shared/tool-lifecycle.js').ToolLifecycleControl;
+
   /** Host bridge for repairing Claude Code subagent usage when provider usage is zero. */
   registerClaudeSubagentTask?: (task: ClaudeSubagentTaskRegistration) => void;
   getClaudeSubagentTaskUsage?: (taskId: string) => ClaudeSubagentTaskUsage | undefined;
@@ -2532,7 +2535,7 @@ export type AgentMcpServerToolsState =
 export interface AgentMcpServerToolsReport {
   state: AgentMcpServerToolsState;
   /** Raw MCP tool names as the server declared them, not harness-qualified names. */
-  tools: Array<{ name: string; description?: string }>;
+  tools: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
 }
 
 export interface AgentSessionHandle {
@@ -2545,6 +2548,8 @@ export interface AgentSessionHandle {
    * the engine has no per-session MCP status entry.
    */
   readMcpServerTools?(serverName: string): Promise<AgentMcpServerToolsReport | null>;
+  /** On-demand public harness tool-catalog calls; unsupported methods must fail explicitly. */
+  callNativeToolCatalog?(method: string, args: unknown[]): Promise<unknown>;
   /** Native session identity safe for resume; may retain an unaccepted fork's source. */
   readonly id: string;
   /** Transient native request identity; hosts must not persist it as a resume id. */

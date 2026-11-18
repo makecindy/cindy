@@ -23,7 +23,8 @@ export interface DeviceLinkApiPorts {
   /** Capture owner and Agent-Net selection before any async preparation. */
   managementScopeKey(): string;
   // Keep preparation as an await boundary; route/owner checks must run after it.
-  prepareAgentNetRuntime(): Promise<Pick<typeof import('./agentNetRuntime.js'), 'agentNetClientForRelay' | 'currentAgentNetClient' | 'agentNetSelectionKey' | 'agentNetRequiresEncryption'>>;
+  prepareAgentNetRuntime(): Promise<Pick<typeof import('./agentNetRuntime.js'), 'agentNetClientForRelay' | 'currentAgentNetClient' | 'agentNetSelectionKey' | 'agentNetRequiresEncryption'
+    | 'agentNetNoteDeviceRemoved'>>;
   prepareOwnerScope(): Promise<Pick<typeof import('../appSessionState.js'), 'activeOwnerScopeKey' | 'isAppSessionBoundaryPending'>>;
   prepareRelayConfig(): Promise<Pick<typeof import('./selfHostedRelayConfig.js'), 'readRelaySecrets'>>;
 }
@@ -143,6 +144,16 @@ function officialDeviceLinkApiFetch<T>(
   });
 }
 
+/**
+ * The official Device Link device list alone, for Agent-Net's check of removed devices (packages/agent-net/src/membership.ts reads it in
+ * the background while Agent-Net is on). Behind the same throttle as every other read of `/devices`: not sent inside a
+ * 429 window, and a 429 it gets is recorded for the others.
+ */
+function officialDeviceListFetch<T>(opts: Omit<ApiFetchOptions, 'baseUrl' | 'token' | 'authorization'> = {}): Promise<T> {
+  const base = officialDeviceLinkApiBase();
+  return throttledDirectoryRead(base, (extra) => officialDeviceLinkApiFetch<T>(DEVICE_DIRECTORY_PATH, { ...opts, ...extra }));
+}
+
 async function deviceLinkApiFetch<T>(
   apiPath: string,
   opts: Omit<ApiFetchOptions, 'baseUrl' | 'token' | 'authorization'> = {},
@@ -224,6 +235,9 @@ async function deviceLinkApiFetch<T>(
         await api.request('DELETE', '/devices/' + encodeURIComponent(target), undefined);
         assertCurrent();
       }
+      // Refuse it on Agent-Net here right away as well, without waiting for the next read of the Device Link device list
+      // (packages/agent-net/src/membership.ts); the account and selection are still the ones that removed it (assertCurrent).
+      if (opts.method === 'DELETE' && deletion?.deleted === true && deletion.deviceId === target) runtime.agentNetNoteDeviceRemoved(target);
       return result;
     }
     return officialDeviceLinkApiFetch<T>(apiPath, opts);
@@ -274,5 +288,5 @@ async function deviceLinkApiFetch<T>(
   });
 }
 
-return { resolveDeviceLinkApiBase, officialDeviceLinkApiBase, officialDeviceLinkApiFetch, deviceLinkApiFetch };
+return { resolveDeviceLinkApiBase, officialDeviceLinkApiBase, officialDeviceLinkApiFetch, officialDeviceListFetch, deviceLinkApiFetch };
 }

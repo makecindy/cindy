@@ -453,7 +453,7 @@ describe('GhostInstallReceiptStore cleanup', () => {
   it('ignores runtime point grants without rewriting old receipt data', async () => {
     const base = createSetupReceipt();
     const fragments = [{ id: 'style', text: 'Static task instructions', order: 10, scope: 'selected-task' as const }];
-    const hooks = ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory', 'will-schedule-run'] as const;
+    const hooks = ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory', 'will-tool-call', 'did-tool-result', 'will-schedule-run'] as const;
     const receipt = createGhostInstallReceipt({ ...base,
       manifest: { ...base.manifest, schemaVersion: 3, minCindyVersion: '0.0.0', systemPrompt: fragments,
         subscribe: { hooks: [...hooks] } },

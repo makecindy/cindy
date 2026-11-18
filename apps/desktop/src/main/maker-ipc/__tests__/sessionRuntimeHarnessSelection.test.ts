@@ -8,6 +8,7 @@ import {
 import {
   pendingHarnessRuntimeMutation,
   setSessionRuntimeHarness,
+  userStagedSelectionProjection,
   type HarnessRuntimeSelectionDeps,
 } from '../sessionRuntimeHarnessSelection';
 import type { SessionRuntimeProfile } from '../sessionRuntimeControl';
@@ -53,7 +54,7 @@ function setup(running = false) {
     pendingRevision: (id) => pending.revision!(id),
     read: vi.fn(async () => effective),
     resolve: vi.fn(async (profile) => ({ ...profile, providerId: profile.providerId ?? 'openai' })),
-    stage: (id, profile, assertCurrent, beforeMutation) =>
+    stage: (id, profile, assertCurrent, beforeMutation, source = 'agent') =>
       performSessionAgentSwitch(switchDeps, {
         sessionId: id,
         targetAgentKind: profile.agentKind,
@@ -62,7 +63,7 @@ function setup(running = false) {
         effort: profile.effort,
         fastMode: profile.fastMode,
         ...(profile.agentDeviceId !== undefined ? { agentDeviceId: profile.agentDeviceId } : {}),
-        runtimeSource: 'agent',
+        runtimeSource: source === 'agent' ? 'agent' : undefined,
         assertSelectionCurrent: assertCurrent,
         beforeMutation,
       }),
@@ -197,6 +198,81 @@ describe('runtime harness selection', () => {
       expect(h.switchDeps.supersedePendingCredentialSwitch).not.toHaveBeenCalled();
     },
   );
+
+  // 2026-11-17: after staging a Worker's new source, the Lead's follow-up without harness hit
+  // CONFLICT although its generation matched, because the turn-end path yields to any staged
+  // selection. Without harness the patch now revises the staged selection, as choosing again in
+  // the picker does; omitted fields keep the staged values. Tier: unit (real staging transaction).
+  it('revises a staged selection when harness is omitted, keeping its other fields', async () => {
+    const h = setup();
+    await setSessionRuntimeHarness(h.deps, {
+      ...request, patch: { ...request.patch, providerId: 'gateway', effort: 'low' },
+    });
+
+    expect(await setSessionRuntimeHarness(h.deps, {
+      targetSessionId: 's1', expectedGeneration: 5, patch: { fastMode: true },
+    })).toMatchObject({
+      ok: true,
+      status: 'deferred',
+      effectiveBoundary: 'next_send',
+      pendingMutation: {
+        profile: { agentKind: 'codex', model: 'gpt-6-astra', providerId: 'gateway', effort: 'low', fastMode: true },
+      },
+    });
+    expect(h.close).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  // PR #11071: axes-only Agent revisions lost picker provenance. Existing tests only
+  // revised Agent choices. Minimal input: reselect the current model, then enable Fast.
+  // Unit tier: real staging + send application must retain the IM manual-route marker.
+  it('keeps a user-staged choice manual after an Agent revises its axes and sends', async () => {
+    const h = setup();
+    h.pending.set('s1', {
+      targetAgentKind: 'claude-code', model: h.effective.model,
+      providerId: 'old-provider', sameAgentSelection: true,
+    });
+    h.switchDeps.selectSameAgentModel = vi.fn(async (id, intent, applyNow) => {
+      if (!applyNow) h.pending.set(id, { ...intent, sameAgentSelection: true });
+      return { deferred: !applyNow };
+    });
+    h.switchDeps.onUserRouteSelectionLanded = vi.fn(async () => {});
+
+    expect(await setSessionRuntimeHarness(h.deps, {
+      targetSessionId: 's1', expectedGeneration: 4, patch: { fastMode: true },
+    })).toMatchObject({
+      ok: true,
+      pendingMutation: { source: 'user', profile: { fastMode: true } },
+    });
+    await applyPendingAgentSwitchIfIdle(h.switchDeps, 's1');
+    expect(h.switchDeps.onUserRouteSelectionLanded).toHaveBeenCalledWith('s1');
+    expect(h.pending.get('s1')).toBeUndefined();
+  });
+
+  // Agent runtime reads showed pending=null for a picker choice, so a Lead could overwrite a
+  // choice it never saw. Picker choices project as source=user; system follow-ups and the
+  // agent's own staging (already projected) do not. Tier: unit (the projection Host reads use).
+  it.each([
+    [{ targetAgentKind: 'codex' as const, model: 'gpt-6-astra', providerId: 'openai', sameAgentSelection: true }, 'user'],
+    [{ targetAgentKind: 'codex' as const, model: 'gpt-6-astra', providerId: 'openai', runtimeSource: 'agent' as const }, null],
+    [{ targetAgentKind: 'codex' as const, model: 'gpt-6-astra', providerId: 'openai', configStaged: true }, null],
+  ])('projects only picker choices as user-staged: %j', (intent, source) => {
+    expect(userStagedSelectionProjection(intent, 7, null)?.source ?? null).toBe(source);
+    if (source) {
+      expect(userStagedSelectionProjection(intent, 7, null)).toEqual({
+        generation: 7, source: 'user',
+        profile: { agentDeviceId: null, agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: null, fastMode: false },
+      });
+    }
+  });
+
+  it('asks to re-read when the staged selection a revision targets is gone', async () => {
+    const h = setup();
+    expect(await setSessionRuntimeHarness(h.deps, {
+      ...request, patch: { model: 'gpt-6-astra' },
+    })).toMatchObject({ ok: false, errorCode: 'CONFLICT' });
+    expect(h.pending.get('s1')).toBeUndefined();
+  });
 
   it.each([
     { orcaRole: 'lead', running: false },

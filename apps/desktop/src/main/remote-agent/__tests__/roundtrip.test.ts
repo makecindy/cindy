@@ -36,6 +36,7 @@ import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import { hostedAttachmentPreservation } from '../../maker-host/attachmentPreservation';
 import { hostedStartOptions } from '../host/service';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service';
+import { ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy';
 import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch';
 import { relocateForFreshStart } from '../../maker-ipc/sessionAgentSwitchHandler';
 import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
@@ -280,6 +281,33 @@ function createHost(
 }
 
 describe('remote agent round trip', () => {
+  // Unit: groupRelay covers the host reply. The controller must restore the typed
+  // quota cause from either admission rejection or the asynchronous startup stream.
+  it.each(['admission', 'startup stream'])('restores the group quota reset from %s', async boundary => {
+    const message = '[REMOTE_AGENT_GROUP_USAGE_LIMIT] usage_limit_reached: the available accounts for this model have reached their usage limit; resets_at: 1794978600000';
+    const host = createHost(undefined, undefined, async () => { throw new AgentStartupStoppedError(new Error(message)); });
+    const invoke = makeDeps(host).invoke;
+    const start = createDeviceAgentStarter({
+      remoteInvoke: async (_deviceId, _channel, args) => {
+        if (boundary === 'admission' && (args[0] as { op: string }).op === 'open') {
+          return { ok: false, error: { code: 'IPC_ERROR', message } };
+        }
+        return { ok: true, result: await invoke(args) };
+      },
+      rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge: async () => null, makerMemory: () => undefined,
+      captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: historyLogger,
+    });
+    try {
+      const failure = await start({ agentKind: 'codex', deviceId: 'ordinary-peer', options: {
+        sessionId: 'remote-quota', workingDir: project, model: 'gpt-5', providerId: 'openai',
+      } }).catch(error => error);
+      expect(failure).toBeInstanceOf(AgentStartupStoppedError);
+      expect(failure.cause).toBeInstanceOf(ProviderGroupUsageLimitError);
+      expect(failure.cause.limit).toEqual({ resetAtMs: 1794978600000 });
+      expect(hostInputs).toHaveLength(boundary === 'admission' ? 0 : 1);
+    } finally { host.dispose(); }
+  });
+
   // Hosted 413 integration: production open/host/reverse HTTP/projection must
   // return an attachment readable by the native executor, not a provider file.
   // Prior tests exercised tools but never a host-initiated preservation batch.

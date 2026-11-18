@@ -328,6 +328,22 @@ PROJECT_MISMATCH 表示换了项目或任务被移动，应新建任务并保留
 不能改投插件默认模型。权限收紧与项目移除会在派发时再检查，插件不能绕过。项目属于插件宿主电脑，
 远程模型来源不把项目搬到另一台电脑。
 
+IM 入口插件在 ghost.json 顶层声明 `imEntrance: true`，「设置 → IM 机器人」会列出它，并在用户没开官方
+机器人时也显示「项目与模型」，让用户能改这份共用配置。声明只影响展示，不授予能力。
+
+**按群聊/私聊单独设置**：`capabilities().imProjectOverrides === true` 时，插件可以让某个群聊或私聊
+不跟随项目的模型与权限，目录始终跟随项目。`imProjectConfig({imProject})` 返回此刻「跟随 IM」的
+`{imProject, route, permissionMode}`，用来在页面上显示。`create` 和 `followImProject` 可带
+`imOverride: {route?, permissionMode?, permissionGrant?}`，省略的字段跟随项目；route 用统一选择器
+（`cindy.pickModel`）返回的整份 route，原样保存与回传。权限与项目一样或更严时直接生效；比项目更宽时
+先在用户点选后调用 `confirmImPermission({imProject, permissionMode, conversation:{label, kind:'group'|'direct'}})`，
+Host 弹出 Cindy 自己的确认框（页面画不出、点不到）；允许后返回 `{granted:true, grant}`，把 `grant`
+与该群聊/私聊的覆盖一起保存并放进 `imOverride.permissionGrant`；拒绝返回 `{granted:false}`。不更宽时直接
+返回 `{granted:true}`。授权只对本插件、本项目有效，卸载后失效，更新插件保留；没有有效授权时
+`create` / `followImProject` 返回 `CONFIRMATION_REQUIRED`，提示用户在插件页重新确认，不要自动改用别的权限。
+改回跟随项目时去掉 `imOverride` 即可。创建键不含覆盖，改了覆盖后重试同一键返回原任务，再用
+`followImProject` 应用新覆盖。在消息到来时（后台）不要调用 `confirmImPermission`，它只用于用户正在操作的页面。
+
 **远程模型执行**：`capabilities().remoteRoutes === true` 时，
 `create` 和 `setModel` 的完整 route 可带 `agentDeviceId`（同账号其他电脑或 `share:<shareId>`）。
 省略表示插件运行电脑；它选择 Agent 执行来源，任务记录、文件、权限和结果仍归插件运行电脑。
@@ -391,6 +407,21 @@ const run = await cindy.tasks.send({ taskId: task.taskId, expectedRevision: task
 const status = await cindy.tasks.getRun({ runId: run.runId });
 const page = await cindy.tasks.readMessages({ taskId: task.taskId, limit: 50 });
 // 保存 nextCursor；下一页传 after，不以最后一条 assistant 推断 run 已完成。
+```
+
+**边生成边显示（新增接口，尚未发布）**：`capabilities().runPreview === true` 时，`getRun` 在
+`status === 'running'` 且任务当前执行的正是这次输入时，可额外返回 `preview: { text }`：
+Agent 正在输出的那一段回答（最多 32768 个 UTF-16 字符，超出只保留开头），已去掉内部引用标记。
+它只是过程中的草稿：一次工具调用后会从新的一段重新开始，不是完整回答，也不是最终结果；
+没有正在输出的文字、run 已结束或任务正在执行别的输入时不带此字段。最终回答仍在 run 结束后
+按 `outputMessageId` 用 `readMessages` 读取，不要把最后一次 preview 当结果保存。
+无需新声明，归属检查与 `getRun` 相同，只能看到本插件这次 run 的内容。旧 Host 没有该标记，
+插件照常只显示阶段，不要为了取草稿而缩短轮询间隔（约 700 ms 足够）。
+
+```js
+const caps = await cindy.tasks.capabilities();
+const state = await cindy.tasks.getRun({ runId: run.runId });
+if (caps.runPreview === true && state.preview) showDraft(state.preview.text); // 可能变短或重置
 ```
 
 SDK 成功返回 data，失败抛出带 code 的错误。原始管子响应为 `{ok:true,data}` 或
