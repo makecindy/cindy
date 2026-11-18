@@ -6,7 +6,7 @@ import { useSelectableDevices } from '@/hooks/useControllableDevices';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 
 type LinkStatus = 'stopped' | 'connecting' | 'online';
-type Directory = { devices: DeviceLinkDeviceView[] };
+type Directory = { devices: DeviceLinkDeviceView[]; displayBudget?: { remainingMs: number } };
 
 function device(overrides: Partial<DeviceLinkDeviceView> = {}): DeviceLinkDeviceView {
   return {
@@ -168,5 +168,47 @@ describe('new-task device picker recovery', () => {
     api.controls();
     await flush();
     expect(result.current).toEqual({ devices: [], loaded: true });
+  });
+
+  it('keeps the rows and stays loaded while an unrelated refresh revalidates', async () => {
+    const studio = device({ online: true, remoteControlEnabled: true });
+    const phone = device({ deviceId: 'phone', name: 'Phone', platform: 'ios' });
+    const pending = deferred();
+    api.listDevices.mockResolvedValueOnce({ devices: [studio, phone] })
+      .mockReturnValueOnce(pending.promise);
+    const { result } = await mountOnline(useSelectableDevices);
+    const rows = result.current.devices;
+    expect(result.current.loaded).toBe(true);
+    // A refresh that cannot change the selectable computers (here the phone coming
+    // online) must not look like a reload: consumers probe every row again on a new
+    // array or a loaded=false flip.
+    api.controls();
+    await flush();
+    expect(result.current.loaded).toBe(true);
+    expect(result.current.devices).toBe(rows);
+    pending.resolve({ devices: [studio, { ...phone, online: true }] });
+    await flush();
+    expect(result.current.loaded).toBe(true);
+    expect(result.current.devices).toBe(rows);
+  });
+
+  it('keeps a way back to this computer when the directory expires and the re-read fails', async () => {
+    api.listDevices
+      .mockResolvedValueOnce({
+        devices: [device({ online: true, remoteControlEnabled: true })],
+        displayBudget: { remainingMs: 1000 },
+      })
+      .mockRejectedValue(new Error('directory unavailable'));
+    const { result } = await mountOnline(useSelectableDevices);
+    expect(result.current.devices[0]?.online).toBe(true);
+    await act(async () => { vi.advanceTimersByTime(1500); });
+    await flush();
+    // The expired rows stay listed (offline, not selectable) so the switcher, and
+    // with it the way back to this computer, does not disappear; nothing is
+    // authoritative until a read succeeds.
+    expect(result.current).toEqual({
+      devices: [{ deviceId: 'studio-pc', name: 'Studio PC', platform: 'linux', online: false }],
+      loaded: false,
+    });
   });
 });

@@ -713,10 +713,10 @@ describe('Shared create project picker', () => {
   // 列表会合法变空,若按「非空」gate,回落永远不触发,草稿会永久指着一台已消失的设备。
   it('distinguishes a loaded-empty device snapshot from a not-yet-loaded one', () => {
     expect(controllableDevicesHookSource).toContain(
-      'export function useSelectableDevices(): { devices: SelectableDevice[]; loaded: boolean }',
+      'export function useSelectableDevices(): SelectableDevicesSnapshot',
     );
     // 拉取失败(device-link 不可用)的空不作数,不得据此清掉用户选定的设备。
-    expect(controllableDevicesHookSource).toContain("loaded: request.status === 'ready'");
+    expect(controllableDevicesHookSource).toContain("const loaded = status === 'ready' ||");
     expect(newMakerDraftRouteSource).toContain('if (!selectableDevicesLoaded) return;');
     expect(newMakerDraftRouteSource).not.toContain('if (selectableDevices.length === 0) return;');
   });
@@ -1078,8 +1078,11 @@ describe('Shared create project picker', () => {
   it('keeps the last known device rows when listDevices fails', () => {
     // 清空会造成死角:选了远程设备后一次瞬时失败就让 pill 返回 null,而回落 effect 又(正确地)
     // 因为空不权威而不动草稿 —— 草稿仍指着那台设备,UI 上却没有控件能切回本机。
-    expect(controllableDevicesHookSource).toContain('toSelectableDevices(list ?? [])');
-    expect(controllableDevicesHookSource).toContain("loaded: request.status === 'ready'");
+    // 目录过期 / 读取失败、暂时没有列表时保留上次的行(标为离线),行为见 selectableDeviceRecovery.test.tsx。
+    expect(controllableDevicesHookSource).toContain(
+      'previous.devices.map((d) => (d.online ? { ...d, online: false } : d))',
+    );
+    expect(controllableDevicesHookSource).toContain("const loaded = status === 'ready' ||");
     const failure = deviceListSource.slice(
       deviceListSource.indexOf('markRequestFailed(error);'),
       deviceListSource.indexOf('finishRefresh(gen, background);',

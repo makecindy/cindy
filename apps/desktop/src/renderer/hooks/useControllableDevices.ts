@@ -8,11 +8,12 @@
  * 常驻时背上整套设置页的订阅开销。device-link 不可用(未登录 / relay 断)→ 静默空列表。
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { isCindyApp, isControllableDevice as isControllableCindyDevice, isMobilePlatform } from '@cindy/maker-shared/device-list';
 import {
   useDeviceLinkDeviceList,
   useDeviceLinkDeviceListRequestState,
+  type DeviceLinkDeviceListStatus,
 } from '@/features/device-link/useDeviceLinkDeviceList';
 
 export interface ControllableDevice {
@@ -122,13 +123,41 @@ export function sameSelectableList(
  * 用户在 UI 上再也切不回本机。反过来,首帧未就绪或 device-link 暂时不可用(抛错)时的空
  * 不能当权威,否则一次抖动就把用户刚选的设备抹掉。
  */
-export function useSelectableDevices(): { devices: SelectableDevice[]; loaded: boolean } {
+export function useSelectableDevices(): SelectableDevicesSnapshot {
   const list = useDeviceLinkDeviceList();
-  const request = useDeviceLinkDeviceListRequestState();
-  const devices = useMemo(() => toSelectableDevices(list ?? []), [list]);
-  // 读取失败时共享目录保留旧行但不是权威快照，不能据此清掉草稿里的设备；
-  // Device Link 停用后清空则是权威的空。
-  return { devices, loaded: request.status === 'ready' };
+  const { status } = useDeviceLinkDeviceListRequestState();
+  const previous = useRef(EMPTY_SELECTABLE_DEVICES);
+  const next = useMemo(() => nextSelectableDevices(previous.current, list, status), [list, status]);
+  previous.current = next;
+  return next;
+}
+
+export interface SelectableDevicesSnapshot {
+  devices: SelectableDevice[];
+  loaded: boolean;
+}
+
+const EMPTY_SELECTABLE_DEVICES: SelectableDevicesSnapshot = { devices: [], loaded: false };
+
+/**
+ * 共享目录 → 创建页快照。保留旧 hook 对消费者的两条约定:
+ * - 名单不变时沿用原数组,重新读取期间 `loaded` 不回落。消费者(如 Telegram 的远程设备区)
+ *   按数组引用和 `loaded` 重新探测每台电脑,无关的目录刷新不能让它们重来一遍。
+ * - 目录过期或读取失败、暂时拿不到列表时保留上次的设备行并一律标为离线:切换器不消失,
+ *   用户仍能切回本机,也不会选到状态未知的远程电脑。只有 Device Link 停用后的
+ *   ready + 无列表才是权威的空;读取失败时共享目录自己保留的旧行照常列出,但不是权威快照。
+ */
+export function nextSelectableDevices(
+  previous: SelectableDevicesSnapshot,
+  list: readonly DeviceLinkDeviceView[] | null,
+  status: DeviceLinkDeviceListStatus,
+): SelectableDevicesSnapshot {
+  let devices = list ? toSelectableDevices(list)
+    : status === 'ready' ? []
+    : previous.devices.map((d) => (d.online ? { ...d, online: false } : d));
+  if (sameSelectableList(previous.devices, devices)) devices = previous.devices;
+  const loaded = status === 'ready' || (status === 'loading' && list !== null && previous.loaded);
+  return devices === previous.devices && loaded === previous.loaded ? previous : { devices, loaded };
 }
 
 export function useControllableDevices(): ControllableDevice[] {
