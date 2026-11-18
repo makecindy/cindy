@@ -151,7 +151,7 @@ export interface UseFileTreeReturn {
    *
    * Root 文件(relPath 不含 '/')直接 no-op return —— 它已经在根级,无需展开。
    */
-  expandToPath: (relPath: string) => Promise<void>;
+  expandToPath: (relPath: string, kind?: 'file' | 'directory') => Promise<void>;
 }
 
 const ROOT_KEY = '';
@@ -159,19 +159,7 @@ const EVENT_COALESCE_MS = 50;
 // Bound restore bursts before they reach local filesystem IPC or a remote host.
 const RESTORE_CONCURRENCY = 8;
 
-/**
- * 结构等价判定 —— name/type/relPath/symlinkTarget 完全相同(含顺序),
- * 只有 mtime/size 变化时返回 true。
- *
- * 用途:setEntries 前的去重。chokidar/parcel 对我们自己 writeFile 的原子 rename
- * 也会推 change 事件 → 触发 fetchDir 拿到一组对象引用全新但内容结构没变的
- * DirEntry[]。如果直接 setEntries(new Map)会让 flattenTree useMemo 重算 +
- * 所有 FileTreeRow 重渲, 视觉上"刷一下"。
- *
- * 当前所有 entries 消费者(FileTreeView, WorkdirBrowseSidebar.findEntryByRelPath)
- * 都不读 mtime/size, 所以跳过更新无功能影响。如果未来加了"按 mtime 排序"
- * / "显示文件大小"之类的 UI, 这里要相应放宽比较。
- */
+/** Directory rows consume both identity and display metadata. */
 function entriesStructurallyEqual(
   a: readonly DirEntry[],
   b: readonly DirEntry[],
@@ -183,6 +171,7 @@ function entriesStructurallyEqual(
     if (x.relPath !== y.relPath) return false;
     if (x.name !== y.name) return false;
     if (x.type !== y.type) return false;
+    if (x.type === 'file' && (x.size !== y.size || x.mtimeMs !== y.mtimeMs)) return false;
     if (x.symlinkTarget !== y.symlinkTarget) return false;
   }
   return true;
@@ -953,12 +942,13 @@ async function refresh(store: FileTreeStore): Promise<void> {
   await Promise.all([...targets].map((p) => fetchDir(store, p)));
 }
 
-async function expandToPath(store: FileTreeStore, relPath: string): Promise<void> {
+async function expandToPath(store: FileTreeStore, relPath: string, kind: 'file' | 'directory' = 'file'): Promise<void> {
   if (!relPath) return;
   const parts = relPath.split('/');
-  if (parts.length < 2) return; // root 级文件
+  const depth = kind === 'directory' ? parts.length : parts.length - 1;
+  if (!depth) return;
   const ancestors: string[] = [];
-  for (let i = 1; i < parts.length; i++) {
+  for (let i = 1; i <= depth; i++) {
     ancestors.push(parts.slice(0, i).join('/'));
   }
   // 一次性写 expanded set
@@ -1072,7 +1062,7 @@ export function useFileTree({
   const collapseAllCb = useCallback(() => collapseAll(store), [store]);
   const refreshCb = useCallback(() => refresh(store), [store]);
   const expandToPathCb = useCallback(
-    (relPath: string) => expandToPath(store, relPath),
+    (relPath: string, kind?: 'file' | 'directory') => expandToPath(store, relPath, kind),
     [store],
   );
 

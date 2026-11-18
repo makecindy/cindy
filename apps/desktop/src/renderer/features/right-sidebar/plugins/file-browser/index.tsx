@@ -18,6 +18,7 @@
  */
 
 import { lazy } from 'react';
+import { pickFileIcon } from '@/components/ui/file-type-icon';
 import { FolderTree } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
@@ -30,7 +31,7 @@ const FileBrowserBody = lazy(() =>
 
 /** plugin state shape — 跟 store 序列化结构一致,默认 JSON identity 即可 hydrate。 */
 export interface FileBrowserState {
-  /** 当前选中的 workdir-relative POSIX 路径;null = 没选(渲染空提示)。 */
+  /** 当前选中的 workdir-relative POSIX 路径;null = 显示目录。 */
   selectedFilePath: string | null;
   /**
    * 一次性目录定位请求(聊天目录 chip → openDirInSidebarFileBrowser 写入):
@@ -76,9 +77,9 @@ function FileBrowserTabPillTitle({
   return <>{basename}</>;
 }
 
-/** TabPill 上的图标 —— 固定 FolderTree(无须随 selection 切换)。 */
-function FileBrowserTabPillIcon() {
-  return <FolderTree size={13} />;
+function FileBrowserTabPillIcon({ state }: { state: FileBrowserState }) {
+  const Icon = state.selectedFilePath ? pickFileIcon(state.selectedFilePath) : FolderTree;
+  return <Icon size={13} />;
 }
 
 const plugin: TabKindPlugin<FileBrowserState> = {

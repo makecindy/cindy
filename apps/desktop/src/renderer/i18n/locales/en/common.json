@@ -16964,6 +16964,12 @@
       "unspecifiedDir": "Unspecified directory"
     },
     "workdirBrowse": {
+      "previewFile": "Preview",
+      "filterDirectory": "Filter this folder…",
+      "projectTree": "Project tree",
+      "systemPreview": "System preview",
+      "listView": "List",
+      "gridView": "Thumbnails",
       "backToProjects": "Back to Projects",
       "switchProject": "Switch project",
       "activeSessionCount_one": "{{count}} active session",

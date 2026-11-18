@@ -84,7 +84,8 @@ import { UnrenderablePlaceholder } from './UnrenderablePlaceholder';
 import { DocSearchBar } from './DocSearchBar';
 import { setActiveFileBodyHandle } from './lib/activeFileBodyHandle';
 import { loadFileScroll, saveFileScroll } from './lib/fileScrollStore';
-import { basename, formatBytes, formatMtime } from './lib/fileMeta';
+import { isVideoPath } from './lib/videoExt';
+import { basename, formatBytes, formatMtime, toOsAbsolutePath } from './lib/fileMeta';
 import { OpenInSystemActions } from './OpenInSystemActions';
 import { isDrawioPath } from './lib/drawioExt';
 import { isImagePath } from './lib/imageExt';
@@ -863,6 +864,10 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         />
       );
     }
+    if (isVideoPath(content.stat.relPath)) {
+      const filePath = toOsAbsolutePath(workdir, content.stat.relPath);
+      return <VideoFilePreview key={filePath} workdir={workdir} stat={content.stat} filePath={filePath} />;
+    }
     if (isImagePath(content.stat.relPath)) {
       return (
         <ImagePreview
@@ -1310,6 +1315,56 @@ function CachedFileView({
   );
 }
 
+function VideoFilePreview({ workdir, stat, filePath, cached = false }: {
+  workdir: string;
+  stat: { relPath: string; size: number; mtimeMs: number };
+  filePath: string;
+  cached?: boolean;
+}) {
+  const { t } = useTranslation();
+  const [videoFailed, setVideoFailed] = useState(false);
+  if (videoFailed) {
+    return (
+      <UnrenderablePlaceholder
+        workdir={workdir}
+        relPath={stat.relPath}
+        size={stat.size}
+        mtimeMs={stat.mtimeMs}
+        remote={cached}
+        localCopyPath={cached ? filePath : null}
+      />
+    );
+  }
+  // 布局对齐 ImagePreview:播放器 flex-1 自适应,元信息 + 系统打开按钮
+  // shrink-0 固定(min-h-0 + overflow-hidden 防大视频撑破 flex 边界)。
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-4 px-8 py-6">
+      <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden">
+        {/* 缓存副本是本地文件,xdt-file:// range 流式,2GB 也可拖进度条 */}
+        <video
+          controls
+          className="min-h-0 min-w-0 max-h-full max-w-full rounded-lg bg-black"
+          preload="metadata"
+          src={toLocalFileUrl(filePath)}
+          onError={() => setVideoFailed(true)}
+        />
+      </div>
+      <div className="shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
+        {basename(stat.relPath)}
+        {stat.size > 0 && (
+          <>
+            {' · '}
+            {formatBytes(stat.size)}
+            {' · '}
+            {t('ccAgent.workdirBrowse.unrenderable.modifiedAt', { time: formatMtime(stat.mtimeMs) })}
+          </>
+        )}
+      </div>
+      <OpenInSystemActions absPath={filePath} systemPreview={!cached} className="shrink-0" />
+    </div>
+  );
+}
+
 /** CachedFileView 的正文体:按类型分派预览(文本/图片/PDF/视频/占位卡)。 */
 function CachedFileBody({
   workdir,
@@ -1328,13 +1383,10 @@ function CachedFileBody({
   /** 缓存副本超 READ_CACHED 32MB 显示上限被截断:顶部提示,别让局部当全量。 */
   const [textTruncated, setTextTruncated] = useState(false);
   const [probed, setProbed] = useState(false);
-  // 容器被协议放行但轨道编码 Chromium 不支持(典型:HEVC .mov)→ <video>
-  // onError,回落占位卡走系统播放器。
-  const [videoFailed, setVideoFailed] = useState(false);
   const isImg = isImagePath(stat.relPath);
   const isPdf = isPdfPath(stat.relPath);
   // Chromium 可原生播放的视频容器;其余视频格式落占位卡走系统播放器。
-  const isVideo = /\.(mp4|m4v|mov|webm)$/i.test(stat.relPath);
+  const isVideo = isVideoPath(stat.relPath);
   // 载入缓存副本(读盘 + IPC + 首次渲染)对 30MB 级文本是秒级的,同样走
   // 延迟门控 loading:小文件保持空白零跳变,大文件超阈值后浮现 spinner。
   const showLoading = useDelayedFlag(!probed && !isImg && !isPdf);
@@ -1343,7 +1395,6 @@ function CachedFileBody({
     setText(null);
     setTextTruncated(false);
     setProbed(false);
-    setVideoFailed(false);
     if (isImg || isPdf || isVideo) return;
     let cancelled = false;
     void window.electronAPI.fileBrowser.readCached({ cachePath }).then((res) => {
@@ -1366,45 +1417,7 @@ function CachedFileBody({
     return <PdfPreview workdir={cacheDir} relPath={cacheBase} size={stat.size} mtimeMs={stat.mtimeMs} />;
   }
   if (isVideo) {
-    if (videoFailed) {
-      return (
-        <UnrenderablePlaceholder
-          workdir={workdir}
-          relPath={stat.relPath}
-          size={stat.size}
-          mtimeMs={stat.mtimeMs}
-          remote
-          localCopyPath={cachePath}
-        />
-      );
-    }
-    // 布局对齐 ImagePreview:播放器 flex-1 自适应,元信息 + 系统打开按钮
-    // shrink-0 固定(min-h-0 + overflow-hidden 防大视频撑破 flex 边界)。
-    return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-4 px-8 py-6">
-        <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden">
-          {/* 缓存副本是本地文件,xdt-file:// range 流式,2GB 也可拖进度条 */}
-          <video
-            controls
-            className="min-h-0 min-w-0 max-h-full max-w-full rounded-lg bg-black"
-            src={toLocalFileUrl(cachePath)}
-            onError={() => setVideoFailed(true)}
-          />
-        </div>
-        <div className="shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
-          {basename(stat.relPath)}
-          {stat.size > 0 && (
-            <>
-              {' · '}
-              {formatBytes(stat.size)}
-              {' · '}
-              {t('ccAgent.workdirBrowse.unrenderable.modifiedAt', { time: formatMtime(stat.mtimeMs) })}
-            </>
-          )}
-        </div>
-        <OpenInSystemActions absPath={cachePath} className="shrink-0" />
-      </div>
-    );
+    return <VideoFilePreview key={cachePath} workdir={workdir} stat={stat} filePath={cachePath} cached />;
   }
   if (text !== null && /\.svg$/i.test(stat.relPath) && !isDrawioPath(stat.relPath)) {
     return (

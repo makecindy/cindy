@@ -506,6 +506,7 @@ import {
   inspectPassiveLocalProfileAdoption,
 } from './localProfileDataMigration';
 import { acquireWindowsPackagedInstanceBarrier } from './windowsPackagedInstanceBarrier';
+import { openSystemPreview } from './file-browser/system-preview';
 import { registerFsBrowseIpc } from './fsBrowse/ipc';
 import {
   ensureReady as localDbEnsureReady,
@@ -9243,6 +9244,11 @@ const registerIpcHandlers = () => {
       lightboxMedia.readImageBytes(params),
     );
   }
+
+  ipcMain.handle('file:system-preview', (event, filePath: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return openSystemPreview(BrowserWindow.fromWebContents(event.sender), filePath);
+  });
 
   // 附件卡缩略图:系统缩略图服务(macOS QuickLook / Windows Shell)按路径出小预览。
   // 高权限入口——先过 sender 闸,再由 readFileThumbnail 做路径策略与 payload 校验;

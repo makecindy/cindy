@@ -16890,6 +16890,12 @@
       "unspecifiedDir": "未指定目录"
     },
     "workdirBrowse": {
+      "previewFile": "预览",
+      "filterDirectory": "筛选当前文件夹…",
+      "projectTree": "项目文件树",
+      "systemPreview": "系统预览",
+      "listView": "列表",
+      "gridView": "缩略图",
       "backToProjects": "返回项目",
       "switchProject": "切换项目",
       "activeSessionCount_one": "{{count}} 个活跃任务",

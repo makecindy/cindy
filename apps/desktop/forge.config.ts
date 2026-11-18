@@ -2093,6 +2093,17 @@ const config: ForgeConfig = {
   },
   rebuildConfig: {},
   hooks: {
+    generateAssets: async (_config, platform, arch) => {
+      if (process.platform !== 'win32' || platform !== 'win32') return;
+      const source = path.join(__dirname, 'native', 'file-preview');
+      const result = spawnSync(process.execPath, [
+        _require.resolve('node-gyp/bin/node-gyp.js'), 'rebuild', '--release', '--arch=' + arch,
+      ], { cwd: source, stdio: 'inherit' });
+      if (result.status !== 0) throw new Error('Windows Shell preview helper build failed');
+      const dest = path.join(__dirname, 'resources', 'tools', 'file-preview');
+      fs.mkdirSync(dest, { recursive: true });
+      fs.copyFileSync(path.join(source, 'build', 'Release', 'cindy-file-preview.exe'), path.join(dest, 'cindy-file-preview.exe'));
+    },
     // Builds cindy-updater.exe before electron-packager copies resources/ into
     // the package — guarantees the shipped updater matches HEAD.
     prePackage: async (_forgeConfig, platform, arch) => {
