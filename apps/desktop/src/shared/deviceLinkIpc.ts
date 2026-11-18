@@ -134,7 +134,9 @@ export type DeviceLinkConnectionIssueKind =
   | 'too-many-connections'
   | 'version-mismatch'
   /** 连续多次握手成功后仍在稳定期内断开。 */
-  | 'unstable';
+  | 'unstable'
+  /** 主连接是 Agent-Net、它和中转的连接断开超过 10 秒：直连的电脑照常，其他设备与手机推送暂时不通（只在开着 Agent-Net 时出现）。 */
+  | 'agent-net-relay-down';
 
 /** 连接问题(同 @cindy/device-link 的 DeviceLinkConnectionIssue) */
 export interface DeviceLinkConnectionIssue {

@@ -88,9 +88,11 @@ function listenOnLoopback(server) {
  *   openBrowser: (url: string) => Promise<void>,
  *   method?: string,
  *   onAuthorizeUrl?: (url: string) => void,
+ *   onSignedIn?: (accessToken: string) => Promise<void>,
  *   signal?: AbortSignal,
  *   now?: () => number,
  * }} deps
+ * `onSignedIn` gets the access token of this explicit sign-in (held in memory only), after the session is saved.
  * @returns {Promise<{authenticated: true, realm: 'cn' | 'global', method: string}>}
  */
 export async function runHostLogin(deps) {
@@ -106,6 +108,7 @@ export async function runHostLogin(deps) {
   const pair = await deps.client.exchangeAuthorizationCode(authorization.code, verifier);
   if (pair?.status !== 'ok') throw new Error(unfinishedLoginMessage(pair));
   deps.store.write(AUTH_SESSION_KEY, deps.deviceId ? serializeHostSession(deps.region, pair.refreshToken, deps.deviceId) : serializeAuthSessionRecord(deps.region, pair.refreshToken));
+  if (deps.onSignedIn && typeof pair.accessToken === 'string' && pair.accessToken) await deps.onSignedIn(pair.accessToken);
   return { authenticated: true, realm: deps.region, method: method.providerOrConnectionId ?? method.type };
 }
 

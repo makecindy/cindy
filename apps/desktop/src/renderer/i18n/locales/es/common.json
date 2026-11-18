@@ -7033,7 +7033,8 @@
         "replaced": "Conexión reemplazada por otra instancia de este dispositivo",
         "too-many-connections": "Se alcanzó el límite de conexiones de esta cuenta",
         "version-mismatch": "La versión del protocolo no coincide: actualiza la aplicación",
-        "unstable": "La conexión se interrumpe y se restablece continuamente: revisa la red o reinicia Cindy si el problema persiste"
+        "unstable": "La conexión se interrumpe y se restablece continuamente: revisa la red o reinicia Cindy si el problema persiste",
+        "agent-net-relay-down": "No se puede acceder al relé de Agent-Net; reconectando. Las computadoras conectadas directamente siguen funcionando; los demás dispositivos no pueden conectarse por ahora"
       },
       "refresh": "Actualizar",
       "empty": "Aún no hay otros dispositivos. Inicia sesión en {{appName}} con la misma cuenta en otra computadora y aparecerá aquí.",
@@ -16226,7 +16227,8 @@
         "replaced": "Esta conexión fue reemplazada por otra instancia del mismo dispositivo. Reconectando…",
         "too-many-connections": "Hay demasiados dispositivos conectados a esta cuenta; el servidor rechazó la conexión",
         "version-mismatch": "La versión del protocolo no coincide con la del servidor. Actualiza la aplicación e inténtalo de nuevo",
-        "unstable": "Esta computadora pierde y restablece la conexión constantemente, por lo que las acciones remotas pueden seguir agotando el tiempo de espera. Revisa la red o reinicia Cindy e inténtalo de nuevo"
+        "unstable": "Esta computadora pierde y restablece la conexión constantemente, por lo que las acciones remotas pueden seguir agotando el tiempo de espera. Revisa la red o reinicia Cindy e inténtalo de nuevo",
+        "agent-net-relay-down": "Esta computadora no puede acceder al relé de Agent-Net y se está reconectando. Las acciones remotas fallan si la otra computadora no está conectada directamente"
       }
     },
     "common": {

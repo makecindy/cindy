@@ -75,5 +75,8 @@ describe('resolveActiveConnectionIssue（本机卡片的原因行）', () => {
     expect(resolveActiveConnectionIssue('connecting', authFailed)).toBe(authFailed);
     expect(resolveActiveConnectionIssue('online', authFailed)).toBeNull();
     expect(resolveActiveConnectionIssue('online', unstable)).toBe(unstable);
+    // 2026-11-17 审查：Agent-Net 主连接连不上中转时连接本身还在（online），原来设置页一直显示已连接。
+    const relayDown = { kind: 'agent-net-relay-down' as const };
+    expect(resolveActiveConnectionIssue('online', relayDown)).toBe(relayDown);
   });
 });

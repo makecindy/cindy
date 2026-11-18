@@ -7033,7 +7033,8 @@
         "replaced": "Connexion remplacée par une autre instance de cet appareil",
         "too-many-connections": "Limite de connexions atteinte pour ce compte",
         "version-mismatch": "Version de protocole incompatible : veuillez mettre à jour l'application",
-        "unstable": "La connexion se coupe et se rétablit sans cesse : vérifiez le réseau, ou redémarrez Cindy si le problème persiste"
+        "unstable": "La connexion se coupe et se rétablit sans cesse : vérifiez le réseau, ou redémarrez Cindy si le problème persiste",
+        "agent-net-relay-down": "Relais Agent-Net injoignable, reconnexion en cours. Les ordinateurs connectés directement fonctionnent toujours ; les autres appareils ne peuvent pas se connecter pour le moment"
       },
       "refresh": "Actualiser",
       "empty": "Aucun autre appareil pour l'instant. Connectez-vous à {{appName}} avec le même compte sur un autre ordinateur et il apparaîtra ici.",
@@ -16226,7 +16227,8 @@
         "replaced": "Cette connexion a été remplacée par une autre instance du même appareil : reconnexion…",
         "too-many-connections": "Trop d'appareils en ligne pour ce compte : le serveur a refusé la connexion",
         "version-mismatch": "La version du protocole ne correspond pas à celle du serveur : mettez à jour l'application et réessayez",
-        "unstable": "Cet ordinateur perd et rétablit sans cesse sa connexion : les actions à distance risquent d'expirer à répétition. Vérifiez le réseau ou redémarrez Cindy et réessayez"
+        "unstable": "Cet ordinateur perd et rétablit sans cesse sa connexion : les actions à distance risquent d'expirer à répétition. Vérifiez le réseau ou redémarrez Cindy et réessayez",
+        "agent-net-relay-down": "Cet ordinateur ne joint pas le relais Agent-Net et se reconnecte. Les actions à distance échouent si l'autre ordinateur n'est pas connecté directement"
       }
     },
     "common": {
