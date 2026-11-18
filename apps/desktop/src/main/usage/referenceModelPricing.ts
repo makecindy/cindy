@@ -76,14 +76,41 @@ export function getReferenceModelPricing(
   };
 }
 
-export function broadcastReferenceModelPricing(): void {
+let lastBroadcastTable: string | null = null;
+let followUpScheduled = false;
+
+function publishReferenceModelPricing(pricing: ModelPricingCatalog, table: string): void {
+  lastBroadcastTable = table;
   notifyUsagePricingChanged();
-  const pricing = getReferenceModelPricing();
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send(REFERENCE_MODEL_PRICING_CHANGED_CHANNEL, pricing);
     }
   }
+}
+
+export function broadcastReferenceModelPricing(): void {
+  const pricing = getReferenceModelPricing();
+  publishReferenceModelPricing(pricing, JSON.stringify(pricing));
+}
+
+/**
+ * 供应商清单变化后跟进一次参考价。
+ *
+ * OAuth 账号供应商的报价按「当时这个账号名下的型号」逐个生成；账号发现在目录加载之后才
+ * 补入新型号，那一刻没有人再广播，界面上这些型号就一直没有价格（独立订阅账号页上新型号
+ * 缺价格档）。同一轮事件循环内的多次变化只重算一次；报价表没变就不广播，也不通知用量重算。
+ */
+export function followReferenceModelPricingAfterProviderChange(): void {
+  if (followUpScheduled) return;
+  followUpScheduled = true;
+  setImmediate(() => {
+    followUpScheduled = false;
+    const pricing = getReferenceModelPricing();
+    const table = JSON.stringify(pricing);
+    if (table === lastBroadcastTable) return;
+    publishReferenceModelPricing(pricing, table);
+  });
 }
 
 /** 按显式来源估算 Codex 订阅轮价值，不读取 XD Gateway 报价。 */

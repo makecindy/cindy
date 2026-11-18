@@ -45,7 +45,11 @@ vi.mock('../modelPriceOverrideStore.js', () => ({
 }));
 
 import { accountReferencePriceQuote } from '../accountReferencePrice.js';
-import { getReferenceModelPricing, getCodexProviderSubscriptionValuePrice } from '../referenceModelPricing.js';
+import { BrowserWindow } from 'electron';
+import {
+  broadcastReferenceModelPricing, followReferenceModelPricingAfterProviderChange,
+  getReferenceModelPricing, getCodexProviderSubscriptionValuePrice, REFERENCE_MODEL_PRICING_CHANGED_CHANNEL,
+} from '../referenceModelPricing.js';
 
 describe('independent subscription account reference prices', () => {
   it.each(['claude-code', 'codex', 'pi'] as const)(
@@ -176,5 +180,47 @@ it('resolves the reference catalog for a historical day with route tariffs', () 
   } finally {
     if (original === undefined) delete route.referencePrices;
     else route.referencePrices = original;
+  }
+});
+
+// Unit: an independent ChatGPT account page showed no price tier for models that account
+// discovery added after the catalog load (GPT-6.2 Sol / Astra, 2026-11-18). Account quotes are
+// keyed by the provider's models at broadcast time, so a provider change must be followed by
+// one more broadcast. Entry: the main-side broadcast the renderer subscribes to.
+it('follows account discovery with one broadcast per burst and none when prices are unchanged', async () => {
+  const sent: Array<Record<string, Record<string, unknown>>> = [];
+  const windows = vi.spyOn(BrowserWindow, 'getAllWindows').mockReturnValue([{
+    isDestroyed: () => false,
+    webContents: { send: (channel: string, pricing: never) => {
+      if (channel === REFERENCE_MODEL_PRICING_CHANGED_CHANNEL) sent.push(pricing);
+    } },
+  } as never]);
+  const tick = () => new Promise(resolve => setImmediate(resolve));
+  const account = accountCatalog.providers.find(provider => provider.id === 'openai-account')!;
+  const before = account.models.codex!;
+  const key = modelPricingKey('gpt-5.6-sol', 'codex');
+  try {
+    broadcastReferenceModelPricing();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]['openai-account'][key]).toBeUndefined();
+
+    // Provider changed, prices did not: nothing is sent.
+    followReferenceModelPricingAfterProviderChange();
+    await tick();
+    expect(sent).toHaveLength(1);
+
+    // Discovery adds a model; a burst of provider changes yields a single broadcast.
+    account.models.codex = [...before, { ...before[0], id: 'gpt-5.6-sol', name: 'Sol' }];
+    for (let i = 0; i < 5; i++) followReferenceModelPricingAfterProviderChange();
+    expect(sent).toHaveLength(1);
+    await tick();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]['openai-account'][key]).toMatchObject({ providerId: 'openai-account', modelId: 'gpt-5.6-sol' });
+
+    await tick();
+    expect(sent).toHaveLength(2);
+  } finally {
+    account.models.codex = before;
+    windows.mockRestore();
   }
 });
