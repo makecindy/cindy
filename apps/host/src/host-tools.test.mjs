@@ -15,6 +15,7 @@ import { createHostConfirmations } from './host-confirmations.ts';
 import { createHostToolService } from './agent/host-tools.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 import { createHostServer } from './server.mjs';
+import { createHostService } from './service.mjs';
 import { createWebAuth } from './web-auth.mjs';
 import { createEventHub } from './events.mjs';
 import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
@@ -328,7 +329,7 @@ test('the Host cindy_helper serves the desktop product help to agents', async ()
 test('Node AI tools create, inspect and edit the complete project profile in the current owner', async t => {
   const profile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'host-project-tools-')));
   configureHostOwner({ userDataDir: profile, ownerId: 'projects-owner' });
-  const sqlite = new Database(':memory:');
+  const sqlite = new Database(path.join(profile, 'owner.sqlite'));
   for (const table of [sessions, botSessionLinks, botProfiles, projectAliases, recentWorkdirs]) {
     sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column =>
       `"${column.name}" ${column.getSQLType()}${column.primary ? ' PRIMARY KEY' : ''}`).join(',')})`);
@@ -340,11 +341,13 @@ test('Node AI tools create, inspect and edit the complete project profile in the
   await Promise.all([root, first, second].map(dir => fs.mkdir(dir)));
   await writeProjectsRootDirectory(root);
   let current = true;
+  let held = null;
+  const profileHold = () => held;
   const changes = [];
   const confirmations = createHostConfirmations({ current: () => current });
   const service = createHostToolService({ profileDir: profile, ownerId: 'projects-owner', current: () => current,
     owner: () => getActiveDataOwnerPushStamp(), deviceId: () => 'this-host', onProjectsChanged: catalogChanged => { changes.push(catalogChanged); },
-    getGhost: () => null, getSession: () => undefined, confirmations, t: key => key,
+    getGhost: () => null, getSession: () => undefined, confirmations, profileHold, t: key => key,
     taskActions: { input: () => ({ key: 'input', ownerInput: true, boundary: 'input' }) },
   });
   const runtime = service.providers.find(provider => provider.name === 'cindy_helper').toHostTools({
@@ -382,6 +385,39 @@ test('Node AI tools create, inspect and edit the complete project profile in the
   assert.ok(list.projects.some(item => item.working_dir === created.working_dir));
   assert.equal((await call('update_project_info', { project_key: created.project_key, field: 'profile', value: { directories: [] } })).ok, true);
   assert.deepEqual((await call('get_project_info', { project_key: created.project_key })).project.directories, []);
+  // §3.2 integration: the MCP entry bypassed the HTTP profile hold. A running task with
+  // a valid owner must get the service's refusal for each new project write. The original
+  // case covered an owner change only. Use the actual profile and SQLite bytes to catch writes.
+  await t.test('profile hold refuses project writes and still serves project reads', async () => {
+    const snapshot = async () => {
+      const entries = await fs.readdir(profile, { recursive: true, withFileTypes: true });
+      const files = entries.filter(entry => entry.isFile()).map(entry => path.join(entry.parentPath, entry.name)).sort();
+      return Promise.all(files.map(async file => [path.relative(profile, file), await fs.readFile(file)]));
+    };
+    const before = await snapshot();
+    const beforePushes = changes.length;
+    held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
+    const invoke = createHostService({ profileHold });
+    const serviceError = await invoke('/api/project-info/set').catch(error => error);
+    assert.equal(serviceError.code, 'PRECONDITION_FAILED');
+    const expected = { ok: false, errorCode: serviceError.code,
+      data: { hint: serviceError.message.replace(/^\[PRECONDITION_FAILED\] /, '') } };
+    for (const [tool, args] of [
+      ['create_project', { name: 'Denied' }],
+      ['update_project_info', { project_key: created.project_key, field: 'name', value: 'Denied' }],
+      ['rename_project', { working_dir: created.working_dir, name: 'Denied' }],
+      ['remove_project', { working_dir: created.working_dir }],
+    ]) {
+      assert.deepEqual(await call(tool, args), expected, tool);
+    }
+    assert.deepEqual(await fs.readdir(root), ['Demo']);
+    assert.equal(changes.length, beforePushes);
+    assert.deepEqual(await snapshot(), before);
+    const projects = await call('list_projects', {});
+    assert.ok(projects.projects.some(item => item.working_dir === created.working_dir));
+    assert.equal((await call('get_project_info', { project_key: created.project_key })).project.name, 'Updated');
+    held = null;
+  });
   current = false;
   const stale = await call('update_project_info', { project_key: created.project_key, field: 'name', value: 'Wrong owner' });
   assert.equal(stale.ok, false);

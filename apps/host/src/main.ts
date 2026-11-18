@@ -895,6 +895,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const i18n = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
   hostConfirmations = createHostConfirmations({ current: toolOwnerCurrent });
   hostTools = createHostToolService({ profileDir: dataDir, ownerId,
+    profileHold: () => inputQueue.isHeldForDesktop() ? profileInUseMessage() : null,
     deviceId: () => currentDeviceId ?? 'local',
     onProjectsChanged: catalogChanged => eventHub.publish({ type: 'project_aliases_changed', catalogChanged }),
     owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),

@@ -24,14 +24,18 @@ import type { HostStorageService } from '../../../desktop/src/main/cindy-brain/s
 import { createStorageToolExecutor } from '../../../desktop/src/main/cindy-brain/storageToolAccess.js';
 import { HostServiceCatalog, createHostServiceToolExecutor } from '../../../desktop/src/main/cindy-brain/hostServiceCatalog.js';
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.js';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { HELP_KNOWLEDGE } from '../../../desktop/src/main/maker-ipc/helpKnowledge.generated.js';
 import type { createHostConfirmations } from '../host-confirmations.js';
+
+const PROJECT_WRITE_TOOLS = new Set(['create_project', 'update_project_info', 'rename_project', 'remove_project']);
 
 interface Options {
   profileDir: string;
   ownerId: string;
   owner(): DataOwnerPushStamp;
   current(): boolean;
+  profileHold?(): string | null;
   deviceId?(): string;
   onProjectsChanged?(catalogChanged: boolean): void;
   getGhost(id: string): InstalledGhost | null;
@@ -60,16 +64,31 @@ export function createHostToolService(options: Options) {
     }) : async () => ({ ok: false, errorCode: 'HOST_NOT_READY', message: 'Task input authority is unavailable.' }),
   });
   const authorizeCall: ToolCallAuthorizer = async call => {
+    const projectWrite = call.server === 'cindy_helper' && PROJECT_WRITE_TOOLS.has(call.tool);
+    const projectHold = () => projectWrite ? options.profileHold?.() : null;
+    let held = projectHold();
+    if (held) return { ok: false, errorCode: 'PRECONDITION_FAILED', message: held };
+
     const database = getCurrentDbClientSnapshot();
     const decision = await authorizeTaskCall(call);
     if (!decision.ok) return decision;
+    // Task authorization can wait for a confirmation while the desktop takes the profile.
+    held = projectHold();
+    if (held) return { ok: false, errorCode: 'PRECONDITION_FAILED', message: held };
     const assertCurrent = () => {
       if (!current() || !database || database !== getCurrentDbClientSnapshot()) throw new Error('OWNER_SCOPE_CHANGED');
     };
     try { assertCurrent(); }
     catch { return { ok: false, errorCode: 'OWNER_SCOPE_CHANGED', message: 'Host account changed.' }; }
     return { ok: true, run: operation => {
-      const run = async () => { assertCurrent(); const result = await operation(); assertCurrent(); return result; };
+      const run = async () => {
+        assertCurrent();
+        const occupied = projectHold();
+        if (occupied) throwIpcError('PRECONDITION_FAILED', occupied);
+        const result = await operation();
+        assertCurrent();
+        return result;
+      };
       return decision.run ? decision.run(run) : run();
     } };
   };
