@@ -7,6 +7,7 @@ import {
   buildHandoffText,
   createAgentHandoffPendingRegistry,
   describeHandoffUserSource,
+  estimateHandoffTokens,
   extractAgentIslandPromptText,
   extractPlainText,
   prependHandoffToUserMessage,
@@ -156,7 +157,7 @@ describe('buildHandoffText', () => {
     expect(handoff).toContain('Some records omitted or abbreviated');
     expect(handoff).toContain('Verify completion');
     expect(handoff).not.toContain(request);
-    expect(handoff.length).toBeLessThanOrEqual(12_000);
+    expect(estimateHandoffTokens(handoff)).toBeLessThanOrEqual(12_000);
     expect(handoffCoverage).toBe('condensed');
   });
 
@@ -292,8 +293,22 @@ describe('buildHandoffText', () => {
     expect(positions.every((at, index) => at >= 0 && (index === 0 || at > positions[index - 1]!))).toBe(true);
   });
 
+  it('keeps a long ASCII tool result on a verified window and preserves the 16K unknown-window limit', () => {
+    // Unit, PR #11352: the old per-character budget dropped a result that fits
+    // in the verified target's token allowance. The same route without proof
+    // must still use the legacy character cap.
+    const outcome = 'command output\n' + 'ordinary ASCII output\n'.repeat(3_000);
+    const history = [msg('user', 'keep the whole result'), msg('tool_result', outcome)];
+    const verified = buildHandoff(history, { ...opts, targetContextWindow: 200_000 });
+    expect(verified.handoffCoverage).toBe('complete');
+    expect(verified.handoff).toContain(outcome);
+    const unknown = buildHandoff(history, { ...opts, targetContextWindow: null });
+    expect(unknown.handoff.length).toBeLessThanOrEqual(16_000);
+    expect(unknown.handoffCoverage).toBe('condensed');
+  });
+
   // Unit: target windows bound the actual prefix; idle-gap keeps its old
-  // ceiling, and overflow leaves room for a known retry payload.
+  // character ceiling, and overflow leaves room for a known retry payload.
   it.each([
     { targetContextWindow: 500_000, cap: 100_000, reason: 'agent-switch' as const },
     { targetContextWindow: 500_000, cap: 16_000, reason: 'idle-gap' as const },
@@ -303,10 +318,28 @@ describe('buildHandoffText', () => {
     const result = buildHandoff([
       msg('assistant', `Long retained record ${'甲'.repeat(110_000)} Final check.`),
     ], { ...opts, ...options });
-    expect(result.handoff.length).toBe(cap);
+    expect(estimateHandoffTokens(result.handoff)).toBeLessThanOrEqual(cap);
+    if (options.reason === 'idle-gap') expect(result.handoff.length).toBe(cap);
     expect(result.handoff).toContain('Final check.');
     expect(result.handoffCoverage).toBe('condensed');
     expect(result.handoff).toMatch(/== End of (handoff|rebuild) note; the user's new message follows ==$/);
+  });
+
+  // Unit, PR #11352: user text is denser than the full history once a large
+  // ASCII tool log is reduced. The first estimate cannot set the final limit.
+  it('rechecks token usage after prioritizing non-ASCII user text over ASCII logs', () => {
+    const history = [
+      msg('user', `起始约束 ${'中文🧭'.repeat(21_000)} 最终纠正`),
+      msg('tool_result', 'mostly plain English tool data\n'.repeat(20_000)),
+      msg('user', '近期要求'),
+    ];
+    const result = buildHandoff(history, { ...opts, targetContextWindow: 200_000 });
+    expect(result.handoffCoverage).toBe('condensed');
+    expect(result.handoff).toContain('起始约束');
+    expect(result.handoff).toContain('近期要求');
+    const asciiUnits = result.handoff.replace(/[^\x00-\x7f]/g, '').length;
+    expect(asciiUnits * 0.4 + (result.handoff.length - asciiUnits)).toBeLessThanOrEqual(60_000);
+    expect(result.handoff).toMatch(/== End of handoff note; the user's new message follows ==$/);
   });
 
   // 2026-11-11 handoff regression (7e35c9ff94 / d950013706), unit.
@@ -340,7 +373,8 @@ describe('buildHandoffText', () => {
     expect(handoff).toContain(latestResult);
     expect(handoff).toContain('exit 1; 37500 chars; result omitted');
     expect(handoff).toContain('Some records omitted or abbreviated');
-    expect(handoff.length).toBeLessThanOrEqual(targetContextWindow ? 60_000 : 16_000);
+    if (targetContextWindow) expect(estimateHandoffTokens(handoff)).toBeLessThanOrEqual(60_000);
+    else expect(handoff.length).toBeLessThanOrEqual(16_000);
   });
 
   // Unit: entering condensation must cap an individual recent tool result
@@ -597,24 +631,24 @@ describe('composeForkOriginHandoff', () => {
     // 升级前落库的 agent_switch 行仍是旧中文格式;识别不了就会在裁剪时把老会话
     // 唯一的边界连同检索指引尾巴一起削掉。
     const legacyTerminator = '== 交接说明结束,以下是用户的新消息 ==';
-    const capped = `${'x'.repeat(100_000 - legacyTerminator.length - 2)}\n\n${legacyTerminator}`;
+    const capped = `${'甲'.repeat(100_000 - legacyTerminator.length - 2)}\n\n${legacyTerminator}`;
     expect(capped.length).toBe(100_000);
 
     const text = composeForkOriginHandoff('sess-legacy', capped);
 
-    expect(text.length).toBeLessThanOrEqual(100_000);
+    expect(estimateHandoffTokens(text)).toBeLessThanOrEqual(100_000);
     expect(text).toContain('sess-legacy');
     expect(text.endsWith(`\n\n${legacyTerminator}`)).toBe(true);
   });
 
   it('已顶到上限的交接:组合后仍不超限,且结束标记前保有空行分隔', () => {
     const terminator = "== End of handoff note; the user's new message follows ==";
-    const capped = `${'x'.repeat(100_000 - terminator.length - 2)}\n\n${terminator}`;
-    expect(capped.length).toBe(100_000);
+    const capped = `${'x'.repeat(250_000 - terminator.length - 2)}\n\n${terminator}`;
+    expect(capped.length).toBe(250_000);
 
     const text = composeForkOriginHandoff('sess-p', capped);
 
-    expect(text.length).toBeLessThanOrEqual(100_000);
+    expect(estimateHandoffTokens(text)).toBeLessThanOrEqual(100_000);
     expect(text).toContain('sess-p');
     expect(text.trimEnd().endsWith(terminator)).toBe(true);
     // 正文被从中部裁开后,结束标记不能直接贴在半句话后面
@@ -628,7 +662,7 @@ describe('composeForkOriginHandoff', () => {
     { companion: true },
     { reason: 'message-deletion' as const },
   ])('preserves the full retrieval tail when forking a near-cap handoff (%j)', (options) => {
-    const messages = [msg('user', 'background '.repeat(9_300))];
+    const messages = [msg('user', '背景 '.repeat(49_300))];
     for (let i = 0; i < 4; i++) messages.push(msg('user', `Progress ${i}`), msg('assistant', `Latest outcome ${i}`));
     const pending = buildHandoffText(messages, {
       fromLabel: 'Claude Code', toLabel: 'Codex', sessionId: 'sess-parent', targetContextWindow: 500_000, ...options,
@@ -642,7 +676,7 @@ describe('composeForkOriginHandoff', () => {
     expect(text).toContain('forked by the user');
     expect(text).toContain('Progress 3');
     expect(text).toContain('Latest outcome 3');
-    expect(text.length).toBeLessThanOrEqual(100_000);
+    expect(estimateHandoffTokens(text)).toBeLessThanOrEqual(100_000);
   });
 
   it('在引擎切换边界上 fork:来源标记并入 re-armed 交接,不替换它', () => {

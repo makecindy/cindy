@@ -24,7 +24,6 @@ interface ContextSourceMessage extends HandoffSourceMessage {
 interface MessageDeleteSessionRow {
   status: string;
   agentKind: string;
-  contextWindow?: number | null;
 }
 
 /**
@@ -47,6 +46,7 @@ export interface MessageDeleteHandlerDeps {
     clientId: string,
   ): Promise<MessageDeletionTarget | null>;
   listMessagesForContext(sessionId: string): Promise<ContextSourceMessage[]>;
+  resolveHandoffWindow?(sessionId: string): Promise<number | null>;
   getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null | undefined;
   hasBackgroundActivity(sessionId: string): boolean;
   closeSession(sessionId: string): Promise<void>;
@@ -124,6 +124,7 @@ export async function performMessageDeletion(
     // durable FIFO 里可能仍有在删除请求前产生、但尚未落库的 tool_result / Subagent
     // 观察。屏障后必须重读目标与历史，确保它们进入同一轮的删除范围且不会混入 handoff。
     // 代次也在这份最终历史之前读取；期间若发生 /clear，registry 会拒绝旧代 handoff。
+    const targetContextWindow = await deps.resolveHandoffWindow?.(sessionId);
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
     const [target, source] = await Promise.all([
       deps.getMessage(sessionId, clientId),
@@ -139,7 +140,7 @@ export async function performMessageDeletion(
       fromLabel: label,
       toLabel: label,
       sessionId,
-      targetContextWindow: sessionRow.contextWindow,
+      targetContextWindow,
       reason: 'message-deletion',
     });
 

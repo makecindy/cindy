@@ -111,7 +111,7 @@ import { countMachineRunningTasks } from '../machines/directory.js';
 import { configureLocalMachineActivity, readLocalMachineStatus } from '../machines/localStatus.js';
 import { getHostSourceDevice, getSelfDeviceId, onRemotePushChannel, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { readDeviceProviderViews, readRemoteProviderRoute } from '../remote-agent/controller/deviceCatalog.js';
+import { readDeviceProviderCatalog, readDeviceProviderViews, readRemoteProviderRoute, resolveDeviceHandoffWindow, type DeviceProviderCatalogRead } from '../remote-agent/controller/deviceCatalog.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { cancelPendingRemoteStart } from '../remote-agent/controller/startRemote.js';
 import { createNativeHistoryRelocator } from '../remote-agent/controller/relocateNativeHistory.js';
@@ -218,7 +218,7 @@ import { readSshCodexModelList, isVerifiedSshCodexResume } from '../remote-ssh/c
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { resolveConnectedDefaultProviderIdForModel } from '../maker-host/provider-route.js';
 import { bindGroupFastPolicy } from '../provider-group/fastPolicyRuntime.js';
-import { resolveConfiguredContextWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, readStoredSessionContextWindowBudget, applySessionContextWindowBudgetToCreateOpts } from '../maker-host/model-context-settings.js';
+import { resolveConfiguredContextWindow, resolveDesktopHandoffWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, readStoredSessionContextWindowBudget, applySessionContextWindowBudgetToCreateOpts } from '../maker-host/model-context-settings.js';
 import { isSessionContextWindowBudgetCustomized, readSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
 import { MAX_CONTEXT_WINDOW_BUDGET, MIN_CONTEXT_WINDOW_BUDGET } from '../../shared/sessionContextWindowBudget.js';
 import { getCodexHome } from '../maker-host/auth-adapters.js';
@@ -260,7 +260,6 @@ import type {
 } from '@cindy/maker-core';
 import {
   effectiveSourceIdForModel,
-  getModel,
   isModelSelectableForNewRoute,
   buildUserProvider,
   mergeDiscoveredRuntimeModels,
@@ -1327,7 +1326,7 @@ import {
 import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
 import { createSubscriptionFastPolicy } from '../maker-host/subscription-fast-policy.js';
 import { DEFAULT_MODEL_COMPACTION_PCT, modelCompactionTarget } from '../../shared/modelContextLimit.js';
-import { resolveVerifiedContextWindow, resolveModelDefaultContextWindow } from '../maker-host/catalog-to-descriptors.js';
+import { resolveModelDefaultContextWindow } from '../maker-host/catalog-to-descriptors.js';
 import {
   isModelContextLimitCustomized,
   readModelContextLimit,
@@ -8759,15 +8758,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     model: string,
     providerId: string | null,
   ): Promise<number | null> {
-    const providers = await readUsableAgentDeviceProviders(deviceId, agent, model, providerId);
-    const selected = providerId ?? effectiveSourceIdForModel(providers, null, model, agent);
-    const provider = providers.find((view) => view.id === selected);
-    return provider ? getModel(provider, model, agent)?.contextWindow ?? null : null;
-  }
-
-  function resolveLocalHandoffWindow(sessionId: string, agent: AgentKind, model: string, providerId: string | null) {
-    return resolveConfiguredContextWindow(getActiveCatalog(), agent, providerId, model,
-      readSessionContextWindowBudget(sessionId));
+    const catalog = await readUsableAgentDeviceCatalog(deviceId, agent, model, providerId);
+    return resolveDeviceHandoffWindow(catalog, deviceId, agent, model, providerId);
   }
 
   async function readUsableAgentDeviceProviders(
@@ -8777,17 +8769,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     providerId: string | null,
     unavailableCode?: 'MODEL_SELECTION_UNAVAILABLE',
   ): Promise<ProviderView[]> {
-    let views: ProviderView[] = [];
+    return (await readUsableAgentDeviceCatalog(deviceId, agent, model, providerId, unavailableCode)).views;
+  }
+
+  async function readUsableAgentDeviceCatalog(
+    deviceId: string,
+    agent: AgentKind,
+    model: string,
+    providerId: string | null,
+    unavailableCode?: 'MODEL_SELECTION_UNAVAILABLE',
+  ): Promise<DeviceProviderCatalogRead> {
+    let catalog: DeviceProviderCatalogRead = { views: [], stale: true };
     const checked = await checkDeviceRoute(
       async () => {
-        views = await readDeviceProviderViews(remoteBackgroundInvoke, deviceId);
-        return views;
+        catalog = await readDeviceProviderCatalog(remoteBackgroundInvoke, deviceId);
+        return catalog.views;
       },
       agent,
       providerId,
       model,
     );
-    if (!checked) return views;
+    if (!checked) return catalog;
     // 分享来的供应商连不上(分享者电脑离线，或分享在服务端已暂停而 relay 只回离线)：用分享专属
     // 文案，不让受邀者去「那台电脑」上操作。
     const rejection = checked === 'unreachable' && isProviderShareAgentDeviceId(deviceId)
@@ -9289,6 +9291,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 return row;
               },
               listMessages: id => listMessagesForAgentHandoff(id, null, undefined, 'replay'),
+              resolveHandoffWindow: resolveDesktopHandoffWindow,
               commit: commitContextRebuild,
               setPending: (id, handoff, generation) => agentHandoffPending.set(id, handoff, generation),
               publish: id => broadcastSessionPatched(id, { sdkSessionId: null, contextTokens: 0 }),
@@ -9593,9 +9596,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           fromLabel: label,
           toLabel: label,
           sessionId,
-          targetContextWindow: row.contextWindow,
+          targetContextWindow: await resolveDesktopHandoffWindow(sessionId, {
+            ...row, agentKind: session.agentKind,
+          }),
           reason: 'native-session-recovery',
         });
+        assertLocalAppOwner();
         await commitContextRebuild(sessionId, handoff, {
           reason: 'native-session-recovery',
           handoffCoverage,
@@ -11444,16 +11450,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = {
     readOwnerGeneration: () => getActiveAppSession().generation,
-    resolveHandoffWindow: async ({ sessionId, agent, model, providerId, agentDeviceId }) => {
-      if (!agentDeviceId) return resolveLocalHandoffWindow(sessionId, agent, model, providerId);
-      try {
-        const route = await readRemoteProviderRoute({ agentDeviceId, agentKind: agent, model, providerId });
-        return route.model.contextWindow ?? null;
-      } catch {
-        // A history budget probe never owns route availability or a retry.
-        return null;
-      }
-    },
+    resolveHandoffWindow: ({ sessionId, agent, model, providerId, agentDeviceId }) =>
+      resolveDesktopHandoffWindow(sessionId, { agentKind: agent, model, providerId, agentDeviceId }),
     listCompanionSessionIds: async (sessionId) => {
       const row = await readContextRecoverySession(sessionId);
       if (row?.botRole !== 'canonical') return undefined;
@@ -11724,20 +11722,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setTimeout(() => ensureProviderGroupUsageReporter(), PROVIDER_GROUP_USAGE_STARTUP_DELAY_MS).unref?.();
   registerMakerMessageDeleteHandler(makerSessionRegistry, {
     getSessionRow: async (sessionId) => {
-      const [row] = await getDbClient()
-        .drizzle.select({
-          status: sessions.status, agentKind: sessions.agentKind, contextWindow: sessions.contextWindow,
-          model: sessions.model, providerId: sessions.providerId, agentDeviceId: sessions.agentDeviceId,
-        })
+      const [row] = await getDbClient().drizzle
+        .select({ status: sessions.status, agentKind: sessions.agentKind })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
-      if (!row) return null;
-      const configured = !row.agentDeviceId && row.model
-        ? resolveLocalHandoffWindow(sessionId, dbToMakerAgentKind(row.agentKind), row.model, row.providerId)
-        : null;
-      return { ...row, contextWindow: configured && row.contextWindow
-        ? Math.min(configured, row.contextWindow) : configured ?? row.contextWindow };
+      return row ?? null;
+    },
+    resolveHandoffWindow: async (sessionId) => {
+      const owner = captureDataOwnerBroadcastScope();
+      const row = await readContextRecoverySession(sessionId);
+      const window = row ? await resolveDesktopHandoffWindow(sessionId, {
+        ...row, agentKind: dbToMakerAgentKind(row.agentKind), providerId: row.providerId ?? null,
+      }) : null;
+      if (!isDataOwnerBroadcastScopeCurrent(owner)) {
+        throwIpcError('PRECONDITION_FAILED', 'the task owner changed during history lookup');
+      }
+      return window;
     },
     getMessage: getMessageDeletionTarget,
     listMessagesForContext: (sessionId) => listMessagesForAgentHandoff(sessionId, null, undefined, 'replay'),
@@ -18869,12 +18870,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isDataOwnerBroadcastScopeCurrent: (...args) => isDataOwnerBroadcastScopeCurrent(...args),
     }, threadId),
     getAutoCompactThresholdPct: () => DEFAULT_MODEL_COMPACTION_PCT,
-    resolveHandoffWindow: (sessionId, agent, model, providerId) =>
-      resolveLocalHandoffWindow(sessionId, dbToMakerAgentKind(agent), model, providerId),
+    resolveHandoffWindow: (sessionId, route) =>
+      resolveDesktopHandoffWindow(sessionId, { ...route, agentKind: dbToMakerAgentKind(route.agentKind) }),
     resolveVerifiedWindow: (agentKind, modelId, providerId) => {
       const catalog = getActiveCatalog();
       const makerAgentKind = dbToMakerAgentKind(agentKind);
-      return resolveConfiguredContextWindow(catalog, makerAgentKind, providerId, modelId);
+      return resolveConfiguredContextWindow(catalog, makerAgentKind, providerId, modelId, undefined, 'required');
     },
     listMessages: (sessionId) => listMessagesForAgentHandoff(sessionId, 400),
     listReplayMessages: (sessionId) => listMessagesForAgentHandoff(sessionId, null, undefined, 'replay'),
@@ -22552,12 +22553,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (orcaSelectionOnSend && runtimeStatus.agentDeviceId) {
       // Selection-time metadata may be absent or stale after a queued turn. Read
       // the execution computer again; an acknowledgement is not window metadata.
-      const providers = await readUsableAgentDeviceProviders(
+      const catalog = await readUsableAgentDeviceCatalog(
         runtimeStatus.agentDeviceId, agentKind, model, targetProviderId,
       );
       if (supersededByOwnerBoundary()) return { deferred: false, superseded: true };
       assertRuntimeOwnerCurrent();
-      targetContextWindow = resolveVerifiedContextWindow({ providers }, agentKind, targetProviderId, model) ?? undefined;
+      targetContextWindow = resolveDeviceHandoffWindow(catalog, runtimeStatus.agentDeviceId, agentKind, model, targetProviderId) ?? undefined;
     }
     let live = maker.getSession(sessionId);
     if (live && isSessionInTurn(sessionId)) {
@@ -22575,6 +22576,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if ((live || orcaSelectionOnSend) && targetContextWindow && contextOverflowRolloverHolder) {
       const prepared = await contextOverflowRolloverHolder.prepareModelWindowSwitch(sessionId, {
         contextWindow: targetContextWindow,
+        verifiedHandoffWindow: orcaSelectionOnSend && runtimeStatus.agentDeviceId
+          ? targetContextWindow
+          : await resolveDesktopHandoffWindow(sessionId, {
+              agentKind, model, providerId: targetProviderId, agentDeviceId: runtimeStatus.agentDeviceId,
+            }),
         recheckTargetPressure: true,
         confirmedTargetPressure: orcaSelectionOnSend
           ? input.confirmedContextWindow === targetContextWindow

@@ -5,13 +5,20 @@ import { buildHandoff, type HandoffSourceMessage } from './agentHandoff.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 
 type RecoveryRow = Pick<typeof sessions.$inferSelect,
-  'sdkSessionId' | 'status' | 'agentKind' | 'agentDeviceId' | 'providerId' | 'model' | 'clearedAt'> & { contextWindow?: number | null };
+  'sdkSessionId' | 'status' | 'agentKind' | 'agentDeviceId' | 'providerId' | 'model' | 'clearedAt'>;
 
 export interface SharedSessionResumeRecoveryDeps {
   assertCurrent(): void;
   readGeneration(sessionId: string): number;
   getSessionRow(sessionId: string): Promise<RecoveryRow | undefined>;
   listMessages(sessionId: string): Promise<HandoffSourceMessage[]>;
+  resolveHandoffWindow?(sessionId: string, route: {
+    agentKind: MakerSessionCreateOpts['agentKind'];
+    agentDeviceId: string;
+    model: string;
+    providerId: string | null;
+    workingBudget?: number | null;
+  }): Promise<number | null>;
   commit: typeof commitContextRebuild;
   setPending(sessionId: string, handoff: string, generation: number): void;
   publish(sessionId: string): void;
@@ -47,9 +54,13 @@ export async function withSharedSessionResumeRecovery<T>(
       row.agentDeviceId !== options.agentDeviceId || row.providerId !== (options.providerId ?? null) ||
       row.model !== options.model || !row.model) throw error;
     const history = await deps.listMessages(sessionId);
+    const targetContextWindow = await deps.resolveHandoffWindow?.(sessionId, {
+      agentKind: options.agentKind, agentDeviceId: options.agentDeviceId!, model: row.model,
+      providerId: row.providerId, workingBudget: options.contextWindowBudget,
+    });
     assertCurrent();
     const { handoff, handoffCoverage } = buildHandoff(history, {
-      targetContextWindow: options.contextWindowBudget ?? row.contextWindow,
+      targetContextWindow,
       fromLabel: options.agentKind, toLabel: options.agentKind, sessionId, reason: 'native-session-recovery',
     });
     await deps.commit(sessionId, handoff, {

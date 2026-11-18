@@ -53,6 +53,7 @@ export interface HostRecoveryPorts {
   readSessionExtraDirsFromDb: ReplayContextRecoveryPorts['readSessionExtraDirsFromDb'];
   readSessionWritableDirsFromDb: ReplayContextRecoveryPorts['readSessionWritableDirsFromDb'];
   resolveVerifiedWindow?: ContextOverflowRolloverDeps['resolveVerifiedWindow'];
+  resolveHandoffWindow?: ContextOverflowRolloverDeps['resolveHandoffWindow'];
   /** Present only while oversized Codex history recovery is open (classifyCodexHistory). */
   codexHistory?: Pick<ClassifyCodexHistoryPorts, 'readCodexThreadStorageReadOnly' | 'classifyCodexHistoryOversized'>;
   /** Present only while Pi's unsupported request option recovery is open. */
@@ -113,6 +114,7 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
     } : {}),
     getAutoCompactThresholdPct: () => DEFAULT_MODEL_COMPACTION_PCT,
     ...(host.resolveVerifiedWindow ? { resolveVerifiedWindow: host.resolveVerifiedWindow } : {}),
+    ...(host.resolveHandoffWindow ? { resolveHandoffWindow: host.resolveHandoffWindow } : {}),
     listMessages: sessionId => listMessagesForAgentHandoff(sessionId, 400) as ReturnType<ContextOverflowRolloverDeps['listMessages']>,
     listReplayMessages: sessionId => listMessagesForAgentHandoff(sessionId, null, undefined, 'replay'),
     findLatestUser: sessionId => findLatestUserMessageForRebuild(sessionId) as ReturnType<NonNullable<ContextOverflowRolloverDeps['findLatestUser']>>,

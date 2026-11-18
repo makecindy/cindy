@@ -27,6 +27,7 @@ import { and, asc, desc, eq, gt, gte, isNull, lt, or, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../localDb/client/current';
+import { resolveDesktopHandoffWindow } from '../maker-host/model-context-settings.js';
 import { scheduleNativeHistoryBackupCleanup } from '../remote-agent/controller/nativeHistoryBackup.js';
 import { assertTaskActionCurrent, runTaskActionRewindBoundary } from '../maker-ipc/taskActionAuthorization.js';
 import { sessions, messages } from '../localDb/schema';
@@ -175,7 +176,6 @@ interface RewindContext {
   targetClientId: string;
   /** 当前 agent kind；Claude checkpoint 与 conversation-tree rollback 机制不同。 */
   agentKind: 'claude-code' | 'codex' | 'pi';
-  contextWindow?: number | null;
   /**
    * prior assistant uuid——Claude SDK resumeSessionAt 用。Claude 缺省表示目标之前没有
    * 可续接的回复(首条消息、之前的轮次都被停掉等),改为换全新原生会话。
@@ -239,13 +239,12 @@ async function loadRewindContext(
   const maker = getMaker();
   const makerSession = maker.getSession(sessionId);
   let detached = false;
-  let contextWindow = makerSession?.getUsageSnapshot?.().contextWindow;
   if (!makerSession) {
     // session 不在内存中:app 刚启动 / 这条 session 还没在新链路激活过。
     // 例外:Claude 任务上一次回退没有续接点,已关闭会话并清掉原生会话 id——没有原生
     // 会话可回滚,继续回退只需要裁剪对话,不必先发一条无关消息把会话叫起来。
     const [row] = await db
-      .select({ agentKind: sessions.agentKind, sdkSessionId: sessions.sdkSessionId, contextWindow: sessions.contextWindow })
+      .select({ agentKind: sessions.agentKind, sdkSessionId: sessions.sdkSessionId })
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .limit(1);
@@ -256,7 +255,6 @@ async function loadRewindContext(
       );
     }
     detached = true;
-    contextWindow = row.contextWindow ?? undefined;
   }
   if (makerSession?.isTurnRunning()) {
     throw rewindError('SESSION_RUNNING', '会话进行中，无法回滚');
@@ -348,7 +346,6 @@ async function loadRewindContext(
       targetRowid: target.rowid,
       targetMessageId: target.id,
       targetClientId: target.clientId,
-      contextWindow,
       agentKind,
       tailTurnsToDrop: tailTurns.length,
       codexUserMessages,
@@ -447,7 +444,6 @@ async function loadRewindContext(
     targetCreatedAt: target.createdAt,
     targetMessageId: target.id,
     targetClientId: target.clientId,
-    contextWindow,
     agentKind,
     assistantUuid: detached ? undefined : assistantUuid,
     userUuid,
@@ -815,18 +811,19 @@ async function loadCodexRewindNativeBoundary(
  */
 async function buildNativeContextReset(
   sessionId: string,
-  ctx: Pick<RewindContext, 'targetClientId' | 'contextWindow' | 'agentKind'>,
+  ctx: Pick<RewindContext, 'targetClientId' | 'agentKind'>,
 ): Promise<NonNullable<RewindCommitArgs['nativeContextReset']>> {
   // The rewind target may be earlier than the last page of durable history.
   const history = await listMessagesForAgentHandoff(sessionId, null, undefined, 'replay');
   const targetIndex = history.findIndex((message) => message.clientId === ctx.targetClientId);
   const kept = targetIndex >= 0 ? history.slice(0, targetIndex) : [];
   const label = ctx.agentKind === 'codex' ? 'Codex' : ctx.agentKind === 'pi' ? 'Pi' : 'Claude Code';
-  const replay = kept.some((message) => message.role === 'user')
-    ? buildHandoff(kept, {
+  const hasUserHistory = kept.some((message) => message.role === 'user');
+  const route = hasUserHistory ? await getMaker().getSessionMeta(sessionId) : null;
+  const replay = hasUserHistory ? buildHandoff(kept, {
         fromLabel: label,
         toLabel: label,
-        targetContextWindow: ctx.contextWindow,
+        targetContextWindow: route ? await resolveDesktopHandoffWindow(sessionId, { ...route, providerId: route.providerId ?? null }) : null,
         sessionId,
         reason: 'message-rewind',
       })

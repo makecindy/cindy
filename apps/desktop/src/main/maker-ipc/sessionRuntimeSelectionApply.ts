@@ -1000,6 +1000,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           try {
             preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(sessionId, {
               contextWindow: targetContextWindow!,
+              verifiedHandoffWindow: runtimeAgentKind ? resolveConfiguredContextWindow(
+                getActiveCatalog(), runtimeAgentKind, targetRouteProviderId, model, sessionContextWindowBudget, 'required',
+              ) : null,
               recheckTargetPressure: true,
               confirmedTargetPressure:
                 (internalOptions.source === 'user' && internalOptions.applyingUserSelectionOnSend === true &&
@@ -1419,6 +1422,10 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
                 sessionId,
                 {
                   contextWindow: finalPiWindow,
+                  verifiedHandoffWindow: resolveConfiguredContextWindow(
+                    getActiveCatalog(), 'pi', targetRouteProviderId, model,
+                    Math.min(sessionContextWindowBudget ?? finalPiWindow, finalPiWindow), 'required',
+                  ),
                   recheckTargetPressure: true,
                   confirmedTargetPressure:
                     (internalOptions.source === 'user' && internalOptions.applyingUserSelectionOnSend === true &&

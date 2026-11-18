@@ -113,13 +113,15 @@ export interface BuildHandoffOptions {
 
 const HANDOFF_CONTEXT_FRACTION = 0.30;
 const OVERFLOW_RESERVED_WINDOW_FRACTION = 0.35;
-// Count each UTF-16 code unit as one token. This avoids the English chars/4
-// assumption for Chinese and gives supplementary characters two units.
-const HANDOFF_CHARS_PER_TOKEN = 1;
+// Use tenths of a token so the ceiling comparison has no floating-point drift.
+const TOKEN_UNITS = 10;
+const ASCII_TOKEN_UNITS = 4; // 2.5 chars/token reserves more than the usual 3–4 for prose/code.
+const NON_ASCII_TOKEN_UNITS = TOKEN_UNITS; // Count UTF-16 units, including both halves of emoji.
 const HANDOFF_MAX_TOKENS = 100_000;
-// Keep the previous budget when the execution route has no verified window.
-const HANDOFF_UNKNOWN_WINDOW_TOKENS = 16_000;
-const IDLE_GAP_MAX_TOKENS = 16_000;
+const HANDOFF_MAX_CHARS = 250_000; // 100K tokens of all-ASCII text.
+const HANDOFF_UNKNOWN_WINDOW_CHARS = 16_000;
+const IDLE_GAP_MAX_CHARS = 16_000;
+const HANDOFF_BUDGET_RETRIES = 2;
 const HANDOFF_USER_EXCERPT_CHARS = 120;
 const HANDOFF_ASSISTANT_EXCERPT_CHARS = 240;
 const HANDOFF_TOOL_STUB_INPUT_CHARS = 160;
@@ -132,17 +134,27 @@ const HANDOFF_USER_OVERFLOW_OUTCOME_MAX_FRACTION = 0.25;
 const HANDOFF_LEDGER_PATH_CHARS = 240;
 const HANDOFF_LEDGER_MAX_FRACTION = 0.25;
 
-function handoffCharacterBudget(opts: BuildHandoffOptions): number {
+function handoffTokenBudget(opts: BuildHandoffOptions): number | null {
   const window = opts.targetContextWindow;
-  const budget = typeof window === 'number' && Number.isFinite(window) && window > 0
-    ? Math.floor(window * HANDOFF_CONTEXT_FRACTION)
-    : HANDOFF_UNKNOWN_WINDOW_TOKENS;
-  const cap = opts.reason === 'idle-gap' ? IDLE_GAP_MAX_TOKENS : HANDOFF_MAX_TOKENS;
-  const knownInputBudget = opts.nextInputChars !== undefined && window && window > 0
-    ? Math.max(0, Math.floor(window * (1 - OVERFLOW_RESERVED_WINDOW_FRACTION))
-        - Math.ceil(opts.nextInputChars / HANDOFF_CHARS_PER_TOKEN))
-    : budget;
-  return Math.min(budget, cap, knownInputBudget) * HANDOFF_CHARS_PER_TOKEN;
+  if (typeof window !== 'number' || !Number.isFinite(window) || window <= 0) return null;
+  const budget = Math.floor(window * HANDOFF_CONTEXT_FRACTION);
+  // Keep the existing conservative allowance for the retry input, which may
+  // include content separate from the text that the handoff builder can see.
+  const knownInputBudget = opts.nextInputChars === undefined ? budget
+    : Math.max(0, Math.floor(window * (1 - OVERFLOW_RESERVED_WINDOW_FRACTION)) - Math.ceil(opts.nextInputChars));
+  return Math.min(budget, HANDOFF_MAX_TOKENS, knownInputBudget);
+}
+
+function tokenUnits(text: string): number {
+  let units = text.length * ASCII_TOKEN_UNITS;
+  for (const run of text.matchAll(/[^\x00-\x7f]+/g)) {
+    units += run[0].length * (NON_ASCII_TOKEN_UNITS - ASCII_TOKEN_UNITS);
+  }
+  return units;
+}
+
+export function estimateHandoffTokens(text: string): number {
+  return Math.ceil(tokenUnits(text) / TOKEN_UNITS);
 }
 
 const SYNTHETIC_TRIGGER_PREFIX = '[UI_ACTION_TRIGGER]';
@@ -176,7 +188,8 @@ function excerpt(text: string, cap: number, marker = '\n…(middle omitted)…\n
   if (text.length <= cap) return text;
   if (cap <= marker.length) return text.slice(0, cap);
   const head = Math.ceil((cap - marker.length) / 2);
-  return text.slice(0, head) + marker + text.slice(-(cap - marker.length - head));
+  const tail = cap - marker.length - head;
+  return text.slice(0, head) + marker + (tail > 0 ? text.slice(-tail) : '');
 }
 
 /** 折叠换行成单行(提要区用)。 */
@@ -749,22 +762,11 @@ export function buildHandoff(
   messages: HandoffSourceMessage[],
   opts: BuildHandoffOptions,
 ): { handoff: string; handoffCoverage: HandoffCoverage } {
-  const budget = handoffCharacterBudget(opts);
-  const { before, after } = assembleHandoffSections(messages, opts);
-  if (before[1]) {
-    before[1] = excerpt(before[1], Math.floor(budget * HANDOFF_LEDGER_MAX_FRACTION));
-  }
+  const tokens = handoffTokenBudget(opts);
+  const framing = assembleHandoffSections(messages, opts);
   const heading = opts.mode === 'delta'
     ? '== Conversation while you were away =='
     : '== Conversation replay ==';
-  const render = (records: string[], omitted: boolean) => [
-    ...before,
-    ...(records.length || omitted
-      ? [[heading, REPLAY_CONTEXT, ...(omitted ? [REPLAY_OMITTED, ...(opts.sessionId ? [REPLAY_TECHNICAL_RETRIEVAL] : [])] : []), ...records].join('\n')]
-      : opts.mode === 'delta' ? ['== No new messages while you were away =='] : []),
-    ...after,
-  ].join('\n\n');
-
   const entries: ReplayEntry[] = [];
   for (const message of messages) {
     const record = replayRecord(message, opts.includeToolResults !== false);
@@ -772,6 +774,67 @@ export function buildHandoff(
       entries.push({ role: message.role, record });
     }
   }
+
+  const build = (budget: number) => buildHandoffWithinChars(entries, opts, framing, heading, budget);
+  if (tokens === null) return build(HANDOFF_UNKNOWN_WINDOW_CHARS);
+  if (opts.reason === 'idle-gap') {
+    return buildAtConservativeBudget(build, Math.min(IDLE_GAP_MAX_CHARS, tokens), tokens, opts);
+  }
+
+  const frame = [...framing.before, heading, REPLAY_CONTEXT, ...framing.after].join('\n');
+  let chars = frame.length;
+  let units = tokenUnits(frame);
+  for (const { record } of entries) {
+    if (!record) continue;
+    const separators = record.text ? 2 : 1;
+    chars += record.label.length + record.text.length + separators;
+    units += tokenUnits(record.label) + tokenUnits(record.text) + separators * ASCII_TOKEN_UNITS;
+  }
+  let budget = Math.min(HANDOFF_MAX_CHARS, Math.floor(tokens * TOKEN_UNITS * chars / units));
+  // The selected suffix may be denser than the whole history. Validate the
+  // exact outgoing text, including ledger and source labels, after every build.
+  for (let attempt = 0; attempt <= HANDOFF_BUDGET_RETRIES && budget > tokens; attempt++) {
+    const result = build(budget);
+    const estimated = estimateHandoffTokens(result.handoff);
+    if (estimated <= tokens) return result;
+    budget = Math.min(budget - 1, Math.floor(budget * tokens / estimated));
+  }
+  return buildAtConservativeBudget(build, Math.min(budget, tokens), tokens, opts);
+}
+
+function buildAtConservativeBudget(
+  build: (budget: number) => { handoff: string; handoffCoverage: HandoffCoverage },
+  chars: number,
+  tokens: number,
+  opts: BuildHandoffOptions,
+): { handoff: string; handoffCoverage: HandoffCoverage } {
+  const result = build(chars);
+  if (result.handoff.length <= chars && estimateHandoffTokens(result.handoff) <= tokens) return result;
+  // If even the compact framing cannot fit, never send a replay that would
+  // exceed the target budget. Every non-empty replay keeps its terminator.
+  const terminator = handoffTerminator(opts);
+  return { handoff: terminator.length <= chars && estimateHandoffTokens(terminator) <= tokens ? terminator : '', handoffCoverage: 'condensed' };
+}
+
+function buildHandoffWithinChars(
+  entries: ReplayEntry[],
+  opts: BuildHandoffOptions,
+  framing: ReturnType<typeof assembleHandoffSections>,
+  heading: string,
+  budget: number,
+): { handoff: string; handoffCoverage: HandoffCoverage } {
+  const before = [...framing.before];
+  if (before[1]) {
+    before[1] = excerpt(before[1], Math.floor(budget * HANDOFF_LEDGER_MAX_FRACTION));
+  }
+  const render = (records: string[], omitted: boolean) => [
+    ...before,
+    ...(records.length || omitted
+      ? [[heading, REPLAY_CONTEXT, ...(omitted ? [REPLAY_OMITTED, ...(opts.sessionId ? [REPLAY_TECHNICAL_RETRIEVAL] : [])] : []), ...records].join('\n')]
+      : opts.mode === 'delta' ? ['== No new messages while you were away =='] : []),
+    ...framing.after,
+  ].join('\n\n');
+
   if (entries.every(entry => entry.record !== undefined)) {
     const completeSize = entries.length
       ? entries.reduce((size, { record }) => {
@@ -1111,18 +1174,24 @@ export function composeForkOriginHandoff(
   if (!pendingHandoff) return buildForkOriginHandoff(parentSessionId);
   const fact = forkOriginFactLine(parentSessionId);
   const composed = `${fact}\n\n${pendingHandoff}`;
-  if (composed.length <= HANDOFF_MAX_TOKENS * HANDOFF_CHARS_PER_TOKEN) return composed;
+  const fits = (text: string) => text.length <= HANDOFF_MAX_CHARS && estimateHandoffTokens(text) <= HANDOFF_MAX_TOKENS;
+  if (fits(composed)) return composed;
   // 早期原文可能已用满交接预算。前置 fork 事实后二次裁剪，也必须保住完整的
   // 检索说明与原结束标记；正文只从中间省略，保留最近请求和执行结果。
   const { body, tail } = splitMandatoryHandoffTail(pendingHandoff, '');
   const separator = '\n\n';
   // 两个 separator:fact 与正文之间、正文与结束标记之间。后者不能省——正文被从中部
   // 裁开后末尾多半停在半句上,结束标记直接贴上去就毁掉了"显式分隔"这个不变量本身。
-  const room = HANDOFF_MAX_TOKENS * HANDOFF_CHARS_PER_TOKEN - fact.length - separator.length * 2 - tail.length;
+  const framing = `${fact}${separator}${separator}${tail}`;
+  const maxBodyChars = HANDOFF_MAX_CHARS - framing.length;
+  const remainingTokens = HANDOFF_MAX_TOKENS - estimateHandoffTokens(framing);
+  const room = Math.min(maxBodyChars, Math.floor(body.length * remainingTokens / Math.max(1, estimateHandoffTokens(body))));
   // 极端情形(当前上限下不可达)也要守住优先级:交接关系到跨引擎的对话连续性,
   // 来源标记只是元信息——挤不下时丢后者,绝不能反过来把整段交接换成一行来源说明。
   if (room <= 0) return pendingHandoff;
-  return `${fact}${separator}${excerpt(body, room).trimEnd()}${separator}${tail}`;
+  const render = (cap: number) => `${fact}${separator}${excerpt(body, cap).trimEnd()}${separator}${tail}`;
+  const result = render(room);
+  return fits(result) ? result : render(Math.min(room, remainingTokens));
 }
 
 /** send 路径的 wire 消息形态(与 makerSendTransaction 的 IpcUserMessage 对齐)。 */

@@ -455,7 +455,13 @@ export interface ContextOverflowRolloverDeps {
     modelId: string,
     providerId: string | null,
   ): number | null;
-  resolveHandoffWindow?(sessionId: string, agentKind: string, model: string, providerId: string | null): number | null;
+  resolveHandoffWindow?(sessionId: string, route: {
+    agentKind: string;
+    model: string;
+    providerId: string | null;
+    agentDeviceId?: string | null;
+    remoteHostId?: string | null;
+  }): number | null | Promise<number | null>;
   getAutoCompactThresholdPct?(): number | undefined;
   listMessages(sessionId: string): Promise<OverflowSourceMessage[]>;
   /** Read replay history only after deciding to retire the current native context. */
@@ -632,6 +638,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     sessionId: string,
     target: {
       contextWindow: number;
+      verifiedHandoffWindow?: number | null;
       recheckTargetPressure?: boolean;
       confirmedTargetPressure?: boolean;
       onConfirmationRequired?: (contextTokens: number) => void;
@@ -667,21 +674,24 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       return none;
     }
   };
-  const configuredHandoffWindow = (sessionId: string, agentKind: string, model: string, providerId: string | null) =>
-    deps.resolveHandoffWindow?.(sessionId, agentKind, model, providerId)
-    ?? lookupVerifiedContextWindow(deps.resolveVerifiedWindow, model, providerId, agentKind);
-  const rebuildWindow = (
+  const rebuildWindow = async (
     sessionId: string,
     row: NonNullable<Awaited<ReturnType<ContextOverflowRolloverDeps['getSessionRow']>>>,
+    target?: { model: string; providerId: string | null },
     liveWindow?: number,
   ) => {
-    const configured = row.model
-      ? configuredHandoffWindow(sessionId, row.agentKind, row.model, row.providerId ?? null)
-      : null;
-    const windows = [configured, liveWindow, row.contextWindow].filter(
+    const model = target?.model ?? row.model;
+    if (!model || row.remoteHostId) return null;
+    const providerId = target ? target.providerId : row.providerId ?? null;
+    const verified = deps.resolveHandoffWindow
+      ? await deps.resolveHandoffWindow(sessionId, { agentKind: row.agentKind, model, providerId, agentDeviceId: row.agentDeviceId })
+      : row.agentDeviceId ? null : lookupVerifiedContextWindow(deps.resolveVerifiedWindow, model, providerId, row.agentKind);
+    if (verified === null || target) return verified;
+    // Same-route measurements can tighten a proven limit. A snapshot or
+    // persisted default alone does not establish the destination's capacity.
+    return Math.min(verified, ...[liveWindow, row.contextWindow].filter(
       (window): window is number => typeof window === 'number' && Number.isFinite(window) && window > 0,
-    );
-    return windows.length ? Math.min(...windows) : null;
+    ));
   };
   const runRecover = async (
     sessionId: string,
@@ -898,12 +908,13 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         fromLabel: label,
         toLabel: label,
         sessionId,
-        targetContextWindow: rebuildWindow(sessionId, sessionRow, live?.getUsageSnapshot?.().contextWindow),
+        targetContextWindow: await rebuildWindow(sessionId, sessionRow, undefined, live?.getUsageSnapshot?.().contextWindow),
         nextInputChars: oversized ? CODEX_HISTORY_CONTINUE_MESSAGE.length : extractPlainText(sourceText).length,
         reason: oversized ? 'native-session-recovery' : 'context-overflow',
         companion: isBotChatContext(sessionRow),
         ...(await companionRecall(sessionId, isBotChatContext(sessionRow))),
       });
+      signal?.throwIfAborted();
       await deps.commitRebuild(sessionId, handoff, {
         reason: 'context-overflow',
         handoffCoverage,
@@ -957,6 +968,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     sessionId: string,
     target: {
       contextWindow: number;
+      verifiedHandoffWindow?: number | null;
       recheckTargetPressure?: boolean;
       confirmedTargetPressure?: boolean;
       onConfirmationRequired?: (contextTokens: number) => void;
@@ -1092,11 +1104,13 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       fromLabel: label,
       toLabel: label,
       sessionId,
-      targetContextWindow: target.contextWindow,
+      targetContextWindow: target.verifiedHandoffWindow == null
+        ? null : Math.min(target.contextWindow, target.verifiedHandoffWindow),
       reason: 'model-window-switch',
       companion: isBotChatContext(sessionRow),
       ...(await companionRecall(sessionId, isBotChatContext(sessionRow))),
     });
+    target.assertCanCommit?.();
     await deps.commitRebuild(sessionId, handoff, {
       reason: 'model-window-switch',
       handoffCoverage,
@@ -1221,11 +1235,12 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       fromLabel: label,
       toLabel: label,
       sessionId,
-      targetContextWindow: rebuildWindow(sessionId, sessionRow, liveUsage?.contextWindow),
+      targetContextWindow: await rebuildWindow(sessionId, sessionRow, undefined, liveUsage?.contextWindow),
       reason: botChat || isOversizedHistoryErrorData(lastError) ? 'native-session-recovery' : rebuildReason,
       companion: botChat,
       ...(await companionRecall(sessionId, botChat)),
     });
+    signal.throwIfAborted();
     await deps.commitRebuild(sessionId, handoff, {
       reason: rebuildReason,
       handoffCoverage,
@@ -1290,13 +1305,14 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             fromLabel: engineLabelForOverflow(row.agentKind),
             toLabel: engineLabelForOverflow(row.agentKind),
             sessionId,
-            targetContextWindow: target && target !== 'retain-route'
-              ? configuredHandoffWindow(sessionId, row.agentKind, target.model, target.providerId)
-              : rebuildWindow(sessionId, row, live?.getUsageSnapshot?.().contextWindow),
+            targetContextWindow: await rebuildWindow(
+              sessionId, row, target && target !== 'retain-route' ? target : undefined, live?.getUsageSnapshot?.().contextWindow,
+            ),
             reason: 'native-session-recovery',
             companion: companionChat,
             ...(await companionRecall(sessionId, companionChat)),
           });
+          assertReady();
           // Durable handoff, SDK reset and complete target route succeed or fail together.
           // No user turn or tool call is replayed by this control-plane operation.
           const commitArgs: Parameters<ContextOverflowRolloverDeps['commitRebuild']> = [sessionId, handoff, {
