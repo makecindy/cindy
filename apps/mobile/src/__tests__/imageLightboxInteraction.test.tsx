@@ -2257,37 +2257,41 @@ describe("chrome toggle, loading and video pages", () => {
     root = createRoot(document.createElement("div"));
   });
 
-  // A complete retained file survives a failed remote refresh. Unit tier: real
-  // React retry/resolve lifecycle; the HTTP control must still disable stale exports.
-  it.each(['file:///cache/clip.mp4', 'http://127.0.0.1:12345/clip'])('preserves only a cached export across failed video refresh (%s)', async (source) => {
+  // Playback refresh does not prove the original unavailable. Real React unit
+  // regression for #10136: leased file/Range and unleased OSS HTTPS, plus expiry.
+  it.each([
+    ['file:///cache/clip.mp4', true, false],
+    ['http://127.0.0.1:12345/clip', true, false],
+    ['https://cdn.invalid/clip.mp4', false, false],
+    ['https://cdn.invalid/clip.mp4', false, true],
+  ] as const)('preserves available exports across failed video refresh (%s, lease=%s, expired=%s)', async (source, leased, expired) => {
     const url = 'xdt-video://cache/retry.mp4';
     const video = { key: 'retry', title: 'retry.mp4', url,
       payload: { kind: 'media', media: { kind: 'video', url, previewable: false } } } as ImageLightboxProps['images'][number];
     let consumers = 0;
     const resolved: MobileResolvedRemoteMedia = { url: source, previewable: true, mimeType: 'video/mp4',
-      ossKey: '', size: 16, expiresAt: '2099-01-01T00:00:00Z',
-      protectLocalFile: () => { consumers++; return () => { consumers--; }; } };
+      ossKey: '', size: 16, expiresAt: expired ? '2000-01-01T00:00:00Z' : '2099-01-01T00:00:00Z',
+      ...(leased ? { protectLocalFile: () => { consumers++; return () => { consumers--; }; } } : {}) };
     const resolver = vi.fn(async () => resolved);
     await act(async () => { mount({ images: [video], initialUrl: url, resolveOpaqueSource: true,
       onResolveRemoteMedia: resolver }); });
-    expect(consumers).toBe(1);
+    expect(consumers).toBe(leased ? 1 : 0);
     act(() => runtime.nodes.get('message.imageLightboxVideoPlayer').onError('unsupported codec'));
     act(() => runtime.nodes.get('message.imageLightboxVideoWebPlayer').onStatusChange({ state: 'error' }));
     let reject!: (error: Error) => void;
     resolver.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
     await act(async () => press('message.imageLightboxRetryButton'));
-    const cached = source.startsWith('file://');
-    expect(runtime.nodes.get('message.videoDownload').source).toBe(cached ? source : null);
-    expect(consumers).toBe(cached ? 1 : 0);
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(expired ? null : source);
+    expect(consumers).toBe(leased ? 1 : 0);
     await act(async () => reject(new Error('REMOTE_OFFLINE')));
     expect(isMounted('message.imageLightboxRetryButton')).toBe(true);
-    expect(runtime.nodes.get('message.videoDownload').source).toBe(cached ? source : null);
-    expect(consumers).toBe(cached ? 1 : 0);
-    resolver.mockResolvedValue({ ...resolved });
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(expired ? null : source);
+    expect(consumers).toBe(leased ? 1 : 0);
+    resolver.mockResolvedValue({ ...resolved, expiresAt: '2099-01-01T00:00:00Z' });
     await act(async () => press('message.imageLightboxRetryButton'));
     expect(runtime.nodes.get('message.imageLightboxVideoPlayer').url).toBe(source);
     expect(runtime.nodes.get('message.videoDownload').source).toBe(source);
-    expect(consumers).toBe(1);
+    expect(consumers).toBe(leased ? 1 : 0);
     act(() => root.unmount());
     root = createRoot(document.createElement('div'));
     expect(consumers).toBe(0);

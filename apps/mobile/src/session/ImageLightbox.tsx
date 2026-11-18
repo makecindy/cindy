@@ -69,6 +69,7 @@ import { previewSourceName } from "@cindy/maker-shared/attachment-preview";
 import { useTheme, useThemedStyles, type ThemeColors } from "@/theme";
 import {
   isDesktopLocalMediaUrl,
+  isResolvedRemoteMediaFresh,
   mediaLoadFailureKey,
   type MobileResolvedRemoteMedia,
   type ResolveRemoteMediaFn,
@@ -127,10 +128,11 @@ const LIGHTBOX_SETTLE_SPRING = { damping: 30, stiffness: 260, mass: 1 } as const
 // 缩略图垫底**不**挂在取件态里:它要跨过 loading → ready 的边界继续垫住原图
 // 下载那一段(见 lightboxImageLayers),挂进 loading 分支会在取件完成的瞬间
 // 结构性丢失,把第二段空档裸露成纯黑。垫底地址单独存 previewMap。
-type PageResolveState =
+type PageResolveState = (
   | { status: 'loading'; media?: MobileResolvedRemoteMedia }
   | { status: 'ready'; media: MobileResolvedRemoteMedia }
-  | { status: 'error'; error?: unknown; media?: MobileResolvedRemoteMedia };
+  | { status: 'error'; error?: unknown; media?: MobileResolvedRemoteMedia }
+) & { sourceUnavailable?: boolean };
 
 /** 宿主注入的底部操作(文件浏览器:复制路径/发送到会话);回调收当前活跃页。 */
 export interface ImageLightboxAction {
@@ -555,7 +557,8 @@ export const ImageLightbox = memo(function ImageLightbox({
     resolvingImagesRef.current.add(key);
     setResolveMap((prev) => {
       // 显示副本与取件状态分开:刷新失败不撤掉仍可读的原图,也不假装刷新成功。
-      return { ...prev, [key]: { status: 'loading', media: prev[key]?.media } };
+      return { ...prev, [key]: { status: 'loading', media: prev[key]?.media,
+        sourceUnavailable: prev[key]?.sourceUnavailable } };
     });
     void onResolveRemoteMedia(
       { kind: media.kind, url: media.url, previewable: media.previewable },
@@ -565,7 +568,8 @@ export const ImageLightbox = memo(function ImageLightbox({
         setResolveMap((prev) => ({ ...prev, [key]: { status: 'ready', media: resolved } }));
       })
       .catch((error: unknown) => {
-        setResolveMap((prev) => ({ ...prev, [key]: { status: 'error', error, media: prev[key]?.media } }));
+        setResolveMap((prev) => ({ ...prev, [key]: { status: 'error', error, media: prev[key]?.media,
+          sourceUnavailable: prev[key]?.sourceUnavailable } }));
       })
       .finally(() => resolvingImagesRef.current.delete(key));
     // 垫底缩略图:列表里这张图已经解码好了,拿来从打开那一刻接住画面,一直垫到
@@ -602,8 +606,8 @@ export const ImageLightbox = memo(function ImageLightbox({
   ) => {
     setResolveMap((prev) => {
       const current = prev[image.url];
-      if (current?.status !== 'ready' || current.media !== source) return prev;
-      return { ...prev, [image.url]: { status: 'error', error, media: source } };
+      if (current?.media !== source || current.sourceUnavailable) return prev;
+      return { ...prev, [image.url]: { status: 'error', error, media: source, sourceUnavailable: true } };
     });
   }, []);
 
@@ -686,6 +690,12 @@ export const ImageLightbox = memo(function ImageLightbox({
   const chromeShown = chromeToggledVisible || isAnnotating || activeIsVideo;
   const activeUri = activeImage ? displayUriFor(activeImage) : null;
   const activeResolveState = activeImage ? resolveMap[activeImage.url] : undefined;
+  // A playback refresh is separate from the original's export availability.
+  // Leased originals remain held; unleased presigned URLs must still be fresh.
+  const activeVideoSource = activeResolveState?.sourceUnavailable
+    || (activeResolveState && activeResolveState.status !== 'ready' && activeResolveState.media
+      && !activeResolveState.media.protectLocalFile && !isResolvedRemoteMediaFresh(activeResolveState.media))
+    ? null : activeUri;
   // Expo can display library handles, but sharing/annotation need the file or remote
   // original supplied later by the existing upload pipeline. Do not enable dead-end actions.
   const activeActionsReady = !!activeUri && !/^(?:ph|content|assets-library):\/\//.test(activeUri)
@@ -1025,8 +1035,7 @@ export const ImageLightbox = memo(function ImageLightbox({
             {/* 手机缩放靠捏合与双击,不放放大 / 缩小 / 适应按钮;原始尺寸在「更多」里。 */}
             {activeIsVideo ? (
               <VideoDownloadButton key={activeImage?.key}
-                source={activeResolveState && activeResolveState.status !== 'ready'
-                  && !activeUri?.startsWith('file://') ? null : activeUri}
+                source={activeVideoSource}
                 mimeType={activeMimeType}
                 render={({ busy, progress, disabled, download }) => (
                   <PreviewIconButton
@@ -2153,9 +2162,8 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
     resolvedUnsupported || (!retryable && !media.previewable)
   ));
   const protectLocalFile = resolveState?.media?.protectLocalFile;
-  // A failed remote refresh does not invalidate a complete local copy. Keep it
-  // protected for export while retrying playback, even in loading/error state.
-  const retainSource = resolveState?.status === 'ready' || !!uri?.startsWith('file://');
+  // A failed refresh does not invalidate an original still held for export.
+  const retainSource = !resolveState?.sourceUnavailable;
   const leaseRefreshUsed = useRef(false);
   const leaseRetry = useRef({ image, onRetry, onSourceUnavailable });
   leaseRetry.current = { image, onRetry, onSourceUnavailable };
@@ -2167,13 +2175,14 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
     try {
       return protectLocalFile?.();
     } catch (error) {
+      if (resolveState?.media) {
+        leaseRetry.current.onSourceUnavailable(leaseRetry.current.image, resolveState.media, error);
+      }
       // Releasing the last consumer can close a cached stream. On returning to
       // this page, refresh once; a failed refresh keeps the existing retry UI.
       if (!leaseRefreshUsed.current) {
         leaseRefreshUsed.current = true;
         leaseRetry.current.onRetry(leaseRetry.current.image);
-      } else if (resolveState?.media) {
-        leaseRetry.current.onSourceUnavailable(leaseRetry.current.image, resolveState.media, error);
       }
     }
   }, [active, protectLocalFile, retainSource, uri]);
