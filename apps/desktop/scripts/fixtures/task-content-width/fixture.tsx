@@ -5,6 +5,7 @@ import { MarkdownRenderer } from '../../../src/renderer/components/chat/Markdown
 import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
 import { PluginUiProvider } from '../../../src/renderer/cindy-brain/PluginUiContributions';
 import { TASK_MESSAGE_MAX_WIDTH, useProportionalWidth } from '../../../src/renderer/hooks/useProportionalWidth';
+import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
 import { LayoutRoot } from '../../../src/renderer/layout/LayoutRoot';
 import { usePanelWidth } from '../../../src/renderer/layout/paneWidths';
 import { BuiltinPanelBridgeProvider } from '../../../src/renderer/panels/BuiltinPanelBridge';
@@ -30,6 +31,7 @@ if (layout.content.type === 'split') layout.content.children.forEach(child => { 
 
 function Task() {
   const width = useProportionalWidth(ctx.data.legacy ? 914 : TASK_MESSAGE_MAX_WIDTH);
+  const attachmentState = useAttachments('fixture-task-width');
   return <main className="min-w-[400px] flex-1 h-full" data-task-pane>
     <div ref={width.containerRef} className="relative h-full w-full" data-task-width>
       <MessageStream workingDir="" historyLoaded messages={ctx.data.streaming
@@ -40,6 +42,7 @@ function Task() {
         style={{ left: width.inputPad, right: width.inputPad }}>
         <div className="mx-auto" style={{ width: width.inputWidth }} data-width-composer>
           <ChatInput initialWorkingDir="/workspace" runtimeAgentKind="codex" vendorKey="codex"
+            attachmentState={attachmentState}
             deviceLinkDeviceId={null} initialModel="fixture-chat" initialProviderId="openai"
             hideRuntimeControls showFolderPicker={false} disableAutofocus onSend={forbid('send')} />
         </div>
