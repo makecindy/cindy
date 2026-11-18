@@ -16596,6 +16596,36 @@
         "priority": "优先级",
         "activity": "最近活动",
         "created": "创建时间"
+      },
+      "inbox": {
+        "thisEvening": "今晚",
+        "tomorrow": "明天",
+        "nextWeek": "下周",
+        "custom": "自定义…",
+        "wakeAt": "唤回日期和时间",
+        "timeZone": "本地时间（{{zone}}）",
+        "invalidTime": "请选择未来一年内的日期和时间。",
+        "inbox": "待处理",
+        "working": "进行中",
+        "snoozed": "稍后处理",
+        "archived": "已处理",
+        "snooze": "稍后处理",
+        "complete": "完成",
+        "wake": "立即取回",
+        "restore": "恢复任务",
+        "process": "标记已处理（归档）",
+        "empty": "收件箱已清空",
+        "snoozeFailed": "未能保存稍后处理时间，请检查连接并确认任务所属电脑已更新。",
+        "hours": "{{count}} 小时后",
+        "hours_one": "{{count}} 小时后",
+        "hours_other": "{{count}} 小时后"
+      },
+      "taskListMode": {
+        "heading": "任务模式",
+        "tasks": "任务列表",
+        "inbox": "收件箱",
+        "enterInbox": "切换到收件箱模式",
+        "leaveInbox": "切换到任务列表模式"
       }
     },
     "rename": {
@@ -21310,6 +21340,27 @@
         "allow": "允许",
         "deny": "拒绝"
       }
+    }
+  },
+  "featureIntro": {
+    "close": "关闭",
+    "taskInbox": {
+      "title": "认识收件箱",
+      "lead": "任务会按状态自动分成待处理、进行中、稍后处理和已处理。最好的习惯是随手清空收件箱：处理完点完成，不急的稍后处理。",
+      "pending": {
+        "title": "待处理",
+        "body": "任务跑完有了结果，或者在等你回答，都会出现在这里。"
+      },
+      "done": {
+        "title": "完成",
+        "body": "处理好了点一下完成，任务移到已处理；之后有新进展会自动回来。"
+      },
+      "snooze": {
+        "title": "稍后处理",
+        "body": "现在顾不上就选个时间，到点自动回到待处理。"
+      },
+      "start": "开始使用",
+      "note": "随时可以用侧边栏顶部的按钮切回任务列表。"
     }
   },
   "firstRunGuide": {

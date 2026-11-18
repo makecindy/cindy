@@ -16596,6 +16596,36 @@
         "priority": "優先級",
         "activity": "最近活動",
         "created": "建立時間"
+      },
+      "inbox": {
+        "thisEvening": "今晚",
+        "tomorrow": "明天",
+        "nextWeek": "下週",
+        "custom": "自訂…",
+        "wakeAt": "喚回日期與時間",
+        "timeZone": "本地時間（{{zone}}）",
+        "invalidTime": "請選擇未來一年內的日期與時間。",
+        "inbox": "待處理",
+        "working": "進行中",
+        "snoozed": "稍後處理",
+        "archived": "已處理",
+        "snooze": "稍後處理",
+        "complete": "完成",
+        "wake": "立即取回",
+        "restore": "恢復任務",
+        "process": "標記已處理（封存）",
+        "empty": "收件匣已清空",
+        "snoozeFailed": "無法儲存稍後處理時間，請檢查連線並確認任務所在電腦已更新。",
+        "hours": "{{count}} 小時後",
+        "hours_one": "{{count}} 小時後",
+        "hours_other": "{{count}} 小時後"
+      },
+      "taskListMode": {
+        "heading": "任務模式",
+        "tasks": "任務列表",
+        "inbox": "收件匣",
+        "enterInbox": "切換到收件匣模式",
+        "leaveInbox": "切換到任務列表模式"
       }
     },
     "rename": {
@@ -21310,6 +21340,27 @@
         "allow": "允許",
         "deny": "拒絕"
       }
+    }
+  },
+  "featureIntro": {
+    "close": "關閉",
+    "taskInbox": {
+      "title": "認識收件匣",
+      "lead": "任務會依狀態自動分成待處理、進行中、稍後處理和已處理。最好的習慣是隨手清空收件匣：處理完按完成，不急的稍後處理。",
+      "pending": {
+        "title": "待處理",
+        "body": "任務跑完有了結果，或者在等你回答，都會出現在這裡。"
+      },
+      "done": {
+        "title": "完成",
+        "body": "處理好了按一下完成，任務移到已處理；之後有新進展會自動回來。"
+      },
+      "snooze": {
+        "title": "稍後處理",
+        "body": "現在顧不上就選個時間，時間到自動回到待處理。"
+      },
+      "start": "開始使用",
+      "note": "隨時可以用側邊欄頂部的按鈕切回任務列表。"
     }
   },
   "firstRunGuide": {

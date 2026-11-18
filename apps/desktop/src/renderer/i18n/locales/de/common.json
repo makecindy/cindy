@@ -16670,6 +16670,36 @@
         "priority": "Priorität",
         "activity": "Letzte Aktivität",
         "created": "Erstellungszeit"
+      },
+      "inbox": {
+        "thisEvening": "Heute Abend",
+        "tomorrow": "Morgen",
+        "nextWeek": "Nächste Woche",
+        "custom": "Benutzerdefiniert…",
+        "wakeAt": "Datum und Uhrzeit der Wiedervorlage",
+        "timeZone": "Ortszeit ({{zone}})",
+        "invalidTime": "Wähle einen zukünftigen Zeitpunkt innerhalb eines Jahres.",
+        "inbox": "Offen",
+        "working": "In Arbeit",
+        "snoozed": "Zurückgestellt",
+        "archived": "Erledigt",
+        "snooze": "Aufgabe zurückstellen",
+        "complete": "Erledigt",
+        "wake": "Jetzt zurückholen",
+        "restore": "Aufgabe wiederherstellen",
+        "process": "Als erledigt markieren (archivieren)",
+        "empty": "Der Posteingang ist leer",
+        "snoozeFailed": "Die Zeit konnte nicht gespeichert werden. Prüfe die Verbindung und aktualisiere den Computer mit dieser Aufgabe.",
+        "hours": "In {{count}} Stunden",
+        "hours_one": "In {{count}} Stunde",
+        "hours_other": "In {{count}} Stunden"
+      },
+      "taskListMode": {
+        "heading": "Aufgabenmodus",
+        "tasks": "Aufgabenliste",
+        "inbox": "Posteingang",
+        "enterInbox": "Zum Posteingangsmodus wechseln",
+        "leaveInbox": "Zum Aufgabenlistenmodus wechseln"
       }
     },
     "rename": {
@@ -21392,6 +21422,27 @@
         "allow": "Erlauben",
         "deny": "Ablehnen"
       }
+    }
+  },
+  "featureIntro": {
+    "close": "Schließen",
+    "taskInbox": {
+      "title": "Der Posteingang",
+      "lead": "Aufgaben ordnen sich selbst in Offen, In Arbeit, Zurückgestellt und Erledigt ein. Am besten hältst du den Posteingang leer: Klicke auf Erledigt, wenn eine Aufgabe fertig ist, und stelle zurück, was warten kann.",
+      "pending": {
+        "title": "Offen",
+        "body": "Aufgaben erscheinen hier, sobald sie ein Ergebnis haben oder auf deine Antwort warten."
+      },
+      "done": {
+        "title": "Erledigt",
+        "body": "Erledigt? Ein Klick auf Erledigt verschiebt die Aufgabe. Gibt es Neues, kommt sie von selbst zurück."
+      },
+      "snooze": {
+        "title": "Zurückgestellt",
+        "body": "Gerade keine Zeit? Wähle eine Zeit, dann kommt die Aufgabe zurück nach Offen."
+      },
+      "start": "Los geht’s",
+      "note": "Mit der Schaltfläche oben in der Seitenleiste wechselst du jederzeit zurück zur Aufgabenliste."
     }
   },
   "firstRunGuide": {

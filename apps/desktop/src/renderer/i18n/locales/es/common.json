@@ -16832,6 +16832,37 @@
         "priority": "Prioridad",
         "activity": "Actividad reciente",
         "created": "Fecha de creación"
+      },
+      "inbox": {
+        "thisEvening": "Esta tarde",
+        "tomorrow": "Mañana",
+        "nextWeek": "La próxima semana",
+        "custom": "Personalizar…",
+        "wakeAt": "Fecha y hora de regreso",
+        "timeZone": "Hora local ({{zone}})",
+        "invalidTime": "Elige una fecha y hora futuras dentro de un año.",
+        "inbox": "Pendientes",
+        "working": "En curso",
+        "snoozed": "Pospuestas",
+        "archived": "Procesadas",
+        "snooze": "Posponer tarea",
+        "complete": "Hecho",
+        "wake": "Mostrar ahora",
+        "restore": "Restaurar tarea",
+        "process": "Marcar como procesada (archivar)",
+        "empty": "La bandeja está vacía",
+        "snoozeFailed": "No se pudo guardar la hora. Comprueba la conexión y actualiza el equipo que aloja esta tarea.",
+        "hours": "En {{count}} horas",
+        "hours_one": "En {{count}} hora",
+        "hours_many": "En {{count}} horas",
+        "hours_other": "En {{count}} horas"
+      },
+      "taskListMode": {
+        "heading": "Modo de tareas",
+        "tasks": "Lista de tareas",
+        "inbox": "Bandeja de entrada",
+        "enterInbox": "Cambiar al modo bandeja de entrada",
+        "leaveInbox": "Cambiar al modo lista de tareas"
       }
     },
     "rename": {
@@ -21597,6 +21628,27 @@
         "allow": "Permitir",
         "deny": "Rechazar"
       }
+    }
+  },
+  "featureIntro": {
+    "close": "Cerrar",
+    "taskInbox": {
+      "title": "Conoce la bandeja de entrada",
+      "lead": "Las tareas se ordenan solas en Pendientes, En curso, Pospuestas y Procesadas. El mejor hábito es mantener la bandeja vacía: haz clic en Hecho cuando termines una tarea y pospón lo que pueda esperar.",
+      "pending": {
+        "title": "Pendientes",
+        "body": "Las tareas aparecen aquí cuando tienen un resultado o esperan tu respuesta."
+      },
+      "done": {
+        "title": "Hecho",
+        "body": "¿Listo? Un clic en Hecho la pasa a Procesadas. Vuelve sola si hay novedades."
+      },
+      "snooze": {
+        "title": "Pospuestas",
+        "body": "¿Ahora no puedes? Elige una hora y volverá a Pendientes."
+      },
+      "start": "Empezar",
+      "note": "Vuelve a la lista de tareas cuando quieras con el botón de la parte superior de la barra lateral."
     }
   },
   "firstRunGuide": {

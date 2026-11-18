@@ -16596,6 +16596,36 @@
         "priority": "缓急",
         "activity": "近动",
         "created": "立时"
+      },
+      "inbox": {
+        "thisEvening": "今夕",
+        "tomorrow": "明日",
+        "nextWeek": "下周",
+        "custom": "自定…",
+        "wakeAt": "唤回日期时辰",
+        "timeZone": "本地时辰（{{zone}}）",
+        "invalidTime": "请选择来岁以内之未来日期时辰。",
+        "inbox": "待处理",
+        "working": "进行中",
+        "snoozed": "待后处理",
+        "archived": "已处理",
+        "snooze": "留待后办",
+        "complete": "毕",
+        "wake": "即刻取回",
+        "restore": "恢复任务",
+        "process": "标记已处理（归档）",
+        "empty": "箱中已清",
+        "snoozeFailed": "未能保存稍后处理时间，请检查连接并确认任务所属电脑已更新。",
+        "hours": "{{count}} 小时后",
+        "hours_one": "{{count}} 小时后",
+        "hours_other": "{{count}} 小时后"
+      },
+      "taskListMode": {
+        "heading": "任务模式",
+        "tasks": "任务列表",
+        "inbox": "收件箱",
+        "enterInbox": "转至收件箱之式",
+        "leaveInbox": "转至任务列之式"
       }
     },
     "rename": {
@@ -21439,6 +21469,27 @@
         "allow": "允许",
         "deny": "拒绝"
       }
+    }
+  },
+  "featureIntro": {
+    "close": "闭",
+    "taskInbox": {
+      "title": "识收件箱",
+      "lead": "任务依其状自分为待处理、进行中、待后处理、已处理。善用之道，在常清其箱：事毕者点「毕」，未及者待后处理。",
+      "pending": {
+        "title": "待处理",
+        "body": "任务事竣有果，或待君答，则现于此。"
+      },
+      "done": {
+        "title": "毕",
+        "body": "事毕点「毕」，任务移入已处理；后有新进，自返其处。"
+      },
+      "snooze": {
+        "title": "待后处理",
+        "body": "今未暇则择一时，时至自返待处理。"
+      },
+      "start": "始用",
+      "note": "可随时以侧栏顶端之钮返任务列。"
     }
   },
   "firstRunGuide": {

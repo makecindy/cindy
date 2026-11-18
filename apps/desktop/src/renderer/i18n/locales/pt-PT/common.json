@@ -16832,6 +16832,37 @@
         "priority": "Prioridade",
         "activity": "Atividade recente",
         "created": "Hora de criação"
+      },
+      "inbox": {
+        "thisEvening": "Esta tarde",
+        "tomorrow": "Amanhã",
+        "nextWeek": "Na próxima semana",
+        "custom": "Personalizar…",
+        "wakeAt": "Data e hora de regresso",
+        "timeZone": "Hora local ({{zone}})",
+        "invalidTime": "Escolhe uma data e hora futuras dentro de um ano.",
+        "inbox": "Pendentes",
+        "working": "Em curso",
+        "snoozed": "Adiadas",
+        "archived": "Tratadas",
+        "snooze": "Adiar tarefa",
+        "complete": "Concluído",
+        "wake": "Mostrar agora",
+        "restore": "Restaurar tarefa",
+        "process": "Marcar como tratada (arquivar)",
+        "empty": "A caixa de entrada está vazia",
+        "snoozeFailed": "Não foi possível guardar a hora. Verifique a ligação e atualize o computador onde está a tarefa.",
+        "hours": "Daqui a {{count}} horas",
+        "hours_one": "Daqui a {{count}} hora",
+        "hours_many": "Daqui a {{count}} horas",
+        "hours_other": "Daqui a {{count}} horas"
+      },
+      "taskListMode": {
+        "heading": "Modo de tarefas",
+        "tasks": "Lista de tarefas",
+        "inbox": "Caixa de entrada",
+        "enterInbox": "Mudar para o modo caixa de entrada",
+        "leaveInbox": "Mudar para o modo lista de tarefas"
       }
     },
     "rename": {
@@ -21597,6 +21628,27 @@
         "allow": "Permitir",
         "deny": "Recusar"
       }
+    }
+  },
+  "featureIntro": {
+    "close": "Fechar",
+    "taskInbox": {
+      "title": "Conheça a caixa de entrada",
+      "lead": "As tarefas organizam-se sozinhas em Pendentes, Em curso, Adiadas e Tratadas. O melhor hábito é manter a caixa de entrada vazia: clique em Concluído quando terminar uma tarefa e adie o que pode esperar.",
+      "pending": {
+        "title": "Pendentes",
+        "body": "As tarefas aparecem aqui quando têm um resultado ou aguardam a sua resposta."
+      },
+      "done": {
+        "title": "Concluído",
+        "body": "Resolveu? Um clique em Concluído move-a para Tratadas. Volta sozinha se houver novidades."
+      },
+      "snooze": {
+        "title": "Adiadas",
+        "body": "Sem tempo agora? Escolha uma hora e ela volta para Pendentes."
+      },
+      "start": "Começar",
+      "note": "Volte à lista de tarefas a qualquer momento com o botão no topo da barra lateral."
     }
   },
   "firstRunGuide": {
