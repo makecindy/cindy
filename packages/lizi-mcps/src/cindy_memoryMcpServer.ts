@@ -30,6 +30,7 @@ import {
   registerMemoryConsolidateTool,
   registerMemoryDeleteTool,
   registerMemoryListTool,
+  registerMemoryScopesTool,
   registerMemoryReadTool,
   registerMemoryReviewTool,
   registerMemorySearchTool,
@@ -128,6 +129,7 @@ export function createCindyMemoryMcpServer(deps: MemoryMcpDeps): McpServer {
 
   // 注册顺序 = list_tools 里的位次。读类优先, 写类次之, 维护类放最后。
   registerMemoryListTool(registry, deps);
+  registerMemoryScopesTool(registry, deps);
   registerMemoryReadTool(registry, deps);
   registerMemorySearchTool(registry, deps);
   // session_search 仅在 host 提供 searchSessions 时注册 (跟 art video registry 同模式)。

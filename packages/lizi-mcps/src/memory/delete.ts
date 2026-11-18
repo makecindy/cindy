@@ -7,7 +7,7 @@
 
 import { z } from 'zod';
 
-import { memoryScopeArg, storeHolding, withStore, type MemoryScopeName } from './_shared.js';
+import { memoryProjectArg, memoryScopeArg, storeHolding, withStore, type MemoryScopeName } from './_shared.js';
 import type { MemoryMcpDeps } from '../types.js';
 import type { MemoryToolRegistry } from '../cindy_memoryToolRegistry.js';
 
@@ -21,12 +21,13 @@ export function registerMemoryDeleteTool(registry: MemoryToolRegistry, deps: Mem
     inputShape: {
       filename: z.string().min(1).describe('memory 分片文件名'),
       scope: memoryScopeArg,
+      project: memoryProjectArg,
     },
-    handler: async ({ filename, scope }) =>
+    handler: async ({ filename, scope, project }) =>
       withStore(deps, async (_store, ctx) => {
         const target = await storeHolding(ctx, filename, scope as MemoryScopeName | undefined);
         await target.store.delete(filename);
         return { deleted: filename, scope: target.scope };
-      }),
+      }, { project: project as string | undefined }),
   });
 }

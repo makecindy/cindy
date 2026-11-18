@@ -72,6 +72,18 @@ export const memoryScopeArg = z
   .optional()
   .describe('哪一份记忆: user = 关于用户本人、每个项目都生效; project = 只属于当前仓库或目录');
 
+/**
+ * 操作另一个项目的记忆 (整理记忆时用)。值取自 `memory_scopes`; 传了之后这次调用里的
+ * `project` 那一份就是它, `user` 那一份不变。宿主对带这个参数的调用不走可信 server 的静默
+ * 放行, 交给当前任务的权限档 (docs/product-rules/cindy-memory.md §8)。
+ */
+export const memoryProjectArg = z
+  .string()
+  .min(1)
+  .max(4096)
+  .optional()
+  .describe('可选: 改为操作另一个项目的记忆, 值取自 memory_scopes 返回的 project。不传 = 当前任务所在的项目');
+
 async function holds(store: MakerMemoryStore, filename: string): Promise<boolean> {
   try {
     await store.read(filename);
@@ -140,6 +152,8 @@ export async function storeHolding(
 export async function withStore(
   deps: MemoryMcpDeps,
   fn: (store: MakerMemoryStore, ctx: WithStoreContext) => Promise<unknown>,
+  /** `accountWide`: 这次调用要看账号下的全部范围 (memory_scopes), 与 `project` 一样只对普通任务开放。 */
+  options: { project?: string; accountWide?: boolean } = {},
 ): Promise<MemoryToolResult> {
   let store: MakerMemoryStore;
   let manager: MakerMemoryManager;
@@ -184,6 +198,27 @@ export async function withStore(
       );
     }
     scopes = manager.memoryScopesFor(scopeKey);
+    // 只有普通任务 (有账号级记忆的那种) 能看到或换到别的项目; 伙伴只有它自己那一份,
+    // 也不该知道用户有哪些项目。
+    if ((options.project !== undefined || options.accountWide) && !scopes.user) {
+      return buildJsonResult(
+        { ok: false, code: 'INVALID_PARAMS', message: 'this task has only its own memory; other projects are not available' },
+        true,
+      );
+    }
+    if (options.project !== undefined) {
+      // 传进来的键不可信: 只接受当前账号下确实有记忆的项目, 不为任意路径打开存储
+      // (与记忆页对范围键的校验同一规则)。
+      const listed = await manager.listScopes();
+      if (!listed.some((scope) => scope.kind === 'project' && scope.scopeKey === options.project)) {
+        return buildJsonResult(
+          { ok: false, code: 'NOT_FOUND', message: 'no memory for that project; call memory_scopes for the valid values' },
+          true,
+        );
+      }
+      scopeKey = options.project;
+      scopes = { user: scopes.user, project: options.project };
+    }
     store = await manager.getStore(scopes.project ?? scopes.user!);
   } catch (err) {
     const { code, message } = classifyMemoryError(err);

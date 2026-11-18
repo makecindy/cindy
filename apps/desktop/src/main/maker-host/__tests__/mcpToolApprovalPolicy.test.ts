@@ -742,4 +742,27 @@ describe('cross-device actions use the task permission mode', () => {
     expect(helper('local::sess-9')).toBe('prompt-each-time');
     expect(helper(undefined)).toBe('prompt-each-time');
   });
+  // 整理记忆要改别的项目的记忆 (docs/product-rules/cindy-memory.md §8): 一个任务默认只能静默读写
+  // 自己项目和「关于你」; 伸手到别的项目时交给权限档, 否则任何任务里的注入内容都能悄悄读走所有
+  // 项目的记忆。
+  it('lets the task permission mode decide a memory call that targets another project, and nothing else', () => {
+    const memory = (toolName: string | undefined, name: string, args: Record<string, unknown>) =>
+      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_memory', toolName, toolParams: { name, args } });
+
+    for (const toolName of ['call_tool', undefined]) {
+      expect(memory(toolName, 'memory_list', { project: '/repo/other' })).toBe('prompt-each-time');
+      expect(memory(toolName, 'memory_delete', { filename: 'feedback_x.md', project: '/repo/other' }))
+        .toBe('prompt-each-time');
+      // 当前项目和「关于你」: 照旧静默。
+      expect(memory(toolName, 'memory_list', {})).toBe('auto-approve');
+      expect(memory(toolName, 'memory_write', { type: 'feedback', name: 'x', scope: 'user' })).toBe('auto-approve');
+      // 只列出哪些项目有记忆、各有几条, 不含内容。
+      expect(memory(toolName, 'memory_scopes', {})).toBe('auto-approve');
+    }
+    // Claude 的桥会把嵌套参数序列化成字符串: 判定看的是宿主最终拿到的值。
+    expect(getDesktopMcpToolApprovalPolicy({
+      serverName: 'cindy_memory', toolName: 'call_tool',
+      toolParams: { name: 'memory_read', args: JSON.stringify({ filename: 'a.md', project: '/repo/other' }) },
+    })).toBe('prompt-each-time');
+  });
 });

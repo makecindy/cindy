@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-import { shardNameSchema, memoryScopeArg, storeForNew, storeHolding, withStore, type MemoryScopeName } from './_shared.js';
+import { shardNameSchema, memoryProjectArg, memoryScopeArg, storeForNew, storeHolding, withStore, type MemoryScopeName } from './_shared.js';
 import type { MemoryMcpDeps } from '../types.js';
 import type { MemoryToolRegistry } from '../cindy_memoryToolRegistry.js';
 import type { MakerMemoryStore, WriteOptions, WriteResult } from '@cindy/maker-core';
@@ -70,9 +70,11 @@ export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: Memo
       body: z.string().min(1),
       mode: z.enum(['create', 'update', 'append']).optional(),
       scope: memoryScopeArg,
+      project: memoryProjectArg,
     },
-    handler: async ({ scope, ...args }) => {
-      const saved = deps.beginWrite?.(deps.getSessionContext?.());
+    handler: async ({ scope, project, ...args }) => {
+      // 改另一个项目的记忆是整理, 不是这轮对话学到了什么: 不出保存回执 (回执只认当前任务的项目)。
+      const saved = project ? undefined : deps.beginWrite?.(deps.getSessionContext?.());
       let written: WriteResult | undefined;
       let writtenScope: MemoryScopeName | undefined;
       const result = await withStore(deps, async (_store, ctx) => {
@@ -91,7 +93,7 @@ export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: Memo
           // 只是提示: 记忆已经存好, 列不出来也不能把这次写入报成失败 (账号边界由 withStore 收尾复核)。
           : await recentlySaved(target.store, written.filename).catch(() => []);
         return { ...written, scope: target.scope, ...(savedRecently.length ? { savedRecently } : {}) };
-      });
+      }, { project: project as string | undefined });
       if (!result.isError && written) saved?.({ key: written.filename, title: args.title as string,
         action: args.mode === 'update' || args.mode === 'append' ? 'updated' : 'created',
         ...(writtenScope ? { scope: writtenScope } : {}) });
