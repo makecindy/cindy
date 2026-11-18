@@ -3,11 +3,12 @@
 // admission, but not picker identity, recycling serialization or borrower rows.
 // Minimal input: one managed tree and one new task; no real Git, DB or timers.
 import { beforeEach, expect, it, vi } from 'vitest';
+import type { WorktreeMeta } from '../../../worktree/types';
 const h = vi.hoisted(() => ({
   owner: null as unknown,
   row: null as Record<string, unknown> | null,
   locked: false,
-  entries: [] as Array<Record<string, unknown>>,
+  entries: [] as WorktreeMeta[],
   git: vi.fn(),
   bootstrap: vi.fn(),
   insert: vi.fn(),
@@ -27,7 +28,6 @@ vi.mock('../../client/current', () => ({
   getCurrentDbClientSnapshot: () => h.owner,
   getDbClient: () => ({ drizzle: db }),
 }));
-vi.mock('../../../worktree/worktreeStore', () => ({ getAll: () => h.entries }));
 vi.mock('../../../worktree/gitExec', () => ({ gitExec: h.git }));
 vi.mock('../../../worktree/resourceLock', () => ({
   physicalWorktreeKey: async (value: string) => value,
@@ -71,7 +71,15 @@ const request = {
   reuseWorktreePath: tree.path,
   reuseWorktreeSessionId: 'owner',
 };
-const ports = { senderId: 1, userDataDir: '/user-data', notifyPluginSessionCreated: h.notify };
+const ports = {
+  senderId: 1,
+  userDataDir: '/user-data',
+  notifyPluginSessionCreated: h.notify,
+  lookupRegisteredWorktree: (sessionId: string) => {
+    expect(h.locked).toBe(true);
+    return h.entries.find(entry => entry.sessionId === sessionId) ?? null;
+  },
+};
 beforeEach(() => {
   vi.clearAllMocks();
   h.owner = { client: { drizzle: db } };
@@ -121,6 +129,17 @@ it('does not recreate a missing checkout or leave an empty session behind', asyn
   h.git.mockRejectedValueOnce(new Error('ENOENT'));
   await expect(createUserSession(request, ports)).rejects.toThrow('no longer available');
   expect(h.bootstrap).not.toHaveBeenCalled();
+  expect(h.insert).not.toHaveBeenCalled();
+});
+// Issue #11167: one valid reuse request on a launcher without the Desktop
+// registry must fail closed. Stale-selection cases exercise a wired registry.
+it('rejects reuse when the launcher supplies no registry before touching Git or the database', async () => {
+  await expect(createUserSession(request, {
+    senderId: 0,
+    userDataDir: '/user-data',
+    notifyPluginSessionCreated: h.notify,
+  })).rejects.toThrow('no longer available');
+  expect(h.git).not.toHaveBeenCalled();
   expect(h.insert).not.toHaveBeenCalled();
 });
 it('rejects a different repository placed at the old worktree path', async () => {

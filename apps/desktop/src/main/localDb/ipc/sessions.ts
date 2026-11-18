@@ -1,6 +1,6 @@
 import { getSessionRowSnapshot, getSessionRowSnapshotStrict, type SessionRowSnapshot } from '../sessionDispatchSnapshot.js';
 import { commitProvisionalSession as commitSessionDraft, discardProvisionalSessionRow as discardSessionDraft } from '../sessionDraftLifecycle.js';
-import { createUserSession, withWorktreeMutation } from './createUserSession.js';
+import { createUserSession, withWorktreeMutation, type UserSessionCreatePorts } from './createUserSession.js';
 import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js';
 import { pagePermissionSessionChanged } from '../../mcp-apps/pagePermissions.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
@@ -199,6 +199,7 @@ export interface SessionRecycleScope {
 }
 
 export interface RegisterSessionIpcOpts {
+  lookupRegisteredWorktree?: UserSessionCreatePorts['lookupRegisteredWorktree'];
   /** Use the same live catalog as runtime usage, without writing during reads. */
   resolveContextWindow?: (session: ContextWindowSession) => number | null;
   /** Close a local Pi/Codex runtime only if its current turn is idle. */
@@ -1320,6 +1321,7 @@ export function registerSessionIpc(
     return createUserSession(body, {
       senderId: event.sender.id,
       userDataDir: app.getPath('userData'),
+      lookupRegisteredWorktree: opts.lookupRegisteredWorktree,
       notifyPluginSessionCreated: (input) => {
         void import('../../cindy-brain/index.js').then(m => m.notifyGhostSessionEvent('created', input)).catch(() => {});
       },

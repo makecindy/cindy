@@ -16,11 +16,9 @@ import { consumeWritableDirectoryPickerGrants, WritableDirectoryPickerGrantError
 import { forgetProvisionalSession, isProvisionalSession, markProvisionalSession } from '../provisionalSessions.js';
 import { upsertRecentWorkdir } from './recentWorkdirsCore.js';
 import { managedWorktreeRoot } from '../../worktree/managedResourcePath.js';
-import { withWorktreeResourceLocks } from '../../worktree/resourceLock.js';
+import { physicalWorktreeKey, withWorktreeResourceLocks } from '../../worktree/resourceLock.js';
 import { createLogger } from '../../logger.js';
-import { getAll as getWorktrees } from '../../worktree/worktreeStore.js';
 import { gitExec } from '../../worktree/gitExec.js';
-import { physicalWorktreeKey } from '../../worktree/resourceLock.js';
 import type { WorktreeMeta } from '../../worktree/types.js';
 
 const log = createLogger('local-db-sessions');
@@ -28,6 +26,8 @@ export interface UserSessionCreatePorts {
   senderId: number;
   userDataDir: string;
   notifyPluginSessionCreated(input: { sessionId: string; workdir?: string }): void;
+  /** Only launchers with a local worktree registry can admit reuse requests. */
+  lookupRegisteredWorktree?: (sessionId: string) => WorktreeMeta | null;
 }
 
 export async function withWorktreeMutation<T>(resources: string[], task: () => Promise<T>): Promise<T> {
@@ -53,18 +53,25 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     || request.workspaceKind !== 'project' || request.remoteHostId || request.provisional) {
     throwIpcError('INVALID_PARAMS', 'Only a local project task can reuse a worktree');
   }
+  const lookupRegisteredWorktree = ports.lookupRegisteredWorktree;
+  if (!lookupRegisteredWorktree) {
+    throwIpcError('PRECONDITION_FAILED', 'The selected worktree is no longer available');
+  }
   const requestedPath = request.reuseWorktreePath;
+  const requestedOwner = request.reuseWorktreeSessionId;
+  const requestedProject = typeof request.workingDir === 'string' ? request.workingDir : null;
   // Serialize admission and INSERT with recycling. A stale picker must never
   // initialize an empty replacement directory or silently create another tree.
   return withWorktreeMutation([requestedPath], async () => {
     if (!owner || getCurrentDbClientSnapshot() !== owner) {
       throwIpcError('PRECONDITION_FAILED', 'Account changed; create the task again');
     }
-    const meta = getWorktrees().find(item => item.sessionId === request.reuseWorktreeSessionId
-      && workingDirEquals(item.path, requestedPath)
-      && workingDirEquals(item.baseRepo, typeof request.workingDir === 'string' ? request.workingDir : null)
-      && !item.ephemeral && !item.quarantinePath && !item.pendingSessionTransfer);
-    if (!meta) throwIpcError('PRECONDITION_FAILED', 'The selected worktree is no longer available');
+    const meta = lookupRegisteredWorktree(requestedOwner);
+    if (!meta || meta.sessionId !== requestedOwner || !workingDirEquals(meta.path, requestedPath)
+      || !workingDirEquals(meta.baseRepo, requestedProject)
+      || meta.ephemeral || meta.quarantinePath || meta.pendingSessionTransfer) {
+      throwIpcError('PRECONDITION_FAILED', 'The selected worktree is no longer available');
+    }
     try {
       const [root, common, baseCommon] = await Promise.all([
         gitExec(['rev-parse', '--show-toplevel'], meta.path),
