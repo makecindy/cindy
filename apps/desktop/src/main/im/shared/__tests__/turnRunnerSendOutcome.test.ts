@@ -231,6 +231,7 @@ interface SessionHarness {
   abort: ReturnType<typeof vi.fn>;
   acquireTurnLease: ReturnType<typeof vi.fn>;
   releaseTurnLease: ReturnType<typeof vi.fn>;
+  listenerCount(): number;
   emit(event: AgentEvent): void;
   dispatchInteraction(request: InteractionRequest): Promise<InteractionDecision>;
 }
@@ -296,6 +297,7 @@ function createSessionHarness(
     abort,
     acquireTurnLease,
     releaseTurnLease,
+    listenerCount: () => listeners.length,
     emit(event: AgentEvent) {
       for (const listener of [...listeners]) listener(event);
     },
@@ -5263,7 +5265,7 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
     function createLivenessSetup(options: { onRebuild?: (previous: Session) => void | Promise<void> } = {}) {
       const previous = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
       const replacement = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
-      let live: Session = previous.session;
+      let live: Session | undefined = previous.session;
       const maker = {
         getSession: vi.fn(() => live),
         // Maker 的真实语义：同一 business id 重建后 activeSessions 里是新实例。
@@ -5272,10 +5274,17 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
             live = previous.session;
           } else {
             // 重建路径会重试旧实例的 close；close 事件在 createSession 返回前就送达宿主。
-            await options.onRebuild?.(previous.session);
+            if (maker.createSession.mock.calls.length === 2) {
+              await options.onRebuild?.(previous.session);
+            }
             live = replacement.session;
           }
           return live;
+        }),
+        closeSessionIfCurrent: vi.fn(async (session: Session) => {
+          if (live !== session) return;
+          await session.close();
+          if (live === session) live = undefined;
         }),
         on: vi.fn((listener: (event: MakerEvent) => void) => {
           makerEventListeners.push(listener);
@@ -5401,8 +5410,8 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       }
     });
 
-    it.each(['archived', 'deleted'] as const)('rejects a task made %s while rebuilding its runtime', async (status) => {
-      const { previous, replacement, localRunner, runTurn } = createLivenessSetup();
+    it.each(['archived', 'deleted', 'missing'] as const)('rejects a task made %s while rebuilding its runtime', async (status) => {
+      const { previous, replacement, maker, localRunner, runTurn } = createLivenessSetup();
       previous.hasStartedClosing.mockReturnValue(true);
       const activeRow = {
         id: SESSION_ID,
@@ -5419,13 +5428,19 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       // 重建前读一次（可用），重建后再读一次（用户已关任务 → archived）。
       mocks.desktopSessionRows
         .mockReturnValueOnce([{ ...activeRow }])
-        .mockReturnValueOnce([{ ...activeRow, status }]);
+        .mockReturnValueOnce(status === 'missing' ? [] : [{ ...activeRow, status }]);
       try {
         await runTurn();
         await flushMicrotasks();
 
         // 忽略 close 事件不等于可以继续跑：任务已归档，这条消息必须明确失败。
         expect(replacement.send).not.toHaveBeenCalled();
+        // #11381 review: terminal cleanup may run before startup publishes the
+        // replacement. The runner must retire that exact late runtime as well.
+        expect(maker.closeSessionIfCurrent).toHaveBeenCalledWith(replacement.session);
+        expect(replacement.session.close).toHaveBeenCalledOnce();
+        expect(maker.getSession()).toBeUndefined();
+        expect(replacement.listenerCount()).toBe(0);
         expect(mocks.logger.info).toHaveBeenCalledWith(
           expect.stringContaining('rebuilding closing runtime before send'),
         );
@@ -5435,6 +5450,34 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       } finally {
         localRunner.disposeAllSessions();
       }
+    });
+
+    // #11381 review: public disposal during createSession previously allowed a
+    // late listener to survive and observe a later wiring of the same task.
+    // Unit, fake transport; existing Stop coverage only checked that send stops.
+    it('does not rebind after disposal while rebuilding and can wire again without duplicate observers', async () => {
+      const { previous, replacement, localRunner, runTurn, onTurnComplete } = createLivenessSetup({
+        onRebuild: async () => { await localRunner.disposeAllSessions(); },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        await runTurn();
+        expect(replacement.send).not.toHaveBeenCalled();
+        expect(replacement.listenerCount()).toBe(0);
+        expect(mocks.wireSessionToIpcExternal).not.toHaveBeenCalledWith(replacement.session);
+
+        onTurnComplete.mockClear();
+        await runTurn();
+        expect(replacement.send).toHaveBeenCalledOnce();
+        expect(replacement.listenerCount()).toBe(1);
+        replacement.emit({ type: 'text', data: { text: 'after rewire', isFinal: true } });
+        replacement.emit({ type: 'done', data: {} });
+        await flushMicrotasks();
+        expect(onTurnComplete).toHaveBeenCalledOnce();
+      } finally {
+        await localRunner.disposeAllSessions();
+      }
+      expect(replacement.listenerCount()).toBe(0);
     });
 
     it('does not send after an explicit stop during runtime rebuilding', async () => {

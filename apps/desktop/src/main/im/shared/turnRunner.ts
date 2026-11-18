@@ -2260,9 +2260,19 @@ export function createTurnRunner(
       const [latest] = await getDbClient().drizzle.select().from(sessionsTable)
         .where(eq(sessionsTable.id, sessionId)).limit(1);
       if (!latest || latest.status === 'archived' || latest.status === 'deleted') {
-        forgetClosedSession(sessionId, 'session closed while rebuilding its runtime');
+        // Terminal cleanup may have run before startup published this instance.
+        // Retire only this replacement, never a later runtime for the same id.
+        await maker.closeSessionIfCurrent(current);
+        if (sessionStates.get(sessionId) === state) {
+          forgetClosedSession(sessionId, 'session closed while rebuilding its runtime');
+        }
         throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} closed while rebuilding its runtime`);
       }
+    }
+    // Disposal may finish during either await above. Do not install an observer
+    // after its owner has cleaned up: it could observe a later wiring of this id.
+    if (sessionStates.get(sessionId) !== state) {
+      throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} detached while preparing its runtime`);
     }
     if (current === previous) return;
 
