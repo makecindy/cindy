@@ -41,6 +41,11 @@ export interface ProviderGroupDirectoryDeps {
     Promise<{ views: ProviderView[]; stale: boolean; remainingMs?: number }>;
   listReceivedShares(): readonly ProviderShareReceived[];
   isMobilePlatform(platform: string | null): boolean;
+  /** The add-computer list left this computer out because its directory could not be read. */
+  onCandidateReadFailed?(agentDeviceId: string, error: unknown): void;
+  /** Captures the user's link-close generation; the returned check is false once that link was closed
+   *  (or when a live retry should not be tried for this target at all). */
+  captureLinkCloseEpoch?(agentDeviceId: string): () => boolean;
   /** 本机这个供应商正在运行一轮的任务数(localLoad.ts)；不提供或读不到时为 null。 */
   localRunning?(providerId: string): Promise<number | null>;
   /** Same-account subscription snapshots only; absence/failure keeps the member usable. */
@@ -147,6 +152,15 @@ export interface ProviderGroupDirectory {
   offlineForMs?(agentDeviceId: string): Promise<number | null>;
   /** 忘掉缓存(换账号、组内电脑失败后需要现读)。 */
   invalidate(agentDeviceId?: string, options?: Omit<ProviderGroupUsageInvalidation, 'agentDeviceId'>): void;
+}
+
+/**
+ * A read that may answer if asked again live: its metadata scope moved while it was in flight
+ * (device-link/providerMetadataContinuity.ts), or a directory snapshot was not ready or ran out.
+ */
+function isInterruptedCatalogRead(error: unknown): boolean {
+  const row = error && typeof error === 'object' ? error as { code?: unknown; message?: unknown } : {};
+  return row.message === 'Metadata scope changed' || row.code === 'MODEL_VISIBILITY_NOT_READY';
 }
 
 export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): ProviderGroupDirectory {
@@ -440,9 +454,27 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
       if (!local) return [];
       const memberKeys = new Set(config?.members.map((m) => m.key) ?? []);
       const candidates: ProviderGroupCandidate[] = [];
+      // The quick read answers from its last snapshot after 2s, but fails outright when that
+      // computer's metadata scope moved meanwhile, or when the snapshot budget ran out. Listing is
+      // an explicit user action: on exactly those failures ask that computer once more, live, so a
+      // computer that could join never silently disappears (2026-11-17 field report: a computer
+      // with a 3–7s directory read was missing on every attempt). Refusals and timeouts are final;
+      // a link the user closed meanwhile is not reopened (device-link/index.ts closeRemoteLink).
+      const candidateCatalog = (agentDeviceId: string) => {
+        const linkStillOpen = deps.captureLinkCloseEpoch?.(agentDeviceId) ?? (() => true);
+        return readCatalog(agentDeviceId)
+          .catch((error: unknown) => {
+            if (!isInterruptedCatalogRead(error) || !linkStillOpen()) throw error;
+            return readCatalog(agentDeviceId, true);
+          })
+          .catch((error: unknown) => {
+            deps.onCandidateReadFailed?.(agentDeviceId, error);
+            return [] as ProviderView[];
+          });
+      };
       const deviceList = await readDevices().catch(() => [] as readonly DeviceLinkDeviceView[]);
       const deviceReads = deviceList.filter(isControllable).map(async (device) => {
-        const views = await readCatalog(device.deviceId).catch(() => [] as ProviderView[]);
+        const views = await candidateCatalog(device.deviceId);
         for (const view of views) {
           if (!view.connected || view.suspended || !isSameProvider(local, view)) continue;
           const key = providerGroupMemberKey(device.deviceId, view.id);
@@ -477,7 +509,7 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
           return;
         }
         if (share.status !== 'active' || !share.hostOnline) return;
-        const views = await readCatalog(agentDeviceId).catch(() => [] as ProviderView[]);
+        const views = await candidateCatalog(agentDeviceId);
         const view = views.find((v) => v.id === share.providerId);
         if (!view || !view.connected || view.suspended || !isSameProvider(local, view)) return;
         candidates.push({ ...base, providerName: view.name });

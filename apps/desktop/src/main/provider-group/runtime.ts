@@ -44,6 +44,10 @@ import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc.js';
 import { isModelCatalogSourceChange } from '../../shared/controlledModelCatalog.js';
 import { createGroupContinuityClient } from './continuityClient.js';
 import { createProviderGroupUsageReader, providerGroupUsageMatches, providerGroupUsageSnapshot, providerGroupCodexUsageSnapshot, providerGroupCodexUsageFromReads, type ProviderGroupCodexUsageSnapshot } from './usage.js';
+import { createLogger } from '../logger.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
+
+const log = createLogger('provider-group');
 
 interface OwnerRuntime {
   owner: string;
@@ -244,6 +248,20 @@ function runtimeForActiveOwner(): OwnerRuntime {
     },
     listReceivedShares: () => getReceivedShares(),
     isMobilePlatform: (platform) => isMobilePlatform(platform),
+    // Own computers only: a received share is closed under the sharer's peer key, which this
+    // generation cannot see, so its list entry keeps a single read.
+    captureLinkCloseEpoch: (agentDeviceId) => {
+      if (isProviderShareAgentDeviceId(agentDeviceId)) return () => false;
+      const epoch = getRemoteLinkCloseEpoch(agentDeviceId);
+      return () => getRemoteLinkCloseEpoch(agentDeviceId) === epoch;
+    },
+    // Only the short device id and the error code: messages may carry host details.
+    onCandidateReadFailed: (agentDeviceId, error) => {
+      const row = error && typeof error === 'object' ? error as { code?: unknown; message?: unknown } : {};
+      const code = typeof row.code === 'string' && row.code !== 'IPC_ERROR' ? row.code
+        : typeof row.message === 'string' ? /^\[([A-Z0-9_]+)\]/.exec(row.message)?.[1] ?? 'unknown' : 'unknown';
+      log.warn('add-computer list left out a computer it could not read', { device: agentDeviceId.slice(0, 8), code });
+    },
     localRunning: async (providerId) => (await readProviderRunningTurnsByProvider())?.get(providerId) ?? null,
     readClaudeUsage: (member) => usage.read(member),
     readCodexUsage: async (member) => {
