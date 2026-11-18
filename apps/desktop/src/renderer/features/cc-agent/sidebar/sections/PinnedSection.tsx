@@ -496,6 +496,7 @@ export function PinnedSection({
           ) : mode === 'card' ? (
             <CardMasonry
               items={slicedEntries}
+              disabled={sortBy !== 'manual'}
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
@@ -509,6 +510,7 @@ export function PinnedSection({
             // 一条顶线覆盖"列表顶";高亮(active/选中/hover)行及其相邻行的线隐藏。
             <SortableList
               items={slicedEntries}
+              disabled={sortBy !== 'manual'}
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}
@@ -519,6 +521,7 @@ export function PinnedSection({
           ) : (
             <SortableList
               items={slicedEntries}
+              disabled={sortBy !== 'manual'}
               getId={getEntryId}
               onReorder={onReorder}
               reducedMotion={reducedMotion}

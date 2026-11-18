@@ -56,6 +56,37 @@ afterEach(() => {
 });
 
 describe('DraggableCardColumns native drop disposition', () => {
+  // 用户回归：卡片多列不能在自动排序时提交拖拽。旧测试只区分内外部落点；
+  // 最小输入为两列卡片，在 disabled 状态收到内部 drop，再恢复手动拖拽；unit。
+  it('rejects reordering while disabled and permits it after re-enabling', () => {
+    const onReorder = vi.fn();
+    const props = {
+      items: ['a', 'b', 'c', 'd'], columns: 2, getId: (id: string) => id,
+      onReorder, renderItem: (id: string) => <span>{id}</span>, reducedMotion: true,
+      forceFallback: false,
+    };
+    const page = render(<DraggableCardColumns {...props} disabled />);
+    const drop = () => {
+      const [first, second] = Array.from(page.container.firstElementChild!.children) as HTMLElement[];
+      const instance = sortableMock.MockSortable.instances.at(-2)!;
+      sortableMock.MockSortable.active = instance;
+      callback<() => void>(instance.options, 'onStart')();
+      const moved = first.children[0] as HTMLElement;
+      second.append(moved);
+      moved.dispatchEvent(new Event('drop', { bubbles: true }));
+      callback<(event: SortableEvent) => void>(instance.options, 'onEnd')({
+        item: moved, from: first, to: second, oldIndex: 0, newIndex: 2, newDraggableIndex: 2,
+      });
+      expect(columnIds(first)).toEqual(['a', 'c']);
+      expect(columnIds(second)).toEqual(['b', 'd']);
+    };
+    drop();
+    expect(onReorder).not.toHaveBeenCalled();
+    page.rerender(<DraggableCardColumns {...props} disabled={false} />);
+    drop();
+    expect(onReorder).toHaveBeenCalledWith(['b', 'c', 'd', 'a']);
+  });
+
   it('restores all columns and skips reorder when dropped outside', () => {
     const onReorder = vi.fn();
     const { container } = render(

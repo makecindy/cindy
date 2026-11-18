@@ -23,6 +23,7 @@ export interface DraggableCardColumnsProps<T> {
   renderItem: (item: T, index: number) => ReactNode;
   onReorder: (newOrderIds: string[]) => void;
   reducedMotion: boolean;
+  disabled?: boolean;
   groupId?: string;
   /** 与 SortableList 同口径；置顶卡片用原生 DnD 兼容分屏 drop。 */
   forceFallback?: boolean;
@@ -123,6 +124,7 @@ export function DraggableCardColumns<T>({
   renderItem,
   onReorder,
   reducedMotion,
+  disabled = false,
   groupId,
   forceFallback = true,
 }: DraggableCardColumnsProps<T>) {
@@ -181,7 +183,7 @@ export function DraggableCardColumns<T>({
         restoreColumnDomOrder(columnRefs.current, originalBuckets);
       }
 
-      if (aborted || (!forceFallback && dropDisposition !== 'internal')) return;
+      if (disabled || aborted || (!forceFallback && dropDisposition !== 'internal')) return;
 
       if (current.length === newOrder.length && current.every((id, i) => id === newOrder[i])) {
         return;
@@ -191,6 +193,7 @@ export function DraggableCardColumns<T>({
 
     const instances = cols.map((el) =>
       Sortable.create(el, {
+        disabled,
         group: { name: groupId ?? CARD_GROUP_NAME, pull: true, put: true },
         animation: reducedMotion ? 0 : 150,
         filter: CARD_DRAG_FILTER,
@@ -256,7 +259,7 @@ export function DraggableCardColumns<T>({
       nativeDropDispositionRef.current = null;
       instances.forEach((inst) => inst.destroy());
     };
-  }, [columns, forceFallback, reducedMotion, groupId]);
+  }, [columns, disabled, forceFallback, reducedMotion, groupId]);
 
   return (
     <div className="flex w-full items-stretch gap-[7px]">

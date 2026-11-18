@@ -286,6 +286,8 @@ export function useSidebarFilter(
     loadProjectOrder(),
   );
   const [pinnedSortBy, setPinnedSortByState] = useState(loadPinnedSortBy);
+  const pinnedSortByRef = useRef(pinnedSortBy);
+  pinnedSortByRef.current = pinnedSortBy;
   const setPinnedSortBy = useCallback((next: PinnedSortBy) => {
     setPinnedSortByState(next);
     persistPinnedSortBy(next);
@@ -609,8 +611,10 @@ export function useSidebarFilter(
   );
 
   const setManualPinnedOrder = useCallback(
-    (order: readonly string[], activeEntryIds: readonly string[], baseOrder: readonly string[]) =>
-      updatePinnedOrder(
+    (order: readonly string[], activeEntryIds: readonly string[], baseOrder: readonly string[]) => {
+      // 显示排序不能写回手动顺序，也忽略切换模式后迟到的拖拽回调。
+      if (pinnedSortByRef.current !== 'manual') return Promise.resolve();
+      return updatePinnedOrder(
         () =>
           normalizeManualPinnedOrder(order, activeEntryIds, (entryId) =>
             sidebarPinnedEntryComparisonKey(entryId, window.electronAPI.platform),
@@ -620,7 +624,8 @@ export function useSidebarFilter(
           baseOrder: Array.from(baseOrder),
           order: nextOrder,
         }),
-      ),
+      );
+    },
     [updatePinnedOrder],
   );
 
