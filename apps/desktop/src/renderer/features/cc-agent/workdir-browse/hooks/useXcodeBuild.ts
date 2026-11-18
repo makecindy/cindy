@@ -101,6 +101,12 @@ export function useXcodeBuild({
         if (next.status === 'error' && next.error) setError(next.error);
       } catch (loadError) {
         if (sequence !== requestSequence.current) return;
+        // 远程 / 设备会话由 main 侧直接拒绝：这不是「构建失败」，整条栏对这类会话不该出现。
+        if (extractIpcError(loadError)?.code === 'UNSUPPORTED_CAPABILITY') {
+          setError(null);
+          setDiscovery(null);
+          return;
+        }
         setError(errorMessage(loadError));
         setDiscovery(null);
       } finally {

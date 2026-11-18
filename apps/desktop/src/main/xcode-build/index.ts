@@ -120,6 +120,29 @@ function containerName(name: string): string {
   return name.replace(/\.(?:xcworkspace|xcodeproj)$/i, '');
 }
 
+/** flutter run 的工作目录：自容器目录向上找最近的 pubspec.yaml，找不到就用容器目录。 */
+async function resolveFlutterAppRoot(
+  absoluteContainer: string,
+  workdir: string,
+  deps: XcodeBuildDependencies,
+): Promise<string> {
+  const containerDir = path.dirname(absoluteContainer);
+  const stopAt = path.resolve(workdir);
+  let current = containerDir;
+  for (let depth = 0; depth < 8; depth += 1) {
+    try {
+      const info = await deps.stat(path.join(current, 'pubspec.yaml'));
+      if (!info.isDirectory()) return current;
+    } catch {
+      // 这一层没有 pubspec.yaml，继续向上。
+    }
+    const parent = path.dirname(current);
+    if (parent === current || parent.length < stopAt.length) break;
+    current = parent;
+  }
+  return containerDir;
+}
+
 async function findXcodeContainers(
   workdir: string,
   deps: XcodeBuildDependencies,
@@ -455,6 +478,8 @@ export interface XcodeBuildManagerOptions {
 export class XcodeBuildManager {
   private readonly deps: XcodeBuildDependencies;
   private readonly records = new Map<string, BuildRecord>();
+  /** `${ownerId}\0${workdir}`：扫描/解析阶段还没写 records，用它挡住连点。 */
+  private readonly pendingStarts = new Set<string>();
 
   constructor(private readonly options: XcodeBuildManagerOptions) {
     this.deps = { ...defaultDependencies, ...options.dependencies };
@@ -466,6 +491,24 @@ export class XcodeBuildManager {
 
   async start(request: XcodeBuildStartRequest & { ownerId: number }): Promise<XcodeBuildState> {
     const normalizedWorkdir = path.resolve(request.workdir);
+    // 第一次 start 在扫描目录、解析容器时还没写入 records，只查运行记录挡不住第二次点击：
+    // 两个构建会同时跑同一条 scheme。用「正在启动」占位把同一窗口、同一工作目录串起来。
+    const startKey = `${request.ownerId}\u0000${normalizedWorkdir}`;
+    if (this.pendingStarts.has(startKey)) {
+      throwIpcError('PRECONDITION_FAILED', 'an Xcode build is already starting');
+    }
+    this.pendingStarts.add(startKey);
+    try {
+      return await this.startReserved(request, normalizedWorkdir);
+    } finally {
+      this.pendingStarts.delete(startKey);
+    }
+  }
+
+  private async startReserved(
+    request: XcodeBuildStartRequest & { ownerId: number },
+    normalizedWorkdir: string,
+  ): Promise<XcodeBuildState> {
     const active = [...this.records.values()].find(
       (record) =>
         record.ownerId === request.ownerId &&
@@ -556,6 +599,25 @@ export class XcodeBuildManager {
 
     await this.terminateLaunchedApp(record);
     this.finish(record, null, 'cancelled');
+  }
+
+  /**
+   * 所有者窗口销毁时的收尾:构建不能比承载它的窗口活得更久。副窗口(右侧栏独立窗)
+   * 关掉不退出应用,推送目标随之消失,再没人能停这条 Flutter 进程。
+   */
+  releaseOwner(ownerId: number): void {
+    for (const record of [...this.records.values()]) {
+      if (record.ownerId !== ownerId || record.state.status !== 'running') continue;
+      record.stopRequested = true;
+      record.abortController.abort();
+      if (record.flutterProcess) record.flutterProcess.kill('SIGINT');
+      if (record.state.phase === 'launched') void this.terminateLaunchedApp(record).catch(() => undefined);
+      this.appendOutput(record, 'Owner window closed; build cancelled.\n');
+      this.finish(record, null, 'cancelled');
+    }
+    for (const key of [...this.pendingStarts]) {
+      if (key.startsWith(`${ownerId}\u0000`)) this.pendingStarts.delete(key);
+    }
   }
 
   /**
@@ -708,7 +770,8 @@ export class XcodeBuildManager {
       const settings = parseXcodeAppBuildSettings(settingsResult.stdout);
       record.bundleId = settings.bundleId;
       if (settings.flutterRoot) {
-        await this.runFlutter(record, request, settings.flutterRoot);
+        const appRoot = await resolveFlutterAppRoot(absoluteContainer, record.state.workdir, this.deps);
+        await this.runFlutter(record, request, settings.flutterRoot, appRoot);
         return;
       }
 
@@ -817,6 +880,7 @@ export class XcodeBuildManager {
     record: BuildRecord,
     request: XcodeBuildStartRequest,
     flutterRoot: string,
+    appRoot: string,
   ): Promise<void> {
     record.state = { ...record.state, supportsHotReload: true };
     this.options.emit(record.ownerId, { type: 'state', state: { ...record.state } });
@@ -832,7 +896,9 @@ export class XcodeBuildManager {
       '--device-timeout',
       '30',
     ], {
-      cwd: record.state.workdir,
+      // flutter run 必须站在 pubspec.yaml 所在目录：嵌套工程（apps/mobile/ios/Runner.xcworkspace）
+      // 从会话根目录跑会找不到 pubspec。
+      cwd: appRoot,
       env: { ...process.env, TERM: 'dumb', NO_COLOR: '1' },
     });
     record.flutterProcess = child;
@@ -978,6 +1044,18 @@ export function registerXcodeBuildIpc(options: {
     return event.sender.id;
   };
 
+  // 承载窗口销毁 = 这条构建的推送与停止入口都消失了,由 main 侧收尾（关副窗口不会退出应用）。
+  const watchedOwners = new Set<number>();
+  const watchOwnerLifetime = (event: Electron.IpcMainInvokeEvent): void => {
+    const sender = event.sender;
+    if (watchedOwners.has(sender.id)) return;
+    watchedOwners.add(sender.id);
+    sender.once('destroyed', () => {
+      watchedOwners.delete(sender.id);
+      manager.releaseOwner(sender.id);
+    });
+  };
+
   ipcMain.handle(XCODE_BUILD_INVOKE.DISCOVER, async (event, request: unknown) => {
     ownerId(event);
     const parsed = parseDiscoveryRequest(request);
@@ -986,6 +1064,7 @@ export function registerXcodeBuildIpc(options: {
   });
   ipcMain.handle(XCODE_BUILD_INVOKE.START, async (event, request: unknown) => {
     const requesterId = ownerId(event);
+    watchOwnerLifetime(event);
     const parsed = parseStartRequest(request);
     await options.assertSessionWorkdir(parsed.sessionId, parsed.workdir);
     return manager.start({ ...parsed, ownerId: requesterId });

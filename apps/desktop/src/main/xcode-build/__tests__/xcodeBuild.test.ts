@@ -353,6 +353,7 @@ Available destinations for the "Recipes" scheme:
       dependencies: managerDependencies({
         execFile,
         spawn: spawn as unknown as XcodeBuildDependencies['spawn'],
+        stat: pubspecStat(WORKDIR),
       }),
       emit: vi.fn(),
     });
@@ -404,7 +405,156 @@ Available destinations for the "Recipes" scheme:
     expect(child.kill).toHaveBeenCalledWith('SIGINT');
     expect(manager.status(WORKDIR, 7).state).toMatchObject({ status: 'cancelled' });
   });
+
+  it('runs flutter from the nested app root that owns pubspec.yaml', async () => {
+    const appRoot = underWorkdir('apps', 'mobile');
+    const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
+      if (args.includes('-showBuildSettings')) {
+        return { stdout: buildSettings('com.example.recipes', BUILD_DIR, '/flutter'), stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const child = new EventEmitter() as EventEmitter & {
+      stdin: { writable: boolean; write: ReturnType<typeof vi.fn> };
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdin = { writable: true, write: vi.fn() };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn(() => true);
+    const spawn = vi.fn(() => child);
+    const directory = (name: string) => ({ name, isDirectory: () => true });
+    const readdir = (async (directoryPath: string) => {
+      if (directoryPath === WORKDIR) return [directory('apps')] as never;
+      if (directoryPath === underWorkdir('apps')) return [directory('mobile')] as never;
+      if (directoryPath === underWorkdir('apps', 'mobile')) return [directory('ios')] as never;
+      if (directoryPath === underWorkdir('apps', 'mobile', 'ios')) {
+        return [directory('Runner.xcworkspace')] as never;
+      }
+      return [] as never;
+    }) as unknown as XcodeBuildDependencies['readdir'];
+    const manager = new XcodeBuildManager({
+      dependencies: managerDependencies({
+        execFile,
+        spawn: spawn as unknown as XcodeBuildDependencies['spawn'],
+        stat: pubspecStat(appRoot),
+        readdir,
+      }),
+      emit: vi.fn(),
+    });
+
+    await manager.start({
+      sessionId: 'session-1',
+      ownerId: 7,
+      workdir: WORKDIR,
+      containerPath: 'apps/mobile/ios/Runner.xcworkspace',
+      containerKind: 'workspace',
+      scheme: 'Runner',
+      destinationId: 'DEVICE-1',
+      destinationPlatform: 'iOS',
+      destinationName: 'Simon’s iPhone',
+      destinationOsVersion: null,
+    });
+
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+    // 嵌套工程的 pubspec 在 apps/mobile，不是会话根目录；从根跑 flutter run 找不到工程。
+    expect(spawn).toHaveBeenCalledWith(
+      FLUTTER_BIN,
+      expect.any(Array),
+      expect.objectContaining({ cwd: appRoot }),
+    );
+  });
+
+  it('rejects a second start while the first one is still discovering', async () => {
+    // 首次 start 卡在扫描阶段（还没写 records），第二次点击必须被拒，不能并发两个构建。
+    const execFile = vi.fn(() => new Promise<never>(() => undefined));
+    const manager = new XcodeBuildManager({
+      dependencies: managerDependencies({ execFile }),
+      emit: vi.fn(),
+    });
+    const request = {
+      sessionId: 'session-1',
+      ownerId: 7,
+      workdir: WORKDIR,
+      containerPath: 'ios/Recipes.xcworkspace',
+      containerKind: 'workspace' as const,
+      scheme: 'Recipes',
+      destinationId: 'SIM-1',
+      destinationPlatform: 'iOS Simulator',
+      destinationName: 'iPhone 16 Pro',
+      destinationOsVersion: '18.2',
+    };
+
+    const first = manager.start(request);
+    await expect(manager.start(request)).rejects.toThrow(/already starting/);
+    void first.catch(() => undefined);
+  });
+
+  it('cancels the running build when its owner window goes away', async () => {
+    const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
+      if (args.includes('-showBuildSettings')) {
+        return { stdout: buildSettings('com.example.recipes', BUILD_DIR, '/flutter'), stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const child = new EventEmitter() as EventEmitter & {
+      stdin: { writable: boolean; write: ReturnType<typeof vi.fn> };
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdin = { writable: true, write: vi.fn() };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn(() => true);
+    const spawn = vi.fn(() => child);
+    const manager = new XcodeBuildManager({
+      dependencies: managerDependencies({
+        execFile,
+        spawn: spawn as unknown as XcodeBuildDependencies['spawn'],
+        stat: pubspecStat(WORKDIR),
+      }),
+      emit: vi.fn(),
+    });
+
+    await manager.start({
+      sessionId: 'session-1',
+      ownerId: 7,
+      workdir: WORKDIR,
+      containerPath: 'ios/Recipes.xcworkspace',
+      containerKind: 'workspace',
+      scheme: 'Recipes',
+      destinationId: 'DEVICE-1',
+      destinationPlatform: 'iOS',
+      destinationName: 'Simon’s iPhone',
+      destinationOsVersion: null,
+    });
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+
+    manager.releaseOwner(7);
+
+    // 关掉承载它的窗口后不能留下一条谁也停不掉的 flutter run。
+    expect(child.kill).toHaveBeenCalledWith('SIGINT');
+    expect(manager.status(WORKDIR, 7).state).toMatchObject({ status: 'cancelled' });
+  });
 });
+
+/**
+ * flutter 工程根探测用的 stat：只有 `root/pubspec.yaml` 是文件，
+ * 其它 pubspec.yaml 一律不存在，其余路径都当目录（发现逻辑会 stat 目录）。
+ */
+function pubspecStat(root: string) {
+  const pubspec = path.join(root, 'pubspec.yaml');
+  return (async (target: string) => {
+    if (target === pubspec) return { isDirectory: () => false } as never;
+    if (path.basename(target) === 'pubspec.yaml') {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    }
+    return { isDirectory: () => true } as never;
+  }) as unknown as XcodeBuildDependencies['stat'];
+}
 
 function buildSettings(bundleId: string, buildDir: string, flutterRoot?: string): string {
   return JSON.stringify([
