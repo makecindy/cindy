@@ -25,6 +25,7 @@ import {
 } from '../codex-credential-switch.js';
 import { rehydrateCloseSuppression } from '../rehydrateCloseSuppression.js';
 import { setActiveCatalog } from '../active-catalog.js';
+import { deriveCodexCustomProviderRoutes, registerCodexScopedCustomProviderRoutes } from '../codex-custom-provider-route.js';
 
 afterEach(() => {
   rehydrateCloseSuppression.resetForTest();
@@ -33,6 +34,32 @@ afterEach(() => {
 });
 
 describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
+  // #11237 dev acceptance: a scoped native Host registers a valid custom identity,
+  // but the builtin fallback used to reject it. Existing tests only registered
+  // shared-Host routes. Unit tier: exercise the production dispatch guard without
+  // spawning a process; mismatches and retired registrations must still fail closed.
+  it('accepts a matching scoped Host identity but rejects another route and retired identity', () => {
+    const provider = buildUserProvider({
+      id: 'scoped-image', name: 'Scoped fixture', auth: { method: 'none' },
+      runtimes: { codex: { baseUrl: 'http://127.0.0.1/v1', wireProtocol: 'openai-responses',
+        supportsImageGeneration: true, models: [{ id: 'gpt-6-astra', name: 'Fixture' }] } },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const routes = deriveCodexCustomProviderRoutes(catalog);
+    const route = routes.find((entry) => entry.providerId === provider.id)!;
+    const release = registerCodexScopedCustomProviderRoutes('credential-switch-test', routes);
+    const input = { agentKind: 'codex', currentProviderId: provider.id, nextProviderId: provider.id,
+      currentModel: 'gpt-6-astra', nextModel: 'gpt-6-astra', currentCodexProxyActive: true,
+      currentCodexThreadModelProviderId: route.modelProviderId } as const;
+    try {
+      expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(false);
+      expect(isCodexThreadModelProviderIdentityMismatch({ ...input, nextProviderId: 'openai' })).toBe(true);
+      release();
+      expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(true);
+    } finally { release(); }
+  });
+
   it('closes local Codex sessions when switching between XD key and OpenAI OAuth', () => {
     expect(shouldCloseSessionForCredentialSwitch({
       agentKind: 'codex',

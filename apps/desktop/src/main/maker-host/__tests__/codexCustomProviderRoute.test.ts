@@ -13,6 +13,7 @@ import {
   crossesCodexAppliedCustomProviderIdentity,
   deriveCodexCustomProviderRoutes,
   hasCodexAppliedCustomProviderCapability,
+  isAppliedCodexCustomProviderIdentity,
   isCodexCustomProviderNamespacePath,
   parseCodexCustomProviderPath,
   relativeProviderRequestPath,
@@ -382,10 +383,13 @@ describe('scoped Host capabilities', () => {
     try {
       setCodexAppliedCustomProviderRoutes([]);
       expect(hasCodexAppliedCustomProviderCapability('provider-alpha', 'imageGeneration')).toBe(true);
+      expect(isAppliedCodexCustomProviderIdentity(routes[0]!.modelProviderId)).toBe(true);
       releaseOld();
       expect(hasCodexAppliedCustomProviderCapability('provider-alpha', 'imageGeneration')).toBe(true);
+      expect(isAppliedCodexCustomProviderIdentity(routes[0]!.modelProviderId)).toBe(true);
       releaseNew();
       expect(hasCodexAppliedCustomProviderCapability('provider-alpha', 'imageGeneration')).toBe(false);
+      expect(isAppliedCodexCustomProviderIdentity(routes[0]!.modelProviderId)).toBe(false);
     } finally {
       releaseOld();
       releaseNew();

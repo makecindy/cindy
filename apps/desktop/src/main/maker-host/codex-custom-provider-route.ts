@@ -301,12 +301,13 @@ export function crossesCodexAppliedCustomProviderIdentity(
     : actualIsAppliedCustomProviderIdentity || actualIsRetiredPrototypeIdentity;
 }
 
-/** Whether a thread provider id belongs to the currently applied dynamic route set. */
+/** Recognize the same shared/scoped Host snapshots used by the crossing guard above. */
 export function isAppliedCodexCustomProviderIdentity(providerId: string | null | undefined): boolean {
   const actual = providerId?.trim() || null;
-  return actual !== null && appliedCustomProviderRoutes.some(
-    (route) => route.modelProviderId === actual,
-  );
+  if (actual === null) return false;
+  const matches = (route: CodexCustomProviderRoute) => route.modelProviderId === actual;
+  return appliedCustomProviderRoutes.some(matches) ||
+    [...scopedAppliedCustomProviderRoutes.values()].some((routes) => routes.some(matches));
 }
 
 export function buildCodexCustomProviderArgs(
