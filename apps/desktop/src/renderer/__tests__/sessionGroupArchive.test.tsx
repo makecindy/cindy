@@ -601,18 +601,34 @@ describe('session group bulk lifecycle', () => {
       return 'updated';
     } } } });
     worktreeRemovalPreview.mockImplementation(async (id) => ({ hasWorktree: id === 'project', dirty: id === 'project' }));
-    await act(async () => {
-      await view.result.current({ kind: 'project', project });
+    // Project archive uses its own host receipt path. Preserve the real draft and
+    // staged file here too, including when restoring this task later.
+    saveDraft('project', {
+      text: plainTextToTiptapDoc('unsent project notes'),
+      attachments: [{
+        id: 'project-notes', name: 'project.txt', path: 'C:/cache/chat-attachments/project.txt',
+        ext: 'txt', size: 5, category: 'text', mimeType: 'text/plain',
+      }],
     });
-    expect(apply.mock.calls).toEqual([['project'], ['beyond-sidebar']]);
-    expect(view.options.patchLocal).toHaveBeenCalledWith('project', { status: 'archived' });
-    expect(view.writes.get('dialogue')?.status).toBe('active');
-    expect(view.options.confirmDialog.mock.calls[0][0].description).toContain(
-      'ccAgent.sidebar.archiveAll.description',
-    );
-    expect(view.options.confirmDialog.mock.calls[0][0].description).toContain(
-      'ccAgent.sidebar.bulkSelection.confirmArchive.dirtyWorktreeWarning:{"count":1}',
-    );
-    expect(worktreeRemovalPreview).toHaveBeenCalledWith('project');
+    try {
+      await act(async () => {
+        await view.result.current({ kind: 'project', project });
+      });
+      expect(getDraft('project')?.text).toEqual(plainTextToTiptapDoc('unsent project notes'));
+      expect(getDraft('project')?.attachments[0]?.path).toBe('C:/cache/chat-attachments/project.txt');
+      expect(cleanupStagedChatAttachments).not.toHaveBeenCalled();
+      expect(apply.mock.calls).toEqual([['project'], ['beyond-sidebar']]);
+      expect(view.options.patchLocal).toHaveBeenCalledWith('project', { status: 'archived' });
+      expect(view.writes.get('dialogue')?.status).toBe('active');
+      expect(view.options.confirmDialog.mock.calls[0][0].description).toContain(
+        'ccAgent.sidebar.archiveAll.description',
+      );
+      expect(view.options.confirmDialog.mock.calls[0][0].description).toContain(
+        'ccAgent.sidebar.bulkSelection.confirmArchive.dirtyWorktreeWarning:{"count":1}',
+      );
+      expect(worktreeRemovalPreview).toHaveBeenCalledWith('project');
+    } finally {
+      discardDraft('project');
+    }
   });
 });

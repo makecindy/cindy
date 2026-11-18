@@ -166,7 +166,6 @@ export function useSessionGroupArchive({
             if (nextStatus === 'archived') {
               makerChatStore.closeSessionQuery(id);
               makerChatStore.purgeSession(id);
-              discardComposerDraft(id);
             }
           }
         }
