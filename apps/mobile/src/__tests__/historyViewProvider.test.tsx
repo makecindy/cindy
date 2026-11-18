@@ -1014,6 +1014,24 @@ describe('Provider pre-send link recovery', () => {
     expect(subscribed.flat()).not.toContain('session:abc');
   });
 
+  it('keeps file cleanup on the existing link instead of reopening it', async () => {
+    const client = transport.clients[0];
+    client.needsLinkRecovery = deviceId => deviceId === 'host';
+    const cleanup = [{ action: 'close', connection: 'remote-1' }];
+    let result!: unknown;
+    await act(async () => {
+      result = await context.invoke('host', 'device-link:file-peer', cleanup).catch(error => error);
+    });
+    expect(result).toMatchObject({ code: 'LINK_NOT_OPEN' });
+    expect(client.openLink).not.toHaveBeenCalled();
+    expect(sentOn(client, 'device-link:file-peer')).toHaveLength(0);
+    // A ready link still carries the cleanup as before.
+    client.needsLinkRecovery = () => false;
+    await act(async () => { await context.invoke('host', 'device-link:file-peer', cleanup); });
+    expect(client.openLink).not.toHaveBeenCalled();
+    expect(sentOn(client, 'device-link:file-peer')).toHaveLength(1);
+  });
+
   it('lets a history read finish when a refresh replaces the settled handshake it is using', async () => {
     const client = transport.clients[0];
     client.openLink.mockResolvedValue(accepted(supported));

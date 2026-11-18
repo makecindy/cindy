@@ -33,6 +33,7 @@ import {
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   FILE_BROWSER_EVENT_CHANNEL,
+  FILE_PEER_CHANNEL,
   PROTOCOL_VERSION,
   REMOTE_RESOURCE_CHANGED_CHANNEL,
   parseRemoteResourceChangedPayload,
@@ -2157,7 +2158,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             return withAccessRevokedHandling(deviceId, async () => unwrapInvoke<T>(result, channel));
           }
         }
-        await recoverLinkBeforeSend(client, deviceId, preSend);
+        // File cleanup is best effort over the existing link, as on Desktop: a late
+        // file answer must not reopen the link just to dispose its allocation.
+        if (channel === FILE_PEER_CHANNEL && (args[0] as { action?: unknown } | null)?.action === 'close') {
+          if (client.needsLinkRecovery(deviceId)) {
+            throw new DeviceLinkError('LINK_NOT_OPEN', 'file cleanup requires an existing link');
+          }
+        } else {
+          await recoverLinkBeforeSend(client, deviceId, preSend);
+        }
         return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background, noResultCache: opts?.noResultCache });
       },
     );

@@ -15,7 +15,8 @@
   调用 `openLink` 前（`openLink` 会清除用户关闭标记）和 accept 之后各复核一次：客户端已换账号以
   `NOT_CONNECTED` 结束；断开代次变化或 `isOutboundExplicitlyClosed` 以 `LINK_NOT_OPEN` 结束，不发
   `link-open`、请求不写出。订阅在恢复期间有 topic 被释放时按原有语义返回 false，由确认流程重算
-  仍缺的 topic 继续订阅。被 `refreshSettled` 替换掉的已结算建链只算刷新：仍在等它的历史读取可以
+  仍缺的 topic 继续订阅。文件通道的 `close` 清理只走现有链路（与 Desktop `remoteInvokeLive` 一致）：
+  需要恢复时直接以 `LINK_NOT_OPEN` 结束，不为释放一个已不需要的分配重新建链。被 `refreshSettled` 替换掉的已结算建链只算刷新：仍在等它的历史读取可以
   完成；真正的失效（presence、对端重置等）删除条目，照旧作废。
 - **Desktop**：`remoteInvokeLive` 经 `linkRecovery.ts` 的 `ensureInvokeLinkReady`，`remoteSubscribe`
   在发送前按同一判据重开。订阅等待期间用户断开时直接以 `LINK_NOT_OPEN` 失败，不再复验控制权限；
@@ -44,7 +45,7 @@
    Provider 验证 invoke 与订阅发送前先重开这台设备、另一台电脑的请求不建链、共享连接不重启；用户
    断开后请求不写出，等中继上线期间断开也不重新建链；presence 夹在 link-open 与 link-accept 之间、或在
    等中继上线时到达，请求照常发出；恢复期间释放部分 topic，其余 topic 照常订阅；刷新替换已结算建链时，
-   在等它的历史读取照常完成。Desktop `remoteInvokeSendGuard.test.ts` 覆盖发送前恢复、取消、断开、禁用与
+   在等它的历史读取照常完成；链路需要恢复时文件清理不重新建链。Desktop `remoteInvokeSendGuard.test.ts` 覆盖发送前恢复、取消、断开、禁用与
    仅列表订阅。
 
 实现见 `apps/mobile/src/device-link/DeviceLinkContext.tsx`（`recoverLinkBeforeSend`）、
