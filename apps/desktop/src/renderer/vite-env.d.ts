@@ -177,6 +177,7 @@ interface DeviceLinkPeerLinkView {
 }
 interface DeviceLinkPeerLinksSnapshot {
   links: DeviceLinkPeerLinkView[];
+  relayProtocol?: 'agent-net' | 'device-link';
   /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
   relayRttMs: number | null;
 }

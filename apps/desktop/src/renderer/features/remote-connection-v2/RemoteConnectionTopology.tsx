@@ -37,7 +37,7 @@ import { TopologyFlowLayer, type FlowLine } from './TopologyFlow';
 import { groupLines, layoutTopology, OFFLINE_FOLD_ID, type Point, type TopologyLayout } from './topologyGeometry';
 import type { TopologyModel, TopologyNode, TopologyStatus } from './topologyModel';
 import { ProtocolMark } from './ProtocolMark';
-import { formatRtt, protocolKind, protocolLabel, rowSubtitle, type ProtocolKind } from './topologyPresentation';
+import { formatRtt, protocolKind, protocolKindLabel, protocolLabel, rowSubtitle, type ProtocolKind } from './topologyPresentation';
 
 import './remote-connection-v2.css';
 
@@ -330,6 +330,9 @@ export function RemoteConnectionTopology({
       if (model.relay.flow) {
         flowing.push({ id: `${group.id}:relay`, shape: toRelay.shape, flow: model.relay.flow });
       }
+      const relayProtocol = protocolKindLabel(model.relay.protocol, t);
+      const relayRtt = model.relay.rttMs === null ? null : formatRtt(model.relay.rttMs, t);
+      const relayDetail = [relayProtocol, relayRtt].filter(Boolean).join(' · ');
       const size = m.relayR * 2;
       // 中转站的名字和它的往返写在小圆点旁边:贴着圆点朝中间那一侧排开(扇出的线都在另一侧),
       // 中间来的那段线从下面上来就放上面,反之放下面,不和线打架。
@@ -340,7 +343,7 @@ export function RemoteConnectionTopology({
           <span
             className="rcv2-relay flex h-full w-full items-center justify-center rounded-full border"
             role="img"
-            aria-label={model.relay.name}
+            aria-label={[model.relay.name, relayDetail].filter(Boolean).join(' · ')}
           >
             <Radio size={14} strokeWidth={1.75} aria-hidden />
           </span>
@@ -359,14 +362,14 @@ export function RemoteConnectionTopology({
           aria-hidden
         >
           <span>{model.relay.name}</span>
-          {model.relay.rttMs !== null ? (
+          {relayDetail ? (
             <span
               className={cn(
                 'tabular-nums',
                 emphasis !== 'rest' && emphasis !== 'dim' && 'text-[var(--text-secondary)]',
               )}
             >
-              {formatRtt(model.relay.rttMs, t)}
+              {relayDetail}
             </span>
           ) : null}
         </div>,

@@ -215,7 +215,7 @@ void mountPage({
         disabledControlDeviceIds: [],
         unresponsiveDeviceIds: [],
       }),
-      getPeerLinks: async () => ({ links: data.links, relayRttMs: data.relayRttMs }),
+      getPeerLinks: async () => ({ links: data.links, relayProtocol: 'agent-net', relayRttMs: data.relayRttMs }),
       onPeerLinksChanged: subscription('peerLinks'),
       onPresenceChanged: subscription('presence'),
       onStatusChanged: subscription('linkStatus'),

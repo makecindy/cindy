@@ -79,6 +79,7 @@ export interface TopologyGroup {
 }
 
 export interface TopologyRelay {
+  protocol?: DeviceLinkPeerLinksSnapshot['relayProtocol'];
   name: string;
   selfHosted: boolean;
   rttMs: number | null;
@@ -111,6 +112,7 @@ export interface BuildTopologyInput {
   links: readonly DeviceLinkPeerLinkView[];
   relayRttMs: number | null;
   relayName: string;
+  relayProtocol?: DeviceLinkPeerLinksSnapshot['relayProtocol'];
   selfHosted: boolean;
   controlledBy: readonly string[];
   unresponsive: readonly string[];
@@ -268,6 +270,7 @@ export function buildTopology(input: BuildTopologyInput): TopologyModel {
     groups,
     relay: {
       name: input.relayName,
+      protocol: input.relayProtocol,
       selfHosted: input.selfHosted,
       rttMs: input.relayRttMs,
       flow: mergeFlows(nodes.filter((n) => n.status === 'relay').map((n) => n.flow)),
