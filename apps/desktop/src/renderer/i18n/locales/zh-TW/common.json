@@ -21839,6 +21839,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "將這個儲存庫下載到本機？",
+    "credentialNotice": "如果是私人儲存庫，Cindy 可能會使用本機已登入的帳號。",
+    "saveTo": "儲存到本機",
+    "confirmImport": "確認匯入",
+    "confirmSshTitle": "允許此專案存取下列 SSH 目錄？",
+    "sshHost": "SSH 主機",
+    "readWriteAccess": "可讀寫",
+    "readAccess": "唯讀",
+    "confirmAccess": "允許存取",
     "autoLoading": "正在辨識專案圖示…",
     "autoNone": "使用專案名稱產生的字母圖示。",
     "autoSource": "來源",

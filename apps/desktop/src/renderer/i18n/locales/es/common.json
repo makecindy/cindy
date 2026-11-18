@@ -22129,6 +22129,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "¿Descargar este repositorio en este equipo?",
+    "credentialNotice": "Si el repositorio es privado, Cindy puede usar la cuenta con la que has iniciado sesión en este equipo.",
+    "saveTo": "Guardar en",
+    "confirmImport": "Confirmar importación",
+    "confirmSshTitle": "¿Permitir que este proyecto acceda a los siguientes directorios SSH?",
+    "sshHost": "Host SSH",
+    "readWriteAccess": "Lectura y escritura",
+    "readAccess": "Solo lectura",
+    "confirmAccess": "Permitir acceso",
     "autoLoading": "Buscando icono…",
     "autoNone": "Se usan las iniciales del nombre del proyecto.",
     "autoSource": "Origen",

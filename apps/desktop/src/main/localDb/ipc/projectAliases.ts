@@ -1,3 +1,4 @@
+import { rendererProjectRequest } from '../../projectConfirmation.desktop.js';
 import { projectCreationRoot } from '../../projectCreation.js';
 import '../../projectDirectories.desktop.js';
 import { readProjectDirectories } from '../../projectDirectoryStore.js';
@@ -117,13 +118,7 @@ export function registerProjectAliasesIpc(): void {
   });
   ipcMain.handle(PROJECT_SETTINGS_SET_CHANNEL, (event, input: unknown) => {
     if (isDeviceLinkInvoke()) return updateProjectInfo(input, { kind: 'host' });
-    assertTrustedAppRendererEvent(event);
-    const body = requireObject(input, 'input');
-    return updateProjectInfo(input, {
-      kind: 'renderer',
-      senderId: event.sender.id,
-      scope: body.projectGrantScope,
-    });
+    return updateProjectInfo(input, rendererProjectRequest(event, input));
   });
   ipcMain.handle(PROJECT_ALIASES_GET_CHANNEL, async (event) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);

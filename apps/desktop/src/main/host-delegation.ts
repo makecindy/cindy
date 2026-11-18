@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import type { IpcMainInvokeEvent } from 'electron';
+import { PROJECT_SETTINGS_SET_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
 import { HOST_CONTRACT_CHANNELS, type HostChannelDef } from '@cindy/maker-shared/host-channel-contract';
 import { createIpcError } from '../shared/ipc-errors.js';
 import { guardIpcRegistration, type IpcChannelUsage } from './ipcChannelUsage';
@@ -176,6 +177,7 @@ export function claimProxiedChannels(
 }
 
 export interface HostDelegatedIpcDeps {
+  readonly forwardProjectWrite?: (client: HostClient, event: IpcMainInvokeEvent, input: unknown) => Promise<unknown>;
   readonly assertTrusted?: (event: IpcMainInvokeEvent) => void;
   readonly client: HostClient;
   /** Newly delegated approval paths require the real registered top-level window. */
@@ -216,6 +218,10 @@ export function registerHostDelegatedIpc(deps: HostDelegatedIpcDeps): string[] {
       if (entry.trustedRenderer) {
         if (!deps.assertTrusted) throw new Error('Trusted renderer admission is required');
         deps.assertTrusted(event);
+      }
+      if (entry.channel === PROJECT_SETTINGS_SET_CHANNEL) {
+        if (!deps.forwardProjectWrite) throw createIpcError('PERMISSION_DENIED', 'Project window unavailable');
+        return deps.forwardProjectWrite(deps.client, event, args[0]);
       }
       if (['ghosts:request-task-approval', 'ghosts:confirm:resolve', 'ghosts:install-consent:resolve'].includes(entry.channel)
         && deps.authorizePluginApproval?.(event, entry.channel, args) !== true)

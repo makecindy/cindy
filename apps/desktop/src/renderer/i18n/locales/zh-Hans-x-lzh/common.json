@@ -21839,6 +21839,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "欲下载此库至本机乎？",
+    "credentialNotice": "若为私库，Cindy 或用本机已登入之账号。",
+    "saveTo": "存于本机",
+    "confirmImport": "确认汇入",
+    "confirmSshTitle": "许此专案存取下列 SSH 目录乎？",
+    "sshHost": "SSH 主机",
+    "readWriteAccess": "可读写",
+    "readAccess": "唯读",
+    "confirmAccess": "允许存取",
     "autoLoading": "寻项目图…",
     "autoNone": "取项目名之字为标。",
     "autoSource": "出处",

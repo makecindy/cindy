@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { validateProjectDirectories } from './projectDirectoryValidation.js';
 import { sessionTaskProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { eq } from 'drizzle-orm';
 import type { Session } from '@cindy/maker-core';
@@ -58,7 +59,8 @@ export async function applyProjectDirectoriesForTurn(session: Session): Promise<
       )
     : undefined;
   if (!defaults && !inheritedSessions.has(session)) return;
-  const projectDefaults = row.workspaceKind === 'project' ? (defaults ?? []) : [];
+  // Never pass a stored path that now resolves elsewhere to an agent. A failed check stops this turn.
+  const projectDefaults = await validateProjectDirectories(key, row.workspaceKind === 'project' ? (defaults ?? []) : []);
   const legacyRead = parseLegacy(row.extraDirs);
   const legacyWrite = parseLegacy(row.writableDirs);
   const read = [

@@ -21839,6 +21839,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "将这个仓库下载到本机？",
+    "credentialNotice": "如果是私有仓库，Cindy 可能会使用本机已登录的账号。",
+    "saveTo": "保存到本机",
+    "confirmImport": "确认导入",
+    "confirmSshTitle": "允许此项目访问以下 SSH 目录？",
+    "sshHost": "SSH 主机",
+    "readWriteAccess": "可读写",
+    "readAccess": "只读",
+    "confirmAccess": "允许访问",
     "autoLoading": "正在识别项目图标…",
     "autoNone": "使用项目名称生成的字母图标。",
     "autoSource": "来源",

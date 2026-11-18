@@ -1,7 +1,7 @@
 /** Unit tier. Project settings must survive reload/account switches and apply at the next
  * turn without overwriting legacy task grants. Existing icon tests cover neither scope nor
  * filesystem permissions. Minimal inputs: two directories, a worktree task, then revoke. */
-import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, realpath, mkdir, rm, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
@@ -26,7 +26,7 @@ vi.mock('../localDb/client/current.js', () => ({
   }),
 }));
 import { readProjectDirectories, setProjectDirectories } from '../projectDirectoryStore';
-import { validateProjectDirectories } from '../projectDirectoryValidation';
+import { configureProjectDirectoryProbe, validateProjectDirectories } from '../projectDirectoryValidation';
 import { applyProjectDirectoriesForTurn } from '../projectDirectoryRuntime';
 import {
   parseHostProjectAliasesSnapshot,
@@ -34,7 +34,7 @@ import {
 } from '@cindy/maker-shared/project-alias-sync';
 let main: string, reference: string, output: string;
 beforeAll(async () => {
-  h.root = await mkdtemp(path.join(os.tmpdir(), 'cindy-project-directories-'));
+  h.root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'cindy-project-directories-')));
   [main, reference, output] = ['repo', 'reference', 'output'].map((name) =>
     path.join(h.root, name),
   );
@@ -78,7 +78,7 @@ it('rejects overlapping and symlink-equivalent directories before saving access'
       { path: output, access: 'write' },
       { path: reference, access: 'read' },
     ]),
-  ).resolves.toBeUndefined();
+  ).resolves.toEqual([{ path: output, access: 'write' }, { path: reference, access: 'read' }]);
   await expect(
     validateProjectDirectories(`local:${main}`, [{ path: h.root, access: 'read' }]),
   ).rejects.toThrow('overlap');
@@ -166,6 +166,7 @@ it('old hosts remain compatible while malformed directory payloads cannot become
 
 // Unit regression: legacy paths on the controller must not be relabeled as SSH grants.
 it('labels only the saved project subset for the matching SSH host, including revocation', async () => {
+  configureProjectDirectoryProbe(async (_host, path) => path);
   h.row = { ...h.row, projectDir: '/srv/project', workingDir: '/srv/project',
     remoteHostId: 'ssh-1', extraDirs: '["/controller/reference"]', writableDirs: '["/controller/output"]' };
   const key = 'remote:ssh-1:/srv/project';
@@ -181,4 +182,32 @@ it('labels only the saved project subset for the matching SSH host, including re
   await applyProjectDirectoriesForTurn(session);
   expect(setExtraDirs).toHaveBeenLastCalledWith(expect.any(Array), null, { hostId: 'ssh-1', directories: [] });
   expect(setWritableDirs).toHaveBeenLastCalledWith(expect.any(Array), { hostId: 'ssh-1', directories: [] });
+});
+
+// Unit: select two ordinary fixture directories through an SSH alias. The grant stays on its
+// confirmed target and the turn hook stops before installing a target that now resolves elsewhere.
+it('resolves SSH selections on their host and checks the saved physical path at each turn', async () => {
+  const key = 'remote:build:/work/project';
+  const targets: Record<string, string> = { '/links/art': '/data/art' };
+  configureProjectDirectoryProbe(async (host, name) => {
+    expect(host).toBe('build');
+    return targets[name] ?? name;
+  });
+  const input = [{ path: '/links/art', access: 'write' as const }];
+  await expect(validateProjectDirectories(key, input)).rejects.toThrow('/data/art');
+  const saved = await validateProjectDirectories(key, input, true);
+  expect(saved).toEqual([{ path: '/data/art', access: 'write' }]);
+  targets['/work/project/child'] = '/data/other';
+  await expect(validateProjectDirectories(key, [{ path: '/work/project/child', access: 'read' }], true)).rejects.toThrow('overlap');
+  await setProjectDirectories(key, saved, () => {});
+  h.row = { ...h.row, projectDir: '/work/project', workingDir: '/work/project', remoteHostId: 'build', extraDirs: null };
+  const setWritableDirs = vi.fn();
+  const session = { id: 'remote-task', capabilities, setWritableDirs, setExtraDirs: vi.fn() } as unknown as Session;
+  targets['/links/art'] = '/data/other';
+  await applyProjectDirectoriesForTurn(session);
+  expect(setWritableDirs).toHaveBeenLastCalledWith(['/data/art'], { hostId: 'build', directories: ['/data/art'] });
+  targets['/data/art'] = '/data/other';
+  setWritableDirs.mockClear();
+  await expect(applyProjectDirectoriesForTurn(session)).rejects.toThrow('TARGET_CHANGED');
+  expect(setWritableDirs).not.toHaveBeenCalled();
 });

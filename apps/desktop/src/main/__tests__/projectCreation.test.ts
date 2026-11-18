@@ -2,7 +2,7 @@
 // Existing registration tests require an existing folder and cannot cover allocation.
 // Minimum failures: two creates with the same name; rejected clone; owner switch.
 // Exercises prepareNewProject on isolated temporary folders with injected Git.
-import { mkdtemp, mkdir, readdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { realpath, mkdtemp, mkdir, readdir, readFile, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -15,7 +15,7 @@ import {
 vi.mock('../dialogue-workspace-settings.js', () => ({ dialogueWorkspaceRoots: () => [] }));
 let root: string;
 beforeEach(async () => {
-  root = await mkdtemp(path.join(os.tmpdir(), 'cindy-create-project-'));
+  root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'cindy-create-project-')));
 });
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
@@ -147,4 +147,24 @@ it.each([
   ['-.'.repeat(2048), false],
 ] as const)('recognizes an explicit pasted address: %s', (input, expected) => {
   expect(isExplicitProjectRepositoryAddress(input)).toBe(expected);
+});
+
+// Unit: native consent must match the URL and collision-resolved location actually given to Git.
+it('cancels before using credentials, then imports to the exact confirmed destination on retry', async () => {
+  const d = deps();
+  const github = vi.fn(d.github);
+  await mkdir(path.join(root, 'demo'));
+  const destination = path.join(root, 'demo-2');
+  const confirmImport = vi.fn(async (url: string, directory: string) => {
+    expect([url, directory]).toEqual(['https://github.com/team/demo.git', destination]);
+    expect(d.git).not.toHaveBeenCalled();
+  });
+  const input = { repositoryUrl: 'https://github.com/team/demo', confirmImport };
+  confirmImport.mockRejectedValueOnce(new Error('cancelled'));
+  await expect(prepareNewProject(input, () => {}, { ...d, github })).rejects.toThrow('cancelled');
+  expect(github).not.toHaveBeenCalled();
+  expect(d.git).not.toHaveBeenCalled();
+  expect(await readdir(root)).toEqual(['demo']);
+  await prepareNewProject(input, () => {}, { ...d, github });
+  expect(d.git.mock.calls[0]![0].slice(-2)).toEqual(confirmImport.mock.calls[1]);
 });

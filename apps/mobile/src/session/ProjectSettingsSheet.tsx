@@ -433,6 +433,7 @@ export function ProjectSettingsSheet({
     maker,
     scope: existingKey,
     formEpoch: 0,
+    canonicalDirectory: true,
     workingDir: directory,
     setSheetOpen: setFormVisible,
     onChoose: (path) => {

@@ -21839,6 +21839,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "欲下載此庫至本機乎？",
+    "credentialNotice": "若為私庫，Cindy 或用本機已登入之帳號。",
+    "saveTo": "存於本機",
+    "confirmImport": "確認匯入",
+    "confirmSshTitle": "許此專案存取下列 SSH 目錄乎？",
+    "sshHost": "SSH 主機",
+    "readWriteAccess": "可讀寫",
+    "readAccess": "唯讀",
+    "confirmAccess": "允許存取",
     "autoLoading": "尋專案圖…",
     "autoNone": "取專案名之字為標。",
     "autoSource": "出處",

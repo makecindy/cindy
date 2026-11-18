@@ -522,3 +522,20 @@ it('delegates browser settings only from the trusted renderer and keeps Host aut
   expect(request).toHaveBeenCalledWith('/api/browser-backend/set-kind', { kind: 'user-browser' });
   expect(local).not.toHaveBeenCalled();
 });
+
+// Unit: the project channel must never forward Renderer input to the generic owner write route.
+it('routes a delegated project mutation through its window-bound authorization adapter', async () => {
+  const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
+  const ipcMain = { removeHandler() {}, handle(channel: string, fn: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) { handlers.set(channel, fn); } };
+  const client = { request: vi.fn(async () => ({})) };
+  const event = {} as IpcMainInvokeEvent;
+  const input = { create: true, projectKey: 'local:', repositoryUrl: 'https://gitlab.com/team/demo' };
+  const channel = 'sidebar-settings:set-project-info';
+  registerHostDelegatedIpc({ client, ipcMain, assertTrusted() {} });
+  await expect(handlers.get(channel)!(event, input)).rejects.toThrow('PERMISSION_DENIED');
+  const forwardProjectWrite = vi.fn(async () => ({}));
+  registerHostDelegatedIpc({ client, ipcMain, assertTrusted() {}, forwardProjectWrite });
+  await handlers.get(channel)!(event, input);
+  expect(forwardProjectWrite).toHaveBeenCalledWith(client, event, input);
+  expect(client.request).not.toHaveBeenCalled();
+});

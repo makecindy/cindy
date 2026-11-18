@@ -1323,6 +1323,7 @@ import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.
 import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
 import { createLogger as createSchedulerLogger } from './logger.js';
 // Keep opt-in platform dependencies after the existing desktop bootstrap imports.
+import { forwardProjectWrite } from './host-platform/project-writes.desktop.js';
 import { connectHostPlatformClient } from './host-platform/client.desktop.js';
 
 let makerProviderRefreshConfigured = false;
@@ -1340,6 +1341,11 @@ function hostDelegation(): HostDelegationConfig | null {
 }
 
 const hostClientMode = hostDelegation() !== null;
+function projectWindowOwnerStamp() {
+  if (!hostClientMode) return getActiveDataOwnerPushStamp();
+  const { dataOwnerId, ownerGeneration } = authManager.getAuthState();
+  return { dataOwnerId, ownerGeneration };
+}
 if (hostClientMode) {
   console.log('[bootstrap-electron] client mode requested at startup');
 }
@@ -1368,6 +1374,7 @@ function installHostClientMode(): boolean {
     }
   };
   const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain,
+    forwardProjectWrite: (client, event, input) => forwardProjectWrite(client, event, input, projectWindowOwnerStamp),
     assertTrusted: assertTrustedAppRendererEvent,
     authorizePluginApproval: (event, channel, args) => {
       if (!isTrustedAppRendererEvent(event)) return false;
@@ -7901,7 +7908,7 @@ const registerIpcHandlers = () => {
         projectGrantScope,
       }: { defaultPath?: string; writableGrantScope?: string; projectGrantScope?: string } = {},
     ) => {
-      const projectOwner = getActiveDataOwnerPushStamp();
+      const projectOwner = projectWindowOwnerStamp();
       const projectScope =
         projectGrantScope === undefined
           ? undefined
@@ -7913,7 +7920,7 @@ const registerIpcHandlers = () => {
           throw new Error('invalid writable directory grant scope');
         }
       }
-      const targetWin = getWindow() ?? BrowserWindow.getFocusedWindow();
+      const targetWin = projectScope !== undefined ? BrowserWindow.fromWebContents(event.sender) : getWindow() ?? BrowserWindow.getFocusedWindow();
       if (!targetWin) return { success: true, path: null };
       const result = await dialog.showOpenDialog(targetWin, {
         // createDirectory:macOS 显示"新建文件夹"按钮(Windows 自带);
@@ -7925,15 +7932,18 @@ const registerIpcHandlers = () => {
         return { success: true, path: null };
       }
       const selectedPath = result.filePaths[0];
+      let displayedPath = selectedPath;
       if (projectScope !== undefined) {
-        const current = getActiveDataOwnerPushStamp();
+        const current = projectWindowOwnerStamp();
         if (
           isAppSessionBoundaryPending() ||
           current.dataOwnerId !== projectOwner.dataOwnerId ||
           current.ownerGeneration !== projectOwner.ownerGeneration
         )
           throwIpcError('PRECONDITION_FAILED', 'Project account changed');
-        await issueWritableDirectoryPickerGrant({
+        assertTrustedAppRendererEvent(event);
+        displayedPath = await issueWritableDirectoryPickerGrant({
+          useCanonicalPath: true,
           scopeId: projectScope,
           senderId: event.sender.id,
           directory: selectedPath,
@@ -7946,7 +7956,7 @@ const registerIpcHandlers = () => {
           directory: selectedPath,
         });
       }
-      return { success: true, path: selectedPath };
+      return { success: true, path: displayedPath };
     },
   );
 

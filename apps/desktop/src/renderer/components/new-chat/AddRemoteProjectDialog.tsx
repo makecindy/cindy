@@ -163,8 +163,8 @@ export function AddRemoteProjectDialog({
     if (!selectedTarget) return null;
     return selectedTarget.kind === 'ssh'
       ? sshBrowseAdapter(selectedTarget.hostId)
-      : deviceLinkBrowseAdapter(selectedTarget.deviceId);
-  }, [selectedTarget?.key]);
+      : deviceLinkBrowseAdapter(selectedTarget.deviceId, existingOnly);
+  }, [selectedTarget?.key, existingOnly]);
   const currentBrowseRef = useRef({ open, adapter });
   currentBrowseRef.current = { open, adapter };
   useEffect(() => {

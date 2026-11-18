@@ -1,3 +1,4 @@
+import { requireCanonicalProjectDirectory } from '../projectDirectoryValidation.js';
 import { updateProjectInfo } from '../projectInfoCore.js';
 import {
   validateLocalProjectDirectory,
@@ -148,6 +149,7 @@ export async function createProject({
   return withLocalProjectContext(callerSessionId, async ({ client, owner, assertCurrent }) => {
     const physicalDirectory = await validateExistingLocalProjectDirectory(directory.workingDir);
     if (!physicalDirectory.ok) return physicalDirectory;
+    requireCanonicalProjectDirectory(directory.workingDir, physicalDirectory.workingDir);
     assertCurrent();
     if (!(await upsertRecentWorkdir(directory.workingDir, Date.now(), process.platform, client))) {
       return fail('INTERNAL', 'Could not register the project directory.');

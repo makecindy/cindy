@@ -15,7 +15,10 @@ import {
   parseProjectDirectories,
   resolveProjectDirectories,
 } from '@cindy/maker-shared/project-alias-sync';
-import { validateProjectDirectories } from './projectDirectoryValidation.js';
+import {
+  requireCanonicalProjectDirectory,
+  validateProjectDirectories,
+} from './projectDirectoryValidation.js';
 import { withCrossProcessLock } from './device-link/crossProcessLock.js';
 import { ownerScopedUserDataPath } from './appSessionState.js';
 import {
@@ -40,6 +43,7 @@ import { getDbClient } from './localDb/client/current.js';
 import { requireObject, throwIpcError } from './utils/ipcValidate.js';
 import {
   authorizeProjectDirectoryChanges,
+  newProjectDirectoryAccess,
   type ProjectInfoAuthorization,
 } from './projectInfoAuthorization.js';
 
@@ -87,7 +91,7 @@ async function writeProjectInfo(
   const body = requireObject(input, 'input');
   const owner = getActiveDataOwnerPushStamp();
   const assertCurrent = () => {
-    if (authorization?.kind === 'host') authorization.assertCurrent?.();
+    authorization?.assertCurrent?.();
     const current = getActiveDataOwnerPushStamp();
     if (
       isAppSessionBoundaryPending() ||
@@ -142,37 +146,61 @@ async function writeProjectInfo(
     (typeof body.repositoryUrl !== 'string' || body.repositoryUrl.length > 4096 || !body.create)
   )
     throwIpcError('INVALID_PARAMS', 'Invalid repository URL');
-  if ('directories' in changes && parseProjectDirectories(changes.directories) === null)
-    throwIpcError('INVALID_PARAMS', 'Invalid project directories');
+  const requestedDirectories =
+    'directories' in changes ? parseProjectDirectories(changes.directories) : undefined;
+  if (requestedDirectories === null) throwIpcError('INVALID_PARAMS', 'Invalid project directories');
   if (body.create && !authorization)
     throwIpcError(
       'WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED',
       'Project creation was not authorized.',
     );
+  const remoteRenderer = projectKey.startsWith('remote:') && authorization?.kind === 'renderer';
+  const directories =
+    requestedDirectories &&
+    (await validateProjectDirectories(projectKey, requestedDirectories, remoteRenderer));
+  if (body.create && projectKey !== 'local:') {
+    const lexical = validateLocalProjectDirectory((body.projectKey as string).slice(6));
+    if (!lexical.ok) throwIpcError('INVALID_PARAMS', lexical.message);
+    if (projectKey !== `local:${lexical.workingDir}`)
+      throwIpcError(
+        'INVALID_PARAMS',
+        'Use the project main directory, not a managed task worktree',
+      );
+    const physical = await validateExistingLocalProjectDirectory(lexical.workingDir);
+    if (!physical.ok) throwIpcError('INVALID_PARAMS', physical.message);
+    requireCanonicalProjectDirectory(lexical.workingDir, physical.workingDir);
+  }
   if (automaticCreation) {
-    if (body.projectKey !== 'local:') {
-      const lexical = validateLocalProjectDirectory((body.projectKey as string).slice(6));
-      if (!lexical.ok || projectKey !== `local:${lexical.workingDir}`)
-        throwIpcError('INVALID_PARAMS', 'Use the project main directory, not a managed task worktree');
-    }
-    // Check every caller-specified root before allocation or credentialed Git access.
-    // The generated directory is admitted only for this invocation, never via wire data.
-    await authorizeProjectDirectoryChanges({
-      projectKey,
-      owner,
-      authorization,
-      requested: [
-        ...(projectKey !== 'local:'
-          ? [{ path: projectKey.slice(6), access: 'write' as const }]
-          : []),
-        ...(parseProjectDirectories(changes.directories) ?? []),
-      ],
-      previous: [],
-    });
+    const checkSelection = (checkOnly: boolean) =>
+      authorizeProjectDirectoryChanges({
+        projectKey,
+        authorization,
+        previous: [],
+        checkOnly,
+        requested: [
+          ...(projectKey !== 'local:'
+            ? [{ path: projectKey.slice(6), access: 'write' as const }]
+            : []),
+          ...(directories ?? []),
+        ],
+      });
+    // Preserve the selected folders if the user cancels the import and edits the draft.
+    const confirmImport =
+      authorization?.kind === 'renderer' && body.repositoryUrl
+        ? async (url: string, directory: string) => {
+            assertCurrent();
+            await authorization.check({ kind: 'repository', url, directory });
+            assertCurrent();
+            await checkSelection(false);
+          }
+        : undefined;
+    await checkSelection(!!confirmImport);
     assertCurrent();
     const prepared = await prepareNewProject(
       {
         directory: projectKey.slice(6),
+        confirmImport,
+        directories,
         name: changes.name as string | undefined,
         repositoryUrl: body.repositoryUrl as string | undefined,
       },
@@ -180,11 +208,8 @@ async function writeProjectInfo(
     );
     try {
       assertCurrent();
-      if ('directories' in changes)
-        await validateProjectDirectories(
-          `local:${prepared.directory}`,
-          parseProjectDirectories(changes.directories)!,
-        );
+      if (directories?.length)
+        await validateProjectDirectories(`local:${prepared.directory}`, directories);
     } catch (error) {
       await prepared.cleanup();
       throw error;
@@ -197,22 +222,26 @@ async function writeProjectInfo(
       `local:${prepared.directory}`,
     );
   }
-  if (body.create) {
-    const requestedDirectory = (body.projectKey as string).slice(6);
-    const lexical = validateLocalProjectDirectory(requestedDirectory);
-    if (!lexical.ok) throwIpcError('INVALID_PARAMS', lexical.message);
-    if (projectKey !== `local:${lexical.workingDir}`)
-      throwIpcError(
-        'INVALID_PARAMS',
-        'Use the project main directory, not a managed task worktree',
-      );
-    const validation = await validateExistingLocalProjectDirectory(lexical.workingDir);
-    if (!validation.ok) throwIpcError('INVALID_PARAMS', validation.message);
+  const currentDirectories = () =>
+    resolveProjectDirectories(
+      { aliases: [], platform: process.platform, directories: readProjectDirectories() },
+      projectKey,
+    );
+  // The user's native sheet may stay open indefinitely. Do not hold the store lock while waiting.
+  let confirmedSsh: typeof directories;
+  if (remoteRenderer && directories) {
+    confirmedSsh = newProjectDirectoryAccess(directories, currentDirectories() ?? [], true);
+    if (confirmedSsh.length) {
+      const separator = projectKey.indexOf(':', 7);
+      assertCurrent();
+      await authorization.check({
+        kind: 'ssh',
+        host: decodeURIComponent(projectKey.slice(7, separator)),
+        project: projectKey.slice(separator + 1),
+        directories: confirmedSsh,
+      });
+    }
   }
-  const directories =
-    'directories' in changes ? parseProjectDirectories(changes.directories) : undefined;
-  if (directories === null) throwIpcError('INVALID_PARAMS', 'Invalid project directories');
-  if (directories) await validateProjectDirectories(projectKey, directories);
   assertCurrent();
   const lockPath = ownerScopedUserDataPath('project-info-write.lock');
   await withCrossProcessLock(
@@ -221,15 +250,11 @@ async function writeProjectInfo(
     async (status) => {
       if (!status.held) throwIpcError('INTERNAL', 'Project settings are busy');
       assertCurrent();
-      const previousDirectories = resolveProjectDirectories(
-        { aliases: [], platform: process.platform, directories: readProjectDirectories() },
-        projectKey,
-      );
+      const previousDirectories = currentDirectories();
       const previouslyRegistered = body.create ? await hasRecentWorkdir(projectKey.slice(6)) : true;
       if (authorizedCreation !== projectKey) {
         await authorizeProjectDirectoryChanges({
           projectKey,
-          owner,
           authorization,
           requested: [
             ...(body.create && !previouslyRegistered
@@ -238,6 +263,7 @@ async function writeProjectInfo(
             ...(directories ?? []),
           ],
           previous: previousDirectories ?? [],
+          confirmedSsh,
         });
       }
       assertCurrent();
@@ -272,6 +298,16 @@ async function writeProjectInfo(
           iconWritten = true;
         }
         if (directories) {
+          // A directory or ancestor may have changed during a picker, sheet or lock wait.
+          const current = await validateProjectDirectories(
+            projectKey,
+            requestedDirectories!,
+            remoteRenderer,
+          );
+          directories.forEach((item, i) =>
+            requireCanonicalProjectDirectory(item.path, current[i]!.path, remoteRenderer),
+          );
+          assertCurrent();
           await setProjectDirectories(projectKey, directories, assertCurrent);
           directoriesWritten = true;
         }

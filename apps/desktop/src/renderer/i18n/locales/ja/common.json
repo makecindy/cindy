@@ -21839,6 +21839,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "このリポジトリをこのコンピューターにダウンロードしますか？",
+    "credentialNotice": "非公開リポジトリの場合、Cindy はこのコンピューターでログイン中のアカウントを使用することがあります。",
+    "saveTo": "保存先",
+    "confirmImport": "インポートする",
+    "confirmSshTitle": "このプロジェクトに次の SSH ディレクトリへのアクセスを許可しますか？",
+    "sshHost": "SSH ホスト",
+    "readWriteAccess": "読み書き",
+    "readAccess": "読み取り専用",
+    "confirmAccess": "アクセスを許可",
     "autoLoading": "アイコンを検索中…",
     "autoNone": "プロジェクト名から生成した文字アイコンを使用します。",
     "autoSource": "取得元",

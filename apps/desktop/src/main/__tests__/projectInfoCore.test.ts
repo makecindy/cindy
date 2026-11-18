@@ -43,7 +43,8 @@ vi.mock('../localDb/ipc/recentWorkdirsCore.js', () => ({
   removeRecentWorkdir: vi.fn(),
 }));
 vi.mock('../sidebarSettingsStoreCore.js', () => ({ restoreLocalProjectVisibility: vi.fn() }));
-vi.mock('../projectDirectoryValidation.js', () => ({
+vi.mock('../projectDirectoryValidation.js', async (original) => ({
+  ...await original<typeof import('../projectDirectoryValidation.js')>(),
   validateProjectDirectories: h.validateDirectories,
 }));
 vi.mock('../projectDirectoryRoot.js', () => ({
@@ -68,7 +69,7 @@ import { readProjectIconImage, readProjectInfo, updateProjectInfo } from '../pro
 import { prepareNewProject } from '../projectCreation.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { projectDirectoryGrantScope } from '../projectInfoAuthorization';
+import { projectDirectoryGrantScope, projectRendererAuthorization } from '../projectInfoAuthorization';
 import {
   clearWritableDirectoryPickerGrantsForTesting,
   issueWritableDirectoryPickerGrant,
@@ -81,9 +82,9 @@ beforeEach(() => {
   h.directories = {};
   h.cleanup.mockResolvedValue(undefined);
   h.register.mockResolvedValue(true);
-  h.validateRoot.mockResolvedValue({ ok: true, workingDir: '/repo' });
+  h.validateRoot.mockImplementation(async (workingDir) => ({ ok: true, workingDir }));
   h.setDirectories.mockResolvedValue(undefined);
-  h.validateDirectories.mockResolvedValue(undefined);
+  h.validateDirectories.mockImplementation(async (_key, directories) => directories);
   h.rename.mockResolvedValue(undefined);
   h.importImage.mockResolvedValue(`cindy-media://blobs/${'a'.repeat(64)}.png`);
   h.icons['local:/repo'] = '🚀';
@@ -379,9 +380,11 @@ it('consumes only this window, form and account generation picker proof', async 
     field: 'profile',
     value: { directories: [{ path: directory, access: 'write' }] },
   };
-  const authorization = { kind: 'renderer' as const, senderId: 7, scope: 'form' };
+  const forForm = (sender: number, scope: string) => projectRendererAuthorization(sender, scope, h.stamp, vi.fn(), () => {});
+  const authorization = forForm(7, 'form');
   const issue = async (stamp = h.stamp) =>
     issueWritableDirectoryPickerGrant({
+      useCanonicalPath: true,
       scopeId: projectDirectoryGrantScope(stamp, 'form'),
       senderId: 7,
       directory,
@@ -390,8 +393,8 @@ it('consumes only this window, form and account generation picker proof', async 
   await expect(updateProjectInfo(request, authorization)).rejects.toThrow('AUTHORIZATION_REQUIRED');
   await issue();
   for (const foreign of [
-    { ...authorization, senderId: 8 },
-    { ...authorization, scope: 'other-form' },
+    forForm(8, 'form'),
+    forForm(7, 'other-form'),
   ])
     await expect(updateProjectInfo(request, foreign)).rejects.toThrow('AUTHORIZATION_REQUIRED');
   expect(h.setDirectories).not.toHaveBeenCalled();
@@ -426,7 +429,8 @@ it('retains/revokes existing access without a picker but requires proof for a re
 it('authorizes supplied roots before cloning, then saves the same complete profile', async () => {
   vi.spyOn(fs, 'realpath').mockImplementation(async (value) => String(value));
   const directory = path.resolve('project-reference');
-  const authorization = { kind: 'renderer' as const, senderId: 7, scope: 'create' };
+  const confirm = vi.fn();
+  const authorization = projectRendererAuthorization(7, 'create', h.stamp, confirm, () => {});
   const request = {
     ...h.stamp,
     create: true,
@@ -438,10 +442,19 @@ it('authorizes supplied roots before cloning, then saves the same complete profi
   await expect(updateProjectInfo(request, authorization)).rejects.toThrow('AUTHORIZATION_REQUIRED');
   expect(prepareNewProject).not.toHaveBeenCalled();
   await issueWritableDirectoryPickerGrant({
-    scopeId: projectDirectoryGrantScope(h.stamp, 'create'),
+    useCanonicalPath: true,
+      scopeId: projectDirectoryGrantScope(h.stamp, 'create'),
     senderId: 7,
     directory,
   });
+  const prepared = vi.mocked(prepareNewProject);
+  prepared.mockImplementation(async ({ confirmImport }) => {
+    await confirmImport!('https://gitlab.com/team/demo.git', '/Projects/Created');
+    return { directory: '/Projects/Created', cleanup: vi.fn() };
+  });
+  confirm.mockRejectedValueOnce(new Error('cancelled'));
+  await expect(updateProjectInfo(request, authorization)).rejects.toThrow('cancelled');
+  expect(h.setDirectories).not.toHaveBeenCalled();
   const result = await updateProjectInfo(request, authorization);
   expect(result.createdProjectKey).toBe('local:/Projects/Created');
   expect(h.setDirectories).toHaveBeenCalledWith(
@@ -450,4 +463,29 @@ it('authorizes supplied roots before cloning, then saves the same complete profi
     expect.any(Function),
   );
   expect(h.set).toHaveBeenCalledWith(result.createdProjectKey, '🚀', expect.any(Function));
+});
+
+// Unit: the profile entry must bind native SSH consent to the actual save and access level.
+it('confirms only new SSH access and never writes a cancelled or stale request', async () => {
+  const key = 'remote:build%20host:/work/project';
+  const read = { path: '/data/art', access: 'read' as const };
+  const write = { ...read, access: 'write' as const };
+  const confirm = vi.fn();
+  const save = (directories: typeof h.directories[string]) => updateProjectInfo({
+    ...h.stamp, projectKey: key, field: 'profile', value: { directories },
+  }, projectRendererAuthorization(7, 'form', h.stamp, confirm, () => {}));
+  h.directories = { [key]: [read] };
+  await save([read]);
+  await save([]);
+  expect(confirm).not.toHaveBeenCalled();
+  h.setDirectories.mockClear();
+  confirm.mockRejectedValueOnce(new Error('cancelled'));
+  await expect(save([write])).rejects.toThrow('cancelled');
+  expect(confirm).toHaveBeenCalledWith({ kind: 'ssh', host: 'build host', project: '/work/project', directories: [write] }, undefined);
+  expect(h.setDirectories).not.toHaveBeenCalled();
+  confirm.mockImplementationOnce(() => { h.stamp = { ...h.stamp, ownerGeneration: 2 }; });
+  await expect(save([write])).rejects.toThrow('PRECONDITION_FAILED');
+  expect(h.setDirectories).not.toHaveBeenCalled();
+  await save([write]);
+  expect(h.setDirectories).toHaveBeenCalledWith(key, [write], expect.any(Function));
 });

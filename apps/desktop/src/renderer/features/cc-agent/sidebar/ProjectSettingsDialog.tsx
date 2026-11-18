@@ -1,3 +1,4 @@
+import { extractIpcError } from '@/utils/ipcError';
 import {
   isExplicitProjectRepositoryAddress,
   parseProjectRepository,
@@ -270,8 +271,9 @@ export function ProjectSettingsDialog({
         if (create) onCreated?.(createdDirectory);
         onClose();
       }
-    } catch {
-      setError(label(create ? 'createFailed' : 'failed'));
+    } catch (error) {
+      if (extractIpcError(error)?.code !== 'MUTATION_CANCELLED')
+        setError(label(create ? 'createFailed' : 'failed'));
     } finally {
       lock.current = false;
       setBusy(false);

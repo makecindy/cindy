@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -104,7 +104,7 @@ describe('createProject', () => {
   let directory: string;
   beforeEach(async () => {
     vi.clearAllMocks();
-    directory = await mkdtemp(path.join(os.tmpdir(), 'cindy-create-project-'));
+    directory = await realpath(await mkdtemp(path.join(os.tmpdir(), 'cindy-create-project-')));
     h.dialogueRoot = path.join(directory, 'dialogues');
     h.historicalRoots = [];
     h.inaccessibleRoots = {};
@@ -439,8 +439,9 @@ describe('createProject', () => {
       expect(h.restore).not.toHaveBeenCalled();
       await rm(alias);
       await symlink(directory, alias, process.platform === 'win32' ? 'junction' : 'dir');
-      // Preserve the logical alias identity, not the physical target path.
-      expect(await run(alias)).toMatchObject({ ok: true, workingDir: alias.replaceAll('\\', '/') });
+      // The task permission decision must name the physical directory.
+      expect(await run(alias)).toMatchObject({ ok: false, errorCode: 'WRITABLE_DIRECTORY_TARGET_CHANGED' });
+      expect(await run(directory)).toMatchObject({ ok: true, workingDir: directory.replaceAll('\\', '/') });
     },
   );
   it('rejects files, relative paths and managed task worktrees', async () => {

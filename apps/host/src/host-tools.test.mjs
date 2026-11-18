@@ -288,7 +288,7 @@ test('negotiated HTTP event streams deliver one live owner dialog without puttin
 // its actual MCP dispatch, shared core, isolated SQLite and temporary directories;
 // no Electron shim, credentials, Git service or real user paths are involved.
 test('Node AI tools create, inspect and edit the complete project profile in the current owner', async t => {
-  const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'host-project-tools-'));
+  const profile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'host-project-tools-')));
   configureHostOwner({ userDataDir: profile, ownerId: 'projects-owner' });
   const sqlite = new Database(':memory:');
   for (const table of [sessions, botSessionLinks, botProfiles, projectAliases, recentWorkdirs]) {

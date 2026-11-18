@@ -21839,6 +21839,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "이 저장소를 이 컴퓨터에 다운로드할까요?",
+    "credentialNotice": "비공개 저장소의 경우 Cindy가 이 컴퓨터에 로그인된 계정을 사용할 수 있습니다.",
+    "saveTo": "저장 위치",
+    "confirmImport": "가져오기 확인",
+    "confirmSshTitle": "이 프로젝트가 다음 SSH 디렉터리에 접근하도록 허용할까요?",
+    "sshHost": "SSH 호스트",
+    "readWriteAccess": "읽기 및 쓰기",
+    "readAccess": "읽기 전용",
+    "confirmAccess": "접근 허용",
     "autoLoading": "아이콘 찾는 중…",
     "autoNone": "프로젝트 이름으로 만든 문자 아이콘을 사용합니다.",
     "autoSource": "출처",

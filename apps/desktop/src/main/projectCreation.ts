@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import {
+  type ProjectDirectory,
   parseProjectRepository,
   projectCreationFolderName,
 } from '@cindy/maker-shared/project-alias-sync';
@@ -16,6 +17,10 @@ import {
   validateExistingLocalProjectDirectory,
   validateLocalProjectDirectory,
 } from './projectDirectoryRoot.js';
+import {
+  requireCanonicalProjectDirectory,
+  validateProjectDirectories,
+} from './projectDirectoryValidation.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 
 export function inferProjectsRoot(
@@ -61,7 +66,13 @@ export interface PreparedNewProject {
 }
 /** Only folders reserved by this operation are eligible for cleanup; selected folders are never removed. */
 export async function prepareNewProject(
-  input: { directory?: string; name?: string; repositoryUrl?: string },
+  input: {
+    directory?: string;
+    name?: string;
+    repositoryUrl?: string;
+    directories?: readonly ProjectDirectory[];
+    confirmImport?: (url: string, directory: string) => Promise<void>;
+  },
   assertCurrent: () => void,
   deps = { root: projectCreationRoot, git: runGit, github: resolveGhBinary },
 ): Promise<PreparedNewProject> {
@@ -81,7 +92,7 @@ export async function prepareNewProject(
     const name = projectCreationFolderName(input.name || repository?.name || 'Project');
     for (let suffix = 1; suffix <= 1000; suffix++) {
       assertCurrent();
-      directory = path.join(root, suffix === 1 ? name : `${name}-${suffix}`);
+      directory = path.join(valid.workingDir, suffix === 1 ? name : `${name}-${suffix}`);
       try {
         await fs.mkdir(directory);
         owned = true;
@@ -93,6 +104,7 @@ export async function prepareNewProject(
     if (!owned) throwIpcError('ALREADY_EXISTS', 'Could not allocate a project directory');
   }
   const identity = owned ? await fs.lstat(directory) : null;
+  let cloneStarted = false;
   const cleanup = async () => {
     if (!identity) return;
     const current = await fs.lstat(directory).catch(() => null);
@@ -101,18 +113,28 @@ export async function prepareNewProject(
       !current.isSymbolicLink() &&
       current.dev === identity.dev &&
       current.ino === identity.ino
-    )
-      await fs.rm(directory, { recursive: true, force: true });
+    ) {
+      if (cloneStarted) await fs.rm(directory, { recursive: true, force: true });
+      else
+        await fs.rmdir(directory).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOTEMPTY' && error.code !== 'EEXIST') throw error;
+        });
+    }
   };
   try {
     const lexical = validateLocalProjectDirectory(directory);
     if (!lexical.ok) throwIpcError('INVALID_PARAMS', lexical.message);
     const valid = await validateExistingLocalProjectDirectory(directory);
     if (!valid.ok) throwIpcError('INVALID_PARAMS', valid.message);
+    requireCanonicalProjectDirectory(directory, valid.workingDir);
     assertCurrent();
+    if (input.directories?.length)
+      await validateProjectDirectories(`local:${directory}`, input.directories);
     if (repository) {
-      if ((await fs.readdir(directory)).length)
+      if (input.confirmImport && (await fs.readdir(directory)).length)
         throwIpcError('INVALID_PARAMS', 'Choose an empty directory for cloning');
+      await input.confirmImport?.(repository.url, directory);
+      assertCurrent();
       const args = ['-c', 'core.hooksPath='];
       if (
         new URL(repository.url).hostname === 'github.com' &&
@@ -122,8 +144,12 @@ export async function prepareNewProject(
         if (!/['\r\n]/.test(gh))
           args.push('-c', `credential.https://github.com.helper=!'${gh}' auth git-credential`);
       }
+      if ((await fs.readdir(directory)).length)
+        throwIpcError('INVALID_PARAMS', 'Choose an empty directory for cloning');
+      requireCanonicalProjectDirectory(directory, await fs.realpath(directory));
       assertCurrent();
       try {
+        cloneStarted = true;
         await deps.git([...args, 'clone', '--', repository.url, directory], {
           timeoutMs: 5 * 60_000,
           killProcessGroup: true,
