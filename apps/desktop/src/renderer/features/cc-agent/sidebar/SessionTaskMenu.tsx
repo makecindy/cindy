@@ -217,6 +217,9 @@ function ActiveSessionTaskMenu({
   const empty = isEmptyDraftSession(session);
   const ownerActionsBlocked = writeBlocked || guest;
   const canSnooze = snoozeAction && !archived && !ownerActionsBlocked;
+  useEffect(() => {
+    if (!canSnooze && dialog?.kind === 'custom-snooze') setDialog(null);
+  }, [canSnooze, dialog, setDialog]);
   const showRuntimePlugins = !session.deviceLinkDeviceId && (
     session.runtimePluginsSelected === true || readInstalledGhostsSnapshot().some(ghost =>
       declaredGhostControlPoints(ghost.manifest).some(isRuntimePluginPoint))
