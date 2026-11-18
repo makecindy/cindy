@@ -6935,12 +6935,17 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
           rollbackUnacceptedFork?.();
         };
-        if (pendingRewindTo || activeBridgeRewindResumeAt) {
+        // An unused Query has no durable resume id yet. It still needs the same
+        // directory snapshot rebuild before its first input reaches the SDK.
+        const initialDirectoryRebuild =
+          !durableSdkSessionId && activeQueryDirectoryGeneration !== autoReviewDirectoryGeneration;
+        if (pendingRewindTo || activeBridgeRewindResumeAt || initialDirectoryRebuild) {
           const resumeAt = pendingRewindTo ?? activeBridgeRewindResumeAt;
-          if (!resumeAt) {
+          if (!resumeAt && !initialDirectoryRebuild) {
             throw new Error('Claude rewind rebuild missing resume target');
           }
-          const directoryGrantRebuild = pendingRewindTo === durableSdkSessionId;
+          const directoryGrantRebuild =
+            initialDirectoryRebuild || pendingRewindTo === durableSdkSessionId;
           log.debug('send ▶ pendingRewindTo detected — rebuilding sdkQuery with 三件套', {
             resumeSessionAt: directoryGrantRebuild ? undefined : resumeAt,
             resumeSdkSid: durableSdkSessionId,
@@ -6989,7 +6994,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           for (;;) {
             q = await buildQuery({
               ...(directoryGrantRebuild ? {} : { resumeSessionAt: resumeAt }),
-              ...(!opts.remoteHostId || !directoryGrantRebuild ? { forkSession: true } : {}),
+              ...(!initialDirectoryRebuild && (!opts.remoteHostId || !directoryGrantRebuild)
+                ? { forkSession: true }
+                : {}),
               permissionMode: snapSdkPermissionMode,
             });
             if (resolveMaxOutputTokens(mutableModel) === appliedMaxOutputTokens || sendOpts?.signal?.aborted || closed) break;
@@ -7056,7 +7063,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 轮直接撞上下文上限。
           // 桥接 turn 计数: 实际 push /compact 时 +1, 让后续 middle-turn suppress /
           // onTurnEnd 保持 turnInFlight 靠精确计数, 不受 SDK prompt 消费模式影响。
-          bridgeCompactQueued = queueAutoCompactBridge('rewind', resumeAt);
+          if (resumeAt) bridgeCompactQueued = queueAutoCompactBridge('rewind', resumeAt);
           // 本次 send 的 bridge state 已注册;guard 继续保持到下面 turnInFlight=true,
           // 防止 runtime setter 在 user turn 尚未登记时把 /compact 注入成未标记 turn。
         }

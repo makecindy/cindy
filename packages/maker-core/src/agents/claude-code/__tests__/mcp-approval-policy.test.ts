@@ -1106,7 +1106,9 @@ describe('a custom server cannot take over a builtin name', () => {
 
   // Unit regression: observe the actual SSH factory payload after next-turn rebuild.
   // Legacy controller paths were deliberately omitted; validated project paths were omitted too.
-  it('sends only matching-host project grants to SSH and removes revoked roots on the next Query', async () => {
+  // Missing coverage: a brand-new SSH task has no SDK id before its first send.
+  // Minimal input: setters before send, without resumeSessionId; unit, in-memory remote Query.
+  it.each([undefined, 'ssh-sdk-existing'])('sends matching-host SSH grants before first input and revokes them (resume %s)', async (resumeSessionId) => {
     process.env.CLAUDE_CONFIG_DIR = await makeTempDir();
     const deps = createDeps();
     const starts: Record<string, unknown>[] = [];
@@ -1115,7 +1117,7 @@ describe('a custom server cannot take over a builtin name', () => {
       return createFakeQuery() as never;
     };
     const handle = await new ClaudeCodeAgent(deps).startSession({
-      sessionId: 'ssh-project-directories', model: 'claude-opus-4-6', resumeSessionId: 'ssh-sdk-existing',
+      sessionId: 'ssh-project-directories', model: 'claude-opus-4-6', resumeSessionId,
       workingDir: '/srv/project', remoteHostId: 'ssh-1', permissionMode: 'ask',
       extraDirs: ['/controller/legacy'], writableDirs: ['/controller/output'],
     });
@@ -1128,7 +1130,7 @@ describe('a custom server cannot take over a builtin name', () => {
       await handle.send({ type: 'user', content: 'Read the project.' });
       expect(starts).toHaveLength(2);
       expect(starts.at(-1)?.additionalDirectories).toEqual(['/srv/reference', '/srv/output']);
-      expect(starts.at(-1)?.resumeSdkSessionId).toBe('ssh-sdk-existing');
+      expect(starts.at(-1)?.resumeSdkSessionId).toBe(resumeSessionId);
       expect(starts.at(-1)).not.toHaveProperty('forkSession');
       await handle.setExtraDirs?.(['/srv/reference'], null,
         { hostId: 'wrong-host', directories: ['/srv/reference'] });
