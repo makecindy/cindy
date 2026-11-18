@@ -1306,6 +1306,7 @@ export function createTurnExecutor(deps) {
         log.warn('failed to close unhealthy PI session after prompt timeout', { sessionId: id, error: errorText(error) });
       });
     },
+    recordRuntimeControlError(id, data) { historyFor(id).onTurnErrorEvent(id, data, null); },
     isRunning(id) { return turns.get(id)?.running === true; },
     // The turn has its terminal and its rows are still settling: still running for dispatch (isRunning).
     isSettling(id) { const turn = turns.get(id); return turn?.terminal === true && turn.running === true; },

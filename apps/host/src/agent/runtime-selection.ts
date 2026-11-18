@@ -105,6 +105,8 @@ import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconcile
 import { createSessionRuntimeFallback } from '../../../desktop/src/main/maker-ipc/sessionRuntimeFallback.ts';
 import { createSessionRuntimeFallbackSettingsFile } from '../../../desktop/src/main/maker-host/sessionRuntimeFallbackSettingsCore.ts';
 import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
+import { createPendingSessionRuntimeControlSettlement } from '../../../desktop/src/main/maker-ipc/pendingSessionRuntimeControlSettlement.ts';
+import { publishAgentEvent } from './turn-executor.mjs';
 import { explicitPorts } from './explicit-ports.ts';
 
 /** What the Host's runtime selection reads from the rest of the Host (main.ts binds it). */
@@ -137,7 +139,9 @@ export interface HostRuntimeSelectionDeps {
   inputQueue: {
     contextRecoveryRollover(): SessionRuntimeSelectionPorts['contextOverflowRolloverHolder'];
     sessionDbAgentKind(sessionId: string): 'cc' | 'codex' | 'pi' | null;
+    recordRuntimeControlError(sessionId: string, data: { message: string; reason: string }): void;
     isTurnRunning(sessionId: string): boolean;
+    canSettleTurnControls(): boolean;
     wakeSession: AgentInputCoordinator['wakeSession'];
     refreshQueuedRoute: AgentInputCoordinator['refreshQueuedRoute'];
     cancelUsageLimitWait(sessionId: string): void;
@@ -159,7 +163,7 @@ export interface HostRuntimeSelectionDeps {
  */
 export const HOST_RUNTIME_SELECTION_QUEUE_MEMBERS = [
   'contextRecoveryRollover', 'sessionDbAgentKind', 'isTurnRunning', 'wakeSession', 'refreshQueuedRoute',
-  'cancelUsageLimitWait', 'discardWorkingDirectoryRecovery', 'startPorts',
+  'cancelUsageLimitWait', 'discardWorkingDirectoryRecovery', 'startPorts', 'recordRuntimeControlError', 'canSettleTurnControls',
 ] as const satisfies readonly (keyof HostRuntimeSelectionDeps['inputQueue'])[];
 type UnlistedQueueMembers = Exclude<keyof HostRuntimeSelectionDeps['inputQueue'], typeof HOST_RUNTIME_SELECTION_QUEUE_MEMBERS[number]>;
 const everyQueueMemberListed: [UnlistedQueueMembers] extends [never] ? true : never = true;
@@ -301,9 +305,8 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     getSessionDbAgentKind: sessionId => deps.inputQueue.sessionDbAgentKind(sessionId),
     getMaker: maker,
   });
-  // The desktop's sessionTurnActivityTracker: in a turn from the runtime's foreground running status
-  // to its end. The executor's own turn record is open for the very send a pick lands in, so it is
-  // not that; the task's runtime reports the same as the tracker here.
+  // Host also considers a runtime with an unacknowledged permission change busy. The desktop
+  // reads its foreground turn activity tracker here (release table, section 7).
   const isSessionInTurn = (sessionId: string) => maker().getSession(sessionId)?.isTurnRunning?.() === true;
   // register.ts's binding (createColdPiRehydrationBinding), with the Host's runtime start functions
   // (the ones its send transaction uses) in place of the desktop's.
@@ -476,6 +479,16 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     recordSessionContextSnapshot: recordHostContextSnapshot,
   });
   const handleSetModel = createHandleSetModel(ports);
+  const settleRuntimeControl = createPendingSessionRuntimeControlSettlement(explicitPorts<Parameters<typeof createPendingSessionRuntimeControlSettlement>[0]>({
+    applySessionRuntimeSelection,
+    runtimeSelectionRequiresModelWindowConfirmation: result =>
+      result.contextWindowConfirmationRequired !== undefined || result.contextTokensForConfirmation !== undefined,
+    broadcastSessionRuntimeProjection,
+    getSessionDbAgentKind: id => deps.inputQueue.sessionDbAgentKind(id),
+    onTurnErrorEvent: (id, error) => deps.inputQueue.recordRuntimeControlError(id, error),
+    broadcastToAllWindows: (_channel, { sessionId, event }) => publishAgentEvent({ publish: deps.publish }, sessionId, event, {}),
+    log: deps.log,
+  }));
   applyPiPendingSelection = createApplyPiPendingSelection(explicitPorts<Parameters<typeof createApplyPiPendingSelection>[0]>({ handleSetModel }));
   const readSessionRuntimeProfiles = createReadSessionRuntimeProfiles(explicitPorts<Parameters<typeof createReadSessionRuntimeProfiles>[0]>({
     maker: { getSessionMeta: sessionId => maker().getSessionMeta(sessionId), getSession: sessionId => maker().getSession(sessionId) },
@@ -560,7 +573,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
    */
   const onSessionClosed = (sessionId: string, session: Pick<Session, 'getUsageSnapshot'>) => {
     rememberSessionLastLiveUsage(sessionId, session.getUsageSnapshot());
-    pendingCredentialSwitchService.onSessionClosed(sessionId);
+    if (deps.inputQueue.canSettleTurnControls()) pendingCredentialSwitchService.onSessionClosed(sessionId);
     // As the desktop's cleanupClosedSessionRuntime (register.ts), after the pending switch: a closed
     // runtime's budget bookkeeping goes, so its replacement starts from the stored budget.
     appliedContextWindowBudgets.delete(sessionId);
@@ -665,8 +678,10 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     persistSessionFields,
     /** A task's turn settled (the desktop's settlePendingCredentialSwitch): a pending switch lands now. */
     onTurnSettled(sessionId: string) {
+      if (!deps.inputQueue.canSettleTurnControls()) return;
       settlePendingCredentialSwitchWith(
         explicitPorts<Parameters<typeof settlePendingCredentialSwitchWith>[0]>({ pendingCredentialSwitchHolder: pendingCredentialSwitchService, log: deps.log }), sessionId, 'host-turn-settled');
+      settleRuntimeControl(sessionId, 'host-turn-settled');
     },
     /**
      * register.ts registerPendingCredentialSwitchForSession: a credential switch that waits for the task's
