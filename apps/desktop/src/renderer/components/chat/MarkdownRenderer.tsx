@@ -1497,10 +1497,16 @@ async function activateResolvedLocalTarget(
   // 用户在这里还能就地编辑、接着跳。不带行号的链接保持原有灯箱行为。
   if (!(await shouldOpenTextLightboxForOrigin(ctx, target.absPath))) return;
   if (target.line !== undefined) {
+    // 内嵌子任务的右栏属于宿主会话,但 rel 是按子任务自己的工作目录算的:交给宿主
+    // 会话的 tab 会打开同名却不同的文件(还能就地编辑)。因此只有内容会话本身就是
+    // 右栏宿主时才走这条入口。
+    const hostSessionId =
+      ctx.sessionId && (ctx.sidebarTargetSessionId ?? ctx.sessionId) === ctx.sessionId
+        ? ctx.sessionId
+        : null;
     const rel = toWorkdirRel(ctx.workingDir, target.absPath);
-    const sidebarTargetSessionId = ctx.sidebarTargetSessionId ?? ctx.sessionId;
-    if (rel && sidebarTargetSessionId && isTextPreviewSupported(target.absPath)) {
-      await openFileInSidebarFileBrowser(sidebarTargetSessionId, rel, target.line);
+    if (hostSessionId && rel && isTextPreviewSupported(target.absPath)) {
+      await openFileInSidebarFileBrowser(hostSessionId, rel, target.line);
       return;
     }
   }
