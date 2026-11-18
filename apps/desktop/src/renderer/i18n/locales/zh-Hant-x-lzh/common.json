@@ -8172,7 +8172,7 @@
         "hostTools_handoff": "任務傳言",
         "hostTools_handoffDetail": "得循 Cindy 之器傳訊息於既有任務。需當前任務之境者，須明指任務。",
         "hostTools_usage": "查用量及供應商組狀態",
-        "hostTools_usageDetail": "可查現用 Cindy 帳號於此機所接 Claude/Codex 之帳號標識、方案、配額時段及更新時間，亦可查此機及同帳號已授權他機所記每日、型號用量、估算費用、供應商組配置與狀態，及可見成員、設備之標識、名稱與頭像。不得取訂閱登入郵址、帳號目錄、內部指紋、憑證或檔案，亦不得改帳號或設定",
+        "hostTools_usageDetail": "可查現用 Cindy 帳號於此機所接 Claude/Codex 之帳號標識、方案、配額時段及更新時間，亦可查此機及同帳號已授權他機所記每日、型號用量、估算費用、供應商組配置與狀態，及可見成員、設備之標識、名稱與頭像。不得取訂閱登入郵址、帳號目錄、內部指紋、憑證或檔案，亦不得改帳號或設定。亦可查有權存取之任務額度，含同帳號已授權他機及准予閱額度之分享供應商。",
         "hostTools_settings": "應用設定",
         "hostTools_settingsDetail": "得循 Cindy 之器閱改應用設定；不返金鑰，祕文仍由主人親填。",
         "hostTools_scheduler": "自動化治辦",
