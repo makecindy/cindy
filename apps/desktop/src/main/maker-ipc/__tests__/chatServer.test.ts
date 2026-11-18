@@ -2292,6 +2292,116 @@ describe('Chat Server result delivery and refresh', () => {
       expect(deliveries()).toHaveLength(0);
     });
 
+    // #6799: a source lookup refused with INVALID_INPUT must not block a valid request
+    // already present in the same room's fresh authorized snapshot. Standard tier:
+    // exercise withChatServer's HTTP adapter and claim-to-dispatch path, with mocked transport.
+    // Existing happy-path tests do not cover single-message lookup incompatibility.
+    it.each([
+      { status: 200, source: 'present', delivered: true },
+      { status: 400, source: 'present', delivered: true },
+      { status: 400, source: 'missing', delivered: false },
+      { status: 400, source: 'wrong-room', delivered: false },
+      { status: 400, source: 'deleted', delivered: false },
+      { status: 400, source: 'system', delivered: false },
+      { status: 400, source: 'wrong-id', delivered: false },
+      { status: 400, source: 'invalid-content', delivered: false },
+      { status: 403, source: 'present', delivered: false },
+      { status: 404, source: 'present', delivered: false },
+      { status: 410, source: 'present', delivered: false },
+    ])('recovers a refused source lookup without expanding read authority ($status/$source)', async ({ status, source, delivered }) => {
+      const original = fixture.handle.getMockImplementation()!;
+      let snapshotReads = 0;
+      let sourceReads = 0;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (method === 'GET' && /\/messages\/[0-9a-f-]{36}$/.test(route)) {
+          sourceReads++;
+          if (status !== 200) return { status, body: { error: { code: status === 400 ? 'INVALID_INPUT' : 'FORBIDDEN' } } };
+        }
+        if (route === `/conversations/${roomId}/snapshot`) {
+          const messages = source === 'missing' ? [] : history.map(m => ({ ...m,
+            ...(source === 'deleted' ? { deleted: true } : {}),
+            ...(source === 'system' ? { origin: 'system' } : {}),
+            ...(source === 'wrong-id' ? { id: '50000000-0000-4000-8000-000000000099' } : {}),
+            ...(source === 'invalid-content' ? { content: null } : {}),
+          }));
+          snapshotReads++;
+          return { body: { room: room(source === 'wrong-room' ? '10000000-0000-4000-8000-000000000099' : roomId),
+            members, messages, cursor: '1' } };
+        }
+        return original(route, method, body);
+      });
+      await ask(5, '@Cindy answer the current request');
+      expect(dispatched()).toHaveLength(delivered ? 1 : 0);
+      if (delivered) {
+        expect(snapshotReads).toBe(1);
+        expect(sourceReads).toBe(1);
+        expect(dispatched()[0]!.message).toContain('@Cindy answer the current request');
+        expect(dispatched()[0]!.resumeWithStoredPermissionMode).toBe(true);
+        expect(verifiedOwnerRequestText(dispatched()[0]!.autoReviewUserText)).toBe('@Cindy answer the current request');
+      } else expect(deps.ensureGroupAssistantSession).not.toHaveBeenCalled();
+    });
+
+    // A fulfilled initial snapshot is local to one execution; it must not authorize the next
+    // request after room access, the owner scope or this service's lifetime has changed.
+    it.each(['ok', 403, 429, 'dispose', 'owner-change'] as const)('reads a new authorized snapshot for the next execution (%s)', async next => {
+      service.dispose();
+      let epoch = 0;
+      deps.captureOwnerScope = () => ({ epoch }) as unknown as ReturnType<NonNullable<typeof deps.captureOwnerScope>>;
+      deps.isOwnerScopeCurrent = scope => (scope as unknown as { epoch: number }).epoch === epoch;
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })),
+        settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      const original = fixture.handle.getMockImplementation()!;
+      let later = false, snapshotReads = 0;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (method === 'GET' && /\/messages\/[0-9a-f-]{36}$/.test(route))
+          return { status: 400, body: { error: { code: 'INVALID_INPUT' } } };
+        if (route === `/conversations/${roomId}/snapshot`) {
+          snapshotReads++;
+          if (later && typeof next === 'number') return { status: next, body: { error: { code: next === 403 ? 'FORBIDDEN' : 'RATE_LIMITED' } } };
+          if (later && next === 'dispose') service.dispose();
+          if (later && next === 'owner-change') epoch++;
+          return { body: { room: room(roomId), members, messages: history, cursor: '1' } };
+        }
+        return original(route, method, body);
+      });
+      await ask(5, 'First request');
+      expect(dispatched()).toHaveLength(1);
+      expect(snapshotReads).toBe(1);
+      await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Done' });
+      later = true;
+      await ask(6, 'Second request');
+      expect(snapshotReads).toBe(2);
+      expect(dispatched()).toHaveLength(next === 'ok' ? 2 : 1);
+      expect(deps.ensureGroupAssistantSession).toHaveBeenCalledTimes(next === 'ok' ? 2 : 1);
+      if (next === 'ok') expect(dispatched()[1]!.message).toContain('Second request');
+    });
+
+    it('rechecks execution authority after sharing a snapshot while the source read was pending', async () => {
+      const original = fixture.handle.getMockImplementation()!;
+      let snapshotReads = 0, revoked = false, releaseSource!: () => void;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (method === 'GET' && /\/messages\/[0-9a-f-]{36}$/.test(route))
+          return new Promise(resolve => { releaseSource = () => resolve({ status: 400, body: { error: { code: 'INVALID_INPUT' } } }); });
+        if (route === `/conversations/${roomId}/snapshot`) {
+          snapshotReads++;
+          return { body: { room: room(roomId), members, messages: history, cursor: '1' } };
+        }
+        if (body?.action === 'heartbeat' && revoked) return { status: 403, body: { error: { code: 'FORBIDDEN' } } };
+        return original(route, method, body);
+      });
+      await ask(5, 'Request before revocation');
+      expect(snapshotReads).toBe(1);
+      expect(releaseSource).toBeTypeOf('function');
+      expect(dispatched()).toHaveLength(0);
+      revoked = true;
+      releaseSource();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(snapshotReads).toBe(1);
+      expect(fixture.handle.mock.calls.some(([, , body]) => body?.action === 'heartbeat')).toBe(true);
+      expect(dispatched()).toHaveLength(0);
+      expect(deps.ensureGroupAssistantSession).not.toHaveBeenCalled();
+    });
+
     it('delivers your request into the group task and answers with that turn', async () => {
       history.push(message(2, peerId, 'The build is red\nagain'));
       await ask(5, '@Cindy please fix it');
