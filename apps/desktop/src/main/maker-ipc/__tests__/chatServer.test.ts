@@ -1818,7 +1818,7 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(2000);
     const prompt = vi.mocked(deps.dispatch).mock.calls[0][0].message;
     expect(prompt.includes('Do not call another participant just to reply.')).toBe(!supported);
-    expect(prompt.includes('write @ and its name')).toBe(supported);
+    expect(prompt.includes('An @name in your final reply wakes that teammate')).toBe(supported);
     const data = [...prompt.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)].map(match => JSON.parse(match[1])).find(block => block.participants);
     expect(data.participants).toContainEqual({ name: 'Bot (Owner)', kind: 'bot', you: true, owner: 'Owner', description: 'Writes the code' });
     expect(data.participants).toContainEqual({ name: 'Luna (Owner)', kind: 'bot', owner: 'Owner' });
@@ -2275,6 +2275,21 @@ describe('Chat Server result delivery and refresh', () => {
     // Claimed as the group's Cindy, never through AI reply mode; the requester's own words become one
     // ordinary visible message in the group's task with its label and the group's recent messages; only
     // that input's turn end answers the group.
+    it('delivers a public Cindy handoff only from the exact group input to the named teammate', async () => {
+      members = [...cindyMembers, luna];
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route === '/me'
+        ? { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupTeammateMentions: 1 }, groupAssistantActorId: cindyId } }
+        : original(route, method, body));
+      await ask(5, 'Please arrange this');
+      const [input] = dispatched();
+      expect(input!.message).toContain('Luna');
+      const reply = { ...terminal, sessionId: input!.targetSessionId, resultText: '@Luna please draft the offer' };
+      expect(await service.settleLaneTurn({ ...reply, activeInputClientId: null })).toBe(false);
+      expect(await service.settleLaneTurn({ ...reply, activeInputClientId: input!.clientId })).toBe(true);
+      expect(deliveries()[0][2]).toMatchObject({ mentions: [teammateId] });
+    });
+
     it('stops the exact public Cindy task input when another device requests a stop', async () => {
       await ask(5, 'Wait until stopped');
       const [input] = dispatched();
@@ -3754,6 +3769,19 @@ describe('Chat Server result delivery and refresh', () => {
       });
     }
     const prompt = () => vi.mocked(deps.dispatch).mock.calls[0][0].message;
+
+    it('posts a new independent message without consulting or adding to a legacy plan', async () => {
+      singleSpeaker(route => route === '/me'
+        ? { body: { actor: { id: selfId }, capabilities: { groupSingleSpeaker: 1, independentReplies: 1 } } }
+        : undefined);
+      const sent = await service.sendMessage({ groupId: roomId, text: 'Another thing', clientId: 'independent-send',
+        mentions: { all: false, botIds: [] } });
+      expect(sent).toMatchObject({ ok: true });
+      expect(fixture.handle.mock.calls).toContainEqual(expect.arrayContaining([
+        `/conversations/${roomId}/messages`, 'POST', expect.objectContaining({ independentReplies: true }),
+      ]));
+      expect(fixture.handle.mock.calls.some(([path]) => path.includes('/plans'))).toBe(false);
+    });
 
     it('posts an un-addressed reply as written and never asks the server to continue a round', async () => {
       singleSpeaker(route => route.endsWith(`/messages/${execution.source_message_id}`) ? { body: message(execution.source_message_id, 'Let us discuss') } : undefined);

@@ -928,8 +928,8 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         placeholder={threadRootId ? t('groupChat.thread.placeholder') : undefined}
         stopPending={stopping || group.round.status === 'running' && group.round.speakers.length > 0 && group.round.speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping')}
         canStop={group.round.canStop !== false && (!group.serverBacked || group.supportsOwnedStop === true && (chat.server ? group.round.canStop === true
-          : chat.state.kind === 'ready' && chat.state.group.round.speakers.some(speaker => canStopBotGroupSpeaker(group, speaker))))} running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
-        divisionSupported={!threadRootId && !chat.server && (!group.singleSpeaker || group.supportsDivision === true)} attachmentsSupported={group.supportsAttachments === true} uploadAttachment={chat.uploadAttachment} onSend={send} onStop={stop} />
+          : chat.state.kind === 'ready' && chat.state.group.round.speakers.some(speaker => canStopBotGroupSpeaker(group, speaker))))} running={!threadRootId && group.round.status === 'running'} planState={threadRootId || group.serverBacked || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
+        attachmentsSupported={group.supportsAttachments === true} uploadAttachment={chat.uploadAttachment} onSend={send} onStop={stop} />
       </View>
       {Platform.OS === 'ios' ? <DockKeyboardBottomSpacer restingBottom={insets.bottom}
         keyboardGap={0} /> : null}

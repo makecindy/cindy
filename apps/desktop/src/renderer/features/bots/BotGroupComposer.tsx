@@ -8,9 +8,7 @@
  * 中输入框为空时，发送按钮变成停止；有文字时照常发送——插话本身就会作废当前一轮
  * （docs/product-rules/bot-group-chat.md §4.4）。
  *
- * 「+」菜单里的「安排分工」（§7.2）给输入框加上「分工」标签：带标签发出的消息一定交给
- * 负责人出安排（`division: true`），发出后标签清掉。安排进行中或等继续时不能再安排新的，
- * 菜单项置灰并说明原因。占位文字跟随未结束的安排，告诉用户这时说的话会交给谁。
+ * 只有旧版发件箱的失败消息可能带分工标签，恢复草稿时保留原请求。
  *
  * 「引用回复」（§10）：页面持有当前群的待发引用，输入框上方显示紧凑的引用块，× 或 Esc
  * 只取消引用、不动正文。引用随发送一起交给 main（只带消息 id，摘要由 main 从服务器读），
@@ -107,7 +105,6 @@ import { chatErrorKey } from './chatError';
 import {
   botGroupErrorKey,
   isActiveBotGroupMember,
-  isBotGroupDivisionBlocked,
   type BotGroupComposerPlanState,
 } from './botGroupPresentation';
 import { botGroupApi } from './botGroupStore';
@@ -359,7 +356,6 @@ export function BotGroupComposer({
   const canSend =
     !disabled && !voice.isBusy && (trimmed.length > 0 || attachmentCount > 0) && !tooLong && !tooManyAttachments && hasMembers;
   const showStop = !voice.isBusy && !thread && canStop && running && trimmed.length === 0 && attachmentCount === 0;
-  const divisionBlocked = isBotGroupDivisionBlocked(planState);
 
   // Picking 引用回复 brings the caret here, ready to type the reply; picking the same message
   // again (after clicking elsewhere) does too, since each pick is a new quote.
@@ -909,28 +905,6 @@ export function BotGroupComposer({
                       {t('extraDirs.addFiles')}
                     </span>
                   </DropdownMenuItem>
-                  {!thread && conversationKind !== 'direct' && <DropdownMenuItem
-                    disabled={divisionBlocked}
-                    className={cn(MENU_ITEM_CLASS, 'h-auto items-start gap-2.5 py-2')}
-                    onSelect={() => {
-                      focusInputOnMenuCloseRef.current = true;
-                      setDivision(true);
-                    }}
-                  >
-                    <Users size={16} aria-hidden className="mt-0.5 shrink-0 text-[var(--text-secondary)]" />
-                    <span className="flex min-w-0 flex-col gap-0.5">
-                      <span>
-                        {t('bots.groupChat.composer.division')}
-                      </span>
-                      <span className="text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
-                        {t(
-                          divisionBlocked
-                            ? 'bots.groupChat.composer.divisionBusy'
-                            : divisionSteps ? 'bots.groupChat.composer.divisionDescriptionSteps' : 'bots.groupChat.composer.divisionDescription',
-                        )}
-                      </span>
-                    </span>
-                  </DropdownMenuItem>}
                 </DropdownMenuContent>
               </DropdownMenu>
               {footerStart?.(sending)}

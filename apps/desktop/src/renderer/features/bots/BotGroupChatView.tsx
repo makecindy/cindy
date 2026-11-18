@@ -1602,7 +1602,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             draftKey={attachmentScope}
             members={group.members}
             running={running} canStop={group.round.canStop !== false && (!group.serverBacked || allSpeakers.some(speaker => canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId })))}
-            planState={botGroupComposerPlanState(openPlan, group.replyMode)}
+            planState={group.serverBacked ? null : botGroupComposerPlanState(openPlan, group.replyMode)}
             divisionSteps={!!group.singleSpeaker}
             attachments={attachmentState}
             attachmentScope={attachmentScope}

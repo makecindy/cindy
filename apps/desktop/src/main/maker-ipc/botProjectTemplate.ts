@@ -12,8 +12,9 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { GROUP_TEAMMATE_HANDOFF_GUIDANCE, GROUP_TEAMMATE_PROJECT_GUIDANCE } from './groupCollaborationSkillContent.js';
 
-export const TEAMMATE_TEMPLATE_VERSION = 5;
+export const TEAMMATE_TEMPLATE_VERSION = 7;
 /** What the project started from and which template files it still has untouched. */
 export const TEAMMATE_TEMPLATE_RECORD = path.join('.cindy', 'template.json');
 const PENDING_DIR = path.join('.cindy', 'template');
@@ -102,10 +103,15 @@ export function teammateTemplateFiles(displayName: string): Record<string, strin
     '.agents/skills/hand-off/SKILL.md': [
       '---',
       'name: hand-off',
-      'description: Use before starting any work longer than a quick answer (changing a repository, building or testing, research, anything that takes more than a few minutes) to start a task for it in the right project. Also for sending work to an existing task or buddy and for answering how that work is going.',
+      'description: Use to coordinate teammates in a group, hand off longer work to a project task, or check its progress.',
       '---',
       '',
       '# Hand-off',
+      '',
+      '## In a group',
+      '',
+      GROUP_TEAMMATE_HANDOFF_GUIDANCE,
+      GROUP_TEAMMATE_PROJECT_GUIDANCE,
       '',
       '## Start a task',
       '',
