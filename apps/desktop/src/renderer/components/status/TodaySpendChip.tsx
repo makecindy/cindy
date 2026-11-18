@@ -1176,7 +1176,9 @@ export function TodaySpendChip({
   const remoteCodexAccountPayload = useRemoteCodexAccountUsage(
     remoteCodexDeviceId,
     providerId ?? 'openai',
-    { live: liveRemoteCodex },
+    // Native quota reads persist a snapshot on the host. Long-lived task chips
+    // share Settings updates and refresh on opening/recovery, without polling.
+    { live: liveRemoteCodex, poll: false },
   );
   const remoteCodexRefresh = useRemoteCodexRefreshState(liveRemoteCodex ? remoteCodexDeviceId : null, providerId ?? 'openai');
   const taskAccountCodexPayload = React.useMemo(

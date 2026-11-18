@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => ({
   remoteCodexPayload: null as Record<string, unknown> | null,
   remoteCodexDeviceIds: [] as Array<string | null>,
   remoteCodexLive: [] as boolean[],
+  remoteCodexPoll: [] as (boolean | undefined)[],
   remoteCodexRefresh: vi.fn(),
   remoteClaudeQuota: null as Record<string, unknown> | null,
   remoteXaiSnapshot: null as Record<string, unknown> | null,
@@ -168,8 +169,9 @@ vi.mock('@/hooks/useRemoteDeviceUsage', async () => {
     requestRemoteXaiSubscriptionRefresh: vi.fn(),
     requestRemoteCodexLiveRefresh: mocks.remoteCodexRefresh,
     useRemoteCodexRefreshState: () => ({ failed: false, refreshing: false }),
-    useRemoteCodexAccountUsage: (deviceId: string | null, _provider?: string, options?: { live?: boolean }) => {
+    useRemoteCodexAccountUsage: (deviceId: string | null, _provider?: string, options?: { live?: boolean; poll?: boolean }) => {
       mocks.remoteCodexLive.push(options?.live === true);
+      mocks.remoteCodexPoll.push(options?.poll);
       mocks.remoteCodexDeviceIds.push(deviceId);
       return deviceId ? mocks.remoteCodexPayload : null;
     },
@@ -231,6 +233,7 @@ beforeEach(() => {
   mocks.remoteCodexPayload = null;
   mocks.remoteCodexDeviceIds = [];
   mocks.remoteCodexLive = [];
+  mocks.remoteCodexPoll = [];
   mocks.remoteCodexRefresh.mockClear();
   mocks.remoteClaudeQuota = null;
   mocks.remoteXaiSnapshot = null;
@@ -455,6 +458,7 @@ describe('TodaySpendChip device-link remote sessions', () => {
     fireEvent.mouseEnter(screen.getByRole('button'));
     act(() => vi.advanceTimersByTime(300));
     expect(mocks.remoteCodexLive).toContain(true);
+    expect(mocks.remoteCodexPoll.every(value => value === false)).toBe(true);
     expect(mocks.remoteCodexRefresh).toHaveBeenCalledWith('device-abc', 'openai');
     expect(screen.getByText('remote@example.com')).toBeTruthy();
     expect(screen.queryByText('local@example.com')).toBeNull();

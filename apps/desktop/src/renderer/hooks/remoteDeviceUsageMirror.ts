@@ -18,7 +18,7 @@ function isSnapshotShape(value: unknown): value is Record<string, unknown> {
 }
 
 export interface RemoteDeviceUsageMirror<T> {
-  useMirror(deviceId: string | null, providerId?: string, options?: { live?: boolean; refreshEpoch?: number }): T | null;
+  useMirror(deviceId: string | null, providerId?: string, options?: { live?: boolean; refreshEpoch?: number; poll?: boolean }): T | null;
   useReadState(deviceId: string | null, providerId?: string): { failed: boolean; refreshing: boolean };
   request(deviceId: string, providerId?: string, queueIfPending?: boolean, scheduling?: { background?: boolean }, recover?: boolean): void;
   resetForTest(): void;
@@ -201,9 +201,10 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
       if (isDataOwnerGenerationCurrent(entry.owner) && entry.listeners.size > 0) request(deviceId, providerId, false, queuedScheduling, retrySupport);
     }
   }
-  function useMirror(deviceId: string | null, providerId?: string, options: { live?: boolean; refreshEpoch?: number } = {}): T | null {
+  function useMirror(deviceId: string | null, providerId?: string, options: { live?: boolean; refreshEpoch?: number; poll?: boolean } = {}): T | null {
     const entry = deviceId ? entryFor(deviceId, providerId) : null;
     const live = options.live === true;
+    const polling = options.poll !== false;
     const refreshEpoch = live ? options.refreshEpoch : undefined;
     const lastLiveEntry = useRef<Entry | null>(null);
     const [, rerender] = useState(0);
@@ -280,8 +281,10 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         timer = undefined;
         if (visible()) {
           flushQueuedRefresh(entry, deviceId, providerId);
+          // Passive observers still catch up once when becoming visible (including
+          // an initially hidden mount), but never own a recurring write-through read.
           poll();
-          timer = setInterval(poll, cfg.refreshIntervalMs);
+          if (polling) timer = setInterval(poll, cfg.refreshIntervalMs);
         }
       };
       if (cfg.refreshIntervalMs) {
@@ -330,7 +333,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         if (entry.listeners.size === 0) { entry.stopReconnect?.(); entry.stopReconnect = undefined; }
         off();
       };
-    }, [deviceId, providerId, entry, live, refreshEpoch]);
+    }, [deviceId, providerId, entry, live, refreshEpoch, polling]);
     // Read the current entry during render: switching devices/accounts must not show the old value.
     return entry?.snapshot ?? null;
   }
