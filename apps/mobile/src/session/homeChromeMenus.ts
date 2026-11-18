@@ -141,6 +141,7 @@ export function buildHomeScopePullDownActions(
 export interface HomeDisplayMenuState {
   groupByProject: boolean;
   groupDialogue: boolean;
+  groupAutomation?: boolean;
   sortBy: HomeListSortBy;
   projectOrder: HomeProjectOrder;
   statusFilter: HomeStatusFilter;
@@ -221,6 +222,7 @@ export function buildHomeDisplayPullDownActions(input: {
   const groupSummary = [
     state.groupByProject ? t(`${MENU}.groupProject`) : null,
     state.groupDialogue ? t(`${MENU}.groupDialogue`) : null,
+    state.groupAutomation ? t(`${MENU}.groupAutomation`) : null,
   ].filter(Boolean).join(t(`${MENU}.summarySeparator`)) || t(`${MENU}.summaryNone`);
   const filterCount = activeContentFilterCount({
     projects: state.projectFilter,
@@ -238,6 +240,7 @@ export function buildHomeDisplayPullDownActions(input: {
       // 打开中的菜单会退回根层,所以它选完收起;只改勾选 / 副标题 / 禁用的项才保持展开。
       checkable("group.project", t(`${MENU}.groupProject`), state.groupByProject),
       checkable("group.dialogue", t(`${MENU}.groupDialogue`), state.groupDialogue, true),
+      checkable("group.automation", t(`${MENU}.groupAutomation`), state.groupAutomation === true, true),
     ]),
     submenu("sort", t(`${MENU}.sortHeading`), t(sortLabelKey(state.sortBy)), "arrow.up.arrow.down",
       SORT_OPTIONS.map((sortBy) => ({
@@ -348,6 +351,7 @@ export function homeDisplayActionPatch(
   if (id === "teammates.showCollapsedAvatars") return { showCollapsedTeammateAvatars: !(state.showCollapsedTeammateAvatars ?? true) };
   if (id === "group.project") return { groupByProject: !state.groupByProject };
   if (id === "group.dialogue") return { groupDialogue: !state.groupDialogue };
+  if (id === "group.automation") return { groupAutomation: !state.groupAutomation };
   if (id === "filter.reset") return { lastActivityFilter: "all", projectFilter: "all", teammateFilter: "all", vendorFilter: "all" };
   if (id === "filter.teammates.none") return { teammateFilter: "none" };
   if (id === "filter.teammates.all") return { teammateFilter: "all" };

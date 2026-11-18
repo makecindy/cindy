@@ -1,5 +1,10 @@
 # Cindy Design System
 
+> **读取时机**：新增或修改任何界面、组件、布局、样式、动效或 UI 文案之前。先读下面的「阅读路由」，
+> 再按路由读相关章节与专题，不需要通读全文；设计文档索引见 `cindy-design-system.md`。
+> **适用路径**：`apps/desktop/src/renderer/**`、`apps/mobile/app/**`、`apps/mobile/src/**/*.tsx`、
+> `apps/mobile/src/theme/**`、`packages/design-tokens/**`
+
 ## 阅读路由
 
 本文件是 Cindy 视觉规则的入口，不需要通读。本节只指路，不写参数；每个参数只在对应章节保留一份。
@@ -32,7 +37,8 @@
 | 圆角与点击区域 | 上述组件的默认值 | §5 Border Radius Scale、[治理合同](./design-governance.md) §13 |
 | 字号、字重、行高 | Tailwind 字号档位 | §3 |
 | 动效 | Motion Token | §14.4 |
-| 界面文案 | i18n 键 | §11、[术语表](../../i18n/GLOSSARY.md) |
+| 界面文案 | i18n 键 | §11、[术语表](../../i18n/GLOSSARY.md)（规则见[工程约定](../dev-rules/engineering-conventions.md) §5.1） |
+| 文案里出现「任务／对话／消息」 | 已裁决的叫法 | [任务与对话命名](../product-rules/task-and-conversation-naming.md) |
 | 修改 Token、主题或标准组件 | 现有生成链路 | [治理合同](./design-governance.md)、[Token README](../../packages/design-tokens/README.md) |
 
 只在改动对应功能时才读下面的专题：
@@ -83,6 +89,8 @@ The decision and review correction are recorded in
 [`design-decision-log.md`](./design-decision-log.md) (2026-09-06).
 
 ## 2. Color Palette & Roles
+
+MCP App 卡片来源例外（2026-11-16）：第三方来源、本地安装、来源未知使用 warning 语义前景色（Desktop `--warning-fg`，Mobile `warningFg`）；市场来源不标色，自定义 MCP 使用普通文字色。只表达安装来源，不替代权限或签名判断。
 
 > **Multi-theme note**: the values in this section are the concrete **Default Light / Default Dark** (base theme) palette, given as the visual-spec reference sample. At runtime **every color is consumed through a token** (see §10 Theme System & Token Reference), so the same component automatically renders each theme's own colors under other themes (Eclipse / One Dark Pro / Monokai Pro, …). **When implementing components, always write tokens, never hex** — rules in §10.
 
@@ -1683,6 +1691,14 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 - **Scope boundary**: this dialog only. Other working-UI surfaces keep the neutral treatment; a new brand surface needs a new entry here. Contract test: `mobileDownloadDialog.test.tsx` → `keeps the QR card flat with no brand edge`.
 - **Reference renders** (light theme, zh-CN, @2x — `assets/mobile-download-dialog/`): [local mode](assets/mobile-download-dialog/guest-local.webp) (QR only — no account, so no permission card) · [signed in, no linked mobile](assets/mobile-download-dialog/onboarding.webp) (228px QR + permission card) · [signed in, mobile linked](assets/mobile-download-dialog/linked.webp) (132px QR + device list). Re-shoot these when the dialog's layout changes. **Stale as of 2026-07-25**: all three still show the retired brand edge around the QR — read them for layout only, not for the card's treatment.
 
+**Sanctioned brand surface — gift card face (owner-requested 2026-11-16).**
+
+- **Where**: Desktop `features/billing/GiftCardFace.tsx`, mounted only by `GiftCardRedeemDialog` — the confirm and result steps of redeeming a gift card from Billing settings. Mobile `src/gift-card/GiftCardFace.tsx`, mounted only by `GiftCardSheet` — the same two steps of the redeem sheet (see `apps/mobile/docs/mobile-design-guide.md` §9). A gift card has to read as a gift, so the card itself is the one place in this flow that carries brand artwork, and it is the same card on both clients.
+- **Asset / theme boundary**: four finished faces, `{cindy,cat,bell,leap}.webp` (1200×757, no amount), in Desktop `renderer/assets/gift-cards/` and Mobile `assets/gift-cards/`, composed from existing official artwork and the wordmark without redraw. Brand red and the characters are intrinsic to these files; the components author no colour. The two red faces use the wordmark in a single ivory colour because its red arrow and cursor are not visible on the artwork's red ground. The same four files ship with Share Server and Platform Console so a card looks identical everywhere; `faceCode` comes from the server, and a code this build does not know falls back to the default face — never a broken image. Light and Dark use the same files.
+- **Amount on the face (owner-requested 2026-11-16)**: the amount is printed on the card, as on a physical gift card — currency symbol plus the number with trailing zeros dropped (`$20`, `¥100`, `$19.99`). It is part of the artwork, not interface text: `packages/maker-shared/src/giftCardAmount.ts` (shared by Desktop and Mobile) holds the outlines of the 14 characters an amount can contain (Anton, SIL OFL 1.1, drawn as vector paths so neither client loads an extra typeface), the per-face position and size in card coordinates, and the two artwork colours (ivory on the red and night faces, ink on the ivory face). These are the same numbers Share Server and Platform Console use; change them together. Amounts longer than the face allows scale down as a whole. This is the only text on the face and the only use of this lettering in the clients — the interface typeface is unchanged.
+- **Treatment**: static image with the container radius (12) and a 1px default-border hairline, which keeps the ivory and night faces separated from the panel in either mode. No tilt, shadow, sheen or motion. Sender and message are ordinary token-coloured text below the card; the amount is not repeated there. The card is exposed to assistive technology as one image named with the amount. If an amount cannot be drawn (a character with no outline), the face is shown without it and the amount falls back to token-coloured text below.
+- **Scope boundary**: the Desktop redeem dialog and the Mobile redeem sheet only. The Billing page, balance cards, order history, Mobile settings and every other dialog or sheet stay neutral; this is not precedent for artwork on other cards or confirmations.
+
 **Sanctioned brand surface — Alipay payment QR (approved 2026-07-29).**
 
 - **Where**: `features/billing/BillingCheckoutDialog.tsx` and `PlanChangeDialog.tsx` (`PlanChangeStatusDialog`) only. The 40px white center plate may show the 32px official `resources/icon.png` only after a QR payment payload successfully encodes at H error correction.
@@ -1890,7 +1906,7 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 头像在本轮开头显示，右侧依次呈现处理记录与回复正文；执行中转为完成态时保持同组，不再给回复重复头像。
 复用回复头像的尺寸、间距和正文列；展开的中间文字与工具明细不重复头像，成果卡仍与正文对齐。没有过程的回复照常显示头像，新一轮重新显示头像。
 
-常用操作固定在消息下方，复用现有群聊图标、引用预览与输入组件。桌面32px按钮、4px间隔、14px图标；手机44pt热区、不额外插空，左右消息的操作图形对齐对应正文边缘。复制/回复/更多常显，现有朗读与编辑能力保留；创建话题与分享图片放更多。已有话题沿用头像、回复数及最后回复时间/未读提示入口，不另造数字徽章。普通任务与私聊的914px内容列规则不变；群聊自适应宽度及操作栏位置见 [群聊规则](../product-rules/bot-group-chat.md)。手机正文直接选字不受操作栏影响。沿用语义色与原菜单开合、焦点和按压状态；各语言及明暗模式均不得溢出。
+常用操作固定在消息下方，复用现有群聊图标、引用预览与输入组件。桌面32px按钮、4px间隔、14px图标；手机44pt热区、不额外插空，左右消息的操作图形对齐对应正文边缘。复制/回复/更多常显，现有朗读与编辑能力保留；创建话题与分享图片放更多。已有话题沿用头像、回复数及最后回复时间/未读提示入口，不另造数字徽章。普通任务、伙伴私聊与群聊共用914px内容列及响应式留白规则，群聊不得单独放宽；气泡及输入区规则见 [群聊规则](../product-rules/bot-group-chat.md)。手机正文直接选字不受操作栏影响。沿用语义色与原菜单开合、焦点和按压状态；各语言及明暗模式均不得溢出。
 
 ### 伙伴内部通讯入口（2026-11-01）
 

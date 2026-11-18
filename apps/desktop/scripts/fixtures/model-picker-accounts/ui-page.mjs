@@ -6,6 +6,8 @@ export default {
   notCovered:
     'Native login, real quotas, dispatch and mobile rendering; host account snapshots are fixtures',
   cases: {
+    'official-plan-name': { about: 'Model source details preserve official Ultra from the selected pro-coded account' },
+    'official-plan-name-narrow': { about: 'Official Ultra model source details at 320-pixel content width', viewport: { width: 320, height: 400 } },
     'quota-low': { about: 'Single account nearly exhausted' },
     'quota-exhausted': { about: 'Single account recovery countdown' },
     'quota-pool': { about: 'Pool exhausted; earliest usable account recovery' },
@@ -72,6 +74,11 @@ export default {
           ? await ui.t('providerGroup.member.accountCount', { count: 2 })
           : 'second@example.test';
     await page.locator('[data-model-source-details]').filter({ hasText: pool ? 'Anthropic' : identity }).waitFor();
+    if (ui.case.startsWith('official-plan-name')) {
+      await page.locator('[data-model-source-details]').getByText(/ · Ultra$/).waitFor();
+      await ui.capture('official-plan-name');
+      return;
+    }
     await page.getByRole('button', { name: `Anthropic · ${identity}`, exact: true }).waitFor();
     if (!pool)
       await page.locator(`[data-weekly-remaining="${ui.case === 'bound' ? 34 : 80}"]`).waitFor();

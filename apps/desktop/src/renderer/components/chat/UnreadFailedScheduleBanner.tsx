@@ -11,6 +11,7 @@ import {
   type ScheduleMissingPlugin,
 } from '@cindy/maker-shared/schedule-model';
 import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
+import { usePluginInPlace } from '@/features/plugin/lib/pluginInPlace';
 import {
   compareFailedScheduleRuns,
   dismissScheduleFailure,
@@ -101,7 +102,7 @@ function FailedScheduleNotice({
       data-testid="unread-failed-schedule-banner"
       data-banner-kind="unread-failed-schedule"
       message={message}
-      actions={missingPlugin && !remote ? <MissingPluginAction plugin={missingPlugin} /> : undefined}
+      actions={missingPlugin && !remote ? <MissingPluginAction plugin={missingPlugin} onReady={dismiss} /> : undefined}
       details={latestFailedRun.errorMsg}
       onDiagnose={onDiagnose && latestFailedRun.errorMsg ? () => onDiagnose({
         message,
@@ -113,20 +114,34 @@ function FailedScheduleNotice({
   );
 }
 
-/** Opens the plugin where the user can fix it: its installed page, else its market detail. */
-function MissingPluginAction({ plugin }: { plugin: ScheduleMissingPlugin }) {
+/**
+ * Installs or turns on the plugin right here; the check recovers on its next run,
+ * so the notice closes once the plugin is usable. A plugin that is already on is
+ * looked at on its page.
+ */
+function MissingPluginAction({ plugin, onReady }: { plugin: ScheduleMissingPlugin; onReady: () => void }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { run, isBusy } = usePluginInPlace();
   const resolved = resolvePluginInstanceQuery(readInstalledGhostsSnapshot(), plugin.ghostId, plugin.namespace ?? null);
   const installed = resolved.status === 'unique' ? resolved.ghost : null;
-  const open = () => navigate(
-    installed ? `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(installed))}`
-      : plugin.pluginId ? `/plugins?market=${encodeURIComponent(plugin.pluginId)}`
-        : '/plugins',
-  );
+  // A record without a namespace names the root source, never "any source".
+  const target = {
+    ghostId: plugin.ghostId,
+    namespace: plugin.namespace ?? null,
+    ...(plugin.pluginId ? { marketPluginId: plugin.pluginId } : {}),
+  };
+  if (installed?.enabled) {
+    return (
+      <Button size="sm" compact type="button"
+        onClick={() => navigate(`/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(installed))}`)}>
+        {t('chat.unreadFailedScheduleBanner.openPlugin')}
+      </Button>
+    );
+  }
   return (
-    <Button size="sm" compact type="button" onClick={open}>
-      {t(installed ? 'chat.unreadFailedScheduleBanner.openPlugin' : 'chat.unreadFailedScheduleBanner.installPlugin')}
+    <Button size="sm" compact type="button" loading={isBusy(target)} onClick={() => void run(target, { onReady })}>
+      {t(installed ? 'chat.unreadFailedScheduleBanner.enablePlugin' : 'chat.unreadFailedScheduleBanner.installPlugin')}
     </Button>
   );
 }

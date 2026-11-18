@@ -37,6 +37,8 @@ export type HostSendOutcome = {
   message: string;
   /** CREDENTIAL_SWITCH_BUSY 专用:挡路的本地会话 ids(coordinator 用于事件驱动唤醒 + renderer 展示)。 */
   busySessionIds?: string[];
+  /** Main-only proof of stopped subscription admission, not an opaque adapter failure. */
+  startupAdmission?: 'subscription-account-limited';
 };
 
 export type DesktopSessionDispatchSuccess = {
@@ -84,13 +86,14 @@ export interface SanitizedSendOutcomeError {
 export function createHostSendFailure(
   code: HostSendFailureCode,
   message: string,
-  extra?: { busySessionIds?: string[] },
+  extra?: Pick<HostSendOutcome, 'busySessionIds' | 'startupAdmission'>,
 ): HostSendOutcome {
   return {
     kind: 'host-send',
     accepted: false,
     code,
     message,
+    ...(extra?.startupAdmission ? { startupAdmission: extra.startupAdmission } : {}),
     ...(extra?.busySessionIds ? { busySessionIds: [...extra.busySessionIds] } : {}),
   };
 }

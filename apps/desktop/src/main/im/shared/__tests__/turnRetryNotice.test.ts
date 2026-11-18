@@ -21,6 +21,15 @@ import {
 beforeEach(() => setMainLocale('zh-CN'));
 afterEach(() => setMainLocale('en'));
 
+// #10854: the stable legacy reason includes non-budget failures, so IM must not
+// turn a first empty response plus failed dispatch into repeated empty responses.
+it.each([undefined, 'budget', 'rate-limit', 'session-breaker', 'dispatch-not-accepted', 'dispatch-error'])(
+  'uses neutral silent-stop IM copy for cause %s', silentStopFailureCause => {
+    expect(terminalErrorText({ reason: 'silent-stop-exhausted', silentStopFailureCause }))
+      .toBe('检测到空响应，自动续跑已暂停。');
+  },
+);
+
 describe('turnRetryNotice', () => {
   // #10385, unit: both channel styles must expose recovery, never the provider's raw details.
   it.each(['telegram', 'wechat'])('localizes missing review models for %s without widening permissions', (channel) => {

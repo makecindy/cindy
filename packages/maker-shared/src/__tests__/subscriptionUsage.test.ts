@@ -19,6 +19,15 @@ describe('subscription usage shared rules', () => {
     expect(formatCodexPlanLabel('prolite')).toBe('Pro Lite');
     expect(formatCodexPlanLabel('future_plan')).toBe('Future Plan');
   });
+  // Unit: CLI display names can differ from machine plan codes; legacy fixtures only supplied the codes.
+  it('prefers the official Claude display name and keeps the legacy fallback', () => {
+    expect(formatClaudeSubscriptionPlanLabel('pro', 'pro', ' Ultra ')).toBe('Ultra');
+    expect(formatClaudeSubscriptionPlanLabel(undefined, undefined, 'Future Plan')).toBe('Future Plan');
+    expect(formatClaudeSubscriptionPlanLabel('max', 'max_20x', ' ')).toBe('Max 20×');
+    expect(formatClaudeSubscriptionPlanLabel('max', 'max_20x', 'Max')).toBe('Max 20×');
+    expect(formatClaudeSubscriptionPlanLabel('max', 'max_5x', 'Ultra')).toBe('Ultra');
+    expect(formatClaudeSubscriptionPlanLabel('pro', 'pro', 123)).toBe('Pro');
+  });
   it.each([
     ['claude-fable-5[1m]', 'fable'],
     ['claude-opus-5-5[1m] ', 'opus'],

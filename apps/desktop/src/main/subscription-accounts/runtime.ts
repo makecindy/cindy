@@ -92,6 +92,7 @@ import {
   loginLegacyCodexProviderAccount,
   codexAccountRpc,
 } from './nativeCli.js';
+import { AccountServiceUnreachableError, isAccountServiceUnreachable } from './accountServiceError.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { mapCodexAppServerModelsToCatalog, mapCodexModelsToCatalog } from '../maker-host/codexModelMapping.js';
 import type { CatalogModel } from '@cindy/model-providers';
@@ -124,9 +125,11 @@ type Usage = {
 interface AccountSnapshot {
   /** Non-secret equality key; never a credential or execution authorization. */
   accountKey?: string;
-  auth: AuthState & { plan?: string; planTier?: string; planType?: string; loginExpiresAt?: string };
+  auth: AuthState & { plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string };
   usage?: Usage;
   unavailable?: boolean;
+  /** The failed read could not reach the account service (not a CLI or file problem). */
+  unreachable?: boolean;
   at: number;
   usageAt?: number;
 }
@@ -261,7 +264,7 @@ async function persistUsage(state: OwnerRuntime, provider: SubscriptionProvider,
   const fingerprint = usageFingerprint(provider, info);
   const payload = provider === 'anthropic' ? info.usage.claudeUsage && {
     ...info.usage.claudeUsage, accountFingerprint: fingerprint,
-    subscriptionType: info.auth.plan, planTier: info.auth.planTier,
+    subscriptionType: info.auth.plan, planTier: info.auth.planTier, planDisplayName: info.auth.planDisplayName,
   } : info.usage.codexUsage && {
     ...info.usage.codexUsage, accountFingerprint: fingerprint,
     planType: info.auth.planType ?? info.auth.plan ?? info.usage.codexPlan,
@@ -792,11 +795,16 @@ async function snapshot(
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
         };
         observedUsage ||= !!current?.usage && (current.auth.plan !== result.auth.plan
-          || current.auth.planTier !== result.auth.planTier || current.auth.planType !== result.auth.planType);
+          || current.auth.planTier !== result.auth.planTier || current.auth.planDisplayName !== result.auth.planDisplayName
+          || current.auth.planType !== result.auth.planType);
       } catch (error) {
         const account = provider === 'anthropic'
           ? readPool(provider)?.accounts.find((account) => account.id === id) : undefined;
-        const identity = account?.reloginIdentity ?? account?.lastConfirmedIdentity;
+        // A failed read says nothing about who is signed in: keep the identity this owner last
+        // saw for the same slot, so the row does not turn into a nameless, signed-out-looking one.
+        const lastRead = state.cache.get(key);
+        const identity = account?.reloginIdentity ?? account?.lastConfirmedIdentity
+          ?? (lastRead?.auth.authenticated || lastRead?.unavailable ? lastRead.auth.identity : undefined);
         // 这条日志是「重启后发不出去」唯一可查的线索。**不记 error.message**：读取链里有
         // auth.json 的 JSON.parse，解析失败的 message 会带上文件片段(可能含 token)。
         // 耗时与错误类型已足够分辨：近 0ms 多为 CLI 未就绪 / spawn 失败，15s 是读超时，
@@ -806,8 +814,14 @@ async function snapshot(
           accountId: id,
           elapsedMs: Date.now() - startedAt,
           error: error instanceof Error ? error.name : typeof error,
+          unreachable: isAccountServiceUnreachable(error),
         });
-        result = { auth: { authenticated: false, ...(identity ? { identity } : {}) }, unavailable: true, at: Date.now() };
+        result = {
+          auth: { authenticated: false, ...(identity ? { identity } : {}) },
+          unavailable: true,
+          ...(isAccountServiceUnreachable(error) ? { unreachable: true } : {}),
+          at: Date.now(),
+        };
       }
     }
     assertOwner(state);
@@ -817,7 +831,8 @@ async function snapshot(
       return state.cache.get(key) ?? { auth: { authenticated: false }, at: 0 };
     if (result.usage?.claudeUsage) result = { ...result, usage: { ...result.usage, claudeUsage: {
       ...result.usage.claudeUsage, subscriptionType: result.auth.plan,
-      planTier: result.auth.planTier, accountFingerprint: usageFingerprint(provider, result),
+      planTier: result.auth.planTier, planDisplayName: result.auth.planDisplayName,
+      accountFingerprint: usageFingerprint(provider, result),
     } } };
     const previous = state.cache.get(key);
     state.cache.set(key, result);
@@ -826,8 +841,12 @@ async function snapshot(
         && state.cache.get(key) === result).catch(() => log.warn('Account quota persistence unavailable'));
     } else if (observedUsage) await persistUsage(state, provider, id, result);
     assertOwner(state);
-    if (provider === 'openai') publishCodexCatalogChange(state);
-    else publishClaudeCatalogChange(state);
+    // Only a change between readable and unreadable is announced, so every open view follows a
+    // recovered (or lost) connection; repeated failures within the failure TTL stay quiet.
+    const availabilityChanged = !!cached && (previous?.unavailable === true) !== (result.unavailable === true);
+    if (provider === 'anthropic') publishClaudeCatalogChange(state);
+    else if (!availabilityChanged) publishCodexCatalogChange(state);
+    if (availabilityChanged) changed(provider);
     return result;
   })();
   state.flights.set(key, { promise: flight, forceUsage });
@@ -1445,6 +1464,7 @@ export async function readSubscriptionSessionAccount(
       ...(info.auth.identity ? { identity: info.auth.identity } : {}),
       ...(info.auth.plan ? { plan: info.auth.plan } : {}),
       ...(info.auth.planTier ? { planTier: info.auth.planTier } : {}),
+      ...(info.auth.planDisplayName ? { planDisplayName: info.auth.planDisplayName } : {}),
       ...(info.auth.planType ? { planType: info.auth.planType } : {}),
       paused: config.paused,
       status: info.unavailable
@@ -1463,6 +1483,19 @@ export async function readSubscriptionSessionAccount(
       ...(!options.remote && destination !== requestedRoute ? { ownerProviderId: destination } : {}),
     },
   };
+}
+
+/** A share stays on its published provider, even when its original account was merged elsewhere. */
+export async function canSwitchHostedSubscriptionAccount(
+  providerId: string, sessionId: string, model: string,
+): Promise<boolean> {
+  const ref = resolveSubscriptionPoolProvider(providerId);
+  if (!ref) return false;
+  const view = await readSubscriptionSessionAccount(ref.kind, {
+    sessionId, model, routeProviderId: providerId,
+  }, { remote: true });
+  return view.state === 'bound' && view.account.blocked === true && view.account.switchAvailable === true
+    && (!view.replacementProviderId || view.replacementProviderId === providerId);
 }
 
 export async function readSubscriptionPoolUsage(
@@ -1627,7 +1660,7 @@ export async function readSubscriptionUsage(providerId?: string) {
       const info = state.cache.get(keyOf(provider, target.id))!;
       return subscriptionUsageView({ providerId: target.providerId, provider, accountId: target.id,
         authenticated: info.auth.authenticated, unavailable: info.unavailable, plan: info.auth.plan,
-        planTier: info.auth.planTier, planType: info.auth.planType,
+        planTier: info.auth.planTier, planDisplayName: info.auth.planDisplayName, planType: info.auth.planType,
         ...accountUsage(info.usage), updatedAt: info.usageAt }, Date.now());
     }));
   return { scope: 'local', accounts };
@@ -1701,6 +1734,7 @@ async function readSubscriptionPoolView(
         ...(info.auth.authenticated && !info.unavailable && info.accountKey ? { accountKey: info.accountKey } : {}),
         plan: info.auth.plan,
         planTier: info.auth.planTier,
+        planDisplayName: info.auth.planDisplayName,
         planType: info.auth.planType,
         ...(provider === 'anthropic' && !disconnectedFor(pool, provider, account.id) && info.auth.authenticated
           && info.auth.loginExpiresAt ? { loginExpiresAt: info.auth.loginExpiresAt } : {}),
@@ -2585,7 +2619,16 @@ export async function runSubscriptionAccountCommand(
         (adding && accountId === 'default') || (provider === 'openai' && !legacy) || renewClaude
           ? await (legacy
               ? readLegacyCodexAccount()
-              : readNativeAccount(provider, directory))
+              : readNativeAccount(provider, directory)
+          ).catch((error: unknown) => {
+            // Signing in a known account again, or a fresh directory, does not depend on this
+            // pre-read: the browser login decides the account and is verified afterwards. A
+            // network failure must not block the very sign-in meant to fix the account
+            // (2026-11-18). Attaching the default login and Claude renewal still need the answer.
+            if (isAccountServiceUnreachable(error) && !(adding && accountId === 'default') && !renewClaude)
+              return undefined;
+            throw error;
+          })
           : undefined;
       assertOwner(state);
       if (abort.signal.aborted) throw new Error('login_cancelled');
@@ -2637,7 +2680,10 @@ export async function runSubscriptionAccountCommand(
       assertOwner(state);
       if (abort.signal.aborted) throw new Error('login_cancelled');
       if (verified.unavailable)
-        throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable');
+        // Still not a completed sign-in; only the reported cause differs when the CLI was offline.
+        throw verified.unreachable
+          ? new AccountServiceUnreachableError('Sign-in could not be confirmed')
+          : new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable');
       if (verified.auth.errorReason === 'account_mismatch') throw new Error('account_mismatch');
       if (!verified.auth.authenticated) throw new Error('login_failed');
       previousInvalidation = undefined;

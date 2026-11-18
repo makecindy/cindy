@@ -4,4 +4,4 @@ import * as journal from '../cindy-media/refCompensationJournal.desktop.js';
 /** Platform assembly for the shared service. */
 import { app } from 'electron';
 import { createAttachmentRecoveryService } from './oversizedAttachmentRecoveryCore.js';
-export const { createAttachmentRecovery, createRequestSizeController } = createAttachmentRecoveryService({ getUserDataDir: () => app.getPath('userData'), media: { ...blobs, ...ingest, ...journal } });
+export const { createAttachmentRecovery, createRequestSizeController, attachmentPreservation, attachmentStorageRoots } = createAttachmentRecoveryService({ getUserDataDir: () => app.getPath('userData'), media: { ...blobs, ...ingest, ...journal } });

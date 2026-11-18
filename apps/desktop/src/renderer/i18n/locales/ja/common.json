@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "この Pi の実行場所ではシステム指示の追加に対応していません。",
+    "nativeHooksUnsupported": "ツールフックはローカルの Claude Code と Pi のみ対応しています。",
     "title": "タスクのプラグイン",
     "description": "このタスクで使うプラグインを選択します。変更は次のメッセージから反映されます。",
     "unsupported": "リクエストごとの処理はローカルの Pi のみ対応しています。このタスクのエンジンでは利用できません。",
@@ -1365,7 +1366,7 @@
     "REMOTE_PROVIDER_UPDATING": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
     "REMOTE_PROVIDER_UNSUPPORTED": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "リモートタスクでは Claude サブスクリプションを使用できません。ゲートウェイまたは API キーのモデルを選択してください",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスが応答していません。リモートデバイスを確認して再試行してください。",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスから現在応答がありません。ネットワークが遅いか、デバイスが混み合っている可能性があります。Cindy が自動で確認を続けるので、接続が回復してから再試行してください。",
     "INTERNAL": "操作に失敗しました。しばらくしてから再試行してください。",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "SSH 設定がディスク上で変更されました。再読み込みしてからもう一度お試しください。",
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定は保存されましたが、Cindy で再読み込みできませんでした。SSH 設定を再読み込みしてください。",
@@ -4302,7 +4303,6 @@
           "label": "実行するコンピュータ",
           "optionLocal": "このコンピュータ",
           "notSignedIn": "未ログイン",
-          "autoBorrowing": "このコンピュータは未ログインのため、新しいタスクは {{device}} で実行します。ログインは不要です。",
           "local": "新しいタスクはこのコンピュータで実行します。ログイン済みの別のコンピュータも選べます。",
           "pinned": "新しいタスクは {{device}} で、そのコンピュータのログインを使って実行します。実行中のタスクはそのままです。",
           "inline": "実行先",
@@ -6923,7 +6923,8 @@
         "replaced": "同じデバイスの別の接続に置き換えられました",
         "too-many-connections": "このアカウントの同時接続数が上限に達しました",
         "version-mismatch": "プロトコルバージョンが一致しません。アプリを更新してください",
-        "unstable": "接続が切断と再接続を繰り返しています。ネットワークを確認し、続く場合は Cindy を再起動してください"
+        "unstable": "接続が切断と再接続を繰り返しています。ネットワークを確認し、続く場合は Cindy を再起動してください",
+        "agent-net-relay-down": "Agent-Net の中継に接続できません。再接続しています。直接接続しているパソコンは引き続き使えますが、ほかのデバイスはしばらく接続できません"
       },
       "refresh": "更新",
       "empty": "他のデバイスはまだありません。別のパソコンで同じアカウントで {{appName}} にログインすると、ここに表示されます。",
@@ -8184,8 +8185,8 @@
         "hostTools_controlDetail": "Cindy のタスクツールで既存のタスクやプロジェクトを編集、アーカイブ、復元、操作し、このパソコンにネイティブ形式のタスクファイルをインポートできます。",
         "hostTools_handoff": "タスクへの送信",
         "hostTools_handoffDetail": "Cindy のタスクツールで既存のタスクにメッセージを送信できます。現在のタスク情報が必要な操作では、対象のタスクを明示する必要があります。",
-        "hostTools_usage": "サブスクリプション使用量の読み取り",
-        "hostTools_usageDetail": "このコンピューターで現在の Cindy アカウントに接続された Claude と Codex のアカウント識別子、プラン、使用制限の期間、更新時刻を読み取ります。メールアドレス、認証情報、ファイル、他のコンピューターのデータは読み取れず、アカウントも変更できません。",
+        "hostTools_usage": "使用量とプロバイダーグループの状態を読み取る",
+        "hostTools_usageDetail": "現在の Cindy アカウントに接続された、このコンピューター上の Claude/Codex のアカウント ID、プラン、クォータ期間、更新時刻を読み取ります。このコンピューターと、同じアカウントで許可された他のコンピューターの記録済みの日別・モデル別使用量、推定費用、プロバイダーグループの設定と状態、表示可能なメンバー・デバイスの ID、名前、アバターも読み取ります。サブスクリプションのログインメール、アカウントのディレクトリ、内部フィンガープリント、認証情報、ファイルの読み取りや、アカウント・設定の変更はできません。",
         "hostTools_settings": "アプリ設定",
         "hostTools_settingsDetail": "Cindy の設定ツールでアプリの設定を読み取り、変更できます。秘密情報は返されず、機密情報の入力は本人が行います。",
         "hostTools_scheduler": "自動化の管理",
@@ -8213,6 +8214,8 @@
         "hostTools_terminalDetail": "このコンピューターでユーザー権限のコマンドや対話型ターミナルを起動し、このプラグインのプロセスの出力確認、入力、停止を行います。コマンドはファイルやアプリにアクセスできます。",
         "agentHiddenTasks": "セッションリストに表示されないバックグラウンドセッションを作成できます",
         "agentHiddenTasksDetail": "このプラグインが作成したセッションを、セッションリスト・検索・通知に表示しないようにできます。プラグイン詳細の「バックグラウンドセッション」からいつでも確認したり開いたり、セッションリストに表示したりできます。プラグインをアンインストールすると再び表示されます。",
+        "agentModelPreferences": "モデルのお気に入りの読み取りと編集、最近使用したモデルの読み取り",
+        "agentModelPreferencesDetail": "このコンピュータのモデルのお気に入りと最近使用したモデル（推論強度と Fast の設定を含む）を読み取り、お気に入りを追加・変更・削除できます。変更は Cindy のモデル選択にも反映されます。プラグインで選んだモデルは最近使用に記録されません。ほかのコンピュータのモデルや共有されたモデルは含まれず、認証情報も渡されません。",
         "agentErrand": "タスクを作成し、作業を実行して結果を取得できます",
         "agentErrandDetail": "作成したタスクは Cindy のタスク一覧に表示され、進行状況を確認して会話を続けられます。",
         "agentSchedule": "自動化の新規作成をあなたに依頼できます",
@@ -8241,6 +8244,8 @@
         "subscribeTopics": "セッションの動きを把握(ターン・セッションイベント、メッセージ内容は含まない)",
         "subscribeMessage": "メッセージ内容のイベント",
         "subscribeMessageDetail": "保存済みのユーザーメッセージと AI の返信を受信します。添付ファイルは別の読み取りと受け渡しで取得します。",
+        "subscribeToolExecution": "ツール実行イベント",
+        "subscribeToolExecutionDetail": "ツール名、入力、結果、エラーを受信します。実行は変更せず、監視のみ行います。",
         "subscribeTaskState": "タスク状態のイベント",
         "subscribeTaskStateDetail": "タスクの実行、待機、完了、アーカイブ、非表示の状態変更を受信します。",
         "subscribeActivity": "AI が思考中のタイミングと、あなたの操作を待っているタイミングを把握",
@@ -8263,6 +8268,10 @@
         "subscribeStartTurnDetail": "タスクでこのプラグインを選んだ場合のみ、現在のメッセージを読み、接続済みモデル、推論強度、Fast を選べます。エラー時はタスクの設定に従い、操作を代わりに承認することはできません。",
         "subscribeModelRequest": "選択したタスクの各モデルリクエストを処理できます",
         "subscribeModelRequestDetail": "タスクでこのプラグインを選んだ場合のみ、モデルへのリクエストを読み、モデル、パラメーター、内容を調整できます。現在はローカルの Pi のみ対応し、エラー時はタスクの設定に従います。接続の認証情報は含まれません。",
+        "subscribeToolCall": "選択したタスクのツール呼び出しを処理できます",
+        "subscribeToolCallDetail": "エンジンが対応する範囲でツールの引数を読み取り、変更、拒否できます。代わりに操作を承認することはできません。",
+        "subscribeToolResult": "選択したタスクのツール結果を処理できます",
+        "subscribeToolResultDetail": "結果を読み取り、エンジンが対応する範囲でコンテキストの追加や結果の置換ができます。実行済みの操作は取り消せません。",
         "subscribeStartTask": "新しいタスクのモデルを選べます",
         "subscribeStartTaskDetail": "新しいタスクでこのプラグインのモデルを選ぶと、最初のメッセージを読んで、接続済みのモデルから 1 つ選びます。この処理は最初のメッセージを送る前に一度だけ実行されます。",
         "card": "メッセージカードを描画",
@@ -8375,6 +8384,7 @@
             "contentStyle": "メッセージの間隔と吹き出しを変更する"
           },
           "positions": {
+            "composer_header": "入力欄の上部",
             "composer_toolbar": "入力欄のツールバー",
             "session_header": "タスクのヘッダー",
             "statusbar": "ステータスバー",
@@ -10834,7 +10844,12 @@
       "summary": "自己紹介",
       "summaryPlaceholder": "例：連載小説を書くのが大好きな小説家。少しユーモアがあり、登場人物の心の動きを考えるのが好き。",
       "avatarSelectionFailed": "画像を読み込めませんでした。5 MB 以下の PNG、JPEG、WebP 画像を選んでください。",
-      "personality": "性格と話し方"
+      "personality": "性格と話し方",
+      "sourceLength": "{{length}} / {{limit}} UTF-16 コード単位（前後の空白を除く）。",
+      "sourceExcess": "上限を {{excess}} 単位超えています。保存するには文章を短くしてください。",
+      "sourceTooLong": "文章が長すぎるため保存できません。編集して続けてください。",
+      "sourceRecovery": "保存済みの原文は変わらず、下書き全文はこのページに残ります。コピー後、安全な場所に貼り付けて全文が揃っていることを確認してから、短くするか変更を破棄してください。",
+      "sourceCopy": "全文をコピー"
     },
     "nameLabel": "呼び名",
     "close": "閉じる",
@@ -12536,6 +12551,7 @@
       "createOwnApp": "自分の App を作成 ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ {{count}} 件の添付ファイルを送信できませんでした：{{names}}",
+    "outboundAttachmentOverLimit": "{{name}}（上限 {{limit}} MB を超過）",
     "unnamedAttachment": "名前のない添付ファイル",
     "text": {
       "discord": {
@@ -12917,7 +12933,7 @@
           "reasoningDominated": "思考が今回の出力予算の大半を使ったため、返信が不完全な可能性があります。推論強度を下げるか、先に会話履歴を圧縮してから続けてください。",
           "generic": "モデルが出力の長さの上限に達したため、このターンの返信は不完全な可能性があります。新しいメッセージを送ると続行できます。繰り返し発生する場合は、推論強度を下げるか、先に会話履歴を圧縮してください。",
           "join": "{{usage}}{{guidance}}",
-          "silentStopExhausted": "モデルが空の応答を続けて返したため、自動続行を一時停止しました。"
+          "silentStopExhausted": "空の応答を検出したため、自動続行を一時停止しました。"
         },
         "permission": {
           "autoReviewUnavailable": "自動レビューが完了しませんでした。この操作を許可するか確認してください。",
@@ -13474,9 +13490,17 @@
         "submitLabel": "回答を送信",
         "multiSelectHint": "（複数選択可）",
         "resolved": "✅ 選択: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "このカードは期限切れです",
         "textHint": "質問者のみ回答できます。{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。",
-        "replyHint": "質問者のみ回答できます。選択肢をタップし、複数の質問・複数選択の場合は選択後に送信してください。\n{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。"
+        "replyHint": "質問者のみ回答できます。選択肢をタップし、複数の質問・複数選択の場合は選択後に送信してください。\n{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。",
+        "nextLabel": "次の質問",
+        "stepHint": "質問者のみ回答できます。選択肢をタップするか、{{code}} の後に回答を入力してください。",
+        "stepSubmitHint": "質問者のみ回答できます。選んでから「{{action}}」をタップするか、{{code}} の後に回答を入力し、最後に「{{code}} OK」を送ってください。",
+        "stepTextHint": "質問者のみ回答できます。{{code}} の後に回答を入力してください。",
+        "unanswered": "⚠️ 未回答の質問があります：{{numbers}}。すべて回答してから送信してください。",
+        "unansweredSingle": "⚠️ まだ回答がありません。先に選択肢を選ぶか、回答を入力してください。",
+        "numberSeparator": "、"
       }
     }
   },
@@ -13668,12 +13692,6 @@
         "TARGET_UNAVAILABLE": "プラグインが無効、アンインストール済み、または利用できません。プラグインの状態を確認してもう一度お試しください。",
         "ASSESSMENT_FAILED": "設定状況を更新できませんでした。もう一度お試しください。",
         "TIMEOUT": "設定がタイムアウトしました。もう一度お試しください。"
-      },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AIモデルサービス",
-          "description": "プラグインが宣言した画像または動画機能を使用する前に、利用可能なモデルサービスへ接続してください。"
-        }
       },
       "form": {
         "placeholder": "{{label}}を入力",
@@ -13974,6 +13992,14 @@
         "standard": "標準",
         "fast": "高速",
         "ultrafast": "超高速"
+      },
+      "discoveredCopy": {
+        "title": "「{{device}}」の {{provider}} を使いますか？",
+        "description": "{{unavailable}}続けると「{{device}}」で実行します。ここからいつでも戻せます。",
+        "unavailableHere": "このパソコンの {{provider}} は現在使えません。",
+        "unavailableOn": "「{{device}}」の {{provider}} は現在使えません。",
+        "confirm": "使う",
+        "cancel": "このままにする"
       }
     },
     "permissionSelector": {
@@ -14264,7 +14290,8 @@
         "description": "元のパソコンにある会話の記録は移せないため、引き継ぎの要約から続けます。思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
         "descriptionNativeHistory": "会話の記録をすべてコピーして、続きから再開します。復元できない場合は引き継ぎの要約から続けるため、思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
         "confirm": "パソコンを切り替える",
-        "cancel": "このままにする"
+        "cancel": "このままにする",
+        "discoveredDescription": "{{reason}}{{description}}"
       }
     },
     "agentSelect": {
@@ -14850,6 +14877,8 @@
       "failed": "画像を生成できませんでした。もう一度お試しください"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "このタスクでは cindy_helper が有効ですが、利用できません。タスクの結果を報告できない可能性があります。",
+      "codexHelperUnverified": "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。",
       "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
       "replyFailed": "返信を完了できませんでした",
       "retryTitle": "最後のメッセージを再送信",
@@ -14972,6 +15001,7 @@
       "pluginDisabledUnnamed": "自動チェックが停止しています：必要なプラグインが有効になっていません。有効にすると自動で再開します。",
       "installPlugin": "プラグインをインストール",
       "openPlugin": "プラグインを開く",
+      "enablePlugin": "プラグインを有効にする",
       "dismissTitle": "過去の失敗通知を閉じる"
     },
     "worktreeRestoreBanner": {
@@ -15635,6 +15665,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。",
       "MCP_APPROVAL_AUTO_BLOCKED": "このツール呼び出しは自動審査でブロックされました。手動で拒否された記録はありません。",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "操作の詳細が不足しているため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "指示が変更されたか、まだ同期されていないため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "ディレクトリの権限が変更されたため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "委任された権限が変更されたため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "プラグインまたはタスクの承認が失効したため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "この操作を許可するユーザーの指示がないため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "作業計画が対応するサイズを超えているため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "実行する Agent が登録済みの作業計画と一致しないため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "タスクの作業ディレクトリが変更されたため、自動承認がこのツール呼び出しをブロックしました。",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "委任されたタスクの範囲が未指定または無効なため、自動承認がこのツール呼び出しをブロックしました。",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "権限の確認がタイムアウトし、有効な確認結果を受信できませんでした。タイムアウトだけでは、ボタンをクリックしたかどうかは判断できません。",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "権限の確認を完了できませんでした。手動で拒否された記録はありません。",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "このモデルはパソコン側でのリクエスト転送が必要ですが、今のリモート接続では転送できません。Cindy AI に切り替えるか、このパソコン上のタスクで使ってください。",
@@ -15914,6 +15954,7 @@
       "saveFailed": "コンテキストウィンドウの段階を保存できませんでした"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "リモートからの応答を待っています…",
       "readingMemory": "記憶を読んでいます…",
       "savingMemory": "記憶を保存しています…",
       "deletingMemory": "記憶を削除しています…",
@@ -15963,7 +16004,8 @@
         "replaced": "同じデバイスの別の接続に置き換えられました。再接続しています…",
         "too-many-connections": "このアカウントの同時オンライン台数が多すぎるため、サーバーに接続を拒否されました",
         "version-mismatch": "サーバーとプロトコルバージョンが一致しません。アプリを更新してから再試行してください",
-        "unstable": "このパソコンの接続が切断と再接続を繰り返しているため、リモート操作がタイムアウトし続ける可能性があります。ネットワークを確認するか、Cindy を再起動して再試行してください"
+        "unstable": "このパソコンの接続が切断と再接続を繰り返しているため、リモート操作がタイムアウトし続ける可能性があります。ネットワークを確認するか、Cindy を再起動して再試行してください",
+        "agent-net-relay-down": "このパソコンは Agent-Net の中継に接続できず、再接続しています。相手のパソコンと直接接続していない場合、リモート操作は失敗します"
       }
     },
     "common": {
@@ -16184,7 +16226,8 @@
         "project": "プロジェクト",
         "flat": "フラット表示",
         "device": "デバイス",
-        "dialogue": "チャット"
+        "dialogue": "チャット",
+        "automation": "自動化"
       },
       "filterGroupByDeviceManualTip": "手動並び替え中はデバイス別のグループ化を使用できません",
       "deviceGroup": {
@@ -16532,6 +16575,7 @@
       "groupSummary": {
         "project": "プロジェクト",
         "dialogue": "チャット",
+        "automation": "自動化",
         "device": "デバイス"
       },
       "taskStatusHeading": "セッションの状態",
@@ -16754,6 +16798,7 @@
         "openInFileBrowser": "ファイルブラウザで開く",
         "showInFolder": "フォルダーで表示",
         "copyFilePath": "ファイルパスをコピー",
+        "copyFolderPath": "フォルダーのパスをコピー",
         "deleteFile": "ファイルを削除"
       },
       "searchPanel": {
@@ -17227,7 +17272,9 @@
           "jira_read": "Jira の読み取り",
           "jira_comment": "Jira へのコメント",
           "sessions_dispatch": "セッションのディスパッチ",
-          "feishu_read": "Feishu メッセージの読み取り"
+          "feishu_read": "Feishu メッセージの読み取り",
+          "settings_read": "共有メンバーを読み取る",
+          "usage_read": "使用量とプロバイダーグループの状態を読み取る"
         },
         "project": "プロジェクトディレクトリ",
         "capabilitiesLabel": "許可する機能",
@@ -17239,7 +17286,9 @@
           "jira_read": "Jira 課題の照会・読み取り（キー指定 / JQL 検索）",
           "jira_comment": "Jira 課題へのコメント追加",
           "sessions_dispatch": "{{appName}} セッションの作成・再開とメッセージ送信",
-          "feishu_read": "最近アクティブなチャットの一覧取得、指定チャット（グループ/DM）の最新メッセージ取得"
+          "feishu_read": "最近アクティブなチャットの一覧取得、指定チャット（グループ/DM）の最新メッセージ取得",
+          "settings_read": "自分が共有したメンバーと利用可能なモデルを、このコンピューターまたは同じアカウントで許可された他のコンピューターから読み取る。変更は行わない",
+          "usage_read": "現在の Cindy アカウントに接続された、このコンピューター上の Claude/Codex のアカウント ID、プラン、クォータ期間、更新時刻を読み取ります。このコンピューターと、同じアカウントで許可された他のコンピューターの記録済みの日別・モデル別使用量、推定費用、プロバイダーグループの設定と状態、表示可能なメンバー・デバイスの ID、名前、アバターも読み取ります。サブスクリプションのログインメール、アカウントのディレクトリ、内部フィンガープリント、認証情報、ファイルの読み取りや、アカウント・設定の変更はできません。"
         },
         "capabilityWarn": {
           "ghostMissing": "「{{name}}」プラグインが必要ですが未インストールです——実行時にこの機能は失敗します",
@@ -18964,8 +19013,9 @@
       "steerFailed": "割り込み送信に失敗：{{message}}",
       "qrExpired": "QR コードが期限切れです。最初からやり直してください",
       "registrationFailed": "作成に失敗しました。後でもう一度お試しください",
-      "silentStopExhausted": "モデルが空の応答を繰り返し返したため、自動再開を一時停止しました。「続行」をクリックしてタスクを再開してください。",
+      "silentStopExhausted": "空の応答を検出したため、自動続行を一時停止しました。",
       "executionResultUnavailable": "実行結果を取得できなかったため、自動継続を停止しました。既存の実行結果を確認するようアシスタントに依頼してください。",
+      "unexecutedToolMarkup": "モデルがツール呼び出しをテキストとして出力しました。実行結果を確認できないため、このターンは完了していません。",
       "outputLimit": "モデルが出力上限に達したため、この応答は不完全な可能性があります。新しいメッセージを送信して続行できます。繰り返す場合は、推論強度を下げるか、先に対話履歴を圧縮してください。",
       "outputLimitReasoning": "推論が今回の出力予算の大部分を消費したため、応答は不完全な可能性があります。推論強度を下げるか、対話履歴を圧縮してから続行してください。",
       "outputLimitUsage": "今回のモデルリクエストの出力は {{outputTokens}} トークンで、うち {{reasoningTokens}} トークンが推論に使われました。",
@@ -19525,6 +19575,41 @@
       "notSupported": "このアカウントでは残高照会を利用できません。",
       "unavailable": "残高を取得できません。更新してもう一度お試しください。"
     },
+    "giftCard": {
+      "action": "ギフトカードを使う",
+      "title": "ギフトカードを使う",
+      "inputLabel": "引き換えコード",
+      "inputHint": "16 文字のコードを入力するか、ギフトカードのリンクを貼り付けてください。",
+      "continue": "続ける",
+      "confirmTitle": "このギフトカードを受け取りますか？",
+      "confirmAction": "受け取る",
+      "from": "{{sender}} より",
+      "cardLabel": "Cindy ギフトカード、{{amount}}",
+      "fields": {
+        "validity": "有効期間",
+        "validityValue_other": "受け取りから {{count}} 日間",
+        "claimBy": "受け取り期限",
+        "destination": "追加先"
+      },
+      "doneTitle": "{{amount}} を追加しました",
+      "doneDescription": "特典残高に追加しました。{{date}} まで有効です。",
+      "doneDescriptionNoDate": "特典残高に追加しました。",
+      "pendingTitle": "ギフトカードを受け取りました",
+      "pendingDescription": "{{amount}} を追加中です。まもなく特典残高に反映されます。もう一度受け取る必要はありません。",
+      "alreadyYours": "このギフトカードはすでに受け取り済みです。",
+      "done": "完了",
+      "errors": {
+        "notFound": "コードが無効です。確認してもう一度お試しください。",
+        "wrongRegionCn": "このギフトカードは Cindy 中国本土版用のため、このアカウントでは受け取れません。",
+        "wrongRegionGlobal": "このギフトカードは Cindy 国際版用のため、このアカウントでは受け取れません。",
+        "alreadyClaimed": "このギフトカードはすでに受け取られています。",
+        "expired": "このギフトカードは受け取り期限を過ぎています。",
+        "voided": "このギフトカードは無効になりました。",
+        "rateLimited": "試行回数が多すぎます。しばらくしてからもう一度お試しください。",
+        "failed": "ギフトカードを受け取れませんでした。しばらくしてからもう一度お試しください。",
+        "personalRequired": "ギフトカードは個人アカウントでのみ受け取れます。"
+      }
+    },
     "usage": {
       "title": "残高使用量",
       "observedAt": "残高更新: {{date}}",
@@ -19540,6 +19625,7 @@
         "empty": "特典の付与履歴はありません。",
         "incomplete": "付与履歴が多いため、最新の{{count}}件のみ表示しています。",
         "unnamed": "特典残高",
+        "giftCard": "ギフトカード · {{sender}} より",
         "original": "付与額",
         "used": "使用済み",
         "remaining": "残り",
@@ -20890,7 +20976,7 @@
     "loadFailed": "アプリを読み込めませんでした。接続を確認して再読み込みしてください。",
     "updateRequired": "このコンピューターはまだ MCP Apps に対応していません。このコンピューターの Cindy を更新してから、もう一度お試しください。",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "$t(mcpApps.appName)「{{name}}」から送信",
     "serverId": "MCP サーバー ID：{{id}}",
     "exitFullscreen": "全画面表示を終了",
@@ -20904,7 +20990,19 @@
     "pluginCspRejected": "ページが未宣言のドメインを要求したため、読み込みを拒否しました。",
     "filesOnExecutionComputer": "ファイルの内容は実行側のコンピューターで確認してください",
     "awaitingApproval": "確認を待っています",
-    "pendingApprovals": "{{count}} 件の確認待ち"
+    "pendingApprovals": "{{count}} 件の確認待ち",
+    "source": {
+      "official": "Cindy 公式",
+      "organization": "組織 · {{namespace}}",
+      "market": "プラグインマーケット",
+      "third-party": "サードパーティの提供元",
+      "local": "ローカルインストール",
+      "unknown": "提供元不明"
+    },
+    "customMcp": "カスタム MCP",
+    "sourceLabel": "提供元",
+    "signatureLabel": "署名",
+    "fullscreen": "全画面"
   },
   "richAnswer": {
     "invalidImageReference": "画像の参照先が無効なため、表示できません。",
@@ -21490,6 +21588,7 @@
     "removeTitle": "{{name}} を外しますか？",
     "removeDescription": "Cindy はこのアカウントにタスクを割り当てなくなります。CLI のログイン情報と会話履歴はこのコンピューターに残ります。",
     "failed": "アカウントの取得または更新ができませんでした。CLI のログインとネットワーク接続を確認して、もう一度お試しください。",
+    "unreachable": "アカウントサービスに接続できないため、ログイン状態を確認できません。ネットワークを確認して、もう一度お試しください。",
     "openDirectory": "アカウントフォルダーを開く",
     "openDirectoryFailed": "アカウントフォルダーを開けませんでした。移動または削除された可能性があります。",
     "loginAgain": "再ログイン",

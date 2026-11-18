@@ -187,7 +187,7 @@ describe('message write paths avoid large-content readback', () => {
       result: { content: [{ type: 'text', text: 'Saved', _meta: { private: 'block' } }],
         structuredContent: { private: 'structured' }, _meta: { private: 'view-only' } },
     } };
-    const publicContent = { mcpAppHistory: { version: 1, title: 'Draft', text: 'Saved' } };
+    const publicContent = { mcpAppHistory: { version: 1, title: 'Draft', text: 'Saved', customMcp: true } };
     const created = await createMessage('s1', { clientId: 'app-card', role: 'assistant', content, agentMeta: { mcpApp: true } });
     expect(created.content).toEqual(publicContent);
     const row = (await h.db!.select().from(messages))[0]!;

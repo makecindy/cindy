@@ -142,6 +142,7 @@ import {
   readSessionScroll,
   saveSessionScroll,
   updateRenderWindowFloor,
+  clearRenderWindowFloor,
   type SessionScrollSnapshot,
 } from '@/lib/sessionScrollStore';
 import {
@@ -501,7 +502,7 @@ interface MessageStreamProps {
   botUnreadBoundaryAt?: number | null;
   onBotReadThrough?: (at: number) => void;
   messages: ChatMessage[];
-  /** Persisted row already owned by the live error banner; keep its recovery state there. */
+  /** Exact row owned by a rendered replacement error banner; otherwise keep its history card. */
   activeErrorClientId?: string | null;
   /** The ongoing call appears only in its transcript popover, including history replays. */
   activeVoiceCallId?: string | null;
@@ -2507,6 +2508,8 @@ const recentRenderProjections: {
   characters: number;
 }[] = [];
 let renderProjectionOwner = getDataOwnerGeneration();
+// 挂载视图地板的序号:每个 MessageStream mount 一个,只求同会话内不重复。
+let floorViewSeq = 0;
 
 /**
  * Reuse pure history projection across keyed MessageStream mounts. Retain at
@@ -3650,11 +3653,17 @@ export function MessageStream({
   // 自动跟随(pinToBottom)的程序化滚动不走滚动保存分支，只靠 saveSessionScroll
   // 会让一直跟随的挂载面板没有地板快照，维护拍永远裁不动(Greptile P1)。
   // 只 merge 地板字段，不碰阅读位置，上翻读者不受影响。
+  // viewId 按挂载视图记录:同会话双面板各自跟踪，卸载时清掉自己的。
+  const floorViewId = useMemo(() => `floor-${++floorViewSeq}`, []);
+  useEffect(() => {
+    if (!sessionId) return;
+    return () => clearRenderWindowFloor(sessionId, floorViewId);
+  }, [sessionId, floorViewId]);
   useEffect(() => {
     if (!sessionId) return;
     const floor = renderWindowFloorClientId(visibleRenderItems);
-    if (floor) updateRenderWindowFloor(sessionId, floor);
-  }, [sessionId, visibleRenderItems]);
+    if (floor) updateRenderWindowFloor(sessionId, floor, floorViewId);
+  }, [sessionId, visibleRenderItems, floorViewId]);
   const visibleMetadataItems = visibleMetadataProjection(visibleRenderItems);
 
   // 镜像 ref：unmount cleanup / ResizeObserver / 落定回调里读最新值（闭包会 stale）。
@@ -6479,11 +6488,6 @@ export function MessageStream({
     return collectAssistantTurnUsageDetails(metadataMessages, turnFinalAssistantClientIds);
   }, [metadataMessages, turnFinalAssistantClientIds]);
 
-  // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
-  // 知道"是不是最后一条"来跳过重复渲染。走可见序列:尾部挂着子代理内部行时,
-  // 真实的最后一条可见 error 会因为"不是最后一条"而在流内重复渲染一遍。
-  const lastMessageClientId =
-    visibleMessages.length > 0 ? visibleMessages[visibleMessages.length - 1].clientId : undefined;
   const previousLocalFileRefsRef = useRef<readonly KnownLocalFileRef[]>([]);
   const localFileRefs = useMemo<readonly KnownLocalFileRef[]>(() => {
     return collectStableLocalFileRefs(rawMetadataMessages, previousLocalFileRefsRef.current);
@@ -6984,7 +6988,6 @@ export function MessageStream({
                         continuationInFlightProjectionCapability={
                           continuationInFlightProjectionCapability
                         }
-                        isLastMessage={msg.clientId === lastMessageClientId}
                         isActiveError={msg.role === 'error' && msg.clientId === activeErrorClientId}
                         localFileRefs={localFileRefs}
                         assistantAvatar={botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar}
@@ -7175,7 +7178,6 @@ const MessageItem = memo(function MessageItem({
   isLastUserInput,
   isContinuationTurnOwner,
   continuationInFlightProjectionCapability,
-  isLastMessage,
   isActiveError,
   localFileRefs,
   assistantAvatar,
@@ -7227,10 +7229,7 @@ const MessageItem = memo(function MessageItem({
   isContinuationTurnOwner?: boolean;
   /** 当前投影对精确续跑边界字段的支持状态；legacy 才允许启用旧端兼容兜底。 */
   continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
-  /** True iff this message is the last message in the full list —
-   *  error-tail-banner: a trailing un-dismissed error row is rendered by the
-   *  actionable banner above the composer instead of an inline card. */
-  isLastMessage?: boolean;
+  /** The parent actually renders this exact error in a replacement banner. */
   isActiveError?: boolean;
   localFileRefs: readonly KnownLocalFileRef[];
   /** Bot 对话:assistant 气泡左侧的伙伴头像。普通任务不传。 */
@@ -7319,7 +7318,7 @@ const MessageItem = memo(function MessageItem({
         return sessionId ? (
           <McpAppCard sessionId={sessionId} clientId={message.clientId}
             title={String(message.systemCardData?.title ?? '')}
-            plugin={message.systemCardData?.plugin}
+            plugin={message.systemCardData?.plugin} customMcp={message.systemCardData?.customMcp}
             fallbackText={String(message.systemCardData?.fallbackText ?? '')} />
         ) : null;
       }
@@ -7422,13 +7421,9 @@ const MessageItem = memo(function MessageItem({
       // 呈现走 CCAgentSessionView 输入框上方的 InterruptedTurnBanner(与 ErrorBanner
       // 同风格)+ sidebar 'error' 红点,这里渲染 null。
       if (message.errorReason === APP_EXIT_INTERRUPTED_REASON) return null;
-      // error-tail-banner:普通失败行是尾部消息且未被忽略时,由输入框上方的可操作
-      // 红条(重试/关闭)独家承载,流内不重复渲染,避免双红条;被忽略或后续有新
-      // 消息后回落为流内静态历史卡。
-      if (isActiveError || (isLastMessage && !message.errorDismissed)) return null;
-      // A live error may be followed by hidden or system rows when history is
-      // reloaded. Its exact persisted identity still belongs to the live banner;
-      // unrelated failures remain available as compact history cards.
+      // Only a rendered alternate UI may own this exact row. Standalone and
+      // read-only streams retain failures, including those before location cards.
+      if (isActiveError) return null;
       return (
         <ErrorMessageCard
           message={message.content}

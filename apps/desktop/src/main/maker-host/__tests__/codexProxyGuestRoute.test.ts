@@ -35,10 +35,10 @@ vi.mock('../logger-adapter', () => ({
 import { buildUserProvider } from '@cindy/model-providers';
 import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
-import { getActiveCatalog, setCustomProviders, setDiscoveredCodexModels } from '../active-catalog';
+import { getActiveCatalog, getActiveCatalogWithCodexModels, setCustomProviders, setDiscoveredCodexModels } from '../active-catalog';
 import { createCodexGuestRoutingGuard, createModelRoutingTransform, registerComposed, registerReviewerRouteContext, unregister } from '../codex-proxy-host.desktop';
 import { CODEX_CUSTOM_PROVIDER_ROUTE_ROOT, deriveCodexCustomProviderRoutes } from '../codex-custom-provider-route';
-import { captureGuestRequestUsage, registerGuestProviderRoute, resetGuestProviderRoutesForTest } from '../guest-provider-route-store';
+import { captureGuestRequestUsage, registerGuestProviderRoute, resetGuestProviderRoutesForTest, setGuestProviderModelCatalogReader } from '../guest-provider-route-store';
 import { bindHostedSessionProvider, clearAllSessionProviders, setSessionProvider } from '../session-provider-store';
 import { setCustomProviderKeyReader } from '../provider-route';
 import { createUsagePricingObserver } from '../model-usage-pricing';
@@ -133,6 +133,38 @@ describe('Codex proxy guard for shared-provider guests', () => {
   it('lets a guest request for a shared model continue to the session route', async () => {
     const guard = createCodexGuestRoutingGuard('shared-a', 'env-key');
     expect(await guard({ model: 'shared-model' }, ctx('/responses', { 'thread-id': 'guest-thread' }))).toBeUndefined();
+  });
+
+  // Unit regression: provider-group admission sees the account pool, but the
+  // outbound proxy previously checked only default-account discovery. Existing
+  // guard fixtures put every model in that default catalog and missed this 403.
+  // Minimum: a valid guest/session grant and one model found only in the pool.
+  // The existing proxy graph is imported once; this case adds no process, I/O,
+  // or real wait. Standalone timings are recorded in the PR validation.
+  it('uses live pooled membership for guest inference without bypassing model grants', async () => {
+    const model = { id: 'pool-only-model', name: 'Pool only model', contextWindow: 100_000,
+      efforts: [], defaultEffort: null };
+    let pooledModels = [model];
+    let allowed = true;
+    setDiscoveredCodexModels([]);
+    const authorize = vi.fn((candidate: string) => allowed && candidate === model.id);
+    registerGuestProviderRoute('guest-session', 'openai', authorize, () => true);
+    const guard = createCodexGuestRoutingGuard('openai', 'oauth-bearer', 'guest-session');
+    const request = () => guard({ model: model.id }, ctx('/responses', { 'thread-id': 'guest-thread' }));
+
+    // Reproduce the old reader: authorization succeeds, catalog membership fails.
+    setGuestProviderModelCatalogReader(getActiveCatalog);
+    expect(await statusOf(request())).toBe(403);
+    expect(authorize).toHaveReturnedWith(true);
+
+    setGuestProviderModelCatalogReader(() => getActiveCatalogWithCodexModels(pooledModels));
+    expect(await request()).toBeUndefined();
+    allowed = false;
+    expect(await statusOf(request())).toBe(403);
+    allowed = true;
+    expect(await request()).toBeUndefined();
+    pooledModels = [];
+    expect(await statusOf(request())).toBe(403);
   });
 
   it('refuses a model the shared provider does not offer, even from the guest session', async () => {

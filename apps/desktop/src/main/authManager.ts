@@ -2711,13 +2711,16 @@ interface CloudOwnerDataReservation {
   finalize(): boolean;
 }
 
-function recoverCloudOwnerDataReservations(committedOwnerId: string | null): boolean {
+function recoverCloudOwnerDataReservations(
+  committedOwnerId: string | null,
+  nativeCommittedOwnerId: string | null = committedOwnerId,
+): boolean {
   const profileRecovery = recoverPendingLocalProfileDataOwner(
     committedOwnerId,
     app.getPath('userData'),
     BRAND_IDENTITY.dbFilePrefix,
   );
-  const nativeRecovery = recoverPendingLegacyNativeProviderAuthOwner(committedOwnerId);
+  const nativeRecovery = recoverPendingLegacyNativeProviderAuthOwner(nativeCommittedOwnerId);
   return profileRecovery !== 'failed' && nativeRecovery !== 'failed';
 }
 
@@ -2774,8 +2777,17 @@ function reserveCloudOwnerData(
     if (nativeReservation.status === 'failed') {
       throw new Error('native provider ownership reservation failed before cloud owner commit');
     }
+    let nativeOwnerId = authoritativeOwnerId;
     if (nativeReservation.status === 'owned-by-other') {
-      throw new Error('local profile and native provider ownership reservations disagree');
+      // Older installations can already have distinct, committed owners for
+      // retained data and native credentials. Preserve both authorities; their
+      // consumers enforce ownership independently. Only a readable, committed
+      // native claim permits this path, never an uncertain/provisional claim.
+      const nativeOwner = readLegacyNativeProviderAuthOwner();
+      if (nativeOwner.status !== 'owned') {
+        throw new Error('native provider ownership could not be verified before cloud owner commit');
+      }
+      nativeOwnerId = nativeOwner.ownerId;
     }
     if (nativeReservation.status === 'claimed' && nativeReservation.claimToken) {
       rollbackActions.push(() => {
@@ -2795,7 +2807,7 @@ function reserveCloudOwnerData(
         for (const rollback of rollbackActions.reverse()) rollback();
         return recoverCloudOwnerDataReservations(previousOwnerId);
       },
-      finalize: () => recoverCloudOwnerDataReservations(authoritativeOwnerId),
+      finalize: () => recoverCloudOwnerDataReservations(authoritativeOwnerId, nativeOwnerId),
     };
   } catch (error) {
     for (const rollback of rollbackActions.reverse()) rollback();
@@ -2845,7 +2857,7 @@ function repairStableCloudOwnerDataReservationsWhileLocked(ownerId: string): boo
       error: error instanceof Error ? error.message : String(error),
     });
   }
-  if (nativeReservation === 'failed' || nativeReservation === 'owned-by-other') {
+  if (nativeReservation === 'failed') {
     log.warn('stable cloud owner remains authenticated with local adoption fail-closed', {
       ownerId,
       authoritativeOwnerId,
@@ -2853,6 +2865,10 @@ function repairStableCloudOwnerDataReservationsWhileLocked(ownerId: string): boo
       nativeReservation,
     });
     return false;
+  }
+  if (nativeReservation === 'owned-by-other') {
+    const nativeOwner = readLegacyNativeProviderAuthOwner();
+    return nativeOwner.status === 'owned' && nativeOwner.ownerId === ownerId;
   }
   return authoritativeOwnerId === ownerId;
 }
@@ -2895,9 +2911,9 @@ function commitCloudAppSession(ownerId: string, authRealmChanged = false): void 
 async function migrateLocalProviderBindingsAfterCloudCommit(ownerId: string): Promise<void> {
   if (isPassiveSharedUserDataInstance()) return;
   try {
-    // The profile marker is the single durable authority for both retained
-    // local namespaces. Reconcile the native marker to that owner before any
-    // legacy credential migration can run.
+    // Recover both namespaces, preserving independently committed legacy owners.
+    // This gate only grants native migration to the native namespace's owner;
+    // local database adoption still checks its own profile marker.
     if (!(await repairStableCloudOwnerDataReservations(ownerId))) return;
     if (migrateLocalNativeProviderAuthBindings(ownerId)) {
       log.info('migrated local native provider bindings to first cloud owner', { ownerId });

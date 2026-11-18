@@ -745,6 +745,47 @@ describe('BillingPage remote catalog rendering', () => {
     expect(window.electronAPI.billing.getBalance).not.toHaveBeenCalled();
   });
 
+  // 契约：礼品卡到账的赠送在明细里要认得出来。此前这一行只显示通用名称，和其它赠送无法区分。
+  // 组件层：真实 BillingPage + 假的宿主数据，验证名称的选择规则，不涉及服务端如何标注来源。
+  it('names a redeemed gift card with its sender, and keeps other grants as they were', async () => {
+    const grant = (grantId: string, extra: Record<string, unknown>) => ({
+      grantId,
+      displayName: null,
+      originalAmount: '20',
+      usedAmount: '0',
+      remainingAmount: '20',
+      expiresAt: '2026-08-01T00:00:00Z',
+      state: 'active' as const,
+      ...extra,
+    });
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '60',
+      plan: { remaining: '0', used: '0', total: '0' },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '60', used: '0', total: '60' },
+      promotionalGrants: [
+        grant('gift', { source: { type: 'gift_card' as const, senderName: 'Cindy Team' } }),
+        // 礼品卡来源优先于 Gateway 上的名称；没有来源的赠送沿用原来的名称或通用名称。
+        grant('named', { displayName: 'Welcome grant' }),
+        grant('plain', {}),
+      ],
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: '2026-07-23T12:00:00Z',
+      scale: 9 as const,
+      observedAt: '2026-07-23T12:00:00Z',
+    }));
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('Welcome grant')).toBeTruthy();
+    const rows = within(screen.getByRole('list')).getAllByRole('listitem');
+    expect(within(rows[0]).getByText((text) => text.startsWith('billing.usage.promotionalDetails.giftCard'))).toBeTruthy();
+    expect(rows[0].textContent).toContain('Cindy Team');
+    expect(within(rows[2]).getByText('billing.usage.promotionalDetails.unnamed')).toBeTruthy();
+    expect(screen.getAllByText((text) => text.startsWith('billing.usage.promotionalDetails.giftCard'))).toHaveLength(1);
+  });
+
   it('refreshes the balance and XD models once when a top-up succeeds', async () => {
     const pendingOrder = {
       orderId: 'order_paid',

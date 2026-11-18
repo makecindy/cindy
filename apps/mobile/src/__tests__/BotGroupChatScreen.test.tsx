@@ -1932,6 +1932,9 @@ describe('group attachments', () => {
     });
     // Sent attachments leave the tray and are not reclaimed by the phone (the computer took them).
     expect(byId('botGroup.attachmentTray')).toBeNull();
+    // A delivered message folds the composer and keyboard away; a failed one keeps them (below).
+    expect(h.inputBlur).toHaveBeenCalled();
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
     expect(h.local.release).toHaveBeenCalledWith(['att-1']);
     expect(h.discarded).toEqual([]);
   });

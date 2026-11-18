@@ -327,6 +327,21 @@ describe('query 帧字段联动', () => {
     );
   });
 
+  it('models 条目 provider 可选(旧桌面端缺席合法), present 时必须 string|null', () => {
+    roundTrip(makeQueryResponse(MODELS_RESPONSE_LEGACY)); // legacy fixture 无 provider
+    for (const provider of ['Cindy AI', null]) {
+      const ok = structuredClone(MODELS_RESPONSE);
+      ok.agents![0].models[0].provider = provider;
+      roundTrip(makeQueryResponse(ok));
+    }
+    const bad = structuredClone(MODELS_RESPONSE) as unknown as Record<string, unknown>;
+    (bad.agents as Array<{ models: Array<Record<string, unknown>> }>)[0].models[0].provider = 42;
+    expectReject(
+      { ...makeQueryResponse(MODELS_RESPONSE), payload: bad },
+      'provider must be a string or null',
+    );
+  });
+
   it('permissionModes 可选字段形状校验', () => {
     const base = makeQueryResponse(MODELS_RESPONSE);
     const badArr = structuredClone(MODELS_RESPONSE) as unknown as Record<string, unknown>;

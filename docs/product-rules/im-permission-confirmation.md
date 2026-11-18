@@ -1,5 +1,12 @@
 # IM 与 Cindy 共用工具权限确认
 
+> **读取时机**：修改 IM 工具授权、来源消息、多端确认或暂停期间的确认回执，或新增 IM 渠道之前
+> **适用路径**：`apps/desktop/src/main/maker-ipc/**/{interactionRouter,sharedPermission}*`、
+> `apps/desktop/src/main/im/shared/**/{permissionPresentation,pendingInteractions,interactionSource,autoReviewUnavailablePrompt}*`、
+> `apps/desktop/src/main/im/*/{adapter,interaction,textInteractions,WechatIM}*`、
+> `apps/desktop/src/main/hook-control/**/{interactions,sharedPermission}*`、
+> `apps/mobile/src/session/{permissionPresentation,interactionModel}*`
+
 2026-10-03，用户要求：授权同时在 IM 和 Cindy 显示，任一处可以确认，来源群聊和
 触发消息要保留；各种 IM 及未来新增机器人应复用同一实现。
 
