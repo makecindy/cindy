@@ -260,6 +260,7 @@ describe('message viewport content virtualization', () => {
       // Before MutationObserver delivery: synchronous navigation must also see it.
       syncViewport();
     });
+    await flushFrames();
     expect(rowMeasurements).toBeGreaterThan(0);
     expect(row(39).querySelector('button')).not.toBeNull();
     expect(row(40).querySelector('button')).not.toBeNull();
@@ -270,6 +271,7 @@ describe('message viewport content virtualization', () => {
     await flushFrames();
     expect(row(48).querySelector('button')).toBeNull();
     await act(async () => { viewportHeight = 1600; syncViewport(); });
+    await flushFrames();
     expect(row(48).querySelector('button')).not.toBeNull();
   });
 
@@ -448,9 +450,8 @@ describe('message viewport content virtualization', () => {
   it('mounts rows reached by a large scroll and remembers heights when they leave', async () => {
     await act(async () => root.render(<Fixture />));
     await act(async () => { scroller().dispatchEvent(new WheelEvent('wheel', { bubbles: true })); scroller().scrollTop = 0; scroller().dispatchEvent(new Event('scroll')); });
-    // The destination must exist before another animation frame is allowed.
-    // Otherwise fast wheel/scrollbar input can paint a viewport of placeholders.
-    expect(row(0).querySelector('button')).not.toBeNull();
+    // The destination must be mounted by the pending frame callback, before
+    // paint. Otherwise fast wheel/scrollbar input can paint placeholders.
     await flushFrames();
     expect(row(0).querySelector('button')).not.toBeNull();
     expect(scroller().scrollTop).toBe(0);
@@ -466,16 +467,41 @@ describe('message viewport content virtualization', () => {
     expect(row(0).style.height).toBe('180px');
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
   });
-  it('commits a programmatic jump before the browser has dispatched its scroll event', async () => {
+  it('commits a programmatic jump in the same frame before paint', async () => {
     await act(async () => root.render(<Fixture restore />));
     await act(async () => {
       scroller().scrollTop = 1800;
       syncViewport();
-      expect(row(10).querySelector('button')).not.toBeNull();
     });
+    // The window commits once, in the pending frame callback before paint;
+    // a scroll event arriving later describes an already mounted destination.
+    await flushFrames();
+    expect(row(10).querySelector('button')).not.toBeNull();
     expect(row(10).getBoundingClientRect().top).toBe(0);
   });
-  it('mounts a direct animation-frame write at its microtask checkpoint without a scroll event', async () => {
+  it('coalesces a burst of scroll, write, resize and sync signals into one window commit', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    await flushFrames();
+    let commits = 0;
+    const commitObserver = new MutationObserver(() => { commits += 1; });
+    commitObserver.observe(scroller(), { childList: true, subtree: true });
+    await act(async () => {
+      scroller().scrollTop = 1800;
+      await new Promise<void>(resolve => queueMicrotask(resolve));
+      syncViewport();
+      scroller().dispatchEvent(new Event('scroll'));
+      viewportHeight = 1600;
+      notifyResize();
+    });
+    await flushFrames();
+    commitObserver.disconnect();
+    // A streaming pin emits several of these signals per frame; the burst
+    // must settle in a single reconcile commit, not one forced commit each.
+    expect(commits).toBe(1);
+    expect(row(10).querySelector('button')).not.toBeNull();
+    expect(row(48).querySelector('button')).toBeNull();
+  });
+  it('mounts a direct animation-frame write before paint, without a scroll event', async () => {
     await act(async () => root.render(<Fixture restore />));
     await flushFrames();
     expect(row(10).querySelector('button')).toBeNull();
@@ -485,7 +511,12 @@ describe('message viewport content virtualization', () => {
       frames.clear();
       pending.forEach(callback => callback(16));
       await new Promise<void>(resolve => queueMicrotask(resolve));
-      // No scroll event or next animation frame has been delivered.
+      // No scroll event has been delivered. The write schedules the window
+      // commit in the next frame's callback, which still runs before paint.
+      const scheduled = [...frames.values()];
+      frames.clear();
+      scheduled.forEach(callback => callback(32));
+      await new Promise<void>(resolve => queueMicrotask(resolve));
       expect(row(10).querySelector('button')).not.toBeNull();
       expect(row(10).getBoundingClientRect().top).toBe(0);
     });
@@ -508,9 +539,10 @@ describe('message viewport content virtualization', () => {
     await act(async () => {
       scroller().scrollTop = 0;
       await new Promise<void>(resolve => queueMicrotask(resolve));
-      expect(scroller().scrollTop).toBe(0);
-      expect(row(0).querySelector('button')).not.toBeNull();
     });
+    await flushFrames();
+    expect(scroller().scrollTop).toBe(0);
+    expect(row(0).querySelector('button')).not.toBeNull();
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
   });
   it('updates the owner before DOM observers can compensate toward a stale reading position', async () => {
@@ -529,6 +561,10 @@ describe('message viewport content virtualization', () => {
         scroller().scrollTop = 1800;
         await new Promise<void>(resolve => queueMicrotask(resolve));
       });
+      // The compensator reverts unknown DOM replacements to its saved reading
+      // point. The write updated that point at its microtask; the replacement
+      // itself commits in the pending frame, before paint.
+      await flushFrames();
       expect(observeScroll).toHaveBeenCalled();
       expect(scroller().scrollTop).toBe(1800);
       expect(row(10).querySelector('button')).not.toBeNull();
