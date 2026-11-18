@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   binary: '/fixture/codex' as string | null,
   spawn: vi.fn(),
   error: false,
+  errorMessage: 'fixture-secret-must-not-leak',
   hold: false,
   accountResult: undefined as unknown,
   oldAuthenticated: false,
@@ -46,6 +47,7 @@ import {
   readLegacyCodexProviderAccount,
   loginLegacyCodexProviderAccount,
 } from '../nativeCli.js';
+import { isAccountServiceUnreachable } from '../accountServiceError.js';
 import { refreshClaudeCliLoginStatus, runClaudeCliLogin } from '../../maker-host/claude-native-cli.desktop.js';
 
 const children: (EventEmitter & {
@@ -125,6 +127,7 @@ it('rejects a failed asynchronous proof without sending or exposing its error de
 beforeEach(() => {
   h.binary = '/fixture/codex';
   h.error = false;
+  h.errorMessage = 'fixture-secret-must-not-leak';
   h.hold = false;
   h.accountResult = undefined;
   h.oldAuthenticated = false;
@@ -152,7 +155,7 @@ beforeEach(() => {
               request.id === 1
                 ? { id: 1, result: {} }
                 : h.error
-                  ? { id: 2, error: { message: 'fixture-secret-must-not-leak' } }
+                  ? { id: 2, error: { message: h.errorMessage } }
                   : {
                       id: 2,
                       result: h.accountResult ?? {
@@ -316,14 +319,40 @@ describe('official Codex profiles', () => {
     );
     expect(children[0].kill).toHaveBeenCalledTimes(1);
   });
+  // 2026-11-18 user report, unit: Codex answered `workspace routing discovery timed out` because
+  // chatgpt.com resolved to a wrong address. It surfaced as a generic failure, so a valid login
+  // looked lost. The earlier case only covers a non-network error. Classify, never forward text.
+  it.each([
+    { message: 'workspace routing discovery timed out', unreachable: true },
+    { message: 'error sending request for url (https://chatgpt.com/backend-api/x)', unreachable: true },
+    { message: 'fixture-secret-must-not-leak', unreachable: false },
+  ])('classifies a CLI account error as unreachable=$unreachable', async ({ message, unreachable }) => {
+    h.error = true;
+    h.errorMessage = message;
+    const error = await codexAccountRpc('/fixture/second', 'account/read', {}).catch((e: unknown) => e);
+    expect(isAccountServiceUnreachable(error)).toBe(unreachable);
+    expect((error as Error).message).toBe('Codex account request failed');
+  });
+
+  // Same report: the browser login finished, then its confirming read hit the network failure and
+  // the whole sign-in was reported as failed. The caller re-reads and shows the account as unknown.
+  it('does not fail a finished browser login when only the confirming read is unreachable', async () => {
+    h.error = true;
+    h.errorMessage = 'workspace routing discovery timed out';
+    await expect(loginNativeAccount('openai', '/fixture/second', new AbortController().signal)).resolves.toBeUndefined();
+    h.errorMessage = 'fixture-secret-must-not-leak';
+    await expect(loginNativeAccount('openai', '/fixture/second', new AbortController().signal))
+      .rejects.toThrow('Codex account request failed');
+  });
+
   it('bounds a stalled CLI read and cancels a browser login without querying another profile', async () => {
     vi.useFakeTimers();
     h.hold = true;
-    const pending = expect(codexAccountRpc('/fixture/second', 'account/read', {})).rejects.toThrow(
-      'timed out',
-    );
+    const pending = codexAccountRpc('/fixture/second', 'account/read', {}).catch((e: unknown) => e);
     await vi.advanceTimersByTimeAsync(15_000);
-    await pending;
+    const stalled = await pending;
+    expect((stalled as Error).message).toMatch('timed out');
+    expect(isAccountServiceUnreachable(stalled)).toBe(true);
     const abort = new AbortController();
     const login = expect(
       loginNativeAccount('openai', '/fixture/second', abort.signal),
