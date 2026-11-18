@@ -36,6 +36,7 @@ import {
 import { LineSplitter } from '../eventLog';
 import { remoteAgentStartupTiming } from '../startupTiming';
 import { isRetryableLinkError, RemoteAgentPoller, type PolledRun, type RemoteAgentInvoke } from './poller';
+import { isDeliveryBackpressure, RemoteAgentDeliveryGate } from './deliveryPressure';
 
 export { isRetryableLinkError, RemoteAgentPoller, type RemoteAgentInvoke } from './poller';
 
@@ -56,6 +57,8 @@ const CLOSE_DRAIN_MS = 5_000;
 const MAX_REPLY_DELIVER_ATTEMPTS = 30;
 /** push 帧批次交付重试上限(对方按 seq 去重，同序号重试不会重复投递)。 */
 const MAX_PUSH_DELIVER_ATTEMPTS = 30;
+/** Pollers are already shared per executor/transport; never coordinate unrelated peers. */
+const deliveryGates = new WeakMap<RemoteAgentPoller, RemoteAgentDeliveryGate>();
 
 export class RemoteAgentRemoteError extends Error {
   constructor(readonly info: RemoteAgentErrorInfo, readonly phase?: 'start') {
@@ -96,6 +99,8 @@ export class RemoteAgentRunClient implements PolledRun {
   private started: { resolve(handle: Record<string, unknown>): void; reject(error: Error): void } | null = null;
   private readonly splitter = new LineSplitter(MAX_LINE_BYTES);
   private readonly inflight = new Map<string, AbortController>();
+  private readonly deliveryAbort = new AbortController();
+  private readonly deliveryGate: RemoteAgentDeliveryGate;
 
   private readonly invoke: RemoteAgentInvoke;
 
@@ -110,6 +115,9 @@ export class RemoteAgentRunClient implements PolledRun {
     },
   ) {
     this.invoke = poller.invoke;
+    let gate = deliveryGates.get(poller);
+    if (!gate) { gate = new RemoteAgentDeliveryGate(); deliveryGates.set(poller, gate); }
+    this.deliveryGate = gate;
     this.drained = new Promise<void>((resolve) => {
       this.markDrained = resolve;
     });
@@ -124,7 +132,8 @@ export class RemoteAgentRunClient implements PolledRun {
   }
 
   /** 把一个 JSON 值做成载荷：小的内联，大的 gzip 后分段上传。 */
-  async payload(value: unknown, uploadId = this.newId(), requireActive?: () => void): Promise<RemoteAgentPayload> {
+  async payload(value: unknown, uploadId = this.newId(), requireActive?: () => void,
+    invoke: RemoteAgentInvoke = this.invoke): Promise<RemoteAgentPayload> {
     const requireOpen = () => {
       if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
       requireActive?.();
@@ -145,7 +154,7 @@ export class RemoteAgentRunClient implements PolledRun {
     for (let index = 0; index < chunks; index += 1) {
       requireOpen();
       const data = gz.subarray(index * chunkBytes, (index + 1) * chunkBytes);
-      await this.invoke([{ op: 'upload', uploadId, index, data: data.toString('base64') }]);
+      await invoke([{ op: 'upload', uploadId, index, data: data.toString('base64') }]);
       // An in-flight chunk can finish after cancellation, but no next chunk or open may start.
       requireOpen();
     }
@@ -251,9 +260,11 @@ export class RemoteAgentRunClient implements PolledRun {
       for (let attempt = 1; ; attempt += 1) {
         if (this.closed) return;
         try {
-          await this.invoke([{ op: 'push', runId: this.runId, seq, frames, ...(this.holdsRemote() ? { hold: true } : {}) }]);
+          await this.deliveryGate.invoke(() => this.invoke([{ op: 'push', runId: this.runId, seq, frames,
+            ...(this.holdsRemote() ? { hold: true } : {}) }]), this.deliveryAbort.signal);
           return;
         } catch (error) {
+          if (this.closed) return;
           const retryable = isRetryableLinkError(error) && attempt < MAX_PUSH_DELIVER_ATTEMPTS;
           this.log?.warn(retryable ? 'remote agent: push failed; retrying' : 'remote agent: push failed', {
             runId: this.runId,
@@ -262,7 +273,9 @@ export class RemoteAgentRunClient implements PolledRun {
             error: String(error),
           });
           if (!retryable) throw error;
-          await sleep(delay);
+          // Peer pressure owns one shared probe timer; per-run timers would
+          // put the entire failed batch back into the send queue together.
+          if (!isDeliveryBackpressure(error)) await sleep(delay);
           delay = Math.min(delay * 2, 5_000);
         }
       }
@@ -305,6 +318,7 @@ export class RemoteAgentRunClient implements PolledRun {
   private finish(reason: string, error?: RemoteAgentErrorInfo, idleReclaimed = false): void {
     if (this.closed) return;
     this.closed = true;
+    this.deliveryAbort.abort();
     this.poller.unregister(this.runId);
     this.markDrained();
     const failure = new Error(error?.message ?? `[REMOTE_AGENT_EXPIRED] The task ended on the other computer (${reason}).`);
@@ -398,12 +412,11 @@ export class RemoteAgentRunClient implements PolledRun {
         reply = await this.handlers.onRequest(request, abort.signal);
       } catch (error) {
         reply = { type: 'error', error: { code: 'CONTROLLER_ERROR', message: error instanceof Error ? error.message : String(error) } };
-      } finally {
-        this.inflight.delete(requestId);
       }
       if (this.closed || abort.signal.aborted) return;
-      await this.deliverReply(requestId, reply);
+      await this.deliverReply(requestId, reply, abort.signal);
     } finally {
+      if (this.inflight.get(requestId) === abort) this.inflight.delete(requestId);
       this.answering -= 1;
     }
   }
@@ -418,17 +431,21 @@ export class RemoteAgentRunClient implements PolledRun {
    * 白白占住对方的 staging 缓冲；若首份上传已被消费、只是响应丢了，复用同一载荷还能直接
    * 命中幂等返回。上传中途失败后同一 uploadId 重传，也不会多留半份暂存载荷。
    */
-  private async deliverReply(requestId: string, reply: RemoteAgentReply): Promise<void> {
+  private async deliverReply(requestId: string, reply: RemoteAgentReply, signal: AbortSignal): Promise<void> {
     const uploadId = this.newId();
     let payload: RemoteAgentPayload | undefined;
     let delay = 500;
     for (let attempt = 1; ; attempt += 1) {
-      if (this.closed) return;
+      if (this.closed || signal.aborted) return;
       try {
-        payload ??= await this.payload(reply, uploadId);
-        await this.invoke([{ op: 'reply', runId: this.runId, requestId, payload }]);
+        const requireActive = () => { if (signal.aborted) throw signal.reason; };
+        const invoke: RemoteAgentInvoke = args => this.deliveryGate.invoke(() => this.invoke(args), signal);
+        payload ??= await this.payload(reply, uploadId, requireActive, invoke);
+        requireActive();
+        await invoke([{ op: 'reply', runId: this.runId, requestId, payload }]);
         return;
       } catch (error) {
+        if (this.closed || signal.aborted) return;
         const retryable = isRetryableLinkError(error) && attempt < MAX_REPLY_DELIVER_ATTEMPTS;
         this.log?.warn(retryable ? 'remote agent: reply failed; retrying' : 'remote agent: reply failed', {
           runId: this.runId,
@@ -437,7 +454,7 @@ export class RemoteAgentRunClient implements PolledRun {
           error: String(error),
         });
         if (!retryable) return;
-        await sleep(delay);
+        if (!isDeliveryBackpressure(error)) await sleep(delay);
         delay = Math.min(delay * 2, 5_000);
       }
     }

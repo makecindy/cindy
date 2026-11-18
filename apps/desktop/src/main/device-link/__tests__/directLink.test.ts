@@ -86,7 +86,7 @@ it('uses the desktop budget and synchronously claims a released native slot', as
 // path until the app restarts. The bridge tests do not cover this native startup
 // gate. Fake time covers cooldown, shared startup and healthy recovery in unit tier.
 it('bounds crash-loop restarts but lets authorized demand recover after a cooldown', async () => {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'performance'] });
   const observer = events(), session = desktopDirectRuntime.create('one', observer);
   await session.offer();
   fake.failed!(); expect(observer.closed).toHaveBeenCalledOnce();
@@ -98,6 +98,7 @@ it('bounds crash-loop restarts but lets authorized demand recover after a cooldo
   cancelled.close();
   desktopDirectRuntime.suspend?.();
   await expect(desktopDirectRuntime.create('three', events()).offer()).rejects.toThrow('UNAVAILABLE');
+  vi.setSystemTime(Date.now() - 60 * 60_000); // Clock correction cannot prolong an elapsed cooldown.
   await vi.advanceTimersByTimeAsync(60_000);
   await expect(stale.offer()).rejects.toThrow('CLOSED');
   await expect(cancelled.offer()).rejects.toThrow('CLOSED');

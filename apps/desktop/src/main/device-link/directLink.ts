@@ -26,7 +26,7 @@ function failed() {
   crashes += 1;
   // Keep the immediate crash-loop guard, but do not permanently disable direct
   // paths after a transient native failure. Only later authorized demand retries.
-  if (crashes >= 2) retryAt = Date.now() + Math.min(RESTART_COOLDOWN_MAX_MS,
+  if (crashes >= 2) retryAt = performance.now() + Math.min(RESTART_COOLDOWN_MAX_MS,
     RESTART_COOLDOWN_BASE_MS * 2 ** Math.min(crashes - 2, 3));
   suspend();
 }
@@ -42,7 +42,7 @@ function suspend() {
 function ensureStarted(): Promise<void> {
   if (detach) return Promise.resolve();
   if (starting) return starting;
-  if (crashes >= 2 && Date.now() < retryAt) return Promise.reject(new Error('DIRECT_RUNTIME_UNAVAILABLE'));
+  if (crashes >= 2 && performance.now() < retryAt) return Promise.reject(new Error('DIRECT_RUNTIME_UNAVAILABLE'));
   if (!registered) {
     registered = true;
     ipcMain.handle(DIRECT_LINK_LOCAL.REGISTER, (event) => host.registered(event));

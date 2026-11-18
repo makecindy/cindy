@@ -129,9 +129,12 @@ it('reports whether its relay connection is open, and when that changes', async 
 // Unit, real WorkerSocket: one cached same-account device, one pending dial,
 // no routable path. Existing live-relay tests only exercise available peers.
 it('reports a LAN handshake while the cached directory marks the peer offline', async () => {
+  // The handshake is still in progress: keep this worker alive until cleanup.
+  // A once listener let it exit just after ready, racing the route assertion.
   const workerFile = new URL('data:text/javascript,' + encodeURIComponent(`
 import { parentPort } from 'node:worker_threads';
-parentPort.once('message', () => {
+parentPort.on('message', (message) => {
+  if (message.type !== 'init') return;
   const deviceId = 'lan-peer';
   parentPort.postMessage({ type: 'directory', directory: [{ certificate: { deviceId } }], cached: true });
   parentPort.postMessage({ type: 'status', queued: 0, known: [deviceId],
