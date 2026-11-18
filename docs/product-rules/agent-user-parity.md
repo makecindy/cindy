@@ -165,7 +165,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 伙伴     | 项目规则、技能与自动化：伙伴项目的 `AGENTS.md`、`.agents/skills`、`.cindy/automations/schedules.json`（原有文件工具与 `schedule_*`；伙伴项目的自动化免导入确认） | 有（2026-11-08） | 无（随云端伙伴迁到新主力电脑） |
 | 伙伴     | 显式重新接受已保存模型，恢复旧版遗留的自动模型记录 | 有（`update_teammate_profile` 显式提交完整 `modelChain`，即使值未变） | 无（远程设置 IPC 可按版本接受，不等于跨电脑 Agent 工具） |
 | 伙伴     | 发现与选择 Codex Apps 连接器（继承默认保留，显式 MCP 白名单可收窄） | 有（能力工具） | 无（SSH Codex 不提供） |
-| 工具     | 添加自定义 MCP 服务器（HTTP/SSE 或本机 stdio；`request_mcp_setup` 在本任务打开同一设置表单，stdio 可建议 command/args/cwd/envKeys，凭证值由主人在表单填写、工具回执不返回）；伙伴随后可用能力工具加入。保存保留原任务，新启动的本机任务加载更新，含共享 app-server 的 Codex；不承诺原任务下一轮热加载，见[运行环境生效边界](../dev-rules/configuration-and-overrides.md#自定义-mcp-的生效边界)（2026-11-18） | 有（本机桌面任务） | 无（主人到受信电脑的设置 → 工具 → 外部工具添加） |
+| 工具     | 添加自定义 MCP 服务器（HTTP/SSE 或本机 stdio；`request_mcp_setup` 在本任务打开同一设置表单，stdio 可建议 command/args/cwd/envKeys，凭证值由主人在表单填写、工具回执不返回）；伙伴随后可用能力工具加入。新增工具由新任务按挂载规则加载；编辑已挂载的工具后，本机任务沿原连接使用旧配置，下次连接应读取最新配置，见[运行环境生效边界](../dev-rules/configuration-and-overrides.md#自定义-mcp-的生效边界)（2026-11-18） | 有（本机桌面任务） | 无（主人到受信电脑的设置 → 工具 → 外部工具添加） |
 | 伙伴     | 按已证实归属搜索跨渠道聊天、按最近活动列出旧任务           | 有   | 有（历史查询，两端需支持筛选参数） |
 | 伙伴     | 查看自己的本机 IM 连接分配与状态                         | 有   | 无               |
 | 伙伴     | 开关自己的记忆（`set_teammate_capability` kind=feature，与能力页同一份设置；系统技能已于 2026-11-08 随系统 Skill 机制移除） | 有（2026-11-01） | 无（远程设置界面可管理） |

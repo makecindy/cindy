@@ -119,11 +119,11 @@ describe('codexEnvironment', () => {
     expect(replacementUrl.toString()).not.toBe(boundUrl.toString());
   });
 
-  // Regression: saving a custom MCP after bridge startup omitted it even from new tasks.
-  // Build real per-thread overrides, then initialize/list/call through SDK clients:
-  // new tasks see additions/edits while existing transports and calls keep their snapshot.
+  // PR #11295: new tasks saw edits, but a task reconnecting on its own kept the old config.
+  // Exercise buildSessionMcpConfig + SDK initialize/list/call: delay the first connection,
+  // edit again while it is open, then reconnect before creating a second task.
   // Tier: existing integration fixture (loopback bridge + SDK Client, no accounts/processes).
-  it('loads custom provider additions and edits for new bound sessions without replacing the cached bridge', async () => {
+  it('loads saved custom provider edits on the next connection and additions in new tasks', async () => {
     let enterCall!: () => void;
     let releaseCall!: () => void;
     const entered = new Promise<void>(resolve => { enterCall = resolve; });
@@ -144,7 +144,9 @@ describe('codexEnvironment', () => {
         });
         return server;
       });
-    const providers: McpProvider[] = [testProvider()];
+    const delayed = provider('custom_delayed', 'delayed-v1');
+    registerAppServer(delayed.name, () => delayed.appServerConfig());
+    const providers: McpProvider[] = [testProvider(), delayed];
     const logger = noopLogger();
     const first = await getCodexExtraSpawnConfig({ mcpProviders: providers, logger });
     const bridgeIdentity = { port: first.bridge!.port, token: first.bridge!.token, instanceId: first.bridge!.instanceId };
@@ -159,14 +161,15 @@ describe('codexEnvironment', () => {
       });
       return bound;
     };
-    const connect = async (bound: Record<string, unknown>, name: string): Promise<Client> => {
+    const connect = async (bound: Record<string, unknown>, name: string) => {
       const client = new Client({ name: 'provider-snapshot-test', version: '1' });
       clients.push(client);
       const tokenEnv = bound[`mcp_servers.${name}.bearer_token_env_var`] as string;
-      await client.connect(new StreamableHTTPClientTransport(new URL(bound[`mcp_servers.${name}.url`] as string), {
+      const transport = new StreamableHTTPClientTransport(new URL(bound[`mcp_servers.${name}.url`] as string), {
         requestInit: { headers: { Authorization: `Bearer ${first.extraEnv[tokenEnv]}` } },
-      }));
-      return client;
+      });
+      await client.connect(transport);
+      return { client, transport };
     };
     const save = (...next: CustomMcpProvider[]) => {
       // Match the registry: current configs are available before the provider array changes.
@@ -184,13 +187,30 @@ describe('codexEnvironment', () => {
       expect(bound[`mcp_servers.${name}.enabled`]).toBe(enabled);
     };
     try {
-      save(provider('custom_snapshot', 'old-command', true));
-      const oldBound = configure('old-instance', ['custom_snapshot']);
+      const original = provider('custom_snapshot', 'old-command', true);
+      save(delayed, original);
+      const oldBound = configure('old-instance', ['custom_snapshot', 'custom_delayed']);
       expectConfigured(oldBound, 'custom_snapshot', 'old-instance', true);
-      const existing = await connect(oldBound, 'custom_snapshot');
+
+      save(provider('custom_delayed', 'delayed-v2'), original);
+      const delayedFirst = await connect(oldBound, 'custom_delayed');
+      expect.soft(await delayedFirst.client.callTool({ name: 'read_config', arguments: {} }))
+        .toMatchObject({ content: [{ text: 'delayed-v2' }] });
+
+      const latest = provider('custom_delayed', 'delayed-v3');
+      save(latest, original);
+      expect.soft(await delayedFirst.client.callTool({ name: 'read_config', arguments: {} }))
+        .toMatchObject({ content: [{ text: 'delayed-v2' }] });
+      await delayedFirst.transport.terminateSession();
+      await delayedFirst.client.close();
+      const { client: reconnected } = await connect(oldBound, 'custom_delayed');
+      expect(await reconnected.callTool({ name: 'read_config', arguments: {} }))
+        .toMatchObject({ content: [{ text: 'delayed-v3' }] });
+
+      const { client: existing } = await connect(oldBound, 'custom_snapshot');
       const inFlight = existing.callTool({ name: 'read_config', arguments: {} });
       await entered;
-      save(provider('custom_snapshot', 'new-command'), provider('custom_added', 'added-command'));
+      save(latest, provider('custom_snapshot', 'new-command'), provider('custom_added', 'added-command'));
       const cached = await getCodexExtraSpawnConfig({ mcpProviders: providers, logger });
       expect(cached).toBe(first);
       const nextBound = configure('new-instance', ['custom_snapshot', 'custom_added']);
@@ -199,15 +219,15 @@ describe('codexEnvironment', () => {
       expect(oldBound).not.toHaveProperty('mcp_servers.custom_added.url');
       expect({ port: cached.bridge!.port, token: cached.bridge!.token, instanceId: cached.bridge!.instanceId }).toEqual(bridgeIdentity);
       // Remote consumers keep the startup advertisement; local overrides carry the new catalog.
-      expect(cached.bridgeServerNames).toEqual(['cindy_test']);
-      expect(getActiveCodexBridgeServerNames()).toEqual(['cindy_test']);
+      expect(cached.bridgeServerNames).toEqual(['cindy_test', 'custom_delayed']);
+      expect(getActiveCodexBridgeServerNames()).toEqual(['cindy_test', 'custom_delayed']);
       releaseCall();
       expect(await inFlight).toMatchObject({ content: [{ type: 'text', text: 'old-command' }] });
       expect(await existing.callTool({ name: 'read_config', arguments: {} }))
         .toMatchObject({ content: [{ type: 'text', text: 'old-command' }] });
 
       for (const [name, expected] of [['custom_snapshot', 'new-command'], ['custom_added', 'added-command']] as const) {
-        const client = await connect(nextBound, name);
+        const { client } = await connect(nextBound, name);
         expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(['read_config']);
         expect(await client.callTool({ name: 'read_config', arguments: {} }))
           .toMatchObject({ content: [{ type: 'text', text: expected }] });

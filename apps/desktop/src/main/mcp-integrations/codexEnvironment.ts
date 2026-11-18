@@ -317,13 +317,26 @@ async function doStart(
     { url: string; bearerTokenEnvVar?: string; envHttpHeaders?: Record<string, string> }
   > = Object.create(null);
   const extraEnv: Record<string, string> = {};
+  // The registry updates this array in place after a successful save. Resolve
+  // the whole provider on initialize so an existing route sees one coherent
+  // config (including credentials) without disturbing its open transports.
+  function customAppFactory(name: string): () => McpServer {
+    return () => {
+      const current = opts.mcpProviders.find(provider => provider.name === name);
+      if (!(current instanceof CustomMcpProvider) || !current.supportsApps)
+        throw new Error('MCP_APP_SERVER_CHANGED');
+      return createSdkServer(current, ctx);
+    };
+  }
   // The registry can publish another catalog while getExtraEnv is pending.
   // Classify spawn entries against the same snapshot used to select providers.
   const initialRegistered = new Set(appServerIds());
-  const initialFactories = new WeakMap<McpProvider, () => McpServer>();
   for (const provider of [...opts.mcpProviders]) {
     if (provider.isEnabled && !provider.isEnabled(ctx)) continue;
-    if (provider instanceof CustomMcpProvider && provider.supportsApps && !initialRegistered.has(provider.name)) continue;
+    if (provider instanceof CustomMcpProvider && provider.supportsApps) {
+      if (initialRegistered.has(provider.name)) serverFactories[provider.name] = customAppFactory(provider.name);
+      continue;
+    }
 
     const providerEnv = await provider.getExtraEnv?.(ctx);
     if (providerEnv) Object.assign(extraEnv, providerEnv);
@@ -369,9 +382,10 @@ async function doStart(
       }
       return createServer();
     };
-    if (initialRegistered.has(provider.name)) initialFactories.set(provider, serverFactories[provider.name]);
-    const pluginId = pluginIdForKnownProviderName(provider.name);
-    if (pluginId) pluginIdByServerName[provider.name] = pluginId;
+  }
+  for (const name of Object.keys(serverFactories)) {
+    const pluginId = pluginIdForKnownProviderName(name);
+    if (pluginId) pluginIdByServerName[name] = pluginId;
   }
 
   if (Object.keys(serverFactories).length === 0 && Object.keys(remoteHttpServers).length === 0) {
@@ -413,7 +427,7 @@ async function doStart(
     for (const provider of opts.mcpProviders) {
       if (!(provider instanceof CustomMcpProvider) || !provider.supportsApps || !registered.has(provider.name)) continue;
       const name = provider.name;
-      factories[name] = initialFactories.get(provider) ?? (() => createSdkServer(provider, ctx));
+      factories[name] = customAppFactory(name);
       const key = `mcp_servers.${name}`;
       config[`${key}.url`] = withMcpRouteIdentity(bridge!.url(name), { sessionInstanceId: instanceId });
       config[`${key}.bearer_token_env_var`] = TOKEN_ENV;
