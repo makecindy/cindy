@@ -5,7 +5,8 @@ import {
 } from '../../../src/renderer/features/remote-desktop/TaskLiveScreenButtons';
 import type { InstalledGhost } from '../../../src/shared/ghost';
 import type { RemoteLiveScreen } from '@cindy/device-link';
-import { mountPage, subscription } from '../../ui-page/harness';
+import { ctx, mountPage, subscription } from '../../ui-page/harness';
+import { ToastContainer } from '../../../src/renderer/components/ui/toast/ToastContainer';
 
 const installed = {
   id: 'cindy-simulator',
@@ -16,7 +17,7 @@ const installed = {
   manifest: {
     id: 'cindy-simulator',
     name: 'Device Simulator',
-    taskView: { html: 'task.html', remote: true },
+    taskView: { html: 'task.html', remote: ctx.case === 'default' },
   },
 } as InstalledGhost;
 const screens = [
@@ -51,13 +52,14 @@ const screens = [
     taskIds: ['fixture'],
   },
 ] as RemoteLiveScreen[];
-const TASK_LIVE_SCREENS = { screens, loaded: true, unavailable: false };
+const TASK_LIVE_SCREENS = { screens: ctx.case === 'default' ? screens : [screens[0]], loaded: true, unavailable: false };
 
 /** The title-bar entries, and the task's composer stack where the ask waits. */
 function TaskChrome() {
   const entries = useAutoOpenTaskLiveScreens('fixture', TASK_LIVE_SCREENS as never);
   return (
     <div className="flex min-h-screen flex-col gap-4 bg-content-area p-4 text-foreground">
+      <ToastContainer />
       <div className="flex items-center gap-2">
         <TaskLiveScreenButtons sessionId="fixture" entries={entries} />
       </div>
@@ -78,11 +80,15 @@ void mountPage({
     },
     pluginMarket: {
       lookup: async () => ({
-        items: [{ pluginId: 'second', ghostId: 'second', namespace: null, installState: 'not-installed' }],
+        items: ctx.case === 'default'
+          ? [{ pluginId: 'second', ghostId: 'second', namespace: null, installState: 'not-installed' }]
+          : [{ pluginId: 'cindy-simulator', ghostId: 'cindy-simulator', namespace: null,
+            installState: ctx.case === 'update' ? 'update-available' : 'installed' }],
       }),
-      detail: async () => ({
-        pluginId: 'second', ghostId: 'second', namespace: null, installState: 'not-installed',
-        releaseId: 'fixture-release', manifest: { id: 'second' },
+      detail: async (pluginId: string) => ({
+        pluginId, ghostId: pluginId, namespace: null,
+        installState: ctx.case === 'update' ? 'update-available' : 'not-installed',
+        releaseId: 'fixture-release', manifest: { id: pluginId, taskView: { html: 'task.html', remote: true } },
       }),
       // Main's permission confirmation is outside this page: the install stays pending.
       install: () => new Promise(() => {}),

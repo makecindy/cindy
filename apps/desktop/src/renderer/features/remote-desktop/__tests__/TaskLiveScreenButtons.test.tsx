@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 测试价值：通过真实入口保护「远程任务的设备（模拟器）在电脑上由同一个插件自己的任务页显示」——只认
 // 那台电脑绑定到当前任务、正在运行的设备；本机装着同一个插件时设备出现就自动打开它的任务页一次（之后
-// 不反复弹出），入口可再次打开；本机没装、没开启或版本太旧时不打开任何页面，而是在输入框上方留一条
+// 不反复弹出），入口可再次打开；本机没装、没开启或不支持远程查看时不打开任何页面，而是在输入框上方留一条
 // 提示（2026-11-17 起不再用顶部几秒即逝的提示），点一下就在原地安装 / 开启 / 更新并打开设备，只装同一
 // 来源的那一个市场条目；旧版电脑（不支持设备画面）不发列表请求、不出现入口。最小输入：一台在线可远控
 // 的电脑、一份设备列表与本机已装插件；unit tier，单独约 3 秒。
@@ -76,6 +76,49 @@ function Entries() {
 const notice = () => document.querySelector<HTMLElement>('[data-banner-kind="task-live-screen-plugin"]');
 const settle = () => act(async () => void (await Promise.resolve()));
 
+// #11227: the existing setup test covered only an available upgrade. Exercise the
+// real entry and setup flow with a current installed release, or a newer release
+// that still cannot show remote devices. Unit tier; no real network or timers.
+it.each(['installed', 'update-without-remote', 'other-source', 'lookup-unavailable'])(
+  'does not promise or install a remote-view upgrade when none is available: %s',
+  async (state) => {
+    installed.ghosts = [plugin({ remote: false })];
+    lookup.mockResolvedValue({ items: [{
+      pluginId: 'cindy-simulator', ghostId: 'cindy-simulator',
+      namespace: state === 'other-source' ? 'other' : null,
+      installState: state === 'installed' ? 'installed' : 'update-available',
+    }] });
+    if (state === 'lookup-unavailable') lookup.mockResolvedValue({ items: [], unavailableReason: 'offline' });
+    if (state === 'update-without-remote') detail.mockResolvedValue({
+      pluginId: 'cindy-simulator', ghostId: 'cindy-simulator', namespace: null,
+      installState: 'update-available', releaseId: 'newer-release',
+      manifest: plugin({ remote: false }).manifest,
+    });
+    invoke.mockImplementation(async (_device: string, _channel: string, [request]: [{ op: string }]) =>
+      request.op === 'capabilities'
+        ? { version: 1, enabled: true, liveScreens: true }
+        : { screens: [listed('sim-a', 'iPhone Air', ['task-1'])] });
+    render(<Entries />);
+    await settle();
+    await settle();
+    expect(notice()?.textContent).toContain('does not support remote viewing');
+    expect(lookup).not.toHaveBeenCalled();
+    fireEvent.click(within(notice()!).getByRole('button', { name: 'Check for compatible update' }));
+    for (let i = 0; i < 4; i++) await settle();
+    expect(install).not.toHaveBeenCalled();
+    expect(setEnabled).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(openTab).not.toHaveBeenCalled();
+    if (state === 'lookup-unavailable') {
+      expect(toasts.error).toHaveBeenLastCalledWith(i18n.t('settings.ghosts.market.errors.generic'));
+      expect(toasts.info).not.toHaveBeenCalled();
+    } else {
+      expect(toasts.info).toHaveBeenLastCalledWith(i18n.t('remoteDesktop.liveScreenPlugin.unsupported.unavailable'));
+    }
+    expect(notice()).not.toBeNull();
+  },
+);
+
 beforeEach(async () => {
   revokedDevicesStore.clearAll();
   unresponsiveDevicesStore.clearAll();
@@ -103,7 +146,7 @@ beforeEach(async () => {
   detail.mockImplementation(async (pluginId: string) => ({
     ...(await lookup.mock.results.at(-1)?.value)?.items.find((item: { pluginId: string }) => item.pluginId === pluginId),
     releaseId: `release-${pluginId}`,
-    manifest: { id: 'cindy-simulator' },
+    manifest: { id: 'cindy-simulator', taskView: { html: 'task.html', remote: true } },
   }));
   install.mockReset();
   install.mockResolvedValue({ ghost: plugin() });
@@ -222,7 +265,7 @@ it('asks above the composer and sets the plugin up right here when this computer
   await settle();
   expect(install).toHaveBeenCalledExactlyOnceWith('cindy-simulator', {
     expectedReleaseId: 'release-cindy-simulator',
-    expectedManifest: { id: 'cindy-simulator' },
+    expectedManifest: { id: 'cindy-simulator', taskView: { html: 'task.html', remote: true } },
     allowSourceReplacement: false,
   });
   expect(navigate).not.toHaveBeenCalled();
@@ -238,13 +281,13 @@ it('asks above the composer and sets the plugin up right here when this computer
   await settle();
   expect(setEnabled).toHaveBeenCalledExactlyOnceWith('_root__cindy-simulator', true, 'approved:r');
 
-  // Too old to show another computer's device: update it in place from its own market listing.
+  // Missing support: check for a release that really supplies it, then update in place.
   installed.ghosts = [plugin({ remote: false })];
   lookup.mockResolvedValue({ items: [{ pluginId: 'cindy-simulator', ghostId: 'cindy-simulator', namespace: null, installState: 'update-available' }] });
   view.rerender(<Entries />);
   await settle();
-  expect(notice()?.textContent).toContain('Update the “Device Simulator” plugin');
-  fireEvent.click(within(notice()!).getByRole('button', { name: 'Update' }));
+  expect(notice()?.textContent).toContain('does not support remote viewing');
+  fireEvent.click(within(notice()!).getByRole('button', { name: 'Check for compatible update' }));
   await settle();
   await settle();
   await settle();
@@ -371,7 +414,7 @@ it.each([
     if (installs) expect(install).toHaveBeenLastCalledWith(installs, expect.objectContaining({ allowSourceReplacement: false }));
     else {
       expect(install).not.toHaveBeenCalled();
-      expect(toasts.info).toHaveBeenLastCalledWith(i18n.t('newChat.pluginSuggestions.unavailable'));
+      expect(toasts.info).toHaveBeenLastCalledWith(i18n.t('remoteDesktop.liveScreenPlugin.unsupported.unavailable'));
     }
     expect(navigate).not.toHaveBeenCalled();
     install.mockClear();

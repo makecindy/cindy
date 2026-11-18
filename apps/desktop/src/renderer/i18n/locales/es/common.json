@@ -1359,10 +1359,11 @@
         "body": "Esta tarea tiene {{device}} abierto en otro ordenador. Activa el complemento «{{plugin}}» en este ordenador para verlo y manejarlo en la barra lateral derecha.",
         "action": "Activar"
       },
-      "update": {
-        "title": "Actualiza el complemento «{{plugin}}»",
-        "body": "Esta tarea tiene {{device}} abierto en otro ordenador. Actualiza el complemento «{{plugin}}» en este ordenador para verlo y manejarlo en la barra lateral derecha.",
-        "action": "Actualizar"
+      "unsupported": {
+        "title": "El complemento «{{plugin}}» no admite la vista remota",
+        "body": "El complemento instalado no puede mostrar {{device}} desde otro ordenador. Busca una actualización compatible o usa el dispositivo en el ordenador que ejecuta esta sesión.",
+        "action": "Buscar actualización compatible",
+        "unavailable": "No hay una actualización compatible en el origen de este complemento. Usa el dispositivo en el ordenador que ejecuta esta sesión."
       }
     },
     "lockOnExitHintPrivacy": "Muestra la pantalla de privacidad al salir para que la IA siga trabajando; tocar la computadora la bloquea.",

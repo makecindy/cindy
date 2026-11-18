@@ -13,8 +13,29 @@ export default {
     default: {
       about: 'One usable provider and one missing provider, with a duplicate legacy install key; the ask waits above the composer',
     },
+    unsupported: { about: 'The latest same-source installed release does not support remote viewing; checking leaves the task in place' },
+    update: { about: 'A compatible same-source release exists; checking starts its ordinary in-place update' },
   },
   async check(page, ui) {
+    const scenario = await page.evaluate(() => window.__uiPage.ctx.case);
+    if (scenario !== 'default') {
+      const notice = page.locator('[data-banner-kind="task-live-screen-plugin"]');
+      const title = await ui.t('remoteDesktop.liveScreenPlugin.unsupported.title', { plugin: 'Device Simulator' });
+      await notice.waitFor();
+      assert.ok((await notice.innerText()).includes(title));
+      await ui.capture('unsupported');
+      await notice.getByRole('button', { name: await ui.t('remoteDesktop.liveScreenPlugin.unsupported.action'), exact: true }).click();
+      if (scenario === 'update') {
+        await notice.locator('button[aria-busy="true"]').waitFor();
+        await ui.capture('updating');
+      } else {
+        const result = page.getByText(await ui.t('remoteDesktop.liveScreenPlugin.unsupported.unavailable'), { exact: true });
+        await result.waitFor();
+        await ui.capture('no-compatible-update');
+        assert.ok(await notice.isVisible());
+      }
+      return;
+    }
     await page
       .getByRole('button', { name: 'Device Simulator · iPhone Air', exact: true })
       .waitFor();

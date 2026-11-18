@@ -1359,10 +1359,11 @@
         "body": "Cette tâche a {{device}} ouvert sur un autre ordinateur. Activez le plugin « {{plugin}} » sur cet ordinateur pour le voir et le contrôler dans la barre latérale droite.",
         "action": "Activer"
       },
-      "update": {
-        "title": "Mettre à jour le plugin « {{plugin}} »",
-        "body": "Cette tâche a {{device}} ouvert sur un autre ordinateur. Mettez à jour le plugin « {{plugin}} » sur cet ordinateur pour le voir et le contrôler dans la barre latérale droite.",
-        "action": "Mettre à jour"
+      "unsupported": {
+        "title": "Le plugin « {{plugin}} » ne prend pas en charge l’affichage à distance",
+        "body": "Le plugin installé ne peut pas afficher {{device}} depuis un autre ordinateur. Recherchez une mise à jour compatible ou utilisez l’appareil sur l’ordinateur qui exécute cette session.",
+        "action": "Rechercher une mise à jour compatible",
+        "unavailable": "Aucune mise à jour compatible n’est disponible depuis la source de ce plugin. Utilisez l’appareil sur l’ordinateur qui exécute cette session."
       }
     },
     "lockOnExitHintPrivacy": "Affiche l'écran de confidentialité à la sortie pour que l'IA continue de travailler ; toucher l'ordinateur le verrouille.",
