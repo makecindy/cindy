@@ -303,7 +303,7 @@ it.each(['shared-task', 'provider-share'] as const)('carries %s requests with ho
   expect(target.relayId).toBe('guest:' + delegation.id); expect(target.transportKey).toBe(guest.transportKey);
   // 会话层（2026-11-16）：两端都启用会话以后，这个受邀者的控制链路走委托里的单向会话，键就是分享帧解出来的那个逻辑对端，
   // 由委托决定，不由消息决定。分享资源一端只开委托里的会话（delegatedOnly）：同账号的设备在它上面没有会话。
-  const visitorSocket = f.sockets.find(socket => socket.deviceId === guest.deviceId)!;
+  const visitorSocket = f.sockets.filter(socket => socket.deviceId === guest.deviceId).at(-1)!;
   const memberSocket = f.sockets.find(socket => socket.deviceId === 'b-controller')!;
   const hostKeys: string[] = [], visitorPushes: unknown[] = [];
   hostSocket.useSessions!({ laneFor: () => 'normal', delegatedOnly: true, handlers: (key) => { hostKeys.push(key); return {
