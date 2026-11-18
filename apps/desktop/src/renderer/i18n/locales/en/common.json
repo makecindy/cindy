@@ -141,6 +141,10 @@
     "message": "Cindy cannot read this attachment. Select the original file to continue sending this message. Cancelling keeps your draft.",
     "button": "Use Original File"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "This send was cancelled because the task or window changed.",
+    "invalid": "This send is no longer valid for the current task."
+  },
   "mailReader": {
     "showExternalImages": "Show External Images",
     "markReadFailed": "Could not sync read status. Check mailbox authorization and reopen this email.",

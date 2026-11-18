@@ -141,6 +141,10 @@
     "message": "Cindy 无法读取这个附件。请选择原文件，确认后继续发送这条消息；取消会保留草稿。",
     "button": "使用原文件"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "因为任务或窗口发生变化，本次发送已取消。",
+    "invalid": "本次发送对当前任务已无效。"
+  },
   "mailReader": {
     "showExternalImages": "显示外部图片",
     "markReadFailed": "未能同步已读状态，请检查邮箱授权后重新打开。",

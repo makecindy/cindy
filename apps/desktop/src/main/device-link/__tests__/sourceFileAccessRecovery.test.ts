@@ -115,6 +115,44 @@ describe('send failure error primacy', () => {
     await expect(result).rejects.toBe(missing);
     expect((missing as Error).cause).toBe(scope);
   });
+
+  // #10906 review P2:IpcError 包装会把 readFile 的 signal 中止包成一句没有标记的消息,
+  // 但原错误挂在 cause 上;只要本作用域的信号确实已中止,仍要判成作用域拆坏的症状。
+  it('lets the scope failure lead when a wrapped abort carries the scope signal', async () => {
+    const controller = new AbortController();
+    const scope = scopeError();
+    const aborted = Object.assign(new Error('The operation was aborted'), { name: 'AbortError', code: 'ABORT_ERR' });
+    const wrapped = Object.assign(new Error('[DEVICE_LINK_MEDIA_TRANSFER_FAILED] The operation was aborted'), {
+      code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+      cause: aborted,
+    });
+    controller.abort();
+    const result = withSourceFileAccessRecovery({
+      signal: controller.signal,
+      selectFile: async () => null,
+      assertCurrent: () => { throw scope; },
+    }, async () => { throw wrapped; });
+    await expect(result).rejects.toBe(scope);
+    expect((scope as Error).cause).toBe(wrapped);
+  });
+
+  // 反过来:信号没中止时,cause 上的中止不是本作用域拆坏的证据(可能是远端自己的中止),
+  // 包装后的传输失败必须保持主错误,否则又重新顶替真实故障。
+  it('keeps a wrapped abort primary when this scope was not aborted', async () => {
+    const scope = scopeError();
+    const aborted = Object.assign(new Error('The operation was aborted'), { name: 'AbortError', code: 'ABORT_ERR' });
+    const wrapped = Object.assign(new Error('[DEVICE_LINK_MEDIA_TRANSFER_FAILED] The operation was aborted'), {
+      code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+      cause: aborted,
+    });
+    const result = withSourceFileAccessRecovery({
+      signal: new AbortController().signal,
+      selectFile: async () => null,
+      assertCurrent: () => { throw scope; },
+    }, async () => { throw wrapped; });
+    await expect(result).rejects.toBe(wrapped);
+    expect((wrapped as Error).cause).toBe(aborted);
+  });
 });
 
 // #10906 review:内层复查也会顶替真实原因 —— 读取被拒后、准备弹选择框前那次

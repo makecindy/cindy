@@ -141,6 +141,10 @@
     "message": "Cindy kann diesen Anhang nicht lesen. Wähle die Originaldatei aus, um diese Nachricht weiter zu senden. Beim Abbrechen bleibt dein Entwurf erhalten.",
     "button": "Originaldatei verwenden"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "Dieses Senden wurde abgebrochen, weil sich die Aufgabe oder das Fenster geändert hat.",
+    "invalid": "Dieses Senden ist für die aktuelle Sitzung nicht mehr gültig."
+  },
   "mailReader": {
     "showExternalImages": "Externe Bilder anzeigen",
     "markReadFailed": "Lesestatus konnte nicht synchronisiert werden. Prüfe die Postfachautorisierung und öffne diese E-Mail erneut.",

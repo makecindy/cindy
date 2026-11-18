@@ -141,6 +141,10 @@
     "message": "Cindy ne peut pas lire cette pièce jointe. Sélectionnez le fichier d'origine pour poursuivre l'envoi de ce message. Si vous annulez, votre brouillon est conservé.",
     "button": "Utiliser le fichier d'origine"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "Cet envoi a été annulé, car la tâche ou la fenêtre a changé.",
+    "invalid": "Cet envoi n'est plus valide pour la session en cours."
+  },
   "mailReader": {
     "showExternalImages": "Afficher les images externes",
     "markReadFailed": "Impossible de synchroniser l'état de lecture. Vérifiez l'autorisation de la boîte mail et rouvrez cet e-mail.",

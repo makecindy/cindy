@@ -141,6 +141,10 @@
     "message": "Cindy 不能讀此附件。請擇原始檔案，確認後續遣此訊；罷則草稿仍留。",
     "button": "用原始檔案"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "任務或視窗既遷，此傳遂止。",
+    "invalid": "此傳於當下任務，已屬無效。"
+  },
   "mailReader": {
     "showExternalImages": "顯外部之圖",
     "markReadFailed": "未能同步已讀之狀，請察信箱授權而後重啟。",

@@ -57,11 +57,12 @@ export function resolveSendScopeReason(probe: SendScopeProbe): SendScopeReason |
 }
 
 /**
- * 用户看得见的文案:守卫覆盖所有前台发送通道,没有附件确认时不能说「附件确认」。
+ * 用户看得见的文案走 i18n key(#10906 review P1):这些串会以 `[PERMISSION_DENIED]` 带到
+ * 渲染层的错误横幅,而渲染层对未登记的码只能回落原文 —— 硬编码英文等于所有语言都看到英文。
  * 具体命中条件只进日志,不进文案(用户要的是「这次发送为什么没成」,不是内部术语)。
  */
-export function describeSendScopeReason(reason: SendScopeReason): string {
+export function sendScopeReasonI18nKey(reason: SendScopeReason): string {
   return reason === 'aborted'
-    ? 'This send was cancelled because the task or window changed.'
-    : 'This send is no longer valid for the current task.';
+    ? 'deviceLinkSendScope.cancelled'
+    : 'deviceLinkSendScope.invalid';
 }

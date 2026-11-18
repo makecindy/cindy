@@ -73,10 +73,29 @@ const CANCELLED_MARKER = /\b(?:UPLOAD_CANCELLED|FILE_PEER_CANCELLED)\b/;
  */
 function isScopeTeardownSymptom(error: unknown, signal?: AbortSignal): boolean {
   if (error === null || (typeof error !== 'object' && typeof error !== 'function')) return false;
-  const candidate = error as { name?: unknown; code?: unknown; message?: unknown };
-  if (candidate.name === 'AbortError' || candidate.code === 'ABORT_ERR') return true;
+  const candidate = error as { name?: unknown; code?: unknown; message?: unknown; cause?: unknown };
+  if (isAbortMarker(candidate)) return true;
   if (signal && error === signal.reason) return true;
-  return typeof candidate.message === 'string' && CANCELLED_MARKER.test(candidate.message);
+  // 包装层自己不带标记:DEVICE_LINK_MEDIA_TRANSFER_FAILED 会把 readFile 的 signal 中止
+  // 包成一句「The operation was aborted」,name/code 全丢(#10906 review P2)。这时只有
+  // **本作用域的信号确实已中止**、且 cause 链上带着中止标记,才算作用域拆坏的症状 ——
+  // 否则远端自己的中止会把真实故障重新顶替掉。
+  if (signal?.aborted !== true) return false;
+  return chainHasAbortMarker(candidate.cause, 0);
+}
+
+/** 错误自身就是中止:标准 AbortError,或传输链路的显式中止标记。 */
+function isAbortMarker(error: { name?: unknown; code?: unknown; message?: unknown }): boolean {
+  if (error.name === 'AbortError' || error.code === 'ABORT_ERR') return true;
+  return typeof error.message === 'string' && CANCELLED_MARKER.test(error.message);
+}
+
+/** cause 链上(有深度上限,防环)是否带着中止标记。 */
+function chainHasAbortMarker(cause: unknown, depth: number): boolean {
+  if (depth > 3 || cause === null || (typeof cause !== 'object' && typeof cause !== 'function')) return false;
+  const candidate = cause as { name?: unknown; code?: unknown; message?: unknown; cause?: unknown };
+  if (isAbortMarker(candidate)) return true;
+  return chainHasAbortMarker(candidate.cause, depth + 1);
 }
 
 /** Captured by each transfer, so its asynchronous checkpoints retain the initiating scope. */

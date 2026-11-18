@@ -141,6 +141,10 @@
     "message": "O Cindy não consegue ler este anexo. Selecione o arquivo original para continuar enviando esta mensagem. Ao cancelar, seu rascunho será mantido.",
     "button": "Usar arquivo original"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "Este envio foi cancelado porque a tarefa ou a janela mudou.",
+    "invalid": "Este envio não é mais válido para a sessão atual."
+  },
   "mailReader": {
     "showExternalImages": "Mostrar imagens externas",
     "markReadFailed": "Não foi possível sincronizar o status de leitura. Verifique a autorização da caixa de e-mail e abra este e-mail novamente.",

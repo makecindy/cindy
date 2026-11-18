@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  describeSendScopeReason,
   resolveSendScopeReason,
+  sendScopeReasonI18nKey,
   type SendScopeProbe,
 } from '../sendScopeGuard';
 
@@ -51,10 +51,19 @@ describe('send scope guard', () => {
     })).toBe('aborted');
   });
 
-  it('does not blame an attachment confirmation on sends that never had one', () => {
-    for (const reason of ['aborted', 'owner-changed', 'window-destroyed'] as const) {
-      expect(describeSendScopeReason(reason)).not.toMatch(/attachment/i);
+  // #10906 review P1:用户看得见的文案走 i18n key(渲染层对未登记的码只能回落原文),
+  // 且没有附件确认的发送不能说「附件确认」。中止与其余作用域失效是两个 key。
+  it('maps every reason to a localized message key without blaming an attachment', () => {
+    const reasons = [
+      'aborted', 'boundary-pending', 'owner-unset', 'owner-changed', 'generation-changed',
+      'sender-destroyed', 'frame-missing', 'frame-detached', 'frame-changed', 'window-missing', 'window-destroyed',
+    ] as const;
+    for (const reason of reasons) {
+      expect(sendScopeReasonI18nKey(reason)).toMatch(/^deviceLinkSendScope\./);
     }
-    expect(describeSendScopeReason('aborted')).toMatch(/cancelled/i);
+    expect(sendScopeReasonI18nKey('aborted')).toBe('deviceLinkSendScope.cancelled');
+    for (const reason of ['owner-changed', 'window-destroyed'] as const) {
+      expect(sendScopeReasonI18nKey(reason)).toBe('deviceLinkSendScope.invalid');
+    }
   });
 });

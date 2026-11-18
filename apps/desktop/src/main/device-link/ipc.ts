@@ -44,7 +44,7 @@ import { ServerApiError } from '../serverApiClient.desktop';
 import { deviceLinkApiFetch } from './deviceLinkApi.desktop.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
-import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
+import { createIpcError, isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
 import { ReviewArtifactAuthorizationError } from '../reviewer/reviewArtifactAuthorization.js';
 import { decodeRemoteHistory } from '../../shared/remoteHistoryCache';
 import {
@@ -98,7 +98,7 @@ import { confirmReviewArtifacts } from '../reviewer/confirmReviewArtifacts.js';
 import { tryUploadPeerAttachment } from './filePeer';
 import { withAgentNetMediaTarget } from './agentNetMediaRouting.js';
 import { withSourceFileAccessRecovery, releaseSourceFileAccessUploads } from './sourceFileAccessRecovery';
-import { describeSendScopeReason, resolveSendScopeReason } from './sendScopeGuard';
+import { resolveSendScopeReason, sendScopeReasonI18nKey } from './sendScopeGuard';
 import { parseSharedTaskPeer, scrubSharedProviderCatalog } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
 import {
@@ -891,10 +891,15 @@ export async function handleInvoke(
        if (err instanceof ReviewArtifactAuthorizationError) {
          throwIpcError('PERMISSION_DENIED', err.message);
        }
-       throwIpcError(
+       // 包装会丢掉中止的 name/code(#10906 review P2):作用域作废掐断在途传输时,
+       // readFile 的 signal 中止被包成这层之后消息里一个标记都不剩。原错误挂到 cause,
+       // 让「这是不是作用域拆坏的症状」能按结构化判据认出来,而不是猜文案。
+       const transferFailure = createIpcError(
          'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
          err instanceof Error ? err.message : String(err),
-      );
+       );
+       transferFailure.cause = err;
+       throw transferFailure;
     }
     assertControlTargetEnabled(deps, normalizedDeviceId);
   }
@@ -1890,7 +1895,9 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
             reason,
             channel: String(p.channel),
           });
-          throwIpcError('PERMISSION_DENIED', describeSendScopeReason(reason));
+          // 文案走 i18n(#10906 review P1):渲染层对未登记的码只能回落原文,硬编码英文
+          // 会让所有语言都看到英文。命中条件仍只进上面的日志。
+          throwIpcError('PERMISSION_DENIED', t(sendScopeReasonI18nKey(reason)));
         }
         assertTrustedAppRendererEvent(e);
       };
