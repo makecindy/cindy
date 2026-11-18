@@ -50,6 +50,7 @@ import type { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import type { AgentInputQueueSnapshotState } from '../localDb/agentInputQueueSnapshots.js';
 import {
   isContinuationOnlyAutoResumeReason,
+  isUnexpectedWorkerStreamEnd,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
 import type { SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
@@ -1341,6 +1342,20 @@ function requiresOrcaReportPersistence(item: AgentInputQueuedMessage): boolean {
 }
 
 export class AgentInputCoordinator {
+  // A direct Lead assignment bypasses the queue. Keep its receipt off the active input
+  // boundary so ordinary sends, steering and successful terminals retain their semantics.
+  private readonly directWorkerReceipts = new WeakMap<object, {
+    generation: number; item: AgentInputQueuedMessage; signal: AbortSignal;
+  }>();
+
+  rememberDirectWorkerInput(runtime: object, generation: number, item: AgentInputQueuedMessage, signal: AbortSignal): () => void {
+    const receipt = { generation, item, signal };
+    if (!signal.aborted && item.createOpts.orcaRole === 'worker') this.directWorkerReceipts.set(runtime, receipt);
+    return () => {
+      if (this.directWorkerReceipts.get(runtime) === receipt) this.directWorkerReceipts.delete(runtime);
+    };
+  }
+
   private readonly states = new Map<string, SessionInputState>();
   /** 账号限额等待计划的单调令牌（跨会话唯一，迟到的 host 定时器据此失效）。 */
   private usageLimitWaitSeq = 0;
@@ -4465,6 +4480,19 @@ export class AgentInputCoordinator {
       return;
     }
     const active = state.activeTurn;
+    let directWorkerItem: AgentInputQueuedMessage | undefined;
+    const runtime = this.deps.getTurnSessionIdentity?.(sessionId);
+    if (runtime && meta?.sessionInstanceId && meta.sessionInstanceId === readSessionInstanceId(runtime)) {
+      const receipt = this.directWorkerReceipts.get(runtime);
+      if (receipt && receipt.generation === meta.sessionTurnGeneration) {
+        this.directWorkerReceipts.delete(runtime);
+        if (!active && !receipt.signal.aborted && !state.queuePaused && !state.queueAbortPending &&
+            !state.pendingQueue.length && !state.recovery && type === 'error' &&
+            isUnexpectedWorkerStreamEnd({ ...signals, message })) {
+          directWorkerItem = receipt.item;
+        }
+      }
+    }
     state.staleLiveIdleSinceMs = null;
     // Ownership first. A later-generation terminal must not tear down the
     // pending Stop abort boundary that can still reclaim the leftover turn.
@@ -4505,14 +4533,15 @@ export class AgentInputCoordinator {
         this.emit(sessionId);
         return;
       }
-      if (active?.persisted) {
+      if (active?.persisted || directWorkerItem) {
+        const item = active?.item ?? directWorkerItem ?? null;
         state.activeTurn = null;
         state.stickyError = null;
-        const schedulerItem = active.item && isSchedulerOriginItem(active.item);
-        const resumableCandidate = this.isResumableTurnErrorCandidate(sessionId, message, signals, active.item);
-        const scheduledQuota = isScheduledQuotaRecovery(active.item, message, signals);
+        const schedulerItem = item && isSchedulerOriginItem(item);
+        const resumableCandidate = this.isResumableTurnErrorCandidate(sessionId, message, signals, item);
+        const scheduledQuota = isScheduledQuotaRecovery(item, message, signals);
         setErrorProjectionSignals(state, signals);
-        const outcome = this.setActiveTurnRecovery(state, active.item, {
+        const outcome = this.setActiveTurnRecovery(state, item, {
           allowSchedulerAutoResume: Boolean(schedulerItem && resumableCandidate) || scheduledQuota,
           persistedFailure: true,
         });
@@ -4538,8 +4567,8 @@ export class AgentInputCoordinator {
         // 用低调提示表达(autoResumePending)。两种结果都只 emit 一次,不让用户先看到一帧
         // 红横幅再被撤掉。
         const takeover =
-          outcome === 'kept' && active.item
-            ? this.notifyResumableTurnError(sessionId, active.item, message, signals)
+          outcome === 'kept' && item
+            ? this.notifyResumableTurnError(sessionId, item, message, signals)
             : null;
         if (takeover) {
           state.autoResumePending = takeover;
@@ -4549,7 +4578,7 @@ export class AgentInputCoordinator {
           state.error = message ?? state.error;
           // 限额失败保留 Retry 与等待；其它确定性错误仍交给 runner 收口。
           if (schedulerItem && !scheduledQuota) {
-            this.setActiveTurnRecovery(state, active.item, { persistedFailure: true });
+            this.setActiveTurnRecovery(state, item, { persistedFailure: true });
             this.markPendingExternalTerminalDone(sessionId, state);
             this.emit(sessionId);
             this.scheduleDrainAfterExternalTurnSettles(
@@ -4560,12 +4589,12 @@ export class AgentInputCoordinator {
           }
         }
         // 供应商组会先试着换电脑时，在 emit 之前登记先不呈现：不让用户先看到一帧红横幅。
-        if (!takeover && outcome === 'kept' && active.item) {
-          this.holdForProviderGroupSwitch(sessionId, state, active.item, message, signals);
+        if (!takeover && outcome === 'kept' && item) {
+          this.holdForProviderGroupSwitch(sessionId, state, item, message, signals);
         }
         this.emit(sessionId);
-        if (!takeover && outcome === 'kept' && active.item) {
-          this.notifyUsageLimitedTurnError(sessionId, active.item, message, signals);
+        if (!takeover && outcome === 'kept' && item) {
+          this.notifyUsageLimitedTurnError(sessionId, item, message, signals);
         }
         return;
       }
