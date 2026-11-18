@@ -84,7 +84,6 @@ export interface BootstrapDirectoryGrantDeps {
   preservePersistedGrants?: boolean;
   statDirectory?: (dir: string) => Promise<{ isDirectory(): boolean }>;
   realpathDirectory?: (dir: string) => Promise<string>;
-  readPersistedExtraDirs?(sessionId: string): Promise<string[]>;
   readPersistedWritableDirs(sessionId: string): Promise<string[]>;
   persistExistingSession(
     sessionId: string,
@@ -105,14 +104,6 @@ export async function prepareDirectoryGrantsForBootstrap(
   opts: CreateOpts,
   deps: BootstrapDirectoryGrantDeps,
 ): Promise<void> {
-  // Direct cold-start preparation has no renderer-owned directory snapshot.
-  // Restore the Host's saved grants, including its private Library marker,
-  // before applying the same validation as lazy SEND. Explicit [] stays [];
-  // wire callers still cannot supply a Host-owned Library slot.
-  if (opts.extraDirs === undefined && !opts.remoteHostId && typeof opts.id === 'string' && opts.id
-    && deps.readPersistedExtraDirs) {
-    Object.assign(opts, directoryGrantsForRuntime(await deps.readPersistedExtraDirs(opts.id)));
-  }
   const libraryRoot = opts.remoteHostId ? undefined : opts[LIBRARY_READ_ROOT];
   const runtimeDirs = opts.extraDirs ?? [];
   if (runtimeDirs.some((dir) => isLibraryExtraDirSlot(dir.trim()))) {
@@ -538,6 +529,7 @@ export interface MakerSendTransaction {
    * task row. Returns false when a runtime already exists or startup failed;
    * the next send then follows its normal path.
    */
+  preparePiSkillRuntime(sessionId: string, workingDir: string, preferences: Pick<CreateOpts, 'userPrompt' | 'makerMemoryEnabled'>): Promise<void>;
   prewarmSession(sessionId: string, createOpts: CreateOpts): Promise<boolean>;
   /**
    * Main-side senders that reach an idle live session without this transaction (Orca
@@ -1102,6 +1094,25 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   }
 
   return {
+    async preparePiSkillRuntime(sessionId, workingDir, preferences) {
+      const opts = await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId);
+      if (opts.agentKind !== 'pi' || opts.workingDir !== workingDir) {
+        throwIpcError('PRECONDITION_FAILED', 'Session engine or working directory changed');
+      }
+      const live = deps.getSession(sessionId);
+      if (live) {
+        if (live.agentKind !== 'pi' || live.workDir !== workingDir) {
+          throwIpcError('PRECONDITION_FAILED', 'Running session no longer matches the selected project');
+        }
+        return;
+      }
+      const co = deps.buildCreateOptsWithStderr({ ...opts, ...preferences, id: sessionId });
+      const result = await lazyCreateSession(sessionId, co);
+      if (result.kind === 'failure') {
+        const outcome = result.result.outcome;
+        throwIpcError('PRECONDITION_FAILED', outcome?.kind === 'host-send' ? outcome.message : 'Pi startup failed');
+      }
+    },
     async prewarmSession(sessionId, createOpts) {
       if (deps.getSession(sessionId)) return false;
       const lazy = await lazyCreateSession(sessionId, createOpts);

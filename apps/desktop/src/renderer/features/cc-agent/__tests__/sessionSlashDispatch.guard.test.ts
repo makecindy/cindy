@@ -28,7 +28,7 @@ visit(source);
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-function harness(agentKind = 'pi', remoteDeviceId?: string) {
+function harness(agentKind = 'pi', remoteDeviceId?: string, runtimeOnly = false) {
   vi.stubGlobal('window', { setTimeout });
   const discovered: slash.UnifiedCommand = {
     kind: 'agent-skill', source: 'skill', name: 'demo', scope: 'repo', runtimeStatus: 'discovered',
@@ -37,20 +37,20 @@ function harness(agentKind = 'pi', remoteDeviceId?: string) {
   let ready = false;
   let release!: () => void;
   const preparation = new Promise<void>(resolve => { release = () => { ready = true; resolve(); }; });
-  const create = vi.fn((..._args: any[]) => preparation);
+  const create = vi.fn((..._args: any[]) => preparation.then(() => ({ accepted: true })));
   const send = vi.fn(async (..._args: any[]) => false);
   const session = { id: 'cold', agentKind, model: 'saved-model', effort: 'high', permissionMode: 'ask',
     workingDir: '/project', status: 'active', source: 'user', orcaRole: null,
     extraDirs: ['/reference', 'cindy-library:/library'], writableDirs: ['/output'] };
   const environment: Record<string, any> = {
-    ...slash, session, sessionId: session.id, remoteDeviceId, catalogDeviceId: remoteDeviceId,
+    ...slash, toast: { error: vi.fn() }, extractIpcError: () => null, session, sessionId: session.id, remoteDeviceId, catalogDeviceId: remoteDeviceId,
     dbToMakerAgentKind: (kind: string) => kind,
     buildCreateOptsForCurrentSession: (_id: string, model: string, effort: string, permissionMode: string, workingDir: string) =>
       ({ model, effort, permissionMode, workingDir }),
-    window: { setTimeout, electronAPI: { maker: { createSession: create }, deviceLink: { invoke: create } } },
+    window: { setTimeout, electronAPI: { maker: { prewarmSession: create }, deviceLink: { invoke: create } } },
     CINDY_MAKE_ENABLED: true, allCommandsRef: { current: [discovered] },
     getHelpCommandsSnapshot: async () => [discovered],
-    loadAllCommands: async () => ready ? [loaded] : [discovered],
+    loadAllCommands: async () => ready ? [loaded] : runtimeOnly ? [] : [discovered],
     setAllCommands: vi.fn(), isRemoteSession: false,
     readOnly: false, cindyMakeInputLocked: false, invalidateHistoryRecoveryNavigation: vi.fn(),
     matchNavigationCommandName: () => null, tryHandleNavigationCommand: async () => false,
@@ -86,12 +86,12 @@ it.each(['queue', 'steer'])('waits beyond the retry budget before sending a cold
   await submission;
   expect(h.send.mock.calls[0][0]).toBe('/skill:demo hello');
   expect(h.send.mock.calls[0][7].pastedTextRanges).toEqual([{ start: 12, end: 17 }]);
-  expect(h.create.mock.calls[0][0]).toMatchObject({
-    id: 'cold', model: 'chosen-model', workingDir: '/project',
+  expect(h.create.mock.calls[0][1]).toMatchObject({
+    purpose: 'pi-skill-dispatch', model: 'chosen-model', workingDir: '/project',
   });
   // Host restores grants from its DB; never forward the private Library slot.
-  expect(h.create.mock.calls[0][0].extraDirs).toBeUndefined();
-  expect(h.create.mock.calls[0][0].writableDirs).toBeUndefined();
+  expect(h.create.mock.calls[0][1].extraDirs).toBeUndefined();
+  expect(h.create.mock.calls[0][1].writableDirs).toBeUndefined();
 });
 
 it('prepares on the controlled device for callers without a custom preparation callback', async () => {
@@ -101,8 +101,8 @@ it('prepares on the controlled device for callers without a custom preparation c
   });
   h.release();
   await expect(dispatch).resolves.toMatchObject({ message: '/skill:demo', handled: false });
-  expect(h.create.mock.calls[0]).toEqual(['controlled-device', 'maker:create-session', [expect.objectContaining({
-    id: 'cold', workingDir: '/selected-project', model: 'saved-model',
+  expect(h.create.mock.calls[0]).toEqual(['controlled-device', 'maker:session:prewarm', ['cold', expect.objectContaining({
+    purpose: 'pi-skill-dispatch', workingDir: '/selected-project', model: 'saved-model',
   })]]);
 });
 
@@ -117,6 +117,7 @@ it('does not send plain text after runtime preparation fails', async () => {
   const h = harness();
   h.create.mockRejectedValueOnce(new Error('runtime unavailable'));
   await expect(h.handleSend('/demo', 'chosen-model', 'medium', 'ask')).rejects.toThrow('runtime unavailable');
+  expect(h.environment.toast.error).toHaveBeenCalledWith(expect.stringContaining('runtime unavailable'));
   expect(h.send).not.toHaveBeenCalled();
 });
 
@@ -149,7 +150,7 @@ it('waits for a cold skill before saving a queue edit and rebases its metadata',
 });
 
 it.each([undefined, 'controlled-device'])('resumes directory selection with the pending model and rewritten skill (device: %s)', async remoteDeviceId => {
-  const h = harness('pi', remoteDeviceId);
+  const h = harness('pi', remoteDeviceId, true);
   let completed!: () => void;
   const submission = new Promise<void>(resolve => { completed = resolve; });
   Object.assign(h.environment, {
@@ -169,6 +170,6 @@ it.each([undefined, 'controlled-device'])('resumes directory selection with the 
   expect(h.send.mock.calls[0][7].pastedTextRanges).toEqual([{ start: 12, end: 17 }]);
   const createOpts = expect.objectContaining({ model: 'pending-model', effort: 'medium', permissionMode: 'ask', workingDir: '/selected-project' });
   expect(h.create.mock.calls[0]).toEqual(remoteDeviceId
-    ? [remoteDeviceId, 'maker:create-session', [createOpts]]
-    : [createOpts]);
+    ? [remoteDeviceId, 'maker:session:prewarm', ['cold', createOpts]]
+    : ['cold', createOpts]);
 });

@@ -21,7 +21,7 @@ import { McpSetupBridge } from './mcpSetupBridge.js';
 import type { McpSetupProposal, McpSetupRequest } from '../../shared/mcpSetup.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { measureTraceOperation } from '../performance-trace/measure.js';
-import { assertSessionCreationCurrent, currentSessionCreationSignal } from '../localDb/sessionRuntimeCleanup.js';
+import { assertSessionCreationCurrent, currentSessionCreationSignal, runSessionCreationAttempt } from '../localDb/sessionRuntimeCleanup.js';
 import { pagePermissionGrants } from '../mcp-apps/pagePermissions.js';
 import { setPluginPageToolRunner, readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
 import { callPluginAttachmentProvider, callPluginAttachmentTool } from '../mcp-apps/pluginAttachment.js';
@@ -9174,11 +9174,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       statDirectory: usingFallback ? statWorkingDirectory : undefined,
       realpathDirectory: usingFallback ? realpathWorkingDirectory : undefined,
       preservePersistedGrants: usingFallback,
-      readPersistedExtraDirs: async (sessionId) => {
-        const dirs = await readSessionExtraDirsFromDb(sessionId);
-        assertAccess?.();
-        return dirs;
-      },
       readPersistedWritableDirs: readSessionWritableDirsFromDb,
       persistExistingSession: async (sessionId, patch) => {
         const [existing] = await getDbClient()
@@ -18319,6 +18314,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const {
     sendToAgentAccepted: sendToAgentAcceptedUnlocked,
+    preparePiSkillRuntime,
     prewarmSession: prewarmSessionRuntime,
     hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
@@ -18417,7 +18413,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readSessionWorkingDirFromDb,
     readSessionWorkingDirState: readSessionWorkingDirRow,
     withRehydrateCloseSuppressed,
-    bootstrapSession,
+    bootstrapSession: (opts) => bootstrapSession(opts, assertSessionCreationCurrent),
     markOrcaRoleIfNeeded,
     broadcastSessionCreated,
     prepareSendUserMessage: (sessionId, message) =>
@@ -19295,6 +19291,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (getDeviceLinkInvokeContext()?.sharedTask) return { accepted: false };
       if (!createOpts || typeof createOpts !== 'object' || Array.isArray(createOpts)) {
         throwIpcError('INVALID_PARAMS', 'createOpts required');
+      }
+      if ('purpose' in createOpts && createOpts.purpose === 'pi-skill-dispatch') {
+        const request = createOpts as Record<string, unknown>;
+        const workingDir = request.workingDir;
+        if (typeof workingDir !== 'string' || !workingDir) throwIpcError('INVALID_PARAMS', 'workingDir required');
+        const preferences = {
+          ...(typeof request.userPrompt === 'string' ? { userPrompt: request.userPrompt } : {}),
+          ...(typeof request.makerMemoryEnabled === 'boolean' ? { makerMemoryEnabled: request.makerMemoryEnabled } : {}),
+        };
+        await runSessionCreationAttempt(sid, getDbClient, () => withSendToSessionLock(sid, async () => {
+          assertSessionCreationCurrent();
+          const row = await getSessionRowSnapshotStrict(sid);
+          assertSessionCreationCurrent();
+          if (!row || row.status === 'deleted' || row.status === 'archived' || row.source === 'review') {
+            throwIpcError('PRECONDITION_FAILED', 'Pi session is unavailable');
+          }
+          await preparePiSkillRuntime(sid, workingDir, preferences);
+          assertSessionCreationCurrent();
+        }));
+        return { accepted: true };
       }
       void agentPrewarmer.request(sid, createOpts);
       return { accepted: true };

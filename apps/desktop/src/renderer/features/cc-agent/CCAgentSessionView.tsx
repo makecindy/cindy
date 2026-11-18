@@ -3700,27 +3700,25 @@ function CCAgentSessionContent({
     model = session?.model,
     effort = session?.effort,
     permissionMode = session?.permissionMode,
-    vendorOptions?: Record<string, unknown>,
   ) => {
     if (!sessionId || !workingDir || !model || !permissionMode
       || dbToMakerAgentKind(session?.agentKind) !== 'pi') return;
-    const createOpts = {
-      id: sessionId,
-      ...buildCreateOptsForCurrentSession(
-        sessionId, model, effort ?? '', permissionMode, workingDir,
-        vendorOptions ? { vendorOptions } : undefined,
-      ),
-      agentKind: 'pi' as const,
-      workingDir,
-      orcaRole: session?.orcaRole ?? null,
+    const request = {
+      ...buildCreateOptsForCurrentSession(sessionId, model, effort ?? '', permissionMode, workingDir),
+      purpose: 'pi-skill-dispatch',
     };
-    if (remoteDeviceId) {
-      await window.electronAPI.deviceLink.invoke(remoteDeviceId, 'maker:create-session', [createOpts]);
-    } else {
-      await window.electronAPI.maker.createSession(createOpts);
+    try {
+      const result = remoteDeviceId
+        ? await window.electronAPI.deviceLink.invoke(remoteDeviceId, 'maker:session:prewarm', [sessionId, request])
+        : await window.electronAPI.maker.prewarmSession?.(sessionId, request);
+      if (!(result as { accepted?: boolean } | undefined)?.accepted) throw new Error(t('richAnswer.sendFailed'));
+    } catch (error) {
+      const detail = extractIpcError(error)?.message ?? (error instanceof Error ? error.message : String(error));
+      toast.error(detail || t('richAnswer.sendFailed'));
+      throw error;
     }
   }, [sessionId, session?.workingDir, session?.model, session?.effort,
-    session?.permissionMode, session?.agentKind, session?.orcaRole, remoteDeviceId]);
+    session?.permissionMode, session?.agentKind, remoteDeviceId, t]);
 
   const maybeDispatchDesktopSlashCommand = useCallback(
     async (
@@ -3773,6 +3771,7 @@ function CCAgentSessionContent({
         : cached.length > 0
           ? cached
           : await getHelpCommandsSnapshot();
+      let runtimeCatalogSettled = false;
       const reconcileParams = {
         agentKind,
         sessionId: session?.id,
@@ -3786,6 +3785,7 @@ function CCAgentSessionContent({
               skipAgentSkills: isRemoteSession,
               sessionId: session?.id,
               forceReload: true,
+              onPiRuntimeStatus: status => { runtimeCatalogSettled = status !== 'pending'; },
             },
             remoteDeviceId,
           ),
@@ -3793,6 +3793,8 @@ function CCAgentSessionContent({
       const reconciled = options?.piRuntimeRetryDelaysMs
         ? await reconcilePiRuntimeCommandForSessionDispatch({
             ...reconcileParams,
+            prepareMissing: Boolean(options.workingDirOverride),
+            runtimeCatalogSettled: () => runtimeCatalogSettled,
             prepareRuntime: options.preparePiRuntime ?? (() => preparePiRuntimeForDispatch(workingDir)),
             retryDelaysMs: options.piRuntimeRetryDelaysMs,
           })
@@ -3987,7 +3989,7 @@ function CCAgentSessionContent({
                   workingDirOverride: newDir,
                   builtInSkillIntent: pending.builtInSkillIntent,
                   preparePiRuntime: () => preparePiRuntimeForDispatch(
-                    newDir, pending.model, pending.effort, pending.permissionMode, pending.vendorOptions,
+                    newDir, pending.model, pending.effort, pending.permissionMode,
                   ),
                 },
               );

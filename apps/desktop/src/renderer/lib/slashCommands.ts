@@ -567,17 +567,18 @@ export async function reconcilePiRuntimeCommandForDispatch(params: {
 }
 
 export async function reconcilePiRuntimeCommandForSessionDispatch(
-  params: Parameters<typeof reconcilePiRuntimeCommandForDispatchWithRetry>[0],
+  params: Parameters<typeof reconcilePiRuntimeCommandForDispatchWithRetry>[0] & { prepareMissing?: boolean },
 ): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
   // Refresh the preview first: a cold cache may not yet contain the project
   // skill. Unknown text and ordinary Desktop commands must not start Pi just
   // because the caller can now prepare a runtime.
   const initial = await reconcilePiRuntimeCommandForDispatch(params);
+  if (params.runtimeCatalogSettled?.()) return initial;
   const needsRuntime = initial.command !== undefined && (
     isSlashCommandUnavailable(initial.command)
     || (initial.command.kind === 'desktop' && hasShadowedUnavailableSkill(initial.commands, params.commandName))
   );
-  if (!needsRuntime) return initial;
+  if (!needsRuntime && !(params.prepareMissing && !initial.command)) return initial;
   return reconcilePiRuntimeCommandForDispatchWithRetry({ ...params, commands: initial.commands });
 }
 
@@ -590,6 +591,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   prepareRuntime?: () => Promise<void>;
   retryDelaysMs?: readonly number[];
   sleep?: (delayMs: number) => Promise<void>;
+  runtimeCatalogSettled?: () => boolean;
 }): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
   if (params.agentKind !== 'pi' || !params.sessionId) {
     return reconcilePiRuntimeCommandForDispatch(params);
@@ -623,7 +625,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
           result.command.kind === 'desktop'
           && hasShadowedUnavailableSkill(result.commands, params.commandName)
         );
-    if (!shouldRetry) return result;
+    if (!shouldRetry || params.runtimeCatalogSettled?.()) return result;
     await sleep(delayMs);
     result = await reconcilePiRuntimeCommandForDispatch({
       ...params,

@@ -5059,6 +5059,31 @@ describe('repeatable environment notes are sent only when they change', () => {
 });
 
 describe('Agent prewarm', () => {
+  // #11112: Pi catalog preparation must use the existing task's lazy bootstrap,
+  // including Orca identity, without issuing a first user/Worker-ready message.
+  it.each(['lead', 'worker'] as const)('prepares an existing cold Pi %s from persisted settings', async role => {
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({
+        id: 'session-1', agentKind: 'pi', workingDir: '/repo', model: 'saved', orcaRole: role,
+      }),
+      readSessionWorkingDirFromDb: async () => '/repo',
+      synthesizeOrcaVendorOptionsFromDb: async (_id, opts) => {
+        opts.vendorOptions = { orcaRole: role, orcaWorkflowId: 'team' };
+        return true;
+      },
+      readSessionExtraDirsFromDb: vi.fn(async () => { throw new Error('busy'); }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.preparePiSkillRuntime('session-1', '/repo', {});
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'saved', vendorOptions: { orcaRole: role, orcaWorkflowId: 'team' },
+    }));
+    expect(deps.readSessionExtraDirsFromDb).toHaveBeenCalledOnce();
+    await expect(transaction.preparePiSkillRuntime('session-1', '/other', {})).rejects.toThrow();
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+  });
+
   it('starts the runtime a first send would start, and the send then reuses it', async () => {
     let live: ReturnType<typeof createSession> | undefined;
     const { deps } = createDeps({

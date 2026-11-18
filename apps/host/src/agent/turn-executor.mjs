@@ -318,7 +318,6 @@ export function createTurnExecutor(deps) {
           // Recovery must never persist unavailable grants as revocations.
           preservePersistedGrants: true,
           statDirectory,
-          readPersistedExtraDirs: deps.readSessionExtraDirs ?? (async () => []),
           readPersistedWritableDirs: deps.readSessionWritableDirs ?? (async () => []),
           persistExistingSession: async () => { throw new Error('Host must not rewrite directory grants at startup'); },
         });
