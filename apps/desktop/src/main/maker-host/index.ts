@@ -1794,6 +1794,7 @@ export function getMaker(): Maker {
       getDisabledRuntimePluginIds: (workingDir) => getPluginRegistry().getDisabledRuntimePluginIds(workingDir),
     });
     const codexAgent = new CodexAgent({
+      nativeRecoveryObserver: ghostNativeRecoveryObserver,
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       getManagedSkills: listCindyManagedSkills,
