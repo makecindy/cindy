@@ -368,6 +368,7 @@ import {
 import { sessionCollaborationLabel } from '@/session/collaboration';
 import {
   agentKindForSession,
+  composerSlashInvocationName,
   detectComposerTrigger,
   filterAtResources,
   filterSlashCommands,
@@ -5592,7 +5593,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       composerDocumentRef.current,
       trigger.from,
       draftRef.current.length,
-      [slashCommandTextNode(command.name), { type: 'text', text: ' ' }],
+      [slashCommandTextNode(composerSlashInvocationName(command)), { type: 'text', text: ' ' }],
     );
     applyComposerDocument(
       nextDocument,

@@ -15,7 +15,8 @@ import {
 } from '@/session/inputProjection';
 import { buildMobileUploadedAttachment } from '@/session/attachments';
 import { parseAttachmentOssRef } from '@/session/attachmentOssRef';
-import { textComposerDocument } from '@/session/composerDocument';
+import { composerSlashInvocationName, filterSlashCommands } from '@/session/composerPalette';
+import { serializeComposerDocument, slashCommandTextNode, textComposerDocument } from '@/session/composerDocument';
 import { localizeAgentError } from '@/session/agentErrorI18n';
 import type { RemoteMessage, RemoteSession } from '@/session/types';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
@@ -46,6 +47,19 @@ function session(patch: Partial<RemoteSession> = {}): RemoteSession {
 }
 
 describe('inputProjection', () => {
+  it('queues the selected Pi package skill with its invocation and marked range', () => {
+    const [selected] = filterSlashCommands([{
+      kind: 'agent-skill', name: 'poteto-mode', source: 'skill', runtimeCommandName: 'skill:poteto-mode',
+      runtimeStatus: 'loaded',
+    }], 'skill:poteto');
+    const serialized = serializeComposerDocument({ version: 1, nodes: [
+      slashCommandTextNode(composerSlashInvocationName(selected)), { type: 'text', text: ' review' },
+    ] });
+    const queued = buildQueuedTextMessage(session({ agentKind: 'pi' }), serialized.text, new Date(), 'q-pi', serialized);
+    expect(queued.text).toBe('/skill:poteto-mode review');
+    expect(JSON.parse(queued.persistedContent).slashCommandRanges).toEqual([{ start: 0, end: '/skill:poteto-mode'.length }]);
+  });
+
   it.each([CONTINUE_AFTER_ERROR_PROMPT, CONTINUE_AFTER_APP_EXIT_PROMPT])('folds interrupted work using the actual queued continuation envelope: %s', (prompt) => {
     const queued = buildQueuedTextMessage(session(), prompt, new Date('2026-01-01T00:00:03Z'), 'resume');
     for (const content of [queued.chatMessage.content, queued.persistedContent]) {

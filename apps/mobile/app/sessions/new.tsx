@@ -239,6 +239,7 @@ import {
   filterSlashCommands,
   insertAtResource,
   insertSlashCommand,
+  composerSlashInvocationName,
   mergeSlashCommands,
 } from '@/session/composerPalette';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
@@ -3715,7 +3716,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const selectSlashCommand = useCallback((command: MobileSlashCommand) => {
     const current = firstMessageRef.current;
     pendingGoalSkillRef.current = command.kind === 'agent-skill' ? command.name : null;
-    const next = insertSlashCommand(current, detectComposerTrigger(current), command);
+    const next = insertSlashCommand(current, detectComposerTrigger(current), { name: composerSlashInvocationName(command) });
     if (next === current) return;
     setFirstMessageDraft(next);
     const selection = { start: next.length, end: next.length };
