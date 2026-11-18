@@ -583,8 +583,9 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
       return;
     }
     const nextEntries = new Map(store.snapshot.entries);
-    const retargeted = (prevList ?? []).filter(old => old.symlinkTarget !==
-      list.find(entry => entry.relPath === old.relPath)?.symlinkTarget);
+    const aliases = new Map(list.filter(entry => entry.symlinkTarget !== undefined)
+      .map(entry => [entry.relPath, entry.symlinkTarget]));
+    const retargeted = (prevList ?? []).filter(old => old.symlinkTarget !== aliases.get(old.relPath));
     const reload: string[] = [];
     for (const key of nextEntries.keys()) {
       if (retargeted.some(entry => key === entry.relPath || key.startsWith(`${entry.relPath}/`))) {
