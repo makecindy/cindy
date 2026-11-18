@@ -16390,6 +16390,7 @@
       "expandAllSessions": "盡展諸務",
       "collapseInactiveSessions": "收久閒之務",
       "showAllSessions": "示全部 {{count}} 項",
+      "showMoreSessions": "再示 {{count}} 項",
       "allSessions": "諸差事",
       "scopeLocalSessions": "此機差事",
       "dialogues": "言談",

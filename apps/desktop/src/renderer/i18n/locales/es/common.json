@@ -16620,6 +16620,7 @@
       "expandAllSessions": "Expandir todas las tareas",
       "collapseInactiveSessions": "Contraer tareas inactivas",
       "showAllSessions": "Mostrar todas ({{count}})",
+      "showMoreSessions": "Mostrar {{count}} más",
       "allSessions": "Todas las sesiones",
       "scopeLocalSessions": "Local",
       "dialogues": "Conversación",

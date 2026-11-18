@@ -16390,6 +16390,7 @@
       "expandAllSessions": "すべてのタスクを展開",
       "collapseInactiveSessions": "非アクティブなタスクを折りたたむ",
       "showAllSessions": "{{count}} 件をすべて表示",
+      "showMoreSessions": "さらに {{count}} 件を表示",
       "allSessions": "すべてのセッション",
       "scopeLocalSessions": "このデバイスのセッション",
       "dialogues": "会話",

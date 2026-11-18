@@ -1,7 +1,10 @@
 import { SessionEntryList } from '../../../src/renderer/features/cc-agent/sidebar/SessionEntryList';
 import { useState } from 'react';
+import { Timer } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { mountPage, subscription, ctx } from '../../ui-page/harness';
 import { ProjectNode } from '../../../src/renderer/features/cc-agent/sidebar/sections/ProjectNode';
+import { SessionGroupNode } from '../../../src/renderer/features/cc-agent/sidebar/sections/ProjectsSection';
 import { WorktreeProvider } from '../../../src/renderer/contexts/WorktreeContext';
 import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
@@ -25,8 +28,29 @@ const projects = examples.map(([name, icon, tasks], i) => ({
     workingDir:`/Projects/${name}`, _count:{messages:5}} as Session)),
 }));
 const sessions = projects.flatMap(p => p.sessions);
+function GroupsPreview() {
+  const { t } = useTranslation();
+  const shared = {
+    collapsed: false, parentSectionCollapsed: false, disableSessionCollapse: false,
+    isCreateDisabled: false, sessionVariant: 'text' as const,
+    runningSessionIds: new Set<string>(), attachedSessionIds: new Set<string>(),
+    notifications: new Set<string>(), scheduleSessionIndex: new Map(),
+    onToggle: noop, onSessionClick: noop, onAction: noop, onRename: noop,
+    onTogglePin: noop, onScheduleAction: noop,
+  };
+  const automation: Session = { ...projects[1].sessions[0], source: 'scheduler', title: '每周用量报告' };
+  return <aside className="bg-sidebar text-foreground min-h-screen space-y-3 p-3" data-ui-page-subject>
+    <section aria-label="Automation fixture">
+      <SessionGroupNode {...shared} sessions={[automation]} groupTitle={t('ccAgent.layout.automations')} groupIcon={<Timer size={15} aria-hidden />} />
+    </section>
+    <section aria-label="Dialogue fixture">
+      <SessionGroupNode {...shared} sessions={projects[0].sessions} onCreateDialogue={noop} />
+    </section>
+  </aside>;
+}
 function Preview() {
   const [collapsed, setCollapsed] = useState(new Set(projects.slice(3).map(p=>p.projectKey)));
+  if (ctx.data.groups) return <GroupsPreview />;
   if (ctx.data.flat) return <aside className="bg-sidebar text-foreground min-h-screen p-3" data-ui-page-subject>
     <SessionEntryList sessions={sessions} collapsible={!!ctx.data.inactive} sessionVariant={ctx.data.flat === 'list' ? 'list' : 'text'}
       sourceLabelMap={new Map(projects.flatMap(project => project.sessions.map(session => [session.id, project.displayName] as const)))}

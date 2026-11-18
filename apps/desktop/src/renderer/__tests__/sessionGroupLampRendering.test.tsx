@@ -50,13 +50,17 @@ vi.mock('../features/cc-agent/sidebar/SessionItem', () => ({
   },
 }));
 vi.mock('../features/cc-agent/sidebar/SessionCard', () => ({ SessionCard: () => null }));
-vi.mock('../features/cc-agent/sidebar/AutomationSessionGroupItem', () => ({ AutomationSessionGroupItem: () => null }));
+vi.mock('../features/cc-agent/sidebar/AutomationSessionGroupItem', () => ({
+  AutomationSessionGroupItem: ({ group }: { group: { title: string } }) => <span>{group.title}</span>,
+}));
 
 function remoteSessions(): Session[] {
-  return ['first', 'idle', 'lit'].map((id, i) => ({
-    id, title: id, status: 'active', createdAt: `2026-09-0${3 - i}T00:00:00Z`,
-    updatedAt: `2026-09-0${3 - i}T00:00:00Z`, deviceLinkDeviceId: 'remote',
-  } as Session));
+  const now = Date.now();
+  return ['first', 'idle', 'lit'].map((id, i) => {
+    const activity = new Date(now - i * 60 * 60_000).toISOString();
+    return { id, title: id, status: 'active', createdAt: activity,
+      updatedAt: activity, deviceLinkDeviceId: 'remote' } as Session;
+  });
 }
 
 function props(groupDevice: boolean): ProjectsSectionProps {
@@ -86,14 +90,13 @@ function props(groupDevice: boolean): ProjectsSectionProps {
   };
 }
 
-/** Three remote tasks in the shared dialogue group (limit 1, so two rows fold). */
+/** Three remote tasks in the shared dialogue group, two older than the idle threshold. */
 function groupProps(groupDevice: boolean): ProjectsSectionProps {
   return { ...props(groupDevice), dialogues: remoteSessions() };
 }
 
 beforeEach(() => {
   localStorage.clear();
-  localStorage.setItem('sidebar.collapse.projectSessionLimit', '1');
   // ProjectsSection 渲染时读 window.electronAPI.platform 做项目键比较(main 897de9031);
   // jsdom 没有 preload 桥,这里只补 platform 字段,与 windowCloseBehavior 用例同法。
   Object.defineProperty(window, 'electronAPI', {
@@ -432,7 +435,7 @@ describe.each([false, true])('Dialogue groups with device grouping %s', (groupDe
     expect(screen.getByTestId('row-first')).toBeTruthy();
     expect(screen.queryByTestId('row-idle')).toBeNull();
     expect(screen.queryByTestId('row-lit')).not.toBeNull();
-    expect(screen.getByText('ccAgent.sidebar.showAllSessions')).toBeTruthy();
+    expect(screen.getByText('ccAgent.sidebar.showMoreSessions')).toBeTruthy();
   });
 
   it('updates the rendered group on remote activity and shows its header lamp only while collapsed', () => {
@@ -615,7 +618,7 @@ describe('Dialogue groups across devices', () => {
     const view = render(<ProjectsSection {...p} />);
     const a = deviceHeader('Device A').parentElement!;
     const b = deviceHeader('Device B').parentElement!;
-    fireEvent.click(within(b).getByText('ccAgent.sidebar.showAllSessions'));
+    fireEvent.click(within(groupHeader(b)).getByRole('button', { name: 'ccAgent.sidebar.expandAllSessions' }));
     expect(within(b).getAllByTestId(/^row-/)).toHaveLength(3);
     expect(within(a).getAllByTestId(/^row-/)).toHaveLength(1);
     const bHeader = groupHeader(b);
@@ -648,7 +651,7 @@ describe('Dialogue groups across devices', () => {
     render(<ProjectsSection {...p} />);
     expect(screen.getAllByText('ccAgent.sidebar.dialogues')).toHaveLength(1);
     expect(screen.queryByText('Device A')).toBeNull();
-    fireEvent.click(screen.getByText('ccAgent.sidebar.showAllSessions'));
+    fireEvent.click(within(groupHeader()).getByRole('button', { name: 'ccAgent.sidebar.expandAllSessions' }));
     expect(screen.getAllByTestId(/^row-/)).toHaveLength(5);
   });
 });
@@ -674,4 +677,44 @@ it('switches between project navigation and inbox while retaining access to proc
   expect(screen.getByTestId(`row-${task.id}`)).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: /^ccAgent.sidebar.inbox.archived/ }));
   expect(screen.getByTestId('row-processed')).toBeTruthy();
+});
+
+// #11252: production sidebar grouping with one idle automation row and one idle
+// dialogue row. Unit coverage for independent header toggles, all-idle footers
+// and filtering. The existing lamp tests cover dialogue/device state only.
+it('expands and refolds idle automation and dialogue rows from their own headers', () => {
+  const p = props(false);
+  p.filter.groupAutomation = true;
+  const [dialogue, automation] = remoteSessions().slice(1);
+  p.dialogues = [dialogue, { ...automation, source: 'scheduler', title: 'Weekly automation' }];
+  const view = render(<ProjectsSection {...p} />);
+  const header = screen.getByText('ccAgent.layout.automations').closest<HTMLElement>('[role="button"]')!;
+  const autoActions = within(header);
+  const dialogueActions = within(groupHeader());
+  const expand = 'ccAgent.sidebar.expandAllSessions';
+  const fold = 'ccAgent.sidebar.collapseInactiveSessions';
+
+  expect(screen.queryByText('Weekly automation')).toBeNull();
+  expect(screen.queryByText('idle')).toBeNull();
+  expect(screen.queryByText('ccAgent.sidebar.showMoreSessions')).toBeNull();
+  fireEvent.click(header);
+  expect(header.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(autoActions.getByRole('button', { name: expand }));
+  expect(header.getAttribute('aria-expanded')).toBe('true');
+  expect(screen.getByText('Weekly automation')).toBeTruthy();
+  expect(screen.queryByText('idle')).toBeNull();
+  expect(screen.getAllByRole('button', { name: fold })).toEqual([autoActions.getByRole('button', { name: fold })]);
+  fireEvent.click(autoActions.getByRole('button', { name: fold }));
+  expect(screen.queryByText('Weekly automation')).toBeNull();
+  fireEvent.click(dialogueActions.getByRole('button', { name: expand }));
+  expect(screen.getByText('idle')).toBeTruthy();
+  expect(screen.getAllByRole('button', { name: fold })).toEqual([dialogueActions.getByRole('button', { name: fold })]);
+  fireEvent.click(dialogueActions.getByRole('button', { name: fold }));
+  expect(screen.queryByText('idle')).toBeNull();
+
+  view.rerender(<ProjectsSection {...p} filter={{ ...p.filter, isSessionContentFiltered: true }} />);
+  expect(screen.getByText('Weekly automation')).toBeTruthy();
+  expect(screen.getByText('idle')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: expand })).toBeNull();
+  expect(screen.queryByRole('button', { name: fold })).toBeNull();
 });

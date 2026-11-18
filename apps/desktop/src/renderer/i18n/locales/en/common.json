@@ -16464,6 +16464,7 @@
       "expandAllSessions": "Expand All Tasks",
       "collapseInactiveSessions": "Collapse Inactive Tasks",
       "showAllSessions": "Show all {{count}}",
+      "showMoreSessions": "Show {{count}} more",
       "allSessions": "All sessions",
       "scopeLocalSessions": "Local",
       "dialogues": "Chat",

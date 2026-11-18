@@ -6,7 +6,8 @@ import { SidebarActivityClock, useSidebarActivityNow } from '../features/cc-agen
 import { ProjectNode, type ProjectNodeProps } from '../features/cc-agent/sidebar/sections/ProjectNode';
 import { SessionEntryList, type SessionEntryListProps } from '../features/cc-agent/sidebar/SessionEntryList';
 
-const translate = (key: string) => key;
+const translate = (key: string, options?: { count?: number }) =>
+  options?.count === undefined ? key : `${key}: ${options.count}`;
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate, i18n: { language: 'en' } }) }));
 vi.mock('@/components/ui/tooltip', () => ({ Tip: ({ children }: { children: React.ReactNode }) => children }));
 // Row presentation and unopened project settings are unrelated to folding. The
@@ -84,7 +85,7 @@ describe('sidebar idle folding interactions', () => {
     expect(screen.getByText('expires')).toBeTruthy();
     act(() => vi.advanceTimersByTime(60_000));
     expect(screen.queryByText('expires')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.showAllSessions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.showMoreSessions: 2' }));
     act(() => vi.advanceTimersByTime(60_000));
     expect(screen.getByText('expires')).toBeTruthy();
     expect(screen.getByText('old')).toBeTruthy();

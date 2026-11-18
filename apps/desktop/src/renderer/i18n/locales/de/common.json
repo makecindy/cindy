@@ -16464,6 +16464,7 @@
       "expandAllSessions": "Alle Aufgaben aufklappen",
       "collapseInactiveSessions": "Inaktive Aufgaben einklappen",
       "showAllSessions": "Alle {{count}} anzeigen",
+      "showMoreSessions": "{{count}} weitere anzeigen",
       "allSessions": "Alle Sitzungen",
       "scopeLocalSessions": "Lokal",
       "dialogues": "Chat",

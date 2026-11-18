@@ -16390,6 +16390,7 @@
       "expandAllSessions": "모든 작업 펼치기",
       "collapseInactiveSessions": "비활성 작업 접기",
       "showAllSessions": "{{count}}개 모두 표시",
+      "showMoreSessions": "{{count}}개 더 보기",
       "allSessions": "모든 세션",
       "scopeLocalSessions": "이 기기의 세션",
       "dialogues": "대화",

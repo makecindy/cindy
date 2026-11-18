@@ -65,7 +65,7 @@ export interface SessionEntryListProps {
   collapsible?: boolean;
   /** 历史调用兼容；普通任务按闲置时间收起，不再保留前 N 条。 */
   collapseLimit?: number;
-  /** Project headers share the list's expand-all mode. */
+  /** 带标题操作的分组受控展开，底部只保留快捷展开入口。 */
   showAll?: boolean;
   onShowAllChange?: (showAll: boolean) => void;
   /** collapsible 时临时禁用(如按内容搜索/筛选中,应展开全部命中)。 */
@@ -234,11 +234,11 @@ export function SessionEntryList({
   }
 
   // 对话段与项目内会话按闲置时间折叠，不再无条件保留前 N 条；保留
-  // 需关注 / 运行中 / 当前打开的会话;超出收起,底部「显示全部 N 个」一次展开。
+  // 需关注 / 运行中 / 当前打开的会话；底部快捷展开注明还会显示几项。
   // running 豁免与上层聚合灯同口径(Greptile P1):项目行/设备段头的呼吸灯为
   // running 会话点亮,该会话就不能折进「显示全部」——灯亮进去必须找得到行。
   // foldExemptSessionIds 供父层追加口径(如展开态并入 device-link 远程镜像)。
-  const { visibleEntries, isOverflowing, totalCount } = getSidebarSessionCollapseView({
+  const { visibleEntries, isOverflowing, hiddenCount } = getSidebarSessionCollapseView({
     entries,
     minVisibleCount: collapseLimit,
     showAll,
@@ -254,10 +254,10 @@ export function SessionEntryList({
       (foldExemptSessionIds != null && entryHasAttention(entry, foldExemptSessionIds)),
   });
 
-  // Projects with no visible tasks can still be expanded from their headers.
-  const showFooter = controlledShowAll === undefined
+  // 有标题按钮的分组即使没有可见任务，也可以从标题展开。
+  const showFooter = !disableCollapse && (controlledShowAll === undefined
     ? isOverflowing || showAll
-    : isOverflowing && visibleEntries.length > 0;
+    : isOverflowing && visibleEntries.length > 0);
 
   return (
     <>
@@ -279,7 +279,7 @@ export function SessionEntryList({
         >
           {showAll
             ? t('ccAgent.sidebar.collapseInactiveSessions')
-            : t('ccAgent.sidebar.showAllSessions', { count: totalCount })}
+            : t('ccAgent.sidebar.showMoreSessions', { count: hiddenCount })}
         </button>
       )}
     </>

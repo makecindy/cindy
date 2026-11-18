@@ -16390,6 +16390,7 @@
       "expandAllSessions": "展開全部任務",
       "collapseInactiveSessions": "摺疊不活躍任務",
       "showAllSessions": "顯示全部 {{count}} 項",
+      "showMoreSessions": "再顯示 {{count}} 項",
       "allSessions": "全部任務",
       "scopeLocalSessions": "本機任務",
       "dialogues": "對話",
