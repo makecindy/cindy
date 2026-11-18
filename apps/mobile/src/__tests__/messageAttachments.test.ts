@@ -32,6 +32,14 @@ describe('partitionMessageAttachments', () => {
     expect(svgAttachmentForDisplay(text)).toBe(text);
   });
 
+  // 图片附件会自动取缩略图:workdir 外的 UNC 若转成图片,被控 Windows 桌面会自动向该主机发起 SMB。
+  it('keeps an SVG on a UNC share outside the workdir as a file attachment', () => {
+    const unc: NormalizedAttachment = { kind: 'file', name: 'x.svg', path: '\\\\nas\\share\\x.svg', previewable: false };
+    expect(svgAttachmentForDisplay(unc, 'C:\\proj')).toBe(unc);
+    const inShare = { ...unc, path: '\\\\nas\\share\\proj\\x.svg' };
+    expect(svgAttachmentForDisplay(inShare, '\\\\nas\\share\\proj')).toMatchObject({ kind: 'image' });
+  });
+
   it('separates images from files while preserving order within each presentation group', () => {
     const attachments: NormalizedAttachment[] = [
       { kind: 'file', name: 'brief.pdf', path: '/repo/brief.pdf', previewable: false },

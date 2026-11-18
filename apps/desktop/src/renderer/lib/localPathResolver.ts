@@ -233,10 +233,53 @@ export function resolveKnownLocalFileHref(
 }
 
 /**
+ * The filesystem path a `file://` URL names, as literal path text.
+ *
+ *   - `file:///abs`, `file://localhost/abs` → `/abs`; `/C:/x` → `C:/x`
+ *   - `file://C:/x` (common malformed drive spelling)  → `C:/x`
+ *   - `file://host/share/x` → `\\host\share\x` — the host names another
+ *     machine (RFC 8089 UNC form). Never a path relative to the task folder:
+ *     joining `host/share/x` onto it and suffix-searching the workspace opens
+ *     an unrelated local file.
+ *   - host `.`, `..` or `?` (also percent-encoded) → the decoded text after
+ *     `file://`, as before UNC support: `file://./docs/a.md` is a misspelled
+ *     relative link, and `\\.\` / `\\?\` would name the Windows device
+ *     namespace, not a share.
+ *
+ * The URL path is percent-decoded once; filenames with a literal `%`
+ * ("100%完成.md") form invalid escapes, so decoding falls back to the raw
+ * text instead of throwing — remote sessions call this synchronously during
+ * render and a URIError took down the whole route.
+ */
+function fileUrlToPath(href: string): string {
+  const rest = href.slice('file://'.length);
+  // URL parsers treat `\` like `/` in file URLs, so either ends the authority.
+  const authorityEnd = rest.search(/[\\/]/);
+  const host = authorityEnd >= 0 ? rest.slice(0, authorityEnd) : rest;
+  // Decode the host on its own so an escaped separator cannot move the share
+  // boundary (`file://a%2Fb/share` names host `a%2Fb`, not host `a`).
+  const decodedHost = safeDecodeURIComponent(host);
+  if (!host || /^(?:\.\.?|\?)$/.test(decodedHost)) {
+    return stripWindowsDriveUriSlash(safeDecodeURIComponent(rest));
+  }
+  if (/^[A-Za-z]:$/.test(host)) return safeDecodeURIComponent(rest);
+  if (host.toLowerCase() === 'localhost') {
+    // localhost names this machine, never a share: `file://localhost//nas/x`
+    // is the local `/nas/x`, not `//nas/x`.
+    const localPath = safeDecodeURIComponent(rest.slice(host.length) || '/').replace(/^[\\/]+/, '/');
+    return stripWindowsDriveUriSlash(localPath);
+  }
+  const uncHost = /[\\/]/.test(decodedHost) ? host : decodedHost;
+  const sharePath = safeDecodeURIComponent(rest.slice(host.length)).replace(/\//g, '\\');
+  return `\\\\${uncHost}${sharePath}`;
+}
+
+/**
  * Resolve a markdown href / @-chip ref to an absolute filesystem path.
  *
  * Behavior:
- *   - `file://...`                    → decode + strip leading slash on Win
+ *   - `file:///...`, `file://localhost/...` → decode + strip leading slash on Win
+ *   - `file://host/share/...`         → UNC `\\host\share\...` (see fileUrlToPath)
  *   - `/C:/...` + Windows cwd         → strip the extra leading slash
  *   - POSIX absolute (`^/`)           → return as-is
  *   - Windows absolute (`^[A-Za-z]:`) → return as-is
@@ -251,17 +294,7 @@ export function resolveKnownLocalFileHref(
  * @param cwd  session.workingDir, expected to be an absolute path
  */
 export function resolveLocalPath(href: string, cwd: string): string {
-  if (href.startsWith('file://')) {
-    // safeDecode: filenames with a literal `%` ("100%完成.md") form invalid
-    // escape sequences — a bare decodeURIComponent throws URIError and, since
-    // remote sessions call this synchronously during render, took down the
-    // whole route with react-router's error page. Fall back to the raw path.
-    let p = safeDecodeURIComponent(href.slice(7));
-    // Windows file URL: 'file:///C:/x.png' → after slice(7): '/C:/x.png'
-    // → strip leading '/' → 'C:/x.png'
-    p = stripWindowsDriveUriSlash(p);
-    return p;
-  }
+  if (href.startsWith('file://')) return fileUrlToPath(href);
   href = normalizeWindowsDriveHref(href, cwd);
   if (href.startsWith('/')) return href;
   if (WIN_ABS_RE.test(href)) return href;
@@ -500,12 +533,33 @@ function settleSmartResult(
   if (entry) for (const resolve of entry.resolvers) resolve(result);
 }
 
+/**
+ * `file://nas/share/x` names a share on another machine. Rendering must not
+ * contact a host named in message content (on Windows a stat opens an SMB
+ * connection and offers NTLM credentials), so render-time lookups, remote
+ * pre-checks and media loads skip it; only an explicit open asks for it.
+ */
+export function isFileUrlHostHref(href: string): boolean {
+  return /^file:\/\/[^\\/]/.test(href) && /^[\\/]{2}/.test(fileUrlToPath(href));
+}
+
 async function runBatchForDir(
   workingDir: string,
   hrefMap: Map<string, PendingBatchEntry>,
   revalidateNegative = false,
 ): Promise<void> {
-  const hrefs = [...hrefMap.keys()];
+  const hrefs: string[] = [];
+  for (const href of hrefMap.keys()) {
+    if (!isFileUrlHostHref(href)) {
+      hrefs.push(href);
+      continue;
+    }
+    settleSmartResult(workingDir, href, hrefMap, {
+      status: 'none',
+      fallbackAbsPath: resolveLocalPath(href, workingDir),
+    });
+  }
+  if (hrefs.length === 0) return;
   const sentAt = Date.now();
   for (const href of hrefs) smartLookupSentAt.set(smartResolveCacheKey(workingDir, href), sentAt);
   const api = (typeof window !== 'undefined' ? window.electronAPI : undefined) as
@@ -789,12 +843,9 @@ export function normalizeMarkdownImageSrc(
   }
   if (src.startsWith('xdt-file://')) return normalizeXdtFileUrlForRenderer(src);
 
-  let localPath = src;
-  if (localPath.startsWith('file://')) {
-    localPath = safeDecodeURIComponent(localPath.slice(7));
-  }
-  // file:///C:/x.png -> /C:/x.png after stripping the scheme. Drop the
-  // URL-only leading slash before handing the native Windows path onward.
-  localPath = stripWindowsDriveUriSlash(localPath);
+  // A file URL is decoded exactly once (file:///C:/x.png → C:/x.png,
+  // file://host/share/a.png → \\host\share\a.png). A raw /C:/x.png path drops
+  // its URL-only leading slash before the native Windows path goes onward.
+  const localPath = src.startsWith('file://') ? fileUrlToPath(src) : stripWindowsDriveUriSlash(src);
   return toLocalFileUrl(resolveLocalPath(localPath, workingDir));
 }
