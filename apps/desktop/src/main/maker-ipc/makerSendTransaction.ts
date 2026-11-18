@@ -251,6 +251,7 @@ function extractIpcUserMessageText(message: IpcUserMessage): string {
 }
 
 export interface MakerSendTransactionSession {
+  readonly agentDeviceId?: string | null;
   readonly stablePermissionModeState?: Session['stablePermissionModeState'];
   readonly stablePlanModeState?: Session['stablePlanModeState'];
   hostStartupPreferences?: CreateOpts['hostStartupPreferences'];
@@ -1102,7 +1103,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       }
       const live = deps.getSession(sessionId);
       if (live && live.getStatus?.() !== 'error') {
-        if (live.agentKind !== 'pi' || live.workDir !== workingDir) {
+        if (live.agentKind !== 'pi' || live.workDir !== workingDir ||
+            (live.agentDeviceId ?? null) !== (opts.agentDeviceId ?? null)) {
           throwIpcError('PRECONDITION_FAILED', 'Running session no longer matches the selected project');
         }
         live.retryFailedRuntimeCapabilityCapture?.();

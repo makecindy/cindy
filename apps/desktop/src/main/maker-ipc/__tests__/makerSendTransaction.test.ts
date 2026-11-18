@@ -5069,13 +5069,29 @@ describe('Agent prewarm', () => {
     await createMakerSendTransaction(deps).preparePiSkillRuntime('session-1', '/repo', {});
     expect(deps.bootstrapSession).toHaveBeenCalledOnce();
   });
+  // #11112 / unit: a switch can leave a live Pi for the same path on the old device.
+  it('only retries the catalog on the persisted execution device', async () => {
+    const retry = vi.fn();
+    const live = { ...createSession({ agentKind: 'pi', workDir: '/repo' }), agentDeviceId: 'device-a',
+      retryFailedRuntimeCapabilityCapture: retry };
+    const { deps } = createDeps({
+      getSession: () => live,
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'pi', workingDir: '/repo', model: 'saved', agentDeviceId: 'device-b' }),
+    });
+    const prepare = () => createMakerSendTransaction(deps).preparePiSkillRuntime('session-1', '/repo', {});
+    await expect(prepare()).rejects.toThrow();
+    expect(retry).not.toHaveBeenCalled();
+    live.agentDeviceId = 'device-b';
+    await prepare();
+    expect(retry).toHaveBeenCalledOnce();
+  });
   // #11112: Pi catalog preparation must use the existing task's lazy bootstrap,
   // including Orca identity, without issuing a first user/Worker-ready message.
   it.each(['lead', 'worker'] as const)('prepares an existing cold Pi %s from persisted settings', async role => {
     const { deps } = createDeps({
       getSession: vi.fn(() => undefined),
       readWorkingDirectoryRecoveryCreateOpts: async () => ({
-        id: 'session-1', agentKind: 'pi', workingDir: '/repo', model: 'saved', orcaRole: role,
+        id: 'session-1', agentKind: 'pi', workingDir: '/repo', model: 'saved', agentDeviceId: 'device-b', orcaRole: role,
       }),
       readSessionWorkingDirFromDb: async () => '/repo',
       synthesizeOrcaVendorOptionsFromDb: async (_id, opts) => {
@@ -5087,7 +5103,7 @@ describe('Agent prewarm', () => {
     const transaction = createMakerSendTransaction(deps);
     await transaction.preparePiSkillRuntime('session-1', '/repo', {});
     expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
-      model: 'saved', vendorOptions: { orcaRole: role, orcaWorkflowId: 'team' },
+      model: 'saved', agentDeviceId: 'device-b', vendorOptions: { orcaRole: role, orcaWorkflowId: 'team' },
     }));
     expect(deps.readSessionExtraDirsFromDb).toHaveBeenCalledOnce();
     await expect(transaction.preparePiSkillRuntime('session-1', '/other', {})).rejects.toThrow();

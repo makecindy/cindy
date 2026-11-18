@@ -18434,6 +18434,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         title: row.title ?? undefined,
         resumeSessionId: row.sdkSessionId ?? undefined,
         remoteHostId: row.remoteHostId ?? undefined,
+        agentDeviceId: row.agentDeviceId ?? undefined,
         orcaRole: row.orcaRole as CreateOpts['orcaRole'],
         codexHistoryHasProductPrompt: row.codexHistoryHasProductPrompt ?? undefined,
       };
