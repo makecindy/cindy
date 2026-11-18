@@ -4345,6 +4345,7 @@ interface ElectronAPI {
     account(command: import('@cindy/device-link').SharedTaskAccountCommand): Promise<unknown>;
   };
   providerShare: {
+    exportRoster(providerId: string, owner: import('../shared/dataOwnerPush').DataOwnerPushStamp): Promise<void>;
     command<C extends import('../shared/providerShare').ProviderShareCommand>(
       command: C,
     ): Promise<import('../shared/providerShare').ProviderShareCommandResult[C['action']]>;
