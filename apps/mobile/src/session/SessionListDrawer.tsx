@@ -3,7 +3,7 @@ import { SharedTaskListContent, useSharedTaskList } from './SharedTaskList';
 import { useIsFocused } from 'expo-router/react-navigation';
 import type { ViewInstance } from 'react-native';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ComponentProps } from 'react';
-import { AccessibilityInfo, BackHandler, findNodeHandle, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { AccessibilityInfo, BackHandler, findNodeHandle, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
   cancelAnimation, Easing, runOnJS, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue, withTiming, type SharedValue,
 } from 'react-native-reanimated';
@@ -529,9 +529,12 @@ export function SessionListDrawerSurface({ currentSessionId, persistent = false,
             second selection cannot change preferences while its route is discarded. */}
         <View ref={homeContentRef} style={styles.content} pointerEvents={open ? 'auto' : 'none'}
           accessibilityElementsHidden={!open} importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}>
+          {/* UIKit covers the root list host with this Screen. Inline iOS Home
+              must own its list too; Android keeps its resident root list. */}
           {retainHome && NativeHistorySlot ? <NativeHistorySlot surfaceId={surfaceId} selected={!handoffShell && (!sharedList || (focused || retainPresentation) && !persistent)}
             onDock={persistent && !handoffShell && taskDrawerHandoffAvailable ? finishHandoff : undefined}
-            testID="sessionDrawer.retainedSlot" style={styles.content} /> : homeContent}
+            testID="sessionDrawer.retainedSlot" style={styles.content} />
+            : Platform.OS === 'ios' ? <LocalHomeList>{homeContent}</LocalHomeList> : homeContent}
         </View>
 
       </Animated.View>;
