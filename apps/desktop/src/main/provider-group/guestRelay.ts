@@ -117,7 +117,10 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
         return { kind: 'unavailable' };
       }
       if (pick.kind === 'none') return null;
-      if (pick.kind === 'unavailable') return { kind: 'unavailable' };
+      if (pick.kind === 'unavailable') {
+        const { full, usageLimit } = pick;
+        return { kind: 'unavailable', full, usageLimit };
+      }
       const { member } = pick;
       if (member.kind === 'local' || !member.agentDeviceId) return { kind: 'local', ...(load ? { load } : {}) };
       return {

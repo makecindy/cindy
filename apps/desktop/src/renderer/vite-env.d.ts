@@ -2846,6 +2846,7 @@ interface ElectronAPI {
         type: 'file' | 'directory';
         size: number;
         mtimeMs: number;
+        symlinkTarget?: string;
       }>
     >;
     /** 项目级文件名扁平列表(ripgrep --files honor .gitignore);失败返回空数组
@@ -2873,6 +2874,7 @@ interface ElectronAPI {
             size: number;
             mtimeMs: number;
             truncated: boolean;
+            resolvedPath?: string;
           };
         }
       /** OVERSIZE = 远程文本超传输上限(device-link 帧限预判),stat 供"文件过大"占位卡。 */
@@ -2888,7 +2890,8 @@ interface ElectronAPI {
       workdir: string;
       relPath: string;
       content: string;
-    }) => Promise<{ ok: true; size: number; mtimeMs: number } | { ok: false; message: string }>;
+      expectedResolvedPath?: string;
+    }) => Promise<{ ok: true; size: number; mtimeMs: number; resolvedPath?: string } | { ok: false; message: string }>;
     createFile: (params: {
       remoteHostId?: string | null;
       workdir: string;
@@ -5188,6 +5191,7 @@ interface ElectronAPI {
           pinnedAt?: string | null;
           /** 任务级「消息免打扰」：不发系统通知 / 灵动岛 / 手机推送 / IM 消息。 */
           notificationsMuted?: boolean;
+    snoozedUntil?: string | null;
           status?: import('@/lib/ccAgent.types').SessionStatus;
           orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
           /** 附加只读引用目录覆盖列表 (绝对路径)。 */
@@ -6645,7 +6649,7 @@ interface ElectronAPI {
       retryImageDelivery: (sessionId: string, imageId: string) => Promise<void>;
       retryLastError: (
         sessionId: string,
-        opts?: { expectedClearBoundaryMs?: number | null },
+        opts?: { expectedClearBoundaryMs?: number | null; expectedQueueHeadClientId?: string; expectedSwitchRevision?: number },
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
       clearError: (
         sessionId: string,
@@ -6797,6 +6801,7 @@ interface ElectronAPI {
       engineReady: boolean;
       deferred?: boolean;
       sameEngineRevision?: number;
+      pendingSwitchRevision?: number;
       sameEngineSuperseded?: boolean;
     }>;
     /**

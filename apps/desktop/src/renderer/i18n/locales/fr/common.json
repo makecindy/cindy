@@ -16832,6 +16832,37 @@
         "priority": "Priorité",
         "activity": "Activité récente",
         "created": "Date de création"
+      },
+      "inbox": {
+        "thisEvening": "Ce soir",
+        "tomorrow": "Demain",
+        "nextWeek": "La semaine prochaine",
+        "custom": "Personnaliser…",
+        "wakeAt": "Date et heure de rappel",
+        "timeZone": "Heure locale ({{zone}})",
+        "invalidTime": "Choisissez une date et une heure futures dans l’année à venir.",
+        "inbox": "À traiter",
+        "working": "En cours",
+        "snoozed": "Reportées",
+        "archived": "Traitées",
+        "snooze": "Reporter la tâche",
+        "complete": "Terminé",
+        "wake": "Réafficher maintenant",
+        "restore": "Restaurer la tâche",
+        "process": "Marquer comme traitée (archiver)",
+        "empty": "La boîte de réception est vide",
+        "snoozeFailed": "Impossible de conserver l’heure du report. Vérifiez la connexion et mettez à jour l’ordinateur hébergeant cette tâche.",
+        "hours": "Dans {{count}} heures",
+        "hours_one": "Dans {{count}} heure",
+        "hours_many": "Dans {{count}} heures",
+        "hours_other": "Dans {{count}} heures"
+      },
+      "taskListMode": {
+        "heading": "Mode des tâches",
+        "tasks": "Liste des tâches",
+        "inbox": "Boîte de réception",
+        "enterInbox": "Passer en mode boîte de réception",
+        "leaveInbox": "Passer en mode liste des tâches"
       }
     },
     "rename": {
@@ -17126,6 +17157,7 @@
         "menuSave": "Enregistrer",
         "menuInsertTable": "Insérer un tableau",
         "externalChangeBlocked": "Le fichier a été modifié sur le disque. Enregistrement automatique suspendu ; enregistrez manuellement pour l'écraser.",
+        "targetChanged": "Le fichier pointe désormais vers un autre emplacement. Votre brouillon est toujours dans l’éditeur. Copiez-le avant de rouvrir le fichier.",
         "tableMenu": {
           "addRowAbove": "Ajouter une ligne au-dessus",
           "addRowBelow": "Ajouter une ligne en dessous",
@@ -21597,6 +21629,27 @@
         "allow": "Autoriser",
         "deny": "Refuser"
       }
+    }
+  },
+  "featureIntro": {
+    "close": "Fermer",
+    "taskInbox": {
+      "title": "Découvrir la boîte de réception",
+      "lead": "Les tâches se rangent d’elles-mêmes dans À traiter, En cours, Reportées et Traitées. La meilleure habitude : vider la boîte de réception au fil de l’eau. Cliquez sur Terminé quand une tâche est réglée, reportez ce qui peut attendre.",
+      "pending": {
+        "title": "À traiter",
+        "body": "Les tâches arrivent ici quand elles ont un résultat ou attendent votre réponse."
+      },
+      "done": {
+        "title": "Terminé",
+        "body": "C’est réglé ? Un clic sur Terminé la range dans Traitées. Elle revient d’elle-même s’il y a du nouveau."
+      },
+      "snooze": {
+        "title": "Reportées",
+        "body": "Pas le temps maintenant ? Choisissez une heure : la tâche reviendra dans À traiter."
+      },
+      "start": "Commencer",
+      "note": "Revenez à la liste des tâches à tout moment avec le bouton en haut de la barre latérale."
     }
   },
   "firstRunGuide": {

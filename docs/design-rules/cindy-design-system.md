@@ -22,6 +22,7 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 | [`login-flow.md`](./login-flow.md) | 登录链路（§16，编号不变），含生成的登录色表 | `DESIGN.md` 专题，规范效力相同 |
 | [`message-link-clickability.md`](./message-link-clickability.md) | 聊天正文的链接操作与可点性信号（§14.5） | `DESIGN.md` 专题，规范效力相同 |
 | [`container-transform.md`](./container-transform.md) | 输入框工具栏的容器形变与工具栏分档（§14.4） | `DESIGN.md` 专题，规范效力相同 |
+| [`feature-introduction.md`](./feature-introduction.md) | 功能介绍：第一次用到某个功能时带小动画的一页引导（§4、§14.4） | `DESIGN.md` 专题，规范效力相同 |
 | [`wallpaper.md`](./wallpaper.md) | 应用壁纸（§2） | `DESIGN.md` 专题，规范效力相同 |
 | [`macos-menu-bar-quota.md`](./macos-menu-bar-quota.md) | macOS 菜单栏额度面板（§4） | `DESIGN.md` 专题，规范效力相同 |
 | [`attachment-preview.md`](./attachment-preview.md) | 附件预览的结构与交互 | 专题补充 |
