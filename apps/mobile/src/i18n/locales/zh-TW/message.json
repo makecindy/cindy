@@ -256,6 +256,8 @@
     "notSent": "未傳送",
     "imagesNotUploaded_one": "{{count}} 張圖片沒傳上去",
     "imagesNotUploaded_other": "{{count}} 張圖片沒傳上去",
+    "waitingForNamedComputer": "連上{{name}}後自動傳送",
+    "reconnectComputer": "立即重連",
     "waitingForComputer": "等電腦連上後傳送",
     "waitingForNetwork": "等網路恢復後傳送",
     "queued": "排隊中",

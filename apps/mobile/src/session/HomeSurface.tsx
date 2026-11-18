@@ -2147,13 +2147,18 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     sortBy: indexedSearch.sortBy,
     status: indexedSearch.statusFilter,
   });
+  // Directory refreshes can reorder the same computers. Ordering reads depend only on
+  // membership and connection generation, not on row identity or display order.
+  const projectOrderDeviceIds = useStableValue([...homeSyncDeviceIds].sort(),
+    (a, b) => a.length === b.length && a.every((id, index) => id === b[index]));
   useEffect(() => {
     const expectedAccountGeneration = accountGeneration;
-    const ids = homeSyncDeviceIds;
+    const ids = projectOrderDeviceIds;
     if (ids.length === 0) return undefined;
     let cancelled = false;
     const fence = createProjectOrderFetchFence();
     projectOrderFetchFenceRef.current = fence;
+    let pendingIds = ids;
     const loadAttempt = async () => {
       // Project ordering is secondary Home metadata. Let the bounded sessions-list batch
       // finish first so cold start/reconnect does not create a second overlapping six-device
@@ -2162,15 +2167,15 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         await syncInFlightRef.current;
         if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return false;
       }
-      const tokens = new Map(ids.map((deviceId) => [deviceId, fence.begin(deviceId)]));
-      const entries = await runHomeDeviceSyncBatch(ids, async (deviceId) => {
+      const tokens = new Map(pendingIds.map((deviceId) => [deviceId, fence.begin(deviceId)]));
+      const entries = await runHomeDeviceSyncBatch(pendingIds, async (deviceId) => {
         const result = await homeDeviceSyncLimiterRef.current.run(async () => {
           if (
             cancelled
             || homeAccountGenerationRef.current !== expectedAccountGeneration
             || !homeSyncTargetDeviceIdsRef.current.has(deviceId)
           ) return { kind: 'transient' } as const;
-          return fetchHostProjectOrder(invoke, deviceId);
+          return fetchHostProjectOrder(invoke, deviceId, expectedAccountGeneration, connectionEpoch);
         });
         return [deviceId, result] as const;
       });
@@ -2188,7 +2193,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         }
         return next;
       });
-      return entries.some(([, result]) => result.kind === 'transient');
+      pendingIds = entries.filter(([, result]) => result.kind === 'transient').map(([id]) => id);
+      return pendingIds.length > 0;
     };
     const load = startHostProjectOrderLoad(loadAttempt);
     hostProjectOrderLoadRef.current = load.completion;
@@ -2211,7 +2217,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       if (hostProjectOrderLoadRef.current === load.completion) hostProjectOrderLoadRef.current = null;
       unsubscribe();
     };
-  }, [accountGeneration, homeSyncDeviceIds, invoke]);
+  }, [accountGeneration, connectionEpoch, projectOrderDeviceIds, invoke]);
   const revokedTipDeviceName = useMemo(
     () => revokedTipDeviceId
       ? deviceModels.find((item) => item.deviceId === revokedTipDeviceId)?.name ?? t('devices.list.thisComputer')

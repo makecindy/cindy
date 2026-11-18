@@ -65,7 +65,7 @@ import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner 
 import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, reconcileMobileOutboxDrafts } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
 import { isDurableOutboxSettled, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
-import { isInFlightDeviceLinkError, isSharedTaskPeer, resolveRemoteText } from '@cindy/device-link';
+import { isInFlightDeviceLinkError, isScopedPeer, isSharedTaskPeer, resolveRemoteText } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
   ArrowDown,
@@ -482,6 +482,7 @@ import {
   reconcileOptimisticUserMessages,
   type OptimisticUserMessage,
 } from '@/session/optimisticUserMessages';
+import { useWaitingComputerRecovery } from '@/session/useWaitingComputerRecovery';
 import { usePendingOutboxActions, usePendingSendActions } from '@/session/usePendingSendActions';
 import {
   acquireQueueEditLock,
@@ -1219,6 +1220,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     connectionIssue,
     getPresenceAvailability,
     getSubscriptionIdentity,
+    readDeviceList,
+    recoverWaitingPeer,
     invoke,
     openLink,
     reopenLink,
@@ -2439,10 +2442,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 待发气泡写「等…后发送」只看真正断开:只有系统确认手机没网才归因于网络(relay 连接中 /
   // 服务重连不算);电脑不可达或无响应归因于电脑;同步中、自动恢复中几秒就过去,不提示。
   const localNetworkStatus = useLocalNetworkStatus();
+  const waitingSend = outboxConnectionState.relayOnline && localNetworkStatus !== 'unavailable'
+    && !isDeviceAccessRevoked && !isScopedPeer(deviceId)
+    ? outboxItems.find(item => item.phase === 'uploading' && (targetAvailableForDispatch === false
+      || isDeviceUnresponsive || item.enqueueError?.includes('DEVICE_OFFLINE')))
+    : undefined;
   const outboxWaitingFor: MobilePendingSendWaitingFor | null = localNetworkStatus === 'unavailable'
     ? 'network'
     : outboxConnectionState.relayOnline
-      && (outboxConnectionState.targetAvailable === false || outboxConnectionState.deviceUnresponsive)
+      && (outboxConnectionState.targetAvailable === false || outboxConnectionState.deviceUnresponsive || waitingSend !== undefined)
       ? 'computer'
       : null;
   // 弱网普通断线也要有可见信号(消息流静默停更没有任何提示),经防闪延迟后显示
@@ -8433,7 +8441,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   }, [applyComposerDocument, discardQueueEditTransientAttachments, pendingUploads.length,
     queueAvailabilityReason, queueBusy, setQueueEditLock, t]);
 
+  const reconnectWaitingComputer = useWaitingComputerRecovery(
+    deviceId, waitingSend?.clientId, readDeviceList, recoverWaitingPeer,
+  );
   const pendingSendActions = usePendingSendActions({
+    waitingComputerName: deviceName,
+    reconnectComputer: waitingSend ? reconnectWaitingComputer : undefined,
     beginQueueEdit, moveQueueItem, queueBusy, queueSelectedClientId,
     removeQueueItem, removeOutboxItem, retryOutboxItem, sessionId,
     setQueueSelectedClientId, steerQueueItem,

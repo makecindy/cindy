@@ -24,6 +24,7 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   // Next-prompt suggestion after a turn completes: a model request the host answers in
   // ~2 s. Nobody waits on it, so it must not hold a foreground slot while the user sends.
   'maker:predict-prompt',
+  'sidebar-settings:get-project-order',
   // 打字时的 Agent 预热是尽力而为的提示，排在用户正在等待的请求之后。
   'maker:session:prewarm',
 ]);
