@@ -764,6 +764,9 @@ it('does not synchronously sort a whole 100,000-entry Skill root before visiting
   await fs.mkdir(directory, { recursive: true });
   const opendir = fs.opendir.bind(fs);
   let closed = false; let visited = 0; let previous = '';
+  let outOfOrder: { previous: string; name: string } | undefined;
+  // The spy retains rejections: one fixture error avoids 100,000 captured stacks.
+  const missingLink = Object.assign(new Error('fixture dangling link'), { code: 'ENOENT' });
   vi.spyOn(fs, 'opendir').mockImplementation(async (...args) => {
     if (String(args[0]) !== directory) return opendir(...args);
     return { async *[Symbol.asyncIterator]() {
@@ -779,9 +782,10 @@ it('does not synchronously sort a whole 100,000-entry Skill root before visiting
   vi.spyOn(fs, 'stat').mockImplementation(async (...args) => {
     if (path.dirname(String(args[0])) !== directory) return stat(...args);
     const name = path.basename(String(args[0]));
-    expect(previous.localeCompare(name)).toBeLessThan(0);
+    // Check every pair, but build a matcher only once, outside the hot loop.
+    if (previous.localeCompare(name) >= 0) outOfOrder ??= { previous, name };
     previous = name; visited++;
-    throw Object.assign(new Error('fixture dangling link'), { code: 'ENOENT' });
+    throw missingLink;
   });
   const sort = Array.prototype.sort;
   vi.spyOn(Array.prototype, 'sort').mockImplementation(function(this: unknown[], compare) {
@@ -791,6 +795,7 @@ it('does not synchronously sort a whole 100,000-entry Skill root before visiting
   const items = await discoverImportSkills({ kind: 'hermes', agentId: 'main', name: 'Ada', root, workspace: root,
     configFile: path.join(root, 'config.yaml') }, {}, home, {}, createImportBudget());
   expect(items).toEqual([]);
+  expect(outOfOrder).toBeUndefined();
   expect(visited).toBe(100_000);
   expect(closed).toBe(true);
 }, 30_000);
