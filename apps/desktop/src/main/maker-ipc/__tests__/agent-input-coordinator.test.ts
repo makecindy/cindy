@@ -1800,6 +1800,7 @@ function unsupportedChatBridgeImageError(feature = "input content part 'input_im
 }
 
 function createHarness(opts?: {
+  isScheduledQuotaInput?: (item: AgentInputQueuedMessage) => boolean;
   canRestoreOrcaReport?: AgentInputCoordinatorDeps['canRestoreOrcaReport'];
   awaitQueuePersistence?: AgentInputCoordinatorDeps['awaitQueuePersistence'];
   getRecoveryContextSnapshot?: (sessionId: string, userClientId: string) => Promise<RecoveryContextSnapshot>;
@@ -2006,6 +2007,7 @@ function createHarness(opts?: {
     isResumableTurnErrorCandidate,
     onResumableTurnErrorDiscarded,
     onUsageLimitedTurnError,
+    isScheduledQuotaInput: opts?.isScheduledQuotaInput,
     ...(opts?.providerGroupSwitchCandidate
       ? { providerGroupSwitchCandidate: opts.providerGroupSwitchCandidate }
       : {}),
@@ -13563,17 +13565,21 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
 // Only bootstrap/native execution and route application are injected. Existing
 // turn-error tests never enter the cold, unpersisted queue-head failure boundary.
 describe('Bot subscription startup admission', () => {
-  function startupHarness(bot = true, opaque = false, rehydrate = false) {
-    const h = createHarness();
+  function startupHarness(bot = true, opaque = false, rehydrate = false, quota = false) {
+    const scheduledQuotaInputs = new WeakSet<object>();
+    const h = createHarness({ isScheduledQuotaInput: item => scheduledQuotaInputs.has(item.createOpts) });
     const attemptCurrent = vi.spyOn(h.coordinator, 'isAutoResumeAttemptCurrent');
     const sid = 'startup-admission';
     let backup = false;
     const session: MakerSendTransactionSession = {
-      id: sid, instanceId: 'backup-runtime', agentKind: 'codex', workDir: '/repo', remoteHostId: null,
+      id: sid, instanceId: 'backup-runtime', agentKind: quota ? 'claude-code' : 'codex', workDir: '/repo', remoteHostId: null,
+      stablePermissionModeState: { mode: 'ask', generation: 0 },
+      stablePlanModeState: { enabled: true, generation: 0 },
       isTurnRunning: () => false,
       send: vi.fn(async (_message, opts) => {
         await opts?.beforeProviderStart?.();
         await opts?.onAccepted?.();
+        await opts?.resolveAutoReviewUserIntent?.();
         opts?.onDispatching?.();
         h.setRunning(true);
         return { accepted: true as const };
@@ -13586,7 +13592,8 @@ describe('Bot subscription startup admission', () => {
     });
     const transaction = createMakerSendTransaction({
       getMainClassicalStyle, getResolvedMainLocale, readMcpAppModelContext: id => mcpAppModelContext(id),
-      getSession: () => rehydrate && !backup ? session : undefined,
+      getSession: () => (rehydrate && !backup) || (quota && backup) ? session : undefined,
+      readScheduledPermissions: async () => ({ permissionMode: 'ask', planModeEnabled: true }),
       closeSession: async () => {}, closeSessionIfCurrent: async () => {}, preflightBotRuntimeResources: async () => {},
       getSessionMeta: async () => ({}), ensureRemoteReadyForSessionStart: async () => {},
       checkWorkDirExists: async () => true, isOrcaMcpHydrated: () => !rehydrate,
@@ -13625,7 +13632,7 @@ describe('Bot subscription startup admission', () => {
         isAutoResumeAttemptCurrent: (id, token) => h.coordinator.isAutoResumeAttemptCurrent(id, token),
         autoRetryLastError: (id, token) => h.coordinator.autoRetryLastError(id, token),
       }, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
-      botFallbackInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
+      botFallbackInputs, scheduledQuotaInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
       getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map<Session, number>(),
       maybeApplySessionRuntimeFallback: fallback, pendingSessionRuntimeFallbackRebuilds: new Set<Session>(),
@@ -13639,8 +13646,64 @@ describe('Bot subscription startup admission', () => {
       agentKind: 'claude-code', model: 'claude-opus-5-5', workingDir: '/repo', planMode: true,
     } });
     if (bot) botFallbackInputs.add(item.createOpts);
-    return { ...h, sid, item, bootstrap, session, fallback, book, failure, attemptCurrent };
+    if (quota) {
+      item.origin = { kind: 'scheduler', scheduleId: 'daily', scheduleName: 'Daily', runId: 'daily-run' };
+      scheduledQuotaInputs.add(item.createOpts);
+    }
+    return { ...h, sid, item, bootstrap, session, fallback, book, failure, attemptCurrent,
+      setAvailable: () => { backup = true; } };
   }
+
+  // Unit regression: #11082's proven-stopped startup receipt bypassed the quota
+  // terminal path. Existing tests covered only running remote Schedule errors.
+  // Drive the real transaction/coordinator/guard: wait without persisting or
+  // switching routes, then send the same queued input once, or honor cancellation.
+  it.each(['resume', 'cancel', 'missing-reset', 'opaque'] as const)(
+    'keeps remote scheduled startup quota recovery bounded: %s', async mode => {
+      const h = startupHarness(true, mode === 'opaque', false, true);
+      const timers: Array<() => void> = [];
+      const guard = new UsageLimitAutoResume({
+        now: () => 1_000_000, random: () => 0,
+        setTimer: fn => { timers.push(fn); return fn; }, clearTimer: () => {},
+        isEligible: async () => true,
+        resolveResetAt: async () => mode === 'missing-reset' ? null : 9_000_000,
+        arm: (id, token, at) => h.coordinator.armUsageLimitWait(id, token, at),
+        isCurrent: (id, token) => h.coordinator.isUsageLimitWaitCurrent(id, token),
+        cancel: (id, token) => { h.coordinator.cancelUsageLimitWait(id, token); },
+        continueSession: (id, token, info) => h.coordinator.continueAfterUsageLimitReset(id, token, info),
+        log: () => {},
+      });
+      h.onUsageLimitedTurnError.mockImplementation((id, signals, _item, token) => guard.onTurnError(id, signals, token));
+      try {
+        h.coordinator.enqueue(h.sid, h.item);
+        await flush(); await h.sendToAgent.mock.results[0].value; await flush();
+        expect(h.session.send).not.toHaveBeenCalled();
+        expect(h.onUserMessagePersisted).not.toHaveBeenCalled();
+        expect(h.coordinator.getProjection(h.sid).autoResumePending).toBeUndefined();
+        if (mode === 'opaque' || mode === 'missing-reset') {
+          expect(timers).toHaveLength(0);
+          expect(h.coordinator.getProjection(h.sid)).toMatchObject({
+            error: expect.stringContaining('SUBSCRIPTION_ACCOUNT_LIMITED'), usageLimitWait: null,
+          });
+        } else {
+          expect(timers).toHaveLength(1);
+          expect(h.coordinator.getProjection(h.sid).usageLimitWait?.resumeAt).toBe(9_060_000);
+          expect(h.coordinator.scheduledQuotaOrigin(h.sid)).toEqual(h.item.origin);
+          if (mode === 'cancel') h.coordinator.stop(h.sid);
+          h.setAvailable();
+          timers.shift()!(); await flush(); await flush();
+          if (mode === 'resume') { await h.sendToAgent.mock.results[1].value; await flush(); }
+          expect(h.session.send).toHaveBeenCalledTimes(mode === 'resume' ? 1 : 0);
+          expect(h.onUserMessagePersisted).toHaveBeenCalledTimes(mode === 'resume' ? 1 : 0);
+          if (mode === 'resume') {
+            expect(h.sendToAgent.mock.calls[1][3].persistUserMessage?.clientId).toBe(h.item.clientId);
+            expect(h.sendToAgent.mock.calls[1][2]).toMatchObject(h.item.createOpts);
+          }
+        }
+        expect(h.fallback).not.toHaveBeenCalled();
+      } finally { guard.dispose(); }
+    },
+  );
 
   it.each([false, true])('switches before sending the same original input (rehydrate=%s)', async rehydrate => {
     vi.useFakeTimers();

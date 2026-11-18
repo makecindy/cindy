@@ -466,6 +466,8 @@ export interface AgentInputCoordinatorDeps {
     /** 绑定本次错误 recovery 的令牌；`armUsageLimitWait` 只认这个令牌。 */
     candidateToken: number,
   ) => void;
+  /** Host-verified remote companion Schedule; ordinary bot wakes never qualify. */
+  isScheduledQuotaInput?: (item: AgentInputQueuedMessage) => boolean;
   /**
    * **纯判定**：这条将交给 `onUsageLimitedTurnError` 的错误会不会先由供应商组试着换电脑
    * (docs/product-rules/provider-groups.md §6.1)。返回换电脑的原因时，这次错误照常成为当前状态
@@ -6142,13 +6144,14 @@ export class AgentInputCoordinator {
         result.reason === 'cancelled-before-dispatch';
       const startupAdmission = !item.orcaReportDelivery && result.kind === 'host-send'
         && result.startupAdmission === 'subscription-account-limited';
+      const scheduledQuotaAdmission = startupAdmission && this.deps.isScheduledQuotaInput?.(item) === true;
       if (!cancelledByUserBoundary && !startupAdmission) this.notifyRejectedUserTurn(sessionId, item);
       if (!cancelledByUserBoundary) this.recoverOrcaReportPreparation(sessionId, latest, item, result);
       // This receipt comes only from a proven-stopped bootstrap, before the
       // user row or native turn exists. Keep the original queue item/authorization.
       // Bot membership, route changes and retry limits remain owned by the host.
       if (!latest.queueAbortPending && !latest.autoResumePending
-        && startupAdmission) {
+        && startupAdmission && !scheduledQuotaAdmission) {
         const signals = { reason: BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON };
         if (this.isResumableTurnErrorCandidate(sessionId, message, signals, item)) {
           const takeover = this.notifyResumableTurnError(sessionId, item, message, signals, false);
@@ -6163,6 +6166,11 @@ export class AgentInputCoordinator {
       if (!cancelledByUserBoundary && startupAdmission
         && latest.autoResumePending?.reason !== BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON) {
         this.notifyRejectedUserTurn(sessionId, item);
+      }
+      // The stopped bootstrap has no native turn to emit a quota terminal.
+      // Keep the same queue-head recovery and use the existing reset-time owner.
+      if (!latest.queueAbortPending && scheduledQuotaAdmission) {
+        this.notifyUsageLimitedTurnError(sessionId, item, message, { usageLimit: true }, true);
       }
       this.emit(sessionId);
       return;
@@ -7563,11 +7571,12 @@ export class AgentInputCoordinator {
     item: AgentInputQueuedMessage,
     message?: string,
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
+    beforeDispatch = signals?.providerGroupUsageLimit !== undefined,
   ): void {
     const state = this.states.get(sessionId);
     // The synchronous switch hint only controls error presentation. Recovery
     // eligibility belongs to the service, including reconnect-only groups.
-    if (!state || !this.willNotifyUsageLimitedTurnError(state, item, signals?.providerGroupUsageLimit !== undefined)) return;
+    if (!state || !this.willNotifyUsageLimitedTurnError(state, item, beforeDispatch)) return;
     const token = ++this.usageLimitWaitSeq;
     state.usageLimitWait = {
       resumeAt: null, token, recovery: state.recovery!,

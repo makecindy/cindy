@@ -19678,6 +19678,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 按住(见 isAutoResumeDeferred)。与下面 onResumableTurnError 的第一道门是同一个函数,
     // 两处必须同判据 —— 否则会出现"按住了却永远不接管"或"没按住却接管"的错配。
     isResumableTurnErrorCandidate: canRecoverTurn,
+    isScheduledQuotaInput: item => scheduledQuotaInputs.has(item.createOpts),
     // 被按住的 error 最终没接管 → 只补落 error 行(横幅 coordinator 自己设)。
     // 纯判定：供应商组会先试着换电脑时，这次错误先不呈现(provider-groups.md §6.1)。
     providerGroupSwitchCandidate: (sessionId, signals) =>
