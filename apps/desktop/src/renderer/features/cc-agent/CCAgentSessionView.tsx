@@ -4321,9 +4321,11 @@ function CCAgentSessionContent({
         session.runtimeBaselineRecoveryPending === true && !session.runtimePending && !agentSwitchIntent &&
         model === session.runtimeEffective?.model && displayAgentKind === session.runtimeEffective.agentKind &&
         (opts.providerId ?? null) === (session.runtimeEffective.providerId ?? null);
-      const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
-      // A location switch is applied by main on the next send; null explicitly selects local.
-      const authCatalogDeviceId = agentSwitchIntent?.agentDeviceId !== undefined
+      const authAgentKind = deliveryMode === 'steer' ? dbToMakerAgentKind(session?.agentKind) : displayAgentKind;
+      const authVendor = authAgentKind === 'pi' ? 'pi' : authAgentKind === 'codex' ? 'codex' : 'cc';
+      // Steer joins the current turn; only the next send applies a location switch.
+      // null explicitly selects local execution.
+      const authCatalogDeviceId = deliveryMode !== 'steer' && agentSwitchIntent?.agentDeviceId !== undefined
         ? modelCatalogKey(agentSwitchIntent.agentDeviceId ?? undefined, controlledModelRoute.catalogHostDeviceId)
         : catalogDeviceId;
       const passesVendorAuthGate = async () => (await vendorAuthGate.checkAndConfirm(authVendor, {

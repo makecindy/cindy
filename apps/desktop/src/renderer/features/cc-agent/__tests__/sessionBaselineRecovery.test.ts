@@ -89,7 +89,7 @@ it('authenticates the recovered Harness on subsequent sends after a legacy proje
 // rejection rolls the bubble back so the composer restores the draft.
 function setup(options: { proceed: boolean; remoteDeviceId?: string | null; rebalance?: boolean; status?: string; catalogDeviceId?: string; remoteHostId?: string;
   gate?: ReturnType<typeof useVendorAuthGate>; vendor?: 'codex' | 'claude-code';
-  switchAgentDeviceId?: string | null; catalogHostDeviceId?: string }) {
+  pendingVendor?: 'pi'; switchAgentDeviceId?: string | null; currentAgentDeviceId?: string; catalogHostDeviceId?: string }) {
   const order: string[] = [];
   const auth = vi.fn(async () => {
     order.push('auth');
@@ -106,12 +106,13 @@ function setup(options: { proceed: boolean; remoteDeviceId?: string | null; reba
   const send = runInNewContext(code, {
     readOnly: false, cindyMakeInputLocked: false, invalidateHistoryRecoveryNavigation: vi.fn(),
     remoteDeviceId: options.remoteDeviceId ?? null, catalogDeviceId: options.catalogDeviceId,
-    displayAgentKind: options.vendor ?? 'claude-code', isCodex: options.vendor === 'codex',
+    displayAgentKind: options.pendingVendor ?? options.vendor ?? 'claude-code',
+    isCodex: !options.pendingVendor && options.vendor === 'codex', dbToMakerAgentKind,
     agentSwitchIntent: options.switchAgentDeviceId !== undefined
-      ? { target: options.vendor ?? 'claude-code', agentDeviceId: options.switchAgentDeviceId } : null,
+      ? { target: options.pendingVendor ?? options.vendor ?? 'claude-code', agentDeviceId: options.switchAgentDeviceId } : null,
     modelCatalogKey, controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     vendorAuthGate: options.gate ?? { checkAndConfirm: auth },
-    session: { remoteHostId: options.remoteHostId, source: 'user', status: options.status ?? 'active', workingDir: '/repo' }, sessionId: 'session-1',
+    session: { agentKind: options.vendor === 'codex' ? 'codex' : 'cc', agentDeviceId: options.currentAgentDeviceId, remoteHostId: options.remoteHostId, source: 'user', status: options.status ?? 'active', workingDir: '/repo' }, sessionId: 'session-1',
     folderPickerOpen: false, sessionHandoffPreparing: false, isOrcaLeadSession: () => false,
     isRunningRef: { current: false }, confirmRebalance: vi.fn(), t: (key: string) => key,
     offerSessionRebalance: async () => (options.rebalance ? recordRebalance : undefined),
@@ -265,4 +266,44 @@ it.each([
       op: 'read', agentDeviceId: next, channel: 'maker:agent:status', args: ['codex'],
     }]);
   }
+});
+
+// Greptile #11177: a steer joins the current turn without consuming the next-send
+// location intent. Exercise the actual callback/hook with the pending peer offline
+// (and the inverse), proving both successful dispatch and the current-route denial.
+it.each([
+  [undefined, 'next-remote', undefined, true, undefined],
+  ['current-remote', null, undefined, true, undefined],
+  ['share:current', 'next-remote', 'task-host', true, undefined],
+  ['current-remote', 'next-remote', undefined, false, undefined],
+  ['current-remote', 'next-remote', undefined, true, 'pi'],
+] as const)('steers on current location (%s -> %s, host=%s, ready=%s, pending=%s)', async (current, next, taskHost, ready, pendingVendor) => {
+  revalidate.mockResolvedValue(current ? 'unauthenticated' : 'ready');
+  const invoke = vi.fn(async (device: string, channel: string, args: unknown[]) => {
+    const sourceDevice = taskHost ? (args[0] as { agentDeviceId: string }).agentDeviceId : device;
+    if (sourceDevice !== current || !ready) throw new Error('offline');
+    const operation = taskHost ? (args[0] as { channel: string }).channel : channel;
+    return operation === 'maker:agent:status'
+      ? { binaryReady: (taskHost ? (args[0] as { args: string[] }).args[0] : args[0]) === 'codex', authReady: true }
+      : { providers: [{ id: 'remote', name: 'Remote', connected: true, agents: ['codex'], routing: { codex: {} }, models: { codex: [] } }] };
+  });
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  const { result } = renderHook(() => useVendorAuthGate());
+  const { send, storeSend } = setup({ proceed: false, vendor: 'codex', gate: result.current,
+    catalogDeviceId: modelCatalogKey(current, taskHost), currentAgentDeviceId: current,
+    switchAgentDeviceId: next, catalogHostDeviceId: taskHost, pendingVendor });
+  await expect(send('join running turn', 'model', '', 'ask', undefined, undefined, {
+    literalText: true, deliveryMode: 'steer',
+  })).resolves.toBe(ready);
+  expect(storeSend).toHaveBeenCalledTimes(ready ? 1 : 0);
+  if (!current) {
+    expect(invoke).not.toHaveBeenCalled();
+    expect(revalidate).toHaveBeenCalledExactlyOnceWith({ includeSuspended: true, skipBinary: false });
+  } else {
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith(taskHost ?? current,
+      taskHost ? 'maker:model-catalog:read' : 'maker:agent:status',
+      taskHost ? [{ op: 'read', agentDeviceId: current, channel: 'maker:agent:status', args: ['codex'] }] : ['codex']);
+  }
+  expect(confirm).toHaveBeenCalledTimes(ready ? 0 : 1);
 });
