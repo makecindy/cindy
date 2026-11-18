@@ -32,7 +32,13 @@ function projectIntroSeen(): boolean {
  */
 function hasNoProjectYet(): boolean {
   const local = recentWorkdirsStore.get();
-  if (!local || local.length > 0) return false;
+  if (
+    !local ||
+    local.length > 0 ||
+    !remoteProjectsStore.getInitialDiscoverySettled() ||
+    remoteProjectsStore.getBootstrapLoadingDeviceIds().size > 0 ||
+    remoteProjectsStore.getBootstrapFailedDeviceIds().size > 0
+  ) return false;
   return !remoteProjectsStore
     .getMergedRemoteSessions()
     .some((session) => session.workspaceKind === 'project');

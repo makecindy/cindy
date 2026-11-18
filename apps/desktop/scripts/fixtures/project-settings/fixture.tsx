@@ -7,6 +7,7 @@ import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 import { ctx as page, mountPage, subscription } from '../../ui-page/harness';
 import { ProjectSettingsDialog } from '../../../src/renderer/features/cc-agent/sidebar/ProjectSettingsDialog';
 import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
+import { remoteProjectsStore } from '../../../src/renderer/features/device-link/remoteProjectsStore';
 import { recentWorkdirsStore } from '../../../src/renderer/lib/recentWorkdirsStore';
 // This isolated HTTP fixture lacks secure-context UUID support. Production uses Chromium's crypto.
 if (!crypto.randomUUID) {
@@ -25,7 +26,12 @@ function DeviceEntry({ enabled, children }: { enabled: boolean; children: (close
   const { t } = useTranslation();
   // The sidebar keeps this computer's project list loaded; the introduction reads it.
   useEffect(() => {
-    if (page.data.intro) void recentWorkdirsStore.ensure();
+    if (page.data.intro) {
+      // This isolated fixture has no remote devices; discovery has completed.
+      const settleDiscovery = remoteProjectsStore.beginInitialDiscovery();
+      settleDiscovery();
+      void recentWorkdirsStore.ensure();
+    }
   }, []);
   if (!enabled) return children(() => {});
   return <div className="max-w-80 p-4">
