@@ -14,7 +14,7 @@ const schema = z.intersection(z.object({ owner: z.object({ dataOwnerId: z.string
 const MAX_BYTES = 8 * 1024 * 1024;
 // All renderer windows share one Main. Seed through the existing read before writing;
 // merging this bounded slot adds no synchronous disk read to a write/IPC hot path.
-let cloudHomes: { scope: string; retiredBotIds: string[]; revision: number } | null = null;
+let cloudHomes: { scope: string; retiredBotIds: string[]; revision: number; value: Record<string, unknown> | null } | null = null;
 let cloudHomesRevision = 0;
 const stringIds = (value: unknown): string[] => Array.isArray(value)
   ? value.filter((id): id is string => typeof id === 'string') : [];
@@ -34,34 +34,43 @@ export function accessChatDisplayCache(input: unknown): unknown {
     if (request.key !== 'cloud-homes') return value;
     const retiredBotIds = stringIds(value?.retiredBotIds);
     if (cloudHomes?.scope !== scope || JSON.stringify(cloudHomes.retiredBotIds) !== JSON.stringify(retiredBotIds)) {
-      cloudHomes = { scope, retiredBotIds, revision: ++cloudHomesRevision };
+      cloudHomes = { scope, retiredBotIds, revision: ++cloudHomesRevision, value: null };
     }
-    return value && typeof value === 'object' ? { ...value, retirementRevision: cloudHomes.revision } : value;
+    cloudHomes.value = value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+    return { ...cloudHomes.value, retirementRevision: cloudHomes.revision };
   }
   let value = request.action === 'remove' ? null : request.value;
   let retiredBotIds: string[] | null = null;
+  let hasNewRetirements = false;
   if (request.action === 'write' && request.key === 'cloud-homes') {
     // Failed/missing hydration must never erase deletions we have not loaded.
     if (cloudHomes?.scope !== scope) throwIpcError('PRECONDITION_FAILED', 'Cloud display cache must be loaded before writing');
     if (!value || typeof value !== 'object' || Array.isArray(value)) throwIpcError('INVALID_PARAMS', 'Cloud display cache must be an object');
-    const { revivedBotIds, retirementRevision, ...incoming } = value as Record<string, unknown>;
-    const retired = new Set([...cloudHomes.retiredBotIds, ...stringIds(incoming.retiredBotIds)]);
+    const { revivedBotIds, newlyRetiredBotIds, retirementRevision, ...incoming } = value as Record<string, unknown>;
+    // The full retired list is window history. Only this accept's new removals may
+    // add tombstones: an old window must not undo another window's revival.
+    const newlyRetired = stringIds(newlyRetiredBotIds);
+    hasNewRetirements = newlyRetired.length > 0;
+    const retired = new Set([...cloudHomes.retiredBotIds, ...newlyRetired]);
     const active = new Set(Array.isArray(incoming.actors) ? incoming.actors.flatMap(actor =>
       actor && typeof actor.externalId === 'string' ? [actor.externalId] : []) : []);
     // Presence alone may come from a stale renderer. Only a renderer that observed
     // retirement then a fresh active actor can explicitly revive that identity.
     if (retirementRevision === cloudHomes.revision) {
-      for (const id of stringIds(revivedBotIds)) if (active.has(id)) retired.delete(id);
+      for (const id of stringIds(revivedBotIds)) if (active.has(id) && !newlyRetired.includes(id)) retired.delete(id);
     }
     retiredBotIds = [...retired];
-    value = { ...incoming, retiredBotIds };
+    // A stale historical snapshot may also have an empty/older actor roster.
+    // Keep the accepted roster while still applying genuinely new removals.
+    const current = retirementRevision === cloudHomes.revision || cloudHomes.value === null;
+    value = { ...(current ? incoming : cloudHomes.value), retiredBotIds };
   }
   const raw = JSON.stringify(value);
   if (!raw || Buffer.byteLength(raw) > MAX_BYTES) throw new Error('CACHE_TOO_LARGE');
   mkdirSync(root, { recursive: true, mode: 0o700 }); atomicWriteFileSync(file, raw);
   if (retiredBotIds) {
-    const unchanged = cloudHomes?.scope === scope && JSON.stringify(cloudHomes.retiredBotIds) === JSON.stringify(retiredBotIds);
-    cloudHomes = { scope, retiredBotIds, revision: unchanged ? cloudHomes!.revision : ++cloudHomesRevision };
+    const unchanged = !hasNewRetirements && cloudHomes?.scope === scope && JSON.stringify(cloudHomes.retiredBotIds) === JSON.stringify(retiredBotIds);
+    cloudHomes = { scope, retiredBotIds, revision: unchanged ? cloudHomes!.revision : ++cloudHomesRevision, value: value as Record<string, unknown> };
   }
   if (request.key === 'cloud-homes' && request.action === 'remove') cloudHomes = null;
   rmSync(`${file}.bak`, { force: true });

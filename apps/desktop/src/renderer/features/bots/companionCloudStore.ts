@@ -47,10 +47,12 @@ function accept(next: CompanionCloudSnapshot): void {
   // That is not an authoritative deletion of the saved companion list.
   if (!next.enabled && !next.humanActorId && snapshot.actors.length) return;
   const revivedBotIds: string[] = [];
+  const newlyRetiredBotIds: string[] = [];
   if (next.enabled) {
     const ids = new Set(next.actors.map(actor => actor.externalId));
     for (const actor of snapshot.actors) if (!ids.has(actor.externalId)) {
       retiredBotIds.add(actor.externalId);
+      newlyRetiredBotIds.push(actor.externalId);
       void companionCloudApi()?.chatDisplayCache?.({ action: 'remove', key: `companion:${actor.externalId}`, owner }).catch(() => undefined);
     }
     for (const id of ids) if (retiredBotIds.delete(id)) revivedBotIds.push(id);
@@ -60,18 +62,17 @@ function accept(next: CompanionCloudSnapshot): void {
   apply(next);
   if (next.enabled || next.humanActorId) {
     void companionCloudApi()?.chatDisplayCache?.({ action: 'write', key: 'cloud-homes', owner,
-      value: { ...next, retiredBotIds: [...retiredBotIds], revivedBotIds, retirementRevision } }).then(value => {
+      value: { ...next, retiredBotIds: [...retiredBotIds], newlyRetiredBotIds, revivedBotIds, retirementRevision } }).then(value => {
         if (!isDataOwnerGenerationCurrent(requestOwner) || accepted !== revision) return;
         // Main may know a deletion this window missed while it had no subscribers.
         const receipt = value as { retiredBotIds?: unknown; retirementRevision?: number } | null;
         retirementRevision = receipt?.retirementRevision;
         const persisted = receipt?.retiredBotIds;
         if (!Array.isArray(persisted)) return;
-        let changed = false;
-        for (const id of persisted) if (typeof id === 'string' && !retiredBotIds.has(id)) {
-          retiredBotIds.add(id);
-          changed = true;
-        }
+        const merged = new Set(persisted.filter((id): id is string => typeof id === 'string'));
+        const changed = merged.size !== retiredBotIds.size || [...merged].some(id => !retiredBotIds.has(id));
+        // Main's receipt also removes history revived by another window.
+        retiredBotIds = merged;
         if (changed) apply({ ...snapshot, actors: snapshot.actors.filter(actor => !retiredBotIds.has(actor.externalId)) });
       }).catch(() => undefined);
   }

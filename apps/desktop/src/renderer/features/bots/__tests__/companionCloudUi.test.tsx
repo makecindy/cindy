@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompanionCloudSnapshot } from '../../../../shared/companionCloud';
 
@@ -592,7 +592,7 @@ describe('deleted cloud companion cache reconciliation', () => {
     const view = renderHook(() => useCompanionCloud());
     if (source === 'push') act(() => push(fresh));
     await act(async () => finish(snapshot('laptop')));
-    await waitFor(() => expect(saved).toMatchObject({ actors: [], retiredBotIds: ['mia'] }));
+    await waitFor(() => expect(saved).toMatchObject({ actors: [], retiredBotIds: ['mia'], newlyRetiredBotIds: ['mia'] }));
     expect(cloudRemoteBots(view.result.current, [row, { ...row, id: 'ordinary' }]).map(x => x.id)).toEqual(['ordinary']);
     view.unmount();
     resetCompanionCloudStoreForTests();
@@ -602,4 +602,24 @@ describe('deleted cloud companion cache reconciliation', () => {
     expect(cloudRemoteBots(restarted.result.current, [row])).toEqual([]);
     restarted.unmount();
   });
+});
+
+// #11303 review: Main may have accepted a revival while this window hydrated old history.
+// Unit tier, real renderer store: a merged receipt must restore the ordinary remote row.
+it('drops stale retirement history when Main reports another window revived the identity', async () => {
+  const row = { id: 'mia', deviceId: 'laptop', deviceName: 'Laptop', name: 'Mia', avatar: '',
+    avatarColor: 'violet', description: '', preview: '', activityAt: 0, sessionId: null, online: false, connectionKnown: true };
+  resetCompanionCloudStoreForTests();
+  const empty = { ...snapshot('laptop'), actors: [] };
+  maker.getCompanionCloudState.mockResolvedValue(empty);
+  let finishWrite!: (value: unknown) => void;
+  maker.chatDisplayCache.mockImplementation((request: { action: string }) => request.action === 'read'
+    ? Promise.resolve({ ...empty, retiredBotIds: ['mia'], retirementRevision: 1 })
+    : new Promise(resolve => { finishWrite = resolve; }));
+  const probe = renderHook(() => useCompanionCloud());
+  await waitFor(() => expect(finishWrite).toBeTypeOf('function'));
+  expect(cloudRemoteBots(probe.result.current, [row])).toEqual([]);
+  await act(async () => finishWrite({ retiredBotIds: [], retirementRevision: 2 }));
+  expect(cloudRemoteBots(probe.result.current, [row]).map(bot => bot.id)).toEqual(['mia']);
+  probe.unmount();
 });
