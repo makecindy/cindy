@@ -272,8 +272,8 @@ Device Link 只为两类对端保留：还是旧版本的 Cindy，以及没打�
   靠传输核心自己的拥塞控制；伪造与篡改的包靠密钥校验挡掉。
 - UDP 一段时间不通，自动回到 443；恢复后再切回。
 - **2026-11-14 已完成（本仓库）**：认证格式、「收得到」位、退回与恢复的时间见
-  [协议记录](dev-rules/protocol-compatibility/agent-net-udp-relay.md)。官方中转需服务端仓同步后生效；手机未覆盖，
-  随原生库冷更；提高打洞成功率没有做。
+  [协议记录](dev-rules/protocol-compatibility/agent-net-udp-relay.md)。官方中转需服务端仓同步后生效；手机 2026-11-18 随原生库覆盖
+  （新安装包生效）；提高打洞成功率没有做。
 - 自建中转同一次改动内同步适配：递增 `packages/device-link-relay/src/version.ts` 的版本，让已部署的主人看到升级入口；
   官方服务端仓的内核副本同步同一改动。容量与限速按 [服务器通道审查](dev-rules/server-channel-review.md) 评估。
   官方部署另行授权。
@@ -370,7 +370,7 @@ Device Link 只为两类对端保留：还是旧版本的 Cindy，以及没打�
 （[`2026-11-14-ordered-jitter`](../packages/agent-net-core/sim/results/2026-11-14-ordered-jitter/README.md)，模拟器里分块传输 45% → 94%），
 压测这一档从 48% / 75% 到 64%–84%（[复测](benchmarks/agent-net-session-2026-11-13/README.md#核心抖动修正后复测2026-11-14)），
 仍低于 Device Link 的 95%：小请求让核心进低排队模式，窗口按最小往返留余量，抖动线路上先卡住速度；改窗口会让 4G 上小请求变慢，
-还没找到两头都不退的做法。接着查了每个包的处理开销（[记录](benchmarks/agent-net-session-2026-11-13/README.md#每个包的处理开销2026-11-14)）：会话层收数据时反复拼接没收齐的帧，改掉以后不限速快约 15%、家宽一档 83% → 90%；按线路字节算家宽、每秒 1 MB 两档已和 Device Link 一样满，剩下的加密、发包、中转签名都是每个包的固定成本。随后接入了 Desktop（默认关，启动时设 `CINDY_AGENT_NET_SESSIONS=1` 才开）：会话跑在 Agent-Net 的 worker 里，Main 拿解好的消息（`session/workerSessions.ts`）；`apps/desktop/src/main/device-link/agentNetSessionLinks.ts` 把会话翻译成 Device Link 客户端的接口与帧形状，结果压缩与增量、推送压缩、正文复用、历史页增量和调用排队都用 Device Link 的同一批模块（2026-11-14 用户要求完整版）；`agentNetSessionRouting.ts` 按对端、按方向选路，业务代码不改。只有上层启用了会话的节点才宣告会话能力。2026-11-14～15 在 Windows 测试机 与 macOS 测试机 两台电脑上隔离验收：建链、打开远端任务、发消息、对方重启后恢复都经会话层完成，期间修了选路过严、同一对电脑混走两条路、包装层身份比较和 macOS 开关转发四个问题，又补上了对方刚连上时的选路空窗（先等会话一小段）（[验收记录](benchmarks/agent-net-session-2026-11-13/README.md#两台电脑隔离验收2026-11-1415)）。2026-11-15 第一次在两台电脑之间的真实线路上对比（[记录](benchmarks/agent-net-session-2026-11-13/README.md#真实网络对比2026-11-15)）：大数据在途时会话层的小请求仍是 20 多毫秒（原来的 Device Link 几百毫秒到 4.6 秒），上传是原来的 Device Link 的 1–3 倍多；回传每秒 3–7 MB，还不到原来的 Device Link 的一半，原因是抖动线路上低排队模式的窗口让带宽估计一路下滑，加上核心本身在这条线路上还没跑满。2026-11-16 在核心里补上（[核心验证记录](../packages/agent-net-core/sim/results/2026-11-16-jitter-window/README.md)）：低排队模式的窗口另加确认一直成批到达多出来的量、自己排的队不当成路径变慢、加速探测连着成功时加大；另一半原因是包太长，经 VPN 这类隧道时 1400 字节的包被拆成两片，改成发包不超过 1350 字节、收包上限仍是 1400（[协议记录](dev-rules/protocol-compatibility/agent-net-send-packet-size.md)）。同日还修了 Windows 上驱动一直空转：Node 的计时器约 15.5 毫秒才醒，驱动原来传输期间一直看时间，每秒 1 MB 时每 MB 要 1.8 秒 CPU；现在由核心判断哪条连接等不起（`needs_fine_timer`），降到约 0.2 秒，速度不变。之后同一条线路上同一时段交替对比：会话层不夹小请求时回传 / 上传每秒 19 / 18 MB（原来的 Device Link 9 / 7 MB），夹着小请求时 11 / 11 MB（Device Link 10 / 4 MB），小请求最长 35–41 毫秒（Device Link 0.6–4.7 秒）；本机慢线路更快，家宽、每秒 1 MB 差 3–7 个百分点（每个包多 5% 包头），跨地区长往返、本机回环这种极短往返的纯传和 CPU 还落后（[详细对比](benchmarks/agent-net-vs-device-link-2026-11-16/README.md)）。同日用户确认会话层跟着「Agent-Net (Beta)」开关走，去掉开发期的环境变量，补上超时后不再执行（取消，以及比时限晚到的请求不交给业务，方案第 5.4 节）；在两台电脑上验证了开关开着走会话、关掉退回 Device Link、再打开不用重启就恢复。同日反方向验收（macOS 测试机 控制这台）：新建远程任务、上传附件、重新打开历史、被控端重启都走通；其间发现两台直连时一端正常退出、对端要 30 秒才知道（关闭包没发出去），已修，修复后 4 毫秒。同日跨账号接入会话层：会话开在委托里的连接上，键是分享帧解出来的同一个逻辑对端，单向（受邀者只调用、分享资源一端只回应），
+还没找到两头都不退的做法。接着查了每个包的处理开销（[记录](benchmarks/agent-net-session-2026-11-13/README.md#每个包的处理开销2026-11-14)）：会话层收数据时反复拼接没收齐的帧，改掉以后不限速快约 15%、家宽一档 83% → 90%；按线路字节算家宽、每秒 1 MB 两档已和 Device Link 一样满，剩下的加密、发包、中转签名都是每个包的固定成本。随后接入了 Desktop（默认关，启动时设 `CINDY_AGENT_NET_SESSIONS=1` 才开）：会话跑在 Agent-Net 的 worker 里，Main 拿解好的消息（`session/workerSessions.ts`）；`packages/agent-net/src/session/sessionLinks.ts` 把会话翻译成 Device Link 客户端的接口与帧形状，结果压缩与增量、推送压缩、正文复用、历史页增量和调用排队都用 Device Link 的同一批模块（2026-11-14 用户要求完整版）；`packages/agent-net/src/session/sessionRouting.ts` 按对端、按方向选路，业务代码不改。只有上层启用了会话的节点才宣告会话能力。2026-11-14～15 在 Windows 测试机 与 macOS 测试机 两台电脑上隔离验收：建链、打开远端任务、发消息、对方重启后恢复都经会话层完成，期间修了选路过严、同一对电脑混走两条路、包装层身份比较和 macOS 开关转发四个问题，又补上了对方刚连上时的选路空窗（先等会话一小段）（[验收记录](benchmarks/agent-net-session-2026-11-13/README.md#两台电脑隔离验收2026-11-1415)）。2026-11-15 第一次在两台电脑之间的真实线路上对比（[记录](benchmarks/agent-net-session-2026-11-13/README.md#真实网络对比2026-11-15)）：大数据在途时会话层的小请求仍是 20 多毫秒（原来的 Device Link 几百毫秒到 4.6 秒），上传是原来的 Device Link 的 1–3 倍多；回传每秒 3–7 MB，还不到原来的 Device Link 的一半，原因是抖动线路上低排队模式的窗口让带宽估计一路下滑，加上核心本身在这条线路上还没跑满。2026-11-16 在核心里补上（[核心验证记录](../packages/agent-net-core/sim/results/2026-11-16-jitter-window/README.md)）：低排队模式的窗口另加确认一直成批到达多出来的量、自己排的队不当成路径变慢、加速探测连着成功时加大；另一半原因是包太长，经 VPN 这类隧道时 1400 字节的包被拆成两片，改成发包不超过 1350 字节、收包上限仍是 1400（[协议记录](dev-rules/protocol-compatibility/agent-net-send-packet-size.md)）。同日还修了 Windows 上驱动一直空转：Node 的计时器约 15.5 毫秒才醒，驱动原来传输期间一直看时间，每秒 1 MB 时每 MB 要 1.8 秒 CPU；现在由核心判断哪条连接等不起（`needs_fine_timer`），降到约 0.2 秒，速度不变。之后同一条线路上同一时段交替对比：会话层不夹小请求时回传 / 上传每秒 19 / 18 MB（原来的 Device Link 9 / 7 MB），夹着小请求时 11 / 11 MB（Device Link 10 / 4 MB），小请求最长 35–41 毫秒（Device Link 0.6–4.7 秒）；本机慢线路更快，家宽、每秒 1 MB 差 3–7 个百分点（每个包多 5% 包头），跨地区长往返、本机回环这种极短往返的纯传和 CPU 还落后（[详细对比](benchmarks/agent-net-vs-device-link-2026-11-16/README.md)）。同日用户确认会话层跟着「Agent-Net (Beta)」开关走，去掉开发期的环境变量，补上超时后不再执行（取消，以及比时限晚到的请求不交给业务，方案第 5.4 节）；在两台电脑上验证了开关开着走会话、关掉退回 Device Link、再打开不用重启就恢复。同日反方向验收（macOS 测试机 控制这台）：新建远程任务、上传附件、重新打开历史、被控端重启都走通；其间发现两台直连时一端正常退出、对端要 30 秒才知道（关闭包没发出去），已修，修复后 4 毫秒。同日跨账号接入会话层：会话开在委托里的连接上，键是分享帧解出来的同一个逻辑对端，单向（受邀者只调用、分享资源一端只回应），
 只认这个资源登记的那条分享连接，线上编码与 Device Link 给跨账号的一样；在真实核心、中转与分享授权的集成测试里验证了两种资源；同日在两个账号的两台真实电脑上验收了共享任务：受邀者打开、读历史、发消息、回复实时推回都走会话，
 主人移出成员的同一秒两端会话作废（[协议记录](dev-rules/protocol-compatibility/agent-net-session.md)「覆盖情况」）。供应商分享当时只在集成测试里走过，2026-11-17 在真机上验收（见下面 ⑤）。
 同日在线状态也改走会话（宣告里多带 `presence-v1`，老版本对端照旧收帧），两台新版 Desktop 之间线上不再有 Device Link 的帧。
@@ -391,8 +391,8 @@ Device Link 只为两类对端保留：还是旧版本的 Cindy，以及没打�
 现在回复里写上；修复后同一台电脑 2.5 分钟里只建一次链路。后来按用户定的原则「改动只影响 Agent-Net」改成只在 Host 开着 Agent-Net 时写上，
 关着时和主干一样（主干上 Device Link 的这个问题另行处理）。
 ④ 已完成：业务（Desktop 的 `index.ts`、`dispatch.ts` 与 Node Host）拿到的不再是 Device Link 客户端，而是 `PeerLinks`
-（`apps/desktop/src/main/device-link/peerLinks.ts`）。它把 Device Link 客户端的每个公开方法分成四组：按对端选路、两条路合并的事件、
-连接本身的、只有 Device Link 传输层才有的；选路层（`agentNetSessionRouting.ts`）不再用 Proxy，逐个方法写明走哪条路，
+（`packages/agent-net/src/session/peerLinks.ts`）。它把 Device Link 客户端的每个公开方法分成四组：按对端选路、两条路合并的事件、
+连接本身的、只有 Device Link 传输层才有的；选路层（`packages/agent-net/src/session/sessionRouting.ts`）不再用 Proxy，逐个方法写明走哪条路，
 没归组的方法业务调不到，不会悄悄落回 Device Link。会话层（`AgentNetSessionLinks`）声明自己实现前两组。Device Link 包不知道
 Agent-Net，没有改动。真机复验（同一个 XD 账号的两台电脑与 Host）：开着时建链 12–16 毫秒、列任务 11–19 毫秒、100 MB 4.1 秒
 （每秒约 25 MB），Host 收到的链路与请求都走会话；关掉 Agent-Net 后同样的操作走 Device Link，100 MB 经 WebRTC 48 秒（每秒约 2.2 MB）；
@@ -454,7 +454,12 @@ Agent-Net，没有改动。真机复验（同一个 XD 账号的两台电脑与 
     只在单元测试里验证。
 - **没测的**：远程桌面画面（macOS 测试机 上的测试版没有屏幕录制权限，要在那台电脑上手动授权）；自建中转加会话（要在一台电脑上对外开放
   中转端口，集成测试用的就是自建形态的中转）；真实的换网（远程操作会断开自己的连接）。手机端改动按用户安排延后。
-迁完之前，旧版对端、没开 Agent-Net 的设备与手机一律走 Device Link 的帧。
+- **阶段 4 手机（2026-11-18，用户要求「确保手机能使用到我们做的最新的 agent net 的能力」，冷更新不必顾虑）**：会话对接从 Desktop 移到
+  `packages/agent-net/src/session/`（连同删设备规则 `membership.ts`），Desktop、Node Host 与手机共用；手机的原生连接补上会话通道，
+  同账号与共享任务（受邀者）都走会话，文件字节也走会话；原生库换成和 Desktop 一样的发包上限、窗口与发送缓冲，补上中转 UDP、
+  STUN 与按流积压；换网时通知 Agent-Net；只认 Device Link 设备列表里的设备。旧安装包的原生库配新 JS 照样走会话，只是没有中转 UDP 与 STUN。
+  真实原生库的集成测试与手机单元测试通过；iOS、Android 的原生包这台电脑编不了，真机（前后台、锁屏、换网、耗电）都还没测。
+迁完之前，旧版对端与没开 Agent-Net 的设备一律走 Device Link 的帧。
 
 ## 11. 验收
 

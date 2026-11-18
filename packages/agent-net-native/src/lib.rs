@@ -5,6 +5,7 @@ mod engine;
 mod media;
 mod media_http;
 mod notification;
+mod udp_paths;
 
 use std::{ffi::{c_char, CString}, panic::{AssertUnwindSafe, catch_unwind}};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};

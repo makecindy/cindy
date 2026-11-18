@@ -72,7 +72,7 @@ it.each([false, true])('handles an ordinary peer missing a certificate without d
   fake.enabled = true;
   const socket = new EventEmitter() as any;
   socket.close = () => socket.emit('close', 1000);
-  socket.knowsPeer = () => known; socket.certificateFor = () => undefined;
+  socket.knowsPeer = () => known; socket.certificateFor = () => undefined; socket.restrictPeers = () => undefined;
   fake.open.mockResolvedValue(socket);
   fake.identity.mockResolvedValue({ api: { identity: { deviceId: 'phone' }, certificate: { expiresAt: Date.now() + 48 * 60 * 60_000 } },
     signer: {}, newTransportEngine: async () => ({ destroy: vi.fn() }) });
