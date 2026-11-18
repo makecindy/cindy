@@ -517,23 +517,35 @@ export function startCompanionCloud(input: {
     const materializer = input.host.materializer;
     if (!materializer) return Promise.reject(new Error('MATERIALIZE_UNAVAILABLE'));
     const botId = actor.externalId;
+    const actorId = actor.id;
     const pending = materializing.get(botId);
     if (pending) return pending;
-    const run = materializeCompanion({ api: input.api, store, state, log: input.log, fence, correction, onDemoted: publish, host: {
-      ...materializer, latestRows: input.host.latestRows,
-      ...(correction && materializer.backupProfileSource ? { backupProfileSource: async (id: string, value: unknown, writeFence: CompanionWriteFence) => {
-        const pending = state.bot(id)?.profileCorrection;
-        if (pending?.version === correction.version && pending.backedUp) return;
-        await materializer.backupProfileSource!(id, value, writeFence);
-        writeFence.assertCurrent();
-        state.update(id, actor.id, entry => { if (entry.profileCorrection?.version === correction.version) entry.profileCorrection.backedUp = true; });
-      } } : {}),
-    },
-      ...(input.media ? { download: input.media.download } : {}),
-      actor: { id: actor.id, externalId: botId, name: actor.name, avatar: actor.avatar ?? null },
-      roomId: () => mirror.ensureRoom(botId, actor.id, actor.name) })
+    const run = (async () => {
+      // Home CAS confirms ownership, but does not refresh the cached avatar. Read the
+      // current actor before restoring; once materialized, reconcile will not replay it.
+      fence.assertCurrent();
+      const actors = await input.api<CompanionRuntimeActor[]>('/actors');
+      fence.assertCurrent();
+      const current = actorOf(botId);
+      const fresh = actors.find(value => value.id === actorId && value.externalId === botId && value.kind === 'bot' && !value.disabled);
+      if (current?.id !== actorId || current.homeDeviceId !== input.selfDeviceId
+        || !fresh || fresh.homeDeviceId !== input.selfDeviceId) throw new Error('COMPANION_CHANGED');
+      return materializeCompanion({ api: input.api, store, state, log: input.log, fence, correction, onDemoted: publish, host: {
+        ...materializer, latestRows: input.host.latestRows,
+        ...(correction && materializer.backupProfileSource ? { backupProfileSource: async (id: string, value: unknown, writeFence: CompanionWriteFence) => {
+          const pending = state.bot(id)?.profileCorrection;
+          if (pending?.version === correction.version && pending.backedUp) return;
+          await materializer.backupProfileSource!(id, value, writeFence);
+          writeFence.assertCurrent();
+          state.update(id, actorId, entry => { if (entry.profileCorrection?.version === correction.version) entry.profileCorrection.backedUp = true; });
+        } } : {}),
+      },
+        ...(input.media ? { download: input.media.download } : {}),
+        actor: { id: actorId, externalId: botId, name: actor.name, avatar: fresh.avatar ?? null },
+        roomId: () => mirror.ensureRoom(botId, actorId, actor.name) });
+    })()
       .then(result => {
-        if (correction) state.update(botId, actor.id, entry => {
+        if (correction) state.update(botId, actorId, entry => {
           if (entry.profileCorrection?.version === correction.version) entry.profileCorrection.restored = {
             preference: entry.prefs[COMPANION_PROFILE_KEY]?.revision ?? 0, store: entry.stored?.[COMPANION_PROFILE_KEY]?.revision ?? 0,
           };
@@ -542,7 +554,7 @@ export function startCompanionCloud(input: {
         // becomes a project now, not only at the next start. Never holds up the arrival.
         if (live() && input.host.upgradeArrived) {
           void input.host.upgradeArrived(botId).catch(error => {
-            input.log?.warn('Teammate upgrade after arrival will retry', { actorId: actor.id, code: errorCode(error) });
+            input.log?.warn('Teammate upgrade after arrival will retry', { actorId: actorId, code: errorCode(error) });
           });
         }
         return result;

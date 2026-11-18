@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COMPANION_CLOUD_VERSION } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import { createCompanionHomeRegistry } from '../homes.js';
+import { restoreCloudAvatar } from '../avatarRestore.js';
 import { readTranscriptPage } from '../room.js';
 import { startCompanionCloud, type CompanionCloudHost, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
 import type { CompanionApi } from '../types.js';
@@ -20,14 +21,14 @@ let runtime: CompanionCloudRuntime | undefined;
 afterEach(() => { runtime?.dispose(); runtime = undefined; });
 
 function setup(options: { home: string | null; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[]; backgroundIdentityApi?: CompanionApi;
-  identityDeferred?: (error: unknown) => boolean;
+  readActors?: () => Promise<CompanionRuntimeActor[]>; identityDeferred?: (error: unknown) => boolean;
   installationId?: string; probe?: (deviceId: string) => Promise<boolean>; values?: Array<{ key: string; value: unknown }>;
   readValues?: () => Promise<Array<{ key: string; value: unknown }>>; syncProfile?: (botId: string) => Promise<void>;
   turnActive?: () => boolean; homeLink?: CompanionCloudHost['homeLink']; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
   canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean; refreshForeground?: () => Promise<void>;
   retireLocalCopy?: CompanionCloudHost['retireLocalCopy']; store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string; upgradeArrived?: CompanionCloudHost['upgradeArrived']; current?: () => boolean }) {
   const actors: CompanionRuntimeActor[] = [{ id: 'actor-1', kind: 'bot', externalId: 'bot_mia', name: 'Mia', avatar: null, homeDeviceId: options.home }];
-  const { api, calls } = fakeApi(options.handler ?? ((route, method) => {
+  const handler: ApiHandler = options.handler ?? ((route, method) => {
     // The home has uploaded the profile snapshot a take-over builds from.
     if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', value: MIA, revision: 1 }] : { revision: 1 };
     if (route === '/conversations') return { id: ROOM };
@@ -35,7 +36,9 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     if (route.endsWith('/import')) return {};
     if (method === 'PATCH') return {};
     throw new Error(`unexpected ${method} ${route}`);
-  }));
+  });
+  const { api, calls } = fakeApi((route, method, data, actorId) => route === '/actors'
+    ? options.readActors?.() ?? actors.map(actor => ({ ...actor })) : handler(route, method, data, actorId));
   const local = fakeLocal();
   const { state, files } = memoryState(options.savedState);
   const refresh = vi.fn(async () => undefined);
@@ -541,6 +544,57 @@ describe('take over', () => {
       expect(t.state.isDemoted('bot_mia')).toBe(false);
       expect(t.local.host.createProfile).toHaveBeenCalledOnce();
     } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  // #9684, unit: an existing null/old Actor cache survived takeOver and later
+  // reconcile as the default avatar. Prior coverage did not change the server avatar
+  // independently of that cache. These cases run real materialization and avatar
+  // conversion; only network and local persistence ports are in memory.
+  it.each([null, '🐢', '🦊'])('restores the current cloud avatar when the cached avatar is %s', async cachedAvatar => {
+    const readActors = vi.fn(async () => [{ ...t.actors[0]!, avatar: '🦊' }]);
+    const t = setup({ home: 'laptop', readActors });
+    t.actors[0]!.avatar = cachedAvatar;
+    let localAvatar: string | undefined;
+    t.host.materializer!.createProfile = vi.fn(async input => {
+      const restored = await restoreCloudAvatar(input.avatar);
+      if (!('portable' in restored)) throw new Error('unexpected image');
+      localAvatar = restored.portable;
+      t.local.setProfile({ status: 'active', displayName: input.name, description: input.description });
+    });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+    expect(localAvatar).toBe('🦊');
+    expect(readActors).toHaveBeenCalledOnce();
+    t.actors[0]!.avatar = '🦊';
+    await t.runtime.reconcile([{ id: 'bot_mia', status: 'active' }]);
+    expect(localAvatar).toBe('🦊');
+    expect(t.state.isDemoted('bot_mia')).toBe(false);
+    expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+  });
+
+  it('restores the current cloud avatar on automatic arrival too', async () => {
+    const t = setup({ home: 'desk', readActors: async () => [{ ...t.actors[0]!, avatar: '🦊' }] });
+    await t.runtime.reconcile([]);
+    await vi.waitFor(() => expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ avatar: '🦊' }), expect.anything()));
+    await vi.waitFor(() => expect(t.state.isDemoted('bot_mia')).toBe(false));
+  });
+
+  // A failed/obsolete identity read must leave the copy hidden for the existing retry.
+  it.each(['account', 'disposed', 'failure', 'retired', 'moved', 'replaced', 'cache-replaced', 'cache-moved'] as const)('does not restore stale identity after the authoritative read is %s', async scenario => {
+    let current = true;
+    const readActors = vi.fn(async () => {
+      if (scenario === 'account') current = false;
+      if (scenario === 'disposed') t.runtime.dispose();
+      if (scenario === 'failure') throw new Error('REQUEST_TIMEOUT');
+      if (scenario === 'cache-replaced') t.actors[0]!.id = 'replacement';
+      if (scenario === 'cache-moved') t.actors[0]!.homeDeviceId = 'elsewhere';
+      return [{ ...t.actors[0]!, avatar: '🦊', ...(scenario === 'retired' ? { disabled: true } : {}),
+        ...(scenario === 'moved' ? { homeDeviceId: 'elsewhere' } : {}), ...(scenario === 'replaced' ? { id: 'replacement' } : {}) }];
+    });
+    const t = setup({ home: 'laptop', readActors, current: () => current });
+    expect((await t.runtime.takeOver('bot_mia')).ok).toBe(false);
+    expect(t.local.host.createProfile).not.toHaveBeenCalled();
+    expect(t.local.host.updateProfile).not.toHaveBeenCalled();
+    expect(t.state.isDemoted('bot_mia')).toBe(true);
   });
 
   it('resolves an uncached actor through the explicit refresh channel before taking over', async () => {

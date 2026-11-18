@@ -1190,6 +1190,7 @@ describe('Bot canonical Session lifecycle', () => {
       await expect(host.materializer!.createProfile(draft(), { assertCurrent() {} }))
         .rejects.toMatchObject({ code: 'INVALID_PARAMS', failure });
       const { api, calls } = fakeApi((route, method) => {
+        if (route === '/actors') return [actor];
         if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', revision: 1, value: {
           name: actor.name, description: '', soul: field === 'identitySource' ? source : '',
           systemPrompt: '', user: field === 'userContextSource' ? source : '',
@@ -1249,6 +1250,7 @@ describe('Bot canonical Session lifecycle', () => {
       const publish = () => host.homes.update(companionSnapshot({ enabled: true, selfDeviceId: 'self', humanActorId: 'human', actors,
         demotedBotIds: state.demotedBotIds() }));
       const { api, calls } = fakeApi((route, method) => {
+        if (route === '/actors') return actors;
         if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', revision: 1, value: {
           name: 'Cloud Cindy', description: '', soul: 'Cloud identity', systemPrompt: '', user: '', templateId: 'cindy',
         } }] : { revision: 1 };
