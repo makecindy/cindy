@@ -11,11 +11,13 @@ import { readRecycleRecord, writeRecycleRecord, worktreeGeneration } from './rec
 import { extractRecoveryArchive, inventoryWorktree, sameWorktreeFiles, verifyRecoveryArchive } from './recoveryArchive';
 import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
 import { hasLiveSessionReference, loadLiveSessionPathKeys } from './liveSessionRefs';
+import type { WorktreeRestoreRequester } from './liveSessionRefs';
 import {
   assertManagedResourceLocation, assertManagedResourcePath, assertWorktreeGitIdentity, gitMetadataUsable,
 } from './resourceSafety';
 import * as store from './worktreeStore';
 import { withLegacyWorktreeRuntimeGuard } from './legacyRuntimeGuard';
+import type { WorktreeMeta } from './types';
 import {
   checkoutMissingSnapshotFiles, presentFilesMatchSnapshotTree, readWorktreeHeadRef, releaseSnapshotRef,
 } from './contentSnapshot';
@@ -115,11 +117,19 @@ async function restoreMultiboxSnapshot(record: RecycleRecord, worktreePath: stri
  * Records from older clients carry an encrypted archive; newer ones rebuild files from the Git
  * snapshot, which holds tracked and new files but not ignored ones.
  */
-export async function restoreRecordedWorktree(sessionId: string, worktreePath: string): Promise<boolean | null> {
+export async function restoreRecordedWorktree(
+  sessionId: string,
+  worktreePath: string,
+  requester?: WorktreeRestoreRequester,
+): Promise<boolean | null> {
   // Keep ordinary present/legacy lookups free of Windows helper processes.
   const pending = await readRecycleRecord(worktreePath, sessionId);
   if (!restorableRecord(pending)) return null;
-  return withWorktreeResourceLock(worktreePath, () => withLegacyWorktreeRuntimeGuard(async (legacyGuardHeld) => {
+  return withWorktreeResourceLock(worktreePath, () => withLegacyWorktreeRuntimeGuard(async (guardHeld) => {
+    const legacyGuardHeld = () => guardHeld() && (!requester || requester.isCurrent());
+    if (requester && !requester.isCurrent()) return false;
+    const hasLiveReferences = async (meta: WorktreeMeta) => hasLiveSessionReference(meta,
+      await loadLiveSessionPathKeys({ excludeSessionId: sessionId, restoreRequester: requester }));
     const record = await readRecycleRecord(worktreePath, sessionId);
     if (!record?.snapshot || !restorableRecord(record)) return null;
     if ([record.snapshot.head, record.snapshot.tree, record.snapshot.indexTree, record.snapshot.commit]
@@ -175,7 +185,7 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
         return false;
       }
     }
-    if (hasLiveSessionReference(record.meta, await loadLiveSessionPathKeys({ excludeSessionId: sessionId }))) return false;
+    if (await hasLiveReferences(record.meta)) return false;
     if (record.archive) await verifyRecoveryArchive(record.archive);
     if (!legacyGuardHeld()) return false;
     if (headRef) {
@@ -268,7 +278,7 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
       if (!(await recordedFilesMatch(record, worktreePath))) return false;
       await checkoutMissingSnapshotFiles(worktreePath, record.snapshot.tree);
     }
-    if (hasLiveSessionReference(record.meta, await loadLiveSessionPathKeys({ excludeSessionId: sessionId }))) return false;
+    if (await hasLiveReferences(record.meta)) return false;
     await assertManagedResourcePath(record.meta, [worktreePath]);
     await assertWorktreeGitIdentity(record.meta);
     if (!legacyGuardHeld()) return false;
@@ -276,7 +286,9 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
     if (currentHead.trim() !== record.snapshot.head) return false;
     if (headRef !== undefined && await readWorktreeHeadRef(worktreePath) !== headRef) return false;
     if (!(await indexIsRestorable(worktreePath, record.snapshot.indexTree))) return false;
+    if (!legacyGuardHeld()) return false;
     await gitExec(['read-tree', record.snapshot.indexTree], worktreePath);
+    if (!legacyGuardHeld()) return false;
     await store.set(sessionId, { ...record.meta, sessionId,
       ...(headRef ? { branch: headRef.slice('refs/heads/'.length) } : {}),
       generation: record.restoredGeneration, quarantinePath: undefined });
