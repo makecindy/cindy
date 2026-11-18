@@ -8,6 +8,7 @@ export interface DiscoveredProjectIcon {
   candidate: boolean;
 }
 export interface IconDiscoveryIO {
+  directoryName?: string;
   read(relative: string): Promise<Buffer | null>;
   fetch(url: string): Promise<{ bytes: Buffer; url: string } | null>;
   gitOrigin?(): Promise<string | null>;
@@ -87,13 +88,45 @@ function links(html: string): { rel: string; href: string }[] {
     return attrs.rel && attrs.href ? [{ rel: attrs.rel, href: attrs.href }] : [];
   });
 }
-export async function discoverProjectIcon(
-  io: IconDiscoveryIO,
+const monorepoIcons = ['apps/desktop/resources/icon.png', 'apps/mobile/assets/icon.png'];
+
+function linkedPackageDirectories(readme: Buffer | null): string[] {
+  const roots = new Set<string>();
+  const markdown = readme?.subarray(0, 32 * 1024).toString('utf8') ?? '';
+  for (const link of markdown.matchAll(
+    /(?<!!)\[[^\]\n]{1,256}\]\((?:<([^>\n]{1,1024})>|([^\s()]{1,1024}))\)/g,
+  )) {
+    let target: string;
+    try {
+      target = decodeURIComponent((link[1] ?? link[2]!).split('#')[0]!);
+    } catch {
+      continue;
+    }
+    if (!target || target.startsWith('/') || target.split('/').includes('..')) continue;
+    const relative = localIconPath(target);
+    if (!relative) continue;
+    const directory = /\/(?:README\.md|package\.json)$/i.test(relative)
+      ? path.posix.dirname(relative)
+      : relative.replace(/\/$/, '');
+    // Whether a link names a package is determined by its manifest, not a filename suffix.
+    if (!directory || directory === '.') continue;
+    roots.add(directory);
+    if (roots.size === 8) break;
+  }
+  return [...roots];
+}
+
+interface IconPackage {
+  name?: string;
+  build?: { icon?: unknown; mac?: { icon?: unknown } };
+}
+
+async function localArtwork(
+  read: IconDiscoveryIO['read'],
+  root: string,
+  pkg: IconPackage | null,
+  app: { expo?: { icon?: unknown }; icon?: unknown } | null,
 ): Promise<DiscoveredProjectIcon | null> {
-  const read = (p: string) => io.read(p).catch(() => null);
-  const fetch = (u: string) => io.fetch(u).catch(() => null);
-  const pkg = json(await read('package.json'));
-  const app = json(await read('app.json'));
   const paths: string[] = [];
   for (const p of [app?.expo?.icon, app?.icon, pkg?.build?.icon, pkg?.build?.mac?.icon]) {
     const valid = localIconPath(p);
@@ -105,7 +138,7 @@ export async function discoverProjectIcon(
     'public/manifest.webmanifest',
     'public/manifest.json',
   ]) {
-    const manifest = json(await read(name));
+    const manifest = json(await read(root + name));
     if (Array.isArray(manifest?.icons))
       for (const icon of manifest.icons.slice(0, 6)) {
         const p = localIconPath(icon?.src, path.posix.dirname(name));
@@ -129,11 +162,24 @@ export async function discoverProjectIcon(
     'public/favicon.ico',
     'favicon.ico',
   );
-  for (const p of [...new Set(paths)].slice(0, 28)) {
-    const bytes = await read(p);
+  for (const relative of [...new Set(paths)].slice(0, 28).concat(monorepoIcons)) {
+    const source = root + relative;
+    const bytes = await read(source);
     const image = bytes && (await projectIconThumbnail(bytes));
-    if (image) return { image, source: p, kind: 'local', candidate: false };
+    if (image) return { image, source, kind: 'local', candidate: false };
   }
+  return null;
+}
+
+export async function discoverProjectIcon(
+  io: IconDiscoveryIO,
+): Promise<DiscoveredProjectIcon | null> {
+  const read = (p: string) => io.read(p).catch(() => null);
+  const fetch = (u: string) => io.fetch(u).catch(() => null);
+  const pkg = json(await read('package.json'));
+  const app = json(await read('app.json'));
+  const local = await localArtwork(read, '', pkg, app);
+  if (local) return local;
   const website = async (raw: unknown): Promise<DiscoveredProjectIcon | null> => {
     const url = safeIconUrl(raw);
     if (!url || ['github.com', 'www.github.com', 'api.github.com'].includes(new URL(url).hostname))
@@ -178,7 +224,22 @@ export async function discoverProjectIcon(
     .filter((x) => typeof x === 'string')
     .map((x) => x.match(/github\.com[/:]([\w.-]+)\/([\w.-]+)/i))
     .find(Boolean);
-  if (!repo) return null;
+  if (!repo) {
+    const name = io.directoryName?.toLowerCase();
+    if (pkg || app || !name) return null;
+    let match: { root: string; pkg: IconPackage } | undefined;
+    for (const root of linkedPackageDirectories(await read('README.md'))) {
+      const child = json(await read(`${root}/package.json`));
+      if (typeof child?.name !== 'string' || child.name.split('/').pop()?.toLowerCase() !== name)
+        continue;
+      // A README may link several checkouts of the same package. Avoid choosing by link order.
+      if (match) return null;
+      match = { root, pkg: child };
+    }
+    if (!match) return null;
+    const root = match.root + '/';
+    return localArtwork(read, root, match.pkg, json(await read(root + 'app.json')));
+  }
   const slug = `${repo[1]}/${repo[2]!.replace(/\.git$/, '')}`;
   const meta = json((await fetch(`https://api.github.com/repos/${slug}`))?.bytes ?? null);
   const site = await website(meta?.homepage);
