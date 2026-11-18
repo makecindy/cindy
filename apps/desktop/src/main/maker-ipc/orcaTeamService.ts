@@ -681,8 +681,8 @@ interface AutoBridgeState {
    * 因此这里只剩终态映射与面板/通知读取用途。
    */
   structuredReport?: OrcaStructuredWorkerReport;
-  /** 该回报已按六态映射到 worker 状态；终态早于回报时由回报侧补映射。 */
-  reportApplied?: boolean;
+  /** 已按六态映射过的那份回报（引用比较）；同轮后续新结论仍要逐条映射。 */
+  appliedReport?: OrcaStructuredWorkerReport;
   /** 本轮真实终态；晚到回报按它映射，避免覆盖 error。 */
   terminalStatus?: 'done' | 'error';
   /** latest_report 投影来自哪条排队回报；该条被改写/撤回/合并时投影必须失效。 */
@@ -848,7 +848,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     turnStatus: 'done' | 'error',
   ): Promise<void> {
     await applyReportOutcome(state.workerId, state.leadSessionId, report, turnStatus);
-    state.reportApplied = true;
+    state.appliedReport = report;
   }
 
   async function withWorkerTransition<T>(
@@ -2489,11 +2489,15 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         try {
           await withWorkerTransition(state.workerId, async () => {
             const provisional = provisionalDispatches.get(sessionId);
-            const ownsState = autoBridge.get(sessionId) === state
+            const current = autoBridge.get(sessionId);
+            // 本轮清理删条目后迟到的回执仍归属本轮（终态先到、回报后到的设计内场景）；
+            // 只有新派活的条目真正接管时才让位。
+            const ownsState = current === state
+              || current === undefined
               || provisional?.previousPendingIdentity === state;
             // 新一轮派活已认领该行时，旧回执只在旧 state 上记账结算，不再写 worker 行——
             // 否则迟到的旧回报会把新派活的 running 面板与 structuredReport 洗回旧结论。
-            const supersedesRow = autoBridge.get(sessionId) !== state;
+            const supersedesRow = current !== undefined && current !== state;
             if (report && ownsState) {
               const isProgress = report.state === 'progress';
               state.structuredReport = report;
@@ -2502,7 +2506,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
               // 终态先到、回报后到：由回报侧补做映射，否则晚到的 waiting / blocked 会永久停在 done。
             if (supersedesRow) {
               // 新轮已接管面板：旧回报只留档，不落盘，也不反向改状态。
-            } else if (state.terminalObserved && !state.reportApplied && !isProgress) {
+            } else if (state.terminalObserved && state.appliedReport !== report && !isProgress) {
                 // 用真实终态：晚到的 ready 不能把已判 error 的轮次洗成成功。
                 await applyWorkerReportState(state, report, state.terminalStatus ?? 'done');
               } else if (!state.terminalObserved) {
@@ -2705,7 +2709,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           // 结构化回报的六态映射只在一处做（applyWorkerReportState）；已映射过的
           // （终态先到、回报后到时由回报侧补映射）不再覆盖。无结构化回报时保持旧路径。
           if (state) state.terminalStatus = params.status;
-          const structured = state && !state.reportApplied && state.structuredReport?.state !== 'progress'
+          const structured = state && state.appliedReport !== state.structuredReport && state.structuredReport?.state !== 'progress'
             ? state.structuredReport
             : undefined;
           if (state && structured) {

@@ -404,6 +404,13 @@ const ROOT_ONLY_WORKER_TOOLS: ReadonlySet<string> = new Set([
   'cancel_queued_report',
   'merge_queued_reports',
 ]);
+/** 远程 Worker 通道白名单；与 @cindy/device-link 的 ORCA_REMOTE_WORKER_BRIDGE_TOOLS 同步维护。 */
+const REMOTE_WORKER_SERVED_TOOLS: ReadonlySet<string> = new Set([
+  'send_to_lead',
+  'read_lead_history',
+  'read_lead',
+  'lead_status',
+]);
 const SAFE_ERROR_NAME_RE = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
 const SAFE_SEND_ERROR_CODES = new Set(['SESSION_RUNNING']);
 
@@ -1538,7 +1545,11 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
     ctx: McpProviderContext, register: RegisterWorkerTool,
     options: WorkerBridgeInvokeOptions = {},
   ) => {
+    // 远程 Worker 只注册白名单工具的 schema：其余工具在本通道必然
+    // REMOTE_WORKER_NOT_SUPPORTED，不注册以免描述诱导出必然失败的调用。
+    const remoteWorkerOnly = ctx.vendorOptions?.orcaRemoteWorker === true;
     defineTools(ctx, (name, description, shape, handler) => {
+      if (remoteWorkerOnly && !REMOTE_WORKER_SERVED_TOOLS.has(name)) return;
       register(name, description, shape, async (args) => {
         const runtime = resolveRuntimeMcpContext(ctx);
         if (ROOT_ONLY_WORKER_TOOLS.has(name)) {

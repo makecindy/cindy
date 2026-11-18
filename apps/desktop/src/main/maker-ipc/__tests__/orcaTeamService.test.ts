@@ -2365,6 +2365,31 @@ describe('OrcaTeamService', () => {
     expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith('worker-1', expect.objectContaining({ state: 'waiting' }));
   });
 
+  // 同一派活轮的多条已接受回报不能被一次性旗标吞掉（Codex P2）：终态先到时，
+  // 第二条结论同样要落库并映射，面板不能停在第一条结论上。
+  it('applies each accepted report in one assignment turn, not just the first', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '干活',
+    });
+    const finish1 = service.captureLocalWorkerReport('worker-session-1');
+    const terminal = service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '结束',
+    });
+    await finish1(true, { delivered: true, report: { state: 'failed', summary: '第一结论：失败' } });
+    const finish2 = service.captureLocalWorkerReport('worker-session-1');
+    await finish2(true, { delivered: true, report: { state: 'waiting', summary: '第二结论：改完了' } });
+    await terminal;
+
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith('worker-1', expect.objectContaining({ state: 'waiting' }));
+    expect(deps.updateWorkerStatus).toHaveBeenCalledWith('worker-1', 'error', expect.objectContaining({ state: 'failed' }));
+    expect(getWorker().status).toBe('idle');
+  });
+
   // 队列回执是投影的事实源：消息被改写，投影就不能继续宣称旧状态。
   it('records a progress report without settling the assignment or bridging text', async () => {
     const leadMessages: string[] = [];

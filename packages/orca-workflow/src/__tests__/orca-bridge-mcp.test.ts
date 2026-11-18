@@ -30,6 +30,8 @@ const WORKER_BRIDGE_TOOLS = [
   'report_progress', 'send_to_lead', 'read_lead_history', 'read_lead', 'lead_status',
   'get_lead_queue_status', 'update_queued_report', 'cancel_queued_report', 'merge_queued_reports',
 ];
+// 远程通道白名单（与 orca-bridge-mcp 的 REMOTE_WORKER_SERVED_TOOLS 同步）。
+const REMOTE_WORKER_TOOLS = ['send_to_lead', 'read_lead_history', 'read_lead', 'lead_status'];
 
 interface FakeSession {
   id: string;
@@ -291,15 +293,15 @@ describe('orca_worker_bridge MCP helpers', () => {
   // the public provider must omit this server for ordinary/Lead Claude sessions,
   // while preserving local/remote Workers and shared Codex/Pi bridge factories.
   it.each<{
-    name: string; agentKind: AgentKind; vendorOptions?: Record<string, unknown>; enabled: boolean;
+    name: string; agentKind: AgentKind; vendorOptions?: Record<string, unknown>; enabled: boolean; tools?: string[];
   }>([
     { name: 'ordinary Claude', agentKind: 'claude-code', enabled: false },
     { name: 'Claude Lead', agentKind: 'claude-code', vendorOptions: { orcaRole: 'lead' }, enabled: false },
-    { name: 'local Claude Worker', agentKind: 'claude-code', vendorOptions: { orcaRole: 'worker' }, enabled: true },
-    { name: 'remote Claude Worker', agentKind: 'claude-code', vendorOptions: { orcaRemoteWorker: true }, enabled: true },
-    { name: 'shared Codex bridge', agentKind: 'codex', enabled: true },
-    { name: 'shared Pi bridge', agentKind: 'pi', enabled: true },
-  ])('mounts Worker tools only where needed: $name', ({ agentKind, vendorOptions, enabled }) => {
+    { name: 'local Claude Worker', agentKind: 'claude-code', vendorOptions: { orcaRole: 'worker' }, enabled: true, tools: WORKER_BRIDGE_TOOLS },
+    { name: 'remote Claude Worker', agentKind: 'claude-code', vendorOptions: { orcaRemoteWorker: true }, enabled: true, tools: REMOTE_WORKER_TOOLS },
+    { name: 'shared Codex bridge', agentKind: 'codex', enabled: true, tools: WORKER_BRIDGE_TOOLS },
+    { name: 'shared Pi bridge', agentKind: 'pi', enabled: true, tools: WORKER_BRIDGE_TOOLS },
+  ])('mounts Worker tools only where needed: $name', ({ agentKind, vendorOptions, enabled, tools }) => {
     const { maker } = makeProvider();
     const provider = createOrcaWorkerBridgeMcpProvider({
       getMaker: () => maker as unknown as Maker, logger: makeLogger(),
@@ -312,7 +314,27 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(provider.isEnabled?.(ctx)).toBe(enabled);
     const config = provider.toClaudeSdkConfig?.(ctx) as { instance: FakeMcpServer } | null;
     if (!enabled) expect(config).toBeNull();
-    else expect(Object.keys(config!.instance._registeredTools)).toEqual(WORKER_BRIDGE_TOOLS);
+    else expect(Object.keys(config!.instance._registeredTools)).toEqual(tools);
+  });
+
+  // 远程 Worker 的 Agent 只看得到白名单工具的 schema：其余五个（report_progress、
+  // 队列改写三件、get_lead_queue_status）在本通道必然 REMOTE_WORKER_NOT_SUPPORTED，
+  // 不注册 schema 才不会诱导必然失败的工具调用。
+  it('registers only the bridge allowlist for remote Workers', () => {
+    const { maker } = makeProvider();
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => maker as unknown as Maker, logger: makeLogger(),
+      persistUserMessage: async () => undefined, wireSession: () => undefined,
+    });
+    const ctx: McpProviderContext = {
+      agentKind: 'pi', workingDir: '', vendorOptions: { orcaRemoteWorker: true },
+    };
+    const config = provider.toClaudeSdkConfig?.(ctx) as { instance: FakeMcpServer };
+    const registered = Object.keys(config.instance._registeredTools);
+    expect(registered).toEqual(REMOTE_WORKER_TOOLS);
+    for (const banned of ['report_progress', 'update_queued_report', 'cancel_queued_report', 'merge_queued_reports', 'get_lead_queue_status']) {
+      expect(registered).not.toContain(banned);
+    }
   });
 
   // The Worker prompt is the only place a model learns these names; a tool the prompt
