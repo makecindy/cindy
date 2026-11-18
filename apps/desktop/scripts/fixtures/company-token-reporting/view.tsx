@@ -1,13 +1,24 @@
-import { CompanyTokenSettings } from '../../../src/renderer/components/settings/usage/CompanyTokenReporting';
+import { UsageHistorySection } from '../../../src/renderer/components/settings/usage/UsageHistorySection';
+import { SettingsSidebarNav } from '../../../src/renderer/components/settings/SettingsSidebarNav';
 import { mountPage } from '../../ui-page/harness';
 
 void mountPage({
   host: () => {
     let participating = true;
+    let noted = false;
     return {
-      companyTokenView: async () => ({ generation: 1, participating, needsNotice: false }),
+      companyTokenView: async () => ({ generation: 1, participating, needsNotice: !noted }),
+      companyTokenNotice: async () => { noted = true; document.body.dataset.noticeShown = 'true'; },
       companyTokenParticipation: async (next: boolean) => { participating = next; },
     };
   },
-  render: () => <main className="p-4"><CompanyTokenSettings /></main>,
+  render: () => (
+    <div className="flex h-screen">
+      <aside className="w-52 shrink-0 overflow-auto border-r border-[var(--border-default)] p-3">
+        <SettingsSidebarNav activeTab="usage" tabIds={['general', 'appearance', 'providers', 'billing', 'usage',
+          'personalization', 'shortcuts', 'remote-control', 'ghosts', 'help', 'about']} onSelectTab={() => {}} />
+      </aside>
+      <main className="min-w-0 flex-1 overflow-y-auto p-7"><UsageHistorySection /></main>
+    </div>
+  ),
 });

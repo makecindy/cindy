@@ -1,4 +1,3 @@
-import { CompanyTokenSettings } from './usage/CompanyTokenReporting';
 import { generalSettings } from './GeneralSettings.settings-search';
 import { billingSettings } from './BillingSettings.settings-search';
 import { usageHistorySettings } from './usage/UsageHistorySection.settings-search';
@@ -641,7 +640,6 @@ function SettingsViewContent() {
             {activeTab === 'usage' && (
               <div role="tabpanel" id={usageHistorySettings.usage.targetId} aria-labelledby="settings-tab-usage">
                 <section aria-label={t(usageHistorySettings.usage.titleKey)}>
-                  <CompanyTokenSettings />
                   <UsageHistorySection />
                 </section>
               </div>

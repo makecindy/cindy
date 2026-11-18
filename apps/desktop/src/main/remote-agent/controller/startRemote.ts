@@ -1,4 +1,5 @@
-import { companyExecutionReporting, type CompanyExecutionChallenge } from '../../usage/companyTokenFacts.js';
+import { createCompanyReportingRenewal } from './companyReportingRenewal.js';
+import { companyExecutionReporting } from '../../usage/companyTokenFacts.js';
 import { createAttachmentPreservationReceiver } from '../attachmentPreservation.js';
 import type { PreserveAttachmentBatch } from '../../maker-host/attachmentPreservation.js';
 import { currentSessionCreationSignal } from '../../localDb/sessionRuntimeCleanup.js';
@@ -613,18 +614,7 @@ async function prepareAndStartRemoteAgentSession(
   const leavePool = deps.pool?.add(member);
 
   let reportingTimer: ReturnType<typeof setInterval> | undefined;
-  function syncReporting(runId: string, valid: () => boolean) {
-    const service = companyExecutionReporting();
-    if (!service?.available()) return;
-    void (async () => {
-      const challenge = await deps.invoke([{ op: 'company-reporting-challenge', runId }]) as CompanyExecutionChallenge | null;
-      if (!valid() || !challenge || typeof challenge.recipient !== 'string' ||
-          !/^[0-9a-f]{64}$/.test(challenge.recipient) || typeof challenge.nonce !== 'string' ||
-          !/^[0-9a-f-]{36}$/.test(challenge.nonce)) return;
-      const grant = await service.issue({ nonce: challenge.nonce, recipient: challenge.recipient });
-      if (valid() && grant) await deps.invoke([{ op: 'company-reporting-grant', runId, grant }]);
-    })().catch(() => undefined);
-  }
+  const syncReporting = createCompanyReportingRenewal(deps.invoke);
   let localDisposal: Promise<void> | null = null;
   const disposeLocal = (): Promise<void> => {
     clearInterval(reportingTimer);
@@ -681,6 +671,17 @@ async function prepareAndStartRemoteAgentSession(
       }
     };
     const client: RemoteAgentRunClient = new RemoteAgentRunClient(runId, poller, {
+      beforeSend: reporting ? async () => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            syncReporting(runId, isCurrent),
+            new Promise<void>(resolve => { timer = setTimeout(resolve, 1500); }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      } : undefined,
       onEvent: (event) => {
         if (!isCurrent()) return;
         touch();

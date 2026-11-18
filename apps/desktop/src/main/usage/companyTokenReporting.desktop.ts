@@ -50,6 +50,7 @@ const current = (id: Identity) => {
   );
 };
 
+class CompanyAuthorizationError extends Error {}
 async function request(id: Identity, route: string, method = 'GET', body?: object) {
   if (!current(id)) throw new Error('Company identity changed');
   const response = await net.fetch(id.base + route, {
@@ -63,6 +64,7 @@ async function request(id: Identity, route: string, method = 'GET', body?: objec
     },
     body: body && JSON.stringify(body),
   });
+  if ([401, 403, 404, 409].includes(response.status)) throw new CompanyAuthorizationError();
   if (!response.ok) throw new Error('Company request failed');
   return response;
 }
@@ -115,6 +117,7 @@ export function createCompanyTokenReporting() {
     }
     syncing = true;
     const version = invalidation;
+    let policyLoaded = false;
     try {
       const who = identity();
       if (!who) {
@@ -152,6 +155,7 @@ export function createCompanyTokenReporting() {
         models: new Set(rule.models),
         until: Date.now() + 6 * 60_000,
       };
+      policyLoaded = true;
       if (!policy.participating) {
         purge();
         if (localOff) {
@@ -210,8 +214,8 @@ export function createCompanyTokenReporting() {
         if (!current(who) || invalidation !== version) break;
         queue.acknowledge(scope, batch.batchId);
       }
-    } catch {
-      if (version === invalidation) policy = null;
+    } catch (error) {
+      if (version === invalidation && (!policyLoaded || error instanceof CompanyAuthorizationError)) policy = null;
     } finally {
       syncing = false;
       if (rerun) {

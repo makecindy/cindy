@@ -1,3 +1,4 @@
+import { recordCompanyPiRoots } from '../../usage/companyPiReceipts.js';
 import { companyExecutionReporting, type CaptureCompanyUsage } from '../../usage/companyTokenFacts.js';
 import { bindHostedAttachmentPreservation } from '../../maker-host/attachmentPreservation.js';
 import { remoteAttachmentPreservation, ATTACHMENT_PRESERVATION_PATH } from '../attachmentPreservation.js';
@@ -1988,8 +1989,19 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     try {
       const observed = run.usageMeter.observe(event, model ?? '');
       if (!run.relay && run.turnUsage && run.providerId && companyExecutionReporting()?.direct(run.providerId, run.kind)) {
-        for (const sample of observed) run.turnUsage(sample.model, { input: sample.inputTokens, output: sample.outputTokens,
-          cacheRead: sample.cacheReadTokens, cacheWrite: sample.cacheCreateTokens });
+        if (run.kind === 'pi') {
+          if (event.type === 'done' && event.source === 'pi') {
+            const usage = (event.data as { usage?: { receipts?: unknown; segments?: unknown; segmentsComplete?: boolean } } | undefined)?.usage;
+            recordCompanyPiRoots(run.turnUsage, usage?.receipts ?? (usage?.segmentsComplete ? usage.segments : undefined));
+          }
+        } else {
+          for (const sample of observed) {
+            run.turnUsage(sample.model, {
+              input: sample.inputTokens, output: sample.outputTokens,
+              cacheRead: sample.cacheReadTokens, cacheWrite: sample.cacheCreateTokens,
+            });
+          }
+        }
       }
       // Native proxy receipts already include root and child tokens. Terminal events only count turns.
       const samples = run.guestRoute?.receiptMetering ? observed.filter(sample => sample.turns > 0).map(sample => ({
@@ -3548,12 +3560,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (!record || reportingHandshakes.get(k) !== pending || pending.expires <= now() ||
             !deps.isOwnerCurrent(pending.owner) || !deps.isControllerAuthorized(controller)) return {};
         const run = runs.get(k);
-        if (!run) { pending.authorization = record; return {}; }
+        if (!run) { pending.authorization = record; return { authorized: true }; }
         reportingHandshakes.delete(k);
         if (!run.closing && !run.relay && deps.isOwnerCurrent(run.owner)) {
           if (run.turnUsage && run.reportingReceipt === record.receipt) run.turnUsage = record.record;
           run.authorizedUsage = record.record;
           run.reportingReceipt = record.receipt;
+          return { authorized: true };
         }
         return {};
       }

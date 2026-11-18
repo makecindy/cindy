@@ -166,3 +166,57 @@ it('accepts proven subscription and BYOK routes and rejects explicit or disguise
   ).toBe(false);
   expect(directCompanyTokenRoute('unresolved', undefined, gateway)).toBe(false);
 });
+
+it('retains valid collection and the same pending batch when delivery fails', async () => {
+  const { CompanyTokenQueue } = await import('../companyTokenQueue');
+  const file = path.join(dir, 'company-token-outbox.json');
+  const scope = { owner: JSON.stringify(['cn', org.orgId, org.id]), orgRevision: 2, memberRevision: 1 };
+  new CompanyTokenQueue(file).add(scope, { day: '2020-01-01', model: 'gpt-5', ...counts });
+  const batches: string[] = [];
+  ports.fetch.mockImplementation(async (url, options) => {
+    if (url.endsWith('/api/me')) return Response.json(me(true));
+    batches.push(JSON.parse(options.body).batchId);
+    return new Response(null, { status: batches.length === 1 ? 503 : 200 });
+  });
+  service.refresh();
+  await vi.waitFor(() => expect(batches).toHaveLength(1));
+  expect(service.view()?.participating).toBe(true);
+  service.noted(1);
+  startCompanyUsage()!('gpt-5', counts);
+  service.refresh();
+  await vi.waitFor(() => expect(batches).toEqual([batches[0], batches[0]]));
+});
+
+it('reports only confirmed Pi root requests even when a Gateway child used the same model', async () => {
+  const { recordCompanyPiRoots } = await import('../companyPiReceipts');
+  const record = vi.fn();
+  const request = { model: 'gpt-5', inputTokens: 12, outputTokens: 7 };
+  recordCompanyPiRoots(record, ['pi:1', 'pi:1', 'pi-child:task:1', 'pi-unattributed:3', undefined]
+    .map(id => ({ id, ...request })));
+  expect(record.mock.calls).toEqual([['gpt-5', { input: 12, output: 7, cacheRead: 0, cacheWrite: 0 }]]);
+});
+
+it('coalesces remote renewals and reauthorizes after midnight or a long idle period', async () => {
+  const { createCompanyReportingRenewal } = await import('../../remote-agent/controller/companyReportingRenewal');
+  const { installExecutionReporting } = await import('../companyTokenFacts');
+  const issue = vi.fn().mockResolvedValue('grant');
+  installExecutionReporting({ available: () => true, issue, challenge: () => null,
+    redeem: async () => undefined, direct: () => false });
+  const invoke = vi.fn().mockImplementation(async ([request]) => request.op === 'company-reporting-challenge'
+    ? { nonce: '0'.repeat(36), recipient: 'a'.repeat(64) } : { authorized: true });
+  const renew = createCompanyReportingRenewal(invoke);
+  const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-18T23:59:50Z'));
+  try {
+    await Promise.all([renew('run', () => true), renew('run', () => true)]);
+    await renew('run', () => true);
+    expect(issue).toHaveBeenCalledTimes(1);
+    now.mockReturnValue(Date.parse('2026-11-19T00:00:01Z'));
+    await renew('run', () => true);
+    now.mockReturnValue(Date.parse('2026-11-19T01:30:00Z'));
+    await renew('run', () => true);
+    expect(issue).toHaveBeenCalledTimes(3);
+  } finally {
+    now.mockRestore();
+    installExecutionReporting(undefined);
+  }
+});

@@ -1,5 +1,5 @@
 {
-  "companyTokens": {"title": "公司用量统计", "notice": "你的公司已开启模型 Token 用量统计。仅上报所用模型和 Token 数量。", "syncFailed": "暂时无法与公司同步统计设置。"},
+  "companyTokens": {"title": "公司用量统计", "notice": "仅向公司上报模型名称和 Token 数量。", "syncFailed": "暂时无法与公司同步统计设置。", "off": "已关闭，本机停止上报。"},
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "当前 Pi 运行位置不支持系统提示词片段。",

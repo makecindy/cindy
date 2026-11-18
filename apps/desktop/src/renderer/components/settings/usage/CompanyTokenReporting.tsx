@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/contexts/AuthContext';
-import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 
@@ -34,21 +33,15 @@ function useCompanyTokenView() {
   return org && view?.generation === dataOwnerGeneration ? view : null;
 }
 
-export function CompanyTokenNotice() {
-  const view = useCompanyTokenView();
-  const { t } = useTranslation();
-  useEffect(() => {
-    if (!view?.needsNotice) return;
-    toast.info(t('companyTokens.notice'));
-    void window.electronAPI.companyTokenNotice(view.generation).catch(() => undefined);
-  }, [view?.needsNotice, view?.generation, t]);
-  return null;
-}
-
 export function CompanyTokenSettings() {
   const view = useCompanyTokenView();
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (view?.participating && view.needsNotice) {
+      void window.electronAPI.companyTokenNotice(view.generation).catch(() => undefined);
+    }
+  }, [view]);
   if (!view) return null;
   const toggle = async () => {
     setBusy(true);
@@ -62,19 +55,19 @@ export function CompanyTokenSettings() {
     }
   };
   return (
-    <SettingsCard>
-      <SettingsRow
-        title={t('companyTokens.title')}
-        hint={t('companyTokens.notice')}
-        trailing={
-          <Switch
-            aria-label={t('companyTokens.title')}
-            checked={view.participating}
-            disabled={busy}
-            onCheckedChange={() => void toggle()}
-          />
-        }
+    <div className="mb-5 flex items-center justify-between gap-4 border-b border-[var(--border-default)] pb-4">
+      <div>
+        <div className="text-14 font-medium">{t('companyTokens.title')}</div>
+        <div className="mt-1 text-12 text-[var(--text-secondary)]">
+          {t(view.participating ? 'companyTokens.notice' : 'companyTokens.off')}
+        </div>
+      </div>
+      <Switch
+        aria-label={t('companyTokens.title')}
+        checked={view.participating}
+        disabled={busy}
+        onCheckedChange={() => void toggle()}
       />
-    </SettingsCard>
+    </div>
   );
 }

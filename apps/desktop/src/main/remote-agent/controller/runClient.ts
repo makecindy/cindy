@@ -76,6 +76,7 @@ export interface RemoteAgentRunHandlers {
   onClosed(reason: string, error?: RemoteAgentErrorInfo, idleReclaimed?: boolean): void;
   /** 本机还有这个任务的工作在进行、对方看不到(拉取时报 hold，对方不按闲置收回)。 */
   holdsRemote?(): boolean;
+  beforeSend?(): Promise<void>;
   recoverAuthorization?(): Promise<void>;
 }
 
@@ -237,6 +238,10 @@ export class RemoteAgentRunClient implements PolledRun {
     void result.catch(() => undefined);
     try {
       const payload = await this.payload(args, this.newId(), requireActive);
+      if (method === 'send' && this.handlers.beforeSend) {
+        requireActive();
+        await this.handlers.beforeSend();
+      }
       // Stop can overtake gzip or a chunk acknowledgement, including the final
       // await before dispatch. Never deliver that old send after Stop.
       requireActive();

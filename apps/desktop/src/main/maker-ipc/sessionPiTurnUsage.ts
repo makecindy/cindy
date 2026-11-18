@@ -1,3 +1,4 @@
+import { recordCompanyPiRoots } from '../usage/companyPiReceipts.js';
 import { takeCompanyTurn } from '../usage/companyTokenFacts.js';
 import { captureTurnUsageContext, turnBillingSource, type TurnUsageContext } from './turnUsageContext.js';
 import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.desktop.js';
@@ -182,8 +183,7 @@ export function recordSessionPiTurnUsage(
         if (!session.remoteHostId && !session.agentDeviceId && sessionProvider !== 'xd' && piSegmentsReliable &&
             (turnContext.subscriptionKind !== null || turnContext.accessKind === 'subscription' || isCustomProviderRoute)) {
           const record = takeCompanyTurn(turnContext);
-          for (const [model, group] of groupedSegments) record?.(model, { input: group.tokens.inputTokens,
-            output: group.tokens.outputTokens, cacheRead: group.tokens.cacheReadTokens, cacheWrite: group.tokens.cacheCreateTokens });
+          if (record) recordCompanyPiRoots(record, effectiveSegments);
         }
         // An explicitly incomplete segment payload must not be collapsed
         // into one synthetic request for pricing. Keep the aggregate token

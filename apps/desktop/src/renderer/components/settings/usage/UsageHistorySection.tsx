@@ -1,3 +1,4 @@
+import { CompanyTokenSettings } from './CompanyTokenReporting';
 import { usageHistorySettings } from './UsageHistorySection.settings-search';
 import { ErrorNotice } from '@/components/ui/error-notice';
 /**
@@ -192,6 +193,8 @@ export function UsageHistorySection(): React.JSX.Element {
           description={t('usageHistory.description')}
         />
       </div>
+
+      <CompanyTokenSettings />
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <span className="text-13 font-medium text-[var(--text-secondary)]">
