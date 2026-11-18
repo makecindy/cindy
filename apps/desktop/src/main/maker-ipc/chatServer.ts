@@ -2802,6 +2802,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       return message?.id === messageId && Array.isArray(message.content) ? message : undefined;
     } catch (error) {
       if (error instanceof ChatResponseError && [403, 404, 410].includes(error.status)) return undefined;
+      // Some deployed servers reject the single-message route while their authorized
+      // snapshot already contains the source. Do not substitute cached history, scan
+      // other rooms, or treat an authorization failure as endpoint compatibility.
+      if (error instanceof ChatResponseError && error.status === 400 && error.message === 'INVALID_INPUT') {
+        const snapshot = await (work ? workApi : api)<Snapshot>(`/conversations/${id.parse(roomId)}/snapshot`);
+        const source = snapshot?.room?.id === roomId && Array.isArray(snapshot.messages)
+          ? snapshot.messages.find(message => message.id === messageId && Array.isArray(message.content)) : undefined;
+        if (source) return source;
+      }
       throw error;
     }
   }

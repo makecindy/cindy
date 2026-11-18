@@ -2292,6 +2292,38 @@ describe('Chat Server result delivery and refresh', () => {
       expect(deliveries()).toHaveLength(0);
     });
 
+    // #6799: a source lookup refused with INVALID_INPUT must not block a valid request
+    // already present in the same room's fresh authorized snapshot. Standard tier:
+    // exercise withChatServer's HTTP adapter and claim-to-dispatch path, with mocked transport.
+    // Existing happy-path tests do not cover single-message lookup incompatibility.
+    it.each([
+      { status: 400, source: 'present', delivered: true },
+      { status: 400, source: 'missing', delivered: false },
+      { status: 400, source: 'wrong-room', delivered: false },
+      { status: 403, source: 'present', delivered: false },
+      { status: 404, source: 'present', delivered: false },
+      { status: 410, source: 'present', delivered: false },
+    ])('recovers a refused source lookup without expanding read authority ($status/$source)', async ({ status, source, delivered }) => {
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (method === 'GET' && /\/messages\/[0-9a-f-]{36}$/.test(route)) {
+          return { status, body: { error: { code: status === 400 ? 'INVALID_INPUT' : 'FORBIDDEN' } } };
+        }
+        if (route === `/conversations/${roomId}/snapshot`) {
+          return { body: { room: room(source === 'wrong-room' ? '10000000-0000-4000-8000-000000000099' : roomId),
+            members, messages: source === 'missing' ? [] : history, cursor: '1' } };
+        }
+        return original(route, method, body);
+      });
+      await ask(5, '@Cindy answer the current request');
+      expect(dispatched()).toHaveLength(delivered ? 1 : 0);
+      if (delivered) {
+        expect(dispatched()[0]!.message).toContain('@Cindy answer the current request');
+        expect(dispatched()[0]!.resumeWithStoredPermissionMode).toBe(true);
+        expect(verifiedOwnerRequestText(dispatched()[0]!.autoReviewUserText)).toBe('@Cindy answer the current request');
+      } else expect(deps.ensureGroupAssistantSession).not.toHaveBeenCalled();
+    });
+
     it('delivers your request into the group task and answers with that turn', async () => {
       history.push(message(2, peerId, 'The build is red\nagain'));
       await ask(5, '@Cindy please fix it');
