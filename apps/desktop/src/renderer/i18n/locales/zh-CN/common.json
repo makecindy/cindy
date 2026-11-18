@@ -6447,7 +6447,8 @@
           "defaultProjectTag": "默认",
           "defaultProjectFullAccessWarning": "默认项目「{{name}}」的权限是完全访问：任何群里 @ 机器人，都会以完全访问在它里面执行。",
           "sharedSettingsPointer": "项目、模型与权限由所有官方机器人共用。",
-          "sharedSettingsPointerAction": "去设置"
+          "sharedSettingsPointerAction": "去设置",
+          "workspacesCardDescriptionWithPlugins": "官方机器人和 IM 插件共用这一份。项目来自侧栏，新建、改名或移除请在侧栏操作；在 IM 里用 /model 改，这里也会跟着变。插件里给群聊或私聊单独改过的模型和权限不受影响。"
         },
         "binding": {
           "copyLink": "复制链接",
@@ -6979,11 +6980,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "官方",
-        "personal": "个人"
+        "personal": "个人",
+        "plugins": "插件"
       },
       "tips": {
         "cindy": "由 Cindy 提供并维护。无需自行创建机器人或准备凭证，按引导连接后即可使用。",
-        "personal": "使用你自己的账号或机器人，由你提供并管理所需凭证；每个渠道的账号、权限和设置独立保存。"
+        "personal": "使用你自己的账号或机器人，由你提供并管理所需凭证；每个渠道的账号、权限和设置独立保存。",
+        "plugins": "由已安装的插件提供的 IM 入口。登录和绑定在插件页面完成；项目、模型与权限默认使用「项目与模型」里的设置，也可以在插件里给每个群聊或私聊单独修改。"
       },
       "defaults": {
         "title": "新对话配置",
@@ -7015,6 +7018,10 @@
         },
         "groupPermissionLabel": "群聊新建任务权限档",
         "groupPermissionDescription": "群里新建任务时统一使用的权限模式（@bot 开话题、/new、/ctr 都算），默认「自动审批」；上面那个权限模式只管私聊。群上下文里有成员可控的内容，设成「完全访问」后将直接执行、不再逐条确认，请确认群里的人都可信。改动只影响之后新建的任务，已有任务在群里用 /permission 单独切换。"
+      },
+      "plugins": {
+        "rowHint": "登录、绑定和每个群聊、私聊的单独设置都在插件页面里。",
+        "open": "打开插件"
       }
     },
     "shortcuts": {
@@ -21863,6 +21870,19 @@
       "network": "连接中断，正在重试…",
       "timeout": "连接超时，正在重试…",
       "server": "服务器繁忙，正在重试…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "放宽权限？",
+    "message": "允许“{{name}}”让“{{conversation}}”在项目“{{project}}”里使用“{{mode}}”？",
+    "detail": "这比 IM 项目设置（{{projectMode}}）更宽。允许后，这个插件在这个项目里可以使用这一档权限，只影响插件自己的任务；之后可以在插件里改回跟随 IM。",
+    "groupWarning": "群里的消息其他成员也能发。权限越宽，需要你确认的操作越少，请确认群里的人都可信。",
+    "allow": "允许",
+    "cancel": "取消",
+    "modes": {
+      "ask": "默认权限",
+      "auto": "自动审批",
+      "bypassPermissions": "完全访问"
     }
   }
 }

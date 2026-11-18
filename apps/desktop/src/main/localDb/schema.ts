@@ -2511,7 +2511,8 @@ export const sessionTaskTags = sqliteTable(
 export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   id: text('id').primaryKey(),
   pluginId: text('plugin_id').notNull(),
-  operation: text('operation', { enum: ['create', 'send', 'target'] }).notNull(),
+  // imPermission: a looser IM-project permission the user allowed in Cindy (TypeScript-only enum).
+  operation: text('operation', { enum: ['create', 'send', 'target', 'imPermission'] }).notNull(),
   targetId: text('target_id').notNull(),
   requestKey: text('request_key').notNull(),
   fingerprint: text('fingerprint').notNull(),

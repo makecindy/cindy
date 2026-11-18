@@ -6490,7 +6490,8 @@
           "defaultProjectTag": "Default",
           "defaultProjectFullAccessWarning": "The default project “{{name}}” has Full access: an @mention from any group runs with full access inside it.",
           "sharedSettingsPointer": "Projects, models and permissions are shared by all official bots.",
-          "sharedSettingsPointerAction": "Open settings"
+          "sharedSettingsPointerAction": "Open settings",
+          "workspacesCardDescriptionWithPlugins": "Shared by every official bot and IM plugin. Projects come from your sidebar — create, rename, or remove them there. Changes made with /model in a chat show up here too. Models and permissions changed for a single chat in a plugin are not affected."
         },
         "binding": {
           "copyLink": "Copy link",
@@ -7022,11 +7023,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "Official",
-        "personal": "Personal"
+        "personal": "Personal",
+        "plugins": "Plugins"
       },
       "tips": {
         "cindy": "Provided and maintained by Cindy. No need to create a bot or supply credentials—follow the connection steps to get started.",
-        "personal": "Use your own account or bot and manage the required credentials yourself. Each channel keeps its own account, permissions, and settings."
+        "personal": "Use your own account or bot and manage the required credentials yourself. Each channel keeps its own account, permissions, and settings.",
+        "plugins": "IM entrances provided by installed plugins. Sign in and link accounts on the plugin's page. Projects, models and permissions follow Projects and models by default, and can be changed per chat in the plugin."
       },
       "defaults": {
         "title": "New Conversation Configuration",
@@ -7058,6 +7061,10 @@
         },
         "groupPermissionLabel": "Permission mode for new group tasks",
         "groupPermissionDescription": "Permission mode used for every task created in a group chat — @bot opening a topic, /new, and /ctr all use it; the permission mode above applies to direct messages only. Defaults to Auto approval. Group context can contain member-controlled content — choosing Full access executes actions without per-step confirmation, so only pick it for groups you trust. Changes apply to tasks created afterwards; switch an existing task with /permission in the group."
+      },
+      "plugins": {
+        "rowHint": "Sign-in, linking and per-chat settings are on the plugin's page.",
+        "open": "Open plugin"
       }
     },
     "shortcuts": {
@@ -21946,6 +21953,19 @@
       "network": "Connection lost, retrying…",
       "timeout": "Connection timed out, retrying…",
       "server": "Server busy, retrying…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "Loosen permissions for this chat?",
+    "message": "Allow “{{name}}” to use “{{mode}}” for “{{conversation}}” in the project “{{project}}”?",
+    "detail": "This is looser than the IM project setting ({{projectMode}}). If you allow it, this plugin can use this permission level in this project, for its own sessions only. You can switch back to following IM in the plugin at any time.",
+    "groupWarning": "Other members can also send messages in this group. The looser the permission, the fewer actions ask for your confirmation, so make sure you trust everyone in the group.",
+    "allow": "Allow",
+    "cancel": "Cancel",
+    "modes": {
+      "ask": "Default permissions",
+      "auto": "Auto-review",
+      "bypassPermissions": "Full access"
     }
   }
 }

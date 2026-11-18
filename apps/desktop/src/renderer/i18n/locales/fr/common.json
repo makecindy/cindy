@@ -6554,7 +6554,8 @@
           "defaultProjectFullAccessWarning": "Le projet par défaut « {{name}} » est en Accès complet : une @mention depuis n'importe quel groupe s'y exécute avec un accès complet.",
           "sharedSettingsPointer": "Les projets, modèles et autorisations sont partagés par tous les bots officiels.",
           "sharedSettingsPointerAction": "Ouvrir les réglages",
-          "workspacesBoundCount_many": "{{count}} projets"
+          "workspacesBoundCount_many": "{{count}} projets",
+          "workspacesCardDescriptionWithPlugins": "Partagé par tous les bots officiels et les plugins de messagerie. Les projets viennent de la barre latérale : créez-les, renommez-les ou retirez-les là-bas. Les modifications faites avec /model dans une conversation apparaissent aussi ici. Les modèles et autorisations modifiés pour une seule conversation dans un plugin ne sont pas concernés."
         },
         "binding": {
           "copyLink": "Copier le lien",
@@ -7089,11 +7090,13 @@
       "beta": "Bêta",
       "groups": {
         "cindy": "Officiel",
-        "personal": "Personnel"
+        "personal": "Personnel",
+        "plugins": "Plugins"
       },
       "tips": {
         "cindy": "Fourni et maintenu par Cindy. Inutile de créer un bot ou de fournir des identifiants : suivez les étapes de connexion pour commencer.",
-        "personal": "Utilisez votre propre compte ou bot et gérez vous-même les identifiants nécessaires. Chaque canal conserve son propre compte, ses autorisations et ses paramètres."
+        "personal": "Utilisez votre propre compte ou bot et gérez vous-même les identifiants nécessaires. Chaque canal conserve son propre compte, ses autorisations et ses paramètres.",
+        "plugins": "Entrées de messagerie fournies par les plugins installés. La connexion et l'association se font sur la page du plugin. Les projets, modèles et autorisations suivent « Projets et modèles » par défaut et peuvent être modifiés par conversation dans le plugin."
       },
       "defaults": {
         "title": "Configuration des nouvelles conversations",
@@ -7125,6 +7128,10 @@
         },
         "groupPermissionLabel": "Mode d'autorisation des nouvelles tâches de groupe",
         "groupPermissionDescription": "Mode d'autorisation utilisé pour chaque tâche créée dans une conversation de groupe : @bot ouvrant un sujet, /new et /ctr l'utilisent tous ; le mode d'autorisation ci-dessus ne s'applique qu'aux messages privés. Par défaut : approbation automatique. Le contexte de groupe peut contenir du contenu contrôlé par les membres. Choisir Accès complet exécute les actions sans confirmation à chaque étape : ne le choisissez que pour des groupes de confiance. Les modifications s'appliquent aux tâches créées ensuite ; pour une tâche existante, changez de mode avec /permission dans le groupe."
+      },
+      "plugins": {
+        "rowHint": "La connexion, l'association et les réglages de chaque conversation se trouvent sur la page du plugin.",
+        "open": "Ouvrir le plugin"
       }
     },
     "shortcuts": {
@@ -22152,6 +22159,19 @@
       "network": "Connexion perdue, nouvelle tentative…",
       "timeout": "Délai de connexion dépassé, nouvelle tentative…",
       "server": "Serveur occupé, nouvelle tentative…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "Élargir les autorisations de cette conversation ?",
+    "message": "Autoriser « {{name}} » à utiliser « {{mode}} » pour « {{conversation}} » dans le projet « {{project}} » ?",
+    "detail": "C'est plus large que le réglage du projet de messagerie ({{projectMode}}). Si vous l'autorisez, ce plugin pourra utiliser ce niveau d'autorisation dans ce projet, uniquement pour ses propres sessions. Vous pouvez revenir au réglage de messagerie dans le plugin à tout moment.",
+    "groupWarning": "D'autres membres peuvent aussi envoyer des messages dans ce groupe. Plus l'autorisation est large, moins d'actions vous demandent confirmation : assurez-vous de faire confiance à tous les membres du groupe.",
+    "allow": "Autoriser",
+    "cancel": "Annuler",
+    "modes": {
+      "ask": "Autorisations par défaut",
+      "auto": "Revue auto",
+      "bypassPermissions": "Accès complet"
     }
   }
 }

@@ -20,6 +20,24 @@ it('validates and projects each host tool group independently in both manifest r
   expect(diffGhostPermissionItems(before.manifest, after.manifest).added.map(item => item.key)).toEqual(['agent:host-tools:scheduler', 'agent:host-tools:terminal', 'code']);
 });
 
+// User decision 2026-11-18: `imEntrance` only lists a plugin on the IM bots page. Both manifest readers
+// must agree, it needs the task/target declarations it relies on, and adding it in an update must not
+// add a permission prompt (existing installs keep working). Minimal inputs: with/without tasks+targets.
+it('accepts imEntrance only with tasks and targets, in both readers, without a new permission', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'im-plugin', name: 'IM plugin', version: '1.0.0', entry: 'main.js',
+    agent: { tasks: true, targets: true } };
+  for (const validate of [validateGhostManifest, validateProtocolManifest]) {
+    expect(validate({ ...base, imEntrance: true })).toMatchObject({ ok: true, manifest: { imEntrance: true } });
+    for (const invalid of [{ imEntrance: 'yes' }, { imEntrance: true, agent: { tasks: true } }])
+      expect(validate({ ...base, ...invalid }).ok).toBe(false);
+  }
+  const before = validateGhostManifest(base);
+  const after = validateGhostManifest({ ...base, imEntrance: true });
+  if (!before.ok || !after.ok) throw new Error('invalid fixture');
+  expect(before.manifest).not.toHaveProperty('imEntrance');
+  expect(diffGhostPermissionItems(before.manifest, after.manifest).added).toEqual([]);
+});
+
 // 第23项：HTTPS 域名旧批准不能变成 HTTP 或自定义端口批准；双 validator 与权限 diff 共用真实入口。
 it('keeps exact-origin network permissions separate from existing HTTPS domain approvals', () => {
   const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'local-service', name: 'Local service', version: '1.0.0', kind: 'chip', entry: 'main.js' };
