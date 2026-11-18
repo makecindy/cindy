@@ -2259,7 +2259,7 @@ function CCAgentSessionContent({
   // live 供应商目录(含内置 + 自定义,按 agent 挂模型)—— vendor↔model 一致性校验的真源,
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
-  const { providers: localProviders } = useProviders();
+  const { providers: localProviders, loading: localProvidersLoading, error: localProvidersError } = useProviders();
   const { mode: authMode, user: authUser, dataOwnerId, deviceId: selfDeviceId } = useAuth();
   const {
     begin: beginHistoryRecovery,
@@ -2428,9 +2428,17 @@ function CCAgentSessionContent({
   );
   const { providers: deviceProviders } = useDeviceProviders(catalogDeviceId);
   const providers = catalogDeviceId ? deviceProviders : localProviders;
+  const taskAccountCatalog = useDeviceProviders(taskAccountDeviceId ?? undefined);
   const taskAccountProviderId = usageAccount.kind === 'unreadable' ? null
     : sessionSubscriptionPoolProvider(normalizeDbAgentKind(displayAgentKind), usageChipProviderId,
-        session?.remoteHostId, providers.find(provider => provider.id === usageChipProviderId));
+        session?.remoteHostId, providers.find(provider => provider.id === usageChipProviderId),
+        !agentSwitchIntent && session?.providerId == null, {
+          modelId: session?.model,
+          providers: taskAccountDeviceId ? taskAccountCatalog.providers : localProviders,
+          catalogReady: taskAccountDeviceId
+            ? !taskAccountCatalog.loading && !taskAccountCatalog.error
+            : !localProvidersLoading && !localProvidersError,
+        });
   const canSwitchToClaudeSubscription = useMemo(() => {
     if (
       remoteDeviceId ||
