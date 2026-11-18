@@ -280,7 +280,7 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
 
 | 情形 | 行为 |
 |---|---|
-| 新用户 | 本地新任务按完整组合落点：OpenAI 订阅→GPT-6.1 Sol / Codex；Anthropic 订阅→Claude Opus 5.5 / Claude Code；Cindy AI→服务端下发的 Auto / Pi；之后保留 xAI 订阅→Grok / Pi 回退。深度沿用各模型目录默认值；来源、模型和引擎必须可用，不伪造 Auto，也不借旧 GLM 默认标记选固定型号 |
+| 新用户 | 本地新任务按完整组合落点：OpenAI 订阅→GPT-6.2 Sol / Codex；Anthropic 订阅→Claude Opus 5.5 / Claude Code；Cindy AI→服务端下发的 Auto / Pi；之后保留 xAI 订阅→Grok / Pi 回退。深度沿用各模型目录默认值；来源、模型和引擎必须可用，不伪造 Auto，也不借旧 GLM 默认标记选固定型号 |
 | 多来源 | 未自定义时按 OpenAI→Anthropic→Cindy AI→xAI 选择可用组合（CN / Global 一致）；独立订阅账号按认证身份识别，保留真实账号 ID。用户手动选择保持优先；来源仍在加载、账号没有可用目标、或零来源时不编造组合 |
 | 未自定义老用户 | 同新用户；自动下放不设置 `modelChosenByVendor`。仅由旧版 cc 不可用触发并持久化的非 cc Harness 仍属于系统回退，不算用户自定义 |
 | 已自定义老用户 | 任一明确的 Harness / 来源 / 模型 / 思考深度 / Fast 选择会封住后续自动下放；`modelChosenByVendor`、providerModelMemory、引擎 override 与形态偏好全部保留 |

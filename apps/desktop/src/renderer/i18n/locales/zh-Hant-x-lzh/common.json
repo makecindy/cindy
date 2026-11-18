@@ -5359,8 +5359,19 @@
       "title": "書訊",
       "sendShortcut": {
         "label": "以 {{shortcut}} 遣之",
-        "hint": "啟則按 {{shortcut}} 遣訊；闔則按 Enter 遣訊，按 Shift+Enter 換行。",
-        "ariaLabel": "以 {{shortcut}} 遣訊"
+        "hint": "Enter 則遣，Shift+Enter 則換行。",
+        "ariaLabel": "以 {{shortcut}} 遣訊",
+        "hintModifierEnter": "{{shortcut}} 則遣，Enter 則換行。"
+      },
+      "followUp": {
+        "label": "行中遣訊之法",
+        "hintQueue": "差事行中，遣鈕與 {{send}} 皆排隊。",
+        "hintSteer": "差事行中，遣鈕與 {{send}} 皆插話於今之差事。",
+        "ariaLabel": "差事行中遣訊之法",
+        "options": {
+          "queue": "排隊",
+          "steer": "插話"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -6454,7 +6465,8 @@
           "defaultProjectTag": "常例",
           "defaultProjectFullAccessWarning": "常例案「{{name}}」之權限為完全存取：任一群中 @ 機器人，皆將以完全存取之權於其中執行，慎之。",
           "sharedSettingsPointer": "案、模型與權限，諸官方機器人共用。",
-          "sharedSettingsPointerAction": "往設之"
+          "sharedSettingsPointerAction": "往設之",
+          "workspacesCardDescriptionWithPlugins": "諸官方機器人與 IM 法器共用此一份。案出於側欄，立案、更名、除案皆於側欄行之；於 IM 中以 /model 更之，此處亦隨之而變。法器中逐群逐私語另設之模型與權柄，不受其擾。"
         },
         "binding": {
           "copyLink": "錄連結",
@@ -6763,6 +6775,7 @@
           "latency": "延遲",
           "lastSeen": "末見",
           "controlling": "方操控此機",
+          "protocol": "連線之法",
           "rttNote": "近測",
           "manage": "理裝置…",
           "linkStatus": "與「{{name}}」",
@@ -6987,11 +7000,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "官設",
-        "personal": "私"
+        "personal": "私",
+        "plugins": "法器"
       },
       "tips": {
         "cindy": "由 Cindy 所供並維護。無須自建機器人或備憑證，依引導連線即可用。",
-        "personal": "用君自家之名籍或機器人，所需憑證由君自供自理；各渠道之名籍、權柄與設定各自儲存。"
+        "personal": "用君自家之名籍或機器人，所需憑證由君自供自理；各渠道之名籍、權柄與設定各自儲存。",
+        "plugins": "已裝法器所供之 IM 入口。登入與綁定於法器頁中為之；案、模型與權柄默隨「案與模型」之設，亦可於法器中逐群逐私語另設。"
       },
       "defaults": {
         "title": "新言談配置",
@@ -7023,6 +7038,10 @@
         },
         "groupPermissionLabel": "群議新差事之權柄檔",
         "groupPermissionDescription": "群組中新開差事時統一所用之權柄檔（@bot 開話題、/new、/ctr 皆屬之），常例為「自審」；上方之權柄檔唯管私聊。群組上下文中有成員可控之內容，設為「完全存取」後將徑行執行、不復逐項確認，請確保群組成員皆可信。變更僅及此後新開之差事，既有差事請於群組中以 /permission 另行切換。"
+      },
+      "plugins": {
+        "rowHint": "登入、綁定與各群各私語之設，皆在法器頁中。",
+        "open": "啟法器"
       }
     },
     "shortcuts": {
@@ -8239,6 +8258,8 @@
         "subscribeMessageDetail": "收已存之君訊與 AI 之答；附件另循讀取與交接之途。",
         "subscribeToolExecution": "工具行事",
         "subscribeToolExecutionDetail": "收工具之名、輸入、結果與過誤；惟觀之，不改其行。",
+        "subscribeNativeRecovery": "原生復行之事",
+        "subscribeNativeRecoveryDetail": "收重試、壓縮上下文及任務止息之狀態。",
         "subscribeTaskState": "差事狀態",
         "subscribeTaskStateDetail": "收差事運行、候答、完畢、歸檔及隱顯之變。",
         "subscribeActivity": "旁聽 AI 何時思之、何時候君",
@@ -9818,6 +9839,41 @@
       },
       "providerTooltip": "取此差事今所選之供方；未指定則留空。",
       "tokensTooltip": "僅計此差事於{{range}}內所生之 token。"
+    },
+    "auxiliary": {
+      "title": "輔助模型用量",
+      "label": "輔助請求",
+      "purpose": "用途",
+      "requests": "已記請求",
+      "description": "已計入總 Token。惟錄上游所報用量；未報者及往日遺漏，皆不估補。",
+      "sources": {
+        "title": "擬題",
+        "task-summary": "任務撮要",
+        "prompt-prediction": "輸入建議",
+        "working-status": "進展文案",
+        "help": "問答釋疑",
+        "bot-creation": "建立夥伴",
+        "bot-opening": "夥伴開場",
+        "group-planning": "群組籌畫",
+        "ambient-reply": "判斷回覆",
+        "auto-review": "自動覆核",
+        "tool-loop-review": "工具循環覆核",
+        "memory-review": "記憶覆核",
+        "git-summary": "變更撮要",
+        "hook-generation": "自動化腳本",
+        "automation-verification": "匯入驗證",
+        "plugin-text": "法器文字請求",
+        "voice-dialogue": "語音交談",
+        "voice-exit": "判斷結束語音",
+        "voice-refinement": "語音潤飾",
+        "dictionary-learning": "詞典習得",
+        "embedding-query": "向量檢索",
+        "embedding-index": "向量索引",
+        "web-search": "網頁搜尋",
+        "provider-probe": "連線測試",
+        "vision-bridge": "視覺橋",
+        "auxiliary": "其他輔助請求"
+      }
     }
   },
   "usageDashboard": {
@@ -11207,6 +11263,7 @@
       "unavailableTitle": "此群議已不可用",
       "unavailableDescription": "或已被刪。歸同伴頁，可啟他群議與同伴。",
       "sidebar": {
+        "threadReply": "話題覆",
         "title": "群議",
         "empty": "尚無訊",
         "preview": "{{name}}：{{text}}",
@@ -11539,6 +11596,7 @@
           "sharedReplyFrom": "貼回 {{name}} 之話題回覆",
           "sharedReply": "貼回一則話題回覆",
           "edited": "已修",
+          "replyNotFound": "未得此覆言。",
           "sourceUnavailable": "原回覆已刪，或君無權覽之。",
           "viewThread": "覽話題",
           "viewInMain": "於群議中覽",
@@ -13635,9 +13693,8 @@
     "sendButton": {
       "send": "遣訊",
       "queue": "排隊遣",
-      "queueTooltip": "點之則排隊遣；按 {{shortcut}} 插話，不中斷今之差事",
-      "queueTooltipSendMode": "點之則排隊；按 {{shortcut}} 遣此訊",
-      "stop": "止生成"
+      "stop": "止生成",
+      "steer": "插話於今之差事"
     },
     "pluginSetup": {
       "account": {
@@ -14528,6 +14585,13 @@
       "runningWithWorktree_one": "它結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。",
       "runningWithWorktree_other": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。",
       "runningWithWorktree_many": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。"
+    },
+    "followUpHint": {
+      "queueDefault": "差事行中所遣之訊，默從排隊。",
+      "steerDefault": "差事行中所遣之訊，默為插話於今之差事。",
+      "switchToSteer": "默改插話",
+      "switchToQueue": "默改排隊",
+      "dismiss": "關閉提示"
     }
   },
   "onboarding": {
@@ -16593,6 +16657,36 @@
         "priority": "緩急",
         "activity": "近動",
         "created": "立時"
+      },
+      "inbox": {
+        "thisEvening": "今夕",
+        "tomorrow": "明日",
+        "nextWeek": "下週",
+        "custom": "自定…",
+        "wakeAt": "喚回日期時辰",
+        "timeZone": "本地時辰（{{zone}}）",
+        "invalidTime": "請選擇來歲以內之未來日期時辰。",
+        "inbox": "待處理",
+        "working": "進行中",
+        "snoozed": "待後處理",
+        "archived": "已處理",
+        "snooze": "留待後辦",
+        "complete": "畢",
+        "wake": "即刻取回",
+        "restore": "恢復任務",
+        "process": "標記已處理（封存）",
+        "empty": "匣中已清",
+        "snoozeFailed": "無法儲存稍後處理時間，請檢查連線並確認任務所在電腦已更新。",
+        "hours": "{{count}} 小時後",
+        "hours_one": "{{count}} 小時後",
+        "hours_other": "{{count}} 小時後"
+      },
+      "taskListMode": {
+        "heading": "任務模式",
+        "tasks": "任務列表",
+        "inbox": "收件匣",
+        "enterInbox": "轉至收件匣之式",
+        "leaveInbox": "轉至任務列之式"
       }
     },
     "rename": {
@@ -16885,6 +16979,7 @@
         "menuSave": "存之",
         "menuInsertTable": "插表格",
         "externalChangeBlocked": "卷已為外部所改，自動儲存已暫停。確認後可親手存之以覆蓋。",
+        "targetChanged": "檔案指向已變更，目前的草稿仍保留在編輯器中。請先複製草稿，再重新開啟檔案",
         "tableMenu": {
           "addRowAbove": "上增一行",
           "addRowBelow": "下增一行",
@@ -19641,7 +19736,8 @@
           "expired": "已逾期",
           "voided": "已廢"
         }
-      }
+      },
+      "viewUsage": "覽耗用"
     },
     "orders": {
       "title": "訂單錄",
@@ -21438,6 +21534,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "閉",
+    "taskInbox": {
+      "title": "識收件匣",
+      "lead": "任務依其狀自分為待處理、進行中、待後處理、已處理。善用之道，在常清其匣：事畢者點「畢」，未及者待後處理。",
+      "pending": {
+        "title": "待處理",
+        "body": "任務事竣有果，或待君答，則現於此。"
+      },
+      "done": {
+        "title": "畢",
+        "body": "事畢點「畢」，任務移入已處理；後有新進，自返其處。"
+      },
+      "snooze": {
+        "title": "待後處理",
+        "body": "今未暇則擇一時，時至自返待處理。"
+      },
+      "start": "始用",
+      "note": "可隨時以側欄頂端之鈕返任務列。"
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "歡迎使用 Cindy",
@@ -21873,6 +21990,19 @@
       "network": "連線中斷，方再試…",
       "timeout": "連線逾時，方再試…",
       "server": "伺服器繁忙，方再試…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "寬其權柄乎？",
+    "message": "許「{{name}}」使「{{conversation}}」於案「{{project}}」中用「{{mode}}」乎？",
+    "detail": "此較 IM 案之設（{{projectMode}}）為寬。許之，則此法器於此案中可用此檔權柄，唯及法器自家之差事；後可於法器中復隨 IM。",
+    "groupWarning": "群中他人亦可發言。權柄愈寬，需君確認之事愈少，務請確知群中皆可信之人。",
+    "allow": "許",
+    "cancel": "罷",
+    "modes": {
+      "ask": "預設權柄",
+      "auto": "自審",
+      "bypassPermissions": "完全存取"
     }
   }
 }

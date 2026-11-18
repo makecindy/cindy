@@ -1689,7 +1689,8 @@ describe('CodexAgent oneShot Goal ownership', () => {
     MockCodexTransport.onCreate = transport => {
       transport.setMockResponse(Method.TurnStart, { result: { turn: { id: 'one-shot-turn' } } });
     };
-    const pending = agent.oneShot(prompt, { timeoutMs: 2_000 });
+    const onUsage = vi.fn();
+    const pending = agent.oneShot(prompt, { timeoutMs: 2_000, onUsage });
     void pending.catch(() => undefined);
     try {
       await vi.waitFor(() => expect(createdTransports[0]?.lines.some(line =>
@@ -1704,7 +1705,13 @@ describe('CodexAgent oneShot Goal ownership', () => {
       transport.emitMockLine({ method: 'item/completed', params: {
         threadId, turnId: 'one-shot-turn', item: { type: 'agentMessage', id: 'answer', text: 'Bounded result' },
       } });
+      transport.emitMockLine({ method: 'thread/tokenUsage/updated', params: { threadId, turnId: 'one-shot-turn',
+        tokenUsage: { total: { inputTokens: 100, cachedInputTokens: 20, outputTokens: 5, reasoningOutputTokens: 0, totalTokens: 105 },
+          last: { inputTokens: 100, cachedInputTokens: 20, outputTokens: 5, reasoningOutputTokens: 0, totalTokens: 105 } } } });
+      transport.emitMockLine({ method: 'turn/completed', params: { threadId, turn: { id: 'one-shot-turn', status: 'completed', items: [] } } });
       await expect(pending).resolves.toBe('Bounded result');
+      expect(onUsage).toHaveBeenCalledOnce();
+      expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 80, cacheReadTokens: 20, outputTokens: 5 }));
       expect(transport.lines.map(line => JSON.parse(line)).filter(message =>
         message.method === Method.ThreadUnsubscribe)).toEqual([
         expect.objectContaining({ params: { threadId } }),
@@ -36384,6 +36391,53 @@ describe('CodexAgent custom provider context window override', () => {
     expect(createdTransports[0]?.closed).toBe(true);
     expect((agent as unknown as { hosts: Map<string, unknown> }).hosts.size).toBe(0);
     await agent.dispose();
+  });
+
+  it.each(['recovered', 'second timeout', 'exit unconfirmed'])('bounds local resume recovery: %s', async outcome => {
+    const stallTwice = outcome === 'second timeout';
+    const exitUnconfirmed = outcome === 'exit unconfirmed';
+    const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const resumes: unknown[] = [];
+    let previous: InstanceType<typeof MockCodexTransport> | undefined;
+    MockCodexTransport.onCreate = transport => {
+      if (previous) expect(previous.closed).toBe(true);
+      previous = transport;
+      const write = transport.writeLine.bind(transport);
+      vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+        const request = JSON.parse(line);
+        if (request.method === Method.ThreadResume) {
+          resumes.push(request.params.threadId);
+          if (resumes.length === 1 || stallTwice) return;
+          transport.setMockResponse(Method.ThreadResume, {
+            result: { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' },
+          });
+        }
+        await write(line);
+      });
+    };
+    const agent = new CodexAgent(createDeps({}, { isolateCodexAccountSessions: true }));
+    vi.useFakeTimers();
+    try {
+      const start = agent.startSession({
+        sessionId: 'local-resume-retry', model: 'gpt-5.4', workingDir: '/repo', resumeSessionId: threadId,
+      });
+      if (exitUnconfirmed) MockCodexTransport.closeError = new Error('exit unconfirmed');
+      const result = outcome === 'recovered' ? start.then(h => h.close())
+        : expect(start).rejects.toThrow(exitUnconfirmed ? 'exit unconfirmed' : 'thread/resume timed out');
+      await vi.waitFor(() => expect(resumes).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(60_000);
+      if (!exitUnconfirmed) await vi.waitFor(() => expect(resumes).toHaveLength(2));
+      if (stallTwice) await vi.advanceTimersByTimeAsync(60_000);
+      await result;
+      expect(resumes).toEqual(exitUnconfirmed ? [threadId] : [threadId, threadId]);
+      expect(createdTransports).toHaveLength(resumes.length);
+      expect(createdTransports.flatMap(t => t.lines.map(line => JSON.parse(line).method)))
+        .not.toContain(Method.TurnStart);
+    } finally {
+      MockCodexTransport.closeError = null;
+      vi.useRealTimers();
+      await agent.dispose();
+    }
   });
 
   it.each(['account', 'custom-context'])('reports confirmed %s host exit after initialize fails', async (kind) => {

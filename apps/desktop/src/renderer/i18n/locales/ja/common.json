@@ -5425,8 +5425,19 @@
       "title": "メッセージ入力",
       "sendShortcut": {
         "label": "{{shortcut}}で送信",
-        "hint": "オンにすると{{shortcut}}でメッセージを送信します。オフにするとEnterで送信し、Shift+Enterで改行します。",
-        "ariaLabel": "{{shortcut}}でメッセージを送信"
+        "hint": "Enterで送信、Shift+Enterで改行します。",
+        "ariaLabel": "{{shortcut}}でメッセージを送信",
+        "hintModifierEnter": "{{shortcut}}で送信、Enterで改行します。"
+      },
+      "followUp": {
+        "label": "実行中の送信方法",
+        "hintQueue": "タスクの実行中は、送信ボタンと{{send}}でキューに追加します。",
+        "hintSteer": "タスクの実行中は、送信ボタンと{{send}}で実行中のタスクに割り込みます。",
+        "ariaLabel": "タスク実行中の送信方法",
+        "options": {
+          "queue": "キューに追加",
+          "steer": "割り込み"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -6454,7 +6465,8 @@
           "defaultProjectTag": "既定",
           "defaultProjectFullAccessWarning": "既定のプロジェクト「{{name}}」の権限はフルアクセスです。どのグループから @ で呼ばれても、この中でフルアクセスで実行されます。",
           "sharedSettingsPointer": "プロジェクト・モデル・権限はすべての公式ボットで共通です。",
-          "sharedSettingsPointerAction": "設定を開く"
+          "sharedSettingsPointerAction": "設定を開く",
+          "workspacesCardDescriptionWithPlugins": "すべての公式ボットと IM プラグインで共通の設定です。プロジェクトはサイドバーのものと同じで、作成・名前変更・削除はサイドバーで行います。チャットで /model から変更した内容もここに反映されます。プラグインでチャットごとに変更したモデルと権限は影響を受けません。"
         },
         "binding": {
           "copyLink": "リンクをコピー",
@@ -6763,6 +6775,7 @@
           "latency": "遅延",
           "lastSeen": "最終オンライン",
           "controlling": "このコンピューターを操作中",
+          "protocol": "接続方式",
           "rttNote": "直近の計測",
           "manage": "デバイスを管理…",
           "linkStatus": "「{{name}}」との接続",
@@ -6987,11 +7000,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "公式",
-        "personal": "個人"
+        "personal": "個人",
+        "plugins": "プラグイン"
       },
       "tips": {
         "cindy": "Cindy が提供・管理します。自分でボットを作成したり認証情報を用意したりする必要はなく、案内に沿って接続するだけで利用できます。",
-        "personal": "自分のアカウントまたはボットを接続し、必要な認証情報を自分で管理します。アカウント、権限、設定はチャンネルごとに保存されます。"
+        "personal": "自分のアカウントまたはボットを接続し、必要な認証情報を自分で管理します。アカウント、権限、設定はチャンネルごとに保存されます。",
+        "plugins": "インストール済みのプラグインが提供する IM の入口です。ログインと連携はプラグインのページで行います。プロジェクト、モデル、権限は既定で「プロジェクトとモデル」の設定に従い、プラグインでチャットごとに変更することもできます。"
       },
       "defaults": {
         "title": "新規会話設定",
@@ -7023,6 +7038,10 @@
         },
         "groupPermissionLabel": "グループで新規タスクを作成するときの権限モード",
         "groupPermissionDescription": "グループで新規タスクを作成するときに共通で使う権限モード（@bot でトピックを開く場合、/new、/ctr のいずれも対象）。初期値は「自動承認」で、上の権限モードは個人チャット専用です。グループの文脈にはメンバーが操作できる内容が含まれるため、「フルアクセス」を選ぶと確認なしで直接実行されます。信頼できるグループでのみ選択してください。変更は以後に作成するタスクにのみ適用され、既存のタスクはグループ内で /permission を使って個別に切り替えます。"
+      },
+      "plugins": {
+        "rowHint": "ログイン、連携、チャットごとの設定はプラグインのページにあります。",
+        "open": "プラグインを開く"
       }
     },
     "shortcuts": {
@@ -8253,6 +8272,8 @@
         "subscribeMessageDetail": "保存済みのユーザーメッセージと AI の返信を受信します。添付ファイルは別の読み取りと受け渡しで取得します。",
         "subscribeToolExecution": "ツール実行イベント",
         "subscribeToolExecutionDetail": "ツール名、入力、結果、エラーを受信します。実行は変更せず、監視のみ行います。",
+        "subscribeNativeRecovery": "ネイティブ復旧イベント",
+        "subscribeNativeRecoveryDetail": "再試行、コンテキストの圧縮、タスクの停止に関するエンジンの状態を受信します。",
         "subscribeTaskState": "タスク状態のイベント",
         "subscribeTaskStateDetail": "タスクの実行、待機、完了、アーカイブ、非表示の状態変更を受信します。",
         "subscribeActivity": "AI が思考中のタイミングと、あなたの操作を待っているタイミングを把握",
@@ -9818,6 +9839,41 @@
       },
       "providerTooltip": "セッションで現在選択されているプロバイダー。未指定の場合は空欄です。",
       "tokensTooltip": "このセッションが{{range}}に使用したトークンのみを集計します。"
+    },
+    "auxiliary": {
+      "title": "補助モデルの使用量",
+      "label": "補助リクエスト",
+      "purpose": "用途",
+      "requests": "記録済みリクエスト",
+      "description": "合計トークンに含まれます。プロバイダーが返した使用量のみ記録し、未報告の使用量や過去のリクエストは推定しません。",
+      "sources": {
+        "title": "タイトル生成",
+        "task-summary": "タスクの要約",
+        "prompt-prediction": "入力候補",
+        "working-status": "作業状況",
+        "help": "ヘルプ",
+        "bot-creation": "コンパニオン作成",
+        "bot-opening": "コンパニオンの挨拶",
+        "group-planning": "グループの計画",
+        "ambient-reply": "返信の判断",
+        "auto-review": "自動レビュー",
+        "tool-loop-review": "ツールループの確認",
+        "memory-review": "メモリの確認",
+        "git-summary": "変更の要約",
+        "hook-generation": "自動化スクリプト",
+        "automation-verification": "インポートの検証",
+        "plugin-text": "プラグインのテキスト",
+        "voice-dialogue": "音声会話",
+        "voice-exit": "音声終了の判断",
+        "voice-refinement": "音声テキストの推敲",
+        "dictionary-learning": "辞書学習",
+        "embedding-query": "ベクトル検索",
+        "embedding-index": "ベクトル索引",
+        "web-search": "ウェブ検索",
+        "provider-probe": "接続テスト",
+        "vision-bridge": "ビジョンブリッジ",
+        "auxiliary": "その他の補助リクエスト"
+      }
     }
   },
   "usageDashboard": {
@@ -11207,6 +11263,7 @@
       "unavailableTitle": "このグループチャットは利用できません",
       "unavailableDescription": "削除された可能性があります。仲間のページに戻ると、ほかのグループチャットや仲間を開けます。",
       "sidebar": {
+        "threadReply": "スレッドへの返信",
         "title": "グループチャット",
         "empty": "メッセージはまだありません",
         "preview": "{{name}}: {{text}}",
@@ -11539,6 +11596,7 @@
           "sharedReplyFrom": "{{name}} のスレッド返信を共有しました",
           "sharedReply": "スレッドの返信を共有しました",
           "edited": "編集済み",
+          "replyNotFound": "この返信が見つかりませんでした。",
           "sourceUnavailable": "元の返信は削除されたか、表示する権限がありません。",
           "viewThread": "スレッドを見る",
           "viewInMain": "メインチャットで見る",
@@ -13635,9 +13693,8 @@
     "sendButton": {
       "send": "メッセージを送信",
       "queue": "キューに追加",
-      "queueTooltip": "クリックでキューに追加。{{shortcut}} でタスクを中断せずに割り込み送信",
-      "queueTooltipSendMode": "クリックでキューに追加、{{shortcut}}でこのメッセージを送信",
-      "stop": "生成を停止"
+      "stop": "生成を停止",
+      "steer": "実行中のタスクに割り込む"
     },
     "pluginSetup": {
       "account": {
@@ -14528,6 +14585,13 @@
       "runningWithWorktree_one": "完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningWithWorktree_other": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningWithWorktree_many": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。"
+    },
+    "followUpHint": {
+      "queueDefault": "タスクの実行中に送信したメッセージは、デフォルトでキューに追加されます。",
+      "steerDefault": "タスクの実行中に送信したメッセージは、デフォルトで実行中のタスクに割り込みます。",
+      "switchToSteer": "デフォルトを割り込みにする",
+      "switchToQueue": "デフォルトをキューに追加にする",
+      "dismiss": "ヒントを閉じる"
     }
   },
   "onboarding": {
@@ -16593,6 +16657,36 @@
         "priority": "優先度",
         "activity": "最近のアクティビティ",
         "created": "作成日時"
+      },
+      "inbox": {
+        "thisEvening": "今夜",
+        "tomorrow": "明日",
+        "nextWeek": "来週",
+        "custom": "カスタム…",
+        "wakeAt": "再表示する日時",
+        "timeZone": "現地時間（{{zone}}）",
+        "invalidTime": "1年以内の未来の日時を選択してください。",
+        "inbox": "未処理",
+        "working": "実行中",
+        "snoozed": "後で処理",
+        "archived": "処理済み",
+        "snooze": "後で処理する",
+        "complete": "完了",
+        "wake": "今すぐ戻す",
+        "restore": "タスクを復元",
+        "process": "処理済みにする（アーカイブ）",
+        "empty": "受信トレイは空です",
+        "snoozeFailed": "後で処理する時刻を保存できませんでした。接続を確認し、タスクがあるコンピューターを更新してください。",
+        "hours": "{{count}} 時間後",
+        "hours_one": "{{count}} 時間後",
+        "hours_other": "{{count}} 時間後"
+      },
+      "taskListMode": {
+        "heading": "タスクモード",
+        "tasks": "タスク一覧",
+        "inbox": "受信トレイ",
+        "enterInbox": "受信トレイモードに切り替え",
+        "leaveInbox": "タスク一覧モードに切り替え"
       }
     },
     "rename": {
@@ -16885,6 +16979,7 @@
         "menuSave": "保存",
         "menuInsertTable": "表を挿入",
         "externalChangeBlocked": "ファイルが外部で変更されました。自動保存を停止しました。手動保存で上書きできます。",
+        "targetChanged": "ファイルの参照先が変わりました。下書きはエディターに残っています。下書きをコピーしてから、ファイルを開き直してください。",
         "tableMenu": {
           "addRowAbove": "上に行を追加",
           "addRowBelow": "下に行を追加",
@@ -19641,7 +19736,8 @@
           "expired": "期限切れ",
           "voided": "無効"
         }
-      }
+      },
+      "viewUsage": "使用量を見る"
     },
     "orders": {
       "title": "注文履歴",
@@ -21309,6 +21405,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "閉じる",
+    "taskInbox": {
+      "title": "受信トレイの使い方",
+      "lead": "タスクは状態に応じて「未処理」「実行中」「後で処理」「処理済み」に自動で分かれます。おすすめは受信トレイをこまめに空にすること。済んだら完了、今やらないものは後で処理にしましょう。",
+      "pending": {
+        "title": "未処理",
+        "body": "結果が出たタスクや、あなたの回答を待っているタスクがここに入ります。"
+      },
+      "done": {
+        "title": "完了",
+        "body": "対応が済んだら完了を 1 回押すと処理済みへ。新しい動きがあれば自動で戻ってきます。"
+      },
+      "snooze": {
+        "title": "後で処理",
+        "body": "今は手が回らないときは時刻を選ぶと、その時刻に未処理へ戻ります。"
+      },
+      "start": "使い始める",
+      "note": "サイドバー上部のボタンでいつでもタスク一覧に戻せます。"
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Cindy へようこそ",
@@ -21873,6 +21990,19 @@
       "network": "接続が切れました。再試行しています…",
       "timeout": "接続がタイムアウトしました。再試行しています…",
       "server": "サーバーが混雑しています。再試行しています…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "このチャットの権限を広げますか？",
+    "message": "「{{name}}」が、プロジェクト「{{project}}」の「{{conversation}}」で「{{mode}}」を使うことを許可しますか？",
+    "detail": "IM のプロジェクト設定（{{projectMode}}）より広い権限です。許可すると、このプラグインはこのプロジェクトでこの権限を使えるようになります（プラグイン自身のセッションのみ）。プラグインからいつでも IM の設定に戻せます。",
+    "groupWarning": "このグループでは他のメンバーもメッセージを送れます。権限が広いほど確認を求められる操作が減るため、グループの全員を信頼できるか確認してください。",
+    "allow": "許可",
+    "cancel": "キャンセル",
+    "modes": {
+      "ask": "デフォルト権限",
+      "auto": "自動レビュー",
+      "bypassPermissions": "フルアクセス"
     }
   }
 }

@@ -1,3 +1,4 @@
+import type { BotGroupTextInput } from './botGroupTextInput';
 /**
  * 群聊 @ 点名候选：主群输入框与 Thread 回复框共用的一套状态与候选列表。
  *
@@ -66,7 +67,7 @@ export function useBotGroupMentionPicker({
   onTextChange: (value: string) => void;
   /** Full roster: active members other than you are offered; everyone but you still resolves. */
   members: readonly BotGroupMemberView[];
-  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  textareaRef: RefObject<BotGroupTextInput | null>;
   /** Labels that mean 「所有人」 when resolving; the first is the one offered. Defaults to the UI label. */
   allLabels?: readonly string[];
   allowMentionAllBots?: boolean;
@@ -199,7 +200,7 @@ export function useBotGroupMentionPicker({
   };
 
   /** Arrow keys, Enter / Tab and Esc while the list is open; true when the key was used. */
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>): boolean => {
     if (!open || !query) return false;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();

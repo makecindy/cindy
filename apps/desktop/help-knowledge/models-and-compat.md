@@ -15,7 +15,7 @@ You pick the model a task uses from the **model selector in the composer toolbar
 
 **Default model for a new task:**
 
-- It depends on what you've connected: with a ChatGPT (OpenAI) subscription it's **GPT-6.1 Sol** on Codex; with a Claude (Anthropic) subscription it's **Opus 5.5** on Claude Code; otherwise it's Cindy AI's **Auto** on Pi. After that, a new task starts with the model you last picked.
+- It depends on what you've connected: with a ChatGPT (OpenAI) subscription it's **GPT-6.2 Sol** on Codex; with a Claude (Anthropic) subscription it's **Opus 5.5** on Claude Code; otherwise it's Cindy AI's **Auto** on Pi. After that, a new task starts with the model you last picked.
 
 **Switching mid-task:**
 

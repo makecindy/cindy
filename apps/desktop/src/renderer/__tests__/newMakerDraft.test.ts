@@ -205,7 +205,7 @@ describe('newMakerDraft store', () => {
     expect(getDraft().vendor).toBe('cc');
     sources.push({ ...sources[0]!, id: 'openai', agents: ['codex'],
       access: { kind: 'subscription', product: 'ChatGPT' },
-      models: { codex: [{ id: 'gpt-6.1-sol', name: 'Sol', contextWindow: 272000, efforts: ['high'], defaultEffort: 'high' }] },
+      models: { codex: [{ id: 'gpt-6.2-sol', name: 'Sol', contextWindow: 272000, efforts: ['high'], defaultEffort: 'high' }] },
     });
     expect(applySuggestedDefaultTuple(resolve())).toBe(!customized);
     const draft = getDraft();

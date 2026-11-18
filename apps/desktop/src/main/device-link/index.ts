@@ -219,12 +219,10 @@ import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
 import { installAgentNetMediaRouting } from './agentNetMedia.js';
 import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute } from './agentNetSharing.js';
 import { installAgentNetSharingPolicy } from './agentNetSharingPolicy.js';
-import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot,
+import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
   agentNetTransportAttestation, verifyAgentNetTransportAttestation, agentNetPrefersPrimary, useAgentNetSessions, agentNetSession,
   agentNetPeerRoute, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRttMs } from './agentNetRuntime.js';
-import { AgentNetSessionLinks, agentNetSessionLane } from './agentNetSessionLinks.js';
-import { outboundOnSession, routeSessionPeers } from './agentNetSessionRouting.js';
-import type { PeerLinks } from './peerLinks.js';
+import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery, requiresSessionLink } from './linkRecovery';
 import { invalidatePluginOauth } from '../plugin-oauth/runtime.js';
 import {
@@ -472,7 +470,7 @@ function refreshControllerDisplayNamesFromDirectory(generation: number): Promise
   return promise;
 }
 
-// 业务看到的链路客户端：按对端走 Agent-Net 会话或 Device Link（peerLinks.ts）。
+// 业务看到的链路客户端：按对端走 Agent-Net 会话或 Device Link（packages/agent-net/src/session/peerLinks.ts）。
 let client: PeerLinks | null = null;
 /** 主连接是 Agent-Net 且允许旧连接时的 Device Link 中转连接（手机推送补发用，sendNotifyToPhones）。 */
 let compatibilityConnection: (() => DeviceLinkClient | null) | null = null;
@@ -1972,7 +1970,7 @@ export function getDeviceLinkStatus(): DeviceLinkStatus {
   return client?.getStatus() ?? 'stopped';
 }
 
-/** 远程连接拓扑:本机已协商链路的对端路径 / RTT 快照。链路未起、已拆除或会话边界期间为空。 */
+/** 远程连接拓扑:本机控制链路和 Agent-Net 传输路径的快照。 */
 export function getDeviceLinkPeerLinks(): DeviceLinkPeerLinksSnapshot {
   if (!client || linkTornDown || isAppSessionBoundaryPending()) return { links: [], relayRttMs: null };
   return {
@@ -1982,6 +1980,7 @@ export function getDeviceLinkPeerLinks(): DeviceLinkPeerLinksSnapshot {
       const encrypted = primaryUsesEncryptedTransport && client!.connectionFor(link.deviceId) === client;
       return core ? { ...link, ...core, encrypted } : { ...link, encrypted };
     }),
+    ...(primaryUsesEncryptedTransport ? { agentNetRoutes: agentNetPeerRoutes() } : {}),
     relayProtocol: client.getStatus() === 'online' && !agentNetRelayDown()
       ? (primaryUsesEncryptedTransport ? 'agent-net' : 'device-link')
       : undefined,

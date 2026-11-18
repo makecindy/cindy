@@ -99,7 +99,12 @@ export function createRuntimePluginControl(deps: {
             const result = answer.result!;
             const assertResultCurrent = () => {
               assertCurrent();
-              if (result[RUNTIME_PLUGIN_RESULT_CURRENT]?.() === false) throw new Error('Runtime plugin approval changed');
+              if (result[RUNTIME_PLUGIN_RESULT_CURRENT]?.() === false) {
+                if (point === 'will-tool-call' || point === 'did-tool-result') {
+                  throw new RuntimePluginControlError('block', target.pluginId, true, 'selection-changed');
+                }
+                throw new Error('Runtime plugin approval changed');
+              }
             };
             assertResultCurrent();
             if (result.action === 'skip' || result.action === 'block') {

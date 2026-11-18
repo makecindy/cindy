@@ -20,6 +20,8 @@ vi.mock('@cindy/maker-scheduler', () => ({ Scheduler: class {
   constructor(options: SchedulerOptions) { mocks.schedulerOptions = options; }
   async start() {}
   async stop() {}
+  // A quiet round re-archives its task (quietRunArchive); these runs are never silenced.
+  isRunSilenced() { return false; }
 } }));
 vi.mock('../../localDb/dialogueWorkspace', () => ({ dialogueWorkspaceRoots: () => [] }));
 vi.mock('../../localDb/schema.js', () => ({ sessions: {} }));

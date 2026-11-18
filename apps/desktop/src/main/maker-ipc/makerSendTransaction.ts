@@ -404,6 +404,8 @@ export interface MakerSendTransactionDeps {
    * startup so an uncertain turn cannot be replayed after a Host restart.
    * Desktop omits this port and retains its existing event-driven lifecycle. */
   beforeProviderStart?: (sessionId: string, sendOpts: unknown) => Promise<void>;
+  /** Validate a consumed quota wait after acceptance/vision and before vendor dispatch. */
+  assertQuotaContinuation?: (sessionId: string, sendOpts: unknown) => Promise<void>;
   onUndispatchedDirectUserTurn?: (sessionId: string) => void;
   ackInterruptedTurnDispatched?: (sessionId: string, endedAt: number) => void | Promise<void>;
   previewUserPrompt?(
@@ -1853,7 +1855,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ), () => sess.send(outgoing as never, {
           ...(retryTranscriptUserEntryId ? { retryTranscriptUserEntryId } : {}),
           ...(beforeProviderStart ? { beforeProviderStart } : {}),
-          ...(assertAppCurrent
+          ...(assertAppCurrent || deps.assertQuotaContinuation
             ? {
                 resolveAutoReviewUserIntent: async () => {
                   const intent = resolveScheduledIntent
@@ -1864,7 +1866,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                   // Session awaits this existing authorization hook after all
                   // preparation (including vision), immediately before dispatch.
                   if (scheduledOrigin) await deps.assertScheduledDispatchRoute?.(sessionId);
-                  await assertAppCurrent();
+                  await assertAppCurrent?.();
+                  await deps.assertQuotaContinuation?.(sessionId, finalFenceSendOpts);
                   return intent;
                 },
               }

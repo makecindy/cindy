@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { parseAuxiliaryTokens, parseAuxiliaryResponse, type AuxiliaryUsageRecorder, type AuxiliaryAttribution } from '../../shared/auxiliaryUsage.js';
 /**
  * Direct one-shot text requests (the auxiliary-model chain and the dedicated Auto-review
  * candidates), shared by Desktop and the Node Host. Moved verbatim from oneShotCandidates.ts,
@@ -75,6 +77,7 @@ export interface UtilityTextDispatchRoute {
 }
 
 export type UtilityTextCandidate = {
+  routeProviderId?: string;
   providerId: string;
   model: string;
   transport: UtilityModelTransport;
@@ -83,6 +86,9 @@ export type UtilityTextCandidate = {
 };
 
 export type UtilityTextRequestOptions = {
+  /** Host accounting only; never loads task history or enters the provider body. */
+  source?: string;
+  sessionId?: string;
   maxTokens?: number;
   timeoutMs?: number;
   /** Optional lightweight reasoning hint for short internal classifiers. */
@@ -166,7 +172,7 @@ export type DedicatedAutoReviewCandidate = (typeof DEDICATED_AUTO_REVIEW_CANDIDA
 
 export type AutoReviewAuxiliaryFallback = (
   prompt: string,
-  opts: { timeoutMs: number; signal?: AbortSignal; validateResponse: (text: string) => boolean },
+  opts: { timeoutMs: number; signal?: AbortSignal; sessionId?: string; validateResponse: (text: string) => boolean },
 ) => Promise<UtilityTextResult>;
 
 import { decodeRemoteAuxiliaryModelRef, REMOTE_AUXILIARY_PROVIDER_PREFIX, type RemoteAuxiliaryRoute } from '../../shared/remoteAuxiliaryModelRef.js';
@@ -176,6 +182,8 @@ import { encodeCatalogModelPin } from '../../shared/catalogModelPin.js';
 export interface OneShotCandidatesPorts {
   /** Unsupported launchers retain the exact choice as unavailable, never resolve it locally. */
   requestRemoteUtilityText?: (route: RemoteAuxiliaryRoute, prompt: string, opts: UtilityTextRequestOptions) => Promise<UtilityTextResult>;
+  createUsageRecorder?: (attribution: AuxiliaryAttribution) => AuxiliaryUsageRecorder;
+
   readClaudeApiKey: typeof import('../maker-host/auth-adapters.js').readClaudeApiKey;
   getChatgptBridgeAuth: typeof import('../maker-host/anthropic-responses-bridge-host.js').getChatgptBridgeAuth;
   getChatgptBridgeAuthForDispatch: typeof import('../maker-host/anthropic-responses-bridge-host.js').getChatgptBridgeAuthForDispatch;
@@ -199,6 +207,43 @@ const { readClaudeApiKey, getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch,
 
 
 const log = createLogger('utility-model:one-shot');
+const usageContext = new AsyncLocalStorage<{ record: AuxiliaryUsageRecorder; route: AuxiliaryAttribution }>();
+async function observeUsage(body: unknown, wire: string, model: string) {
+  const context = usageContext.getStore();
+  const tokens = parseAuxiliaryTokens(body, wire);
+  if (context && tokens) {
+    const actualModel = body && typeof body === 'object' && 'model' in body && typeof body.model === 'string'
+      ? body.model : model;
+    try { await context.record(tokens, { ...context.route, model: actualModel, transport: wire }); }
+    catch { log.warn('auxiliary usage observer failed'); }
+  }
+}
+async function observedStream(response: Parameters<typeof readUtilityTextStream>[0], wire: string, model: string, onText?: (text: string) => void) {
+  return readUtilityTextStream(response, onText, async raw => {
+    const context = usageContext.getStore();
+    const observed = parseAuxiliaryResponse(raw, wire);
+    if (context && observed.tokens) {
+      try { await context.record(observed.tokens, { ...context.route, model: observed.model ?? model, transport: wire }); }
+      catch { log.warn('auxiliary usage observer failed'); }
+    }
+  });
+}
+async function observeRejectedResponse(response: Parameters<typeof readUtilityTextStream>[0], wire: string, model: string) {
+  try {
+    await observedStream(response, wire, model);
+  } catch {
+    // The HTTP status remains the request outcome, even for an incomplete error body.
+  }
+}
+function metered<Args extends unknown[], Result>(fn: (...args: Args) => Promise<Result>, source?: string) {
+  return (...args: Args): Promise<Result> => {
+    const opts = args[args.length - 1] as UtilityTextRequestOptions | undefined;
+    const route = { providerId: opts?.providerId, model: opts?.model, source: opts?.source ?? source, sessionId: opts?.sessionId };
+    const record = ports.createUsageRecorder?.(route);
+    if (!record) return fn(...args);
+    return usageContext.run({ record, route }, () => fn(...args)).finally(() => { try { record.close(); } catch { log.warn('auxiliary usage recorder cleanup failed'); } });
+  };
+}
 
 const XD_UTILITY_ROUTE_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 
@@ -528,7 +573,8 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
         // Normalize legacy profiles into exact catalog HTTP routes too. Never call
         // Agent.oneShot: approval must not start a development Agent or tool loop.
         result = await requestUtilityTextWithinTimeout(
-          (signal) => requestExplicitUtilityText(evidence, {
+          (signal) => metered(requestExplicitUtilityText)(evidence, {
+            source: 'auto-review', sessionId: opts.sessionId,
             ...route,
             systemPrompt,
             maxTokens: DEDICATED_AUTO_REVIEW_MAX_TOKENS,
@@ -567,7 +613,7 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
 async function requestDedicatedAutoReviewCandidateText(
   prompt: string,
   candidate: DedicatedAutoReviewCandidate,
-  opts: { timeoutMs: number; signal?: AbortSignal },
+  opts: { timeoutMs: number; signal?: AbortSignal; sessionId?: string },
 ): Promise<UtilityTextResult> {
   const { systemPrompt, evidence } = splitAutoReviewPrompt(prompt);
   const profile: UtilityModelProfile = {
@@ -742,7 +788,7 @@ async function runDefaultProfileCandidates(
       },
     };
     try {
-      const text = (await candidate.execute(prompt, candidateOpts)).trim();
+      const text = (await executeMeteredCandidate(candidate, prompt, candidateOpts)).trim();
       validateUtilityResponse(text, opts);
       return {
         ok: true,
@@ -1498,6 +1544,12 @@ async function requestBuiltinProviderText(
   return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'agent_unavailable')] };
 }
 
+function executeMeteredCandidate(candidate: UtilityTextCandidate, prompt: string, opts?: UtilityTextRequestOptions) {
+  const current = usageContext.getStore();
+  if (!current) return candidate.execute(prompt, opts);
+  return usageContext.run({ ...current, route: { ...current.route, providerId: candidate.routeProviderId ?? candidate.providerId, model: candidate.model } }, () => candidate.execute(prompt, { ...opts, source: current.route.source, sessionId: current.route.sessionId }));
+}
+
 async function executeCandidates(
   candidates: UtilityTextCandidate[],
   prompt: string,
@@ -1517,7 +1569,7 @@ async function executeCandidates(
         continue;
       }
     try {
-      const text = (await candidate.execute(prompt, opts)).trim();
+      const text = (await executeMeteredCandidate(candidate, prompt, opts)).trim();
       validateUtilityResponse(text, opts);
       log.info('explicit utility text provider succeeded', {
         providerId: candidate.providerId,
@@ -1556,7 +1608,7 @@ async function resolveCodexCandidate(
     const auth = await maker.getAgentAuthState(agentKind);
     if (!auth.authenticated) {
       log.debug('utility text candidate skipped: codex not authenticated', {
-        providerId: profile.id,
+      providerId: profile.id,
         reason: auth.errorReason,
       });
       return { attempt: skippedAttempt(profile, 'not_authenticated') };
@@ -1570,11 +1622,15 @@ async function resolveCodexCandidate(
   }
   return {
     candidate: {
+      routeProviderId: utilityProfileRouteProviderId(profile),
       providerId: profile.id,
       model: profile.model,
       transport: profile.transport,
       profile,
       execute: (prompt, opts) => maker.oneShot(agentKind, prompt, {
+        source: opts?.source,
+        sessionId: opts?.sessionId,
+        providerId: utilityProfileRouteProviderId(profile),
         model: profile.model,
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
@@ -1606,6 +1662,7 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
   }
   return {
     candidate: {
+      routeProviderId: utilityProfileRouteProviderId(profile),
       providerId: profile.id,
       model: profile.model,
       transport: profile.transport,
@@ -1705,10 +1762,11 @@ async function requestLiteLlmText(input: {
       if (response.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
       // Do not retain or log upstream response bodies: gateways may echo request
       // metadata, while the HTTP status is sufficient for user recovery.
-      await response.body?.cancel().catch(() => undefined);
+      await observeRejectedResponse(response, 'chat-completions', input.model);
       throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
     }
     let parsed = await response.json() as ChatCompletionBody;
+    await observeUsage(parsed, 'chat-completions', input.model);
     let text = chatCompletionChoicesText(parsed);
     const retryBudget = !text && maxTokens !== undefined
       && outputBudgetExhausted('chat-completions', parsed)
@@ -1724,10 +1782,11 @@ async function requestLiteLlmText(input: {
       const budgeted = await send();
       if (budgeted.ok) {
         parsed = await budgeted.json() as ChatCompletionBody;
+        await observeUsage(parsed, 'chat-completions', input.model);
         text = chatCompletionChoicesText(parsed);
       } else {
         if (budgeted.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
-        await budgeted.body?.cancel().catch(() => undefined);
+        await observeRejectedResponse(budgeted, 'chat-completions', input.model);
       }
     }
     if (!text) {
@@ -1927,7 +1986,7 @@ async function requestProviderHttpText(input: {
               : { thinking: { type: 'disabled' }, reasoning_effort: 'minimal' }
             : {}),
           ...(effort ? { reasoning_effort: effort } : {}),
-          ...(input.onText ? { stream: true } : {}),
+          ...(input.onText ? { stream: true, ...(!minimal ? { stream_options: { include_usage: true } } : {}) } : {}),
           messages: [
             ...(instructions ? [{ role: 'system', content: instructions }] : []),
             { role: 'user', content: input.prompt },
@@ -2028,7 +2087,7 @@ async function requestProviderHttpText(input: {
       }
       if (next === null || !nextBody) break;
       tried.add(next);
-      await response.body?.cancel().catch(() => undefined);
+      await observeRejectedResponse(response, step.wire, targetFor(step).model);
       log.debug('utility text request rejected, trying the next reasoning step', {
         status: response.status,
         from: utilityRequestStepKey(step),
@@ -2043,11 +2102,11 @@ async function requestProviderHttpText(input: {
     }
     if (!response.ok) {
       if (response.status === 401) input.onUnauthorized?.();
-      await response.body?.cancel().catch(() => undefined);
+      await observeRejectedResponse(response, step.wire, targetFor(step).model);
       throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
     }
 
-    let raw = await readUtilityTextStream(response, input.onText);
+    let raw = await observedStream(response, step.wire, targetFor(step).model, input.onText);
     const parsed = responseStructure(step.wire, raw);
     let text = wireResponseText(step.wire, raw);
     // thinking:disabled 只是请求侧建议,BYOM 网关可以无视;max_tokens 是含思考的
@@ -2070,11 +2129,11 @@ async function requestProviderHttpText(input: {
       // 的可选字段不重新加回去(原样重来只会再被拒一次)。
       const budgeted = await send(step, buildBody(step, retryBudget));
       if (budgeted.ok) {
-        raw = await readUtilityTextStream(budgeted, input.onText);
+        raw = await observedStream(budgeted, step.wire, targetFor(step).model, input.onText);
         text = wireResponseText(step.wire, raw);
       } else {
         if (budgeted.status === 401) input.onUnauthorized?.();
-        await budgeted.body?.cancel().catch(() => undefined);
+        await observeRejectedResponse(budgeted, step.wire, targetFor(step).model);
       }
     }
     // The step was accepted by the provider; remember it even when the model
@@ -2547,5 +2606,5 @@ function joinProxyPath(baseUrl: string, suffix: string): string {
   return appendProviderPath(baseUrl, suffix);
 }
 
-return { isUtilityRoutePaymentRequired, agentSupportsOneShot, getUtilityTextCandidates, isUtilityRouteDisabled, requestUtilityText, requestExplicitUtilityText, createCustomAutoReviewFallback, requestDedicatedAutoReviewCandidateText, toAnthropicApiModelId };
+return { isUtilityRoutePaymentRequired, agentSupportsOneShot, getUtilityTextCandidates, isUtilityRouteDisabled, requestUtilityText: metered(requestUtilityText), requestExplicitUtilityText: metered(requestExplicitUtilityText), createCustomAutoReviewFallback, requestDedicatedAutoReviewCandidateText: metered(requestDedicatedAutoReviewCandidateText, 'auto-review'), toAnthropicApiModelId };
 }

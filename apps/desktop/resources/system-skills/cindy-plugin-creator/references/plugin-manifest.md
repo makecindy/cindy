@@ -60,6 +60,7 @@
   // 用户拖过 / 弹过后以用户的放置为准。可选 "multiple": true 允许同一视图同时开在多处。
   "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时仍必填,用于长期管理/替换/清除;调用前缺失时主机也会在统一 Setup 卡内联收单,见 §4.7)
   "showTaskPreferences": true,     // 可选:是否显示宿主「模型与任务」卡,缺省/true 显示,false 隐藏;见 §4.8
+  "imEntrance": true,              // 可选:IM 入口插件(需同时声明 agent.tasks 与 agent.targets)。只影响展示:「设置 → IM 机器人」列出本插件,并在没开官方机器人时也显示「项目与模型」;不新增权限。见 plugin-agent-tasks.md「IM 共用项目与模型」
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
 }
 ```
