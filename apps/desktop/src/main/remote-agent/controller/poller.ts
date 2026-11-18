@@ -18,7 +18,7 @@ import {
 } from '@cindy/device-link';
 
 /** 经设备互联调用对方；失败时抛出带 `code` 的错误(与 remoteBackgroundInvoke 一致)。 */
-export type RemoteAgentInvoke = (args: unknown[]) => Promise<unknown>;
+export type RemoteAgentInvoke = (args: unknown[], options?: { preSend?: () => void }) => Promise<unknown>;
 
 /** 对方不可达时持续重拉的最长时间。 */
 export const REMOTE_AGENT_READ_GIVE_UP_MS = 2 * 60_000;

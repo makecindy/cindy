@@ -86,7 +86,7 @@ export class RemoteAgentRunClient implements PolledRun {
   private readonly drained: Promise<void>;
   private markDrained!: () => void;
   private pushSeq = 0;
-  /** Stop invalidates only sends still preparing their payload, not the live link. */
+  /** Stop invalidates unsent calls, including those waiting for link admission. */
   private sendGeneration = 0;
   /** 在途的 push 批次(含重试中的)。 */
   private pushing = 0;
@@ -229,7 +229,7 @@ export class RemoteAgentRunClient implements PolledRun {
       // Stop can overtake gzip or a chunk acknowledgement, including the final
       // await before dispatch. Never deliver that old send after Stop.
       requireActive();
-      await this.invoke([{ op: 'call', runId: this.runId, callId, method, payload }]);
+      await this.invoke([{ op: 'call', runId: this.runId, callId, method, payload }], { preSend: requireActive });
     } catch (error) {
       this.pendingCalls.delete(callId);
       throw error;
@@ -491,13 +491,16 @@ function remoteAgentLinkGuidanceCode(code: string | undefined): string | undefin
 /** 生产接线：经设备互联后台链路调用某台电脑的远程 Agent 通道。 */
 export function remoteAgentInvoker(
   deviceId: string,
-  invoke: (deviceId: string, channel: string, args: unknown[]) => Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>,
+  invoke: (deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void }) => Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>,
 ): RemoteAgentInvoke {
-  return async (args) => {
+  return async (args, options) => {
     let result: Awaited<ReturnType<typeof invoke>>;
     try {
-      result = await invoke(deviceId, REMOTE_AGENT_CHANNEL, args);
+      result = options ? await invoke(deviceId, REMOTE_AGENT_CHANNEL, args, options)
+        : await invoke(deviceId, REMOTE_AGENT_CHANNEL, args);
     } catch (error) {
+      // Cancellation before wire dispatch is not a remote failure or retry hint.
+      if (error instanceof Error && error.name === 'AbortError') throw error;
       throw remoteAgentLinkError(error, deviceId);
     }
     if (result.ok) return result.result;

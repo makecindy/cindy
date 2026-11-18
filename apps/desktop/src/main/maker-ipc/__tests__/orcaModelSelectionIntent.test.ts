@@ -421,6 +421,47 @@ describe('complete selection commit boundaries', () => {
     expect(recoverRenamedSessionModelOnSend).toHaveBeenCalledTimes(route === 'ordinary' ? 1 : 0);
   });
 
+  // Unit: execute the production direct-send adapter with the real send lock.
+  // An input cancelled during lock admission must not restore/rebuild its task;
+  // existing queue tests always released the predecessor before cancellation.
+  it.each(['waiting', 'preparing'] as const)('cancels direct-send %s without leaking its route lease', async phase => {
+    const id = `cancelled-direct-send-${phase}`;
+    const release = phase === 'waiting' ? await acquireSendToSessionLock(id) : () => {};
+    let finishPreparation!: () => void;
+    const preparation = new Promise<void>(resolve => { finishPreparation = resolve; });
+    let preparationEntered!: () => void;
+    const entered = new Promise<void>(resolve => { preparationEntered = resolve; });
+    const restore = vi.fn(async () => {});
+    const rebuild = vi.fn(async () => {});
+    const adapter = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession, acquireSendToSessionLock,
+      scheduledModelScope: { restore }, agentSwitchPending: new Map(),
+      isUserPendingAgentSwitchIntent, reconcileBotModelRoute: vi.fn(),
+      applyPendingAgentSwitchIfIdle: rebuild, agentSwitchDeps: {},
+      recoverRenamedSessionModelOnSend: vi.fn(),
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(),
+      prepareUnhealthySessionForSend: vi.fn(async () => {
+        if (phase === 'preparing') { preparationEntered(); await preparation; }
+        return false;
+      }),
+    });
+    const abort = new AbortController();
+    let failure: unknown;
+    const pending = adapter(id, abort.signal).catch((error: unknown) => { failure = error; });
+    if (phase === 'preparing') await entered;
+    else for (let n = 0; n < 10; n++) await Promise.resolve();
+    abort.abort();
+    finishPreparation();
+    try {
+      await vi.waitFor(() => expect(failure).toBe(abort.signal.reason));
+      if (phase === 'waiting') {
+        expect(restore).not.toHaveBeenCalled();
+        expect(rebuild).not.toHaveBeenCalled();
+      }
+    } finally { release(); finishPreparation(); await pending; }
+    await withSendToSessionLock(id, async () => {});
+  });
+
   it('reads a picker intent staged while the direct send waits for the real route lock', async () => {
     const pending = createPendingAgentSwitchRegistry();
     let status = 'archived';

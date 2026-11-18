@@ -2179,7 +2179,7 @@ export class DeviceLinkClient {
       if (payload.channel === 'git-context:github-read' && !this.getPeerTransport(dst).supportsGithubRead) {
         return { ok: false as const, error: { code: 'IPC_ERROR' as const, message: 'GITHUB_READ_UNSUPPORTED: update the target computer to use GitHub queries' } };
       }
-      if (resolveInvokePriority(payload.channel, options?.background) === 'background'
+      if (resolveInvokePriority(payload.channel, options?.background, payload.args) === 'background'
         && (this.networkProbeTimer || this.networkChangeTimer)) {
         throw new DeviceLinkError('BACKPRESSURE', 'background refresh paused while checking relay connectivity');
       }
@@ -2240,11 +2240,11 @@ export class DeviceLinkClient {
       return outcome.result;
     };
     return (bypassInvokeScheduling(payload) ? send() : this.invokeScheduler.run(
-      dst, resolveInvokePriority(payload.channel, options?.background),
+      dst, resolveInvokePriority(payload.channel, options?.background, payload.args),
       slotBudgetMs, send, { channel: payload.channel, request: requestId, source: options?.diagnosticSource ?? 'client' },
     )).catch((error: unknown) => {
       if (error instanceof DeviceLinkError && error.code === 'BACKPRESSURE' && !error.inFlight) {
-        this.log.debug(`device-link invoke admission failed dst=${shortDeviceRef(dst)} channel=${payload.channel} priority=${resolveInvokePriority(payload.channel, options?.background)} elapsedMs=${Math.round(this.monotonicNow() - queuedAt)} reason=${error.message}`);
+        this.log.debug(`device-link invoke admission failed dst=${shortDeviceRef(dst)} channel=${payload.channel} priority=${resolveInvokePriority(payload.channel, options?.background, payload.args)} elapsedMs=${Math.round(this.monotonicNow() - queuedAt)} reason=${error.message}`);
       }
       throw error;
     });
