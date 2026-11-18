@@ -524,10 +524,11 @@ it("uses paired generation samples, expires recent speed, and isolates a differe
   vi.setSystemTime(1000);
   await render();
   await render({ outputTokens: 100, generationDurationMs: 1000 });
-  await render({ outputTokens: 150, generationDurationMs: 2000 });
+  await render({ outputTokens: 150, totalOutputTokens: 5300, generationDurationMs: 2000 });
   await gesture("onPress");
   expect(card()!.textContent).toContain("50");
   expect(card()!.textContent).toContain("75 tok/s");
+  expect(card()!.textContent).toContain("5.3k tok");
   expect(card()!.textContent).toContain("100 tok/s");
   await act(async () => vi.advanceTimersByTime(60_000));
   expect(card()!.textContent).toContain("—");
