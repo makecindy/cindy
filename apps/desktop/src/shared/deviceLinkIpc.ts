@@ -231,6 +231,11 @@ export interface DeviceLinkPeerLinksSnapshot {
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: DeviceLinkAgentNetPeerRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';
-  /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
+  /**
+   * 经中转的数据现在走中转的 UDP 端口还是 WebSocket:Agent-Net 两种都可能(UDP 不通时退回 WebSocket),
+   * Device Link 只有 WebSocket。没有 relayProtocol、或 Agent-Net 主连接还没报上来时不给。
+   */
+  relayTransport?: 'udp' | 'websocket';
+  /** 本机到主 relay 的往返，取数据实际走的那条路:UDP 是登记到确认，WebSocket 是心跳;离线 / 未测得为 null */
   relayRttMs: number | null;
 }

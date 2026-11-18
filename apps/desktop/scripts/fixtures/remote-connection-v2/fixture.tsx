@@ -242,6 +242,8 @@ void mountPage({
         links: data.links,
         agentNetRoutes,
         relayProtocol: selfEncrypted ? 'agent-net' : 'device-link',
+        // Agent-Net 经中转的数据走 UDP;fleet 演示 UDP 不通退回 WebSocket。Device Link 只有 WebSocket。
+        relayTransport: selfEncrypted && ctx.case !== 'fleet' ? 'udp' : 'websocket',
         relayRttMs: data.relayRttMs,
       }),
       onPeerLinksChanged: subscription('peerLinks'),
