@@ -14299,7 +14299,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     pluginTaskEpoch = snapshot;
     pluginTasks = createPluginTaskService({
       store: createPluginTaskStore(snapshot.client), assertCurrent, assertAuthorized: assertPlugin, resolveRoute,
-      resolveImProject: async (pluginId, project) => {
+      resolveImProject: async (pluginId, project, selectedRoute) => {
         assertPlugin(pluginId);
         const catalog = await readPluginImProjectCatalog();
         const selected = readImProject(pluginId, project);
@@ -14311,12 +14311,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             sharedImProjectFingerprint(current.alias) !== fingerprint)
             throw new PluginTaskError('STALE_REVISION', 'Shared project settings changed');
         };
+        const target = { workingDir: selected.workingDir, matches: selected.matches, assertCurrent: assertProjectCurrent,
+          label: selected.alias === HOOK_CHAT_WORKSPACE_ALIAS ? t('settings.tina.chat.title') : selected.alias };
+        if (selectedRoute) {
+          const permissionMode = getSharedProjectPref(selected.alias).permissionMode ?? 'bypassPermissions';
+          assertProjectCurrent();
+          if (!(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(permissionMode))
+            throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected project permission is unavailable');
+          return { ...target, permissionMode: permissionMode as GhostErrandPermissionMode, route: selectedRoute };
+        }
         const config = await resolveSharedImProjectConfig(selected.alias, log);
         assertProjectCurrent();
         if (!config.providerId || !(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(config.permissionMode))
           throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected project configuration is unavailable');
-        return { workingDir: selected.workingDir, matches: selected.matches, assertCurrent: assertProjectCurrent,
-          label: selected.alias === HOOK_CHAT_WORKSPACE_ALIAS ? t('settings.tina.chat.title') : selected.alias,
+        return { ...target,
           permissionMode: config.permissionMode as GhostErrandPermissionMode,
           route: { agentKind: config.agentKind === 'claude-code' ? 'cc' : config.agentKind,
             model: config.model, providerId: config.providerId, effort: config.effort ?? '', fastMode: false,

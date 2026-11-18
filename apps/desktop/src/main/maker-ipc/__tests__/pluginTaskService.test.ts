@@ -105,7 +105,7 @@ it("applies a conversation's own settings and loosens only with a grant for that
   f.deps.readPermissionMode = () => undefined;
   const task = await f.create();
   const own = { ...f.route, model: 'own-model', effort: 'low' };
-  f.deps.resolveImProject = async () => ({ route: f.route, permissionMode: 'auto', assertCurrent: () => {}, matches: () => true });
+  f.deps.resolveImProject = async (_plugin, _project, route) => ({ route: route ?? f.route, permissionMode: 'auto', assertCurrent: () => {}, matches: () => true });
   let revision = task.revision;
   const setModel = vi.fn(async (id: string, selected: PluginTaskRoute, assertCurrent: () => Promise<void>, permissionMode?: string) => {
     await assertCurrent();
@@ -130,6 +130,15 @@ it("applies a conversation's own settings and loosens only with a grant for that
   f.deps.assertImProjectDispatch = (_plugin, _project, _task, mode) => granted(mode);
   await f.service.send('p', { taskId: task.taskId, expectedRevision: revision, requestKey: 'loose', text: 'hi' });
   expect(granted).toHaveBeenLastCalledWith('bypassPermissions');
+  // PR #11208 unit regression: TASK_BUSY must leave the previous grant usable.
+  const autoGrant = await f.service.recordImPermissionGrant('p', 'chat', 'auto');
+  const oldResolver = f.deps.resolveImProject;
+  f.deps.resolveImProject = async (...args) => ({ ...await oldResolver(...args), permissionMode: 'ask' });
+  setModel.mockRejectedValueOnce(new PluginTaskError('TASK_BUSY', 'Busy'));
+  await expect(follow({ permissionMode: 'auto', permissionGrant: autoGrant })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  await f.service.assertDispatch('p', task.taskId);
+  expect(granted).toHaveBeenLastCalledWith('bypassPermissions');
+  f.deps.resolveImProject = oldResolver;
   await follow({});
   expect(JSON.parse(f.rows.get(task.taskId)!.payload).imPermissionGrant).toBeUndefined();
   expect(f.tasks.get(task.taskId)).toMatchObject({ resolvedConfig: f.route, permissionMode: 'auto' });
@@ -141,12 +150,18 @@ it("applies a conversation's own settings and loosens only with a grant for that
 it('creates with conversation settings, needs a grant to loosen and replays without a conflict', async () => {
   const f = fixture();
   f.deps.readPermissionMode = () => undefined;
-  f.deps.resolveImProject = async () => ({ route: f.route, workingDir: '/project', permissionMode: 'ask', assertCurrent: () => {}, matches: () => true });
+  let defaultOffline = false;
+  f.deps.resolveImProject = async (_plugin, _project, route) => {
+    // PR #11208 unit regression: an offline default must not prevent explicit routing.
+    if (defaultOffline && !route) throw new Error('Default source offline');
+    return { route: route ?? f.route, workingDir: '/project', permissionMode: 'ask', assertCurrent: () => {}, matches: () => true };
+  };
   const own = { ...f.route, model: 'own-model' };
   const request = { requestKey: 'im-own', title: 'Group', imProject: '/project' };
   await expect(f.service.create('p', { ...request, imOverride: { permissionMode: 'auto' } })).rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' });
   expect(f.deps.createSession).not.toHaveBeenCalled();
   const grant = await f.service.recordImPermissionGrant('p', '/project', 'auto');
+  defaultOffline = true;
   const task = await f.service.create('p', { ...request, imOverride: { route: own, permissionMode: 'auto', permissionGrant: grant } });
   expect(f.deps.createSession).toHaveBeenLastCalledWith('p', task.taskId, 'Group', own, undefined, own, expect.any(Function),
     undefined, undefined, expect.objectContaining({ workingDir: '/project' }), 'auto');
