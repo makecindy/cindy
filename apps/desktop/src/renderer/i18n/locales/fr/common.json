@@ -437,7 +437,8 @@
       "loading": "Chargement de l'accès aux modèles…",
       "loadFailed": "Impossible de charger l'accès aux modèles. Rouvrez ces paramètres.",
       "saveFailed": "Impossible d'enregistrer l'accès aux modèles. Réessayez.",
-      "needsUpdate": "Mettez à jour Cindy sur l'ordinateur du fournisseur pour gérer l'accès aux modèles."
+      "needsUpdate": "Mettez à jour Cindy sur l'ordinateur du fournisseur pour gérer l'accès aux modèles.",
+      "followsPool": "Cette connexion a été fusionnée dans « {{pool}} » : ses modèles à distance suivent « {{pool}} ». Modifiez-les là-bas. Les limites des membres ci-dessous restent réglables ici."
     },
     "entry": {
       "label": "Accès distant et partage",
@@ -4398,7 +4399,8 @@
           "description": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous partagez peuvent utiliser les modèles de ce fournisseur. L'Agent s'exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur.",
           "descriptionGroup": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous partagez peuvent utiliser les modèles de ce fournisseur. Le groupe de fournisseurs choisit l'ordinateur qui exécute l'Agent.",
           "ariaLabel": "Autoriser vos autres ordinateurs et les personnes avec qui vous partagez à utiliser ce fournisseur",
-          "writeFailed": "Impossible d'enregistrer le paramètre d'accès à distance. Veuillez réessayer."
+          "writeFailed": "Impossible d'enregistrer le paramètre d'accès à distance. Veuillez réessayer.",
+          "followsPool": "Cette connexion a été fusionnée dans « {{pool}} » et suit son réglage « Autoriser l'utilisation à distance ». Modifiez-le là-bas."
         },
         "ownComputersCanUse": "Disponible pour mes autres ordinateurs",
         "moreActionsAria": "Plus d'actions",
@@ -6486,18 +6488,13 @@
         "allowInboundAria": "Autoriser ou non {{name}} à contrôler cet appareil",
         "peerControlOff": "Contrôle à distance non activé sur l'autre appareil",
         "masterOffHint": "Activez d'abord l'interrupteur principal ci-dessus",
-        "controllingThisMac": "Connecté à Cindy",
-        "useThisDeviceModels": "Utiliser les modèles d’ici",
-        "allowModelUseAria": "Autoriser {{name}} à utiliser les modèles de cet ordinateur"
+        "controllingThisMac": "Connecté à Cindy"
       },
       "toast": {
         "revoked": "Accès révoqué pour cet appareil",
         "revokeFailed": "Échec de la révocation de l'accès",
         "restored": "Accès rétabli pour cet appareil",
-        "restoreFailed": "Échec du rétablissement de l'accès",
-        "modelUseRestored": "L’autre ordinateur peut de nouveau utiliser les modèles d’ici",
-        "modelUseRevoked": "L’autre ordinateur ne peut plus utiliser les modèles d’ici",
-        "modelUseFailed": "Impossible d’enregistrer « Utiliser les modèles d’ici ». Veuillez réessayer."
+        "restoreFailed": "Échec du rétablissement de l'accès"
       },
       "sections": {
         "myDevices": "Mes appareils",
@@ -7001,11 +6998,6 @@
       "description": "Les appareils connectés avec le même compte Feishu peuvent se détecter mutuellement. Une fois « Autoriser le contrôle » activé, vos autres appareils peuvent contrôler à distance {{appName}} sur cette machine.",
       "allowControl": "Autoriser les appareils du même compte à contrôler cette machine",
       "allowControlHint": "Une fois activé, les autres appareils connectés avec le même compte peuvent contrôler cette machine sans approbation à chaque connexion. Un indicateur visible s'affiche pendant le contrôle, et vous pouvez vous déconnecter à tout moment.",
-      "ownModelAccess": {
-        "title": "Autoriser mes autres ordinateurs à utiliser les modèles de celui-ci",
-        "hint": "Une fois activé, vos autres ordinateurs peuvent utiliser les fournisseurs de cet ordinateur. L’Agent s’exécute ici, avec la connexion et le quota de cet ordinateur. Rien n’est partagé avec d’autres personnes.",
-        "writeFailed": "Impossible d’enregistrer ce réglage. Veuillez réessayer."
-      },
       "keepAwake": "Empêcher la mise en veille",
       "keepAwakeHint": "Une fois activé, cette machine ne se met pas en veille, afin que les Agents en arrière-plan et les tâches planifiées continuent de s'exécuter (vous pouvez toujours éteindre l'écran ou le verrouiller).",
       "linkStatus": {
@@ -15939,7 +15931,7 @@
       "REMOTE_AGENT_INVALID": "Un problème est survenu lors de la communication avec l'ordinateur qui exécute l'Agent. Réessayez ; si le problème persiste, mettez à jour Cindy sur les deux ordinateurs.",
       "REMOTE_AGENT_RESUME_REJECTED": "L’ordinateur qui exécute le modèle ne peut pas reprendre cette session. Créez une nouvelle session depuis la liste des sessions et copiez le contenu nécessaire pour continuer. La session d’origine et les messages en attente sont conservés.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Ce modèle a atteint la limite de partage de modèle définie par son propriétaire. Choisissez un autre modèle disponible pour continuer.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Cet ordinateur ne vous a pas ouvert ce fournisseur ou le modèle sélectionné. S’il s’agit de votre propre ordinateur, activez « Autoriser mes autres ordinateurs à utiliser les modèles de celui-ci » dans sa connexion à distance. S’il vous a été partagé, demandez à son propriétaire d’ajuster l’accès dans Accès distant et partage. Vous pouvez aussi choisir un autre modèle.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Cet ordinateur ne vous a pas ouvert ce fournisseur ou le modèle sélectionné. S’il s’agit de votre propre ordinateur, activez « Autoriser l'utilisation à distance » pour ce fournisseur sur cet ordinateur. S’il vous a été partagé, demandez à son propriétaire d’ajuster l’accès dans Accès distant et partage. Vous pouvez aussi choisir un autre modèle.",
       "REMOTE_AGENT_FORK_FAILED": "L'ordinateur qui exécute l'Agent n'a pas pu démarrer une nouvelle session à partir d'ici. Réessayez, ou essayez avec un autre message.",
       "REMOTE_AGENT_SHARE_PAUSED": "Le propriétaire a suspendu ce partage pour vous : ces modèles ne peuvent donc pas être utilisés tant qu'il n'est pas réactivé. Passez à un autre modèle pour continuer.",
       "REMOTE_AGENT_SHARE_REMOVED": "Ce partage n'est plus disponible (le propriétaire l'a supprimé ou vous l'avez quitté). Passez à un autre modèle pour continuer.",
