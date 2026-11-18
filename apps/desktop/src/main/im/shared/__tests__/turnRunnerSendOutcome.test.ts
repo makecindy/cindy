@@ -5605,6 +5605,39 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       }
     });
 
+    // Final review: Stop may be followed by a new message before preparation
+    // rejects. No native done event exists to release that queued successor.
+    it('drains a new message queued after Stop when old preparation fails', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const entered = deferred<void>();
+      const failPreparation = deferred<void>();
+      const { previous, replacement, localRunner, runTurn } = createLivenessSetup({
+        onRebuild: async () => {
+          entered.resolve();
+          await failPreparation.promise;
+          throw new SessionCreationCleanupPendingError();
+        },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        const first = runTurn();
+        await entered.promise;
+        await localRunner.stopActiveTurn({ botContextId: 'cli_test_bot', userId: 'ou_user' });
+        await runTurn();
+        failPreparation.resolve();
+        await first;
+        await vi.advanceTimersByTimeAsync(600);
+        await flushMicrotasks();
+        expect(replacement.send).toHaveBeenCalledOnce();
+        expect(previous.send).not.toHaveBeenCalled();
+        expect(mocks.feishuIm.sendText.mock.calls.map(call => String(call[1])).join(' '))
+          .not.toContain('启动 Agent 失败');
+      } finally {
+        await localRunner.disposeAllSessions();
+        vi.useRealTimers();
+      }
+    });
+
     it('keeps a healthy runtime and does not rebuild on every message', async () => {
       const { previous, replacement, maker, localRunner, runTurn } = createLivenessSetup();
       try {

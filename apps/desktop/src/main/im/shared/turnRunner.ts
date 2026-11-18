@@ -2114,6 +2114,7 @@ export function createTurnRunner(
         if (index >= 0) state.queue.splice(index, 1);
         await completeTurnCallbackAfterAck(item.turn);
         settleTurnTerminal(item.turn);
+        if (!finishDeferredDetachIfIdle(state)) armDispatchRetry(state, userId);
         return { kind: 'rejected', reason: 'aborted' };
       }
       const turnPolicyFailureReason = classifyTurnPermissionPolicySendFailure(err, item, state);
