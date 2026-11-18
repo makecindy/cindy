@@ -65,6 +65,18 @@ describe('historical schedule failure notice', () => {
       expect(shouldShowFailedScheduleNotice(visible)).toBe(true);
       expect(shouldShowFailedScheduleNotice({ ...visible, [field]: true })).toBe(false);
     });
+  // Unit: after a normal turn finishes, busy flags clear and used to resurrect this banner.
+  it.each(['scheduled task auto-resume failed', 'scheduled task auto-resume failed: retry overloaded'])(
+    'only retires %s after input newer than the terminal result', (errorMsg) => {
+      const rows: RemoteScheduleRun[] = [{ id: 'failed', scheduleId: 'a', sessionId: 's',
+        status: 'failed', firedAt: 10, finishedAt: 20, errorMsg }];
+      const latestFailedRun = buildSessionScheduleIndex([], new Map([['a', rows]])).get('s')!.latestFailedRun!;
+      const state = { ...visible, latestFailedRun, userSendAt: 21 };
+      expect(shouldShowFailedScheduleNotice(state)).toBe(false);
+      expect(shouldShowFailedScheduleNotice({ ...state, userSendAt: 20 })).toBe(true);
+      expect(shouldShowFailedScheduleNotice({ ...state, latestFailedRun: { ...latestFailedRun, finishedAt: undefined } })).toBe(true);
+      expect(shouldShowFailedScheduleNotice({ ...state, latestFailedRun: { ...latestFailedRun, errorMsg: 'pre-run hook failed' } })).toBe(true);
+    });
   it('requires a failed run', () => expect(shouldShowFailedScheduleNotice({ ...visible, latestFailedRun: null })).toBe(false));
   // A check blocked because its plugin was uninstalled used to show only the generic
   // "checks blocked" line; the stored diagnosis must reach the notice (mobile reads full runs).

@@ -7329,6 +7329,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // v2 因果能力：同引擎 no-op 返回 revision，后续 SET_MODEL 在 session 锁内 CAS。
       // 新 desktop 控制端据此与只有基础切换能力的旧 host 做安全兼容门控。
       supportsSessionAgentSwitchCas: true,
+      supportsQueueHeadRetry: true,
       // 新控制端只有看到此位才允许给被控端 Orca Team 选择 Worker Full access。
       // 旧 desktop 缺省为 false，避免显式 bypassPermissions 被旧 handler 静默忽略。
       supportsOrcaWorkerPermissionMode: true,
@@ -13605,7 +13606,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     syncLanePermission: async (laneSessionId) => syncBotLanePermission(laneSessionId),
     hasPendingInteraction: (sessionId) => hasPendingAgentInteractionForSession(sessionId),
-    decidePlan: createBotGroupPlanDecider((prompt, opts) => requestUtilityText(maker, prompt, opts)),
+    decidePlan: createBotGroupPlanDecider((prompt, opts) => requestUtilityText(maker, prompt, { ...opts, source: 'group-planning' })),
     workDir: botGroupWorkDir,
     validateProjectDir: async (dir) => {
       try {
@@ -14303,36 +14304,59 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const live = maker.getSession(taskId);
       return live && (live.isTurnRunning() || live.getTurnControlSnapshot().pendingInteractionCount > 0) ? { instanceId: live.instanceId, generation: live.getTurnGeneration() } : null;
     };
+    const readImProjectPermissionMode = (alias: string): GhostErrandPermissionMode => {
+      const mode = getSharedProjectPref(alias).permissionMode ?? 'bypassPermissions';
+      if (!(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(mode))
+        throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected project permission is unavailable');
+      return mode as GhostErrandPermissionMode;
+    };
+    const resolveImProjectTarget = async (pluginId: string, project: string) => {
+      assertPlugin(pluginId);
+      const catalog = await readPluginImProjectCatalog();
+      const selected = readImProject(pluginId, project);
+      const fingerprint = sharedImProjectFingerprint(selected.alias);
+      const assertProjectCurrent = () => {
+        assertPlugin(pluginId);
+        const current = readImProject(pluginId, project);
+        if (!catalog.isCurrent() || current.alias !== selected.alias || current.approval !== selected.approval ||
+          sharedImProjectFingerprint(current.alias) !== fingerprint)
+          throw new PluginTaskError('STALE_REVISION', 'Shared project settings changed');
+      };
+      const target = { workingDir: selected.workingDir, matches: selected.matches, assertCurrent: assertProjectCurrent,
+        label: selected.alias === HOOK_CHAT_WORKSPACE_ALIAS ? t('settings.tina.chat.title') : selected.alias };
+      return { alias: selected.alias, target };
+    };
     pluginTaskEpoch = snapshot;
     pluginTasks = createPluginTaskService({
       store: createPluginTaskStore(snapshot.client), assertCurrent, assertAuthorized: assertPlugin, resolveRoute,
-      resolveImProject: async (pluginId, project) => {
-        assertPlugin(pluginId);
-        const catalog = await readPluginImProjectCatalog();
-        const selected = readImProject(pluginId, project);
-        const fingerprint = sharedImProjectFingerprint(selected.alias);
-        const assertProjectCurrent = () => {
-          assertPlugin(pluginId);
-          const current = readImProject(pluginId, project);
-          if (!catalog.isCurrent() || current.alias !== selected.alias || current.approval !== selected.approval ||
-            sharedImProjectFingerprint(current.alias) !== fingerprint)
-            throw new PluginTaskError('STALE_REVISION', 'Shared project settings changed');
-        };
-        const config = await resolveSharedImProjectConfig(selected.alias, log);
-        assertProjectCurrent();
+      resolveImProjectPermission: async (pluginId, project) => {
+        const { alias, target } = await resolveImProjectTarget(pluginId, project);
+        target.assertCurrent();
+        return { ...target, permissionMode: readImProjectPermissionMode(alias) };
+      },
+      resolveImProject: async (pluginId, project, selectedRoute) => {
+        const { alias, target } = await resolveImProjectTarget(pluginId, project);
+        if (selectedRoute) {
+          target.assertCurrent();
+          return { ...target, permissionMode: readImProjectPermissionMode(alias), route: selectedRoute };
+        }
+        const config = await resolveSharedImProjectConfig(alias, log);
+        target.assertCurrent();
         if (!config.providerId || !(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(config.permissionMode))
           throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected project configuration is unavailable');
-        return { workingDir: selected.workingDir, matches: selected.matches, assertCurrent: assertProjectCurrent,
+        return { ...target,
           permissionMode: config.permissionMode as GhostErrandPermissionMode,
           route: { agentKind: config.agentKind === 'claude-code' ? 'cc' : config.agentKind,
             model: config.model, providerId: config.providerId, effort: config.effort ?? '', fastMode: false,
             ...(config.agentDeviceId ? { agentDeviceId: config.agentDeviceId } : {}) } };
       },
-      assertImProjectDispatch: (pluginId, project, task) => {
+      assertImProjectDispatch: (pluginId, project, task, granted) => {
         const selected = readImProject(pluginId, project);
         if (!selected.matches(task)) throw new PluginTaskError('PROJECT_MISMATCH', 'Task moved out of the selected project');
-        const permission = getSharedProjectPref(selected.alias).permissionMode ?? 'bypassPermissions';
-        if (!isPluginTaskPermissionAllowed(task.permissionMode, permission, task.planModeEnabled))
+        const permission = readImProjectPermissionMode(selected.alias);
+        // A conversation may run looser than its project only up to what the user allowed in Cindy.
+        if (!isPluginTaskPermissionAllowed(task.permissionMode, permission, task.planModeEnabled) &&
+          !(granted && isPluginTaskPermissionAllowed(task.permissionMode, granted, task.planModeEnabled)))
           throw new PluginTaskError('PERMISSION_DENIED', 'Shared project permission changed');
       },
       prepareInvocation: (id, operationId, parentId, operation, sessionId) => {
@@ -14859,6 +14883,60 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           throw new PluginTaskError('PERMISSION_DENIED', 'Account or plugin authorization changed');
         return { projects: [{ id: HOOK_CHAT_WORKSPACE_ALIAS, label: t('settings.tina.chat.title') },
           ...Object.entries(catalog.workspaces).map(([label, id]) => ({ id, label, directory: id }))] };
+      }
+      case 'imProjectConfig': {
+        const config = await service.imProjectConfig(pluginId, request.imProject);
+        return { imProject: config.imProject, route: config.route, permissionMode: config.permissionMode };
+      }
+      case 'confirmImPermission': {
+        // Loosening one IM conversation past its project is the user's call, made in Cindy's own
+        // dialog (or the phone's): a plugin page can neither draw nor click it.
+        const snapshot = getCurrentDbClientSnapshot();
+        const approval = pluginTargetAuthorizationRevision(pluginId);
+        if (!approval) throw new PluginTaskError('PERMISSION_DENIED', 'Shared IM projects require agent.targets approval');
+        const project = await service.imProjectPermission(pluginId, request.imProject);
+        const assertRequestCurrent = () => {
+          assertCallerCurrent();
+          if (snapshot !== getCurrentDbClientSnapshot() || pluginTargetAuthorizationRevision(pluginId) !== approval)
+            throw new PluginTaskError('PERMISSION_DENIED', 'Account or plugin authorization changed');
+          project.assertCurrent();
+          // The plugin's own Host card is the ceiling for either confirmation path.
+          const cfg = getPluginTaskDefaults(pluginId);
+          if (cfg && !isPluginTaskPermissionAllowed(request.permissionMode, cfg.permissionMode))
+            throw new PluginTaskError('PERMISSION_DENIED', 'Requested permission exceeds plugin dispatch policy');
+        };
+        assertRequestCurrent();
+        if (isPluginTaskPermissionAllowed(request.permissionMode, project.permissionMode)) return { granted: true };
+        if (pluginPermissionRequests.size) throw new PluginTaskError('TASK_BUSY', 'A permission request is already open');
+        pluginPermissionRequests.add(pluginId);
+        try {
+          const fill = (key: string, values: Record<string, string>) =>
+            Object.entries(values).reduce((value, [name, replacement]) => value.replaceAll(`{{${name}}}`, replacement), t(key));
+          const mode = (value: string) => t(`pluginImPermission.modes.${value}`);
+          const presentation = {
+            title: t('pluginImPermission.title'),
+            message: fill('pluginImPermission.message', {
+              name: getInstalledGhostName(pluginId) ?? pluginId, conversation: request.conversation.label,
+              project: project.label ?? request.imProject, mode: mode(request.permissionMode),
+            }),
+            detail: [fill('pluginImPermission.detail', { projectMode: mode(project.permissionMode) }),
+              ...(request.conversation.kind === 'group' ? [t('pluginImPermission.groupWarning')] : [])].join('\n\n'),
+            allow: t('pluginImPermission.allow'), cancel: t('pluginImPermission.cancel'),
+          };
+          let allowed: boolean;
+          if (request.mobilePageId) {
+            allowed = await showMobilePluginTaskPermission(pluginId, request.mobilePageId, presentation);
+          } else {
+            const window = getDeepLinkMainWindow();
+            const options = { type: 'question' as const, title: presentation.title, message: presentation.message,
+              detail: presentation.detail, buttons: [presentation.allow, presentation.cancel], defaultId: 1, cancelId: 1 };
+            allowed = (window && !window.isDestroyed() ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options)).response === 0;
+          }
+          if (!allowed) return { granted: false };
+          assertRequestCurrent();
+          const grant = await service.recordImPermissionGrant(pluginId, request.imProject, request.permissionMode);
+          return { granted: true, grant };
+        } finally { pluginPermissionRequests.delete(pluginId); }
       }
       case 'followImProject': return service.followImProject(pluginId, request);
       case 'setModel': return service.setModel(pluginId, request);
@@ -15533,7 +15611,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return queued;
   }
 
+  const workerInputs = new WeakSet<object>();
   const orcaInterAgentDispatcher: OrcaInterAgentDispatcher = createOrcaInterAgentDispatcher({
+    directWorkerRecovery: {
+      getInputAbortSignal: id => inputCoordinator.getInputAbortSignal(id),
+      rememberDirectWorkerInput: (runtime, generation, item, signal) => {
+        if (item.createOpts.orcaRole === 'worker') workerInputs.add(item.createOpts);
+        return inputCoordinator.rememberDirectWorkerInput(runtime, generation, item, signal);
+      },
+    },
     prepareRestoredReportAcceptance: prepareRestoredOrcaReportAcceptance,
     onDirectInputDispatched: sessionId => touchSessionActivityInDb(sessionId),
     readAutoReviewHistory: sessionId => readAutoReviewHistory(sessionId),
@@ -18484,7 +18570,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!isQuotaScheduleCurrent(schedule, sessionId)) throwIpcError('PRECONDITION_FAILED', 'Schedule is no longer active for this task');
       }
       if (!scheduled) await scheduledModelScope.restore(sessionId);
-      await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId);
+      const expectedSwitch = agentInputCoordinatorHolder?.takeRetrySwitchRevision(sessionId, options?.clientId);
+      await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, { signal: options?.signal, expectedRevision: expectedSwitch });
+      if (agentSwitchPending.get(sessionId)?.targetAgentDeviceId !== undefined) {
+        throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected computer is not ready; retry the send after recovery');
+      }
       if (!scheduled) await recoverRenamedSessionModelOnSend(sessionId);
       // 桌面发送也是「消息真正发出去」的边界：回合中登记、随后被模型选择器取消的预算
       // 重建必须在这里补一次（调用方已持 send 锁）。
@@ -18582,7 +18672,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isAutoResumeAttemptCurrent: (sessionId, attemptToken) => inputCoordinator.isAutoResumeAttemptCurrent(sessionId, attemptToken),
       autoRetryLastError: (sessionId, attemptToken) => inputCoordinator.autoRetryLastError(sessionId, attemptToken),
     },
-    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs, saveTurnStartedAtForDeferred,
+    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,
     beginSchedulerAutoResume,
     getStableSessionForTurnBoundary: (sessionId) => getStableSessionForTurnBoundary(sessionId),
     pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
@@ -18611,6 +18701,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!ownsQuotaRoute()) await reconcileBotModelRoute(sessionId, true);
       const [botInput] = await getDbClient()
         .drizzle.select({
+          orcaRole: sessions.orcaRole,
+          orcaRemoteLead: sessions.orcaRemoteLead,
           source: sessions.source,
           role: botSessionLinks.role,
           workingDir: sessions.workingDir,
@@ -18632,6 +18724,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throwIpcError('PRECONDITION_FAILED', SHADOWED_COMPANION_INPUT_MESSAGE);
       }
       if (args[2] && typeof args[2] === 'object') {
+        if (botInput?.orcaRole === 'worker' || parseOrcaRemoteLead(botInput?.orcaRemoteLead)) workerInputs.add(args[2]);
+        else workerInputs.delete(args[2]);
         const origin = (args[3] as { origin?: AgentInputQueuedMessage['origin'] } | undefined)?.origin;
         if (botInput?.source === 'bot' && botInput.agentDeviceId && !botInput.remoteHostId
           && ['canonical', 'thread'].includes(botInput.role ?? '')
@@ -21665,6 +21759,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     async (_e, sessionId: unknown, opts?: unknown) => {
       const sid = requireSessionId(sessionId);
       await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
+      if (opts && typeof opts === 'object' && 'expectedQueueHeadClientId' in opts) {
+        const expected = requireClientId(opts.expectedQueueHeadClientId);
+        const revision = 'expectedSwitchRevision' in opts ? opts.expectedSwitchRevision : undefined;
+        if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision <= 0) {
+          throwIpcError('INVALID_PARAMS', 'expected switch revision required');
+        }
+        if (!agentSwitchPending.get(sid) || agentSwitchPending.revision?.(sid) !== revision) {
+          return inputCoordinator.getProjection(sid);
+        }
+        return inputCoordinator.retryLastError(sid, expected, revision);
+      }
       return inputCoordinator.retryLastError(sid);
     },
   );

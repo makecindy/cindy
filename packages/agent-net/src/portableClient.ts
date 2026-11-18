@@ -8,6 +8,30 @@ import { fromBase64Url, toBase64Url, utf8 } from './portableBytes.js';
 import { SocketEvents } from './socketEvents.js';
 import type { SocketClient, SocketUplink } from './socketPorts.js';
 
+/**
+ * Relay UDP credentials (packages/agent-net-relay/src/udpRelay.ts `UDP_RELAY_HEADER` / `UDP_RELAY_VERSION`, Node only): asked for
+ * with this header and offered in the relay's hello. An older relay ignores the header and the session stays on the WebSocket.
+ */
+const UDP_RELAY_HEADER = 'x-agent-net-udp';
+const UDP_RELAY_VERSION = '2';
+/**
+ * As the Node client's `udpCredentialsAllowed`: the credentials are a reusable secret, so they are asked for only over TLS or on
+ * this machine; owner-pinned private relays on plain http stay on the WebSocket.
+ */
+function udpCredentialsAllowed(wsUrl: string): boolean {
+  return /^wss:\/\//i.test(wsUrl) || /^ws:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i.test(wsUrl);
+}
+/** A malformed credential only disables UDP for this session; it never fails the handshake. */
+function udpCredentials(value: unknown): { session: Uint8Array; key: Uint8Array } | null {
+  if (!value || typeof value !== 'object') return null;
+  const { session, key } = value as { session?: unknown; key?: unknown };
+  if (typeof session !== 'string' || typeof key !== 'string') return null;
+  try {
+    const credentials = { session: fromBase64Url(session), key: fromBase64Url(key) };
+    return credentials.session.length === 8 && credentials.key.length === 32 ? credentials : null;
+  } catch { return null; }
+}
+
 export interface AgentNetSigner {
   readonly identity: { deviceId: string; signingKey: string; transportKey: string };
   sign(text: string): Promise<string>;
@@ -27,6 +51,7 @@ export interface BinarySocket {
   close(): void;
 }
 export interface PortableClientOptions {
+  relayUdpEnabled?(): boolean;
   assertCurrent(): void;
   sha256(data: Uint8Array): string;
   /** MD5 digest bytes. With it the client offers direct media transfer (Content-MD5 binds each stored chunk). */
@@ -290,9 +315,10 @@ export class PortableAgentNetClient implements SocketClient {
   async connect(): Promise<SocketUplink> {
     const path = this.path('/ws'), header = await this.header('GET', path);
     this.options.assertCurrent();
-    const ws = this.options.createWebSocket(this.base.replace(/^http/, 'ws') + path, { authorization: header });
+    const url = this.base.replace(/^http/, 'ws') + path, askUdp = this.options.relayUdpEnabled?.() === true && udpCredentialsAllowed(url);
+    const ws = this.options.createWebSocket(url, { authorization: header, ...(askUdp ? { [UDP_RELAY_HEADER]: UDP_RELAY_VERSION } : {}) });
     ws.binaryType = 'arraybuffer';
-    return PortableUplink.open(ws, this);
+    return PortableUplink.open(ws, this, askUdp);
   }
 }
 
@@ -302,6 +328,8 @@ class PortableUplink extends SocketEvents implements SocketUplink {
   delegations: Delegation[] = [];
   delegationRequests: DelegationRequest[] = [];
   notifications = false;
+  /** This session's relay UDP credentials when the relay offered them; null keeps every relayed datagram on the WebSocket. */
+  udp: { session: Uint8Array; key: Uint8Array } | null = null;
   private receiver: ((deviceId: string, data: Uint8Array) => void) | null = null;
   private pending: [string, Uint8Array][] = [];
   private pendingBytes = 0;
@@ -310,7 +338,7 @@ class PortableUplink extends SocketEvents implements SocketUplink {
   private scheduled: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private constructor(private ws: BinarySocket) { super(); }
-  static open(ws: BinarySocket, client: PortableAgentNetClient): Promise<PortableUplink> {
+  static open(ws: BinarySocket, client: PortableAgentNetClient, askUdp = false): Promise<PortableUplink> {
     const uplink = new PortableUplink(ws);
     return new Promise((resolve, reject) => {
       let established = false, receivedHello = false;
@@ -345,6 +373,7 @@ class PortableUplink extends SocketEvents implements SocketUplink {
               if (receivedHello || message.protocolVersion !== 2
                 || message.deviceId !== (client.delegation ? 'guest:' + client.delegation.id : client.identity.deviceId)) throw new Error('INVALID_HELLO');
               uplink.notifications = message.notifications === true;
+              uplink.udp = askUdp ? udpCredentials((message as { udp?: unknown }).udp) : null;
               receivedHello = true; established = true; clearTimeout(timer); resolve(uplink);
             } else {
               if (!receivedHello) throw new Error('INVALID_HELLO');

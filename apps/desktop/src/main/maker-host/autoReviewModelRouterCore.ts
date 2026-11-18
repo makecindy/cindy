@@ -39,7 +39,7 @@ export interface AutoReviewModelRouterDeps {
   requestCandidate: (
     prompt: string,
     candidate: DedicatedAutoReviewCandidate,
-    opts: { timeoutMs: number; signal?: AbortSignal },
+    opts: { timeoutMs: number; signal?: AbortSignal; sessionId?: string },
   ) => Promise<UtilityTextResult>;
   createAuxiliaryFallback?: () => AutoReviewAuxiliaryFallback | undefined;
   parseDecision?: (text: string) => AutoReviewDecision | null;
@@ -147,14 +147,14 @@ interface PendingCandidateAttempt {
  */
 export function createAutoReviewModelRouter(
   deps: AutoReviewModelRouterDeps,
-): (prompt: string, signal?: AbortSignal) => Promise<string | AutoReviewTextFailure | null> {
+): (prompt: string, signal?: AbortSignal, sessionId?: string) => Promise<string | AutoReviewTextFailure | null> {
   const candidates = deps.candidates;
   const requestCandidate = deps.requestCandidate;
   const parseDecision = deps.parseDecision ?? parseAutoPermissionReviewDecision;
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? sleepWithSignal;
 
-  return async (prompt, parentSignal) => {
+  return async (prompt, parentSignal, sessionId?: string) => {
     const startedAt = now();
     let failure: AutoReviewTextFailure['failure'] = 'no_available_model';
     const recordFailure = (result: UtilityTextResult) => {
@@ -205,7 +205,7 @@ export function createAutoReviewModelRouter(
         try {
           const timeoutMs = Math.min(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS, remainingMs);
           result = await requestUtilityTextWithinTimeout(
-            (signal) => requestCandidate(prompt, candidate, { timeoutMs, signal }),
+            (signal) => requestCandidate(prompt, candidate, { timeoutMs, signal, sessionId }),
             timeoutMs,
             controller.signal,
             () => candidateTimeoutFailure(candidate),
@@ -280,6 +280,7 @@ export function createAutoReviewModelRouter(
               (signal) => auxiliaryFallback(prompt, {
                 timeoutMs: AUTO_REVIEW_CANDIDATE_TIMEOUT_MS,
                 signal,
+                sessionId,
                 validateResponse: (text) => parseDecision(text) !== null,
               }),
               timeoutMs,

@@ -1,5 +1,5 @@
 import { SHARED_TASK_CAPABILITY } from '@cindy/device-link';
-import type { PeerLinks } from './peerLinks.js';
+import type { PeerLinks } from '@cindy/agent-net';
 import type { DelegationRequest } from '@cindy/agent-net-protocol';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import {

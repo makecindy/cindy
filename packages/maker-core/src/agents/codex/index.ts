@@ -3504,6 +3504,9 @@ assertRouteCurrent();
     }
     let releaseHost: (() => void) | undefined;
     let subscription: ThreadSubscription | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    let observedUsage: Parameters<NonNullable<OneShotOptions['onUsage']>>[0] | undefined;
     try {
       const leased = await this.acquireHostOperation(() => this.getUtilityHost());
       releaseHost = leased.release;
@@ -3533,7 +3536,7 @@ assertRouteCurrent();
         ? startResp.model
         : opts?.model;
 
-      // 等首条 agentMessage.completed 文本; 出 error 通知用 sentinel object 区分超时/正常
+      // Keep the final text but settle on turn completion so later usage is not lost.
       type OneShotResult = { kind: 'text'; text: string } | { kind: 'empty' } | { kind: 'error'; message: string };
       let resolve: (r: OneShotResult) => void = () => {};
       const result = new Promise<OneShotResult>((res) => {
@@ -3541,6 +3544,7 @@ assertRouteCurrent();
       });
       let currentTurnId: string | null = null;
       let resolved = false;
+      let responseText: string | undefined;
 
       subscription = host.subscribeThread(threadId, {
         turnStarted: (params) => {
@@ -3550,14 +3554,23 @@ assertRouteCurrent();
           if (resolved) return;
           const item = params.item as { type?: string; text?: string };
           if (item.type === 'agentMessage' && typeof item.text === 'string') {
-            resolved = true;
-            resolve({ kind: 'text', text: item.text.trim() });
+            responseText = item.text.trim();
           }
+        },
+        tokenUsageUpdated: params => {
+          const usage = params.tokenUsage?.total;
+          if (!usage) return;
+          observedUsage = {
+            model: dispatchModel,
+            inputTokens: Math.max(0, usage.inputTokens - usage.cachedInputTokens),
+            outputTokens: usage.outputTokens,
+            cacheReadTokens: usage.cachedInputTokens,
+          };
         },
         turnCompleted: () => {
           if (!resolved) {
             resolved = true;
-            resolve({ kind: 'empty' });
+            resolve(responseText === undefined ? { kind: 'empty' } : { kind: 'text', text: responseText });
           }
         },
         error: (params) => {
@@ -3601,16 +3614,15 @@ assertRouteCurrent();
 
       // 自家超时 sentinel (kind 'timeout'), 走外部 signal 也走同一通道
       const timeoutP = new Promise<OneShotResult>((res) => {
-        const t = setTimeout(() => res({ kind: 'error', message: '__TIMEOUT__' }), timeoutMs);
-        opts?.signal?.addEventListener('abort', () => {
-          clearTimeout(t);
-          res({ kind: 'error', message: '__ABORTED__' });
-        });
+        timer = setTimeout(() => res({ kind: 'error', message: '__TIMEOUT__' }), timeoutMs);
+        onAbort = () => res({ kind: 'error', message: '__ABORTED__' });
+        opts?.signal?.addEventListener('abort', onAbort, { once: true });
+        if (opts?.signal?.aborted) onAbort();
       });
       const r = await Promise.race([result, timeoutP]);
 
-      // 如果 turn 没结束就拿到结果, 主动 interrupt 避免 server 继续算
-      if (r.kind === 'text' && currentTurnId) {
+      // On failure/timeout, stop the temporary turn instead of leaving it generating.
+      if (r.kind === 'error' && currentTurnId) {
         host.request(Method.TurnInterrupt, { threadId, turnId: currentTurnId }).catch(() => undefined);
       }
 
@@ -3641,8 +3653,16 @@ assertRouteCurrent();
       // 网络/host 启动等未分类失败统一归 'network' (跟 claude 端 mapAnthropicError 一致)
       throw new OneShotError('network', err instanceof Error ? err.message : String(err));
     } finally {
-      try { await subscription?.release(); } catch { /* no-op */ }
-      releaseHost?.();
+      if (timer) clearTimeout(timer);
+      if (onAbort) opts?.signal?.removeEventListener('abort', onAbort);
+      try {
+        // Even a failed unsubscribe must not discard already observed token facts.
+        try { await subscription?.release(); } catch { /* best effort cleanup */ }
+        try { if (observedUsage) await opts?.onUsage?.(observedUsage); }
+        catch { log.warn('oneShot usage observer failed'); }
+      } finally {
+        releaseHost?.();
+      }
     }
   }
 
@@ -3707,6 +3727,9 @@ assertRouteCurrent();
     const hostedEnvironmentId = hosted ? `cindy-device-${randomUUID()}` : undefined;
     // 受邀者(另一个账号)：本机用户的插件、技能、MCP、hooks、connectors、记忆与全局说明不进入会话。
     const hostedGuest = hosted?.guest === true;
+    const nativeRecovery = !reviewMode && !opts.remoteHostId && !opts.deviceHosted && sid
+      ? this.deps.nativeRecoveryObserver?.(sid)
+      : undefined;
     // 受邀者只能用分享给它的那一个供应商(启动来源就是它)：app-server 不升格、不开智能子代理调配，
     // 自定义供应商路由与按模型分流也只留它(见 prepareCodexExtraSpawnConfig 的 deviceHostedGuestProviderId)。
     const guestProviderId = hostedGuest ? hosted?.guestProvider?.providerId : undefined;
@@ -4502,6 +4525,7 @@ assertRouteCurrent();
      * 一起失去。memory flush 侧仍保持原有的「controller 存在才通知」语义。
      */
     const handleCompactBoundary = (): void => {
+      nativeRecovery?.publish('codex', 'contextCompaction', {});
       compactionStormTracker.noteCompaction();
       memoryFlushController?.onCompactBoundary();
     };
@@ -7297,6 +7321,9 @@ assertRouteCurrent();
       };
       acquireHostBindingLeaseIfNeeded();
       assertCurrentHost('thread/start');
+      // Codex answers thread/start only after its own startup work, including an
+      // upstream warm-up request; keep the wait visible apart from host start-up.
+      const threadStartBeganAt = Date.now();
       const resp = await withMcpDiscoveryContext(() => {
           assertCurrentHost('thread/start dispatch');
           return host.request<ThreadStartResponse>(Method.ThreadStart, params, {
@@ -7333,6 +7360,7 @@ assertRouteCurrent();
       threadMayHaveRollout = false;
       log.info('thread/start ok', {
         threadId,
+        elapsedMs: Date.now() - threadStartBeganAt,
         model: resp.model,
         modelProvider: codexThreadModelProviderId ?? null,
         serviceTier: serviceTierState.value ?? null,
@@ -12948,6 +12976,9 @@ assertRouteCurrent();
           terminalErroredTurnIds.add(params.turn.id);
           return;
         }
+        if (nativeRecovery && params.turn.id === currentTurnId && !terminalErroredTurnIds.has(params.turn.id)) {
+          nativeRecovery.publish('codex', 'turn/completed', { status: params.turn.status });
+        }
         handleTurnCompleted(params);
       },
       itemStarted: (params) => {
@@ -13353,6 +13384,9 @@ assertRouteCurrent();
           cancelActiveYieldContinuation('transport error');
         }
         if (!isTransportError && shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        if (nativeRecovery && !isTransportError) {
+          nativeRecovery.publish('codex', 'error', { willRetry: params.willRetry === true });
+        }
         const targetsPendingTurn = isTurnStartPending && currentTurnId === null && Boolean(params.turnId);
         // 空 turnId 的容量拒绝: 过载重投的 RPC 还在飞、而它的 turnStarted 尚未到达时,
         // currentTurnId 是 null 且 isTurnInFlight 是 false —— 上面两条既有判据都不成立,

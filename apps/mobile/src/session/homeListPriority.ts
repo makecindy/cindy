@@ -180,6 +180,19 @@ export function collectHomePriorityContext(
   };
 }
 
+/** Inbox rows represent individual runs, never the group's aggregate signals. */
+export function collectInboxHomePriorityContext(
+  items: readonly RemoteSessionListItem[],
+  runningSessionIds: ReadonlySet<string>,
+  hold: ViewedPriorityHoldState,
+): HomeListPriorityContext {
+  return collectHomePriorityContext(
+    items.flatMap(item => item.automationGroup?.items ?? [item]),
+    runningSessionIds,
+    hold,
+  );
+}
+
 export const __testing = {
   LIVE_TASK_PRIORITY,
   resetHomeViewedPriorityHold() {

@@ -2,7 +2,7 @@
  * 业务代码看到的链路客户端：按对端走 Agent-Net 会话或 Device Link（docs/agent-net-session-plan.md 第 10 节「④ 接口外壳」）。
  *
  * 业务（index.ts、dispatch.ts、Node Host）只拿这个类型，不拿 Device Link 客户端本身。每个方法都明确归到下面一组里，
- * 选路层（agentNetSessionRouting.ts）逐个实现，没有「没写到就落回 Device Link」：Device Link 客户端以后多了方法，
+ * 选路层（sessionRouting.ts）逐个实现，没有「没写到就落回 Device Link」：Device Link 客户端以后多了方法，
  * 要先在这里归组、在选路层写上怎么走，业务才用得到。Device Link 客户端本身也满足这个类型（Agent-Net 关着时它就是全部）。
  * 消息形状（Envelope、InvokePayload 等）是两条路共用的业务协议，会话层原样承载。
  */
