@@ -44,6 +44,7 @@ import type {
   BotImConnectionView,
   BotImFeishuService,
   BotImGroupActivationMode,
+  BotImOwnerPairingRequest,
 } from '../../../shared/botImConnection';
 import { useBotTranslation } from './botPronounContext';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
@@ -51,6 +52,9 @@ import { RemoteOfficialXCard } from './RemoteOfficialXCard';
 import type { BotProfile } from './botStore';
 import {
   addBotImConnection,
+  approveBotImConnectionOwnerPairing,
+  botImConnectionOwnerPairingSupported,
+  dismissBotImConnectionOwnerPairing,
   archiveBotImConnectionLane,
   botImConnectionLaneArchiveSupported,
   adoptPersonalBot,
@@ -71,6 +75,8 @@ import {
 
 const BOT_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{20,}$/;
 const OWNER_USER_ID_PATTERN = /^\d{4,20}$/;
+/** 误填了 @用户名 / 用户名(不是数字 id)。 */
+const TELEGRAM_HANDLE_PATTERN = /^@?[A-Za-z][A-Za-z0-9_]{3,31}$/;
 // Same application launchers as Settings → IM bots.
 const FEISHU_APP_LAUNCHER_URL: Record<BotImFeishuService, string> = {
   feishu: 'https://open.feishu.cn/page/launcher?from=backend_oneclick',
@@ -94,10 +100,15 @@ function ChannelIcon({ channel }: { channel: BotImChannel }) {
 
 type StatusTone = 'connected' | 'pending' | 'off' | 'error';
 
+/** Telegram 已连上但还没有主人: 等主人私聊 bot 后在 Cindy 里确认。 */
+function awaitingOwnerPairing(view: BotImConnectionView): boolean {
+  return view.channel === 'telegram' && view.status.kind === 'connected' && !view.identity.ownerUserId;
+}
+
 function statusPresentation(view: BotImConnectionView): { key: string; tone: StatusTone; detail?: string } {
   switch (view.status.kind) {
     case 'connected':
-      return { key: 'connected', tone: 'connected' };
+      return awaitingOwnerPairing(view) ? { key: 'awaitingPairing', tone: 'pending' } : { key: 'connected', tone: 'connected' };
     case 'connecting':
       return { key: 'connecting', tone: 'pending' };
     case 'offline':
@@ -209,7 +220,7 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-12 text-[var(--text-secondary)]">
                     {identity ? (
                       <>
-                        <span className="min-w-0 truncate">{identity}</span>
+                        <span className="min-w-0 truncate" title={identity}>{identity}</span>
                         <span aria-hidden className="text-[var(--text-tertiary)]">
                           ·
                         </span>
@@ -225,7 +236,7 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                         className="h-1.5 w-1.5 shrink-0 rounded-full"
                         style={{ backgroundColor: STATUS_DOT[status.tone] }}
                       />
-                      <span className="truncate">
+                      <span className="truncate" title={`${t(`bots.channels.status.${status.key}`)}${status.detail ? ` · ${status.detail}` : ''}`}>
                         {t(`bots.channels.status.${status.key}`)}
                         {status.detail ? ` · ${status.detail}` : ''}
                       </span>
@@ -255,6 +266,9 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.uncertain', {
                     count: view.health.uncertainInputs + view.health.uncertainSends,
                   })}</p>
+                ) : null}
+                {awaitingOwnerPairing(view) ? (
+                  <OwnerPairingPanel api={im} view={view} botName={bot.name} deviceName={target.kind === 'local' ? undefined : (target.deviceName ?? '')} onApplied={apply} />
                 ) : null}
                 {(view.channel === 'telegram' || view.channel === 'imessage') && view.botContextId && botImConnectionGroupsSupported(im) ? (
                   <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} refreshVersion={groupVersions[view.id] ?? 0} />
@@ -306,6 +320,196 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
         <BotChannelAddDialog bot={bot} api={im} remoteName={target.channels.canEnterCredentials ? undefined : target.deviceName} onApplied={apply} onOpenChange={setAdding} />
       ) : null}
     </section>
+  );
+}
+
+/**
+ * Telegram 连接还没有主人时的配对小节: 提示主人私聊 bot 拿配对码, 列出私聊过来的请求。
+ * 主人要把 bot 在 Telegram 里回复的码输进来才能确认(按请求者 + 码匹配), 码不在 Cindy 里显示;
+ * 发消息的人不能自己成为主人。远程设置目标只提示到那台电脑上确认。
+ */
+function OwnerPairingPanel({
+  api,
+  view,
+  botName,
+  deviceName,
+  onApplied,
+}: {
+  api: BotImConnectionApi | null;
+  view: BotImConnectionView;
+  botName: string;
+  /** 远程设置目标的电脑名(本机为 undefined; 远程但不知道名字时为空串)。 */
+  deviceName?: string;
+  onApplied: (next: BotImConnectionListPayload) => void;
+}) {
+  const { t } = useBotTranslation();
+  const { confirm } = useConfirmDialog();
+  const [busyUserId, setBusyUserId] = useState<string | null>(null);
+  const [codes, setCodes] = useState<Record<string, string>>({});
+  const [error, setError] = useState<{ userId: string | null; text: string } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const canConfirmHere = deviceName === undefined && botImConnectionOwnerPairingSupported(api);
+  const requests = (view.identity.pendingOwnerPairings ?? []).filter((request) => request.expiresAt > now);
+  const botHandle = view.identity.username ? `@${view.identity.username}` : t('bots.channels.pairing.thisBot');
+
+  // 到期的请求按时从列表里消失(传输层也会在下次读取时清掉)。
+  const nextExpiry = Math.min(...(view.identity.pendingOwnerPairings ?? []).map((request) => request.expiresAt).filter((at) => at > now));
+  useEffect(() => {
+    if (!Number.isFinite(nextExpiry)) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, nextExpiry - Date.now()) + 50);
+    return () => clearTimeout(timer);
+  }, [nextExpiry]);
+
+  const who = (request: BotImOwnerPairingRequest) =>
+    request.username ? `${request.displayName} (@${request.username})` : request.displayName;
+
+  const refresh = () => {
+    void api?.list().then(onApplied).catch(() => undefined);
+  };
+
+  const approve = async (request: BotImOwnerPairingRequest) => {
+    const code = (codes[request.userId] ?? '').trim();
+    if (busyUserId || !code) return;
+    const ok = await confirm({
+      title: t('bots.channels.pairing.confirm.title', { who: who(request) }),
+      description: t('bots.channels.pairing.confirm.description', { userId: request.userId, name: botName }),
+      confirmText: t('bots.channels.pairing.confirm.confirm'),
+      cancelText: t('bots.channels.pairing.confirm.cancel'),
+    });
+    if (!ok) return;
+    setBusyUserId(request.userId);
+    setError(null);
+    try {
+      onApplied(await approveBotImConnectionOwnerPairing(api, view.id, request.userId, code));
+    } catch (failure) {
+      const message = extractIpcError(failure)?.message ?? '';
+      const locked = /OWNER_PAIRING_LOCKED: (\d+)/.exec(message);
+      setError({
+        userId: request.userId,
+        text: locked
+          ? t('bots.channels.pairing.errors.locked', { minutes: Number(locked[1]) })
+          : message.includes('OWNER_PAIRING_EXPIRED')
+            ? t('bots.channels.pairing.errors.expired')
+            : message.includes('OWNER_PAIRING_INVALID')
+              ? t('bots.channels.pairing.errors.invalid')
+              : t('bots.channels.pairing.errors.failed'),
+      });
+      // 请求可能已过期或已被别处确认: 以最新列表为准。
+      refresh();
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
+  const dismiss = async (request: BotImOwnerPairingRequest) => {
+    if (busyUserId) return;
+    setBusyUserId(request.userId);
+    setError(null);
+    try {
+      onApplied(await dismissBotImConnectionOwnerPairing(api, view.id, request.userId));
+    } catch {
+      setError({ userId: request.userId, text: t('bots.channels.pairing.errors.failed') });
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
+  return (
+    <div className="mt-2 flex flex-col gap-2 rounded-xl border border-[var(--border-default)] px-3 py-2">
+      <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">
+        {t('bots.channels.pairing.hint', { bot: botHandle, name: botName })}
+      </p>
+      {requests.length > 0 ? (
+        <ul className="flex flex-col gap-3" aria-label={t('bots.channels.pairing.listLabel')}>
+          {requests.map((request) => (
+            <li key={request.userId} className="flex min-w-0 flex-col gap-2">
+              <div className="min-w-0">
+                <p className="break-words text-13 text-[var(--text-primary)]">
+                  {t('bots.channels.pairing.request', { who: who(request) })}
+                </p>
+                {/* 数字 ID 单独一行、不截断: 长显示名不能把它挤掉。 */}
+                <p className="break-all font-mono text-12 leading-[1.5] text-[var(--text-secondary)]">
+                  {t('bots.channels.pairing.userIdLine', { userId: request.userId })}
+                </p>
+              </div>
+              {canConfirmHere ? (
+                <form
+                  className="min-w-0"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void approve(request);
+                  }}
+                >
+                  <FormField label={t('bots.channels.pairing.codeLabel')}>
+                    {(control) => (
+                      // 输入框与按钮同高(32px)同一行居中; 窄窗口换行时按钮靠右。
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <div className="min-w-0 flex-1 basis-40">
+                          <Input
+                            {...control}
+                            size="sm"
+                            mono
+                            value={codes[request.userId] ?? ''}
+                            onChange={(value) => setCodes((current) => ({ ...current, [request.userId]: value }))}
+                            placeholder={t('bots.channels.pairing.codePlaceholder')}
+                            autoComplete="off"
+                            spellCheck={false}
+                            maxLength={32}
+                            disabled={busyUserId !== null}
+                          />
+                        </div>
+                        <div className="ml-auto flex shrink-0 items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            tone="quiet"
+                            size="md"
+                            compact
+                            disabled={busyUserId !== null}
+                            aria-label={t('bots.channels.pairing.dismissAria', { who: who(request) })}
+                            onClick={() => void dismiss(request)}
+                          >
+                            {t('bots.channels.pairing.dismiss')}
+                          </Button>
+                          <Button
+                            type="submit"
+                            variant="primary"
+                            size="md"
+                            compact
+                            loading={busyUserId === request.userId}
+                            disabled={!(codes[request.userId] ?? '').trim() || (busyUserId !== null && busyUserId !== request.userId)}
+                            aria-label={t('bots.channels.pairing.approveAria', { who: who(request) })}
+                          >
+                            {t('bots.channels.pairing.approve')}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </FormField>
+                </form>
+              ) : null}
+              {error && error.userId === request.userId ? (
+                <p role="alert" className="text-12 leading-[1.5] text-[var(--error-fg)]">
+                  {error.text}
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {!canConfirmHere ? (
+        <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
+          {deviceName
+            ? t('bots.channels.pairing.confirmOnHost', { device: deviceName })
+            : t('bots.channels.pairing.confirmOnHostUnnamed')}
+        </p>
+      ) : null}
+      {error && !requests.some((request) => request.userId === error.userId) ? (
+        <p role="alert" className="text-12 leading-[1.5] text-[var(--error-fg)]">
+          {error.text}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -809,7 +1013,7 @@ function BotChannelAddDialog({
       : channel === 'imessage'
       ? filled(imessage.serverUrl, imessage.ownerAddress, imessage.chatGuids, imessage.listenHost, imessage.listenPort) && (!!editing || filled(imessage.password))
       : channel === 'telegram'
-      ? filled(token, ownerUserId)
+      ? filled(token)
       : channel === 'feishu'
         ? filled(appId, appSecret)
         : channel === 'wecom'
@@ -827,6 +1031,9 @@ function BotChannelAddDialog({
         const trimmedToken = token.trim();
         const trimmedOwner = ownerUserId.trim();
         if (!BOT_TOKEN_PATTERN.test(trimmedToken)) return t('bots.channels.add.errors.invalidToken');
+        // 主人可不填: 保存后私聊 bot 拿配对码, 回这里确认。
+        if (!trimmedOwner) return { botId: bot.id, channel: 'telegram', token: trimmedToken };
+        if (TELEGRAM_HANDLE_PATTERN.test(trimmedOwner)) return t('bots.channels.add.errors.ownerIsHandle');
         if (!OWNER_USER_ID_PATTERN.test(trimmedOwner)) return t('bots.channels.add.errors.invalidOwner');
         return { botId: bot.id, channel: 'telegram', token: trimmedToken, ownerUserId: trimmedOwner };
       }
@@ -1024,8 +1231,8 @@ function BotChannelAddDialog({
                     )}
                   </FormField>
                   <FormField
-                    label={t('bots.channels.add.telegram.ownerLabel')}
-                    hint={t('bots.channels.add.telegram.ownerHint', { name: bot.name })}
+                    label={t('bots.channels.add.telegram.ownerOptionalLabel')}
+                    hint={t('bots.channels.add.telegram.ownerOptionalHint', { name: bot.name })}
                   >
                     {(control) => (
                       <Input

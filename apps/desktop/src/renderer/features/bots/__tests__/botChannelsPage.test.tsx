@@ -409,7 +409,7 @@ describe('BotChannelsPage', () => {
     fireEvent.change(within(dialog).getByLabelText('bots.channels.add.telegram.tokenLabel'), {
       target: { value: 'not a token' },
     });
-    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.telegram.ownerLabel'), {
+    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.telegram.ownerOptionalLabel'), {
       target: { value: '4242' },
     });
     fireEvent.click(submit);
@@ -433,6 +433,88 @@ describe('BotChannelsPage', () => {
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(within(await screen.findByRole('list')).getAllByRole('listitem')).toHaveLength(1);
+  });
+
+  // #9678: 主人 id 改为选填(保存后私聊配对); 误填 @用户名要给出明确提示而不是笼统的「应为数字」。
+  // unit: 真实添加弹窗, 最小输入 = 只填 token / 填 @handle。
+  it('adds a Telegram bot from its token alone and explains an @username typed as the owner id', async () => {
+    const api = installApi({ connections: [] });
+    render(<BotChannelsPage bot={mia} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.add.button' }));
+    const dialog = await screen.findByRole('dialog');
+    const submit = within(dialog).getByRole('button', { name: 'bots.channels.add.confirm' });
+    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.telegram.tokenLabel'), {
+      target: { value: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ' },
+    });
+    expect((submit as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.telegram.ownerOptionalLabel'), {
+      target: { value: '@mia_owner' },
+    });
+    fireEvent.click(submit);
+    expect(await within(dialog).findByRole('alert')).toHaveProperty(
+      'textContent',
+      'bots.channels.add.errors.ownerIsHandle',
+    );
+    expect(api.add).not.toHaveBeenCalled();
+
+    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.telegram.ownerOptionalLabel'), {
+      target: { value: '' },
+    });
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(api.add).toHaveBeenCalledWith({
+        botId: 'bot-1',
+        channel: 'telegram',
+        token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+      }),
+    );
+  });
+
+  // #9678: 没有主人的 Telegram 连接显示「等待配对」与私聊来的请求; 主人要输入 bot 回复的码并二次确认,
+  // 才按「请求者 + 码」调用配对确认。数字 ID 单独一行; 过期的请求不显示; 确认失败后以最新列表为准。
+  // unit: 真实列表组件 + 假 IPC; 最小输入 = 一条有效请求 + 一条已过期请求。
+  it('pairs the Telegram owner only after the code from Telegram is typed and confirmed here', async () => {
+    const now = Date.now();
+    const live = { userId: '4242', displayName: 'A very long Telegram display name that could hide the id', username: 'lance', requestedAt: now, expiresAt: now + 600_000 };
+    const stale = { userId: '5151', displayName: 'Old request', requestedAt: now - 900_000, expiresAt: now - 1 };
+    const unpaired = connection({ identity: { username: 'mia_bot', ownerUserId: null, pendingOwnerPairings: [live, stale] } });
+    const paired = connection({ identity: { username: 'mia_bot', ownerUserId: '4242' } });
+    const api = Object.assign(installApi({ connections: [unpaired] }), {
+      approveOwnerPairing: vi.fn(async ({ code }: { code: string }) => {
+        if (code !== 'K7MQ2P') throw new Error('[PRECONDITION_FAILED] OWNER_PAIRING_INVALID');
+        return { connections: [paired] };
+      }),
+      dismissOwnerPairing: vi.fn(),
+    });
+    render(<BotChannelsPage bot={mia} />);
+    expect(await screen.findByText(/bots\.channels\.status\.awaitingPairing/)).toBeTruthy();
+    expect(screen.getByText('bots.channels.pairing.userIdLine:{"userId":"4242"}')).toBeTruthy();
+    expect(screen.queryByText(/"userId":"5151"/)).toBeNull();
+    const approve = screen.getByRole('button', { name: /^bots\.channels\.pairing\.approveAria/ }) as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+
+    const input = screen.getByLabelText('bots.channels.pairing.codeLabel');
+    fireEvent.change(input, { target: { value: 'AAAAAA' } });
+    fireEvent.click(approve);
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'bots.channels.pairing.errors.invalid');
+    expect(api.approveOwnerPairing).toHaveBeenCalledWith({ id: unpaired.id, userId: '4242', code: 'AAAAAA' });
+    await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
+
+    mocks.confirm.mockResolvedValueOnce(false);
+    fireEvent.change(input, { target: { value: 'K7MQ2P' } });
+    fireEvent.click(approve);
+    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledTimes(2));
+    expect(mocks.confirm).toHaveBeenLastCalledWith(
+      expect.objectContaining({ description: 'bots.channels.pairing.confirm.description:{"userId":"4242","name":"Mia"}' }),
+    );
+    expect(api.approveOwnerPairing).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(approve);
+    await waitFor(() => expect(api.approveOwnerPairing).toHaveBeenLastCalledWith({ id: unpaired.id, userId: '4242', code: 'K7MQ2P' }));
+    await waitFor(() => expect(screen.queryByLabelText('bots.channels.pairing.codeLabel')).toBeNull());
+    expect(screen.getByText(/bots\.channels\.status\.connected/)).toBeTruthy();
+    expect(api.dismissOwnerPairing).not.toHaveBeenCalled();
   });
 
   it('offers the bot already set up in Cindy first, and moves it without asking for credentials', async () => {
@@ -569,7 +651,7 @@ describe('BotChannelsPage', () => {
     fireEvent.change(within(dialog).getByLabelText('bots.channels.add.telegram.tokenLabel'), {
       target: { value: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ' },
     });
-    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.telegram.ownerLabel'), {
+    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.telegram.ownerOptionalLabel'), {
       target: { value: '4242' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'bots.channels.add.confirm' }));
@@ -712,6 +794,18 @@ describe('BotChannelsPage for a teammate on another computer', () => {
     renderRemote(remoteApi(), { x });
     expect(await screen.findByText(/bots\.remoteSettings\.finishOnHost:.*Studio/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'bots.channels.officialX.bind' })).toBeNull();
+  });
+  // #9678 / S1: 远程设置目标没有配对确认入口, 只显示请求者并提示到那台电脑上确认(带电脑名)。
+  it('shows Telegram pairing requests read-only and points to the teammate computer', async () => {
+    const now = Date.now();
+    renderRemote(remoteApi({
+      list: vi.fn(async () => ({ connections: [connection({ identity: { username: 'mia_bot', ownerUserId: null,
+        pendingOwnerPairings: [{ userId: '4242', displayName: 'Lance', requestedAt: now, expiresAt: now + 600_000 }] } })] })),
+    }));
+    expect(await screen.findByText('bots.channels.pairing.userIdLine:{"userId":"4242"}')).toBeTruthy();
+    expect(screen.getByText('bots.channels.pairing.confirmOnHost:{"device":"Studio"}')).toBeTruthy();
+    expect(screen.queryByLabelText('bots.channels.pairing.codeLabel')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^bots\.channels\.pairing\.approveAria/ })).toBeNull();
   });
 });
 

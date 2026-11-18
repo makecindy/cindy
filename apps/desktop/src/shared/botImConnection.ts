@@ -170,9 +170,40 @@ export interface BotImConnectionView extends BotImConnectionRecord {
   identity: {
     /** Telegram bot 用户名 / Discord bot 标签(连上后才有); 其它渠道为 null。 */
     username: string | null;
-    /** 主人用户 id: Telegram / Discord 是填进去的, 企业微信 / 钉钉是首个私聊者(TOFU), 还没人私聊时为 null。 */
+    /**
+     * 主人用户 id: Telegram 是填进去的或经配对确认的, Discord 是填进去的, 企业微信 / 钉钉是首个
+     * 私聊者(TOFU), 还没人私聊时为 null。
+     */
     ownerUserId: string | null;
+    /** Telegram 还没有主人时等本机确认的配对请求; 其它渠道与旧版本没有这个字段。 */
+    pendingOwnerPairings?: BotImOwnerPairingRequest[];
   };
+}
+
+/**
+ * 私聊过 bot、等 Cindy 本机确认成为主人的人(Telegram)。不含配对码: 码只在 Telegram 私聊里,
+ * 主人要把它输进 Cindy 才能确认。
+ */
+export interface BotImOwnerPairingRequest {
+  /** Telegram 数字用户 id。 */
+  userId: string;
+  displayName: string;
+  username?: string;
+  requestedAt: number;
+  expiresAt: number;
+}
+
+export interface BotImOwnerPairingApproveInput {
+  id: string;
+  /** 请求者的 Telegram 数字用户 id。 */
+  userId: string;
+  /** 主人从 Telegram 里抄来的配对码。 */
+  code: string;
+}
+
+export interface BotImOwnerPairingDismissInput {
+  id: string;
+  userId: string;
 }
 
 export interface BotImConnectionListPayload {
@@ -181,7 +212,8 @@ export interface BotImConnectionListPayload {
 
 export type BotImConnectionAddInput =
   | { botId: string; channel: 'imessage'; groupAliases?: string[]; serverUrl: string; password: string; ownerAddress: string; chatGuids: string[]; listenHost: string; listenPort: number }
-  | { botId: string; channel: 'telegram'; token: string; ownerUserId: string }
+  /** ownerUserId 为空 = 等主人私聊 bot 后在 Cindy 里确认配对。 */
+  | { botId: string; channel: 'telegram'; token: string; ownerUserId?: string }
   | {
       botId: string;
       channel: 'feishu';
