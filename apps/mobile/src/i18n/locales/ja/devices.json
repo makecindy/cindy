@@ -5,7 +5,7 @@
   "widgetGuideAndroid": "ホーム画面の空いている場所を長押しし、「ウィジェット」をタップします。\n\nCindy の「サブスクの残り」または「毎日の使用量」をホーム画面にドラッグします。",
   "widgetGuideDismiss": "閉じる",
   "usageOther": "その他",
-  "usageTitle": "利用状況",
+  "usageTitle": "使用量",
   "usageOnlyDevice": "{{name}} のみ",
   "usagePlans": "プランの残り利用枠",
   "usageBudget": "今期の残り予算",
