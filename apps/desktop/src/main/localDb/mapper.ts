@@ -296,6 +296,8 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     planModeEnabled: !!row.planModeEnabled,
     clearedAt: msToIso(row.clearedAt),
     pinnedAt: msToIso(row.pinnedAt),
+    snoozedUntil: msToIso(row.snoozedUntil),
+    snoozedAt: msToIso(row.snoozedAt),
     hiddenAt: msToIso(row.hiddenAt),
     notificationsMuted: !!row.notificationsMuted,
     userSendAt: msToIso(row.userSendAt),
@@ -523,6 +525,7 @@ export function sessionPatchToRow(
     clearedAt?: string | null;
     pinnedAt?: string | null;
     notificationsMuted?: boolean;
+    snoozedUntil?: string | null;
     status?: SessionStatus;
     orcaRole?: OrcaRole | null;
     extraDirs?: string[];
@@ -554,8 +557,16 @@ export function sessionPatchToRow(
   if (patch.contextWindow !== undefined) out.contextWindow = patch.contextWindow;
   if (patch.clearedAt !== undefined) out.clearedAt = isoToMs(patch.clearedAt);
   if (patch.pinnedAt !== undefined) out.pinnedAt = isoToMs(patch.pinnedAt);
+  if (patch.snoozedUntil !== undefined) {
+    out.snoozedUntil = isoToMs(patch.snoozedUntil);
+    out.snoozedAt = patch.snoozedUntil === null ? null : Date.now();
+  }
   if (patch.notificationsMuted !== undefined) out.notificationsMuted = !!patch.notificationsMuted;
-  if (patch.status !== undefined) out.status = patch.status;
+  if (patch.status !== undefined) {
+    out.status = patch.status;
+    out.snoozedUntil = null;
+    out.snoozedAt = null;
+  }
   if (patch.orcaRole !== undefined) out.orcaRole = patch.orcaRole;
   if (patch.extraDirs !== undefined) out.extraDirs = safeStringify(patch.extraDirs);
   if (patch.writableDirs !== undefined) out.writableDirs = safeStringify(patch.writableDirs);

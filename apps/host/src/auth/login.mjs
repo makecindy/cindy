@@ -95,9 +95,11 @@ function listenOnLoopback(server) {
  *   openBrowser: (url: string) => Promise<void>,
  *   method?: string,
  *   onAuthorizeUrl?: (url: string) => void,
+ *   onSignedIn?: (accessToken: string) => Promise<void>,
  *   signal?: AbortSignal,
  *   now?: () => number,
  * }} deps
+ * `onSignedIn` gets the access token of this explicit sign-in (held in memory only), after the session is saved.
  * @returns {Promise<{authenticated: true, realm: 'cn' | 'global', method: string}>}
  */
 export async function runHostLogin(deps) {
@@ -129,6 +131,7 @@ export async function runHostLogin(deps) {
     try { await deps.persistSession(record, pair.membership); }
     catch (error) { await endRefusedSession(deps, pair.accessToken); throw error; }
   } else deps.store.write(AUTH_SESSION_KEY, record);
+  if (deps.onSignedIn && typeof pair.accessToken === 'string' && pair.accessToken) await deps.onSignedIn(pair.accessToken);
   return { authenticated: true, realm: deps.region, method: method.providerOrConnectionId ?? method.type };
 }
 

@@ -178,6 +178,14 @@ because the app is signed. Building and isolated probing must not restart the ac
 ## Preparation and updates
 
 Each `prepare` uses a **new output directory**, preserving existing builds and dirty source worktrees.
+
+When a Cindy Chrome seed declares a native host, the composed plugin repository's
+`scripts/build-browser-native.mjs` builds the connectors before the seed hash is
+recorded. Install the Go version pinned by that script on the build machine
+(`go` on PATH or `CINDY_BUILD_GO`). A directory override must supply its own
+built connectors. Missing connectors block preparation and verification of
+older candidates. After a source change, use the plugin detail page to select
+the browser extension and check the connection with the user-browser backend.
 It fully paginates the open PR list, orders selected stacked PRs by dependency, fetches exact main/PR
 commit IDs and records them. Fork PRs use their exact SHA, not a same-named local branch. Local merge
 commits use the developer's Git identity and Signed-off-by; no branch is pushed and no PR is created.

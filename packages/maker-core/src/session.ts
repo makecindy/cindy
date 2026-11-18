@@ -190,6 +190,7 @@ export type SessionStartupPreferences = Readonly<Pick<StartSessionOptions,
   'userPrompt' | 'makerMemoryEnabled' | 'displayReasoning'>>;
 
 export interface SessionOptions {
+  beforeTurn?: (session: Session) => Promise<void>;
   hostStartupPreferences?: SessionStartupPreferences;
   id: string;
   /** 与 Agent MCP context 同源的本次内存实例代号；省略时由 Session 自铸。 */
@@ -655,7 +656,10 @@ export class Session {
   private turnControlState: TurnControlState | null = null;
   private readonly asyncUserQuestions: AsyncUserQuestions;
 
+  private readonly beforeTurn?: (session: Session) => Promise<void>;
+
   constructor(opts: SessionOptions) {
+    this.beforeTurn = opts.beforeTurn;
     this.hostStartupPreferences = opts.hostStartupPreferences
       ? Object.freeze({ ...opts.hostStartupPreferences }) : undefined;
     this.id = opts.id;
@@ -1051,6 +1055,7 @@ export class Session {
       const cancelledBeforePreparation = finishCancelledBeforeDispatch();
       if (cancelledBeforePreparation !== null) return cancelledBeforePreparation;
       if (afterTurnReserved) await afterTurnReserved();
+      await this.beforeTurn?.(this);
       const cancelledAfterReservation = finishCancelledBeforeDispatch();
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);
@@ -1943,6 +1948,12 @@ export class Session {
     return await this.handle.readMcpServerTools?.(serverName) ?? null;
   }
 
+  async callNativeToolCatalog(method: string, args: unknown[]): Promise<unknown> {
+    this.ensureActive();
+    if (!this.handle.callNativeToolCatalog) throw new Error('UNSUPPORTED_CAPABILITY');
+    return this.handle.callNativeToolCatalog(method, args);
+  }
+
   /**
    * 当前 session 生命周期状态 ('active' / 'aborting' / 'closed' / 'error')。
    * 这是内存里的 SDK 子进程视角, 不持久化。区分:
@@ -2381,7 +2392,7 @@ export class Session {
    * 不写 DB —— 持久化由调用方 (main IPC 协调 local-db:sessions:update) 负责,
    * 跟 setModel/setEffort 双 IPC 协调先例一致。
    */
-  async setExtraDirs(dirs: string[], libraryRoot?: string | null): Promise<void> {
+  async setExtraDirs(dirs: string[], libraryRoot?: string | null, remote?: { hostId: string; directories: string[] }): Promise<void> {
     this.ensureActive();
     if (!this.capabilities.extraDirs.supported) {
       throw new NotSupportedError('extraDirs', this.capabilities.extraDirs);
@@ -2389,13 +2400,13 @@ export class Session {
     if (!this.handle.setExtraDirs) {
       throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setExtraDirs(dirs, libraryRoot);
+    await this.handle.setExtraDirs(dirs, libraryRoot, remote);
   }
 
   /**
    * 运行时覆盖附加可读写目录。不写 DB；持久化由 host 与 setExtraDirs 相同地协调。
    */
-  async setWritableDirs(dirs: string[]): Promise<void> {
+  async setWritableDirs(dirs: string[], remote?: { hostId: string; directories: string[] }): Promise<void> {
     this.ensureActive();
     const capability = this.capabilities.writableDirs;
     if (!capability?.supported) {
@@ -2407,7 +2418,7 @@ export class Session {
     if (!this.handle.setWritableDirs) {
       throw new NotSupportedError('writableDirs', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setWritableDirs(dirs);
+    await this.handle.setWritableDirs(dirs, remote);
   }
 
   // ── Rewind (Stage 2 C2) ────────────────────────────────────────────────────

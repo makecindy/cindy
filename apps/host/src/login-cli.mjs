@@ -25,6 +25,7 @@ import { configureAppDataDir, configureUserDataDir } from '../../desktop/src/mai
 import { createDesktopScanner } from './agent/profile-coexistence.ts';
 import { allowSkillProjectionOwnerCommit, commitLoginSessionAndOwner } from './agent/skill-projection-owner.ts';
 import { discoverHostOwner, resolveHostAppDataDir } from './profile-path.mjs';
+import { restoreDeviceLinkRegistration } from './auth/device-link-registration.mjs';
 import { createCredentialStore } from './credentials/store.mjs';
 import { resolveHostDataDir, resolveHostRegion } from './profile-path.mjs';
 
@@ -61,6 +62,7 @@ export function serveLoginAdmission(status) {
   };
 }
 import { hostAuthFetch } from './auth-fetch.mjs';
+import { hostRuntimeLayout } from './runtime-layout.mjs';
 
 
 /** Open the system browser without blocking the login flow on its exit. */
@@ -160,6 +162,19 @@ export async function runLoginCommand(argv, io = {}) {
       }
     },
     method,
+    // A Host removed from the account in Device Link registers again only with this fresh sign-in (serve starts from a
+    // refreshed token, which cannot): say hello once with it (auth/device-link-registration.mjs).
+    onSignedIn: async (token) => {
+      if (!endpoints.deviceLinkApiBaseUrl) return;
+      // Started while the browser sign-in was open: a second hello with this device would replace its live connection.
+      if ((await readHostProcessStatus(userDataDir)).running !== false) return;
+      let registration = 'failed';
+      try {
+        registration = await restoreDeviceLinkRegistration({ apiBaseUrl: endpoints.deviceLinkApiBaseUrl, token,
+          version: hostRuntimeLayout().version });
+      } catch { /* The sign-in is saved either way. */ }
+      if (registration !== 'registered') err('This computer could not register with remote connections now; start Cindy Host and try signing in again if it stays unavailable.');
+    },
   });
   out(`Signed in (${result.realm}). Cindy host will reuse this login on restart.`);
   // serve keeps its current session until it restarts (it does not adopt a new one while running).

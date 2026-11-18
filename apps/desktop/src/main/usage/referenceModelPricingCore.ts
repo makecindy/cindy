@@ -8,7 +8,7 @@
  * the Desktop window broadcast (broadcastReferenceModelPricing) and re-exports this module.
  */
 
-import type { AgentKind } from '@cindy/model-providers';
+import type { AgentKind, Catalog } from '@cindy/model-providers';
 
 import {
   getModelPriceQuote,
@@ -38,13 +38,18 @@ export const REFERENCE_MODEL_PRICING_CHANGED_CHANNEL = 'usage:reference-model-pr
  * 与 BYOK 价格不带生效期，照常加入。批量按天取价的调用方传同一份 `overrides` 快照。
  */
 export function getReferenceModelPricing(
-  options: { at?: string | Date; overrides?: ModelPriceOverridesSnapshot } = {},
+  options: {
+    at?: string | Date;
+    overrides?: ModelPriceOverridesSnapshot;
+    /** Providers to quote per model; defaults to the active catalog's. */
+    providers?: Catalog['providers'];
+  } = {},
 ): ModelPricingCatalog {
   const { at } = options;
   const catalog = getActiveCatalog();
   const registry = catalog.modelRegistry;
   const pricing = registryPricingCatalog(registry, at);
-  for (const provider of catalog.providers) {
+  for (const provider of options.providers ?? catalog.providers) {
     // Connection-local prices belong to this account and engine, including OAuth
     // discovery quotes. Publishing only Registry routes dropped them all.
     if (provider.source === 'user' && provider.id !== 'xd') {

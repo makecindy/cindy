@@ -61,6 +61,8 @@ export class ClusterStore implements RelayStore {
     return store;
   }
   network(id: string): NetworkRecord | undefined { return Object.hasOwn(this.state.networks, id) ? structuredClone(this.state.networks[id]) : undefined; }
+  /** As `Store.peekNetwork`: `write` always puts in a new record object, so a reference taken here stays a consistent snapshot. */
+  peekNetwork(id: string): Readonly<NetworkRecord> | undefined { return Object.hasOwn(this.state.networks, id) ? this.state.networks[id] : undefined; }
   networks(): NetworkRecord[] { return Object.values(structuredClone(this.state.networks)); }
   networkIds(): string[] { return Object.keys(this.state.networks); }
   /** A targeted read barrier before control-plane authorization. Notifications may arrive later

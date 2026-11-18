@@ -5519,8 +5519,19 @@
       "title": "Saisie des messages",
       "sendShortcut": {
         "label": "Utiliser {{shortcut}} pour envoyer",
-        "hint": "Activé, {{shortcut}} envoie les messages. Désactivé, Enter envoie les messages et Shift+Enter insère un saut de ligne.",
-        "ariaLabel": "Utiliser {{shortcut}} pour envoyer les messages"
+        "hint": "Enter envoie le message. Shift+Enter insère un saut de ligne.",
+        "ariaLabel": "Utiliser {{shortcut}} pour envoyer les messages",
+        "hintModifierEnter": "{{shortcut}} envoie le message. Enter insère un saut de ligne."
+      },
+      "followUp": {
+        "label": "Envoi pendant l'exécution",
+        "hintQueue": "Pendant l'exécution de la tâche, le bouton d'envoi et {{send}} mettent le message en file d'attente.",
+        "hintSteer": "Pendant l'exécution de la tâche, le bouton d'envoi et {{send}} réorientent la tâche en cours.",
+        "ariaLabel": "Envoi pendant l'exécution de la tâche",
+        "options": {
+          "queue": "File d'attente",
+          "steer": "Réorienter"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -6554,7 +6565,8 @@
           "defaultProjectFullAccessWarning": "Le projet par défaut « {{name}} » est en Accès complet : une @mention depuis n'importe quel groupe s'y exécute avec un accès complet.",
           "sharedSettingsPointer": "Les projets, modèles et autorisations sont partagés par tous les bots officiels.",
           "sharedSettingsPointerAction": "Ouvrir les réglages",
-          "workspacesBoundCount_many": "{{count}} projets"
+          "workspacesBoundCount_many": "{{count}} projets",
+          "workspacesCardDescriptionWithPlugins": "Partagé par tous les bots officiels et les plugins de messagerie. Les projets viennent de la barre latérale : créez-les, renommez-les ou retirez-les là-bas. Les modifications faites avec /model dans une conversation apparaissent aussi ici. Les modèles et autorisations modifiés pour une seule conversation dans un plugin ne sont pas concernés."
         },
         "binding": {
           "copyLink": "Copier le lien",
@@ -6866,6 +6878,7 @@
           "latency": "Latence",
           "lastSeen": "Dernière connexion",
           "controlling": "Contrôle cet ordinateur",
+          "protocol": "Connexion",
           "rttNote": "dernière mesure",
           "manage": "Gérer l’appareil…",
           "linkStatus": "Vers {{name}}",
@@ -7033,7 +7046,8 @@
         "replaced": "Connexion remplacée par une autre instance de cet appareil",
         "too-many-connections": "Limite de connexions atteinte pour ce compte",
         "version-mismatch": "Version de protocole incompatible : veuillez mettre à jour l'application",
-        "unstable": "La connexion se coupe et se rétablit sans cesse : vérifiez le réseau, ou redémarrez Cindy si le problème persiste"
+        "unstable": "La connexion se coupe et se rétablit sans cesse : vérifiez le réseau, ou redémarrez Cindy si le problème persiste",
+        "agent-net-relay-down": "Relais Agent-Net injoignable, reconnexion en cours. Les ordinateurs connectés directement fonctionnent toujours ; les autres appareils ne peuvent pas se connecter pour le moment"
       },
       "refresh": "Actualiser",
       "empty": "Aucun autre appareil pour l'instant. Connectez-vous à {{appName}} avec le même compte sur un autre ordinateur et il apparaîtra ici.",
@@ -7089,11 +7103,13 @@
       "beta": "Bêta",
       "groups": {
         "cindy": "Officiel",
-        "personal": "Personnel"
+        "personal": "Personnel",
+        "plugins": "Plugins"
       },
       "tips": {
         "cindy": "Fourni et maintenu par Cindy. Inutile de créer un bot ou de fournir des identifiants : suivez les étapes de connexion pour commencer.",
-        "personal": "Utilisez votre propre compte ou bot et gérez vous-même les identifiants nécessaires. Chaque canal conserve son propre compte, ses autorisations et ses paramètres."
+        "personal": "Utilisez votre propre compte ou bot et gérez vous-même les identifiants nécessaires. Chaque canal conserve son propre compte, ses autorisations et ses paramètres.",
+        "plugins": "Entrées de messagerie fournies par les plugins installés. La connexion et l'association se font sur la page du plugin. Les projets, modèles et autorisations suivent « Projets et modèles » par défaut et peuvent être modifiés par conversation dans le plugin."
       },
       "defaults": {
         "title": "Configuration des nouvelles conversations",
@@ -7125,6 +7141,10 @@
         },
         "groupPermissionLabel": "Mode d'autorisation des nouvelles tâches de groupe",
         "groupPermissionDescription": "Mode d'autorisation utilisé pour chaque tâche créée dans une conversation de groupe : @bot ouvrant un sujet, /new et /ctr l'utilisent tous ; le mode d'autorisation ci-dessus ne s'applique qu'aux messages privés. Par défaut : approbation automatique. Le contexte de groupe peut contenir du contenu contrôlé par les membres. Choisir Accès complet exécute les actions sans confirmation à chaque étape : ne le choisissez que pour des groupes de confiance. Les modifications s'appliquent aux tâches créées ensuite ; pour une tâche existante, changez de mode avec /permission dans le groupe."
+      },
+      "plugins": {
+        "rowHint": "La connexion, l'association et les réglages de chaque conversation se trouvent sur la page du plugin.",
+        "open": "Ouvrir le plugin"
       }
     },
     "shortcuts": {
@@ -8360,6 +8380,8 @@
         "subscribeMessageDetail": "Reçoit les messages enregistrés et les réponses de l’IA. Les pièces jointes passent par une lecture et un transfert distincts.",
         "subscribeToolExecution": "Événements d’exécution des outils",
         "subscribeToolExecutionDetail": "Reçoit les noms, entrées, résultats et erreurs des outils. Observe sans modifier l’exécution.",
+        "subscribeNativeRecovery": "Événements natifs de récupération",
+        "subscribeNativeRecoveryDetail": "Reçoit l’état du moteur lors des nouvelles tentatives, de la compaction du contexte et de l’arrêt des tâches.",
         "subscribeTaskState": "Événements d’état des tâches",
         "subscribeTaskStateDetail": "Reçoit les changements d’exécution, d’attente, de fin, d’archivage et de masquage des tâches.",
         "subscribeActivity": "Observe quand l'IA réfléchit et quand elle attend votre intervention",
@@ -8575,6 +8597,24 @@
         "openInSidebar": "Ouvrir dans la barre latérale",
         "panelPageHosted": "S'ouvre depuis la page Plugins · se ferme lorsque vous la quittez",
         "panelNone": "Ce plugin n'a pas de panneau",
+        "githubRelease": {
+          "title": "Mises à jour du plugin",
+          "installed": "Version installée {{version}}",
+          "upstream": "Version publiée {{version}}",
+          "prerelease": "Préversion",
+          "check": "Rechercher des mises à jour",
+          "update": "Télécharger et installer",
+          "connect": "Se connecter à GitHub",
+          "checking": "Recherche de mises à jour…",
+          "updating": "Téléchargement et installation…",
+          "available": "Une mise à jour est disponible.",
+          "current": "La version installée est à jour.",
+          "updated": "Plugin mis à jour.",
+          "empty": "Aucune version installable disponible.",
+          "sign-in": "Connectez-vous à GitHub pour rechercher des mises à jour.",
+          "forbidden": "Ce compte GitHub ne peut pas lire le dépôt privé.",
+          "unavailable": "Impossible de vérifier ou d’installer la mise à jour. Réessayez."
+        },
         "customSlotTitle": "Zone de paramètres personnalisés du plugin",
         "dangerTitle": "Désinstaller le plugin",
         "infoContents": "Contenu",
@@ -9951,6 +9991,41 @@
       },
       "providerTooltip": "Le fournisseur actuellement sélectionné pour la session ; vide si aucun n'est épinglé.",
       "tokensTooltip": "Ne compte que les jetons utilisés par cette session sur {{range}}."
+    },
+    "auxiliary": {
+      "title": "Utilisation auxiliaire",
+      "label": "Auxiliaire",
+      "purpose": "Usage",
+      "requests": "Requêtes enregistrées",
+      "description": "Inclus dans le total des tokens. Seule l’utilisation renvoyée par le fournisseur est enregistrée ; les données absentes et les requêtes passées ne sont pas estimées.",
+      "sources": {
+        "title": "Génération de titres",
+        "task-summary": "Résumés des tâches",
+        "prompt-prediction": "Suggestions de saisie",
+        "working-status": "État du travail",
+        "help": "Aide",
+        "bot-creation": "Création de compagnons",
+        "bot-opening": "Salutations des compagnons",
+        "group-planning": "Planification du groupe",
+        "ambient-reply": "Décisions de réponse",
+        "auto-review": "Revue automatique",
+        "tool-loop-review": "Revue des boucles d’outils",
+        "memory-review": "Revue de la mémoire",
+        "git-summary": "Résumés des modifications",
+        "hook-generation": "Scripts d’automatisation",
+        "automation-verification": "Vérification des imports",
+        "plugin-text": "Texte des extensions",
+        "voice-dialogue": "Conversations vocales",
+        "voice-exit": "Décisions de fin d’appel",
+        "voice-refinement": "Amélioration du texte vocal",
+        "dictionary-learning": "Apprentissage du dictionnaire",
+        "embedding-query": "Recherche vectorielle",
+        "embedding-index": "Indexation vectorielle",
+        "web-search": "Recherche web",
+        "provider-probe": "Tests de connexion",
+        "vision-bridge": "Vision Bridge",
+        "auxiliary": "Autres requêtes auxiliaires"
+      }
     }
   },
   "usageDashboard": {
@@ -10901,6 +10976,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "Impossible de charger les amis",
+    "rosterReload": "Recharger les amis",
     "avatarStatus": {
       "awaiting": "Attend votre confirmation",
       "error": "Requiert votre attention",
@@ -11356,6 +11433,7 @@
       "unavailableTitle": "Cette conversation de groupe n'est plus disponible",
       "unavailableDescription": "Elle a peut-être été supprimée. Revenez à Amis pour ouvrir une autre conversation de groupe ou un autre ami.",
       "sidebar": {
+        "threadReply": "Réponse dans le fil",
         "title": "Conversations de groupe",
         "empty": "Aucun message",
         "preview": "{{name}} : {{text}}",
@@ -11692,6 +11770,7 @@
           "sharedReplyFrom": "A partagé une réponse de fil de {{name}}",
           "sharedReply": "A partagé une réponse de fil",
           "edited": "Modifié",
+          "replyNotFound": "Cette réponse est introuvable.",
           "sourceUnavailable": "La réponse d'origine a été supprimée ou ne vous est pas accessible.",
           "viewThread": "Voir le fil",
           "viewInMain": "Voir dans la conversation principale",
@@ -13821,9 +13900,8 @@
     "sendButton": {
       "send": "Envoyer le message",
       "queue": "Mettre le message en file d'attente",
-      "queueTooltip": "Cliquez pour mettre en file d'attente ; appuyez sur {{shortcut}} pour réorienter la tâche sans l'interrompre",
-      "queueTooltipSendMode": "Cliquez pour mettre en file d'attente ; appuyez sur {{shortcut}} pour envoyer ce message",
-      "stop": "Arrêter la génération"
+      "stop": "Arrêter la génération",
+      "steer": "Réorienter la tâche en cours"
     },
     "pluginSetup": {
       "account": {
@@ -14727,6 +14805,13 @@
       "runningWithWorktree_one": "Attendez sa fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
       "runningWithWorktree_other": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
       "runningWithWorktree_many": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences."
+    },
+    "followUpHint": {
+      "queueDefault": "Les messages envoyés pendant l'exécution de la tâche sont mis en file d'attente.",
+      "steerDefault": "Les messages envoyés pendant l'exécution de la tâche réorientent la tâche en cours.",
+      "switchToSteer": "Réorienter par défaut",
+      "switchToQueue": "File d'attente par défaut",
+      "dismiss": "Fermer l'astuce"
     }
   },
   "onboarding": {
@@ -15060,6 +15145,8 @@
       "subtitle_many": "{{count}} messages sélectionnés"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "cindy_helper est activé, mais indisponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis.",
+      "codexHelperUnverified": "Impossible de vérifier si cindy_helper est disponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis.",
       "requestFormatError": "L'application a envoyé une requête non valide : cette réponse n'a donc pas pu aboutir.",
       "replyFailed": "Impossible de terminer la réponse",
       "retryTitle": "Renvoyer le dernier message",
@@ -16249,7 +16336,8 @@
         "replaced": "Cette connexion a été remplacée par une autre instance du même appareil : reconnexion…",
         "too-many-connections": "Trop d'appareils en ligne pour ce compte : le serveur a refusé la connexion",
         "version-mismatch": "La version du protocole ne correspond pas à celle du serveur : mettez à jour l'application et réessayez",
-        "unstable": "Cet ordinateur perd et rétablit sans cesse sa connexion : les actions à distance risquent d'expirer à répétition. Vérifiez le réseau ou redémarrez Cindy et réessayez"
+        "unstable": "Cet ordinateur perd et rétablit sans cesse sa connexion : les actions à distance risquent d'expirer à répétition. Vérifiez le réseau ou redémarrez Cindy et réessayez",
+        "agent-net-relay-down": "Cet ordinateur ne joint pas le relais Agent-Net et se reconnecte. Les actions à distance échouent si l'autre ordinateur n'est pas connecté directement"
       }
     },
     "common": {
@@ -16475,7 +16563,8 @@
         "project": "Projet",
         "flat": "Liste simple",
         "device": "Appareil",
-        "dialogue": "Conversation"
+        "dialogue": "Conversation",
+        "automation": "Automatisation"
       },
       "filterGroupByDeviceManualTip": "Le regroupement par appareil n'est pas disponible en tri manuel",
       "deviceGroup": {
@@ -16829,6 +16918,7 @@
       "groupSummary": {
         "project": "Projet",
         "dialogue": "Conversation",
+        "automation": "Automatisation",
         "device": "Appareil"
       },
       "taskStatusHeading": "Statut des sessions",
@@ -16841,6 +16931,37 @@
         "priority": "Priorité",
         "activity": "Activité récente",
         "created": "Date de création"
+      },
+      "inbox": {
+        "thisEvening": "Ce soir",
+        "tomorrow": "Demain",
+        "nextWeek": "La semaine prochaine",
+        "custom": "Personnaliser…",
+        "wakeAt": "Date et heure de rappel",
+        "timeZone": "Heure locale ({{zone}})",
+        "invalidTime": "Choisissez une date et une heure futures dans l’année à venir.",
+        "inbox": "À traiter",
+        "working": "En cours",
+        "snoozed": "Reportées",
+        "archived": "Traitées",
+        "snooze": "Reporter la tâche",
+        "complete": "Terminé",
+        "wake": "Réafficher maintenant",
+        "restore": "Restaurer la tâche",
+        "process": "Marquer comme traitée (archiver)",
+        "empty": "La boîte de réception est vide",
+        "snoozeFailed": "Impossible de conserver l’heure du report. Vérifiez la connexion et mettez à jour l’ordinateur hébergeant cette tâche.",
+        "hours": "Dans {{count}} heures",
+        "hours_one": "Dans {{count}} heure",
+        "hours_many": "Dans {{count}} heures",
+        "hours_other": "Dans {{count}} heures"
+      },
+      "taskListMode": {
+        "heading": "Mode des tâches",
+        "tasks": "Liste des tâches",
+        "inbox": "Boîte de réception",
+        "enterInbox": "Passer en mode boîte de réception",
+        "leaveInbox": "Passer en mode liste des tâches"
       }
     },
     "rename": {
@@ -17135,6 +17256,7 @@
         "menuSave": "Enregistrer",
         "menuInsertTable": "Insérer un tableau",
         "externalChangeBlocked": "Le fichier a été modifié sur le disque. Enregistrement automatique suspendu ; enregistrez manuellement pour l'écraser.",
+        "targetChanged": "Le fichier pointe désormais vers un autre emplacement. Votre brouillon est toujours dans l’éditeur. Copiez-le avant de rouvrir le fichier.",
         "tableMenu": {
           "addRowAbove": "Ajouter une ligne au-dessus",
           "addRowBelow": "Ajouter une ligne en dessous",
@@ -19917,7 +20039,8 @@
           "expired": "Expiré",
           "voided": "Annulé"
         }
-      }
+      },
+      "viewUsage": "Voir la consommation"
     },
     "orders": {
       "title": "Historique des commandes",
@@ -21611,6 +21734,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "Fermer",
+    "taskInbox": {
+      "title": "Découvrir la boîte de réception",
+      "lead": "Les tâches se rangent d’elles-mêmes dans À traiter, En cours, Reportées et Traitées. La meilleure habitude : vider la boîte de réception au fil de l’eau. Cliquez sur Terminé quand une tâche est réglée, reportez ce qui peut attendre.",
+      "pending": {
+        "title": "À traiter",
+        "body": "Les tâches arrivent ici quand elles ont un résultat ou attendent votre réponse."
+      },
+      "done": {
+        "title": "Terminé",
+        "body": "C’est réglé ? Un clic sur Terminé la range dans Traitées. Elle revient d’elle-même s’il y a du nouveau."
+      },
+      "snooze": {
+        "title": "Reportées",
+        "body": "Pas le temps maintenant ? Choisissez une heure : la tâche reviendra dans À traiter."
+      },
+      "start": "Commencer",
+      "note": "Revenez à la liste des tâches à tout moment avec le bouton en haut de la barre latérale."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Bienvenue dans Cindy",
@@ -21895,6 +22039,7 @@
     "removeTitle": "Retirer {{name}} ?",
     "removeDescription": "Cindy n’attribuera plus de tâches à ce compte. La connexion CLI et l’historique des conversations restent sur cet ordinateur.",
     "failed": "Impossible de lire ou de mettre à jour le compte. Vérifiez la connexion CLI et le réseau, puis réessayez.",
+    "unreachable": "Impossible de joindre le service du compte : l’état de la connexion ne peut pas être confirmé. Vérifiez le réseau, puis réessayez.",
     "openDirectory": "Ouvrir le dossier du compte",
     "openDirectoryFailed": "Impossible d’ouvrir le dossier du compte. Il a peut-être été déplacé ou supprimé.",
     "loginAgain": "Se reconnecter",
@@ -22088,6 +22233,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "Télécharger ce dépôt sur cet ordinateur ?",
+    "credentialNotice": "Pour un dépôt privé, Cindy peut utiliser le compte connecté sur cet ordinateur.",
+    "saveTo": "Enregistrer dans",
+    "confirmImport": "Confirmer l’importation",
+    "confirmSshTitle": "Autoriser ce projet à accéder aux répertoires SSH suivants ?",
+    "sshHost": "Hôte SSH",
+    "readWriteAccess": "Lecture et écriture",
+    "readAccess": "Lecture seule",
+    "confirmAccess": "Autoriser l’accès",
     "autoLoading": "Recherche de l’icône…",
     "autoNone": "Les initiales du nom du projet sont utilisées.",
     "autoSource": "Source",
@@ -22127,7 +22281,42 @@
     "discard": "Abandonner",
     "colors": {
       "default": "Par défaut (selon le thème)"
-    }
+    },
+    "directories": "Dossiers du projet",
+    "directoriesHint": "S’applique à toutes les tâches de ce projet dès le prochain tour. Les dossiers propres à chaque tâche sont conservés.",
+    "removeDirectory": "Retirer le dossier",
+    "directoryPath": "Chemin complet du dossier",
+    "addDirectory": "Ajouter un dossier",
+    "browseDirectory": "Parcourir les dossiers",
+    "mainDirectory": "Dossier principal",
+    "createTitle": "Nouveau projet",
+    "createAction": "Créer le projet",
+    "repository": "URL du dépôt",
+    "repositoryHint": "Compatible avec GitHub, GitLab et les autres dépôts Git via HTTPS ou SSH.",
+    "autoDirectory": "Sans dossier choisi, création dans {{path}}. Un numéro est ajouté si le nom existe.",
+    "cloning": "Clonage du dépôt…",
+    "invalidRepository": "Saisissez une URL de dépôt GitHub, GitLab ou Git valide.",
+    "createFailed": "Impossible de créer le projet. Vérifiez les droits en écriture, l’URL et l’accès Git de cet ordinateur. Le dossier de clonage doit être vide.",
+    "createNamePlaceholder": "Nom du projet",
+    "createNameHint": "Donnez un nom à votre projet pour commencer.",
+    "createFromRepository": "Créer depuis un dépôt de code",
+    "createBlank": "Passer à un projet vide",
+    "source_blank": "Projet vide",
+    "source_existing": "Ouvrir un dossier existant",
+    "source_repository": "Importer un dépôt de code",
+    "sourceHint_blank": "Saisissez un nom. Le dossier sera créé automatiquement.",
+    "sourceHint_existing": "Choisissez un dossier de projet sur cet ordinateur.",
+    "sourceHint_repository": "Collez un lien de dépôt pour le télécharger sur cet ordinateur.",
+    "source": "Origine du projet",
+    "sourceShort_blank": "Nouveau",
+    "sourceShort_existing": "Dossier",
+    "sourceShort_repository": "Dépôt",
+    "automaticMain": "Principal · Automatique",
+    "source_local": "Dossier local",
+    "sourceShort_local": "Dossier local",
+    "sourceHint_local": "Saisissez un nom pour créer un dossier ou choisissez un dossier existant.",
+    "chooseExistingFolder": "Choisir un dossier existant",
+    "changeMainDirectory": "Modifier"
   },
   "taskManagement": {
     "scope": "Uniquement pour ce compte sur cet ordinateur.",
@@ -22176,6 +22365,19 @@
       "network": "Connexion perdue, nouvelle tentative…",
       "timeout": "Délai de connexion dépassé, nouvelle tentative…",
       "server": "Serveur occupé, nouvelle tentative…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "Élargir les autorisations de cette conversation ?",
+    "message": "Autoriser « {{name}} » à utiliser « {{mode}} » pour « {{conversation}} » dans le projet « {{project}} » ?",
+    "detail": "C'est plus large que le réglage du projet de messagerie ({{projectMode}}). Si vous l'autorisez, ce plugin pourra utiliser ce niveau d'autorisation dans ce projet, uniquement pour ses propres sessions. Vous pouvez revenir au réglage de messagerie dans le plugin à tout moment.",
+    "groupWarning": "D'autres membres peuvent aussi envoyer des messages dans ce groupe. Plus l'autorisation est large, moins d'actions vous demandent confirmation : assurez-vous de faire confiance à tous les membres du groupe.",
+    "allow": "Autoriser",
+    "cancel": "Annuler",
+    "modes": {
+      "ask": "Autorisations par défaut",
+      "auto": "Revue auto",
+      "bypassPermissions": "Accès complet"
     }
   }
 }

@@ -2131,32 +2131,43 @@ describe('translateItemNotification collabAgentToolCall', () => {
     });
   });
 
-  it('keeps wait/send/resume control updates live-only', async () => {
-    const q = createAsyncQueue<AgentEvent>();
-    const ctx = makeCtx(newCodexRuntimeState());
-    const params = {
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      item: {
-        type: 'collabAgentToolCall',
-        id: 'wait-1',
-        tool: 'wait',
-        status: 'inProgress',
-        senderThreadId: 'thread-1',
-        receiverThreadIds: ['child-a', 'child-b'],
-        agentsStates: {},
-      },
-    };
+  it.each(['wait', 'sendInput', 'resumeAgent', 'closeAgent'])(
+    'keeps the %s control call out of the Subagent card pipeline',
+    async (tool) => {
+      const q = createAsyncQueue<AgentEvent>();
+      const ctx = makeCtx(newCodexRuntimeState());
+      const base = {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'collabAgentToolCall',
+          id: `${tool}-1`,
+          tool,
+          status: 'inProgress',
+          senderThreadId: 'thread-1',
+          receiverThreadIds: ['child-a', 'child-b'],
+          agentsStates: {},
+        },
+      };
 
-    translateItemNotification('started', params, q, ctx);
+      translateItemNotification('started', base, q, ctx);
+      translateItemNotification('completed', {
+        ...base,
+        item: { ...base.item, status: 'completed' },
+      }, q, ctx);
 
-    const update = (await collect(q)).find((event) => event.type === 'agent_task_update');
-    expect(update?.data).toMatchObject({
-      taskId: 'wait-1',
-      receiverThreadIds: ['child-a', 'child-b'],
-    });
-    expect(update?.data).not.toHaveProperty('subagentObservation');
-  });
+      const events = await collect(q);
+      // 控制调用是普通工具步骤:工具边界照发,但不发 agent_task_update ——
+      // 否则每轮 wait 都会长出一张 "Subagent wait" 卡和一条后台任务行。
+      expect(events.filter((event) => event.type === 'agent_task_update')).toEqual([]);
+      expect(events.map((event) => event.type)).toEqual([
+        'tool_use',
+        'tool_result_full',
+        'tool_result',
+      ]);
+      expect(events[0].data).toMatchObject({ toolUseId: `${tool}-1`, toolName: `collab:${tool}` });
+    },
+  );
 });
 
 describe('translateItemNotification subAgentActivity', () => {

@@ -725,7 +725,7 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain(
       'const composerDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);',
     );
-    expect(newMakerDraftRouteSource).toContain('text: stripLocalMentionChips(composerDraft.text),');
+    expect(newMakerDraftRouteSource).toContain('text: stripLocalMentionChips(composerDraft.text, deviceChanged),');
   });
 
   // #807 review 第三轮:点已选中的那一行只是确认当前选择,不能有副作用 —— 否则用户点一下
@@ -864,7 +864,7 @@ describe('Shared create project picker', () => {
       'const handleWtSourceBranchChange = useCallback(',
     ]) {
       const worktreeHandler = newMakerDraftRouteSource.slice(
-        newMakerDraftRouteSource.indexOf(marker),
+        newMakerDraftRouteSource.lastIndexOf(marker),
       );
       expect(worktreeHandler.slice(0, worktreeHandler.indexOf('\n  const ', 1))).toContain(
         'if (sendInFlightRef.current || directoryRecoveryRef.current?.isSelecting()) return;',
@@ -892,7 +892,7 @@ describe('Shared create project picker', () => {
       newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback('),
     );
     expect(action).toContain(
-      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions();',
+      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions(deviceChanged);',
     );
     // 附件由出站上传层搬运，无需随引用一起删除。
     expect(action).not.toContain('dropPathBackedAttachments');
@@ -1071,7 +1071,7 @@ describe('Shared create project picker', () => {
       newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback('),
     );
     expect(action).toContain(
-      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions();',
+      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions(deviceChanged);',
     );
   });
 
@@ -1174,15 +1174,14 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).not.toContain('await commitRemoteSessionHandoff(');
     // 而首条交接必须在各自的 handoff 之后仍然发生(交接本体没被搬走):发送路径先把普通首条
     // 直接交给 store 发件队列再导航;协同 / 斜杠命令 / 未受理时退回 setPending 再导航。
-    const sendPart = newMakerDraftRouteSource.slice(
-      newMakerDraftRouteSource.indexOf("logTag: 'draft send'"),
-    );
-    const directNavigate = sendPart.indexOf('navigate(');
-    expect(sendPart.slice(0, directNavigate)).toContain('makerChatStore.sendMessage(');
-    const fallbackNavigate = sendPart.indexOf('navigate(', directNavigate + 1);
-    expect(sendPart.slice(directNavigate, fallbackNavigate)).toContain(
-      'setPending(remoteSessionId',
-    );
+    const previewNavigation = newMakerDraftRouteSource.indexOf('navigate(`/cc-agent/${presetSessionId}`');
+    const sendCommit = newMakerDraftRouteSource.indexOf('commitRemoteSessionHandoff({', previewNavigation);
+    const firstDelivery = newMakerDraftRouteSource.indexOf('makerChatStore.sendMessage(', sendCommit);
+    const pendingFallback = newMakerDraftRouteSource.indexOf('setPending(remoteSessionId', sendCommit);
+    expect(previewNavigation).toBeGreaterThan(-1);
+    expect(sendCommit).toBeGreaterThan(previewNavigation);
+    expect(firstDelivery).toBeGreaterThan(sendCommit);
+    expect(pendingFallback).toBeGreaterThan(firstDelivery);
     const goalPart = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf("logTag: 'draft goal'"),
     );
@@ -1207,13 +1206,13 @@ describe('Shared create project picker', () => {
     for (const marker of ["logTag: 'draft send'", "logTag: 'draft goal'"]) {
       const callStart = newMakerDraftRouteSource.lastIndexOf(
         'commitRemoteSessionHandoff({',
-        newMakerDraftRouteSource.indexOf(marker),
+        newMakerDraftRouteSource.lastIndexOf(marker),
       );
       const callEnd = newMakerDraftRouteSource.indexOf('});', callStart);
       expect(newMakerDraftRouteSource.slice(callStart, callEnd)).toContain('createArgs,');
     }
     // workDir 取 create 响应(纯对话的运行目录由对端分配,控制端猜不到)。
-    expect((newMakerDraftRouteSource.match(/workDir: created\?\.workDir,/g) ?? []).length).toBe(2);
+    expect((newMakerDraftRouteSource.match(/workDir: created\??\.workDir,/g) ?? []).length).toBe(2);
   });
 
   // #807 review 第十七轮:handleSend 的第一个 await 是协同策略重取,它在上锁之前 —— 期间两个
@@ -1247,7 +1246,7 @@ describe('Shared create project picker', () => {
     );
     expect(action).not.toContain('attachmentState.removeFile');
     expect(newMakerDraftRouteSource).not.toContain('dropPathBackedAttachments');
-    expect(action).toContain('stripProjectRelativeMentions();');
+    expect(action).toContain('stripProjectRelativeMentions(deviceChanged);');
   });
 
   /**
@@ -1298,7 +1297,7 @@ describe('Shared create project picker', () => {
     expect(body).toContain('const workingDirChanged = req.workingDir !== draft.workingDir;');
     // mention chip 存**项目相对**路径 → 设备或项目任一变化都要剥(第 29 轮 P1)。
     expect(body).toContain(
-      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions();',
+      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions(deviceChanged);',
     );
     // 附件始终属于控制端，换目标设备不丢弃；发送时由上传层转成远端引用。
     expect(body).not.toContain('dropPathBackedAttachments');
@@ -1470,7 +1469,7 @@ describe('Shared create project picker', () => {
     // The single add entry grants write access only through the local Main picker;
     // legacy read-only directories retain their independent removal callback.
     expect(chatInputSource).toMatch(
-      /if \(onWritableDirsChange && writableGrantScope && !remoteHostId && deviceLinkDeviceId === null\)/,
+      /onWritableDirsChange\s*&&\s*writableGrantScope\s*&&\s*!remoteHostId\s*&&\s*deviceLinkDeviceId === null/,
     );
     const directoryAction = chatInputSource.slice(
       chatInputSource.indexOf("id: 'add-extra-dir'"),
@@ -1529,7 +1528,7 @@ describe('Shared create project picker', () => {
   // Device-link uploads controller-owned files before dispatch; see outboundMedia.test.ts.
   it('preserves in-flight attachment ingestion for the remote upload pipeline', () => {
     expect(newMakerDraftRouteSource).not.toContain('attachmentState.removeFile(f.id)');
-    expect(newMakerDraftRouteSource).toContain('rehomeDraftAttachments(files, remoteSessionId)');
+    expect(newMakerDraftRouteSource).toContain('rehomeDraftAttachments(files, presetSessionId');
   });
 
   // #807 review 第二十四轮:handleCreateGoal 必须整段持在途锁。上一轮我以为「模态遮罩挡住 pill」就

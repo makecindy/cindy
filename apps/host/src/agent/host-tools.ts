@@ -8,6 +8,10 @@ import { createTaskToolCallAuthorizer } from '../../../desktop/src/main/maker-ip
 import { createDesktopTaskActionAuthorizer } from '../../../desktop/src/main/maker-ipc/taskActionHost.js';
 import { createTaskActionConfirmation } from '../../../desktop/src/main/maker-ipc/taskActionConfirmation.js';
 import { createHistoryToolCallbacks } from '../../../desktop/src/main/mcp-integrations/historyToolCallbacks.js';
+import { createProjectToolCallbacks } from '../../../desktop/src/main/mcp-integrations/projectToolCallbacks.js';
+import { createProject } from '../../../desktop/src/main/mcp-integrations/createProjectCore.js';
+import { renameProject, removeProject } from '../../../desktop/src/main/mcp-integrations/projectManagementCore.js';
+import { updateProjectInfo } from '../../../desktop/src/main/projectInfoCore.js';
 import { resolveHelperSurface } from '../../../desktop/src/main/mcp-integrations/helperSurface.js';
 import { DeviceLinkError } from '@cindy/device-link';
 import type { ChatHistoryReaderDeps } from '../../../desktop/src/main/mcp-integrations/remoteChatHistory.js';
@@ -28,6 +32,8 @@ interface Options {
   ownerId: string;
   owner(): DataOwnerPushStamp;
   current(): boolean;
+  deviceId?(): string;
+  onProjectsChanged?(catalogChanged: boolean): void;
   getGhost(id: string): InstalledGhost | null;
   getSession(id: string): Session | undefined;
   confirmations: ReturnType<typeof createHostConfirmations>;
@@ -68,11 +74,55 @@ export function createHostToolService(options: Options) {
     } };
   };
   const services = new HostServiceCatalog();
+  const projectTools = createProjectToolCallbacks({
+    deviceId: () => options.deviceId?.() ?? 'local',
+    withAccountDataAccess: async (sessionId, operation) => {
+      const database = current() ? getCurrentDbClientSnapshot() : null;
+      const assertCurrent = async () => {
+        if (!current() || !database || database !== getCurrentDbClientSnapshot()) throw new Error('OWNER_SCOPE_CHANGED');
+        const db = tryGetDbClient();
+        if (!db || !sessionId || await resolveHelperSurface(db, sessionId) === 'restricted')
+          throw new Error('Account data is unavailable for this task');
+        if (!current() || database !== getCurrentDbClientSnapshot()) throw new Error('OWNER_SCOPE_CHANGED');
+      };
+      await assertCurrent();
+      const result = await operation(assertCurrent);
+      await assertCurrent();
+      return result;
+    },
+    invokeRemote: async (device, channel, args, request) => {
+      await request?.preSend?.();
+      if (!options.invokeRemote) throw new DeviceLinkError('NOT_CONNECTED', 'Device Link is unavailable');
+      return options.invokeRemote(device, channel, args);
+    },
+    local: {
+      createProject: async input => {
+        const result = await createProject(input);
+        if (result.ok && current()) options.onProjectsChanged?.(true);
+        return result;
+      },
+      updateProjectInfo: async (input, authorization) => {
+        const result = await updateProjectInfo(input, authorization);
+        if (current()) options.onProjectsChanged?.(false);
+        return result;
+      },
+      renameProject: async input => {
+        const result = await renameProject(input);
+        if (result.ok && current()) options.onProjectsChanged?.(false);
+        return result;
+      },
+      removeProject: async input => {
+        const result = await removeProject(input);
+        if (result.ok && current()) options.onProjectsChanged?.(true);
+        return result;
+      },
+    },
+  });
   // Node plugin installation and connection lifecycles are not connected yet.
   // Agent providers remain unchanged; plugins fail before setup.
   const supportsPluginServer = (server: string) => server !== 'cindy_computer';
   const providers = createLiziMcpProviders({
-    xdtHelper: { authorizeCall,
+    xdtHelper: { authorizeCall, ...projectTools,
       hostServices: createHostServiceToolExecutor(services, { pluginCall: getPluginHostToolCaller, getGhost: options.getGhost, supportsPluginServer }),
       // The product help the desktop gives get_capabilities({ scope: 'help' }) (mcp-providers.ts productHelpDocs).
       productHelpDocs: HELP_KNOWLEDGE,

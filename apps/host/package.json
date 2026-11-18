@@ -21,6 +21,7 @@
     "tsx": "^4.19.0"
   },
   "dependencies": {
+    "@cindy/agent-net": "workspace:*",
     "@cindy/anthropic-compat-proxy": "workspace:*",
     "@cindy/auth-client": "workspace:*",
     "@cindy/browser-control-runtime": "workspace:*",

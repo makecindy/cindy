@@ -14,6 +14,7 @@ export interface NativeAgentNetOptions {
   deviceId: string;
   legacySigning?: boolean;
   udp?: boolean;
+  enhancedTransport?: boolean;
 }
 /** Trusted app adapter. Private seeds never enter AsyncStorage, logs or an RPC. */
 export class MobileAgentNetEngine implements NativeEnginePort {

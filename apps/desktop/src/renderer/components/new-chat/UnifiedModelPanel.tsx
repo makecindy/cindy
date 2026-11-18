@@ -371,6 +371,7 @@ export interface UnifiedModelPanelProps {
     ready: boolean;
     /** `active` 那台的目录读取失败时,列表区显示的提示(含重试)。 */
     failure?: ReactNode;
+    status?: ReactNode;
     onActivate: (target: { deviceId: string; providerId: string } | null) => void;
   };
   /**
@@ -929,6 +930,7 @@ export function UnifiedModelPanel({
     if (el.clientHeight < 1) return; // 还没有真实布局,等下一次尺寸回调。
     const row = el.querySelector<HTMLElement>('[data-model-selected="true"]');
     if (!row) {
+      el.scrollTop = 0;
       needsEnsureVisibleRef.current = false; // 本视图没有选中行,无事可做。
       return;
     }
@@ -1532,6 +1534,7 @@ export function UnifiedModelPanel({
           {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
           {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
           {favoritesPinned && effectiveRail.kind === 'favorites' && !query.trim() ? favoritesPinned : null}
+          {!remoteListPending && remoteRail !== null ? remoteSources?.status : null}
           {effectiveRail.kind === 'model-groups' ? (
             modelGroupsView ?? null
           ) : remoteListPending ? (

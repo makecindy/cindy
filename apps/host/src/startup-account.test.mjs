@@ -30,10 +30,34 @@ import { lifoCleanup } from './test-support/cleanup.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { retainDbClient, waitForRetainedDbClient } from '../../desktop/src/main/localDb/client/pendingOperations.ts';
 
 // Unit regression: run the real startup/auth functions with in-memory network,
 // credentials and storage. A valid login for B must never open A's database.
 const source = ts.createSourceFile('main.ts', readFileSync(new URL('./main.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+test('owner storage closes only after retained auxiliary usage has settled', async () => {
+  const events = [];
+  const client = { dispose: async () => { events.push('dispose'); } };
+  const h = setup({
+    openOwnerDatabase: async () => ({}),
+    createDbClientForHandle: () => client,
+    OwnerSessionStorage: class {},
+    setCurrentDbClient() {},
+    reconcileDeletedTaskViewState: async () => {},
+    configureProvisionalSessions() { throw new Error('storage ready'); },
+    clearCurrentDbClient: () => events.push('clear'),
+    waitForRetainedDbClient,
+  });
+  await assert.rejects(h.start('account-b'), /storage ready/);
+  const release = retainDbClient(client);
+  const closing = h.close();
+  try {
+    await Promise.resolve();
+    assert.deepEqual(events, ['clear']);
+    events.push('usage-settled');
+  } finally { release(); await closing; }
+  assert.deepEqual(events, ['clear', 'usage-settled', 'dispose']);
+});
 const functions = [];
 function visit(node) {
   if (ts.isFunctionDeclaration(node) && ['ensureRuntime', 'resolveAccountUser'].includes(node.name?.text)) {
@@ -43,10 +67,11 @@ function visit(node) {
 visit(source);
 const compiled = ts.transpileModule(`
 let activeOwner = null, runtimeLease = null, currentSessionToken = null, accountUser = null, currentDeviceId = null, remoteIdentityReady = false;
+let closeStorage = null, sessionStorage = null;
 let account = { authenticated: false, realm: 'global' };
 const runtime = { owner: null };
 ${functions.join('\n')}
-return { start: ensureRuntime, resolve: resolveAccountUser, token: () => currentSessionToken, account: () => account, runtime, lease: () => runtimeLease };
+return { start: ensureRuntime, resolve: resolveAccountUser, token: () => currentSessionToken, account: () => account, runtime, lease: () => runtimeLease, close: () => closeStorage() };
 `, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 function setup(overrides = {}) {
@@ -54,6 +79,7 @@ function setup(overrides = {}) {
   const steps = [];
   const deps = {
     mapMembershipToAuthUser, decodeAccessTokenOrgSlug, resolveRuntimeDeviceId, resolveSessionDevice, canRegisterHostDevice, AUTH_SESSION_KEY,
+    waitForRetainedDbClient,
     resolveHostDataDir: () => 'isolated-test-profile',
     configureHostOwner: ({ ownerId }) => { steps.push(`owner:${ownerId}`); },
     // Row 25 (25a): the Host reads the Skill projection boundary for the owner it just configured.
@@ -405,6 +431,7 @@ function renewalHarness(t, server) {
   const invalidated = [];
   const deps = {
     mapMembershipToAuthUser, decodeAccessTokenOrgSlug, resolveRuntimeDeviceId, resolveSessionDevice, canRegisterHostDevice, AUTH_SESSION_KEY,
+    waitForRetainedDbClient,
     resolveHostDataDir: () => 'isolated-test-profile', resolveHostRegion: () => 'global', hostPackageRegion: () => 'global',
     readAuthEndpoints: () => ({ authApiBaseUrl: 'https://example.invalid' }), assertHostSessionRegion, hostAuthFetch: () => assert.fail('no network'),
     createCredentialStore: async () => store, createRequire: () => () => ({ machineIdSync: () => 'test-device' }),

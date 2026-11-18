@@ -29,6 +29,7 @@ type DeliveryPorts = {
     stateOf(id: string): string;
     spawn(ghost: InstalledGhost): Promise<{ ok: true } | { ok: false; reason: string }>;
   };
+  isRunningInstall?: GhostSubscriptionGatewayDeps['isRunningInstall'];
   listGhostNotificationCandidates: NonNullable<GhostSubscriptionGatewayDeps['listGhostsAsync']>;
   findGhostNotificationTarget: NonNullable<GhostSubscriptionGatewayDeps['findGhostForDelivery']>;
   sendToGhostLogic(id: string, event: Parameters<GhostSubscriptionGatewayDeps['sendToGhost']>[1]): boolean;
@@ -49,6 +50,7 @@ export function createSubscriptionGatewayReader(ports: DeliveryPorts) {
         listGhostsAsync: listGhostNotificationCandidates,
         findGhostForDelivery: findGhostNotificationTarget,
         isRunning: (id) => getGhostRuntime().stateOf(id) === 'running',
+        isRunningInstall: ports.isRunningInstall,
         wake: async (ghost) => {
           const r = await getGhostRuntime().spawn(ghost);
           if (!r.ok) throw new Error(r.reason);
