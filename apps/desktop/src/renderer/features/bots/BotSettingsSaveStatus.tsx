@@ -5,7 +5,7 @@ import type { BotSettingsAutosaveController } from './useBotSettingsAutosave';
 
 /** Shared settings header feedback; only a confirmed receipt becomes saved. */
 export function BotSettingsSaveStatus({ autosave, modelPage, sourceTooLong }: {
-  autosave: Pick<BotSettingsAutosaveController, 'status' | 'errorKey' | 'retry'>;
+  autosave: Pick<BotSettingsAutosaveController, 'status' | 'modelSelectionSaved' | 'errorKey' | 'retry'>;
   modelPage: boolean;
   sourceTooLong: boolean;
 }) {
@@ -17,7 +17,7 @@ export function BotSettingsSaveStatus({ autosave, modelPage, sourceTooLong }: {
   );
   if (autosave.status === 'saved') return (
     <span role="status" className="inline-flex animate-fade-in items-center gap-1 text-11 text-[var(--text-tertiary)]">
-      <Check size={12} /> {t(modelPage ? 'bots.autosave.savedModel' : 'bots.autosave.saved')}
+      <Check size={12} /> {t(modelPage && autosave.modelSelectionSaved ? 'bots.autosave.savedModel' : 'bots.autosave.saved')}
     </span>
   );
   if (autosave.status === 'error') return (

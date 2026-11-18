@@ -7,10 +7,11 @@ export default {
   cases: {
     default: { about: 'An unanswered save stops spinning and keeps its choice' },
     confirmed: { about: 'A confirmed model save explains when it applies' },
+    profile: { about: 'A confirmed profile save never claims a model will apply next turn' },
   },
   async check(page, ui) {
     await page.clock.install();
-    await page.getByRole('button', { name: 'Edit model', exact: true }).click();
+    await page.getByRole('button', { name: ui.case === 'profile' ? 'Edit profile' : 'Edit model', exact: true }).click();
     await page.clock.runFor(1);
     await page.getByRole('status').getByText(await ui.t('bots.autosave.saving'), { exact: true }).waitFor();
     if (ui.case === 'default') {
@@ -21,7 +22,7 @@ export default {
       await ui.capture('unconfirmed');
     } else {
       await page.evaluate(() => window.dispatchEvent(new Event('fixture:confirm-save')));
-      await page.getByRole('status').getByText(await ui.t('bots.autosave.savedModel'), { exact: true }).waitFor();
+      await page.getByRole('status').getByText(await ui.t(ui.case === 'profile' ? 'bots.autosave.saved' : 'bots.autosave.savedModel'), { exact: true }).waitFor();
     }
   },
 };

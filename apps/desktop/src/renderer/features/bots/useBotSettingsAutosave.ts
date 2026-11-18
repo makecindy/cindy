@@ -45,6 +45,8 @@ export interface UseBotSettingsAutosaveOptions {
 
 export interface BotSettingsAutosaveController {
   status: BotAutosaveStatus;
+  /** Whether the held success receipt came from a confirmed model selection. */
+  modelSelectionSaved: boolean;
   errorKey: string | null;
   /** 字段变化:文本走防抖,离散选择走即时合并窗口。 */
   onEdit: (trigger: BotAutosaveTrigger) => void;
@@ -98,6 +100,8 @@ export function useBotSettingsAutosave(
   }, [formOwner]);
 
   const [status, setStatus] = useState<BotAutosaveStatus>('idle');
+  const [modelSelectionSaved, setModelSelectionSaved] = useState(false);
+  const completedModelSelectionRef = useRef(false);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
@@ -109,11 +113,15 @@ export function useBotSettingsAutosave(
       savedTimerRef.current = null;
     }
     setStatus(next);
+    setModelSelectionSaved(next === 'saved' && completedModelSelectionRef.current);
     setErrorKey(next === 'error' ? botSettingsSaveErrorKey(error) : null);
     if (next !== 'saved') return;
     savedTimerRef.current = setTimeout(() => {
       savedTimerRef.current = null;
-      if (mountedRef.current) setStatus('idle');
+      if (mountedRef.current) {
+        setStatus('idle');
+        setModelSelectionSaved(false);
+      }
     }, SAVED_HOLD_MS);
   }, []);
 
@@ -130,6 +138,9 @@ export function useBotSettingsAutosave(
         if (!isDataOwnerGenerationCurrent(owner)) throw new Error('Settings owner changed');
         await commitRef.current(next, modelSelection);
         if (!isDataOwnerGenerationCurrent(owner)) throw new Error('Settings owner changed');
+        // Tag only the real completed commit, never the current page or a newer
+        // pending choice. The scheduler emits its receipt after this resolves.
+        completedModelSelectionRef.current = modelSelection === true;
       },
       onStatusChange: handleStatus,
     });
@@ -191,5 +202,5 @@ export function useBotSettingsAutosave(
     handleStatus('idle');
   }, [autosave, baselineRef, handleStatus]);
 
-  return { status, errorKey, onEdit, flush, retry, isDirty, discard, hasPendingModelSelection: autosave.hasPendingModelSelection, composition };
+  return { status, modelSelectionSaved, errorKey, onEdit, flush, retry, isDirty, discard, hasPendingModelSelection: autosave.hasPendingModelSelection, composition };
 }

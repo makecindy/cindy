@@ -27,6 +27,7 @@ function Fixture() {
       <BotSettingsSaveStatus autosave={autosave} modelPage sourceTooLong={false} />
     </div>
     <button data-ui-page-control onClick={() => { setName('Edited buddy'); autosave.onEdit('model'); }}>Edit model</button>
+    <button data-ui-page-control onClick={() => { setName('Edited profile'); autosave.onEdit('instant'); }}>Edit profile</button>
   </main>;
 }
 

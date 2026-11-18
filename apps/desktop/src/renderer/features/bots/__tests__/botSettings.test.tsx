@@ -443,6 +443,23 @@ describe('Bot entry after deletion', () => {
 });
 
 describe('Bot settings profile consolidation', () => {
+  // PR #11347 review regression (unit/jsdom): the real settings header must
+  // describe the completed commit, not the page entered during its 1.8s hold.
+  // Existing model receipt cases only saved a model on the model page.
+  // Minimal input: save a name, then immediately open the model page.
+  it('does not turn a profile save into a model receipt when switching pages', async () => {
+    vi.useFakeTimers();
+    renderSettings();
+    const name = screen.getByLabelText('bots.nameLabel');
+    fireEvent.change(name, { target: { value: 'Updated name' } });
+    await act(async () => { fireEvent.blur(name); });
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.saved');
+    await act(async () => { fireEvent.click(screen.getByText('bots.settingsTabs.model')); });
+    expect(screen.getByRole('status').textContent).toContain('bots.autosave.saved');
+    expect(screen.getByRole('status').textContent).not.toContain('bots.autosave.savedModel');
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+  });
+
   // PR #11347 unit regression: exercise real canLeave, autosave and patch
   // generation. Existing picker tests used explicit model revisions, so never
   // covered an ordinary field reverted to baseline while its old write hung.
